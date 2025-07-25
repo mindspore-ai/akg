@@ -78,28 +78,23 @@ MS_CUSTOM_OPS_REGISTER(add, AddCustomOpFuncImpl, AddCustomAscend);
 #include "ascendc_pyboost_runner.h"
 
 namespace ms_custom_ops {
-class AddRunner : public AscendCOpRunner {
-public:
-  using AscendCOpRunner::AscendCOpRunner;
-};
-
+using namespace mindspore;
+using namespace mindspore::device::ascend;
 ms::Tensor custom_add(const ms::Tensor &x, const ms::Tensor &y) {
+  // assume the shape of x and y is same.
   auto out = ms::Tensor(x.data_type(), x.shape());
-  auto runner = std::make_shared<AddRunner>("AddCustom");
-  auto ms_x = x.tensor();
-  auto ms_y = y.tensor();
-  auto ms_out = out.tensor();
-  runner->SetLaunchFunc(
-      LAUNCH_ASCENDC_FUNC(aclnnAddCustom, ms_x, ms_y, ms_out));
+  auto runner = std::make_shared<ms::pynative::AscendCOpRunner>("AddCustom");
+  runner->SetLaunchFunc(LAUNCH_ASCENDC_FUNC(aclnnAddCustom, x, y, out));
   runner->Run({x, y}, {out});
   return out;
 }
+
+auto pyboost_add(const ms::Tensor &x, const ms::Tensor &y) {
+  return ms::pynative::PyboostRunner::Call<1>(custom_add, x, y);
+}
 } // namespace ms_custom_ops
 
-py::object pyboost_add(const ms::Tensor &x, const ms::Tensor &y) {
-  return ms_custom_ops::AddRunner::Call<1>(ms_custom_ops::custom_add, x, y);
-}
-
 MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
-  m.def("add", &pyboost_add, "add", pybind11::arg("x"), pybind11::arg("y"));
+  m.def("add", &ms_custom_ops::pyboost_add, "add", pybind11::arg("x"),
+        pybind11::arg("y"));
 }

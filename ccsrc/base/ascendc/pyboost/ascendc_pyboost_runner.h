@@ -16,49 +16,67 @@
 #ifndef MS_CUSTOM_OPS_OP_DEF_ASCENDC_PYBOOST_ASCENDC_PYBOOST_RUNNER_H_
 #define MS_CUSTOM_OPS_OP_DEF_ASCENDC_PYBOOST_ASCENDC_PYBOOST_RUNNER_H_
 
+#include "module.h"
 #include "ms_extension/all.h"
 #include <functional>
 #include <optional>
 #include <set>
-#include "module.h"
 
-
-namespace ms_custom_ops {
-using namespace mindspore;
-using namespace ms::pynative;
-
+namespace ms::pynative {
 using AscendCLaunchFunc =
     std::function<void(mindspore::device::DeviceContext *, size_t)>;
-using AscendCWorkSpaceFunc = std::function<size_t()>;
 
-class AscendCOpRunner : public PyboostRunner {
+class AscendCOpRunner final : public PyboostRunner {
 public:
   using PyboostRunner::PyboostRunner;
   void SetLaunchFunc(AscendCLaunchFunc func) { launch_func_ = func; }
-  void SetWorkSpaceFunc(AscendCWorkSpaceFunc func) { workspace_func_ = func; }
 
 protected:
-  size_t CalcWorkspace() override {
-    if (workspace_func_ != nullptr) {
-      return workspace_func_();
-    }
-    return 0;
+  void LaunchKernel() override {
+    MS_EXCEPTION_IF_NULL(launch_func_);
+    launch_func_(_device_context_, _stream_id_);
   }
 
-  void LaunchKernel() override {
-    if (launch_func_ != nullptr) {
-      launch_func_(_device_context_, _stream_id_);
-    }
-  }
   void _DispatchLaunchTask() override { LaunchKernel(); }
   AscendCLaunchFunc launch_func_{nullptr};
-  AscendCWorkSpaceFunc workspace_func_{nullptr};
 };
 
-#define LAUNCH_ASCENDC_FUNC(aclnn_api, ...)                                    \
-  [__VA_ARGS__](auto __device_context, auto __stream_id) {                     \
-    LAUNCH_ACLNN(aclnn_api, __device_context, __stream_id, __VA_ARGS__);       \
+inline mindspore::tensor::TensorPtr Tensor2Ptr(const ms::Tensor &t) {
+  return t.is_defined() ? t.tensor() : nullptr;
+}
+
+inline std::vector<mindspore::tensor::TensorPtr>
+Tensor2Ptr(const std::vector<ms::Tensor> &tensors) {
+  std::vector<mindspore::tensor::TensorPtr> result;
+  result.reserve(tensors.size());
+  for (const auto &t : tensors) {
+    result.push_back(t.tensor());
   }
-} // namespace ms_custom_ops
+  return result;
+}
+
+inline std::optional<mindspore::tensor::TensorPtr>
+Tensor2Ptr(const std::optional<ms::Tensor> &opt_tensor) {
+  if (opt_tensor.has_value()) {
+    return Tensor2Ptr(opt_tensor.value());
+  }
+  return std::nullopt;
+}
+
+template <typename T> inline constexpr T Tensor2Ptr(const T &t) { return t; }
+
+#define LAUNCH_ASCENDC_FUNC(aclnn_api, ...)                                    \
+  [](auto &&... args) {                                                        \
+    auto args_t = std::make_tuple(                                             \
+        ms::pynative::Tensor2Ptr(std::forward<decltype(args)>(args))...);      \
+    return [args_t](auto __dev_ctx, auto __stream_id) {                        \
+      std::apply(                                                              \
+          [&](auto &&... args) {                                               \
+            LAUNCH_ACLNN(aclnn_api, __dev_ctx, __stream_id, args...);          \
+          },                                                                   \
+          args_t);                                                             \
+    };                                                                         \
+  }(__VA_ARGS__)
+} // namespace ms::pynative
 
 #endif // MS_CUSTOM_OPS_OP_DEF_ASCENDC_PYBOOST_ASCENDC_PYBOOST_RUNNER_H_
