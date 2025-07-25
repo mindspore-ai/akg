@@ -16,7 +16,7 @@ import pytest
 import asyncio
 from pathlib import Path
 from ai_kernel_generator import get_project_root
-from ai_kernel_generator.database.database import Database, DEFAULT_DATABASE_PATH
+from ai_kernel_generator.database.database import Database, DEFAULT_DATABASE_PATH, RetrievalStrategy
 from ..utils import get_benchmark_name
 
 DEFAULT_BENCHMARK_PATH = Path(get_project_root()).parent.parent / "benchmark"
@@ -38,39 +38,50 @@ async def test_insert():
     # 初始化系统
     db_system = Database()
 
-    arch = "ascend910b4"
+    arch = "ascend310p3"
     backend = "ascend"
-    framework = "torch"
-    impl_type = "triton"
+    framework = "numpy"
+    impl_type = "swft"
 
     # 插入示例
-    id_list = [2, 3, 4, 5]
+    id_list = [49, 50]
     benchmark_name = get_benchmark_name(id_list)
-    for op_name in benchmark_name:
+    for i, op_name in enumerate(benchmark_name):
+        name = op_name.strip(f"{str(id_list[i])}_")
         impl_code, framework_code = gen_task_code(
             framework_path=DEFAULT_BENCHMARK_PATH / "kernelbench" / framework / op_name / f"{op_name}_{framework}.py",
-            impl_path=DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
+            impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
         )
         await db_system.insert(impl_code, framework_code, backend, arch, impl_type, framework)
 
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_samples():
+@pytest.mark.parametrize("strategy_mode", [
+    (RetrievalStrategy.RANDOMICITY),
+    (RetrievalStrategy.SIMILARITY),
+    # (RetrievalStrategy.OPTIMALITY),
+    (RetrievalStrategy.RULE)
+])
+async def test_samples(strategy_mode):
     # 初始化系统
     db_system = Database()
 
-    arch = "ascend910b4"
+    arch = "ascend310p3"
     backend = "ascend"
-    framework = "torch"
-    impl_type = "triton"
+    framework = "numpy"
+    impl_type = "swft"
 
     # 查询示例
-    op_name = get_benchmark_name([1])[0]
-    impl_code_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
-    impl_code = Path(impl_code_path).read_text()
-    await db_system.samples(output_content=[], impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type, sample_num=3)
-
+    benchmark_id = 53
+    op_name = get_benchmark_name([benchmark_id])[0]
+    name = op_name.strip(f"{str(benchmark_id)}_")
+    impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
+    impl_code = Path(impl_path).read_text()
+    results = await db_system.samples(
+        output_content=["impl_code"], strategy_mode = strategy_mode,
+        impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type, sample_num=3
+    )
 
 @pytest.mark.level0
 @pytest.mark.asyncio
@@ -78,14 +89,16 @@ async def test_delete():
     # 初始化系统
     db_system = Database()
 
-    arch = "ascend910b4"
+    arch = "ascend310p3"
     backend = "ascend"
-    framework = "torch"
-    impl_type = "triton"
+    framework = "numpy"
+    impl_type = "swft"
 
     # 删除示例
-    op_name = get_benchmark_name([3])[0]
-    impl_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
+    benchmark_id = 50
+    op_name = get_benchmark_name([benchmark_id])[0]
+    name = op_name.strip(f"{str(benchmark_id)}_")
+    impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
     impl_code = Path(impl_path).read_text()
     await db_system.delete(impl_code, backend, arch, impl_type)
 
@@ -96,40 +109,43 @@ async def test_async_database():
     # 初始化系统
     db_system = Database()
 
-    arch = "ascend910b4"
+    arch = "ascend310p3"
     backend = "ascend"
-    framework = "torch"
-    impl_type = "triton"
+    framework = "numpy"
+    impl_type = "swft"
 
     # 定义并发任务: 2个添加任务、2个查询任务、2个删除任务
     async def insert_task(benchmark_id):
         op_name = get_benchmark_name([benchmark_id])[0]
+        name = op_name.strip(f"{str(benchmark_id)}_")
         impl_code, framework_code = gen_task_code(
             framework_path=DEFAULT_BENCHMARK_PATH / "kernelbench" / framework / op_name / f"{op_name}_{framework}.py",
-            impl_path=DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
+            impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
         )
         return await db_system.insert(impl_code, framework_code, backend, arch, impl_type, framework)
 
     async def sample_task(benchmark_id):
         op_name = get_benchmark_name([benchmark_id])[0]
-        impl_code_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
-        impl_code = Path(impl_code_path).read_text()
+        name = op_name.strip(f"{str(benchmark_id)}_")
+        impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
+        impl_code = Path(impl_path).read_text()
         return await db_system.samples(output_content=[], impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type, sample_num=3)
 
     async def delete_task(benchmark_id):
         op_name = get_benchmark_name([benchmark_id])[0]
-        impl_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
+        name = op_name.strip(f"{str(benchmark_id)}_")
+        impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
         impl_code = Path(impl_path).read_text()
         return await db_system.delete(impl_code, backend, arch, impl_type)
 
     # 创建多个并发任务
     tasks = [
-        insert_task(6),
-        insert_task(7),
-        sample_task(1),
-        sample_task(1),
-        delete_task(6),
-        delete_task(7)
+        insert_task(47),
+        insert_task(48),
+        sample_task(53),
+        sample_task(53),
+        delete_task(47),
+        delete_task(48)
     ]
 
     # 执行所有并发任务

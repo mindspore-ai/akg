@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import shutil
 import yaml
 import json
@@ -27,7 +26,7 @@ from ai_kernel_generator.utils.common_utils import get_md5_hash
 
 logger = logging.getLogger(__name__)
 
-class RetrievalStragegy(Enum):
+class RetrievalStrategy(Enum):
     RANDOMICITY = "randomicity"
     SIMILARITY = "similarity"
     OPTIMALITY = "optimality"
@@ -41,7 +40,7 @@ class Database():
         """初始化数据库系统"""
         self.database_path = database_path or str(DEFAULT_DATABASE_PATH)
         config_path = config_path or str(DEFAULT_CONFIG_PATH)
-        self.vector_store = VectorStore(config_path)
+        self.vector_store = VectorStore(config_path, self.database_path)
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
@@ -70,12 +69,12 @@ class Database():
         }
         return extracted_features
     
-    def get_output_content(self, output_content:List[str], stragegy_mode:RetrievalStragegy, docs, impl_type, framework):
+    def get_output_content(self, output_content:List[str], strategy_mode:RetrievalStrategy, docs, impl_type, framework):
         result = []
         for doc in docs:
             case_path = Path(doc.metadata["file_path"])
             
-            res_dict = {"stragegy_mode": stragegy_mode}
+            res_dict = {"strategy_mode": strategy_mode}
             for content in output_content:
                 if content == "impl_code" and impl_type:
                     code_file_path = case_path / f"{impl_type}.py"
@@ -104,7 +103,7 @@ class Database():
                 if content in metadata:
                     res_dict[content] = metadata[content]
                 else:
-                    raise ValueError(f"Content '{content}' not found in metadata. Available keys: {', '.join(metadata.keys())}")
+                    raise ValueError(f"Content '{content}' not found in metadata. Available keys: strategy_mode, impl_code, framework_code, {', '.join(metadata.keys())}")
 
             result.append(res_dict)
         return result
@@ -157,24 +156,24 @@ class Database():
             filter={"feature_invariants": feature_invariants}
         )
 
-    def samples_with_stragegy(self, stragegy_mode: RetrievalStragegy, output_content: List[str], features_str:str, feature_invariants:str,
+    def samples_with_strategy(self, strategy_mode: RetrievalStrategy, output_content: List[str], features_str:str, feature_invariants:str,
                               sample_num: int = 5, rule_desc:str = "", impl_type: str = "", framework: str = ""):
         """根据指定的策略获取样本"""
-        if stragegy_mode == RetrievalStragegy.RANDOMICITY:
+        if strategy_mode == RetrievalStrategy.RANDOMICITY:
             docs = self.randomicity_search(features_str, feature_invariants, sample_num)
-        elif stragegy_mode == RetrievalStragegy.SIMILARITY:
+        elif strategy_mode == RetrievalStrategy.SIMILARITY:
             docs = self.similarity_search(features_str, feature_invariants, sample_num)
-        elif stragegy_mode == RetrievalStragegy.OPTIMALITY:
+        elif strategy_mode == RetrievalStrategy.OPTIMALITY:
             docs = self.optimality_search(features_str, feature_invariants, sample_num)
-        elif stragegy_mode == RetrievalStragegy.RULE:
+        elif strategy_mode == RetrievalStrategy.RULE:
             docs = self.rule_search(features_str, feature_invariants, sample_num, rule_desc)
         else:
-            raise ValueError("Invalid stragegy_mode")
+            raise ValueError("Invalid strategy_mode")
         
-        result = self.get_output_content(output_content, stragegy_mode, docs, impl_type, framework)
+        result = self.get_output_content(output_content, strategy_mode, docs, impl_type, framework)
         return result
 
-    async def samples(self, output_content: List[str], stragegy_mode: RetrievalStragegy = RetrievalStragegy.SIMILARITY, sample_num: int = 5, rule_desc: str = "",
+    async def samples(self, output_content: List[str], strategy_mode: RetrievalStrategy = RetrievalStrategy.SIMILARITY, sample_num: int = 5, rule_desc: str = "",
                       impl_code: str = "", framework_code:str = "", backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
         """
         基本采样，根据指定的策略获取样本
@@ -183,25 +182,25 @@ class Database():
         features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
         feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
         
-        result = self.samples_with_stragegy(stragegy_mode, output_content, features_str, feature_invariants, sample_num, rule_desc, impl_type, framework)
+        result = self.samples_with_strategy(strategy_mode, output_content, features_str, feature_invariants, sample_num, rule_desc, impl_type, framework)
         return result
     
-    async def combined_samples(self, stragegy_mode: List[RetrievalStragegy], output_content: List[str], sample_num: List[int], rule_desc:str = "",
+    async def combined_samples(self, strategy_mode: List[RetrievalStrategy], output_content: List[str], sample_num: List[int], rule_desc:str = "",
                                impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
         """
         综合采样，根据不同的策略和数量获取样本
         """
-        if len(stragegy_mode) != len(sample_num):
-            raise ValueError("stragegy_mode and sample_num must have the same length")
-        if not stragegy_mode or not sample_num:
-            raise ValueError("stragegy_mode and sample_num cannot be empty")
+        if len(strategy_mode) != len(sample_num):
+            raise ValueError("strategy_mode and sample_num must have the same length")
+        if not strategy_mode or not sample_num:
+            raise ValueError("strategy_mode and sample_num cannot be empty")
 
         features = await self.feature_extractor(impl_code, framework_code, backend, arch, impl_type)
         features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
         feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
         result = []
-        for stragegy, num in zip(stragegy_mode, sample_num):
-            res = self.samples_with_stragegy(stragegy, output_content, features_str, feature_invariants, num, rule_desc, impl_type, framework)
+        for strategy, num in zip(strategy_mode, sample_num):
+            res = self.samples_with_strategy(strategy, output_content, features_str, feature_invariants, num, rule_desc, impl_type, framework)
             result.extend(res)
         return result
     
@@ -267,3 +266,7 @@ class Database():
             if doc.metadata["file_path"] in paths:
                 true_positives += 1
         return (true_positives / positives * 100) if positives > 0 else 0
+    
+    def clear(self):
+        self.vector_store.clear()
+        shutil.rmtree(str(Path(self.database_path) / "operators"))

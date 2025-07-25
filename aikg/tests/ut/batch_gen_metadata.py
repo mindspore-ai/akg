@@ -18,6 +18,7 @@ python tests/ut/batch_gen_metadata.py --impl_type "triton" --framework "torch" -
 '''
 
 import argparse
+import asyncio
 from pathlib import Path
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.database.database import Database
@@ -26,25 +27,25 @@ from ai_kernel_generator.utils.common_utils import get_fixed_suffix_content
 DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "database_config.yaml"
 
 
-def insert_one_case(impl_type: str, framework: str, backend: str, arch: str, path: str):
+async def insert_one_case(impl_type: str, framework: str, backend: str, arch: str, path: str):
     """处理指定架构下的所有算子目录，生成或更新metadata.json"""
-    db_rag = Database()
+    db_system = Database()
     impl_code = get_fixed_suffix_content(suffix=impl_type, path=path)
     framework_code = get_fixed_suffix_content(suffix=framework, path=path)
-    db_rag.insert(impl_code, framework_code, backend, arch, impl_type, framework)
+    await db_system.insert(impl_code, framework_code, backend, arch, impl_type, framework)
 
 
-def insert_multi_case(impl_type: str, framework: str, backend: str, arch: str, path: str):
+async def insert_multi_case(impl_type: str, framework: str, backend: str, arch: str, path: str):
     """处理指定架构下的所有算子目录，生成或更新metadata.json"""
-    db_rag = Database()
+    db_system = Database()
     for path in Path(path).iterdir():
         if path.is_dir():
             impl_code = get_fixed_suffix_content(suffix=impl_type, path=path)
             framework_code = get_fixed_suffix_content(suffix=framework, path=path)
-            db_rag.insert(impl_code, framework_code, backend, arch, impl_type, framework)
+            await db_system.insert(impl_code, framework_code, backend, arch, impl_type, framework)
 
 
-def main():
+async def main():
     # 解析命令行参数
     parser = argparse.ArgumentParser(description='批量提取Python文件特征并生成元数据')
     parser.add_argument('--impl_type', required=True, help='实现类型（如triton、swft等）')
@@ -55,7 +56,7 @@ def main():
     parser.add_argument('--config_path', default=DEFAULT_CONFIG_PATH, help='配置文件路径')
     args = parser.parse_args()
 
-    insert_one_case(
+    await insert_one_case(
         impl_type=args.impl_type,
         framework=args.framework,
         backend=args.backend,
@@ -63,7 +64,7 @@ def main():
         path=args.path
     )
 
-    # insert_multi_case(
+    # await insert_multi_case(
     #     impl_type=args.impl_type,
     #     framework=args.framework,
     #     backend=args.backend,
@@ -73,4 +74,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
