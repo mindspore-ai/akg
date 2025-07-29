@@ -15,16 +15,14 @@
 import logging
 import re
 import os
+from pathlib import Path
 from ai_kernel_generator import get_project_root
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
 
 class SWFTDocsProcessor:
-    def __init__(self, api_to_use):
-        self.api_to_use = api_to_use
-        self.output_lines = []
-
     def add_function_dscb(self, content, header):
         level = 2
         prefix = '#' * level
@@ -84,35 +82,59 @@ class SWFTDocsProcessor:
 
         return ''.join(function_lines).strip() if function_lines else None
 
-    def run(self):
-        root_dir = get_project_root()
-        for file_name in self.api_to_use.keys():
-            if not self.api_to_use[file_name]:
-                continue
-            md_file = os.path.join(root_dir, "resources", "docs", "swft_docs", f"{file_name}.md")
-            py_file = os.path.join(root_dir, "resources", "docs", "swft_docs", "api", f"{file_name}.txt")
+    def process_list_api(self, api_to_use, docs_path):
+        """处理list类型API参数
+
+        Args:
+            api_to_use (list): API名称列表
+            docs_path (str): 文档路径
+
+        Returns:
+            dict: 按文件名分类的API字典
+        """
+        api_dict = defaultdict(list)
+        for md_file in Path(docs_path).glob('*.md'):
             with open(md_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-            self.output_lines.append(f"# {file_name}.txt\n\n")
-            for function in self.api_to_use[file_name]:
+
+            file_name = md_file.stem
+            for api_name in api_to_use:
+                if api_name in content:
+                    api_dict[file_name].append(api_name)
+                    break
+        return api_dict
+
+    def generate_available_api(self, api_to_use, docs_path, impl_path):
+        output_lines = []
+
+        # 处理list类型参数
+        if isinstance(api_to_use, list):
+            api_to_use = self.process_list_api(api_to_use, docs_path)
+
+        # 原有字典处理逻辑
+        for file_name in api_to_use.keys():
+            if not api_to_use[file_name]:
+                continue
+            md_file = os.path.join(docs_path, f"{file_name}.md")
+            py_file = os.path.join(impl_path, f"{file_name}.py")
+            with open(md_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            output_lines.append(f"# {file_name}.py\n\n")
+
+            for function in api_to_use[file_name]:
                 func_name = f"## {function}"
                 api_docs = self.add_function_dscb(content, function)
                 api_code = self.add_function_code(py_file, function)
 
                 if not func_name or not api_docs or not api_code:
-                    print("No matching function found.")
+                    print(f"No matching function found: {function}")
                     continue
 
-                self.output_lines.append(func_name)
-                self.output_lines.append(api_docs)
-                self.output_lines.append(api_code)
-        return "\n".join(self.output_lines)
+                output_lines.append(func_name)
+                output_lines.append(api_docs)
+                output_lines.append(api_code)
 
-
-def generate_available_api(swft_api):
-    processor = SWFTDocsProcessor(swft_api)
-    result = processor.run()
-    return result
+        return "\n".join(output_lines)
 
 
 def extract_function_details():
