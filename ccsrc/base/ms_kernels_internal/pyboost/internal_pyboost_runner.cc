@@ -27,10 +27,7 @@ void InternalPyboostRunner::GetOrCreateKernel(const TensorList &inputs,
     MS_LOG(DEBUG) << "Internal Op [" << this->op_name() << "] hit cache";
   } else {
     MS_LOG(DEBUG) << "Internal Op [" << this->op_name() << "] miss cache";
-    if (!IsInternalDtypeSupport(inputs, outputs)) {
-      MS_LOG(EXCEPTION) << "Input dtype is not supported for internal op ["
-                        << this->op_name() << "]";
-    }
+    TransDataType(inputs, outputs);
     UpdateArgImmutableInfo(&inputs_ii_, inputs, true);
     UpdateArgImmutableInfo(&outputs_ii_, outputs);
     internal_op_ = CreateKernel(inputs_ii_, outputs_ii_);
@@ -70,8 +67,8 @@ size_t InternalPyboostRunner::CalcWorkspace() {
                          0);
 }
 
-bool InternalPyboostRunner::IsInternalDtypeSupport(
-    const TensorList &ms_inputs, const TensorList &ms_outputs) {
+void InternalPyboostRunner::TransDataType(const TensorList &ms_inputs,
+                                          const TensorList &ms_outputs) {
   internal_inputs_dtype_.resize(ms_inputs.size());
   internal_outputs_dtype_.resize(ms_outputs.size());
 
@@ -92,10 +89,6 @@ bool InternalPyboostRunner::IsInternalDtypeSupport(
     internal_outputs_dtype_[i] =
         TransInternalDataType(ms_outputs[i].data_type());
   }
-
-  return mindspore::internal::IsInternalKernelDtypesSupported(
-      TransInternalOpName(this->op_name()), internal_inputs_dtype_,
-      internal_outputs_dtype_);
 }
 
 TilingCacheItemPtr InternalPyboostRunner::GetOrGenerateTiling() {

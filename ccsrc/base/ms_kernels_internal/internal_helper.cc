@@ -30,17 +30,6 @@
 #include <vector>
 
 namespace ms_custom_ops {
-std::string TransInternalOpName(const std::string &ms_op_name) {
-  auto internal_name =
-      InternalNameMapper::GetInstance().GetInternalName(ms_op_name);
-  if (internal_name.empty()) {
-    MS_LOG(EXCEPTION)
-        << "Op " << ms_op_name
-        << " is supported in Internal, but the name is not mapped";
-  }
-  return internal_name;
-}
-
 InternalNameMapper &InternalNameMapper::GetInstance() {
   static InternalNameMapper name_mammer;
   return name_mammer;

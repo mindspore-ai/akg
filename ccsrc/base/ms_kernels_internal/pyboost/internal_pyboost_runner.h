@@ -64,8 +64,7 @@ protected:
   virtual bool UpdateParam() { return true; }
 
 protected:
-  bool IsInternalDtypeSupport(const TensorList &ms_inputs,
-                              const TensorList &ms_outputs);
+  void TransDataType(const TensorList &ms_inputs, const TensorList &ms_outputs);
 
   TilingCacheItemPtr GetOrGenerateTiling();
   virtual internal::InternalOpPtr

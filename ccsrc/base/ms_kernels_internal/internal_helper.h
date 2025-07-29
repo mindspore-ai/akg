@@ -36,8 +36,6 @@ inline internal::ShapeInfo TransInternalShape(const ShapeVector &shape) {
   return internal_shape;
 }
 
-std::string TransInternalOpName(const std::string &ms_op_name);
-
 bool CheckDefaultSupportFormat(const std::string &format);
 
 internal::DataType TransInternalDataType(TypeId ms_type);
@@ -73,8 +71,6 @@ class InternalNameRegistrar {
 public:
   InternalNameRegistrar(const std::string &ms_name,
                         const std::string &internal_name) {
-    std::cout << "InternalNameRegistrar : ms_name: " << ms_name
-              << ", internal_name: " << internal_name << std::endl;
     InternalNameMapper::GetInstance().Insert(ms_name, internal_name);
   }
   ~InternalNameRegistrar() = default;
