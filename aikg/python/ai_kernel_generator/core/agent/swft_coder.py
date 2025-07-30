@@ -19,7 +19,7 @@ from pathlib import Path
 from ai_kernel_generator.utils.common_utils import ParserFactory, remove_copyright_from_text
 from ai_kernel_generator.core.agent.agent_base import AgentBase
 from ai_kernel_generator import get_project_root
-from ai_kernel_generator.utils.markdown_utils import generate_available_api
+from ai_kernel_generator.core.agent.utils.api_generator import APIGenerator
 from ai_kernel_generator.core.utils import ParsedCode, ActionType
 
 logger = logging.getLogger(__name__)
@@ -81,21 +81,6 @@ class SWFTCoder(AgentBase):
         self.format_api_instructions = self.api_parser.get_format_instructions()
         self.format_coder_instructions = self.code_parser.get_format_instructions()
 
-        # 初始化API生成模板
-        self.api_prompt = self.load_template("swft/api_gen_template.j2")
-        self.api_base_doc = {
-            "op_name": self.op_name,
-            "framework": self.framework,
-            "compute": self.load_doc("swft_docs/compute.md"),
-            "composite": self.load_doc("swft_docs/composite.md"),
-            "slicedata": self.load_doc("swft_docs/slicedata.md"),
-            "move": self.load_doc("swft_docs/move.md"),
-            "format_instructions": self.format_api_instructions,
-        }
-        self.api_input = {
-            "aul_code": "",
-            **self.api_base_doc,
-        }
         self.intermediate_base_doc = {"supported_api": ""}
 
         # 初始化SWFT生成模板
@@ -130,17 +115,9 @@ class SWFTCoder(AgentBase):
         Args:
             swft_content (str): 从LLM获取的SWFT内容。
         """
-        parsed_content = self.api_parser.parse(swft_content)
-        swft_api = {
-            'compute': parsed_content.compute,
-            'composite': parsed_content.composite,
-            'move': parsed_content.move,
-            'slicedata': parsed_content.slicedata
-        }
-        supported_api_str = generate_available_api(swft_api)
-        self.intermediate_base_doc["supported_api"] = supported_api_str
-        self.swft_gen_input["supported_api"] = supported_api_str
-        self.swft_fix_input["supported_api"] = supported_api_str
+        self.intermediate_base_doc["supported_api"] = swft_content
+        self.swft_gen_input["supported_api"] = swft_content
+        self.swft_fix_input["supported_api"] = swft_content
 
     def update(self, action_type: str, aul_code: str, swft_code: str, suggestions: str):
         update_list = []
@@ -177,7 +154,13 @@ class SWFTCoder(AgentBase):
         swft_code = parsed_code.swft_code if parsed_code else ""
         self.update(action_type, aul_code, swft_code, suggestions)
 
-        swft_content, _, _ = await self.run_llm(self.api_prompt, self.api_input, self.model_config["swft_coder_api"])
+        api_gen = APIGenerator(
+            model_config=self.model_config,
+            dsl=self.impl_type,
+            task_desc=self.task_desc,
+            sketch=aul_code
+        )
+        swft_content = await api_gen.run()
         self.update_api(swft_content)
 
         # 根据动作类型选择对应的处理逻辑
