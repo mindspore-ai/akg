@@ -125,7 +125,6 @@ class SWFTCoder(AgentBase):
             self.agent_name = f"SWFTCoder -- [impl_type] {self.impl_type} -- [action] {action_type.name} -- [op_name] {self.op_name}"
             update_list.append("action_type")
         if aul_code != "":
-            self.api_input["aul_code"] = aul_code
             self.swft_gen_input["aul_code"] = aul_code
             self.swft_fix_input["aul_code"] = aul_code
             update_list.append("aul_code")
