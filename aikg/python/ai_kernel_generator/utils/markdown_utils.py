@@ -143,7 +143,6 @@ def extract_function_details():
         "composite.md"
     ]
 
-    # aul_docs_dir = os.path.join(get_project_root(), "resources", "docs", "swft_docs")
     import swft
     swft_path = swft.__path__[0] / "docs"
     combined_spec = ""

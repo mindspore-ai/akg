@@ -143,6 +143,48 @@ def load_binary_data(data_dir, reference_outputs):
     
     return loaded_outputs
 
+
+{% if framework == "torch" %}
+def get_limit(data_type):
+    import torch
+    if data_type == torch.float16:
+        return 0.004
+    elif data_type == torch.bfloat16:
+        return 0.03
+    elif data_type == torch.int8:
+        return 0.01
+    else:
+        return 0.004
+{% elif framework == "numpy" %}
+def get_limit(data_type):
+    import numpy as np
+    if data_type == np.float16:
+        return 0.004
+    elif data_type == np.int8:
+        return 0.01
+    else:
+        return 0.004
+{% elif framework == "mindspore" %}
+def get_limit(data_type):
+    import mindspore as ms
+    if data_type == ms.float16:
+        return 0.004
+    elif data_type == ms.bfloat16:
+        return 0.03
+    elif data_type == ms.int8:
+        return 0.01
+    else:
+        return 0.004
+{% endif %}
+
+def compare(framework_out_flatten, impl_out_flatten, limit, data_type):
+    err_cnt = 0
+    size = len(framework_out_flatten) 
+    err_cnt = np.sum(np.abs(framework_out_flatten - impl_out_flatten) / np.abs(impl_out_flatten) > limit).astype(np.int32)
+    limit_cnt = int(size * limit)
+    if err_cnt > limit_cnt:
+        raise AssertionError(f"验证失败: err_cnt = {err_cnt} / {limit_cnt}，输出不一致（dtype={data_type}, limit={limit}）")
+
 def verify_implementations():
     """验证框架实现和具体实现的结果一致性"""
     # 获取运行模式
@@ -246,57 +288,31 @@ def verify_implementations():
     # 加载SWFT输出
     impl_output = load_binary_data(data_dir, framework_output)
     {% endif %}
-    
-    data_type = framework_output[0].dtype if isinstance(framework_output, (list, tuple)) else framework_output.dtype
-    {% if framework == "torch" %}
-    # 根据数据类型设置误差容忍度
-    if data_type == torch.float16:
-        limit = 0.004
-    elif data_type == torch.bfloat16:
-        limit = 0.03
-    elif data_type == torch.int8:
-        limit = 0.01
-    else:
-        limit = 0.004
-    framework_out_flatten = framework_output.flatten().detach().cpu().numpy()
-    impl_out_flatten = impl_output.flatten()
-    if isinstance(impl_out_flatten, torch.Tensor):
-        impl_out_flatten = impl_out_flatten.detach().cpu().numpy()
-    {% elif framework == "numpy" %}
-    # 根据数据类型设置误差容忍度
-    if data_type == np.float16:
-        limit = 0.004
-    elif data_type == np.int8:
-        limit = 0.01
-    else:
-        limit = 0.004
-    framework_out_flatten = framework_output.flatten()
-    impl_out_flatten = impl_output.flatten()
-    {% elif framework == "mindspore" %}
-    # 根据数据类型设置误差容忍度
-    if data_type == ms.float16:
-        limit = 0.004
-    elif data_type == ms.bfloat16:
-        limit = 0.03
-    elif data_type == ms.int8:
-        limit = 0.01
-    else:
-        limit = 0.004
-    framework_out_flatten = framework_output.flatten().asnumpy()
-    impl_out_flatten = impl_output.flatten()
-    if isinstance(impl_out_flatten, ms.Tensor):
-        impl_out_flatten = impl_out_flatten.asnumpy()
-    {% endif %}
-    
-    def compare(framework_out_flatten, impl_out_flatten, limit):
-        err_cnt = 0
-        size = len(framework_out_flatten) 
-        err_cnt = np.sum(np.abs(framework_out_flatten - impl_out_flatten) / np.abs(impl_out_flatten) > limit).astype(np.int32)
-        limit_cnt = int(size * limit)
-        if err_cnt > limit_cnt:
-            raise AssertionError(f"验证失败: err_cnt = {err_cnt} / {limit_cnt}，输出不一致（dtype={data_type}, limit={limit}）")
 
-    compare(framework_out_flatten, impl_out_flatten, limit)
+    if not isinstance(framework_output, (list, tuple)):
+        framework_output = [framework_output]
+    if not isinstance(impl_output, (list, tuple)):
+        impl_output = [impl_output]
+    
+    for i, (fw_out, impl_out) in enumerate(zip(framework_output, impl_output)):
+        data_type = framework_output[i].dtype if isinstance(framework_output, (list, tuple)) else framework_output.dtype
+        limit = get_limit(data_type)
+        {% if framework == "torch" %}
+        framework_out_flatten = fw_out.flatten().detach().cpu().numpy()
+        impl_out_flatten = impl_out.flatten()
+        if isinstance(impl_out_flatten, torch.Tensor):
+            impl_out_flatten = impl_out_flatten.detach().cpu().numpy()
+        {% elif framework == "numpy" %}
+        framework_out_flatten = fw_out.flatten()
+        impl_out_flatten = impl_out.flatten()
+        {% elif framework == "mindspore" %}
+        framework_out_flatten = fw_out.flatten().asnumpy()
+        impl_out_flatten = impl_out.flatten()
+        if isinstance(impl_out_flatten, ms.Tensor):
+            impl_out_flatten = impl_out_flatten.asnumpy()
+        {% endif %}
+        
+        compare(framework_out_flatten, impl_out_flatten, limit, data_type)
     print(f"验证结果: 成功")
 
 
