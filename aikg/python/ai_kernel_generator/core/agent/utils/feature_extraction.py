@@ -41,7 +41,7 @@ class FeatureExtraction(AgentBase):
         self.format_instructions = self.feature_parser.get_format_instructions()
 
         # 初始化模板
-        self.feature_extraction_template = self.load_template("feature_extraction/feature_extraction_template.j2")
+        self.feature_extraction_template = self.load_template("utils/feature_extraction_template.j2")
 
         self.feature_extraction_input = {
             "impl_code": self.impl_code,

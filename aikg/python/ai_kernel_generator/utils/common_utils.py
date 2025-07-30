@@ -131,10 +131,9 @@ class ParserFactory:
             cls._api_parser = cls.create_output_parser(
                 "ApiBlock",
                 {
-                    'compute': (list[str], ...),
-                    'composite': (list[str], ...),
-                    'move': (list[str], ...),
-                    'slicedata': (list[str], ...)
+                    'api_name': (list[str], ...),
+                    'api_desc': (list[str], ...),
+                    'api_impl': (list[str], ...)
                 }
             )
         return cls._api_parser
@@ -376,3 +375,36 @@ def get_fixed_suffix_content(suffix: str, path: str):
         impl_code = f.read()
 
     return impl_code
+
+
+def load_directory(dir_path: str, recursive: bool = False, file_extensions: list = None) -> str:
+    """加载目录下的所有文件内容
+
+    Args:
+        dir_path: 目录路径
+        recursive: 是否递归读取子目录，默认False
+        file_extensions: 允许的文件扩展名列表，默认全部类型
+
+    Returns:
+        str: 合并后的文件内容字符串
+    """
+    if not dir_path.exists():
+        raise FileNotFoundError(f"目录不存在: {dir_path}")
+
+    combined_content = ""
+    pattern = "**/*" if recursive else "*"
+
+    for file_path in dir_path.glob(pattern):
+        if file_path.is_file():
+            if file_extensions and file_path.suffix.lower() not in file_extensions:
+                continue
+
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                combined_content += content + "\n\n"
+            except Exception as e:
+                logger.error(f"加载文件失败 {file_path}: {str(e)}")
+                continue
+
+    return combined_content.strip()
