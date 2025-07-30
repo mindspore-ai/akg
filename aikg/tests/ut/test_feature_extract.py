@@ -30,9 +30,9 @@ async def test_feature_extract():
     op_name = "elu"
     backend = "ascend"
     arch = "ascend310p3"
-    impl_type = "swft"
+    dsl = "swft"
     op_name = "elu"
-    impl_code_path = DEFAULT_DATABASE_PATH / impl_type / arch / op_name / "aigen" / "elu_aul.py"
+    impl_code_path = DEFAULT_DATABASE_PATH / dsl / arch / op_name / "aigen" / "elu_aul.py"
 
     with open(impl_code_path, "r", encoding="utf-8") as f:
         impl_code = f.read()

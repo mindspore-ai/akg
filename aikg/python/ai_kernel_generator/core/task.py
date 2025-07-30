@@ -12,36 +12,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
+import os
 import json
+import logging
 import asyncio
-from typing import Tuple
+from typing import Tuple, Optional, Dict, Any
+from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
-from ai_kernel_generator.core.utils import ActionType, ParsedCode
+from ai_kernel_generator.core.utils import check_task_config, check_task_type
 from ai_kernel_generator.core.agent.conductor import Conductor
-from ai_kernel_generator.core.agent.aul_designer import AULDesigner
-from ai_kernel_generator.core.agent.coder import CoderFactory
+from ai_kernel_generator.core.agent.coder import Coder
+from ai_kernel_generator.core.agent.designer import Designer
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
-from ai_kernel_generator.core.task_base import TaskBase
+from ai_kernel_generator.utils.workflow_manager import WorkflowManager
 
 logger = logging.getLogger(__name__)
 
 
-class Task(TaskBase):
+class Task:
+    """
+    配置驱动的任务类，基于workflow.yaml进行工作流管理
+    """
+
     def __init__(self,
                  op_name: str,
                  task_desc: str,
                  task_id: str,
                  backend: str,
                  arch: str,
-                 impl_type: str,
+                 dsl: str,
                  config: dict,
                  device_pool: DevicePool,
                  framework: str,
                  task_type="precision_only",
-                 limit_steps=10) -> None:
+                 workflow: Optional[str] = None) -> None:
         """
-        初始化任务类，用于记录任务的各种属性。
+        初始化Task类，基于workflow配置进行工作流管理。
 
         Args:
             op_name (str): 算子名称。
@@ -49,117 +55,216 @@ class Task(TaskBase):
             task_id (str): 任务ID。
             backend (str): 后端名称。
             arch (str): 架构名称。
-            impl_type (str): 实现类型。
+            dsl (str): 实现类型。
             config (dict): 配置agent_mode_config。
+            device_pool: 设备池。
             framework (str): 框架名称。
             task_type (str, optional): 任务类型, 默认为"precision_only"。
-            limit_steps (int, optional): 限制步数, 默认为10。
+            workflow (str, optional): workflow名称，可以是文件名或完整路径。
+                - 文件名: "coder_only_workflow" -> "config/coder_only_workflow.yaml"
+                - 完整路径: "config/xxx.yaml"
+                - None: 使用默认配置
         """
-        super().__init__(op_name, task_desc, task_id, backend, arch, impl_type, config, device_pool, framework,
-                         task_type, limit_steps)
-        self.designer = AULDesigner(self.op_name, self.task_desc, self.model_name_dict,
-                                    self.impl_type, self.backend, self.arch)
-        self.coder = CoderFactory().create_coder(self.op_name, self.task_desc, self.model_name_dict, self.impl_type,
-                                                 self.framework)
-        self.verifier = KernelVerifier(self.op_name, self.task_desc, self.log_dir,
-                                       self.task_id, self.framework, self.impl_type, self.backend, self.arch)
-        self.conductor = Conductor(self.op_name, self.task_id, self.log_dir, self.impl_type,
-                                   self.model_name_dict, coder_only_mode=False)
+        # 验证任务配置
+        check_task_config(framework, backend, arch, dsl)
+        check_task_type(task_type)
 
-    def init_conductor(self, init_action_type=ActionType.DO_DESIGNER, init_parsed_code=ParsedCode()):
+        # 基础属性
+        self.op_name = op_name
+        self.task_desc = task_desc
+        self.task_id = task_id
+        self.backend = backend.lower()
+        self.arch = arch.lower()
+        self.dsl = dsl
+        self.framework = framework
+        self.task_type = task_type
+        self.device_pool = device_pool
+
+        # 统一保存config，后续向下传递
+        self.config = config
+
+        # 优先使用传入的workflow参数，否则使用config中的workflow_config_path
+        if workflow:
+            self.workflow_config_path = WorkflowManager.resolve_workflow_config_path(workflow)
+        else:
+            self.workflow_config_path = config.get("workflow_config_path")
+            if self.workflow_config_path and not os.path.isabs(self.workflow_config_path):
+                # 相对路径需要相对于项目根目录
+                self.workflow_config_path = os.path.join(get_project_root(), self.workflow_config_path)
+
+        # 确保workflow_config_path不为空
+        if not self.workflow_config_path:
+            raise ValueError("workflow_config_path is required. Please provide it in config or as workflow parameter.")
+
+        # 初始化Conductor（优先初始化，用于获取workflow配置）
+        self.conductor = Conductor(self.op_name, self.task_desc, self.task_id,
+                                   self.dsl, self.framework, self.arch,
+                                   workflow_config_path=self.workflow_config_path, config=self.config)
+
+        # 根据workflow配置动态初始化agents
+        self._init_agents_from_workflow()
+
+    def _init_agents_from_workflow(self):
+        """根据workflow.yaml配置动态初始化需要的agents"""
+        # 获取workflow中配置的agent列表
+        agent_names = set(self.conductor.agent_info.keys())
+
+        # 初始化所需的agents
+        self.agents = {}  # 存储所有agents的字典
+
+        # 根据配置创建相应的agents
+        if 'designer' in agent_names:
+            self.designer = Designer(self.op_name, self.task_desc,
+                                     self.dsl, self.backend, self.arch,
+                                     workflow_config_path=self.workflow_config_path, config=self.config)
+            self.agents['designer'] = self.designer
+
+        if 'coder' in agent_names:
+            self.coder = Coder(self.op_name, self.task_desc,
+                               self.dsl, self.framework, self.backend, self.arch,
+                               workflow_config_path=self.workflow_config_path, config=self.config)
+            self.agents['coder'] = self.coder
+
+        if 'verifier' in agent_names:
+            self.verifier = KernelVerifier(self.op_name, self.task_desc,
+                                           self.task_id, self.framework, self.dsl, self.backend, self.arch, config=self.config)
+            self.agents['verifier'] = self.verifier
+
+    def get_agent(self, agent_name: str):
+        """获取指定名称的agent实例"""
+        if agent_name not in self.agents:
+            raise ValueError(f"Agent '{agent_name}' is not available in current workflow configuration. "
+                             f"Available agents: {list(self.agents.keys())}")
+        return self.agents[agent_name]
+
+    def init_conductor(self, init_task_info: Optional[Dict[str, Any]] = None):
         """
-        初始化Conductor，根据初始动作类型和解析代码进行初始化。
+        初始化Conductor，根据初始任务信息进行初始化。
+
         Args:
-            init_action_type (ActionType, optional): 初始动作类型, 默认为ActionType.DO_DESIGNER。
-            init_parsed_code (ParsedCode, optional): 初始解析代码, 默认为ParsedCode()。
-        Returns:
-            None
+            init_task_info (Dict[str, Any], optional): 初始任务信息字典, 包含初始代码等
         """
+
         # 初始化基础文档
-        self.conductor.trace.base_doc.update(self.designer.aul_base_doc)
-        if "triton" in self.impl_type:
-            self.conductor.trace.base_doc.update(self.coder.triton_base_doc)
-        elif self.impl_type == "swft":
-            self.conductor.trace.base_doc.update(self.coder.swft_base_doc)
+        base_doc = {}
 
-        # 初始化检查文档
-        self.conductor.initialize_check_docs()
+        # 只在相应agent存在时添加其基础文档
+        if 'designer' in self.agents:
+            base_doc.update(self.agents['designer'].base_doc)
 
-        # 插入初始记录
-        if init_action_type in (ActionType.DO_CODER, ActionType.VERIFY):
-            self.conductor.trace.insert_designer_or_coder_record(
-                json.dumps({"code": init_parsed_code.aul_code, "description": ""}), "", "", ActionType.DO_DESIGNER
+        if 'coder' in self.agents:
+            coder = self.agents['coder']
+            base_doc.update(coder.base_doc)
+
+        # 初始化任务信息
+        self.conductor.set_task_info(base_doc)
+
+        # 插入初始记录（如果有初始代码）
+        # 注意：这里的逻辑假设从某个中间步骤开始，需要预先插入之前步骤的结果
+        if init_task_info and init_task_info.get("designer_code"):
+            self.conductor.record_agent_execution(
+                agent_name="designer",
+                result=json.dumps({"code": init_task_info.get("designer_code")})
             )
-        if init_action_type == ActionType.VERIFY:
-            if "triton" in self.impl_type:
-                self.conductor.trace.insert_designer_or_coder_record(
-                    json.dumps({"code": init_parsed_code.triton_code, "description": ""}), "", "", ActionType.DO_CODER
-                )
-            elif self.impl_type == "swft":
-                self.conductor.trace.insert_designer_or_coder_record(
-                    json.dumps({"code": init_parsed_code.swft_code, "description": ""}), "", "", ActionType.DO_CODER
-                )
 
-    async def run(self, init_action_type=ActionType.DO_DESIGNER, init_parsed_code=ParsedCode(),
-                  init_suggestions="") -> Tuple[str, bool]:
+        if init_task_info and init_task_info.get("coder_code"):
+            self.conductor.record_agent_execution(
+                agent_name="coder",
+                result=json.dumps({"code": init_task_info.get("coder_code")})
+            )
+
+    async def run(self, init_task_info: Optional[Dict[str, Any]] = None) -> Tuple[str, bool]:
         """
         异步运行任务，执行操作任务字符串
+
         Args:
-            init_action_type (ActionType, optional): 初始动作类型, 默认为ActionType.DO_DESIGNER。
-            init_parsed_code (ParsedCode, optional): 初始解析代码, 默认为ParsedCode()。
-            init_suggestions (str, optional): 初始建议, 默认为""。
+            init_task_info: 初始任务信息字典，包含初始代码等
+
         Returns:
-            Tuple[str, bool]: 包含算子名称和验证结果的元组。
+            Tuple[str, bool]: (算子名称, 是否成功)
         """
         try:
-            self.init_conductor(init_action_type, init_parsed_code)
-            action_type = init_action_type
-            parsed_code = init_parsed_code
-            suggestions = init_suggestions
+            # 初始化conductor
+            self.init_conductor(init_task_info)
 
-            verify_res = False
+            # 获取首个agent（通过yaml配置）
+            current_agent = self.conductor.start_agent
 
-            while action_type != ActionType.EXIT:
-                logger.info(f"Task {self.task_id}, op_name: {self.op_name}, action_type: {action_type.value}")
-                if action_type in [ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER]:
-                    designer_res, designer_prompt, designer_reasoning = await self.designer.run(action_type, parsed_code, suggestions)
-                    self.conductor.trace.insert_designer_or_coder_record(
-                        designer_res, designer_prompt, designer_reasoning, action_type)
-                elif action_type in [ActionType.DO_CODER, ActionType.FIX_CODER]:
-                    coder_res, coder_prompt, coder_reasoning = await self.coder.run(action_type, parsed_code, suggestions)
-                    if self.impl_type == "swft":
-                        self.conductor.trace.base_doc.update(self.coder.intermediate_base_doc)
-                    self.conductor.trace.insert_designer_or_coder_record(
-                        coder_res, coder_prompt, coder_reasoning, action_type)
-                elif action_type == ActionType.VERIFY:
-                    device_id = await self.device_pool.acquire_device()
-                    try:
-                        current_step = len(self.conductor.trace.trace_list)
-                        loop = asyncio.get_running_loop()
-                        verify_res, verify_log = await loop.run_in_executor(
-                            None,
-                            self.verifier.run,
-                            parsed_code, current_step, device_id
+            while current_agent != "finish":
+                logger.info(f"Task {self.task_id}, op_name: {self.op_name}, current_agent: {current_agent}")
+                try:
+                    if current_agent == "designer":
+                        designer = self.get_agent('designer')
+
+                        designer_res, designer_prompt, designer_reasoning = await designer.run(
+                            task_info=self.conductor.task_info
                         )
-                        profile_res = ""
-                        if verify_res and self.task_type == "profile" and self.backend == "ascend":
-                            speedup = self.verifier.run_profile(current_step, device_id, self.profile_settings)
-                            profile_res = f"speedup: {speedup:.6f}x"
-                        self.conductor.trace.insert_verifier_record(
-                            str(verify_res), verify_log, profile_res, action_type)
-                    finally:
-                        await self.device_pool.release_device(device_id)
-                else:
-                    raise ValueError(f"Unsupported target: {action_type}")
+                        self.conductor.record_agent_execution(
+                            agent_name="designer",
+                            result=designer_res,
+                            prompt=designer_prompt,
+                            reasoning=designer_reasoning
+                        )
 
-                action_type, parsed_code, suggestions = await self.conductor.get_next_action()
-                if self.conductor.step >= self.limit_steps:
-                    action_type = ActionType.EXIT
+                    elif current_agent == "coder":
+                        coder = self.get_agent('coder')
 
-            if verify_res:
-                return self.op_name, True
-            else:
-                return self.op_name, False
+                        coder_res, coder_prompt, coder_reasoning = await coder.run(
+                            task_info=self.conductor.task_info
+                        )
+
+                        self.conductor.record_agent_execution(
+                            agent_name="coder",
+                            result=coder_res,
+                            prompt=coder_prompt,
+                            reasoning=coder_reasoning
+                        )
+
+                    elif current_agent == "verifier":
+                        device_id = await self.device_pool.acquire_device()
+                        try:
+                            current_step = len(self.conductor.trace.trace_list)
+                            loop = asyncio.get_running_loop()
+                            # 传递task_info而不是parsed_code
+                            verify_res, verify_log = await loop.run_in_executor(
+                                None,
+                                self.verifier.run,
+                                self.conductor.task_info, current_step, device_id
+                            )
+                            profile_res = ""
+                            if verify_res and self.task_type == "profile" and self.backend == "ascend":
+                                profile_settings = self.config.get("profile_settings", {})
+                                speedup = self.verifier.run_profile(current_step, device_id, profile_settings)
+                                profile_res = f"speedup: {speedup:.6f}x"
+
+                            self.conductor.record_agent_execution(
+                                agent_name="verifier",
+                                result=str(verify_res),
+                                error_log=verify_log,
+                                profile=profile_res
+                            )
+                        finally:
+                            await self.device_pool.release_device(device_id)
+                    else:
+                        raise ValueError(f"Unsupported agent: {current_agent}")
+
+                    # 获取下一个agent
+                    next_agent = await self.conductor.get_next_agent()
+                    current_agent = next_agent
+
+                except Exception as agent_error:
+                    logger.error(f"Agent {current_agent} execution failed: {agent_error}")
+                    self.conductor.record_agent_execution(
+                        agent_name=current_agent,
+                        result=f"ERROR: Agent execution failed: {str(agent_error)}",
+                        error_log=str(agent_error)
+                    )
+                    return self.op_name, False
+
+            # 获取最终结果
+            final_success = self.conductor.task_info.get('verifier_result', False)
+            return self.op_name, final_success
+
         except Exception as e:
             logger.error(f"Task {self.task_id} failed: {e}")
             return self.op_name, False

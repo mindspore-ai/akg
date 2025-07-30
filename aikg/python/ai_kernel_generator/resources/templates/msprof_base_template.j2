@@ -2,18 +2,18 @@ import os
 import json
 import numpy as np
 from typing import Union, Literal, List, Tuple, Any
-
 {% if framework == "torch" %}
 import torch
 from {{ op_name }}_torch import Model as FrameworkModel, get_inputs, get_init_inputs
 TensorType = torch.Tensor
-{% else %}
+{% elif framework == "numpy" %}
+from {{ op_name }}_numpy import Model as FrameworkModel, get_inputs, get_init_inputs
+TensorType = np.ndarray
+{% elif framework == "mindspore" %}
 import mindspore as ms
 from mindspore.common import np_dtype
 from {{ op_name }}_mindspore import Model as FrameworkModel, get_inputs, get_init_inputs
 TensorType = ms.Tensor
-
-# MindSpore 到 NumPy 的数据类型映射
 MS_TO_NP_DTYPE_MAP = {
     ms.float32: np.float32,
     ms.float16: np.float16,
@@ -30,9 +30,9 @@ MS_TO_NP_DTYPE_MAP = {
 }
 {% endif %}
 
-{% if "triton" in impl_type %}
+{% if "triton" in dsl %}
 from {{ op_name }}_triton import {{ impl_func_name }}
-{% elif impl_type == "swft" %}
+{% elif dsl == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
 {% endif %}
 
@@ -41,9 +41,10 @@ def run_base_implementations():
     # 获取运行模式
     backend = "{{ backend }}"  # 计算设备后端
     arch = "{{ arch }}"  # 硬件架构
-    impl_type = "{{ impl_type }}"  # 实现方式
+    dsl = "{{ dsl }}"  # 实现方式
     
     {% if framework == "torch" %}
+    torch.manual_seed(0)
     # PyTorch设备设置
     if backend == "cuda":
         os.environ['CUDA_VISIBLE_DEVICES'] = str({{ device_id }})
@@ -54,11 +55,18 @@ def run_base_implementations():
         elif arch == "v100":
             torch.cuda.set_device(0)  # 使用第一个v100设备
     elif backend == "ascend":
-        os.environ['DEVICE_ID'] = str({{ device_id }})
         if "ascend910" in arch:
+            {% if dsl == "triton-russia" %}
+            os.environ['TRITON_ASCEND_DEVICE'] = str({{ device_id }})
+            device = torch.device("cpu")
+            {% else %}
+            os.environ['DEVICE_ID'] = str({{ device_id }})
             device = torch.device("npu")
+            torch.npu.manual_seed(0)
             torch.npu.set_device({{ device_id }})
+            {% endif %}
         elif "ascend310" in arch:
+            os.environ['DEVICE_ID'] = str({{ device_id }})
             device = torch.device("cpu")
         else:
             raise ValueError(f"不支持的ascend架构: {arch}")
@@ -106,7 +114,9 @@ def run_base_implementations():
             except (AttributeError, TypeError):
                 return x
     inputs = [process_input(x) for x in inputs]
-    {% else %}
+    {% elif framework == "numpy" %}
+    inputs = get_inputs()
+    {% elif framework == "mindspore" %}
     inputs = get_inputs()
     {% endif %}
     

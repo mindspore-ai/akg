@@ -19,14 +19,13 @@ import logging
 import subprocess
 import json
 from datetime import datetime
-from typing import Optional, Literal, Tuple
+from typing import Optional, Literal, Tuple, Dict, Any
 from jinja2 import Template
 import pandas as pd
 from pathlib import Path
 
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.utils.process_utils import run_command
-from ai_kernel_generator.core.utils import ParsedCode
 
 # 模板路径
 TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "kernel_verify_template.j2")
@@ -47,13 +46,13 @@ class KernelVerifier:
     def __init__(self,
                  op_name: str,
                  framework_code: str,
-                 log_dir: str,
                  task_id: str = "0",
                  framework: FrameworkType = "torch",
-                 impl_type: ImplType = "triton",
+                 dsl: ImplType = "triton",
                  backend: BackendType = "cuda",
                  arch: ArchType = "a100",
-                 impl_func_name: Optional[str] = None):
+                 impl_func_name: Optional[str] = None,
+                 config: Optional[Dict[str, Any]] = None):
         """
         初始化Kernel验证器。
 
@@ -63,23 +62,29 @@ class KernelVerifier:
             log_dir (str): 调试信息目录
             task_id (str, optional): 任务ID，用于生成唯一目录名
             framework (FrameworkType): 深度学习框架，可选值包括 "torch", "mindspore", "numpy"
-            impl_type (ImplType): 实现类型，可选值包括 "triton", "triton-russia", "swft"
+            dsl (ImplType): 实现类型，可选值包括 "triton", "triton-russia", "swft"
             backend (BackendType): 计算设备后端，可选值包括 "cuda", "ascend"
             arch (ArchType): 硬件架构，可选值包括 "a100", "v100", "ascend910b4", "ascend310p3"
-            impl_func_name (str, optional): 实现函数名，默认为op_name_impl_type_framework
+            impl_func_name (str, optional): 实现函数名，默认为op_name_dsl_framework
         """
         self.op_name = op_name
         self.framework_code = framework_code
         self.framework = framework
-        self.impl_type = impl_type
+        self.dsl = dsl
         self.backend = backend.lower()
         self.arch = arch.lower()
         self.task_id = task_id
-        self.log_dir = log_dir
-        if "triton" in self.impl_type:
+
+        # 从config中获取log_dir
+        if config:
+            self.config = config
+            self.log_dir = config.get("log_dir")
+        else:
+            raise ValueError("config is required for KernelVerifier")
+        if "triton" in self.dsl:
             self.impl_func_name = impl_func_name or f"{op_name}_triton_{framework}"
         else:
-            self.impl_func_name = impl_func_name or f"{op_name}_{impl_type}_{framework}"
+            self.impl_func_name = impl_func_name or f"{op_name}_{dsl}_{framework}"
 
         # 验证backend和arch的组合是否有效
         if self.backend == "cuda" and self.arch not in ["a100", "v100"]:
@@ -104,10 +109,10 @@ class KernelVerifier:
             f.write(self.framework_code)
 
         # 创建具体实现文件
-        if "triton" in self.impl_type:
+        if "triton" in self.dsl:
             file_name = f"{self.op_name}_triton.py"
         else:
-            file_name = f"{self.op_name}_{self.impl_type}.py"
+            file_name = f"{self.op_name}_{self.dsl}.py"
         impl_file = os.path.join(verify_dir, file_name)
         with open(impl_file, "w", encoding="utf-8") as f:
             f.write(impl_code)
@@ -123,7 +128,7 @@ class KernelVerifier:
         rendered_code = template.render(
             op_name=self.op_name,
             framework=self.framework,
-            impl_type=self.impl_type,
+            dsl=self.dsl,
             device_id=device_id,
             impl_func_name=self.impl_func_name,
             backend=self.backend,
@@ -133,11 +138,17 @@ class KernelVerifier:
         with open(verify_file, "w", encoding="utf-8") as f:
             f.write(rendered_code)
 
-    def run_verify(self, verify_dir: str):
-        """运行验证脚本"""
+    def run_verify(self, verify_dir: str, timeout: int = 300):
+        """
+        运行验证脚本
+
+        Args:
+            verify_dir: 验证目录
+            timeout: 超时时间（秒），默认5分钟
+        """
         os.chdir(verify_dir)
         python_cmd = ["python", f"verify_{self.op_name}.py"]
-        return run_command(python_cmd, f"verify_{self.op_name}")
+        return run_command(python_cmd, f"verify_{self.op_name}", timeout=timeout)
 
     def gen_profile_project(self, verify_dir: str, device_id: int = 0, warmup_times: int = 5, run_times: int = 50):
         """生成profile项目文件到指定目录"""
@@ -159,7 +170,7 @@ class KernelVerifier:
         rendered_code = template.render(
             op_name=self.op_name,
             framework=self.framework,
-            impl_type=self.impl_type,
+            dsl=self.dsl,
             device_id=device_id,
             impl_func_name=self.impl_func_name,
             backend=self.backend,
@@ -353,27 +364,38 @@ class KernelVerifier:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
             return 0.0
 
-    def run(self, parsed_code: ParsedCode, current_step: int = 0, device_id: int = 0):
-        """完整的验证流程
+    def run(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = 0):
+        """
+        运行内核验证器，验证代码的正确性
 
         Args:
-            parsed_code: 解析后的代码
-            current_step: 步骤计数器，用于生成唯一目录名
+            task_info: 任务信息字典，包含所有代码和状态
+            current_step: 当前步骤
             device_id: 设备ID
+
+        Returns:
+            Tuple[bool, str]: (验证结果, 错误日志)
         """
-        if "triton" in self.impl_type:
-            impl_code = parsed_code.triton_code
-        elif self.impl_type == "swft":
-            impl_code = parsed_code.swft_code
+        logger.info(f"Verifier Run - Step: {current_step}, Device: {device_id}")
+
+        # 根据实现类型从task_info获取代码
+        target_code = task_info.get('coder_code', '')
+
+        if not target_code:
+            logger.error("No target code found for verification")
+            return False, "No target code found for verification"
 
         # 动态创建验证目录
         verify_dir = self._create_verify_dir(current_step)
 
         # 在独立目录中生成验证项目
-        self.gen_verify_project(impl_code, verify_dir, device_id)
+        self.gen_verify_project(target_code, verify_dir, device_id)
+
+        # 从config获取timeout配置，默认5分钟
+        verify_timeout = self.config.get('verify_timeout', 300)
 
         # 运行验证
-        verify_res, verify_log = self.run_verify(verify_dir)
+        verify_res, verify_log = self.run_verify(verify_dir, timeout=verify_timeout)
 
         # 保存验证结果到JSONL文件（每行一个JSON对象）
         result_jsonl_path = os.path.join(os.path.expanduser(self.log_dir), "verification_results.jsonl")
@@ -386,7 +408,7 @@ class KernelVerifier:
             "error_log": verify_log,
             "timestamp": datetime.now().isoformat(),
             "framework": self.framework,
-            "impl_type": self.impl_type,
+            "dsl": self.dsl,
             "backend": self.backend,
             "arch": self.arch
         }

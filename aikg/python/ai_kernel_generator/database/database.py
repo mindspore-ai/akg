@@ -44,7 +44,7 @@ class Database():
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
-    async def feature_extractor(self,impl_code: str, framework_code:str, backend:str, arch: str, impl_type:str, profile=float('inf')):
+    async def feature_extractor(self,impl_code: str, framework_code:str, backend:str, arch: str, dsl:str, profile=float('inf')):
         """提取任务特征"""
         # 特征提取
         feature_extractor = FeatureExtraction(
@@ -64,20 +64,20 @@ class Database():
             "profile": profile,
             "backend": backend,
             "arch": arch,
-            "impl_type": impl_type,
+            "dsl": dsl,
             "description": parsed_content.description
         }
         return extracted_features
     
-    def get_output_content(self, output_content:List[str], strategy_mode:RetrievalStrategy, docs, impl_type, framework):
+    def get_output_content(self, output_content:List[str], strategy_mode:RetrievalStrategy, docs, dsl, framework):
         result = []
         for doc in docs:
             case_path = Path(doc.metadata["file_path"])
             
             res_dict = {"strategy_mode": strategy_mode}
             for content in output_content:
-                if content == "impl_code" and impl_type:
-                    code_file_path = case_path / f"{impl_type}.py"
+                if content == "impl_code" and dsl:
+                    code_file_path = case_path / f"{dsl}.py"
                     if not code_file_path.exists():
                         raise FileNotFoundError(f"Code file not found: {code_file_path}")
                     with open(code_file_path, "r", encoding="utf-8") as f:
@@ -157,7 +157,7 @@ class Database():
         )
 
     def samples_with_strategy(self, strategy_mode: RetrievalStrategy, output_content: List[str], features_str:str, feature_invariants:str,
-                              sample_num: int = 5, rule_desc:str = "", impl_type: str = "", framework: str = ""):
+                              sample_num: int = 5, rule_desc:str = "", dsl: str = "", framework: str = ""):
         """根据指定的策略获取样本"""
         if strategy_mode == RetrievalStrategy.RANDOMICITY:
             docs = self.randomicity_search(features_str, feature_invariants, sample_num)
@@ -170,23 +170,23 @@ class Database():
         else:
             raise ValueError("Invalid strategy_mode")
         
-        result = self.get_output_content(output_content, strategy_mode, docs, impl_type, framework)
+        result = self.get_output_content(output_content, strategy_mode, docs, dsl, framework)
         return result
 
     async def samples(self, output_content: List[str], strategy_mode: RetrievalStrategy = RetrievalStrategy.SIMILARITY, sample_num: int = 5, rule_desc: str = "",
-                      impl_code: str = "", framework_code:str = "", backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
+                      impl_code: str = "", framework_code:str = "", backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
         """
         基本采样，根据指定的策略获取样本
         """
-        features = await self.feature_extractor(impl_code, framework_code, backend, arch, impl_type)
+        features = await self.feature_extractor(impl_code, framework_code, backend, arch, dsl)
         features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
-        feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
+        feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
         
-        result = self.samples_with_strategy(strategy_mode, output_content, features_str, feature_invariants, sample_num, rule_desc, impl_type, framework)
+        result = self.samples_with_strategy(strategy_mode, output_content, features_str, feature_invariants, sample_num, rule_desc, dsl, framework)
         return result
     
     async def combined_samples(self, strategy_mode: List[RetrievalStrategy], output_content: List[str], sample_num: List[int], rule_desc:str = "",
-                               impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
+                               impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
         """
         综合采样，根据不同的策略和数量获取样本
         """
@@ -195,24 +195,24 @@ class Database():
         if not strategy_mode or not sample_num:
             raise ValueError("strategy_mode and sample_num cannot be empty")
 
-        features = await self.feature_extractor(impl_code, framework_code, backend, arch, impl_type)
+        features = await self.feature_extractor(impl_code, framework_code, backend, arch, dsl)
         features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
-        feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
+        feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
         result = []
         for strategy, num in zip(strategy_mode, sample_num):
-            res = self.samples_with_strategy(strategy, output_content, features_str, feature_invariants, num, rule_desc, impl_type, framework)
+            res = self.samples_with_strategy(strategy, output_content, features_str, feature_invariants, num, rule_desc, dsl, framework)
             result.extend(res)
         return result
     
-    async def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, impl_type: str, framework: str, profile=float('inf')):
+    async def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, dsl: str, framework: str, profile=float('inf')):
         """
         插入新的算子实现
         """
-        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type)
+        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
         operator_path = Path(self.database_path) / "operators"
-        file_path = operator_path / arch / impl_type / md5_hash
+        file_path = operator_path / arch / dsl / md5_hash
 
-        features = await self.feature_extractor(impl_code, framework_code, backend, arch, impl_type, profile)
+        features = await self.feature_extractor(impl_code, framework_code, backend, arch, dsl, profile)
         file_path.mkdir(parents=True, exist_ok=True)
         metadata_file = file_path / "metadata.json"
         with open(metadata_file, "w", encoding="utf-8") as f:
@@ -221,11 +221,11 @@ class Database():
         framework_file = file_path / f"{framework}.py"
         with open(framework_file, "w", encoding="utf-8") as f:
             f.write(framework_code)
-        impl_file = file_path / f"{impl_type}.py"
+        impl_file = file_path / f"{dsl}.py"
         with open(impl_file, "w", encoding="utf-8") as f:
             f.write(impl_code)
 
-        self.vector_store.insert(backend, arch, impl_type, md5_hash)
+        self.vector_store.insert(backend, arch, dsl, md5_hash)
         logger.info(f"Operator implementation inserted successfully, file path: {file_path}")
 
     def update(self):
@@ -234,14 +234,14 @@ class Database():
         """
         pass
 
-    async def delete(self, impl_code:str, backend: str, arch: str, impl_type: str):
+    async def delete(self, impl_code:str, backend: str, arch: str, dsl: str):
         """
         删除算子实现
         """
-        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type)
+        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
 
         operator_path = Path(self.database_path) / "operators"
-        file_path = operator_path / arch / impl_type / md5_hash
+        file_path = operator_path / arch / dsl / md5_hash
         if not file_path.exists():
             logger.warning(f"Operator implementation does not exist: {file_path}")
             return

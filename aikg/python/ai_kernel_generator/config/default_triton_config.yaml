@@ -1,0 +1,25 @@
+# Model preset configuration
+agent_model_config:
+  designer: deepseek_r1_default
+  coder: deepseek_r1_default
+  conductor: deepseek_r1_default
+  api_generator: deepseek_r1_default
+
+# Log configuration
+log_dir: "~/aikg_logs"
+
+# Workflow configuration
+workflow_config_path: "config/default_workflow.yaml"
+
+# Documentation directory configuration
+docs_dir:
+  designer: "resources/docs/aul_docs"
+  coder: "resources/docs/triton_docs"
+
+# Performance analysis configuration
+profile_settings:
+  run_times: 50
+  warmup_times: 5
+
+# Verification configuration
+verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)

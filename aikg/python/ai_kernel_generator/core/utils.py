@@ -13,37 +13,6 @@
 # limitations under the License.
 
 
-from enum import Enum
-from dataclasses import dataclass
-
-
-class ActionType(Enum):
-    DO_DESIGNER = "DoDesigner"
-    FIX_DESIGNER = "FixDesigner"
-    DO_CODER = "DoCoder"
-    FIX_CODER = "FixCoder"
-    DO_CODER_DIRECT = "DoCoderDirect"  # 直接从输入生成Triton代码
-    VERIFY = "Verify"
-    EXIT = "Exit"
-
-
-@dataclass
-class Record:
-    action_type: ActionType = ActionType.DO_DESIGNER
-    result: str = ""
-    prompt: str = ""
-    reasoning: str = ""
-    error_log: str = ""
-    profile: str = ""
-
-
-@dataclass
-class ParsedCode:
-    aul_code: str = ""
-    swft_code: str = ""
-    triton_code: str = ""
-
-
 def check_backend_arch(backend: str, arch: str):
     """
     验证后端与架构的匹配关系
@@ -61,14 +30,14 @@ def check_backend_arch(backend: str, arch: str):
         raise ValueError("cpu backend only support x86_64 and aarch64")
 
 
-def check_impl_type(impl_type: str):
+def check_dsl(dsl: str):
     """
     验证实现类型
     Args:
-        impl_type: 实现类型(triton/swft)
+        dsl: 实现类型(triton/swft)
     """
-    if impl_type not in ["triton", "triton-russia", "swft"]:
-        raise ValueError("impl_type must be triton or swft")
+    if dsl not in ["triton", "triton-russia", "swft"]:
+        raise ValueError("dsl must be triton or swft")
 
 
 def check_task_type(task_type: str):
@@ -83,7 +52,7 @@ def check_task_type(task_type: str):
 
 # 配置依赖关系映射表
 VALID_CONFIGS = {
-    # framework -> backend -> arch -> impl_type
+    # framework -> backend -> arch -> dsl
     "mindspore": {
         "ascend": {
             "ascend910b4": ["triton", "triton-russia"],
@@ -107,14 +76,14 @@ VALID_CONFIGS = {
 }
 
 
-def check_task_config(framework: str, backend: str, arch: str, impl_type: str):
+def check_task_config(framework: str, backend: str, arch: str, dsl: str):
     """
     统一验证配置参数之间的依赖关系
     Args:
         framework: 框架类型
         backend: 硬件后端名称
         arch: 硬件架构名称
-        impl_type: 实现类型
+        dsl: 实现类型
     """
     if framework not in VALID_CONFIGS:
         raise ValueError(f"Unsupported framework: {framework}")
@@ -125,5 +94,5 @@ def check_task_config(framework: str, backend: str, arch: str, impl_type: str):
     if arch not in VALID_CONFIGS[framework][backend]:
         raise ValueError(f"Backend {backend} does not support arch: {arch}")
 
-    if impl_type not in VALID_CONFIGS[framework][backend][arch]:
-        raise ValueError(f"Arch {arch} does not support impl_type: {impl_type}")
+    if dsl not in VALID_CONFIGS[framework][backend][arch]:
+        raise ValueError(f"Arch {arch} does not support dsl: {dsl}")

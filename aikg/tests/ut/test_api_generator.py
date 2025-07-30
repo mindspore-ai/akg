@@ -28,7 +28,7 @@ RESOURCES_PATH = Path("tests") / "resources"
     ("torch", "triton"),
 ])
 async def test_api_gen(framework, dsl):
-    config = load_config()['agent_model_config']
+    config = load_config(dsl)['agent_model_config']
     op_name = "relu_op"
     framework_path = RESOURCES_PATH / op_name / f"{op_name}_{framework}.py"
     with open(framework_path, "r", encoding="utf-8") as f:

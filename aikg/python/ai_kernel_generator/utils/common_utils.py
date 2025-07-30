@@ -88,43 +88,112 @@ def create_log_dir(prefix_name: str = "test_log"):
 
 class ParserFactory:
     """
-    解析器工厂类，提供常用的解析器创建和获取功能
+    解析器工厂类，提供动态解析器创建和管理功能
     """
 
-    # 类级别的预定义解析器缓存
-    _code_parser = None
-    _check_parser = None
-    _api_parser = None
+    # 动态解析器注册表
+    _dynamic_parsers = {}
+
+    # 支持的类型映射
+    _type_mapping = {
+        'str': str,
+        'int': int,
+        'float': float,
+        'bool': bool,
+        'list[str]': list[str],
+        'list[int]': list[int],
+        'list[float]': list[float],
+    }
     _feature_parser = None
+    _api_parser = None
 
     @classmethod
-    def get_code_parser(cls):
-        """获取代码解析器"""
-        if cls._code_parser is None:
-            cls._code_parser = cls.create_output_parser(
-                "CodeBlock",
-                {
-                    'code': (str, ...),
-                    'description': (str, ...)
+    def register_parser(cls, parser_name: str, parser_config: dict):
+        """动态注册解析器
+
+        Args:
+            parser_name: 解析器名称
+            parser_config: 解析器配置，包含output_fields
+                格式: {
+                    'output_fields': {
+                        'field_name': {
+                            'field_type': 'str',
+                            'mandatory': True,
+                            'field_description': '字段描述'
+                        }
+                    }
                 }
-            )
-        return cls._code_parser
+        """
+        try:
+            # 转换字段定义为pydantic格式
+            pydantic_fields = {}
+            output_fields = parser_config.get('output_fields', {})
+            for field_name, field_config in output_fields.items():
+                field_type = cls._get_field_type(field_config.get('field_type', 'str'))
+                # 检查字段是否必须
+                is_mandatory = field_config.get('mandatory', True)
+                if is_mandatory:
+                    pydantic_fields[field_name] = (field_type, ...)
+                else:
+                    pydantic_fields[field_name] = (field_type, None)
+
+            # 创建解析器
+            parser = cls.create_output_parser(parser_name, pydantic_fields)
+
+            # 缓存解析器
+            cls._dynamic_parsers[parser_name] = {
+                'parser': parser,
+                'config': parser_config
+            }
+
+            logger.info(f"Successfully registered parser: {parser_name}")
+
+        except Exception as e:
+            logger.error(f"Failed to register parser {parser_name}: {str(e)}")
+            raise
 
     @classmethod
-    def get_check_parser(cls):
-        """获取分析解析器"""
-        if cls._check_parser is None:
-            cls._check_parser = cls.create_output_parser(
-                "CheckBlock",
-                {
-                    'result': (int, ...),
-                    'reason': (str, ...),
-                    'suggestions': (str, ...)
-                }
-            )
-        return cls._check_parser
+    def get_parser(cls, parser_name: str):
+        """获取解析器
+
+        Args:
+            parser_name: 解析器名称
+
+        Returns:
+            PydanticOutputParser实例
+        """
+        # 从动态解析器中获取
+        if parser_name in cls._dynamic_parsers:
+            return cls._dynamic_parsers[parser_name]['parser']
+        else:
+            raise ValueError(
+                f"Parser '{parser_name}' not found. Please ensure it's registered via workflow.yaml or register_parser().")
 
     @classmethod
+    def list_parsers(cls):
+        """列出所有已注册的解析器"""
+        parsers = {}
+
+        # 添加动态解析器
+        for name, info in cls._dynamic_parsers.items():
+            parsers[name] = info['config']
+
+        return parsers
+
+    @classmethod
+    def _get_field_type(cls, type_str: str):
+        """根据字符串获取对应的Python类型"""
+        if type_str in cls._type_mapping:
+            return cls._type_mapping[type_str]
+        else:
+            # 尝试动态解析类型（比如List[CustomClass]等）
+            try:
+                return eval(type_str)
+            except:
+                logger.warning(f"Unknown type: {type_str}, defaulting to str")
+                return str
+
+    @staticmethod
     def get_api_parser(cls):
         """获取API解析器"""
         if cls._api_parser is None:

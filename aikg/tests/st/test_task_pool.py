@@ -5,17 +5,16 @@ from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ..utils import get_benchmark_name, get_benchmark_task, add_op_prefix
 from ai_kernel_generator.config.config_validator import load_config
-from ai_kernel_generator.core.utils import ActionType, ParsedCode
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("framework,impl_type,backend,arch", [
+@pytest.mark.parametrize("framework,dsl,backend,arch", [
     ("mindspore", "triton", "ascend", "ascend910b4"),
 ])
-async def test_parallel_task_triton_ascend910b4(framework, impl_type, backend, arch):
+async def test_parallel_task_triton_ascend910b4(framework, dsl, backend, arch):
     task_pool = TaskPool()
     device_pool = DevicePool([1, 2])
-    config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
+    config = load_config(dsl)  # or load_config("/your-path-to-config/xxx_config.yaml")
     benchmark_name = get_benchmark_name([19], framework=framework)
 
     result_dict = defaultdict(int)
@@ -28,7 +27,7 @@ async def test_parallel_task_triton_ascend910b4(framework, impl_type, backend, a
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),
-            impl_type=impl_type,
+            dsl=dsl,
             backend=backend,
             arch=arch,
             config=config,
@@ -61,13 +60,13 @@ async def test_parallel_task_triton_ascend910b4(framework, impl_type, backend, a
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("framework,impl_type,backend,arch", [
+@pytest.mark.parametrize("framework,dsl,backend,arch", [
     ("numpy", "swft", "ascend", "ascend310p3"),
 ])
-async def test_parallel_task_swft_ascend310p3(framework, impl_type, backend, arch):
+async def test_parallel_task_swft_ascend310p3(framework, dsl, backend, arch):
     task_pool = TaskPool()
     device_pool = DevicePool([1, 2])
-    config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
+    config = load_config(dsl)  # or load_config("/your-path-to-config/xxx_config.yaml")
     benchmark_name = get_benchmark_name([19], framework=framework)
 
     result_dict = defaultdict(int)
@@ -80,7 +79,7 @@ async def test_parallel_task_swft_ascend310p3(framework, impl_type, backend, arc
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),
-            impl_type=impl_type,
+            dsl=dsl,
             backend=backend,
             arch=arch,
             config=config,
@@ -113,13 +112,13 @@ async def test_parallel_task_swft_ascend310p3(framework, impl_type, backend, arc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("framework,impl_type,backend,arch", [
+@pytest.mark.parametrize("framework,dsl,backend,arch", [
     ("torch", "triton", "cuda", "a100")
 ])
-async def test_parallel_task_triton_a100(framework, impl_type, backend, arch):
+async def test_parallel_task_triton_a100(framework, dsl, backend, arch):
     task_pool = TaskPool()
     device_pool = DevicePool([1, 2])
-    config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
+    config = load_config(dsl)  # or load_config("/your-path-to-config/xxx_config.yaml")
     benchmark_name = get_benchmark_name([19], framework=framework)
 
     result_dict = defaultdict(int)
@@ -132,7 +131,7 @@ async def test_parallel_task_triton_a100(framework, impl_type, backend, arch):
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),
-            impl_type=impl_type,
+            dsl=dsl,
             backend=backend,
             arch=arch,
             config=config,
@@ -165,13 +164,13 @@ async def test_parallel_task_triton_a100(framework, impl_type, backend, arch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("framework,impl_type,backend,arch", [
+@pytest.mark.parametrize("framework,dsl,backend,arch", [
     ("torch", "swft", "ascend", "ascend310p3")
 ])
-async def test_parallel_task_from_coder(framework, impl_type, backend, arch):
+async def test_parallel_task_from_coder(framework, dsl, backend, arch):
     task_pool = TaskPool()
     device_pool = DevicePool([1, 2])
-    config = load_config()
+    config = load_config(dsl)
     benchmark_name = get_benchmark_name([19, 20, 21, 22], framework=framework)
 
     for i in range(len(benchmark_name)):
@@ -181,36 +180,39 @@ async def test_parallel_task_from_coder(framework, impl_type, backend, arch):
         # 读取实现代码
         aul_path = f"./database/benchmark_to_aul/{benchmark_name[i]}.py"
         with open(aul_path, "r", encoding="utf-8") as f:
-            aul_code = f.read()
+            designer_code = f.read()
 
         task = Task(
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),
-            impl_type=impl_type,
+            dsl=dsl,
             backend=backend,
             arch=arch,
             config=config,
             device_pool=device_pool,
-            framework=framework
+            framework=framework,
+            workflow="coder_only_workflow"
         )
 
-        parsed_code = ParsedCode()
-        parsed_code.aul_code = aul_code
-        task_pool.create_task(task.run, ActionType.DO_CODER, parsed_code)
+        # 使用init_task_info代替ParsedCode，提供designer_code让coder开始工作
+        init_task_info = {
+            "designer_code": designer_code
+        }
+        task_pool.create_task(task.run, init_task_info)
 
     await task_pool.wait_all()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("framework,impl_type,backend,arch", [
+@pytest.mark.parametrize("framework,dsl,backend,arch", [
     ("torch", "swft", "ascend", "ascend310p3"),
     # ("torch", "triton", "cuda", "a100")
 ])
-async def test_parallel_task_from_verifier(framework, impl_type, backend, arch):
+async def test_parallel_task_from_verifier(framework, dsl, backend, arch):
     task_pool = TaskPool()
     device_pool = DevicePool([4, 5])
-    config = load_config()
+    config = load_config(dsl)
     benchmark_name = get_benchmark_name([19], framework=framework) * 2
 
     for i in range(len(benchmark_name)):
@@ -220,35 +222,33 @@ async def test_parallel_task_from_verifier(framework, impl_type, backend, arch):
         # 读取实现代码
         # Extract the core name from aikg_ prefixed op_name
         core_name = op_name[5:]  # Remove "aikg_" prefix
-        kernel_path = f"./tests/resources/triton/{core_name}_op/{core_name}_{impl_type}.py"
+        kernel_path = f"./tests/resources/triton/{core_name}_op/{core_name}_{dsl}.py"
         with open(kernel_path, "r", encoding="utf-8") as f:
             kernel_code = f.read()
 
         aul_path = f"./database/benchmark_to_aul/{benchmark_name[i]}.py"
         with open(aul_path, "r", encoding="utf-8") as f:
-            aul_code = f.read()
+            designer_code = f.read()
 
         task = Task(
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),
-            impl_type=impl_type,
+            dsl=dsl,
             backend=backend,
             arch=arch,
             config=config,
             device_pool=device_pool,
-            framework=framework
+            framework=framework,
+            workflow="verifier_only_workflow"
         )
 
-        parsed_code = ParsedCode()
-        parsed_code.aul_code = aul_code
-        if impl_type == "swft":
-            parsed_code.swft_code = kernel_code
-        elif "triton" in impl_type:
-            parsed_code.triton_code = kernel_code
-        else:
-            raise ValueError(f"Invalid implementation type: {impl_type}")
+        # 使用init_task_info提供完整的代码，让verifier直接开始验证
+        init_task_info = {
+            "designer_code": designer_code,
+            "coder_code": kernel_code
+        }
 
-        task_pool.create_task(task.run, ActionType.VERIFY, parsed_code)
+        task_pool.create_task(task.run, init_task_info)
 
     await task_pool.wait_all()

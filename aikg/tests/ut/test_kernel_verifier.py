@@ -16,16 +16,15 @@ import textwrap
 import pytest
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
 from ai_kernel_generator.utils.common_utils import create_log_dir
-from ai_kernel_generator.core.utils import ParsedCode
 
 
 @pytest.mark.level0
 @pytest.mark.parametrize("op_name", ["relu"])
-@pytest.mark.parametrize("framework,impl_type,backend", [
+@pytest.mark.parametrize("framework,dsl,backend", [
     ("mindspore", "triton", "ascend"),
     ("torch", "triton", "ascend"),
 ])
-def test_kernel_verifier_ascend910b4(op_name, framework, impl_type, backend):
+def test_kernel_verifier_ascend910b4(op_name, framework, dsl, backend):
     arch = "ascend910b4"
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
@@ -33,30 +32,25 @@ def test_kernel_verifier_ascend910b4(op_name, framework, impl_type, backend):
         op_task_str = textwrap.dedent(f.read())
 
     # 读取实现代码
-    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{impl_type}.py"
+    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{dsl}.py"
     with open(kernel_path, "r", encoding="utf-8") as f:
         kernel_code = f.read()
 
-    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{impl_type}_test')
-    impl_func_name = f"{op_name}_{impl_type}_{framework}"
+    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
         framework_code=op_task_str,
         log_dir=log_dir,
         framework=framework,
-        impl_type=impl_type,
+        dsl=dsl,
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name
     )
-    parsed_code = ParsedCode()
-    if impl_type == "swft":
-        parsed_code.swft_code = kernel_code
-    elif "triton" in impl_type:
-        parsed_code.triton_code = kernel_code
-    else:
-        raise ValueError(f"Invalid implementation type: {impl_type}")
-    result, error_log = verifier.run(parsed_code)
+    task_info = {}
+    task_info["coder_code"] = kernel_code
+    result, error_log = verifier.run(task_info)
     assert result, f"验证失败: {error_log}"
 
 # ascend310p3
@@ -64,12 +58,12 @@ def test_kernel_verifier_ascend910b4(op_name, framework, impl_type, backend):
 
 @pytest.mark.level0
 @pytest.mark.parametrize("op_name", ["relu"])
-@pytest.mark.parametrize("framework,impl_type,backend", [
+@pytest.mark.parametrize("framework,dsl,backend", [
     ("mindspore", "swft", "ascend"),
     ("torch", "swft", "ascend"),
     ("numpy", "swft", "ascend"),
 ])
-def test_kernel_verifier_ascend310p3(op_name, framework, impl_type, backend):
+def test_kernel_verifier_ascend310p3(op_name, framework, dsl, backend):
     arch = "ascend310p3"
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
@@ -77,30 +71,25 @@ def test_kernel_verifier_ascend310p3(op_name, framework, impl_type, backend):
         op_task_str = textwrap.dedent(f.read())
 
     # 读取实现代码
-    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{impl_type}.py"
+    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{dsl}.py"
     with open(kernel_path, "r", encoding="utf-8") as f:
         kernel_code = f.read()
 
-    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{impl_type}_test')
-    impl_func_name = f"{op_name}_{impl_type}_{framework}"
+    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
         framework_code=op_task_str,
         log_dir=log_dir,
         framework=framework,
-        impl_type=impl_type,
+        dsl=dsl,
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name
     )
-    parsed_code = ParsedCode()
-    if impl_type == "swft":
-        parsed_code.swft_code = kernel_code
-    elif "triton" in impl_type:
-        parsed_code.triton_code = kernel_code
-    else:
-        raise ValueError(f"Invalid implementation type: {impl_type}")
-    result, error_log = verifier.run(parsed_code)
+    task_info = {}
+    task_info["coder_code"] = kernel_code
+    result, error_log = verifier.run(task_info)
     assert result, f"验证失败: {error_log}"
 
 # a100
@@ -108,10 +97,10 @@ def test_kernel_verifier_ascend310p3(op_name, framework, impl_type, backend):
 
 @pytest.mark.level0
 @pytest.mark.parametrize("op_name", ["relu"])
-@pytest.mark.parametrize("framework,impl_type,backend", [
+@pytest.mark.parametrize("framework,dsl,backend", [
     ("torch", "triton", "cuda"),
 ])
-def test_kernel_verifier_a100(op_name, framework, impl_type, backend):
+def test_kernel_verifier_a100(op_name, framework, dsl, backend):
     arch = "a100"
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
@@ -119,30 +108,25 @@ def test_kernel_verifier_a100(op_name, framework, impl_type, backend):
         op_task_str = textwrap.dedent(f.read())
 
     # 读取实现代码
-    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{impl_type}.py"
+    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{dsl}.py"
     with open(kernel_path, "r", encoding="utf-8") as f:
         kernel_code = f.read()
 
-    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{impl_type}_test')
-    impl_func_name = f"{op_name}_{impl_type}_{framework}"
+    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
         framework_code=op_task_str,
         log_dir=log_dir,
         framework=framework,
-        impl_type=impl_type,
+        dsl=dsl,
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name
     )
-    parsed_code = ParsedCode()
-    if impl_type == "swft":
-        parsed_code.swft_code = kernel_code
-    elif "triton" in impl_type:
-        parsed_code.triton_code = kernel_code
-    else:
-        raise ValueError(f"Invalid implementation type: {impl_type}")
-    result, error_log = verifier.run(parsed_code)
+    task_info = {}
+    task_info["coder_code"] = kernel_code
+    result, error_log = verifier.run(task_info)
     assert result, f"验证失败: {error_log}"
 
 # v100
@@ -150,10 +134,10 @@ def test_kernel_verifier_a100(op_name, framework, impl_type, backend):
 
 @pytest.mark.level0
 @pytest.mark.parametrize("op_name", ["relu"])
-@pytest.mark.parametrize("framework,impl_type,backend", [
+@pytest.mark.parametrize("framework,dsl,backend", [
     ("torch", "triton", "cuda"),
 ])
-def test_kernel_verifier_v100(op_name, framework, impl_type, backend):
+def test_kernel_verifier_v100(op_name, framework, dsl, backend):
     arch = "v100"
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
@@ -161,41 +145,36 @@ def test_kernel_verifier_v100(op_name, framework, impl_type, backend):
         op_task_str = textwrap.dedent(f.read())
 
     # 读取实现代码
-    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{impl_type}.py"
+    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{dsl}.py"
     with open(kernel_path, "r", encoding="utf-8") as f:
         kernel_code = f.read()
 
-    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{impl_type}_test')
-    impl_func_name = f"{op_name}_{impl_type}_{framework}"
+    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
         framework_code=op_task_str,
         log_dir=log_dir,
         framework=framework,
-        impl_type=impl_type,
+        dsl=dsl,
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name
     )
-    parsed_code = ParsedCode()
-    if impl_type == "swft":
-        parsed_code.swft_code = kernel_code
-    elif "triton" in impl_type:
-        parsed_code.triton_code = kernel_code
-    else:
-        raise ValueError(f"Invalid implementation type: {impl_type}")
-    result, error_log = verifier.run(parsed_code)
+    task_info = {}
+    task_info["coder_code"] = kernel_code
+    result, error_log = verifier.run(task_info)
     assert result, f"验证失败: {error_log}"
 
 
 # profiling功能测试
 @pytest.mark.level0
 @pytest.mark.parametrize("op_name", ["relu"])
-@pytest.mark.parametrize("framework,impl_type,backend", [
+@pytest.mark.parametrize("framework,dsl,backend", [
     ("mindspore", "triton", "ascend"),
     ("torch", "triton", "ascend"),
 ])
-def test_kernel_verifier_profiling_ascend910b4(op_name, framework, impl_type, backend):
+def test_kernel_verifier_profiling_ascend910b4(op_name, framework, dsl, backend):
     arch = "ascend910b4"
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
@@ -203,33 +182,28 @@ def test_kernel_verifier_profiling_ascend910b4(op_name, framework, impl_type, ba
         op_task_str = textwrap.dedent(f.read())
 
     # 读取实现代码
-    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{impl_type}.py"
+    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{dsl}.py"
     with open(kernel_path, "r", encoding="utf-8") as f:
         kernel_code = f.read()
 
-    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{impl_type}_profiling_test')
-    impl_func_name = f"{op_name}_{impl_type}_{framework}"
+    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_profiling_test')
+    impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
         framework_code=op_task_str,
         log_dir=log_dir,
         task_id="profiling_test_001",
         framework=framework,
-        impl_type=impl_type,
+        dsl=dsl,
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name
     )
-    parsed_code = ParsedCode()
-    if impl_type == "swft":
-        parsed_code.swft_code = kernel_code
-    elif "triton" in impl_type:
-        parsed_code.triton_code = kernel_code
-    else:
-        raise ValueError(f"Invalid implementation type: {impl_type}")
+    task_info = {}
+    task_info["coder_code"] = kernel_code
 
     # 先进行验证，确保验证通过
-    result, error_log = verifier.run(parsed_code)
+    result, error_log = verifier.run(task_info)
     assert result, f"验证失败: {error_log}"
 
     # 进行性能分析
@@ -246,10 +220,10 @@ def test_kernel_verifier_profiling_ascend910b4(op_name, framework, impl_type, ba
 
 @pytest.mark.level0
 @pytest.mark.parametrize("op_name", ["relu"])
-@pytest.mark.parametrize("framework,impl_type,backend", [
+@pytest.mark.parametrize("framework,dsl,backend", [
     ("torch", "triton", "cuda"),
 ])
-def test_kernel_verifier_profiling_a100(op_name, framework, impl_type, backend):
+def test_kernel_verifier_profiling_a100(op_name, framework, dsl, backend):
     arch = "a100"
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
@@ -257,31 +231,28 @@ def test_kernel_verifier_profiling_a100(op_name, framework, impl_type, backend):
         op_task_str = textwrap.dedent(f.read())
 
     # 读取实现代码
-    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{impl_type}.py"
+    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{dsl}.py"
     with open(kernel_path, "r", encoding="utf-8") as f:
         kernel_code = f.read()
 
-    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{impl_type}_profiling_test')
-    impl_func_name = f"{op_name}_{impl_type}_{framework}"
+    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_profiling_test')
+    impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
         framework_code=op_task_str,
         log_dir=log_dir,
         task_id="profiling_test_001",
         framework=framework,
-        impl_type=impl_type,
+        dsl=dsl,
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name
     )
-    parsed_code = ParsedCode()
-    if "triton" in impl_type:
-        parsed_code.triton_code = kernel_code
-    else:
-        raise ValueError(f"Invalid implementation type: {impl_type}")
+    task_info = {}
+    task_info["coder_code"] = kernel_code
 
     # 先进行验证，确保验证通过
-    result, error_log = verifier.run(parsed_code)
+    result, error_log = verifier.run(task_info)
     assert result, f"验证失败: {error_log}"
 
     # 进行性能分析
