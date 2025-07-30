@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import yaml
 import json
 import logging
@@ -19,27 +20,19 @@ from pathlib import Path
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
-from ai_kernel_generator import get_project_root
 from ai_kernel_generator.utils.common_utils import get_md5_hash
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
-DEFAULT_INDEX_PATH = DEFAULT_DATABASE_PATH / "vector_store"
-DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "database_config.yaml"
 
 class VectorStore:
     """
     基于RAG的优化方案检索器，检索最相似的算子调度方案
     """
-    def __init__(
-        self, 
-        config_path: str = "",
-        database_path: str = "",
-        index_path: str = ""):
-        self.database_path = database_path if database_path else str(DEFAULT_DATABASE_PATH)
-        self.index_path = index_path if index_path else str(DEFAULT_INDEX_PATH)
-        self.config_path = config_path if config_path else str(DEFAULT_CONFIG_PATH)
+    def __init__(self, config_path: str, database_path: str):
+        os.environ["OMP_NUM_THREADS"] = "8"
+        self.database_path = database_path
+        self.index_path = str(Path(self.database_path) / "vector_store")
+        self.config_path = config_path
         self.embedding_model = self.load_embedding_model()
         self.loaded_vectorstore = self.load_or_create_vector_store()
         
@@ -110,35 +103,10 @@ class VectorStore:
             dummy_id = list(vector_store.index_to_docstore_id.values())[0]
             vector_store.delete([dummy_id])
         else:
-            # 捕获OpenBLAS警告和异常
-            original_stderr = sys.stderr
-            sys.stderr = captured_stderr = StringIO()
-            try:
-                vector_store = FAISS.from_documents(
-                    documents=documents,
-                    embedding=self.embedding_model,
-                )
-            except Exception as e:
-                # 恢复stderr并检查OpenBLAS警告
-                sys.stderr = original_stderr
-                stderr_output = captured_stderr.getvalue()
-                # 检查是否是NUM_THREADS超出导致的错误
-                if 'OpenBLAS WARNING' in stderr_output and 'NUM_THREADS exceeded' in stderr_output:
-                    logger.error(
-                        "OpenBLAS error: Precompiled NUM_THREADS exceeded. "
-                        "Please set: export OMP_NUM_THREADS=32 before running."
-                    )
-                raise
-            finally:
-                sys.stderr = original_stderr
-                
-            # 检查OpenBLAS警告
-            stderr_output = captured_stderr.getvalue()
-            if 'OpenBLAS warning' in stderr_output and 'NUM_THREADS exceeded' in stderr_output:
-                    logger.warning(
-                        "OpenBLAS warning: Precompiled NUM_THREADS exceeded. "
-                        "Consider setting: export OMP_NUM_THREADS=32"
-                    )
+            vector_store = FAISS.from_documents(
+                documents=documents,
+                embedding=self.embedding_model,
+            )
         
         # 保存索引
         vector_store.save_local(self.index_path)

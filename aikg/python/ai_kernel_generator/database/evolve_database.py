@@ -17,7 +17,7 @@ from typing import List
 from pathlib import Path
 import json
 from langchain_core.documents import Document
-from ai_kernel_generator.database.database import Database, RetrievalStragegy
+from ai_kernel_generator.database.database import Database, RetrievalStrategy
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.utils.common_utils import get_md5_hash
 
@@ -59,10 +59,10 @@ class EvolveDatabase(Database):
 
         result = []
         optimality_docs = self.optimality_search()
-        optimality_res = self.get_output_content(output_content, RetrievalStragegy.OPTIMALITY, optimality_docs, impl_type, framework)
+        optimality_res = self.get_output_content(output_content, RetrievalStrategy.OPTIMALITY, optimality_docs, impl_type, framework)
         
         random_docs = self.randomicity_search(features_str, feature_invariants, sample_num - 1)
-        random_res = self.get_output_content(output_content, RetrievalStragegy.RANDOMICITY, random_docs, impl_type, framework)
+        random_res = self.get_output_content(output_content, RetrievalStrategy.RANDOMICITY, random_docs, impl_type, framework)
         
         result.extend(optimality_res)
         result.extend(random_res)
