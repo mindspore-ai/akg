@@ -131,7 +131,7 @@ class SWFTDocsProcessor:
                     continue
 
                 output_lines.append(func_name)
-                output_lines.append(api_docs)
+                # output_lines.append(api_docs)
                 output_lines.append(api_code)
 
         return "\n".join(output_lines)
@@ -143,11 +143,13 @@ def extract_function_details():
         "composite.md"
     ]
 
-    aul_docs_dir = os.path.join(get_project_root(), "resources", "docs", "swft_docs")
+    # aul_docs_dir = os.path.join(get_project_root(), "resources", "docs", "swft_docs")
+    import swft
+    swft_path = swft.__path__[0] / "docs"
     combined_spec = ""
 
     for doc_file in swft_doc_files:
-        doc_path = os.path.join(aul_docs_dir, doc_file)
+        doc_path = os.path.join(swft_path, doc_file)
         try:
             with open(doc_path, "r", encoding="utf-8") as f:
                 content = f.read()

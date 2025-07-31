@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 def get_swft_path():
     import swft
-    return swft.__path__
+    return swft.__path__[0]
 
 class APIGenerator(AgentBase):
     def __init__(self, task_desc: str, sketch: str, dsl: str, model_config: dict):

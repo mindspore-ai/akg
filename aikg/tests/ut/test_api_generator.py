@@ -16,7 +16,6 @@ import pytest
 import gc
 from pathlib import Path
 from ai_kernel_generator.core.agent.utils.api_generator import APIGenerator
-from ai_kernel_generator import get_project_root
 from ai_kernel_generator.config.config_validator import load_config
 
 RESOURCES_PATH = Path("tests") / "resources"
