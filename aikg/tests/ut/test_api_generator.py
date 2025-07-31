@@ -16,17 +16,16 @@ import pytest
 import gc
 from pathlib import Path
 from ai_kernel_generator.core.agent.utils.api_generator import APIGenerator
-from ai_kernel_generator import get_project_root
 from ai_kernel_generator.config.config_validator import load_config
 
-RESOURCES_PATH = Path(get_project_root()).parent.parent / "tests" / "resources"
+RESOURCES_PATH = Path("tests") / "resources"
 
 
 @pytest.mark.level0
 @pytest.mark.asyncio
 @pytest.mark.parametrize("framework,dsl", [
-    ("torch", "triton"),
     ("numpy", "swft"),
+    ("torch", "triton"),
 ])
 async def test_api_gen(framework, dsl):
     config = load_config()['agent_model_config']

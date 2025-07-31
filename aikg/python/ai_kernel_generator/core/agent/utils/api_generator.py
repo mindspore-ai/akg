@@ -24,6 +24,10 @@ from ai_kernel_generator.utils.markdown_utils import SWFTDocsProcessor
 logger = logging.getLogger(__name__)
 
 
+def get_swft_path():
+    import swft
+    return swft.__path__[0]
+
 class APIGenerator(AgentBase):
     def __init__(self, task_desc: str, sketch: str, dsl: str, model_config: dict):
         self.task_desc = remove_copyright_from_text(task_desc)
@@ -38,8 +42,7 @@ class APIGenerator(AgentBase):
         self.format_api_instructions = self.api_parser.get_format_instructions()
 
         if self.dsl == "swft":
-            root_dir = get_project_root()
-            swft_dir = Path(root_dir).parent.parent.parent / "swft"
+            swft_dir = Path(get_swft_path())
             swft_docs_dir = swft_dir / "docs"
             self.api_docs = load_directory(swft_docs_dir, file_extensions=[".md"])
         else:
@@ -69,9 +72,8 @@ class APIGenerator(AgentBase):
             formatted_str += f"API name: {name}\nAPI description:{desc}\nAPI implement：\n{impl}\n\n"
 
         if self.dsl == "swft":
-            root_dir = get_project_root()
-            swft_dir = Path(root_dir).parent.parent.parent / "swft"
-            swft_impl_dir = swft_dir / "python" / "swft" / "api"
+            swft_dir = Path(get_swft_path())
+            swft_impl_dir = swft_dir / "api"
             swft_docs_dir = swft_dir / "docs"
             swft_doc = SWFTDocsProcessor()
             supported_api_str = swft_doc.generate_available_api(parsed_content.api_name, swft_docs_dir, swft_impl_dir)
