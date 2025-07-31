@@ -25,15 +25,15 @@
 {{ expert_suggestion }}
 {% endif %}
 
-{% if api_docs %}
+{% if api_docs_suitable %}
 ## API 文档
-{{api_docs}}
+{{api_docs_suitable}}
 请严格按照API文档的方式生成对应的代码
 {% endif %}
 
-{% if dsl_sample_code %}
+{% if dsl_examples_suitable %}
 ## 示例代码-基础
-{{ dsl_sample_code }}
+{{ dsl_examples_suitable }}
 请参考上述{{dsl}} 示例代码， 格式、import、调用函数方式等；确保生成可直接接入验证流程的 {{dsl}} 
 注意：调整切分大小和循环结构，是一个常用的优化手段，通常可以通过调整grid的设定、调整kernel内for循环的方式、调整计算方法来实现
 请你尽最大的努力，对代码的运行效率进行优化

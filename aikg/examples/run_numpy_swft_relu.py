@@ -72,12 +72,13 @@ async def run_numpy_swft_single():
         arch="ascend310p3",
         config=config,
         device_pool=device_pool,
-        framework="numpy"
+        framework="numpy",
+        workflow="coder_only_workflow"
     )
 
     task_pool.create_task(task.run)
     results = await task_pool.wait_all()
-    for op_name, result in results:
+    for op_name, result, _ in results:
         if result:
             print(f"Task {op_name} passed")
         else:

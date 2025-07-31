@@ -123,15 +123,13 @@ def load_config(dsl="", config_path: Optional[str] = None):
         final_config_path = config_path
     else:
         # 2. 没有config_path时，根据dsl选择默认配置
-        if "triton" in dsl:
-            final_config_path = Path(__file__).parent / "default_triton_config.yaml"
-        else:
-            final_config_path = Path(__file__).parent / f"default_{dsl}_config.yaml"
+        final_config_path = Path(__file__).parent / f"default_{dsl}_config.yaml"
 
-        # 3. 检查默认配置文件是否存在，不存在就抛出错误
-        if not final_config_path.exists():
-            raise ValueError(f"No default config found for dsl '{dsl}'. "
-                             f"Please provide config_path or ensure default config exists at: {final_config_path}")
+    # 3. 检查默认配置文件是否存在，不存在就抛出错误
+    if not final_config_path.exists():
+        raise ValueError(f"No default config found for dsl '{dsl}'. "
+                            f"Please provide config_path like load_config('/path-to-config/xxx_config.yaml') "
+                            f"or ensure default config exists at: {final_config_path}")
 
     validator = ConfigValidator(final_config_path)
     validator.validate_all()
