@@ -22,3 +22,5 @@ from .vmax import Vmax
 from .vmin import Vmin
 from .vand import Vand
 from .vor import Vor
+from .vcmpv import Vcmpv
+from .vsel import Vsel

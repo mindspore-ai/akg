@@ -148,7 +148,7 @@ class TestSuiteRunner:
 
 
 if __name__ == "__main__":
-    runner = TestSuiteRunner(test_dirs=['./fusion', './math', './reduce', './matmul_L0'])
+    runner = TestSuiteRunner(test_dirs=['./fusion', './math', './reduce', './matmul_L0', './pa', './gmm_L0', './bmm'])
     test_scripts = runner.discover_tests()
     print(f"发现 {len(test_scripts)} 个测试脚本")
     runner.execute_tests_by_group()

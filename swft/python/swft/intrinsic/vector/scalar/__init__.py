@@ -18,3 +18,4 @@ from .vadds import Vadds
 from .vmuls import Vmuls
 from .vmaxs import Vmaxs
 from .vmins import Vmins
+from .vcmpvs import Vcmpvs

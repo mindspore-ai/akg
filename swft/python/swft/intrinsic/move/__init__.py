@@ -14,6 +14,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .split import Split
 from .concat import Concat
 from .setvalue import SetValue

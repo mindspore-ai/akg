@@ -13,6 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from swft.core.c_expression import can_fit_memory
+
 MMAD_SUPPORT_TYPE = {
     "FP16": {"FP16": "FP32"},
     "INT8": {"INT8": "INT32", "UINT8": "INT32"},
@@ -59,6 +61,16 @@ SCALARTYPE_CTYPE = {
     "FP16": "half"
 }
 
+CMPV_SUPPORT_OPTYPE = ["EQ", "NE", "LT", "GT", "GE", "LE"]
+CMP_OP_TYPE = {
+    "EQ": 0,
+    "NE": 1,
+    "LT": 2,
+    "GT": 3,
+    "GE": 4,
+    "LE": 5
+}
+
 
 def is_mem_type_valid(mem_type):
     return mem_type in VALID_MEM_TYPE
@@ -80,3 +92,38 @@ def is_tensor(obj):
 
 def is_scalar(obj):
     return hasattr(obj, "type") and obj.type == "Scalar"
+
+def eqal_eq(scalar_a, scalar_b):
+    if isinstance(scalar_b, int):
+        return int(scalar_a.value) == scalar_b
+    if (scalar_a.has_value() and scalar_b.has_value()):
+        return int(scalar_a.value) == int(scalar_b.value)
+    return False
+
+def eval_ne(scalar_a, scalar_b):
+    if isinstance(scalar_b, int):
+        return int(scalar_a.value) != scalar_b
+    if (scalar_a.has_value() and scalar_b.has_value()):
+        return int(scalar_a.value) != int(scalar_b.value)
+    return False
+
+def eval_le(scalar_a, scalar_b):
+    if isinstance(scalar_b, int):
+        return int(scalar_a.value) <= scalar_b
+    if (scalar_a.has_value() and scalar_b.has_value()):
+        return int(scalar_a.value) <= int(scalar_b.value)
+    return False
+
+def eval_gt(scalar_a, scalar_b):
+    if isinstance(scalar_b, int):
+        return int(scalar_a.value) > scalar_b
+    if (scalar_a.has_value() and scalar_b.has_value()):
+        return int(scalar_a.value) > int(scalar_b.value)
+    return False
+
+def eval_lt(scalar_a, scalar_b):
+    if isinstance(scalar_b, int):
+        return int(scalar_a.value) < scalar_b
+    if (scalar_a.has_value() and scalar_b.has_value()):
+        return int(scalar_a.value) < int(scalar_b.value)
+    return False

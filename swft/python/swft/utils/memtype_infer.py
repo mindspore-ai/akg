@@ -20,6 +20,7 @@ __all__ = [
     "dup_memtype_infer",
     "move_memtype_infer",
     "concat_memtype_infer",
+    "sel_memtype_infer",
     "default_memtype_infer"
 ]
 
@@ -46,6 +47,19 @@ def bino_memtype_infer(a_mem, b_mem, attrs=None):
         raise TypeError(
             "Vector op mem_type not be {}, but got {}.".format("UB", b_mem))
     return "UB"
+
+def sel_memtype_infer(a_mem, b_mem, cond_mem, attrs=None):
+    if (a_mem != "UB"):
+        raise TypeError(
+            "Vector op mem_type not be {}, but got {}.".format("UB", a_mem))
+    if (b_mem != "UB"):
+        raise TypeError(
+            "Vector op mem_type not be {}, but got {}.".format("UB", b_mem))
+    if (cond_mem != "UB"):
+        raise TypeError(
+            "Vector op mem_type not be {}, but got {}.".format("UB", cond_mem))
+    return "UB"
+
 
 
 def mono_memtype_infer(a_mem, attrs=None):

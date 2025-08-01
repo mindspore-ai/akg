@@ -27,7 +27,9 @@ __all__ = [
     "concat_dtype_infer",
     "default_dtype_infer",
     "change_dtype_infer",
-    "gather_dtype_infer"
+    "gather_dtype_infer",
+    "cmpv_dtype_infer",
+    "sel_dtype_infer"
 ]
 
 
@@ -50,6 +52,25 @@ def bino_dtype_infer(a_dtype, b_dtype, attrs=None):
     if a_dtype not in VECTOR_SUPPORT_TYPE:
         raise TypeError("Vector op not support type {}".format(a_dtype))
     return a_dtype
+
+
+def sel_dtype_infer(a_dtype, b_dtype, cond_dtype, attrs=None):
+    if a_dtype != b_dtype:
+        raise TypeError(
+            "Vector op type mismatch ({}, {})".format(a_dtype, b_dtype))
+    if a_dtype not in VECTOR_SUPPORT_TYPE:
+        raise TypeError("Vector op not support type {}".format(a_dtype))
+    if cond_dtype != "BOOL":
+        raise TypeError("condition not support type {}".format(cond_dtype))
+    return a_dtype
+
+def cmpv_dtype_infer(a_dtype, b_dtype, attrs=None):
+    if a_dtype != b_dtype:
+        raise TypeError(
+            "Vector op type mismatch ({}, {})".format(a_dtype, b_dtype))
+    if a_dtype not in VECTOR_SUPPORT_TYPE:
+        raise TypeError("Vector op not support type {}".format(a_dtype))
+    return "BOOL"
 
 
 def mono_dtype_infer(a_dtype, attrs=None):

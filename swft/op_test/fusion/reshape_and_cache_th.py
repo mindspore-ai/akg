@@ -26,11 +26,11 @@ os.system(f"mkdir -p temp/{OP_NAME}")
 os.system(f"mkdir -p temp/{OP_NAME}/input")
 os.system(f"mkdir -p temp/{OP_NAME}/output")
 
-MAX_TOKENS = 1024
-TOKENS_LEN = 5
+
+TOKENS_LEN = 10001
 NUM_HEADS = 1
 HEAD_SIZE = 576
-NUM_BLOCKS = 512
+NUM_BLOCKS = 16384
 BLOCK_SIZE = 16
 CORE_NUM = 8
 
@@ -64,29 +64,40 @@ def gen_data():
 @sub_kernel(core_num=CORE_NUM)
 def reshape_and_cache_nz(kv_in, kvcache_out, slot_mapping, token_len):
     block_idx = get_block_idx()
-    maxpercore_size = MAX_TOKENS // CORE_NUM
-    percore_size = ((token_len + CORE_NUM - 1) // CORE_NUM).copy()
+    percore_size = ((token_len + CORE_NUM - 1) // CORE_NUM)
     token_num = Scalar("INT32", 0)
     if (block_idx + 1) * percore_size < token_len:
-        token_num.load(percore_size)
+        token_num = percore_size.copy()
     elif block_idx * percore_size < token_len:
-        token_num.load(token_len - block_idx * percore_size)
+        token_num = (token_len - block_idx * percore_size).copy()
     else:
-        token_num.load(Scalar("INT32", 0))
-    ub_slot = slice_to_ub(
-        slot_mapping, [block_idx * percore_size], [maxpercore_size])
-    for i in dynamic_loop(token_num):
-        # 从gm将slot_mapping第n个token的slot值读入ub
-        offset = move_to_scalar(ub_slot[i])
-        x = offset // BLOCK_SIZE
-        y = offset % BLOCK_SIZE
-        # 将kv_in的第i个token读入ub
-        k_ub = slice_to_ub(
-            kv_in, [block_idx * percore_size + i, 0, 0], [1, NUM_HEADS, HEAD_SIZE])
-        k_ub = change_view(
-            k_ub, new_shape=[1, 1, NUM_HEADS * HEAD_SIZE], new_format="NZ")
-        insert_to_gm(kvcache_out, k_ub, [x, y, 0], [
-            1, 1, NUM_HEADS * HEAD_SIZE])
+        token_num = Scalar("INT32", 0).copy()
+    maxpercore_size = 128
+    tile_num = token_num // maxpercore_size
+    res_num = token_num % maxpercore_size
+    for i in dynamic_loop(tile_num):
+        ub_slot = slice_to_ub(slot_mapping, [block_idx * percore_size + i * maxpercore_size], [maxpercore_size])
+        for j in dynamic_loop(maxpercore_size):
+            offset = move_to_scalar(ub_slot[j])
+            x = offset // BLOCK_SIZE
+            y = offset % BLOCK_SIZE
+            k_ub = slice_to_ub(kv_in, [block_idx * percore_size + i * maxpercore_size + j, 0, 0], [1, NUM_HEADS, HEAD_SIZE])
+            k_ub = change_view(k_ub, new_shape=[1, 1, NUM_HEADS * HEAD_SIZE], new_format = "NZ")
+            insert_to_gm(kvcache_out, k_ub, [x, y, 0], [1, 1, NUM_HEADS * HEAD_SIZE])
+    if res_num > 0:
+        ub_slot = slice_to_ub(slot_mapping, [block_idx * percore_size + token_num - res_num], [maxpercore_size])
+        for j in dynamic_loop(res_num):
+            # 从gm将slot_mapping第n个token的slot值读入ub
+            offset = move_to_scalar(ub_slot[j])
+            x = offset // BLOCK_SIZE
+            y = offset % BLOCK_SIZE
+            # 将kv_in的第i个token读入ub
+            k_ub = slice_to_ub(
+                kv_in, [block_idx * percore_size + token_num - res_num + j, 0, 0], [1, NUM_HEADS, HEAD_SIZE])
+            k_ub = change_view(
+                k_ub, new_shape=[1, 1, NUM_HEADS * HEAD_SIZE], new_format="NZ")
+            insert_to_gm(kvcache_out, k_ub, [x, y, 0], [
+                1, 1, NUM_HEADS * HEAD_SIZE])
 
 
 if __name__ == '__main__':
@@ -103,7 +114,7 @@ if __name__ == '__main__':
         kv_in, kvcache_out, slot_mapping, token_len)
     compile_kernel(f"./temp/{OP_NAME}/{OP_NAME}.cce", OP_NAME)
     exec_kernel(OP_NAME, locals(), prefix_path="temp", inputs=[
-                'kv_in', 'token_len', 'slot_mapping'], outputs=['kvcache_out'])
+                'kv_in', 'token_len', 'slot_mapping'], outputs=['kvcache_out'], profiling = 100)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     return_code = os.system(
         f'python3 {script_dir}/../verify_result.py ./temp/{OP_NAME}/output/kvcache_out_actual.bin ./temp/{OP_NAME}/output/kvcache_out_golden.bin float16 4e-2 1e-2 4e-3')
