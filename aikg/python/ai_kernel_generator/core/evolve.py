@@ -132,7 +132,7 @@ async def evolve(
                 device_pool=device_pool,
                 framework=framework,
                 task_type="profile",
-                workflow_config_path="coder_only_workflow",
+                workflow="coder_only_workflow",
                 inspirations=inspirations,
             )
 
@@ -144,7 +144,7 @@ async def evolve(
         logger.info(f"Waiting for {len(round_tasks)} tasks in round {round_idx}")
         results = await task_pool.wait_all()
         for op_name, success, task_info in results:
-            logger.info(f"op_name: {op_name}, result: {task_info}")
+            logger.debug(f"op_name: {op_name}, result: {task_info}")
             if success:
                 await evolve_db.insert(
                     impl_code=task_info["coder_code"],
@@ -153,7 +153,7 @@ async def evolve(
                     arch=arch,
                     dsl=dsl,
                     framework=framework,
-                    profile=task_info["profile_res"][0],  # gen_time, base_time, speedup
+                    profile = task_info.get("profile_res", (float('inf'), 0.0, 0.0))[0]
                 )
 
         # 清空任务池的任务列表，为下一轮准备

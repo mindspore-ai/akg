@@ -111,7 +111,7 @@ class ResultProcessor:
             return False
 
     @staticmethod
-    def update_verifier_result(result: str, error_log: str, task_info: Dict[str, Any]) -> None:
+    def update_verifier_result(result: str, error_log: str, task_info: Dict[str, Any], profile_res: Optional[str] = None) -> None:
         """
         更新verifier结果
 
@@ -129,6 +129,9 @@ class ResultProcessor:
 
             # 直接更新verifier_error字段
             task_info['verifier_error'] = error_log or ''
+
+            if profile_res:
+                task_info['profile_res'] = profile_res
 
             logger.debug(f"Updated verifier result: {task_info['verifier_result']}")
 

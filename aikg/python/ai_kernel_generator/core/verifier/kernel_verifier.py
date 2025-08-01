@@ -101,6 +101,54 @@ class KernelVerifier:
         os.makedirs(target_dir, exist_ok=True)
         return target_dir
 
+    def _generate_import_statements(self) -> str:
+        """根据framework和dsl生成适当的import语句"""
+        import_lines = []
+        
+        if "triton" in self.dsl:
+            if self.framework == "mindspore":
+                import_lines = [
+                    "import torch",
+                    "import triton", 
+                    "import triton.language as tl",
+                    "import mindspore as ms"
+                ]
+            elif self.framework == "torch":
+                import_lines = [
+                    "import torch",
+                    "import triton",
+                    "import triton.language as tl"
+                ]
+            elif self.framework == "numpy":
+                import_lines = [
+                    "import numpy as np",
+                    "import triton",
+                    "import triton.language as tl"
+                ]
+        elif self.dsl == "swft":
+            import_lines = [
+                "from swft.core import *",
+                "from swft.api import *", 
+                "import numpy as np"
+            ]
+        elif self.framework == "numpy":
+            import_lines = [
+                "import numpy as np"
+            ]
+        elif self.framework == "torch":
+            import_lines = [
+                "import torch"
+            ]
+        elif self.framework == "mindspore":
+            import_lines = [
+                "import mindspore as ms"
+            ]
+        
+        # 添加换行符并连接
+        if import_lines:
+            return "\n".join(import_lines) + "\n\n"
+        return ""
+
     def gen_verify_project(self, impl_code: str, verify_dir: str, device_id: int = 0):
         """生成验证项目文件到指定目录"""
         # 创建框架实现文件
@@ -114,8 +162,13 @@ class KernelVerifier:
         else:
             file_name = f"{self.op_name}_{self.dsl}.py"
         impl_file = os.path.join(verify_dir, file_name)
+        
+        # 生成import语句
+        import_statements = self._generate_import_statements()
+        
         with open(impl_file, "w", encoding="utf-8") as f:
-            f.write(impl_code)
+            # 先写入import语句，再写入原始代码
+            f.write(import_statements + impl_code)
 
         # 生成验证脚本
         verify_file = os.path.join(verify_dir, f"verify_{self.op_name}.py")
@@ -217,7 +270,7 @@ class KernelVerifier:
             valid_ops = op_counts[op_counts == total_count]
 
             if len(valid_ops) == 0:
-                return False, "没有找到符合预期次数的Op", 0.0
+                return False, "没有找到符合预期次数的Op", float('inf')
 
             # 检查不匹配的Op
             invalid_ops = op_counts[op_counts != total_count]
@@ -238,7 +291,7 @@ class KernelVerifier:
             return True, "", total_avg_time
 
         except Exception as e:
-            return False, f"分析数据时出错: {str(e)}", 0.0
+            return False, f"分析数据时出错: {str(e)}", float('inf')
 
     def run_nsys(self, script_path: str) -> Tuple[bool, str, Optional[str]]:
         """运行nsys性能分析"""
@@ -269,7 +322,7 @@ class KernelVerifier:
             csv_path = dir_plib / "nsys_report_gputrace.csv"
 
             if not os.path.exists(csv_path):
-                return False, "未生成csv文件", 0.0
+                return False, "未生成csv文件", float('inf')
             df = pd.read_csv(csv_path)
             # 兼容不同nsys版本的列名
             name_col = None
@@ -289,12 +342,12 @@ class KernelVerifier:
                     time_col = col
                     break
             if not name_col or not time_col:
-                return False, "未找到kernel名或耗时列", 0.0
+                return False, "未找到kernel名或耗时列", float('inf')
             total_count = warmup_times + run_times
             op_counts = df[name_col].value_counts()
             valid_ops = op_counts[op_counts == total_count]
             if len(valid_ops) == 0:
-                return False, "没有找到符合预期次数的kernel", 0.0
+                return False, "没有找到符合预期次数的kernel", float('inf')
             df_valid = df[df[name_col].isin(valid_ops.index)]
             total_avg_time = 0.0
             for op_name in valid_ops.index:
@@ -305,7 +358,7 @@ class KernelVerifier:
                     total_avg_time += avg_time  # timeunit us
             return True, "", total_avg_time
         except Exception as e:
-            return False, f"分析nsys数据时出错: {str(e)}", 0.0
+            return False, f"分析nsys数据时出错: {str(e)}", float('inf')
 
     def save_speedup_result(self, speedup: float, base_time: float, gen_time: float, unique_dir: str):
         """保存加速比结果到txt文件"""
@@ -335,6 +388,8 @@ class KernelVerifier:
             expanded_log_dir = os.path.expanduser(self.log_dir)
             unique_dir_name = f"I{self.task_id}_S{current_step:02d}_verify"
             verify_dir = os.path.join(expanded_log_dir, self.op_name, unique_dir_name)
+            
+            os.chdir(verify_dir)
 
             # 生成profile脚本并运行
             self.gen_profile_project(verify_dir, device_id, warmup_times, run_times)
@@ -352,17 +407,18 @@ class KernelVerifier:
                 _, _, gen_time = self.analyze_nsys_data(gen_prof_path, warmup_times, run_times)
             else:
                 logger.warning(f"[{self.task_id}:{self.op_name}] 不支持的backend: {self.backend}")
-                return 0.0
+                return float('inf'), 0.0, 0.0
 
-            speedup = ((base_time - gen_time) / base_time if gen_time > 0 else 0.0) * 100.
+            speedup = base_time / gen_time
+            speedup_percent = speedup * 100.0
             self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
             logger.info(f"orig performance is {base_time:.2f} us")
             logger.info(f"aikg performance is {gen_time:.2f} us")
-            logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，性能提升: {speedup:.2f} %")
+            logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，性能提升: {speedup_percent:.2f} %")
             return gen_time, base_time, speedup
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
-            return 0.0
+            return float('inf'), 0.0, 0.0
 
     def run(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = 0):
         """

@@ -124,7 +124,7 @@ class Conductor(AgentBase):
         return ResultProcessor.get_agent_parser(agent_name, self.workflow_config_path, self.agent_parsers)
 
     def record_agent_execution(self, agent_name: str, result: str, prompt: str = "", reasoning: str = "",
-                               error_log: str = "", profile_res = []) -> bool:
+                               error_log: str = "", profile_res = ()) -> bool:
         """
         记录agent执行结果，进行解析并更新任务信息
 
@@ -161,9 +161,7 @@ class Conductor(AgentBase):
                     agent_name, result, self.task_info, agent_parser, self.trace, self.agent_info
                 )
             elif agent_name == "verifier":
-                if profile_res:
-                    self.task_info['profile_res'] = profile_res
-                ResultProcessor.update_verifier_result(result, error_log, self.task_info)
+                ResultProcessor.update_verifier_result(result, error_log, self.task_info, profile_res)
 
         except Exception as e:
             logger.error(f"Failed to record and process agent execution for {agent_name}: {e}")

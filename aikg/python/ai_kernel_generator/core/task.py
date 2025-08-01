@@ -16,7 +16,7 @@ import os
 import json
 import logging
 import asyncio
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Dict, Any, List
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.core.utils import check_task_config, check_task_type
@@ -45,7 +45,7 @@ class Task:
                  device_pool: DevicePool,
                  framework: str,
                  task_type="precision_only",
-                 workflow_config_path: Optional[str] = None,
+                 workflow: Optional[str] = None,
                  inspirations: Optional[List[str]] = None,) -> None:
         """
         初始化Task类，基于workflow配置进行工作流管理。
@@ -77,8 +77,8 @@ class Task:
         self.task_id = task_id
         self.backend = backend.lower()
         self.arch = arch.lower()
-        self.dsl = dsl
-        self.framework = framework
+        self.dsl = dsl.lower()
+        self.framework = framework.lower()
         self.task_type = task_type
         self.device_pool = device_pool
         self.inspirations = inspirations
@@ -237,10 +237,14 @@ class Task:
                                 self.verifier.run,
                                 self.conductor.task_info, current_step, device_id
                             )
-                            profile_res = None
-                            if verify_res and self.task_type == "profile" and self.backend == "ascend":
+                            profile_res = ()
+                            if verify_res and self.task_type == "profile" and self.backend in ["ascend", "cuda"]:
                                 profile_settings = self.config.get("profile_settings", {})
-                                profile_res = self.verifier.run_profile(current_step, device_id, profile_settings)
+                                profile_res = await loop.run_in_executor(
+                                    None,
+                                    self.verifier.run_profile,
+                                    current_step, device_id, profile_settings
+                                )
 
                             self.conductor.record_agent_execution(
                                 agent_name="verifier",

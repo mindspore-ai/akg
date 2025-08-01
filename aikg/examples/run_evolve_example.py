@@ -94,7 +94,7 @@ async def run_evolve_example():
         framework=framework,
         backend=backend,
         arch=arch,
-        config=load_config(),
+        config=load_config(dsl),
         device_pool=device_pool,
         task_pool=task_pool,
         max_rounds=max_rounds,

@@ -28,7 +28,7 @@ class AgentRecord:
     prompt: str = ""
     reasoning: str = ""
     error_log: str = ""
-    profile: str = ""
+    profile_res: tuple = ()
 
 
 class Trace:
@@ -57,7 +57,7 @@ class Trace:
                 f.write(str(content))
 
     def insert_agent_record(self, agent_name: str, result: str = "", prompt: str = "", reasoning: str = "",
-                            error_log: str = "", profile: str = "") -> None:
+                            error_log: str = "", profile_res: tuple = ()) -> None:
         """
         插入agent执行记录（只保存原始数据，不进行解析）
 
@@ -75,7 +75,7 @@ class Trace:
             prompt=prompt,
             reasoning=reasoning,
             error_log=error_log,
-            profile=profile
+            profile_res=profile_res
         )
         self.trace_list.append(record)
 
@@ -152,61 +152,3 @@ class Trace:
             file_path = os.path.join(target_dir, f"{base_name}{param_name}.txt")
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(str(content))
-
-    def get_last_verifier_result(self) -> bool:
-        """
-        获取最后的verifier结果（简单的结果获取，不涉及解析）
-
-        Returns:
-            True表示验证成功，False表示验证失败
-        """
-        if not self.trace_list:
-            return False
-
-        # 从后向前查找verifier记录
-        for record in reversed(self.trace_list):
-            if record.agent_name == "verifier":
-                result = record.result
-                if result == "True" or result is True:
-                    return True
-                elif result == "False" or result is False:
-                    return False
-
-        return False
-
-    def get_last_verifier_error_log(self) -> str:
-        """
-        获取最后的verifier错误日志
-
-        Returns:
-            错误日志字符串
-        """
-        if not self.trace_list:
-            return ""
-
-        # 从后向前查找verifier记录
-        for record in reversed(self.trace_list):
-            if record.agent_name == "verifier":
-                return record.error_log or ""
-
-        return ""
-
-    def find_last_agent_record(self, agent_names: list):
-        """
-        查找最后的agent记录（返回完整记录，供conductor使用）
-
-        Args:
-            agent_names: agent名字列表
-
-        Returns:
-            AgentRecord或None
-        """
-        if not agent_names or not self.trace_list:
-            return None
-
-        # 从后向前查找
-        for record in reversed(self.trace_list):
-            if record.agent_name in agent_names:
-                return record
-
-        return None
