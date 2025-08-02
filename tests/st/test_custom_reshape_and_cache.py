@@ -131,7 +131,8 @@ class TestConfig:
     
     def apply(self):
         """Apply test configuration"""
-        context.set_context(device_target=self.device_target, mode=self.mode)
+        ms.set_device(self.device_target)
+        context.set_context(mode=self.mode)
         if self.jit_config:
             context.set_context(jit_config=self.jit_config)
 

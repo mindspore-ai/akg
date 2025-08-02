@@ -85,6 +85,10 @@ get_yaml_files("${DOC_YAML_FILES}" DOC_YAML_STRING)
 # =============================================================================
 
 # Generate Python script for building custom ops with MindSpore's CustomOpBuilder
+set(ENABLE_DEBUG False)
+if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+    set(ENABLE_DEBUG True)
+endif()
 set(PYTHON_SCRIPT_PATH "${CMAKE_BINARY_DIR}/build_custom_with_ms.py")
 file(WRITE ${PYTHON_SCRIPT_PATH} "
 import mindspore as ms
@@ -97,7 +101,8 @@ ms.ops.CustomOpBuilder(
     backend='Ascend',
     cflags='${CFLAGS_INCLUDES}',
     ldflags='-L${INTERNAL_KERNEL_LIB_PATH} -l${LIBS}',
-    build_dir='${BUILD_EXTENSION_DIR}'
+    build_dir='${BUILD_EXTENSION_DIR}',
+    debug_mode=${ENABLE_DEBUG}
 ).build()
 ")
 

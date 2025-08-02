@@ -30,11 +30,48 @@ OP_KERNEL = "op_kernel"
 code_suffix = {"cpp", "h"}
 
 
+SOC_VERSION_MAP = {
+    "ascend910a": "ascend910",
+    "ascend910proa": "ascend910",
+    "ascned910premiuma": "ascend910",
+    "ascend910prob": "ascend910",
+    "ascend910b": "ascend910b",
+    "ascend910b1": "ascend910b",
+    "ascend910b2": "ascend910b",
+    "ascend910b2c": "ascend910b",
+    "ascend910b3": "ascend910b",
+    "ascend910b4": "ascend910b",
+    "ascend910b4-1": "ascend910b",
+    "ascend910c": "ascend910_93",
+    "ascend910_9391": "ascend910_93",
+    "ascend910_9392": "ascend910_93",
+    "ascend910_9381": "ascend910_93",
+    "ascend910_9382": "ascend910_93",
+    "ascend910_9372": "ascend910_93",
+    "ascend910_9362": "ascend910_93",
+    "ascend310p": "ascend310p",
+    "ascend310p1": "ascend310p",
+    "ascend310p3": "ascend310p",
+    "ascend310p5": "ascend310p",
+    "ascend310p7": "ascend310p",
+    "ascend310p3vir01": "ascend310p",
+    "ascend310p3vir02": "ascend310p",
+    "ascend310p3vir04": "ascend310p",
+    "ascend310p3vir08": "ascend310p",
+    "ascend310b": "ascend310b",
+    "ascend310b1": "ascend310b",
+    "ascend310b2": "ascend310b",
+    "ascend310b3": "ascend310b",
+    "ascend310b4": "ascend310b",
+}
+
+
 def get_config():
     """get config from user"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("-o", "--op_host_path", type=str, required=True)
-    parser.add_argument("-k", "--op_kernel_path", type=str, required=True)
+    parser.add_argument("--op_dirs", type=str, required=True)
+    parser.add_argument("--build_type", type=str, default="Release")
+    parser.add_argument("--build_path", type=str, default="")
     parser.add_argument("--soc_version", type=str, default="")
     parser.add_argument("--ascend_cann_package_path", type=str, default="")
     parser.add_argument("--vendor_name", type=str, default="customize")
@@ -51,34 +88,28 @@ class CustomOPCompiler():
 
     def __init__(self, args):
         self.args = args
-        script_path = os.path.realpath(__file__)
-        dir_path, _ = os.path.split(script_path)
-        self.current_path = dir_path
-        self.custom_project = os.path.join(dir_path, "CustomProject")
+        if self.args.build_path != "":
+            self.custom_project = os.path.join(self.args.build_path, "CustomProject")
+        else:
+            self.custom_project = os.path.join(os.path.dirname(os.path.realpath(__file__)), "CustomProject")
+        self.op_dirs = re.split(r"[;, ]", self.args.op_dirs)
 
     def check_args(self):
         """check config"""
-        if not os.path.isdir(self.args.op_host_path):
-            raise ValueError(
-                f"Config error! op host path [{self.args.op_host_path}] is not exist,"
-                f" please check your set --op_host_path")
-
-        if not os.path.isdir(self.args.op_kernel_path):
-            raise ValueError(
-                f"Config error! op kernel path [{self.args.op_kernel_path}] is not exist, "
-                f"please check your set --op_kernel_path")
+        for op_dir in self.op_dirs:
+            if not os.path.isdir(op_dir):
+                raise ValueError(
+                    f"Config error! op directpry [{op_dir}] is not exist, "
+                    f"please check your set --op_dirs")
 
         if self.args.soc_version != "":
-            support_soc_version = {"Ascend910", "Ascend910B", "Ascend310P", "Ascend310B"}
-            input_socs = re.split(r"[;,]", self.args.soc_version)
-            input_socs = [soc.strip() for soc in input_socs if soc.strip()]
-            support_soc_version_lower = {soc.lower() for soc in support_soc_version}
-            invalid_socs = [soc for soc in input_socs if soc.lower() not in support_soc_version_lower]
-            if invalid_socs:
-                raise ValueError(
-                    f"Config error! Unsupported soc version(s): {invalid_socs}! "
-                    f"Please check your set --soc_version and use ';' or ',' to separate multiple soc_versions, "
-                    f"supported soc versions are {support_soc_version}")
+            soc_version_list = re.split(r"[;,]", self.args.soc_version)
+            for soc_version in soc_version_list:
+                if soc_version.lower() not in SOC_VERSION_MAP.keys():
+                    raise ValueError(
+                        f"Config error! Unsupported soc version(s): {soc_version}! "
+                        f"Please check your set --soc_version and use ';' or ',' to separate multiple soc_versions. "
+                        f"Supported soc version : {SOC_VERSION_MAP.keys()}.")
 
         if self.args.ascend_cann_package_path != "":
             if not os.path.isdir(self.args.ascend_cann_package_path):
@@ -113,23 +144,30 @@ class CustomOPCompiler():
             self.args.ascend_cann_package_path = os.environ.get('ASCEND_HOME_PATH', "/usr/local/Ascend/ascend-toolkit/latest")
 
         if self.args.soc_version == "":
-            self.args.soc_version = "Ascend910,Ascend910B,Ascend310P,Ascend310B"
+            self.args.soc_version = "ascend910b1,ascend310p1"
 
     def copy_code_file(self):
         """copy code file to custom project"""
+        for op_dir in self.op_dirs:
+            op_host_dir = os.path.join(op_dir, OP_HOST)
+            op_kernel_dir = os.path.join(op_dir, OP_KERNEL)
+            if not os.path.exists(op_host_dir) or not os.path.exists(op_kernel_dir):
+                logger.warning(f"The {op_dir} dose not contain {op_host_dir} or {op_kernel_dir}, skipped!")
+                continue
 
-        for item in os.listdir(self.args.op_host_path):
-            if item.split('.')[-1] in code_suffix:
-                item_path = os.path.join(self.args.op_host_path, item)
-                target_path = os.path.join(self.custom_project, OP_HOST, item)
-                if os.path.isfile(item_path):
-                    shutil.copy(item_path, target_path)
-        for item in os.listdir(self.args.op_kernel_path):
-            if item.split('.')[-1] in code_suffix:
-                item_path = os.path.join(self.args.op_kernel_path, item)
-                target_path = os.path.join(self.custom_project, OP_KERNEL, item)
-                if os.path.isfile(item_path):
-                    shutil.copy(item_path, target_path)
+            for item in os.listdir(op_host_dir):
+                if item.split('.')[-1] in code_suffix:
+                    item_path = os.path.join(op_host_dir, item)
+                    target_path = os.path.join(self.custom_project, OP_HOST, item)
+                    if os.path.isfile(item_path):
+                        shutil.copy(item_path, target_path)
+
+            for item in os.listdir(op_kernel_dir):
+                if item.split('.')[-1] in code_suffix:
+                    item_path = os.path.join(op_kernel_dir, item)
+                    target_path = os.path.join(self.custom_project, OP_KERNEL, item)
+                    if os.path.isfile(item_path):
+                        shutil.copy(item_path, target_path)
 
         for root, _, files in os.walk(self.custom_project):
             for f in files:
@@ -137,12 +175,29 @@ class CustomOPCompiler():
                 if file_extension == ".sh":
                     os.chmod(os.path.join(root, f), 0o700)
 
+    def trans_soc_version(self, soc_version_args):
+        soc_version_list = re.split(r"[;,]", soc_version_args)
+        if len(soc_version_list) == 1:
+            version_map = {"ascend910": "ascend910a",
+                           "ascend910b": "ascend910b1",
+                           "ascend310p": "ascend310p1",
+                           "ascned310b": "ascend310b1",
+                           "ascend910c": "ascend910_9391"}
+            soc = soc_version_list[0].lower()
+            return f"ai_core-{version_map.get(soc, soc)}"
+
+        socs = []
+        for soc_version in soc_version_list:
+            soc = SOC_VERSION_MAP.get(soc_version.lower())
+            socs.append(soc)
+        return ",".join(f"ai_core-{soc}" for soc in socs)
+
     def generate_compile_project(self):
         """generate compile project"""
         if os.path.exists(self.custom_project) and os.path.isdir(self.custom_project):
             shutil.rmtree(self.custom_project)
 
-        compute_unit = ",".join([f"ai_core-{soc}" for soc in re.split(r"[;,]", self.args.soc_version)])
+        compute_unit = self.trans_soc_version(self.args.soc_version)
         json_data = [{"op": "CustomOP"}]
         with tempfile.TemporaryDirectory() as temp_dir:
             custom_json = os.path.join(temp_dir, "custom.json")
@@ -151,12 +206,21 @@ class CustomOPCompiler():
 
             gen_command = ["msopgen", "gen", "-i", custom_json, "-c", compute_unit, "-lan", "cpp", "-out", self.custom_project]
             self.exec_shell_command(gen_command)
-        
+
+        if self.args.build_type.lower() == "debug":
+            debug_command = ["sed", "-i", "s/Release/Debug/g", f"{self.custom_project}/CMakePresets.json"]
+            self.exec_shell_command(debug_command)
+
+        if os.getenv("CMAKE_THREAD_NUM"):
+            thread_num = int(os.getenv("CMAKE_THREAD_NUM"))
+            cmake_j_command = ["sed", "-i", f"s/-j$(nproc)/-j{thread_num}/g", f"{self.custom_project}/build.sh"]
+            self.exec_shell_command(cmake_j_command)
+
         op_host_dir = os.path.join(self.custom_project, OP_HOST)
         for item in os.listdir(op_host_dir):
             if item.split('.')[-1] in code_suffix:
                 os.remove(os.path.join(op_host_dir, item))
-        
+
         op_kernel_dir = os.path.join(self.custom_project, OP_KERNEL)
         for item in os.listdir(op_kernel_dir):
             if item.split('.')[-1] in code_suffix:

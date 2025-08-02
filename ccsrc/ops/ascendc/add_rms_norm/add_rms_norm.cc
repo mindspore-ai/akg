@@ -24,8 +24,7 @@
 #include <string>
 #include <vector>
 
-namespace mindspore {
-namespace ops {
+namespace ms_custom_ops {
 class OPS_API AddRmsNormCustomOpFuncImpl : public OpFuncImpl {
 public:
   ShapeArray InferShape(const PrimitivePtr &primitive,
@@ -87,10 +86,7 @@ public:
 
   bool GeneralInferRegistered() const override { return true; }
 };
-} // namespace ops
-} // namespace mindspore
 
-namespace ms_custom_ops {
 class AddRmsNormCustomAscend : public AscendCKernelMod {
 public:
   AddRmsNormCustomAscend() : AscendCKernelMod(std::move("aclnnAddRmsNormCustom")) {}

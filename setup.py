@@ -131,6 +131,7 @@ class CustomBuildExt(build_ext):
         BUILD_OPS_DIR = os.path.join(ROOT_DIR, "build", "ms_custom_ops")
         os.makedirs(BUILD_OPS_DIR, exist_ok=True)
 
+        build_type = "Debug" if os.getenv("DEBUG_MODE") == "on" else "Release"
         ascend_home_path = _get_ascend_home_path()
         env_script_path = _get_ascend_env_path()
         build_extension_dir = os.path.join(BUILD_OPS_DIR, "kernel_meta", ext_name)
@@ -142,16 +143,19 @@ class CustomBuildExt(build_ext):
         # Also prepare the Python package directory for generated files
         python_package_path = os.path.join(ROOT_DIR, "python", package_name)
         os.makedirs(python_package_path, exist_ok=True)
-        # 动态检测CPU核心数，取一半，至少为1
         available_cores = multiprocessing.cpu_count()
-        compile_cores = max(1, available_cores // 2)
+        if os.getenv("CMAKE_THREAD_NUM", None):
+            compile_cores = int(os.getenv("CMAKE_THREAD_NUM"))
+        else:
+            compile_cores = max(1, available_cores // 2)
         logger.info(f"Available CPU cores: {available_cores}, using {compile_cores} cores for compilation")
         # Combine all cmake commands into one string
         cmake_cmd = (
             f"source {env_script_path} && "
             f"cmake -S {OPS_DIR} -B {BUILD_OPS_DIR}"
-            f"  -DCMAKE_BUILD_TYPE=Release"
+            f"  -DCMAKE_BUILD_TYPE={build_type}"
             f"  -DCMAKE_INSTALL_PREFIX={os.path.join(BUILD_OPS_DIR, 'install')}"
+            f"  -DCMAKE_BUILD_PATH={BUILD_OPS_DIR}"
             f"  -DBUILD_EXTENSION_DIR={build_extension_dir}"
             f"  -DASCENDC_INSTALL_PATH={package_path}"
             f"  -DMS_EXTENSION_NAME={ext_name}"
