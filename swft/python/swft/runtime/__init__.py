@@ -13,16 +13,5 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-from .tensor import Tensor
-from .scalar import Scalar
-from .c_expression import set_context, get_context
-from .dynamic_loop import dynamic_loop
-from .sub_kernel import sub_kernel, sync_kernel, jit
-from .instruction import Instruction
-from .compile import compile_kernel
-from .compile_func import compile_func, code_block_context, custom_and, custom_or, custom_not
-from .name_tensor import name_tensor
-import os
-if os.getenv("ENABLE_MS_JIT", 0):
-  from .ms_plugin import ms_jit
+from .kernel_session import exec_kernel
+from .npu_session import NPUSession

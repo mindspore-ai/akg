@@ -19,14 +19,36 @@ from .instruction import Instruction
 from .scalar import Scalar
 from .name_tensor import name_tensor
 
-from swft.utils import util as checker
 import traceback
 from copy import deepcopy
+import numpy as np
 
 
 class Tensor(CTensor):
-    def __init__(self, mem_type, dtype, shape, format, multi_core=None):
-        CTensor.__init__(self, mem_type, dtype, shape, format, multi_core)
+    def __init__(self, *args, **kwdargs):
+        if len(args) == 5:
+            mem_type, dtype, shape, format, multi_core = args[0], args[1], args[2], args[3], args[4]
+            scalar_shape = [Scalar("INT32", dim) for dim in shape]
+            CTensor.__init__(self, mem_type, dtype,
+                             scalar_shape, format, multi_core)
+        elif len(args) == 3:
+            mem_type, dtype, shape = args[0], args[1], args[2]
+            scalar_shape = [Scalar("INT32", dim) for dim in shape]
+            format = kwdargs["format"] if "format" in kwdargs.keys() else "ND"
+            multi_core = kwdargs["multi_core"] if "multi_core" in kwdargs.keys(
+            ) else False
+            CTensor.__init__(self, mem_type, dtype,
+                             scalar_shape, format, multi_core)
+        elif len(args) == 1:
+            ndarray = args[0]
+            if not isinstance(ndarray, np.ndarray):
+                raise TypeError(
+                    "expect Tensor to be initialized from numpy.ndarray")
+            format = "ND" if "format" not in kwdargs else kwdargs["format"]
+            multi_core = False if "multi_core" not in kwdargs else kwdargs["multi_core"]
+            CTensor.__init__(self, ndarray, format, multi_core)
+        else:
+            raise TypeError("falied to parse Tensor init arguments")
         stack = traceback.extract_stack()
         filename, lineno, function_name, code = stack[-2]
         parse = code.split("=")
@@ -34,28 +56,24 @@ class Tensor(CTensor):
             self.__name__ = parse[0].strip()
 
     @property
-    def type(self):
-        return "Tensor"
-
-    @property
     def shape(self):
-        return self.getShape()
+        return [Scalar("INT32", dim) for dim in self._get_shape()]
 
     @property
     def dtype(self):
-        return self.getDtype()
+        return self._get_dtype()
 
     @property
     def mem_type(self):
-        return self.getMemType()
+        return self._get_mem_type()
 
     @property
     def format(self):
-        return self.getFormat()
+        return self._get_format()
 
     @property
     def multi_core(self):
-        return self.getMultiCore()
+        return self._get_multi_core()
 
     @name_tensor
     def load(self, tensor, attr=None):
@@ -68,12 +86,6 @@ class Tensor(CTensor):
                 self.dtype, tensor.dtype))
 
         if self.mem_type != tensor.mem_type and self.mem_type != "L0C":
-            support_shape = deepcopy(tensor.shape)
-            if attr is not None:
-                support_shape = deepcopy(self.shape)
-            if self.shape != support_shape:
-                raise Exception("Tensor shape {} and {} not match.".format(
-                    support_shape, self.shape))
             if self.format != tensor.format:
                 raise Exception("Tensor format {} and {} not match.".format(
                     tensor.format, self.format))

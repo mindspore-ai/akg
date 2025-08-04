@@ -445,3 +445,43 @@ def vector_dup(factor, size, multi_core):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     VectorDup(factor, out, {"size": size})()
     return out
+
+
+@name_tensor
+def vcmpv(src0, src1, opType):
+    if opType not in CMPV_SUPPORT_OPTYPE:
+        raise TypeError("vcmpv not support optype {}".format(opType))
+    out_dtype = cmpv_dtype_infer(src0.dtype, src1.dtype)
+    out_mem_type = bino_memtype_infer(src0.mem_type, src1.mem_type)
+    out_size = bino_shape_infer(src0.shape, src1.shape)
+    out_format = default_format_infer(src0.format)
+    multi_core = src0.multi_core
+    out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
+    Vcmpv(src0, src1, out, attrs={"opType": [CMP_OP_TYPE[opType]]})()
+    return out
+
+
+@name_tensor
+def vcmpvs(src, factor, opType):
+    if (not isinstance(factor, Scalar)):
+        factor = Scalar(src.dtype, factor)
+    out_mem_type = mono_memtype_infer(src.mem_type)
+    out_size = default_shape_infer(src.shape)
+    out_dtype = "BOOL"
+    out_format = default_format_infer(src.format)
+    multi_core = src.multi_core
+    out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
+    Vcmpvs(src, factor, out, attrs={"opType": [CMP_OP_TYPE[opType]]})()
+    return out
+
+
+@name_tensor
+def where(src0, src1, condition):
+    out_dtype = bino_dtype_infer(src0.dtype, src1.dtype)
+    out_mem_type = bino_memtype_infer(src0.mem_type, src1.mem_type)
+    out_size = condition.shape
+    out_format = default_format_infer(src0.format)
+    multi_core = src0.multi_core
+    out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
+    Vsel(src0, src1, condition, out)()
+    return out

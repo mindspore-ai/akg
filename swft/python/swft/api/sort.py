@@ -40,29 +40,65 @@ def vsort16(src0):
 
 
 @name_tensor
-def vmrgsort4(src0, src1=None, src2=None, src3=None):
+def vmrgsort4(src0, src1=None, src2=None, src3=None, len0=None, len1=None, len2=None, len3=None, rep=1, all_local=True):
     shape = deepcopy(src0.shape)
-    if (src1 == None):
+    if (len0 is None):
+        len0_s = Scalar("INT32", shape[-1])
+    elif (isinstance(len0, int)):
+        len0_s = Scalar("INT32", len0 * 8)
+        shape[-1] = len0 * 8 * rep
+    else:
+        len0_s = len0 * 8
+    is_exhasuted = 0.0 if all_local else 1.0
+    if (src1 is None):
         dst = Tensor("UB", src0.dtype, shape, src0.format, src0.multi_core)
-        Instruction("VMRGSORT4", (src0, ), (dst, ), {"config": [1]})()
+        Instruction("VMRGSORT4", (src0, len0_s), (dst, ), {"config": [
+                    1], "rep": [rep], "is_exhasuted": [is_exhasuted]})()
         return dst
-    shape[-1] += src1.shape[-1]
+
+    if (len1 is None):
+        len1_s = Scalar("INT32", src1.shape[-1])
+        shape[-1] += src1.shape[-1]
+    elif (isinstance(len1, int)):
+        len1_s = Scalar("INT32", len1 * 8)
+        shape[-1] += len1 * 8 * rep
+    else:
+        len1_s = len1 * 8
+        shape[-1] += src1.shape[-1]
     if (src2 == None):
         dst = Tensor("UB", src0.dtype, shape, src0.format, src0.multi_core)
-        Instruction("VMRGSORT4", (src0, src1), (dst, ), {"config": [3]})()
+        Instruction("VMRGSORT4", (src0, len0_s, src1, len1_s), (dst, ), {
+                    "config": [3], "rep": [rep], "is_exhasuted": [is_exhasuted]})()
         return dst
-    shape[-1] += src2.shape[-1]
-    if (src3 == None):
-        dst = Tensor("UB", src0.dtype, shape, src0.format, src0.multi_core)
-        Instruction("VMRGSORT4", (src0, src1, src2),
-                    (dst, ), {"config": [7]})()
-        return dst
-    shape[-1] += src3.shape[-1]
-    dst = Tensor("UB", src0.dtype, shape, src0.format, src0.multi_core)
-    Instruction("VMRGSORT4", (src0, src1, src2, src3),
-                (dst, ), {"config": [15]})()
-    return dst
 
+    if (len2 is None):
+        len2_s = Scalar("INT32", src2.shape[-1])
+        shape[-1] += src2.shape[-1]
+    elif (isinstance(len2, int)):
+        len2_s = Scalar("INT32", len2 * 8)
+        shape[-1] += len2 * 8 * rep
+    else:
+        len2_s = len2 * 8
+        shape[-1] += src2.shape[-1]
+    if (src3 is None):
+        dst = Tensor("UB", src0.dtype, shape, src0.format, src0.multi_core)
+        Instruction("VMRGSORT4", (src0, len0_s, src1, len1_s, src2, len2_s),
+                    (dst, ), {"config": [7], "rep": [rep], "is_exhasuted": [is_exhasuted]})()
+        return dst
+    
+    if (len3 is None):
+        len3_s = Scalar("INT32", src3.shape[-1])
+        shape[-1] += src3.shape[-1]
+    elif (isinstance(len3, int)):
+        len3_s = Scalar("INT32", len3 * 8)
+        shape[-1] += len3 * 8 * rep
+    else:
+        len3_s = len3 * 8
+        shape[-1] += src3.shape[-1]
+    dst = Tensor("UB", src0.dtype, shape, src0.format, src0.multi_core)
+    Instruction("VMRGSORT4", (src0, len0_s, src1, len1_s, src2, len2_s, src3, len3_s),
+                (dst, ), {"config": [15], "rep": [rep], "is_exhasuted": [is_exhasuted]})()
+    return dst
 
 @name_tensor
 def vextract(src):

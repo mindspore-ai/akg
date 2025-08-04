@@ -16,7 +16,8 @@
 
 from .compute import mmad, vadd, vsub, vmul, vdiv, vmax, vmin, vand, vor, \
     vadds, vmuls, vmaxs, vmins, vexp, vsqrt, vrelu, vln, vrec, vabs, vnot, \
-    vconv, vconv_s42f16, vconv_s42s8, vbrcb, vector_dup, vcmax, vcmin, vcadd, vsubs, vdivs
+    vconv, vconv_s42f16, vconv_s42s8, vbrcb, vector_dup, vcmax, vcmin, vcadd, \
+    vsubs, vdivs, vcmpv, vcmpvs, where
 from .context import get_block_idx
 from .move import move_to_gm, move_to_ub, move_to_l1, move_to_l0A, move_to_l0B, move_to_l0C, move_to_scalar, move_scalar_to_ub
 from .transdata import nd_to_nz, nz_to_nd, transpose, reshape, nchw_to_nc1hwc0, change_view, transpose_to_gm
@@ -25,3 +26,4 @@ from .sync import sync_cores
 from .gatherandscatter import vgather
 from .sort import vconcat, vsort16, vmrgsort4, vextract
 from .composite import tanh, arange
+from swft.runtime import exec_kernel

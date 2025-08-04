@@ -32,7 +32,7 @@ def move_to_gm(src, no_autopad=False):
 
 @name_tensor
 def move_to_scalar(src):
-    if len(src.shape) != 1 and src.shape[0] != 1:
+    if len(src.shape) != 1 and eval_ne(src.shape[0], 1):
         raise ValueError("For move to scalar, src tensor's shape must be [1]")
     dst = Scalar(src.dtype)
     dst.load(src)
@@ -122,9 +122,9 @@ def move_to_l0B(src, Transpose=False, load3d=False, k_w=0, k_h=0):
 @name_tensor
 def move_to_l0C(src, out_shape, multi_core=True):
     for i in range(len(src.shape) - 1):
-        if (src.shape[i] != 1):
+        if eval_ne(src.shape[i], 1):
             raise ValueError("Broadcast_to_cc needs bias shape.")
-    if src.shape[-1] != out_shape[-1]:
+    if eval_ne(src.shape[-1], out_shape[-1]):
         raise ValueError(
             "Broadcast_to_cc shape mismatch between {} and {}.".format(src.shape, out_shape))
     out_size = deepcopy(out_shape)

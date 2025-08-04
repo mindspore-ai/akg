@@ -15,7 +15,7 @@
 # limitations under the License.
 
 from .c_expression import push_to_list, compile_ckernel
-
+from swft.utils import is_scalar
 trace = []
 
 
@@ -26,7 +26,7 @@ def trace_info(idx, name, inputs, outputs, attr):
         for (k, v) in attr.items():
             if (isinstance(v, list)):
                 list_keys.append(k)
-                list_values.append(v)
+                list_values.append([s.value if is_scalar(s) else s for s in v])
     input_tensors = []
     input_scalars = []
     output_tensors = []
@@ -50,16 +50,16 @@ def add_trace(idx, name, inputs, outputs, attr):
     trace.append((idx, name, inputs, outputs, attr))
 
 
-def compile_kernel(file_path, name=None, hard_sync=False):
+def compile_kernel(file_path, name=None, hard_sync=False, idx=-1):
     global trace
     for i in trace:
         trace_info(*i)
     trace.clear()
     if name == None:
-        succ = compile_ckernel(file_path, "", hard_sync)
+        succ = compile_ckernel(file_path, "", hard_sync, idx)
         if not succ:
             raise Exception("Compile failed, not good tiling size.")
     else:
-        succ = compile_ckernel(file_path, name, hard_sync)
+        succ = compile_ckernel(file_path, name, hard_sync, idx)
         if not succ:
             raise Exception("Compile failed, not good tiling size.")
