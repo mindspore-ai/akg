@@ -118,7 +118,8 @@ private:
 };
 } // namespace ms_custom_ops
 
-MS_CUSTOM_OPS_REGISTER(add_rms_norm, AddRmsNormCustomOpFuncImpl, AddRmsNormCustomAscend);
+REG_GRAPH_MODE_OP(add_rms_norm, ms_custom_ops::AddRmsNormCustomOpFuncImpl,
+                  ms_custom_ops::AddRmsNormCustomAscend);
 
 // =============================================================================
 // PYBOOST MODE IMPLEMENTATION
