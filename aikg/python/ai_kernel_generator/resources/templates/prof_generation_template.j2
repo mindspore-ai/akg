@@ -231,6 +231,9 @@ def run_generation_implementations():
     # 运行Triton实现
     for _ in range({{ total_count }}):
         impl_output = {{ impl_func_name }}(*inputs)
+        {% if backend == "cuda" %}
+        torch.cuda.synchronize()
+        {% endif %}
     {% elif dsl == "swft" %}
     # 运行SWFT实现
     data_dir = os.path.dirname(__file__)

@@ -143,8 +143,20 @@ def load_binary_data(data_dir, reference_outputs):
     
     return loaded_outputs
 
-
-{% if framework == "torch" %}
+{% if "triton" in dsl and backend == "cuda" and arch == "a100" %}
+def get_limit(data_type):
+    import torch
+    if data_type == torch.float32:
+        return 0.02
+    elif data_type == torch.float16:
+        return 0.004
+    elif data_type == torch.bfloat16:
+        return 0.03
+    elif data_type == torch.int8:
+        return 0.01
+    else:
+        return 0.02
+{% elif framework == "torch" %}
 def get_limit(data_type):
     import torch
     if data_type == torch.float16:

@@ -123,6 +123,9 @@ def run_base_implementations():
     # 运行框架实现
     for _ in range({{ total_count }}):
         framework_output = framework_model(*inputs)
+        {% if backend == "cuda" %}
+        torch.cuda.synchronize()
+        {% endif %}
 
 if __name__ == "__main__":
     run_base_implementations() 

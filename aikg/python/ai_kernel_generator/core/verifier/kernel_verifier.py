@@ -29,9 +29,9 @@ from ai_kernel_generator.utils.process_utils import run_command
 
 # 模板路径
 TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "kernel_verify_template.j2")
-PROFILE_BASE_TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "msprof_base_template.j2")
+PROFILE_BASE_TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "prof_base_template.j2")
 PROFILE_GENERATION_TEMPLATE_PATH = os.path.join(
-    get_project_root(), "resources", "templates", "msprof_generation_template.j2")
+    get_project_root(), "resources", "templates", "prof_generation_template.j2")
 
 # 类型定义
 FrameworkType = Literal["torch", "mindspore", "numpy"]
@@ -296,8 +296,8 @@ class KernelVerifier:
     def run_nsys(self, script_path: str) -> Tuple[bool, str, Optional[str]]:
         """运行nsys性能分析"""
         try:
-            output_name = "nsys_report"
-            cmd = f'nsys profile --output={output_name} --force-overwrite true python {script_path}'
+            output_name = "nsys_report_" + os.path.basename(script_path).replace(".py", "")
+            cmd = f'nsys profile --output={output_name} python {script_path}'
             print("run_nsys = ", cmd)
             process = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
             report_path = os.path.join(os.path.dirname(script_path), output_name + ".nsys-rep")
@@ -312,14 +312,15 @@ class KernelVerifier:
         """分析nsys生成的rep文件，返回平均耗时(us)，统计方式与analyze_prof_data一致"""
 
         try:
-            from pathlib import Path
             dir_plib = Path(rep_path).resolve().parent
-            csv_path = dir_plib / "nsys_report"  # rep_path.replace(".nsys-rep", ".csv")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_base = f"nsys_report_{timestamp}"
+            csv_path = dir_plib / csv_base  # rep_path.replace(".nsys-rep", ".csv")
             # 导出csv
             cmd = f'nsys stats --report gputrace  --timeunit us  --format csv --output {csv_path} {rep_path}'
             print("analyze_nsys_data = ", cmd)
             subprocess.run(cmd, shell=True, check=True)
-            csv_path = dir_plib / "nsys_report_gputrace.csv"
+            csv_path = dir_plib / f"{csv_base}_gputrace.csv"
 
             if not os.path.exists(csv_path):
                 return False, "未生成csv文件", float('inf')

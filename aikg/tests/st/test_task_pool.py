@@ -37,7 +37,7 @@ async def test_parallel_task_triton_ascend910b4(framework, dsl, backend, arch):
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    for op_name, result in results:
+    for op_name, result, _ in results:
         result_dict[op_name] += result
     print(result_dict)
 
@@ -89,7 +89,7 @@ async def test_parallel_task_swft_ascend310p3(framework, dsl, backend, arch):
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    for op_name, result in results:
+    for op_name, result, _ in results:
         result_dict[op_name] += result
     print(result_dict)
 
@@ -141,7 +141,7 @@ async def test_parallel_task_triton_a100(framework, dsl, backend, arch):
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    for op_name, result in results:
+    for op_name, result, _ in results:
         result_dict[op_name] += result
     print(result_dict)
 
