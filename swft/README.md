@@ -34,8 +34,6 @@ swft/
 ```
 相关API文档链接：
 
-[进阶教程.md](docs/进阶教程.md) SWFT的算子编写教程
-
 [tensor.md](docs/tensor.md) SWFT Tensor API教程
 
 [core.md](docs/core.md) swft.core模块API教程
@@ -50,6 +48,7 @@ swft/
 
 ## 快速开始
 ### 环境要求
+本软件目前只支持ARM架构环境，暂无法在其他架构(X86, PowerPC等)上正常运行。
 1. gcc>=9.4
 2. python>=3.7
 3. pybind11
@@ -58,8 +57,12 @@ swft/
 6. wheel>=0.45.1
 
 ### 安装方法
-自动打包和安装swft软件包：
+1.设置CANN包路径环境变量
+2.执行CANN包设置环境变量脚本
+3.自动打包和安装swft软件包
 ```shell
+export ASCEND_HOME_PATH=xxx/ascend-toolkit/latest/
+source xxx/ascend-toolkit/set_env.sh
 bash build.sh
 ```
 ### 使用示例

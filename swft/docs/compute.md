@@ -553,3 +553,58 @@ print(out_tensor.size)  # 输出应为[1024, 32]
 ```python
 factor = Scalar("FP32", 2.5)
 new_vector = vector_dup(factor, [1024], multi_core=False) #[1024]
+```
+
+
+## vcmpv
+### 函数说明
+向量比较指令，用于逐个元素比较，支持多种比较操作，支持广播扩展。
+### 参数说明
+- src0: input, Tensor("UB", 任意Dtype, format="ND")
+- src1: input, Tensor("UB", 任意Dtype, format="ND"), 数据类型和src0一致。
+- opType: input, 操作类型，支持["EQ", "NE", "LT", "GT", "GE", "LE"]。
+### 返回值
+- out: output, Tensor("UB", Dtype="BOOL"), shape和广播扩展后的shape一致。
+
+### sample0
+```python
+x_ub = Tensor("UB", "FP32", [1024], format="ND")
+y_ub = Tensor("UB", "FP32", [512], format="ND")
+ub_out = vcmpv(x_ub, y_ub, "EQ")
+```
+
+## vcmpvs
+### 函数说明
+向量比较指令，用于张量的逐个元素和标量的比较，支持多种比较操作。
+### 参数说明
+- src: input, Tensor("UB", 任意Dtype, format="ND")
+- factor: input, 必须为Scalar类型，数据类型和src一致。
+- opType: input, 操作类型，支持["EQ", "NE", "LT", "GT", "GE", "LE"]。
+### 返回值
+- out: output, Tensor("UB", Dtype="BOOL"), shape和src的shape一致。
+
+### sample0
+```python
+x_ub = Tensor("UB", "FP32", [1024], format="ND")
+factor = Scalar("FP32", 2.5)
+ub_out = vcmpv(x_ub, factor, "EQ")
+```
+
+## where
+### 函数说明
+向量选择指令，用于依据给定的条件，从两个张量中选取元素，支持输入参数condition广播扩展。
+### 参数说明
+- src0: input, Tensor("UB", 任意Dtype, format="ND")
+- src1: input, Tensor("UB", format="ND"), 数据类型和src0一致。
+- condition: input，当condition中的元素为True,结果张量对应位置元素取自src0，当condition中的元素为False,
+结果张量对应位置的元素取自src1。
+### 返回值
+- out: output, Tensor("UB"), 数据类型和src0，src1保持一致，shape和广播扩展后的shape一致。
+
+### sample0
+```python
+src0 = Tensor("UB", "FP32", [512], format="ND")
+src1 = Tensor("UB", "FP32", [512], format="ND")
+condition = Tensor("UB", "BOOL", [1024], format="ND")
+out = where(src0, src1, condition)
+```
