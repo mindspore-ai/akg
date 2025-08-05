@@ -21,24 +21,56 @@ PYBIND11_MODULE(c_expression, m)
     py::class_<Value>(m, "Value");
     py::class_<Tensor, Value>(m, "Tensor")
         .def(py::init<const std::string &, const std::string &, const py::list &, const std::string &, const bool>())
+        .def(py::init<py::array &, const std::string &, const bool>())
         .def("update_param", &Tensor::updateParam)
         .def("update_name", &Value::updateName)
-        .def("get_name", &Value::getName)
         .def("update_position", &Value::updatePosition)
-        .def("getShape", &Tensor::getShapePy)
-        .def("getDtype", &Tensor::getDTypePy)
-        .def("getMemType", &Tensor::getMemTypePy)
-        .def("getFormat", &Tensor::getFormatPy)
-        .def("getMultiCore", &Tensor::isMultiCore);
-    py::class_<Scalar, Value>(m, "Scalar")
+        .def("get_name", &Value::getName)
+        .def("_get_shape",
+             [](Tensor &self) {
+                // Port std::vector<Scalar<int>> into std::vector<Scalar<double>>
+                std::vector<Scalar<double>> shape_double;
+                for (const auto &dim : self.getShape()) {
+                    if (dim.hasValue()) {
+                        shape_double.push_back(Scalar<double>("INT32", dim.getValue()));
+                    } else {
+                        Scalar<double> dim_double = Scalar<double>("INT32");
+                        dim_double.setTile(dim.getTile());
+                        shape_double.push_back(dim_double);
+                    }
+                }
+                return shape_double;
+             })
+        .def("_get_dtype", &Tensor::getDTypePy)
+        .def("_get_mem_type", &Tensor::getMemTypePy)
+        .def("_get_format", &Tensor::getFormatPy)
+        .def("_get_multi_core", &Tensor::isMultiCore)
+        .def("sync_device_to_host", &Tensor::syncDeviceToHost)
+        .def("sync_host_to_device", &Tensor::syncHostToDevice)
+        .def("as_numpy", &Tensor::asNumpy)
+        .def("host_data_ptr", &Tensor::getHostDataPtr, py::return_value_policy::reference)
+        .def("device_data_ptr", &Tensor::getDeviceDataPtr, py::return_value_policy::reference)
+        .def_property_readonly("type", &Tensor::getClassType);
+    py::class_<Scalar<double>, Value>(m, "Scalar")
         .def(py::init<const std::string &>())
         .def(py::init<const std::string &, const float>())
         .def("update_name", &Value::updateName)
-        .def("get_name", &Value::getName)
         .def("update_position", &Value::updatePosition)
-        .def("has_value", &Scalar::hasValue)
-        .def("getValue", &Scalar::getValue)
-        .def("getDtype", &Scalar::getDtypeStr);
+        .def("get_name", &Value::getName)
+        .def("has_value", &Scalar<double>::hasValue)
+        .def("_has_tile", &Scalar<double>::hasTile)
+        .def("_get_tile", &Scalar<double>::getTile)
+        .def("_set_tile", &Scalar<double>::setTile)
+        .def("_get_dtype", &Scalar<double>::getDtypeStr)
+        .def("__deepcopy__", &Scalar<double>::deepcopy, py::arg("memo"))
+        .def("__repr__", &Scalar<double>::toString)
+        .def_property_readonly("type", &Scalar<double>::getClassType)
+        .def_property_readonly("value", &Scalar<double>::getValue);
+    py::class_<NPUSession>(m, "NPUSession")
+        .def(py::init<const int>())
+        .def("_get_stream", &NPUSession::getStream, py::return_value_policy::reference)
+        .def("_get_current_device", &NPUSession::getCurrentDevice)
+        .def("_sync_stream", &NPUSession::syncStream);
     m.def("new_subkernel", &newSubKernel);
     m.def("new_synckernel", &newSyncSubKernel);
     m.def("set_context", &setContext);

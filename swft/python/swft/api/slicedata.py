@@ -49,13 +49,9 @@ def split_to_ub(src, split_size, split_axis, relu=False, no_autopad=False):
             attrs["relu"] = [1.0]
         if no_autopad:
             attrs["no_pad"] = [1.0]
-        out_mem_type = move_memtype_infer(src.mem_type, attrs)
-        out_dtype = default_dtype_infer(src.dtype)
-        out_format = move_format_infer(src.format, attrs)
-        out_size = split_shape_infer(src.shape, attrs)
-        multi_core = src.multi_core
-        dst = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
-        Split(src, dst, deepcopy(attrs))()
+        slicesize = [input_end[size] - input_start[size]
+                     for size in range(len(src.shape))]
+        dst = slice_to_ub(src, input_start, slicesize, no_autopad=False)
         out.append(dst)
         input_start[split_axis] = split_size[i]
         if i < len(split_size) - 1:
@@ -93,13 +89,9 @@ def split_to_l1(src, split_size, split_axis):
     for i in range(len(split_size)):
         attrs = {"mem_type": "L1", "format": None, "input_start": input_start,
                  "input_end": input_end, "strides": strides}
-        out_mem_type = move_memtype_infer(src.mem_type, attrs)
-        out_dtype = default_dtype_infer(src.dtype)
-        out_format = move_format_infer(src.format, attrs)
-        out_size = split_shape_infer(src.shape, attrs)
-        multi_core = src.multi_core
-        dst = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
-        Split(src, dst, deepcopy(attrs))()
+        slicesize = [input_end[size] - input_start[size]
+                     for size in range(len(src.shape))]
+        dst = slice_to_l1(src, input_start, slicesize)
         out.append(dst)
         input_start[split_axis] = split_size[i]
         if i < len(split_size) - 1:
@@ -215,7 +207,7 @@ def concat(src_lst, concat_axis):
             raise ValueError("Concat shape mismatch.")
         for j in range(len(out_size)):
             if j != concat_axis:
-                if out_size[j] != src_lst[i].shape[j]:
+                if eval_ne(out_size[j], src_lst[i].shape[j]):
                     raise ValueError("Concat shape mismatch.")
                 output_start.append(0)
                 output_end.append(out_size[j])
@@ -254,7 +246,7 @@ def concat_to_l1(src_lst, concat_axis):
             raise ValueError("Concat shape mismatch.")
         for j in range(len(out_size)):
             if j != concat_axis:
-                if out_size[j] != src_lst[i].shape[j]:
+                if eval_ne(out_size[j], src_lst[i].shape[j]):
                     raise ValueError("Concat shape mismatch.")
                 output_start.append(0)
                 output_end.append(out_size[j])

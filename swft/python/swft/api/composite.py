@@ -15,11 +15,11 @@
 # limitations under the License.
 
 import numpy as np
-from swft.core import Tensor, Scalar, name_tensor, can_fit_memory
+from swft.core import Tensor, Scalar, name_tensor
 from .compute import vadds, vdiv, vexp, vmuls, vsubs, vector_dup, concat
 from .move import move_scalar_to_ub, move_to_ub
 from .slicedata import slice_to_ub
-from swft.utils import TYPE_SIZE
+from swft.utils import TYPE_SIZE, can_fit_memory
 
 
 @name_tensor
@@ -90,7 +90,7 @@ def arange(start, stop=None, step=1, dtype="INT32"):
     if not can_fit_memory(size * dtype_size * 2, "UB"):
         raise ValueError(
             "For arange, the number of element cannot fit UB memory!")
-    if size < 32 / dtype_size:
+    if size <= 32 / dtype_size:
         values = arange_naive(size, dtype=dtype)
         if start != 0:
             values = vadds(values, start)
@@ -98,7 +98,7 @@ def arange(start, stop=None, step=1, dtype="INT32"):
             values = vmuls(values, step)
         return values
 
-    if size >= 32 // dtype_size and size < 256 // dtype_size:
+    if size > 32 // dtype_size and size <= 256 // dtype_size:
         values_16 = arange_naive(32 // dtype_size, dtype=dtype)
         return arange_simd(start, stop, step, 32 // dtype_size, values_16)
 

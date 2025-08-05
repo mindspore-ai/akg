@@ -69,26 +69,43 @@ def update_name(obj, name):
     if is_scalar(obj) or is_tensor(obj):
         obj.update_name(name)
 
+def continue_():
+    Instruction("CONTINUE", (), (), None)()
 
 class RemoveControlFlowAndInjectContext(NodeTransformer):
     def __init__(self):
         self.block_counter = 0
         self.iter_var_set = set()
+        self.in_dynamic_loop = False
 
     def visit_For(self, node):
-        if isinstance(node.target, ast.Name):
-            var_names = [node.target.id]
-        elif isinstance(node.target, ast.Tuple):
-            var_names = [
-                el.id for el in node.target.elts if isinstance(el, ast.Name)]
+        var_names = []
+        if node.iter.func.id != "dynamic_loop":
+            if isinstance(node.target, ast.Name):
+                var_names = [node.target.id]
+            elif isinstance(node.target, ast.Tuple):
+                var_names = [
+                    el.id for el in node.target.elts if isinstance(el, ast.Name)]
         else:
-            var_names = []
+            self.in_dynamic_loop = True
         for var in var_names:
             self.iter_var_set.add(var)
 
         node = self.generic_visit(node)
         for var in var_names:
             self.iter_var_set.remove(var)
+        return node
+
+    def visit_Continue(self, node):
+        if self.in_dynamic_loop:
+            new_node = ast.Expr(
+                value=ast.Call(
+                    func=ast.Name(id='continue_', ctx=ast.Load()),
+                    args=[],
+                    keywords=[]
+                )
+            )
+            return new_node
         return node
 
     def is_constant_expression(self, node):
@@ -443,6 +460,7 @@ def compile_func(func, globalv):
     globalv["custom_or"] = custom_or
     globalv["custom_not"] = custom_not
     globalv["update_name"] = update_name
+    globalv["continue_"] = continue_
     exec(compile(transformed_tree, "<ast>", "exec"), globalv, namespace)
     modified_func_name = func.__name__
     modified_func = namespace[modified_func_name]
