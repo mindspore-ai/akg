@@ -19,7 +19,7 @@ from ai_kernel_generator.utils.common_utils import ParserFactory
 logger = logging.getLogger(__name__)
 
 
-class FeatureExtraction(AgentBase):
+class FeatureExtractor(AgentBase):
     """
     根据算子的初始实现或者调度，分析出当前算子的特征信息。
     特征信息包括：
@@ -33,7 +33,7 @@ class FeatureExtraction(AgentBase):
         self.impl_code = impl_code
         self.framework_code = framework_code
 
-        agent_name = f"FeatureExtraction"
+        agent_name = f"FeatureExtractor"
         super().__init__(agent_name=agent_name)
 
         # 初始化解析器
@@ -50,4 +50,4 @@ class FeatureExtraction(AgentBase):
         }
 
     async def run(self) -> Tuple[str, str, str]:
-        return await self.run_llm(self.feature_extraction_template, self.feature_extraction_input, self.model_config["feature_extraction"])
+        return await self.run_llm(self.feature_extraction_template, self.feature_extraction_input, self.model_config["feature_extractor"])

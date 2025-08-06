@@ -15,7 +15,7 @@
 import pytest
 import gc
 from pathlib import Path
-from ai_kernel_generator.core.agent.utils.feature_extraction import FeatureExtraction
+from ai_kernel_generator.core.agent.utils.feature_extractor import FeatureExtractor
 from ai_kernel_generator.utils.common_utils import load_yaml
 from ai_kernel_generator import get_project_root
 
@@ -36,7 +36,7 @@ async def test_feature_extract():
 
     with open(impl_code_path, "r", encoding="utf-8") as f:
         impl_code = f.read()
-    feature = FeatureExtraction(
+    feature = FeatureExtractor(
         model_config=config,
         impl_code=impl_code,
         framework_code=""

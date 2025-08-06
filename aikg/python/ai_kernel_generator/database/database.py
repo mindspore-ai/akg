@@ -22,7 +22,7 @@ from typing import List
 from pathlib import Path
 from ai_kernel_generator.database.vector_store import VectorStore
 from ai_kernel_generator import get_project_root
-from ai_kernel_generator.core.agent.utils.feature_extraction import FeatureExtraction
+from ai_kernel_generator.core.agent.utils.feature_extractor import FeatureExtractor
 from ai_kernel_generator.utils.common_utils import get_md5_hash
 
 logger = logging.getLogger(__name__)
@@ -48,10 +48,10 @@ class Database():
             self.config = yaml.safe_load(f)
         self.random_mode = random_mode
 
-    async def feature_extractor(self,impl_code: str, framework_code:str, backend:str, arch: str, dsl:str, profile=float('inf')):
+    async def extract_features(self,impl_code: str, framework_code:str, backend:str, arch: str, dsl:str, profile=float('inf')):
         """提取任务特征"""
         # 特征提取
-        feature_extractor = FeatureExtraction(
+        feature_extractor = FeatureExtractor(
             model_config=self.config.get("agent_model_config"),
             impl_code=impl_code,
             framework_code=framework_code
@@ -200,7 +200,7 @@ class Database():
         基本采样，根据指定的策略获取样本
         """
         if not self.random_mode and strategy_mode != RetrievalStrategy.RANDOMICITY:
-            features = await self.feature_extractor(impl_code, framework_code, backend, arch, dsl)
+            features = await self.extract_features(impl_code, framework_code, backend, arch, dsl)
             features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
         else:
             features_str = ""
@@ -219,7 +219,7 @@ class Database():
         if not strategy_mode or not sample_num:
             raise ValueError("strategy_mode and sample_num cannot be empty")
 
-        features = await self.feature_extractor(impl_code, framework_code, backend, arch, dsl)
+        features = await self.extract_features(impl_code, framework_code, backend, arch, dsl)
         features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
         feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
         result = []
@@ -236,7 +236,7 @@ class Database():
         operator_path = Path(self.database_path) / "operators"
         file_path = operator_path / arch / dsl / md5_hash
 
-        features = await self.feature_extractor(impl_code, framework_code, backend, arch, dsl, profile)
+        features = await self.extract_features(impl_code, framework_code, backend, arch, dsl, profile)
         file_path.mkdir(parents=True, exist_ok=True)
         metadata_file = file_path / "metadata.json"
         with open(metadata_file, "w", encoding="utf-8") as f:

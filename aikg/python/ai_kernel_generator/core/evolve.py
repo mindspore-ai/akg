@@ -99,17 +99,13 @@ async def evolve(
 
     for round_idx in range(1, max_rounds + 1):
         logger.info(f"Evolve round {round_idx}/{max_rounds} started")
-
-        # 创建并行任务
-        round_tasks = []
-        for pid in range(parallel_num):
-            task_id = f"{round_idx}_{pid}"
-
-            # 获取当前轮次的启发
-            if round_idx == 1:
-                inspirations = []
-            else:
-                inspirations = await evolve_db.samples(
+        inspirations = list()
+        if round_idx == 1:
+            inspirations = [[] for _ in range(parallel_num)]
+        else:
+            for pid in range(parallel_num):
+                task_pool.create_task(partial(
+                    evolve_db.samples,
                     output_content=["impl_code", "profile"],
                     sample_num=min(parallel_num, 2),
                     impl_code="",
@@ -118,8 +114,14 @@ async def evolve(
                     arch=arch,
                     dsl=dsl,
                     framework=framework,
-                )
-            logger.info(f"inspirations: {inspirations}")
+                ))
+            inspirations = await task_pool.wait_all()
+            task_pool.tasks.clear()
+
+        # 创建并行任务
+        round_tasks = []
+        for pid in range(parallel_num):
+            task_id = f"{round_idx}_{pid}"
 
             task = Task(
                 op_name=op_name,
@@ -133,30 +135,29 @@ async def evolve(
                 framework=framework,
                 task_type="profile",
                 workflow="coder_only_workflow",
-                inspirations=inspirations,
+                inspirations=inspirations[pid],
             )
 
             # 使用DO_CODER_DIRECT跳过设计阶段，直接生成代码
-            task_handle = task_pool.create_task(partial(task.run,))
-            round_tasks.append(task_handle)
+            task_pool.create_task(partial(task.run,))
 
-        # 等待当前轮次所有任务完成
-        logger.info(f"Waiting for {len(round_tasks)} tasks in round {round_idx}")
         results = await task_pool.wait_all()
+        task_pool.tasks.clear()
+
         for op_name, success, task_info in results:
             logger.debug(f"op_name: {op_name}, result: {task_info}")
             if success:
-                await evolve_db.insert(
+                task_pool.create_task(partial(
+                    evolve_db.insert,
                     impl_code=task_info["coder_code"],
                     framework_code=task_info["task_desc"],
                     backend=backend,
                     arch=arch,
                     dsl=dsl,
                     framework=framework,
-                    profile = task_info.get("profile_res", (float('inf'), 0.0, 0.0))[0]
-                )
-
-        # 清空任务池的任务列表，为下一轮准备
+                    profile = task_info.get("profile_res", (float('inf'), 0.0, 0.0))[0],
+                ))
+        await task_pool.wait_all()
         task_pool.tasks.clear()
 
     return

@@ -54,7 +54,7 @@ class EvolveDatabase(Database):
         Evolve采样方案，根据当前算子的特征信息，从数据库中采样出优化性和随机性的算子实现。
         """
         if not self.random_mode:
-            features = await self.feature_extractor(impl_code, framework_code, backend, arch, dsl)
+            features = await self.extract_features(impl_code, framework_code, backend, arch, dsl)
             features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
             feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
 

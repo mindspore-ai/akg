@@ -25,7 +25,7 @@ verify_distance_strategy: "EUCLIDEAN_DISTANCE"
 
 # Feature extraction preset
 agent_model_config:
-  feature_extraction: deepseek_r1_default
+  feature_extractor: deepseek_r1_default
 ```
 
 ## Core Methods
