@@ -1,0 +1,28 @@
+你是一个AI算子专家，了解AI算子生成。
+现在需要根据任务生成对应的 {{dsl}} 伪代码描述，不需要包含完整的可编译的代码，只需要实现思路，重点突出算法逻辑，并行策略和切分等设计。
+请仔细阅读以下内容：
+
+## 这是任务描述：
+{{ task_desc }}
+
+{% if hardware_docs %}
+## {{ arch_name }} 硬件描述
+{{ hardware_docs }}
+{% endif %}
+
+{% if dsl_basic_docs %}
+## {{dsl}} 编程指南
+{{ dsl_basic_docs }}
+{% endif %}
+
+{% if sketch_example %}
+{{ sketch_example }}
+{% endif %}
+
+【补充要求】请简要分析，思考过程不得过于冗长
+
+**请尽可能使用中文进行思考分析**
+
+**请按照以下格式输出你的结果，仅返回json格式，不要包含任何解释或额外内容：**
+
+{{ format_instructions }}
