@@ -58,36 +58,38 @@ def get_triton_sample_code(framework: str) -> str:
 
     return "\n".join(all_code)
 
+
 def get_inspirations(inspirations: List[dict]) -> str:
     """
     将inspirations列表转换为字符串
-    
+
     Args:
         inspirations: 包含字典的列表，每个字典格式为:
                      {'strategy_mode':xxx, 'impl_code':str, 'profile':float}
-    
+
     Returns:
         str: 拼接后的字符串，包含所有impl_code和profile信息
     """
     if not inspirations:
         return ""
-    
+
     result_parts = []
-    
+
     for i, inspiration in enumerate(inspirations):
         if not isinstance(inspiration, dict):
             logger.warning(f"跳过非字典类型的inspiration: {type(inspiration)}")
             continue
-            
+
         impl_code = inspiration.get('impl_code', '')
         profile = inspiration.get('profile', float('inf'))
-        
+
         if impl_code:  # 只有当impl_code不为空时才添加
             inspiration_text = f"## Inspiration {i+1} 代码执行耗时(s): {profile}\n"
             inspiration_text += f"代码：\n```\n{impl_code}\n```\n"
             result_parts.append(inspiration_text)
-    
+
     return "\n".join(result_parts)
+
 
 class Coder(AgentBase):
     def __init__(self, op_name: str, task_desc: str, dsl: str, framework: str, backend: str, arch: str = "", workflow_config_path: str = None, config: dict = None):
@@ -145,18 +147,17 @@ class Coder(AgentBase):
             "database_examples": "",
         }
 
-
     def _load_dsl_sample_code(self) -> str:
         """
         根据framework加载对应的DSL示例代码
-        
+
         Returns:
             str: 示例代码内容，如果找不到对应示例则返回空字符串
         """
         if not self.framework:
             logger.warning("framework为空，无法加载示例代码")
             return ""
-        
+
         try:
             # 使用现有的get_triton_sample_code函数
             sample_code = get_triton_sample_code(self.framework)
@@ -169,7 +170,6 @@ class Coder(AgentBase):
         except Exception as e:
             logger.warning(f"加载示例代码失败: {e}")
             return ""
-        
 
     async def run(self, task_info: dict) -> Tuple[str, str, str]:
         """执行代码生成

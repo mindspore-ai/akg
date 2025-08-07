@@ -124,7 +124,7 @@ class Conductor(AgentBase):
         return ResultProcessor.get_agent_parser(agent_name, self.workflow_config_path, self.agent_parsers)
 
     def record_agent_execution(self, agent_name: str, result: str, prompt: str = "", reasoning: str = "",
-                               error_log: str = "", profile_res = ()) -> bool:
+                               error_log: str = "", profile_res=()) -> bool:
         """
         记录agent执行结果，进行解析并更新任务信息
 

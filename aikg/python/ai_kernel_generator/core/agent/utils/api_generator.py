@@ -28,6 +28,7 @@ def get_swft_path():
     import swft
     return swft.__path__[0]
 
+
 class APIGenerator(AgentBase):
     def __init__(self, task_desc: str, sketch: str, dsl: str, model_config: dict):
         self.task_desc = remove_copyright_from_text(task_desc)

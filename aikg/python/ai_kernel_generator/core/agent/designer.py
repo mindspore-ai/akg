@@ -86,7 +86,6 @@ class Designer(AgentBase):
             except Exception as e:
                 logger.warning(f"获取SWFT支持的API失败: {e}")
 
-
     async def run(self, task_info: dict) -> Tuple[str, str, str]:
         """执行AUL设计代码生成
 

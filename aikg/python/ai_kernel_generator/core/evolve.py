@@ -155,7 +155,7 @@ async def evolve(
                     arch=arch,
                     dsl=dsl,
                     framework=framework,
-                    profile = task_info.get("profile_res", (float('inf'), 0.0, 0.0))[0],
+                    profile=task_info.get("profile_res", (float('inf'), 0.0, 0.0))[0],
                 ))
         await task_pool.wait_all()
         task_pool.tasks.clear()

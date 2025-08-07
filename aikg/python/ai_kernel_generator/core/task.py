@@ -240,13 +240,11 @@ class Task:
                             profile_res = ()
                             if verify_res and self.task_type == "profile" and self.backend in ["ascend", "cuda"]:
                                 profile_settings = self.config.get("profile_settings", {})
-                                import concurrent.futures
-                                with concurrent.futures.ProcessPoolExecutor() as executor:
-                                    profile_res = await loop.run_in_executor(
-                                        executor,
-                                        self.verifier.run_profile,
-                                        current_step, device_id, profile_settings
-                                    )
+                                profile_res = await loop.run_in_executor(
+                                    None,
+                                    self.verifier.run_profile,
+                                    current_step, device_id, profile_settings
+                                )
 
                             self.conductor.record_agent_execution(
                                 agent_name="verifier",
