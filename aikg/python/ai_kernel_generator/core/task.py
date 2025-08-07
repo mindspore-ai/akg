@@ -46,7 +46,8 @@ class Task:
                  framework: str,
                  task_type="precision_only",
                  workflow: Optional[str] = None,
-                 inspirations: Optional[List[str]] = None,) -> None:
+                 inspirations: Optional[List[str]] = None,
+                 meta_prompts: Optional[List[str]] = None) -> None:
         """
         初始化Task类，基于workflow配置进行工作流管理。
 
@@ -82,6 +83,7 @@ class Task:
         self.task_type = task_type
         self.device_pool = device_pool
         self.inspirations = inspirations
+        self.meta_prompts = meta_prompts
 
         # 统一保存config，后续向下传递
         self.config = config
@@ -203,7 +205,7 @@ class Task:
                         designer = self.get_agent('designer')
 
                         designer_res, designer_prompt, designer_reasoning = await designer.run(
-                            task_info=self.conductor.task_info
+                            task_info=self.conductor.task_info,meta_prompts=self.meta_prompts
                         )
                         self.conductor.record_agent_execution(
                             agent_name="designer",

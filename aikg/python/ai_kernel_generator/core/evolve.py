@@ -17,10 +17,12 @@ import json
 import random
 from functools import partial
 from typing import List, Dict, Any, Optional, Tuple, Callable
+from pathlib import Path
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.database.evolve_database import EvolveDatabase
+from ai_kernel_generator import get_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,26 @@ def pretty_print_results(results: List[Tuple[str, bool]]):
     logger.info("-" * 60)
     logger.info(f"Success Rate: {success_count}/{total_count} ({success_rate:.2%})")
     logger.info("=" * 60)
+
+def load_meta_prompts(meta_prompt_path, pid):
+    with open(meta_prompt_path, "r", encoding="utf-8") as f:
+        _meta_prompts = json.load(f)
+    
+    meta_prompts = []
+    
+    if "Platform_Agnostic_Hints" in _meta_prompts:
+        platform_agnostic = _meta_prompts["Platform_Agnostic_Hints"]
+        keys = list(platform_agnostic.keys())
+        selected_key = keys[pid % len(keys)]  # 确保 pid 在合理范围内
+        meta_prompts.append(platform_agnostic[selected_key])  # 只添加 1 个
+    
+    if "Platform_Specific_Hints" in _meta_prompts:
+        platform_specific = _meta_prompts["Platform_Specific_Hints"]
+        keys = list(platform_specific.keys())
+        selected_key = keys[pid % len(keys)]  # 确保 pid 在合理范围内
+        meta_prompts.append(platform_specific[selected_key])  # 只添加 1 个
+    
+    return meta_prompts
 
 
 async def evolve(
@@ -96,12 +118,35 @@ async def evolve(
 
     all_results = []
     best_success_rate = 0.0
+    meta_prompts = []
 
     for round_idx in range(1, max_rounds + 1):
         logger.info(f"Evolve round {round_idx}/{max_rounds} started")
-        inspirations = list()
+        inspirations: list = list()
         if round_idx == 1:
             inspirations = [[] for _ in range(parallel_num)]
+            if dsl == "triton":
+                # load meta-prompt.json
+                root_dir = get_project_root()
+                meta_prompt_path = (
+                    Path(root_dir)
+                    / "resources"
+                    / "docs"
+                    / f"{dsl}_docs"
+                    / "meta-prompt.json"
+                )
+                if not meta_prompt_path.exists():
+                    logger.warning(
+                        f"Meta-prompt file not found: {meta_prompt_path}"
+                    )
+                else:
+                    meta_prompts = [load_meta_prompts(meta_prompt_path, pid) for pid in range(parallel_num)]
+
+                if not meta_prompts:
+                    logger.warning(
+                        f"No inspirations found in meta-prompts"
+                    )
+
         else:
             for pid in range(parallel_num):
                 task_pool.create_task(partial(
@@ -115,6 +160,7 @@ async def evolve(
                     dsl=dsl,
                     framework=framework,
                 ))
+                meta_prompts = []
             inspirations = await task_pool.wait_all()
             task_pool.tasks.clear()
 
@@ -134,11 +180,13 @@ async def evolve(
                 device_pool=device_pool,
                 framework=framework,
                 task_type="profile",
-                workflow="coder_only_workflow",
+                workflow="default_workflow",
                 inspirations=inspirations[pid],
+                meta_prompts=meta_prompts[pid],
             )
 
             # 使用DO_CODER_DIRECT跳过设计阶段，直接生成代码
+            task_pool.create_task(partial(task.run,))
             task_pool.create_task(partial(task.run,))
 
         results = await task_pool.wait_all()
@@ -158,6 +206,7 @@ async def evolve(
                     profile=task_info.get("profile_res", (float('inf'), 0.0, 0.0))[0],
                 ))
         await task_pool.wait_all()
+
         task_pool.tasks.clear()
 
     return
