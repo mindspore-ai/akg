@@ -1,10 +1,6 @@
 # 嵌入模型配置
 embedding_model: "GanymedeNil/text2vec-large-chinese"  # 适用于中文特征描述
 
-# 向量数据库配置
-distance_strategy: "COSINE"
-verify_distance_strategy: "EUCLIDEAN_DISTANCE"
-
 # 特征提取模型预设配置
 agent_model_config:
   feature_extractor: deepseek_r1_default

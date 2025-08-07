@@ -76,30 +76,8 @@ class Database():
     def get_output_content(self, output_content:List[str], strategy_mode:RetrievalStrategy, docs, dsl, framework):
         result = []
         for doc in docs:
-            case_path = Path(doc.metadata["file_path"])
-            
-            res_dict = {"strategy_mode": strategy_mode}
-            for content in output_content:
-                if content == "impl_code":
-                    self._read_code_file(content, dsl, case_path, res_dict)
-                    continue
-                
-                if content == "framework_code":
-                    self._read_code_file(content, framework, case_path, res_dict)
-                    continue
-                
-                metadata_file = case_path / "metadata.json"
-                if not metadata_file.exists():
-                    raise FileNotFoundError(f"Metadata file not found: {metadata_file}")
-                with open(metadata_file, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
-                
-                if content in metadata:
-                    res_dict[content] = metadata[content]
-                else:
-                    raise ValueError(f"Content '{content}' not found in metadata. Available keys: strategy_mode, impl_code, framework_code, {', '.join(metadata.keys())}")
-
-            result.append(res_dict)
+            case_path = doc.metadata["file_path"]
+            result.append(self.get_case_content(output_content, case_path, strategy_mode, dsl, framework))
         return result
     
     def randomicity_search(self, output_content: List[str], k: int = 5, backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
@@ -115,15 +93,7 @@ class Database():
         selected_cases = random.sample(cases, k) if k > 0 else []
         result = []
         for case_path in selected_cases:
-            res_dict = {}
-            for content in output_content:
-                if content == "impl_code":
-                    self._read_code_file(content, dsl, case_path, res_dict)
-                elif content == "framework_code":
-                    self._read_code_file(content, framework, case_path, res_dict)
-                else:
-                    raise ValueError(f"Invalid output content: {content}")
-            result.append(res_dict)
+            result.append(self.get_case_content(output_content, case_path, RetrievalStrategy.RANDOMICITY, dsl, framework))
         return result
 
     def max_marginal_relevance_search(self, query: str, feature_invariants: str, k: int = 5):
@@ -310,3 +280,41 @@ class Database():
             code = f.read()
         
         res_dict[content] = code
+    
+    def get_case_content(self, output_content: List[str], case_path: str, strategy_mode: RetrievalStrategy, dsl: str = "", framework: str = ""):
+        case_path = Path(case_path)
+        if not case_path.exists():
+            raise FileNotFoundError(f"Case path not found: {case_path}")
+        
+        res_dict = {"strategy_mode": strategy_mode}
+        for content in output_content:
+            if content == "impl_code" and dsl:
+                    code_file_path = case_path / f"{dsl}.py"
+                    if not code_file_path.exists():
+                        raise FileNotFoundError(f"Code file not found: {code_file_path}")
+                    with open(code_file_path, "r", encoding="utf-8") as f:
+                        impl_code = f.read()
+                    res_dict[content] = impl_code
+                    continue
+                
+            if content == "framework_code" and framework:
+                code_file_path = case_path / f"{framework}.py"
+                if not code_file_path.exists():
+                    raise FileNotFoundError(f"Code file not found: {code_file_path}")
+                with open(code_file_path, "r", encoding="utf-8") as f:
+                    framework_code = f.read()
+                res_dict[content] = framework_code
+                continue
+            
+            metadata_file = case_path / "metadata.json"
+            if not metadata_file.exists():
+                raise FileNotFoundError(f"Metadata file not found: {metadata_file}")
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            
+            if content in metadata:
+                res_dict[content] = metadata[content]
+            else:
+                raise ValueError(f"Content '{content}' not found. Available keys: strategy_mode, impl_code, framework_code, {', '.join(metadata.keys())}")
+
+        return res_dict
