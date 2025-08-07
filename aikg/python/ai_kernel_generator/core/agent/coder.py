@@ -16,11 +16,11 @@ import logging
 from typing import Tuple, List
 from pathlib import Path
 
-from ai_kernel_generator.utils.common_utils import remove_copyright_from_text
+from ai_kernel_generator.utils.common_utils import ParserFactory, remove_copyright_from_text
 from ai_kernel_generator.utils.parser_registry import create_step_parser
 from ai_kernel_generator.utils.hardware_utils import get_hardware_doc
+from ai_kernel_generator.utils.swft_docs_loader import get_swft_docs_content
 from ai_kernel_generator.core.agent.agent_base import AgentBase
-from ai_kernel_generator.core.agent.utils.swft_docs_loader import get_swft_docs_content
 from ai_kernel_generator import get_project_root
 
 logger = logging.getLogger(__name__)
@@ -126,20 +126,19 @@ class Coder(AgentBase):
             logger.warning("framework为空，无法加载示例代码")
             return ""
 
-        
         # 使用配置化的文档路径
         try:
             # 从config中获取coder的docs_dir
             if not self.config:
                 raise ValueError("No config provided. Cannot resolve document path.")
-            
+
             docs_dir_config = self.config.get('docs_dir', {})
             if 'coder' not in docs_dir_config:
                 raise ValueError("No doc directory configured for coder agent.")
-            
+
             coder_docs_dir = docs_dir_config['coder']
             base_dir = Path(get_project_root()) / coder_docs_dir / "examples"
-            
+
         except Exception as e:
             logger.warning(f"Failed to resolve configurable doc path: {e}, using fallback path")
             # 降级到硬编码路径
@@ -152,10 +151,10 @@ class Coder(AgentBase):
         all_code = []
         # 支持多种文件格式：py, md, txt等
         supported_extensions = ['*.py', '*.md', '*.txt']
-        
+
         for extension in supported_extensions:
             # 使用glob模式匹配framework开头的文件
-            for file_path in base_dir.glob(f"{self.framework}_*{extension[1:]}"):
+            for file_path in base_dir.glob(f"{self.framework}_{extension}"):
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
                         content = f.read().strip()
@@ -178,7 +177,7 @@ class Coder(AgentBase):
             return ""
 
         return "\n".join(all_code)
-    
+
     def load_doc(self, doc_path: str) -> str:
         """
         重写load_doc方法，特殊处理swft后端
@@ -187,17 +186,17 @@ class Coder(AgentBase):
         2. swft后端：
            - 如果指定的文档路径存在，就读取该文档
            - 如果指定的文档路径不存在，则默认使用swft的本地文档
-        
+
         Args:
             doc_path (str): 文档文件的相对路径
-            
+
         Returns:
             str: 文档内容
         """
         # 检查是否是swft后端
-        if self.backend.lower() == "swft":
+        if self.dsl.lower() == "swft":
             logger.info(f"检测到swft后端，尝试读取文档: {doc_path}")
-            
+
             try:
                 # 首先尝试使用父类的标准方法读取指定文档
                 standard_content = super().load_doc(doc_path)
@@ -207,14 +206,13 @@ class Coder(AgentBase):
                 else:
                     logger.info(f"swft指定文档为空，使用默认的swft本地文档")
                     return get_swft_docs_content()
-                    
+
             except Exception as e:
                 logger.warning(f"读取swft指定文档失败: {str(e)}，使用默认的swft本地文档")
                 return get_swft_docs_content()
         else:
             # 对于其他后端，使用父类的标准方法
             return super().load_doc(doc_path)
-        
 
     async def run(self, task_info: dict) -> Tuple[str, str, str]:
         """执行代码生成
@@ -232,16 +230,35 @@ class Coder(AgentBase):
         conductor_suggestion = task_info.get('conductor_suggestion', '')
 
         # 获取api文档
-        if len(self.base_doc["api_docs"]) > 5000: # 如果api文档过长，使用llm进行content压缩
-            api_docs_suitable, _, _ = await self.run_llm(self.api_docs_prompt, self.base_doc, self.model_config.get("api_generator", "default"))
+        if len(self.base_doc["api_docs"]) > 5000:  # 如果api文档过长，使用llm进行content压缩
+            api_parser = ParserFactory.get_api_parser()
+            format_api_instructions = api_parser.get_format_instructions()
+            api_input_data = {
+                **self.base_doc,
+                "sketch": sketch,  # AUL代码作为sketch
+                "llm_suggestions": conductor_suggestion,  # Conductor建议
+                "error_log": task_info.get('verifier_error', ''),
+                "format_instructions": format_api_instructions
+            }
+            api_docs_json, _, _ = await self.run_llm(self.api_docs_prompt, api_input_data, self.model_config.get("api_generator", "default"))
+            parsed_content = api_parser.parse(api_docs_json)
+            api_docs_suitable = "\n\n".join(
+                f"API name: {name}\nAPI description:{desc}\nAPI implement：\n{impl}"
+                for name, desc, impl in zip(
+                    parsed_content.api_name,
+                    parsed_content.api_desc,
+                    parsed_content.api_example
+                )
+            )
         else:
             api_docs_suitable = self.base_doc["api_docs"]
 
         # 获取dsl示例代码
-        if len(self.base_doc["dsl_examples"]) > 5000: # 如果dsl示例代码过长，使用llm进行content压缩
-            dsl_examples_suitable, _, _ = await self.run_llm(self.dsl_examples_prompt, self.base_doc, self.model_config.get("example_compressor", "default"))
-        else:
-            dsl_examples_suitable = self.base_doc["dsl_examples"]
+        # TODO
+        # if len(self.base_doc["dsl_examples"]) > 5000:  # 如果dsl示例代码过长，使用llm进行content压缩
+        #     dsl_examples_suitable, _, _ = await self.run_llm(self.dsl_examples_prompt, self.base_doc, self.model_config.get("example_compressor", "default"))
+        # else:
+        dsl_examples_suitable = self.base_doc["dsl_examples"]
 
         # 基于base_doc构建输入，只更新变化的部分
         input_data = {

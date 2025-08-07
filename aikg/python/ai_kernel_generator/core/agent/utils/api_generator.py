@@ -69,7 +69,7 @@ class APIGenerator(AgentBase):
         parsed_content = self.api_parser.parse(api_json)
 
         formatted_str = ""
-        for name, desc, impl in zip(parsed_content.api_name, parsed_content.api_desc, parsed_content.api_impl):
+        for name, desc, impl in zip(parsed_content.api_name, parsed_content.api_desc, parsed_content.api_example):
             formatted_str += f"API name: {name}\nAPI description:{desc}\nAPI implement：\n{impl}\n\n"
 
         if self.dsl == "swft":

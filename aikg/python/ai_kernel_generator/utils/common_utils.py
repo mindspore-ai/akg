@@ -193,7 +193,7 @@ class ParserFactory:
                 logger.warning(f"Unknown type: {type_str}, defaulting to str")
                 return str
 
-    @staticmethod
+    @classmethod
     def get_api_parser(cls):
         """获取API解析器"""
         if cls._api_parser is None:
@@ -202,7 +202,7 @@ class ParserFactory:
                 {
                     'api_name': (list[str], ...),
                     'api_desc': (list[str], ...),
-                    'api_impl': (list[str], ...)
+                    'api_example': (list[str], ...)
                 }
             )
         return cls._api_parser

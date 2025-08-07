@@ -32,7 +32,8 @@ async def test_parallel_task_swft_ascend310p3(framework, dsl, backend, arch):
             arch=arch,
             config=config,
             device_pool=device_pool,
-            framework=framework
+            framework=framework,
+            workflow="coder_only_workflow"
         )
         task_pool.create_task(task.run)
 

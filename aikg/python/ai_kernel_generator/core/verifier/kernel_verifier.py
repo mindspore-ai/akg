@@ -104,12 +104,12 @@ class KernelVerifier:
     def _generate_import_statements(self) -> str:
         """根据framework和dsl生成适当的import语句"""
         import_lines = []
-        
+
         if "triton" in self.dsl:
             if self.framework == "mindspore":
                 import_lines = [
                     "import torch",
-                    "import triton", 
+                    "import triton",
                     "import triton.language as tl",
                     "import mindspore as ms"
                 ]
@@ -128,7 +128,7 @@ class KernelVerifier:
         elif self.dsl == "swft":
             import_lines = [
                 "from swft.core import *",
-                "from swft.api import *", 
+                "from swft.api import *",
                 "import numpy as np"
             ]
         elif self.framework == "numpy":
@@ -143,7 +143,7 @@ class KernelVerifier:
             import_lines = [
                 "import mindspore as ms"
             ]
-        
+
         # 添加换行符并连接
         if import_lines:
             return "\n".join(import_lines) + "\n\n"
@@ -162,10 +162,10 @@ class KernelVerifier:
         else:
             file_name = f"{self.op_name}_{self.dsl}.py"
         impl_file = os.path.join(verify_dir, file_name)
-        
+
         # 生成import语句
         import_statements = self._generate_import_statements()
-        
+
         with open(impl_file, "w", encoding="utf-8") as f:
             # 先写入import语句，再写入原始代码
             f.write(import_statements + impl_code)
@@ -389,7 +389,7 @@ class KernelVerifier:
             expanded_log_dir = os.path.expanduser(self.log_dir)
             unique_dir_name = f"I{self.task_id}_S{current_step:02d}_verify"
             verify_dir = os.path.join(expanded_log_dir, self.op_name, unique_dir_name)
-            
+
             os.chdir(verify_dir)
 
             # 生成profile脚本并运行
