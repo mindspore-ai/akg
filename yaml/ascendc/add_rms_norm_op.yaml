@@ -1,0 +1,19 @@
+#operator add_rms_norm
+add_rms_norm:
+  args:
+    x1:
+      dtype: tensor
+    x2:
+      dtype: tensor
+    gamma:
+      dtype: tensor
+    epsilon:
+      dtype: float
+      default: 1e-6
+  returns:
+    y:
+      dtype: tensor
+    rstd:
+      dtype: tensor
+    x:
+      dtype: tensor
