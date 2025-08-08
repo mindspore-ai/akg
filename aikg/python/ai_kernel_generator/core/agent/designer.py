@@ -43,7 +43,6 @@ class Designer(AgentBase):
         self.backend = backend
         self.workflow_config_path = workflow_config_path
         self.config = config
-        self.have_meta_prompt = True
 
         # 从config中获取model_config
         if config:
@@ -88,11 +87,12 @@ class Designer(AgentBase):
                 logger.warning(f"获取SWFT支持的API失败: {e}")
 
 
-    async def run(self, task_info: dict, meta_prompts: list | None) -> Tuple[str, str, str]:
+    async def run(self, task_info: dict) -> Tuple[str, str, str]:
         """执行AUL设计代码生成
 
         Args:
             task_info: 任务信息字典，包含当前所有代码和状态
+            meta_prompts: 格式化后的meta prompts字符串
 
         Returns:
             tuple: (生成内容, 格式化提示词, 推理内容)
@@ -104,7 +104,7 @@ class Designer(AgentBase):
         input_data = {
             **self.base_doc,
             "llm_suggestions": conductor_suggestion,  # Conductor建议
-            "meta_prompts": str(meta_prompts) if meta_prompts else "",  # 初始启发
+            "meta_prompts": task_info.get("meta_prompts", ""),
         }
 
         # 执行LLM生成

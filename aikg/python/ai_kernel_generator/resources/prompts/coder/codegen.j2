@@ -35,6 +35,8 @@
 ## 示例代码-基础
 {{ dsl_sample_code }}
 请参考上述{{dsl}} 示例代码， 格式、import、调用函数方式等；确保生成可直接接入验证流程的 {{dsl}} 
+注意：调整切分大小和循环结构，是一个常用的优化手段，通常可以通过调整grid的设定、调整kernel内for循环的方式、调整计算方法来实现
+请你尽最大的努力，对代码的运行效率进行优化
 {% endif %}
 
 {% if database_examples %}
@@ -97,12 +99,12 @@ output = {{ func_name }}(*inputs)
 {% endif %}
 ```
 
-2. 参考《算子任务描述》中的 get_init_inputs() 中的函数，要在{{ func_name }}函数内部以常量的形式体现：
+2. 参考《算子任务描述》中的 get_init_inputs() 中的参数，要在{{ func_name }}函数内部以硬编码的常量形式体现：
 ```
 def {{ func_name }}(...):
   # 根据 get_init_inputs() 生成参数
-  param0 = ... # 从get_init_inputs()中获取
-  param1 = ... # 从get_init_inputs()中获取
+  param0 = ... # 参考《算子任务描述》中 get_init_inputs() 中获取的参数，硬编码于此
+  param1 = ... # 参考《算子任务描述》中 get_init_inputs() 中获取的参数，硬编码于此
   ...
   # 执行 kernel 函数
   ...

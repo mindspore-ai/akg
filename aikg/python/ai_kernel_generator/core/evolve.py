@@ -52,24 +52,38 @@ def pretty_print_results(results: List[Tuple[str, bool]]):
     logger.info("=" * 60)
 
 def load_meta_prompts(meta_prompt_path, pid):
+    """
+    加载meta prompts并格式化为可读的字符串
+    
+    Args:
+        meta_prompt_path: meta prompt文件路径
+        pid: 进程ID，用于选择不同的prompt
+        
+    Returns:
+        str: 格式化后的meta prompts字符串
+    """
     with open(meta_prompt_path, "r", encoding="utf-8") as f:
         _meta_prompts = json.load(f)
     
-    meta_prompts = []
+    formatted_prompts = []
+    prompt_counter = 1
     
     if "Platform_Agnostic_Hints" in _meta_prompts:
         platform_agnostic = _meta_prompts["Platform_Agnostic_Hints"]
         keys = list(platform_agnostic.keys())
         selected_key = keys[pid % len(keys)]  # 确保 pid 在合理范围内
-        meta_prompts.append(platform_agnostic[selected_key])  # 只添加 1 个
+        prompt_content = platform_agnostic[selected_key]
+        formatted_prompts.append(f"## 优化建议 {prompt_counter}: 平台无关优化\n{prompt_content}")
+        prompt_counter += 1
     
     if "Platform_Specific_Hints" in _meta_prompts:
         platform_specific = _meta_prompts["Platform_Specific_Hints"]
         keys = list(platform_specific.keys())
         selected_key = keys[pid % len(keys)]  # 确保 pid 在合理范围内
-        meta_prompts.append(platform_specific[selected_key])  # 只添加 1 个
+        prompt_content = platform_specific[selected_key]
+        formatted_prompts.append(f"## 优化建议 {prompt_counter}: 平台特定优化\n{prompt_content}")
     
-    return meta_prompts
+    return "\n\n".join(formatted_prompts)
 
 
 async def evolve(
@@ -128,24 +142,15 @@ async def evolve(
             if dsl == "triton":
                 # load meta-prompt.json
                 root_dir = get_project_root()
-                meta_prompt_path = (
-                    Path(root_dir)
-                    / "resources"
-                    / "docs"
-                    / f"{dsl}_docs"
-                    / "meta-prompt.json"
-                )
-                if not meta_prompt_path.exists():
-                    logger.warning(
-                        f"Meta-prompt file not found: {meta_prompt_path}"
-                    )
-                else:
-                    meta_prompts = [load_meta_prompts(meta_prompt_path, pid) for pid in range(parallel_num)]
+                meta_prompt_path = Path(root_dir) / "resources" / "docs" / f"{dsl}_docs" / "meta-prompt.json"
 
-                if not meta_prompts:
-                    logger.warning(
-                        f"No inspirations found in meta-prompts"
-                    )
+                if meta_prompt_path.exists():
+                    meta_prompts = [load_meta_prompts(meta_prompt_path, pid) for pid in range(parallel_num)]
+                else:
+                    logger.warning(f"Meta-prompt file not found: {meta_prompt_path}")
+
+                if not meta_prompts or all(not prompt for prompt in meta_prompts):
+                    logger.warning(f"No inspirations found in meta-prompts")
 
         else:
             for pid in range(parallel_num):
@@ -160,7 +165,7 @@ async def evolve(
                     dsl=dsl,
                     framework=framework,
                 ))
-                meta_prompts = []
+            meta_prompts = None
             inspirations = await task_pool.wait_all()
             task_pool.tasks.clear()
 
@@ -182,11 +187,9 @@ async def evolve(
                 task_type="profile",
                 workflow="default_workflow",
                 inspirations=inspirations[pid],
-                meta_prompts=meta_prompts[pid],
+                meta_prompts=meta_prompts[pid] if meta_prompts else None,
             )
 
-            # 使用DO_CODER_DIRECT跳过设计阶段，直接生成代码
-            task_pool.create_task(partial(task.run,))
             task_pool.create_task(partial(task.run,))
 
         results = await task_pool.wait_all()

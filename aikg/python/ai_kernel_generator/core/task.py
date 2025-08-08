@@ -47,7 +47,7 @@ class Task:
                  task_type="precision_only",
                  workflow: Optional[str] = None,
                  inspirations: Optional[List[str]] = None,
-                 meta_prompts: Optional[List[str]] = None) -> None:
+                 meta_prompts: Optional[str] = None) -> None:
         """
         初始化Task类，基于workflow配置进行工作流管理。
 
@@ -164,8 +164,9 @@ class Task:
         # 初始化任务信息
         self.conductor.set_task_info(base_doc)
 
-        # inspirations from evolution
+        # inspirations and meta_prompts from evolution
         self.conductor.task_info.update({"inspirations": self.inspirations})
+        self.conductor.task_info.update({"meta_prompts": self.meta_prompts})
 
         # 插入初始记录（如果有初始代码）
         # 注意：这里的逻辑假设从某个中间步骤开始，需要预先插入之前步骤的结果
@@ -205,7 +206,7 @@ class Task:
                         designer = self.get_agent('designer')
 
                         designer_res, designer_prompt, designer_reasoning = await designer.run(
-                            task_info=self.conductor.task_info,meta_prompts=self.meta_prompts
+                            task_info=self.conductor.task_info
                         )
                         self.conductor.record_agent_execution(
                             agent_name="designer",
