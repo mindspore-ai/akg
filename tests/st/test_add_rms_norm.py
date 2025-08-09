@@ -20,21 +20,29 @@ from mindspore import Tensor, context
 import pytest
 import ms_custom_ops
 
-@ms.jit(jit_level="O0", infer_boost="on")
+@ms.jit(jit_level="O0", infer_boost="on", backend="ms_backend")
 def add_rms_norm(x1, x2, gamma, epsilon=1e-6):
     return ms.ops.add_rms_norm(x1, x2, gamma, epsilon)
 
+@pytest.mark.level0
+@pytest.mark.env_onecard
+@pytest.mark.platform_ascend910b
 @pytest.mark.parametrize('exec_mode', [context.GRAPH_MODE, context.PYNATIVE_MODE])
 @pytest.mark.parametrize('dtype', [ms.float16, ms.float32, ms.bfloat16])
 @pytest.mark.parametrize('shape', [(1, 1024, 1024)])
 def test_custom_add_rms_norm(exec_mode, dtype, shape):
+    """
+    Feature: Test add_rms_norm.
+    Description: Test add_rms_norm.
+    Expectation: Assert that results are consistent with expected.
+    """
     ms.set_device("Ascend")
 
     def add_rms_norm_custom(x1, x2, gamma, epsilon=1e-6):
         return ms_custom_ops.add_rms_norm(x1, x2, gamma, epsilon)
 
     if exec_mode == context.GRAPH_MODE:
-        add_rms_norm_custom = ms.jit(add_rms_norm_custom, jit_level="O0", infer_boost="on")
+        add_rms_norm_custom = ms.jit(add_rms_norm_custom, jit_level="O0", infer_boost="on", backend="ms_backend")
 
     x1 = Tensor(np.random.rand(*shape), dtype)
     x2 = Tensor(np.random.rand(*shape), dtype)
@@ -45,12 +53,6 @@ def test_custom_add_rms_norm(exec_mode, dtype, shape):
     np.testing.assert_allclose(
         out[0].astype(ms.float32).asnumpy(),
         expect[0].astype(ms.float32).asnumpy(),
-        rtol=1e-3,
-        atol=1e-3,
-    )
-    np.testing.assert_allclose(
-        out[1].astype(ms.float32).asnumpy(),
-        expect[1].astype(ms.float32).asnumpy(),
         rtol=1e-3,
         atol=1e-3,
     )

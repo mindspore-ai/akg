@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import subprocess
 import shutil
 import tempfile
@@ -126,7 +127,7 @@ class CustomOPCompiler():
                 self.args.install_path = opp_path
 
             os.makedirs(self.args.install_path, exist_ok=True)
-    
+
     def exec_shell_command(self, command, stdout=None):
         try:
             result = subprocess.run(command, stdout=stdout, stderr=subprocess.STDOUT, shell=False, text=True, check=True)
@@ -204,8 +205,16 @@ class CustomOPCompiler():
             with open(custom_json, 'w', encoding='utf-8') as f:
                 json.dump(json_data, f, indent=4)
 
+            os.chmod(custom_json, stat.S_IRUSR | stat.S_IWUSR)
             gen_command = ["msopgen", "gen", "-i", custom_json, "-c", compute_unit, "-lan", "cpp", "-out", self.custom_project]
             self.exec_shell_command(gen_command)
+
+        if os.getenv("GCC_TOOLCHAIN"):
+            gcc_path = os.getenv("GCC_TOOLCHAIN")
+            bisheng_gcc = ['sed', '-i', 
+                           f'/options.append("-I" + tikcpp_path)/i\\    options.append("--gcc-toolchain={gcc_path}")', 
+                           f'{self.custom_project}/cmake/util/ascendc_impl_build.py']
+            self.exec_shell_command(bisheng_gcc)
 
         if self.args.build_type.lower() == "debug":
             debug_command = ["sed", "-i", "s/Release/Debug/g", f"{self.custom_project}/CMakePresets.json"]
@@ -225,9 +234,9 @@ class CustomOPCompiler():
         for item in os.listdir(op_kernel_dir):
             if item.split('.')[-1] in code_suffix:
                 os.remove(os.path.join(op_kernel_dir, item))
-        
+
         self.copy_code_file()
-    
+
     def compile_custom_op(self):
         """compile custom operator"""
         if self.args.ascend_cann_package_path != "":

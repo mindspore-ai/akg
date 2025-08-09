@@ -16,14 +16,21 @@
 
 import numpy as np
 import mindspore as ms
-from mindspore.ops import ModuleWrapper
-from mindspore import Tensor, context, Parameter, ops
+from mindspore import Tensor, context
 import pytest
 import ms_custom_ops
 
+@pytest.mark.level0
+@pytest.mark.env_onecard
+@pytest.mark.platform_ascend910b
 @pytest.mark.parametrize('exec_mode', [context.GRAPH_MODE, context.PYNATIVE_MODE])
 @pytest.mark.parametrize('np_dtype', [np.float16])
 def test_custom_add(exec_mode, np_dtype):
+    """
+    Feature: Test add.
+    Description: Test add.
+    Expectation: Assert that results are consistent with expected.
+    """
     ms.set_device("Ascend")
     ms.set_context(mode=exec_mode)
     
