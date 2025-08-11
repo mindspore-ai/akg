@@ -121,11 +121,10 @@ REG_GRAPH_MODE_OP(add_rms_norm, ms_custom_ops::AddRmsNormCustomOpFuncImpl,
 // PYBOOST MODE IMPLEMENTATION
 // =============================================================================
 
-#include "ascendc_pyboost_runner.h"
-
 namespace ms_custom_ops {
 using namespace mindspore;
 using namespace mindspore::device::ascend;
+constexpr size_t kAddRmsNormOutputNum = 3;
 
 std::vector<ms::Tensor> custom_add_rms_norm(const ms::Tensor &x1, const ms::Tensor &x2,
                                             const ms::Tensor &gamma, float epsilon) {
@@ -141,20 +140,15 @@ std::vector<ms::Tensor> custom_add_rms_norm(const ms::Tensor &x1, const ms::Tens
   auto out_y = ms::Tensor(x1.data_type(), x1_shape);
   auto out_rstd = ms::Tensor(TypeId::kNumberTypeFloat32, rstd_shape);
   auto out_x = ms::Tensor(x1.data_type(), x1_shape);
-  auto runner = std::make_shared<ms::pynative::AscendCOpRunner>("AddRmsNorm");
+  auto runner = std::make_shared<ms::pynative::AclnnOpRunner>("AddRmsNorm");
   runner->SetLaunchFunc(
-      LAUNCH_ASCENDC_FUNC(aclnnAddRmsNormCustom, x1, x2, gamma, epsilon, out_y, out_rstd, out_x));
+      LAUNCH_ACLNN_FUNC(aclnnAddRmsNormCustom, x1, x2, gamma, epsilon, out_y, out_rstd, out_x));
   runner->Run({x1, x2, gamma}, {out_y, out_rstd, out_x});
   return {out_y, out_rstd, out_x};
-}
-
-auto pyboost_add_rms_norm(const ms::Tensor &x1, const ms::Tensor &x2, const ms::Tensor &gamma,
-                          float epsilon) {
-  return ms::pynative::PyboostRunner::Call<3>(custom_add_rms_norm, x1, x2, gamma, epsilon);
 }
 } // namespace ms_custom_ops
 
 MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
-  m.def("add_rms_norm", &ms_custom_ops::pyboost_add_rms_norm, "add_rms_norm", pybind11::arg("x1"),
-        pybind11::arg("x2"), pybind11::arg("gamma"), pybind11::arg("epsilon") = 1e-6f);
+  m.def("add_rms_norm",
+        PYBOOST_CALLER(ms_custom_ops::kAddRmsNormOutputNum, ms_custom_ops::custom_add_rms_norm));
 }

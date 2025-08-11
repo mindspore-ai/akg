@@ -72,26 +72,21 @@ REG_GRAPH_MODE_OP(add, ms_custom_ops::AddCustomOpFuncImpl,
 // PYBOOST MODE IMPLEMENTATION
 // =============================================================================
 
-#include "ascendc_pyboost_runner.h"
-
 namespace ms_custom_ops {
 using namespace mindspore;
 using namespace mindspore::device::ascend;
+constexpr size_t kAddOutputNum = 1;
+
 ms::Tensor custom_add(const ms::Tensor &x, const ms::Tensor &y) {
   // assume the shape of x and y is same.
   auto out = ms::Tensor(x.data_type(), x.shape());
-  auto runner = std::make_shared<ms::pynative::AscendCOpRunner>("AddCustom");
-  runner->SetLaunchFunc(LAUNCH_ASCENDC_FUNC(aclnnAddCustom, x, y, out));
+  auto runner = std::make_shared<ms::pynative::AclnnOpRunner>("AddCustom");
+  runner->SetLaunchFunc(LAUNCH_ACLNN_FUNC(aclnnAddCustom, x, y, out));
   runner->Run({x, y}, {out});
   return out;
-}
-
-auto pyboost_add(const ms::Tensor &x, const ms::Tensor &y) {
-  return ms::pynative::PyboostRunner::Call<1>(custom_add, x, y);
 }
 } // namespace ms_custom_ops
 
 MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
-  m.def("add", &ms_custom_ops::pyboost_add, "add", pybind11::arg("x"),
-        pybind11::arg("y"));
+  m.def("add", PYBOOST_CALLER(ms_custom_ops::kAddOutputNum, ms_custom_ops::custom_add));
 }
