@@ -21,6 +21,7 @@ from ai_kernel_generator.config.config_validator import load_config
 
 device_id = os.getenv("DEVICE_ID", 1)
 
+
 @pytest.mark.level0
 @pytest.mark.mindspore
 @pytest.mark.triton
@@ -32,7 +33,7 @@ def test_kernel_verifier_ascend910b4_mindspore(op_name):
     dsl = "triton"
     backend = "ascend"
     arch = "ascend910b4"
-    config = load_config(dsl) # unused
+    config = load_config(dsl)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -72,7 +73,7 @@ def test_kernel_verifier_ascend910b4_torch(op_name):
     dsl = "triton"
     backend = "ascend"
     arch = "ascend910b4"
-    config = load_config(dsl) # unused
+    config = load_config(dsl)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -114,7 +115,7 @@ def test_kernel_verifier_ascend310p3_mindspore(op_name):
     dsl = "swft"
     backend = "ascend"
     arch = "ascend310p3"
-    config = load_config(dsl) # unused
+    config = load_config(dsl)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -154,7 +155,7 @@ def test_kernel_verifier_ascend310p3_torch(op_name):
     dsl = "swft"
     backend = "ascend"
     arch = "ascend310p3"
-    config = load_config(dsl) # unused
+    config = load_config(dsl)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -194,7 +195,7 @@ def test_kernel_verifier_ascend310p3_numpy(op_name):
     dsl = "swft"
     backend = "ascend"
     arch = "ascend310p3"
-    config = load_config(dsl) # unused
+    config = load_config(dsl)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -236,7 +237,7 @@ def test_kernel_verifier_a100(op_name):
     dsl = "triton"
     backend = "cuda"
     arch = "a100"
-    config = load_config(dsl) # unused
+    config = load_config(dsl)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -278,7 +279,7 @@ def test_kernel_verifier_v100(op_name):
     dsl = "triton"
     backend = "cuda"
     arch = "v100"
-    config = load_config(dsl) # unused
+    config = load_config(dsl)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -320,7 +321,7 @@ def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
     dsl = "triton"
     backend = "ascend"
     arch = "ascend910b4"
-    config = load_config(dsl) # unused
+    config = load_config(dsl)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -356,7 +357,8 @@ def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    gen_time, base_time, speedup = verifier.run_profile(current_step=0, device_id=device_id, profile_settings=profile_settings)
+    gen_time, base_time, speedup = verifier.run_profile(
+        current_step=0, device_id=device_id, profile_settings=profile_settings)
 
     print(f"orig performance is {base_time:.2f} us")
     print(f"aikg performance is {gen_time:.2f} us")
@@ -375,7 +377,7 @@ def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
     dsl = "triton"
     backend = "ascend"
     arch = "ascend910b4"
-    config = load_config(dsl) # unused
+    config = load_config(dsl)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -411,7 +413,8 @@ def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    gen_time, base_time, speedup = verifier.run_profile(current_step=0, device_id=device_id, profile_settings=profile_settings)
+    gen_time, base_time, speedup = verifier.run_profile(
+        current_step=0, device_id=device_id, profile_settings=profile_settings)
 
     print(f"orig performance is {base_time:.2f} us")
     print(f"aikg performance is {gen_time:.2f} us")
@@ -432,7 +435,7 @@ def test_kernel_verifier_profiling_a100(op_name):
     dsl = "triton"
     backend = "cuda"
     arch = "a100"
-    config = load_config(dsl) # unused
+    config = load_config(dsl)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -468,7 +471,8 @@ def test_kernel_verifier_profiling_a100(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    gen_time, base_time, speedup = verifier.run_profile(current_step=0, device_id=device_id, profile_settings=profile_settings)
+    gen_time, base_time, speedup = verifier.run_profile(
+        current_step=0, device_id=device_id, profile_settings=profile_settings)
     print(f"orig performance is {base_time:.2f} us")
     print(f"aikg performance is {gen_time:.2f} us")
     print(f"speedup is {speedup:.2f}x")

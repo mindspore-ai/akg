@@ -8,6 +8,7 @@ from ..utils import (
 )
 from ai_kernel_generator.config.config_validator import load_config
 
+
 @pytest.mark.level0
 @pytest.mark.torch
 @pytest.mark.swft

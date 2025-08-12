@@ -1,70 +1,57 @@
-# 通用 Designer 设计文档
+# Designer设计文档
 
 ## 概述
-Designer 是 AI Kernel Generator 中的核心组件，基于大型语言模型(LLM)自动生成和修复设计文档。它继承自 `AgentBase`，负责根据算子名称、任务描述和硬件配置，智能生成高质量的算子设计文档。当前我们采用AUL (AI Unity Language，算法统一语言) 作为设计文档的表达语言，用户可以灵活的设计其他实现方式。
+Designer是AI Kernel Generator中的核心组件，基于大语言模型(LLM)自动生成算法设计文档。它继承自`AgentBase`，负责根据算子名称、任务描述和硬件配置智能生成高质量的算法草图。Designer使用自定义设计语言来表达算法逻辑。
 
 ## 核心功能
-- **智能代码生成**：根据算子名称和任务描述自动生成 AUL 代码
-- **代码自动修复**：基于验证反馈智能修复代码问题  
-- **多硬件支持**：支持 Ascend NPU、CUDA GPU 等硬件后端
-- **文档集成**：自动加载 AUL 规范和硬件文档
-- **动态适配**：根据硬件类型动态获取配置信息
+- **智能设计生成**: 根据算子需求自动生成算法设计文档
+- **CustomDocs集成**: 支持自定义参考文档以提升生成质量
+- **多DSL支持**: 支持不同的设计语言
+- **硬件感知设计**: 在设计生成过程中考虑硬件特性
+- **文档集成**: 自动加载设计规范和参考资料
 
 ## 初始化参数
-| 参数名称 | 类型/必选 | 参数说明 |
+| 参数名称 | 类型/必需性 | 描述 |
 |---------|---------|---------|
-| op_name | str (必选) | 算子名称，如 "matmul", "relu" |
-| task_desc | str (必选) | 任务描述，详细说明算子功能需求 |
-| model_config | dict (必选) | LLM 模型配置，包含生成和修复两个模型配置 |
-| impl_type | str (可选) | 实现类型，如 "swft"，默认："" |
-| backend | str (可选) | 硬件后端：cpu/ascend/cuda，默认："" |
-| arch | str (可选) | 硬件架构：ascend310p3/ascend910b4/a100，默认："" |
+| op_name | str (必需) | 算子名称，标识特定算子 |
+| task_desc | str (必需) | 任务描述，详细说明算子功能需求 |
+| dsl | str (必需) | 设计语言："triton"、"swft"等 |
+| backend | str (必需) | 硬件后端："ascend"、"cuda"等 |
+| arch | str (必需) | 硬件架构："ascend910b4"、"a100"等 |
+| workflow_config_path | str (可选) | 工作流配置文件路径 |
+| config | dict (必需) | 完整配置，包括CustomDocs设置 |
 
-## 执行流程 run
+## CustomDocs集成
 
-1. **状态更新阶段**
-   - 提取现有AUL代码（来自parsed_code.aul_code）
-   - 调用update()更新代理状态信息
+Designer利用CustomDocs功能从配置的目录中加载参考文档：
 
-2. **核心执行阶段**  
-   - 基于action_type选择对应的处理逻辑
-     - `DO_DESIGNER`：使用aul_gen_prompt模板和aul_gen_input数据调用run_llm()
-     - `FIX_DESIGNER`：使用aul_fix_prompt模板和aul_fix_input数据调用run_llm()
-   - 不支持的action_type抛出ValueError异常
+### 必需文档
+- `basic_docs.md` - DSL基础文档和语法规范
 
-3. **结果返回**
-   - 返回三元组：(生成内容, 格式化提示词, 推理内容)
-
-## 使用示例
+### 文档加载
+Designer从配置中`docs_dir.designer`路径加载文档：
 ```python
-from ai_kernel_generator.core.agent.aul_designer import AULDesigner
-from ai_kernel_generator.core.utils import ActionType
-
-# 创建Designer实例
-designer = AULDesigner(
-    op_name="relu",
-    task_desc=task_desc,
-    model_config=config["model"],
-    impl_type="triton",
-    backend="ascend",
-    arch="ascend910b4"
-)
-
-# 执行代码生成
-async def generate_code():
-    result = await designer.run(
-        action_type=ActionType.DO_DESIGNER,
-        parsed_code=None,
-        suggestions=""
-    )
-    print(f"生成的AUL代码: {result[0]}")
-
-# 执行代码修复
-async def fix_code():
-    result = await designer.run(
-        action_type=ActionType.FIX_DESIGNER,
-        parsed_code=parsed_code,
-        suggestions="优化内存访问模式"
-    )
-    print(f"修复后的代码: {result[0]}")
+self.base_doc = {
+    "dsl_basic_docs": self.load_doc("basic_docs.md"),
+    # ... 其他字段
+}
 ```
+
+## 执行流程
+
+1. **初始化阶段**
+   - 加载工作流配置并创建解析器
+   - 初始化设计生成模板
+   - 使用CustomDocs加载参考文档
+   - 准备基础文档结构
+
+2. **生成阶段**
+   - 处理任务信息和conductor建议
+   - 使用加载的文档执行LLM生成
+   - 返回生成的设计、提示词和推理过程
+
+3. **文档结构**
+   - DSL规范和语法规则
+   - 算法设计模式和示例
+   - 硬件特定的考虑因素
+   - 输出解析的格式指令

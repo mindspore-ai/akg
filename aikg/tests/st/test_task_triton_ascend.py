@@ -9,6 +9,7 @@ from ..utils import (
 )
 from ai_kernel_generator.config.config_validator import load_config
 
+
 @pytest.mark.level0
 @pytest.mark.mindspore
 @pytest.mark.triton
@@ -19,11 +20,11 @@ from ai_kernel_generator.config.config_validator import load_config
 async def test_kernelbench_mindspore_triton_ascend910b4():
     """测试 KernelBench - MindSpore Triton Ascend910B4"""
     framework = "mindspore"
-    dsl = "triton" 
+    dsl = "triton"
     backend = "ascend"
     arch = "ascend910b4"
     benchmark = "KernelBench"
-    
+
     task_pool = TaskPool()
     device_pool = DevicePool([1])
     # or load_config("/your-path-to-config/xxx_config.yaml")
@@ -96,7 +97,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
     backend = "ascend"
     arch = "ascend910b4"
     benchmark = "KernelBench"
-    
+
     task_pool = TaskPool()
     device_pool = DevicePool([1])
     # or load_config("/your-path-to-config/xxx_config.yaml")
@@ -170,7 +171,7 @@ async def test_multikernelbench_activation_torch_triton_ascend910b4():
     arch = "ascend910b4"
     benchmark = "MultiKernelBench"
     category = "activation"
-    
+
     task_pool = TaskPool()
     device_pool = DevicePool([1])
     # or load_config("/your-path-to-config/xxx_config.yaml")

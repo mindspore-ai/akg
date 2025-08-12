@@ -1,12 +1,12 @@
-# Default DSL Configuration Document
+# DSL Configuration Document
 
 ## Overview
 
-DefaultDSLConfig is the default configuration management system for different DSLs (Domain Specific Languages) in AI Kernel Generator. It provides preset configuration templates for each DSL (such as Triton, SWFT, etc.), including model configurations, document paths, workflow settings, etc., to simplify the user configuration process.
+DSLConfig is the configuration management system for different DSLs (Domain Specific Languages) in AI Kernel Generator. It provides preset configuration templates for each DSL (such as Triton, SWFT, etc.), including model configurations, document paths, workflow settings, etc., to simplify the user configuration process.
 
 ## Configuration File Structure
 
-Default DSL configuration files use YAML format and mainly contain the following configuration items:
+DSL configuration files use YAML format and mainly contain the following configuration items:
 
 ```yaml
 # Agent model configuration
@@ -80,7 +80,7 @@ Specifies reference documentation directories for different agents:
 
 ```yaml
 docs_dir:
-  designer: "resources/docs/aul_docs"    # Designer docs (e.g., AUL specifications)
+  designer: "resources/docs/triton_docs"    # Designer docs (e.g., DSL syntax)
   coder: "resources/docs/triton_docs"    # Coder docs (e.g., DSL syntax)
 ```
 
@@ -113,7 +113,7 @@ Sets the timeout for code verification:
 **Use Case**: Triton kernel development on NVIDIA GPUs
 
 **Features**:
-- Uses AUL / Sketch as design language
+- Uses predefined design language
 - Targets Triton code generation
 - Supports Ascend NPU / CUDA GPU backend
 
@@ -124,7 +124,7 @@ Sets the timeout for code verification:
 **Use Case**: SWFT kernel development on Huawei Ascend NPUs
 
 **Features**:
-- Uses AUL as design language
+- Uses predefined design language
 - Targets SWFT code generation
 - Supports Ascend NPU backend
 
@@ -168,9 +168,9 @@ config.update({
 ```yaml
 # custom_dsl_config.yaml
 agent_model_config:
-  designer: your_model
-  coder: your_model
-  conductor: your_model
+  designer: model_name
+  coder: model_name
+  conductor: model_name
 
 log_dir: "~/custom_logs"
 
@@ -207,28 +207,3 @@ docs_dir:
   coder: "path/to/code/docs"
   optimizer: "path/to/optimization/docs"  # New optimization docs
 ```
-
-## Best Practices
-
-### Configuration Management Principles
-
-1. **Version Control**: Include configuration files in version control for change tracking
-2. **Environment Separation**: Use different configurations for development, testing, and production environments
-3. **Modular Design**: Separate common configurations from specific configurations
-4. **Documentation Sync**: Update related documentation when configurations change
-
-### Performance Optimization Recommendations
-
-1. **Model Selection**: Choose appropriate LLM models based on task complexity
-2. **Log Management**: Set reasonable log levels to avoid generating too many log files
-3. **Timeout Settings**: Adjust verification timeout based on hardware performance
-4. **Performance Testing**: Appropriately adjust profile_settings parameters to balance accuracy and efficiency
-
-### Troubleshooting
-
-1. **Path Issues**: Ensure all path configurations are correct and files exist
-2. **Model Configuration**: Verify LLM model names and API configurations are correct
-3. **Permission Issues**: Ensure log directories have write permissions
-4. **Memory Management**: Monitor memory usage during performance testing
-
-Through the DefaultDSLConfig system, AI Kernel Generator provides standardized configuration management for different DSLs, simplifying the user configuration process and improving system usability and maintainability.

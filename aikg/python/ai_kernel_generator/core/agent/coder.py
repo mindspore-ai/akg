@@ -235,10 +235,10 @@ class Coder(AgentBase):
                 api_parser = ParserFactory.get_api_parser()
                 format_api_instructions = api_parser.get_format_instructions()
                 api_input_data = {
-                **self.base_doc,
-                "sketch": sketch,  # AUL代码作为sketch
-                "llm_suggestions": conductor_suggestion,  # Conductor建议
-                "error_log": task_info.get('verifier_error', ''),
+                    **self.base_doc,
+                    "sketch": sketch,  # AUL代码作为sketch
+                    "llm_suggestions": conductor_suggestion,  # Conductor建议
+                    "error_log": task_info.get('verifier_error', ''),
                     "format_instructions": format_api_instructions
                 }
                 api_docs_json, _, _ = await self.run_llm(self.api_docs_prompt, api_input_data, self.model_config.get("api_generator", "default"))

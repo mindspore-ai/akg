@@ -60,7 +60,8 @@ async def test_insert_and_delete():
     benchmark_name = get_kernelbench_op_name(id_list)
     for i, op_name in enumerate(benchmark_name):
         name = op_name.strip(f"{str(id_list[i])}_")
-        impl_code, _ = gen_task_code(impl_path=DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py")
+        impl_code, _ = gen_task_code(impl_path=DEFAULT_DATABASE_PATH / dsl /
+                                     arch / name / "aigen" / f"{name}_{dsl}.py")
         await db_system.delete(impl_code, backend, arch, dsl)
 
 
