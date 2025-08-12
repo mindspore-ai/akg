@@ -124,11 +124,19 @@ validate_markers() {
     done
 
     # 根据测试类型和标记类型决定验证策略
-    if [[ "$test_type" == "ut" ]] && [[ "$has_functional_markers" == true ]] && [[ "$has_hardware_markers" == false ]]; then
-        # ut测试且只包含功能标记，跳过硬件配置验证
-        print_info "ut测试且只包含功能标记，跳过硬件配置验证"
-        print_info "功能标记验证通过！"
-        return 0
+    if [[ "$test_type" == "ut" ]]; then
+        # ut测试：如果没有标记，直接通过（运行全量测试）
+        if [[ -z "$markers" ]]; then
+            print_info "ut测试无标记，将运行全量测试"
+            return 0
+        fi
+        # 如果有功能标记，直接通过
+        if [[ "$has_functional_markers" == true ]]; then
+            print_info "ut测试功能标记验证通过！"
+            return 0
+        fi
+        # 如果包含硬件配置标记，继续验证
+        print_info "ut测试包含硬件配置标记，开始验证..."
     elif [[ "$test_type" == "st" ]]; then
         # st测试，必须包含硬件配置标记
         if [[ "$has_hardware_markers" == false ]]; then

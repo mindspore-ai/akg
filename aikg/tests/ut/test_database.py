@@ -35,7 +35,7 @@ def gen_task_code(framework_path: str = "", impl_path: str = ""):
 @pytest.mark.level0
 @pytest.mark.use_model
 @pytest.mark.asyncio
-async def test_insert():
+async def test_insert_and_delete():
     # 初始化系统
     db_system = Database(random_mode=True)
 
@@ -54,6 +54,14 @@ async def test_insert():
             impl_path=DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py"
         )
         await db_system.insert(impl_code, framework_code, backend, arch, dsl, framework)
+
+    # 删除示例
+    id_list = [49, 50]
+    benchmark_name = get_kernelbench_op_name(id_list)
+    for i, op_name in enumerate(benchmark_name):
+        name = op_name.strip(f"{str(id_list[i])}_")
+        impl_code, _ = gen_task_code(impl_path=DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py")
+        await db_system.delete(impl_code, backend, arch, dsl)
 
 
 @pytest.mark.level0
@@ -94,26 +102,6 @@ async def test_samples(strategy_mode):
     for result in results:
         print('\n'.join(result["impl_code"].split("\n")[:10]))
         print('-' * 80)
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_delete():
-    # 初始化系统
-    db_system = Database(random_mode=True)
-
-    arch = "ascend310p3"
-    backend = "ascend"
-    framework = "numpy"
-    dsl = "swft"
-
-    # 删除示例
-    benchmark_id = 50
-    op_name = get_kernelbench_op_name([benchmark_id])[0]
-    name = op_name.strip(f"{str(benchmark_id)}_")
-    impl_path = DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py"
-    impl_code = Path(impl_path).read_text()
-    await db_system.delete(impl_code, backend, arch, dsl)
 
 
 @pytest.mark.level0
