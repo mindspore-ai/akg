@@ -90,8 +90,8 @@ class WorkflowManager:
             if start_agent is None:
                 raise ValueError("Missing required 'start_agent' in workflow config")
 
-            # 获取mandatory_analysis（可选）
-            mandatory_analysis = config.get('mandatory_analysis', [])
+            # 获取mandatory_llm_analysis（可选）
+            mandatory_llm_analysis = config.get('mandatory_llm_analysis', [])
 
             # 解析各agent的可能下一步
             agent_next_mapping = {}
@@ -109,7 +109,7 @@ class WorkflowManager:
                 'max_step': max_step,
                 'repeat_limits': repeat_limits,
                 'agent_next_mapping': agent_next_mapping,
-                'mandatory_analysis': mandatory_analysis
+                'mandatory_llm_analysis': mandatory_llm_analysis
             }
 
         except Exception as e:

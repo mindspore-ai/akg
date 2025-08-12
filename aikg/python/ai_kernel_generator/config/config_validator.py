@@ -61,20 +61,6 @@ class ConfigValidator:
         root_dir = os.path.expanduser(self.config['log_dir'])
         self.config['log_dir'] = Path(root_dir) / f"Task_{next(tempfile._get_candidate_names())}"
 
-    def validate_workflow_config_path(self):
-        if 'workflow_config_path' not in self.config:
-            logger.warning("配置文件中缺少 workflow_config_path 字段")
-
-        workflow_config_path = self.config['workflow_config_path']
-        # 如果是相对路径，检查文件是否存在
-        if not os.path.isabs(workflow_config_path):
-            full_path = Path(get_project_root()) / workflow_config_path
-        else:
-            full_path = Path(workflow_config_path)
-
-        if not full_path.exists():
-            raise ValueError(f"workflow_config_path 指定的文件不存在: {full_path}")
-
     def validate_docs_dir(self):
         if 'docs_dir' not in self.config:
             raise ValueError("配置文件中缺少 docs_dir 字段")
@@ -97,11 +83,9 @@ class ConfigValidator:
         try:
             self.validate_llm_models()
             self.validate_log_dir()
-            self.validate_workflow_config_path()
             self.validate_docs_dir()
         except ValueError as e:
-            logger.error(f"配置校验失败：{str(e)}")
-            raise
+            raise ValueError(f"配置校验失败：{str(e)}")
 
 
 def load_config(dsl="", config_path: Optional[str] = None):

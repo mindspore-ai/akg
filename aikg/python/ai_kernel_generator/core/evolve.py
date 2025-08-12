@@ -51,23 +51,24 @@ def pretty_print_results(results: List[Tuple[str, bool]]):
     logger.info(f"Success Rate: {success_count}/{total_count} ({success_rate:.2%})")
     logger.info("=" * 60)
 
+
 def load_meta_prompts(meta_prompt_path, pid):
     """
     加载meta prompts并格式化为可读的字符串
-    
+
     Args:
         meta_prompt_path: meta prompt文件路径
         pid: 进程ID，用于选择不同的prompt
-        
+
     Returns:
         str: 格式化后的meta prompts字符串
     """
     with open(meta_prompt_path, "r", encoding="utf-8") as f:
         _meta_prompts = json.load(f)
-    
+
     formatted_prompts = []
     prompt_counter = 1
-    
+
     if "Platform_Agnostic_Hints" in _meta_prompts:
         platform_agnostic = _meta_prompts["Platform_Agnostic_Hints"]
         keys = list(platform_agnostic.keys())
@@ -75,14 +76,14 @@ def load_meta_prompts(meta_prompt_path, pid):
         prompt_content = platform_agnostic[selected_key]
         formatted_prompts.append(f"## 优化建议 {prompt_counter}: 平台无关优化\n{prompt_content}")
         prompt_counter += 1
-    
+
     if "Platform_Specific_Hints" in _meta_prompts:
         platform_specific = _meta_prompts["Platform_Specific_Hints"]
         keys = list(platform_specific.keys())
         selected_key = keys[pid % len(keys)]  # 确保 pid 在合理范围内
         prompt_content = platform_specific[selected_key]
         formatted_prompts.append(f"## 优化建议 {prompt_counter}: 平台特定优化\n{prompt_content}")
-    
+
     return "\n\n".join(formatted_prompts)
 
 
@@ -111,13 +112,23 @@ async def evolve(
         config: 配置字典
         device_pool: 设备池
         task_pool: 任务池
-        evolve_db: 进化数据库实例，需要实现add()和samples()方法
-        get_inspirations_from_meta_prompts: 获取初始启发的函数
         max_rounds: 最大进化轮数
         parallel_num: 每轮并行任务数
 
     Returns:
-        进化结果字典
+        进化结果字典，包含以下字段：
+        - op_name: 算子名称
+        - total_rounds: 总进化轮数
+        - total_tasks: 总任务数
+        - successful_tasks: 成功任务数
+        - final_success_rate: 最终成功率
+        - best_success_rate: 最佳成功率
+        - implementation_type: 实现类型
+        - framework: 框架名称
+        - backend: 后端名称
+        - architecture: 架构名称
+        - best_implementations: 最佳实现列表
+        - round_results: 每轮详细结果
     """
     logger.info(f"Starting evolve process for {op_name}")
     logger.info(f"Configuration: {dsl} on {backend}/{arch} using {framework}")
@@ -133,6 +144,10 @@ async def evolve(
     all_results = []
     best_success_rate = 0.0
     meta_prompts = []
+    round_results = []
+    best_implementations = []
+    total_tasks = 0
+    total_successful_tasks = 0
 
     for round_idx in range(1, max_rounds + 1):
         logger.info(f"Evolve round {round_idx}/{max_rounds} started")
@@ -195,9 +210,29 @@ async def evolve(
         results = await task_pool.wait_all()
         task_pool.tasks.clear()
 
-        for op_name, success, task_info in results:
-            logger.debug(f"op_name: {op_name}, result: {task_info}")
+        # 统计当前轮次结果
+        round_success_count = 0
+        round_total_count = len(results)
+        round_implementations = []
+
+        for task_op_name, success, task_info in results:
+            logger.debug(f"op_name: {task_op_name}, result: {task_info}")
+            total_tasks += 1
+
             if success:
+                total_successful_tasks += 1
+                round_success_count += 1
+
+                # 收集成功的实现信息
+                impl_info = {
+                    'op_name': task_op_name,
+                    'round': round_idx,
+                    'task_info': task_info,
+                    'profile': task_info.get("profile_res", (float('inf'), 0.0, 0.0))[0]
+                }
+                round_implementations.append(impl_info)
+                best_implementations.append(impl_info)
+
                 task_pool.create_task(partial(
                     evolve_db.insert,
                     impl_code=task_info["coder_code"],
@@ -208,8 +243,54 @@ async def evolve(
                     framework=framework,
                     profile=task_info.get("profile_res", (float('inf'), 0.0, 0.0))[0],
                 ))
-        await task_pool.wait_all()
 
+        await task_pool.wait_all()
         task_pool.tasks.clear()
 
-    return
+        # 计算当前轮次成功率
+        round_success_rate = round_success_count / round_total_count if round_total_count > 0 else 0.0
+        if round_success_rate > best_success_rate:
+            best_success_rate = round_success_rate
+
+        # 记录轮次结果
+        round_result = {
+            'round': round_idx,
+            'total_tasks': round_total_count,
+            'successful_tasks': round_success_count,
+            'success_rate': round_success_rate,
+            'implementations': round_implementations
+        }
+        round_results.append(round_result)
+        all_results.extend([(impl['op_name'], True) for impl in round_implementations])
+
+        # 打印轮次结果
+        pretty_print_results([(impl['op_name'], True) for impl in round_implementations] +
+                             [(f"failed_task_{i}", False) for i in range(round_total_count - round_success_count)])
+
+    # 按性能排序最佳实现（越小越好）
+    best_implementations.sort(key=lambda x: x['profile'])
+
+    # 计算最终成功率
+    final_success_rate = total_successful_tasks / total_tasks if total_tasks > 0 else 0.0
+
+    # 构建返回结果
+    evolution_result = {
+        'op_name': op_name,
+        'total_rounds': max_rounds,
+        'total_tasks': total_tasks,
+        'successful_tasks': total_successful_tasks,
+        'final_success_rate': final_success_rate,
+        'best_success_rate': best_success_rate,
+        'implementation_type': dsl,
+        'framework': framework,
+        'backend': backend,
+        'architecture': arch,
+        'best_implementations': best_implementations[:5],  # 只返回前5个最佳实现
+        'round_results': round_results
+    }
+
+    logger.info(f"Evolution completed for {op_name}")
+    logger.info(f"Total tasks: {total_tasks}, Successful: {total_successful_tasks}")
+    logger.info(f"Final success rate: {final_success_rate:.2%}")
+
+    return evolution_result

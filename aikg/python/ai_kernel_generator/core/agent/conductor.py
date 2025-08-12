@@ -117,7 +117,7 @@ class Conductor(AgentBase):
         self.max_step = config['max_step']
         self.repeat_limits = config['repeat_limits']
         self.agent_next_mapping = config['agent_next_mapping']
-        self.mandatory_analysis = config['mandatory_analysis']
+        self.mandatory_llm_analysis = config['mandatory_llm_analysis']
 
     def get_agent_parser(self, agent_name: str):
         """为指定的agent获取解析器"""
@@ -313,14 +313,14 @@ class Conductor(AgentBase):
                 # 验证失败，排除finish选项
                 valid_next_agents.discard("finish")
 
-        # 根据valid_next_agents数量和mandatory_analysis配置决定是否需要LLM分析
+        # 根据valid_next_agents数量和mandatory_llm_analysis配置决定是否需要LLM分析
         if len(valid_next_agents) == 0:
             # 没有可选agent，直接结束
             return "finish"
         elif len(valid_next_agents) == 1:
-            # 只有一个可选agent，根据mandatory_analysis判断是否需要LLM分析
+            # 只有一个可选agent，根据mandatory_llm_analysis判断是否需要LLM分析
             next_agent = list(valid_next_agents)[0]
-            if next_agent in self.mandatory_analysis:
+            if current_agent in self.mandatory_llm_analysis:
                 # 需要强制LLM分析
                 logger.info(f"Agent {next_agent} requires mandatory LLM analysis")
                 decided_agent = await self._llm_decide_next_agent(current_agent, valid_next_agents)

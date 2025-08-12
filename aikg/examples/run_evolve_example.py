@@ -101,35 +101,101 @@ async def run_evolve_example():
         parallel_num=parallel_num
     )
 
+    # 检查进化结果是否有效
+    if not evolution_result:
+        print("\n❌ 进化过程返回空结果")
+        return None
+
     # 输出进化结果
     print("\n" + "="*80)
     print("进化完成！最终结果汇总:")
     print("="*80)
-    print(f"算子名称: {evolution_result['op_name']}")
-    print(f"总轮数: {evolution_result['total_rounds']}")
-    print(f"总任务数: {evolution_result['total_tasks']}")
-    print(f"成功任务数: {evolution_result['successful_tasks']}")
-    print(f"最终成功率: {evolution_result['final_success_rate']:.2%}")
-    print(f"最佳成功率: {evolution_result['best_success_rate']:.2%}")
-    print(f"实现类型: {evolution_result['implementation_type']}")
-    print(f"框架: {evolution_result['framework']}")
-    print(f"后端: {evolution_result['backend']}")
-    print(f"架构: {evolution_result['architecture']}")
+    print(f"算子名称: {evolution_result.get('op_name', 'Unknown')}")
+    print(f"总轮数: {evolution_result.get('total_rounds', 0)}")
+    print(f"总任务数: {evolution_result.get('total_tasks', 0)}")
+    print(f"成功任务数: {evolution_result.get('successful_tasks', 0)}")
+    print(f"最终成功率: {evolution_result.get('final_success_rate', 0.0):.2%}")
+    print(f"最佳成功率: {evolution_result.get('best_success_rate', 0.0):.2%}")
+    print(f"实现类型: {evolution_result.get('implementation_type', 'Unknown')}")
+    print(f"框架: {evolution_result.get('framework', 'Unknown')}")
+    print(f"后端: {evolution_result.get('backend', 'Unknown')}")
+    print(f"架构: {evolution_result.get('architecture', 'Unknown')}")
 
     # 显示最佳实现
-    best_implementations = evolution_result['best_implementations']
+    best_implementations = evolution_result.get('best_implementations', [])
     if best_implementations:
         print(f"\n最佳实现 (前{len(best_implementations)}个):")
         for i, impl in enumerate(best_implementations, 1):
-            print(f"  {i}. {impl['op_name']} (轮次 {impl['round']})")
+            profile_score = impl.get('profile', float('inf'))
+            profile_str = f"性能: {profile_score:.4f}" if profile_score != float('inf') else "性能: N/A"
+            print(f"  {i}. {impl.get('op_name', 'Unknown')} (轮次 {impl.get('round', 'N/A')}, {profile_str})")
+    else:
+        print("\n⚠️  没有找到成功的实现")
+
+    # 显示每轮详细结果
+    round_results = evolution_result.get('round_results', [])
+    if round_results:
+        print(f"\n每轮详细结果:")
+        for round_result in round_results:
+            round_num = round_result.get('round', 'N/A')
+            success_rate = round_result.get('success_rate', 0.0)
+            successful = round_result.get('successful_tasks', 0)
+            total = round_result.get('total_tasks', 0)
+            print(f"  轮次 {round_num}: {successful}/{total} 成功 ({success_rate:.2%})")
 
     print("="*80)
 
     # 保存结果到文件
     import json
-    result_file = f"evolve_result_{op_name}_{dsl}_{framework}.json"
+    result_file = f"evolve_result_{evolution_result.get('op_name', 'unknown')}_{dsl}_{framework}.json"
+
+    # 为了JSON序列化，需要处理可能包含不可序列化对象的task_info字段
+    serializable_result = evolution_result.copy()
+    if 'best_implementations' in serializable_result:
+        serializable_implementations = []
+        for impl in serializable_result['best_implementations']:
+            serializable_impl = impl.copy()
+            # 从task_info中提取关键代码信息，然后移除整个task_info字段
+            if 'task_info' in serializable_impl:
+                task_info = serializable_impl['task_info']
+                # 提取关键代码字段
+                serializable_impl['designer_code'] = task_info.get('designer_code', '')
+                serializable_impl['coder_code'] = task_info.get('coder_code', '')
+                serializable_impl['task_desc'] = task_info.get('task_desc', '')
+                serializable_impl['verifier_result'] = task_info.get('verifier_result', False)
+                serializable_impl['verifier_error'] = task_info.get('verifier_error', '')
+                # 移除复杂的task_info对象
+                del serializable_impl['task_info']
+            serializable_implementations.append(serializable_impl)
+        serializable_result['best_implementations'] = serializable_implementations
+
+    # 处理round_results中的implementations
+    if 'round_results' in serializable_result:
+        serializable_rounds = []
+        for round_result in serializable_result['round_results']:
+            serializable_round = round_result.copy()
+            if 'implementations' in serializable_round:
+                serializable_impls = []
+                for impl in serializable_round['implementations']:
+                    serializable_impl = impl.copy()
+                    # 从task_info中提取关键代码信息，然后移除整个task_info字段
+                    if 'task_info' in serializable_impl:
+                        task_info = serializable_impl['task_info']
+                        # 提取关键代码字段
+                        serializable_impl['designer_code'] = task_info.get('designer_code', '')
+                        serializable_impl['coder_code'] = task_info.get('coder_code', '')
+                        serializable_impl['task_desc'] = task_info.get('task_desc', '')
+                        serializable_impl['verifier_result'] = task_info.get('verifier_result', False)
+                        serializable_impl['verifier_error'] = task_info.get('verifier_error', '')
+                        # 移除复杂的task_info对象
+                        del serializable_impl['task_info']
+                    serializable_impls.append(serializable_impl)
+                serializable_round['implementations'] = serializable_impls
+            serializable_rounds.append(serializable_round)
+        serializable_result['round_results'] = serializable_rounds
+
     with open(result_file, 'w', encoding='utf-8') as f:
-        json.dump(evolution_result, f, indent=2, ensure_ascii=False)
+        json.dump(serializable_result, f, indent=2, ensure_ascii=False)
     print(f"结果已保存到: {result_file}")
 
     return evolution_result
@@ -142,8 +208,9 @@ def main():
 
     if result:
         print("\n🎉 进化式算子生成成功完成!")
-        if result['successful_tasks'] > 0:
-            print(f"✅ 成功生成了 {result['successful_tasks']} 个有效的算子实现")
+        successful_tasks = result.get('successful_tasks', 0)
+        if successful_tasks > 0:
+            print(f"✅ 成功生成了 {successful_tasks} 个有效的算子实现")
         else:
             print("⚠️  未能生成成功的算子实现，请检查配置和任务描述")
     else:

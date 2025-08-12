@@ -146,7 +146,7 @@ class ParserFactory:
                 'config': parser_config
             }
 
-            logger.info(f"Successfully registered parser: {parser_name}")
+            logger.debug(f"Successfully registered parser: {parser_name}")
 
         except Exception as e:
             logger.error(f"Failed to register parser {parser_name}: {str(e)}")

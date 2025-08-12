@@ -189,18 +189,8 @@ class AgentBase(ABC):
             return "coder"
         elif "conductor" in class_name:
             return "conductor"
-
-        # 从agent_name中提取（作为备选方案）
-        agent_name_lower = self.agent_name.lower()
-        if "designer" in agent_name_lower:
-            return "designer"
-        elif "coder" in agent_name_lower:
-            return "coder"
-        elif "conductor" in agent_name_lower:
-            return "conductor"
-
-        # 默认返回unknown
-        return "unknown"
+        else:
+            return class_name.lower()
 
     def _check_input_dict(self, input: Dict[str, Any]) -> None:
         """
