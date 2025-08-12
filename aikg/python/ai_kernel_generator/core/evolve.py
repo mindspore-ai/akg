@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-import json
 import random
 from functools import partial
 from typing import List, Dict, Any, Optional, Tuple, Callable
@@ -52,39 +51,49 @@ def pretty_print_results(results: List[Tuple[str, bool]]):
     logger.info("=" * 60)
 
 
-def load_meta_prompts(meta_prompt_path, pid):
+def load_meta_prompts(parallel_num: int) -> list[str]:
     """
-    加载meta prompts并格式化为可读的字符串
+    返回长度为 parallel_num 的 meta prompt 列表。
+    如果 meta prompt 数量不足，则自动拼接多个内容，保证每个字符串都不完全重复。
 
     Args:
-        meta_prompt_path: meta prompt文件路径
-        pid: 进程ID，用于选择不同的prompt
+        parallel_num: 并行任务数
 
     Returns:
-        str: 格式化后的meta prompts字符串
+        list[str]: meta prompts 字符串列表
     """
-    with open(meta_prompt_path, "r", encoding="utf-8") as f:
-        _meta_prompts = json.load(f)
+    try:
+        from ai_kernel_generator.resources.docs.triton_docs.meta_prompts import (
+            triton_meta_prompts,
+        )
 
-    formatted_prompts = []
-    prompt_counter = 1
+        assert triton_meta_prompts
+        assert isinstance(
+            triton_meta_prompts, list
+        ), "triton_meta_prompts should be a list"
 
-    if "Platform_Agnostic_Hints" in _meta_prompts:
-        platform_agnostic = _meta_prompts["Platform_Agnostic_Hints"]
-        keys = list(platform_agnostic.keys())
-        selected_key = keys[pid % len(keys)]  # 确保 pid 在合理范围内
-        prompt_content = platform_agnostic[selected_key]
-        formatted_prompts.append(f"## 优化建议 {prompt_counter}: 平台无关优化\n{prompt_content}")
-        prompt_counter += 1
-
-    if "Platform_Specific_Hints" in _meta_prompts:
-        platform_specific = _meta_prompts["Platform_Specific_Hints"]
-        keys = list(platform_specific.keys())
-        selected_key = keys[pid % len(keys)]  # 确保 pid 在合理范围内
-        prompt_content = platform_specific[selected_key]
-        formatted_prompts.append(f"## 优化建议 {prompt_counter}: 平台特定优化\n{prompt_content}")
-
-    return "\n\n".join(formatted_prompts)
+        n = len(triton_meta_prompts)
+        prompts_pool = triton_meta_prompts.copy()
+        random.shuffle(prompts_pool)
+        result = []
+        idx = 0
+        for i in range(parallel_num):
+            # 计算每个字符串要拼接的 meta prompt 数量，尽量均匀分配
+            base = n // parallel_num
+            extra = 1 if i < n % parallel_num else 0
+            count = base + extra
+            # 随机选择 count 个 meta prompt（可重复）
+            if idx + count > n:
+                random.shuffle(prompts_pool)
+                idx = 0
+            prompts = prompts_pool[idx : idx + count]
+            idx += count
+            result.append("\n\n".join(prompts))
+        assert len(result) == parallel_num, "Result length mismatch"
+        return result
+    except Exception as e:
+        logger.error(f"Failed to load meta prompts: {e}")
+        return ["" for _ in range(parallel_num)]
 
 
 async def evolve(
@@ -136,6 +145,7 @@ async def evolve(
     # 临时数据库路径配置
     import os
     import uuid
+
     random_hash = uuid.uuid4().hex[:8]
     evolve_database_path = os.path.expanduser(f"~/aikg_db/{random_hash}/")
     os.makedirs(evolve_database_path, exist_ok=True)
@@ -155,12 +165,14 @@ async def evolve(
         if round_idx == 1:
             inspirations = [[] for _ in range(parallel_num)]
             if dsl == "triton":
-                # load meta-prompt.json
+                # load meta-prompt
                 root_dir = get_project_root()
-                meta_prompt_path = Path(root_dir) / "resources" / "docs" / f"{dsl}_docs" / "meta-prompt.json"
+                # fmt: off
+                meta_prompt_path = Path(root_dir) / "resources" / "docs" / f"{dsl}_docs" / "meta_prompts.py"
+                # fmt: on
 
                 if meta_prompt_path.exists():
-                    meta_prompts = [load_meta_prompts(meta_prompt_path, pid) for pid in range(parallel_num)]
+                    meta_prompts = load_meta_prompts(parallel_num)
                 else:
                     logger.warning(f"Meta-prompt file not found: {meta_prompt_path}")
 
