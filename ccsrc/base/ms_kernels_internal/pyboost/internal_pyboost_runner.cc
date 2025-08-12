@@ -42,6 +42,8 @@ void InternalPyboostRunner::GetOrCreateKernel(const TensorList &inputs,
     hash_map_[key] = internal_op_;
   }
 
+  internal_inputs_shape_.clear();
+  internal_outputs_shape_.clear();
   internal_inputs_shape_.resize(inputs.size());
   internal_outputs_shape_.resize(outputs.size());
   TransInternalShapes(&internal_inputs_shape_, inputs, true);
@@ -149,7 +151,7 @@ void InternalPyboostRunner::TransInternalShapes(
     bool is_input) {
   for (size_t i = 0; i < tensorlist.size(); i++) {
     if (!tensorlist[i].is_defined()) {
-      shapelist->at(i) = mindspore::internal::ShapeInfo{0};
+      shapelist->at(i) = mindspore::internal::ShapeInfo{};
       continue;
     }
 
