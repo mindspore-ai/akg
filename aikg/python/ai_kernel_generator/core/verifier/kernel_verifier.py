@@ -415,7 +415,7 @@ class KernelVerifier:
             self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
             logger.info(f"orig performance is {base_time:.2f} us")
             logger.info(f"aikg performance is {gen_time:.2f} us")
-            logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，性能提升: {speedup_percent:.2f} %")
+            logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，加速比（基准为100%）: {speedup_percent:.2f} %")
             return gen_time, base_time, speedup
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")

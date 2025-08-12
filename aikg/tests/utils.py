@@ -106,27 +106,28 @@ def get_kernelbench_op_name(task_index_list, framework="torch"):
     if framework == "torch":
         task_path = os.path.join(
             aikg_path, 'thirdparty', 'KernelBench', 'KernelBench', 'level1')
+        # PyTorch: 直接查找文件
+        task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
+        matched_files = []
+        
+        if os.path.exists(task_path):
+            for file in os.listdir(task_path):
+                if file.endswith('.py') and any(file.startswith(task_prefix) for task_prefix in task_prefix_list):
+                    benchmark_name = file[:-3]
+                    matched_files.append(benchmark_name)
     else:
-        # Original logic for mindspore and numpy benchmarks
+        # MindSpore/NumPy: 查找子目录
         task_path = os.path.join(
             aikg_path, 'benchmark', 'kernelbench', framework)
-
-    # 检查目录是否存在
-    if not os.path.exists(task_path):
-        if framework == "torch":
-            _raise_submodule_error("KernelBench 目录", task_path)
-        else:
-            _raise_submodule_error(f"{framework} benchmark 目录", task_path)
-
-    task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
-    matched_files = []
-
-    if os.path.exists(task_path):
-        for file in os.listdir(task_path):
-            if file.endswith('.py') and any(file.startswith(task_prefix) for task_prefix in task_prefix_list):
-                # Remove .py extension to get the benchmark name
-                benchmark_name = file[:-3]
-                matched_files.append(benchmark_name)
+        task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
+        matched_files = []
+        
+        if os.path.exists(task_path):
+            for dir_name in os.listdir(task_path):
+                dir_path = os.path.join(task_path, dir_name)
+                if os.path.isdir(dir_path) and any(dir_name.startswith(task_prefix) for task_prefix in task_prefix_list):
+                    # 对于MindSpore，返回目录名作为benchmark_name
+                    matched_files.append(dir_name)
 
     return matched_files if matched_files else None
 
@@ -199,3 +200,44 @@ def get_task_content(folder_path, file_name):
     except (FileNotFoundError, IOError, UnicodeDecodeError) as e:
         print(f"读取文件 {file_path} 失败: {e}")
         return ""
+
+
+def process_task_results(results, print_summary=True):
+    """
+    处理任务运行结果，验证每个op_name是否至少有一次成功。
+    
+    Args:
+        results: task_pool.wait_all() 返回的结果列表，格式为 [(op_name, result, _), ...]
+        print_summary: 是否打印结果摘要
+    
+    Returns:
+        bool: 如果所有op_name都至少成功一次返回True，否则返回False
+    """
+    from collections import defaultdict
+    
+    # 收集结果到字典
+    result_dict = defaultdict(int)
+    for op_name, result, _ in results:
+        result_dict[op_name] += result
+
+    # 检查失败的case - 同一个op_name只要有一次成功就算通过
+    failed_cases = []
+    for op_name, success_count in result_dict.items():
+        if success_count == 0:  # 如果成功次数为0，说明所有尝试都失败了
+            failed_cases.append(op_name)
+    
+    # 可选的结果摘要
+    if print_summary:
+        total_ops = len(result_dict)
+        passed_ops = total_ops - len(failed_cases)
+        pass_rate = passed_ops / total_ops if total_ops > 0 else 0.0
+        
+        print('-' * 60)
+        print(f"结果字典: {dict(result_dict)}")
+        print(f"通过的操作数: {passed_ops}/{total_ops}")
+        print(f"通过率: {pass_rate:.2%}")
+        if failed_cases:
+            print(f"失败的测试case: {failed_cases}")
+        print('-' * 60)
+    
+    return len(failed_cases) == 0
