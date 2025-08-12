@@ -6,3 +6,10 @@
 	path = aikg/thirdparty/KernelBench
 	url = https://github.com/ScalingIntelligence/KernelBench.git
 	branch = main
+	commit = 21fbe5a642898cd60b8f60c7aefb43d475e11f33
+
+[submodule "aikg/thirdparty/MultiKernelBench"]
+	path = aikg/thirdparty/MultiKernelBench
+	url = https://github.com/wzzll123/MultiKernelBench.git
+	branch = main
+	commit = 55cb5c059573f0bf00f2dc24c75f810059cf2785

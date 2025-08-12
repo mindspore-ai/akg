@@ -1,0 +1,37 @@
+# designer, coder, verifier workflow, only once designer
+
+agent_info:
+  designer:
+    possible_next_agent: [coder]
+    output_format:
+      parser_name: designer_parser
+      parser_definition:
+        output_fields:
+          code:
+            field_type: str
+            mandatory: true
+            field_description: "Algorithm pseudocode implementation"
+  coder:
+    possible_next_agent: [verifier]
+    output_format:
+      parser_name: coder_parser
+      parser_definition:
+        output_fields:
+          code:
+            field_type: str
+            mandatory: true
+            field_description: "Complete executable code implementation"
+  verifier:
+    possible_next_agent: [finish, coder]
+    # verifier is programmatic verification, returns structured data directly, no parser needed
+
+start_agent: designer
+
+# Agents that require LLM analysis even when only one option is available
+# These agents need conductor's decision-making and suggestions
+mandatory_llm_analysis: [verifier]
+
+limitation_info:
+  # Required limitation settings
+  required:
+    max_step: 20    # Maximum execution steps to prevent infinite loops

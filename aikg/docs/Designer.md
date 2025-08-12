@@ -1,70 +1,57 @@
-# General Designer Design Document
+# Designer Design Document
 
 ## Overview
-Designer is a core component in the AI Kernel Generator that automatically generates and repairs design documents based on Large Language Models (LLMs). It inherits from `AgentBase` and is responsible for intelligently generating high-quality kernel design documents based on the kernel name, task description, and hardware configuration. We currently use AUL (AI Unity Language) as the expression language for design documents, but users can flexibly design other implementation methods.
+Designer is a core component in the AI Kernel Generator that automatically generates algorithm design documents based on Large Language Models (LLMs). It inherits from `AgentBase` and is responsible for intelligently generating high-quality algorithm sketches based on the kernel name, task description, and hardware configuration. The Designer uses AUL (AI Unity Language) or similar design languages to express algorithm logic.
 
 ## Core Functions
-- **Intelligent Code Generation**: Automatically generates AUL code based on the kernel name and task description.
-- **Automatic Code Repair**: Intelligently fixes code issues based on verification feedback.  
-- **Multi-Hardware Support**: Supports hardware backends such as Ascend NPUs and CUDA GPUs.
-- **Document Integration**: Automatically loads AUL specifications and hardware documentation.
-- **Dynamic Adaptation**: Dynamically obtains configuration information based on the hardware type.
+- **Intelligent Design Generation**: Automatically generates algorithm design documents based on kernel requirements
+- **CustomDocs Integration**: Supports custom reference documents to improve generation quality
+- **Multi-DSL Support**: Supports different design languages
+- **Hardware-Aware Design**: Considers hardware characteristics during design generation
+- **Document Integration**: Automatically loads design specifications and reference materials
 
 ## Initialization Parameters
 | Parameter Name | Type/Required | Description |
 |---------|---------|---------|
-| op_name | str (Required) | Kernel name, e.g., "matmul", "relu" |
-| task_desc | str (Required) | Task description, detailing the functional requirements of the kernel. |
-| model_config | dict (Required) | LLM model configuration, including configurations for both generation and repair models. |
-| impl_type | str (Optional) | Implementation type, e.g., "swft". Default: "" |
-| backend | str (Optional) | Hardware backend: cpu/ascend/cuda. Default: "" |
-| arch | str (Optional) | Hardware architecture: ascend310p3/ascend910b4/a100. Default: "" |
+| op_name | str (Required) | Kernel name, identifying the specific kernel |
+| task_desc | str (Required) | Task description, detailing the kernel functional requirements |
+| dsl | str (Required) | Design language: "triton", "swft", etc. |
+| backend | str (Required) | Hardware backend: "ascend", "cuda", etc. |
+| arch | str (Required) | Hardware architecture: "ascend910b4", "a100", etc. |
+| workflow_config_path | str (Optional) | Workflow configuration file path |
+| config | dict (Required) | Complete configuration including CustomDocs settings |
 
-## Execution Flow run
+## CustomDocs Integration
 
-1. **State Update Stage**
-   - Extract existing AUL code (from `parsed_code.aul_code`).
-   - Call `update()` to update the agent's state information.
+The Designer leverages the CustomDocs feature to load reference documents from configured directories:
 
-2. **Core Execution Stage**  
-   - Select the corresponding processing logic based on `action_type`.
-     - `DO_DESIGNER`: Call `run_llm()` using the `aul_gen_prompt` template and `aul_gen_input` data.
-     - `FIX_DESIGNER`: Call `run_llm()` using the `aul_fix_prompt` template and `aul_fix_input` data.
-   - Throw a `ValueError` for unsupported `action_type`.
+### Required Documents
+- `basic_docs.md` - DSL basic documentation and syntax specifications
 
-3. **Result Return**
-   - Returns a triplet: (generated content, formatted prompt, inference content).
-
-## Usage Example
+### Document Loading
+The Designer loads documents from the `docs_dir.designer` path specified in the configuration:
 ```python
-from ai_kernel_generator.core.agent.aul_designer import AULDesigner
-from ai_kernel_generator.core.utils import ActionType
+self.base_doc = {
+    "dsl_basic_docs": self.load_doc("basic_docs.md"),
+    # ... other fields
+}
+```
 
-# Create a Designer instance
-designer = AULDesigner(
-    op_name="relu",
-    task_desc=task_desc,
-    model_config=config["model"],
-    impl_type="triton",
-    backend="ascend",
-    arch="ascend910b4"
-)
+## Execution Flow
 
-# Execute code generation
-async def generate_code():
-    result = await designer.run(
-        action_type=ActionType.DO_DESIGNER,
-        parsed_code=None,
-        suggestions=""
-    )
-    print(f"Generated AUL code: {result[0]}")
+1. **Initialization Stage**
+   - Load workflow configuration and create parser
+   - Initialize design generation template
+   - Load reference documents using CustomDocs
+   - Prepare base document structure
 
-# Execute code repair
-async def fix_code():
-    result = await designer.run(
-        action_type=ActionType.FIX_DESIGNER,
-        parsed_code=parsed_code,
-        suggestions="Optimize memory access patterns"
-    )
-    print(f"Fixed code: {result[0]}")
-``` 
+2. **Generation Stage**
+   - Process task information and conductor suggestions
+   - Execute LLM generation using loaded documents
+   - Return generated design, prompt, and reasoning
+
+3. **Document Structure**
+   - DSL specifications and syntax rules
+   - Algorithm design patterns and examples
+   - Hardware-specific considerations
+   - Format instructions for output parsing

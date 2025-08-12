@@ -19,6 +19,7 @@ from ai_kernel_generator.core.utils import check_task_config
 class TestTaskConfig:
     """测试任务配置验证函数"""
 
+    @pytest.mark.level0
     def test_valid_configs(self):
         """测试有效的配置组合"""
         valid_configs = [
@@ -30,13 +31,14 @@ class TestTaskConfig:
             ("numpy", "swft", "ascend", "ascend310p3"),
         ]
 
-        for framework, impl_type, backend, arch in valid_configs:
+        for framework, dsl, backend, arch in valid_configs:
             try:
-                check_task_config(framework, backend, arch, impl_type)
-                print(f"有效配置: {framework} + {backend} + {arch} + {impl_type}")
+                check_task_config(framework, backend, arch, dsl)
+                print(f"有效配置: {framework} + {backend} + {arch} + {dsl}")
             except ValueError as e:
-                pytest.fail(f"有效配置验证未通过: {framework} + {backend} + {arch} + {impl_type}, 错误: {e}")
+                pytest.fail(f"有效配置验证未通过: {framework} + {backend} + {arch} + {dsl}, 错误: {e}")
 
+    @pytest.mark.level0
     def test_invalid_framework(self):
         """测试无效的框架"""
         invalid_configs = [
@@ -45,11 +47,12 @@ class TestTaskConfig:
             ("mindspore_old", "swft", "ascend", "ascend310p3"),
         ]
 
-        for framework, impl_type, backend, arch in invalid_configs:
+        for framework, dsl, backend, arch in invalid_configs:
             with pytest.raises(ValueError, match="Unsupported framework"):
-                check_task_config(framework, backend, arch, impl_type)
+                check_task_config(framework, backend, arch, dsl)
                 print(f"正确捕获无效框架错误: {framework}")
 
+    @pytest.mark.level0
     def test_invalid_backend(self):
         """测试无效的后端"""
         invalid_configs = [
@@ -58,11 +61,12 @@ class TestTaskConfig:
             ("numpy", "swft", "invalid_backend", "ascend310p3"),
         ]
 
-        for framework, impl_type, backend, arch in invalid_configs:
+        for framework, dsl, backend, arch in invalid_configs:
             with pytest.raises(ValueError, match="does not support backend"):
-                check_task_config(framework, backend, arch, impl_type)
+                check_task_config(framework, backend, arch, dsl)
                 print(f"正确捕获无效后端错误: {framework} + {backend}")
 
+    @pytest.mark.level0
     def test_invalid_arch(self):
         """测试无效的架构"""
         invalid_configs = [
@@ -71,12 +75,13 @@ class TestTaskConfig:
             ("numpy", "swft", "ascend", "invalid_arch"),
         ]
 
-        for framework, impl_type, backend, arch in invalid_configs:
+        for framework, dsl, backend, arch in invalid_configs:
             with pytest.raises(ValueError, match="does not support arch"):
-                check_task_config(framework, backend, arch, impl_type)
+                check_task_config(framework, backend, arch, dsl)
                 print(f"正确捕获无效架构错误: {backend} + {arch}")
 
-    def test_invalid_impl_type(self):
+    @pytest.mark.level0
+    def test_invalid_dsl(self):
         """测试无效的实现类型"""
         invalid_configs = [
             ("mindspore", "invalid_impl", "ascend", "ascend910b4"),
@@ -84,11 +89,12 @@ class TestTaskConfig:
             ("numpy", "invalid_impl", "ascend", "ascend310p3"),
         ]
 
-        for framework, impl_type, backend, arch in invalid_configs:
-            with pytest.raises(ValueError, match="does not support impl_type"):
-                check_task_config(framework, backend, arch, impl_type)
-                print(f"正确捕获无效实现类型错误: {impl_type}")
+        for framework, dsl, backend, arch in invalid_configs:
+            with pytest.raises(ValueError, match="does not support dsl"):
+                check_task_config(framework, backend, arch, dsl)
+                print(f"正确捕获无效实现类型错误: {dsl}")
 
+    @pytest.mark.level0
     def test_mismatched_combinations(self):
         """测试不匹配的组合"""
         mismatched_configs = [
@@ -101,11 +107,12 @@ class TestTaskConfig:
             ("numpy", "triton", "ascend", "ascend310p3"),
         ]
 
-        for framework, impl_type, backend, arch in mismatched_configs:
-            with pytest.raises(ValueError, match="does not support impl_type"):
-                check_task_config(framework, backend, arch, impl_type)
-                print(f"正确捕获不匹配组合错误: {framework} + {backend} + {arch} + {impl_type}")
+        for framework, dsl, backend, arch in mismatched_configs:
+            with pytest.raises(ValueError, match="does not support dsl"):
+                check_task_config(framework, backend, arch, dsl)
+                print(f"正确捕获不匹配组合错误: {framework} + {backend} + {arch} + {dsl}")
 
+    @pytest.mark.level0
     def test_nonexistent_combinations(self):
         """测试不存在的组合"""
         nonexistent_configs = [
@@ -117,11 +124,12 @@ class TestTaskConfig:
             ("torch", "triton", "ascend", "ascend310p3"),  # torch的ascend310p3只支持swft
         ]
 
-        for framework, impl_type, backend, arch in nonexistent_configs:
+        for framework, dsl, backend, arch in nonexistent_configs:
             with pytest.raises(ValueError):
-                check_task_config(framework, backend, arch, impl_type)
-                print(f"正确捕获不存在组合错误: {framework} + {backend} + {arch} + {impl_type}")
+                check_task_config(framework, backend, arch, dsl)
+                print(f"正确捕获不存在组合错误: {framework} + {backend} + {arch} + {dsl}")
 
+    @pytest.mark.level0
     def test_edge_cases(self):
         """测试边界情况"""
         # 空字符串
@@ -138,6 +146,7 @@ class TestTaskConfig:
 
         print("正确捕获边界情况错误")
 
+    @pytest.mark.level0
     def test_all_valid_combinations(self):
         """测试所有有效的组合"""
         # 根据VALID_CONFIGS映射表测试所有有效组合
@@ -153,10 +162,10 @@ class TestTaskConfig:
             ("numpy", "swft", "ascend", "ascend310p3"),
         ]
 
-        for framework, impl_type, backend, arch in all_valid_combinations:
+        for framework, dsl, backend, arch in all_valid_combinations:
             try:
-                check_task_config(framework, backend, arch, impl_type)
-                print(f"有效组合: {framework} + {backend} + {arch} + {impl_type}")
+                check_task_config(framework, backend, arch, dsl)
+                print(f"有效组合: {framework} + {backend} + {arch} + {dsl}")
             except ValueError as e:
 
-                pytest.fail(f"有效组合验证未通过: {framework} + {backend} + {arch} + {impl_type}, 错误: {e}")
+                pytest.fail(f"有效组合验证未通过: {framework} + {backend} + {arch} + {dsl}, 错误: {e}")

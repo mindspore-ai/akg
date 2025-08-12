@@ -30,9 +30,9 @@ MS_TO_NP_DTYPE_MAP = {
 }
 {% endif %}
 
-{% if "triton" in impl_type %}
+{% if "triton" in dsl %}
 from {{ op_name }}_triton import {{ impl_func_name }}
-{% elif impl_type == "swft" %}
+{% elif dsl == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
 {% endif %}
 
@@ -143,8 +143,20 @@ def load_binary_data(data_dir, reference_outputs):
     
     return loaded_outputs
 
-
-{% if framework == "torch" %}
+{% if "triton" in dsl and backend == "cuda" and arch == "a100" %}
+def get_limit(data_type):
+    import torch
+    if data_type == torch.float32:
+        return 0.02
+    elif data_type == torch.float16:
+        return 0.004
+    elif data_type == torch.bfloat16:
+        return 0.03
+    elif data_type == torch.int8:
+        return 0.01
+    else:
+        return 0.02
+{% elif framework == "torch" %}
 def get_limit(data_type):
     import torch
     if data_type == torch.float16:
@@ -179,8 +191,13 @@ def get_limit(data_type):
 
 def compare(framework_out_flatten, impl_out_flatten, limit, data_type):
     err_cnt = 0
-    size = len(framework_out_flatten) 
-    err_cnt = np.sum(np.abs(framework_out_flatten - impl_out_flatten) / np.abs(impl_out_flatten) > limit).astype(np.int32)
+    size = len(framework_out_flatten)
+    abs_diff = np.abs(framework_out_flatten - impl_out_flatten)
+    abs_ref = np.abs(impl_out_flatten)
+    eps = 1e-8
+    
+    relative_error = np.where(abs_ref > eps, abs_diff / abs_ref, abs_diff)
+    err_cnt = np.sum(relative_error > limit).astype(np.int32)
     limit_cnt = int(size * limit)
     if err_cnt > limit_cnt:
         raise AssertionError(f"验证失败: err_cnt = {err_cnt} / {limit_cnt}，输出不一致（dtype={data_type}, limit={limit}）")
@@ -190,7 +207,7 @@ def verify_implementations():
     # 获取运行模式
     backend = "{{ backend }}"  # 计算设备后端
     arch = "{{ arch }}"  # 硬件架构
-    impl_type = "{{ impl_type }}"  # 实现方式
+    dsl = "{{ dsl }}"  # 实现方式
     
     {% if framework == "torch" %}
     torch.manual_seed(0)
@@ -205,7 +222,7 @@ def verify_implementations():
             torch.cuda.set_device(0)  # 使用第一个v100设备
     elif backend == "ascend":
         if "ascend910" in arch:
-            {% if impl_type == "triton-russia" %}
+            {% if dsl == "triton-russia" %}
             os.environ['TRITON_ASCEND_DEVICE'] = str({{ device_id }})
             device = torch.device("cpu")
             {% else %}
@@ -272,10 +289,10 @@ def verify_implementations():
     # 运行框架实现
     framework_output = framework_model(*inputs)
     
-    {% if "triton" in impl_type %}
+    {% if "triton" in dsl %}
     # 运行Triton实现
     impl_output = {{ impl_func_name }}(*inputs)
-    {% elif impl_type == "swft" %}
+    {% elif dsl == "swft" %}
     # 运行SWFT实现
     data_dir = os.path.dirname(__file__)
     
@@ -317,4 +334,4 @@ def verify_implementations():
 
 
 if __name__ == "__main__":
-    verify_implementations() 
+    verify_implementations()

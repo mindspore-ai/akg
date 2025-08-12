@@ -1,0 +1,51 @@
+# Default designer, coder, verifier workflow
+
+agent_info:
+  designer:
+    possible_next_agent: [coder, designer]
+    output_format:
+      parser_name: designer_parser
+      parser_definition:
+        output_fields:
+          code:
+            field_type: str
+            mandatory: true
+            field_description: "Algorithm pseudocode implementation"
+  coder:
+    possible_next_agent: [verifier, coder]
+    output_format:
+      parser_name: coder_parser
+      parser_definition:
+        output_fields:
+          code:
+            field_type: str
+            mandatory: true
+            field_description: "Complete executable code implementation"
+  verifier:
+    possible_next_agent: [finish, designer, coder]
+    # verifier is programmatic verification, returns structured data directly, no parser needed
+
+start_agent: designer
+
+# Agents that require LLM analysis even when only one option is available
+# These agents need conductor's decision-making and suggestions
+mandatory_llm_analysis: []
+
+limitation_info:
+  # Required limitation settings
+  required:
+    max_step: 10    # Maximum execution steps to prevent infinite loops
+  # Optional limitation settings
+  optional:
+    # Agent repeat limits: prevent single agent or specific sequences from infinite repetition
+    # If not set, defaults to max 3 consecutive repeats per agent
+    repeat_limits:
+      # Single agent consecutive repeat limits
+      single_agent:
+        designer: 2    # designer max 2 consecutive repeats
+        coder: 2       # coder max 2 consecutive repeats
+      # Specific sequence repeat limits  
+      sequences:
+        coder_verifier: 
+          pattern: [coder, verifier]  # coder->verifier sequence
+          max_repeats: 3              # max 3 repeats

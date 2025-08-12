@@ -13,409 +13,324 @@
 # limitations under the License.
 
 import logging
-import importlib.util
-from typing import List, Tuple
+from typing import Set, Optional, Dict, Any, List
+from ai_kernel_generator.utils.workflow_manager import WorkflowManager
+from ai_kernel_generator.utils.workflow_controller import WorkflowController
+from ai_kernel_generator.utils.result_processor import ResultProcessor
+from ai_kernel_generator.core.agent.agent_base import AgentBase
 from ai_kernel_generator.core.trace import Trace
-from ai_kernel_generator.core.utils import ActionType, ParsedCode
-from ai_kernel_generator.core.agent.agent_base import AgentBase
-from ai_kernel_generator.utils.common_utils import ParserFactory
-from ai_kernel_generator.core.agent.agent_base import AgentBase
+from ai_kernel_generator.utils.parser_registry import create_conductor_parser
 
 logger = logging.getLogger(__name__)
 
 
 class Conductor(AgentBase):
-    def __init__(self, op_name: str, task_id: str, log_dir: str, impl_type: str, model_config: dict, coder_only_mode: bool = False) -> None:
+    """
+    Conductor，基于workflow.yaml配置文件进行工作流管理
+    职责：工作流协调、状态管理
+    """
+
+    # 类级别的解析器缓存
+    _conductor_parser = None
+
+    @classmethod
+    def get_conductor_parser(cls):
+        """获取Conductor决策解析器"""
+        if cls._conductor_parser is None:
+            cls._conductor_parser = create_conductor_parser()
+        return cls._conductor_parser
+
+    def __init__(self, op_name: str, task_desc: str, task_id: str, dsl: str,
+                 framework: str, arch: str, workflow_config_path: Optional[str] = None,
+                 config: Optional[dict] = None):
         """
-        初始化任务类，用于记录任务的各种属性。
+        初始化Conductor
 
         Args:
-            op_name (str): 操作名称。
-            task_id (str): 任务ID。
-            log_dir (str): 日志目录。
-            impl_type (str): 实现类型。
-            model_config (dict): 模型配置。
-            coder_only_mode (bool, optional): 是否为coder_only模式, 默认为False。
+            op_name: 算子名称
+            task_desc: 任务描述
+            task_id: 任务ID
+            dsl: 实现类型
+            framework: 前端框架
+            arch: 硬件架构
+            workflow_config_path: workflow配置文件路径，可选
+            config: 完整配置字典，包含log_dir、model_config等
         """
+        # 初始化基类
+        agent_name = f"Conductor -- [dsl] {dsl} -- [op_name] {op_name}"
+        super().__init__(agent_name=agent_name, config=config)
 
         self.op_name = op_name
+        self.task_desc = task_desc
         self.task_id = task_id
-        self.log_dir = log_dir
-        self.impl_type = impl_type
-        self.model_config = model_config
-        self.coder_only_mode = coder_only_mode
+        self.dsl = dsl
+        self.framework = framework
+        self.arch = arch
+        self.config = config
 
-        # 根据模式设置不同的agent_name
-        if coder_only_mode:
-            super().__init__(
-                agent_name=f"Conductor -- [impl_type] {self.impl_type} -- [action] CoderOnly -- [op_name] {self.op_name}")
+        # 从config中获取需要的属性
+        if config:
+            self.log_dir = config.get("log_dir")
+            self.model_config = config.get("agent_model_config", {})
         else:
-            super().__init__(
-                agent_name=f"Conductor -- [impl_type] {self.impl_type} -- [action] Check_Designer -- [op_name] {self.op_name}")
+            raise ValueError("config is required for Conductor")
 
-        self.step = 0
-        self.fixed_step = 0
+        self.step_count = 0
+
+        self.last_parse_success = True  # 记录最新agent执行的解析状态
+
+        self.agent_parsers = {}
+
+        self.conductor_template = self.load_template("conductor/analyze.j2")
+
+        # 优先使用传入的workflow_config_path，否则从config中获取
+        if workflow_config_path:
+            self.workflow_config_path = workflow_config_path
+        elif self.config and self.config.get('workflow_config_path'):
+            self.workflow_config_path = self.config.get('workflow_config_path')
+        else:
+            raise ValueError("workflow_config_path is required for Conductor")
+        self._load_workflow_config()
+
         self.trace = Trace(self.op_name, self.task_id, self.log_dir)
-        self.code_parser = ParserFactory.get_code_parser()
-        self.check_parser = ParserFactory.get_check_parser()
-        self.check_format_instructions = self.check_parser.get_format_instructions()
 
-        # 只在非coder_only模式下加载designer检查模板
-        if not coder_only_mode:
-            self.check_designer_prompt = self.load_template("conductor/check_designer_template.j2")
-            self.check_designer_base_doc = {}
-            self.check_designer_input = {}
+        self.task_info = {}
 
-        # 根据impl_type选择不同的coder检查模板
-        if "triton" in self.impl_type:
-            self.check_coder_prompt = self.load_template("conductor/check_triton_coder_template.j2")
-        elif self.impl_type == "swft":
-            self.check_coder_prompt = self.load_template("conductor/check_swft_coder_template.j2")
-        else:
-            raise ValueError(f"不支持的impl_type: {self.impl_type}")
-        self.check_coder_base_doc = {}
-        self.check_coder_input = {}
+    def set_task_info(self, base_doc: Dict[str, Any] = None):
+        """设置任务信息和基础文档"""
+        # 初始化task_info
+        self.task_info = WorkflowManager.initialize_task_info_fields(
+            self.agent_info, self.op_name, self.task_id, self.dsl, self.task_desc, base_doc
+        )
 
-        if "triton" in self.impl_type and not importlib.util.find_spec('triton.backends'):
-            raise ImportError("please install triton first")
-        if self.impl_type == "triton-russia" and not importlib.util.find_spec('triton.backends.ascend'):
-            raise ImportError("please install triton-russia first")
+    def get_agent_history(self) -> List[str]:
+        """从trace中获取agent执行历史"""
+        return [record.agent_name for record in self.trace.trace_list]
 
-        # 加载错误分析模板
-        self.analyze_error_prompt = self.load_template("conductor/analyze_error_template.j2")
-        self.analyze_error_base_doc = {}
-        self.analyze_error_input = {}
+    def _load_workflow_config(self):
+        """从workflow.yaml文件读取配置信息到self属性中"""
+        config = WorkflowManager.load_workflow_config(self.workflow_config_path)
 
-    def initialize_check_docs(self):
-        """在Task初始化完成后调用，用trace.base_doc初始化check相关的文档"""
-        if not self.trace.base_doc:
-            logger.warning("trace.base_doc为空，无法初始化check_designer_base_doc")
-            return
+        self.agent_info = config['agent_info']
+        self.limitation_info = config['limitation_info']
+        self.start_agent = config['start_agent']
+        self.max_step = config['max_step']
+        self.repeat_limits = config['repeat_limits']
+        self.agent_next_mapping = config['agent_next_mapping']
+        self.mandatory_llm_analysis = config['mandatory_llm_analysis']
 
-        # 只在非coder_only模式下初始化designer相关文档
-        if not self.coder_only_mode:
-            self.check_designer_base_doc = {
-                "op_name": self.trace.base_doc.get("op_name", ""),
-                "task_desc": self.trace.base_doc.get("task_desc", ""),
-                "aul_spec": self.load_doc("conductor_docs/check_aul.md"),
-                "supported_compute_api": self.trace.base_doc.get("supported_compute_api", ""),
-                "hardware_info": self.trace.base_doc.get("hardware_info", ""),
-                "aul_tiling": self.trace.base_doc.get("aul_tiling", ""),
-                "format_instructions": self.check_format_instructions,
-            }
-            self.check_designer_input = {
-                "aul_code": "",
-                **self.check_designer_base_doc,
-            }
-            logger.debug("check_designer_base_doc初始化完成")
+    def get_agent_parser(self, agent_name: str):
+        """为指定的agent获取解析器"""
+        return ResultProcessor.get_agent_parser(agent_name, self.workflow_config_path, self.agent_parsers)
 
-        if "triton" in self.impl_type:
-            self.check_coder_base_doc = {
-                "op_name": self.trace.base_doc.get("op_name", ""),
-                "task_desc": self.trace.base_doc.get("task_desc", ""),
-                "impl_type": self.impl_type,
-                "triton_api_str": self.trace.base_doc.get("triton_api_str", ""),
-                "triton_tutorial_str": self.trace.base_doc.get("triton_tutorial_str", ""),
-                "triton_sample_code": self.trace.base_doc.get("triton_sample_code", ""),
-                "format_instructions": self.check_format_instructions,
-            }
-            self.check_coder_input = {
-                "aul_code": "",
-                "triton_code": "",
-                **self.check_coder_base_doc,
-            }
-        elif self.impl_type == "swft":
-            self.check_coder_base_doc = {
-                "op_name": self.trace.base_doc.get("op_name", ""),
-                "task_desc": self.trace.base_doc.get("task_desc", ""),
-                "impl_type": self.impl_type,
-                "swft_sample_code": self.trace.base_doc.get("swft_sample_code", ""),
-                "error_sample": self.trace.base_doc.get("error_sample", ""),
-                "format_instructions": self.check_format_instructions,
-            }
-            self.check_coder_input = {
-                "aul_code": "",
-                "swft_code": "",
-                "supported_api": "",
-                **self.check_coder_base_doc,
-            }
-        logger.debug(f"check_coder_base_doc初始化完成，impl_type: {self.impl_type}")
-
-        self.analyze_error_base_doc = {
-            "impl_type": self.impl_type,
-            "task_desc": self.trace.base_doc.get("task_desc", ""),
-            "hardware_info": self.trace.base_doc.get("hardware_info", ""),
-            "format_instructions": self.check_format_instructions,
-        }
-        self.analyze_error_input = {
-            "designer_code": "",
-            "coder_code": "",
-            "error_log": "",
-            "supported_api": "",
-            **self.analyze_error_base_doc,
-        }
-        logger.debug("analyze_error_base_doc初始化完成")
-
-    def find_last_parsed_code(self, action_types: List[ActionType]) -> str:
-        """查找trace列表中最后出现的指定类型记录
+    def record_agent_execution(self, agent_name: str, result: str, prompt: str = "", reasoning: str = "",
+                               error_log: str = "", profile_res=()) -> bool:
+        """
+        记录agent执行结果，进行解析并更新任务信息
 
         Args:
-            action_types: 单个ActionType或ActionType列表，当为列表时查找最后出现的任一类型记录
-        """
-        parsed_code = ""
-        for record in reversed(self.trace.trace_list):
-            if record.action_type in action_types:
-                parsed_result = ParserFactory.robust_parse(record.result, self.code_parser)
-                parsed_code = parsed_result.code
-                break
-        return parsed_code
+            agent_name: agent名称（designer, coder, verifier，...）
+            result: 执行结果（json字符串）
+            prompt: 使用的prompt
+            reasoning: 推理过程
+            error_log: 错误日志（主要用于verifier）
+            profile_res: 性能分析结果（主要用于verifier）
 
-    async def get_next_action(self) -> Tuple[ActionType, ParsedCode, str]:
+        Returns:
+            bool: 解析是否成功（对于不需要解析器的agent返回True）
         """
-        异步运行任务，执行操作任务字符串
+        parse_success = True
+
+        try:
+            # 1. 保存原始数据到trace
+            self.trace.insert_agent_record(
+                agent_name=agent_name,
+                result=result,
+                prompt=prompt,
+                reasoning=reasoning,
+                error_log=error_log,
+                profile_res=profile_res
+            )
+
+            # 2. 进行解析并更新任务信息
+            agent_config = self.agent_info.get(agent_name, {})
+            if 'output_format' in agent_config:
+                # 需要解析器的agent
+                agent_parser = self.get_agent_parser(agent_name)
+                parse_success = ResultProcessor.parse_and_update_code(
+                    agent_name, result, self.task_info, agent_parser, self.trace, self.agent_info
+                )
+            elif agent_name == "verifier":
+                ResultProcessor.update_verifier_result(result, error_log, self.task_info, profile_res)
+
+        except Exception as e:
+            logger.error(f"Failed to record and process agent execution for {agent_name}: {e}")
+            parse_success = False
+
+        # 记录最新的解析状态
+        self.last_parse_success = parse_success
+        return parse_success
+
+    def get_illegal_agent(self) -> Set[str]:
+        """获取违禁操作的agent集合"""
+        return WorkflowController.get_illegal_agent(
+            self.step_count, self.max_step, self.get_current_agent_name(),
+            self.get_agent_history(), self.repeat_limits, self.agent_info
+        )
+
+    def get_valid_next_agent(self, agent_name: str) -> Set[str]:
+        """获取有效的下一个agent选项"""
+        return WorkflowController.get_valid_next_agent(
+            agent_name, self.agent_next_mapping, self.step_count, self.max_step,
+            self.get_current_agent_name(), self.get_agent_history(), self.repeat_limits, self.agent_info
+        )
+
+    def get_current_agent_name(self) -> Optional[str]:
+        """获取当前agent名称，从trace中获取最新的agent"""
+        if self.trace.trace_list:
+            return self.trace.trace_list[-1].agent_name
+        return None
+
+    def _should_retry_current_agent(self, current_agent: str) -> bool:
+        """
+        检查当前agent是否需要重试（基于解析失败）
+
+        Args:
+            current_agent: 当前agent名称
+
+        Returns:
+            是否需要重试
+        """
+        if not current_agent:
+            return False
+
+        # 检查是否可以重试（当前agent在valid_next_agents中）
+        valid_agents = self.get_valid_next_agent(current_agent)
+        if current_agent not in valid_agents:
+            return False
+
+        # 检查解析是否失败
+        if not self.last_parse_success:
+            logger.warning(f"Agent {current_agent} latest execution failed to parse, will retry")
+            return True
+
+        return False
+
+    async def _llm_decide_next_agent(self, current_agent: str, valid_next_agents: Set[str]) -> str:
+        """
+        使用LLM决策下一个agent，基于analyze.j2模板
+
+        Args:
+            current_agent: 当前agent名称
+            valid_next_agents: 有效的下一个agent集合
+
+        Returns:
+            str: 决策的下一个agent名称
         """
         try:
-            self.step += 1
-            action_type = ActionType.EXIT
-            parsed_code = ParsedCode()
-            suggestions = ""
+            # 获取Conductor解析器和格式说明
+            conductor_parser = self.get_conductor_parser()
+            format_instructions = conductor_parser.get_format_instructions()
 
-            trace_len = len(self.trace.trace_list)
-            pre_trace = self.trace.trace_list[trace_len - 1] if trace_len > 0 else None
-            if pre_trace:
-                action_type = pre_trace.action_type
-                result = pre_trace.result
+            # 获取最新的coder代码结果
+            agent_result = self.task_info.get('coder_code', '')
 
-                # 在coder_only模式下，跳过designer相关的检查
-                if self.coder_only_mode and action_type in [ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER]:
-                    logger.info(
-                        f"Task {self.task_id}, op_name: {self.op_name}, action_type: Skipping designer check in coder_only mode")
-                    return ActionType.EXIT, parsed_code, suggestions
+            # 获取错误日志（如果有）
+            error_log = self.task_info.get('verifier_error', '')
 
-                # 在coder_only模式下，跳过所有coder相关的self-check
-                if self.coder_only_mode and action_type in [ActionType.DO_CODER_DIRECT, ActionType.FIX_CODER]:
-                    logger.info(
-                        f"Task {self.task_id}, op_name: {self.op_name}, action_type: Skipping self-check for {action_type.name} in coder_only mode")
-                    # 解析代码并设置到parsed_code
-                    self._parse_and_set_code(action_type, result, parsed_code)
-                    return self._get_next_action(action_type, parsed_code, "")
+            # 构建输入数据（匹配analyze.j2模板）
+            input_data = {
+                'dsl': self.dsl,
+                'expert_suggestion': self.task_info.get('expert_suggestion', ''),
+                'op_name': self.op_name,
+                'framework': self.framework,
+                'task_desc': self.task_desc,
+                'agent_name': current_agent,
+                'agent_result': agent_result,
+                'error_log': error_log if error_log else None,
+                'valid_next_agents': ', '.join(sorted(valid_next_agents)),
+                'format_instructions': format_instructions,
+            }
 
-                if action_type in [ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER,
-                                   ActionType.DO_CODER, ActionType.FIX_CODER]:
-                    logger.info(f"Task {self.task_id}, op_name: {self.op_name}, action_type: Conductor Self-Check")
-                    return await self.self_check(action_type, result, parsed_code)
-                elif action_type == ActionType.VERIFY:
-                    if result == "False":
-                        error_log = pre_trace.error_log
-                        logger.info(
-                            f"Task {self.task_id}, op_name: {self.op_name}, action_type: Conductor Analyze Error")
-                        return await self.analyze_error(error_log, parsed_code)
-                    else:
-                        return ActionType.EXIT, parsed_code, suggestions
-            return action_type, parsed_code, suggestions
+            model_name = self.model_config.get('conductor')
+            content, formatted_prompt, reasoning = await self.run_llm(self.conductor_template, input_data, model_name)
+
+            # 保存LLM调用记录
+            self.trace.insert_conductor_agent_record(
+                res=content,
+                prompt=formatted_prompt,
+                reasoning=reasoning,
+                agent_name="decision"
+            )
+
+            # 解析LLM输出
+            agent_decision, suggestion = ResultProcessor.parse_conductor_decision(
+                content, conductor_parser, valid_next_agents
+            )
+
+            if agent_decision:
+                # 保存suggestion到task_info用于传递给下一个agent
+                if suggestion:
+                    self.task_info['conductor_suggestion'] = suggestion
+                return agent_decision
+
         except Exception as e:
-            logger.error(f"Task {self.task_id} failed: {e}")
+            logger.warning(f"LLM decision failed: {e}, falling back to default")
 
-    async def self_check(self, action_type: ActionType, result: str, parsed_code: ParsedCode):
-        """一个简单的分析模块，解析code，并判断是否需要fix"""
+        logger.warning(f"LLM decision failed for agent {current_agent}, ending task with finish")
+        return "finish"
 
-        # 在coder_only模式下，跳过designer相关的检查
-        if self.coder_only_mode and self._is_designer_action(action_type):
-            logger.debug("CoderOnly模式下跳过designer检查，直接跳转到下一步")
-            return self._get_next_action(action_type, parsed_code, "")
+    async def get_next_agent(self) -> str:
+        """
+        获取下一个要执行的agent
+        自动从trace中提取最新的agent并处理其结果，再决策下一个agent
+        """
+        # 这个方法只应该在执行过agent后调用，用于决策下一个agent
+        if not self.trace.trace_list:
+            raise ValueError("Error: get_next_agent() should only be called after agent execution.")
 
-        # 更新重试计数
-        self._update_fixed_step(action_type)
+        self.step_count += 1
 
-        # 解析代码并设置到parsed_code
-        code = self._parse_and_set_code(action_type, result, parsed_code)
+        # 清除上一次的conductor建议，避免影响新的决策
+        self.task_info.pop('conductor_suggestion', None)
 
-        # 检查是否超过重试限制
-        if self._should_force_next(action_type):
-            logger.debug("修复次数超过限制，强制跳转")
-            return self._get_force_next_action(action_type, parsed_code)
+        current_agent = self.get_current_agent_name()
 
-        # 检查代码是否为空
-        if not code:
-            logger.debug("代码为空，需要修复")
-            return self._handle_empty_code(action_type, parsed_code)
+        # 检查当前agent是否解析失败，如果失败且可以重试，就返回同一个agent
+        if self._should_retry_current_agent(current_agent):
+            logger.info(f"Agent {current_agent} parsing failed, retrying...")
+            return current_agent
 
-        # 运行LLM检查
-        return await self._run_llm_check(action_type, parsed_code)
+        # 根据yaml文件要求，获取next_agent_name
+        valid_next_agents = self.get_valid_next_agent(current_agent)
 
-    def _update_fixed_step(self, action_type: ActionType):
-        """更新重试计数"""
-        if action_type in [ActionType.DO_DESIGNER, ActionType.DO_CODER, ActionType.DO_CODER_DIRECT, ActionType.VERIFY]:
-            self.fixed_step = 0
-        elif action_type in [ActionType.FIX_DESIGNER, ActionType.FIX_CODER]:
-            self.fixed_step += 1
+        # 特殊处理verifier的结果
+        if current_agent == "verifier":
+            verifier_result = self.task_info.get('verifier_result', False)
+            if verifier_result:
+                return "finish"
+            else:
+                # 验证失败，排除finish选项
+                valid_next_agents.discard("finish")
 
-    def _parse_and_set_code(self, action_type: ActionType, result: str, parsed_code: ParsedCode) -> str:
-        """解析代码并设置到parsed_code对象"""
-        parsed = ParserFactory.robust_parse(result, self.code_parser) if result else None
-        code = parsed.code if parsed else ""
-
-        if self._is_designer_action(action_type):
-            parsed_code.aul_code = code
-            self.check_designer_input["aul_code"] = code
-            self.check_coder_input["aul_code"] = code
-        elif self._is_coder_action(action_type):
-            if "triton" in self.impl_type:
-                parsed_code.triton_code = code
-                self.check_coder_input["triton_code"] = code
-            elif self.impl_type == "swft":
-                parsed_code.swft_code = code
-                self.check_coder_input["swft_code"] = code
-                self.check_coder_input["supported_api"] = self.trace.base_doc.get("supported_api", "")
-        elif self._is_verifier_action(action_type):
-            self.analyze_error_input["designer_code"] = parsed_code.aul_code
-            if "triton" in self.impl_type:
-                self.analyze_error_input["coder_code"] = parsed_code.triton_code
-            elif self.impl_type == "swft":
-                self.analyze_error_input["coder_code"] = parsed_code.swft_code
-                self.analyze_error_input["supported_api"] = self.trace.base_doc.get("supported_api", "")
-
-        return code
-
-    def _should_force_next(self, action_type: ActionType) -> bool:
-        """检查是否应该强制跳转到下一步"""
-        force_actions = [ActionType.FIX_DESIGNER, ActionType.FIX_CODER]
-        return self.fixed_step > 1 and action_type in force_actions
-
-    def _get_force_next_action(self, action_type: ActionType, parsed_code: ParsedCode):
-        """获取强制跳转的下一步动作"""
-        next_actions = {
-            ActionType.FIX_DESIGNER: ActionType.DO_CODER,
-            ActionType.FIX_CODER: ActionType.VERIFY,
-            ActionType.VERIFY: ActionType.EXIT
-        }
-        next_action = next_actions.get(action_type, ActionType.EXIT)
-        return next_action, parsed_code, ""
-
-    def _handle_empty_code(self, action_type: ActionType, parsed_code: ParsedCode):
-        """处理代码为空的情况"""
-        if self._is_designer_action(action_type):
-            logger.warning("Designer输出代码为空，需要修复")
-            return ActionType.FIX_DESIGNER, parsed_code, ""
-        elif self._is_coder_action(action_type):
-            logger.warning("Coder输出代码为空，需要修复")
-            return ActionType.FIX_CODER, parsed_code, ""
-
-    async def _run_llm_check(self, action_type: ActionType, parsed_code: ParsedCode):
-        """运行LLM检查"""
-        if self._is_designer_action(action_type):
-            self.agent_name = f"Conductor -- [impl_type] {self.impl_type} -- [action] Check_Designer -- [op_name] {self.op_name}"
-            prompt = self.check_designer_prompt
-            input = self.check_designer_input
-        elif self._is_coder_action(action_type):
-            self.agent_name = f"Conductor -- [impl_type] {self.impl_type} -- [action] Check_Coder -- [op_name] {self.op_name}"
-            prompt = self.check_coder_prompt
-            input = self.check_coder_input
-
-        res, prompt, reasoning = await self.run_llm(
-            prompt,
-            input,
-            self.model_config["conductor_check"]
-        )
-        self.trace.insert_conductor_record(res, prompt, reasoning, action_type)
-
-        parsed = ParserFactory.robust_parse(res, self.check_parser)
-        if not parsed:
-            logger.warning("Conductor Self-Check 模块解析失败，默认推进流程")
-            return self._get_next_action(action_type, parsed_code, "")
-
-        result_correctness = parsed.result
-        suggestions = parsed.suggestions if parsed.suggestions else ""
-
-        if result_correctness == 1:
-            logger.debug("Conductor Self-Check 模块决策：不需要修复")
-            return self._get_next_action(action_type, parsed_code, "")
-        elif result_correctness == 0:
-            logger.debug("Conductor Self-Check 模块决策：需要修复")
-            return self._get_fix_action(action_type, parsed_code, suggestions)
+        # 根据valid_next_agents数量和mandatory_llm_analysis配置决定是否需要LLM分析
+        if len(valid_next_agents) == 0:
+            # 没有可选agent，直接结束
+            return "finish"
+        elif len(valid_next_agents) == 1:
+            # 只有一个可选agent，根据mandatory_llm_analysis判断是否需要LLM分析
+            next_agent = list(valid_next_agents)[0]
+            if current_agent in self.mandatory_llm_analysis:
+                # 需要强制LLM分析
+                logger.info(f"Agent {next_agent} requires mandatory LLM analysis")
+                decided_agent = await self._llm_decide_next_agent(current_agent, valid_next_agents)
+                return decided_agent
+            else:
+                # 直接返回该agent，无需LLM分析
+                logger.info(f"Direct transition to {next_agent} (no LLM analysis required)")
+                return next_agent
         else:
-            logger.warning("Conductor Self-Check 模块决策结果异常，默认推进流程")
-            return self._get_next_action(action_type, parsed_code, "")
-
-    async def run_llm_analyze_error(self, parsed_code: ParsedCode) -> Tuple[str, str, str]:
-        res, prompt, reasoning = await self.run_llm(
-            self.analyze_error_prompt,
-            self.analyze_error_input,
-            self.model_config["conductor_analyze"]
-        )
-        self.trace.insert_conductor_record(res, prompt, reasoning, ActionType.VERIFY)
-
-        parsed_result = ParserFactory.robust_parse(res, self.check_parser)
-        if parsed_result.result == 1:
-            action_type = ActionType.FIX_DESIGNER
-        elif parsed_result.result == 2:
-            action_type = ActionType.FIX_CODER
-
-        suggestions = parsed_result.suggestions
-        return action_type, parsed_code, suggestions
-
-    async def analyze_error(self, error_log: str, parsed_code: ParsedCode) -> Tuple[str, str, str]:
-        # 在coder_only模式下，直接返回FIX_CODER
-        if self.coder_only_mode:
-            logger.debug("CoderOnly模式下验证失败，直接返回FIX_CODER")
-            coder_code = self.find_last_parsed_code([ActionType.DO_CODER_DIRECT, ActionType.FIX_CODER])
-            if "triton" in self.impl_type:
-                parsed_code.triton_code = coder_code
-            elif self.impl_type == "swft":
-                parsed_code.swft_code = coder_code
-            return ActionType.FIX_CODER, parsed_code, error_log
-
-        # 原有的analyze_error逻辑
-        designer_code = self.find_last_parsed_code([ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER])
-        coder_code = self.find_last_parsed_code([ActionType.DO_CODER, ActionType.FIX_CODER])
-        parsed_code.aul_code = designer_code
-        if "triton" in self.impl_type:
-            parsed_code.triton_code = coder_code
-        elif self.impl_type == "swft":
-            parsed_code.swft_code = coder_code
-
-        # 更新重试计数
-        self._update_fixed_step(ActionType.VERIFY)
-
-        # 解析代码并设置到parsed_code
-        self._parse_and_set_code(ActionType.VERIFY, "", parsed_code)
-        self.analyze_error_input["error_log"] = error_log
-
-        return await self.run_llm_analyze_error(parsed_code)
-
-    def _is_designer_action(self, action_type: ActionType) -> bool:
-        """判断是否为Designer相关动作"""
-        return action_type in [ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER]
-
-    def _is_coder_action(self, action_type: ActionType) -> bool:
-        """判断是否为Coder相关动作"""
-        return action_type in [ActionType.DO_CODER, ActionType.DO_CODER_DIRECT, ActionType.FIX_CODER]
-
-    def _is_verifier_action(self, action_type: ActionType) -> bool:
-        """判断是否为Verifier相关动作"""
-        return action_type == ActionType.VERIFY
-
-    def _get_next_action(self, action_type: ActionType, parsed_code: ParsedCode, suggestions: str):
-        """获取下一步动作"""
-        next_actions = {
-            ActionType.DO_DESIGNER: ActionType.DO_CODER,
-            ActionType.FIX_DESIGNER: ActionType.DO_CODER,
-            ActionType.DO_CODER: ActionType.VERIFY,
-            ActionType.DO_CODER_DIRECT: ActionType.VERIFY,
-            ActionType.FIX_CODER: ActionType.VERIFY,
-            ActionType.VERIFY: ActionType.EXIT
-        }
-        next_action = next_actions.get(action_type, ActionType.EXIT)
-        return next_action, parsed_code, suggestions
-
-    def _get_fix_action(self, action_type: ActionType, parsed_code: ParsedCode, suggestions: str):
-        """获取修复动作"""
-        fix_actions = {
-            ActionType.DO_DESIGNER: ActionType.FIX_DESIGNER,
-            ActionType.FIX_DESIGNER: ActionType.FIX_DESIGNER,
-            ActionType.DO_CODER: ActionType.FIX_CODER,
-            ActionType.DO_CODER_DIRECT: ActionType.FIX_CODER,
-            ActionType.FIX_CODER: ActionType.FIX_CODER
-        }
-        fix_action = fix_actions.get(action_type, ActionType.EXIT)
-        return fix_action, parsed_code, suggestions
+            # 多个可选agent，调用LLM进行决策
+            logger.info(f"Multiple valid agents {valid_next_agents}, using LLM decision")
+            next_agent = await self._llm_decide_next_agent(current_agent, valid_next_agents)
+            return next_agent

@@ -69,13 +69,13 @@ async def run_mindspore_triton_single():
 
     task_pool = TaskPool()
     device_pool = DevicePool([0])
-    config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
+    config = load_config("triton")  # or load_config("/your-path-to-config/xxx_config.yaml")
 
     task = Task(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",
-        impl_type="triton",
+        dsl="triton",
         backend="ascend",
         arch="ascend910b4",
         config=config,

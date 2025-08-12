@@ -15,16 +15,28 @@
 import os
 
 
+def _raise_submodule_error(path_name, path_value):
+    """通用的子模块错误提示函数"""
+    error_msg = f"找不到 {path_name}: {path_value}\n"
+    error_msg += "请确保已正确下载相关子模块。\n"
+    error_msg += "解决方案：\n"
+    error_msg += "1. 如果已克隆仓库，请执行：git submodule update --init --recursive\n"
+    error_msg += "2. 或者在aikg目录下执行：git submodule update --init --remote 'thirdparty/*'"
+    raise FileNotFoundError(error_msg)
+
+
 def get_op_task_str(op_name):
     current_file_path = os.path.abspath(__file__)
     commom_path = os.path.dirname(current_file_path)
-    task_path = os.path.join(commom_path, 'resources', 'task', op_name + '_task.py')
+    task_path = os.path.join(commom_path, 'resources',
+                             'task', op_name + '_task.py')
     with open(task_path, "r", encoding="utf-8") as f:
         op_task_str = f.read()
     return op_task_str
 
 
-def get_benchmark_task(op_name, framework="mindspore"):
+def get_kernelbench_task_desc(op_name, framework="torch"):
+    """获取 KernelBench 任务描述"""
     current_file_path = os.path.abspath(__file__)
     commom_path = os.path.dirname(current_file_path)
     aikg_path = os.path.dirname(commom_path)
@@ -32,54 +44,140 @@ def get_benchmark_task(op_name, framework="mindspore"):
     if framework == "torch":
         # Path for torch benchmarks from the KernelBench submodule.
         # The submodule is at `aikg/thirdparty/KernelBench`, and benchmark files are inside `KernelBench/level1/` subdirectory.
-        base_dir = os.path.join(aikg_path, 'thirdparty', 'KernelBench', 'KernelBench', 'level1')
+        base_dir = os.path.join(
+            aikg_path, 'thirdparty', 'KernelBench', 'KernelBench', 'level1')
         # Files are directly in level1 directory with naming pattern: {number}_{name}.py
         task_path = os.path.join(base_dir, op_name + '.py')
     else:
         # Original path for mindspore and numpy benchmarks
-        base_dir = os.path.join(aikg_path, 'benchmark', 'kernelbench', framework)
-        task_path = os.path.join(base_dir, op_name, op_name + f'_{framework}.py')
+        base_dir = os.path.join(aikg_path, 'benchmark',
+                                'kernelbench', framework)
+        task_path = os.path.join(
+            base_dir, op_name, op_name + f'_{framework}.py')
+
+    # 检查文件是否存在
+    if not os.path.exists(task_path):
+        if framework == "torch":
+            _raise_submodule_error("KernelBench 任务文件", task_path)
+        else:
+            _raise_submodule_error(f"{framework} benchmark 任务文件", task_path)
 
     with open(task_path, "r", encoding="utf-8") as f:
         benchmark_task_str = f.read()
     return benchmark_task_str
 
 
-def get_benchmark_name(task_index_list, framework="mindspore"):
+def get_multikernelbench_task_desc(op_name, framework="torch"):
+    """获取 MultiKernelBench 任务描述"""
+    current_file_path = os.path.abspath(__file__)
+    commom_path = os.path.dirname(current_file_path)
+    aikg_path = os.path.dirname(commom_path)
+
+    # Path for MultiKernelBench benchmarks from reference directory
+    base_path = os.path.join(
+        aikg_path, 'thirdparty', 'MultiKernelBench', 'reference')
+
+    # 检查基础路径是否存在
+    if not os.path.exists(base_path):
+        _raise_submodule_error("MultiKernelBench 目录", base_path)
+
+    # Find the file in any category
+    for category in os.listdir(base_path):
+        category_path = os.path.join(base_path, category)
+        if os.path.isdir(category_path):
+            task_path = os.path.join(category_path, op_name + '.py')
+            if os.path.exists(task_path):
+                with open(task_path, "r", encoding="utf-8") as f:
+                    return f.read()
+
+    # If not found in any category, raise an error
+    _raise_submodule_error(f"MultiKernelBench 中的操作 {op_name}", f"已搜索目录: {base_path}")
+
+
+def get_kernelbench_op_name(task_index_list, framework="torch"):
+    """获取 KernelBench 操作名称列表"""
+    if task_index_list is None:
+        return None
+
     current_file_path = os.path.abspath(__file__)
     commom_path = os.path.dirname(current_file_path)
     aikg_path = os.path.dirname(commom_path)
 
     if framework == "torch":
-        # For torch, look in thirdparty KernelBench level1 directory
-        task_path = os.path.join(aikg_path, 'thirdparty', 'KernelBench', 'KernelBench', 'level1')
-        task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
-        matched_files = []
-
-        if os.path.exists(task_path):
-            for file in os.listdir(task_path):
-                if file.endswith('.py') and any(file.startswith(task_prefix) for task_prefix in task_prefix_list):
-                    # Remove .py extension to get the benchmark name
-                    benchmark_name = file[:-3]
-                    matched_files.append(benchmark_name)
-
-        return matched_files if matched_files else None
+        task_path = os.path.join(
+            aikg_path, 'thirdparty', 'KernelBench', 'KernelBench', 'level1')
     else:
         # Original logic for mindspore and numpy benchmarks
-        task_path = os.path.join(aikg_path, 'benchmark', 'kernelbench', framework)
-        task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
-        matched_folders = []
+        task_path = os.path.join(
+            aikg_path, 'benchmark', 'kernelbench', framework)
 
-        if os.path.exists(task_path):
-            for file in os.listdir(task_path):
-                if any(file.startswith(task_prefix) for task_prefix in task_prefix_list):
-                    matched_folders.append(file)
+    # 检查目录是否存在
+    if not os.path.exists(task_path):
+        if framework == "torch":
+            _raise_submodule_error("KernelBench 目录", task_path)
+        else:
+            _raise_submodule_error(f"{framework} benchmark 目录", task_path)
 
-        return matched_folders if matched_folders else None
+    task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
+    matched_files = []
+
+    if os.path.exists(task_path):
+        for file in os.listdir(task_path):
+            if file.endswith('.py') and any(file.startswith(task_prefix) for task_prefix in task_prefix_list):
+                # Remove .py extension to get the benchmark name
+                benchmark_name = file[:-3]
+                matched_files.append(benchmark_name)
+
+    return matched_files if matched_files else None
 
 
-def add_op_prefix(benchmark_name):
-    return "aikg_" + benchmark_name
+def get_multikernelbench_op_name(category="all", framework="torch", op_name=None):
+    """获取 MultiKernelBench 操作名称列表"""
+    current_file_path = os.path.abspath(__file__)
+    commom_path = os.path.dirname(current_file_path)
+    aikg_path = os.path.dirname(commom_path)
+
+    # For MultiKernelBench, use category-based reading
+    base_path = os.path.join(
+        aikg_path, 'thirdparty', 'MultiKernelBench', 'reference')
+
+    # 检查基础路径是否存在
+    if not os.path.exists(base_path):
+        _raise_submodule_error("MultiKernelBench 目录", base_path)
+
+    matched_files = []
+
+    if os.path.exists(base_path):
+        if category == "all":
+            # Get all available categories
+            categories = [d for d in os.listdir(
+                base_path) if os.path.isdir(os.path.join(base_path, d))]
+        else:
+            categories = [category] if os.path.isdir(
+                os.path.join(base_path, category)) else []
+
+        for cat in categories:
+            category_path = os.path.join(base_path, cat)
+            if os.path.exists(category_path):
+                for file in os.listdir(category_path):
+                    if file.endswith('.py'):
+                        # Remove .py extension to get the benchmark name
+                        operation_name = file[:-3]
+
+                        # 如果指定了 op_name，只返回匹配的 case
+                        if op_name is not None:
+                            if operation_name == op_name:
+                                matched_files.append(operation_name)
+                                break  # 找到匹配的就停止搜索
+                        else:
+                            matched_files.append(operation_name)
+
+    return matched_files if matched_files else None
+
+
+def add_op_prefix(op_name, benchmark="KernelBench"):
+    """为操作名称添加前缀，格式：aikg_{benchmark}_{op_name}"""
+    return f"aikg_{benchmark.lower()}_{op_name}"
 
 
 def get_folder_names(folder_path):

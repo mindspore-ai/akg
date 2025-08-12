@@ -14,99 +14,133 @@
 
 """
 大模型推理痕迹追踪模块
+只负责存储原始数据，不进行解析逻辑
 """
 import os
-from ai_kernel_generator.core.utils import Record, ActionType
-from ai_kernel_generator.utils.common_utils import ParserFactory
+from dataclasses import dataclass
+
+
+@dataclass
+class AgentRecord:
+    """Agent记录类，存储原始数据"""
+    agent_name: str
+    result: str = ""
+    prompt: str = ""
+    reasoning: str = ""
+    error_log: str = ""
+    profile_res: tuple = ()
 
 
 class Trace:
     """
-    大模型推理痕迹追踪类，用于记录大模型的推理过程。
+    大模型推理痕迹追踪类
+    职责：存储原始数据，保存文件，不负责解析逻辑
     """
 
     def __init__(self, op_name, task_id, log_dir: str):
         self.op_name = op_name
         self.task_id = task_id
         self.log_dir = log_dir
-        self.code_parser = ParserFactory.get_code_parser()
+        self.trace_list = []  # 存储AgentRecord记录
 
-        self.trace_list = []  # 存储追踪记录的列表
-        self.base_doc = {}  # 存储基础文档
-
-    def save_parameters_to_files(self, action_type: ActionType, params: list):
-        """统一保存参数到文件的私有方法"""
+    def save_parameters_to_files(self, agent_name: str, params: list):
+        """保存参数到文件"""
         expanded_log_dir = os.path.expanduser(self.log_dir)
         target_dir = os.path.join(expanded_log_dir, self.op_name)
         os.makedirs(target_dir, exist_ok=True)
 
-        base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_{action_type.value}_"
+        base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_{agent_name}_"
 
         for param_name, content in params:
             file_path = os.path.join(target_dir, f"{base_name}{param_name}.txt")
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(str(content))
 
-    def insert_designer_or_coder_record(self, res: str, prompt: str, reasoning: str, action_type: ActionType) -> None:
+    def insert_agent_record(self, agent_name: str, result: str = "", prompt: str = "", reasoning: str = "",
+                            error_log: str = "", profile_res: tuple = ()) -> None:
         """
-        插入设计器或编码器的记录。
+        插入agent执行记录（只保存原始数据，不进行解析）
 
         Args:
-            res (str): 结果。
-            prompt (str): 提示。
-            reasoning (str): 推理过程。
-            action_type (ActionType): 操作类型。
+            agent_name: agent名称（designer, coder, verifier）
+            result: 执行结果（原始json字符串）
+            prompt: 使用的prompt
+            reasoning: 推理过程
+            error_log: 错误日志（主要用于verifier）
+            profile: 性能数据
         """
-        if action_type not in [ActionType.DO_DESIGNER, ActionType.DO_CODER, ActionType.FIX_DESIGNER, ActionType.FIX_CODER, ActionType.DO_CODER_DIRECT]:
-            raise ValueError("action_type must be Designer or Coder")
-
-        record = Record(action_type=action_type, result=res, prompt=prompt, reasoning=reasoning)
+        record = AgentRecord(
+            agent_name=agent_name,
+            result=result,
+            prompt=prompt,
+            reasoning=reasoning,
+            error_log=error_log,
+            profile_res=profile_res
+        )
         self.trace_list.append(record)
 
-        try:
-            parsed_result = ParserFactory.robust_parse(res, self.code_parser)
-            res_code = parsed_result.code
-            res_description = parsed_result.description
-            res_to_save = res_code + "\n\n\n" + "'''" + "\n" + res_description + "\n" + "'''"
-        except:
-            res_to_save = res
-
-        self.save_parameters_to_files(action_type, [
-            ('result', res_to_save),
-            ('prompt', prompt),
-            ('reasoning', reasoning)
-        ])
-
-    def insert_verifier_record(self, verify_res: str, verify_log: str, profile: str, action_type=ActionType.VERIFY) -> None:
-        """
-        插入测试器的记录。
-
-        Args:
-            verify_log (str): 验证日志。
-            profile (str): 性能数据。
-            action_type (ActionType, optional): 操作类型。默认为ActionType.VERIFY。
-        """
-        if action_type != ActionType.VERIFY:
-            raise ValueError("action_type must be Verify")
-
-        record = Record(action_type=action_type, result=verify_res, error_log=verify_log, profile=profile)
-        self.trace_list.append(record)
-        if verify_log != "":
-            self.save_parameters_to_files(action_type, [
-                ('error_log', verify_log)
+        # 对于所有agent，保存原始json数据
+        if agent_name in ["designer", "coder"]:
+            self.save_parameters_to_files(agent_name, [
+                ('result', result),  # 保存原始json
+                ('prompt', prompt),
+                ('reasoning', reasoning)
             ])
+        elif agent_name == "verifier":
+            # verifier记录错误日志
+            if error_log:
+                self.save_parameters_to_files(agent_name, [
+                    ('error_log', error_log)
+                ])
 
-    def insert_conductor_record(self, res: str, prompt: str, reasoning: str, action_type: ActionType) -> None:
+    def save_parsed_code(self, agent_name: str, params: list) -> None:
+        """
+        保存解析后的内容到一个文件（由conductor调用）
+
+        Args:
+            agent_name: agent名称
+            params: 参数列表，格式为 [('参数名', '内容'), ...]
+        """
+        if not params:
+            return
+
+        # 保存到recorder目录，与trace记录分隔开
+        expanded_log_dir = os.path.expanduser(self.log_dir)
+        target_dir = os.path.join(expanded_log_dir, self.op_name, "recorder")
+        os.makedirs(target_dir, exist_ok=True)
+
+        # 生成单个文件
+        base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_{agent_name}_parsed.txt"
+        file_path = os.path.join(target_dir, base_name)
+
+        # 将所有内容合并到一个文件，每个部分用几个回车隔开
+        content_parts = []
+        for param_name, content in params:
+            if content:
+                content_parts.append(f"=== {param_name} ===\n{content}")
+
+        if content_parts:
+            combined_content = "\n\n\n".join(content_parts)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(combined_content)
+
+    def insert_conductor_agent_record(self, res: str, prompt: str, reasoning: str, agent_name: str) -> None:
+        """
+        插入conductor相关的记录（包括LLM决策、检查等）
+
+        Args:
+            res: 结果内容
+            prompt: prompt内容
+            reasoning: 推理过程
+            agent_name: agent名称或操作类型（如decision、check、analyze等）
+        """
         expanded_log_dir = os.path.expanduser(self.log_dir)
         target_dir = os.path.join(expanded_log_dir, self.op_name, "conductor")
         os.makedirs(target_dir, exist_ok=True)
 
-        if action_type in [ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER]:
-            base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_CheckDesigner_"
-        elif action_type in [ActionType.DO_CODER, ActionType.FIX_CODER]:
-            base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_CheckCoder_"
-        elif action_type == ActionType.VERIFY:
-            base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_AnalyzeError_"
+        # 直接使用agent_name，不进行转换
+        base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_{agent_name}_decision_"
+
         params = [
             ('result', res),
             ('prompt', prompt),

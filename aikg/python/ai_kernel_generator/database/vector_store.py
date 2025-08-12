@@ -83,11 +83,11 @@ class VectorStore:
             
             backend = metadata.get('backend', '')
             arch = metadata.get('arch', '')
-            impl_type = metadata.get('impl_type', '')
-            feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
+            dsl = metadata.get('dsl', '')
+            feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
             # 创建检索文档
             doc = Document(
-                page_content=", ".join([f"{k}: {v}" for k, v in metadata.items() if k not in {'backend', 'arch', 'impl_type', 'profile'}]),
+                page_content=", ".join([f"{k}: {v}" for k, v in metadata.items() if k not in {'backend', 'arch', 'dsl', 'profile'}]),
                 metadata={
                     "file_path": str(op_subdir),
                     "feature_invariants": feature_invariants
@@ -112,9 +112,9 @@ class VectorStore:
         vector_store.save_local(self.index_path)
         return vector_store
 
-    def insert(self, backend: str, arch: str, impl_type: str, md5_hash: str):
+    def insert(self, backend: str, arch: str, dsl: str, md5_hash: str):
         """向向量存储添加新的算子特征文档"""
-        metadata_path = Path(self.database_path) / "operators" / arch / impl_type / md5_hash / 'metadata.json'
+        metadata_path = Path(self.database_path) / "operators" / arch / dsl / md5_hash / 'metadata.json'
         if not metadata_path.exists():
             raise ValueError(f"算子元数据文件 {str(metadata_path)} 不存在")
         
@@ -125,10 +125,10 @@ class VectorStore:
         op_dir = metadata_path.parent
 
         # 创建文档对象
-        feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
+        feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
         # 创建检索文档
         doc = Document(
-            page_content=", ".join([f"{k}: {v}" for k, v in metadata.items() if k not in {'backend', 'arch', 'impl_type', 'profile'}]),
+            page_content=", ".join([f"{k}: {v}" for k, v in metadata.items() if k not in {'backend', 'arch', 'dsl', 'profile'}]),
             metadata={
                 "file_path": str(op_dir),
                 "feature_invariants": feature_invariants

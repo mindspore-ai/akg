@@ -1,65 +1,133 @@
 # Conductor Design Document
 
 ## Overview
-Conductor is the task commander component in the AI Kernel Generator. It inherits from `AgentBase` and is responsible for managing and coordinating the entire task execution flow. By checking the output results of various agents, it decides the next action to take and provides intelligent analysis and repair guidance when errors occur.
+Conductor is the task commander component in the AI Kernel Generator. It inherits from `AgentBase` and is responsible for managing and coordinating the entire task execution flow. Based on workflow.yaml configuration files, it provides intelligent workflow management by recording and analyzing the output results of various agents, making decisions on the next agent to execute, and providing intelligent guidance.
 
 ## Core Functions
-- **Task Flow Management**: Coordinates the execution order of Designer, Coder, and Verifier.
-- **Code Self-Verification**: Performs quality checks on the generated design documents and implementation code to decide whether to roll back for repairs.
-- **Intelligent Error Analysis**: Analyzes the reasons for test failures and provides suggestions for fixes.
-- **State Tracking and Recording**: Maintains a complete trace of task execution.
-- **Retry Mechanism Control**: Manages the number of repair retries to avoid infinite loops.
+- **Configuration-Based Workflow Management**: Dynamically manages agent execution flow based on workflow.yaml configuration
+- **Intelligent Agent Decision Making**: Uses LLM to analyze current state and decide the next agent to execute
+- **Execution Result Recording and Parsing**: Records all agent execution results and performs structured parsing
+- **State Tracking and Trace Management**: Maintains complete task execution traces through Trace
+- **Retry and Error Handling**: Intelligently handles parsing failures with agent retry mechanisms
+- **Flow Control and Limitations**: Manages execution steps and repeat limitations to avoid infinite loops
 
 ## Initialization Parameters
 | Parameter Name | Type/Required | Description |
 |---------|---------|---------|
-| op_name | str (Required) | Operation name, identifying the specific kernel. |
-| task_id | str (Required) | Unique identifier for the task. |
-| log_dir | str (Required) | Path to the log storage directory. |
-| impl_type | str (Required) | Implementation type: "triton" or "swft". |
-| model_config | dict (Required) | LLM model configuration, including `conductor_check` and `conductor_analyze` configurations. |
+| op_name | str (Required) | Kernel name, identifying the specific kernel |
+| task_desc | str (Required) | Task description, detailing the kernel functional requirements |
+| task_id | str (Required) | Unique identifier for the task |
+| dsl | str (Required) | Implementation type: "triton", "swft", etc. |
+| framework | str (Required) | Frontend framework: "mindspore", "torch", "numpy", etc. |
+| arch | str (Required) | Hardware architecture: "ascend910b4", "a100", etc. |
+| workflow_config_path | str (Optional) | Workflow configuration file path, obtained from config if not provided |
+| config | dict (Required) | Complete configuration dictionary, including log_dir, agent_model_config, etc. |
 
-## Execution Flow get_next_action
+## Workflow Configuration System
 
-1. **Trace Analysis Stage**
-   - Get the record of the previous step (pre_trace).
-   - Determine the execution path based on `action_type`.
-   - Update the step counter.
+### Configuration File Structure
+Conductor manages the entire execution flow based on workflow.yaml configuration files, which mainly include:
 
-2. **Decision Execution Stage**
-   - After Designer/Coder completes: Execute `self_check()` for code inspection.
-   - After Verifier fails: Execute `analyze_error()` for error analysis.
-   - On success or exit condition met: Return `EXIT`.
+- **agent_info**: Defines possible next steps and output formats for each agent
+- **start_agent**: Specifies the starting agent
+- **limitation_info**: Sets execution limits (maximum steps, repeat limits, etc.)
+- **mandatory_analysis**: List of agents requiring mandatory LLM analysis
 
-3. **Result Return**
-   - Returns a triplet: (next action type, parsed code object, repair suggestion).
+### Example Configuration
+```yaml
+agent_info:
+  designer:
+    possible_next_agent: [coder]
+    output_format:
+      parser_name: designer_parser
+  coder:
+    possible_next_agent: [verifier]
+  verifier:
+    possible_next_agent: [finish, coder]
+start_agent: designer
+mandatory_analysis: [verifier]
+limitation_info:
+  required:
+    max_step: 20
+```
+
+## Execution Flow get_next_agent
+
+1. **State Update Stage**
+   - Increment step counter (step_count)
+   - Clear previous conductor suggestions
+   - Get current agent name
+
+2. **Retry Check Stage**
+   - Check if current agent parsing failed
+   - If parsing failed and retryable, return same agent for retry
+
+3. **Decision Execution Stage**
+   - Get valid next agent options based on workflow configuration
+   - Special handling for verifier results (success leads to finish, failure excludes finish option)
+   - Decide whether LLM analysis is needed based on option count and mandatory_analysis configuration
+
+4. **Intelligent Decision Making**
+   - No options: directly finish
+   - Single option and not mandatory analysis: direct execution
+   - Single option with mandatory analysis or multiple options: call LLM for intelligent decision
 
 ## Key Method Descriptions
 
-### self_check() - Code Self-Check
-- **Function**: Checks the quality of the code output by Designer or Coder.
-- **Process**: Parse code → Check retry limit → LLM performs quality assessment → Decide whether to perform a repair.
-- **Output**: Next action (continue/repair) and suggestion (if a repair is needed).
+### record_agent_execution() - Agent Execution Recording
+- **Function**: Records agent execution results, performs parsing and updates task information
+- **Process**: Save raw data to trace → Parse results using appropriate parser → Update task_info
+- **Parameters**: Agent name, execution result, prompt, reasoning process, error log, performance results
+- **Returns**: Whether parsing was successful
 
-### analyze_error() - Error Analysis  
-- **Function**: Analyzes the root cause of a test failure.
-- **Process**: Extract the most recent matching Designer and Coder code → LLM analyzes the error log → Pinpoint the source of the problem (Designer/Coder).
-- **Output**: Repair target (Designer/Coder) and specific repair suggestions.
+### _llm_decide_next_agent() - LLM Intelligent Decision Making
+- **Function**: Uses LLM to analyze current state and decide the next agent
+- **Process**: Build input data → Call LLM → Parse decision results → Save suggestions
+- **Template**: Uses conductor/analyze.j2 template for analysis
+- **Input**: Current agent, agent results, error logs, valid options, etc.
+- **Output**: Name of the decided next agent
 
-### initialize_check_docs() - Document Initialization
-- **Function**: Initializes input data for various check templates based on `trace.base_doc`.
-- **Supports**: Designer checks, Triton/SWFT Coder checks, error analysis.
+### set_task_info() - Task Information Initialization
+- **Function**: Initializes task information and base documents based on workflow configuration
+- **Support**: Dynamic field initialization, base document integration
 
 ## User-Defined Extensions
 
 ### Extension Overview
-Referring to the AIKG project flowchart, the **Conductor module acts as the scheduling module**, centrally controlling the task flow and making decisions based on information stored in the `trace`. Users can freely modify or extend this module. **The main entry point for modification is the `get_next_action()` function**. Users can control the task flow according to their own designed flowcharts and judgment conditions.
+**The Conductor module serves as an intelligent scheduling center**, controlling task flow based on workflow.yaml configuration files and LLM intelligent analysis. Users can customize extensions through the following approaches:
 
-### Default Execution Flow
-Taking the typical task flow as an example:
+1. **Configuration File Extension**: Modify or create new workflow.yaml configuration files to define custom agent flows
+2. **Code Extension**: Modify the `get_next_agent()` function to add custom decision logic
+3. **Template Extension**: Modify the conductor/analyze.j2 template to customize LLM analysis prompts
 
-- `DO_DESIGNER` → `conductor (self_check)` → `FIX_DESIGNER` / `DO_CODER`
-- `DO_CODER` → `conductor (self_check)` → `FIX_CODER` / `VERIFY`  
-- `VERIFY` → `conductor (error_analyze)` → `FIX_DESIGNER` / `FIX_CODER`
+### Configuration File Extension Example
+Users can create custom workflow configurations, such as adding new agents or modifying flows:
 
-Through the Conductor, the various modules are connected to **form a self-checking loop** for intelligently analyzing tasks and generating kernels. 
+```yaml
+agent_info:
+  designer:
+    possible_next_agent: [coder, designer]  # Support designer self-repair
+  coder:
+    possible_next_agent: [verifier, coder]
+  verifier:
+    possible_next_agent: [finish, designer, coder, optimizer]  # Add optimizer agent
+  optimizer:
+    possible_next_agent: [verifier, optimizer]
+start_agent: designer
+mandatory_analysis: [verifier, optimizer]  # Force LLM analysis for critical agents
+```
+
+### Typical Execution Flow
+Based on default configuration:
+
+- `designer` → `conductor (decision)` → `coder`
+- `coder` → `conductor (decision)` → `verifier`  
+- `verifier` → `conductor (intelligent analysis)` → `finish` / `coder`
+
+Through Conductor's intelligent scheduling, agents form **adaptive execution loops**, dynamically selecting optimal paths based on task state.
+
+### Extension Key Points
+- **Main Extension Entry**: `get_next_agent()` function and workflow.yaml configuration files
+- **Decision Logic**: Custom LLM decision flow can be implemented in `_llm_decide_next_agent()`
+- **State Management**: Access complete execution state through `task_info` and `trace`
+- **Parser Extension**: Support result parsing for new agents through `record_agent_execution()` 

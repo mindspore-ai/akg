@@ -61,23 +61,24 @@ async def run_numpy_swft_single():
 
     task_pool = TaskPool()
     device_pool = DevicePool([0])
-    config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
+    config = load_config("swft")  # or load_config("/your-path-to-config/xxx_config.yaml")
 
     task = Task(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",
-        impl_type="swft",
+        dsl="swft",
         backend="ascend",
         arch="ascend310p3",
         config=config,
         device_pool=device_pool,
-        framework="numpy"
+        framework="numpy",
+        workflow="coder_only_workflow"
     )
 
     task_pool.create_task(task.run)
     results = await task_pool.wait_all()
-    for op_name, result in results:
+    for op_name, result, _ in results:
         if result:
             print(f"Task {op_name} passed")
         else:

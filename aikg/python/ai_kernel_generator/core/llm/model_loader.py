@@ -90,6 +90,15 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
             model_params["api_base"] = "http://localhost:11434"
             logger.debug(f"未设置环境变量 {OLLAMA_API_BASE_ENV}，使用默认 api_base: {model_params['api_base']}")
 
+        # 记录连接信息
+        logger.info(
+            f"创建Ollama模型 '{name}': api_base={model_params['api_base']}, model={model_params.get('model', 'N/A')}")
+        # 显示环境变量信息
+        if OLLAMA_API_BASE_ENV in os.environ:
+            logger.info(f"  环境变量 {OLLAMA_API_BASE_ENV}: {os.environ[OLLAMA_API_BASE_ENV]}")
+        else:
+            logger.info(f"  环境变量 {OLLAMA_API_BASE_ENV}: 未设置 (使用默认值)")
+
         # 创建Ollama模型实例
         model = ChatOllama(
             base_url=model_params.pop("api_base"),
@@ -108,6 +117,15 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         else:
             model_params["api_base"] = "http://localhost:8001/v1"
             logger.debug(f"未设置环境变量 {VLLM_API_BASE_ENV}，使用默认 api_base: {model_params['api_base']}")
+
+        # 记录连接信息
+        logger.info(
+            f"创建VLLM模型 '{name}': api_base={model_params['api_base']}, model={model_params.get('model', 'N/A')}")
+        # 显示环境变量信息
+        if VLLM_API_BASE_ENV in os.environ:
+            logger.info(f"  环境变量 {VLLM_API_BASE_ENV}: {os.environ[VLLM_API_BASE_ENV]}")
+        else:
+            logger.info(f"  环境变量 {VLLM_API_BASE_ENV}: 未设置 (使用默认值)")
 
         # 设置20分钟的timeout
         timeout = httpx.Timeout(60, read=60 * 20)
@@ -138,6 +156,19 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         # 提取模型参数 - 只排除api_key_env
         model_params = {k: v for k, v in preset_config.items()
                         if k != "api_key_env"}
+
+        # 记录连接信息
+        logger.info(
+            f"创建Langchain模型 '{name}': api_base={model_params.get('api_base', 'N/A')}, model={model_params.get('model', 'N/A')}")
+        # 显示环境变量信息
+        if api_key_env in os.environ:
+            api_key_value = os.environ[api_key_env]
+            # 只显示前8位和后4位，保护API密钥安全
+            masked_key = api_key_value[:8] + "*" * (len(api_key_value) - 12) + \
+                api_key_value[-4:] if len(api_key_value) > 12 else "***"
+            logger.info(f"  环境变量 {api_key_env}: {masked_key}")
+        else:
+            logger.info(f"  环境变量 {api_key_env}: 未设置")
 
         timeout = httpx.Timeout(60, read=60 * 10)
         # 创建DeepSeek模型实例

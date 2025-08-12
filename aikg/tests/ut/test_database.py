@@ -17,7 +17,7 @@ import asyncio
 from pathlib import Path
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.database.database import Database, DEFAULT_DATABASE_PATH, RetrievalStrategy
-from ..utils import get_benchmark_name
+from ..utils import get_kernelbench_op_name
 
 DEFAULT_BENCHMARK_PATH = Path(get_project_root()).parent.parent / "benchmark"
 
@@ -33,33 +33,45 @@ def gen_task_code(framework_path: str = "", impl_path: str = ""):
 
 
 @pytest.mark.level0
+@pytest.mark.use_model
 @pytest.mark.asyncio
-async def test_insert():
+async def test_insert_and_delete():
     # 初始化系统
-    db_system = Database()
+    db_system = Database(random_mode=True)
 
     arch = "ascend310p3"
     backend = "ascend"
     framework = "numpy"
-    impl_type = "swft"
+    dsl = "swft"
 
     # 插入示例
     id_list = [49, 50]
-    benchmark_name = get_benchmark_name(id_list)
+    benchmark_name = get_kernelbench_op_name(id_list)
     for i, op_name in enumerate(benchmark_name):
         name = op_name.strip(f"{str(id_list[i])}_")
         impl_code, framework_code = gen_task_code(
             framework_path=DEFAULT_BENCHMARK_PATH / "kernelbench" / framework / op_name / f"{op_name}_{framework}.py",
-            impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
+            impl_path=DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py"
         )
-        await db_system.insert(impl_code, framework_code, backend, arch, impl_type, framework)
+        await db_system.insert(impl_code, framework_code, backend, arch, dsl, framework)
+
+    # 删除示例
+    id_list = [49, 50]
+    benchmark_name = get_kernelbench_op_name(id_list)
+    for i, op_name in enumerate(benchmark_name):
+        name = op_name.strip(f"{str(id_list[i])}_")
+        impl_code, _ = gen_task_code(impl_path=DEFAULT_DATABASE_PATH / dsl /
+                                     arch / name / "aigen" / f"{name}_{dsl}.py")
+        await db_system.delete(impl_code, backend, arch, dsl)
 
 
 @pytest.mark.level0
+@pytest.mark.use_model
+@pytest.mark.use_vector_store
 @pytest.mark.asyncio
 @pytest.mark.parametrize("strategy_mode", [
-    (RetrievalStrategy.RANDOMICITY),
-    (RetrievalStrategy.SIMILARITY),
+    (RetrievalStrategy.NAIVETY),
+    (RetrievalStrategy.MMR),
     # (RetrievalStrategy.OPTIMALITY),
     (RetrievalStrategy.RULE)
 ])
@@ -70,41 +82,33 @@ async def test_samples(strategy_mode):
     arch = "ascend310p3"
     backend = "ascend"
     framework = "numpy"
-    impl_type = "swft"
+    dsl = "swft"
 
     # 查询示例
     benchmark_id = 53
-    op_name = get_benchmark_name([benchmark_id])[0]
+    op_name = get_kernelbench_op_name([benchmark_id])[0]
     name = op_name.strip(f"{str(benchmark_id)}_")
-    impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
+    impl_path = DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py"
     impl_code = Path(impl_path).read_text()
     results = await db_system.samples(
-        output_content=["impl_code"], strategy_mode = strategy_mode,
-        impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type, sample_num=3
+        output_content=["impl_code"],
+        strategy_mode=strategy_mode,
+        impl_code=impl_code,
+        backend=backend,
+        arch=arch,
+        dsl=dsl,
+        sample_num=3
     )
+    print('\n' + '-' * 80)
+    for result in results:
+        print('\n'.join(result["impl_code"].split("\n")[:10]))
+        print('-' * 80)
+
 
 @pytest.mark.level0
+@pytest.mark.use_model
+@pytest.mark.use_vector_store
 @pytest.mark.asyncio
-async def test_delete():
-    # 初始化系统
-    db_system = Database()
-
-    arch = "ascend310p3"
-    backend = "ascend"
-    framework = "numpy"
-    impl_type = "swft"
-
-    # 删除示例
-    benchmark_id = 50
-    op_name = get_benchmark_name([benchmark_id])[0]
-    name = op_name.strip(f"{str(benchmark_id)}_")
-    impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
-    impl_code = Path(impl_path).read_text()
-    await db_system.delete(impl_code, backend, arch, impl_type)
-
-
-@pytest.mark.asyncio
-@pytest.mark.level0
 async def test_async_database():
     # 初始化系统
     db_system = Database()
@@ -112,31 +116,38 @@ async def test_async_database():
     arch = "ascend310p3"
     backend = "ascend"
     framework = "numpy"
-    impl_type = "swft"
+    dsl = "swft"
 
     # 定义并发任务: 2个添加任务、2个查询任务、2个删除任务
     async def insert_task(benchmark_id):
-        op_name = get_benchmark_name([benchmark_id])[0]
+        op_name = get_kernelbench_op_name([benchmark_id])[0]
         name = op_name.strip(f"{str(benchmark_id)}_")
         impl_code, framework_code = gen_task_code(
             framework_path=DEFAULT_BENCHMARK_PATH / "kernelbench" / framework / op_name / f"{op_name}_{framework}.py",
-            impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
+            impl_path=DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py"
         )
-        return await db_system.insert(impl_code, framework_code, backend, arch, impl_type, framework)
+        return await db_system.insert(impl_code, framework_code, backend, arch, dsl, framework)
 
     async def sample_task(benchmark_id):
-        op_name = get_benchmark_name([benchmark_id])[0]
+        op_name = get_kernelbench_op_name([benchmark_id])[0]
         name = op_name.strip(f"{str(benchmark_id)}_")
-        impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
+        impl_path = DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py"
         impl_code = Path(impl_path).read_text()
-        return await db_system.samples(output_content=[], impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type, sample_num=3)
+        return await db_system.samples(
+            output_content=["impl_code"],
+            impl_code=impl_code,
+            backend=backend,
+            arch=arch,
+            dsl=dsl,
+            sample_num=3
+        )
 
     async def delete_task(benchmark_id):
-        op_name = get_benchmark_name([benchmark_id])[0]
+        op_name = get_kernelbench_op_name([benchmark_id])[0]
         name = op_name.strip(f"{str(benchmark_id)}_")
-        impl_path=DEFAULT_DATABASE_PATH / impl_type / arch / name / "aigen" / f"{name}_{impl_type}.py"
+        impl_path = DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py"
         impl_code = Path(impl_path).read_text()
-        return await db_system.delete(impl_code, backend, arch, impl_type)
+        return await db_system.delete(impl_code, backend, arch, dsl)
 
     # 创建多个并发任务
     tasks = [
@@ -150,3 +161,54 @@ async def test_async_database():
 
     # 执行所有并发任务
     return await asyncio.gather(*tasks)
+
+
+@pytest.mark.level0
+@pytest.mark.use_model
+@pytest.mark.asyncio
+async def test_random_database():
+    # 初始化系统
+    db_system = Database(random_mode=True)
+
+    arch = "ascend310p3"
+    backend = "ascend"
+    framework = "numpy"
+    dsl = "swft"
+
+    # 插入示例
+    id_list = [49, 50]
+    benchmark_name = get_kernelbench_op_name(id_list)
+    for i, op_name in enumerate(benchmark_name):
+        name = op_name.strip(f"{str(id_list[i])}_")
+        impl_code, framework_code = gen_task_code(
+            framework_path=DEFAULT_BENCHMARK_PATH / "kernelbench" / framework / op_name / f"{op_name}_{framework}.py",
+            impl_path=DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py"
+        )
+        await db_system.insert(impl_code, framework_code, backend, arch, dsl, framework)
+
+    # 查询示例
+    benchmark_id = 49
+    op_name = get_kernelbench_op_name([benchmark_id])[0]
+    name = op_name.strip(f"{str(benchmark_id)}_")
+    impl_path = DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py"
+    impl_code = Path(impl_path).read_text()
+    results = await db_system.samples(
+        output_content=["impl_code"],
+        impl_code=impl_code,
+        backend=backend,
+        arch=arch,
+        dsl=dsl,
+        sample_num=3
+    )
+    print('\n' + '-' * 80)
+    for result in results:
+        print('\n'.join(result["impl_code"].split("\n")[:10]))
+        print('-' * 80)
+
+    # 删除示例
+    benchmark_id = 49
+    op_name = get_kernelbench_op_name([benchmark_id])[0]
+    name = op_name.strip(f"{str(benchmark_id)}_")
+    impl_path = DEFAULT_DATABASE_PATH / dsl / arch / name / "aigen" / f"{name}_{dsl}.py"
+    impl_code = Path(impl_path).read_text()
+    await db_system.delete(impl_code, backend, arch, dsl)

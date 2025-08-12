@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_EVOLVE_DATABASE_PATH = Path(get_project_root()).parent.parent / "evolve_database"
 
 class EvolveDatabase(Database):
-    def __init__(self, config_path: str = "", database_path: str = ""):
-        super().__init__(config_path, database_path)
+    def __init__(self, config_path: str = "", database_path: str = "", random_mode: bool = False):
+        super().__init__(config_path, database_path, random_mode)
         self.database_path = database_path or str(DEFAULT_EVOLVE_DATABASE_PATH)
 
     def optimality_search(self):
@@ -49,21 +49,22 @@ class EvolveDatabase(Database):
         return [Document(page_content="", metadata={"file_path": min_path})] if min_path else []
 
     async def samples(self, output_content:List[str], sample_num:int = 5, impl_code: str = "", framework_code:str = "",
-                      backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
+                      backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
         """
         Evolve采样方案，根据当前算子的特征信息，从数据库中采样出优化性和随机性的算子实现。
         """
-        features = await self.feature_extractor(impl_code, framework_code, backend, arch, impl_type)
-        features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
-        feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
+        if not self.random_mode:
+            features = await self.extract_features(impl_code, framework_code, backend, arch, dsl)
+            features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
+            feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
 
         result = []
-        optimality_docs = self.optimality_search()
-        optimality_res = self.get_output_content(output_content, RetrievalStrategy.OPTIMALITY, optimality_docs, impl_type, framework)
+        # TODO:
+        # optimality_docs = self.optimality_search()
+        # optimality_res = self.get_output_content(output_content, RetrievalStrategy.OPTIMALITY, optimality_docs, dsl, framework)
         
-        random_docs = self.randomicity_search(features_str, feature_invariants, sample_num - 1)
-        random_res = self.get_output_content(output_content, RetrievalStrategy.RANDOMICITY, random_docs, impl_type, framework)
+        random_res = self.randomicity_search(output_content, sample_num - 1, backend, arch, dsl, framework)
         
-        result.extend(optimality_res)
+        # result.extend(optimality_res)
         result.extend(random_res)
         return result

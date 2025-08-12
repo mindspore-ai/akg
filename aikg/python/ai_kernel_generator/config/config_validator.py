@@ -21,7 +21,6 @@ from ai_kernel_generator.utils.common_utils import load_yaml
 from ai_kernel_generator import get_project_root
 
 logger = logging.getLogger(__name__)
-DEFAULT_CONFIG = Path(__file__).parent / "default_config.yaml"
 
 
 class ConfigValidator:
@@ -34,31 +33,18 @@ class ConfigValidator:
 
     def __init__(self, config_path: str):
         self.config = load_yaml(config_path)
-        self.default_config = load_yaml(DEFAULT_CONFIG)
 
     def validate_llm_models(self):
-        # 从默认配置中获取支持的模型名称字典，这里假设默认配置中包含了agent_model的默认设置，你可以根据实际情况进行调整。
-        supported_model_config = self.default_config['agent_model_config']
-
         if 'agent_model_config' not in self.config:
-            self.config['agent_model_config'] = supported_model_config
-            return
+            raise ValueError("配置文件中缺少 agent_model_config 字段")
+
         user_model_config = self.config['agent_model_config']
-
-        invalid_agents = [k for k in user_model_config if k not in supported_model_config.keys()]
-        if invalid_agents:
-            raise ValueError(
-                f"非法的模型角色配置: {', '.join(invalid_agents)}。合法角色应为: {', '.join(sorted(supported_model_config.keys()))}")
-
-        # 补充用户未配置的agent
-        for agent in supported_model_config:
-            if agent not in user_model_config:
-                user_model_config[agent] = supported_model_config[agent]
 
         # 从llm_config.yaml加载所有预设模型名称
         llm_config_path = Path(get_project_root()) / "core" / "llm" / "llm_config.yaml"
         llm_config = load_yaml(llm_config_path)
         valid_presets = llm_config.keys()
+
         # 检查模型预设名称合法性
         invalid_models = [f"{agent}:{model}" for agent, model in user_model_config.items()
                           if model not in valid_presets]
@@ -69,23 +55,66 @@ class ConfigValidator:
         self.config['agent_model_config'] = user_model_config
 
     def validate_log_dir(self):
-        default_log_dir = self.default_config['log_dir']
         if 'log_dir' not in self.config:
-            self.config['log_dir'] = default_log_dir
+            raise ValueError("配置文件中缺少 log_dir 字段")
+
         root_dir = os.path.expanduser(self.config['log_dir'])
         self.config['log_dir'] = Path(root_dir) / f"Task_{next(tempfile._get_candidate_names())}"
+
+    def validate_docs_dir(self):
+        if 'docs_dir' not in self.config:
+            raise ValueError("配置文件中缺少 docs_dir 字段")
+
+        docs_dir_config = self.config['docs_dir']
+        if not isinstance(docs_dir_config, dict):
+            raise ValueError("docs_dir 必须是一个字典，包含各个agent类型的文档目录配置")
+
+        # 检查每个文档目录是否存在
+        for agent_type, docs_dir in docs_dir_config.items():
+            if not os.path.isabs(docs_dir):
+                full_path = Path(get_project_root()) / docs_dir
+            else:
+                full_path = Path(docs_dir)
+
+            if not full_path.exists():
+                raise ValueError(f"docs_dir 中 {agent_type} 指定的目录不存在: {full_path}")
 
     def validate_all(self):
         try:
             self.validate_llm_models()
             self.validate_log_dir()
+            self.validate_docs_dir()
         except ValueError as e:
-            logger.error(f"配置校验失败：{str(e)}")
-            raise
+            raise ValueError(f"配置校验失败：{str(e)}")
 
 
-def load_config(config_path: Optional[str] = None):
-    config_path = config_path or DEFAULT_CONFIG
-    validator = ConfigValidator(config_path)
+def load_config(dsl="", config_path: Optional[str] = None):
+    """
+    加载并验证配置文件
+
+    Args:
+        dsl: 领域特定语言类型，用于选择默认配置文件
+        config_path: 配置文件路径，如果不提供则根据dsl选择默认配置
+
+    Returns:
+        dict: 验证后的配置
+
+    Raises:
+        ValueError: 如果没有config_path且根据dsl找不到默认配置文件
+    """
+    # 1. 有config_path时直接使用config_path
+    if config_path:
+        final_config_path = Path(config_path)
+    else:
+        # 2. 没有config_path时，根据dsl选择默认配置
+        final_config_path = Path(__file__).parent / f"default_{dsl}_config.yaml"
+
+    # 3. 检查默认配置文件是否存在，不存在就抛出错误
+    if not final_config_path.exists():
+        raise ValueError(f"No default config found for dsl '{dsl}'. "
+                         f"Please provide config_path like load_config('/path-to-config/xxx_config.yaml') "
+                         f"or ensure default config exists at: {final_config_path}")
+
+    validator = ConfigValidator(final_config_path)
     validator.validate_all()
     return validator.config

@@ -21,7 +21,19 @@ import platform
 logger = logging.getLogger(__name__)
 
 
-def run_command(cmd_list, cmd_msg="untitled_command", env=None):
+def run_command(cmd_list, cmd_msg="untitled_command", env=None, timeout=300):
+    """
+    运行命令行程序
+
+    Args:
+        cmd_list: 命令列表
+        cmd_msg: 命令描述信息
+        env: 环境变量
+        timeout: 超时时间（秒），默认5分钟
+
+    Returns:
+        tuple: (是否成功, 错误信息)
+    """
     try:
         # 确保环境变量包含Python无缓冲设置
         if env is None:
@@ -36,8 +48,23 @@ def run_command(cmd_list, cmd_msg="untitled_command", env=None):
             bufsize=0,  # 改为无缓冲
             env=env)
 
-        # 直接使用communicate获取完整输出，确保不丢失错误信息
-        stdout, stderr = process.communicate()
+        # 使用timeout参数
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # 超时处理
+            process.kill()
+            # 等待进程完全结束
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                # 强制终止
+                process.terminate()
+                stdout, stderr = "", ""
+
+            error_msg = f"Command '{cmd_msg}' timed out after {timeout} seconds"
+            logger.error(error_msg)
+            return False, error_msg
 
         # 处理和显示输出
         if stdout:
