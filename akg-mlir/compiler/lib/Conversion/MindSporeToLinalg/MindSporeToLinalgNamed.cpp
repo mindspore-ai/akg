@@ -17,7 +17,7 @@
 #include <numeric>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
-#include "akg/Dialect/HACC/IR/HACC.h"
+#include "bishengir/Dialect/HACC/IR/HACC.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Math/IR/Math.h"

@@ -23,7 +23,7 @@
 #include "akg/Dialect/Linalg/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Dialect/MindSpore/Passes.h"
-#include "akg/Dialect/HACC/IR/HACC.h"
+#include "bishengir/Dialect/HACC/IR/HACC.h"
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Pipelines/InitAllPipelines.h"
 #include "akg/Transforms/Passes.h"
