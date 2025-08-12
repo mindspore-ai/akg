@@ -104,7 +104,7 @@ def load_config(dsl="", config_path: Optional[str] = None):
     """
     # 1. 有config_path时直接使用config_path
     if config_path:
-        final_config_path = config_path
+        final_config_path = Path(config_path)
     else:
         # 2. 没有config_path时，根据dsl选择默认配置
         final_config_path = Path(__file__).parent / f"default_{dsl}_config.yaml"

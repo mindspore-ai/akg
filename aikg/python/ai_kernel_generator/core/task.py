@@ -266,6 +266,9 @@ class Task:
 
                 except Exception as agent_error:
                     logger.error(f"Agent {current_agent} execution failed: {agent_error}")
+                    logger.error(f"Error type: {type(agent_error).__name__}")
+                    logger.error(f"Full error details: {repr(agent_error)}")
+
                     self.conductor.record_agent_execution(
                         agent_name=current_agent,
                         result=f"ERROR: Agent execution failed: {str(agent_error)}",

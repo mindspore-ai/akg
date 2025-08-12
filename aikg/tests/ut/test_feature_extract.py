@@ -24,6 +24,7 @@ DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "database_config.y
 
 
 @pytest.mark.level0
+@pytest.mark.use_model
 @pytest.mark.asyncio
 async def test_feature_extract():
     config = load_yaml(DEFAULT_CONFIG_PATH)['agent_model_config']

@@ -223,53 +223,57 @@ class Coder(AgentBase):
         Returns:
             Tuple[str, str, str]: 生成的代码、提示信息和推理过程
         """
-        # 从task_info中获取代码信息
-        sketch = task_info.get('designer_code', '')
+        try:
+            # 从task_info中获取代码信息
+            sketch = task_info.get('designer_code', '')
 
-        # 从task_info中获取conductor的建议
-        conductor_suggestion = task_info.get('conductor_suggestion', '')
+            # 从task_info中获取conductor的建议
+            conductor_suggestion = task_info.get('conductor_suggestion', '')
 
-        # 获取api文档
-        if len(self.base_doc["api_docs"]) > 5000:  # 如果api文档过长，使用llm进行content压缩
-            api_parser = ParserFactory.get_api_parser()
-            format_api_instructions = api_parser.get_format_instructions()
-            api_input_data = {
+            # 获取api文档
+            if len(self.base_doc["api_docs"]) > 5000:  # 如果api文档过长，使用llm进行content压缩
+                api_parser = ParserFactory.get_api_parser()
+                format_api_instructions = api_parser.get_format_instructions()
+                api_input_data = {
                 **self.base_doc,
                 "sketch": sketch,  # AUL代码作为sketch
                 "llm_suggestions": conductor_suggestion,  # Conductor建议
                 "error_log": task_info.get('verifier_error', ''),
-                "format_instructions": format_api_instructions
-            }
-            api_docs_json, _, _ = await self.run_llm(self.api_docs_prompt, api_input_data, self.model_config.get("api_generator", "default"))
-            parsed_content = api_parser.parse(api_docs_json)
-            api_docs_suitable = "\n\n".join(
-                f"API name: {name}\nAPI description:{desc}\nAPI implement：\n{impl}"
-                for name, desc, impl in zip(
-                    parsed_content.api_name,
-                    parsed_content.api_desc,
-                    parsed_content.api_example
+                    "format_instructions": format_api_instructions
+                }
+                api_docs_json, _, _ = await self.run_llm(self.api_docs_prompt, api_input_data, self.model_config.get("api_generator", "default"))
+                parsed_content = api_parser.parse(api_docs_json)
+                api_docs_suitable = "\n\n".join(
+                    f"API name: {name}\nAPI description:{desc}\nAPI implement：\n{impl}"
+                    for name, desc, impl in zip(
+                        parsed_content.api_name,
+                        parsed_content.api_desc,
+                        parsed_content.api_example
+                    )
                 )
-            )
-        else:
-            api_docs_suitable = self.base_doc["api_docs"]
+            else:
+                api_docs_suitable = self.base_doc["api_docs"]
 
-        # 获取dsl示例代码
-        # TODO
-        # if len(self.base_doc["dsl_examples"]) > 5000:  # 如果dsl示例代码过长，使用llm进行content压缩
-        #     dsl_examples_suitable, _, _ = await self.run_llm(self.dsl_examples_prompt, self.base_doc, self.model_config.get("example_compressor", "default"))
-        # else:
-        dsl_examples_suitable = self.base_doc["dsl_examples"]
+            # 获取dsl示例代码
+            # TODO
+            # if len(self.base_doc["dsl_examples"]) > 5000:  # 如果dsl示例代码过长，使用llm进行content压缩
+            #     dsl_examples_suitable, _, _ = await self.run_llm(self.dsl_examples_prompt, self.base_doc, self.model_config.get("example_compressor", "default"))
+            # else:
+            dsl_examples_suitable = self.base_doc["dsl_examples"]
 
-        # 基于base_doc构建输入，只更新变化的部分
-        input_data = {
-            **self.base_doc,
-            "sketch": sketch,  # AUL代码作为sketch
-            "llm_suggestions": conductor_suggestion,  # Conductor建议
-            "error_log": task_info.get('verifier_error', ''),
-            "inspirations": get_inspirations(task_info.get('inspirations', [])),
-            "api_docs_suitable": api_docs_suitable,
-            "dsl_examples_suitable": dsl_examples_suitable,
-        }
+            # 基于base_doc构建输入，只更新变化的部分
+            input_data = {
+                **self.base_doc,
+                "sketch": sketch,  # AUL代码作为sketch
+                "llm_suggestions": conductor_suggestion,  # Conductor建议
+                "error_log": task_info.get('verifier_error', ''),
+                "inspirations": get_inspirations(task_info.get('inspirations', [])),
+                "api_docs_suitable": api_docs_suitable,
+                "dsl_examples_suitable": dsl_examples_suitable,
+            }
 
-        # 执行LLM生成
-        return await self.run_llm(self.coder_prompt, input_data, self.model_config["coder"])
+            # 执行LLM生成
+            return await self.run_llm(self.coder_prompt, input_data, self.model_config["coder"])
+        except Exception as e:
+            logger.error(f"Exception in coder.run: {type(e).__name__}: {e}")
+            raise

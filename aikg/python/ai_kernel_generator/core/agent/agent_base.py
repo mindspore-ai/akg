@@ -295,4 +295,5 @@ class AgentBase(ABC):
             return content, formatted_prompt, reasoning_content
         except Exception as e:
             logger.error(f"LLM Failed: [status] %s -- [model] %s -- [error] %s", self.agent_name, model_name, e)
-            return "", "", ""
+            logger.error(f"Exception in run_llm: {type(e).__name__}: {e}")
+            raise

@@ -19,6 +19,7 @@ from ai_kernel_generator.core.utils import check_task_config
 class TestTaskConfig:
     """测试任务配置验证函数"""
 
+    @pytest.mark.level0
     def test_valid_configs(self):
         """测试有效的配置组合"""
         valid_configs = [
@@ -37,6 +38,7 @@ class TestTaskConfig:
             except ValueError as e:
                 pytest.fail(f"有效配置验证未通过: {framework} + {backend} + {arch} + {dsl}, 错误: {e}")
 
+    @pytest.mark.level0
     def test_invalid_framework(self):
         """测试无效的框架"""
         invalid_configs = [
@@ -50,6 +52,7 @@ class TestTaskConfig:
                 check_task_config(framework, backend, arch, dsl)
                 print(f"正确捕获无效框架错误: {framework}")
 
+    @pytest.mark.level0
     def test_invalid_backend(self):
         """测试无效的后端"""
         invalid_configs = [
@@ -63,6 +66,7 @@ class TestTaskConfig:
                 check_task_config(framework, backend, arch, dsl)
                 print(f"正确捕获无效后端错误: {framework} + {backend}")
 
+    @pytest.mark.level0
     def test_invalid_arch(self):
         """测试无效的架构"""
         invalid_configs = [
@@ -76,6 +80,7 @@ class TestTaskConfig:
                 check_task_config(framework, backend, arch, dsl)
                 print(f"正确捕获无效架构错误: {backend} + {arch}")
 
+    @pytest.mark.level0
     def test_invalid_dsl(self):
         """测试无效的实现类型"""
         invalid_configs = [
@@ -89,6 +94,7 @@ class TestTaskConfig:
                 check_task_config(framework, backend, arch, dsl)
                 print(f"正确捕获无效实现类型错误: {dsl}")
 
+    @pytest.mark.level0
     def test_mismatched_combinations(self):
         """测试不匹配的组合"""
         mismatched_configs = [
@@ -106,6 +112,7 @@ class TestTaskConfig:
                 check_task_config(framework, backend, arch, dsl)
                 print(f"正确捕获不匹配组合错误: {framework} + {backend} + {arch} + {dsl}")
 
+    @pytest.mark.level0
     def test_nonexistent_combinations(self):
         """测试不存在的组合"""
         nonexistent_configs = [
@@ -122,6 +129,7 @@ class TestTaskConfig:
                 check_task_config(framework, backend, arch, dsl)
                 print(f"正确捕获不存在组合错误: {framework} + {backend} + {arch} + {dsl}")
 
+    @pytest.mark.level0
     def test_edge_cases(self):
         """测试边界情况"""
         # 空字符串
@@ -138,6 +146,7 @@ class TestTaskConfig:
 
         print("正确捕获边界情况错误")
 
+    @pytest.mark.level0
     def test_all_valid_combinations(self):
         """测试所有有效的组合"""
         # 根据VALID_CONFIGS映射表测试所有有效组合
