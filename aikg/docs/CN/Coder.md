@@ -5,7 +5,7 @@ Coder是AI Kernel Generator中的核心组件，负责将算法设计转换为�
 
 ## 核心功能
 - **设计到代码转换**: 将算法设计转换为具体实现代码
-- **CustomDocs集成**: 利用自定义参考文档进行精确代码生成
+- **文档驱动式接入集成（Doc-Driven Integration）**: 利用自定义参考文档进行精确代码生成
 - **多DSL支持**: 支持各种目标语言（Triton、SWFT等）
 - **框架适配**: 为不同前端框架（MindSpore、PyTorch等）生成代码
 - **错误引导修复**: 基于验证反馈修复生成的代码
@@ -20,40 +20,18 @@ Coder是AI Kernel Generator中的核心组件，负责将算法设计转换为�
 | framework | str (必需) | 前端框架："mindspore"、"torch"、"numpy"等 |
 | backend | str (必需) | 硬件后端："ascend"、"cuda"等 |
 | arch | str (必需) | 硬件架构："ascend910b4"、"a100"等 |
-| workflow_config_path | str (可选) | 工作流配置文件路径 |
-| config | dict (必需) | 完整配置，包括CustomDocs设置 |
+| workflow_config_path | str (可选) | 工作流配置文件路径（通常由 Task 根据编排配置注入） |
+| config | dict (必需) | 完整编排配置，包含 log_dir、agent_model_config、docs_dir 等（详见《[任务编排方案配置](./TaskOrchestrationPlan.md)》） |
 
-## CustomDocs集成
+> 相关文档：工作流见《[Workflow](./Workflow.md)》；文档接入见《[文档驱动式接入指南](./DocDrivenIntegration.md)》。
 
-Coder广泛使用CustomDocs功能加载全面的参考资料：
+## 文档驱动式接入集成（Doc-Driven Integration）
 
-### 必需文档
-根据代码分析，以下文档对Coder的正常运行至关重要：
-
-- `basic_docs.md` - DSL基础文档和语法规范
-- `api/api.md` - API接口文档，包含详细的函数描述
-- `suggestion_docs.md` - 专家建议和最佳实践
-- `examples/` 目录 - 框架特定的示例文件（如`mindspore_*.py`、`torch_*.py`）
-
-### 文档加载过程
-Coder从配置中`docs_dir.coder`路径加载文档：
-```python
-self.base_doc = {
-    "api_docs": self.load_doc("api/api.md"),
-    "dsl_basic_docs": self.load_doc("basic_docs.md"),
-    "dsl_examples": self._load_dsl_examples(),
-    "expert_suggestion": self.load_doc("suggestion_docs.md"),
-    # ... 其他字段
-}
-```
-
-### 智能文档处理
-- **API压缩**: 对于大型API文档，使用LLM提取相关API
-- **示例加载**: 从examples目录动态加载框架特定的示例
+Coder 通过编排配置中的 `docs_dir.coder` 加载参考文档；文档清单、目录结构与写作规范请见《[文档驱动式接入指南](./DocDrivenIntegration.md)》，此处不再重复。
 
 ## 配置示例
 ```yaml
-# 在DSL配置文件中
+# 在任务编排方案配置文件中
 docs_dir:
   coder: "resources/docs/triton_docs"  # Coder参考文档
   
@@ -62,26 +40,14 @@ agent_model_config:
   api_generator: "your_api_model"  # 用于API文档压缩
 ```
 
-## 文档目录结构
-```
-your_coder_docs/
-├── basic_docs.md           # DSL语法和基本概念
-├── api/
-│   └── api.md             # 全面的API文档
-├── suggestion_docs.md     # 专家建议和模式
-└── examples/
-    ├── mindspore_example.py    # MindSpore特定示例
-    ├── torch_example.py        # PyTorch特定示例
-    ├── mindspore_matmul.py     # 操作特定示例
-    └── ...
-```
+ 
 
 ## 执行流程
 
 1. **初始化阶段**
    - 加载工作流配置并创建解析器
    - 初始化代码生成模板
-   - 使用CustomDocs加载所有参考文档
+   - 使用文档驱动式接入（Doc-Driven Integration）加载所有参考文档
    - 准备包含加载内容的基础文档结构
 
 2. **处理阶段**
@@ -94,12 +60,4 @@ your_coder_docs/
    - 使用全面的上下文执行LLM生成
    - 返回生成的代码、提示词和推理过程
 
-## 特殊功能
-
-### 框架特定示例加载
-Coder自动加载与指定框架匹配的示例：
-```python
-def _load_dsl_examples(self) -> str:
-    # 从examples目录加载"mindspore_*.py"、"torch_*.py"等文件
-    # 支持多种文件格式：.py、.md、.txt
-```
+ 

@@ -20,7 +20,7 @@ Conductor is the task commander component in the AI Kernel Generator. It inherit
 | dsl | str (Required) | Implementation type: "triton", "swft", etc. |
 | framework | str (Required) | Frontend framework: "mindspore", "torch", "numpy", etc. |
 | arch | str (Required) | Hardware architecture: "ascend910b4", "a100", etc. |
-| workflow_config_path | str (Optional) | Workflow configuration file path, obtained from config if not provided |
+| workflow_config_path | str (Optional) | Workflow configuration file path, injected by Task |
 | config | dict (Required) | Complete configuration dictionary, including log_dir, agent_model_config, etc. |
 
 ## Workflow Configuration System
@@ -31,7 +31,7 @@ Conductor manages the entire execution flow based on workflow.yaml configuration
 - **agent_info**: Defines possible next steps and output formats for each agent
 - **start_agent**: Specifies the starting agent
 - **limitation_info**: Sets execution limits (maximum steps, repeat limits, etc.)
-- **mandatory_analysis**: List of agents requiring mandatory LLM analysis
+- **mandatory_llm_analysis**: List of agents requiring mandatory LLM analysis
 
 ### Example Configuration
 ```yaml
@@ -45,7 +45,7 @@ agent_info:
   verifier:
     possible_next_agent: [finish, coder]
 start_agent: designer
-mandatory_analysis: [verifier]
+mandatory_llm_analysis: [verifier]
 limitation_info:
   required:
     max_step: 20
@@ -65,7 +65,7 @@ limitation_info:
 3. **Decision Execution Stage**
    - Get valid next agent options based on workflow configuration
    - Special handling for verifier results (success leads to finish, failure excludes finish option)
-   - Decide whether LLM analysis is needed based on option count and mandatory_analysis configuration
+   - Decide whether LLM analysis is needed based on option count and mandatory_llm_analysis configuration
 
 4. **Intelligent Decision Making**
    - No options: directly finish
@@ -114,7 +114,7 @@ agent_info:
   optimizer:
     possible_next_agent: [verifier, optimizer]
 start_agent: designer
-mandatory_analysis: [verifier, optimizer]  # Force LLM analysis for critical agents
+mandatory_llm_analysis: [verifier, optimizer]  # Force LLM analysis for critical agents
 ```
 
 ### Typical Execution Flow

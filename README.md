@@ -18,7 +18,7 @@ AKG(Auto Kernel Generator)是一个深度学习编译器，用以对深度神经
 
 AKG 代码仓中的各个子项目，都支持独立安装构建，请参考各子项目使用说明。
 
-- **AIKG：** 请参考 [AIKG](./aikg/README.md) 文档
+- **AIKG：** 请参考 [AIKG](./aikg/README_CN.md) 文档
 - **AKG-TVM：** 请参考 [AKG-TVM](./akg-tvm/README.md) 文档
 - **AKG-MLIR：** 请参考 [AKG-MLIR](./akg-mlir/README.md) 文档
 - **SWFT：** 请参考 [SWFT](./SWFT/README.md) 文档

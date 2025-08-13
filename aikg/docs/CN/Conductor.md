@@ -20,7 +20,7 @@ Conductor 是 AI Kernel Generator 中的任务指挥者组件，继承自 `Agent
 | dsl | str (必选) | 实现类型："triton"、"swft"等DSL |
 | framework | str (必选) | 前端框架："mindspore"、"torch"、"numpy"等 |
 | arch | str (必选) | 硬件架构："ascend910b4"、"a100"等 |
-| workflow_config_path | str (可选) | workflow配置文件路径，如不提供则从default_{dsl}_config.yaml中获取 |
+| workflow_config_path | str (可选) | workflow 配置文件路径，由 Task 注入 |
 | config | dict (必选) | 完整配置字典，包含log_dir、agent_model_config等 |
 
 ## 工作流配置体系
@@ -31,7 +31,7 @@ Conductor基于workflow.yaml配置文件管理整个执行流程，主要包含�
 - **agent_info**: 定义各代理的可能下一步和输出格式
 - **start_agent**: 指定起始代理
 - **limitation_info**: 设置执行限制（最大步数、重复限制等）
-- **mandatory_analysis**: 需要强制LLM分析的代理列表
+- **mandatory_llm_analysis**: 需要强制LLM分析的代理列表
 
 ### 示例配置
 ```yaml
@@ -45,7 +45,7 @@ agent_info:
   verifier:
     possible_next_agent: [finish, coder]
 start_agent: designer
-mandatory_analysis: [verifier]
+mandatory_llm_analysis: [verifier]
 limitation_info:
   required:
     max_step: 20
@@ -65,7 +65,7 @@ limitation_info:
 3. **决策执行阶段**
    - 根据workflow配置获取有效的下一步代理选项
    - 特殊处理verifier结果（成功则finish，失败则排除finish选项）
-   - 根据选项数量和mandatory_analysis配置决定是否需要LLM分析
+   - 根据选项数量和mandatory_llm_analysis配置决定是否需要LLM分析
 
 4. **智能决策**
    - 无选项：直接结束（finish）
@@ -114,7 +114,7 @@ agent_info:
   optimizer:
     possible_next_agent: [verifier, optimizer]
 start_agent: designer
-mandatory_analysis: [verifier, optimizer]  # 强制对关键代理进行LLM分析
+mandatory_llm_analysis: [verifier, optimizer]  # 强制对关键代理进行LLM分析
 ```
 
 ### 典型执行流程

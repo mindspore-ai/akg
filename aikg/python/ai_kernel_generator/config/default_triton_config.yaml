@@ -16,7 +16,7 @@ workflow_config_path: "config/default_workflow.yaml"
 
 # Documentation directory configuration
 docs_dir:
-  designer: "resources/docs/aul_docs"
+  designer: "resources/docs/triton_docs"
   coder: "resources/docs/triton_docs"
 
 # Performance analysis configuration

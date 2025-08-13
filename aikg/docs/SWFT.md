@@ -3,9 +3,6 @@
 ## SWFT Introduction
 SWFT is a kernel compiler for Ascend, characterized by minimalist coding and high performance. It currently serves as the backend for AIKG Ascend310P kernel generation.
 
-## SWFTCoder
-AIKG interfaces with the SWFT kernel's Python front-end. By directly generating SWFT Python code, it utilizes SWFT to compile it directly into Ascend backend code. The integration between AIKG and SWFT is mainly focused on the Coder part. For this purpose, AIKG provides SWFTCoder as a dedicated Coder to handle the code generation work.
-
 
 ## AIKG-SWFT Analysis
 
@@ -13,7 +10,6 @@ AIKG interfaces with the SWFT kernel's Python front-end. By directly generating 
   - While supporting basic Ascend syntax, it extends to higher-level abstractions (e.g., data movement supports arbitrary lengths, with actual repeat, block, and stride settings handled internally by SWFT).
   - The Python syntax can be roughly aligned with the front-end Sketch design (`tile2slice`, `move2copy`, `vec_compute`).
 - Automatic static memory allocation eliminates the need for explicit control over buffers, setting up pipelines, etc.
-  - Advantage: No need for the Designer to analyze scheduling, leading to a high baseline for code generation quality.
 
 ## Reference Code
 

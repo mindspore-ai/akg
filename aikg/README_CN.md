@@ -5,72 +5,88 @@
 ## 目录
 - [AI-driven Kernel Generator(AIKG)](#ai-driven-kernel-generatoraikg)
   - [目录](#目录)
-  - [1. 项目简介](#1-项目简介)
-  - [2. 更新日志](#2-更新日志)
-  - [3. 安装流程](#3-安装流程)
-  - [4. 配置](#4-配置)
-    - [4.1 API与模型配置](#41-api与模型配置)
-    - [4.2 第三方依赖](#42-第三方依赖)
-    - [4.3 MindSpore 2.7版本 前端依赖](#43-mindspore-27版本-前端依赖)
-    - [4.4 华为Atlas推理系列产品 SWFT 后端依赖](#44-华为atlas推理系列产品-swft-后端依赖)
-    - [4.5 华为Atlas A2训练系列产品 Triton 后端依赖](#45-华为atlas-a2训练系列产品-triton-后端依赖)
-    - [4.6 NVIDIA GPU Triton 后端依赖](#46-nvidia-gpu-triton-后端依赖)
-    - [4.7 相似性检测依赖](#47-相似性检测依赖)
-  - [5. 运行示例](#5-运行示例)
-  - [6. 设计文档](#6-设计文档)
-    - [6.1 AIKG通用框架](#61-aikg通用框架)
-    - [6.2 Designer](#62-designer)
-    - [6.3 Coder](#63-coder)
-    - [6.4 Verifier](#64-verifier)
-    - [6.5 Conductor](#65-conductor)
-    - [6.6 SWFT Backend](#66-swft-backend)
-    - [6.7 Triton Backend](#67-triton-backend)
+  - [📘 1. 项目简介](#-1-项目简介)
+  - [🗓️ 2. 更新日志](#️-2-更新日志)
+  - [🛠️ 3. 安装部署流程](#️-3-安装部署流程)
+  - [⚙️ 4. 配置](#️-4-配置)
+    - [配置快速指南](#配置快速指南)
+      - [Step 1: 基础环境配置](#step-1-基础环境配置)
+        - [API与模型配置](#api与模型配置)
+        - [第三方依赖](#第三方依赖)
+      - [Step 2: 前端依赖配置](#step-2-前端依赖配置)
+        - [MindSpore 2.7版本 前端依赖（可选）](#mindspore-27版本-前端依赖可选)
+      - [Step 3: 后端依赖配置](#step-3-后端依赖配置)
+      - [Step 4: 可选工具配置](#step-4-可选工具配置)
+        - [文本相似性检测依赖](#文本相似性检测依赖)
+  - [▶️ 5. 教程示例](#️-5-教程示例)
+  - [📐 6. 设计文档](#-6-设计文档)
+    - [核心框架](#核心框架)
+    - [核心组件](#核心组件)
+    - [后端支持](#后端支持)
 
-## 1. 项目简介
+## 📘 1. 项目简介
 AIKG 是一款 AI 驱动的算子生成器。
 AIKG 利用大语言模型(LLM)的代码生成能力，通过大语言模型规划和控制（多个）Agent 协同完成多后端、多类型的AI算子生成和自动优化。
 同时 AIKG 提供丰富的算子Agent相关子模块，用户可组合构建自定义算子Agents任务。
 
-## 2. 更新日志
-- **CustomDocs**: 支持为不同Agent自定义参考文档，提升生成质量和精度。详细配置说明请参考 [自定义文档配置指南](./docs/CN/CustomDocs.md)
+## 🗓️ 2. 更新日志
+- 2025-08-12：支持“文档驱动式接入”功能，按统一文档规范提供资料即可快速、灵活地接入新的 DSL/前端/后端（详见《[文档驱动式接入指南](./docs/CN/DocDrivenIntegration.md)》）。
+- 2025-06-27：AIKG 初始版本，支持 Triton 与 SWFT 后端代码生成能力。
 
-## 3. 安装流程
+
+## 🛠️ 3. 安装部署流程
 ```bash
-# 使用conda环境（可选， 推荐python3.9/3.10/3.11版本）
+# 1. 环境设置
+# 1.1 使用conda环境（可选， 推荐python3.9/3.10/3.11版本）
 conda create -n aikg python=3.11
 conda activate aikg
 
-# 或者创建虚拟环境（可选）
+# 1.2 或者创建虚拟环境（可选）
 python -m venv .venv
 source .venv/bin/active
 
-# pip安装依赖
+# 2. pip安装依赖
 pip install -r requirements.txt
 
-# setup & install
+# 3. whl安装/环境设置
+# 3.1 whl安装
 bash build.sh
 pip install output/ai_kernel_generator-*-py3-none-any.whl
+
+# 3.2 或者设置环境变量
+cd aikg
+source env.sh
 ```
 
 
-## 4. 配置
+## ⚙️ 4. 配置
 
-### 4.1 API与模型配置
+### 配置快速指南
+
+#### Step 1: 基础环境配置
+
+##### API与模型配置
 AIKG 通过环境变量来设置不同大语言模型（LLM）服务的 API。请根据您使用的服务，配置相应的环境变量：
 
 ```bash
+# 各厂商API接口。详细支持列表请参考docs/API.md
+export AIKG_XXX_API_KEY=xxx
+
 # VLLM (https://github.com/vllm-project/vllm)
 export AIKG_VLLM_API_BASE=http://localhost:8000/v1
 
 # Ollama (https://ollama.com/)
 export AIKG_OLLAMA_API_BASE=http://localhost:11434
-
-# 其他API接口。详细支持列表请参考docs/API.md
-export AIKG_XXXXX_API_KEY=xxxxxxxxxxxxxxxxxxx
 ```
-关于注册新模型配置 `llm_config.yaml`、 编排任务流程设置 `xxx_config.yaml`、查看当前支持API列表 等更多信息，请参考 [API](./docs/CN/API.md) 文档。
+更多配置选项：
+- **任务编排方案配置（Task Orchestration Plan Configuration）**: 声明一次任务的完整运行方案（包含 `agent_model_config`、`workflow_config_path`、`docs_dir` 等）。常见方案文件：`default_triton_config.yaml`、`vllm_triton_coderonly_config.yaml`。详见《[任务编排方案配置](./docs/CN/TaskOrchestrationPlan.md)》。
+- **模型配置**: `llm_config.yaml` 中预设了多种 LLM 服务商的模型配置（DeepSeek、Qwen、Moonshot 等）。编排配置中的 `agent_model_config` 取值来源于该文件的预设名称。
+- **工作流定义（Workflow）**: 通过 `workflow_config_path` 指定工作流 YAML，定义 Agent 执行顺序与约束，支持 `default_workflow.yaml`、`coder_only_workflow.yaml` 等。详见《[工作流系统设计文档](./docs/CN/Workflow.md)》。
+- **文档驱动式接入（Doc-Driven Integration）**: 通过编排配置的 `docs_dir` 为各 Agent 提供参考文档目录。详见《[文档驱动式接入指南](./docs/CN/DocDrivenIntegration.md)》。
 
-### 4.2 第三方依赖
+详细配置说明请参考 [API配置文档](./docs/CN/API.md)。
+
+##### 第三方依赖
 本项目使用 git submodule 管理部分第三方依赖。
 
 初次克隆或拉取更新后，请使用以下命令初始化并下载 `aikg` 相关的依赖：
@@ -79,59 +95,71 @@ export AIKG_XXXXX_API_KEY=xxxxxxxxxxxxxxxxxxx
 git submodule update --init --remote "aikg/thirdparty/*"
 ```
 
-### 4.3 MindSpore 2.7版本 前端依赖
+#### Step 2: 前端依赖配置
+
+##### MindSpore 2.7版本 前端依赖（可选）
 支持python版本：python3.11、python3.10、python3.9
 支持系统版本：aarch64、x86_64
+推荐按官方安装指南选择环境与安装方式：[MindSpore 2.7 安装指南](https://www.mindspore.cn/install)
+```bash
+pip install mindspore==2.7.0 -i https://repo.mindspore.cn/pypi/simple --trusted-host repo.mindspore.cn --extra-index-url https://repo.huaweicloud.com/repository/pypi/simple
 ```
-# python3.11 + aarch64的安装包示例
-pip install https://repo.mindspore.cn/mindspore/mindspore/version/202506/20250619/master_20250619160020_1261ff4ce06d6f2dc4ce446139948a3e4e9c966b_newest/unified/aarch64/mindspore-2.7.0-cp311-cp311-linux_aarch64.whl
-```
 
-### 4.4 华为Atlas推理系列产品 SWFT 后端依赖
-请参考：https://gitee.com/mindspore/akg/swft
+#### Step 3: 后端依赖配置
+根据您的硬件平台选择相应的后端：
 
-### 4.5 华为Atlas A2训练系列产品 Triton 后端依赖
-请参考：https://gitee.com/ascend/triton-ascend
+| 平台 | 后端 | 参考链接 |
+|------|------|----------|
+| 华为Atlas A2训练系列产品 | Triton | https://gitee.com/ascend/triton-ascend |
+| NVIDIA GPU | Triton | https://github.com/triton-lang/triton |
+| 华为Atlas推理系列产品 | SWFT | https://gitee.com/mindspore/akg/tree/br_aikg/swft |
 
+#### Step 4: 可选工具配置
 
-### 4.6 NVIDIA GPU Triton 后端依赖
-请参考：https://github.com/triton-lang/triton
-
-
-### 4.7 相似性检测依赖
-句子相似性检测工具text2vec-large-chinese： 若无法自动加载模型，需要手动下载到thirdparty目录下
+##### 文本相似性检测依赖
+文本句子相似性检测工具text2vec-large-chinese： 若无法自动加载模型，需要手动下载到thirdparty目录下
 将下载后的模型地址添加到database对应的yaml中，请参考  [DataBase](./docs/CN/DataBase.md) 文档
 ```bash
 bash download.sh --with_local_model
 ```
 
+> 💡 **配置提示**: 
+> - 详细的API配置请参考 [API文档](./docs/CN/API.md) 
+> - 数据库配置请参考 [DataBase文档](./docs/CN/DataBase.md)
+> - 更多配置选项请参考各组件的专门文档
 
-## 5. 运行示例
-通过AIKG完成算子自动生成的简易流程，请参考[Tutorial](./docs/CN/Tutorial.md)文档以及`examples`目录中示例代码。
+
+## ▶️ 5. 教程示例
+
+以下为 `examples/` 目录中的常用示例：
+
+| 示例 | 说明 |
+|------|------|
+| `run_mindspore_triton_single.py` | 单算子示例（MindSpore + Triton，Ascend 910B4）。 |
+| `run_mindspore_triton_parallel.py` | 并行多算子示例（MindSpore + Triton，Ascend 910B4）。 |
+| `run_numpy_swft_relu.py` | SWFT ReLU 示例（Ascend 310P3）。 |
+| `run_numpy_swft_swiglu.py` | SWFT SwiGLU 示例（Ascend 310P3）。 |
+
+更多上手流程与参数说明，请参考《[Tutorial](./docs/CN/Tutorial.md)》。
 
 
-## 6. 设计文档
-### 6.1 AIKG通用框架
-- `Task`: 请参考 [Task](./docs/CN/Task.md) 文档
-- `Trace`: 请参考 [Trace](./docs/CN/Trace.md) 文档
-- `TaskPool`: 请参考 [TaskPool](./docs/CN/TaskPool.md) 文档
-- `DevicePool`: 请参考 [DevicePool](./docs/CN/DevicePool.md) 文档
-- `DataBase`: 请参考 [DataBase](./docs/CN/DataBase.md) 文档
+## 📐 6. 设计文档
 
-### 6.2 Designer
-请参考 [Designer](./docs/CN/Designer.md) 文档
+> 建议先阅读《[任务编排方案配置](./docs/CN/TaskOrchestrationPlan.md)》，了解任务运行方案与入口；工作流细节见《[Workflow](./docs/CN/Workflow.md)》，文档规范见《[文档驱动式接入指南](./docs/CN/DocDrivenIntegration.md)》。
 
-### 6.3 Coder
-请参考 [Coder](./docs/CN/Coder.md) 文档
+### 核心框架
+- **[Task](./docs/CN/Task.md)** - 任务管理模块
+- **[Trace](./docs/CN/Trace.md)** - 执行追踪模块  
+- **[TaskPool](./docs/CN/TaskPool.md)** - 任务池管理
+- **[DevicePool](./docs/CN/DevicePool.md)** - 设备池管理
+- **[DataBase](./docs/CN/DataBase.md)** - 数据库模块
 
-### 6.4 Verifier
-请参考 [Verifier](./docs/CN/Verifier.md) 文档
+### 核心组件
+- **[Designer](./docs/CN/Designer.md)** - 算子设计器
+- **[Coder](./docs/CN/Coder.md)** - 代码生成器
+- **[Verifier](./docs/CN/Verifier.md)** - 验证器
+- **[Conductor](./docs/CN/Conductor.md)** - 任务编排器
 
-### 6.5 Conductor
-请参考 [Conductor](./docs/CN/Conductor.md) 文档
-
-### 6.6 SWFT Backend
-请参考 [SWFT](./docs/CN/SWFT.md) 文档
-
-### 6.7 Triton Backend
-请参考 [Triton](./docs/CN/Triton.md) 文档
+### 后端支持
+- **[SWFT Backend](./docs/CN/SWFT.md)** - 华为Atlas推理系列后端
+- **[Triton Backend](./docs/CN/Triton.md)** - Triton计算后端

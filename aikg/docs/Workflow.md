@@ -2,7 +2,7 @@
 
 ## Overview
 
-Workflow is the core configuration management system in AI Kernel Generator that defines and controls the execution flow of agents through YAML configuration files. It provides the rule foundation for Conductor's intelligent scheduling, supports flexible workflow customization, and achieves optimal execution paths for different scenarios.
+Workflow is AIKG's core configuration system that defines and controls the execution flow of agents via YAML. It powers Conductor's intelligent scheduling, supports flexible customization, and enables optimal execution paths across scenarios.
 
 ## Core Philosophy
 
@@ -34,7 +34,7 @@ agent_info:
 start_agent: agent_name
 
 # List of agents requiring mandatory LLM analysis (when these agents enter conductor, conductor forces LLM analysis)
-mandatory_analysis: [agent1, agent2]
+mandatory_llm_analysis: [agent1, agent2]
 
 # Limitation information
 limitation_info:
@@ -56,7 +56,7 @@ limitation_info:
 |------------|------|----------|-------------|
 | agent_info | dict | Yes | Defines configuration information for all agents |
 | start_agent | str | Yes | Specifies the starting agent for the workflow |
-| mandatory_analysis | list | No | List of agents requiring mandatory LLM analysis |
+| mandatory_llm_analysis | list | No | List of agents requiring mandatory LLM analysis |
 | limitation_info | dict | Yes | Execution limitation configuration |
 
 ## Predefined Workflow Types
@@ -93,7 +93,7 @@ For reference, the actual workflow configuration files can be found in:
 **Flow**: `coder` ←→ `verifier` → `finish`
 
 **Features**:
-- Skips design phase, directly generates code
+- In coder-only workflow, Designer is disabled; Coder directly generates target DSL code
 - Coder can self-repair
 - Suitable for standard kernels or scenarios with sufficient reference implementations
 
@@ -175,7 +175,7 @@ limitation_info:
 
 ### LLM Intelligent Decision Conditions
 1. **Multiple Available Agents**: Need intelligent selection
-2. **Single Available Agent but in mandatory_analysis List**: Need analysis and suggestions
+2. **Single Available Agent but in mandatory_llm_analysis List**: Need analysis and suggestions
 
 ## Custom Workflow Guide
 
@@ -198,7 +198,7 @@ agent_info:
 
 start_agent: custom_optimizer
 
-mandatory_analysis: [custom_optimizer]
+mandatory_llm_analysis: [custom_optimizer]
 
 limitation_info:
   required:
@@ -231,7 +231,7 @@ agent_info:
     possible_next_agent: [verifier, optimizer]
 
 start_agent: designer
-mandatory_analysis: [optimizer]  # Force analysis for optimizer
+mandatory_llm_analysis: [optimizer]  # Force analysis for optimizer
 ```
 
 ## Best Practices
@@ -241,7 +241,7 @@ mandatory_analysis: [optimizer]  # Force analysis for optimizer
 1. **Clear Objectives**: Choose appropriate workflow types based on specific use cases
 2. **Minimize Complexity**: Prioritize simple linear processes
 3. **Reasonable Limits**: Avoid infinite loops by setting appropriate retry counts
-4. **Mandatory Analysis Configuration**: Configure mandatory_analysis for critical decision points
+4. **Mandatory Analysis Configuration**: Configure mandatory_llm_analysis for critical decision points
 
 ### Configuration Recommendations
 
@@ -260,7 +260,7 @@ mandatory_analysis: [optimizer]  # Force analysis for optimizer
 2. **Workflow Optimization**:
    - Adjust limitation parameters based on actual usage
    - Analyze agent execution history to optimize decision paths
-   - Use mandatory_analysis to control critical decision points
+   - Use mandatory_llm_analysis to control critical decision points
 
 3. **Debugging Support**:
    - View complete execution traces through Trace

@@ -3,9 +3,6 @@
 ## SWFT 简介
 SWFT是一款Ascend算子编译器，有着极简编写、高性能等特征。当前作为AIKG Ascend310P算子生成后端。
 
-## SWFTCoder
-AIKG对接SWFT算子python前端，通过直接生成SWFT python，利用SWFT直接编译成Ascend后端代码。AIKG与SWFT的对接主要集中在Coder部分，为此AIKG提供SWFTCoder作为专用的Coder来完成代码生成工作。
-
 
 ## AIKG-SWFT 分析
 
@@ -13,7 +10,6 @@ AIKG对接SWFT算子python前端，通过直接生成SWFT python，利用SWFT直
   - 支持基础Ascend语法同时，扩展出更高阶的封装（例如：数据搬移支持任意长度，在SWFT内部做实际的repeat、block、stride设置）
   - python写法与前端Sketch设计能大致对齐（`tile2slice, move2copy, vec_compute`）
 - 自动静态内存分配，无需现式控制buffer、设置pipeline等内容
-  - 优点：无需Designer分析调度，代码生成下限高
 
 ## 参考代码
 
