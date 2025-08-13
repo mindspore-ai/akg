@@ -13,6 +13,7 @@
 import asyncio
 from typing import List
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +27,27 @@ class DevicePool:
         device_count (int): 可用设备总数
     """
 
-    def __init__(self, device_list: List[int]):
+    def __init__(self, device_list: List[int] = None):
+        if device_list is None:
+            device_list = [0]
+            
         self.available_devices = asyncio.Queue()
         self.condition = asyncio.Condition()
-        self.device_list = device_list
+        
+        env_devices = os.environ.get("AIKG_DEVICES_LIST")
+        if env_devices:
+            try:
+                self.device_list = [int(x.strip()) for x in env_devices.split(',')]
+                logger.info(f"使用环境变量 AIKG_DEVICES_LIST: {self.device_list}")
+            except ValueError as e:
+                logger.warning(f"环境变量 AIKG_DEVICES_LIST 格式错误: {env_devices}, 使用默认值: {device_list}")
+                self.device_list = device_list
+        else:
+            self.device_list = device_list
 
-        # 初始化设备ID队列
-        for device_id in device_list:
+        for device_id in self.device_list:
             self.available_devices.put_nowait(device_id)
+
 
     async def acquire_device(self) -> int:
         """

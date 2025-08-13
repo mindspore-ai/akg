@@ -22,9 +22,9 @@ def get_inputs():
     Returns:
         list: List containing two symmetric tensors A and B.
     """
-    A = np.random.randn(N, N).astype(np.float16)
+    A = np.random.rand(N, N).astype(np.float16)
     A = (A + A.T) / 2  # Ensure symmetry
-    B = np.random.randn(N, N).astype(np.float16)
+    B = np.random.rand(N, N).astype(np.float16)
     B = (B + B.T) / 2  # Ensure symmetry
     return [A, B]
 

@@ -312,7 +312,7 @@ def verify_implementations():
         impl_output = [impl_output]
     
     for i, (fw_out, impl_out) in enumerate(zip(framework_output, impl_output)):
-        data_type = framework_output[i].dtype if isinstance(framework_output, (list, tuple)) else framework_output.dtype
+        data_type = framework_output[i].dtype
         limit = get_limit(data_type)
         {% if framework == "torch" %}
         framework_out_flatten = fw_out.flatten().detach().cpu().numpy()
@@ -330,7 +330,46 @@ def verify_implementations():
         {% endif %}
         
         compare(framework_out_flatten, impl_out_flatten, limit, data_type)
-    print(f"验证结果: 成功")
+    
+    # 构建验证成功信息
+    import time
+    import uuid
+    
+    # 生成唯一标识符，避免并发时的日志混乱
+    verification_id = str(uuid.uuid4())[:8]
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    
+    # 收集验证的基础信息
+    verification_info = {
+        "verification_id": verification_id,
+        "timestamp": timestamp,
+        "op_name": "{{ op_name }}",
+        "framework": "{{ framework }}",
+        "backend": "{{ backend }}",
+        "arch": "{{ arch }}",
+        "dsl": "{{ dsl }}",
+        "device_id": {{ device_id }},
+        "status": "成功"
+    }
+    
+    # 收集输入输出信息
+    output_shapes = [str(out.shape) if hasattr(out, 'shape') else str(type(out)) for out in framework_output]
+    output_dtypes = [str(out.dtype) if hasattr(out, 'dtype') else str(type(out)) for out in framework_output]
+    
+    verification_info.update({
+        "output_count": len(output_shapes),
+        "output_shapes": output_shapes,
+        "output_dtypes": output_dtypes
+    })
+    
+    # 格式化输出，确保并发时不会混乱
+    verification_log = f"""[{verification_id}] 验证结果: 成功
+[{verification_id}] 算子: {{ op_name }} | 框架: {{ framework }} | 后端: {{ backend }} | 架构: {{ arch }}
+[{verification_id}] DSL: {{ dsl }} | 设备ID: {{ device_id }} | 时间: {timestamp}
+[{verification_id}] 输出数量: {len(output_shapes)} | 形状: {output_shapes} | 数据类型: {output_dtypes}
+[{verification_id}] {'='*60}\n\n"""
+    
+    print(verification_log)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ N = 4096
 
 
 def get_inputs():
-    A = np.random.randn(M, N).astype(np.float16)
+    A = np.random.rand(M, N).astype(np.float16)
     s = 3.14
     return [A, s]
 

@@ -43,7 +43,6 @@ def pytest_configure(config):
             config.option.log_level = level_name
 
     print(f"pytest配置: 根据环境变量AIKG_LOG_LEVEL={glog_level}设置日志级别为{level_name}")
-    print(f"DEBUG: 根日志记录器级别: {logging.getLogger().level}")
 
 
 @pytest.fixture(autouse=True)

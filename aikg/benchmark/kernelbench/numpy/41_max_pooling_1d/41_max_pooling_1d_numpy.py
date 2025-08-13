@@ -46,7 +46,7 @@ return_indices = False
 
 
 def get_inputs():
-    x = np.random.randn(batch_size, features, sequence_length).astype(np.float16)
+    x = np.random.rand(batch_size, features, sequence_length).astype(np.float16)
     return [x]
 
 

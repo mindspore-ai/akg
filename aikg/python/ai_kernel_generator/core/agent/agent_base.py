@@ -194,17 +194,17 @@ class AgentBase(ABC):
 
     def _check_input_dict(self, input: Dict[str, Any]) -> None:
         """
-        检查并打印input字典中每个key的值是否为空
+        检查并记录input字典中每个key的值是否为空
 
         Args:
             input: 要检查的输入字典
         """
-        print(f"\n{'='*60}")
-        print(f"检查 input 字典内容 (Agent: {self.agent_name})")
-        print(f"{'='*60}")
+        logger.debug("=" * 60)
+        logger.debug(f"检查 input 字典内容 (Agent: {self.agent_name})")
+        logger.debug("=" * 60)
 
         if not input:
-            print("❌ input 字典为空!")
+            logger.debug("❌ input 字典为空!")
             return
 
         for key, value in input.items():
@@ -217,12 +217,12 @@ class AgentBase(ABC):
             elif isinstance(value, (list, dict)) and len(value) == 0:
                 is_empty = True
 
-            # 打印状态
+            # 记录状态
             status = "❌ 空" if is_empty else "✅ 有值"
             value_preview = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
-            print(f"{status} {key}: {value_preview}")
+            logger.debug(f"{status} {key}: {value_preview}")
 
-        print(f"{'='*60}\n")
+        logger.debug("=" * 60)
 
     async def run_llm(self, prompt: PromptTemplate, input: Dict[str, Any], model_name: str) -> tuple[str, str, str]:
         """运行LLM

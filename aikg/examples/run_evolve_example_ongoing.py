@@ -18,6 +18,7 @@ from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.database.database import Database
+from ai_kernel_generator.utils.environment_check import check_env_for_task
 
 
 def get_op_name():
@@ -85,6 +86,9 @@ async def run_evolve_example():
     task_pool = TaskPool(max_concurrency=parallel_num)
     device_pool = DevicePool([0, 1])  # 使用设备0和1
 
+    config = load_config(dsl)
+    check_env_for_task(framework, backend, dsl, config)
+
     # 运行进化过程
     print("开始进化过程...")
     evolution_result = await evolve(
@@ -94,7 +98,7 @@ async def run_evolve_example():
         framework=framework,
         backend=backend,
         arch=arch,
-        config=load_config(dsl),
+        config=config,
         device_pool=device_pool,
         task_pool=task_pool,
         max_rounds=max_rounds,

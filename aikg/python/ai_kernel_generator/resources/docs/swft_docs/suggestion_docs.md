@@ -30,41 +30,33 @@ gm_input = Tensor("GM", "FP16", [1, 2688], "ND", False)
 ub_input = slice_to_ub(gm_input, [1, input_start], [0, ELEMS_PER_CORE])
 ```
 
-### 错误示例3：slice_to_ub，vmul，vadd等API没有返回值
-
-```python
-slice_to_ub(gm_input, begin=[current_batch, 0], slicesize=[1, DIM])
-vmul(input_ub, tmp_ub)
-vadd(input_ub, tmp_ub)
-```
-### 推荐示例3：slice_to_ub，vmul，vadd等API有返回值
-
-```python
-input_ub = slice_to_ub(gm_input, begin=[current_batch, 0], slicesize=[1, DIM])
-mul_ub = vmul(input_ub, tmp_ub)
-add_ub = vadd(input_ub, tmp_ub)
-```
-
-### 错误示例4：insert_to_gm缺少参数
-
-```python 
-insert_to_gm(gm_output, output_ub, begin=[start_batch, 0])
-```
-### 推荐示例4：insert_to_gm有4个入参
-
-```python 
-insert_to_gm(gm_output, output_ub, begin=[start_batch, 0], slicesize=[SAMPLES_PER_CORE, DIM])
-```
-
-### 错误示例5：计算1/x时使用了vrec，而使用vrec会导致精度有问题
+### 错误示例3：计算1/x时使用了vrec，而使用vrec会导致精度有问题
 
 ```python 
 output_ub = vrec(input_ub)  # 1/x
 ```
 
-### 推荐示例5：将1/x转换为x/(x*x)计算，组合vsub和vdiv以避免使用vrec，精度正确
+### 推荐示例3：将1/x转换为x/(x*x)计算，组合vsub和vdiv以避免使用vrec，精度正确
 
 ```python 
 pow_ub = vmul(input_ub, input_ub)  # x*x
 output_ub = vdiv(input_ub, pow_ub)  # x/(x*x) = 1/x
+```
+
+### 推荐示例4：reduce的结果为标量时，使用向量-标量运算替代后向的broadcast操作，注意仅仅在双目运算中使用
+```python 
+ub_max = vcmax(ub_input, reduce_axis=-1)
+ub_exp = vexp(ub_max)
+ub_sub = vsubs(ub_input, move_to_scalar(ub_exp))
+```
+
+### 推荐示例5：为了保证结果的正确性，累加操作必须转为fp32
+```python 
+ub_input_fp32 = vconv(ub_input, "FP32")
+ub_sum = vcadd(ub_input_fp32, reduce_axis=-1)
+```
+
+### 推荐示例6：如果生成的cce过长（也就是所有嵌套for循环的乘积过大），将for循环中的range替换为dynamic_loop
+```python 
+for i in dynamic_loop(SAMPLES_PER_CORE):
 ```

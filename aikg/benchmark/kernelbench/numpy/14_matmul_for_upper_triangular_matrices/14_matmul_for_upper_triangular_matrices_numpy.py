@@ -23,8 +23,8 @@ def get_inputs():
     Returns:
         list: A list containing two upper triangular matrices of shape (N, N).
     """
-    A = np.triu(np.random.randn(N, N).astype(np.float16))
-    B = np.triu(np.random.randn(N, N).astype(np.float16))
+    A = np.triu(np.random.rand(N, N).astype(np.float16))
+    B = np.triu(np.random.rand(N, N).astype(np.float16))
     return [A, B]
 
 

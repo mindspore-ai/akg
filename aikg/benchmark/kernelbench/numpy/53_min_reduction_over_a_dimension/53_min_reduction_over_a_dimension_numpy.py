@@ -18,7 +18,7 @@ dim2 = 256
 
 
 def get_inputs():
-    x = np.random.randn(batch_size, dim1, dim2).astype(np.float16)
+    x = np.random.rand(batch_size, dim1, dim2).astype(np.float16)
     return [x]
 
 

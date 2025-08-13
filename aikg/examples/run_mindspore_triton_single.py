@@ -16,6 +16,7 @@ from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.task import Task
+from ai_kernel_generator.utils.environment_check import check_env_for_task
 import asyncio
 import os
 os.environ['STREAM_OUTPUT_MODE'] = 'on'
@@ -69,8 +70,11 @@ async def run_mindspore_triton_single():
 
     task_pool = TaskPool()
     device_pool = DevicePool([0])
-    config = load_config("triton")  # or load_config("/your-path-to-config/xxx_config.yaml")
-
+    config = load_config("triton")  # use offical deepseek api
+    # config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+    
+    check_env_for_task("mindspore", "ascend", "triton", config)
+    
     task = Task(
         op_name=op_name,
         task_desc=task_desc,
@@ -80,12 +84,13 @@ async def run_mindspore_triton_single():
         arch="ascend910b4",
         config=config,
         device_pool=device_pool,
-        framework="mindspore"
+        framework="mindspore",
+        workflow="coder_only_workflow"
     )
 
     task_pool.create_task(task.run)
     results = await task_pool.wait_all()
-    for op_name, result in results:
+    for op_name, result, _ in results:
         if result:
             print(f"Task {op_name} passed")
         else:

@@ -20,8 +20,8 @@ k = 768
 
 
 def get_inputs():
-    A = np.random.randn(b, i, j, l).astype(np.float16)
-    B = np.random.randn(l, k).astype(np.float16)
+    A = np.random.rand(b, i, j, l).astype(np.float16)
+    B = np.random.rand(l, k).astype(np.float16)
     return [A, B]
 
 

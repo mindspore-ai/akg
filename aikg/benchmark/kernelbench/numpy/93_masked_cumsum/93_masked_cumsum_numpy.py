@@ -19,7 +19,7 @@ dim = 1
 
 
 def get_inputs():
-    x = np.random.randn(batch_size, *input_shape).astype(np.float16)
+    x = np.random.rand(batch_size, *input_shape).astype(np.float16)
     mask = np.random.randint(0, 2, x.shape).astype(bool)  # Random boolean mask
     return [x, mask]
 

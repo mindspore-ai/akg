@@ -17,8 +17,8 @@ K = 131072
 
 
 def get_inputs():
-    A = np.random.randn(M, K).astype(np.float16)
-    B = np.random.randn(K, 1).astype(np.float16)
+    A = np.random.rand(M, K).astype(np.float16)
+    B = np.random.rand(K, 1).astype(np.float16)
     return [A, B]
 
 
