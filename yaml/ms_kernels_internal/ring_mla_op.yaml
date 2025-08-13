@@ -1,0 +1,69 @@
+#operator ring_mla
+ring_mla:
+  args:
+    query:
+      dtype: tensor
+    query_rope:
+      dtype: tensor
+    key:
+      dtype: tensor
+    key_rope:
+      dtype: tensor
+    value:
+      dtype: tensor
+    mask:
+      dtype: tensor
+      default: None
+    alibi_coeff:
+      dtype: tensor
+      default: None
+    deq_scale_qk:
+      dtype: tensor
+      default: None
+    deq_offset_qk:
+      dtype: tensor
+      default: None
+    deq_scale_pv:
+      dtype: tensor
+      default: None
+    deq_offset_pv:
+      dtype: tensor
+      default: None
+    quant_p:
+      dtype: tensor
+      default: None
+    log_n:
+      dtype: tensor
+      default: None
+    o_prev:
+      dtype: tensor
+      default: None
+    lse_prev:
+      dtype: tensor
+      default: None
+    q_seq_lens:
+      dtype: tensor
+      default: None
+    context_lens:
+      dtype: tensor
+      default: None
+    head_num:
+      dtype: int
+      default: 0
+    scale_value:
+      dtype: float
+      default: 1.0
+    kv_head_num:
+      dtype: int
+      default: 0
+    mask_type:
+      dtype: int
+      default: 0
+    calc_type:
+      dtype: int
+      default: 0
+  returns:
+    attention_out:
+      dtype: tensor
+    lse:
+      dtype: tensor

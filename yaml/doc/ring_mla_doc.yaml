@@ -1,0 +1,94 @@
+ring_mla:
+    description: |
+        The RingMLA is a multi-head latent attention operator that splits Query/Key into
+        base and RoPE parts and supports KV-head grouping. It optionally applies a
+        triangular causal mask and can perform a ring update that fuses the current
+        attention result with a previous partial result.
+
+        Args:
+            query (Tensor): Query without RoPE part with data type of float16 or bfloat16.
+              :math:`(num\_tokens, num\_head, base\_dim)`.
+            query_rope (Tensor): Query RoPE part with data type of float16 or bfloat16.
+              :math:`(num\_tokens, num\_head, rope\_dim)`.
+            key (Tensor): Key without RoPE part with data type of float16 or bfloat16.
+              :math:`(num\_kv\_tokens, num\_kv\_head, base\_dim)`.
+            key_rope (Tensor): Key RoPE part with data type of float16 or bfloat16.
+              :math:`(num\_kv\_tokens, num\_kv\_head, rope\_dim)`.
+            value (Tensor): Value tensor with data type of float16 or bfloat16.
+              :math:`(num\_kv\_tokens, num\_kv\_head, value\_dim)`.
+            mask (Tensor, optional): Lookahead/causal mask. When provided, use float16 for
+              fp16 flow or bfloat16 for bf16 flow. Typical shapes are
+              :math:`(batch, max\_seq, max\_seq)` or :math:`(max\_seq, max\_seq)`.
+              Default: ``None``.
+            alibi_coeff (Tensor, optional): Optional ALiBi coefficients, broadcastable to
+              attention logits. Default: ``None``.
+            deq_scale_qk (Tensor, optional): Optional dequant scale for QK logits. Default: ``None``.
+            deq_offset_qk (Tensor, optional): Optional dequant offset for QK logits. Default: ``None``.
+            deq_scale_pv (Tensor, optional): Optional dequant scale for PV values. Default: ``None``.
+            deq_offset_pv (Tensor, optional): Optional dequant offset for PV values. Default: ``None``.
+            quant_p (Tensor, optional): Optional quantized probability buffer. Default: ``None``.
+            log_n (Tensor, optional): Optional normalization log factors. Default: ``None``.
+            o_prev (Tensor, optional): Previous attention output used by ring update when enabled,
+              with data type of float16 or bfloat16.
+              :math:`(num\_tokens, num\_head, value\_dim)`. Default: zeros if not provided.
+            lse_prev (Tensor, optional): Previous log-sum-exp (LSE) used by ring update when enabled,
+              with data type of float32.
+              :math:`(num\_head, num\_tokens)`. Default: zeros if not provided.
+            q_seq_lens (Tensor, optional): The query length of each sequence with data type of int32.
+              :math:`(batch,)`. Default: ``None``.
+            context_lens (Tensor, optional): The KV length of each sequence with data type of int32.
+              :math:`(batch,)`. Default: ``None``.
+            head_num (int): Number of attention heads for Query.
+            scale_value (float): Scaling factor applied to QK^T, typically :math:`1/\sqrt{head\_dim}`.
+            kv_head_num (int): Number of KV heads for Key/Value; K/V are repeated per-group to match `head_num`.
+            mask_type (int): Mask mode. ``0`` for no mask, ``1`` for triangular causal mask.
+            calc_type (int): Calculation mode. ``0`` enables ring update using `o_prev`/`lse_prev`,
+              ``1`` computes standalone attention.
+
+        Returns:
+            - Tensor, the attention output with data type matching `value` (float16 or bfloat16),
+              :math:`(num\_tokens, num\_head, value\_dim)`.
+            - Tensor, the log-sum-exp (LSE) with data type float32,
+              :math:`(num\_head, num\_tokens)`.
+
+        Supported Platforms:
+            ``Ascend``
+
+        Examples:
+            >>> import math
+            >>> import numpy as np
+            >>> from mindspore import Tensor
+            >>> import ms_custom_ops
+            >>> num_tokens = 4
+            >>> num_kv_tokens = 8
+            >>> num_head = 16
+            >>> num_kv_head = 16
+            >>> base_dim, rope_dim, value_dim = 128, 64, 128
+            >>> scale_value = 1.0 / math.sqrt(base_dim + rope_dim)
+            >>> q_nope = Tensor(np.random.randn(num_tokens, num_head, base_dim).astype(np.float16))
+            >>> q_rope = Tensor(np.random.randn(num_tokens, num_head, rope_dim).astype(np.float16))
+            >>> k_nope = Tensor(np.random.randn(num_kv_tokens, num_kv_head, base_dim).astype(np.float16))
+            >>> k_rope = Tensor(np.random.randn(num_kv_tokens, num_kv_head, rope_dim).astype(np.float16))
+            >>> value = Tensor(np.random.randn(num_kv_tokens, num_kv_head, value_dim).astype(np.float16))
+            >>> # Optional tensors; use None when not needed
+            >>> mask = None
+            >>> alibi = None
+            >>> deq_scale_qk = None
+            >>> deq_offset_qk = None
+            >>> deq_scale_pv = None
+            >>> deq_offset_pv = None
+            >>> quant_p = None
+            >>> log_n = None
+            >>> # Previous outputs for ring update (set calc_type=0 to enable)
+            >>> o_prev = Tensor(np.zeros((num_tokens, num_head, value_dim), dtype=np.float16))
+            >>> lse_prev = Tensor(np.zeros((num_head, num_tokens), dtype=np.float32))
+            >>> # Sequence lengths (batch=1 example)
+            >>> q_seq_lens = Tensor(np.array([num_tokens], dtype=np.int32))
+            >>> kv_seq_lens = Tensor(np.array([num_kv_tokens], dtype=np.int32))
+            >>> out, lse = ms_custom_ops.ring_mla(
+            ...     q_nope, q_rope, k_nope, k_rope, value, mask, alibi,
+            ...     deq_scale_qk, deq_offset_qk, deq_scale_pv, deq_offset_pv, quant_p, log_n,
+            ...     o_prev, lse_prev, q_seq_lens, kv_seq_lens,
+            ...     num_head, scale_value, num_kv_head, 0, 1)
+            >>> print(out.shape, lse.shape)
+            (4, 16, 128) (16, 4)
