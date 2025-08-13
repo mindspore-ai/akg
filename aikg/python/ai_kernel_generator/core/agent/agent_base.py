@@ -16,13 +16,13 @@ import os
 import logging
 from abc import ABC
 from typing import Dict, Any
-from pathlib import Path
 
 from langchain.prompts import PromptTemplate
 
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.llm.model_loader import create_model
-from ai_kernel_generator.utils.common_utils import get_prompt_path, load_yaml
+from ai_kernel_generator.utils.common_utils import get_prompt_path
+from ai_kernel_generator.utils.collector import get_collector
 
 logger = logging.getLogger(__name__)
 stream_output_mode = os.getenv("STREAM_OUTPUT_MODE", "off").lower() == "on"
@@ -31,21 +31,22 @@ stream_output_mode = os.getenv("STREAM_OUTPUT_MODE", "off").lower() == "on"
 class AgentBase(ABC):
     """AIKG代理基类，提供基础功能和接口"""
 
-    def __init__(self, agent_name: str, config: dict = None):
-        self.agent_name = agent_name
+    def __init__(self, agent_details: dict = {}, config: dict = None):
+        self.agent_details = agent_details
         self.root_dir = get_project_root()
         self.config = config
 
     @staticmethod
-    def count_tokens(text: str, model_name: str, agent_name: str) -> None:
+    def count_tokens(text: str, model_name: str, agent_details: str) -> None:
         """使用tiktoken准确计算字符串的token数量并打印日志
 
         Args:
             text: 要统计的文本
             model_name: 模型名称，用于日志打印
-            agent_name: 代理名称，用于日志打印
+            agent_details: 代理详情信息
 
         """
+        agent_name = agent_details.get("agent_name", "Unknown")
         if not text:
             logger.debug(f"LLM Start:  [status] %s -- [model] %s -- [token_count] %s", agent_name, model_name, 0)
             return
@@ -200,7 +201,7 @@ class AgentBase(ABC):
             input: 要检查的输入字典
         """
         logger.debug("=" * 60)
-        logger.debug(f"检查 input 字典内容 (Agent: {self.agent_name})")
+        logger.debug(f"检查 input 字典内容 (Agent: {self.agent_details.get('agent_name', 'Unknown')})")
         logger.debug("=" * 60)
 
         if not input:
@@ -237,7 +238,7 @@ class AgentBase(ABC):
         """
         formatted_prompt = prompt.format(**input)
         self._check_input_dict(input)
-        # self.count_tokens(formatted_prompt, model_name, self.agent_name) # 暂不开启token统计
+        # self.count_tokens(formatted_prompt, model_name, self.agent_details) # 暂不开启token统计
         # 创建模型
         model = create_model(model_name)
 
@@ -290,10 +291,28 @@ class AgentBase(ABC):
                     f"usage_metadata: {raw_result.usage_metadata}"
                 logger.info(response_metadata)
 
-            logger.debug(f"LLM End:    [status] %s -- [model] %s", self.agent_name, model_name)
+            logger.debug(f"LLM End:    [status] %s -- [model] %s",
+                         self.agent_details.get('agent_name', 'Unknown'), model_name)
+            
+            # 使用collector收集数据
+            try:
+                collector = await get_collector()
+                collected_data = {
+                    "hash": self.agent_details.get('hash', 'Unknown'),
+                    "agent_name": self.agent_details.get('agent_name', 'Unknown'),
+                    "model_name": model_name,
+                    "content": content,
+                    "formatted_prompt": formatted_prompt,
+                    "reasoning_content": reasoning_content,
+                    "response_metadata": response_metadata,
+                }
+                await collector.collect(collected_data)
+            except Exception as e:
+                logger.warning(f"Failed to collect data: {e}")
 
             return content, formatted_prompt, reasoning_content
         except Exception as e:
-            logger.error(f"LLM Failed: [status] %s -- [model] %s -- [error] %s", self.agent_name, model_name, e)
+            logger.error(f"LLM Failed: [status] %s -- [model] %s -- [error] %s",
+                         self.agent_details.get('agent_name', 'Unknown'), model_name, e)
             logger.error(f"Exception in run_llm: {type(e).__name__}: {e}")
             raise

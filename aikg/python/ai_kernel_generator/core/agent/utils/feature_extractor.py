@@ -15,7 +15,7 @@
 import logging
 from typing import Tuple
 from ai_kernel_generator.core.agent.agent_base import AgentBase
-from ai_kernel_generator.utils.common_utils import ParserFactory
+from ai_kernel_generator.utils.common_utils import ParserFactory, get_md5_hash
 logger = logging.getLogger(__name__)
 
 
@@ -33,8 +33,10 @@ class FeatureExtractor(AgentBase):
         self.impl_code = impl_code
         self.framework_code = framework_code
 
-        agent_name = f"FeatureExtractor"
-        super().__init__(agent_name=agent_name)
+        agent_details = {
+            "agent_name": "feature_extractor",
+        }
+        super().__init__(agent_details=agent_details)
 
         # 初始化解析器
         self.feature_parser = ParserFactory.get_feature_parser()
@@ -50,4 +52,12 @@ class FeatureExtractor(AgentBase):
         }
 
     async def run(self) -> Tuple[str, str, str]:
+        # 执行LLM生成前更新agent_details，确保正确性
+        hash = get_md5_hash(impl_code=self.impl_code)
+        to_update_agent_details = {
+            "agent_name": "feature_extractor",
+            "hash": hash,
+        }
+        self.agent_details.update(to_update_agent_details)
+
         return await self.run_llm(self.feature_extraction_template, self.feature_extraction_input, self.model_config["feature_extractor"])

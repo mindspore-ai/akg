@@ -43,6 +43,7 @@ class Designer(AgentBase):
         self.backend = backend
         self.workflow_config_path = workflow_config_path
         self.config = config
+        self.llm_step_count = 0
 
         # 从config中获取model_config
         if config:
@@ -50,8 +51,14 @@ class Designer(AgentBase):
         else:
             raise ValueError("config is required for Designer")
 
-        agent_name = f"Designer -- [dsl] {self.dsl} -- [op_name] {self.op_name}"
-        super().__init__(agent_name=agent_name, config=config)
+        agent_details = {
+            "agent_name": "designer",
+            "dsl": self.dsl,
+            "op_name": self.op_name,
+            "backend": self.backend,
+            "arch": self.arch,
+        }
+        super().__init__(agent_details=agent_details, config=config)
 
         # 直接使用从workflow.yaml获取的designer解析器
         self.code_parser = create_step_parser("designer", self.workflow_config_path)
@@ -105,6 +112,16 @@ class Designer(AgentBase):
             "llm_suggestions": conductor_suggestion,  # Conductor建议
             "meta_prompts": task_info.get("meta_prompts", ""),
         }
+
+        # 执行LLM生成前更新agent_details，确保正确性
+        self.llm_step_count += 1
+        to_update_agent_details = {
+            "agent_name": "designer",
+            "hash": task_info.get("task_id", "Designer"),
+            "task_id": task_info.get("task_id", "Unknown"),
+            "step": self.llm_step_count,
+        }
+        self.agent_details.update(to_update_agent_details)
 
         # 执行LLM生成
         return await self.run_llm(

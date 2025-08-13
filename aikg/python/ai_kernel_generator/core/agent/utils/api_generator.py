@@ -35,8 +35,12 @@ class APIGenerator(AgentBase):
         self.sketch = sketch
         self.dsl = dsl
         self.model_config = model_config
-        agent_name = f"APIGenerator -- [dsl] {self.dsl}"
-        super().__init__(agent_name=agent_name)
+        self.llm_step_count = 0
+        agent_details = {
+            "agent_name": "api_generator",
+            "dsl": self.dsl,
+        }
+        super().__init__(agent_details=agent_details)
 
         # 初始化解析器
         self.api_parser = ParserFactory.get_api_parser()
@@ -65,6 +69,15 @@ class APIGenerator(AgentBase):
         """
         运行API生成器
         """
+        # 执行LLM生成前更新agent_details，确保正确性
+        # TODO: 缺少task_id
+        self.llm_step_count += 1
+        to_update_agent_details = {
+            "agent_name": "api_generator",
+            "step": self.llm_step_count,
+        }
+        self.agent_details.update(to_update_agent_details)
+
         api_json, _, _ = await self.run_llm(self.api_prompt, self.api_input, self.model_config["api_generator"])
         parsed_content = self.api_parser.parse(api_json)
 

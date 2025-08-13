@@ -25,6 +25,7 @@ from ai_kernel_generator.core.agent.coder import Coder
 from ai_kernel_generator.core.agent.designer import Designer
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
 from ai_kernel_generator.utils.workflow_manager import WorkflowManager
+from ai_kernel_generator.utils.collector import get_collector
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,25 @@ class Task:
 
             # 获取最终结果
             final_success = self.conductor.task_info.get('verifier_result', False)
+
+            try:
+                collector = await get_collector()
+                collector.set_config(self.config)
+                
+                # 根据验证结果准备数据
+                if final_success:
+                    # 验证成功：收集task相关数据 + database数据
+                    saved_files = await collector.prepare_and_remove_data(task_id=self.task_id)
+                    database_file = collector.prepare_database_data(self.conductor.task_info)
+                    all_files = saved_files + ([database_file] if database_file else [])
+                    logger.debug(f"Task {self.task_id} completed successfully, saved {len(all_files)} files: {all_files}")
+                else:
+                    # 验证失败：收集无task_id的独立数据
+                    saved_files = await collector.prepare_and_remove_data()
+                    logger.debug(f"Task {self.task_id} failed, saved {len(saved_files)} files: {saved_files}")
+            except Exception as e:
+                logger.error(f"Failed to prepare data for transmission in task {self.task_id}: {e}")
+                    
             return self.op_name, final_success, self.conductor.task_info
 
         except Exception as e:
