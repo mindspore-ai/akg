@@ -17,8 +17,8 @@ M = 4096
 
 
 def get_inputs():
-    A = np.random.randn(M, M).astype(np.float16)
-    B = np.random.randn(M, M).astype(np.float16)
+    A = np.random.rand(M, M).astype(np.float16)
+    B = np.random.rand(M, M).astype(np.float16)
     A = np.tril(A)
     B = np.tril(B)
     return [A, B]

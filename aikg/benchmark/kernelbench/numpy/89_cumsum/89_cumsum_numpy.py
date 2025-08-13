@@ -25,7 +25,7 @@ def get_inputs():
         list: A list containing a single randomly generated tensor with shape
               (batch_size, *input_shape).
     """
-    return [np.random.randn(batch_size, *input_shape).astype(np.float16)]
+    return [np.random.rand(batch_size, *input_shape).astype(np.float16)]
 
 
 def get_init_inputs():

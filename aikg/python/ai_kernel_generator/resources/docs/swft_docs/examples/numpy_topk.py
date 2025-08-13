@@ -20,6 +20,7 @@ def topk_kernel(x, indices, x_out, indices_out):
         index = neg_one.copy()
         for j in range(i, length):
             x = move_to_scalar(ub_x[j])
+            # 注意：通过比较数值大小，实现排序功能
             if x > res:
                 res.load(x)
                 index.load(Scalar("INT32", j))

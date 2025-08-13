@@ -7,40 +7,31 @@ OP_NAME = "softmax"
 
 @sub_kernel(core_num=8)
 def softmax_kernel(gm_input, gm_output):
-    # Hardcoded parameters from tiling
     BATCH_SIZE = 16
     DIM = 16384
     BLOCK_DIM = 8
-    SAMPLES_PER_CORE = BATCH_SIZE // BLOCK_DIM  # 2
+    SAMPLES_PER_CORE = BATCH_SIZE // BLOCK_DIM
 
-    # Get core index
     core_idx = get_block_idx()
     start_batch = core_idx * SAMPLES_PER_CORE
 
-    # Process each sample in pipeline
     for i in range(SAMPLES_PER_CORE):
         current_batch = start_batch + i
-
-        # Load input data to UB
         ub_input = slice_to_ub(gm_input, [current_batch, 0], [1, DIM])
+        # 注意：为了保证结果的正确性，累加操作必须转为fp32
+        ub_input_fp32 = vconv(ub_input, "FP32")
 
-        # 1. Find max value (along dim axis)
-        ub_max = vcmax(ub_input, reduce_axis=-1)
-
-        # 2. Subtract max value
-        ub_sub = vsubs(ub_input, move_to_scalar(ub_max))
-
-        # 3. Compute exp
+        ub_max = vcmax(ub_input_fp32, reduce_axis=-1)
+        # 注意：为了充分利用UB，reduce后为标量情况下，使用向量-标量运算替代broadcast，注意仅仅在双目运算中使用
+        ub_sub = vsubs(ub_input_fp32, move_to_scalar(ub_max))
         ub_exp = vexp(ub_sub)
-
-        # 4. Sum exp values
+        
         ub_sum = vcadd(ub_exp, reduce_axis=-1)
-
-        # 5. Divide each element by sum
+        # 注意：为了充分利用UB，reduce后为标量情况下，使用向量-标量运算替代broadcast，注意仅仅在双目运算中使用
         ub_div = vdivs(ub_exp, move_to_scalar(ub_sum))
 
-        # Write result back to GM
-        insert_to_gm(gm_output, ub_div, [current_batch, 0], [1, DIM])
+        ub_result = vconv(ub_div, "FP16")
+        insert_to_gm(gm_output, ub_result, [current_batch, 0], [1, DIM])
 
 
 def softmax_swft_numpy(device_id=0):

@@ -61,7 +61,7 @@ dilation = 3
 
 
 def get_inputs():
-    x = np.random.randn(batch_size, channels, height, width).astype(np.float16)
+    x = np.random.rand(batch_size, channels, height, width).astype(np.float16)
     return [x]
 
 

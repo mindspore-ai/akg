@@ -21,7 +21,7 @@ dim = 2000
 
 
 def get_inputs():
-    return [np.random.randn(batch_size, dim).astype(np.float16)]
+    return [np.random.rand(batch_size, dim).astype(np.float16)]
 
 
 def get_init_inputs():

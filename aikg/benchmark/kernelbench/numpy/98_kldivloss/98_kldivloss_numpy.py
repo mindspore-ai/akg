@@ -24,8 +24,8 @@ def get_inputs():
     def softmax(x, axis=-1):
         e_x = np.exp(x - np.max(x, axis=axis, keepdims=True))
         return e_x / e_x.sum(axis=axis, keepdims=True)
-    return [softmax(np.random.randn(batch_size, *input_shape).astype(np.float16)),
-            softmax(np.random.randn(batch_size, *input_shape).astype(np.float16))]
+    return [softmax(np.random.rand(batch_size, *input_shape).astype(np.float16)),
+            softmax(np.random.rand(batch_size, *input_shape).astype(np.float16))]
 
 
 def get_init_inputs():

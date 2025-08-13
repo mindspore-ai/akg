@@ -10,14 +10,14 @@ from ai_kernel_generator.utils.environment_check import check_env_for_task
 
 
 @pytest.mark.level0
-@pytest.mark.torch
+@pytest.mark.numpy
 @pytest.mark.swft
 @pytest.mark.ascend
 @pytest.mark.ascend310p3
 @pytest.mark.use_model
 @pytest.mark.asyncio
 async def test_parallel_task_swft_ascend():
-    framework = "torch"
+    framework = "numpy"
     dsl = "swft"
     backend = "ascend"
     arch = "ascend310p3"

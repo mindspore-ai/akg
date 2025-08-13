@@ -30,7 +30,7 @@ dim = 1
 
 
 def get_inputs():
-    return [np.random.randn(batch_size, *input_shape).astype(np.float16), np.random.randint(0, num_classes, (batch_size,))]
+    return [np.random.rand(batch_size, *input_shape).astype(np.float16), np.random.randint(0, num_classes, (batch_size,))]
 
 
 def get_init_inputs():

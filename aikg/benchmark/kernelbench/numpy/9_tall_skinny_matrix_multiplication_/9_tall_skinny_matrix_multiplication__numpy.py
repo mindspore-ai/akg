@@ -17,8 +17,8 @@ N = 16
 
 
 def get_inputs():
-    A = np.random.randn(M, N).astype(np.float16)
-    B = np.random.randn(N, M).astype(np.float16)
+    A = np.random.rand(M, N).astype(np.float16)
+    B = np.random.rand(N, M).astype(np.float16)
     return [A, B]
 
 
