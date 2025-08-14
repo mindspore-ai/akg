@@ -59,7 +59,7 @@ constexpr size_t kInputHeadNumIndex = 5;
 constexpr size_t kOutputIndex = 0;
 class CustomReshapeAndCache : public InternalKernelMod {
 public:
-  CustomReshapeAndCache() : InternalKernelMod() {}
+  CustomReshapeAndCache() : InternalKernelMod(), skip_execution_(false) {}
   ~CustomReshapeAndCache() = default;
 
   void InitKernelInputsOutputsIndex() override {
@@ -69,15 +69,64 @@ public:
     kernel_outputs_index_ = {kOutputIndex};
   }
 
+  int Resize(const std::vector<KernelTensor *> &inputs,
+             const std::vector<KernelTensor *> &outputs) override {
+    // Check if any input has shape containing 0
+    for (const auto &input : inputs) {
+      if (input == nullptr)
+        continue;
+      auto shape = input->GetShapeVector();
+      for (const auto &dim : shape) {
+        if (dim == 0) {
+          MS_LOG(INFO) << "ReshapeAndCache: Skipping execution due to zero "
+                          "dimension in input shape: "
+                       << shape;
+          skip_execution_ = true;
+          return KernelMod::Resize(inputs, outputs); // Skip execution
+        }
+      }
+    }
+
+    skip_execution_ = false;
+    // Call base class implementation
+    return InternalKernelMod::Resize(inputs, outputs);
+  }
+
+  bool Launch(const std::vector<KernelTensor *> &inputs,
+              const std::vector<KernelTensor *> &workspace,
+              const std::vector<KernelTensor *> &outputs,
+              void *stream_ptr) override {
+    // Skip execution if flag is set
+    if (skip_execution_) {
+      return true; // Skip execution, return success
+    }
+
+    // Call base class implementation
+    return InternalKernelMod::Launch(inputs, workspace, outputs, stream_ptr);
+  }
+
 protected:
   internal::InternalOpPtr
   CreateKernel(const internal::InputsImmutableInfoList &inputs,
                const internal::OutputsImmutableInfoList &outputs,
                const std::vector<KernelTensor *> &ms_inputs,
                const std::vector<KernelTensor *> &ms_outputs) override {
-    return internal::CreateReshapeAndCacheOp(
-        inputs, outputs, internal::kInternalReshapeAndCacheOpName);
+    internal::ReshapeAndCacheParam param;
+    auto head_num = ms_inputs.at(internal::kIndex5);
+    if (head_num->dtype_id() == TypeId::kNumberTypeInt64) {
+      param.head_num =
+          static_cast<int32_t>(head_num->GetValue<int64_t>().value());
+    } else {
+      MS_LOG(EXCEPTION)
+          << "ReshapeAndCache [head_num]'s dtype wrong, expect int64, but got: "
+          << head_num->dtype_id();
+    }
+    return internal::CreateAsdReshapeAndCacheOp(
+        inputs, outputs, param, internal::kInternalAsdReshapeAndCacheOpName);
   }
+
+private:
+  bool skip_execution_; // Flag to skip execution when shape contains 0
 };
 } // namespace ms_custom_ops
 
@@ -102,15 +151,17 @@ protected:
   internal::InternalOpPtr
   CreateKernel(const internal::InputsImmutableInfoList &inputs,
                const internal::OutputsImmutableInfoList &outputs) override {
-    return internal::CreateReshapeAndCacheOp(
-        inputs, outputs, internal::kInternalReshapeAndCacheOpName);
+    internal::ReshapeAndCacheParam param;
+    param.head_num = this->head_num_;
+    return internal::CreateAsdReshapeAndCacheOp(
+        inputs, outputs, param, internal::kInternalAsdReshapeAndCacheOpName);
   }
 
 private:
   int32_t head_num_{0};
 };
 MS_KERNELS_INTERNAL_NAME_REG(ReshapeAndCache,
-                             internal::kInternalReshapeAndCacheOpName);
+                             internal::kInternalAsdReshapeAndCacheOpName);
 } // namespace ms::pynative
 
 namespace ms_custom_ops {
