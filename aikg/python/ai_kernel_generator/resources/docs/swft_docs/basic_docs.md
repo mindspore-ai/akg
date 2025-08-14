@@ -26,17 +26,17 @@ SWFT算子定义完成后，通过如下代码启动算子编译，并最终输�
 ```python
 def tanh_swft_numpy(device_id=0):
     set_context("310P") #指示编译的昇腾后端，当前仅支持310系列
-    input0 = Tensor("GM", "FP16", [16, 256, 256], "ND", multi_core=False) # multi_core仅支持False
-    output0 = Tensor("GM", "FP16", [16, 256], "ND", multi_core=False) # multi_core仅支持False
+    input0 = Tensor("GM", "FP16", [16, 256, 256], "ND", False)
+    output0 = Tensor("GM", "FP16", [16, 256], "ND", False)
     tanh_kernel(input0, output0)
 
     # 使用动态路径
     current_dir = os.path.dirname(__file__)
-    cce_path = os.path.join(current_dir, f"{OP_NAME}", f"{OP_NAME}.cce") # 指示算子编译输出文件的最终位置，输出为CCE代码。
+    cce_path = os.path.join(current_dir, OP_NAME, OP_NAME + ".cce") # 指示算子编译输出文件的最终位置，输出为CCE代码。
     compile_kernel(cce_path, OP_NAME) # 编译算子
     exec_kernel(OP_NAME, locals(), inputs=['input0'], outputs=['output0'], device_id=device_id) # 执行算子
 ```
-其中所有的输入输出Tensor必须按照input/output+index的方式命名，例如：input0, input1, output0, output1等，并且`multi_core`仅支持False。通过compile_kernel编译算子，exec_kernel执行算子，最终输出算子执行结果。
+其中所有的输入输出Tensor必须按照input/output+index的方式命名，例如：input0, input1, output0, output1等。通过compile_kernel编译算子，exec_kernel执行算子，最终输出算子执行结果。
 
 ## SWFT 参考代码
 

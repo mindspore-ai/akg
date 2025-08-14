@@ -23,12 +23,14 @@ def softmax_kernel(gm_input, gm_output):
 
         ub_max = vcmax(ub_input_fp32, reduce_axis=-1)
         # 注意：为了充分利用UB，reduce后为标量情况下，使用向量-标量运算替代broadcast，注意仅仅在双目运算中使用
-        ub_sub = vsubs(ub_input_fp32, move_to_scalar(ub_max))
+        ub_max_scalar = move_to_scalar(ub_max)
+        ub_sub = vsubs(ub_input_fp32, ub_max_scalar)
         ub_exp = vexp(ub_sub)
 
         ub_sum = vcadd(ub_exp, reduce_axis=-1)
         # 注意：为了充分利用UB，reduce后为标量情况下，使用向量-标量运算替代broadcast，注意仅仅在双目运算中使用
-        ub_div = vdivs(ub_exp, move_to_scalar(ub_sum))
+        ub_sum_scalar = move_to_scalar(ub_sum)
+        ub_div = vdivs(ub_exp, ub_sum_scalar)
 
         ub_result = vconv(ub_div, "FP16")
         insert_to_gm(gm_output, ub_result, [current_batch, 0], [1, DIM])
@@ -42,6 +44,6 @@ def softmax_swft_numpy(device_id=0):
 
     # 使用动态路径
     current_dir = os.path.dirname(__file__)
-    cce_path = os.path.join(current_dir, f"{OP_NAME}", f"{OP_NAME}.cce")
+    cce_path = os.path.join(current_dir, OP_NAME, OP_NAME + ".cce")
     compile_kernel(cce_path, OP_NAME)
     exec_kernel(OP_NAME, locals(), inputs=['input0'], outputs=['output0'], device_id=device_id)

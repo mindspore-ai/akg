@@ -60,4 +60,4 @@ class FeatureExtractor(AgentBase):
         }
         self.context.update(to_update_context)
 
-        return await self.run_llm(self.feature_extraction_template, self.feature_extraction_input, self.model_config["feature_extractor"])
+        return await self.run_llm(self.feature_extraction_template, self.feature_extraction_input, self.model_config.get("feature_extractor", "default"))

@@ -17,6 +17,7 @@ from typing import List
 from pathlib import Path
 import json
 from langchain_core.documents import Document
+from ai_kernel_generator.database.vector_store import VectorStore
 from ai_kernel_generator.database.database import Database, RetrievalStrategy
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.utils.common_utils import get_md5_hash
@@ -26,9 +27,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_EVOLVE_DATABASE_PATH = Path(get_project_root()).parent.parent / "evolve_database"
 
 class EvolveDatabase(Database):
-    def __init__(self, config_path: str = "", database_path: str = "", random_mode: bool = False):
-        super().__init__(config_path, database_path, random_mode)
+    def __init__(self, database_path: str = "", config: dict = None):
         self.database_path = database_path or str(DEFAULT_EVOLVE_DATABASE_PATH)
+        self.schedule_vector_store = VectorStore(
+            database_path=self.database_path,
+            index_name="schedule_vector_store"
+        )
+        self.vector_stores = [self.schedule_vector_store]
+        super().__init__(self.database_path, self.vector_stores, config)
 
     def optimality_search(self):
         """遍历数据库路径查找profile最小的metadata.json文件"""
@@ -53,18 +59,27 @@ class EvolveDatabase(Database):
         """
         Evolve采样方案，根据当前算子的特征信息，从数据库中采样出优化性和随机性的算子实现。
         """
-        if not self.random_mode:
+        result = []
+        optimality_docs = self.optimality_search()
+        optimality_res = self.get_output_content(output_content, RetrievalStrategy.OPTIMALITY, optimality_docs, dsl, framework)
+        result.extend(optimality_res)
+        
+        need_extract_features = False
+        for vector_store in self.vector_stores:
+            if vector_store.enable_vector_store:
+                need_extract_features = True
+                break
+        
+        if need_extract_features:
             features = await self.extract_features(impl_code, framework_code, backend, arch, dsl)
             features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
             feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
-
-        result = []
-        # TODO:
-        # optimality_docs = self.optimality_search()
-        # optimality_res = self.get_output_content(output_content, RetrievalStrategy.OPTIMALITY, optimality_docs, dsl, framework)
+            
+            docs = self.schedule_vector_store.max_marginal_relevance_search(features_str, feature_invariants, sample_num)
+            schedule_res = self.get_output_content(output_content, RetrievalStrategy.NAIVETY, docs, dsl, framework)
+            result.extend(schedule_res)
+        else:
+            random_res = self.randomicity_search(output_content, sample_num - 1, backend, arch, dsl, framework)
+            result.extend(random_res)
         
-        random_res = self.randomicity_search(output_content, sample_num - 1, backend, arch, dsl, framework)
-        
-        # result.extend(optimality_res)
-        result.extend(random_res)
         return result
