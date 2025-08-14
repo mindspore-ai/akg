@@ -25,7 +25,7 @@ from ai_kernel_generator.utils.common_utils import get_prompt_path
 from ai_kernel_generator.utils.collector import get_collector
 
 logger = logging.getLogger(__name__)
-stream_output_mode = os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
+aikg_stream_output = os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
 
 
 class AgentBase(ABC):
@@ -271,7 +271,7 @@ class AgentBase(ABC):
                 # 其他模型使用原来的chain方式
                 chain = prompt | model
 
-                if not stream_output_mode:
+                if not aikg_stream_output:
                     raw_result = await chain.ainvoke(input)
                     content = raw_result.content
                     reasoning_content = raw_result.additional_kwargs.get("reasoning_content", "")
