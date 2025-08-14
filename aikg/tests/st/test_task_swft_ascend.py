@@ -26,7 +26,7 @@ async def test_parallel_task_swft_ascend():
     config = load_config(dsl)
 
     check_env_for_task(framework, backend, dsl, config)
-    
+
     benchmark_name = get_kernelbench_op_name([19, 20], framework=framework)
 
     if benchmark_name is None:
@@ -51,7 +51,7 @@ async def test_parallel_task_swft_ascend():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    
+
     # 使用通用的结果处理函数
     success = process_task_results(results, print_summary=True)
     assert success, "存在测试case失败"

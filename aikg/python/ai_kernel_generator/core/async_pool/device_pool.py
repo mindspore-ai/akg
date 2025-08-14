@@ -30,10 +30,10 @@ class DevicePool:
     def __init__(self, device_list: List[int] = None):
         if device_list is None:
             device_list = [0]
-            
+
         self.available_devices = asyncio.Queue()
         self.condition = asyncio.Condition()
-        
+
         env_devices = os.environ.get("AIKG_DEVICES_LIST")
         if env_devices:
             try:
@@ -47,7 +47,6 @@ class DevicePool:
 
         for device_id in self.device_list:
             self.available_devices.put_nowait(device_id)
-
 
     async def acquire_device(self) -> int:
         """

@@ -51,14 +51,14 @@ class Designer(AgentBase):
         else:
             raise ValueError("config is required for Designer")
 
-        agent_details = {
+        context = {
             "agent_name": "designer",
             "dsl": self.dsl,
             "op_name": self.op_name,
             "backend": self.backend,
             "arch": self.arch,
         }
-        super().__init__(agent_details=agent_details, config=config)
+        super().__init__(context=context, config=config)
 
         # 直接使用从workflow.yaml获取的designer解析器
         self.code_parser = create_step_parser("designer", self.workflow_config_path)
@@ -113,15 +113,15 @@ class Designer(AgentBase):
             "meta_prompts": task_info.get("meta_prompts", ""),
         }
 
-        # 执行LLM生成前更新agent_details，确保正确性
+        # 执行LLM生成前更新context，确保正确性
         self.llm_step_count += 1
-        to_update_agent_details = {
+        to_update_context = {
             "agent_name": "designer",
             "hash": task_info.get("task_id", "Designer"),
             "task_id": task_info.get("task_id", "Unknown"),
             "step": self.llm_step_count,
         }
-        self.agent_details.update(to_update_agent_details)
+        self.context.update(to_update_context)
 
         # 执行LLM生成
         return await self.run_llm(

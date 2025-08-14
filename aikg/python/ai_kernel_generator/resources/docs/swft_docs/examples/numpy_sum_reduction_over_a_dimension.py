@@ -21,7 +21,7 @@ def sum_reduction_over_a_dimension_kernel(gm_input, gm_output):
         # 注意：为了保证结果的正确性，累加操作必须转为fp32
         init_fp32 = Scalar("FP32", 0.0)
         reduce_buf_fp32 = vector_dup(init_fp32, [1, 1, DIM2], False)
-        
+
         # 注意：当前SWFT仅支持最后一根轴是reduce轴，因此最后一根轴为非reduce轴时，只能通过for循环和vadd指令替代vcadd
         for j in range(DIM1):
             ub_input = slice_to_ub(gm_input, [current_batch, j, 0], [1, 1, DIM2])

@@ -33,10 +33,10 @@ class FeatureExtractor(AgentBase):
         self.impl_code = impl_code
         self.framework_code = framework_code
 
-        agent_details = {
+        context = {
             "agent_name": "feature_extractor",
         }
-        super().__init__(agent_details=agent_details)
+        super().__init__(context=context)
 
         # 初始化解析器
         self.feature_parser = ParserFactory.get_feature_parser()
@@ -52,12 +52,12 @@ class FeatureExtractor(AgentBase):
         }
 
     async def run(self) -> Tuple[str, str, str]:
-        # 执行LLM生成前更新agent_details，确保正确性
+        # 执行LLM生成前更新context，确保正确性
         hash = get_md5_hash(impl_code=self.impl_code)
-        to_update_agent_details = {
+        to_update_context = {
             "agent_name": "feature_extractor",
             "hash": hash,
         }
-        self.agent_details.update(to_update_agent_details)
+        self.context.update(to_update_context)
 
         return await self.run_llm(self.feature_extraction_template, self.feature_extraction_input, self.model_config["feature_extractor"])

@@ -57,14 +57,14 @@ class Conductor(AgentBase):
             config: 完整配置字典，包含log_dir、model_config等
         """
         # 初始化基类
-        agent_details = {
+        context = {
             "agent_name": "conductor",
             "dsl": dsl,
             "op_name": op_name,
             "framework": framework,
             "arch": arch,
         }
-        super().__init__(agent_details=agent_details, config=config)
+        super().__init__(context=context, config=config)
 
         self.op_name = op_name
         self.task_desc = task_desc
@@ -259,15 +259,15 @@ class Conductor(AgentBase):
                 'format_instructions': format_instructions,
             }
 
-            # 执行LLM生成前更新agent_details，确保正确性
+            # 执行LLM生成前更新context，确保正确性
             self.llm_step_count += 1
-            to_update_agent_details = {
+            to_update_context = {
                 "agent_name": "conductor",
                 "hash": self.task_id + "@" + str(self.llm_step_count),
                 "task_id": self.task_id,
                 "step": self.llm_step_count,
             }
-            self.agent_details.update(to_update_agent_details)
+            self.context.update(to_update_context)
 
             model_name = self.model_config.get('conductor')
             content, formatted_prompt, reasoning = await self.run_llm(self.conductor_template, input_data, model_name)

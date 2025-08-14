@@ -30,20 +30,20 @@ logger = logging.getLogger(__name__)
 def check_env(framework=None, backend=None, dsl=None, config_path=None, config=None):
     """
     检查环境是否满足要求
-    
+
     Args:
         framework: 框架类型 (mindspore/torch/numpy)
         backend: 后端类型 (ascend/cuda/cpu)
         dsl: DSL类型 (triton/swft)
         config_path: 任务配置文件路径，用于检查具体使用的模型API
         config: 已加载的配置字典，优先于config_path使用
-    
+
     Returns:
         bool: 环境检查是否通过
     """
     print("🔍 正在检查环境...")
     issues = []
-    
+
     # 1. 检查基础包
     base_packages = ['numpy', 'jinja2', 'httpx']
     for pkg in base_packages:
@@ -51,7 +51,7 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
             importlib.import_module(pkg)
         except ImportError:
             issues.append(f"❌ 缺少基础包: {pkg}")
-    
+
     # 2. 检查框架
     if framework == 'mindspore':
         try:
@@ -63,7 +63,7 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
             importlib.import_module('torch')
         except ImportError:
             issues.append("❌ 缺少 torch")
-    
+
     # 3. 检查DSL
     if dsl == 'triton':
         try:
@@ -75,7 +75,7 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
             importlib.import_module('swft')
         except ImportError:
             issues.append("❌ 缺少 swft")
-    
+
     # 4. 检查硬件
     if backend == 'cuda':
         try:
@@ -91,12 +91,12 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
                 issues.append("⚠️ 昇腾设备可能不可用")
         except:
             issues.append("⚠️ 未找到 npu-smi")
-    
+
     # 5. 检查API配置
     api_ok = _check_llm_api(config_path, config)
     if not api_ok:
         issues.append("❌ LLM API配置或连接有问题")
-    
+
     # 输出结果
     if issues:
         print("🚨 发现问题:")
@@ -115,11 +115,11 @@ def _load_llm_config():
         # 找到llm_config.yaml文件
         current_dir = Path(__file__).parent
         config_path = current_dir.parent / "core" / "llm" / "llm_config.yaml"
-        
+
         if not config_path.exists():
             print(f"⚠️ 未找到LLM配置文件: {config_path}")
             return None
-            
+
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
             return config
@@ -134,10 +134,10 @@ def _check_llm_api(config_path=None, config=None):
     llm_config = _load_llm_config()
     if not llm_config:
         return False
-    
+
     # 获取使用的模型配置
     used_models = set()
-    
+
     if config:
         # 优先使用已加载的配置字典
         if 'agent_model_config' in config:
@@ -160,7 +160,7 @@ def _check_llm_api(config_path=None, config=None):
     else:
         print("⚠️ 未提供任务配置，跳过API检查")
         return True
-    
+
     # 检查每个使用的模型
     all_ok = True
     for model_name in used_models:
@@ -169,16 +169,16 @@ def _check_llm_api(config_path=None, config=None):
             print(f"❌ 未找到模型配置: {model_name}")
             all_ok = False
             continue
-            
+
         print(f"🔍 检查模型: {model_name}")
-        
+
         # 获取实际的API地址（考虑环境变量覆盖）
         actual_api_base = _get_actual_api_base(model_name, model_config)
         if not actual_api_base:
             print(f"❌ 模型 {model_name} 未找到API地址配置")
             all_ok = False
             continue
-        
+
         # 检查API密钥（只有非本地服务才需要）
         if not model_name.startswith(('ollama_', 'vllm_')):
             api_key_env = model_config.get('api_key_env')
@@ -196,10 +196,10 @@ def _check_llm_api(config_path=None, config=None):
         else:
             # 本地服务（如ollama, vllm）不需要API密钥
             print("ℹ️ 本地服务，无需API密钥")
-        
+
         if not _test_api_connection(actual_api_base, model_config.get('api_key_env')):
             all_ok = False
-    
+
     return all_ok
 
 
@@ -218,7 +218,7 @@ def _get_actual_api_base(model_name, model_config):
             default_url = "http://localhost:11434"
             print(f"  环境变量AIKG_OLLAMA_API_BASE未设置，使用默认: {default_url}")
             return default_url
-            
+
     elif model_name.startswith("vllm_"):
         # VLLM模型：优先使用环境变量AIKG_VLLM_API_BASE
         vllm_env = os.getenv("AIKG_VLLM_API_BASE")
@@ -248,11 +248,11 @@ def _load_task_config(config_path):
             config_path = project_root / config_path
         else:
             config_path = Path(config_path)
-        
+
         if not config_path.exists():
             print(f"⚠️ 未找到任务配置文件: {config_path}")
             return None
-            
+
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
             return config
@@ -270,12 +270,12 @@ def _test_api_connection(api_base, api_key_env=None):
             api_key = os.getenv(api_key_env)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
-        
+
         # 统一处理API地址：去掉所有路径，只保留协议和域名
         from urllib.parse import urlparse
         parsed = urlparse(api_base)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-        
+
         # GET请求端点（通常用于获取信息）
         get_endpoints = [
             "/models",                    # 通用模型列表端点
@@ -287,7 +287,7 @@ def _test_api_connection(api_base, api_key_env=None):
             "/status",                   # 状态检查端点
             "/"                          # 根路径
         ]
-        
+
         # POST请求端点（聊天补全，需要发送测试数据）
         post_endpoints = [
             ("/chat/completions", {"model": "test", "messages": []}),
@@ -295,15 +295,15 @@ def _test_api_connection(api_base, api_key_env=None):
             ("/v3/chat/completions", {"model": "test", "messages": []}),
             ("/api/v3/chat/completions", {"model": "test", "messages": []}),
         ]
-        
+
         success_endpoint = None
-        
+
         # 先尝试GET请求
         for endpoint in get_endpoints:
             try:
                 url = f"{base_url}{endpoint}"
                 response = requests.get(url, headers=headers, timeout=10, verify=False)
-                
+
                 # 接受多种成功状态码
                 if response.status_code in [200, 201, 202, 204]:
                     success_endpoint = url
@@ -312,18 +312,18 @@ def _test_api_connection(api_base, api_key_env=None):
                     # 401表示端点存在但需要认证，也算连接成功
                     success_endpoint = url + " (需要认证)"
                     break
-                    
+
             except:
                 # 静默处理所有异常，继续尝试下一个端点
                 continue
-        
+
         # 如果GET请求都失败，尝试POST请求到聊天端点
         if not success_endpoint:
             for endpoint, test_data in post_endpoints:
                 try:
                     url = f"{base_url}{endpoint}"
                     response = requests.post(url, headers=headers, json=test_data, timeout=10, verify=False)
-                    
+
                     # 对于POST请求，400也算成功（说明端点存在，只是参数不对）
                     if response.status_code in [200, 201, 202, 204, 400, 422]:
                         success_endpoint = url + " (POST)"
@@ -331,17 +331,17 @@ def _test_api_connection(api_base, api_key_env=None):
                     elif response.status_code == 401:
                         success_endpoint = url + " (需要认证)"
                         break
-                        
+
                 except:
                     continue
-        
+
         if success_endpoint:
             print(f"✅ API连接正常: {success_endpoint}")
             return True
         else:
             print(f"⚠️ API连接测试失败，请检查 {base_url} 是否可访问")
             return False
-        
+
     except Exception as e:
         print(f"❌ API连接测试异常: {e}")
         return False
@@ -351,13 +351,13 @@ def check_env_for_task(framework, backend, dsl, config):
     """
     为tests目录提供的便捷环境检查函数
     失败时直接抛出异常
-    
+
     Args:
         framework: 框架类型
         backend: 后端类型
         dsl: DSL类型
         config: 通过load_config()加载的配置字典
-    
+
     Raises:
         RuntimeError: 环境检查失败时抛出异常
     """

@@ -25,7 +25,7 @@ def softmax_kernel(gm_input, gm_output):
         # 注意：为了充分利用UB，reduce后为标量情况下，使用向量-标量运算替代broadcast，注意仅仅在双目运算中使用
         ub_sub = vsubs(ub_input_fp32, move_to_scalar(ub_max))
         ub_exp = vexp(ub_sub)
-        
+
         ub_sum = vcadd(ub_exp, reduce_axis=-1)
         # 注意：为了充分利用UB，reduce后为标量情况下，使用向量-标量运算替代broadcast，注意仅仅在双目运算中使用
         ub_div = vdivs(ub_exp, move_to_scalar(ub_sum))

@@ -59,7 +59,7 @@ async def test_kernelbench_mindspore_triton_ascend910b4():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    
+
     # 使用通用的结果处理函数
     success = process_task_results(results, print_summary=True)
     assert success, "存在测试case失败"
@@ -114,7 +114,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    
+
     # 使用通用的结果处理函数
     success = process_task_results(results, print_summary=True)
     assert success, "存在测试case失败"
@@ -173,7 +173,7 @@ async def test_multikernelbench_activation_torch_triton_ascend910b4():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    
+
     # 使用通用的结果处理函数
     success = process_task_results(results, print_summary=True)
     assert success, "存在测试case失败"
