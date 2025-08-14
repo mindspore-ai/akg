@@ -68,6 +68,8 @@ class Coder(AgentBase):
         self.arch = arch
         self.workflow_config_path = workflow_config_path
         self.config = config
+        self.codegen_step_count = 0
+        self.api_step_count = 0
 
         # 从config中获取model_config
         if config:
@@ -75,8 +77,15 @@ class Coder(AgentBase):
         else:
             raise ValueError("config is required for Coder")
 
-        agent_name = f"Coder -- [dsl] {self.dsl} -- [op_name] {self.op_name} -- [framework] {self.framework}"
-        super().__init__(agent_name=agent_name, config=config)
+        context = {
+            "agent_name": "coder",
+            "dsl": dsl,
+            "op_name": op_name,
+            "framework": framework,
+            "backend": backend,
+            "arch": arch,
+        }
+        super().__init__(context=context, config=config)
 
         # 直接使用从workflow.yaml获取的coder解析器
         self.code_parser = create_step_parser("coder", self.workflow_config_path)
@@ -241,6 +250,16 @@ class Coder(AgentBase):
                     "error_log": task_info.get('verifier_error', ''),
                     "format_instructions": format_api_instructions
                 }
+
+                self.api_step_count += 1
+                to_update_api_details = {
+                    "agent_name": "api",
+                    "hash": task_info.get("task_id", "Api"),
+                    "task_id": task_info.get("task_id", "Unknown"),
+                    "step": self.api_step_count,
+                }
+                self.context.update(to_update_api_details)
+
                 api_docs_json, _, _ = await self.run_llm(self.api_docs_prompt, api_input_data, self.model_config.get("api_generator", "default"))
                 parsed_content = api_parser.parse(api_docs_json)
                 api_docs_suitable = "\n\n".join(
@@ -271,6 +290,16 @@ class Coder(AgentBase):
                 "api_docs_suitable": api_docs_suitable,
                 "dsl_examples_suitable": dsl_examples_suitable,
             }
+
+            # 执行LLM生成前更新context，确保正确性
+            self.codegen_step_count += 1
+            to_update_codegen_details = {
+                "agent_name": "coder",
+                "hash": task_info.get("task_id", "Coder"),
+                "task_id": task_info.get("task_id", "Unknown"),
+                "step": self.codegen_step_count,
+            }
+            self.context.update(to_update_codegen_details)
 
             # 执行LLM生成
             return await self.run_llm(self.coder_prompt, input_data, self.model_config["coder"])

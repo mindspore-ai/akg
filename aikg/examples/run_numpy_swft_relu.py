@@ -19,7 +19,7 @@ from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 import asyncio
 import os
-os.environ['STREAM_OUTPUT_MODE'] = 'on'
+os.environ['AIKG_STREAM_OUTPUT'] = 'on'
 
 
 def get_op_name():

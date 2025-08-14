@@ -19,7 +19,7 @@ from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 import asyncio
 import os
-os.environ['STREAM_OUTPUT_MODE'] = 'on'
+os.environ['AIKG_STREAM_OUTPUT'] = 'on'
 
 
 def get_op_name():
@@ -72,9 +72,9 @@ async def run_mindspore_triton_single():
     device_pool = DevicePool([0])
     config = load_config("triton")  # use offical deepseek api
     # config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
-    
+
     check_env_for_task("mindspore", "ascend", "triton", config)
-    
+
     task = Task(
         op_name=op_name,
         task_desc=task_desc,

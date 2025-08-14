@@ -21,7 +21,8 @@ class TestAgent(AgentBase):
     """测试用的Agent类，继承自AgentBase"""
 
     def __init__(self):
-        super().__init__(agent_name="TestAgent")
+        context = {"agent_name": "test_agent"}
+        super().__init__(context=context)
 
 
 async def test_simple_run_llm():

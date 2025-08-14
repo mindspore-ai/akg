@@ -109,7 +109,7 @@ def get_kernelbench_op_name(task_index_list, framework="torch"):
         # PyTorch: 直接查找文件
         task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
         matched_files = []
-        
+
         if os.path.exists(task_path):
             for file in os.listdir(task_path):
                 if file.endswith('.py') and any(file.startswith(task_prefix) for task_prefix in task_prefix_list):
@@ -121,7 +121,7 @@ def get_kernelbench_op_name(task_index_list, framework="torch"):
             aikg_path, 'benchmark', 'kernelbench', framework)
         task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
         matched_files = []
-        
+
         if os.path.exists(task_path):
             for dir_name in os.listdir(task_path):
                 dir_path = os.path.join(task_path, dir_name)
@@ -205,16 +205,16 @@ def get_task_content(folder_path, file_name):
 def process_task_results(results, print_summary=True):
     """
     处理任务运行结果，验证每个op_name是否至少有一次成功。
-    
+
     Args:
         results: task_pool.wait_all() 返回的结果列表，格式为 [(op_name, result, _), ...]
         print_summary: 是否打印结果摘要
-    
+
     Returns:
         bool: 如果所有op_name都至少成功一次返回True，否则返回False
     """
     from collections import defaultdict
-    
+
     # 收集结果到字典
     result_dict = defaultdict(int)
     for op_name, result, _ in results:
@@ -225,13 +225,13 @@ def process_task_results(results, print_summary=True):
     for op_name, success_count in result_dict.items():
         if success_count == 0:  # 如果成功次数为0，说明所有尝试都失败了
             failed_cases.append(op_name)
-    
+
     # 可选的结果摘要
     if print_summary:
         total_ops = len(result_dict)
         passed_ops = total_ops - len(failed_cases)
         pass_rate = passed_ops / total_ops if total_ops > 0 else 0.0
-        
+
         print('-' * 60)
         print(f"结果字典: {dict(result_dict)}")
         print(f"通过的操作数: {passed_ops}/{total_ops}")
@@ -239,5 +239,5 @@ def process_task_results(results, print_summary=True):
         if failed_cases:
             print(f"失败的测试case: {failed_cases}")
         print('-' * 60)
-    
+
     return len(failed_cases) == 0

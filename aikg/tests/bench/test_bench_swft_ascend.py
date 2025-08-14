@@ -1,3 +1,4 @@
+import os
 import pytest
 from collections import defaultdict
 from ai_kernel_generator.core.task import Task
@@ -8,6 +9,8 @@ from ..utils import (
 )
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
+
+os.environ['AIKG_DATA_COLLECT'] = 'on'
 
 
 @pytest.mark.level2
@@ -25,9 +28,9 @@ async def test_bench_swft_ascend():
     task_pool = TaskPool()
     device_pool = DevicePool([1, 2])
     config = load_config(dsl)
-    
+
     check_env_for_task(framework, backend, dsl, config)
-    
+
     benchmark_name = get_kernelbench_op_name([19, 20], framework=framework)
 
     if benchmark_name is None:

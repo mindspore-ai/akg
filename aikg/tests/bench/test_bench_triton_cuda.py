@@ -1,3 +1,4 @@
+import os
 import pytest
 from collections import defaultdict
 from ai_kernel_generator.core.task import Task
@@ -8,6 +9,8 @@ from ..utils import (
 )
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
+
+os.environ['AIKG_DATA_COLLECT'] = 'on'
 
 
 @pytest.mark.level2
@@ -25,9 +28,9 @@ async def test_bench_triton_cuda():
     task_pool = TaskPool(1)
     device_pool = DevicePool([1])
     config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
-    
+
     check_env_for_task(framework, backend, dsl, config)
-    
+
     benchmark_name = get_kernelbench_op_name([19], framework=framework)
 
     if benchmark_name is None:

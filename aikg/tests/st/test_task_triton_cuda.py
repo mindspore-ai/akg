@@ -24,9 +24,9 @@ async def test_parallel_task_triton_cuda():
     task_pool = TaskPool(1)
     device_pool = DevicePool([1])
     config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
-    
+
     check_env_for_task(framework, backend, dsl, config)
-    
+
     benchmark_name = get_kernelbench_op_name([19], framework=framework)
 
     if benchmark_name is None:
@@ -51,7 +51,7 @@ async def test_parallel_task_triton_cuda():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    
+
     # 使用通用的结果处理函数
     success = process_task_results(results, print_summary=True)
     assert success, "存在测试case失败"

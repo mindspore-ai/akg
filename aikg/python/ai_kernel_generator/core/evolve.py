@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import logging
 import random
 from functools import partial
-from typing import List, Dict, Any, Optional, Tuple, Callable
+from typing import List, Dict, Any, Tuple
 from pathlib import Path
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
@@ -23,6 +24,8 @@ from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.database.evolve_database import EvolveDatabase
 from ai_kernel_generator import get_project_root
 
+
+os.environ['AIKG_DATA_COLLECT'] = 'on'
 logger = logging.getLogger(__name__)
 
 
@@ -86,7 +89,7 @@ def load_meta_prompts(parallel_num: int) -> list[str]:
             if idx + count > n:
                 random.shuffle(prompts_pool)
                 idx = 0
-            prompts = prompts_pool[idx : idx + count]
+            prompts = prompts_pool[idx: idx + count]
             idx += count
             result.append("\n\n".join(prompts))
         assert len(result) == parallel_num, "Result length mismatch"

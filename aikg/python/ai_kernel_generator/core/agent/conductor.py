@@ -57,8 +57,14 @@ class Conductor(AgentBase):
             config: 完整配置字典，包含log_dir、model_config等
         """
         # 初始化基类
-        agent_name = f"Conductor -- [dsl] {dsl} -- [op_name] {op_name}"
-        super().__init__(agent_name=agent_name, config=config)
+        context = {
+            "agent_name": "conductor",
+            "dsl": dsl,
+            "op_name": op_name,
+            "framework": framework,
+            "arch": arch,
+        }
+        super().__init__(context=context, config=config)
 
         self.op_name = op_name
         self.task_desc = task_desc
@@ -76,6 +82,7 @@ class Conductor(AgentBase):
             raise ValueError("config is required for Conductor")
 
         self.step_count = 0
+        self.llm_step_count = 0
 
         self.last_parse_success = True  # 记录最新agent执行的解析状态
 
@@ -251,6 +258,16 @@ class Conductor(AgentBase):
                 'valid_next_agents': ', '.join(sorted(valid_next_agents)),
                 'format_instructions': format_instructions,
             }
+
+            # 执行LLM生成前更新context，确保正确性
+            self.llm_step_count += 1
+            to_update_context = {
+                "agent_name": "conductor",
+                "hash": self.task_id + "@" + str(self.llm_step_count),
+                "task_id": self.task_id,
+                "step": self.llm_step_count,
+            }
+            self.context.update(to_update_context)
 
             model_name = self.model_config.get('conductor')
             content, formatted_prompt, reasoning = await self.run_llm(self.conductor_template, input_data, model_name)
