@@ -5,7 +5,7 @@ Designer is a core component in the AI Kernel Generator that automatically gener
 
 ## Core Functions
 - **Intelligent Design Generation**: Automatically generates algorithm design documents based on kernel requirements
-- **CustomDocs Integration**: Supports custom reference documents to improve generation quality
+- **Doc-Driven Integration**: Supports custom reference documents to improve generation quality
 - **Multi-DSL Support**: Supports different design languages
 - **Hardware-Aware Design**: Considers hardware characteristics during design generation
 - **Document Integration**: Automatically loads design specifications and reference materials
@@ -18,31 +18,21 @@ Designer is a core component in the AI Kernel Generator that automatically gener
 | dsl | str (Required) | Design language: "triton", "swft", etc. |
 | backend | str (Required) | Hardware backend: "ascend", "cuda", etc. |
 | arch | str (Required) | Hardware architecture: "ascend910b4", "a100", etc. |
-| workflow_config_path | str (Optional) | Workflow configuration file path |
-| config | dict (Required) | Complete configuration including CustomDocs settings |
+| workflow_config_path | str (Optional) | Workflow configuration file path (usually injected by Task from the orchestration plan) |
+| config | dict (Required) | Complete orchestration plan configuration including log_dir, agent_model_config, docs_dir, etc. (see [Task Orchestration Plan Configuration](./TaskOrchestrationPlan.md)) |
 
-## CustomDocs Integration
+> Related docs: Workflow details in [Workflow](./Workflow.md); documentation integration in [Doc-Driven Integration Guide](./DocDrivenIntegration.md).
 
-The Designer leverages the CustomDocs feature to load reference documents from configured directories:
+## Doc-Driven Integration
 
-### Required Documents
-- `basic_docs.md` - DSL basic documentation and syntax specifications
-
-### Document Loading
-The Designer loads documents from the `docs_dir.designer` path specified in the configuration:
-```python
-self.base_doc = {
-    "dsl_basic_docs": self.load_doc("basic_docs.md"),
-    # ... other fields
-}
-```
+The Designer loads reference documents via `docs_dir.designer` in the orchestration plan. For document list and specifications, see the [Doc-Driven Integration Guide](./DocDrivenIntegration.md). Details are not duplicated here.
 
 ## Execution Flow
 
 1. **Initialization Stage**
    - Load workflow configuration and create parser
    - Initialize design generation template
-   - Load reference documents using CustomDocs
+   - Load reference documents using Doc-Driven Integration
    - Prepare base document structure
 
 2. **Generation Stage**

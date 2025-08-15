@@ -5,7 +5,7 @@ Designer是AI Kernel Generator中的核心组件，基于大语言模型(LLM)自
 
 ## 核心功能
 - **智能设计生成**: 根据算子需求自动生成算法设计文档
-- **CustomDocs集成**: 支持自定义参考文档以提升生成质量
+- **文档驱动式接入集成（Doc-Driven Integration）**: 支持自定义参考文档以提升生成质量
 - **多DSL支持**: 支持不同的设计语言
 - **硬件感知设计**: 在设计生成过程中考虑硬件特性
 - **文档集成**: 自动加载设计规范和参考资料
@@ -18,31 +18,21 @@ Designer是AI Kernel Generator中的核心组件，基于大语言模型(LLM)自
 | dsl | str (必需) | 设计语言："triton"、"swft"等 |
 | backend | str (必需) | 硬件后端："ascend"、"cuda"等 |
 | arch | str (必需) | 硬件架构："ascend910b4"、"a100"等 |
-| workflow_config_path | str (可选) | 工作流配置文件路径 |
-| config | dict (必需) | 完整配置，包括CustomDocs设置 |
+| workflow_config_path | str (可选) | 工作流配置文件路径（通常由 Task 根据编排配置注入） |
+| config | dict (必需) | 完整编排配置，包含 log_dir、agent_model_config、docs_dir 等（详见《[任务编排方案配置](./TaskOrchestrationPlan.md)》） |
 
-## CustomDocs集成
+> 相关文档：工作流见《[Workflow](./Workflow.md)》；文档接入见《[文档驱动式接入指南](./DocDrivenIntegration.md)》。
 
-Designer利用CustomDocs功能从配置的目录中加载参考文档：
+## 文档驱动式接入集成（Doc-Driven Integration）
 
-### 必需文档
-- `basic_docs.md` - DSL基础文档和语法规范
-
-### 文档加载
-Designer从配置中`docs_dir.designer`路径加载文档：
-```python
-self.base_doc = {
-    "dsl_basic_docs": self.load_doc("basic_docs.md"),
-    # ... 其他字段
-}
-```
+Designer 通过编排配置中的 `docs_dir.designer` 加载参考文档；文档清单与规范请见《[文档驱动式接入指南](./DocDrivenIntegration.md)》，此处不再重复。
 
 ## 执行流程
 
 1. **初始化阶段**
    - 加载工作流配置并创建解析器
    - 初始化设计生成模板
-   - 使用CustomDocs加载参考文档
+   - 使用文档驱动式接入加载参考文档
    - 准备基础文档结构
 
 2. **生成阶段**

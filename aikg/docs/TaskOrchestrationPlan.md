@@ -1,12 +1,20 @@
-# DSL Configuration Document
+# Task Orchestration Plan Configuration
 
 ## Overview
 
-DSLConfig is the configuration management system for different DSLs (Domain Specific Languages) in AI Kernel Generator. It provides preset configuration templates for each DSL (such as Triton, SWFT, etc.), including model configurations, document paths, workflow settings, etc., to simplify the user configuration process.
+The Task Orchestration Plan Configuration (Plan for short) declares the complete runtime scheme for a kernel generation task and is loaded by `Task` at runtime to drive agent collaboration and execution.
+
+The plan mainly includes:
+- `agent_model_config`: assign LLM presets to each agent (presets from `core/llm/llm_config.yaml`).
+- `workflow_config_path`: points to the workflow YAML that defines execution flow (see [Workflow System Design Document](./Workflow.md)).
+- `docs_dir`: reference documentation directories for agents (see [Doc-Driven Integration Guide](./DocDrivenIntegration.md)).
+- `log_dir`: root directory for task logs.
+- `profile_settings`: performance testing parameters (e.g., `run_times`, `warmup_times`).
+- `verify_timeout`: verification timeout in seconds.
 
 ## Configuration File Structure
 
-DSL configuration files use YAML format and mainly contain the following configuration items:
+The plan uses YAML format and mainly contains the following items:
 
 ```yaml
 # Agent model configuration
@@ -40,22 +48,13 @@ verify_timeout: 300  # Verification timeout in seconds
 
 ### 1. Agent Model Configuration (agent_model_config)
 
-Defines the LLM models used by each agent:
+`agent_model_config` assigns the LLM preset used by each agent. Values must come from `core/llm/llm_config.yaml` (e.g., `deepseek_r1_default`). Common keys: `designer`, `coder`, `conductor`, `api_generator` (extensible). Invalid names will be rejected during validation.
 
-| Agent Name | Type | Description |
-|------------|------|-------------|
-| designer | str | Model used by the designer agent |
-| coder | str | Model used by the coder agent |
-| conductor | str | Model used by the conductor agent |
-| api_generator | str | Model used by the API generator agent |
-
-**Example Configuration**:
 ```yaml
+# Example agent model configuration
 agent_model_config:
   designer: deepseek_r1_default
   coder: deepseek_r1_default
-  conductor: deepseek_r1_default
-  api_generator: deepseek_r1_default
 ```
 
 ### 2. Log Configuration (log_dir)
@@ -65,28 +64,23 @@ Specifies the storage directory for task execution logs:
 - **Format**: String path
 - **Support**: Absolute and relative paths (supports `~` for user home directory)
 - **Default**: `"~/aikg_logs"`
+- **Final path shape**: A subdirectory like `Task_{random_id}` will be created under this directory at runtime.
 
 ### 3. Workflow Configuration (workflow_config_path)
 
-Specifies the default workflow configuration file used by this DSL:
-
-- **Format**: Path relative to project root directory
-- **Purpose**: Defines agent execution flow and limitations
-- **Example**: `"config/default_workflow.yaml"`
+- Points to the workflow YAML for this task, configuring AIKG's task execution flow. Example: `"config/default_workflow.yaml"`.
+- See [Workflow System Design Document](./Workflow.md).
 
 ### 4. Documentation Directory Configuration (docs_dir)
 
-Specifies reference documentation directories for different agents:
+See the [Doc-Driven Integration Guide](./DocDrivenIntegration.md).
 
 ```yaml
+# Example docs configuration
 docs_dir:
   designer: "resources/docs/triton_docs"    # Designer docs (e.g., DSL syntax)
-  coder: "resources/docs/triton_docs"    # Coder docs (e.g., DSL syntax)
+  coder: "resources/docs/triton_docs"       # Coder docs (e.g., DSL syntax)
 ```
-
-**Purpose**:
-- Designer: Provides algorithm design specification documents
-- Coder: Provides target DSL syntax and API documentation
 
 ### 5. Performance Analysis Configuration (profile_settings)
 
@@ -106,18 +100,18 @@ Sets the timeout for code verification:
 - **Default**: 300 seconds (5 minutes)
 - **Purpose**: Prevents verification process from waiting indefinitely
 
-## Predefined DSL Configurations
+## Preset Plans
 
 ### Triton Configuration (default_triton_config.yaml)
 
-**Use Case**: Triton kernel development on NVIDIA GPUs
+**Use Case**: Triton kernel development
 
 **Features**:
 - Uses predefined design language
 - Targets Triton code generation
 - Supports Ascend NPU / CUDA GPU backend
 
-**Configuration Example**: [`python/ai_kernel_generator/config/default_triton_config.yaml`](../python/ai_kernel_generator/config/default_triton_config.yaml)
+**Configuration Example**: [`config/default_triton_config.yaml`](../python/ai_kernel_generator/config/default_triton_config.yaml)
 
 ### SWFT Configuration (default_swft_config.yaml)
 
@@ -128,30 +122,25 @@ Sets the timeout for code verification:
 - Targets SWFT code generation
 - Supports Ascend NPU backend
 
-## Configuration Usage Methods
-
-### 1. Direct Use of Predefined Configurations
+## Usage
 
 ```python
-from ai_kernel_generator import load_config
+from ai_kernel_generator.config.config_validator import load_config
 
-# Load Triton default configuration
-config = load_config("default_triton_config")
+# Option 1: Load preset by DSL (e.g., triton)
+config = load_config(dsl="triton")
 
-# Create task
-task = Task(
-    op_name="relu",
-    task_desc="...",
-    dsl="triton",
-    config=config
-)
+# Option 2: Load by explicit plan path
+config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+
+task = Task(op_name="relu", task_desc="...", dsl="triton", config=config)
 ```
 
 ### 2. Custom Configuration Override
 
 ```python
 # Customize based on default configuration
-config = load_config("default_triton_config")
+config = load_config(dsl="triton")
 
 # Override specific configuration items
 config.update({
@@ -163,10 +152,10 @@ config.update({
 })
 ```
 
-### 3. Creating New DSL Configurations
+### 3. Creating a New Plan File
 
 ```yaml
-# custom_dsl_config.yaml
+# custom_orchestration_plan.yaml
 agent_model_config:
   designer: model_name
   coder: model_name

@@ -11,7 +11,7 @@ Database模块是算子优化方案管理数据库框架，主要负责算子优
 ## 初始化参数
 | 参数名称 | 类型/必选 | 默认值 | 参数说明 |
 |---------|---------|-------|---------|
-| config_path | str (可选) | database_config.yaml | 配置文件路径，其中embedding_model表示可以是模型名字，也可以是本地下载的模型路径；distance_strategy和verify_distance_strategy表示向量距离，当前支持EUCLIDEAN_DISTANCE，MAX_INNER_PRODUCT，DOT_PRODUCT，JACCARD和COSINE |
+| config_path | str (可选) | database_config.yaml | 配置文件路径，其中 embedding_model 表示可以是模型名字，也可以是本地下载的模型路径；distance_strategy 和 verify_distance_strategy 表示向量距离，当前支持 EUCLIDEAN_DISTANCE，MAX_INNER_PRODUCT，DOT_PRODUCT，JACCARD和COSINE |
 | database_path | str (可选) | ../database | 算子方案存储根目录 |
 
 ### database_config.yaml示例：

@@ -2,7 +2,7 @@
 
 ## 概述
 
-Workflow是AI Kernel Generator中的核心配置管理系统，通过YAML配置文件定义和控制代理（Agent）的执行流程。它为Conductor提供智能调度的规则基础，支持灵活的工作流定制，实现不同场景下的最优执行路径。
+Workflow是AIKG的核心配置管理系统，通过YAML配置文件定义和控制代理（Agent）的执行流程。它为Conductor提供智能调度的规则基础，支持灵活的工作流定制，实现不同场景下的最优执行路径。
 
 ## 核心理念
 
@@ -34,7 +34,7 @@ agent_info:
 start_agent: agent_name
 
 # 强制LLM分析的代理列表（由此agent进入conductor后，conductor强制使用LLM分析）
-mandatory_analysis: [agent1, agent2]
+mandatory_llm_analysis: [agent1, agent2]
 
 # 限制信息
 limitation_info:
@@ -56,7 +56,7 @@ limitation_info:
 |---------|------|------|------|
 | agent_info | dict | 是 | 定义所有代理的配置信息 |
 | start_agent | str | 是 | 指定工作流的起始代理 |
-| mandatory_analysis | list | 否 | 需要强制LLM分析的代理列表 |
+| mandatory_llm_analysis | list | 否 | 需要强制LLM分析的代理列表 |
 | limitation_info | dict | 是 | 执行限制配置 |
 
 ## 预定义工作流类型
@@ -175,7 +175,7 @@ limitation_info:
 
 ### LLM智能决策条件
 1. **多个可选代理**：需要智能选择
-2. **单一可选代理但在mandatory_analysis列表中**：需要分析建议
+2. **单一可选代理但在mandatory_llm_analysis列表中**：需要分析建议
 
 ## 自定义工作流指南
 
@@ -198,7 +198,7 @@ agent_info:
 
 start_agent: custom_optimizer
 
-mandatory_analysis: [custom_optimizer]
+mandatory_llm_analysis: [custom_optimizer]
 
 limitation_info:
   required:
@@ -231,7 +231,7 @@ agent_info:
     possible_next_agent: [verifier, optimizer]
 
 start_agent: designer
-mandatory_analysis: [optimizer]  # 强制分析optimizer
+mandatory_llm_analysis: [optimizer]  # 强制分析optimizer
 ```
 
 ## 最佳实践
@@ -241,7 +241,7 @@ mandatory_analysis: [optimizer]  # 强制分析optimizer
 1. **明确目标**：根据具体使用场景选择合适的工作流类型
 2. **最小化复杂度**：优先使用简单的线性流程
 3. **合理设置限制**：避免无限循环，设置合适的重试次数
-4. **强制分析配置**：对关键决策点配置mandatory_analysis
+4. **强制分析配置**：对关键决策点配置mandatory_llm_analysis
 
 ### 配置建议
 
@@ -260,7 +260,7 @@ mandatory_analysis: [optimizer]  # 强制分析optimizer
 2. **工作流优化**：
    - 根据实际使用情况调整限制参数
    - 分析代理执行历史，优化决策路径
-   - 使用mandatory_analysis控制关键决策点
+   - 使用mandatory_llm_analysis控制关键决策点
 
 3. **调试支持**：
    - 通过Trace查看完整执行轨迹

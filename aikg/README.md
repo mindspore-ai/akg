@@ -5,71 +5,86 @@
 ## Table of Contents
 - [AI-driven Kernel Generator (AIKG)](#ai-driven-kernel-generator-aikg)
   - [Table of Contents](#table-of-contents)
-  - [1. Project Overview](#1-project-overview)
-  - [2. Changelog](#2-changelog)
-  - [3. Installation Guide](#3-installation-guide)
-  - [4. Configuration](#4-configuration)
-    - [4.1 API and Model Configuration](#41-api-and-model-configuration)
-    - [4.2 Third-party Dependencies](#42-third-party-dependencies)
-    - [4.3 MindSpore 2.7 Frontend Dependencies](#43-mindspore-27-frontend-dependencies)
-    - [4.4 Huawei Atlas Inference Series SWFT Backend Dependencies](#44-huawei-atlas-inference-series-swft-backend-dependencies)
-    - [4.5 Huawei Atlas A2 Training Series Triton Backend Dependencies](#45-huawei-atlas-a2-training-series-triton-backend-dependencies)
-    - [4.6 NVIDIA GPU Triton Backend Dependencies](#46-nvidia-gpu-triton-backend-dependencies)
-    - [4.7 Similarity Detection Dependencies](#47-similarity-detection-dependencies)
-  - [5. Usage Examples](#5-usage-examples)
-  - [6. Design Documentation](#6-design-documentation)
-    - [6.1 AIKG General Framework](#61-aikg-general-framework)
-    - [6.2 Designer](#62-designer)
-    - [6.3 Coder](#63-coder)
-    - [6.4 Verifier](#64-verifier)
-    - [6.5 Conductor](#65-conductor)
-    - [6.6 SWFT Backend](#66-swft-backend)
-    - [6.7 Triton Backend](#67-triton-backend)
+  - [📘 1. Project Overview](#-1-project-overview)
+  - [🗓️ 2. Changelog](#️-2-changelog)
+  - [🛠️ 3. Installation \& Deployment Guide](#️-3-installation--deployment-guide)
+  - [⚙️ 4. Configuration](#️-4-configuration)
+    - [Configuration Quick Guide](#configuration-quick-guide)
+      - [Step 1: Basic Environment Configuration](#step-1-basic-environment-configuration)
+        - [API and Model Configuration](#api-and-model-configuration)
+        - [Third-party Dependencies](#third-party-dependencies)
+      - [Step 2: Frontend Dependencies Configuration](#step-2-frontend-dependencies-configuration)
+        - [MindSpore 2.7 Frontend Dependencies(Optional)](#mindspore-27-frontend-dependenciesoptional)
+      - [Step 3: Backend Dependencies Configuration](#step-3-backend-dependencies-configuration)
+      - [Step 4: Optional Tools Configuration](#step-4-optional-tools-configuration)
+        - [Similarity Detection Dependencies](#similarity-detection-dependencies)
+  - [▶️ 5. Tutorial Examples](#️-5-tutorial-examples)
+  - [📐 6. Design Documentation](#-6-design-documentation)
+    - [Core Framework](#core-framework)
+    - [Core Components](#core-components)
+    - [Backend Support](#backend-support)
 
-## 1. Project Overview
+## 📘 1. Project Overview
 AIKG is an AI-driven kernel generator that leverages the code generation capabilities of Large Language Models (LLMs). 
 Through LLM-based planning and control of (multi-)agents, AIKG collaboratively accomplishes multi-backend, multi-type AI kernel generation and automatic optimization. 
 Additionally, AIKG provides a rich set of submodules for kernel agents, which enables users to build custom agent tasks.
 
-## 2. Changelog
-- **CustomDocs**: Support custom reference documents for different Agents to improve generation quality and precision. For detailed configuration instructions, please refer to [Custom Documentation Configuration Guide](./docs/CustomDocs.md)
+## 🗓️ 2. Changelog
+- 2025-08-12: Introduced Doc-Driven Integration; by following a unified documentation specification, you can quickly and flexibly integrate new DSLs/frontends/backends (see [Doc-Driven Integration Guide](./docs/DocDrivenIntegration.md)).
+- 2025-06-27: Initial AIKG release with code generation support for Triton and SWFT backends.
 
-## 3. Installation Guide
+## 🛠️ 3. Installation & Deployment Guide
 ```bash
-# Create conda environment (optional, recommended Python 3.9/3.10/3.11)
+# 1. Environment Setup
+# 1.1 Create conda environment (optional, recommended Python 3.9/3.10/3.11)
 conda create -n aikg python=3.11
 conda activate aikg
 
-# Or create virtual environment (optional)
+# 1.2 Or create virtual environment (optional)
 python -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies via pip
+# 2. Install dependencies via pip
 pip install -r requirements.txt
 
-# Setup & install
+# 3. whl installation / environment setup
+# 3.1 Install from whl
 bash build.sh
 pip install output/ai_kernel_generator-*-py3-none-any.whl
+
+# 3.2 Or setup environment variables
+cd aikg
+source env.sh
 ```
 
-## 4. Configuration
+## ⚙️ 4. Configuration
 
-### 4.1 API and Model Configuration
+### Configuration Quick Guide
+
+#### Step 1: Basic Environment Configuration
+
+##### API and Model Configuration
 AIKG uses environment variables to set the API keys for various Large Language Model (LLM) services. Please configure the appropriate environment variables based on the service you are using:
 
 ```bash
 # VLLM (https://github.com/vllm-project/vllm)
 export AIKG_VLLM_API_BASE=http://localhost:8000/v1
 
+# Other API interfaces. For detailed supported list, please refer to docs/API.md
+export AIKG_XXX_API_KEY=xxx
+
 # Ollama (https://ollama.com/)
 export AIKG_OLLAMA_API_BASE=http://localhost:11434
-
-# Other API interfaces. For detailed supported list, please refer to docs/API.md
-export AIKG_XXXXX_API_KEY=xxxxxxxxxxxxxxxxxxx
 ```
-For more information on registering new model configurations in `llm_config.yaml`, orchestrating task workflows in `xxx_config.yaml`, and viewing the current list of supported APIs, please refer to the [API](./docs/API.md) documentation.
+Additional configuration options:
+- **Task Orchestration Plan Configuration**: Declares a task's complete runtime scheme (including `agent_model_config`, `workflow_config_path`, `docs_dir`, etc.). Common plan files: `default_triton_config.yaml`, `vllm_triton_coderonly_config.yaml`. See [Task Orchestration Plan Configuration](./docs/TaskOrchestrationPlan.md).
+- **Model Configuration**: `llm_config.yaml` contains preset configurations for various LLM providers (DeepSeek, Qwen, Moonshot, etc.). The `agent_model_config` in the plan references presets from this file.
+- **Workflow Definition**: Specify the workflow YAML via `workflow_config_path` to define agent execution order and constraints (e.g., `default_workflow.yaml`, `coder_only_workflow.yaml`). See [Workflow System Design Document](./docs/Workflow.md).
+- **Doc-Driven Integration**: Provide reference docs for agents via the plan's `docs_dir`. See [Doc-Driven Integration Guide](./docs/DocDrivenIntegration.md).
 
-### 4.2 Third-party Dependencies
+For detailed configuration instructions, please refer to [API Configuration Documentation](./docs/API.md).
+
+##### Third-party Dependencies
 This project uses git submodules to manage certain third-party dependencies.
 
 After initial cloning or pulling updates, please use the following command to initialize and download `aikg`-related dependencies:
@@ -78,56 +93,66 @@ After initial cloning or pulling updates, please use the following command to in
 git submodule update --init --remote "aikg/thirdparty/*"
 ```
 
-### 4.3 MindSpore 2.7 Frontend Dependencies
-Supported Python versions: Python 3.11, Python 3.10, Python 3.9
-Supported system versions: aarch64, x86_64
-```
-# Example installation package for python3.11 + aarch64
-pip install https://repo.mindspore.cn/mindspore/mindspore/version/202506/20250619/master_20250619160020_1261ff4ce06d6f2dc4ce446139948a3e4e9c966b_newest/unified/aarch64/mindspore-2.7.0-cp311-cp311-linux_aarch64.whl
-```
+#### Step 2: Frontend Dependencies Configuration
 
-### 4.4 Huawei Atlas Inference Series SWFT Backend Dependencies
-Please refer to: https://gitee.com/mindspore/akg/swft
+##### MindSpore 2.7 Frontend Dependencies(Optional)
+Supported Python versions: 3.11, 3.10, 3.9
+Supported system architectures: aarch64, x86_64
+Prefer the official installation guide to choose environment and method: [MindSpore 2.7 Installation Guide](https://www.mindspore.cn/en/install)
 
-### 4.5 Huawei Atlas A2 Training Series Triton Backend Dependencies
-Please refer to: https://gitee.com/ascend/triton-ascend
+#### Step 3: Backend Dependencies Configuration
+Choose the appropriate backend based on your hardware platform:
 
-### 4.6 NVIDIA GPU Triton Backend Dependencies
-Please refer to: https://github.com/triton-lang/triton
+| Platform | Backend | Reference Link |
+|----------|---------|----------------|
+| Huawei Atlas A2 Training Series | Triton | https://gitee.com/ascend/triton-ascend |
+| NVIDIA GPU | Triton | https://github.com/triton-lang/triton |
+| Huawei Atlas Inference Series | SWFT | https://gitee.com/mindspore/akg/tree/br_aikg/swft |
 
+#### Step 4: Optional Tools Configuration
 
-### 4.7 Similarity Detection Dependencies
+##### Similarity Detection Dependencies
 The text similarity detection tool text2vec-large-chinese: If the model cannot be loaded automatically, manually download it to the thirdparty directory.
 After downloading the model, add its local path to the corresponding YAML configuration in the database. For detailed configuration instructions, please refer to the [DataBase](./docs/DataBase.md) documentation.
 ```bash
 bash download.sh --with_local_model
 ```
 
-## 5. Usage Examples
-For a simplified workflow demonstrating AIKG's automatic kernel generation capabilities, please refer to the [Tutorial](./docs/Tutorial.md) documentation and example code in the `examples` directory.
+> 💡 **Configuration Tips**: 
+> - For detailed API configuration, please refer to [API Documentation](./docs/API.md) 
+> - For database configuration, please refer to [DataBase Documentation](./docs/DataBase.md)
+> - For more configuration options, please refer to the dedicated documentation for each component
 
-## 6. Design Documentation
-### 6.1 AIKG General Framework
-- `Task`: Please refer to [Task](./docs/Task.md) documentation
-- `Trace`: Please refer to [Trace](./docs/Trace.md) documentation
-- `TaskPool`: Please refer to [TaskPool](./docs/TaskPool.md) documentation
-- `DevicePool`: Please refer to [DevicePool](./docs/DevicePool.md) documentation
-- `Database`: Please refer to [DataBase](./docs/Database.md) documentation
+## ▶️ 5. Tutorial Examples
 
-### 6.2 Designer
-Please refer to [Designer](./docs/Designer.md) documentation
+Below are common examples in the `examples/` directory:
 
-### 6.3 Coder
-Please refer to [Coder](./docs/Coder.md) documentation
+| Example | Description |
+|--------|-------------|
+| `run_mindspore_triton_single.py` | Single operator example (MindSpore + Triton, Ascend 910B4). |
+| `run_mindspore_triton_parallel.py` | Parallel multi-operator example (MindSpore + Triton, Ascend 910B4). |
+| `run_numpy_swft_relu.py` | SWFT ReLU example (Ascend 310P3). |
+| `run_numpy_swft_swiglu.py` | SWFT SwiGLU example (Ascend 310P3). |
 
-### 6.4 Verifier
-Please refer to [Verifier](./docs/Verifier.md) documentation
+For more getting started steps and parameter notes, please refer to the [Tutorial](./docs/Tutorial.md).
 
-### 6.5 Conductor
-Please refer to [Conductor](./docs/Conductor.md) documentation
+## 📐 6. Design Documentation
 
-### 6.6 SWFT Backend
-Please refer to [SWFT](./docs/SWFT.md) documentation
+> We recommend reading the [Task Orchestration Plan Configuration](./docs/TaskOrchestrationPlan.md) first for the overall task plan and entry points; workflow details are in [Workflow](./docs/Workflow.md) and documentation specs are in [Doc-Driven Integration](./docs/DocDrivenIntegration.md).
 
-### 6.7 Triton Backend
-Please refer to [Triton](./docs/Triton.md) documentation
+### Core Framework
+- **[Task](./docs/Task.md)** - Task management module
+- **[Trace](./docs/Trace.md)** - Execution tracking module  
+- **[TaskPool](./docs/TaskPool.md)** - Task pool management
+- **[DevicePool](./docs/DevicePool.md)** - Device pool management
+- **[DataBase](./docs/DataBase.md)** - Database module
+
+### Core Components
+- **[Designer](./docs/Designer.md)** - Kernel designer
+- **[Coder](./docs/Coder.md)** - Code generator
+- **[Verifier](./docs/Verifier.md)** - Verifier
+- **[Conductor](./docs/Conductor.md)** - Task orchestrator
+
+### Backend Support
+- **[SWFT Backend](./docs/SWFT.md)** - Huawei Atlas inference series backend
+- **[Triton Backend](./docs/Triton.md)** - Triton compute backend

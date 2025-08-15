@@ -1,22 +1,22 @@
-# AI Kernel Generator Example Tutorial
+# AI Kernel Generator Example Tutorial (Coder-only)
 
 ## Overview
 
-This tutorial introduces how to use the AI Kernel Generator to run the generation and verification process for a single kernel. Using `examples/run_mindspore_triton_single.py` as an example, it demonstrates how to automatically generate a Triton implementation from a MindSpore kernel definition and verify it.
+This tutorial is based on the coder-only workflow. It demonstrates how to generate a Triton implementation directly from a MindSpore frontend description and verify it (without the Designer step). See `examples/run_mindspore_triton_single.py`.
 
 ## Core Components
 
 ### Main Modules
-- **Task**: A task instance.
-- **TaskPool**: A task pool manager that supports asynchronous task execution.
-- **DevicePool**: A device resource pool that manages device allocation for execution.
+- **Task**: A task instance
+- **TaskPool**: A task pool manager for async execution
+- **DevicePool**: A device resource pool for device allocation
 
-### Execution Flow
+### Execution Flow (coder-only)
 ```
-Task Initialization → AULDesigner generates AUL code → TritonCoder converts to Triton code → Verifier verifies the result
+Task Initialization → Coder generates Triton code → Verifier verifies the result
 ```
 
-## Example Code Analysis
+## Example Code
 
 ### 1. Task Description Function
 
@@ -26,6 +26,7 @@ def get_task_desc():
 import mindspore as ms
 from mindspore import nn
 
+
 class Model(nn.Cell):
     def __init__(self):
         super(Model, self).__init__()
@@ -33,12 +34,15 @@ class Model(nn.Cell):
     def construct(self, x: ms.Tensor) -> ms.Tensor:
         return ms.ops.relu(x)
 
+
 batch_size = 16
 dim = 16384
+
 
 def get_inputs():
     x = ms.ops.randn(batch_size, dim, dtype=ms.float16)
     return [x]
+
 
 def get_init_inputs():
     return []
@@ -46,12 +50,12 @@ def get_init_inputs():
 ```
 
 **Key Elements**:
-- **Model Definition**: A MindSpore model class that inherits from `nn.Cell`.
-- **Kernel Implementation**: The specific kernel logic is defined in the `construct` method.
-- **Input Generation**: The `get_inputs()` function generates test data.
-- **Initialization Inputs**: The `get_init_inputs()` function provides model initialization parameters.
+- Model definition using `nn.Cell`
+- Kernel logic defined in `construct`
+- `get_inputs()` for test data
+- `get_init_inputs()` for init params
 
-### 2. Main Execution Function
+### 2. Main Execution Function (coder-only)
 
 ```python
 async def run_mindspore_triton_single():
@@ -60,18 +64,22 @@ async def run_mindspore_triton_single():
 
     task_pool = TaskPool()
     device_pool = DevicePool([0])
-    config = load_config()
+    config = load_config(dsl="triton")  # choose default plan by DSL
+
+    # Recommended: environment check before running
+    check_env_for_task("mindspore", "ascend", "triton", config)
 
     task = Task(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",
-        impl_type="triton",
+        dsl="triton",
         backend="ascend",
         arch="ascend910b4",
         config=config,
         device_pool=device_pool,
-        framework="mindspore"
+        framework="mindspore",
+        workflow="coder_only_workflow"
     )
 
     task_pool.create_task(task.run)
@@ -80,26 +88,29 @@ async def run_mindspore_triton_single():
 ```
 
 **Parameter Descriptions**:
-| Parameter Name | Type | Description |
+| Name | Type | Description |
 |---------|------|------|
-| op_name | str | Kernel name. |
-| task_desc | str | Task description (includes model definition and test data generation). |
-| task_id | str | Unique identifier for the task. |
-| impl_type | str | Implementation type: "triton" or "swft". |
-| backend | str | Computation backend: "ascend", "cuda", etc. |
-| arch | str | Hardware architecture: e.g., "ascend910b4". |
-| config | dict | Configuration file, including LLM model configurations, etc. |
-| device_pool | DevicePool | Device resource pool. |
-| framework | str | Framework type: "mindspore", "torch", or "numpy". |
+| op_name | str | Kernel name |
+| task_desc | str | Task description (model + inputs) |
+| task_id | str | Unique task identifier |
+| dsl | str | Target DSL, e.g. "triton", "swft" |
+| backend | str | Backend, e.g. "ascend", "cuda" |
+| arch | str | Hardware arch, e.g. "ascend910b4" |
+| config | dict | Task orchestration plan config (`agent_model_config`, `workflow_config_path`, `docs_dir`, etc.) |
+| device_pool | DevicePool | Device pool |
+| framework | str | Frontend framework: "mindspore"/"torch"/"numpy" |
+| workflow | str | Optional. Override `workflow_config_path`, e.g. "coder_only_workflow" |
 
-## Running the Steps
+> Configuration: `load_config("triton")` loads `config/default_triton_config.yaml`. If you run with local vLLM and coder-only, consider `vllm_triton_coderonly_config.yaml` via `load_config(config_path=...)`.
+
+## Run
 
 ### 1. Environment Setup
 
-Please refer to the project's [README documentation](../README.md).
+See the project's [README](../README.md).
 
-### 2. Running the Example
+### 2. Execute the example
 
 ```bash
 python examples/run_mindspore_triton_single.py
-``` 
+```

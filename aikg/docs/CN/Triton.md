@@ -3,9 +3,6 @@
 ## Triton 简介
 Triton是一款高性能AI Kernel内核编程语言，专为深度学习应用优化，支持华为Ascend和NVIDIA GPU设备。当前作为AIKG Triton算子生成后端，提供高效的内核代码生成能力。
 
-## TritonCoder
-AIKG对接Triton算子python前端，通过直接生成Triton python代码，利用Triton编译器编译成Ascend/GPU后端代码。
-
 ## 参考代码
 
 AIKG生成的 `relu_op` 示例如下：

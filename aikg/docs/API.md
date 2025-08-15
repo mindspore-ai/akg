@@ -58,38 +58,33 @@ Task flow configuration files are used to orchestrate and organize which model d
 **Default Configuration Directory**: `aikg/python/ai_kernel_generator/config/`
 
 **Functionality**:
--   **Task Orchestration**: Assign different LLM models to different Agents like `Designer`, `Coder`, and `Conductor`.
--   **Flexible Combinations**: Create multiple configuration files for different scenarios. For example, one flow might use a model deployed with vLLM, while another uses the official DeepSeek API.
--   **Default Configuration**: `default_config.yaml` is the default flow configuration.
+-   **Task Orchestration**: Assign LLM models to agents such as `designer`, `coder`, and `conductor`.
+-   **Flexible Combinations**: Create multiple configuration files for different scenarios (e.g., local vLLM + cloud API).
+-   **Default Plan**: Presets are provided by DSL, e.g., `default_triton_config.yaml`.
 
-**Example (`vllm_dsr1_with_official_dsv3_config.yaml`)**:
-This file demonstrates how to configure different LLM models for various Agents (e.g., Coder, Designer) within a kernel generation flow. For instance, the code fixing (`swft_coder_fix`) and checking (`conductor_check`) tasks use the official `deepseek_v3_default` model, while most other tasks use the `vllm_deepseek_r1_default` model deployed via vLLM.
+**Example (coder-only, local vLLM)**: `vllm_triton_coderonly_config.yaml`
+Use a unified local vLLM model preset for coder-only workflow.
 
 ```yaml
 # Model preset configuration
 agent_model_config:
-  aul_designer: vllm_deepseek_r1_default
-  aul_designer_fix: vllm_deepseek_r1_default
-  swft_coder: deepseek_v3_default
-  swft_coder_api: vllm_deepseek_r1_default
-  swft_coder_fix: deepseek_v3_default
-  triton_coder: vllm_deepseek_r1_default
-  triton_coder_fix: vllm_deepseek_r1_default
-  conductor_check: vllm_deepseek_r1_default
-  conductor_analyze: deepseek_v3_default
+  designer: vllm_deepseek_r1_default
+  coder: vllm_deepseek_r1_default
+  conductor: vllm_deepseek_r1_default
+  api_generator: vllm_deepseek_r1_default
 
 # Log configuration
 log_dir: "~/aikg_logs"
 ```
 
 **How to Use**:
-In your code, you can load a specific task flow configuration using `load_config()`.
+Load a plan configuration using `load_config()`.
 ```python
-# Load the default configuration: default_config.yaml
-config = load_config()
+# Load preset by DSL: default_triton_config.yaml
+config = load_config(dsl="triton")
 
 # Load a specific configuration file
-config = load_config("/path/to/your/vllm_dsr1_with_official_dsv3_config.yaml")
+config = load_config(config_path="/path/to/your/vllm_custom_path.yaml")
 
 # Use the configuration in a task
 task = Task(

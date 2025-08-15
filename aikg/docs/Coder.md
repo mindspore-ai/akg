@@ -5,7 +5,7 @@ The Coder is a core component in the AI Kernel Generator that converts algorithm
 
 ## Core Functions
 - **Design-to-Code Translation**: Converts algorithm designs into concrete implementation code
-- **CustomDocs Integration**: Leverages custom reference documents for accurate code generation
+- **Doc-Driven Integration**: Leverages custom reference documents for accurate code generation
 - **Multi-DSL Support**: Supports various target languages (Triton, SWFT, etc.)
 - **Framework Adaptation**: Generates code for different frontend frameworks (MindSpore, PyTorch, etc.)
 - **Error-Guided Repair**: Fixes generated code based on verification feedback
@@ -20,40 +20,18 @@ The Coder is a core component in the AI Kernel Generator that converts algorithm
 | framework | str (Required) | Frontend framework: "mindspore", "torch", "numpy", etc. |
 | backend | str (Required) | Hardware backend: "ascend", "cuda", etc. |
 | arch | str (Required) | Hardware architecture: "ascend910b4", "a100", etc. |
-| workflow_config_path | str (Optional) | Workflow configuration file path |
-| config | dict (Required) | Complete configuration including CustomDocs settings |
+| workflow_config_path | str (Optional) | Workflow configuration file path (usually injected by Task from the orchestration plan) |
+| config | dict (Required) | Complete orchestration plan configuration, including log_dir, agent_model_config, docs_dir, etc. (see [Task Orchestration Plan Configuration](./TaskOrchestrationPlan.md)) |
 
-## CustomDocs Integration
+> Related docs: Workflow details in [Workflow](./Workflow.md); documentation integration in [Doc-Driven Integration Guide](./DocDrivenIntegration.md).
 
-The Coder extensively uses the CustomDocs feature to load comprehensive reference materials:
+## Doc-Driven Integration
 
-### Required Documents
-Based on code analysis, the following documents are essential for proper Coder operation:
-
-- `basic_docs.md` - DSL basic documentation and syntax specifications
-- `api/api.md` - API interface documentation with detailed function descriptions
-- `suggestion_docs.md` - Expert suggestions and best practices
-- `examples/` directory - Framework-specific example files (e.g., `mindspore_*.py`, `torch_*.py`)
-
-### Document Loading Process
-The Coder loads documents from the `docs_dir.coder` path specified in the configuration:
-```python
-self.base_doc = {
-    "api_docs": self.load_doc("api/api.md"),
-    "dsl_basic_docs": self.load_doc("basic_docs.md"),
-    "dsl_examples": self._load_dsl_examples(),
-    "expert_suggestion": self.load_doc("suggestion_docs.md"),
-    # ... other fields
-}
-```
-
-### Intelligent Document Processing
-- **API Compression**: For large API documents, uses LLM to extract relevant APIs
-- **Example Loading**: Dynamically loads framework-specific examples from the examples directory
+The Coder loads reference documents via `docs_dir.coder` in the orchestration plan. For document list, directory structure, and authoring guidelines, see the [Doc-Driven Integration Guide](./DocDrivenIntegration.md). Details are not duplicated here.
 
 ## Configuration Example
 ```yaml
-# In DSL configuration file
+# In task orchestration plan file
 docs_dir:
   coder: "resources/docs/triton_docs"  # Coder reference documents
   
@@ -62,44 +40,23 @@ agent_model_config:
   api_generator: "your_api_model"  # For API document compression
 ```
 
-## Document Directory Structure
-```
-your_coder_docs/
-├── basic_docs.md           # DSL syntax and basic concepts
-├── api/
-│   └── api.md             # Comprehensive API documentation
-├── suggestion_docs.md     # Expert suggestions and patterns
-└── examples/
-    ├── mindspore_example.py    # MindSpore-specific examples
-    ├── torch_example.py        # PyTorch-specific examples
-    ├── mindspore_matmul.py     # Operation-specific examples
-    └── ...
-```
+ 
 
 ## Execution Flow
 
 1. **Initialization Stage**
    - Load workflow configuration and create parser
    - Initialize code generation templates
-   - Load all reference documents using CustomDocs
+   - Load all reference documents using Doc-Driven Integration
    - Prepare base document structure with loaded content
 
 2. **Processing Stage**
    - Extract algorithm design from task information
    - Process API documentation (compress if needed)
-   - Load framework-specific examples
    - Incorporate conductor suggestions and error feedback
 
 3. **Generation Stage**
    - Execute LLM generation with comprehensive context
    - Return generated code, prompt, and reasoning process
 
-## Special Features
-
-### Framework-Specific Example Loading
-The Coder automatically loads examples matching the specified framework:
-```python
-def _load_dsl_examples(self) -> str:
-    # Loads files like "mindspore_*.py", "torch_*.py" from examples directory
-    # Supports multiple file formats: .py, .md, .txt
-```
+ 
