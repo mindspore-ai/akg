@@ -152,7 +152,7 @@ class Task:
         """
 
         # 初始化基础文档
-        base_doc = {}
+        base_doc = {"backend": self.backend, "arch": self.arch, "dsl": self.dsl, "framework": self.framework}
 
         # 只在相应agent存在时添加其基础文档
         if 'designer' in self.agents:

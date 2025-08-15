@@ -84,6 +84,7 @@ class Coder(AgentBase):
             "framework": framework,
             "backend": backend,
             "arch": arch,
+            "task_desc": task_desc,
         }
         super().__init__(context=context, config=config)
 
@@ -255,7 +256,7 @@ class Coder(AgentBase):
                 to_update_api_details = {
                     "agent_name": "api",
                     "hash": task_info.get("task_id", "Api"),
-                    "task_id": task_info.get("task_id", "Unknown"),
+                    "task_id": task_info.get("task_id", ""),
                     "step": self.api_step_count,
                 }
                 self.context.update(to_update_api_details)
@@ -296,7 +297,7 @@ class Coder(AgentBase):
             to_update_codegen_details = {
                 "agent_name": "coder",
                 "hash": task_info.get("task_id", "Coder"),
-                "task_id": task_info.get("task_id", "Unknown"),
+                "task_id": task_info.get("task_id", ""),
                 "step": self.codegen_step_count,
             }
             self.context.update(to_update_codegen_details)

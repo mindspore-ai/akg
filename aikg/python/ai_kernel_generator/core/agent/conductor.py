@@ -265,6 +265,8 @@ class Conductor(AgentBase):
                 "agent_name": "conductor",
                 "hash": self.task_id + "@" + str(self.llm_step_count),
                 "task_id": self.task_id,
+                "backend": self.task_info.get("backend", ""),
+                "task_desc": self.task_desc,
                 "step": self.llm_step_count,
             }
             self.context.update(to_update_context)
