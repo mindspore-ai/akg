@@ -17,7 +17,6 @@ from ai_kernel_generator.core.evolve import evolve
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.config.config_validator import load_config
-from ai_kernel_generator.database.database import Database
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 
 
@@ -124,14 +123,30 @@ async def run_evolve_example():
     print(f"框架: {evolution_result.get('framework', 'Unknown')}")
     print(f"后端: {evolution_result.get('backend', 'Unknown')}")
     print(f"架构: {evolution_result.get('architecture', 'Unknown')}")
+    
+    # 显示存储目录信息
+    storage_dir = evolution_result.get('storage_dir', '')
+    if storage_dir:
+        print(f"存储目录: {storage_dir}")
 
     # 显示最佳实现
     best_implementations = evolution_result.get('best_implementations', [])
     if best_implementations:
         print(f"\n最佳实现 (前{len(best_implementations)}个):")
         for i, impl in enumerate(best_implementations, 1):
-            profile_score = impl.get('profile', float('inf'))
-            profile_str = f"性能: {profile_score:.4f}" if profile_score != float('inf') else "性能: N/A"
+            profile_data = impl.get('profile', float('inf'))
+            
+            # 处理profile信息，支持三元组格式
+            if isinstance(profile_data, (list, tuple)) and len(profile_data) >= 3:
+                gen_time, base_time, speedup = profile_data[0], profile_data[1], profile_data[2]
+                profile_str = f"生成代码: {gen_time:.4f}s, 基准代码: {base_time:.4f}s, 加速比: {speedup:.2f}x"
+            elif isinstance(profile_data, (list, tuple)) and len(profile_data) >= 1:
+                profile_str = f"执行时间: {profile_data[0]:.4f}s"
+            elif profile_data != float('inf'):
+                profile_str = f"执行时间: {profile_data:.4f}s"
+            else:
+                profile_str = "性能: N/A"
+                
             print(f"  {i}. {impl.get('op_name', 'Unknown')} (轮次 {impl.get('round', 'N/A')}, {profile_str})")
     else:
         print("\n⚠️  没有找到成功的实现")
@@ -170,6 +185,10 @@ async def run_evolve_example():
                 serializable_impl['verifier_error'] = task_info.get('verifier_error', '')
                 # 移除复杂的task_info对象
                 del serializable_impl['task_info']
+            
+            # 确保profile三元组可以JSON序列化
+            if 'profile' in serializable_impl and isinstance(serializable_impl['profile'], tuple):
+                serializable_impl['profile'] = list(serializable_impl['profile'])
             serializable_implementations.append(serializable_impl)
         serializable_result['best_implementations'] = serializable_implementations
 
@@ -193,6 +212,10 @@ async def run_evolve_example():
                         serializable_impl['verifier_error'] = task_info.get('verifier_error', '')
                         # 移除复杂的task_info对象
                         del serializable_impl['task_info']
+                    
+                    # 确保profile三元组可以JSON序列化
+                    if 'profile' in serializable_impl and isinstance(serializable_impl['profile'], tuple):
+                        serializable_impl['profile'] = list(serializable_impl['profile'])
                     serializable_impls.append(serializable_impl)
                 serializable_round['implementations'] = serializable_impls
             serializable_rounds.append(serializable_round)

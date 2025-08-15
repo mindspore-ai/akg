@@ -51,7 +51,16 @@ def get_inspirations(inspirations: List[dict]) -> str:
         profile = inspiration.get('profile', float('inf'))
 
         if impl_code:  # 只有当impl_code不为空时才添加
-            inspiration_text = f"## Inspiration {i+1} 代码执行耗时(s): {profile}\n"
+            # 处理profile信息，支持三元组格式
+            if isinstance(profile, (list, tuple)) and len(profile) >= 3:
+                gen_time, base_time, speedup = profile[0], profile[1], profile[2]
+                profile_text = f"生成代码耗时: {gen_time:.4f}s, 基准代码耗时: {base_time:.4f}s, 加速比: {speedup:.2f}x"
+            elif isinstance(profile, (list, tuple)) and len(profile) >= 1:
+                profile_text = f"代码执行耗时: {profile[0]:.4f}s"
+            else:
+                profile_text = f"代码执行耗时: {profile:.4f}s" if profile != float('inf') else "代码执行耗时: N/A"
+            
+            inspiration_text = f"## Inspiration {i+1} {profile_text}\n"
             inspiration_text += f"代码：\n```\n{impl_code}\n```\n"
             result_parts.append(inspiration_text)
 

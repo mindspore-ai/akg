@@ -15,13 +15,13 @@
 import os
 import logging
 import random
+import json
 from functools import partial
 from typing import List, Dict, Any, Tuple
 from pathlib import Path
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
-from ai_kernel_generator.database.evolve_database import EvolveDatabase
 from ai_kernel_generator import get_project_root
 
 
@@ -99,6 +99,108 @@ def load_meta_prompts(parallel_num: int) -> list[str]:
         return ["" for _ in range(parallel_num)]
 
 
+def save_implementation(impl_data: Dict[str, Any], storage_dir: str) -> None:
+    """保存实现到本地文件
+    
+    Args:
+        impl_data: 实现数据字典
+        storage_dir: 存储目录
+    """
+    try:
+        os.makedirs(storage_dir, exist_ok=True)
+        
+        # 生成唯一文件名
+        round_idx = impl_data.get('round', 0)
+        task_id = impl_data.get('task_id', 'unknown')
+        filename = f"impl_{round_idx}_{task_id}.json"
+        filepath = os.path.join(storage_dir, filename)
+        
+        # 保存数据
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(impl_data, f, ensure_ascii=False, indent=2)
+            
+        logger.debug(f"Saved implementation to {filepath}")
+    except Exception as e:
+        logger.error(f"Failed to save implementation: {e}")
+
+
+def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict[str, Any]]:
+    """从本地文件加载最佳实现
+    
+    Args:
+        storage_dir: 存储目录
+        max_count: 最大加载数量
+        
+    Returns:
+        按性能排序的最佳实现列表
+    """
+    implementations = []
+    
+    try:
+        if not os.path.exists(storage_dir):
+            return implementations
+            
+        for filename in os.listdir(storage_dir):
+            if filename.endswith('.json'):
+                filepath = os.path.join(storage_dir, filename)
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        impl_data = json.load(f)
+                        implementations.append(impl_data)
+                except Exception as e:
+                    logger.warning(f"Failed to load {filepath}: {e}")
+                    
+        # 按性能排序（gen_time越小越好）
+        implementations.sort(key=lambda x: x.get('profile', (float('inf'), 0.0, 0.0))[0])
+        
+        logger.info(f"Loaded {len(implementations)} implementations from {storage_dir}")
+        return implementations[:max_count]
+        
+    except Exception as e:
+        logger.error(f"Failed to load implementations from {storage_dir}: {e}")
+        return implementations
+
+
+def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int = 2) -> List[Dict[str, Any]]:
+    """从实现列表中采样inspiration格式的数据
+    
+    Args:
+        implementations: 实现列表
+        sample_num: 采样数量
+        
+    Returns:
+        inspiration格式的数据列表
+    """
+    if not implementations:
+        return []
+        
+    # 随机采样或选择最佳的几个
+    if len(implementations) <= sample_num:
+        selected = implementations
+    else:
+        # 50%概率选择最佳的，50%概率随机选择
+        best_count = max(1, sample_num // 2)
+        random_count = sample_num - best_count
+        
+        selected = implementations[:best_count]  # 最佳的几个
+        if random_count > 0 and len(implementations) > best_count:
+            remaining = implementations[best_count:]
+            selected.extend(random.sample(remaining, min(random_count, len(remaining))))
+    
+    # 转换为inspiration格式
+    inspirations = []
+    for impl in selected:
+        profile_tuple = impl.get('profile', (float('inf'), 0.0, 0.0))
+        inspiration = {
+            'impl_code': impl.get('impl_code', ''),
+            'profile': profile_tuple,  # 保持完整的三元组
+            'strategy_mode': 'evolution'
+        }
+        inspirations.append(inspiration)
+    
+    return inspirations
+
+
 async def evolve(
     op_name: str,
     task_desc: str,
@@ -145,14 +247,11 @@ async def evolve(
     logger.info(f"Starting evolve process for {op_name}")
     logger.info(f"Configuration: {dsl} on {backend}/{arch} using {framework}")
 
-    # 临时数据库路径配置
-    import os
+    # 本地存储路径配置
     import uuid
-
     random_hash = uuid.uuid4().hex[:8]
-    evolve_database_path = os.path.expanduser(f"~/aikg_db/{random_hash}/")
-    os.makedirs(evolve_database_path, exist_ok=True)
-    evolve_db = EvolveDatabase(database_path=evolve_database_path)
+    storage_dir = os.path.expanduser(f"~/aikg_evolve/{op_name}_{dsl}_{framework}_{backend}_{arch}/{random_hash}/")
+    os.makedirs(storage_dir, exist_ok=True)
 
     all_results = []
     best_success_rate = 0.0
@@ -165,6 +264,7 @@ async def evolve(
     for round_idx in range(1, max_rounds + 1):
         logger.info(f"Evolve round {round_idx}/{max_rounds} started")
         inspirations: list = list()
+        
         if round_idx == 1:
             inspirations = [[] for _ in range(parallel_num)]
             if dsl == "triton":
@@ -181,23 +281,16 @@ async def evolve(
 
                 if not meta_prompts or all(not prompt for prompt in meta_prompts):
                     logger.warning(f"No inspirations found in meta-prompts")
-
         else:
+            # 从本地存储加载历史最佳实现作为inspiration
+            stored_implementations = load_best_implementations(storage_dir, max_count=parallel_num * 2)
+            
+            inspirations = []
             for pid in range(parallel_num):
-                task_pool.create_task(partial(
-                    evolve_db.samples,
-                    output_content=["impl_code", "profile"],
-                    sample_num=min(parallel_num, 2),
-                    impl_code="",
-                    framework_code=task_desc,
-                    backend=backend,
-                    arch=arch,
-                    dsl=dsl,
-                    framework=framework,
-                ))
+                sampled = sample_inspirations(stored_implementations, sample_num=min(parallel_num, 2))
+                inspirations.append(sampled)
+            
             meta_prompts = None
-            inspirations = await task_pool.wait_all()
-            task_pool.tasks.clear()
 
         # 创建并行任务
         round_tasks = []
@@ -238,29 +331,28 @@ async def evolve(
                 total_successful_tasks += 1
                 round_success_count += 1
 
+                # 获取完整的profile三元组
+                profile_res = task_info.get("profile_res", (float('inf'), 0.0, 0.0))
+                
                 # 收集成功的实现信息
                 impl_info = {
                     'op_name': task_op_name,
                     'round': round_idx,
+                    'task_id': task_info.get('task_id', ''),
                     'task_info': task_info,
-                    'profile': task_info.get("profile_res", (float('inf'), 0.0, 0.0))[0]
+                    'profile': profile_res,  # 完整三元组
+                    'impl_code': task_info.get("coder_code", ""),
+                    'framework_code': task_desc,
+                    'backend': backend,
+                    'arch': arch,
+                    'dsl': dsl,
+                    'framework': framework
                 }
                 round_implementations.append(impl_info)
                 best_implementations.append(impl_info)
 
-                task_pool.create_task(partial(
-                    evolve_db.insert,
-                    impl_code=task_info["coder_code"],
-                    framework_code=task_info["task_desc"],
-                    backend=backend,
-                    arch=arch,
-                    dsl=dsl,
-                    framework=framework,
-                    profile=task_info.get("profile_res", (float('inf'), 0.0, 0.0))[0],
-                ))
-
-        await task_pool.wait_all()
-        task_pool.tasks.clear()
+                # 保存到本地文件
+                save_implementation(impl_info, storage_dir)
 
         # 计算当前轮次成功率
         round_success_rate = round_success_count / round_total_count if round_total_count > 0 else 0.0
@@ -282,8 +374,8 @@ async def evolve(
         pretty_print_results([(impl['op_name'], True) for impl in round_implementations] +
                              [(f"failed_task_{i}", False) for i in range(round_total_count - round_success_count)])
 
-    # 按性能排序最佳实现（越小越好）
-    best_implementations.sort(key=lambda x: x['profile'])
+    # 按性能排序最佳实现（gen_time越小越好）
+    best_implementations.sort(key=lambda x: x['profile'][0] if isinstance(x['profile'], (list, tuple)) else x['profile'])
 
     # 计算最终成功率
     final_success_rate = total_successful_tasks / total_tasks if total_tasks > 0 else 0.0
@@ -301,11 +393,13 @@ async def evolve(
         'backend': backend,
         'architecture': arch,
         'best_implementations': best_implementations[:5],  # 只返回前5个最佳实现
-        'round_results': round_results
+        'round_results': round_results,
+        'storage_dir': storage_dir  # 添加存储目录信息
     }
 
     logger.info(f"Evolution completed for {op_name}")
     logger.info(f"Total tasks: {total_tasks}, Successful: {total_successful_tasks}")
     logger.info(f"Final success rate: {final_success_rate:.2%}")
+    logger.info(f"Results stored in: {storage_dir}")
 
     return evolution_result
