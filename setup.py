@@ -184,7 +184,7 @@ class CustomBuildExt(build_ext):
         logger.info(f"Copied {so_name} to {dst_so_path}")
 
         # Copy generated Python files to Python package directory
-        auto_generate_dir = os.path.join(build_extension_dir, "auto_generate")
+        auto_generate_dir = os.path.join(build_extension_dir, ext_name + "_auto_generate")
         if os.path.exists(auto_generate_dir):
             generated_files = ["gen_ops_def.py", "gen_ops_prim.py"]
             for gen_file in generated_files:
