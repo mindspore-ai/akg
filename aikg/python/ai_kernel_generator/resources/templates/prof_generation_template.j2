@@ -32,6 +32,8 @@ MS_TO_NP_DTYPE_MAP = {
 
 {% if "triton" in dsl %}
 from {{ op_name }}_triton import {{ impl_func_name }}
+import triton
+import triton.testing
 {% elif dsl == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
 {% endif %}
@@ -228,12 +230,33 @@ def run_generation_implementations():
     {% endif %}
     
     {% if "triton" in dsl %}
-    # 运行Triton实现
-    for _ in range({{ total_count }}):
-        impl_output = {{ impl_func_name }}(*inputs)
-        {% if backend == "cuda" %}
-        torch.cuda.synchronize()
-        {% endif %}
+    # 使用triton.testing.do_bench进行Triton实现测试
+    def triton_benchmark_fn():
+        result = {{ impl_func_name }}(*inputs)
+        return result
+    
+    # 使用do_bench测量执行时间
+    execution_time = triton.testing.do_bench(
+        triton_benchmark_fn,
+        warmup={{ warmup_times }},
+        rep={{ run_times }},
+        return_mode="mean"
+    )
+    
+    # 保存时间结果到文件
+    result_data = {
+        "execution_time_ms": execution_time,  # triton do_bench返回毫秒
+        "execution_time_us": execution_time * 1000,  # 转换为微秒以保持兼容性
+        "warmup_times": {{ warmup_times }},
+        "run_times": {{ run_times }},
+        "method": "triton_do_bench"
+    }
+    
+    with open("generation_profile_result.json", "w") as f:
+        json.dump(result_data, f, indent=2)
+    
+    print(f"[{{ op_name }}] Generation execution time: {execution_time:.4f} ms")
+    
     {% elif dsl == "swft" %}
     # 运行SWFT实现
     data_dir = os.path.dirname(__file__)

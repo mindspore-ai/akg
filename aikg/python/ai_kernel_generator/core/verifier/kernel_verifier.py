@@ -212,15 +212,14 @@ class KernelVerifier:
 
     def gen_profile_project(self, verify_dir: str, device_id: int = 0, warmup_times: int = 5, run_times: int = 50):
         """生成profile项目文件到指定目录"""
-        total_count = warmup_times + run_times
         # 生成基准性能测试脚本
         profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_base.py")
-        self.gen_profile_file_from_template(PROFILE_BASE_TEMPLATE_PATH, profile_file, device_id, total_count)
+        self.gen_profile_file_from_template(PROFILE_BASE_TEMPLATE_PATH, profile_file, device_id, warmup_times, run_times)
         # 生成性能测试脚本
         profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_generation.py")
-        self.gen_profile_file_from_template(PROFILE_GENERATION_TEMPLATE_PATH, profile_file, device_id, total_count)
+        self.gen_profile_file_from_template(PROFILE_GENERATION_TEMPLATE_PATH, profile_file, device_id, warmup_times, run_times)
 
-    def gen_profile_file_from_template(self, template_path: str, profile_file: str, device_id: int, total_count: int):
+    def gen_profile_file_from_template(self, template_path: str, profile_file: str, device_id: int, warmup_times: int, run_times: int):
         """从模板生成profile文件"""
         # 从文件加载模板
         with open(template_path, "r", encoding="utf-8") as f:
@@ -235,7 +234,9 @@ class KernelVerifier:
             impl_func_name=self.impl_func_name,
             backend=self.backend,
             arch=self.arch,
-            total_count=total_count
+            warmup_times=warmup_times,
+            run_times=run_times,
+            total_count=warmup_times + run_times
         )
 
         with open(profile_file, "w", encoding="utf-8") as f:
@@ -405,7 +406,10 @@ class KernelVerifier:
             # 生成profile脚本并运行
             self.gen_profile_project(verify_dir, device_id, warmup_times, run_times)
 
-            if self.backend == "ascend":
+            # 检查是否为triton DSL，如果是则使用do_bench
+            if "triton" in self.dsl:
+                base_time, gen_time = self.run_triton_do_bench_profile(verify_dir)
+            elif self.backend == "ascend":
                 _, _, base_prof_path = self.run_msprof(os.path.join(verify_dir, f"profile_{self.op_name}_base.py"))
                 _, _, gen_prof_path = self.run_msprof(os.path.join(
                     verify_dir, f"profile_{self.op_name}_generation.py"))
@@ -420,7 +424,7 @@ class KernelVerifier:
                 logger.warning(f"[{self.task_id}:{self.op_name}] 不支持的backend: {self.backend}")
                 return float('inf'), 0.0, 0.0
 
-            speedup = base_time / gen_time
+            speedup = base_time / gen_time if gen_time > 0 else 0.0
             speedup_percent = speedup * 100.0
             self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
             logger.info(f"orig performance is {base_time:.2f} us")
@@ -436,6 +440,81 @@ class KernelVerifier:
                 os.chdir(original_cwd)
             except Exception:
                 pass
+
+    def run_triton_do_bench_profile(self, verify_dir: str) -> Tuple[float, float]:
+        """使用triton do_bench运行性能分析
+        
+        Args:
+            verify_dir: 验证目录
+            
+        Returns:
+            (base_time_us, gen_time_us): 基准时间和生成时间（微秒）
+        """
+        try:
+            # 保存当前工作目录
+            original_cwd = os.getcwd()
+            
+            # 切换到验证目录
+            os.chdir(verify_dir)
+            
+            try:
+                # 运行base profile脚本
+                base_script = f"profile_{self.op_name}_base.py"
+                base_result = run_command(["python", base_script], cmd_msg="base_profile", timeout=300)
+                if not base_result[0]:
+                    logger.error(f"Base profile script execution failed: {base_result[1]}")
+                    return float('inf'), float('inf')
+                
+                # 运行generation profile脚本
+                gen_script = f"profile_{self.op_name}_generation.py"
+                gen_result = run_command(["python", gen_script], cmd_msg="generation_profile", timeout=300)
+                if not gen_result[0]:
+                    logger.error(f"Generation profile script execution failed: {gen_result[1]}")
+                    return float('inf'), float('inf')
+                
+                # 读取保存的时间结果
+                base_time_us = self.read_triton_profile_result(verify_dir, "base_profile_result.json")
+                gen_time_us = self.read_triton_profile_result(verify_dir, "generation_profile_result.json")
+                
+                return base_time_us, gen_time_us
+                
+            finally:
+                # 恢复原始工作目录
+                os.chdir(original_cwd)
+            
+        except Exception as e:
+            logger.error(f"Triton do_bench profile failed: {e}")
+            return float('inf'), float('inf')
+
+    def read_triton_profile_result(self, verify_dir: str, result_file: str) -> float:
+        """读取triton profile结果文件
+        
+        Args:
+            verify_dir: 验证目录
+            result_file: 结果文件名
+            
+        Returns:
+            执行时间（微秒）
+        """
+        try:
+            result_path = os.path.join(verify_dir, result_file)
+            if not os.path.exists(result_path):
+                logger.error(f"Profile result file not found: {result_path}")
+                return float('inf')
+            
+            with open(result_path, 'r') as f:
+                result_data = json.load(f)
+            
+            # 获取时间结果（微秒）
+            execution_time_us = result_data.get("execution_time_us", float('inf'))
+            method = result_data.get("method", "unknown")
+            
+            logger.info(f"Read profile result from {result_file}: {execution_time_us:.4f} us (method: {method})")
+            return execution_time_us
+            
+        except Exception as e:
+            logger.error(f"Failed to read profile result from {result_file}: {e}")
+            return float('inf')
 
     def run(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = 0):
         """
