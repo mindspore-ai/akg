@@ -25,7 +25,7 @@ from ai_kernel_generator.utils.common_utils import get_prompt_path
 from ai_kernel_generator.utils.collector import get_collector
 
 logger = logging.getLogger(__name__)
-stream_output_mode = os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
+aikg_stream_output = os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
 
 
 class AgentBase(ABC):
@@ -46,7 +46,7 @@ class AgentBase(ABC):
             context: 代理详情信息
 
         """
-        agent_name = context.get("agent_name", "Unknown")
+        agent_name = context.get("agent_name", "")
         if not text:
             logger.debug(f"LLM Start:  [status] %s -- [model] %s -- [token_count] %s", agent_name, model_name, 0)
             return
@@ -201,7 +201,7 @@ class AgentBase(ABC):
             input: 要检查的输入字典
         """
         logger.debug("=" * 60)
-        logger.debug(f"检查 input 字典内容 (Agent: {self.context.get('agent_name', 'Unknown')})")
+        logger.debug(f"检查 input 字典内容 (Agent: {self.context.get('agent_name', '')})")
         logger.debug("=" * 60)
 
         if not input:
@@ -271,7 +271,7 @@ class AgentBase(ABC):
                 # 其他模型使用原来的chain方式
                 chain = prompt | model
 
-                if not stream_output_mode:
+                if not aikg_stream_output:
                     raw_result = await chain.ainvoke(input)
                     content = raw_result.content
                     reasoning_content = raw_result.additional_kwargs.get("reasoning_content", "")
@@ -292,15 +292,21 @@ class AgentBase(ABC):
                 logger.info(response_metadata)
 
             logger.debug(f"LLM End:    [status] %s -- [model] %s",
-                         self.context.get('agent_name', 'Unknown'), model_name)
+                         self.context.get('agent_name', ''), model_name)
 
             if os.getenv("AIKG_DATA_COLLECT", "off").lower() == "on":
                 # 使用collector收集数据
                 try:
                     collector = await get_collector()
                     collected_data = {
-                        "hash": self.context.get('hash', 'Unknown'),
-                        "agent_name": self.context.get('agent_name', 'Unknown'),
+                        "hash": self.context.get('hash', ''),
+                        "agent_name": self.context.get('agent_name', ''),
+                        "op_name": self.context.get('op_name', ''),
+                        "dsl": self.context.get('dsl', ''),
+                        "backend": self.context.get('backend', ''),
+                        "arch": self.context.get('arch', ''),
+                        "framework": self.context.get('framework', ''),
+                        "task_desc": self.context.get('task_desc', ''),
                         "model_name": model_name,
                         "content": content,
                         "formatted_prompt": formatted_prompt,
@@ -314,6 +320,6 @@ class AgentBase(ABC):
             return content, formatted_prompt, reasoning_content
         except Exception as e:
             logger.error(f"LLM Failed: [status] %s -- [model] %s -- [error] %s",
-                         self.context.get('agent_name', 'Unknown'), model_name, e)
+                         self.context.get('agent_name', ''), model_name, e)
             logger.error(f"Exception in run_llm: {type(e).__name__}: {e}")
             raise

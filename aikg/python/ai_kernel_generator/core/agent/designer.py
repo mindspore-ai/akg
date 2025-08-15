@@ -57,6 +57,7 @@ class Designer(AgentBase):
             "op_name": self.op_name,
             "backend": self.backend,
             "arch": self.arch,
+            "task_desc": self.task_desc,
         }
         super().__init__(context=context, config=config)
 
@@ -117,8 +118,9 @@ class Designer(AgentBase):
         self.llm_step_count += 1
         to_update_context = {
             "agent_name": "designer",
+            "framework": task_info.get("framework", ""),
             "hash": task_info.get("task_id", "Designer"),
-            "task_id": task_info.get("task_id", "Unknown"),
+            "task_id": task_info.get("task_id", ""),
             "step": self.llm_step_count,
         }
         self.context.update(to_update_context)

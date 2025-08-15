@@ -251,7 +251,7 @@ class Collector:
             database_data = {
                 "hash": "database",
                 "backend": task_info.get("backend", ""),
-                "arch": task_info.get("arch_name", ""),  # base_doc中使用arch_name
+                "arch": task_info.get("arch_name", ""),
                 "framework": task_info.get("framework", ""),
                 "dsl": task_info.get("dsl", ""),
                 "framework_code": task_info.get("task_desc", ""),

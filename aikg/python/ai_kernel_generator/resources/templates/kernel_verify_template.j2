@@ -193,14 +193,17 @@ def compare(framework_out_flatten, impl_out_flatten, limit, data_type):
     err_cnt = 0
     size = len(framework_out_flatten)
     abs_diff = np.abs(framework_out_flatten - impl_out_flatten)
-    abs_ref = np.abs(impl_out_flatten)
+    abs_ref = np.abs(framework_out_flatten)
     eps = 1e-8
     
     relative_error = np.where(abs_ref > eps, abs_diff / abs_ref, abs_diff)
     err_cnt = np.sum(relative_error > limit).astype(np.int32)
     limit_cnt = int(size * limit)
     if err_cnt > limit_cnt:
-        raise AssertionError(f"验证失败: err_cnt = {err_cnt} / {limit_cnt}，输出不一致（dtype={data_type}, limit={limit}）")
+        error_msg = f"验证失败，输出不一致: err_cnt={err_cnt} / {limit_cnt}, dtype={data_type}, limit={limit}\n"
+        error_msg += f"Framework output (first 10): {framework_out_flatten[:10]}\n"
+        error_msg += f"Implementation output (first 10): {impl_out_flatten[:10]}"
+        raise AssertionError(error_msg)
 
 def verify_implementations():
     """验证框架实现和具体实现的结果一致性"""
