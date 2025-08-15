@@ -199,9 +199,16 @@ class KernelVerifier:
             verify_dir: 验证目录
             timeout: 超时时间（秒），默认5分钟
         """
-        os.chdir(verify_dir)
-        python_cmd = ["python", f"verify_{self.op_name}.py"]
-        return run_command(python_cmd, f"verify_{self.op_name}", timeout=timeout)
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(verify_dir)
+            python_cmd = ["python", f"verify_{self.op_name}.py"]
+            return run_command(python_cmd, f"verify_{self.op_name}", timeout=timeout)
+        finally:
+            try:
+                os.chdir(original_cwd)
+            except Exception:
+                pass
 
     def gen_profile_project(self, verify_dir: str, device_id: int = 0, warmup_times: int = 5, run_times: int = 50):
         """生成profile项目文件到指定目录"""
@@ -308,13 +315,15 @@ class KernelVerifier:
         except Exception as e:
             return False, f"执行错误: {str(e)}", None
 
-    def analyze_nsys_data(self, rep_path: str, warmup_times: int, run_times: int) -> Tuple[bool, str, float]:
+    def analyze_nsys_data(self, rep_path: str, warmup_times: int, run_times: int, profile_type: str = "") -> Tuple[bool, str, float]:
         """分析nsys生成的rep文件，返回平均耗时(us)，统计方式与analyze_prof_data一致"""
 
         try:
             dir_plib = Path(rep_path).resolve().parent
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            csv_base = f"nsys_report_{timestamp}"
+            # 在CSV文件名中添加profile_type标识
+            type_suffix = f"_{profile_type}" if profile_type else ""
+            csv_base = f"nsys_report_{timestamp}{type_suffix}"
             csv_path = dir_plib / csv_base  # rep_path.replace(".nsys-rep", ".csv")
             # 导出csv
             cmd = f'nsys stats --report gputrace  --timeunit us  --format csv --output {csv_path} {rep_path}'
@@ -381,6 +390,7 @@ class KernelVerifier:
 
     def run_profile(self, current_step: int = 0, device_id: str = "0", profile_settings: dict = {}):
         """运行profile分析"""
+        original_cwd = os.getcwd()
         try:
             run_times = profile_settings.get("run_times", 50)
             warmup_times = profile_settings.get("warmup_times", 5)
@@ -403,9 +413,9 @@ class KernelVerifier:
                 _, _, gen_time = self.analyze_prof_data(gen_prof_path, warmup_times, run_times)
             elif self.backend == "cuda":
                 _, _, base_prof_path = self.run_nsys(os.path.join(verify_dir, f"profile_{self.op_name}_base.py"))
-                _, _, base_time = self.analyze_nsys_data(base_prof_path, warmup_times, run_times)
+                _, _, base_time = self.analyze_nsys_data(base_prof_path, warmup_times, run_times, "base")
                 _, _, gen_prof_path = self.run_nsys(os.path.join(verify_dir, f"profile_{self.op_name}_generation.py"))
-                _, _, gen_time = self.analyze_nsys_data(gen_prof_path, warmup_times, run_times)
+                _, _, gen_time = self.analyze_nsys_data(gen_prof_path, warmup_times, run_times, "generation")
             else:
                 logger.warning(f"[{self.task_id}:{self.op_name}] 不支持的backend: {self.backend}")
                 return float('inf'), 0.0, 0.0
@@ -420,6 +430,12 @@ class KernelVerifier:
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
             return float('inf'), 0.0, 0.0
+        finally:
+            # 恢复原始工作目录
+            try:
+                os.chdir(original_cwd)
+            except Exception:
+                pass
 
     def run(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = 0):
         """
