@@ -1,12 +1,14 @@
 import os
 import pytest
+from pathlib import Path
 from collections import defaultdict
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ..utils import (
     get_kernelbench_op_name, get_multikernelbench_op_name,
-    get_kernelbench_task_desc, get_multikernelbench_task_desc, add_op_prefix
+    get_kernelbench_task_desc, get_multikernelbench_task_desc, add_op_prefix,
+    generate_beautiful_test_report
 )
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
@@ -43,8 +45,6 @@ async def test_kernelbench_mindspore_triton_ascend910b4():
     if benchmark_name is None:
         raise RuntimeError(f"benchmark '{benchmark}' 不支持")
 
-    result_dict = defaultdict(int)
-
     for i in range(len(benchmark_name)):
         task_desc = get_kernelbench_task_desc(
             benchmark_name[i], framework=framework)
@@ -65,27 +65,10 @@ async def test_kernelbench_mindspore_triton_ascend910b4():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    for op_name, result, _ in results:
-        result_dict[op_name] += result
-
-    pass_num = 0
-    for result in result_dict.values():
-        if result:
-            pass_num += 1
-    pass_rate = pass_num / len(result_dict)
-
-    print('-' * 60)
-    print(f"Benchmark: {benchmark}")
-    print(f"Category: all")
-    print(result_dict)
-    print("PASS RATE: ", pass_rate)
-    with open("test_results.txt", "w", encoding="utf-8") as f:
-        f.write(f"Benchmark: {benchmark}\n")
-        f.write(f"Category: all\n")
-        f.write(f"结果字典: {dict(result_dict)}\n")
-        f.write(f"通过率: {pass_rate}\n")
-    print("结果已保存到 test_results.txt")
-    print('-' * 60)
+    
+    report_stats = generate_beautiful_test_report(
+        results, config, framework, dsl, backend, arch
+    )
 
 
 @pytest.mark.level2
@@ -117,8 +100,6 @@ async def test_kernelbench_torch_triton_ascend910b4():
     if benchmark_name is None:
         raise RuntimeError(f"benchmark '{benchmark}' 不支持")
 
-    result_dict = defaultdict(int)
-
     for i in range(len(benchmark_name)):
         task_desc = get_kernelbench_task_desc(
             benchmark_name[i], framework=framework)
@@ -139,27 +120,10 @@ async def test_kernelbench_torch_triton_ascend910b4():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    for op_name, result, _ in results:
-        result_dict[op_name] += result
-
-    pass_num = 0
-    for result in result_dict.values():
-        if result:
-            pass_num += 1
-    pass_rate = pass_num / len(result_dict)
-
-    print('-' * 60)
-    print(f"Benchmark: {benchmark}")
-    print(f"Category: all")
-    print(result_dict)
-    print("PASS RATE: ", pass_rate)
-    with open("test_results.txt", "w", encoding="utf-8") as f:
-        f.write(f"Benchmark: {benchmark}\n")
-        f.write(f"Category: all\n")
-        f.write(f"结果字典: {dict(result_dict)}\n")
-        f.write(f"通过率: {pass_rate}\n")
-    print("结果已保存到 test_results.txt")
-    print('-' * 60)
+    
+    report_stats = generate_beautiful_test_report(
+        results, config, framework, dsl, backend, arch
+    )
 
 
 @pytest.mark.level2
@@ -226,15 +190,17 @@ async def test_multikernelbench_activation_torch_triton_ascend910b4():
             pass_num += 1
     pass_rate = pass_num / len(result_dict)
 
+    result_dir = Path(os.path.expanduser(config['log_dir']))
+
     print('-' * 60)
     print(f"Benchmark: {benchmark}")
     print(f"Category: {category}")
     print(result_dict)
     print("PASS RATE: ", pass_rate)
-    with open("test_results.txt", "w", encoding="utf-8") as f:
+    with open(result_dir / "test_results.txt", "w", encoding="utf-8") as f:
         f.write(f"Benchmark: {benchmark}\n")
         f.write(f"Category: {category}\n")
         f.write(f"结果字典: {dict(result_dict)}\n")
         f.write(f"通过率: {pass_rate}\n")
-    print("结果已保存到 test_results.txt")
+    print(f"结果已保存到 {result_dir}/test_results.txt")
     print('-' * 60)
