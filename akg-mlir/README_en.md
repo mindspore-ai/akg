@@ -1,31 +1,23 @@
 # akg-mlir
 
-基于MLIR的自动算子生成器（Auto kernel generator(AKG) based on MLIR）
+Auto kernel generator(AKG) based on MLIR
 
-## 依赖组件
-- ***LLVM/MLIR***: 
-地址：https://github.com/llvm/llvm-project
-当前使用的 commit id：cd708029e0b2869e80abe31ddb175f7c35361f90
+## Dependency 
+- ***LLVM/MLIR***: https://github.com/llvm/llvm-project, current llvm commit id: cd708029e0b2869e80abe31ddb175f7c35361f90
 
-- ***Polytops*** : 
-地址：https://gitee.com/ms-incubator/polytops
-推荐版本 commit SHA：ca3df32829ff81869ba0f209c7fca24d9710a89e
-编译时会自动构建
-镜像仓库：https://codehub-y.huawei.com/DPSL-Paris/MLScheduler
+- ***Polytops*** : https://gitee.com/ms-incubator/polytops, last know working polytops v0.24.2 commit SHA: ca3df32829ff81869ba0f209c7fca24d9710a89e
+automattically build during make/ninja
+mirror git https://codehub-y.huawei.com/DPSL-Paris/MLScheduler
 
-- ***Symengine*** : 
-地址：https://github.com/symengine/symengine
-当前使用的 commit id：7b1880824c2cce98787ae29a317682ba6c294484
+- ***Symengine*** : https://github.com/symengine/symengine, current symengine commit id: 7b1880824c2cce98787ae29a317682ba6c294484
 
-- ***AscendNPU IR***: 
-地址：https://gitee.com/ascend/ascendnpu-ir 
-当前使用的 commit id：f4bb879a22c56c591b163f397eeb3b82794863f9
+- ***AscendNPU IR***: https://gitee.com/ascend/ascendnpu-ir, current bishengir commit id: f4bb879a22c56c591b163f397eeb3b82794863f9
 
-## 编译和安装
+## Build and Install
 
-### 安装构建BiSheng IR所需的预编译组件
+### Install pre-builts thats are required to build BiShengIR
 
-1. 将包含与您的目标机器对应的预编译组件的包（**Verison 0.4**，可在[发布页面](https://gitee.com/ascend/ascendnpu-ir/releases)获取）解压到任意位置。在安装后，它应当包含如下内容：
+1. Extract the package (**Verison 0.4**, available in the [release page](https://gitee.com/ascend/ascendnpu-ir/releases)) containing the pre-builts corresponding to your target machine to any location. After install, it should contain the following contents:
 
    ```bash
    ├── lib
@@ -35,13 +27,13 @@
      └── bishengir-yaml-gen  // used to generate files from yaml
    ```
 
-2. 将环境变量设置为安装路径：
+2. Set environment variable to the installed path:
 
   ```bash
   export BISHENG_IR_INSTALL_PATH= ...
   ```
 
-### 使用 build.sh 脚本构建
+### Via build.sh
 ```shell
 cd PATH_TO_AKG_MLIR_ROOT_PATH
 
@@ -67,7 +59,7 @@ Command Example:
     bash build.sh -e ascend akg-mlir-only -j32
 ```
 
-### 手动分步构建
+### Step-by-Step
 ```shell
 # build llvm/mlir
 cmake ../llvm \
@@ -92,7 +84,8 @@ cmake ../llvm \
 export PATH_TO_BUILT_LLVM=${PWD}
 cmake --build . --config Release -j32
 ```
-**说明**：GPU后端需要 -DLLVM_TARGETS_TO_BUILD=NVPTX，SymEngine项目需要 -DLLVM_ENABLE_RTTI=ON
+-DLLVM_TARGETS_TO_BUILD=NVPTX required for GPU backend, Target/PTX
+-DLLVM_ENABLE_RTTI=ON required with symengine project
 
 ```shell
 # build symengine
@@ -124,10 +117,10 @@ cmake ../cmake/ \
     -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH}
 cmake --build . --config Release -j32
 ```
-**注意**：由于项目依赖 cloog，Ninja构建方式暂不支持
+ninja doesn't work due to issue when defining project dependencies with cloog.
 
 
-## 运行示例
+## Run example
 
 ```shell
 cd compile/lib/test/
@@ -135,7 +128,7 @@ PATH_TO_BUILD/bin/akg-opt akg_loop_tiling.mlir -allow-unregistered-dialect -spli
 
 ```
 
-## 代码格式化
+## Code formatting
 
 ```shell
 git diff -U0 HEAD^ | ./third-party/llvm-project/clang/tools/clang-format/clang-format-diff.py -i -p1

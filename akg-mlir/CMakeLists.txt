@@ -96,6 +96,7 @@ set(LLVM_REQUIRES_RTTI ON)
 message("LLVM_BUILD_PATH: ${LLVM_BUILD_PATH}")
 set(LLVM_INSTALL_DIR "${LLVM_BUILD_PATH}")
 set(LLVM_TOOLS_DIR "${LLVM_BUILD_PATH}/bin")
+set(LLVM_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third-party/llvm-project")
 
 
 if(NOT DEFINED LLVM_EXTERNAL_LIT)
@@ -107,7 +108,15 @@ set(MLIR_DIR "${LLVM_INSTALL_DIR}/lib/cmake/mlir")
 include(cmake/MLIR.cmake)
 set(JSON_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/JSON-for-Modern-CPP-v3.10.1.zip")
 
+#-------------------------------------------------------------------------------
+# BishengIR
+#-------------------------------------------------------------------------------
 
+set(BISHENGIR_INCLUDE_DIR ${LLVM_SOURCE_PATH}/third-party/bishengir/bishengir/include)
+include_directories(${BISHENGIR_INCLUDE_DIR})
+
+set(BISHENGIR_BUILD_INCLUDE_DIR ${LLVM_BUILD_PATH}/tools/bishengir/bishengir/include)
+include_directories(${BISHENGIR_BUILD_INCLUDE_DIR})
 
 #-------------------------------------------------------------------------------
 # AKG-MLIR

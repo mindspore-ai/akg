@@ -218,11 +218,13 @@ build_llvm() {
     -DLLVM_ENABLE_BINDINGS=OFF \
     -DLLVM_INSTALL_UTILS=ON \
     -DCMAKE_BUILD_TYPE=${_BUILD_TYPE} \
-    -DLLVM_ENABLE_ASSERTIONS=ON \
     -DLLVM_ENABLE_RTTI=ON \
     -DCMAKE_C_COMPILER=${C_COMPILER_PATH} \
     -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH} \
-    -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
+    -DMLIR_ENABLE_BINDINGS_PYTHON=OFF \
+    -DLLVM_EXTERNAL_PROJECTS="bishengir" \
+    -DLLVM_EXTERNAL_BISHENGIR_SOURCE_DIR=${LLVM_BASE_PATH}/third-party/bishengir \
+    -DBISHENG_IR_INSTALL_PATH="${BISHENG_IR_INSTALL_PATH}"
 
     export PATH_TO_BUILT_LLVM=${PWD}
     cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM}
@@ -246,8 +248,17 @@ get_akg_mlir_cmake_args() {
   fi
 }
 
+update_bishengir_commit(){
+  cd third-party/llvm-project/third-party/bishengir
+  git reset --hard f4bb879a22c56c591b163f397eeb3b82794863f9
+}
+
 update_submodule(){
   git submodule update --init --depth 1 third-party/llvm-project/
+  if [ ! -d "third-party/llvm-project/third-party/bishengir" ]; then
+    git -C third-party/llvm-project/ submodule add https://gitee.com/ascend/ascendnpu-ir.git third-party/bishengir
+  fi
+  update_bishengir_commit
 }
 
 
@@ -268,7 +279,9 @@ fi
 
 # Build akg target
 cd $BUILD_DIR
-cmake .. ${CMAKE_ARGS} ${AKG_MLIR_CMAKE_ARGS}
+cmake .. ${CMAKE_ARGS} ${AKG_MLIR_CMAKE_ARGS} \
+    -DCMAKE_C_COMPILER=${C_COMPILER_PATH} \
+    -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH}
 cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
 cmake --build . --target install
 
