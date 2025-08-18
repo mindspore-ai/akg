@@ -214,10 +214,12 @@ class KernelVerifier:
         """生成profile项目文件到指定目录"""
         # 生成基准性能测试脚本
         profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_base.py")
-        self.gen_profile_file_from_template(PROFILE_BASE_TEMPLATE_PATH, profile_file, device_id, warmup_times, run_times)
+        self.gen_profile_file_from_template(PROFILE_BASE_TEMPLATE_PATH, profile_file,
+                                            device_id, warmup_times, run_times)
         # 生成性能测试脚本
         profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_generation.py")
-        self.gen_profile_file_from_template(PROFILE_GENERATION_TEMPLATE_PATH, profile_file, device_id, warmup_times, run_times)
+        self.gen_profile_file_from_template(PROFILE_GENERATION_TEMPLATE_PATH,
+                                            profile_file, device_id, warmup_times, run_times)
 
     def gen_profile_file_from_template(self, template_path: str, profile_file: str, device_id: int, warmup_times: int, run_times: int):
         """从模板生成profile文件"""
@@ -443,20 +445,20 @@ class KernelVerifier:
 
     def run_triton_do_bench_profile(self, verify_dir: str) -> Tuple[float, float]:
         """使用triton do_bench运行性能分析
-        
+
         Args:
             verify_dir: 验证目录
-            
+
         Returns:
             (base_time_us, gen_time_us): 基准时间和生成时间（微秒）
         """
         try:
             # 保存当前工作目录
             original_cwd = os.getcwd()
-            
+
             # 切换到验证目录
             os.chdir(verify_dir)
-            
+
             try:
                 # 运行base profile脚本
                 base_script = f"profile_{self.op_name}_base.py"
@@ -464,35 +466,35 @@ class KernelVerifier:
                 if not base_result[0]:
                     logger.error(f"Base profile script execution failed: {base_result[1]}")
                     return float('inf'), float('inf')
-                
+
                 # 运行generation profile脚本
                 gen_script = f"profile_{self.op_name}_generation.py"
                 gen_result = run_command(["python", gen_script], cmd_msg="generation_profile", timeout=300)
                 if not gen_result[0]:
                     logger.error(f"Generation profile script execution failed: {gen_result[1]}")
                     return float('inf'), float('inf')
-                
+
                 # 读取保存的时间结果
                 base_time_us = self.read_triton_profile_result(verify_dir, "base_profile_result.json")
                 gen_time_us = self.read_triton_profile_result(verify_dir, "generation_profile_result.json")
-                
+
                 return base_time_us, gen_time_us
-                
+
             finally:
                 # 恢复原始工作目录
                 os.chdir(original_cwd)
-            
+
         except Exception as e:
             logger.error(f"Triton do_bench profile failed: {e}")
             return float('inf'), float('inf')
 
     def read_triton_profile_result(self, verify_dir: str, result_file: str) -> float:
         """读取triton profile结果文件
-        
+
         Args:
             verify_dir: 验证目录
             result_file: 结果文件名
-            
+
         Returns:
             执行时间（微秒）
         """
@@ -501,17 +503,17 @@ class KernelVerifier:
             if not os.path.exists(result_path):
                 logger.error(f"Profile result file not found: {result_path}")
                 return float('inf')
-            
+
             with open(result_path, 'r') as f:
                 result_data = json.load(f)
-            
+
             # 获取时间结果（微秒）
             execution_time_us = result_data.get("execution_time_us", float('inf'))
             method = result_data.get("method", "unknown")
-            
+
             logger.info(f"Read profile result from {result_file}: {execution_time_us:.4f} us (method: {method})")
             return execution_time_us
-            
+
         except Exception as e:
             logger.error(f"Failed to read profile result from {result_file}: {e}")
             return float('inf')

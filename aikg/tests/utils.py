@@ -243,11 +243,11 @@ def process_task_results(results, print_summary=True):
     return len(failed_cases) == 0
 
 
-def generate_beautiful_test_report(results, config, framework, dsl, backend, arch, 
-                                 save_to_file=True, output_dir=None):
+def generate_beautiful_test_report(results, config, framework, dsl, backend, arch,
+                                   save_to_file=True, output_dir=None):
     """
     生成美观的测试结果报告，包含控制台输出和文件保存。
-    
+
     Args:
         results: task_pool.wait_all() 返回的结果列表，格式为 [(op_name, result, _), ...]
         config: 配置字典，需要包含 'log_dir' 键
@@ -257,55 +257,55 @@ def generate_beautiful_test_report(results, config, framework, dsl, backend, arc
         arch: 架构名称 (如 "a100", "910b")
         save_to_file: 是否保存结果到文件
         output_dir: 输出目录，如果为None则使用config['log_dir']
-    
+
     Returns:
         dict: 包含统计信息的字典
     """
     from pathlib import Path
-    
+
     # 确定输出目录
     if output_dir is None:
         result_dir = Path(os.path.expanduser(config['log_dir']))
     else:
         result_dir = Path(output_dir)
-    
-    # 统计每个算子的通过次数 (pass@n 统计) - 从原始results统计 
+
+    # 统计每个算子的通过次数 (pass@n 统计) - 从原始results统计
     op_stats = {}
     for op_name, result, _ in results:
-        base_op_name = op_name  # 可能需要根据实际情况调整算子名称提取逻辑 
+        base_op_name = op_name  # 可能需要根据实际情况调整算子名称提取逻辑
         if base_op_name not in op_stats:
             op_stats[base_op_name] = {'passed': 0, 'total': 0}
-        op_stats[base_op_name]['total'] += 1 
+        op_stats[base_op_name]['total'] += 1
         if result:
-            op_stats[base_op_name]['passed'] += 1 
-   
-    # 分类算子：有通过的 vs 完全失败的 
-    passed_ops = []  # 至少通过1次的算子 
-    failed_ops = []  # 完全失败的算子 
-   
+            op_stats[base_op_name]['passed'] += 1
+
+    # 分类算子：有通过的 vs 完全失败的
+    passed_ops = []  # 至少通过1次的算子
+    failed_ops = []  # 完全失败的算子
+
     for op_name, stats in op_stats.items():
         if stats['passed'] > 0:
             passed_ops.append((op_name, stats['passed'], stats['total']))
         else:
             failed_ops.append((op_name, stats['passed'], stats['total']))
-   
-    # 提取order并按order排序的函数 
+
+    # 提取order并按order排序的函数
     def extract_order(op_name):
         try:
-            # 从 aikg_{order}_{op_name} 格式中提取 order 
+            # 从 aikg_{order}_{op_name} 格式中提取 order
             if op_name.startswith('aikg_'):
-                parts = op_name.split('_', 2)  # 分割成 ['aikg', 'order', 'op_name'] 
+                parts = op_name.split('_', 2)  # 分割成 ['aikg', 'order', 'op_name']
                 if len(parts) >= 2:
                     return int(parts[1])
-            return float('inf')  # 如果格式不匹配，放到最后 
+            return float('inf')  # 如果格式不匹配，放到最后
         except (ValueError, IndexError):
-            return float('inf')  # 如果解析失败，放到最后 
-   
-    # 按order排序 
+            return float('inf')  # 如果解析失败，放到最后
+
+    # 按order排序
     passed_ops.sort(key=lambda x: extract_order(x[0]))
     failed_ops.sort(key=lambda x: extract_order(x[0]))
-   
-    # 控制台输出 
+
+    # 控制台输出
     print('=' * 80)
     print(f"🚀 Pass@N 测试结果报告 - {framework.upper()} + {dsl.upper()} ({backend.upper()}/{arch.upper()})")
     print('=' * 80)
@@ -315,76 +315,76 @@ def generate_beautiful_test_report(results, config, framework, dsl, backend, arc
     print(f"   • 失败算子数量: {len(failed_ops)} ❌")
     print(f"   • 算子通过率: {len(passed_ops)/len(op_stats)*100:.1f}%")
     print('-' * 80)
-   
+
     if passed_ops:
         print("✅ 通过的算子:")
         for i, (op, passed, total) in enumerate(passed_ops, 1):
             print(f"   {i:2d}. {op} (pass num: {passed}/{total})")
-   
+
     if failed_ops:
         print(f"\n❌ 完全失败的算子:")
         for i, (op, passed, total) in enumerate(failed_ops, 1):
             print(f"   {i:2d}. {op} (pass num: {passed}/{total})")
-   
+
     print('=' * 80)
-   
-    # 保存详细结果到文件 
+
+    # 保存详细结果到文件
     if save_to_file:
         result_dir.mkdir(parents=True, exist_ok=True)
         with open(result_dir / "test_results.txt", "w", encoding="utf-8") as f:
             f.write("🚀 Pass@N 测试结果报告\n")
             f.write("=" * 80 + "\n\n")
-           
-            # 测试配置信息 
+
+            # 测试配置信息
             f.write("📋 测试配置:\n")
             f.write(f"   • 框架: {framework.upper()}\n")
             f.write(f"   • DSL: {dsl.upper()}\n")
             f.write(f"   • 后端: {backend.upper()}\n")
             f.write(f"   • 架构: {arch.upper()}\n\n")
-           
-            # 统计信息 
+
+            # 统计信息
             f.write("📊 Pass@N 统计:\n")
             f.write(f"   • 测试算子总数: {len(op_stats)}\n")
             f.write(f"   • 通过算子数量: {len(passed_ops)} ✅\n")
             f.write(f"   • 失败算子数量: {len(failed_ops)} ❌\n")
             f.write(f"   • 算子通过率: {len(passed_ops)/len(op_stats)*100:.1f}%\n\n")
-           
-            # 详细结果 
+
+            # 详细结果
             f.write("📝 详细结果:\n")
             f.write("-" * 60 + "\n")
-           
+
             if passed_ops:
                 f.write("✅ 通过的算子 (按order排序):\n")
                 for i, (op, passed, total) in enumerate(passed_ops, 1):
                     f.write(f"   {i:2d}. {op} (pass num: {passed}/{total})\n")
                 f.write("\n")
-           
+
             if failed_ops:
                 f.write("❌ 完全失败的算子:\n")
                 for i, (op, passed, total) in enumerate(failed_ops, 1):
                     f.write(f"   {i:2d}. {op} (pass num: {passed}/{total})\n")
                 f.write("\n")
-           
-            # Pass@N 统计表格 
+
+            # Pass@N 统计表格
             f.write("📊 Pass@N 统计表:\n")
             f.write("-" * 50 + "\n")
             f.write(f"{'算子名称':<30} {'PassNum':<15} {'状态':<8}\n")
             f.write("-" * 50 + "\n")
-           
-            all_ops = passed_ops + failed_ops 
-            all_ops.sort(key=lambda x: extract_order(x[0]))  # 按order排序 
-           
+
+            all_ops = passed_ops + failed_ops
+            all_ops.sort(key=lambda x: extract_order(x[0]))  # 按order排序
+
             for op, passed, total in all_ops:
-                pass_at_n = f"{passed}/{total}" 
-                status = "✅ 通过" if passed > 0 else "❌ 失败" 
+                pass_at_n = f"{passed}/{total}"
+                status = "✅ 通过" if passed > 0 else "❌ 失败"
                 f.write(f"{op:<30} {pass_at_n:<15} {status}\n")
-           
+
             f.write("\n" + "=" * 80 + "\n")
             f.write("报告生成完成! 🎉\n")
-       
+
         print(f"📄 详细结果已保存到 {result_dir}/test_results.txt")
         print('=' * 80)
-    
+
     # 返回统计信息供进一步处理
     return {
         'total_ops': len(op_stats),

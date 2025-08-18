@@ -59,7 +59,7 @@ def get_inspirations(inspirations: List[dict]) -> str:
                 profile_text = f"代码执行耗时: {profile[0]:.4f}s"
             else:
                 profile_text = f"代码执行耗时: {profile:.4f}s" if profile != float('inf') else "代码执行耗时: N/A"
-            
+
             inspiration_text = f"## Inspiration {i+1} {profile_text}\n"
             inspiration_text += f"代码：\n```\n{impl_code}\n```\n"
             result_parts.append(inspiration_text)

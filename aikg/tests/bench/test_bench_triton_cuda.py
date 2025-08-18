@@ -55,8 +55,7 @@ async def test_bench_triton_cuda():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    
+
     report_stats = generate_beautiful_test_report(
         results, config, framework, dsl, backend, arch
     )
-    

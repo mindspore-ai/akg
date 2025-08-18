@@ -65,7 +65,7 @@ async def test_kernelbench_mindspore_triton_ascend910b4():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    
+
     report_stats = generate_beautiful_test_report(
         results, config, framework, dsl, backend, arch
     )
@@ -120,7 +120,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    
+
     report_stats = generate_beautiful_test_report(
         results, config, framework, dsl, backend, arch
     )

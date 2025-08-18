@@ -77,6 +77,6 @@ triton_meta_prompts: list[str] = [
     Operator_Fusion,
     Controlling_Computational_Granularity,
     Triton_Block_Pointers_and_Loads,
-    Leveraging_Triton_Autotuning,
+    # Leveraging_Triton_Autotuning,
     Implementing_Efficient_Fusion,
 ]

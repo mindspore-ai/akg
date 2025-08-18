@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import asyncio
+from pathlib import Path
+import json
+from datetime import datetime
 from ai_kernel_generator.core.evolve import evolve
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
@@ -23,7 +26,6 @@ from ai_kernel_generator.utils.environment_check import check_env_for_task
 def get_op_name():
     """获取算子名称"""
     return "aikg_relu"
-
 
 def get_task_desc():
     """获取任务描述"""
@@ -54,7 +56,6 @@ def get_init_inputs():
     return []  # No special initialization inputs needed
 '''
 
-
 async def run_evolve_example():
     """运行进化式算子生成示例"""
     # 基本参数配置
@@ -62,11 +63,11 @@ async def run_evolve_example():
     task_desc = get_task_desc()
     dsl = "triton"  # 可选: "triton", "swft"
     framework = "torch"  # 可选: "mindspore", "torch", "numpy"
-    backend = "ascend"  # 可选: "ascend", "cuda"
-    arch = "ascend910b4"  # 根据backend选择对应架构
+    backend = "cuda"  # 可选: "ascend", "cuda"
+    arch = "a100"  # 根据backend选择对应架构
 
     # 进化参数配置
-    max_rounds = 3  # 进化轮数
+    max_rounds = 5  # 进化轮数
     parallel_num = 4  # 每轮并行任务数
 
     print("="*80)
@@ -83,9 +84,9 @@ async def run_evolve_example():
 
     # 初始化资源
     task_pool = TaskPool(max_concurrency=parallel_num)
-    device_pool = DevicePool([0, 1])  # 使用设备0和1
+    device_pool = DevicePool([5])  # 使用设备0和1
 
-    config = load_config(dsl)
+    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_evolve_config.yaml")
     check_env_for_task(framework, backend, dsl, config)
 
     # 运行进化过程
@@ -123,7 +124,7 @@ async def run_evolve_example():
     print(f"框架: {evolution_result.get('framework', 'Unknown')}")
     print(f"后端: {evolution_result.get('backend', 'Unknown')}")
     print(f"架构: {evolution_result.get('architecture', 'Unknown')}")
-    
+
     # 显示存储目录信息
     storage_dir = evolution_result.get('storage_dir', '')
     if storage_dir:
@@ -135,7 +136,7 @@ async def run_evolve_example():
         print(f"\n最佳实现 (前{len(best_implementations)}个):")
         for i, impl in enumerate(best_implementations, 1):
             profile_data = impl.get('profile', float('inf'))
-            
+
             # 处理profile信息，支持三元组格式
             if isinstance(profile_data, (list, tuple)) and len(profile_data) >= 3:
                 gen_time, base_time, speedup = profile_data[0], profile_data[1], profile_data[2]
@@ -146,7 +147,7 @@ async def run_evolve_example():
                 profile_str = f"执行时间: {profile_data:.4f}s"
             else:
                 profile_str = "性能: N/A"
-                
+
             print(f"  {i}. {impl.get('op_name', 'Unknown')} (轮次 {impl.get('round', 'N/A')}, {profile_str})")
     else:
         print("\n⚠️  没有找到成功的实现")
@@ -165,8 +166,9 @@ async def run_evolve_example():
     print("="*80)
 
     # 保存结果到文件
-    import json
-    result_file = f"evolve_result_{evolution_result.get('op_name', 'unknown')}_{dsl}_{framework}.json"
+    timestamp_str = datetime.now().strftime("%Y%m%d%H%M") # 获取当前时间，并格式化为 "YYYYMMDDHHMM"
+    file_name = f"evolve_result_{evolution_result.get('op_name', 'unknown')}_{dsl}_{framework}_{timestamp_str}.json"
+    result_file = Path(config.get("log_dir", "")) / file_name
 
     # 为了JSON序列化，需要处理可能包含不可序列化对象的task_info字段
     serializable_result = evolution_result.copy()
@@ -185,7 +187,7 @@ async def run_evolve_example():
                 serializable_impl['verifier_error'] = task_info.get('verifier_error', '')
                 # 移除复杂的task_info对象
                 del serializable_impl['task_info']
-            
+
             # 确保profile三元组可以JSON序列化
             if 'profile' in serializable_impl and isinstance(serializable_impl['profile'], tuple):
                 serializable_impl['profile'] = list(serializable_impl['profile'])
@@ -212,7 +214,7 @@ async def run_evolve_example():
                         serializable_impl['verifier_error'] = task_info.get('verifier_error', '')
                         # 移除复杂的task_info对象
                         del serializable_impl['task_info']
-                    
+
                     # 确保profile三元组可以JSON序列化
                     if 'profile' in serializable_impl and isinstance(serializable_impl['profile'], tuple):
                         serializable_impl['profile'] = list(serializable_impl['profile'])

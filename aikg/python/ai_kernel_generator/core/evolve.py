@@ -101,24 +101,24 @@ def load_meta_prompts(parallel_num: int) -> list[str]:
 
 def save_implementation(impl_data: Dict[str, Any], storage_dir: str) -> None:
     """保存实现到本地文件
-    
+
     Args:
         impl_data: 实现数据字典
         storage_dir: 存储目录
     """
     try:
         os.makedirs(storage_dir, exist_ok=True)
-        
+
         # 生成唯一文件名
         round_idx = impl_data.get('round', 0)
         task_id = impl_data.get('task_id', 'unknown')
         filename = f"impl_{round_idx}_{task_id}.json"
         filepath = os.path.join(storage_dir, filename)
-        
+
         # 保存数据
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(impl_data, f, ensure_ascii=False, indent=2)
-            
+
         logger.debug(f"Saved implementation to {filepath}")
     except Exception as e:
         logger.error(f"Failed to save implementation: {e}")
@@ -126,20 +126,20 @@ def save_implementation(impl_data: Dict[str, Any], storage_dir: str) -> None:
 
 def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict[str, Any]]:
     """从本地文件加载最佳实现
-    
+
     Args:
         storage_dir: 存储目录
         max_count: 最大加载数量
-        
+
     Returns:
         按性能排序的最佳实现列表
     """
     implementations = []
-    
+
     try:
         if not os.path.exists(storage_dir):
             return implementations
-            
+
         for filename in os.listdir(storage_dir):
             if filename.endswith('.json'):
                 filepath = os.path.join(storage_dir, filename)
@@ -149,13 +149,13 @@ def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict
                         implementations.append(impl_data)
                 except Exception as e:
                     logger.warning(f"Failed to load {filepath}: {e}")
-                    
+
         # 按性能排序（gen_time越小越好）
         implementations.sort(key=lambda x: x.get('profile', (float('inf'), 0.0, 0.0))[0])
-        
+
         logger.info(f"Loaded {len(implementations)} implementations from {storage_dir}")
         return implementations[:max_count]
-        
+
     except Exception as e:
         logger.error(f"Failed to load implementations from {storage_dir}: {e}")
         return implementations
@@ -163,17 +163,17 @@ def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict
 
 def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int = 2) -> List[Dict[str, Any]]:
     """从实现列表中采样inspiration格式的数据
-    
+
     Args:
         implementations: 实现列表
         sample_num: 采样数量
-        
+
     Returns:
         inspiration格式的数据列表
     """
     if not implementations:
         return []
-        
+
     # 随机采样或选择最佳的几个
     if len(implementations) <= sample_num:
         selected = implementations
@@ -181,12 +181,12 @@ def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int =
         # 50%概率选择最佳的，50%概率随机选择
         best_count = max(1, sample_num // 2)
         random_count = sample_num - best_count
-        
+
         selected = implementations[:best_count]  # 最佳的几个
         if random_count > 0 and len(implementations) > best_count:
             remaining = implementations[best_count:]
             selected.extend(random.sample(remaining, min(random_count, len(remaining))))
-    
+
     # 转换为inspiration格式
     inspirations = []
     for impl in selected:
@@ -197,7 +197,7 @@ def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int =
             'strategy_mode': 'evolution'
         }
         inspirations.append(inspiration)
-    
+
     return inspirations
 
 
@@ -264,7 +264,7 @@ async def evolve(
     for round_idx in range(1, max_rounds + 1):
         logger.info(f"Evolve round {round_idx}/{max_rounds} started")
         inspirations: list = list()
-        
+
         if round_idx == 1:
             inspirations = [[] for _ in range(parallel_num)]
             if dsl == "triton":
@@ -284,13 +284,13 @@ async def evolve(
         else:
             # 从本地存储加载历史最佳实现作为inspiration
             stored_implementations = load_best_implementations(storage_dir, max_count=parallel_num * 2)
-            
+
             inspirations = []
             for pid in range(parallel_num):
                 sampled = sample_inspirations(stored_implementations, sample_num=min(parallel_num, 2))
                 inspirations.append(sampled)
-            
-            meta_prompts = None
+
+            meta_prompts = load_meta_prompts(parallel_num) if meta_prompt_path.exists() else []
 
         # 创建并行任务
         round_tasks = []
@@ -333,7 +333,7 @@ async def evolve(
 
                 # 获取完整的profile三元组
                 profile_res = task_info.get("profile_res", (float('inf'), 0.0, 0.0))
-                
+
                 # 收集成功的实现信息
                 impl_info = {
                     'op_name': task_op_name,
@@ -375,7 +375,8 @@ async def evolve(
                              [(f"failed_task_{i}", False) for i in range(round_total_count - round_success_count)])
 
     # 按性能排序最佳实现（gen_time越小越好）
-    best_implementations.sort(key=lambda x: x['profile'][0] if isinstance(x['profile'], (list, tuple)) else x['profile'])
+    best_implementations.sort(key=lambda x: x['profile'][0] if isinstance(
+        x['profile'], (list, tuple)) else x['profile'])
 
     # 计算最终成功率
     final_success_rate = total_successful_tasks / total_tasks if total_tasks > 0 else 0.0

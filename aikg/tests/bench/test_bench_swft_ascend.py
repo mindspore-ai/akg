@@ -55,7 +55,7 @@ async def test_bench_swft_ascend():
         task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
-    
+
     report_stats = generate_beautiful_test_report(
         results, config, framework, dsl, backend, arch
     )

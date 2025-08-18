@@ -3,7 +3,7 @@
 
 agent_info:
   coder:
-    possible_next_agent: [verifier, coder]
+    possible_next_agent: [verifier]
     output_format:
       parser_name: coder_parser
       parser_definition:
@@ -25,12 +25,4 @@ mandatory_llm_analysis: [verifier]
 
 limitation_info:
   required:
-    max_step: 6
-  optional:
-    repeat_limits:
-      single_agent:
-        coder: 3
-      sequences:
-        coder_verifier:
-          pattern: [coder, verifier]
-          max_repeats: 3
+    max_step: 15
