@@ -213,3 +213,99 @@ async def test_comprehensive_workflow():
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 assert task_prefix in data.get("agent_name", "")
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_data_field_validation():
+    """测试数据字段校验功能"""
+    collector = await get_collector()
+    
+    # 测试1: 标准agent完整数据（不应有警告）
+    complete_data = {
+        'hash': 'test_hash',
+        'agent_name': 'designer',
+        'op_name': 'test_op',
+        'dsl': 'triton',
+        'backend': 'cuda',
+        'arch': 'A100',
+        'framework': 'torch',
+        'task_desc': 'test task',
+        'model_name': 'deepseek_r1_default',
+        'content': 'generated code',
+        'formatted_prompt': 'test prompt',
+        'reasoning_content': 'reasoning',
+        'response_metadata': 'metadata'
+    }
+    await collector.collect(complete_data)
+    
+    # 测试2: 标准agent缺少字段（应该有警告）
+    incomplete_data = {
+        'hash': 'test_hash2',
+        'agent_name': 'coder',
+        'op_name': 'test_op2'
+        # 缺少多个必需字段
+    }
+    await collector.collect(incomplete_data)
+    
+    # 测试3: feature_extractor完整数据（不应有警告）
+    feature_complete = {
+        'hash': 'feature_hash',
+        'agent_name': 'feature_extractor',
+        'model_name': 'deepseek_r1_default',
+        'content': 'feature content',
+        'formatted_prompt': 'feature prompt',
+        'reasoning_content': 'feature reasoning',
+        'response_metadata': 'feature metadata'
+    }
+    await collector.collect(feature_complete)
+    
+    # 测试4: feature_extractor缺少字段（应该有警告）
+    feature_incomplete = {
+        'agent_name': 'feature_extractor',
+        'hash': 'feature_hash2'
+        # 缺少其他字段
+    }
+    await collector.collect(feature_incomplete)
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_empty_value_detection():
+    """测试空值检测逻辑"""
+    collector = await get_collector()
+    
+    # 测试各种空值和边界情况
+    test_data = {
+        'hash': 'test_hash',
+        'agent_name': 'verifier',
+        'op_name': '',     # 空字符串
+        'dsl': None,       # None值
+        'backend': False,  # False应该是合法值
+        'arch': 0,         # 0应该是合法值
+        'framework': 'mindspore',
+        'task_desc': 'test task',
+        'model_name': 'deepseek_r1_default',
+        'content': 'generated code',
+        'formatted_prompt': 'test prompt',
+        'reasoning_content': 'reasoning',
+        'response_metadata': 'metadata'
+    }
+    await collector.collect(test_data)
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio  
+async def test_is_empty_value_helper():
+    """测试_is_empty_value辅助方法的关键用例"""
+    collector = await get_collector()
+    
+    # 测试关键用例
+    assert collector._is_empty_value(None) == True
+    assert collector._is_empty_value('') == True
+    assert collector._is_empty_value('   ') == True
+    assert collector._is_empty_value([]) == True
+    assert collector._is_empty_value({}) == True
+    assert collector._is_empty_value(False) == False
+    assert collector._is_empty_value(0) == False
+    assert collector._is_empty_value('hello') == False
