@@ -306,6 +306,7 @@ class AgentBase(ABC):
                         "backend": self.context.get('backend', ''),
                         "arch": self.context.get('arch', ''),
                         "framework": self.context.get('framework', ''),
+                        "workflow_name": self.context.get('workflow_name', ''),
                         "task_desc": self.context.get('task_desc', ''),
                         "model_name": model_name,
                         "content": content,

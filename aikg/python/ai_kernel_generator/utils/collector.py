@@ -24,6 +24,12 @@ from .common_utils import get_md5_hash
 
 logger = logging.getLogger(__name__)
 
+COLLECTOR_VERSION = "1.0.0"
+
+
+def get_version() -> str:
+    return COLLECTOR_VERSION
+
 
 class Collector:
     """异步单例数据收集器"""
@@ -146,8 +152,7 @@ class Collector:
                 key = (agent_name, hash_value)
 
                 entry = {
-                    "timestamp": datetime.now().isoformat(),
-                    "loop_time": asyncio.get_event_loop().time(),
+                    "version": COLLECTOR_VERSION,
                     "session_id": self._session_id,
                     "sequence_id": self._counter,
                     "data": data,
@@ -183,7 +188,7 @@ class Collector:
             # 标准agent应该包含的必需字段
             required_fields = [
                 'hash', 'agent_name', 'op_name', 'dsl', 'backend', 
-                'arch', 'framework', 'task_desc', 'model_name', 
+                'arch', 'framework', 'workflow_name', 'task_desc', 'model_name', 
                 'content', 'formatted_prompt', 'reasoning_content', 
                 'response_metadata'
             ]
@@ -268,17 +273,15 @@ class Collector:
             saved_files = []
             for (agent_name, hash_value), entry in data_to_prepare:
                 try:
-                    # 构建一级JSON结构
                     send_data = {
                         # 发送时的元数据
                         "send_timestamp": datetime.now().isoformat(),
                         "send_task_id": task_id if task_id else "",
 
-                        # entry的一级属性
-                        "collect_timestamp": entry.get("timestamp"),
-                        "collect_loop_time": entry.get("loop_time"),
-                        "collect_session_id": entry.get("session_id"),
-                        "collect_sequence_id": entry.get("sequence_id"),
+                        # entry的核心属性
+                        "version": entry.get("version"),
+                        "session_id": entry.get("session_id"),
+                        "sequence_id": entry.get("sequence_id"),
 
                         # 原始数据的一级属性
                         **entry.get("data", {})
@@ -308,11 +311,13 @@ class Collector:
         """
         try:
             database_data = {
+                "version": COLLECTOR_VERSION,
                 "hash": "database",
                 "backend": task_info.get("backend", ""),
                 "arch": task_info.get("arch_name", ""),
                 "framework": task_info.get("framework", ""),
                 "dsl": task_info.get("dsl", ""),
+                "workflow_name": task_info.get("workflow_name", ""),
                 "framework_code": task_info.get("task_desc", ""),
                 "impl_code": task_info.get("coder_code", ""),
                 "profile": task_info.get("profile_res", ())  # 保存完整的三元组
