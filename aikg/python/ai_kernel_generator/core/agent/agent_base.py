@@ -251,21 +251,44 @@ class AgentBase(ABC):
                     {"role": "user", "content": formatted_prompt}
                 ]
 
-                # 直接调用OpenAI API
-                response = await model.chat.completions.create(
-                    model=model.model_name,
-                    messages=messages,
-                    temperature=model.temperature,
-                    top_p=model.top_p,
-                    stream=False
-                )
+                if not aikg_stream_output:
+                    # 非流式模式
+                    response = await model.chat.completions.create(
+                        model=model.model_name,
+                        messages=messages,
+                        temperature=model.temperature,
+                        top_p=model.top_p,
+                        stream=False
+                    )
 
-                content = response.choices[0].message.content
-                reasoning_content = response.choices[0].message.reasoning_content
+                    content = response.choices[0].message.content
+                    reasoning_content = response.choices[0].message.reasoning_content
 
-                response_metadata = f"completion_tokens: {response.usage.completion_tokens}, " + \
-                    f"prompt_tokens: {response.usage.prompt_tokens}, total_tokens: {response.usage.total_tokens}"
-                logger.info(f"response_metadata: {response_metadata}")
+                    response_metadata = f"completion_tokens: {response.usage.completion_tokens}, " + \
+                        f"prompt_tokens: {response.usage.prompt_tokens}, total_tokens: {response.usage.total_tokens}"
+                    logger.info(f"response_metadata: {response_metadata}")
+                else:
+                    # 流式模式
+                    content = ""
+                    reasoning_content = ""
+                    stream = await model.chat.completions.create(
+                        model=model.model_name,
+                        messages=messages,
+                        temperature=model.temperature,
+                        top_p=model.top_p,
+                        stream=True
+                    )
+                    async for chunk in stream:
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            chunk_content = delta.content
+                            print(chunk_content, end='', flush=True)
+                            content += chunk_content
+                        elif getattr(delta, 'reasoning_content', None):
+                            chunk_reasoning = delta.reasoning_content
+                            print(chunk_reasoning, end='', flush=True)
+                            reasoning_content += chunk_reasoning
+                    response_metadata = ""
 
             else:
                 # 其他模型使用原来的chain方式
