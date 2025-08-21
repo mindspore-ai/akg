@@ -24,17 +24,19 @@ def myprint(a):
         print(a[i*32:min((i+1)*32, len)])
 
 
-def verify_result(args):
-    output = np.fromfile(args.actual_file, dtype=args.dataType).reshape(-1)
-    golden = np.fromfile(args.golden_file, dtype=args.dataType).reshape(-1)
-    if args.int_list:
-        relative_tol = args.int_list[0]
-        absolute_tol = args.int_list[1]
-        error_tol = args.int_list[2]
-    else:
+def verify_result(args=None, output=None, golden=None):
+    if args is None or (not args.int_list):
         relative_tol = 1e-2
         absolute_tol = 1e-2
         error_tol = 4e-3
+    else:
+        relative_tol = args.int_list[0]
+        absolute_tol = args.int_list[1]
+        error_tol = args.int_list[2]
+    if output is None:
+        output = np.fromfile(args.actual_file, dtype=args.dataType).reshape(-1)
+    if golden is None:
+        golden = np.fromfile(args.golden_file, dtype=args.dataType).reshape(-1)
     different_element_results = np.isclose(output,
                                            golden,
                                            rtol=relative_tol,

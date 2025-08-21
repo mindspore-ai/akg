@@ -18,11 +18,11 @@ from .tensor import Tensor
 from .scalar import Scalar
 from .c_expression import set_context, get_context
 from .dynamic_loop import dynamic_loop
-from .sub_kernel import sub_kernel, sync_kernel, jit
+from .sub_kernel import sub_kernel, sync_kernel, native_jit
 from .instruction import Instruction
 from .compile import compile_kernel
 from .compile_func import compile_func, code_block_context, custom_and, custom_or, custom_not
 from .name_tensor import name_tensor
 import os
-if os.getenv("ENABLE_MS_JIT", 0):
-  from .ms_plugin import ms_jit
+if os.getenv("ENABLE_SWFT_JIT", 1):
+  from .ms_plugin import jit, compile_ms_cell

@@ -107,11 +107,12 @@ TODO
 
 ```python
 import numpy as nps
+import swft
 from swft.core import *
 from swft.api import *
 from swft.runtime import * # swft 昇腾执行环境
 
-@jit(core_num=8)
+@swft.jit(core_num=8)
 def tanh_kernel(x, out):
     x_ub = move_to_ub(x)
     tanh_ub = tanh(x_ub)
