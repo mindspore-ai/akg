@@ -295,6 +295,7 @@ class Coder(AgentBase):
                 **self.base_doc,
                 "sketch": sketch,  # AUL代码作为sketch
                 "llm_suggestions": conductor_suggestion,  # Conductor建议
+                "coder_code": task_info.get('coder_code', ''),
                 "error_log": task_info.get('verifier_error', ''),
                 "inspirations": get_inspirations(task_info.get('inspirations', [])),
                 "api_docs_suitable": api_docs_suitable,
