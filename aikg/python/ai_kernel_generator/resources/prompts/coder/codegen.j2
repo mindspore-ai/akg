@@ -70,9 +70,14 @@
 {{ task_desc }}
 
 {% if sketch %}
-### Sketch 方案
-上一轮Agent已完成设计分析，生成了对应Sketch，但是Sketch并不一定是对的或者好的，你可以参考Sketch的灵感，来完成代码的生成和优化
+### 设计草图
+以下是为此算子设计的实现策略，参考生成{{dsl}}代码
 {{ sketch }}
+{% endif %}
+
+{% if coder_code %}
+### 这是上一次生成的代码
+{{ coder_code }}
 {% endif %}
 
 {% if error_log %}

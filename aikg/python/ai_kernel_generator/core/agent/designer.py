@@ -72,18 +72,16 @@ class Designer(AgentBase):
         # 初始化designer生成模板
         self.designer_prompt = self.load_template("designer/gen_sketch.j2")
 
-        # TODO: 加入数据库中的相似代码
         self.base_doc = {
             "dsl": self.dsl,
-            "dsl_basic_docs": self.load_doc("basic_docs.md"),
+            "dsl_basic_docs": "",
             "arch_name": self.arch,
             "backend": self.backend,
             "op_name": self.op_name,
             "task_desc": remove_copyright_from_text(self.task_desc),
             "hardware_docs": get_hardware_doc(self.backend, self.arch),
             "format_instructions": self.format_instructions,
-            "similar_code": "",
-            "sketch_example": ""
+            "sketch_guide": self.load_doc("sketch_rule.md")
         }
 
         # 为SWFT实现类型添加支持的API
