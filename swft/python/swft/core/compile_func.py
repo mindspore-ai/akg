@@ -439,6 +439,23 @@ class NameTensor(ast.NodeTransformer):
         return node
 
 
+class JITTransformer(NodeTransformer):
+    def visit_FunctionDef(self, node):
+        node = self.generic_visit(node)
+        new_decorators = []
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Call):
+                if isinstance(decorator.func, ast.Name) and decorator.func.id == 'jit':
+                    continue
+                if (isinstance(decorator.func, ast.Attribute) and
+                    isinstance(decorator.func.value, ast.Name) and
+                    decorator.func.value.id == 'swft' and decorator.func.attr == 'jit'):
+                    continue
+            new_decorators.append(decorator)
+        node.decorator_list = new_decorators
+        return node
+
+
 def transform(transform_types, tree):
     for transform_type in transform_types:
         transformer = transform_type()
@@ -451,7 +468,7 @@ def transform(transform_types, tree):
 def compile_func(func, globalv):
     original_source = inspect.getsource(func)
     tree = parse(original_source)
-    transform_types = [ConstantFolding,
+    transform_types = [JITTransformer, ConstantFolding,
                        RemoveControlFlowAndInjectContext, ScalarCopy, NameTensor]
     transformed_tree = transform(transform_types, tree)
     namespace = {}

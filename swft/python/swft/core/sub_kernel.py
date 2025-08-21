@@ -49,8 +49,8 @@ def sub_kernel(core_num=1):
 
 
 @lru_cache(maxsize=None)
-def load_pybind_op(module_name, func_name, so_path):
-    spec = importlib.util.spec_from_file_location(module_name, so_path)
+def load_func_from_module(module_name, func_name, file_path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
@@ -68,10 +68,10 @@ def call_op(kernel_name, so_path, core_num, args):
         if is_scalar(arg):
             c_args.append(arg.value)
     c_args.append(NPUSession.instance().stream)
-    load_pybind_op(kernel_name, kernel_name, so_path)(*c_args)
+    load_func_from_module(kernel_name, kernel_name, so_path)(*c_args)
 
 
-def jit(core_num=1):
+def native_jit(core_num=1):
     def logging_decorator(func):
         @wraps(func)
         def wrapped_function(*args, **kwargs):

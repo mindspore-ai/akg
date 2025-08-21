@@ -125,6 +125,76 @@ op_bind_start = """#include <pybind11/pybind11.h>
 namespace py = pybind11;
 """
 
+module_registry_class_def = '''
+using ModuleRegisterFunction = std::function<void(pybind11::module_ &)>;
+class ModuleRegistry {
+public:
+  // Get the singleton instance
+  static ModuleRegistry &Instance() {
+    static ModuleRegistry instance;
+    return instance;
+  }
+
+  // Register a module function
+  void Register(ModuleRegisterFunction func, bool pynative_node = true) {
+    auto &target =
+        pynative_node ? pynative_reg_functions_ : graph_reg_functions_;
+    target.emplace_back(std::move(func));
+  }
+
+  // Call all registered module functions
+  void RegisterAll(pybind11::module_ &m) {
+    for (const auto &func : pynative_reg_functions_) {
+      func(m);
+    }
+    for (const auto &func : graph_reg_functions_) {
+      func(m);
+    }
+  }
+private:
+  ModuleRegistry() = default;
+  ~ModuleRegistry() = default;
+
+  // Disable copy and assignment
+  ModuleRegistry(const ModuleRegistry &) = delete;
+  ModuleRegistry &operator=(const ModuleRegistry &) = delete;
+
+  // Store all registered functions
+  std::vector<ModuleRegisterFunction> pynative_reg_functions_;
+  std::vector<ModuleRegisterFunction> graph_reg_functions_;
+};
+
+#define REG_GRAPH_MODE_OP(op, OpFuncImplClass, KernelClass)                    \\
+  MS_CUSTOM_OPS_REGISTER(op, OpFuncImplClass, KernelClass);                    \\
+  static void op##_func() {}                                                   \\
+  static void op##_register(pybind11::module_ &m) {                            \\
+    if (!pybind11::hasattr(m, #op)) {                                          \\
+      m.def(#op, &op##_func);                                                  \\
+    }                                                                          \\
+  }                                                                            \\
+  struct op##_registrar {                                                      \\
+    op##_registrar() {                                                         \\
+      ModuleRegistry::Instance().Register(op##_register, false);               \\
+    }                                                                          \\
+  };                                                                           \\
+  static op##_registrar registrar_instance
+'''
+
+ms_run_src_start = '''
+#include "ms_extension.h"
+#include "plugin/device/ascend/kernel/custom/custom_kernel_factory.h"
+#include "common/kernel.h"
+#include <iostream>
+#include <dlfcn.h>
+#include <pybind11/pybind11.h>
+#include <vector>
+using namespace mindspore;
+using namespace mindspore::kernel;
+using namespace mindspore::device::ascend;
+using namespace mindspore::ops;
+typedef void (*kernel_func_t)(uint32_t, void *, void *, ...);
+static std::unordered_map<std::string, kernel_func_t> kernel_cache;
+'''
 
 def extract_parameters(func_call):
     match = re.search(r'\((.*?)\)', func_call)
@@ -150,7 +220,7 @@ def gen_size_str(tensor_name, local_vars):
 
 
 def gen_allocate_addr(input_names, var_names, kernel_name, local_vars, prefix_dir="."):
-    
+
     lines = []
     for name in var_names:
         if name in local_vars.keys() and is_scalar(local_vars[name]):
@@ -299,16 +369,136 @@ class ArgType(enum.Enum):
     BOOL = 4
 
 
-def gen_ms_run_src(src_file, lib_path, kernel_name, ms_run_func_name, args_order):
-    lines = ['#include "ms_extension.h"',
-             '#include <iostream>',
-             '#include <dlfcn.h>',
-             '#include <pybind11/pybind11.h>',
-             '#include <vector>',
-             'typedef void (*kernel_func_t)(uint32_t, void *, void *, ...);',
-             'static std::unordered_map<std::string, kernel_func_t> kernel_cache;']
-    class_name = f'SwftOp_{kernel_name}'
-    lines.append(f'class {class_name} : public ms::pynative::PyboostRunner')
+def get_load_kernel_src(lib_path, kernel_name):
+    lines = ['    int32_t block_dim = 8;',
+             '    void *l2ctrl = nullptr;',
+             '    kernel_func_t func;',
+             f'    std::string op_name{{"{kernel_name}"}};',
+             '    auto iter = kernel_cache.find(op_name);',
+             '    if (iter == kernel_cache.end()) {',
+             f'        std::string lib_name = "{lib_path}";',
+             '        auto lib_handle = dlopen(lib_name.c_str(), RTLD_LAZY);',
+             '        if (lib_handle == nullptr) {',
+             '            std::cout << "[ERROR] failed to dlopen " << lib_name << std::endl;',
+             '        }',
+             '        auto kernel_handle = dlsym(lib_handle, op_name.c_str());',
+             '        if (kernel_handle == nullptr) {',
+             '            std::cout << "[ERROR] failed to dlsym " << op_name << std::endl;',
+             '        }',
+             '        func = reinterpret_cast<kernel_func_t>(kernel_handle);',
+             '    } else {',
+             '        func = iter->second;',
+             '    }']
+    return lines
+
+
+def get_launch_src_for_kernel_mod(args_order):
+    lines = []
+    args = []
+    for i, arg_type in enumerate(args_order):
+        if arg_type == ArgType.TENSOR:
+            tensor_arg = f"tensor_arg_{i}"
+            lines.append(f'        void *{tensor_arg} = inputs[{i}]->device_ptr();')
+            args.append(tensor_arg)
+        elif arg_type == ArgType.INT:
+            int_arg = f"int_arg_{i}"
+            lines.append(f'        int {int_arg} = static_cast<int>(inputs.at({i})->GetValue<int64_t>().value());')
+            args.append(int_arg)
+        elif arg_type == ArgType.FLOAT:
+            float_arg = f"float_arg_{i}"
+            lines.append(f'        float {float_arg} = static_cast<float>(inputs.at({i})->GetValue<float>().value());')
+            args.append(float_arg)
+        elif arg_type == ArgType.BOOL:
+            bool_arg = f"bool_arg_{i}"
+            lines.append(f'        bool {bool_arg} = static_cast<bool>(inputs.at({i})->GetValue<bool>().value());')
+            args.append(bool_arg)
+    launch_line = '        func(block_dim, l2ctrl, stream_ptr'
+    for arg in args:
+        launch_line += f', {arg}'
+    launch_line += ');'
+    lines.append(launch_line)
+    return lines
+
+
+def get_launch_line_for_pyboost_runner(args_order):
+    launch_line = '        func(block_dim, l2ctrl, stream()'
+    tensor_idx = 0
+    int_idx = 0
+    float_idx = 0
+    bool_idx = 0
+    for arg_type in args_order:
+        if arg_type == ArgType.TENSOR:
+            launch_line += f', tensor_args[{tensor_idx}]'
+            tensor_idx += 1
+        elif arg_type == ArgType.INT:
+            launch_line += f', int_args_[{int_idx}]'
+            int_idx += 1
+        elif arg_type == ArgType.FLOAT:
+            launch_line += f', float_args_[{float_idx}]'
+            float_idx += 1
+        elif arg_type == ArgType.BOOL:
+            launch_line += f', bool_args_[{bool_idx}]'
+            bool_idx += 1
+    launch_line += ');'
+    return launch_line
+
+
+def gen_ms_run_src(src_file, lib_path, kernel_name, args_order):
+    lines = [ms_run_src_start]
+
+    op_func_class_name = f'{kernel_name}_OpFuncImpl'
+    lines.append('namespace ms_custom_ops {')
+    lines.append(f'class OPS_API {op_func_class_name} : public OpFuncImpl')
+    lines.append('{')
+    lines.append('public:')
+    lines.append('  ShapeArray InferShape(const PrimitivePtr &primitive,')
+    lines.append('                        const InferInfoPtrList &input_infos) const override {')
+    lines.append('    return {input_infos[0]->GetShape()};')
+    lines.append('  }')
+    lines.append('  std::vector<TypeId>')
+    lines.append('  InferType(const PrimitivePtr &primitive,')
+    lines.append('            const InferInfoPtrList &input_infos) const override {')
+    lines.append('    return {input_infos[0]->GetType()};')
+    lines.append('  }')
+    lines.append('')
+    lines.append('  bool GeneralInferRegistered() const override { return true; }')
+    lines.append('};')
+
+    kernel_mod_class_name = f'{kernel_name}_KernelMod'
+    load_kernel_src = get_load_kernel_src(lib_path, kernel_name)
+    lines.append(f'class {kernel_mod_class_name} : public KernelMod')
+    lines.append('{')
+    lines.append('public:')
+    lines.append('    bool Init(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) override {')
+    lines.append('        return true;')
+    lines.append('    }')
+    lines.append('    int Resize(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) override {')
+    lines.append('        return KernelMod::Resize(inputs, outputs);')
+    lines.append('    }')
+    lines.append('    bool Launch(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &workspace,')
+    lines.append('                const std::vector<KernelTensor *> &outputs, void *stream_ptr) override {')
+    lines.extend(load_kernel_src)
+    launch_src_for_kernel_mod = get_launch_src_for_kernel_mod(args_order)
+    lines.extend(launch_src_for_kernel_mod)
+    lines.append('        return true;')
+    lines.append('    }')
+    lines.append('    std::vector<KernelAttr> GetOpSupport() override {')
+    lines.append('      MS_LOG(EXCEPTION) << "This interface is not support in swft kernel.";')
+    lines.append('    }')
+    lines.append('    void set_fullname(const std::string &fullname) override {')
+    lines.append('        fullname_ = fullname;')
+    lines.append('    }')
+    lines.append('')
+    lines.append('private:')
+    lines.append('  std::string fullname_;')
+    lines.append('};')
+    lines.append('} // namespace ms_custom_ops')
+    lines.append(module_registry_class_def)
+    lines.append(f'REG_GRAPH_MODE_OP({kernel_name}, ms_custom_ops::{op_func_class_name},')
+    lines.append(f'                  ms_custom_ops::{kernel_mod_class_name});')
+
+    pyboost_runner_class_name = f'{kernel_name}_PyboostRunner'
+    lines.append(f'class {pyboost_runner_class_name} : public ms::pynative::PyboostRunner')
     lines.append('{')
     lines.append('public:')
     lines.append('  using PyboostRunner::PyboostRunner;')
@@ -317,54 +507,15 @@ def gen_ms_run_src(src_file, lib_path, kernel_name, ms_run_func_name, args_order
     lines.append('        for (auto input : inputs()) {')
     lines.append('            tensor_args.push_back(static_cast<uint8_t *>(input.GetDataPtr()));')
     lines.append('        }')
-    lines.append('        uint32_t block_dim = 8;')
-    lines.append('        void *l2ctrl = nullptr;')
-
-    lines.append('        kernel_func_t func;')
-    lines.append('        auto iter = kernel_cache.find(op_name());')
-    lines.append('        if (iter == kernel_cache.end()) {')
-    lines.append('            std::string lib_name = "{lib_path}";')
-    lines.append('            auto lib_handle = dlopen(lib_name.c_str(), RTLD_LAZY);')
-    lines.append('            if (lib_handle == nullptr) {')
-    lines.append('                std::cout << "[ERROR] failed to dlopen " << lib_name << std::endl;')
-    lines.append('                return;')
-    lines.append('            }')
-    lines.append('            auto kernel_handle = dlsym(lib_handle, op_name().c_str());')
-    lines.append('            if (kernel_handle == nullptr) {')
-    lines.append('                std::cout << "[ERROR] failed to dlsym " << op_name() << std::endl;')
-    lines.append('                return;')
-    lines.append('            }')
-    lines.append('            func = reinterpret_cast<kernel_func_t>(kernel_handle);')
-    lines.append('        } else {')
-    lines.append('            func = iter->second;')
-    lines.append('        }')
-    launch_line = '        func(block_dim, l2ctrl, stream()'
-    
-    tensor_idx = 0
-    int_idx = 0
-    float_idx = 0
-    bool_idx = 0
-    for i in args_order:
-        if i == ArgType.TENSOR:
-            launch_line += f', tensor_args[{tensor_idx}]'
-            tensor_idx += 1
-        elif i == ArgType.INT:
-            launch_line += f', int_args_[{int_idx}]'
-            int_idx += 1
-        elif i == ArgType.FLOAT:
-            launch_line += f', float_args_[{float_idx}]'
-            float_idx += 1
-        elif i == ArgType.BOOL:
-            launch_line += f', bool_args_[{bool_idx}]'
-            bool_idx += 1
-    launch_line += ');'
-    lines.append(launch_line)
+    lines.extend(load_kernel_src)
+    launch_line_for_pyboost_runner = get_launch_line_for_pyboost_runner(args_order)
+    lines.append(launch_line_for_pyboost_runner)
 
     lines.append('    }')
     lines.append('    static void Eval(std::vector<ms::Tensor> tensor_args, std::vector<int> int_args,')
     lines.append('                     std::vector<float> float_args, std::vector<bool> bool_args)')
     lines.append('    {')
-    lines.append(f'        auto runner = std::make_shared<{class_name}>("{kernel_name}");')
+    lines.append(f'        auto runner = std::make_shared<{pyboost_runner_class_name}>("{kernel_name}");')
     lines.append('        runner->int_args_ = int_args;')
     lines.append('        runner->float_args_ = float_args;')
     lines.append('        runner->bool_args_ = bool_args;')
@@ -375,29 +526,82 @@ def gen_ms_run_src(src_file, lib_path, kernel_name, ms_run_func_name, args_order
     lines.append('    std::vector<float> float_args_;')
     lines.append('    std::vector<bool> bool_args_;')
     lines.append('};')
-    apiName = f'msRun{kernel_name}'
+    apiName = f'{kernel_name}_runner'
     lines.append(f'auto {apiName}(std::vector<ms::Tensor> tensor_args, std::vector<int> int_args,')
     lines.append('    std::vector<float> float_args, std::vector<bool> bool_args)')
     lines.append('{')
     lines.append('    return ms::pynative::PyboostRunner::Call<0>(')
-    lines.append(f'        {class_name}::Eval, tensor_args, int_args, float_args, bool_args);')
+    lines.append(f'        {pyboost_runner_class_name}::Eval, tensor_args, int_args, float_args, bool_args);')
     lines.append('}')
     lines.append('PYBIND11_MODULE(MS_EXTENSION_NAME, m)')
     lines.append('{')
-    lines.append(f'    m.def("{ms_run_func_name}", &{apiName});')
+    lines.append(f'    m.def("{kernel_name}", &{apiName});')
+    lines.append(f'    ModuleRegistry::Instance().RegisterAll(m);')
     lines.append('}')
     src = '\n'.join(lines)
     with open(src_file, "w") as f:
         f.write(src)
 
 
-def gen_ms_run_build(build_dir, build_file, src_file, module_name):
+def gen_ms_run_op_yaml(kernel_name, args_order, op_yaml_file):
+    lines = [f'#operator {kernel_name}',
+             f'{kernel_name}:',
+             '  args:']
+    tensor_args = []
+    for i, arg_type in enumerate(args_order):
+        if arg_type == ArgType.TENSOR:
+            tensor_arg = f"tensor_arg_{i}"
+            tensor_args.append(tensor_arg)
+            lines.append(f'    {tensor_arg}:')
+            lines.append('      dtype: tensor')
+        elif arg_type == ArgType.INT:
+            int_arg = f"int_arg_{i}"
+            lines.append(f'    {int_arg}:')
+            lines.append('      dtype: int')
+        elif arg_type == ArgType.FLOAT:
+            float_arg = f"float_arg_{i}"
+            lines.append(f'    {float_arg}:')
+            lines.append('      dtype: float')
+        elif arg_type == ArgType.BOOL:
+            bool_arg = f"bool_arg_{i}"
+            lines.append(f'    {bool_arg}:')
+            lines.append('      dtype: bool')
+    lines.append('  args_signature:')
+    rw_write_line = '    rw_write: '
+    for i, arg in enumerate(tensor_args):
+        if i > 0:
+            rw_write_line += ', '
+        rw_write_line += arg
+    lines.append(rw_write_line)
+    lines.append('  labels:')
+    lines.append('    side_effect_mem: True')
+    lines.append('  returns:')
+    lines.append(f'    out:')
+    lines.append('      dtype: tensor')
+    lines.append('  class:')
+    lines.append(f'    name: {kernel_name}')
+    src = '\n'.join(lines)
+    with open(op_yaml_file, "w") as f:
+        f.write(src)
+
+
+def gen_ms_run_doc_yaml(kernel_name, op_doc_file):
+    lines = [f'{kernel_name}:',
+             '    description: |']
+    src = '\n'.join(lines)
+    with open(op_doc_file, "w") as f:
+        f.write(src)
+
+
+def gen_ms_run_build(build_dir, build_file, src_file, module_name, op_yaml_file, op_doc_file):
     lines = ['import mindspore as ms',
              'ms.ops.CustomOpBuilder(']
     lines.append(f'    name="{module_name}",')
     lines.append(f'    sources="{src_file}",')
     lines.append('    backend="Ascend",')
-    lines.append(f'    build_dir="{build_dir}"')
+    lines.append(f'    build_dir="{build_dir}",')
+    lines.append(f'    op_def="{op_yaml_file}",')
+    lines.append(f'    op_doc="{op_doc_file}",')
     lines.append(').build()')
     src = '\n'.join(lines)
     with open(build_file, "w") as f:
