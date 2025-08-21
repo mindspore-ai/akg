@@ -4,7 +4,7 @@
 # 用法: ./run_test.sh -m "torch and triton and cuda"
 
 # 添加调试信息
-set -x  # 启用调试模式，显示每个命令
+# set -x  # 启用调试模式，显示每个命令
 set -e  # 遇到错误立即退出
 
 # 颜色定义
@@ -314,7 +314,7 @@ check_directory() {
 main() {
     print_info "主函数开始执行..."
     
-    local markers=""
+    local markers="level0 and not use_model and not use_vector_store"
     local test_type="ut"  # 默认运行ut测试
     local pytest_args=()
     local verbose=false
@@ -330,8 +330,12 @@ main() {
                 exit 0
                 ;;
             -m)
-                markers="$2"
-                print_info "设置标记表达式: '$markers'"
+                if [[ -n "$2" ]]; then
+                    markers="$2"
+                    print_info "用户指定标记表达式: '$markers'"
+                else
+                    print_warning "忽略空的-m参数，使用默认标记"
+                fi
                 shift 2
                 ;;
             -t)
@@ -379,18 +383,23 @@ main() {
     local test_path=$(get_test_path "$test_type")
     print_info "测试路径: $test_path"
     
-    # 构建pytest命令
-    local pytest_cmd="pytest -sv --disable-warnings $test_path -m \"$markers\""
-    
+    # 构建pytest命令（使用数组避免eval导致的二次分词）
+    local cmd=(pytest -sv --disable-warnings "$test_path")
+    if [[ -n "$markers" ]]; then
+        cmd+=(-m "$markers")
+    fi
     if [[ ${#pytest_args[@]} -gt 0 ]]; then
-        pytest_cmd="$pytest_cmd ${pytest_args[*]}"
+        cmd+=("${pytest_args[@]}")
     fi
     
-    print_info "构建的pytest命令: '$pytest_cmd'"
+    # 安全打印将要执行的命令
+    local pretty_cmd=""
+    printf -v pretty_cmd "%q " "${cmd[@]}"
+    print_info "构建的pytest命令: ${pretty_cmd}"
     print_info "当前工作目录: $(pwd)"
     print_info "测试类型: $test_type"
     print_info "测试路径: $test_path"
-    print_info "执行命令: $pytest_cmd"
+    print_info "执行命令: ${pretty_cmd}"
     echo
     
     # 运行测试
@@ -398,7 +407,7 @@ main() {
     echo "=========================================="
     
     print_info "执行pytest命令..."
-    if eval "$pytest_cmd"; then
+    if "${cmd[@]}"; then
         echo "=========================================="
         print_success "所有测试通过！"
         exit 0
