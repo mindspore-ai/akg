@@ -153,6 +153,10 @@ class Task:
 
         # 初始化基础文档
         base_doc = {"backend": self.backend, "arch": self.arch, "dsl": self.dsl, "framework": self.framework}
+        
+        # 添加workflow名称
+        workflow_name = os.path.basename(self.workflow_config_path).replace('.yaml', '') if self.workflow_config_path else ""
+        base_doc["workflow_name"] = workflow_name
 
         # 只在相应agent存在时添加其基础文档
         if 'designer' in self.agents:
