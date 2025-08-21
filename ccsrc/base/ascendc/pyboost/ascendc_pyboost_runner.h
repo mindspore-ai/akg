@@ -22,7 +22,7 @@
 #include <optional>
 #include <set>
 
-namespace ms::pynative {
+namespace ms_custom_ops {
 using AscendCLaunchFunc =
     std::function<void(mindspore::device::DeviceContext *, size_t)>;
 
@@ -68,7 +68,7 @@ template <typename T> inline constexpr T Tensor2Ptr(const T &t) { return t; }
 #define LAUNCH_ASCENDC_FUNC(aclnn_api, ...)                                    \
   [](auto &&... args) {                                                        \
     auto args_t = std::make_tuple(                                             \
-        ms::pynative::Tensor2Ptr(std::forward<decltype(args)>(args))...);      \
+      ms_custom_ops::Tensor2Ptr(std::forward<decltype(args)>(args))...);       \
     return [args_t](auto __dev_ctx, auto __stream_id) {                        \
       std::apply(                                                              \
           [&](auto &&... args) {                                               \
@@ -77,6 +77,6 @@ template <typename T> inline constexpr T Tensor2Ptr(const T &t) { return t; }
           args_t);                                                             \
     };                                                                         \
   }(__VA_ARGS__)
-} // namespace ms::pynative
+} // namespace ms_custom_ops
 
 #endif // MS_CUSTOM_OPS_OP_DEF_ASCENDC_PYBOOST_ASCENDC_PYBOOST_RUNNER_H_

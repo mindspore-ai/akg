@@ -21,7 +21,7 @@
 #include <vector>
 
 #include "common/kernel.h"
-#include "include/internal.h"
+#include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
 #include "tiling_mem_mgr.h"
 
 #include "debug/profiler/profiling.h"
@@ -34,7 +34,7 @@ namespace ms_custom_ops {
 using namespace mindspore::ops;
 
 class InternalKernelMod : public KernelMod {
-public:
+ public:
   InternalKernelMod() {
     ascend_profiler_ = profiler::Profiler::GetInstance(kAscendDevice);
     MS_EXCEPTION_IF_NULL(ascend_profiler_);
@@ -42,35 +42,26 @@ public:
 
   virtual ~InternalKernelMod() = default;
 
-  bool Init(const std::vector<KernelTensor *> &inputs,
-            const std::vector<KernelTensor *> &outputs) override;
-  int Resize(const std::vector<KernelTensor *> &inputs,
-             const std::vector<KernelTensor *> &outputs) override;
-  bool Launch(const std::vector<KernelTensor *> &inputs,
-              const std::vector<KernelTensor *> &workspace,
-              const std::vector<KernelTensor *> &outputs,
-              void *stream_ptr) override;
+  bool Init(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) override;
+  int Resize(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) override;
+  bool Launch(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &workspace,
+              const std::vector<KernelTensor *> &outputs, void *stream_ptr) override;
 
   std::vector<KernelAttr> GetOpSupport() override {
     MS_LOG(EXCEPTION) << "This interface is not support in internal kernel.";
   }
 
-  void set_fullname(const std::string &fullname) override {
-    fullname_ = fullname;
-  }
+  void set_fullname(const std::string &fullname) override { fullname_ = fullname; }
 
-protected:
-  virtual bool IsNeedRecreate(const std::vector<KernelTensor *> &inputs,
-                              const std::vector<KernelTensor *> &outputs);
-  virtual bool UpdateParam(const std::vector<KernelTensor *> &inputs,
-                           const std::vector<KernelTensor *> &outputs) {
+ protected:
+  virtual bool IsNeedRecreate(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs);
+  virtual bool UpdateParam(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) {
     return true;
   }
-  virtual internal::InternalOpPtr
-  CreateKernel(const internal::InputsImmutableInfoList &inputs,
-               const internal::OutputsImmutableInfoList &outputs,
-               const std::vector<KernelTensor *> &ms_inputs,
-               const std::vector<KernelTensor *> &ms_outputs) {
+  virtual internal::InternalOpPtr CreateKernel(const internal::InputsImmutableInfoList &inputs,
+                                               const internal::OutputsImmutableInfoList &outputs,
+                                               const std::vector<KernelTensor *> &ms_inputs,
+                                               const std::vector<KernelTensor *> &ms_outputs) {
     return nullptr;
   }
 
@@ -88,15 +79,12 @@ protected:
   internal::OutputsAddrList internal_outputs_addr_;
   internal::WsAddrList internal_wss_addr_;
 
-private:
+ private:
   std::shared_ptr<profiler::Profiler> ascend_profiler_{nullptr};
-  void GetOrGenerateTiling(const std::vector<KernelTensor *> &inputs,
-                           const std::vector<KernelTensor *> &outputs);
-  inline void UpdateAddr(const std::vector<KernelTensor *> &inputs,
-                         const std::vector<KernelTensor *> &outputs,
+  void GetOrGenerateTiling(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs);
+  inline void UpdateAddr(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs,
                          const std::vector<KernelTensor *> &workspace);
-  void GetInternalKernel(const std::vector<KernelTensor *> &inputs,
-                         const std::vector<KernelTensor *> &outputs);
+  void GetInternalKernel(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs);
 
   MemoryType host_tiling_mem_type_{kMemoryUndefined};
   MemoryType device_tiling_mem_type_{kMemoryUndefined};
@@ -111,11 +99,5 @@ private:
 
 using InternalKernelModPtr = std::shared_ptr<InternalKernelMod>;
 using InternalKernelModPtrList = std::vector<InternalKernelModPtr>;
-
-#define MS_CUSTOM_INTERNAL_KERNEL_NAME_REG(PRIM_NAME_STR, INTERNAL_NAME_VAR)   \
-  static const InternalNameRegistrar                                           \
-      g_##PRIM_NAME_STR##_ms_to_internal_mapper("Custom_" #PRIM_NAME_STR,      \
-                                                INTERNAL_NAME_VAR);
-
-} // namespace ms_custom_ops
-#endif // MINDSPORE_CCSRC_BACKEND_KERNEL_COMPILER_INTERNAL_KERNEL_MOD_H_
+}  // namespace ms_custom_ops
+#endif  // MINDSPORE_CCSRC_BACKEND_KERNEL_COMPILER_INTERNAL_KERNEL_MOD_H_

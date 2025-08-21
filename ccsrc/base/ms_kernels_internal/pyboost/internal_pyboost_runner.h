@@ -24,20 +24,19 @@
 #include <unordered_map>
 
 #include "include/internal.h"
-#include "internal_helper.h"
+#include "ccsrc/base/ms_kernels_internal/internal_helper.h"
 #include "internal_pyboost_utils.h"
 #include "internal_spinlock.h"
 #include "internal_tiling_cache.h"
 #include "module.h"
 
-namespace ms::pynative {
+namespace ms_custom_ops {
 using namespace mindspore;
-using namespace ms_custom_ops;
 using TensorList = std::vector<ms::Tensor>;
 
-class InternalPyboostRunner : public PyboostRunner {
-public:
-  using PyboostRunner::PyboostRunner;
+class InternalPyboostRunner : public ms::pynative::PyboostRunner {
+ public:
+  using ms::pynative::PyboostRunner::PyboostRunner;
 
   // Generic setup method for configuring the runner with parameters and
   // calculating hash keys
@@ -50,31 +49,24 @@ public:
 
   void GetOrCreateKernel(const TensorList &inputs, const TensorList &outputs);
 
-protected:
+ protected:
   size_t CalcWorkspace() override;
 
-  virtual uint64_t GetOrGenerateOpKey(const uint64_t &op_key) const {
-    return op_key;
-  }
+  virtual uint64_t GetOrGenerateOpKey(const uint64_t &op_key) const { return op_key; }
 
-  virtual uint64_t GetOrGenerateOpTilingKey(const uint64_t &tiling_key) const {
-    return tiling_key;
-  }
+  virtual uint64_t GetOrGenerateOpTilingKey(const uint64_t &tiling_key) const { return tiling_key; }
 
   virtual bool UpdateParam() { return true; }
 
-protected:
+ protected:
   void TransDataType(const TensorList &ms_inputs, const TensorList &ms_outputs);
 
   TilingCacheItemPtr GetOrGenerateTiling();
-  virtual internal::InternalOpPtr
-  CreateKernel(const internal::InputsImmutableInfoList &inputs,
-               const internal::OutputsImmutableInfoList &outputs) = 0;
-  void TransInternalShapes(internal::ShapeInfoList *shapelist,
-                           const TensorList &tensorlist, bool is_input = false);
+  virtual internal::InternalOpPtr CreateKernel(const internal::InputsImmutableInfoList &inputs,
+                                               const internal::OutputsImmutableInfoList &outputs) = 0;
+  void TransInternalShapes(internal::ShapeInfoList *shapelist, const TensorList &tensorlist, bool is_input = false);
 
-  static void UpdateAddr(std::vector<internal::RawDeviceAddr> *addrlist,
-                         const TensorList &tensorlist) {
+  static void UpdateAddr(std::vector<internal::RawDeviceAddr> *addrlist, const TensorList &tensorlist) {
     addrlist->resize(tensorlist.size());
     for (size_t i = 0; i < tensorlist.size(); i++) {
       if (!tensorlist[i].is_defined()) {
@@ -85,8 +77,7 @@ protected:
     }
   }
 
-  void GetWorkspace(const internal::InternalOpPtr &internal_op,
-                    internal::WsAddrList *internal_wss_addr);
+  void GetWorkspace(const internal::InternalOpPtr &internal_op, internal::WsAddrList *internal_wss_addr);
 
   void LaunchKernel() override;
 
@@ -102,21 +93,12 @@ protected:
   internal::OutputsImmutableInfoList outputs_ii_;
   TilingCacheItemPtr tiling_cache_item_{nullptr};
 
-private:
-  void UpdateArgImmutableInfo(internal::ArgImmutableInfo *arginfo,
-                              const ms::Tensor &tensor,
-                              internal::DataType dtype);
-  void UpdateArgImmutableInfo(std::vector<internal::ArgImmutableInfo> *arginfos,
-                              const TensorList &tensorlist,
+ private:
+  void UpdateArgImmutableInfo(internal::ArgImmutableInfo *arginfo, const ms::Tensor &tensor, internal::DataType dtype);
+  void UpdateArgImmutableInfo(std::vector<internal::ArgImmutableInfo> *arginfos, const TensorList &tensorlist,
                               bool is_input = false);
 
   SimpleSpinLock lock_;
 };
-
-#define MS_KERNELS_INTERNAL_NAME_REG(PRIM_NAME_STR, INTERNAL_NAME_VAR)         \
-  static const InternalNameRegistrar                                           \
-      g_##PRIM_NAME_STR##_ms_to_internal_mapper(#PRIM_NAME_STR,                \
-                                                INTERNAL_NAME_VAR);
-
-} // namespace ms::pynative
-#endif // MS_CUSTOM_OPS_INTERNAL_OP_PYBOOST_RUNNER_H_
+}  // namespace ms_custom_ops
+#endif  // MS_CUSTOM_OPS_INTERNAL_OP_PYBOOST_RUNNER_H_

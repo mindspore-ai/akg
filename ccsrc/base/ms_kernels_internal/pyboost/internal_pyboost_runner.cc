@@ -16,8 +16,7 @@
 
 #include "internal_pyboost_runner.h"
 
-namespace ms::pynative {
-
+namespace ms_custom_ops {
 void InternalPyboostRunner::GetOrCreateKernel(const TensorList &inputs,
                                               const TensorList &outputs) {
   auto key = GetOrGenerateOpKey(op_key_);
@@ -248,4 +247,4 @@ void InternalPyboostRunner::LaunchKernel() {
   }
   MS_LOG(DEBUG) << "Launch InternalKernel " << op_name << " end";
 }
-} // namespace ms::pynative
+} // namespace ms_custom_ops
