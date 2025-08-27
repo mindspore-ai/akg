@@ -1,0 +1,48 @@
+#operator Mla
+mla:
+  args:
+    q_nope:
+      dtype: tensor
+    q_rope:
+      dtype: tensor
+    ctkv:
+      dtype: tensor
+    k_rope:
+      dtype: tensor
+    block_tables:
+      dtype: tensor
+    attn_mask:
+      dtype: tensor
+      default: None
+    deq_scale_qk:
+      dtype: tensor
+      default: None
+    deq_scale_pv:
+      dtype: tensor
+      default: None
+    q_seq_lens:
+      dtype: tensor
+      default: None
+    context_lens:
+      dtype: tensor
+      default: None
+    head_num:
+      dtype: int
+      default: 32
+    scale_value:
+      dtype: float
+      default: 0.0
+    kv_head_num:
+      dtype: int
+      default: 1
+    mask_mode:
+      dtype: int
+      default: 0
+    is_ring:
+      dtype: int
+      default: 0
+  returns:
+    attention_out:
+      dtype: tensor
+    lse:
+      dtype: tensor

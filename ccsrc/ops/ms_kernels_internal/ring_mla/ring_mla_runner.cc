@@ -15,9 +15,10 @@
  */
 
 #include "ring_mla_runner.h"
+#include "ccsrc/utils/utils.h"
 
 using namespace ms_custom_ops;
-namespace ms::pynative {
+namespace ms_custom_ops {
 
 namespace {
 
@@ -50,8 +51,8 @@ void RingMLARunner::SetSeqLen(const std::optional<ms::Tensor> &q_seq_lens,
   (void)GetSeqLenFromInputTensor(context_lens.value(), &param_.kvSeqLen);
 }
 
-void RingMLARunner::SetRingMLAParam(int64_t head_num, float scale_value,
-                                    int64_t kv_head_num, int64_t mask_type, int64_t calc_type) {
+void RingMLARunner::SetRingMLAParam(int64_t head_num, float scale_value, int64_t kv_head_num, int64_t mask_type,
+                                    int64_t calc_type) {
   param_.headNum = static_cast<int32_t>(head_num);
   param_.qkScale = scale_value;
   param_.kvHeadNum = static_cast<int32_t>(kv_head_num);
@@ -76,28 +77,14 @@ bool RingMLARunner::UpdateParam() {
   return true;
 }
 
-internal::InternalOpPtr RingMLARunner::CreateKernel(
-    const internal::InputsImmutableInfoList &inputs,
-    const internal::OutputsImmutableInfoList &outputs) {
+internal::InternalOpPtr RingMLARunner::CreateKernel(const internal::InputsImmutableInfoList &inputs,
+                                                    const internal::OutputsImmutableInfoList &outputs) {
   created_flag_ = true;
   return internal::CreateRingMLAOp(inputs, outputs, param_, internal::kInternalRingMLAOpName);
 }
 
-MS_KERNELS_INTERNAL_NAME_REG(RingMLA, internal::kInternalRingMLAOpName);
-
-}  // namespace ms::pynative
-
-namespace ms_custom_ops {
-
 namespace {
-
-ms::Tensor ToTensorOrEmpty(const std::optional<ms::Tensor> &opt_tensor) {
-  return opt_tensor.has_value() ? opt_tensor.value() : ms::Tensor();
-}
-
-ms::Tensor GenAttnOutTensor(const ms::Tensor &query) {
-  return ms::Tensor(query.data_type(), query.shape());
-}
+ms::Tensor GenAttnOutTensor(const ms::Tensor &query) { return ms::Tensor(query.data_type(), query.shape()); }
 
 ms::Tensor GenLseOutTensor(const ms::Tensor &query, const std::optional<ms::Tensor> &lse_prev,
                            const int64_t &calc_type) {
@@ -124,17 +111,16 @@ ms::Tensor GenLseOutTensor(const ms::Tensor &query, const std::optional<ms::Tens
 }  // namespace
 
 std::vector<ms::Tensor> npu_ring_mla(
-    const ms::Tensor &query, const ms::Tensor &query_rope, const ms::Tensor &key,
-    const ms::Tensor &key_rope, const ms::Tensor &value, const std::optional<ms::Tensor> &mask,
-    const std::optional<ms::Tensor> &alibi_coeff, const std::optional<ms::Tensor> &deq_scale_qk,
-    const std::optional<ms::Tensor> &deq_offset_qk, const std::optional<ms::Tensor> &deq_scale_pv,
-    const std::optional<ms::Tensor> &deq_offset_pv, const std::optional<ms::Tensor> &quant_p,
-    const std::optional<ms::Tensor> &log_n, const std::optional<ms::Tensor> &o_prev,
-    const std::optional<ms::Tensor> &lse_prev, const std::optional<ms::Tensor> &q_seq_lens,
-    const std::optional<ms::Tensor> &context_lens, const int64_t &head_num, const float &scale_value,
-    const int64_t &kv_head_num, const int64_t &mask_type, const int64_t &calc_type) {
+  const ms::Tensor &query, const ms::Tensor &query_rope, const ms::Tensor &key, const ms::Tensor &key_rope,
+  const ms::Tensor &value, const std::optional<ms::Tensor> &mask, const std::optional<ms::Tensor> &alibi_coeff,
+  const std::optional<ms::Tensor> &deq_scale_qk, const std::optional<ms::Tensor> &deq_offset_qk,
+  const std::optional<ms::Tensor> &deq_scale_pv, const std::optional<ms::Tensor> &deq_offset_pv,
+  const std::optional<ms::Tensor> &quant_p, const std::optional<ms::Tensor> &log_n,
+  const std::optional<ms::Tensor> &o_prev, const std::optional<ms::Tensor> &lse_prev,
+  const std::optional<ms::Tensor> &q_seq_lens, const std::optional<ms::Tensor> &context_lens, const int64_t &head_num,
+  const float &scale_value, const int64_t &kv_head_num, const int64_t &mask_type, const int64_t &calc_type) {
   const std::string op_name = "RingMLA";
-  auto runner = std::make_shared<ms::pynative::RingMLARunner>(op_name);
+  auto runner = std::make_shared<ms_custom_ops::RingMLARunner>(op_name);
   MS_EXCEPTION_IF_NULL(runner);
 
   runner->SetRingMLAParam(head_num, scale_value, kv_head_num, mask_type, calc_type);
@@ -142,20 +128,27 @@ std::vector<ms::Tensor> npu_ring_mla(
 
   // Setup the runner with all parameters (including hash calculation)
   runner->Setup(op_name, query, query_rope, key, key_rope, value, mask, alibi_coeff, deq_scale_qk, deq_offset_qk,
-                deq_scale_pv, deq_offset_pv, quant_p, log_n, o_prev, lse_prev, q_seq_lens, context_lens,
-                head_num, scale_value, kv_head_num, mask_type, calc_type);
+                deq_scale_pv, deq_offset_pv, quant_p, log_n, o_prev, lse_prev, q_seq_lens, context_lens, head_num,
+                scale_value, kv_head_num, mask_type, calc_type);
 
   auto attn_out = GenAttnOutTensor(query);
   auto lse_out = GenLseOutTensor(query, lse_prev, calc_type);
 
-  std::vector<ms::Tensor> inputs = {
-      query, query_rope, key, key_rope, value,
-      ToTensorOrEmpty(mask), ToTensorOrEmpty(alibi_coeff),
-      ToTensorOrEmpty(deq_scale_qk), ToTensorOrEmpty(deq_offset_qk),
-      ToTensorOrEmpty(deq_scale_pv), ToTensorOrEmpty(deq_offset_pv),
-      ToTensorOrEmpty(quant_p), ToTensorOrEmpty(log_n),
-      ToTensorOrEmpty(o_prev), ToTensorOrEmpty(lse_prev)
-  };
+  std::vector<ms::Tensor> inputs = {query,
+                                    query_rope,
+                                    key,
+                                    key_rope,
+                                    value,
+                                    GetTensorOrEmpty(mask),
+                                    GetTensorOrEmpty(alibi_coeff),
+                                    GetTensorOrEmpty(deq_scale_qk),
+                                    GetTensorOrEmpty(deq_offset_qk),
+                                    GetTensorOrEmpty(deq_scale_pv),
+                                    GetTensorOrEmpty(deq_offset_pv),
+                                    GetTensorOrEmpty(quant_p),
+                                    GetTensorOrEmpty(log_n),
+                                    GetTensorOrEmpty(o_prev),
+                                    GetTensorOrEmpty(lse_prev)};
   std::vector<ms::Tensor> outputs = {attn_out, lse_out};
   runner->GetOrCreateKernel(inputs, outputs);
   runner->Run(inputs, outputs);
@@ -173,34 +166,20 @@ auto pyboost_ring_mla(const ms::Tensor &query, const ms::Tensor &query_rope, con
                       const std::optional<ms::Tensor> &lse_prev, const ms::Tensor &q_seq_lens,
                       const ms::Tensor &context_lens, const int64_t &head_num, const float &scale_value,
                       const int64_t &kv_head_num, const int64_t &mask_type, const int64_t &calc_type) {
-  return ms::pynative::PyboostRunner::Call<2>(
-      ms_custom_ops::npu_ring_mla, query, query_rope, key, key_rope, value, mask, alibi_coeff, deq_scale_qk,
-      deq_offset_qk, deq_scale_pv, deq_offset_pv, quant_p, log_n, o_prev, lse_prev, q_seq_lens, context_lens,
-      head_num, scale_value, kv_head_num, mask_type, calc_type);
+  return ms::pynative::PyboostRunner::Call<2>(ms_custom_ops::npu_ring_mla, query, query_rope, key, key_rope, value,
+                                              mask, alibi_coeff, deq_scale_qk, deq_offset_qk, deq_scale_pv,
+                                              deq_offset_pv, quant_p, log_n, o_prev, lse_prev, q_seq_lens, context_lens,
+                                              head_num, scale_value, kv_head_num, mask_type, calc_type);
 }
 
 MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
-  m.def("ring_mla", &pyboost_ring_mla, "Ring MLA",
-        pybind11::arg("query"),
-        pybind11::arg("query_rope"),
-        pybind11::arg("key"),
-        pybind11::arg("key_rope"),
-        pybind11::arg("value"),
-        pybind11::arg("mask") = std::nullopt,
-        pybind11::arg("alibi_coeff") = std::nullopt,
-        pybind11::arg("deq_scale_qk") = std::nullopt,
-        pybind11::arg("deq_offset_qk") = std::nullopt,
-        pybind11::arg("deq_scale_pv") = std::nullopt,
-        pybind11::arg("deq_offset_pv") = std::nullopt,
-        pybind11::arg("quant_p") = std::nullopt,
-        pybind11::arg("log_n") = std::nullopt,
-        pybind11::arg("o_prev") = std::nullopt,
-        pybind11::arg("lse_prev") = std::nullopt,
-        pybind11::arg("q_seq_lens"),
-        pybind11::arg("context_lens"),
-        pybind11::arg("head_num"),
-        pybind11::arg("scale_value"),
-        pybind11::arg("kv_head_num"),
-        pybind11::arg("mask_type"),
-        pybind11::arg("calc_type"));
+  m.def("ring_mla", &pyboost_ring_mla, "Ring MLA", pybind11::arg("query"), pybind11::arg("query_rope"),
+        pybind11::arg("key"), pybind11::arg("key_rope"), pybind11::arg("value"), pybind11::arg("mask") = std::nullopt,
+        pybind11::arg("alibi_coeff") = std::nullopt, pybind11::arg("deq_scale_qk") = std::nullopt,
+        pybind11::arg("deq_offset_qk") = std::nullopt, pybind11::arg("deq_scale_pv") = std::nullopt,
+        pybind11::arg("deq_offset_pv") = std::nullopt, pybind11::arg("quant_p") = std::nullopt,
+        pybind11::arg("log_n") = std::nullopt, pybind11::arg("o_prev") = std::nullopt,
+        pybind11::arg("lse_prev") = std::nullopt, pybind11::arg("q_seq_lens"), pybind11::arg("context_lens"),
+        pybind11::arg("head_num"), pybind11::arg("scale_value"), pybind11::arg("kv_head_num"),
+        pybind11::arg("mask_type"), pybind11::arg("calc_type"));
 }

@@ -30,31 +30,25 @@
 #include <vector>
 
 namespace ms_custom_ops {
-InternalNameMapper &InternalNameMapper::GetInstance() {
-  static InternalNameMapper name_mammer;
-  return name_mammer;
-}
-
 internal::DataType TransInternalDataType(TypeId ms_type) {
-  static const std::unordered_map<TypeId, internal::DataType>
-      kMSTypeToInternalType = {
-          {kNumberTypeFloat16, internal::DataType::kTypeFloat16},
-          {kNumberTypeBFloat16, internal::DataType::kTypeBF16},
-          {kNumberTypeFloat32, internal::DataType::kTypeFloat32},
-          {kNumberTypeDouble, internal::DataType::kTypeFloat64},
-          {kNumberTypeInt32, internal::DataType::kTypeInt32},
-          {kNumberTypeUInt32, internal::DataType::kTypeUint32},
-          {kNumberTypeInt16, internal::DataType::kTypeInt16},
-          {kNumberTypeUInt16, internal::DataType::kTypeUint16},
-          {kNumberTypeInt8, internal::DataType::kTypeInt8},
-          {kNumberTypeUInt8, internal::DataType::kTypeUint8},
-          {kNumberTypeInt64, internal::DataType::kTypeInt64},
-          {kNumberTypeUInt64, internal::DataType::kTypeUint64},
-          {kNumberTypeComplex64, internal::DataType::kTypeComplex64},
-          {kNumberTypeComplex128, internal::DataType::kTypeComplex128},
-          {kNumberTypeBool, internal::DataType::kTypeBool},
-          {kMetaTypeNone, internal::DataType::kTypeNone},
-      };
+  static const std::unordered_map<TypeId, internal::DataType> kMSTypeToInternalType = {
+    {kNumberTypeFloat16, internal::DataType::kTypeFloat16},
+    {kNumberTypeBFloat16, internal::DataType::kTypeBF16},
+    {kNumberTypeFloat32, internal::DataType::kTypeFloat32},
+    {kNumberTypeDouble, internal::DataType::kTypeFloat64},
+    {kNumberTypeInt32, internal::DataType::kTypeInt32},
+    {kNumberTypeUInt32, internal::DataType::kTypeUint32},
+    {kNumberTypeInt16, internal::DataType::kTypeInt16},
+    {kNumberTypeUInt16, internal::DataType::kTypeUint16},
+    {kNumberTypeInt8, internal::DataType::kTypeInt8},
+    {kNumberTypeUInt8, internal::DataType::kTypeUint8},
+    {kNumberTypeInt64, internal::DataType::kTypeInt64},
+    {kNumberTypeUInt64, internal::DataType::kTypeUint64},
+    {kNumberTypeComplex64, internal::DataType::kTypeComplex64},
+    {kNumberTypeComplex128, internal::DataType::kTypeComplex128},
+    {kNumberTypeBool, internal::DataType::kTypeBool},
+    {kMetaTypeNone, internal::DataType::kTypeNone},
+  };
 
   auto iter = kMSTypeToInternalType.find(ms_type);
   if (iter == kMSTypeToInternalType.end()) {
@@ -66,22 +60,21 @@ internal::DataType TransInternalDataType(TypeId ms_type) {
 }
 
 internal::TensorFormat TransInternalFormat(Format format) {
-  static const std::unordered_map<Format, internal::TensorFormat>
-      kMSFormatToInternalFormat = {
-          {DEFAULT_FORMAT, internal::TensorFormat::kFormatND},
-          {NCHW, internal::TensorFormat::kFormatNCHW},
-          {NHWC, internal::TensorFormat::kFormatNHWC},
-          {ND, internal::TensorFormat::kFormatND},
-          {NC1HWC0, internal::TensorFormat::kFormatNC1HWC0},
-          {FRACTAL_Z, internal::TensorFormat::kFormatFRACTAL_Z},
-          {NC1HWC0_C04, internal::TensorFormat::kFormatNC1HWC0_C04},
-          {HWCN, internal::TensorFormat::kFormatHWCN},
-          {NDHWC, internal::TensorFormat::kFormatNDHWC},
-          {FRACTAL_NZ, internal::TensorFormat::kFormatFRACTAL_NZ},
-          {NCDHW, internal::TensorFormat::kFormatNCDHW},
-          {NDC1HWC0, internal::TensorFormat::kFormatNDC1HWC0},
-          {FRACTAL_Z_3D, internal::TensorFormat::kFormatFRACTAL_Z_3D},
-      };
+  static const std::unordered_map<Format, internal::TensorFormat> kMSFormatToInternalFormat = {
+    {DEFAULT_FORMAT, internal::TensorFormat::kFormatND},
+    {NCHW, internal::TensorFormat::kFormatNCHW},
+    {NHWC, internal::TensorFormat::kFormatNHWC},
+    {ND, internal::TensorFormat::kFormatND},
+    {NC1HWC0, internal::TensorFormat::kFormatNC1HWC0},
+    {FRACTAL_Z, internal::TensorFormat::kFormatFRACTAL_Z},
+    {NC1HWC0_C04, internal::TensorFormat::kFormatNC1HWC0_C04},
+    {HWCN, internal::TensorFormat::kFormatHWCN},
+    {NDHWC, internal::TensorFormat::kFormatNDHWC},
+    {FRACTAL_NZ, internal::TensorFormat::kFormatFRACTAL_NZ},
+    {NCDHW, internal::TensorFormat::kFormatNCDHW},
+    {NDC1HWC0, internal::TensorFormat::kFormatNDC1HWC0},
+    {FRACTAL_Z_3D, internal::TensorFormat::kFormatFRACTAL_Z_3D},
+  };
 
   auto iter = kMSFormatToInternalFormat.find(format);
   if (iter == kMSFormatToInternalFormat.end()) {
@@ -89,21 +82,20 @@ internal::TensorFormat TransInternalFormat(Format format) {
   }
 
   switch (format) {
-  case NCHW:
-  case NHWC:
-  case NDHWC:
-  case NCDHW:
-    // some op not support NCHW, NHWC, ... format, current return ND format
-    return internal::TensorFormat::kFormatND;
-  default:
-    return iter->second;
+    case NCHW:
+    case NHWC:
+    case NDHWC:
+    case NCDHW:
+      // some op not support NCHW, NHWC, ... format, current return ND format
+      return internal::TensorFormat::kFormatND;
+    default:
+      return iter->second;
   }
 }
 
 bool CheckDefaultSupportFormat(const std::string &format) {
-  static std::set<std::string> default_support = {
-      kOpFormat_DEFAULT, kOpFormat_ND,    kOpFormat_NCHW,
-      kOpFormat_NHWC,    kOpFormat_NDHWC, kOpFormat_NCDHW};
+  static std::set<std::string> default_support = {kOpFormat_DEFAULT, kOpFormat_ND,    kOpFormat_NCHW,
+                                                  kOpFormat_NHWC,    kOpFormat_NDHWC, kOpFormat_NCDHW};
   return default_support.find(format) != default_support.end();
 }
-} // namespace ms_custom_ops
+}  // namespace ms_custom_ops

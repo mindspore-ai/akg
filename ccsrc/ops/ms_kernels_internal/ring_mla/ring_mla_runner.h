@@ -35,16 +35,12 @@
 #include "utils/check_convert_utils.h"
 #include "internal_pyboost_runner.h"
 
-using namespace ms_custom_ops;
-namespace ms::pynative {
-
+namespace ms_custom_ops {
 class RingMLARunner : public InternalPyboostRunner {
  public:
   using InternalPyboostRunner::InternalPyboostRunner;
-  void SetSeqLen(const std::optional<ms::Tensor> &q_seq_lens,
-                 const std::optional<ms::Tensor> &context_lens);
-  void SetRingMLAParam(int64_t head_num, float scale_value,
-                       int64_t kv_head_num, int64_t mask_type, int64_t calc_type);
+  void SetSeqLen(const std::optional<ms::Tensor> &q_seq_lens, const std::optional<ms::Tensor> &context_lens);
+  void SetRingMLAParam(int64_t head_num, float scale_value, int64_t kv_head_num, int64_t mask_type, int64_t calc_type);
 
  protected:
   bool UpdateParam() override;
@@ -56,6 +52,6 @@ class RingMLARunner : public InternalPyboostRunner {
   internal::RingMLAParam param_;
 };
 
-}  // namespace ms::pynative
+}  // namespace ms_custom_ops
 
 #endif  // CCSRC_OPS_MS_KERNELS_INTERNAL_RING_MLA_RING_MLA_RUNNER_H_
