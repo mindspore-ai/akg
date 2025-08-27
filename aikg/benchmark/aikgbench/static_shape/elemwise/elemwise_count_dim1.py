@@ -3,9 +3,8 @@ import torch.nn as nn
 
 
 class Model(nn.Module):
-    def __init__(self, dim=None):
+    def __init__(self):
         super(Model, self).__init__()
-        self.dim = dim
 
     def forward(self, input_tensor, cmp_val):
         # torch.eq(input, other, *, out=None)
@@ -16,7 +15,7 @@ class Model(nn.Module):
         # - Computing statistics on boolean masks
         # - Implementing certain counting mechanisms
         condition = (input_tensor == cmp_val)
-        return torch.sum(condition, dim=self.dim)
+        return torch.sum(condition, dim=1)
 
 
 def get_inputs():
@@ -28,6 +27,4 @@ def get_inputs():
 
 
 def get_init_inputs():
-    # Specific dim value for reduction
-    dim = 1  # Count along second dimension (feature dimension)
-    return [dim]
+    return []

@@ -28,5 +28,5 @@ def get_inputs():
 
 def get_init_inputs():
     # Parameters for add
-    alpha = 2.0
+    alpha = 1.0
     return [alpha]
