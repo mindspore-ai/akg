@@ -34,7 +34,8 @@ enum MlaInputIndex : size_t {
   kMlaInputNumHeadIndex,
   kMlaInputScaleValueIndex,
   kMlaInputNumKVHeadIndex,
-  kMlaInputMaskModeIndex,
+  kMlaInputMaskTypeIndex,
+  kMlaInputInputFormatIndex,
   kMlaInputIsRingIndex,
   kMlaInputsNum
 };
@@ -46,6 +47,8 @@ enum MlaMaskMode : int8_t {
   kMaskSpec,
   kMaskFree,
 };
+
+enum MlaInputFormat : int8_t { kKVFormatND = 0, kKVFormatNZ };
 }  // namespace ms_custom_ops
 
 #endif

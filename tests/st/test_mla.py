@@ -27,7 +27,7 @@ class MlaTestParam:
     """MlaTestParam"""
 
     def __init__(self, num_heads, kv_heads, block_size, head_size_nope, head_size_rope, num_blocks,
-                 q_seq_lens: list, context_lengths: list, tor, nope_ms_dtype, rope_ms_dtype, mask_mode: str,
+                 q_seq_lens: list, context_lengths: list, tor, nope_ms_dtype, rope_ms_dtype, mask_type: str,
                  is_quant_flag=False, run_mode=ms.GRAPH_MODE):
 
         self.num_heads = num_heads
@@ -42,7 +42,7 @@ class MlaTestParam:
         self.is_quant_flag = is_quant_flag
         self.nope_ms_dtype = nope_ms_dtype
         self.rope_ms_dtype = rope_ms_dtype
-        self.mask_mode = mask_mode
+        self.mask_type = mask_type
         self.mask_factor = -10000.0 if rope_ms_dtype == ms.float16 else 1.0
 
         self.batch = len(q_seq_lens)
@@ -72,11 +72,11 @@ class MlaTestParam:
             pre_qseqlen += qseqlen
         self.ori_pa_mask_tensor = Tensor(np_ori_pa_mask, dtype=self.rope_ms_dtype)
 
-        if self.mask_mode == "MASK_NONE":
+        if self.mask_type == "MASK_NONE":
             return None
 
 
-        if self.mask_mode == "MASK_SPEC":
+        if self.mask_type == "MASK_SPEC":
             pre_qseqlen = 0
             np_mask = np.zeros(
                 shape=(self.num_tokens, self.max_context_len)).astype(np.float32)
@@ -91,7 +91,7 @@ class MlaTestParam:
                 pre_qseqlen += qseqlen
             return np_mask
 
-        if self.mask_mode == "MASK_FREE":
+        if self.mask_type == "MASK_FREE":
             # [[-10000.0 -10000.0 -10000.0 ... -10000.0],
             # [0        -10000.0 -10000.0 ... -10000.0],
             # [0               0 -10000.0 ... -10000.0],
@@ -166,28 +166,34 @@ class Net(nn.Cell):
         self.kv_head_num = kv_head_num
         self.mask_type = mask_type
         self.tor = tor
-
+        self._ispynative = (context.get_context("mode") == context.PYNATIVE_MODE)
 
     def construct(self, q_nope, q_rope, ctkv, k_rope, block_tables, mask, deq_scale_qk, deq_scale_pv,
-                  q_seq_lens, batch_valid_length):
+                  q_seq_lens, batch_valid_length, input_format=0):
+        if self._ispynative:
+            q_lens_cpu = q_seq_lens.move_to("CPU")
+            kv_lens_cpu = batch_valid_length.move_to("CPU")
+        else:
+            q_lens_cpu = ops.move_to(q_seq_lens, "CPU")
+            kv_lens_cpu = ops.move_to(batch_valid_length, "CPU")
+
         return ms_custom_ops.mla(q_nope, q_rope, ctkv, k_rope, block_tables, mask, deq_scale_qk,
-                                     deq_scale_pv, q_seq_lens, batch_valid_length, self.q_head_num, self.tor,
-                                     self.kv_head_num, self.mask_type)
+                                     deq_scale_pv, q_lens_cpu, kv_lens_cpu, self.q_head_num, self.tor,
+                                     self.kv_head_num, self.mask_type, input_format=input_format)
 
 
 class GoldenNet(nn.Cell):
     """GoldenNet"""
 
-    def __init__(self, q_head_num, kv_head_num, mask_mode, tor, mla_v_dim):
+    def __init__(self, q_head_num, kv_head_num, mask_type, tor, mla_v_dim):
         super().__init__()
         self.q_head_num = q_head_num
         self.kv_head_num = kv_head_num
-        self.mask_mode = mask_mode
+        self.mask_type = mask_type
         self.tor = tor
         self.mla_v_dim = mla_v_dim
         self.op = PagedAttention(self.q_head_num, self.tor, self.kv_head_num, 'DEFAULT', 'MASK_DEFAULT',
                                  self.mla_v_dim)
-
 
     def construct(self, query, key_cache, value_cache, block_tables, batch_valid_length, antiquant_scale,
                   antiquant_offset, attn_mask, q_seq_lens, alibi_mask):
@@ -203,23 +209,32 @@ def run_mla(test_param: MlaTestParam):
     dyn_q_nope_tensor = Tensor(
         shape=dyn_q_nope_shape, dtype=test_param.q_nope_tensor.dtype)
 
-    if test_param.mask_mode == "MASK_NONE":
-        mask_mode = 0
-    elif test_param.mask_mode == "MASK_SPEC":
-        mask_mode = 3
-    elif test_param.mask_mode == "MASK_FREE":
-        mask_mode = 4
+    if test_param.mask_type == "MASK_NONE":
+        mask_type = 0
+    elif test_param.mask_type == "MASK_SPEC":
+        mask_type = 3
+    elif test_param.mask_type == "MASK_FREE":
+        mask_type = 4
     else:
-        mask_mode = -1
+        mask_type = -1
 
     net = Net(test_param.num_heads, test_param.kv_heads,
-              mask_mode, test_param.tor)
+              mask_type, test_param.tor)
     net.set_inputs(q_nope=dyn_q_nope_tensor)
     net.phase = "increment"
 
-    out, _ = net(test_param.q_nope_tensor, test_param.q_rope_tensor, test_param.ctkv_tensor, test_param.k_rope_tensor,
+    ctkv_tensor = test_param.ctkv_tensor
+    k_rope_tensor = test_param.k_rope_tensor
+    input_format = 0
+    if test_param.is_quant_flag:
+        ctkv_tensor = ms.jit(ms_custom_ops.trans_data)(ctkv_tensor, 1)
+        k_rope_tensor = ms.jit(ms_custom_ops.trans_data)(k_rope_tensor, 1)
+        input_format = 1
+
+    out, _ = net(test_param.q_nope_tensor, test_param.q_rope_tensor, ctkv_tensor, k_rope_tensor,
                  test_param.block_tables_tensor, test_param.mask_tensor, test_param.deq_scale_qk_tensor,
-                 test_param.deq_scale_pv_tensor, test_param.q_seq_lens_tensor, test_param.context_lengths_tensor)
+                 test_param.deq_scale_pv_tensor, test_param.q_seq_lens_tensor, test_param.context_lengths_tensor,
+                 input_format)
     return out
 
 
@@ -531,16 +546,15 @@ def test_mla_base(dtype, batch, mode):
 
 
 # int8 need set MS_INTERNAL_ENABLE_NZ_OPS="Mla"
-@pytest.mark.skip
-@pytest.mark.level1
+@pytest.mark.level0
 @pytest.mark.platform_arm_ascend910b_training
 @pytest.mark.env_onecard
-@pytest.mark.parametrize('mask_mode', ["MASK_NONE"])
+@pytest.mark.parametrize('mask_type', ["MASK_NONE"])
 @pytest.mark.parametrize("q_seq_lens", [[1, 1, 1, 1]])
 @pytest.mark.parametrize('dtype', [ms.bfloat16, ms.float16])
 @pytest.mark.parametrize('q_head_num', [32, 96])
 @pytest.mark.parametrize('block_size', [16, 128])
-def test_mla_int8(mask_mode, q_seq_lens, dtype, q_head_num, block_size):
+def test_mla_int8(mask_type, q_seq_lens, dtype, q_head_num, block_size):
     """
     Feature: test mla
     Description: test mla.
@@ -548,7 +562,7 @@ def test_mla_int8(mask_mode, q_seq_lens, dtype, q_head_num, block_size):
     """
     context_lengths = [192, 193, 194, 195]
     test_param = MlaTestParam(q_head_num, 1, block_size, 512, 64, 1024, q_seq_lens, context_lengths, 0.001,
-                              ms.int8, dtype, mask_mode, True)
+                              ms.int8, dtype, mask_type, True)
     run_test_with_numpy_golden(test_param)
 
 
@@ -556,12 +570,12 @@ def test_mla_int8(mask_mode, q_seq_lens, dtype, q_head_num, block_size):
 @pytest.mark.skip
 @pytest.mark.platform_arm_ascend910b_training
 @pytest.mark.env_onecard
-@pytest.mark.parametrize('mask_mode', ["MASK_SPEC"])
+@pytest.mark.parametrize('mask_type', ["MASK_SPEC"])
 @pytest.mark.parametrize("q_seq_lens", [[1, 1, 3, 1]])
 @pytest.mark.parametrize('dtype', [ms.bfloat16])
 @pytest.mark.parametrize('q_head_num', [32])
 @pytest.mark.parametrize('block_size', [128])
-def test_mla_int8_mtp(mask_mode, q_seq_lens, dtype, q_head_num, block_size):
+def test_mla_int8_mtp(mask_type, q_seq_lens, dtype, q_head_num, block_size):
     """
     Feature: test mla
     Description: test mla.
@@ -569,7 +583,7 @@ def test_mla_int8_mtp(mask_mode, q_seq_lens, dtype, q_head_num, block_size):
     """
     context_lengths = [192, 193, 194, 195]
     test_param = MlaTestParam(q_head_num, 1, block_size, 512, 64, 1024, q_seq_lens, context_lengths, 0.001,
-                              ms.int8, dtype, mask_mode, True)
+                              ms.int8, dtype, mask_type, True)
     run_test_with_numpy_golden(test_param)
 
 
