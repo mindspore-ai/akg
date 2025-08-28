@@ -114,8 +114,46 @@ def _get_ascend_env_path():
                             "please make sure environment variable 'ASCEND_HOME_PATH' is set correctly.")
     return env_script_path
 
+
+def generate_docs():
+    """Generate YAML documentation from Markdown sources."""
+    logger.info("Generating documentation...")
+    doc_generator_script = os.path.join(ROOT_DIR, "scripts", "doc_generator.py")
+    
+    if not os.path.exists(doc_generator_script):
+        logger.warning(f"Documentation generator script not found: {doc_generator_script}")
+        return
+    
+    try:
+        # Run the documentation generator
+        result = subprocess.run(
+            [sys.executable, doc_generator_script],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            logger.info("Documentation generated successfully")
+            if result.stdout:
+                logger.info(f"Generator output: {result.stdout}")
+        else:
+            logger.warning(f"Documentation generation failed with exit code {result.returncode}")
+            if result.stderr:
+                logger.warning(f"Generator error: {result.stderr}")
+    except Exception as e:
+        logger.warning(f"Failed to run documentation generator: {e}")
+
 class CustomBuildExt(build_ext):
     ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
+
+    def run(self):
+        """Override run method to include documentation generation."""
+        # Generate documentation before building extensions
+        generate_docs()
+        
+        # Continue with normal build process
+        super().run()
 
     def build_extension(self, ext):
         if ext.name == "ms_custom_ops":

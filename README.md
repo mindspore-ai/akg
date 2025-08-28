@@ -81,7 +81,8 @@ ms_custom_ops/
 │   ├── ascendc/
 │   |   └── {op_name}_op.yaml
 │   ├── doc/
-│   |   └── {op_name}_doc.yaml
+│   |   ├── {op_name}.md          # Markdown源文件
+│   |   └── {op_name}_doc.yaml    # 生成的文档YAML文件
 │   └── ms_kernels_internal/
 │   |   └── {op_name}_op.yaml
 ├── tests/                        # 测试文件
