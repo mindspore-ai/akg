@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-// =============================================================================
-// GRAPH MODE IMPLEMENTATION
-// =============================================================================
-
 #include "ccsrc/base/ms_kernels_internal/graphmode/internal_kernel_mod.h"
 #include "ir/tensor.h"
 #include "kernel/ascend/acl_ir/acl_convert.h"
@@ -34,26 +30,59 @@
 #include <utility>
 #include <vector>
 
+// =============================================================================
+// COMMON FUNCTION
+// =============================================================================
+
+namespace {
+enum class CacheMode {
+  ND = 0,
+  NZ = 1,
+};
+}
+
 namespace ms_custom_ops {
+enum InputIndex {
+  kInputKeyIndex = 0,
+  kInputValueIndex = 1,
+  kInputKeyCacheIndex = 2,
+  kInputValueCacheIndex = 3,
+  kInputSlotMappingIndex = 4,
+  kInputCacheModeIndex = 5,
+  kInputHeadNumIndex = 6,
+};
+
+enum OutputIndex { kOutputIndex = 0 };
+
+inline internal::InternalOpPtr CreateReshapeAndCacheOpWithFormat(const internal::InputsImmutableInfoList &inputs,
+                                                                 const internal::OutputsImmutableInfoList &outputs,
+                                                                 const internal::ReshapeAndCacheParam &param,
+                                                                 int32_t cache_mode) {
+  if (cache_mode == static_cast<int32_t>(CacheMode::NZ)) {
+    auto inputs_clone = inputs;
+    inputs_clone[kInputKeyCacheIndex].SetFormat(internal::kFormatFRACTAL_NZ);
+    inputs_clone[kInputValueCacheIndex].SetFormat(internal::kFormatFRACTAL_NZ);
+    return internal::CreateAsdReshapeAndCacheOp(inputs_clone, outputs, param,
+                                                internal::kInternalAsdReshapeAndCacheOpName);
+  }
+  return internal::CreateAsdReshapeAndCacheOp(inputs, outputs, param, internal::kInternalAsdReshapeAndCacheOpName);
+}
+
+// =============================================================================
+// GRAPH MODE IMPLEMENTATION
+// =============================================================================
+
 class OPS_API CustomReshapeAndCacheOpFuncImpl : public OpFuncImpl {
  public:
   ShapeArray InferShape(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) const override {
-    return {input_infos[0]->GetShape()};
+    return {input_infos[kInputKeyIndex]->GetShape()};
   }
   std::vector<TypeId> InferType(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) const override {
-    return {input_infos[0]->GetType()};
+    return {input_infos[kInputKeyIndex]->GetType()};
   }
-
   bool GeneralInferRegistered() const override { return true; }
 };
 
-constexpr size_t kInputKeyIndex = 0;
-constexpr size_t kInputValueIndex = 1;
-constexpr size_t kInputKeyCacheIndex = 2;
-constexpr size_t kInputValueCacheIndex = 3;
-constexpr size_t kInputSlotMappingIndex = 4;
-constexpr size_t kInputHeadNumIndex = 5;
-constexpr size_t kOutputIndex = 0;
 class CustomReshapeAndCache : public InternalKernelMod {
  public:
   CustomReshapeAndCache() : InternalKernelMod(), skip_execution_(false) {}
@@ -103,13 +132,22 @@ class CustomReshapeAndCache : public InternalKernelMod {
                                        const std::vector<KernelTensor *> &ms_inputs,
                                        const std::vector<KernelTensor *> &ms_outputs) override {
     internal::ReshapeAndCacheParam param;
-    auto head_num = ms_inputs.at(internal::kIndex5);
+    auto head_num = ms_inputs.at(kInputHeadNumIndex);
     if (head_num->dtype_id() == TypeId::kNumberTypeInt64) {
       param.head_num = static_cast<int32_t>(head_num->GetValue<int64_t>().value());
     } else {
       MS_LOG(EXCEPTION) << "ReshapeAndCache [head_num]'s dtype wrong, expect int64, but got: " << head_num->dtype_id();
     }
-    return internal::CreateAsdReshapeAndCacheOp(inputs, outputs, param, internal::kInternalAsdReshapeAndCacheOpName);
+    auto cache_mode = ms_inputs.at(kInputCacheModeIndex);
+    int32_t cache_node_val = 0;
+    if (cache_mode->dtype_id() == TypeId::kNumberTypeInt64) {
+      cache_node_val = static_cast<int32_t>(cache_mode->GetValue<int64_t>().value());
+    } else {
+      MS_LOG(EXCEPTION) << "ReshapeAndCache [cache_mode]'s dtype wrong, expect int64, but got: "
+                        << cache_mode->dtype_id();
+    }
+
+    return CreateReshapeAndCacheOpWithFormat(inputs, outputs, param, cache_node_val);
   }
 
  private:
@@ -132,33 +170,40 @@ class ReshapeAndCacheRunner : public InternalPyboostRunner {
   using InternalPyboostRunner::InternalPyboostRunner;
 
   void SetHeadNum(const int32_t &head_num) { this->head_num_ = head_num; }
+  void SetCacheMode(const int32_t &cache_mode) { this->cache_mode_ = cache_mode; }
 
  protected:
   internal::InternalOpPtr CreateKernel(const internal::InputsImmutableInfoList &inputs,
                                        const internal::OutputsImmutableInfoList &outputs) override {
     internal::ReshapeAndCacheParam param;
     param.head_num = this->head_num_;
-    return internal::CreateAsdReshapeAndCacheOp(inputs, outputs, param, internal::kInternalAsdReshapeAndCacheOpName);
+
+    return CreateReshapeAndCacheOpWithFormat(inputs, outputs, param, this->cache_mode_);
   }
 
  private:
   int32_t head_num_{0};
+  int32_t cache_mode_{0};
 };
 
 void npu_reshape_and_cache(const ms::Tensor &key, const std::optional<ms::Tensor> &value,
                            const std::optional<ms::Tensor> &key_cache, const std::optional<ms::Tensor> &value_cache,
-                           const std::optional<ms::Tensor> &slot_mapping, std::optional<int64_t> head_num) {
+                           const std::optional<ms::Tensor> &slot_mapping, std::optional<int64_t> cache_mode,
+                           std::optional<int64_t> head_num) {
   auto op_name = "ReshapeAndCache";
   auto runner = std::make_shared<ms_custom_ops::ReshapeAndCacheRunner>(op_name);
   MS_EXCEPTION_IF_NULL(runner);
 
-  // Set head_num if provided
+  if (cache_mode.has_value()) {
+    runner->SetCacheMode(static_cast<int32_t>(cache_mode.value()));
+  }
+
   if (head_num.has_value()) {
     runner->SetHeadNum(static_cast<int32_t>(head_num.value()));
   }
 
   // Setup the runner with all parameters (including hash calculation)
-  runner->Setup(op_name, key, value, key_cache, value_cache, slot_mapping, head_num);
+  runner->Setup(op_name, key, value, key_cache, value_cache, slot_mapping, cache_mode, head_num);
 
   // if you need infer shape and type, you can use this
   // auto result = GenResultTensor(key);
@@ -173,14 +218,15 @@ void npu_reshape_and_cache(const ms::Tensor &key, const std::optional<ms::Tensor
 
 auto pyboost_reshape_and_cache(const ms::Tensor &key, const std::optional<ms::Tensor> &value,
                                const std::optional<ms::Tensor> &key_cache, const std::optional<ms::Tensor> &value_cache,
-                               const std::optional<ms::Tensor> &slot_mapping, std::optional<int64_t> head_num) {
+                               const std::optional<ms::Tensor> &slot_mapping, std::optional<int64_t> cache_mode,
+                               std::optional<int64_t> head_num) {
   return ms::pynative::PyboostRunner::Call<0>(ms_custom_ops::npu_reshape_and_cache, key, value, key_cache, value_cache,
-                                              slot_mapping, head_num);
+                                              slot_mapping, cache_mode, head_num);
 }
 
 MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
   m.def("reshape_and_cache", &pyboost_reshape_and_cache, "Reshape And Cache", pybind11::arg("key"),
         pybind11::arg("value") = std::nullopt, pybind11::arg("key_cache") = std::nullopt,
         pybind11::arg("value_cache") = std::nullopt, pybind11::arg("slot_mapping") = std::nullopt,
-        pybind11::arg("head_num") = std::nullopt);
+        pybind11::arg("cache_mode") = std::nullopt, pybind11::arg("head_num") = std::nullopt);
 }

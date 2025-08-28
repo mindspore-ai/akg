@@ -1,0 +1,11 @@
+#operator trans_data
+trans_data:
+  args:
+    input:
+      dtype: tensor
+    transdata_type:
+      dtype: int  
+      default: 0  # 0: FRACTAL_NZ_TO_ND, 1: ND_TO_FRACTAL_NZ
+  returns:
+    output:
+      dtype: tensor

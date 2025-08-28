@@ -15,6 +15,9 @@ reshape_and_cache:
     slot_mapping:
       dtype: tensor
       default: None
+    cache_mode:
+      dtype: int
+      default: 0
     head_num:
       dtype: int
       default: 0
@@ -26,5 +29,3 @@ reshape_and_cache:
   returns:
     out:
       dtype: tensor
-  class:
-    name: ReshapeAndCache

@@ -332,7 +332,7 @@ private:
 };
 } // namespace ms_custom_ops
 
-// 注册算子infer函数，用于在计算过程中推导算子输出shape和dtype，以便分配算子输出内存
+// 注册算子infer函数
 REG_GRAPH_MODE_OP(add, ms_custom_ops::AddCustomOpFuncImpl,
                   ms_custom_ops::AddCustomAscend);
 
@@ -360,6 +360,7 @@ ms::Tensor custom_add(const ms::Tensor &x, const ms::Tensor &y) {
 
 // pybind调用函数
 auto pyboost_add(const ms::Tensor &x, const ms::Tensor &y) {
+  // Call<输出个数>
   return ms::pynative::PyboostRunner::Call<1>(custom_add, x, y);
 }
 } // namespace ms_custom_ops
@@ -385,77 +386,105 @@ pyboost:
 
 以reshape_and_cache算子为例：
 ```cpp
-#include "internal_kernel_mod.h"
-#include "ir/tensor.h"
-#include "kernel/ascend/acl_ir/acl_convert.h"
-#include "mindspore/ops/ops_utils/op_utils.h"
+#include "ccsrc/base/ms_kernels_internal/graphmode/internal_kernel_mod.h"
 #include "ms_extension/api.h"
-#include "ops/base_operator.h"
-#include "ops/ops_func_impl/op_func_impl.h"
-#include "ops/ops_func_impl/simple_infer.h"
-#include "runtime/device/kernel_runtime.h"
-#include "utils/check_convert_utils.h"
-#include <map>
-#include <string>
-#include <utility>
-#include <vector>
+#include "ccsrc/utils/utils.h"
+
+namespace ms_custom_ops {
 
 // =============================================================================
 // 图模式调用实现
 // =============================================================================
 
-namespace ms_custom_ops {
-// 算子infer函数，需要实现InferShape和InferType函数
+// 1. 算子infer函数
 class OPS_API CustomReshapeAndCacheOpFuncImpl : public OpFuncImpl {
 public:
-  // 算子infershape，需要返回算子所有输出的shape大小
   ShapeArray InferShape(const PrimitivePtr &primitive,
                         const InferInfoPtrList &input_infos) const override {
-    return {input_infos[0]->GetShape()};
+    return {input_infos[0]->GetShape()}; // 输出shape与第一个输入相同
   }
 
-  // 算子infertype，需要返回算子所有输出的数据类型
   std::vector<TypeId> InferType(const PrimitivePtr &primitive,
                                 const InferInfoPtrList &input_infos) const override {
-    return {input_infos[0]->GetType()};
+    return {input_infos[0]->GetType()}; // 输出类型与第一个输入相同
   }
-
+  
   bool GeneralInferRegistered() const override { return true; }
 };
 
-constexpr size_t kInputKeyIndex = 0;
-constexpr size_t kInputValueIndex = 1;
-constexpr size_t kInputKeyCacheIndex = 2;
-constexpr size_t kInputValueCacheIndex = 3;
-constexpr size_t kInputSlotMappingIndex = 4;
-constexpr size_t kInputHeadNumIndex = 5;
-constexpr size_t kOutputIndex = 0;
-// 算子graph模式调用，需要继承InternalKernelMod基类，并实现InitKernelInputsOutputsIndex和CreateKernel函数
+// 2. 算子KernelMod
 class CustomReshapeAndCache : public InternalKernelMod {
 public:
-  CustomReshapeAndCache() : InternalKernelMod() {}
+  CustomReshapeAndCache() : InternalKernelMod(), skip_execution_(false) {}
   ~CustomReshapeAndCache() = default;
 
-  // 是算子前端定义的输入输出和算子kernel输入输出位置索引的映射关系。
   void InitKernelInputsOutputsIndex() override {
-    kernel_inputs_index_ = {kInputKeyIndex, kInputValueIndex, kInputKeyCacheIndex,
-                            kInputValueCacheIndex, kInputSlotMappingIndex};
-    kernel_outputs_index_ = {kOutputIndex};
+    // 指定参与计算的输入输出索引
+    kernel_inputs_index_ = {0, 1, 2, 3, 4}; // key, value, key_cache, value_cache, slot_mapping
+    kernel_outputs_index_ = {0};
+  }
+
+  // 重写Resize处理零维度输入
+  int Resize(const std::vector<KernelTensor *> &inputs, 
+             const std::vector<KernelTensor *> &outputs) override {
+    // 检查输入是否包含0维度，如果有则跳过执行
+    for (const auto &input : inputs) {
+      if (input == nullptr) continue;
+      auto shape = input->GetShapeVector();
+      for (const auto &dim : shape) {
+        if (dim == 0) {
+          skip_execution_ = true;
+          return KernelMod::Resize(inputs, outputs);
+        }
+      }
+    }
+    skip_execution_ = false;
+    return InternalKernelMod::Resize(inputs, outputs);
+  }
+
+  // 重写Launch处理跳过执行标志
+  bool Launch(const std::vector<KernelTensor *> &inputs,
+              const std::vector<KernelTensor *> &workspace,
+              const std::vector<KernelTensor *> &outputs, 
+              void *stream_ptr) override {
+    if (skip_execution_) {
+      return true; // 跳过执行，直接返回成功
+    }
+    return InternalKernelMod::Launch(inputs, workspace, outputs, stream_ptr);
   }
 
 protected:
-  // 创建具体算子的op实例
-  internal::InternalOpPtr CreateKernel(const internal::InputsImmutableInfoList &inputs,
-                                       const internal::OutputsImmutableInfoList &outputs,
-                                       const std::vector<KernelTensor *> &ms_inputs,
-                                       const std::vector<KernelTensor *> &ms_outputs) override {
-    return internal::CreateReshapeAndCacheOp(
-        inputs, outputs, internal::kInternalReshapeAndCacheOpName);
+  internal::InternalOpPtr CreateKernel(
+      const internal::InputsImmutableInfoList &inputs,
+      const internal::OutputsImmutableInfoList &outputs,
+      const std::vector<KernelTensor *> &ms_inputs,
+      const std::vector<KernelTensor *> &ms_outputs) override {
+    // 从输入张量中提取参数
+    internal::ReshapeAndCacheParam param;
+    auto head_num = ms_inputs.at(6); // head_num在第6个位置
+    param.head_num = static_cast<int32_t>(head_num->GetValue<int64_t>().value());
+    
+    auto cache_mode = ms_inputs.at(5); // cache_mode在第5个位置
+    int32_t cache_mode_val = static_cast<int32_t>(cache_mode->GetValue<int64_t>().value());
+
+    // 根据cache_mode设置格式：NZ格式需要特殊处理
+    if (cache_mode_val == 1) { // NZ格式
+      auto inputs_clone = inputs;
+      inputs_clone[2].SetFormat(internal::kFormatFRACTAL_NZ); // key_cache
+      inputs_clone[3].SetFormat(internal::kFormatFRACTAL_NZ); // value_cache
+      return internal::CreateAsdReshapeAndCacheOp(inputs_clone, outputs, param,
+                                                  internal::kInternalAsdReshapeAndCacheOpName);
+    }
+    return internal::CreateAsdReshapeAndCacheOp(inputs, outputs, param, 
+                                                internal::kInternalAsdReshapeAndCacheOpName);
   }
+
+private:
+  bool skip_execution_; // 跳过执行标志
 };
 } // namespace ms_custom_ops
 
-// 注册算子infer函数，用于在计算过程中推导算子输出shape和dtype，以便分配算子输出内存
+// 注册算子
 REG_GRAPH_MODE_OP(reshape_and_cache, ms_custom_ops::CustomReshapeAndCacheOpFuncImpl,
                   ms_custom_ops::CustomReshapeAndCache);
 
@@ -465,227 +494,217 @@ REG_GRAPH_MODE_OP(reshape_and_cache, ms_custom_ops::CustomReshapeAndCacheOpFuncI
 
 #include "internal_pyboost_runner.h"
 
-using namespace ms_custom_ops;
-namespace ms::pynative {
-
-// 创建算子pyboost执行器，需要继承InternalPyboostRunner
+namespace ms_custom_ops {
+// 1. 创建算子Pyboost执行器
 class ReshapeAndCacheRunner : public InternalPyboostRunner {
 public:
   using InternalPyboostRunner::InternalPyboostRunner;
 
   void SetHeadNum(const int32_t &head_num) { this->head_num_ = head_num; }
+  void SetCacheMode(const int32_t &cache_mode) { this->cache_mode_ = cache_mode; }
 
 protected:
-   // 创建具体算子的op实例
-  internal::InternalOpPtr CreateKernel(const internal::InputsImmutableInfoList &inputs,
-                                       const internal::OutputsImmutableInfoList &outputs) override {
-    return internal::CreateReshapeAndCacheOp(
-        inputs, outputs, internal::kInternalReshapeAndCacheOpName);
+  internal::InternalOpPtr CreateKernel(
+      const internal::InputsImmutableInfoList &inputs,
+      const internal::OutputsImmutableInfoList &outputs) override {
+    internal::ReshapeAndCacheParam param;
+    param.head_num = this->head_num_;
+    
+    // 根据cache_mode设置格式
+    if (this->cache_mode_ == 1) { // NZ格式
+      auto inputs_clone = inputs;
+      inputs_clone[2].SetFormat(internal::kFormatFRACTAL_NZ);
+      inputs_clone[3].SetFormat(internal::kFormatFRACTAL_NZ);
+      return internal::CreateAsdReshapeAndCacheOp(inputs_clone, outputs, param,
+                                                  internal::kInternalAsdReshapeAndCacheOpName);
+    }
+    return internal::CreateAsdReshapeAndCacheOp(inputs, outputs, param, 
+                                                internal::kInternalAsdReshapeAndCacheOpName);
   }
 
 private:
   int32_t head_num_{0};
+  int32_t cache_mode_{0};
 };
 
-// 算子注册
-MS_KERNELS_INTERNAL_NAME_REG(ReshapeAndCache,
-                             internal::kInternalReshapeAndCacheOpName);
-} // namespace ms::pynative
-
-namespace ms_custom_ops {
-// 获取tensor或创建空tensor
-ms::Tensor GetTensorOrEmpty(const std::optional<ms::Tensor> &opt_tensor) {
-  return opt_tensor.has_value() ? opt_tensor.value() : ms::Tensor();
-}
-
-// 算子kernel调用函数，需要手动创建输出tensor
+// 2. 算子kernel调用函数
 void npu_reshape_and_cache(const ms::Tensor &key,
                            const std::optional<ms::Tensor> &value,
                            const std::optional<ms::Tensor> &key_cache,
                            const std::optional<ms::Tensor> &value_cache,
                            const std::optional<ms::Tensor> &slot_mapping,
+                           std::optional<int64_t> cache_mode,
                            std::optional<int64_t> head_num) {
   auto op_name = "ReshapeAndCache";
-  auto runner = std::make_shared<ms::pynative::ReshapeAndCacheRunner>(op_name);
+  auto runner = std::make_shared<ms_custom_ops::ReshapeAndCacheRunner>(op_name);
   MS_EXCEPTION_IF_NULL(runner);
 
-  // 设置head_num属性
+  // 设置参数
+  if (cache_mode.has_value()) {
+    runner->SetCacheMode(static_cast<int32_t>(cache_mode.value()));
+  }
   if (head_num.has_value()) {
     runner->SetHeadNum(static_cast<int32_t>(head_num.value()));
   }
 
-  // 索引入参设置到runner
-  runner->Setup(op_name, key, value, key_cache, value_cache, slot_mapping,
-                head_num);
-
-  // 获取输入输出tensor;
+  // 执行算子
+  runner->Setup(op_name, key, value, key_cache, value_cache, slot_mapping, 
+                cache_mode, head_num);
   std::vector<ms::Tensor> inputs = {
       key, GetTensorOrEmpty(value), GetTensorOrEmpty(key_cache),
       GetTensorOrEmpty(value_cache), GetTensorOrEmpty(slot_mapping)};
   std::vector<ms::Tensor> outputs = {};
   runner->GetOrCreateKernel(inputs, outputs);
   runner->Run(inputs, outputs);
-  return;
 }
-} // namespace ms_custom_ops
 
-// pybind调用函数
+// 3. pybind接口注册
 auto pyboost_reshape_and_cache(const ms::Tensor &key,
                                const std::optional<ms::Tensor> &value,
                                const std::optional<ms::Tensor> &key_cache,
                                const std::optional<ms::Tensor> &value_cache,
                                const std::optional<ms::Tensor> &slot_mapping,
+                               std::optional<int64_t> cache_mode,
                                std::optional<int64_t> head_num) {
-  return ms::pynative::PyboostRunner::Call<0>(
-      ms_custom_ops::npu_reshape_and_cache, key, value, key_cache, value_cache,
-      slot_mapping, head_num);
+  // Call<输出Tensor的个数>(算子kernel调用函数, 输入Tensor...)
+  return ms::pynative::PyboostRunner::Call<0>(ms_custom_ops::npu_reshape_and_cache, 
+                                             key, value, key_cache, value_cache,
+                                             slot_mapping, cache_mode, head_num);
 }
+} // namespace ms_custom_ops
 
-// 算子接口注册，对接C++和python接口
+// 注册Python接口
 MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
   m.def("reshape_and_cache", &pyboost_reshape_and_cache, "Reshape And Cache",
-        pybind11::arg("key"), pybind11::arg("value") = std::nullopt,
+        pybind11::arg("key"),
+        pybind11::arg("value") = std::nullopt,
         pybind11::arg("key_cache") = std::nullopt,
         pybind11::arg("value_cache") = std::nullopt,
         pybind11::arg("slot_mapping") = std::nullopt,
+        pybind11::arg("cache_mode") = std::nullopt,
         pybind11::arg("head_num") = std::nullopt);
 }
 ```
 
-#### 3. 编写测试
+#### 3. 特殊format的支持
 
-创建测试文件 `tests/st/test_my_op.py`：
+**背景说明**：
+某些算子需要支持特殊的数据格式（如FRACTAL_NZ），但MindSpore框架不提供自动format推导能力。因此需要通过用户参数来指定格式类型，并配合`trans_data`算子进行格式转换。
 
+**核心概念**：
+
+1. **格式转换算子**：`trans_data`
+   - `transdata_type=0`: FRACTAL_NZ_TO_ND (NZ→ND)
+   - `transdata_type=1`: ND_TO_FRACTAL_NZ (ND→NZ)
+   - 用于在不同数据格式间进行无损转换
+
+2. **算子格式适配**：通过参数控制内部格式处理
+   - `cache_mode=0`: ND格式模式（默认）
+   - `cache_mode=1`: FRACTAL_NZ格式模式
+
+**典型使用模式**：
+
+**模式1：支持多格式的算子**
 ```python
-import pytest
-import numpy as np
-import mindspore as ms
-import ms_custom_ops
+# ND格式模式（默认）
+ms_custom_ops.reshape_and_cache(key, value, key_cache, value_cache, 
+                                slot_mapping, cache_mode=0)
 
-@pytest.mark.parametrize('exec_mode', [ms.context.GRAPH_MODE, ms.context.PYNATIVE_MODE])
-def test_my_op(exec_mode):
-    ms.set_context(mode=exec_mode)
-    ms.set_device("Ascend")
-    
-    # 准备输入数据
-    input_data = np.random.rand(10, 20).astype(np.float16)
-    
-    # 执行算子
-    output = ms_custom_ops.my_op(ms.Tensor(input_data))
-    
-    # 验证结果
-    expected = # 计算期望结果
-    assert np.allclose(output.asnumpy(), expected, rtol=1e-3, atol=1e-3)
+# FRACTAL_NZ格式模式
+# 1. 将ND格式缓存转换为NZ格式
+key_cache_nz = ms_custom_ops.trans_data(key_cache, transdata_type=1)  # ND→NZ
+value_cache_nz = ms_custom_ops.trans_data(value_cache, transdata_type=1)  # ND→NZ
+
+# 2. 使用NZ格式模式执行算子
+ms_custom_ops.reshape_and_cache(key, value, key_cache_nz, value_cache_nz, 
+                                slot_mapping, cache_mode=1)
+
+# 3. 如需要，将结果转换回ND格式进行验证
+key_cache_result = ms_custom_ops.trans_data(key_cache_nz, transdata_type=0)  # NZ→ND
+value_cache_result = ms_custom_ops.trans_data(value_cache_nz, transdata_type=0)  # NZ→ND
 ```
 
-
-## 🐛 调试技巧
-
-### 1. 日志输出
-
-设置环境变量开启详细日志：
-```bash
-export GLOG_v=3
-export ASCEND_GLOBAL_LOG_LEVEL=3
-```
-
-### 2. 性能分析
-
-使用 MindSpore Profiler 分析算子性能：
+**模式2：专用格式转换算子**
 ```python
-from mindspore.profiler import Profiler
-
-profiler = Profiler()
-# 执行算子
-profiler.analyse()
+# 单纯的格式转换
+nz_tensor = ms_custom_ops.trans_data(nd_tensor, transdata_type=1)  # ND→NZ
+nd_tensor = ms_custom_ops.trans_data(nz_tensor, transdata_type=0)   # NZ→ND
 ```
 
-### 3. 常见问题
+**实现步骤**：
 
-**Q: Resize 接口返回 KRET_RESIZE_FAILED**  
-A: 检查以下几点：
-1. 确保 `CreateKernel` 方法正确实现并返回有效的内部算子
-2. 验证 `UpdateParam` 方法是否正确处理参数
-3. 检查输入输出索引映射是否正确注册
-4. 查看日志确认具体的失败原因
+1. **添加格式选择参数**
+   - 为算子添加format选择参数（如`cache_mode`）
+   - 定义格式映射关系：`0`=ND格式，`1`=FRACTAL_NZ格式
 
-**Q: 编译失败提示找不到 CANN 环境**  
-A: 确保正确安装昇腾 CANN 工具包，并设置环境变量：
-```bash
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
+2. **实现格式转换逻辑**
+   - 在`CreateKernel`函数中根据参数值判断是否需要格式转换
+   - 对需要特殊格式的输入张量调用`SetFormat()`方法
+
+**代码示例**（以reshape_and_cache为例）：
+```cpp
+// 在CreateKernel函数中实现格式适配
+internal::InternalOpPtr CreateKernel(
+    const internal::InputsImmutableInfoList &inputs,
+    const internal::OutputsImmutableInfoList &outputs,
+    const std::vector<KernelTensor *> &ms_inputs,
+    const std::vector<KernelTensor *> &ms_outputs) override {
+  
+  // 获取格式参数
+  auto cache_mode = ms_inputs.at(5); // cache_mode参数位置
+  int32_t cache_mode_val = static_cast<int32_t>(cache_mode->GetValue<int64_t>().value());
+  
+  // 根据参数设置特殊格式
+  if (cache_mode_val == 1) { // FRACTAL_NZ格式
+    auto inputs_clone = inputs;
+    inputs_clone[2].SetFormat(internal::kFormatFRACTAL_NZ); // key_cache
+    inputs_clone[3].SetFormat(internal::kFormatFRACTAL_NZ); // value_cache
+    return internal::CreateAsdReshapeAndCacheOp(inputs_clone, outputs, param, op_name);
+  }
+  
+  // 默认ND格式，无需转换
+  return internal::CreateAsdReshapeAndCacheOp(inputs, outputs, param, op_name);
+}
 ```
 
-**Q: 性能不如预期**  
-A: 1) 检查是否正确使用了缓存机制；2) 确认内存访问模式是否高效；3) 使用 Profiler 定位瓶颈。
+**测试中的使用模式**（以NZ格式测试为例）：
+```cpp
+// NZ Format Test Flow:
+// 1. Create initial ND format cache tensors
+np_k, np_v, np_k_cache, np_v_cache, np_slot_map = create_nd_inputs(...)
 
-**Q: PyBoost 模式下算子执行失败**  
-A: 检查以下几点：
-1. 确保 `CreateKernel` 方法正确实现并返回有效的内部算子
-2. 验证 `LaunchKernel` 方法中的张量处理逻辑
-3. 检查 `Setup` 方法中的参数设置和 hash 计算
-4. 确认 Python 模块注册是否正确
+// 2. Convert cache tensors to FRACTAL_NZ format
+ms_k_cache = ms_custom_ops.trans_data(ms_k_cache, transdata_type=1)  # ND→NZ
+ms_v_cache = ms_custom_ops.trans_data(ms_v_cache, transdata_type=1)  # ND→NZ
 
-## 示例：reshape_and_cache 算子
+// 3. Run ReshapeAndCache with cache_mode=1 (NZ format mode)
+net(key, value, ms_k_cache, ms_v_cache, slot_mapping, cache_mode=1)
 
-reshape_and_cache 是一个典型的自定义算子示例，用于 KV Cache 的更新操作：
+// 4. Convert results back to ND format for verification
+ms_k_cache_nd = ms_custom_ops.trans_data(ms_k_cache, transdata_type=0)  # NZ→ND
+ms_v_cache_nd = ms_custom_ops.trans_data(ms_v_cache, transdata_type=0)  # NZ→ND
 
-### 功能描述
-- 将输入的 key 和 value 张量 reshape 后写入到指定的缓存位置
-- 支持灵活的 slot 映射机制
-- 高效的内存更新操作
-
-### 使用方法
-```python
-# 参数说明
-# key: 输入的 key 张量，shape 为 (batch, seq_len, hidden_dim) 或 (batch*seq_len, hidden_dim)
-# value: 输入的 value 张量，shape 同 key
-# key_cache: key 缓存张量，shape 为 (num_slots, slot_size, num_heads, head_dim)
-# value_cache: value 缓存张量，shape 同 key_cache
-# slot_mapping: 指定每个 token 写入的 slot 位置
-# head_num: attention head 数量
-
-output = ms_custom_ops.reshape_and_cache(
-    key, value, key_cache, value_cache, slot_mapping, head_num
-)
+// 5. Compare with golden ND results
+verify_results(ms_k_cache_nd, golden_k_output, dtype)
 ```
 
-## 📋 文件命名规范
+**关键注意事项**：
+- ✅ **数据一致性**：格式转换应保持数据完全一致，任何精度损失都可能表明实现错误
+- ✅ **Internal算子**：底层算子库会自动处理shape转换，用户只需设置format即可
+- ⚠️ **AscendC算子**：需要用户手动实现format转换和shape计算逻辑
+- 📝 **参数设计**：建议使用枚举值（0,1,2...）而非字符串，提高性能
+- 🔍 **测试验证**：确保不同format下的输入输出shape和数据正确性
+- 💡 **性能优化**：避免不必要的格式转换，尽量在同一格式下完成整个计算流程
 
-为了保持项目结构的一致性，请遵循以下命名规范：
+**格式转换数据类型支持**：
+- ✅ **FRACTAL_NZ_TO_ND**: 支持 float16, bfloat16（int8不支持）
+- ✅ **ND_TO_FRACTAL_NZ**: 支持 float16, bfloat16, int8
+- ⚠️ **对齐要求**: float16/bfloat16需要16字节对齐，int8需要32字节对齐
 
-### 算子实现文件
-- **算子**: `{op_name}.cc` (如: `reshape_and_cache.cc`)
-- **AscendC算子kernel**：按照AscendC官方要求实现`op_host`和`op_kernel`目录下算子文件。
-
-### 配置文件
-- **YAML配置**: `{op_name}_op.yaml` (如: `reshape_and_cache_op.yaml`)
-- **算子文档**: `{op_name}_doc.yaml` (如: `reshape_and_cache_doc.yaml`)
-
-### 测试文件
-- **测试文件**: `test_{op_name}.py` (如: `test_reshape_and_cache.py`)
-
-### 头文件
-- **基类头文件**: 使用描述性名称 (如: `internal_pyboost_runner.h`)
-- **工具头文件**: 使用功能描述 (如: `internal_helper.h`)
-
-## 🤝 贡献指南
-
-欢迎贡献新的自定义算子！请遵循以下步骤：
-
-1. **Fork** 代码仓库
-2. **创建特性分支**: `git checkout -b feature/your-new-op`
-3. **实现算子**并添加测试
-4. **提交更改**: `git commit -m "Add new operator: your-new-op"`
-5. **推送分支**: `git push origin feature/your-new-op`
-6. **创建 Pull Request**
-
-确保：
-- 代码符合项目编码规范
-- 添加充分的单元测试
-- 更新相关文档
-- 遵循文件命名规范
-- 通过所有测试用例
-
-## 📄 许可证
-
-本项目采用 Apache License 2.0 许可证。
+**适配检查清单**：
+- [ ] 是否添加了format选择参数？
+- [ ] 是否正确使用了trans_data进行格式转换？
+- [ ] 是否在两种模式（graph/pyboost）中都实现了格式转换？
+- [ ] 是否验证了不同格式下的功能正确性？
+- [ ] 是否测试了格式转换的往返一致性？
+- [ ] 是否在文档中说明了参数含义和使用方式？
