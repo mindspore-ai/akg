@@ -25,40 +25,48 @@
     - broadcast：广播
     - tranpose：维度重排
     - reshape：改变维度数量，不改变数据顺序
-    - slice：索引，如gather，scatter类
-    - matmul
+    - matmul：矩阵乘法，常用A@B、matmul(A, B)表示
     - conv
-    - 融合算子：elementwise+broadcast，matmul+elementwise等
-  **input_specs**：输入tensor的shape，dtype等，明确给出具体值，不要用变量替代；
-  **output_specs**：输出tensor的shape，dtype等，不包含临时tensor，明确给出具体值，不要用变量替代；
-  **computation**：算子的计算逻辑；
+    - shuffle
+    - 融合算子处理原则：若算子涉及多个算子类型，按照conv > matmul > reduce > shuffle > tranpose > reshape > broadcast > elementwise的优先级顺序，选择优先级最高的作为融合算子的算子类型，如：
+      一个融合算子计算涉及elementwise+reduce，那么该融合算子的类型记为reduce
+  **input_specs**：输入tensor的shape，dtype等，明确给出具体值，不要用变量替代，输入tensor的变量名限定为input0, input1等。举例：
+    - 输入 input0: shape (1024, 4096), dtype float16; 输入 input1: shape (4096, 2048), dtype float16; 输入 input2: 标量值, dtype float16
+  **output_specs**：输出tensor的shape，dtype等，不包含临时tensor，明确给出具体值，不要用变量替代，输出tensor的变量名限定为output0, output1等。举例：
+    - 输出 output0: shape (1024, 2048), dtype float16
+  **computation**：使用numpy的API表示算子的计算逻辑，必须严格遵循以下要求：
+    【要求一】仅能使用一下计算符号和numpy API：
+      - 基础运算：加减乘除（+-*/），取模（%）
+      - 数学函数：指数对数（np.exp, np.log），方根（np.power），np.maximum，np.minimum
+      - reduce运算：np.min, np.max, np.sum（禁止使用np.mean）
+      - 矩阵乘法运算：np.matmul
+      - 比较运算：<, >, <=, >=, ==, !=
+      - 条件选择：np.where
+      - 特殊情况：如果不用numpy API就是只能用for循环实现，则直接使用numpy API（如np.cumsum, np.sort等），避免使用for循环
+      **强调**：np.where运距如果可以用np.maximum和np.minimum代替，优先使用np.maximum或np.minimum
+    【要求二】所有中间变量名限定为temp0, temp1等。表达式中禁止出现除input0, temp1, output2等以外的任何变量名
+    【要求三】在不涉及重复计算的前提下，计算逻辑必须在一个表达式中完成，禁止使用多个表达式，中间变量数量必须最小化
+    【要求四】可以用输入tensor的属性（如shape）来动态获取的参数，禁止直接使用具体值
 
 ## 调度策略
 {% if impl_code %}
-  **schedule**：根据调度优化后的算子描述分析算子调度策略，如：
+  **schedule**：根据调度优化后的算子描述分析算子调度策略：
+{% else %}
+  **schedule**：根据算子基础信息设计对应的调度策略：
+{% endif %}
     - 切分策略：每根轴的切分大小，明确给出具体切分值
     - 并行策略：核数以及每个核的数据量（明确给出具体值），概述哪根轴映射到核上，负载均衡优化方案等
-    - ​​数据局部性优化：概述缓存机制，double buffer或者数据预取设计方案等
-    - 边界处理机制
-    - 硬件资源利用：概述​内存访问，寄存器使用情况等
   【注意事项】若存在多个kernel实现，需要分别给出每个kernel的调度策略
-{% else %}
-  **schedule**：根据算子基础信息以及对应的调度，总结算子全部的特征信息
-{% endif %}
-
-## 总结
-  **description**：根据上述描述，简单扼要总结算子的特征信息
 
 3. 示例
 ```json
   "op_name": "hinge_loss",
-  "op_type": "elementwise+reduce",
-  "input_specs": "输入 predictions: shape (128, 1), dtype float32; 输入 targets: shape (128, 1), dtype float32",
-  "output_specs": "输出 final_output: shape (1,), dtype float32",
-  "computation": "element_loss = max(0, 1 - predictions * targets); final_output = mean(element_loss)",
+  "op_type": "reduce",
+  "input_specs": "输入 input0: shape (128, 1), dtype float32; 输入 input1: shape (128, 1), dtype float32",
+  "output_specs": "输出 output0: shape (1,), dtype float32",
+  "computation": "output0 = np.sum(np.maximun(0, 1 - input0 * input1)) / (input0.shape[0] * input0.shape[1])",
   "schedule": "elementwise_kernel: 切分策略BLOCK_SIZE=1024，并行策略grid=(128,)，每个核处理1024元素；reduce_kernel: 切分策略BLOCK_SIZE_REDUCE=1024，并行策略grid=(1,)，单核处理全量数据归约；边界处理通过mask机制自动处理越界访问；数据预取通过tl.load/tl.store显式管理",
-  "description": "该算子是一个elementwisereduce融合的Hinge Loss实现，使用双阶段计算策略：第一阶段通过1024分块并行计算每个元素的max(0,1-p*t)，第二阶段通过单核1024分块归约计算均值。采用Triton的显式内存管理优化数据局部性，通过mask机制处理非对齐数据。"
- ```
+```
 
 【注意事项】请尽可能使用中文进行思考分析
 【注意事项】涉及到数值，需要明确给出具体值，如shape，切分值，核数等

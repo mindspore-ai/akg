@@ -15,6 +15,7 @@
 import os
 import json
 import logging
+from typing import List, Dict
 from pathlib import Path
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -27,14 +28,51 @@ class VectorStore:
     """
     基于RAG的优化方案检索器，检索最相似的算子调度方案
     """
-    def __init__(self, database_path: str, embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", index_name: str = "vector_store"):
+    # 单例模式实现
+    _instances: Dict[str, 'VectorStore'] = {}
+    _lock = False  # 简单的锁机制避免并发问题
+    
+    def __new__(cls, 
+                database_path: str, 
+                embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
+                index_name: str = "vector_store",
+                features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation", "schedule"]):
+        # 使用数据库路径、索引名称和特征列表的组合作为实例的唯一标识
+        instance_key = get_md5_hash(database_path=database_path, index_name=index_name, features=features)
+        
+        # 检查实例是否已存在
+        if instance_key not in cls._instances or cls._instances[instance_key] is None:
+            # 简单锁机制
+            while cls._lock:
+                pass
+            cls._lock = True
+            try:
+                # 双重检查锁定模式
+                if instance_key not in cls._instances or cls._instances[instance_key] is None:
+                    cls._instances[instance_key] = super(VectorStore, cls).__new__(cls)
+            finally:
+                cls._lock = False
+        
+        return cls._instances[instance_key]
+        
+    def __init__(self, 
+                 database_path: str, 
+                 embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
+                 index_name: str = "vector_store",
+                 features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation", "schedule"]):
+        # 防止重复初始化
+        if hasattr(self, '_initialized') and self._initialized:
+            return
+        
         os.environ["OMP_NUM_THREADS"] = "8"
         self.database_path = database_path
+        self.features = features
         self.index_path = str(Path(self.database_path) / index_name)
         self.enable_vector_store = True
         self.embedding_model = self._load_embedding_model(embedding_model_name) 
         self.vector_store = self._load_or_create_store()
-        
+        self._initialized = True
+
     def _load_embedding_model(self, embedding_model_name: str = "GanymedeNil/text2vec-large-chinese"):
         """从配置文件加载嵌入模型"""
         logger.info(f"Loading embedding model: {embedding_model_name}")
@@ -78,16 +116,32 @@ class VectorStore:
         
         # 如果索引不存在则创建
         if not (index_path / "index.faiss").exists():
-            logger.info("Building operator feature vector database...")
+            logger.info(f"Building operator feature vector database: {index_path.name}...")
             return self._build_vector_store()
         
         # 加载现有索引
-        logger.info("Loading existing vector index...")
+        logger.info(f"Loading existing vector index: {index_path.name}...")
         return FAISS.load_local(
             folder_path=self.index_path,
             embeddings=self.embedding_model,
             allow_dangerous_deserialization=True  # 注意安全性
         )
+
+    def gen_document(self, metadata: dict, file_path: str):
+        """从算子元数据生成文档"""
+        backend = metadata.get('backend', '')
+        arch = metadata.get('arch', '')
+        dsl = metadata.get('dsl', '')
+        feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
+        doc = Document(
+            page_content=", ".join([f"{k}: {metadata[k]}" for k in self.features]),
+            metadata={
+                "op_type": metadata.get('op_type', ''),
+                "file_path": file_path,
+                "feature_invariants": feature_invariants
+            }
+        )
+        return doc
     
     def _build_vector_store(self):
         """从算子元数据构建向量存储"""
@@ -105,20 +159,9 @@ class VectorStore:
             # 加载算子元数据
             with open(metadata_file, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
-            
-            backend = metadata.get('backend', '')
-            arch = metadata.get('arch', '')
-            dsl = metadata.get('dsl', '')
-            feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
+
             # 创建检索文档
-            doc = Document(
-                page_content=", ".join([f"{k}: {v}" for k, v in metadata.items() if k not in {'backend', 'arch', 'dsl', 'profile'}]),
-                metadata={
-                    "file_path": str(op_subdir),
-                    "feature_invariants": feature_invariants
-                }
-            )
-            documents.append(doc)
+            documents.append(self.gen_document(metadata, str(op_subdir)))
         # 创建向量存储
         if not documents:
             # 创建空向量存储
@@ -142,8 +185,8 @@ class VectorStore:
         return self.vector_store.max_marginal_relevance_search(
             query=query,
             k=k,
-            fetch_k = max(20, 5 * k),
-            lambda_mult = 0.2, # 极致多样性
+            fetch_k=max(20, 5 * k),
+            lambda_mult=0.2, # 极致多样性
             filter={"feature_invariants": feature_invariants}, 
         )
         
@@ -152,7 +195,7 @@ class VectorStore:
         return self.vector_store.similarity_search(
             query=query,
             k=k,
-            fetch_k = max(fetch_k, 5 * k),
+            fetch_k=max(fetch_k, 5 * k),
             filter={"feature_invariants": feature_invariants}
         )
         
@@ -161,7 +204,7 @@ class VectorStore:
         return self.vector_store.similarity_search_with_score(
             query=query,
             k=k,
-            fetch_k = max(fetch_k, 5 * k),
+            fetch_k=max(fetch_k, 5 * k),
             filter={"feature_invariants": feature_invariants}
         )
 
@@ -181,15 +224,7 @@ class VectorStore:
         op_dir = metadata_path.parent
 
         # 创建文档对象
-        feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
-        # 创建检索文档
-        doc = Document(
-            page_content=", ".join([f"{k}: {v}" for k, v in metadata.items() if k not in {'backend', 'arch', 'dsl', 'profile'}]),
-            metadata={
-                "file_path": str(op_dir),
-                "feature_invariants": feature_invariants
-            }
-        )
+        doc = self.gen_document(metadata, str(op_dir))
 
         # 检查是否已存在相同算子的文档（去重并覆盖）
         self.delete(md5_hash)

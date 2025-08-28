@@ -31,7 +31,8 @@ class EvolveDatabase(Database):
         self.database_path = database_path or str(DEFAULT_EVOLVE_DATABASE_PATH)
         self.schedule_vector_store = VectorStore(
             database_path=self.database_path,
-            index_name="schedule_vector_store"
+            index_name="schedule_vector_store",
+            features=["schedule"]
         )
         self.vector_stores = [self.schedule_vector_store]
         super().__init__(self.database_path, self.vector_stores, config)

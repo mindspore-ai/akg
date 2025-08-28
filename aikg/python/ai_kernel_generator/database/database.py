@@ -32,6 +32,7 @@ class RetrievalStrategy(Enum):
     MMR = "max_marginal_relevance"
     OPTIMALITY = "optimality"
     RULE = "rule"
+    HIERARCHY = "hierarchy"
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
 
@@ -44,7 +45,7 @@ class Database():
         if config:
             self.model_config = config.get("agent_model_config", {})
         else:
-            raise ValueError("config is required for Coder")
+            raise ValueError("config is required for Database")
 
     async def extract_features(self,impl_code: str, framework_code:str, backend:str, arch: str, dsl:str, profile=float('inf')):
         """提取任务特征"""
@@ -66,12 +67,11 @@ class Database():
             "profile": profile,
             "backend": backend,
             "arch": arch,
-            "dsl": dsl,
-            "description": parsed_content.description
+            "dsl": dsl
         }
         return extracted_features
 
-    def _get_case_content(self, output_content: List[str], case_path: str, strategy_mode: RetrievalStrategy, dsl: str = "", framework: str = ""):
+    def get_case_content(self, output_content: List[str], case_path: str, strategy_mode: RetrievalStrategy = None, dsl: str = "", framework: str = ""):
         case_path = Path(case_path)
         if not case_path.exists():
             raise FileNotFoundError(f"Case path not found: {case_path}")
@@ -122,7 +122,7 @@ class Database():
         selected_cases = random.sample(cases, k) if k > 0 else []
         result = []
         for case_path in selected_cases:
-            result.append(self._get_case_content(output_content, case_path, RetrievalStrategy.RANDOMICITY, dsl, framework))
+            result.append(self.get_case_content(output_content, case_path, RetrievalStrategy.RANDOMICITY, dsl, framework))
         return result
     
     def get_output_content(self, output_content:List[str], strategy_mode:RetrievalStrategy, docs, dsl, framework):

@@ -82,8 +82,8 @@ async def test_samples(strategy_mode):
     dsl = "swft"
     
     config = load_config(dsl)
-    vector_stroe = VectorStore(DEFAULT_DATABASE_PATH)
-    db_system = Database(config=config, vector_stroes=[vector_stroe])
+    vector_store = VectorStore(DEFAULT_DATABASE_PATH)
+    db_system = Database(config=config, vector_stores=[vector_store])
 
     # 查询示例
     benchmark_id = 53
