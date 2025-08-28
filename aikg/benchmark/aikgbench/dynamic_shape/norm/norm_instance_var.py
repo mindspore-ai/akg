@@ -26,14 +26,28 @@ class Model(nn.Module):
         
         return result
 
-
-def get_inputs():
-    # Batch size: 32
-    # Feature channels: 4096
-    # Spatial dimensions: 8 x 8
-    input_tensor = torch.randn(32, 4096, 8, 8, dtype=torch.float32)
-    return [input_tensor]
-
+def get_inputs_dyn_list():
+    """
+    Generate multiple sets of random input tensors for testing with different shapes.
+    """
+    # Case 1: Small tensor size (16, 2048, 4, 4) (smaller than static)
+    input_tensor1 = torch.randn(16, 2048, 4, 4, dtype=torch.float32)
+    
+    # Case 2: Medium tensor size (24, 3072, 6, 6) (non-aligned batch, medium channels)
+    input_tensor2 = torch.randn(24, 3072, 6, 6, dtype=torch.float32)
+    
+    # Case 3: Large tensor size (32, 4096, 8, 8) (aligned, same as static)
+    input_tensor3 = torch.randn(32, 4096, 8, 8, dtype=torch.float32)
+    
+    # Case 4: Very large tensor size (48, 6144, 12, 12) (non-aligned batch, larger than static)
+    input_tensor4 = torch.randn(48, 6144, 12, 12, dtype=torch.float32)
+    
+    return [
+        [input_tensor1],
+        [input_tensor2],
+        [input_tensor3],
+        [input_tensor4]
+    ]
 
 def get_init_inputs():
     """

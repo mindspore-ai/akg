@@ -3,18 +3,24 @@ import torch.nn as nn
 
 
 class Model(nn.Module):
+    """
+    Model that performs Layer Normalization operation.
+    Layer normalization normalizes across the feature dimension for each sample.
+    """
     def __init__(self, normalized_shape):
         super(Model, self).__init__()
         self.normalized_shape = normalized_shape
 
     def forward(self, input_tensor):
-        # torch.layer_norm(input, normalized_shape, weight=None, bias=None, eps=1e-05, cudnn_enable=True)
-        # Applies Layer Normalization over a mini-batch of inputs.
-        # Layer normalization is commonly used in neural networks for:
-        # - Stabilizing training dynamics
-        # - Reducing internal covariate shift
-        # - Normalizing activations across feature dimensions
+        """
+        Perform Layer Normalization operation.
         
+        Args:
+            input_tensor: Input tensor of shape (batch_size, seq_len, hidden_size)
+            
+        Returns:
+            Layer normalized output tensor
+        """
         # Create weight and bias tensors with the correct shape
         weight = torch.ones(self.normalized_shape, dtype=input_tensor.dtype, device=input_tensor.device)
         bias = torch.zeros(self.normalized_shape, dtype=input_tensor.dtype, device=input_tensor.device)
@@ -23,10 +29,12 @@ class Model(nn.Module):
 
 
 def get_inputs():
-    # Batch size: 16
-    # Sequences: 16
-    # Hidden features: 4096
-    input_tensor = torch.randn((16, 16, 4096), dtype=torch.float32)
+    """
+    Generate random input tensors for testing with large model shapes.
+    """
+    # Batch size: 32, Sequence length: 1024, Hidden size: 4096
+    batch_size, seq_len, hidden_size = 32, 1024, 4096
+    input_tensor = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.float32)
     return [input_tensor]
 
 

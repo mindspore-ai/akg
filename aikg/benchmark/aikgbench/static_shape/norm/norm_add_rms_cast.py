@@ -17,17 +17,29 @@ class Model(nn.Module):
     def forward(self, x, residual, gamma):
         """
         Perform Add + RMS Normalization + Cast fused operation.
+        
+        Args:
+            x: Input tensor of shape (batch_size, seq_len, hidden_size)
+            residual: Residual tensor of shape (batch_size, seq_len, hidden_size)
+            gamma: Scale parameter of shape (hidden_size,)
+            
+        Returns:
+            Output tensor after add + RMS norm + cast
         """
         # Add residual connection
         x_added = x + residual
 
-        # Compute reciprocal RMS and normalize
-        rstd = torch.rsqrt(x_added.pow(2).mean(dim=-1, keepdim=True) + self.epsilon)
-        output = (x_added * rstd) * gamma
+        # Compute RMS normalization using rsqrt for efficiency
+        variance = x_added.pow(2).mean(dim=-1, keepdim=True)
+        rstd = torch.rsqrt(variance + self.epsilon)
+        x_normalized = x_added * rstd
+        
+        # Apply scale parameter
+        output = x_normalized * gamma
 
         # Cast to target data type
-        output = output.to(self.target_dtype)
-        return output
+        output_cast = output.to(self.target_dtype)
+        return output_cast
 
 
 def get_inputs():

@@ -8,10 +8,6 @@ class Model(nn.Module):
 
     def forward(self, input_tensor):
         # GroupNormSwish operation
-        # This operation is commonly used in neural networks for:
-        # - Normalizing activations in groups
-        # - Applying Swish activation function
-        # - Used in models like EfficientNet
         
         # Apply GroupNorm
         group_norm = torch.nn.functional.group_norm(input_tensor, self.num_groups)

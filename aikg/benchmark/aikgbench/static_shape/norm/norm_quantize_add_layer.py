@@ -12,13 +12,35 @@ class Model(nn.Module):
         self.epsilon = epsilon
 
     def forward(self, x1, x2, scale, offset, gamma, beta):
-        # Dequantize and add
-        x_added = x1.float() * scale + offset + (x2.float() * scale + offset)
+        """
+        Perform Quantized Add + Layer Normalization fused operation.
+        
+        Args:
+            x1: First quantized input tensor of shape (batch_size, seq_len, hidden_size)
+            x2: Second quantized input tensor of shape (batch_size, seq_len, hidden_size)
+            scale: Scale factor for dequantization
+            offset: Offset factor for dequantization
+            gamma: Scale parameter for layer norm
+            beta: Shift parameter for layer norm
+            
+        Returns:
+            Output tensor after dequantization and layer normalization
+        """
+        # Dequantize both input tensors
+        x1_float = x1.float() * scale + offset
+        x2_float = x2.float() * scale + offset
+        
+        # Add the dequantized tensors
+        x_added = x1_float + x2_float
 
-        # Layer normalization
+        # Layer normalization with efficient computation
         mean = x_added.mean(dim=-1, keepdim=True)
         var = x_added.var(dim=-1, keepdim=True, unbiased=False)
-        output = ((x_added - mean) / torch.sqrt(var + self.epsilon)) * gamma + beta
+        rstd = torch.rsqrt(var + self.epsilon)
+        x_normalized = (x_added - mean) * rstd
+        
+        # Apply scale and shift parameters
+        output = x_normalized * gamma + beta
         return output
 
 

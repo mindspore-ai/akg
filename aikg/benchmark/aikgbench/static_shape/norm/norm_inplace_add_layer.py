@@ -32,7 +32,7 @@ class Model(nn.Module):
         # Compute mean and variance across the last dimension
         mean = x.mean(dim=-1, keepdim=True)
         var = x.var(dim=-1, keepdim=True, unbiased=False)
-        rstd = 1.0 / torch.sqrt(var + self.epsilon)
+        rstd = torch.rsqrt(var + self.epsilon)
 
         # Apply normalization
         x_normalized = (x - mean) * rstd
