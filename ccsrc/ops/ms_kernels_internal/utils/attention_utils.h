@@ -23,14 +23,13 @@
 #include "mindspore/ops/kernel/include/common/kernel_tensor.h"
 
 namespace ms_custom_ops {
-inline bool GetSeqLenAndCheckUpdate(mindspore::kernel::KernelTensor *tensor, std::vector<int32_t> *seq_len) {
-  auto new_value = tensor->GetValueWithCheck<std::vector<int32_t>>();
+inline bool CheckAndUpdate(const std::vector<int32_t> &new_seq_len, std::vector<int32_t> *seq_len) {
   bool is_need_update = false;
-  if (seq_len->size() != new_value.size()) {
+  if (seq_len->size() != new_seq_len.size()) {
     is_need_update = true;
   } else {
-    for (size_t i = 0; i < new_value.size(); i++) {
-      if ((*seq_len)[i] != new_value[i]) {
+    for (size_t i = 0; i < new_seq_len.size(); i++) {
+      if ((*seq_len)[i] != new_seq_len[i]) {
         is_need_update = true;
         break;
       }
@@ -38,12 +37,16 @@ inline bool GetSeqLenAndCheckUpdate(mindspore::kernel::KernelTensor *tensor, std
   }
   if (is_need_update) {
     seq_len->clear();
-    for (size_t i = 0; i < new_value.size(); i++) {
-      seq_len->emplace_back(new_value[i]);
+    for (size_t i = 0; i < new_seq_len.size(); i++) {
+      seq_len->emplace_back(new_seq_len[i]);
     }
   }
-
   return is_need_update;
+}
+
+inline bool GetSeqLenAndCheckUpdate(mindspore::kernel::KernelTensor *tensor, std::vector<int32_t> *seq_len) {
+  auto new_value = tensor->GetValueWithCheck<std::vector<int32_t>>();
+  return CheckAndUpdate(new_value, seq_len);
 }
 }  // namespace ms_custom_ops
 
