@@ -244,6 +244,27 @@ vllm_deepseek_r1_default:
   frequency_penalty: 0.6
   presence_penalty: 0.5
 
+
+vllm_deepseek_v31_thinking_default:
+  api_base: "http://localhost:8001/v1"
+  model: "deepseek_v31"
+  max_tokens: 8192
+  temperature: 0.1
+  top_p: 0.7
+  frequency_penalty: 0.6
+  presence_penalty: 0.5
+
+
+vllm_deepseek_v31_default:
+  api_base: "http://localhost:8001/v1"
+  model: "deepseek_v31"
+  max_tokens: 8192
+  temperature: 0.1
+  top_p: 0.7
+  frequency_penalty: 0.6
+  presence_penalty: 0.5
+
+
 # MOONSHOT 模型配置
 # kimi-k2-0711-preview 模型，官方推荐 temperature: 0.6
 moonshot_kimi_k2:

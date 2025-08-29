@@ -88,6 +88,26 @@ class AgentBase(ABC):
         except Exception as e:
             raise Exception(f"文件读取失败: {file_path}, 错误: {str(e)}")
 
+    @staticmethod
+    def split_think(content: str) -> tuple[str, str]:
+        """按首次出现的 '</think>' 对文本进行拆分。
+
+        Args:
+            content: 待处理的原始文本
+
+        Returns:
+            tuple[str, str]: (new_content, reasoning_content)。若未包含该标记，返回 (content, "")。
+        """
+        if content is None:
+            return "", ""
+        marker = "</think>"
+        pos = content.find(marker)
+        if pos == -1:
+            return content, ""
+        reasoning_content = content[:pos]
+        new_content = content[pos + len(marker):].lstrip("\r\n ")
+        return new_content, reasoning_content
+
     def load_template(self, template_path: str, template_format: str = "jinja2") -> PromptTemplate:
         """
         从指定路径加载Jinja2模板
@@ -251,15 +271,21 @@ class AgentBase(ABC):
                     {"role": "user", "content": formatted_prompt}
                 ]
 
+                # 统一构造调用参数与 thinking 配置
+                is_thinking = "thinking" in model_name.lower()
+                create_kwargs = {
+                    "model": model.model_name,
+                    "messages": messages,
+                    "temperature": model.temperature,
+                    "top_p": model.top_p,
+                }
+                if is_thinking:
+                    create_kwargs["extra_body"] = {"chat_template_kwargs": {"thinking": True}}
+
                 if not aikg_stream_output:
                     # 非流式模式
-                    response = await model.chat.completions.create(
-                        model=model.model_name,
-                        messages=messages,
-                        temperature=model.temperature,
-                        top_p=model.top_p,
-                        stream=False
-                    )
+                    create_kwargs["stream"] = False
+                    response = await model.chat.completions.create(**create_kwargs)
 
                     content = response.choices[0].message.content
                     reasoning_content = response.choices[0].message.reasoning_content
@@ -269,15 +295,10 @@ class AgentBase(ABC):
                     logger.info(f"response_metadata: {response_metadata}")
                 else:
                     # 流式模式
+                    create_kwargs["stream"] = True
                     content = ""
                     reasoning_content = ""
-                    stream = await model.chat.completions.create(
-                        model=model.model_name,
-                        messages=messages,
-                        temperature=model.temperature,
-                        top_p=model.top_p,
-                        stream=True
-                    )
+                    stream = await model.chat.completions.create(**create_kwargs)
                     async for chunk in stream:
                         delta = chunk.choices[0].delta
                         if delta.content:
@@ -316,6 +337,11 @@ class AgentBase(ABC):
 
             logger.debug(f"LLM End:    [status] %s -- [model] %s",
                          self.context.get('agent_name', ''), model_name)
+
+            # 后处理：从 content 中剥离可能包含的 reasoning 片段
+            content, extracted_reasoning = self.split_think(content)
+            if extracted_reasoning:
+                reasoning_content = extracted_reasoning
 
             if os.getenv("AIKG_DATA_COLLECT", "off").lower() == "on":
                 # 使用collector收集数据

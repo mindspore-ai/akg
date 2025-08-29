@@ -41,6 +41,8 @@ async def test_simple_run_llm():
 
     # 指定model name
     model_name = "vllm_deepseek_r1_default"
+    # model_name = "vllm_deepseek_v31_thinking_default"
+    # model_name = "vllm_deepseek_v31_default"
 
     # 跑run_llm
     content, formatted_prompt, reasoning_content = await agent.run_llm(

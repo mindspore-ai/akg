@@ -302,7 +302,7 @@ def _test_api_connection(api_base, api_key_env=None):
         for endpoint in get_endpoints:
             try:
                 url = f"{base_url}{endpoint}"
-                response = requests.get(url, headers=headers, timeout=10, verify=False)
+                response = requests.get(url, headers=headers, timeout=30, verify=False)
 
                 # 接受多种成功状态码
                 if response.status_code in [200, 201, 202, 204]:
@@ -322,7 +322,7 @@ def _test_api_connection(api_base, api_key_env=None):
             for endpoint, test_data in post_endpoints:
                 try:
                     url = f"{base_url}{endpoint}"
-                    response = requests.post(url, headers=headers, json=test_data, timeout=10, verify=False)
+                    response = requests.post(url, headers=headers, json=test_data, timeout=30, verify=False)
 
                     # 对于POST请求，400也算成功（说明端点存在，只是参数不对）
                     if response.status_code in [200, 201, 202, 204, 400, 422]:
