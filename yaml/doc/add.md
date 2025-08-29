@@ -12,16 +12,16 @@ $$
 
 ## 输入参数
 
-| Name   | DType                                 | Shape                 | Description |
-|--------|----------------------------------------|-----------------------|-------------|
-| x  | Tensor[float32/float16/int8/int32]                | 与 `y` 可广播     | 第一个输入 |
-| y  | Tensor[float32/float16/int8/int32]                | 与 `x` 可广播     | 第二个输入 |
+| Name   | DType                                 | Shape                 | Format  | Optional  | Description |
+|--------|----------------------------------------|-----------------------|--------|-----------|---------|
+| x  | Tensor[float32/float16/int8/int32]                | 与 `y` 可广播     |  ND | False | 第一个输入 |
+| y  | Tensor[float32/float16/int8/int32]                | 与 `x` 可广播     |  ND | False | 第二个输入 |
 
 ## 输出参数
 
-| Name  | DType                      | Shape                | Description |
-|-------|----------------------------|----------------------|-------------|
-| out   | Tensor[float32/float16/int8/int32] | 与广播后shape一致     | 逐元素加法结果 |
+| Name  | DType                      | Shape                | Format  | Optional | Description |
+|-------|----------------------------|----------------------|---------|----------|----------|
+| out   | Tensor[float32/float16/int8/int32] | 与广播后shape一致     |  ND | False | 逐元素加法结果 |
 
 ## 使用示例
 
