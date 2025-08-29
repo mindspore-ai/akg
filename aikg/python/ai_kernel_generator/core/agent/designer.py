@@ -118,7 +118,7 @@ class Designer(AgentBase):
             "agent_name": "designer",
             "framework": task_info.get("framework", ""),
             "hash": task_info.get("task_id", "Designer"),
-            "task_id": task_info.get("task_id", ""),
+            "task_id": "",
             "step": self.llm_step_count,
         }
         self.context.update(to_update_context)

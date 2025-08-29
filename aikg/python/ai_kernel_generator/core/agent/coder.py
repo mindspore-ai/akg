@@ -264,8 +264,8 @@ class Coder(AgentBase):
                 self.api_step_count += 1
                 to_update_api_details = {
                     "agent_name": "api",
-                    "hash": task_info.get("task_id", "Api"),
-                    "task_id": task_info.get("task_id", ""),
+                    "hash": task_info.get("task_id", "Api") + "@" + str(self.api_step_count),
+                    "task_id": "",
                     "step": self.api_step_count,
                 }
                 self.context.update(to_update_api_details)
@@ -306,7 +306,7 @@ class Coder(AgentBase):
             self.codegen_step_count += 1
             to_update_codegen_details = {
                 "agent_name": "coder",
-                "hash": task_info.get("task_id", "Coder"),
+                "hash": task_info.get("task_id", "Coder") + "@" + str(self.codegen_step_count),
                 "task_id": task_info.get("task_id", ""),
                 "step": self.codegen_step_count,
             }

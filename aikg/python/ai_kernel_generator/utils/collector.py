@@ -16,6 +16,9 @@ import asyncio
 import json
 import logging
 import os
+import random
+import string
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -42,7 +45,12 @@ class Collector:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._store = {}
-            cls._instance._session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            # 生成高度随机的session_id，避免高并发或多服务器环境下的重复
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            uuid_part = str(uuid.uuid4())[:8]  # UUID的前8位
+            random_part = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))  # 6位随机字符
+            process_id = os.getpid()  # 进程ID，用于区分不同进程
+            cls._instance._session_id = f"session_{timestamp}_{uuid_part}_{random_part}_{process_id}"
             cls._instance._counter = 0
             cls._instance._config = None
             cls._instance._save_dir = None
@@ -75,36 +83,28 @@ class Collector:
                 self._async_lock = asyncio.Lock()
             self._initialized = True
 
-    def _generate_filename(self, agent_name: str, hash_value: str, data: Optional[dict] = None) -> str:
+    def _generate_filename(self, agent_name: str, hash_value: str, sequence_id: Optional[int] = None) -> str:
         """
-        生成文件名，格式为 {agent_name}_{hash}_{时间戳}_{内容哈希}.json
+        生成文件名，格式为 {_session_id}_{sequence_id}_{agent_name}_{hash}.json
 
         Args:
             agent_name: 代理名称
             hash_value: 原始哈希值
-            data: 数据内容，用于生成内容哈希
+            sequence_id: 序列ID，如果提供则直接使用，如果不提供则使用当前_counter并递增
 
         Returns:
             str: 生成的文件名
         """
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]  # 精确到毫秒
         safe_agent_name = agent_name.replace('/', '_').replace('\\', '_')
         safe_hash = hash_value.replace('/', '_').replace('\\', '_')
+        safe_session_id = self._session_id.replace('/', '_').replace('\\', '_')
+        
+        # 如果没有提供sequence_id，则使用当前counter并递增（用于测试等场景）
+        if sequence_id is None:
+            sequence_id = self._counter
+            self._counter += 1
 
-        # 生成基于数据内容的哈希值
-        content_hash = ""
-        if data:
-            try:
-                content_hash = get_md5_hash(**data)[:8]
-            except Exception as e:
-                logger.warning(f"Failed to generate content hash: {e}")
-                # 如果无法生成内容哈希，使用时间戳的纳秒部分
-                content_hash = str(datetime.now().timestamp()).replace('.', '')[-8:]
-        else:
-            # 没有数据时使用时间戳的纳秒部分
-            content_hash = str(datetime.now().timestamp()).replace('.', '')[-8:]
-
-        return f"{safe_agent_name}_{safe_hash}_{timestamp}_{content_hash}.json"
+        return f"{safe_session_id}_{sequence_id}_{safe_agent_name}_{safe_hash}.json"
 
     def _save_json_file(self, data: dict, filename: str) -> bool:
         """
@@ -287,8 +287,8 @@ class Collector:
                         **entry.get("data", {})
                     }
 
-                    # 生成文件名并保存
-                    filename = self._generate_filename(agent_name, hash_value, entry.get("data"))
+                    # 生成文件名并保存（使用数据收集时的sequence_id作为前缀）
+                    filename = self._generate_filename(agent_name, hash_value, entry.get("sequence_id", None))
                     if self._save_json_file(send_data, filename):
                         saved_files.append(str(self._save_dir / filename))
 
@@ -324,7 +324,7 @@ class Collector:
             }
 
             # 生成文件名并保存
-            filename = self._generate_filename("database", "database", database_data)
+            filename = self._generate_filename("database", "database")
             if self._save_json_file(database_data, filename):
                 file_path = str(self._save_dir / filename)
                 logger.debug(f"Saved database JSON file: {file_path}")

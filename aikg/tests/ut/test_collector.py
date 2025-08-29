@@ -151,17 +151,19 @@ async def test_filename_generation():
     """测试文件名生成"""
     collector = await get_collector()
 
-    # 格式测试
-    name = collector._generate_filename("a/b", "c\\d", {"x": "y"})
-    assert name.startswith("a_b_c_d_")
+    # 格式测试: {session_id}_{sequence_id}_{agent_name}_{hash}.json
+    current_counter = collector._counter
+    name = collector._generate_filename("a/b", "c\\d")
+    assert "_a_b_c_d" in name  # 检查格式包含预期的agent_name和hash
     assert name.endswith(".json")
     assert "/" not in name and "\\" not in name
+    assert name.startswith("session_")  # 检查以session_开头
+    assert f"_{current_counter}_" in name  # 检查包含当前counter
 
-    # 唯一性测试
-    name1 = collector._generate_filename("agent", "hash", {})
-    time.sleep(0.01)
-    name2 = collector._generate_filename("agent", "hash", {})
-    assert name1 != name2
+    # 唯一性测试 - 每次调用counter会递增，所以文件名应该不同
+    name1 = collector._generate_filename("agent", "hash")
+    name2 = collector._generate_filename("agent", "hash")
+    assert name1 != name2  # 因为counter递增，所以文件名不同
 
 
 @pytest.mark.level0
