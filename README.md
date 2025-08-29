@@ -133,7 +133,7 @@ bash build.sh -p ${absolute_op_dir_path}
 
 # 编译指定算子
 bash build.sh -p ${absolute_op_dir_path}
-eg. bash build.sh -p /home/ms_custom_ops/ccsrc/ops/ascendc/add,/home/ms_custom_ops/ccsrc/ops/ascendc/add_rms_norm
+eg. bash build.sh -p /home/ms_custom_ops/ccsrc/ops/ascendc/add,/home/ms_custom_ops/ccsrc/ops/ascendc/add
 
 # 指定SOC Verison编译
 eg. bash build.sh -v ascend910b4
