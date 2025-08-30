@@ -36,8 +36,7 @@ protected:
   internal::InternalOpPtr
   CreateKernel(const internal::InputsImmutableInfoList &inputs,
                const internal::OutputsImmutableInfoList &outputs) override {
-    return internal::CreatePagedCacheLoadOp(
-        inputs, outputs, param_, internal::kInternalPagedCacheLoadOpName);
+    return CreatePagedCacheLoadOpWithFormat(inputs, outputs, param_);
   }
 
 private:
