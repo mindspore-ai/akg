@@ -39,6 +39,17 @@ enum PagedCacheLoadOutputIndex : size_t {
   kPCLOutputValueOutIndex,
   kPCLOutputsNum
 };
-}  // namespace ms_custom_ops
 
+inline internal::InternalOpPtr CreatePagedCacheLoadOpWithFormat(const internal::InputsImmutableInfoList &inputs,
+                                                                const internal::OutputsImmutableInfoList &outputs,
+                                                                const internal::PagedCacheLoadParam &param) {
+  if (param.kv_cache_cfg_type == 1) {
+    auto inputs_clone = inputs;
+    inputs_clone[kPCLInputKeyCacheIndex].SetFormat(internal::kFormatFRACTAL_NZ);
+    inputs_clone[kPCLInputValueCacheIndex].SetFormat(internal::kFormatFRACTAL_NZ);
+    return internal::CreatePagedCacheLoadOp(inputs_clone, outputs, param, internal::kInternalPagedCacheLoadOpName);
+  }
+  return internal::CreatePagedCacheLoadOp(inputs, outputs, param, internal::kInternalPagedCacheLoadOpName);
+};
+}  // namespace ms_custom_ops
 #endif

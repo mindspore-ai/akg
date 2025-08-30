@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-// =============================================================================
-// GRAPH MODE IMPLEMENTATION
-// =============================================================================
-
 #include "ccsrc/base/ms_kernels_internal/graphmode/internal_kernel_mod.h"
 #include "ccsrc/ops/ms_kernels_internal/paged_cache_load/paged_cache_load_common.h"
 #include "mindspore/ops/ops_utils/op_utils.h"
@@ -96,7 +92,7 @@ protected:
     param.kv_cache_cfg_type = kv_cache_cfg_type->GetValue<int64_t>().value();
     param.is_seq_lens_cumsum_type = is_seq_lens_cumsum_type->GetValue<bool>().value();
     param.has_seq_starts = has_seq_starts->GetValue<bool>().value();
-    return internal::CreatePagedCacheLoadOp(inputs, outputs, param, internal::kInternalPagedCacheLoadOpName);
+    return CreatePagedCacheLoadOpWithFormat(inputs, outputs, param);
   }
 
 private:
