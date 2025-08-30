@@ -20,15 +20,14 @@
 #include <string>
 #include <vector>
 
-#include "common/kernel.h"
-#include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
 #include "tiling_mem_mgr.h"
-
-#include "debug/profiler/profiling.h"
 #include "internal_helper.h"
 #include "internal_spinlock.h"
 #include "internal_tiling_cache.h"
 #include "module.h"
+#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel.h"
+#include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
+#include "mindspore/ccsrc/tools/profiler/profiling.h"
 
 namespace ms_custom_ops {
 using namespace mindspore::ops;

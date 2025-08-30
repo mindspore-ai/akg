@@ -67,12 +67,13 @@ endif()
 # MindSpore Internal Kernels Path Detection
 # =============================================================================
 
-set(INTERNAL_KERNEL_INC_PATH "${MS_PATH}/lib/plugin/ascend/ms_kernels_internal/internal_kernel")
+set(INTERNAL_KERNEL_ROOT_PATH "${MS_PATH}/lib/plugin/ascend/ms_kernels_internal/internal_kernel")
+set(INTERNAL_KERNEL_INC_PATH "${INTERNAL_KERNEL_ROOT_PATH}" "${INTERNAL_KERNEL_ROOT_PATH}/include")
 
 # Check if paths exist
 foreach(INCLUDE_PATH ${INTERNAL_KERNEL_INC_PATH})
-    if(NOT EXISTS ${INTERNAL_KERNEL_INC_PATH})
-        message(WARNING "Include path does not exist: ${INTERNAL_KERNEL_INC_PATH}")
+    if(NOT EXISTS ${INCLUDE_PATH})
+        message(WARNING "Include path does not exist: ${INCLUDE_PATH}")
         message(WARNING "This may cause compilation errors if headers are needed")
     endif()
 endforeach()

@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-#include "internal_tiling_cache.h"
 #include <utility>
+#include "internal_tiling_cache.h"
+#include "mindspore/core/include/ir/tensor_storage_info.h"
 
 namespace ms_custom_ops {
 constexpr size_t kSizeFive = 5;
+constexpr size_t kSizeTwo = 2;
 
 void Gather(mindspore::kernel::KernelTensor *tensor) {
   if (tensor == nullptr || tensor->type_id() == kMetaTypeNone) {
@@ -73,8 +75,7 @@ void Gather(const device::DeviceAddressPtr &device_address) {
   auto dtype = device_address->type_id();
   MemcpyToBuf(&dtype, sizeof(int));
 
-  const auto &storage_info =
-      device_address->address_common()->tensor_storage_info_;
+  const auto &storage_info = device_address->GetTensorStorageInfo();
   if (storage_info != nullptr) {
     // strides
     MemcpyToBuf(

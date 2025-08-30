@@ -19,10 +19,10 @@
 #include <utility>
 #include <vector>
 #include "ccsrc/ops/ms_kernels_internal/mla/mla_common.h"
-#include "mindspore/ccsrc/ms_extension/api.h"
-#include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
 #include "ccsrc/base/ms_kernels_internal/pyboost/internal_pyboost_runner.h"
 #include "ccsrc/utils/utils.h"
+#include "mindspore/ccsrc/ms_extension/api.h"
+#include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
 
 namespace ms_custom_ops {
 class MlaRunner : public InternalPyboostRunner {

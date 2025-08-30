@@ -17,18 +17,18 @@
 #ifndef MS_CUSTOM_OPS_INTERNAL_OP_PYBOOST_RUNNER_H_
 #define MS_CUSTOM_OPS_INTERNAL_OP_PYBOOST_RUNNER_H_
 
-#include "ms_extension/api.h"
 #include <functional>
 #include <optional>
 #include <set>
 #include <unordered_map>
 
-#include "include/internal.h"
-#include "ccsrc/base/ms_kernels_internal/internal_helper.h"
 #include "internal_pyboost_utils.h"
 #include "internal_spinlock.h"
 #include "internal_tiling_cache.h"
 #include "module.h"
+#include "mindspore/ccsrc/ms_extension/api.h"
+#include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
+#include "ccsrc/base/ms_kernels_internal/internal_helper.h"
 
 namespace ms_custom_ops {
 using namespace mindspore;

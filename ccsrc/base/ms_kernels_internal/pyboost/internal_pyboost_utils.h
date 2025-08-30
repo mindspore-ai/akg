@@ -17,13 +17,13 @@
 #ifndef MS_CUSTOM_OPS_INTERNAL_PYBOOST_UTILS_H_
 #define MS_CUSTOM_OPS_INTERNAL_PYBOOST_UTILS_H_
 
-#include "internal_helper.h"
-#include "internal_tiling_cache.h"
-#include "kernel/ascend/acl_ir/op_api_cache.h"
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
+#include "internal_helper.h"
+#include "internal_tiling_cache.h"
+#include "mindspore/ops/kernel/ascend/acl_ir/op_api_cache.h"
 
 namespace ms_custom_ops {
 void GatherOpHash(const mindspore::tensor::TensorPtr &);

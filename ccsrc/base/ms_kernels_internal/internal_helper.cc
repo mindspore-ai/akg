@@ -16,18 +16,18 @@
 
 #include "internal_helper.h"
 
-#include "common/kernel_build_info.h"
-#include "include/backend/kernel_info.h"
-#include "include/common/utils/anfalgo.h"
-#include "mindapi/base/type_id.h"
+#include <set>
+#include <unordered_map>
+#include <vector>
+#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel_build_info.h"
+#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel_info.h"
+#include "mindspore/ccsrc/include/common/utils/anfalgo.h"
+#include "mindspore/core/include/mindapi/base/type_id.h"
 #include "mindspore/ops/op_def/auto_generate/gen_ops_primitive_c.h"
 #include "mindspore/ops/op_def/math_op_name.h"
 #include "mindspore/ops/op_def/nn_optimizer_op_name.h"
 #include "mindspore/ops/ops_utils/op_constants.h"
-#include "utils/log_adapter.h"
-#include <set>
-#include <unordered_map>
-#include <vector>
+#include "mindspore/core/include/utils/log_adapter.h"
 
 namespace ms_custom_ops {
 internal::DataType TransInternalDataType(TypeId ms_type) {

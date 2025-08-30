@@ -15,10 +15,9 @@
  */
 
 #include "internal_kernel_mod.h"
-
-#include "include/common/utils/ms_device_shape_transfer.h"
 #include "internal_helper.h"
 #include "internal_tiling_cache.h"
+#include "mindspore/ccsrc/include/common/utils/ms_device_shape_transfer.h"
 #include <functional>
 #include <utility>
 

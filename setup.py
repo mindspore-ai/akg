@@ -198,7 +198,7 @@ class CustomBuildExt(build_ext):
             f"  -DASCENDC_INSTALL_PATH={package_path}"
             f"  -DMS_EXTENSION_NAME={ext_name}"
             f"  -DASCEND_CANN_PACKAGE_PATH={ascend_home_path} && "
-            f"cmake --build {BUILD_OPS_DIR} -j{compile_cores} --verbose"
+            f"cmake --build {BUILD_OPS_DIR} -j{compile_cores}"
         )
 
         try:

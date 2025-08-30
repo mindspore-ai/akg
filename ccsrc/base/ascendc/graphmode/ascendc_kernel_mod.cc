@@ -19,9 +19,9 @@
 #include <map>
 #include <set>
 #include <functional>
-#include "utils/ms_utils.h"
-#include "ir/tensor.h"
-#include "kernel/ascend/acl_ir/acl_helper.h"
+#include "mindspore/core/include/utils/ms_utils.h"
+#include "mindspore/core/include/mindapi/ir/tensor.h"
+#include "mindspore/ops/kernel/ascend/acl_ir/acl_helper.h"
 
 namespace ms_custom_ops {
 bool AscendCKernelMod::is_dynamic_ = false;

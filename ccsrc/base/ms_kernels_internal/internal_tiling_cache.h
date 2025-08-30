@@ -16,15 +16,16 @@
 #ifndef MS_CUSTOM_OPS_INTERNAL_TILING_CACHE_H_
 #define MS_CUSTOM_OPS_INTERNAL_TILING_CACHE_H_
 
-#include "common/kernel.h"
-#include "include/internal.h"
-#include "ir/primitive.h"
-#include "tiling_mem_mgr.h"
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include "tiling_mem_mgr.h"
+#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel.h"
+#include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
+#include "mindspore/core/include/ir/primitive.h"
 
 namespace ms_custom_ops {
 using namespace mindspore;

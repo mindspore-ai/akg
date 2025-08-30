@@ -16,14 +16,14 @@
 
 #include "tiling_mem_mgr.h"
 
-#include "acl/acl.h"
-#include "mindspore/ccsrc/runtime/hardware/device_context_manager.h"
-#include "plugin/device/ascend/kernel/internal/internal_ascend_adapter.h"
-#include "plugin/res_manager/ascend/mem_manager/ascend_memory_pool.h"
-#include "plugin/res_manager/ascend/symbol_interface/acl_rt_symbol.h"
-#include "plugin/res_manager/ascend/symbol_interface/symbol_utils.h"
-#include "utils/ms_context.h"
 #include <algorithm>
+#include "acl/acl.h"
+#include "mindspore/ccsrc/runtime/hardware_abstract/device_context/device_context_manager.h"
+#include "mindspore/ops/kernel/ascend/internal/internal_ascend_adapter.h"
+#include "mindspore/ccsrc/plugin/ascend/res_manager/mem_manager/ascend_memory_pool.h"
+#include "mindspore/ccsrc/plugin/ascend/res_manager/symbol_interface/acl_rt_symbol.h"
+#include "mindspore/ccsrc/plugin/ascend/res_manager/symbol_interface/symbol_utils.h"
+#include "mindspore/core/include/utils/ms_context.h"
 
 #define TMP_LOG(level) MS_LOG(level) << GetName() << ": "
 
@@ -235,7 +235,7 @@ TilingMemMgr::TilingMemMgr() {
       context_ptr->get_param<std::string>(MS_CTX_DEVICE_TARGET);
   device_context_ =
       device::DeviceContextManager::GetInstance().GetOrCreateDeviceContext(
-          {device_name, device_id});
+          {device::GetDeviceTypeByName(device_name), device_id});
 }
 
 void TilingMemMgr::CopyAsync(void *host_ptr, void *device_ptr, size_t size) {

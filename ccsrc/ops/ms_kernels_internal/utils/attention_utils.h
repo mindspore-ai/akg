@@ -20,7 +20,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "mindspore/ops/kernel/include/common/kernel_tensor.h"
+#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel_tensor.h"
 
 namespace ms_custom_ops {
 inline bool GetSeqLenAndCheckUpdate(mindspore::kernel::KernelTensor *tensor, std::vector<int32_t> *seq_len) {

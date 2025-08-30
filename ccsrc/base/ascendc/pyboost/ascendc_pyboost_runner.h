@@ -17,7 +17,7 @@
 #define MS_CUSTOM_OPS_OP_DEF_ASCENDC_PYBOOST_ASCENDC_PYBOOST_RUNNER_H_
 
 #include "module.h"
-#include "ms_extension/all.h"
+#include "mindspore/ccsrc/ms_extension/all.h"
 #include <functional>
 #include <optional>
 #include <set>
