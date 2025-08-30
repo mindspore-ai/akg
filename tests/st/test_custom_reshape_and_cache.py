@@ -16,6 +16,7 @@
 
 # Standard library imports
 from enum import Enum
+from functools import cache, wraps
 from typing import Tuple, Optional, Dict, Any
 
 # Third-party imports
@@ -30,6 +31,18 @@ from mindspore.common.np_dtype import bfloat16
 
 # Local imports
 import ms_custom_ops
+
+def jit_for_graph_mode(fn):
+    """
+    A decorator that conditionally applies jit to a function at runtime based on the context mode.
+    """
+    jitted_fn = jit(fn)
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if context.get_context("mode") == context.GRAPH_MODE:
+            return jitted_fn(*args, **kwargs)
+        return fn(*args, **kwargs)
+    return wrapper
 
 # Global constants
 NUM_SLOTS = 20
@@ -57,23 +70,19 @@ class DataType(Enum):
 class ReshapeAndCacheAll(nn.Cell):
     """Reshape and cache operation for NZ/ND format with all parameters"""
     
-    def __init__(self):
-        super().__init__()
-
-    def construct(self, key, value, key_cache, value_cache, slot_map, head_num=0):
+    @jit_for_graph_mode
+    def construct(self, key, value, key_cache, value_cache, slot_map, cache_mode, head_num=0):
         return ms_custom_ops.reshape_and_cache(
-            key, value, key_cache, value_cache, slot_map, head_num)
+            key, value, key_cache, value_cache, slot_map, cache_mode, head_num)
 
 
 class ReshapeAndCacheKey(nn.Cell):
     """Reshape and cache operation for NZ/ND format with key only"""
     
-    def __init__(self):
-        super().__init__()
-
-    def construct(self, key, key_cache, slot_map):
+    @jit_for_graph_mode
+    def construct(self, key, key_cache, slot_map, cache_mode):
         return ms_custom_ops.reshape_and_cache(
-            key, key_cache=key_cache, slot_mapping=slot_map)
+            key, key_cache=key_cache, slot_mapping=slot_map, cache_mode=cache_mode)
 
 
 class MindSporeInputFactory:
@@ -82,26 +91,19 @@ class MindSporeInputFactory:
     @staticmethod
     def create_inputs(np_k: np.ndarray, np_v: np.ndarray, 
                      np_k_cache: np.ndarray, np_v_cache: np.ndarray, 
-                     np_slot_map: np.ndarray, format: str = "", 
-                     exec_mode: context = context.GRAPH_MODE) -> Tuple[Tensor, ...]:
+                     np_slot_map: np.ndarray) -> Tuple[Tensor, ...]:
         """Create MindSpore inputs"""
         ms_key = Tensor(np_k)
         ms_value = Tensor(np_v)
-        
-        if exec_mode == context.GRAPH_MODE:
-            ms_key_cache = Parameter(Tensor(np_k_cache), storage_format=format, name="key_cache")
-            ms_value_cache = Parameter(Tensor(np_v_cache), storage_format=format, name="value_cache")
-        else:
-            ms_key_cache = Tensor(np_k_cache)
-            ms_value_cache = Tensor(np_v_cache)
-        
+        ms_key_cache = Tensor(np_k_cache)
+        ms_value_cache = Tensor(np_v_cache)
         ms_slot_map = Tensor(np_slot_map)
         return ms_key, ms_value, ms_key_cache, ms_value_cache, ms_slot_map
 
 
-def create_ms_inputs(np_k, np_v, np_k_cache, np_v_cache, np_slot_map, format="", exec_mode=context.GRAPH_MODE):
+def create_ms_inputs(np_k, np_v, np_k_cache, np_v_cache, np_slot_map):
     """Legacy function for backward compatibility"""
-    return MindSporeInputFactory.create_inputs(np_k, np_v, np_k_cache, np_v_cache, np_slot_map, format, exec_mode)
+    return MindSporeInputFactory.create_inputs(np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
 
 
 class TestResultVerifier:
@@ -157,7 +159,35 @@ class DimensionTestHelper:
 
 
 # ===============================
-#        test nd format
+#        RESHAPE AND CACHE TEST ARCHITECTURE
+# ===============================
+"""
+Test Structure Overview:
+
+1. ND FORMAT TESTS (cache_mode=0):
+   - Direct ND format testing without format conversion
+   - Data flow: Input(ND) → ReshapeAndCache → Output(ND) → Verify
+   - Tests: test_reshape_and_cache_nd_*
+
+2. NZ FORMAT TESTS (cache_mode=1): 
+   - Tests FRACTAL_NZ format with format conversion using trans_data
+   - Data flow: Input(ND) → TransData(ND→NZ) → ReshapeAndCache → TransData(NZ→ND) → Verify
+   - Tests: test_reshape_and_cache_nz_*
+   
+3. KEY COMPONENTS:
+   - create_nd_inputs(): Generate ND format test data
+   - create_nz_inputs(): Generate NZ-compatible test data (different layout)
+   - get_nd_cached_slots(): Extract verification data from ND format cache
+   - get_nz_cached_slots(): Extract verification data from NZ format cache (legacy)
+   - nd_inference()/nz_inference(): Generate golden reference results
+
+4. VERIFICATION STRATEGY:
+   - ND tests: Both actual and golden use ND format → direct comparison
+   - NZ tests: Convert actual results back to ND format → compare with ND golden
+"""
+
+# ===============================
+#        ND FORMAT TESTS
 # ===============================
 class TestDataGenerator:
     """Data generator for test inputs"""
@@ -318,7 +348,7 @@ def test_reshape_and_cache_nd_key_value(np_dtype, kv_dim, run_mode):
         np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
     
     # Run test
-    _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map)
+    _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map, 0)
     TestResultVerifier.verify_results(ms_k_cache, np_k_cache_out, np_dtype)
     TestResultVerifier.verify_results(ms_v_cache, np_v_cache_out, np_dtype)
 
@@ -350,7 +380,7 @@ def test_reshape_and_cache_nd_key(np_dtype, kv_dim, run_mode):
         np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
     
     # Run test
-    _ = net(ms_k, key_cache=ms_k_cache, slot_map=ms_slot_map)
+    _ = net(ms_k, key_cache=ms_k_cache, slot_map=ms_slot_map, cache_mode=0)
     TestResultVerifier.verify_results(ms_k_cache, np_k_cache_out, np_dtype)
 
 
@@ -383,7 +413,7 @@ def test_reshape_and_cache_nd_key_value_different_dimensions(np_dtype, kv_dim, k
             np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
         
         # Run test
-        _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map)
+        _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map, 0)
         TestResultVerifier.verify_results(ms_k_cache, np_k_cache_out, np_dtype)
         TestResultVerifier.verify_results(ms_v_cache, np_v_cache_out, np_dtype)
     
@@ -397,9 +427,10 @@ def test_reshape_and_cache_nd_key_value_different_dimensions(np_dtype, kv_dim, k
 @pytest.mark.parametrize('run_mode', [context.GRAPH_MODE, context.PYNATIVE_MODE])
 def test_reshape_and_cache_nz_different_key_value_dimensions(kv_dim, run_mode):
     """
-    Feature: Test ReshapeAndCache.
-    Description: Test NZ format with significantly different K_HEAD_DIM and V_HEAD_DIM.
-    Expectation: Assert that results are consistent with numpy.
+    Feature: Test ReshapeAndCache with FRACTAL_NZ format and different key/value dimensions.
+    Description: Test with very different K_HEAD_DIM(96) and V_HEAD_DIM(16) using trans_data conversion.
+    Test Flow: ND → trans_data(ND→NZ) → ReshapeAndCache(cache_mode=1) → trans_data(NZ→ND) → Verify
+    Expectation: Handles dimension differences correctly after roundtrip FRACTAL_NZ conversion.
     """
     def run_test():
         # Setup context
@@ -420,29 +451,24 @@ def test_reshape_and_cache_nz_different_key_value_dimensions(kv_dim, run_mode):
             np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
 
         # Create MindSpore inputs with appropriate format
-        if run_mode == context.GRAPH_MODE:
-            ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map = create_ms_inputs(
-                np_k, np_v, np_k_cache, np_v_cache, np_slot_map, format="FRACTAL_NZ")
-        else:
-            ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map = create_ms_inputs(
-                np_k, np_v, np_k_cache, np_v_cache, np_slot_map, format="")
-            acl_format = 29
-            ms_k_cache = ops.auto_generate.format_cast(ms_k_cache, acl_format)
-            ms_v_cache = ops.auto_generate.format_cast(ms_v_cache, acl_format)
+        ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map = create_ms_inputs(
+            np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
+        # Convert ND to FRACTAL_NZ format using trans_data
+        ms_k_cache = ms_custom_ops.trans_data(ms_k_cache, transdata_type=1)  # ND_TO_FRACTAL_NZ
+        ms_v_cache = ms_custom_ops.trans_data(ms_v_cache, transdata_type=1)  # ND_TO_FRACTAL_NZ
 
-        _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map, head_num=NUM_HEADS)
-
-        # Extract and verify results
+        _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map, cache_mode=1, head_num=NUM_HEADS)
+       
+        # Extract and verify results - both use ND format extraction
         ms_k_cache_np = ms_k_cache.asnumpy()
         ms_v_cache_np = ms_v_cache.asnumpy()
         
-        # Extract cached slots for verification
-        ms_k_output = get_nd_cached_slots(ms_k_cache_np, np_slot_map)
-        golden_k_output = get_nd_cached_slots(np_k_cache_out, np_slot_map)
+        ms_k_output = get_nz_cached_slots(ms_k_cache_np, np_slot_map)
+        golden_k_output = get_nd_cached_slots(np_k_cache_out, np_slot_map)  # Golden is already ND format
         
-        ms_v_output = get_nd_cached_slots(ms_v_cache_np, np_slot_map)
-        golden_v_output = get_nd_cached_slots(np_v_cache_out, np_slot_map)
-        
+        ms_v_output = get_nz_cached_slots(ms_v_cache_np, np_slot_map)
+        golden_v_output = get_nd_cached_slots(np_v_cache_out, np_slot_map)  # Golden is already ND format
+
         # Verify results
         assert np.allclose(ms_k_output, golden_k_output, 0.001, 0.001)
         assert np.allclose(ms_v_output, golden_v_output, 0.001, 0.001)
@@ -483,7 +509,7 @@ def test_reshape_and_cache_different_key_value_dimensions(kv_dim, run_mode):
             np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
         
         # Run test
-        _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map)
+        _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map, cache_mode=0)
         TestResultVerifier.verify_results(ms_k_cache, np_k_cache_out, np.float16)
         TestResultVerifier.verify_results(ms_v_cache, np_v_cache_out, np.float16)
     
@@ -492,8 +518,56 @@ def test_reshape_and_cache_different_key_value_dimensions(kv_dim, run_mode):
 
 
 # ===============================
-#        test nz format
+#        NZ FORMAT TESTS (FRACTAL_NZ)
 # ===============================
+"""
+NZ Format Test Flow:
+1. Create initial ND format cache tensors
+2. Convert cache tensors to FRACTAL_NZ format using trans_data(type=2)
+3. Run ReshapeAndCache with cache_mode=1 (NZ format mode)
+4. Convert results back to ND format using trans_data(type=1) for verification
+5. Compare with golden ND results using get_nd_cached_slots()
+
+Note: The 'NZ' in test names refers to FRACTAL_NZ format compatibility,
+but all verification is done in ND format after conversion back.
+"""
+def convert_cache_nz_to_nd_and_verify(ms_k_cache, ms_v_cache, np_k_cache_out, np_v_cache_out, 
+                                     np_slot_map, k_dtype, v_dtype):
+    """
+    Helper function to convert FRACTAL_NZ cache results back to ND format and perform verification.
+    This eliminates code duplication across NZ test functions.
+    """
+    # Convert FRACTAL_NZ cache results back to ND format for verification
+    ms_k_cache_nd = ms_custom_ops.trans_data(ms_k_cache, transdata_type=0)  # FRACTAL_NZ_TO_ND
+    ms_v_cache_nd = ms_custom_ops.trans_data(ms_v_cache, transdata_type=0)  # FRACTAL_NZ_TO_ND
+    
+    # Extract and verify results - convert to numpy arrays
+    ms_k_cache_np = ms_k_cache_nd.asnumpy()
+    ms_v_cache_np = ms_v_cache_nd.asnumpy()
+    
+    # Handle bfloat16 conversion
+    if k_dtype == bfloat16:
+        ms_k_cache_np = ms_k_cache_np.astype(np.float32)
+        np_k_cache_out = np_k_cache_out.astype(np.float32)
+    
+    if v_dtype == bfloat16:
+        ms_v_cache_np = ms_v_cache_np.astype(np.float32)
+        np_v_cache_out = np_v_cache_out.astype(np.float32)
+    
+    # Extract cached slots for verification - both use ND format extraction
+    ms_k_output = get_nd_cached_slots(ms_k_cache_np, np_slot_map)
+    golden_k_output = get_nd_cached_slots(np_k_cache_out, np_slot_map)  # Golden is already ND format
+    
+    ms_v_output = get_nd_cached_slots(ms_v_cache_np, np_slot_map)
+    golden_v_output = get_nd_cached_slots(np_v_cache_out, np_slot_map)  # Golden is already ND format
+    
+    # Verify results
+    assert np.allclose(ms_k_output, golden_k_output, 0.001, 0.001), \
+        f"Key cache mismatch: max_diff={np.max(np.abs(ms_k_output - golden_k_output))}"
+    assert np.allclose(ms_v_output, golden_v_output, 0.001, 0.001), \
+        f"Value cache mismatch: max_diff={np.max(np.abs(ms_v_output - golden_v_output))}"
+
+
 class NZDataGenerator(TestDataGenerator):
     """Data generator for NZ format"""
     
@@ -524,7 +598,6 @@ def create_nz_inputs(k_dtype=np.float16, v_dtype=np.float16, kv_dim=3, k_head_di
 
 def get_nz_cached_slots(cache, slot_map):
     ans = []
-    tmp = []
 
     num_slots = cache.shape[0]
     slot_size = cache.shape[1]
@@ -540,6 +613,7 @@ def get_nz_cached_slots(cache, slot_map):
             continue
         slot_idx = slot // slot_size
         slot_offset = slot % slot_size
+        tmp = []  # Reset tmp for each slot
         for j in range(cache.shape[1]):
             tmp.append(cache[slot_idx][j][slot_offset])
         ans.append(np.concatenate(tmp, axis=0))
@@ -568,9 +642,10 @@ def get_nd_cached_slots(cache, slot_map):
 @pytest.mark.parametrize('run_mode', [context.GRAPH_MODE, context.PYNATIVE_MODE])
 def test_reshape_and_cache_nz(k_dtype, v_dtype, kv_dim, run_mode):
     """
-    Feature: Test ReshapeAndCache.
-    Description: Test NZ format with key and value.
-    Expectation: Assert that results are consistent with numpy.
+    Feature: Test ReshapeAndCache with FRACTAL_NZ format conversion.
+    Description: Test FRACTAL_NZ format compatibility using trans_data for format conversion.
+    Test Flow: ND → trans_data(ND→NZ) → ReshapeAndCache(cache_mode=1) → trans_data(NZ→ND) → Verify
+    Expectation: Results match golden ND format reference after roundtrip conversion.
     """
     # Skip invalid combinations
     if (k_dtype == np.float16 and v_dtype != np.float16) or \
@@ -590,19 +665,15 @@ def test_reshape_and_cache_nz(k_dtype, v_dtype, kv_dim, run_mode):
         np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
 
     # Create MindSpore inputs with appropriate format
-    if run_mode == context.GRAPH_MODE:
-        ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map = create_ms_inputs(
-            np_k, np_v, np_k_cache, np_v_cache, np_slot_map, format="FRACTAL_NZ")
-    else:
-        ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map = create_ms_inputs(
-            np_k, np_v, np_k_cache, np_v_cache, np_slot_map, format="")
-        acl_format = 29
-        ms_k_cache = ops.auto_generate.format_cast(ms_k_cache, acl_format)
-        ms_v_cache = ops.auto_generate.format_cast(ms_v_cache, acl_format)
+    ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map = create_ms_inputs(
+        np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
+    # Convert ND to FRACTAL_NZ format using trans_data
+    ms_k_cache = ms_custom_ops.trans_data(ms_k_cache, transdata_type=1)  # ND_TO_FRACTAL_NZ
+    ms_v_cache = ms_custom_ops.trans_data(ms_v_cache, transdata_type=1)  # ND_TO_FRACTAL_NZ
 
-    _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map, head_num=NUM_HEADS)
-
-    # Extract and verify results
+    _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map, cache_mode=1, head_num=NUM_HEADS)
+ 
+    # Extract and verify results - convert to numpy arrays
     ms_k_cache_np = ms_k_cache.asnumpy()
     ms_v_cache_np = ms_v_cache.asnumpy()
     
@@ -615,12 +686,12 @@ def test_reshape_and_cache_nz(k_dtype, v_dtype, kv_dim, run_mode):
         ms_v_cache_np = ms_v_cache_np.astype(np.float32)
         np_v_cache_out = np_v_cache_out.astype(np.float32)
     
-    # Extract cached slots for verification
-    ms_k_output = get_nd_cached_slots(ms_k_cache_np, np_slot_map)
-    golden_k_output = get_nd_cached_slots(np_k_cache_out, np_slot_map)
-    
-    ms_v_output = get_nd_cached_slots(ms_v_cache_np, np_slot_map)
-    golden_v_output = get_nd_cached_slots(np_v_cache_out, np_slot_map)
+    # Extract cached slots for verification - both use ND format extraction
+    ms_k_output = get_nz_cached_slots(ms_k_cache_np, np_slot_map)
+    golden_k_output = get_nd_cached_slots(np_k_cache_out, np_slot_map)  # Golden is already ND format
+
+    ms_v_output = get_nz_cached_slots(ms_v_cache_np, np_slot_map)
+    golden_v_output = get_nd_cached_slots(np_v_cache_out, np_slot_map)  # Golden is already ND format
     
     # Verify results
     assert np.allclose(ms_k_output, golden_k_output, 0.001, 0.001)
@@ -638,9 +709,10 @@ def test_reshape_and_cache_nz(k_dtype, v_dtype, kv_dim, run_mode):
 @pytest.mark.parametrize('v_head_dim', [32, 64, 128])
 def test_reshape_and_cache_nz_different_dimensions(k_dtype, v_dtype, kv_dim, run_mode, k_head_dim, v_head_dim):
     """
-    Feature: Test ReshapeAndCache.
-    Description: Test NZ format with different K_HEAD_DIM and V_HEAD_DIM combinations.
-    Expectation: Assert that results are consistent with numpy.
+    Feature: Test ReshapeAndCache with FRACTAL_NZ format and various dimension combinations.
+    Description: Test all combinations of K_HEAD_DIM and V_HEAD_DIM (32,64,128) using trans_data conversion.
+    Test Flow: ND → trans_data(ND→NZ) → ReshapeAndCache(cache_mode=1) → trans_data(NZ→ND) → Verify
+    Expectation: All dimension combinations work correctly with FRACTAL_NZ roundtrip conversion.
     """
     # Skip invalid combinations
     if (k_dtype == np.float16 and v_dtype != np.float16) or \
@@ -661,19 +733,16 @@ def test_reshape_and_cache_nz_different_dimensions(k_dtype, v_dtype, kv_dim, run
             np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
 
         # Create MindSpore inputs with appropriate format
-        if run_mode == context.GRAPH_MODE:
-            ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map = create_ms_inputs(
-                np_k, np_v, np_k_cache, np_v_cache, np_slot_map, format="FRACTAL_NZ")
-        else:
-            ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map = create_ms_inputs(
-                np_k, np_v, np_k_cache, np_v_cache, np_slot_map, format="")
-            acl_format = 29
-            ms_k_cache = ops.auto_generate.format_cast(ms_k_cache, acl_format)
-            ms_v_cache = ops.auto_generate.format_cast(ms_v_cache, acl_format)
+        ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map = create_ms_inputs(
+            np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
+        # Convert ND to FRACTAL_NZ format using trans_data
+        ms_k_cache = ms_custom_ops.trans_data(ms_k_cache, transdata_type=1)  # ND_TO_FRACTAL_NZ
+        ms_v_cache = ms_custom_ops.trans_data(ms_v_cache, transdata_type=1)  # ND_TO_FRACTAL_NZ
 
-        _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map, head_num=NUM_HEADS)
+        _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map, cache_mode=1, head_num=NUM_HEADS)
 
-        # Extract and verify results
+        # Extract and verify results - convert to numpy arrays
+        # host没有FRACTAL_NZ的信息，asnumpy后还是FRACTAL_NZ格式
         ms_k_cache_np = ms_k_cache.asnumpy()
         ms_v_cache_np = ms_v_cache.asnumpy()
         
@@ -686,12 +755,13 @@ def test_reshape_and_cache_nz_different_dimensions(k_dtype, v_dtype, kv_dim, run
             ms_v_cache_np = ms_v_cache_np.astype(np.float32)
             np_v_cache_out = np_v_cache_out.astype(np.float32)
         
-        # Extract cached slots for verification
-        ms_k_output = get_nd_cached_slots(ms_k_cache_np, np_slot_map)
-        golden_k_output = get_nd_cached_slots(np_k_cache_out, np_slot_map)
-        
-        ms_v_output = get_nd_cached_slots(ms_v_cache_np, np_slot_map)
-        golden_v_output = get_nd_cached_slots(np_v_cache_out, np_slot_map)
+        # Extract cached slots for verification - both use ND format extraction
+        # 所以这里直接用nz格式提取
+        ms_k_output = get_nz_cached_slots(ms_k_cache_np, np_slot_map)
+        golden_k_output = get_nd_cached_slots(np_k_cache_out, np_slot_map)  # Golden is already ND format
+
+        ms_v_output = get_nz_cached_slots(ms_v_cache_np, np_slot_map)
+        golden_v_output = get_nd_cached_slots(np_v_cache_out, np_slot_map)  # Golden is already ND format
         
         # Verify results
         assert np.allclose(ms_k_output, golden_k_output, 0.001, 0.001)
