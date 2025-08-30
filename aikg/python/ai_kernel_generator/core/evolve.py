@@ -22,7 +22,9 @@ from pathlib import Path
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+from ai_kernel_generator.core.sketch import Sketch
 from ai_kernel_generator import get_project_root
+from ai_kernel_generator.utils.collector import get_collector
 
 
 os.environ['AIKG_DATA_COLLECT'] = 'on'
@@ -57,13 +59,14 @@ def pretty_print_results(results: List[Tuple[str, bool]]):
 def load_meta_prompts(parallel_num: int) -> list[str]:
     """
     返回长度为 parallel_num 的 meta prompt 列表。
-    如果 meta prompt 数量不足，则自动拼接多个内容，保证每个字符串都不完全重复。
-
+    
     Args:
         parallel_num: 并行任务数
 
     Returns:
         list[str]: meta prompts 字符串列表
+        - 当parallel_num <= n时：随机不重复选择
+        - 当parallel_num > n时：随机重复选择，保证parallel_num条数据
     """
     try:
         from ai_kernel_generator.resources.docs.triton_docs.meta_prompts import (
@@ -76,27 +79,27 @@ def load_meta_prompts(parallel_num: int) -> list[str]:
         ), "triton_meta_prompts should be a list"
 
         n = len(triton_meta_prompts)
-        prompts_pool = triton_meta_prompts.copy()
-        random.shuffle(prompts_pool)
-        result = []
-        idx = 0
-        for i in range(parallel_num):
-            # 计算每个字符串要拼接的 meta prompt 数量，尽量均匀分配
-            base = n // parallel_num
-            extra = 1 if i < n % parallel_num else 0
-            count = base + extra
-            # 随机选择 count 个 meta prompt（可重复）
-            if idx + count > n:
-                random.shuffle(prompts_pool)
-                idx = 0
-            prompts = prompts_pool[idx: idx + count]
-            idx += count
-            result.append("\n\n".join(prompts))
-        assert len(result) == parallel_num, "Result length mismatch"
-        return result
+        
+        if parallel_num <= n:
+            # 随机不重复选择parallel_num个
+            return random.sample(triton_meta_prompts, parallel_num)
+        else:
+            # 需要重复选择，保证parallel_num条数据
+            result = []
+            while len(result) < parallel_num:
+                # 每轮随机打乱所有prompts
+                shuffled_prompts = triton_meta_prompts.copy()
+                random.shuffle(shuffled_prompts)
+                
+                # 取需要的数量
+                remaining = parallel_num - len(result)
+                result.extend(shuffled_prompts[:min(remaining, n)])
+            
+            return result
+            
     except Exception as e:
         logger.error(f"Failed to load meta prompts: {e}")
-        return ["" for _ in range(parallel_num)]
+        return [""] * parallel_num
 
 
 def save_implementation(impl_data: Dict[str, Any], storage_dir: str) -> None:
@@ -161,12 +164,13 @@ def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict
         return implementations
 
 
-def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int = 2) -> List[Dict[str, Any]]:
+def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int = 2, use_all: bool = False) -> List[Dict[str, Any]]:
     """从实现列表中采样inspiration格式的数据
 
     Args:
         implementations: 实现列表
-        sample_num: 采样数量
+        sample_num: 采样数量（当use_all=False时生效）
+        use_all: 是否使用所有数据，如果True则按性能排序返回所有数据
 
     Returns:
         inspiration格式的数据列表
@@ -174,25 +178,33 @@ def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int =
     if not implementations:
         return []
 
-    # 随机采样或选择最佳的几个
-    if len(implementations) <= sample_num:
-        selected = implementations
+    if use_all:
+        # 使用所有数据，按性能排序
+        selected = implementations  # implementations已经按性能排序
     else:
-        # 50%概率选择最佳的，50%概率随机选择
-        best_count = max(1, sample_num // 2)
-        random_count = sample_num - best_count
+        # 随机采样或选择最佳的几个
+        if len(implementations) <= sample_num:
+            selected = implementations
+        else:
+            # 50%概率选择最佳的，50%概率随机选择
+            best_count = max(1, sample_num // 2)
+            random_count = sample_num - best_count
 
-        selected = implementations[:best_count]  # 最佳的几个
-        if random_count > 0 and len(implementations) > best_count:
-            remaining = implementations[best_count:]
-            selected.extend(random.sample(remaining, min(random_count, len(remaining))))
+            selected = implementations[:best_count]  # 最佳的几个
+            if random_count > 0 and len(implementations) > best_count:
+                remaining = implementations[best_count:]
+                selected.extend(random.sample(remaining, min(random_count, len(remaining))))
 
     # 转换为inspiration格式
     inspirations = []
     for impl in selected:
         profile_tuple = impl.get('profile', (float('inf'), 0.0, 0.0))
+
+        # 优先使用sketch，如果没有sketch则使用原始代码
+        impl_content = impl.get('sketch', '') or impl.get('impl_code', '')
+
         inspiration = {
-            'impl_code': impl.get('impl_code', ''),
+            'impl_code': impl_content,  # 使用sketch作为inspiration内容
             'profile': profile_tuple,  # 保持完整的三元组
             'strategy_mode': 'evolution'
         }
@@ -323,8 +335,20 @@ async def evolve(
         round_total_count = len(results)
         round_implementations = []
 
+        # 创建sketch agent（复用config）
+        sketch_agent = Sketch(
+            op_name=op_name,
+            task_desc=task_desc,
+            dsl=dsl,
+            backend=backend,
+            arch=arch,
+            config=config
+        )
+
+        # 收集成功任务信息
+        successful_impls = []
+
         for task_op_name, success, task_info in results:
-            logger.debug(f"op_name: {task_op_name}, result: {task_info}")
             total_tasks += 1
 
             if success:
@@ -340,14 +364,32 @@ async def evolve(
                     'round': round_idx,
                     'task_id': task_info.get('task_id', ''),
                     'task_info': task_info,
-                    'profile': profile_res,  # 完整三元组
+                    'profile': profile_res,
                     'impl_code': task_info.get("coder_code", ""),
                     'framework_code': task_desc,
                     'backend': backend,
                     'arch': arch,
                     'dsl': dsl,
-                    'framework': framework
+                    'framework': framework,
+                    'sketch': ''
                 }
+                successful_impls.append(impl_info)
+
+        # 使用task_pool异步执行sketch生成
+        if successful_impls:
+            for impl_info in successful_impls:
+                if impl_info['impl_code']:
+                    task_pool.create_task(partial(sketch_agent.run, impl_info['task_info']))
+
+            sketch_results = await task_pool.wait_all()
+            task_pool.tasks.clear()
+
+            # 处理sketch结果并更新impl_info
+            for i, impl_info in enumerate(successful_impls):
+                if impl_info['impl_code'] and i < len(sketch_results):
+                    sketch_content = sketch_results[i]
+                    impl_info['sketch'] = sketch_content if not isinstance(sketch_content, Exception) else ""
+
                 round_implementations.append(impl_info)
                 best_implementations.append(impl_info)
 
@@ -369,6 +411,14 @@ async def evolve(
         }
         round_results.append(round_result)
         all_results.extend([(impl['op_name'], True) for impl in round_implementations])
+
+        if os.getenv("AIKG_DATA_COLLECT", "off").lower() == "on":
+            try:
+                collector = await get_collector()
+                collector.set_config(config)
+                saved_files = await collector.prepare_and_remove_data()
+            except Exception as e:
+                logger.error(f"Failed to prepare data for transmission in evolve round {round_idx}: {e}")
 
         # 打印轮次结果
         pretty_print_results([(impl['op_name'], True) for impl in round_implementations] +

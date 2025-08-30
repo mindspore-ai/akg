@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-from typing import Tuple
+from typing import Tuple, List
 
 from ai_kernel_generator.core.agent.agent_base import AgentBase
 from ai_kernel_generator.utils.common_utils import remove_copyright_from_text
@@ -23,6 +23,47 @@ from ai_kernel_generator.utils.parser_registry import create_step_parser
 from ai_kernel_generator.database.database import Database
 
 logger = logging.getLogger(__name__)
+
+
+def get_inspirations(inspirations: List[dict]) -> str:
+    """
+    将inspirations列表转换为字符串
+
+    Args:
+        inspirations: 包含字典的列表，每个字典格式为:
+                     {'strategy_mode':xxx, 'impl_code':str, 'profile':float}
+
+    Returns:
+        str: 拼接后的字符串，包含所有impl_code和profile信息
+    """
+    if not inspirations:
+        return ""
+
+    result_parts = []
+
+    for i, inspiration in enumerate(inspirations):
+        if not isinstance(inspiration, dict):
+            logger.warning(f"跳过非字典类型的inspiration: {type(inspiration)}")
+            continue
+
+        impl_code = inspiration.get('impl_code', '')
+        profile = inspiration.get('profile', float('inf'))
+
+        if impl_code:  # 只有当impl_code不为空时才添加
+            # 处理profile信息，支持三元组格式
+            if isinstance(profile, (list, tuple)) and len(profile) >= 3:
+                gen_time, base_time, speedup = profile[0], profile[1], profile[2]
+                profile_text = f"根据此方案草图生成的代码计算耗时: {gen_time:.4f}us, 基准代码耗时: {base_time:.4f}us, 加速比: {speedup:.2f}x"
+            elif isinstance(profile, (list, tuple)) and len(profile) >= 1:
+                profile_text = f"代码执行耗时: {profile[0]:.4f}us"
+            else:
+                profile_text = f"代码执行耗时: {profile:.4f}us" if profile != float('inf') else "代码执行耗时: N/A"
+
+            inspiration_text = f"## Inspiration {i+1} {profile_text}\n"
+            inspiration_text += f"代码：\n```\n{impl_code}\n```\n"
+            result_parts.append(inspiration_text)
+
+    return "\n".join(result_parts)
 
 
 class Designer(AgentBase):
@@ -109,6 +150,7 @@ class Designer(AgentBase):
         input_data = {
             **self.base_doc,
             "llm_suggestions": conductor_suggestion,  # Conductor建议
+            "inspirations": get_inspirations(task_info.get('inspirations', [])),
             "meta_prompts": task_info.get("meta_prompts", ""),
         }
 
@@ -120,6 +162,7 @@ class Designer(AgentBase):
             "hash": task_info.get("task_id", "Designer"),
             "task_id": "",
             "step": self.llm_step_count,
+            "workflow_name": task_info.get("workflow_name", ""),
         }
         self.context.update(to_update_context)
 

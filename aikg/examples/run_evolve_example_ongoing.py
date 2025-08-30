@@ -27,6 +27,7 @@ def get_op_name():
     """获取算子名称"""
     return "aikg_relu"
 
+
 def get_task_desc():
     """获取任务描述"""
     return '''
@@ -55,6 +56,7 @@ def get_inputs():
 def get_init_inputs():
     return []  # No special initialization inputs needed
 '''
+
 
 async def run_evolve_example():
     """运行进化式算子生成示例"""
@@ -166,7 +168,7 @@ async def run_evolve_example():
     print("="*80)
 
     # 保存结果到文件
-    timestamp_str = datetime.now().strftime("%Y%m%d%H%M") # 获取当前时间，并格式化为 "YYYYMMDDHHMM"
+    timestamp_str = datetime.now().strftime("%Y%m%d%H%M")  # 获取当前时间，并格式化为 "YYYYMMDDHHMM"
     file_name = f"evolve_result_{evolution_result.get('op_name', 'unknown')}_{dsl}_{framework}_{timestamp_str}.json"
     result_file = Path(config.get("log_dir", "")) / file_name
 

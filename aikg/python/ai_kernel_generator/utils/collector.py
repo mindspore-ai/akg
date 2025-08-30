@@ -145,7 +145,7 @@ class Collector:
             async with self._async_lock:
                 agent_name = data.get('agent_name', '')
                 hash_value = data.get('hash', '')
-                
+
                 # 数据字段校验
                 self._validate_data_fields(data)
 
@@ -173,35 +173,35 @@ class Collector:
     def _validate_data_fields(self, data: Dict[str, Any]) -> None:
         """
         校验数据字段完整性
-        
+
         Args:
             data: 要校验的数据字典
         """
         agent_name = data.get('agent_name', '')
-        
+
         if agent_name == "feature_extractor":
             # feature_extractor agent允许字段不全
-            required_fields = ['hash', 'agent_name', 'model_name', 
-                'content', 'formatted_prompt', 'reasoning_content', 
-                'response_metadata']
+            required_fields = ['hash', 'agent_name', 'model_name',
+                               'content', 'formatted_prompt', 'reasoning_content',
+                               'response_metadata']
         else:
             # 标准agent应该包含的必需字段
             required_fields = [
-                'hash', 'agent_name', 'op_name', 'dsl', 'backend', 
-                'arch', 'framework', 'workflow_name', 'task_desc', 'model_name', 
-                'content', 'formatted_prompt', 'reasoning_content', 
+                'hash', 'agent_name', 'op_name', 'dsl', 'backend',
+                'arch', 'framework', 'workflow_name', 'task_desc', 'model_name',
+                'content', 'formatted_prompt', 'reasoning_content',
                 'response_metadata'
             ]
-        
+
         missing_fields = []
         empty_fields = []
-        
+
         for field in required_fields:
             if field not in data:
                 missing_fields.append(field)
             elif self._is_empty_value(data[field]):
                 empty_fields.append(field)
-        
+
         # 记录缺失或空值的字段
         if missing_fields:
             logger.warning(f"Agent '{agent_name}' 缺少必需字段: {missing_fields}")
@@ -211,10 +211,10 @@ class Collector:
     def _is_empty_value(self, value) -> bool:
         """
         判断值是否为空
-        
+
         Args:
             value: 要判断的值
-            
+
         Returns:
             bool: 是否为空值
         """

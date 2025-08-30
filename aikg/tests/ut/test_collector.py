@@ -222,7 +222,7 @@ async def test_comprehensive_workflow():
 async def test_data_field_validation():
     """测试数据字段校验功能"""
     collector = await get_collector()
-    
+
     # 测试1: 标准agent完整数据（不应有警告）
     complete_data = {
         'hash': 'test_hash',
@@ -240,7 +240,7 @@ async def test_data_field_validation():
         'response_metadata': 'metadata'
     }
     await collector.collect(complete_data)
-    
+
     # 测试2: 标准agent缺少字段（应该有警告）
     incomplete_data = {
         'hash': 'test_hash2',
@@ -249,7 +249,7 @@ async def test_data_field_validation():
         # 缺少多个必需字段
     }
     await collector.collect(incomplete_data)
-    
+
     # 测试3: feature_extractor完整数据（不应有警告）
     feature_complete = {
         'hash': 'feature_hash',
@@ -261,7 +261,7 @@ async def test_data_field_validation():
         'response_metadata': 'feature metadata'
     }
     await collector.collect(feature_complete)
-    
+
     # 测试4: feature_extractor缺少字段（应该有警告）
     feature_incomplete = {
         'agent_name': 'feature_extractor',
@@ -276,7 +276,7 @@ async def test_data_field_validation():
 async def test_empty_value_detection():
     """测试空值检测逻辑"""
     collector = await get_collector()
-    
+
     # 测试各种空值和边界情况
     test_data = {
         'hash': 'test_hash',
@@ -297,11 +297,11 @@ async def test_empty_value_detection():
 
 
 @pytest.mark.level0
-@pytest.mark.asyncio  
+@pytest.mark.asyncio
 async def test_is_empty_value_helper():
     """测试_is_empty_value辅助方法的关键用例"""
     collector = await get_collector()
-    
+
     # 测试关键用例
     assert collector._is_empty_value(None) == True
     assert collector._is_empty_value('') == True

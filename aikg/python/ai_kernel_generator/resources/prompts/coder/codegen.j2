@@ -34,9 +34,7 @@
 {% if dsl_examples_suitable %}
 ## 示例代码-基础
 {{ dsl_examples_suitable }}
-请参考上述{{dsl}} 示例代码， 格式、import、调用函数方式等；确保生成可直接接入验证流程的 {{dsl}} 
-注意：调整切分大小和循环结构，是一个常用的优化手段，通常可以通过调整grid的设定、调整kernel内for循环的方式、调整计算方法来实现
-请你尽最大的努力，对代码的运行效率进行优化
+请参考上述{{dsl}} 示例代码， 格式、import、调用函数方式等；确保生成可直接接入验证流程的{{ dsl }}代码
 {% endif %}
 
 {% if database_examples %}
@@ -45,15 +43,6 @@
 请参考上述从数据库中检索到的相关代码片段
 
 重点关注示例代码中重要注释的内容，如注意等关键字
-{% endif %}
-
-{% if inspirations %}
-### 进化探索方案
-{{ inspirations }}
-请参考上述从进化探索方案中检索到的相关代码片段以及性能指标，分析可用的优化方案，并生成对应的{{dsl}}代码
-一般而言，调整切分方式、修改计算逻辑、调整计算顺序、调整计算精度等，都是可行的优化方案
-在triton代码生成过程中，修改grid的大小、调整每一个核处理长度、调整核内for循环的流水并行方式，都是可行的手段
-请你尽最大努力来完成代码的优化，得到一个计算速度快的高效算子实现
 {% endif %}
 
 ----
@@ -71,8 +60,24 @@
 
 {% if sketch %}
 ### 设计草图
-以下是为此算子设计的实现策略，参考生成{{dsl}}代码
+以下是为此算子设计的实现草图，请严格按照此草图生成{{dsl}}代码
+
 {{ sketch }}
+
+### Sketch到{{dsl}}代码转换要点
+{% if dsl == "triton" %}
+- **并行映射**: num_cores → grid size, tile_size → BLOCK_SIZE
+- **流水线配置**: pipeline_depth → num_stages, 核内并行度 → num_warps  
+- **数据访问**: load/store → tl.load/tl.store with mask
+- **计算实现**: 自然语言描述 → tl.函数 (如tl.maximum, tl.dot)
+- **循环结构**: pipeline_range → for循环 with tl.cdiv
+{% elif dsl == "swft" %}
+- **并行映射**: num_cores → core_num, tile_size → block_size
+- **循环结构**: pipeline_range → gm.for_range
+- **数据访问**: load/store → gm.dup/gm.cast  
+- **计算实现**: 自然语言描述 → gm.函数 (如gm.vmax, gm.mmad)
+- **内存管理**: 注意GlobalMem, VecBuf, CubeBuf的使用
+{% endif %}
 {% endif %}
 
 {% if coder_code %}

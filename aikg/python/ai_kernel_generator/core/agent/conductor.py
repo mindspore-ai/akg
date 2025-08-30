@@ -19,7 +19,7 @@ from ai_kernel_generator.utils.workflow_controller import WorkflowController
 from ai_kernel_generator.utils.result_processor import ResultProcessor
 from ai_kernel_generator.core.agent.agent_base import AgentBase
 from ai_kernel_generator.core.trace import Trace
-from ai_kernel_generator.utils.parser_registry import create_conductor_parser
+from ai_kernel_generator.utils.common_utils import ParserFactory
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class Conductor(AgentBase):
     def get_conductor_parser(cls):
         """获取Conductor决策解析器"""
         if cls._conductor_parser is None:
-            cls._conductor_parser = create_conductor_parser()
+            cls._conductor_parser = ParserFactory.get_conductor_parser()
         return cls._conductor_parser
 
     def __init__(self, op_name: str, task_desc: str, task_id: str, dsl: str,
@@ -268,6 +268,7 @@ class Conductor(AgentBase):
                 "backend": self.task_info.get("backend", ""),
                 "task_desc": self.task_desc,
                 "step": self.llm_step_count,
+                "workflow_name": self.task_info.get("workflow_name", ""),
             }
             self.context.update(to_update_context)
 

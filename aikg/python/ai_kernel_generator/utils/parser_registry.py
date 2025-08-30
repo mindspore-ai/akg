@@ -109,14 +109,3 @@ def create_step_parser(step_name: str, workflow_config_path: Optional[str] = Non
     except Exception as e:
         logger.error(f"Failed to create parser for step '{step_name}': {e}")
         raise
-
-
-def create_conductor_parser():
-    """创建Conductor决策解析器"""
-    return ParserFactory.create_output_parser(
-        "ConductorDecision",
-        {
-            'decision': (str, ...),  # 下一个要执行的agent名称
-            'suggestion': (str, "")  # 给下一个agent的建议或指导信息
-        }
-    )

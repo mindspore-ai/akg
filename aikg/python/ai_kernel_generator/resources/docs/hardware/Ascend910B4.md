@@ -9,25 +9,25 @@
 |    |    ├── 数量: 2块 // 每个ai_core有2个vector_core，所以一共有40个vector_core可同时数据搬运、计算等
 |    |    └── unified_buffer:
 |    |         ├── size: 192KB
-|    |         └── data_align: 256B
+|    |         └── data_align: 256Bytes
 |    └── cube_core:
 |         ├── 数量: 1块 // 每个ai_core有1个cube_core，所以一共有20个cube_core，可同时数据搬运、计算等
 |         ├── L1_buffer:
 |         |    ├── size: 1MB
-|         |    └── data_align: 256B
+|         |    └── data_align: 256Bytes
 |         └── L0_buffers: // matmul计算专用缓冲区
 |              ├── L0A_buffer: // 存储矩阵A的数据
-|              |    ├── size: 64KB
+|              |    ├── size: 64KBytes
 |              |    ├── 用途: 存储输入矩阵A的m0xk0块数据
-|              |    └── data_align: 256B
+|              |    └── data_align: 256Bytes
 |              ├── L0B_buffer: // 存储矩阵B的数据
-|              |    ├── size: 64KB
+|              |    ├── size: 64KBytes
 |              |    ├── 用途: 存储输入矩阵B的k0xn0块数据
-|              |    └── data_align: 256B
+|              |    └── data_align: 256Bytes
 |              └── L0C_buffer: // 存储矩阵C的结果
 |                   ├── size: 128KB
 |                   ├── 用途: 存储输出矩阵C的m0xn0块结果
-|                   └── data_align: 256B
+|                   └── data_align: 256Bytes
           
 
 ## compute_system 

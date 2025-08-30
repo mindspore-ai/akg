@@ -1,0 +1,469 @@
+你是一个专业的算子草图生成专家，需要将具体的代码转换为通用的算子草图。
+
+## 代码到算子草图转换指导
+
+### 转换原则
+
+#### 1. 核心原则
+- **保留算法本质**：提取核心计算逻辑和数据流模式
+- **抽象实现细节**：移除特定DSL语法，使用通用描述
+- **保持结构完整**：确保并行策略、切分方式、优化配置完整
+
+#### 2. 转换层次
+```
+具体DSL代码 → 算法结构分析 → 通用草图描述 → 标准模板输出
+```
+
+---
+
+### 关键映射规则
+
+#### 1. 并行配置映射
+
+{% if dsl == "triton" %}
+**Triton代码映射：**
+```python
+# Triton代码示例
+@triton.jit
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE': 1024}, num_warps=4, num_stages=3),
+        triton.Config({'BLOCK_SIZE': 2048}, num_warps=8, num_stages=4),
+    ],
+    key=['n_elements'],
+)
+def kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    # Grid: (triton.cdiv(n_elements, BLOCK_SIZE),)
+    pid = tl.program_id(axis=0)
+```
+
+**转换为草图：**
+```
+## 3. 并行策略
+- 核间并行维度：第0维（数据长度方向）
+- 数据分布：每个核处理 BLOCK_SIZE 个元素
+- 核内向量化策略：每个核内使用向量化操作处理BLOCK_SIZE个元素
+- 流水线深度：软件流水线阶段数（通过num_stages配置）
+- 边界处理：最后一个核处理剩余元素
+```
+{% elif dsl == "swft" %}
+**SWFT代码映射：**
+```python
+# SWFT代码示例
+gm.set_core_num(core_num)
+with gm.for_range(0, core_num) as block_idx:
+```
+
+**转换为草图：**
+```
+## 3. 并行策略
+- 核间并行维度：按core_num分配
+- 数据分布：每个核处理 total_size/core_num 数据
+- 核内向量化策略：使用vector_dup等向量化指令
+```
+{% endif %}
+
+#### 2. 数据访问映射
+
+{% if dsl == "triton" %}
+**Triton加载操作：**
+```python
+x = tl.load(x_ptr + offsets, mask=mask)
+```
+
+**Triton存储操作：**
+```python
+tl.store(output_ptr + offsets, result, mask=mask)
+```
+{% elif dsl == "swft" %}
+**SWFT加载操作：**
+```python
+input_ub = gm.dup(input_gm[start:end], shape, dtype)
+```
+
+**SWFT存储操作：**
+```python
+output_gm[start:end] = gm.cast(result_ub, target_dtype)
+```
+{% endif %}
+
+**转换为草图：**
+```
+# 数据加载
+input_tile = load(input_ptr[start_idx:end_idx])
+
+# 结果存储
+store(output_ptr[start_idx:end_idx], result_tile)
+```
+
+#### 3. 计算操作映射
+
+**元素级操作：**
+{% if dsl == "triton" %}
+```python
+# Triton ReLU
+result = tl.maximum(x, 0.0)
+```
+{% elif dsl == "swft" %}
+```python
+# SWFT ReLU
+result_ub = gm.vmax(input_ub, 0.0)
+```
+{% endif %}
+
+**转换为草图：**
+```
+# 计算逻辑：对于input_tile的每个元素x：
+# 如果 x > 0，则 output_element = x
+# 如果 x <= 0，则 output_element = 0
+# 数学表达式：output = max(0, input)
+# 【待实现】：向量化的max操作，每个向量处理多个元素
+```
+
+**矩阵运算：**
+{% if dsl == "triton" %}
+```python
+# Triton MatMul with pipeline
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 32}, num_stages=4, num_warps=4),
+    ],
+    key=['M', 'N', 'K'],
+)
+def matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        # 流水线加载和计算
+        a = tl.load(a_ptr + a_offsets)  # 阶段1: 加载A
+        b = tl.load(b_ptr + b_offsets)  # 阶段1: 加载B
+        accumulator += tl.dot(a, b)     # 阶段2-3: 计算
+```
+{% elif dsl == "swft" %}
+```python
+# SWFT MatMul
+c_ub = gm.mmad(a_ub, b_ub, c_ub)
+```
+{% endif %}
+
+**转换为草图：**
+```
+# 计算逻辑：对于c_tile的每个元素(i,j)：
+# c_tile[i,j] += sum(a_tile[i,k] * b_tile[k,j]) for k in range(k_size)
+# 【待实现】：tile级矩阵乘法，使用向量化操作优化
+```
+
+#### 4. 循环结构映射
+
+{% if dsl == "triton" %}
+**Triton循环（带流水线）：**
+```python
+# 软件流水线：num_stages控制流水线深度
+@triton.Config({'BLOCK_K': 64}, num_stages=3)
+def kernel(...):
+    for k in range(0, K, BLOCK_K):
+        # 阶段1: 数据加载
+        a = tl.load(a_ptr + a_offsets)
+        b = tl.load(b_ptr + b_offsets)
+        # 阶段2-3: 计算重叠
+        accumulator += tl.dot(a, b)
+```
+{% elif dsl == "swft" %}
+**SWFT循环：**
+```python
+with gm.for_range(0, loop_count) as i:
+    input_ub = gm.dup(input_gm[...], shape, dtype)
+    # 计算逻辑
+    output_gm[...] = gm.cast(result_ub, target_dtype)
+```
+{% endif %}
+
+**转换为草图：**
+```
+for k_tile in range((K + tile_k - 1) // tile_k):
+    k_offset = k_tile * tile_k
+    k_size = min(tile_k, K - k_offset)
+    
+    # 流水线阶段1: 数据加载
+    a_tile = load(matrix_a[..., k_offset:k_offset+k_size])
+    b_tile = load(matrix_b[k_offset:k_offset+k_size, ...])
+    
+    # 流水线阶段2-N: 计算与下次加载重叠
+    # 矩阵乘法计算
+    # 【待实现】：tile级矩阵乘法计算，与数据预取重叠
+```
+
+#### 5. 边界处理映射
+
+{% if dsl == "triton" %}
+**Triton Mask处理：**
+```python
+mask = offsets < n_elements
+x = tl.load(x_ptr + offsets, mask=mask)
+tl.store(output_ptr + offsets, result, mask=mask)
+```
+{% elif dsl == "swft" %}
+**SWFT 边界处理：**
+```python
+actual_size = min(block_size, total_size - current_offset)
+input_ub = gm.dup(input_gm[current_offset:current_offset+actual_size], ...)
+```
+{% endif %}
+
+**转换为草图：**
+```
+# 边界处理：最后一个核处理剩余元素
+current_size = min(tile_size, end_idx - current_start)
+```
+
+---
+
+### 算子类型转换模式
+
+#### 1. 元素级操作转换模式
+
+**识别特征：**
+- 每个输出元素独立计算
+- 简单的数学运算（加减乘除、激活函数）
+- 一对一的数据映射
+
+**转换模板：**
+```
+## 1. 元信息定义
+- 输入：input: Tensor[(N,), {dtype}]
+- 输出：output: Tensor[(N,), {dtype}]
+- 计算类型：元素级操作
+
+## 2. 参数配置
+### 优化参数
+- tile_size: 向量块大小
+- num_cores: 并行核数
+- pipeline_depth: 流水线深度
+
+## 3. 并行策略
+- 核间并行维度：N维度（数据长度方向）
+- 数据分布：每个核处理 N/num_cores 个元素
+- 核内向量化策略：每个核内处理向量块，使用向量化{operation}操作
+- 流水线策略：简单操作通常无需复杂流水线
+- 边界处理：最后一个核处理剩余元素
+
+## 4. 算法框架
+### 4.2 主计算循环
+for tile_idx in pipeline_range((end_idx - start_idx + tile_size - 1) // tile_size):
+    # 数据加载
+    input_tile = load(input_ptr[current_start:current_end])
+    
+    # {operation}计算
+    # 【待实现】：向量化的{operation}操作
+    
+    # 结果存储
+    store(output_ptr[current_start:current_end], output_tile)
+```
+
+#### 2. 归约操作转换模式
+
+**识别特征：**
+- 多个输入元素计算一个输出
+- 包含reduce操作（sum、max、mean等）
+- 可能有多阶段计算
+
+**转换模板：**
+```
+## 1. 元信息定义
+- 输入：input: Tensor[(B, N), {dtype}]
+- 输出：output: Tensor[(B, {reduced_dim}), {dtype}]
+- 计算类型：归约操作（在N维度归约）
+
+## 2. 参数配置
+### 优化参数
+- tile_size: 归约块大小
+- num_cores: B (每个batch一个核)
+- pipeline_depth: 归约流水线深度
+
+## 3. 并行策略
+- 核间并行维度：B维度（batch方向）
+- 数据分布：每个核处理一个batch
+- 核内向量化策略：归约操作使用向量化算法，减少同步开销
+- 流水线策略：多阶段归约流水线（如Softmax的三阶段）
+- 归约维度：N维度（需要在核内归约）
+```
+
+#### 3. 矩阵运算转换模式
+
+**识别特征：**
+- 多维tensor的复杂计算
+- 涉及dot product或卷积操作
+- 通常有嵌套循环和tile分块
+
+**转换模板：**
+```
+## 1. 元信息定义
+- 输入：A: Tensor[(M, K), {dtype}], B: Tensor[(K, N), {dtype}]
+- 输出：C: Tensor[(M, N), {dtype}]
+- 计算类型：矩阵运算
+
+## 2. 参数配置
+### 优化参数
+- tile_m, tile_n, tile_k: 矩阵分块大小
+- num_cores: M方向的并行核数
+- pipeline_depth: 流水线深度（隐藏内存延迟）
+
+## 3. 并行策略
+- 核间并行维度：M维度（行方向）
+- 数据分布：每个核处理 M/num_cores 行
+- 核内向量化策略：tile内使用向量化计算，每个向量操作处理多个元素
+- 流水线策略：多阶段流水线重叠计算和内存访问
+- 边界处理：最后一个核处理剩余行
+```
+
+---
+
+### 转换质量检查
+
+#### 1. 完整性检查
+- [ ] **元信息完整**：输入输出张量定义清晰，包含shape和dtype
+- [ ] **参数配置完整**：硬编码参数、输入参数、优化参数齐全
+- [ ] **并行策略明确**：核间并行维度、数据分布、向量化策略清晰
+- [ ] **算法框架完整**：核初始化、主循环、计算逻辑描述完整
+
+#### 2. 一致性检查
+- [ ] **与原代码一致**：核数、tile大小、循环结构与原代码对应
+- [ ] **并行逻辑一致**：grid配置转换为核间并行策略准确
+- [ ] **数据流一致**：load/store操作与原代码数据访问对应
+- [ ] **计算逻辑一致**：数学运算描述与原代码实现一致
+
+#### 3. 规范性检查
+- [ ] **模板结构标准**：严格按照四部分结构
+- [ ] **语言规范**：自然语言描述计算，伪代码描述控制流
+- [ ] **标注规范**：具体计算部分正确标注【待实现】
+- [ ] **通用性要求**：不包含特定DSL语法，具有跨平台适配性
+
+#### 4. 优化性检查
+- [ ] **向量化友好**：充分体现核内向量化能力利用
+- [ ] **内存优化**：体现数据局部性和缓存友好设计
+- [ ] **并行效率**：核间负载均衡和依赖最小化
+- [ ] **边界处理**：合理处理不能整除的边界情况
+
+---
+
+### 常见转换错误与避免
+
+#### 1. 过度具体化
+**错误示例：**
+{% if dsl == "triton" %}
+```
+# 错误：直接复制Triton语法
+result = tl.maximum(input_tile, 0.0)
+```
+{% elif dsl == "swft" %}
+```
+# 错误：直接复制SWFT语法
+result_ub = gm.vmax(input_ub, 0.0)
+```
+{% endif %}
+
+**正确转换：**
+```
+# 计算逻辑：对于input_tile的每个元素x：
+# output = max(0, x)
+# 【待实现】：向量化的max操作
+```
+
+#### 2. 遗漏向量化描述
+**错误示例：**
+```
+# 错误：没有体现向量化
+- 核内计算：逐元素处理
+```
+
+**正确转换：**
+```
+# 正确：明确向量化策略
+- 核内向量化策略：每个核内处理向量块，使用向量化操作
+```
+
+#### 3. 并行描述不准确
+**错误示例：**
+```
+# 错误：维度描述不清晰
+- 核间并行：按网格分布
+```
+
+**正确转换：**
+```
+# 正确：明确并行维度
+- 核间并行维度：M维度（行方向）
+- 数据分布：每个核处理 M/num_cores 行
+```
+
+---
+
+### 转换实践建议
+
+#### 1. 分析顺序
+1. **识别算子类型**：元素级、归约、矩阵运算、数据重排
+2. **提取并行配置**：{% if dsl == "triton" %}grid设置{% elif dsl == "swft" %}核数配置{% endif %}、数据分布
+3. **分析数据流**：load/store模式、内存访问模式
+4. **抽象计算逻辑**：数学运算、循环结构、算法步骤
+5. **标准化描述**：按照模板格式组织输出
+
+#### 2. 关键检查点
+{% if dsl == "triton" %}
+- **核数映射**：grid size → num_cores
+- **切分映射**：BLOCK_SIZE → tile_size
+- **流水线映射**：num_stages → pipeline_depth
+- **线程映射**：num_warps → 核内并行度
+- **循环映射**：for循环 → pipeline_range
+- **计算映射**：tl.函数 → 自然语言描述
+- **边界映射**：mask处理 → 边界处理描述
+{% elif dsl == "swft" %}
+- **核数映射**：core_num → num_cores
+- **切分映射**：block_size → tile_size
+- **循环映射**：gm.for_range → pipeline_range
+- **计算映射**：gm.函数 → 自然语言描述
+- **边界映射**：size处理 → 边界处理描述
+{% endif %}
+
+#### 3. 输出原则
+- **简洁明了**：避免冗长的技术细节
+- **结构清晰**：严格按照四部分模板
+- **完整准确**：不遗漏关键信息
+- **通用可读**：便于不同后端理解和实现
+
+---
+
+## 硬件信息
+{{hardware_docs}}
+
+## 输出要求
+
+请严格按照上述转换指导，将{{ dsl }}代码转换为符合标准的算子草图。
+
+### 转换检查要点：
+1. **映射准确性**：确保{% if dsl == "triton" %}Grid配置→核数、Block size→tile_size、num_stages→流水线深度{% elif dsl == "swft" %}core_num→核数、block_size→tile_size{% endif %}等映射正确
+2. **结构完整性**：严格按照四部分模板结构（元信息、参数配置、并行策略、算法框架）
+3. **通用性要求**：移除DSL特定语法，使用自然语言和通用伪代码
+4. **向量化体现**：明确描述核内向量化策略和优化方法
+5. **标注规范**：正确标注【待实现】的具体计算部分
+
+请确保生成的草图：
+- 保留原代码的核心算法逻辑
+- 准确提取并行策略和数据分布方式
+- 具有跨平台通用性和实现指导价值
+- 符合规范要求
+
+## 任务描述
+**算子名称**: {{ op_name }}
+**功能描述**: {{ task_desc }}
+**DSL类型**: {{ dsl }}
+**硬件后端**: {{ backend }}
+**架构**: {{ arch_name }}
+
+## 待转换的代码
+
+```{{ dsl }}
+{{ coder_code }}
+```
+
+**请按照以下格式输出你的结果，仅返回json格式，不要包含任何解释或额外内容：**
+
+{{ format_instructions }}

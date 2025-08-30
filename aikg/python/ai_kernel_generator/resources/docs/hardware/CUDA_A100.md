@@ -7,8 +7,7 @@
 |    └── shared_memory_block:
 |         ├── 大小: 164KB (最大可用)
 |         ├── from_data: ["gm"]
-|         ├── to_data: ["gm"]
-|         └── data_align: 128B
+|         └── to_data: ["gm"]
 └── registers (per SM):
      ├── 数量: 65536个32位寄存器
      ├── 最大线程数: 2048 (每SM)

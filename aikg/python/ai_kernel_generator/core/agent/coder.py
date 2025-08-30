@@ -26,47 +26,6 @@ from ai_kernel_generator import get_project_root
 logger = logging.getLogger(__name__)
 
 
-def get_inspirations(inspirations: List[dict]) -> str:
-    """
-    将inspirations列表转换为字符串
-
-    Args:
-        inspirations: 包含字典的列表，每个字典格式为:
-                     {'strategy_mode':xxx, 'impl_code':str, 'profile':float}
-
-    Returns:
-        str: 拼接后的字符串，包含所有impl_code和profile信息
-    """
-    if not inspirations:
-        return ""
-
-    result_parts = []
-
-    for i, inspiration in enumerate(inspirations):
-        if not isinstance(inspiration, dict):
-            logger.warning(f"跳过非字典类型的inspiration: {type(inspiration)}")
-            continue
-
-        impl_code = inspiration.get('impl_code', '')
-        profile = inspiration.get('profile', float('inf'))
-
-        if impl_code:  # 只有当impl_code不为空时才添加
-            # 处理profile信息，支持三元组格式
-            if isinstance(profile, (list, tuple)) and len(profile) >= 3:
-                gen_time, base_time, speedup = profile[0], profile[1], profile[2]
-                profile_text = f"生成代码耗时: {gen_time:.4f}s, 基准代码耗时: {base_time:.4f}s, 加速比: {speedup:.2f}x"
-            elif isinstance(profile, (list, tuple)) and len(profile) >= 1:
-                profile_text = f"代码执行耗时: {profile[0]:.4f}s"
-            else:
-                profile_text = f"代码执行耗时: {profile:.4f}s" if profile != float('inf') else "代码执行耗时: N/A"
-
-            inspiration_text = f"## Inspiration {i+1} {profile_text}\n"
-            inspiration_text += f"代码：\n```\n{impl_code}\n```\n"
-            result_parts.append(inspiration_text)
-
-    return "\n".join(result_parts)
-
-
 class Coder(AgentBase):
     def __init__(self, op_name: str, task_desc: str, dsl: str, framework: str, backend: str, arch: str = "", workflow_config_path: str = None, config: dict = None):
         self.op_name = op_name
@@ -87,7 +46,6 @@ class Coder(AgentBase):
             raise ValueError("config is required for Coder")
 
         context = {
-            "agent_name": "coder",
             "dsl": dsl,
             "op_name": op_name,
             "framework": framework,
@@ -297,7 +255,6 @@ class Coder(AgentBase):
                 "llm_suggestions": conductor_suggestion,  # Conductor建议
                 "coder_code": task_info.get('coder_code', ''),
                 "error_log": task_info.get('verifier_error', ''),
-                "inspirations": get_inspirations(task_info.get('inspirations', [])),
                 "api_docs_suitable": api_docs_suitable,
                 "dsl_examples_suitable": dsl_examples_suitable,
             }
@@ -309,6 +266,7 @@ class Coder(AgentBase):
                 "hash": task_info.get("task_id", "Coder") + "@" + str(self.codegen_step_count),
                 "task_id": task_info.get("task_id", ""),
                 "step": self.codegen_step_count,
+                "workflow_name": task_info.get("workflow_name", ""),
             }
             self.context.update(to_update_codegen_details)
 

@@ -4,6 +4,7 @@ agent_model_config:
   coder: vllm_deepseek_r1_default
   conductor: vllm_deepseek_r1_default
   api_generator: vllm_deepseek_r1_default
+  sketch: vllm_deepseek_r1_default
 
 # Log configuration
 log_dir: "~/aikg_logs"

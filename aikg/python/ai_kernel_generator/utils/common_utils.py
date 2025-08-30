@@ -106,6 +106,8 @@ class ParserFactory:
     }
     _feature_parser = None
     _api_parser = None
+    _sketch_parser = None
+    _conductor_parser = None
 
     @classmethod
     def register_parser(cls, parser_name: str, parser_config: dict):
@@ -224,6 +226,31 @@ class ParserFactory:
                 }
             )
         return cls._feature_parser
+
+    @classmethod
+    def get_sketch_parser(cls):
+        """获取Sketch解析器"""
+        if cls._sketch_parser is None:
+            cls._sketch_parser = cls.create_output_parser(
+                "SketchBlock",
+                {
+                    'sketch': (str, ...)
+                }
+            )
+        return cls._sketch_parser
+
+    @classmethod
+    def get_conductor_parser(cls):
+        """获取Conductor决策解析器"""
+        if cls._conductor_parser is None:
+            cls._conductor_parser = cls.create_output_parser(
+                "ConductorDecision",
+                {
+                    'decision': (str, ...),  # 下一个要执行的agent名称
+                    'suggestion': (str, "")  # 给下一个agent的建议或指导信息
+                }
+            )
+        return cls._conductor_parser
 
     @staticmethod
     def create_output_parser(parser_name, fields):
