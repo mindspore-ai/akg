@@ -23,6 +23,7 @@
 #include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
 #include "ccsrc/base/ms_kernels_internal/pyboost/internal_pyboost_runner.h"
 #include "ccsrc/utils/utils.h"
+#include "ccsrc/ops/ms_kernels_internal/utils/attention_utils.h"
 
 namespace ms_custom_ops {
 class MlaRunner : public InternalPyboostRunner {
@@ -30,26 +31,56 @@ class MlaRunner : public InternalPyboostRunner {
   MlaRunner(const std::string &op_name) : InternalPyboostRunner(op_name) {}
   ~MlaRunner() = default;
 
-  void UpdateParam(int32_t head_size, float tor, int32_t kv_head, mindspore::internal::MLAParam::MaskType mask_type,
-                   int32_t is_ring, const std::vector<int32_t> &q_seq_len, const std::vector<int32_t> &kv_seq_len) {
+  void SetParam(int32_t head_size, float tor, int32_t kv_head, mindspore::internal::MLAParam::MaskType mask_type,
+                int32_t is_ring, const std::vector<int32_t> &q_seq_len, const std::vector<int32_t> &kv_seq_len) {
     param_.type = mindspore::internal::MLAParam::kSplitCache;
     param_.head_size = head_size;
     param_.tor = tor;
     param_.kv_head = kv_head;
     param_.mask_type = mask_type;
     param_.is_ring = is_ring;
-    param_.q_seq_len = q_seq_len;
-    param_.kv_seq_len = kv_seq_len;
+
+    auto is_q_changed = CheckAndUpdate(q_seq_len, &param_.q_seq_len);
+    auto is_kv_changed = CheckAndUpdate(kv_seq_len, &param_.kv_seq_len);
+    need_update_param_ = is_q_changed | is_kv_changed;
   }
 
+  void SetInputFormat(MlaInputFormat input_format) { input_format_ = input_format; }
+
  protected:
+  bool UpdateParam() override {
+    if (created_flag_) {
+      // the q_seq_len and kv_seq_len are inited in CreatedKernel, so there is no need to load them again
+      created_flag_ = false;
+    }
+
+    if (need_update_param_) {
+      auto ret = internal_op_->UpdateParam(&param_);
+      if (ret != internal::kInternalOk) {
+        MS_LOG(ERROR) << "InternalMla UpdateParam failed in MlaRunner.";
+        return false;
+      }
+      return true;
+    }
+  }
+
   internal::InternalOpPtr CreateKernel(const internal::InputsImmutableInfoList &inputs,
                                        const internal::OutputsImmutableInfoList &outputs) override {
+    created_flag_ = true;
+    if (input_format_ == kKVFormatNZ) {
+      auto inputs_new = inputs;
+      inputs_new[kMlaInputKvCacheIndex].SetFormat(internal::kFormatFRACTAL_NZ);
+      inputs_new[kMlaInputKropeIndex].SetFormat(internal::kFormatFRACTAL_NZ);
+      return internal::CreateMLAOp(inputs_new, outputs, param_, internal::kInternalMLAOpName);
+    }
     return mindspore::internal::CreateMLAOp(inputs, outputs, param_, internal::kInternalMLAOpName);
   }
 
  private:
   mindspore::internal::MLAParam param_;
+  bool created_flag_{true};
+  bool need_update_param_{false};
+  MlaInputFormat input_format_{kKVFormatND};
 };
 
 std::vector<ms::Tensor> mla_atb(const ms::Tensor &q_nope, const ms::Tensor &q_rope, const ms::Tensor &ctkv,
@@ -59,7 +90,7 @@ std::vector<ms::Tensor> mla_atb(const ms::Tensor &q_nope, const ms::Tensor &q_ro
                                 const std::optional<ms::Tensor> &deq_scale_pv,
                                 const std::optional<ms::Tensor> &q_seq_lens,
                                 const std::optional<ms::Tensor> &context_lens, int64_t head_num, double scale_value,
-                                int64_t kv_head_num, int64_t mask_mode, int64_t is_ring) {
+                                int64_t kv_head_num, int64_t mask_type, int64_t input_format, int64_t is_ring) {
   static auto op_name = "Mla";
   auto runner = std::make_shared<MlaRunner>(op_name);
   MS_EXCEPTION_IF_NULL(runner);
@@ -72,14 +103,18 @@ std::vector<ms::Tensor> mla_atb(const ms::Tensor &q_nope, const ms::Tensor &q_ro
 
   auto q_seq_lens_value = GetValueFromTensor<std::vector<int32_t>>(q_seq_lens.value(), op_name, "q_seq_lens");
   auto context_lens_value = GetValueFromTensor<std::vector<int32_t>>(context_lens.value(), op_name, "context_lens");
-  runner->UpdateParam(static_cast<int32_t>(head_num), static_cast<float>(scale_value),
-                      static_cast<int32_t>(kv_head_num),
-                      static_cast<mindspore::internal::MLAParam::MaskType>(mask_mode), static_cast<int32_t>(is_ring),
-                      q_seq_lens_value, context_lens_value);
+  runner->SetParam(static_cast<int32_t>(head_num), static_cast<float>(scale_value), static_cast<int32_t>(kv_head_num),
+                   static_cast<mindspore::internal::MLAParam::MaskType>(mask_type), static_cast<int32_t>(is_ring),
+                   q_seq_lens_value, context_lens_value);
+
+  if (input_format != kKVFormatND && input_format != kKVFormatNZ) {
+    MS_LOG(EXCEPTION) << "For " << op_name << ", the input_format is invalid: " << input_format;
+  }
+  runner->SetInputFormat(static_cast<MlaInputFormat>(input_format));
 
   // Setup the runner with all parameters (including hash calculation)
   runner->Setup(op_name, q_nope, q_rope, ctkv, k_rope, block_tables, attn_mask, deq_scale_qk, deq_scale_pv, q_seq_lens,
-                context_lens, head_num, scale_value, kv_head_num, mask_mode, is_ring);
+                context_lens, head_num, scale_value, kv_head_num, mask_type, input_format, is_ring);
 
   auto attn_out = ms::Tensor(q_nope.data_type(), q_nope.shape());
   auto lse_out = ms::Tensor(q_nope.data_type(), {0});
@@ -102,10 +137,11 @@ auto pyboost_mla(const ms::Tensor &q_nope, const ms::Tensor &q_rope, const ms::T
                  const ms::Tensor &block_tables, const std::optional<ms::Tensor> &attn_mask,
                  const std::optional<ms::Tensor> &deq_scale_qk, const std::optional<ms::Tensor> &deq_scale_pv,
                  const std::optional<ms::Tensor> &q_seq_lens, const std::optional<ms::Tensor> &context_lens,
-                 int64_t head_num, double scale_value, int64_t kv_head_num, int64_t mask_mode, int64_t is_ring) {
+                 int64_t head_num, double scale_value, int64_t kv_head_num, int64_t mask_type, int64_t input_format,
+                 int64_t is_ring) {
   return ms::pynative::PyboostRunner::Call<2>(mla_atb, q_nope, q_rope, ctkv, k_rope, block_tables, attn_mask,
                                               deq_scale_qk, deq_scale_pv, q_seq_lens, context_lens, head_num,
-                                              scale_value, kv_head_num, mask_mode, is_ring);
+                                              scale_value, kv_head_num, mask_type, input_format, is_ring);
 }
 }  // namespace ms_custom_ops
 
@@ -115,6 +151,6 @@ MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
         pybind11::arg("attn_mask") = std::nullopt, pybind11::arg("deq_scale_qk") = std::nullopt,
         pybind11::arg("deq_scale_pv") = std::nullopt, pybind11::arg("q_seq_lens") = std::nullopt,
         pybind11::arg("context_lens") = std::nullopt, pybind11::arg("head_num") = 32,
-        pybind11::arg("scale_value") = 0.0, pybind11::arg("kv_head_num") = 1, pybind11::arg("mask_mode") = 0,
-        pybind11::arg("is_ring") = 0);
+        pybind11::arg("scale_value") = 0.0, pybind11::arg("kv_head_num") = 1, pybind11::arg("mask_type") = 0,
+        pybind11::arg("input_format") = 0, pybind11::arg("is_ring") = 0);
 }
