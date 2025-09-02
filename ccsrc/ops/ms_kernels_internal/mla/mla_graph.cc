@@ -138,22 +138,22 @@ static void CheckShape(const PrimitivePtr &primitive, const InferInfoPtrList &in
 
   if (!input_infos[kMlaInputAttnMaskIndex]->IsNone() && !input_infos[kMlaInputAttnMaskIndex]->IsDynamic()) {
     auto mask_shape = input_infos[kMlaInputAttnMaskIndex]->GetShape();
-    auto mask_mode_value = input_infos[kMlaInputMaskModeIndex]->GetScalarValue<int64_t>();
-    if (!mask_mode_value.has_value()) {
-      MS_EXCEPTION(ValueError) << "For MLA mask_mode must be constant but got variable.";
+    auto mask_type_value = input_infos[kMlaInputMaskTypeIndex]->GetScalarValue<int64_t>();
+    if (!mask_type_value.has_value()) {
+      MS_EXCEPTION(ValueError) << "For MLA mask_type must be constant but got variable.";
     }
 
-    auto mask_mode = mask_mode_value.value();
-    if (mask_mode == kMaskSpec || mask_mode == kMaskFree) {
+    auto mask_type = mask_type_value.value();
+    if (mask_type == kMaskSpec || mask_type == kMaskFree) {
       MS_CHECK_VALUE(mask_shape.size() == kMLAMaskRank,
                      CheckAndConvertUtils::FormatCommMsg("For MLA The rank of mask must be ", kMLAMaskRank,
                                                          ", but got shape: ", mask_shape));
     }
 
-    if (mask_mode == kMaskFree) {
+    if (mask_type == kMaskFree) {
       MS_CHECK_VALUE(mask_shape[mask_shape.size() - 1] == kMLAMaskFreeLastDim,
                      CheckAndConvertUtils::FormatCommMsg("For MLA The last dim of mask must be ", kMLAMaskFreeLastDim,
-                                                         ", when mask_mode is MASK_FREE but got shape: ", mask_shape));
+                                                         ", when mask_type is MASK_FREE but got shape: ", mask_shape));
     }
   }
 
@@ -217,8 +217,8 @@ class OPS_API MlaFuncImpl : public OpFuncImpl {
   bool GeneralInferRegistered() const override { return true; }
 
   std::set<int64_t> GetValueDependArgIndices() const override {
-    return {kMlaInputQueryLensIndex, kMlaInputContextLensIndex, kMlaInputNumHeadIndex, kMlaInputScaleValueIndex,
-            kMlaInputNumKVHeadIndex, kMlaInputMaskModeIndex,    kMlaInputIsRingIndex};
+    return {kMlaInputQueryLensIndex, kMlaInputContextLensIndex, kMlaInputNumHeadIndex,     kMlaInputScaleValueIndex,
+            kMlaInputNumKVHeadIndex, kMlaInputMaskTypeIndex,    kMlaInputInputFormatIndex, kMlaInputIsRingIndex};
   };
 };
 
@@ -237,13 +237,21 @@ class Mla : public InternalKernelMod {
     param_.tor = ms_inputs[kMlaInputScaleValueIndex]->GetValueWithCheck<float>();
     param_.kv_head = static_cast<int32_t>(ms_inputs[kMlaInputNumKVHeadIndex]->GetValueWithCheck<int64_t>());
     param_.mask_type =
-      static_cast<internal::MLAParam::MaskType>(ms_inputs[kMlaInputMaskModeIndex]->GetValueWithCheck<int64_t>());
+      static_cast<internal::MLAParam::MaskType>(ms_inputs[kMlaInputMaskTypeIndex]->GetValueWithCheck<int64_t>());
     param_.is_ring = static_cast<int32_t>(ms_inputs[kMlaInputIsRingIndex]->GetValueWithCheck<int64_t>());
 
     param_.q_seq_len = ms_inputs[kMlaInputQueryLensIndex]->GetValueWithCheck<std::vector<int32_t>>();
     param_.kv_seq_len = ms_inputs[kMlaInputContextLensIndex]->GetValueWithCheck<std::vector<int32_t>>();
 
+    auto input_format = static_cast<MlaInputFormat>(ms_inputs[kMlaInputInputFormatIndex]->GetValueWithCheck<int64_t>());
     created_flag_ = true;
+    if (input_format == kKVFormatNZ) {
+      auto inputs_new = inputs;
+      inputs_new[kMlaInputKvCacheIndex].SetFormat(internal::kFormatFRACTAL_NZ);
+      inputs_new[kMlaInputKropeIndex].SetFormat(internal::kFormatFRACTAL_NZ);
+      return internal::CreateMLAOp(inputs_new, outputs, param_, internal::kInternalMLAOpName);
+    }
+
     return internal::CreateMLAOp(inputs, outputs, param_, internal::kInternalMLAOpName);
   }
 

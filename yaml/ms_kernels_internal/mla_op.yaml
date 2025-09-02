@@ -35,7 +35,10 @@ mla:
     kv_head_num:
       dtype: int
       default: 1
-    mask_mode:
+    mask_type:
+      dtype: int
+      default: 0
+    input_format:
       dtype: int
       default: 0
     is_ring:
