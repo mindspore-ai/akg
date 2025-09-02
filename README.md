@@ -55,12 +55,15 @@ ms_custom_ops/
 │   │   │   ├── internal_helper.h/cc      # 内部辅助函数
 │   │   │   ├── internal_spinlock.h       # 自旋锁实现
 │   │   │   └── internal_tiling_cache.h/cc # 内部Tiling缓存
-│   │   └── ascendc/              # 昇腾算子基础
-│   │       ├── pyboost/
-│   │       └── graphmode/
+│   │   ├── ascendc/              # 昇腾算子基础
+│   │   │   ├── pyboost/
+│   │   │   └── graphmode/
+│   │   ├── module.h
+│   │   └── module.cc
 │   ├── ops/                      # 算子实现
 │   │   ├── ms_kernels_internal/
-│   │   │   └── {op_name}.cc
+│   │   │   └── {op_name}/
+│   │   │   │   ├── {op_name}.cc
 │   │   ├── ascendc/
 │   │   │   ├── {op_name}/
 │   │   │   │   ├── {op_name}.cc
@@ -69,8 +72,6 @@ ms_custom_ops/
 │   │   │   └── CMakeLists.txt
 │   │   └── CMakeLists.txt
 │   ├── CMakeLists.txt
-│   ├── module.h
-│   └── module.cc
 ├── cmake/                        # CMake配置文件
 │   ├── compile_ascendc_ops.cmake
 │   └── find_ms_internal_kernels_lib.cmake
@@ -101,7 +102,7 @@ ms_custom_ops/
 ### 1. 环境准备
 
 确保已安装：
-- **MindSpore**: br_infer_iter分支日构建包
+- **MindSpore**: master分支日构建包
 - **昇腾 CANN 工具包**: 最新版本
 - **CMake**: >= 3.16
 - **Python**: >= 3.9
@@ -276,7 +277,7 @@ pyboost:
 以add算子为例：
 ```cpp
 #include "ascendc_kernel_mod.h"
-#include "ms_extension/api.h"
+#include "mindspore/ccsrc/ms_extension/api.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -387,7 +388,7 @@ pyboost:
 以reshape_and_cache算子为例：
 ```cpp
 #include "ccsrc/base/ms_kernels_internal/graphmode/internal_kernel_mod.h"
-#include "ms_extension/api.h"
+#include "mindspore/ccsrc/ms_extension/api.h"
 #include "ccsrc/utils/utils.h"
 
 namespace ms_custom_ops {

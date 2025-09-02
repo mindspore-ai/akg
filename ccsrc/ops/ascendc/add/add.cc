@@ -18,11 +18,12 @@
 // GRAPH MODE IMPLEMENTATION
 // =============================================================================
 
-#include "ascendc_kernel_mod.h"
-#include "ms_extension/api.h"
 #include <map>
 #include <string>
 #include <vector>
+
+#include "ascendc_kernel_mod.h"
+#include "mindspore/ccsrc/ms_extension/api.h"
 
 namespace ms_custom_ops {
 class OPS_API AddCustomOpFuncImpl : public OpFuncImpl {

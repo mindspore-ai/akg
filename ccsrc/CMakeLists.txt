@@ -28,7 +28,7 @@ add_subdirectory(ops)
 set(LIB_DIR ${INTERNAL_KERNEL_LIB_PATH})
 set(LIBS ${MINDSPORE_INTERNAL_KERNELS_LIB})
 set(SRC_FILES ${BASE_SRC_FILES} ${OPS_SRC_FILES})
-set(INCLUDE_DIRS ${BASE_INCLUDE_DIRS} ${INTERNAL_KERNEL_INC_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/..)
+set(INCLUDE_DIRS ${BASE_INCLUDE_DIRS} ${INTERNAL_KERNEL_INC_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/.. "${MS_PATH}/include")
 
 # =============================================================================
 # Debug Output and Validation

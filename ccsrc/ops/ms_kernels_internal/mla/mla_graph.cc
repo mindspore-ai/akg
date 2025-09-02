@@ -29,7 +29,6 @@
 #include "mindspore/core/include/ops/base_operator.h"
 #include "mindspore/core/include/ops/ops_func_impl/op_func_impl.h"
 #include "mindspore/core/include/ops/ops_func_impl/simple_infer.h"
-#include "mindspore/ccsrc/runtime/device/kernel_runtime.h"
 #include "mindspore/core/include/utils/check_convert_utils.h"
 
 namespace ms_custom_ops {

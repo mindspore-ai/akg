@@ -20,7 +20,8 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "mindspore/ops/kernel/include/common/kernel_tensor.h"
+#include "mindspore/ccsrc/ms_extension/api.h"
+#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel_tensor.h"
 
 namespace ms_custom_ops {
 // Helper function to convert optional tensor to tensor or empty tensor
@@ -31,8 +32,7 @@ inline ms::Tensor GetTensorOrEmpty(const std::optional<ms::Tensor> &opt_tensor) 
 inline void *GetHostDataPtr(const ms::Tensor &tensor) {
   auto tensor_ptr = tensor.tensor();
   MS_EXCEPTION_IF_NULL(tensor_ptr);
-  auto &tensor_data = tensor_ptr->data();
-  return tensor_data.data();
+  return tensor_ptr->data_c();
 }
 
 template <typename T, mindspore::TypeId DATA_TYPE>

@@ -16,7 +16,7 @@
 #ifndef MS_CUSTOM_OPS_TILING_MEM_MGR_H_
 #define MS_CUSTOM_OPS_TILING_MEM_MGR_H_
 
-#include "mindspore/ccsrc/runtime/hardware/device_context.h"
+#include "mindspore/ccsrc/runtime/hardware_abstract/device_context/device_context.h"
 #include <atomic>
 #include <set>
 #include <string>
