@@ -269,7 +269,7 @@ void gen_hash_tmp(const uint64_t *blocks, const int block_num,
 }
 
 uint64_t gen_hash(const void *key, const int len, const uint32_t seed) {
-  const uint8_t *data = (const uint8_t *)key;
+  const uint8_t *data = static_cast<const uint8_t *>(key);
   // the length of each block is 16 bytes
   const int block_num = len / 16;
   // has and hax are literal appromix to hash, and hax is the return value of
@@ -282,44 +282,44 @@ uint64_t gen_hash(const void *key, const int len, const uint32_t seed) {
   const uint64_t c1 = 9782798678568883157LLU;
   const uint64_t c2 = 5545529020109919103LLU;
 
-  const uint64_t *blocks = (const uint64_t *)(data);
+  const uint64_t *blocks = reinterpret_cast<const uint64_t *>(data);
 
   // update hax
   gen_hash_tmp(blocks, block_num, seed, &has, &hax);
 
   // the length of each block is 16 bytes
-  const uint8_t *tail = (const uint8_t *)(data + block_num * 16);
+  const uint8_t *tail = static_cast<const uint8_t *>(data + block_num * 16);
   uint64_t t1 = 0;
   uint64_t t2 = 0;
   // because the size of a block is 16, different offsets are calculated for
   // tail blocks for different sizes
   switch (static_cast<uint64_t>(len) & 15) {
   case 15:
-    t2 ^= ((uint64_t)tail[14]) << 48;
+    t2 ^= static_cast<uint64_t>(tail[14]) << 48;
     [[fallthrough]];
     {}
   case 14:
-    t2 ^= ((uint64_t)tail[13]) << 40;
+    t2 ^= static_cast<uint64_t>(tail[13]) << 40;
     [[fallthrough]];
     {}
   case 13:
-    t2 ^= ((uint64_t)tail[12]) << 32;
+    t2 ^= static_cast<uint64_t>(tail[12]) << 32;
     [[fallthrough]];
     {}
   case 12:
-    t2 ^= ((uint64_t)tail[11]) << 24;
+    t2 ^= static_cast<uint64_t>(tail[11]) << 24;
     [[fallthrough]];
     {}
   case 11:
-    t2 ^= ((uint64_t)tail[10]) << 16;
+    t2 ^= static_cast<uint64_t>(tail[10]) << 16;
     [[fallthrough]];
     {}
   case 10:
-    t2 ^= ((uint64_t)tail[9]) << 8;
+    t2 ^= static_cast<uint64_t>(tail[9]) << 8;
     [[fallthrough]];
     {}
   case 9:
-    t2 ^= ((uint64_t)tail[8]) << 0;
+    t2 ^= static_cast<uint64_t>(tail[8]) << 0;
     t2 *= c2;
     t2 = rotating_left(t2, 33);
     t2 *= c1;
@@ -327,35 +327,35 @@ uint64_t gen_hash(const void *key, const int len, const uint32_t seed) {
     [[fallthrough]];
     {}
   case 8:
-    t1 ^= ((uint64_t)tail[7]) << 56;
+    t1 ^= static_cast<uint64_t>(tail[7]) << 56;
     [[fallthrough]];
     {}
   case 7:
-    t1 ^= ((uint64_t)tail[6]) << 48;
+    t1 ^= static_cast<uint64_t>(tail[6]) << 48;
     [[fallthrough]];
     {}
   case 6:
-    t1 ^= ((uint64_t)tail[5]) << 40;
+    t1 ^= static_cast<uint64_t>(tail[5]) << 40;
     [[fallthrough]];
     {}
   case 5:
-    t1 ^= ((uint64_t)tail[4]) << 32;
+    t1 ^= static_cast<uint64_t>(tail[4]) << 32;
     [[fallthrough]];
     {}
   case 4:
-    t1 ^= ((uint64_t)tail[3]) << 24;
+    t1 ^= static_cast<uint64_t>(tail[3]) << 24;
     [[fallthrough]];
     {}
   case 3:
-    t1 ^= ((uint64_t)tail[2]) << 16;
+    t1 ^= static_cast<uint64_t>(tail[2]) << 16;
     [[fallthrough]];
     {}
   case 2:
-    t1 ^= ((uint64_t)tail[1]) << 8;
+    t1 ^= static_cast<uint64_t>(tail[1]) << 8;
     [[fallthrough]];
     {}
   case 1:
-    t1 ^= ((uint64_t)tail[0]) << 0;
+    t1 ^= static_cast<uint64_t>(tail[0]) << 0;
     t1 *= c1;
     t1 = rotating_left(t1, 31);
     t1 *= c2;
@@ -446,8 +446,7 @@ void InternalTilingCache::Unbind(const TilingCacheItemPtr &item) {
   }
 }
 
-std::vector<TilingCacheItemPtr>
-InternalTilingCache::CombOutSuspectedUselessItems() {
+std::vector<TilingCacheItemPtr> InternalTilingCache::CombOutSuspectedUselessItems() {
   std::vector<TilingCacheItemPtr> erased_items;
   std::vector<uint64_t> keys;
   for (auto &iter : cache_) {

@@ -33,21 +33,18 @@
 // COMMON FUNCTION
 // =============================================================================
 
-namespace {
-enum class TransdataType {
+namespace ms_custom_ops {
+enum class TransdataType : int32_t {
   FRACTAL_NZ_TO_ND = 0,
   ND_TO_FRACTAL_NZ = 1,
 };
 
-}
-
-namespace ms_custom_ops {
-enum InputIndex {
+enum class InputIndex : size_t {
   kInputIndex = 0,
   kTransdataTypeIndex = 1,
 };
 
-enum OutputIndex { kOutputIndex = 0 };
+enum class OutputIndex : size_t { kOutputIndex = 0 };
 
 inline internal::InternalOpPtr CreateTransDataOpWithParam(const internal::InputsImmutableInfoList &inputs,
                                                          const internal::OutputsImmutableInfoList &outputs,
@@ -57,7 +54,7 @@ inline internal::InternalOpPtr CreateTransDataOpWithParam(const internal::Inputs
   // Map transdata_type to internal enum and set appropriate input format
   auto inputs_clone = inputs;
   auto outputs_clone = outputs;
-  
+
   if (transdata_type == static_cast<int32_t>(TransdataType::FRACTAL_NZ_TO_ND)) {
     param.transdataType = internal::TransDataParam::FRACTAL_NZ_TO_ND;
     // For FRACTAL_NZ_TO_ND: input should be FRACTAL_NZ format
@@ -69,10 +66,10 @@ inline internal::InternalOpPtr CreateTransDataOpWithParam(const internal::Inputs
     inputs_clone[0].SetFormat(internal::kFormatND);
     outputs_clone[0].SetFormat(internal::kFormatFRACTAL_NZ);
   } else {
-    MS_LOG(EXCEPTION) << "TransData: Invalid transdata_type " << transdata_type 
+    MS_LOG(EXCEPTION) << "TransData: Invalid transdata_type " << transdata_type
                       << ", valid values are: 0 (FRACTAL_NZ_TO_ND), 1 (ND_TO_FRACTAL_NZ)";
   }
-  
+
   // Note: outCrops are handled internally by the ms_kernels_internal layer
   // Users do not need to specify outCrops - they are auto-calculated
   param.specialTransdata = internal::TransDataParam::NORMAL;
@@ -89,10 +86,10 @@ class OPS_API CustomTransDataOpFuncImpl : public OpFuncImpl {
   ShapeArray InferShape(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) const override {
     // For TransData, output shape depends on the conversion type
     // For now, return the same shape as input (this might need refinement based on actual format conversion)
-    return {input_infos[kInputIndex]->GetShape()};
+    return {input_infos[static_cast<size_t>(InputIndex::kInputIndex)]->GetShape()};
   }
   std::vector<TypeId> InferType(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) const override {
-    return {input_infos[kInputIndex]->GetType()};
+    return {input_infos[static_cast<size_t>(InputIndex::kInputIndex)]->GetType()};
   }
   bool GeneralInferRegistered() const override { return true; }
 };
@@ -103,8 +100,8 @@ class CustomTransData : public InternalKernelMod {
   ~CustomTransData() = default;
 
   void InitKernelInputsOutputsIndex() override {
-    kernel_inputs_index_ = {kInputIndex};
-    kernel_outputs_index_ = {kOutputIndex};
+    kernel_inputs_index_ = {static_cast<size_t>(InputIndex::kInputIndex)};
+    kernel_outputs_index_ = {static_cast<size_t>(OutputIndex::kOutputIndex)};
   }
 
   int Resize(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) override {
@@ -142,7 +139,7 @@ class CustomTransData : public InternalKernelMod {
                                        const internal::OutputsImmutableInfoList &outputs,
                                        const std::vector<KernelTensor *> &ms_inputs,
                                        const std::vector<KernelTensor *> &ms_outputs) override {
-    auto transdata_type = ms_inputs.at(kTransdataTypeIndex);
+    auto transdata_type = ms_inputs.at(static_cast<size_t>(InputIndex::kTransdataTypeIndex));
     int32_t transdata_type_val = 0;
     if (transdata_type->dtype_id() == TypeId::kNumberTypeInt64) {
       transdata_type_val = static_cast<int32_t>(transdata_type->GetValue<int64_t>().value());
@@ -196,7 +193,7 @@ ms::Tensor npu_trans_data(const ms::Tensor &input, std::optional<int64_t> transd
   // Setup the runner with all parameters (including hash calculation)
   runner->Setup(op_name, input, transdata_type);
 
-  // Create output tensor with same shape and type as input 
+  // Create output tensor with same shape and type as input
   // Note: The actual output shape may be different due to format conversion
   // but the kernel will handle the correct output allocation
   auto output = ms::Tensor(input.data_type(), input.shape());
