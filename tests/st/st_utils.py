@@ -15,9 +15,7 @@
 
 
 import numpy as np
-import os
 import mindspore as ms
-from mindspore import Tensor
 
 def custom_compare(output, expect, mstype):
     if mstype == ms.float16:

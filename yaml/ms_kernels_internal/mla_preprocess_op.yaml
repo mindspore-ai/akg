@@ -1,0 +1,75 @@
+#operator MlaPreprocess
+mla_preprocess:
+  args:
+    input1:
+      dtype: tensor
+    gamma1:
+      dtype: tensor
+    beta1:
+      dtype: tensor
+    quant_scale1:
+      dtype: tensor
+    quant_offset1:
+      dtype: tensor
+    wdqkv:
+      dtype: tensor
+    bias1:
+      dtype: tensor
+    gamma2:
+      dtype: tensor
+    beta2:
+      dtype: tensor
+    quant_scale2:
+      dtype: tensor
+    quant_offset2:
+      dtype: tensor
+    gamma3:
+      dtype: tensor
+    sin1:
+      dtype: tensor
+    cos1:
+      dtype: tensor
+    sin2:
+      dtype: tensor
+    cos2:
+      dtype: tensor
+    key_cache:
+      dtype: tensor
+    slot_mapping:
+      dtype: tensor
+    wuq:
+      dtype: tensor
+    bias2:
+      dtype: tensor
+    wuk:
+      dtype: tensor
+    de_scale1:
+      dtype: tensor
+    de_scale2:
+      dtype: tensor
+    ctkv_scale:
+      dtype: tensor
+    qnope_scale:
+      dtype: tensor
+    krope_cache:
+      dtype: tensor
+    param_cache_mode:
+      dtype: int
+      default: 0
+  args_signature:
+    rw_write: key_cache, krope_cache
+  labels:
+    side_effect_mem: True
+  returns:
+    output0:
+      dtype: tensor
+    output1:
+      dtype: tensor
+    output2:
+      dtype: tensor
+    output3:
+      dtype: tensor
+  function:
+    name: mla_preprocess
+  class:
+    name: MlaPreprocess
