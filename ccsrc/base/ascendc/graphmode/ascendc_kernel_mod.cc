@@ -60,5 +60,7 @@ AscendCKernelMod::~AscendCKernelMod() {
     auto cache = std::get<kIndex2>(item);
     cache(device::ascend::ProcessCacheType::kReleaseParamsAndExecutor, {});
   });
+  delete executor_;
+  executor_ = nullptr;
 }
 }  // namespace ms_custom_ops

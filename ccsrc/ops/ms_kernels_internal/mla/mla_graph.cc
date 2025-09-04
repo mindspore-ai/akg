@@ -100,14 +100,11 @@ static void CheckShape(const PrimitivePtr &primitive, const InferInfoPtrList &in
 
   if (!input_infos[kMlaInputKvCacheIndex]->IsDynamic()) {
     auto q_heads = input_infos[kMlaInputNumHeadIndex]->GetScalarValue<int64_t>();
-    if (q_heads.has_value()) {
-      if (q_heads.value() == kMLAQheadMax) {
-        if (ctkv_shape[kMLABlockSizeDim] != kMLAQheadMax) {
-          MS_LOG(EXCEPTION) << "For MLA the block_size must be 128 when "
-                               "head_num is 128, but got block_size: "
-                            << ctkv_shape[kMLABlockSizeDim];
-        }
-      }
+    bool is_head_max = q_heads.has_value() && (q_heads.value() == kMLAQheadMax);
+    if (is_head_max && ctkv_shape[kMLABlockSizeDim] != kMLAQheadMax) {
+      MS_LOG(EXCEPTION) << "For MLA the block_size must be 128 when "
+                           "head_num is 128, but got block_size: "
+                        << ctkv_shape[kMLABlockSizeDim];
     }
   }
 

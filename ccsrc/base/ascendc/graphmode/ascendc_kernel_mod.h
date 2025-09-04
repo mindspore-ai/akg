@@ -166,7 +166,7 @@ class AscendCKernelMod : public KernelMod {
       MS_LOG(INFO) << "Set ascendc cache queue length of kbyk to " << capacity_;
     }
   }
-  ~AscendCKernelMod();
+  virtual ~AscendCKernelMod();
 
   bool Init(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs);
   int Resize(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs);

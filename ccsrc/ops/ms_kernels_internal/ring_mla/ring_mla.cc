@@ -258,7 +258,6 @@ bool CustomRingMLA::UpdateParam(const std::vector<KernelTensor *> &inputs,
                                                         inputs[kQSeqLenIdx], &param_.qSeqLen);
   bool kv_need_update = GetSeqLenFromInputAndCheckUpdate(kernel_name_, "batch_valid_length",
                                                          inputs[kKVSeqLenIdx], &param_.kvSeqLen);
-
   if (q_need_update || kv_need_update) {
     auto ret = internal_op_->UpdateParam(&param_);
     if (ret != internal::kInternalOk) {
