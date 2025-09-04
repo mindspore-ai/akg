@@ -100,16 +100,6 @@ static void CheckShape(const PrimitivePtr &primitive, const InferInfoPtrList &in
   }
 
   if (!input_infos[kMlaInputKvCacheIndex]->IsDynamic()) {
-    MS_CHECK_VALUE(ctkv_shape.size() == kMLAKVshapeRank,
-                   CheckAndConvertUtils::FormatCommMsg("For MLA The rank of ctkv must be ", kMLAKVshapeRank,
-                                                       ", but got shape: ", ctkv_shape));
-    MS_CHECK_VALUE(ctkv_shape[ctkv_shape.size() - 1] == kMLAQKVnopeHiddenSize,
-                   CheckAndConvertUtils::FormatCommMsg("For MLA The last dim of ctkv must be ", kMLAQKVnopeHiddenSize,
-                                                       ", but got shape: ", ctkv_shape));
-    MS_CHECK_VALUE(ALIGN_16(ctkv_shape[kMLABlockSizeDim]),
-                   CheckAndConvertUtils::FormatCommMsg("For MLA The block_size must be the multiple of 16 , but got: ",
-                                                       ctkv_shape[kMLABlockSizeDim]));
-
     auto q_heads = input_infos[kMlaInputNumHeadIndex]->GetScalarValue<int64_t>();
     if (q_heads.has_value()) {
       if (q_heads.value() == kMLAQheadMax) {
@@ -120,15 +110,6 @@ static void CheckShape(const PrimitivePtr &primitive, const InferInfoPtrList &in
         }
       }
     }
-  }
-
-  if (!input_infos[kMlaInputKropeIndex]->IsDynamic()) {
-    MS_CHECK_VALUE(k_rope_shape.size() == kMLAKVshapeRank,
-                   CheckAndConvertUtils::FormatCommMsg("For MLA The rank of k_rope must be ", kMLAKVshapeRank,
-                                                       ", but got shape: ", k_rope_shape));
-    MS_CHECK_VALUE(k_rope_shape[k_rope_shape.size() - 1] == kMLAQKropeHiddenSize,
-                   CheckAndConvertUtils::FormatCommMsg("For MLA The last dim of k_rope must be ", kMLAQKropeHiddenSize,
-                                                       ", but got shape: ", k_rope_shape));
   }
 
   if (!input_infos[kMlaInputBlockTablesIndex]->IsDynamic()) {
