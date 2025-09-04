@@ -55,7 +55,7 @@ public:
 
   std::string GetName() const { return name_; }
 
-  inline bool IsOneOffMem(void *addr) const {
+  inline bool IsOneOffMem(const void *addr) const {
     return addr < mem_base_ptr_ || addr >= mem_base_ptr_ + total_size_;
   }
 
@@ -120,9 +120,9 @@ public:
     return mgr;
   }
 
-  void CopyAsync(void *host_ptr, void *device_ptr, size_t size);
+  void CopyAsync(const void *host_ptr, void *device_ptr, size_t size);
 
-  void CopyAsyncD2H(void *host_ptr, void *device_ptr, size_t size);
+  void CopyAsyncD2H(const void *device_ptr, void *host_ptr, size_t size);
 
   TilingMemPoolHost pool_host_{kTilingMemPoolBlockSize,
                                kTilingMemPoolHostBlockNum};

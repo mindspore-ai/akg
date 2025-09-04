@@ -33,15 +33,13 @@
 // COMMON FUNCTION
 // =============================================================================
 
-namespace {
-enum class CacheMode {
+namespace ms_custom_ops {
+enum class CacheMode : int32_t {
   ND = 0,
   NZ = 1,
 };
-}
 
-namespace ms_custom_ops {
-enum InputIndex {
+enum class InputIndex : size_t {
   kInputKeyIndex = 0,
   kInputValueIndex = 1,
   kInputKeyCacheIndex = 2,
@@ -51,7 +49,7 @@ enum InputIndex {
   kInputHeadNumIndex = 6,
 };
 
-enum OutputIndex { kOutputIndex = 0 };
+enum class OutputIndex : size_t { kOutputIndex = 0 };
 
 inline internal::InternalOpPtr CreateReshapeAndCacheOpWithFormat(const internal::InputsImmutableInfoList &inputs,
                                                                  const internal::OutputsImmutableInfoList &outputs,
@@ -59,8 +57,8 @@ inline internal::InternalOpPtr CreateReshapeAndCacheOpWithFormat(const internal:
                                                                  int32_t cache_mode) {
   if (cache_mode == static_cast<int32_t>(CacheMode::NZ)) {
     auto inputs_clone = inputs;
-    inputs_clone[kInputKeyCacheIndex].SetFormat(internal::kFormatFRACTAL_NZ);
-    inputs_clone[kInputValueCacheIndex].SetFormat(internal::kFormatFRACTAL_NZ);
+    inputs_clone[static_cast<size_t>(InputIndex::kInputKeyCacheIndex)].SetFormat(internal::kFormatFRACTAL_NZ);
+    inputs_clone[static_cast<size_t>(InputIndex::kInputValueCacheIndex)].SetFormat(internal::kFormatFRACTAL_NZ);
     return internal::CreateAsdReshapeAndCacheOp(inputs_clone, outputs, param,
                                                 internal::kInternalAsdReshapeAndCacheOpName);
   }
@@ -74,10 +72,10 @@ inline internal::InternalOpPtr CreateReshapeAndCacheOpWithFormat(const internal:
 class OPS_API CustomReshapeAndCacheOpFuncImpl : public OpFuncImpl {
  public:
   ShapeArray InferShape(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) const override {
-    return {input_infos[kInputKeyIndex]->GetShape()};
+    return {input_infos[static_cast<size_t>(InputIndex::kInputKeyIndex)]->GetShape()};
   }
   std::vector<TypeId> InferType(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) const override {
-    return {input_infos[kInputKeyIndex]->GetType()};
+    return {input_infos[static_cast<size_t>(InputIndex::kInputKeyIndex)]->GetType()};
   }
   bool GeneralInferRegistered() const override { return true; }
 };
@@ -88,9 +86,11 @@ class CustomReshapeAndCache : public InternalKernelMod {
   ~CustomReshapeAndCache() = default;
 
   void InitKernelInputsOutputsIndex() override {
-    kernel_inputs_index_ = {kInputKeyIndex, kInputValueIndex, kInputKeyCacheIndex, kInputValueCacheIndex,
-                            kInputSlotMappingIndex};
-    kernel_outputs_index_ = {kOutputIndex};
+    kernel_inputs_index_ = {
+      static_cast<size_t>(InputIndex::kInputKeyIndex), static_cast<size_t>(InputIndex::kInputValueIndex),
+      static_cast<size_t>(InputIndex::kInputKeyCacheIndex), static_cast<size_t>(InputIndex::kInputValueCacheIndex),
+      static_cast<size_t>(InputIndex::kInputSlotMappingIndex)};
+    kernel_outputs_index_ = {static_cast<size_t>(OutputIndex::kOutputIndex)};
   }
 
   int Resize(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) override {
@@ -131,13 +131,13 @@ class CustomReshapeAndCache : public InternalKernelMod {
                                        const std::vector<KernelTensor *> &ms_inputs,
                                        const std::vector<KernelTensor *> &ms_outputs) override {
     internal::ReshapeAndCacheParam param;
-    auto head_num = ms_inputs.at(kInputHeadNumIndex);
+    auto head_num = ms_inputs.at(static_cast<size_t>(InputIndex::kInputHeadNumIndex));
     if (head_num->dtype_id() == TypeId::kNumberTypeInt64) {
       param.head_num = static_cast<int32_t>(head_num->GetValue<int64_t>().value());
     } else {
       MS_LOG(EXCEPTION) << "ReshapeAndCache [head_num]'s dtype wrong, expect int64, but got: " << head_num->dtype_id();
     }
-    auto cache_mode = ms_inputs.at(kInputCacheModeIndex);
+    auto cache_mode = ms_inputs.at(static_cast<size_t>(InputIndex::kInputCacheModeIndex));
     int32_t cache_node_val = 0;
     if (cache_mode->dtype_id() == TypeId::kNumberTypeInt64) {
       cache_node_val = static_cast<int32_t>(cache_mode->GetValue<int64_t>().value());
@@ -204,8 +204,7 @@ void npu_reshape_and_cache(const ms::Tensor &key, const std::optional<ms::Tensor
   // Setup the runner with all parameters (including hash calculation)
   runner->Setup(op_name, key, value, key_cache, value_cache, slot_mapping, cache_mode, head_num);
 
-  // if you need infer shape and type, you can use this
-  // auto result = GenResultTensor(key);
+  // if you need infer shape and type, you need create output tensors.
   std::vector<ms::Tensor> inputs = {key, GetTensorOrEmpty(value), GetTensorOrEmpty(key_cache),
                                     GetTensorOrEmpty(value_cache), GetTensorOrEmpty(slot_mapping)};
   std::vector<ms::Tensor> outputs = {};

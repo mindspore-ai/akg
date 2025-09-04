@@ -79,11 +79,10 @@ void TilingMemPool::Rearrange() {
   mem_slots_ = std::move(new_slots);
   head_ = 0;
   tail_ = last_slot_idx + 1;
-  TMP_LOG(INFO) << "Complete doing rearrange!!! New size of mem_slots_: "
-                << mem_slots_.size() << ", new tail_: " << tail_;
+  TMP_LOG(INFO) << "Complete doing rearrange!!! New size of mem_slots_: " << mem_slots_.size()
+                << ", new tail_: " << tail_;
   for (size_t i = 0; i < mem_slots_.size(); i++) {
-    TMP_LOG(INFO) << "idx: " << i << ", offset: " << mem_slots_[i].offset_
-                  << ", len: " << mem_slots_[i].length_;
+    TMP_LOG(INFO) << "idx: " << i << ", offset: " << mem_slots_[i].offset_ << ", len: " << mem_slots_[i].length_;
   }
 }
 
@@ -92,16 +91,13 @@ void *TilingMemPool::Malloc(size_t size) {
 
   if (mem_base_ptr_ == nullptr) {
     mem_base_ptr_ = static_cast<int8_t *>(MallocInner(total_size_));
-    TMP_LOG(INFO) << "Malloc base ptr: "
-                  << static_cast<const void *>(mem_base_ptr_)
-                  << ", size: " << total_size_;
+    TMP_LOG(INFO) << "Malloc base ptr: " << static_cast<const void *>(mem_base_ptr_) << ", size: " << total_size_;
     MS_EXCEPTION_IF_NULL(mem_base_ptr_);
   }
 
   if (head_ == tail_) {
     auto ret = MallocOneOffMem(aligned_size);
-    TMP_LOG(INFO) << "Malloc one off memory because of empty slots, addr: "
-                  << ret << ", size: " << size
+    TMP_LOG(INFO) << "Malloc one off memory because of empty slots, addr: " << ret << ", size: " << size
                   << ", aligned_size: " << aligned_size;
     return ret;
   }
@@ -137,16 +133,13 @@ void *TilingMemPool::Malloc(size_t size) {
 
   if (ret_addr == nullptr) {
     auto ret = MallocOneOffMem(aligned_size);
-    TMP_LOG(INFO)
-        << "Malloc one off memory because of not enough memory in slot, addr: "
-        << ret << ", size: " << size << ", aligned_size: " << aligned_size;
+    TMP_LOG(INFO) << "Malloc one off memory because of not enough memory in slot, addr: " << ret << ", size: " << size
+                  << ", aligned_size: " << aligned_size;
     return ret;
   }
 
-  TMP_LOG(DEBUG) << "Malloc cached memory ret_addr: "
-                 << static_cast<const void *>(ret_addr) << ", size: " << size
-                 << ", aligned_size: " << aligned_size
-                 << ", offset: " << ret_addr - mem_base_ptr_;
+  TMP_LOG(DEBUG) << "Malloc cached memory ret_addr: " << static_cast<const void *>(ret_addr) << ", size: " << size
+                 << ", aligned_size: " << aligned_size << ", offset: " << ret_addr - mem_base_ptr_;
   return ret_addr;
 }
 
@@ -171,10 +164,8 @@ void TilingMemPool::Free(void *addr, size_t size) {
       slot.offset_ = offset;
       slot.length_ += aligned_size;
       merged = true;
-      TMP_LOG(DEBUG) << "Merge slots: head_: " << head_ << ", tail_: " << tail_
-                     << ", cur_idx: " << i
-                     << ", new slot.offset_: " << slot.offset_
-                     << ", new slot.length_: " << slot.length_;
+      TMP_LOG(DEBUG) << "Merge slots: head_: " << head_ << ", tail_: " << tail_ << ", cur_idx: " << i
+                     << ", new slot.offset_: " << slot.offset_ << ", new slot.length_: " << slot.length_;
       break;
     }
   }
@@ -186,8 +177,7 @@ void TilingMemPool::Free(void *addr, size_t size) {
       mem_slots_[tail_] = Slot{offset, aligned_size};
     }
     tail_ = RoundAdd(tail_);
-    TMP_LOG(DEBUG) << "Create new slot, offset: " << offset
-                   << ", aligned_size: " << aligned_size
+    TMP_LOG(DEBUG) << "Create new slot, offset: " << offset << ", aligned_size: " << aligned_size
                    << ", new_tail_: " << tail_;
   }
 }
@@ -238,7 +228,7 @@ TilingMemMgr::TilingMemMgr() {
           {device::GetDeviceTypeByName(device_name), device_id});
 }
 
-void TilingMemMgr::CopyAsync(void *host_ptr, void *device_ptr, size_t size) {
+void TilingMemMgr::CopyAsync(const void *host_ptr, void *device_ptr, size_t size) {
   device_context_->device_res_manager_->BindDeviceToCurrentThread(false);
   if (default_stream_ == nullptr) {
     auto default_stream_id =
@@ -254,7 +244,7 @@ void TilingMemMgr::CopyAsync(void *host_ptr, void *device_ptr, size_t size) {
   }
 }
 
-void TilingMemMgr::CopyAsyncD2H(void *host_ptr, void *device_ptr, size_t size) {
+void TilingMemMgr::CopyAsyncD2H(const void *device_ptr, void *host_ptr, size_t size) {
   device_context_->device_res_manager_->BindDeviceToCurrentThread(false);
   if (default_stream_ == nullptr) {
     auto default_stream_id =

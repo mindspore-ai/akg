@@ -97,8 +97,6 @@ TilingCacheItemPtr InternalPyboostRunner::GetOrGenerateTiling() {
   auto key = GetOrGenerateOpTilingKey(tiling_key_);
   auto tiling_info_ptr = InternalTilingCache::GetInstance().Bind(key);
   if (tiling_info_ptr == nullptr) {
-    // TODO check if need to bind device to current thread
-    // device_context->device_res_manager_->BindDeviceToCurrentThread(false);
     MS_LOG(INFO) << "start create tiling info for " << this->op_name();
     auto tiling_size = internal_op_->GetTilingSize();
     auto host_addr = TilingMemMgr::GetInstance().pool_host_.Malloc(tiling_size);
