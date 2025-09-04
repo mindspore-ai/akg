@@ -37,6 +37,7 @@ using TensorList = std::vector<ms::Tensor>;
 class InternalPyboostRunner : public ms::pynative::PyboostRunner {
  public:
   using ms::pynative::PyboostRunner::PyboostRunner;
+  virtual ~InternalPyboostRunner() = default;
 
   // Generic setup method for configuring the runner with parameters and
   // calculating hash keys

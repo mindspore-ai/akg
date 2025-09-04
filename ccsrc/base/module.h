@@ -17,12 +17,12 @@
 #ifndef MS_CUSTOM_OPS_MODULE_H_
 #define MS_CUSTOM_OPS_MODULE_H_
 
-#include "mindspore/ccsrc/ms_extension/api.h"
-#include "mindspore/ops/kernel/ascend/custom/custom_kernel_factory.h"
 #include <functional>
 #include <pybind11/pybind11.h>
 #include <string>
 #include <vector>
+#include "mindspore/ccsrc/ms_extension/api.h"
+#include "mindspore/ops/kernel/ascend/custom/custom_kernel_factory.h"
 
 // Define the type of module registration functions
 using ModuleRegisterFunction = std::function<void(pybind11::module_ &)>;

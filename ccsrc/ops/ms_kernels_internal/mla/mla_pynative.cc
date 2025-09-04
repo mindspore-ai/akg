@@ -28,7 +28,7 @@
 namespace ms_custom_ops {
 class MlaRunner : public InternalPyboostRunner {
  public:
-  MlaRunner(const std::string &op_name) : InternalPyboostRunner(op_name) {}
+  explicit MlaRunner(const std::string &op_name) : InternalPyboostRunner(op_name) {}
   ~MlaRunner() = default;
 
   void SetParam(int32_t head_size, float tor, int32_t kv_head, mindspore::internal::MLAParam::MaskType mask_type,
