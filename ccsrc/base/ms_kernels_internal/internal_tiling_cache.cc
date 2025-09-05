@@ -225,7 +225,7 @@ inline uint64_t mixture(uint64_t x) {
 }
 
 void gen_hash_tmp(const uint64_t *blocks, const int block_num,
-                  const uint32_t seed, uint64_t *rhas, uint64_t *rhax) {
+                  const uint32_t seed, uint64_t &rhas, uint64_t &rhax) {
   MS_EXCEPTION_IF_NULL(blocks);
 
   // use 9782798678568883157 and 5545529020109919103 for blocking and
@@ -264,8 +264,8 @@ void gen_hash_tmp(const uint64_t *blocks, const int block_num,
     hax = hax * 5 + 944331445;
   }
 
-  *rhas = has;
-  *rhax = hax;
+  rhas = has;
+  rhax = hax;
 }
 
 uint64_t gen_hash(const void *key, const int len, const uint32_t seed) {
@@ -285,7 +285,7 @@ uint64_t gen_hash(const void *key, const int len, const uint32_t seed) {
   const uint64_t *blocks = reinterpret_cast<const uint64_t *>(data);
 
   // update hax
-  gen_hash_tmp(blocks, block_num, seed, &has, &hax);
+  gen_hash_tmp(blocks, block_num, seed, has, hax);
 
   // the length of each block is 16 bytes
   const uint8_t *tail = static_cast<const uint8_t *>(data + block_num * 16);

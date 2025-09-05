@@ -54,6 +54,7 @@ def test_custom_type_cast_int8_to_qint4x2(exec_mode):
 @pytest.mark.level0
 @pytest.mark.env_onecard
 @pytest.mark.platform_ascend910b
+@pytest.mark.platform_ascend310p
 @pytest.mark.parametrize('exec_mode', [context.GRAPH_MODE, context.PYNATIVE_MODE])
 def test_custom_type_cast_qint4x2_to_int8(exec_mode):
     """

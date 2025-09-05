@@ -202,6 +202,7 @@ class TestResultVerifier:
 
 @pytest.mark.level0
 @pytest.mark.platform_ascend910b
+@pytest.mark.platform_ascend310p
 @pytest.mark.env_onecard
 @pytest.mark.parametrize('np_dtype', [np.float16, np.int8, bfloat16])
 @pytest.mark.parametrize('input_shape', [(2, 16, 16), (1, 32, 32), (4, 8, 64)])
