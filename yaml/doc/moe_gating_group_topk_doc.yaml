@@ -1,0 +1,47 @@
+moe_gating_group_topk:
+    description: |
+        MoE计算中，对输入x做Sigmoid计算，对计算结果分组进行排序，最后根据分组排序的结果选取前k个专家.
+
+        Args:
+            x (Tensor): 两维专家分数Tensor，数据类型支持float16、bfloat16、float32，仅支持连续Tensor
+            bias (Tensor, optional): 要求是1D的Tensor，要求shape值与x的最后一维相等。数据类型支持float16、bfloat16、float32，数据类型需要与x保持一致。
+            k (整型): 每个token最终筛选得到的专家个数，数据类型为int64。要求1≤k≤x.shape[-1]/group_count*k_group。k取值范围为[1, 32]。
+            k_groupk (整型): 个token组筛选过程中，选出的专家组个数，数据类型为int64。
+            group_count (整型): 表示将全部专家划分的组数，数据类型为int64，当前仅支持group_count = k_groupk = k。
+            group_select_mode (整型): 表示一个专家组的总得分计算方式。默认值为0，表示取组内Top2的专家进行得分累加，作为专家组得分。当前仅支持默认值0。
+            renorm (整型): renorm标记，当前仅只支持0，表示先进行norm再进行topk计算
+            norm_type (整型): 表示norm函数类型，当前仅支持0，表示使用Softmax函数。
+            out_flag (布尔类型): 是否输出norm函数中间结果。当前仅支持False，表示不输出。 
+            routed_scaling_factor (float类型): routed_scaling_factor系数，默认值1.0
+            eps (float类型): eps系数，默认值1e-20
+                        
+        Returns:
+            - y_out：Tensor类型，表示对x做norm操作和分组排序topk后计算的结果。要求是一个2D的Tensor，数据类型支持float16、bfloat16、float32，
+            数据类型与x需要保持一致，数据格式要求为ND，第一维的大小要求与x的第一维相同，最后一维的大小与k相同。不支持非连续Tensor。
+            - expert_idx_out：Tensor类型，表示对x做norm操作和分组排序topk后的索引，即专家的序号。shape要求与yOut一致，数据类型支持int32，数据格式要求为ND。不支持非连续Tensor。
+            - norm_out：Tensor类型，norm计算的输出结果。shape要求与x保持一致，数据类型为float32，数据格式要求为ND。不支持非连续Tensor。
+
+        Supported Platforms:
+            ``Atlas 800I A2 推理产品/Atlas A3 推理系列产品/Atlas 推理系列产品AI Core``          
+
+        Examples:
+            >>> import numpy as np
+            >>> import mindspore as ms
+            >>> import ms_custom_ops
+            >>> ms.set_device("Ascend")
+            >>> ms.set_context(mode=ms.context.PYNATIVE_MODE)
+            >>> x = np.random.uniform(-2, 2, (8, 64)).astype(np.float16)
+            >>> x_tensor = ms.Tensor(x, dtype=ms.float16)
+            >>> bias = None
+            >>> k = 4
+            >>> k_group = 4
+            >>> group_count = 4
+            >>> group_select_mode = 0
+            >>> renorm = 0
+            >>> norm_type = 0
+            >>> out_flag = False
+            >>> routed_scaling_factor = 1.0
+            >>> eps = 1e-20
+            >>> y_out, expert_idx_out, _ = ms_custom_ops.moe_gating_group_topk(x_tensor, bias, k, k_group, group_count, group_select_mode, renorm, norm_type, out_flag, routed_scaling_factor, eps)
+            >>> print("y_out:", y_out)
+            >>> print("expert_idx_out:", expert_idx_out)

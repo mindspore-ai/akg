@@ -1,0 +1,42 @@
+#operator moe_gating_group_topk
+moe_gating_group_topk:
+  args:
+    x:
+      dtype: tensor
+    bias:
+      dtype: tensor
+      default: None 
+    k:
+      dtype: int
+      default: 1
+    k_group:
+      dtype: int
+      default: 1
+    group_count:
+      dtype: int
+      default: 1
+    group_select_mode:
+      dtype: int
+      default: 0
+    renorm:
+      dtype: int
+      default: 0
+    norm_type:
+      dtype: int
+      default: 0
+    out_flag:
+      dtype: bool
+      default: False
+    routed_scaling_factor:
+      dtype: float
+      default: 1.0
+    eps:
+      dtype: float
+      default: 1e-20
+  returns:
+    y_out:
+      dtype: tensor
+    expert_idx_out:
+      dtype: tensor
+    norm_out:
+      dtype: tensor
