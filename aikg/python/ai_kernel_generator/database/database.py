@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import shutil
-import yaml
 import json
 import logging
 import random
@@ -33,26 +32,26 @@ class RetrievalStrategy(Enum):
     MMR = "max_marginal_relevance"
     OPTIMALITY = "optimality"
     RULE = "rule"
+    HIERARCHY = "hierarchy"
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
-DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "database_config.yaml"
 
 class Database():
-    def __init__(self, config_path: str = "", database_path: str = "", random_mode: bool = False):
+    def __init__(self, database_path: str = "", vector_stores: List[VectorStore] = [], config: dict = None):
         """初始化数据库系统"""
         self.database_path = database_path or str(DEFAULT_DATABASE_PATH)
-        config_path = config_path or str(DEFAULT_CONFIG_PATH)
-        if not random_mode:
-            self.vector_store = VectorStore(config_path, self.database_path)
-        with open(config_path, 'r', encoding='utf-8') as f:
-            self.config = yaml.safe_load(f)
-        self.random_mode = random_mode
+        self.vector_stores = vector_stores
+        
+        if config:
+            self.model_config = config.get("agent_model_config", {})
+        else:
+            raise ValueError("config is required for Database")
 
     async def extract_features(self,impl_code: str, framework_code:str, backend:str, arch: str, dsl:str, profile=float('inf')):
         """提取任务特征"""
         # 特征提取
         feature_extractor = FeatureExtractor(
-            model_config=self.config.get("agent_model_config"),
+            model_config=self.model_config,
             impl_code=impl_code,
             framework_code=framework_code
         )
@@ -68,220 +67,11 @@ class Database():
             "profile": profile,
             "backend": backend,
             "arch": arch,
-            "dsl": dsl,
-            "description": parsed_content.description
+            "dsl": dsl
         }
         return extracted_features
-    
-    def get_output_content(self, output_content:List[str], strategy_mode:RetrievalStrategy, docs, dsl, framework):
-        result = []
-        for doc in docs:
-            case_path = doc.metadata["file_path"]
-            result.append(self.get_case_content(output_content, case_path, strategy_mode, dsl, framework))
-        return result
-    
-    def randomicity_search(self, output_content: List[str], k: int = 5, backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
-        if not arch or not dsl:
-            raise ValueError("arch and dsl must be provided in random mode")
-            
-        sample_path = Path(self.database_path) / "operators" / arch / dsl
-        if not sample_path.exists() or not sample_path.is_dir():
-            raise ValueError(f"Sample path {sample_path} does not exist or is not a directory")
-        
-        cases = [f for f in sample_path.iterdir() if f.is_dir()]
-        k = min(k, len(cases))
-        selected_cases = random.sample(cases, k) if k > 0 else []
-        result = []
-        for case_path in selected_cases:
-            result.append(self.get_case_content(output_content, case_path, RetrievalStrategy.RANDOMICITY, dsl, framework))
-        return result
 
-    def max_marginal_relevance_search(self, query: str, feature_invariants: str, k: int = 5):
-        return self.vector_store.loaded_vectorstore.max_marginal_relevance_search(
-            query=query,
-            k=k,
-            fetch_k = max(20, 5 * k),
-            lambda_mult = 0.2, # 极致多样性
-            filter={"feature_invariants": feature_invariants}, 
-        )
-        
-    def naivety_search(self, query: str, feature_invariants: str, k: int = 5):
-        return self.vector_store.loaded_vectorstore.similarity_search(
-            query=query,
-            k=k,
-            fetch_k = max(20, 5 * k),
-            filter={"feature_invariants": feature_invariants}
-        )
-        
-    def optimality_search(self, query: str, feature_invariants: str, k: int = 1):
-        docs = self.vector_store.loaded_vectorstore.similarity_search(
-            query=query,
-            k= 5 * k,
-            fetch_k = max(20, 10 * k),
-            filter={"feature_invariants": feature_invariants}
-        )
-
-        min_profile = float('inf')
-        min_doc = None
-        for doc in docs:
-            metadata_file = Path(doc.metadata["file_path"]) / "metadata.json"
-            if not metadata_file.exists():
-                continue
-            with open(metadata_file, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
-            profile = metadata.get('profile', float('inf'))
-            if profile < min_profile:
-                min_profile = profile
-                min_doc = doc
-        
-        return [min_doc]
-    
-    def rule_search(self, query: str, feature_invariants: str, k: int = 5, rule_desc:str = ""):
-        return self.vector_store.loaded_vectorstore.similarity_search(
-            query=query,
-            k=k,
-            fetch_k = max(20, 5 * k),
-            filter={"feature_invariants": feature_invariants}
-        )
-
-    def samples_with_strategy(self, strategy_mode: RetrievalStrategy, output_content: List[str], features_str:str, feature_invariants:str,
-                              sample_num: int = 5, rule_desc:str = "", backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
-        """根据指定的策略获取样本"""
-        if strategy_mode == RetrievalStrategy.RANDOMICITY:
-            result = self.randomicity_search(output_content, sample_num, backend, arch, dsl, framework)
-        else:
-            if strategy_mode == RetrievalStrategy.MMR:
-                docs = self.max_marginal_relevance_search(features_str, feature_invariants, sample_num)
-            elif strategy_mode == RetrievalStrategy.NAIVETY:
-                docs = self.naivety_search(features_str, feature_invariants, sample_num)
-            elif strategy_mode == RetrievalStrategy.OPTIMALITY:
-                docs = self.optimality_search(features_str, feature_invariants, sample_num)
-            elif strategy_mode == RetrievalStrategy.RULE:
-                docs = self.rule_search(features_str, feature_invariants, sample_num, rule_desc)
-            else:
-                raise ValueError("Invalid strategy_mode")
-            
-            result = self.get_output_content(output_content, strategy_mode, docs, dsl, framework)
-        return result
-
-    async def samples(self, output_content: List[str], strategy_mode: RetrievalStrategy = RetrievalStrategy.NAIVETY, sample_num: int = 5, rule_desc: str = "",
-                      impl_code: str = "", framework_code:str = "", backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
-        """
-        基本采样，根据指定的策略获取样本
-        """
-        if not self.random_mode and strategy_mode != RetrievalStrategy.RANDOMICITY:
-            features = await self.extract_features(impl_code, framework_code, backend, arch, dsl)
-            features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
-        else:
-            features_str = ""
-            strategy_mode = RetrievalStrategy.RANDOMICITY
-        feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
-        result = self.samples_with_strategy(strategy_mode, output_content, features_str, feature_invariants, sample_num, rule_desc, backend, arch, dsl, framework)  
-        return result
-    
-    async def combined_samples(self, strategy_mode: List[RetrievalStrategy], output_content: List[str], sample_num: List[int], rule_desc:str = "",
-                               impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
-        """
-        综合采样，根据不同的策略和数量获取样本
-        """
-        if len(strategy_mode) != len(sample_num):
-            raise ValueError("strategy_mode and sample_num must have the same length")
-        if not strategy_mode or not sample_num:
-            raise ValueError("strategy_mode and sample_num cannot be empty")
-
-        features = await self.extract_features(impl_code, framework_code, backend, arch, dsl)
-        features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
-        feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
-        result = []
-        for strategy, num in zip(strategy_mode, sample_num):
-            res = self.samples_with_strategy(strategy, output_content, features_str, feature_invariants, num, rule_desc, dsl, framework)
-            result.extend(res)
-        return result
-    
-    async def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, dsl: str, framework: str, profile=float('inf')):
-        """
-        插入新的算子实现
-        """
-        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
-        operator_path = Path(self.database_path) / "operators"
-        file_path = operator_path / arch / dsl / md5_hash
-
-        features = await self.extract_features(impl_code, framework_code, backend, arch, dsl, profile)
-        file_path.mkdir(parents=True, exist_ok=True)
-        metadata_file = file_path / "metadata.json"
-        with open(metadata_file, "w", encoding="utf-8") as f:
-            json.dump(features, f, ensure_ascii=False, indent=4)
-        
-        framework_file = file_path / f"{framework}.py"
-        with open(framework_file, "w", encoding="utf-8") as f:
-            f.write(framework_code)
-        impl_file = file_path / f"{dsl}.py"
-        with open(impl_file, "w", encoding="utf-8") as f:
-            f.write(impl_code)
-
-        if not self.random_mode:
-            self.vector_store.insert(backend, arch, dsl, md5_hash)
-        logger.info(f"Operator implementation inserted successfully, file path: {file_path}")
-
-    def update(self):
-        """
-        更新已有算子实现
-        """
-        pass
-
-    async def delete(self, impl_code:str, backend: str, arch: str, dsl: str):
-        """
-        删除算子实现
-        """
-        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
-
-        operator_path = Path(self.database_path) / "operators"
-        file_path = operator_path / arch / dsl / md5_hash
-        if not file_path.exists():
-            logger.warning(f"Operator implementation does not exist: {file_path}")
-            return
-        shutil.rmtree(file_path)
-        # 删除空的上级目录
-        current_dir = file_path.parent
-        while current_dir.exists() and current_dir != operator_path:
-            if not any(current_dir.iterdir()):
-                current_dir.rmdir()
-                current_dir = current_dir.parent
-            else:
-                break
-        if not self.random_mode:
-            self.vector_store.delete(md5_hash)
-        logger.info(f"Operator implementation deleted successfully, file path: {file_path}")
-
-    def verify(self, query, feature_invariants, sample_docs, top_k: int = 5):
-        docs = self.similarity_search(query, feature_invariants, top_k)
-        paths = [doc.metadata["file_path"] for doc, _ in docs]
-        positives = len(sample_docs) 
-        true_positives = 0
-        for doc, _ in sample_docs:
-            if doc.metadata["file_path"] in paths:
-                true_positives += 1
-        return (true_positives / positives * 100) if positives > 0 else 0
-    
-    def clear(self):
-        self.vector_store.clear()
-        shutil.rmtree(str(Path(self.database_path) / "operators"))
-
-    def _read_code_file(self, content: str, type_value: str, case_path: Path, res_dict: dict):
-        """读取代码文件并添加到结果字典中"""
-        if not type_value:
-            return
-
-        code_file_path = case_path / f"{type_value}.py"
-        if not code_file_path.exists():
-            raise FileNotFoundError(f"Code file not found: {code_file_path}")
-        
-        with open(code_file_path, "r", encoding="utf-8") as f:
-            code = f.read()
-        
-        res_dict[content] = code
-    
-    def get_case_content(self, output_content: List[str], case_path: str, strategy_mode: RetrievalStrategy, dsl: str = "", framework: str = ""):
+    def get_case_content(self, output_content: List[str], case_path: str, strategy_mode: RetrievalStrategy = None, dsl: str = "", framework: str = ""):
         case_path = Path(case_path)
         if not case_path.exists():
             raise FileNotFoundError(f"Case path not found: {case_path}")
@@ -318,3 +108,117 @@ class Database():
                 raise ValueError(f"Content '{content}' not found. Available keys: strategy_mode, impl_code, framework_code, {', '.join(metadata.keys())}")
 
         return res_dict
+
+    def randomicity_search(self, output_content: List[str], k: int = 5, backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
+        if not arch or not dsl:
+            raise ValueError("arch and dsl must be provided in random mode")
+            
+        sample_path = Path(self.database_path) / "operators" / arch / dsl
+        if not sample_path.exists() or not sample_path.is_dir():
+            raise ValueError(f"Sample path {sample_path} does not exist or is not a directory")
+        
+        cases = [f for f in sample_path.iterdir() if f.is_dir()]
+        k = min(k, len(cases))
+        selected_cases = random.sample(cases, k) if k > 0 else []
+        result = []
+        for case_path in selected_cases:
+            result.append(self.get_case_content(output_content, case_path, RetrievalStrategy.RANDOMICITY, dsl, framework))
+        return result
+    
+    def get_output_content(self, output_content:List[str], strategy_mode:RetrievalStrategy, docs, dsl, framework):
+        result = []
+        for doc in docs:
+            case_path = doc.metadata["file_path"]
+            result.append(self.get_case_content(output_content, case_path, strategy_mode, dsl, framework))
+        return result
+    
+    async def samples(self, output_content: List[str], strategy_modes: List[RetrievalStrategy] = [], sample_num: int = 5, rule_desc: str = "",
+                      impl_code: str = "", framework_code:str = "", backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
+        """
+        基本采样，根据指定的策略获取样本
+        """        
+        if len(strategy_modes) != len(self.vector_stores):
+            raise ValueError("strategy_modes和vector_stores长度必须一致")
+        
+        if not self.vector_stores:
+            return self.randomicity_search(output_content, sample_num, backend, arch, dsl, framework)
+        
+        need_extract_features = False
+        for vector_store, strategy_mode in zip(self.vector_stores, strategy_modes):
+            if vector_store.enable_vector_store and strategy_mode!= RetrievalStrategy.RANDOMICITY:
+                need_extract_features = True
+                break
+
+        if need_extract_features:
+            features = await self.extract_features(impl_code, framework_code, backend, arch, dsl)
+            features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
+            feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
+
+        for vector_store, strategy_mode in zip(self.vector_stores, strategy_modes):
+            if vector_store.enable_vector_store and strategy_mode != RetrievalStrategy.RANDOMICITY:
+                if strategy_mode == RetrievalStrategy.MMR:
+                    docs = self.vector_store.max_marginal_relevance_search(features_str, feature_invariants, sample_num)
+                elif strategy_mode == RetrievalStrategy.NAIVETY:
+                    docs = self.vector_store.similarity_search(features_str, feature_invariants, sample_num)
+                else:
+                    raise ValueError("Invalid strategy_mode")
+                result = self.get_output_content(output_content, strategy_mode, docs, dsl, framework)
+            else:
+                result = self.randomicity_search(output_content, sample_num, backend, arch, dsl, framework)
+            return result
+    
+    async def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, dsl: str, framework: str, profile=float('inf')):
+        """
+        插入新的算子实现
+        """
+        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
+        operator_path = Path(self.database_path) / "operators"
+        file_path = operator_path / arch / dsl / md5_hash
+
+        features = await self.extract_features(impl_code, framework_code, backend, arch, dsl, profile)
+        file_path.mkdir(parents=True, exist_ok=True)
+        metadata_file = file_path / "metadata.json"
+        with open(metadata_file, "w", encoding="utf-8") as f:
+            json.dump(features, f, ensure_ascii=False, indent=4)
+        
+        framework_file = file_path / f"{framework}.py"
+        with open(framework_file, "w", encoding="utf-8") as f:
+            f.write(framework_code)
+        impl_file = file_path / f"{dsl}.py"
+        with open(impl_file, "w", encoding="utf-8") as f:
+            f.write(impl_code)
+
+        for vector_store in self.vector_stores:
+            vector_store.insert(backend, arch, dsl, md5_hash)
+        logger.info(f"Operator implementation inserted successfully, file path: {file_path}")
+
+    async def delete(self, impl_code:str, backend: str, arch: str, dsl: str):
+        """
+        删除算子实现
+        """
+        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
+
+        operator_path = Path(self.database_path) / "operators"
+        file_path = operator_path / arch / dsl / md5_hash
+        if not file_path.exists():
+            logger.warning(f"Operator implementation does not exist: {file_path}")
+            return
+        shutil.rmtree(file_path)
+        # 删除空的上级目录
+        current_dir = file_path.parent
+        while current_dir.exists() and current_dir != operator_path:
+            if not any(current_dir.iterdir()):
+                current_dir.rmdir()
+                current_dir = current_dir.parent
+            else:
+                break
+
+        for vector_store in self.vector_stores:
+            vector_store.delete(md5_hash)
+        logger.info(f"Operator implementation deleted successfully, file path: {file_path}")
+    
+    def clear(self):
+        for vector_store in self.vector_stores:
+            vector_store.clear()
+        shutil.rmtree(str(Path(self.database_path) / "operators"))
+

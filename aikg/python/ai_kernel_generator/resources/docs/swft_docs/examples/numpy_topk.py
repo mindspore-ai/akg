@@ -23,7 +23,8 @@ def topk_kernel(x, indices, x_out, indices_out):
             # 注意：通过比较数值大小，实现排序功能
             if x > res:
                 res.load(x)
-                index.load(Scalar("INT32", j))
+                j_scalar = Scalar("INT32", j)
+                index.load(j_scalar)
         tmp = move_to_scalar(ub_x[i])
         ub_x = move_scalar_to_ub(res, ub_x, i)
         ub_x = move_scalar_to_ub(tmp, ub_x, index)
@@ -45,6 +46,6 @@ def topk_swft_numpy(device_id=0):
 
     # 使用动态路径
     current_dir = os.path.dirname(__file__)
-    cce_path = os.path.join(current_dir, f"{OP_NAME}", f"{OP_NAME}.cce")
+    cce_path = os.path.join(current_dir, OP_NAME, OP_NAME + ".cce")
     compile_kernel(cce_path, OP_NAME)
     exec_kernel(OP_NAME, locals(), inputs=['input0', 'input1'], outputs=['output0', 'output1'], device_id=device_id)

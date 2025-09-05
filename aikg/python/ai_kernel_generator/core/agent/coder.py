@@ -15,7 +15,7 @@
 import logging
 from typing import Tuple, List
 from pathlib import Path
-
+from ai_kernel_generator.database.coder_database import CoderDatabase
 from ai_kernel_generator.utils.common_utils import ParserFactory, remove_copyright_from_text
 from ai_kernel_generator.utils.parser_registry import create_step_parser
 from ai_kernel_generator.utils.hardware_utils import get_hardware_doc
@@ -27,7 +27,15 @@ logger = logging.getLogger(__name__)
 
 
 class Coder(AgentBase):
-    def __init__(self, op_name: str, task_desc: str, dsl: str, framework: str, backend: str, arch: str = "", workflow_config_path: str = None, config: dict = None):
+    def __init__(self, 
+                 op_name: str, 
+                 task_desc: str, 
+                 dsl: str, 
+                 framework: str, 
+                 backend: str, 
+                 arch: str = "", 
+                 workflow_config_path: str = None, 
+                 config: dict = None):
         self.op_name = op_name
         self.task_desc = remove_copyright_from_text(task_desc)
         self.dsl = dsl
@@ -39,11 +47,15 @@ class Coder(AgentBase):
         self.codegen_step_count = 0
         self.api_step_count = 0
 
-        # 从config中获取model_config
+        # 从config中获取model_config, database_config
         if config:
             self.model_config = config.get("agent_model_config", {})
+            self.database_config = config.get("database_config", {})
         else:
             raise ValueError("config is required for Coder")
+
+        if self.database_config.get("use_database", False):
+            self.db_system = CoderDatabase(config=config)
 
         context = {
             "dsl": dsl,
@@ -83,7 +95,7 @@ class Coder(AgentBase):
 
             "api_docs": self.load_doc("api/api.md"),
             "dsl_basic_docs": self.load_doc("basic_docs.md"),
-            "dsl_examples": self._load_dsl_examples(),
+            "dsl_examples": "" if self.database_config.get("use_database", False) else self._load_dsl_examples(),
             "expert_suggestion": self.load_doc("suggestion_docs.md"),
 
             # 可选参数
@@ -154,6 +166,39 @@ class Coder(AgentBase):
             return ""
 
         return "\n".join(all_code)
+    
+    async def _load_database_examples(self):
+        """
+        根据算子特征从Database检索并加载对应的DSL示例代码
+
+        Returns:
+            str: 示例代码内容，如果找不到对应示例则返回空字符串
+        """
+        if not self.arch:
+            logger.warning("arch为空，无法加载Database示例代码")
+            return ""
+        
+        docs = await self.db_system.samples(
+            output_content=["op_name", "impl_code"],
+            framework_code=self.task_desc,
+            framework=self.framework,
+            backend=self.backend,
+            arch=self.arch,
+            dsl=self.dsl,
+            sample_num=self.database_config["sample_num"]
+        )
+
+        all_code = []
+        for doc in docs:
+            file_name = doc["op_name"] + f"_{self.dsl}.py"
+            content = doc["impl_code"]
+            all_code.append(f"# Python File: {file_name}\n{content}\n")
+
+        if not all_code:
+            logger.warning(f"未找到相关的示例文件")
+            return ""
+
+        return "\n".join(all_code)
 
     def load_doc(self, doc_path: str) -> str:
         """
@@ -206,6 +251,9 @@ class Coder(AgentBase):
 
             # 从task_info中获取conductor的建议
             conductor_suggestion = task_info.get('conductor_suggestion', '')
+
+            if self.database_config.get("use_database", False) and not self.base_doc["database_examples"]:
+                self.base_doc["database_examples"] = await self._load_database_examples()
 
             # 获取api文档
             if len(self.base_doc["api_docs"]) > 5000:  # 如果api文档过长，使用llm进行content压缩

@@ -14,14 +14,14 @@ os.environ['AIKG_DATA_COLLECT'] = 'on'
 
 
 @pytest.mark.level2
-@pytest.mark.torch
+@pytest.mark.numpy
 @pytest.mark.swft
 @pytest.mark.ascend
 @pytest.mark.ascend310p3
 @pytest.mark.use_model
 @pytest.mark.asyncio
 async def test_bench_swft_ascend():
-    framework = "torch"
+    framework = "numpy"
     dsl = "swft"
     backend = "ascend"
     arch = "ascend310p3"

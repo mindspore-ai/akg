@@ -5,6 +5,7 @@ agent_model_config:
   conductor: deepseek_r1_default
   api_generator: deepseek_r1_default
   example_compressor: deepseek_r1_default
+  feature_extractor: deepseek_r1_default
   default: deepseek_r1_default
 
 # Log configuration
@@ -25,3 +26,8 @@ profile_settings:
 
 # Verification configuration
 verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
+
+# Database configuration
+database_config:
+  use_database: false
+  sample_num: 2
