@@ -38,7 +38,7 @@ public:
   ~CustomPagedCacheLoad() = default;
 
   void InitKernelInputsOutputsIndex() override {
-    kernel_inputs_index_ = {kPCLInputKeyCacheIndex, kPCLInputValueCacheIndex, kPCLInputBlockTableIndex, 
+    kernel_inputs_index_ = {kPCLInputKeyCacheIndex, kPCLInputValueCacheIndex, kPCLInputBlockTableIndex,
                             kPCLInputSeqLensIndex, kPCLInputKeyIndex, kPCLInputValueIndex, kPCLInputSeqStartsIndex};
     kernel_outputs_index_ = {kPCLOutputKeyOutIndex, kPCLOutputValueOutIndex};
   }

@@ -16,15 +16,15 @@
 #ifndef MS_CUSTOM_OPS_INTERNAL_HELPER_H_
 #define MS_CUSTOM_OPS_INTERNAL_HELPER_H_
 
+#include <memory>
+#include <string>
+#include <unordered_map>
 #include "include/api/format.h"
 #include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
 #include "mindspore/core/include/ir/anf.h"
 #include "mindspore/core/include/ir/dtype/type_id.h"
 #include "mindspore/ops/kernel/ascend/visible.h"
 #include "mindspore/core/include/mindapi/base/shape_vector.h"
-#include <memory>
-#include <string>
-#include <unordered_map>
 
 using namespace mindspore;
 namespace ms_custom_ops {
