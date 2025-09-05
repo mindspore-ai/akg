@@ -1,0 +1,13 @@
+#operator type_cast
+type_cast:
+  args:
+    x:
+      dtype: tensor
+    output_dtype:
+      dtype: TypeId
+      arg_handler: dtype_to_type_id
+  returns:
+    out:
+      dtype: tensor
+  class:
+    name: TypeCast
