@@ -17,6 +17,7 @@
 #include "internal_kernel_mod.h"
 #include <functional>
 #include <utility>
+#include "mindspore/core/include/utils/ms_context.h"
 #include "internal_helper.h"
 #include "internal_tiling_cache.h"
 #include "mindspore/ccsrc/include/common/utils/ms_device_shape_transfer.h"
@@ -25,6 +26,13 @@ namespace ms_custom_ops {
 SimpleSpinLock InternalKernelMod::lock_ = SimpleSpinLock();
 
 bool InternalKernelMod::Init(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) {
+  auto ms_context = MsContext::GetInstance();
+  MS_EXCEPTION_IF_NULL(ms_context);
+  auto soc = ms_context->ascend_soc_version();
+  if (soc.find("ascend910_93") != std::string::npos || soc.find("ascend910b") != std::string::npos) {
+    is_aclgraph_supported_ = true;
+  }
+
   InitKernelInputsOutputsIndex();
 
   for (size_t i = 0; i < kernel_inputs_index_.size(); i++) {
@@ -284,9 +292,27 @@ void InternalKernelMod::UpdateAddr(const std::vector<KernelTensor *> &inputs,
 
 bool InternalKernelMod::Launch(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &workspace,
                                const std::vector<KernelTensor *> &outputs, void *stream_ptr) {
+  if (is_aclgraph_supported_) {
+    auto acl_ret = aclmdlRICaptureGetInfo(reinterpret_cast<aclrtStream>(stream_ptr), &capture_status_, &ri_model_);
+    if (acl_ret != ACL_SUCCESS) {
+      MS_LOG(ERROR) << "Op " << kernel_name_ << " call aclmdlRICaptureGetInfo failed, ret: " << acl_ret;
+      return false;
+    }
+
+    if (capture_status_ == ACL_MODEL_RI_CAPTURE_STATUS_ACTIVE) {
+      InternalTilingCache::GetInstance().SetItemToPermanent(last_item_);
+      MS_LOG(INFO) << "aclgraph is capturing model, set tiling item to permanent, op_name: " << kernel_name_
+                   << ", item: " << last_item_ << ", tiling_addr: " << last_item_->tiling_info_->tiling_addr_
+                   << ", inputs info: ";
+      for (const auto input : inputs) {
+        MS_LOG(INFO) << input->ToString();
+      }
+    }
+  }
+
   UpdateAddr(inputs, outputs, workspace);
   internal::InternalStatus status =
     internal_op_->Launch(internal_inputs_addr_, internal_outputs_addr_, internal_wss_addr_, stream_ptr, fullname_);
   return (status == internal::InternalStatus::kInternalOk);
 }
-} // namespace ms_custom_ops
+}  // namespace ms_custom_ops
