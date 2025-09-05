@@ -59,7 +59,7 @@ def pretty_print_results(results: List[Tuple[str, bool]]):
 def load_meta_prompts(parallel_num: int) -> list[str]:
     """
     返回长度为 parallel_num 的 meta prompt 列表。
-    
+
     Args:
         parallel_num: 并行任务数
 
@@ -79,7 +79,7 @@ def load_meta_prompts(parallel_num: int) -> list[str]:
         ), "triton_meta_prompts should be a list"
 
         n = len(triton_meta_prompts)
-        
+
         if parallel_num <= n:
             # 随机不重复选择parallel_num个
             return random.sample(triton_meta_prompts, parallel_num)
@@ -90,13 +90,13 @@ def load_meta_prompts(parallel_num: int) -> list[str]:
                 # 每轮随机打乱所有prompts
                 shuffled_prompts = triton_meta_prompts.copy()
                 random.shuffle(shuffled_prompts)
-                
+
                 # 取需要的数量
                 remaining = parallel_num - len(result)
                 result.extend(shuffled_prompts[:min(remaining, n)])
-            
+
             return result
-            
+
     except Exception as e:
         logger.error(f"Failed to load meta prompts: {e}")
         return [""] * parallel_num
@@ -127,7 +127,7 @@ def save_implementation(impl_data: Dict[str, Any], storage_dir: str) -> None:
         logger.error(f"Failed to save implementation: {e}")
 
 
-def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict[str, Any]]:
+def load_best_implementations(storage_dir: str) -> List[Dict[str, Any]]:
     """从本地文件加载最佳实现
 
     Args:
@@ -157,20 +157,64 @@ def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict
         implementations.sort(key=lambda x: x.get('profile', (float('inf'), 0.0, 0.0))[0])
 
         logger.info(f"Loaded {len(implementations)} implementations from {storage_dir}")
-        return implementations[:max_count]
+        return implementations
 
     except Exception as e:
         logger.error(f"Failed to load implementations from {storage_dir}: {e}")
         return implementations
 
 
-def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int = 2, use_all: bool = False) -> List[Dict[str, Any]]:
+def classify_implementations_by_performance(implementations: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """按性能将实现分为三层：差、中等、好
+
+    Args:
+        implementations: 实现列表（已按性能排序，gen_time越小越好）
+
+    Returns:
+        分层后的实现字典，包含'good', 'medium', 'poor'三个层级
+    """
+    if not implementations:
+        return {'good': [], 'medium': [], 'poor': []}
+
+    # 过滤出有效的加速比数据
+    valid_impls = []
+    for impl in implementations:
+        profile = impl.get('profile', (float('inf'), 0.0, 0.0))
+        if len(profile) >= 3 and profile[2] != float('inf') and profile[2] > 0:
+            valid_impls.append(impl)
+
+    if not valid_impls:
+        return {'good': [], 'medium': [], 'poor': []}
+
+    total_count = len(valid_impls)
+
+    # 按加速比排序（从高到低）
+    valid_impls.sort(key=lambda x: x['profile'][2], reverse=True)
+
+    # 分层策略：前30%为好，中间40%为中等，后30%为差
+    good_count = max(1, int(total_count * 0.3))
+    medium_count = max(1, int(total_count * 0.4))
+
+    classified = {
+        'good': valid_impls[:good_count],
+        'medium': valid_impls[good_count:good_count + medium_count],
+        'poor': valid_impls[good_count + medium_count:]
+    }
+
+    logger.info(f"Performance classification: good={len(classified['good'])}, "
+                f"medium={len(classified['medium'])}, poor={len(classified['poor'])}")
+
+    return classified
+
+
+def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int = 2, use_all: bool = False, use_tiered_sampling: bool = False) -> List[Dict[str, Any]]:
     """从实现列表中采样inspiration格式的数据
 
     Args:
         implementations: 实现列表
         sample_num: 采样数量（当use_all=False时生效）
         use_all: 是否使用所有数据，如果True则按性能排序返回所有数据
+        use_tiered_sampling: 是否使用分层采样策略
 
     Returns:
         inspiration格式的数据列表
@@ -182,18 +226,39 @@ def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int =
         # 使用所有数据，按性能排序
         selected = implementations  # implementations已经按性能排序
     else:
-        # 随机采样或选择最佳的几个
-        if len(implementations) <= sample_num:
-            selected = implementations
-        else:
-            # 50%概率选择最佳的，50%概率随机选择
-            best_count = max(1, sample_num // 2)
-            random_count = sample_num - best_count
+        # 检查是否有足够数据进行分层采样
+        if use_tiered_sampling and len(implementations) >= 3:  # 至少需要3个实现才进行分层
+            # 分层采样：从好、中等、差三个层级各选一个
+            classified = classify_implementations_by_performance(implementations)
 
-            selected = implementations[:best_count]  # 最佳的几个
-            if random_count > 0 and len(implementations) > best_count:
-                remaining = implementations[best_count:]
-                selected.extend(random.sample(remaining, min(random_count, len(remaining))))
+            selected = []
+            # 从每个层级选择一个最佳的
+            for tier in ['good', 'medium', 'poor']:
+                if classified[tier]:
+                    selected.append(classified[tier][0])  # 选择该层级最佳的
+
+            # 如果需要更多样本，从最佳层级补充
+            while len(selected) < sample_num and classified['good']:
+                remaining_good = [impl for impl in classified['good'] if impl not in selected]
+                if remaining_good:
+                    selected.append(remaining_good[0])
+                else:
+                    break
+
+            logger.info(f"Tiered sampling selected {len(selected)} inspirations from different performance tiers")
+        else:
+            # 传统采样策略
+            if len(implementations) <= sample_num:
+                selected = implementations
+            else:
+                # 50%概率选择最佳的，50%概率随机选择
+                best_count = max(1, sample_num // 2)
+                random_count = sample_num - best_count
+
+                selected = implementations[:best_count]  # 最佳的几个
+                if random_count > 0 and len(implementations) > best_count:
+                    remaining = implementations[best_count:]
+                    selected.extend(random.sample(remaining, min(random_count, len(remaining))))
 
     # 转换为inspiration格式
     inspirations = []
@@ -201,10 +266,12 @@ def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int =
         profile_tuple = impl.get('profile', (float('inf'), 0.0, 0.0))
 
         # 优先使用sketch，如果没有sketch则使用原始代码
-        impl_content = impl.get('sketch', '') or impl.get('impl_code', '')
+        sketch = impl.get('sketch', '')
+        impl_code = impl.get('impl_code', '')
 
         inspiration = {
-            'impl_code': impl_content,  # 使用sketch作为inspiration内容
+            'sketch': sketch,  # 使用sketch作为inspiration内容
+            'impl_code': impl_code,  # 使用原始代码作为inspiration内容
             'profile': profile_tuple,  # 保持完整的三元组
             'strategy_mode': 'evolution'
         }
@@ -273,6 +340,11 @@ async def evolve(
     total_tasks = 0
     total_successful_tasks = 0
 
+    # 新增：跟踪每轮和全局最佳加速比
+    round_best_speedups = []  # 每轮最佳加速比
+    global_best_speedup = 0.0  # 全局最佳加速比
+    global_best_speedup_history = []  # 截至每轮的全局最佳加速比历史
+
     for round_idx in range(1, max_rounds + 1):
         logger.info(f"Evolve round {round_idx}/{max_rounds} started")
         inspirations: list = list()
@@ -295,17 +367,17 @@ async def evolve(
                     logger.warning(f"No inspirations found in meta-prompts")
         else:
             # 从本地存储加载历史最佳实现作为inspiration
-            stored_implementations = load_best_implementations(storage_dir, max_count=parallel_num * 2)
+            stored_implementations = load_best_implementations(storage_dir)
 
             inspirations = []
             for pid in range(parallel_num):
-                sampled = sample_inspirations(stored_implementations, sample_num=min(parallel_num, 2))
+                # 使用分层采样策略，每个任务采样3个不同层级的inspiration
+                sampled = sample_inspirations(stored_implementations, sample_num=3, use_tiered_sampling=False)
                 inspirations.append(sampled)
 
             meta_prompts = load_meta_prompts(parallel_num) if meta_prompt_path.exists() else []
 
         # 创建并行任务
-        round_tasks = []
         for pid in range(parallel_num):
             task_id = f"{round_idx}_{pid}"
 
@@ -401,13 +473,36 @@ async def evolve(
         if round_success_rate > best_success_rate:
             best_success_rate = round_success_rate
 
+        # 计算当前轮次最佳加速比
+        round_best_speedup = 0.0
+        if round_implementations:
+            round_speedups = []
+            for impl in round_implementations:
+                profile = impl.get('profile', (float('inf'), 0.0, 0.0))
+                if len(profile) >= 3 and profile[2] != float('inf') and profile[2] > 0:
+                    round_speedups.append(profile[2])
+
+            if round_speedups:
+                round_best_speedup = max(round_speedups)
+                # 更新全局最佳加速比
+                if round_best_speedup > global_best_speedup:
+                    global_best_speedup = round_best_speedup
+
+        round_best_speedups.append(round_best_speedup)
+        global_best_speedup_history.append(global_best_speedup)
+
+        logger.info(f"Round {round_idx} best speedup: {round_best_speedup:.2f}x, "
+                    f"Global best so far: {global_best_speedup:.2f}x")
+
         # 记录轮次结果
         round_result = {
             'round': round_idx,
             'total_tasks': round_total_count,
             'successful_tasks': round_success_count,
             'success_rate': round_success_rate,
-            'implementations': round_implementations
+            'implementations': round_implementations,
+            'round_best_speedup': round_best_speedup,  # 新增：当前轮次最佳加速比
+            'global_best_speedup': global_best_speedup  # 新增：截至当前轮次的全局最佳加速比
         }
         round_results.append(round_result)
         all_results.extend([(impl['op_name'], True) for impl in round_implementations])
@@ -445,7 +540,11 @@ async def evolve(
         'architecture': arch,
         'best_implementations': best_implementations[:5],  # 只返回前5个最佳实现
         'round_results': round_results,
-        'storage_dir': storage_dir  # 添加存储目录信息
+        'storage_dir': storage_dir,  # 添加存储目录信息
+        # 新增：加速比统计信息
+        'round_best_speedups': round_best_speedups,  # 每轮最佳加速比
+        'global_best_speedup_history': global_best_speedup_history,  # 截至每轮的全局最佳加速比历史
+        'final_best_speedup': global_best_speedup  # 最终全局最佳加速比
     }
 
     logger.info(f"Evolution completed for {op_name}")

@@ -163,7 +163,31 @@ async def run_evolve_example():
             success_rate = round_result.get('success_rate', 0.0)
             successful = round_result.get('successful_tasks', 0)
             total = round_result.get('total_tasks', 0)
-            print(f"  轮次 {round_num}: {successful}/{total} 成功 ({success_rate:.2%})")
+            round_best_speedup = round_result.get('round_best_speedup', 0.0)
+            global_best_speedup = round_result.get('global_best_speedup', 0.0)
+
+            print(f"  轮次 {round_num}: {successful}/{total} 成功 ({success_rate:.2%}), "
+                  f"本轮最佳: {round_best_speedup:.2f}x, 全局最佳: {global_best_speedup:.2f}x")
+
+    # 显示加速比统计汇总
+    round_best_speedups = evolution_result.get('round_best_speedups', [])
+    global_best_speedup_history = evolution_result.get('global_best_speedup_history', [])
+    final_best_speedup = evolution_result.get('final_best_speedup', 0.0)
+
+    if round_best_speedups:
+        print(f"\n🚀 加速比统计汇总:")
+        print(f"  每轮最佳加速比: {[f'{x:.2f}x' for x in round_best_speedups]}")
+        print(f"  截至每轮全局最佳: {[f'{x:.2f}x' for x in global_best_speedup_history]}")
+        print(f"  最终全局最佳加速比: {final_best_speedup:.2f}x")
+
+        # 计算加速比改进趋势
+        if len(round_best_speedups) > 1:
+            improvements = []
+            for i in range(1, len(round_best_speedups)):
+                if round_best_speedups[i] > round_best_speedups[i-1]:
+                    improvements.append(f"轮次{i+1}")
+            if improvements:
+                print(f"  性能改进轮次: {', '.join(improvements)}")
 
     print("="*80)
 

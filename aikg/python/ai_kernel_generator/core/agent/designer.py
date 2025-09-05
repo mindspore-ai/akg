@@ -46,10 +46,11 @@ def get_inspirations(inspirations: List[dict]) -> str:
             logger.warning(f"跳过非字典类型的inspiration: {type(inspiration)}")
             continue
 
+        sketch = inspiration.get('sketch', '')
         impl_code = inspiration.get('impl_code', '')
         profile = inspiration.get('profile', float('inf'))
 
-        if impl_code:  # 只有当impl_code不为空时才添加
+        if sketch or impl_code:  # 只有当sketch或impl_code不为空时才添加
             # 处理profile信息，支持三元组格式
             if isinstance(profile, (list, tuple)) and len(profile) >= 3:
                 gen_time, base_time, speedup = profile[0], profile[1], profile[2]
@@ -60,7 +61,10 @@ def get_inspirations(inspirations: List[dict]) -> str:
                 profile_text = f"代码执行耗时: {profile:.4f}us" if profile != float('inf') else "代码执行耗时: N/A"
 
             inspiration_text = f"## Inspiration {i+1} {profile_text}\n"
-            inspiration_text += f"代码：\n```\n{impl_code}\n```\n"
+            if sketch:
+                inspiration_text += f"算法草图 ：\n```\n{sketch}\n```\n"
+            if impl_code:
+                inspiration_text += f"代码：\n```\n{impl_code}\n```\n"
             result_parts.append(inspiration_text)
 
     return "\n".join(result_parts)

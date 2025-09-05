@@ -133,7 +133,7 @@ def run_base_implementations():
         base_benchmark_fn,
         warmup={{ warmup_times }},
         rep={{ run_times }},
-        return_mode="mean"
+        return_mode="min"
     )
     
     # 保存时间结果到文件

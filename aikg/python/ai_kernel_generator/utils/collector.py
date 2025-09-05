@@ -98,7 +98,7 @@ class Collector:
         safe_agent_name = agent_name.replace('/', '_').replace('\\', '_')
         safe_hash = hash_value.replace('/', '_').replace('\\', '_')
         safe_session_id = self._session_id.replace('/', '_').replace('\\', '_')
-        
+
         # 如果没有提供sequence_id，则使用当前counter并递增（用于测试等场景）
         if sequence_id is None:
             sequence_id = self._counter
