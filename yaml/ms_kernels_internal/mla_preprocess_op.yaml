@@ -69,7 +69,5 @@ mla_preprocess:
       dtype: tensor
     output3:
       dtype: tensor
-  function:
-    name: mla_preprocess
   class:
     name: MlaPreprocess

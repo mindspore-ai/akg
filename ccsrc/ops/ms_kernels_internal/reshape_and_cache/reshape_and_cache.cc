@@ -187,19 +187,13 @@ class ReshapeAndCacheRunner : public InternalPyboostRunner {
 
 void npu_reshape_and_cache(const ms::Tensor &key, const std::optional<ms::Tensor> &value,
                            const std::optional<ms::Tensor> &key_cache, const std::optional<ms::Tensor> &value_cache,
-                           const std::optional<ms::Tensor> &slot_mapping, std::optional<int64_t> cache_mode,
-                           std::optional<int64_t> head_num) {
+                           const std::optional<ms::Tensor> &slot_mapping, const int64_t cache_mode,
+                           const int64_t head_num) {
   auto op_name = "ReshapeAndCache";
   auto runner = std::make_shared<ms_custom_ops::ReshapeAndCacheRunner>(op_name);
   MS_EXCEPTION_IF_NULL(runner);
-
-  if (cache_mode.has_value()) {
-    runner->SetCacheMode(static_cast<int32_t>(cache_mode.value()));
-  }
-
-  if (head_num.has_value()) {
-    runner->SetHeadNum(static_cast<int32_t>(head_num.value()));
-  }
+  runner->SetCacheMode(static_cast<int32_t>(cache_mode));
+  runner->SetHeadNum(static_cast<int32_t>(head_num));
 
   // Setup the runner with all parameters (including hash calculation)
   runner->Setup(op_name, key, value, key_cache, value_cache, slot_mapping, cache_mode, head_num);
@@ -216,8 +210,8 @@ void npu_reshape_and_cache(const ms::Tensor &key, const std::optional<ms::Tensor
 
 auto pyboost_reshape_and_cache(const ms::Tensor &key, const std::optional<ms::Tensor> &value,
                                const std::optional<ms::Tensor> &key_cache, const std::optional<ms::Tensor> &value_cache,
-                               const std::optional<ms::Tensor> &slot_mapping, std::optional<int64_t> cache_mode,
-                               std::optional<int64_t> head_num) {
+                               const std::optional<ms::Tensor> &slot_mapping, const int64_t cache_mode,
+                               const int64_t head_num) {
   return ms::pynative::PyboostRunner::Call<0>(ms_custom_ops::npu_reshape_and_cache, key, value, key_cache, value_cache,
                                               slot_mapping, cache_mode, head_num);
 }
@@ -226,5 +220,5 @@ MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
   m.def("reshape_and_cache", &pyboost_reshape_and_cache, "Reshape And Cache", pybind11::arg("key"),
         pybind11::arg("value") = std::nullopt, pybind11::arg("key_cache") = std::nullopt,
         pybind11::arg("value_cache") = std::nullopt, pybind11::arg("slot_mapping") = std::nullopt,
-        pybind11::arg("cache_mode") = std::nullopt, pybind11::arg("head_num") = std::nullopt);
+        pybind11::arg("cache_mode"), pybind11::arg("head_num"));
 }

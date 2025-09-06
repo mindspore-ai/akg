@@ -67,18 +67,16 @@ std::vector<ms::Tensor> npu_mla_preprocess(const ms::Tensor &input1,
                                            const ms::Tensor &ctkv_scale,
                                            const ms::Tensor &qnope_scale,
                                            const ms::Tensor &krope_cache,
-                                           std::optional<int64_t> param_cache_mode) {
+                                           const int64_t param_cache_mode) {
   auto op_name = "MlaPreprocess";
   auto runner = std::make_shared<MlaPreprocessLoadRunner>(op_name);
   MS_EXCEPTION_IF_NULL(runner);
 
   // Set head_num if provided
-  if (param_cache_mode.has_value()) {
-    runner->SetParamCacheMode(static_cast<int32_t>(param_cache_mode.value()));
-  }
+  runner->SetParamCacheMode(static_cast<int32_t>(param_cache_mode));
   runner->param_.n = 0;
   runner->param_.head_num = 0;
-  runner->param_.cache_mode = param_cache_mode.value();
+  runner->param_.cache_mode = param_cache_mode;
 
   // Setup the runner with all parameters (including hash calculation)
   runner->Setup(op_name, input1, gamma1, beta1, quant_scale1, quant_offset1, wdqkv, bias1, gamma2, beta2, quant_scale2,
@@ -95,7 +93,7 @@ std::vector<ms::Tensor> npu_mla_preprocess(const ms::Tensor &input1,
   ShapeVector key_out_shape{0};
   ShapeVector qrope_out_shape{};
   ShapeVector krope_out_shape{};
-  if (param_cache_mode.value() != kMlaPreCacheModeQK) {
+  if (param_cache_mode != kMlaPreCacheModeQK) {
     q_out_shape = {n, head_num, 512};
     key_out_shape = {0};
     qrope_out_shape = {n, head_num, 64};
@@ -106,7 +104,7 @@ std::vector<ms::Tensor> npu_mla_preprocess(const ms::Tensor &input1,
   auto key_out = ms::Tensor(input1.data_type(), key_out_shape);
   auto qrope_out = ms::Tensor(input1.data_type(), qrope_out_shape);
   auto krope_out = ms::Tensor(input1.data_type(), krope_out_shape);
-  if (param_cache_mode.value() == kMlaPreCacheModeQKSplitQuant) {
+  if (param_cache_mode == kMlaPreCacheModeQKSplitQuant) {
     q_out = ms::Tensor(quant_offset1.data_type(), q_out_shape);
     key_out = ms::Tensor(quant_offset1.data_type(), key_out_shape);
   }
@@ -143,7 +141,7 @@ auto pyboost_mla_preprocess(const ms::Tensor &input1,
                             const ms::Tensor &ctkv_scale,
                             const ms::Tensor &qnope_scale,
                             const ms::Tensor &krope_cache,
-                            std::optional<int64_t> param_cache_mode) {
+                            const int64_t param_cache_mode) {
   return ms::pynative::PyboostRunner::Call<4>(
       npu_mla_preprocess, input1, gamma1, beta1, quant_scale1, quant_offset1, wdqkv, bias1, gamma2, beta2,
       quant_scale2, quant_offset2, gamma3, sin1, cos1, sin2, cos2, key_cache, slot_mapping, wuq, bias2, wuk, de_scale1,
@@ -159,5 +157,5 @@ MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
     pybind11::arg("sin1"), pybind11::arg("cos1"), pybind11::arg("sin2"), pybind11::arg("cos2"),
     pybind11::arg("key_cache"), pybind11::arg("slot_mapping"), pybind11::arg("wuq"), pybind11::arg("bias2"),
     pybind11::arg("wuk"), pybind11::arg("de_scale1"), pybind11::arg("de_scale2"), pybind11::arg("ctkv_scale"),
-    pybind11::arg("qnope_scale"), pybind11::arg("krope_cache"), pybind11::arg("param_cache_mode") = std::nullopt);
+    pybind11::arg("qnope_scale"), pybind11::arg("krope_cache"), pybind11::arg("param_cache_mode"));
 }
