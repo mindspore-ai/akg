@@ -28,6 +28,7 @@
 #include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel.h"
 #include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
 #include "mindspore/ccsrc/tools/profiler/profiling.h"
+#include "acl/acl_mdl.h"
 
 namespace ms_custom_ops {
 using namespace mindspore::ops;
@@ -94,6 +95,9 @@ class InternalKernelMod : public KernelMod {
   std::vector<size_t> nz_output_indices_;
   std::string fullname_;
   static SimpleSpinLock lock_;
+  aclmdlRICaptureStatus capture_status_{ACL_MODEL_RI_CAPTURE_STATUS_NONE};
+  aclmdlRI ri_model_{nullptr};
+  bool is_aclgraph_supported_{false};
 };
 
 using InternalKernelModPtr = std::shared_ptr<InternalKernelMod>;

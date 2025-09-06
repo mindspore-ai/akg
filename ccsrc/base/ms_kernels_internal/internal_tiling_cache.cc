@@ -32,8 +32,7 @@ void Gather(mindspore::kernel::KernelTensor *tensor) {
   const auto shape_size = shape.size();
   // view shape
   if (!shape.empty()) {
-    MemcpyToBuf(shape.data(),
-                static_cast<int64_t>(shape_size * sizeof(int64_t)));
+    MemcpyToBuf(shape.data(), static_cast<int64_t>(shape_size * sizeof(int64_t)));
   }
 
   // data type
@@ -43,17 +42,13 @@ void Gather(mindspore::kernel::KernelTensor *tensor) {
   const auto &storage_info = tensor->tensor_storage_info();
   if (storage_info != nullptr) {
     // strides
-    MemcpyToBuf(
-        storage_info->strides.data(),
-        static_cast<int64_t>(storage_info->strides.size() * sizeof(int64_t)));
+    MemcpyToBuf(storage_info->strides.data(), static_cast<int64_t>(storage_info->strides.size() * sizeof(int64_t)));
 
     // offset
     MemcpyToBuf(&storage_info->storage_offset, sizeof(int64_t));
 
     // origin shape
-    MemcpyToBuf(storage_info->ori_shape.data(),
-                static_cast<int64_t>(storage_info->ori_shape.size()) *
-                    sizeof(int64_t));
+    MemcpyToBuf(storage_info->ori_shape.data(), static_cast<int64_t>(storage_info->ori_shape.size()) * sizeof(int64_t));
   }
 }
 
@@ -67,8 +62,7 @@ void Gather(const device::DeviceAddressPtr &device_address) {
   const auto shape_size = shape.size();
   // view shape
   if (!shape.empty()) {
-    MemcpyToBuf(shape.data(),
-                static_cast<int64_t>(shape_size * sizeof(int64_t)));
+    MemcpyToBuf(shape.data(), static_cast<int64_t>(shape_size * sizeof(int64_t)));
   }
 
   // data type
@@ -78,17 +72,13 @@ void Gather(const device::DeviceAddressPtr &device_address) {
   const auto &storage_info = device_address->GetTensorStorageInfo();
   if (storage_info != nullptr) {
     // strides
-    MemcpyToBuf(
-        storage_info->strides.data(),
-        static_cast<int64_t>(storage_info->strides.size() * sizeof(int64_t)));
+    MemcpyToBuf(storage_info->strides.data(), static_cast<int64_t>(storage_info->strides.size() * sizeof(int64_t)));
 
     // offset
     MemcpyToBuf(&storage_info->storage_offset, sizeof(int64_t));
 
     // origin shape
-    MemcpyToBuf(storage_info->ori_shape.data(),
-                static_cast<int64_t>(storage_info->ori_shape.size()) *
-                    sizeof(int64_t));
+    MemcpyToBuf(storage_info->ori_shape.data(), static_cast<int64_t>(storage_info->ori_shape.size()) * sizeof(int64_t));
   }
 }
 
@@ -104,8 +94,7 @@ void Gather(const mindspore::tensor::TensorPtr &tensor) {
   const auto shape_size = shape.size();
   // view shape
   if (!shape.empty()) {
-    MemcpyToBuf(shape.data(),
-                static_cast<int64_t>(shape_size * sizeof(int64_t)));
+    MemcpyToBuf(shape.data(), static_cast<int64_t>(shape_size * sizeof(int64_t)));
   }
   // data type
   auto dtype = tensor->data_type();
@@ -114,17 +103,13 @@ void Gather(const mindspore::tensor::TensorPtr &tensor) {
   auto storage_info = tensor->storage_info();
   if (storage_info != nullptr) {
     // strides
-    MemcpyToBuf(
-        storage_info->strides.data(),
-        static_cast<int64_t>(storage_info->strides.size() * sizeof(int64_t)));
+    MemcpyToBuf(storage_info->strides.data(), static_cast<int64_t>(storage_info->strides.size() * sizeof(int64_t)));
 
     // offset
     MemcpyToBuf(&storage_info->storage_offset, sizeof(int64_t));
 
     // origin shape
-    MemcpyToBuf(storage_info->ori_shape.data(),
-                static_cast<int64_t>(storage_info->ori_shape.size()) *
-                    sizeof(int64_t));
+    MemcpyToBuf(storage_info->ori_shape.data(), static_cast<int64_t>(storage_info->ori_shape.size()) * sizeof(int64_t));
   }
 
   // storage shape(current hasn't special format)
@@ -191,9 +176,7 @@ void GatherInfo(const std::optional<TypePtr> &type) {
   }
 }
 
-void GatherInfo(const string &s) {
-  MemcpyToBuf(s.c_str(), static_cast<int64_t>(s.size()));
-}
+void GatherInfo(const string &s) { MemcpyToBuf(s.c_str(), static_cast<int64_t>(s.size())); }
 
 void GatherInfo(const std::optional<string> &s) {
   if (s.has_value()) {
@@ -207,9 +190,7 @@ constexpr int g_rShift33Bits = 33;
 constexpr uint64_t MIX_STEP1 = 18397679294719823053LLU;
 constexpr uint64_t MIX_STEP2 = 14181476777654086739LLU;
 
-inline uint64_t rotating_left(uint64_t x, uint8_t n) {
-  return (x << n) | (x >> (64 - n));
-}
+inline uint64_t rotating_left(uint64_t x, uint8_t n) { return (x << n) | (x >> (64 - n)); }
 
 inline uint64_t mixture(uint64_t x) {
   // constants step1(18397679294719823053) and step2(14181476777654086739) are
@@ -224,8 +205,7 @@ inline uint64_t mixture(uint64_t x) {
   return x;
 }
 
-void gen_hash_tmp(const uint64_t *blocks, const int block_num,
-                  const uint32_t seed, uint64_t &rhas, uint64_t &rhax) {
+void gen_hash_tmp(const uint64_t *blocks, const int block_num, const uint32_t seed, uint64_t &rhas, uint64_t &rhax) {
   MS_EXCEPTION_IF_NULL(blocks);
 
   // use 9782798678568883157 and 5545529020109919103 for blocking and
@@ -294,76 +274,76 @@ uint64_t gen_hash(const void *key, const int len, const uint32_t seed) {
   // because the size of a block is 16, different offsets are calculated for
   // tail blocks for different sizes
   switch (static_cast<uint64_t>(len) & 15) {
-  case 15:
-    t2 ^= static_cast<uint64_t>(tail[14]) << 48;
-    [[fallthrough]];
-    {}
-  case 14:
-    t2 ^= static_cast<uint64_t>(tail[13]) << 40;
-    [[fallthrough]];
-    {}
-  case 13:
-    t2 ^= static_cast<uint64_t>(tail[12]) << 32;
-    [[fallthrough]];
-    {}
-  case 12:
-    t2 ^= static_cast<uint64_t>(tail[11]) << 24;
-    [[fallthrough]];
-    {}
-  case 11:
-    t2 ^= static_cast<uint64_t>(tail[10]) << 16;
-    [[fallthrough]];
-    {}
-  case 10:
-    t2 ^= static_cast<uint64_t>(tail[9]) << 8;
-    [[fallthrough]];
-    {}
-  case 9:
-    t2 ^= static_cast<uint64_t>(tail[8]) << 0;
-    t2 *= c2;
-    t2 = rotating_left(t2, 33);
-    t2 *= c1;
-    hax ^= t2;
-    [[fallthrough]];
-    {}
-  case 8:
-    t1 ^= static_cast<uint64_t>(tail[7]) << 56;
-    [[fallthrough]];
-    {}
-  case 7:
-    t1 ^= static_cast<uint64_t>(tail[6]) << 48;
-    [[fallthrough]];
-    {}
-  case 6:
-    t1 ^= static_cast<uint64_t>(tail[5]) << 40;
-    [[fallthrough]];
-    {}
-  case 5:
-    t1 ^= static_cast<uint64_t>(tail[4]) << 32;
-    [[fallthrough]];
-    {}
-  case 4:
-    t1 ^= static_cast<uint64_t>(tail[3]) << 24;
-    [[fallthrough]];
-    {}
-  case 3:
-    t1 ^= static_cast<uint64_t>(tail[2]) << 16;
-    [[fallthrough]];
-    {}
-  case 2:
-    t1 ^= static_cast<uint64_t>(tail[1]) << 8;
-    [[fallthrough]];
-    {}
-  case 1:
-    t1 ^= static_cast<uint64_t>(tail[0]) << 0;
-    t1 *= c1;
-    t1 = rotating_left(t1, 31);
-    t1 *= c2;
-    has ^= t1;
-    [[fallthrough]];
-    {}
-  default: {
-  }
+    case 15:
+      t2 ^= static_cast<uint64_t>(tail[14]) << 48;
+      [[fallthrough]];
+      {}
+    case 14:
+      t2 ^= static_cast<uint64_t>(tail[13]) << 40;
+      [[fallthrough]];
+      {}
+    case 13:
+      t2 ^= static_cast<uint64_t>(tail[12]) << 32;
+      [[fallthrough]];
+      {}
+    case 12:
+      t2 ^= static_cast<uint64_t>(tail[11]) << 24;
+      [[fallthrough]];
+      {}
+    case 11:
+      t2 ^= static_cast<uint64_t>(tail[10]) << 16;
+      [[fallthrough]];
+      {}
+    case 10:
+      t2 ^= static_cast<uint64_t>(tail[9]) << 8;
+      [[fallthrough]];
+      {}
+    case 9:
+      t2 ^= static_cast<uint64_t>(tail[8]) << 0;
+      t2 *= c2;
+      t2 = rotating_left(t2, 33);
+      t2 *= c1;
+      hax ^= t2;
+      [[fallthrough]];
+      {}
+    case 8:
+      t1 ^= static_cast<uint64_t>(tail[7]) << 56;
+      [[fallthrough]];
+      {}
+    case 7:
+      t1 ^= static_cast<uint64_t>(tail[6]) << 48;
+      [[fallthrough]];
+      {}
+    case 6:
+      t1 ^= static_cast<uint64_t>(tail[5]) << 40;
+      [[fallthrough]];
+      {}
+    case 5:
+      t1 ^= static_cast<uint64_t>(tail[4]) << 32;
+      [[fallthrough]];
+      {}
+    case 4:
+      t1 ^= static_cast<uint64_t>(tail[3]) << 24;
+      [[fallthrough]];
+      {}
+    case 3:
+      t1 ^= static_cast<uint64_t>(tail[2]) << 16;
+      [[fallthrough]];
+      {}
+    case 2:
+      t1 ^= static_cast<uint64_t>(tail[1]) << 8;
+      [[fallthrough]];
+      {}
+    case 1:
+      t1 ^= static_cast<uint64_t>(tail[0]) << 0;
+      t1 *= c1;
+      t1 = rotating_left(t1, 31);
+      t1 *= c2;
+      has ^= t1;
+      [[fallthrough]];
+      {}
+    default: {
+    }
   }
 
   has ^= static_cast<uint64_t>(len);
@@ -390,12 +370,9 @@ uint64_t calc_hash_id() {
 
 void GatherHash(mindspore::kernel::KernelTensor *tensor) { Gather(tensor); }
 
-void GatherHash(const device::DeviceAddressPtr &device_address) {
-  Gather(device_address);
-}
+void GatherHash(const device::DeviceAddressPtr &device_address) { Gather(device_address); }
 
-void GatherHash(const std::pair<mindspore::kernel::KernelTensor *, bool>
-                    &tensor_and_trans) {
+void GatherHash(const std::pair<mindspore::kernel::KernelTensor *, bool> &tensor_and_trans) {
   auto tensor = tensor_and_trans.first;
   auto trans = tensor_and_trans.second;
   GatherHash(tensor);
@@ -403,8 +380,7 @@ void GatherHash(const std::pair<mindspore::kernel::KernelTensor *, bool>
   MemcpyToBuf(&trans, 1);
 }
 
-void GatherHash(
-    const std::vector<mindspore::kernel::KernelTensor *> &tensor_list) {
+void GatherHash(const std::vector<mindspore::kernel::KernelTensor *> &tensor_list) {
   for (auto tensor : tensor_list) {
     GatherHash(tensor);
   }
@@ -440,8 +416,7 @@ TilingCacheItemPtr InternalTilingCache::Bind(uint64_t key) {
 void InternalTilingCache::Unbind(const TilingCacheItemPtr &item) {
   if (item != nullptr) {
     item->ref_count_--;
-    MS_LOG(DEBUG) << "unbind, addr: " << item->tiling_info_->tiling_addr_
-                  << ", host_addr: " << item->host_addr_
+    MS_LOG(DEBUG) << "unbind, addr: " << item->tiling_info_->tiling_addr_ << ", host_addr: " << item->host_addr_
                   << ", ref: " << item->ref_count_;
   }
 }
@@ -453,10 +428,8 @@ std::vector<TilingCacheItemPtr> InternalTilingCache::CombOutSuspectedUselessItem
     if (iter.second->ref_count_ <= 0) {
       (void)keys.emplace_back(iter.first);
       (void)erased_items.emplace_back(iter.second);
-      MS_LOG(DEBUG) << "Comb out key: " << iter.first
-                    << ", addr: " << iter.second->tiling_info_->tiling_addr_
-                    << ", host_addr: " << iter.second->host_addr_
-                    << ", ref: " << iter.second->ref_count_;
+      MS_LOG(DEBUG) << "Comb out key: " << iter.first << ", addr: " << iter.second->tiling_info_->tiling_addr_
+                    << ", host_addr: " << iter.second->host_addr_ << ", ref: " << iter.second->ref_count_;
     }
   }
 
@@ -467,16 +440,21 @@ std::vector<TilingCacheItemPtr> InternalTilingCache::CombOutSuspectedUselessItem
   return erased_items;
 }
 
-bool InternalTilingCache::Insert(uint64_t key,
-                                 const TilingCacheItemPtr &ti_ptr) {
+bool InternalTilingCache::Insert(uint64_t key, const TilingCacheItemPtr &ti_ptr) {
   if (cache_.find(key) != cache_.end()) {
     MS_LOG(EXCEPTION) << "kernel is already in cache, where the key is " << key
                       << ", device_addr: " << ti_ptr->tiling_info_->tiling_addr_
-                      << ", host_addr: " << ti_ptr->host_addr_
-                      << ", size: " << ti_ptr->size_;
+                      << ", host_addr: " << ti_ptr->host_addr_ << ", size: " << ti_ptr->size_;
   }
 
   cache_[key] = ti_ptr;
   return true;
 }
-} // namespace ms_custom_ops
+
+void InternalTilingCache::SetItemToPermanent(TilingCacheItemPtr ti_ptr) {
+  static const auto kPermanentRef = 0x80000000;
+  if (ti_ptr != nullptr) {
+    ti_ptr->ref_count_ |= kPermanentRef;
+  }
+}
+}  // namespace ms_custom_ops
