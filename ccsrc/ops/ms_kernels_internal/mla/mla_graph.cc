@@ -47,26 +47,24 @@ static constexpr auto kMLABlockSizeheadMax = 128;
 #define ALIGN_16(v) (((v) & (16 - 1)) == 0)
 
 static void CheckParam(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) {
-  auto kv_heads = input_infos[kMlaInputNumKVHeadIndex]->GetScalarValue<int64_t>();
-  if (kv_heads.has_value()) {
-    MS_CHECK_VALUE(kv_heads.value() == 1, CheckAndConvertUtils::FormatCommMsg(
-                                            "For MLA The kv_head_num must be 1 , but got : ", kv_heads.value()));
-  }
+  auto kv_heads = input_infos[kMlaInputNumKVHeadIndex]->GetScalarValueWithCheck<int64_t>();
 
-  auto q_heads = input_infos[kMlaInputNumHeadIndex]->GetScalarValue<int64_t>();
-  if (q_heads.has_value()) {
-    MS_CHECK_VALUE(q_heads.value() <= kMLAQheadMax,
-                   CheckAndConvertUtils::FormatCommMsg("For MLA The head_num must be <= ", kMLAQheadMax,
-                                                       ", but got : ", q_heads.value()));
-    MS_CHECK_VALUE(ALIGN_16(q_heads.value()),
-                   CheckAndConvertUtils::FormatCommMsg("For MLA The head_num must be the multiple of 16, but got : ",
-                                                       q_heads.value()));
+  MS_CHECK_VALUE(kv_heads == 1, CheckAndConvertUtils::FormatCommMsg(
+                                  "For MLA The kv_head_num must be 1 , but got : ", kv_heads));
 
-    if (q_heads.value() == kMLAQheadMax) {
-      auto q_nope_type = input_infos[kMlaInputQnopeIndex]->GetType();
-      if (q_nope_type == kNumberTypeInt8) {
-        MS_LOG(EXCEPTION) << "For MLA int8 is not support when head_num=128.";
-      }
+
+  auto q_heads = input_infos[kMlaInputNumHeadIndex]->GetScalarValueWithCheck<int64_t>();
+  MS_CHECK_VALUE(q_heads <= kMLAQheadMax,
+                 CheckAndConvertUtils::FormatCommMsg("For MLA The head_num must be <= ", kMLAQheadMax,
+                                                     ", but got : ", q_heads));
+  MS_CHECK_VALUE(ALIGN_16(q_heads),
+                 CheckAndConvertUtils::FormatCommMsg("For MLA The head_num must be the multiple of 16, but got : ",
+                                                     q_heads));
+
+  if (q_heads == kMLAQheadMax) {
+    auto q_nope_type = input_infos[kMlaInputQnopeIndex]->GetType();
+    if (q_nope_type == kNumberTypeInt8) {
+      MS_LOG(EXCEPTION) << "For MLA int8 is not support when head_num=128.";
     }
   }
 }
@@ -99,8 +97,8 @@ static void CheckShape(const PrimitivePtr &primitive, const InferInfoPtrList &in
   }
 
   if (!input_infos[kMlaInputKvCacheIndex]->IsDynamic()) {
-    auto q_heads = input_infos[kMlaInputNumHeadIndex]->GetScalarValue<int64_t>();
-    bool is_head_max = q_heads.has_value() && (q_heads.value() == kMLAQheadMax);
+    auto q_heads = input_infos[kMlaInputNumHeadIndex]->GetScalarValueWithCheck<int64_t>();
+    bool is_head_max = q_heads == kMLAQheadMax;
     if (is_head_max && ctkv_shape[kMLABlockSizeDim] != kMLAQheadMax) {
       MS_LOG(EXCEPTION) << "For MLA the block_size must be 128 when "
                            "head_num is 128, but got block_size: "
@@ -117,11 +115,8 @@ static void CheckShape(const PrimitivePtr &primitive, const InferInfoPtrList &in
   if (!input_infos[kMlaInputAttnMaskIndex]->IsNone() && !input_infos[kMlaInputAttnMaskIndex]->IsDynamic()) {
     auto mask_shape = input_infos[kMlaInputAttnMaskIndex]->GetShape();
     auto mask_type_value = input_infos[kMlaInputMaskTypeIndex]->GetScalarValue<int64_t>();
-    if (!mask_type_value.has_value()) {
-      MS_EXCEPTION(ValueError) << "For MLA mask_type must be constant but got variable.";
-    }
 
-    auto mask_type = mask_type_value.value();
+    auto mask_type = mask_type_value;
     if (mask_type == kMaskSpec || mask_type == kMaskFree) {
       MS_CHECK_VALUE(mask_shape.size() == kMLAMaskRank,
                      CheckAndConvertUtils::FormatCommMsg("For MLA The rank of mask must be ", kMLAMaskRank,
@@ -169,14 +164,10 @@ class OPS_API MlaFuncImpl : public OpFuncImpl {
   ShapeArray InferShape(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) const override {
     auto &q_nope_info = input_infos[kMlaInputQnopeIndex];
     auto q_nope_shape = q_nope_info->GetShape();
-    auto is_ring_value = input_infos[kMlaInputIsRingIndex]->GetScalarValue<int64_t>();
-    if (!is_ring_value.has_value()) {
-      MS_EXCEPTION(ValueError) << "For MLA, the ring must be a constant, but got a variable.";
-    }
+    auto is_ring_value = input_infos[kMlaInputIsRingIndex]->GetScalarValueWithCheck<int64_t>();
 
-    auto is_ring = is_ring_value.value();
-    if (is_ring != 0) {
-      MS_EXCEPTION(ValueError) << "For MLA, ir_ring must be 0 now, but got: " << is_ring;
+    if (is_ring_value != 0) {
+      MS_EXCEPTION(ValueError) << "For MLA, ir_ring must be 0 now, but got: " << is_ring_value;
     }
 
     CheckShape(primitive, input_infos);

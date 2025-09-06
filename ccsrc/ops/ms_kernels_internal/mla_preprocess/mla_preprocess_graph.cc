@@ -27,7 +27,7 @@ public:
     auto key_cache_shape_ptr = input_infos[kMlaPreprocessKeyCacheIndex]->GetShape();
     auto wuk_ptr = input_infos[kMlaPreprocessWukIndex]->GetShape();
 
-    auto cache_mode = input_infos[kMlaPreprocessParamCacheModeIndex]->GetScalarValue<int64_t>().value();
+    auto cache_mode = input_infos[kMlaPreprocessParamCacheModeIndex]->GetScalarValueWithCheck<int64_t>();
     auto head_dim = key_cache_shape_ptr[3];
     auto n = input1_shape_ptr[0];
     auto head_num = wuk_ptr[0];
@@ -41,7 +41,7 @@ public:
   std::vector<TypeId> InferType(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) const override {
     auto input1_type = input_infos[kMlaPreprocessInput1Index]->GetType();
     auto offset1_type = input_infos[kMlaPreprocessQuantOffset1Index]->GetType();
-    auto cache_mode = input_infos[kMlaPreprocessParamCacheModeIndex]->GetScalarValue<int64_t>().value();
+    auto cache_mode = input_infos[kMlaPreprocessParamCacheModeIndex]->GetScalarValueWithCheck<int64_t>();
     if (cache_mode == kMlaPreCacheModeQKSplitQuant) {
       return {offset1_type, offset1_type, input1_type, input1_type};
     }
