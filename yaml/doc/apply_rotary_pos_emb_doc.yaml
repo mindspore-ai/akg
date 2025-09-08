@@ -1,0 +1,47 @@
+apply_rotary_pos_emb:
+    description: |
+        推理网络为了提升性能，将query和key两路算子融合成一路。执行旋转位置编码计算。
+
+        Args:
+            query (Tensor): 表示要执行旋转位置编码的第一个张量，公式中的query，仅支持连续Tensor，数据格式支持BSH和TH，数据类型支持float16、float32、bfloat16。
+            key (Tensor): 表示要执行旋转位置编码的第一个张量，公式中的key，仅支持连续Tensor，数据格式支持BSH和TH，数据类型支持float16、float32、bfloat16。
+            cos (Tensor): 表示参与计算的位置编码张量，公式中的cos。
+            sin (Tensor): 表示参与计算的位置编码张量，公式中的sin。
+            position_ids (Tensor): 这是个一维Tensor，在推理网络prefill阶段表示每个batch的sequence length，在推理网络的decode阶段表示每个batch递推的下标。
+            cos_format (Tensor): 此参数是cos/sin形态的配置，默认值为2，取值范围(0，1,2,3)。目前推理网络中，基本采用cos_format=2.
+                cos_format等于0或1时，表示cos/sin采用max sequence length构造Tensor的shape是(max_seqlen, head_dim)，0表示cos/sin的值不交替，1则表示交替。
+                cos_format等于2或3时，表示cos/sin采用tokens length构造Tensor的shape是(tokens_len, head_dim)，2表示cos/sin的值不交替，3则表示交替。
+                        
+        Returns:
+            - Tensor, query经过旋转位置编码后的结果，数据类型和大小于输入相同。
+            - Tensor, query经过旋转位置编码后的结果，数据类型和大小于输入相同。
+
+        Supported Platforms:
+            ``Atlas 800I A2 推理产品/Atlas 800I A3 推理产品``          
+
+        Examples:
+            >>> import numpy as np
+            >>> import mindspore as ms
+            >>> import ms_custom_ops
+            >>> ms.set_device("Ascend")
+            >>> ms.set_context(mode=ms.context.PYNATIVE_MODE)
+            >>> ms.set_context(jit_config={"jit_level": "O0"})
+            >>> inv_freq = 1.0 / (10000 ** (np.arange(0, 128, 2).astype(np.float32) * (1 / 128)))
+            >>> t = np.arange(2048, dtype=inv_freq.dtype)
+            >>> freqs = np.outer(t, inv_freq)
+            >>> emb = np.concatenate((freqs, freqs), axis=-1)
+            >>> cos = np.cos(emb).astype(np.float16)
+            >>> sin = np.sin(emb).astype(np.float16)
+            >>> query = np.random.rand(2, 1, 128).astype(np.float16)
+            >>> key = np.random.rand(2, 1, 128).astype(np.float16)
+            >>> position_ids = np.random.randint(0, 2048, [2], dtype=np.int32)
+            >>> cos = cos[position_ids]
+            >>> sin = sin[position_ids]
+            >>> query_tensor = ms.Tensor(query, dtype=ms.float16) 
+            >>> key_tensor = ms.Tensor(key, dtype=ms.float16) 
+            >>> cos_tensor = ms.Tensor(cos, dtype=ms.float16) 
+            >>> sin_tensor = ms.Tensor(sin, dtype=ms.float16) 
+            >>> pos_tensor = ms.Tensor(position_ids, dtype=ms.float16)
+            >>> out_query, out_key = ms_custom_ops.apply_rotary_pos_emb(query_tensor, key_tensor, cos_tensor, sin_tensor, pos_tensor, 2)
+            >>> print("query out: ", out_query)
+            >>> print("key out: ", out_key)

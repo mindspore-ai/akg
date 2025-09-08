@@ -1,0 +1,23 @@
+#operator apply_rotary_pos_emb
+apply_rotary_pos_emb:
+    args:
+        query:
+            dtype: tensor
+        key:
+            dtype: tensor
+        cos:
+            dtype: tensor
+        sin:
+            dtype: tensor
+        position_ids:
+            dtype: tensor
+        cos_format:
+            dtype: int
+            default: 2
+    args_signature:
+        dtype_group: (query, key), (cos, sin)
+    returns:
+        query_embed:
+            dtype: tensor
+        key_embed:
+            dtype: tensor
