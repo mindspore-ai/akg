@@ -146,9 +146,7 @@ def load_binary_data(data_dir, reference_outputs):
 {% if "triton" in dsl and backend == "cuda" and arch == "a100" %}
 def get_limit(data_type):
     import torch
-    if data_type == torch.float32:
-        return 0.02
-    elif data_type == torch.float16:
+    if data_type == torch.float16:
         return 0.004
     elif data_type == torch.bfloat16:
         return 0.03
@@ -166,7 +164,7 @@ def get_limit(data_type):
     elif data_type == torch.int8:
         return 0.01
     else:
-        return 0.004
+        return 0.02
 {% elif framework == "numpy" %}
 def get_limit(data_type):
     import numpy as np
@@ -190,16 +188,63 @@ def get_limit(data_type):
 {% endif %}
 
 def compare(framework_out_flatten, impl_out_flatten, limit, data_type):
-    err_cnt = 0
     size = len(framework_out_flatten)
-    abs_diff = np.abs(framework_out_flatten - impl_out_flatten)
-    abs_ref = np.abs(framework_out_flatten)
-    eps = 1e-8
     
+    # 1. 检查形状一致性
+    if framework_out_flatten.shape != impl_out_flatten.shape:
+        raise AssertionError(f"验证失败，输出形状不一致: framework={framework_out_flatten.shape}, impl={impl_out_flatten.shape}")
+    
+    # 2. 检查NaN值
+    framework_nan_count = np.sum(np.isnan(framework_out_flatten))
+    impl_nan_count = np.sum(np.isnan(impl_out_flatten))
+    
+    if framework_nan_count > 0 or impl_nan_count > 0:
+        raise AssertionError(f"验证失败，检测到NaN值: Framework={framework_nan_count}/{size}, Implementation={impl_nan_count}/{size}")
+    
+    # 3. 检查Inf值 - 只有当两边Inf位置和符号都匹配时才允许
+    framework_inf_mask = np.isinf(framework_out_flatten)
+    impl_inf_mask = np.isinf(impl_out_flatten)
+    
+    # 检查Inf位置是否匹配
+    if not np.array_equal(framework_inf_mask, impl_inf_mask):
+        fw_inf_count = np.sum(framework_inf_mask)
+        impl_inf_count = np.sum(impl_inf_mask)
+        raise AssertionError(f"验证失败，Inf位置不匹配: Framework={fw_inf_count}/{size}, Implementation={impl_inf_count}/{size}")
+    
+    # 检查Inf符号是否匹配
+    if np.sum(framework_inf_mask) > 0:
+        inf_sign_match = np.array_equal(
+            np.sign(framework_out_flatten[framework_inf_mask]), 
+            np.sign(impl_out_flatten[impl_inf_mask])
+        )
+        if not inf_sign_match:
+            raise AssertionError(f"验证失败，Inf符号不匹配")
+    
+    # 4. 对有限值进行精度比较
+    finite_mask = np.isfinite(framework_out_flatten) & np.isfinite(impl_out_flatten)
+    finite_count = np.sum(finite_mask)
+    
+    if finite_count == 0:
+        print(f"警告: 所有值都是Inf，跳过精度检查")
+        return
+    
+    # 提取有限值
+    framework_finite = framework_out_flatten[finite_mask]
+    impl_finite = impl_out_flatten[finite_mask]
+    
+    # 计算相对误差
+    abs_diff = np.abs(framework_finite - impl_finite)
+    abs_ref = np.abs(framework_finite)
+    eps = 1e-8
     relative_error = np.where(abs_ref > eps, abs_diff / abs_ref, abs_diff)
+    
+    # 统计错误
     err_cnt = np.sum(relative_error > limit).astype(np.int32)
-    limit_cnt = int(size * limit)
+    limit_cnt = int(finite_count * limit)
+    
     if err_cnt > limit_cnt:
+        max_error = np.max(relative_error)
+        mean_error = np.mean(relative_error)
         error_msg = f"验证失败，输出不一致: err_cnt={err_cnt} / {limit_cnt}, dtype={data_type}, limit={limit}\n"
         error_msg += f"Framework output (first 10): {framework_out_flatten[:10]}\n"
         error_msg += f"Implementation output (first 10): {impl_out_flatten[:10]}"
@@ -314,9 +359,19 @@ def verify_implementations():
     if not isinstance(impl_output, (list, tuple)):
         impl_output = [impl_output]
     
+    # 基本检查
+    if len(framework_output) != len(impl_output):
+        raise AssertionError(f"验证失败，输出数量不一致: framework={len(framework_output)}, impl={len(impl_output)}")
+    
     for i, (fw_out, impl_out) in enumerate(zip(framework_output, impl_output)):
+        # 检查None值
+        if fw_out is None or impl_out is None:
+            raise AssertionError(f"输出{i}为None: framework={fw_out is None}, impl={impl_out is None}")
+        
         data_type = framework_output[i].dtype
         limit = get_limit(data_type)
+        
+        # 转换为numpy数组
         {% if framework == "torch" %}
         framework_out_flatten = fw_out.flatten().detach().cpu().numpy()
         impl_out_flatten = impl_out.flatten()
@@ -332,6 +387,11 @@ def verify_implementations():
             impl_out_flatten = impl_out_flatten.asnumpy()
         {% endif %}
         
+        # 统一数据类型
+        if framework_out_flatten.dtype != impl_out_flatten.dtype:
+            impl_out_flatten = impl_out_flatten.astype(framework_out_flatten.dtype)
+        
+        # 执行比对
         compare(framework_out_flatten, impl_out_flatten, limit, data_type)
     
     # 构建验证成功信息
