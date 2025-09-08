@@ -23,7 +23,7 @@ set(ASCENDC_SRC_FILES ${SRC_FILES} PARENT_SCOPE)
 
 set(OP_COMPILER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/../../../scripts/op_compiler.py")
 
-if(SRC_FILES)
+if(ASCENDC_OP_DIRS)
     include(${CMAKE_CURRENT_SOURCE_DIR}/../../../cmake/compile_ascendc_ops.cmake)
 endif()
 

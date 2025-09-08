@@ -268,7 +268,7 @@ output = reshape_and_cache(key, value, key_cache, value_cache, slot_mapping, hea
 要实现的主要类和函数：  
 graph:  
 1）算子infer函数，用来推导算子输出shape和dtype；  
-2）算子KernelMod，需要继承`AscendCKernelMod`并重写`Launch`和`GetWorkSpaceInfo`接口；  
+2）算子KernelMod，需要继承`AclnnCustomKernelMod`并重写`Launch`和`GetWorkSpaceInfo`接口；  
 
 pyboost:  
 1）算子kernel调用函数;   
@@ -307,9 +307,9 @@ public:
 };
 
 // 算子graph模式调用，aclnn两段式接口调用，需要实现Launch和GetWorkSpaceInfo函数
-class AddCustomAscend : public AscendCKernelMod {
+class AddCustomAscend : public AclnnCustomKernelMod {
 public:
-  AddCustomAscend() : AscendCKernelMod(std::move("aclnnAddCustom")) {}
+  AddCustomAscend() : AclnnCustomKernelMod(std::move("aclnnAddCustom")) {}
   ~AddCustomAscend() = default;
 
   // 算子执行调用函数，RunOp函数会调用aclnn算子第二段接口

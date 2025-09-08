@@ -157,16 +157,16 @@ using CacheTuple = std::tuple<uint64_t, aclOpExecutor *, ProcessCache, size_t>;
     return all_acl_tensor;                                                                                      \
   }
 
-class AscendCKernelMod : public KernelMod {
+class AclnnCustomKernelMod : public KernelMod {
  public:
-  explicit AscendCKernelMod(std::string &&op_type) : op_type_(std::move(op_type)) {
+  explicit AclnnCustomKernelMod(std::string &&op_type) : op_type_(std::move(op_type)) {
     auto capaticy_from_user = GetCacheCapaticy();
     if (capaticy_from_user >= 0) {
       capacity_ = LongToSize(capaticy_from_user);
       MS_LOG(INFO) << "Set ascendc cache queue length of kbyk to " << capacity_;
     }
   }
-  virtual ~AscendCKernelMod();
+  virtual ~AclnnCustomKernelMod();
 
   bool Init(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs);
   int Resize(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs);

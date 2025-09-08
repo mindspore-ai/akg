@@ -114,7 +114,7 @@ static void CheckShape(const PrimitivePtr &primitive, const InferInfoPtrList &in
 
   if (!input_infos[kMlaInputAttnMaskIndex]->IsNone() && !input_infos[kMlaInputAttnMaskIndex]->IsDynamic()) {
     auto mask_shape = input_infos[kMlaInputAttnMaskIndex]->GetShape();
-    auto mask_type_value = input_infos[kMlaInputMaskTypeIndex]->GetScalarValue<int64_t>();
+    auto mask_type_value = input_infos[kMlaInputMaskTypeIndex]->GetScalarValueWithCheck<int64_t>();
 
     auto mask_type = mask_type_value;
     if (mask_type == kMaskSpec || mask_type == kMaskFree) {

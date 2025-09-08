@@ -24,14 +24,14 @@
 #include "mindspore/ops/kernel/ascend/acl_ir/acl_helper.h"
 
 namespace ms_custom_ops {
-bool AscendCKernelMod::is_dynamic_ = false;
+bool AclnnCustomKernelMod::is_dynamic_ = false;
 
-bool AscendCKernelMod::Init(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) {
-  MS_LOG(DEBUG) << "AscendCKernelMod Init";
+bool AclnnCustomKernelMod::Init(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) {
+  MS_LOG(DEBUG) << "AclnnCustomKernelMod Init";
   return true;
 }
 
-int AscendCKernelMod::Resize(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) {
+int AclnnCustomKernelMod::Resize(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) {
   auto ret = KernelMod::Resize(inputs, outputs);
   if (UseSimulationApi()) {
     return ret;
@@ -40,13 +40,13 @@ int AscendCKernelMod::Resize(const std::vector<KernelTensor *> &inputs, const st
   return ret;
 }
 
-bool AscendCKernelMod::Launch(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &workspace,
+bool AclnnCustomKernelMod::Launch(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &workspace,
                             const std::vector<KernelTensor *> &outputs, void *stream_ptr) {
   MS_EXCEPTION_IF_NULL(stream_ptr);
   return true;
 }
 
-std::vector<size_t> AscendCKernelMod::GetLaunchIgnoredInputAddressIdx() const {
+std::vector<size_t> AclnnCustomKernelMod::GetLaunchIgnoredInputAddressIdx() const {
   static const std::map<std::string, std::vector<size_t>> launch_ignored_input_addr_idx = {
     {kTransposeOpName, {kIndex1}}};
   if (launch_ignored_input_addr_idx.count(kernel_name_) > 0) {
@@ -55,7 +55,7 @@ std::vector<size_t> AscendCKernelMod::GetLaunchIgnoredInputAddressIdx() const {
   return {};
 }
 
-AscendCKernelMod::~AscendCKernelMod() {
+AclnnCustomKernelMod::~AclnnCustomKernelMod() {
   (void)std::for_each(hash_cache_.begin(), hash_cache_.end(), [&](CacheTuple &item) {
     auto cache = std::get<kIndex2>(item);
     cache(device::ascend::ProcessCacheType::kReleaseParamsAndExecutor, {});
