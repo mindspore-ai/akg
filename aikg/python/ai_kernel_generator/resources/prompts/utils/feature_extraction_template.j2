@@ -8,7 +8,6 @@
 
 {% endif %}
 
-
 {% if impl_code %}
 
 经过调度优化后的算子描述：
@@ -49,23 +48,84 @@
     【要求四】可以用输入tensor的属性（如shape）来动态获取的参数，禁止直接使用具体值
 
 ## 调度策略
-{% if impl_code %}
-  **schedule**：根据调度优化后的算子描述分析算子调度策略：
-{% else %}
-  **schedule**：根据算子基础信息设计对应的调度策略：
-{% endif %}
-    - 切分策略：每根轴的切分大小，明确给出具体切分值
-    - 并行策略：核数以及每个核的数据量（明确给出具体值），概述哪根轴映射到核上，负载均衡优化方案等
-  【注意事项】若存在多个kernel实现，需要分别给出每个kernel的调度策略
+  **schedule**：根据算子实现代码分析调度策略，包含以下子字段：
+    - **基础特征类**
+      - **tiling**：分析代码中的切分策略，按照轴的出现顺序对应轴的名字（dim0, dim1, dim2...），下划线后0,1表示第几次切分。明确给出具体值，不要用变量替代。格式为：
+        - dim0_0=256：第0根轴的第0次切分是256
+        - dim1_1=128：第1根轴的第1次切分是128
+        - 如果某个轴没有切分，则不输出该轴的信息
+      - **parallel**：分析代码中的并行策略，包括在哪个轴并行和核数，核数明确给出具体值，不要用变量替代。格式为：
+        - dim0 parallel 10：dim0轴并行，核数为10
+        - dim1 parallel 32：dim1轴并行，核数为32
+        - 如果某个轴没有并行，则不输出该轴的信息
+    - **PASS类**
+      - **flatten**：判断是否支持轴融合优化，值为True/False。判断标准：
+        {% if dsl == "triton" %}
+        - 如果代码中有将多个轴合并的操作，则为True
+        {% else %}
+        - 需要判断在写回GM时是否进行了reshape操作，如A(dim0, dim1)->A(dim0 * dim1)
+        {% endif %}
+        - 如果代码中没有轴融合相关操作，则为False
+      - **multi_buffer**：判断是否支持multi buffer优化。判断标准：
+        {% if dsl == "triton" %}
+        - 检查代码中是否有num_stages参数，有则取值，否则为1
+        {% else %}
+        - 不做检查，默认为1
+        {% endif %}
+    - **文字描述类**
+      - **swizzle**：Swizzle是一种通过重新映射数据索引或线程索引来优化内存访问模式的通用编程技巧。如果算子是或包含matmul算子，总结Swizzle操作：
+        - 如果有相关优化，简要描述重排技术类型、实现方式和优化目标
+        - 如果没有相关优化，则令swizzle值设为NONE
+        {% if dsl == "triton" %}
+        【注意事项】使用tl.make_block_ptr中的order参数改变矩阵访问模式不视为Swizzle操作
+        {% endif %}
 
-3. 示例
+5. 示例
+示例一：
 ```json
+{
   "op_name": "hinge_loss",
   "op_type": "reduce",
   "input_specs": "输入 input0: shape (128, 1), dtype float32; 输入 input1: shape (128, 1), dtype float32",
   "output_specs": "输出 output0: shape (1,), dtype float32",
   "computation": "output0 = np.sum(np.maximun(0, 1 - input0 * input1)) / (input0.shape[0] * input0.shape[1])",
-  "schedule": "elementwise_kernel: 切分策略BLOCK_SIZE=1024，并行策略grid=(128,)，每个核处理1024元素；reduce_kernel: 切分策略BLOCK_SIZE_REDUCE=1024，并行策略grid=(1,)，单核处理全量数据归约；边界处理通过mask机制自动处理越界访问；数据预取通过tl.load/tl.store显式管理",
+  "schedule": {
+    "base": {
+      "tiling": "dim0_0=1024",
+      "parallel": "dim0 parallel 128"
+    },
+    "pass": {
+      "flatten": false,
+      "multi_buffer": 2
+    },
+    "text": {
+      "swizzle": "NONE"
+    }
+  }
+}
+```
+示例二：
+```json
+{
+  "op_name": "matmul",
+  "op_type": "matmul",
+  "input_specs": "输入 input0: shape (1024, 1024), dtype float16; 输入 input1: shape (1024, 1024), dtype float16",
+  "output_specs": "输出 output0: shape (1024, 1024), dtype float16",
+  "computation": "output0 = np.matmul(input0, input1)",
+  "schedule": {
+    "base": {
+      "tiling": "dim0_0=256, dim1_0=32, dim2_0=32",
+      "parallel": "dim0 parallel 8, dim1 parallel 16"
+    },
+    "pass": {
+      "flatten": false,
+      "multi_buffer": 3
+    },
+    "text": {
+      "swizzle": "通过GROUP_SIZE_M=8实现矩阵乘法的优化排布，将相邻的8个M轴程序块分组处理，提升L2 Cache的局部性和命中率"
+    }
+  }
+}
 ```
 
 【注意事项】请尽可能使用中文进行思考分析

@@ -14,32 +14,32 @@
 
 import pytest
 import gc
-from pathlib import Path
 from ai_kernel_generator.core.agent.utils.feature_extractor import FeatureExtractor
-from ai_kernel_generator.utils.common_utils import load_yaml
-from ai_kernel_generator import get_project_root
 from ai_kernel_generator.config.config_validator import load_config
-
-DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
 
 
 @pytest.mark.level0
 @pytest.mark.use_model
 @pytest.mark.asyncio
 async def test_feature_extract():
-    backend = "ascend"
-    arch = "ascend310p3"
-    dsl = "swft"
-    op_name = "elu"
-    impl_code_path = DEFAULT_DATABASE_PATH / dsl / arch / op_name / "aigen" / "elu_aul.py"
-
-    config = load_config(dsl).get("agent_model_config", {})
+    framework = "torch"
+    dsl = "triton"
+    
+    op_name = "relu"
+    
+    framework_code_path = f"tests/resources/{op_name}_op/{op_name}_{framework}.py"
+    impl_code_path = f"tests/resources/{op_name}_op/{op_name}_{dsl}.py"
+    with open(framework_code_path, "r", encoding="utf-8") as f:
+        framework_code = f.read()
     with open(impl_code_path, "r", encoding="utf-8") as f:
         impl_code = f.read()
+    
+    config = load_config(dsl).get("agent_model_config", {})
     feature = FeatureExtractor(
         model_config=config,
         impl_code=impl_code,
-        framework_code=""
+        framework_code=framework_code,
+        dsl=dsl
     )
     try:
         feature_res, _, _ = await feature.run()

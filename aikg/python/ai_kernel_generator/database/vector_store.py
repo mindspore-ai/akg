@@ -36,7 +36,7 @@ class VectorStore:
                 database_path: str, 
                 embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
                 index_name: str = "vector_store",
-                features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation", "schedule"]):
+                features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation"]):
         # 使用数据库路径、索引名称和特征列表的组合作为实例的唯一标识
         instance_key = get_md5_hash(database_path=database_path, index_name=index_name, features=features)
         
@@ -59,7 +59,7 @@ class VectorStore:
                  database_path: str, 
                  embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
                  index_name: str = "vector_store",
-                 features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation", "schedule"]):
+                 features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation"]):
         # 防止重复初始化
         if hasattr(self, '_initialized') and self._initialized:
             return
@@ -213,7 +213,7 @@ class VectorStore:
         if not self.enable_vector_store:
             return
 
-        metadata_path = Path(self.database_path) / "operators" / arch / dsl / md5_hash / 'metadata.json'
+        metadata_path = Path(self.database_path) / arch / dsl / md5_hash / 'metadata.json'
         if not metadata_path.exists():
             raise ValueError(f"算子元数据文件 {str(metadata_path)} 不存在")
         

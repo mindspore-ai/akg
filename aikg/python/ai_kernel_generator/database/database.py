@@ -33,6 +33,7 @@ class RetrievalStrategy(Enum):
     OPTIMALITY = "optimality"
     RULE = "rule"
     HIERARCHY = "hierarchy"
+    FUSION = "fusion"
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
 
@@ -113,7 +114,7 @@ class Database():
         if not arch or not dsl:
             raise ValueError("arch and dsl must be provided in random mode")
             
-        sample_path = Path(self.database_path) / "operators" / arch / dsl
+        sample_path = Path(self.database_path) / arch / dsl
         if not sample_path.exists() or not sample_path.is_dir():
             raise ValueError(f"Sample path {sample_path} does not exist or is not a directory")
         
@@ -172,8 +173,7 @@ class Database():
         插入新的算子实现
         """
         md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
-        operator_path = Path(self.database_path) / "operators"
-        file_path = operator_path / arch / dsl / md5_hash
+        file_path = Path(self.database_path) / arch / dsl / md5_hash
 
         features = await self.extract_features(impl_code, framework_code, backend, arch, dsl, profile)
         file_path.mkdir(parents=True, exist_ok=True)
@@ -198,7 +198,7 @@ class Database():
         """
         md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
 
-        operator_path = Path(self.database_path) / "operators"
+        operator_path = Path(self.database_path)
         file_path = operator_path / arch / dsl / md5_hash
         if not file_path.exists():
             logger.warning(f"Operator implementation does not exist: {file_path}")
@@ -220,5 +220,5 @@ class Database():
     def clear(self):
         for vector_store in self.vector_stores:
             vector_store.clear()
-        shutil.rmtree(str(Path(self.database_path) / "operators"))
+        shutil.rmtree(self.database_path)
 

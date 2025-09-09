@@ -221,7 +221,7 @@ class ParserFactory:
                     "input_specs": (str, ...),
                     "output_specs": (str, ...),
                     "computation": (str, ...),
-                    "schedule": (str, ...)
+                    "schedule": (dict, ...)
                 }
             )
         return cls._feature_parser

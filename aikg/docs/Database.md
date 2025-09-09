@@ -1,83 +1,149 @@
 # Database Module Design Documentation
 
 ## Overview
-The Database module is an operator optimization solution management framework, responsible for storage, retrieval, verification and management of operator optimization solutions. It enables rapid matching of similar solutions through feature extraction and vector search.
+The Database module is an operator optimization solution management framework, responsible for storage, retrieval, verification and management of operator optimization solutions. It provides a structured approach to organizing and accessing operator implementations across different hardware architectures and DSLs, enabling rapid matching of operator solutions through feature extraction and vector retrieval.
 
 ## Core Features
-- **Multi-strategy similarity search**: Supports COSINE/EUCLIDEAN_DISTANCE and other similarity calculation strategies
+- **Multi-strategy retrieval**: Supports various retrieval strategies including random sampling, similarity search, and rule-based filtering
 - **Solution lifecycle management**: Provides complete operations for solution insertion, update, deletion and lookup
-- **Two-stage verification**: Initial retrieval + secondary verification mechanism ensures result accuracy
+- **Feature extraction**: Automatic extraction of operator characteristics from implementation code
+- **Hierarchical organization**: Structured storage by architecture, DSL, and unique identifiers
+
+### Retrieval Strategies
+The Database module supports multiple retrieval strategies for finding operator optimization solutions:
+
+| Strategy | Description | Use Case |
+|----------|-------------|----------|
+| **RANDOMICITY** | Random sampling of operators from the database | Testing, baseline comparison, unbiased sampling |
+| **NAIVETY** | Direct similarity search based on feature vectors | Simple similarity matching, straightforward retrieval |
+| **MMR** | Maximum Marginal Relevance balancing similarity and diversity | Avoiding redundant results, ensuring diverse solutions |
+| **OPTIMALITY** | Performance-optimized retrieval strategy | High-performance scenarios requiring fastest retrieval |
+| **RULE** | Rule-based search with custom criteria | Custom filtering logic, domain-specific requirements |
+| **HIERARCHY** | Hierarchical search across different abstraction levels | Multi-level analysis, progressive refinement |
+| **FUSION** | Multi-strategy fusion combining different approaches | Comprehensive search, leveraging multiple methods |
 
 ## Initialization Parameters
 | Parameter | Type/Required | Default | Description |
 |----------|--------------|---------|-------------|
-| config_path | str (optional) | database_config.yaml | Configuration file path. embedding_model can be model name or local model path; distance_strategy and verify_distance_strategy support EUCLIDEAN_DISTANCE, MAX_INNER_PRODUCT, DOT_PRODUCT, JACCARD and COSINE |
 | database_path | str (optional) | ../database | Root directory for operator solution storage |
+| vector_stores | List[VectorStore] (optional) | [] | List of VectorStores for similarity search |
+| config | dict (required) | None | Configuration dictionary containing agent_model_config |
 
-### database_config.yaml example:
-```yaml
-# Embedding model configuration
-embedding_model: "GanymedeNil/text2vec-large-chinese"  # Model name or local path e.g. "xxx/thirdparty/text2vec-large-chinese"
-
-# Vector database configuration
-distance_strategy: "COSINE"
-verify_distance_strategy: "EUCLIDEAN_DISTANCE"
-
-# Feature extraction preset
-agent_model_config:
-  feature_extractor: deepseek_r1_default
+### Configuration Structure:
+```python
+config = {
+    "agent_model_config": {
+        "feature_extraction": "deepseek_r1_default"
+    }
+}
 ```
 
 ## Core Methods
-### sample
-**Function**: Retrieve similar operator optimization solutions  
+
+### samples
+**Function**: Retrieve similar operator optimization solutions using specified strategies  
 **Parameters**:
+- `output_content`: List of content types to retrieve (e.g., ["impl_code", "framework_code"])
+- `strategy_modes`: List of retrieval strategies to use
+- `sample_num`: Number of samples to retrieve (default: 5)
 - `impl_code`: Operator implementation code
+- `framework_code`: Framework adapter code
 - `backend`: Compute backend (ascend/cuda/cpu)
 - `arch`: Hardware architecture (e.g. ascend910b4)
-- `impl_type`: Implementation type (triton/swft)
+- `dsl`: Domain-specific language (triton/swft)
+- `framework`: Framework name (mindspore/pytorch)
 
-**Returns**:
-- Recall rate, list of solutions with similarity scores
+**Returns**: List of retrieved operator solutions
 
 ### insert
-**Feature generation rules**:
-1. Generate feature invariants using `get_md5_hash()`
-2. Directory structure: `{database_path}/operators/{arch}/{impl_type}/{md5_hash}/`
-3. Metadata saved as metadata.json
+**Function**: Insert new operator implementation into database  
+**Parameters**:
+- `impl_code`: Operator implementation code
+- `framework_code`: Framework adapter code
+- `backend`: Compute backend (ascend/cuda/cpu)
+- `arch`: Hardware architecture
+- `dsl`: Domain-specific language
+- `framework`: Framework name
+- `profile`: Performance profile (default: inf)
+
+**Storage Structure**:
+1. Generate md5_hash using `get_md5_hash()`
+2. Directory structure: `{database_path}/{arch}/{dsl}/{md5_hash}/`
+3. Save metadata as metadata.json
+4. Save implementation code as {dsl}.py
+5. Save framework code as {framework}.py
 
 ### delete
-**Deletion logic**:
-1. Locate directory using md5_hash generated from code content
-2. Cascade delete empty parent directories
-3. Synchronously update vector storage index
+**Function**: Delete operator implementation from database  
+**Parameters**:
+- `impl_code`: Operator implementation code
+- `backend`: Compute backend
+- `arch`: Hardware architecture
+- `dsl`: Domain-specific language
 
-### verify
-**Verification process**:
-1. Re-retrieve using alternative distance strategy
-2. Calculate recall rate of both retrieval results
-3. Return verification pass rate
+**Deletion Process**:
+1. Generate md5_hash to locate directory
+2. Remove operator directory and files
+3. Cascade delete empty parent directories
+4. Update VectorStore indices
+
+### extract_features
+**Function**: Extract operator features from implementation code  
+**Parameters**:
+- `impl_code`: Operator implementation code
+- `framework_code`: Framework adapter code
+- `backend`: Compute backend
+- `arch`: Hardware architecture
+- `dsl`: Domain-specific language
+- `profile`: Performance profile
+
+**Returns**: Dictionary containing extracted features (op_name, op_type, input_specs, output_specs, computation, schedule, etc.)
 
 ## Usage Example
 ```python
-# Initialize RAG system
-rag = DatabaseRAG(config_path="custom_rag.yaml")
+from ai_kernel_generator.database.database import Database, RetrievalStrategy
+from ai_kernel_generator.database.vector_store import VectorStore
+
+# Initialize Database with VectorStore support
+vector_store = VectorStore(
+    database_path="/path/to/database",
+    embedding_model_name="GanymedeNil/text2vec-large-chinese",
+    index_name="operator_vector_store"
+)
+
+config = {
+    "agent_model_config": {
+        "feature_extraction": "deepseek_r1_default"
+    }
+}
+
+database = Database(
+    database_path="/path/to/database",
+    vector_stores=[vector_store],
+    config=config
+)
 
 # Insert new solution
-rag.insert(
+await database.insert(
     impl_code=matmul_impl,
     framework_code=mindspore_adapter,
     backend="ascend",
     arch="ascend910b4",
-    impl_type="triton",
+    dsl="triton",
     framework="mindspore"
 )
 
 # Retrieve similar solutions
-recall, results = rag.sample(
+results = await database.samples(
+    output_content=["impl_code", "framework_code"],
+    strategy_modes=[RetrievalStrategy.NAIVETY],
+    sample_num=5,
     impl_code=new_matmul_impl,
+    framework_code=new_framework_code,
     backend="ascend",
     arch="ascend910b4",
-    impl_type="triton"
+    dsl="triton",
+    framework="mindspore"
 )
+
 ```
