@@ -212,7 +212,6 @@ class AscendCKernelMod : public KernelMod {
     return GetValue<T>(attr_value);
   }
 
-  aclOpExecutor *executor_{nullptr};
   CallBackFunc release_func_{nullptr};
   std::string op_type_;
   uint64_t hash_id_{0};
