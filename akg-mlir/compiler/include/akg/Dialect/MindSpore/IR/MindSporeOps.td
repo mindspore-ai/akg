@@ -2486,7 +2486,7 @@ def MindSpore_CatOp : MindSpore_Op<"cat", [Pure]> {
 //===----------------------------------------------------------------------===//
 // MindSpore Operator: clamp
 //===----------------------------------------------------------------------===//
-def MindSpore_ClampOp : MindSpore_Op<"clamp", [Pure, AttrSizedOperandSegments]> {
+def MindSpore_ClampOp : MindSpore_Op<"clamp", [Pure]> {
   let summary = "mindspore.ops.clamp(input, min=None, max=None)";
 
   let description = [{
