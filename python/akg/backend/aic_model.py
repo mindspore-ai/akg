@@ -58,11 +58,15 @@ def launch(kernel, args, output=(-1,)):
     _check_exists(aic_model_path,
                   "AIC_MODEL_PATH environment variable is not set. Please set it to the dir of model_exe")
     aic_model_path = os.path.realpath(aic_model_path)
+    if not os.path.isdir(aic_model_path):
+        raise RuntimeError("Invalid aic_model_path")
     # spec : target chip specification.
     spec_name = os.getenv('AIC_MODEL_SPEC_NAME')
     _check_exists(spec_name,
                   "AIC_MODEL_SPEC_NAME environment variable is not set. Please set it to the name of spec("
                   "It should be xxx.spec and the xxx.spec file is under the AIC_MODEL_PATH directory)")
+    if not spec_name.endswith(".spec") or not os.path.isfile(os.path.join(aic_model_path, spec_name)):
+        raise RuntimeError("Invalid spec_name")
     aic_out_path = os.path.realpath("aic_out")
     _mkdir(aic_out_path)
     calog_path = aic_out_path + "/calog"

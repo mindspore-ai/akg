@@ -94,7 +94,7 @@ def random_gaussian(size, miu=0, sigma=8, epsilon=0, seed=None):
     """Generate random array with absolution value obeys gaussian distribution."""
     random_data_disk_path = None
     if os.environ.get("RANDOM_DATA_DISK_PATH") is not None:
-        random_data_disk_path = os.environ.get("RANDOM_DATA_DISK_PATH") + "/random_data_%s_%s.bin" % (
+        random_data_disk_path = os.path.realpath(os.environ.get("RANDOM_DATA_DISK_PATH")) + "/random_data_%s_%s.bin" % (
             str(miu), str(sigma))
 
     if random_data_disk_path is None or (not os.path.exists(random_data_disk_path)):

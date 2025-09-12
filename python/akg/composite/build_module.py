@@ -343,7 +343,14 @@ def merge_attrs(attrs_a, attrs_b):
 
 
 def read_repo_file(repo_file, is_json_load=True):
+    repo_file = os.path.realpath(repo_file)
+    safe_path = os.path.realpath(os.environ.get("AKG_WHITE_LIST_PATH", "./"))
     if not os.path.exists(repo_file):
+        return {}
+    if not repo_file.endswith(".json"):
+        return {}
+    if not repo_file.startswith(safe_path):
+        print("Please set tiling repo path specified by env AKG_WHITE_LIST_PATH or current path")
         return {}
     with open(repo_file, 'r') as f:
         repo = f.read()
@@ -364,7 +371,7 @@ def _get_default_repository_file(process):
 
 def _get_repository(desc_d, attrs):
     if os.getenv('MS_GRAPH_KERNEL_TILING'):
-        return read_repo_file(str(os.getenv('MS_GRAPH_KERNEL_TILING')))
+        return read_repo_file(os.path.realpath(str(os.getenv('MS_GRAPH_KERNEL_TILING'))))
     if 'buffer_stitch' in desc_d and attrs.get("process") == 'cuda':
         return {}
     if "repository_path" in attrs:
@@ -692,7 +699,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
         attr["enable_cce_lib"] = True
         repository = None
         if os.getenv('MS_GRAPH_KERNEL_TILING'):
-            repository = read_repo_file(str(os.getenv('MS_GRAPH_KERNEL_TILING')))
+            repository = read_repo_file(os.path.realpath(str(os.getenv('MS_GRAPH_KERNEL_TILING'))))
         return _build_to_module_ascend_lib(desc_s_in, kernel_name, repository)
 
     poly = True
