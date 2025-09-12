@@ -97,13 +97,11 @@ module {
   }
 }
 
-module {
-  func.func @Any_NegAxis_KeepDims(%x: tensor<4x5xi1>) -> tensor<4x1xi1>
-      attributes {compute_capability = "", mindspore_kernel, process = "aicore"} {
-    %r = "mindspore.any"(%x) {axis = array<i64: -1>, keep_dims = true}
-         : (tensor<4x5xi1>) -> tensor<4x1xi1>
-    return %r : tensor<4x1xi1>
-  }
+module { func.func @Fused_Any_Axis1_KeepDims(%arg0: tensor<1x3x5xi1>) -> tensor<1x1x5xi1> 
+attributes {compute_capability = "", mindspore_kernel, process = "aicore"} { 
+  %0 = "mindspore.any"(%arg0) {axis = array<i64: 1>, keep_dims = true} 
+        : (tensor<1x3x5xi1>) -> tensor<1x1x5xi1> 
+  return %0 : tensor<1x1x5xi1> } 
 }
 
 module {
@@ -407,12 +405,13 @@ module {
   }
 }
 
-module {
-  func.func @Reciprocal_ScalarF64(%s: tensor<f64>) -> tensor<f64>
-      attributes {compute_capability = "", mindspore_kernel, process = "aicore"} {
-    %o = "mindspore.reciprocal"(%s) : (tensor<f64>) -> tensor<f64>
-    return %o : tensor<f64>
-  }
+module { 
+  func.func @Reciprocal_2D(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> 
+      attributes {compute_capability = "", mindspore_kernel, process = "aicore"} { 
+  %0 = "mindspore.reciprocal"(%arg0) 
+        : (tensor<2x3xf32>) -> tensor<2x3xf32> 
+  return %0 : tensor<2x3xf32> 
+  } 
 }
 
 module {
@@ -455,14 +454,14 @@ module {
   }
 }
 
-module {
-  func.func @Sort_AxisNeg2_F64(%x: tensor<2x3x4xf64>)
-      -> (tensor<2x3x4xf64>, tensor<2x3x4xi64>)
-      attributes {compute_capability = "", mindspore_kernel, process = "aicore"} {
-    %sorted, %idx = "mindspore.sort"(%x) {axis = -2 : i64}
-                    : (tensor<2x3x4xf64>) -> (tensor<2x3x4xf64>, tensor<2x3x4xi64>)
-    return %sorted, %idx : tensor<2x3x4xf64>, tensor<2x3x4xi64>
-  }
+module { 
+  func.func @Sort_3D_LastDim(%x: tensor<1x3x7xf32>) 
+      -> (tensor<1x3x7xf32>, tensor<1x3x7xi64>) 
+      attributes {compute_capability = "", mindspore_kernel, process = "aicore"} { 
+  %sorted, %idx = "mindspore.sort"(%x) {axis = -1 : i64} 
+                  : (tensor<1x3x7xf32>) -> (tensor<1x3x7xf32>, tensor<1x3x7xi64>) 
+  return %sorted, %idx : tensor<1x3x7xf32>, tensor<1x3x7xi64> 
+  } 
 }
 
 module {
