@@ -333,7 +333,7 @@ def verify_implementations():
     {% elif framework == "mindspore" %}
     inputs = get_inputs()
     {% endif %}
-    
+    torch.manual_seed(0)
     # 运行框架实现
     framework_output = framework_model(*inputs)
     
