@@ -373,14 +373,11 @@ module {
 }
 
 module {
-  func.func @Rand_F64_4D() -> tensor<1x3x5x7xf64>
-      attributes {compute_capability = "", mindspore_kernel, process = "aicore"} {
-    %y = "mindspore.rand"()
-         { size = array<i64: 1, 3, 5, 7>,
-           dtype = f64,
-           seed = 42 : i64 }
-         : () -> tensor<1x3x5x7xf64>
-    return %y : tensor<1x3x5x7xf64>
+  func.func @Rand_I32_Vector() -> tensor<3xi32> {
+    %0 = "mindspore.rand"()
+         { size = array<i64: 3>, dtype = i32 }
+         : () -> tensor<3xi32>
+    return %0 : tensor<3xi32>
   }
 }
 
