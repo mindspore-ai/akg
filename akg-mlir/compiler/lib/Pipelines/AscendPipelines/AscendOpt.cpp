@@ -55,7 +55,6 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
   pm.addPass(createLegalizeTypePass());
   pm.addPass(createFoldDimensionPass());
   pm.addPass(createMindSporeToLinalgNamedPass());
-  pm.addPass(createArithToLinalgConversionPass());
 }
 }  // namespace
 

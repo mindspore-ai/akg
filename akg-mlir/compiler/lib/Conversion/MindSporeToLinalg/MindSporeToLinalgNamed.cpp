@@ -823,6 +823,17 @@ class MindSporeInvConverter : public OpRewritePattern<mindspore::InvOp> {
   }
 };
 
+class MindSporeConstConverter : public OpRewritePattern<mindspore::ConstOp> {
+ public:
+  using OpRewritePattern<mindspore::ConstOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mindspore::ConstOp op, 
+                                PatternRewriter &rewriter) const final {
+    (void)rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, op.getValue());
+    return success();
+  }
+};
+
 void mlir::populateLowerMindSporeToLinalgNamedPattern(RewritePatternSet &patterns) {
   // clang-format off
   (void)patterns.add<
@@ -856,13 +867,15 @@ void mlir::populateLowerMindSporeToLinalgNamedPattern(RewritePatternSet &pattern
     MindSporeInplaceAssignConverter,
     MindSporeReshapeConverter,
     MindSporeBroadcastConverter,
-    MindSporeInvConverter
+    MindSporeInvConverter,
+    MindSporeConstConverter
   >(patterns.getContext());
   // clang-format on
   return;
 }
 
-struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedBase<ConvertMindSporeToLinalgNamedPass> {
+struct ConvertMindSporeToLinalgNamedPass 
+    : public ConvertMindSporeToLinalgNamedBase<ConvertMindSporeToLinalgNamedPass> {
  public:
   ConvertMindSporeToLinalgNamedPass() = default;
 
@@ -871,6 +884,7 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
     registry.insert<tensor::TensorDialect>();
     registry.insert<math::MathDialect>();
     registry.insert<hacc::HACCDialect>();
+    registry.insert<arith::ArithDialect>();
   }
 
   void runOnOperation() override {
