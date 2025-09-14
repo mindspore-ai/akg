@@ -175,6 +175,31 @@ result = tl.where(mask, data, 0.0)
 - **返回**: 根据条件选择的值
 - **用途**: SIMD 友好的条件选择
 
+### tl.cumsum(input, axis=0, reverse=False, dtype=None)
+```python
+cumulative_sum = tl.cumsum(data, axis=0)
+reverse_cumsum = tl.cumsum(data, axis=1, reverse=True)
+```
+- **参数**:
+  - `input`: 输入张量
+  - `axis`: 累积求和的轴 (默认为 0)
+  - `reverse`: 是否反向累积 (默认为 False)
+  - `dtype`: 输出数据类型 (可选，默认与输入相同)
+- **返回**: 累积求和结果张量
+- **用途**: 计算沿指定轴的累积和，常用于前缀和计算
+
+### tl.cumprod(input, axis=0, reverse=False)
+```python
+cumulative_prod = tl.cumprod(data, axis=0)
+reverse_cumprod = tl.cumprod(data, axis=1, reverse=True)
+```
+- **参数**:
+  - `input`: 输入张量
+  - `axis`: 累积乘积的轴 (默认为 0)
+  - `reverse`: 是否反向累积 (默认为 False)
+- **返回**: 累积乘积结果张量
+- **用途**: 计算沿指定轴的累积乘积，常用于概率计算和序列处理
+
 ## 6. 原子操作 API
 
 ### tl.atomic_add(pointer, value)
@@ -200,4 +225,4 @@ tl.atomic_max(max_ptr, local_max)
 BLOCK_SIZE: tl.constexpr = 1024
 ```
 - **用途**: 标记编译时常量参数
-- **约束**: 必须在函数签名中声明 
+- **约束**: 必须在函数签名中声明

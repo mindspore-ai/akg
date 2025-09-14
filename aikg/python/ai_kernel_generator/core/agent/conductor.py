@@ -254,7 +254,7 @@ class Conductor(AgentBase):
                 'task_desc': self.task_desc,
                 'agent_name': current_agent,
                 'agent_result': agent_result,
-                'error_log': error_log if error_log else None,
+                'error_log': error_log[:5000] if error_log else None,
                 'valid_next_agents': ', '.join(sorted(valid_next_agents)),
                 'format_instructions': format_instructions,
             }

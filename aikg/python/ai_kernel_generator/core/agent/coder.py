@@ -263,7 +263,7 @@ class Coder(AgentBase):
                     **self.base_doc,
                     "sketch": sketch,  # AUL代码作为sketch
                     "llm_suggestions": conductor_suggestion,  # Conductor建议
-                    "error_log": task_info.get('verifier_error', ''),
+                    "error_log": task_info.get('verifier_error', '')[:5000],
                     "format_instructions": format_api_instructions
                 }
 
@@ -302,7 +302,7 @@ class Coder(AgentBase):
                 "sketch": sketch,  # AUL代码作为sketch
                 "llm_suggestions": conductor_suggestion,  # Conductor建议
                 "coder_code": task_info.get('coder_code', ''),
-                "error_log": task_info.get('verifier_error', ''),
+                "error_log": task_info.get('verifier_error', '')[:5000],
                 "api_docs_suitable": api_docs_suitable,
                 "dsl_examples_suitable": dsl_examples_suitable,
             }
