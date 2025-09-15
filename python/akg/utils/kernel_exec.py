@@ -132,6 +132,7 @@ def create_code(kernel_name, code_path=None, code=None, code_type=CCE):
 
     if not code_path:
         code_path = "./"
+    code_path = validate_and_normalize_path(code_path)
 
     if code_type == CCE and len(code_path) > 4 and code_path[-4:].lower() == postfix:
         real_path = code_path
@@ -197,7 +198,6 @@ def profiling_mode_run(kernel_name, args, outputs, tuning, device_id, arch=None)
         logging.info(cycle)
     else:
         logging.error("OOPS, can't correctly Task Duration!")
-    TestUtils.record_cycle(cycle)
     logging.info('=====Task Duration(us)==============================')
     return output_data, {'run_time': cycle}
 
@@ -1120,29 +1120,3 @@ def get_cycles(mod, *mod_args, target="cuda", device_id=0, repeat_time=400):
     tcost = target_profiling(mod, *mod_args, target=target, repeat_time=repeat_time, device_id=device_id,
                              need_warm_up=False)
     return tcost
-
-
-class TestUtils:
-    """Class for getting cycle and core num."""
-
-    @staticmethod
-    def record_cycle(cycle):
-        if os.environ.get(PERFORMANCE_TEST_FILE):
-            result_file = os.environ.get(PERFORMANCE_TEST_FILE)
-            with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
-                f.write("{0}\n".format(cycle))
-
-    @staticmethod
-    def record_core(stmt):
-        """Function for getting performance data from cores."""
-
-        def get_core_num():
-            core_num = 1
-            if hasattr(stmt, 'attr_key') and stmt.attr_key == 'thread_extent':
-                core_num = stmt.value
-            return core_num
-
-        if os.environ.get(PERFORMANCE_TEST_FILE):
-            result_file = os.environ.get(PERFORMANCE_TEST_FILE)
-            with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
-                f.write("{0}; ".format(get_core_num()))
