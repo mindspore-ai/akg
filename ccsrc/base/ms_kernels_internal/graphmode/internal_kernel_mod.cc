@@ -20,7 +20,7 @@
 #include "mindspore/core/include/utils/ms_context.h"
 #include "internal_helper.h"
 #include "internal_tiling_cache.h"
-#include "mindspore/ccsrc/include/common/utils/ms_device_shape_transfer.h"
+#include "mindspore/ccsrc/include/backend/common/ms_device_shape_transfer.h"
 
 namespace ms_custom_ops {
 SimpleSpinLock InternalKernelMod::lock_ = SimpleSpinLock();
@@ -245,20 +245,22 @@ int InternalKernelMod::Resize(const std::vector<KernelTensor *> &inputs, const s
     return KRET_RESIZE_FAILED;
   }
 
+  size_t idx = 0;
   for (auto i : kernel_inputs_index_) {
     auto shape = TransInternalShape(inputs[i]->GetShapeVector());
     if (inputs[i]->dtype_id() == kMetaTypeNone) {
       shape = {};
     }
-    internal_inputs_shape_[i] = std::move(shape);
+    internal_inputs_shape_[idx++] = std::move(shape);
   }
 
+  idx = 0;
   for (auto i : kernel_outputs_index_) {
     auto shape = TransInternalShape(outputs[i]->GetShapeVector());
     if (outputs[i]->dtype_id() == kMetaTypeNone) {
       shape = {};
     }
-    internal_outputs_shape_[i] = std::move(shape);
+    internal_outputs_shape_[idx++] = std::move(shape);
   }
   if (!UpdateParam(inputs, outputs)) {
     MS_LOG(ERROR) << "UpdateParam failed, kernel_name: " << kernel_name_;

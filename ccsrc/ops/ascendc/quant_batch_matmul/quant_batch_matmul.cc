@@ -24,7 +24,7 @@
 #include "ccsrc/base/ascendc/graphmode/ascendc_kernel_mod.h"
 #include "ccsrc/utils/utils.h"
 #include "mindspore/ccsrc/ms_extension/api.h"
-#include "mindspore/ccsrc/include/common/utils/ms_device_shape_transfer.h"
+#include "mindspore/ccsrc/include/backend/common/ms_device_shape_transfer.h"
 
 namespace ms_custom_ops {
 constexpr size_t kQbmmMatSize = 2;

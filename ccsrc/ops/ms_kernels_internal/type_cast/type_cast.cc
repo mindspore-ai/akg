@@ -33,8 +33,8 @@
 namespace ms_custom_ops {
 constexpr size_t kTypeIndex = 1;
 
-bool CheckTypeValid(TypeId input_type, TypeId output_type) {
-  static const std::set<TypeId> valid_type = {kNumberTypeInt8, kNumberTypeInt4};
+void CheckTypeValid(TypeId input_type, TypeId output_type) {
+  const std::set<TypeId> valid_type = {kNumberTypeInt8, kNumberTypeInt4};
   if (!valid_type.count(input_type) || !valid_type.count(output_type)) {
     MS_LOG(EXCEPTION) << "For 'type_cast'"
                       << ", the input and output dtype must be [int8, int4], but got input: "

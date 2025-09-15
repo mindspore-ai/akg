@@ -156,7 +156,7 @@ def run(x_dtype, row, expert, k, k_group, group_count, group_select_mode, renorm
                                    rtol=1e-2, atol=1e-2, err_msg='score error', verbose=True)
 
 
-@pytest.mark.level0
+@pytest.mark.level1
 @pytest.mark.env_onecard
 @pytest.mark.platform_ascend910b
 @pytest.mark.platform_ascend310p
@@ -186,7 +186,7 @@ def test_moe_gating_group_topk_tp4(x_dtype, row, expert, k, k_group, group_count
         norm_type, out_flag, routed_scaling_factor, eps, is_dynamic, is_debug, run_mode)
 
 
-@pytest.mark.level0
+@pytest.mark.level1
 @pytest.mark.env_onecard
 @pytest.mark.platform_ascend910b
 @pytest.mark.platform_ascend310p
@@ -215,7 +215,7 @@ def test_moe_gating_group_topk_tp8(x_dtype, row, expert, k, k_group, group_count
     run(x_dtype, row, expert, k, k_group, group_count, group_select_mode, renorm,
         norm_type, out_flag, routed_scaling_factor, eps, is_dynamic, is_debug, run_mode)
 
-@pytest.mark.level0
+@pytest.mark.level1
 @pytest.mark.env_onecard
 @pytest.mark.platform_ascend910b
 @pytest.mark.parametrize('x_dtype', [bfloat16])
