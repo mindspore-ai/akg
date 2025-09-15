@@ -27,14 +27,14 @@ logger = logging.getLogger(__name__)
 
 
 class Coder(AgentBase):
-    def __init__(self, 
-                 op_name: str, 
-                 task_desc: str, 
-                 dsl: str, 
-                 framework: str, 
-                 backend: str, 
-                 arch: str = "", 
-                 workflow_config_path: str = None, 
+    def __init__(self,
+                 op_name: str,
+                 task_desc: str,
+                 dsl: str,
+                 framework: str,
+                 backend: str,
+                 arch: str = "",
+                 workflow_config_path: str = None,
                  config: dict = None):
         self.op_name = op_name
         self.task_desc = remove_copyright_from_text(task_desc)
@@ -166,7 +166,7 @@ class Coder(AgentBase):
             return ""
 
         return "\n".join(all_code)
-    
+
     async def _load_database_examples(self):
         """
         根据算子特征从Database检索并加载对应的DSL示例代码
@@ -177,7 +177,7 @@ class Coder(AgentBase):
         if not self.arch:
             logger.warning("arch为空，无法加载Database示例代码")
             return ""
-        
+
         docs = await self.db_system.samples(
             output_content=["op_name", "impl_code"],
             framework_code=self.task_desc,

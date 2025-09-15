@@ -80,7 +80,7 @@ async def test_samples(strategy_mode):
     backend = "ascend"
     framework = "numpy"
     dsl = "swft"
-    
+
     config = load_config(dsl)
     vector_store = VectorStore(DEFAULT_DATABASE_PATH)
     db_system = Database(config=config, vector_stores=[vector_store])
@@ -115,7 +115,7 @@ async def test_async_database():
     backend = "ascend"
     framework = "numpy"
     dsl = "swft"
-    
+
     config = load_config(dsl)
     db_system = Database(config=config)
 
@@ -172,7 +172,7 @@ async def test_random_database():
     backend = "ascend"
     framework = "numpy"
     dsl = "swft"
-    
+
     config = load_config(dsl)
     db_system = Database(config=config)
 
