@@ -1,10 +1,19 @@
 [English Version](./README.md)
 
+<div align="center">
+  <img src="./aikg_logo.jpg" alt="AIKG Logo" width="400">
+</div>
+
+<div align="center">
+
 # AI-driven Kernel Generator(AIKG)
 
-## 目录
+</div>
+
+<details>
+<summary><b>📋 目录</b></summary>
+
 - [AI-driven Kernel Generator(AIKG)](#ai-driven-kernel-generatoraikg)
-  - [目录](#目录)
   - [📘 1. 项目简介](#-1-项目简介)
   - [🗓️ 2. 更新日志](#️-2-更新日志)
   - [🛠️ 3. 安装部署流程](#️-3-安装部署流程)
@@ -23,6 +32,8 @@
     - [核心框架](#核心框架)
     - [核心组件](#核心组件)
     - [后端支持](#后端支持)
+
+</details>
 
 ## 📘 1. 项目简介
 AIKG 是一款 AI 驱动的算子生成器。
