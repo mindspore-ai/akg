@@ -29,5 +29,5 @@ verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
 
 # Database configuration
 database_config:
-  use_database: false
+  enable_rag: false
   sample_num: 2

@@ -107,6 +107,18 @@ sflow_qwen3_32b:
   frequency_penalty: 0.5
   presence_penalty: 0.5
 
+
+sflow_qwen3_235b:
+  api_base: "https://api.siliconflow.cn/v1/"
+  model: "Qwen/Qwen3-235B-A22B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  max_tokens: 8192
+  temperature: 0.6
+  top_p: 0.95
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+
 sflow_qwen3_235b:
   api_base: "https://api.siliconflow.cn/v1/"
   model: "Qwen/Qwen3-235B-A22B"
