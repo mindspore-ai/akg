@@ -1,10 +1,19 @@
 [中文版](./README_CN.md)
 
+<div align="center">
+  <img src="./aikg_logo.jpg" alt="AIKG Logo" width="400">
+</div>
+
+<div align="center">
+
 # AI-driven Kernel Generator (AIKG)
 
-## Table of Contents
+</div>
+
+<details>
+<summary><b>📋 Table of Contents</b></summary>
+
 - [AI-driven Kernel Generator (AIKG)](#ai-driven-kernel-generator-aikg)
-  - [Table of Contents](#table-of-contents)
   - [📘 1. Project Overview](#-1-project-overview)
   - [🗓️ 2. Changelog](#️-2-changelog)
   - [🛠️ 3. Installation \& Deployment Guide](#️-3-installation--deployment-guide)
@@ -23,6 +32,8 @@
     - [Core Framework](#core-framework)
     - [Core Components](#core-components)
     - [Backend Support](#backend-support)
+
+</details>
 
 ## 📘 1. Project Overview
 AIKG is an AI-driven kernel generator that leverages the code generation capabilities of Large Language Models (LLMs). 
