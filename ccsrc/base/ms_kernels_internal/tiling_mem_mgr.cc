@@ -18,12 +18,6 @@
 
 #include <algorithm>
 #include "acl/acl.h"
-#include "mindspore/ccsrc/runtime/hardware_abstract/device_context/device_context_manager.h"
-#include "mindspore/ops/kernel/ascend/internal/internal_ascend_adapter.h"
-#include "mindspore/ccsrc/plugin/ascend/res_manager/mem_manager/ascend_memory_pool.h"
-#include "mindspore/ccsrc/plugin/ascend/res_manager/symbol_interface/acl_rt_symbol.h"
-#include "mindspore/ccsrc/plugin/ascend/res_manager/symbol_interface/symbol_utils.h"
-#include "mindspore/core/include/utils/ms_context.h"
 
 #define TMP_LOG(level) MS_LOG(level) << GetName() << ": "
 

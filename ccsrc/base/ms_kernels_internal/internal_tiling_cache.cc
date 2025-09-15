@@ -16,7 +16,6 @@
 
 #include "internal_tiling_cache.h"
 #include <utility>
-#include "mindspore/core/include/ir/tensor_storage_info.h"
 
 namespace ms_custom_ops {
 constexpr size_t kSizeFive = 5;

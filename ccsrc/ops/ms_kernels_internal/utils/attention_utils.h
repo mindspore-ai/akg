@@ -20,7 +20,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel_tensor.h"
+#include "mindspore/include/custom_op_api.h"
 
 namespace ms_custom_ops {
 inline bool CheckAndUpdate(const std::vector<int32_t> &new_seq_len, std::vector<int32_t> *seq_len) {

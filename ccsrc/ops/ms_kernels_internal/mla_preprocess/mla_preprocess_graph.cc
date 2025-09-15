@@ -16,8 +16,6 @@
 
 #include "ccsrc/base/ms_kernels_internal/graphmode/internal_kernel_mod.h"
 #include "ccsrc/ops/ms_kernels_internal/mla_preprocess/mla_preprocess_common.h"
-#include "mindspore/ops/ops_utils/op_utils.h"
-#include "mindspore/core/include/ops/ops_func_impl/op_func_impl.h"
 
 namespace ms_custom_ops {
 class OPS_API CustomMlaPreprocessOpFuncImpl : public OpFuncImpl {

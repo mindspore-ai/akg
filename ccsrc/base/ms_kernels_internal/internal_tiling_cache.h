@@ -23,9 +23,8 @@
 #include <vector>
 
 #include "tiling_mem_mgr.h"
-#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel.h"
+#include "mindspore/include/custom_op_api.h"
 #include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
-#include "mindspore/core/include/ir/primitive.h"
 
 namespace ms_custom_ops {
 using namespace mindspore;

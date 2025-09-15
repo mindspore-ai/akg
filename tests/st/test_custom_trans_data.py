@@ -407,7 +407,7 @@ def test_trans_data_alignment_reference(dtype):
         print(f"Alignment test passed: shape={input_shape}, dtype={dtype}, nz_shape={nz_shape}")
 
 
-@pytest.mark.level0
+@pytest.mark.level1
 @pytest.mark.platform_ascend910b
 @pytest.mark.env_onecard
 def test_trans_data_edge_cases():

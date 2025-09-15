@@ -19,9 +19,6 @@
 #include <map>
 #include <set>
 #include <functional>
-#include "mindspore/core/include/utils/ms_utils.h"
-#include "mindspore/core/include/mindapi/ir/tensor.h"
-#include "mindspore/ops/kernel/ascend/acl_ir/acl_helper.h"
 
 namespace ms_custom_ops {
 bool AclnnCustomKernelMod::is_dynamic_ = false;

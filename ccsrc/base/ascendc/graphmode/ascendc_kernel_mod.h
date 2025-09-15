@@ -24,15 +24,9 @@
 #include <unordered_map>
 #include <list>
 #include <utility>
-
 #include "module.h"
-#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel.h"
-#include "mindspore/ccsrc/include/common/utils/utils.h"
-#include "mindspore/ops/kernel/ascend/acl_ir/op_api_exec.h"
-#include "mindspore/ccsrc/plugin/ascend/res_manager/mem_manager/ascend_memory_manager.h"
-#include "mindspore/ccsrc/plugin/ascend/res_manager/stream_manager/ascend_stream_manager.h"
-#include "mindspore/ccsrc/runtime/hardware_abstract/device_context/device_context_manager.h"
-#include "mindspore/core/include/utils/ms_utils.h"
+#include "mindspore/include/custom_op_api.h"
+
 
 namespace ms_custom_ops {
 using namespace mindspore;

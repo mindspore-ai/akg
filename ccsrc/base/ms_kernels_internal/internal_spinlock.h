@@ -18,6 +18,7 @@
 #define MS_CUSTOM_OPS_INTERNAL_SPINLOCK_H_
 
 #include <atomic>
+#include "mindspore/include/custom_op_api.h"
 
 namespace ms_custom_ops {
 class SimpleSpinLock {
