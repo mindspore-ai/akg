@@ -25,7 +25,6 @@
 #include "ccsrc/utils/utils.h"
 #include "mindspore/ccsrc/ms_extension/api.h"
 #include "ccsrc/base/ascendc/graphmode/ascendc_kernel_mod.h"
-#include "mindspore/ccsrc/include/common/utils/ms_device_shape_transfer.h"
 #include "mindspore/core/include/utils/core_op_utils.h"
 #include "mindspore/core/include/utils/convert_utils_base.h"
 #include "mindspore/core/include/utils/check_convert_utils.h"

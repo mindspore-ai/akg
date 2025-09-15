@@ -215,7 +215,7 @@ void InternalPyboostRunner::GetWorkspace(
 
   size_t offset = 0;
   for (size_t i = 0; i < workspace_size_list.size(); i++) {
-    auto work_ptr = workspace_ptr + offset;
+    auto work_ptr = static_cast<void *>(static_cast<int8_t *>(workspace_ptr) + offset);
     internal_wss_addr->at(i) = work_ptr;
     offset += workspace_size_list[i];
   }
