@@ -376,7 +376,6 @@ def profiling_analyse(arch):
     CANNFileParser(public_path).export_cann_profiling()
     cann_file_parser = OpSummaryParser(public_path, arch)
     task_duration = cann_file_parser.generate_op_summary_data()
-    #task_duration = float(datas.get(OpSummaryHeaders.TASK_DURATION, PROF_ERROR_CODE))
     return task_duration
 
 def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,

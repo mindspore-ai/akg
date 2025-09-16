@@ -190,14 +190,18 @@ bool AscendKernelRuntime::UnLoadKernelFunc() {
 
 bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel_name,
                               const bool is_dynamic, const std::vector<TensorDevicePtr> &input_tensors,
-                              const std::vector<std::vector<int64_t>> &input_shape_args) {
-  uint32_t blockdim = 20;  // default blockdim equal to 1.
+                              const std::vector<std::vector<int64_t>> &input_shape_args,
+                              int64_t tiling_key, int64_t tiling_struct_size) {
+  uint32_t blockdim = 40;  // default blockdim equal to 1.
   int64_t offset = 0;
   std::string func_name = kernel_name;
   std::vector<void *> runtimeargs;
   
   if (is_dynamic) {
-    for (size_t idx = 0; idx < input_tensors.size(); idx++) {
+    size_t input_size = input_tensors.size();
+    if (tiling_struct_size > 0)
+      input_size -= 1;
+    for (size_t idx = 0; idx < input_size; idx++) {
       auto tensor = input_tensors[idx];
       auto shape = input_shape_args[idx];
       runtimeargs.push_back(tensor->GetDeviceAddress());
@@ -214,6 +218,15 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
         runtimeargs.push_back(reinterpret_cast<void *>(stride));
         size = stride;
       }
+    }
+    if (tiling_struct_size > 0) {
+      auto tensor = input_tensors[input_size];
+      runtimeargs.push_back(reinterpret_cast<void*>(&tiling_key));
+      runtimeargs.push_back(tensor->GetDeviceAddress());
+      runtimeargs.push_back(tensor->GetDeviceAddress());
+      runtimeargs.push_back(reinterpret_cast<void*>(offset));
+      runtimeargs.push_back(reinterpret_cast<void*>(tiling_struct_size));
+      runtimeargs.push_back(reinterpret_cast<void*>(1));
     }
   } else {
     for (auto tensor : input_tensors)
@@ -301,7 +314,8 @@ void AscendKernelRuntime::RunOpAssignMemory(const std::vector<TensorDevicePtr> &
 
 void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &kernel_name,
                                     const bool is_dynamic, const std::vector<TensorDevicePtr> &input_tensors,
-                                    const std::vector<std::vector<int64_t>> &input_shape_args) {
+                                    const std::vector<std::vector<int64_t>> &input_shape_args,
+                                    int64_t tiling_key, int64_t tiling_struct_size) {
   // InitResource
   if (!Init()) {
     LOG(FATAL) << "Kernel runtime init error.";
@@ -313,7 +327,7 @@ void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &
     SyncHostToDevice(tensor->GetDataSize(), tensor->GetHostAddress(), tensor->GetDeviceAddress());
   }
   // run op
-  if (!Run(path, kernel_name, is_dynamic, input_tensors, input_shape_args)) {
+  if (!Run(path, kernel_name, is_dynamic, input_tensors, input_shape_args, tiling_key, tiling_struct_size)) {
     LOG(FATAL) << "Kernel runtime run error.";
   }
   // get output

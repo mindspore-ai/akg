@@ -50,7 +50,8 @@ class AscendKernelRuntime {
   void ReleaseDeviceRes();
   bool Run(const std::string &path, const std::string &kernel_name, const bool is_dynamic, 
            const std::vector<TensorDevicePtr> &input_tensors,
-           const std::vector<std::vector<int64_t>> &input_shape_args);
+           const std::vector<std::vector<int64_t>> &input_shape_args,
+           int64_t tiling_key, int64_t tiling_struct_size);
   bool SyncStream();
   bool MemcpyAsync(void *dst, const void *src, uint64_t size, int32_t kind);
   void RunOpAssignMemory(const std::vector<TensorDevicePtr> &tensors);
@@ -58,7 +59,8 @@ class AscendKernelRuntime {
   bool SyncHostToDevice(size_t size, const void *host_ptr, void *device_ptr);
   void RunOpImpl(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
                  const std::vector<TensorDevicePtr> &input_tensors, 
-                 const std::vector<std::vector<int64_t>> &input_shape_args);
+                 const std::vector<std::vector<int64_t>> &input_shape_args,
+                 int64_t tiling_key, int64_t tiling_struct_size);
 
   void set_device_id(uint32_t device_id) { device_id_ = device_id; }
   uint32_t device_id() { return device_id_; }

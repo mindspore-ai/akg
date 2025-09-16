@@ -122,6 +122,7 @@ include_directories(${BISHENGIR_BUILD_INCLUDE_DIR})
 # AKG-MLIR
 #-------------------------------------------------------------------------------
 
+include(${CMAKE_SOURCE_DIR}/cmake/external_libs/glog.cmake)
 include_directories(${AKG_MLIR_SRC_INCLUDE_DIR})
 include_directories(${AKG_MLIR_BIN_INCLUDE_DIR})
 

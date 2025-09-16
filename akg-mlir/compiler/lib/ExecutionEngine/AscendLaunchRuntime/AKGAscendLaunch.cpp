@@ -17,6 +17,9 @@
 #include <iostream>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AKGAscendRun.h"
 
+typedef int64_t (*tiling_function_t)(void*);
+typedef int64_t (*get_tiling_struct_size_function_t)();
+
 std::vector<std::vector<uint16_t>> bf16s_;
 
 void F32ToBF16(float *input, uint16_t *output, uint32_t size) {
@@ -69,7 +72,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   std::map<long unsigned int, py::buffer_info> bf16_buf_map;
 
   for (long unsigned int i = 0; i < args.size(); i++) {
-    auto tensor_obj_ptr = cast<AscendTensorObjStructPtr>(args[i]);
+    auto tensor_obj_ptr = args[i].cast<AscendTensorObjStructPtr>();
     py::buffer_info buffer_info = tensor_obj_ptr->buffer_info.request();
     auto is_bf16 = (bool)(tensor_obj_ptr->is_bf16);
     if (is_bf16) {
@@ -91,11 +94,73 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
       input_shapes.push_back(input_shape);
     }
   }
+
+  int64_t offset = 0;
+  int64_t tiling_key;
+  int64_t tiling_struct_size;
+  std::vector<void *> runtimeargs;
+  if (is_dynamic) {
+    std::string so_path = path + "/lib" + kernel_name + ".so";
+    void *handle = dlopen(so_path.data(), RTLD_LAZY);
+    if (!handle) {
+      std::cerr << "Failed to load library: " << dlerror() << std::endl;
+      return;
+    }
+
+    std::string tiling_struct_size_name = kernel_name + "_get_tiling_struct_size_function";
+    get_tiling_struct_size_function_t get_tiling_struct_size_function = (get_tiling_struct_size_function_t)dlsym(handle, tiling_struct_size_name.data());
+    tiling_struct_size = get_tiling_struct_size_function();
+    const char* dlsym_error = dlerror();
+    if (dlsym_error) {
+      std::cerr << "Failed to load symbol: " << dlsym_error << std::endl;
+      dlclose(handle);
+      return;
+    }
+
+    if (tiling_struct_size > 0) {
+      std::string tiling_function_name = kernel_name + "_tiling_function";
+      tiling_function_t tiling_function = (tiling_function_t)dlsym(handle, tiling_function_name.data());
+      dlsym_error = dlerror();
+      if (dlsym_error) {
+        std::cerr << "Failed to load symbol: " << dlsym_error << std::endl;
+        dlclose(handle);
+        return;
+      }
+      int64_t* arg_tiling_host = static_cast<int64_t*>(aligned_alloc(8, tiling_struct_size * sizeof(int64_t)));
+      for (size_t idx = 0; idx < input_tensors.size(); idx++) {
+        auto tensor = input_tensors[idx];
+        auto shape = input_shapes[idx];
+        runtimeargs.push_back(tensor->GetDeviceAddress());
+        runtimeargs.push_back(tensor->GetDeviceAddress());
+        runtimeargs.push_back(reinterpret_cast<void*>(offset));
+
+        int64_t size = 1;
+        for (auto dim : shape) {
+          runtimeargs.push_back(reinterpret_cast<void*>(dim));
+          size *= dim;
+        }
+        for (auto& dim : shape) {
+          int64_t stride = size / dim;
+          runtimeargs.push_back(reinterpret_cast<void*>(stride));
+          size = stride;
+        }
+      }
+      runtimeargs.push_back(reinterpret_cast<void*>(&tiling_key));
+      runtimeargs.push_back(reinterpret_cast<void*>(arg_tiling_host));
+      runtimeargs.push_back(reinterpret_cast<void*>(arg_tiling_host));
+      runtimeargs.push_back(reinterpret_cast<void*>(offset));
+      runtimeargs.push_back(reinterpret_cast<void*>(tiling_struct_size));
+      runtimeargs.push_back(reinterpret_cast<void*>(1));
+      tiling_function((void*)(runtimeargs.data()));
+      input_tensors.push_back(std::make_shared<mlir::runtime::TensorDevice>(arg_tiling_host, tiling_struct_size * sizeof(int64_t), false));
+    }
+  }
+
   auto kernel_runtime = mlir::runtime::AscendKernelRuntime(device_id);
-  kernel_runtime.RunOpImpl(path, kernel_name, is_dynamic, input_tensors, input_shapes);
+  kernel_runtime.RunOpImpl(path, kernel_name, is_dynamic, input_tensors, input_shapes, tiling_key, tiling_struct_size);
 
   for(auto iter = bf16_buf_map.begin(); iter != bf16_buf_map.end(); iter++) {
-    auto tensor_obj_ptr = cast<AscendTensorObjStructPtr>(args[iter->first]);
+    auto tensor_obj_ptr = args[iter->first].cast<AscendTensorObjStructPtr>();
     py::buffer_info res_buf = tensor_obj_ptr->buffer_info.request();
     ConvertToFP32(bf16_buf_map[iter->first], res_buf);
   }
