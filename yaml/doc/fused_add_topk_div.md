@@ -50,36 +50,57 @@ fused_add_topk_div算子实现了Sigmoid、Add、GroupTopk、Gather、ReduceSum�
 import mindspore as ms
 import numpy as np
 import ms_custom_ops
+import os
 
 ms.set_device("Ascend")
 
-@ms.jit
-def apply_rotary_pos_emb_ext_func(query, key, cos, sin, layout="BSND", rotary_mode="half"):
-   return ms_custom_ops.apply_rotary_pos_emb_ext(query, key, cos, sin, layout, rotary_mode)
+def jit(func):
+    @wraps(func)
+    def decorator(*args, **kwargs):
+        if ms.get_context("mode") == "PYNATIVE_MODE":
+            return func(*args, **kwargs)
+        return ms.jit(func, jit_level="O0", infer_boost="on")(*args, **kwargs)
 
-batch = 1
-seq_len = 1
-q_num_head = 1
-k_num_head = 1
-head_dim = 128
-query_dtype = np.float16
-query_data = np.random.uniform(
-        0, 1, [batch_size, seq_len, num_head, hidden_dim]
-    ).astype(query_dtype)
-key_data = np.random.uniform(
-        0, 1, [batch_size, seq_len, num_head, hidden_dim]
-    ).astype(query_dtype)
-cos_data = np.random.uniform(0, 1, [batch_size, seq_len, 1, hidden_dim]).astype(
-        query_dtype
-    )
-sin_data = cos_data = np.random.uniform(
-        0, 1, [batch_size, seq_len, 1, hidden_dim]
-    ).astype(query_dtype)
+    return decorator
 
-query = Tensor(query_data, dtype=get_ms_dtype(query_dtype))
-key = Tensor(key_data, dtype=get_ms_dtype(query_dtype))
-cos = Tensor(cos_data, dtype=get_ms_dtype(query_dtype))
-sin = Tensor(sin_data, dtype=get_ms_dtype(query_dtype))
 
-query_emb, key_emb = apply_rotary_pos_emb_ext_func(query, key, cos, sin)
+class AsdFusedAddTopKDivCustom(ms.nn.Cell):
+    def __init__(self):
+        super().__init__()
+
+    @jit
+    def construct(
+        self, x, add_num, group_num, group_topk, n, k, activate_type, is_norm, scale
+    ):
+        return ms_custom_ops.fused_add_topk_div(
+            x, add_num, group_num, group_topk, n, k, activate_type, is_norm, scale
+        )
+
+a, b, group_num, group_topk, n, k = [8, 4, 2, 2, 2, 2]
+activate_type = 0  # 算子只支持0
+is_norm = True  # True时 会乘scale
+scale = 2.5  # 暂时固定
+os.environ["USE_LLM_CUSTOM_MATMUL"] = "off"
+os.environ["INTERNAL_PRINT_TILING"] = "on"
+os.environ["MS_DISABLE_INTERNAL_KERNELS_LIST"] = ""
+os.environ["MS_ENABLE_INTERNAL_BOOST"] = "off"
+context.set_context(mode=mode, device_target="Ascend")
+context.set_context(jit_config={"jit_level": "O0", "infer_boost": "on"})
+x_np = np.random.randn(a, b)
+add_num_np = np.random.randn(b)
+x_t = Tensor(x_np).astype(ms.bfloat16)
+add_num_t = Tensor(add_num_np).astype(ms.bfloat16)
+
+net = AsdFusedAddTopKDivCustom() 
+weight, indices = net(
+                    x_t,
+                    add_num_t,
+                    group_num,
+                    group_topk,
+                    n,
+                    k,
+                    activate_type,
+                    is_norm,
+                    scale,
+                )
 ```

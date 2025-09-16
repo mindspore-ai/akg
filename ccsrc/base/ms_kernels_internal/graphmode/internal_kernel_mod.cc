@@ -279,12 +279,13 @@ int InternalKernelMod::Resize(const std::vector<KernelTensor *> &inputs, const s
 void InternalKernelMod::UpdateAddr(const std::vector<KernelTensor *> &inputs,
                                    const std::vector<KernelTensor *> &outputs,
                                    const std::vector<KernelTensor *> &workspace) {
+  size_t idx = 0;
   for (auto i : kernel_inputs_index_) {
-    internal_inputs_addr_[i] = inputs[i]->device_ptr();
+    internal_inputs_addr_[idx++] = inputs[i]->device_ptr();
   }
-
+  idx = 0;
   for (auto i : kernel_outputs_index_) {
-    internal_outputs_addr_[i] = outputs[i]->device_ptr();
+    internal_outputs_addr_[idx++] = outputs[i]->device_ptr();
   }
 
   for (size_t i = 0; i < workspace.size(); i++) {
