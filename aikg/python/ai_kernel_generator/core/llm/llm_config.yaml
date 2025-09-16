@@ -107,6 +107,7 @@ sflow_qwen3_32b:
   frequency_penalty: 0.5
   presence_penalty: 0.5
 
+
 sflow_qwen3_235b:
   api_base: "https://api.siliconflow.cn/v1/"
   model: "Qwen/Qwen3-235B-A22B"
@@ -310,3 +311,26 @@ moonshot_kimi_128k:
 
 # 默认配置名称
 default_preset: "sflow_ds_r1_default" 
+
+# 硅流平台 Qwen3 Embedding 模型
+sflow_qwen3_embedding_8b:
+  api_base: "https://api.siliconflow.cn/v1"
+  model: "Qwen/Qwen3-Embedding-8B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  dimensions: 1024  # 可选，指定输出维度
+  encoding_format: "float"  # 输出格式：float 或 base64
+
+sflow_qwen3_embedding_4b:
+  api_base: "https://api.siliconflow.cn/v1"
+  model: "Qwen/Qwen3-Embedding-4B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  dimensions: 768
+
+sflow_qwen3_embedding_0.6b:
+  api_base: "https://api.siliconflow.cn/v1"
+  model: "Qwen/Qwen3-Embedding-0.6B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  dimensions: 512
+
+# 默认embedding配置
+default_embedding_preset: "sflow_qwen3_embedding_8b"  

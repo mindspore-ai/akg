@@ -31,18 +31,10 @@
 请严格按照API文档的方式生成对应的代码
 {% endif %}
 
-{% if dsl_examples_suitable %}
+{% if dsl_examples %}
 ## 示例代码-基础
-{{ dsl_examples_suitable }}
+{{ dsl_examples }}
 请参考上述{{dsl}} 示例代码， 格式、import、调用函数方式等；确保生成可直接接入验证流程的{{ dsl }}代码
-{% endif %}
-
-{% if database_examples %}
-### 示例代码-数据库检索
-{{ database_examples }}
-请参考上述从数据库中检索到的相关代码片段
-
-重点关注示例代码中重要注释的内容，如注意等关键字
 {% endif %}
 
 ----
