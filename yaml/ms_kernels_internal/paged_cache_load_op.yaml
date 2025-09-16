@@ -9,10 +9,6 @@ paged_cache_load:
       dtype: tensor
     seq_lens:
       dtype: tensor
-    key:
-      dtype: tensor
-    value:
-      dtype: tensor
     seq_starts:
       dtype: tensor
       default: None
@@ -25,16 +21,10 @@ paged_cache_load:
     has_seq_starts:
       dtype: bool
       default: false
-  args_signature:
-    rw_write: key, value
-  labels:
-    side_effect_mem: True
   returns:
     key_out:
       dtype: tensor
-      inplace: key
     value_out:
       dtype: tensor
-      inplace: value
   class:
     name: PagedCacheLoad

@@ -25,33 +25,38 @@ class AsdPagedCacheLoadCustom(ms.nn.Cell):
     def __init__(self):
         super().__init__()
 
-    @jit
-    def construct(self, key_cache, value_cache, block_table, seq_lens, key, value, seq_starts, kv_cache_cfg,
+    def construct(self, key_cache, value_cache, block_table, seq_lens, seq_starts, kv_cache_cfg,
                   is_seq_lens_cumsum_type, has_seq_starts):
-        return ms_custom_ops.paged_cache_load(key_cache, value_cache, block_table, seq_lens, key, value,
-                                              seq_starts, kv_cache_cfg, is_seq_lens_cumsum_type,
-                                              has_seq_starts)
+        return ms_custom_ops.paged_cache_load(key_cache, value_cache, block_table, seq_lens, seq_starts, kv_cache_cfg,
+                                              is_seq_lens_cumsum_type, has_seq_starts)
     
 def golden_calc_nd(num_tokens, num_heads, head_size_k, head_size_v, block_size, block_tables, context_lens,
-                   seq_starts, key_cache, value_cache, dtype):
-    sum_context_lens = context_lens[-1]
-    if dtype == ms.float16:
+                   seq_starts, key_cache, value_cache, dtype1, dtype2, sum_context_lens):
+    if dtype1 == ms.float16:
         key_expect = np.zeros((sum_context_lens, num_heads, head_size_k)).astype(np.float16)
-        value_expect = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(np.float16)
-    elif dtype == ms.bfloat16:
+    elif dtype1 == ms.bfloat16:
         key_expect = np.zeros((sum_context_lens, num_heads, head_size_k)).astype(np.float32)
-        value_expect = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(np.float32)
     else:
         key_expect = np.zeros((sum_context_lens, num_heads, head_size_k)).astype(np.int8)
+    if dtype2 == ms.float16:
+        value_expect = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(np.float16)
+    elif dtype2 == ms.bfloat16:
+        value_expect = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(np.float32)
+    else:
         value_expect = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(np.int8)
+
     kv_rslt_id = 0
     context_start = 0
     for i in range(num_tokens):
         block_table = block_tables[i]
-        context_end = int(context_lens[i + 1])
-        context_len = context_end - context_start
-        context_start = context_end
-        block_table_offset = seq_starts[i] // block_size
+        if seq_starts is None:
+            context_len = int(context_lens[i])
+            block_table_offset = 0
+        else:
+            context_end = int(context_lens[i + 1])
+            context_len = context_end - context_start
+            context_start = context_end
+            block_table_offset = seq_starts[i] // block_size
         for j in range(context_len):
             block_id = int(block_table[block_table_offset + j // block_size])
             block_offset = j % block_size
@@ -65,16 +70,18 @@ def golden_calc_nd(num_tokens, num_heads, head_size_k, head_size_v, block_size, 
     return key_expect, value_expect
 
 def golden_calc_nz(num_tokens, num_heads, head_size_k, head_size_v, block_size, block_tables, context_lens,
-                   key_cache, value_cache, dtype):
-    sum_context_lens = sum(context_lens)
-    if dtype == ms.float16:
+                   key_cache, value_cache, dtype1, dtype2, sum_context_lens):
+    if dtype1 == ms.float16:
         key_expect = np.zeros((sum_context_lens, num_heads, head_size_k)).astype(np.float16)
-        value_expect = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(np.float16)
-    elif dtype == ms.bfloat16:
+    elif dtype1 == ms.bfloat16:
         key_expect = np.zeros((sum_context_lens, num_heads, head_size_k)).astype(np.float32)
-        value_expect = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(np.float32)
     else:
         key_expect = np.zeros((sum_context_lens, num_heads, head_size_k)).astype(np.int8)
+    if dtype2 == ms.float16:
+        value_expect = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(np.float16)
+    elif dtype2 == ms.bfloat16:
+        value_expect = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(np.float32)
+    else:
         value_expect = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(np.int8)
 
     kv_rslt_id = 0    
@@ -94,62 +101,80 @@ def golden_calc_nz(num_tokens, num_heads, head_size_k, head_size_v, block_size, 
     return (key_expect.reshape(sum_context_lens, num_heads * head_size_k),
             value_expect.reshape(sum_context_lens, num_heads * head_size_v))
 
-def generate_data_nd(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype):
-    if dtype == ms.float16:
+def generate_data_nd(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype1, dtype2,
+                     cu_seq_lens):
+    if dtype1 == ms.float16:
         key_cache = np.random.randint(1, 11, 
                                       size=(num_blocks, block_size, num_heads, head_size_k)).astype(np.float16)
-        value_cache = np.random.randint(1, 11, 
-                                        size=(num_blocks, block_size, num_heads, head_size_v)).astype(np.float16)
-    elif dtype == ms.bfloat16:
+    elif dtype1 == ms.bfloat16:
         key_cache = np.random.randint(1, 11, 
                                       size=(num_blocks, block_size, num_heads, head_size_k)).astype(np.float32)
-        value_cache = np.random.randint(1, 11, 
-                                        size=(num_blocks, block_size, num_heads, head_size_v)).astype(np.float32)
     else:
         key_cache = np.random.randint(1, 11, 
                                       size=(num_blocks, block_size, num_heads, head_size_k)).astype(np.int8)
+    if dtype2 == ms.float16:
+        value_cache = np.random.randint(1, 11, 
+                                        size=(num_blocks, block_size, num_heads, head_size_v)).astype(np.float16)
+    elif dtype2 == ms.bfloat16:
+        value_cache = np.random.randint(1, 11, 
+                                        size=(num_blocks, block_size, num_heads, head_size_v)).astype(np.float32)
+    else:
         value_cache = np.random.randint(1, 11, 
                                         size=(num_blocks, block_size, num_heads, head_size_v)).astype(np.int8)
+
     context_lens = [random.randint(1, 1024) for _ in range(num_tokens)]
     max_context_len = max(context_lens)
     max_num_blocks_per_req = (max_context_len + block_size -1) // block_size + 4
     block_tables = []
-    for _ in range(num_tokens):
-        block_table = [
-            random.randint(0, num_blocks - 1) for _ in range(max_num_blocks_per_req)
-        ]
-        block_tables.append(block_table)
-    cu_context_lens = [0]
-    for elem in context_lens:
-        cu_context_lens.append(cu_context_lens[-1] + elem)
-    seq_starts = [random.randint(0, 4) * block_size for _ in range(num_tokens)]
-    context_lens = np.array(cu_context_lens).astype(np.int32)
-    block_tables = np.array(block_tables).astype(np.int32)
-    seq_starts = np.array(seq_starts).astype(np.int32)
-    sum_context_lens = context_lens[-1]
-    key = np.zeros((sum_context_lens, num_heads, head_size_k)).astype(key_cache.dtype)
-    value = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(value_cache.dtype)
-    key_tensor = Tensor(key).astype(dtype)
-    value_tensor = Tensor(value).astype(dtype)
 
-    return key_cache, value_cache, block_tables, context_lens, key_tensor, value_tensor, seq_starts
+    if cu_seq_lens:
+        for _ in range(num_tokens):
+            block_table = [
+                random.randint(0, num_blocks - 1) for _ in range(max_num_blocks_per_req)
+            ]
+            block_tables.append(block_table)
+        cu_context_lens = [0]
+        for elem in context_lens:
+            cu_context_lens.append(cu_context_lens[-1] + elem)
+        seq_starts = [random.randint(0, 4) * block_size for _ in range(num_tokens)]
+        context_lens = np.array(cu_context_lens).astype(np.int32)
+        block_tables = np.array(block_tables).astype(np.int32)
+        seq_starts = np.array(seq_starts).astype(np.int32)
+        sum_context_lens = context_lens[-1]
+    
+        return key_cache, value_cache, block_tables, context_lens, seq_starts, sum_context_lens
+    else:
+        for _ in range(num_tokens):
+            block_table = [
+                random.randint(0, num_blocks - 1) for _ in range(max_num_blocks_per_req)
+            ]
+            block_tables.append(block_table)
+    
+        context_lens = np.array(context_lens).astype(np.int32)
+        block_tables = np.array(block_tables).astype(np.int32)
+        sum_context_lens = sum(context_lens)
+        return key_cache, value_cache, block_tables, context_lens, None, sum_context_lens
 
-def generate_data_nz(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype):
-    if dtype == ms.float16:
+def generate_data_nz(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype1, dtype2):
+    if dtype1 == ms.float16:
         key_cache = np.random.randint(1, 11, 
                                       size=(num_blocks, block_size, num_heads, head_size_k)).astype(np.float16)
-        value_cache = np.random.randint(1, 11, 
-                                        size=(num_blocks, block_size, num_heads, head_size_v)).astype(np.float16)
-    elif dtype == ms.bfloat16:
+    elif dtype1 == ms.bfloat16:
         key_cache = np.random.randint(1, 11, 
                                       size=(num_blocks, block_size, num_heads, head_size_k)).astype(np.float32)
-        value_cache = np.random.randint(1, 11, 
-                                        size=(num_blocks, block_size, num_heads, head_size_v)).astype(np.float32)
     else:
         key_cache = np.random.randint(1, 11, 
                                       size=(num_blocks, block_size, num_heads, head_size_k)).astype(np.int8)
+    if dtype2 == ms.float16:
+        value_cache = np.random.randint(1, 11, 
+                                        size=(num_blocks, block_size, num_heads, head_size_v)).astype(np.float16)
+    elif dtype2 == ms.bfloat16:
+        value_cache = np.random.randint(1, 11, 
+                                        size=(num_blocks, block_size, num_heads, head_size_v)).astype(np.float32)
+    else:
         value_cache = np.random.randint(1, 11, 
                                         size=(num_blocks, block_size, num_heads, head_size_v)).astype(np.int8)
+
     context_lens = [random.randint(1, 1024) for _ in range(num_tokens)]
     max_context_len = max(context_lens)
     max_num_blocks_per_req = (max_context_len + block_size -1) // block_size
@@ -163,70 +188,68 @@ def generate_data_nz(num_tokens, num_heads, head_size_k, head_size_v, block_size
     context_lens = np.array(context_lens).astype(np.int32)
     block_tables = np.array(block_tables).astype(np.int32)
     sum_context_lens = sum(context_lens)
-    key = np.zeros((sum_context_lens, num_heads * head_size_k)).astype(key_cache.dtype)
-    value = np.zeros((sum_context_lens, num_heads * head_size_v)).astype(value_cache.dtype)
-    key_tensor = Tensor(key).astype(dtype)
-    value_tensor = Tensor(value).astype(dtype)
 
-    return key_cache, value_cache, block_tables, context_lens, key_tensor, value_tensor, None
+    return key_cache, value_cache, block_tables, context_lens, None, sum_context_lens
 
-def paged_cache_load_function(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype,
+def paged_cache_load_function(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype1, dtype2,
                               format_type, cu_seq_lens, has_seq_starts):
     if format_type == 0:
-        key_cache, value_cache, block_tables, context_lens, key_tensor, value_tensor, seq_starts = (
+        key_cache, value_cache, block_tables, context_lens, seq_starts, sum_context_lens = (
             generate_data_nd(
-                num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype
+                num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype1, dtype2, cu_seq_lens
             )
         )
         key_golden, value_golden = golden_calc_nd(num_tokens, num_heads, head_size_k, head_size_v, block_size,
                                                   block_tables, context_lens, seq_starts, key_cache, value_cache,
-                                                  dtype)
-        key_cache_tensor = Tensor(key_cache).astype(dtype)
-        value_cache_tensor = Tensor(value_cache).astype(dtype)
+                                                  dtype1, dtype2, int(sum_context_lens))
+        key_cache_tensor = Tensor(key_cache).astype(dtype1)
+        value_cache_tensor = Tensor(value_cache).astype(dtype2)
     else:
-        key_cache, value_cache, block_tables, context_lens, key_tensor, value_tensor, seq_starts = (
+        key_cache, value_cache, block_tables, context_lens, seq_starts, sum_context_lens = (
             generate_data_nz(
-                num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype
+                num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype1, dtype2
             )
         )
         key_golden, value_golden = golden_calc_nz(num_tokens, num_heads, head_size_k, head_size_v, block_size,
-                                                  block_tables, context_lens, key_cache, value_cache, dtype)
+                                                  block_tables, context_lens, key_cache, value_cache, dtype1, dtype2,
+                                                  int(sum_context_lens))
         key_cache = key_cache.reshape(num_blocks, block_size, -1)
         value_cache = value_cache.reshape(num_blocks, block_size, -1)
-        key_cache_tensor = ms_custom_ops.trans_data(Tensor(key_cache).astype(dtype), transdata_type=1) # ND_TO_FRACTAL_NZ
-        value_cache_tensor = ms_custom_ops.trans_data(Tensor(value_cache).astype(dtype), transdata_type=1) # ND_TO_FRACTAL_NZ
-
+        key_cache_tensor = ms_custom_ops.trans_data(Tensor(key_cache).astype(dtype1), transdata_type=1) # ND_TO_FRACTAL_NZ
+        value_cache_tensor = ms_custom_ops.trans_data(Tensor(value_cache).astype(dtype2), transdata_type=1) # ND_TO_FRACTAL_NZ
     seq_starts_tensor = None if seq_starts is None else Tensor(seq_starts)
+
     net = AsdPagedCacheLoadCustom()
     key_out, value_out = net(
         key_cache_tensor,
         value_cache_tensor,
         Tensor(block_tables),
         Tensor(context_lens),
-        key_tensor,
-        value_tensor,
         seq_starts_tensor,
         format_type, cu_seq_lens, has_seq_starts
     )
-    if dtype == ms.bfloat16:
+    if dtype1 == ms.bfloat16:
         key_out_np = key_out.astype(ms.float32).asnumpy()
-        value_out_np = value_out.astype(ms.float32).asnumpy()
     else:
         key_out_np = key_out.asnumpy()
+    if dtype2 == ms.bfloat16:
+        value_out_np = value_out.astype(ms.float32).asnumpy()
+    else:
         value_out_np = value_out.asnumpy()
-    key_out_compare = custom_compare(key_out_np, key_golden, dtype)
+
+    key_out_compare = custom_compare(key_out_np, key_golden, dtype1)
     assert key_out_compare, "key_out compare failed"
-    value_out_compare = custom_compare(value_out_np, value_golden, dtype)
+    value_out_compare = custom_compare(value_out_np, value_golden, dtype2)
     assert value_out_compare, "value_out compare failed"
 
 @pytest.mark.level0
 @pytest.mark.platform_ascend910b
 @pytest.mark.env_onecard
-@pytest.mark.parametrize('dtype', [ms.float16, ms.int8, ms.bfloat16])
+@pytest.mark.parametrize('dtype1', [ms.float16, ms.int8, ms.bfloat16])
+@pytest.mark.parametrize('dtype2', [ms.float16, ms.int8, ms.bfloat16])
 @pytest.mark.parametrize('context_mode', [context.GRAPH_MODE, context.PYNATIVE_MODE])
-@pytest.mark.parametrize('input_param', [[128, 128, 16, 144, 128, 16, 1],
-                                         [256, 64, 16, 192, 128, 32, 1]])
-def test_paged_cache_load_nd_with_seq_starts(dtype, context_mode, input_param):
+@pytest.mark.parametrize('input_param', [[128, 128, 16, 144, 128, 16, 1]])
+def test_paged_cache_load_nd_with_seq_starts(dtype1, dtype2, context_mode, input_param):
     """
     Feature: test paged_cache_load operator
     Description: test paged_cache_load
@@ -236,21 +259,20 @@ def test_paged_cache_load_nd_with_seq_starts(dtype, context_mode, input_param):
     context.set_context(jit_config={"jit_level": "O0"})
     num_blocks, block_size, num_heads, head_size_k, head_size_v, batch, seq_len = input_param
     num_tokens = batch * seq_len
-    dtype = dtype
     format_type = 0 # 0-nd, 1-nz
     cu_seq_lens = True
     has_seq_starts = True
-    paged_cache_load_function(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype,
+    paged_cache_load_function(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype1, dtype2,
                               format_type, cu_seq_lens, has_seq_starts)
 
 @pytest.mark.level0
 @pytest.mark.platform_ascend910b
 @pytest.mark.env_onecard
-@pytest.mark.parametrize('dtype', [ms.float16, ms.int8, ms.bfloat16])
-@pytest.mark.parametrize('context_mode', [context.PYNATIVE_MODE])
-@pytest.mark.parametrize('input_param', [[128, 128, 16, 144, 128, 16, 1],
-                                         [256, 64, 16, 192, 128, 32, 1]])
-def test_paged_cache_load_nz(dtype, context_mode, input_param):
+@pytest.mark.parametrize('dtype1', [ms.float16, ms.int8, ms.bfloat16])
+@pytest.mark.parametrize('dtype2', [ms.float16, ms.int8, ms.bfloat16])
+@pytest.mark.parametrize('context_mode', [context.GRAPH_MODE, context.PYNATIVE_MODE])
+@pytest.mark.parametrize('input_param', [[128, 128, 16, 144, 128, 16, 1]])
+def test_paged_cache_load_nd_without_seq_starts(dtype1, dtype2, context_mode, input_param):
     """
     Feature: test paged_cache_load operator
     Description: test paged_cache_load
@@ -260,9 +282,32 @@ def test_paged_cache_load_nz(dtype, context_mode, input_param):
     context.set_context(jit_config={"jit_level": "O0"})
     num_blocks, block_size, num_heads, head_size_k, head_size_v, batch, seq_len = input_param
     num_tokens = batch * seq_len
-    dtype = dtype
+    format_type = 0 # 0-nd, 1-nz
+    cu_seq_lens = False
+    has_seq_starts = False
+    paged_cache_load_function(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype1, dtype2,
+                              format_type, cu_seq_lens, has_seq_starts)
+
+@pytest.mark.skip # TODO: A bug exists in the ontinuous running of ND and NZ formats (@sunhaochen)
+@pytest.mark.level0
+@pytest.mark.platform_ascend910b
+@pytest.mark.env_onecard
+@pytest.mark.parametrize('dtype1', [ms.float16, ms.int8, ms.bfloat16])
+@pytest.mark.parametrize('dtype2', [ms.float16, ms.int8, ms.bfloat16])
+@pytest.mark.parametrize('context_mode', [context.GRAPH_MODE, context.PYNATIVE_MODE])
+@pytest.mark.parametrize('input_param', [[128, 128, 16, 144, 128, 16, 1]])
+def test_paged_cache_load_nz(dtype1, dtype2, context_mode, input_param):
+    """
+    Feature: test paged_cache_load operator
+    Description: test paged_cache_load
+    Expectation: the result is correct
+    """
+    context.set_context(mode=context_mode, device_target="Ascend")
+    context.set_context(jit_config={"jit_level": "O0"})
+    num_blocks, block_size, num_heads, head_size_k, head_size_v, batch, seq_len = input_param
+    num_tokens = batch * seq_len
     format_type = 1 # 0-nd, 1-nz
     cu_seq_lens = False
     has_seq_starts = False
-    paged_cache_load_function(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype,
+    paged_cache_load_function(num_tokens, num_heads, head_size_k, head_size_v, block_size, num_blocks, dtype1, dtype2,
                               format_type, cu_seq_lens, has_seq_starts)

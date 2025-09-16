@@ -16,15 +16,67 @@
 
 #include "ccsrc/base/ms_kernels_internal/graphmode/internal_kernel_mod.h"
 #include "ccsrc/ops/ms_kernels_internal/paged_cache_load/paged_cache_load_common.h"
+#include "mindspore/ops/ops_utils/op_utils.h"
+#include "mindspore/core/include/ops/ops_func_impl/op_func_impl.h"
+#include <vector>
 
 namespace ms_custom_ops {
 class OPS_API CustomPagedCacheLoadOpFuncImpl : public OpFuncImpl {
 public:
   ShapeArray InferShape(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) const override {
-    return {input_infos[kPCLInputKeyIndex]->GetShape(), input_infos[kPCLInputValueIndex]->GetShape()};
+    int64_t format_type = input_infos[kPCLInputParamKvCacheCfgIndex]->GetScalarValueWithCheck<int64_t>();
+    bool seq_lens_consum_type = input_infos[kPCLInputParamIsSeqLensCumsumTypeIndex]->GetScalarValueWithCheck<bool>();
+    int64_t sum_context_lens = abstract::Shape::kShapeDimAny;
+
+    if (seq_lens_consum_type) {
+      if (input_infos[kPCLInputSeqLensIndex]->GetType() == mindspore::TypeId::kNumberTypeInt64) {
+        auto context_lens_tensor = input_infos[kPCLInputSeqLensIndex]->GetArrayValue<int64_t>();
+        if (context_lens_tensor.has_value()) {
+          auto context_lens_vector = context_lens_tensor.value().ToVector();
+          sum_context_lens = context_lens_vector.back();
+        }
+      } else {
+        auto context_lens_tensor = input_infos[kPCLInputSeqLensIndex]->GetArrayValue<int32_t>();
+        if (context_lens_tensor.has_value()) {
+          auto context_lens_vector = context_lens_tensor.value().ToVector();
+          sum_context_lens = context_lens_vector.back();
+        }
+      }
+    } else {
+      if (input_infos[kPCLInputSeqLensIndex]->GetType() == mindspore::TypeId::kNumberTypeInt64) {
+        auto context_lens_tensor = input_infos[kPCLInputSeqLensIndex]->GetArrayValue<int64_t>();
+        if (context_lens_tensor.has_value()) {
+          auto context_lens_vector = context_lens_tensor.value().ToVector();
+          sum_context_lens = std::accumulate(context_lens_vector.begin(), context_lens_vector.end(), 0);
+        }
+      } else {
+        auto context_lens_tensor = input_infos[kPCLInputSeqLensIndex]->GetArrayValue<int32_t>();
+        if (context_lens_tensor.has_value()) {
+          auto context_lens_vector = context_lens_tensor.value().ToVector();
+          sum_context_lens = std::accumulate(context_lens_vector.begin(), context_lens_vector.end(), 0);
+        }
+      }
+    }
+
+    ShapeVector key_out_shape{};
+    ShapeVector value_out_shape{};
+    if (format_type == kNdFormatType) {  // ND
+      int64_t num_heads = input_infos[kPCLInputKeyCacheIndex]->GetShape()[kNumHeadsIndex];
+      int64_t head_size_k = input_infos[kPCLInputKeyCacheIndex]->GetShape()[kHeadSizeIndex];
+      int64_t head_size_v = input_infos[kPCLInputValueCacheIndex]->GetShape()[kHeadSizeIndex];
+      key_out_shape = {sum_context_lens, num_heads, head_size_k};
+      value_out_shape = {sum_context_lens, num_heads, head_size_v};
+    } else {  // NZ
+      int64_t num_heads_mul_head_size_k = input_infos[kPCLInputKeyCacheIndex]->GetShape()[kNumHeadsMulHeadSizeIndex];
+      int64_t num_heads_mul_head_size_v = input_infos[kPCLInputValueCacheIndex]->GetShape()[kNumHeadsMulHeadSizeIndex];
+      key_out_shape = {sum_context_lens, num_heads_mul_head_size_k};
+      value_out_shape = {sum_context_lens, num_heads_mul_head_size_v};
+    }
+    return {key_out_shape, value_out_shape};
   }
+
   std::vector<TypeId> InferType(const PrimitivePtr &primitive, const InferInfoPtrList &input_infos) const override {
-    return {{input_infos[kPCLInputKeyIndex]->GetType(), input_infos[kPCLInputValueIndex]->GetType()}};
+    return {{input_infos[kPCLInputKeyCacheIndex]->GetType(), input_infos[kPCLInputValueCacheIndex]->GetType()}};
   }
 
   bool GeneralInferRegistered() const override { return true; }
@@ -37,7 +89,7 @@ public:
 
   void InitKernelInputsOutputsIndex() override {
     kernel_inputs_index_ = {kPCLInputKeyCacheIndex, kPCLInputValueCacheIndex, kPCLInputBlockTableIndex,
-                            kPCLInputSeqLensIndex, kPCLInputKeyIndex, kPCLInputValueIndex, kPCLInputSeqStartsIndex};
+                            kPCLInputSeqLensIndex, kPCLInputSeqStartsIndex};
     kernel_outputs_index_ = {kPCLOutputKeyOutIndex, kPCLOutputValueOutIndex};
   }
 
@@ -90,6 +142,17 @@ protected:
     param.kv_cache_cfg_type = kv_cache_cfg_type->GetValue<int64_t>().value();
     param.is_seq_lens_cumsum_type = is_seq_lens_cumsum_type->GetValue<bool>().value();
     param.has_seq_starts = has_seq_starts->GetValue<bool>().value();
+    
+    auto context_lens_tensor = ms_inputs.at(kPCLInputSeqLensIndex);
+    auto context_lens_value = context_lens_tensor->GetValueWithCheck<std::vector<int32_t>>();
+    auto sum_context_lens = 0;
+    if (is_seq_lens_cumsum_type) {
+      sum_context_lens = context_lens_value.back();
+    } else {
+      sum_context_lens = std::accumulate(context_lens_value.begin(), context_lens_value.end(), 0);
+    }
+    param.sum_context_lens = sum_context_lens;
+    MS_LOG(INFO) << "param.sum_context_lens is " << param.sum_context_lens;
     return CreatePagedCacheLoadOpWithFormat(inputs, outputs, param);
   }
 

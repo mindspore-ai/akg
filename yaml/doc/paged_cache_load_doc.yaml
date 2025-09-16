@@ -17,16 +17,14 @@ paged_cache_load:
             seq_lens (Tensor): recording context length of each batch in two form:
              - length of each batch.  e.g. [1, 10, 5, 20]  shape is [batch]
              - accumulated sum of the length of each batch.  e.g. [0, 1, 11, 16, 36] shape is [batch+1]
-            key (Tensor): inplaced update. It is the key after concat. [num_tokens, num_heads, head_size_k]
-            value (Tensor): inplaced update. It is the value after concat. [num_tokens, num_heads, head_size_v]
             seq_starts (Tensor): Optional input, recording where sequence starts. [batch]
             kv_cache_cfg (int): default 0, 0->nd, 1->nz
             is_seq_lens_cumsum_type (bool): default false, when using seq_starts in ND, set it to True. Otherwise, false. 
             has_seq_starts (bool): default false, when using seq_starts in ND, set it to True. Otherwise, false.
 
         Returns:
-            key_out (Tensor): same address with input "key".
-            value_out (Tensor): same address with input "value"
+            key_out (Tensor): the key after concat [num_tokens, num_heads, head_size_k]
+            value_out (Tensor): the value after concat [num_tokens, num_heads, head_size_v]
 
         Supported Platforms:
             ``Ascend910B``
@@ -40,14 +38,13 @@ paged_cache_load:
             import ms_custom_ops
 
             class AsdPagedCacheLoadCustom(ms.nn.Cell):
-                def __init__(self):
-                    super().__init__()
-                
-                def construct(self, key_cache, value_cache, block_table, seq_lens, key, value, seq_starts, kv_cache_cfg,
-                              is_seq_lens_cumsum_type, has_seq_starts):
-                    return ms_custom_ops.paged_cache_load(key_cache, value_cache, block_table, seq_lens, key, value,
-                                                          seq_starts, kv_cache_cfg, is_seq_lens_cumsum_type,
-                                                          has_seq_starts)
+            def __init__(self):
+                super().__init__()
+        
+            def construct(self, key_cache, value_cache, block_table, seq_lens, seq_starts, kv_cache_cfg,
+                          is_seq_lens_cumsum_type, has_seq_starts):
+                return ms_custom_ops.paged_cache_load(key_cache, value_cache, block_table, seq_lens, seq_starts, kv_cache_cfg,
+                                              is_seq_lens_cumsum_type, has_seq_starts)
 
             ------------------------------------ ND INPUT WITH SEQ_STARTS -------------------------------------------------------------                                              
             # dtype is in [ms.float16, ms.bfloat16, ms.int8]
@@ -83,10 +80,6 @@ paged_cache_load:
             block_tables = np.array(block_tables).astype(np.int32)
             seq_starts = np.array(seq_starts).astype(np.int32)
             sum_context_lens = context_lens[-1]
-            key = np.zeros((sum_context_lens, num_heads, head_size_k)).astype(key_cache.dtype)
-            value = np.zeros((sum_context_lens, num_heads, head_size_v)).astype(value_cache.dtype)
-            key_tensor = Tensor(key).astype(dtype)
-            value_tensor = Tensor(value).astype(dtype)
 
             seq_starts_tensor = None if seq_starts is None else Tensor(seq_starts)
             net = AsdPagedCacheLoadCustom()
@@ -95,8 +88,6 @@ paged_cache_load:
                 Tensor(value_cache).astype(dtype),
                 Tensor(block_tables),
                 Tensor(context_lens),
-                key_tensor,
-                value_tensor,
                 seq_starts_tensor,
                 format_type, cu_seq_lens, has_seq_starts
             )
@@ -135,10 +126,6 @@ paged_cache_load:
             context_lens = np.array(context_lens).astype(np.int32)
             block_tables = np.array(block_tables).astype(np.int32)
             sum_context_lens = sum(context_lens)
-            key = np.zeros((sum_context_lens, num_heads * head_size_k)).astype(key_cache.dtype)
-            value = np.zeros((sum_context_lens, num_heads * head_size_v)).astype(value_cache.dtype)
-            key_tensor = Tensor(key).astype(dtype)
-            value_tensor = Tensor(value).astype(dtype)
             seq_starts_tensor = None if seq_starts is None else Tensor(seq_starts)
             net = AsdPagedCacheLoadCustom()
             key_out, value_out = net(
@@ -146,8 +133,6 @@ paged_cache_load:
                 Tensor(value_cache).astype(dtype),
                 Tensor(block_tables),
                 Tensor(context_lens),
-                key_tensor,
-                value_tensor,
                 seq_starts_tensor,
                 format_type, cu_seq_lens, has_seq_starts
             )

@@ -25,8 +25,6 @@ enum PagedCacheLoadInputIndex : size_t {
   kPCLInputValueCacheIndex,
   kPCLInputBlockTableIndex,
   kPCLInputSeqLensIndex,
-  kPCLInputKeyIndex,
-  kPCLInputValueIndex,
   kPCLInputSeqStartsIndex,
   kPCLInputParamKvCacheCfgIndex,
   kPCLInputParamIsSeqLensCumsumTypeIndex,
@@ -39,6 +37,12 @@ enum PagedCacheLoadOutputIndex : size_t {
   kPCLOutputValueOutIndex,
   kPCLOutputsNum
 };
+
+inline constexpr int64_t kNumHeadsIndex = 2;
+inline constexpr int64_t kHeadSizeIndex = 3;
+inline constexpr int64_t kNdFormatType = 0;
+inline constexpr int64_t kNzFormatType = 1;
+inline constexpr int64_t kNumHeadsMulHeadSizeIndex = 2;
 
 inline internal::InternalOpPtr CreatePagedCacheLoadOpWithFormat(const internal::InputsImmutableInfoList &inputs,
                                                                 const internal::OutputsImmutableInfoList &outputs,
