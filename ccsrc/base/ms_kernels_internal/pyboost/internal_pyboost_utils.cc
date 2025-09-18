@@ -102,6 +102,10 @@ void GatherTilingHash(const std::vector<tensor::TensorPtr> &tensors) {
   }
 }
 
+void GatherTilingHash(const ms::Tensor &tensor) {
+  GatherTilingHash(tensor.tensor());
+}
+
 void GatherHash(const std::vector<int64_t> &int_arrays) {
   MemcpyToBuf(&int_arrays, sizeof(void *));
 }
