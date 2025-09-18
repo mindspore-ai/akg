@@ -227,8 +227,8 @@ def run_mla(test_param: MlaTestParam):
     k_rope_tensor = test_param.k_rope_tensor
     input_format = 0
     if test_param.is_quant_flag:
-        ctkv_tensor = ms.jit(ms_custom_ops.trans_data)(ctkv_tensor, 1)
-        k_rope_tensor = ms.jit(ms_custom_ops.trans_data)(k_rope_tensor, 1)
+        ctkv_tensor = ms_custom_ops.trans_data(ctkv_tensor, 1)
+        k_rope_tensor = ms_custom_ops.trans_data(k_rope_tensor, 1)
         input_format = 1
 
     out, _ = net(test_param.q_nope_tensor, test_param.q_rope_tensor, ctkv_tensor, k_rope_tensor,

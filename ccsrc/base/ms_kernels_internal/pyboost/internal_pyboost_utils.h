@@ -24,6 +24,7 @@
 #include "internal_helper.h"
 #include "internal_tiling_cache.h"
 #include "mindspore/ops/kernel/ascend/acl_ir/op_api_cache.h"
+#include "mindspore/ccsrc/ms_extension/api.h"
 
 namespace ms_custom_ops {
 void GatherOpHash(const mindspore::tensor::TensorPtr &);
@@ -70,6 +71,7 @@ uint64_t CalcInternalOpApiHash(const std::string &arg, const Args &... args) {
   return calc_hash_id();
 }
 
+void GatherTilingHash(const ms::Tensor &);
 void GatherTilingHash(const mindspore::tensor::TensorPtr &);
 void GatherTilingHash(const std::optional<mindspore::tensor::TensorPtr> &);
 void GatherTilingHash(const std::vector<mindspore::tensor::TensorPtr> &);

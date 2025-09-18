@@ -736,8 +736,8 @@ def test_reshape_and_cache_nz_different_dimensions(k_dtype, v_dtype, kv_dim, run
         ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map = create_ms_inputs(
             np_k, np_v, np_k_cache, np_v_cache, np_slot_map)
         # Convert ND to FRACTAL_NZ format using trans_data
-        ms_k_cache = ms.jit(ms_custom_ops.trans_data)(ms_k_cache, transdata_type=1)  # ND_TO_FRACTAL_NZ
-        ms_v_cache = ms.jit(ms_custom_ops.trans_data)(ms_v_cache, transdata_type=1)  # ND_TO_FRACTAL_NZ
+        ms_k_cache = ms_custom_ops.trans_data(ms_k_cache, transdata_type=1)  # ND_TO_FRACTAL_NZ
+        ms_v_cache = ms_custom_ops.trans_data(ms_v_cache, transdata_type=1)  # ND_TO_FRACTAL_NZ
 
         _ = net(ms_k, ms_v, ms_k_cache, ms_v_cache, ms_slot_map, cache_mode=1, head_num=NUM_HEADS)
 
