@@ -68,6 +68,18 @@ void GatherShape(const mindspore::tensor::TensorPtr &tensor) {
 }
 } // namespace
 
+void GatherOpHash(const ms::Tensor &tensor) {
+  GatherOpHash(tensor.tensor());
+}
+
+void GatherOpHash(const std::optional<ms::Tensor> &tensor) {
+  // "ot" for optional tensor
+  MemcpyToBuf("ot", kSizeTwo);
+  if (tensor.has_value()) {
+    GatherOpHash(tensor.value().tensor());
+  }
+}
+
 void GatherOpHash(const mindspore::tensor::TensorPtr &tensor) {
   GatherType(tensor);
 }
@@ -104,6 +116,12 @@ void GatherTilingHash(const std::vector<tensor::TensorPtr> &tensors) {
 
 void GatherTilingHash(const ms::Tensor &tensor) {
   GatherTilingHash(tensor.tensor());
+}
+
+void GatherTilingHash(const std::optional<ms::Tensor> &tensor) {
+  if (tensor.has_value()) {
+    GatherTilingHash(tensor.value().tensor());
+  }
 }
 
 void GatherHash(const std::vector<int64_t> &int_arrays) {

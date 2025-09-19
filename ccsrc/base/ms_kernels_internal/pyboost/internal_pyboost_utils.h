@@ -27,6 +27,8 @@
 #include "mindspore/ccsrc/ms_extension/api.h"
 
 namespace ms_custom_ops {
+void GatherOpHash(const ms::Tensor &);
+void GatherOpHash(const std::optional<ms::Tensor> &);
 void GatherOpHash(const mindspore::tensor::TensorPtr &);
 void GatherOpHash(const std::optional<mindspore::tensor::TensorPtr> &);
 void GatherOpHash(const std::vector<mindspore::tensor::TensorPtr> &);
@@ -72,6 +74,7 @@ uint64_t CalcInternalOpApiHash(const std::string &arg, const Args &... args) {
 }
 
 void GatherTilingHash(const ms::Tensor &);
+void GatherTilingHash(const std::optional<ms::Tensor> &);
 void GatherTilingHash(const mindspore::tensor::TensorPtr &);
 void GatherTilingHash(const std::optional<mindspore::tensor::TensorPtr> &);
 void GatherTilingHash(const std::vector<mindspore::tensor::TensorPtr> &);
