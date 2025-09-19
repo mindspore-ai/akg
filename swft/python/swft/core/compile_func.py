@@ -440,19 +440,32 @@ class NameTensor(ast.NodeTransformer):
 
 
 class JITTransformer(NodeTransformer):
+    def __init__(self, kernel_name, dynamic_dims):
+        self.kernel_name = kernel_name
+        self.dynamic_dims = dynamic_dims
+
+    def add_dynamic_dims_args(self, node):
+        if self.dynamic_dims is not None:
+            for arg_idx, dim_indices in self.dynamic_dims.items():
+                for dim_idx in dim_indices:
+                    node.args.args.append(ast.arg(arg=f"dynamic_shape_arg_{arg_idx}_dim_{dim_idx}"))
+        return node
+
     def visit_FunctionDef(self, node):
         node = self.generic_visit(node)
-        new_decorators = []
-        for decorator in node.decorator_list:
-            if isinstance(decorator, ast.Call):
-                if isinstance(decorator.func, ast.Name) and decorator.func.id == 'jit':
-                    continue
-                if (isinstance(decorator.func, ast.Attribute) and
-                    isinstance(decorator.func.value, ast.Name) and
-                    decorator.func.value.id == 'swft' and decorator.func.attr == 'jit'):
-                    continue
-            new_decorators.append(decorator)
-        node.decorator_list = new_decorators
+        if node.name == self.kernel_name:
+            node = self.add_dynamic_dims_args(node)
+            new_decorators = []
+            for decorator in node.decorator_list:
+                if isinstance(decorator, ast.Call):
+                    if isinstance(decorator.func, ast.Name) and decorator.func.id == 'jit':
+                        continue
+                    if (isinstance(decorator.func, ast.Attribute) and
+                        isinstance(decorator.func.value, ast.Name) and
+                        decorator.func.value.id == 'swft' and decorator.func.attr == 'jit'):
+                        continue
+                new_decorators.append(decorator)
+            node.decorator_list = new_decorators
         return node
 
 
@@ -465,12 +478,20 @@ def transform(transform_types, tree):
     return tree
 
 
-def compile_func(func, globalv):
+def jit_transform(tree, kernel_name, dynamic_dims=None):
+    jit_transformer = JITTransformer(kernel_name, dynamic_dims)
+    transformed_tree = jit_transformer.visit(tree)
+    fix_missing_locations(transformed_tree)
+    return transformed_tree
+
+
+def compile_func(func, globalv, dynamic_dims=None):
     original_source = inspect.getsource(func)
     tree = parse(original_source)
-    transform_types = [JITTransformer, ConstantFolding,
+    jit_transformed_tree = jit_transform(tree, func.__name__, dynamic_dims)
+    transform_types = [ConstantFolding,
                        RemoveControlFlowAndInjectContext, ScalarCopy, NameTensor]
-    transformed_tree = transform(transform_types, tree)
+    transformed_tree = transform(transform_types, jit_transformed_tree)
     namespace = {}
     globalv["code_block_context"] = code_block_context
     globalv["custom_and"] = custom_and

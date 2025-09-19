@@ -14,5 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .core import jit
+import os
+if os.getenv("ENABLE_SWFT_JIT", 1):
+    from .core import jit, aot
 from . import *
