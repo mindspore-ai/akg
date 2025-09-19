@@ -23,6 +23,22 @@
 #include "mindspore/include/custom_op_api.h"
 
 namespace ms_custom_ops {
+  constexpr size_t kIndex0{0};
+  constexpr size_t kIndex1{1};
+  constexpr size_t kIndex2{2};
+  constexpr size_t kIndex3{3};
+  constexpr size_t kIndex4{4};
+  constexpr size_t kIndex5{5};
+  constexpr size_t kIndex6{6};
+  constexpr size_t kIndex7{7};
+  constexpr size_t kIndex8{8};
+  constexpr size_t kIndex9{9};
+  constexpr size_t kDim0{0};
+  constexpr size_t kDim1{1};
+  constexpr size_t kDim2{2};
+  constexpr size_t kDim3{3};
+  constexpr size_t kDim4{4};
+  constexpr size_t kDim5{5};
 // Helper function to convert optional tensor to tensor or empty tensor
 inline ms::Tensor GetTensorOrEmpty(const std::optional<ms::Tensor> &opt_tensor) {
   return opt_tensor.has_value() ? opt_tensor.value() : ms::Tensor();
