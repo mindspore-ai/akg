@@ -182,18 +182,15 @@ private:
 
 ms_run_src_start = '''
 #include "ms_extension.h"
-#include "plugin/device/ascend/kernel/custom/custom_kernel_factory.h"
-#include "common/kernel.h"
+#include "mindspore/ops/kernel/ascend/custom/custom_kernel_factory.h"
+#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel.h"
 #include <iostream>
-#include <dlfcn.h>
 #include <pybind11/pybind11.h>
 #include <vector>
 using namespace mindspore;
 using namespace mindspore::kernel;
 using namespace mindspore::device::ascend;
 using namespace mindspore::ops;
-typedef void (*kernel_func_t)(uint32_t, void *, void *, ...);
-static std::unordered_map<std::string, kernel_func_t> kernel_cache;
 '''
 
 def extract_parameters(func_call):
@@ -369,37 +366,32 @@ class ArgType(enum.Enum):
     BOOL = 4
 
 
-def get_load_kernel_src(lib_path, kernel_name):
-    lines = ['    int32_t block_dim = 8;',
-             '    void *l2ctrl = nullptr;',
-             '    kernel_func_t func;',
-             f'    std::string op_name{{"{kernel_name}"}};',
-             '    auto iter = kernel_cache.find(op_name);',
-             '    if (iter == kernel_cache.end()) {',
-             f'        std::string lib_name = "{lib_path}";',
-             '        auto lib_handle = dlopen(lib_name.c_str(), RTLD_LAZY);',
-             '        if (lib_handle == nullptr) {',
-             '            std::cout << "[ERROR] failed to dlopen " << lib_name << std::endl;',
-             '        }',
-             '        auto kernel_handle = dlsym(lib_handle, op_name.c_str());',
-             '        if (kernel_handle == nullptr) {',
-             '            std::cout << "[ERROR] failed to dlsym " << op_name << std::endl;',
-             '        }',
-             '        func = reinterpret_cast<kernel_func_t>(kernel_handle);',
-             '    } else {',
-             '        func = iter->second;',
-             '    }']
-    return lines
+def get_kernel_declare(kernel_name, args_order, dynamic_dims):
+    line = f'extern "C" void {kernel_name}(uint32_t, void *, void*'
+    for arg in args_order:
+        if arg == ArgType.TENSOR:
+            line += ', uint8_t *'
+        elif arg == ArgType.INT:
+            line += ', int'
+        elif arg == ArgType.FLOAT:
+            line += ', float'
+        elif arg == ArgType.BOOL:
+            line += ', bool'
+    for dim_indices in dynamic_dims.values():
+        for _ in dim_indices:
+            line += ', int'
+    line += ');'
+    return line
 
 
-def get_launch_src_for_kernel_mod(args_order):
+def get_launch_src_for_kernel_mod(kernel_name, args_order, dynamic_dims):
     lines = []
     args = []
     for i, arg_type in enumerate(args_order):
         if arg_type == ArgType.TENSOR:
             tensor_arg = f"tensor_arg_{i}"
             lines.append(f'        void *{tensor_arg} = inputs[{i}]->device_ptr();')
-            args.append(tensor_arg)
+            args.append(f"(uint8_t *){tensor_arg}")
         elif arg_type == ArgType.INT:
             int_arg = f"int_arg_{i}"
             lines.append(f'        int {int_arg} = static_cast<int>(inputs.at({i})->GetValue<int64_t>().value());')
@@ -412,7 +404,12 @@ def get_launch_src_for_kernel_mod(args_order):
             bool_arg = f"bool_arg_{i}"
             lines.append(f'        bool {bool_arg} = static_cast<bool>(inputs.at({i})->GetValue<bool>().value());')
             args.append(bool_arg)
-    launch_line = '        func(block_dim, l2ctrl, stream_ptr'
+    for arg_idx, dim_indices in dynamic_dims.items():
+        for dim_idx in dim_indices:
+            dyn_dim_arg = f'arg_{arg_idx}_dim_{dim_idx}'
+            lines.append(f'        int64_t {dyn_dim_arg} = inputs[{arg_idx}]->GetShapeVector()[{dim_idx}];')
+            args.append(dyn_dim_arg)
+    launch_line = f'        {kernel_name}(block_dim, l2ctrl, stream_ptr'
     for arg in args:
         launch_line += f', {arg}'
     launch_line += ');'
@@ -420,15 +417,19 @@ def get_launch_src_for_kernel_mod(args_order):
     return lines
 
 
-def get_launch_line_for_pyboost_runner(args_order):
-    launch_line = '        func(block_dim, l2ctrl, stream()'
+def get_launch_line_for_pyboost_runner(kernel_name, args_order, dynamic_dims):
+    launch_line = f'        {kernel_name}(block_dim, l2ctrl, stream()'
     tensor_idx = 0
     int_idx = 0
     float_idx = 0
     bool_idx = 0
-    for arg_type in args_order:
+    dynamic_dim_args = []
+    for arg_idx, arg_type in enumerate(args_order):
         if arg_type == ArgType.TENSOR:
-            launch_line += f', tensor_args[{tensor_idx}]'
+            launch_line += f', (uint8_t *)(inputs()[{tensor_idx}].GetDataPtr())'
+            if arg_idx in dynamic_dims:
+                for dim_idx in dynamic_dims[arg_idx]:
+                    dynamic_dim_args.append(f'inputs()[{arg_idx}].shape()[{dim_idx}]')
             tensor_idx += 1
         elif arg_type == ArgType.INT:
             launch_line += f', int_args_[{int_idx}]'
@@ -439,25 +440,148 @@ def get_launch_line_for_pyboost_runner(args_order):
         elif arg_type == ArgType.BOOL:
             launch_line += f', bool_args_[{bool_idx}]'
             bool_idx += 1
+    for arg in dynamic_dim_args:
+        launch_line += f', {arg}'
     launch_line += ');'
     return launch_line
 
 
-def gen_ms_run_src(src_file, lib_path, kernel_name, args_order):
+def get_pyboost_runner_api(api_name, args_order):
+    lines = []
+    tensor_args = []
+    int_args = []
+    float_args = []
+    bool_args = []
+    api_line = f'auto {api_name}('
+    for idx, arg_type in enumerate(args_order):
+        if arg_type == ArgType.TENSOR:
+            tensor_arg = f'tensor_arg_{idx}'
+            api_line += f'ms::Tensor {tensor_arg}'
+            tensor_args.append(tensor_arg)
+        elif arg_type == ArgType.INT:
+            int_arg = f'int_arg_{idx}'
+            api_line += f'int {int_arg}'
+            int_args.append(int_arg)
+        elif arg_type == ArgType.FLOAT:
+            float_arg = f'float_arg_{idx}'
+            api_line += f'float {float_arg}'
+            float_args.append(float_arg)
+        elif arg_type == ArgType.BOOL:
+            bool_arg = f'bool_arg_{idx}'
+            api_line += f'bool {bool_arg}'
+            bool_args.append(bool_arg)
+        if idx + 1 == len(args_order):
+            api_line += ') {'
+        else:
+            api_line += ', '
+    lines.append(api_line)
+    lines.append(f'    std::vector<ms::Tensor> tensor_args{{{", ".join(tensor_args)}}};')
+    lines.append(f'    std::vector<int> int_args{{{", ".join(int_args)}}};')
+    lines.append(f'    std::vector<float> float_args{{{", ".join(float_args)}}};')
+    lines.append(f'    std::vector<bool> bool_args{{{", ".join(bool_args)}}};')
+    return lines
+
+
+def get_check_shape_src_for_kernel_mod(arg_attrs):
+    lines = []
+    for i, (_, attr) in enumerate(arg_attrs.items()):
+        arg_type = attr['type']
+        if arg_type == 'tensor':
+            shape = attr['shape']
+            tensor_shape = f'tensor_arg_{i}_shape'
+            lines.append(f'    auto {tensor_shape} = input_infos[{i}]->GetShape();')
+            lines.append(f'    if ({tensor_shape}.size() != {len(shape)}) {{')
+            lines.append(f'      MS_LOG(EXCEPTION) << "argument {i} should have {len(shape)} dimensions";')
+            lines.append('    }')
+            for dim_idx, dim_size in enumerate(shape):
+                if dim_size == -1:
+                    continue
+                lines.append(f'    if ({tensor_shape}[{dim_idx}] != {dim_size}) {{')
+                lines.append(f'      MS_LOG(EXCEPTION) << "argument {i} dim {dim_idx} should be {dim_size}";')
+                lines.append('    }')
+    return lines
+
+
+tensor_type_map = {
+    "float16": "kNumberTypeFloat16",
+    "float32": "kNumberTypeFloat32",
+    "int8": "kNumberTypeInt8",
+    "int16": "kNumberTypeInt16",
+    "int32": "kNumberTypeInt32",
+    "bool": "kNumberTypeBool",
+}
+
+
+def get_check_dtype_src_for_kernel_mod(arg_attrs):
+    lines = []
+    for i, (_, attr) in enumerate(arg_attrs.items()):
+        arg_type = attr['type']
+        if arg_type == 'tensor':
+            dtype = attr['dtype']
+            expected_dtype = tensor_type_map[dtype]
+            tensor_dtype = f'tensor_arg_{i}_dtype'
+            lines.append(f'    auto {tensor_dtype} = input_infos[{i}]->GetType();')
+            lines.append(f'    if ({tensor_dtype} != {expected_dtype}) {{')
+            lines.append(f'      MS_LOG(EXCEPTION) << "argument {i} should be {dtype}";')
+            lines.append('    }')
+    return lines
+
+
+def get_check_shape_src_for_pyboost_runner(arg_attrs):
+    lines = []
+    for i, (_, attr) in enumerate(arg_attrs.items()):
+        arg_type = attr['type']
+        if arg_type == 'tensor':
+            shape = attr['shape']
+            tensor_shape = f'tensor_arg_{i}_shape'
+            lines.append(f'    auto {tensor_shape} = tensor_arg_{i}.shape();')
+            lines.append(f'    if ({tensor_shape}.size() != {len(shape)}) {{')
+            lines.append(f'      MS_LOG(EXCEPTION) << "argument {i} should have {len(shape)} dimensions";')
+            lines.append('    }')
+            for dim_idx, dim_size in enumerate(shape):
+                if dim_size == -1:
+                    continue
+                lines.append(f'    if ({tensor_shape}[{dim_idx}] != {dim_size}) {{')
+                lines.append(f'      MS_LOG(EXCEPTION) << "argument {i} dim {dim_idx} should be {dim_size}";')
+                lines.append('    }')
+    return lines
+
+
+def get_check_dtype_src_for_pyboost_runner(arg_attrs):
+    lines = []
+    for i, (_, attr) in enumerate(arg_attrs.items()):
+        arg_type = attr['type']
+        if arg_type == 'tensor':
+            dtype = attr['dtype']
+            expected_dtype = tensor_type_map[dtype]
+            tensor_dtype = f'tensor_arg_{i}_dtype'
+            lines.append(f'    auto {tensor_dtype} = tensor_arg_{i}.data_type();')
+            lines.append(f'    if ({tensor_dtype} != {expected_dtype}) {{')
+            lines.append(f'      MS_LOG(EXCEPTION) << "argument {i} should be {dtype}";')
+            lines.append('    }')
+    return lines
+
+
+def gen_ms_run_src(src_file, kernel_name, args_order, dynamic_dims, arg_attrs):
     lines = [ms_run_src_start]
+    kernel_declare = get_kernel_declare(kernel_name, args_order, dynamic_dims)
+    lines.append(kernel_declare)
 
     op_func_class_name = f'{kernel_name}_OpFuncImpl'
     lines.append('namespace ms_custom_ops {')
-    lines.append(f'class OPS_API {op_func_class_name} : public OpFuncImpl')
-    lines.append('{')
+    lines.append(f'class OPS_API {op_func_class_name} : public OpFuncImpl {{')
     lines.append('public:')
     lines.append('  ShapeArray InferShape(const PrimitivePtr &primitive,')
     lines.append('                        const InferInfoPtrList &input_infos) const override {')
+    check_shape_src_for_kernel_mod = get_check_shape_src_for_kernel_mod(arg_attrs)
+    lines.extend(check_shape_src_for_kernel_mod)
     lines.append('    return {input_infos[0]->GetShape()};')
     lines.append('  }')
     lines.append('  std::vector<TypeId>')
     lines.append('  InferType(const PrimitivePtr &primitive,')
     lines.append('            const InferInfoPtrList &input_infos) const override {')
+    check_dtype_src_for_kernel_mod = get_check_dtype_src_for_kernel_mod(arg_attrs)
+    lines.extend(check_dtype_src_for_kernel_mod)
     lines.append('    return {input_infos[0]->GetType()};')
     lines.append('  }')
     lines.append('')
@@ -465,9 +589,7 @@ def gen_ms_run_src(src_file, lib_path, kernel_name, args_order):
     lines.append('};')
 
     kernel_mod_class_name = f'{kernel_name}_KernelMod'
-    load_kernel_src = get_load_kernel_src(lib_path, kernel_name)
-    lines.append(f'class {kernel_mod_class_name} : public KernelMod')
-    lines.append('{')
+    lines.append(f'class {kernel_mod_class_name} : public KernelMod {{')
     lines.append('public:')
     lines.append('    bool Init(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) override {')
     lines.append('        return true;')
@@ -477,8 +599,9 @@ def gen_ms_run_src(src_file, lib_path, kernel_name, args_order):
     lines.append('    }')
     lines.append('    bool Launch(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &workspace,')
     lines.append('                const std::vector<KernelTensor *> &outputs, void *stream_ptr) override {')
-    lines.extend(load_kernel_src)
-    launch_src_for_kernel_mod = get_launch_src_for_kernel_mod(args_order)
+    lines.append('        int32_t block_dim = 8;')
+    lines.append('        void *l2ctrl = nullptr;')
+    launch_src_for_kernel_mod = get_launch_src_for_kernel_mod(kernel_name, args_order, dynamic_dims)
     lines.extend(launch_src_for_kernel_mod)
     lines.append('        return true;')
     lines.append('    }')
@@ -498,23 +621,18 @@ def gen_ms_run_src(src_file, lib_path, kernel_name, args_order):
     lines.append(f'                  ms_custom_ops::{kernel_mod_class_name});')
 
     pyboost_runner_class_name = f'{kernel_name}_PyboostRunner'
-    lines.append(f'class {pyboost_runner_class_name} : public ms::pynative::PyboostRunner')
-    lines.append('{')
+    lines.append(f'class {pyboost_runner_class_name} : public ms::pynative::PyboostRunner {{')
     lines.append('public:')
     lines.append('  using PyboostRunner::PyboostRunner;')
     lines.append('    void LaunchKernel() override {')
-    lines.append('        std::vector<uint8_t *> tensor_args;')
-    lines.append('        for (auto input : inputs()) {')
-    lines.append('            tensor_args.push_back(static_cast<uint8_t *>(input.GetDataPtr()));')
-    lines.append('        }')
-    lines.extend(load_kernel_src)
-    launch_line_for_pyboost_runner = get_launch_line_for_pyboost_runner(args_order)
+    lines.append('        int32_t block_dim = 8;')
+    lines.append('        void *l2ctrl = nullptr;')
+    launch_line_for_pyboost_runner = get_launch_line_for_pyboost_runner(kernel_name, args_order, dynamic_dims)
     lines.append(launch_line_for_pyboost_runner)
 
     lines.append('    }')
     lines.append('    static void Eval(std::vector<ms::Tensor> tensor_args, std::vector<int> int_args,')
-    lines.append('                     std::vector<float> float_args, std::vector<bool> bool_args)')
-    lines.append('    {')
+    lines.append('                     std::vector<float> float_args, std::vector<bool> bool_args) {')
     lines.append(f'        auto runner = std::make_shared<{pyboost_runner_class_name}>("{kernel_name}");')
     lines.append('        runner->int_args_ = int_args;')
     lines.append('        runner->float_args_ = float_args;')
@@ -526,16 +644,18 @@ def gen_ms_run_src(src_file, lib_path, kernel_name, args_order):
     lines.append('    std::vector<float> float_args_;')
     lines.append('    std::vector<bool> bool_args_;')
     lines.append('};')
-    apiName = f'{kernel_name}_runner'
-    lines.append(f'auto {apiName}(std::vector<ms::Tensor> tensor_args, std::vector<int> int_args,')
-    lines.append('    std::vector<float> float_args, std::vector<bool> bool_args)')
-    lines.append('{')
+    pyboost_api_name = f'pyboost_{kernel_name}'
+    pyboost_runner_api_src = get_pyboost_runner_api(pyboost_api_name, args_order)
+    lines.extend(pyboost_runner_api_src)
+    check_shape_src_for_pyboost_runner = get_check_shape_src_for_pyboost_runner(arg_attrs)
+    lines.extend(check_shape_src_for_pyboost_runner)
+    check_dtype_src_for_pyboost_runner = get_check_dtype_src_for_pyboost_runner(arg_attrs)
+    lines.extend(check_dtype_src_for_pyboost_runner)
     lines.append('    return ms::pynative::PyboostRunner::Call<0>(')
     lines.append(f'        {pyboost_runner_class_name}::Eval, tensor_args, int_args, float_args, bool_args);')
     lines.append('}')
-    lines.append('PYBIND11_MODULE(MS_EXTENSION_NAME, m)')
-    lines.append('{')
-    lines.append(f'    m.def("{kernel_name}", &{apiName});')
+    lines.append('PYBIND11_MODULE(MS_EXTENSION_NAME, m) {')
+    lines.append(f'    m.def("{kernel_name}", &{pyboost_api_name});')
     lines.append(f'    ModuleRegistry::Instance().RegisterAll(m);')
     lines.append('}')
     src = '\n'.join(lines)

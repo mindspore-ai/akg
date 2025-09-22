@@ -25,4 +25,4 @@ from .compile_func import compile_func, code_block_context, custom_and, custom_o
 from .name_tensor import name_tensor
 import os
 if os.getenv("ENABLE_SWFT_JIT", 1):
-  from .ms_plugin import jit, compile_ms_cell
+  from .ms_plugin import jit, aot, compile_ms_cell, compile_ms_func

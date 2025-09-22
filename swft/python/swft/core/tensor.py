@@ -28,12 +28,12 @@ class Tensor(CTensor):
     def __init__(self, *args, **kwdargs):
         if len(args) == 5:
             mem_type, dtype, shape, format, multi_core = args[0], args[1], args[2], args[3], args[4]
-            scalar_shape = [Scalar("INT32", dim) for dim in shape]
+            scalar_shape = [dim if isinstance(dim, Scalar) else Scalar("INT32", dim) for dim in shape]
             CTensor.__init__(self, mem_type, dtype,
                              scalar_shape, format, multi_core)
         elif len(args) == 3:
             mem_type, dtype, shape = args[0], args[1], args[2]
-            scalar_shape = [Scalar("INT32", dim) for dim in shape]
+            scalar_shape = [dim if isinstance(dim, Scalar) else Scalar("INT32", dim) for dim in shape]
             format = kwdargs["format"] if "format" in kwdargs.keys() else "ND"
             multi_core = kwdargs["multi_core"] if "multi_core" in kwdargs.keys(
             ) else False
@@ -57,7 +57,7 @@ class Tensor(CTensor):
 
     @property
     def shape(self):
-        return [Scalar("INT32", dim) for dim in self._get_shape()]
+        return [dim if isinstance(dim, Scalar) else Scalar("INT32", dim) for dim in self._get_shape()]
 
     @property
     def dtype(self):
