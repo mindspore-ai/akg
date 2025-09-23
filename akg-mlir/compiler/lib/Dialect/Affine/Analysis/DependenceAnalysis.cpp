@@ -113,16 +113,22 @@ void MemRefDependenceGraph::addEdge(unsigned srcId, unsigned dstId, Value value)
 void MemRefDependenceGraph::print(raw_ostream &os) const {
   os << "\nMemRefDependenceGraph\n";
   os << "\nNodes:\n";
-  for (const auto &idAndNode : nodes) {
-    os << "Node: " << idAndNode.first << ": ";
-    idAndNode.second.op->dump();
-    auto it = inEdges.find(idAndNode.first);
+  std::vector<unsigned> sortedNodeId;
+  for (const auto &node : nodes) {
+    sortedNodeId.emplace_back(node.first);
+  }
+  std::sort(sortedNodeId.begin(), sortedNodeId.end());
+  for (auto nodeId : sortedNodeId) {
+    auto idAndNode = nodes.find(nodeId);
+    os << "Node: " << idAndNode->first << ": ";
+    idAndNode->second.op->dump();
+    auto it = inEdges.find(idAndNode->first);
     if (it != inEdges.end()) {
       for (const auto &e : it->second) {
         os << "  InEdge: " << e.id << " " << e.value << "\n";
       }
     }
-    it = outEdges.find(idAndNode.first);
+    it = outEdges.find(idAndNode->first);
     if (it != outEdges.end()) {
       for (const auto &e : it->second) {
         os << "  OutEdge: " << e.id << " " << e.value << "\n";
@@ -201,9 +207,28 @@ bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned d
 }
 
 /// Return all nodes which define SSA values used in node 'id'.
-void MemRefDependenceGraph::getDirectlyDependentNodes(unsigned id, DenseSet<unsigned> &dependentNodes) {
+void MemRefDependenceGraph::getPredecessorNodes(unsigned id, DenseSet<unsigned> &dependentNodes) {
   for (Edge edge : inEdges[id]) {
     dependentNodes.insert(edge.id);
+  }
+}
+
+void MemRefDependenceGraph::getPredecessorNodes(unsigned id, std::vector<unsigned> &dependentNodes) {
+  for (Edge edge : inEdges[id]) {
+    dependentNodes.emplace_back(edge.id);
+  }
+}
+
+/// Return all nodes which use SSA values defined in node 'id'.
+void MemRefDependenceGraph::getSuccessorNodes(unsigned id, DenseSet<unsigned> &dependentNodes) {
+  for (Edge edge : outEdges[id]) {
+    dependentNodes.insert(edge.id);
+  }
+}
+
+void MemRefDependenceGraph::getSuccessorNodes(unsigned id, std::vector<unsigned> &dependentNodes) {
+  for (Edge edge : outEdges[id]) {
+    dependentNodes.emplace_back(edge.id);
   }
 }
 
@@ -223,7 +248,7 @@ void MemRefDependenceGraph::createInitNode(DenseMap<Value, SetVector<unsigned>> 
       auto memref = cast<affine::AffineWriteOpInterface>(op).getMemRef();
       memrefAccesses[memref].insert(node.id);
       nodes.insert({node.id, node});
-    } else if (op->getNumRegions() != 0 || isa<affine::AffineYieldOp, func::ReturnOp>(op)) {
+    } else if (op->getNumRegions() != 0 || isa<affine::AffineApplyOp, affine::AffineYieldOp, func::ReturnOp>(op)) {
       // Return false if another region is found (not currently supported).
       return;
     } else if (isa<CallOpInterface>(op)) {
@@ -243,17 +268,7 @@ void MemRefDependenceGraph::createInitNode(DenseMap<Value, SetVector<unsigned>> 
   });
 }
 
-// Initializes the dependence graph based on operations in 'f'.
-// Returns true on success, false otherwise.
-// Initializes the data dependence graph by walking operations in `block`.
-// todo: Add support for taking a Block arg to construct the
-// dependence graph at a different depth.
-bool MemRefDependenceGraph::init() {
-  // Map from a memref to the set of ids of the nodes that have ops accessing
-  // the memref.
-  DenseMap<Value, SetVector<unsigned>> memrefAccesses;
-  createInitNode(memrefAccesses);
-
+bool MemRefDependenceGraph::createEdges(const DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
   DenseMap<Operation *, unsigned> tempNodes;
   for (auto &idAndNode : nodes) {
     tempNodes.insert({idAndNode.second.op, idAndNode.first});
@@ -281,15 +296,39 @@ bool MemRefDependenceGraph::init() {
     for (unsigned i = 0; i < n; ++i) {
       unsigned srcId = memrefAndList.second[i];
       bool srcHasStore = getNode(srcId)->getStoreOpCount(memrefAndList.first) > 0;
+      bool srcIsFor = isa<affine::AffineForOp>(getNode(srcId)->op);
+      if (srcIsFor) {
+        continue;
+      }
       for (unsigned j = i + 1; j < n; ++j) {
         unsigned dstId = memrefAndList.second[j];
         bool dstHasStore = getNode(dstId)->getStoreOpCount(memrefAndList.first) > 0;
+        bool dstIsFor = isa<affine::AffineForOp>(getNode(dstId)->op);
+        if (dstIsFor) {
+          continue;
+        }
         if ((srcHasStore || dstHasStore) && hasMemrefAccessDependence(srcId, dstId)) {
           addEdge(srcId, dstId, memrefAndList.first);
         }
       }
     }
   }
+  return true;
+}
+
+
+// Initializes the dependence graph based on operations in 'f'.
+// Returns true on success, false otherwise.
+// Initializes the data dependence graph by walking operations in `block`.
+// todo: Add support for taking a Block arg to construct the
+// dependence graph at a different depth.
+bool MemRefDependenceGraph::init() {
+  // Map from a memref to the set of ids of the nodes that have ops accessing
+  // the memref.
+  DenseMap<Value, SetVector<unsigned>> memrefAccesses;
+  createInitNode(memrefAccesses);
+
+  createEdges(memrefAccesses);
   return true;
 }
 

@@ -28,6 +28,15 @@ def AffineLoopReorder : Pass<"affine-loop-reorder", "func::FuncOp"> {
   ];
 }
 
+def AKGLoopFusion : Pass<"akg-loop-fusion", "func::FuncOp"> {
+  let summary = "Fuse compatible loops for optimization";
+  let description = [{
+    AKGLoopFusion pass identifies and fuses compatible loops to improve performance.
+    This pass analyzes loop dependencies and bounds to determine safe fusion opportunities.
+  }];
+  let constructor = "mlir::createAKGLoopFusionPass()";
+}
+
 def AffineHandleBoundaryIfExtract : Pass<"affine-handle-boundary-if-extract", "func::FuncOp"> {
   let summary = "Extract the boundary-if in nest loops cases";
   let constructor = "mlir::createAffineHandleBoundaryIfExtract()";

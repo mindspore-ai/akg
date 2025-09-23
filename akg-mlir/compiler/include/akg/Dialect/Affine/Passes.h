@@ -1,5 +1,5 @@
 /**
- * Copyright 2023-2024 Huawei Technologies Co., Ltd
+ * Copyright 2023-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 #include "akg/Dialect/Affine/Transforms/AffineHandleBoundaryIfRestore.h"
 #include "akg/Dialect/Affine/Transforms/AffineIteratorConversion.h"
 #include "akg/Dialect/Affine/Transforms/AffineLoopReorder.h"
+#include "akg/Dialect/Affine/Transforms/AKGLoopFusion.h"
 #include "akg/Dialect/Affine/Transforms/AffineMemoryPromotion.h"
 #include "akg/Dialect/Affine/Transforms/AffineTailBlockTiling.h"
 #include "akg/Dialect/Affine/Transforms/ExtractIfOp.h"
