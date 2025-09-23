@@ -1,0 +1,51 @@
+# 统一进化配置文件
+
+# 基础配置
+base:
+  dsl: "triton"              # 实现类型: triton, swft, etc.
+  framework: "torch"         # 框架: torch, numpy, mindspore, etc.
+  backend: "cuda"            # 后端: ascend, cuda, etc.
+  arch: "a100"               # 架构: a100, ascend910b4, etc.
+
+# 进化参数配置
+evolve:
+  max_rounds: 3              # 进化轮数
+  parallel_num: 4            # 每轮并行任务数，需要设置为 num_islands 的倍数
+
+# 岛屿模型配置（设置num_islands为1或更小值可禁用岛屿模型）
+island:
+  num_islands: 2             # 岛屿数量（设置为1可禁用岛屿）
+  migration_interval: 2      # 迁移间隔（设置为0可禁用迁移）
+  elite_size: 5              # 精英保留数量（设置为0可禁用精英机制）
+  parent_selection_prob: 0.5 # 父代来源概率 (0.5概率在当前岛屿选择，0.5概率在精英机制选择)
+
+# 设备配置
+devices:
+  device_list: [6]        # 可用设备列表
+
+# 任务配置
+task:
+  op_name: "aikg_op"         # 算子名称
+  task_desc: "Path/to/your/tasks/task.py"  # 任务描述
+
+# 批量执行配置（用于run_batch_evolve.py）
+batch:
+  parallel_num: 2            # batch级别的并行数（同时运行的evolve任务数），需要小于等于device_pool的长度
+  device_pool: [6, 7]        # 批量执行时的设备池
+  task_dir: "Path/to/your/tasks"     # 任务文件目录
+  output_dir: "Path/to/your/aikg_evolve/batch_results"  # 输出目录
+
+# 特定任务的自定义配置（可选）
+# 格式：{任务名: 配置参数字典}
+custom_tasks:
+  # 示例：为特定任务配置不同参数，请以 aikg_开头，加上文件名
+  # aikg_relu:
+  #   max_rounds: 5
+  #   parallel_num: 2
+  #   num_islands: 1
+  # aikg_add:
+  #   max_rounds: 3
+  #   parallel_num: 1
+  #   num_islands: 2
+  #   migration_interval: 1
+  #   elite_size: 3

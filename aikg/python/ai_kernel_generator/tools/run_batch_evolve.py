@@ -18,55 +18,49 @@ import subprocess
 import json
 import asyncio
 import re
+import yaml
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import traceback
 from ai_kernel_generator import get_project_root
 
+"""
+批量执行配置参数 - 默认从evolve_config.yaml读取配置
+
+该模块提供了一个用于批量执行进化式算子生成的工具，支持并行执行多个任务以提高效率。
+
+主要功能：
+1. 并行执行多个任务
+2. 动态设备分配避免冲突
+3. 详细的执行结果统计和报告生成
+4. 默认从evolve_config.yaml读取配置，支持自定义配置文件
+
+使用方法：
+1. 使用默认配置文件：python run_batch_evolve.py
+2. 使用自定义配置文件：python run_batch_evolve.py your_config.yaml
+
+配置文件说明：
+默认配置文件：config/evolve_config.yaml
+支持从该配置文件的以下部分读取配置：
+• base: 进化基础配置（dsl, framework, backend, arch）
+• evolve: 进化参数配置（max_rounds, parallel_num）
+• batch: 批量执行配置（parallel_num, device_pool, task_dir, output_dir）
+• custom_tasks: 特定任务的自定义配置
+
+"""
+
 # ============================================================================
-# 批量执行配置参数 - 在此处修改批量执行的配置
+# 批量执行配置参数 - 从evolve_config.yaml读取配置
 # ============================================================================
-
-# 基础进化参数配置 - 对所有任务生效
-EVOLVE_BASE_CONFIG = {
-    "dsl": "triton",           # 实现类型: triton, swft, etc.
-    "framework": "torch",      # 框架: torch, numpy, mindspore, etc.
-    "backend": "ascend",       # 后端: ascend, cuda, etc.
-    "arch": "ascend910b4"      # 架构: a100, ascend910b4, etc.
-}
-
-# 批量并行配置
-BATCH_PARALLEL_NUM = 2  # batch级别的并行数（同时运行的evolve任务数）
-
-# 任务目录和输出目录配置
-TASK_DIR = "Path/to/your/tasks"  # 任务文件目录 - 请修改为实际路径
-OUTPUT_DIR = "Path/to/your/batch_results"  # 输出目录 - 请修改为实际路径
-
-# 设备池配置（循环分配给不同任务，避免并行冲突）
-# 每个任务会分配一个设备，数量需要大于等于并行数
-DEVICE_POOL = [4, 5]  # 可用设备列表
-
-# 默认任务配置
-DEFAULT_TASK_CONFIG = {
-    "max_rounds": 2,
-    "parallel_num": 2
-}
-
-# 每个任务的自定义配置（可选）
-# 格式：{任务名: EvolveConfig参数字典}
-TASK_CUSTOM_CONFIGS = {
-    # 示例：为特定任务配置不同参数
-    # "relu_task": {"max_rounds": 3, "parallel_num": 1},
-    # "add_task": {"max_rounds": 2, "parallel_num": 2},
-}
 
 
 class BatchTaskPool:
     """批量任务池，用于管理并行执行的evolve任务"""
 
-    def __init__(self, max_concurrency: int, device_pool: List[int]):
+    def __init__(self, max_concurrency: int, device_pool: List[int], config_path: Optional[str] = None):
         self.max_concurrency = max_concurrency
+        self.config_path = config_path
         self.semaphore = asyncio.Semaphore(max_concurrency)
         # 动态设备池管理
         self.available_devices = asyncio.Queue()
@@ -103,7 +97,7 @@ class BatchTaskPool:
                 result = await loop.run_in_executor(
                     None,
                     run_single_task_subprocess,
-                    task_file, output_dir, index, total, use_compact_output, device
+                    task_file, output_dir, index, total, use_compact_output, device, self.config_path
                 )
                 return result
         finally:
@@ -196,7 +190,7 @@ def discover_task_files(task_dir: str) -> List[Path]:
 
 
 def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, total: int,
-                               use_compact_output: bool = False, device: int = 5) -> Dict[str, Any]:
+                               use_compact_output: bool = False, device: int = 5, config_path: Optional[str] = None) -> Dict[str, Any]:
     """使用subprocess方式运行单个任务"""
     op_name = "aikg_" + task_file.stem
 
@@ -229,29 +223,18 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
         # 使用绝对路径
         absolute_task_file = Path(task_file).resolve()
 
-        # 获取任务配置
-        max_rounds = DEFAULT_TASK_CONFIG["max_rounds"]
-        parallel_num = DEFAULT_TASK_CONFIG["parallel_num"]
 
-        # 应用任务特定配置
-        if op_name in TASK_CUSTOM_CONFIGS:
-            custom_config = TASK_CUSTOM_CONFIGS[op_name]
-            max_rounds = custom_config.get('max_rounds', max_rounds)
-            parallel_num = custom_config.get('parallel_num', parallel_num)
-
-        # 构建命令 - 传递完整的配置参数
+        # 构建命令 - 传递简化参数
         cmd = [
             sys.executable, str(single_evolve_script),
             op_name,                                    # 1. 算子名称
             str(absolute_task_file),                   # 2. 任务文件路径
-            str(device),                               # 3. 设备ID
-            str(max_rounds),                           # 4. 最大轮数
-            str(parallel_num),                         # 5. 并行数
-            EVOLVE_BASE_CONFIG["dsl"],                 # 6. DSL类型
-            EVOLVE_BASE_CONFIG["framework"],           # 7. 框架
-            EVOLVE_BASE_CONFIG["backend"],             # 8. 后端
-            EVOLVE_BASE_CONFIG["arch"]                 # 9. 架构
+            str(device)                                # 3. 设备ID
         ]
+        
+        # 如果有配置文件路径，则添加到命令中
+        if config_path:
+            cmd.append(config_path)
 
         # 根据输出模式选择执行方式
         if use_compact_output:
@@ -342,7 +325,7 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
                             success_rate = float(match.group(1)) / 100
                 except:
                     pass
-            elif "最终全局最佳加速比:" in line or "最佳:" in line:
+            elif "最终全局最佳加速比:" in line or "最佳:" in line or "加速比:" in line:
                 try:
                     if "最终全局最佳加速比:" in line:
                         best_speedup = float(line.split("最终全局最佳加速比:")[1].split("x")[0].strip())
@@ -351,6 +334,14 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
                         match = re.search(r'最佳:(\d+\.?\d*)x', line)
                         if match:
                             best_speedup = float(match.group(1))
+                    elif "加速比:" in line:
+                        # 匹配 "加速比: 6.07x" 格式
+                        match = re.search(r'加速比:\s*(\d+\.?\d*)x', line)
+                        if match:
+                            speedup_value = float(match.group(1))
+                            # 如果当前加速比更好，则更新
+                            if best_speedup is None or speedup_value > best_speedup:
+                                best_speedup = speedup_value
                 except:
                     pass
 
@@ -443,7 +434,7 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
                 f.write(f"任务文件: {task_file}\n")
                 f.write(f"开始时间: {start_time.isoformat()}\n")
                 f.write(f"结束时间: {end_time.isoformat()}\n")
-                f.write(f"执行时间: {execution_time:.2f}秒\n")
+                f.write(f"执行时间: {execution_time:.2f}微秒\n")
                 f.write(f"任务成功: 否\n")
                 f.write(f"错误信息: {error_msg}\n")
                 f.write("\n" + "="*50 + " 错误详情 " + "="*50 + "\n")
@@ -464,6 +455,55 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
             'start_time': start_time.isoformat(),
             'end_time': end_time.isoformat()
         }
+
+
+def load_config(config_path: str = None) -> Dict[str, Any]:
+    """加载配置文件并返回配置字典"""
+    # 如果没有指定配置文件，则使用默认的evolve_config.yaml
+    if config_path is None:
+        # 获取项目根目录下的配置文件路径
+        project_root = get_project_root()
+        config_path = os.path.join(project_root, "config", "evolve_config.yaml")
+    
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+
+            # 检查必要的配置项
+            if 'batch' not in config:
+                raise ValueError("配置文件中缺少 'batch' 部分")
+            
+            batch_config = config['batch']
+            
+            # 检查必要的配置项
+            required_keys = ['parallel_num', 'device_pool', 'task_dir', 'output_dir']
+            missing_keys = [key for key in required_keys if key not in batch_config]
+            if missing_keys:
+                raise ValueError(f"配置文件中 'batch' 部分缺少必要的配置项: {missing_keys}")
+            
+            # 读取配置
+            config_dict = {
+                "batch_parallel_num": batch_config['parallel_num'],
+                "task_dir": batch_config['task_dir'],
+                "output_dir": batch_config['output_dir'],
+                "device_pool": batch_config['device_pool']
+            }
+
+            print(f"✅ 成功加载配置文件: {config_path}")
+            print(f"   任务目录: {config_dict['task_dir']}")
+            print(f"   输出目录: {config_dict['output_dir']}")
+            print(f"   设备池: {config_dict['device_pool']}")
+            print(f"   批量并行数: {config_dict['batch_parallel_num']}")
+
+        except Exception as e:
+            print(f"❌ 错误: 无法加载配置文件 {config_path}: {e}")
+            raise
+    else:
+        print(f"❌ 错误: 配置文件不存在: {config_path}")
+        raise FileNotFoundError(f"配置文件不存在: {config_path}")
+    
+    return config_dict
 
 
 def print_batch_summary(batch_results: List[Dict[str, Any]], total_start_time: datetime):
@@ -513,10 +553,19 @@ def print_batch_summary(batch_results: List[Dict[str, Any]], total_start_time: d
 
 def main():
     """主函数"""
-    # 使用硬编码配置
-    task_dir = TASK_DIR
-    output_dir = Path(OUTPUT_DIR)
-    parallel_num = BATCH_PARALLEL_NUM
+    # 检查命令行参数
+    config_path = None
+    if len(sys.argv) > 1:
+        config_path = sys.argv[1]
+
+    # 加载配置文件（如果不指定配置文件，则使用默认的evolve_config.yaml）
+    config = load_config(config_path)
+
+    # 使用配置值
+    task_dir = os.path.expanduser(config["task_dir"]) if config["task_dir"] else os.path.expanduser("~/aikg_tasks")
+    output_dir = Path(os.path.expanduser(config["output_dir"])) if config["output_dir"] else Path(
+        os.path.expanduser("~/aikg_batch_results"))
+    parallel_num = config["batch_parallel_num"] if config["batch_parallel_num"] > 0 else 2
 
     # 创建输出目录
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -526,7 +575,7 @@ def main():
     print(f"任务目录: {task_dir}")
     print(f"输出目录: {output_dir}")
     print(f"并行数: {parallel_num}")
-    print(f"设备池: {DEVICE_POOL}")
+    print(f"设备池: {config['device_pool']}")
     print("="*80)
 
     total_start_time = datetime.now()
@@ -540,14 +589,18 @@ def main():
             print("❌ 未找到任何.py文件")
             return
 
-        # 创建批量任务池（传入设备池）
-        batch_pool = BatchTaskPool(max_concurrency=parallel_num, device_pool=DEVICE_POOL)
+        # 创建批量任务池（传入设备池和配置文件路径）
+        batch_pool = BatchTaskPool(
+            max_concurrency=parallel_num, 
+            device_pool=config["device_pool"], 
+            config_path=config_path
+        )
 
         if parallel_num <= 1:
             print(f"\n📋 将按顺序执行 {len(task_files)} 个算子的进化流程...")
         else:
             print(f"\n🚀 将并行执行 {len(task_files)} 个算子的进化流程...")
-            print(f"📱 设备动态分配：{DEVICE_POOL} (任务完成后自动回收)")
+            print(f"📱 设备动态分配：{config['device_pool']} (任务完成后自动回收)")
 
         # 运行任务
         try:

@@ -14,8 +14,10 @@
 
 import asyncio
 import sys
+import os
 from pathlib import Path
 import json
+import yaml
 from datetime import datetime
 from ai_kernel_generator.core.evolve import evolve
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
@@ -23,77 +25,130 @@ from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 from ai_kernel_generator import get_project_root
-from typing import Optional, List
-from dataclasses import dataclass
+from typing import Optional, List, Dict, Any
 
-# ============================================================================
+
+# ============================================================================ #
 # 配置参数类
-# ============================================================================
+# ============================================================================ #
 
 
-@dataclass
 class EvolveConfig:
     """进化配置参数类"""
-    # 基本参数
-    dsl: str = "triton"
-    framework: str = "torch"
-    backend: str = "ascend"
-    arch: str = "ascend910b4"
 
-    # 进化参数
-    max_rounds: int = 2
-    parallel_num: int = 2
-
-    # 设备配置
-    device_list: List[int] = None
-
-    # 配置文件路径
-    config_path: str = ""  # 将在__post_init__中设置
-
-    # 任务配置
-    op_name: Optional[str] = None
-    task_desc: Optional[str] = None
-
-    def __post_init__(self):
-        if self.device_list is None:
-            self.device_list = [5]
-        if not self.config_path:
-            self.config_path = str(Path(get_project_root()) / "config" / "vllm_triton_evolve_config.yaml")
-
-
-# 默认配置实例 - 在此处修改基础配置
-DEFAULT_CONFIG = EvolveConfig(
-    dsl="triton",
-    framework="torch",
-    backend="ascend",
-    arch="ascend910b4",
-    max_rounds=2,
-    parallel_num=2,
-    device_list=[5],
-    config_path=""  # 将在__post_init__中自动设置
-)
-
-# 默认任务配置
-DEFAULT_OP_NAME = "relu_op"
-DEFAULT_TASK_DESC = """import torch
-import torch.nn as nn
-
-class Model(nn.Module):
     def __init__(self):
-        super(Model, self).__init__()
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.relu(x)
+        # 基本参数
+        self.dsl = "triton"
+        self.framework = "torch"
+        self.backend = "cuda"
+        self.arch = "a100"
 
-batch_size = 16
-dim = 16384
+        # 进化参数
+        self.max_rounds = 5
+        self.parallel_num = 4
 
-def get_inputs():
-    x = torch.randn(batch_size, dim)
-    return [x]
+        # 岛屿模型参数
+        self.num_islands = 1  # 设置为1或更小值可禁用岛屿模型
+        self.migration_interval = 0  # 设置为0可禁用迁移
+        self.elite_size = 0  # 设置为0可禁用精英机制
+        self.parent_selection_prob = 0.5  # 父代选择概率
 
-def get_init_inputs():
-    return []
-"""
+        # 设备配置
+        self.device_list = [0]
+
+        # 配置文件路径
+        self.config_path = str(Path(get_project_root()) / "config" / "vllm_triton_evolve_config.yaml")
+
+        # 任务配置
+        self.op_name = "relu_op"
+        self.task_desc = "Path/to/your/tasks/relu_task.py"
+
+    @classmethod
+    def from_yaml(cls, config_path: str, skip_task_config: bool = False):
+        """从YAML配置文件加载配置
+        
+        Args:
+            config_path: 配置文件路径
+            skip_task_config: 是否跳过任务配置（用于批量调用模式）
+        """
+        config = cls()
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                yaml_config = yaml.safe_load(f)
+
+            # 基础配置
+            if 'base' in yaml_config:
+                base = yaml_config['base']
+                config.dsl = base.get('dsl', config.dsl)
+                config.framework = base.get('framework', config.framework)
+                config.backend = base.get('backend', config.backend)
+                config.arch = base.get('arch', config.arch)
+            else:
+                raise ValueError("base section not found in config file")
+
+            # 进化参数
+            if 'evolve' in yaml_config:
+                evolve_config = yaml_config['evolve']
+                config.max_rounds = evolve_config.get('max_rounds', config.max_rounds)
+                config.parallel_num = evolve_config.get('parallel_num', config.parallel_num)
+            else:
+                raise ValueError("evolve section not found in config file")
+
+            # 岛屿模型配置
+            if 'island' in yaml_config:
+                island_config = yaml_config['island']
+                config.num_islands = island_config.get('num_islands', config.num_islands)
+                config.migration_interval = island_config.get('migration_interval', config.migration_interval)
+                config.elite_size = island_config.get('elite_size', config.elite_size)
+                config.parent_selection_prob = island_config.get('parent_selection_prob', config.parent_selection_prob)
+            else:
+                raise ValueError("island section not found in config file")
+
+            # 设备配置
+            if 'devices' in yaml_config:
+                config.device_list = yaml_config['devices'].get('device_list', config.device_list)
+            else:
+                raise ValueError("devices section not found in config file")
+
+            # 任务配置（仅在非批量调用模式下加载）
+            if not skip_task_config and 'task' in yaml_config:
+                task_config = yaml_config['task']
+                config.op_name = task_config.get('op_name', config.op_name)
+
+                # 处理task_desc，从文件路径读取
+                task_desc_value = task_config.get('task_desc', config.task_desc)
+                if task_desc_value and isinstance(task_desc_value, str):
+                    try:
+                        # 作为文件路径读取
+                        with open(task_desc_value, 'r', encoding='utf-8') as f:
+                            config.task_desc = f.read().strip()
+                    except Exception as e:
+                        print(f"Error: Failed to read task description file {task_desc_value}: {e}")
+                        config.task_desc = None
+
+            return config
+        except Exception as e:
+            print(f"Warning: Failed to load config from {config_path}, using default config: {e}")
+            return config
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'dsl': self.dsl,
+            'framework': self.framework,
+            'backend': self.backend,
+            'arch': self.arch,
+            'max_rounds': self.max_rounds,
+            'parallel_num': self.parallel_num,
+            'num_islands': self.num_islands,
+            'migration_interval': self.migration_interval,
+            'elite_size': self.elite_size,
+            'parent_selection_prob': self.parent_selection_prob,
+            'device_list': self.device_list,
+            'config_path': self.config_path,
+            'op_name': self.op_name,
+            'task_desc': self.task_desc
+        }
 
 
 async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_config: EvolveConfig = None):
@@ -102,20 +157,20 @@ async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_c
     Args:
         op_name: 算子名称，如果为None则使用evolve_config中的配置
         task_desc: 任务描述，如果为None则使用evolve_config中的配置
-        evolve_config: 进化配置类实例，如果为None则使用默认配置
+        evolve_config: 进化配置类实例，如果为None则创建默认配置
     """
-    # 使用传入的配置或默认配置
+    # 使用传入的配置或创建默认配置
     if evolve_config is None:
-        evolve_config = DEFAULT_CONFIG
+        evolve_config = EvolveConfig()
 
     # 如果op_name或task_desc为None，尝试从配置中获取
     if op_name is None:
-        op_name = evolve_config.op_name or DEFAULT_OP_NAME
+        op_name = evolve_config.op_name
     if task_desc is None:
-        task_desc = evolve_config.task_desc or DEFAULT_TASK_DESC.strip()
+        task_desc = evolve_config.task_desc
 
     print("="*80)
-    print("AI KERNEL GENERATOR - 进化式算子生成示例")
+    print("AI KERNEL GENERATOR - 统一进化式算子生成")
     print("="*80)
     print(f"算子名称: {op_name}")
     print(f"实现类型: {evolve_config.dsl}")
@@ -124,6 +179,24 @@ async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_c
     print(f"架构: {evolve_config.arch}")
     print(f"进化轮数: {evolve_config.max_rounds}")
     print(f"并行任务数: {evolve_config.parallel_num}")
+
+    # 岛屿模型配置说明
+    if evolve_config.num_islands <= 1:
+        print("岛屿模型: 禁用（简单进化模式）")
+    else:
+        print(f"岛屿数量: {evolve_config.num_islands}")
+        if evolve_config.migration_interval <= 0:
+            print("迁移: 禁用")
+        else:
+            print(f"迁移间隔: {evolve_config.migration_interval}")
+
+    if evolve_config.elite_size <= 0:
+        print("精英机制: 禁用")
+    else:
+        print(f"精英数量: {evolve_config.elite_size}")
+
+    if evolve_config.num_islands > 1 and evolve_config.elite_size > 0:
+        print(f"父代选择概率: {evolve_config.parent_selection_prob}")
     print("="*80)
 
     # 初始化资源
@@ -146,7 +219,11 @@ async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_c
         device_pool=device_pool,
         task_pool=task_pool,
         max_rounds=evolve_config.max_rounds,
-        parallel_num=evolve_config.parallel_num
+        parallel_num=evolve_config.parallel_num,
+        num_islands=evolve_config.num_islands,
+        migration_interval=evolve_config.migration_interval,
+        elite_size=evolve_config.elite_size,
+        parent_selection_prob=evolve_config.parent_selection_prob
     )
 
     # 检查进化结果是否有效
@@ -169,6 +246,26 @@ async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_c
     print(f"后端: {evolution_result.get('backend', 'Unknown')}")
     print(f"架构: {evolution_result.get('architecture', 'Unknown')}")
 
+    # 岛屿信息
+    island_info = evolution_result.get('island_info', {})
+    if island_info:
+        num_islands_used = island_info.get('num_islands', 'N/A')
+        if num_islands_used <= 1:
+            print("进化模式: 简单进化（无岛屿模型）")
+        else:
+            print(f"岛屿数量: {num_islands_used}")
+            migration_interval_used = island_info.get('migration_interval', 'N/A')
+            if migration_interval_used <= 0:
+                print("迁移: 禁用")
+            else:
+                print(f"迁移间隔: {migration_interval_used}")
+
+            elite_size_used = island_info.get('elite_size', 'N/A')
+            if elite_size_used <= 0:
+                print("精英机制: 禁用")
+            else:
+                print(f"精英数量: {elite_size_used}")
+
     # 显示存储目录信息
     storage_dir = evolution_result.get('storage_dir', '')
     if storage_dir:
@@ -184,15 +281,24 @@ async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_c
             # 处理profile信息，支持三元组格式
             if isinstance(profile_data, (list, tuple)) and len(profile_data) >= 3:
                 gen_time, base_time, speedup = profile_data[0], profile_data[1], profile_data[2]
-                profile_str = f"生成代码: {gen_time:.4f}s, 基准代码: {base_time:.4f}s, 加速比: {speedup:.2f}x"
+                profile_str = f"生成代码: {gen_time:.4f}us, 基准代码: {base_time:.4f}us, 加速比: {speedup:.2f}x"
             elif isinstance(profile_data, (list, tuple)) and len(profile_data) >= 1:
-                profile_str = f"执行时间: {profile_data[0]:.4f}s"
+                profile_str = f"执行时间: {profile_data[0]:.4f}us"
             elif profile_data != float('inf'):
-                profile_str = f"执行时间: {profile_data:.4f}s"
+                profile_str = f"执行时间: {profile_data:.4f}us"
             else:
                 profile_str = "性能: N/A"
 
-            print(f"  {i}. {impl.get('op_name', 'Unknown')} (轮次 {impl.get('round', 'N/A')}, {profile_str})")
+            # 构建显示信息
+            info_parts = [f"{impl.get('op_name', 'Unknown')} (轮次 {impl.get('round', 'N/A')}"]
+
+            # 只有在启用岛屿模型时才显示来源岛屿信息
+            if evolution_result.get('island_info', {}).get('num_islands', 1) > 1:
+                source_island = impl.get('source_island', 'N/A')
+                info_parts.append(f"来源岛屿 {source_island}")
+
+            info_parts.append(profile_str)
+            print(f"  {i}. {', '.join(info_parts)})")
     else:
         print("\n⚠️  没有找到成功的实现")
 
@@ -205,31 +311,7 @@ async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_c
             success_rate = round_result.get('success_rate', 0.0)
             successful = round_result.get('successful_tasks', 0)
             total = round_result.get('total_tasks', 0)
-            round_best_speedup = round_result.get('round_best_speedup', 0.0)
-            global_best_speedup = round_result.get('global_best_speedup', 0.0)
-
-            print(f"  轮次 {round_num}: {successful}/{total} 成功 ({success_rate:.2%}), "
-                  f"本轮最佳: {round_best_speedup:.2f}x, 全局最佳: {global_best_speedup:.2f}x")
-
-    # 显示加速比统计汇总
-    round_best_speedups = evolution_result.get('round_best_speedups', [])
-    global_best_speedup_history = evolution_result.get('global_best_speedup_history', [])
-    final_best_speedup = evolution_result.get('final_best_speedup', 0.0)
-
-    if round_best_speedups:
-        print(f"\n🚀 加速比统计汇总:")
-        print(f"  每轮最佳加速比: {[f'{x:.2f}x' for x in round_best_speedups]}")
-        print(f"  截至每轮全局最佳: {[f'{x:.2f}x' for x in global_best_speedup_history]}")
-        print(f"  最终全局最佳加速比: {final_best_speedup:.2f}x")
-
-        # 计算加速比改进趋势
-        if len(round_best_speedups) > 1:
-            improvements = []
-            for i in range(1, len(round_best_speedups)):
-                if round_best_speedups[i] > round_best_speedups[i-1]:
-                    improvements.append(f"轮次{i+1}")
-            if improvements:
-                print(f"  性能改进轮次: {', '.join(improvements)}")
+            print(f"  轮次 {round_num}: {successful}/{total} 成功 ({success_rate:.2%})")
 
     print("="*80)
 
@@ -300,49 +382,127 @@ async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_c
 
 def main():
     """主函数"""
+    # 解析命令行参数
+    project_root = get_project_root()
+    config_path = os.path.join(project_root, "config", "evolve_config.yaml")
     if len(sys.argv) == 1:
-        # 无参数模式：使用硬编码的默认配置
-        op_name = DEFAULT_OP_NAME
-        task_desc = DEFAULT_TASK_DESC.strip()
-        config = DEFAULT_CONFIG
+        # 无参数模式：使用默认配置文件
+        try:
+            config = EvolveConfig.from_yaml(config_path)
+            op_name = config.op_name
+            task_desc = config.task_desc
 
-        print(f"使用默认硬编码任务: {op_name}")
-        print("任务描述: 使用内置默认任务")
+            print(f"使用默认配置文件: {config_path}")
+            print(f"算子名称: {op_name}")
+            print(f"任务描述文件: {task_desc}")
+            print(f"配置详情: {config.to_dict()}")
+        except Exception as e:
+            print(f"无法加载默认配置文件 {config_path}: {e}")
+            print("使用内置默认配置")
+            config = EvolveConfig()
+            op_name = config.op_name
+            task_desc = config.task_desc
+            
+            print(f"算子名称: {op_name}")
+            print(f"任务描述文件: {task_desc}")
 
-    elif len(sys.argv) == 10:
-        # batch_runner调用模式: op_name task_file device max_rounds parallel_num dsl framework backend arch
+    elif len(sys.argv) == 2:
+        # 配置文件模式：从YAML配置文件加载
+        config_path = sys.argv[1]
+        try:
+            config = EvolveConfig.from_yaml(config_path)
+            op_name = config.op_name
+            task_desc = config.task_desc
+
+            print(f"使用配置文件: {config_path}")
+            print(f"算子名称: {op_name}")
+            print(f"任务描述文件: {task_desc}")
+            print(f"配置详情: {config.to_dict()}")
+        except Exception as e:
+            print(f"无法加载配置文件 {config_path}: {e}")
+            sys.exit(1)
+
+    elif len(sys.argv) > 3:
+        # batch_runner简化模式: op_name task_file device [config_file]
         op_name = sys.argv[1]
         task_file = sys.argv[2]
         device = int(sys.argv[3])
-        max_rounds = int(sys.argv[4])
-        parallel_num = int(sys.argv[5])
-        dsl = sys.argv[6]
-        framework = sys.argv[7]
-        backend = sys.argv[8]
-        arch = sys.argv[9]
 
         # 创建配置对象
-        config = EvolveConfig(
-            dsl=dsl,
-            framework=framework,
-            backend=backend,
-            arch=arch,
-            max_rounds=max_rounds,
-            parallel_num=parallel_num,
-            device_list=[device],
-            config_path=""  # 将在__post_init__中自动设置
-        )
+        config = EvolveConfig()
+        
+        # 如果提供了配置文件路径
+        if len(sys.argv) == 5:
+            config_path = sys.argv[4]
+
+        try:
+            # 批量调用模式：跳过任务配置，因为任务文件是直接传入的
+            file_config = EvolveConfig.from_yaml(config_path, skip_task_config=True)
+            # 合并配置
+            for key, value in file_config.to_dict().items():
+                setattr(config, key, value)
+            
+            # 检查是否有自定义任务配置
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    yaml_config = yaml.safe_load(f)
+                
+                # 检查是否有custom_tasks配置
+                if 'custom_tasks' in yaml_config and yaml_config['custom_tasks']:
+                    if op_name in yaml_config['custom_tasks']:
+                        custom_config = yaml_config['custom_tasks'][op_name]
+                        print(f"🎯 发现自定义配置 for {op_name}: {custom_config}")
+                        
+                        # 应用自定义配置
+                        if 'max_rounds' in custom_config:
+                            config.max_rounds = custom_config['max_rounds']
+                            print(f"   自定义 max_rounds: {config.max_rounds}")
+                        if 'parallel_num' in custom_config:
+                            config.parallel_num = custom_config['parallel_num']
+                            print(f"   自定义 parallel_num: {config.parallel_num}")
+                        if 'num_islands' in custom_config:
+                            config.num_islands = custom_config['num_islands']
+                            print(f"   自定义 num_islands: {config.num_islands}")
+                        if 'migration_interval' in custom_config:
+                            config.migration_interval = custom_config['migration_interval']
+                            print(f"   自定义 migration_interval: {config.migration_interval}")
+                        if 'elite_size' in custom_config:
+                            config.elite_size = custom_config['elite_size']
+                            print(f"   自定义 elite_size: {config.elite_size}")
+                        if 'parent_selection_prob' in custom_config:
+                            config.parent_selection_prob = custom_config['parent_selection_prob']
+                            print(f"   自定义 parent_selection_prob: {config.parent_selection_prob}")
+                        
+                        print(f"✅ 已应用自定义配置")
+                    
+            except Exception as e:
+                print(f"提示: 无法解析custom_tasks配置: {e}")
+                
+        except Exception as e:
+            print(f"警告: 无法加载配置文件 {config_path}: {e}")
+
+        # 设置设备
+        config.device_list = [device]
 
         # 读取任务描述文件
         try:
             with open(task_file, 'r', encoding='utf-8') as f:
                 task_desc = f.read().strip()
 
-            print(f"批量模式任务: {op_name}")
+            print(f"任务: {op_name}")
             print(f"任务文件: {task_file}")
             print(f"设备: {config.device_list}")
             print(f"配置: {config.max_rounds}轮/{config.parallel_num}并行")
             print(f"基础参数: {config.dsl}/{config.framework}/{config.backend}/{config.arch}")
+
+            # 岛屿模型配置
+            if config.num_islands > 1:
+                print(f"岛屿数量: {config.num_islands}")
+                if config.migration_interval > 0:
+                    print(f"迁移间隔: {config.migration_interval}")
+                if config.elite_size > 0:
+                    print(f"精英数量: {config.elite_size}")
+                    print(f"父代选择概率: {config.parent_selection_prob}")
 
         except FileNotFoundError:
             print(f"任务文件不存在: {task_file}")
@@ -353,8 +513,10 @@ def main():
 
     else:
         print("用法:")
-        print("  python run_batch_evolve.py                                                                        # 使用硬编码默认配置")
-        print("  python run_batch_evolve.py <op_name> <task_file> <device> <rounds> <parallel> <dsl> <framework> <backend> <arch>  # batch模式")
+        print("  python single_evolve_runner.py                                                                        # 使用默认配置")
+        print("  python single_evolve_runner.py <config_file>                                                          # 使用YAML配置文件")
+        print(
+            "  python single_evolve_runner.py <op_name> <task_file> <device> [config_file]                           # batch runner简化模式")
         sys.exit(1)
 
     # 运行任务
@@ -373,6 +535,8 @@ def main():
 
     except Exception as e:
         print(f"Error occurred during evolution: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
