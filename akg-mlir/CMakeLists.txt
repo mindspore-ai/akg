@@ -79,50 +79,19 @@ endif()
 #-------------------------------------------------------------------------------
 # LLVM Configuration
 #-------------------------------------------------------------------------------
-
-# Temporarily support legacy variable
-if (DEFINED LLVM_INSTALL_PATH)
-  set(LLVM_BUILD_PATH ${LLVM_INSTALL_PATH})
-  message(WARNING
-    "Deprecated variable LLVM_INSTALL_PATH was set. "
-    "It is recommended to either set cmake variable $LLVM_BUILD_PATH "
-    "or environment variable $LLVM_DIR."
-  )
-endif ()
-
 set(LLVM_REQUIRES_EH ON)
 set(LLVM_REQUIRES_RTTI ON)
 
-message("LLVM_BUILD_PATH: ${LLVM_BUILD_PATH}")
-set(LLVM_INSTALL_DIR "${LLVM_BUILD_PATH}")
-set(LLVM_TOOLS_DIR "${LLVM_BUILD_PATH}/bin")
-set(LLVM_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third-party/llvm-project")
+include(${CMAKE_SOURCE_DIR}/cmake/MLIR.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/external_libs/glog.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/external_libs/ascendnpu_ir.cmake)
 
-
-if(NOT DEFINED LLVM_EXTERNAL_LIT)
-  set(LLVM_EXTERNAL_LIT "${LLVM_TOOLS_DIR}/llvm-lit.py" CACHE PATH "PATH to llvm-lit")
-endif()
-
-# ----------------------------- Dependencies
-set(MLIR_DIR "${LLVM_INSTALL_DIR}/lib/cmake/mlir")
-include(cmake/MLIR.cmake)
 set(JSON_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/JSON-for-Modern-CPP-v3.10.1.zip")
-
-#-------------------------------------------------------------------------------
-# BishengIR
-#-------------------------------------------------------------------------------
-
-set(BISHENGIR_INCLUDE_DIR ${LLVM_SOURCE_PATH}/third-party/bishengir/bishengir/include)
-include_directories(${BISHENGIR_INCLUDE_DIR})
-
-set(BISHENGIR_BUILD_INCLUDE_DIR ${LLVM_BUILD_PATH}/tools/bishengir/bishengir/include)
-include_directories(${BISHENGIR_BUILD_INCLUDE_DIR})
 
 #-------------------------------------------------------------------------------
 # AKG-MLIR
 #-------------------------------------------------------------------------------
 
-include(${CMAKE_SOURCE_DIR}/cmake/external_libs/glog.cmake)
 include_directories(${AKG_MLIR_SRC_INCLUDE_DIR})
 include_directories(${AKG_MLIR_BIN_INCLUDE_DIR})
 
