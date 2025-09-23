@@ -15,7 +15,6 @@
 import os
 import json
 import logging
-from sre_parse import ANY
 from typing import Any, List, Dict
 from pathlib import Path
 from abc import ABC, abstractmethod
@@ -39,9 +38,10 @@ class VectorStore(ABC):
                 database_path: str, 
                 embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
                 index_name: str = "vector_store",
-                features: List[str] = None):
+                features: List[str] = None,
+                config: dict = None):
         # 使用数据库路径、索引名称和特征列表的组合作为实例的唯一标识
-        instance_key = get_md5_hash(database_path=database_path, index_name=index_name, features=features)
+        instance_key = get_md5_hash(database_path=database_path, index_name=index_name, features=features, config=config)
         
         # 检查实例是否已存在
         if instance_key not in cls._instances or cls._instances[instance_key] is None:
@@ -62,7 +62,8 @@ class VectorStore(ABC):
                  database_path: str, 
                  embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
                  index_name: str = "vector_store",
-                 features: List[str] = None):
+                 features: List[str] = None,
+                 config: dict = None):
         # 防止重复初始化
         if hasattr(self, '_initialized') and self._initialized:
             return
@@ -71,6 +72,7 @@ class VectorStore(ABC):
         self.database_path = database_path
         self.features = features or ["op_name", "op_type", "input_specs", "output_specs", "computation", "schedule"]
         self.index_path = str(Path(self.database_path) / index_name)
+        self.config = config or {}
         self.enable_vector_store = True
         self.embedding_model = self._load_embedding_model(embedding_model_name) 
         self.vector_store = self._load_or_create_store(None)
@@ -85,7 +87,7 @@ class VectorStore(ABC):
             try:
                 embedding = HuggingFaceEmbeddings(
                     model_name=model_name,
-                    model_kwargs={'device': 'cpu'},  # 如有GPU可改为'cuda'
+                    model_kwargs={'device': self.config.get("database_config", {}).get("embedding_device", "cpu")},
                     encode_kwargs={'normalize_embeddings': True}
                 )
                 return embedding
@@ -215,7 +217,7 @@ class VectorStore(ABC):
         if not self.enable_vector_store:
             return
 
-        metadata_path = Path(self.database_path) / "operators" / common_path / md5_hash / 'metadata.json'
+        metadata_path = Path(self.database_path) / common_path / md5_hash / 'metadata.json'
         if not metadata_path.exists():
             raise ValueError(f"算子元数据文件 {str(metadata_path)} 不存在")
         

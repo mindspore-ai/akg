@@ -28,8 +28,9 @@ class EvolveVectorStore(VectorStore):
                  database_path: str, 
                  embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
                  index_name: str = "evolve_vector_store",
-                 features: List[str] = ["base", "pass", "text"]):
-        super().__init__(database_path, embedding_model_name, index_name, features)
+                 features: List[str] = ["base", "pass", "text"],
+                 config: dict = None):
+        super().__init__(database_path, embedding_model_name, index_name, features, config)
     
     @staticmethod
     def get_page_content(metadata: dict, features: List[str]):

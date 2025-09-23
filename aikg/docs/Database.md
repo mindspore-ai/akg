@@ -34,6 +34,9 @@ The Database module supports multiple retrieval strategies for finding operator 
 config = {
     "agent_model_config": {
         "feature_extraction": "deepseek_r1_default"
+    },
+    "database_config": {
+        "embedding_device": "cpu"  # or "cuda" for GPU
     }
 }
 ```
@@ -102,20 +105,6 @@ config = {
 ## Usage Example
 ```python
 from ai_kernel_generator.database.database import Database, RetrievalStrategy
-from ai_kernel_generator.database.vector_store import VectorStore
-
-# Initialize Database with VectorStore support
-vector_store = VectorStore(
-    database_path="/path/to/database",
-    embedding_model_name="GanymedeNil/text2vec-large-chinese",
-    index_name="operator_vector_store"
-)
-
-config = {
-    "agent_model_config": {
-        "feature_extraction": "deepseek_r1_default"
-    }
-}
 
 database = Database(
     database_path="/path/to/database",

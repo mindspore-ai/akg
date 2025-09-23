@@ -60,7 +60,8 @@ class CoderDatabase(Database):
         self.computation_vector_store = CoderVectorStore(
             database_path=self.database_path,
             index_name="computation_vector_store",
-            features=["op_name", "computation"]
+            features=["op_name", "computation"],
+            config=config
         )
         self.vector_stores = [self.computation_vector_store]
         super().__init__(self.database_path, self.vector_stores, config)

@@ -34,6 +34,9 @@ Database模块支持多种检索策略来查找算子优化方案：
 config = {
     "agent_model_config": {
         "feature_extraction": "deepseek_r1_default"
+    },
+    "database_config": {
+        "embedding_device": "cpu"  # 或 "cuda" 用于GPU
     }
 }
 ```
@@ -102,20 +105,6 @@ config = {
 ## 使用示例
 ```python
 from ai_kernel_generator.database.database import Database, RetrievalStrategy
-from ai_kernel_generator.database.vector_store import VectorStore
-
-# 初始化带VectorStore支持的数据库
-vector_store = VectorStore(
-    database_path="/path/to/database",
-    embedding_model_name="GanymedeNil/text2vec-large-chinese",
-    index_name="operator_vector_store"
-)
-
-config = {
-    "agent_model_config": {
-        "feature_extraction": "deepseek_r1_default"
-    }
-}
 
 database = Database(
     database_path="/path/to/database",

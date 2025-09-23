@@ -34,9 +34,10 @@ class CoderVectorStore(VectorStore):
                 database_path: str, 
                 embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
                 index_name: str = "vector_store",
-                features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation"]):
+                features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation"],
+                config: dict = None):
         # 使用数据库路径、索引名称和特征列表的组合作为实例的唯一标识
-        instance_key = get_md5_hash(database_path=database_path, index_name=index_name, features=features)
+        instance_key = get_md5_hash(database_path=database_path, index_name=index_name, features=features, config=config)
         
         # 检查实例是否已存在
         if instance_key not in cls._instances or cls._instances[instance_key] is None:
@@ -57,8 +58,9 @@ class CoderVectorStore(VectorStore):
                  database_path: str, 
                  embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
                  index_name: str = "coder_vector_store",
-                 features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation"]):
-        super().__init__(database_path, embedding_model_name, index_name, features)
+                 features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation"],
+                 config: dict = None):
+        super().__init__(database_path, embedding_model_name, index_name, features, config)
     
     def gen_document(self, metadata: dict, file_path: str, other_args: Any = None):
         """从代码元数据生成文档 - 重写父类方法"""
@@ -76,8 +78,7 @@ class CoderVectorStore(VectorStore):
         doc = Document(
             page_content=", ".join(page_content_parts),
             metadata={
-                "code_type": metadata.get('code_type', ''),
-                "function_name": metadata.get('function_name', ''),
+                "op_type": metadata.get('op_type', ''),
                 "file_path": file_path,
                 "feature_invariants": feature_invariants
             }
