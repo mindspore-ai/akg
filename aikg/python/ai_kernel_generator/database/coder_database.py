@@ -17,7 +17,7 @@ from typing import List, Dict
 from pathlib import Path
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
-from ai_kernel_generator.database.vector_store import VectorStore
+from ai_kernel_generator.database.coder_vector_store import CoderVectorStore
 from ai_kernel_generator.database.database import Database, RetrievalStrategy
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.utils.common_utils import get_md5_hash
@@ -57,7 +57,7 @@ class CoderDatabase(Database):
             return
         
         self.database_path = database_path or str(DEFAULT_CODER_DATABASE_PATH)
-        self.computation_vector_store = VectorStore(
+        self.computation_vector_store = CoderVectorStore(
             database_path=self.database_path,
             index_name="computation_vector_store",
             features=["op_name", "computation"]

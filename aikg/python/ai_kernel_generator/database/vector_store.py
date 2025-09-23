@@ -15,8 +15,10 @@
 import os
 import json
 import logging
-from typing import List, Dict
+from sre_parse import ANY
+from typing import Any, List, Dict
 from pathlib import Path
+from abc import ABC, abstractmethod
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
@@ -24,9 +26,10 @@ from ai_kernel_generator.utils.common_utils import get_md5_hash
 
 logger = logging.getLogger(__name__)
 
-class VectorStore:
+class VectorStore(ABC):
     """
     基于RAG的优化方案检索器，检索最相似的算子调度方案
+    抽象基类，定义了向量存储的基本框架，子类需要实现gen_document方法
     """
     # 单例模式实现
     _instances: Dict[str, 'VectorStore'] = {}
@@ -36,7 +39,7 @@ class VectorStore:
                 database_path: str, 
                 embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
                 index_name: str = "vector_store",
-                features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation"]):
+                features: List[str] = None):
         # 使用数据库路径、索引名称和特征列表的组合作为实例的唯一标识
         instance_key = get_md5_hash(database_path=database_path, index_name=index_name, features=features)
         
@@ -59,18 +62,18 @@ class VectorStore:
                  database_path: str, 
                  embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
                  index_name: str = "vector_store",
-                 features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation"]):
+                 features: List[str] = None):
         # 防止重复初始化
         if hasattr(self, '_initialized') and self._initialized:
             return
         
         os.environ["OMP_NUM_THREADS"] = "8"
         self.database_path = database_path
-        self.features = features
+        self.features = features or ["op_name", "op_type", "input_specs", "output_specs", "computation", "schedule"]
         self.index_path = str(Path(self.database_path) / index_name)
         self.enable_vector_store = True
         self.embedding_model = self._load_embedding_model(embedding_model_name) 
-        self.vector_store = self._load_or_create_store()
+        self.vector_store = self._load_or_create_store(None)
         self._initialized = True
 
     def _load_embedding_model(self, embedding_model_name: str = "GanymedeNil/text2vec-large-chinese"):
@@ -107,7 +110,7 @@ class VectorStore:
         self.enable_vector_store = False
         return None
     
-    def _load_or_create_store(self):
+    def _load_or_create_store(self, other_args: Any = None):
         """加载或创建向量存储"""
         if not self.enable_vector_store:
             return None
@@ -117,7 +120,7 @@ class VectorStore:
         # 如果索引不存在则创建
         if not (index_path / "index.faiss").exists():
             logger.info(f"Building operator feature vector database: {index_path.name}...")
-            return self._build_vector_store()
+            return self._build_vector_store(other_args)
         
         # 加载现有索引
         logger.info(f"Loading existing vector index: {index_path.name}...")
@@ -127,23 +130,22 @@ class VectorStore:
             allow_dangerous_deserialization=True  # 注意安全性
         )
 
-    def gen_document(self, metadata: dict, file_path: str):
-        """从算子元数据生成文档"""
-        backend = metadata.get('backend', '')
-        arch = metadata.get('arch', '')
-        dsl = metadata.get('dsl', '')
-        feature_invariants = get_md5_hash(backend=backend, arch=arch, dsl=dsl)
-        doc = Document(
-            page_content=", ".join([f"{k}: {metadata[k]}" for k in self.features]),
-            metadata={
-                "op_type": metadata.get('op_type', ''),
-                "file_path": file_path,
-                "feature_invariants": feature_invariants
-            }
-        )
-        return doc
+    @abstractmethod
+    def gen_document(self, metadata: dict, file_path: str, other_args: Any = None) -> Document:
+        """
+        从元数据生成文档 - 子类必须实现此方法
+        
+        Args:
+            metadata: 元数据字典
+            file_path: 文件路径
+            other_args: 其他参数
+            
+        Returns:
+            Document: 生成的文档对象
+        """
+        pass
     
-    def _build_vector_store(self):
+    def _build_vector_store(self, other_args: Any = None):
         """从算子元数据构建向量存储"""
         root_dir = Path(self.database_path)
         documents = []
@@ -161,7 +163,7 @@ class VectorStore:
                 metadata = json.load(f)
 
             # 创建检索文档
-            documents.append(self.gen_document(metadata, str(op_subdir)))
+            documents.append(self.gen_document(metadata, str(op_subdir), other_args))
         # 创建向量存储
         if not documents:
             # 创建空向量存储
@@ -208,12 +210,12 @@ class VectorStore:
             filter={"feature_invariants": feature_invariants}
         )
 
-    def insert(self, backend: str, arch: str, dsl: str, md5_hash: str):
+    def insert(self, common_path: str, md5_hash: str):
         """向向量存储添加新的算子特征文档"""
         if not self.enable_vector_store:
             return
 
-        metadata_path = Path(self.database_path) / arch / dsl / md5_hash / 'metadata.json'
+        metadata_path = Path(self.database_path) / "operators" / common_path / md5_hash / 'metadata.json'
         if not metadata_path.exists():
             raise ValueError(f"算子元数据文件 {str(metadata_path)} 不存在")
         

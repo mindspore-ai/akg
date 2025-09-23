@@ -158,9 +158,9 @@ class Database():
         for vector_store, strategy_mode in zip(self.vector_stores, strategy_modes):
             if vector_store.enable_vector_store and strategy_mode != RetrievalStrategy.RANDOMICITY:
                 if strategy_mode == RetrievalStrategy.MMR:
-                    docs = self.vector_store.max_marginal_relevance_search(features_str, feature_invariants, sample_num)
+                    docs = vector_store.max_marginal_relevance_search(features_str, feature_invariants, sample_num)
                 elif strategy_mode == RetrievalStrategy.NAIVETY:
-                    docs = self.vector_store.similarity_search(features_str, feature_invariants, sample_num)
+                    docs = vector_store.similarity_search(features_str, feature_invariants, sample_num)
                 else:
                     raise ValueError("Invalid strategy_mode")
                 result = self.get_output_content(output_content, strategy_mode, docs, dsl, framework)
@@ -189,7 +189,7 @@ class Database():
             f.write(impl_code)
 
         for vector_store in self.vector_stores:
-            vector_store.insert(backend, arch, dsl, md5_hash)
+            vector_store.insert(f"{arch}/{dsl}", md5_hash)
         logger.info(f"Operator implementation inserted successfully, file path: {file_path}")
 
     async def delete(self, impl_code:str, backend: str, arch: str, dsl: str):
