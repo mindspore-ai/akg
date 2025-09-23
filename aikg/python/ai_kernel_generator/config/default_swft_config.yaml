@@ -31,3 +31,4 @@ verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
 database_config:
   enable_rag: false
   sample_num: 2
+  embedding_device: "cpu"

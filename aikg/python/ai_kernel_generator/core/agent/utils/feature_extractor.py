@@ -28,10 +28,11 @@ class FeatureExtractor(AgentBase):
         - 特征信息总结
     """
 
-    def __init__(self, model_config: dict, impl_code: str = "", framework_code: str = ""):
+    def __init__(self, model_config: dict, impl_code: str = "", framework_code: str = "", dsl: str = ""):
         self.model_config = model_config
         self.impl_code = impl_code
         self.framework_code = framework_code
+        self.dsl = dsl
 
         context = {
             "agent_name": "feature_extractor",
@@ -48,6 +49,7 @@ class FeatureExtractor(AgentBase):
         self.feature_extraction_input = {
             "impl_code": self.impl_code,
             "framework_code": self.framework_code,
+            "dsl": self.dsl,
             "format_instructions": self.format_instructions,
         }
 

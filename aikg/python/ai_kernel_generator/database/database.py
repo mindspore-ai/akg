@@ -33,6 +33,7 @@ class RetrievalStrategy(Enum):
     OPTIMALITY = "optimality"
     RULE = "rule"
     HIERARCHY = "hierarchy"
+    FUSION = "fusion"
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
 
@@ -113,7 +114,7 @@ class Database():
         if not arch or not dsl:
             raise ValueError("arch and dsl must be provided in random mode")
             
-        sample_path = Path(self.database_path) / "operators" / arch / dsl
+        sample_path = Path(self.database_path) / arch / dsl
         if not sample_path.exists() or not sample_path.is_dir():
             raise ValueError(f"Sample path {sample_path} does not exist or is not a directory")
         
@@ -157,9 +158,9 @@ class Database():
         for vector_store, strategy_mode in zip(self.vector_stores, strategy_modes):
             if vector_store.enable_vector_store and strategy_mode != RetrievalStrategy.RANDOMICITY:
                 if strategy_mode == RetrievalStrategy.MMR:
-                    docs = self.vector_store.max_marginal_relevance_search(features_str, feature_invariants, sample_num)
+                    docs = vector_store.max_marginal_relevance_search(features_str, feature_invariants, sample_num)
                 elif strategy_mode == RetrievalStrategy.NAIVETY:
-                    docs = self.vector_store.similarity_search(features_str, feature_invariants, sample_num)
+                    docs = vector_store.similarity_search(features_str, feature_invariants, sample_num)
                 else:
                     raise ValueError("Invalid strategy_mode")
                 result = self.get_output_content(output_content, strategy_mode, docs, dsl, framework)
@@ -172,8 +173,7 @@ class Database():
         插入新的算子实现
         """
         md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
-        operator_path = Path(self.database_path) / "operators"
-        file_path = operator_path / arch / dsl / md5_hash
+        file_path = Path(self.database_path) / arch / dsl / md5_hash
 
         features = await self.extract_features(impl_code, framework_code, backend, arch, dsl, profile)
         file_path.mkdir(parents=True, exist_ok=True)
@@ -189,7 +189,7 @@ class Database():
             f.write(impl_code)
 
         for vector_store in self.vector_stores:
-            vector_store.insert(backend, arch, dsl, md5_hash)
+            vector_store.insert(f"{arch}/{dsl}", md5_hash)
         logger.info(f"Operator implementation inserted successfully, file path: {file_path}")
 
     async def delete(self, impl_code:str, backend: str, arch: str, dsl: str):
@@ -198,7 +198,7 @@ class Database():
         """
         md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
 
-        operator_path = Path(self.database_path) / "operators"
+        operator_path = Path(self.database_path)
         file_path = operator_path / arch / dsl / md5_hash
         if not file_path.exists():
             logger.warning(f"Operator implementation does not exist: {file_path}")
@@ -220,5 +220,5 @@ class Database():
     def clear(self):
         for vector_store in self.vector_stores:
             vector_store.clear()
-        shutil.rmtree(str(Path(self.database_path) / "operators"))
+        shutil.rmtree(self.database_path)
 
