@@ -23,8 +23,7 @@
 #include <vector>
 #include "internal_helper.h"
 #include "internal_tiling_cache.h"
-#include "mindspore/ops/kernel/ascend/acl_ir/op_api_cache.h"
-#include "mindspore/ccsrc/ms_extension/api.h"
+#include "mindspore/include/custom_op_api.h"
 
 namespace ms_custom_ops {
 void GatherOpHash(const ms::Tensor &);

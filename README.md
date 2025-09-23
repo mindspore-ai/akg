@@ -277,7 +277,7 @@ pyboost:
 以add算子为例：
 ```cpp
 #include "ascendc_kernel_mod.h"
-#include "mindspore/ccsrc/ms_extension/api.h"
+#include "mindspore/include/custom_op_api.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -388,7 +388,7 @@ pyboost:
 以reshape_and_cache算子为例：
 ```cpp
 #include "ccsrc/base/ms_kernels_internal/graphmode/internal_kernel_mod.h"
-#include "mindspore/ccsrc/ms_extension/api.h"
+#include "mindspore/include/custom_op_api.h"
 #include "ccsrc/utils/utils.h"
 
 namespace ms_custom_ops {

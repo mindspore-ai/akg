@@ -25,10 +25,8 @@
 #include "internal_spinlock.h"
 #include "internal_tiling_cache.h"
 #include "module.h"
-#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel.h"
-#include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
-#include "mindspore/ccsrc/tools/profiler/profiling.h"
 #include "acl/acl_mdl.h"
+#include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
 
 namespace ms_custom_ops {
 using namespace mindspore::ops;

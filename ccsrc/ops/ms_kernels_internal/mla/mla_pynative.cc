@@ -21,8 +21,6 @@
 #include "ccsrc/ops/ms_kernels_internal/mla/mla_common.h"
 #include "ccsrc/base/ms_kernels_internal/pyboost/internal_pyboost_runner.h"
 #include "ccsrc/utils/utils.h"
-#include "mindspore/ccsrc/ms_extension/api.h"
-#include "lib/plugin/ascend/ms_kernels_internal/internal_kernel/include/internal.h"
 #include "ccsrc/ops/ms_kernels_internal/utils/attention_utils.h"
 
 namespace ms_custom_ops {

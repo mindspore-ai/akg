@@ -25,15 +25,6 @@
 
 #include "ccsrc/base/ms_kernels_internal/graphmode/internal_kernel_mod.h"
 #include "ccsrc/utils/utils.h"
-#include "mindspore/core/include/mindapi/ir/tensor.h"
-#include "mindspore/ops/kernel/ascend/acl_ir/acl_convert.h"
-#include "mindspore/ops/ops_utils/op_utils.h"
-#include "mindspore/ccsrc/ms_extension/api.h"
-#include "mindspore/core/include/ops/base_operator.h"
-#include "mindspore/core/include/ops/ops_func_impl/op_func_impl.h"
-#include "mindspore/core/include/ops/ops_func_impl/simple_infer.h"
-#include "mindspore/core/include/utils/check_convert_utils.h"
-#include "mindspore/ccsrc/include/backend/common/ms_device_shape_transfer.h"
 
 namespace ms_custom_ops {
 enum FusedAddTopKDivInputIndex : size_t {

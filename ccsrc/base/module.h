@@ -21,8 +21,7 @@
 #include <pybind11/pybind11.h>
 #include <string>
 #include <vector>
-#include "mindspore/ccsrc/ms_extension/api.h"
-#include "mindspore/ops/kernel/ascend/custom/kernel_mod_impl/custom_kernel_factory.h"
+#include "mindspore/include/custom_op_api.h"
 
 // Define the type of module registration functions
 using ModuleRegisterFunction = std::function<void(pybind11::module_ &)>;

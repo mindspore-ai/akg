@@ -87,11 +87,19 @@ def get_requirements() -> List[str]:
 
 
 def write_commit_id():
-    ret_code = os.system("git rev-parse --abbrev-ref HEAD > .commit_id "
-                         "&& git log --abbrev-commit -1 >> .commit_id")
-    if ret_code != 0:
-        sys.stdout.write("Warning: Can not get commit id information. Please make sure git is available.")
-        os.system("echo 'git is not available while building.' > .commit_id")
+    commit_info = ""
+    try:
+        commit_info += subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode("utf-8")
+        commit_info += subprocess.check_output(
+            ["git", "log", "--abbrev-commit", "-1"]).decode("utf-8")
+    except subprocess.CalledProcessError:
+        logger.warning("Can't get commit id information. "
+                       "Please make sure git is available.")
+        commit_info = "git is not available while building."
+
+    with open("./python/ms_custom_ops/.commit_id", "w") as f:
+        f.write(commit_info)
 
 
 def get_version():

@@ -22,14 +22,6 @@
 #include "ccsrc/ops/ms_kernels_internal/mla/mla_common.h"
 #include "ccsrc/ops/ms_kernels_internal/utils/attention_utils.h"
 #include "ccsrc/base/ms_kernels_internal/graphmode/internal_kernel_mod.h"
-#include "mindspore/core/include/ir/tensor.h"
-#include "mindspore/ops/kernel/ascend/acl_ir/acl_convert.h"
-#include "mindspore/ops/ops_utils/op_utils.h"
-#include "mindspore/ccsrc/ms_extension/api.h"
-#include "mindspore/core/include/ops/base_operator.h"
-#include "mindspore/core/include/ops/ops_func_impl/op_func_impl.h"
-#include "mindspore/core/include/ops/ops_func_impl/simple_infer.h"
-#include "mindspore/core/include/utils/check_convert_utils.h"
 
 namespace ms_custom_ops {
 static constexpr auto kMLAQshapeRank = 3;

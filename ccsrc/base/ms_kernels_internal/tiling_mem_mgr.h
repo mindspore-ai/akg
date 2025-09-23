@@ -21,7 +21,7 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include "mindspore/ccsrc/runtime/hardware_abstract/device_context/device_context.h"
+#include "mindspore/include/custom_op_api.h"
 
 namespace ms_custom_ops {
 constexpr size_t kTilingMemPoolBlockSize = 32;

@@ -17,10 +17,8 @@
 #include "internal_kernel_mod.h"
 #include <functional>
 #include <utility>
-#include "mindspore/core/include/utils/ms_context.h"
 #include "internal_helper.h"
 #include "internal_tiling_cache.h"
-#include "mindspore/ccsrc/include/backend/common/ms_device_shape_transfer.h"
 
 namespace ms_custom_ops {
 SimpleSpinLock InternalKernelMod::lock_ = SimpleSpinLock();

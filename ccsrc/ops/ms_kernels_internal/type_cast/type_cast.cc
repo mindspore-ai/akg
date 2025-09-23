@@ -23,12 +23,6 @@
 #include <utility>
 #include <vector>
 #include "internal_kernel_mod.h"
-#include "mindspore/core/include/mindapi/ir/tensor.h"
-#include "mindspore/ops/kernel/ascend/acl_ir/acl_convert.h"
-#include "mindspore/ops/ops_utils/op_utils.h"
-#include "mindspore/ccsrc/ms_extension/api.h"
-#include "mindspore/core/include/ops/base_operator.h"
-#include "mindspore/core/include/ops/ops_func_impl/op_func_impl.h"
 
 namespace ms_custom_ops {
 constexpr size_t kTypeIndex = 1;

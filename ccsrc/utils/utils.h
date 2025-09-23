@@ -20,8 +20,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "mindspore/ccsrc/ms_extension/api.h"
-#include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel_tensor.h"
+#include "mindspore/include/custom_op_api.h"
 
 namespace ms_custom_ops {
 // Helper function to convert optional tensor to tensor or empty tensor

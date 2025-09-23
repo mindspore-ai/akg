@@ -16,11 +16,11 @@
 #ifndef MS_CUSTOM_OPS_OP_DEF_ASCENDC_PYBOOST_ASCENDC_PYBOOST_RUNNER_H_
 #define MS_CUSTOM_OPS_OP_DEF_ASCENDC_PYBOOST_ASCENDC_PYBOOST_RUNNER_H_
 
-#include "module.h"
-#include "mindspore/ccsrc/ms_extension/all.h"
 #include <functional>
 #include <optional>
 #include <set>
+#include "module.h"
+#include "mindspore/include/custom_op_api.h"
 
 namespace ms_custom_ops {
 using AscendCLaunchFunc =
