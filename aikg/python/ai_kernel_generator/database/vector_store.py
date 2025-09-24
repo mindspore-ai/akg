@@ -184,76 +184,63 @@ class VectorStore(ABC):
         vector_store.save_local(self.index_path)
         return vector_store
     
-    def max_marginal_relevance_search(self, query: str, feature_invariants: str, k: int = 5):
+    def max_marginal_relevance_search(self, query: str, k: int = 5):
         "执行最大边际相关搜索并返回匹配的文档"
         return self.vector_store.max_marginal_relevance_search(
             query=query,
             k=k,
             fetch_k=max(20, 5 * k),
             lambda_mult=0.2, # 极致多样性
-            filter={"feature_invariants": feature_invariants}, 
         )
         
-    def similarity_search(self, query: str, feature_invariants: str, k: int = 5, fetch_k: int = 20):
+    def similarity_search(self, query: str, k: int = 5, fetch_k: int = 20):
         "执行语义搜索并返回匹配的文档"
         return self.vector_store.similarity_search(
             query=query,
             k=k,
-            fetch_k=max(fetch_k, 5 * k),
-            filter={"feature_invariants": feature_invariants}
+            fetch_k=max(fetch_k, 5 * k)
         )
         
-    def similarity_search_with_score(self, query: str, feature_invariants: str, k: int = 5, fetch_k: int = 20):
+    def similarity_search_with_score(self, query: str, k: int = 5, fetch_k: int = 20):
         "执行语义搜索并返回匹配的文档及其相似度得分"
         return self.vector_store.similarity_search_with_score(
             query=query,
             k=k,
-            fetch_k=max(fetch_k, 5 * k),
-            filter={"feature_invariants": feature_invariants}
+            fetch_k=max(fetch_k, 5 * k)
         )
-
-    def insert(self, common_path: str, md5_hash: str):
-        """向向量存储添加新的算子特征文档"""
+        
+    def insert(self, doc_path: str):
+        """向向量存储添加新的文档"""
         if not self.enable_vector_store:
             return
 
-        metadata_path = Path(self.database_path) / common_path / md5_hash / 'metadata.json'
+        metadata_path = Path(self.database_path) / doc_path / "metadata.json"
         if not metadata_path.exists():
             raise ValueError(f"算子元数据文件 {str(metadata_path)} 不存在")
-        
-        with open(str(metadata_path), 'r', encoding='utf-8') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
-        # 获取算子目录
         op_dir = metadata_path.parent
-
-        # 创建文档对象
         doc = self.gen_document(metadata, str(op_dir))
-
-        # 检查是否已存在相同算子的文档（去重并覆盖）
-        self.delete(md5_hash)
-        
-        # 添加到向量存储并保存
+        self.delete(doc_path)
         self.vector_store.add_documents([doc])
         self.vector_store.save_local(self.index_path)
-        logger.info(f"Successfully added operator with md5_hash={md5_hash} to vector index")
+        logger.info(f"Successfully added document with path={doc_path} to vector index")
 
-    def delete(self, md5_hash: str):
-        """从向量存储中删除指定算子特征文档"""
+    def delete(self, doc_path: str):
+        """从向量存储中删除指定文档"""
         if not self.enable_vector_store:
             return
-
+        
         existing_ids = list(self.vector_store.index_to_docstore_id.values())
         for doc_id in existing_ids:
             existing_doc = self.vector_store.docstore.search(doc_id)
-            metadata_md5_hash = existing_doc.metadata.get("file_path").split('/')[-1]
-            if metadata_md5_hash == md5_hash:
-                # 已存在相同算子的文档，删除旧文档
+            if existing_doc.metadata.get("file_path") == doc_path:
                 self.vector_store.delete([doc_id])
                 self.vector_store.save_local(self.index_path)
-                logger.info(f"Successfully removed operator with md5_hash={md5_hash} from vector index")
-                return 
-        logger.info(f"算子md5_hash={md5_hash}不存在于向量索引中")
+                logger.info(f"Successfully removed document with path={doc_path} from vector index")
+                return
+        logger.info(f"Document with path={doc_path} not found in vector index")
     
     def clear(self):
         """清空向量存储"""

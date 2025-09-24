@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-from typing import List
+from typing import List, Any
 from langchain_core.documents import Document
 from ai_kernel_generator.database.vector_store import VectorStore
 
@@ -23,7 +23,6 @@ class EvolveVectorStore(VectorStore):
     """
     基于RAG的进化算子调度方案检索器，继承自VectorStore并专门处理schedule相关功能
     """
-    
     def __init__(self, 
                  database_path: str, 
                  embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
@@ -54,7 +53,7 @@ class EvolveVectorStore(VectorStore):
                     page_content_parts.append(f"{key}: {value}")
         return ", ".join(page_content_parts)
     
-    def gen_document(self, metadata: dict, file_path: str):
+    def gen_document(self, metadata: dict, file_path: str, other_args: Any = None):
         """从算子元数据生成文档，支持schedule块字段"""
         page_content = self.get_page_content(metadata, self.features)
         return Document(

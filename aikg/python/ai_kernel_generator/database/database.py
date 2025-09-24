@@ -189,7 +189,7 @@ class Database():
             f.write(impl_code)
 
         for vector_store in self.vector_stores:
-            vector_store.insert(f"{arch}/{dsl}", md5_hash)
+            vector_store.insert(f"{arch}/{dsl}/{md5_hash}")
         logger.info(f"Operator implementation inserted successfully, file path: {file_path}")
 
     async def delete(self, impl_code:str, backend: str, arch: str, dsl: str):
@@ -214,7 +214,7 @@ class Database():
                 break
 
         for vector_store in self.vector_stores:
-            vector_store.delete(md5_hash)
+            vector_store.delete(f"{arch}/{dsl}/{md5_hash}")
         logger.info(f"Operator implementation deleted successfully, file path: {file_path}")
     
     def clear(self):
