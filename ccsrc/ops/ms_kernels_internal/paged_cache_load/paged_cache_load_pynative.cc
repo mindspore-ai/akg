@@ -21,6 +21,7 @@
 #include "ccsrc/base/ms_kernels_internal/pyboost/internal_pyboost_runner.h"
 #include "ccsrc/ops/ms_kernels_internal/paged_cache_load/paged_cache_load_common.h"
 #include "ccsrc/utils/utils.h"
+#include <vector>
 
 namespace ms_custom_ops {
 class PagedCacheLoadRunner : public InternalPyboostRunner {
@@ -49,8 +50,6 @@ std::vector<ms::Tensor> npu_paged_cache_load(const ms::Tensor &key_cache,
                                              const ms::Tensor &value_cache,
                                              const ms::Tensor &block_table,
                                              const ms::Tensor &seq_lens,
-                                             const ms::Tensor &key,
-                                             const ms::Tensor &value,
                                              const std::optional<ms::Tensor> &seq_starts,
                                              std::optional<int64_t> kv_cache_cfg,
                                              std::optional<bool> is_seq_lens_cumsum_type,
@@ -73,12 +72,59 @@ std::vector<ms::Tensor> npu_paged_cache_load(const ms::Tensor &key_cache,
   runner->param_.is_seq_lens_cumsum_type = is_seq_lens_cumsum_type.value();
   runner->param_.has_seq_starts = has_seq_starts.value();
 
+  int64_t sum_context_lens = abstract::Shape::kShapeDimAny;
+
+  if (seq_lens.GetDataPtr() != nullptr) {
+    if (is_seq_lens_cumsum_type.value()) {
+      if (seq_lens.data_type() == mindspore::TypeId::kNumberTypeInt64) {
+        int64_t * seq_lens_ptr = static_cast<int64_t *>(seq_lens.GetDataPtr());
+        for (size_t i = 0; i < seq_lens.numel(); i ++) {
+          sum_context_lens = seq_lens_ptr[seq_lens.numel() - 1];
+        }
+      } else {
+        int32_t * seq_lens_ptr = static_cast<int32_t *>(seq_lens.GetDataPtr());
+        for (size_t i = 0; i < seq_lens.numel(); i ++) {
+          sum_context_lens = seq_lens_ptr[seq_lens.numel() - 1];
+        }
+      }
+    } else {
+      sum_context_lens = 0;
+      if (seq_lens.data_type() == mindspore::TypeId::kNumberTypeInt64) {
+        int64_t * seq_lens_ptr = static_cast<int64_t *>(seq_lens.GetDataPtr());
+        for (size_t i = 0; i < seq_lens.numel(); i ++) {
+          sum_context_lens += seq_lens_ptr[i];
+        }
+      } else {
+        int32_t * seq_lens_ptr = static_cast<int32_t *>(seq_lens.GetDataPtr());
+        for (size_t i = 0; i < seq_lens.numel(); i ++) {
+          sum_context_lens += seq_lens_ptr[i];
+        }
+      }
+    }
+  }
+  runner->param_.sum_context_lens = sum_context_lens;
   // Setup the runner with all parameters (including hash calculation)
-  runner->Setup(op_name, key_cache, value_cache, block_table, seq_lens, key, value, seq_starts, kv_cache_cfg,
+  runner->Setup(op_name, key_cache, value_cache, block_table, seq_lens, seq_starts, kv_cache_cfg,
                 is_seq_lens_cumsum_type, has_seq_starts);
-  std::vector<ms::Tensor> inputs = {key_cache, value_cache, block_table, seq_lens, key, value,
-                                    GetTensorOrEmpty(seq_starts)};
-  std::vector<ms::Tensor> outputs = {key, value};
+  std::vector<ms::Tensor> inputs = {key_cache, value_cache, block_table, seq_lens, GetTensorOrEmpty(seq_starts)};
+
+  ShapeVector key_out_shape{};
+  ShapeVector value_out_shape{};
+  if (kv_cache_cfg == kNdFormatType) {  // ND
+    int64_t num_heads = key_cache.shape()[kNumHeadsIndex];
+    int64_t head_size_k = key_cache.shape()[kHeadSizeIndex];
+    int64_t head_size_v = value_cache.shape()[kHeadSizeIndex];
+    key_out_shape = {sum_context_lens, num_heads, head_size_k};
+    value_out_shape = {sum_context_lens, num_heads, head_size_v};
+  } else {  // NZ
+    int64_t num_heads_mul_head_size_k = key_cache.shape()[kNumHeadsMulHeadSizeIndex];
+    int64_t num_heads_mul_head_size_v = value_cache.shape()[kNumHeadsMulHeadSizeIndex];
+    key_out_shape = {sum_context_lens, num_heads_mul_head_size_k};
+    value_out_shape = {sum_context_lens, num_heads_mul_head_size_v};
+  }
+  auto key_out = ms::Tensor(key_cache.data_type(), key_out_shape);
+  auto value_out = ms::Tensor(value_cache.data_type(), value_out_shape);
+  std::vector<ms::Tensor> outputs = {key_out, value_out};
   runner->GetOrCreateKernel(inputs, outputs);
   runner->Run(inputs, outputs);
   return outputs;
@@ -88,14 +134,12 @@ auto pyboost_paged_cache_load(const ms::Tensor &key_cache,
                               const ms::Tensor &value_cache,
                               const ms::Tensor &block_table,
                               const ms::Tensor &seq_lens,
-                              const ms::Tensor &key,
-                              const ms::Tensor &value,
                               const std::optional<ms::Tensor> &seq_starts,
                               std::optional<int64_t> kv_cache_cfg,
                               std::optional<bool> is_seq_lens_cumsum_type,
                               std::optional<bool> has_seq_starts) {
   return ms::pynative::PyboostRunner::Call<2>(
-      npu_paged_cache_load, key_cache, value_cache, block_table, seq_lens, key, value, seq_starts,
+      npu_paged_cache_load, key_cache, value_cache, block_table, seq_lens, seq_starts,
       kv_cache_cfg, is_seq_lens_cumsum_type, has_seq_starts);
 }
 } // namespace ms_custom_ops
@@ -104,7 +148,6 @@ MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
   m.def("paged_cache_load", &ms_custom_ops::pyboost_paged_cache_load, "Paged Cache Load",
     pybind11::arg("key_cache"), pybind11::arg("value_cache"),
     pybind11::arg("block_table"), pybind11::arg("seq_lens"),
-    pybind11::arg("key"), pybind11::arg("value"),
     pybind11::arg("seq_starts") = std::nullopt,
     pybind11::arg("kv_cache_cfg") = std::nullopt,
     pybind11::arg("is_seq_lens_cumsum_type") = std::nullopt,

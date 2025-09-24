@@ -175,7 +175,7 @@ output = ms_custom_ops.reshape_and_cache(
 import mindspore as ms
 import ms_custom_ops
 
-reshape_and_cache = ms.jit(func=ms_custom_ops.reshape_and_cache)
+reshape_and_cache = ms.jit(ms_custom_ops.reshape_and_cache)
 output = reshape_and_cache(key, value, key_cache, value_cache, slot_mapping, head_num)
 ```
 
