@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-from typing import List, Dict, Any
+from typing import List, Any
 from langchain_core.documents import Document
 from ai_kernel_generator.database.vector_store import VectorStore
 from ai_kernel_generator.utils.common_utils import get_md5_hash
@@ -26,34 +26,6 @@ class CoderVectorStore(VectorStore):
     基于RAG的代码生成器向量存储，继承自VectorStore
     专门用于代码生成相关的向量检索
     """
-    # 单例模式实现 - 重写父类的单例管理
-    _instances: Dict[str, 'CoderVectorStore'] = {}
-    _lock = False  # 简单的锁机制避免并发问题
-    
-    def __new__(cls, 
-                database_path: str, 
-                embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 
-                index_name: str = "vector_store",
-                features: List[str] = ["op_name", "op_type", "input_specs", "output_specs", "computation"],
-                config: dict = None):
-        # 使用数据库路径、索引名称和特征列表的组合作为实例的唯一标识
-        instance_key = get_md5_hash(database_path=database_path, index_name=index_name, features=features, config=config)
-        
-        # 检查实例是否已存在
-        if instance_key not in cls._instances or cls._instances[instance_key] is None:
-            # 简单锁机制
-            while cls._lock:
-                pass
-            cls._lock = True
-            try:
-                # 双重检查锁定模式
-                if instance_key not in cls._instances or cls._instances[instance_key] is None:
-                    cls._instances[instance_key] = super(CoderVectorStore, cls).__new__(cls)
-            finally:
-                cls._lock = False
-        
-        return cls._instances[instance_key]
-    
     def __init__(self, 
                  database_path: str, 
                  embedding_model_name: str = "GanymedeNil/text2vec-large-chinese", 

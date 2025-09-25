@@ -77,6 +77,8 @@ class CoderDatabase(Database):
             fetch_k=max(100, 20 * k),
             filter={"feature_invariants": feature_invariants, "op_type": op_type}
         )
+        if not computation_docs:
+            raise ValueError(f"No {op_type} operator found")
         shape_features = ["input_specs", "output_specs"]
         shape_docs = []
         for doc in computation_docs:

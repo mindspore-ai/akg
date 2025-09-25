@@ -32,19 +32,19 @@ class EvolveDatabase(Database):
         self.base_vector_store = EvolveVectorStore(
             database_path=self.database_path,
             index_name="base_vector_store",
-            features=["schedule.base"],
+            features=["base"],
             config=config
         )
         self.pass_vector_store = EvolveVectorStore(
             database_path=self.database_path,
             index_name="pass_vector_store",
-            features=["schedule.PASS"],
+            features=["pass"],
             config=config
         )
         self.text_vector_store = EvolveVectorStore(
             database_path=self.database_path,
             index_name="text_vector_store",
-            features=["schedule.text"],
+            features=["text"],
             config=config
         )
         self.vector_stores = [self.base_vector_store, self.pass_vector_store, self.text_vector_store]
