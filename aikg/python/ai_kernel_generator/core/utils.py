@@ -65,7 +65,11 @@ VALID_CONFIGS = {
             "ascend310p3": ["swft"]
         },
         "cuda": {
-            "a100": ["triton"],
+            "a100": ["triton", "cuda_c"],
+        },
+        "cpu": {
+            "x86_64": ["cpp"],
+            "aarch64": ["cpp"],
         },
     },
     "numpy": {

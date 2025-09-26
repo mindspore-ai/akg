@@ -41,6 +41,7 @@ Through LLM-based planning and control of (multi-)agents, AIKG collaboratively a
 Additionally, AIKG provides a rich set of submodules for kernel agents, which enables users to build custom agent tasks.
 
 ## 🗓️ 2. Changelog
+- 2025-09-26: Added CUDA C and C++ DSL support. See [Benchmark Results](./docs/DSLBenchmarkResults202509.md) for KernelBench Level1 success rates.
 - 2025-09-14: KernelBench Level1 kernel generation success rate updated, see [Benchmark Results](./docs/BenchmarkResults202509.md).
 - 2025-08-12: Introduced Doc-Driven Integration; by following a unified documentation specification, you can quickly and flexibly integrate new DSLs/frontends/backends (see [Doc-Driven Integration Guide](./docs/DocDrivenIntegration.md)).
 - 2025-06-27: Initial AIKG release with code generation support for Triton and SWFT backends.
