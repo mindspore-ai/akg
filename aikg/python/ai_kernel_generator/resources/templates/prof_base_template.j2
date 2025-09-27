@@ -36,6 +36,10 @@ import triton
 import triton.testing
 {% elif dsl == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
+{% elif dsl == "cuda_c" %}
+from {{ op_name }}_cuda_c import {{ impl_func_name }}
+{% elif dsl == "cpp" %}
+from {{ op_name }}_cpp import {{ impl_func_name }}
 {% endif %}
 
 def run_base_implementations():
@@ -149,7 +153,30 @@ def run_base_implementations():
         json.dump(result_data, f, indent=2)
     
     print(f"[{{ op_name }}] Base execution time: {execution_time:.4f} ms")
-    
+    {% elif dsl == "cpp" %}
+    # CPU
+    import time
+    def base_benchmark_fn():
+        return framework_model(*inputs)
+    # 执行 warmup
+    for _ in range({{ warmup_times }}):
+        _ = base_benchmark_fn()
+    # 计时 rep 次
+    start_t = time.perf_counter()
+    for _ in range({{ run_times }}):
+        _ = base_benchmark_fn()
+    end_t = time.perf_counter()
+    execution_time_ms = (end_t - start_t) * 1000.0 / max({{ run_times }}, 1)
+    result_data = {
+        "execution_time_ms": execution_time_ms,
+        "execution_time_us": execution_time_ms * 1000,
+        "warmup_times": {{ warmup_times }},
+        "run_times": {{ run_times }},
+        "method": "cpu_loop_timer"
+    }
+    with open("base_profile_result.json", "w") as f:
+        json.dump(result_data, f, indent=2)
+    print(f"[{{ op_name }}] Base execution time: {execution_time_ms:.4f} ms")
     {% else %}
     # 非triton实现，使用传统循环计时
     # 运行框架实现

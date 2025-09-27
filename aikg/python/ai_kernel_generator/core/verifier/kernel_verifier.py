@@ -35,9 +35,9 @@ PROFILE_GENERATION_TEMPLATE_PATH = os.path.join(
 
 # 类型定义
 FrameworkType = Literal["torch", "mindspore", "numpy"]
-ImplType = Literal["triton", "triton-russia", "swft"]
-BackendType = Literal["cuda", "ascend"]
-ArchType = Literal["a100", "v100", "ascend910b4", "ascend310p3"]
+ImplType = Literal["triton", "triton-russia", "swft", "cuda_c", "cpp", "ascendc"]
+BackendType = Literal["cuda", "ascend", "cpu"]
+ArchType = Literal["a100", "v100", "ascend910b4", "ascend310p3", "x86_64", "aarch64"]
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +130,13 @@ class KernelVerifier:
                 "from swft.core import *",
                 "from swft.api import *",
                 "import numpy as np"
+            ]
+        elif self.dsl == "cuda_c" or self.dsl == "cpp":
+            import_lines = [
+                "import torch",
+                "import torch.nn as nn",
+                "import torch.nn.functional as F",
+                "from torch.utils.cpp_extension import load_inline"
             ]
         elif self.framework == "numpy":
             import_lines = [
@@ -422,6 +429,9 @@ class KernelVerifier:
                 _, _, base_time = self.analyze_nsys_data(base_prof_path, warmup_times, run_times, "base")
                 _, _, gen_prof_path = self.run_nsys(os.path.join(verify_dir, f"profile_{self.op_name}_generation.py"))
                 _, _, gen_time = self.analyze_nsys_data(gen_prof_path, warmup_times, run_times, "generation")
+            elif self.backend == "cpu":
+                # 走的triton验证流程
+                base_time, gen_time = self.run_triton_do_bench_profile(verify_dir)
             else:
                 logger.warning(f"[{self.task_id}:{self.op_name}] 不支持的backend: {self.backend}")
                 return float('inf'), 0.0, 0.0

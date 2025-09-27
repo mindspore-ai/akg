@@ -34,6 +34,10 @@ MS_TO_NP_DTYPE_MAP = {
 from {{ op_name }}_triton import {{ impl_func_name }}
 {% elif dsl == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
+{% elif dsl == "cuda_c" %}
+from {{ op_name }}_cuda_c import {{ impl_func_name }}
+{% elif dsl == "cpp" %}
+from {{ op_name }}_cpp import {{ impl_func_name }}
 {% endif %}
 
 {% if framework == "torch" %}
@@ -339,6 +343,13 @@ def verify_implementations():
     
     {% if "triton" in dsl %}
     # 运行Triton实现
+    impl_output = {{ impl_func_name }}(*inputs)
+    {% elif dsl == "cuda_c" %}
+    # 运行CUDA C实现
+    impl_output = {{ impl_func_name }}(*inputs)
+
+    {% elif dsl == "cpp" %}
+    # 运行CPP实现
     impl_output = {{ impl_func_name }}(*inputs)
     {% elif dsl == "swft" %}
     # 运行SWFT实现
