@@ -2,11 +2,12 @@
 
 ## 概述
 
-AI Kernel Generator 提供了三个文件，用于自动生成和优化算子：
+AI Kernel Generator 提供了四个文件，用于自动生成和优化算子：
 
 1. **`evolve.py`** - 核心进化算法实现
 2. **`single_evolve_runner.py`** - 单任务进化执行器
 3. **`run_batch_evolve.py`** - 批量任务进化执行器
+4. **`run_torch_evolve_triton.py`** - PyTorch + Triton 进化示例脚本
 
 相关配置见**`evolve_config.yaml`**配置文件
 
@@ -128,4 +129,23 @@ python run_batch_evolve.py
 
 # 使用指定配置文件
 python run_batch_evolve.py evolve_config.yaml
+```
+
+## 使用示例
+
+### 4. PyTorch + Triton 进化示例
+
+`run_torch_evolve_triton.py` 示例展示了如何使用进化系统与 PyTorch 框架和 Triton DSL 进行自动内核生成和优化。
+
+**主要特性**:
+- **框架**: PyTorch 与 CUDA 后端
+- **DSL**: Triton 用于 GPU 内核生成
+- **架构**: A100 GPU 支持
+- **进化模式**: 岛屿模式，包含 2 个岛屿和精英保留机制
+- **任务**: ReLU 激活函数优化
+
+**使用方法**:
+```bash
+# 运行 PyTorch 进化示例
+python run_torch_evolve_triton.py
 ```

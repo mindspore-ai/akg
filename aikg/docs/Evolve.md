@@ -2,11 +2,12 @@
 
 ## Overview
 
-AI Kernel Generator provides three files for automatic kernel generation and optimization:
+AI Kernel Generator provides four files for automatic kernel generation and optimization:
 
 1. **`evolve.py`** - Core evolution algorithm implementation
 2. **`single_evolve_runner.py`** - Single task evolution executor
 3. **`run_batch_evolve.py`** - Batch task evolution executor
+4. **`run_torch_evolve_triton.py`** - PyTorch + Triton evolution example script
 
 Related configuration can be found in the **`evolve_config.yaml`** configuration file
 
@@ -127,4 +128,23 @@ python run_batch_evolve.py
 
 # Use specified configuration file
 python run_batch_evolve.py evolve_config.yaml
+```
+
+## Usage Examples
+
+### 4. PyTorch + Triton Evolution Example
+
+The `run_torch_evolve_triton.py` example demonstrates how to use the evolution system with PyTorch framework and Triton DSL for automatic kernel generation and optimization.
+
+**Key Features**:
+- **Framework**: PyTorch with CUDA backend
+- **DSL**: Triton for GPU kernel generation
+- **Architecture**: A100 GPU support
+- **Evolution Mode**: Island mode with 2 islands and elite retention
+- **Task**: ReLU activation function optimization
+
+**Usage**:
+```bash
+# Run PyTorch evolution example
+python run_torch_evolve_triton.py
 ```
