@@ -15,26 +15,24 @@
 
 set -e
 export AKG_MLIR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/" && pwd )"
-echo $AKG_MLIR_DIR
 BUILD_DIR="${AKG_MLIR_DIR}/build"
-OUTPUT_PATH="${AKG_MLIR_DIR}/output"
 C_COMPILER_PATH=$(which gcc)
 CXX_COMPILER_PATH=$(which g++)
 
 usage()
 {
     echo "Usage:"
-    echo "bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t on|off] [-o] [-u] [-m akg-mlir-only|all] [-s] [-c] [-h]"
+    echo "bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t on|off] [-b] [-o] [-u] [-s] [-c] [-h]"
     echo ""
     echo "Options:"
     echo "    -h Print usage"
+    echo "    -b enable binds python (Default: off)"
     echo "    -d Debug mode"
     echo "    -e Hardware environment: cpu, gpu, ascend or all"
     echo "    -j[n] Set the threads when building (Default: -j8)"
     echo "    -t Unit test: on or off (Default: off)"
     echo "    -o Output .o file directory"
     echo "    -u Enable auto tune"
-    echo "    -m Compile mode: akg-mlir-only or all, default: all"
     echo "    -s Specifies the source path of third-party, default: none \n\tllvm-project"
     echo "    -c Clean built files, default: off"
 }
@@ -80,13 +78,16 @@ CMAKE_ARGS=""
 COMPILE_AKG_MLIR="off"
 AKG_MLIR_CMAKE_ARGS=""
 AKG_MLIR_ARGS=""
-PATH_TO_SOURCE_LLVM=${AKG_MLIR_DIR}/third-party/llvm-project/
 _BUILD_TYPE="Release"
 BACKEND_ENV="CPU"
+ENABLE_BINDS_PYTHON="OFF"
 
-while getopts 'h:e:j:u:t:o:d:m:s:c:r' opt
+while getopts 'bhe:j:u:t:o:d:m:s:c:r' opt
 do
     case "${opt}" in
+        b)
+            ENABLE_BINDINGS_PYTHON="ON"
+            ;;
         h)
             usage
             exit 0
@@ -168,10 +169,7 @@ do
             exit 0
             ;;
         s)
-            LLVM_BUILD_PATH=${OPTARG}
-            ;;
-        m)
-            COMPILE_MODE=${OPTARG}
+            LLVM_INSTALL_PATH=${OPTARG}
             ;;
         c)
             CLEAN_BUILT="on"
@@ -186,7 +184,6 @@ echo "CMAKE_ARGS: ${CMAKE_ARGS}"
 
 # Create directories
 mkdir -pv "${BUILD_DIR}"
-mkdir -pv "${OUTPUT_PATH}/akg"
 
 make_clean()
 {
@@ -211,16 +208,19 @@ fi
 
 # Build akg target
 cd $BUILD_DIR
+set -x
 cmake .. ${CMAKE_ARGS} ${AKG_MLIR_CMAKE_ARGS} \
+    -DAKG_ENABLE_BINDINGS_PYTHON=${ENABLE_BINDINGS_PYTHON} \
     -DCMAKE_C_COMPILER=${C_COMPILER_PATH} \
     -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH} \
-    -DCMAKE_PREFIX_PATH=${LLVM_BUILD_PATH}
+    -DCMAKE_PREFIX_PATH=${LLVM_INSTALL_PATH}
 cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
 
-if [ ! -f "akg/bin/akg-opt" ];then
-  echo "[ERROR] akg-opt not exist!"
-  exit 1
-fi
-cp -r akg/bin ${OUTPUT_PATH}/akg/
+cd $AKG_MLIR_DIR
+AKG_CMAKE_ALREADY_BUILD=1 \
+  AKG_CMAKE_BUILD_DIR=${BUILD_DIR} \
+  AKG_ENABLE_BINDINGS_PYTHON=${ENABLE_BINDINGS_PYTHON} \
+  python3 setup.py bdist_wheel
+set -
 
 echo "---------------- AKG: build end ----------------"

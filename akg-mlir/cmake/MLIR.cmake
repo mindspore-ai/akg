@@ -29,6 +29,15 @@ include(AddLLVM)
 include(AddMLIR)
 include(HandleLLVMOptions)
 
+################################################################################
+# Setup python.
+################################################################################
+if(AKG_ENABLE_BINDINGS_PYTHON)
+  include(AddMLIRPython)
+  include(MLIRDetectPythonEnv)
+  mlir_configure_python_dev_packages()
+endif()
+
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
 link_directories(${LLVM_BUILD_LIBRARY_DIR})

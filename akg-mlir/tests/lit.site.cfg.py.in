@@ -1,8 +1,8 @@
 import lit.llvm
 
 config.llvm_tools_dir = r"@LLVM_TOOLS_DIR@"
-config.akg_tools_dir = r"@AKG_TOOLS_DIR@"
-config.akg_test_build_dir = r"@AKG_TEST_BUILD_DIR@"
+config.akg_tools_dir = r"@AKG_MLIR_TOOLS_DIR@"
+config.akg_test_build_dir = r"@CMAKE_BINARY_DIR@/tests"
 config.lit_tools_dir = config.llvm_tools_dir
 config.mlir_lib_dir = r"@MLIR_LIB_DIR@" or r"@LLVM_LIBRARY_DIR@"
 config.llvm_shlib_ext = r"@SHLIBEXT@"
@@ -17,4 +17,4 @@ except KeyError:
 lit.llvm.initialize(lit_config, config)
 
 # Let the main config do the real work.
-lit_config.load_config(config, r"@AKG_TEST_SOURCE_DIR@/lit.cfg.py")
+lit_config.load_config(config, r"@CMAKE_SOURCE_DIR@/tests/lit.cfg.py")

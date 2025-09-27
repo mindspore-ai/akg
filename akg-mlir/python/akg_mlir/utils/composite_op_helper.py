@@ -27,8 +27,8 @@ import importlib.util
 from logging.handlers import TimedRotatingFileHandler
 from collections import namedtuple
 import numpy as np
-from akg_mlir.utils.gen_random import random_gaussian, gen_indices, gen_csr_indices
-from akg_mlir.utils.op_dsl import get_attr, get_op_dsl
+from .gen_random import random_gaussian, gen_indices, gen_csr_indices
+from .op_dsl import get_attr, get_op_dsl
 from bfloat16 import bfloat16
 
 
@@ -683,7 +683,7 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
 
     uni_file_name = _gen_uniq_file_name(desc.get("op"))
     printer = CodePrinter(uni_file_name)
-    printer.out("from akg_mlir.utils.op_dsl import *", False)
+    printer.out("from akg.utils.op_dsl import *", False)
     printer.out("from bfloat16 import bfloat16", True)
     printer.out("def get_expect(input_dict, expect):", True)
     for command in commands:

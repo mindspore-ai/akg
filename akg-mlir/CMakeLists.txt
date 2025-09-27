@@ -1,4 +1,4 @@
-# Copyright 2023 Huawei Technologies Co., Ltd
+# Copyright 2023-2025 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,8 +20,20 @@ endif()
 if(POLICY CMP0072)
   cmake_policy(SET CMP0072 NEW)
 endif()
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 OLD)
+endif()
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)
+endif()
+if(POLICY CMP0175)
+  cmake_policy(SET CMP0175 OLD)
+endif()
 
 project(akg C CXX)
+
+option(AKG_ENABLE_BINDINGS_PYTHON "Enables MLIR Python Bindings" OFF)
+option(AKG_INCLUDE_TESTS "Generate build targets for the akg-mlir tests." ON)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.5.0)
@@ -61,6 +73,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${AKG_MLIR_BINARY_DIR}/bin)
 set(AKG_MLIR_SRC_INCLUDE_DIR ${AKG_MLIR_SOURCE_DIR}/include)
 set(AKG_MLIR_BIN_INCLUDE_DIR ${AKG_MLIR_BINARY_DIR}/include)
 set(AKG_MLIR_BIN_LIB_DIR ${AKG_MLIR_BINARY_DIR}/lib)
+set(AKG_MLIR_TOOLS_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 
 
 #-------------------------------------------------------------------------------
@@ -101,20 +114,19 @@ add_subdirectory(${AKG_MLIR_SOURCE_DIR}/include ${AKG_MLIR_BINARY_DIR}/include)
 # Build tools
 add_subdirectory(${AKG_MLIR_SOURCE_DIR}/tools ${AKG_MLIR_BINARY_DIR}/tools)
 
-set(AKG_MLIR_TOOLS_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 
-option(AKG_INCLUDE_TESTS "Generate build targets for the akg-mlir tests." ON)
 if (AKG_INCLUDE_TESTS)
   add_definitions(-DAKG_INCLUDE_TESTS)
 endif()
 
 # Build tests
 if (AKG_INCLUDE_TESTS)
-  set(AKG_TEST_BUILD_DIR "${AKG_MLIR_BINARY_DIR}/test")
-  set(AKG_TEST_SOURCE_DIR "${AKG_MLIR_SOURCE_DIR}/../test")
-  add_subdirectory(${AKG_TEST_SOURCE_DIR} ${AKG_TEST_BUILD_DIR})
+  add_subdirectory(tests)
 endif()
 
+if(AKG_ENABLE_BINDINGS_PYTHON)
+  add_subdirectory(python)
+endif()
 # Installation rules
 if(ENABLE_AKG)
   install(TARGETS akg-opt DESTINATION lib${LIB_SUFFIX})

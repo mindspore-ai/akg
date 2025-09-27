@@ -19,14 +19,13 @@ target_link_libraries(akg_ascend_launch_runtime glog dl)
 check_cxx_compiler_flag(-Wweak-vtables
   COMPILER_SUPPORTS_WARNING_WEAK_VTABLES)
 if(COMPILER_SUPPORTS_WARNING_WEAK_VTABLES)
-  target_compile_options(akg_ascend_launch_runtime PUBLIC
-    "-Wweak-vtables")
+  target_compile_options(akg_ascend_launch_runtime PUBLIC "-Wweak-vtables")
 endif()
 target_compile_definitions(akg_ascend_launch_runtime PRIVATE akg_ascend_launch_runtime_EXPORTS)
 
 find_package(pybind11 REQUIRED)
-include_directories(${PYBIND11_INCLUDE_DIR})
-message(WARNING ${PYBIND11_INCLUDE_DIR})
+include_directories(${pybind11_INCLUDE_DIRS})
+message(STATUS "PYBIND11_INCLUDE_DIR: ${pybind11_INCLUDE_DIRS}")
 pybind11_add_module(akgAscendLaunch AKGAscendLaunch.cpp)
 target_link_libraries(akgAscendLaunch PRIVATE akg_ascend_launch_runtime)
 pybind11_add_module(akgProfileMgr ProfileMgr.cpp)

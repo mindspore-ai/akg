@@ -9,16 +9,13 @@ fi
 
 BACKEND_ENV=$1
 BASEPATH=$(cd $(dirname $0); pwd)
-AKG_MLIR_BUILD_PATH=${BASEPATH}/../../build/akg-mlir
+AKG_MLIR_BUILD_PATH=${BASEPATH}/../build
 SYSTEM_TEST_DIR=${BASEPATH}/st
 TOOL_PATH=${BASEPATH}/../python/akg_mlir/exec_tools
-ST_TOOL=${TOOL_PATH}/py_benchmark.py
-
-export PATH=${AKG_MLIR_BUILD_PATH}/bin:$PATH
-export LD_LIBRARY_PATH=${AKG_MLIR_BUILD_PATH}/lib:${LD_LIBRARY_PATH}
+ST_TOOL=akg_benchmark
 
 # 1. run ut test cases
-cmake --build ${AKG_MLIR_BUILD_PATH}/test/ --target check-akg-mlir
+cmake --build ${AKG_MLIR_BUILD_PATH}/tests/ --target check-akg-mlir
 
 # 2. run st test cases
 if [[ "X${BACKEND_ENV}" = "XCPU" ]] || [[ "X${BACKEND_ENV}" = "Xcpu" ]]; then
@@ -27,7 +24,7 @@ if [[ "X${BACKEND_ENV}" = "XCPU" ]] || [[ "X${BACKEND_ENV}" = "Xcpu" ]]; then
     rm -rf ${TOOL_PATH}/akg_kernel_meta
     rm -rf ${TOOL_PATH}/mlir_files
     rm -rf ${TOOL_PATH}/tmp_files
-    if [[ $(python ${ST_TOOL} -e cpu -d ${net} -c 1 -ci 1 -t 16 | grep "dir test") == "dir test success" ]]; then
+    if [[ $(${ST_TOOL} -e cpu -d ${net} -c 1 -ci 1 -t 16 | grep "dir test") == "dir test success" ]]; then
         echo "test ${net}: Success"
     else
         echo "test ${net}: Failed"
@@ -41,7 +38,7 @@ if [[ "X${BACKEND_ENV}" = "XCPU" ]] || [[ "X${BACKEND_ENV}" = "Xcpu" ]]; then
         rm -rf ${TOOL_PATH}/akg_kernel_meta
         rm -rf ${TOOL_PATH}/mlir_files
         rm -rf ${TOOL_PATH}/tmp_files
-        if [[ $(python ${ST_TOOL} -e cpu -d ${SYSTEM_TEST_DIR}/cpu/${net} -c 1 -ci 1 -t 16 | grep "dir test ") == "dir test success" ]]; then
+        if [[ $(${ST_TOOL} -e cpu -d ${SYSTEM_TEST_DIR}/cpu/${net} -c 1 -ci 1 -t 16 | grep "dir test ") == "dir test success" ]]; then
             echo "test ${file}: Success"
         else
             echo "test ${file}: Failed"
@@ -57,7 +54,7 @@ elif [[ "X${BACKEND_ENV}" = "XGPU" ]] || [[ "X${BACKEND_ENV}" = "Xgpu" ]]; then
     rm -rf ${TOOL_PATH}/akg_kernel_meta
     rm -rf ${TOOL_PATH}/mlir_files
     rm -rf ${TOOL_PATH}/tmp_files
-    if [[ $(python ${ST_TOOL} -e gpu -d ${net} -c 1 -ci 1 -t 8 | grep "dir test") == "dir test success" ]]; then
+    if [[ $(${ST_TOOL} -e gpu -d ${net} -c 1 -ci 1 -t 8 | grep "dir test") == "dir test success" ]]; then
         echo "test ${net}: Success"
     else
         echo "test ${net}: Failed"
@@ -72,7 +69,7 @@ elif [[ "X${BACKEND_ENV}" = "XGPU" ]] || [[ "X${BACKEND_ENV}" = "Xgpu" ]]; then
         rm -rf ${TOOL_PATH}/akg_kernel_meta
         rm -rf ${TOOL_PATH}/mlir_files
         rm -rf ${TOOL_PATH}/tmp_files
-        if [[ $(python ${ST_TOOL} -e gpu -d ${SYSTEM_TEST_DIR}/gpu/${net} -c 1 -ci 1 -t 16 | grep "dir test ") == "dir test success" ]]; then
+        if [[ $(${ST_TOOL} -e gpu -d ${SYSTEM_TEST_DIR}/gpu/${net} -c 1 -ci 1 -t 16 | grep "dir test ") == "dir test success" ]]; then
             echo "test ${net}: Success"
         else
             echo "test ${net}: Failed"
