@@ -105,4 +105,19 @@ def LinalgElementwiseFusionExt : Pass<"linalg-fuse-elementwise-ext"> {
   ];
 }
 
+def MemrefCopyToLoops : Pass<"memref-copy-to-loops", "func::FuncOp"> {
+  let summary = "Convert memref.copy operations to explicit loop-based copy operations";
+  let description = [{
+    This pass converts memref.copy operations to explicit loop-based copy operations
+    using affine.for loops. This is useful for lowering high-level copy operations
+    to more explicit loop structures that can be further optimized.
+  }];
+  let constructor = "mlir::createMemrefCopyToLoopsPass()";
+  let dependentDialects = [
+    "affine::AffineDialect",
+    "memref::MemRefDialect",
+    "arith::ArithDialect"
+  ];
+}
+
 #endif // AKG_MLIR_DIALECT_LINAGLG_PASSES
