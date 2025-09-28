@@ -489,7 +489,9 @@ def parse_batch_runner_mode(args: List[str]) -> tuple[str, str, EvolveConfig]:
     op_name = args[1]
     task_file = args[2]
     device = int(args[3])
-
+    project_root = get_project_root()
+    config_path = os.path.join(project_root, "config", "evolve_config.yaml")
+    
     # 创建配置对象
     config = EvolveConfig()
     
@@ -497,18 +499,18 @@ def parse_batch_runner_mode(args: List[str]) -> tuple[str, str, EvolveConfig]:
     if len(args) == 5:
         config_path = args[4]
         
-        try:
-            # 批量调用模式：跳过任务配置，因为任务文件是直接传入的
-            file_config = EvolveConfig.from_yaml(config_path, skip_task_config=True)
-            # 合并配置
-            for key, value in file_config.to_dict().items():
-                setattr(config, key, value)
+    try:
+        # 批量调用模式：跳过任务配置，因为任务文件是直接传入的
+        file_config = EvolveConfig.from_yaml(config_path, skip_task_config=True)
+        # 合并配置
+        for key, value in file_config.to_dict().items():
+            setattr(config, key, value)
+        
+        # 应用自定义任务配置
+        apply_custom_task_config(config, config_path, op_name)
             
-            # 应用自定义任务配置
-            apply_custom_task_config(config, config_path, op_name)
-                
-        except Exception as e:
-            print(f"警告: 无法加载配置文件 {config_path}: {e}")
+    except Exception as e:
+        print(f"警告: 无法加载配置文件 {config_path}: {e}")
 
     # 设置设备
     config.device_list = [device]
