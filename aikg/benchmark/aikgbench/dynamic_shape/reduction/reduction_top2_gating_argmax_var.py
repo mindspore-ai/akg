@@ -8,16 +8,15 @@ class Model(nn.Module):
         self.dim = dim
 
     def forward(self, var):
-        # torch.max(input, dim, keepdim=False)
-        # Returns a namedtuple (values, indices) where values is the maximum value of each row
-        # of the input tensor in the given dimension dim, and indices is the index location of
-        # each maximum value found.
+        # Top-2 gating argmax operation
+        # Returns the top-2 values and their indices along the specified dimension
         # This operation is commonly used in neural networks for:
-        # - Max pooling in convolutional networks
-        # - Finding the most activated neuron in a layer
-        # - Attention mechanisms in transformers
-        # - Gating mechanisms in mixture-of-experts models
-        return torch.max(var, dim=self.dim)
+        # - Top-2 selection in mixture-of-experts models
+        # - Gating mechanisms that select top-2 experts
+        # - Sparse attention mechanisms
+        # - Hierarchical routing in neural networks
+        topk_values, topk_indices = torch.topk(var, k=2, dim=self.dim)
+        return topk_values, topk_indices
 
 
 def get_inputs_dyn_list():

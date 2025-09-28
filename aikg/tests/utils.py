@@ -94,6 +94,36 @@ def get_multikernelbench_task_desc(op_name, framework="torch"):
     _raise_submodule_error(f"MultiKernelBench 中的操作 {op_name}", f"已搜索目录: {base_path}")
 
 
+def get_aikgbench_task_desc(op_name, framework="torch"):
+    """获取 AIKGBench 任务描述"""
+    current_file_path = os.path.abspath(__file__)
+    commom_path = os.path.dirname(current_file_path)
+    aikg_path = os.path.dirname(commom_path)
+
+    # Path for AIKGBench benchmarks
+    base_path = os.path.join(aikg_path, 'benchmark', 'aikgbench')
+
+    # 检查基础路径是否存在
+    if not os.path.exists(base_path):
+        _raise_submodule_error("AIKGBench 目录", base_path)
+
+    # Find the file in any category and subcategory
+    for category in os.listdir(base_path):
+        category_path = os.path.join(base_path, category)
+        if os.path.isdir(category_path):
+            # 遍历子分类 (attention, elemwise, fused, etc.)
+            for subcategory in os.listdir(category_path):
+                subcategory_path = os.path.join(category_path, subcategory)
+                if os.path.isdir(subcategory_path):
+                    task_path = os.path.join(subcategory_path, op_name + '.py')
+                    if os.path.exists(task_path):
+                        with open(task_path, "r", encoding="utf-8") as f:
+                            return f.read()
+
+    # If not found in any category, raise an error
+    _raise_submodule_error(f"AIKGBench 中的操作 {op_name}", f"已搜索目录: {base_path}")
+
+
 def get_kernelbench_op_name(task_index_list, framework="torch"):
     """获取 KernelBench 操作名称列表"""
     if task_index_list is None:
@@ -172,6 +202,67 @@ def get_multikernelbench_op_name(category="all", framework="torch", op_name=None
                                 break  # 找到匹配的就停止搜索
                         else:
                             matched_files.append(operation_name)
+
+    return matched_files if matched_files else None
+
+
+def get_aikgbench_op_name(category="all", subcategory="all", framework="torch", op_name=None):
+    """获取 AIKGBench 操作名称列表
+    
+    Args:
+        category: 主分类 ("all", "dynamic", "static")
+        subcategory: 子分类 ("all", "attention", "elemwise", "fused", "index", "norm", "reduction", "sorting", "tensor_manipulation", "matmul")
+        framework: 框架名称 (默认 "torch")
+        op_name: 特定操作名称 (可选)
+    
+    Returns:
+        list: 匹配的操作名称列表，如果没有找到则返回 None
+    """
+    current_file_path = os.path.abspath(__file__)
+    commom_path = os.path.dirname(current_file_path)
+    aikg_path = os.path.dirname(commom_path)
+
+    # For AIKGBench, use category-based reading
+    base_path = os.path.join(aikg_path, 'benchmark', 'aikgbench')
+
+    # 检查基础路径是否存在
+    if not os.path.exists(base_path):
+        _raise_submodule_error("AIKGBench 目录", base_path)
+
+    matched_files = []
+
+    if os.path.exists(base_path):
+        if category == "all":
+            # Get all available categories (dynamic and static)
+            categories = [d for d in os.listdir(
+                base_path) if os.path.isdir(os.path.join(base_path, d))]
+        else:
+            categories = [category] if os.path.isdir(
+                os.path.join(base_path, f"{category}_shape")) else []
+
+        for cat in categories:
+            category_path = os.path.join(base_path, f"{cat}_shape")
+            if os.path.exists(category_path):
+                # 遍历子分类 (attention, elemwise, fused, etc.)
+                for subcat in os.listdir(category_path):
+                    subcat_path = os.path.join(category_path, subcat)
+                    if os.path.isdir(subcat_path):
+                        # 如果指定了子分类，只处理匹配的子分类
+                        if subcategory != "all" and subcat != subcategory:
+                            continue
+                            
+                        for file in os.listdir(subcat_path):
+                            if file.endswith('.py'):
+                                # Remove .py extension to get the benchmark name
+                                operation_name = file[:-3]
+
+                                # 如果指定了 op_name，只返回匹配的 case
+                                if op_name is not None:
+                                    if operation_name == op_name:
+                                        matched_files.append(operation_name)
+                                        break  # 找到匹配的就停止搜索
+                                else:
+                                    matched_files.append(operation_name)
 
     return matched_files if matched_files else None
 

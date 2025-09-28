@@ -4,15 +4,30 @@ import numpy as np
 from typing import Union, Literal, List, Tuple, Any
 {% if framework == "torch" %}
 import torch
-from {{ op_name }}_torch import Model as FrameworkModel, get_inputs, get_init_inputs
+from {{ op_name }}_torch import Model as FrameworkModel, get_init_inputs
+{% if is_dynamic_shape %}
+from {{ op_name }}_torch import get_inputs_dyn_list
+{% else %}
+from {{ op_name }}_torch import get_inputs
+{% endif %}
 TensorType = torch.Tensor
 {% elif framework == "numpy" %}
-from {{ op_name }}_numpy import Model as FrameworkModel, get_inputs, get_init_inputs
+from {{ op_name }}_numpy import Model as FrameworkModel, get_init_inputs
+{% if is_dynamic_shape %}
+from {{ op_name }}_numpy import get_inputs_dyn_list
+{% else %}
+from {{ op_name }}_numpy import get_inputs
+{% endif %}
 TensorType = np.ndarray
 {% elif framework == "mindspore" %}
 import mindspore as ms
 from mindspore.common import np_dtype
-from {{ op_name }}_mindspore import Model as FrameworkModel, get_inputs, get_init_inputs
+from {{ op_name }}_mindspore import Model as FrameworkModel, get_init_inputs
+{% if is_dynamic_shape %}
+from {{ op_name }}_mindspore import get_inputs_dyn_list
+{% else %}
+from {{ op_name }}_mindspore import get_inputs
+{% endif %}
 TensorType = ms.Tensor
 MS_TO_NP_DTYPE_MAP = {
     ms.float32: np.float32,
@@ -101,9 +116,10 @@ def run_base_implementations():
     
     {% if framework == "torch" %}
     framework_model = framework_model.to(device)
-    # 处理输入数据
-    inputs = get_inputs()
+    {% endif %}
+    
     def process_input(x):
+        {% if framework == "torch" %}
         if isinstance(x, torch.Tensor):
             return x.to(device)
         elif isinstance(x, np.ndarray):
@@ -117,6 +133,116 @@ def run_base_implementations():
                 return x.to(device)
             except (AttributeError, TypeError):
                 return x
+        {% else %}
+        return x
+        {% endif %}
+    
+    def run_benchmark(inputs):
+        """运行基准测试"""
+        {% if "triton" in dsl %}
+        {% if backend == "ascend" %}
+        # 导入profiler以支持性能测试
+        try:
+            from ai_kernel_generator.core.verifier.profiler import profiler_npu
+            patch_imported = True
+        except ImportError:
+            # 如果导入失败，使用标准方法
+            patch_imported = False
+        {% endif %}
+        # 基准测试函数
+        def base_benchmark_fn():
+            result = framework_model(*inputs)
+            return result
+        
+        if backend == "ascend" and patch_imported:
+            execution_time_us = profiler_npu(
+                base_benchmark_fn,
+                warmup={{ warmup_times }},
+                active={{ run_times }},
+                prof_dir_name="prof_base_output",
+                keep_res=False,
+                suppress_warnings=True
+            )
+            execution_time_ms = execution_time_us / 1000
+            method = "profiler_npu"
+        else:
+            import triton.testing
+            execution_time_ms = triton.testing.do_bench(
+                base_benchmark_fn,
+                warmup={{ warmup_times }},
+                rep={{ run_times }},
+                return_mode="min"
+            )
+            method = "triton_do_bench"
+
+        {% elif dsl == "cpp" %}
+        # CPU
+        import time
+        def base_benchmark_fn():
+            return framework_model(*inputs)
+        # 执行 warmup
+        for _ in range({{ warmup_times }}):
+            _ = base_benchmark_fn()
+        # 计时 rep 次
+        start_t = time.perf_counter()
+        for _ in range({{ run_times }}):
+            _ = base_benchmark_fn()
+        end_t = time.perf_counter()
+        execution_time_ms = (end_t - start_t) * 1000.0 / max({{ run_times }}, 1)
+        method = "cpu_loop_timer"
+        
+        {% else %}
+        # 非triton实现，使用传统循环计时
+        import time
+        start_time = time.time()
+        for _ in range({{ total_count }}):
+            framework_output = framework_model(*inputs)
+            {% if backend == "cuda" %}
+            torch.cuda.synchronize()
+            {% endif %}
+        end_time = time.time()
+        execution_time_ms = (end_time - start_time) * 1000 / {{ total_count }}  # 转换为毫秒
+        method = "traditional_timing"
+        {% endif %}
+
+        return execution_time_ms, method
+    
+    {% if is_dynamic_shape %}
+    # 动态shape：获取多组输入数据
+    inputs_list = get_inputs_dyn_list()
+    
+    # 对每组输入进行性能测试
+    all_execution_times = []
+    for case_idx, inputs in enumerate(inputs_list):
+        {% if framework == "torch" %}
+        inputs = [process_input(x) for x in inputs]
+        {% endif %}
+        
+        execution_time, method = run_benchmark(inputs)
+        all_execution_times.append(execution_time)
+        print(f"[{{ op_name }}] Case {case_idx + 1} execution time: {execution_time * 1000:.4f} us")
+    
+    # 计算平均执行时间
+    avg_execution_time = sum(all_execution_times) / len(all_execution_times)
+    
+    # 保存时间结果到文件
+    result_data = {
+        "execution_time_ms": avg_execution_time,
+        "execution_time_us": avg_execution_time * 1000,
+        "case_count": len(inputs_list),
+        "case_times": all_execution_times,
+        "warmup_times": {{ warmup_times }},
+        "run_times": {{ run_times }},
+        "method": method,
+        "shape_type": "dynamic"
+    }
+    
+    print(f"[{{ op_name }}] Average execution time: {avg_execution_time * 1000:.4f} us")
+    
+    {% else %}
+    # 静态shape：获取单组输入数据
+    {% if framework == "torch" %}
+    inputs = get_inputs()
     inputs = [process_input(x) for x in inputs]
     {% elif framework == "numpy" %}
     inputs = get_inputs()
@@ -124,91 +250,23 @@ def run_base_implementations():
     inputs = get_inputs()
     {% endif %}
     
-    {% if "triton" in dsl %}
-    {% if backend == "ascend" %}
-    # 导入profiler以支持性能测试
-    try:
-        from ai_kernel_generator.core.verifier.profiler import profiler_npu
-        patch_imported = True
-    except ImportError:
-        # 如果导入失败，使用标准方法
-        patch_imported = False
-    {% endif %}
-    
-    # 基准测试函数
-    def base_benchmark_fn():
-        result = framework_model(*inputs)
-        return result
-    
-    if backend == "ascend" and patch_imported:
-        execution_time_us = profiler_npu(
-            base_benchmark_fn,
-            warmup={{ warmup_times }},
-            active={{ run_times }},
-            prof_dir_name="prof_base_output",
-            keep_res=False,
-            suppress_warnings=True
-        )
-        execution_time_ms = execution_time_us / 1000
-        method = "profiler_npu"
-    else:
-        import triton.testing
-        execution_time_ms = triton.testing.do_bench(
-            base_benchmark_fn,
-            warmup={{ warmup_times }},
-            rep={{ run_times }},
-            return_mode="min"
-        )
-        execution_time_us = execution_time_ms * 1000
-        method = "triton_do_bench"
+    execution_time, method = run_benchmark(inputs)
     
     # 保存时间结果到文件
     result_data = {
-        "execution_time_ms": execution_time_ms,
-        "execution_time_us": execution_time_us,
+        "execution_time_ms": execution_time,
+        "execution_time_us": execution_time * 1000,
         "warmup_times": {{ warmup_times }},
         "run_times": {{ run_times }},
-        "method": method
+        "method": method,
+        "shape_type": "static"
     }
     
-    with open("base_profile_result.json", "w") as f:
-        json.dump(result_data, f, indent=2)
-    
-    print(f"[{{ op_name }}] Base execution time: {execution_time_us:.4f} us")
-    
-    {% elif dsl == "cpp" %}
-    # CPU
-    import time
-    def base_benchmark_fn():
-        return framework_model(*inputs)
-    # 执行 warmup
-    for _ in range({{ warmup_times }}):
-        _ = base_benchmark_fn()
-    # 计时 rep 次
-    start_t = time.perf_counter()
-    for _ in range({{ run_times }}):
-        _ = base_benchmark_fn()
-    end_t = time.perf_counter()
-    execution_time_ms = (end_t - start_t) * 1000.0 / max({{ run_times }}, 1)
-    result_data = {
-        "execution_time_ms": execution_time_ms,
-        "execution_time_us": execution_time_ms * 1000,
-        "warmup_times": {{ warmup_times }},
-        "run_times": {{ run_times }},
-        "method": "cpu_loop_timer"
-    }
-    with open("base_profile_result.json", "w") as f:
-        json.dump(result_data, f, indent=2)
-    print(f"[{{ op_name }}] Base execution time: {execution_time_us:.4f} us")
-    {% else %}
-    # 非triton实现，使用传统循环计时
-    # 运行框架实现
-    for _ in range({{ total_count }}):
-        framework_output = framework_model(*inputs)
-        {% if backend == "cuda" %}
-        torch.cuda.synchronize()
-        {% endif %}
+    print(f"[{{ op_name }}] Base execution time: {execution_time * 1000:.4f} us")
     {% endif %}
+
+    with open("base_profile_result.json", "w") as f:
+        json.dump(result_data, f, indent=2)
 
 if __name__ == "__main__":
     run_base_implementations() 

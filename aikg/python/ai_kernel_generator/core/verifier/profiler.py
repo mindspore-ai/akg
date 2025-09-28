@@ -137,8 +137,8 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100, prof_di
             prof.step()
             torch.npu.synchronize()
 
-    time = collect_time(profile_path, active)
-    return time, profile_path
+    exec_time = collect_time(profile_path, active)
+    return exec_time, profile_path
 
 
 def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_name: Optional[str] = None, 
@@ -156,15 +156,15 @@ def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_nam
     """
     if suppress_warnings:
         with suppress_output():
-            time, profile_path = profiler_npu_core(fn, warmup, active, prof_dir_name)
+            exec_time, profile_path = profiler_npu_core(fn, warmup, active, prof_dir_name)
     else:
-        time, profile_path = profiler_npu_core(fn, warmup, active, prof_dir_name)
+        exec_time, profile_path = profiler_npu_core(fn, warmup, active, prof_dir_name)
 
     # 清理结果文件
     if not keep_res and os.path.exists(profile_path):
         shutil.rmtree(profile_path)
 
-    return time
+    return exec_time
 
 
 def collect_time(base_dir: str, active: int) -> float:

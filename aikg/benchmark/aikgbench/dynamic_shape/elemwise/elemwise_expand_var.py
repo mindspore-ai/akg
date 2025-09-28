@@ -16,26 +16,28 @@ class Model(nn.Module):
 
 def get_inputs_dyn_list():
     # Expand variation cases with both aligned and non-aligned shapes
+    # For torch.expand() to work, target dimensions must match existing dimensions
+    # or be expandable from singleton dimensions (size 1)
     
     # Case 1: 16-aligned batch, 16-aligned hidden
-    # Shape (1, 256) expanded to (256, 4096)
+    # Shape (1, 256) expanded to (256, 256) - expand singleton dimension 0
     var1 = torch.randn(1, 256, dtype=torch.float32)
-    target_shape1 = (256, 4096)
+    target_shape1 = (256, 256)
     
     # Case 2: Non-16-aligned batch, 16-aligned hidden
-    # Shape (1, 125) expanded to (125, 5120)
+    # Shape (1, 125) expanded to (125, 125) - expand singleton dimension 0
     var2 = torch.randn(1, 125, dtype=torch.float32)
-    target_shape2 = (125, 5120)
+    target_shape2 = (125, 125)
     
     # Case 3: 16-aligned batch, non-16-aligned hidden
-    # Shape (1, 512) expanded to (512, 6144)
+    # Shape (1, 512) expanded to (512, 512) - expand singleton dimension 0
     var3 = torch.randn(1, 512, dtype=torch.float32)
-    target_shape3 = (512, 6144)
+    target_shape3 = (512, 512)
     
     # Case 4: Large batch size
-    # Shape (1, 1024) expanded to (1024, 8192)
+    # Shape (1, 1024) expanded to (1024, 1024) - expand singleton dimension 0
     var4 = torch.randn(1, 1024, dtype=torch.float32)
-    target_shape4 = (1024, 8192)
+    target_shape4 = (1024, 1024)
     
     return [
         [var1, target_shape1],

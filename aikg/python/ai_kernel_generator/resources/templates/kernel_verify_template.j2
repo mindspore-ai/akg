@@ -1,18 +1,35 @@
 import os
 import json
 import numpy as np
+import signal
+import functools
 from typing import Union, Literal, List, Tuple, Any
 {% if framework == "torch" %}
 import torch
-from {{ op_name }}_torch import Model as FrameworkModel, get_inputs, get_init_inputs
+from {{ op_name }}_torch import Model as FrameworkModel, get_init_inputs
+{% if is_dynamic_shape %}
+from {{ op_name }}_torch import get_inputs_dyn_list
+{% else %}
+from {{ op_name }}_torch import get_inputs
+{% endif %}
 TensorType = torch.Tensor
 {% elif framework == "numpy" %}
-from {{ op_name }}_numpy import Model as FrameworkModel, get_inputs, get_init_inputs
+from {{ op_name }}_numpy import Model as FrameworkModel, get_init_inputs
+{% if is_dynamic_shape %}
+from {{ op_name }}_numpy import get_inputs_dyn_list
+{% else %}
+from {{ op_name }}_numpy import get_inputs
+{% endif %}
 TensorType = np.ndarray
 {% elif framework == "mindspore" %}
 import mindspore as ms
 from mindspore.common import np_dtype
-from {{ op_name }}_mindspore import Model as FrameworkModel, get_inputs, get_init_inputs
+from {{ op_name }}_mindspore import Model as FrameworkModel, get_init_inputs
+{% if is_dynamic_shape %}
+from {{ op_name }}_mindspore import get_inputs_dyn_list
+{% else %}
+from {{ op_name }}_mindspore import get_inputs
+{% endif %}
 TensorType = ms.Tensor
 MS_TO_NP_DTYPE_MAP = {
     ms.float32: np.float32,
@@ -39,6 +56,29 @@ from {{ op_name }}_cuda_c import {{ impl_func_name }}
 {% elif dsl == "cpp" %}
 from {{ op_name }}_cpp import {{ impl_func_name }}
 {% endif %}
+
+# Timeout装饰器函数
+def timeout_handler(signum, frame):
+    raise TimeoutError("计算超时")
+
+def with_timeout(timeout_seconds):
+    """装饰器：为函数添加超时控制"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            # 设置信号处理器
+            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(timeout_seconds)
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                # 恢复原来的信号处理器
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+        return wrapper
+    return decorator
+
 
 {% if framework == "torch" %}
 def save_tensor(tensor: TensorType, bin_path: str):
@@ -236,6 +276,12 @@ def compare(framework_out_flatten, impl_out_flatten, limit, data_type):
     framework_finite = framework_out_flatten[finite_mask]
     impl_finite = impl_out_flatten[finite_mask]
     
+    # 检查是否为布尔类型
+    if framework_finite.dtype == bool or impl_finite.dtype == bool:
+        if not np.array_equal(framework_finite, impl_finite):
+            raise AssertionError(f"验证失败，布尔值不匹配: dtype={data_type}")
+        return
+    
     # 计算相对误差
     abs_diff = np.abs(framework_finite - impl_finite)
     abs_ref = np.abs(framework_finite)
@@ -261,6 +307,7 @@ def verify_implementations():
     arch = "{{ arch }}"  # 硬件架构
     dsl = "{{ dsl }}"  # 实现方式
     
+    # 设备设置
     {% if framework == "torch" %}
     torch.manual_seed(0)
     # PyTorch设备设置
@@ -309,15 +356,10 @@ def verify_implementations():
         raise ValueError(f"MindSpore不支持的后端: {backend}")
     {% endif %}
 
-    # 获取初始化参数和输入数据
-    init_params = get_init_inputs()
-    framework_model = FrameworkModel(*init_params)
-    
-    {% if framework == "torch" %}
-    framework_model = framework_model.to(device)
-    # 处理输入数据
-    inputs = get_inputs()
+    # 公共函数定义
     def process_input(x):
+        """处理输入数据，将数据移动到正确的设备"""
+        {% if framework == "torch" %}
         if isinstance(x, torch.Tensor):
             return x.to(device)
         elif isinstance(x, np.ndarray):
@@ -331,83 +373,130 @@ def verify_implementations():
                 return x.to(device)
             except (AttributeError, TypeError):
                 return x
+        {% else %}
+        return x
+        {% endif %}
+
+    def verify_single_case(inputs):
+        """验证单个案例的公共逻辑"""
+        {% if backend == "ascend" %}
+        torch.npu.manual_seed(0)
+        {% endif %}
+        
+        # 运行框架实现
+        framework_output = framework_model(*inputs)
+        
+        {% if dsl == "swft" %}
+        # 运行SWFT实现
+        data_dir = os.path.dirname(__file__)
+        
+        # 生成二进制数据文件
+        gen_binary_data(inputs, framework_output, data_dir)
+        
+        # 运行SWFT实现
+        {{ impl_func_name }}(device_id=int({{ device_id }}))
+        
+        # 加载SWFT输出
+        impl_output = load_binary_data(data_dir, framework_output)
+        {% elif dsl in ["triton", "cuda_c", "cpp"] %}
+        # 运行Triton实现
+        impl_output = {{ impl_func_name }}(*inputs)
+        {% endif %}
+
+        if not isinstance(framework_output, (list, tuple)):
+            framework_output = [framework_output]
+        if not isinstance(impl_output, (list, tuple)):
+            impl_output = [impl_output]
+        
+        # 基本检查
+        if len(framework_output) != len(impl_output):
+            raise AssertionError(f"验证失败，输出数量不一致: framework={len(framework_output)}, impl={len(impl_output)}")
+        
+        for i, (fw_out, impl_out) in enumerate(zip(framework_output, impl_output)):
+            # 检查None值
+            if fw_out is None or impl_out is None:
+                raise AssertionError(f"输出{i}为None: framework={fw_out is None}, impl={impl_out is None}")
+            
+            data_type = framework_output[i].dtype
+            limit = get_limit(data_type)
+            
+            # 转换为numpy数组
+            {% if framework == "torch" %}
+            framework_out_flatten = fw_out.flatten().detach().cpu().numpy()
+            impl_out_flatten = impl_out.flatten()
+            if isinstance(impl_out_flatten, torch.Tensor):
+                impl_out_flatten = impl_out_flatten.detach().cpu().numpy()
+            {% elif framework == "numpy" %}
+            framework_out_flatten = fw_out.flatten()
+            impl_out_flatten = impl_out.flatten()
+            {% elif framework == "mindspore" %}
+            framework_out_flatten = fw_out.flatten().asnumpy()
+            impl_out_flatten = impl_out.flatten()
+            if isinstance(impl_out_flatten, ms.Tensor):
+                impl_out_flatten = impl_out_flatten.asnumpy()
+            {% endif %}
+            
+            # 统一数据类型
+            if framework_out_flatten.dtype != impl_out_flatten.dtype:
+                impl_out_flatten = impl_out_flatten.astype(framework_out_flatten.dtype)
+            
+            # 执行比对
+            compare(framework_out_flatten, impl_out_flatten, limit, data_type)
+        
+        return True, framework_output
+
+    # 获取初始化参数和输入数据
+    init_params = get_init_inputs()
+    framework_model = FrameworkModel(*init_params)
+    
+    {% if framework == "torch" %}
+    framework_model = framework_model.to(device)
+    {% endif %}
+    
+    {% if is_dynamic_shape %}
+    # 动态shape：获取多组输入数据
+    inputs_list = get_inputs_dyn_list()
+    
+    # 对每组输入进行验证
+    for case_idx, inputs in enumerate(inputs_list):
+        {% if framework == "torch" %}
+        inputs = [process_input(x) for x in inputs]
+        {% endif %}
+        
+        print(f"验证动态shape案例 {case_idx + 1}/{len(inputs_list)}")
+        
+        # 使用timeout装饰器包装整个验证过程
+        @with_timeout({{ timeout }})
+        def verify_case():
+            return verify_single_case(inputs)
+        
+        try:
+            verify_result, framework_output = verify_case()
+            print(f"动态shape案例 {case_idx + 1} 验证成功")
+        except TimeoutError:
+            raise AssertionError(f"动态shape案例 {case_idx + 1} 验证超时（{timeout}秒）")
+    
+    {% else %}
+    # 静态shape：获取单组输入数据
+    {% if framework == "torch" %}
+    inputs = get_inputs()
     inputs = [process_input(x) for x in inputs]
     {% elif framework == "numpy" %}
     inputs = get_inputs()
     {% elif framework == "mindspore" %}
     inputs = get_inputs()
     {% endif %}
-    torch.manual_seed(0)
-    # 运行框架实现
-    framework_output = framework_model(*inputs)
     
-    {% if backend == "ascend" %}
-    torch.npu.manual_seed(0)
+    # 使用timeout装饰器包装整个验证过程
+    @with_timeout({{ timeout }})
+    def verify_case():
+        return verify_single_case(inputs)
+    
+    try:
+        verify_result, framework_output = verify_case()
+    except TimeoutError:
+        raise AssertionError(f"静态shape验证超时（{timeout}秒）")
     {% endif %}
-    
-    {% if "triton" in dsl %}
-    # 运行Triton实现
-    impl_output = {{ impl_func_name }}(*inputs)
-    {% elif dsl == "cuda_c" %}
-    # 运行CUDA C实现
-    impl_output = {{ impl_func_name }}(*inputs)
-
-    {% elif dsl == "cpp" %}
-    # 运行CPP实现
-    impl_output = {{ impl_func_name }}(*inputs)
-    {% elif dsl == "swft" %}
-    # 运行SWFT实现
-    data_dir = os.path.dirname(__file__)
-    
-    # 生成二进制数据文件
-    gen_binary_data(inputs, framework_output, data_dir)
-    
-    # 运行SWFT实现
-    {{ impl_func_name }}(device_id=int({{ device_id }}))
-    
-    # 加载SWFT输出
-    impl_output = load_binary_data(data_dir, framework_output)
-    {% endif %}
-
-    if not isinstance(framework_output, (list, tuple)):
-        framework_output = [framework_output]
-    if not isinstance(impl_output, (list, tuple)):
-        impl_output = [impl_output]
-    
-    # 基本检查
-    if len(framework_output) != len(impl_output):
-        raise AssertionError(f"验证失败，输出数量不一致: framework={len(framework_output)}, impl={len(impl_output)}")
-    
-    for i, (fw_out, impl_out) in enumerate(zip(framework_output, impl_output)):
-        # 检查None值
-        if fw_out is None or impl_out is None:
-            raise AssertionError(f"输出{i}为None: framework={fw_out is None}, impl={impl_out is None}")
-        
-        data_type = framework_output[i].dtype
-        limit = get_limit(data_type)
-        
-        # 转换为numpy数组
-        {% if framework == "torch" %}
-        framework_out_flatten = fw_out.flatten().detach().cpu().numpy()
-        impl_out_flatten = impl_out.flatten()
-        if isinstance(impl_out_flatten, torch.Tensor):
-            impl_out_flatten = impl_out_flatten.detach().cpu().numpy()
-        {% elif framework == "numpy" %}
-        framework_out_flatten = fw_out.flatten()
-        impl_out_flatten = impl_out.flatten()
-        {% elif framework == "mindspore" %}
-        framework_out_flatten = fw_out.flatten().asnumpy()
-        impl_out_flatten = impl_out.flatten()
-        if isinstance(impl_out_flatten, ms.Tensor):
-            impl_out_flatten = impl_out_flatten.asnumpy()
-        {% endif %}
-        
-        # 统一数据类型
-        if framework_out_flatten.dtype != impl_out_flatten.dtype:
-            impl_out_flatten = impl_out_flatten.astype(framework_out_flatten.dtype)
-        
-        # 执行比对
-        compare(framework_out_flatten, impl_out_flatten, limit, data_type)
     
     # 构建验证成功信息
     import time
@@ -430,21 +519,30 @@ def verify_implementations():
         "status": "成功"
     }
     
-    # 收集输入输出信息
+    # 收集验证信息
+    {% if is_dynamic_shape %}
+    verification_info.update({
+        "shape_type": "dynamic",
+        "case_count": len(inputs_list)
+    })
+    shape_info = f"形状类型: 动态 | 验证案例数: {len(inputs_list)}"
+    {% else %}
     output_shapes = [str(out.shape) if hasattr(out, 'shape') else str(type(out)) for out in framework_output]
     output_dtypes = [str(out.dtype) if hasattr(out, 'dtype') else str(type(out)) for out in framework_output]
-    
     verification_info.update({
+        "shape_type": "static",
         "output_count": len(output_shapes),
         "output_shapes": output_shapes,
         "output_dtypes": output_dtypes
     })
+    shape_info = f"形状类型: 静态 | 输出数量: {len(output_shapes)} | 形状: {output_shapes} | 数据类型: {output_dtypes}"
+    {% endif %}
     
     # 格式化输出，确保并发时不会混乱
     verification_log = f"""[{verification_id}] 验证结果: 成功
 [{verification_id}] 算子: {{ op_name }} | 框架: {{ framework }} | 后端: {{ backend }} | 架构: {{ arch }}
 [{verification_id}] DSL: {{ dsl }} | 设备ID: {{ device_id }} | 时间: {timestamp}
-[{verification_id}] 输出数量: {len(output_shapes)} | 形状: {output_shapes} | 数据类型: {output_dtypes}
+[{verification_id}] {shape_info}
 [{verification_id}] {'='*60}\n\n"""
     
     print(verification_log)

@@ -478,6 +478,66 @@ def test_kernel_verifier_profiling_a100(op_name):
     print(f"speedup is {speedup:.2f}x")
 
 
+# AIKGBench dynamic shape profiling功能测试
+@pytest.mark.level0
+@pytest.mark.torch
+@pytest.mark.triton
+@pytest.mark.ascend
+@pytest.mark.ascend910b4
+@pytest.mark.profiling
+@pytest.mark.parametrize("op_name", ["add_dyn"])
+def test_kernel_verifier_profiling_dynamic_ascend910b4_torch(op_name):
+    """Dynamic shape profiling test for ascend910b4_torch"""
+    framework = "torch"
+    dsl = "triton"
+    backend = "ascend"
+    arch = "ascend910b4"
+    config = load_config(dsl)  # unused
+    
+    # 读取框架实现代码
+    op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
+    with open(op_task_file, "r", encoding="utf-8") as f:
+        op_task_str = textwrap.dedent(f.read())
+
+    # 读取实现代码
+    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{dsl}.py"
+    with open(kernel_path, "r", encoding="utf-8") as f:
+        kernel_code = f.read()
+
+    impl_func_name = f"{op_name}_{dsl}_{framework}"
+    verifier = KernelVerifier(
+        op_name=op_name,
+        framework_code=op_task_str,
+        task_id="dynamic_profiling_test_001",
+        framework=framework,
+        dsl=dsl,
+        backend=backend,
+        arch=arch,
+        impl_func_name=impl_func_name,
+        config=config
+    )
+    task_info = {}
+    task_info["coder_code"] = kernel_code
+
+    # 先进行验证，确保验证通过
+    result, error_log = verifier.run(task_info, device_id=device_id)
+    assert result, f"验证失败: {error_log}"
+
+    # 进行性能分析
+    profile_settings = {
+        "run_times": 50,
+        "warmup_times": 5
+    }
+    gen_time, base_time, speedup = verifier.run_profile(
+        current_step=0, device_id=device_id, profile_settings=profile_settings)
+    
+    print(f"Dynamic Shape Profiling Results:")
+    print(f"Operation: {op_name}")
+    print(f"orig performance is {base_time:.2f} us")
+    print(f"aikg performance is {gen_time:.2f} us")
+    print(f"speedup is {speedup:.2f}x")
+
+
 @pytest.mark.level0
 @pytest.mark.torch
 @pytest.mark.cuda_c

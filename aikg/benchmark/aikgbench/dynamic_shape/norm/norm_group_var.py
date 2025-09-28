@@ -19,15 +19,16 @@ class Model(nn.Module):
 
 def get_inputs_dyn_list():
     # Group normalization variation cases with both aligned and non-aligned shapes
+    # Note: Channel dimension must be divisible by num_groups (8)
     
-    # Case 1: Medium tensor size (15, 15, 1344) (non-aligned)
-    inp1 = torch.randn(15, 15, 1344, dtype=torch.float32)
+    # Case 1: Medium tensor size (16, 16, 1344) (non-aligned spatial dims)
+    inp1 = torch.randn(16, 16, 1344, dtype=torch.float32)
     
-    # Case 2: Very large tensor size (16, 16, 4096) (aligned)
-    inp2 = torch.randn(16, 16, 4096, dtype=torch.float32)
+    # Case 2: Large tensor size (32, 32, 4096) (aligned)
+    inp2 = torch.randn(32, 32, 4096, dtype=torch.float32)
     
-    # Case 3: Extreme tensor size (127, 127, 4096) (non-aligned)
-    inp3 = torch.randn(127, 127, 4096, dtype=torch.float32)
+    # Case 3: Very large tensor size (64, 64, 5120) (non-aligned spatial dims)
+    inp3 = torch.randn(64, 64, 5120, dtype=torch.float32)
     
     # Case 4: Extreme tensor size (128, 128, 8192) (aligned)
     inp4 = torch.randn(128, 128, 8192, dtype=torch.float32)

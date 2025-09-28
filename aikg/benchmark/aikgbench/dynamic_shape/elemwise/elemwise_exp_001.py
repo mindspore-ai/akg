@@ -27,8 +27,8 @@ def get_inputs_dyn_list():
     # Case 2: Middle (batch=32, seq=512, hidden=1024)
     input_tensor2 = torch.randn(32, 512, 1024, dtype=torch.float32) * 0.1
 
-    # Case 3: Large (batch=64, seq=2048, hidden=4096)
-    input_tensor3 = torch.randn(64, 2048, 4096, dtype=torch.float32) * 0.1
+    # Case 3: Large (batch=256, seq=1024, hidden=4096)
+    input_tensor3 = torch.randn(256, 1024, 4096, dtype=torch.float32) * 0.1
 
     # Case 4: Non-aligned (batch=48, seq=256, hidden=2688)
     input_tensor4 = torch.randn(48, 256, 2688, dtype=torch.float32) * 0.1

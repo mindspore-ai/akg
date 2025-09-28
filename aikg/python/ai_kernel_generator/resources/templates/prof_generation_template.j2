@@ -4,15 +4,30 @@ import numpy as np
 from typing import Union, Literal, List, Tuple, Any
 {% if framework == "torch" %}
 import torch
-from {{ op_name }}_torch import Model as FrameworkModel, get_inputs, get_init_inputs
+from {{ op_name }}_torch import Model as FrameworkModel, get_init_inputs
+{% if is_dynamic_shape %}
+from {{ op_name }}_torch import get_inputs_dyn_list
+{% else %}
+from {{ op_name }}_torch import get_inputs
+{% endif %}
 TensorType = torch.Tensor
 {% elif framework == "numpy" %}
-from {{ op_name }}_numpy import Model as FrameworkModel, get_inputs, get_init_inputs
+from {{ op_name }}_numpy import Model as FrameworkModel, get_init_inputs
+{% if is_dynamic_shape %}
+from {{ op_name }}_numpy import get_inputs_dyn_list
+{% else %}
+from {{ op_name }}_numpy import get_inputs
+{% endif %}
 TensorType = np.ndarray
 {% elif framework == "mindspore" %}
 import mindspore as ms
 from mindspore.common import np_dtype
-from {{ op_name }}_mindspore import Model as FrameworkModel, get_inputs, get_init_inputs
+from {{ op_name }}_mindspore import Model as FrameworkModel, get_init_inputs
+{% if is_dynamic_shape %}
+from {{ op_name }}_mindspore import get_inputs_dyn_list
+{% else %}
+from {{ op_name }}_mindspore import get_inputs
+{% endif %}
 TensorType = ms.Tensor
 MS_TO_NP_DTYPE_MAP = {
     ms.float32: np.float32,
@@ -215,9 +230,10 @@ def run_generation_implementations():
     
     {% if framework == "torch" %}
     framework_model = framework_model.to(device)
-    # 处理输入数据
-    inputs = get_inputs()
+    {% endif %}
+    
     def process_input(x):
+        {% if framework == "torch" %}
         if isinstance(x, torch.Tensor):
             return x.to(device)
         elif isinstance(x, np.ndarray):
@@ -231,6 +247,135 @@ def run_generation_implementations():
                 return x.to(device)
             except (AttributeError, TypeError):
                 return x
+        {% else %}
+        return x
+        {% endif %}
+    
+    def run_benchmark(inputs):
+        """运行基准测试"""
+        {% if "triton" in dsl %}
+        {% if backend == "ascend" %}
+        try:
+            from ai_kernel_generator.core.verifier.profiler import profiler_npu
+            from ai_kernel_generator.utils.triton_autotune_patch import get_collected_config_timings, clear_collected_config_timings
+            # 清除之前的配置信息
+            clear_collected_config_timings()
+            patch_imported = True
+        except ImportError:
+            get_collected_config_timings = lambda: {}
+            clear_collected_config_timings = lambda: None
+            patch_imported = False
+        
+        # 清除缓存确保重新autotune
+        if hasattr({{ impl_func_name }}, 'cache'):
+            {{ impl_func_name }}.cache.clear()
+        
+        # 触发autotune
+        {{ impl_func_name }}(*inputs)
+        
+        # 获取收集的配置信息
+        config_timings = get_collected_config_timings()
+        {% endif %}
+        
+        # 进行最终的性能测试
+        def triton_benchmark_fn():
+            result = {{ impl_func_name }}(*inputs)
+            return result
+        
+        if backend == "ascend" and patch_imported:
+            execution_time_us = profiler_npu(
+                triton_benchmark_fn,
+                warmup={{ warmup_times }},
+                active={{ run_times }},
+                prof_dir_name="prof_generation_output",
+                keep_res=False,
+                suppress_warnings=True
+            )
+            execution_time_ms = execution_time_us / 1000
+            method = "profiler_npu"
+        else:
+            # GPU环境或补丁导入失败：使用标准do_bench
+            import triton.testing
+            execution_time_ms = triton.testing.do_bench(
+                triton_benchmark_fn,
+                warmup={{ warmup_times }},
+                rep={{ run_times }},
+                return_mode="min"
+            )
+            method = "triton_do_bench"
+
+        {% elif dsl == "cpp" %}
+        # CPU
+        import time
+        def cpp_benchmark_fn():
+            return {{ impl_func_name }}(*inputs)
+        # 执行 warmup
+        for _ in range({{ warmup_times }}):
+            _ = cpp_benchmark_fn()
+        # 计时 rep 次
+        start_t = time.perf_counter()
+        for _ in range({{ run_times }}):
+            _ = cpp_benchmark_fn()
+        end_t = time.perf_counter()
+        execution_time_ms = (end_t - start_t) * 1000.0 / max({{ run_times }}, 1)
+        method = "cpu_loop_timer"
+        
+        {% elif dsl == "swft" %}
+        # 运行SWFT实现
+        data_dir = os.path.dirname(__file__)
+        
+        # 生成二进制数据文件
+        framework_output = framework_model(*inputs)
+        gen_binary_data(inputs, framework_output, data_dir)
+        
+        # 运行SWFT实现
+        import time
+        start_time = time.time()
+        for _ in range({{ total_count }}):
+            {{ impl_func_name }}(device_id=int({{ device_id }}))
+        end_time = time.time()
+        execution_time_ms = (end_time - start_time) * 1000 / {{ total_count }}  # 转换为毫秒
+        method = "traditional_timing"
+        {% endif %}
+
+        return execution_time_ms, method
+    
+    {% if is_dynamic_shape %}
+    # 动态shape：获取多组输入数据
+    inputs_list = get_inputs_dyn_list()
+    
+    # 对每组输入进行性能测试
+    all_execution_times = []
+    for case_idx, inputs in enumerate(inputs_list):
+        {% if framework == "torch" %}
+        inputs = [process_input(x) for x in inputs]
+        {% endif %}
+        
+        execution_time, method = run_benchmark(inputs)
+        all_execution_times.append(execution_time)
+        print(f"[{{ op_name }}] Case {case_idx + 1} execution time: {execution_time * 1000:.4f} us")
+    
+    # 计算平均执行时间
+    avg_execution_time = sum(all_execution_times) / len(all_execution_times)
+    
+    # 保存时间结果到文件
+    result_data = {
+        "execution_time_ms": avg_execution_time,
+        "execution_time_us": avg_execution_time * 1000,
+        "case_count": len(inputs_list),
+        "case_times": all_execution_times,
+        "warmup_times": {{ warmup_times }},
+        "run_times": {{ run_times }},
+        "method": method,
+        "shape_type": "dynamic"
+    }
+    
+    print(f"[{{ op_name }}] Average execution time: {avg_execution_time * 1000:.4f} us")
+    
+    {% else %}
+    # 静态shape：获取单组输入数据
+    {% if framework == "torch" %}
+    inputs = get_inputs()
     inputs = [process_input(x) for x in inputs]
     {% elif framework == "numpy" %}
     inputs = get_inputs()
@@ -238,111 +383,23 @@ def run_generation_implementations():
     inputs = get_inputs()
     {% endif %}
     
-    {% if "triton" in dsl %}
-    {% if backend == "ascend" %}
-    try:
-        from ai_kernel_generator.core.verifier.profiler import profiler_npu
-        from ai_kernel_generator.utils.triton_autotune_patch import get_collected_config_timings, clear_collected_config_timings
-        # 清除之前的配置信息
-        clear_collected_config_timings()
-        patch_imported = True
-    except ImportError:
-        get_collected_config_timings = lambda: {}
-        clear_collected_config_timings = lambda: None
-        patch_imported = False
+    execution_time, method = run_benchmark(inputs)
     
-    # 清除缓存确保重新autotune
-    if hasattr({{ impl_func_name }}, 'cache'):
-        {{ impl_func_name }}.cache.clear()
-    
-    # 触发autotune
-    {{ impl_func_name }}(*inputs)
-    
-    # 获取收集的配置信息
-    config_timings = get_collected_config_timings()
-    {% endif %}
-    
-    # 进行最终的性能测试
-    def triton_benchmark_fn():
-        result = {{ impl_func_name }}(*inputs)
-        return result
-    
-    if backend == "ascend" and patch_imported:
-        execution_time_us = profiler_npu(
-            triton_benchmark_fn,
-            warmup={{ warmup_times }},
-            active={{ run_times }},
-            prof_dir_name="prof_generation_output",
-            keep_res=False,
-            suppress_warnings=True
-        )
-        execution_time_ms = execution_time_us / 1000
-        method = "profiler_npu"
-    else:
-        # GPU环境或补丁导入失败：使用标准do_bench
-        import triton.testing
-        execution_time_ms = triton.testing.do_bench(
-            triton_benchmark_fn,
-            warmup={{ warmup_times }},
-            rep={{ run_times }},
-            return_mode="min"
-        )
-        execution_time_us = execution_time_ms * 1000
-        method = "triton_do_bench"
-    
-    # 保存时间结果和配置信息到文件
+    # 保存时间结果到文件
     result_data = {
-        "execution_time_ms": execution_time_ms,
-        "execution_time_us": execution_time_us,
+        "execution_time_ms": execution_time,
+        "execution_time_us": execution_time * 1000,
         "warmup_times": {{ warmup_times }},
         "run_times": {{ run_times }},
         "method": method,
-        "config_timings": config_timings
+        "shape_type": "static"
     }
     
-    with open("generation_profile_result.json", "w") as f:
-        json.dump(result_data, f, indent=2)
-    
-    print(f"[{{ op_name }}] Generation execution time: {execution_time_us:.4f} us")
-    
-    {% elif dsl == "swft" %}
-    # 运行SWFT实现
-    data_dir = os.path.dirname(__file__)
-    
-    # 生成二进制数据文件
-    gen_binary_data(inputs, framework_output, data_dir)
-    
-    # 运行SWFT实现
-    for _ in range({{ total_count }}):
-        {{ impl_func_name }}(device_id=int({{ device_id }}))
-    
-    # 加载SWFT输出
-    impl_output = load_binary_data(data_dir, framework_output)
-    {% elif dsl == "cpp" %}
-    # CPU
-    import time
-    def cpp_benchmark_fn():
-        return {{ impl_func_name }}(*inputs)
-    # 执行 warmup
-    for _ in range({{ warmup_times }}):
-        _ = cpp_benchmark_fn()
-    # 计时 rep 次
-    start_t = time.perf_counter()
-    for _ in range({{ run_times }}):
-        _ = cpp_benchmark_fn()
-    end_t = time.perf_counter()
-    execution_time_ms = (end_t - start_t) * 1000.0 / max({{ run_times }}, 1)
-    result_data = {
-        "execution_time_ms": execution_time_ms,
-        "execution_time_us": execution_time_ms * 1000,
-        "warmup_times": {{ warmup_times }},
-        "run_times": {{ run_times }},
-        "method": "cpu_loop_timer"
-    }
-    with open("generation_profile_result.json", "w") as f:
-        json.dump(result_data, f, indent=2)
-    print(f"[{{ op_name }}] Generation execution time: {execution_time_us:.4f} us")
+    print(f"[{{ op_name }}] Generation execution time: {execution_time * 1000:.4f} us")
     {% endif %}
+    
+    with open("generation_profile_result.json", "w") as f:
+        json.dump(result_data, f, indent=2)
 
 if __name__ == "__main__":
     run_generation_implementations()

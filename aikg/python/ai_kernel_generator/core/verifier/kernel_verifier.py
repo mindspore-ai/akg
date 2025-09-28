@@ -18,6 +18,7 @@ import shutil
 import logging
 import subprocess
 import json
+import sys
 from datetime import datetime
 from typing import Optional, Literal, Tuple, Dict, Any
 from jinja2 import Template
@@ -156,6 +157,15 @@ class KernelVerifier:
             return "\n".join(import_lines) + "\n\n"
         return ""
 
+    def _detect_dynamic_shape(self) -> bool:
+        """
+        检测框架代码是否包含动态shape函数
+        
+        Returns:
+            bool: True if contains get_inputs_dyn_list, False otherwise
+        """
+        return "get_inputs_dyn_list" in self.framework_code
+
     def gen_verify_project(self, impl_code: str, verify_dir: str, device_id: int = 0):
         """生成验证项目文件到指定目录"""
         # 创建框架实现文件
@@ -184,6 +194,9 @@ class KernelVerifier:
         with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
             template = Template(f.read())
 
+        # 检测是否为动态shape
+        is_dynamic_shape = self._detect_dynamic_shape()
+
         # 使用模板变量
         rendered_code = template.render(
             op_name=self.op_name,
@@ -192,7 +205,9 @@ class KernelVerifier:
             device_id=device_id,
             impl_func_name=self.impl_func_name,
             backend=self.backend,
-            arch=self.arch
+            arch=self.arch,
+            is_dynamic_shape=is_dynamic_shape,
+            timeout=self.config.get('verify_timeout', 300)
         )
 
         with open(verify_file, "w", encoding="utf-8") as f:
@@ -204,13 +219,14 @@ class KernelVerifier:
 
         Args:
             verify_dir: 验证目录
-            timeout: 超时时间（秒），默认5分钟
+            timeout: 超时时间（秒），默认5分钟（传递给模板用于每次计算）
         """
         original_cwd = os.getcwd()
         try:
             os.chdir(verify_dir)
             python_cmd = ["python", f"verify_{self.op_name}.py"]
-            return run_command(python_cmd, f"verify_{self.op_name}", timeout=timeout)
+            # 使用run_command但禁用timeout，让验证脚本无限制运行
+            return run_command(python_cmd, f"verify_{self.op_name}", timeout=None)
         finally:
             try:
                 os.chdir(original_cwd)
@@ -234,6 +250,9 @@ class KernelVerifier:
         with open(template_path, "r", encoding="utf-8") as f:
             template = Template(f.read())
 
+        # 检测是否为动态shape
+        is_dynamic_shape = self._detect_dynamic_shape()
+
         # 使用模板变量
         rendered_code = template.render(
             op_name=self.op_name,
@@ -245,7 +264,8 @@ class KernelVerifier:
             arch=self.arch,
             warmup_times=warmup_times,
             run_times=run_times,
-            total_count=warmup_times + run_times
+            total_count=warmup_times + run_times,
+            is_dynamic_shape=is_dynamic_shape
         )
 
         with open(profile_file, "w", encoding="utf-8") as f:

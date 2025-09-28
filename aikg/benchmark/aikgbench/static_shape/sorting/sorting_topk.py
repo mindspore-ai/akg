@@ -17,7 +17,8 @@ class Model(nn.Module):
         # - Implementing attention mechanisms
         # - Selecting the most probable tokens in language models
         # - Non-maximum suppression in object detection
-        return torch.topk(input_tensor, self.k, dim=self.dim)
+        values, indices = torch.topk(input_tensor, self.k, dim=self.dim)
+        return values, indices
 
 
 def get_inputs():

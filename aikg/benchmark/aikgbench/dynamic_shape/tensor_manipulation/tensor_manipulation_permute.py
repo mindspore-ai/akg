@@ -35,6 +35,7 @@ def get_inputs_dyn_list():
 
 def get_init_inputs():
     # Specific dims for permutation
-    # Permute dimensions to (128, 4, 64)
+    # Permute dimensions from (batch, seq, hidden) to (seq, batch, hidden)
+    # For input (256, 128, 64) -> output (128, 256, 64)
     dims = (1, 0, 2)
     return [dims]

@@ -23,13 +23,13 @@ class Model(nn.Module):
 
 def get_inputs_dyn_list():
     # Small shape case
-    input1 = torch.randn(128, 256, 512, dtype=torch.float32)
+    input1 = torch.randn(16, 64, 512, dtype=torch.float32)
     # Middle shape case
-    input2 = torch.randn(512, 1024, 2048, dtype=torch.float32)
+    input2 = torch.randn(32, 512, 1024, dtype=torch.float32)
     # Large shape case
-    input3 = torch.randn(1024, 4096, 4096, dtype=torch.float32)
+    input3 = torch.randn(256, 1024, 4096, dtype=torch.float32)
     # Nonaligned shape case
-    input4 = torch.randn(768, 3000, 3500, dtype=torch.float32)
+    input4 = torch.randn(48, 256, 2688, dtype=torch.float32)
 
     return [[input1], [input2], [input3], [input4]]
 

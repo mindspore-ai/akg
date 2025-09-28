@@ -27,20 +27,20 @@ class Model(nn.Module):
 
 def get_inputs_dyn_list():
     # Small shape case
-    input1 = torch.randn(128, 512, 1024, dtype=torch.float16)  # batch=128 > 100
-    seq_lengths1 = torch.randint(256, 512, (128,), dtype=torch.int32)
+    input1 = torch.randn(16, 64, 512, dtype=torch.float16)
+    seq_lengths1 = torch.randint(32, 64, (16,), dtype=torch.int32)
 
     # Middle shape case
-    input2 = torch.randn(512, 2048, 4096, dtype=torch.float16)  # batch=512
-    seq_lengths2 = torch.randint(1024, 2048, (512,), dtype=torch.int32)
+    input2 = torch.randn(32, 512, 1024, dtype=torch.float16)
+    seq_lengths2 = torch.randint(256, 512, (32,), dtype=torch.int32)
 
     # Large shape case
-    input3 = torch.randn(1024, 4096, 8192, dtype=torch.float16)
-    seq_lengths3 = torch.randint(2048, 4096, (1024,), dtype=torch.int32)
+    input3 = torch.randn(256, 1024, 4096, dtype=torch.float16)
+    seq_lengths3 = torch.randint(512, 1024, (256,), dtype=torch.int32)
 
     # Noaligned shape case
-    input4 = torch.randn(513, 3000, 6144, dtype=torch.float16)
-    seq_lengths4 = torch.randint(1500, 3000, (513,), dtype=torch.int32)
+    input4 = torch.randn(48, 256, 2688, dtype=torch.float16)
+    seq_lengths4 = torch.randint(128, 256, (48,), dtype=torch.int32)
 
     return [
         [input1, seq_lengths1],

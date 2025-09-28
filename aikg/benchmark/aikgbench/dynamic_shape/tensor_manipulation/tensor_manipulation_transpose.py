@@ -17,8 +17,6 @@ class Model(nn.Module):
 
 
 def get_inputs_dyn_list():
-    # Batch size: 1024
-    # Hidden dimension: 4096
     # Three tensors are concatenated along the batch dimension to get (1536, 4096)
     # Small shape case
     inputs1 = torch.randn(128, 256, dtype=torch.float32)

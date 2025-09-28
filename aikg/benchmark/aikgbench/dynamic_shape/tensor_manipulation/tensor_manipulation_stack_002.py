@@ -7,7 +7,7 @@ class Model(nn.Module):
         super(Model, self).__init__()
         self.dim = dim
 
-    def forward(self, inputs):
+    def forward(self, input1, input2):
         # torch.stack(tensors, dim=0, *, out=None)
         # Concatenates a sequence of tensors along a new dimension.
         # This is a stack operation along dimension 1 (new feature dimension).
@@ -15,30 +15,33 @@ class Model(nn.Module):
         # - Combining multiple feature maps into a new dimension
         # - Creating batch dimensions
         # - Implementing certain attention mechanisms
-        return torch.stack(inputs, dim=self.dim)
+        return torch.stack([input1, input2], dim=self.dim)
 
 
 def get_inputs_dyn_list():
-    # Batch size: 1024
-    # Hidden dimension: 4096
-    # Three tensors are concatenated along the batch dimension to get (1536, 4096)
-    # Small shape case
-    inputs1 = torch.randn(128, 256, dtype=torch.float32)
-    # Non-aligned shape case
-    inputs2 = torch.randn(511, 511, dtype=torch.float32)
-    # Middle shape case
-    inputs3 = torch.randn(512, 4096, dtype=torch.float32)
-    # Standard Large shape case
-    inputs4 = torch.randn(1024, 4096, dtype=torch.float32)
-    # Large shape case
-    inputs5 = torch.randn(2048, 8192, dtype=torch.float32)
+    # Two tensors are stacked along dimension 1 to create a new feature dimension
+    # Small shape case - stack along feature dimension
+    inputs1_1 = torch.randn(128, 256, dtype=torch.float32)
+    inputs1_2 = torch.randn(128, 256, dtype=torch.float32)
+    # Non-aligned shape case - stack along feature dimension
+    inputs2_1 = torch.randn(511, 511, dtype=torch.float32)
+    inputs2_2 = torch.randn(511, 511, dtype=torch.float32)
+    # Middle shape case - stack along feature dimension
+    inputs3_1 = torch.randn(512, 4096, dtype=torch.float32)
+    inputs3_2 = torch.randn(512, 4096, dtype=torch.float32)
+    # Standard Large shape case - stack along feature dimension
+    inputs4_1 = torch.randn(1024, 4096, dtype=torch.float32)
+    inputs4_2 = torch.randn(1024, 4096, dtype=torch.float32)
+    # Large shape case - stack along feature dimension
+    inputs5_1 = torch.randn(2048, 8192, dtype=torch.float32)
+    inputs5_2 = torch.randn(2048, 8192, dtype=torch.float32)
 
     return [
-        [inputs1],
-        [inputs2],
-        [inputs3],
-        [inputs4],
-        [inputs5]
+        [inputs1_1, inputs1_2],
+        [inputs2_1, inputs2_2],
+        [inputs3_1, inputs3_2],
+        [inputs4_1, inputs4_2],
+        [inputs5_1, inputs5_2]
     ]
 
 

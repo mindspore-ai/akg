@@ -36,10 +36,10 @@ def get_inputs_dyn_list():
     input_tensor4 = torch.randn(48, 2688, 64, 64, dtype=torch.float32)
 
     return [
-        input_tensor1,
-        input_tensor2,
-        input_tensor3,
-        input_tensor4
+        [input_tensor1],
+        [input_tensor2],
+        [input_tensor3],
+        [input_tensor4]
     ]
 
 def get_init_inputs():

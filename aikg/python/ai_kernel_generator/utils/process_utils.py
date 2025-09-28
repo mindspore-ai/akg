@@ -29,7 +29,7 @@ def run_command(cmd_list, cmd_msg="untitled_command", env=None, timeout=300):
         cmd_list: 命令列表
         cmd_msg: 命令描述信息
         env: 环境变量
-        timeout: 超时时间（秒），默认5分钟
+        timeout: 超时时间（秒），默认5分钟。设置为None禁用timeout
 
     Returns:
         tuple: (是否成功, 错误信息)
@@ -48,23 +48,28 @@ def run_command(cmd_list, cmd_msg="untitled_command", env=None, timeout=300):
             bufsize=0,  # 改为无缓冲
             env=env)
 
-        # 使用timeout参数
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            # 超时处理
-            process.kill()
-            # 等待进程完全结束
+        # 根据timeout参数决定是否使用超时
+        if timeout is None:
+            # 不使用timeout，让进程自然完成
+            stdout, stderr = process.communicate()
+        else:
+            # 使用timeout参数
             try:
-                stdout, stderr = process.communicate(timeout=5)
+                stdout, stderr = process.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
-                # 强制终止
-                process.terminate()
-                stdout, stderr = "", ""
+                # 超时处理
+                process.kill()
+                # 等待进程完全结束
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # 强制终止
+                    process.terminate()
+                    stdout, stderr = "", ""
 
-            error_msg = f"Command '{cmd_msg}' timed out after {timeout} seconds"
-            logger.error(error_msg)
-            return False, error_msg
+                error_msg = f"Command '{cmd_msg}' timed out after {timeout} seconds"
+                logger.error(error_msg)
+                return False, error_msg
 
         # 处理和显示输出
         if stdout:

@@ -10,6 +10,9 @@ class Model(nn.Module):
         # torch.rsqrt(input, *, out=None)
         # Returns a new tensor with the reciprocal square root of the elements of input.
         # rsqrt(input) = 1 / sqrt(input)
+        # Note: input must be strictly positive (> 0), otherwise:
+        # - sqrt() of negative numbers returns NaN
+        # - sqrt(0) = 0, so 1/sqrt(0) = 1/0 returns inf or NaN
         # This operation is commonly used in neural networks for:
         # - Normalization operations (e.g., RMS normalization, layer normalization)
         # - Mathematical transformations in specialized layers
@@ -19,16 +22,16 @@ class Model(nn.Module):
 
 def get_inputs_dyn_list():
     # Case 1: Small (batch=256, hidden=512)
-    input_tensor1 = torch.randn(256, 512, dtype=torch.float32)
+    input_tensor1 = torch.rand(256, 512, dtype=torch.float32) + 1e-6
 
     # Case 2: Middle (batch=1024, hidden=4096)
-    input_tensor2 = torch.randn(1024, 4096, dtype=torch.float32)
+    input_tensor2 = torch.rand(1024, 4096, dtype=torch.float32) + 1e-6
 
     # Case 3: Large (batch=2048, hidden=4096)
-    input_tensor3 = torch.randn(2048, 4096, dtype=torch.float32)
+    input_tensor3 = torch.rand(2048, 4096, dtype=torch.float32) + 1e-6
 
     # Case 4: Non-aligned (batch=768, hidden=2688)
-    input_tensor4 = torch.randn(768, 2688, dtype=torch.float32)
+    input_tensor4 = torch.rand(768, 2688, dtype=torch.float32) + 1e-6
 
     return [
         [input_tensor1],

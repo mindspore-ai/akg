@@ -44,5 +44,4 @@ def get_inputs_dyn_list():
 
 def get_init_inputs():
     # Specific dim value for reduction
-    # Extract params  # Reduce along second dimension (features dimension)
     return []
