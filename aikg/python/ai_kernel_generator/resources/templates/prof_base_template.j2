@@ -32,8 +32,6 @@ MS_TO_NP_DTYPE_MAP = {
 
 {% if "triton" in dsl %}
 from {{ op_name }}_triton import {{ impl_func_name }}
-import triton
-import triton.testing
 {% elif dsl == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
 {% elif dsl == "cuda_c" %}
@@ -127,32 +125,57 @@ def run_base_implementations():
     {% endif %}
     
     {% if "triton" in dsl %}
-    # 使用triton.testing.do_bench进行基准测试
+    {% if backend == "ascend" %}
+    # 导入profiler以支持性能测试
+    try:
+        from ai_kernel_generator.core.verifier.profiler import profiler_npu
+        patch_imported = True
+    except ImportError:
+        # 如果导入失败，使用标准方法
+        patch_imported = False
+    {% endif %}
+    
+    # 基准测试函数
     def base_benchmark_fn():
         result = framework_model(*inputs)
         return result
     
-    # 使用do_bench测量执行时间
-    execution_time = triton.testing.do_bench(
-        base_benchmark_fn,
-        warmup={{ warmup_times }},
-        rep={{ run_times }},
-        return_mode="min"
-    )
+    if backend == "ascend" and patch_imported:
+        execution_time_us = profiler_npu(
+            base_benchmark_fn,
+            warmup={{ warmup_times }},
+            active={{ run_times }},
+            prof_dir_name="prof_base_output",
+            keep_res=False,
+            suppress_warnings=True
+        )
+        execution_time_ms = execution_time_us / 1000
+        method = "profiler_npu"
+    else:
+        import triton.testing
+        execution_time_ms = triton.testing.do_bench(
+            base_benchmark_fn,
+            warmup={{ warmup_times }},
+            rep={{ run_times }},
+            return_mode="min"
+        )
+        execution_time_us = execution_time_ms * 1000
+        method = "triton_do_bench"
     
     # 保存时间结果到文件
     result_data = {
-        "execution_time_ms": execution_time,  # triton do_bench返回毫秒
-        "execution_time_us": execution_time * 1000,  # 转换为微秒以保持兼容性
+        "execution_time_ms": execution_time_ms,
+        "execution_time_us": execution_time_us,
         "warmup_times": {{ warmup_times }},
         "run_times": {{ run_times }},
-        "method": "triton_do_bench"
+        "method": method
     }
     
     with open("base_profile_result.json", "w") as f:
         json.dump(result_data, f, indent=2)
     
-    print(f"[{{ op_name }}] Base execution time: {execution_time:.4f} ms")
+    print(f"[{{ op_name }}] Base execution time: {execution_time_us:.4f} us")
+    
     {% elif dsl == "cpp" %}
     # CPU
     import time
@@ -176,7 +199,7 @@ def run_base_implementations():
     }
     with open("base_profile_result.json", "w") as f:
         json.dump(result_data, f, indent=2)
-    print(f"[{{ op_name }}] Base execution time: {execution_time_ms:.4f} ms")
+    print(f"[{{ op_name }}] Base execution time: {execution_time_us:.4f} us")
     {% else %}
     # 非triton实现，使用传统循环计时
     # 运行框架实现

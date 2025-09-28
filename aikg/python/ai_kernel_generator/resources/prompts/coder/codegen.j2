@@ -97,22 +97,6 @@
 inputs = get_inputs()
 {% if "triton" in dsl %}
 # 运行Triton实现
-## 卷积类算子生成
-请注意！！如果检测到给出的任务示例是卷积类的算子任务，为了保证Triton的卷积核权重与当前任务代码的卷积核权重共享，在Triton的host测生成对应的weight之前，例如：
-```
-    import torch
-    import torch.nn as nn
-    import triton
-    import triton.language as tl
-    # Triton内核
-    @triton.jit
-    def triton_kernel():
-        pass
-    def triton_host():
-        args = ...
-        weight = nn.ConvXXX(**args).weight.to(device)
-```
-我们会在调用Triton代码之前固定随机种子以保证Triton的卷积核权重与任务代码的卷积核权重一致，请务必保证nn中调用的module要与任务torch代码中调用的module要一致，使用的参数要一致，device设置请参考不同的硬件后端（"cuda", "npu"）。
 output = {{ func_name }}(*inputs)
 {% elif dsl == "swft" %}
 # 运行SWFT实现
@@ -132,6 +116,25 @@ def {{ func_name }}(...):
   # 执行 kernel 函数
   ...
 ```
+
+{% if "triton" in dsl %}
+3. 卷积类算子生成注意事项：
+请注意！！如果检测到给出的任务是卷积类的算子任务，为了保证Triton的卷积核权重与当前任务代码的卷积核权重一致，需要在Triton的host侧生成对应的weight：
+```
+    import torch
+    import torch.nn as nn
+    import triton
+    import triton.language as tl
+    # Triton内核
+    @triton.jit
+    def triton_kernel():
+        pass
+    def triton_host():
+        args = ...
+        weight = nn.ConvXXX(**args).weight.to(device)
+```
+我们会在调用Triton代码之前固定随机种子以保证Triton的卷积核权重与任务代码的卷积核权重一致，请务必保证nn中调用的module要与任务torch代码中调用的module要一致，使用的参数要一致，device设置请参考不同的硬件后端（"cuda", "npu"）。
+{% endif %}
 
 **请尽可能使用中文进行思考分析**
 

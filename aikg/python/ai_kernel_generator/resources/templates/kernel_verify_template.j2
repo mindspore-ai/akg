@@ -341,6 +341,10 @@ def verify_implementations():
     # 运行框架实现
     framework_output = framework_model(*inputs)
     
+    {% if backend == "ascend" %}
+    torch.npu.manual_seed(0)
+    {% endif %}
+    
     {% if "triton" in dsl %}
     # 运行Triton实现
     impl_output = {{ impl_func_name }}(*inputs)

@@ -31,9 +31,14 @@ MS_TO_NP_DTYPE_MAP = {
 {% endif %}
 
 {% if "triton" in dsl %}
+{% if backend == "ascend" %}
+try:
+    from ai_kernel_generator.utils.triton_autotune_patch import apply_triton_patches
+    apply_triton_patches()
+except ImportError:
+    pass
+{% endif %}
 from {{ op_name }}_triton import {{ impl_func_name }}
-import triton
-import triton.testing
 {% elif dsl == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
 {% elif dsl == "cuda_c" %}
@@ -234,32 +239,71 @@ def run_generation_implementations():
     {% endif %}
     
     {% if "triton" in dsl %}
-    # 使用triton.testing.do_bench进行Triton实现测试
+    {% if backend == "ascend" %}
+    try:
+        from ai_kernel_generator.core.verifier.profiler import profiler_npu
+        from ai_kernel_generator.utils.triton_autotune_patch import get_collected_config_timings, clear_collected_config_timings
+        # 清除之前的配置信息
+        clear_collected_config_timings()
+        patch_imported = True
+    except ImportError:
+        get_collected_config_timings = lambda: {}
+        clear_collected_config_timings = lambda: None
+        patch_imported = False
+    
+    # 清除缓存确保重新autotune
+    if hasattr({{ impl_func_name }}, 'cache'):
+        {{ impl_func_name }}.cache.clear()
+    
+    # 触发autotune
+    {{ impl_func_name }}(*inputs)
+    
+    # 获取收集的配置信息
+    config_timings = get_collected_config_timings()
+    {% endif %}
+    
+    # 进行最终的性能测试
     def triton_benchmark_fn():
         result = {{ impl_func_name }}(*inputs)
         return result
     
-    # 使用do_bench测量执行时间
-    execution_time = triton.testing.do_bench(
-        triton_benchmark_fn,
-        warmup={{ warmup_times }},
-        rep={{ run_times }},
-        return_mode="min"
-    )
+    if backend == "ascend" and patch_imported:
+        execution_time_us = profiler_npu(
+            triton_benchmark_fn,
+            warmup={{ warmup_times }},
+            active={{ run_times }},
+            prof_dir_name="prof_generation_output",
+            keep_res=False,
+            suppress_warnings=True
+        )
+        execution_time_ms = execution_time_us / 1000
+        method = "profiler_npu"
+    else:
+        # GPU环境或补丁导入失败：使用标准do_bench
+        import triton.testing
+        execution_time_ms = triton.testing.do_bench(
+            triton_benchmark_fn,
+            warmup={{ warmup_times }},
+            rep={{ run_times }},
+            return_mode="min"
+        )
+        execution_time_us = execution_time_ms * 1000
+        method = "triton_do_bench"
     
-    # 保存时间结果到文件
+    # 保存时间结果和配置信息到文件
     result_data = {
-        "execution_time_ms": execution_time,  # triton do_bench返回毫秒
-        "execution_time_us": execution_time * 1000,  # 转换为微秒以保持兼容性
+        "execution_time_ms": execution_time_ms,
+        "execution_time_us": execution_time_us,
         "warmup_times": {{ warmup_times }},
         "run_times": {{ run_times }},
-        "method": "triton_do_bench"
+        "method": method,
+        "config_timings": config_timings
     }
     
     with open("generation_profile_result.json", "w") as f:
         json.dump(result_data, f, indent=2)
     
-    print(f"[{{ op_name }}] Generation execution time: {execution_time:.4f} ms")
+    print(f"[{{ op_name }}] Generation execution time: {execution_time_us:.4f} us")
     
     {% elif dsl == "swft" %}
     # 运行SWFT实现
@@ -297,7 +341,7 @@ def run_generation_implementations():
     }
     with open("generation_profile_result.json", "w") as f:
         json.dump(result_data, f, indent=2)
-    print(f"[{{ op_name }}] Generation execution time: {execution_time_ms:.4f} ms")
+    print(f"[{{ op_name }}] Generation execution time: {execution_time_us:.4f} us")
     {% endif %}
 
 if __name__ == "__main__":
