@@ -326,7 +326,7 @@ class CommonUtils {
       return initStoreOp;
     }
     llvm::DenseSet<unsigned> dependentIds;
-    dependenceGraph.getDirectlyDependentNodes(nodeId, dependentIds);
+    dependenceGraph.getPredecessorNodes(nodeId, dependentIds);
     for (auto id : dependentIds) {
       Operation *dependenceOp = dependenceGraph.getNode(id)->op;
       if (!isInRange(dependenceOp->getParentOp())) {

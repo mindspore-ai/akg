@@ -153,7 +153,7 @@ Operation *ExtractIfOpPass::getInsertPoint(mlir::Operation *op, bool isForward) 
     return innerOp;
   }
   llvm::DenseSet<unsigned> dependentIds;
-  dependenceGraph.getDirectlyDependentNodes(nodeId, dependentIds);
+  dependenceGraph.getPredecessorNodes(nodeId, dependentIds);
   Operation *dependentInnerOp = nullptr;
   for (auto id : dependentIds) {
     Operation *dependenceOp = dependenceGraph.getNode(id)->op;

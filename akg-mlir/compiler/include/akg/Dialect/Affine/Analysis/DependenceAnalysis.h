@@ -85,6 +85,7 @@ struct MemRefDependenceGraph {
   explicit MemRefDependenceGraph(Block *block) : block(block) {}
 
   void createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses);
+  bool createEdges(const DenseMap<Value, SetVector<unsigned>> &memrefAccesses);
   bool init();
   // Returns the graph node for 'id'.
   Node *getNode(unsigned id);
@@ -97,7 +98,10 @@ struct MemRefDependenceGraph {
   bool hasDependencePath(unsigned srcId, unsigned dstId);
   bool hasMemrefAccessDependence(unsigned srcId, unsigned dstId);
 
-  void getDirectlyDependentNodes(unsigned id, DenseSet<unsigned> &dependentNodes);
+  void getPredecessorNodes(unsigned id, DenseSet<unsigned> &dependentNodes);
+  void getPredecessorNodes(unsigned id, std::vector<unsigned> &dependentNodes);
+  void getSuccessorNodes(unsigned id, DenseSet<unsigned> &dependentNodes);
+  void getSuccessorNodes(unsigned id, std::vector<unsigned> &dependentNodes);
 
   void print(raw_ostream &os) const;
   void dump() const { print(llvm::errs()); }
