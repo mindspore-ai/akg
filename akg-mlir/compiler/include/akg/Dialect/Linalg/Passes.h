@@ -27,6 +27,7 @@
 #include "akg/Dialect/Linalg/Transforms/LinalgCopyBufferize.h"
 #include "akg/Dialect/Linalg/Transforms/LinalgSimplify.h"
 #include "akg/Dialect/Linalg/Transforms/MatchAndMarkReductionOps.h"
+#include "akg/Dialect/Linalg/Transforms/MemrefCopyToLoops.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 
