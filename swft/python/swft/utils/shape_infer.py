@@ -15,7 +15,7 @@
 # limitations under the License.
 
 from copy import deepcopy
-from .util import eval_ne, eval_le, eval_gt, eval_lt
+from .util import eval_ne, eval_le, eval_gt, eval_lt, is_scalar
 
 __all__ = [
     "mmad_shape_infer",
@@ -232,8 +232,11 @@ def slice_size_infer(slice_size):
     if not isinstance(slice_size, (tuple, list)):
         raise TypeError("slice_size should be either tuple or list")
     for ele in slice_size:
-        if not isinstance(ele, int):
+        if not isinstance(ele, int) and not is_scalar(ele):
             raise TypeError("each element in slice size should be integer")
+        if is_scalar(ele):
+            if not ele.has_value() and not ele._has_tile():
+                raise TypeError("Scalar elememt should have value or tile")
     return slice_size
 
 

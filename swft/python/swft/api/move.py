@@ -57,9 +57,12 @@ def move_to_ub(src, dtype=None, relu=False, no_autopad=False):
 
 
 @name_tensor
-def move_to_l1(src):
+def move_to_l1(src, no_autopad=False):
+    attr = {}
+    if (no_autopad):
+        attr["no_pad"] = [1.0]
     dst = Tensor("L1", src.dtype, src.shape, src.format, src.multi_core)
-    dst.load(src)
+    dst.load(src, attr=attr)
     return dst
 
 

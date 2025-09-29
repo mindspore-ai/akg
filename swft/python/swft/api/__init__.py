@@ -24,6 +24,6 @@ from .transdata import nd_to_nz, nz_to_nd, transpose, reshape, nchw_to_nc1hwc0, 
 from .slicedata import slice, split_to_ub, slice_to_l1, split_to_l1, split_to_l0A, split_to_l0B, concat, concat_to_l1, concat_to_gm, slice_to_ub, pad_to_ub, insert_to_gm, slice_to_l0A, slice_to_l0B
 from .sync import sync_cores
 from .gatherandscatter import vgather
-from .sort import vconcat, vsort16, vmrgsort4, vextract
+from .sort import vconcat, vsort16, vmrgsort4, vextract, mgr_sort
 from .composite import tanh, arange
 from swft.runtime import exec_kernel

@@ -15,7 +15,7 @@
 # limitations under the License.
 
 import os
-if not os.getenv("ENABLE_SWFT_JIT", 1):
+if not os.getenv("ENABLE_SWFT_JIT", 0):
     exit()
 import inspect
 import subprocess

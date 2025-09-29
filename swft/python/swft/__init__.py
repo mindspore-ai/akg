@@ -15,6 +15,6 @@
 # limitations under the License.
 
 import os
-if os.getenv("ENABLE_SWFT_JIT", 1):
+if os.getenv("ENABLE_SWFT_JIT", 0):
     from .core import jit, aot
 from . import *

@@ -109,3 +109,10 @@ def vextract(src):
     dst1 = Tensor("UB", src.dtype, shape, src.format, src.multi_core)
     Instruction("VEXTRACT", (src, ), (dst1, ), {"type": [5]})()
     return dst0, dst1
+
+def mgr_sort(x_in, index_in, x_out, index_out, len, tiling):
+    if (isinstance(len, int)):
+        len = Scalar("INT32", len)
+    if (isinstance(tiling, int)):
+        tiling = Scalar("INT32", tiling)
+    Instruction("MGRSORT", (x_in, index_in, x_out, index_out, len, tiling), (x_in, index_in, x_out, index_out))()

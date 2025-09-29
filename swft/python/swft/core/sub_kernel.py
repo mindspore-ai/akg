@@ -25,7 +25,7 @@ from .compile import compile_kernel
 from swft.runtime.npu_session import NPUSession
 from swft.utils import is_tensor, is_scalar, gen_opbind_cpp
 kernel_list = []
-
+initialied_set = set()
 
 def sub_kernel(core_num=1):
     def logging_decorator(func):
@@ -46,6 +46,27 @@ def sub_kernel(core_num=1):
             return func(*args, **kwargs)
         return wrapped_function
     return logging_decorator
+
+def call_func(func, *args, **kwargs):
+    pass
+
+def add_func(func):
+    pass
+
+def sub_func(inline=False):
+    def logging_decorator(func):
+        @wraps(func)
+        def wrapped_function(*args, **kwargs):
+            if (inline):
+                return func(*args, **kwargs)
+            global initialied_set
+            if (func in initialied_set and not inline):
+                return call_func(func, *args, **kwargs)
+            initialied_set.add(func)
+            add_func(func)
+            return call_func(func, *args, **kwargs)
+        return wrapped_function
+    return logging_decorator      
 
 
 @lru_cache(maxsize=None)
@@ -106,9 +127,13 @@ def native_jit(core_num=1):
             compile_kernel(
                 f"./{prefix_path}/{kernel_name}/{kernel_name}.cce", kernel_name, idx=kernel_id)
             cann_path = npu_session.cann_path
-            compile_opt = f'{cann_path}/toolkit/tools/ccec_compiler/bin/ccec -xcce --cce-aicore-arch=dav-m200 -mllvm \
+            compile_opt = f'{cann_path}/toolkit/tools/ccec_compiler/bin/ccec -xcce -O3 \
+                        -I{cann_path}/compiler/tikcpp/tikcfw/ \
+                        -I{cann_path}/aarch64-linux/ascendc/include/basic_api/impl/ \
+                        -I{cann_path}/aarch64-linux/ascendc/include/basic_api/interface/ \
+                        --cce-aicore-arch=dav-m200 -mllvm \
                          -cce-aicore-function-stack-size=16000 -mllvm -cce-aicore-record-overflow=false -mllvm \
-                         -cce-aicore-addr-transform -mllvm --cce-aicore-jump-expand=true -fPIC -pthread -o \
+                         -cce-aicore-addr-transform -mllvm --cce-aicore-jump-expand=true -std=c++20 -fPIC -pthread -o \
                          {prefix_path}/{kernel_name}/{kernel_name}.o -c {prefix_path}/{kernel_name}/{kernel_name}.cce'
             with open(f'./{prefix_path}/{kernel_name}/pybind.cpp', 'w') as f:
                 f.write("\n".join(gen_opbind_cpp(

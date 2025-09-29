@@ -12,7 +12,7 @@ rm -rf /python/swft.egg-info
 find ./python -type d -name "__pycache__" -exec rm -rf {} +
 scp -r docs/ python/swft/
 cp README.md python/swft/
-python -m build --wheel
+python -m build --wheel --no-isolation
 pip install dist/swft-0.0.1-py3-none-any.whl --force-reinstall
 rm -rf /python/swft.egg-info
 rm -rf build/
