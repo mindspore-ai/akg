@@ -438,7 +438,8 @@ def run_a_kernel(desc,
                  clear_tmp=False,
                  dump_ir=False,
                  replace_dso=False,
-                 repo_path=""):
+                 repo_path="",
+                 enable_akg_loop_fusion=False):
     """function to run a single kernel"""
     is_dyn_shape = (static_desc is not None)
     if not backend:
@@ -457,7 +458,8 @@ def run_a_kernel(desc,
                                 dump_ir=dump_ir,
                                 repo_path=repo_path,
                                 profiling_trails=profiling_trails,
-                                runtime_provider="MLIR")
+                                runtime_provider="MLIR",
+                                enable_akg_loop_fusion=enable_akg_loop_fusion)
 
     if backend == "gpu":
         _run_gpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
@@ -541,7 +543,8 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
                          clear_tmp=compile_args.clear_tmp,
                          dump_ir=bool(compile_args.dump_ir),
                          replace_dso=compile_args.replace_dso,
-                         repo_path=compile_args.repo_path)
+                         repo_path=compile_args.repo_path,
+                         enable_akg_loop_fusion=compile_args.akg_fusion)
         except ValueError:
             print(kernel_name + " precision error = 9999999997ms")
             if run_res is not None and run_idx is not None:
@@ -601,6 +604,7 @@ if __name__ == "__main__":
     parser.add_argument("-dump", "--dump_ir", type=int, default=0)
     parser.add_argument("-r", "--replace_dso", type=bool, default=False)
     parser.add_argument("-repo", "--repo_path", type=str, default="")
+    parser.add_argument("-af", "--akg_fusion", type=bool, default=False)
 
     args = parser.parse_args()
     _create_dirs()

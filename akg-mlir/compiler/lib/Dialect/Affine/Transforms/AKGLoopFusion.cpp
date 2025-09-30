@@ -121,6 +121,7 @@ void AKGLoopFusion::runOnBlock(Block *block) {
 void AKGLoopFusion::runPreProcess() {
   func::FuncOp funcOp = getOperation();
 
+  // The reduce axis sinks to the innermost layer.
   funcOp.walk([&](affine::AffineForOp inner) {
     if (auto outer = dyn_cast<affine::AffineForOp>(inner->getParentOp())) {
       if (CommonUtils::isReduceAxis(funcOp, inner->getParentOp())) {

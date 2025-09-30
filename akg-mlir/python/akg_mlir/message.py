@@ -110,6 +110,7 @@ class AkgMlirDriver(object):
         repo_path: str = "",
         profiling_trails=0,
         runtime_provider="MindSpore",
+        enable_akg_loop_fusion=False,
     ):
         super().__init__()
 
@@ -131,6 +132,7 @@ class AkgMlirDriver(object):
         self.repo_path = repo_path
         self.profiling_trails = profiling_trails
         self.runtime_provider = runtime_provider
+        self.enable_akg_loop_fusion = enable_akg_loop_fusion
 
         with open(input_file, "r") as f:
             kernel_info = json.loads(f.read())
@@ -266,6 +268,8 @@ class AkgMlirDriver(object):
         ascend_opt_option = "--ascend-opt"
         if dyn_shape:
             ascend_opt_option += "=dynamic-shape=true"
+        if self.enable_akg_loop_fusion:
+            ascend_opt_option += "=enable-akg-loop-fusion=1"
         cmd = [os.path.join(self.akg_tools_dir, "bin/akg-opt"), input_file, ascend_opt_option, "-o", out_file]
         if self.dump_ir:
             cmd.append("--mlir-print-ir-after-all")
