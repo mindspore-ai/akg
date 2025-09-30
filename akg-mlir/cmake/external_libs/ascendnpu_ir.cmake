@@ -1,15 +1,14 @@
-include(CheckSymbolExists)
-check_symbol_exists(__aarch64__ "" __CHECK_AARCH64)
-check_symbol_exists(__x86_64__ "" __CHECK_X86_64)
-
-set(AscendNpuIR_URL "https://gitee.com/ascend/ascendnpu-ir/archive/refs/tags/v0.4-beta.tar.gz")
+set(AscendNpuIR_VERSION "v0.4-beta")
+set(AscendNpuIR_URL "https://gitee.com/ascend/ascendnpu-ir/archive/refs/tags/${AscendNpuIR_VERSION}.tar.gz")
 set(AscendNpuIR_MD5 "c3f9e8fda069ce04533815f3ed6760e0")
 
-if(__CHECK_X86_64)
-  set(BishengIR_URL "https://gitee.com/ascend/ascendnpu-ir/releases/download/v0.4-beta/bishengir_x86.tar.gz")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  set(BishengIR_URL
+      "https://gitee.com/ascend/ascendnpu-ir/releases/download/${AscendNpuIR_VERSION}/bishengir_x86.tar.gz")
   set(BishengIR_MD5 "ea33b239a5edd96a5285f7d5ab1bae90")
-elseif(__CHECK_AARCH64)
-  set(BishengIR_URL "https://gitee.com/ascend/ascendnpu-ir/releases/download/v0.4-beta/bishengir_aarch64.tar.gz")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
+  set(BishengIR_URL
+      "https://gitee.com/ascend/ascendnpu-ir/releases/download/${AscendNpuIR_VERSION}/bishengir_aarch64.tar.gz")
   set(BishengIR_MD5 "9cc2569882475d1dc59da4142c0f96be")
 else()
   message(FATAL_ERROR "runtime only support aarch64 and x86_64")
