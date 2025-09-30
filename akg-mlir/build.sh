@@ -188,51 +188,6 @@ echo "CMAKE_ARGS: ${CMAKE_ARGS}"
 mkdir -pv "${BUILD_DIR}"
 mkdir -pv "${OUTPUT_PATH}/akg"
 
-build_llvm() {
-    echo "Start building llvm project."
-    LLVM_BASE_PATH=${PATH_TO_SOURCE_LLVM}
-    echo "LLVM_BASE_PATH = ${PATH_TO_SOURCE_LLVM}"
-    cd ${LLVM_BASE_PATH}
-    if [ ! -d "./build" ]; then
-        mkdir -pv build
-    fi
-    LLVM_BUILD_PATH=${LLVM_BASE_PATH}/build
-    echo "LLVM_BUILD_PATH = ${LLVM_BUILD_PATH}"
-    cd ${LLVM_BUILD_PATH}
-    local LLVM_CMAKE_ARGS="-G Ninja "
-    if [[ "X${BACKEND_ENV}" = "XGPU" ]]; then
-        LLVM_CMAKE_ARGS="${LLVM_CMAKE_ARGS} -DLLVM_TARGETS_TO_BUILD='host;Native;NVPTX'"
-        LLVM_CMAKE_ARGS="${LLVM_CMAKE_ARGS} -DMLIR_ENABLE_CUDA_RUNNER=ON"
-    else
-        LLVM_CMAKE_ARGS="${LLVM_CMAKE_ARGS} -DLLVM_TARGETS_TO_BUILD='host'"
-    fi
-
-    cmake ../llvm \
-    ${LLVM_CMAKE_ARGS} \
-    -DPython3_FIND_STRATEGY=LOCATION \
-    -DLLVM_BUILD_EXAMPLES=ON \
-    -DLLVM_ENABLE_PROJECTS="llvm;mlir;clang;openmp" \
-    -DLLVM_ENABLE_RUNTIMES="compiler-rt" \
-    -DLLVM_OPTIMIZED_TABLEGEN=ON \
-    -DLLVM_ENABLE_OCAMLDOC=OFF \
-    -DLLVM_ENABLE_BINDINGS=OFF \
-    -DLLVM_INSTALL_UTILS=ON \
-    -DCMAKE_BUILD_TYPE=${_BUILD_TYPE} \
-    -DLLVM_ENABLE_RTTI=ON \
-    -DCMAKE_C_COMPILER=${C_COMPILER_PATH} \
-    -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH} \
-    -DMLIR_ENABLE_BINDINGS_PYTHON=OFF \
-    -DLLVM_EXTERNAL_PROJECTS="bishengir" \
-    -DLLVM_EXTERNAL_BISHENGIR_SOURCE_DIR=${LLVM_BASE_PATH}/third-party/bishengir \
-    -DBISHENG_IR_INSTALL_PATH="${BISHENG_IR_INSTALL_PATH}"
-
-    export PATH_TO_BUILT_LLVM=${PWD}
-    cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM}
-    cmake --install ${LLVM_BUILD_PATH} --component clang --prefix ${OUTPUT_PATH}/akg
-    cmake --install ${LLVM_BUILD_PATH} --component llc --prefix ${OUTPUT_PATH}/akg
-    echo "Success to build llvm project!"
-}
-
 make_clean()
 {
   echo "enable make clean"
@@ -241,37 +196,14 @@ make_clean()
 }
 
 get_akg_mlir_cmake_args() {
-  AKG_MLIR_CMAKE_ARGS="${AKG_MLIR_CMAKE_ARGS} -DLLVM_BUILD_PATH=${PATH_TO_BUILT_LLVM} 
-  -DLLVM_EXTERNAL_LIT=${PATH_TO_BUILT_LLVM}/bin/llvm-lit"
   if [[ "X${ENABLE_UNIT_TEST}" = "Xon" ]]; then
     AKG_MLIR_ARGS="${AKG_MLIR_ARGS} --target check-akg-mlir"
   fi
 }
 
-update_bishengir_commit(){
-  cd third-party/llvm-project/third-party/bishengir
-  git reset --hard f4bb879a22c56c591b163f397eeb3b82794863f9
-}
-
-update_submodule(){
-  git submodule update --init --depth 1 third-party/llvm-project/
-  if [ ! -d "third-party/llvm-project/third-party/bishengir" ]; then
-    git -C third-party/llvm-project/ submodule add https://gitee.com/ascend/ascendnpu-ir.git third-party/bishengir
-  fi
-  update_bishengir_commit
-}
-
-
 echo "---------------- AKG: build start ----------------"
 
-if [[ "X${COMPILE_MODE}" = "Xakg-mlir-only" ]]; then
-  PATH_TO_BUILT_LLVM=${PATH_TO_SOURCE_LLVM}/build
-  get_akg_mlir_cmake_args
-else
-  update_submodule
-  build_llvm
-  get_akg_mlir_cmake_args
-fi
+get_akg_mlir_cmake_args
 
 if [[ "X$CLEAN_BUILT" = "Xon" ]]; then
     make_clean
@@ -281,9 +213,10 @@ fi
 cd $BUILD_DIR
 cmake .. ${CMAKE_ARGS} ${AKG_MLIR_CMAKE_ARGS} \
     -DCMAKE_C_COMPILER=${C_COMPILER_PATH} \
-    -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH}
+    -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH} \
+    -DCMAKE_PREFIX_PATH=${LLVM_BUILD_PATH}
 cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
-cmake --build . --target install
+#cmake --build . --target install
 
 if [ ! -f "akg/bin/akg-opt" ];then
   echo "[ERROR] akg-opt not exist!"

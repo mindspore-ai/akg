@@ -205,7 +205,7 @@ set(AKG_FIND_NO_DEFAULT_PATH NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH NO_SYSTEM_E
 
 function(akg_add_pkg pkg_name )
     set(options )
-    set(oneValueArgs URL MD5 GIT_REPOSITORY GIT_TAG VER EXE DIR CMAKE_PATH CUSTOM_CMAKE)
+    set(oneValueArgs URL MD5 GIT_REPOSITORY GIT_TAG VER EXE DIR HEAD_ONLY CMAKE_PATH CUSTOM_CMAKE)
     set(multiValueArgs CMAKE_OPTION  CONFIGURE_COMMAND LIBS PATCHES)
     cmake_parse_arguments(PKG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN} )
 
@@ -307,7 +307,6 @@ function(akg_add_pkg pkg_name )
             list(GET ALL_FILES 0 ${pkg_name}_SOURCE_DIR)
         endif()
     endif()
-    message("${pkg_name}_SOURCE_DIR : ${${pkg_name}_SOURCE_DIR}")
 
     # Copy pkg to the build directory and uses the copied one
     set(${pkg_name}_PATCHED_DIR ${CMAKE_BINARY_DIR}/${pkg_name})
@@ -317,7 +316,6 @@ function(akg_add_pkg pkg_name )
     file(MAKE_DIRECTORY "${${pkg_name}_PATCHED_DIR}")
     file(COPY ${${pkg_name}_SOURCE_DIR}/ DESTINATION ${${pkg_name}_PATCHED_DIR})
     set(${pkg_name}_SOURCE_DIR ${${pkg_name}_PATCHED_DIR})
-    message("${pkg_name}_SOURCE_DIR : ${${pkg_name}_SOURCE_DIR}")
 
     # Apply patches on pkg
     foreach(_PATCH_FILE ${PKG_PATCHES})
@@ -344,7 +342,16 @@ function(akg_add_pkg pkg_name )
     endif()
 
     if(${pkg_name}_SOURCE_DIR)
-        if(PKG_CMAKE_OPTION)
+        if(PKG_HEAD_ONLY)
+            file(GLOB ${pkg_name}_SOURCE_SUBDIRS ${${pkg_name}_SOURCE_DIR}/*)
+            file(COPY ${${pkg_name}_SOURCE_SUBDIRS} DESTINATION ${${pkg_name}_BASE_DIR})
+            set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/${PKG_HEAD_ONLY} PARENT_SCOPE)
+            if(NOT PKG_RELEASE)
+                add_library(${pkg_name} INTERFACE)
+                target_include_directories(${pkg_name} INTERFACE ${${pkg_name}_INC})
+            endif()
+
+        elseif(PKG_CMAKE_OPTION)
             # in cmake
             file(MAKE_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
             if(${pkg_name}_CFLAGS)
