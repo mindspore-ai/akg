@@ -56,22 +56,25 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
   pm.addPass(createFoldDimensionPass());
   pm.addPass(createMindSporeToLinalgNamedPass());
 
-  pm.addPass(bufferization::createBufferResultsToOutParamsPass());
-  pm.addPass(bufferization::createOneShotBufferizePass());
-  // pm.addPass(createMemrefCopyToLoopsPass());
-  pm.addPass(createMatchAndMarkReductionOpsPass());
 
-  OpPassManager &nestedFunctionPM = pm.nest<func::FuncOp>();
-  nestedFunctionPM.addPass(createConvertLinalgToAffineLoopsPass());
-  nestedFunctionPM.addPass(affine::createAffineLoopNormalizePass());
-  nestedFunctionPM.addPass(createCSEPass());
-  nestedFunctionPM.addPass(createCanonicalizerPass());
-  nestedFunctionPM.addPass(createCopyElisionPass());
-  nestedFunctionPM.addPass(createCopyRemovalPass());
-  nestedFunctionPM.addPass(createCanonicalizerPass());
-  nestedFunctionPM.addPass(memref::createFoldMemRefAliasOpsPass());
-  nestedFunctionPM.addPass(createAKGLoopFusionPass());
-  nestedFunctionPM.addPass(createCanonicalizerPass());
+  if (options.enableAKGLoopFusion) {
+    pm.addPass(bufferization::createBufferResultsToOutParamsPass());
+    pm.addPass(bufferization::createOneShotBufferizePass());
+    pm.addPass(createMemrefCopyToLoopsPass());
+    pm.addPass(createMatchAndMarkReductionOpsPass());
+
+    OpPassManager &nestedFunctionPM = pm.nest<func::FuncOp>();
+    nestedFunctionPM.addPass(createConvertLinalgToAffineLoopsPass());
+    nestedFunctionPM.addPass(affine::createAffineLoopNormalizePass());
+    nestedFunctionPM.addPass(createCSEPass());
+    nestedFunctionPM.addPass(createCanonicalizerPass());
+    nestedFunctionPM.addPass(createCopyElisionPass());
+    nestedFunctionPM.addPass(createCopyRemovalPass());
+    nestedFunctionPM.addPass(createCanonicalizerPass());
+    nestedFunctionPM.addPass(memref::createFoldMemRefAliasOpsPass());
+    nestedFunctionPM.addPass(createAKGLoopFusionPass());
+    nestedFunctionPM.addPass(createCanonicalizerPass());
+  }
 }
 }  // namespace
 

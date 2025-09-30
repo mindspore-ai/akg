@@ -34,6 +34,8 @@ struct AscendOptPipelineOptions : public PassPipelineOptions<AscendOptPipelineOp
 
   Option<bool> saveTemps{*this, "save-temps", cl::desc("Save temporary files"), cl::init(false)};
 
+  Option<bool> enableAKGLoopFusion{*this, "enable-akg-loop-fusion", cl::desc("ascend enable akg loop fusion"), cl::init(false)};
+
   Option<std::string> target{*this, "process", cl::desc("the backend info"), cl::init("ascend")};
 
   Option<std::string> arch{*this, "arch", cl::desc("the ascend architecture, e.g. '910A' or '910B'"), cl::init("910B")};
