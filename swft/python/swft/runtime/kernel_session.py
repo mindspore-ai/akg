@@ -23,7 +23,11 @@ def exec_kernel(kernel_name, local_vars, prefix_path=".", inputs=[], outputs=[],
     cann_path = os.getenv("ASCEND_HOME_PATH")
     if not cann_path:
         raise ValueError("ASCEND_HOME_PATH not set!")
-    compile_kernel = f'{cann_path}/toolkit/tools/ccec_compiler/bin/ccec -xcce --cce-aicore-arch=dav-m200 -mllvm -cce-aicore-function-stack-size=16000 -mllvm -cce-aicore-record-overflow=false -mllvm -cce-aicore-addr-transform -mllvm --cce-aicore-jump-expand=true  -fPIC -pthread -o {prefix_path}/{kernel_name}/{kernel_name}.o -c {prefix_path}/{kernel_name}/{kernel_name}.cce'
+    compile_kernel = f'{cann_path}/toolkit/tools/ccec_compiler/bin/ccec -xcce -O3 \
+        -I{cann_path}/compiler/tikcpp/tikcfw/ \
+        -I{cann_path}/aarch64-linux/ascendc/include/basic_api/impl/ \
+        -I{cann_path}/aarch64-linux/ascendc/include/basic_api/interface/ \
+        --cce-aicore-arch=dav-m200 -mllvm -cce-aicore-function-stack-size=16000 -mllvm -cce-aicore-record-overflow=false -mllvm -cce-aicore-addr-transform -mllvm --cce-aicore-jump-expand=true -std=c++20 -fPIC -pthread -o {prefix_path}/{kernel_name}/{kernel_name}.o -c {prefix_path}/{kernel_name}/{kernel_name}.cce'
     compile_main = f'c++ -I{cann_path}/acllib/include -fvisibility-inlines-hidden -std=c++17 -fmessage-length=0 -ftree-vectorize -fPIC -fstack-protector-strong -fno-plt -O3 -pipe -isystem -std=gnu++17 -fPIC -O2 -std=c++17 -MD -MT {prefix_path}/{kernel_name}/main.cpp.o -MF {prefix_path}/{kernel_name}/main.cpp.o.d -o {prefix_path}/{kernel_name}/main.cpp.o -c {prefix_path}/{kernel_name}/main.cpp'
     link_opt = f'{cann_path}/toolkit/tools/ccec_compiler/bin/ccec --cce-fatobj-link  -Wl,-O2 -Wl,--sort-common -Wl,--as-needed -Wl,-z,relro -Wl,-z,now -Wl,--allow-shlib-undefined ./{prefix_path}/{kernel_name}/main.cpp.o -o ./{prefix_path}/{kernel_name}/{kernel_name}_kernel -L{cann_path}/lib64  -L{cann_path}/tools/simulator/Ascend310P3/lib ./{prefix_path}/{kernel_name}/{kernel_name}.o -lstdc++ -lm -lgcc_s -lgcc -lc -lgcc_s -lgcc  -lstdc++ -lruntime -lprofapi -lascendcl'
     fname = f'./{prefix_path}/{kernel_name}/{kernel_name}.cce'

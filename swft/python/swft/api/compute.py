@@ -383,8 +383,9 @@ def vcmax(src, reduce_axis):
     out_dtype = mono_dtype_infer(src.dtype)
     out_format = default_format_infer(src.format)
     multi_core = src.multi_core
+    in_shape = [float(x.value) for x in src.shape]
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
-    Vcmax(src, out, attrs={"reduce_axis": [reduce_axis]})()
+    Vcmax(src, out, attrs={"reduce_axis": [reduce_axis], "pad_colum":in_shape})()
     return out
 
 
@@ -398,8 +399,9 @@ def vcmin(src, reduce_axis):
     out_dtype = mono_dtype_infer(src.dtype)
     out_format = default_format_infer(src.format)
     multi_core = src.multi_core
+    in_shape = [float(x.value) for x in src.shape]
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
-    Vcmin(src, out, attrs={"reduce_axis": [reduce_axis]})()
+    Vcmin(src, out, attrs={"reduce_axis": [reduce_axis], "pad_colum":in_shape})()
     return out
 
 
@@ -413,8 +415,9 @@ def vcadd(src, reduce_axis):
     out_dtype = mono_dtype_infer(src.dtype)
     out_format = default_format_infer(src.format)
     multi_core = src.multi_core
+    in_shape = [float(x.value) for x in src.shape]
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
-    Vcadd(src, out, attrs={"reduce_axis": [reduce_axis]})()
+    Vcadd(src, out, attrs={"reduce_axis": [reduce_axis], "pad_colum":in_shape})()
     return out
 
 
@@ -435,7 +438,7 @@ def vbrcb(src, broadcast_axis, broad_size):
 
 
 @name_tensor
-def vector_dup(factor, size, multi_core):
+def vector_dup(factor, size, multi_core, no_autopad=False):
     if (not isinstance(factor, Scalar)):
         raise TypeError("VectorDup requires Scalar input.")
     out_mem_type = dup_memtype_infer(None)
@@ -443,7 +446,10 @@ def vector_dup(factor, size, multi_core):
     out_dtype = mono_dtype_infer(factor.dtype)
     out_format = dup_format_infer(None)
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
-    VectorDup(factor, out, {"size": size})()
+    attrs = {"size": size}
+    if no_autopad:
+        attrs["no_pad"] = [1.0]
+    VectorDup(factor, out, attrs)()
     return out
 
 

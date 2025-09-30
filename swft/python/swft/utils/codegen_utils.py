@@ -182,7 +182,7 @@ private:
 
 ms_run_src_start = '''
 #include "ms_extension.h"
-#include "mindspore/ops/kernel/ascend/custom/custom_kernel_factory.h"
+#include "mindspore/ops/kernel/ascend/custom/kernel_mod_impl/custom_kernel_factory.h"
 #include "mindspore/ccsrc/include/runtime/hardware_abstract/kernel_base/kernel.h"
 #include <iostream>
 #include <pybind11/pybind11.h>

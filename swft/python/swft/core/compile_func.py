@@ -20,7 +20,6 @@ import operator
 from ast import NodeTransformer, NodeVisitor, parse, fix_missing_locations
 from contextlib import contextmanager
 from swft.utils.util import is_scalar, is_tensor
-from .c_expression import push_to_list, compile_ckernel
 from .instruction import Instruction
 from .scalar import Scalar
 
@@ -164,6 +163,19 @@ class RemoveControlFlowAndInjectContext(NodeTransformer):
                 keywords=[]
             )
         return self.generic_visit(node)
+
+    def visit_While(self, node):
+        node = self.generic_visit(node)
+        if (self.is_constant_expression(node.test)):
+            return node
+        with_node = self.wrap_with_context(node.body, "WHILE", node.test, node)
+        cond_expr = ast.Expr(value=node.test)
+        with_node[0].body.append(cond_expr)
+        if node.orelse:
+            with_node.extend(node.orelse)
+        for new_node in with_node:
+            fix_missing_locations(new_node)
+        return with_node
 
     def wrap_with_context(self, statements, name, cond, node):
         if not statements:

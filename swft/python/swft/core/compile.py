@@ -26,7 +26,16 @@ def trace_info(idx, name, inputs, outputs, attr):
         for (k, v) in attr.items():
             if (isinstance(v, list)):
                 list_keys.append(k)
-                list_values.append([s.value if is_scalar(s) else s for s in v])
+                list_values_ = []
+                for s in v:
+                    if is_scalar(s):
+                        if not s._has_tile():
+                            list_values_.append(-1)
+                        else:
+                            list_values_.append(s.tile)
+                    else:
+                        list_values_.append(s)
+                list_values.append(list_values_)
     input_tensors = []
     input_scalars = []
     output_tensors = []

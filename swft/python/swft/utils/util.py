@@ -93,7 +93,7 @@ def is_tensor(obj):
 def is_scalar(obj):
     return hasattr(obj, "type") and obj.type == "Scalar"
 
-def eqal_eq(scalar_a, scalar_b):
+def eval_eq(scalar_a, scalar_b):
     if isinstance(scalar_b, int):
         return int(scalar_a.value) == scalar_b
     if (scalar_a.has_value() and scalar_b.has_value()):

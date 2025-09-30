@@ -21,9 +21,9 @@ from swft.core.c_expression import set_context, get_context
 class NPUSession(CNPUSession):
     _instance = None
 
-    def __init__(self, device_id=0, context="310P"):
+    def __init__(self, device_id=0, context="310P", codeType="ASCENDC"):
         self.cann_path = os.getenv("ASCEND_HOME_PATH")
-        set_context(context)
+        set_context(context, codeType)
         if not self.cann_path:
             raise ValueError("ASCEND_HOME_PATH not set!")
         CNPUSession.__init__(self, device_id)
@@ -44,11 +44,11 @@ class NPUSession(CNPUSession):
         return self._sync_stream()
     
     @classmethod
-    def create(cls, device_id=0, context="310P"):
+    def create(cls, device_id=0, context="310P", codeType="ASCENDC"):
         if cls._instance is not None:
             raise RuntimeError(
                 "npu session already created, please use instance()")
-        cls._instance = cls(device_id, context)
+        cls._instance = cls(device_id, context, codeType)
         cls._is_default = False
         return cls._instance
     

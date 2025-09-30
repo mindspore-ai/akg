@@ -17,7 +17,7 @@ EXP = 256
 K = 7168
 G = 256
 N = 512
-M = 4096
+M = 8
 CORE_NUM = 8
 
 #Numpy Test

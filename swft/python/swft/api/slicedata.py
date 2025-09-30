@@ -21,14 +21,15 @@ from swft.utils import *
 
 
 def slice_move_instruction(src, dst_mem, begin, slice_size, attrs=None, dst=None, instr=None):
-    slice_size = slice_size_infer(slice_size)
+    if dst_mem != "GM" and instr != "SLICE":
+        slice_size = slice_size_infer(slice_size)
     if not dst:
         dst = Tensor(dst_mem, src.dtype, slice_size,
                      src.format, src.multi_core)
     if not instr:
         instr = "SLICEMOV"
     begin = slice_begin_infer(begin)
-    slice_size = (Scalar("INT32", x) for x in slice_size)
+    slice_size = (Scalar("INT32", x) if isinstance(x, int) else x for x in slice_size)
     begin = (Scalar("INT32", x) if isinstance(x, int) else x for x in begin)
     Instruction(instr, (src,) + tuple(begin) +
                 tuple(slice_size), (dst, ), attrs)()

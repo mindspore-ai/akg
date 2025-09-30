@@ -22,7 +22,7 @@ from .name_tensor import name_tensor
 import traceback
 from copy import deepcopy
 import numpy as np
-
+from swft.utils import is_scalar
 
 class Tensor(CTensor):
     def __init__(self, *args, **kwdargs):
@@ -43,7 +43,7 @@ class Tensor(CTensor):
             ndarray = args[0]
             if not isinstance(ndarray, np.ndarray):
                 raise TypeError(
-                    "expect Tensor to be initialized from numpy.ndarray")
+                    "expect Tensor to be initialized from numpy.ndarry")
             format = "ND" if "format" not in kwdargs else kwdargs["format"]
             multi_core = False if "multi_core" not in kwdargs else kwdargs["multi_core"]
             CTensor.__init__(self, ndarray, format, multi_core)
@@ -75,7 +75,6 @@ class Tensor(CTensor):
     def multi_core(self):
         return self._get_multi_core()
 
-    @name_tensor
     def load(self, tensor, attr=None):
         if not isinstance(tensor, Tensor):
             raise TypeError(
@@ -110,6 +109,7 @@ class Tensor(CTensor):
         begin = [0] * len(slice_shape)
         if not isinstance(index, tuple):
             index = (index,)
+            instr_str = "SLICE"
         for i in range(len(self.shape)):
             if i >= len(index):
                 continue

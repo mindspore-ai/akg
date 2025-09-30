@@ -26,7 +26,6 @@ class Instruction():
         self.attr = attr
 
     def __call__(self, *args, **kwargs):
-        self.instr_check(self.inputs, self.outputs, self.attr)
         add_trace(get_idx(), self.name, self.inputs, self.outputs, self.attr)
 
     def instr_check(self, inputs, outputs, attr):

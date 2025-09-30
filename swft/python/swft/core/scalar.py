@@ -27,25 +27,36 @@ class Scalar(CScalar):
         if dtype not in ["INT32", "FP32", "BOOL", "FP16", "INT16"]:
             raise TypeError(
                 "Currently only support Scalar with INT32, FP32, FP16, INT16 or BOOL")
-        if (value is not None) and (tile is not None):
-            raise TypeError("Scalar cannot have both value and tile")
         if (value is not None):
             if isinstance(value, CScalar):
                 if (value.has_value()):
                     CScalar.__init__(self, dtype, value.value)
                 else:
                     CScalar.__init__(self, dtype)
-                    if value._has_tile():
+                    if (value._has_tile()):
                         self._set_tile(value._get_tile())
             else:
                 CScalar.__init__(self, dtype, value)
         else:
             CScalar.__init__(self, dtype)
+        if tile is not None:
+            if isinstance(tile, CScalar):
+                if(tile.has_value()):
+                    self._set_tile(tile.value)
+                elif isinstance(tile, int):
+                    self._set_tile(tile)
         stack = traceback.extract_stack()
         filename, lineno, function_name, code = stack[-2]
         parse = code.split("=")
         if len(parse) > 1:
             self.__name__ = parse[0].strip()
+            self.update_name(self.__name__)
+        if (value is not None):
+            if isinstance(value, CScalar):
+                if value.get_name() != "":
+                    self.__name__ = value.get_name()
+                    self.update_name(self.__name__)
+
 
     @property
     def tile(self):
@@ -73,7 +84,7 @@ class Scalar(CScalar):
         if hasattr(scalar, 'shape') and allsize.value != 1:
             raise ValueError(
                 "For Scalar load(Tensor), Tensor shape must be [1]")
-        Instruction("MOV", (scalar, ), (self, ), attr)()
+        Instruction("MOV", (scalar, self), (self, ), attr)()
 
     def __deepcopy__(self, memo):
         return Scalar(self.dtype, CScalar.__deepcopy__(self, memo))
@@ -82,6 +93,8 @@ class Scalar(CScalar):
     def copy(self):
         adder = Scalar(self.dtype, 0)
         res = Scalar(self.dtype)
+        if self._has_tile():
+            res._set_tile(self._get_tile())
         Instruction("SADD", (self, adder, ), (res, ), None)()
         return res
 
@@ -90,6 +103,8 @@ class Scalar(CScalar):
         if self.has_value():
             return Scalar(self.dtype, self.value ** 0.5)
         res = Scalar(self.dtype)
+        if self._has_tile():
+            res._set_tile(self.tile ** 0.5)
         Instruction("SSQRT", (self, ), (res, ), None)()
         return res
 
@@ -102,6 +117,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, self.value + other.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(self.tile + other.tile)
         Instruction("SADD", (self, other, ), (res, ), None)()
         return res
 
@@ -114,6 +131,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, self.value + other.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(self.tile + other.tile)
         Instruction("SADD", (other, self, ), (res, ), None)()
         return res
 
@@ -126,6 +145,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, self.value - other.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(self.tile - other.tile)
         Instruction("SSUB", (self, other, ), (res, ), None)()
         return res
 
@@ -138,6 +159,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, other.value - self.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(other.tile - self.tile)
         Instruction("SSUB", (other, self, ), (res, ), None)()
         return res
 
@@ -150,6 +173,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, self.value * other.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(other.tile * self.tile)
         Instruction("SMUL", (self, other, ), (res, ), None)()
         return res
 
@@ -162,6 +187,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, other.value * self.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(other.tile * self.tile)
         Instruction("SMUL", (other, self, ), (res, ), None)()
         return res
 
@@ -174,6 +201,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, self.value / other.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(self.tile / other.tile)
         Instruction("SDIV", (self, other, ), (res, ), None)()
         return res
 
@@ -186,6 +215,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, other.value / self.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(other.tile / self.tile)
         Instruction("SDIV", (other, self, ), (res, ), None)()
         return res
 
@@ -199,6 +230,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, self.value // other.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(self.tile // other.tile)
         Instruction("SFLOORDIV", (self, other, ), (res, ), None)()
         return res
 
@@ -212,6 +245,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, other.value // self.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(other.tile // self.tile)
         Instruction("SFLOORDIV", (other, self, ), (res, ), None)()
         return res
 
@@ -224,6 +259,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, self.value % other.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(self.tile % other.tile)
         Instruction("SMOD", (self, other, ), (res, ), None)()
         return res
 
@@ -236,6 +273,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, other.value % self.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(other.tile % self.tile)
         Instruction("SMOD", (other, self, ), (res, ), None)()
         return res
 
@@ -248,6 +287,8 @@ class Scalar(CScalar):
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, other.value % self.value)
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(self.tile % self.tile)
         Instruction("SMOD", (other, self, ), (res, ), None)()
         return res
 
@@ -390,6 +431,8 @@ class Scalar(CScalar):
         if self.has_value():
             return Scalar(self.dtype, -self.value)
         res = Scalar(self.dtype)
+        if self._has_tile():
+            res._set_tile(-self.tile)
         Instruction("SNEG", (self, ), (res, ), None)()
 
 
@@ -402,7 +445,11 @@ class Scalar(CScalar):
                 "Currently only support max(Scalar, Scalar/int/float)")
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, max(other.value, self.value))
+        elif self.get_name() == other.get_name():
+            return other
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(max(other.tile, self.tile))
         Instruction("SMAX", (self, other, ), (res, ), None)()
         return res
 
@@ -415,6 +462,10 @@ class Scalar(CScalar):
                 "Currently only support min(Scalar, Scalar/int/float)")
         if self.has_value() and other.has_value():
             return Scalar(self.dtype, min(other.value, self.value))
+        elif self.get_name() == other.get_name():
+            return other
         res = Scalar(self.dtype)
+        if self._has_tile() and other._has_tile():
+            res._set_tile(min(other.tile, self.tile))
         Instruction("SMIN", (self, other, ), (res, ), None)()
         return res
