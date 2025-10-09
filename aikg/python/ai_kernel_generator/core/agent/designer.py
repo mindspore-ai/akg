@@ -126,7 +126,7 @@ class Designer(AgentBase):
             "task_desc": remove_copyright_from_text(self.task_desc),
             "hardware_docs": get_hardware_doc(self.backend, self.arch),
             "format_instructions": self.format_instructions,
-            "sketch_guide": self.load_doc("sketch_rule.md")
+            "sketch_guide": self.load_doc("SKETCH_DESIGN_v2.md")
         }
 
         # 为SWFT实现类型添加支持的API
