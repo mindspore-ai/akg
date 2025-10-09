@@ -216,7 +216,6 @@ cmake .. ${CMAKE_ARGS} ${AKG_MLIR_CMAKE_ARGS} \
     -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH} \
     -DCMAKE_PREFIX_PATH=${LLVM_BUILD_PATH}
 cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
-#cmake --build . --target install
 
 if [ ! -f "akg/bin/akg-opt" ];then
   echo "[ERROR] akg-opt not exist!"
