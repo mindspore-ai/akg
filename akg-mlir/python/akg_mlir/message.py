@@ -326,7 +326,7 @@ class AkgMlirDriver(object):
             input_file,
             "-enable-hfusion-compile=true",
             "-enable-hivm-compile=true",
-            "-enable-lir-compile=true",
+            "-enable-bin-relocation=false",
             "-block-dim=40",
             "-enable-auto-multi-buffer=true",
             "-o",
