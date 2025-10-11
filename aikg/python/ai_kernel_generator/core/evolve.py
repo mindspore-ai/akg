@@ -177,8 +177,7 @@ async def evolve(
                         if num_islands == 1:
                             stored_implementations = load_best_implementations(island_storage_dir)
                         else:
-                            stored_implementations = load_best_implementations(islands_storage_dirs[parent_island_idx],
-                                                                               max_count=tasks_per_island * 2)
+                            stored_implementations = load_best_implementations(islands_storage_dirs[parent_island_idx])
 
                         # 如果有实现可用，先选择一个作为父代
                         parent_implementation = None
@@ -195,7 +194,19 @@ async def evolve(
                             all_excluded_implementations.append(parent_implementation)
 
                         sampled = sample_inspirations(stored_implementations, sample_num=min(
-                            tasks_per_island, 3), use_tiered_sampling=True, parent_implementations=all_excluded_implementations)
+                            len(stored_implementations), 3), use_tiered_sampling=True, parent_implementations=all_excluded_implementations)
+                        
+                        # 将父代加入灵感列表
+                        if parent_implementation:
+                            parent_inspiration = {
+                                'id': parent_implementation.get('id'),
+                                'sketch': parent_implementation.get('sketch', ''),
+                                'impl_code': parent_implementation.get('impl_code', ''),
+                                'profile': parent_implementation.get('profile', (float('inf'), 0.0, 0.0)),
+                                'strategy_mode': 'evolution'
+                            }
+                            sampled.insert(0, parent_inspiration)  # 父代放在第一位
+                        
                         island_inspirations[island_idx].append(sampled)
 
                     island_meta_prompts[island_idx] = load_meta_prompts(dsl, tasks_per_island)

@@ -152,12 +152,12 @@ def save_implementation(impl_data: Dict[str, Any], storage_dir: str) -> None:
         logger.error(f"Failed to save implementation: {e}")
 
 
-def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict[str, Any]]:
+def load_best_implementations(storage_dir: str, max_count: int = None) -> List[Dict[str, Any]]:
     """从本地文件加载最佳实现
 
     Args:
         storage_dir: 存储目录
-        max_count: 最大加载数量
+        max_count: 最大加载数量，None表示加载所有实现
 
     Returns:
         按性能排序的最佳实现列表
@@ -185,7 +185,11 @@ def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict
         implementations.sort(key=lambda x: x.get('profile', (float('inf'), 0.0, 0.0))[0])
 
         logger.info(f"Loaded {len(implementations)} implementations from {storage_dir}")
-        return implementations[:max_count]
+        
+        if max_count is None:
+            return implementations
+        else:
+            return implementations[:max_count]
 
     except Exception as e:
         logger.error(f"Failed to load implementations from {storage_dir}: {e}")
