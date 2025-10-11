@@ -78,7 +78,8 @@ class Sketch(AgentBase):
             "op_name": self.op_name,
             "task_desc": remove_copyright_from_text(self.task_desc),
             "hardware_docs": get_hardware_doc(self.backend, self.arch),
-            "format_instructions": self.format_instructions
+            "format_instructions": self.format_instructions,
+            "sketch_guide": self.load_doc("SKETCH_DESIGN_v2.md")
         }
 
     async def run(self, task_info: dict) -> str:
