@@ -31,7 +31,7 @@ def get_inspirations(inspirations: List[dict]) -> str:
 
     Args:
         inspirations: 包含字典的列表，每个字典格式为:
-                     {'strategy_mode':xxx, 'impl_code':str, 'profile':float}
+                     {'strategy_mode':xxx, 'impl_code':str, 'profile':float, 'is_parent':bool}
 
     Returns:
         str: 拼接后的字符串，包含所有impl_code和profile信息
@@ -40,6 +40,7 @@ def get_inspirations(inspirations: List[dict]) -> str:
         return ""
 
     result_parts = []
+    has_parent = False
 
     for i, inspiration in enumerate(inspirations):
         if not isinstance(inspiration, dict):
@@ -49,6 +50,11 @@ def get_inspirations(inspirations: List[dict]) -> str:
         sketch = inspiration.get('sketch', '')
         impl_code = inspiration.get('impl_code', '')
         profile = inspiration.get('profile', float('inf'))
+        is_parent = inspiration.get('is_parent', False)
+        
+        # 检测是否有父代
+        if is_parent:
+            has_parent = True
 
         if sketch or impl_code:  # 只有当sketch或impl_code不为空时才添加
             # 处理profile信息，支持三元组格式
@@ -60,12 +66,24 @@ def get_inspirations(inspirations: List[dict]) -> str:
             else:
                 profile_text = f"代码执行耗时: {profile:.4f}us" if profile != float('inf') else "代码执行耗时: N/A"
 
-            inspiration_text = f"## Inspiration {i+1} {profile_text}\n"
+            # 如果是父代，添加标记
+            parent_mark = " 【父代方案】" if is_parent else ""
+            inspiration_text = f"## Inspiration {i+1}{parent_mark} {profile_text}\n"
             if sketch:
                 inspiration_text += f"算法草图 ：\n```\n{sketch}\n```\n"
             if impl_code:
                 inspiration_text += f"代码：\n```\n{impl_code}\n```\n"
             result_parts.append(inspiration_text)
+
+    # 如果有父代，在开头添加进化优化策略说明
+    if has_parent and result_parts:
+        strategy_note = (
+            "**进化优化策略**：\n"
+            "- 标记为【父代方案】的是本次进化的基础，请以它为主要参考进行改进和优化\n"
+            "- 其他 Inspiration 可作为补充参考，用于交叉变异和借鉴优化思路\n"
+            "- 请在父代方案的基础上，结合其他方案的优点，生成优化后的草图\n\n"
+        )
+        result_parts.insert(0, strategy_note)
 
     return "\n".join(result_parts)
 
