@@ -16,6 +16,7 @@ workflow_config_path: "config/default_workflow.yaml"
 docs_dir:
   designer: "resources/docs/sketch_docs"
   coder: "resources/docs/triton_docs"
+  sketch: "resources/docs/sketch_docs"
 
 # Performance analysis configuration
 profile_settings:
