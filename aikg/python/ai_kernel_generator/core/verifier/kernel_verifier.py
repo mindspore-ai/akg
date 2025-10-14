@@ -126,6 +126,14 @@ class KernelVerifier:
                     "import triton",
                     "import triton.language as tl"
                 ]
+        elif self.dsl == "tilelang_npuir":
+            if self.framework == "torch":
+                import_lines = [
+                    "import torch",
+                    "import torch_npu",
+                    "import tilelang",
+                    "import tilelang.language as T"
+                ]
         elif self.dsl == "swft":
             import_lines = [
                 "from swft.core import *",
@@ -160,7 +168,7 @@ class KernelVerifier:
     def _detect_dynamic_shape(self) -> bool:
         """
         检测框架代码是否包含动态shape函数
-        
+
         Returns:
             bool: True if contains get_inputs_dyn_list, False otherwise
         """

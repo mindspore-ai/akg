@@ -25,6 +25,8 @@ op_name_module = load_inline(
 )
 
 # Python接口函数
+
+
 def op_name(x: torch.Tensor) -> torch.Tensor:
     if x.device.type != "cpu":
         x = x.cpu()

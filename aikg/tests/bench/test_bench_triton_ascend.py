@@ -233,15 +233,15 @@ async def test_aikgbench_torch_triton_ascend910b4():
 
     # AIKGBench: 按分类读取，可以指定具体的 op_name 来获取单个 case
     benchmark_name = get_aikgbench_op_name(
-        op_name="elemwise_add_001_var", 
-        category=category, 
-        subcategory=subcategory, 
+        op_name="elemwise_add_001_var",
+        category=category,
+        subcategory=subcategory,
         framework=framework
     )
     # # 按类别获取一个类别所有的op
     # benchmark_name = get_aikgbench_op_name(
-    #     category=category, 
-    #     subcategory=subcategory, 
+    #     category=category,
+    #     subcategory=subcategory,
     #     framework=framework
     # )
 

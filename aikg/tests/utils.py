@@ -208,13 +208,13 @@ def get_multikernelbench_op_name(category="all", framework="torch", op_name=None
 
 def get_aikgbench_op_name(category="all", subcategory="all", framework="torch", op_name=None):
     """获取 AIKGBench 操作名称列表
-    
+
     Args:
         category: 主分类 ("all", "dynamic", "static")
         subcategory: 子分类 ("all", "attention", "elemwise", "fused", "index", "norm", "reduction", "sorting", "tensor_manipulation", "matmul")
         framework: 框架名称 (默认 "torch")
         op_name: 特定操作名称 (可选)
-    
+
     Returns:
         list: 匹配的操作名称列表，如果没有找到则返回 None
     """
@@ -250,7 +250,7 @@ def get_aikgbench_op_name(category="all", subcategory="all", framework="torch", 
                         # 如果指定了子分类，只处理匹配的子分类
                         if subcategory != "all" and subcat != subcategory:
                             continue
-                            
+
                         for file in os.listdir(subcat_path):
                             if file.endswith('.py'):
                                 # Remove .py extension to get the benchmark name

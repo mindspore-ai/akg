@@ -15,6 +15,7 @@ from ai_kernel_generator.utils.environment_check import check_env_for_task
 
 os.environ['AIKG_DATA_COLLECT'] = 'on'
 
+
 @pytest.mark.level2
 @pytest.mark.torch
 @pytest.mark.cpp
@@ -68,6 +69,7 @@ async def test_kernelbench_torch_cpu_x86_64():
     report_stats = generate_beautiful_test_report(
         results, config, framework, dsl, backend, arch
     )
+
 
 @pytest.mark.level2
 @pytest.mark.torch

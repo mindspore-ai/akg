@@ -223,7 +223,6 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
         # 使用绝对路径
         absolute_task_file = Path(task_file).resolve()
 
-
         # 构建命令 - 传递简化参数
         cmd = [
             sys.executable, str(single_evolve_script),
@@ -231,7 +230,7 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
             str(absolute_task_file),                   # 2. 任务文件路径
             str(device)                                # 3. 设备ID
         ]
-        
+
         # 如果有配置文件路径，则添加到命令中
         if config_path:
             cmd.append(config_path)
@@ -464,7 +463,7 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
         # 获取项目根目录下的配置文件路径
         project_root = get_project_root()
         config_path = os.path.join(project_root, "config", "evolve_config.yaml")
-    
+
     if os.path.exists(config_path):
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
@@ -473,15 +472,15 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
             # 检查必要的配置项
             if 'batch' not in config:
                 raise ValueError("配置文件中缺少 'batch' 部分")
-            
+
             batch_config = config['batch']
-            
+
             # 检查必要的配置项
             required_keys = ['parallel_num', 'device_pool', 'task_dir', 'output_dir']
             missing_keys = [key for key in required_keys if key not in batch_config]
             if missing_keys:
                 raise ValueError(f"配置文件中 'batch' 部分缺少必要的配置项: {missing_keys}")
-            
+
             # 读取配置
             config_dict = {
                 "batch_parallel_num": batch_config['parallel_num'],
@@ -502,7 +501,7 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
     else:
         print(f"❌ 错误: 配置文件不存在: {config_path}")
         raise FileNotFoundError(f"配置文件不存在: {config_path}")
-    
+
     return config_dict
 
 
@@ -591,8 +590,8 @@ def main():
 
         # 创建批量任务池（传入设备池和配置文件路径）
         batch_pool = BatchTaskPool(
-            max_concurrency=parallel_num, 
-            device_pool=config["device_pool"], 
+            max_concurrency=parallel_num,
+            device_pool=config["device_pool"],
             config_path=config_path
         )
 

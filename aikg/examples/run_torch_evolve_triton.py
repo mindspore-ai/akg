@@ -66,46 +66,46 @@ def get_init_inputs():
 
 async def run_torch_evolve_triton():
     """运行Triton进化示例"""
-    
+
     # 创建配置对象并设置硬编码参数
     config = EvolveConfig()
-    
+
     # 基础配置
     config.dsl = "triton"
     config.framework = "torch"
     config.backend = "cuda"
     config.arch = "a100"
-    
+
     # 进化参数
-    config.max_rounds = 3 
+    config.max_rounds = 3
     config.parallel_num = 4
-    
+
     # 岛屿模型参数
     config.num_islands = 2
     config.migration_interval = 2
     config.elite_size = 5
     config.parent_selection_prob = 0.5
-    
+
     # 设备配置
     config.device_list = [0]
 
     # 配置文件路径
     config.config_path = str(Path(get_project_root()) / "config" / "vllm_triton_evolve_config.yaml")
-    
+
     # 选择要运行的任务
     config.op_name = get_op_name()
     config.task_desc = get_task_desc()
-    
+
     # 打印配置信息
     print_evolve_config(config.op_name, config)
-    
+
     # 初始化资源池
     task_pool = TaskPool(max_concurrency=config.parallel_num)
     device_pool = DevicePool(config.device_list)
-    
+
     # 加载配置并检查环境
     check_env_for_task(config.framework, config.backend, config.dsl, config.config_path)
-    
+
     # 调用evolve函数
     print("开始进化过程...")
     evolution_result = await evolve(
@@ -125,7 +125,7 @@ async def run_torch_evolve_triton():
         elite_size=config.elite_size,
         parent_selection_prob=config.parent_selection_prob
     )
-    
+
     # 打印结果
     print_evolution_result(evolution_result, config)
 

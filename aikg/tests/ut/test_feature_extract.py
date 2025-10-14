@@ -24,16 +24,16 @@ from ai_kernel_generator.config.config_validator import load_config
 async def test_feature_extract():
     framework = "torch"
     dsl = "triton"
-    
+
     op_name = "relu"
-    
+
     framework_code_path = f"tests/resources/{op_name}_op/{op_name}_{framework}.py"
     impl_code_path = f"tests/resources/{op_name}_op/{op_name}_{dsl}.py"
     with open(framework_code_path, "r", encoding="utf-8") as f:
         framework_code = f.read()
     with open(impl_code_path, "r", encoding="utf-8") as f:
         impl_code = f.read()
-    
+
     config = load_config(dsl).get("agent_model_config", {})
     feature = FeatureExtractor(
         model_config=config,

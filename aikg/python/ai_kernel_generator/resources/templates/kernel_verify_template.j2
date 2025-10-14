@@ -49,6 +49,15 @@ MS_TO_NP_DTYPE_MAP = {
 
 {% if "triton" in dsl %}
 from {{ op_name }}_triton import {{ impl_func_name }}
+{% elif dsl == "tilelang_npuir" %}
+import tilelang
+tilelang.cache.clear_cache()
+try:
+    from ai_kernel_generator.utils.tilelang_compile_patch import apply_tilelang_patches
+    apply_tilelang_patches()
+except ImportError:
+    pass
+from {{ op_name }}_tilelang_npuir import {{ impl_func_name }}
 {% elif dsl == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
 {% elif dsl == "cuda_c" %}
@@ -398,7 +407,7 @@ def verify_implementations():
         
         # 加载SWFT输出
         impl_output = load_binary_data(data_dir, framework_output)
-        {% elif dsl in ["triton", "cuda_c", "cpp"] %}
+        {% elif dsl in ["triton", "cuda_c", "cpp", "tilelang_npuir"] %}
         # 运行Triton实现
         impl_output = {{ impl_func_name }}(*inputs)
         {% endif %}

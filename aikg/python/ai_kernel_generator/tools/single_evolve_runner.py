@@ -65,11 +65,11 @@ class EvolveConfig:
     @classmethod
     def from_yaml(cls, config_path: str, skip_task_config: bool = False) -> 'EvolveConfig':
         """从YAML配置文件加载配置
-        
+
         Args:
             config_path: 配置文件路径
             skip_task_config: 是否跳过任务配置（用于批量调用模式）
-            
+
         Returns:
             EvolveConfig: 配置对象实例
         """
@@ -135,7 +135,7 @@ class EvolveConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典
-        
+
         Returns:
             Dict[str, Any]: 配置字典
         """
@@ -159,7 +159,7 @@ class EvolveConfig:
 
 def print_evolve_config(op_name: str, evolve_config: EvolveConfig) -> None:
     """打印进化配置信息
-    
+
     Args:
         op_name: 算子名称
         evolve_config: 进化配置对象
@@ -197,11 +197,11 @@ def print_evolve_config(op_name: str, evolve_config: EvolveConfig) -> None:
 
 def print_evolution_result(evolution_result: Dict[str, Any], evolve_config: EvolveConfig) -> Dict[str, Any]:
     """打印进化结果信息
-    
+
     Args:
         evolution_result: 进化结果字典
         evolve_config: 进化配置对象
-        
+
     Returns:
         Dict[str, Any]: 进化结果字典
     """
@@ -299,13 +299,13 @@ def print_evolution_result(evolution_result: Dict[str, Any], evolve_config: Evol
 
 def load_task_description(task_file: str) -> str:
     """加载任务描述文件
-    
+
     Args:
         task_file: 任务文件路径
-        
+
     Returns:
         str: 任务描述内容
-        
+
     Raises:
         FileNotFoundError: 文件不存在
         Exception: 读取文件失败
@@ -321,7 +321,7 @@ def load_task_description(task_file: str) -> str:
 
 def apply_custom_task_config(config: EvolveConfig, config_path: str, op_name: str) -> None:
     """应用自定义任务配置
-    
+
     Args:
         config: 配置对象
         config_path: 配置文件路径
@@ -330,30 +330,30 @@ def apply_custom_task_config(config: EvolveConfig, config_path: str, op_name: st
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             yaml_config = yaml.safe_load(f)
-        
+
         # 检查是否有custom_tasks配置
         if 'custom_tasks' in yaml_config and yaml_config['custom_tasks']:
             if op_name in yaml_config['custom_tasks']:
                 custom_config = yaml_config['custom_tasks'][op_name]
                 print(f"🎯 发现自定义配置 for {op_name}: {custom_config}")
-                
+
                 # 应用自定义配置
                 config_mapping = {
                     'max_rounds': 'max_rounds',
-                    'parallel_num': 'parallel_num', 
+                    'parallel_num': 'parallel_num',
                     'num_islands': 'num_islands',
                     'migration_interval': 'migration_interval',
                     'elite_size': 'elite_size',
                     'parent_selection_prob': 'parent_selection_prob'
                 }
-                
+
                 for config_key, attr_name in config_mapping.items():
                     if config_key in custom_config:
                         setattr(config, attr_name, custom_config[config_key])
                         print(f"   自定义 {config_key}: {custom_config[config_key]}")
-                
+
                 print(f"✅ 已应用自定义配置")
-                
+
     except Exception as e:
         print(f"提示: 无法解析custom_tasks配置: {e}")
 
@@ -363,7 +363,8 @@ def print_usage() -> None:
     print("用法:")
     print("  python single_evolve_runner.py                                                                        # 使用默认配置")
     print("  python single_evolve_runner.py <config_file>                                                          # 使用YAML配置文件")
-    print("  python single_evolve_runner.py <op_name> <task_file> <device> [config_file]                           # batch runner简化模式")
+    print(
+        "  python single_evolve_runner.py <op_name> <task_file> <device> [config_file]                           # batch runner简化模式")
 
 
 async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_config: EvolveConfig = None) -> Dict[str, Any]:
@@ -373,7 +374,7 @@ async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_c
         op_name: 算子名称，如果为None则使用evolve_config中的配置
         task_desc: 任务描述，如果为None则使用evolve_config中的配置
         evolve_config: 进化配置类实例，如果为None则创建默认配置
-        
+
     Returns:
         Dict[str, Any]: 进化结果字典
     """
@@ -421,13 +422,13 @@ async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_c
 
 def parse_default_config() -> tuple[str, str, EvolveConfig]:
     """解析默认配置
-    
+
     Returns:
         tuple: (op_name, task_desc, config)
     """
     project_root = get_project_root()
     config_path = os.path.join(project_root, "config", "evolve_config.yaml")
-    
+
     try:
         config = EvolveConfig.from_yaml(config_path)
         op_name = config.op_name
@@ -437,7 +438,7 @@ def parse_default_config() -> tuple[str, str, EvolveConfig]:
         print(f"算子名称: {op_name}")
         print(f"任务描述文件: {task_desc}")
         print(f"配置详情: {config.to_dict()}")
-        
+
         return op_name, task_desc, config
     except Exception as e:
         print(f"无法加载默认配置文件 {config_path}: {e}")
@@ -445,19 +446,19 @@ def parse_default_config() -> tuple[str, str, EvolveConfig]:
         config = EvolveConfig()
         op_name = config.op_name
         task_desc = config.task_desc
-        
+
         print(f"算子名称: {op_name}")
         print(f"任务描述文件: {task_desc}")
-        
+
         return op_name, task_desc, config
 
 
 def parse_config_file_mode(config_path: str) -> tuple[str, str, EvolveConfig]:
     """解析配置文件模式
-    
+
     Args:
         config_path: 配置文件路径
-        
+
     Returns:
         tuple: (op_name, task_desc, config)
     """
@@ -470,7 +471,7 @@ def parse_config_file_mode(config_path: str) -> tuple[str, str, EvolveConfig]:
         print(f"算子名称: {op_name}")
         print(f"任务描述文件: {task_desc}")
         print(f"配置详情: {config.to_dict()}")
-        
+
         return op_name, task_desc, config
     except Exception as e:
         print(f"无法加载配置文件 {config_path}: {e}")
@@ -479,10 +480,10 @@ def parse_config_file_mode(config_path: str) -> tuple[str, str, EvolveConfig]:
 
 def parse_batch_runner_mode(args: List[str]) -> tuple[str, str, EvolveConfig]:
     """解析批量运行器模式
-    
+
     Args:
         args: 命令行参数列表
-        
+
     Returns:
         tuple: (op_name, task_desc, config)
     """
@@ -494,10 +495,23 @@ def parse_batch_runner_mode(args: List[str]) -> tuple[str, str, EvolveConfig]:
     
     # 创建配置对象
     config = EvolveConfig()
-    
+
     # 如果提供了配置文件路径
     if len(args) == 5:
         config_path = args[4]
+
+        try:
+            # 批量调用模式：跳过任务配置，因为任务文件是直接传入的
+            file_config = EvolveConfig.from_yaml(config_path, skip_task_config=True)
+            # 合并配置
+            for key, value in file_config.to_dict().items():
+                setattr(config, key, value)
+
+            # 应用自定义任务配置
+            apply_custom_task_config(config, config_path, op_name)
+
+        except Exception as e:
+            print(f"警告: 无法加载配置文件 {config_path}: {e}")
         
     try:
         # 批量调用模式：跳过任务配置，因为任务文件是直接传入的
@@ -542,7 +556,7 @@ def main() -> None:
     if len(sys.argv) == 1:
         # 无参数模式：使用默认配置文件
         op_name, task_desc, config = parse_default_config()
-        
+
     elif len(sys.argv) == 2:
         # 配置文件模式：从YAML配置文件加载
         config_path = sys.argv[1]

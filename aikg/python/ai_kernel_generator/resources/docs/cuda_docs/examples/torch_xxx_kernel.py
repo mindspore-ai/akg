@@ -20,14 +20,15 @@ torch::Tensor op_name_kernel_call(torch::Tensor input){
 cpp_src = ("torch::Tensor op_name_kernel_call(torch::Tensor input);")
 # JIT编译
 kernel_module = load_inline(
-    name = "op_name_cuda",
-    cpp_sources = cpp_src,
-    cuda_sources = source,
-    functions = ["op_name_kernel_call"],
-    verbose = True,
-    extra_cflags = [""],
-    extra_ldflags = [""],
+    name="op_name_cuda",
+    cpp_sources=cpp_src,
+    cuda_sources=source,
+    functions=["op_name_kernel_call"],
+    verbose=True,
+    extra_cflags=[""],
+    extra_ldflags=[""],
 )
+
 
 def op_name_kernel_call(x):
     return kernel_module.op_name_kernel_call(x)

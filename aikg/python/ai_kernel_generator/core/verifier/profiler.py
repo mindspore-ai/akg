@@ -26,8 +26,8 @@ import pandas as pd
 
 # 预编译正则表达式，提高性能
 _FILTER_PATTERNS = re.compile(r'(Please DO NOT tune args|Invalid parameter export_type|'
-                             r'Start parsing profiling data|CANN profiling data parsed|'
-                             r'All profiling data parsed|\[WARNING\]|\[INFO\]|profiler\.py:)')
+                              r'Start parsing profiling data|CANN profiling data parsed|'
+                              r'All profiling data parsed|\[WARNING\]|\[INFO\]|profiler\.py:)')
 
 _SYMBOL_PATTERN = re.compile(r'^[\\\|/\-_=+*#~`!@$%^&()\[\]{}.,;:\'"<>?\s]+$')
 _DECORATION_PATTERN = re.compile(r'[\\\|\-=/]{3,}')
@@ -55,7 +55,7 @@ def suppress_output():
                 return
 
             stripped_text = text.strip()
-            
+
             # 完全空行
             if not stripped_text:
                 return
@@ -112,7 +112,7 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100, prof_di
     total = skip_first + (wait + warmup + active) * repeat
 
     timestamp = int(time.time() * 1000)
-    
+
     if prof_dir_name is not None:
         profile_path = os.path.join(os.getcwd(), f"{prof_dir_name}_{timestamp}")
     else:
@@ -141,7 +141,7 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100, prof_di
     return exec_time, profile_path
 
 
-def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_name: Optional[str] = None, 
+def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_name: Optional[str] = None,
                  keep_res: bool = False, suppress_warnings: bool = True) -> float:
     """
     NPU profiler主函数
@@ -170,11 +170,11 @@ def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_nam
 def collect_time(base_dir: str, active: int) -> float:
     """
     从profiling结果中收集时间信息
-    
+
     Args:
         base_dir: profiling结果目录
         active: 有效测量次数
-        
+
     Returns:
         float: 平均执行时间(微秒)，失败时返回float('inf')
     """
@@ -203,7 +203,7 @@ def collect_time(base_dir: str, active: int) -> float:
             # 过滤有效操作
             try:
                 valid_ops = df[df['Count'] % active == 0].copy()
-                
+
                 if valid_ops.empty:
                     print(f"No valid ops found in {target_file}")
                     continue
@@ -212,10 +212,10 @@ def collect_time(base_dir: str, active: int) -> float:
                 if pd.isna(total_time_sum) or total_time_sum <= 0:
                     print(f"Invalid timing data in {target_file}")
                     continue
-                    
+
                 average_time = total_time_sum / active
                 return average_time
-                
+
             except (KeyError, ValueError, ZeroDivisionError) as e:
                 print(f"Error processing timing data in {target_file}: {e}")
                 continue

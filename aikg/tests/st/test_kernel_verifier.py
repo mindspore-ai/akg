@@ -493,7 +493,7 @@ def test_kernel_verifier_profiling_dynamic_ascend910b4_torch(op_name):
     backend = "ascend"
     arch = "ascend910b4"
     config = load_config(dsl)  # unused
-    
+
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -530,7 +530,7 @@ def test_kernel_verifier_profiling_dynamic_ascend910b4_torch(op_name):
     }
     gen_time, base_time, speedup = verifier.run_profile(
         current_step=0, device_id=device_id, profile_settings=profile_settings)
-    
+
     print(f"Dynamic Shape Profiling Results:")
     print(f"Operation: {op_name}")
     print(f"orig performance is {base_time:.2f} us")
@@ -591,6 +591,7 @@ def test_kernel_verifier_profiling_cuda(op_name):
     print(f"orig performance is {base_time:.2f} us")
     print(f"aikg performance is {gen_time:.2f} us")
     print(f"speedup is {speedup:.2f}x")
+
 
 @pytest.mark.level0
 @pytest.mark.torch

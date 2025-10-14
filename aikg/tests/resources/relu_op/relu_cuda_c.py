@@ -40,5 +40,6 @@ kernel_module = load_inline(
     extra_ldflags=["-lcudart"],
 )
 
+
 def relu_cuda_c_torch(x):
     return kernel_module.relu_kernel_call(x)

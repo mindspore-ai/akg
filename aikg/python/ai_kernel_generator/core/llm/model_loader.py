@@ -187,28 +187,28 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
 
 class LocalAPIEmbeddings(Embeddings):
     """使用本地部署的 Embedding API"""
-    
+
     def __init__(self, api_url: str, model_name: str):
         self.api_url = api_url
         self.model_name = model_name
-    
+
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """为文档生成 Embeddings"""
         return self._embed(texts)
-    
+
     def embed_query(self, text: str) -> List[float]:
         """为查询生成 Embeddings"""
         return self._embed([text])[0]
-    
+
     def _embed(self, texts: List[str]) -> List[List[float]]:
         """调用 API 生成 Embeddings"""
         payload = {
             "model": self.model_name,
             "input": texts
         }
-        
+
         headers = {"Content-Type": "application/json"}
-        
+
         try:
             response = requests.post(
                 self.api_url,
@@ -219,22 +219,22 @@ class LocalAPIEmbeddings(Embeddings):
                 timeout=30
             )
             response.raise_for_status()
-            
+
             # 解析返回的 JSON
             result = response.json()
-            
+
             # 检查返回格式是否正确
             if 'data' not in result:
                 raise ValueError(f"API返回格式错误，缺少'data'字段: {result}")
-            
+
             embeddings = []
             for item in result['data']:
                 if 'embedding' not in item:
                     raise ValueError(f"API返回格式错误，缺少'embedding'字段: {item}")
                 embeddings.append(item['embedding'])
-            
+
             return embeddings
-        
+
         except requests.exceptions.RequestException as e:
             # 处理异常情况
             print(f"API请求失败: {e}")
@@ -245,36 +245,36 @@ class LocalAPIEmbeddings(Embeddings):
 def create_embedding_model(name: Optional[str] = None, config_path: Optional[str] = None):
     """
     根据预设名称创建embedding模型
-    
+
     Args:
         name: 预设配置名称，如果为None则使用默认配置
         config_path: 配置文件路径，如果为None则使用默认路径
-        
+
     Returns:
         OpenAIEmbeddings: 创建的embedding模型实例，兼容LangChain
     """
     # 使用默认路径或指定路径
     config_path = config_path or CONFIG_PATH
-    
+
     # 检查配置文件是否存在
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"配置文件未找到: {config_path}")
-    
+
     # 加载配置
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
-    
+
     # 如果未指定预设名称，使用默认embedding预设
     name = name or config.get("default_embedding_preset", "sflow_qwen3_embedding_8b")
-    
+
     # 检查预设是否存在
     if name not in config:
         available_presets = [k for k in config.keys() if k.startswith("sflow_") and "embedding" in k]
         raise ValueError(f"embedding预设 '{name}' 未找到。可用预设: {', '.join(available_presets)}")
-    
+
     # 获取预设配置
     preset_config = config[name]
-    
+
     if name.startswith("vllm_"):
         # 检查是否有环境变量覆盖api_base
         if VLLM_API_BASE_ENV in os.environ:
@@ -296,7 +296,7 @@ def create_embedding_model(name: Optional[str] = None, config_path: Optional[str
         api_key_env = preset_config.get("api_key_env")
         if not api_key_env:
             raise ValueError(f"预设 '{name}' 未配置 api_key_env")
-            
+
         api_key = os.getenv(api_key_env)
         if not api_key:
             raise ValueError(f"API密钥未找到。请设置环境变量 {api_key_env}")
@@ -308,5 +308,5 @@ def create_embedding_model(name: Optional[str] = None, config_path: Optional[str
             model=preset_config.get("model"),
             **({"dimensions": preset_config.get("dimensions")} if preset_config.get("dimensions") else {})
         )
-    
+
     return embedding_model

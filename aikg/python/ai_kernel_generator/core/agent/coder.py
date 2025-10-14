@@ -162,7 +162,6 @@ class Coder(AgentBase):
 
         return "\n".join(all_code)
 
-
     async def _samples_database_examples(self):
         """
         根据算子特征从Database检索并加载对应的DSL示例代码
@@ -170,17 +169,17 @@ class Coder(AgentBase):
         Returns:
             str: 示例代码内容，如果找不到对应示例则返回空字符串
         """
-        
+
         if not self.arch or not self.dsl:
             logger.warning("arch或dsl为空，无法加载示例代码")
             return ""
-        
+
         all_code = []
 
         try:
             project_root = Path(get_project_root()).parent.parent / "database" / "local"
             local_dir = Path(project_root) / self.arch / self.dsl
-            
+
             if not local_dir.exists():
                 logger.warning(f"local示例目录不存在: {local_dir}")
                 return ""
@@ -199,10 +198,9 @@ class Coder(AgentBase):
                         logger.warning(f"读取local示例文件 {file_path} 时发生错误: {str(e)}")
                         continue
 
-            
         except Exception as e:
             logger.warning(f"从local目录获取示例代码失败: {e}")
-        
+
         if self.database_config and self.database_config.get("enable_rag", False):
             try:
                 db_system = CoderDatabase(config=self.config)
@@ -223,18 +221,18 @@ class Coder(AgentBase):
 
             except Exception as e:
                 logger.warning(f"从数据库获取示例代码失败: {e}")
-        
+
         return "\n".join(all_code)
 
     async def _generate_api_docs(self, sketch: str, conductor_suggestion: str, task_info: dict) -> str:
         """
         生成API文档，如果原始API文档过长则使用LLM进行内容压缩
-        
+
         Args:
             sketch: AUL代码作为sketch
             conductor_suggestion: Conductor建议
             task_info: 任务信息字典
-            
+
         Returns:
             str: 适合的API文档内容
         """
@@ -270,7 +268,7 @@ class Coder(AgentBase):
             )
         else:
             api_docs_suitable = self.base_doc["api_docs"]
-            
+
         return api_docs_suitable
 
     def load_doc(self, doc_path: str) -> str:
@@ -312,19 +310,19 @@ class Coder(AgentBase):
     async def _select_optimal_examples(self) -> str:
         """
         智能选择最优的示例代码，避免prompt过长
-        
+
         策略：
         1. 优先使用database_examples（相关性高）
         2. 如果database_examples为空或过短，补充user_examples
         3. 控制总长度，避免prompt过长
-        
+
         Returns:
             str: 选择后的示例代码
         """
         database_examples = await self._samples_database_examples()
-            
+
         user_examples = self._load_user_examples()
-        
+
         # 优先使用database_examples
         if database_examples:
             logger.info("使用database_examples作为主要示例代码")
@@ -343,7 +341,7 @@ class Coder(AgentBase):
             #     user_examples, _, _ = await self.run_llm(self.user_examples_prompt, user_examples_input_data, self.model_config.get("example_compressor", "default"))
 
             return user_examples
-        
+
         # 如果两者都为空，返回空字符串
         logger.warning("user_examples和database_examples都为空，将不提供示例代码")
         return ""

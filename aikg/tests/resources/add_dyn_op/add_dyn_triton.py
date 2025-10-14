@@ -2,6 +2,7 @@ import torch
 import triton
 import triton.language as tl
 
+
 @triton.jit
 def add_dyn_kernel(
     input_ptr,
@@ -24,6 +25,7 @@ def add_dyn_kernel(
     output = input + other * alpha
     tl.store(output_ptr + offsets, output, mask=mask)
 
+
 def add_dyn_triton_torch(input_tensor, other):
     """
     内核启动器
@@ -40,5 +42,3 @@ def add_dyn_triton_torch(input_tensor, other):
     )
 
     return output
-
-    

@@ -57,6 +57,7 @@ relu_cpp_module = load_inline(
     verbose=True
 )
 
+
 def relu_cpp_torch(x):
     if x.device.type != "cpu":
         x = x.cpu()

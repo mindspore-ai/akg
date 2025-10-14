@@ -129,7 +129,6 @@ async def evolve(
         tasks_per_island = parallel_num
         island_storage_dir = storage_dir
 
-
     for round_idx in range(1, max_rounds + 1):
         logger.info(f"Evolve round {round_idx}/{max_rounds} started")
 
