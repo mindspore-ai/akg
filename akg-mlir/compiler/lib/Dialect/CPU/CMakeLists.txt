@@ -1,3 +1,4 @@
+find_library(GMP_LIBRARY NAMES gmp REQUIRED)
 add_subdirectory(IR)
 
 file(GLOB_RECURSE SRC_LIST *.cpp)
@@ -10,7 +11,7 @@ add_mlir_dialect_library(AKGCPUPasses
   DEPENDS
   AKGCPUPassIncGen
   MLIRCPUDialect
-  
+
   DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
@@ -23,4 +24,4 @@ add_mlir_dialect_library(AKGCPUPasses
   MLIRTransformUtils
   AKGMLIRAnalysis
   )
-target_link_libraries(AKGCPUPasses PRIVATE akg::symengine gmp stdc++fs)
+target_link_libraries(AKGCPUPasses PRIVATE akg::symengine ${GMP_LIBRARY} stdc++fs)

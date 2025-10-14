@@ -24,19 +24,19 @@ import subprocess
 import time
 
 import numpy as np
-from akg_mlir import AkgMlirDriver
-from akg_mlir.utils.composite_op_helper import compare_tensor, gen_json_data
-from akg_mlir.utils.dynamic_utils import dump_shape_arg_list, get_device_shape
-from akg_mlir.utils.gen_runtime_code import (ProfilingParams,
-                                           gen_cuda_runtime_code)
-from akg_mlir.utils.result_analysis import get_compare_tolerance
-from akg_mlir.ascend_profilier.cann_file_parser import CANNFileParser
-from akg_mlir.ascend_profilier.op_summary_parser import OpSummaryParser
-from akg_mlir.ascend_profilier.op_summary_headers import OpSummaryHeaders
+from akg import AkgMlirDriver
+from ..utils.composite_op_helper import compare_tensor, gen_json_data
+from ..utils.dynamic_utils import dump_shape_arg_list, get_device_shape
+from ..utils.gen_runtime_code import (ProfilingParams,
+                                      gen_cuda_runtime_code)
+from ..utils.result_analysis import get_compare_tolerance
+from ..ascend_profilier.cann_file_parser import CANNFileParser
+from ..ascend_profilier.op_summary_parser import OpSummaryParser
+from ..ascend_profilier.op_summary_headers import OpSummaryHeaders
 from bfloat16 import bfloat16
 
-import akgAscendLaunch
-import akgProfileMgr
+import akg.akgAscendLaunch as akgAscendLaunch
+import akg.akgProfileMgr as akgProfileMgr
 
 PROF_ERROR_CODE = 9999999999
 
@@ -580,7 +580,7 @@ class TestUtils:
             with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
                 f.write("{0}; ".format(get_core_num()))
 
-if __name__ == "__main__":
+def main(args=None):
     # usage: python py_benchmark.py -e gpu --file ./info_cases/Fused_BiasAdd_1551558231201032373.info --prof_trails 100
     parser = argparse.ArgumentParser(description='Run cases')
     parser.add_argument("-e",
@@ -658,3 +658,6 @@ if __name__ == "__main__":
             print("precision correct")
         else:
             _run_single_file(args.file, args)
+
+if __name__ == "__main__":
+    main()

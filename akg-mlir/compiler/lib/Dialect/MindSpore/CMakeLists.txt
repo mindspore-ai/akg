@@ -1,3 +1,4 @@
+find_library(GMP_LIBRARY NAMES gmp REQUIRED)
 add_subdirectory(IR)
 
 file(GLOB_RECURSE SRC_LIST *.cpp)
@@ -27,4 +28,4 @@ add_mlir_dialect_library(MindSporePasses
   MLIRTransformUtils
   AKGMLIRAnalysis
   )
-target_link_libraries(MindSporePasses PRIVATE akg::symengine gmp stdc++fs)
+target_link_libraries(MindSporePasses PRIVATE akg::symengine ${GMP_LIBRARY} stdc++fs)

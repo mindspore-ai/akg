@@ -67,7 +67,7 @@ def get_kernel_meta_path():
     """Return the PATH of kernel meta files."""
     kernel_meta_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
     return os.path.join(
-        os.path.realpath(os.getenv("MS_COMPILER_CACHE_PATH", str(pathlib.Path(__file__).absolute().parent))),
+        os.path.realpath(os.getenv("MS_COMPILER_CACHE_PATH", "")),
         kernel_meta_dir,
     )
 
@@ -117,7 +117,8 @@ class AkgMlirDriver(object):
         self.input_file = input_file
         self.output_dir = get_kernel_meta_path() if output_dir == "" else output_dir
         self.akg_tools_dir = (
-            os.path.join(pathlib.Path(__file__).absolute().parent, "../../build/")
+            os.path.dirname(os.path.abspath(__file__))
+            #os.path.join(pathlib.Path(__file__).absolute().parent, "../../build/")
             if akg_tools_dir == ""
             else akg_tools_dir
         )
@@ -354,7 +355,7 @@ class AkgMlirDriver(object):
         if self.profiling_trails > 0:
             input_file = wrap_timer_func(input_file, self.kernel_name, self.profiling_trails)
         out_file = os.path.join(self.output_dir, kernel_name + ".ll")
-        cmd = [os.path.join(self.llvm_tools_dir, "bin/mlir-translate"), input_file, "--mlir-to-llvmir", "-o", out_file]
+        cmd = ["mlir-translate", input_file, "--mlir-to-llvmir", "-o", out_file]
         print("_run_mlir_to_llvm:", cmd)
         try:
             subprocess.run(cmd, check=True, capture_output=True)
@@ -368,7 +369,7 @@ class AkgMlirDriver(object):
         out_file = os.path.join(self.output_dir, kernel_name + ".s")
         bin_file = os.path.join(self.output_dir, kernel_name + ".so")
         cmd = [
-            os.path.join(self.llvm_tools_dir, "bin/llc"),
+            "llc",
             input_file,
             "-relocation-model=pic",
             "-O3",
@@ -381,7 +382,7 @@ class AkgMlirDriver(object):
             raise RuntimeError("generate .s failed in case " + input_file + "!\n")
 
         cmd = [
-            os.path.join(self.llvm_tools_dir, "bin/clang++"),
+            "clang++",
             out_file,
             "--rtlib=compiler-rt",
             "-fopenmp",
@@ -426,7 +427,7 @@ class AkgMlirDriver(object):
         out_file = os.path.join(self.output_dir, kernel_name + ".s")
         bin_file = os.path.join(self.output_dir, kernel_name + ".so")
         cmd = [
-            os.path.join(self.llvm_tools_dir, "bin/llc"),
+            "llc",
             input_file,
             "-relocation-model=pic",
             "-O3",
@@ -440,7 +441,7 @@ class AkgMlirDriver(object):
             raise RuntimeError("generate .s failed in case " + input_file + "!\n")
 
         cmd = [
-            os.path.join(self.llvm_tools_dir, "bin/clang++"),
+            "clang++",
             out_file,
             "--rtlib=compiler-rt",
             "-O3",

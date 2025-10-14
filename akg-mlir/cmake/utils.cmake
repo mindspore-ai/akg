@@ -232,7 +232,6 @@ function(akg_add_pkg pkg_name )
 
     # strip directory variables to ensure third party packages are installed in consistent locations
     string(REPLACE ${CMAKE_SOURCE_DIR} "" ARGN_STRIPPED ${ARGN})
-    message("REPLACE ${_MS_LIB_CACHE} "" ARGN_STRIPPED ${ARGN_STRIPPED}")
     string(REPLACE ${_MS_LIB_CACHE} "" ARGN_STRIPPED ${ARGN_STRIPPED})
     set(${pkg_name}_CONFIG_TXT
             "${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_C_COMPILER_VERSION}
