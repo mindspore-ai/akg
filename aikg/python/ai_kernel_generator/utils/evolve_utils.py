@@ -152,12 +152,12 @@ def save_implementation(impl_data: Dict[str, Any], storage_dir: str) -> None:
         logger.error(f"Failed to save implementation: {e}")
 
 
-def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict[str, Any]]:
+def load_best_implementations(storage_dir: str, max_count: int = None) -> List[Dict[str, Any]]:
     """从本地文件加载最佳实现
 
     Args:
         storage_dir: 存储目录
-        max_count: 最大加载数量
+        max_count: 最大加载数量，None表示加载所有实现
 
     Returns:
         按性能排序的最佳实现列表
@@ -185,7 +185,11 @@ def load_best_implementations(storage_dir: str, max_count: int = 5) -> List[Dict
         implementations.sort(key=lambda x: x.get('profile', (float('inf'), 0.0, 0.0))[0])
 
         logger.info(f"Loaded {len(implementations)} implementations from {storage_dir}")
-        return implementations[:max_count]
+        
+        if max_count is None:
+            return implementations
+        else:
+            return implementations[:max_count]
 
     except Exception as e:
         logger.error(f"Failed to load implementations from {storage_dir}: {e}")
@@ -389,32 +393,26 @@ def migrate_elites(islands: List[List[Dict[str, Any]]], migration_size: int = 1)
     return updated_islands
 
 
-def select_parent_from_elite(current_island_idx: int, num_islands: int, elite_pool: List[Dict[str, Any]]) -> int:
-    """从精英机制中选择父代所在的岛屿索引
+def select_parent_from_elite(current_island_idx: int, elite_pool: List[Dict[str, Any]]) -> tuple:
+    """从精英池中选择父代
 
     Args:
         current_island_idx: 当前岛屿索引
-        num_islands: 总岛屿数量
         elite_pool: 精英池
 
     Returns:
-        父代所在的岛屿索引
+        (parent_implementation, parent_island_idx): 父代实现和其所在的岛屿索引
+        如果精英池为空，返回 (None, current_island_idx)
     """
     if not elite_pool:
-        # 如果精英池为空，返回当前岛屿
-        return current_island_idx
+        # 如果精英池为空，返回None和当前岛屿
+        return None, current_island_idx
 
-    # 从精英池中随机选择一个精英个体
+    # 从精英池中随机选择一个精英个体作为父代
     selected_elite = random.choice(elite_pool)
-
-    # 根据精英个体的来源岛屿决定父代岛屿
-    source_island = selected_elite.get('source_island', None)
-    if source_island is not None and source_island != current_island_idx and 0 <= source_island < num_islands:
-        return source_island
-    else:
-        # 选择除当前岛屿外的随机岛屿
-        other_islands = [i for i in range(num_islands) if i != current_island_idx]
-        if other_islands:
-            return random.choice(other_islands)
-        else:
-            return current_island_idx
+    
+    # 获取精英个体的来源岛屿
+    source_island = selected_elite.get('source_island', current_island_idx)
+    
+    # 返回选中的精英个体和其来源岛屿
+    return selected_elite, source_island

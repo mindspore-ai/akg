@@ -169,22 +169,23 @@ async def evolve(
                         if random.random() < parent_selection_prob:
                             # 在当前岛屿中随机选择父代（保持岛屿隔离）
                             parent_island_idx = island_idx
+                            if num_islands == 1:
+                                stored_implementations = load_best_implementations(island_storage_dir)
+                            else:
+                                stored_implementations = load_best_implementations(islands_storage_dirs[parent_island_idx])
+                            # 从当前岛屿随机选择一个作为父代
+                            parent_implementation = random.choice(stored_implementations) if stored_implementations else None
                         else:
-                            # 在精英机制中选择父代
-                            parent_island_idx = select_parent_from_elite(island_idx, num_islands, elite_pool)
-
-                        # 从父代所在的岛屿中选取灵感（严格限制在指定岛屿内）
-                        if num_islands == 1:
-                            stored_implementations = load_best_implementations(island_storage_dir)
-                        else:
-                            stored_implementations = load_best_implementations(islands_storage_dirs[parent_island_idx],
-                                                                               max_count=tasks_per_island * 2)
-
-                        # 如果有实现可用，先选择一个作为父代
-                        parent_implementation = None
-                        if stored_implementations:
-                            # 随机选择一个作为父代
-                            parent_implementation = random.choice(stored_implementations)
+                            # 在精英池中选择父代（直接返回具体的精英个体）
+                            parent_implementation, parent_island_idx = select_parent_from_elite(island_idx, elite_pool)
+                            # 加载父代所在岛屿的所有实现，用于采样其他灵感
+                            if num_islands == 1:
+                                stored_implementations = load_best_implementations(island_storage_dir)
+                            else:
+                                stored_implementations = load_best_implementations(islands_storage_dirs[parent_island_idx])
+                            # 如果精英池返回了None（精英池为空），则从当前岛屿随机选一个
+                            if parent_implementation is None and stored_implementations:
+                                parent_implementation = random.choice(stored_implementations)
 
                         # 使用分层采样策略来增加多样性，排除当前轮次已生成的实现和父代实现
                         current_round_implementations = [
@@ -195,7 +196,20 @@ async def evolve(
                             all_excluded_implementations.append(parent_implementation)
 
                         sampled = sample_inspirations(stored_implementations, sample_num=min(
-                            tasks_per_island, 3), use_tiered_sampling=True, parent_implementations=all_excluded_implementations)
+                            len(stored_implementations), 3), use_tiered_sampling=True, parent_implementations=all_excluded_implementations)
+                        
+                        # 将父代加入灵感列表
+                        if parent_implementation:
+                            parent_inspiration = {
+                                'id': parent_implementation.get('id'),
+                                'sketch': parent_implementation.get('sketch', ''),
+                                'impl_code': parent_implementation.get('impl_code', ''),
+                                'profile': parent_implementation.get('profile', (float('inf'), 0.0, 0.0)),
+                                'strategy_mode': 'evolution',
+                                'is_parent': True  # 标记为父代
+                            }
+                            sampled.insert(0, parent_inspiration)  # 父代放在第一位
+                        
                         island_inspirations[island_idx].append(sampled)
 
                     island_meta_prompts[island_idx] = load_meta_prompts(dsl, tasks_per_island)
@@ -206,7 +220,7 @@ async def evolve(
                 inspirations = []
                 for pid in range(parallel_num):
                     # 使用分层采样策略，每个任务采样3个不同层级的inspiration
-                    sampled = sample_inspirations(stored_implementations, sample_num=3, use_tiered_sampling=False)
+                    sampled = sample_inspirations(stored_implementations, sample_num=min(len(stored_implementations), 3), use_tiered_sampling=False)
                     inspirations.append(sampled)
 
                 meta_prompts = load_meta_prompts(dsl, parallel_num)
