@@ -24,8 +24,6 @@ endif()
 target_compile_definitions(akg_ascend_launch_runtime PRIVATE akg_ascend_launch_runtime_EXPORTS)
 
 find_package(pybind11 REQUIRED)
-include_directories(${pybind11_INCLUDE_DIRS})
-message(STATUS "PYBIND11_INCLUDE_DIR: ${pybind11_INCLUDE_DIRS}")
 pybind11_add_module(akgAscendLaunch AKGAscendLaunch.cpp)
 target_link_libraries(akgAscendLaunch PRIVATE akg_ascend_launch_runtime)
 pybind11_add_module(akgProfileMgr ProfileMgr.cpp)
