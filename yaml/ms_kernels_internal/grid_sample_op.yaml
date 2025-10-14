@@ -1,0 +1,16 @@
+#operator grid_sample
+grid_sample:
+    args:
+        input:
+            dtype: tensor
+        grid:
+            dtype: tensor
+        mode:
+            dtype: str
+        padding_mode: 
+            dtype: str
+        align_corners:
+            dtype: bool
+    returns:
+        output:
+            dtype: tensor
