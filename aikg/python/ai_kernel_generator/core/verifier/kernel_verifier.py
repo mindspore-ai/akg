@@ -234,7 +234,7 @@ class KernelVerifier:
             os.chdir(verify_dir)
             python_cmd = ["python", f"verify_{self.op_name}.py"]
             # 使用run_command但禁用timeout，让验证脚本无限制运行
-            return run_command(python_cmd, f"verify_{self.op_name}", timeout=None)
+            return run_command(python_cmd, f"verify_{self.op_name}", timeout=timeout)
         finally:
             try:
                 os.chdir(original_cwd)

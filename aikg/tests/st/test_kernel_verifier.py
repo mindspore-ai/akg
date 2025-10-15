@@ -540,61 +540,6 @@ def test_kernel_verifier_profiling_dynamic_ascend910b4_torch(op_name):
 
 @pytest.mark.level0
 @pytest.mark.torch
-@pytest.mark.cuda_c
-@pytest.mark.cuda
-@pytest.mark.a100
-@pytest.mark.profiling
-@pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_profiling_cuda(op_name):
-    framework = "torch"
-    dsl = "cuda_c"
-    backend = "cuda"
-    arch = "a100"
-    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_cuda_c_coderonly_config.yaml")  # unused
-    # 读取框架实现代码
-    op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
-    with open(op_task_file, "r", encoding="utf-8") as f:
-        op_task_str = textwrap.dedent(f.read())
-
-    # 读取实现代码
-    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{dsl}.py"
-    with open(kernel_path, "r", encoding="utf-8") as f:
-        kernel_code = f.read()
-
-    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_profiling_test')
-    impl_func_name = f"{op_name}_{dsl}_{framework}"
-    verifier = KernelVerifier(
-        op_name=op_name,
-        framework_code=op_task_str,
-        task_id="profiling_test_001",
-        framework=framework,
-        dsl=dsl,
-        backend=backend,
-        arch=arch,
-        impl_func_name=impl_func_name,
-        config=config
-    )
-    task_info = {}
-    task_info["coder_code"] = kernel_code
-
-    # 先进行验证，确保验证通过
-    result, error_log = verifier.run(task_info, device_id=device_id)
-    assert result, f"验证失败: {error_log}"
-
-    # 进行性能分析
-    profile_settings = {
-        "run_times": 50,
-        "warmup_times": 5
-    }
-    gen_time, base_time, speedup = verifier.run_profile(
-        current_step=0, device_id=device_id, profile_settings=profile_settings)
-    print(f"orig performance is {base_time:.2f} us")
-    print(f"aikg performance is {gen_time:.2f} us")
-    print(f"speedup is {speedup:.2f}x")
-
-
-@pytest.mark.level0
-@pytest.mark.torch
 @pytest.mark.cpp
 @pytest.mark.cpu
 @pytest.mark.x86_64

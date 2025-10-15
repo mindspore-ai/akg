@@ -6,8 +6,7 @@ from torch.utils.cpp_extension import load_inline
 # 内联C++扩展代码
 cpp_source = """
 #include <torch/extension.h>
-#include <algorithm>
-torch::Tensor relu_cpp_kernel(torch::Tensor x) {
+torch::Tensor ReLU_kernel(torch::Tensor x) {
     if (!x.is_contiguous()) {
         x = x.contiguous();
     }
@@ -45,20 +44,19 @@ torch::Tensor relu_cpp_kernel(torch::Tensor x) {
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("relu_cpp_kernel", &relu_cpp_kernel, "ReLU C++ kernel");
+    m.def("ReLU_kernel", &ReLU_kernel, "ReLU C++ kernel");
 }
 """
 
 # 动态加载C++扩展
-relu_cpp_module = load_inline(
-    name="relu_cpp",
+ReLU_module = load_inline(
+    name="ReLU",
     cpp_sources=cpp_source,
     extra_cflags=["-O3"],
     verbose=True
 )
-
-
-def relu_cpp_torch(x):
+# 内核调用
+def relu_cpp_torch(x: torch.Tensor) -> torch.Tensor:
     if x.device.type != "cpu":
         x = x.cpu()
-    return relu_cpp_module.relu_cpp_kernel(x)
+    return ReLU_module.ReLU_kernel(x)

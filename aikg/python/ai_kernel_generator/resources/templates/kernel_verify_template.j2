@@ -64,6 +64,8 @@ from {{ op_name }}_swft import {{ impl_func_name }}
 from {{ op_name }}_cuda_c import {{ impl_func_name }}
 {% elif dsl == "cpp" %}
 from {{ op_name }}_cpp import {{ impl_func_name }}
+{% elif dsl == "tilelang_cuda" %}
+from {{ op_name }}_tilelang_cuda import {{ impl_func_name }}
 {% endif %}
 
 # Timeout装饰器函数
@@ -407,7 +409,7 @@ def verify_implementations():
         
         # 加载SWFT输出
         impl_output = load_binary_data(data_dir, framework_output)
-        {% elif dsl in ["triton", "cuda_c", "cpp", "tilelang_npuir"] %}
+        {% elif dsl in ["triton", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda"] %}
         # 运行Triton实现
         impl_output = {{ impl_func_name }}(*inputs)
         {% endif %}
