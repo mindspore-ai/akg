@@ -336,6 +336,18 @@ def run_generation_implementations():
         end_time = time.time()
         execution_time_ms = (end_time - start_time) * 1000 / {{ total_count }}  # 转换为毫秒
         method = "traditional_timing"
+        {% else %}
+        # dsl：cuda_c
+        import time
+        start_time = time.time()
+        for _ in range({{ total_count }}):
+            framework_output = framework_model(*inputs)
+            {% if backend == "cuda" %}
+            torch.cuda.synchronize()
+            {% endif %}
+        end_time = time.time()
+        execution_time_ms = (end_time - start_time) * 1000 / {{ total_count }}  # 转换为毫秒
+        method = "traditional_timing"
         {% endif %}
 
         return execution_time_ms, method
