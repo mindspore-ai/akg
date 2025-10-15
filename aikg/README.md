@@ -104,7 +104,7 @@ This project uses git submodules to manage certain third-party dependencies.
 After initial cloning or pulling updates, please use the following command to initialize and download `aikg`-related dependencies:
 ```bash
 # Initialize and pull aikg-related submodules
-git submodule update --init --remote "aikg/thirdparty/*"
+git submodule update --init "aikg/thirdparty/*"
 ```
 
 #### Step 2: Frontend Dependencies Configuration

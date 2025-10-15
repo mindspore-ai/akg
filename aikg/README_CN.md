@@ -106,7 +106,7 @@ export AIKG_OLLAMA_API_BASE=http://localhost:11434
 初次克隆或拉取更新后，请使用以下命令初始化并下载 `aikg` 相关的依赖：
 ```bash
 # 初始化并拉取 aikg 相关的子模块
-git submodule update --init --remote "aikg/thirdparty/*"
+git submodule update --init "aikg/thirdparty/*"
 ```
 
 #### Step 2: 前端依赖配置
