@@ -46,6 +46,10 @@ exp_data = tl.exp(stable_data)
 - **仅在内核参数中使用**: `BLOCK_SIZE: tl.constexpr`
 - **不可在host侧使用**: 启动函数中不可用tl.constexpr
 
+### 输出张量创建规范
+- host 侧使用 `torch.empty` 或 `torch.empty_like` 创建输出张量
+- 不要使用 `torch.zeros` 或 `torch.ones`，避免不必要的初始化开销
+
 ### Ascend 后端避免使用 tl.where 计算内存偏移
 Ascend 后端对`tl.where`生成的复杂指针运算支持不完全。复杂条件判断可以采用if-else静态分支处理，而非在内存访问时动态计算。
 

@@ -41,7 +41,7 @@ def matmul_triton_framework(x0, x1):
     assert C == C2, f"矩阵维度不匹配: {C} != {C2}"
 
     # 分配输出张量
-    output = torch.zeros((B, D), dtype=x0.dtype, device=x0.device)
+    output = torch.empty((B, D), dtype=x0.dtype, device=x0.device)
 
     # 启动内核
     matmul_kernel[1, 1, 1](output, x0, x1, 1, B, C, D)

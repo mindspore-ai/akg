@@ -47,7 +47,8 @@ def standard_kernel(
 
 ### 内核启动方式
 ```python
-def launch_kernel(input_tensor, output_tensor):
+def launch_kernel(input_tensor):
+    output_tensor = torch.empty(size, dtype, device)
     BLOCK_SIZE = 1024  
     grid = (triton.cdiv(input_tensor.numel(), BLOCK_SIZE),)
     

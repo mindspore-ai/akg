@@ -67,7 +67,7 @@ def layer_norm_triton_mindspore(x, normalized_shape, weight, bias, eps=1e-5):
     Triton Layer Normalization 启动函数
     """
     # 分配输出张量
-    y = ms.mint.zeros_like(x)
+    y = ms.mint.empty_like(x)
 
     # 将输入展平为二维
     x_arg = x.reshape(-1, x.shape[-1])

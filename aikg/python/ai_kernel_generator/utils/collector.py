@@ -23,11 +23,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from .common_utils import get_md5_hash
-
 logger = logging.getLogger(__name__)
 
-COLLECTOR_VERSION = "1.0.0"
+COLLECTOR_VERSION = "2.0.0"
 
 
 def get_version() -> str:

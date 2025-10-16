@@ -41,7 +41,7 @@ def matmul_triton_mindspore(x0, x1):
     C, D = x1.shape
 
     # 分配输出张量
-    output = ms.mint.zeros((B, D))
+    output = ms.mint.empty((B, D))
 
     # 启动内核
     matmul_kernel[1, 1, 1](output, x0, x1, 1, B, C, D)

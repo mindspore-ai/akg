@@ -106,8 +106,11 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100, prof_di
         l2_cache=False,
         data_simplification=False
     )
-    skip_first = 1
+    # 将 warmup 步数放入 skip_first，保持预热效果但避免 warmup_trace 的副作用
+    # fn() 依然会在所有 skip_first 步骤中执行，确保充分预热
+    skip_first = 1 + warmup
     wait = 0
+    warmup = 0
     repeat = 1
     total = skip_first + (wait + warmup + active) * repeat
 
