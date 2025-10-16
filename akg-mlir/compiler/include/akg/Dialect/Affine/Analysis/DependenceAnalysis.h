@@ -81,8 +81,11 @@ struct MemRefDependenceGraph {
   unsigned nextNodeId = 0;
   // The block for which this graph is created to perform fusion.
   Block *block;
+  // Whether to use AKG-specific analysis.
+  bool useAKGAnalysis;
 
-  explicit MemRefDependenceGraph(Block *block) : block(block) {}
+  explicit MemRefDependenceGraph(Block *block, bool useAKGAnalysis = true) 
+      : block(block), useAKGAnalysis(useAKGAnalysis) {}
 
   void createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses);
   bool createEdges(const DenseMap<Value, SetVector<unsigned>> &memrefAccesses);
@@ -103,8 +106,8 @@ struct MemRefDependenceGraph {
   void getSuccessorNodes(unsigned id, DenseSet<unsigned> &dependentNodes);
   void getSuccessorNodes(unsigned id, std::vector<unsigned> &dependentNodes);
 
-  void print(raw_ostream &os) const;
-  void dump() const { print(llvm::errs()); }
+  virtual void print(raw_ostream &os) const;
+  virtual void dump() const { print(llvm::errs()); }
 };
 
 }  // namespace akg

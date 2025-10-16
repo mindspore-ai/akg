@@ -127,8 +127,10 @@ void FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
       auto orderGroups = [&]() -> std::pair<GroupPtr, GroupPtr> {
         auto oldGroup = depGraph.getGroup(oldPlan.fusedGroup.to);
         auto newGroup = depGraph.getGroup(fusePlan.fusedGroup.to);
-        llvm::outs() << "oldGroup " << oldPlan.fusedGroup.to << " template " << oldGroup->groupTemplate
-                     << ", new group " << fusePlan.fusedGroup.to << " template " << newGroup->groupTemplate << "\n";
+        std::string oldTemplateString = oldGroup->getGroupTemplateString();
+        std::string newTemplateString = newGroup->getGroupTemplateString();
+        llvm::outs() << "oldGroup " << oldPlan.fusedGroup.to << " groupTemplate " << oldTemplateString
+                     << ", new group " << fusePlan.fusedGroup.to << " groupTemplate " << newTemplateString << "\n";
         if (oldGroup->groupTemplate == OperatorTemplate::Reduce) {
           return std::make_pair(newGroup, oldGroup);
         }
@@ -286,41 +288,6 @@ void FusionAnalyzer::plan() {
   fusionPlans = sortedPlan;
 }
 
-void Group::print(raw_ostream &os) const {
-  std::string indent = "  ";
-  os << "[Group " << groupId << "]\n";
-  auto it3 = operatorTemplateMap.find(static_cast<int>(groupTemplate));
-  if (it3 != operatorTemplateMap.end()) {
-    os << indent << ">> GroupTemplate: " << it3->second << "\n";
-  } else {
-    os << indent << ">> GroupTemplate: " << static_cast<int>(groupTemplate) << "\n";
-  }
-  os << indent << ">> FusedGroups: [";
-  for (auto gid : fusedGroupId) {
-    os << gid << ", ";
-  }
-  os << "]\n";
-  os << indent << ">> Nodes: [";
-  for (auto nid : nodesId) {
-    os << nid << ", ";
-  }
-  os << "]\n";
-  os << indent << ">> LoopTransforms: [\n";
-  for (auto it : nodeTransformRecords) {
-    os << indent << indent << ">> Node " << it.first << ": [";
-    for (LoopTransform lt : it.second) {
-      int ltI = static_cast<int>(lt);
-      auto it2 = loopTransformToStr.find(ltI);
-      if (it2 != loopTransformToStr.end()) {
-        os << it2->second << " -> ";
-      } else {
-        os << ltI << " -> ";
-      }
-    }
-    os << "]\n";
-  }
-  os << indent << indent << "]\n";
-}
 
 void FusionAnalyzer::initGroups() { groups = depGraph.groups; }
 
@@ -332,7 +299,8 @@ void FusionAnalyzer::topoSort() {
   }
   std::sort(allGroups.begin(), allGroups.end(), GroupCmp);
   for (auto g : allGroups) {
-    llvm::outs() << "group " << g->groupId << " temp " << g->groupTemplate << "\n";
+    std::string groupTemplateString = g->getGroupTemplateString();
+    llvm::outs() << "group " << g->groupId << " groupTemplate " << groupTemplateString << "\n";
     for (auto node : g->nodesId) {
       topoSortNodeIds.push_back(node);
     }
