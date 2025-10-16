@@ -1,43 +1,66 @@
-# NPU硬件说明
-## memory_system
-├── gm (GlobalMemory/DeviceMemory):
-|    └── size: 64GB
-├── L2Cache: // 全部核共用
-|    └── size: 192MB
-├── Buffers(per ai_core) x 24: // 整个芯片有24个ai_core
-|    ├── vector_core:
-|    |    ├── 数量: 2块 // 每个ai_core有2个vector_core，所以一共有48个vector_core
-|    |    └── unified_buffer:
-|    |         ├── size: 192KB
-|    |         └── data_align: 256B
-|    └── cube_core:
-|         ├── 数量: 1块 // 每个ai_core有1个cube_core，所以一共有24个cube_core
-|         ├── L1_buffer:
-|         |    ├── size: 1MB
-|         |    └── data_align: 256B
-|         └── L0_buffers: // matmul计算专用缓冲区
-|              ├── L0A_buffer: // 存储矩阵A的数据
-|              |    ├── size: 64KB
-|              |    ├── 用途: 存储输入矩阵A的m0xk0块数据
-|              |    └── data_align: 256B
-|              ├── L0B_buffer: // 存储矩阵B的数据
-|              |    ├── size: 64KB
-|              |    ├── 用途: 存储输入矩阵B的k0xn0块数据
-|              |    └── data_align: 256B
-|              └── L0C_buffer: // 存储矩阵C的结果
-|                   ├── size: 128KB
-|                   ├── 用途: 存储输出矩阵C的m0xn0块结果
-|                   └── data_align: 256B
-          
+# Ascend 910B1 NPU硬件规格说明
 
-## compute_system 
-├── vector_compute_unit:
-|    ├── 约束: 需要unified_buffer能放下
-|    ├── 约束: 只能做连续、带mask的vector计算
-|    └── 功能: 常规的vector计算，带mask vector计算等
-├── cube_compute_unit:
-|    ├── 约束1: 需要m0xk0xsizeof(A.dtype) < L0A_buffer_size(64KB)
-|    ├── 约束2: 需要n0xk0xsizeof(B.dtype) < L0B_buffer_size(64KB)
-|    ├── 约束3: 需要m0xn0xsizeof(C.dtype==fp32) < L0C_buffer_size(128KB)
-|    ├── 约束: 专门用于矩阵乘法等tensor计算
-|    └── 功能: 高效的矩阵乘法，一次完成一个m0xk0xn0的矩阵乘法
+## 1. 硬件架构
+
+**芯片配置:**
+- 24个AI Core，每个包含: 2个VEC(向量计算单元) + 1个CUBE(矩阵计算单元) + 1个SU(标量计算单元)
+- 整个芯片有48个VEC，24个CUBE，24个SU
+
+**数据通路:**
+- MTE1: L1 → L0A/L0B
+- MTE2: GM → UB/L1/L0A/L0B  
+- MTE3: UB → GM, L1 → L2 Cache
+- FixP: L0C → L1/GM (可随路类型转换)
+- L2 Cache自动缓存GM与AI Core间的数据交互
+
+## 2. 存储系统
+
+| 存储层级 | 容量 | 共享范围 | 对齐 | 说明 |
+|---------|------|---------|------|------|
+| GM | 64GB | 全设备 | - | 设备主存储 |
+| L2 Cache | 192MB | 24个AI Core | - | 自动缓存 |
+| L1 Buffer | 1MB | 单AI Core | 256Bytes | Cube通用缓存 |
+| L0A | 64KB | 单Cube | 256Bytes | 左矩阵A (m0×k0) |
+| L0B | 64KB | 单Cube | 256Bytes | 右矩阵B (k0×n0) |
+| L0C | 128KB | 单Cube | 256Bytes | 结果矩阵C (m0×n0)，支持累加 |
+| UB | 192KB | 单VEC | 256Bytes | 向量运算缓存 |
+
+## 3. 计算单元
+
+### 3.1 VEC (向量计算单元)
+
+**性能:** 1拍处理 2 × 256 Bytes向量计算 (每AI Core有2个VEC)
+
+**约束:**
+- 数据需放入UB (192KB)
+- 支持连续内存或带mask访问
+- 256 Bytes对齐
+- 内部按256 Bytes分块处理
+
+### 3.2 CUBE (矩阵计算单元)
+
+**性能:** 1拍完成 16×16×16 FP16矩阵乘 (8192 FLOPs/cycle)
+
+**工作流程:**
+1. L0A ← 左矩阵A (m0×k0)
+2. L0B ← 右矩阵B (k0×n0)  
+3. CUBE执行矩阵乘: C = A × B
+4. 结果写入L0C，支持累加
+
+**约束:**
+- `m0 × k0 × sizeof(A.dtype) ≤ 64KB` (L0A)
+- `k0 × n0 × sizeof(B.dtype) ≤ 64KB` (L0B)
+- `m0 × n0 × sizeof(C.dtype) ≤ 128KB` (L0C)
+- 256 Bytes对齐
+- 自动按16×16分块，尾块自动补0计算
+
+## 4. 优化策略
+
+**内存对齐:** 所有L0/L1/UB数据传输按照256 Bytes对齐，以发挥最大性能
+
+**数据复用:**
+- 调整搬运顺序，让频繁访问数据缓存在L2
+- L1/UB双缓冲技术: 一块计算，一块加载
+- MTE后台搬运与CUBE/VEC计算重叠
+
+**并行:** 24个AI Core按需并行分配任务，CUBE与VEC可同时执行不同任务
