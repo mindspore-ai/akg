@@ -13,6 +13,8 @@
 4. **Buffer维度**: 所有参与运算的buffer必须相同rank
 5. **科学计数法**: 不支持，使用Tensor传递或`0.0001`
 6. **标量操作数**: 必须在`T.Kernel`内、`T.Scope`外预先定义为变量
+7. **编译时常量**: 直接使用外部常量，不要在`@T.prim_func`内重新赋值
+8. **复合表达式**: 必须拆分为多个步骤，不能直接作为函数参数（如`T.min(a, b-c)`需拆分）
 
 
 ---
@@ -246,50 +248,53 @@ with T.Kernel(n_blocks, is_npu=True) as (cid, _):
         T.copy(y_ub, Y[offset], [size])
 ```
 
-### 错误12: 其他常见问题
-
-**未处理边界**
+### 错误12: 编译时常量重新赋值
 ```python
-# 错误：可能越界
-T.copy(A[offset], A_ub, [block_size])
+# ❌ 错误：重新赋值外部常量
+n_blocks_n = 128  # 外部定义
 
-# 正确：使用T.min
-tail_size = T.min(block_size, N - offset)
-T.copy(A[offset], A_ub, [tail_size])
+@T.prim_func
+def main(...):
+    with T.Kernel(total_blocks, is_npu=True) as (cid, _):
+        n_blocks_n_int = n_blocks_n  # ❌ 重新赋值
+        block_m_id = cid // n_blocks_n_int
+
+# ✅ 正确：直接使用
+@T.prim_func
+def main(...):
+    with T.Kernel(total_blocks, is_npu=True) as (cid, _):
+        block_m_id = cid // n_blocks_n  # ✅ 直接使用外部常量
 ```
-**错误信息**: 可能导致内存访问错误或结果错误
+**错误信息**: `error: custom op 'v_' is unknown (tried 'func.v_' as well)`
 
-**Tile大小不是2的幂**
+**根本原因**: 在`@T.prim_func`内重新赋值外部编译时常量会导致变量被编译为未定义符号`v_`
+
+**关键规则**: 
+- ✅ 直接使用：`cid // n_blocks_n`
+- ❌ 重新赋值：`temp = n_blocks_n; cid // temp`
+
+### 错误13: 复合表达式未拆分
 ```python
-# 不推荐
-block_size = 100
+# ❌ 错误：T.min参数中使用复合表达式
+for k_idx in T.serial(T.ceildiv(K, block_k)):
+    k_offset = k_idx * block_k
+    tail_k = T.min(block_k, K - k_offset)  # ❌ 复合表达式
 
-# 推荐
-block_size = 128  # 或 256, 512等
+# ✅ 正确：拆分为两步
+for k_idx in T.serial(T.ceildiv(K, block_k)):
+    k_offset = k_idx * block_k
+    k_remaining = K - k_offset  # ✅ 先计算
+    tail_k = T.min(block_k, k_remaining)  # ✅ 再使用
 ```
-**错误信息**: 可能导致性能下降或对齐错误
+**错误信息**: `error: expected SSA operand`
 
-**矩阵K维度不匹配**
-```python
-# 错误
-A: T.Tensor((M, K1), dtype)
-B: T.Tensor((K2, N), dtype)  # K1 != K2
+**根本原因**: TileLang无法将复合表达式直接降低到NPUIR，生成未解析的占位符
 
-# 正确
-A: T.Tensor((M, K), dtype)
-B: T.Tensor((K, N), dtype)  # K维度匹配
-```
-**错误信息**: 编译通过但运行时计算结果错误
+**关键规则**: 
+- ✅ 拆分：`temp = K - k_offset; T.min(block_k, temp)`
+- ❌ 直接使用：`T.min(block_k, K - k_offset)`
+- 适用于`T.min/max`等所有内置函数的复合表达式参数
 
-**未指定target="npuir"**
-```python
-# 错误
-compiled = tilelang.compile(func)
-
-# 正确
-compiled = tilelang.compile(func, target="npuir")
-```
-**错误信息**: 可能使用错误的编译目标或编译失败
 
 ---
 
@@ -357,11 +362,13 @@ with T.Scope("Vector"):
 | `rtFunctionRegister failed` | Tensor用列表或函数名不是main | 用元组、函数名改为main | 错误1/2 |
 | `unexpected decimal integer literal` | 整数形式浮点数 | 使用`5.5`而非`5.0` | 错误6 |
 | `custom op 'e' is unknown` | 科学计数法（如1e-5） | Tensor传递或`0.0001` | 错误7 |
+| `custom op 'v_' is unknown` | 编译时常量重新赋值 | 直接使用外部常量，不要重新赋值 | 错误12 |
 | `'float' object has no attribute 'buffer'` | 标量字面量直接用于运算 | 先定义变量再使用 | 错误8 |
 | `IndexError: indexing 1 on an array of size 1` | 2D与1D buffer混用 | 统一所有buffer为相同rank | 错误4 |
 | `'hivm.hir.load' op src and dst should have same dimensions` | `T.copy`维度不匹配 | 确保源和目标rank一致 | 错误9 |
 | `'NoneType' object has no attribute 'group'` | block_size在T.Kernel内定义 | 在T.Kernel外定义常量 | 错误10 |
 | `TVMError: x_ub should be a memref` | T.copy在T.Scope外调用 | 所有数据操作放在Scope内 | 错误11 |
+| `expected SSA operand` | 复合表达式未拆分（如`K - k_offset`） | 将复合表达式拆分为多个步骤 | 错误13 |
 
 ---
 
