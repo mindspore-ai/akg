@@ -380,6 +380,10 @@ def profiling_analyse(arch):
 
 def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                     output_indexes, desc, profiling_trails, expect, replace_dso):
+    ascend_path = os.getenv("ASCEND_HOME_PATH", "")
+    if ascend_path == "":
+        raise Exception("ASCEND_HOME_PATH is not sett, source <ascend-toolkit>/set_env.sh first")
+    os.environ['RT_LIB'] = os.path.join(ascend_path, 'lib64')
     akg_mlir_driver.run_ascend()
     # Run executable and profiling
     if replace_dso:

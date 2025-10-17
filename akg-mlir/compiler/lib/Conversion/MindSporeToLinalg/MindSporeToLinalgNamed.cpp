@@ -18,6 +18,7 @@
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "bishengir/Dialect/HFusion/IR/HFusion.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -131,44 +132,6 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *op, PatternRewr
 
   auto namedOp = createElemwiseOp(op, emptyTensor, attrs, rewriter);
   rewriter.replaceOp(op, namedOp->getResults());
-  return success();
-}
-
-static LogicalResult elementwiseToMathMatchAndRewriteHelper(Operation *op, PatternRewriter &rewriter) {
-  auto loc = op->getLoc();
-  Operation *mathOp = nullptr;
-  auto src = op->getOperands();
-  llvm::TypeSwitch<Operation *>(op)
-    .Case([&](mindspore::SqrtOp) { mathOp = rewriter.create<math::SqrtOp>(loc, src); })
-    .Case([&](mindspore::RsqrtOp) { mathOp = rewriter.create<math::RsqrtOp>(loc, src); })
-    .Case([&](mindspore::AbsOp) { mathOp = rewriter.create<math::AbsIOp>(loc, src); })
-    .Case([&](mindspore::PowOp) { mathOp = rewriter.create<math::PowFOp>(loc, src); })
-    .Case([&](mindspore::TanhOp) { mathOp = rewriter.create<math::TanhOp>(loc, src); })
-    .Case([&](mindspore::AtanOp) { mathOp = rewriter.create<math::AtanOp>(loc, src); })
-    .Case([&](mindspore::SinOp) { mathOp = rewriter.create<math::SinOp>(loc, src); })
-    .Case([&](mindspore::CosOp) { mathOp = rewriter.create<math::CosOp>(loc, src); })
-    .Default([](Operation *) {});
-
-  rewriter.replaceOp(op, mathOp->getResults());
-  return success();
-}
-
-static LogicalResult elementwiseToArithMatchAndRewriteHelper(Operation *op, PatternRewriter &rewriter) {
-  auto loc = op->getLoc();
-  Operation *arithOp = nullptr;
-  auto src = op->getOperands();
-  llvm::TypeSwitch<Operation *>(op)
-    .Case([&](mindspore::MinimumOp) { arithOp = rewriter.create<arith::MinimumFOp>(loc, src); })
-    .Case([&](mindspore::MaximumOp) { arithOp = rewriter.create<arith::MaximumFOp>(loc, src); })
-    .Case([&](mindspore::FloorDivOp) { arithOp = rewriter.create<arith::FloorDivSIOp>(loc, src); })
-    .Case([&](mindspore::EqualOp) { arithOp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, src[0], src[1]); })
-    .Case([&](mindspore::LessEqualOp) { arithOp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle, src[0], src[1]); })
-    .Case([&](mindspore::GreaterEqualOp) { arithOp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge, src[0], src[1]); })
-    .Case([&](mindspore::LessOp) { arithOp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, src[0], src[1]); })
-    .Case([&](mindspore::GreaterOp) { arithOp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, src[0], src[1]); })
-    .Default([](Operation *) {});
-
-  rewriter.replaceOp(op, arithOp->getResults());
   return success();
 }
 
@@ -735,6 +698,58 @@ broadcastMatchAndRewriteHelper(mindspore::BroadcastToOp brcOp,
   return success();
 }
 
+static LogicalResult roundMatchAndRewriteHelper(mindspore::RoundOp roundOp, 
+                                                PatternRewriter &rewriter) {
+  auto ctx = roundOp.getContext();
+  auto loc = roundOp.getLoc();
+  Value input = roundOp.getOperand();
+  Value output = roundOp.getResult();
+
+  SmallVector<Value> dynDims;
+  ShapedType shapedType = input.getType().cast<ShapedType>();
+  ArrayRef<int64_t> typeShapes = shapedType.getShape();
+  for (size_t i = 0; i < typeShapes.size(); i++) {
+    if (typeShapes[i] == ShapedType::kDynamic) {
+      auto dynDim = rewriter.create<tensor::DimOp>(loc, input, i);
+      dynDims.push_back(dynDim);
+    }
+  }
+  auto srcElemType = getElementTypeOrSelf(input);
+  auto dstElemType = getElementTypeOrSelf(output);
+  auto resultType = RankedTensorType::get(shapedType.getShape(), dstElemType);
+  Value emptyTensor = rewriter.create<tensor::EmptyOp>(
+    loc, resultType.getShape(), resultType.getElementType(), dynDims);
+  
+  rewriter.replaceOpWithNewOp<linalg::RoundOp>(roundOp, input, emptyTensor);
+  return success();
+}
+
+static LogicalResult selectMatchAndRewriteHelper(mindspore::SelectOp selectOp, 
+                                                 PatternRewriter &rewriter) {
+  auto loc = selectOp.getLoc();
+  Value condition = selectOp.getPred();
+  Value trueValue = selectOp.getOnTrue();
+  Value falseValue = selectOp.getOnFalse();
+  Value output = selectOp.getResult();
+
+  SmallVector<Value> dynDims;
+  auto resultTy = output.getType().cast<ShapedType>();
+  Value emptyTensor = 
+    rewriter.create<tensor::EmptyOp>(loc, resultTy.getShape(), resultTy.getElementType(), dynDims);
+
+  rewriter.replaceOpWithNewOp<linalg::SelectOp>(
+    selectOp, ValueRange{condition, trueValue, falseValue}, ValueRange{emptyTensor});
+  return success();
+}
+
+static LogicalResult isFiniteMatchAndRewriteHelper(Operation *op, PatternRewriter &rewriter) {
+  auto loc = op->getLoc();
+  auto resultTy = op->getResult(0).getType().cast<ShapedType>();
+  auto namedOp = rewriter.create<hfusion::IsFiniteOp>(loc, resultTy, op->getOperands()[0]);
+  rewriter.replaceOp(op, namedOp->getResults());
+  return success();
+}
+
 template <typename SrcOp>
 class MindSporeElemwiseConverter : public OpRewritePattern<SrcOp> {
  public:
@@ -742,26 +757,6 @@ class MindSporeElemwiseConverter : public OpRewritePattern<SrcOp> {
 
   LogicalResult matchAndRewrite(SrcOp op, PatternRewriter &rewriter) const final {
     return elementwiseMatchAndRewriteHelper(op, rewriter);
-  }
-};
-
-template <typename SrcOp>
-class MindSporeElemwiseToMathConverter : public OpRewritePattern<SrcOp> {
- public:
-  using OpRewritePattern<SrcOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(SrcOp op, PatternRewriter &rewriter) const final {
-    return elementwiseToMathMatchAndRewriteHelper(op, rewriter);
-  }
-};
-
-template <typename SrcOp>
-class MindSporeElemwiseToArithConverter : public OpRewritePattern<SrcOp> {
- public:
-  using OpRewritePattern<SrcOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(SrcOp op, PatternRewriter &rewriter) const final {
-    return elementwiseToArithMatchAndRewriteHelper(op, rewriter);
   }
 };
 
@@ -813,6 +808,36 @@ class MindSporeBroadcastConverter : public OpRewritePattern<mindspore::Broadcast
   }
 };
 
+class MindSporeRoundConverter : public OpRewritePattern<mindspore::RoundOp> {
+ public:
+  using OpRewritePattern<mindspore::RoundOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mindspore::RoundOp op, 
+                                PatternRewriter &rewriter) const final {
+    return roundMatchAndRewriteHelper(op, rewriter);
+  }
+};
+
+class MindSporeSelectConverter : public OpRewritePattern<mindspore::SelectOp> {
+ public:
+  using OpRewritePattern<mindspore::SelectOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mindspore::SelectOp op, 
+                                PatternRewriter &rewriter) const final {
+    return selectMatchAndRewriteHelper(op, rewriter);
+  }
+};
+
+class MindSporeIsFiniteConverter : public OpRewritePattern<mindspore::IsFiniteOp> {
+ public:
+  using OpRewritePattern<mindspore::IsFiniteOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mindspore::IsFiniteOp op, 
+                                PatternRewriter &rewriter) const final {
+    return isFiniteMatchAndRewriteHelper(op, rewriter);
+  }
+};
+
 class MindSporeInvConverter : public OpRewritePattern<mindspore::InvOp> {
  public:
   using OpRewritePattern<mindspore::InvOp>::OpRewritePattern;
@@ -841,25 +866,15 @@ void mlir::populateLowerMindSporeToLinalgNamedPattern(RewritePatternSet &pattern
     MindSporeElemwiseConverter<mindspore::MulOp>,
     MindSporeElemwiseConverter<mindspore::SubOp>,
     MindSporeElemwiseConverter<mindspore::DivOp>,
+    MindSporeElemwiseConverter<mindspore::PowOp>,
+    MindSporeElemwiseConverter<mindspore::MaximumOp>,
+    MindSporeElemwiseConverter<mindspore::MinimumOp>,
     MindSporeElemwiseConverter<mindspore::ExpOp>,
+    MindSporeElemwiseConverter<mindspore::AbsOp>,
     MindSporeElemwiseConverter<mindspore::LogOp>,
     MindSporeElemwiseConverter<mindspore::NegateOp>,
-    MindSporeElemwiseToMathConverter<mindspore::SqrtOp>,
-    MindSporeElemwiseToMathConverter<mindspore::RsqrtOp>,
-    MindSporeElemwiseToMathConverter<mindspore::AbsOp>,
-    MindSporeElemwiseToMathConverter<mindspore::PowOp>,
-    MindSporeElemwiseToMathConverter<mindspore::TanhOp>,
-    MindSporeElemwiseToMathConverter<mindspore::AtanOp>,
-    MindSporeElemwiseToMathConverter<mindspore::SinOp>,
-    MindSporeElemwiseToMathConverter<mindspore::CosOp>,
-    MindSporeElemwiseToArithConverter<mindspore::MinimumOp>,
-    MindSporeElemwiseToArithConverter<mindspore::MaximumOp>,
-    MindSporeElemwiseToArithConverter<mindspore::FloorDivOp>,
-    MindSporeElemwiseToArithConverter<mindspore::EqualOp>,
-    MindSporeElemwiseToArithConverter<mindspore::LessEqualOp>,
-    MindSporeElemwiseToArithConverter<mindspore::GreaterEqualOp>,
-    MindSporeElemwiseToArithConverter<mindspore::LessOp>,
-    MindSporeElemwiseToArithConverter<mindspore::GreaterOp>,
+    MindSporeElemwiseConverter<mindspore::SqrtOp>,
+    MindSporeElemwiseConverter<mindspore::RsqrtOp>,
     MindSporeReduceConverter<mindspore::ReduceMaxOp>,
     MindSporeReduceConverter<mindspore::ReduceMinOp>,
     MindSporeReduceConverter<mindspore::ReduceSumOp>,
@@ -867,6 +882,9 @@ void mlir::populateLowerMindSporeToLinalgNamedPattern(RewritePatternSet &pattern
     MindSporeInplaceAssignConverter,
     MindSporeReshapeConverter,
     MindSporeBroadcastConverter,
+    MindSporeRoundConverter,
+    MindSporeSelectConverter,
+    MindSporeIsFiniteConverter,
     MindSporeInvConverter,
     MindSporeConstConverter
   >(patterns.getContext());
@@ -884,6 +902,7 @@ struct ConvertMindSporeToLinalgNamedPass
     registry.insert<tensor::TensorDialect>();
     registry.insert<math::MathDialect>();
     registry.insert<hacc::HACCDialect>();
+    registry.insert<hfusion::HFusionDialect>();
     registry.insert<arith::ArithDialect>();
   }
 
@@ -891,15 +910,15 @@ struct ConvertMindSporeToLinalgNamedPass
     RewritePatternSet patterns(&getContext());
     ConversionTarget target(getContext());
 
-    target
-      .addLegalDialect<arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect, math::MathDialect>();
-    target.addIllegalDialect<mindspore::MindSporeDialect>();
+    target.addLegalDialect<arith::ArithDialect, linalg::LinalgDialect, 
+      tensor::TensorDialect, math::MathDialect, hfusion::HFusionDialect>();
 
     FunctionOpInterface func = getOperation();
     func->setAttr("hacc.function_kind",
       hacc::HACCFuncTypeAttr::get(func->getContext(), hacc::HACCFuncType::HOST));
 
     mlir::populateLowerMindSporeToLinalgNamedPattern(patterns);
+    mlir::populateLowerMindSporeToLinalgPattern(patterns);
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
       signalPassFailure();
     }

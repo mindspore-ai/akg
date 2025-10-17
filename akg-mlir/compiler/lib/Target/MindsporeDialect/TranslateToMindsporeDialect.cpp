@@ -437,6 +437,7 @@ void MindBuilder::initMindOpFactory() {
   this->mindOpFactory["Square"] = &MindBuilder::convertUnaryOp<mindspore::SquareOp>;
   this->mindOpFactory["Sqrt"] = &MindBuilder::convertUnaryOp<mindspore::SqrtOp>;
   this->mindOpFactory["IsInf"] = &MindBuilder::convertUnaryOp<mindspore::IsinfOp>;
+  this->mindOpFactory["IsFinite"] = &MindBuilder::convertUnaryOp<mindspore::IsFiniteOp>;
   this->mindOpFactory["IsNan"] = &MindBuilder::convertUnaryOp<mindspore::IsnanOp>;
   this->mindOpFactory["Reciprocal"] = &MindBuilder::convertUnaryOp<mindspore::InvOp>;
   this->mindOpFactory["LogicalNot"] = &MindBuilder::convertUnaryOp<mindspore::LogicalNotOp>;
