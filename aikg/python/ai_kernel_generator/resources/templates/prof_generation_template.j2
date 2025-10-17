@@ -251,8 +251,13 @@ def run_generation_implementations():
         return x
         {% endif %}
     
-    def run_benchmark(inputs):
-        """运行基准测试"""
+    def run_benchmark(inputs, case_idx=0):
+        """运行基准测试
+        
+        Args:
+            inputs: 输入数据
+            case_idx: 用例索引，用于区分不同shape的输入（默认为0）
+        """
         {% if "triton" in dsl %}
         {% if backend == "ascend" %}
         try:
@@ -275,6 +280,16 @@ def run_generation_implementations():
         
         # 获取收集的配置信息
         config_timings = get_collected_config_timings()
+        
+        # 保存autotune信息到当前文件夹
+        if config_timings:
+            autotune_filename = f"autotune_info_case_{case_idx}.json"
+            try:
+                with open(autotune_filename, 'w') as f:
+                    json.dump(config_timings, f, indent=2, ensure_ascii=False)
+                print(f"[{{ op_name }}] Autotune info saved to {autotune_filename}")
+            except Exception as e:
+                print(f"[{{ op_name }}] Warning: Failed to save autotune info: {e}")
         {% endif %}
         
         # 进行最终的性能测试
@@ -363,7 +378,7 @@ def run_generation_implementations():
         inputs = [process_input(x) for x in inputs]
         {% endif %}
         
-        execution_time, method = run_benchmark(inputs)
+        execution_time, method = run_benchmark(inputs, case_idx=case_idx)
         all_execution_times.append(execution_time)
         print(f"[{{ op_name }}] Case {case_idx + 1} execution time: {execution_time * 1000:.4f} us")
     
@@ -395,7 +410,7 @@ def run_generation_implementations():
     inputs = get_inputs()
     {% endif %}
     
-    execution_time, method = run_benchmark(inputs)
+    execution_time, method = run_benchmark(inputs, case_idx=0)
     
     # 保存时间结果到文件
     result_data = {
