@@ -252,12 +252,7 @@ def run_generation_implementations():
         {% endif %}
     
     def run_benchmark(inputs, case_idx=0):
-        """运行基准测试
-        
-        Args:
-            inputs: 输入数据
-            case_idx: 用例索引，用于区分不同shape的输入（默认为0）
-        """
+        """运行基准测试"""
         {% if "triton" in dsl %}
         {% if backend == "ascend" %}
         try:

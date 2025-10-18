@@ -443,9 +443,9 @@ class KernelVerifier:
             # 生成profile脚本并运行
             self.gen_profile_project(verify_dir, device_id, warmup_times, run_times)
 
-            # 检查是否为triton DSL，如果是则使用do_bench
+            # 检查是否为triton DSL，如果是则运行脚本获取性能数据
             if "triton" in self.dsl:
-                base_time, gen_time = self.run_triton_do_bench_profile(verify_dir)
+                base_time, gen_time = self.run_profile_scripts_and_collect_results(verify_dir)
             elif self.backend == "ascend":
                 _, _, base_prof_path = self.run_msprof(os.path.join(verify_dir, f"profile_{self.op_name}_base.py"))
                 _, _, gen_prof_path = self.run_msprof(os.path.join(
@@ -458,8 +458,8 @@ class KernelVerifier:
                 _, _, gen_prof_path = self.run_nsys(os.path.join(verify_dir, f"profile_{self.op_name}_generation.py"))
                 _, _, gen_time = self.analyze_nsys_data(gen_prof_path, warmup_times, run_times, "generation")
             elif self.backend == "cpu":
-                # 走的triton验证流程
-                base_time, gen_time = self.run_triton_do_bench_profile(verify_dir)
+                # CPU后端使用脚本方式收集性能数据
+                base_time, gen_time = self.run_profile_scripts_and_collect_results(verify_dir)
             else:
                 logger.warning(f"[{self.task_id}:{self.op_name}] 不支持的backend: {self.backend}")
                 return float('inf'), 0.0, 0.0
@@ -470,6 +470,13 @@ class KernelVerifier:
             logger.info(f"orig performance is {base_time:.2f} us")
             logger.info(f"aikg performance is {gen_time:.2f} us")
             logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，加速比（基准为100%）: {speedup_percent:.2f} %")
+            
+            # 读取并打印autotune结果
+            if "triton" in self.dsl:
+                autotune_summary = self.read_autotune_results_from_directory(verify_dir)
+                if autotune_summary:
+                    logger.info(f"[{self.op_name}: {self.task_id}] Autotune配置详情:\n{autotune_summary}")
+            
             return gen_time, base_time, speedup
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
@@ -481,11 +488,11 @@ class KernelVerifier:
             except Exception:
                 pass
 
-    def run_triton_do_bench_profile(self, verify_dir: str) -> Tuple[float, float]:
-        """使用triton do_bench运行性能分析
+    def run_profile_scripts_and_collect_results(self, verify_dir: str) -> Tuple[float, float]:
+        """运行性能测试脚本并收集结果
 
         Args:
-            verify_dir: 验证目录
+            verify_dir: 验证目录，包含性能测试脚本
 
         Returns:
             (base_time_us, gen_time_us): 基准时间和生成时间（微秒）
@@ -498,23 +505,23 @@ class KernelVerifier:
             os.chdir(verify_dir)
 
             try:
-                # 运行base profile脚本
+                # 步骤1：运行基准性能测试脚本
                 base_script = f"profile_{self.op_name}_base.py"
                 base_result = run_command(["python", base_script], cmd_msg="base_profile", timeout=300)
                 if not base_result[0]:
-                    logger.error(f"Base profile script execution failed: {base_result[1]}")
+                    logger.error(f"[{self.op_name}: {self.task_id}] 基准性能脚本执行失败: {base_result[1]}")
                     return float('inf'), float('inf')
 
-                # 运行generation profile脚本
+                # 步骤2：运行生成代码性能测试脚本
                 gen_script = f"profile_{self.op_name}_generation.py"
                 gen_result = run_command(["python", gen_script], cmd_msg="generation_profile", timeout=300)
                 if not gen_result[0]:
-                    logger.error(f"Generation profile script execution failed: {gen_result[1]}")
+                    logger.error(f"[{self.op_name}: {self.task_id}] 生成代码性能脚本执行失败: {gen_result[1]}")
                     return float('inf'), float('inf')
 
-                # 读取保存的时间结果
-                base_time_us = self.read_triton_profile_result(verify_dir, "base_profile_result.json")
-                gen_time_us = self.read_triton_profile_result(verify_dir, "generation_profile_result.json")
+                # 步骤3：从JSON文件读取性能数据
+                base_time_us = self.read_profile_result_from_json(verify_dir, "base_profile_result.json")
+                gen_time_us = self.read_profile_result_from_json(verify_dir, "generation_profile_result.json")
 
                 return base_time_us, gen_time_us
 
@@ -523,23 +530,97 @@ class KernelVerifier:
                 os.chdir(original_cwd)
 
         except Exception as e:
-            logger.error(f"Triton do_bench profile failed: {e}")
+            logger.error(f"[{self.op_name}: {self.task_id}] 性能脚本执行和结果收集失败: {e}")
             return float('inf'), float('inf')
 
-    def read_triton_profile_result(self, verify_dir: str, result_file: str) -> float:
-        """读取triton profile结果文件
+    def read_autotune_results_from_directory(self, verify_dir: str) -> str:
+        """从验证目录读取所有autotune结果并格式化输出
+        
+        读取指定目录下的所有 autotune_info_case_*.json 文件，
+        并以类似 TRITON_PRINT_AUTOTUNING=1 的格式输出。
+        
+        Args:
+            verify_dir: 验证目录路径
+            
+        Returns:
+            格式化的autotune结果字符串，格式如下：
+            
+            Case 0:
+            All config timings for kernel_name:
+              Config 1: BLOCK_M=128, BLOCK_N=256 -> 145.2300us (BEST)
+              Config 2: BLOCK_M=64, BLOCK_N=128 -> 178.5600us
+              ...
+        """
+        from pathlib import Path
+        
+        result_lines = []
+        
+        # 查找所有autotune文件
+        verify_path = Path(verify_dir)
+        autotune_files = sorted(verify_path.glob("autotune_info_case_*.json"))
+        
+        if not autotune_files:
+            return ""
+        
+        # 逐个读取并格式化
+        for autotune_file in autotune_files:
+            # 提取case索引
+            case_idx = autotune_file.stem.split('_')[-1]
+            
+            try:
+                with open(autotune_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                result_lines.append(f"Case {case_idx}:")
+                
+                # 遍历每个kernel
+                for kernel_name, configs in data.items():
+                    result_lines.append(f"All config timings for {kernel_name}:")
+                    
+                    # 按rank排序输出
+                    sorted_configs = sorted(configs, key=lambda x: x['rank'])
+                    
+                    for config_info in sorted_configs:
+                        config_str = config_info['config']
+                        timing_us = config_info['timing_us']
+                        is_best = config_info['is_best']
+                        rank = config_info['rank']
+                        
+                        status = " (BEST)" if is_best else ""
+                        result_lines.append(f"  Config {rank}: {config_str} -> {timing_us:.4f}us{status}")
+                
+                result_lines.append("")  # 空行分隔不同case
+                
+            except Exception as e:
+                logger.warning(f"[{self.op_name}: {self.task_id}] 读取autotune文件失败 {autotune_file.name}: {e}")
+        
+        return "\n".join(result_lines)
+
+    def read_profile_result_from_json(self, verify_dir: str, result_file: str) -> float:
+        """从JSON文件读取性能测试结果
+        
+        该方法读取性能测试脚本生成的JSON结果文件，提取执行时间。
+        
+        JSON文件格式示例：
+        {
+            "execution_time_us": 145.23,
+            "execution_time_ms": 0.14523,
+            "method": "triton_do_bench",
+            "warmup_times": 5,
+            "run_times": 50
+        }
 
         Args:
             verify_dir: 验证目录
-            result_file: 结果文件名
+            result_file: 结果文件名（如 "base_profile_result.json"）
 
         Returns:
-            执行时间（微秒）
+            execution_time_us: 执行时间（微秒），失败时返回 float('inf')
         """
         try:
             result_path = os.path.join(verify_dir, result_file)
             if not os.path.exists(result_path):
-                logger.error(f"Profile result file not found: {result_path}")
+                logger.error(f"[{self.op_name}: {self.task_id}] 性能结果文件不存在: {result_path}")
                 return float('inf')
 
             with open(result_path, 'r') as f:
@@ -549,11 +630,11 @@ class KernelVerifier:
             execution_time_us = result_data.get("execution_time_us", float('inf'))
             method = result_data.get("method", "unknown")
 
-            logger.info(f"Read profile result from {result_file}: {execution_time_us:.4f} us (method: {method})")
+            logger.info(f"[{self.op_name}: {self.task_id}] 从 {result_file} 读取性能数据: {execution_time_us:.4f} us (method: {method})")
             return execution_time_us
 
         except Exception as e:
-            logger.error(f"Failed to read profile result from {result_file}: {e}")
+            logger.error(f"[{self.op_name}: {self.task_id}] 读取性能结果文件失败 {result_file}: {e}")
             return float('inf')
 
     def run(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = 0):
