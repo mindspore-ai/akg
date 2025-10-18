@@ -21,6 +21,10 @@ suggestion5 = """
 当硬件是NPU时，每次的数据搬运都是以256Bytes为单位的，所以在数据读取和存储时，考虑将数据对齐到256Bytes的倍数，或许可以提升性能。
 """
 
+suggestion6 = """
+可以通过添加autotune来优化性能，所以可以在生成时列出多组参数来进行生成，并添加@llm_hint("autotune", autotune_configs)来提示LLM进行优化，列出autotune_configs的具体配置。
+"""
+
 triton_meta_prompts: list[str] = [
     suggestion1,
     suggestion2,
