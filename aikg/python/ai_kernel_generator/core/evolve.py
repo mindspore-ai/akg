@@ -325,8 +325,12 @@ async def evolve(
                         total_successful_tasks += 1
                         island_success_count += 1
 
-                        # 获取完整的profile三元组
-                        profile_res = task_info.get("profile_res", (float('inf'), 0.0, 0.0))
+                        # 获取性能分析结果字典
+                        profile_res = task_info.get("profile_res", {
+                            'gen_time': float('inf'),
+                            'base_time': 0.0,
+                            'speedup': 0.0
+                        })
 
                         # 收集成功的实现信息
                         impl_info = {
@@ -427,8 +431,12 @@ async def evolve(
                     total_successful_tasks += 1
                     round_success_count += 1
 
-                    # 获取完整的profile三元组
-                    profile_res = task_info.get("profile_res", (float('inf'), 0.0, 0.0))
+                    # 获取性能分析结果字典
+                    profile_res = task_info.get("profile_res", {
+                        'gen_time': float('inf'),
+                        'base_time': 0.0,
+                        'speedup': 0.0
+                    })
 
                     # 收集成功的实现信息
                     impl_info = {

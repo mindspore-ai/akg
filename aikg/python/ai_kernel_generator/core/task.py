@@ -246,7 +246,7 @@ class Task:
                                 self.verifier.run,
                                 self.conductor.task_info, current_step, device_id
                             )
-                            profile_res = ()
+                            profile_res = {}
                             if verify_res and self.task_type == "profile" and self.backend in ["ascend", "cuda"]:
                                 profile_settings = self.config.get("profile_settings", {})
                                 profile_res = await loop.run_in_executor(

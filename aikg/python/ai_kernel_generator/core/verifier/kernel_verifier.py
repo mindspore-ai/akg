@@ -426,8 +426,16 @@ class KernelVerifier:
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 保存加速比结果失败: {str(e)}")
 
-    def run_profile(self, current_step: int = 0, device_id: str = "0", profile_settings: dict = {}):
-        """运行profile分析"""
+    def run_profile(self, current_step: int = 0, device_id: str = "0", profile_settings: dict = {}) -> dict:
+        """运行profile分析
+        
+        Returns:
+            dict: 性能分析结果，包含以下字段：
+                - gen_time: 生成代码执行时间（微秒）
+                - base_time: 基准代码执行时间（微秒）
+                - speedup: 加速比
+                - autotune_summary: autotune配置详情（仅triton DSL）
+        """
         original_cwd = os.getcwd()
         try:
             run_times = profile_settings.get("run_times", 50)
@@ -462,7 +470,11 @@ class KernelVerifier:
                 base_time, gen_time = self.run_profile_scripts_and_collect_results(verify_dir)
             else:
                 logger.warning(f"[{self.task_id}:{self.op_name}] 不支持的backend: {self.backend}")
-                return float('inf'), 0.0, 0.0
+                return {
+                    'gen_time': float('inf'),
+                    'base_time': 0.0,
+                    'speedup': 0.0
+                }
 
             speedup = base_time / gen_time if gen_time > 0 else 0.0
             speedup_percent = speedup * 100.0
@@ -471,16 +483,28 @@ class KernelVerifier:
             logger.info(f"aikg performance is {gen_time:.2f} us")
             logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，加速比（基准为100%）: {speedup_percent:.2f} %")
             
-            # 读取并打印autotune结果
-            if "triton" in self.dsl:
+            # 构建返回结果
+            result = {
+                'gen_time': gen_time,
+                'base_time': base_time,
+                'speedup': speedup
+            }
+            
+            # 只在 triton + ascend 情况下添加 autotune_summary
+            if "triton" in self.dsl and self.backend == "ascend":
                 autotune_summary = self.read_autotune_results_from_directory(verify_dir)
                 if autotune_summary:
+                    result['autotune_summary'] = autotune_summary
                     logger.info(f"[{self.op_name}: {self.task_id}] Autotune配置详情:\n{autotune_summary}")
             
-            return gen_time, base_time, speedup
+            return result
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
-            return float('inf'), 0.0, 0.0
+            return {
+                'gen_time': float('inf'),
+                'base_time': 0.0,
+                'speedup': 0.0
+            }
         finally:
             # 恢复原始工作目录
             try:
