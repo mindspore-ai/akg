@@ -72,7 +72,7 @@ if [ ! -n "$1" ]; then
 fi
 
 # Parse arguments
-THREAD_NUM=32
+THREAD_NUM=$(nproc)
 SIMD_SET=off
 CMAKE_ARGS=""
 COMPILE_AKG_MLIR="off"
