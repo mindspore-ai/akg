@@ -187,7 +187,7 @@ class Coder(AgentBase):
             # 查找所有Python文件
             for file_path in local_dir.glob("*.py"):
                 # 检查文件名是否包含op_name（不区分大小写）
-                if self.op_name.lower() in file_path.stem.lower():
+                if file_path.stem.lower() in self.op_name.lower():
                     try:
                         with open(file_path, "r", encoding="utf-8") as f:
                             content = f.read().strip()
