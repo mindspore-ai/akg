@@ -184,12 +184,12 @@ def _transform_data_to_ctypes_ascend(data,
         if isinstance(d, int):
             data_ctypes.append(ctypes.c_int(d))
         elif isinstance(d, np.ndarray):
-            ascend_tensor_obj = akgAscendLaunch.AscendTensorObjStruct()
+            ascend_tensor_obj = akgAscendLaunch.AscendTensorObjStructPyTorch()
             data_addr = d.ctypes.data_as(ctypes.c_void_p)
             shape_addr = data_shape.ctypes.data_as(ctypes.c_void_p)
             is_output = data_idx in output_idx_set
             is_dynamic = False #now we consider static shape first;
-            ascend_tensor_obj.buffer_info = d
+            ascend_tensor_obj.tensor_info = d
             ascend_tensor_obj.shape_info = data_shape
             ascend_tensor_obj.nbytes = data_bytes
             ascend_tensor_obj.is_output = is_output

@@ -72,17 +72,23 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   std::map<long unsigned int, py::buffer_info> bf16_buf_map;
 
   for (long unsigned int i = 0; i < args.size(); i++) {
-    auto tensor_obj_ptr = args[i].cast<AscendTensorObjStructPtr>();
-    py::buffer_info buffer_info = tensor_obj_ptr->buffer_info.request();
+    auto tensor_obj_ptr = args[i].cast<AscendTensorObjStructPyTorchPtr>();
+    auto tensor = tensor_obj_ptr->tensor_info;
     auto is_bf16 = (bool)(tensor_obj_ptr->is_bf16);
     if (is_bf16) {
+      py::buffer_info buffer_info = py::cast<py::buffer>(tensor).request();
       buffer_info = ConvertToBF16(buffer_info);
       bf16_buf_map[i] = std::move(buffer_info);
     }
-    auto data_addr = buffer_info.ptr;
+    void* data_addr = tensor_obj_ptr->data_ptr();
     auto bytes = (unsigned long long)(tensor_obj_ptr->nbytes);
     auto is_output = (bool)(tensor_obj_ptr->is_output);
-    input_tensors.push_back(std::make_shared<mlir::runtime::TensorDevice>(data_addr, bytes, is_output));
+    auto is_host = (bool)(tensor_obj_ptr->is_host());
+    if(is_host){
+      input_tensors.push_back(std::make_shared<mlir::runtime::TensorDevice>(data_addr, nullptr, bytes, is_output));
+    }else{
+      input_tensors.push_back(std::make_shared<mlir::runtime::TensorDevice>(nullptr, data_addr, bytes, is_output));
+    }
     // TODO: dynamic shape judge;
 
     if (is_dynamic) {
@@ -152,7 +158,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
       runtimeargs.push_back(reinterpret_cast<void*>(tiling_struct_size));
       runtimeargs.push_back(reinterpret_cast<void*>(1));
       tiling_function((void*)(runtimeargs.data()));
-      input_tensors.push_back(std::make_shared<mlir::runtime::TensorDevice>(arg_tiling_host, tiling_struct_size * sizeof(int64_t), false));
+      input_tensors.push_back(std::make_shared<mlir::runtime::TensorDevice>(arg_tiling_host, nullptr, tiling_struct_size * sizeof(int64_t), false));
     }
   }
 
@@ -160,8 +166,8 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   kernel_runtime.RunOpImpl(path, kernel_name, is_dynamic, input_tensors, input_shapes, tiling_key, tiling_struct_size);
 
   for(auto iter = bf16_buf_map.begin(); iter != bf16_buf_map.end(); iter++) {
-    auto tensor_obj_ptr = args[iter->first].cast<AscendTensorObjStructPtr>();
-    py::buffer_info res_buf = tensor_obj_ptr->buffer_info.request();
+    auto tensor_obj_ptr = args[iter->first].cast<AscendTensorObjStructPyTorchPtr>();
+    py::buffer_info res_buf = py::cast<py::buffer>(tensor_obj_ptr->tensor_info).request();
     ConvertToFP32(bf16_buf_map[iter->first], res_buf);
   }
   return;
@@ -179,6 +185,16 @@ PYBIND11_MODULE(akgAscendLaunch, m) {
     .def_readwrite("is_bf16", &AscendTensorObjStruct::is_bf16)
     .def("set_value", &AscendTensorObjStruct::set_value);
 
+  py::class_<AscendTensorObjStructPyTorch, std::shared_ptr<AscendTensorObjStructPyTorch>>(m, "AscendTensorObjStructPyTorch")
+    .def(py::init<>())
+    .def_readwrite("tensor_info", &AscendTensorObjStructPyTorch::tensor_info)
+    .def_readwrite("shape_info", &AscendTensorObjStructPyTorch::shape_info)
+    .def_readwrite("nbytes", &AscendTensorObjStructPyTorch::nbytes)
+    .def_readwrite("is_output", &AscendTensorObjStructPyTorch::is_output)
+    .def_readwrite("is_dynamic", &AscendTensorObjStructPyTorch::is_dynamic)
+    .def_readwrite("is_bf16", &AscendTensorObjStructPyTorch::is_bf16)
+    .def("set_value", &AscendTensorObjStructPyTorch::set_value)
+    .def("data_ptr", &AscendTensorObjStructPyTorch::data_ptr);
   // ascend_run call
   m.def("akg_ascend_run", &akg_ascend_run);
 }

@@ -23,6 +23,11 @@ class TensorDevice {
  public:
   TensorDevice(void *host_address, size_t nbytes, bool is_output)
       : host_address_(host_address), nbytes_(nbytes), is_output_(is_output) {}
+  TensorDevice(void *host_address, void *device_address, size_t nbytes, bool is_output)
+      : host_address_(host_address), device_address_(device_address), nbytes_(nbytes), is_output_(is_output) {
+        if(device_address_!=nullptr)
+          is_host_ = false;
+      }
   ~TensorDevice() {
     host_address_ = nullptr;
     device_address_ = nullptr;
@@ -32,12 +37,14 @@ class TensorDevice {
   void *GetDeviceAddress() { return device_address_; }
   void SetDeviceAddress(void *device_address) { device_address_ = device_address; }
   bool IsOutput() { return is_output_; }
+  bool IsHostTensor() { return is_host_; }
 
  private:
   void *host_address_{nullptr};
   size_t nbytes_{0};
   bool is_output_{false};
   void *device_address_{nullptr};
+  bool is_host_{true};
 };
 using TensorDevicePtr = std::shared_ptr<TensorDevice>;
 }  // namespace runtime
