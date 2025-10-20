@@ -43,9 +43,7 @@ struct MemrefCopyToLoops : public impl::MemrefCopyToLoopsBase<MemrefCopyToLoops>
     MemrefCopyToLoops() = default;
 
     void runOnOperation() override{
-        llvm::outs() << "createMemrefCopyToLoopsPass\n";
         func::FuncOp funcOp = getOperation();
-        // auto isReduceOp = CommonUtils::getOperatorType(funcOp) == OperatorTemplate::Reduce;
 
         SmallVector<memref::CopyOp> needConvert;
         (void)funcOp->walk([&](memref::CopyOp copyOp) {
@@ -53,47 +51,30 @@ struct MemrefCopyToLoops : public impl::MemrefCopyToLoopsBase<MemrefCopyToLoops>
           if (!srcOp){
             return;
           }
-          llvm::outs() << "srcOp\n";
-          srcOp->dump();
+
           if (auto tomem = dyn_cast<bufferization::ToMemrefOp>(srcOp)){
-            llvm::outs() << "YES\n";
             auto mem = tomem.getMemref();
-            llvm::outs() << "mem\n";
-            mem.dump();
-            llvm::outs() << "getTensor\n";
-            tomem.getTensor().dump();
-            llvm::outs() << "getTensor memref\n";
             auto totensor = tomem.getTensor().getDefiningOp();
-            if (totensor){
-                totensor->dump();
+            if (!totensor){
+                return;
             }
             if (auto tt = dyn_cast<bufferization::ToTensorOp>(totensor)) {
-              llvm::outs() << "IS TENSOR\n";
-              tt.dump();
               auto tensormem = tt.getMemref().getDefiningOp();
-              llvm::outs() << "tensormem\n";
-              tensormem->dump();
+              if (!tensormem){
+                return;
+              }
               if (isa<memref::ExpandShapeOp, memref::CollapseShapeOp>(tensormem)) {
                 needConvert.emplace_back(copyOp);
               }
             }
           }
-          // if (!isa<memref::ExpandShapeOp, memref::CollapseShapeOp>(srcOp) && !copyOp.getTarget().getDefiningOp()) {
-          //     return;
-          // } 
-          // if (!copyOp.getSource().getDefiningOp() && !copyOp.getTarget().getDefiningOp() && isReduceOp) {
-          //   llvm::outs() << "Copy output, don't change\n";
-          //   return;
-          // }
 
         });
         OpBuilder builder(funcOp);
 
         for (auto copyOp : needConvert) {
-          copyOp.dump();
           builder.setInsertionPoint(copyOp);
           auto newCopyOp = makeMemRefCopyOp(builder, copyOp->getLoc(), copyOp.getSource(), copyOp.getTarget());
-          newCopyOp.dump();
           copyOp.getOperation()->replaceAllUsesWith(newCopyOp.getOperation());
           copyOp.erase();
         }

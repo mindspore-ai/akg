@@ -192,15 +192,29 @@ bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned d
   Operation *srcOp = getNode(srcId)->op;
   Operation *dstOp = getNode(dstId)->op;
   unsigned numCommonLoops = affine::getNumCommonSurroundingLoops(*srcOp, *dstOp);
-  affine::AKGMemRefAccess srcAccess(srcOp);
-  affine::AKGMemRefAccess dstAccess(dstOp);
-  for (unsigned d = 1; d <= numCommonLoops + 1; ++d) {
-    affine::FlatAffineValueConstraints dependenceConstraints;
-    // todo: Cache dependence analysis results, check cache here.
-    affine::DependenceResult result =
-      mlir::affine::checkMemrefAccessDependenceAKG(srcAccess, dstAccess, d, &dependenceConstraints, nullptr);
-    if (result.value == affine::DependenceResult::HasDependence) {
-      return true;
+
+  if (useAKGAnalysis) {
+    affine::AKGMemRefAccess srcAccess(srcOp);
+    affine::AKGMemRefAccess dstAccess(dstOp);
+    for (unsigned d = 1; d <= numCommonLoops + 1; ++d) {
+      affine::FlatAffineValueConstraints dependenceConstraints;
+      // todo: Cache dependence analysis results, check cache here.
+      affine::DependenceResult result =
+        affine::checkMemrefAccessDependenceAKG(srcAccess, dstAccess, d, &dependenceConstraints, nullptr);
+      if (result.value == affine::DependenceResult::HasDependence) {
+        return true;
+        }
+      }
+  } else {
+    affine::MemRefAccess srcAccess(srcOp);
+    affine::MemRefAccess dstAccess(dstOp);
+    for (unsigned d = 1; d <= numCommonLoops + 1; ++d) {
+      affine::FlatAffineValueConstraints dependenceConstraints;
+      affine::DependenceResult result =
+        affine::checkMemrefAccessDependence(srcAccess, dstAccess, d, &dependenceConstraints, nullptr);
+      if (result.value == affine::DependenceResult::HasDependence) {
+        return true;
+      }
     }
   }
   return false;

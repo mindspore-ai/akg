@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Analysis/AKGLoopFusionAnalyzer.h"
+#include "akg/Dialect/Affine/Analysis/AKGLoopFusionBuilder.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
+#include "akg/Utils/AnalysisCommon.hpp"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
@@ -141,7 +142,7 @@ bool MemRefDependenceGraphForFusion::init() {
   DenseMap<Value, SetVector<unsigned>> memrefAccesses;
   createInitNode(memrefAccesses);
   // Create Node Edges
-  MemRefDependenceGraph::createEdges(memrefAccesses);
+  createEdges(memrefAccesses);
   return true;
 }
 
@@ -220,7 +221,8 @@ void MemRefDependenceGraphForFusion::print(raw_ostream &os) const {
   MemRefDependenceGraph::print(os);
   for (auto it : groups) {
     auto g = it.second;
-    os << "Group " << g->groupId << " (Type " << g->groupTemplate << ") IsGlobalOut (" << g->isGlobalOut << ") root is "
+    std::string groupTemplateString = g->getGroupTemplateString();
+    os << "Group " << g->groupId << " (GroupTemplate " << groupTemplateString << ") IsGlobalOut (" << g->isGlobalOut << ") root is "
        << g->rootId << " has " << g->nodesId.size() << " nodes inside: [";
     for (auto nid : g->nodesId) {
       os << nid << ", ";
@@ -487,5 +489,47 @@ void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::Affine
   // srcNode = nullptr;
   nodeAlias[srcId] = dstId;
 }
+
+std::string Group::getGroupTemplateString() const {
+  auto it = operatorTemplateMap.find(static_cast<int>(groupTemplate));
+  if (it != operatorTemplateMap.end()) {
+    return it->second;
+  } else {
+    return std::to_string(static_cast<int>(groupTemplate));
+  }
+}
+
+void Group::print(raw_ostream &os) const {
+  std::string indent = "  ";
+  os << "[Group " << groupId << "]\n";
+  std::string groupTemplateString = getGroupTemplateString();
+  os << indent << ">> GroupTemplate: " << groupTemplateString << "\n";
+  os << indent << ">> FusedGroups: [";
+  for (auto gid : fusedGroupId) {
+    os << gid << ", ";
+  }
+  os << "]\n";
+  os << indent << ">> Nodes: [";
+  for (auto nid : nodesId) {
+    os << nid << ", ";
+  }
+  os << "]\n";
+  os << indent << ">> LoopTransforms: [\n";
+  for (auto it : nodeTransformRecords) {
+    os << indent << indent << ">> Node " << it.first << ": [";
+    for (LoopTransform lt : it.second) {
+      int ltI = static_cast<int>(lt);
+      auto it2 = loopTransformToStr.find(ltI);
+      if (it2 != loopTransformToStr.end()) {
+        os << it2->second << " -> ";
+      } else {
+        os << ltI << " -> ";
+      }
+    }
+    os << "]\n";
+  }
+  os << indent << indent << "]\n";
+}
+
 }  // namespace akg
 }  // namespace mlir

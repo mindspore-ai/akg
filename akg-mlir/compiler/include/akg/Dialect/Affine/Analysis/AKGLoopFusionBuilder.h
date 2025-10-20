@@ -57,6 +57,7 @@ public:
   void setIsGlobalOut(bool isOut) { isGlobalOut = isOut; }
   void dump() const { print(llvm::errs()); }
   void print(llvm::raw_ostream &os) const;
+  std::string getGroupTemplateString() const;
 
 private:
   std::unordered_map<int, std::string> loopTransformToStr{
@@ -84,13 +85,14 @@ struct LoopNestStateCollector {
 // Inherits from MemRefDependenceGraph and adds fusion-specific functionality
 struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
 public:
-  explicit MemRefDependenceGraphForFusion(Block *block) : MemRefDependenceGraph(block) {}
+  explicit MemRefDependenceGraphForFusion(Block *block) : MemRefDependenceGraph(block, false) {}
 
   GroupPtr getGroup(unsigned groupId);
   GroupPtr getGroupByNode(unsigned nodeId);
   std::unordered_set<GroupPtr> getGroupsByNode(llvm::DenseSet<unsigned> nodeIds);
   bool init();
-  void print(llvm::raw_ostream &os) const;
+  void print(llvm::raw_ostream &os) const override;
+  void dump() const override { print(llvm::errs()); }
   void createInitNode(llvm::DenseMap<Value, llvm::SetVector<unsigned>> &memrefAccesses);
   OperatorTemplate getGroupType(const std::vector<unsigned> &nodes);
   bool elementwiseMatch(Operation *op);
