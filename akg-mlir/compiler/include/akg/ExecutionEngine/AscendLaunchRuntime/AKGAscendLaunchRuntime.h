@@ -54,7 +54,7 @@ class AscendKernelRuntime {
            int64_t tiling_key, int64_t tiling_struct_size);
   bool SyncStream();
   bool MemcpyAsync(void *dst, const void *src, uint64_t size, int32_t kind);
-  void RunOpAssignMemory(const std::vector<TensorDevicePtr> &tensors);
+  void InitDeviceMemory(const std::vector<TensorDevicePtr> &tensors);
   bool SyncDeviceToHost(size_t size, void *device_ptr, void *host_ptr);
   bool SyncHostToDevice(size_t size, const void *host_ptr, void *device_ptr);
   void RunOpImpl(const std::string &path, const std::string &kernel_name, const bool is_dynamic,

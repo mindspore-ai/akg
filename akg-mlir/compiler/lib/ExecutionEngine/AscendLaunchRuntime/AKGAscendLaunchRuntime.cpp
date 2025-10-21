@@ -304,11 +304,13 @@ bool AscendKernelRuntime::SyncStream() {
   return true;
 }
 
-void AscendKernelRuntime::RunOpAssignMemory(const std::vector<TensorDevicePtr> &tensors) {
+void AscendKernelRuntime::InitDeviceMemory(const std::vector<TensorDevicePtr> &tensors) {
   for (auto tensor : tensors) {
-    auto mem_size = tensor->GetDataSize();
-    auto device_addr = mem_manager_->MallocMemFromMemPool(mem_size);
-    tensor->SetDeviceAddress(device_addr);
+    if(tensor->IsHostTensor()){
+      auto mem_size = tensor->GetDataSize();
+      auto device_addr = mem_manager_->MallocMemFromMemPool(mem_size);
+      tensor->SetDeviceAddress(device_addr);
+    }
   }
 }
 
@@ -321,10 +323,11 @@ void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &
     LOG(FATAL) << "Kernel runtime init error.";
   }
   // malloc mem
-  RunOpAssignMemory(input_tensors);
+  InitDeviceMemory(input_tensors);
   // load input data to device
   for (const auto &tensor : input_tensors) {
-    SyncHostToDevice(tensor->GetDataSize(), tensor->GetHostAddress(), tensor->GetDeviceAddress());
+    if(tensor->IsHostTensor())
+      SyncHostToDevice(tensor->GetDataSize(), tensor->GetHostAddress(), tensor->GetDeviceAddress());
   }
   // run op
   if (!Run(path, kernel_name, is_dynamic, input_tensors, input_shape_args, tiling_key, tiling_struct_size)) {
@@ -332,7 +335,7 @@ void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &
   }
   // get output
   for (const auto &tensor : input_tensors) {
-    if (tensor->IsOutput()) {
+    if (tensor->IsOutput() && tensor->IsHostTensor()) {
       SyncDeviceToHost(tensor->GetDataSize(), tensor->GetDeviceAddress(), tensor->GetHostAddress());
     }
   }
