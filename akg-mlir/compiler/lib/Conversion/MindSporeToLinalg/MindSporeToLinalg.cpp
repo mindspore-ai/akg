@@ -1274,7 +1274,6 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
 };
 
 void mlir::populateLowerMindSporeToLinalgPattern(RewritePatternSet &patterns) {
-  // clang-format off
   (void)patterns.add<
     MindSporePointwiseConverter<mindspore::SinOp>,
     MindSporePointwiseConverter<mindspore::CosOp>,
@@ -1313,7 +1312,17 @@ void mlir::populateLowerMindSporeToLinalgPattern(RewritePatternSet &patterns) {
     MindsporeMatMulOpConverter<mindspore::MatMulOp>,
     MindsporeMatMulOpConverter<mindspore::BatchMatMulOp>
   >(patterns.getContext());
-  // clang-format on
+  return;
+}
+
+void mlir::populateLowerMindSporeCompareToLinalgPattern(RewritePatternSet &patterns) {
+  (void)patterns.add<
+    MindSporePointwiseConverter<mindspore::LessEqualOp>,
+    MindSporePointwiseConverter<mindspore::LessOp>,
+    MindSporePointwiseConverter<mindspore::GreaterEqualOp>,
+    MindSporePointwiseConverter<mindspore::GreaterOp>,
+    MindSporePointwiseConverter<mindspore::EqualOp>
+  >(patterns.getContext());
   return;
 }
 

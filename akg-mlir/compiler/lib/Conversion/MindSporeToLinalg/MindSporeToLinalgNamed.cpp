@@ -43,7 +43,7 @@ static std::set<std::string> linalgUnarySet = {
   "mindspore.neg"};
 static std::set<std::string> linalgBinarySet = {
   "mindspore.add", "mindspore.mul", "mindspore.sub", 
-  "mindspore.div", "mindspore.maximum", "mindspore.minimum"};
+  "mindspore.div", "mindspore.maximum", "mindspore.minimum", "mindspore.pow"};
 
 bool isIntegerType(Operation *op) {
   Type type = op->getResultTypes()[0];
@@ -74,6 +74,7 @@ static linalg::BinaryFn getLinalgBinaryKind(Operation *op) {
     .Case([&](mindspore::DivOp) { kind = linalg::BinaryFn::div; })
     .Case([&](mindspore::MaximumOp) { kind = linalg::BinaryFn::max_signed; })
     .Case([&](mindspore::MinimumOp) { kind = linalg::BinaryFn::min_signed; })
+    .Case([&](mindspore::PowOp) { kind = linalg::BinaryFn::powf; })
     .Default([](Operation *) {});
   return kind;
 }
@@ -918,7 +919,7 @@ struct ConvertMindSporeToLinalgNamedPass
       hacc::HACCFuncTypeAttr::get(func->getContext(), hacc::HACCFuncType::HOST));
 
     mlir::populateLowerMindSporeToLinalgNamedPattern(patterns);
-    mlir::populateLowerMindSporeToLinalgPattern(patterns);
+    mlir::populateLowerMindSporeCompareToLinalgPattern(patterns);
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
       signalPassFailure();
     }
