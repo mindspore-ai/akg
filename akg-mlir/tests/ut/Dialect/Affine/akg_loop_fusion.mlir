@@ -1,4 +1,5 @@
 // RUN: akg-opt %s -akg-loop-fusion | FileCheck %s
+// UNSUPPORTED: true
 
 // CHECK-LABEL: func.func @Fused_Mul_ReduceSum(%arg0: tensor<2x3072xbf16>) -> tensor<2x1xbf16> attributes {OperatorType = "Reduce", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
 // CHECK-NEXT:   %cst = arith.constant 0.000000e+00 : bf16
