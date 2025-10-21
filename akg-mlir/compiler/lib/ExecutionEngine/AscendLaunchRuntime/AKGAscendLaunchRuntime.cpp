@@ -164,7 +164,7 @@ void *AscendKernelRuntime::GetKernelFunc(const std::string &path, const std::str
   // CHECK(f != nullptr) << "Function get_kernel_meta_path is not registered";
   std::string file_str;
   auto dir_path = path;
-  (void)file_str.append(dir_path).append("lib" + kernel_name).append(kBinFileSuffix);
+  (void)file_str.append(dir_path).append("/lib" + kernel_name).append(kBinFileSuffix);
   char *file_c_str = (char *)file_str.c_str();
 
   void *handle = dlopen(file_c_str, RTLD_LAZY | RTLD_LOCAL);

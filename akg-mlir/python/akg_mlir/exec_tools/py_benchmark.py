@@ -218,8 +218,7 @@ def create_executable(kernel_name,
                       output_indexes,
                       is_dyn_shape):
     """Generate executable files"""
-    cur_path = str(pathlib.Path(__file__).absolute().parent)
-    tmp_file_path = os.path.join(cur_path, "tmp_files")
+    tmp_file_path = _get_tmp_dir()
     tmp_file_name = os.path.join(
         tmp_file_path, "gen_func_" + kernel_name + ".so")
     fake_output_indices = list()
@@ -259,21 +258,23 @@ def compare_results(kernel_name, desc, input_for_mod, output_indexes, expect):
     else:
         print(kernel_name + " precision correct")
 
+def _get_kernel_meta_dir():
+    kernel_meta_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
+    return kernel_meta_dir
+
+def _get_tmp_dir():
+    return os.path.join(_get_kernel_meta_dir(), "tmp_files")
 
 def _create_dirs():
-    dir_paths = ["akg_kernel_meta", "tmp_files"]
-    for item in dir_paths:
-        file_path = os.path.join(
-            str(pathlib.Path(__file__).absolute().parent), item)
+    dir_paths = [_get_kernel_meta_dir(), _get_tmp_dir()]
+    for file_path in dir_paths:
         if not os.path.exists(file_path):
             os.makedirs(file_path)
 
 
 def _clear_tmp_dirs(kernel_name):
-    dir_paths = ["akg_kernel_meta", "tmp_files"]
-    for item in dir_paths:
-        file_path = os.path.join(
-            str(pathlib.Path(__file__).absolute().parent), item)
+    dir_paths = [_get_kernel_meta_dir(), _get_tmp_dir()]
+    for file_path in dir_paths:
         if not os.path.exists(file_path):
             continue
         for file_name in os.listdir(file_path):
@@ -336,8 +337,7 @@ def _run_cpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
     akg_mlir_driver.run_cpu()
     # Run executable and profiling
     if replace_dso:
-        dso_path = os.path.join(
-            str(pathlib.Path(__file__).absolute().parent), "akg_kernel_meta", kernel_name + "_custom.so")
+        dso_path = os.path.join(_get_kernel_meta_dir(), kernel_name + "_custom.so")
         if os.path.exists(dso_path):
             logging.info(
                 "Try to use the customized dso file : %s", dso_path)
@@ -345,8 +345,7 @@ def _run_cpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
             raise ValueError(
                 "Failed to find the customized dso file : " + dso_path)
     else:
-        dso_path = os.path.join(
-            str(pathlib.Path(__file__).absolute().parent), "akg_kernel_meta", kernel_name + ".so")
+        dso_path = os.path.join(_get_kernel_meta_dir(), kernel_name + ".so")
     cur = ctypes.cdll.LoadLibrary(dso_path)
     input_for_mod_ctypes = _transform_data_to_ctypes(
         input_for_mod, kernel_name, is_dyn_shape, "cpu")
@@ -387,8 +386,7 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
     akg_mlir_driver.run_ascend()
     # Run executable and profiling
     if replace_dso:
-        dso_path = os.path.join(
-            str(pathlib.Path(__file__).absolute().parent), "akg_kernel_meta", kernel_name + "_custom.so")
+        dso_path = os.path.join(_get_kernel_meta_dir(), kernel_name + "_custom.so")
         if os.path.exists(dso_path):
             logging.info(
                 "Try to use the customized dso file : %s", dso_path)
@@ -396,8 +394,7 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
             raise ValueError(
                 "Failed to find the customized dso file : " + dso_path)
     else:
-        dso_path = os.path.join(
-            str(pathlib.Path(__file__).absolute().parent), "akg_kernel_meta", "lib" + kernel_name + ".so")
+        dso_path = os.path.join(_get_kernel_meta_dir(), "lib" + kernel_name + ".so")
     # load ascend_run func
     launch_func_name = "asend_run"
 
@@ -406,8 +403,7 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
         input_for_mod, kernel_name, output_indexes, is_dyn_shape, "ascend")
     # Run executable and compare results
     device_id = int(os.environ.get("DEVICE_ID", 0))
-    dso_path = os.path.join(
-        str(pathlib.Path(__file__).absolute().parent), "akg_kernel_meta/")
+    dso_path = _get_kernel_meta_dir()
     if profiling_trails == 0:
         akgAscendLaunch.akg_ascend_run(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
         for idx, d in enumerate(expect):
@@ -455,8 +451,7 @@ def run_a_kernel(desc,
         static_desc if is_dyn_shape else desc, with_compute=True)
     # Init AkgMlirDriver
     akg_mlir_driver = AkgMlirDriver(input_file=file_path,
-                                output_dir=os.path.join(
-                                    pathlib.Path(__file__).absolute().parent, "akg_kernel_meta"),
+                                output_dir=_get_kernel_meta_dir(),
                                 llvm_tools_dir=os.getenv("LLVM_HOME", ""),
                                 dynamic_shape=is_dyn_shape,
                                 dump_ir=dump_ir,
