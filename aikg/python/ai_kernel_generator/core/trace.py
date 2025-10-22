@@ -17,7 +17,8 @@
 只负责存储原始数据，不进行解析逻辑
 """
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -28,7 +29,7 @@ class AgentRecord:
     prompt: str = ""
     reasoning: str = ""
     error_log: str = ""
-    profile_res: dict = {}
+    profile_res: dict = field(default_factory=dict)
 
 
 class Trace:
@@ -57,7 +58,7 @@ class Trace:
                 f.write(str(content))
 
     def insert_agent_record(self, agent_name: str, result: str = "", prompt: str = "", reasoning: str = "",
-                            error_log: str = "", profile_res: dict = {}) -> None:
+                            error_log: str = "", profile_res: Optional[dict] = None) -> None:
         """
         插入agent执行记录（只保存原始数据，不进行解析）
 
@@ -69,6 +70,9 @@ class Trace:
             error_log: 错误日志（主要用于verifier）
             profile_res: 性能数据字典
         """
+        if profile_res is None:
+            profile_res = {}
+        
         record = AgentRecord(
             agent_name=agent_name,
             result=result,

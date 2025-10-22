@@ -203,7 +203,11 @@ async def evolve(
                                 'id': parent_implementation.get('id'),
                                 'sketch': parent_implementation.get('sketch', ''),
                                 'impl_code': parent_implementation.get('impl_code', ''),
-                                'profile': parent_implementation.get('profile', (float('inf'), 0.0, 0.0)),
+                                'profile': parent_implementation.get('profile', {
+                                    'gen_time': float('inf'),
+                                    'base_time': 0.0,
+                                    'speedup': 0.0
+                                }),
                                 'strategy_mode': 'evolution',
                                 'is_parent': True  # 标记为父代
                             }
@@ -391,9 +395,8 @@ async def evolve(
 
                     # 添加到精英池（新生成的实现都有唯一ID，无需去重）
                     elite_pool.extend(island_impls_list)
-                    # 按性能排序精英池
-                    elite_pool.sort(key=lambda x: x['profile'][0] if isinstance(
-                        x['profile'], (list, tuple)) else x['profile'])
+                    # 按性能排序精英池（gen_time越小越好）
+                    elite_pool.sort(key=lambda x: x.get('profile', {}).get('gen_time', float('inf')))
                     # 保持精英库大小限制
                     elite_pool = elite_pool[:elite_size * num_islands]
 
@@ -515,8 +518,7 @@ async def evolve(
                              [(f"failed_task_{i}", False) for i in range(round_total_count - round_success_count)])
 
     # 按性能排序最佳实现（gen_time越小越好）
-    best_implementations.sort(key=lambda x: x['profile'][0] if isinstance(
-        x['profile'], (list, tuple)) else x['profile'])
+    best_implementations.sort(key=lambda x: x.get('profile', {}).get('gen_time', float('inf')))
 
     # 计算最终成功率
     final_success_rate = total_successful_tasks / total_tasks if total_tasks > 0 else 0.0

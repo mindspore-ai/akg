@@ -182,7 +182,7 @@ def load_best_implementations(storage_dir: str, max_count: int = None) -> List[D
                     logger.warning(f"Failed to load {filepath}: {e}")
 
         # 按性能排序（gen_time越小越好）
-        implementations.sort(key=lambda x: x.get('profile', (float('inf'), 0.0, 0.0))[0])
+        implementations.sort(key=lambda x: x.get('profile', {}).get('gen_time', float('inf')))
 
         logger.info(f"Loaded {len(implementations)} implementations from {storage_dir}")
         
@@ -222,8 +222,8 @@ def classify_implementations_by_performance(implementations: List[Dict[str, Any]
 
     total_count = len(valid_impls)
 
-    # 按加速比排序（从高到低）
-    valid_impls.sort(key=lambda x: x.get('profile', {}).get('speedup', 0.0), reverse=True)
+    # 按生成时间排序（从小到大，越小越好）
+    valid_impls.sort(key=lambda x: x.get('profile', {}).get('gen_time', float('inf')))
 
     # 分层策略：前30%为好，中间40%为中等，后30%为差
     good_count = max(1, int(total_count * 0.3))
@@ -358,8 +358,8 @@ def migrate_elites(islands: List[List[Dict[str, Any]]], migration_size: int = 1)
     # 收集所有岛屿的精英
     elites = []
     for island in islands:
-        # 每个岛屿选择最好的几个个体
-        sorted_island = sorted(island, key=lambda x: x.get('profile', (float('inf'), 0.0, 0.0))[0])
+        # 每个岛屿选择最好的几个个体（gen_time越小越好）
+        sorted_island = sorted(island, key=lambda x: x.get('profile', {}).get('gen_time', float('inf')))
         elites.extend(sorted_island[:migration_size])
 
     # 随机打乱精英列表

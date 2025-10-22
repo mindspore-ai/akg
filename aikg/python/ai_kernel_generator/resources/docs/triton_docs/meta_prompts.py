@@ -1,5 +1,6 @@
 suggestion1 = """
 grid级别的设置需要考虑启动和运算开销：将2D的grid设置修改为1D的grid，之后在内核中进行处理，能够显著降低启动开销。
+对于二维输入数据，由于数据是连续存储的，可以将数据处理成（看成）一维形式，统一连续提取、计算，这样可以获得更灵活的切分、操作方式。
 """
 
 suggestion2 = """
@@ -9,6 +10,7 @@ suggestion2 = """
 
 suggestion3 = """
 对于复杂的算子，例如某些融合算子，在不同计算阶段需要进行不同轴上的reduce操作的情况，我们可以将复杂的算子拆开进行处理：有的时候一味的融合并不能带来性能收益，反而拆开按顺序单独计算、多次调用不同kernel能够带来更好的性能。
+设计按顺序执行的elementwise操作和reduce操作时，也可以将这部分拆开作为两个kernel，设置不同的grid和blocksize。
 """
 
 suggestion4 = """
@@ -19,6 +21,7 @@ suggestion4 = """
 suggestion5 = """
 可以尝试在核内计算时尝试更大/更小的Block_size，来平衡并行度和资源占用。
 当硬件是NPU时，每次的数据搬运都是以256Bytes为单位的，所以在数据读取和存储时，考虑将数据对齐到256Bytes的倍数，或许可以提升性能。
+数据搬运的带宽性能上限大概是256*256Bytes，可以参照这个上限来设计数据搬运的策略。
 """
 
 suggestion6 = """
@@ -31,4 +34,5 @@ triton_meta_prompts: list[str] = [
     suggestion3,
     suggestion4,
     suggestion5,
+    suggestion6,
 ]

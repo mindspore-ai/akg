@@ -255,16 +255,18 @@ def print_evolution_result(evolution_result: Dict[str, Any], evolve_config: Evol
     if best_implementations:
         print(f"\n最佳实现 (前{len(best_implementations)}个):")
         for i, impl in enumerate(best_implementations, 1):
-            profile_data = impl.get('profile', float('inf'))
+            profile_data = impl.get('profile', {})
 
-            # 处理profile信息，支持三元组格式
-            if isinstance(profile_data, (list, tuple)) and len(profile_data) >= 3:
-                gen_time, base_time, speedup = profile_data[0], profile_data[1], profile_data[2]
-                profile_str = f"生成代码: {gen_time:.4f}us, 基准代码: {base_time:.4f}us, 加速比: {speedup:.2f}x"
-            elif isinstance(profile_data, (list, tuple)) and len(profile_data) >= 1:
-                profile_str = f"执行时间: {profile_data[0]:.4f}us"
-            elif profile_data != float('inf'):
-                profile_str = f"执行时间: {profile_data:.4f}us"
+            # 处理profile信息（dict格式）
+            if isinstance(profile_data, dict):
+                gen_time = profile_data.get('gen_time', float('inf'))
+                base_time = profile_data.get('base_time', 0.0)
+                speedup = profile_data.get('speedup', 0.0)
+                
+                if gen_time != float('inf'):
+                    profile_str = f"生成代码: {gen_time:.4f}us, 基准代码: {base_time:.4f}us, 加速比: {speedup:.2f}x"
+                else:
+                    profile_str = "性能: N/A"
             else:
                 profile_str = "性能: N/A"
 
