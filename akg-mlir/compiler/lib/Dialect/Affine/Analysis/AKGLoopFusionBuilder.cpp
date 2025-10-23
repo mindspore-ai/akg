@@ -369,12 +369,25 @@ bool MemRefDependenceGraphForFusion::isGlobalMemref(unsigned id) {
 }
 
 unsigned FusionCodeGenHelper::getAliasId(unsigned srcId) {
-  auto it = nodeAlias.find(srcId);
-  if (it != nodeAlias.end()) {
-    llvm::outs() << "Find alias id " << srcId << " -> " << it->second << "\n";
-    return it->second;
+  // Follow the alias chain to find the final destination
+  std::unordered_set<unsigned> visited;
+  unsigned currentId = srcId;
+  
+  while (nodeAlias.find(currentId) != nodeAlias.end()) {
+    if (visited.count(currentId)) {
+      // Circular alias detected, break to avoid infinite loop
+      llvm::outs() << "Warning: Circular alias detected for node " << srcId << "\n";
+      break;
+    }
+    visited.insert(currentId);
+    currentId = nodeAlias[currentId];
   }
-  return srcId;
+  
+  if (currentId != srcId) {
+    llvm::outs() << "Find alias chain " << srcId << " -> " << currentId << "\n";
+  }
+  
+  return currentId;
 }
 
 void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp sibAffineForOp,
@@ -442,7 +455,9 @@ void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::Affine
   for (unsigned i = 1; i <= dstLoopDepthTest; ++i) {
     affine::FusionResult result = canFuseLoops(srcAffineForOp, dstAffineForOp,
                                                /*dstLoopDepth=*/i, &depthSliceUnions[i - 1], strategy);
-    if (result.value == affine::FusionResult::Success) maxLegalFusionDepth = i;
+    if (result.value == affine::FusionResult::Success) {
+      maxLegalFusionDepth = i;
+    }
   }
 
   if (maxLegalFusionDepth == 0) {
@@ -454,8 +469,11 @@ void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::Affine
   unsigned bestDstLoopDepth = maxLegalFusionDepth;
   // Retrieve producer stores from the src loop.
   SmallVector<Operation *, 2> producerStores;
-  for (Operation *op : srcNode->stores)
-    if (producerConsumerMemrefs.count(cast<affine::AffineWriteOpInterface>(op).getMemRef())) producerStores.push_back(op);
+  for (Operation *op : srcNode->stores) {
+    if (producerConsumerMemrefs.count(cast<affine::AffineWriteOpInterface>(op).getMemRef())) {
+      producerStores.push_back(op);
+    }
+  }
 
   // TODO: Suppport multiple producer stores in profitability
   // analysis. We limit profitability analysis to only scenarios with
@@ -470,8 +488,7 @@ void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::Affine
   }
   assert(!producerStores.empty() && "Expected producer store");
   if (producerStores.size() > 1) {
-    llvm::outs() << "Skipping profitability analysis. Not "
-                    "supported for this case\n";
+    llvm::outs() << "Skipping profitability analysis. Not supported for this case\n";
   }
 
   assert(bestDstLoopDepth > 0 && "Unexpected loop fusion depth");
