@@ -17,18 +17,47 @@ Kernel性能对比工具
 用于对比triton-ascend和原生torch_npu的性能
 
 使用方法：
-1. 修改 get_custom_op_torch_code() 函数，填入你的torch实现代码
-2. 修改 get_custom_op_triton_code() 函数，填入你的triton实现代码
-3. 运行 python examples/kernel_profile.py 即可得到性能对比结果
+1. 方法一：直接修改代码
+   - 修改 get_custom_op_torch_code() 函数，填入你的torch实现代码
+   - 修改 get_custom_op_triton_code() 函数，填入你的triton实现代码
+   - 运行 python examples/kernel_profile.py
+
+2. 方法二：通过环境变量读取代码
+   - 设置环境变量 TORCH_CODE_PATH 指向你的torch代码文件
+   - 设置环境变量 TRITON_CODE_PATH 指向你的triton代码文件
+   - 运行 python examples/kernel_profile.py
+   
+   示例：
+   export TORCH_CODE_PATH="/path/to/your/torch_code.py"
+   export TRITON_CODE_PATH="/path/to/your/triton_code.py"
+   python examples/kernel_profile.py
+
+3. 方法三：通过命令行参数（推荐）
+   - 使用 --torch-code-path 指定torch代码文件
+   - 使用 --triton-code-path 指定triton代码文件
+   - 使用 --op-name 指定算子名称
+   - 其他可选参数：--device-id, --run-times, --warmup-times 等
+   
+   示例：
+   python examples/kernel_profile.py --torch-code-path /path/to/torch_code.py --triton-code-path /path/to/triton_code.py --op-name my_op
+   
+   查看所有参数：
+   python examples/kernel_profile.py --help
 """
 
 import os
+import argparse
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
 from ai_kernel_generator.config.config_validator import load_config
 
 
-def get_custom_op_torch_code():
+def get_custom_op_torch_code(torch_code_path=None):
     """获取自定义算子的torch实现代码（示例：ReLU）"""
+    if torch_code_path and os.path.exists(torch_code_path):
+        with open(torch_code_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    
+    # 默认代码（当文件不存在时使用）
     return '''
 import torch
 import torch.nn as nn
@@ -57,8 +86,13 @@ def get_init_inputs():
 '''
 
 
-def get_custom_op_triton_code():
+def get_custom_op_triton_code(triton_code_path=None):
     """获取自定义算子的triton实现代码（示例：ReLU）"""
+    if triton_code_path and os.path.exists(triton_code_path):
+        with open(triton_code_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    
+    # 默认代码（当文件不存在时使用）
     return '''
 import torch
 import triton
@@ -194,16 +228,59 @@ def run_kernel_profile(
     return gen_time, base_time, speedup
 
 
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description='Kernel性能对比工具')
+    parser.add_argument('--torch-code-path', type=str, 
+                       help='Torch代码文件路径')
+    parser.add_argument('--triton-code-path', type=str,
+                       help='Triton代码文件路径')
+    parser.add_argument('--op-name', type=str, default='custom_op',
+                       help='算子名称 (默认: custom_op)')
+    parser.add_argument('--device-id', type=int, default=None,
+                       help='设备ID (默认从环境变量DEVICE_ID获取)')
+    parser.add_argument('--run-times', type=int, default=50,
+                       help='运行次数 (默认: 50)')
+    parser.add_argument('--warmup-times', type=int, default=5,
+                       help='预热次数 (默认: 5)')
+    
+    return parser.parse_args()
+
+
 def main():
     """主函数 - 自定义算子性能测试（示例：ReLU）"""
-    # 设置环境变量（可选）
-    device_id = int(os.getenv("DEVICE_ID", "0"))
+    # 解析命令行参数
+    args = parse_args()
+    
+    # 设置设备ID（优先使用命令行参数，其次环境变量）
+    if args.device_id is not None:
+        device_id = args.device_id
+    else:
+        device_id = int(os.getenv("DEVICE_ID", "0"))
+    
+    # 获取文件路径（优先使用命令行参数，其次环境变量）
+    torch_code_path = args.torch_code_path or os.getenv("TORCH_CODE_PATH")
+    triton_code_path = args.triton_code_path or os.getenv("TRITON_CODE_PATH")
     
     # 获取op_task_str和kernel_code
-    # 提示：直接修改 get_custom_op_torch_code() 和 get_custom_op_triton_code() 
-    # 两个函数中的代码即可测试不同的算子
-    op_task_str = get_custom_op_torch_code()
-    kernel_code = get_custom_op_triton_code()
+    # 如果提供了文件路径，则从文件读取；否则使用默认代码
+    op_task_str = get_custom_op_torch_code(torch_code_path)
+    kernel_code = get_custom_op_triton_code(triton_code_path)
+    
+    # 打印使用的代码来源
+    if torch_code_path and os.path.exists(torch_code_path):
+        print(f"📁 从文件读取 Torch 代码: {torch_code_path}")
+    else:
+        print("📝 使用默认 Torch 代码")
+        
+    if triton_code_path and os.path.exists(triton_code_path):
+        print(f"📁 从文件读取 Triton 代码: {triton_code_path}")
+    else:
+        print("📝 使用默认 Triton 代码")
+    
+    print(f"🔧 算子名称: {args.op_name}")
+    print(f"🖥️  设备ID: {device_id}")
+    print(f"🔄 运行次数: {args.run_times}, 预热次数: {args.warmup_times}")
     
     # 运行性能测试
     run_kernel_profile(
@@ -215,8 +292,8 @@ def main():
         backend="ascend",
         arch="ascend910b4",
         device_id=device_id,
-        run_times=50,
-        warmup_times=5
+        run_times=args.run_times,
+        warmup_times=args.warmup_times
     )
 
 
