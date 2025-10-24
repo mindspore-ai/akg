@@ -21,8 +21,8 @@ class Model(nn.Module):
 def get_inputs():
     # Batch size: 1024
     # Hidden dimension: 4096
-    input1 = torch.randn(1024, 4096, dtype=torch.float32)
-    input2 = torch.randn(1024, 4096, dtype=torch.float32)
+    input1 = torch.randint(-128, 127, (1024, 4096), dtype=torch.int32)
+    input2 = torch.randint(-128, 127, (1024, 4096), dtype=torch.int32)
     return [input1, input2]
 
 

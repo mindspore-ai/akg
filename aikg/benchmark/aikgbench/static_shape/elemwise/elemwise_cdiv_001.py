@@ -4,22 +4,22 @@ import torch.nn as nn
 
 class Model(nn.Module):
     """
-    Element-wise division with broadcast (2D, FP32).
+    C-style division with truncation (2D, FP32).
     Medium scale: e6
     """
     def __init__(self):
         super(Model, self).__init__()
 
     def forward(self, dividend, divisor):
-        # 2D division operation
-        return dividend / divisor
+        # 2D cdiv operation, second dimension broadcast
+        return torch.div(dividend, divisor, rounding_mode='trunc')
 
 
 def get_inputs():
     # Medium scale: 1024 * 1024 ≈ e6
 
-    dividend = torch.randn(1024, 1024, dtype=torch.float16)
-    divisor = torch.randn(1, 1024, dtype=torch.float16) + 1.0
+    dividend = torch.randn(1024, 1, dtype=torch.float32)
+    divisor = torch.randn(1024, 1024, dtype=torch.float32) + 0.1
     return [dividend, divisor]
 
 

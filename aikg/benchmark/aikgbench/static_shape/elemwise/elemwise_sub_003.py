@@ -19,7 +19,7 @@ def get_inputs():
     # Medium scale: 2048 * 4096 ≈ e6
 
     input1 = torch.randn(2048, 4096, dtype=torch.float16)
-    input2 = torch.randn(1, 1, dtype=torch.float16)
+    input2 = torch.randn(2048, 1, dtype=torch.float16)
     return [input1, input2]
 
 

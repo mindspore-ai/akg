@@ -4,21 +4,21 @@ import torch.nn as nn
 
 class Model(nn.Module):
     """
-    Sigmoid activation (2D, FP32).
+    Element-wise ceil operation (3D, FP16).
     Large scale: e7
     """
     def __init__(self):
         super(Model, self).__init__()
 
     def forward(self, input_tensor):
-        # 2D sigmoid activation
-        return torch.sigmoid(input_tensor)
+        # 3D ceil operation
+        return torch.ceil(input_tensor)
 
 
 def get_inputs():
-    # Large scale: 4096 * 4096 ≈ e7
+    # Large scale: 256 * 1024 * 1024 ≈ e8
 
-    input_tensor = torch.randn(4096, 4096, dtype=torch.float32)
+    input_tensor = torch.randn(256, 1024, 1024, dtype=torch.float16)
     return [input_tensor]
 
 

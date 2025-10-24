@@ -4,22 +4,22 @@ import torch.nn as nn
 
 class Model(nn.Module):
     """
-    Element-wise division with broadcast (2D, FP32).
-    Medium scale: e6
+    Element-wise division (1D, FP16).
+    Medium scale: e3
     """
     def __init__(self):
         super(Model, self).__init__()
 
     def forward(self, dividend, divisor):
-        # 2D division operation
+        # 1D division with FP16
         return dividend / divisor
 
 
 def get_inputs():
-    # Medium scale: 1024 * 1024 ≈ e6
+    # Medium scale: 1024 ≈ e3
 
-    dividend = torch.randn(1024, 1024, dtype=torch.float16)
-    divisor = torch.randn(1, 1024, dtype=torch.float16) + 1.0
+    dividend = torch.randn(1024, dtype=torch.float16)
+    divisor = torch.randn(1024, dtype=torch.float16) + 1.0
     return [dividend, divisor]
 
 

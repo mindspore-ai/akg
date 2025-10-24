@@ -1,30 +1,29 @@
 import torch
 import torch.nn as nn
 
+
 class Model(nn.Module):
     """
-    Element-wise subtraction operation.
-    This operation is commonly used in neural networks for:
-    - Computing residuals in ResNet-like architectures
-    - Calculating differences between tensors
-    - Used in various mathematical computations in neural networks
+    Element-wise subtraction (3D, bfloat16).
+    Large scale: e8
     """
     def __init__(self):
         super(Model, self).__init__()
 
-    def forward(self, minuend, subtrahend):
-        # Element-wise subtraction of subtrahend from minuend
-        result = minuend - subtrahend
-        return result
+    def forward(self, input1, input2):
+        # 3D subtraction operation, broadcasting on front and middle dimensions
+        return input1 - input2
+
 
 def get_inputs():
-    # Batch size: 32
-    # Sequence length: 512
-    # Hidden size: 1024
-    minuend = torch.randn(32, 512, 1024, dtype=torch.float32)
-    subtrahend = torch.randn(32, 512, 1024, dtype=torch.float32)
-    return [minuend, subtrahend]
+    # Large scale: 256 * 1024 * 1024 ≈ e8
+
+    input1 = torch.randn(256, 1024, 1024, dtype=torch.bfloat16)
+    input2 = torch.randn(1, 1, 1024, dtype=torch.bfloat16)
+    return [input1, input2]
+
 
 def get_init_inputs():
-    # No parameters for Element-wise subtraction operation
     return []
+
+
