@@ -17,6 +17,55 @@ import os
 # 全局变量存储配置信息
 _collected_config_timings = {}
 
+# 需要过滤的底层实现参数
+_FILTERED_CONFIG_PARAMS = {
+    'num_warps',
+    'num_ctas', 
+    'num_stages',
+    'num_buffers_warp_spec',
+    'num_consumer_groups',
+    'reg_dec_producer',
+    'reg_inc_consumer',
+    'maxnreg'
+}
+
+
+def _filter_config_string(config_str: str) -> str:
+    """过滤配置字符串，移除底层实现参数
+    
+    处理终端打印格式：
+    "BLOCK_B: 32, BLOCK_C: 32, num_warps: 4, num_ctas: 1, ..."
+    
+    Args:
+        config_str: 原始配置字符串
+        
+    Returns:
+        过滤后的配置字符串，如 "BLOCK_B: 32, BLOCK_C: 32"
+    """
+    # 分割参数（按逗号分隔）
+    params = []
+    for param in config_str.split(','):
+        param = param.strip()
+        if not param:
+            continue
+        
+        # 提取参数名（支持冒号和等号）
+        if ':' in param:
+            param_name = param.split(':', 1)[0].strip()
+        elif '=' in param:
+            param_name = param.split('=', 1)[0].strip()
+        else:
+            # 没有分隔符的参数保留
+            params.append(param)
+            continue
+        
+        # 只保留非过滤参数
+        if param_name not in _FILTERED_CONFIG_PARAMS:
+            params.append(param)
+    
+    # 重新组装
+    return ', '.join(params)
+
 
 def patch_triton_autotuner():
     """动态补丁triton autotuner，添加配置信息收集功能"""
@@ -68,9 +117,12 @@ def patch_triton_autotuner():
                     timing_value = timing[0] if isinstance(timing, list) else timing
                     # profiler_npu返回的已经是微秒，无需转换
                     timing_us = timing_value
+                    
+                    # 过滤配置字符串
+                    config_str = _filter_config_string(str(config))
 
                     config_data.append({
-                        "config": str(config),
+                        "config": config_str,
                         "timing_us": float(timing_us),
                         "is_best": is_best,
                         "rank": i + 1
@@ -90,7 +142,9 @@ def patch_triton_autotuner():
                                 status = " (BEST)" if config == self.best_config else ""
                                 timing_value = timing[0] if isinstance(timing, list) else timing
                                 timing_us = timing_value
-                                print(f"  Config {i+1}: {config} -> {timing_us:.4f}us{status}")
+                                # 过滤配置字符串
+                                config_str = _filter_config_string(str(config))
+                                print(f"  Config {i+1}: {config_str} -> {timing_us:.4f}us{status}")
                             except (TypeError, ValueError, AttributeError):
                                 continue
 

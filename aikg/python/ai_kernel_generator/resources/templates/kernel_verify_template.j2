@@ -333,7 +333,6 @@ def verify_implementations():
     
     # 设备设置
     {% if framework == "torch" %}
-    torch.manual_seed(0)
     # PyTorch设备设置
     if backend == "cuda":
         os.environ['CUDA_VISIBLE_DEVICES'] = str({{ device_id }})
@@ -351,7 +350,6 @@ def verify_implementations():
             {% else %}
             os.environ['DEVICE_ID'] = str({{ device_id }})
             device = torch.device("npu")
-            torch.npu.manual_seed(0)
             torch.npu.set_device({{ device_id }})
             {% endif %}
         elif "ascend310" in arch:
@@ -368,7 +366,6 @@ def verify_implementations():
     {% elif framework == "mindspore" %}
     # MindSpore设备设置
     os.environ['DEVICE_ID'] = str({{ device_id }})
-    ms.set_seed(0)
     if backend == "ascend":
         device = "Ascend"
         # 设置Ascend架构
@@ -401,21 +398,25 @@ def verify_implementations():
         return x
         {% endif %}
 
-    def verify_single_case(inputs):
+    def verify_single_case(inputs_for_framework, inputs_for_impl):
         """验证单个案例的公共逻辑"""
+        
+        # 运行框架实现
+        framework_output = framework_model(*inputs_for_framework)
+        
+        {% if framework == "torch" %}
+        torch.manual_seed(0)
         {% if backend == "ascend" %}
         torch.npu.manual_seed(0)
         {% endif %}
-        
-        # 运行框架实现
-        framework_output = framework_model(*inputs)
-        
-        {% if dsl == "swft" %}
+        {% endif %}
+
+        {% if dsl == "swft" %}        
         # 运行SWFT实现
         data_dir = os.path.dirname(__file__)
         
         # 生成二进制数据文件
-        gen_binary_data(inputs, framework_output, data_dir)
+        gen_binary_data(inputs_for_impl, framework_output, data_dir)
         
         # 运行SWFT实现
         {{ impl_func_name }}(device_id=int({{ device_id }}))
@@ -423,8 +424,8 @@ def verify_implementations():
         # 加载SWFT输出
         impl_output = load_binary_data(data_dir, framework_output)
         {% elif dsl in ["triton", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda"] %}
-        # 运行Triton实现
-        impl_output = {{ impl_func_name }}(*inputs)
+        # 运行实现
+        impl_output = {{ impl_func_name }}(*inputs_for_impl)
         {% endif %}
 
         if not isinstance(framework_output, (list, tuple)):
@@ -479,47 +480,95 @@ def verify_implementations():
     
     {% if is_dynamic_shape %}
     # 动态shape：获取多组输入数据
-    inputs_list = get_inputs_dyn_list()
+    # 设置随机种子以确保数据可复现
+    {% if framework == "torch" %}
+    torch.manual_seed(0)
+    {% if backend == "ascend" %}
+    torch.npu.manual_seed(0)
+    {% endif %}
+    {% elif framework == "numpy" %}
+    np.random.seed(0)
+    {% elif framework == "mindspore" %}
+    ms.set_seed(0)
+    {% endif %}
+    framework_inputs_list = get_inputs_dyn_list()
+    
+    # 重新生成输入数据列表用于impl（避免原地操作影响）
+    {% if framework == "torch" %}
+    torch.manual_seed(0)
+    {% if backend == "ascend" %}
+    torch.npu.manual_seed(0)
+    {% endif %}
+    {% elif framework == "numpy" %}
+    np.random.seed(0)
+    {% elif framework == "mindspore" %}
+    ms.set_seed(0)
+    {% endif %}
+    impl_inputs_list = get_inputs_dyn_list()
     
     # 对每组输入进行验证
-    for case_idx, inputs in enumerate(inputs_list):
+    for case_idx, (inputs_for_framework, inputs_for_impl) in enumerate(zip(framework_inputs_list, impl_inputs_list)):
         {% if framework == "torch" %}
-        inputs = [process_input(x) for x in inputs]
+        inputs_for_framework = [process_input(x) for x in inputs_for_framework]
+        inputs_for_impl = [process_input(x) for x in inputs_for_impl]
         {% endif %}
         
-        print(f"验证动态shape案例 {case_idx + 1}/{len(inputs_list)}")
+        print(f"验证动态shape案例 {case_idx + 1}/{len(framework_inputs_list)}")
         
         # 使用timeout装饰器包装整个验证过程
         @with_timeout({{ timeout }})
         def verify_case():
-            return verify_single_case(inputs)
+            return verify_single_case(inputs_for_framework, inputs_for_impl)
         
         try:
             verify_result, framework_output = verify_case()
             print(f"动态shape案例 {case_idx + 1} 验证成功")
         except TimeoutError:
-            raise AssertionError(f"动态shape案例 {case_idx + 1} 验证超时（{timeout}秒）")
+            raise AssertionError(f"动态shape案例 {case_idx + 1} 验证超时（{{timeout}}秒）")
     
     {% else %}
     # 静态shape：获取单组输入数据
+    # 设置随机种子以确保数据可复现
     {% if framework == "torch" %}
-    inputs = get_inputs()
-    inputs = [process_input(x) for x in inputs]
+    torch.manual_seed(0)
+    {% if backend == "ascend" %}
+    torch.npu.manual_seed(0)
+    {% endif %}
     {% elif framework == "numpy" %}
-    inputs = get_inputs()
+    np.random.seed(0)
     {% elif framework == "mindspore" %}
-    inputs = get_inputs()
+    ms.set_seed(0)
+    {% endif %}
+    inputs_for_framework = get_inputs()
+    {% if framework == "torch" %}
+    inputs_for_framework = [process_input(x) for x in inputs_for_framework]
+    {% endif %}
+    
+    # 重新生成输入数据用于impl（避免原地操作影响）
+    {% if framework == "torch" %}
+    torch.manual_seed(0)
+    {% if backend == "ascend" %}
+    torch.npu.manual_seed(0)
+    {% endif %}
+    {% elif framework == "numpy" %}
+    np.random.seed(0)
+    {% elif framework == "mindspore" %}
+    ms.set_seed(0)
+    {% endif %}
+    inputs_for_impl = get_inputs()
+    {% if framework == "torch" %}
+    inputs_for_impl = [process_input(x) for x in inputs_for_impl]
     {% endif %}
     
     # 使用timeout装饰器包装整个验证过程
     @with_timeout({{ timeout }})
     def verify_case():
-        return verify_single_case(inputs)
+        return verify_single_case(inputs_for_framework, inputs_for_impl)
     
     try:
         verify_result, framework_output = verify_case()
     except TimeoutError:
-        raise AssertionError(f"静态shape验证超时（{timeout}秒）")
+        raise AssertionError(f"静态shape验证超时（{{timeout}}秒）")
     {% endif %}
     
     # 构建验证成功信息

@@ -182,7 +182,7 @@ def load_best_implementations(storage_dir: str, max_count: int = None) -> List[D
                     logger.warning(f"Failed to load {filepath}: {e}")
 
         # 按性能排序（gen_time越小越好）
-        implementations.sort(key=lambda x: x.get('profile', (float('inf'), 0.0, 0.0))[0])
+        implementations.sort(key=lambda x: x.get('profile', {}).get('gen_time', float('inf')))
 
         logger.info(f"Loaded {len(implementations)} implementations from {storage_dir}")
         
@@ -211,8 +211,10 @@ def classify_implementations_by_performance(implementations: List[Dict[str, Any]
     # 过滤出有效的加速比数据
     valid_impls = []
     for impl in implementations:
-        profile = impl.get('profile', (float('inf'), 0.0, 0.0))
-        if len(profile) >= 3 and profile[2] != float('inf') and profile[2] > 0:
+        profile = impl.get('profile', {})
+        
+        speedup = profile.get('speedup', 0.0)
+        if speedup != float('inf') and speedup > 0:
             valid_impls.append(impl)
 
     if not valid_impls:
@@ -220,8 +222,8 @@ def classify_implementations_by_performance(implementations: List[Dict[str, Any]
 
     total_count = len(valid_impls)
 
-    # 按加速比排序（从高到低）
-    valid_impls.sort(key=lambda x: x['profile'][2], reverse=True)
+    # 按生成时间排序（从小到大，越小越好）
+    valid_impls.sort(key=lambda x: x.get('profile', {}).get('gen_time', float('inf')))
 
     # 分层策略：前30%为好，中间40%为中等，后30%为差
     good_count = max(1, int(total_count * 0.3))
@@ -316,7 +318,11 @@ def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int =
     # 转换为inspiration格式
     inspirations = []
     for impl in selected:
-        profile_tuple = impl.get('profile', (float('inf'), 0.0, 0.0))
+        profile_data = impl.get('profile', {
+            'gen_time': float('inf'),
+            'base_time': 0.0,
+            'speedup': 0.0
+        })
 
         # 优先使用sketch，如果没有sketch则使用原始代码
         sketch = impl.get('sketch', '')
@@ -326,7 +332,7 @@ def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int =
             'id': impl.get('id'),  # 保留ID信息
             'sketch': sketch,  # 使用sketch作为inspiration内容
             'impl_code': impl_code,  # 使用原始代码作为inspiration内容
-            'profile': profile_tuple,  # 保持完整的三元组
+            'profile': profile_data,  # 保持完整的性能数据字典
             'strategy_mode': 'evolution'
         }
         inspirations.append(inspiration)
@@ -352,8 +358,8 @@ def migrate_elites(islands: List[List[Dict[str, Any]]], migration_size: int = 1)
     # 收集所有岛屿的精英
     elites = []
     for island in islands:
-        # 每个岛屿选择最好的几个个体
-        sorted_island = sorted(island, key=lambda x: x.get('profile', (float('inf'), 0.0, 0.0))[0])
+        # 每个岛屿选择最好的几个个体（gen_time越小越好）
+        sorted_island = sorted(island, key=lambda x: x.get('profile', {}).get('gen_time', float('inf')))
         elites.extend(sorted_island[:migration_size])
 
     # 随机打乱精英列表

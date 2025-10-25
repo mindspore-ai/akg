@@ -131,7 +131,7 @@ class Conductor(AgentBase):
         return ResultProcessor.get_agent_parser(agent_name, self.workflow_config_path, self.agent_parsers)
 
     def record_agent_execution(self, agent_name: str, result: str, prompt: str = "", reasoning: str = "",
-                               error_log: str = "", profile_res=()) -> bool:
+                               error_log: str = "", profile_res: dict = None) -> bool:
         """
         记录agent执行结果，进行解析并更新任务信息
 
@@ -141,7 +141,11 @@ class Conductor(AgentBase):
             prompt: 使用的prompt
             reasoning: 推理过程
             error_log: 错误日志（主要用于verifier）
-            profile_res: 性能分析结果（主要用于verifier）
+            profile_res: 性能分析结果字典（主要用于verifier），包含：
+                - gen_time: 生成代码执行时间（微秒）
+                - base_time: 基准代码执行时间（微秒）
+                - speedup: 加速比
+                - autotune_summary: autotune配置详情（可选，仅triton+ascend）
 
         Returns:
             bool: 解析是否成功（对于不需要解析器的agent返回True）

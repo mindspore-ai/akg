@@ -31,7 +31,18 @@ def get_inspirations(inspirations: List[dict]) -> str:
 
     Args:
         inspirations: 包含字典的列表，每个字典格式为:
-                     {'strategy_mode':xxx, 'impl_code':str, 'profile':float, 'is_parent':bool}
+            {
+                'strategy_mode': str,
+                'impl_code': str,
+                'sketch': str,
+                'profile': {
+                    'gen_time': float,
+                    'base_time': float,
+                    'speedup': float,
+                    'autotune_summary': str (可选，仅triton+ascend)
+                },
+                'is_parent': bool
+            }
 
     Returns:
         str: 拼接后的字符串，包含所有impl_code和profile信息
@@ -49,7 +60,7 @@ def get_inspirations(inspirations: List[dict]) -> str:
 
         sketch = inspiration.get('sketch', '')
         impl_code = inspiration.get('impl_code', '')
-        profile = inspiration.get('profile', float('inf'))
+        profile = inspiration.get('profile', {})
         is_parent = inspiration.get('is_parent', False)
         
         # 检测是否有父代
@@ -57,14 +68,19 @@ def get_inspirations(inspirations: List[dict]) -> str:
             has_parent = True
 
         if sketch or impl_code:  # 只有当sketch或impl_code不为空时才添加
-            # 处理profile信息，支持三元组格式
-            if isinstance(profile, (list, tuple)) and len(profile) >= 3:
-                gen_time, base_time, speedup = profile[0], profile[1], profile[2]
+            # 处理profile信息（dict格式）
+            gen_time = profile.get('gen_time', float('inf'))
+            base_time = profile.get('base_time', 0.0)
+            speedup = profile.get('speedup', 0.0)
+            autotune_summary = profile.get('autotune_summary', '')
+            
+            if gen_time != float('inf'):
                 profile_text = f"根据此方案草图生成的代码计算耗时: {gen_time:.4f}us, 基准代码耗时: {base_time:.4f}us, 加速比: {speedup:.2f}x"
-            elif isinstance(profile, (list, tuple)) and len(profile) >= 1:
-                profile_text = f"代码执行耗时: {profile[0]:.4f}us"
+                # 如果有autotune信息，添加到profile_text
+                if autotune_summary:
+                    profile_text += f"\n\nAutotune配置详情:\n{autotune_summary}"
             else:
-                profile_text = f"代码执行耗时: {profile:.4f}us" if profile != float('inf') else "代码执行耗时: N/A"
+                profile_text = "代码执行耗时: N/A"
 
             # 如果是父代，添加标记
             parent_mark = " 【父代方案】" if is_parent else ""

@@ -318,7 +318,7 @@ class Collector:
                 "workflow_name": task_info.get("workflow_name", ""),
                 "framework_code": task_info.get("task_desc", ""),
                 "impl_code": task_info.get("coder_code", ""),
-                "profile": task_info.get("profile_res", ())  # 保存完整的三元组
+                "profile": task_info.get("profile_res", {})  # 保存性能分析结果字典
             }
 
             # 生成文件名并保存

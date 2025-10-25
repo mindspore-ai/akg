@@ -160,3 +160,36 @@ result = tl.where(condition, true_value, false_value)
 valid_mask = (offsets < n_elements) & (offsets >= 0)
 data = tl.load(ptr + offsets, mask=valid_mask, other=0.0)
 ```
+
+## 5. autotune使用教程
+
+Autotune 是 Triton 的自动性能优化机制，通过尝试不同的配置参数组合，自动找到最优的内核执行配置。示例：
+
+```
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_M': 128, 'PARALLEL_NUM': 32}),
+        triton.Config({'BLOCK_M': 128, 'PARALLEL_NUM': 64}),
+        triton.Config({'BLOCK_M': 64, 'PARALLEL_NUM': 32}),
+    ],
+    key=['M'],
+)
+@triton.jit
+def kernel(
+    input,
+    output,
+    BLOCK_M: tl.constexpr, PARALLEL_NUM: tl.constexpr # 注意将autotune的参数作为constexpr输入
+):
+    pass
+
+def host_func(input):
+    output = torch.empty_like(input)
+    grid = lambda meta: (triton.cdiv(M, meta['BLOCK_M'] * meta['PARALLEL_NUM']))
+    matmul_kernel[grid](
+        input,
+        output, # 注意调用时不要添加configs里的参数，这部分会在autotune时自动添加
+    )
+    return output
+```
+
+**注意** 不要对'num_warps', 'num_ctas', 'num_stages', 'num_buffers_warp_spec', 'num_consumer_groups', 'reg_dec_producer', 'reg_inc_consumer', 'maxnreg'进行修改调优，当前不支持
