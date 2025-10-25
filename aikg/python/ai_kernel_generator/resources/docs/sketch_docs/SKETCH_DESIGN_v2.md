@@ -207,7 +207,7 @@ sigmoid(src, dst)             # dst = sigmoid(src)
 ```python
 gemm(a, b, dst)               # dst += a @ b (矩阵乘法)
 dot(a, b, result)             # result = dot(a, b) (向量点积)
-reduce_sum(src, axis, dst)    # dst = sum(src, axis=axis)
+reduce_sum(src, axis, dst)    # dst = sum(src, axis=axis) (允许axis为list，指代多轴同时reduce)
 reduce_max(src, axis, dst)    # dst = max(src, axis=axis)
 ...
 ```
