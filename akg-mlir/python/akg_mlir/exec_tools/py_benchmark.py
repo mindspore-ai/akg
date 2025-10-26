@@ -218,6 +218,7 @@ def create_executable(kernel_name,
                       output_indexes,
                       is_dyn_shape):
     """Generate executable files"""
+    cur_path = _get_kernel_meta_dir()
     tmp_file_path = _get_tmp_dir()
     tmp_file_name = os.path.join(
         tmp_file_path, "gen_func_" + kernel_name + ".so")

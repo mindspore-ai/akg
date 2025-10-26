@@ -17,6 +17,7 @@
 import argparse
 import os
 import pathlib
+from .code_template import cpu_profiling_template
 
 
 def wrap_timer_func(file, kernel_name, profiling_trails):
@@ -32,13 +33,11 @@ def wrap_timer_func(file, kernel_name, profiling_trails):
     """
     if not file.endswith(".mlir"):
         return file
-    template_src = ""
-    with open(os.path.join(str(pathlib.Path(__file__).absolute().parent), "cpu_profiling_template.txt"), 'r') as f:
-        template_src = f.read()
     inputs_name = ""
     inputs_ptr = ""
     file_src = ""
     kernel_func_line_id = 0
+    template_src = cpu_profiling_template
     with open(file, 'r') as f:
         file_src = f.readlines()
         for idx, line in enumerate(file_src):
