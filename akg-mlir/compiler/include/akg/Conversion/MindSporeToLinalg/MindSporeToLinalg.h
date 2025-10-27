@@ -30,6 +30,7 @@ class FuncOp;
 std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToLinalgPass();
 
 void populateLowerMindSporeToLinalgPattern(RewritePatternSet &patterns);
+void populateLowerMindSporeCompareToLinalgPattern(RewritePatternSet &patterns);
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_CONVERSION_MINDSPORETOLINALG_MINDSPORETOLINALG_H_
