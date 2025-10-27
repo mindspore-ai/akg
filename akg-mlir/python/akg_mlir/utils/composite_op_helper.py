@@ -206,6 +206,11 @@ def precheck(desc):
                 "The input with mean value %s fails the precheck because the value cannot be a input",
                 input_value
             )
+        elif op_name == "Pow" and (abs(inputs[0]) >= 1e4 or abs(inputs[1]) >= 10) :
+            logging.info(
+                "The input with mean value %s fails the precheck because base or exponent is too large",
+                input_value
+            )
         else:
             res = elemwise_op_func_map[op_name](*inputs)
         return res
