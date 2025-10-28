@@ -33,6 +33,9 @@ TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "kern
 PROFILE_BASE_TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "prof_base_template.j2")
 PROFILE_GENERATION_TEMPLATE_PATH = os.path.join(
     get_project_root(), "resources", "templates", "prof_generation_template.j2")
+# 生成CMakeLists.txt和运行脚本的路径
+CMAKE_TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "cmake_template.j2")
+RUN_TEMPLATE_PATH = os.path.join(get_project_root(), "utils", "compile_tools", "ascend_compile", "run.sh")
 
 # 类型定义
 FrameworkType = Literal["torch", "mindspore", "numpy"]
@@ -75,7 +78,8 @@ class KernelVerifier:
         self.backend = backend.lower()
         self.arch = arch.lower()
         self.task_id = task_id
-
+        # 获取AscendC代码
+        self.context = {}
         # 从config中获取log_dir
         if config:
             self.config = config
@@ -84,6 +88,8 @@ class KernelVerifier:
             raise ValueError("config is required for KernelVerifier")
         if "triton" in self.dsl:
             self.impl_func_name = impl_func_name or f"{op_name}_triton_{framework}"
+        elif self.dsl == "ascendc":
+            self.impl_func_name = impl_func_name or f"{op_name}_kernel"
         else:
             self.impl_func_name = impl_func_name or f"{op_name}_{dsl}_{framework}"
 
@@ -164,7 +170,53 @@ class KernelVerifier:
         if import_lines:
             return "\n".join(import_lines) + "\n\n"
         return ""
+    
+    def generate_ascendc_project(self, impl_code: str, verify_dir: str):
+        """生成AscendC项目文件"""
+        try:
+            # 生成CMakeLists.txt
+            cmake_file = os.path.join(verify_dir, f"CMakeLists.txt")
+            with open(CMAKE_TEMPLATE_PATH, "r", encoding="utf-8") as f:
+                template = Template(f.read())
+            cmake_code = template.render(op_name=self.op_name)
+            with open(cmake_file, "w", encoding="utf-8") as f:
+                f.write(cmake_code)
+            shutil.copy(RUN_TEMPLATE_PATH, verify_dir)
+            
+            # 填充代码
+            try: 
+                compile(impl_code, "<string>", "exec")
+                exec(impl_code, self.context)
+            except Exception as e:
+                raise Exception(f"Error in generated code: {e}")
 
+            # 检查并写入三个关键文件
+            host_tiling_src = self.context.get('host_tiling_src')
+            python_binding_src = self.context.get('python_bind_src')
+            kernel_src = self.context.get('kernel_src')
+            
+            # 检查代码是否为None
+            if host_tiling_src is None:
+                raise Exception(f"host_tiling_src is None - 生成的代码中缺少host侧tiling部分")
+            if python_binding_src is None:
+                raise Exception(f"python_bind_src is None - 生成的代码中缺少内核调用python_bind部分")
+            if kernel_src is None:
+                raise Exception(f"kernel_src is None - 生成的代码中缺少kernel主函数部分")
+
+            # 写入文件
+            with open(os.path.join(verify_dir, f"{self.op_name}_tiling.cpp"), "w") as f:
+                f.write(host_tiling_src)
+            with open(os.path.join(verify_dir, f"pybind11.cpp"), "w") as f:
+                f.write(python_binding_src)
+            with open(os.path.join(verify_dir, f"{self.op_name}_kernel.cpp"), "w") as f:
+                f.write(kernel_src)
+                
+            logger.info(f"[{self.op_name}] AscendC项目文件生成完成")
+            
+        except Exception as e:
+            logger.error(f"AscendC项目生成失败: {e}")
+            raise Exception(f"AscendC项目生成失败: {e}")
+        
     def _detect_dynamic_shape(self) -> bool:
         """
         检测框架代码是否包含动态shape函数
@@ -182,18 +234,18 @@ class KernelVerifier:
             f.write(self.framework_code)
 
         # 创建具体实现文件
-        if "triton" in self.dsl:
-            file_name = f"{self.op_name}_triton.py"
+        if "ascendc" in self.dsl:
+            self.generate_ascendc_project(impl_code, verify_dir)
         else:
             file_name = f"{self.op_name}_{self.dsl}.py"
-        impl_file = os.path.join(verify_dir, file_name)
+            impl_file = os.path.join(verify_dir, file_name)
 
-        # 生成import语句
-        import_statements = self._generate_import_statements()
+            # 生成import语句
+            import_statements = self._generate_import_statements()
 
-        with open(impl_file, "w", encoding="utf-8") as f:
-            # 先写入import语句，再写入原始代码
-            f.write(import_statements + impl_code)
+            with open(impl_file, "w", encoding="utf-8") as f:
+                # 先写入import语句，再写入原始代码
+                f.write(import_statements + impl_code)
 
         # 生成验证脚本
         verify_file = os.path.join(verify_dir, f"verify_{self.op_name}.py")
@@ -686,13 +738,23 @@ class KernelVerifier:
         verify_dir = self._create_verify_dir(current_step)
 
         # 在独立目录中生成验证项目
-        self.gen_verify_project(target_code, verify_dir, device_id)
+        project_gen_log = ""  # 用于存储项目生成阶段的日志
+        try:
+            self.gen_verify_project(target_code, verify_dir, device_id)
+        except Exception as e:
+            # 捕获gen_verify_project中的异常，记录到project_gen_log中
+            error_msg = str(e)
+            logger.error(f"验证项目生成失败: {error_msg}")
+            project_gen_log = f"项目生成失败: {error_msg}\n"
 
         # 从config获取timeout配置，默认5分钟
         verify_timeout = self.config.get('verify_timeout', 300)
 
         # 运行验证
         verify_res, verify_log = self.run_verify(verify_dir, timeout=verify_timeout)
+        
+        # 拼接项目生成日志和验证日志
+        verify_log = project_gen_log + verify_log
 
         # 保存验证结果到JSONL文件（每行一个JSON对象）
         result_jsonl_path = os.path.join(os.path.expanduser(self.log_dir), "verification_results.jsonl")

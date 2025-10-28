@@ -61,8 +61,8 @@ VALID_CONFIGS = {
     },
     "torch": {
         "ascend": {
-            "ascend910b4": ["triton", "triton-russia", "tilelang_npuir"],
-            "ascend310p3": ["swft"]
+            "ascend910b4": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
+            "ascend310p3": ["swft", "ascendc"]
         },
         "cuda": {
             "a100": ["triton", "cuda_c", "tilelang_cuda"],

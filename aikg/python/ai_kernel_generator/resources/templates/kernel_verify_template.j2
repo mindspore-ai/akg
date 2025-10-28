@@ -66,6 +66,10 @@ from {{ op_name }}_cuda_c import {{ impl_func_name }}
 from {{ op_name }}_cpp import {{ impl_func_name }}
 {% elif dsl == "tilelang_cuda" %}
 from {{ op_name }}_tilelang_cuda import {{ impl_func_name }}
+{% elif dsl == "ascendc" %}
+import sys,os
+import torch_npu
+import subprocess
 {% endif %}
 
 # Timeout装饰器函数
@@ -382,7 +386,11 @@ def verify_implementations():
         """处理输入数据，将数据移动到正确的设备"""
         {% if framework == "torch" %}
         if isinstance(x, torch.Tensor):
+        {% if dsl == "ascendc" %}
+            return x.npu()
+        {% else %}
             return x.to(device)
+        {% endif %}
         elif isinstance(x, np.ndarray):
             return torch.from_numpy(x).to(device)
         elif isinstance(x, (list, tuple)):
@@ -426,6 +434,32 @@ def verify_implementations():
         {% elif dsl in ["triton", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda"] %}
         # 运行实现
         impl_output = {{ impl_func_name }}(*inputs_for_impl)
+        {% elif dsl == "ascendc" %}
+        # 处理器
+        ARCH_TO_SOC_VERSION = {
+            "ascend910b4": "Ascend910B4",
+            "ascend310p3": "Ascend310P3"
+        }
+        
+        SOC_VERSION = ARCH_TO_SOC_VERSION.get("{{ arch }}")
+        try:
+            result = subprocess.run(["bash", "run.sh", "-v", SOC_VERSION], check=True, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"[ERROR]：编译失败！")
+            else:
+                print(f"[INFO]：编译成功！")
+        except subprocess.CalledProcessError as e:
+            error_msg = f"\n{'='*50}\n"
+            error_msg += f"NPU Compiler Error(exit code {e.returncode})\n"
+            if e.stdout:
+                error_msg += f"\nSTDOUT:\n{e.stdout}\n"
+            if e.stderr:
+                error_msg += f"\nSTDERR:\n{e.stderr}\n"
+            raise RuntimeError(error_msg) from e
+        sys.path.insert(0, "build")
+        import {{ impl_func_name }}
+        torch.npu.config.allow_internal_format = False
+        impl_output = {{ impl_func_name }}.run_{{ impl_func_name }}(*inputs_for_impl)
         {% endif %}
 
         if not isinstance(framework_output, (list, tuple)):
