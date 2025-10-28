@@ -118,7 +118,6 @@ class AkgMlirDriver(object):
         self.output_dir = get_kernel_meta_path() if output_dir == "" else output_dir
         self.akg_tools_dir = (
             os.path.dirname(os.path.abspath(__file__))
-            #os.path.join(pathlib.Path(__file__).absolute().parent, "../../build/")
             if akg_tools_dir == ""
             else akg_tools_dir
         )
@@ -507,7 +506,7 @@ class AkgMlirDriver(object):
         if opt_options != "":
             opt_pipeline += "=" + opt_options
 
-        cmd = [self.akg_tools_dir + "bin/akg-opt", input_file, opt_pipeline, "-o", out_file]
+        cmd = [os.path.join(self.akg_tools_dir, "bin/akg-opt"), input_file, opt_pipeline, "-o", out_file]
         if self.dump_ir:
             cmd.append("--mlir-print-ir-after-all")
         try:

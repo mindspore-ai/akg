@@ -1,5 +1,6 @@
+cuda_runtime_template = '''
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,15 +29,15 @@
 #include<iomanip>
 #include <cuda_fp16.h>
 
-#define checkCudaDrvErrors(call)                                                                                   \
-    do {                                                                                                           \
-        CUresult status = call;                                                                                    \
-        if (status != 0) {                                                                                         \
-            const char *msg = nullptr;                                                                             \
-            cuGetErrorString(status, &msg);                                                                        \
-            std::cerr << "CUDA error at line " << __LINE__ << " in file " << __FILE__ << ": " << msg << std::endl; \
-            exit(1);                                                                                               \
-        }                                                                                                          \
+#define checkCudaDrvErrors(call)                                                                                   \\
+    do {                                                                                                           \\
+        CUresult status = call;                                                                                    \\
+        if (status != 0) {                                                                                         \\
+            const char *msg = nullptr;                                                                             \\
+            cuGetErrorString(status, &msg);                                                                        \\
+            std::cerr << "CUDA error at line " << __LINE__ << " in file " << __FILE__ << ": " << msg << std::endl; \\
+            exit(1);                                                                                               \\
+        }                                                                                                          \\
     } while (0)
 
 std::string ReadFileToString(const char *filename)
@@ -56,7 +57,7 @@ extern "C" void cuda_runtime_profiling(
     int min_repeat_ms=0
     )
 {
-    std::cout<< "Start runtime profiling:\n";
+    std::cout<< "Start runtime profiling:" << std::endl;
     // initialize cuda
     checkCudaDrvErrors(cuInit(0));
     // get the number of cuda devices
@@ -77,7 +78,7 @@ extern "C" void cuda_runtime_profiling(
     checkCudaDrvErrors(cuCtxCreate(&context, 0, device));
 
     CUstream stream;
-    cuStreamCreate(&stream, 0);    
+    cuStreamCreate(&stream, 0);
 
     std::string ptx_code = ReadFileToString(rt_code_ptx_path);
 
@@ -97,7 +98,7 @@ rt_code_mem_copy_htod
 rt_code_set_grid_params
 rt_code_set_block_params
 rt_code_init_memref_params
-    std::cout<< "Profiling init done;\n";
+    std::cout<< "Profiling init done;" << std::endl;
     // launch the kernel
     void *args[] = {rt_code_set_args_params};
 
@@ -121,7 +122,7 @@ rt_code_init_memref_params
 
         // ns->ms
         double speed = std::chrono::duration_cast<std::chrono::duration<double> >(
-            tend - tbegin).count() / number; 
+            tend - tbegin).count() / number;
         res.push_back(speed);
     }
 
@@ -137,13 +138,13 @@ rt_code_free_d_mem
     }
     avg /= static_cast<double>(res.size());
     std::cout<< "average latency = " <<  std::fixed << std::setprecision(10)  << avg * 1000 << "ms" << std::endl;
-    std::cout<< "Finish runtime profiling.\n";
+    std::cout<< "Finish runtime profiling." << std::endl;
 }
 
 
 extern "C" void cuda_runtime_exec(rt_code_params_list)
 {
-    std::cout<< "Start runtime execution.\n";
+    std::cout<< "Start runtime execution." << std::endl;
     // initialize cuda
     checkCudaDrvErrors(cuInit(0));
 
@@ -191,5 +192,49 @@ rt_code_init_memref_params
 rt_code_mem_copy_dtoh
     // free memory
 rt_code_free_d_mem
-    std::cout<< "Finish runtime execution.\n";
+    std::cout<< "Finish runtime execution." << std::endl;
 }
+'''
+
+cpu_profiling_template = '''
+  llvm.func @nanoTime() -> i64 attributes {llvm.emit_c_interface, sym_visibility = "private"} {
+    %0 = llvm.call @_mlir_ciface_nanoTime() : () -> i64
+    llvm.return %0 : i64
+  }
+  llvm.func @warmUp(%arg0 : INPUTS_PTR) -> () attributes {llvm.emit_c_interface, sym_visibility = "private"} {
+    %c0 = llvm.mlir.constant(0 : index) : i64
+    %c1 = llvm.mlir.constant(1 : index) : i64
+    %c100 = llvm.mlir.constant(1000 : index) : i64
+    llvm.br ^bb1(%c0 : i64)
+  ^bb1(%2: i64):  // 2 preds: ^bb0, ^bb2
+    %1 = llvm.icmp "slt" %2, %c100 : i64
+    llvm.cond_br %1, ^bb2, ^bb3
+  ^bb2:  // pred: ^bb1
+    llvm.call @KERNEL_NAME(%arg0) : (INPUTS_PTR) -> ()
+    %3 = llvm.add %2, %c1  : i64
+    llvm.br ^bb1(%3 : i64)
+  ^bb3:  // pred: ^bb1
+    llvm.return
+  }
+  llvm.func @_mlir_ciface_nanoTime() -> i64 attributes {llvm.emit_c_interface, sym_visibility = "private"}
+  llvm.func @main(INPUTS_NAME : INPUTS_PTR, %arg_time: !llvm.ptr<i64>) attributes {llvm.emit_c_interface, sym_visibility = "public"} {
+    %c0 = llvm.mlir.constant(0 : index) : i64
+    %c1 = llvm.mlir.constant(1 : index) : i64
+    %ctimes = llvm.mlir.constant(CTIMES : index) : i64
+    llvm.call @warmUp(INPUTS_NAME) : (INPUTS_PTR) -> ()
+    %0 = llvm.call @nanoTime() : () -> i64
+    llvm.br ^bb1(%c0 : i64)
+  ^bb1(%2: i64):  // 2 preds: ^bb0, ^bb2
+    %1 = llvm.icmp "slt" %2, %ctimes : i64
+    llvm.cond_br %1, ^bb2, ^bb3
+  ^bb2:  // pred: ^bb1
+    llvm.call @KERNEL_NAME(INPUTS_NAME) : (INPUTS_PTR) -> ()
+    %3 = llvm.add %2, %c1  : i64
+    llvm.br ^bb1(%3 : i64)
+  ^bb3:  // pred: ^bb1
+    %4 = llvm.call @nanoTime() : () -> i64
+    %5 = llvm.sub %4, %0  : i64
+    llvm.store %5, %arg_time : !llvm.ptr<i64>
+    llvm.return
+  }
+'''

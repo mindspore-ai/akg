@@ -20,11 +20,7 @@ import pathlib
 from functools import reduce
 from .dynamic_utils import get_gpu_setting_by_input, get_device_shape
 from .composite_op_helper import get_cpptype_from_pytype
-
-
-def get_cur_dir():
-    """Get parent path of this file"""
-    return pathlib.Path(__file__).absolute().parent
+from .code_template import cuda_runtime_template
 
 
 class ProfilingParams:
@@ -72,11 +68,8 @@ def gen_cuda_runtime_code(kernel_name,
                           fake_output_indices,
                           path="./tmp_files/"):
     """Generate cuda runtime code"""
-    template_src = ""
+    template_src = cuda_runtime_template
     akg_kernel_meta_path = os.path.join(path, "akg_kernel_meta")
-
-    with open(os.path.join(str(get_cur_dir()), "mlir_cuda_runtime_template.txt"), 'r') as file:
-        template_src = file.read()
     device_shape, symbol_map, support_info = get_device_shape(
         input_for_mod, kernel_name, is_dyn_shape)
     mapping_file = os.path.join(akg_kernel_meta_path, kernel_name + ".json")
