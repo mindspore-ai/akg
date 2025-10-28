@@ -75,12 +75,14 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
     auto tensor_obj_ptr = args[i].cast<AscendTensorObjStructPyTorchPtr>();
     auto tensor = tensor_obj_ptr->tensor_info;
     auto is_bf16 = (bool)(tensor_obj_ptr->is_bf16);
-    if (is_bf16) {
+
+    void* data_addr = tensor_obj_ptr->data_ptr();
+    if (is_bf16 && py::isinstance<py::buffer>(tensor)) {
       py::buffer_info buffer_info = py::cast<py::buffer>(tensor).request();
       buffer_info = ConvertToBF16(buffer_info);
+      data_addr = buffer_info.ptr;
       bf16_buf_map[i] = std::move(buffer_info);
     }
-    void* data_addr = tensor_obj_ptr->data_ptr();
     auto bytes = (unsigned long long)(tensor_obj_ptr->nbytes);
     auto is_output = (bool)(tensor_obj_ptr->is_output);
     auto is_host = (bool)(tensor_obj_ptr->is_host());
