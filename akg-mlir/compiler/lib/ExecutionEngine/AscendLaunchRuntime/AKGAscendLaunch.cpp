@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <iostream>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AKGAscendRun.h"
 
