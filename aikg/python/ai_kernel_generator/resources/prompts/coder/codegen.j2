@@ -56,20 +56,6 @@
 
 {{ sketch }}
 
-### Sketch到{{dsl}}代码转换要点
-{% if dsl == "triton" %}
-- **并行映射**: num_cores → grid size, tile_size → BLOCK_SIZE
-- **流水线配置**: pipeline_depth → num_stages, 核内并行度 → num_warps  
-- **数据访问**: load/store → tl.load/tl.store with mask
-- **计算实现**: 自然语言描述 → tl.函数 (如tl.maximum, tl.dot)
-- **循环结构**: pipeline_range → for循环 with tl.cdiv
-{% elif dsl == "swft" %}
-- **并行映射**: num_cores → core_num, tile_size → block_size
-- **循环结构**: pipeline_range → gm.for_range
-- **数据访问**: load/store → gm.dup/gm.cast  
-- **计算实现**: 自然语言描述 → gm.函数 (如gm.vmax, gm.mmad)
-- **内存管理**: 注意GlobalMem, VecBuf, CubeBuf的使用
-{% endif %}
 {% endif %}
 
 {% if coder_code %}
@@ -106,12 +92,11 @@ output = {{ func_name }}(*inputs)
 {% endif %}
 ```
 
-2. 参考《算子任务描述》中的 get_init_inputs() 中的参数，要在{{ func_name }}函数内部以硬编码的常量形式体现：
+2. 所需要的shape参数，要从inputs的数据形状中获取，以适应不同的输入(**重要** 需要仔细检查输入的变量和shape与代码中一一对应）：
 ```
 def {{ func_name }}(...):
-  # 根据 get_init_inputs() 生成参数
-  param0 = ... # 参考《算子任务描述》中 get_init_inputs() 中获取的参数，硬编码于此
-  param1 = ... # 参考《算子任务描述》中 get_init_inputs() 中获取的参数，硬编码于此
+  # 从输入张量获取shape参数
+  P1, P2, P3 = input_tensor.shape  # 变量名应该与inputs构造时对应的变量保持一致，可以用注释标注实际数值并检查合理性
   ...
   # 执行 kernel 函数
   ...

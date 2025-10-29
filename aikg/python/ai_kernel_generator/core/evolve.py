@@ -15,9 +15,9 @@
 import os
 import logging
 import random
+import uuid
 from functools import partial
-from typing import List, Dict, Any, Tuple
-from pathlib import Path
+from typing import Dict, Any
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
@@ -93,7 +93,6 @@ async def evolve(
         logger.info("Island model: Disabled (simple evolution mode)")
 
     # 本地存储路径配置
-    import uuid
     random_hash = uuid.uuid4().hex[:8]
     storage_dir = os.path.expanduser(f"~/aikg_evolve/{op_name}_{dsl}_{framework}_{backend}_{arch}/{random_hash}/")
     os.makedirs(storage_dir, exist_ok=True)

@@ -246,7 +246,7 @@ class ParserFactory:
                 "ConductorDecision",
                 {
                     'decision': (str, ...),  # 下一个要执行的agent名称
-                    'suggestion': (str, "")  # 给下一个agent的建议或指导信息
+                    'error_and_suggestion': (str, "")  # 总结报错信息，并给出下一个agent的建议或指导信息
                 }
             )
         return cls._conductor_parser

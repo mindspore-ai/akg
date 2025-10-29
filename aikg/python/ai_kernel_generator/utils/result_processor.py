@@ -187,7 +187,7 @@ class ResultProcessor:
             parsed_result = conductor_parser.parse(content)
             if parsed_result and hasattr(parsed_result, 'decision'):
                 decision = parsed_result.decision.strip().lower()
-                suggestion = getattr(parsed_result, 'suggestion', '')
+                suggestion = getattr(parsed_result, 'error_and_suggestion', '')
 
                 # 验证决策是否有效
                 for agent in valid_next_agents:
