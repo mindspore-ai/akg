@@ -52,6 +52,10 @@ namespace mlir {
 namespace akg {
 // Topological sort function for fusion plans
 // Returns a sorted list of fusion plans based on their dependencies
+// Example: Given fusion plans with dependencies: A->B, B->D, A->C, C->D
+// Input: dependencies=[(A,B), (B,D), (A,C), (C,D)], numNodes=4
+// Process: Start with nodes having no incoming edges (A), then B,C, finally D
+// Output: [(A,B), (A,C), (B,D), (C,D)] in topological order
 static std::vector<FusionPlan> topologicalSort(const std::vector<FusionPlan> &dependencies, unsigned numNodes) {
   std::vector<unsigned> inDegree(numNodes + 1, 0);
   
@@ -94,6 +98,8 @@ static std::vector<FusionPlan> topologicalSort(const std::vector<FusionPlan> &de
   return sortedEdges;
 }
 
+// Comparison function for sorting groups in topological order.
+// For global output groups, prioritizes by group template type, otherwise sorts by group ID.
 bool GroupCmp(const GroupPtr &g1, const GroupPtr &g2) {
   if (g1->isGlobalOut && g2->isGlobalOut) {
     if (g1->groupTemplate != g2->groupTemplate) {
@@ -119,10 +125,11 @@ std::vector<LoopTransform> FusionAnalyzer::inferLoopTransforms(const GroupPtr ta
 
 void FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
   for (auto oldPlan : fusionPlans) {
+    // Check if a for loop is fused into different for loops
     bool multiOut = oldPlan.fusedGroup.from == fusePlan.fusedGroup.from;
     if (multiOut) {
       llvm::outs() << "Convert multiout pc plan to sib plan\n";
-      llvm::outs() << "Original " << fusePlan.fusedBand.from << " to " << fusePlan.fusedBand.to << "\n";
+      llvm::outs() << "Original Plan node " << fusePlan.fusedBand.from << " to " << fusePlan.fusedBand.to << "\n";
 
       auto orderGroups = [&]() -> std::pair<GroupPtr, GroupPtr> {
         auto oldGroup = depGraph.getGroup(oldPlan.fusedGroup.to);
@@ -158,6 +165,7 @@ void FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
 
       fusePlan.fusedBand.from = depGraph.getNodeId(srcGroup->getLeadingFor());
       fusePlan.fusedBand.to = depGraph.getNodeId(dstGroup->getLeadingFor());
+      llvm::outs() << "Pre-fusion group " << srcGroup->groupId << " to " << dstGroup->groupId << "\n";
 
       // link all source group to dst group
       for (size_t i = 0; i < fusionPlans.size(); ++i) {
@@ -168,13 +176,15 @@ void FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
         }
       }
 
-      llvm::outs() << "New " << fusePlan.fusedBand.from << " to " << fusePlan.fusedBand.to << "\n";
+      llvm::outs() << "New Plan node " << fusePlan.fusedBand.from << " to " << fusePlan.fusedBand.to << "\n";
       fusePlan.fusionType = "V";
       break;
     }
   }
 }
 
+// Applies loop transforms and fuses source group into target group.
+// Records the fusion plan and updates group relationships.
 void FusionAnalyzer::applyAndFuse(std::vector<LoopTransform> loopTransforms, const GroupPtr targetGroup,
                                   const GroupPtr sourceGroup) {
   for (auto lt : loopTransforms) {
@@ -191,8 +201,9 @@ void FusionAnalyzer::applyAndFuse(std::vector<LoopTransform> loopTransforms, con
       finished.insert(fuseTargetId);
     }
   }
-  llvm::outs() << "Fuse " << sourceGroup->groupId << " into " << targetGroup->groupId << "\n";
-  // update fusionPlans
+  llvm::outs() << "Pre-fusion group " << sourceGroup->groupId << " to " << targetGroup->groupId << "\n";
+
+  // Get the for node IDs of sourceGroup and targetGroup
   auto srcNodeId = depGraph.getNodeId(sourceGroup->getLeadingFor());
   auto dstNodeId = depGraph.getNodeId(targetGroup->getLeadingFor());
   FusionPlan fusePlan;
@@ -201,26 +212,39 @@ void FusionAnalyzer::applyAndFuse(std::vector<LoopTransform> loopTransforms, con
 
   checkAndFixMultiOut(fusePlan);
 
-  llvm::outs() << "Add Plan " << fusePlan.fusedBand.from << " to " << fusePlan.fusedBand.to << "\n";
+  llvm::outs() << "Add Plan node " << fusePlan.fusedBand.from << " to " << fusePlan.fusedBand.to << "\n";
   fusionPlans.emplace_back(fusePlan);
 }
 
+// Gets directly connected predecessor nodes for a given node.
+// Filters out nodes that have indirect connections through other nodes.
+// Example: Given dependency graph A->B->C, A->D->C, B->D
+// Querying node C's direct predecessors:
+// - All predecessors: [A, B, D] (sorted descending: [D, B, A])
+// - Check B: B->D exists, so B is indirect predecessor, skip
+// - Check A: A->B exists, so A is indirect predecessor, skip  
+// - Result: only D is direct predecessor
 void FusionAnalyzer::getDirectlyPredecessors(unsigned id, std::vector<unsigned> &predecessorIds) {
   std::vector<unsigned> allPredecessorIds;
 
   depGraph.getPredecessorNodes(id, allPredecessorIds);
+  // Sort in descending order to prioritize direct predecessors.
   std::sort(allPredecessorIds.begin(), allPredecessorIds.end(), std::greater<int>());
 
   std::unordered_set<size_t> skipIdx;
+  // i=0: direct predecessor
   for (size_t i = 1; i < allPredecessorIds.size(); ++i) {
     if (skipIdx.count(i)) {
       continue;
     }
     auto pid = allPredecessorIds[i];
+    // Predecessor nodes are sorted in descending order, so j < i means checking earlier nodes
     for (size_t j = 0; j < i; ++j) {
       if (skipIdx.count(j)) {
         continue;
       }
+      // Check if there exists an edge from pid to allPredecessorIds[j]
+      // If edge exists, pid is not a direct predecessor but an indirect one, add to skipIdx
       if (depGraph.hasEdge(pid, allPredecessorIds[j], mlir::Value())) {
         llvm::outs() << "Skip " << id << " cause it has edge to " << allPredecessorIds[j] << "\n";
         skipIdx.insert(i);
@@ -236,6 +260,8 @@ void FusionAnalyzer::getDirectlyPredecessors(unsigned id, std::vector<unsigned> 
   }
 }
 
+// Checks if the fusion plan is complete.
+// Returns true if all nodes have been processed.
 bool FusionAnalyzer::finishPlan() { return finished.size() == depGraph.nodes.size(); }
 
 void FusionAnalyzer::plan() {
@@ -260,8 +286,8 @@ void FusionAnalyzer::plan() {
         auto tmp = depGraph.getGroupByNode(id);
         if (tmp != nullptr && tmp->groupId != targetGroup->groupId) {
           if (!std::count(sourceGroupIds.begin(), sourceGroupIds.end(), tmp->groupId)) {
-            llvm::outs() << "Insert source group " << tmp->groupId << " by node " << id << " , target is "
-                         << fuseTargetId << "\n";
+            llvm::outs() << "Fuse source group " << tmp->groupId << " (depends on node " << id << ") into target group "
+                         << targetGroup->groupId << " (target node " << fuseTargetId << ")\n";
             sourceGroupIds.emplace_back(tmp->groupId);
           }
         }
@@ -275,15 +301,13 @@ void FusionAnalyzer::plan() {
     }
     for (auto id : sourceGroupIds) {
       auto sourceGroup = groups[id];
-      llvm::outs() << "Do fusion for target  g1 = " << targetGroup->groupId << " g2 = " << sourceGroup->groupId << "\n";
-
       auto loopTransforms = inferLoopTransforms(targetGroup, sourceGroup);
       applyAndFuse(loopTransforms, targetGroup, sourceGroup);
     }
   }
   auto sortedPlan = topologicalSort(fusionPlans, depGraph.nodes.size());
   for (auto p : sortedPlan) {
-    llvm::outs() << "Sort plan : " << p.fusedBand.from << " into " << p.fusedBand.to << "\n";
+    llvm::outs() << "Sort plan: node " << p.fusedBand.from << " to " << p.fusedBand.to << "\n";
   }
   fusionPlans = sortedPlan;
 }
@@ -291,6 +315,9 @@ void FusionAnalyzer::plan() {
 
 void FusionAnalyzer::initGroups() { groups = depGraph.groups; }
 
+// Performs topological sorting of groups for fusion analysis.
+// Groups are sorted according to their priority and dependencies using GroupCmp,
+// then all node IDs from sorted groups are collected into topoSortNodeIds.
 void FusionAnalyzer::topoSort() {
   topoSortNodeIds.clear();
   std::vector<GroupPtr> allGroups;
@@ -298,6 +325,7 @@ void FusionAnalyzer::topoSort() {
     allGroups.push_back(it.second);
   }
   std::sort(allGroups.begin(), allGroups.end(), GroupCmp);
+  llvm::outs() << "topoSort: \n";
   for (auto g : allGroups) {
     std::string groupTemplateString = g->getGroupTemplateString();
     llvm::outs() << "group " << g->groupId << " groupTemplate " << groupTemplateString << "\n";
@@ -305,7 +333,7 @@ void FusionAnalyzer::topoSort() {
       topoSortNodeIds.push_back(node);
     }
   }
-  llvm::outs() << "topoSort: ";
+  llvm::outs() << "topoSortNodeIds: ";
   for (auto it : topoSortNodeIds) {
     llvm::outs() << it << ", ";
   }
@@ -313,6 +341,8 @@ void FusionAnalyzer::topoSort() {
   return;
 }
 
+// Gets the next target group for fusion.
+// Returns the group that should be the target of the next fusion operation.
 GroupPtr FusionAnalyzer::getFusionTargetGroup() {
   for (auto nodeId : topoSortNodeIds) {
     if (!finished.count(nodeId)) {

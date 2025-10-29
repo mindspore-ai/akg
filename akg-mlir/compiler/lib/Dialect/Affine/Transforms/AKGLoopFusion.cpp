@@ -96,22 +96,59 @@ void AKGLoopFusion::runOnBlock(Block *block) {
   FusionCodeGenHelper codegenerator = FusionCodeGenHelper(dependenceGraph);
   
   // Process each fusion plan
-  for (auto &plan : analyzer.fusionPlans) {
-    auto [srcId, dstId] = plan.fusedBand;
+  for (size_t i = 0; i < analyzer.fusionPlans.size(); ++i) {
+    auto &plan = analyzer.fusionPlans[i];
+    
+    // Apply node alias resolution to get the actual current node IDs
+    auto actualSrcId = codegenerator.getAliasId(plan.fusedBand.from);
+    auto actualDstId = codegenerator.getAliasId(plan.fusedBand.to);
+    
+    // Skip if source node has been fused into destination (alias exists)
+    if (actualSrcId == actualDstId) {
+      llvm::outs() << "Skipping fusion plan: source " << plan.fusedBand.from 
+                   << " already fused into destination " << plan.fusedBand.to << "\n";
+      continue;
+    }
+    
+    // Check for conflicts with subsequent fusion plans
+    bool hasConflict = false;
+    for (size_t j = i + 1; j < analyzer.fusionPlans.size(); ++j) {
+      auto &futurePlan = analyzer.fusionPlans[j];
+      auto futureSrcId = codegenerator.getAliasId(futurePlan.fusedBand.from);
+      auto futureDstId = codegenerator.getAliasId(futurePlan.fusedBand.to);
+      
+      // Check for bidirectional conflict: current (src->dst) conflicts with future (dst->src)
+      if ((actualSrcId == futureDstId && actualDstId == futureSrcId) ||
+          (actualSrcId == futureSrcId && actualDstId == futureDstId)) {
+        llvm::outs() << "Conflict detected: current plan " << actualSrcId << " -> " << actualDstId
+                     << " conflicts with future plan " << futureSrcId << " -> " << futureDstId << "\n";
+        hasConflict = true;
+        break;
+      }
+    }
+    
+    if (hasConflict) {
+      llvm::outs() << "Skipping fusion plan due to conflict: " << actualSrcId << " -> " << actualDstId << "\n";
+      continue;
+    }
+    
     // Get source and destination affine::AffineForOp operations from the dependence graph
-    auto srcFor = dyn_cast<affine::AffineForOp>(dependenceGraph.getNode(srcId)->op);
-    auto dstFor = dyn_cast<affine::AffineForOp>(dependenceGraph.getNode(dstId)->op);
+    auto srcFor = dyn_cast<affine::AffineForOp>(dependenceGraph.getNode(actualSrcId)->op);
+    auto dstFor = dyn_cast<affine::AffineForOp>(dependenceGraph.getNode(actualDstId)->op);
     
     if (srcFor && dstFor) {
       if (plan.fusionType == "V") {
         // Vertical fusion: calculate loop depth for the destination loop
         unsigned dstLoopDepthTest = 0;
         dstFor.walk([&](affine::AffineForOp op) { dstLoopDepthTest++; });
-        codegenerator.doVFuse(srcId, dstId, srcFor, dstFor, dstLoopDepthTest, dstLoopDepthTest);
+        codegenerator.doVFuse(actualSrcId, actualDstId, srcFor, dstFor, dstLoopDepthTest, dstLoopDepthTest);
       } else {
         // Horizontal fusion: fuse loops at the same nesting level
-        codegenerator.doHFuse(srcId, dstId, srcFor, dstFor);
+        codegenerator.doHFuse(actualSrcId, actualDstId, srcFor, dstFor);
       }
+    } else {
+      llvm::outs() << "Warning: Could not find valid operations for fusion plan: node "
+                   << plan.fusedBand.from << " to " << plan.fusedBand.to << "\n";
     }
   }
 }

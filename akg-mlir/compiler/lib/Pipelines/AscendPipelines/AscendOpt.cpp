@@ -61,9 +61,15 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
 
   if (options.enableAKGLoopFusion) {
     bool keepFakeOuts = true;
-    nestedFunctionPM.addPass(createLinalgCopyBufferizePass(keepFakeOuts));
+    pm.addPass(createLinalgCopyBufferizePass(keepFakeOuts));
     pm.addPass(bufferization::createEmptyTensorToAllocTensorPass());
-    pm.addPass(bufferization::createOneShotBufferizePass());
+
+    bufferization::OneShotBufferizationOptions bufferizationOpts;
+    bufferizationOpts.bufferizeFunctionBoundaries = true;
+    bufferizationOpts.setFunctionBoundaryTypeConversion(bufferization::LayoutMapOption::IdentityLayoutMap);
+    bufferizationOpts.allowReturnAllocsFromLoops = true;
+    pm.addPass(bufferization::createOneShotBufferizePass(bufferizationOpts));
+
     pm.addPass(createCanonicalizerPass());
     pm.addPass(createMemrefCopyToLoopsPass());
     pm.addPass(createMatchAndMarkReductionOpsPass());
