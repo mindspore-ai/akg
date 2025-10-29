@@ -3,9 +3,8 @@ import torch.nn as nn
 
 
 class Model(nn.Module):
-    def __init__(self, dim=None):
+    def __init__(self):
         super(Model, self).__init__()
-        self.dim = dim
 
     def forward(self, input_tensor):
         # torch.amax(input, dim, keepdim=False)
@@ -14,7 +13,7 @@ class Model(nn.Module):
         # It is commonly used in neural networks for:
         # - Robust pooling operations
         # - Finding extreme values in feature maps
-        return torch.amax(input_tensor, self.dim)
+        return torch.amax(input_tensor)
 
 
 def get_inputs():
@@ -25,6 +24,5 @@ def get_inputs():
 
 
 def get_init_inputs():
-    # Specific dim value for reduction
-    dim = 1  # Reduce along second dimension (features dimension)
-    return [dim]
+    # No parameters needed for global max
+    return []

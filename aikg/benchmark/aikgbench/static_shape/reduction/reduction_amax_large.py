@@ -8,19 +8,19 @@ class Model(nn.Module):
         self.dim = dim
 
     def forward(self, input_tensor):
-        # torch.amin(input, dim, keepdim=False)
-        # Returns the minimum value of each row of the input tensor in the given dimension(s) dim.
-        # This function is very similar to torch.min(), but differs in how gradients are propagated.
+        # torch.amax(input, dim, keepdim=False)
+        # Returns the maximum value of each row of the input tensor in the given dimension(s) dim.
+        # This function is very similar to torch.max(), but differs in how gradients are propagated.
         # It is commonly used in neural networks for:
         # - Robust pooling operations
         # - Finding extreme values in feature maps
-        return torch.amin(input_tensor, self.dim)
+        return torch.amax(input_tensor, self.dim)
 
 
 def get_inputs():
-    # Batch size: 256
-    # Hidden dimension: 512
-    input_tensor = torch.randn(256, 512, dtype=torch.float32)
+    # Batch size: 2048
+    # Hidden dimension: 8192
+    input_tensor = torch.randn(2048, 8192, dtype=torch.float32)
     return [input_tensor]
 
 

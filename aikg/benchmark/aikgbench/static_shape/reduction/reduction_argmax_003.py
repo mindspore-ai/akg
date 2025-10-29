@@ -3,8 +3,9 @@ import torch.nn as nn
 
 
 class Model(nn.Module):
-    def __init__(self):
+    def __init__(self, dim=None):
         super(Model, self).__init__()
+        self.dim = dim
 
     def forward(self, input_tensor):
         # torch.argmax(input, dim, keepdim=False)
@@ -14,7 +15,7 @@ class Model(nn.Module):
         # - Converting logits to class predictions
         # - Finding the most probable token in sequence generation
         # - Implementing hard attention mechanisms
-        return torch.argmax(input_tensor, dim=1)
+        return torch.argmax(input_tensor, dim=self.dim)
 
 
 def get_inputs():
@@ -25,5 +26,7 @@ def get_inputs():
 
 
 def get_init_inputs():
-    # No parameters needed for argmax
-    return []
+    # Specific dim value for reduction
+    # Reduce all dimensions
+    dim = None
+    return [dim]

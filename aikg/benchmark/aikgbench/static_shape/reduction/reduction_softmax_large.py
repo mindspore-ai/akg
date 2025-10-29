@@ -21,12 +21,12 @@ class Model(nn.Module):
         return result
 
 def get_inputs():
-    # Batch size: 1024
-    # Hidden dimension: 4096
-    input_tensor = torch.randn(1024, 4096, dtype=torch.float32)
+    # Batch size: 2048
+    # Hidden dimension: 8192
+    input_tensor = torch.randn(2048, 8192, dtype=torch.float32)
     return [input_tensor]
 
 def get_init_inputs():
     # Parameters for Softmax operation
-    dim = 0  # Reduce along first dimension
+    dim = 1  # Reduce along second dimension
     return [dim]

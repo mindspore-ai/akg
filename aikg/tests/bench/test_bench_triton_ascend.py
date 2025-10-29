@@ -250,7 +250,7 @@ async def test_aikgbench_torch_triton_ascend910b4():
 
     for i in range(len(benchmark_name)):
         task_desc = get_aikgbench_task_desc(
-            benchmark_name[i], framework=framework)
+            benchmark_name[i], category=category, framework=framework)
         op_name = add_op_prefix(benchmark_name[i], benchmark=benchmark)
 
         task = Task(

@@ -17,10 +17,14 @@ class Model(nn.Module):
 
 
 def get_inputs():
-    # Sequence length: 16384
-    input_tensor = torch.randn(16384, dtype=torch.float32)
+    # Batch size: 16
+    # Hidden dimension: 32
+    # Sequence length: 2048
+    input_tensor = torch.randn(16, 32, 2048, dtype=torch.float32)
     return [input_tensor]
 
 
 def get_init_inputs():
-    return []
+    # Reduce along first and third dimension
+    dim = [0, 2]
+    return [dim]

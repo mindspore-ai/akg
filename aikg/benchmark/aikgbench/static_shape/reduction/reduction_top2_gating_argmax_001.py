@@ -8,15 +8,15 @@ class Model(nn.Module):
         self.dim = dim
 
     def forward(self, input_tensor):
-        # torch.min(input, dim, keepdim=False)
-        # Returns a namedtuple (values, indices) where values is the minimum value of each row
-        # of the input tensor in the given dimension dim, and indices is the index location of
-        # each minimum value found.
+        # Top-2 gating argmax operation
+        # Returns the top-2 values and their indices along the specified dimension
         # This operation is commonly used in neural networks for:
-        # - Finding the least activated neuron in a layer
-        # - Implementing min-pooling operations
-        # - Computing robust statistics in normalization layers
-        return torch.min(input_tensor, self.dim)
+        # - Top-2 selection in mixture-of-experts models
+        # - Gating mechanisms that select top-2 experts
+        # - Sparse attention mechanisms
+        # - Hierarchical routing in neural networks
+        topk_values, topk_indices = torch.topk(input_tensor, k=2, dim=self.dim)
+        return topk_values, topk_indices
 
 
 def get_inputs():

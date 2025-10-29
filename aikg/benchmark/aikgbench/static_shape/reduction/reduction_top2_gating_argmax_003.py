@@ -8,13 +8,15 @@ class Model(nn.Module):
         self.dim = dim
 
     def forward(self, input_tensor):
-        # torch.mean(input, dim, keepdim=False, dtype=None)
-        # Returns the mean value of all elements in the input tensor or along the specified dimension.
+        # Top-2 gating argmax operation
+        # Returns the top-2 values and their indices along the specified dimension
         # This operation is commonly used in neural networks for:
-        # - Computing loss functions (e.g., mean squared error)
-        # - Normalizing activations across batch dimensions
-        # - Pooling operations in convolutional networks
-        return torch.mean(input_tensor, dim=self.dim)
+        # - Top-2 selection in mixture-of-experts models
+        # - Gating mechanisms that select top-2 experts
+        # - Sparse attention mechanisms
+        # - Hierarchical routing in neural networks
+        topk_values, topk_indices = torch.topk(input_tensor, k=2, dim=self.dim)
+        return topk_values, topk_indices
 
 
 def get_inputs():
@@ -26,6 +28,6 @@ def get_inputs():
 
 def get_init_inputs():
     # Specific dim value for reduction
-    # Reduce along second dimension (features dimension)
-    dim = 1
+    # Reduce along all dimensions
+    dim = None
     return [dim]

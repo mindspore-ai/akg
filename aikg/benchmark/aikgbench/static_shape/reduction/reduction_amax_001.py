@@ -8,13 +8,13 @@ class Model(nn.Module):
         self.dim = dim
 
     def forward(self, input_tensor):
-        # torch.prod(input, dim, keepdim=False, dtype=None)
-        # Returns the product of each row of the input tensor in the given dimension dim.
-        # Product operations are commonly used in neural networks for:
-        # - Computing joint probabilities
-        # - Implementing specialized aggregation functions
-        # - Mathematical transformations in certain layers
-        return torch.prod(input_tensor, self.dim)
+        # torch.amax(input, dim, keepdim=False)
+        # Returns the maximum value of each row of the input tensor in the given dimension(s) dim.
+        # This function is very similar to torch.max(), but differs in how gradients are propagated.
+        # It is commonly used in neural networks for:
+        # - Robust pooling operations
+        # - Finding extreme values in feature maps
+        return torch.amax(input_tensor, self.dim)
 
 
 def get_inputs():
