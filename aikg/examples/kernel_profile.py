@@ -175,9 +175,12 @@ def run_kernel_profile(
         "run_times": run_times,
         "warmup_times": warmup_times
     }
-    gen_time, base_time, speedup = verifier.run_profile(
+    result = verifier.run_profile(
         current_step=0, device_id=device_id, profile_settings=profile_settings
     )
+    gen_time = result['gen_time']
+    base_time = result['base_time']
+    speedup = result['speedup']
     
     # 打印结果
     print("\n" + "="*60)
