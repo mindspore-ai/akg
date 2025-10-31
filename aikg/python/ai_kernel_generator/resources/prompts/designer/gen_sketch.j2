@@ -23,15 +23,41 @@
 {{ inspirations }}
 请参考上述从进化探索方案中检索到的相关方案草图以及性能指标，分析可用的优化方案，并生成对应的优化后的草图
 一般而言，调整切分方式、修改计算逻辑、调整计算顺序、调整计算精度等，都是可行的优化方案
-
-{% if meta_prompts %}
-## 优化要点
-请在设计草图中重点考虑以下优化建议：
-{{ meta_prompts }}
-**重要提醒**：请严格按照优化建议，基于进化探索方案中的inspirations进行修改
+请你尽最大努力来完成草图的优化，得到一个计算速度快的高效算子草图
 {% endif %}
 
-请你尽最大努力来完成草图的优化，得到一个计算速度快的高效算子草图
+{% if handwrite_suggestions %}
+## 手写优化策略与实现参考
+以下是针对类似算子的专家级优化策略和实现，请深入理解这些优化思路并应用到草图设计中：
+
+{% for suggestion in handwrite_suggestions %}
+### 参考案例 {{ loop.index }}: {{ suggestion.name }}
+
+**原始实现：**
+```{{ dsl }}
+{{ suggestion.torch_code }}
+```
+
+**优化后的实现：**
+```{{ dsl }}
+{{ suggestion.triton_code }}
+```
+
+**优化策略与要点：**
+```markdown
+{{ suggestion.improvement }}
+```
+
+---
+{% endfor %}
+
+**重要提示**：请将上述优化策略融入到草图设计中
+{% endif %}
+
+{% if meta_prompts %}
+## 额外优化要点
+在设计草图中考虑以下优化建议：
+{{ meta_prompts }}
 {% endif %}
 
 请严格按照上述指南，为当前任务生成完整的算子设计草图。

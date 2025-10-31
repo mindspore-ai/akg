@@ -35,6 +35,7 @@ from ai_kernel_generator.utils.evolve_utils import (
     migrate_elites,
     select_parent_from_elite
 )
+from ai_kernel_generator.utils.handwrite_loader import HandwriteSampler, HandwriteLoader
 
 
 os.environ['AIKG_DATA_COLLECT'] = 'on'
@@ -91,7 +92,25 @@ async def evolve(
         logger.info(f"Parent selection probability: {parent_selection_prob}")
     else:
         logger.info("Island model: Disabled (simple evolution mode)")
-
+    
+    # ========== 采样配置 ==========
+    # 手写优化建议采样数量（每次从筛选后的手写建议中采样的数量）
+    handwrite_sample_num = 2
+    
+    # Inspiration采样数量（每次从历史实现中采样的数量）
+    inspiration_sample_num = 3
+    
+    # 创建共享的HandwriteLoader实例（只创建一次，避免重复LLM调用）
+    handwrite_loader = HandwriteLoader(
+        dsl=dsl,
+        op_name=op_name,
+        task_desc=task_desc,
+        config=config
+    )
+    # 异步执行LLM筛选
+    await handwrite_loader.select_relevant_pairs()
+    logger.info(f"Shared HandwriteLoader created with {len(handwrite_loader.get_selected_pairs())} selected documents")
+    
     # 本地存储路径配置
     random_hash = uuid.uuid4().hex[:8]
     storage_dir = os.path.expanduser(f"~/aikg_evolve/{op_name}_{dsl}_{framework}_{backend}_{arch}/{random_hash}/")
@@ -123,10 +142,28 @@ async def evolve(
         current_island_counter = 0
         # 每处理多少任务后切换岛屿
         tasks_per_island_switch = max(1, tasks_per_island)
+        
+        # 为每个岛屿创建独立的HandwriteSampler，共享同一个HandwriteLoader
+        island_handwrite_samplers = [
+            HandwriteSampler(loader=handwrite_loader, sample_num=handwrite_sample_num) 
+            for _ in range(num_islands)
+        ]
+        if any(sampler._total_count > 0 for sampler in island_handwrite_samplers):
+            logger.info(f"Initialized {num_islands} independent HandwriteSamplers for islands, "
+                       f"each with {island_handwrite_samplers[0]._total_count} data pairs")
     else:
         # 简单模式不需要岛屿相关变量
         tasks_per_island = parallel_num
         island_storage_dir = storage_dir
+        
+        # 为每个个体创建独立的HandwriteSampler，共享同一个HandwriteLoader
+        individual_handwrite_samplers = [
+            HandwriteSampler(loader=handwrite_loader, sample_num=handwrite_sample_num) 
+            for _ in range(parallel_num)
+        ]
+        if any(sampler._total_count > 0 for sampler in individual_handwrite_samplers):
+            logger.info(f"Initialized {parallel_num} independent HandwriteSamplers for individuals, "
+                       f"each with {individual_handwrite_samplers[0]._total_count} data pairs")
 
     for round_idx in range(1, max_rounds + 1):
         logger.info(f"Evolve round {round_idx}/{max_rounds} started")
@@ -140,9 +177,11 @@ async def evolve(
         if use_islands:
             island_inspirations = [[] for _ in range(num_islands)]
             island_meta_prompts = [[] for _ in range(num_islands)]
+            island_handwrite_suggestions = [[] for _ in range(num_islands)]
         else:
             inspirations: list = list()
             meta_prompts = []
+            handwrite_suggestions_list = []  # 简单模式：每个个体不同的建议
 
         if round_idx == 1:
             # 第一轮：为所有岛屿初始化空的灵感列表
@@ -151,11 +190,17 @@ async def evolve(
                 for island_idx in range(num_islands):
                     island_inspirations[island_idx] = [[] for _ in range(tasks_per_island)]
                     island_meta_prompts[island_idx] = load_meta_prompts(dsl, tasks_per_island)
+                    # 为每个岛屿使用独立的sampler采样hand_write建议
+                    island_handwrite_suggestions[island_idx] = island_handwrite_samplers[island_idx].sample()
             else:
                 # 简单模式
                 inspirations = [[] for _ in range(parallel_num)]
                 # load meta-prompt
                 meta_prompts = load_meta_prompts(dsl, parallel_num)
+                # 为每个个体使用独立的sampler采样hand_write建议
+                handwrite_suggestions_list = []
+                for pid in range(parallel_num):
+                    handwrite_suggestions_list.append(individual_handwrite_samplers[pid].sample())
         else:
             # 后续轮次：为所有岛屿生成灵感
             if use_islands:
@@ -194,7 +239,7 @@ async def evolve(
                             all_excluded_implementations.append(parent_implementation)
 
                         sampled = sample_inspirations(stored_implementations, sample_num=min(
-                            len(stored_implementations), 3), use_tiered_sampling=True, parent_implementations=all_excluded_implementations)
+                            len(stored_implementations), inspiration_sample_num), use_tiered_sampling=True, parent_implementations=all_excluded_implementations)
                         
                         # 将父代加入灵感列表
                         if parent_implementation:
@@ -215,6 +260,8 @@ async def evolve(
                         island_inspirations[island_idx].append(sampled)
 
                     island_meta_prompts[island_idx] = load_meta_prompts(dsl, tasks_per_island)
+                    # 为每个岛屿使用独立的sampler采样hand_write建议
+                    island_handwrite_suggestions[island_idx] = island_handwrite_samplers[island_idx].sample()
             else:
                 # 简单模式：从本地存储加载历史最佳实现作为inspiration
                 stored_implementations = load_best_implementations(storage_dir)
@@ -222,10 +269,14 @@ async def evolve(
                 inspirations = []
                 for pid in range(parallel_num):
                     # 使用分层采样策略，每个任务采样3个不同层级的inspiration
-                    sampled = sample_inspirations(stored_implementations, sample_num=min(len(stored_implementations), 3), use_tiered_sampling=False)
+                    sampled = sample_inspirations(stored_implementations, sample_num=min(len(stored_implementations), inspiration_sample_num), use_tiered_sampling=True)
                     inspirations.append(sampled)
 
                 meta_prompts = load_meta_prompts(dsl, parallel_num)
+                # 为每个个体使用独立的sampler采样hand_write建议
+                handwrite_suggestions_list = []
+                for pid in range(parallel_num):
+                    handwrite_suggestions_list.append(individual_handwrite_samplers[pid].sample())
 
         # 创建所有岛屿的任务
         all_tasks = []
@@ -259,6 +310,7 @@ async def evolve(
                         workflow="default_workflow",
                         inspirations=island_inspirations[island_idx][pid],
                         meta_prompts=island_meta_prompts[island_idx][pid] if island_meta_prompts[island_idx] else None,
+                        handwrite_suggestions=island_handwrite_suggestions[island_idx],
                     )
 
                     task_pool.create_task(partial(task.run,))
@@ -283,6 +335,7 @@ async def evolve(
                     workflow="default_workflow",
                     inspirations=inspirations[pid],
                     meta_prompts=meta_prompts[pid] if meta_prompts else None,
+                    handwrite_suggestions=handwrite_suggestions_list[pid] if handwrite_suggestions_list else [],
                 )
 
                 task_pool.create_task(partial(task.run,))

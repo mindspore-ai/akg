@@ -190,6 +190,7 @@ class Designer(AgentBase):
             "llm_suggestions": conductor_suggestion,  # Conductor建议
             "inspirations": get_inspirations(task_info.get('inspirations', [])),
             "meta_prompts": task_info.get("meta_prompts", ""),
+            "handwrite_suggestions": task_info.get("handwrite_suggestions", []),
         }
 
         # 执行LLM生成前更新context，确保正确性

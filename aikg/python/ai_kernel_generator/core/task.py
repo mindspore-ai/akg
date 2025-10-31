@@ -48,7 +48,8 @@ class Task:
                  task_type="precision_only",
                  workflow: Optional[str] = None,
                  inspirations: Optional[List[str]] = None,
-                 meta_prompts: Optional[str] = None) -> None:
+                 meta_prompts: Optional[str] = None,
+                 handwrite_suggestions: Optional[List[Dict[str, str]]] = None) -> None:
         """
         初始化Task类，基于workflow配置进行工作流管理。
 
@@ -68,6 +69,8 @@ class Task:
                 - 完整路径: "config/xxx.yaml"
                 - None: 使用默认配置
             inspirations (List[str], optional): 启发示例列表。
+            meta_prompts (str, optional): 元提示。
+            handwrite_suggestions (List[Dict[str, str]], optional): 手写优化建议列表。
         """
         # 验证任务配置
         check_task_config(framework, backend, arch, dsl)
@@ -85,6 +88,7 @@ class Task:
         self.device_pool = device_pool
         self.inspirations = inspirations
         self.meta_prompts = meta_prompts
+        self.handwrite_suggestions = handwrite_suggestions if handwrite_suggestions else []
 
         # 统一保存config，后续向下传递
         self.config = config
@@ -173,6 +177,7 @@ class Task:
         # inspirations and meta_prompts from evolution
         self.conductor.task_info.update({"inspirations": self.inspirations})
         self.conductor.task_info.update({"meta_prompts": self.meta_prompts})
+        self.conductor.task_info.update({"handwrite_suggestions": self.handwrite_suggestions})
 
         # 插入初始记录（如果有初始代码）
         # 注意：这里的逻辑假设从某个中间步骤开始，需要预先插入之前步骤的结果

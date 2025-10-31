@@ -108,6 +108,7 @@ class ParserFactory:
     _api_parser = None
     _sketch_parser = None
     _conductor_parser = None
+    _selector_parser = None
 
     @classmethod
     def register_parser(cls, parser_name: str, parser_config: dict):
@@ -237,6 +238,18 @@ class ParserFactory:
                 }
             )
         return cls._sketch_parser
+    
+    @classmethod
+    def get_selector_parser(cls):
+        """获取Selector解析器"""
+        if cls._selector_parser is None:
+            cls._selector_parser = cls.create_output_parser(
+                "SelectorBlock",
+                {
+                    'selected_names': (list[str], ...)
+                }
+            )
+        return cls._selector_parser
 
     @classmethod
     def get_conductor_parser(cls):

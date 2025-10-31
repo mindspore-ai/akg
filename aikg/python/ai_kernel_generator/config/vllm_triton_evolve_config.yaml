@@ -5,6 +5,7 @@ agent_model_config:
   conductor: vllm_deepseek_v31_default
   api_generator: vllm_deepseek_v31_default
   sketch: vllm_deepseek_v31_default
+  selector: vllm_deepseek_v31_default
 
 # Log configuration
 log_dir: "~/aikg_logs"

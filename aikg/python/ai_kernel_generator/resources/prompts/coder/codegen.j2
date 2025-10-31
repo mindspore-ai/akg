@@ -56,6 +56,9 @@
 
 {{ sketch }}
 
+{% if dsl == 'triton'%}
+如果草图中包含@llm_hint("avaliable_tiling")，使用triton的autotune装饰器进行生成测试
+{% endif %}
 {% endif %}
 
 {% if coder_code %}
