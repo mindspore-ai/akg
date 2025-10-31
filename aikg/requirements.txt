@@ -14,6 +14,5 @@ pytest
 pytest-asyncio
 tiktoken
 torch
-faiss-cpu
 sentence-transformers
 einops
