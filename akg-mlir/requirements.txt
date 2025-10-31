@@ -1,7 +1,0 @@
-asttokens==2.0.8
-astunparse==1.6.3
-cmake==3.24.1.1
-mindspore==2.0.0
-mindspore-gpu @ https://ms-release.obs.cn-north-4.myhuaweicloud.com/1.8.1/MindSpore/gpu/x86_64/cuda-10.1/mindspore_gpu-1.8.1-cp38-cp38-linux_x86_64.whl
-mindvision==0.1.0
-protobuf==4.21.8

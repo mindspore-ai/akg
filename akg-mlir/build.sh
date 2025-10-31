@@ -74,13 +74,13 @@ fi
 # Parse arguments
 THREAD_NUM=$(nproc)
 SIMD_SET=off
-CMAKE_ARGS=""
+CMAKE_ARGS="-DENABLE_GITEE=ON"
 COMPILE_AKG_MLIR="off"
 AKG_MLIR_CMAKE_ARGS=""
 AKG_MLIR_ARGS=""
-_BUILD_TYPE="Release"
+BUILD_TYPE="Release"
 BACKEND_ENV="CPU"
-ENABLE_BINDS_PYTHON="OFF"
+ENABLE_BINDINGS_PYTHON="OFF"
 
 while getopts 'bhe:j:u:t:o:d:m:s:c:r' opt
 do
@@ -121,7 +121,7 @@ do
             ;;
         d)
             CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_BUILD_TYPE=Debug -DUSE_AKG_LOG=1"
-            _BUILD_TYPE=Debug
+            BUILD_TYPE=Debug
             ;;
         o)
             arch_info=`arch | tr '[A-Z]' '[a-z]'`
@@ -169,7 +169,7 @@ do
             exit 0
             ;;
         s)
-            LLVM_INSTALL_PATH=${OPTARG}
+            PREFIX_PATH=${OPTARG}
             ;;
         c)
             CLEAN_BUILT="on"
@@ -213,8 +213,8 @@ cmake .. ${CMAKE_ARGS} ${AKG_MLIR_CMAKE_ARGS} \
     -DAKG_ENABLE_BINDINGS_PYTHON=${ENABLE_BINDINGS_PYTHON} \
     -DCMAKE_C_COMPILER=${C_COMPILER_PATH} \
     -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH} \
-    -DCMAKE_PREFIX_PATH=${LLVM_INSTALL_PATH}
-cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
+    -DCMAKE_PREFIX_PATH=${PREFIX_PATH}
+cmake --build . --config ${BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
 
 cd $AKG_MLIR_DIR
 AKG_CMAKE_ALREADY_BUILD=1 \
