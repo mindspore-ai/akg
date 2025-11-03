@@ -23,17 +23,18 @@ for m_start in range(0, BLOCK_SIZE_M, SUB_BLOCK_SIZE_M):
 ```python
 # 优化Triton——通过autotune测试了多种块大小配置，
 # 配置及其性能如下：
+# （当前AI core为40）
 
-# 1. 核数未用满（当前AI core为40）-> 性能：91.69 us
+# 1. grid = 1000 / 50 = 20 < 40-> 性能：91.69 us
 triton.Config({'BLOCK_SIZE_M': 50, 'SUB_BLOCK_SIZE_M': 25, 'BLOCK_SIZE_N': 256})
 
-# 2. grid等于核数，SUB切分含尾块 -> 性能：53.30 us
+# 2. grid = 40，SUB切分含尾块 -> 性能：53.30 us
 triton.Config({'BLOCK_SIZE_M': 25, 'SUB_BLOCK_SIZE_M': 4, 'BLOCK_SIZE_N': 2048})
 
-# 3. grid等于核数，SUB切分不含尾块 -> 性能：47.58 us
+# 3. grid = 40，SUB切分不含尾块 -> 性能：47.58 us
 triton.Config({'BLOCK_SIZE_M': 25, 'SUB_BLOCK_SIZE_M': 25, 'BLOCK_SIZE_N': 256})
 
-# 4. grid超核数，且非核数整数倍 -> 性能：79.00 us
+# 4. grid > 40，且非核数整数倍 -> 性能：79.00 us
 triton.Config({'BLOCK_SIZE_M': 20, 'SUB_BLOCK_SIZE_M': 20, 'BLOCK_SIZE_N': 256})
 ```
 **优化内容**：

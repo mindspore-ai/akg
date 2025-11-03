@@ -3,29 +3,26 @@ import torch.nn as nn
 
 
 class Model(nn.Module):
-    def __init__(self, dim=None):
+    def __init__(self):
         super(Model, self).__init__()
-        self.dim = dim
 
     def forward(self, input_tensor):
-        # torch.mean(input, dim, keepdim=False, dtype=None)
-        # Returns the mean value of all elements in the input tensor or along the specified dimension.
+        # torch.sum(input, dim, keepdim=False, dtype=None)
+        # Returns the sum of each row of the input tensor in the given dimension dim.
         # This operation is commonly used in neural networks for:
         # - Computing loss functions (e.g., mean squared error)
         # - Normalizing activations across batch dimensions
         # - Pooling operations in convolutional networks
-        return torch.mean(input_tensor, dim=self.dim)
+        return torch.sum(input_tensor, dim=1)
 
 
 def get_inputs():
     # Batch size: 16
-    # Hidden dimension: 32
-    # Sequence length: 2048
-    input_tensor = torch.randn(16, 32, 2048, dtype=torch.float32)
+    # Hidden dimension: 65536
+    input_tensor = torch.randn(16, 65536, dtype=torch.float32)
     return [input_tensor]
 
 
 def get_init_inputs():
-    # Reduce along first and third dimension
-    dim = [0, 2]
-    return [dim]
+    # No parameters required
+    return []
