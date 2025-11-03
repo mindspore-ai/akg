@@ -225,9 +225,18 @@ def WorkaroundFixReduceInitialization : Pass<"workaround-fix-reduce-initializati
     The initialization must be inside a 'if'.
     This pass is present because else we will have an issue during the memory-promotion pass that fail
     when the initialization is not near the usage.
-    When fix memory-promotion, this pass may disapear. But it may require more work to do that this pass.
+    When fix memory-promotion, this pass may disappear. But it may require more work to do that this pass.
   }];
   let constructor = "mlir::createWorkaroundFixReduceInitializationPass()";
+}
+
+def AffineReductionAnnotation : Pass<"affine-reduction-annotation", "func::FuncOp"> {
+  let summary = "Annotate reduction operations with reduction axes and direction in affine dialect";
+  let constructor = "mlir::affine::createAffineReductionAnnotationPass()";
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "mlir::affine::AffineDialect"
+  ];
 }
 
 def AKGAffineDataCopyGeneration : Pass<"akg-affine-data-copy-generate", "func::FuncOp"> {
