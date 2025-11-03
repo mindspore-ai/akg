@@ -4,24 +4,12 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        # 核心用满策略 (maximize core utilization)
-        # 小 BLOCK_SIZE，启动更多 blocks 接近 40 核心
         triton.Config({'BLOCK_SIZE': 32}),
         triton.Config({'BLOCK_SIZE': 64}),
         triton.Config({'BLOCK_SIZE': 128}),
-        
-        # 平衡策略 (balanced)
         triton.Config({'BLOCK_SIZE': 256}),
         triton.Config({'BLOCK_SIZE': 512}),
         triton.Config({'BLOCK_SIZE': 1024}),
-        
-        # UB内存用满策略 (maximize memory utilization)
-        # 大 BLOCK_SIZE，充分利用 192KB UB 内存
-        triton.Config({'BLOCK_SIZE': 2048}),
-        triton.Config({'BLOCK_SIZE': 4096}),
-        triton.Config({'BLOCK_SIZE': 8192}),
-        triton.Config({'BLOCK_SIZE': 16384}),
-        triton.Config({'BLOCK_SIZE': 32768}),
     ],
     key=['n_elements'],
 )
