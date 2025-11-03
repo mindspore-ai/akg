@@ -36,7 +36,7 @@ class Model(nn.Module):
 
 
 def get_inputs():
-    x = torch.randn(128, 256, 512, dtype=torch.float32)
+    x = torch.randn(128, 256, 64, dtype=torch.float32)
     return [x]
 
 
