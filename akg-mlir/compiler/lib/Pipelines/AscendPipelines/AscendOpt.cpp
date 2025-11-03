@@ -17,7 +17,6 @@
 #include "akg/Pipelines/AscendPipelines/AscendOpt.h"
 
 #include <nlohmann/json.hpp>
-#include <string>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/LLVMIR/Passes.h"
@@ -44,47 +43,47 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
 
-using namespace mlir;
-using namespace akgglobal;
+using mlir::OpPassManager;
 
 namespace {
-void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptions &options) {
-  pm.addPass(createAKGOperatorIdentifyPass());
-  pm.addPass(createMindsporeMakeBroadcastablePass());
-  pm.addPass(createEliminateDimensionPass());
-  pm.addPass(createLegalizeTypePass());
-  pm.addPass(createFoldDimensionPass());
-  pm.addPass(createMindSporeToLinalgNamedPass());
+void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelineOptions &options) {
+  pm.addPass(mlir::createAKGOperatorIdentifyPass());
+  pm.addPass(mlir::createMindsporeMakeBroadcastablePass());
+  pm.addPass(mlir::createEliminateDimensionPass());
+  pm.addPass(mlir::createLegalizeTypePass());
+  pm.addPass(mlir::createFoldDimensionPass());
+  pm.addPass(mlir::createMindSporeToLinalgNamedPass());
   pm.addPass(mlir::createMindSporeToTosaPass());
-  OpPassManager &nestedFunctionPM = pm.nest<func::FuncOp>();
-  nestedFunctionPM.addPass(tosa::createTosaToLinalg());
+  OpPassManager &nestedFunctionPM = pm.nest<mlir::func::FuncOp>();
+  nestedFunctionPM.addPass(mlir::tosa::createTosaToLinalg());
 
   if (options.enableAKGLoopFusion) {
     bool keepFakeOuts = true;
-    pm.addPass(createLinalgCopyBufferizePass(keepFakeOuts));
-    pm.addPass(bufferization::createEmptyTensorToAllocTensorPass());
+    pm.addPass(mlir::createLinalgCopyBufferizePass(keepFakeOuts));
+    pm.addPass(mlir::bufferization::createEmptyTensorToAllocTensorPass());
 
-    bufferization::OneShotBufferizationOptions bufferizationOpts;
+    mlir::bufferization::OneShotBufferizationOptions bufferizationOpts;
     bufferizationOpts.bufferizeFunctionBoundaries = true;
-    bufferizationOpts.setFunctionBoundaryTypeConversion(bufferization::LayoutMapOption::IdentityLayoutMap);
+    bufferizationOpts.setFunctionBoundaryTypeConversion(mlir::bufferization::LayoutMapOption::IdentityLayoutMap);
     bufferizationOpts.allowReturnAllocsFromLoops = true;
-    pm.addPass(bufferization::createOneShotBufferizePass(bufferizationOpts));
+    pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufferizationOpts));
 
-    pm.addPass(createCanonicalizerPass());
-    pm.addPass(createMemrefCopyToLoopsPass());
-    pm.addPass(createMatchAndMarkReductionOpsPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createMemrefCopyToLoopsPass());
 
-    OpPassManager &nestedFunctionPM = pm.nest<func::FuncOp>();
-    nestedFunctionPM.addPass(createConvertLinalgToAffineLoopsPass());
-    nestedFunctionPM.addPass(affine::createAffineLoopNormalizePass());
-    nestedFunctionPM.addPass(createCSEPass());
-    nestedFunctionPM.addPass(createCanonicalizerPass());
-    nestedFunctionPM.addPass(createCopyElisionPass());
-    nestedFunctionPM.addPass(createCopyRemovalPass());
-    nestedFunctionPM.addPass(createCanonicalizerPass());
-    nestedFunctionPM.addPass(memref::createFoldMemRefAliasOpsPass());
-    nestedFunctionPM.addPass(createAKGLoopFusionPass());
-    nestedFunctionPM.addPass(createCanonicalizerPass());
+
+    OpPassManager &nestedFusionPM = pm.nest<mlir::func::FuncOp>();
+    nestedFusionPM.addPass(mlir::createConvertLinalgToAffineLoopsPass());
+    nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
+    nestedFusionPM.addPass(mlir::affine::createAffineLoopNormalizePass());
+    nestedFusionPM.addPass(mlir::createCSEPass());
+    nestedFusionPM.addPass(mlir::createCanonicalizerPass());
+    nestedFusionPM.addPass(mlir::createCopyElisionPass());
+    nestedFusionPM.addPass(mlir::createCopyRemovalPass());
+    nestedFusionPM.addPass(mlir::createCanonicalizerPass());
+    nestedFusionPM.addPass(mlir::memref::createFoldMemRefAliasOpsPass());
+    nestedFusionPM.addPass(mlir::createAKGLoopFusionPass());
+    nestedFusionPM.addPass(mlir::createCanonicalizerPass());
   }
 }
 }  // namespace

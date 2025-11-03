@@ -29,6 +29,7 @@
 #include "akg/Dialect/Affine/Transforms/AffineHandleBoundaryIfRestore.h"
 #include "akg/Dialect/Affine/Transforms/AffineIteratorConversion.h"
 #include "akg/Dialect/Affine/Transforms/AffineLoopReorder.h"
+#include "akg/Dialect/Affine/Transforms/AffineReductionAnnotation.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopFusion.h"
 #include "akg/Dialect/Affine/Transforms/AffineMemoryPromotion.h"
 #include "akg/Dialect/Affine/Transforms/AffineTailBlockTiling.h"
