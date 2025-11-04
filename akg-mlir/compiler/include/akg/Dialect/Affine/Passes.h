@@ -31,6 +31,7 @@
 #include "akg/Dialect/Affine/Transforms/AffineLoopReorder.h"
 #include "akg/Dialect/Affine/Transforms/AffineReductionAnnotation.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopFusion.h"
+#include "akg/Dialect/Affine/Transforms/VectorTransferTensorize.h"
 #include "akg/Dialect/Affine/Transforms/AffineMemoryPromotion.h"
 #include "akg/Dialect/Affine/Transforms/AffineTailBlockTiling.h"
 #include "akg/Dialect/Affine/Transforms/ExtractIfOp.h"
