@@ -163,33 +163,52 @@ data = tl.load(ptr + offsets, mask=valid_mask, other=0.0)
 
 ## 5. autotune使用教程
 
-Autotune 是 Triton 的自动性能优化机制，通过尝试不同的配置参数组合，自动找到最优的内核执行配置。示例：
+Autotune 是 Triton 的自动性能优化机制，通过尝试不同的配置参数组合，自动找到最优的内核执行配置。
 
-```
+```python
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_M': 128, 'PARALLEL_NUM': 32}),
-        triton.Config({'BLOCK_M': 128, 'PARALLEL_NUM': 64}),
-        triton.Config({'BLOCK_M': 64, 'PARALLEL_NUM': 32}),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128}),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64}),
     ],
-    key=['M'],
+    key=['M', 'N', 'K'],  # 当这些参数变化时触发重新autotune
 )
 @triton.jit
-def kernel(
-    input,
-    output,
-    BLOCK_M: tl.constexpr, PARALLEL_NUM: tl.constexpr # 注意将autotune的参数作为constexpr输入
+def matmul_kernel(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+    BLOCK_SIZE_M: tl.constexpr, # configs中的参数必须声明为constexpr
+    BLOCK_SIZE_N: tl.constexpr, # configs中的参数必须声明为constexpr
+    BLOCK_SIZE_K: tl.constexpr, # configs中的参数必须声明为constexpr
 ):
+    # kernel实现
     pass
 
-def host_func(input):
-    output = torch.empty_like(input)
-    grid = lambda meta: (triton.cdiv(M, meta['BLOCK_M'] * meta['PARALLEL_NUM']))
+def matmul(a, b):
+    M, K = a.shape
+    K, N = b.shape
+    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    
+    grid = lambda meta: (triton.cdiv(M, meta['BLOCK_SIZE_M']) * triton.cdiv(N, meta['BLOCK_SIZE_N']),) # grid设置是tuple
+    
+    # 关键：调用时不要传递configs中的参数（BLOCK_SIZE_M等）
     matmul_kernel[grid](
-        input,
-        output, # 注意调用时不要添加configs里的参数，这部分会在autotune时自动添加
+        a, b, c,
+        M, N, K,
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1),
+        # 不要写：BLOCK_SIZE_M=128  # 错误！autotune会自动传入
     )
-    return output
+    return c
 ```
 
-**注意** 不要对'num_warps', 'num_ctas', 'num_stages', 'num_buffers_warp_spec', 'num_consumer_groups', 'reg_dec_producer', 'reg_inc_consumer', 'maxnreg'进行修改调优，当前不支持
+### 关键要点
+
+1. **grid必须使用lambda**：`grid = lambda meta: (...)`
+3. **不要传递configs参数**：调用kernel时不要传`BLOCK_SIZE`等autotune的参数
+4. **configs参数必须是constexpr**：在kernel中声明为`PARAM: tl.constexpr`
+5. **key参数**：指定哪些输入维度变化时重新autotune
+
+**注意** 不要对'num_warps', 'num_ctas', 'num_stages', 'num_buffers_warp_spec', 'num_consumer_groups', 'reg_dec_producer', ，'reg_inc_consumer', 'maxnreg'进行修改调优，当前Ascend后端不支持

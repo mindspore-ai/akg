@@ -146,26 +146,30 @@ exp_data = tl.exp(stable_data)
 
 ### 切片操作规范
 Triton不支持Python风格的直接切片语法（如`b[0]`或`b[i:j]`），需使用专用API：
-- **单元素提取**：使用`tl.get_element(b, [index])`或单次load
-- **单元素插入**：使用`tl.insert_slice()`或单次store
-- **长切片读取**：使用`tl.extract_slice(b, [offset], [size], [stride])`或load
+- **单元素提取**：`tl.get_element(tensor, (index,))` 或单次load
+- **切片提取**：`tl.extract_slice(tensor, offsets, sizes, strides)`
+- **切片插入**：`tl.insert_slice(ful, sub, offsets, sizes, strides)` - 将sub张量插入到ful张量的指定位置
 
-**重要限制**：禁止对`tl.arange`生成的张量进行`get_element()`操作
-- `tl.arange`并非实际创建的张量，而是编译时的索引表达式
-- 如需获取其中的数值，应直接计算而非提取
 ```python
-# 错误示例
-offsets = base + tl.arange(0, BLOCK_SIZE)
-value = tl.get_element(offsets, [i])  # 禁止！
+# 一维切片插入
+output_sub = x_sub + y_sub
+output = tl.insert_slice(output, output_sub, [offset], [size], [1])
 
-# 正确示例
-value = base + i  # 直接计算
+# 二维切片插入（逐行构建）
+tmp_buf = tl.zeros((rows, cols), dtype)
+val = tl.load(in_ptr + offset, mask)
+tmp_buf = tl.insert_slice(tmp_buf, val[None,:], offsets=(i, 0), sizes=(1, cols), strides=(1, 1))
+```
 
-# 其他正确用法示例
-element = tl.get_element(tensor, [0])  # 1D实际张量
-element = tl.get_element(tensor, [i, j])  # 2D实际张量
+**重要限制**：禁止对`tl.arange`生成的张量使用`get_element()`
+- `tl.arange`是编译时索引表达式，非实际张量，需直接计算而非提取
+```python
+# 错误：offsets = base + tl.arange(0, BLOCK_SIZE); value = tl.get_element(offsets, [i])
+# 正确：value = base + i
+
+# 正确用法
+element = tl.get_element(tensor, (i, j))  # 实际张量
 sub_tensor = tl.extract_slice(tensor, [0], [32], [1])  # 提取切片
-output = tl.insert_slice(output, sub_tensor, [offset], [size], [1])  # 插入切片
 ```
 
 ### tl.constexpr 正确用法
