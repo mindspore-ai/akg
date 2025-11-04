@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Huawei Technologies Co., Ltd
+ * Copyright 2024-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@
 #include <numeric>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
-// #include "bishengir/Dialect/HACC/IR/HACC.h"
-// #include "bishengir/Dialect/HFusion/IR/HFusion.h"
+#include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "bishengir/Dialect/HFusion/IR/HFusion.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -125,8 +125,8 @@ static Value createExpandShapeOp(Operation *op, PatternRewriter &rewriter, Value
       reassociation.push_back(indices);
     }
   }
-  Value expandShapeOp = rewriter.create<tensor::ExpandShapeOp>(
-    op->getLoc(), expandDst.getType(), expandSrc, reassociation);
+  Value expandShapeOp =
+    rewriter.create<tensor::ExpandShapeOp>(op->getLoc(), expandDst.getType(), expandSrc, reassociation);
   return expandShapeOp;
 }
 
@@ -628,7 +628,7 @@ static LogicalResult roundMatchAndRewriteHelper(mindspore::RoundOp roundOp, Patt
   Value output = roundOp.getResult();
 
   SmallVector<Value> dynDims;
-  ShapedType shapedType = input.getType().cast<ShapedType>();
+  ShapedType shapedType = dyn_cast<ShapedType>(input.getType());
   ArrayRef<int64_t> typeShapes = shapedType.getShape();
   for (size_t i = 0; i < typeShapes.size(); i++) {
     if (typeShapes[i] == ShapedType::kDynamic) {
@@ -653,7 +653,7 @@ static LogicalResult selectMatchAndRewriteHelper(mindspore::SelectOp selectOp, P
   Value output = selectOp.getResult();
 
   SmallVector<Value> dynDims;
-  auto resultTy = output.getType().cast<ShapedType>();
+  auto resultTy = dyn_cast<ShapedType>(output.getType());
   Value emptyTensor = rewriter.create<tensor::EmptyOp>(loc, resultTy.getShape(), resultTy.getElementType(), dynDims);
 
   rewriter.replaceOpWithNewOp<linalg::SelectOp>(selectOp, ValueRange{condition, trueValue, falseValue},
@@ -662,8 +662,10 @@ static LogicalResult selectMatchAndRewriteHelper(mindspore::SelectOp selectOp, P
 }
 
 static LogicalResult isFiniteMatchAndRewriteHelper(Operation *op, PatternRewriter &rewriter) {
-  // auto namedOp = rewriter.create<hfusion::IsFiniteOp>(loc, resultTy, op->getOperands()[0]);
-  // rewriter.replaceOp(op, namedOp->getResults());
+  auto loc = op->getLoc();
+  auto resultTy = dyn_cast<ShapedType>(op->getResult(0).getType());
+  auto namedOp = rewriter.create<hfusion::IsFiniteOp>(loc, resultTy, op->getOperands()[0]);
+  rewriter.replaceOp(op, namedOp->getResults());
   return success();
 }
 
@@ -810,8 +812,8 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
     registry.insert<linalg::LinalgDialect>();
     registry.insert<tensor::TensorDialect>();
     registry.insert<math::MathDialect>();
-    // registry.insert<hacc::HACCDialect>();
-    // registry.insert<hfusion::HFusionDialect>();
+    registry.insert<hacc::HACCDialect>();
+    registry.insert<hfusion::HFusionDialect>();
     registry.insert<arith::ArithDialect>();
   }
 
@@ -819,12 +821,10 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
     RewritePatternSet patterns(&getContext());
     ConversionTarget target(getContext());
 
-    target.addLegalDialect<arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect,
-                           math::MathDialect>();  //, hfusion::HFusionDialect>();
-
-    // func->setAttr("hacc.function_kind",
-    //   hacc::HACCFuncTypeAttr::get(func->getContext(), hacc::HACCFuncType::HOST));
-
+    target.addLegalDialect<arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect, math::MathDialect,
+                           hfusion::HFusionDialect>();
+    FunctionOpInterface func = getOperation();
+    func->setAttr("hacc.function_kind", hacc::HACCFuncTypeAttr::get(func->getContext(), hacc::HACCFuncType::HOST));
     populateLowerMindSporeToLinalgNamedPattern(patterns);
     populateLowerMindSporeCompareToLinalgPattern(patterns);
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
