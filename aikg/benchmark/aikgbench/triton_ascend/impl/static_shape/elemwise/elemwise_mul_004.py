@@ -2,18 +2,23 @@ import torch
 import triton
 import triton.language as tl
 
-
 @triton.autotune(
     configs=[
-        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 16}), # 最优，核数被shape整除
-        # 40 核数（匹配硬件）
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 16}), # 性能接近最优
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 32}), # 超ub
+        # NUM_BLOCKS 核数（32 的倍数），SUB_M 控制内部每次处理行数
+        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 64}),
+        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 32}),
+        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 128}),
+        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 64}),
+        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 32}),
+        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 128}),
+        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 64}),
+        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 32}),
+        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 128}),
     ],
     key=['M', 'N'],
 )
 @triton.jit
-def maximum_kernel_row(
+def sub_kernel_row(
     input1_ptr,
     input2_ptr,
     output_ptr,
@@ -31,15 +36,14 @@ def maximum_kernel_row(
     row_start = pid * rows_per_block
     row_end = tl.minimum(row_start + rows_per_block, M)
     
-    # input2 只需加载一次（所有行共享，第一维广播）
-    offs_n = tl.arange(0, N)
-    input2 = tl.load(input2_ptr + offs_n)  # shape: (N,)
-    
     # 内层循环：每次处理 SUB_M 行
     for sub_start in range(row_start, row_end, SUB_M):
         # 当前子块的行索引
         offs_m = sub_start + tl.arange(0, SUB_M)
         mask_m = offs_m < row_end
+        
+        # 列偏移（固定处理所有 N 列）
+        offs_n = tl.arange(0, N)
         
         # 2D 索引
         offs_m_2d = offs_m[:, None]
@@ -47,15 +51,17 @@ def maximum_kernel_row(
         
         # 计算全局偏移
         input1_offs = offs_m_2d * N + offs_n_2d
+        input2_offs = offs_m_2d  # input2 是 (M, 1)，只有行索引
         
         # 2D 掩码
         mask_2d = mask_m[:, None]
         
-        # 加载 input1
+        # 加载数据
         input1 = tl.load(input1_ptr + input1_offs, mask=mask_2d, other=0.0)
+        input2 = tl.load(input2_ptr + input2_offs, mask=mask_2d, other=0.0)
         
-        # 计算：input2 自动广播到行维度
-        output = tl.maximum(input1, input2)
+        # 计算：input2 自动广播到列维度
+        output = input1 * input2
         
         # 存储
         tl.store(output_ptr + input1_offs, output, mask=mask_2d)
@@ -63,8 +69,8 @@ def maximum_kernel_row(
 
 def custom_op_triton_torch(input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
     assert input1.ndim == 2 and input2.ndim == 2, "Both inputs must be 2D"
-    assert input2.shape[0] == 1, "input2 must have shape (1, N) for row broadcasting"
-    assert input1.shape[1] == input2.shape[1], "Column dimension must match"
+    assert input1.shape[0] == input2.shape[0], "First dimension must match"
+    assert input2.shape[1] == 1, "input2 must have shape (M, 1)"
     
     input1 = input1.contiguous()
     input2 = input2.contiguous()
@@ -75,7 +81,7 @@ def custom_op_triton_torch(input1: torch.Tensor, input2: torch.Tensor) -> torch.
     # Grid 固定为 NUM_BLOCKS，匹配硬件核数
     grid = lambda meta: (meta['NUM_BLOCKS'],)
     
-    maximum_kernel_row[grid](
+    sub_kernel_row[grid](
         input1, input2, output,
         M, N,
     )

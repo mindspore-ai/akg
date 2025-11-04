@@ -4,14 +4,13 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        # NUM_BLOCKS 核数（32 的倍数），SUB_M 控制内部每次处理行数
-        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 4}),
-        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 8}),
-        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 2}),
-        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 4}),
-        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 8}),
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 4}),
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 8}),
+        # NUM_BLOCKS 核数，SUB_M 控制内部每次处理行数
+        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 512}),
+        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 256}),
+        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 512}),
+        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 512}), # 最优
+        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 256}),
+        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 1024}),
     ],
     key=['M', 'N'],
 )

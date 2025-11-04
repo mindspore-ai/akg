@@ -4,20 +4,13 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        # NUM_BLOCKS 核数（32 的倍数），SUB_M 控制内部每次处理行数
-        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 1}),
-        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 2}),
-        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 4}),
-        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 8}),
-        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 16}),
-        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 1}),
-        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 2}),
-        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 4}),
-        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 8}),
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 2}),
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 4}),
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 8}),
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 10}),
+        # NUM_BLOCKS 核数，SUB_M 控制内部每次处理行数，BLOCK_N 控制列切分大小
+        # 对 N=131072 进行列切分，避免 UB 溢出
+        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 2, 'BLOCK_N': 4096}),
+        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 1, 'BLOCK_N': 16384}),
+        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 2, 'BLOCK_N': 8192}),
+        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 2, 'BLOCK_N': 8192}),
+        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 4, 'BLOCK_N': 4096}),
     ],
     key=['M', 'N'],
 )
@@ -27,12 +20,13 @@ def sub_kernel_row(
     input2_ptr,
     output_ptr,
     M,
-    N: tl.constexpr,
+    N,
     NUM_BLOCKS: tl.constexpr,
     SUB_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
 ):
     # 固定 NUM_BLOCKS 个 blocks，每个 block 处理多行
-    # 内部用 SUB_M 切分，减少寄存器压力
+    # 内部用 SUB_M 切分行，用 BLOCK_N 切分列，减少寄存器压力和避免 UB 溢出
     pid = tl.program_id(0)
     
     # 计算每个 block 需要处理的总行数（手动 cdiv）
@@ -40,35 +34,40 @@ def sub_kernel_row(
     row_start = pid * rows_per_block
     row_end = tl.minimum(row_start + rows_per_block, M)
     
-    # 内层循环：每次处理 SUB_M 行
+    # 外层循环：每次处理 SUB_M 行
     for sub_start in range(row_start, row_end, SUB_M):
         # 当前子块的行索引
         offs_m = sub_start + tl.arange(0, SUB_M)
         mask_m = offs_m < row_end
         
-        # 列偏移（固定处理所有 N 列）
-        offs_n = tl.arange(0, N)
-        
-        # 2D 索引
-        offs_m_2d = offs_m[:, None]
-        offs_n_2d = offs_n[None, :]
-        
-        # 计算全局偏移
-        input1_offs = offs_m_2d * N + offs_n_2d
-        input2_offs = offs_m_2d  # input2 是 (M, 1)，只有行索引
-        
-        # 2D 掩码
-        mask_2d = mask_m[:, None]
-        
-        # 加载数据
-        input1 = tl.load(input1_ptr + input1_offs, mask=mask_2d, other=0.0)
-        input2 = tl.load(input2_ptr + input2_offs, mask=mask_2d, other=0.0)
-        
-        # 计算：input2 自动广播到列维度
-        output = input1 - input2
-        
-        # 存储
-        tl.store(output_ptr + input1_offs, output, mask=mask_2d)
+        # 内层循环：每次处理 BLOCK_N 列，避免 UB 溢出
+        for col_start in range(0, N, BLOCK_N):
+            col_end = tl.minimum(col_start + BLOCK_N, N)
+            
+            # 列偏移
+            offs_n = col_start + tl.arange(0, BLOCK_N)
+            mask_n = offs_n < col_end
+            
+            # 2D 索引
+            offs_m_2d = offs_m[:, None]
+            offs_n_2d = offs_n[None, :]
+            
+            # 计算全局偏移
+            input1_offs = offs_m_2d * N + offs_n_2d
+            input2_offs = offs_m_2d  # input2 是 (M, 1)，只有行索引
+            
+            # 2D 掩码
+            mask_2d = mask_m[:, None] & mask_n[None, :]
+            
+            # 加载数据
+            input1 = tl.load(input1_ptr + input1_offs, mask=mask_2d, other=0.0)
+            input2 = tl.load(input2_ptr + input2_offs, mask=mask_m[:, None], other=0.0)
+            
+            # 计算：input2 自动广播到列维度
+            output = input1 - input2
+            
+            # 存储
+            tl.store(output_ptr + input1_offs, output, mask=mask_2d)
 
 
 def custom_op_triton_torch(input1: torch.Tensor, input2: torch.Tensor) -> torch.Tensor:
