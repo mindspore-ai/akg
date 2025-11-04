@@ -23,7 +23,7 @@
 #include "akg/Dialect/Linalg/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Dialect/MindSpore/Passes.h"
-// #include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "bishengir/Dialect/HACC/IR/HACC.h"
 #include "akg/Dialect/SCF/Passes.h"
 #include "akg/Pipelines/InitAllPipelines.h"
 #include "akg/Transforms/Passes.h"
@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
   registry.insert<mlir::linalgExt::LinalgExtDialect>();
   registry.insert<mlir::fusion::FusionDialect>();
   registry.insert<mlir::mindspore::MindSporeDialect>();
-  // registry.insert<mlir::hacc::HACCDialect>();
+  registry.insert<mlir::hacc::HACCDialect>();
   registerLLVMDialectTranslation(registry);
 
   registerMLIRContextCLOptions();

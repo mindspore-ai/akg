@@ -346,8 +346,6 @@ class AkgMlirDriver:
 
         if self.enable_akg_loop_fusion:
             cmd.append("--enable-triton-kernel-compile=true")
-        if self.dump_ir:
-            cmd.append("--mlir-print-ir-after-all")
         dump_log = os.path.join(self.output_dir, kernel_name + "_dump_bishengir.log")
         with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
             try:

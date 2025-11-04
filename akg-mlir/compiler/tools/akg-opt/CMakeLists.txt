@@ -45,6 +45,6 @@ add_executable(akg-opt akg-opt.cpp)
 add_dependencies(akg-opt ${LIBS})
 
 llvm_update_compile_flags(akg-opt)
-target_link_libraries(akg-opt PRIVATE ${LIBS})
+target_link_libraries(akg-opt PRIVATE ${LIBS} BiShengIR)
 
 mlir_check_all_link_libraries(akg-opt)
