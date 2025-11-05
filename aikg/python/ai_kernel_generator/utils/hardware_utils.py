@@ -117,6 +117,7 @@ def get_hardware_doc(backend: str, arch: str) -> str:
         "ascend": {
             "ascend910b1": "hardware/Ascend910B1.md",
             "ascend910b2": "hardware/Ascend910B2.md",
+            "ascend910b2c": "hardware/Ascend910B2C.md",
             "ascend910b3": "hardware/Ascend910B3.md",
             "ascend910b4": "hardware/Ascend910B4.md",
             "ascend310p3": "hardware/Ascend310P3.md"

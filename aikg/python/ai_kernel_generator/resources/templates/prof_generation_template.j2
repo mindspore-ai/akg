@@ -216,10 +216,10 @@ def run_generation_implementations():
     if backend == "ascend":
         device = "Ascend"
         # 设置Ascend架构
-        # 支持 ascend910b1/b2/b3/b4 和 ascend310p3
-        supported_ascend_archs = ["ascend910b1", "ascend910b2", "ascend910b3", "ascend910b4", "ascend310p3"]
+        # 支持 ascend910b1/b2/b2c/b3/b4 和 ascend310p3
+        supported_ascend_archs = ["ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4", "ascend310p3"]
         if arch not in supported_ascend_archs:
-            raise ValueError(f"不支持的ascend架构: {arch}，仅支持ascend910b1/b2/b3/b4和ascend310p3")
+            raise ValueError(f"不支持的ascend架构: {arch}，仅支持ascend910b1/b2/b2c/b3/b4和ascend310p3")
     elif backend == "cpu":
         device = "CPU"
     else:
