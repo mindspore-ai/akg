@@ -9,17 +9,17 @@
 ## 优化1
 ```python
 # 简单Triton
-total_sum = 0.0
+row_max = -float('inf')
 for n_offset in range(0, N, BLOCK_SIZE):
-    # elemwise operatrions...
+    # 加载数据……（步骤略）
 
     curr_max = tl.max(data_block, 1)
-    row_max = tl.maximum(curr_max, 1)
+    row_max = tl.maximum(curr_max, row_max)
 
 # 优化Triton
-acc = tl.zeros([BLOCK_SIZE_M, BLOCK_SIZE_N], dtype=tl.float32)
+curr_max = tl.full((BLOCK_SIZE_M, BLOCK_SIZE_N), -float('inf'), dtype=tl.float32)
 for n_start in range(0, N, BLOCK_SIZE_N):
-    # elemwise operatrions...
+    # 加载数据……（步骤略）
     
     curr_max = tl.maximum(data_block, curr_max)
 row_max = tl.max(curr_max, 1)
