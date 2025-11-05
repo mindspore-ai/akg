@@ -267,4 +267,9 @@ def AKGAffineDataCopyGeneration : Pass<"akg-affine-data-copy-generate", "func::F
   ];
 }
 
+def VectorTransferTensorize : Pass<"vector-transfer-tensorize", "mlir::func::FuncOp"> {
+  let summary = "Promote vector.transfer_{read|write} into pure tensor/memref ops";
+  let constructor = "mlir::affine::createVectorTransferTensorizePass()";
+}
+
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES
