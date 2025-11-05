@@ -309,6 +309,17 @@ moonshot_kimi_128k:
   frequency_penalty: 0.0
   presence_penalty: 0.0
 
+# OpenRouter 模型配置
+openrouter_minimax_m2_free:
+  api_base: "https://openrouter.ai/api/v1"
+  model: "minimax/minimax-m2:free"
+  api_key_env: "AIKG_OPENROUTER_API_KEY"
+  max_tokens: 8192
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
 # 默认配置名称
 default_preset: "sflow_ds_r1_default" 
 
