@@ -1,4 +1,4 @@
-# Copyright 2023 Huawei Technologies Co., Ltd
+# Copyright 2023-2025 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ KERNEL_NAME = "kernelName"
 STATIC_TILE_IMPL = "StaticTileImpl"
 
 def set_ascend_info(core_type, title_dict):
+    """Set ascend info."""
     if len(core_type) == 0:
         return
     if core_type == "MIX":
@@ -72,30 +73,35 @@ def get_kernel_meta_path():
     )
 
 def _is_single_op(desc_d):
+    """Return the number of desc op is 1."""
     input_lists = desc_d.get("op_desc", [])
     return len(input_lists) <= 1
 
 def generate_unique_hash(input_str):
+    """Return the hash of input."""
     unique_hash = hashlib.md5(input_str.encode("utf8")).hexdigest()
     return unique_hash
 
 def deal_input(desc):
+    """Deal input dict."""
     for input_desc in desc["input_desc"] if desc.get("input_desc") is not None else []:
         if len(input_desc[0]["shape"]) == 1 and input_desc[0]["shape"][0] == 1 and "value" in input_desc[0]:
             input_desc[0]["value"] = 0
 
 def del_value(desc):
+    """Deal op desc."""
     for operation in desc["op_desc"]:
         deal_input(operation)
     desc["op"] = ""
 
 def get_npucompiler_path():
+    """Return the path of bishengir-compile."""
     npu_compiler_path = shutil.which("bishengir-compile")
     if npu_compiler_path is None:
         raise EnvironmentError("Couldn't find executable bishengir-compile.")
     return npu_compiler_path
 
-class AkgMlirDriver(object):
+class AkgMlirDriver:
     """class AkgMlirDriver."""
 
     def __init__(
@@ -134,7 +140,7 @@ class AkgMlirDriver(object):
         self.runtime_provider = runtime_provider
         self.enable_akg_loop_fusion = enable_akg_loop_fusion
 
-        with open(input_file, "r") as f:
+        with open(input_file, "r", encoding='utf-8') as f:
             kernel_info = json.loads(f.read())
             self.kernel_name = kernel_info["op"]
             self.backend = "ascend" if kernel_info["process"] == "aicore" else kernel_info["process"]
@@ -193,8 +199,8 @@ class AkgMlirDriver(object):
             try:
                 sub_kernel_name = kernel_name + "_static"
                 sub_input_file = os.path.join(self.output_dir, sub_kernel_name + ".info")
-                sub_input_file_desc = dict()
-                with open(self.input_file, "r") as f:
+                sub_input_file_desc = {}
+                with open(self.input_file, "r", encoding="utf-8") as f:
                     sub_input_file_desc = json.loads(f.read())
                     sub_input_file_desc["op"] = sub_kernel_name
                 with os.fdopen(os.open(sub_input_file, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
@@ -219,9 +225,10 @@ class AkgMlirDriver(object):
         except RuntimeError as exc:
             if self.log_level == "ERROR":
                 raise RuntimeError(f"Compile error, kernel: {self.kernel_name} is not generated") from exc
-            logging.info(f"Compile error, kernel: {self.kernel_name}")
+            logging.info("Compile error, kernel: %s", self.kernel_name)
 
     def _run_mlir_convert(self, kernel_name=None, input_file=None):
+        """convert info to mlir."""
         if kernel_name is None:
             kernel_name = self.kernel_name
         if input_file is None:
@@ -236,10 +243,12 @@ class AkgMlirDriver(object):
         ]
         try:
             subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("mlir pipeline failed in converting the case: " + kernel_name + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("run mlir pipeline failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("mlir pipeline failed in converting the case: " + kernel_name + "!\n") from e
 
     def _run_mlir_cpu_pipeline(self, dyn_shape, kernel_name):
+        """compile mlir use cpu pipeline."""
         input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
         out_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
         cpu_opt_option = "--cpu-opt"
@@ -256,13 +265,14 @@ class AkgMlirDriver(object):
                 dump_log = os.path.join(self.output_dir, kernel_name + "_dump_cpu.log")
                 with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                     f.write(result.stderr)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("mlir pipeline failed in case: " + kernel_name + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("mlir pipeline failed in case: " + kernel_name + "!\n") from e
 
         logging.info("mlir pipeline success")
-        return
 
     def _run_mlir_ascend_pipeline(self, dyn_shape, kernel_name):
+        """compile mlir use ascend pipeline."""
         input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
         out_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
         ascend_opt_option = "--ascend-opt"
@@ -279,15 +289,17 @@ class AkgMlirDriver(object):
                 dump_log = os.path.join(self.output_dir, kernel_name + "_dump_ascend_state1.log")
                 with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                     f.write(result.stderr)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("mlir pipeline failed in case: " + kernel_name + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("mlir pipeline failed in case: " + kernel_name + "!\n") from e
+
 
         logging.info("mlir pipeline success")
-        return
 
     def _dump_ascend_meta_data(self, block_dim, kernel_name):
+        """dump ascend meta data."""
         logging.info("dump ascend meta data:")
-        title_dict = dict()
+        title_dict = {}
         # ascend info
         set_ascend_info("VectorCore", title_dict)
         title_dict["kernelName"] = kernel_name
@@ -300,7 +312,6 @@ class AkgMlirDriver(object):
         title_dict["binFileName"] = bin_file_name
         # sha256
         buf_size = 64 * 1024  # once read 64kb
-        root_path = get_kernel_meta_path()
         sha256 = hashlib.sha256()
         kernel_file_name = os.path.join(self.output_dir, bin_file_name + bin_file_suffix)
         with open(kernel_file_name, "rb") as kf:
@@ -313,9 +324,9 @@ class AkgMlirDriver(object):
 
         json_file = os.path.join(self.output_dir, kernel_name + ".json")
         write_code(title_dict, json_file)
-        return
 
     def _run_ascend_generate_binary(self, kernel_name):
+        """compile mlir to binary for ascend."""
         logging.info("bishengir-compile code generater:")
         npu_compiler_path = get_npucompiler_path()
         input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
@@ -333,6 +344,8 @@ class AkgMlirDriver(object):
             out_file,
         ]
 
+        if self.enable_akg_loop_fusion:
+            cmd.append("--enable-triton-kernel-compile=true")
         if self.dump_ir:
             cmd.append("--mlir-print-ir-after-all")
         dump_log = os.path.join(self.output_dir, kernel_name + "_dump_bishengir.log")
@@ -341,14 +354,15 @@ class AkgMlirDriver(object):
                 result = subprocess.run(cmd, check=True, capture_output=True, text=True)
                 f.write(result.stderr)
             except subprocess.CalledProcessError as e:
+                logging.error("run bishengir-compile failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
                 f.write(str(e))
-                raise RuntimeError("generate ascend binary: " + input_file + "!\n")
+                raise RuntimeError("generate ascend binary: " + input_file + "!\n") from e
         logging.info("generate ascend binary success")
 
         self._dump_ascend_meta_data(block_dim=20, kernel_name=self.kernel_name)
-        return
 
     def _run_mlir_to_llvm(self, kernel_name):
+        """compile mlir to llvm."""
         logging.info("mlir to llvm:")
         input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
         if self.profiling_trails > 0:
@@ -358,12 +372,13 @@ class AkgMlirDriver(object):
         print("_run_mlir_to_llvm:", cmd)
         try:
             subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("mlir to llvm failed in case: " + input_file + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("run mlir to llvm failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("mlir to llvm failed in case: " + input_file + "!\n") from e
         logging.info("mlir to llvm success")
-        return
 
     def _run_cpu_generate_binary(self, kernel_name):
+        """compile mlir to binary for cpu."""
         input_file = os.path.join(self.output_dir, kernel_name + ".ll")
         out_file = os.path.join(self.output_dir, kernel_name + ".s")
         bin_file = os.path.join(self.output_dir, kernel_name + ".so")
@@ -377,8 +392,9 @@ class AkgMlirDriver(object):
         ]
         try:
             subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("generate .s failed in case " + input_file + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("generate .s failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("generate .s failed in case " + input_file + "!\n") from e
 
         cmd = [
             "clang++",
@@ -400,11 +416,12 @@ class AkgMlirDriver(object):
             cmd.extend(["-L", os.path.join(self.llvm_tools_dir, "lib/"), "-lmlir_runner_utils"])
         try:
             subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("generate .so failed in case " + input_file + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("generate .so failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("generate .so failed in case " + input_file + "!\n") from e
 
         logging.info("generate cpu binary .so success")
-        title_dict = dict()
+        title_dict = {}
         # kernel name
         title_dict[KERNEL_NAME] = kernel_name + "_kernel"
         # thread number
@@ -422,6 +439,7 @@ class AkgMlirDriver(object):
         write_code(title_dict, json_file)
 
     def _run_ascend_generate_binary_(self, kernel_name):
+        """compile llvm to binary for ascend."""
         input_file = os.path.join(self.output_dir, kernel_name + ".ll")
         out_file = os.path.join(self.output_dir, kernel_name + ".s")
         bin_file = os.path.join(self.output_dir, kernel_name + ".so")
@@ -436,8 +454,9 @@ class AkgMlirDriver(object):
         print("_run_ascend_generate_binary:0 ", cmd)
         try:
             subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("generate .s failed in case " + input_file + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("generate .s failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("generate .s failed in case " + input_file + "!\n") from e
 
         cmd = [
             "clang++",
@@ -459,11 +478,12 @@ class AkgMlirDriver(object):
         print("_run_ascend_generate_binary:1 ", cmd)
         try:
             subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("generate .so failed in case " + input_file + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("generate .so failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("generate .so failed in case " + input_file + "!\n") from e
 
         logging.info("generate ascend binary .so success")
-        title_dict = dict()
+        title_dict = {}
         # kernel name
         title_dict[KERNEL_NAME] = kernel_name + "_kernel"
         # thread number
@@ -482,7 +502,7 @@ class AkgMlirDriver(object):
 
     def has_reduce(self):
         """Return if the fused op contain reduction operator."""
-        with open(self.input_file, "r") as f:
+        with open(self.input_file, "r", encoding='utf-8') as f:
             desc_d = json.loads(f.read())
             for op in desc_d.get("op_desc"):
                 op_name = op.get("name")
@@ -491,6 +511,7 @@ class AkgMlirDriver(object):
         return False
 
     def _run_mlir_gpu_pipeline(self, dyn_shape, kernel_name, tiling_mode=None):
+        """compile mlir use ascend pipeline."""
         input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
         out_file = os.path.join(self.output_dir, kernel_name + "_gpu.mlir")
         opt_pipeline = "--gpu-dyn-opt" if dyn_shape else "--gpu-opt"
@@ -515,24 +536,26 @@ class AkgMlirDriver(object):
                 dump_log = os.path.join(self.output_dir, kernel_name + "_dump_gpu.log")
                 with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                     f.write(result.stderr)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("mlir gpu pipeline failed in case: " + kernel_name + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("mlir gpu pipeline failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("mlir gpu pipeline failed in case: " + kernel_name + "!\n") from e
         logging.info("mlir gpu pipeline success: %s", kernel_name)
-        return
 
     def _run_mlir_gpu_codegen(self, kernel_name):
+        """compile mlir to nvvm for gpu."""
         logging.info("gpu_codegen:")
         input_file = os.path.join(self.output_dir, kernel_name + "_gpu.mlir")
         out_file = os.path.join(self.output_dir, kernel_name + "_nvvm.mlir")
         cmd = [os.path.join(self.akg_tools_dir, "bin/akg-opt"), input_file, "--gpu-codegen", "-o", out_file]
         try:
             subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("gpu_codegen failed in case: %s" + kernel_name + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("gpu_codegen failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("gpu_codegen failed in case: %s" + kernel_name + "!\n") from e
         logging.info("gpu_codegen success: %s", kernel_name)
-        return
 
     def _run_gpu_translate(self, kernel_name):
+        """compile nnvm to ptx for gpu."""
         logging.info("mlir to ptx:")
         input_file = os.path.join(self.output_dir, kernel_name + "_nvvm.mlir")
         out_prefix = os.path.join(self.output_dir, kernel_name + "_init")
@@ -545,11 +568,13 @@ class AkgMlirDriver(object):
         ]
         try:
             subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("mlir to ptx failed in case: " + kernel_name + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("mlir to ptx failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("mlir to ptx failed in case: " + kernel_name + "!\n") from e
         logging.info("mlir to ptx success: %s", kernel_name)
 
     def _run_ptx_replace(self, dyn_shape, kernel_name):
+        """ptx replacement."""
         logging.info("ptx replacement")
         input_file = os.path.join(self.output_dir, kernel_name + "_init.ptx")
         out_prefix = os.path.join(self.output_dir, kernel_name)
@@ -560,12 +585,14 @@ class AkgMlirDriver(object):
             cmd += ["none", "dynamic_shape"]
         try:
             subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("ptx replacement failed in case: " + input_file + "!\n")
+        except subprocess.CalledProcessError as e:
+            logging.error("ptx replacement failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+            raise RuntimeError("ptx replacement failed in case: " + input_file + "!\n") from e
         logging.info("ptx replacement success: %s", kernel_name)
 
     def _run_ptx_dump_json(self, dyn_shape, kernel_name):
-        title_dict = dict()
+        """dump ptx meta."""
+        title_dict = {}
         json_file = os.path.join(self.output_dir, kernel_name + ".json")
         with open(json_file, "rb") as f:
             params = json.load(f)
@@ -581,12 +608,8 @@ class AkgMlirDriver(object):
         if dyn_shape:
             shape_info_json = os.path.join(self.output_dir, kernel_name + "_shape_info.json")
             if not os.path.exists(shape_info_json):
-                raise RuntimeError(
-                    "Dynamic shape needs file {} to get the device shape. Otherwise, the result may be \
-                                    incorrect.".format(
-                        shape_info_json
-                    )
-                )
+                raise RuntimeError(f"Dynamic shape needs file {shape_info_json} to get the device shape. Otherwise, \
+                                     the result may be incorrect.")
 
             with os.fdopen(os.open(shape_info_json, os.O_RDONLY, 0o755), "rb") as f:
                 shape_params = json.load(f)
@@ -607,9 +630,9 @@ class AkgMlirDriver(object):
         title_dict[SHA256] = lib_sha256.hexdigest()
 
         write_code(title_dict, json_file)
-        return
 
     def _dump_static_tile_kernel_impl(self, kernel_name, title_dict, out_file):
+        """dump ptx."""
         static_json_file = os.path.join(self.output_dir, kernel_name + "_static.json")
         static_ptx_file = os.path.join(self.output_dir, kernel_name + "_static.ptx")
         if not (os.path.exists(static_json_file) and os.path.exists(static_ptx_file)):
