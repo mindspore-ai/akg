@@ -40,8 +40,7 @@ async def test_simple_run_llm():
     input_data = {}
 
     # 指定model name
-    model_name = "openrouter_minimax_m2_free"
-    # model_name = "vllm_deepseek_r1_default"
+    model_name = "vllm_deepseek_r1_default"
     # model_name = "vllm_deepseek_v31_thinking_default"
     # model_name = "vllm_deepseek_v31_default"
 

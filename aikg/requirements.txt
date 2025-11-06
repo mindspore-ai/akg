@@ -1,4 +1,4 @@
-langchain == 0.3.18
+langchain<1.0.0
 langchain-deepseek
 langchain-ollama
 langchain_ollama
