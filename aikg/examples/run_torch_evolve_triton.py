@@ -104,7 +104,8 @@ async def run_torch_evolve_triton():
     device_pool = DevicePool(config.device_list)
 
     # 加载配置并检查环境
-    check_env_for_task(config.framework, config.backend, config.dsl, config.config_path)
+    loaded_config = load_config(config_path=config.config_path)
+    check_env_for_task(config.framework, config.backend, config.dsl, loaded_config)
 
     # 调用evolve函数
     print("开始进化过程...")
@@ -115,7 +116,7 @@ async def run_torch_evolve_triton():
         framework=config.framework,
         backend=config.backend,
         arch=config.arch,
-        config=config.config_path,
+        config=loaded_config,
         device_pool=device_pool,
         task_pool=task_pool,
         max_rounds=config.max_rounds,
