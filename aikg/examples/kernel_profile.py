@@ -284,7 +284,7 @@ def main():
     
     # 运行性能测试
     run_kernel_profile(
-        op_name="custom_op",
+        op_name=args.op_name,
         op_task_str=op_task_str,
         kernel_code=kernel_code,
         framework="torch",
