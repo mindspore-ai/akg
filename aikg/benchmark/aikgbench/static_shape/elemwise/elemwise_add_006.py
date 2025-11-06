@@ -5,7 +5,6 @@ import torch.nn as nn
 class Model(nn.Module):
     """
     Element-wise addition (3D, FP16) with broadcasting on front and back dimensions.
-    Large scale: e6
     """
     def __init__(self):
         super(Model, self).__init__()
@@ -16,9 +15,8 @@ class Model(nn.Module):
 
 
 def get_inputs():
-    # Large scale: 64 x 128 x 256 ≈ e6
-    input1 = torch.randn(64, 128, 256, dtype=torch.float16)
-    input2 = torch.randn(1, 128, 1, dtype=torch.float16)
+    input1 = torch.randn(16, 1024, 65536, dtype=torch.float16)
+    input2 = torch.randn(1, 1024, 1, dtype=torch.float16)
     return [input1, input2]
 
 

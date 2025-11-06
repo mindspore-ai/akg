@@ -5,7 +5,6 @@ import torch.nn as nn
 class Model(nn.Module):
     """
     Element-wise multiplication with vertical broadcast (3D).
-    Medium scale: e6
     """
     def __init__(self):
         super(Model, self).__init__()
@@ -16,10 +15,8 @@ class Model(nn.Module):
 
 
 def get_inputs():
-    # Medium scale: 64 * 128 * 128 ≈ e6
-
-    input1 = torch.randn(64, 128, 128, dtype=torch.float16)
-    input2 = torch.randn(64, 1, 1, dtype=torch.float16)
+    input1 = torch.randn(16, 2048, 2048, dtype=torch.float16)
+    input2 = torch.randn(16, 1, 1, dtype=torch.float16)
     return [input1, input2]
 
 

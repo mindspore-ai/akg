@@ -16,10 +16,9 @@ class Model(nn.Module):
 
 
 def get_inputs():
-    # Large scale: 256 * 1024 * 1024 ≈ e8
 
-    input1 = torch.randn(256, 1024, 1024, dtype=torch.bfloat16)
-    input2 = torch.randn(1, 1, 1024, dtype=torch.bfloat16)
+    input1 = torch.randint(-128, 127, (65536, 128, 16), dtype=torch.int32)
+    input2 = torch.randint(-128, 127, (1, 1, 16), dtype=torch.int32)
     return [input1, input2]
 
 

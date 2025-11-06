@@ -6,11 +6,9 @@ import triton.language as tl
     configs=[
         # NUM_BLOCKS 核数，SUB_M 控制内部每次处理行数，BLOCK_N 控制列切分大小
         # 对 N=131072 进行列切分，避免 UB 溢出
-        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 2, 'BLOCK_N': 4096}),
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 1, 'BLOCK_N': 16384}),
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 2, 'BLOCK_N': 8192}),
-        triton.Config({'NUM_BLOCKS': 32, 'SUB_M': 2, 'BLOCK_N': 8192}),
-        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 4, 'BLOCK_N': 4096}),
+        triton.Config({'NUM_BLOCKS': 40, 'SUB_M': 1, 'BLOCK_N': 16384}), # 1695.11us，最优，用满物理核
+        triton.Config({'NUM_BLOCKS': 64, 'SUB_M': 2, 'BLOCK_N': 2048}), # 2001.41us，核数>40且ub未用满
+        triton.Config({'NUM_BLOCKS': 256, 'SUB_M': 1, 'BLOCK_N': 16384}), # 1709.26us，核数>40，调度开销大
     ],
     key=['M', 'N'],
 )
