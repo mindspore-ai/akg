@@ -22,8 +22,11 @@ def check_backend_arch(backend: str, arch: str):
     """
     if backend not in ["ascend", "cuda", "cpu"]:
         raise ValueError("backend must be ascend, cuda or cpu")
-    elif backend == "ascend" and arch not in ["ascend910b4", "ascend310p3"]:
-        raise ValueError("ascend backend only support ascend910b4 and ascend310p3")
+    elif backend == "ascend":
+        # 支持 ascend910b1, b2, b2c, b3, b4 和 ascend310p3
+        supported_ascend_archs = ["ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4", "ascend310p3"]
+        if arch not in supported_ascend_archs:
+            raise ValueError("ascend backend only support ascend910b1/b2/b2c/b3/b4 and ascend310p3")
     elif backend == "cuda" and arch not in ["a100", "v100"]:
         raise ValueError("cuda backend only support a100 and v100")
     elif backend == "cpu" and arch not in ["x86_64", "aarch64"]:
@@ -51,16 +54,25 @@ def check_task_type(task_type: str):
 
 
 # 配置依赖关系映射表
+# 注意：ascend910b1/b2/b2c/b3/b4 使用相同的配置
 VALID_CONFIGS = {
     # framework -> backend -> arch -> dsl
     "mindspore": {
         "ascend": {
+            "ascend910b1": ["triton", "triton-russia"],
+            "ascend910b2": ["triton", "triton-russia"],
+            "ascend910b2c": ["triton", "triton-russia"],
+            "ascend910b3": ["triton", "triton-russia"],
             "ascend910b4": ["triton", "triton-russia"],
             "ascend310p3": ["swft"]
         },
     },
     "torch": {
         "ascend": {
+            "ascend910b1": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
+            "ascend910b2": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
+            "ascend910b2c": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
+            "ascend910b3": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
             "ascend910b4": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
             "ascend310p3": ["swft", "ascendc"]
         },
@@ -80,6 +92,22 @@ VALID_CONFIGS = {
 }
 
 
+def _get_config_for_arch(backend_config: dict, arch: str) -> list:
+    """
+    获取指定架构的配置
+    Args:
+        backend_config: 后端配置字典
+        arch: 架构名称
+    Returns:
+        DSL 列表
+    """
+    # 直接匹配
+    if arch in backend_config:
+        return backend_config[arch]
+    
+    return None
+
+
 def check_task_config(framework: str, backend: str, arch: str, dsl: str):
     """
     统一验证配置参数之间的依赖关系
@@ -95,8 +123,11 @@ def check_task_config(framework: str, backend: str, arch: str, dsl: str):
     if backend not in VALID_CONFIGS[framework]:
         raise ValueError(f"Framework {framework} does not support backend: {backend}")
 
-    if arch not in VALID_CONFIGS[framework][backend]:
+    backend_config = VALID_CONFIGS[framework][backend]
+    dsl_list = _get_config_for_arch(backend_config, arch)
+    
+    if dsl_list is None:
         raise ValueError(f"Backend {backend} does not support arch: {arch}")
 
-    if dsl not in VALID_CONFIGS[framework][backend][arch]:
+    if dsl not in dsl_list:
         raise ValueError(f"Arch {arch} does not support dsl: {dsl}")

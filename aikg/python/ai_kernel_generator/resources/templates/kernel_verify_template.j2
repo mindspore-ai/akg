@@ -373,8 +373,10 @@ def verify_implementations():
     if backend == "ascend":
         device = "Ascend"
         # 设置Ascend架构
-        if arch not in ["ascend910b4", "ascend310p3"]:
-            raise ValueError(f"不支持的ascend架构: {arch}")
+        # 支持 ascend910b1/b2/b2c/b3/b4 和 ascend310p3
+        supported_ascend_archs = ["ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4", "ascend310p3"]
+        if arch not in supported_ascend_archs:
+            raise ValueError(f"不支持的ascend架构: {arch}，仅支持ascend910b1/b2/b2c/b3/b4和ascend310p3")
     elif backend == "cpu":
         device = "CPU"
     else:
@@ -436,12 +438,21 @@ def verify_implementations():
         impl_output = {{ impl_func_name }}(*inputs_for_impl)
         {% elif dsl == "ascendc" %}
         # 处理器
+        # 映射架构到 SOC_VERSION
+        arch_str = "{{ arch }}"
         ARCH_TO_SOC_VERSION = {
+            "ascend910b1": "Ascend910B1",
+            "ascend910b2": "Ascend910B2",
+            "ascend910b2c": "Ascend910B2C",
+            "ascend910b3": "Ascend910B3",
             "ascend910b4": "Ascend910B4",
             "ascend310p3": "Ascend310P3"
         }
         
-        SOC_VERSION = ARCH_TO_SOC_VERSION.get("{{ arch }}")
+        SOC_VERSION = ARCH_TO_SOC_VERSION.get(arch_str)
+        if SOC_VERSION is None:
+            raise ValueError(f"不支持的ascend架构: {arch_str}，AscendC DSL仅支持ascend910b1/b2/b2c/b3/b4和ascend310p3")
+        
         try:
             result = subprocess.run(["bash", "run.sh", "-v", SOC_VERSION], check=True, capture_output=True, text=True)
             if result.returncode != 0:

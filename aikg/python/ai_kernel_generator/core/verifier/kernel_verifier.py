@@ -96,8 +96,11 @@ class KernelVerifier:
         # 验证backend和arch的组合是否有效
         if self.backend == "cuda" and self.arch not in ["a100", "v100"]:
             raise ValueError(f"cuda后端只支持a100和v100架构，当前架构: {self.arch}")
-        if self.backend == "ascend" and self.arch not in ["ascend910b4", "ascend310p3"]:
-            raise ValueError(f"ascend后端只支持ascend910b4和ascend310p3架构，当前架构: {self.arch}")
+        if self.backend == "ascend":
+            # 支持 ascend910b1, b2, b2c, b3, b4 和 ascend310p3
+            supported_ascend_archs = ["ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4", "ascend310p3"]
+            if self.arch not in supported_ascend_archs:
+                raise ValueError(f"ascend后端只支持ascend910b1/b2/b2c/b3/b4和ascend310p3架构，当前架构: {self.arch}")
 
     def _create_verify_dir(self, step_counter) -> str:
         """创建验证目录并返回目录路径"""
