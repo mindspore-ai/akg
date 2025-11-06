@@ -95,3 +95,13 @@ task = Task(
 )
 ```
 通过这种方式，您可以灵活地为不同的任务流程配置和切换底层的大语言模型。
+
+## 4. 全局环境变量设置
+
+您可以通过高优先级环境变量直接指定 LLM API。
+
+```bash
+export AIKG_BASE_URL="https://api.example.com/v1"
+export AIKG_MODEL_NAME="your-model-name"
+export AIKG_API_KEY="your-api-key"
+```

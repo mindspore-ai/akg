@@ -288,7 +288,7 @@ class AgentBase(ABC):
                     response = await model.chat.completions.create(**create_kwargs)
 
                     content = response.choices[0].message.content
-                    reasoning_content = response.choices[0].message.reasoning_content
+                    reasoning_content = getattr(response.choices[0].message, 'reasoning_content', "")
 
                     response_metadata = f"completion_tokens: {response.usage.completion_tokens}, " + \
                         f"prompt_tokens: {response.usage.prompt_tokens}, total_tokens: {response.usage.total_tokens}"
