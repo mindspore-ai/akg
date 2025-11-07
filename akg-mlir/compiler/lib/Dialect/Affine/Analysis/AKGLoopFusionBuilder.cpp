@@ -42,13 +42,14 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
 
-using namespace mlir;
-using namespace llvm;
-using namespace akg;
-using namespace akgglobal;
-
 namespace mlir {
 namespace akg {
+
+using llvm::DenseMap;
+using llvm::outs;
+using llvm::raw_ostream;
+using llvm::SetVector;
+using llvm::SmallVector;
 // Check if the operation is an elementwise operation
 // Elementwise operations perform the same computation on each element independently
 static bool isElementwiseOp(Operation *op) {
@@ -71,18 +72,18 @@ static bool isBroadcastOp(T lhs, T rhs) {
     if (!memrefType) {
       return shapeInfo;
     }
-    // TODO: support dynamic shape by symbolic info
+    // TODO(hjh): support dynamic shape by symbolic info
     shapeInfo = memrefType.getShape();
     return shapeInfo;
   };
   auto lhsShapeInfo = getShapeInfo(lhs);
   auto rhsShapeInfo = getShapeInfo(rhs);
-  
+
   // Different number of dimensions indicates broadcasting
   if (lhsShapeInfo.size() != rhsShapeInfo.size()) {
     return true;
   }
-  
+
   // Check if any corresponding dimensions have different sizes
   for (size_t i = 0; i < lhsShapeInfo.size(); ++i) {
     auto lhsDim = lhsShapeInfo[i];
@@ -159,7 +160,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
       collector.collect(op);
       // Return false if a region holding op other than 'affine.for' and
       // 'affine.if' was found (not currently supported).
-      // TODO: check this condition
+      // TODO(hjh): check this condition
       if (collector.hasNonAffineRegionOp) {
         return;
       }
@@ -203,7 +204,8 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
       memrefAccesses[memref].insert(node.id);
       nodes.insert({node.id, node});
     } else if (op->getNumRegions() != 0 ||
-               isa<memref::AllocOp, arith::ConstantOp, affine::AffineApplyOp, affine::AffineYieldOp, func::ReturnOp>(op)) {
+               isa<memref::AllocOp, arith::ConstantOp, affine::AffineApplyOp,
+                   affine::AffineYieldOp, func::ReturnOp>(op)) {
       // Return false if another region is found (not currently supported).
       return;
     } else {
@@ -222,8 +224,9 @@ void MemRefDependenceGraphForFusion::print(raw_ostream &os) const {
   for (auto it : groups) {
     auto g = it.second;
     std::string groupTemplateString = g->getGroupTemplateString();
-    os << "Group " << g->groupId << " (GroupTemplate " << groupTemplateString << ") IsGlobalOut (" << g->isGlobalOut << ") root is "
-       << g->rootId << " has " << g->nodesId.size() << " nodes inside: [";
+    os << "Group " << g->groupId << " (GroupTemplate " << groupTemplateString
+       << ") IsGlobalOut (" << g->isGlobalOut << ") root is " << g->rootId
+       << " has " << g->nodesId.size() << " nodes inside: [";
     for (auto nid : g->nodesId) {
       os << nid << ", ";
     }
@@ -258,7 +261,7 @@ OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<
     }
   }
   if (loads.size() == 1 && stores.size() == 1) {
-    // TODO: check transpose
+    // TODO(hjh): check transpose
     return OperatorTemplate::Transpose;
   }
   return OperatorTemplate::Default;
@@ -317,39 +320,39 @@ bool MemRefDependenceGraphForFusion::isGlobalMemref(unsigned id) {
   if (!op) {
     return false;
   }
-  
+
   // Must be a store operation
   auto write = dyn_cast<affine::AffineStoreOp>(op);
   if (!write) {
     return false;
   }
-  
+
   // Get the memref being written to
   auto memref = write.getMemref();
   if (!memref) {
     return false;
   }
-  
+
   // Case1: Direct store to function argument (no defining operation)
   if (!memref.getDefiningOp()) {
     return true;
   }
-  
+
   // Case2: Check for local alloc -> load -> global store pattern
   std::vector<unsigned> successorIds;
   getSuccessorNodes(id, successorIds);
-  
+
   // 1. Must have exactly one successor
   if (successorIds.size() != 1) {
     return false;
   }
-  
+
   // 2. Successor must be a load operation
   auto writeTo = getNode(successorIds.back())->op;
   if (!writeTo || !isa<affine::AffineLoadOp>(writeTo)) {
     return false;
   }
-  
+
   // 3. Load must have exactly one successor
   std::vector<unsigned> grandchild;
   getSuccessorNodes(successorIds.back(), grandchild);
@@ -364,7 +367,7 @@ bool MemRefDependenceGraphForFusion::isGlobalMemref(unsigned id) {
       return true;
     }
   }
-  
+
   return false;
 }
 
@@ -372,7 +375,7 @@ unsigned FusionCodeGenHelper::getAliasId(unsigned srcId) {
   // Follow the alias chain to find the final destination
   std::unordered_set<unsigned> visited;
   unsigned currentId = srcId;
-  
+
   while (nodeAlias.find(currentId) != nodeAlias.end()) {
     if (visited.count(currentId)) {
       // Circular alias detected, break to avoid infinite loop
@@ -382,16 +385,37 @@ unsigned FusionCodeGenHelper::getAliasId(unsigned srcId) {
     visited.insert(currentId);
     currentId = nodeAlias[currentId];
   }
-  
+
   if (currentId != srcId) {
     llvm::outs() << "Find alias chain " << srcId << " -> " << currentId << "\n";
   }
-  
+
   return currentId;
 }
 
-void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp sibAffineForOp,
-                                  affine::AffineForOp dstAffineForOp, unsigned maxLegalFusionDepth, unsigned dstLoopDepthTest) {
+static unsigned findMaxLegalFusionDepth(affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
+                                         unsigned dstLoopDepthTest, const affine::FusionStrategy &strategy,
+                                         llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions) {
+  depthSliceUnions.clear();
+  depthSliceUnions.resize(dstLoopDepthTest);
+  unsigned maxLegalFusionDepth = 0;
+  for (unsigned i = 1; i <= dstLoopDepthTest; ++i) {
+    affine::FusionResult result = canFuseLoops(srcAffineForOp, dstAffineForOp,
+                                               /*dstLoopDepth=*/i, &depthSliceUnions[i - 1], strategy);
+
+    if (result.value == affine::FusionResult::Success) {
+      maxLegalFusionDepth = i;
+      llvm::outs() << "fuseNodes to maxLegalFusionDepth " << maxLegalFusionDepth << "\n";
+    }
+  }
+  return maxLegalFusionDepth;
+}
+
+void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId,
+                                   affine::AffineForOp sibAffineForOp,
+                                   affine::AffineForOp dstAffineForOp,
+                                   unsigned maxLegalFusionDepth,
+                                   unsigned dstLoopDepthTest) {
   // dstId = getAliasId(dstId);
   llvm::outs() << "Perform V Fusion at " << srcId << " to " << dstId << "\n";
   auto *dstNode = mdg.getNode(dstId);
@@ -407,16 +431,14 @@ void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId, affine::Affine
   }
   if (memref) {
     SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
-    depthSliceUnions.resize(dstLoopDepthTest);
     affine::FusionStrategy strategy(memref);
-    for (unsigned i = 1; i <= dstLoopDepthTest; ++i) {
-      affine::FusionResult result = canFuseLoops(sibAffineForOp, dstAffineForOp,
-                                                 /*dstLoopDepth=*/i, &depthSliceUnions[i - 1], strategy);
+    maxLegalFusionDepth = findMaxLegalFusionDepth(sibAffineForOp, dstAffineForOp, dstLoopDepthTest,
+                                                  strategy, depthSliceUnions);
 
-      if (result.value == affine::FusionResult::Success) {
-        maxLegalFusionDepth = i;
-        llvm::outs() << "fuseWithSiblingNodes to maxLegalFusionDepth " << maxLegalFusionDepth << "\n";
-      }
+    if (maxLegalFusionDepth == 0 || depthSliceUnions[maxLegalFusionDepth - 1].isEmpty()) {
+      affine::FusionStrategy new_strategy(affine::FusionStrategy::ProducerConsumer);
+      maxLegalFusionDepth = findMaxLegalFusionDepth(sibAffineForOp, dstAffineForOp, dstLoopDepthTest,
+                                                    new_strategy, depthSliceUnions);
     }
     // Skip if fusion is not feasible at any loop depths.
     if (maxLegalFusionDepth == 0) {
@@ -448,17 +470,10 @@ void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::Affine
 
   // Check the feasibility of fusing src loop nest into dst loop nest
   // at loop depths in range [1, dstLoopDepthTest].
-  unsigned maxLegalFusionDepth = 0;
   SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
-  depthSliceUnions.resize(dstLoopDepthTest);
   affine::FusionStrategy strategy(affine::FusionStrategy::ProducerConsumer);
-  for (unsigned i = 1; i <= dstLoopDepthTest; ++i) {
-    affine::FusionResult result = canFuseLoops(srcAffineForOp, dstAffineForOp,
-                                               /*dstLoopDepth=*/i, &depthSliceUnions[i - 1], strategy);
-    if (result.value == affine::FusionResult::Success) {
-      maxLegalFusionDepth = i;
-    }
-  }
+  unsigned maxLegalFusionDepth = findMaxLegalFusionDepth(srcAffineForOp, dstAffineForOp, dstLoopDepthTest,
+                                                         strategy, depthSliceUnions);
 
   if (maxLegalFusionDepth == 0) {
     llvm::outs() << "Can't fuse: fusion is not legal at any depth\n";
@@ -475,7 +490,7 @@ void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::Affine
     }
   }
 
-  // TODO: Suppport multiple producer stores in profitability
+  // TODO(hjh): Support multiple producer stores in profitability
   // analysis. We limit profitability analysis to only scenarios with
   // a single producer store for now. Note that some multi-store
   // producer scenarios will still go through profitability analysis
