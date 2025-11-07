@@ -68,11 +68,7 @@ def run_base_implementations():
     if backend == "cuda":
         os.environ['CUDA_VISIBLE_DEVICES'] = str({{ device_id }})
         device = torch.device("cuda")
-        # 设置CUDA架构
-        if arch == "a100":
-            torch.cuda.set_device(0)  # 使用第一个a100设备
-        elif arch == "v100":
-            torch.cuda.set_device(0)  # 使用第一个v100设备
+        torch.cuda.set_device(0)  # 使用第一个CUDA设备
     elif backend == "ascend":
         if "ascend910" in arch:
             {% if dsl == "triton-russia" %}

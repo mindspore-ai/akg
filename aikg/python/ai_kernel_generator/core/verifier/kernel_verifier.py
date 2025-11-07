@@ -41,7 +41,7 @@ RUN_TEMPLATE_PATH = os.path.join(get_project_root(), "utils", "compile_tools", "
 FrameworkType = Literal["torch", "mindspore", "numpy"]
 ImplType = Literal["triton", "triton-russia", "swft", "cuda_c", "cpp", "ascendc"]
 BackendType = Literal["cuda", "ascend", "cpu"]
-ArchType = Literal["a100", "v100", "ascend910b4", "ascend310p3", "x86_64", "aarch64"]
+ArchType = Literal["a100", "v100", "h20", "l20", "rtx3090", "ascend910b4", "ascend310p3", "x86_64", "aarch64"]
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class KernelVerifier:
             framework (FrameworkType): 深度学习框架，可选值包括 "torch", "mindspore", "numpy"
             dsl (ImplType): 实现类型，可选值包括 "triton", "triton-russia", "swft"
             backend (BackendType): 计算设备后端，可选值包括 "cuda", "ascend"
-            arch (ArchType): 硬件架构，可选值包括 "a100", "v100", "ascend910b4", "ascend310p3"
+            arch (ArchType): 硬件架构，可选值包括 "a100", "v100", "h20", "l20", "rtx3090", "ascend910b4", "ascend310p3"
             impl_func_name (str, optional): 实现函数名，默认为op_name_dsl_framework
         """
         self.op_name = op_name
@@ -94,8 +94,8 @@ class KernelVerifier:
             self.impl_func_name = impl_func_name or f"{op_name}_{dsl}_{framework}"
 
         # 验证backend和arch的组合是否有效
-        if self.backend == "cuda" and self.arch not in ["a100", "v100"]:
-            raise ValueError(f"cuda后端只支持a100和v100架构，当前架构: {self.arch}")
+        if self.backend == "cuda" and self.arch not in ["a100", "v100", "h20", "l20", "rtx3090"]:
+            raise ValueError(f"cuda后端只支持a100、v100、h20、l20和rtx3090架构，当前架构: {self.arch}")
         if self.backend == "ascend":
             # 支持 ascend910b1, b2, b2c, b3, b4 和 ascend310p3
             supported_ascend_archs = ["ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4", "ascend310p3"]

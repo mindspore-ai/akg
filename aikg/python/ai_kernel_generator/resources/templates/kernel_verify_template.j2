@@ -202,18 +202,7 @@ def load_binary_data(data_dir, reference_outputs):
     
     return loaded_outputs
 
-{% if "triton" in dsl and backend == "cuda" and arch == "a100" %}
-def get_limit(data_type):
-    import torch
-    if data_type == torch.float16:
-        return 0.004
-    elif data_type == torch.bfloat16:
-        return 0.03
-    elif data_type == torch.int8:
-        return 0.01
-    else:
-        return 0.02
-{% elif framework == "torch" %}
+{% if framework == "torch" %}
 def get_limit(data_type):
     import torch
     if data_type == torch.float16:
@@ -341,11 +330,7 @@ def verify_implementations():
     if backend == "cuda":
         os.environ['CUDA_VISIBLE_DEVICES'] = str({{ device_id }})
         device = torch.device("cuda")
-        # 设置CUDA架构
-        if arch == "a100":
-            torch.cuda.set_device(0)  # 使用第一个a100设备
-        elif arch == "v100":
-            torch.cuda.set_device(0)  # 使用第一个v100设备
+        torch.cuda.set_device(0)  # 使用第一个CUDA设备
     elif backend == "ascend":
         if "ascend910" in arch:
             {% if dsl == "triton-russia" %}

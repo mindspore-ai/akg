@@ -111,7 +111,7 @@ validate_markers() {
     local framework_markers=("torch" "mindspore" "numpy")
     local dsl_markers=("triton" "swft")
     local backend_markers=("cuda" "ascend")
-    local arch_markers=("a100" "v100" "ascend910b4" "ascend310p3")
+    local arch_markers=("a100" "v100" "h20" "l20" "rtx3090" "ascend910b4" "ascend310p3")
     
     # 检查是否包含硬件配置标记
     local has_hardware_markers=false
