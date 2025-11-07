@@ -92,4 +92,14 @@ task = Task(
     config=config,
 )
 ```
-This approach allows you to flexibly configure and switch the underlying large language models for different task flows. 
+This approach allows you to flexibly configure and switch the underlying large language models for different task flows.
+
+## 4. Global Environment Variable Settings
+
+You can directly specify the LLM API using high-priority environment variables.
+
+```bash
+export AIKG_BASE_URL="https://api.example.com/v1"
+export AIKG_MODEL_NAME="your-model-name"
+export AIKG_API_KEY="your-api-key"
+``` 

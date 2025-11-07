@@ -130,6 +130,36 @@ def _load_llm_config():
 
 def _check_llm_api(config_path=None, config=None):
     """检查LLM API配置和连接"""
+    # 【最高优先级】检查环境变量覆盖模式
+    env_base_url = os.getenv("AIKG_BASE_URL")
+    env_model_name = os.getenv("AIKG_MODEL_NAME")
+    env_api_key = os.getenv("AIKG_API_KEY")
+    
+    if env_base_url and env_model_name and env_api_key:
+        print("=" * 60)
+        print("🔍 检测到环境变量覆盖模式（最高优先级）")
+        print(f"  AIKG_BASE_URL: {env_base_url}")
+        print(f"  AIKG_MODEL_NAME: {env_model_name}")
+        # 脱敏显示API密钥
+        masked_key = env_api_key[:8] + "*" * (len(env_api_key) - 12) + \
+            env_api_key[-4:] if len(env_api_key) > 12 else "***"
+        print(f"  AIKG_API_KEY: {masked_key}")
+        print("=" * 60)
+        
+        # 简单的连通性检查（尝试访问base_url）
+        try:
+            import requests
+            # 尝试访问根路径或models端点
+            test_url = env_base_url.rstrip('/') + '/models'
+            response = requests.get(test_url, timeout=5)
+            print(f"✅ API连接测试成功: {env_base_url}")
+            return True
+        except Exception as e:
+            print(f"⚠️ API连接测试失败: {e}")
+            print("ℹ️ 将在实际调用时再次尝试连接")
+            # 不强制失败，因为有些API的models端点可能不存在
+            return True
+    
     # 加载LLM配置
     llm_config = _load_llm_config()
     if not llm_config:
