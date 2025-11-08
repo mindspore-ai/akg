@@ -3,26 +3,30 @@ import torch.nn as nn
 
 
 class Model(nn.Module):
-    """
-    Element-wise subtraction (2D, FP16).
-    Medium scale: e6
-    """
-    def __init__(self):
+    def __init__(self, alpha=1.0):
         super(Model, self).__init__()
+        self.alpha = alpha
 
     def forward(self, input1, input2):
-        # 2D subtraction operation
-        return input1 - input2
+        # torch.sub(input, other, *, alpha=1, out=None)
+        # Subtracts other from input tensor element-wise.
+        # If alpha is specified, other is multiplied by alpha before subtraction.
+        # This operation is commonly used in neural networks for:
+        # - Computing residuals in ResNet architectures
+        # - Implementing certain loss functions
+        # - Mathematical transformations in specialized layers
+        return torch.sub(input1, input2, alpha=self.alpha)
 
 
 def get_inputs():
-    # Medium scale: 2048 * 4096 ≈ e6
-
-    input1 = torch.randn(2048, 4096, dtype=torch.float16)
-    input2 = torch.randn(1, 1, dtype=torch.float16)
+    # Batch size: 1024
+    # Hidden dimension: 4096
+    input1 = torch.randn(1024, 4096, dtype=torch.float32)
+    input2 = torch.randn(1024, 4096, dtype=torch.float32)
     return [input1, input2]
 
 
 def get_init_inputs():
-    return []
-
+    # Parameters for sub
+    alpha = 2.0
+    return [alpha]

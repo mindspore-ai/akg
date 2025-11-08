@@ -2,15 +2,15 @@
 **操作类型**:矩阵乘法 (Matrix Multiplication),A[M, K] @ B[K, N] = C[M, N]
 **数据尺寸**:A[2048, 7168]、B[7168, 16384] -> C[2048, 16384],算子规格大
 **数据类型**:float16、bfloat16
-**任务特点**:计算密集型操作,输出矩阵可分解为(NUM_BLOCKS_M × NUM_BLOCKS_N)个独立块并行计算;核心分配策略对缓存命中率和负载均衡影响显著;硬件约束为20个AI Core,Cube缓存(L0A:64KB, L0B:64KB, L0C:128KB, L1:1MB)。
-
-**分块大小**(受Cube缓存容量限制):
-- float16/bfloat16: BLOCK_M=128, BLOCK_K=256, BLOCK_N=256
-- float32: BLOCK_M=BLOCK_K=BLOCK_N=128
+**任务特点**:计算密集型操作； 高并行性，可以在M和N轴上并行；数据局部性强，通过分块可优化缓存使用，核心分配策略对缓存命中率和负载均衡影响显著；K轴存在数据依赖。
 
 # 关键代码切片
 
-## 优化1: 固定核心数启动(最重要!)
+## 优化1: 分块大小(受Cube缓存容量限制)
+- float16/bfloat16: BLOCK_M=128, BLOCK_K=256, BLOCK_N=256
+- float32: BLOCK_M=BLOCK_K=BLOCK_N=128
+
+## 优化2: 固定核心数启动(最重要!)
 ```python
 # ❌ 错误:启动所有块,grid=(NUM_BLOCKS_M*NUM_BLOCKS_N,)
 def grid(meta):
@@ -37,11 +37,8 @@ def matmul_kernel(..., num_cores: tl.constexpr):
 # 启动:固定20个核心
 matmul_kernel[(num_cores,)](...)  # grid=(20,)
 ```
-**优化内容**:
-- ❌ 错误做法:grid=(NUM_BLOCKS_M*NUM_BLOCKS_N,),为每个块启动一个程序(如1024个程序),超出硬件核心数(20个)
-- ✅ 正确做法:grid=(num_cores,),固定启动20个核心,每个核心通过for循环处理多个块(每个核心处理~51块)
-- Ascend 910B4只有20个AI Core,启动超过20个程序会导致调度开销和性能下降
-**总结**:[关键优化] Ascend NPU必须使用固定核心数启动,grid=(num_cores,)即(20,),每个核心循环处理多个块,不要使用grid=(NUM_BLOCKS,)!
+**优化内容**:固定核数（和硬件核数一致，如Ascend 910B4只有20个AI Core）, 每个核心通过for循环处理多个块(每个核心处理~51块)
+**总结**: Ascend NPU必须使用固定核心数启动,grid=(num_cores,)即(20,),每个核心循环处理多个块,不要使用grid=(NUM_BLOCKS,)!
 
 ## 优化2: Swizzle2D块分组重排
 ```python
@@ -91,7 +88,7 @@ def matmul_kernel_swizzle2d(..., GROUP_SIZE: tl.constexpr, DIRECTION: tl.constex
 **优化内容**:
 - Swizzle2D通过GROUP_SIZE将块按组重排,组内块共享mat_a行或mat_b列数据,提升缓存局部性
 - GROUP_SIZE推荐值为4,可通过autotune在[1,2,3,4,5,8]中搜索最优值
-**总结**:[通用优化] 矩阵乘法避免简单线性分配,采用分组重排(swizzle)改善缓存局部性和负载均衡
+**总结**: 矩阵乘法避免简单线性分配,采用分组重排(swizzle)改善缓存局部性和负载均衡
 
 ## 优化3: 矩阵形状自适应
 ```python
@@ -121,5 +118,4 @@ def triton_matmul(mat_a, mat_b, dtype=torch.bfloat16):
 **优化内容**:
 - M≥N时,DIRECTION=0行优先分组,减少mat_a重复加载(可用tl.swizzle2d API)
 - M<N时,DIRECTION=1列优先分组,减少mat_b重复加载(需手动实现)
-- 示例[2048,7168]@[7168,16384]: M<N,选DIRECTION=1,沿N方向分组
-**总结**:[通用优化] 根据输出矩阵M/N比例自适应选择块分配方向,让相同索引的块聚集以提升缓存复用率
+**总结**: 根据输出矩阵M/N比例自适应选择块分配方向,让相同索引的块聚集以提升缓存复用率

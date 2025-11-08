@@ -2,23 +2,11 @@
 **操作类型**：跨轴broadcast类型，broadcast第一、三根轴；3D Tensor输入，3D Tensor输出
 **数据尺寸**：(65536, 128, 16) / (1, 128, 1)，第一、三维需要broadcast，第一维很大，第三维很小
 **数据类型**：float32
-**任务特点**：操作类型为elementwise，需要对第一维和第三维进行广播，属于跨轴broadcast。
+**任务特点**：操作类型为elementwise，需要对第一维和第三维进行广播，属于跨轴broadcast，并且最后一根轴很小。
 
 # 关键代码切片
 
-## 优化1：连续broadcast的通用做法
-
-**优化内容**：对于连续broadcast（相邻维度都需要broadcast），通过reshape将这些维度合并为一维，转换为单轴broadcast，简化处理逻辑。
-
-## 优化2：跨轴broadcast的通用做法
-
-**优化内容**：对于跨轴broadcast（不相邻的维度需要broadcast），通用做法是第一维映射到多核上，然后在核内分别对每个维度进行切分。
-例如，对于(B, H, W) / (1, H, 1)：
-- 选择第一维（如B=65536）映射到多核实现并行
-- 在核内对其他维度按需进行切分处理
-这种方法适用于大多数跨轴broadcast场景，通过多核并行+核内多维切分，实现并行度和数据粒度的平衡。
-
-## 优化3：最后一维特别小的特殊处理
+## 优化1
 ```python
 # ============ 阶段1：多核并行Broadcast（autotune优化）============
 input2_broadcast = torch.empty(1, H, W, dtype=input2.dtype, device=input2.device)
@@ -51,7 +39,14 @@ div_flatten_kernel[grid_div](
 2. **第二阶段kernel（elemwise_kernel）**：将3D问题转换为2D处理：
    - 将(B, H, W)和(1, H, W) reshape为2D：(B, HxW)和(1, HxW)
    - 把第一维(B)映射到多核，核内对HW维度切分（SUB_HW=512），向量化维度大大提升
-
 这种方法通过预先broadcast+reshape，避免了最后一维过小导致的向量化效率问题；并且broadcast较小的shape，开销小。
 
-**总结**：[通用优化] 当最后一维很小时，采用两阶段kernel：先broadcast展开+reshape为2D，再进行标准的多核并行处理，提升向量化效率。
+**总结**：当跨轴broadcast中最后一维特别小时，采用两阶段kernel：先broadcast展开+reshape为2D，再进行标准的多核并行处理，提升向量化效率。
+
+
+**连续broadcast的优化方案**：对于连续broadcast（相邻维度都需要broadcast），通过reshape将这些维度合并为一维，转换为单轴broadcast，简化处理逻辑。
+**跨轴broadcast的优化方案**：对于跨轴broadcast（不相邻的维度需要broadcast），通用做法是第一维映射到多核上，然后在核内分别对每个维度进行切分。
+例如，对于(B, H, W) / (1, H, 1)：
+- 选择第一维（如B=65536）映射到多核实现并行
+- 在核内对其他维度按需进行切分处理
+这种方法适用于大多数跨轴broadcast场景，通过多核并行+核内多维切分，实现并行度和数据粒度的平衡。

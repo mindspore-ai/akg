@@ -10,11 +10,12 @@ class Model(nn.Module):
     def forward(self, input_tensor):
         # torch.mean(input, dim, keepdim=False, dtype=None)
         # Returns the mean value of all elements in the input tensor or along the specified dimension.
-        # This operation is commonly used in neural networks for:
+        # This is a mean operation with no specific dimension (reduces all dimensions).
+        # Mean operations are commonly used in neural networks for:
         # - Computing loss functions (e.g., mean squared error)
         # - Normalizing activations across batch dimensions
         # - Pooling operations in convolutional networks
-        return torch.mean(input_tensor, dim=self.dim)
+        return torch.mean(input_tensor, self.dim)
 
 
 def get_inputs():

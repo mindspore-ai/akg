@@ -11,7 +11,7 @@ class Model(nn.Module):
     
     Formula: output_i = exp(input_i) / sum(exp(input_j)) for j in dimension
     """
-    def __init__(self, dim=None):
+    def __init__(self, dim=-1):
         super(Model, self).__init__()
         self.dim = dim
 
@@ -21,12 +21,13 @@ class Model(nn.Module):
         return result
 
 def get_inputs():
-    # Batch size: 1024
+    # Batch size: 32
+    # Sequence length: 512
     # Hidden dimension: 4096
-    input_tensor = torch.randn(1024, 4096, dtype=torch.float32)
+    input_tensor = torch.randn(32, 512, 4096, dtype=torch.float32)
     return [input_tensor]
 
 def get_init_inputs():
     # Parameters for Softmax operation
-    dim = 1  # Reduce along second dimension
+    dim = -1  # Dimension along which to apply softmax
     return [dim]
