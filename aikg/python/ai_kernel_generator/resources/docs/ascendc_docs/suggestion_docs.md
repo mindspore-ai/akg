@@ -8,74 +8,30 @@
 
 ### 1. 代码组织技巧
 
-#### 模板化设计
+#### 规范流程设计
 ```cpp
-// 使用模板提高代码复用性
-template <typename T, bool isTransA, bool isTransB>
-class MatmulKernel {
+class BasicKernel {
 public:
     __aicore__ inline void Process() {
-        // 通用处理逻辑
+        CopyIn();    // 数据从全局内存拷贝到本地内存
+        Compute();   // 在本地内存中进行计算
+        CopyOut();   // 结果从本地内存拷贝回全局内存
     }
-};
 
-// 特化版本
-template <>
-class MatmulKernel<float, true, false> {
-    // 特定优化实现
-};
-```
-
-### 2. 错误处理技巧
-
-#### 异常安全设计
-```cpp
-class SafeKernel {
 private:
-    bool initialized = false;
-    AscendC::TPipe pipe;
-    
-public:
-    __aicore__ inline bool Init(GM_ADDR input, GM_ADDR output, GM_ADDR tiling) {
-        try {
-            // 初始化逻辑
-            pipe.InitBuffer(buffer, size, bufferSize);
-            initialized = true;
-            return true;
-        } catch (...) {
-            initialized = false;
-            return false;
-        }
+    __aicore__ inline void CopyIn() {
+        AscendC::DataCopy(localTensor, globalTensor, length);
     }
     
-    __aicore__ inline void Process() {
-        ASCENDC_ASSERT(initialized, {
-            KERNEL_LOG(KERNEL_ERROR, "Kernel not initialized");
-        });
-        
-        // 处理逻辑
+    __aicore__ inline void Compute() {
+        AscendC::Add(resultTensor, tensorA, tensorB);
+    }
+    
+    __aicore__ inline void CopyOut() {
+        AscendC::DataCopy(globalTensor, resultTensor, length);
     }
 };
-```
 
-#### 参数验证
-```cpp
-class ParameterValidator {
-public:
-    static bool ValidateMatmulParams(uint32_t M, uint32_t N, uint32_t K) {
-        if (M == 0 || N == 0 || K == 0) {
-            KERNEL_LOG(KERNEL_ERROR, "Invalid matrix dimensions");
-            return false;
-        }
-        
-        if (M > MAX_MATRIX_SIZE || N > MAX_MATRIX_SIZE || K > MAX_MATRIX_SIZE) {
-            KERNEL_LOG(KERNEL_ERROR, "Matrix size exceeds limit");
-            return false;
-        }
-        
-        return true;
-    }
-};
 ```
 
 ## 性能优化
@@ -128,20 +84,6 @@ for (int i = 0; i < size; ++i) {
 AscendC::Mul(outputTensor, inputTensor, scalar);
 ```
 
-#### 融合操作
-```cpp
-// 融合多个操作减少内存访问
-class FusedKernel {
-public:
-    __aicore__ inline void Process() {
-        // 融合：Add + Relu + Mul
-        AscendC::Add(tmpTensor, inputA, inputB);
-        AscendC::Relu(tmpTensor, tmpTensor);
-        AscendC::Mul(outputTensor, tmpTensor, scale);
-    }
-};
-```
-
 ### 3. 流水线优化
 
 #### 双缓冲技术
@@ -161,23 +103,6 @@ public:
 };
 ```
 
-#### 异步处理
-```cpp
-class AsyncKernel {
-public:
-    __aicore__ inline void Process() {
-        // 启动异步数据加载
-        StartAsyncCopy();
-        
-        // 处理当前数据
-        Compute();
-        
-        // 等待异步操作完成
-        WaitForAsyncCopy();
-    }
-};
-```
-
 ## 常见问题排查
 
 ### 1. 内存问题
@@ -190,64 +115,9 @@ void ProblematicCode() {
     // 使用张量
     // 忘记调用 buffer.FreeTensor(tensor);
 }
-
-// 解决：使用RAII模式
-class TensorWrapper {
-private:
-    AscendC::LocalTensor<float> tensor;
-    AscendC::TBuf<AscendC::TPosition::UB>& buffer;
-    
-public:
-    TensorWrapper(AscendC::TBuf<AscendC::TPosition::UB>& buf) 
-        : buffer(buf) {
-        tensor = buffer.AllocTensor<float>();
-    }
-    
-    ~TensorWrapper() {
-        buffer.FreeTensor(tensor);
-    }
-    
-    AscendC::LocalTensor<float>& get() { return tensor; }
-};
 ```
 
-#### 内存对齐问题
-```cpp
-// 问题：数据未对齐导致性能下降
-uint32_t size = 100;  // 不是32字节对齐
-
-// 解决：确保对齐
-uint32_t alignedSize = (size + 31) / 32 * 32;
-```
-
-### 2. 计算问题
-
-#### 数值精度问题
-```cpp
-// 问题：float16精度损失
-half a = 0.1f;
-half b = 0.2f;
-half result = a + b;  // 可能不精确
-
-// 解决：使用float进行计算
-float a_f = static_cast<float>(a);
-float b_f = static_cast<float>(b);
-float result_f = a_f + b_f;
-half result = static_cast<half>(result_f);
-```
-
-#### 溢出问题
-```cpp
-// 问题：整数溢出
-int32_t a = INT32_MAX;
-int32_t b = 1;
-int32_t result = a + b;  // 溢出
-
-// 解决：使用更大的数据类型
-int64_t result = static_cast<int64_t>(a) + static_cast<int64_t>(b);
-```
-
-### 3. 性能问题
+### 2. 性能问题
 
 #### 频繁内存分配
 ```cpp
@@ -276,6 +146,13 @@ for (int i = 0; i < size; ++i) {
 // 解决：批量拷贝
 AscendC::DataCopy(localTensor, globalTensor, size);
 ```
+
+### 3. 数据类型使用问题
+
+#### 在AscendC中，对输入的结果出现NaN的情况，需要检查任务的输入数据类型与AscendC所采用的类型是否一致。
+ - 例如：float32类型的输入数据，在AscendC中需要使用float类型进行计算，避免出现NaN的情况。
+
+
 ## 内核算子生成规范
 
 ### 任务描述
@@ -289,7 +166,7 @@ host_tiling_src="""
 #include "tiling/tiling_api.h"
 uint8_t *GetTilingBuf()
 {
-    //AscendC Host侧Tiling实现代码段
+    //AscendC Host侧Tiling实现代码段，对于Elemwise类的算子，不需要复杂的Tiling,直接返回nullptr即可，在kernel中进行切分即可。
 }
 """
 
