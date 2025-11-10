@@ -272,4 +272,18 @@ def VectorTransferTensorize : Pass<"vector-transfer-tensorize", "mlir::func::Fun
   let constructor = "mlir::affine::createVectorTransferTensorizePass()";
 }
 
+def AffineForVectPass : Pass<"affine-for-vectorize", "mlir::func::FuncOp"> {
+  let summary = "Vectorize innermost affine.for loops (1-D, configurable VF)";
+  let description = [{
+    Vectorizes only leaf (innermost) affine.for loops using AKG's super-vectorize
+    functionality. For dynamic trip count or ub==1, uses --default-vf (default 512).
+    Supports iter_args reductions; skips broadcast-write stores.
+  }];
+  let constructor = "mlir::affine::createAffineForVectPass()";
+  let options = [
+    Option<"defaultVF", "default-vf", "int64_t", /*default=*/"512",
+           "Vector factor used when ub is dynamic or equal to 1">
+  ];
+}
+
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES
