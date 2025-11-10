@@ -32,5 +32,12 @@ We welcome your contributions. For details, please refer to the [MindSpore Contr
 For release notes, see [RELEASE](RELEASE.md).
 
 ## License
-
 [Apache License 2.0](LICENSE).
+
+#### AKG SIG WeChat Group
+
+<div>  
+  <a href="docs/AKG_QRCode.png">
+    <img src="docs/AKG_QRCode.png" alt="AKG SIG WeChat Group QR Code" width="220">  
+  </a>
+</div>
