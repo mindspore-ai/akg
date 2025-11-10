@@ -16,6 +16,7 @@
 
 #include "akg/Dialect/Affine/Transforms/AKGLoopTiling.h"
 
+#include <memory>
 #include <unordered_set>
 #include "akg/Dialect/Affine/Analysis/AutoTiling.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
@@ -45,10 +46,8 @@ namespace mlir {
 #include "akg/Dialect/Affine/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;
-using namespace akg::autotiling;
-using namespace akgglobal;
-using namespace mlir::akg::utils;
+using llvm::SmallVector;
+using llvm::SmallVectorImpl;
 
 #define DEBUG_TYPE "akg-affine-loop-tile"
 
@@ -58,11 +57,12 @@ namespace {
 class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
  public:
   AKGLoopTiling() = default;
-  AKGLoopTiling(uint64_t cacheSizeBytes, bool avoidMaxMinBounds = true) : avoidMaxMinBounds(avoidMaxMinBounds) {
+  explicit AKGLoopTiling(uint64_t cacheSizeBytes, bool avoidMaxMinBounds = true)
+      : avoidMaxMinBounds(avoidMaxMinBounds) {
     this->cacheSizeInKiB = cacheSizeBytes / 1024;
   }
 
-  AKGLoopTiling(const std::string &target, bool useAutoTiling = false) : target(target) {
+  explicit AKGLoopTiling(const std::string &target, bool useAutoTiling = false) : target(target) {
     this->useAutoTiling = useAutoTiling;
   }
 
@@ -81,7 +81,8 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
  private:
   void runCpuOperation();
   void runCudaOperation();
-  void BandCheck(const std::vector<SmallVector<affine::AffineForOp, 6>> &bands);
+  void runNpuOperation();
+  void BandCheck(const std::vector<SmallVector<mlir::affine::AffineForOp, 6>> &bands);
   void getTileSizes();
   std::string getHardware();
   bool isDynamicShape() const;
@@ -89,82 +90,99 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   // core tiling function
   void tileEachBand();
   // initial tiling function
-  void constructTiledLoop(affine::AffineForOp rootAffineForOp, unsigned width,
-                          MutableArrayRef<affine::AffineForOp> tiledLoops);
-  void constructTiledIndex(MutableArrayRef<affine::AffineForOp> newLoops);
+  void constructTiledLoop(mlir::affine::AffineForOp rootAffineForOp, unsigned width,
+                          mlir::MutableArrayRef<mlir::affine::AffineForOp> tiledLoops);
+  void constructTiledIndex(mlir::MutableArrayRef<mlir::affine::AffineForOp> newLoops);
   void setInsertInequality(int curTile, bool &insertInequality);
-  void setNewUpperBound(MutableArrayRef<affine::AffineForOp> newLoops, int curTile, bool insertInequality = true);
+  void setNewUpperBound(mlir::MutableArrayRef<mlir::affine::AffineForOp> newLoops, int curTile,
+                        bool insertInequality = true);
 
   // tile tail block
-  void updateForOpUsers(affine::AffineForOp forOp, int64_t newSize = 0);
-  LogicalResult createTailBlockForBody(affine::AffineForOp forOp);
-  LogicalResult createTailBlock(affine::AffineForOp forOp);
-  LogicalResult createFullBlock(MutableArrayRef<affine::AffineForOp> tiledLoops,
-                                SmallVectorImpl<affine::AffineForOp> &fullTileLoops);
-  LogicalResult createTailBlockDynamic(affine::AffineForOp forOp, AffineSymbolExpr sExpr);
-  LogicalResult createTailBlockStatic(affine::AffineForOp forOp, int64_t differenceUbAndLb);
+  void updateForOpUsers(mlir::affine::AffineForOp forOp, int64_t newSize = 0);
+  mlir::LogicalResult createTailBlockForBody(mlir::affine::AffineForOp forOp);
+  mlir::LogicalResult createTailBlock(mlir::affine::AffineForOp forOp);
+  mlir::LogicalResult createFullBlock(mlir::MutableArrayRef<mlir::affine::AffineForOp> tiledLoops,
+                                      SmallVectorImpl<mlir::affine::AffineForOp> &fullTileLoops);
+  mlir::LogicalResult createTailBlockDynamic(mlir::affine::AffineForOp forOp, mlir::AffineSymbolExpr sExpr);
+  mlir::LogicalResult createTailBlockStatic(mlir::affine::AffineForOp forOp, int64_t differenceUbAndLb);
 
-  LogicalResult separateFullTilesNoIf(SmallVector<affine::AffineForOp, 6> tiledLoops);
+  mlir::LogicalResult separateFullTilesNoIf(SmallVector<mlir::affine::AffineForOp, 6> tiledLoops);
 
-  LogicalResult perfectlyNestedWithIf(SmallVector<affine::AffineForOp, 6> tiledLoops);
-  void updateInsertIfLoops(SmallVector<affine::AffineForOp, 6> &newTiledLoops,
+  mlir::LogicalResult perfectlyNestedWithIf(SmallVector<mlir::affine::AffineForOp, 6> tiledLoops);
+  void updateInsertIfLoops(SmallVector<mlir::affine::AffineForOp, 6> &newTiledLoops,
                            std::unordered_set<unsigned> inequalityForIndex);
-  affine::AffineIfOp createperfectlyNestedCondition(SmallVector<affine::AffineForOp, 6> tiledLoops, OpBuilder b);
+  mlir::affine::AffineIfOp createperfectlyNestedCondition(SmallVector<mlir::affine::AffineForOp, 6> tiledLoops,
+                                                          mlir::OpBuilder b);
 
   // If true, tile sizes are set to avoid max/min in bounds if possible.
   bool avoidMaxMinBounds{true};
   // hardware information
-  std::string target{kTargetCpu};
-  std::string feature{kNEONInstructionSet};
+  std::string target{mlir::kTargetCpu};
+  std::string feature{mlir::kNEONInstructionSet};
   std::string tilingMode{"auto"};
 
-  TilingSolverPtr solver{nullptr};
+  mlir::akg::autotiling::TilingSolverPtr solver{nullptr};
   size_t levelToTile{1};
 
   SmallVector<unsigned, 6> bandTileSizes;
-  MutableArrayRef<affine::AffineForOp> band;
+  mlir::MutableArrayRef<mlir::affine::AffineForOp> band;
 };
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAKGLoopTilingPass() {
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass() {
   return std::make_unique<AKGLoopTiling>();
 }
 
 /// Creates a pass to perform loop tiling on all suitable loop nests of a
 /// Function.
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAKGLoopTilingPass(uint64_t cacheSizeBytes) {
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(uint64_t cacheSizeBytes) {
   return std::make_unique<AKGLoopTiling>(cacheSizeBytes);
 }
 /// Creates a pass to perform loop tiling using auto-tiling strategy
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAKGLoopTilingPass(const std::string &target,
-                                                                           bool useAutoTiling = false) {
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(const std::string &target,
+                                                                                      bool useAutoTiling) {
   return std::make_unique<AKGLoopTiling>(target, useAutoTiling);
 }
 
 /// Creates a pass to perform loop tiling using auto-tiling strategy for dynamic shape
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAKGLoopTilingPass(const std::string &target,
-                                                                           bool useAutoTiling = true,
-                                                                           const std::string &tilingMode = "auto") {
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(
+  const std::string &target, bool useAutoTiling, const std::string &tilingMode) {
   return std::make_unique<AKGLoopTiling>(target, useAutoTiling, tilingMode);
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAKGLoopTilingPass(const std::string &target,
-                                                                           const std::string &feature,
-                                                                           bool useAutoTiling = false) {
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(
+  const std::string &target, const std::string &feature, bool useAutoTiling) {
   return std::make_unique<AKGLoopTiling>(target, feature, useAutoTiling);
 }
 
-static void moveLoopBody(affine::AffineForOp src, affine::AffineForOp dest) {
-  Block::iterator loc = dest.getBody()->begin();
+static void moveLoopBody(mlir::affine::AffineForOp src, mlir::affine::AffineForOp dest) {
+  mlir::Block::iterator loc = dest.getBody()->begin();
   auto &ops = src.getBody()->getOperations();
   dest.getBody()->getOperations().splice(loc, ops, ops.begin(), std::prev(ops.end()));
 }
 
-static AffineExpr getDifferenceUbAndLb(AffineMap ubMap, AffineMap lbMap) {
+// Finds the innermost loop with the maximum depth in the given loop.
+// work even in the case of not perfectly nested loops.
+static std::pair<int, mlir::affine::AffineForOp> findInnermostLoopWithDepth(mlir::affine::AffineForOp loop) {
+  std::pair<int, mlir::affine::AffineForOp> best{1, loop};
+  for (mlir::Operation &op : loop.getBody()->without_terminator()) {
+    if (auto innerLoop = mlir::dyn_cast<mlir::affine::AffineForOp>(&op)) {
+      auto candidate = findInnermostLoopWithDepth(innerLoop);
+      int depth = candidate.first + 1;
+      if (depth > best.first) {
+        best.first = depth;
+        best.second = candidate.second;
+      }
+    }
+  }
+  return best;
+}
+
+static mlir::AffineExpr getDifferenceUbAndLb(mlir::AffineMap ubMap, mlir::AffineMap lbMap) {
   auto maxDim = std::max(lbMap.getNumDims(), ubMap.getNumDims());
   auto maxSymbol = std::max(lbMap.getNumSymbols(), ubMap.getNumSymbols());
-  // TODO: extend this to handle multiple result maps.
-  return simplifyAffineExpr(ubMap.getResult(0) - lbMap.getResult(0), maxDim, maxSymbol);
+  // TODO(akg-dev): extend this to handle multiple result maps.
+  return mlir::simplifyAffineExpr(ubMap.getResult(0) - lbMap.getResult(0), maxDim, maxSymbol);
 }
 
 // Add new axis and initialize lowerbound/upperbound to 0
@@ -185,17 +203,17 @@ static AffineExpr getDifferenceUbAndLb(AffineMap ubMap, AffineMap lbMap) {
 //   }
 // }
 // ```
-void AKGLoopTiling::constructTiledLoop(affine::AffineForOp rootAffineForOp, unsigned width,
-                                       MutableArrayRef<affine::AffineForOp> tiledLoops) {
-  Location loc = rootAffineForOp.getLoc();
+void AKGLoopTiling::constructTiledLoop(mlir::affine::AffineForOp rootAffineForOp, unsigned width,
+                                       mlir::MutableArrayRef<mlir::affine::AffineForOp> tiledLoops) {
+  mlir::Location loc = rootAffineForOp.getLoc();
 
-  Operation *topLoop = rootAffineForOp.getOperation();
-  affine::AffineForOp innermostPointLoop;
+  mlir::Operation *topLoop = rootAffineForOp.getOperation();
+  mlir::affine::AffineForOp innermostPointLoop;
 
   for (unsigned i = 0; i < width; ++i) {
-    OpBuilder b(topLoop);
+    mlir::OpBuilder b(topLoop);
     // Loop bounds will be set later.
-    affine::AffineForOp pointLoop = b.create<affine::AffineForOp>(loc, 0, 0);
+    mlir::affine::AffineForOp pointLoop = b.create<mlir::affine::AffineForOp>(loc, 0, 0);
     pointLoop.getBody()->getOperations().splice(pointLoop.getBody()->begin(), topLoop->getBlock()->getOperations(),
                                                 topLoop);
     tiledLoops[width - 1 - i] = pointLoop;
@@ -233,12 +251,12 @@ void AKGLoopTiling::constructTiledLoop(affine::AffineForOp rootAffineForOp, unsi
 //   }
 // }
 // ```
-void AKGLoopTiling::constructTiledIndex(MutableArrayRef<affine::AffineForOp> newLoops) {
+void AKGLoopTiling::constructTiledIndex(mlir::MutableArrayRef<mlir::affine::AffineForOp> newLoops) {
   int bandSize = band.size();
   if (bandSize == 0) {
     return;
   }
-  OpBuilder b(band[0].getOperation());
+  mlir::OpBuilder b(band[0].getOperation());
   int tileNum = bandTileSizes.size() / bandSize;
   // the i-th tiling
   for (int i = 0; i <= tileNum; ++i) {
@@ -250,21 +268,21 @@ void AKGLoopTiling::constructTiledIndex(MutableArrayRef<affine::AffineForOp> new
       int lastTile = curTile - bandSize;
       if (i == 0) {
         // first tile
-        OperandRange newLbOperands = band[j].getLowerBoundOperands();
-        OperandRange newUbOperands = band[j].getUpperBoundOperands();
+        mlir::OperandRange newLbOperands = band[j].getLowerBoundOperands();
+        mlir::OperandRange newUbOperands = band[j].getUpperBoundOperands();
         newLoops[curTile].setLowerBound(newLbOperands, band[j].getLowerBoundMap());
         newLoops[curTile].setUpperBound(newUbOperands, band[j].getUpperBoundMap());
         newLoops[curTile].setStep(bandTileSizes[curTile]);
       } else if (i == tileNum) {
         // last tile
-        AffineMap lbMap = b.getDimIdentityMap();
+        mlir::AffineMap lbMap = b.getDimIdentityMap();
         newLoops[curTile].setLowerBound(newLoops[lastTile].getInductionVar(), lbMap);
         newLoops[curTile].setStep(1);
 
         setNewUpperBound(newLoops, curTile, true);
       } else {
         // middle tile
-        AffineMap lbMap = b.getDimIdentityMap();
+        mlir::AffineMap lbMap = b.getDimIdentityMap();
         newLoops[curTile].setLowerBound(newLoops[lastTile].getInductionVar(), lbMap);
         newLoops[curTile].setStep(bandTileSizes[curTile]);
 
@@ -322,19 +340,19 @@ void AKGLoopTiling::setInsertInequality(int curTile, bool &insertInequality) {
 //     }
 //   }
 // }
-void AKGLoopTiling::setNewUpperBound(MutableArrayRef<affine::AffineForOp> newLoops, int curTile,
+void AKGLoopTiling::setNewUpperBound(mlir::MutableArrayRef<mlir::affine::AffineForOp> newLoops, int curTile,
                                      bool insertInequality) {
   // Set the upper bound.
   int bandSize = band.size();
   int lastTile = curTile - bandSize;
-  OpBuilder b(newLoops[0].getOperation());
+  mlir::OpBuilder b(newLoops[0].getOperation());
   int64_t largestDiv = getLargestDivisorOfTripCount(band[curTile % bandSize]);
 
   setInsertInequality(curTile, insertInequality);
   if (insertInequality) {
-    affine::AffineBound lastTileUb = newLoops[lastTile].getUpperBound();
-    AffineMap lastTileUbMap = lastTileUb.getMap();
-    SmallVector<Value, 4> ubOperands;
+    mlir::affine::AffineBound lastTileUb = newLoops[lastTile].getUpperBound();
+    mlir::AffineMap lastTileUbMap = lastTileUb.getMap();
+    SmallVector<mlir::Value, 4> ubOperands;
     ubOperands.reserve(lastTileUb.getNumOperands() + 1);
     // Add dim operands from upper bound of the last tile.
     for (unsigned k = 0; k < lastTileUbMap.getNumDims(); ++k) {
@@ -353,7 +371,7 @@ void AKGLoopTiling::setNewUpperBound(MutableArrayRef<affine::AffineForOp> newLoo
     // needs to be inserted.
     bool insertLoopUb = true;
     for (auto ubMap : lastTileUbMap.getResults()) {
-      if (llvm::isa<AffineConstantExpr>(ubMap)) {
+      if (llvm::isa<mlir::AffineConstantExpr>(ubMap)) {
         insertLoopUb = false;
       }
     }
@@ -364,37 +382,36 @@ void AKGLoopTiling::setNewUpperBound(MutableArrayRef<affine::AffineForOp> newLoo
     }
     ubExprs.reserve(newExprSize);
 
-    AffineExpr dimExpr = b.getAffineDimExpr(lastTileUbMap.getNumDims());
+    mlir::AffineExpr dimExpr = b.getAffineDimExpr(lastTileUbMap.getNumDims());
     ubExprs.push_back(dimExpr + bandTileSizes[lastTile]);
     ubExprs.append(lastTileUbMap.getResults().begin(), lastTileUbMap.getResults().end());
     if (insertLoopUb) {
       ubExprs.push_back(b.getAffineConstantExpr(largestDiv));
     }
-    AffineMap ubMap =
-      AffineMap::get(lastTileUbMap.getNumDims() + 1, lastTileUbMap.getNumSymbols(), ubExprs, b.getContext());
+    mlir::AffineMap ubMap = mlir::AffineMap::get(lastTileUbMap.getNumDims() + 1, lastTileUbMap.getNumSymbols(),
+                                                ubExprs, b.getContext());
     newLoops[curTile].setUpperBound(ubOperands, ubMap);
   } else {
-    AffineExpr dim = b.getAffineDimExpr(0);
-    AffineMap ubMap = AffineMap::get(1, 0, dim + newLoops[lastTile].getStepAsInt());
+    mlir::AffineExpr dim = b.getAffineDimExpr(0);
+    mlir::AffineMap ubMap = mlir::AffineMap::get(1, 0, dim + newLoops[lastTile].getStepAsInt());
     newLoops[curTile].setUpperBound(newLoops[lastTile].getInductionVar(), ubMap);
   }
 }
 
 void AKGLoopTiling::getTileSizes() {
-  // TODO: Separately tile axis
+  // TODO(akg-dev): Separately tile axis
   if (useAutoTiling && solver) {
-    // TODO: remove levelToTile
-    SmallVector<affine::AffineForOp, 6> curband;
+    // TODO(akg-dev): remove levelToTile
+    SmallVector<mlir::affine::AffineForOp, 6> curband;
     curband.assign(band.begin(), band.end());
     for (size_t level = 0; level < levelToTile; ++level) {
-      // TODO: Multiple band
-      getTileSizeWithSolver(solver, curband, &bandTileSizes, TilingTaskDesc(0, level));
+      // TODO(akg-dev): Multiple band
+      mlir::akg::autotiling::getTileSizeWithSolver(solver, curband, &bandTileSizes,
+                                                   mlir::akg::autotiling::TilingTaskDesc(0, level));
     }
   } else {
     if (!tileSizes.empty() && tileSize == 1) {
-      for (auto it : tileSizes) {
-        bandTileSizes.push_back(it);
-      }
+      bandTileSizes.insert(bandTileSizes.end(), tileSizes.begin(), tileSizes.end());
     } else {
       bandTileSizes.assign(band.size(), tileSize);
     }
@@ -426,87 +443,88 @@ void AKGLoopTiling::getTileSizes() {
 //   }
 // }
 // ```
-LogicalResult AKGLoopTiling::createFullBlock(MutableArrayRef<affine::AffineForOp> intraTileLoops,
-                                             SmallVectorImpl<affine::AffineForOp> &fullTileLoops) {
+mlir::LogicalResult AKGLoopTiling::createFullBlock(
+  mlir::MutableArrayRef<mlir::affine::AffineForOp> intraTileLoops,
+  SmallVectorImpl<mlir::affine::AffineForOp> &fullTileLoops) {
   if (intraTileLoops.size() == 0) {
-    return success();
+    return mlir::success();
   }
-  OpBuilder b(intraTileLoops[0]);
+  mlir::OpBuilder b(intraTileLoops[0]);
   fullTileLoops.reserve(intraTileLoops.size());
 
   // For each loop in the original nest identify a lower/upper bound pair such
   // that their difference is a constant.
-  affine::FlatAffineValueConstraints cst;
+  mlir::affine::FlatAffineValueConstraints cst;
   for (auto loop : intraTileLoops) {
-    SmallVector<Operation *, 1> loopOp{loop.getOperation()};
-    (void)getIndexSet(loopOp, &cst);
+    SmallVector<mlir::Operation *, 1> loopOp{loop.getOperation()};
+    (void)mlir::affine::getIndexSet(loopOp, &cst);
     // We will mark everything other than this loop IV as symbol for getting a
     // pair of <lb, ub> with a constant difference.
     cst.setDimSymbolSeparation(cst.getNumDimAndSymbolVars() - 1);
     unsigned lbPos, ubPos;
     if (!cst.getConstantBoundOnDimSize(0, nullptr, nullptr, nullptr, &lbPos, &ubPos) || lbPos == ubPos) {
-      LLVM_DEBUG(llvm::dbgs() << "[tile separation] Can't get constant diff / "
-                                 "equalities not yet handled\n");
-      return failure();
+      LLVM_DEBUG(llvm::dbgs() << "[tile separation] Can't get constant diff / equalities not yet handled\n");
+      return mlir::failure();
     }
 
     // Set all variables as dimensions uniformly since some of those marked as
     // symbols above could be outer loop IVs (corresponding tile space IVs).
     cst.setDimSymbolSeparation(0);
 
-    affine::AffineValueMap lbVmap, ubVmap;
+    mlir::affine::AffineValueMap lbVmap, ubVmap;
     cst.getIneqAsAffineValueMap(0, lbPos, lbVmap, b.getContext());
     cst.getIneqAsAffineValueMap(0, ubPos, ubVmap, b.getContext());
 
-    affine::AffineForOp fullTileLoop =
-      affine::createCanonicalizedAffineForOp(b, loop.getLoc(), lbVmap.getOperands(), lbVmap.getAffineMap(),
-                                             ubVmap.getOperands(), ubVmap.getAffineMap(), loop.getStepAsInt());
-    b = OpBuilder::atBlockTerminator(fullTileLoop.getBody());
+    mlir::affine::AffineForOp fullTileLoop =
+      mlir::affine::createCanonicalizedAffineForOp(b, loop.getLoc(), lbVmap.getOperands(), lbVmap.getAffineMap(),
+                                                   ubVmap.getOperands(), ubVmap.getAffineMap(), loop.getStepAsInt());
+    b = mlir::OpBuilder::atBlockTerminator(fullTileLoop.getBody());
     fullTileLoops.push_back(fullTileLoop);
   }
 
   // Add the body for the full tile loop nest.
-  IRMapping operandMap;
+  mlir::IRMapping operandMap;
   for (const auto &loopEn : llvm::enumerate(intraTileLoops)) {
     operandMap.map(loopEn.value().getInductionVar(), fullTileLoops[loopEn.index()].getInductionVar());
   }
-  b = OpBuilder::atBlockTerminator(fullTileLoops.back().getBody());
+  b = mlir::OpBuilder::atBlockTerminator(fullTileLoops.back().getBody());
   for (auto &op : intraTileLoops.back().getBody()->without_terminator()) {
     b.clone(op, operandMap);
   }
   // Add the body for the full tile loop nest.
   for (const auto &loopEn : llvm::enumerate(intraTileLoops)) {
-    replaceAllUsesInRegionWith(loopEn.value().getInductionVar(), fullTileLoops[loopEn.index()].getInductionVar(),
-                               fullTileLoops[loopEn.index()].getRegion());
+    mlir::replaceAllUsesInRegionWith(loopEn.value().getInductionVar(),
+                                     fullTileLoops[loopEn.index()].getInductionVar(),
+                                     fullTileLoops[loopEn.index()].getRegion());
   }
 
   // insert the full block, replacing the original nested for
-  Block *intraBlock = intraTileLoops[0].getOperation()->getBlock();
-  affine::AffineForOp outermostFullTileLoop = fullTileLoops[0];
+  mlir::Block *intraBlock = intraTileLoops[0].getOperation()->getBlock();
+  mlir::affine::AffineForOp outermostFullTileLoop = fullTileLoops[0];
   intraBlock->getOperations().splice(std::prev(intraBlock->end()), outermostFullTileLoop->getBlock()->getOperations(),
-                                     Block::iterator(outermostFullTileLoop));
+                                     mlir::Block::iterator(outermostFullTileLoop));
   intraTileLoops[0].erase();
-  return success();
+  return mlir::success();
 }
 
-LogicalResult AKGLoopTiling::createTailBlockForBody(affine::AffineForOp forOp) {
+mlir::LogicalResult AKGLoopTiling::createTailBlockForBody(mlir::affine::AffineForOp forOp) {
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (auto bodyOp = dyn_cast<affine::AffineForOp>(op)) {
-      if (failed(createTailBlock(bodyOp))) {
-        return failure();
+    if (auto bodyOp = mlir::dyn_cast<mlir::affine::AffineForOp>(op)) {
+      if (mlir::failed(createTailBlock(bodyOp))) {
+        return mlir::failure();
       }
     }
   }
-  return success();
+  return mlir::success();
 }
 
 // Updates the upper bound of all users of the trailing block for loop.
-void AKGLoopTiling::updateForOpUsers(affine::AffineForOp forOp, int64_t newSize) {
+void AKGLoopTiling::updateForOpUsers(mlir::affine::AffineForOp forOp, int64_t newSize) {
   if (!newSize) {
     return;
   }
-  for (OpOperand &use : forOp.getInductionVar().getUses()) {
-    if (auto tiledOp = dyn_cast<affine::AffineForOp>(use.getOwner())) {
+  for (mlir::OpOperand &use : forOp.getInductionVar().getUses()) {
+    if (auto tiledOp = mlir::dyn_cast<mlir::affine::AffineForOp>(use.getOwner())) {
       auto ubMap = tiledOp.getUpperBoundMap();
       auto newExpr = tiledOp.getLowerBoundMap().getResult(0) + newSize;
       ubMap = ubMap.replace(ubMap.getResult(0), newExpr, ubMap.getNumDims(), ubMap.getNumSymbols());
@@ -556,41 +574,42 @@ void AKGLoopTiling::updateForOpUsers(affine::AffineForOp forOp, int64_t newSize)
 //   }
 // }
 // ```
-LogicalResult AKGLoopTiling::createTailBlock(affine::AffineForOp forOp) {
+mlir::LogicalResult AKGLoopTiling::createTailBlock(mlir::affine::AffineForOp forOp) {
   auto origUbMap = forOp.getUpperBoundMap();
   auto origLbMap = forOp.getLowerBoundMap();
-  AffineExpr differenceExpr = getDifferenceUbAndLb(origUbMap, origLbMap);
-  if (auto cExpr = llvm::dyn_cast<AffineConstantExpr>(differenceExpr)) {
+  mlir::AffineExpr differenceExpr = getDifferenceUbAndLb(origUbMap, origLbMap);
+  if (auto cExpr = llvm::dyn_cast<mlir::AffineConstantExpr>(differenceExpr)) {
     return createTailBlockStatic(forOp, cExpr.getValue());
-  } else if (auto sExpr = llvm::dyn_cast<AffineSymbolExpr>(differenceExpr)) {
+  } else if (auto sExpr = llvm::dyn_cast<mlir::AffineSymbolExpr>(differenceExpr)) {
     return createTailBlockDynamic(forOp, sExpr);
   }
-  return success();
+  return mlir::success();
 }
 
-LogicalResult AKGLoopTiling::createTailBlockStatic(affine::AffineForOp forOp, int64_t differenceUbAndLb) {
+mlir::LogicalResult AKGLoopTiling::createTailBlockStatic(mlir::affine::AffineForOp forOp,
+                                                         int64_t differenceUbAndLb) {
   auto origUbMap = forOp.getUpperBoundMap();
   auto origLbMap = forOp.getLowerBoundMap();
   int64_t origStep = forOp.getStepAsInt();
   int64_t tailSize = differenceUbAndLb % origStep;
   if (tailSize == 0) {
     // Recursively processes the forOp body.
-    if (failed(createTailBlockForBody(forOp))) {
-      return failure();
+    if (mlir::failed(createTailBlockForBody(forOp))) {
+      return mlir::failure();
     }
-    return success();
+    return mlir::success();
   }
 
   auto ubMap = origUbMap;
-  AffineExpr newExpr = ubMap.getResult(0) - tailSize;
+  mlir::AffineExpr newExpr = ubMap.getResult(0) - tailSize;
   ubMap = ubMap.replace(ubMap.getResult(0), newExpr, ubMap.getNumDims(), ubMap.getNumSymbols());
   int64_t newDifferenceUbAndLb = 0;
-  AffineExpr differenceExpr = getDifferenceUbAndLb(origUbMap, ubMap);
-  if (auto cExpr = llvm::dyn_cast<AffineConstantExpr>(differenceExpr)) {
+  mlir::AffineExpr differenceExpr = getDifferenceUbAndLb(origUbMap, ubMap);
+  if (auto cExpr = llvm::dyn_cast<mlir::AffineConstantExpr>(differenceExpr)) {
     newDifferenceUbAndLb = cExpr.getValue();
   } else {
     forOp.emitError("Error: Could not get the difference between upper and lower bounds of the loop.");
-    return failure();
+    return mlir::failure();
   }
   // differenceUbAndLb < origStep: If the difference between the upper and lower bounds is less than step, the
   // body block does not need to be inserted.
@@ -608,8 +627,8 @@ LogicalResult AKGLoopTiling::createTailBlockStatic(affine::AffineForOp forOp, in
   }
 
   // Recursively processes the forOp body.
-  if (failed(createTailBlockForBody(forOp))) {
-    return failure();
+  if (mlir::failed(createTailBlockForBody(forOp))) {
+    return mlir::failure();
   }
 
   // differenceUbAndLb < origStep: If the difference between the upper and lower bounds is less than step, the
@@ -620,31 +639,33 @@ LogicalResult AKGLoopTiling::createTailBlockStatic(affine::AffineForOp forOp, in
   // block does not need to be inserted.
   bool isEqualToBlock = (ubMap == origLbMap) && (origUbMap == ubMap) && (tailSize == origStep);
   if (differenceUbAndLb < origStep || !newDifferenceUbAndLb || isEqualToBlock) {
-    return success();
+    return mlir::success();
   }
 
   // Insert the tail tiles
-  OpBuilder b(forOp);
+  mlir::OpBuilder b(forOp);
   b.setInsertionPointAfter(forOp);
   auto tailOp = b.clone(*forOp.getOperation());
-  auto tailForOp = dyn_cast<affine::AffineForOp>(tailOp);
+  auto tailForOp = mlir::dyn_cast<mlir::affine::AffineForOp>(tailOp);
   tailForOp.setLowerBoundMap(ubMap);
   tailForOp.setUpperBoundMap(origUbMap);
   tailForOp.setStep(tailSize);
-  replaceAllUsesInRegionWith(forOp.getInductionVar(), tailForOp.getInductionVar(), tailForOp.getRegion());
+  mlir::replaceAllUsesInRegionWith(forOp.getInductionVar(), tailForOp.getInductionVar(),
+                                   tailForOp.getRegion());
   updateForOpUsers(tailForOp, tailSize);
 
   // Recursively processes the tailForOp body.
-  if (failed(createTailBlockForBody(tailForOp))) {
-    return failure();
+  if (mlir::failed(createTailBlockForBody(tailForOp))) {
+    return mlir::failure();
   }
-  return success();
+  return mlir::success();
 }
 
-LogicalResult AKGLoopTiling::createTailBlockDynamic(affine::AffineForOp forOp, AffineSymbolExpr sExpr) {
+mlir::LogicalResult AKGLoopTiling::createTailBlockDynamic(mlir::affine::AffineForOp forOp,
+                                                          mlir::AffineSymbolExpr sExpr) {
   if (band.size() != bandTileSizes.size()) {
     forOp.emitError("Dynamic shape supports only one tiling.");
-    return failure();
+    return mlir::failure();
   }
   auto origUbMap = forOp.getUpperBoundMap();
   auto origUbOp = forOp.getUpperBoundOperands();
@@ -653,64 +674,64 @@ LogicalResult AKGLoopTiling::createTailBlockDynamic(affine::AffineForOp forOp, A
   // affine.for %arg4 = 0 to %dim
   if (origStep == 1) {
     // Recursively processes the forOp body.
-    if (failed(createTailBlockForBody(forOp))) {
-      return failure();
+    if (mlir::failed(createTailBlockForBody(forOp))) {
+      return mlir::failure();
     }
-    return success();
+    return mlir::success();
   }
 
   auto ubMap = origUbMap;
-  AffineExpr newExpr = ubMap.getResult(0) - sExpr % origStep;
+  mlir::AffineExpr newExpr = ubMap.getResult(0) - sExpr % origStep;
   ubMap = ubMap.replace(ubMap.getResult(0), newExpr, ubMap.getNumDims(), ubMap.getNumSymbols());
   forOp.setUpperBoundMap(ubMap);
 
   // Recursively processes the forOp body.
-  if (failed(createTailBlockForBody(forOp))) {
-    return failure();
+  if (mlir::failed(createTailBlockForBody(forOp))) {
+    return mlir::failure();
   }
 
   // Insert the tail tiles
-  OpBuilder b(forOp);
+  mlir::OpBuilder b(forOp);
   b.setInsertionPointAfter(forOp);
-  affine::AffineForOp tailForOp =
-    b.create<affine::AffineForOp>(forOp.getLoc(), forOp.getUpperBoundOperands(), ubMap, origUbOp, origUbMap, 1);
+  mlir::affine::AffineForOp tailForOp =
+    b.create<mlir::affine::AffineForOp>(forOp.getLoc(), forOp.getUpperBoundOperands(), ubMap, origUbOp, origUbMap, 1);
 
   // Add the body for the full tile loop nest.
-  b = OpBuilder::atBlockTerminator(tailForOp.getBody());
+  b = mlir::OpBuilder::atBlockTerminator(tailForOp.getBody());
   for (auto &op : forOp.getBody()->without_terminator()) {
     b.clone(op);
   }
   // Add the body for the full tile loop nest.
-  replaceAllUsesInRegionWith(forOp.getInductionVar(), tailForOp.getInductionVar(), tailForOp.getRegion());
+  mlir::replaceAllUsesInRegionWith(forOp.getInductionVar(), tailForOp.getInductionVar(), tailForOp.getRegion());
   updateForOpUsers(tailForOp, 1);
 
   // Recursively processes the tailForOp body.
-  if (failed(createTailBlockForBody(tailForOp))) {
-    return failure();
+  if (mlir::failed(createTailBlockForBody(tailForOp))) {
+    return mlir::failure();
   }
-  return success();
+  return mlir::success();
 }
 
-LogicalResult AKGLoopTiling::separateFullTilesNoIf(SmallVector<affine::AffineForOp, 6> tiledLoops) {
+mlir::LogicalResult AKGLoopTiling::separateFullTilesNoIf(SmallVector<mlir::affine::AffineForOp, 6> tiledLoops) {
   // full block
-  auto intraTileLoops = MutableArrayRef<affine::AffineForOp>(tiledLoops).drop_front(band.size());
-  SmallVector<affine::AffineForOp, 4> fullTileLoops;
-  if (failed(createFullBlock(intraTileLoops, fullTileLoops))) {
+  auto intraTileLoops = mlir::MutableArrayRef<mlir::affine::AffineForOp>(tiledLoops).drop_front(band.size());
+  SmallVector<mlir::affine::AffineForOp, 4> fullTileLoops;
+  if (mlir::failed(createFullBlock(intraTileLoops, fullTileLoops))) {
     if (!fullTileLoops.empty()) {
       fullTileLoops.front().erase();
     }
-    return failure();
+    return mlir::failure();
   }
   if (fullTileLoops.size() == 0) {
-    return success();
+    return mlir::success();
   }
 
   // tail block
-  if (failed(createTailBlock(tiledLoops[0]))) {
-    return failure();
+  if (mlir::failed(createTailBlock(tiledLoops[0]))) {
+    return mlir::failure();
   }
 
-  return success();
+  return mlir::success();
 }
 
 // Insert the corresponding if statement based on the upper bound of the for loop to ensure the correctness of the
@@ -741,13 +762,13 @@ LogicalResult AKGLoopTiling::separateFullTilesNoIf(SmallVector<affine::AffineFor
 //   }
 // }
 // ```
-affine::AffineIfOp AKGLoopTiling::createperfectlyNestedCondition(SmallVector<affine::AffineForOp, 6> tiledLoops,
-                                                                 OpBuilder b) {
+mlir::affine::AffineIfOp AKGLoopTiling::createperfectlyNestedCondition(
+  SmallVector<mlir::affine::AffineForOp, 6> tiledLoops, mlir::OpBuilder b) {
   if (tiledLoops.empty()) {
     return nullptr;
   }
 
-  SmallVector<AffineExpr, 4> exprs;
+  SmallVector<mlir::AffineExpr, 4> exprs;
   SmallVector<bool, 4> eqFlags;
   SmallVector<mlir::Value, 4> dimOperands;
   SmallVector<mlir::Value, 4> symbolOperands;
@@ -757,36 +778,36 @@ affine::AffineIfOp AKGLoopTiling::createperfectlyNestedCondition(SmallVector<aff
     assert(loop.getStepAsInt() == 1 && "point loop step expected to be one");
 
     // Find the outermost for loop, that is, the for loop before tiling.
-    Operation *outerOp = nullptr;
+    mlir::Operation *outerOp = nullptr;
     for (auto value : loop.getOperands()) {
-      SmallVector<Operation *, 8> opAxes;
-      CommonUtils::collectRelatedAxes(value, opAxes);
+      SmallVector<mlir::Operation *, 8> opAxes;
+      mlir::CommonUtils::collectRelatedAxes(value, opAxes);
       if (opAxes.empty()) {
         continue;
       }
       for (auto axes : opAxes) {
-        outerOp = CommonUtils::getInnerOrOuterOp(outerOp, axes, false);
+        outerOp = mlir::CommonUtils::getInnerOrOuterOp(outerOp, axes, false);
       }
     }
 
-    if (!outerOp || !isa<affine::AffineForOp>(outerOp)) {
+    if (!outerOp || !mlir::isa<mlir::affine::AffineForOp>(outerOp)) {
       continue;
     }
 
-    auto outerForOp = dyn_cast<affine::AffineForOp>(outerOp);
+    auto outerForOp = mlir::dyn_cast<mlir::affine::AffineForOp>(outerOp);
     auto context = loop.getContext();
-    AffineExpr upperExpr = outerForOp.getUpperBoundMap().getResult(0);
+    mlir::AffineExpr upperExpr = outerForOp.getUpperBoundMap().getResult(0);
     // Adapts to dynamic shapes.
-    if (llvm::isa<AffineSymbolExpr>(upperExpr)) {
+    if (llvm::isa<mlir::AffineSymbolExpr>(upperExpr)) {
       for (auto operand : outerForOp->getOperands()) {
-        if (Operation *parentOp = operand.getDefiningOp()) {
+        if (mlir::Operation *parentOp = operand.getDefiningOp()) {
           symbolOperands.push_back(parentOp->getResult(0));
           upperExpr = mlir::getAffineSymbolExpr(symbolNum++, context);
         }
       }
     }
     // Make sure that the dim variable is incremented each time.
-    AffineExpr newExpr = upperExpr - 1 - mlir::getAffineDimExpr(dimNum++, context);
+    mlir::AffineExpr newExpr = upperExpr - 1 - mlir::getAffineDimExpr(dimNum++, context);
     exprs.push_back(newExpr);
     eqFlags.push_back(false);
     dimOperands.push_back(loop.getInductionVar());
@@ -797,13 +818,12 @@ affine::AffineIfOp AKGLoopTiling::createperfectlyNestedCondition(SmallVector<aff
     dimOperands.insert(dimOperands.end(), symbolOperands.begin(), symbolOperands.end());
   }
 
-  IntegerSet ifCondSet = IntegerSet::get(tiledLoops.size(), symbolNum, exprs, eqFlags);
-  affine::canonicalizeSetAndOperands(&ifCondSet, &dimOperands);
-  return b.create<affine::AffineIfOp>(tiledLoops[0].getLoc(), ifCondSet, dimOperands, false);
-  ;
+  mlir::IntegerSet ifCondSet = mlir::IntegerSet::get(tiledLoops.size(), symbolNum, exprs, eqFlags);
+  mlir::affine::canonicalizeSetAndOperands(&ifCondSet, &dimOperands);
+  return b.create<mlir::affine::AffineIfOp>(tiledLoops[0].getLoc(), ifCondSet, dimOperands, false);
 }
 
-void AKGLoopTiling::updateInsertIfLoops(SmallVector<affine::AffineForOp, 6> &newTiledLoops,
+void AKGLoopTiling::updateInsertIfLoops(SmallVector<mlir::affine::AffineForOp, 6> &newTiledLoops,
                                         std::unordered_set<unsigned> inequalityForIndex) {
   auto it = newTiledLoops.begin();
   unsigned i = 0;
@@ -845,12 +865,12 @@ void AKGLoopTiling::updateInsertIfLoops(SmallVector<affine::AffineForOp, 6> &new
 //   }
 // }
 // ```
-LogicalResult AKGLoopTiling::perfectlyNestedWithIf(SmallVector<affine::AffineForOp, 6> tiledLoops) {
+mlir::LogicalResult AKGLoopTiling::perfectlyNestedWithIf(SmallVector<mlir::affine::AffineForOp, 6> tiledLoops) {
   unsigned forNum = band.size();
   unsigned tileSizesNum = bandTileSizes.size();
   unsigned allTiledForNum = forNum + tileSizesNum;
   if (tiledLoops.size() != allTiledForNum) {
-    return failure();
+    return mlir::failure();
   }
 
   // Records the index whose tile_size cannot be divisible by the for loop.
@@ -863,51 +883,51 @@ LogicalResult AKGLoopTiling::perfectlyNestedWithIf(SmallVector<affine::AffineFor
   }
 
   if (inequalityForIndex.empty()) {
-    return success();
+    return mlir::success();
   }
 
   // Gets all for loops except the first tiling.
-  auto tileLoops = MutableArrayRef<affine::AffineForOp>(tiledLoops).drop_front(forNum);
-  SmallVector<affine::AffineForOp, 4> fullTileLoops;
+  auto tileLoops = mlir::MutableArrayRef<mlir::affine::AffineForOp>(tiledLoops).drop_front(forNum);
+  SmallVector<mlir::affine::AffineForOp, 4> fullTileLoops;
 
-  if (failed(createFullBlock(tileLoops, fullTileLoops))) {
+  if (mlir::failed(createFullBlock(tileLoops, fullTileLoops))) {
     if (!fullTileLoops.empty()) {
       fullTileLoops.front().erase();
     }
     tileLoops[0].emitError("Cannot construct the body block.");
-    return failure();
+    return mlir::failure();
   }
   if (fullTileLoops.empty()) {
-    return success();
+    return mlir::success();
   }
 
-  SmallVector<affine::AffineForOp, 6> newTiledLoops;
-  getPerfectlyNestedLoops(newTiledLoops, tiledLoops[0]);
-  Block *forBody = newTiledLoops[newTiledLoops.size() - 1].getBody();
-  OpBuilder b(forBody, forBody->begin());
-  SmallVector<Operation *, 6> bodyOp;
+  SmallVector<mlir::affine::AffineForOp, 6> newTiledLoops;
+  mlir::affine::getPerfectlyNestedLoops(newTiledLoops, tiledLoops[0]);
+  mlir::Block *forBody = newTiledLoops[newTiledLoops.size() - 1].getBody();
+  mlir::OpBuilder b(forBody, forBody->begin());
+  SmallVector<mlir::Operation *, 6> bodyOp;
   // Records all ops in the for loop to facilitate the insertion of if statements.
   for (auto it = forBody->begin(); it != forBody->end(); ++it) {
-    Operation *op = &*it;
-    if (isa<affine::AffineYieldOp>(op)) {
+    mlir::Operation *op = &*it;
+    if (mlir::isa<mlir::affine::AffineYieldOp>(op)) {
       continue;
     }
     bodyOp.push_back(op);
   }
   updateInsertIfLoops(newTiledLoops, inequalityForIndex);
-  affine::AffineIfOp ifOp = createperfectlyNestedCondition(newTiledLoops, b);
+  mlir::affine::AffineIfOp ifOp = createperfectlyNestedCondition(newTiledLoops, b);
   if (!ifOp) {
     fullTileLoops.front().erase();
     newTiledLoops[0].emitError("Cannot construct an if statement.");
-    return failure();
+    return mlir::failure();
   }
 
-  Block *thenBlock = ifOp.getThenBlock();
+  mlir::Block *thenBlock = ifOp.getThenBlock();
   for (auto op : bodyOp) {
     thenBlock->getOperations().splice(std::prev(thenBlock->end()), op->getBlock()->getOperations(),
-                                      Block::iterator(op));
+                                      mlir::Block::iterator(op));
   }
-  return success();
+  return mlir::success();
 }
 
 void AKGLoopTiling::tileEachBand() {
@@ -916,15 +936,15 @@ void AKGLoopTiling::tileEachBand() {
   unsigned forNum = band.size();
   unsigned tileSizesNum = bandTileSizes.size();
   if (forNum == tileSizesNum) {
-    SmallVector<affine::AffineForOp, 6> tiledNest;
-    if (failed(tilePerfectlyNested(band, bandTileSizes, &tiledNest))) {
+    SmallVector<mlir::affine::AffineForOp, 6> tiledNest;
+    if (mlir::failed(mlir::affine::tilePerfectlyNested(band, bandTileSizes, &tiledNest))) {
       // An empty band always succeeds.
       assert(!band.empty() && "guaranteed to succeed on empty bands");
       LLVM_DEBUG(band.front()->emitRemark("loop tiling failed!\n"));
     }
 
     if (separate) {
-      auto intraTileLoops = MutableArrayRef<affine::AffineForOp>(tiledNest).drop_front(forNum);
+      auto intraTileLoops = mlir::MutableArrayRef<mlir::affine::AffineForOp>(tiledNest).drop_front(forNum);
       if (failed(separateFullTiles(intraTileLoops))) {
         assert(!intraTileLoops.empty() && "guaranteed to succeed on empty bands");
         LLVM_DEBUG(intraTileLoops.front()->emitRemark("separation post tiling failed!\n"));
@@ -940,12 +960,12 @@ void AKGLoopTiling::tileEachBand() {
     }
   } else if (tileSizesNum > forNum && tileSizesNum % forNum == 0) {
     // Tiles the specified band of perfectly nested loops.
-    affine::AffineForOp rootAffineForOp = band[0];
+    mlir::affine::AffineForOp rootAffineForOp = band[0];
     unsigned width = tileSizesNum + forNum;
-    SmallVector<affine::AffineForOp, 6> tiledLoops(width);
+    SmallVector<mlir::affine::AffineForOp, 6> tiledLoops(width);
     constructTiledLoop(rootAffineForOp, width, tiledLoops);
     constructTiledIndex(tiledLoops);
-    SmallVector<Value, 8> origLoopIVs;
+    SmallVector<mlir::Value, 8> origLoopIVs;
     extractForInductionVars(band, &origLoopIVs);
 
     for (unsigned i = 0; i < forNum; i++) {
@@ -971,19 +991,19 @@ void AKGLoopTiling::runCpuOperation() {
   separateNoIf = true;
   tileEachBand();
 
-  func::FuncOp funcOp = getOperation();
-  auto opType = CommonUtils::getOperatorType(funcOp);
-  OpBuilder b(funcOp);
-  if (opType == OperatorTemplate::Reduce) {
-    SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
+  mlir::func::FuncOp funcOp = getOperation();
+  auto opType = mlir::CommonUtils::getOperatorType(funcOp);
+  mlir::OpBuilder b(funcOp);
+  if (opType == mlir::OperatorTemplate::Reduce) {
+    SmallVector<mlir::Operation *, 8> reduceLoops = mlir::CommonUtils::collectReductionAxes(funcOp);
     for (auto reduceLoop : reduceLoops) {
       reduceLoop->setAttr("reduceLoop", b.getUnitAttr());
     }
-  } else if (opType == OperatorTemplate::Broadcast) {
-    llvm::SmallSet<affine::AffineForOp, 6> allBroadcastFor;
-    funcOp.walk([&](affine::AffineForOp forOp) {
-      llvm::SmallSet<affine::AffineForOp, 6> multiFor;
-      for (auto op : forOp->getBlock()->getOps<affine::AffineForOp>()) {
+  } else if (opType == mlir::OperatorTemplate::Broadcast) {
+    llvm::SmallSet<mlir::affine::AffineForOp, 6> allBroadcastFor;
+    funcOp.walk([&](mlir::affine::AffineForOp forOp) {
+      llvm::SmallSet<mlir::affine::AffineForOp, 6> multiFor;
+      for (auto op : forOp->getBlock()->getOps<mlir::affine::AffineForOp>()) {
         multiFor.insert(op);
       }
 
@@ -992,12 +1012,12 @@ void AKGLoopTiling::runCpuOperation() {
       }
     });
 
-    llvm::SmallSet<Operation *, 8> broadcastLoops;
+    llvm::SmallSet<mlir::Operation *, 8> broadcastLoops;
     if (allBroadcastFor.empty()) {
-      CommonUtils::collectBroadcastAxes(funcOp, broadcastLoops);
+      mlir::CommonUtils::collectBroadcastAxes(funcOp, broadcastLoops);
     } else {
       for (auto i : allBroadcastFor) {
-        CommonUtils::collectBroadcastAxes(i, broadcastLoops);
+        mlir::CommonUtils::collectBroadcastAxes(i, broadcastLoops);
       }
     }
     for (auto broadcastLoop : broadcastLoops) {
@@ -1006,18 +1026,67 @@ void AKGLoopTiling::runCpuOperation() {
   }
 }
 
-bool AKGLoopTiling::isDynamicShape() const { return ShapeAlignTool::getInstance().getFuncArgSizes() > 0; }
+bool AKGLoopTiling::isDynamicShape() const {
+  return akgglobal::ShapeAlignTool::getInstance().getFuncArgSizes() > 0;
+}
+
+void AKGLoopTiling::runNpuOperation() {
+  // TODO(ascend-tiling): extend strategy to support multi-axis tiling, auto solver integration
+  // and operator-specific optimisations.
+  if (band.empty()) {
+    return;
+  }
+
+  mlir::affine::AffineForOp innermostLoop = nullptr;
+  int maxDepth = 0;
+  for (auto loop : band) {
+    auto candidate = findInnermostLoopWithDepth(loop);
+    if (candidate.first > maxDepth) {
+      maxDepth = candidate.first;
+      innermostLoop = candidate.second;
+    }
+  }
+  if (!innermostLoop) {
+    return;
+  }
+
+  // Skip if the loop already matches the desired step.
+  if (innermostLoop.getStepAsInt() == 512) {
+    return;
+  }
+
+  SmallVector<mlir::affine::AffineForOp, 1> innermostBand{innermostLoop};
+  SmallVector<unsigned, 1> tileSizes{512};
+  SmallVector<mlir::affine::AffineForOp, 6> tiledNest;
+
+  if (mlir::failed(mlir::affine::tilePerfectlyNested(innermostBand, tileSizes, &tiledNest))) {
+    LLVM_DEBUG(llvm::dbgs() << "[NPU Tiling] Failed to tile innermost loop with step 512.\n");
+    return;
+  }
+
+  // TODO(ascend-tiling): add tail peeling / separating full tiles if future requirements demand it.
+  // TODO(ascend-tiling): insertBufferPlacement();
+  // TODO(ascend-tiling): annotateLoopsForCooperativeScheduling();
+  // TODO(ascend-tiling): rewriteReductionPatternIfNeeded();
+  // Future steps:
+  //   1) Collect loop band metadata (tile hierarchy, axis types).
+  //   2) Query AutoTiling solver for multi-level tiling suggestions.
+  //   3) Adjust induction variables / bounds to schedule outer tiles to AICore grid.
+  //   4) Insert DMA copy and shared UB buffering hooks.
+  //   5) Annotate vectorization hints and reduction strategies.
+  //   6) Perform legality checks (trip count, dynamic shape guard) before committing.
+}
 
 void AKGLoopTiling::runCudaOperation() {
-  func::FuncOp funcOp = getOperation();
-  auto opType = CommonUtils::getOperatorType(funcOp);
-  if (!isDynamicShape() || opType == OperatorTemplate::Reduce) {
+  mlir::func::FuncOp funcOp = getOperation();
+  auto opType = mlir::CommonUtils::getOperatorType(funcOp);
+  if (!isDynamicShape() || opType == mlir::OperatorTemplate::Reduce) {
     inequalityConvertToIf = true;
   }
   tileEachBand();
 
   if (useAutoTiling && solver) {
-    auto configSolver = std::make_shared<GlobalConfigSolver>(solver);
+    auto configSolver = std::make_shared<mlir::akg::autotiling::GlobalConfigSolver>(solver);
 
     configSolver->solve(funcOp);
 
@@ -1026,7 +1095,7 @@ void AKGLoopTiling::runCudaOperation() {
       funcOp->setAttr(akg::utils::kEnableAtomicAdd,
                       configSolver->modelGraph->globalConfigs[akg::utils::kEnableAtomicAdd]);
     }
-    funcOp->walk([&](Operation *curOp) {
+    funcOp->walk([&](mlir::Operation *curOp) {
       if (curOp->hasAttr(kReductionAxesStr)) {
         for (auto it : configSolver->modelGraph->globalConfigs) {
           curOp->setAttr(it.first, it.second);
@@ -1042,22 +1111,22 @@ void AKGLoopTiling::runCudaOperation() {
   }
 }
 
-void AKGLoopTiling::BandCheck(const std::vector<SmallVector<affine::AffineForOp, 6>> &bands) {
-  func::FuncOp funcOp = getOperation();
+void AKGLoopTiling::BandCheck(const std::vector<SmallVector<mlir::affine::AffineForOp, 6>> &bands) {
+  mlir::func::FuncOp funcOp = getOperation();
 
   // A common checker for CPU/GPU that disables reshape op with empty band.
-  if (bands.empty() && (CommonUtils::getOperatorType(funcOp) == OperatorTemplate::Reshape ||
-                        CommonUtils::getOperatorType(funcOp) == OperatorTemplate::Transpose)) {
-    getOperation()->walk([&](Operation *copyOp) {
-      if (isa<CopyOpInterface>(copyOp)) {
+  if (bands.empty() && (mlir::CommonUtils::getOperatorType(funcOp) == mlir::OperatorTemplate::Reshape ||
+                        mlir::CommonUtils::getOperatorType(funcOp) == mlir::OperatorTemplate::Transpose)) {
+    getOperation()->walk([&](mlir::Operation *copyOp) {
+      if (mlir::isa<mlir::CopyOpInterface>(copyOp)) {
         llvm::report_fatal_error(
           llvm::StringRef("[BandCheck]: No loop for reshape op, may have performance issue in static shape."));
       }
     });
   }
 
-  // Rest are checkers for GPU only.
-  if (target == kTargetCpu) {
+  // Rest are checkers for GPU only (CUDA has stricter requirements than Ascend).
+  if (target == mlir::kTargetCpu || target == mlir::kTargetAscend || target == mlir::kTargetAicore) {
     return;
   }
 
@@ -1067,7 +1136,7 @@ void AKGLoopTiling::BandCheck(const std::vector<SmallVector<affine::AffineForOp,
   }
 
   // 3. single-band + dynamic axis checker cause we cannot map the dynamic axis
-  getOperation()->walk([&](affine::AffineForOp forOp) {
+  getOperation()->walk([&](mlir::affine::AffineForOp forOp) {
     if (!forOp.hasConstantLowerBound() || !forOp.hasConstantUpperBound()) {
       llvm::report_fatal_error(
         llvm::StringRef("[BandCheck]: Dynamic bound, may have performance issue in static shape."));
@@ -1077,11 +1146,11 @@ void AKGLoopTiling::BandCheck(const std::vector<SmallVector<affine::AffineForOp,
 
 void AKGLoopTiling::runOnOperation() {
   // Bands of loops to tile.
-  func::FuncOp funcOp = getOperation();
-  std::vector<SmallVector<affine::AffineForOp, 6>> bands;
-  getTileableBands(funcOp, &bands);
+  mlir::func::FuncOp funcOp = getOperation();
+  std::vector<SmallVector<mlir::affine::AffineForOp, 6>> bands;
+  mlir::affine::getTileableBands(funcOp, &bands);
   if (getOperation()->getAttr("process")) {
-    target = dyn_cast<StringAttr>(getOperation()->getAttr("process")).getValue().str();
+    target = mlir::dyn_cast<mlir::StringAttr>(getOperation()->getAttr("process")).getValue().str();
   }
 
   if (!isDynamicShape()) {
@@ -1089,25 +1158,27 @@ void AKGLoopTiling::runOnOperation() {
   }
 
   if (useAutoTiling) {
-    auto initGraph = parseIr(funcOp, bands);
+    auto initGraph = mlir::akg::autotiling::parseIr(funcOp, bands);
     initGraph->setHardware(target);
     initGraph->setFeature(feature);
     initGraph->setIsDynamicShape(isDynamicShape());
     initGraph->setTilingMode(tilingMode);
-    auto modelGraph = buildModelGraph(initGraph);
-    solver = getHeuristicTilingSolver(modelGraph);
+    auto modelGraph = mlir::akg::autotiling::buildModelGraph(initGraph);
+    solver = mlir::akg::autotiling::getHeuristicTilingSolver(modelGraph);
     levelToTile = modelGraph->levelToTile;
   }
 
   // Tile each band.
   for (auto &curBand : bands) {
-    band = MutableArrayRef<affine::AffineForOp>(curBand);
-    if (target == kTargetCpu) {
+    band = mlir::MutableArrayRef<mlir::affine::AffineForOp>(curBand);
+    if (target == mlir::kTargetCpu) {
       runCpuOperation();
-    } else if (target == kTargetCuda) {
+    } else if (target == mlir::kTargetCuda) {
       runCudaOperation();
+    } else if (target == mlir::kTargetAscend || target == mlir::kTargetAicore) {
+      runNpuOperation();
     } else {
-      llvm::errs() << "Currently, only cpu and cuda backends are supported.\n";
+      llvm::errs() << "Currently, only cpu, cuda and ascend backends are supported.\n" << "Current Hardware:" << target;
     }
   }
 }

@@ -44,13 +44,16 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-using namespace mlir::akg;
 namespace mlir {
+
+using akg::MemRefDependenceGraph;
 
 constexpr auto kGlobalCache = 1;
 constexpr auto kTargetCpu = "cpu";
 constexpr auto kTargetCuda = "cuda";
 constexpr auto kTargetGpu = "gpu";
+constexpr auto kTargetAscend = "ascend";
+constexpr auto kTargetAicore = "aicore";
 constexpr auto kOperatorTypeStr = "OperatorType";
 constexpr auto kReduceStr = "Reduce";
 constexpr auto kReductionAxesStr = "reduction_axes";
@@ -105,7 +108,7 @@ class MindOperatorType {
   static bool isMindElementwiseOp(Operation *op) {
     return (
       isa<mindspore::AddOp, mindspore::AddNOp, mindspore::DivOp, mindspore::SqrtOp, mindspore::CosOp, mindspore::SinOp,
-          mindspore::AsinOp,mindspore::AcosOp, mindspore::AcoshOp, mindspore::AtanOp, mindspore::IsnanOp,
+          mindspore::AsinOp, mindspore::AcosOp, mindspore::AcoshOp, mindspore::AtanOp, mindspore::IsnanOp,
           mindspore::IsinfOp, mindspore::InplaceAssignOp, mindspore::AssignOp, mindspore::LessOp,
           mindspore::LessEqualOp>(op));
   }
@@ -123,7 +126,7 @@ class CommonUtils {
   CommonUtils() = default;
   // Determines whether a value is in the upper and lower bounds of the loop.
   static bool isInForUbAndLb(affine::AffineForOp forOp, int64_t constraintValue) {
-    // TODO: getResults().size() > 0
+    // TODO(akg-dev): getResults().size() > 0
     auto ubMap = forOp.getUpperBoundMap().getResult(0);
     auto lbMap = forOp.getLowerBoundMap().getResult(0);
     if (!llvm::isa<AffineConstantExpr>(ubMap) || !llvm::isa<AffineConstantExpr>(lbMap)) {
@@ -141,7 +144,7 @@ class CommonUtils {
   static void getConstraintValues(IntegerSet set, SmallVector<int64_t, 4> &constraintValues) {
     for (auto constraint : set.getConstraints()) {
       int64_t constraintValue = -1;
-      // TODO: if condition type is other
+      // TODO(akg-dev): if condition type is other
       if (constraint.getKind() == AffineExprKind::Add) {
         AffineBinaryOpExpr binaryExpr = llvm::cast<AffineBinaryOpExpr>(constraint);
         if (llvm::isa<AffineConstantExpr>(binaryExpr.getRHS())) {
@@ -249,7 +252,7 @@ class CommonUtils {
       llvm::errs() << "Unable to recognize attribute " << kOperatorTypeStr << ".\n";
       return opType;
     }
-    // TODO: multi band
+    // TODO(akg-dev): multi band
     auto opTypeStr = dyn_cast<StringAttr>(op->getAttr(kOperatorTypeStr)).getValue().str();
     for (auto it = operatorTemplateMap.begin(); it != operatorTemplateMap.end(); ++it) {
       if (it->second == opTypeStr) {
@@ -302,7 +305,7 @@ class CommonUtils {
     } else if (lhsIndices.size() < rhsIndices.size()) {
       return lhsLoadOp;
     } else {
-      // TODO:keep_dim is true
+      // TODO(akg-dev): keep_dim is true
       return nullptr;
     }
   }
@@ -803,7 +806,7 @@ class CommonUtils {
   }
 
   // 1.first try to collect all Operands in the if region;
-  // 2.second try to backward collect all the define op from IfOp condition, until the find the fisrt forOp which
+  // 2.second try to backward collect all the define op from IfOp condition, until the find the first forOp which
   // define, or just reach the end
   static bool isIfConditionRelatedToContent(scf::IfOp IfOp) {
     // 1.first try to collect all op operands in the uif region;
