@@ -84,6 +84,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::memref::createFoldMemRefAliasOpsPass());
     nestedFusionPM.addPass(mlir::createAKGLoopFusionPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
+    nestedFusionPM.addPass(mlir::createAKGLoopTilingPass(false));  // useAutoTiling = false
     nestedFusionPM.addPass(mlir::affine::createAffineForVectPass());
     nestedFusionPM.addPass(mlir::affine::createVectorTransferTensorizePass());
   }

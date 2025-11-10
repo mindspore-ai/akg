@@ -16,6 +16,9 @@
 
 #include "akg/Dialect/Affine/Analysis/AutoTiling.h"
 
+#include <algorithm>
+#include <iterator>
+
 #include "akg/Dialect/Affine/Analysis/Axis.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -91,6 +94,9 @@ ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
   if (hardware == kTargetCuda) {
     return buildGpuModelGraph(initGraph, tilingMgr);
   } else if (hardware == kTargetCpu) {
+    return buildCpuModelGraph(initGraph, tilingMgr);
+  } else if (hardware == kTargetAscend || hardware == kTargetAicore) {
+    // todo Implement buildAscendModelGraph to optimize UB/Cube/Vector scheduling
     return buildCpuModelGraph(initGraph, tilingMgr);
   } else {
     llvm::errs() << "Not impl model graph for hardware " << hardware;
@@ -204,9 +210,9 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<affine::Af
   for (auto axis : sortedAxes) {
     TrySolve(axis);
   }
-  for (auto it : resMap) {
-    tileSizes->push_back(it.second);
-  }
+  tileSizes->reserve(tileSizes->size() + resMap.size());
+  std::transform(resMap.begin(), resMap.end(), std::back_inserter(*tileSizes),
+                 [](const auto &entry) { return entry.second; });
 }
 }  // namespace autotiling
 }  // namespace akg

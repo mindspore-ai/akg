@@ -92,7 +92,7 @@ int TilingSolver::getTileSize(const AxisPtr a, std::vector<int> candidates) {
     }
   }
   if (candidateRanks.empty()) {
-    llvm::errs() << "Error, no candiate is chosen\n";
+    llvm::errs() << "Error, no candidate is chosen\n";
     return 1;
   }
   auto chosen = candidateRanks.begin()->second;
@@ -166,11 +166,9 @@ void GlobalConfigSolver::setEnableVectorize() {
       innerMostAxis->axisType.find(Axis::AxisLabel::kDynamic) == innerMostAxis->axisType.end() ? innerTile->value : -1;
     innerDivisible = innerMostAxis->range.second % innerAlignSize == 0;
   });
-  for (auto node : modelGraph->nodes()) {
-    if (node->opType == "HeavyElem") {
-      enableVec = false;
-      break;
-    }
+  if (std::any_of(modelGraph->nodes().begin(), modelGraph->nodes().end(),
+                  [](const auto &node) { return node->opType == "HeavyElem"; })) {
+    enableVec = false;
   }
   if (innerAlignSize <= akgglobal::GpuScheduleTool::getInstance().minBlockSizesForVectorized ||
       innerAlignSize % akgglobal::GpuScheduleTool::getInstance().vectorSize != 0 || !innerDivisible) {
@@ -180,7 +178,9 @@ void GlobalConfigSolver::setEnableVectorize() {
 }
 
 void GlobalConfigSolver::solve(func::FuncOp funcOp) {
-  if (modelGraph->hardware != kTargetCpu) {
+  if (modelGraph->hardware != kTargetCpu
+    && modelGraph->hardware != kTargetAscend
+    && modelGraph->hardware != kTargetAicore) {
     if (!isDynamicShape() || akgglobal::GpuScheduleTool::getInstance().runtimeArgSize() > 0 ||
         modelGraph->graphTemplate == GraphTemplate::REDUCTION) {
       if (!akgglobal::GpuScheduleTool::getInstance().getIsCustomConfig()) {
@@ -262,10 +262,10 @@ std::vector<std::pair<std::string, int>> GlobalConfigSolver::solveMapResource(co
   auto axisSizes = modelGraph->getLoopExtentsAfterTiling(axis);
   std::vector<std::pair<std::string, int>> allocResult;
   allocResult.reserve(axisSizes.size());
-  int outerLoc = 0;
-  int innerLoc = static_cast<int>(axisSizes.size()) - 1;
-  int midLoc = static_cast<int>(axisSizes.size()) - 2;
   auto Load = [&](const ConfigPtr &config) {
+    const int outerLoc = 0;
+    const int innerLoc = static_cast<int>(axisSizes.size()) - 1;
+    const int midLoc = static_cast<int>(axisSizes.size()) - 2;
     if (config->index == ConfigPos::kOuter) {
       tempMap[outerLoc] = std::make_pair(config->type, axisSizes[outerLoc]);
     } else if (config->index == ConfigPos::kInner) {
@@ -284,9 +284,7 @@ std::vector<std::pair<std::string, int>> GlobalConfigSolver::solveMapResource(co
     Load(mapSeq);
   }
   for (int i = 0; i < static_cast<int>(axisSizes.size()); ++i) {
-    if (tempMap.find(i) == tempMap.end()) {
-      tempMap[i] = std::make_pair(kGpuSeqCfg, axisSizes[static_cast<unsigned>(i)]);
-    }
+    tempMap.try_emplace(i, kGpuSeqCfg, axisSizes[static_cast<unsigned>(i)]);
   }
   for (int i = 0; i < static_cast<int>(axisSizes.size()); ++i) {
     allocResult.push_back(tempMap[i]);
