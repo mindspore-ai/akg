@@ -32,5 +32,12 @@ AKG 代码仓中的各个子项目，都支持独立安装构建，请参考各�
 版本说明详见[RELEASE](RELEASE.md)。
 
 ## 许可证
-
 [Apache License 2.0](LICENSE)。
+
+#### AKG SIG 交流微信群
+
+<div>
+  <a href="docs/AKG_QRCode.png">
+    <img src="docs/AKG_QRCode.png" alt="AKG SIG 交流微信群二维码" width="220">
+  </a>
+</div>
