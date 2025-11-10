@@ -19,9 +19,7 @@ class Model(nn.Module):
 
 
 def get_inputs():
-    # Batch size: 1024
-    # Hidden dimension: 4096
-    input_tensor = torch.randn(1024, 4096, dtype=torch.float32)
+    input_tensor = torch.randn(65536, dtype=torch.float32)
     return [input_tensor]
 
 
