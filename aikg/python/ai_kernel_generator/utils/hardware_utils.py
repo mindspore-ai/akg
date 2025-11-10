@@ -124,7 +124,10 @@ def get_hardware_doc(backend: str, arch: str) -> str:
         },
         "cuda": {
             "a100": "hardware/CUDA_A100.md",
-            "v100": "hardware/CUDA_V100.md"
+            "v100": "hardware/CUDA_V100.md",
+            "h20": "hardware/CUDA_H20.md",
+            "l20": "hardware/CUDA_L20.md",
+            "rtx3090": "hardware/CUDA_RTX3090.md"
         }
     }
 
