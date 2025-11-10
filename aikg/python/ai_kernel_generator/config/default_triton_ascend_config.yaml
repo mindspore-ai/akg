@@ -17,8 +17,8 @@ workflow_config_path: "config/default_workflow.yaml"
 
 # Documentation directory configuration
 docs_dir:
-  designer: "resources/docs/triton_docs"
-  coder: "resources/docs/triton_docs"
+  designer: "resources/docs/triton_ascend_docs"
+  coder: "resources/docs/triton_ascend_docs"
 
 # Performance analysis configuration
 profile_settings:
@@ -27,3 +27,4 @@ profile_settings:
 
 # Verification configuration
 verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
+

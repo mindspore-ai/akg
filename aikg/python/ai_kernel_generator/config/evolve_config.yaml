@@ -2,7 +2,7 @@
 
 # 基础配置
 base:
-  dsl: "triton"              # 实现类型: triton, swft, etc.
+  dsl: "triton_cuda"         # 实现类型: triton_cuda, triton_ascend, swft, etc. (根据backend选择)
   framework: "torch"         # 框架: torch, numpy, mindspore, etc.
   backend: "cuda"            # 后端: ascend, cuda, etc.
   arch: "a100"               # 架构: a100, ascend910b4, etc.

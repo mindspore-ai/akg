@@ -65,7 +65,7 @@ async def evolve(
     Args:
         op_name: 算子名称
         task_desc: 任务描述
-        dsl: 实现类型（如"triton", "swft"）
+        dsl: 实现类型（如"triton_cuda", "triton_ascend", "swft"）
         framework: 框架名称（如"mindspore", "torch", "numpy"）
         backend: 后端名称（如"ascend", "cuda"）
         arch: 架构名称（如"ascend910b4", "a100"）

@@ -148,7 +148,7 @@ def run_kernel_profile(
     op_task_str=None,
     kernel_code=None,
     framework="torch",
-    dsl="triton",
+    dsl="triton_ascend",  # 默认使用triton_ascend，也可以使用triton_cuda
     backend="ascend",
     arch="ascend910b4",
     device_id=0,
@@ -163,7 +163,7 @@ def run_kernel_profile(
         op_task_str: 框架实现代码（如torch实现）
         kernel_code: DSL实现代码（如triton实现）
         framework: 框架名称，默认"torch"
-        dsl: DSL名称，默认"triton"
+        dsl: DSL名称，默认"triton_ascend"（也支持"triton_cuda"）
         backend: 后端名称，默认"ascend"
         arch: 架构名称，默认"ascend910b4"
         device_id: 设备ID，默认0
@@ -288,7 +288,7 @@ def main():
         op_task_str=op_task_str,
         kernel_code=kernel_code,
         framework="torch",
-        dsl="triton",
+        dsl="triton_ascend",  # 默认使用triton_ascend，也可以使用triton_cuda
         backend="ascend",
         arch="ascend910b4",
         device_id=device_id,

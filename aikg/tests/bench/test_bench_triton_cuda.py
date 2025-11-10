@@ -22,7 +22,7 @@ os.environ['AIKG_DATA_COLLECT'] = 'on'
 @pytest.mark.asyncio
 async def test_bench_triton_cuda():
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_cuda"
     backend = "cuda"
     arch = "a100"
     task_pool = TaskPool(1)

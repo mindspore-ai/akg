@@ -45,7 +45,7 @@ MS_TO_NP_DTYPE_MAP = {
 }
 {% endif %}
 
-{% if "triton" in dsl %}
+{% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
 {% if backend == "ascend" %}
 try:
     from ai_kernel_generator.utils.triton_autotune_patch import apply_triton_patches
@@ -251,7 +251,7 @@ def run_generation_implementations():
     
     def run_benchmark(inputs, case_idx=0):
         """运行基准测试"""
-        {% if "triton" in dsl %}
+        {% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
         {% if backend == "ascend" %}
         try:
             from ai_kernel_generator.core.verifier.profiler import profiler_npu

@@ -56,7 +56,7 @@
 
 {{ sketch }}
 
-{% if dsl == 'triton'%}
+{% if dsl == 'triton_cuda' or dsl == 'triton_ascend' %}
 如果草图中包含@llm_hint("avaliable_tiling")，使用triton的autotune装饰器进行生成测试
 {% endif %}
 {% endif %}
@@ -84,7 +84,7 @@
 包含 `{{ op_name }}_kernel` 函数，以及 `{{ func_name }}` 启动函数。
 ```python
 inputs = get_inputs()
-{% if "triton" in dsl %}
+{% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
 # 运行Triton实现
 output = {{ func_name }}(*inputs)
 {% elif dsl == "swft" %}
@@ -105,7 +105,7 @@ def {{ func_name }}(...):
   ...
 ```
 
-{% if "triton" in dsl %}
+{% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
 3. 卷积类算子生成注意事项：
 请注意！！如果检测到给出的任务是卷积类的算子任务，为了保证Triton的卷积核权重与当前任务代码的卷积核权重一致，需要在Triton的host侧生成对应的weight：
 ```

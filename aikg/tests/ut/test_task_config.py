@@ -23,11 +23,11 @@ class TestTaskConfig:
     def test_valid_configs(self):
         """测试有效的配置组合"""
         valid_configs = [
-            ("mindspore", "triton", "ascend", "ascend910b4"),
+            ("mindspore", "triton_ascend", "ascend", "ascend910b4"),
             ("mindspore", "swft", "ascend", "ascend310p3"),
-            ("torch", "triton", "ascend", "ascend910b4"),
+            ("torch", "triton_ascend", "ascend", "ascend910b4"),
             ("torch", "swft", "ascend", "ascend310p3"),
-            ("torch", "triton", "cuda", "a100"),
+            ("torch", "triton_cuda", "cuda", "a100"),
             ("numpy", "swft", "ascend", "ascend310p3"),
         ]
 
@@ -42,8 +42,8 @@ class TestTaskConfig:
     def test_invalid_framework(self):
         """测试无效的框架"""
         invalid_configs = [
-            ("invalid_framework", "triton", "ascend", "ascend910b4"),
-            ("pytorch", "triton", "cuda", "a100"),  # 应该是torch
+            ("invalid_framework", "triton_ascend", "ascend", "ascend910b4"),
+            ("pytorch", "triton_cuda", "cuda", "a100"),  # 应该是torch
             ("mindspore_old", "swft", "ascend", "ascend310p3"),
         ]
 
@@ -56,8 +56,8 @@ class TestTaskConfig:
     def test_invalid_backend(self):
         """测试无效的后端"""
         invalid_configs = [
-            ("mindspore", "triton", "invalid_backend", "ascend910b4"),
-            ("torch", "triton", "invalid_backend", "ascend910b4"),
+            ("mindspore", "triton_ascend", "invalid_backend", "ascend910b4"),
+            ("torch", "triton_ascend", "invalid_backend", "ascend910b4"),
             ("numpy", "swft", "invalid_backend", "ascend310p3"),
         ]
 
@@ -70,8 +70,8 @@ class TestTaskConfig:
     def test_invalid_arch(self):
         """测试无效的架构"""
         invalid_configs = [
-            ("mindspore", "triton", "ascend", "invalid_arch"),
-            ("torch", "triton", "cuda", "invalid_arch"),
+            ("mindspore", "triton_ascend", "ascend", "invalid_arch"),
+            ("torch", "triton_cuda", "cuda", "invalid_arch"),
             ("numpy", "swft", "ascend", "invalid_arch"),
         ]
 
@@ -98,13 +98,13 @@ class TestTaskConfig:
     def test_mismatched_combinations(self):
         """测试不匹配的组合"""
         mismatched_configs = [
-            # ascend910b4只支持triton，但使用了swft
+            # ascend910b4只支持triton_ascend，但使用了swft
             ("mindspore", "swft", "ascend", "ascend910b4"),
             ("torch", "swft", "ascend", "ascend910b4"),
-            # cuda只支持triton，但使用了swft
+            # cuda只支持triton_cuda，但使用了swft
             ("torch", "swft", "cuda", "a100"),
-            # numpy只支持swft，但使用了triton
-            ("numpy", "triton", "ascend", "ascend310p3"),
+            # numpy只支持swft，但使用了triton_ascend
+            ("numpy", "triton_ascend", "ascend", "ascend310p3"),
         ]
 
         for framework, dsl, backend, arch in mismatched_configs:
@@ -117,11 +117,11 @@ class TestTaskConfig:
         """测试不存在的组合"""
         nonexistent_configs = [
             # mindspore不支持cuda
-            ("mindspore", "triton", "cuda", "a100"),
+            ("mindspore", "triton_cuda", "cuda", "a100"),
             # numpy不支持cuda
             ("numpy", "swft", "cuda", "a100"),
             # torch不支持某些不存在的组合
-            ("torch", "triton", "ascend", "ascend310p3"),  # torch的ascend310p3只支持swft
+            ("torch", "triton_ascend", "ascend", "ascend310p3"),  # torch的ascend310p3只支持swft
         ]
 
         for framework, dsl, backend, arch in nonexistent_configs:
@@ -134,15 +134,15 @@ class TestTaskConfig:
         """测试边界情况"""
         # 空字符串
         with pytest.raises(ValueError):
-            check_task_config("", "ascend", "ascend910b4", "triton")
+            check_task_config("", "ascend", "ascend910b4", "triton_ascend")
 
         # None值
         with pytest.raises(ValueError):
-            check_task_config(None, "ascend", "ascend910b4", "triton")
+            check_task_config(None, "ascend", "ascend910b4", "triton_ascend")
 
         # 大小写混合（应该不区分大小写，但这里测试一下）
         with pytest.raises(ValueError):
-            check_task_config("MindSpore", "ascend", "ascend910b4", "triton")
+            check_task_config("MindSpore", "ascend", "ascend910b4", "triton_ascend")
 
         print("正确捕获边界情况错误")
 
@@ -152,12 +152,12 @@ class TestTaskConfig:
         # 根据VALID_CONFIGS映射表测试所有有效组合
         all_valid_combinations = [
             # mindspore
-            ("mindspore", "triton", "ascend", "ascend910b4"),
+            ("mindspore", "triton_ascend", "ascend", "ascend910b4"),
             ("mindspore", "swft", "ascend", "ascend310p3"),
             # torch
-            ("torch", "triton", "ascend", "ascend910b4"),
+            ("torch", "triton_ascend", "ascend", "ascend910b4"),
             ("torch", "swft", "ascend", "ascend310p3"),
-            ("torch", "triton", "cuda", "a100"),
+            ("torch", "triton_cuda", "cuda", "a100"),
             # numpy
             ("numpy", "swft", "ascend", "ascend310p3"),
         ]

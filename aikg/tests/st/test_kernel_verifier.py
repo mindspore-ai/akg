@@ -30,10 +30,10 @@ device_id = os.getenv("DEVICE_ID", 1)
 @pytest.mark.parametrize("op_name", ["relu"])
 def test_kernel_verifier_ascend910b4_mindspore(op_name):
     framework = "mindspore"
-    dsl = "triton"
+    dsl = "triton_ascend"  # 根据测试场景，这里使用ascend
     backend = "ascend"
     arch = "ascend910b4"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -70,10 +70,10 @@ def test_kernel_verifier_ascend910b4_mindspore(op_name):
 @pytest.mark.parametrize("op_name", ["relu"])
 def test_kernel_verifier_ascend910b4_torch(op_name):
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_ascend"  # 根据测试场景，这里使用ascend
     backend = "ascend"
     arch = "ascend910b4"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -115,7 +115,7 @@ def test_kernel_verifier_ascend310p3_mindspore(op_name):
     dsl = "swft"
     backend = "ascend"
     arch = "ascend310p3"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -155,7 +155,7 @@ def test_kernel_verifier_ascend310p3_torch(op_name):
     dsl = "swft"
     backend = "ascend"
     arch = "ascend310p3"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -195,7 +195,7 @@ def test_kernel_verifier_ascend310p3_numpy(op_name):
     dsl = "swft"
     backend = "ascend"
     arch = "ascend310p3"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -234,10 +234,10 @@ def test_kernel_verifier_ascend310p3_numpy(op_name):
 @pytest.mark.parametrize("op_name", ["relu"])
 def test_kernel_verifier_a100(op_name):
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_cuda"  # cuda backend 使用 triton_cuda
     backend = "cuda"
     arch = "a100"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -276,10 +276,10 @@ def test_kernel_verifier_a100(op_name):
 @pytest.mark.parametrize("op_name", ["relu"])
 def test_kernel_verifier_v100(op_name):
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_cuda"  # cuda backend 使用 triton_cuda
     backend = "cuda"
     arch = "v100"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -318,10 +318,10 @@ def test_kernel_verifier_v100(op_name):
 @pytest.mark.parametrize("op_name", ["relu"])
 def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
     framework = "mindspore"
-    dsl = "triton"
+    dsl = "triton_ascend"  # 根据测试场景，这里使用ascend
     backend = "ascend"
     arch = "ascend910b4"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -374,10 +374,10 @@ def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
 @pytest.mark.parametrize("op_name", ["relu"])
 def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_ascend"  # 根据测试场景，这里使用ascend
     backend = "ascend"
     arch = "ascend910b4"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -432,10 +432,10 @@ def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
 @pytest.mark.parametrize("op_name", ["relu"])
 def test_kernel_verifier_profiling_a100(op_name):
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_cuda"  # cuda backend 使用 triton_cuda
     backend = "cuda"
     arch = "a100"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -489,10 +489,10 @@ def test_kernel_verifier_profiling_a100(op_name):
 def test_kernel_verifier_profiling_dynamic_ascend910b4_torch(op_name):
     """Dynamic shape profiling test for ascend910b4_torch"""
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_ascend"  # 根据测试场景，这里使用ascend
     backend = "ascend"
     arch = "ascend910b4"
-    config = load_config(dsl)  # unused
+    config = load_config(dsl, backend=backend)  # unused
 
     # 读取框架实现代码
     op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"

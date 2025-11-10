@@ -64,16 +64,16 @@ async def run_mindspore_triton_single():
 
     task_pool = TaskPool()
     device_pool = DevicePool([0])
-    config = load_config(dsl="triton")  # choose default plan by DSL
+    config = load_config(dsl="triton_ascend", backend="ascend")  # choose default plan by DSL
 
     # Recommended: environment check before running
-    check_env_for_task("mindspore", "ascend", "triton", config)
+    check_env_for_task("mindspore", "ascend", "triton_ascend", config)
 
     task = Task(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",
-        dsl="triton",
+        dsl="triton_ascend",
         backend="ascend",
         arch="ascend910b4",
         config=config,
@@ -93,7 +93,7 @@ async def run_mindspore_triton_single():
 | op_name | str | Kernel name |
 | task_desc | str | Task description (model + inputs) |
 | task_id | str | Unique task identifier |
-| dsl | str | Target DSL, e.g. "triton", "swft" |
+| dsl | str | Target DSL, e.g. "triton_cuda", "triton_ascend", "swft" |
 | backend | str | Backend, e.g. "ascend", "cuda" |
 | arch | str | Hardware arch, e.g. "ascend910b4" |
 | config | dict | Task orchestration plan config (`agent_model_config`, `workflow_config_path`, `docs_dir`, etc.) |
@@ -101,7 +101,7 @@ async def run_mindspore_triton_single():
 | framework | str | Frontend framework: "mindspore"/"torch"/"numpy" |
 | workflow | str | Optional. Override `workflow_config_path`, e.g. "coder_only_workflow" |
 
-> Configuration: `load_config("triton")` loads `config/default_triton_config.yaml`. If you run with local vLLM and coder-only, consider `vllm_triton_coderonly_config.yaml` via `load_config(config_path=...)`.
+> Configuration: `load_config("triton_ascend", backend="ascend")` loads `config/default_triton_ascend_config.yaml` for Ascend backend, or `load_config("triton_cuda", backend="cuda")` for CUDA backend. If you run with local vLLM and coder-only, consider `vllm_triton_coderonly_config.yaml` via `load_config(config_path=...)`.
 
 ## Run
 

@@ -60,14 +60,14 @@
         - 如果某个轴没有并行，则不输出该轴的信息
     - **PASS类**
       - **flatten**：判断是否支持轴融合优化，值为True/False。判断标准：
-        {% if dsl == "triton" %}
+        {% if dsl == "triton_cuda" or dsl == "triton_ascend" %}
         - 如果代码中有将多个轴合并的操作，则为True
         {% else %}
         - 需要判断在写回GM时是否进行了reshape操作，如A(dim0, dim1)->A(dim0 * dim1)
         {% endif %}
         - 如果代码中没有轴融合相关操作，则为False
       - **multi_buffer**：判断是否支持multi buffer优化。判断标准：
-        {% if dsl == "triton" %}
+        {% if dsl == "triton_cuda" or dsl == "triton_ascend" %}
         - 检查代码中是否有num_stages参数，有则取值，否则为1
         {% else %}
         - 不做检查，默认为1
@@ -76,7 +76,7 @@
       - **swizzle**：Swizzle是一种通过重新映射数据索引或线程索引来优化内存访问模式的通用编程技巧。如果算子是或包含matmul算子，总结Swizzle操作：
         - 如果有相关优化，简要描述重排技术类型、实现方式和优化目标
         - 如果没有相关优化，则令swizzle值设为NONE
-        {% if dsl == "triton" %}
+        {% if dsl == "triton_cuda" or dsl == "triton_ascend" %}
         【注意事项】使用tl.make_block_ptr中的order参数改变矩阵访问模式不视为Swizzle操作
         {% endif %}
 

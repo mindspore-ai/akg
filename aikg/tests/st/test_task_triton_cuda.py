@@ -18,7 +18,7 @@ from ai_kernel_generator.utils.environment_check import check_env_for_task
 @pytest.mark.asyncio
 async def test_parallel_task_triton_cuda():
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_cuda"
     backend = "cuda"
     arch = "a100"
     task_pool = TaskPool(1)

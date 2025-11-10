@@ -70,16 +70,16 @@ async def run_mindspore_triton_single():
 
     task_pool = TaskPool()
     device_pool = DevicePool([0])
-    config = load_config("triton")  # use offical deepseek api
+    config = load_config("triton_ascend", backend="ascend")  # use offical deepseek api
     # config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
 
-    check_env_for_task("mindspore", "ascend", "triton", config)
+    check_env_for_task("mindspore", "ascend", "triton_ascend", config)
 
     task = Task(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",
-        dsl="triton",
+        dsl="triton_ascend",
         backend="ascend",
         arch="ascend910b4",
         config=config,

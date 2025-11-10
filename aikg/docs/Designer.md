@@ -15,7 +15,7 @@ Designer is a core component in the AI Kernel Generator that automatically gener
 |---------|---------|---------|
 | op_name | str (Required) | Kernel name, identifying the specific kernel |
 | task_desc | str (Required) | Task description, detailing the kernel functional requirements |
-| dsl | str (Required) | Design language: "triton", "swft", etc. |
+| dsl | str (Required) | Design language: "triton_cuda", "triton_ascend", "swft", etc. |
 | backend | str (Required) | Hardware backend: "ascend", "cuda", etc. |
 | arch | str (Required) | Hardware architecture: "ascend910b4", "a100", etc. |
 | workflow_config_path | str (Optional) | Workflow configuration file path (usually injected by Task from the orchestration plan) |

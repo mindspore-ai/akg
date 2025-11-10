@@ -16,7 +16,7 @@ The Coder is a core component in the AI Kernel Generator that converts algorithm
 |---------|---------|---------|
 | op_name | str (Required) | Kernel name, identifying the specific kernel |
 | task_desc | str (Required) | Task description, detailing the kernel functional requirements |
-| dsl | str (Required) | Target DSL: "triton", "swft", etc. |
+| dsl | str (Required) | Target DSL: "triton_cuda", "triton_ascend", "swft", etc. |
 | framework | str (Required) | Frontend framework: "mindspore", "torch", "numpy", etc. |
 | backend | str (Required) | Hardware backend: "ascend", "cuda", etc. |
 | arch | str (Required) | Hardware architecture: "ascend910b4", "a100", etc. |
@@ -33,7 +33,7 @@ The Coder loads reference documents via `docs_dir.coder` in the orchestration pl
 ```yaml
 # In task orchestration plan file
 docs_dir:
-  coder: "resources/docs/triton_docs"  # Coder reference documents
+  coder: "resources/docs/triton_ascend_docs"  # Coder reference documents
   
 agent_model_config:
   coder: "your_model_name"

@@ -34,7 +34,7 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
     Args:
         framework: 框架类型 (mindspore/torch/numpy)
         backend: 后端类型 (ascend/cuda/cpu)
-        dsl: DSL类型 (triton/swft)
+        dsl: DSL类型 (triton_cuda/triton_ascend/swft)
         config_path: 任务配置文件路径，用于检查具体使用的模型API
         config: 已加载的配置字典，优先于config_path使用
 
@@ -65,11 +65,22 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
             issues.append("❌ 缺少 torch")
 
     # 3. 检查DSL
-    if dsl == 'triton':
+    if dsl in ['triton_cuda', 'triton_ascend']:
         try:
             importlib.import_module('triton')
         except ImportError:
-            issues.append("❌ 缺少 triton")
+            issues.append(f"❌ 缺少 triton (required for {dsl})")
+    elif dsl == 'triton':
+        # 自动转换逻辑：根据backend推断
+        if backend:
+            if backend == 'cuda':
+                dsl = 'triton_cuda'
+            elif backend == 'ascend':
+                dsl = 'triton_ascend'
+            # 递归检查转换后的DSL
+            return check_env(framework, backend, dsl, config_path, config)
+        else:
+            issues.append("❌ dsl='triton' is no longer supported. Please use 'triton_cuda' or 'triton_ascend' explicitly, or provide backend parameter for automatic conversion.")
     elif dsl == 'swft':
         try:
             importlib.import_module('swft')

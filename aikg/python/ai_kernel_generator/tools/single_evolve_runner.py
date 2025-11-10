@@ -37,7 +37,7 @@ class EvolveConfig:
 
     def __init__(self):
         # 基本参数
-        self.dsl = "triton"
+        self.dsl = "triton_cuda"  # 默认使用triton_cuda，可根据backend自动转换
         self.framework = "torch"
         self.backend = "cuda"
         self.arch = "a100"

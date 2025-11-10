@@ -16,7 +16,7 @@ Coder是AI Kernel Generator中的核心组件，负责将算法设计转换为�
 |---------|---------|---------|
 | op_name | str (必需) | 算子名称，标识特定算子 |
 | task_desc | str (必需) | 任务描述，详细说明算子功能需求 |
-| dsl | str (必需) | 目标DSL："triton"、"swft"等 |
+| dsl | str (必需) | 目标DSL："triton_cuda"、"triton_ascend"、"swft"等 |
 | framework | str (必需) | 前端框架："mindspore"、"torch"、"numpy"等 |
 | backend | str (必需) | 硬件后端："ascend"、"cuda"等 |
 | arch | str (必需) | 硬件架构："ascend910b4"、"a100"等 |
@@ -33,7 +33,7 @@ Coder 通过编排配置中的 `docs_dir.coder` 加载参考文档；文档清�
 ```yaml
 # 在任务编排方案配置文件中
 docs_dir:
-  coder: "resources/docs/triton_docs"  # Coder参考文档
+  coder: "resources/docs/triton_ascend_docs"  # Coder参考文档
   
 agent_model_config:
   coder: "your_model_name"

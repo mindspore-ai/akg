@@ -31,11 +31,11 @@ logger = logging.getLogger(__name__)
 class HandwriteLoader:
     """手写优化建议和实现加载器"""
     
-    def __init__(self, dsl: str = "triton", op_name: str = None, task_desc: str = None, config: dict = None):
+    def __init__(self, dsl: str = "triton_ascend", op_name: str = None, task_desc: str = None, config: dict = None):
         """初始化加载器
         
         Args:
-            dsl: DSL类型，默认为"triton"
+            dsl: DSL类型，默认为"triton_ascend"（也支持"triton_cuda"）
             op_name: 算子名称
             task_desc: 任务描述
             config: 配置字典

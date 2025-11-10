@@ -79,8 +79,8 @@ agent_model_config:
 ```yaml
 # 示例文档配置
 docs_dir:
-  designer: "resources/docs/triton_docs"    # Designer文档（如DSL语法）
-  coder: "resources/docs/triton_docs"    # Coder文档（如DSL语法）
+  designer: "resources/docs/triton_ascend_docs"    # Designer文档（如DSL语法）
+  coder: "resources/docs/triton_ascend_docs"    # Coder文档（如DSL语法）
 ```
 
 
@@ -104,7 +104,7 @@ profile_settings:
 
 ## 预设方案配置
 
-### Triton配置 (default_triton_config.yaml)
+### Triton配置 (default_triton_cuda_config.yaml / default_triton_ascend_config.yaml)
 
 **适用场景**: Triton kernel开发
 
@@ -113,7 +113,9 @@ profile_settings:
 - 支持 Ascend NPU / CUDA GPU 后端
 - 在 coder-only 工作流下，Designer 不启用
 
-**配置示例**: [`config/default_triton_config.yaml`](../../python/ai_kernel_generator/config/default_triton_config.yaml)
+**配置示例**: 
+- [`config/default_triton_cuda_config.yaml`](../../python/ai_kernel_generator/config/default_triton_cuda_config.yaml) (CUDA后端)
+- [`config/default_triton_ascend_config.yaml`](../../python/ai_kernel_generator/config/default_triton_ascend_config.yaml) (Ascend后端)
 
 ### SWFT配置 (default_swft_config.yaml)
 
@@ -132,13 +134,13 @@ profile_settings:
 from ai_kernel_generator.config.config_validator import load_config
 
 # 方式1：按 DSL 加载默认方案
-config = load_config(dsl="triton")
+config = load_config(dsl="triton_ascend", backend="ascend")  # 或使用 "triton_cuda" 用于 CUDA 后端
 
 # 方式2：显式指定方案文件路径
 config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
 
 # 创建任务
-task = Task(op_name="relu", task_desc="...", dsl="triton", config=config)
+task = Task(op_name="relu", task_desc="...", dsl="triton_ascend", config=config)  # 或使用 "triton_cuda" 用于 CUDA
 ```
 
 

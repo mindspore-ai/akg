@@ -363,7 +363,7 @@ def generate_beautiful_test_report(results, config, framework, dsl, backend, arc
         results: task_pool.wait_all() 返回的结果列表，格式为 [(op_name, result, _), ...]
         config: 配置字典，需要包含 'log_dir' 键
         framework: 框架名称 (如 "torch", "mindspore")
-        dsl: DSL名称 (如 "triton", "tvm")
+        dsl: DSL名称 (如 "triton_cuda", "triton_ascend", "swft", "tvm")
         backend: 后端名称 (如 "cuda", "ascend")
         arch: 架构名称 (如 "a100", "910b")
         save_to_file: 是否保存结果到文件

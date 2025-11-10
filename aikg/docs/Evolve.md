@@ -55,7 +55,7 @@ The system automatically selects the operation mode based on parameters:
 |----------------|---------------|----------------------|
 | op_name | str (Required) | Operator name |
 | task_desc | str (Required) | Task description |
-| dsl | str (Required) | DSL type: "triton", "swft", etc. |
+| dsl | str (Required) | DSL type: "triton_cuda", "triton_ascend", "swft", etc. |
 | framework | str (Required) | Frontend framework: "mindspore", "torch", "numpy", etc. |
 | backend | str (Required) | Backend type: "ascend", "cuda", etc. |
 | arch | str (Required) | Hardware architecture: "a100", "ascend910b4", etc. |

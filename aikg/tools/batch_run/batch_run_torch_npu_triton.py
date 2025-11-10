@@ -96,16 +96,16 @@ async def run_single_task(op_name: str, task_desc: str):
     """
     task_pool = TaskPool()
     device_pool = DevicePool([0])
-    config = load_config("triton")
+    config = load_config("triton_ascend", backend="ascend")
     # config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
 
-    check_env_for_task("torch", "ascend", "triton", config)
+    check_env_for_task("torch", "ascend", "triton_ascend", config)
 
     task = Task(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",
-        dsl="triton",
+        dsl="triton_ascend",
         backend="ascend",
         arch="ascend910b4",
         config=config,

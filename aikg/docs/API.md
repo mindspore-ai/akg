@@ -60,7 +60,7 @@ Task flow configuration files are used to orchestrate and organize which model d
 **Functionality**:
 -   **Task Orchestration**: Assign LLM models to agents such as `designer`, `coder`, and `conductor`.
 -   **Flexible Combinations**: Create multiple configuration files for different scenarios (e.g., local vLLM + cloud API).
--   **Default Plan**: Presets are provided by DSL, e.g., `default_triton_config.yaml`.
+-   **Default Plan**: Presets are provided by DSL, e.g., `default_triton_cuda_config.yaml` or `default_triton_ascend_config.yaml`.
 
 **Example (coder-only, local vLLM)**: `vllm_triton_coderonly_config.yaml`
 Use a unified local vLLM model preset for coder-only workflow.
@@ -80,8 +80,8 @@ log_dir: "~/aikg_logs"
 **How to Use**:
 Load a plan configuration using `load_config()`.
 ```python
-# Load preset by DSL: default_triton_config.yaml
-config = load_config(dsl="triton")
+# Load preset by DSL: default_triton_ascend_config.yaml (for Ascend) or default_triton_cuda_config.yaml (for CUDA)
+config = load_config(dsl="triton_ascend", backend="ascend")  # or "triton_cuda" for CUDA backend
 
 # Load a specific configuration file
 config = load_config(config_path="/path/to/your/vllm_custom_path.yaml")

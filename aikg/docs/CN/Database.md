@@ -177,7 +177,7 @@ await database.insert(
     framework_code=framework_code,
     backend="ascend",
     arch="ascend910b4",
-    dsl="triton",
+    dsl="triton_ascend",  # 或使用 "triton_cuda" 用于 CUDA 后端
     framework="mindspore"
 )
 
@@ -190,7 +190,7 @@ results = await database.samples(
     framework_code=framework_code,
     backend="ascend",
     arch="ascend910b4",
-    dsl="triton",
+    dsl="triton_ascend",  # 或使用 "triton_cuda" 用于 CUDA 后端
     framework="mindspore"
 )
 
@@ -199,7 +199,7 @@ await database.delete(
     impl_code=impl_code,
     backend="ascend",
     arch="ascend910b4",
-    dsl="triton"
+    dsl="triton_ascend"  # 或使用 "triton_cuda" 用于 CUDA 后端
 )
 ```
 
@@ -219,7 +219,7 @@ results = await coder_db.samples(
     framework_code=framework_code,
     backend="ascend",
     arch="ascend910b4",
-    dsl="triton"
+    dsl="triton_ascend"  # 或使用 "triton_cuda" 用于 CUDA 后端
 )
 ```
 
@@ -237,7 +237,7 @@ results = await evolve_db.samples(
     impl_code=impl_code,
     backend="ascend",
     arch="ascend910b4",
-    dsl="triton"
+    dsl="triton_ascend"  # 或使用 "triton_cuda" 用于 CUDA 后端
 )
 ```
 

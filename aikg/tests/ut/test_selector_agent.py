@@ -69,13 +69,13 @@ class TestSelectorCore:
         selector = Selector(
             op_name="relu_op",
             task_desc="ReLU activation function",
-            dsl="triton",
+            dsl="triton_ascend",
             config=mock_config
         )
         
         assert selector.op_name == "relu_op"
         assert selector.task_desc == "ReLU activation function"
-        assert selector.dsl == "triton"
+        assert selector.dsl == "triton_ascend"
         assert selector.llm_step_count == 0
     
     @pytest.mark.asyncio
@@ -84,7 +84,7 @@ class TestSelectorCore:
         selector = Selector(
             op_name="relu_op",
             task_desc="ReLU activation function",
-            dsl="triton",
+            dsl="triton_ascend",
             config=mock_config
         )
         
@@ -106,7 +106,7 @@ class TestSelectorCore:
         selector = Selector(
             op_name="relu_op",
             task_desc="ReLU activation function",
-            dsl="triton",
+            dsl="triton_ascend",
             config=mock_config
         )
         
@@ -128,7 +128,7 @@ class TestSelectorCore:
         selector = Selector(
             op_name="relu_op",
             task_desc="ReLU activation function",
-            dsl="triton",
+            dsl="triton_ascend",
             config=mock_config
         )
         
@@ -150,7 +150,7 @@ class TestSelectorCore:
         selector = Selector(
             op_name="relu_op",
             task_desc="ReLU activation function",
-            dsl="triton",
+            dsl="triton_ascend",
             config=mock_config
         )
         

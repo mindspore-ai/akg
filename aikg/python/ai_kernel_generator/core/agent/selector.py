@@ -38,7 +38,7 @@ class Selector(AgentBase):
         self,
         op_name: str,
         task_desc: str,
-        dsl: str = "triton",
+        dsl: str = "triton_ascend",  # 默认使用triton_ascend，也支持triton_cuda
         config: dict = None,
     ):
         """初始化Selector Agent

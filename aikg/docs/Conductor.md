@@ -15,7 +15,7 @@ Conductor is the intelligent task scheduler in the AI Kernel Generator. It inher
 | op_name | str (Required) | Kernel name |
 | task_desc | str (Required) | Task description |
 | task_id | str (Required) | Task ID |
-| dsl | str (Required) | DSL type: "triton", "swft", etc. |
+| dsl | str (Required) | DSL type: "triton_cuda", "triton_ascend", "swft", etc. |
 | framework | str (Required) | Frontend framework: "mindspore", "torch", "numpy", etc. |
 | arch | str (Required) | Hardware architecture: "ascend910b4", "a100", etc. |
 | workflow_config_path | str (Optional) | Workflow configuration file path |

@@ -71,7 +71,7 @@ async def run_torch_evolve_triton():
     config = EvolveConfig()
 
     # 基础配置
-    config.dsl = "triton"
+    config.dsl = "triton_cuda"  # 使用triton_cuda替代通用的triton
     config.framework = "torch"
     config.backend = "cuda"
     config.arch = "a100"

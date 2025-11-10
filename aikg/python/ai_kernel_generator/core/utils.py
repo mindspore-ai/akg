@@ -33,14 +33,61 @@ def check_backend_arch(backend: str, arch: str):
         raise ValueError("cpu backend only support x86_64 and aarch64")
 
 
+def normalize_dsl(dsl: str, backend: str = None) -> str:
+    """
+    规范化DSL类型，将通用的triton根据backend转换为triton_cuda或triton_ascend
+    
+    Args:
+        dsl: 实现类型
+        backend: 硬件后端名称(ascend/cuda/cpu)，用于自动转换triton
+        
+    Returns:
+        规范化后的DSL类型
+        
+    Raises:
+        ValueError: 如果dsl为"triton"但backend未提供或无效
+    """
+    dsl = dsl.lower()
+    
+    # 如果已经是规范化的类型，直接返回
+    if dsl in ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc"]:
+        return dsl
+    
+    # 如果是通用的triton，需要根据backend转换
+    if dsl == "triton":
+        if backend is None:
+            raise ValueError(
+                "dsl='triton' is no longer supported. Please use 'triton_cuda' (for CUDA backend) "
+                "or 'triton_ascend' (for Ascend backend) explicitly. "
+                "Alternatively, provide backend parameter for automatic conversion."
+            )
+        backend = backend.lower()
+        if backend == "cuda":
+            return "triton_cuda"
+        elif backend == "ascend":
+            return "triton_ascend"
+        else:
+            raise ValueError(
+                f"dsl='triton' cannot be used with backend='{backend}'. "
+                "Please use 'triton_cuda' (for CUDA) or 'triton_ascend' (for Ascend) explicitly."
+            )
+    
+    # 其他情况直接返回
+    return dsl
+
+
 def check_dsl(dsl: str):
     """
     验证实现类型
     Args:
-        dsl: 实现类型(triton/swft)
+        dsl: 实现类型(triton_cuda/triton_ascend/triton-russia/swft等)
     """
-    if dsl not in ["triton", "triton-russia", "swft"]:
-        raise ValueError("dsl must be triton or swft")
+    valid_dsls = ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc"]
+    if dsl not in valid_dsls:
+        raise ValueError(
+            f"dsl must be one of {valid_dsls}. "
+            "Note: 'triton' is no longer supported. Use 'triton_cuda' or 'triton_ascend' instead."
+        )
 
 
 def check_task_type(task_type: str):
@@ -59,28 +106,28 @@ VALID_CONFIGS = {
     # framework -> backend -> arch -> dsl
     "mindspore": {
         "ascend": {
-            "ascend910b1": ["triton", "triton-russia"],
-            "ascend910b2": ["triton", "triton-russia"],
-            "ascend910b2c": ["triton", "triton-russia"],
-            "ascend910b3": ["triton", "triton-russia"],
-            "ascend910b4": ["triton", "triton-russia"],
+            "ascend910b1": ["triton_ascend", "triton-russia"],
+            "ascend910b2": ["triton_ascend", "triton-russia"],
+            "ascend910b2c": ["triton_ascend", "triton-russia"],
+            "ascend910b3": ["triton_ascend", "triton-russia"],
+            "ascend910b4": ["triton_ascend", "triton-russia"],
             "ascend310p3": ["swft"]
         },
     },
     "torch": {
         "ascend": {
-            "ascend910b1": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
-            "ascend910b2": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
-            "ascend910b2c": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
-            "ascend910b3": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
-            "ascend910b4": ["triton", "triton-russia", "tilelang_npuir", "ascendc"],
+            "ascend910b1": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc"],
+            "ascend910b2": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc"],
+            "ascend910b2c": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc"],
+            "ascend910b3": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc"],
+            "ascend910b4": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc"],
             "ascend310p3": ["swft", "ascendc"]
         },
         "cuda": {
-            "a100": ["triton", "cuda_c", "tilelang_cuda"],
-            "h20": ["triton", "cuda_c", "tilelang_cuda"],
-            "l20": ["triton", "cuda_c", "tilelang_cuda"],
-            "rtx3090": ["triton", "cuda_c", "tilelang_cuda"],
+            "a100": ["triton_cuda", "cuda_c", "tilelang_cuda"],
+            "h20": ["triton_cuda", "cuda_c", "tilelang_cuda"],
+            "l20": ["triton_cuda", "cuda_c", "tilelang_cuda"],
+            "rtx3090": ["triton_cuda", "cuda_c", "tilelang_cuda"],
         },
         "cpu": {
             "x86_64": ["cpp"],
@@ -118,8 +165,11 @@ def check_task_config(framework: str, backend: str, arch: str, dsl: str):
         framework: 框架类型
         backend: 硬件后端名称
         arch: 硬件架构名称
-        dsl: 实现类型
+        dsl: 实现类型（会自动转换triton为triton_cuda或triton_ascend）
     """
+    # 首先规范化DSL（自动转换triton）
+    normalized_dsl = normalize_dsl(dsl, backend)
+    
     if framework not in VALID_CONFIGS:
         raise ValueError(f"Unsupported framework: {framework}")
 
@@ -132,5 +182,8 @@ def check_task_config(framework: str, backend: str, arch: str, dsl: str):
     if dsl_list is None:
         raise ValueError(f"Backend {backend} does not support arch: {arch}")
 
-    if dsl not in dsl_list:
-        raise ValueError(f"Arch {arch} does not support dsl: {dsl}")
+    if normalized_dsl not in dsl_list:
+        raise ValueError(f"Arch {arch} does not support dsl: {normalized_dsl}")
+    
+    # 返回规范化后的DSL，供调用者使用
+    return normalized_dsl

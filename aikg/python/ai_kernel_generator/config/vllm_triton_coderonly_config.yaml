@@ -14,8 +14,8 @@ workflow_config_path: "config/coder_only_workflow.yaml"
 
 # Documentation directory configuration
 docs_dir:
-  designer: "resources/docs/triton_docs"
-  coder: "resources/docs/triton_docs"
+  designer: "resources/docs/triton_ascend_docs"
+  coder: "resources/docs/triton_ascend_docs"
 
 # Performance analysis configuration
 profile_settings:

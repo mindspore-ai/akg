@@ -55,7 +55,7 @@ evolve.py 文件实现了基于遗传算法的算子进化生成系统，支持�
 |---------|---------|---------|
 | op_name | str (必选) | 算子名称 |
 | task_desc | str (必选) | 任务描述 |
-| dsl | str (必选) | DSL类型："triton"、"swft"等 |
+| dsl | str (必选) | DSL类型："triton_cuda"、"triton_ascend"、"swft"等 |
 | framework | str (必选) | 前端框架："mindspore"、"torch"、"numpy"等 |
 | backend | str (必选) | 后端类型："ascend"、"cuda"等 |
 | arch | str (必选) | 硬件架构："a100"、"ascend910b4"等 |

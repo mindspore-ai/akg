@@ -27,6 +27,7 @@ from pathlib import Path
 
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.utils.process_utils import run_command
+from ai_kernel_generator.core.utils import normalize_dsl
 
 # 模板路径
 TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "kernel_verify_template.j2")
@@ -39,7 +40,7 @@ RUN_TEMPLATE_PATH = os.path.join(get_project_root(), "utils", "compile_tools", "
 
 # 类型定义
 FrameworkType = Literal["torch", "mindspore", "numpy"]
-ImplType = Literal["triton", "triton-russia", "swft", "cuda_c", "cpp", "ascendc"]
+ImplType = Literal["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc"]
 BackendType = Literal["cuda", "ascend", "cpu"]
 ArchType = Literal["a100", "v100", "h20", "l20", "rtx3090", "ascend910b4", "ascend310p3", "x86_64", "aarch64"]
 
@@ -52,7 +53,7 @@ class KernelVerifier:
                  framework_code: str,
                  task_id: str = "0",
                  framework: FrameworkType = "torch",
-                 dsl: ImplType = "triton",
+                 dsl: ImplType = "triton_cuda",
                  backend: BackendType = "cuda",
                  arch: ArchType = "a100",
                  impl_func_name: Optional[str] = None,
@@ -66,7 +67,7 @@ class KernelVerifier:
             log_dir (str): 调试信息目录
             task_id (str, optional): 任务ID，用于生成唯一目录名
             framework (FrameworkType): 深度学习框架，可选值包括 "torch", "mindspore", "numpy"
-            dsl (ImplType): 实现类型，可选值包括 "triton", "triton-russia", "swft"
+            dsl (ImplType): 实现类型，可选值包括 "triton_cuda", "triton_ascend", "triton-russia", "swft"
             backend (BackendType): 计算设备后端，可选值包括 "cuda", "ascend"
             arch (ArchType): 硬件架构，可选值包括 "a100", "v100", "h20", "l20", "rtx3090", "ascend910b4", "ascend310p3"
             impl_func_name (str, optional): 实现函数名，默认为op_name_dsl_framework
@@ -74,7 +75,8 @@ class KernelVerifier:
         self.op_name = op_name
         self.framework_code = framework_code
         self.framework = framework
-        self.dsl = dsl
+        # 规范化DSL（自动转换triton为triton_cuda或triton_ascend）
+        self.dsl = normalize_dsl(dsl, backend)
         self.backend = backend.lower()
         self.arch = arch.lower()
         self.task_id = task_id
@@ -86,7 +88,7 @@ class KernelVerifier:
             self.log_dir = config.get("log_dir")
         else:
             raise ValueError("config is required for KernelVerifier")
-        if "triton" in self.dsl:
+        if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
             self.impl_func_name = impl_func_name or f"{op_name}_triton_{framework}"
         elif self.dsl == "ascendc":
             self.impl_func_name = impl_func_name or f"{op_name}_kernel"
@@ -115,7 +117,7 @@ class KernelVerifier:
         """根据framework和dsl生成适当的import语句"""
         import_lines = []
 
-        if "triton" in self.dsl:
+        if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
             if self.framework == "mindspore":
                 import_lines = [
                     "import torch",
@@ -507,7 +509,7 @@ class KernelVerifier:
             self.gen_profile_project(verify_dir, device_id, warmup_times, run_times)
 
             # 检查是否为triton DSL，如果是则运行脚本获取性能数据
-            if "triton" in self.dsl:
+            if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
                 base_time, gen_time = self.run_profile_scripts_and_collect_results(verify_dir)
             elif self.backend == "ascend":
                 _, _, base_prof_path = self.run_msprof(os.path.join(verify_dir, f"profile_{self.op_name}_base.py"))
@@ -545,8 +547,8 @@ class KernelVerifier:
                 'speedup': speedup
             }
             
-            # 只在 triton + ascend 情况下添加 autotune_summary
-            if "triton" in self.dsl and self.backend == "ascend":
+            # 只在 triton_ascend 情况下添加 autotune_summary
+            if "triton_ascend" in self.dsl and self.backend == "ascend":
                 autotune_summary = self.read_autotune_results_from_directory(verify_dir)
                 if autotune_summary:
                     result['autotune_summary'] = autotune_summary
