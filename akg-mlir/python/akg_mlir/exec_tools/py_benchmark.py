@@ -176,26 +176,23 @@ def _transform_data_to_ctypes_ascend(data,
     for data_idx, d in enumerate(data):
         data_shape = np.array(device_shape[data_idx])
         data_bytes = d.nbytes
-        is_bf16 = False
-        if (d.dtype.name == "bfloat16"):
-            d = d.astype(np.float32)
-            data[data_idx] = d
-            is_bf16 = True
+        is_numpy_bf16 = False
         if isinstance(d, int):
             data_ctypes.append(ctypes.c_int(d))
         elif isinstance(d, np.ndarray):
-            ascend_tensor_obj = akgAscendLaunch.AscendTensorObjStructPyTorch()
-            data_addr = d.ctypes.data_as(ctypes.c_void_p)
-            shape_addr = data_shape.ctypes.data_as(ctypes.c_void_p)
-            is_output = data_idx in output_idx_set
-            is_dynamic = False #now we consider static shape first;
-            ascend_tensor_obj.tensor_info = d
-            ascend_tensor_obj.shape_info = data_shape
-            ascend_tensor_obj.nbytes = data_bytes
-            ascend_tensor_obj.is_output = is_output
-            ascend_tensor_obj.is_dynamic = is_dynamic
-            ascend_tensor_obj.is_bf16 = is_bf16
-            data_ctypes.append(ascend_tensor_obj)
+            if(d.dtype.name == "bfloat16"):
+                d = d.astype(np.float32)
+                data[data_idx] = d
+                is_numpy_bf16 = True
+
+        ascend_tensor_obj = akgAscendLaunch.AscendTensorObjStructPyTorch()
+        is_output = data_idx in output_idx_set
+        ascend_tensor_obj.tensor_info = d
+        ascend_tensor_obj.shape_info = data_shape
+        ascend_tensor_obj.nbytes = data_bytes
+        ascend_tensor_obj.is_output = is_output
+        ascend_tensor_obj.is_bf16 = is_numpy_bf16
+        data_ctypes.append(ascend_tensor_obj)
 
     return data_ctypes
 
