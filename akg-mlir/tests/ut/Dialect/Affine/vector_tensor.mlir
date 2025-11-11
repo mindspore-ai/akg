@@ -12,10 +12,10 @@
 // CHECK-NEXT:   affine.for %arg4 = 0 to 1 {
 // CHECK-NEXT:     %cst = arith.constant 0.000000e+00 : f32
 // CHECK-NEXT:     %subview = memref.subview %0[0] [1] [1] : memref<1xf32> to memref<1xf32>
-// CHECK-NEXT:     %5 = bufferization.to_tensor %subview : memref<1xf32>
+// CHECK-NEXT:     %5 = bufferization.to_tensor %subview restrict writable : memref<1xf32>
 // CHECK-NEXT:     %cst_3 = arith.constant 0.000000e+00 : f32
 // CHECK-NEXT:     %subview_4 = memref.subview %1[0] [1] [1] : memref<1xf32> to memref<1xf32>
-// CHECK-NEXT:     %6 = bufferization.to_tensor %subview_4 : memref<1xf32>
+// CHECK-NEXT:     %6 = bufferization.to_tensor %subview_4 restrict writable : memref<1xf32>
 // CHECK-NEXT:     %7 = arith.addf %5, %6 : tensor<1xf32>
 // CHECK-NEXT:     %subview_5 = memref.subview %alloc[0] [1] [1] : memref<1xf32> to memref<1xf32>
 // CHECK-NEXT:     %8 = bufferization.to_memref %7 : memref<1xf32>

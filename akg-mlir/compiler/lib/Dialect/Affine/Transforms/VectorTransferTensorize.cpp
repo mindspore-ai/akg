@@ -20,13 +20,14 @@
 //     1. vector.transfer_{read|write}
 //     2. scalar / vector arith.constant
 //     3. elementwise pure operators (generic, interface/type-based)
-//  into tensor form.
+//  into tensor form, and marks created tensor ops with a "restrict" attr.
 //
 //===----------------------------------------------------------------------===*/
 
 #include "akg/Dialect/Affine/Transforms/VectorTransferTensorize.h"
 
 #include <algorithm>
+#include <cstdint>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
@@ -36,6 +37,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
@@ -121,12 +123,15 @@ struct TensorizeState {
 
 //==============================================================================
 // Build 1-D subview along the innermost dimension
+// sliceLen == 0 → use the full length of the last dimension
+// sliceLen != 0 → use the specified length
 //==============================================================================
 
 static FailureOr<Value> buildSubview1D(OpBuilder &b,
                                        Location loc,
                                        Value src,
-                                       ValueRange indices) {
+                                       ValueRange indices,
+                                       unsigned sliceLen = 0) {
   auto srcTy = src.getType().dyn_cast<MemRefType>();
   if (!srcTy || !srcTy.hasStaticShape()) {
     return mlir::failure();
@@ -151,25 +156,27 @@ static FailureOr<Value> buildSubview1D(OpBuilder &b,
     }
     szs.push_back(b.getIndexAttr(1));
   }
+
   offs.push_back(b.getIndexAttr(0));
-  szs.push_back(b.getIndexAttr(srcTy.getShape().back()));
+  int64_t fullLen = srcTy.getShape().back();
+  int64_t len = sliceLen ? static_cast<int64_t>(sliceLen) : fullLen;
+  szs.push_back(b.getIndexAttr(len));
 
   MemRefType resTy;
   if (dynOff) {
     auto layout = StridedLayoutAttr::get(b.getContext(), mlir::ShapedType::kDynamic, {1});
-    resTy = MemRefType::get({srcTy.getShape().back()},
+    resTy = MemRefType::get({len},
                             srcTy.getElementType(),
                             layout,
                             srcTy.getMemorySpace());
   } else {
-    resTy = MemRefType::get({srcTy.getShape().back()},
+    resTy = MemRefType::get({len},
                             srcTy.getElementType(),
                             AffineMapAttr(),
                             srcTy.getMemorySpace());
   }
 
-  auto sub =
-      b.create<memref::SubViewOp>(loc, resTy, src, offs, szs, strides).getResult();
+  auto sub = b.create<memref::SubViewOp>(loc, resTy, src, offs, szs, strides).getResult();
   return FailureOr<Value>(sub);
 }
 
@@ -183,13 +190,15 @@ static FailureOr<arith::ConstantOp> createTensorConstant(arith::ConstantOp cst,
   Attribute val = cst.getValue();
   // Direct DenseElements
   if (auto dense = val.dyn_cast<DenseElementsAttr>()) {
+    arith::ConstantOp newOp;
     if (dense.getType() == tty) {
-      return b.create<arith::ConstantOp>(cst.getLoc(), dense);
+      newOp = b.create<arith::ConstantOp>(cst.getLoc(), dense);
+    } else if (dense.getNumElements() == tty.getNumElements()) {
+      newOp = b.create<arith::ConstantOp>(cst.getLoc(), dense.reshape(tty));
+    } else {
+      return mlir::failure();
     }
-    if (dense.getNumElements() == tty.getNumElements()) {
-      return b.create<arith::ConstantOp>(cst.getLoc(), dense.reshape(tty));
-    }
-    return mlir::failure();
+    return newOp;
   }
   // Scalar → broadcast
   Attribute elem = val;
@@ -203,7 +212,8 @@ static FailureOr<arith::ConstantOp> createTensorConstant(arith::ConstantOp cst,
   }
   SmallVector<Attribute> vec(tty.getNumElements(), elem);
   auto dense = DenseElementsAttr::get(tty, vec);
-  return b.create<arith::ConstantOp>(cst.getLoc(), dense);
+  auto newOp = b.create<arith::ConstantOp>(cst.getLoc(), dense);
+  return newOp;
 }
 
 //==============================================================================
@@ -240,8 +250,8 @@ static FailureOr<Operation *> tensorizeOneOp(Operation *, TensorizeState &);
 
 static FailureOr<Operation *> handleTransferRead(vector::TransferReadOp rd,
                                                  TensorizeState &s) {
-  auto svOr =
-      buildSubview1D(s.builder, rd.getLoc(), rd.getSource(), rd.getIndices());
+  unsigned sliceLen = rd.getVectorType().getNumElements();
+  auto svOr = buildSubview1D(s.builder, rd.getLoc(), rd.getSource(), rd.getIndices(), sliceLen);
   if (mlir::failed(svOr)) {
     return mlir::failure();
   }
@@ -250,7 +260,13 @@ static FailureOr<Operation *> handleTransferRead(vector::TransferReadOp rd,
     return mlir::failure();
   }
 
-  auto toT = s.builder.create<bufferization::ToTensorOp>(rd.getLoc(), tty, *svOr);
+  auto toT = s.builder.create<bufferization::ToTensorOp>(
+                rd.getLoc(),
+                tty,
+                *svOr,
+                /*restrict=*/true,
+                /*writable=*/true);
+
   s.track(toT);
   s.addMap(rd.getResult(), toT.getResult());
   s.cover(rd);
@@ -259,8 +275,8 @@ static FailureOr<Operation *> handleTransferRead(vector::TransferReadOp rd,
 
 static FailureOr<Operation *> handleTransferWrite(vector::TransferWriteOp wr,
                                                   TensorizeState &s) {
-  auto svOr =
-      buildSubview1D(s.builder, wr.getLoc(), wr.getSource(), wr.getIndices());
+  unsigned sliceLen = wr.getVectorType().getNumElements();
+  auto svOr = buildSubview1D(s.builder, wr.getLoc(), wr.getSource(), wr.getIndices(), sliceLen);
   if (mlir::failed(svOr)) {
     return mlir::failure();
   }
@@ -285,8 +301,7 @@ static FailureOr<Operation *> handleTransferWrite(vector::TransferWriteOp wr,
     return mlir::failure();
   }
 
-  auto toMem = s.builder.create<bufferization::ToMemrefOp>(
-      wr.getLoc(), (*svOr).getType(), tVal);
+  auto toMem = s.builder.create<bufferization::ToMemrefOp>(wr.getLoc(), (*svOr).getType(), tVal);
   auto cp = s.builder.create<memref::CopyOp>(wr.getLoc(), toMem, *svOr);
   s.track(toMem);
   s.track(cp);
@@ -304,6 +319,7 @@ static FailureOr<Operation *> cloneElemOp(Operation *op,
   SmallVector<Type> resTys(op->getNumResults(), tty);
   st.addTypes(resTys);
   Operation *newOp = s.builder.create(st);
+
   s.track(newOp);
   for (auto [o, n] : llvm::zip(op->getResults(), newOp->getResults())) {
     s.addMap(o, n);
@@ -389,10 +405,6 @@ static FailureOr<Operation *> tensorizeOneOp(Operation *op, TensorizeState &s) {
   return handleElemOp(op, s);
 }
 
-//==============================================================================
-// Pass Implementation
-//==============================================================================
-
 namespace {
 #define GEN_PASS_DECL_VECTORTRANSFERTENSORIZE
 #define GEN_PASS_DEF_VECTORTRANSFERTENSORIZE
@@ -444,10 +456,6 @@ struct VectorTransferTensorizePass
   }
 };
 }  // namespace
-
-//==============================================================================
-// Pass Factory
-//==============================================================================
 
 namespace mlir::affine {
 
