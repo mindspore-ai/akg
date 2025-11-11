@@ -378,11 +378,13 @@ target_include_directories(akg PRIVATE "${TVM_DIR}/topi/include")
 
 # Installation rules
 if(ENABLE_AKG)
-  install(TARGETS akg DESTINATION lib${LIB_SUFFIX})
+  set(AKG_PATH "akg")
+  install(TARGETS akg DESTINATION "lib")
   if (EXISTS ${AUTO_TUNE_LIB})
-    install(FILES ${AUTO_TUNE_LIB} DESTINATION lib${LIB_SUFFIX})
+    install(FILES ${AUTO_TUNE_LIB} DESTINATION "lib")
   endif()
 else()
+  set(AKG_PATH ${CMAKE_CURRENT_BINARY_DIR})
   install(TARGETS akg DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg/lib)
 endif()
 
@@ -390,13 +392,13 @@ install(
   DIRECTORY
   ${TVM_DIR}/python/tvm
   ${TVM_DIR}/topi/python/topi
-  DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg)
+  DESTINATION ${AKG_PATH}/akg)
 install(
   DIRECTORY
   ${AKG_SOURCE_DIR}/src/akg_reduce
   ${AKG_SOURCE_DIR}/src/paris_reduce
   ${AKG_SOURCE_DIR}/src/akg_mma_lib
   ${AKG_SOURCE_DIR}/src/akg_random
-  DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg/include)
+  DESTINATION ${AKG_PATH}/akg/include)
 file(GLOB REPOSITORY_FILE_LIST ${AKG_SOURCE_DIR}/python/akg/composite/*.json)
-install(FILES ${REPOSITORY_FILE_LIST} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg/config)
+install(FILES ${REPOSITORY_FILE_LIST} DESTINATION ${AKG_PATH}/akg/config)
