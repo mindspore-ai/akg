@@ -228,7 +228,7 @@ async def test_data_field_validation():
         'hash': 'test_hash',
         'agent_name': 'designer',
         'op_name': 'test_op',
-        'dsl': 'triton',
+        'dsl': 'triton_cuda',  # cuda backend 使用 triton_cuda
         'backend': 'cuda',
         'arch': 'A100',
         'framework': 'torch',

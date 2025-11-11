@@ -66,7 +66,7 @@ def load_meta_prompts(dsl: str, parallel_num: int) -> list[str]:
     返回长度为 parallel_num 的 meta prompt 列表。
 
     Args:
-        dsl: DSL类型（如 "triton", "swft" 等）
+        dsl: DSL类型（如 "triton_cuda", "triton_ascend", "swft" 等）
         parallel_num: 并行任务数
 
     Returns:
@@ -78,11 +78,15 @@ def load_meta_prompts(dsl: str, parallel_num: int) -> list[str]:
     """
     try:
         # 根据DSL类型动态导入对应的meta_prompts
-        if dsl == "triton":
-            from ai_kernel_generator.resources.docs.triton_docs.meta_prompts import (
+        if dsl == "triton_ascend":
+            from ai_kernel_generator.resources.docs.triton_ascend_docs.meta_prompts import (
                 triton_meta_prompts,
             )
             meta_prompts = triton_meta_prompts
+        elif dsl == "triton_cuda":
+            # triton_cuda 目前可能没有单独的 meta_prompts，使用通用的或跳过
+            logger.warning(f"DSL '{dsl}' does not support meta prompts yet, using empty prompts")
+            return [""] * parallel_num
         elif dsl == "swft":
             # 如果swft有meta_prompts，可以在这里添加
             # from ai_kernel_generator.resources.docs.swft_docs.meta_prompts import swft_meta_prompts

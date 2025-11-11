@@ -15,7 +15,7 @@ Conductor 是 AI Kernel Generator 中的智能任务调度器，继承自 `Agent
 | op_name | str (必选) | 算子名称 |
 | task_desc | str (必选) | 任务描述 |
 | task_id | str (必选) | 任务ID |
-| dsl | str (必选) | DSL类型："triton"、"swft"等 |
+| dsl | str (必选) | DSL类型："triton_cuda"、"triton_ascend"、"swft"等 |
 | framework | str (必选) | 前端框架："mindspore"、"torch"、"numpy"等 |
 | arch | str (必选) | 硬件架构："ascend910b4"、"a100"等 |
 | workflow_config_path | str (可选) | workflow配置文件路径 |

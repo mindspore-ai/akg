@@ -19,7 +19,7 @@ Task 模块是 AI Kernel Generator 的核心组件，负责执行单个算子的
 | task_id | str (必选) | 任务 id，用于区分同名算子的不同 shape/计算 |
 | backend | str (必选) | 计算后端：`ascend`/`cuda`/`cpu` |
 | arch | str (必选) | 硬件架构，如 `ascend910b4`/`a100` 等 |
-| dsl | str (必选) | 目标实现 DSL：`triton`/`swft`等 |
+| dsl | str (必选) | 目标实现 DSL：`triton_cuda`/`triton_ascend`/`swft`等 |
 | config | dict (必选) | 任务编排方案配置，包含 `agent_model_config`、`workflow_config_path`、`docs_dir` 等 |
 | device_pool | DevicePool (必选) | 设备资源池 |
 | framework | str (必选) | 框架类型：`mindspore`/`torch`/`numpy` |
@@ -53,7 +53,7 @@ task = Task(
     backend="ascend",
     arch="ascend310p3",
     dsl="swft",
-    config=load_config(dsl="triton"),
+    config=load_config(dsl="triton_ascend", backend="ascend"),  # 或使用 "triton_cuda" 用于 CUDA 后端
     device_pool=global_device_pool
 )
 

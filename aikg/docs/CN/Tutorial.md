@@ -64,16 +64,16 @@ async def run_mindspore_triton_single():
 
     task_pool = TaskPool()
     device_pool = DevicePool([0])
-    config = load_config(dsl="triton")  # 基于 DSL 选择默认方案
+    config = load_config(dsl="triton_ascend", backend="ascend")  # 基于 DSL 选择默认方案
 
     # 推荐：运行前进行环境检查
-    check_env_for_task("mindspore", "ascend", "triton", config)
+    check_env_for_task("mindspore", "ascend", "triton_ascend", config)
 
     task = Task(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",
-        dsl="triton",
+        dsl="triton_ascend",
         backend="ascend",
         arch="ascend910b4",
         config=config,
@@ -93,7 +93,7 @@ async def run_mindspore_triton_single():
 | op_name | str | 算子名称 |
 | task_desc | str | 任务描述（包含模型定义和测试数据生成） |
 | task_id | str | 任务唯一标识符 |
-| dsl | str | 目标 DSL：如 "triton"、"swft" |
+| dsl | str | 目标 DSL：如 "triton_cuda"、"triton_ascend"、"swft" |
 | backend | str | 计算后端：如 "ascend"、"cuda" |
 | arch | str | 硬件架构：如 "ascend910b4" |
 | config | dict | 任务编排方案配置（包含 `agent_model_config`、`workflow_config_path`、`docs_dir` 等） |
@@ -101,7 +101,7 @@ async def run_mindspore_triton_single():
 | framework | str | 前端框架：如 "mindspore"、"torch"、"numpy" |
 | workflow | str | 可选。覆盖配置中的 `workflow_config_path`，如 "coder_only_workflow" |
 
-> 配置说明：`load_config("triton")` 会加载 `config/default_triton_config.yaml` 作为方案；若需 vLLM 本地推理且 coder-only，可使用 `vllm_triton_coderonly_config.yaml` 并通过 `load_config(config_path=...)` 显式指定。
+> 配置说明：`load_config("triton_ascend", backend="ascend")` 会加载 `config/default_triton_ascend_config.yaml` 作为方案（Ascend后端），或使用 `load_config("triton_cuda", backend="cuda")` 加载 `config/default_triton_cuda_config.yaml`（CUDA后端）；若需 vLLM 本地推理且 coder-only，可使用 `vllm_triton_coderonly_config.yaml` 并通过 `load_config(config_path=...)` 显式指定。
 
 ## 运行步骤
 

@@ -23,7 +23,7 @@ from ai_kernel_generator.config.config_validator import load_config
 @pytest.mark.asyncio
 async def test_feature_extract():
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_ascend"
 
     op_name = "relu"
 

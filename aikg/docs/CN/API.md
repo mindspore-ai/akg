@@ -61,7 +61,7 @@ export AIKG_MOONSHOT_API_KEY=sk-xxx
 **功能**:
 -   **任务编排**: 为 `designer`、`coder`、`conductor` 等 Agent 指派不同的 LLM 模型。
 -   **灵活组合**: 可以创建多个配置文件，以应对不同场景（如本地 vLLM 与云端 API 混合）。
--   **默认方案**: 按 DSL 提供默认方案，例如 `default_triton_config.yaml`。
+-   **默认方案**: 按 DSL 提供默认方案，例如 `default_triton_cuda_config.yaml` 或 `default_triton_ascend_config.yaml`。
 
 **示例（coder-only，本地 vLLM）**：`vllm_triton_coderonly_config.yaml`
 为 coder-only 流程配置统一的本地 vLLM 模型。
@@ -83,7 +83,7 @@ log_dir: "~/aikg_logs"
 在代码中，通过 `load_config()` 加载配置。
 ```python
 # 按 DSL 加载默认方案
-config = load_config(dsl="triton")
+config = load_config(dsl="triton_ascend", backend="ascend")  # 或使用 "triton_cuda" 用于 CUDA 后端
 
 # 或加载指定的配置文件
 config = load_config(config_path="/path/to/your/vllm_custom_plan.yaml")

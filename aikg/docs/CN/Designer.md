@@ -15,7 +15,7 @@ Designer是AI Kernel Generator中的核心组件，基于大语言模型(LLM)自
 |---------|---------|---------|
 | op_name | str (必需) | 算子名称，标识特定算子 |
 | task_desc | str (必需) | 任务描述，详细说明算子功能需求 |
-| dsl | str (必需) | 设计语言："triton"、"swft"等 |
+| dsl | str (必需) | 设计语言："triton_cuda"、"triton_ascend"、"swft"等 |
 | backend | str (必需) | 硬件后端："ascend"、"cuda"等 |
 | arch | str (必需) | 硬件架构："ascend910b4"、"a100"等 |
 | workflow_config_path | str (可选) | 工作流配置文件路径（通常由 Task 根据编排配置注入） |

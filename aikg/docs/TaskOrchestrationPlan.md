@@ -78,8 +78,8 @@ See the [Doc-Driven Integration Guide](./DocDrivenIntegration.md).
 ```yaml
 # Example docs configuration
 docs_dir:
-  designer: "resources/docs/triton_docs"    # Designer docs (e.g., DSL syntax)
-  coder: "resources/docs/triton_docs"       # Coder docs (e.g., DSL syntax)
+  designer: "resources/docs/triton_ascend_docs"    # Designer docs (e.g., DSL syntax)
+  coder: "resources/docs/triton_ascend_docs"       # Coder docs (e.g., DSL syntax)
 ```
 
 ### 5. Performance Analysis Configuration (profile_settings)
@@ -102,7 +102,7 @@ Sets the timeout for code verification:
 
 ## Preset Plans
 
-### Triton Configuration (default_triton_config.yaml)
+### Triton Configuration (default_triton_cuda_config.yaml / default_triton_ascend_config.yaml)
 
 **Use Case**: Triton kernel development
 
@@ -111,7 +111,9 @@ Sets the timeout for code verification:
 - Targets Triton code generation
 - Supports Ascend NPU / CUDA GPU backend
 
-**Configuration Example**: [`config/default_triton_config.yaml`](../python/ai_kernel_generator/config/default_triton_config.yaml)
+**Configuration Examples**: 
+- [`config/default_triton_cuda_config.yaml`](../python/ai_kernel_generator/config/default_triton_cuda_config.yaml) (for CUDA backend)
+- [`config/default_triton_ascend_config.yaml`](../python/ai_kernel_generator/config/default_triton_ascend_config.yaml) (for Ascend backend)
 
 ### SWFT Configuration (default_swft_config.yaml)
 
@@ -128,19 +130,19 @@ Sets the timeout for code verification:
 from ai_kernel_generator.config.config_validator import load_config
 
 # Option 1: Load preset by DSL (e.g., triton)
-config = load_config(dsl="triton")
+config = load_config(dsl="triton_ascend", backend="ascend")  # or "triton_cuda" for CUDA backend
 
 # Option 2: Load by explicit plan path
 config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
 
-task = Task(op_name="relu", task_desc="...", dsl="triton", config=config)
+task = Task(op_name="relu", task_desc="...", dsl="triton_ascend", config=config)  # or "triton_cuda" for CUDA
 ```
 
 ### 2. Custom Configuration Override
 
 ```python
 # Customize based on default configuration
-config = load_config(dsl="triton")
+config = load_config(dsl="triton_ascend", backend="ascend")  # or "triton_cuda" for CUDA backend
 
 # Override specific configuration items
 config.update({

@@ -88,16 +88,16 @@ async def run_mindspore_triton_parallel():
 
     task_pool = TaskPool()
     device_pool = DevicePool([0, 1])
-    config = load_config("triton")  # or load_config("/your-path-to-config/xxx_config.yaml")
+    config = load_config("triton_ascend", backend="ascend")  # or load_config("/your-path-to-config/xxx_config.yaml")
 
-    check_env_for_task("mindspore", "ascend", "triton", config)
+    check_env_for_task("mindspore", "ascend", "triton_ascend", config)
 
     for i, (op_name, task_desc) in enumerate(op_name_and_task_desc):
         task = Task(
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),
-            dsl="triton",
+            dsl="triton_ascend",
             backend="ascend",
             arch="ascend910b4",
             config=config,

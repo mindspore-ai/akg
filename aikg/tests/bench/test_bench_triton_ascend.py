@@ -27,7 +27,7 @@ os.environ['AIKG_DATA_COLLECT'] = 'on'
 async def test_kernelbench_mindspore_triton_ascend910b4():
     """测试 KernelBench - MindSpore Triton Ascend910B4"""
     framework = "mindspore"
-    dsl = "triton"
+    dsl = "triton_ascend"
     backend = "ascend"
     arch = "ascend910b4"
     benchmark = "KernelBench"
@@ -82,7 +82,7 @@ async def test_kernelbench_mindspore_triton_ascend910b4():
 async def test_kernelbench_torch_triton_ascend910b4():
     """测试 KernelBench - PyTorch Triton Ascend910B4"""
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_ascend"
     backend = "ascend"
     arch = "ascend910b4"
     benchmark = "KernelBench"
@@ -137,7 +137,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
 async def test_multikernelbench_activation_torch_triton_ascend910b4():
     """测试 MultiKernelBench - PyTorch Triton Ascend910B4 (激活函数分类)"""
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_ascend"
     backend = "ascend"
     arch = "ascend910b4"
     benchmark = "MultiKernelBench"
@@ -217,7 +217,7 @@ async def test_multikernelbench_activation_torch_triton_ascend910b4():
 async def test_aikgbench_torch_triton_ascend910b4():
     """测试 AIKGBench - PyTorch Triton Ascend910B4"""
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_ascend"
     backend = "ascend"
     arch = "ascend910b4"
     benchmark = "AIKGBench"

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 from ai_kernel_generator.utils.common_utils import load_yaml
 from ai_kernel_generator import get_project_root
+from ai_kernel_generator.core.utils import normalize_dsl
 
 logger = logging.getLogger(__name__)
 
@@ -88,28 +89,34 @@ class ConfigValidator:
             raise ValueError(f"配置校验失败：{str(e)}")
 
 
-def load_config(dsl="", config_path: Optional[str] = None):
+def load_config(dsl="", config_path: Optional[str] = None, backend: Optional[str] = None):
     """
     加载并验证配置文件
 
     Args:
-        dsl: 领域特定语言类型，用于选择默认配置文件
+        dsl: 领域特定语言类型，用于选择默认配置文件。如果为"triton"，需要提供backend参数进行自动转换
         config_path: 配置文件路径，如果不提供则根据dsl选择默认配置
+        backend: 硬件后端名称(ascend/cuda)，用于自动转换dsl="triton"为triton_cuda或triton_ascend
 
     Returns:
         dict: 验证后的配置
 
     Raises:
-        ValueError: 如果没有config_path且根据dsl找不到默认配置文件
+        ValueError: 如果没有config_path且根据dsl找不到默认配置文件，或dsl="triton"但未提供backend
     """
-    # 1. 有config_path时直接使用config_path
+    # 1. 规范化DSL（自动转换triton）
+    if dsl:
+        normalized_dsl = normalize_dsl(dsl, backend)
+        dsl = normalized_dsl  # 使用规范化后的DSL
+    
+    # 2. 有config_path时直接使用config_path
     if config_path:
         final_config_path = Path(config_path)
     else:
-        # 2. 没有config_path时，根据dsl选择默认配置
+        # 3. 没有config_path时，根据dsl选择默认配置
         final_config_path = Path(__file__).parent / f"default_{dsl}_config.yaml"
 
-    # 3. 检查默认配置文件是否存在，不存在就抛出错误
+    # 4. 检查默认配置文件是否存在，不存在就抛出错误
     if not final_config_path.exists():
         raise ValueError(f"No default config found for dsl '{dsl}'. "
                          f"Please provide config_path like load_config('/path-to-config/xxx_config.yaml') "

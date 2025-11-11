@@ -20,7 +20,7 @@ from ai_kernel_generator.utils.environment_check import check_env_for_task
 async def test_kernelbench_mindspore_triton_ascend910b4():
     """测试 KernelBench - MindSpore Triton Ascend910B4"""
     framework = "mindspore"
-    dsl = "triton"
+    dsl = "triton_ascend"
     backend = "ascend"
     arch = "ascend910b4"
     benchmark = "KernelBench"
@@ -75,7 +75,7 @@ async def test_kernelbench_mindspore_triton_ascend910b4():
 async def test_kernelbench_torch_triton_ascend910b4():
     """测试 KernelBench - PyTorch Triton Ascend910B4"""
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_ascend"
     backend = "ascend"
     arch = "ascend910b4"
     benchmark = "KernelBench"
@@ -130,7 +130,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
 async def test_multikernelbench_activation_torch_triton_ascend910b4():
     """测试 MultiKernelBench - PyTorch Triton Ascend910B4 (激活函数分类)"""
     framework = "torch"
-    dsl = "triton"
+    dsl = "triton_ascend"
     backend = "ascend"
     arch = "ascend910b4"
     benchmark = "MultiKernelBench"

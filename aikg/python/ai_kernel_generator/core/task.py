@@ -72,8 +72,8 @@ class Task:
             meta_prompts (str, optional): 元提示。
             handwrite_suggestions (List[Dict[str, str]], optional): 手写优化建议列表。
         """
-        # 验证任务配置
-        check_task_config(framework, backend, arch, dsl)
+        # 验证任务配置并规范化DSL（自动转换triton为triton_cuda或triton_ascend）
+        normalized_dsl = check_task_config(framework, backend, arch, dsl)
         check_task_type(task_type)
 
         # 基础属性
@@ -82,7 +82,7 @@ class Task:
         self.task_id = task_id
         self.backend = backend.lower()
         self.arch = arch.lower()
-        self.dsl = dsl.lower()
+        self.dsl = normalized_dsl.lower()  # 使用规范化后的DSL
         self.framework = framework.lower()
         self.task_type = task_type
         self.device_pool = device_pool

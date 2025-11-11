@@ -100,7 +100,7 @@ class TestHandwriteLoaderCore:
         with patch('ai_kernel_generator.utils.handwrite_loader.get_project_root') as mock_root:
             mock_root.return_value = str(temp_handwrite_dir['temp_dir'])
             
-            loader = HandwriteLoader(dsl="triton")
+            loader = HandwriteLoader(dsl="triton_ascend")
             
             # 验证加载
             assert len(loader._all_data_pairs) == 5
@@ -132,7 +132,7 @@ class TestHandwriteLoaderCore:
             mock_root.return_value = str(temp_handwrite_dir['temp_dir'])
             
             loader = HandwriteLoader(
-                dsl="triton",
+                dsl="triton_ascend",
                 op_name="relu_op",
                 task_desc="ReLU activation",
                 config={'agent_model_config': {'default': {}}}

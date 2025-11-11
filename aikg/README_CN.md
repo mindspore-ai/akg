@@ -93,7 +93,7 @@ export AIKG_VLLM_API_BASE=http://localhost:8000/v1
 export AIKG_OLLAMA_API_BASE=http://localhost:11434
 ```
 更多配置选项：
-- **任务编排方案配置（Task Orchestration Plan Configuration）**: 声明一次任务的完整运行方案（包含 `agent_model_config`、`workflow_config_path`、`docs_dir` 等）。常见方案文件：`default_triton_config.yaml`、`vllm_triton_coderonly_config.yaml`。详见《[任务编排方案配置](./docs/CN/TaskOrchestrationPlan.md)》。
+- **任务编排方案配置（Task Orchestration Plan Configuration）**: 声明一次任务的完整运行方案（包含 `agent_model_config`、`workflow_config_path`、`docs_dir` 等）。常见方案文件：`default_triton_cuda_config.yaml`、`default_triton_ascend_config.yaml`、`vllm_triton_coderonly_config.yaml`。详见《[任务编排方案配置](./docs/CN/TaskOrchestrationPlan.md)》。
 - **模型配置**: `llm_config.yaml` 中预设了多种 LLM 服务商的模型配置（DeepSeek、Qwen、Moonshot 等）。编排配置中的 `agent_model_config` 取值来源于该文件的预设名称。
 - **工作流定义（Workflow）**: 通过 `workflow_config_path` 指定工作流 YAML，定义 Agent 执行顺序与约束，支持 `default_workflow.yaml`、`coder_only_workflow.yaml` 等。详见《[工作流系统设计文档](./docs/CN/Workflow.md)》。
 - **文档驱动式接入（Doc-Driven Integration）**: 通过编排配置的 `docs_dir` 为各 Agent 提供参考文档目录。详见《[文档驱动式接入指南](./docs/CN/DocDrivenIntegration.md)》。

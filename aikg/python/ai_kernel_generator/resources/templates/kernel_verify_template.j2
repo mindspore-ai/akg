@@ -47,8 +47,14 @@ MS_TO_NP_DTYPE_MAP = {
 }
 {% endif %}
 
-{% if "triton" in dsl %}
-from {{ op_name }}_triton import {{ impl_func_name }}
+{% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
+{% if dsl == "triton_cuda" %}
+from {{ op_name }}_triton_cuda import {{ impl_func_name }}
+{% elif dsl == "triton_ascend" %}
+from {{ op_name }}_triton_ascend import {{ impl_func_name }}
+{% else %}
+from {{ op_name }}_{{ dsl }} import {{ impl_func_name }}
+{% endif %}
 {% elif dsl == "tilelang_npuir" %}
 import tilelang
 tilelang.cache.clear_cache()
@@ -418,7 +424,7 @@ def verify_implementations():
         
         # 加载SWFT输出
         impl_output = load_binary_data(data_dir, framework_output)
-        {% elif dsl in ["triton", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda"] %}
+        {% elif dsl in ["triton_cuda", "triton_ascend", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda"] %}
         # 运行实现
         impl_output = {{ impl_func_name }}(*inputs_for_impl)
         {% elif dsl == "ascendc" %}
