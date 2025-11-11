@@ -3,31 +3,21 @@ import torch.nn as nn
 
 
 class Model(nn.Module):
-    def __init__(self, alpha=0.5):
+    def __init__(self):
         super(Model, self).__init__()
-        self.alpha = alpha
 
     def forward(self, input1, input2):
-        # torch.add(input, other, *, alpha=1, out=None)
-        # Adds other to input tensor element-wise.
-        # If alpha is specified, other is multiplied by alpha before addition.
-        # This is an element-wise addition with alpha=0.5.
-        # Element-wise addition is commonly used in neural networks for:
-        # - Implementing residual connections
-        # - Adding bias terms
-        # - Combining feature maps
-        return torch.add(input1, input2, alpha=self.alpha)
+        return input1 + input2
 
 
 def get_inputs():
-    # Batch size: 1024
-    # Hidden dimension: 4096
-    input1 = torch.randn(1024, 4096, dtype=torch.float32)
-    input2 = torch.randn(1024, 4096, dtype=torch.float32)
+    input1 = torch.randn(131072, 2048, dtype=torch.float32)
+    input2 = torch.randn(1, 2048, dtype=torch.float32)
     return [input1, input2]
 
 
 def get_init_inputs():
-    # Parameters for add
-    alpha = 0.5
-    return [alpha]
+    # No parameters needed for add
+    return []
+
+

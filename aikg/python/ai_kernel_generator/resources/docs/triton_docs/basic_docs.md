@@ -99,47 +99,78 @@ def reduction_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr
 ```
 
 ### 3.3 矩阵乘法模式
-使用块指针高效处理 2D 数据。
+适用于矩阵乘法等多维块计算,使用固定核心数启动。
 
 ```python
 @triton.jit
-def matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
-    # 获取程序 ID
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
-    
-    # 初始化累加器
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    
-    # 主循环：沿 K 轴迭代
-    for k in range(0, K, BLOCK_SIZE_K):
-        # 创建块指针
-        a_block_ptr = tl.make_block_ptr(
-            base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-            offsets=(pid_m * BLOCK_SIZE_M, k), 
-            block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K), order=(1, 0)
-        )
-        b_block_ptr = tl.make_block_ptr(
-            base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-            offsets=(k, pid_n * BLOCK_SIZE_N), 
-            block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N), order=(1, 0)
-        )
-        
-        # 加载数据块
-        a = tl.load(a_block_ptr, boundary_check=(0, 1))
-        b = tl.load(b_block_ptr, boundary_check=(0, 1))
-        
-        # 矩阵乘加
-        accumulator += tl.dot(a, b)
-    
-    # 存储结果
-    c_block_ptr = tl.make_block_ptr(
-        base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-        offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
-        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0)
+def matmul_kernel(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    num_cores: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    # 关键:使用固定核心数启动,每个核心处理多个块
+    pid = tl.program_id(0)  # 核心ID: 0~num_cores-1
+    NUM_BLOCKS_M = triton.cdiv(M, BLOCK_M)
+    NUM_BLOCKS_N = triton.cdiv(N, BLOCK_N)
+    NUM_BLOCKS = NUM_BLOCKS_M * NUM_BLOCKS_N
+
+    # 每个核心循环处理多个块
+    for block_idx in range(pid, NUM_BLOCKS, num_cores):
+        # 计算当前块的2D索引
+        block_m = block_idx // NUM_BLOCKS_N
+        block_n = block_idx % NUM_BLOCKS_N
+
+        # 初始化累加器
+        accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+        # K维度循环
+        for k in range(0, K, BLOCK_K):
+            # 加载A块
+            a_offset = (block_m * BLOCK_M + tl.arange(0, BLOCK_M))[:, None] * K + \
+                       (k + tl.arange(0, BLOCK_K))[None, :]
+            a_mask = (block_m * BLOCK_M + tl.arange(0, BLOCK_M))[:, None] < M
+            a = tl.load(a_ptr + a_offset, mask=a_mask, other=0.0)
+
+            # 加载B块
+            b_offset = (k + tl.arange(0, BLOCK_K))[:, None] * N + \
+                       (block_n * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
+            b_mask = (block_n * BLOCK_N + tl.arange(0, BLOCK_N))[None, :] < N
+            b = tl.load(b_ptr + b_offset, mask=b_mask, other=0.0)
+
+            # 矩阵乘累加
+            accumulator += tl.dot(a, b)
+
+        # 存储结果
+        c_offset = (block_m * BLOCK_M + tl.arange(0, BLOCK_M))[:, None] * N + \
+                   (block_n * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
+        c_mask = ((block_m * BLOCK_M + tl.arange(0, BLOCK_M))[:, None] < M) & \
+                 ((block_n * BLOCK_N + tl.arange(0, BLOCK_N))[None, :] < N)
+        tl.store(c_ptr + c_offset, accumulator, mask=c_mask)
+
+def matmul(a, b):
+    M, K = a.shape
+    K2, N = b.shape
+    assert K == K2
+    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+
+    num_cores = 20  # Ascend 910B4有20个AI Core
+    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 256
+
+    # 关键:固定核心数启动,grid=(num_cores,)不是(NUM_BLOCKS,)
+    matmul_kernel[(num_cores,)](
+        a, b, c, M, N, K, num_cores,
+        BLOCK_M, BLOCK_N, BLOCK_K
     )
-    tl.store(c_block_ptr, accumulator, boundary_check=(0, 1))
+    return c
 ```
+
+**关键点**:
+- ✅ 使用 `grid=(num_cores,)` 固定启动核心数(如20个)
+- ✅ 每个核心通过 `for block_idx in range(pid, NUM_BLOCKS, num_cores)` 循环处理多个块
+- ❌ 不要使用 `grid=(NUM_BLOCKS_M * NUM_BLOCKS_N,)` 为每个块启动一个程序
 
 ## 4. 边界处理示例
 

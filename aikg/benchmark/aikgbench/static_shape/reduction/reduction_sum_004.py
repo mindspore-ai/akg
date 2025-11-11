@@ -8,14 +8,18 @@ class Model(nn.Module):
 
     def forward(self, input_tensor):
         # torch.sum(input, dim, keepdim=False, dtype=None)
-        # This is a reduction operation along dimension 1.
-        return torch.sum(input_tensor, 1)
+        # Returns the sum of each row of the input tensor in the given dimension dim.
+        # This operation is commonly used in neural networks for:
+        # - Computing loss functions (e.g., mean squared error)
+        # - Normalizing activations across batch dimensions
+        # - Pooling operations in convolutional networks
+        return torch.sum(input_tensor, dim=1)
 
 
 def get_inputs():
-    # Batch size: 1024
-    # Hidden dimension: 4096
-    input_tensor = torch.randn(1024, 4096, dtype=torch.float32)
+    # Batch size: 16
+    # Hidden dimension: 2048
+    input_tensor = torch.randn(16, 2048, dtype=torch.float32)
     return [input_tensor]
 
 

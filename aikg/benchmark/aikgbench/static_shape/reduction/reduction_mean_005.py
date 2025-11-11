@@ -18,14 +18,14 @@ class Model(nn.Module):
 
 
 def get_inputs():
-    # Batch size: 1024
-    # Hidden dimension: 4096
-    input_tensor = torch.randn(1024, 4096, dtype=torch.float32)
+    # Batch size: 16
+    # Hidden dimension: 32
+    # Sequence length: 2048
+    input_tensor = torch.randn(16, 32, 2048, dtype=torch.float32)
     return [input_tensor]
 
 
 def get_init_inputs():
-    # Specific dim value for reduction
-    # Reduce along first dimension (batch dimension)
-    dim = 0
+    # Reduce along second and third dimension
+    dim = [1, 2]
     return [dim]
