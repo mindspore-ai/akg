@@ -26,7 +26,7 @@ for n_start in range(0, BLOCK_SIZE_N, SUB_BLOCK_SIZE_N):
 ## 优化2
 ```python
 # 简单Triton
-row_min = -float('inf')
+row_min = float('inf')
 for n_start in range(0, BLOCK_SIZE_N, SUB_BLOCK_SIZE_N):
     # 加载数据……（步骤略）
 
@@ -34,15 +34,15 @@ for n_start in range(0, BLOCK_SIZE_N, SUB_BLOCK_SIZE_N):
     row_min = tl.minimum(curr_min, row_min)
 
 # 优化Triton
-curr_min = tl.full((BLOCK_SIZE_M, SUB_BLOCK_SIZE_N), -float('inf'), dtype=tl.float32)
+curr_min = tl.full((BLOCK_SIZE_M, SUB_BLOCK_SIZE_N), float('inf'), dtype=tl.float32)
 for n_start in range(0, BLOCK_SIZE_N, SUB_BLOCK_SIZE_N):
     # 加载数据……（步骤略）
     
     curr_min = tl.minimum(data_block, curr_min)
 row_min = tl.min(curr_min, 1)
 ```
-**优化内容**：利用计算重组的思想，通过改变计算顺序和数据结构来提升性能。优化前每次循环都要对data_block进行行规约，规约操作相对耗时，重复次数较多时，严重影响性能，优化后利用curr_min保持矩阵结构，维护中间结果，减少规约次数，从而减少计算开销并提升性能。
-**总结**：将通过申请额外的UB暂存中间结果，将多次规约合并为一次的归约，以分摊归约操作的开销，提升整体性能。
+**优化内容**：利用计算重组的思想，通过改变计算顺序和数据结构来提升性能。优化前每次循环都要对data_block进行行归约，归约操作相对耗时，重复次数较多时，严重影响性能，优化后利用curr_min保持矩阵结构，维护中间结果，减少归约次数，从而减少计算开销并提升性能。
+**总结**：将通过申请额外的UB暂存中间结果，将多次归约合并为一次的归约，以分摊归约操作的开销，提升整体性能。
 
 ## 优化3
 ```python
