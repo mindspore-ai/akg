@@ -311,15 +311,28 @@ static FailureOr<Operation *> handleTransferWrite(vector::TransferWriteOp wr,
 
 static FailureOr<Operation *> cloneElemOp(Operation *op,
                                           llvm::ArrayRef<Value> operands,
-                                          RankedTensorType tty,
                                           TensorizeState &s) {
   OperationState st(op->getLoc(), op->getName());
   st.addOperands(operands);
   st.addAttributes(op->getAttrs());
-  SmallVector<Type> resTys(op->getNumResults(), tty);
-  st.addTypes(resTys);
-  Operation *newOp = s.builder.create(st);
 
+  SmallVector<Type> resTys;
+  resTys.reserve(op->getNumResults());
+  for (Type rt : op->getResultTypes()) {
+    if (auto tt = rt.dyn_cast<RankedTensorType>()) {
+      resTys.push_back(tt);
+      continue;
+    }
+    if (auto vt = rt.dyn_cast<mlir::VectorType>()) {
+      resTys.push_back(
+          RankedTensorType::get(vt.getShape(), vt.getElementType()));
+      continue;
+    }
+    return mlir::failure();
+  }
+  st.addTypes(resTys);
+
+  Operation *newOp = s.builder.create(st);
   s.track(newOp);
   for (auto [o, n] : llvm::zip(op->getResults(), newOp->getResults())) {
     s.addMap(o, n);
@@ -392,7 +405,7 @@ static FailureOr<Operation *> handleElemOp(Operation *op, TensorizeState &s) {
     return mlir::failure();
   }
 
-  return cloneElemOp(op, newOps, tty, s);
+  return cloneElemOp(op, newOps, s);
 }
 
 static FailureOr<Operation *> tensorizeOneOp(Operation *op, TensorizeState &s) {
