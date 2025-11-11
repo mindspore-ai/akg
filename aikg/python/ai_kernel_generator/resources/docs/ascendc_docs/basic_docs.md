@@ -12,7 +12,6 @@ AscendC 采用分层内存架构：
 
 **内存类型说明：**
 - **Global Memory (GM)**: 大容量存储，访问延迟较高
-- **Unified Buffer (UB)**: 片上高速缓存，容量小但速度快
 - **Vector Queue (VEC)**: 用于数据流水线传输
 
 ### 2. 计算核心
@@ -20,7 +19,6 @@ AscendC 采用分层内存架构：
 AscendC 支持多种计算核心：
 - **AIC (AI Core)**: 主要计算核心，支持矩阵运算
 - **AIV (AI Vector)**: 向量计算核心，支持向量运算
-- **CPU**: 通用计算核心
 
 ## 核心概念
 
@@ -61,8 +59,6 @@ AscendC::TPipe pipe;
 // 初始化缓冲区
 pipe.InitBuffer(buffer, queueSize, bufferSize);
 
-// 注册计算对象
-REGIST_MATMUL_OBJ(&pipe, workspacePtr, matmulObj, &tiling);
 ```
 
 ### 3. 队列 (Queue)
@@ -87,13 +83,14 @@ LocalTensor<T> result = outQueue.DeQue<T>();
 缓冲区用于临时数据存储：
 
 ```cpp
-AscendC::TBuf<AscendC::TPosition::UB> tmpBuf;
-
-// 分配张量
-LocalTensor<T> tensor = tmpBuf.AllocTensor<T>();
-
-// 释放张量
-tmpBuf.FreeTensor(tensor);
+    AscendC::TPipe pipe;
+    AscendC::TBuf<AscendC::TPosition::VECCALC> calcBuf; // 模板参数为TPosition中的VECCALC类型
+    uint32_t byteLen = 1024;
+    pipe.InitBuffer(calcBuf, byteLen);
+    // 从calcBuf获取Tensor,Tensor为pipe分配的所有内存大小，为1024字节
+    AscendC::LocalTensor<int32_t> tempTensor1 = calcBuf.Get<int32_t>();
+    // 从calcBuf获取Tensor,Tensor为128个int32_t类型元素的内存大小，为512字节
+    AscendC::LocalTensor<int32_t> tempTensor2 = calcBuf.Get<int32_t>(128);
 ```
 
 ## 编程模式
@@ -128,192 +125,95 @@ private:
 
 ### 2. 流水线模式
 
-使用队列实现数据流水线：
+使用队列实现加法数据流水线：
 
 ```cpp
-class PipelineKernel {
+constexpr int32_t BUFFER_NUM = 2; // tensor num for each queue
+class KernelAdd {
 public:
-    __aicore__ inline void Process() {
-        CopyIn();
-        Compute();
-        CopyOut();
+    __aicore__ inline KernelOps() {}
+    __aicore__ inline void Init(GM_ADDR x, GM_ADDR y, GM_ADDR z, uint32_t totalLength)
+    {
+        this->blockLength = totalLength / AscendC::GetBlockNum();
+        this->tileNum = 8;
+        this->tileLength = this->blockLength / this->tileNum / BUFFER_NUM;
+        xGm.SetGlobalBuffer((__gm__ half *)x + this->blockLength * AscendC::GetBlockIdx(), this->blockLength);
+        yGm.SetGlobalBuffer((__gm__ half *)y + this->blockLength * AscendC::GetBlockIdx(), this->blockLength);
+        zGm.SetGlobalBuffer((__gm__ half *)z + this->blockLength * AscendC::GetBlockIdx(), this->blockLength);
+        pipe.InitBuffer(inQueueX, BUFFER_NUM, this->tileLength * sizeof(half));
+        pipe.InitBuffer(inQueueY, BUFFER_NUM, this->tileLength * sizeof(half));
+        pipe.InitBuffer(outQueueZ, BUFFER_NUM, this->tileLength * sizeof(half));
     }
-
-private:
-    __aicore__ inline void CopyIn() {
-        LocalTensor<T> input = inQueue.AllocTensor<T>();
-        AscendC::DataCopy(input, inputGm, length);
-        inQueue.EnQue(input);
-    }
-    
-    __aicore__ inline void Compute() {
-        LocalTensor<T> input = inQueue.DeQue<T>();
-        LocalTensor<T> output = outQueue.AllocTensor<T>();
-        
-        // 执行计算
-        AscendC::Add(output, input, bias);
-        
-        outQueue.EnQue(output);
-        inQueue.FreeTensor(input);
-    }
-    
-    __aicore__ inline void CopyOut() {
-        LocalTensor<T> output = outQueue.DeQue<T>();
-        AscendC::DataCopy(outputGm, output, length);
-        outQueue.FreeTensor(output);
-    }
-};
-```
-
-### 3. 矩阵乘法模式
-
-使用高阶 API 实现矩阵乘法：
-
-```cpp
-template <typename aType, typename bType, typename cType, typename biasType>
-class MatmulKernel {
-public:
-    __aicore__ inline void Init(GM_ADDR a, GM_ADDR b, GM_ADDR bias, GM_ADDR c, const TCubeTiling& tiling) {
-        // 设置全局张量
-        aGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ aType*>(a), tiling.M * tiling.Ka);
-        bGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ bType*>(b), tiling.Kb * tiling.N);
-        cGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ cType*>(c), tiling.M * tiling.N);
-        
-        // 计算偏移
-        CalcOffset(AscendC::GetBlockIdx(), offsetA, offsetB, offsetC, offsetBias);
-        
-        // 设置张量偏移
-        aGlobal = aGlobal[offsetA];
-        bGlobal = bGlobal[offsetB];
-        cGlobal = cGlobal[offsetC];
-    }
-    
-    __aicore__ inline void Process(AscendC::TPipe* pipe) {
-        // 设置输入矩阵
-        matmulObj.SetTensorA(aGlobal, isAtrans);
-        matmulObj.SetTensorB(bGlobal, isBtrans);
-        
-        // 设置偏置
-        if (tiling.isBias) {
-            matmulObj.SetBias(biasGlobal);
+    __aicore__ inline void Process()
+    {
+        int32_t loopCount = this->tileNum * BUFFER_NUM;
+        for (int32_t i = 0; i < loopCount; i++) {
+            CopyIn(i);
+            Compute(i);
+            CopyOut(i);
         }
-        
-        // 执行矩阵乘法
-        matmulObj.IterateAll(cGlobal);
-        matmulObj.End();
-    }
-};
-```
-
-### 4. 归约运算模式
-
-实现归约运算（如求和、求最大值等）：
-
-```cpp
-template <typename T>
-class ReduceKernel {
-public:
-    __aicore__ inline void Process() {
-        CopyIn();
-        Compute();
-        CopyOut();
     }
 
 private:
-    __aicore__ inline void Compute() {
-        LocalTensor<T> input = inQueue.DeQue<T>();
-        LocalTensor<T> output = outQueue.AllocTensor<T>();
-        LocalTensor<uint8_t> tmpBuffer = tmpBuf.AllocTensor<uint8_t>();
-        
-        // 初始化输出
-        T scalar(0);
-        AscendC::Duplicate<T>(output, scalar, outLength);
-        
-        // 执行归约运算
-        AscendC::Sum(output, input, tmpBuffer, params);
-        
-        outQueue.EnQue<T>(output);
-        inQueue.FreeTensor(input);
-        tmpBuf.FreeTensor(tmpBuffer);
+    __aicore__ inline void CopyIn(int32_t progress)
+    {
+        AscendC::LocalTensor<half> xLocal = inQueueX.AllocTensor<half>();
+        AscendC::LocalTensor<half> yLocal = inQueueY.AllocTensor<half>();
+        AscendC::DataCopy(xLocal, xGm[progress * this->tileLength], this->tileLength);
+        AscendC::DataCopy(yLocal, yGm[progress * this->tileLength], this->tileLength);
+        inQueueX.EnQue(xLocal);
+        inQueueY.EnQue(yLocal);
     }
-};
-```
-
-## 内存管理策略
-
-### 1. 内存对齐
-
-AscendC 要求数据按32字节对齐以获得最佳性能：
-
-```cpp
-constexpr uint32_t PADDING_BYTE = 32U;
-
-auto paddingFunc = [](const uint32_t n, const uint32_t typeSize) -> uint32_t {
-    if (typeSize == 0) return 0;
-    return (n * typeSize + PADDING_BYTE - 1U) / PADDING_BYTE * PADDING_BYTE / typeSize;
-};
-```
-
-### 2. 工作空间管理
-
-```cpp
-// 获取系统工作空间
-void* workspacePtr = GetSysWorkSpacePtr();
-
-// 设置本地工作空间
-matmulObj.SetLocalWorkspace(localWorkspace);
-```
-
-### 3. 内存生命周期
-
-```cpp
-// 正确的内存管理流程
-{
-    LocalTensor<T> tensor = buffer.AllocTensor<T>();
-    // 使用张量
-    // ...
-    buffer.FreeTensor(tensor);  // 必须释放
-}
-```
-
-## 核函数开发模式
-
-### 1. 核函数入口
-
-```cpp
-extern "C" __global__ __aicore__ void kernel_name(
-    GM_ADDR input0, GM_ADDR input1, GM_ADDR output, 
-    GM_ADDR workspace, GM_ADDR tiling)
-{
-    // 平台检测
-    if ASCEND_IS_AIC {
-        return;
+    __aicore__ inline void Compute(int32_t progress)
+    {
+        AscendC::LocalTensor<half> xLocal = inQueueX.DeQue<half>();
+        AscendC::LocalTensor<half> yLocal = inQueueY.DeQue<half>();
+        AscendC::LocalTensor<half> zLocal = outQueueZ.AllocTensor<half>();
+        AscendC::Add(zLocal, xLocal, yLocal, this->tileLength);
+        outQueueZ.EnQue<half>(zLocal);
+        inQueueX.FreeTensor(xLocal);
+        inQueueY.FreeTensor(yLocal);
     }
-    
-    // 创建管道
+    __aicore__ inline void CopyOut(int32_t progress)
+    {
+        AscendC::LocalTensor<half> zLocal = outQueueZ.DeQue<half>();
+        AscendC::DataCopy(zGm[progress * this->tileLength], zLocal, this->tileLength);
+        outQueueZ.FreeTensor(zLocal);
+    }
+
+private:
     AscendC::TPipe pipe;
-    
-    // 创建核函数对象
-    KernelClass kernel;
-    
-    // 初始化
-    kernel.Init(input0, input1, output, tiling, &pipe);
-    
-    // 执行
-    kernel.Process();
+    AscendC::TQue<AscendC::TPosition::VECIN, BUFFER_NUM> inQueueX, inQueueY;
+    AscendC::TQue<AscendC::TPosition::VECOUT, BUFFER_NUM> outQueueZ;
+    AscendC::GlobalTensor<half> xGm;
+    AscendC::GlobalTensor<half> yGm;
+    AscendC::GlobalTensor<half> zGm;
+    uint32_t blockLength;
+    uint32_t tileNum;
+    uint32_t tileLength;
+};
+
+extern "C" __global__ __aicore__ void add_custom(GM_ADDR x, GM_ADDR y, GM_ADDR z, uint32_t totalLength)
+{
+    KernelAdd op;
+    op.Init(x, y, z, totalLength);
+    op.Process();
 }
 ```
-
-### 2. 核函数调用
+### 3. 核函数入口
+```cpp
+   extern "C" __global__ __aicore__ void add_custom(GM_ADDR x, GM_ADDR y, GM_ADDR z, uint32_t totalLength)
+{
+    KernelAdd op;
+    op.Init(x, y, z, totalLength);
+    op.Process();
+}
+```
+### 3. 核函数调用
 
 ```cpp
-void kernel_name_do(uint32_t blockDim, void* stream,
-    GM_ADDR input0, GM_ADDR input1, GM_ADDR output, 
-    GM_ADDR workspace, GM_ADDR tiling)
-{
-    kernel_name<<<blockDim, nullptr, stream>>>(
-        input0, input1, output, workspace, tiling);
-}
+    ACLRT_LAUNCH_KERNEL(kernel_name)(blockDim, acl_stream,
+        cast<void*>(x.storage().data()), cast<void*>(y.storage().data()), cast<void*>(z.storage().data()), totalLength);
 ```
 ## PyBind11 开发指南
 ### Python模块绑定
@@ -337,7 +237,8 @@ at::Tensor run_kernel_custom(const at::Tensor &x, const at::Tensor &y)
     for (uint32_t size : x.sizes()) {
         totalLength *= size;
     }
-    ACLRT_LAUNCH_KERNEL(kernel_name)
+    ACLRT_LAUNCH_KERNEL(kernel_name)(blockDim, acl_stream,
+        x.data_ptr(), y.data_ptr(), z.data_ptr(), totalLength);
     // 其他代码
 }
 } // namespace my_kernel
@@ -349,7 +250,7 @@ PYBIND11_MODULE(kernel_name, m)
 }
 ```
 ### 关键组件说明
-- **头文件包含**：pybind11、torch扩展、ACL启动、NPU流
+- **头文件包含**：pybind11、torch扩展、算子头文件、流管理头文件
 - **命名空间**：避免与函数名冲突
 - **张量处理**：使用at::Tensor进行张量操作
 - **流管理**：获取当前NPU流进行内核启动
