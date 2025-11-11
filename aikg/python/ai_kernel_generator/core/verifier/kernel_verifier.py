@@ -89,7 +89,13 @@ class KernelVerifier:
         else:
             raise ValueError("config is required for KernelVerifier")
         if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
-            self.impl_func_name = impl_func_name or f"{op_name}_triton_{framework}"
+            if self.dsl == "triton_cuda":
+                self.impl_func_name = impl_func_name or f"{op_name}_triton_cuda_{framework}"
+            elif self.dsl == "triton_ascend":
+                self.impl_func_name = impl_func_name or f"{op_name}_triton_ascend_{framework}"
+            else:
+                # 兼容旧代码，如果dsl包含triton_cuda或triton_ascend但不是精确匹配
+                self.impl_func_name = impl_func_name or f"{op_name}_{self.dsl}_{framework}"
         elif self.dsl == "ascendc":
             self.impl_func_name = impl_func_name or f"{op_name}_kernel"
         else:

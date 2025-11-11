@@ -49,8 +49,9 @@ class HandwriteLoader:
         aikg_root = self.project_root.parent.parent
         self.aikgbench_root = aikg_root / "benchmark" / "aikgbench"
         self.torch_base_dir = self.aikgbench_root
-        self.triton_impl_base_dir = self.aikgbench_root / "triton_ascend" / "impl"
-        self.triton_docs_base_dir = self.aikgbench_root / "triton_ascend" / "docs"
+        # 根据dsl类型动态设置triton路径
+        self.triton_impl_base_dir = self.aikgbench_root / self.dsl / "impl"
+        self.triton_docs_base_dir = self.aikgbench_root / self.dsl / "docs"
         
         # 缓存所有可用的数据对
         self._all_data_pairs = []

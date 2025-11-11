@@ -72,7 +72,13 @@ class Coder(AgentBase):
         self.format_instructions = self.code_parser.get_format_instructions()
 
         if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
-            self.func_name = f"{self.op_name}_triton_{self.framework}"
+            if self.dsl == "triton_cuda":
+                self.func_name = f"{self.op_name}_triton_cuda_{self.framework}"
+            elif self.dsl == "triton_ascend":
+                self.func_name = f"{self.op_name}_triton_ascend_{self.framework}"
+            else:
+                # 兼容旧代码，如果dsl包含triton_cuda或triton_ascend但不是精确匹配
+                self.func_name = f"{self.op_name}_{self.dsl}_{self.framework}"
         else:
             self.func_name = f"{self.op_name}_{self.dsl}_{self.framework}"
 
@@ -126,8 +132,8 @@ class Coder(AgentBase):
         except Exception as e:
             logger.warning(f"Failed to resolve configurable doc path: {e}, using fallback path")
             # 降级到硬编码路径（根据DSL类型选择）
-            # 注意：这里无法确定是cuda还是ascend，默认使用ascend
-            base_dir = Path(get_project_root()) / "resources" / "docs" / "triton_ascend_docs" / "examples"
+            docs_subdir = f"{self.dsl}_docs"
+            base_dir = Path(get_project_root()) / "resources" / "docs" / docs_subdir / "examples"
 
         if not base_dir.exists():
             logger.warning(f"Triton示例目录不存在: {base_dir}, 返回空字符串")

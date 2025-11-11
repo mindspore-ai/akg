@@ -53,7 +53,13 @@ try:
 except ImportError:
     pass
 {% endif %}
-from {{ op_name }}_triton import {{ impl_func_name }}
+{% if dsl == "triton_cuda" %}
+from {{ op_name }}_triton_cuda import {{ impl_func_name }}
+{% elif dsl == "triton_ascend" %}
+from {{ op_name }}_triton_ascend import {{ impl_func_name }}
+{% else %}
+from {{ op_name }}_{{ dsl }} import {{ impl_func_name }}
+{% endif %}
 {% elif dsl == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
 {% elif dsl == "cuda_c" %}
