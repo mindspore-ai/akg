@@ -86,6 +86,34 @@ static Attribute getOperationKindAttribute(Operation *op) {
   return attr;
 }
 
+static SmallVector<ReassociationExprs> getExpandMap(SmallVector<int64_t> axes, int64_t expandInputRank,
+                                                    int64_t expandOutputRank, PatternRewriter &rewriter) {
+  int64_t posAtInput = 0;
+  SmallVector<ReassociationExprs> reassociation_map = {};
+  ReassociationExprs expand_strategy;
+  for (int64_t i = 0; i < expandOutputRank; i++) {
+    expand_strategy.push_back(rewriter.getAffineDimExpr(i));
+    if (!llvm::is_contained(axes, i)) {
+      posAtInput += 1;
+      if (posAtInput != expandInputRank) {  // not the last unreduced dimension
+        reassociation_map.push_back(expand_strategy);
+        expand_strategy = {};
+      }
+    }
+  }
+  reassociation_map.push_back(expand_strategy);
+  return reassociation_map;
+}
+
+static Value createExpandShapeOp(Operation *op, PatternRewriter &rewriter, Value expandSrc, Value expandDst,
+                                 uint64_t axis) {
+  SmallVector<int64_t> dims = {static_cast<int64_t>(axis)};
+  int64_t expandInputRank = cast<ShapedType>(expandSrc.getType()).getRank();
+  int64_t expandOutputRank = cast<ShapedType>(expandDst.getType()).getRank();
+  auto reassociation = getExpandMap(dims, expandInputRank, expandOutputRank, rewriter);
+  return rewriter.create<tensor::ExpandShapeOp>(op->getLoc(), expandDst.getType(), expandSrc, reassociation);
+}
+
 static Operation *createElemwiseOp(Operation *op, Value emptyTensor, SmallVector<NamedAttribute> &attrs,
                                    PatternRewriter &rewriter) {
   auto loc = op->getLoc();
@@ -157,36 +185,6 @@ static LogicalResult invMatchAndRewriteHelper(Operation *op, PatternRewriter &re
     rewriter.create<linalg::ElemwiseBinaryOp>(loc, ValueRange{one, op->getOperands()[0]}, emptyTensor, attrs);
   rewriter.replaceOp(op, namedOp->getResults());
   return success();
-}
-
-static SmallVector<ReassociationExprs> getExpandMap(SmallVector<int64_t> axes, int64_t expandInputRank,
-                                                    int64_t expandOutputRank, PatternRewriter &rewriter) {
-  int64_t posAtInput = 0;
-  SmallVector<ReassociationExprs> reassociation_map = {};
-  ReassociationExprs expand_strategy;
-  for (int64_t i = 0; i < expandOutputRank; i++) {
-    expand_strategy.push_back(rewriter.getAffineDimExpr(i));
-    if (!llvm::is_contained(axes, i)) {
-      posAtInput += 1;
-      if (posAtInput != expandInputRank) {  // not the last unreduced dimension
-        reassociation_map.push_back(expand_strategy);
-        expand_strategy = {};
-      }
-    }
-  }
-  reassociation_map.push_back(expand_strategy);
-  return reassociation_map;
-}
-
-static Value createExpandShapeOp(Operation *op, PatternRewriter &rewriter, Value expandSrc, Value expandDst,
-                                 uint64_t axis) {
-  SmallVector<int64_t> dims = {static_cast<int64_t>(axis)};
-  int64_t expandInputRank = cast<ShapedType>(expandSrc.getType()).getRank();
-  int64_t expandOutputRank = cast<ShapedType>(expandDst.getType()).getRank();
-  auto reassociation = getExpandMap(dims, expandInputRank, expandOutputRank, rewriter);
-  Value expandShapeOp =
-    rewriter.create<tensor::ExpandShapeOp>(op->getLoc(), expandDst.getType(), expandSrc, reassociation);
-  return expandShapeOp;
 }
 
 // Returns the constant initial value for a given reduction operation. The
@@ -283,35 +281,97 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, uint64_t axis, P
   auto elementTy = resultTy.getElementType();
   Value input = op->getOperand(0);
 
+  bool useInputAxis = true;
+  SmallVector<int64_t> axes;
   SmallVector<int64_t> reduceShape;
-  SmallVector<Value> dynDims;
-  for (unsigned i = 0; i < inputTy.getRank(); i++) {
-    if (axis != i) {
+
+  for (int64_t i = 0, e = inputTy.getRank(); i < e; ++i) {
+    if (static_cast<int64_t>(i) != static_cast<int64_t>(axis)) {
       reduceShape.push_back(inputTy.getDimSize(i));
-      if (inputTy.isDynamicDim(i)) dynDims.push_back(rewriter.create<tensor::DimOp>(loc, input, i));
+    }
+  }
+  if (reduceShape.size() != resultTy.getRank()) {
+    useInputAxis = false;
+  } else {
+    for (int64_t i = 0; i < reduceShape.size(); ++i) {
+      if (reduceShape[i] != resultTy.getDimSize(i)) {
+        useInputAxis = false;
+        break;
+      }
+    }
+  }
+
+  if (!useInputAxis) {
+    reduceShape.clear();
+    int64_t reduceFactor = inputTy.getNumElements() / resultTy.getNumElements();
+    int64_t currentFactor = 1;
+    for (int64_t i = inputTy.getRank() - 1; i >= 0; --i) {
+      int64_t dimSize = inputTy.getDimSize(i);
+      if (dimSize == ShapedType::kDynamic) {
+        axes.clear();
+        break;
+      }
+      currentFactor *= dimSize;
+      axes.insert(axes.begin(), i);
+      if (currentFactor == reduceFactor) {
+        break;
+      } else if (currentFactor > reduceFactor) {
+        axes.clear();
+        break;
+      }
+    }
+    if (axes.empty()) {
+      axes.push_back(static_cast<int64_t>(axis));
+    }
+    for (int64_t i = 0; i < inputTy.getRank(); i++) {
+      if (!llvm::is_contained(axes, i)) {
+        reduceShape.push_back(inputTy.getDimSize(i));
+      }
+    }
+  } else {
+    axes.push_back(static_cast<int64_t>(axis));
+  }
+
+  SmallVector<Value> dynDims;
+  for (int64_t i = 0; i < inputTy.getRank(); i++) {
+    if (inputTy.isDynamicDim(i) && !llvm::is_contained(axes, i)) {
+      dynDims.push_back(rewriter.create<tensor::DimOp>(loc, input, i));
     }
   }
   // First fill the output buffer with the init value.
   auto emptyTensor = rewriter.create<tensor::EmptyOp>(loc, reduceShape, elementTy, dynDims).getResult();
   auto fillValueAttr = createInitialValueForReduceOp(op, elementTy, rewriter);
-  if (!fillValueAttr) return rewriter.notifyMatchFailure(op, "No initial value found for reduction operation");
-
-  auto fillValue = rewriter.create<arith::ConstantOp>(loc, fillValueAttr);
+  if (!fillValueAttr) {
+    return rewriter.notifyMatchFailure(op, "No initial value found for reduction operation");
+  }
+  auto fillValue = rewriter.create<arith::ConstantOp>(loc, elementTy, fillValueAttr);
   auto filledTensor = rewriter.create<linalg::FillOp>(loc, ValueRange{fillValue}, ValueRange{emptyTensor}).result();
 
   bool didEncounterError = false;
   auto reduceOp = rewriter.create<linalg::ReduceOp>(
-    loc, input, filledTensor, axis, [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+    loc, ValueRange{input}, ValueRange{filledTensor}, axes,
+    [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
       auto result = createLinalgBodyCalculationForReduceOp(op, blockArgs, elementTy, rewriter);
-      if (result) didEncounterError = true;
-
-      nestedBuilder.create<linalg::YieldOp>(loc, result);
+      if (!result) didEncounterError = true;
+      nestedBuilder.create<linalg::YieldOp>(nestedLoc, result);
     });
 
-  auto expandShapeOp = createExpandShapeOp(op, rewriter, reduceOp.getOperation()->getResult(0), op->getResult(0), axis);
-  rewriter.replaceOp(op, expandShapeOp);
+  if (didEncounterError) {
+    return rewriter.notifyMatchFailure(op, "unable to create linalg.generic body for reduce op");
+  }
 
-  if (!didEncounterError) return rewriter.notifyMatchFailure(op, "unable to create linalg.generic body for reduce op");
+  Value result = reduceOp.getOperation()->getResult(0);
+  if (result.getType() != resultTy) {
+    if (useInputAxis) {
+      result = createExpandShapeOp(op, rewriter, result, op->getResult(0), axis);
+    } else {
+        int64_t targetRank = resultTy.getRank();
+        SmallVector<Value> ones(targetRank, rewriter.create<arith::ConstantIndexOp>(loc, 1));
+        Value shape = rewriter.create<tensor::FromElementsOp>(loc, ones);
+        result = rewriter.create<tensor::ReshapeOp>(loc, resultTy, result, shape);
+    }
+  }
+  rewriter.replaceOp(op, result);
   return success();
 }
 
