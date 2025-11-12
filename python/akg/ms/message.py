@@ -40,13 +40,16 @@ def _compilewithjson_to_module_op(kernel_info, attrs, processor):
         # get custom ops implementation first.
         if 'impl_path' in kernel_info and kernel_info['impl_path'] is not None:
             impl_path = os.path.realpath(kernel_info['impl_path'])
-            if os.path.isfile(impl_path):
+            safe_path = os.path.realpath(os.environ.get("AKG_WHITE_LIST_PATH", "./"))
+            if os.path.isfile(impl_path) and impl_path.startswith(safe_path):
                 custom_mod_name = Path(impl_path).resolve().stem
                 mod_spec = importlib.util.spec_from_file_location(
                     custom_mod_name, impl_path)
                 custom_mod = importlib.util.module_from_spec(mod_spec)
                 mod_spec.loader.exec_module(custom_mod)
                 op_func = getattr(custom_mod, op_name, None)
+            else:
+                raise RuntimeError("Please set impl_path specified by env AKG_WHITE_LIST_PATH or current path")
 
         # get built-in ops.
         if op_func is None:
