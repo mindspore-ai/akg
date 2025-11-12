@@ -34,7 +34,7 @@ For release notes, see [RELEASE](RELEASE.md).
 ## License
 [Apache License 2.0](LICENSE).
 
-#### AKG SIG WeChat Group
+## AKG SIG WeChat Group
 
 <div>  
   <a href="docs/AKG_QRCode.png">
