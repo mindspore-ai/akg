@@ -28,12 +28,15 @@ from pathlib import Path
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.utils.process_utils import run_command
 from ai_kernel_generator.core.utils import normalize_dsl
+from ai_kernel_generator.core.verifier.adapters.factory import (
+    get_framework_adapter, get_dsl_adapter, get_backend_adapter
+)
 
 # 模板路径
-TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "kernel_verify_template.j2")
-PROFILE_BASE_TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "prof_base_template.j2")
+TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "kernel_verify_template_refactored.j2")
+PROFILE_BASE_TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "prof_base_template_refactored.j2")
 PROFILE_GENERATION_TEMPLATE_PATH = os.path.join(
-    get_project_root(), "resources", "templates", "prof_generation_template.j2")
+    get_project_root(), "resources", "templates", "prof_generation_template_refactored.j2")
 # 生成CMakeLists.txt和运行脚本的路径
 CMAKE_TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "cmake_template.j2")
 RUN_TEMPLATE_PATH = os.path.join(get_project_root(), "utils", "compile_tools", "ascend_compile", "run.sh")
@@ -239,50 +242,168 @@ class KernelVerifier:
 
     def gen_verify_project(self, impl_code: str, verify_dir: str, device_id: int = 0):
         """生成验证项目文件到指定目录"""
+        logger.info(f"[{self.op_name}] 开始生成验证项目，目录: {verify_dir}, device_id={device_id}")
+        
         # 创建框架实现文件
         framework_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
-        with open(framework_file, "w", encoding="utf-8") as f:
-            f.write(self.framework_code)
+        try:
+            with open(framework_file, "w", encoding="utf-8") as f:
+                f.write(self.framework_code)
+            logger.debug(f"[{self.op_name}] 框架实现文件已创建: {framework_file}")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 框架实现文件创建失败: {framework_file}, 错误: {e}")
+            raise
 
         # 创建具体实现文件
         if "ascendc" in self.dsl:
+            logger.info(f"[{self.op_name}] 检测到AscendC DSL，生成编译项目")
             self.generate_ascendc_project(impl_code, verify_dir)
         else:
             file_name = f"{self.op_name}_{self.dsl}.py"
             impl_file = os.path.join(verify_dir, file_name)
 
-            # 生成import语句
-            import_statements = self._generate_import_statements()
+            # 使用adapter生成import语句
+            try:
+                dsl_adapter = get_dsl_adapter(self.dsl)
+                import_statements = dsl_adapter.get_import_statements(self.framework)
+                logger.debug(f"[{self.op_name}] DSL import语句生成成功")
+            except Exception as e:
+                logger.error(f"[{self.op_name}] DSL import语句生成失败: {e}")
+                raise
 
-            with open(impl_file, "w", encoding="utf-8") as f:
-                # 先写入import语句，再写入原始代码
-                f.write(import_statements + impl_code)
+            try:
+                with open(impl_file, "w", encoding="utf-8") as f:
+                    f.write(import_statements + impl_code)
+                logger.debug(f"[{self.op_name}] 实现文件已创建: {impl_file}")
+            except Exception as e:
+                logger.error(f"[{self.op_name}] 实现文件创建失败: {impl_file}, 错误: {e}")
+                raise
 
         # 生成验证脚本
         verify_file = os.path.join(verify_dir, f"verify_{self.op_name}.py")
 
         # 从文件加载模板
-        with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
-            template = Template(f.read())
+        logger.info(f"[{self.op_name}] 开始生成验证项目，使用模板: {os.path.basename(TEMPLATE_PATH)}")
+        try:
+            with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
+                template = Template(f.read())
+            logger.debug(f"[{self.op_name}] 模板文件加载成功: {TEMPLATE_PATH}")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 模板文件加载失败: {TEMPLATE_PATH}, 错误: {e}")
+            raise
 
         # 检测是否为动态shape
         is_dynamic_shape = self._detect_dynamic_shape()
+        logger.info(f"[{self.op_name}] 检测到shape类型: {'动态' if is_dynamic_shape else '静态'}")
+
+        # 获取adapters
+        logger.debug(f"[{self.op_name}] 初始化adapters: framework={self.framework}, dsl={self.dsl}, backend={self.backend}")
+        try:
+            framework_adapter = get_framework_adapter(self.framework)
+            dsl_adapter = get_dsl_adapter(self.dsl)
+            backend_adapter = get_backend_adapter(self.backend)
+            logger.debug(f"[{self.op_name}] Adapters初始化成功")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] Adapters初始化失败: {e}")
+            raise
+
+        # 使用adapter生成代码字符串
+        logger.debug(f"[{self.op_name}] 开始生成代码片段...")
+        try:
+            framework_imports = framework_adapter.get_import_statements()
+            logger.debug(f"[{self.op_name}] Framework imports生成成功 (长度: {len(framework_imports)})")
+            
+            framework_model_import = framework_adapter.get_framework_import(self.op_name, is_dynamic_shape)
+            logger.debug(f"[{self.op_name}] Framework model import生成成功 (长度: {len(framework_model_import)})")
+            
+            dsl_imports = dsl_adapter.get_import_statements(self.framework)
+            logger.debug(f"[{self.op_name}] DSL imports生成成功 (长度: {len(dsl_imports)})")
+            
+            dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
+            logger.debug(f"[{self.op_name}] DSL impl import生成成功 (长度: {len(dsl_impl_import)})")
+            
+            special_setup_code = dsl_adapter.get_special_setup_code()
+            logger.debug(f"[{self.op_name}] Special setup code生成成功 (长度: {len(special_setup_code)})")
+            
+            # 生成设备设置代码
+            backend_adapter.setup_environment(device_id, self.arch)
+            logger.debug(f"[{self.op_name}] Backend环境设置完成: device_id={device_id}, arch={self.arch}")
+            
+            device_setup_code = framework_adapter.get_device_setup_code(self.backend, self.arch, device_id)
+            logger.debug(f"[{self.op_name}] Device setup code生成成功 (长度: {len(device_setup_code)})")
+            
+            # 生成输入处理代码
+            process_input_code = framework_adapter.get_process_input_code(self.backend, self.dsl)
+            logger.debug(f"[{self.op_name}] Process input code生成成功 (长度: {len(process_input_code)})")
+            
+            # 生成调用实现代码
+            call_impl_code = dsl_adapter.call_impl(
+                self.impl_func_name, "inputs_for_impl", device_id,
+                framework_adapter, self.op_name, "data_dir", "framework_output"
+            )
+            logger.debug(f"[{self.op_name}] Call impl code生成成功 (长度: {len(call_impl_code)})")
+            
+            # 生成set_seed代码
+            set_seed_code = framework_adapter.get_set_seed_code(self.backend)
+            logger.debug(f"[{self.op_name}] Set seed code生成成功 (长度: {len(set_seed_code)})")
+            
+            # 生成binary I/O函数（如果需要）
+            binary_io_functions = ""
+            needs_binary_io = dsl_adapter.needs_binary_io()
+            if needs_binary_io:
+                binary_io_functions = framework_adapter.get_binary_io_functions(self.op_name)
+                logger.info(f"[{self.op_name}] Binary I/O函数生成成功 (长度: {len(binary_io_functions)})")
+            else:
+                logger.debug(f"[{self.op_name}] 不需要Binary I/O函数")
+            
+            # 获取TensorType名称（完整路径）
+            tensor_type_name = framework_adapter.get_tensor_type_name()
+            logger.debug(f"[{self.op_name}] TensorType名称: {tensor_type_name}")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 代码片段生成失败: {e}", exc_info=True)
+            raise
 
         # 使用模板变量
-        rendered_code = template.render(
-            op_name=self.op_name,
-            framework=self.framework,
-            dsl=self.dsl,
-            device_id=device_id,
-            impl_func_name=self.impl_func_name,
-            backend=self.backend,
-            arch=self.arch,
-            is_dynamic_shape=is_dynamic_shape,
-            timeout=self.config.get('verify_timeout', 300)
-        )
+        logger.debug(f"[{self.op_name}] 开始渲染模板...")
+        try:
+            rendered_code = template.render(
+                op_name=self.op_name,
+                framework=self.framework,
+                dsl=self.dsl,
+                device_id=device_id,
+                impl_func_name=self.impl_func_name,
+                backend=self.backend,
+                arch=self.arch,
+                is_dynamic_shape=is_dynamic_shape,
+                timeout=self.config.get('verify_timeout', 300),
+                # Adapter生成的代码
+                framework_imports=framework_imports,
+                framework_model_import=framework_model_import,
+                dsl_imports=dsl_imports,
+                dsl_impl_import=dsl_impl_import,
+                special_setup_code=special_setup_code,
+                device_setup_code=device_setup_code,
+                process_input_code=process_input_code,
+                call_impl_code=call_impl_code,
+                set_seed_code=set_seed_code,
+                binary_io_functions=binary_io_functions,
+                needs_binary_io=needs_binary_io,
+                tensor_type_name=tensor_type_name,
+            )
+            logger.info(f"[{self.op_name}] 模板渲染成功，渲染后代码长度: {len(rendered_code)} 字符")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 模板渲染失败: {e}", exc_info=True)
+            raise
 
-        with open(verify_file, "w", encoding="utf-8") as f:
-            f.write(rendered_code)
+        # 写入文件
+        try:
+            with open(verify_file, "w", encoding="utf-8") as f:
+                f.write(rendered_code)
+            logger.info(f"[{self.op_name}] 验证脚本已写入: {verify_file}")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 验证脚本写入失败: {verify_file}, 错误: {e}")
+            raise
+    
 
     def run_verify(self, verify_dir: str, timeout: int = 300):
         """
@@ -292,12 +413,23 @@ class KernelVerifier:
             verify_dir: 验证目录
             timeout: 超时时间（秒），默认5分钟（传递给模板用于每次计算）
         """
+        verify_script = os.path.join(verify_dir, f"verify_{self.op_name}.py")
+        logger.info(f"[{self.op_name}] 开始运行验证脚本: {verify_script}, timeout={timeout}秒")
+        
         original_cwd = os.getcwd()
         try:
             os.chdir(verify_dir)
             python_cmd = ["python", f"verify_{self.op_name}.py"]
             # 使用run_command但禁用timeout，让验证脚本无限制运行
-            return run_command(python_cmd, f"verify_{self.op_name}", timeout=timeout)
+            result = run_command(python_cmd, f"verify_{self.op_name}", timeout=timeout)
+            if result:
+                logger.info(f"[{self.op_name}] 验证脚本执行成功")
+            else:
+                logger.error(f"[{self.op_name}] 验证脚本执行失败")
+            return result
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 验证脚本执行异常: {e}", exc_info=True)
+            raise
         finally:
             try:
                 os.chdir(original_cwd)
@@ -317,30 +449,210 @@ class KernelVerifier:
 
     def gen_profile_file_from_template(self, template_path: str, profile_file: str, device_id: int, warmup_times: int, run_times: int):
         """从模板生成profile文件"""
+        template_name = os.path.basename(template_path)
+        logger.info(f"[{self.op_name}] 开始生成性能测试文件，使用模板: {template_name}")
+        
         # 从文件加载模板
-        with open(template_path, "r", encoding="utf-8") as f:
-            template = Template(f.read())
+        try:
+            with open(template_path, "r", encoding="utf-8") as f:
+                template = Template(f.read())
+            logger.debug(f"[{self.op_name}] 性能测试模板文件加载成功: {template_path}")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 性能测试模板文件加载失败: {template_path}, 错误: {e}")
+            raise
 
         # 检测是否为动态shape
         is_dynamic_shape = self._detect_dynamic_shape()
+        logger.debug(f"[{self.op_name}] 性能测试shape类型: {'动态' if is_dynamic_shape else '静态'}")
+
+        # 获取adapters
+        try:
+            framework_adapter = get_framework_adapter(self.framework)
+            dsl_adapter = get_dsl_adapter(self.dsl)
+            backend_adapter = get_backend_adapter(self.backend)
+            logger.debug(f"[{self.op_name}] 性能测试Adapters初始化成功")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 性能测试Adapters初始化失败: {e}")
+            raise
+
+        # 使用adapter生成代码字符串
+        logger.debug(f"[{self.op_name}] 开始生成性能测试代码片段...")
+        try:
+            framework_imports = framework_adapter.get_import_statements()
+            framework_model_import = framework_adapter.get_framework_import(self.op_name, is_dynamic_shape)
+            dsl_imports = dsl_adapter.get_import_statements(self.framework)
+            dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
+            special_setup_code = dsl_adapter.get_special_setup_code()
+            
+            # 生成设备设置代码
+            backend_adapter.setup_environment(device_id, self.arch)
+            device_setup_code = framework_adapter.get_device_setup_code(self.backend, self.arch, device_id)
+            
+            # 生成输入处理代码
+            process_input_code = framework_adapter.get_process_input_code(self.backend, self.dsl)
+            
+            # 生成set_seed代码
+            set_seed_code = framework_adapter.get_set_seed_code(self.backend)
+            
+            # 生成binary I/O函数（如果需要）
+            binary_io_functions = ""
+            needs_binary_io = dsl_adapter.needs_binary_io()
+            if needs_binary_io:
+                binary_io_functions = framework_adapter.get_binary_io_functions(self.op_name)
+                logger.info(f"[{self.op_name}] 性能测试Binary I/O函数生成成功")
+            
+            # 获取TensorType名称（完整路径）
+            tensor_type_name = framework_adapter.get_tensor_type_name()
+            
+            # 判断是base还是generation模板
+            is_base_template = "base" in template_path.lower()
+            logger.debug(f"[{self.op_name}] 性能测试模板类型: {'base' if is_base_template else 'generation'}")
+            
+            # 生成benchmark代码
+            if is_base_template:
+                # Base模板：benchmark framework model
+                benchmark_code = self._generate_base_benchmark_code(framework_adapter, dsl_adapter, 
+                                                                     warmup_times, run_times)
+                logger.debug(f"[{self.op_name}] Base benchmark代码生成成功 (长度: {len(benchmark_code)})")
+            else:
+                # Generation模板：benchmark implementation
+                benchmark_code = dsl_adapter.benchmark_impl(
+                    self.impl_func_name, "inputs", warmup_times, run_times, 
+                    self.backend, self.op_name, case_idx=0,
+                    framework_model="framework_model" if needs_binary_io else None,
+                    framework_adapter=framework_adapter if needs_binary_io else None,
+                    device_id=device_id if needs_binary_io else None
+                )
+                logger.debug(f"[{self.op_name}] Generation benchmark代码生成成功 (长度: {len(benchmark_code)})")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 性能测试代码片段生成失败: {e}", exc_info=True)
+            raise
 
         # 使用模板变量
-        rendered_code = template.render(
-            op_name=self.op_name,
-            framework=self.framework,
-            dsl=self.dsl,
-            device_id=device_id,
-            impl_func_name=self.impl_func_name,
-            backend=self.backend,
-            arch=self.arch,
-            warmup_times=warmup_times,
-            run_times=run_times,
-            total_count=warmup_times + run_times,
-            is_dynamic_shape=is_dynamic_shape
-        )
+        logger.debug(f"[{self.op_name}] 开始渲染性能测试模板...")
+        try:
+            rendered_code = template.render(
+                op_name=self.op_name,
+                framework=self.framework,
+                dsl=self.dsl,
+                device_id=device_id,
+                impl_func_name=self.impl_func_name,
+                backend=self.backend,
+                arch=self.arch,
+                warmup_times=warmup_times,
+                run_times=run_times,
+                total_count=warmup_times + run_times,
+                is_dynamic_shape=is_dynamic_shape,
+                # Adapter生成的代码
+                framework_imports=framework_imports,
+                framework_model_import=framework_model_import,
+                dsl_imports=dsl_imports,
+                dsl_impl_import=dsl_impl_import,
+                special_setup_code=special_setup_code,
+                device_setup_code=device_setup_code,
+                process_input_code=process_input_code,
+                set_seed_code=set_seed_code,
+                binary_io_functions=binary_io_functions,
+                needs_binary_io=needs_binary_io,
+                tensor_type_name=tensor_type_name,
+                benchmark_code=benchmark_code,
+            )
+            logger.info(f"[{self.op_name}] 性能测试模板渲染成功，渲染后代码长度: {len(rendered_code)} 字符")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 性能测试模板渲染失败: {e}", exc_info=True)
+            raise
 
-        with open(profile_file, "w", encoding="utf-8") as f:
-            f.write(rendered_code)
+        # 写入文件
+        try:
+            with open(profile_file, "w", encoding="utf-8") as f:
+                f.write(rendered_code)
+            logger.info(f"[{self.op_name}] 性能测试脚本已写入: {profile_file}")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 性能测试脚本写入失败: {profile_file}, 错误: {e}")
+            raise
+    
+    def _generate_base_benchmark_code(self, framework_adapter, dsl_adapter, warmup, runs):
+        """生成base benchmark代码（benchmark framework model）"""
+        if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
+            if self.backend == "ascend":
+                code = f"""        # 导入profiler以支持性能测试
+        try:
+            from ai_kernel_generator.core.verifier.profiler import profiler_npu
+            patch_imported = True
+        except ImportError:
+            # 如果导入失败，使用标准方法
+            patch_imported = False
+        # 基准测试函数
+        def base_benchmark_fn():
+            result = framework_model(*inputs)
+            return result
+        
+        if backend == "ascend" and patch_imported:
+            execution_time_us = profiler_npu(
+                base_benchmark_fn,
+                warmup={warmup},
+                active={runs},
+                prof_dir_name="prof_base_output",
+                keep_res=False,
+                suppress_warnings=True
+            )
+            execution_time_ms = execution_time_us / 1000
+            method = "profiler_npu"
+        else:
+            import triton.testing
+            execution_time_ms = triton.testing.do_bench(
+                base_benchmark_fn,
+                warmup={warmup},
+                rep={runs},
+                return_mode="min"
+            )
+            method = "triton_do_bench"
+"""
+            else:
+                code = f"""        import triton.testing
+        def base_benchmark_fn():
+            result = framework_model(*inputs)
+            return result
+        
+        execution_time_ms = triton.testing.do_bench(
+            base_benchmark_fn,
+            warmup={warmup},
+            rep={runs},
+            return_mode="min"
+        )
+        method = "triton_do_bench"
+"""
+        elif self.dsl == "cpp":
+            code = f"""        # CPU
+        import time
+        def base_benchmark_fn():
+            return framework_model(*inputs)
+        # 执行 warmup
+        for _ in range({warmup}):
+            _ = base_benchmark_fn()
+        # 计时 rep 次
+        start_t = time.perf_counter()
+        for _ in range({runs}):
+            _ = base_benchmark_fn()
+        end_t = time.perf_counter()
+        execution_time_ms = (end_t - start_t) * 1000.0 / max({runs}, 1)
+        method = "cpu_loop_timer"
+"""
+        else:
+            sync_code = "torch.cuda.synchronize()" if self.backend == "cuda" else (
+                "torch.npu.synchronize()" if self.backend == "ascend" else ""
+            )
+            code = f"""        # 非triton实现，使用传统循环计时
+        import time
+        start_time = time.time()
+        for _ in range({warmup + runs}):
+            framework_output = framework_model(*inputs)
+            {sync_code}
+        end_time = time.time()
+        execution_time_ms = (end_time - start_time) * 1000 / {warmup + runs}  # 转换为毫秒
+        method = "traditional_timing"
+"""
+        return code
 
     def run_msprof(self, script_path: str) -> Tuple[bool, str, Optional[str]]:
         """运行msprof性能分析"""
@@ -406,7 +718,7 @@ class KernelVerifier:
         try:
             output_name = "nsys_report_" + os.path.basename(script_path).replace(".py", "")
             cmd = f'nsys profile --output={output_name} python {script_path}'
-            print("run_nsys = ", cmd)
+            logger.debug(f"Running nsys profile: {cmd}")
             process = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
             report_path = os.path.join(os.path.dirname(script_path), output_name + ".nsys-rep")
 
@@ -428,7 +740,7 @@ class KernelVerifier:
             csv_path = dir_plib / csv_base  # rep_path.replace(".nsys-rep", ".csv")
             # 导出csv
             cmd = f'nsys stats --report gputrace  --timeunit us  --format csv --output {csv_path} {rep_path}'
-            print("analyze_nsys_data = ", cmd)
+            logger.debug(f"Running nsys stats: {cmd}")
             subprocess.run(cmd, shell=True, check=True)
             csv_path = dir_plib / f"{csv_base}_gputrace.csv"
 

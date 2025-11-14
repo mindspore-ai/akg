@@ -357,8 +357,11 @@ def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    gen_time, base_time, speedup = verifier.run_profile(
+    result = verifier.run_profile(
         current_step=0, device_id=device_id, profile_settings=profile_settings)
+    gen_time = result['gen_time']
+    base_time = result['base_time']
+    speedup = result['speedup']
 
     print(f"orig performance is {base_time:.2f} us")
     print(f"aikg performance is {gen_time:.2f} us")
@@ -413,8 +416,11 @@ def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    gen_time, base_time, speedup = verifier.run_profile(
+    result = verifier.run_profile(
         current_step=0, device_id=device_id, profile_settings=profile_settings)
+    gen_time = result['gen_time']
+    base_time = result['base_time']
+    speedup = result['speedup']
 
     print(f"orig performance is {base_time:.2f} us")
     print(f"aikg performance is {gen_time:.2f} us")
@@ -471,8 +477,11 @@ def test_kernel_verifier_profiling_a100(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    gen_time, base_time, speedup = verifier.run_profile(
+    result = verifier.run_profile(
         current_step=0, device_id=device_id, profile_settings=profile_settings)
+    gen_time = result['gen_time']
+    base_time = result['base_time']
+    speedup = result['speedup']
     print(f"orig performance is {base_time:.2f} us")
     print(f"aikg performance is {gen_time:.2f} us")
     print(f"speedup is {speedup:.2f}x")
@@ -528,8 +537,11 @@ def test_kernel_verifier_profiling_dynamic_ascend910b4_torch(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    gen_time, base_time, speedup = verifier.run_profile(
+    result = verifier.run_profile(
         current_step=0, device_id=device_id, profile_settings=profile_settings)
+    gen_time = result['gen_time']
+    base_time = result['base_time']
+    speedup = result['speedup']
 
     print(f"Dynamic Shape Profiling Results:")
     print(f"Operation: {op_name}")
@@ -586,8 +598,11 @@ def test_kernel_verifier_profiling_cpp(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    gen_time, base_time, speedup = verifier.run_profile(
+    result = verifier.run_profile(
         current_step=0, device_id=device_id, profile_settings=profile_settings)
+    gen_time = result['gen_time']
+    base_time = result['base_time']
+    speedup = result['speedup']
     print(f"orig performance is {base_time:.2f} us")
     print(f"aikg performance is {gen_time:.2f} us")
     print(f"speedup is {speedup:.2f}x")
