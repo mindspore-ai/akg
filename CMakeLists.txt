@@ -378,11 +378,16 @@ target_include_directories(akg PRIVATE "${TVM_DIR}/topi/include")
 
 # Installation rules
 if(ENABLE_AKG)
-  set(AKG_PATH "akg")
-  install(TARGETS akg DESTINATION "lib")
+  set(AKG_PATH "lib")
+  install(TARGETS akg DESTINATION ${AKG_PATH})
   if (EXISTS ${AUTO_TUNE_LIB})
-    install(FILES ${AUTO_TUNE_LIB} DESTINATION "lib")
+    install(FILES ${AUTO_TUNE_LIB} DESTINATION ${AKG_PATH}))
   endif()
+  install(
+    DIRECTORY
+    ${CMAKE_CURRENT_BINARY_DIR}/akg
+    DESTINATION ${AKG_PATH}
+  )
 else()
   set(AKG_PATH ${CMAKE_CURRENT_BINARY_DIR})
   install(TARGETS akg DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg/lib)
