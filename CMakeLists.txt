@@ -381,7 +381,7 @@ if(ENABLE_AKG)
   set(AKG_PATH "lib")
   install(TARGETS akg DESTINATION ${AKG_PATH})
   if (EXISTS ${AUTO_TUNE_LIB})
-    install(FILES ${AUTO_TUNE_LIB} DESTINATION ${AKG_PATH}))
+    install(FILES ${AUTO_TUNE_LIB} DESTINATION ${AKG_PATH})
   endif()
   install(
     DIRECTORY
