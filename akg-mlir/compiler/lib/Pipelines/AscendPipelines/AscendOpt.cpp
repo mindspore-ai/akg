@@ -74,18 +74,39 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
 
     OpPassManager &nestedFusionPM = pm.nest<mlir::func::FuncOp>();
     nestedFusionPM.addPass(mlir::createConvertLinalgToAffineLoopsPass());
-    nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
-    nestedFusionPM.addPass(mlir::affine::createAffineLoopNormalizePass());
+
+    // pre-process
     nestedFusionPM.addPass(mlir::createCSEPass());
+    nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
+    bool promoteSingleIter = true;
+    nestedFusionPM.addPass(mlir::affine::createAffineLoopNormalizePass(promoteSingleIter));
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
     nestedFusionPM.addPass(mlir::createCopyElisionPass());
+    nestedFusionPM.addPass(mlir::createUnifyShapePass());
     nestedFusionPM.addPass(mlir::createCopyRemovalPass());
+    nestedFusionPM.addPass(mlir::createCSEPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
-    nestedFusionPM.addPass(mlir::memref::createFoldMemRefAliasOpsPass());
+
+    // fusion
     nestedFusionPM.addPass(mlir::createAKGLoopFusionPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
+
+    // tiling
+    // nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
+    nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
     nestedFusionPM.addPass(mlir::createAKGLoopTilingPass(options.target, true));
+    nestedFusionPM.addPass(mlir::createRemoveRedundantLoopsPass());
+    nestedFusionPM.addPass(mlir::createCanonicalizerPass());
+
+    // vector
+    // nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
+    // nestedFusionPM.addPass(mlir::createExtractIfOpPass(options.target));
     nestedFusionPM.addPass(mlir::affine::createAffineForVectPass());
+
+    // parallel
+    // nestedFusionPM.addPass(mlir::createRemoveRedundantLoopsPass());
+    // nestedFusionPM.addPass(mlir::createAKGLoopParallelizePass(options.enableParallel));
+
     nestedFusionPM.addPass(mlir::affine::createVectorTransferTensorizePass());
     if (const char *v = std::getenv("TILINGFUNC"); v && std::string(v) == "1") {
       nestedFusionPM.addPass(mlir::affine::createTilingFuncPass());
