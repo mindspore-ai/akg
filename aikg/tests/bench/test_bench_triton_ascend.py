@@ -36,7 +36,7 @@ async def test_kernelbench_mindspore_triton_ascend910b4():
     task_pool = TaskPool()
     device_pool = DevicePool([device_id])
     # or load_config("/your-path-to-config/xxx_config.yaml")
-    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
 
     check_env_for_task(framework, backend, dsl, config)
 
@@ -91,7 +91,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
     task_pool = TaskPool()
     device_pool = DevicePool([device_id])
     # or load_config("/your-path-to-config/xxx_config.yaml")
-    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
 
     check_env_for_task(framework, backend, dsl, config)
 
@@ -147,7 +147,7 @@ async def test_multikernelbench_activation_torch_triton_ascend910b4():
     task_pool = TaskPool()
     device_pool = DevicePool([device_id])
     # or load_config("/your-path-to-config/xxx_config.yaml")
-    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
 
     check_env_for_task(framework, backend, dsl, config)
 
@@ -228,7 +228,7 @@ async def test_aikgbench_torch_triton_ascend910b4():
     task_pool = TaskPool()
     device_pool = DevicePool([device_id])
     # or load_config("/your-path-to-config/xxx_config.yaml")
-    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
 
     check_env_for_task(framework, backend, dsl, config)
 

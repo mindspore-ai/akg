@@ -56,7 +56,7 @@ class EvolveConfig:
         self.device_list = [0]
 
         # 配置文件路径
-        self.config_path = str(Path(get_project_root()) / "config" / "vllm_triton_evolve_config.yaml")
+        self.config_path = str(Path(get_project_root()) / "config" / "vllm_triton_cuda_evolve_config.yaml")
 
         # 任务配置
         self.op_name = "relu_op"

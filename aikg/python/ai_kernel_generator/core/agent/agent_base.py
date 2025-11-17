@@ -163,6 +163,8 @@ class AgentBase(ABC):
                 logger.warning(f"Resource doc not found: {full_path}")
                 return ""
 
+            logger.info(f"Loading resource doc: {full_path}")
+
             with open(full_path, 'r', encoding='utf-8') as f:
                 return f.read()
         except Exception as e:

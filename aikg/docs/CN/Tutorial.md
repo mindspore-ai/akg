@@ -101,7 +101,7 @@ async def run_mindspore_triton_single():
 | framework | str | 前端框架：如 "mindspore"、"torch"、"numpy" |
 | workflow | str | 可选。覆盖配置中的 `workflow_config_path`，如 "coder_only_workflow" |
 
-> 配置说明：`load_config("triton_ascend", backend="ascend")` 会加载 `config/default_triton_ascend_config.yaml` 作为方案（Ascend后端），或使用 `load_config("triton_cuda", backend="cuda")` 加载 `config/default_triton_cuda_config.yaml`（CUDA后端）；若需 vLLM 本地推理且 coder-only，可使用 `vllm_triton_coderonly_config.yaml` 并通过 `load_config(config_path=...)` 显式指定。
+> 配置说明：`load_config("triton_ascend", backend="ascend")` 会加载 `config/default_triton_ascend_config.yaml` 作为方案（Ascend后端），或使用 `load_config("triton_cuda", backend="cuda")` 加载 `config/default_triton_cuda_config.yaml`（CUDA后端）；若需 vLLM 本地推理且 coder-only，可分别使用 `vllm_triton_ascend_coderonly_config.yaml`（Ascend）或 `vllm_triton_cuda_coderonly_config.yaml`（CUDA），并通过 `load_config(config_path=...)` 显式指定。
 
 ## 运行步骤
 

@@ -91,7 +91,7 @@ export AIKG_XXX_API_KEY=xxx
 export AIKG_OLLAMA_API_BASE=http://localhost:11434
 ```
 Additional configuration options:
-- **Task Orchestration Plan Configuration**: Declares a task's complete runtime scheme (including `agent_model_config`, `workflow_config_path`, `docs_dir`, etc.). Common plan files: `default_triton_cuda_config.yaml`, `default_triton_ascend_config.yaml`, `vllm_triton_coderonly_config.yaml`. See [Task Orchestration Plan Configuration](./docs/TaskOrchestrationPlan.md).
+- **Task Orchestration Plan Configuration**: Declares a task's complete runtime scheme (including `agent_model_config`, `workflow_config_path`, `docs_dir`, etc.). Common plan files: `default_triton_cuda_config.yaml`, `default_triton_ascend_config.yaml`, `vllm_triton_cuda_coderonly_config.yaml`, `vllm_triton_ascend_coderonly_config.yaml`. See [Task Orchestration Plan Configuration](./docs/TaskOrchestrationPlan.md).
 - **Model Configuration**: `llm_config.yaml` contains preset configurations for various LLM providers (DeepSeek, Qwen, Moonshot, etc.). The `agent_model_config` in the plan references presets from this file.
 - **Workflow Definition**: Specify the workflow YAML via `workflow_config_path` to define agent execution order and constraints (e.g., `default_workflow.yaml`, `coder_only_workflow.yaml`). See [Workflow System Design Document](./docs/Workflow.md).
 - **Doc-Driven Integration**: Provide reference docs for agents via the plan's `docs_dir`. See [Doc-Driven Integration Guide](./docs/DocDrivenIntegration.md).

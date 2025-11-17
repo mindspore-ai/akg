@@ -101,7 +101,7 @@ async def run_mindspore_triton_single():
 | framework | str | Frontend framework: "mindspore"/"torch"/"numpy" |
 | workflow | str | Optional. Override `workflow_config_path`, e.g. "coder_only_workflow" |
 
-> Configuration: `load_config("triton_ascend", backend="ascend")` loads `config/default_triton_ascend_config.yaml` for Ascend backend, or `load_config("triton_cuda", backend="cuda")` for CUDA backend. If you run with local vLLM and coder-only, consider `vllm_triton_coderonly_config.yaml` via `load_config(config_path=...)`.
+> Configuration: `load_config("triton_ascend", backend="ascend")` loads `config/default_triton_ascend_config.yaml` for Ascend backend, or `load_config("triton_cuda", backend="cuda")` for CUDA backend. If you run with local vLLM and coder-only, use `vllm_triton_ascend_coderonly_config.yaml` (Ascend) or `vllm_triton_cuda_coderonly_config.yaml` (CUDA) via `load_config(config_path=...)`.
 
 ## Run
 

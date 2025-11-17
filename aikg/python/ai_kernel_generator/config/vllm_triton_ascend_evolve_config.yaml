@@ -4,18 +4,20 @@ agent_model_config:
   coder: vllm_deepseek_v31_default
   conductor: vllm_deepseek_v31_default
   api_generator: vllm_deepseek_v31_default
-  feature_extractor: vllm_deepseek_v31_default
+  sketch: vllm_deepseek_v31_default
+  selector: vllm_deepseek_v31_default
 
 # Log configuration
 log_dir: "~/aikg_logs"
 
 # Workflow configuration
-workflow_config_path: "config/coder_only_workflow.yaml"
+workflow_config_path: "config/default_workflow.yaml"
 
 # Documentation directory configuration
 docs_dir:
-  designer: "resources/docs/triton_ascend_docs"
+  designer: "resources/docs/sketch_docs"
   coder: "resources/docs/triton_ascend_docs"
+  sketch: "resources/docs/sketch_docs"
 
 # Performance analysis configuration
 profile_settings:
@@ -23,4 +25,5 @@ profile_settings:
   warmup_times: 5
 
 # Verification configuration
-verify_timeout: 600  # Timeout for verification in seconds (default 10 minutes)
+verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
+
