@@ -254,6 +254,7 @@ vllm_deepseek_v31_thinking_default:
   top_p: 0.7
   frequency_penalty: 0.6
   presence_penalty: 0.5
+  thinking_mode: "true"
 
 
 vllm_deepseek_v31_default:
@@ -389,6 +390,53 @@ openrouter_deepseek_v3_0324_free:
   top_p: 0.9
   frequency_penalty: 0.5
   presence_penalty: 0.5
+
+zhipu_glm_46_default:
+  api_base: "https://open.bigmodel.cn/api/paas/v4"
+  model: "glm-4.6"
+  api_key_env: "AIKG_ZHIPU_API_KEY"
+  max_tokens: 65536
+  temperature: 0.2
+  top_p: 0.9
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  thinking_mode: "disabled"
+
+
+zhipu_glm_46_thinking_default:
+  api_base: "https://open.bigmodel.cn/api/paas/v4"
+  model: "glm-4.6"
+  api_key_env: "AIKG_ZHIPU_API_KEY"
+  max_tokens: 65536
+  temperature: 0.2
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+  thinking_mode: "enabled"
+
+
+zhipu_glm_45_default:
+  api_base: "https://open.bigmodel.cn/api/paas/v4"
+  model: "glm-4.5"
+  api_key_env: "AIKG_ZHIPU_API_KEY"
+  max_tokens: 65536
+  temperature: 0.2
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+
+zhipu_glm_45_air_thinking_default:
+  api_base: "https://open.bigmodel.cn/api/paas/v4"
+  model: "glm-4.5-air"
+  api_key_env: "AIKG_ZHIPU_API_KEY"
+  max_tokens: 65536
+  temperature: 0.2
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+  thinking_mode: "enabled"
+
 
 # 默认配置名称
 default_preset: "sflow_ds_r1_default" 

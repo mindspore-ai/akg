@@ -27,6 +27,9 @@ export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx
 
 # Moonshot (https://www.moonshot.cn/)
 export AIKG_MOONSHOT_API_KEY=sk-xxx
+
+# 智谱大模型 (https://www.bigmodel.cn/)
+export AIKG_ZHIPU_API_KEY=sk-xxx
 ```
 
 ## 2. LLM 模型配置 (`llm_config.yaml`)
