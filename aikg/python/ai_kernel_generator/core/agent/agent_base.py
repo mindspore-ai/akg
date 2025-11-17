@@ -17,6 +17,11 @@ import logging
 from abc import ABC
 from typing import Dict, Any
 
+try:
+    from openai import AsyncOpenAI as OpenAIAsyncClient
+except ImportError:
+    OpenAIAsyncClient = None
+
 from langchain.prompts import PromptTemplate
 
 from ai_kernel_generator import get_project_root
@@ -262,10 +267,11 @@ class AgentBase(ABC):
         # 创建模型
         model = create_model(model_name)
         effective_model_name = getattr(model, "model_name", model_name)
+        is_openai_async_client = OpenAIAsyncClient is not None and isinstance(model, OpenAIAsyncClient)
 
         try:
             # 如果是VLLM模型（openai.AsyncOpenAI客户端）
-            if effective_model_name.startswith("vllm_"):
+            if effective_model_name.startswith("vllm_") or is_openai_async_client:
                 # 将formatted_prompt转换为OpenAI格式的消息
                 messages = [
                     {"role": "system", "content": ""},  # 空的system prompt
