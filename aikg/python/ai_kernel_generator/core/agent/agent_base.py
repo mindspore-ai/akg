@@ -261,10 +261,11 @@ class AgentBase(ABC):
         # self.count_tokens(formatted_prompt, model_name, self.context) # 暂不开启token统计
         # 创建模型
         model = create_model(model_name)
+        effective_model_name = getattr(model, "model_name", model_name)
 
         try:
             # 如果是VLLM模型（openai.AsyncOpenAI客户端）
-            if model_name.startswith("vllm_"):
+            if effective_model_name.startswith("vllm_"):
                 # 将formatted_prompt转换为OpenAI格式的消息
                 messages = [
                     {"role": "system", "content": ""},  # 空的system prompt
@@ -336,7 +337,7 @@ class AgentBase(ABC):
                 logger.info(response_metadata)
 
             logger.debug(f"LLM End:    [status] %s -- [model] %s",
-                         self.context.get('agent_name', ''), model_name)
+                         self.context.get('agent_name', ''), effective_model_name)
 
             # 后处理：从 content 中剥离可能包含的 reasoning 片段
             content, extracted_reasoning = self.split_think(content)
@@ -357,7 +358,7 @@ class AgentBase(ABC):
                         "framework": self.context.get('framework', ''),
                         "workflow_name": self.context.get('workflow_name', ''),
                         "task_desc": self.context.get('task_desc', ''),
-                        "model_name": model_name,
+                        "model_name": effective_model_name,
                         "content": content,
                         "formatted_prompt": formatted_prompt,
                         "reasoning_content": reasoning_content,
@@ -370,6 +371,6 @@ class AgentBase(ABC):
             return content, formatted_prompt, reasoning_content
         except Exception as e:
             logger.error(f"LLM Failed: [status] %s -- [model] %s -- [error] %s",
-                         self.context.get('agent_name', ''), model_name, e)
+                         self.context.get('agent_name', ''), effective_model_name, e)
             logger.error(f"Exception in run_llm: {type(e).__name__}: {e}")
             raise
