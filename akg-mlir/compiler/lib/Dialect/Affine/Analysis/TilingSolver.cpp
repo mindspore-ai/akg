@@ -179,8 +179,7 @@ void GlobalConfigSolver::setEnableVectorize() {
 
 void GlobalConfigSolver::solve(func::FuncOp funcOp) {
   if (modelGraph->hardware != kTargetCpu
-    && modelGraph->hardware != kTargetAscend
-    && modelGraph->hardware != kTargetAicore) {
+    && modelGraph->hardware != kTargetNpu) {
     if (!isDynamicShape() || akgglobal::GpuScheduleTool::getInstance().runtimeArgSize() > 0 ||
         modelGraph->graphTemplate == GraphTemplate::REDUCTION) {
       if (!akgglobal::GpuScheduleTool::getInstance().getIsCustomConfig()) {
