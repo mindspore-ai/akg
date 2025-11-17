@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import textwrap
 import pytest
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
 from ai_kernel_generator.utils.common_utils import create_log_dir
 from ai_kernel_generator.config.config_validator import load_config
+from ..utils import get_device_id
 
-device_id = os.getenv("DEVICE_ID", 1)
+device_id = get_device_id()
 
 
 @pytest.mark.level0

@@ -9,12 +9,13 @@ from ..utils import (
     get_kernelbench_op_name, get_multikernelbench_op_name,
     get_kernelbench_task_desc, get_multikernelbench_task_desc,
     get_aikgbench_op_name, get_aikgbench_task_desc,
-    add_op_prefix, generate_beautiful_test_report
+    add_op_prefix, generate_beautiful_test_report, get_device_id
 )
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 
 os.environ['AIKG_DATA_COLLECT'] = 'on'
+device_id = get_device_id()
 
 
 @pytest.mark.level2
@@ -33,7 +34,7 @@ async def test_kernelbench_mindspore_triton_ascend910b4():
     benchmark = "KernelBench"
 
     task_pool = TaskPool()
-    device_pool = DevicePool([1])
+    device_pool = DevicePool([device_id])
     # or load_config("/your-path-to-config/xxx_config.yaml")
     config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
 
@@ -88,7 +89,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
     benchmark = "KernelBench"
 
     task_pool = TaskPool()
-    device_pool = DevicePool([1])
+    device_pool = DevicePool([device_id])
     # or load_config("/your-path-to-config/xxx_config.yaml")
     config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
 
@@ -144,7 +145,7 @@ async def test_multikernelbench_activation_torch_triton_ascend910b4():
     category = "activation"
 
     task_pool = TaskPool()
-    device_pool = DevicePool([1])
+    device_pool = DevicePool([device_id])
     # or load_config("/your-path-to-config/xxx_config.yaml")
     config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
 
@@ -225,7 +226,7 @@ async def test_aikgbench_torch_triton_ascend910b4():
     subcategory = "elemwise"
 
     task_pool = TaskPool()
-    device_pool = DevicePool([1])
+    device_pool = DevicePool([device_id])
     # or load_config("/your-path-to-config/xxx_config.yaml")
     config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
 
