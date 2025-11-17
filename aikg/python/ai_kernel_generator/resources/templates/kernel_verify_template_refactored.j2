@@ -289,23 +289,23 @@ def verify_implementations():
     
     {% if is_dynamic_shape %}
     # 动态shape：获取多组输入数据
-    # 设置随机种子以确保数据可复现
-    {% for line in set_seed_code %}
-    {{ line }}
-    {% endfor %}
-    framework_inputs_list = get_inputs_dyn_list()
-    
-    # 重新生成输入数据列表用于impl（避免原地操作影响）
+    # 设置随机种子以确保数据可复现（先准备impl输入）
     {% for line in set_seed_code %}
     {{ line }}
     {% endfor %}
     impl_inputs_list = get_inputs_dyn_list()
     
+    # 再次设置随机种子，重新生成framework输入（确保与impl一致）
+    {% for line in set_seed_code %}
+    {{ line }}
+    {% endfor %}
+    framework_inputs_list = get_inputs_dyn_list()
+    
     # 对每组输入进行验证
-    for case_idx, (inputs_for_framework, inputs_for_impl) in enumerate(zip(framework_inputs_list, impl_inputs_list)):
+    for case_idx, (inputs_for_impl, inputs_for_framework) in enumerate(zip(impl_inputs_list, framework_inputs_list)):
         {% if framework == "torch" %}
-        inputs_for_framework = [process_input(x) for x in inputs_for_framework]
         inputs_for_impl = [process_input(x) for x in inputs_for_impl]
+        inputs_for_framework = [process_input(x) for x in inputs_for_framework]
         {% endif %}
         
         print(f"验证动态shape案例 {case_idx + 1}/{len(framework_inputs_list)}")
@@ -320,22 +320,22 @@ def verify_implementations():
     
     {% else %}
     # 静态shape：获取单组输入数据
-    # 设置随机种子以确保数据可复现
-    {% for line in set_seed_code %}
-    {{ line }}
-    {% endfor %}
-    inputs_for_framework = get_inputs()
-    {% if framework == "torch" %}
-    inputs_for_framework = [process_input(x) for x in inputs_for_framework]
-    {% endif %}
-    
-    # 重新生成输入数据用于impl（避免原地操作影响）
+    # 设置随机种子以确保数据可复现（先准备impl输入）
     {% for line in set_seed_code %}
     {{ line }}
     {% endfor %}
     inputs_for_impl = get_inputs()
     {% if framework == "torch" %}
     inputs_for_impl = [process_input(x) for x in inputs_for_impl]
+    {% endif %}
+    
+    # 重新生成输入数据用于framework（避免原地操作影响）
+    {% for line in set_seed_code %}
+    {{ line }}
+    {% endfor %}
+    inputs_for_framework = get_inputs()
+    {% if framework == "torch" %}
+    inputs_for_framework = [process_input(x) for x in inputs_for_framework]
     {% endif %}
     
     # 使用带超时控制的验证函数
