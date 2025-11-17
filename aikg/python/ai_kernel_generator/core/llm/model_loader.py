@@ -124,6 +124,31 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
             else:
                 logger.debug(f"  {key}: {value}")
 
+    def _build_thinking_extra_body(thinking_mode: Optional[str],
+                                   extra_body: Optional[dict]) -> Optional[dict]:
+        """根据配置构造 thinking 相关的 extra_body"""
+        if thinking_mode is None:
+            return extra_body
+
+        # 统一用字符串匹配，兼容 True/False 以及 enabled/disabled
+        if isinstance(thinking_mode, bool):
+            normalized = "true" if thinking_mode else "false"
+        else:
+            normalized = str(thinking_mode).strip().lower()
+
+        extra_body = dict(extra_body or {})
+        if normalized in {"enabled", "disabled"}:
+            extra_body["thinking"] = {"type": normalized}
+        elif normalized in {"true", "false"}:
+            chat_template_kwargs = dict(extra_body.get("chat_template_kwargs", {}))
+            chat_template_kwargs["thinking"] = (normalized == "true")
+            extra_body["chat_template_kwargs"] = chat_template_kwargs
+        else:
+            logger.warning("不支持的 thinking_mode '%s'，请使用 enabled/disabled 或 True/False", thinking_mode)
+            return extra_body if extra_body else None
+
+        return extra_body
+
     # 判断是否为Ollama模型
     if name.startswith("ollama_"):
         # 提取模型参数
@@ -188,7 +213,11 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         model.temperature = model_params.get("temperature", 0.1)
         model.max_tokens = model_params.get("max_tokens", 8192)
         model.top_p = model_params.get("top_p", 0.95)
+        thinking_mode = model_params.pop("thinking_mode", None)
+        extra_body = model_params.pop("extra_body", None)
+        extra_body = _build_thinking_extra_body(thinking_mode, extra_body)
         model.other_params = model_params
+        model.extra_body = extra_body
 
     else:
         # 获取API密钥
@@ -203,6 +232,13 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         # 提取模型参数 - 只排除api_key_env
         model_params = {k: v for k, v in preset_config.items()
                         if k != "api_key_env"}
+
+        # 统一处理 thinking 配置，允许在 YAML 中通过 thinking_mode 字段控制
+        thinking_mode = model_params.pop("thinking_mode", None)
+        extra_body = model_params.pop("extra_body", None)
+        extra_body = _build_thinking_extra_body(thinking_mode, extra_body)
+        if extra_body:
+            model_params["extra_body"] = extra_body
 
         # 记录连接信息
         logger.info(

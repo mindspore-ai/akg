@@ -225,7 +225,7 @@ class AgentBase(ABC):
         logger.debug("=" * 60)
 
         if not input:
-            logger.debug("❌ input 字典为空!")
+            logger.debug("input 字典为空!")
             return
 
         for key, value in input.items():
@@ -239,7 +239,7 @@ class AgentBase(ABC):
                 is_empty = True
 
             # 记录状态
-            status = "❌ 空" if is_empty else "✅ 有值"
+            status = "空" if is_empty else "✅ 有值"
             value_preview = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
             logger.debug(f"{status} {key}: {value_preview}")
 
@@ -271,16 +271,16 @@ class AgentBase(ABC):
                     {"role": "user", "content": formatted_prompt}
                 ]
 
-                # 统一构造调用参数与 thinking 配置
-                is_thinking = "thinking" in model_name.lower()
+                # 统一构造调用参数，可通过模型实例上的 extra_body 配置 thinking
                 create_kwargs = {
                     "model": model.model_name,
                     "messages": messages,
                     "temperature": model.temperature,
                     "top_p": model.top_p,
                 }
-                if is_thinking:
-                    create_kwargs["extra_body"] = {"chat_template_kwargs": {"thinking": True}}
+                extra_body = getattr(model, "extra_body", None)
+                if extra_body:
+                    create_kwargs["extra_body"] = extra_body
 
                 if not aikg_stream_output:
                     # 非流式模式
