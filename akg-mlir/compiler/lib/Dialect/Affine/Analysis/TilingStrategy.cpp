@@ -40,16 +40,16 @@ bool TilingStrategy::IsRelevant(const AxisPtr &a, const InitGraphPtr graph) {
 }
 
 bool TilingStrategy::IsRelevant(const AxisPtr &a, const InitGraphPtr graph, std::unordered_set<std::string> ops) {
-  if (!ops.empty()) {
-    for (auto node : graph->nodes()) {
-      for (auto dim : node->loopNest()) {
-        if (dim == a && ops.find(node->opType) != ops.end()) {
-          return true;
-        }
-      }
-    }
+  if (ops.empty()) {
+    return false;
   }
-  return false;
+  return std::any_of(graph->nodes().begin(), graph->nodes().end(), [&](const NodePtr &node) {
+    if (ops.find(node->opType) == ops.end()) {
+      return false;
+    }
+    const auto &loopNest = node->loopNest();
+    return std::find(loopNest.begin(), loopNest.end(), a) != loopNest.end();
+  });
 }
 
 void RepositoryStrategy::AddConstraint(ModelGraphPtr initGraph) {
@@ -166,10 +166,9 @@ void DynamicShapeStrategy::DoVariableTile(const GpuModelGraphPtr initGraph, Sket
   auto arg1 = gpuTool.addRuntimeArgument(static_cast<int64_t>(prime1));
   auto arg2 = gpuTool.addRuntimeArgument(static_cast<int64_t>(prime2));
   std::vector<akgglobal::RuntimeVar> dynamicTiles{arg1, arg2};
-  size_t currMapDim = 0;
   size_t totalAxis = 0;
-  initGraph->rootAxis->forEachAxisBottomUp([&](const AxisPtr a) {
-    totalAxis++;
+  initGraph->rootAxis->forEachAxisBottomUp([&, currMapDim = size_t{0}](const AxisPtr a) mutable {
+    ++totalAxis;
     if (a->axisType.find(Axis::AxisLabel::kDynamic) != a->axisType.end()) {
       return;
     }
@@ -287,9 +286,7 @@ void TransposeStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
     return;
   }
 
-  for (auto axis : transposeWrite->loopNest_) {
-    sortByLoadAxes.push_front(axis);
-  }
+  sortByLoadAxes.assign(transposeWrite->loopNest_.rbegin(), transposeWrite->loopNest_.rend());
   std::sort(sortByLoadAxes.begin(), sortByLoadAxes.end(),
             [](const AxisPtr a1, const AxisPtr a2) { return a1->priority > a2->priority; });
   auto warpSize = GpuInfo::getInstance(gpuGraph->hardware).getWarpSizes();
@@ -786,6 +783,79 @@ void ParallelStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
       axis->tryAddConstraint(1, Constraint({unrollTileValue}));
     }
   }
+}
+
+unsigned computeDefaultNpuTileSize(unsigned bandRank) {
+  constexpr unsigned kTile32 = 32;
+  constexpr unsigned kTile16 = 16;
+  constexpr unsigned kTile8 = 8;
+  if (bandRank >= 5) {
+    return kTile8;
+  }
+  if (bandRank == 4) {
+    return kTile16;
+  }
+  return kTile32;
+}
+
+void NpuDefaultTileStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
+  if (gpuGraph == nullptr || gpuGraph->rootAxis == nullptr) {
+    return;
+  }
+
+  std::unordered_map<size_t, unsigned> bandRankMap;
+  gpuGraph->rootAxis->forEachAxisTopDown([&bandRankMap](const AxisPtr axis) {
+    if (axis == nullptr) {
+      return;
+    }
+    auto currentDepth = static_cast<unsigned>(axis->axisIdx + 1);
+    auto it = bandRankMap.find(axis->bandIdx);
+    if (it == bandRankMap.end() || currentDepth > it->second) {
+      bandRankMap[axis->bandIdx] = currentDepth;
+    }
+  });
+
+  gpuGraph->rootAxis->forEachAxisTopDown([&bandRankMap](const AxisPtr axis) {
+    if (axis == nullptr) {
+      return;
+    }
+    auto rankIt = bandRankMap.find(axis->bandIdx);
+    if (rankIt == bandRankMap.end()) {
+      return;
+    }
+    unsigned bandRank = rankIt->second;
+    auto tileConfig = axis->tryGetConfig(0, kTileCfg);
+    if (tileConfig == nullptr) {
+      return;
+    }
+    unsigned targetTile = computeDefaultNpuTileSize(bandRank);
+    auto loop = axis->loop;
+    bool hasStaticBounds = loop && loop->hasConstantLowerBound() && loop->hasConstantUpperBound();
+    bool isDynamic = axis->axisType.find(Axis::AxisLabel::kDynamic) != axis->axisType.end();
+    if (!hasStaticBounds || isDynamic) {
+      tileConfig->value = 1;
+      axis->tryAddConstraint(0, Constraint({1}));
+      return;
+    }
+    int64_t lowerBound = loop->getConstantLowerBound();
+    int64_t upperBound = loop->getConstantUpperBound();
+    int64_t extent = upperBound - lowerBound;
+    if (extent <= 1) {
+      tileConfig->value = 1;
+      axis->tryAddConstraint(0, Constraint({1}));
+      return;
+    }
+    while (targetTile > 1 && extent <= static_cast<int64_t>(targetTile)) {
+      targetTile /= 2;
+    }
+    if (targetTile <= 1) {
+      tileConfig->value = 1;
+      axis->tryAddConstraint(0, Constraint({1}));
+      return;
+    }
+    tileConfig->value = static_cast<int>(targetTile);
+    axis->tryAddConstraint(0, Constraint({static_cast<int>(targetTile)}));
+  });
 }
 
 void TilingStrategyManager::processOn(const ModelGraphPtr modelGraph) {

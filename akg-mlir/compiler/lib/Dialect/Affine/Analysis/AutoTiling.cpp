@@ -95,9 +95,8 @@ ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
     return buildGpuModelGraph(initGraph, tilingMgr);
   } else if (hardware == kTargetCpu) {
     return buildCpuModelGraph(initGraph, tilingMgr);
-  } else if (hardware == kTargetAscend || hardware == kTargetAicore) {
-    // todo Implement buildAscendModelGraph to optimize UB/Cube/Vector scheduling
-    return buildCpuModelGraph(initGraph, tilingMgr);
+  } else if (hardware == kTargetNpu) {
+    return buildNpuModelGraph(initGraph, tilingMgr);
   } else {
     llvm::errs() << "Not impl model graph for hardware " << hardware;
     return std::make_shared<ModelGraph>(initGraph);
@@ -114,6 +113,17 @@ void UniquePrimeCollect(Operation *op) {
     }
     tool.updateVisited(constValue);
   });
+}
+
+// todo Implement buildAscendModelGraph to optimize UB/Cube/Vector scheduling
+GpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {
+  auto npuGraph = std::make_shared<GpuModelGraph>(initGraph);
+  npuGraph->funcOp = initGraph->funcOp;
+  // UniquePrimeCollect(initGraph->funcOp);
+  npuGraph->AnalyzeGraphTemplate();
+  tilingMgr->addStrategy(std::make_shared<NpuDefaultTileStrategy>());
+  tilingMgr->processOn(npuGraph);
+  return npuGraph;
 }
 
 GpuModelGraphPtr buildGpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {

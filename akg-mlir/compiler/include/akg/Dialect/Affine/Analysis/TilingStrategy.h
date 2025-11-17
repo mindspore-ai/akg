@@ -160,6 +160,14 @@ class ParallelStrategy : public TilingStrategy {
   int blockLimitCoef = 2;
 };
 
+class NpuDefaultTileStrategy : public TilingStrategy {
+ public:
+  NpuDefaultTileStrategy() : TilingStrategy() {}
+  ~NpuDefaultTileStrategy() override = default;
+
+  void AddGpuConstraint(GpuModelGraphPtr gpuGraph) override;
+};
+
 class TilingStrategyManager {
  public:
   TilingStrategyManager() {}

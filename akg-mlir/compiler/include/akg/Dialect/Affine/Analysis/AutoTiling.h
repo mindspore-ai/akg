@@ -44,6 +44,7 @@ ModelGraphPtr buildModelGraph(InitGraphPtr initGraph);
 /// hardware platforms can be (e.g., GpuModelGraph and CpuModelGraph).
 GpuModelGraphPtr buildGpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr);
 CpuModelGraphPtr buildCpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr);
+GpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr);
 
 /// Encapsulates the steps required to solve sharding, and supports two solution methods: heuristic and search (Tuning);
 TilingSolverPtr getHeuristicTilingSolver(ModelGraphPtr modelGraph);

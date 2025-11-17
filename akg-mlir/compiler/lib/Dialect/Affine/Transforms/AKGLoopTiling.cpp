@@ -18,6 +18,7 @@
 
 #include <memory>
 #include <unordered_set>
+#include <algorithm>
 #include "akg/Dialect/Affine/Analysis/AutoTiling.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -1031,50 +1032,20 @@ bool AKGLoopTiling::isDynamicShape() const {
 }
 
 void AKGLoopTiling::runNpuOperation() {
-  // TODO(ascend-tiling): extend strategy to support multi-axis tiling, auto solver integration
-  // and operator-specific optimisations.
   if (band.empty()) {
     return;
   }
-
-  mlir::affine::AffineForOp innermostLoop = nullptr;
-  int maxDepth = 0;
-  for (auto loop : band) {
-    auto candidate = findInnermostLoopWithDepth(loop);
-    if (candidate.first > maxDepth) {
-      maxDepth = candidate.first;
-      innermostLoop = candidate.second;
-    }
+  mlir::func::FuncOp funcOp = getOperation();
+  auto opType = mlir::CommonUtils::getOperatorType(funcOp);
+  if (!isDynamicShape() || opType == mlir::OperatorTemplate::Reduce) {
+    inequalityConvertToIf = true;
   }
-  if (!innermostLoop) {
+  tileEachBand();
+  if (useAutoTiling && solver) {
+    // TODO(ascend-tiling): annotate loops for cooperative scheduling
     return;
   }
-
-  // Skip if the loop already matches the desired step.
-  if (innermostLoop.getStepAsInt() == 512) {
-    return;
-  }
-
-  SmallVector<mlir::affine::AffineForOp, 1> innermostBand{innermostLoop};
-  SmallVector<unsigned, 1> tileSizes{512};
-  SmallVector<mlir::affine::AffineForOp, 6> tiledNest;
-
-  if (mlir::failed(mlir::affine::tilePerfectlyNested(innermostBand, tileSizes, &tiledNest))) {
-    LLVM_DEBUG(llvm::dbgs() << "[NPU Tiling] Failed to tile innermost loop with step 512.\n");
-    return;
-  }
-
-  // TODO(ascend-tiling): add tail peeling / separating full tiles if future requirements demand it.
-  // TODO(ascend-tiling): insertBufferPlacement();
-  // TODO(ascend-tiling): annotateLoopsForCooperativeScheduling();
-  // TODO(ascend-tiling): rewriteReductionPatternIfNeeded();
-  // Future steps:
-  //   1) Collect loop band metadata (tile hierarchy, axis types).
-  //   2) Query AutoTiling solver for multi-level tiling suggestions.
-  //   3) Adjust induction variables / bounds to schedule outer tiles to AICore grid.
-  //   4) Insert DMA copy and shared UB buffering hooks.
-  //   5) Annotate vectorization hints and reduction strategies.
-  //   6) Perform legality checks (trip count, dynamic shape guard) before committing.
+  return;
 }
 
 void AKGLoopTiling::runCudaOperation() {
@@ -1125,8 +1096,8 @@ void AKGLoopTiling::BandCheck(const std::vector<SmallVector<mlir::affine::Affine
     });
   }
 
-  // Rest are checkers for GPU only (CUDA has stricter requirements than Ascend).
-  if (target == mlir::kTargetCpu || target == mlir::kTargetAscend || target == mlir::kTargetAicore) {
+  // Rest are checkers for GPU only.
+  if (target == mlir::kTargetCpu || target == mlir::kTargetNpu) {
     return;
   }
 
@@ -1175,7 +1146,7 @@ void AKGLoopTiling::runOnOperation() {
       runCpuOperation();
     } else if (target == mlir::kTargetCuda) {
       runCudaOperation();
-    } else if (target == mlir::kTargetAscend || target == mlir::kTargetAicore) {
+    } else if (target == mlir::kTargetNpu) {
       runNpuOperation();
     } else {
       llvm::errs() << "Currently, only cpu, cuda and ascend backends are supported.\n" << "Current Hardware:" << target;
