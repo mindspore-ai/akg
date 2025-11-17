@@ -6,7 +6,7 @@ Doc-Driven Integration (DDI) treats documentation as a contract. By following a 
 
 ## Orchestration Plan Integration
 
-Enable and configure through the `docs_dir` field in the Task Orchestration Plan. Example: `aikg/python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml`:
+Enable and configure through the `docs_dir` field in the Task Orchestration Plan. Examples: `aikg/python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml` (Ascend) or `aikg/python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml` (CUDA):
 
 ### Basic Configuration Structure
 

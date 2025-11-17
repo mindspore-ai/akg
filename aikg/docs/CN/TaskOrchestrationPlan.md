@@ -136,8 +136,9 @@ from ai_kernel_generator.config.config_validator import load_config
 # 方式1：按 DSL 加载默认方案
 config = load_config(dsl="triton_ascend", backend="ascend")  # 或使用 "triton_cuda" 用于 CUDA 后端
 
-# 方式2：显式指定方案文件路径
-config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+# 方式2：显式指定方案文件路径（本地 vLLM coder-only）
+config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")  # Ascend
+# config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")    # CUDA
 
 # 创建任务
 task = Task(op_name="relu", task_desc="...", dsl="triton_ascend", config=config)  # 或使用 "triton_cuda" 用于 CUDA

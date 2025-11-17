@@ -43,7 +43,7 @@ def relu_kernel(
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
-def relu_triton_mindspore(x):
+def relu_triton_ascend_mindspore(x):
     import mindspore as ms
     output = ms.mint.zeros_like(x)
 
@@ -60,7 +60,7 @@ def relu_triton_mindspore(x):
     return output
 
 
-def relu_triton_torch(x):
+def relu_triton_ascend_torch(x):
     x = x.contiguous()
     n_elements = x.numel()
     output = torch.empty_like(x, device=x.device)

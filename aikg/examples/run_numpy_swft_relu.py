@@ -63,7 +63,7 @@ async def run_numpy_swft_single():
     task_pool = TaskPool()
     device_pool = DevicePool([0])
     config = load_config("swft")  # or load_config("/your-path-to-config/xxx_config.yaml")
-    # config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+    # config = load_config(config_path="./python/ai_kernel_generator/config/default_swft_config.yaml")
 
     check_env_for_task("numpy", "ascend", "swft", config)
 

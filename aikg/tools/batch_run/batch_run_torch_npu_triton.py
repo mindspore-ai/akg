@@ -97,7 +97,7 @@ async def run_single_task(op_name: str, task_desc: str):
     task_pool = TaskPool()
     device_pool = DevicePool([0])
     config = load_config("triton_ascend", backend="ascend")
-    # config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+    # config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
 
     check_env_for_task("torch", "ascend", "triton_ascend", config)
 

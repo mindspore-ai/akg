@@ -18,7 +18,7 @@
 
 ## 文档接入“任务编排方案配置”
 
-通过“任务编排方案配置”的 `docs_dir` 字段启用与配置。示例：`aikg/python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml`：
+通过“任务编排方案配置”的 `docs_dir` 字段启用与配置。示例：`aikg/python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml`（Ascend）或 `aikg/python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml`（CUDA）：
 
 ```yaml
 # Documentation directory configuration

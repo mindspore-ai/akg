@@ -132,8 +132,9 @@ from ai_kernel_generator.config.config_validator import load_config
 # Option 1: Load preset by DSL (e.g., triton)
 config = load_config(dsl="triton_ascend", backend="ascend")  # or "triton_cuda" for CUDA backend
 
-# Option 2: Load by explicit plan path
-config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+# Option 2: Load by explicit plan path (local vLLM coder-only)
+config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")  # Ascend
+# config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")    # CUDA
 
 task = Task(op_name="relu", task_desc="...", dsl="triton_ascend", config=config)  # or "triton_cuda" for CUDA
 ```

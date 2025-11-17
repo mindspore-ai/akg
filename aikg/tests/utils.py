@@ -15,6 +15,11 @@
 import os
 
 
+def get_device_id(default=0):
+    """统一获取 DEVICE_ID，默认值为 0。"""
+    return int(os.getenv("DEVICE_ID", default))
+
+
 def _raise_submodule_error(path_name, path_value):
     """通用的子模块错误提示函数"""
     error_msg = f"找不到 {path_name}: {path_value}\n"

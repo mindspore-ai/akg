@@ -228,7 +228,7 @@ async def run_analysis(
     print(f"🎯 目标: 对比有无优化建议的性能差异\n")
     
     # 1. 加载配置
-    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_evolve_config.yaml")
+    config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_ascend_evolve_config.yaml")
     device_pool = DevicePool(device_list=[device_id])
     
     # 2. 不带优化建议的测试

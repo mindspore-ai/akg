@@ -3,10 +3,14 @@ from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ..utils import (
-    get_kernelbench_op_name, get_kernelbench_task_desc, add_op_prefix, process_task_results
+    get_kernelbench_op_name, get_kernelbench_task_desc, add_op_prefix,
+    process_task_results, get_device_id
 )
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
+
+
+device_id = get_device_id()
 
 
 @pytest.mark.level0
@@ -25,7 +29,7 @@ async def test_kernelbench_torch_tilelang_npuir_ascend910b4():
     benchmark = "KernelBench"
 
     task_pool = TaskPool()
-    device_pool = DevicePool([1])
+    device_pool = DevicePool([device_id])
     # or load_config("/your-path-to-config/xxx_config.yaml")
     config = load_config(config_path="./python/ai_kernel_generator/config/vllm_tilelang_npuir_coderonly_config.yaml")
 

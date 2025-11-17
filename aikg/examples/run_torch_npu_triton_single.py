@@ -72,7 +72,7 @@ async def run_torch_npu_triton_single():
     task_pool = TaskPool()
     device_pool = DevicePool([0])
     config = load_config("triton_ascend", backend="ascend")  # use offical deepseek api
-    # config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_coderonly_config.yaml")
+    # config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
 
     check_env_for_task("torch", "ascend", "triton_ascend", config)
 

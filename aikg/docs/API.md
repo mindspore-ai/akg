@@ -65,19 +65,35 @@ Task flow configuration files are used to orchestrate and organize which model d
 -   **Flexible Combinations**: Create multiple configuration files for different scenarios (e.g., local vLLM + cloud API).
 -   **Default Plan**: Presets are provided by DSL, e.g., `default_triton_cuda_config.yaml` or `default_triton_ascend_config.yaml`.
 
-**Example (coder-only, local vLLM)**: `vllm_triton_coderonly_config.yaml`
-Use a unified local vLLM model preset for coder-only workflow.
+**Example (coder-only, local vLLM)**: `vllm_triton_ascend_coderonly_config.yaml` (Ascend) or `vllm_triton_cuda_coderonly_config.yaml` (CUDA). Both provide unified local vLLM presets for coder-only workflows.
 
 ```yaml
 # Model preset configuration
 agent_model_config:
-  designer: vllm_deepseek_r1_default
-  coder: vllm_deepseek_r1_default
-  conductor: vllm_deepseek_r1_default
-  api_generator: vllm_deepseek_r1_default
+  designer: vllm_deepseek_v31_default
+  coder: vllm_deepseek_v31_default
+  conductor: vllm_deepseek_v31_default
+  api_generator: vllm_deepseek_v31_default
+  feature_extractor: vllm_deepseek_v31_default
 
 # Log configuration
 log_dir: "~/aikg_logs"
+
+# Workflow configuration
+workflow_config_path: "config/coder_only_workflow.yaml"
+
+# Documentation directory configuration
+docs_dir:
+  designer: "resources/docs/triton_ascend_docs"  # Use triton_cuda_docs for the CUDA variant
+  coder: "resources/docs/triton_ascend_docs"
+
+# Performance analysis configuration
+profile_settings:
+  run_times: 50
+  warmup_times: 5
+
+# Verification configuration
+verify_timeout: 600
 ```
 
 **How to Use**:
@@ -87,7 +103,8 @@ Load a plan configuration using `load_config()`.
 config = load_config(dsl="triton_ascend", backend="ascend")  # or "triton_cuda" for CUDA backend
 
 # Load a specific configuration file
-config = load_config(config_path="/path/to/your/vllm_custom_path.yaml")
+config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
+# config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")
 
 # Use the configuration in a task
 task = Task(

@@ -66,19 +66,35 @@ export AIKG_ZHIPU_API_KEY=sk-xxx
 -   **灵活组合**: 可以创建多个配置文件，以应对不同场景（如本地 vLLM 与云端 API 混合）。
 -   **默认方案**: 按 DSL 提供默认方案，例如 `default_triton_cuda_config.yaml` 或 `default_triton_ascend_config.yaml`。
 
-**示例（coder-only，本地 vLLM）**：`vllm_triton_coderonly_config.yaml`
-为 coder-only 流程配置统一的本地 vLLM 模型。
+**示例（coder-only，本地 vLLM）**：`vllm_triton_ascend_coderonly_config.yaml`（Ascend）或 `vllm_triton_cuda_coderonly_config.yaml`（CUDA），用于为 coder-only 流程配置统一的本地 vLLM 模型。
 
 ```yaml
 # 模型预设配置
 agent_model_config:
-  designer: vllm_deepseek_r1_default
-  coder: vllm_deepseek_r1_default
-  conductor: vllm_deepseek_r1_default
-  api_generator: vllm_deepseek_r1_default
+  designer: vllm_deepseek_v31_default
+  coder: vllm_deepseek_v31_default
+  conductor: vllm_deepseek_v31_default
+  api_generator: vllm_deepseek_v31_default
+  feature_extractor: vllm_deepseek_v31_default
 
 # 日志配置
 log_dir: "~/aikg_logs"
+
+# Workflow 配置
+workflow_config_path: "config/coder_only_workflow.yaml"
+
+# 文档目录
+docs_dir:
+  designer: "resources/docs/triton_ascend_docs"  # Ascend 版本；CUDA 版本对应 triton_cuda_docs
+  coder: "resources/docs/triton_ascend_docs"
+
+# 性能分析
+profile_settings:
+  run_times: 50
+  warmup_times: 5
+
+# 验证配置
+verify_timeout: 600
 ```
 
 **使用方式**:
@@ -89,7 +105,8 @@ log_dir: "~/aikg_logs"
 config = load_config(dsl="triton_ascend", backend="ascend")  # 或使用 "triton_cuda" 用于 CUDA 后端
 
 # 或加载指定的配置文件
-config = load_config(config_path="/path/to/your/vllm_custom_plan.yaml")
+config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
+# config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")
 
 # 在任务中使用该配置
 task = Task(

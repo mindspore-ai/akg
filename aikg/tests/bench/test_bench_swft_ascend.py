@@ -5,12 +5,13 @@ from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ..utils import (
     get_kernelbench_op_name, get_kernelbench_task_desc, add_op_prefix,
-    generate_beautiful_test_report
+    generate_beautiful_test_report, get_device_id
 )
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 
 os.environ['AIKG_DATA_COLLECT'] = 'on'
+device_id = get_device_id()
 
 
 @pytest.mark.level2
@@ -26,7 +27,7 @@ async def test_bench_swft_ascend():
     backend = "ascend"
     arch = "ascend310p3"
     task_pool = TaskPool()
-    device_pool = DevicePool([1, 2])
+    device_pool = DevicePool([device_id])
     config = load_config(dsl)
 
     check_env_for_task(framework, backend, dsl, config)
