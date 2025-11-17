@@ -114,10 +114,24 @@ struct FusionAnalyzer {
   std::pair<GroupPtr, GroupPtr> determineFusionOrder(
       const GroupPtr oldGroup, const GroupPtr newGroup);
 
-  // Handles intersection points between two groups in the fusion plan.
-  // Finds common reachable groups and redirects fusion plans accordingly.
-  // Returns the target group if intersection points were found and handled, nullptr otherwise.
-  GroupPtr handleIntersectionPoints(const GroupPtr oldGroup, const GroupPtr newGroup);
+  // Handles backward intersection points between two groups in the fusion plan.
+  // Finds the closest backward intersection point and redirects fusion paths accordingly.
+  // Returns the target group if backward intersection points were found and handled, nullptr otherwise.
+  GroupPtr handleBackwardIntersectionPoints(const GroupPtr oldGroup, const GroupPtr newGroup);
+
+  // Connects all last nodes in paths from srcGroupId to dstGroupId.
+  bool connectLastNodesToTarget(unsigned srcGroupId, unsigned dstGroupId);
+
+  // Redirects shorter path to longer path's starting group.
+  // Modifies fusion plans to redirect paths ending at intersectionId to targetGroup.
+  void redirectFusionPlanToTarget(unsigned intersectionId,
+                                  const std::unordered_map<unsigned, unsigned> &reachable,
+                                  unsigned pathLen, GroupPtr targetGroup);
+
+  // Sets up direct fusion plan from srcGroup to dstGroup and links all source groups to destination group.
+  // Updates fusePlan, oldPlan, and redirects all fusion plans pointing to srcGroup to dstGroup.
+  void setupDirectFusionPlan(FusionPlan &fusePlan, FusionPlan &oldPlan,
+                             const GroupPtr srcGroup, const GroupPtr dstGroup);
 
   std::unordered_set<unsigned> finished;
   std::vector<unsigned> topoSortNodeIds;
