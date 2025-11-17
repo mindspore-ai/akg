@@ -19,8 +19,9 @@ import logging
 import subprocess
 import json
 import sys
+import textwrap
 from datetime import datetime
-from typing import Optional, Literal, Tuple, Dict, Any
+from typing import Optional, Literal, Tuple, Dict, Any, List
 from jinja2 import Template
 import pandas as pd
 from pathlib import Path
@@ -240,6 +241,23 @@ class KernelVerifier:
         """
         return "get_inputs_dyn_list" in self.framework_code
 
+    @staticmethod
+    def _prepare_code_lines(code_snippet: Any) -> List[str]:
+        """将多行代码片段规范化为按行列表，方便模板渲染时控制缩进。"""
+        if not code_snippet:
+            return []
+        if isinstance(code_snippet, (list, tuple)):
+            lines: List[str] = []
+            for snippet in code_snippet:
+                lines.extend(KernelVerifier._prepare_code_lines(snippet))
+            return lines
+        if isinstance(code_snippet, str):
+            normalized = textwrap.dedent(code_snippet).strip("\n")
+            if not normalized:
+                return []
+            return normalized.split("\n")
+        raise TypeError(f"Unsupported code snippet type: {type(code_snippet)}")
+
     def gen_verify_project(self, impl_code: str, verify_dir: str, device_id: int = 0):
         """生成验证项目文件到指定目录"""
         logger.info(f"[{self.op_name}] 开始生成验证项目，目录: {verify_dir}, device_id={device_id}")
@@ -377,16 +395,16 @@ class KernelVerifier:
                 is_dynamic_shape=is_dynamic_shape,
                 timeout=self.config.get('verify_timeout', 300),
                 # Adapter生成的代码
-                framework_imports=framework_imports,
-                framework_model_import=framework_model_import,
-                dsl_imports=dsl_imports,
-                dsl_impl_import=dsl_impl_import,
-                special_setup_code=special_setup_code,
-                device_setup_code=device_setup_code,
-                process_input_code=process_input_code,
-                call_impl_code=call_impl_code,
-                set_seed_code=set_seed_code,
-                binary_io_functions=binary_io_functions,
+                framework_imports=self._prepare_code_lines(framework_imports),
+                framework_model_import=self._prepare_code_lines(framework_model_import),
+                dsl_imports=self._prepare_code_lines(dsl_imports),
+                dsl_impl_import=self._prepare_code_lines(dsl_impl_import),
+                special_setup_code=self._prepare_code_lines(special_setup_code),
+                device_setup_code=self._prepare_code_lines(device_setup_code),
+                process_input_code=self._prepare_code_lines(process_input_code),
+                call_impl_code=self._prepare_code_lines(call_impl_code),
+                set_seed_code=self._prepare_code_lines(set_seed_code),
+                binary_io_functions=self._prepare_code_lines(binary_io_functions),
                 needs_binary_io=needs_binary_io,
                 tensor_type_name=tensor_type_name,
             )
@@ -544,18 +562,18 @@ class KernelVerifier:
                 total_count=warmup_times + run_times,
                 is_dynamic_shape=is_dynamic_shape,
                 # Adapter生成的代码
-                framework_imports=framework_imports,
-                framework_model_import=framework_model_import,
-                dsl_imports=dsl_imports,
-                dsl_impl_import=dsl_impl_import,
-                special_setup_code=special_setup_code,
-                device_setup_code=device_setup_code,
-                process_input_code=process_input_code,
-                set_seed_code=set_seed_code,
-                binary_io_functions=binary_io_functions,
+                framework_imports=self._prepare_code_lines(framework_imports),
+                framework_model_import=self._prepare_code_lines(framework_model_import),
+                dsl_imports=self._prepare_code_lines(dsl_imports),
+                dsl_impl_import=self._prepare_code_lines(dsl_impl_import),
+                special_setup_code=self._prepare_code_lines(special_setup_code),
+                device_setup_code=self._prepare_code_lines(device_setup_code),
+                process_input_code=self._prepare_code_lines(process_input_code),
+                set_seed_code=self._prepare_code_lines(set_seed_code),
+                binary_io_functions=self._prepare_code_lines(binary_io_functions),
                 needs_binary_io=needs_binary_io,
                 tensor_type_name=tensor_type_name,
-                benchmark_code=benchmark_code,
+                benchmark_code=self._prepare_code_lines(benchmark_code),
             )
             logger.info(f"[{self.op_name}] 性能测试模板渲染成功，渲染后代码长度: {len(rendered_code)} 字符")
         except Exception as e:
