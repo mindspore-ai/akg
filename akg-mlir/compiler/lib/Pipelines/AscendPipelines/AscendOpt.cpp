@@ -16,6 +16,7 @@
 
 #include "akg/Pipelines/AscendPipelines/AscendOpt.h"
 
+#include <cstdlib>
 #include <nlohmann/json.hpp>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Affine/Passes.h"
@@ -71,7 +72,6 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createMemrefCopyToLoopsPass());
 
-
     OpPassManager &nestedFusionPM = pm.nest<mlir::func::FuncOp>();
     nestedFusionPM.addPass(mlir::createConvertLinalgToAffineLoopsPass());
     nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
@@ -87,6 +87,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createAKGLoopTilingPass(false));  // useAutoTiling = false
     nestedFusionPM.addPass(mlir::affine::createAffineForVectPass());
     nestedFusionPM.addPass(mlir::affine::createVectorTransferTensorizePass());
+    if (const char *v = std::getenv("TILINGFUNC"); v && std::string(v) == "1") {
+      nestedFusionPM.addPass(mlir::affine::createTilingFuncPass());
+    }
   }
 }
 }  // namespace
