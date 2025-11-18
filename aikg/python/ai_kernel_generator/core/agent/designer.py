@@ -200,6 +200,17 @@ class Designer(AgentBase):
             except (ValueError, IndexError):
                 # 不是evolve场景的task_id格式，保持默认值False
                 pass
+        
+        # ============ Hint模式检测 ============
+        enable_hint_mode = self.config.get("enable_hint_mode", False)
+        has_hint = False
+        
+        if enable_hint_mode:
+            # 检测task_desc中是否有@hint
+            has_hint = 'hint' in self.base_doc["task_desc"].lower()
+            
+            if has_hint:
+                logger.info(f"[{self.op_name}] 检测到hint，启用Hint模式")
 
         # 基于aul_base_doc构建输入，只更新变化的部分
         input_data = {
@@ -209,6 +220,9 @@ class Designer(AgentBase):
             "meta_prompts": task_info.get("meta_prompts", ""),
             "handwrite_suggestions": task_info.get("handwrite_suggestions", []),
             "evolve_first_round": evolve_first_round,  # 控制是否显示available_tiling
+            "enable_llm_range_inference": self.config.get("enable_llm_range_inference", False),  # LLM推理模式
+            "enable_hint_mode": enable_hint_mode,  # Hint模式
+            "has_hint": has_hint,  # 是否检测到hint
         }
 
         # 执行LLM生成前更新context，确保正确性
@@ -224,6 +238,38 @@ class Designer(AgentBase):
         self.context.update(to_update_context)
 
         # 执行LLM生成
-        return await self.run_llm(
+        # run_llm返回: (生成内容, 格式化提示词, 推理内容)
+        llm_result, formatted_prompt, llm_reasoning = await self.run_llm(
             self.designer_prompt, input_data, self.model_config["designer"]
         )
+        
+        # ============ 处理Hint模式的输出 ============
+        if enable_hint_mode and has_hint:
+            import json
+            try:
+                # 解析JSON格式的生成内容
+                result_dict = json.loads(llm_result)
+                sketch = result_dict.get("sketch", "")
+                reasoning = result_dict.get("reasoning", llm_reasoning)
+                
+                # 如果有space_config，保存到task_info（用于MultiCaseGenerator采样）
+                if "space_config" in result_dict:
+                    space_config_code = result_dict["space_config"]
+                    task_info["space_config_code"] = space_config_code
+                    logger.info(f"[{self.op_name}] Designer生成了参数空间配置")
+                
+                # 转换为标准格式（符合workflow.yaml定义：只有code字段）
+                # 将{"sketch": "...", "space_config": "...", "reasoning": "..."} 转换为 {"code": "..."}
+                standard_result = json.dumps({
+                    "code": sketch
+                }, ensure_ascii=False)
+                
+                # 返回: (标准格式的JSON字符串, 格式化提示词, 推理内容)
+                return standard_result, formatted_prompt, reasoning
+            except json.JSONDecodeError as e:
+                # 如果解析失败，按原有流程返回
+                logger.warning(f"[{self.op_name}] Hint模式下JSON解析失败: {e}，使用原始输出")
+                return llm_result, formatted_prompt, llm_reasoning
+        
+        # 非Hint模式，直接返回run_llm的结果
+        return llm_result, formatted_prompt, llm_reasoning

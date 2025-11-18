@@ -1000,8 +1000,20 @@ class KernelVerifier:
             logger.info(f"aikg performance is {gen_time:.2f} us")
             logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，加速比（基准为100%）: {speedup_percent:.2f} %")
             
-            # 添加 unique_dir 到结果
-            result['unique_dir'] = unique_dir_name
+            # 构建返回结果
+            result = {
+                'gen_time': gen_time,
+                'base_time': base_time,
+                'speedup': speedup,
+                'unique_dir': unique_dir_name  # 添加 unique_dir
+            }
+            
+            # 只在 triton_ascend 情况下添加 autotune_summary
+            if "triton_ascend" in self.dsl and self.backend == "ascend":
+                autotune_summary = self.read_autotune_results_from_directory(verify_dir)
+                if autotune_summary:
+                    result['autotune_summary'] = autotune_summary
+                    logger.info(f"[{self.op_name}: {self.task_id}] Autotune配置详情:\n{autotune_summary}")
             
             return result
         except Exception as e:
@@ -1481,12 +1493,31 @@ class KernelVerifier:
             self.gen_verify_project(final_code, verify_dir, device_id)
             logger.info(f"[{self.op_name}] 最终验证项目生成成功")
             
-            # 只有验证通过时才复制到passed_cases文件夹
-            if verification_passed:
-                folder_name = os.path.basename(verify_dir)
-                dst_dir = Path(self.log_dir) / "passed_cases" / self.op_name / folder_name
-                shutil.copytree(verify_dir, dst_dir)
-                logger.info(f"[{self.op_name}] 验证文件已保存到: {dst_dir}")
+            # 注意：不在这里复制到 passed_cases，等所有验证（包括多case）都通过后再复制
+            # 复制操作在 run() 方法的最后统一处理
+            
+            # 保存验证结果到JSONL文件
+            result_jsonl_path = os.path.join(os.path.expanduser(self.log_dir), "verification_results.jsonl")
+            result_info = {
+                "task_name": self.op_name,
+                "task_id": self.task_id,
+                "step": current_step,
+                "verify_dir": verify_dir,
+                "passed": True,
+                "error_log": "".join(verify_logs),
+                "timestamp": datetime.now().isoformat(),
+                "framework": self.framework,
+                "dsl": self.dsl,
+                "backend": self.backend,
+                "arch": self.arch,
+                "autotune_configs": {
+                    "total": len(all_configs),
+                    "passed": len(valid_configs)
+                }
+            }
+            
+            with open(result_jsonl_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(result_info, ensure_ascii=False, indent=2) + '\n\n')
             
         except Exception as e:
             error_msg = str(e)
@@ -1595,14 +1626,9 @@ class KernelVerifier:
             # 保存验证结果到JSONL文件
             self._save_verification_result_to_jsonl(verify_dir, current_step, verify_res, verify_log)
 
-            # 保存通过的验证文件
-            if verify_res:
-                foder_name = os.path.basename(verify_dir)
-                dst_dir = Path(self.log_dir) / "passed_cases" / self.op_name / foder_name
-                # 如果目标目录已存在，先删除再复制（避免 FileExistsError）
-                if dst_dir.exists():
-                    shutil.rmtree(dst_dir)
-                shutil.copytree(verify_dir, dst_dir)
+            # 注意：不在这里复制到 passed_cases
+            # 如果启用了多 case 测试，需要等多 case 验证也通过后才能复制
+            # 复制操作由 task.py 统一管理
 
             return verify_res, verify_log
         finally:

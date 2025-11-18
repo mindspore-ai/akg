@@ -1,0 +1,286 @@
+你是一个专业的测试用例生成专家，需要为已验证通过的 kernel 代码生成多个测试 case。
+
+## 任务信息
+
+### 算子名称
+{{ op_name }}
+
+### 框架
+{{ framework }}
+
+### 原始任务描述
+```python
+{{ original_task_desc }}
+```
+
+### 设计草图（Sketch）
+```
+{{ sketch }}
+```
+
+### 生成的 Kernel 代码
+```python
+{{ coder_code }}
+```
+
+{% if previous_error %}
+---
+
+## 上次失败了，注意避免
+
+```
+{{ previous_error }}
+```
+
+**如何修正**：
+- 索引越界/切片为空 → 参数太小，增大最小值
+- 变量未定义 → 检查辅助函数，参数化所有变量
+- shape 不匹配 → 保持 tensor 维度数（ndim）一致
+- dtype 错误 → 保持数据类型一致
+- Model 引用全局变量 → 用 `global` 声明并修改变量值
+
+{% endif %}
+---
+
+## 你的任务
+
+分析上述代码中的 **assert 约束** 和草图中的 **"设计适用范围"**，生成一个新的 task_desc，包含：
+
+1. **保留原始的 Model 类定义**（一字不改）
+2. **保留原始的 get_init_inputs 函数**（一字不改）
+3. **移除原始的 get_inputs 函数及相关变量定义**
+4. **新增 get_inputs_dyn_list 函数**，包含 5-7 个测试 case（不包含原始输入，因为已在单 case 验证中测试）
+
+**重要**：
+- 移除所有 shape 相关的变量定义（如 `M = 1024`, `batch_size = 16` 等）
+- `get_inputs_dyn_list` 中直接使用具体数值，不使用变量
+- 这样生成的代码更清晰、更容易理解
+
+---
+
+## get_inputs_dyn_list 生成策略
+
+### 步骤 0: **保持维度一致（重要！）**
+
+**必须保持和原始 task_desc 中 `get_inputs()` 完全相同的 tensor 维度数（ndim）！**
+
+例如：
+- 原始输入是 `torch.randn(M, N)` → **2 维** → 新 case 也必须是 2 维，如 `torch.randn(128, 1024)`
+- 原始输入是 `torch.randn(B, C, H, W)` → **4 维** → 新 case 也必须是 4 维，如 `torch.randn(1, 3, 224, 224)`
+- 原始输入是 `torch.randn(N)` → **1 维** → 新 case 也必须是 1 维，如 `torch.randn(1024)`
+
+**只修改 shape 的大小，绝不修改 shape 的维数！**
+
+### 步骤 1: 提取约束条件
+
+从 kernel 代码的 assert 语句中提取 shape 约束，例如：
+- `assert 128 <= M <= 8192` → M 的范围是 [128, 8192]
+- `assert N <= 4096` → N 的上限是 4096
+- `assert M % 64 == 0` → M 必须是 64 的倍数
+
+### 步骤 2: 确定测试 case 组合
+
+生成以下类型的测试 case：
+
+#### A. 边界 case（必须包含 2 个）
+- **最小值组合**：所有参数取允许的最小值或接近最小值
+- **最大值组合**：所有参数取允许的最大值或接近最大值
+
+#### B. 中间值 case（3-5 个）
+- 范围内的典型值
+- 不同参数比例的组合（如 M >> N, M << N, M ≈ N）
+- 注意与 BLOCK_SIZE 的关系（如果草图中有提到）
+
+**注意**：不需要包含原始 task_desc 中的 shape，因为已经在单 case 验证中测试过了
+
+### 步骤 3: 生成代码
+
+```python
+def get_inputs_dyn_list():
+    """
+    生成多个测试 case，覆盖设计适用范围
+    
+    约束条件（从 kernel 代码的 assert 提取）：
+    - [列出所有约束]
+    
+    测试 case 说明：
+    [为每个 case 添加简短说明]
+    """
+    return [
+        [torch.randn(shape1, ..., dtype=...)],  # case 1: 说明
+        [torch.randn(shape2, ..., dtype=...)],  # case 2: 说明
+        # ... 更多 case
+    ]
+```
+
+**注意**：每个 case 的 tensor 维度数必须和原始 `get_inputs()` 中的对应输入**完全一致**！
+
+---
+
+## 示例
+
+### 示例 1：简单的单输入算子
+
+**原始 task_desc**（使用变量）:
+```python
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def forward(self, x):
+        return torch.relu(x)
+
+M = 1024
+N = 4096
+
+def get_inputs():
+    x = torch.randn(M, N, dtype=torch.float32)
+    return [x]
+
+def get_init_inputs():
+    return []
+```
+
+**Kernel 代码中的 assert**:
+```python
+def triton_relu(x):
+    M, N = x.shape
+    assert 128 <= M <= 8192, f"M ({M}) must be in [128, 8192]"
+    assert N <= 4096, f"N ({N}) must be <= 4096"
+    ...
+```
+
+**生成的新 task_desc**（移除变量，直接使用数值）:
+```python
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def forward(self, x):
+        return torch.relu(x)
+
+def get_inputs_dyn_list():
+    """
+    生成多个测试 case，覆盖设计适用范围
+    
+    约束条件（从 kernel 代码的 assert 提取）：
+    - 128 <= M <= 8192
+    - N <= 4096
+    
+    测试 case 说明：
+    1. (128, 1024): 最小 M
+    2. (8192, 4096): 最大 M & N
+    3. (2048, 2048): 方阵
+    4. (4096, 1024): 不同比例
+    5. (512, 512): 小方阵
+    """
+    return [
+        [torch.randn(128, 1024, dtype=torch.float32)],
+        [torch.randn(8192, 4096, dtype=torch.float32)],
+        [torch.randn(2048, 2048, dtype=torch.float32)],
+        [torch.randn(4096, 1024, dtype=torch.float32)],
+        [torch.randn(512, 512, dtype=torch.float32)],
+    ]
+
+def get_init_inputs():
+    return []
+```
+
+### 示例 2：多输入的矩阵乘法
+
+**原始 task_desc**（使用变量）:
+```python
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def forward(self, a, b):
+        return torch.matmul(a, b)
+
+M, N, K = 1024, 2048, 512
+
+def get_inputs():
+    a = torch.randn(M, K, dtype=torch.float16)
+    b = torch.randn(K, N, dtype=torch.float16)
+    return [a, b]
+
+def get_init_inputs():
+    return []
+```
+
+**生成的新 task_desc**（直接使用数值）:
+```python
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def forward(self, a, b):
+        return torch.matmul(a, b)
+
+def get_inputs_dyn_list():
+    """
+    生成多个测试 case，覆盖设计适用范围
+    
+    约束条件：
+    - 128 <= M, N, K <= 4096
+    
+    测试 case 说明：
+    1. (128, 512, 256): 小尺寸
+    2. (4096, 4096, 4096): 最大尺寸
+    3. (512, 1024, 256): 中等尺寸
+    4. (2048, 1024, 1024): 不同比例
+    5. (256, 256, 256): 小方阵
+    """
+    return [
+        [torch.randn(128, 256, dtype=torch.float16), torch.randn(256, 512, dtype=torch.float16)],
+        [torch.randn(4096, 4096, dtype=torch.float16), torch.randn(4096, 4096, dtype=torch.float16)],
+        [torch.randn(512, 256, dtype=torch.float16), torch.randn(256, 1024, dtype=torch.float16)],
+        [torch.randn(2048, 1024, dtype=torch.float16), torch.randn(1024, 1024, dtype=torch.float16)],
+        [torch.randn(256, 256, dtype=torch.float16), torch.randn(256, 256, dtype=torch.float16)],
+    ]
+
+def get_init_inputs():
+    return []
+```
+
+---
+
+## 重要注意事项
+
+1. **移除变量定义**：
+   - 删除所有 shape 相关的变量定义（如 `M = 1024`, `batch_size = 16`, `dim = 4096` 等）
+   - 删除原始的 `get_inputs()` 函数
+   - 只保留 Model 类和 `get_init_inputs()` 函数
+
+2. **直接使用数值**：
+   - `get_inputs_dyn_list()` 中直接写具体的 shape 数值
+   - 不使用任何变量，例如：写 `torch.randn(1024, 2048)` 而不是 `torch.randn(M, N)`
+
+3. **tensor 维度数一致（非常重要！）**：
+   - **必须保持和原始 `get_inputs()` 中每个输入相同的维度数（ndim）**
+   - 原始是 2D tensor，所有新 case 也必须是 2D
+   - 原始是 3D tensor，所有新 case 也必须是 3D
+   - **只改变 shape 的大小，不改变 shape 的维数！**
+
+4. **数据类型一致**：
+   - 新 case 的 dtype、device 等属性必须与原始 `get_inputs()` 完全一致
+
+5. **返回格式一致**：
+   - 如果原始返回多个 tensor，每个 case 也要返回相同数量和顺序
+   - 每个 case 是一个 list，包含所有输入 tensor
+
+6. **约束准确**：
+   - 生成的所有 case 必须满足 kernel 代码的 assert 约束，否则验证会失败
+
+7. **注释清晰**：
+   - 在 docstring 中说明约束条件和每个 case 的意图
+
+8. **不包含原始 shape**：
+   - **不需要**包含原始 task_desc 中的 shape，因为已经在单 case 验证中测试过了
+   - 专注于测试边界值和其他典型场景
+
+---
+
+**请按照以下格式输出你的结果，仅返回 json 格式，不要在 json 外部有任何解释或补充说明：**
+{{ format_instructions }}
+

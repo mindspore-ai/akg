@@ -6,6 +6,7 @@ agent_model_config:
   api_generator: vllm_deepseek_v31_default
   sketch: vllm_deepseek_v31_default
   selector: vllm_deepseek_v31_default
+  test_case_generator: vllm_deepseek_v31_default
 
 # Log configuration
 log_dir: "~/aikg_logs"
@@ -27,3 +28,12 @@ profile_settings:
 # Verification configuration
 verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
 
+# Multi-case testing configuration
+enable_multi_case_verification: false  # Master switch for multi-case verification (set to false to only generate space_config without verification)
+enable_hint_mode: false  # Enable hint mode (user provides @hint, Designer generates space_config)
+enable_llm_range_inference: false  # Enable LLM range inference mode (LLM infers parameter ranges and generates test cases)
+
+# Hint mode sampling configuration (only used when enable_hint_mode=true and enable_multi_case_verification=true)
+multi_case_num: 10  # Number of test cases to sample
+sampling_strategy: "mixed"  # Sampling strategy: random/boundary/mixed
+sampling_seed: 42  # Random seed for reproducibility
