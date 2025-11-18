@@ -249,6 +249,15 @@ def print_evolution_result(evolution_result: Dict[str, Any], evolve_config: Evol
     storage_dir = evolution_result.get('storage_dir', '')
     if storage_dir:
         print(f"存储目录: {storage_dir}")
+    
+    # 显示Task文件夹信息和Log目录
+    task_folder = evolution_result.get('task_folder', '')
+    if task_folder:
+        print(f"Task文件夹: {task_folder}")
+    
+    log_dir = evolution_result.get('log_dir', '')
+    if log_dir:
+        print(f"Log目录: {log_dir}")
 
     # 显示最佳实现
     best_implementations = evolution_result.get('best_implementations', [])
@@ -277,6 +286,10 @@ def print_evolution_result(evolution_result: Dict[str, Any], evolve_config: Evol
             if evolution_result.get('island_info', {}).get('num_islands', 1) > 1:
                 source_island = impl.get('source_island', 'N/A')
                 info_parts.append(f"来源岛屿 {source_island}")
+            
+            # 添加 unique_dir（来自 speed_up_record.txt）
+            unique_dir = impl.get('unique_dir', 'N/A')
+            info_parts.append(f"个体路径: {unique_dir}")
 
             info_parts.append(profile_str)
             print(f"  {i}. {', '.join(info_parts)}")

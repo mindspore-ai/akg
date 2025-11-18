@@ -394,6 +394,7 @@ async def evolve(
                             'op_name': task_op_name,
                             'round': round_idx,
                             'task_id': task_info.get('task_id', ''),
+                            'unique_dir': profile_res.get('unique_dir', ''), 
                             'task_info': task_info,
                             'profile': profile_res,
                             'impl_code': task_info.get("coder_code", ""),
@@ -499,6 +500,7 @@ async def evolve(
                         'op_name': task_op_name,
                         'round': round_idx,
                         'task_id': task_info.get('task_id', ''),
+                        'unique_dir': profile_res.get('unique_dir', ''), 
                         'task_info': task_info,
                         'profile': profile_res,
                         'impl_code': task_info.get("coder_code", ""),
@@ -575,6 +577,10 @@ async def evolve(
     # 计算最终成功率
     final_success_rate = total_successful_tasks / total_tasks if total_tasks > 0 else 0.0
 
+    # 从config中获取log_dir和task_folder
+    log_dir = config.get('log_dir', '')
+    task_folder = os.path.basename(log_dir) if log_dir else ''
+
     # 构建返回结果
     evolution_result = {
         'op_name': op_name,
@@ -590,6 +596,8 @@ async def evolve(
         'best_implementations': best_implementations[:5],  # 只返回前5个最佳实现
         'round_results': round_results,
         'storage_dir': storage_dir,  # 添加存储目录信息
+        'task_folder': task_folder,  # 添加Task文件夹名
+        'log_dir': str(log_dir),  # 添加完整log_dir路径
     }
 
     # 如果使用了岛屿模型，添加岛屿信息

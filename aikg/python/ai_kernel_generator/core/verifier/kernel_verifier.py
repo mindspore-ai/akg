@@ -880,7 +880,8 @@ class KernelVerifier:
             result = {
                 'gen_time': gen_time,
                 'base_time': base_time,
-                'speedup': speedup
+                'speedup': speedup,
+                'unique_dir': unique_dir_name,
             }
             
             # 只在 triton_ascend 情况下添加 autotune_summary
