@@ -47,8 +47,12 @@ def standard_kernel(
 
 ### 内核启动方式
 ```python
-def launch_kernel(input_tensor):
-    output_tensor = torch.empty(size, dtype, device)
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, input_tensor):
+        output_tensor = torch.empty_like(input_tensor)
     BLOCK_SIZE = 1024  
     grid = (triton.cdiv(input_tensor.numel(), BLOCK_SIZE),)
     
@@ -56,6 +60,7 @@ def launch_kernel(input_tensor):
         output_tensor, input_tensor, input_tensor.numel(),
         BLOCK_SIZE=BLOCK_SIZE,
     )
+        return output_tensor
 ```
 
 ## 3. 三大编程模式
@@ -150,7 +155,11 @@ def matmul_kernel(
                  ((block_n * BLOCK_N + tl.arange(0, BLOCK_N))[None, :] < N)
         tl.store(c_ptr + c_offset, accumulator, mask=c_mask)
 
-def matmul(a, b):
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, a, b):
     M, K = a.shape
     K2, N = b.shape
     assert K == K2
@@ -216,7 +225,11 @@ def matmul_kernel(
     # kernel实现
     pass
 
-def matmul(a, b):
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, a, b):
     M, K = a.shape
     K, N = b.shape
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)

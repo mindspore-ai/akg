@@ -32,14 +32,16 @@ class TestDSLAdapterTritonCuda:
         """Test implementation import."""
         adapter = get_dsl_adapter("triton_cuda")
         imports = adapter.get_impl_import("test_op", "test_func")
-        assert "from test_op_triton_cuda import test_func" in imports
+        # 现在统一使用 ModelNew 类格式
+        assert "from test_op_triton_cuda import ModelNew" in imports
     
     def test_call_impl(self):
         """Test call implementation code generation."""
         adapter = get_dsl_adapter("triton_cuda")
         framework_adapter = get_framework_adapter("torch")
         code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
-        assert "impl_output = test_func(*inputs)" in code
+        # 现在使用 impl_model 调用（ModelNew 实例）
+        assert "impl_output = impl_model(*inputs)" in code
     
     def test_needs_binary_io(self):
         """Test binary I/O requirement."""
@@ -74,14 +76,16 @@ class TestDSLAdapterTritonAscend:
         """Test implementation import."""
         adapter = get_dsl_adapter("triton_ascend")
         imports = adapter.get_impl_import("test_op", "test_func")
-        assert "from test_op_triton_ascend import test_func" in imports
+        # 现在统一使用 ModelNew 类格式
+        assert "from test_op_triton_ascend import ModelNew" in imports
     
     def test_call_impl(self):
         """Test call implementation code generation."""
         adapter = get_dsl_adapter("triton_ascend")
         framework_adapter = get_framework_adapter("torch")
         code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
-        assert "impl_output = test_func(*inputs)" in code
+        # 现在使用 impl_model 调用（ModelNew 实例）
+        assert "impl_output = impl_model(*inputs)" in code
     
     def test_benchmark_impl_ascend(self):
         """Test benchmark code generation for Ascend."""
@@ -183,14 +187,16 @@ class TestDSLAdapterCpp:
         """Test implementation import."""
         adapter = get_dsl_adapter("cpp")
         imports = adapter.get_impl_import("test_op", "test_func")
-        assert "from test_op_cpp import test_func" in imports
+        # 现在统一使用 ModelNew 类格式
+        assert "from test_op_cpp import ModelNew" in imports
     
     def test_call_impl(self):
         """Test call implementation code generation."""
         adapter = get_dsl_adapter("cpp")
         framework_adapter = get_framework_adapter("torch")
         code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
-        assert "impl_output = test_func(*inputs)" in code
+        # 现在使用 impl_model 调用（ModelNew 实例）
+        assert "impl_output = impl_model(*inputs)" in code
     
     def test_benchmark_impl(self):
         """Test benchmark code generation."""

@@ -33,9 +33,13 @@ def matmul_kernel(output_ptr, x_ptr, y_ptr,
     tl.store(output_ptr + oidx, result)
 
 
-def matmul_triton_mindspore(x0, x1):
+class ModelNew(ms.nn.Cell):
+    def __init__(self):
+        super().__init__()
+
+    def construct(self, x0, x1):
     """
-    Triton 矩阵乘法启动函数
+        Triton 矩阵乘法
     """
     B, C = x0.shape
     C, D = x1.shape

@@ -60,10 +60,17 @@ def layer_norm_kernel(
         tl.store(Y + cols, y, mask=mask)
 
 
+class ModelNew(torch.nn.Module):
+    def __init__(self, normalized_shape, eps=1e-5):
+        super().__init__()
+        # 对于layer_norm，weight和bias是输入参数，不需要在__init__中初始化
+        self.normalized_shape = normalized_shape
+        self.eps = eps
+
 @torch.inference_mode()
-def layer_norm_triton_framework(x, normalized_shape, weight, bias, eps=1e-5):
+    def forward(self, x, weight, bias):
     """
-    Triton Layer Normalization 启动函数
+        Triton Layer Normalization
     """
     # 分配输出张量
     y = torch.empty_like(x)
@@ -81,7 +88,7 @@ def layer_norm_triton_framework(x, normalized_shape, weight, bias, eps=1e-5):
     # 启动内核
     layer_norm_kernel[(M, )](
         x_arg, y, weight, bias, mean, rstd,
-        x_arg.stride(0), N, eps,
+            x_arg.stride(0), N, self.eps,
         BLOCK_SIZE=BLOCK_SIZE
     )
 

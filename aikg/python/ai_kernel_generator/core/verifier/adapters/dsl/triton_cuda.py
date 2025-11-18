@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Triton CUDA DSL adapter."""
+"""Triton CUDA DSL adapter - 支持 ModelNew (KernelBench) 格式."""
 
 from typing import Any, Optional, Tuple
 
@@ -34,8 +34,32 @@ class DSLAdapterTritonCuda(DSLAdapter):
             return "import triton\nimport triton.language as tl\n"
     
     def get_impl_import(self, op_name: str, impl_func_name: str) -> str:
-        """Return implementation function import."""
-        return f"from {op_name}_triton_cuda import {impl_func_name}\n"
+        """Return implementation function import.
+        
+        统一使用 ModelNew 类格式（KernelBench 风格）。
+        """
+        return f"from {op_name}_triton_cuda import ModelNew\n"
+    
+    def create_impl_module(self, framework: str,
+                          framework_adapter: Any, 
+                          init_params_var: str = "init_params",
+                          device_var: str = "device") -> str:
+        """生成创建 impl_model 的代码（只实例化一次）。
+        
+        Args:
+            framework: Framework name (torch, mindspore, numpy)
+            framework_adapter: Framework adapter instance
+            init_params_var: Variable name for init_params (default: "init_params")
+            device_var: Variable name for device (default: "device")
+            
+        Returns:
+            str: Code string to create impl_model
+        """
+        code = f"impl_model = ModelNew(*{init_params_var})\n"
+        if framework == "torch":
+            code += f"impl_model = impl_model.to({device_var})\n"
+        
+        return code
     
     def call_impl(self, impl_func_name: str, inputs: str, device_id: int,
                   framework_adapter: Any, op_name: str, 
@@ -43,19 +67,9 @@ class DSLAdapterTritonCuda(DSLAdapter):
                   framework_output: Optional[str] = None) -> str:
         """Return code string to call Triton CUDA implementation function.
         
-        Args:
-            impl_func_name: Implementation function name
-            inputs: Input variable name (e.g., "inputs_for_impl")
-            device_id: Device ID (not used for triton_cuda)
-            framework_adapter: Framework adapter (not used for triton_cuda)
-            op_name: Operator name
-            data_dir: Data directory (not used for triton_cuda)
-            framework_output: Framework output (not used for triton_cuda)
-            
-        Returns:
-            str: Code string to call the implementation
+        调用已经实例化好的 impl_model（可以多次调用）。
         """
-        return f"impl_output = {impl_func_name}(*{inputs})\n"
+        return f"impl_output = impl_model(*{inputs})\n"
     
     def needs_binary_io(self) -> bool:
         """Triton CUDA doesn't need binary I/O."""
@@ -72,12 +86,11 @@ class DSLAdapterTritonCuda(DSLAdapter):
                       device_id: Optional[int] = None) -> str:
         """Return code string to benchmark Triton CUDA implementation.
         
-        Returns:
-            str: Code string for benchmarking
+        使用已经实例化好的 impl_model 进行性能测试。
         """
         code = f"""        # 进行最终的性能测试
         def triton_benchmark_fn():
-            result = {impl_func_name}(*{inputs})
+            result = impl_model(*{inputs})
             return result
         
         import triton.testing
@@ -85,9 +98,10 @@ class DSLAdapterTritonCuda(DSLAdapter):
             triton_benchmark_fn,
             warmup={warmup},
             rep={runs},
-            return_mode="min"
+            return_mode="median"
         )
         method = "triton_do_bench"
 """
         return code
+
 

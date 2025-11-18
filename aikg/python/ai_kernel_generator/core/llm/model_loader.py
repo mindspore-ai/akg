@@ -49,10 +49,37 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
     Returns:
         ChatDeepSeek | ChatOllama: 创建的模型实例
     """
+    # 定义 thinking_mode 处理函数（提前定义，供环境变量模式使用）
+    def _build_thinking_extra_body(thinking_mode: Optional[str],
+                                   extra_body: Optional[dict]) -> Optional[dict]:
+        """根据配置构造 thinking 相关的 extra_body"""
+        if thinking_mode is None:
+            return extra_body
+
+        # 统一用字符串匹配，兼容 True/False 以及 enabled/disabled
+        if isinstance(thinking_mode, bool):
+            normalized = "true" if thinking_mode else "false"
+        else:
+            normalized = str(thinking_mode).strip().lower()
+
+        extra_body = dict(extra_body or {})
+        if normalized in {"enabled", "disabled"}:
+            extra_body["thinking"] = {"type": normalized}
+        elif normalized in {"true", "false"}:
+            chat_template_kwargs = dict(extra_body.get("chat_template_kwargs", {}))
+            chat_template_kwargs["thinking"] = (normalized == "true")
+            extra_body["chat_template_kwargs"] = chat_template_kwargs
+        else:
+            logger.warning("不支持的 thinking_mode '%s'，请使用 enabled/disabled 或 True/False", thinking_mode)
+            return extra_body if extra_body else None
+
+        return extra_body
+
     # 【最高优先级】检查环境变量覆盖
     env_base_url = os.getenv("AIKG_BASE_URL")
     env_model_name = os.getenv("AIKG_MODEL_NAME")
     env_api_key = os.getenv("AIKG_API_KEY")
+    env_enable_think = os.getenv("AIKG_MODEL_ENABLE_THINK")
     
     if env_base_url and env_model_name and env_api_key:
         # 使用环境变量创建模型
@@ -64,6 +91,8 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         masked_key = env_api_key[:8] + "*" * (len(env_api_key) - 12) + \
             env_api_key[-4:] if len(env_api_key) > 12 else "***"
         logger.info(f"  AIKG_API_KEY: {masked_key}")
+        if env_enable_think:
+            logger.info(f"  AIKG_MODEL_ENABLE_THINK: {env_enable_think}")
         logger.info("=" * 60)
         
         # 设置默认参数
@@ -72,6 +101,11 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         default_top_p = 0.9
         
         logger.info(f"使用默认参数: temperature={default_temperature}, max_tokens={default_max_tokens}, top_p={default_top_p}")
+        
+        # 处理 thinking_mode 配置
+        extra_body = _build_thinking_extra_body(env_enable_think, None)
+        if extra_body:
+            logger.info(f"启用 thinking 模式: {extra_body}")
         
         # 设置20分钟的timeout
         timeout = httpx.Timeout(60, read=60 * 20)
@@ -89,6 +123,7 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         model.max_tokens = default_max_tokens
         model.top_p = default_top_p
         model.other_params = {}
+        model.extra_body = extra_body
         
         logger.info("环境变量覆盖模式：模型创建完成")
         return model
@@ -123,31 +158,6 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
                 logger.debug(f"  {key}: {value} (环境变量)")
             else:
                 logger.debug(f"  {key}: {value}")
-
-    def _build_thinking_extra_body(thinking_mode: Optional[str],
-                                   extra_body: Optional[dict]) -> Optional[dict]:
-        """根据配置构造 thinking 相关的 extra_body"""
-        if thinking_mode is None:
-            return extra_body
-
-        # 统一用字符串匹配，兼容 True/False 以及 enabled/disabled
-        if isinstance(thinking_mode, bool):
-            normalized = "true" if thinking_mode else "false"
-        else:
-            normalized = str(thinking_mode).strip().lower()
-
-        extra_body = dict(extra_body or {})
-        if normalized in {"enabled", "disabled"}:
-            extra_body["thinking"] = {"type": normalized}
-        elif normalized in {"true", "false"}:
-            chat_template_kwargs = dict(extra_body.get("chat_template_kwargs", {}))
-            chat_template_kwargs["thinking"] = (normalized == "true")
-            extra_body["chat_template_kwargs"] = chat_template_kwargs
-        else:
-            logger.warning("不支持的 thinking_mode '%s'，请使用 enabled/disabled 或 True/False", thinking_mode)
-            return extra_body if extra_body else None
-
-        return extra_body
 
     # 判断是否为Ollama模型
     if name.startswith("ollama_"):

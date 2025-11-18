@@ -36,9 +36,13 @@ def add_kernel(x_ptr,  # 指向第一个输入向量的指针
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
-def add_triton_mindspore(x: torch.Tensor, y: torch.Tensor):
+class ModelNew(ms.nn.Cell):
+    def __init__(self):
+        super().__init__()
+
+    def construct(self, x: torch.Tensor, y: torch.Tensor):
     """
-    Triton 向量相加启动函数
+        Triton 向量相加
     """
     # 预分配输出张量
     output = ms.mint.empty_like(x)

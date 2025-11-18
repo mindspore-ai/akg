@@ -16,6 +16,15 @@ import torch
 import triton
 import triton.language as tl
 
+# 可选导入 mindspore
+try:
+    import mindspore as ms
+    from mindspore import Parameter
+    HAS_MINDSPORE = True
+except ImportError:
+    HAS_MINDSPORE = False
+    ms = None
+
 
 @triton.jit
 def relu_kernel(
@@ -43,35 +52,55 @@ def relu_kernel(
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
-def relu_triton_ascend_mindspore(x):
-    import mindspore as ms
-    output = ms.mint.zeros_like(x)
+# 根据 framework 动态定义 ModelNew
+# 检查 sys.modules 中是否有 mindspore，如果有则使用 MindSpore 版本
+import sys
 
-    n_elements = output.numel()
+if HAS_MINDSPORE and 'mindspore' in sys.modules:
+    # MindSpore 环境：使用 MindSpore 版本的 ModelNew
+    class ModelNew(ms.nn.Cell):
+        def __init__(self):
+            super().__init__()
 
-    BLOCK_SIZE = 1024
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+        def construct(self, x) -> ms.Tensor:
+            """
+            Triton ReLU for MindSpore framework
+            """
+            x = x.contiguous()
+            n_elements = x.numel()
+            output = ms.mint.zeros_like(x)
 
-    relu_kernel[grid](
-        x, output, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
+            BLOCK_SIZE = 1024
+            grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
 
-    return output
+            # 启动kernel
+            relu_kernel[grid](
+                x, output, n_elements,
+                BLOCK_SIZE=BLOCK_SIZE,
+            )
 
+            return output
+else:
+    # PyTorch 环境：使用 PyTorch 版本的 ModelNew
+    class ModelNew(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
 
-def relu_triton_ascend_torch(x):
-    x = x.contiguous()
-    n_elements = x.numel()
-    output = torch.empty_like(x, device=x.device)
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            """
+            Triton ReLU for torch framework
+            """
+            x = x.contiguous()
+            n_elements = x.numel()
+            output = torch.empty_like(x, device=x.device)
 
-    BLOCK_SIZE = 1024
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+            BLOCK_SIZE = 1024
+            grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
 
-    # 启动kernel
-    relu_kernel[grid](
-        x, output, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
+            # 启动kernel
+            relu_kernel[grid](
+                x, output, n_elements,
+                BLOCK_SIZE=BLOCK_SIZE,
+            )
 
-    return output
+            return output

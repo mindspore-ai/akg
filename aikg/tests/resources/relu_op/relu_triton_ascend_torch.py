@@ -49,7 +49,7 @@ class ModelNew(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Triton ReLU
+        Triton ReLU for torch framework
         """
         x = x.contiguous()
         n_elements = x.numel()
@@ -65,3 +65,4 @@ class ModelNew(torch.nn.Module):
         )
 
         return output
+

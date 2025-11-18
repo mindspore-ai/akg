@@ -15,6 +15,7 @@
 import torch
 import triton
 import triton.language as tl
+import mindspore as ms
 
 
 @triton.jit
@@ -43,17 +44,17 @@ def relu_kernel(
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
-class ModelNew(torch.nn.Module):
+class ModelNew(ms.nn.Cell):
     def __init__(self):
         super().__init__()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def construct(self, x) -> ms.Tensor:
         """
-        Triton ReLU
+        Triton ReLU for MindSpore framework
         """
         x = x.contiguous()
         n_elements = x.numel()
-        output = torch.empty_like(x, device=x.device)
+        output = ms.mint.zeros_like(x)
 
         BLOCK_SIZE = 1024
         grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
@@ -65,3 +66,4 @@ class ModelNew(torch.nn.Module):
         )
 
         return output
+
