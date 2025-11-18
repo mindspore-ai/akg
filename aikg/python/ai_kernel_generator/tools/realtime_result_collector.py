@@ -75,7 +75,7 @@ class RealtimeResultCollector:
             收集到的结果字典
         """
         print(f"\n{'='*80}")
-        print(f"📊 正在收集任务结果: {op_name}")
+        print(f"正在收集任务结果: {op_name}")
         print(f"{'='*80}")
         
         # 1. 从日志中提取Task文件夹名和log_dir路径
@@ -103,7 +103,7 @@ class RealtimeResultCollector:
         # 6. 立即写入到csv文件
         self._append_to_csv(op_name, task_folder_name, best_result)
         
-        print(f"  ✅ 结果已写入文件")
+        print(f"  结果已写入文件")
         print(f"{'='*80}\n")
         
         return {
@@ -137,11 +137,11 @@ class RealtimeResultCollector:
                     log_dir = line_stripped.split('Log目录:')[1].strip()
             
             if task_folder == 'Unknown_Task':
-                print(f"  ⚠️  未在日志中找到Task文件夹信息")
+                print(f"  未在日志中找到Task文件夹信息")
             
             return task_folder, log_dir
         except Exception as e:
-            print(f"  ⚠️  提取Task信息失败: {e}")
+            print(f"  提取Task信息失败: {e}")
             return 'Unknown_Task', None
     
     def _find_speedup_record_from_log_dir(self, log_dir: str, op_name: str) -> Optional[Path]:
@@ -166,7 +166,7 @@ class RealtimeResultCollector:
             if path.exists():
                 return path
         
-        print(f"  ⚠️  未找到 speed_up_record.txt")
+        print(f"  未找到 speed_up_record.txt")
         return None
     
     def _parse_speedup_record(self, file_path: Path) -> List[Dict]:
@@ -194,7 +194,7 @@ class RealtimeResultCollector:
                         'speedup': float(match.group(6))
                     })
         except Exception as e:
-            print(f"  ⚠️  解析 speed_up_record.txt 失败: {e}")
+            print(f"  解析 speed_up_record.txt 失败: {e}")
         
         return records
     
@@ -245,7 +245,7 @@ class RealtimeResultCollector:
                         if rank > 0:
                             break
         except Exception as e:
-            print(f"  ⚠️  解析Top结果失败: {e}")
+            print(f"  解析Top结果失败: {e}")
         
         return top_results
     
