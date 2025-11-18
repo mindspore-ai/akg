@@ -55,8 +55,8 @@ class EvolveConfig:
         # 设备配置
         self.device_list = [0]
 
-        # 配置文件路径
-        self.config_path = str(Path(get_project_root()) / "config" / "vllm_triton_cuda_evolve_config.yaml")
+        # 配置文件路径（占位符，应从evolve_config.yaml的base部分读取）
+        self.config_path = "config/default_evolve_config.yaml"
 
         # 任务配置
         self.op_name = "relu_op"
@@ -85,6 +85,13 @@ class EvolveConfig:
                 config.framework = base.get('framework', config.framework)
                 config.backend = base.get('backend', config.backend)
                 config.arch = base.get('arch', config.arch)
+                # 读取配置文件路径，并转换为绝对路径
+                config_path_value = base.get('config_path', config.config_path)
+                if config_path_value and not Path(config_path_value).is_absolute():
+                    # 如果是相对路径，转换为绝对路径
+                    config.config_path = str(Path(get_project_root()) / config_path_value)
+                else:
+                    config.config_path = config_path_value
             else:
                 raise ValueError("base section not found in config file")
 
