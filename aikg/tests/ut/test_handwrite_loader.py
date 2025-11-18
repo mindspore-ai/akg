@@ -26,6 +26,38 @@ from ai_kernel_generator.utils.handwrite_loader import HandwriteLoader, Handwrit
 
 
 @pytest.fixture
+def mock_loader():
+    """创建Mock的HandwriteLoader（10个文档，供多个测试类共享）"""
+    loader = Mock(spec=HandwriteLoader)
+    
+    mock_pairs = [
+        {
+            'name': f'static_shape/reduction/opt_{i:02d}',
+            'file_stem': f'opt_{i:02d}',
+            'shape_type': 'static_shape',
+            'category': 'reduction',
+            'torch_file': Path(f'/tmp/opt_{i:02d}.py'),
+            'triton_file': Path(f'/tmp/opt_{i:02d}.py'),
+            'improvement_file': Path(f'/tmp/opt_{i:02d}.md')
+        }
+        for i in range(10)
+    ]
+    
+    loader.get_selected_pairs.return_value = mock_pairs
+    loader.read_pair_content.side_effect = lambda p: {
+        'name': p['name'],
+        'file_stem': p['file_stem'],
+        'shape_type': p['shape_type'],
+        'category': p['category'],
+        'torch_code': f"torch {p['name']}",
+        'triton_code': f"triton {p['name']}",
+        'improvement': f"improve {p['name']}"
+    }
+    
+    return loader
+
+
+@pytest.fixture
 def temp_handwrite_dir():
     """创建临时的手写文件目录结构"""
     temp_dir = tempfile.mkdtemp()
@@ -155,38 +187,7 @@ class TestHandwriteLoaderCore:
 
 
 class TestHandwriteSamplerCore:
-    """测试HandwriteSampler核心功能"""
-    
-    @pytest.fixture
-    def mock_loader(self):
-        """创建Mock的HandwriteLoader"""
-        loader = Mock(spec=HandwriteLoader)
-        
-        mock_pairs = [
-            {
-                'name': f'static_shape/reduction/opt_{i:02d}',
-                'file_stem': f'opt_{i:02d}',
-                'shape_type': 'static_shape',
-                'category': 'reduction',
-                'torch_file': Path(f'/tmp/opt_{i:02d}.py'),
-                'triton_file': Path(f'/tmp/opt_{i:02d}.py'),
-                'improvement_file': Path(f'/tmp/opt_{i:02d}.md')
-            }
-            for i in range(10)
-        ]
-        
-        loader.get_selected_pairs.return_value = mock_pairs
-        loader.read_pair_content.side_effect = lambda p: {
-            'name': p['name'],
-            'file_stem': p['file_stem'],
-            'shape_type': p['shape_type'],
-            'category': p['category'],
-            'torch_code': f"torch {p['name']}",
-            'triton_code': f"triton {p['name']}",
-            'improvement': f"improve {p['name']}"
-        }
-        
-        return loader
+    """测试HandwriteSampler核心功能（使用模块级mock_loader）"""
     
     def test_basic_sampling(self, mock_loader):
         """测试3: 基本采样和不重复"""
@@ -233,12 +234,12 @@ class TestHandwriteSamplerCore:
         assert all(len(s._used_indices) == 2 for s in samplers)
 
 
-class TestMultiRoundScenario:
-    """测试多轮采样场景"""
+class TestWeightedSampling:
+    """测试加权采样功能"""
     
     @pytest.fixture
-    def setup_samplers(self):
-        """设置测试用的samplers"""
+    def mock_loader_large(self):
+        """创建包含更多文档的Mock HandwriteLoader"""
         loader = Mock(spec=HandwriteLoader)
         
         mock_pairs = [
@@ -251,7 +252,7 @@ class TestMultiRoundScenario:
                 'triton_file': Path(f'/tmp/opt_{i:02d}.py'),
                 'improvement_file': Path(f'/tmp/opt_{i:02d}.md')
             }
-            for i in range(6)
+            for i in range(30)
         ]
         
         loader.get_selected_pairs.return_value = mock_pairs
@@ -260,22 +261,133 @@ class TestMultiRoundScenario:
             'file_stem': p['file_stem'],
             'shape_type': p['shape_type'],
             'category': p['category'],
-            'torch_code': f"code {p['name']}",
-            'triton_code': f"code {p['name']}",
+            'torch_code': f"torch {p['name']}",
+            'triton_code': f"triton {p['name']}",
             'improvement': f"improve {p['name']}"
         }
         
         return loader
     
-    def test_multi_island_multi_round(self, setup_samplers):
-        """测试6: 多岛屿多轮采样"""
+    def test_weight_initialization(self, mock_loader_large):
+        """测试6: 权重初始化和计算"""
+        sampler = HandwriteSampler(loader=mock_loader_large, sample_num=2, decay_rate=2.0)
+        
+        # 验证权重已计算
+        assert hasattr(sampler, '_weights')
+        assert len(sampler._weights) == 30
+        
+        # 验证权重递减
+        assert sampler._weights[0] > sampler._weights[1] > sampler._weights[-1]
+        
+        # 验证权重和为1（归一化）
+        import numpy as np
+        assert abs(sampler._weights.sum() - 1.0) < 1e-6
+    
+    def test_different_decay_rates(self, mock_loader_large):
+        """测试7: 不同衰减率的效果"""
+        sampler_low = HandwriteSampler(loader=mock_loader_large, sample_num=2, decay_rate=1.0)
+        sampler_mid = HandwriteSampler(loader=mock_loader_large, sample_num=2, decay_rate=2.0)
+        sampler_high = HandwriteSampler(loader=mock_loader_large, sample_num=2, decay_rate=5.0)
+        
+        # 权重比应该随衰减率增加而增加
+        ratio_low = sampler_low._weights[0] / sampler_low._weights[-1]
+        ratio_mid = sampler_mid._weights[0] / sampler_mid._weights[-1]
+        ratio_high = sampler_high._weights[0] / sampler_high._weights[-1]
+        
+        assert ratio_low < ratio_mid < ratio_high
+    
+    def test_weighted_sampling_preserves_no_repeat(self, mock_loader_large):
+        """测试8: 加权采样保持不重复特性"""
+        sampler = HandwriteSampler(loader=mock_loader_large, sample_num=3, decay_rate=2.0)
+        
+        # 采样10次
+        all_sampled = []
+        for _ in range(10):
+            samples = sampler.sample()
+            names = [s['name'] for s in samples]
+            
+            # 每次采样内部不重复
+            assert len(names) == len(set(names))
+            
+            all_sampled.extend(names)
+        
+        # 前10次采样共30个，应该覆盖所有文档且没有重复
+        assert len(all_sampled) == 30
+        assert len(set(all_sampled)) == 30
+    
+    def test_weighted_sampling_preserves_reset(self, mock_loader_large):
+        """测试9: 加权采样保持自动重置特性"""
+        sampler = HandwriteSampler(loader=mock_loader_large, sample_num=5, decay_rate=2.0)
+        
+        # 采样6次 = 30个，正好用完
+        for _ in range(6):
+            samples = sampler.sample()
+            assert len(samples) == 5
+        
+        # 第7次应该重置并继续采样
+        samples = sampler.sample()
+        assert len(samples) == 5
+        
+        # 验证已重置
+        assert len(sampler._used_indices) == 5
+    
+    def test_weighted_sampling_bias(self, mock_loader_large):
+        """测试10: 加权采样确实偏向前面的文档"""
+        sampler = HandwriteSampler(loader=mock_loader_large, sample_num=2, decay_rate=2.0)
+        
+        # 统计前5个和后5个文档被采样的次数
+        top_5_count = 0
+        bottom_5_count = 0
+        
+        # 多次采样统计
+        for _ in range(100):
+            # 重置采样器以便重复采样
+            sampler.reset()
+            samples = sampler.sample()
+            
+            for sample in samples:
+                name = sample['name']
+                idx = int(name.split('_')[-1])
+                
+                if idx < 5:
+                    top_5_count += 1
+                elif idx >= 25:
+                    bottom_5_count += 1
+        
+        # 前5个文档被采样次数应该明显多于后5个
+        assert top_5_count > bottom_5_count
+        # 至少1.5倍差异（理论上应该更高，但考虑随机性）
+        assert top_5_count > bottom_5_count * 1.5
+    
+    def test_manual_reset(self, mock_loader_large):
+        """测试11: 手动重置功能"""
+        sampler = HandwriteSampler(loader=mock_loader_large, sample_num=5, decay_rate=2.0)
+        
+        # 采样一些
+        sampler.sample()
+        assert len(sampler._used_indices) == 5
+        
+        # 手动重置
+        sampler.reset()
+        assert len(sampler._used_indices) == 0
+        
+        # 重置后可以重新采样
+        samples = sampler.sample()
+        assert len(samples) == 5
+
+
+class TestMultiRoundScenario:
+    """测试多轮采样场景（使用模块级mock_loader）"""
+    
+    def test_multi_island_multi_round(self, mock_loader):
+        """测试12: 多岛屿多轮采样（集成测试）"""
         num_islands = 3
         num_rounds = 2
         sample_num = 2
         
-        # 每个岛屿独立sampler
+        # 每个岛屿独立sampler（共用模块级mock_loader fixture）
         island_samplers = [
-            HandwriteSampler(loader=setup_samplers, sample_num=sample_num)
+            HandwriteSampler(loader=mock_loader, sample_num=sample_num)
             for _ in range(num_islands)
         ]
         
@@ -288,8 +400,4 @@ class TestMultiRoundScenario:
         # 验证每个岛屿都采样到了多个不同的建议
         for sampler in island_samplers:
             # 2轮 × 2个 = 4个采样
-            assert len(sampler._used_indices) >= 3
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
+            assert len(sampler._used_indices) == 4

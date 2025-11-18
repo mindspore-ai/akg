@@ -243,7 +243,7 @@ class Coder(AgentBase):
         Returns:
             str: 适合的API文档内容
         """
-        if len(self.base_doc["api_docs"]) > 5000:  # 如果api文档过长，使用llm进行content压缩
+        if len(self.base_doc["api_docs"]) > 6000:  # 如果api文档过长，使用llm进行content压缩
             api_parser = ParserFactory.get_api_parser()
             format_api_instructions = api_parser.get_format_instructions()
             api_input_data = {

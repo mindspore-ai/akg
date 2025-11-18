@@ -16,11 +16,10 @@
 手写优化建议和实现加载工具
 """
 
-import asyncio
 import logging
-import random
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+import numpy as np
 
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.agent.selector import Selector
@@ -207,33 +206,73 @@ class HandwriteLoader:
 class HandwriteSampler:
     """手写优化建议采样器
     
-    支持不重复采样，用完后自动重置
+    支持基于相关性的加权采样，用完后自动重置
+    
+    采样策略：
+    - 文档列表已按相关性排序（由LLM筛选时排序）
+    - 使用指数衰减权重：weight(i) = exp(-decay_rate * i / total_count)
+    - 索引越小（相关性越高）权重越大，被选中概率越高
+    - 索引越大（相关性越低）权重越小，但仍有被选中的机会
     """
     
-    def __init__(self, loader: HandwriteLoader, sample_num: int = 2):
+    def __init__(self, loader: HandwriteLoader, sample_num: int = 2, decay_rate: float = 2.0):
         """初始化采样器
         
         Args:
             loader: HandwriteLoader实例
             sample_num: 每次采样的数量
+            decay_rate: 权重衰减率，值越大衰减越快（默认2.0）
+                       - 2.0: 第1个文档权重约为最后一个的7.4倍
+                       - 3.0: 第1个文档权重约为最后一个的20倍
+                       - 1.0: 第1个文档权重约为最后一个的2.7倍
         """
         self.loader = loader
         self.sample_num = sample_num
+        self.decay_rate = decay_rate
         
-        # 获取可用的数据对
+        # 获取可用的数据对（已按相关性排序）
         self._available_pairs = self.loader.get_selected_pairs()
         self._total_count = len(self._available_pairs)
         
         # 记录已使用的索引
         self._used_indices = set()
         
+        # 预计算权重
+        self._weights = self._compute_weights()
+        
         if self._total_count == 0:
             logger.warning("No hand-write data pairs available")
         else:
-            logger.info(f"HandwriteSampler initialized with {self._total_count} pairs, sample_num={sample_num}")
+            logger.info(f"HandwriteSampler initialized with {self._total_count} pairs, "
+                       f"sample_num={sample_num}, decay_rate={decay_rate}")
+            if self._total_count > 1:
+                weight_ratio = self._weights[0] / self._weights[-1]
+                logger.info(f"Weight ratio (first/last): {weight_ratio:.2f}x")
+    
+    def _compute_weights(self) -> np.ndarray:
+        """计算每个索引的采样权重
+        
+        使用指数衰减：weight(i) = exp(-decay_rate * i / total_count)
+        
+        Returns:
+            权重数组，已归一化为概率分布
+        """
+        if self._total_count == 0:
+            return np.array([])
+        
+        # 计算指数衰减权重
+        indices = np.arange(self._total_count)
+        weights = np.exp(-self.decay_rate * indices / self._total_count)
+        
+        # 归一化为概率分布
+        weights = weights / weights.sum()
+        
+        return weights
     
     def sample(self) -> List[Dict[str, str]]:
-        """采样建议
+        """基于相关性权重采样建议
+        
+        使用加权随机采样，相关性高的文档被选中概率更大
         
         Returns:
             采样的建议列表，每个包含name, torch_code, triton_code, improvement等
@@ -250,22 +289,42 @@ class HandwriteSampler:
             self._used_indices.clear()
             available_indices = list(range(self._total_count))
         
-        # 采样
+        # 准备加权采样
         actual_sample_num = min(self.sample_num, len(available_indices))
-        sampled_indices = random.sample(available_indices, actual_sample_num)
+        
+        # 提取可用索引对应的权重并重新归一化
+        available_weights = self._weights[available_indices]
+        available_probs = available_weights / available_weights.sum()
+        
+        # 使用numpy进行加权随机采样（不放回）
+        sampled_indices = np.random.choice(
+            available_indices,
+            size=actual_sample_num,
+            replace=False,
+            p=available_probs
+        )
         
         # 标记为已使用
         self._used_indices.update(sampled_indices)
         
-        # 读取内容
+        # 读取内容并记录导入的文档
         suggestions = []
+        imported_doc_names = []
+        
         for idx in sampled_indices:
             pair = self._available_pairs[idx]
             content = self.loader.read_pair_content(pair)
             if content:
                 suggestions.append(content)
+                # 记录文档名称用于日志
+                imported_doc_names.append(pair['name'])
         
-        logger.debug(f"Sampled {len(suggestions)} suggestions")
+        # 输出导入的优化建议文档日志
+        if imported_doc_names:
+            logger.info(f"HandwriteSampler: 已导入 {len(imported_doc_names)} 个手写优化文档（加权采样）")
+            for i, name in enumerate(imported_doc_names, 1):
+                logger.info(f"  [{i}] {name}")
+        
         return suggestions
     
     def reset(self):

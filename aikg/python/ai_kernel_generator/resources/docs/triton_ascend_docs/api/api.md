@@ -37,7 +37,7 @@ grid_size = triton.cdiv(total_elements, block_size)
 ```
 - **参数**: `a`, `b` - 被除数和除数
 - **返回**: 向上取整的除法结果
-- **用途**: 计算启动网格大小
+- **用途**: host侧使用，计算启动网格大小
 
 ## 3. 内存操作 API
 
@@ -134,6 +134,14 @@ float_data = tl.cast(int_data, tl.float32)
 - **返回**: 类型转换后的张量
 
 ## 5. 数学运算 API
+
+### tl.cdiv(a, b)
+```python
+result = tl.cdiv(offset, BLOCK_SIZE)
+```
+- **参数**: `a`, `b` - 被除数和除数
+- **返回**: 向上取整的除法结果 ⌈a/b⌉
+- **用途**: kernel内部使用，计算向上整除结果，等价于 `(a + b - 1) // b`
 
 ### tl.dot(a, b, acc=None, allow_tf32=True)
 ```python

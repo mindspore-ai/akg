@@ -59,6 +59,7 @@ async def evolve(
     migration_interval: int = 0,  # 设置为0可禁用迁移
     elite_size: int = 0,  # 设置为0可禁用精英机制
     parent_selection_prob: float = 0.5,  # 父代选择概率
+    handwrite_decay_rate: float = 2.0,  # 手写建议采样的权重衰减率
 ) -> Dict[str, Any]:
     """统一的进化式算子生成主函数，支持基础模式和岛屿模型
 
@@ -78,6 +79,7 @@ async def evolve(
         migration_interval: 迁移间隔（设置为0可禁用迁移）
         elite_size: 精英池大小（设置为0可禁用精英机制）
         parent_selection_prob: 父代来源概率
+        handwrite_decay_rate: 手写建议采样的权重衰减率，值越大衰减越快（默认2.0）
 
     Returns:
         进化结果字典
@@ -145,7 +147,7 @@ async def evolve(
         
         # 为每个岛屿创建独立的HandwriteSampler，共享同一个HandwriteLoader
         island_handwrite_samplers = [
-            HandwriteSampler(loader=handwrite_loader, sample_num=handwrite_sample_num) 
+            HandwriteSampler(loader=handwrite_loader, sample_num=handwrite_sample_num, decay_rate=handwrite_decay_rate) 
             for _ in range(num_islands)
         ]
         if any(sampler._total_count > 0 for sampler in island_handwrite_samplers):
@@ -158,7 +160,7 @@ async def evolve(
         
         # 为每个个体创建独立的HandwriteSampler，共享同一个HandwriteLoader
         individual_handwrite_samplers = [
-            HandwriteSampler(loader=handwrite_loader, sample_num=handwrite_sample_num) 
+            HandwriteSampler(loader=handwrite_loader, sample_num=handwrite_sample_num, decay_rate=handwrite_decay_rate) 
             for _ in range(parallel_num)
         ]
         if any(sampler._total_count > 0 for sampler in individual_handwrite_samplers):
@@ -184,23 +186,21 @@ async def evolve(
             handwrite_suggestions_list = []  # 简单模式：每个个体不同的建议
 
         if round_idx == 1:
-            # 第一轮：为所有岛屿初始化空的灵感列表
+            # 第一轮：为所有岛屿初始化空的灵感列表，不导入手写文档
             if use_islands:
                 # 岛屿模型
                 for island_idx in range(num_islands):
                     island_inspirations[island_idx] = [[] for _ in range(tasks_per_island)]
                     island_meta_prompts[island_idx] = load_meta_prompts(dsl, tasks_per_island)
-                    # 为每个岛屿使用独立的sampler采样hand_write建议
-                    island_handwrite_suggestions[island_idx] = island_handwrite_samplers[island_idx].sample()
+                    # 第一轮不导入手写文档
+                    island_handwrite_suggestions[island_idx] = []
             else:
                 # 简单模式
                 inspirations = [[] for _ in range(parallel_num)]
                 # load meta-prompt
                 meta_prompts = load_meta_prompts(dsl, parallel_num)
-                # 为每个个体使用独立的sampler采样hand_write建议
-                handwrite_suggestions_list = []
-                for pid in range(parallel_num):
-                    handwrite_suggestions_list.append(individual_handwrite_samplers[pid].sample())
+                # 第一轮不导入手写文档
+                handwrite_suggestions_list = [[] for _ in range(parallel_num)]
         else:
             # 后续轮次：为所有岛屿生成灵感
             if use_islands:

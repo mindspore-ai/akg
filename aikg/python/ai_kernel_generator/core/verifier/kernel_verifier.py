@@ -1068,13 +1068,15 @@ class KernelVerifier:
     
     def _extract_autotune_configs(self, code: str) -> list:
         """
-        从triton代码中提取所有autotune config
+        从triton代码中提取所有未被注释的autotune config
+        
+        跳过已经被注释掉的config（通常是之前验证失败的）
         
         Args:
             code: triton代码
             
         Returns:
-            list: config列表，每个config是一个字符串
+            list: config列表，每个config是一个字符串（只包含未注释的）
         """
         import re
         
@@ -1087,11 +1089,51 @@ class KernelVerifier:
         
         configs_str = match.group(1)
         
-        # 匹配每个triton.Config(...)
+        # 匹配所有triton.Config(...)，使用更宽松的模式
         config_pattern = r'triton\.Config\s*\([^)]*\{[^}]+\}[^)]*\)'
-        configs = re.findall(config_pattern, configs_str, re.DOTALL)
+        all_matches = re.finditer(config_pattern, configs_str, re.DOTALL)
         
-        return configs
+        valid_configs = []
+        for match in all_matches:
+            # 获取匹配位置之前的内容
+            start_pos = match.start()
+            # 查找这个config之前最近的换行符位置
+            last_newline = configs_str.rfind('\n', 0, start_pos)
+            line_start = last_newline + 1 if last_newline != -1 else 0
+            # 获取从行首到config开始的内容
+            prefix = configs_str[line_start:start_pos]
+            
+            # 如果prefix中没有#，说明未被注释
+            if '#' not in prefix:
+                valid_configs.append(match.group(0))
+        
+        return valid_configs
+    
+    def _count_all_autotune_configs(self, code: str) -> int:
+        """
+        统计所有autotune config的数量（包括已注释的）
+        
+        Args:
+            code: triton代码
+            
+        Returns:
+            int: config总数
+        """
+        import re
+        
+        # 匹配@triton.autotune装饰器块
+        pattern = r'@triton\.autotune\s*\(\s*configs\s*=\s*\[(.*?)\]'
+        match = re.search(pattern, code, re.DOTALL)
+        
+        if not match:
+            return 0
+        
+        configs_str = match.group(1)
+        
+        # 统计所有包含triton.Config的行（无论是否注释）
+        count = configs_str.count('triton.Config')
+        
+        return count
     
     def _generate_single_config_code(self, original_code: str, config_to_keep: str, config_index: int) -> str:
         """
@@ -1124,7 +1166,7 @@ class KernelVerifier:
     
     def _generate_final_code_with_valid_configs(self, original_code: str, valid_configs: list, all_configs: list) -> str:
         """
-        生成最终代码：只保留正确的config，注释掉错误的config
+        生成最终代码：保留正确的config，注释掉错误的config
         
         Args:
             original_code: 原始代码
@@ -1139,17 +1181,18 @@ class KernelVerifier:
         if not all_configs:
             return original_code
         
-        # 构建新的configs块
+        # 统一逻辑：遍历所有config，在valid_configs中的保留，否则注释掉
         new_configs_lines = []
-        for i, config in enumerate(all_configs):
+        
+        for config in all_configs:
             if config in valid_configs:
                 # 保留正确的config
                 new_configs_lines.append(f"        {config},")
             else:
-                # 注释掉错误的config
+                # 注释掉错误的config并添加失败标注
                 config_lines = config.split('\n')
                 commented_lines = [f"        # {line}" if line.strip() else line for line in config_lines]
-                new_configs_lines.append('\n'.join(commented_lines) + ',  #  Failed verification')
+                new_configs_lines.append('\n'.join(commented_lines) + ',  # Failed verification')
         
         new_configs_block = f"configs=[\n" + "\n".join(new_configs_lines) + "\n    ]"
         
@@ -1158,6 +1201,44 @@ class KernelVerifier:
         modified_code = re.sub(pattern, new_configs_block, original_code, count=1, flags=re.DOTALL)
         
         return modified_code
+    
+    def _save_verification_result_to_jsonl(self, verify_dir: str, current_step: int, verification_passed: bool, 
+                                          verify_logs: str, all_configs_count: int = 0, valid_configs_count: int = 0):
+        """
+        保存验证结果到JSONL文件
+        
+        Args:
+            verify_dir: 验证目录
+            current_step: 当前步骤
+            verification_passed: 验证是否通过
+            verify_logs: 验证日志
+            all_configs_count: 所有config数量（autotune专用）
+            valid_configs_count: 通过的config数量（autotune专用）
+        """
+        result_jsonl_path = os.path.join(os.path.expanduser(self.log_dir), "verification_results.jsonl")
+        result_info = {
+            "task_name": self.op_name,
+            "task_id": self.task_id,
+            "step": current_step,
+            "verify_dir": verify_dir,
+            "passed": verification_passed,
+            "error_log": verify_logs,
+            "timestamp": datetime.now().isoformat(),
+            "framework": self.framework,
+            "dsl": self.dsl,
+            "backend": self.backend,
+            "arch": self.arch
+        }
+        
+        # 如果是autotune验证，添加config信息
+        if all_configs_count > 0:
+            result_info["autotune_configs"] = {
+                "total": all_configs_count,
+                "passed": valid_configs_count
+            }
+        
+        with open(result_jsonl_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(result_info, ensure_ascii=False, indent=2) + '\n\n')
     
     def _verify_configs_separately(self, target_code: str, verify_dir: str, device_id: int, verify_timeout: int, current_step: int = 0) -> Tuple[bool, str, str]:
         """
@@ -1175,19 +1256,56 @@ class KernelVerifier:
         """
         logger.info(f"[{self.op_name}] 检测到autotune装饰器，开始单独验证各个config...")
         
-        # 提取所有config
+        # 统计所有config数量（包括已注释的）
+        total_configs_count = self._count_all_autotune_configs(target_code)
+        
+        # 提取未被注释的config
         all_configs = self._extract_autotune_configs(target_code)
         
         if not all_configs:
-            logger.warning(f"[{self.op_name}] 未能提取到config，使用正常验证流程")
-            return None, "", target_code
+            if total_configs_count > 0:
+                # 所有config都被注释，生成验证文件但不运行，直接返回False
+                logger.info(f"[{self.op_name}] 检测到 {total_configs_count} 个config，但全部已被注释（之前验证失败）")
+                
+                verify_logs = []
+                verify_logs.append(f"=== Autotune Config 验证 ===\n")
+                verify_logs.append(f"检测到 {total_configs_count} 个config，全部已被注释（之前验证失败）\n")
+                verify_logs.append(f"跳过验证，直接返回失败结果\n")
+                
+                # 生成最终验证项目（包含所有被注释的config）
+                try:
+                    self.gen_verify_project(target_code, verify_dir, device_id)
+                    logger.info(f"[{self.op_name}] 验证项目已生成（全部config已注释）")
+                except Exception as e:
+                    error_msg = str(e)
+                    verify_logs.append(f"\n生成验证项目失败: {error_msg}\n")
+                    logger.error(f"[{self.op_name}] 生成验证项目失败: {error_msg}")
+                
+                # 保存验证结果到JSONL
+                self._save_verification_result_to_jsonl(
+                    verify_dir, current_step, False, 
+                    "".join(verify_logs), total_configs_count, 0
+                )
+                
+                return False, "".join(verify_logs), target_code
+            else:
+                logger.warning(f"[{self.op_name}] 未能提取到config，使用正常验证流程")
+                return None, "", target_code
         
-        logger.info(f"[{self.op_name}] 提取到 {len(all_configs)} 个config，开始逐个验证...")
+        skipped_count = total_configs_count - len(all_configs)
+        if skipped_count > 0:
+            logger.info(f"[{self.op_name}] 检测到 {total_configs_count} 个config，其中 {skipped_count} 个已被注释（跳过），将验证剩余 {len(all_configs)} 个config")
+        else:
+            logger.info(f"[{self.op_name}] 提取到 {len(all_configs)} 个config，开始逐个验证...")
         
         valid_configs = []
         verify_logs = []
         verify_logs.append(f"=== Autotune Config 单独验证 ===\n")
-        verify_logs.append(f"总共 {len(all_configs)} 个config\n\n")
+        if skipped_count > 0:
+            verify_logs.append(f"检测到 {total_configs_count} 个config，其中 {skipped_count} 个已被注释（跳过验证）\n")
+            verify_logs.append(f"待验证config数量: {len(all_configs)}\n\n")
+        else:
+            verify_logs.append(f"总共 {len(all_configs)} 个config\n\n")
         
         # 为每个config生成单独的验证文件并验证
         for i, config in enumerate(all_configs):
@@ -1228,20 +1346,21 @@ class KernelVerifier:
                 logger.error(f"[{self.op_name}] Config {config_num} 验证异常: {error_msg}")
         
         # 生成验证结果摘要
-        verify_logs.append(f"\n=== 验证结果摘要 ===\n")
         verify_logs.append(f"通过的config数量: {len(valid_configs)}/{len(all_configs)}\n")
         
-        if not valid_configs:
-            verify_logs.append(f"所有config都未通过验证\n")
-            logger.error(f"[{self.op_name}] 所有config都未通过验证")
-            return False, "".join(verify_logs), target_code
-        
-        # 生成最终代码（只保留正确的config）
+        # 统一生成最终代码（正确的保留，错误的注释掉）
         final_code = self._generate_final_code_with_valid_configs(target_code, valid_configs, all_configs)
+        verification_passed = len(valid_configs) > 0
         
-        verify_logs.append(f"验证通过，保留了 {len(valid_configs)} 个正确的config\n")
+        # 记录验证结果
+        if verification_passed:
+            verify_logs.append(f"验证通过，保留了 {len(valid_configs)} 个正确的config\n")
+            logger.info(f"[{self.op_name}] Autotune config验证完成: {len(valid_configs)}/{len(all_configs)} 通过")
+        else:
+            verify_logs.append(f"所有config都未通过验证\n")
+            logger.info(f"[{self.op_name}] 所有config都未通过验证")
+        
         verify_logs.append(f"\n=== 生成最终验证项目 ===\n")
-        logger.info(f"[{self.op_name}] Autotune config验证完成: {len(valid_configs)}/{len(all_configs)} 通过")
         
         # 使用最终代码生成完整的验证项目
         try:
@@ -1249,65 +1368,26 @@ class KernelVerifier:
             self.gen_verify_project(final_code, verify_dir, device_id)
             logger.info(f"[{self.op_name}] 最终验证项目生成成功")
             
-            # 复制到passed_cases文件夹
-            folder_name = os.path.basename(verify_dir)
-            dst_dir = Path(self.log_dir) / "passed_cases" / self.op_name / folder_name
-            shutil.copytree(verify_dir, dst_dir)
-            logger.info(f"[{self.op_name}] 验证文件已保存到: {dst_dir}")
-            
-            # 保存验证结果到JSONL文件
-            result_jsonl_path = os.path.join(os.path.expanduser(self.log_dir), "verification_results.jsonl")
-            result_info = {
-                "task_name": self.op_name,
-                "task_id": self.task_id,
-                "step": current_step,
-                "verify_dir": verify_dir,
-                "passed": True,
-                "error_log": "".join(verify_logs),
-                "timestamp": datetime.now().isoformat(),
-                "framework": self.framework,
-                "dsl": self.dsl,
-                "backend": self.backend,
-                "arch": self.arch,
-                "autotune_configs": {
-                    "total": len(all_configs),
-                    "passed": len(valid_configs)
-                }
-            }
-            
-            with open(result_jsonl_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(result_info, ensure_ascii=False, indent=2) + '\n\n')
+            # 只有验证通过时才复制到passed_cases文件夹
+            if verification_passed:
+                folder_name = os.path.basename(verify_dir)
+                dst_dir = Path(self.log_dir) / "passed_cases" / self.op_name / folder_name
+                shutil.copytree(verify_dir, dst_dir)
+                logger.info(f"[{self.op_name}] 验证文件已保存到: {dst_dir}")
             
         except Exception as e:
             error_msg = str(e)
             verify_logs.append(f"生成最终验证项目失败: {error_msg}\n")
             logger.error(f"[{self.op_name}] 生成最终验证项目失败: {error_msg}")
-            
-            # 保存异常结果到JSONL
-            result_jsonl_path = os.path.join(os.path.expanduser(self.log_dir), "verification_results.jsonl")
-            result_info = {
-                "task_name": self.op_name,
-                "task_id": self.task_id,
-                "step": current_step,
-                "verify_dir": verify_dir,
-                "passed": False,
-                "error_log": "".join(verify_logs),
-                "timestamp": datetime.now().isoformat(),
-                "framework": self.framework,
-                "dsl": self.dsl,
-                "backend": self.backend,
-                "arch": self.arch,
-                "autotune_configs": {
-                    "total": len(all_configs),
-                    "passed": len(valid_configs)
-                }
-            }
-            
-            with open(result_jsonl_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(result_info, ensure_ascii=False, indent=2) + '\n\n')
-            return False, "".join(verify_logs), final_code
+            verification_passed = False
         
-        return True, "".join(verify_logs), final_code
+        # 统一保存验证结果到JSONL
+        self._save_verification_result_to_jsonl(
+            verify_dir, current_step, verification_passed, 
+            "".join(verify_logs), len(all_configs), len(valid_configs)
+        )
+        
+        return verification_passed, "".join(verify_logs), final_code
 
     def run(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = 0):
         """
@@ -1370,24 +1450,8 @@ class KernelVerifier:
         # 拼接项目生成日志和验证日志
         verify_log = project_gen_log + verify_log
 
-        # 保存验证结果到JSONL文件（每行一个JSON对象）
-        result_jsonl_path = os.path.join(os.path.expanduser(self.log_dir), "verification_results.jsonl")
-        result_info = {
-            "task_name": self.op_name,
-            "task_id": self.task_id,
-            "step": current_step,
-            "verify_dir": verify_dir,
-            "passed": verify_res,
-            "error_log": verify_log,
-            "timestamp": datetime.now().isoformat(),
-            "framework": self.framework,
-            "dsl": self.dsl,
-            "backend": self.backend,
-            "arch": self.arch
-        }
-
-        with open(result_jsonl_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(result_info, ensure_ascii=False, indent=2) + '\n\n')
+        # 保存验证结果到JSONL文件
+        self._save_verification_result_to_jsonl(verify_dir, current_step, verify_res, verify_log)
 
         # 保存通过的验证文件
         if verify_res:

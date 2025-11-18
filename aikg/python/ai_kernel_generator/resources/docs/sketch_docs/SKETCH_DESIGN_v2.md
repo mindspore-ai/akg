@@ -328,19 +328,6 @@ sketch gelu {
 }
 ```
 
-## 多种切分示例
-在草图中添加最优切分方式，在后续通过@llm_hint补充更多切分配置
-添加@llm_hint("available_tiling")来提示LLM有更多可选的切分方式，在草图结尾列出available_tiling的具体配置，例如：
-```sketch
-@llm_hint("avaliable_tiling")
-SKETCH
-
-avaliable_tiling:
-BLOCK_SIZE = 256, PARALLEL_NUM = 4
-BLOCK_SIZE = 128, PARALLEL_NUM = 4
-BLOCK_SIZE = 128, PARALLEL_NUM = 8
-```
-
 ## 最佳实践
 
 ### 编写顺序

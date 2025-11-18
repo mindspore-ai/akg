@@ -51,6 +51,9 @@ class EvolveConfig:
         self.migration_interval = 0  # 设置为0可禁用迁移
         self.elite_size = 0  # 设置为0可禁用精英机制
         self.parent_selection_prob = 0.5  # 父代选择概率
+        
+        # 手写建议采样参数
+        self.handwrite_decay_rate = 2.0  # 权重衰减率，值越大衰减越快
 
         # 设备配置
         self.device_list = [0]
@@ -416,7 +419,8 @@ async def run_custom_evolve(op_name: str = None, task_desc: str = None, evolve_c
         num_islands=evolve_config.num_islands,
         migration_interval=evolve_config.migration_interval,
         elite_size=evolve_config.elite_size,
-        parent_selection_prob=evolve_config.parent_selection_prob
+        parent_selection_prob=evolve_config.parent_selection_prob,
+        handwrite_decay_rate=evolve_config.handwrite_decay_rate
     )
 
     return print_evolution_result(evolution_result, evolve_config)

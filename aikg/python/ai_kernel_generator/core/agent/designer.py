@@ -183,6 +183,23 @@ class Designer(AgentBase):
         """
         # 从task_info中获取conductor的建议
         conductor_suggestion = task_info.get("conductor_suggestion", "")
+        
+        # 通过task_id判断是否是evolve场景以及轮次
+        # evolve场景的task_id格式: "{round_idx}_{island_idx}_{pid}" 或 "{round_idx}_{pid}"
+        # 非evolve场景的task_id格式: 任意字符串（如"0", "test_task"等）
+        task_id = task_info.get("task_id", "")
+        evolve_first_round = False  # 默认不显示available_tiling
+        
+        if "_" in task_id:
+            # 可能是evolve场景，尝试解析第一个数字作为round_idx
+            try:
+                round_idx = int(task_id.split("_")[0])
+                # 如果round_idx > 1，说明是第二轮及以后，显示available_tiling
+                if round_idx > 1:
+                    evolve_first_round = True
+            except (ValueError, IndexError):
+                # 不是evolve场景的task_id格式，保持默认值False
+                pass
 
         # 基于aul_base_doc构建输入，只更新变化的部分
         input_data = {
@@ -191,6 +208,7 @@ class Designer(AgentBase):
             "inspirations": get_inspirations(task_info.get('inspirations', [])),
             "meta_prompts": task_info.get("meta_prompts", ""),
             "handwrite_suggestions": task_info.get("handwrite_suggestions", []),
+            "evolve_first_round": evolve_first_round,  # 控制是否显示available_tiling
         }
 
         # 执行LLM生成前更新context，确保正确性

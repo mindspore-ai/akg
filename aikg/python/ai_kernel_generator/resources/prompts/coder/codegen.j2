@@ -95,9 +95,12 @@ output = {{ func_name }}(*inputs)
 {% endif %}
 ```
 
-2. 所需要的shape参数，要从inputs的数据形状中获取，以适应不同的输入(**重要** 需要仔细检查输入的变量和shape与代码中一一对应）：
+2. 对于任务输入中固定写死的init_inputs参数，以及class外定义的参数，硬编码至代码中。
+所需要的shape参数，要从inputs的数据形状中获取，以适应不同的输入(**重要** 需要仔细检查输入的变量和shape与代码中一一对应）：
 ```
 def {{ func_name }}(...):
+  # 硬编码的参数
+  args = ... # 无法从inputs中获取的参数信息硬编码于此
   # 从输入张量获取shape参数
   P1, P2, P3 = input_tensor.shape  # 变量名应该与inputs构造时对应的变量保持一致，可以用注释标注实际数值并检查合理性
   ...

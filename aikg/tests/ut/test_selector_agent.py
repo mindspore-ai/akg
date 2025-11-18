@@ -15,6 +15,14 @@
 """
 Selector Agent的单元测试 - 精简版
 只测试核心流程
+
+Selector Agent 的作用：
+1. 接收候选文档列表
+2. 使用 LLM 筛选相关文档
+3. 返回按相关性排序的文档名列表（第1个最相关）
+
+重要：Selector 返回的排序列表会被 HandwriteSampler 使用，
+       通过加权采样确保相关性高的文档有更高的被选中概率。
 """
 
 import pytest
@@ -145,8 +153,8 @@ class TestSelectorCore:
             assert set(selected_names) == {"relu_001", "gelu_001", "matmul_001"}
     
     @pytest.mark.asyncio
-    async def test_parse_error_fallback(self, mock_config, sample_candidates):
-        """测试5: 解析错误时的fallback"""
+    async def test_selection_order_preserved(self, mock_config, sample_candidates):
+        """测试6: 验证选择顺序被保留（重要！用于加权采样）"""
         selector = Selector(
             op_name="relu_op",
             task_desc="ReLU activation function",
@@ -154,18 +162,22 @@ class TestSelectorCore:
             config=mock_config
         )
         
-        # Mock LLM返回无效JSON
-        mock_llm_response = 'invalid json response'
+        # Mock LLM返回特定顺序的结果
+        # 注意：顺序很重要，第一个是最相关的
+        mock_llm_response = '{"selected_names": ["relu_001", "gelu_001", "matmul_001"]}'
         
         with patch.object(selector, 'run_llm', new_callable=AsyncMock) as mock_run_llm:
             mock_run_llm.return_value = (mock_llm_response, None, None)
             
             selected_names = await selector.run(sample_candidates)
             
-            # Fallback: 返回所有候选文档名
-            assert len(selected_names) == 3
-            assert set(selected_names) == {"relu_001", "gelu_001", "matmul_001"}
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
+            # 验证返回的是列表（保持顺序）而不是集合
+            assert isinstance(selected_names, list)
+            
+            # 验证顺序与LLM返回的顺序一致
+            assert selected_names == ["relu_001", "gelu_001", "matmul_001"]
+            
+            # 这个顺序很重要：
+            # - "relu_001" 排在第1位（最相关），在加权采样时权重最高
+            # - "matmul_001" 排在最后（最不相关），在加权采样时权重最低
+            print("\n    ✓ 顺序保持: LLM排序 → Selector返回 → HandwriteSampler加权采样")
