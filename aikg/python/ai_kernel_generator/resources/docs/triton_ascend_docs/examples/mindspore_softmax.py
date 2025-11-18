@@ -45,9 +45,13 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride,
         tl.store(output_ptrs, softmax_output, mask=mask)
 
 
-def softmax_triton_mindspore(x):
+class ModelNew(ms.nn.Cell):
+    def __init__(self):
+        super().__init__()
+
+    def construct(self, x):
     """
-    Triton softmax 启动函数
+        Triton softmax
     """
     n_rows, n_cols = x.shape
 

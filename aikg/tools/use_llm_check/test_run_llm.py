@@ -54,7 +54,6 @@ async def test_simple_run_llm():
     print(f"Prompt: {formatted_prompt}")
     if reasoning_content:
         print(f"Reasoning: {reasoning_content}")
-    print(f"Model: {model_name}")
     print(f"Output: {content}")
     print("===================")
 

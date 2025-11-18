@@ -51,6 +51,26 @@ class DSLAdapter(ABC):
         """
         pass
     
+    def create_impl_module(self, framework: str,
+                           framework_adapter: Any,
+                           init_params_var: str = "init_params",
+                           device_var: str = "device") -> str:
+        """生成创建 impl_model 的代码（用于 ModelNew 类格式的 DSL）。
+
+        对于使用 ModelNew 类格式的 DSL（如 triton_cuda, triton_ascend, cpp），
+        需要先实例化模型。对于函数式 DSL，返回空字符串。
+
+        Args:
+            framework: Framework name (torch, mindspore, numpy)
+            framework_adapter: Framework adapter instance
+            init_params_var: Variable name for init_params (default: "init_params")
+            device_var: Variable name for device (default: "device")
+
+        Returns:
+            str: Code string to create impl_model, or empty string if not needed
+        """
+        return ""  # 默认返回空字符串，ModelNew 类格式的 DSL 需要override
+    
     @abstractmethod
     def call_impl(self, impl_func_name: str, inputs: str, device_id: int,
                   framework_adapter: Any, op_name: str, 

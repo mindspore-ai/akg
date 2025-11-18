@@ -40,7 +40,7 @@ def get_op_task_str(op_name):
     return op_task_str
 
 
-def get_kernelbench_task_desc(op_name, framework="torch"):
+def get_kernelbench_task_desc(op_name, framework="torch", level="level1"):
     """获取 KernelBench 任务描述"""
     current_file_path = os.path.abspath(__file__)
     commom_path = os.path.dirname(current_file_path)
@@ -48,10 +48,10 @@ def get_kernelbench_task_desc(op_name, framework="torch"):
 
     if framework == "torch":
         # Path for torch benchmarks from the KernelBench submodule.
-        # The submodule is at `aikg/thirdparty/KernelBench`, and benchmark files are inside `KernelBench/level1/` subdirectory.
+        # The submodule is at `aikg/thirdparty/KernelBench`, and benchmark files are inside `KernelBench/{level}/` subdirectory.
         base_dir = os.path.join(
-            aikg_path, 'thirdparty', 'KernelBench', 'KernelBench', 'level1')
-        # Files are directly in level1 directory with naming pattern: {number}_{name}.py
+            aikg_path, 'thirdparty', 'KernelBench', 'KernelBench', level)
+        # Files are directly in level directory with naming pattern: {number}_{name}.py
         task_path = os.path.join(base_dir, op_name + '.py')
     else:
         # Original path for mindspore and numpy benchmarks
@@ -149,7 +149,7 @@ def get_aikgbench_task_desc(op_name, category=None, framework="torch"):
         _raise_submodule_error(f"AIKGBench 中的操作 {op_name}", f"已搜索目录: {base_path}")
 
 
-def get_kernelbench_op_name(task_index_list, framework="torch"):
+def get_kernelbench_op_name(task_index_list, framework="torch", level="level1"):
     """获取 KernelBench 操作名称列表"""
     if task_index_list is None:
         return None
@@ -160,7 +160,7 @@ def get_kernelbench_op_name(task_index_list, framework="torch"):
 
     if framework == "torch":
         task_path = os.path.join(
-            aikg_path, 'thirdparty', 'KernelBench', 'KernelBench', 'level1')
+            aikg_path, 'thirdparty', 'KernelBench', 'KernelBench', level)
         # PyTorch: 直接查找文件
         task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
         matched_files = []

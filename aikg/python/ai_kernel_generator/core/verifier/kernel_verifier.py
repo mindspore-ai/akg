@@ -93,13 +93,8 @@ class KernelVerifier:
         else:
             raise ValueError("config is required for KernelVerifier")
         if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
-            if self.dsl == "triton_cuda":
-                self.impl_func_name = impl_func_name or f"{op_name}_triton_cuda_{framework}"
-            elif self.dsl == "triton_ascend":
-                self.impl_func_name = impl_func_name or f"{op_name}_triton_ascend_{framework}"
-            else:
-                # 兼容旧代码，如果dsl包含triton_cuda或triton_ascend但不是精确匹配
-                self.impl_func_name = impl_func_name or f"{op_name}_{self.dsl}_{framework}"
+            # 对于 triton_cuda 和 triton_ascend，统一使用 ModelNew 类格式
+            self.impl_func_name = impl_func_name or "ModelNew"
         elif self.dsl == "ascendc":
             self.impl_func_name = impl_func_name or f"{op_name}_kernel"
         else:
@@ -354,6 +349,10 @@ class KernelVerifier:
             process_input_code = framework_adapter.get_process_input_code(self.backend, self.dsl)
             logger.debug(f"[{self.op_name}] Process input code生成成功 (长度: {len(process_input_code)})")
             
+            # 生成创建 impl_model 的代码（用于 ModelNew 类格式的 DSL）
+            create_impl_code = dsl_adapter.create_impl_module(self.framework, framework_adapter)
+            logger.debug(f"[{self.op_name}] Create impl module code生成成功 (长度: {len(create_impl_code)})")
+            
             # 生成调用实现代码
             call_impl_code = dsl_adapter.call_impl(
                 self.impl_func_name, "inputs_for_impl", device_id,
@@ -402,6 +401,7 @@ class KernelVerifier:
                 special_setup_code=self._prepare_code_lines(special_setup_code),
                 device_setup_code=self._prepare_code_lines(device_setup_code),
                 process_input_code=self._prepare_code_lines(process_input_code),
+                create_impl_code=self._prepare_code_lines(create_impl_code),
                 call_impl_code=self._prepare_code_lines(call_impl_code),
                 set_seed_code=self._prepare_code_lines(set_seed_code),
                 binary_io_functions=self._prepare_code_lines(binary_io_functions),
@@ -509,6 +509,10 @@ class KernelVerifier:
             # 生成输入处理代码
             process_input_code = framework_adapter.get_process_input_code(self.backend, self.dsl)
             
+            # 生成创建 impl_model 的代码（用于 ModelNew 类格式的 DSL）
+            create_impl_code = dsl_adapter.create_impl_module(self.framework, framework_adapter)
+            logger.debug(f"[{self.op_name}] 性能测试Create impl module code生成成功 (长度: {len(create_impl_code)})")
+            
             # 生成set_seed代码
             set_seed_code = framework_adapter.get_set_seed_code(self.backend)
             
@@ -569,6 +573,7 @@ class KernelVerifier:
                 special_setup_code=self._prepare_code_lines(special_setup_code),
                 device_setup_code=self._prepare_code_lines(device_setup_code),
                 process_input_code=self._prepare_code_lines(process_input_code),
+                create_impl_code=self._prepare_code_lines(create_impl_code),
                 set_seed_code=self._prepare_code_lines(set_seed_code),
                 binary_io_functions=self._prepare_code_lines(binary_io_functions),
                 needs_binary_io=needs_binary_io,
@@ -636,7 +641,7 @@ class KernelVerifier:
             base_benchmark_fn,
             warmup={warmup},
             rep={runs},
-            return_mode="min"
+            return_mode="median"
         )
         method = "triton_do_bench"
 """

@@ -72,7 +72,11 @@ acc = acc / l_i
 
 ```python
 # 方案1：转连续后用一维访问（推荐）
-def launch_kernel(input_tensor):
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, input_tensor):
     # 非连续张量转为连续（一次性开销）
     if not input_tensor.is_contiguous():
         input_tensor = input_tensor.contiguous()
@@ -229,7 +233,11 @@ def large_vector_kernel(
         tl.store(output_ptr + offsets, result, mask=mask)
 
 # 启动方式
-def launch_large_kernel(input_tensor):
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, input_tensor):
     n_elements = input_tensor.numel()
     BLOCK_SIZE = * # 设置为尽可能大的合适的每次处理的值，充分利用ub
     MAX_GRID_SIZE = * # 设置为对应处理核的整数倍（区分vec与cube），小于65535的值
@@ -248,6 +256,7 @@ def launch_large_kernel(input_tensor):
         BLOCK_SIZE=BLOCK_SIZE,
         ELEMENTS_PER_GRID=ELEMENTS_PER_GRID,
     )
+        return output_tensor
 ```
 
 **方案2：host侧多次启动kernel**
@@ -255,7 +264,11 @@ def launch_large_kernel(input_tensor):
 如果一次内核启动无法处理整个张量，可以在host侧将张量分成多个部分，通过多次启动内核来完成计算：
 
 ```python
-def launch_with_batching(x):
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
     M = x.shape[0]
     BLOCK_SIZE = * # 设置为尽可能大的合适的每次处理的值，充分利用ub
     MAX_GRID_SIZE = * # 设置为对应处理核的整数倍（区分vec与cube），小于65535的值
@@ -276,6 +289,7 @@ def launch_with_batching(x):
         # 单次启动即可
         grid = (M,)
         op_kernel[grid](x, x.stride(0), BLOCK_SIZE)
+        return x
 ```
 
 ## 5. 调试与排查清单

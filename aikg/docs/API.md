@@ -122,4 +122,11 @@ You can directly specify the LLM API using high-priority environment variables.
 export AIKG_BASE_URL="https://api.example.com/v1"
 export AIKG_MODEL_NAME="your-model-name"
 export AIKG_API_KEY="your-api-key"
-``` 
+export AIKG_MODEL_ENABLE_THINK="enabled"  # Optional, enable thinking mode
+```
+
+The `AIKG_MODEL_ENABLE_THINK` is an optional parameter to enable the model's thinking mode:
+- **DeepSeek style**: Set to `"enabled"` or `"disabled"`
+- **GLM style**: Set to `"true"` or `"false"`
+
+If this environment variable is not set, thinking mode will not be enabled. 

@@ -80,51 +80,214 @@
 
 ### 代码生成格式规范
 
-1. 参考《算子任务描述》中的 get_inputs() 及其调用方式，确保 {{ func_name }} 函数入参数量、含义、顺序正确；
-包含 `{{ op_name }}_kernel` 函数，以及 `{{ func_name }}` 启动函数。
+**重要：所有生成的代码必须是ModelNew类格式，不再使用函数形式。**
+
+1. 必须生成ModelNew类，格式如下：
 ```python
-inputs = get_inputs()
 {% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
-# 运行Triton实现
-output = {{ func_name }}(*inputs)
-{% elif dsl == "swft" %}
-# 运行SWFT实现
-# 在公共流程内设置 kernel inputs
-{{ func_name }}(devide_id=device_id)
-# 在公共流程内获取 kernel outputs
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def {{ op_name }}_kernel(...):
+    # kernel实现
+    ...
+
+class ModelNew(torch.nn.Module):
+    def __init__(self, ...):
+        super().__init__()
+        # 如果有nn.Module参数（如nn.Linear, nn.Conv2d），需要：
+        # 1. 在__init__开始时设置固定随机种子（与验证模板中的种子一致）
+        # 2. 通过nn.Linear/nn.Conv2d等构建参数，然后提取weight和bias
+        # 3. 使用nn.Parameter包装，确保与原始Model的权重一致
+        torch.manual_seed(0)  # 固定种子（与kernel_verify_template.j2中的种子一致）
+        # 例如：
+        # linear = nn.Linear(in_features, out_features)
+        # self.weight = nn.Parameter(linear.weight.clone())
+        # self.bias = nn.Parameter(linear.bias.clone()) if linear.bias is not None else None
+    
+    def forward(self, ...):
+        # 调用kernel函数
+        return {{ op_name }}_kernel(...)
+{% elif dsl == "cpp" %}
+import torch
+import torch.nn as nn
+from torch.utils.cpp_extension import load_inline
+
+# C++ kernel代码
+cpp_source = """
+...
+"""
+
+# 加载C++扩展
+xxx_module = load_inline(...)
+
+class ModelNew(nn.Module):
+    def __init__(self, ...):
+        super().__init__()
+        # 如果有nn.Module参数，需要设置随机种子并提取参数
+        torch.manual_seed(0)  # 固定种子
+        # 例如：
+        # linear = nn.Linear(in_features, out_features)
+        # self.weight = nn.Parameter(linear.weight.clone())
+        # self.bias = nn.Parameter(linear.bias.clone()) if linear.bias is not None else None
+    
+    def forward(self, ...):
+        # 调用C++ kernel
+        return xxx_module.xxx_kernel(...)
+{% elif framework == "mindspore" %}
+import mindspore as ms
+from mindspore import nn
+{% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
+import triton
+import triton.language as tl
+
+@triton.jit
+def {{ op_name }}_kernel(...):
+    # kernel实现
+    ...
+
+class ModelNew(nn.Cell):
+    def __init__(self, ...):
+        super().__init__()
+        # 如果有nn.Cell参数（如nn.Dense, nn.Conv2d），需要：
+        # 1. 在__init__开始时设置固定随机种子（与验证模板中的种子一致）
+        # 2. 通过nn.Dense/nn.Conv2d等构建参数，然后提取weight和bias
+        # 3. 使用Parameter包装，确保与原始Model的权重一致
+        ms.set_seed(0)  # 固定种子（与kernel_verify_template.j2中的种子一致）
+        # 例如：
+        # dense = nn.Dense(in_features, out_features)
+        # self.weight = Parameter(dense.weight.clone(), name="weight")
+        # self.bias = Parameter(dense.bias.clone(), name="bias") if dense.bias is not None else None
+    
+    def construct(self, ...):
+        # 调用kernel函数
+        return {{ op_name }}_kernel(...)
+{% else %}
+# 其他DSL类似，必须生成ModelNew类
+{% endif %}
+```
+{% endif %}
+
+2. 对于无参数的算子（如ReLU），`__init__`可以为空：
+```python
+{% if framework == "torch" %}
+class ModelNew(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, x):
+        return xxx_kernel(x)
+{% elif framework == "mindspore" %}
+class ModelNew(nn.Cell):
+    def __init__(self):
+        super().__init__()
+    
+    def construct(self, x):
+        return xxx_kernel(x)
 {% endif %}
 ```
 
-2. 对于任务输入中固定写死的init_inputs参数，以及class外定义的参数，硬编码至代码中。
-所需要的shape参数，要从inputs的数据形状中获取，以适应不同的输入(**重要** 需要仔细检查输入的变量和shape与代码中一一对应）：
+3. 对于有参数的算子（如Linear/Dense, Conv2d），必须在`__init__`中通过固定随机种子构建参数：
+```python
+{% if framework == "torch" %}
+class ModelNew(nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        torch.manual_seed(0)  # 固定种子，确保与原始Model权重一致
+        linear = nn.Linear(in_features, out_features)
+        self.weight = nn.Parameter(linear.weight.clone())
+        self.bias = nn.Parameter(linear.bias.clone()) if linear.bias is not None else None
+    
+    def forward(self, x):
+        return xxx_kernel(x, self.weight, self.bias)
+{% elif framework == "mindspore" %}
+class ModelNew(nn.Cell):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        ms.set_seed(0)  # 固定种子，确保与原始Model权重一致
+        from mindspore import Parameter
+        dense = nn.Dense(in_features, out_features)
+        self.weight = Parameter(dense.weight.clone(), name="weight")
+        self.bias = Parameter(dense.bias.clone(), name="bias") if dense.bias is not None else None
+    
+    def construct(self, x):
+        return xxx_kernel(x, self.weight, self.bias)
+{% endif %}
 ```
-def {{ func_name }}(...):
-  # 硬编码的参数
-  args = ... # 无法从inputs中获取的参数信息硬编码于此
+
+4. 如果生成的代码是函数形式（兼容旧代码），可以在ModelNew的forward/construct中直接调用：
+```python
+{% if framework == "torch" %}
+class ModelNew(nn.Module):
+    def forward(self, x):
+        return custom_op_triton_torch(x)  # 直接调用函数
+{% elif framework == "mindspore" %}
+class ModelNew(nn.Cell):
+    def construct(self, x):
+        return custom_op_triton_mindspore(x)  # 直接调用函数
+{% endif %}
+```
+
+5. 对于任务输入中固定写死的init_inputs参数，以及class外定义的参数，硬编码至代码中。
+所需要的shape参数，要从inputs的数据形状中获取，以适应不同的输入(**重要** 需要仔细检查输入的变量和shape与代码中一一对应）：
+```python
+{% if framework == "torch" %}
+def forward(self, input_tensor, ...):
+    # 硬编码的参数（如果有无法从inputs中获取的参数）
+    # args = ... # 无法从inputs中获取的参数信息硬编码于此
+    
   # 从输入张量获取shape参数
-  P1, P2, P3 = input_tensor.shape  # 变量名应该与inputs构造时对应的变量保持一致，可以用注释标注实际数值并检查合理性
+  P1, P2, P3 = input_tensor.shape  # 变量名应该与inputs构造时对应的变量保持一致
   ...
   # 执行 kernel 函数
   ...
+{% elif framework == "mindspore" %}
+def construct(self, input_tensor, ...):
+    # 硬编码的参数（如果有无法从inputs中获取的参数）
+    # args = ... # 无法从inputs中获取的参数信息硬编码于此
+    
+  # 从输入张量获取shape参数
+  P1, P2, P3 = input_tensor.shape  # 变量名应该与inputs构造时对应的变量保持一致
+  ...
+  # 执行 kernel 函数
+  ...
+{% endif %}
 ```
 
 {% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
-3. 卷积类算子生成注意事项：
-请注意！！如果检测到给出的任务是卷积类的算子任务，为了保证Triton的卷积核权重与当前任务代码的卷积核权重一致，需要在Triton的host侧生成对应的weight：
+6. 卷积类算子生成注意事项：
+请注意！！如果检测到给出的任务是卷积类的算子任务，为了保证ModelNew的卷积核权重与当前任务代码的卷积核权重一致，需要在ModelNew的`__init__`中通过固定随机种子构建参数：
+```python
+{% if framework == "torch" %}
+class ModelNew(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, ...):
+        super().__init__()
+        torch.manual_seed(0)  # 固定种子，确保与原始Model权重一致
+        # 创建Conv层并提取weight和bias
+        conv = nn.Conv2d(in_channels, out_channels, kernel_size, ...)
+        self.weight = nn.Parameter(conv.weight.clone())
+        self.bias = nn.Parameter(conv.bias.clone()) if conv.bias is not None else None
+    
+    def forward(self, x):
+        return conv_kernel(x, self.weight, self.bias, ...)
+{% elif framework == "mindspore" %}
+class ModelNew(nn.Cell):
+    def __init__(self, in_channels, out_channels, kernel_size, ...):
+        super().__init__()
+        ms.set_seed(0)  # 固定种子，确保与原始Model权重一致
+        from mindspore import Parameter
+        # 创建Conv层并提取weight和bias
+        conv = nn.Conv2d(in_channels, out_channels, kernel_size, ...)
+        self.weight = Parameter(conv.weight.clone(), name="weight")
+        self.bias = Parameter(conv.bias.clone(), name="bias") if conv.bias is not None else None
+    
+    def construct(self, x):
+        return conv_kernel(x, self.weight, self.bias, ...)
+{% endif %}
 ```
-    import torch
-    import torch.nn as nn
-    import triton
-    import triton.language as tl
-    # Triton内核
-    @triton.jit
-    def triton_kernel():
-        pass
-    def triton_host():
-        args = ...
-        weight = nn.ConvXXX(**args).weight.to(device)
-```
-我们会在调用Triton代码之前固定随机种子以保证Triton的卷积核权重与任务代码的卷积核权重一致，请务必保证nn中调用的module要与任务torch代码中调用的module要一致，使用的参数要一致，device设置请参考不同的硬件后端（"cuda", "npu"）。
+请务必保证nn中调用的module要与任务代码中调用的module要一致，使用的参数要一致，device设置请参考不同的硬件后端（"cuda", "npu", "ascend"）。
 {% endif %}
 
 **请尽可能使用中文进行思考分析**

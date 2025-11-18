@@ -124,4 +124,11 @@ task = Task(
 export AIKG_BASE_URL="https://api.example.com/v1"
 export AIKG_MODEL_NAME="your-model-name"
 export AIKG_API_KEY="your-api-key"
+export AIKG_MODEL_ENABLE_THINK="enabled"  # 可选，启用thinking模式
 ```
+
+其中 `AIKG_MODEL_ENABLE_THINK` 是可选参数，用于启用模型的 thinking 模式：
+- **DeepSeek 风格**：设置为 `"enabled"` 或 `"disabled"`
+- **GLM 风格**：设置为 `"true"` 或 `"false"`
+
+如果不设置此环境变量，则不启用 thinking 模式。

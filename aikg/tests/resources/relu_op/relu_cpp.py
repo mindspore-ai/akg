@@ -55,8 +55,13 @@ ReLU_module = load_inline(
     extra_cflags=["-O3"],
     verbose=True
 )
-# 内核调用
-def relu_cpp_torch(x: torch.Tensor) -> torch.Tensor:
-    if x.device.type != "cpu":
-        x = x.cpu()
-    return ReLU_module.ReLU_kernel(x)
+
+
+class ModelNew(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.device.type != "cpu":
+            x = x.cpu()
+        return ReLU_module.ReLU_kernel(x)

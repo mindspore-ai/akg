@@ -33,6 +33,9 @@
 {{ dsl_examples }}
 
 ## 输出要求
+
+**重要：所有示例代码必须是ModelNew类格式，不再使用函数形式。**
+
 请按照以下格式输出压缩后的示例代码：
 
 1. **核心概念示例**：展示{{ dsl }}的基本使用模式和核心概念
@@ -42,8 +45,17 @@
 
 每个示例应包含：
 - 简洁的注释说明
-- 完整的代码结构
+- 完整的代码结构（必须是ModelNew类格式）
 - 关键点说明
+
+**代码格式要求**：
+- 所有示例必须使用 `class ModelNew(torch.nn.Module):`（PyTorch）或 `class ModelNew(nn.Cell):`（MindSpore）或相应的基类
+- `__init__` 方法用于初始化参数（如果有）
+- `forward` 方法（PyTorch）或 `construct` 方法（MindSpore）包含实际的kernel调用逻辑
+- 对于无参数的算子，`__init__` 可以为空
+- 对于有参数的算子（如Linear/Dense, Conv2d），必须在`__init__`中通过固定随机种子构建参数
+  - PyTorch: 使用 `torch.manual_seed(0)` 和 `nn.Parameter`
+  - MindSpore: 使用 `ms.set_seed(0)` 和 `Parameter`
 
 **请尽可能使用中文进行思考分析**
 

@@ -32,9 +32,13 @@ def matmul_kernel(output_ptr, x_ptr, y_ptr,
     tl.store(output_ptr + oidx, result)
 
 
-def matmul_triton_framework(x0, x1):
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x0, x1):
     """
-    Triton 矩阵乘法启动函数
+        Triton 矩阵乘法
     """
     B, C = x0.shape
     C2, D = x1.shape
