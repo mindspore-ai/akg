@@ -1,5 +1,5 @@
 /**
- * Copyright 2023-2024 Huawei Technologies Co., Ltd
+ * Copyright 2023-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -143,7 +143,7 @@ def AKGAffineLoopParallelize : Pass<"akg-affine-loop-parallelize", "func::FuncOp
 def MergeFusionOp : Pass<"merge-fusion-op", "func::FuncOp"> {
   let summary = "Move all operators between two for loops up or down to the innermost for loop";
   let options = [
-    Option<"mergeSpecificOp", "merge-specific-op", "bool", "false", 
+    Option<"mergeSpecificOp", "merge-specific-op", "bool", "false",
     "Merge specific op: contains the outermost ops of the for loop and the reduce initialization statement. (default=false)">,
   ];
   let constructor = "mlir::createMergeFusionOpPass()";
@@ -182,7 +182,7 @@ def GenerateSingleAffineParallel : Pass<"generate-single-affine-parallel", "func
   let constructor = "mlir::createGenerateSingleAffineParallelPass()";
   let options = [
     Option<"forceGen", "force-gen", "unsigned",
-           /*default=*/"0", 
+           /*default=*/"0",
            "`0` means generate a fake for on top only when there is no loop; while `1` means generate no matter what">,
   ];
   let dependentDialects = [
@@ -193,8 +193,8 @@ def GenerateSingleAffineParallel : Pass<"generate-single-affine-parallel", "func
 def ExtractIfOp : Pass<"extract-if", "func::FuncOp"> {
   let summary = "Extract the affine::AffineIfOp inside the loop and move the statements inside the ThenBlock out of the loop.";
   let options = [
-    Option<"extractAllOp", "extract-all-op", "bool", "false", 
-    "CPU backend: the reduce initialization statement does not need to be extracted. (default=true)">, 
+    Option<"extractAllOp", "extract-all-op", "bool", "false",
+    "CPU backend: the reduce initialization statement does not need to be extracted. (default=true)">,
   ];
   let constructor = "mlir::createExtractIfOpPass()";
 }
@@ -291,6 +291,20 @@ def AffineForVectPass : Pass<"affine-for-vectorize", "mlir::func::FuncOp"> {
 def TilingFunc : Pass<"tiling-func", "mlir::ModuleOp"> {
   let summary = "This pass applies tiling to operations on tensors, dynamically processing tiles";
   let constructor = "mlir::affine::createTilingFuncPass()";
+}
+
+
+def InsertLoadAndStore : Pass<"insert-load-and-store", "func::FuncOp"> {
+  let summary = "Insert hfusion.load and hfusion.store operations";
+  let description = [{
+    This pass inserts hfusion.load and hfusion.store
+  }];
+  let constructor = "mlir::createInsertLoadAndStorePass()";
+  let dependentDialects = [
+    "tensor::TensorDialect",
+    "annotation::AnnotationDialect",
+    "hfusion::HFusionDialect",
+  ];
 }
 
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES

@@ -109,7 +109,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
 
     nestedFusionPM.addPass(mlir::affine::createVectorTransferTensorizePass());
     pm.addPass(mlir::affine::createTilingFuncPass());
+
     pm.nest<mlir::func::FuncOp>().addPass(mlir::createLowerAffinePass());
+    pm.nest<mlir::func::FuncOp>().addPass(mlir::createInsertLoadAndStorePass());
   }
 }
 }  // namespace
