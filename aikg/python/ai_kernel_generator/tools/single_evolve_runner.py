@@ -58,8 +58,8 @@ class EvolveConfig:
         # 设备配置
         self.device_list = [0]
 
-        # 配置文件路径
-        self.config_path = str(Path(get_project_root()) / "config" / "vllm_triton_cuda_evolve_config.yaml")
+        # 配置文件路径（占位符，应从evolve_config.yaml的base部分读取）
+        self.config_path = "config/default_evolve_config.yaml"
 
         # 任务配置
         self.op_name = "relu_op"
@@ -88,6 +88,13 @@ class EvolveConfig:
                 config.framework = base.get('framework', config.framework)
                 config.backend = base.get('backend', config.backend)
                 config.arch = base.get('arch', config.arch)
+                # 读取配置文件路径，并转换为绝对路径
+                config_path_value = base.get('config_path', config.config_path)
+                if config_path_value and not Path(config_path_value).is_absolute():
+                    # 如果是相对路径，转换为绝对路径
+                    config.config_path = str(Path(get_project_root()) / config_path_value)
+                else:
+                    config.config_path = config_path_value
             else:
                 raise ValueError("base section not found in config file")
 
@@ -252,6 +259,15 @@ def print_evolution_result(evolution_result: Dict[str, Any], evolve_config: Evol
     storage_dir = evolution_result.get('storage_dir', '')
     if storage_dir:
         print(f"存储目录: {storage_dir}")
+    
+    # 显示Task文件夹信息和Log目录
+    task_folder = evolution_result.get('task_folder', '')
+    if task_folder:
+        print(f"Task文件夹: {task_folder}")
+    
+    log_dir = evolution_result.get('log_dir', '')
+    if log_dir:
+        print(f"Log目录: {log_dir}")
 
     # 显示最佳实现
     best_implementations = evolution_result.get('best_implementations', [])
@@ -280,6 +296,10 @@ def print_evolution_result(evolution_result: Dict[str, Any], evolve_config: Evol
             if evolution_result.get('island_info', {}).get('num_islands', 1) > 1:
                 source_island = impl.get('source_island', 'N/A')
                 info_parts.append(f"来源岛屿 {source_island}")
+            
+            # 添加 unique_dir（来自 speed_up_record.txt）
+            unique_dir = impl.get('unique_dir', 'N/A')
+            info_parts.append(f"个体路径: {unique_dir}")
 
             info_parts.append(profile_str)
             print(f"  {i}. {', '.join(info_parts)}")

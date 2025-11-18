@@ -6,6 +6,7 @@ base:
   framework: "torch"         # 框架: torch, numpy, mindspore, etc.
   backend: "cuda"            # 后端: ascend, cuda, etc.
   arch: "a100"               # 架构: a100, ascend910b4, etc.
+  config_path: "config/vllm_triton_cuda_evolve_config.yaml"  # AI模型和环境配置文件路径
 
 # 进化参数配置
 evolve:

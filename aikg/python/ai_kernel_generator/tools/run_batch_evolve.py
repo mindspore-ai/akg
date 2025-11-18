@@ -24,6 +24,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 import traceback
 from ai_kernel_generator import get_project_root
+from ai_kernel_generator.tools.realtime_result_collector import RealtimeResultCollector
 
 """
 批量执行配置参数 - 默认从evolve_config.yaml读取配置
@@ -58,9 +59,12 @@ from ai_kernel_generator import get_project_root
 class BatchTaskPool:
     """批量任务池，用于管理并行执行的evolve任务"""
 
-    def __init__(self, max_concurrency: int, device_pool: List[int], config_path: Optional[str] = None):
+    def __init__(self, max_concurrency: int, device_pool: List[int], 
+                 config_path: Optional[str] = None,
+                 collector: Optional[RealtimeResultCollector] = None):
         self.max_concurrency = max_concurrency
         self.config_path = config_path
+        self.collector = collector  # 实时结果收集器
         self.semaphore = asyncio.Semaphore(max_concurrency)
         # 动态设备池管理
         self.available_devices = asyncio.Queue()
@@ -99,6 +103,27 @@ class BatchTaskPool:
                     run_single_task_subprocess,
                     task_file, output_dir, index, total, use_compact_output, device, self.config_path
                 )
+                
+                # 任务完成后立即收集结果
+                if self.collector and result.get('success', False):
+                    try:
+                        # 读取输出文件内容
+                        output_file = result.get('output_file')
+                        output_content = ""
+                        if output_file and Path(output_file).exists():
+                            with open(output_file, 'r', encoding='utf-8') as f:
+                                output_content = f.read()
+                        
+                        # 收集结果（只需要op_name和输出内容）
+                        await loop.run_in_executor(
+                            None,
+                            self.collector.collect_task_result,
+                            result['op_name'],
+                            output_content
+                        )
+                    except Exception as e:
+                        print(f"⚠️  收集结果失败: {e}")
+                
                 return result
         finally:
             # 确保设备被释放
@@ -588,11 +613,19 @@ def main():
             print("❌ 未找到任何.py文件")
             return
 
-        # 创建批量任务池（传入设备池和配置文件路径）
+        # 初始化实时结果收集器
+        collector = RealtimeResultCollector(output_dir)
+        print(f"📊 实时结果收集器已启动")
+        print(f"   TXT输出: {collector.txt_file}")
+        print(f"   CSV输出: {collector.csv_file}")
+        print("="*80)
+
+        # 创建批量任务池（传入设备池、配置文件路径和收集器）
         batch_pool = BatchTaskPool(
             max_concurrency=parallel_num,
             device_pool=config["device_pool"],
-            config_path=config_path
+            config_path=config_path,
+            collector=collector
         )
 
         if parallel_num <= 1:
