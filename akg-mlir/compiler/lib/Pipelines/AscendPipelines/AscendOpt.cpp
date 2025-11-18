@@ -88,7 +88,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::affine::createAffineForVectPass());
     nestedFusionPM.addPass(mlir::affine::createVectorTransferTensorizePass());
     if (const char *v = std::getenv("TILINGFUNC"); v && std::string(v) == "1") {
-      nestedFusionPM.addPass(mlir::affine::createTilingFuncPass());
+      pm.addPass(mlir::affine::createTilingFuncPass());
     }
   }
 }
