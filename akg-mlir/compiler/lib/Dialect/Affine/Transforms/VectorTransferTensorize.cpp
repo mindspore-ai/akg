@@ -16,11 +16,10 @@
 
 //===- VectorTransferTensorize.cpp ------------------------------*- C++ -*-===//
 //
-//  Converts:
-//     1. vector.transfer_{read|write}
-//     2. scalar / vector arith.constant
-//     3. elementwise pure operators (generic, interface/type-based)
-//  into tensor form, and marks created tensor ops with a "restrict" attr.
+// Converts:
+//   1) vector.transfer_{read|write}
+//   2) scalar / vector arith.constant
+//   3) element-wise pure ops into tensor
 //
 //===----------------------------------------------------------------------===*/
 
@@ -29,6 +28,8 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/LoopUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -36,10 +37,10 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 
@@ -48,374 +49,363 @@
 
 #define DEBUG_TYPE "vector-transfer-tensorize"
 
-using mlir::AffineMapAttr;
-using mlir::Attribute;
-using mlir::DenseElementsAttr;
-using mlir::DenseSet;
-using mlir::Dialect;
-using mlir::DialectRegistry;
-using mlir::FailureOr;
-using mlir::IRMapping;
-using mlir::IntegerAttr;
-using mlir::Location;
-using mlir::MemRefType;
-using mlir::OpBuilder;
-using mlir::OpFoldResult;
-using mlir::Operation;
-using mlir::OperationState;
-using mlir::Pass;
-using mlir::RankedTensorType;
-using mlir::SmallVector;
-using mlir::StridedLayoutAttr;
-using mlir::Type;
-using mlir::Value;
-using mlir::ValueRange;
+using namespace mlir;  // NOLINT(build/namespaces)
 
-namespace arith = mlir::arith;
-namespace math = mlir::math;
+namespace arith  = mlir::arith;
+namespace math   = mlir::math;
 namespace vector = mlir::vector;
-namespace bufferization = mlir::bufferization;
+namespace buffer = mlir::bufferization;
 namespace memref = mlir::memref;
 namespace tensor = mlir::tensor;
-namespace func = mlir::func;
+namespace func   = mlir::func;
+namespace affine = mlir::affine;
+namespace func   = mlir::func;
 
-//==============================================================================
+//------------------------------------------------------------------------------
 // Utilities
-//==============================================================================
+//------------------------------------------------------------------------------
 
-static RankedTensorType memrefToTensorType(MemRefType mty) {
-  if (!mty || !mty.hasStaticShape()) {
-    return {};
-  }
-  return RankedTensorType::get(mty.getShape(), mty.getElementType());
+static RankedTensorType convertMemrefToTensorType(MemRefType memrefType) {
+  if (!memrefType || !memrefType.hasStaticShape()) return {};
+  return RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
 }
 
-static bool isNumericLike(Type t) {
-  if (auto rt = t.dyn_cast<RankedTensorType>()) {
-    return rt.getElementType().isIntOrFloat();
-  }
-  if (auto vt = t.dyn_cast<mlir::VectorType>()) {
-    return vt.getElementType().isIntOrFloat();
-  }
-  return t.isIntOrFloat();
+static bool isNumericTypeLike(Type type) {
+  if (auto rankedTensorType = type.dyn_cast<RankedTensorType>())
+    return rankedTensorType.getElementType().isIntOrFloat();
+  if (auto vectorType = type.dyn_cast<VectorType>())
+    return vectorType.getElementType().isIntOrFloat();
+  return type.isIntOrFloat();
 }
 
-//==============================================================================
-// TensorizeState
-//==============================================================================
+//------------------------------------------------------------------------------
+// Tensorization state
+//------------------------------------------------------------------------------
 
-struct TensorizeState {
-  explicit TensorizeState(mlir::MLIRContext *ctx) : builder(ctx) {}
+struct TensorizationState {
+  explicit TensorizationState(MLIRContext *context) : builder(context) {}
 
   OpBuilder builder;
-  IRMapping valueMap;                 // old value -> tensor value
-  DenseSet<Operation *> coveredOps;   // Processed ops
-  SmallVector<Operation *> newOps;    // New ops (for debugging or rollback)
+  IRMapping valueMapping;                       // original value → tensor value
+  llvm::DenseSet<Operation *> operationsToErase;
 
-  void track(Operation *op) { newOps.push_back(op); }
-  void addMap(Value oldV, Value newV) {
-    if (!valueMap.contains(oldV)) {
-      valueMap.map(oldV, newV);
-    }
+  void map(Value original, Value tensorized) { valueMapping.map(original, tensorized); }
+  void replaceMapping(Value original, Value tensorized) {
+    valueMapping.erase(original);
+    map(original, tensorized);
   }
-  void cover(Operation *op) { coveredOps.insert(op); }
+  Value lookup(Value value) const { return valueMapping.lookupOrNull(value); }
+  void markForErasure(Operation *operation) { operationsToErase.insert(operation); }
 };
 
-//==============================================================================
-// Build 1-D subview along the innermost dimension
-// sliceLen == 0 → use the full length of the last dimension
-// sliceLen != 0 → use the specified length
-//==============================================================================
+//------------------------------------------------------------------------------
+// memref.alloc → tensor.empty
+//------------------------------------------------------------------------------
 
-static FailureOr<Value> buildSubview1D(OpBuilder &b,
-                                       Location loc,
-                                       Value src,
-                                       ValueRange indices,
-                                       unsigned sliceLen = 0) {
-  auto srcTy = src.getType().dyn_cast<MemRefType>();
-  if (!srcTy || !srcTy.hasStaticShape()) {
-    return mlir::failure();
-  }
-  unsigned rank = srcTy.getRank();
-  if (rank == 0) {
-    return mlir::failure();
-  }
+static FailureOr<tensor::EmptyOp> convertAllocOp(memref::AllocOp allocOp, TensorizationState &state) {
+  auto tensorType = convertMemrefToTensorType(allocOp.getType());
+  if (!tensorType) return failure();
 
-  SmallVector<OpFoldResult> offs;
-  SmallVector<OpFoldResult> szs;
-  SmallVector<OpFoldResult> strides(rank, b.getIndexAttr(1));
-  bool dynOff = false;
-  for (unsigned i = 0; i < rank - 1; ++i) {
-    if (srcTy.getDimSize(i) == 1) {
-      offs.push_back(b.getIndexAttr(0));
-    } else if (i < indices.size()) {
-      offs.push_back(indices[i]);
-      dynOff = true;
-    } else {
-      offs.push_back(b.getIndexAttr(0));
-    }
-    szs.push_back(b.getIndexAttr(1));
-  }
+  auto emptyTensor =
+      state.builder.create<tensor::EmptyOp>(allocOp.getLoc(), tensorType.getShape(), tensorType.getElementType());
 
-  offs.push_back(b.getIndexAttr(0));
-  int64_t fullLen = srcTy.getShape().back();
-  int64_t len = sliceLen ? static_cast<int64_t>(sliceLen) : fullLen;
-  szs.push_back(b.getIndexAttr(len));
-
-  MemRefType resTy;
-  if (dynOff) {
-    auto layout = StridedLayoutAttr::get(b.getContext(), mlir::ShapedType::kDynamic, {1});
-    resTy = MemRefType::get({len},
-                            srcTy.getElementType(),
-                            layout,
-                            srcTy.getMemorySpace());
-  } else {
-    resTy = MemRefType::get({len},
-                            srcTy.getElementType(),
-                            AffineMapAttr(),
-                            srcTy.getMemorySpace());
-  }
-
-  auto sub = b.create<memref::SubViewOp>(loc, resTy, src, offs, szs, strides).getResult();
-  return FailureOr<Value>(sub);
+  state.map(allocOp.getResult(), emptyTensor.getResult());
+  state.markForErasure(allocOp);
+  return emptyTensor;
 }
 
-//==============================================================================
-// Create tensor constant for broadcasting scalar / vector
-//==============================================================================
+//------------------------------------------------------------------------------
+// bufferization.to_{memref|tensor}
+//------------------------------------------------------------------------------
 
-static FailureOr<arith::ConstantOp> createTensorConstant(arith::ConstantOp cst,
-                                                         RankedTensorType tty,
-                                                         OpBuilder &b) {
-  Attribute val = cst.getValue();
-  // Direct DenseElements
-  if (auto dense = val.dyn_cast<DenseElementsAttr>()) {
-    arith::ConstantOp newOp;
-    if (dense.getType() == tty) {
-      newOp = b.create<arith::ConstantOp>(cst.getLoc(), dense);
-    } else if (dense.getNumElements() == tty.getNumElements()) {
-      newOp = b.create<arith::ConstantOp>(cst.getLoc(), dense.reshape(tty));
-    } else {
-      return mlir::failure();
+static void convertToMemrefOp(buffer::ToMemrefOp toMemrefOp, TensorizationState &state) {
+  state.map(toMemrefOp.getResult(), toMemrefOp.getTensor());
+  state.markForErasure(toMemrefOp);
+}
+
+static LogicalResult convertToTensorOp(buffer::ToTensorOp toTensorOp, TensorizationState &state) {
+  Value mappedMemref = state.lookup(toTensorOp.getMemref());
+  if (!mappedMemref) return failure();
+  toTensorOp.getResult().replaceAllUsesWith(mappedMemref);
+  state.markForErasure(toTensorOp);
+  return success();
+}
+
+//------------------------------------------------------------------------------
+// tensor.extract_slice helpers
+//------------------------------------------------------------------------------
+
+static FailureOr<tensor::ExtractSliceOp> buildOneDimensionalExtractSlice(OpBuilder &builder, Location loc,
+                                                                         Value sourceTensor, ValueRange indices,
+                                                                         unsigned sliceLength) {
+  auto tensorType = sourceTensor.getType().dyn_cast<RankedTensorType>();
+  if (!tensorType || !tensorType.hasStaticShape()) return failure();
+
+  unsigned rank = tensorType.getRank();
+  SmallVector<OpFoldResult> offsets, sizes, strides(rank, builder.getIndexAttr(1));
+
+  for (unsigned dim = 0; dim < rank - 1; ++dim) {
+    if (tensorType.getDimSize(dim) == 1)
+      offsets.push_back(builder.getIndexAttr(0));
+    else if (dim < indices.size())
+      offsets.push_back(indices[dim]);
+    else
+      offsets.push_back(builder.getIndexAttr(0));
+    sizes.push_back(builder.getIndexAttr(1));
+  }
+
+  offsets.push_back(builder.getIndexAttr(0));
+  int64_t fullLength = tensorType.getShape().back();
+  int64_t length = sliceLength ? static_cast<int64_t>(sliceLength) : fullLength;
+  sizes.push_back(builder.getIndexAttr(length));
+
+  auto resultTensorType = RankedTensorType::get({length}, tensorType.getElementType());
+  return builder.create<tensor::ExtractSliceOp>(loc, resultTensorType, sourceTensor, offsets, sizes, strides);
+}
+
+//------------------------------------------------------------------------------
+// const → tensor
+//------------------------------------------------------------------------------
+
+static FailureOr<arith::ConstantOp> createTensorConstantFromScalar(arith::ConstantOp scalarConstant,
+                                                                   RankedTensorType targetTensorType,
+                                                                   OpBuilder &builder) {
+  Attribute valueAttr = scalarConstant.getValue();
+
+  if (auto denseAttr = valueAttr.dyn_cast<DenseElementsAttr>()) {
+    if (denseAttr.getType() == targetTensorType)
+      return builder.create<arith::ConstantOp>(scalarConstant.getLoc(), denseAttr);
+    if (denseAttr.getNumElements() == targetTensorType.getNumElements())
+      return builder.create<arith::ConstantOp>(scalarConstant.getLoc(), denseAttr.reshape(targetTensorType));
+    return failure();
+  }
+
+  Attribute elementAttr = valueAttr;
+  Type elementType = targetTensorType.getElementType();
+  if (auto intAttr = valueAttr.dyn_cast<IntegerAttr>())
+    elementAttr = (intAttr.getType() == elementType) ? elementAttr : IntegerAttr::get(elementType, intAttr.getInt());
+  else if (auto floatAttr = valueAttr.dyn_cast<FloatAttr>())
+    elementAttr =
+        (floatAttr.getType() == elementType) ? elementAttr : FloatAttr::get(elementType, floatAttr.getValue());
+  else
+    return failure();
+
+  SmallVector<Attribute> repeatedValues(targetTensorType.getNumElements(), elementAttr);
+  auto denseAttr = DenseElementsAttr::get(targetTensorType, repeatedValues);
+  return builder.create<arith::ConstantOp>(scalarConstant.getLoc(), denseAttr);
+}
+
+static LogicalResult upgradeConstantToTensor(arith::ConstantOp constantOp, RankedTensorType targetTensorType,
+                                             TensorizationState &state) {
+  if (state.lookup(constantOp.getResult())) return success();
+  auto tensorConstantOr = createTensorConstantFromScalar(constantOp, targetTensorType, state.builder);
+  if (failed(tensorConstantOr)) return failure();
+  state.map(constantOp.getResult(), (*tensorConstantOr).getResult());
+  return success();
+}
+
+//------------------------------------------------------------------------------
+// transfer_read / transfer_write
+//------------------------------------------------------------------------------
+
+static FailureOr<Operation *> convertTransferReadOp(vector::TransferReadOp readOp, TensorizationState &state) {
+  Value sourceTensor = state.lookup(readOp.getSource());
+  if (!sourceTensor) return failure();
+
+  arith::ConstantOp paddingConstant =
+      readOp.getPadding() ? readOp.getPadding().getDefiningOp<arith::ConstantOp>() : nullptr;
+
+  unsigned sliceLength = readOp.getVectorType().getNumElements();
+  auto extractSliceOr =
+      buildOneDimensionalExtractSlice(state.builder, readOp.getLoc(), sourceTensor, readOp.getIndices(), sliceLength);
+  if (failed(extractSliceOr)) return failure();
+
+  state.map(readOp.getResult(), (*extractSliceOr).getResult());
+  state.markForErasure(readOp);
+  if (paddingConstant) state.markForErasure(paddingConstant.getOperation());
+
+  return extractSliceOr->getOperation();
+}
+
+static FailureOr<Operation *> convertTransferWriteOp(vector::TransferWriteOp writeOp, TensorizationState &state) {
+  Value destinationTensor = state.lookup(writeOp.getSource());
+  if (!destinationTensor) return failure();
+
+  unsigned sliceLength = writeOp.getVectorType().getNumElements();
+  auto sliceTensorType = RankedTensorType::get({sliceLength}, writeOp.getVectorType().getElementType());
+
+  Value sourceSlice = state.lookup(writeOp.getVector());
+  if (!sourceSlice) {
+    if (auto constantOp = writeOp.getVector().getDefiningOp<arith::ConstantOp>()) {
+      auto tensorConstantOr = createTensorConstantFromScalar(constantOp, sliceTensorType, state.builder);
+      if (failed(tensorConstantOr)) return failure();
+      sourceSlice = (*tensorConstantOr).getResult();
     }
-    return newOp;
   }
-  // Scalar → broadcast
-  Attribute elem = val;
-  Type ety = tty.getElementType();
-  if (auto ia = val.dyn_cast<IntegerAttr>()) {
-    elem = (ia.getType() == ety) ? elem : IntegerAttr::get(ety, ia.getInt());
-  } else if (auto fa = val.dyn_cast<mlir::FloatAttr>()) {
-    elem = (fa.getType() == ety) ? elem : mlir::FloatAttr::get(ety, fa.getValue());
-  } else {
-    return mlir::failure();
+  if (!sourceSlice || sourceSlice.getType() != sliceTensorType) return failure();
+
+  auto destinationTensorType = destinationTensor.getType().cast<RankedTensorType>();
+  unsigned rank = destinationTensorType.getRank();
+  SmallVector<OpFoldResult> offsets, sizes, strides(rank, state.builder.getIndexAttr(1));
+
+  for (unsigned dim = 0; dim < rank - 1; ++dim) {
+    if (destinationTensorType.getDimSize(dim) == 1)
+      offsets.push_back(state.builder.getIndexAttr(0));
+    else if (dim < writeOp.getIndices().size())
+      offsets.push_back(writeOp.getIndices()[dim]);
+    else
+      offsets.push_back(state.builder.getIndexAttr(0));
+    sizes.push_back(state.builder.getIndexAttr(1));
   }
-  SmallVector<Attribute> vec(tty.getNumElements(), elem);
-  auto dense = DenseElementsAttr::get(tty, vec);
-  auto newOp = b.create<arith::ConstantOp>(cst.getLoc(), dense);
+  offsets.push_back(state.builder.getIndexAttr(0));
+  sizes.push_back(state.builder.getIndexAttr(sliceLength));
+
+  auto insertSliceOp = state.builder.create<tensor::InsertSliceOp>(writeOp.getLoc(), sourceSlice, destinationTensor,
+                                                                   offsets, sizes, strides);
+
+  affine::AffineForOp currentLoop = writeOp->getParentOfType<affine::AffineForOp>();
+  if (!currentLoop) {
+    state.markForErasure(writeOp);
+    return insertSliceOp.getOperation();
+  }
+
+  Value currentInsideValue = insertSliceOp.getResult();
+  Value currentDestination = destinationTensor;
+  Value originalInitTensor = destinationTensor;
+  Operation *outermostChangedLoop = nullptr;
+
+  while (currentLoop) {
+    IRRewriter rewriter(currentLoop.getContext());
+
+    auto newLoop = cast<affine::AffineForOp>(*currentLoop.replaceWithAdditionalYields(
+        rewriter, /*initOperand=*/originalInitTensor, /*replaceInitOperandUsesInLoop=*/false,
+        [&](OpBuilder &b, Location, ArrayRef<BlockArgument>) { return SmallVector<Value>{currentInsideValue}; }));
+
+    outermostChangedLoop = newLoop.getOperation();
+
+    Value yieldedInsideValue = newLoop.getBody()->getArguments().back();
+    Value yieldedOutsideValue = newLoop.getResults().back();
+
+    auto replaceInsideUses = [&](OpOperand &use) -> bool { return newLoop->isProperAncestor(use.getOwner()); };
+    currentDestination.replaceUsesWithIf(yieldedInsideValue,
+                                         mlir::function_ref<bool(OpOperand &)>(replaceInsideUses));
+
+    unsigned initOperandPosition = newLoop->getNumOperands() - 1;
+    auto replaceOutsideUses = [&](OpOperand &use) -> bool {
+      Operation *user = use.getOwner();
+      if (user == newLoop.getOperation() && use.getOperandNumber() == static_cast<int>(initOperandPosition))
+        return false;
+      if (newLoop->isProperAncestor(user)) return false;
+      return true;
+    };
+    currentDestination.replaceUsesWithIf(yieldedOutsideValue,
+                                         mlir::function_ref<bool(OpOperand &)>(replaceOutsideUses));
+
+    currentInsideValue = yieldedOutsideValue;
+    currentLoop = newLoop->getParentOfType<affine::AffineForOp>();
+  }
+
+  state.replaceMapping(destinationTensor, currentInsideValue);
+  state.markForErasure(writeOp);
+  state.markForErasure(insertSliceOp.getOperation());
+  return outermostChangedLoop ? outermostChangedLoop : insertSliceOp.getOperation();
+}
+
+//------------------------------------------------------------------------------
+// Element-wise tensorization
+//------------------------------------------------------------------------------
+
+static FailureOr<Operation *> cloneElementWiseOp(Operation *originalOp, ArrayRef<Value> newOperands,
+                                                 TensorizationState &state) {
+  OperationState newState(originalOp->getLoc(), originalOp->getName());
+  newState.addOperands(newOperands);
+  newState.addAttributes(originalOp->getAttrs());
+
+  SmallVector<Type> resultTensorTypes;
+  for (Type originalResultType : originalOp->getResultTypes()) {
+    if (auto rankedTensorType = originalResultType.dyn_cast<RankedTensorType>())
+      resultTensorTypes.push_back(rankedTensorType);
+    else if (auto vectorType = originalResultType.dyn_cast<VectorType>())
+      resultTensorTypes.push_back(
+          RankedTensorType::get(vectorType.getShape(), vectorType.getElementType()));
+    else
+      return failure();
+  }
+  newState.addTypes(resultTensorTypes);
+
+  Operation *newOp = state.builder.create(newState);
+  for (auto [oldResult, newResult] : llvm::zip(originalOp->getResults(), newOp->getResults()))
+    state.map(oldResult, newResult);
+
+  state.markForErasure(originalOp);
   return newOp;
 }
 
-//==============================================================================
-// Upgrade scalar constant to tensor
-//==============================================================================
+static FailureOr<Operation *> convertElementWiseOp(Operation *op, TensorizationState &state) {
+  if (op->getNumRegions() != 0) return failure();
 
-static mlir::LogicalResult upgradeScalarConstant(arith::ConstantOp cst,
-                                                 RankedTensorType tty,
-                                                 TensorizeState &s) {
-  if (s.valueMap.contains(cst.getResult())) {
-    return mlir::success();
-  }
-  auto tcstOr = createTensorConstant(cst, tty, s.builder);
-  if (mlir::failed(tcstOr)) {
-    return mlir::failure();
-  }
-  auto tcst = *tcstOr;
-  s.track(tcst.getOperation());
-  s.addMap(cst.getResult(), tcst.getResult());
-  // Perform RAUW for non-transfer-read uses
-  cst.getResult().replaceUsesWithIf(
-      tcst.getResult(),
-      [](mlir::OpOperand &use) {
-        return !llvm::isa<vector::TransferReadOp>(use.getOwner());
-      });
-  return mlir::success();
-}
-
-//==============================================================================
-// Tensorization helpers
-//==============================================================================
-
-static FailureOr<Operation *> tensorizeOneOp(Operation *, TensorizeState &);
-
-static FailureOr<Operation *> handleTransferRead(vector::TransferReadOp rd,
-                                                 TensorizeState &s) {
-  unsigned sliceLen = rd.getVectorType().getNumElements();
-  auto svOr = buildSubview1D(s.builder, rd.getLoc(), rd.getSource(), rd.getIndices(), sliceLen);
-  if (mlir::failed(svOr)) {
-    return mlir::failure();
-  }
-  auto tty = memrefToTensorType(llvm::cast<MemRefType>((*svOr).getType()));
-  if (!tty) {
-    return mlir::failure();
+  if (llvm::any_of(op->getOperandTypes(), [](Type t) { return !isNumericTypeLike(t); })) {
+    return failure();
   }
 
-  auto toT = s.builder.create<bufferization::ToTensorOp>(
-                rd.getLoc(),
-                tty,
-                *svOr,
-                /*restrict=*/true,
-                /*writable=*/true);
-
-  s.track(toT);
-  s.addMap(rd.getResult(), toT.getResult());
-  s.cover(rd);
-  return FailureOr<Operation *>(toT.getOperation());
-}
-
-static FailureOr<Operation *> handleTransferWrite(vector::TransferWriteOp wr,
-                                                  TensorizeState &s) {
-  unsigned sliceLen = wr.getVectorType().getNumElements();
-  auto svOr = buildSubview1D(s.builder, wr.getLoc(), wr.getSource(), wr.getIndices(), sliceLen);
-  if (mlir::failed(svOr)) {
-    return mlir::failure();
-  }
-  auto tty = memrefToTensorType(llvm::cast<MemRefType>((*svOr).getType()));
-  if (!tty) {
-    return mlir::failure();
+  if (llvm::any_of(op->getResultTypes(), [](Type t) { return !isNumericTypeLike(t); })) {
+    return failure();
   }
 
-  Value vec = wr.getVector();
-  Value tVal = s.valueMap.lookupOrNull(vec);
-  if (!tVal) {
-    if (auto cst = vec.getDefiningOp<arith::ConstantOp>()) {
-      auto tcst = createTensorConstant(cst, tty, s.builder);
-      if (mlir::failed(tcst)) {
-        return mlir::failure();
-      }
-      s.track(tcst->getOperation());
-      tVal = tcst->getResult();
-    }
-  }
-  if (!tVal || tVal.getType() != tty) {
-    return mlir::failure();
-  }
-
-  auto toMem = s.builder.create<bufferization::ToMemrefOp>(wr.getLoc(), (*svOr).getType(), tVal);
-  auto cp = s.builder.create<memref::CopyOp>(wr.getLoc(), toMem, *svOr);
-  s.track(toMem);
-  s.track(cp);
-  s.cover(wr);
-  return FailureOr<Operation *>(cp.getOperation());
-}
-
-static FailureOr<Operation *> cloneElemOp(Operation *op,
-                                          llvm::ArrayRef<Value> operands,
-                                          TensorizeState &s) {
-  OperationState st(op->getLoc(), op->getName());
-  st.addOperands(operands);
-  st.addAttributes(op->getAttrs());
-
-  SmallVector<Type> resTys;
-  resTys.reserve(op->getNumResults());
-  for (Type rt : op->getResultTypes()) {
-    if (auto tt = rt.dyn_cast<RankedTensorType>()) {
-      resTys.push_back(tt);
-      continue;
-    }
-    if (auto vt = rt.dyn_cast<mlir::VectorType>()) {
-      resTys.push_back(
-          RankedTensorType::get(vt.getShape(), vt.getElementType()));
-      continue;
-    }
-    return mlir::failure();
-  }
-  st.addTypes(resTys);
-
-  Operation *newOp = s.builder.create(st);
-  s.track(newOp);
-  for (auto [o, n] : llvm::zip(op->getResults(), newOp->getResults())) {
-    s.addMap(o, n);
-  }
-  s.cover(op);
-  return FailureOr<Operation *>(newOp);
-}
-
-static FailureOr<Operation *> handleElemOp(Operation *op, TensorizeState &s) {
-  if (op->getNumRegions() != 0) {
-    return mlir::failure();
-  }
-  if (auto mem = llvm::dyn_cast<mlir::MemoryEffectOpInterface>(op)) {
-    if (!mem.hasNoEffect()) {
-      return mlir::failure();
-    }
-  }
-
-  if (std::any_of(op->result_type_begin(), op->result_type_end(),
-                  [](Type t) { return !isNumericLike(t); })) {
-    return mlir::failure();
-  }
-
-  if (std::any_of(op->operand_type_begin(), op->operand_type_end(),
-                  [](Type t) { return !isNumericLike(t); })) {
-    return mlir::failure();
-  }
-
-  RankedTensorType tty = nullptr;
-  bool found = false;
-  for (Value v : op->getOperands()) {
-    if (auto mapped = s.valueMap.lookupOrNull(v)) {
-      if (auto rt = mapped.getType().dyn_cast<RankedTensorType>()) {
-        tty = rt;
-        found = true;
+  RankedTensorType referenceTensorType = nullptr;
+  for (Value operand : op->getOperands()) {
+    if (auto mapped = state.lookup(operand)) {
+      if (auto rankedType = mapped.getType().dyn_cast<RankedTensorType>()) {
+        referenceTensorType = rankedType;
         break;
       }
     }
-    if (auto rt = v.getType().dyn_cast<RankedTensorType>()) {
-      tty = rt;
-      found = true;
+    if (auto rankedType = operand.getType().dyn_cast<RankedTensorType>()) {
+      referenceTensorType = rankedType;
       break;
     }
   }
-  if (!found || !tty) {
-    return mlir::failure();
-  }
+  if (!referenceTensorType) return failure();
 
-  SmallVector<Value> newOps;
-  newOps.reserve(op->getNumOperands());
-  for (Value v : op->getOperands()) {
-    if (auto mapped = s.valueMap.lookupOrNull(v)) {
-      if (mapped.getType() != tty) {
-        return mlir::failure();
-      }
-      newOps.push_back(mapped);
+  SmallVector<Value> newOperands;
+  for (Value operand : op->getOperands()) {
+    if (auto mapped = state.lookup(operand)) {
+      newOperands.push_back(mapped);
       continue;
     }
-    if (v.getType() == tty) {
-      newOps.push_back(v);
+    if (operand.getType() == referenceTensorType) {
+      newOperands.push_back(operand);
       continue;
     }
-    if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
-      if (mlir::failed(upgradeScalarConstant(cst, tty, s))) {
-        return mlir::failure();
-      }
-      newOps.push_back(s.valueMap.lookup(cst.getResult()));
+    if (auto constantOp = operand.getDefiningOp<arith::ConstantOp>()) {
+      if (failed(upgradeConstantToTensor(constantOp, referenceTensorType, state))) return failure();
+      newOperands.push_back(state.lookup(constantOp.getResult()));
       continue;
     }
-    return mlir::failure();
+    return failure();
   }
-
-  return cloneElemOp(op, newOps, s);
+  return cloneElementWiseOp(op, newOperands, state);
 }
 
-static FailureOr<Operation *> tensorizeOneOp(Operation *op, TensorizeState &s) {
-  if (auto rd = llvm::dyn_cast<vector::TransferReadOp>(op)) {
-    return handleTransferRead(rd, s);
+//------------------------------------------------------------------------------
+// Dispatch
+//------------------------------------------------------------------------------
+
+static FailureOr<Operation *> tensorizeOperation(Operation *op, TensorizationState &state) {
+  if (auto allocOp = dyn_cast<memref::AllocOp>(op)) return convertAllocOp(allocOp, state);
+
+  if (auto toMemrefOp = dyn_cast<buffer::ToMemrefOp>(op)) {
+    convertToMemrefOp(toMemrefOp, state);
+    return toMemrefOp.getOperation();
   }
-  if (auto wr = llvm::dyn_cast<vector::TransferWriteOp>(op)) {
-    return handleTransferWrite(wr, s);
+  if (auto toTensorOp = dyn_cast<buffer::ToTensorOp>(op)) {
+    (void)convertToTensorOp(toTensorOp, state);
+    return toTensorOp.getOperation();
   }
-  return handleElemOp(op, s);
+  if (auto readOp = dyn_cast<vector::TransferReadOp>(op)) return convertTransferReadOp(readOp, state);
+  if (auto writeOp = dyn_cast<vector::TransferWriteOp>(op)) return convertTransferWriteOp(writeOp, state);
+
+  return convertElementWiseOp(op, state);
 }
 
 namespace {
@@ -425,57 +415,50 @@ namespace {
 
 struct VectorTransferTensorizePass
     : public impl::VectorTransferTensorizeBase<VectorTransferTensorizePass> {
-  void getDependentDialects(DialectRegistry &r) const override {
-    r.insert<arith::ArithDialect,
-             math::MathDialect,
-             vector::VectorDialect,
-             bufferization::BufferizationDialect,
-             memref::MemRefDialect,
-             tensor::TensorDialect>();
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect, math::MathDialect, vector::VectorDialect, tensor::TensorDialect,
+                    buffer::BufferizationDialect, memref::MemRefDialect, func::FuncDialect>();
   }
 
   void runOnOperation() override {
-    func::FuncOp fn = getOperation();
-    TensorizeState s(fn.getContext());
+    func::FuncOp funcOp = getOperation();
+    TensorizationState state(funcOp.getContext());
 
-    // === Main tensorization loop ==========================================
-    SmallVector<Operation *> wl;
-    fn.walk([&](Operation *op) { wl.push_back(op); });
+    SmallVector<Operation *> workList;
+    funcOp.walk([&](Operation *operation) { workList.push_back(operation); });
 
-    for (Operation *op : wl) {
-      if (llvm::isa<func::FuncOp>(op) || s.coveredOps.contains(op)) {
-        continue;
-      }
-      s.builder.setInsertionPoint(op);
-      (void)tensorizeOneOp(op, s);
+    for (Operation *operation : workList) {
+      if (isa<func::FuncOp>(operation) || state.operationsToErase.contains(operation)) continue;
+      state.builder.setInsertionPoint(operation);
+      (void)tensorizeOperation(operation, state);
     }
 
-    // === Remove covered ops that are no longer used =====================
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      for (auto it = s.coveredOps.begin(); it != s.coveredOps.end();) {
-        Operation *op = *it;
-        if (op->use_empty()) {
-          ++it;
-          s.coveredOps.erase(op);
-          op->erase();
-          changed = true;
-        } else {
-          ++it;
-        }
+    auto eraseDeadMarkedOps = [&]() {
+      SmallVector<Operation *> toDelete;
+      for (Operation *operation : state.operationsToErase)
+        if (operation->use_empty()) toDelete.push_back(operation);
+      for (Operation *operation : toDelete) {
+        state.operationsToErase.erase(operation);
+        operation->erase();
       }
-    }
+      return !toDelete.empty();
+    };
+    while (eraseDeadMarkedOps()) {}
+
+    bool memrefOpsRemain = false;
+    funcOp.walk([&](Operation *operation) {
+      if (operation->getDialect()->getNamespace() == memref::MemRefDialect::getDialectNamespace()) {
+        memrefOpsRemain = true;
+        operation->emitError("memref op survived tensor-only conversion");
+      }
+    });
+    if (memrefOpsRemain) signalPassFailure();
   }
 };
 }  // namespace
 
 namespace mlir::affine {
-
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>>
-createVectorTransferTensorizePass() {
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> createVectorTransferTensorizePass() {
   return std::make_unique<VectorTransferTensorizePass>();
 }
-
 }  // namespace mlir::affine
-
