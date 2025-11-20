@@ -37,4 +37,3 @@ std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(uint64_t ca
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_AKGLOOPTILING_H_
-
