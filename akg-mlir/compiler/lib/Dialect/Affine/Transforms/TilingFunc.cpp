@@ -16,23 +16,28 @@
 
 #include "akg/Dialect/Affine/Transforms/TilingFunc.h"
 
+#include <algorithm>
+#include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
-#include <iostream>
-#include <algorithm>
 
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Pass/Pass.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
+
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+
+#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
 
 #define DEBUG_TYPE "tiling-func"
@@ -62,7 +67,6 @@ namespace {
 
 struct AutoTilingOptions {
   unsigned blockDim = 40;
-  [[maybe_unused]] bool enableManageHostResources = false;
 };
 
 struct KernelInfo {
@@ -97,16 +101,13 @@ class TilingBase {
     if (failed(runPostTilingProcedure(builder))) return failure();
     return success();
   }
+
   static void setAutoTilingOptions(const AutoTilingOptions &opt) { options_ = opt; }
 
  protected:
   LogicalResult runPreTilingProcedure(OpBuilder &) {
     kernelInfo_->baseKernelName = originalKernel_.getSymName().str();
     kernelInfo_->blockDim = options_.blockDim;
-
-    if (options_.enableManageHostResources) {
-      (void)0;
-    }
     return success();
   }
 
@@ -124,19 +125,33 @@ class TilingBase {
     builder.setInsertionPoint(originalKernel_);
 
     constexpr int64_t kDummyTiling[] = {0, 12280, 13, 1, 49120};
-    constexpr unsigned kN = sizeof(kDummyTiling) / sizeof(kDummyTiling[0]);
+    constexpr unsigned kN = static_cast<unsigned>(sizeof(kDummyTiling) / sizeof(kDummyTiling[0]));
+    static_assert(kN >= 1, "host tiling function must return at least 1 result");
 
     auto origTy = originalKernel_.getFunctionType();
     if (origTy.getNumResults() != 1) {
-      originalKernel_.emitError() << "expect exactly 1 result before rewriting";
+      originalKernel_.emitError("expect exactly 1 result before rewriting");
       return failure();
     }
 
-    SmallVector<Type> argTypes(origTy.getInputs().begin(), origTy.getInputs().end());
+    SmallVector<Type> argTypes;
+    argTypes.reserve(origTy.getNumInputs() + 1);
+    for (Type ty : origTy.getInputs()) {
+      if (auto memrefType = dyn_cast<MemRefType>(ty)) {
+        ty = RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
+      }
+      argTypes.push_back(ty);
+    }
+
     Type outTy = origTy.getResult(0);
+    if (auto memrefType = dyn_cast<MemRefType>(outTy)) {
+      outTy = RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
+    }
     argTypes.push_back(outTy);
 
-    SmallVector<Type> resTypes(kN, builder.getI64Type());
+    SmallVector<Type> resTypes;
+    resTypes.reserve(kN);
+    for (unsigned i = 0; i < kN; ++i) resTypes.push_back(builder.getI64Type());
 
     std::string name = kernelInfo_->baseKernelName + "_single_outlined_0_0_tiling_function";
     auto funcTy = FunctionType::get(builder.getContext(), argTypes, resTypes);
@@ -155,100 +170,173 @@ class TilingBase {
     host.setArgAttr(nInputs, "hacc.output_idx", builder.getI64IntegerAttr(0));
 
     host.setResultAttr(0, "hacc.arg_type", StringAttr::get(builder.getContext(), "tiling_key"));
-    for (unsigned i = 1; i < kN; ++i)
+    for (unsigned i = 1; i < kN; ++i) {
       host.setResultAttr(i, "hacc.arg_type", StringAttr::get(builder.getContext(), "tiling_data"));
+    }
 
     builder.setInsertionPointToEnd(&host.getBody().front());
 
     SmallVector<Value> cst;
     cst.reserve(kN);
-    std::transform(std::begin(kDummyTiling), std::end(kDummyTiling), std::back_inserter(cst),
-                   [&](int64_t v) { return builder.create<arith::ConstantIntOp>(host.getLoc(), v, 64); });
+    for (unsigned i = 0; i < kN; ++i) {
+      cst.push_back(builder.create<arith::ConstantIntOp>(host.getLoc(), kDummyTiling[i], 64));
+    }
 
     builder.create<func::ReturnOp>(host.getLoc(), cst);
-
     tilingInfo_.setHostTilingFunc(host);
     return success();
+  }
+
+  LogicalResult collectDeviceSignature(func::FuncOp orig, SmallVector<Type> &devInputs, Type &outTy,
+                                       SmallVector<Type> &devResults) {
+    auto origTy = orig.getFunctionType();
+    if (origTy.getNumResults() != 1) {
+      orig.emitError("expect exactly 1 result");
+      return failure();
+    }
+    devInputs.clear();
+    devInputs.reserve(origTy.getNumInputs() + 1);
+
+    for (Type ty : origTy.getInputs()) {
+      if (auto memrefType = dyn_cast<MemRefType>(ty)) {
+        ty = RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
+      }
+      devInputs.push_back(ty);
+    }
+
+    outTy = origTy.getResult(0);
+    if (auto memrefType = dyn_cast<MemRefType>(outTy)) {
+      outTy = RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
+    }
+    devInputs.push_back(outTy);
+
+    devResults.clear();
+    devResults.push_back(outTy);
+    return success();
+  }
+
+  void setHaccIOArgAttrs(func::FuncOp f, unsigned nInputs, OpBuilder &builder, bool isOutputOnLastArg) {
+    for (unsigned i = 0; i < nInputs; ++i) {
+      f.setArgAttr(i, "hacc.arg_type", StringAttr::get(builder.getContext(), "input"));
+      f.setArgAttr(i, "hacc.input_idx", builder.getI64IntegerAttr(i));
+    }
+    if (isOutputOnLastArg) {
+      f.setArgAttr(nInputs, "hacc.arg_type", StringAttr::get(builder.getContext(), "output"));
+      f.setArgAttr(nInputs, "hacc.output_idx", builder.getI64IntegerAttr(0));
+    }
+  }
+
+  func::FuncOp createAndAnnotateDeviceFunc(OpBuilder &builder, Location loc, StringRef name, FunctionType devTy,
+                                           FunctionType origTy, unsigned blockDim, func::FuncOp hostTiling) {
+    auto deviceFunc = builder.create<func::FuncOp>(loc, name, devTy);
+    unsigned nInputs = origTy.getNumInputs();
+
+    setHaccIOArgAttrs(deviceFunc, nInputs, builder, /*isOutputOnLastArg=*/true);
+
+    deviceFunc->setAttr(mockattr::kEnableAutoMarkBufferSize, builder.getUnitAttr());
+    deviceFunc->setAttr(mockattr::kFunctionKind, StringAttr::get(builder.getContext(), mockattr::kDevice));
+    deviceFunc->setAttr(mockattr::kFusionKind,
+                        StringAttr::get(builder.getContext(), mockattr::kFusionKindPureElemwise));
+    deviceFunc->setAttr(mockattr::kBlockDim, builder.getI64IntegerAttr(blockDim));
+    deviceFunc->setAttr("hacc.entry", builder.getUnitAttr());
+    if (hostTiling) {
+      deviceFunc->setAttr(mockattr::kTilingFunction, FlatSymbolRefAttr::get(hostTiling.getSymNameAttr()));
+    }
+    return deviceFunc;
+  }
+
+  Value cloneKernelBodyToDeviceFunc(func::FuncOp originalKernel, func::FuncOp deviceFunc, unsigned nInputs,
+                                    Value outArg) {
+    Value returned;
+    if (originalKernel.empty()) return returned;
+
+    IRMapping map;
+    Block &oldEntry = originalKernel.front();
+
+    unsigned argToMap = std::min<unsigned>(oldEntry.getNumArguments(), nInputs);
+    for (unsigned i = 0; i < argToMap; ++i) {
+      map.map(oldEntry.getArgument(i), deviceFunc.getBody().front().getArgument(i));
+    }
+    if (oldEntry.getNumArguments() > nInputs) {
+      map.map(oldEntry.getArgument(nInputs), outArg);
+    }
+
+    func::ReturnOp oldRet = nullptr;
+    SmallVector<Operation *> toClone;
+    toClone.reserve(oldEntry.getOperations().size());
+    for (Operation &op : oldEntry) {
+      if (auto r = dyn_cast<func::ReturnOp>(op)) {
+        oldRet = r;
+        continue;
+      }
+      toClone.push_back(&op);
+    }
+
+    OpBuilder b = OpBuilder::atBlockEnd(&deviceFunc.getBody().front());
+    for (Operation *op : toClone) b.clone(*op, map);
+
+    if (oldRet && oldRet.getNumOperands() == 1) {
+      Value mapped = map.lookupOrNull(oldRet.getOperand(0));
+      if (mapped) returned = mapped;
+    }
+    return returned;
+  }
+
+  void retargetAffineForInitsIfNeeded(func::FuncOp deviceFunc, Value returned, Value outArg) {
+    if (!returned || !outArg || returned == outArg) return;
+
+    deviceFunc.walk([&](AffineForOp forOp) {
+      auto results = forOp.getResults();
+      if (results.empty()) return;
+
+      std::optional<unsigned> resultIdx;
+      for (unsigned i = 0, e = results.size(); i < e; ++i) {
+        if (results[i] == returned) {
+          resultIdx = i;
+          break;
+        }
+      }
+      if (!resultIdx) return;
+
+      SmallVector<Value> newInitArgs(forOp.getInits().begin(), forOp.getInits().end());
+      if (newInitArgs.empty() || newInitArgs.size() != results.size()) return;
+
+      newInitArgs[*resultIdx] = outArg;
+
+      unsigned start = forOp.getLowerBoundOperands().size() + forOp.getUpperBoundOperands().size();
+      unsigned len = static_cast<unsigned>(newInitArgs.size());
+      forOp.getOperation()->setOperands(start, len, newInitArgs);
+    });
   }
 
   LogicalResult initTilingKernel(OpBuilder &builder) {
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPoint(originalKernel_);
 
-    auto origTy = originalKernel_.getFunctionType();
-    if (origTy.getNumResults() != 1) {
-      originalKernel_.emitError() << "expect exactly 1 result";
-      return failure();
-    }
+    SmallVector<Type> devInputs, devResults;
+    Type outTy = nullptr;
+    if (failed(collectDeviceSignature(originalKernel_, devInputs, outTy, devResults))) return failure();
 
-    SmallVector<Type> devInputs(origTy.getInputs().begin(), origTy.getInputs().end());
-    Type outTy = origTy.getResult(0);
-    devInputs.push_back(outTy);
-
-    SmallVector<Type> devResults;
     std::string name = kernelInfo_->baseKernelName + "_single_outlined_0_0_0";
     auto devTy = FunctionType::get(builder.getContext(), devInputs, devResults);
-    auto deviceFunc = builder.create<func::FuncOp>(originalKernel_.getLoc(), name, devTy);
-
-    unsigned nInputs = origTy.getNumInputs();
-    for (unsigned i = 0; i < nInputs; ++i) {
-      deviceFunc.setArgAttr(i, "hacc.arg_type", StringAttr::get(builder.getContext(), "input"));
-      deviceFunc.setArgAttr(i, "hacc.input_idx", builder.getI64IntegerAttr(i));
-    }
-    deviceFunc.setArgAttr(nInputs, "hacc.arg_type", StringAttr::get(builder.getContext(), "output"));
-    deviceFunc.setArgAttr(nInputs, "hacc.output_idx", builder.getI64IntegerAttr(0));
-
-    deviceFunc->setAttr(mockattr::kEnableAutoMarkBufferSize, builder.getUnitAttr());
-    deviceFunc->setAttr(mockattr::kFunctionKind, StringAttr::get(builder.getContext(), mockattr::kDevice));
-    deviceFunc->setAttr(mockattr::kFusionKind,
-                        StringAttr::get(builder.getContext(), mockattr::kFusionKindPureElemwise));
-    deviceFunc->setAttr(mockattr::kBlockDim, builder.getI64IntegerAttr(kernelInfo_->blockDim));
-    deviceFunc->setAttr("hacc.entry", builder.getUnitAttr());
-    if (auto hostTiling = tilingInfo_.getHostTilingFunc())
-      deviceFunc->setAttr(mockattr::kTilingFunction, FlatSymbolRefAttr::get(hostTiling.getSymNameAttr()));
+    auto origTy = originalKernel_.getFunctionType();
+    auto deviceFunc = createAndAnnotateDeviceFunc(builder, originalKernel_.getLoc(), name, devTy, origTy,
+                                                  kernelInfo_->blockDim, tilingInfo_.getHostTilingFunc());
 
     Block *entry = deviceFunc.addEntryBlock();
     OpBuilder b = OpBuilder::atBlockEnd(entry);
-    Location loc = deviceFunc.getLoc();
-
-    SmallVector<Value> inArgs;
-    inArgs.reserve(nInputs);
-    for (unsigned i = 0; i < nInputs; ++i) inArgs.push_back(entry->getArgument(i));
+    unsigned nInputs = origTy.getNumInputs();
     Value outArg = entry->getArgument(nInputs);
 
-    Value returned;
-    {
-      IRMapping map;
-      if (!originalKernel_.empty()) {
-        Block &oldEntry = originalKernel_.front();
-        unsigned argToMap = std::min<unsigned>(oldEntry.getNumArguments(), nInputs);
-        for (unsigned i = 0; i < argToMap; ++i) map.map(oldEntry.getArgument(i), inArgs[i]);
-        if (oldEntry.getNumArguments() > nInputs) map.map(oldEntry.getArgument(nInputs), outArg);
-
-        func::ReturnOp oldRet = nullptr;
-        SmallVector<Operation *> toClone;
-        for (Operation &op : oldEntry) {
-          if (auto r = dyn_cast<func::ReturnOp>(op)) {
-            oldRet = r;
-            continue;
-          }
-          toClone.push_back(&op);
-        }
-        for (Operation *op : toClone) b.clone(*op, map);
-
-        if (oldRet && oldRet.getNumOperands() == 1) returned = map.lookupOrDefault(oldRet.getOperand(0));
-      }
-    }
+    Value returned = cloneKernelBodyToDeviceFunc(originalKernel_, deviceFunc, nInputs, outArg);
     if (!returned) returned = outArg;
 
-    if (returned != outArg) b.create<memref::CopyOp>(loc, returned, outArg);
+    retargetAffineForInitsIfNeeded(deviceFunc, returned, outArg);
 
-    b.create<func::ReturnOp>(loc);
-
+    b.create<func::ReturnOp>(deviceFunc.getLoc(), ValueRange{returned});
     tilingKernel_ = deviceFunc;
 
     if (failed(createOrGetGetTilingStructSizeFunction(builder, deviceFunc))) return failure();
-
     return success();
   }
 
@@ -267,58 +355,19 @@ class TilingBase {
 
     originalKernel_.setFunctionType(FunctionType::get(builder.getContext(), newInputs, newResults));
 
-    for (unsigned i = 0; i < nInputs; ++i) {
-      originalKernel_.setArgAttr(i, "hacc.arg_type", StringAttr::get(builder.getContext(), "input"));
-      originalKernel_.setArgAttr(i, "hacc.input_idx", builder.getI64IntegerAttr(i));
-    }
-    originalKernel_.setArgAttr(nInputs, "hacc.arg_type", StringAttr::get(builder.getContext(), "output"));
-    originalKernel_.setArgAttr(nInputs, "hacc.output_idx", builder.getI64IntegerAttr(0));
+    setHaccIOArgAttrs(originalKernel_, nInputs, builder, /*isOutputOnLastArg=*/true);
 
-    while (!originalKernel_.getBody().empty()) originalKernel_.getBody().front().erase();
+    while (!originalKernel_.getBody().empty()) {
+      originalKernel_.getBody().front().erase();
+    }
 
     Block *entry = originalKernel_.addEntryBlock();
     OpBuilder b = OpBuilder::atBlockEnd(entry);
     Location loc = originalKernel_.getLoc();
 
     SmallVector<Value> passArgs(entry->args_begin(), entry->args_end());
-    b.create<func::CallOp>(loc, tilingKernel_.getSymName(), TypeRange{}, passArgs);
-
-    Value outArg = entry->getArgument(nInputs);
-    b.create<func::ReturnOp>(loc, outArg);
-
-    auto hostTiling = tilingInfo_.getHostTilingFunc();
-    SmallVector<func::CallOp> callers;
-    module_.walk([&](func::CallOp c) {
-      if (c.getCallee() == kernelInfo_->baseKernelName) callers.push_back(c);
-    });
-
-    for (func::CallOp callOp : callers) {
-      OpBuilder::InsertionGuard gg(builder);
-      builder.setInsertionPoint(callOp);
-
-      SmallVector<Value> operands(callOp.getOperands().begin(), callOp.getOperands().end());
-      auto outMemRefTy = dyn_cast<MemRefType>(outTy);
-      if (!outMemRefTy) {
-        callOp.emitError() << "expect memref out";
-        return failure();
-      }
-      Value outVal = builder.create<memref::AllocOp>(callOp.getLoc(), outMemRefTy);
-
-      SmallVector<Value> tilArgs(operands);
-      tilArgs.push_back(outVal);
-      auto tilResTys = hostTiling.getFunctionType().getResults();
-      auto tilCall = builder.create<func::CallOp>(callOp.getLoc(), hostTiling.getSymName(), tilResTys, tilArgs);
-
-      SmallVector<Value> newCallArgs(operands);
-      newCallArgs.push_back(outVal);
-      newCallArgs.append(tilCall.getResults().begin(), tilCall.getResults().end());
-
-      auto newCall = builder.create<func::CallOp>(callOp.getLoc(), originalKernel_.getSymName(),
-                                                  originalKernel_.getFunctionType().getResults(), newCallArgs);
-
-      callOp.replaceAllUsesWith(newCall.getResults());
-      callOp.erase();
-    }
+    auto call = b.create<func::CallOp>(loc, tilingKernel_.getSymName(), TypeRange{outTy}, passArgs);
+    b.create<func::ReturnOp>(loc, call.getResults());
 
     return success();
   }
@@ -326,36 +375,30 @@ class TilingBase {
   LogicalResult createOrGetGetTilingStructSizeFunction(OpBuilder &builder, func::FuncOp deviceFunc) {
     ModuleOp module = deviceFunc->getParentOfType<ModuleOp>();
     if (!module) {
-      deviceFunc.emitError() << "cannot find parent ModuleOp for device function";
+      deviceFunc.emitError("cannot find parent ModuleOp for device function");
       return failure();
     }
-
     std::string base = deviceFunc.getSymName().str();
     if (base.size() >= 2 && base.substr(base.size() - 2) == "_0") {
       base = base.substr(0, base.size() - 2);
     }
 
     std::string hostName = base + "_get_tiling_struct_size_function";
-
     if (auto sym = SymbolTable::lookupSymbolIn(module, StringAttr::get(module.getContext(), hostName))) {
       if (isa<func::FuncOp>(sym)) return success();
     }
 
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPointToStart(module.getBody());
-
-    auto funcTy =
-      FunctionType::get(module.getContext(), /*inputs=*/TypeRange{}, /*results=*/TypeRange{builder.getI64Type()});
+    auto funcTy = FunctionType::get(module.getContext(), TypeRange{}, TypeRange{builder.getI64Type()});
     auto host = builder.create<func::FuncOp>(deviceFunc.getLoc(), hostName, funcTy);
     host.setVisibility(SymbolTable::Visibility::Public);
-
     host->setAttr(mockattr::kFunctionKind, StringAttr::get(builder.getContext(), mockattr::kHost));
 
     Block *entry = host.addEntryBlock();
     OpBuilder b = OpBuilder::atBlockEnd(entry);
-    auto zero = b.create<arith::ConstantIntOp>(host.getLoc(), /*value=*/0, /*width=*/64);
+    auto zero = b.create<arith::ConstantIntOp>(host.getLoc(), 0, 64);
     b.create<func::ReturnOp>(host.getLoc(), ValueRange{zero});
-
     return success();
   }
 
@@ -378,7 +421,6 @@ class PureElemwiseTiling : public TilingBase {
 
 struct TilingFunc : public mlir::impl::TilingFuncBase<TilingFunc> {
   TilingFunc() = default;
-
   void runOnOperation() override {
     ModuleOp module = getOperation();
     if (!module) {
@@ -389,8 +431,9 @@ struct TilingFunc : public mlir::impl::TilingFuncBase<TilingFunc> {
     SmallVector<func::FuncOp> kernels;
     module.walk([&](func::FuncOp f) {
       if (auto kind = f->getAttrOfType<StringAttr>(mockattr::kFunctionKind);
-          !kind || kind.getValue() == mockattr::kDevice)
+          !kind || kind.getValue() == mockattr::kDevice) {
         kernels.push_back(f);
+      }
     });
 
     AutoTilingOptions opts;
@@ -400,7 +443,7 @@ struct TilingFunc : public mlir::impl::TilingFuncBase<TilingFunc> {
     for (func::FuncOp k : kernels) {
       PureElemwiseTiling sch(k);
       if (failed(sch.runOnOperation(builder))) {
-        k.emitError() << "auto-tiling failed";
+        k.emitError("auto-tiling failed");
         signalPassFailure();
         return;
       }
