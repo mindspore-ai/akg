@@ -286,7 +286,7 @@ def AffineForVectPass : Pass<"affine-for-vectorize", "mlir::func::FuncOp"> {
   ];
 }
 
-def TilingFunc : Pass<"tiling-func", "mlir::func::FuncOp"> {
+def TilingFunc : Pass<"tiling-func", "mlir::ModuleOp"> {
   let summary = "This pass applies tiling to operations on tensors, dynamically processing tiles";
   let constructor = "mlir::affine::createTilingFuncPass()";
 }

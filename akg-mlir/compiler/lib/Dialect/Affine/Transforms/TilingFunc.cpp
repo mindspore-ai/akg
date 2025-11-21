@@ -21,6 +21,7 @@
 #include <utility>
 #include <iostream>
 #include <algorithm>
+
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Attributes.h"
@@ -174,7 +175,6 @@ class TilingBase {
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPoint(originalKernel_);
 
-    constexpr unsigned kTilingCnt = 5;
     auto origTy = originalKernel_.getFunctionType();
     if (origTy.getNumResults() != 1) {
       originalKernel_.emitError() << "expect exactly 1 result";
@@ -256,9 +256,6 @@ class TilingBase {
 
   LogicalResult fixCallSitesAndCaller(OpBuilder &builder) {
     assert(tilingKernel_);
-
-    constexpr unsigned kTilingCnt = 5;
-    (void)kTilingCnt;
 
     auto oldTy = originalKernel_.getFunctionType();
     unsigned nInputs = oldTy.getNumInputs();
@@ -383,10 +380,8 @@ struct TilingFunc : public mlir::impl::TilingFuncBase<TilingFunc> {
   TilingFunc() = default;
 
   void runOnOperation() override {
-    func::FuncOp func = getOperation();
-    ModuleOp module = func->getParentOfType<ModuleOp>();
+    ModuleOp module = getOperation();
     if (!module) {
-      func.emitError() << "cannot find parent ModuleOp";
       signalPassFailure();
       return;
     }
@@ -399,10 +394,9 @@ struct TilingFunc : public mlir::impl::TilingFuncBase<TilingFunc> {
     });
 
     AutoTilingOptions opts;
-
     TilingBase::setAutoTilingOptions(opts);
 
-    OpBuilder builder(func.getContext());
+    OpBuilder builder(module.getContext());
     for (func::FuncOp k : kernels) {
       PureElemwiseTiling sch(k);
       if (failed(sch.runOnOperation(builder))) {
@@ -417,7 +411,6 @@ struct TilingFunc : public mlir::impl::TilingFuncBase<TilingFunc> {
 }  // namespace
 }  // namespace mlir::affine
 
-// -----------------------------------------------------------------------------
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::affine::createTilingFuncPass() {
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::affine::createTilingFuncPass() {
   return std::make_unique<TilingFunc>();
 }

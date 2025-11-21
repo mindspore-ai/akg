@@ -1,4 +1,4 @@
- /**
+/**
  * Copyright 2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,14 +22,11 @@
 
 namespace mlir {
 
-namespace func {
-class FuncOp;
-}  // namespace func
+class ModuleOp;
 
 namespace affine {
 
-std::unique_ptr<OperationPass<func::FuncOp>>
-createTilingFuncPass();
+std::unique_ptr<OperationPass<ModuleOp>> createTilingFuncPass();
 
 }  // namespace affine
 }  // namespace mlir
