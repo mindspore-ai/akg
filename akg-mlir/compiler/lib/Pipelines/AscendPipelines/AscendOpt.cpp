@@ -64,7 +64,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::bufferization::createEmptyTensorToAllocTensorPass());
 
     mlir::bufferization::OneShotBufferizationOptions bufferizationOpts;
-    bufferizationOpts.bufferizeFunctionBoundaries = true;
+    bufferizationOpts.bufferizeFunctionBoundaries = false;
     bufferizationOpts.setFunctionBoundaryTypeConversion(mlir::bufferization::LayoutMapOption::IdentityLayoutMap);
     bufferizationOpts.allowReturnAllocsFromLoops = true;
     pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufferizationOpts));
@@ -108,9 +108,8 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     // nestedFusionPM.addPass(mlir::createAKGLoopParallelizePass(options.enableParallel));
 
     nestedFusionPM.addPass(mlir::affine::createVectorTransferTensorizePass());
-    if (const char *v = std::getenv("TILINGFUNC"); v && std::string(v) == "1") {
-      pm.addPass(mlir::affine::createTilingFuncPass());
-    }
+    pm.addPass(mlir::affine::createTilingFuncPass());
+    pm.nest<mlir::func::FuncOp>().addPass(mlir::createLowerAffinePass());
   }
 }
 }  // namespace
