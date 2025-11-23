@@ -32,6 +32,9 @@ from ai_kernel_generator.core.utils import normalize_dsl
 from ai_kernel_generator.core.verifier.adapters.factory import (
     get_framework_adapter, get_dsl_adapter, get_backend_adapter
 )
+from ai_kernel_generator.core.worker.interface import WorkerInterface
+import tarfile
+import io
 
 # 模板路径
 TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "kernel_verify_template_refactored.j2")
@@ -61,7 +64,8 @@ class KernelVerifier:
                  backend: BackendType = "cuda",
                  arch: ArchType = "a100",
                  impl_func_name: Optional[str] = None,
-                 config: Optional[Dict[str, Any]] = None):
+                 config: Optional[Dict[str, Any]] = None,
+                 worker: Optional[WorkerInterface] = None):
         """
         初始化Kernel验证器。
 
@@ -75,6 +79,7 @@ class KernelVerifier:
             backend (BackendType): 计算设备后端，可选值包括 "cuda", "ascend"
             arch (ArchType): 硬件架构，可选值包括 "a100", "v100", "h20", "l20", "rtx3090", "ascend910b4", "ascend310p3"
             impl_func_name (str, optional): 实现函数名，默认为op_name_dsl_framework
+            worker (WorkerInterface, optional): Worker实例，用于执行验证任务
         """
         self.op_name = op_name
         self.framework_code = framework_code
@@ -108,6 +113,9 @@ class KernelVerifier:
             supported_ascend_archs = ["ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4", "ascend310p3"]
             if self.arch not in supported_ascend_archs:
                 raise ValueError(f"ascend后端只支持ascend910b1/b2/b2c/b3/b4和ascend310p3架构，当前架构: {self.arch}")
+
+        # 保存Worker实例（可以在运行时动态设置）
+        self.worker = worker
 
     def _create_verify_dir(self, step_counter) -> str:
         """创建验证目录并返回目录路径"""
@@ -422,37 +430,87 @@ class KernelVerifier:
             logger.error(f"[{self.op_name}] 验证脚本写入失败: {verify_file}, 错误: {e}")
             raise
     
+    def _pack_directory(self, dir_path: str) -> bytes:
+        """将目录打包为tar字节流"""
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode='w') as tar_file:
+            for root, dirs, files in os.walk(dir_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, dir_path)
+                    tar_file.add(file_path, arcname=arcname)
+        return tar_buffer.getvalue()
 
-    def run_verify(self, verify_dir: str, timeout: int = 300):
+    async def run_verify(self, verify_dir: str, timeout: int = 300, device_id: int = 0):
         """
         运行验证脚本
+        
+        注意：device 的管理（acquire/release）由调用方（verifier.run()）负责
+        这个方法只负责执行已经生成好的脚本
 
         Args:
             verify_dir: 验证目录
             timeout: 超时时间（秒），默认5分钟（传递给模板用于每次计算）
+            device_id: 设备ID（仅用于日志和兼容性，实际设备已在脚本中设置）
         """
         verify_script = os.path.join(verify_dir, f"verify_{self.op_name}.py")
-        logger.info(f"[{self.op_name}] 开始运行验证脚本: {verify_script}, timeout={timeout}秒")
+        logger.info(f"[{self.op_name}] 准备运行验证脚本: {verify_script}, timeout={timeout}秒")
         
-        original_cwd = os.getcwd()
         try:
-            os.chdir(verify_dir)
-            python_cmd = ["python", f"verify_{self.op_name}.py"]
-            # 使用run_command但禁用timeout，让验证脚本无限制运行
-            result = run_command(python_cmd, f"verify_{self.op_name}", timeout=timeout)
-            if result:
-                logger.info(f"[{self.op_name}] 验证脚本执行成功")
+            # 调用Worker执行验证
+            if not self.worker:
+                # 检查 device_id 是否为 -1（表示 RemoteWorker，设备由远程服务器管理）
+                if device_id == -1:
+                    raise RuntimeError(
+                        f"[{self.op_name}] Worker not set and device_id=-1 (RemoteWorker mode). "
+                        "Worker must be provided by Task or WorkerManager for RemoteWorker."
+                    )
+                # 如果没有worker，根据device_id创建LocalWorker（用于测试场景）
+                import warnings
+                warnings.warn(
+                    f"⚠️  [DEPRECATED] KernelVerifier 自动创建 LocalWorker 是旧的兜底逻辑，仅用于测试。\n"
+                    f"推荐的新写法：\n"
+                    f"  1. 在调用前注册 Worker 到 WorkerManager（一行代码）：\n"
+                    f"     from ai_kernel_generator.core.worker.manager import register_local_worker\n"
+                    f"     \n"
+                    f"     await register_local_worker([{device_id}], backend='{self.backend}', arch='{self.arch}')\n"
+                    f"  2. Task 会自动从 WorkerManager 获取 worker\n"
+                    f"参考示例：examples/run_torch_npu_triton_single.py",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+                logger.warning(f"⚠️  [{self.op_name}] Worker not set, creating temporary LocalWorker (deprecated)")
+                
+                from ai_kernel_generator.core.worker.local_worker import LocalWorker
+                from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+                logger.info(f"[{self.op_name}] Worker not set, creating LocalWorker with device [{device_id}]")
+                device_pool = DevicePool([device_id])
+                self.worker = LocalWorker(device_pool=device_pool, backend=self.backend)
+            
+            from ai_kernel_generator.core.worker.local_worker import LocalWorker
+            if isinstance(self.worker, LocalWorker):
+                if not hasattr(self.worker, 'device_pool') or self.worker.device_pool is None:
+                    raise RuntimeError(
+                        f"[{self.op_name}] LocalWorker must have device_pool. "
+                        "This should be provided by Task when creating _private_worker."
+                    )
+                package_data = verify_dir
             else:
-                logger.error(f"[{self.op_name}] 验证脚本执行失败")
-            return result
+                package_data = self._pack_directory(verify_dir)
+            
+            # worker.verify() 只是执行脚本，不需要管理 device
+            # device 已经在生成脚本时设置好了
+            success, log = await self.worker.verify(package_data, self.task_id, self.op_name, timeout)
+            
+            if success:
+                logger.info(f"[{self.op_name}] 验证执行成功")
+            else:
+                logger.error(f"[{self.op_name}] 验证执行失败，日志如下：\n{log}")
+            return success, log
+            
         except Exception as e:
-            logger.error(f"[{self.op_name}] 验证脚本执行异常: {e}", exc_info=True)
-            raise
-        finally:
-            try:
-                os.chdir(original_cwd)
-            except Exception:
-                pass
+            logger.error(f"[{self.op_name}] 验证执行异常: {e}", exc_info=True)
+            return False, str(e)
 
     def gen_profile_project(self, verify_dir: str, device_id: int = 0, warmup_times: int = 5, run_times: int = 50):
         """生成profile项目文件到指定目录"""
@@ -824,8 +882,13 @@ class KernelVerifier:
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 保存加速比结果失败: {str(e)}")
 
-    def run_profile(self, current_step: int = 0, device_id: str = "0", profile_settings: dict = {}) -> dict:
+    async def run_profile(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = -1, profile_settings: dict = {}) -> dict:
         """运行profile分析
+        
+        注意：与 run() 方法类似，device 的管理在此方法中统一完成
+        
+        Args:
+            device_id: 设备ID（默认-1表示自动管理，LocalWorker会自动从device_pool获取）
         
         Returns:
             dict: 性能分析结果，包含以下字段：
@@ -834,7 +897,29 @@ class KernelVerifier:
                 - speedup: 加速比
                 - autotune_summary: autotune配置详情（仅triton DSL）
         """
-        original_cwd = os.getcwd()
+        # 【关键】对于 LocalWorker 和 RemoteWorker，在方法开始时就 acquire device
+        # 整个 profile 流程（生成脚本 + 执行）都使用这个 device_id
+        # 最后在 finally 中统一释放
+        actual_device_id = device_id
+        acquired_device = None
+        from ai_kernel_generator.core.worker.local_worker import LocalWorker
+        from ai_kernel_generator.core.worker.remote_worker import RemoteWorker
+        
+        if self.worker and isinstance(self.worker, LocalWorker):
+            # LocalWorker: 从本地 device_pool 获取设备
+            acquired_device = await self.worker.device_pool.acquire_device()
+            actual_device_id = acquired_device
+            logger.info(f"[{self.op_name}] Acquired local device {actual_device_id} for entire profile process")
+        elif self.worker and isinstance(self.worker, RemoteWorker):
+            # RemoteWorker: 从远程服务器获取设备
+            acquired_device = await self.worker.acquire_device(task_id=self.task_id)
+            actual_device_id = acquired_device
+            logger.info(f"[{self.op_name}] Acquired remote device {actual_device_id} for entire profile process")
+        else:
+            # 没有 worker（旧流程兼容）
+            actual_device_id = device_id if device_id != -1 else 0
+            logger.info(f"[{self.op_name}] Using device {actual_device_id} (no worker, deprecated flow)")
+        
         try:
             run_times = profile_settings.get("run_times", 50)
             warmup_times = profile_settings.get("warmup_times", 5)
@@ -844,57 +929,79 @@ class KernelVerifier:
             unique_dir_name = f"I{self.task_id}_S{current_step:02d}_verify"
             verify_dir = os.path.join(expanded_log_dir, self.op_name, unique_dir_name)
 
-            os.chdir(verify_dir)
+            # 生成profile脚本
+            # 对于 RemoteWorker，代码生成时使用 0 作为占位符（实际设备由远程服务器管理）
+            # 对于 LocalWorker，使用已经 acquired 的 actual_device_id
+            self.gen_profile_project(verify_dir, actual_device_id, warmup_times, run_times)
 
-            # 生成profile脚本并运行
-            self.gen_profile_project(verify_dir, device_id, warmup_times, run_times)
-
-            # 检查是否为triton DSL，如果是则运行脚本获取性能数据
-            if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
-                base_time, gen_time = self.run_profile_scripts_and_collect_results(verify_dir)
-            elif self.backend == "ascend":
-                _, _, base_prof_path = self.run_msprof(os.path.join(verify_dir, f"profile_{self.op_name}_base.py"))
-                _, _, gen_prof_path = self.run_msprof(os.path.join(
-                    verify_dir, f"profile_{self.op_name}_generation.py"))
-                _, _, base_time = self.analyze_prof_data(base_prof_path, warmup_times, run_times)
-                _, _, gen_time = self.analyze_prof_data(gen_prof_path, warmup_times, run_times)
-            elif self.backend == "cuda":
-                _, _, base_prof_path = self.run_nsys(os.path.join(verify_dir, f"profile_{self.op_name}_base.py"))
-                _, _, base_time = self.analyze_nsys_data(base_prof_path, warmup_times, run_times, "base")
-                _, _, gen_prof_path = self.run_nsys(os.path.join(verify_dir, f"profile_{self.op_name}_generation.py"))
-                _, _, gen_time = self.analyze_nsys_data(gen_prof_path, warmup_times, run_times, "generation")
-            elif self.backend == "cpu":
-                # CPU后端使用脚本方式收集性能数据
-                base_time, gen_time = self.run_profile_scripts_and_collect_results(verify_dir)
-            else:
-                logger.warning(f"[{self.task_id}:{self.op_name}] 不支持的backend: {self.backend}")
-                return {
-                    'gen_time': float('inf'),
-                    'base_time': 0.0,
-                    'speedup': 0.0
-                }
-
-            speedup = base_time / gen_time if gen_time > 0 else 0.0
+            # 打包并发送给Worker执行
+            package_data = self._pack_directory(verify_dir)
+            
+            if not self.worker:
+                # 检查 device_id 是否为 -1（表示自动管理）
+                if device_id == -1:
+                    raise RuntimeError(
+                        f"[{self.op_name}] Worker not set and device_id=-1 (RemoteWorker mode). "
+                        "Worker must be provided by Task or WorkerManager for RemoteWorker."
+                    )
+                # 如果没有worker，根据device_id创建LocalWorker（用于测试场景）
+                # 注意：此时 actual_device_id 已在上面设置为 device_id（因为 device_id != -1）
+                import warnings
+                warnings.warn(
+                    f"⚠️  [DEPRECATED] KernelVerifier 自动创建 LocalWorker 是旧的兜底逻辑，仅用于测试。\n"
+                    f"推荐的新写法：\n"
+                    f"  1. 在调用前注册 Worker 到 WorkerManager（一行代码）：\n"
+                    f"     from ai_kernel_generator.core.worker.manager import register_local_worker\n"
+                    f"     \n"
+                    f"     await register_local_worker([{actual_device_id}], backend='{self.backend}', arch='{self.arch}')\n"
+                    f"  2. Task 会自动从 WorkerManager 获取 worker\n"
+                    f"参考示例：examples/run_torch_npu_triton_single.py",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+                logger.warning(f"⚠️  [{self.op_name}] Worker not set, creating temporary LocalWorker (deprecated)")
+                
+                from ai_kernel_generator.core.worker.local_worker import LocalWorker
+                from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+                logger.info(f"[{self.op_name}] Worker not set, creating LocalWorker with device [{actual_device_id}]")
+                device_pool = DevicePool([actual_device_id])
+                self.worker = LocalWorker(device_pool=device_pool, backend=self.backend)
+            
+            # 检查LocalWorker是否有device_pool
+            from ai_kernel_generator.core.worker.local_worker import LocalWorker
+            if isinstance(self.worker, LocalWorker):
+                if not hasattr(self.worker, 'device_pool') or self.worker.device_pool is None:
+                    raise RuntimeError(
+                        f"[{self.op_name}] LocalWorker must have device_pool. "
+                        "This should be provided by Task when creating _private_worker."
+                    )
+            
+            # 传递完整的 profile_settings 给 Worker
+            full_settings = {
+                **profile_settings,
+                'backend': self.backend,
+                'dsl': self.dsl,
+                'op_name': self.op_name
+            }
+            
+            result = await self.worker.profile(package_data, self.task_id, self.op_name, full_settings)
+            
+            # 从 Worker 返回的结果中提取数据
+            gen_time = result.get('gen_time', float('inf'))
+            base_time = result.get('base_time', 0.0)
+            speedup = result.get('speedup', 0.0)
+            
+            # 保存加速比结果
+            if speedup > 0:
+                self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
+            
             speedup_percent = speedup * 100.0
-            self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
             logger.info(f"orig performance is {base_time:.2f} us")
             logger.info(f"aikg performance is {gen_time:.2f} us")
             logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，加速比（基准为100%）: {speedup_percent:.2f} %")
             
-            # 构建返回结果
-            result = {
-                'gen_time': gen_time,
-                'base_time': base_time,
-                'speedup': speedup,
-                'unique_dir': unique_dir_name,
-            }
-            
-            # 只在 triton_ascend 情况下添加 autotune_summary
-            if "triton_ascend" in self.dsl and self.backend == "ascend":
-                autotune_summary = self.read_autotune_results_from_directory(verify_dir)
-                if autotune_summary:
-                    result['autotune_summary'] = autotune_summary
-                    logger.info(f"[{self.op_name}: {self.task_id}] Autotune配置详情:\n{autotune_summary}")
+            # 添加 unique_dir 到结果
+            result['unique_dir'] = unique_dir_name
             
             return result
         except Exception as e:
@@ -905,11 +1012,18 @@ class KernelVerifier:
                 'speedup': 0.0
             }
         finally:
-            # 恢复原始工作目录
-            try:
-                os.chdir(original_cwd)
-            except Exception:
-                pass
+            # 【关键】在方法结束时统一释放设备
+            # 设备的整个生命周期由 run_profile() 方法管理
+            if acquired_device is not None:
+                from ai_kernel_generator.core.worker.local_worker import LocalWorker
+                from ai_kernel_generator.core.worker.remote_worker import RemoteWorker
+                
+                if isinstance(self.worker, LocalWorker):
+                    await self.worker.device_pool.release_device(acquired_device)
+                    logger.info(f"[{self.op_name}] Released local device {acquired_device}")
+                elif isinstance(self.worker, RemoteWorker):
+                    await self.worker.release_device(acquired_device, task_id=self.task_id)
+                    logger.info(f"[{self.op_name}] Released remote device {acquired_device}")
 
     def run_profile_scripts_and_collect_results(self, verify_dir: str) -> Tuple[float, float]:
         """运行性能测试脚本并收集结果
@@ -919,38 +1033,31 @@ class KernelVerifier:
 
         Returns:
             (base_time_us, gen_time_us): 基准时间和生成时间（微秒）
+        
+        注意: 此函数是线程安全的，不使用 os.chdir()。
+        多个任务可以在线程池中并发执行而不会互相干扰。
         """
         try:
-            # 保存当前工作目录
-            original_cwd = os.getcwd()
+            # 步骤1：运行基准性能测试脚本
+            # 使用 cwd 参数指定工作目录（线程安全），不使用 os.chdir()
+            base_script = f"profile_{self.op_name}_base.py"
+            base_result = run_command(["python", base_script], cmd_msg="base_profile", timeout=300, cwd=verify_dir)
+            if not base_result[0]:
+                logger.error(f"[{self.op_name}: {self.task_id}] 基准性能脚本执行失败: {base_result[1]}")
+                return float('inf'), float('inf')
 
-            # 切换到验证目录
-            os.chdir(verify_dir)
+            # 步骤2：运行生成代码性能测试脚本
+            gen_script = f"profile_{self.op_name}_generation.py"
+            gen_result = run_command(["python", gen_script], cmd_msg="generation_profile", timeout=300, cwd=verify_dir)
+            if not gen_result[0]:
+                logger.error(f"[{self.op_name}: {self.task_id}] 生成代码性能脚本执行失败: {gen_result[1]}")
+                return float('inf'), float('inf')
 
-            try:
-                # 步骤1：运行基准性能测试脚本
-                base_script = f"profile_{self.op_name}_base.py"
-                base_result = run_command(["python", base_script], cmd_msg="base_profile", timeout=300)
-                if not base_result[0]:
-                    logger.error(f"[{self.op_name}: {self.task_id}] 基准性能脚本执行失败: {base_result[1]}")
-                    return float('inf'), float('inf')
+            # 步骤3：从JSON文件读取性能数据
+            base_time_us = self.read_profile_result_from_json(verify_dir, "base_profile_result.json")
+            gen_time_us = self.read_profile_result_from_json(verify_dir, "generation_profile_result.json")
 
-                # 步骤2：运行生成代码性能测试脚本
-                gen_script = f"profile_{self.op_name}_generation.py"
-                gen_result = run_command(["python", gen_script], cmd_msg="generation_profile", timeout=300)
-                if not gen_result[0]:
-                    logger.error(f"[{self.op_name}: {self.task_id}] 生成代码性能脚本执行失败: {gen_result[1]}")
-                    return float('inf'), float('inf')
-
-                # 步骤3：从JSON文件读取性能数据
-                base_time_us = self.read_profile_result_from_json(verify_dir, "base_profile_result.json")
-                gen_time_us = self.read_profile_result_from_json(verify_dir, "generation_profile_result.json")
-
-                return base_time_us, gen_time_us
-
-            finally:
-                # 恢复原始工作目录
-                os.chdir(original_cwd)
+            return base_time_us, gen_time_us
 
         except Exception as e:
             logger.error(f"[{self.op_name}: {self.task_id}] 性能脚本执行和结果收集失败: {e}")
@@ -1246,7 +1353,7 @@ class KernelVerifier:
         with open(result_jsonl_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(result_info, ensure_ascii=False, indent=2) + '\n\n')
     
-    def _verify_configs_separately(self, target_code: str, verify_dir: str, device_id: int, verify_timeout: int, current_step: int = 0) -> Tuple[bool, str, str]:
+    async def _verify_configs_separately(self, target_code: str, verify_dir: str, device_id: int, verify_timeout: int, current_step: int = 0) -> Tuple[bool, str, str]:
         """
         单独验证每个autotune config
         
@@ -1332,7 +1439,7 @@ class KernelVerifier:
                 self.gen_verify_project(single_config_code, temp_verify_dir, device_id)
                 
                 # 运行验证
-                config_res, config_log = self.run_verify(temp_verify_dir, timeout=verify_timeout)
+                config_res, config_log = await self.run_verify(temp_verify_dir, timeout=verify_timeout)
                 
                 if config_res:
                     verify_logs.append(f"验证通过\n\n")
@@ -1395,19 +1502,19 @@ class KernelVerifier:
         
         return verification_passed, "".join(verify_logs), final_code
 
-    def run(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = 0):
+    async def run(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = -1):
         """
         运行内核验证器，验证代码的正确性
 
         Args:
             task_info: 任务信息字典，包含所有代码和状态
             current_step: 当前步骤
-            device_id: 设备ID
+            device_id: 设备ID（默认-1表示自动管理，LocalWorker会自动从device_pool获取）
 
         Returns:
             Tuple[bool, str]: (验证结果, 错误日志)
         """
-        logger.info(f"Verifier Run - Step: {current_step}, Device: {device_id}")
+        logger.info(f"Verifier Run - Step: {current_step}")
 
         # 根据实现类型从task_info获取代码
         target_code = task_info.get('coder_code', '')
@@ -1419,50 +1526,95 @@ class KernelVerifier:
         # 动态创建验证目录
         verify_dir = self._create_verify_dir(current_step)
         
-        # 检测是否是triton autotune代码
-        is_triton_autotune = (self.dsl in ["triton_cuda", "triton_ascend"] and 
-                              self._detect_triton_autotune(target_code))
+        # 【关键】对于 LocalWorker 和 RemoteWorker，在 run() 方法开始时就 acquire device
+        # 整个 verify 流程（生成脚本 + 执行）都使用这个 device_id
+        # 最后在 finally 中统一释放
+        actual_device_id = device_id
+        acquired_device = None
+        from ai_kernel_generator.core.worker.local_worker import LocalWorker
+        from ai_kernel_generator.core.worker.remote_worker import RemoteWorker
         
-        if is_triton_autotune:
-            # 对于autotune的triton代码，单独验证每个config
-            config_verify_result, config_verify_log, final_code = self._verify_configs_separately(
-                target_code, verify_dir, device_id, self.config.get('verify_timeout', 300), current_step
-            )
-            
-            if config_verify_result is not None:
-                # 如果执行了config单独验证，更新代码并返回
-                if config_verify_result:
-                    # 更新task_info中的代码为只包含正确config的版本
-                    task_info['coder_code'] = final_code
-                
-                return config_verify_result, config_verify_log
-
-        # 在独立目录中生成验证项目
-        project_gen_log = ""  # 用于存储项目生成阶段的日志
+        if self.worker and isinstance(self.worker, LocalWorker):
+            # LocalWorker: 从本地 device_pool 获取设备
+            acquired_device = await self.worker.device_pool.acquire_device()
+            actual_device_id = acquired_device
+            logger.info(f"[{self.op_name}] Acquired local device {actual_device_id} for entire verify process")
+        elif self.worker and isinstance(self.worker, RemoteWorker):
+            # RemoteWorker: 从远程服务器获取设备
+            acquired_device = await self.worker.acquire_device(task_id=self.task_id)
+            actual_device_id = acquired_device
+            logger.info(f"[{self.op_name}] Acquired remote device {actual_device_id} for entire verify process")
+        else:
+            # 没有 worker（旧流程兼容）
+            actual_device_id = device_id if device_id != -1 else 0
+            logger.info(f"[{self.op_name}] Using device {actual_device_id} (no worker, deprecated flow)")
+        
         try:
-            self.gen_verify_project(target_code, verify_dir, device_id)
-        except Exception as e:
-            # 捕获gen_verify_project中的异常，记录到project_gen_log中
-            error_msg = str(e)
-            logger.error(f"验证项目生成失败: {error_msg}")
-            project_gen_log = f"项目生成失败: {error_msg}\n"
+            # 检测是否是triton autotune代码
+            is_triton_autotune = (self.dsl in ["triton_cuda", "triton_ascend"] and 
+                                  self._detect_triton_autotune(target_code))
+            
+            if is_triton_autotune:
+                # 对于autotune的triton代码，单独验证每个config
+                config_verify_result, config_verify_log, final_code = await self._verify_configs_separately(
+                    target_code, verify_dir, actual_device_id, self.config.get('verify_timeout', 300), current_step
+                )
+                
+                if config_verify_result is not None:
+                    # 如果执行了config单独验证，更新代码并返回
+                    if config_verify_result:
+                        # 更新task_info中的代码为只包含正确config的版本
+                        task_info['coder_code'] = final_code
+                    
+                    return config_verify_result, config_verify_log
 
-        # 从config获取timeout配置，默认5分钟
-        verify_timeout = self.config.get('verify_timeout', 300)
+            # 在独立目录中生成验证项目
+            project_gen_log = ""  # 用于存储项目生成阶段的日志
+            try:
+                # 对于 RemoteWorker，代码生成时使用 0 作为占位符（实际设备由远程服务器管理）
+                # 对于 LocalWorker，使用已经 acquired 的 actual_device_id
+                self.gen_verify_project(target_code, verify_dir, actual_device_id)
+            except Exception as e:
+                # 捕获gen_verify_project中的异常，记录到project_gen_log中
+                error_msg = str(e)
+                logger.error(f"验证项目生成失败: {error_msg}")
+                project_gen_log = f"项目生成失败: {error_msg}\n"
 
-        # 运行验证
-        verify_res, verify_log = self.run_verify(verify_dir, timeout=verify_timeout)
+            # 从config获取timeout配置，默认5分钟
+            verify_timeout = self.config.get('verify_timeout', 300)
+
+            # 运行验证
+            # worker.verify() 只是执行脚本，不需要管理 device（device 已经在脚本中设置好了）
+            verify_res, verify_log = await self.run_verify(
+                verify_dir, timeout=verify_timeout, device_id=actual_device_id
+            )
         
-        # 拼接项目生成日志和验证日志
-        verify_log = project_gen_log + verify_log
+            # 拼接项目生成日志和验证日志
+            verify_log = project_gen_log + verify_log
 
-        # 保存验证结果到JSONL文件
-        self._save_verification_result_to_jsonl(verify_dir, current_step, verify_res, verify_log)
+            # 保存验证结果到JSONL文件
+            self._save_verification_result_to_jsonl(verify_dir, current_step, verify_res, verify_log)
 
-        # 保存通过的验证文件
-        if verify_res:
-            foder_name = os.path.basename(verify_dir)
-            dst_dir = Path(self.log_dir) / "passed_cases" / self.op_name / foder_name
-            shutil.copytree(verify_dir, dst_dir)
+            # 保存通过的验证文件
+            if verify_res:
+                foder_name = os.path.basename(verify_dir)
+                dst_dir = Path(self.log_dir) / "passed_cases" / self.op_name / foder_name
+                # 如果目标目录已存在，先删除再复制（避免 FileExistsError）
+                if dst_dir.exists():
+                    shutil.rmtree(dst_dir)
+                shutil.copytree(verify_dir, dst_dir)
 
-        return verify_res, verify_log
+            return verify_res, verify_log
+        finally:
+            # 【关键】在 run() 方法结束时统一释放设备
+            # 设备的整个生命周期由 run() 方法管理
+            if acquired_device is not None:
+                from ai_kernel_generator.core.worker.local_worker import LocalWorker
+                from ai_kernel_generator.core.worker.remote_worker import RemoteWorker
+                
+                if isinstance(self.worker, LocalWorker):
+                    await self.worker.device_pool.release_device(acquired_device)
+                    logger.info(f"[{self.op_name}] Released local device {acquired_device}")
+                elif isinstance(self.worker, RemoteWorker):
+                    await self.worker.release_device(acquired_device, task_id=self.task_id)
+                    logger.info(f"[{self.op_name}] Released remote device {acquired_device}")

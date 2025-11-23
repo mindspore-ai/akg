@@ -13,9 +13,9 @@
 # limitations under the License.
 
 from ai_kernel_generator.config.config_validator import load_config
-from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.task import Task
+from ai_kernel_generator.core.worker.manager import register_local_worker
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 import asyncio
 import os
@@ -70,7 +70,10 @@ async def run_torch_npu_triton_single():
     task_desc = get_task_desc()
 
     task_pool = TaskPool()
-    device_pool = DevicePool([0])
+    
+    # 新写法：一行代码注册 LocalWorker
+    await register_local_worker([0], backend="ascend", arch="ascend910b4")
+    
     config = load_config("triton_ascend", backend="ascend")  # use offical deepseek api
     # config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
 
@@ -84,7 +87,6 @@ async def run_torch_npu_triton_single():
         backend="ascend",
         arch="ascend910b4",
         config=config,
-        device_pool=device_pool,
         framework="torch",
         workflow="coder_only_workflow"
     )

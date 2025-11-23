@@ -26,7 +26,7 @@ import sys
 import asyncio
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.core.task import Task
-from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+from ai_kernel_generator.core.worker.manager import register_local_worker
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
 
 
@@ -229,7 +229,9 @@ async def run_analysis(
     
     # 1. 加载配置
     config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_ascend_evolve_config.yaml")
-    device_pool = DevicePool(device_list=[device_id])
+    
+    # 新写法：一行代码注册 LocalWorker
+    await register_local_worker([device_id], backend="ascend", arch="ascend910b4")
     
     # 2. 不带优化建议的测试
     print("🚀 步骤1: 不带优化建议的代码生成")
@@ -243,7 +245,6 @@ async def run_analysis(
         arch="ascend910b4",
         dsl="triton_ascend",
         config=config,
-        device_pool=device_pool,
         framework="torch",
         task_type="profile",
         workflow="default_workflow",
@@ -282,7 +283,6 @@ async def run_analysis(
         arch="ascend910b4",
         dsl="triton_ascend",
         config=config,
-        device_pool=device_pool,
         framework="torch",
         task_type="profile",
         workflow="default_workflow",

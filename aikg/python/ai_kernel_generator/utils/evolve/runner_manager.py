@@ -28,13 +28,13 @@ import yaml
 import traceback
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.config.config_validator import load_config
-from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.evolve import evolve
+from ai_kernel_generator.core.worker.manager import get_worker_manager
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 from .result_collector import RealtimeResultCollector
 
@@ -360,10 +360,21 @@ async def run_single_evolve(op_name: str = None, task_desc: str = None, evolve_c
 
     # 初始化资源
     task_pool = TaskPool(max_concurrency=evolve_config.parallel_num)
-    device_pool = DevicePool(evolve_config.device_list)
 
     config = load_config(config_path=evolve_config.config_path)
-    check_env_for_task(evolve_config.framework, evolve_config.backend, evolve_config.dsl, config)
+    
+    # 判断是否为远程模式（通过环境变量）
+    is_remote = os.getenv("AIKG_WORKER_URL") is not None
+    check_env_for_task(evolve_config.framework, evolve_config.backend, evolve_config.dsl, config, is_remote=is_remote)
+
+    # 确保在运行任务前已注册 Worker
+    if not await get_worker_manager().has_worker(backend=evolve_config.backend, arch=evolve_config.arch):
+        raise RuntimeError(
+            f"未检测到可用的 Worker。请先注册 Worker 后再调用 run_single_evolve：\n"
+            f"  from ai_kernel_generator.core.worker.manager import register_worker\n"
+            f"  await register_worker(backend='{evolve_config.backend}', arch='{evolve_config.arch}', device_ids=[0])\n"
+            f"或设置环境变量 AIKG_WORKER_URL 指向远程 Worker 服务。"
+        )
 
     # 运行进化过程
     print("开始进化过程...")
@@ -375,7 +386,6 @@ async def run_single_evolve(op_name: str = None, task_desc: str = None, evolve_c
         backend=evolve_config.backend,
         arch=evolve_config.arch,
         config=config,
-        device_pool=device_pool,
         task_pool=task_pool,
         max_rounds=evolve_config.max_rounds,
         parallel_num=evolve_config.parallel_num,
@@ -394,72 +404,63 @@ async def run_single_evolve(op_name: str = None, task_desc: str = None, evolve_c
 # ============================================================================
 
 class BatchTaskPool:
-    """批量任务池，用于管理并行执行的evolve任务"""
+    """批量任务池，用于管理并行执行的 evolve 任务"""
 
-    def __init__(self, max_concurrency: int, device_pool: List[int], 
-                 config_path: Optional[str] = None,
-                 collector: Optional[RealtimeResultCollector] = None):
+    def __init__(
+        self,
+        max_concurrency: int,
+        config_path: Optional[str] = None,
+        collector: Optional[RealtimeResultCollector] = None
+    ):
         self.max_concurrency = max_concurrency
         self.config_path = config_path
         self.collector = collector
         self.semaphore = asyncio.Semaphore(max_concurrency)
-        self.available_devices = asyncio.Queue()
-        self.device_lock = asyncio.Lock()
 
-        for device in device_pool:
-            self.available_devices.put_nowait(device)
-
-    async def acquire_device(self) -> int:
-        """获取可用设备"""
-        async with self.device_lock:
-            device = await self.available_devices.get()
-            return device
-
-    async def release_device(self, device: int):
-        """释放设备回池中"""
-        async with self.device_lock:
-            await self.available_devices.put(device)
-
-    async def run_task_async(self, task_file: Path, output_dir: Path, index: int, total: int,
-                             use_compact_output: bool = False) -> Dict[str, Any]:
+    async def run_task_async(
+        self,
+        task_file: Path,
+        output_dir: Path,
+        index: int,
+        total: int,
+        use_compact_output: bool = False
+    ) -> Dict[str, Any]:
         """异步运行单个任务"""
-        device = await self.acquire_device()
-
         if not use_compact_output:
-            print(f"任务 [{index}/{total}] {task_file.stem} 分配到设备 {device}")
+            print(f"任务 [{index}/{total}] {task_file.stem} 开始执行")
 
-        try:
-            async with self.semaphore:
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None,
-                    run_single_task_subprocess,
-                    task_file, output_dir, index, total, use_compact_output, device, self.config_path
-                )
-                
-                # 任务完成后立即收集结果
-                if self.collector and result.get('success', False):
-                    try:
-                        output_file = result.get('output_file')
-                        output_content = ""
-                        if output_file and Path(output_file).exists():
-                            with open(output_file, 'r', encoding='utf-8') as f:
-                                output_content = f.read()
-                        
-                        await loop.run_in_executor(
-                            None,
-                            self.collector.collect_task_result,
-                            result['op_name'],
-                            output_content
-                        )
-                    except Exception as e:
-                        print(f"收集结果失败: {e}")
-                
-                return result
-        finally:
-            await self.release_device(device)
-            if not use_compact_output:
-                print(f"任务 {task_file.stem} 完成，设备 {device} 已回收")
+        async with self.semaphore:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                run_single_task_subprocess,
+                task_file,
+                output_dir,
+                index,
+                total,
+                use_compact_output,
+                self.config_path
+            )
+
+            # 任务完成后立即收集结果
+            if self.collector and result.get('success', False):
+                try:
+                    output_file = result.get('output_file')
+                    output_content = ""
+                    if output_file and Path(output_file).exists():
+                        with open(output_file, 'r', encoding='utf-8') as f:
+                            output_content = f.read()
+
+                    await loop.run_in_executor(
+                        None,
+                        self.collector.collect_task_result,
+                        result['op_name'],
+                        output_content
+                    )
+                except Exception as e:
+                    print(f"收集结果失败: {e}")
+
+            return result
 
     async def run_batch_parallel(self, task_files: List[Path], output_dir: Path) -> List[Dict[str, Any]]:
         """并行运行批量任务"""
@@ -533,7 +534,7 @@ def discover_task_files(task_dir: str) -> List[Path]:
 
 
 def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, total: int,
-                               use_compact_output: bool = False, device: int = 5, config_path: Optional[str] = None) -> Dict[str, Any]:
+                               use_compact_output: bool = False, config_path: Optional[str] = None) -> Dict[str, Any]:
     """使用subprocess方式运行单个任务"""
     op_name = "aikg_" + task_file.stem
 
@@ -565,10 +566,10 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
         absolute_task_file = Path(task_file).resolve()
 
         cmd = [
-            sys.executable, str(single_evolve_script),
+            sys.executable,
+            str(single_evolve_script),
             op_name,
-            str(absolute_task_file),
-            str(device)
+            str(absolute_task_file)
         ]
 
         if config_path:
@@ -777,8 +778,12 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
         }
 
 
-def load_batch_config(config_path: str = None) -> Dict[str, Any]:
-    """加载批量执行配置"""
+def load_batch_config(config_path: str = None) -> Tuple[Dict[str, Any], str]:
+    """加载批量执行配置
+
+    Returns:
+        Tuple[Dict[str, Any], str]: 批量配置字典和实际使用的配置文件路径
+    """
     if config_path is None:
         project_root = get_project_root()
         config_path = os.path.join(project_root, "config", "evolve_config.yaml")
@@ -818,7 +823,7 @@ def load_batch_config(config_path: str = None) -> Dict[str, Any]:
         print(f"错误: 配置文件不存在: {config_path}")
         raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
-    return config_dict
+    return config_dict, config_path
 
 
 def print_batch_summary(batch_results: List[Dict[str, Any]], total_start_time: datetime):
@@ -868,7 +873,7 @@ def print_batch_summary(batch_results: List[Dict[str, Any]], total_start_time: d
 
 async def run_batch_evolve(config_path: str = None) -> None:
     """批量执行进化任务"""
-    config = load_batch_config(config_path)
+    config, resolved_config_path = load_batch_config(config_path)
 
     task_dir = os.path.expanduser(config["task_dir"]) if config["task_dir"] else os.path.expanduser("~/aikg_tasks")
     output_dir = Path(os.path.expanduser(config["output_dir"])) if config["output_dir"] else Path(
@@ -882,7 +887,7 @@ async def run_batch_evolve(config_path: str = None) -> None:
     print(f"任务目录: {task_dir}")
     print(f"输出目录: {output_dir}")
     print(f"并行数: {parallel_num}")
-    print(f"设备池: {config['device_pool']}")
+    print(f"设备配置: {config['device_pool'] or '使用 AIKG_WORKER_URL 指定远程 Worker'}")
     print("="*80)
 
     total_start_time = datetime.now()
@@ -895,6 +900,10 @@ async def run_batch_evolve(config_path: str = None) -> None:
             print("未找到任何.py文件")
             return
 
+        # 尝试检查是否有可用 Worker，但不强制依赖 WorkerManager 实例
+        # (因为此时可能还未连接到 Remote，但为了兼容性，我们假设外部已注册)
+        # 这里不再主动调用 register_worker
+
         # 初始化实时结果收集器
         collector = RealtimeResultCollector(output_dir)
         print(f"实时结果收集器已启动")
@@ -905,8 +914,7 @@ async def run_batch_evolve(config_path: str = None) -> None:
         # 创建批量任务池
         batch_pool = BatchTaskPool(
             max_concurrency=parallel_num,
-            device_pool=config["device_pool"],
-            config_path=config_path,
+            config_path=resolved_config_path,
             collector=collector
         )
 
@@ -914,7 +922,7 @@ async def run_batch_evolve(config_path: str = None) -> None:
             print(f"\n将按顺序执行 {len(task_files)} 个算子的进化流程...")
         else:
             print(f"\n将并行执行 {len(task_files)} 个算子的进化流程...")
-            print(f"设备动态分配：{config['device_pool']} (任务完成后自动回收)")
+            print("Worker 分配：由 WorkerManager 统一调度")
 
         # 运行任务
         try:

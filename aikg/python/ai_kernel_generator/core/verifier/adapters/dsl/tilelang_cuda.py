@@ -30,15 +30,28 @@ class DSLAdapterTilelangCuda(DSLAdapter):
         return code
     
     def get_impl_import(self, op_name: str, impl_func_name: str) -> str:
-        """Return implementation function import."""
-        return f"from {op_name}_tilelang_cuda import {impl_func_name}\n"
+        """Return implementation ModelNew import."""
+        return f"from {op_name}_tilelang_cuda import ModelNew\n"
+    
+    def create_impl_module(
+        self,
+        framework: str,
+        framework_adapter: Any,
+        init_params_var: str = "init_params",
+        device_var: str = "device",
+    ) -> str:
+        """Instantiate TileLang ModelNew once."""
+        code = f"impl_model = ModelNew(*{init_params_var})\n"
+        if framework == "torch":
+            code += f"impl_model = impl_model.to({device_var})\n"
+        return code
     
     def call_impl(self, impl_func_name: str, inputs: str, device_id: int,
                   framework_adapter: Any, op_name: str, 
                   data_dir: Optional[str] = None, 
                   framework_output: Optional[str] = None) -> str:
         """Return code string to call TileLang CUDA implementation function."""
-        return f"impl_output = {impl_func_name}(*{inputs})\n"
+        return f"impl_output = impl_model(*{inputs})\n"
     
     def needs_binary_io(self) -> bool:
         """TileLang CUDA doesn't need binary I/O."""
@@ -58,13 +71,18 @@ class DSLAdapterTilelangCuda(DSLAdapter):
         sync_code = "torch.cuda.synchronize()" if backend == "cuda" else ""
         code = f"""        # dsl：tilelang_cuda
         import time
+        def tilelang_cuda_benchmark_fn():
+            return impl_model(*{inputs})
+        for _ in range({warmup}):
+            _ = tilelang_cuda_benchmark_fn()
+            {sync_code}
         start_time = time.time()
-        for _ in range({warmup + runs}):
-            framework_output = {framework_model}(*{inputs})
+        for _ in range({runs}):
+            _ = tilelang_cuda_benchmark_fn()
             {sync_code}
         end_time = time.time()
-        execution_time_ms = (end_time - start_time) * 1000 / {warmup + runs}  # 转换为毫秒
-        method = "traditional_timing"
+        execution_time_ms = (end_time - start_time) * 1000 / max({runs}, 1)
+        method = "cuda_loop_timer"
 """
         return code
 

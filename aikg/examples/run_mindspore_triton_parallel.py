@@ -15,7 +15,7 @@
 import asyncio
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
-from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+from ai_kernel_generator.core.worker.manager import register_local_worker
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 
@@ -87,7 +87,10 @@ async def run_mindspore_triton_parallel():
     op_name_and_task_desc = get_op_name_and_task_desc()
 
     task_pool = TaskPool()
-    device_pool = DevicePool([0, 1])
+    
+    # 新写法：一行代码注册 LocalWorker（多卡）
+    await register_local_worker([0, 1], backend="ascend", arch="ascend910b4")
+    
     config = load_config("triton_ascend", backend="ascend")  # or load_config("/your-path-to-config/xxx_config.yaml")
 
     check_env_for_task("mindspore", "ascend", "triton_ascend", config)
@@ -101,7 +104,6 @@ async def run_mindspore_triton_parallel():
             backend="ascend",
             arch="ascend910b4",
             config=config,
-            device_pool=device_pool,
             framework="mindspore",
             workflow="coder_only_workflow"
         )

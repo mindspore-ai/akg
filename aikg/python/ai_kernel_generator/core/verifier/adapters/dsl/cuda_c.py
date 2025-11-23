@@ -24,18 +24,43 @@ class DSLAdapterCudaC(DSLAdapter):
     
     def get_import_statements(self, framework: str) -> str:
         """Return CUDA C import statements."""
-        return "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch.utils.cpp_extension import load_inline\n"
+        return (
+            "import torch\n"
+            "import torch.nn as nn\n"
+            "import torch.nn.functional as F\n"
+            "from torch.utils.cpp_extension import load_inline\n"
+        )
     
     def get_impl_import(self, op_name: str, impl_func_name: str) -> str:
-        """Return implementation function import."""
-        return f"from {op_name}_cuda_c import {impl_func_name}\n"
+        """Return implementation ModelNew import."""
+        # CUDA C 生成代码已经统一为 ModelNew 类格式
+        return f"from {op_name}_cuda_c import ModelNew\n"
     
-    def call_impl(self, impl_func_name: str, inputs: str, device_id: int,
-                  framework_adapter: Any, op_name: str, 
+    def create_impl_module(
+        self,
+        framework: str,
+        framework_adapter: Any,
+        init_params_var: str = "init_params",
+        device_var: str = "device",
+    ) -> str:
+        """Instantiate ModelNew once and keep it on the right device."""
+        code = f"impl_model = ModelNew(*{init_params_var})\n"
+        if framework == "torch":
+            code += f"impl_model = impl_model.to({device_var})\n"
+        return code
+    
+    def call_impl(
+        self,
+        impl_func_name: str,
+        inputs: str,
+        device_id: int,
+        framework_adapter: Any,
+        op_name: str,
                   data_dir: Optional[str] = None, 
-                  framework_output: Optional[str] = None) -> str:
-        """Return code string to call CUDA C implementation function."""
-        return f"impl_output = {impl_func_name}(*{inputs})\n"
+        framework_output: Optional[str] = None,
+    ) -> str:
+        """Invoke the instantiated CUDA C ModelNew."""
+        return f"impl_output = impl_model(*{inputs})\n"
     
     def needs_binary_io(self) -> bool:
         """CUDA C doesn't need binary I/O."""
@@ -45,22 +70,35 @@ class DSLAdapterCudaC(DSLAdapter):
         """CUDA C doesn't need compilation (handled by load_inline)."""
         return False
     
-    def benchmark_impl(self, impl_func_name: str, inputs: str, 
-                      warmup: int, runs: int, backend: str, op_name: str,
-                      case_idx: int = 0, framework_model: Optional[str] = None,
+    def benchmark_impl(
+        self,
+        impl_func_name: str,
+        inputs: str,
+        warmup: int,
+        runs: int,
+        backend: str,
+        op_name: str,
+        case_idx: int = 0,
+        framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,
-                      device_id: Optional[int] = None) -> str:
+        device_id: Optional[int] = None,
+    ) -> str:
         """Return code string to benchmark CUDA C implementation."""
         sync_code = "torch.cuda.synchronize()" if backend == "cuda" else ""
         code = f"""        # dsl：cuda_c
         import time
+        def cuda_c_benchmark_fn():
+            return impl_model(*{inputs})
+        for _ in range({warmup}):
+            _ = cuda_c_benchmark_fn()
+            {sync_code}
         start_time = time.time()
-        for _ in range({warmup + runs}):
-            framework_output = {framework_model}(*{inputs})
+        for _ in range({runs}):
+            _ = cuda_c_benchmark_fn()
             {sync_code}
         end_time = time.time()
-        execution_time_ms = (end_time - start_time) * 1000 / {warmup + runs}  # 转换为毫秒
-        method = "traditional_timing"
+        execution_time_ms = (end_time - start_time) * 1000 / max({runs}, 1)
+        method = "cuda_loop_timer"
 """
         return code
 

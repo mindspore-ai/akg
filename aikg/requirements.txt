@@ -16,3 +16,6 @@ tiktoken
 torch
 sentence-transformers
 einops
+fastapi
+uvicorn
+python-multipart
