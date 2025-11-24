@@ -1,3 +1,0 @@
-[lib information]
-git branch: master
-commit  id: cd9a14a184a248dfa418a5785f7f1f436b2962e0

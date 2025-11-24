@@ -1,120 +1,35 @@
-- [What Is AKG?](#what-is-akg)
-- [Hardware Backends Support](#hardware-backends-support)
-- [Build](#build)
-    - [Build With MindSpore](#build-with-mindspore)
-    - [Build Standalone](#build-standalone)
-- [Run](#run)
-- [Contributing](#contributing)
-- [Release Notes](#release-notes)
-- [License](#license)
+# Auto Kernel Generator (AKG)
 
-[查看中文](./README_CN.md)
+#### 项目简介
 
-## What Is AKG
-AKG(Auto Kernel Generator) is an optimizer for operators in Deep Learning Networks. It provides the ability to automatically fuse ops with specific patterns. AKG works with MindSpore-GraphKernel to improve the performance of networks running on different hardware backends.
+AKG(Auto Kernel Generator)是一个深度学习编译器，用以对深度神经网络中的算子进行优化，并提供特定模式下的算子自动融合功能。
+从 2.4 版本之后，我们对 AKG 进行了全新升级，当前的 AKG 项目中，包含了 AIKG、AKG-MLIR 2个子项目，支持 CPU、NVIDIA、V100/A100、Atlas 800T A2/A3、300I DUO 等多硬件后端的算子自动生成。
 
-AKG composes with three basic optimization module, normalization, auto schedule and backend optimization.
-- **normalization.** In order to solve the limitation in expression ability of polyhedral(which can only process static linear programs), the computation IR needs to be normalized first. The mainly optimization of normalization module includes auto-inline, loop fusing, common subexpression elimination and so on.
-- **auto schedule.** Base on polyhedral technology, the auto schedule module mainly have auto-vectorization, auto-tiling, thread/block mapping, dependency analysis and memory promotion.
-- **backend optimization.** The backend optimization module mainly consists of TensorCore acceleration, double buffer optimization, storage flatten optimization and inject sync optimization.
+- **AIKG：** AIKG(AI Driven Kernel Generator)是我们最新孵化的一款大模型驱动的算子生成工具，提供了基于 Multi-agent 的算子自动生成框架、AscendKernelBench 评测平台、以及算子知识库。当前支持通过 LLM 的方式，生成 Triton-Ascend（Atalas A2/A3）以及 SWFT（300I DUO）的 DSL，并完成算子 kernel 编译。
+- **AKG-MLIR：** 基于 MLIR 开源项目演进的深度学习编译器，提供了 CPU/GPU/Ascend 上完整的算子编译 Pipeline。当前包含了 MindSpore Dialect 图编译方言，并对 Linalg、Affine、GPU 等方言进行了扩展，增强了循环融合调度能力。此外，AKG-MLIR 对接了 AscendNPU IR，支持昇腾后端融合算子生成。
 
-  <img src="docs/akg-design.png" style="zoom:80%" div align=center/>
+#### 安装及使用说明
 
-## Hardware Backends Support
-At present, `Ascend910`, `NVIDIA V100/A100` and `CPU` are supported. More Backends are on the list.
+AKG 代码仓中的各个子项目，都支持独立安装构建，请参考各子项目使用说明。
 
-## Build
+- **AIKG：** 请参考 [AIKG](./aikg/README_CN.md) 文档
+- **AKG-MLIR：** 请参考 [AKG-MLIR](./akg-mlir/README.md) 文档
 
-### Build With MindSpore
-See [MindSpore README.md](https://gitee.com/mindspore/mindspore/blob/master/README.md) for details.
+## 贡献
 
-### Build Standalone
-We suggest you build and run akg together with MindSpore. And we also provide a way to run case in standalone mode for convenience sake.
-Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more information about compilation dependencies.
-- Build on Ascend910
+欢迎您的贡献，具体细节请参考[MindSpore 贡献者 Wiki](https://gitee.com/mindspore/mindspore/blob/master/CONTRIBUTING.md)。
 
-  [git-lfs](https://github.com/git-lfs/git-lfs/wiki/installation) needs to be installed before cloning the source codes.
-  ```
-  git clone https://gitee.com/mindspore/akg.git
-  cd akg
-  bash build.sh -e ascend -j8
-  ```
+## 版本说明
 
-- Build on GPU
-  ```
-  git clone https://gitee.com/mindspore/akg.git
-  cd akg
-  bash build.sh -e gpu -j8
-  ```
+版本说明详见[RELEASE](RELEASE.md)。
 
-- Build on CPU
-  ```
-  git clone https://gitee.com/mindspore/akg.git
-  cd akg
-  bash build.sh -e cpu -j8
-  ```
+## 许可证
+[Apache License 2.0](LICENSE)。
 
-## Run Standalone
-1. Set Environment
+## AKG SIG 交流微信群
 
-- Ascend910
-  ```
-  cd tests
-  source ./test_env.sh
-  ```
-
-- NVIDIA V100/A100
-  ```
-  cd tests
-  source ./test_env.sh gpu
-  ```
-
-- CPU
-  ```
-  cd tests
-  source ./test_env.sh cpu
-  ```
-
-2. Run test
-
-- Use script:
-```
-cd tests/st
-python run.py -e gpu -o add -l level0  # run add operator on GPU
-```
-  Detailed instructions see:`python run.py -h`
-- Use specific case:
-
-  - Ascend910
-  ```
-  cd tests/st/ops/
-  pytest -s test_abs.py -m "level0 and platform_x86_ascend_training" # run level0 testcases on Ascend
-  ```
-
-  - NVIDIA V100/A100
-  ```
-  cd tests/st/ops/
-  pytest -s test_abs.py -m "level0 and platform_x86_gpu_training" # run level0 testcases on GPU
-  ```
-
-  - CPU
-  ```
-  cd tests/st/ops/
-  pytest -s test_abs.py -m "level0 and platform_x86_cpu" # run level0 testcases on CPU
-  ```
-
-## Using AKG to generate high performance kernels
-See [Wiki](https://gitee.com/mindspore/akg/wikis).
-
-## Contributing
-
-Welcome contributions. See [MindSpore Contributor Wiki](https://gitee.com/mindspore/mindspore/blob/master/CONTRIBUTING.md) for
-more details.
-
-## Release Notes
-
-The release notes, see our [RELEASE](RELEASE.md).
-
-## License
-
-[Apache License 2.0](LICENSE)
+<div>
+  <a href="docs/AKG_QRCode.png">
+    <img src="docs/AKG_QRCode.png" alt="AKG SIG 交流微信群二维码" width="220">
+  </a>
+</div>
