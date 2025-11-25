@@ -447,3 +447,4 @@ std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> createVectorTransferTen
   return std::make_unique<VectorTransferTensorizePass>();
 }
 }  // namespace mlir::affine
+
