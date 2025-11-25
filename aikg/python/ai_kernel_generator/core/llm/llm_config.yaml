@@ -1,0 +1,465 @@
+# 模型预设配置
+# 每个预设包含完整的模型参数
+
+# 火山引擎 DeepSeek-R1
+volc_ds_r1_default:
+  api_base: "https://ark.cn-beijing.volces.com/api/v3"
+  model: "deepseek-r1-250120"
+  api_key_env: "AIKG_HUOSHAN_API_KEY"
+  max_tokens: 8192
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+volc_ds_r1_creative:
+  api_base: "https://ark.cn-beijing.volces.com/api/v3"
+  model: "deepseek-r1-250120"
+  api_key_env: "AIKG_HUOSHAN_API_KEY"
+  max_tokens: 8192
+  temperature: 0.9
+  top_p: 0.95
+  frequency_penalty: 0.3
+  presence_penalty: 0.3
+
+volc_ds_r1_precise:
+  api_base: "https://ark.cn-beijing.volces.com/api/v3"
+  model: "deepseek-r1-250120"
+  api_key_env: "AIKG_HUOSHAN_API_KEY"
+  max_tokens: 8192
+  temperature: 0.1
+  top_p: 0.9
+  frequency_penalty: 0.7
+  presence_penalty: 0.7
+
+# 火山引擎 DeepSeek-V3
+volc_ds_v3_default:
+  api_base: "https://ark.cn-beijing.volces.com/api/v3"
+  model: "deepseek-v3-250324"
+  api_key_env: "AIKG_HUOSHAN_API_KEY"
+  max_tokens: 8192
+  temperature: 0.1
+  top_p: 0.9
+  frequency_penalty: 0.8
+  presence_penalty: 0.5
+
+# 火山引擎 豆包
+volc_doubao_1_5_pro_32k:
+  api_base: "https://ark.cn-beijing.volces.com/api/v3"
+  model: "doubao-1-5-pro-32k-250115"
+  api_key_env: "AIKG_HUOSHAN_API_KEY"
+
+volc_doubao_1_5_thinking_pro:
+  api_base: "https://ark.cn-beijing.volces.com/api/v3"
+  model: "doubao-1-5-thinking-pro-250415"
+  api_key_env: "AIKG_HUOSHAN_API_KEY"
+
+# 硅流平台的模型
+sflow_ds_r1_default:
+  api_base: "https://api.siliconflow.cn/v1/"
+  model: "Pro/deepseek-ai/DeepSeek-R1"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  max_tokens: 8192
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+
+sflow_ds_r1_0120_default:
+  api_base: "https://api.siliconflow.cn/v1/"
+  model: "Pro/deepseek-ai/DeepSeek-R1-0120"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  max_tokens: 8192
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+
+sflow_ds_v3_default:
+  api_base: "https://api.siliconflow.cn/v1/"
+  model: "Pro/deepseek-ai/DeepSeek-V3"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  max_tokens: 8192
+  temperature: 0.1
+  top_p: 0.9
+  frequency_penalty: 0.8
+  presence_penalty: 0.5
+
+sflow_qwen_32b:
+  api_base: "https://api.siliconflow.cn/v1/"
+  model: "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  max_tokens: 8192
+  temperature: 0.7
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+sflow_qwen3_32b:
+  api_base: "https://api.siliconflow.cn/v1/"
+  model: "Qwen/Qwen3-30B-A3B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  max_tokens: 8192
+  temperature: 0.6
+  top_p: 0.95
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+
+sflow_qwen3_235b:
+  api_base: "https://api.siliconflow.cn/v1/"
+  model: "Qwen/Qwen3-235B-A22B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  max_tokens: 8192
+  temperature: 0.6
+  top_p: 0.95
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+
+sflow_qwen3_235b:
+  api_base: "https://api.siliconflow.cn/v1/"
+  model: "Qwen/Qwen3-235B-A22B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  max_tokens: 8192
+  temperature: 0.6
+  top_p: 0.95
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+sflow_qwen_7b:
+  api_base: "https://api.siliconflow.cn/v1/"
+  model: "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  max_tokens: 8192
+  temperature: 0.7
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+# DeepSeek官方API
+deepseek_r1_default:
+  api_base: "https://api.deepseek.com/beta"
+  model: "deepseek-reasoner"
+  api_key_env: "AIKG_DEEPSEEK_API_KEY"
+  max_tokens: 16384
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+deepseek_r1_precise:
+  api_base: "https://api.deepseek.com/beta"
+  model: "deepseek-reasoner"
+  api_key_env: "AIKG_DEEPSEEK_API_KEY"
+  max_tokens: 16384
+  temperature: 0.1
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+deepseek_v3_default:
+  api_base: "https://api.deepseek.com/beta"
+  model: "deepseek-chat"
+  api_key_env: "AIKG_DEEPSEEK_API_KEY"
+  max_tokens: 8192
+  temperature: 0.1
+  top_p: 0.9
+  frequency_penalty: 0.8
+  presence_penalty: 0.5
+
+# Ollama 模型配置
+ollama_qwen_coder_7b_default:
+  api_base: "http://localhost:11434"
+  model: "qwen2.5-coder:7b"
+  max_tokens: 8192
+  temperature: 0.7
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+ollama_qwen_coder_7b_precise:
+  api_base: "http://localhost:11434"
+  model: "qwen2.5-coder:7b"
+  max_tokens: 8192
+  temperature: 0.1
+  top_p: 0.9
+  frequency_penalty: 0.7
+  presence_penalty: 0.7
+
+ollama_qwen_coder_0.5b_default:
+  api_base: "http://localhost:11434"
+  model: "qwen2.5-coder:0.5b"
+  max_tokens: 8192
+  temperature: 0.7
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+ollama_qwen3_default:
+  api_base: "http://localhost:11434"
+  model: "qwen3:235b"
+  max_tokens: 8192
+  temperature: 0.1
+  top_p: 0.9
+  frequency_penalty: 0.6
+  presence_penalty: 0.6
+
+vllm_deepseek_r1_distill_qwen_32b_default:
+  api_base: "http://localhost:8001/v1"
+  model: "deepseek-r1-distill-qwen-32b"
+  max_tokens: 6144
+  temperature: 0.7
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+vllm_qwen3_32b_default:
+  api_base: "http://localhost:8001/v1"
+  model: "qwen3-32b"
+  max_tokens: 8192
+  temperature: 0.6
+  top_p: 0.95
+  frequency_penalty: 0.6
+  presence_penalty: 0.5
+
+
+vllm_llama_70b_default:
+  api_base: "http://localhost:8001/v1"
+  model: "llama-70b"
+  max_tokens: 8192
+  temperature: 0.6
+  top_p: 0.95
+  frequency_penalty: 0.6
+  presence_penalty: 0.5
+
+
+vllm_deepseek_r1_default:
+  api_base: "http://localhost:8001/v1"
+  model: "deepseek_r1"
+  max_tokens: 4096
+  temperature: 0.1
+  top_p: 0.95
+  frequency_penalty: 0.6
+  presence_penalty: 0.5
+
+
+vllm_deepseek_v31_thinking_default:
+  api_base: "http://localhost:8001/v1"
+  model: "deepseek_v31"
+  max_tokens: 8192
+  temperature: 0.1
+  top_p: 0.7
+  frequency_penalty: 0.6
+  presence_penalty: 0.5
+  thinking_mode: "true"
+
+
+vllm_deepseek_v31_default:
+  api_base: "http://localhost:8001/v1"
+  model: "deepseek_v31"
+  max_tokens: 8192
+  temperature: 0.1
+  top_p: 0.7
+  frequency_penalty: 0.6
+  presence_penalty: 0.5
+
+
+# MOONSHOT 模型配置
+# kimi-k2-0711-preview 模型，官方推荐 temperature: 0.6
+moonshot_kimi_k2:
+  api_base: "https://api.moonshot.cn/v1"
+  model: "kimi-k2-0711-preview"
+  api_key_env: "AIKG_MOONSHOT_API_KEY"
+  max_tokens: 32768
+  temperature: 0.6
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+
+# kimi-latest 系列模型，官方推荐 temperature: 0.3
+moonshot_kimi_8k:
+  api_base: "https://api.moonshot.cn/v1"
+  model: "moonshot-v1-8k"
+  api_key_env: "AIKG_MOONSHOT_API_KEY"
+  max_tokens: 8192
+  temperature: 0.3
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+
+moonshot_kimi_32k:
+  api_base: "https://api.moonshot.cn/v1"
+  model: "moonshot-v1-32k"
+  api_key_env: "AIKG_MOONSHOT_API_KEY"
+  max_tokens: 32768
+  temperature: 0.3
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+
+moonshot_kimi_128k:
+  api_base: "https://api.moonshot.cn/v1"
+  model: "moonshot-v1-128k"
+  api_key_env: "AIKG_MOONSHOT_API_KEY"
+  max_tokens: 131072
+  temperature: 0.3
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+
+# OpenRouter 模型配置
+openrouter_minimax_m2_free:
+  api_base: "https://openrouter.ai/api/v1"
+  model: "minimax/minimax-m2:free"
+  api_key_env: "AIKG_OPENROUTER_API_KEY"
+  max_tokens: 16384
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+openrouter_deepseek_v31_free:
+  api_base: "https://openrouter.ai/api/v1"
+  model: "deepseek/deepseek-chat-v3.1:free"
+  api_key_env: "AIKG_OPENROUTER_API_KEY"
+  max_tokens: 16384
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+openrouter_gpt_oss_20b_free:
+  api_base: "https://openrouter.ai/api/v1"
+  model: "openai/gpt-oss-20b:free"
+  api_key_env: "AIKG_OPENROUTER_API_KEY"
+  max_tokens: 16384
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+openrouter_glm_45_air_free:
+  api_base: "https://openrouter.ai/api/v1"
+  model: "z-ai/glm-4.5-air:free"
+  api_key_env: "AIKG_OPENROUTER_API_KEY"
+  max_tokens: 16384
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+openrouter_kimi_k2_free:
+  api_base: "https://openrouter.ai/api/v1"
+  model: "moonshotai/kimi-k2:free"
+  api_key_env: "AIKG_OPENROUTER_API_KEY"
+  max_tokens: 16384
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+openrouter_deepseek_r1_0528_free:
+  api_base: "https://openrouter.ai/api/v1"
+  model: "deepseek/deepseek-r1-0528:free"
+  api_key_env: "AIKG_OPENROUTER_API_KEY"
+  max_tokens: 16384
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+openrouter_qwen3_235b_a22b_free:
+  api_base: "https://openrouter.ai/api/v1"
+  model: "qwen/qwen3-235b-a22b:free"
+  api_key_env: "AIKG_OPENROUTER_API_KEY"
+  max_tokens: 16384
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+openrouter_deepseek_v3_0324_free:
+  api_base: "https://openrouter.ai/api/v1"
+  model: "deepseek/deepseek-chat-v3-0324:free"
+  api_key_env: "AIKG_OPENROUTER_API_KEY"
+  max_tokens: 16384
+  temperature: 0.6
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+zhipu_glm_46_default:
+  api_base: "https://open.bigmodel.cn/api/paas/v4"
+  model: "glm-4.6"
+  api_key_env: "AIKG_ZHIPU_API_KEY"
+  max_tokens: 65536
+  temperature: 0.2
+  top_p: 0.9
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  thinking_mode: "disabled"
+
+
+zhipu_glm_46_thinking_default:
+  api_base: "https://open.bigmodel.cn/api/paas/v4"
+  model: "glm-4.6"
+  api_key_env: "AIKG_ZHIPU_API_KEY"
+  max_tokens: 65536
+  temperature: 0.2
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+  thinking_mode: "enabled"
+
+
+zhipu_glm_45_default:
+  api_base: "https://open.bigmodel.cn/api/paas/v4"
+  model: "glm-4.5"
+  api_key_env: "AIKG_ZHIPU_API_KEY"
+  max_tokens: 65536
+  temperature: 0.2
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+
+
+zhipu_glm_45_air_thinking_default:
+  api_base: "https://open.bigmodel.cn/api/paas/v4"
+  model: "glm-4.5-air"
+  api_key_env: "AIKG_ZHIPU_API_KEY"
+  max_tokens: 65536
+  temperature: 0.2
+  top_p: 0.9
+  frequency_penalty: 0.5
+  presence_penalty: 0.5
+  thinking_mode: "enabled"
+
+
+# 默认配置名称
+default_preset: "sflow_ds_r1_default" 
+
+# 硅流平台 Qwen3 Embedding 模型
+sflow_qwen3_embedding_8b:
+  api_base: "https://api.siliconflow.cn/v1"
+  model: "Qwen/Qwen3-Embedding-8B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  dimensions: 1024  # 可选，指定输出维度
+  encoding_format: "float"  # 输出格式：float 或 base64
+
+sflow_qwen3_embedding_4b:
+  api_base: "https://api.siliconflow.cn/v1"
+  model: "Qwen/Qwen3-Embedding-4B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  dimensions: 768
+
+sflow_qwen3_embedding_0.6b:
+  api_base: "https://api.siliconflow.cn/v1"
+  model: "Qwen/Qwen3-Embedding-0.6B"
+  api_key_env: "AIKG_SILICONFLOW_API_KEY"
+  dimensions: 512
+
+# 默认embedding配置
+default_embedding_preset: "sflow_qwen3_embedding_8b"  

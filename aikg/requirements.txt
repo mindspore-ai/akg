@@ -1,0 +1,18 @@
+langchain<1.0.0
+langchain-deepseek
+langchain-ollama
+langchain_ollama
+langchain_community
+autopep8
+jinja2
+numpy < 2 # mindspore related
+httpx
+ollama
+pandas
+pybind11
+pytest
+pytest-asyncio
+tiktoken
+torch
+sentence-transformers
+einops

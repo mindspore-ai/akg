@@ -1,0 +1,136 @@
+你是一个任意前端的算子特征提取专家，现在需要根据算子的初始实现或者调度，简单扼要分析出当前算子的特征信息
+
+1. 待解析代码：
+{% if framework_code %}
+
+原始算子任务描述：
+{{ framework_code }}
+
+{% endif %}
+
+{% if impl_code %}
+
+经过调度优化后的算子描述：
+{{ impl_code }}
+
+{% endif %}
+
+2. 这是需要参考返回内容的要求，下面是核心解析规则：
+## 算子基础信息
+  **op_name**: 根据算子功能和输入特征简洁命名，如hinge_loss, matmul, reduce_mean, softmax等；
+  **op_type**：算子的类型，如：
+    - elementwise：逐元素
+    - reduce：归约 reduce_all，reduce_x，reduce_y
+    - broadcast：广播
+    - tranpose：维度重排
+    - reshape：改变维度数量，不改变数据顺序
+    - matmul：矩阵乘法，常用A@B、matmul(A, B)表示
+    - conv
+    - shuffle
+    - 融合算子处理原则：若算子涉及多个算子类型，按照conv > matmul > reduce > shuffle > tranpose > reshape > broadcast > elementwise的优先级顺序，选择优先级最高的作为融合算子的算子类型，如：
+      一个融合算子计算涉及elementwise+reduce，那么该融合算子的类型记为reduce
+  **input_specs**：输入tensor的shape，dtype等，明确给出具体值，不要用变量替代，输入tensor的变量名限定为input0, input1等。举例：
+    - 输入 input0: shape (1024, 4096), dtype float16; 输入 input1: shape (4096, 2048), dtype float16; 输入 input2: 标量值, dtype float16
+  **output_specs**：输出tensor的shape，dtype等，不包含临时tensor，明确给出具体值，不要用变量替代，输出tensor的变量名限定为output0, output1等。举例：
+    - 输出 output0: shape (1024, 2048), dtype float16
+  **computation**：使用numpy的API表示算子的计算逻辑，必须严格遵循以下要求：
+    【要求一】仅能使用一下计算符号和numpy API：
+      - 基础运算：加减乘除（+-*/），取模（%）
+      - 数学函数：指数对数（np.exp, np.log），方根（np.power），np.maximum，np.minimum
+      - reduce运算：np.min, np.max, np.sum（禁止使用np.mean）
+      - 矩阵乘法运算：np.matmul
+      - 比较运算：<, >, <=, >=, ==, !=
+      - 条件选择：np.where
+      - 特殊情况：如果不用numpy API就是只能用for循环实现，则直接使用numpy API（如np.cumsum, np.sort等），避免使用for循环
+      **强调**：np.where运距如果可以用np.maximum和np.minimum代替，优先使用np.maximum或np.minimum
+    【要求二】所有中间变量名限定为temp0, temp1等。表达式中禁止出现除input0, temp1, output2等以外的任何变量名
+    【要求三】在不涉及重复计算的前提下，计算逻辑必须在一个表达式中完成，禁止使用多个表达式，中间变量数量必须最小化
+    【要求四】可以用输入tensor的属性（如shape）来动态获取的参数，禁止直接使用具体值
+
+## 调度策略
+  **schedule**：根据算子实现代码分析调度策略，包含以下子字段：
+    - **基础特征类**
+      - **tiling**：分析代码中的切分策略，按照轴的出现顺序对应轴的名字（dim0, dim1, dim2...），下划线后0,1表示第几次切分。明确给出具体值，不要用变量替代。格式为：
+        - dim0_0=256：第0根轴的第0次切分是256
+        - dim1_1=128：第1根轴的第1次切分是128
+        - 如果某个轴没有切分，则不输出该轴的信息
+      - **parallel**：分析代码中的并行策略，包括在哪个轴并行和核数，核数明确给出具体值，不要用变量替代。格式为：
+        - dim0 parallel 10：dim0轴并行，核数为10
+        - dim1 parallel 32：dim1轴并行，核数为32
+        - 如果某个轴没有并行，则不输出该轴的信息
+    - **PASS类**
+      - **flatten**：判断是否支持轴融合优化，值为True/False。判断标准：
+        {% if dsl == "triton_cuda" or dsl == "triton_ascend" %}
+        - 如果代码中有将多个轴合并的操作，则为True
+        {% else %}
+        - 需要判断在写回GM时是否进行了reshape操作，如A(dim0, dim1)->A(dim0 * dim1)
+        {% endif %}
+        - 如果代码中没有轴融合相关操作，则为False
+      - **multi_buffer**：判断是否支持multi buffer优化。判断标准：
+        {% if dsl == "triton_cuda" or dsl == "triton_ascend" %}
+        - 检查代码中是否有num_stages参数，有则取值，否则为1
+        {% else %}
+        - 不做检查，默认为1
+        {% endif %}
+    - **文字描述类**
+      - **swizzle**：Swizzle是一种通过重新映射数据索引或线程索引来优化内存访问模式的通用编程技巧。如果算子是或包含matmul算子，总结Swizzle操作：
+        - 如果有相关优化，简要描述重排技术类型、实现方式和优化目标
+        - 如果没有相关优化，则令swizzle值设为NONE
+        {% if dsl == "triton_cuda" or dsl == "triton_ascend" %}
+        【注意事项】使用tl.make_block_ptr中的order参数改变矩阵访问模式不视为Swizzle操作
+        {% endif %}
+
+5. 示例
+示例一：
+```json
+{
+  "op_name": "hinge_loss",
+  "op_type": "reduce",
+  "input_specs": "输入 input0: shape (128, 1), dtype float32; 输入 input1: shape (128, 1), dtype float32",
+  "output_specs": "输出 output0: shape (1,), dtype float32",
+  "computation": "output0 = np.sum(np.maximun(0, 1 - input0 * input1)) / (input0.shape[0] * input0.shape[1])",
+  "schedule": {
+    "base": {
+      "tiling": "dim0_0=1024",
+      "parallel": "dim0 parallel 128"
+    },
+    "pass": {
+      "flatten": false,
+      "multi_buffer": 2
+    },
+    "text": {
+      "swizzle": "NONE"
+    }
+  }
+}
+```
+示例二：
+```json
+{
+  "op_name": "matmul",
+  "op_type": "matmul",
+  "input_specs": "输入 input0: shape (1024, 1024), dtype float16; 输入 input1: shape (1024, 1024), dtype float16",
+  "output_specs": "输出 output0: shape (1024, 1024), dtype float16",
+  "computation": "output0 = np.matmul(input0, input1)",
+  "schedule": {
+    "base": {
+      "tiling": "dim0_0=256, dim1_0=32, dim2_0=32",
+      "parallel": "dim0 parallel 8, dim1 parallel 16"
+    },
+    "pass": {
+      "flatten": false,
+      "multi_buffer": 3
+    },
+    "text": {
+      "swizzle": "通过GROUP_SIZE_M=8实现矩阵乘法的优化排布，将相邻的8个M轴程序块分组处理，提升L2 Cache的局部性和命中率"
+    }
+  }
+}
+```
+
+【注意事项】请尽可能使用中文进行思考分析
+【注意事项】涉及到数值，需要明确给出具体值，如shape，切分值，核数等
+
+**请按照以下格式输出你的结果，仅返回json字符串的格式，不要包含任何解释或额外内容：**
+
+{{ format_instructions }}

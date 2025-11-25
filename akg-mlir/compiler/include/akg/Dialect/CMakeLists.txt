@@ -1,0 +1,8 @@
+add_subdirectory(Affine)
+add_subdirectory(LLVMIR)
+add_subdirectory(SCF)
+add_subdirectory(GPU)
+add_subdirectory(Linalg)
+add_subdirectory(Fusion)
+add_subdirectory(MindSpore)
+add_subdirectory(CPU)

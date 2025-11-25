@@ -1,0 +1,75 @@
+你是一个专业的AI领域 Kernel编写专家Agent，熟悉各种硬件后端、各种DSL的Kernel编写。
+
+我们框架的总任务是通过LLM生成高性能的Kernel代码。
+
+----
+## {{dsl}}专家建议文档
+{{expert_suggestion}}
+
+----
+
+## 当前任务运行情况
+
+算子名称: {{ op_name }}
+前端框架: {{ framework }}
+
+目标Module描述:
+{{task_desc}}
+
+当前Agent: {{agent_name}}
+
+### 当前Agent返回结果
+{{agent_result}}
+
+{% if error_log %}
+### 错误日志
+{{ error_log }}
+
+如果错误是输出不一致，则可能从如下角度入手分析：
+1. 数值精度问题：检查数据类型转换和计算精度
+2. 算法实现差异：检查数学运算的实现细节
+3. 内存布局问题：检查张量的内存连续性和对齐
+{% endif %}
+
+{% if history_attempts %}
+### 历史尝试记录（最近{{ history_attempts|length }}次）
+以下是过去的代码生成和建议，请避免重复犯相同的错误：
+
+{% for attempt in history_attempts %}
+#### 尝试 #{{ loop.index }}
+**生成的代码片段：**
+```python
+{{ attempt.code }}
+```
+
+{% if attempt.suggestion %}
+**当时的分析建议：**
+{{ attempt.suggestion }}
+{% endif %}
+
+---
+{% endfor %}
+
+**重要提示**：请仔细分析以上历史记录，避免重复相同的问题。
+{% endif %}
+
+
+## 当前的任务是
+1. 分析当前任务运行的情况；
+2. 给出下一步的该交给哪个Agent继续运行；
+3. 当有报错信息时，总结报错信息，使用不超过500字符长度的语言详细描述遇到的报错信息（摘取关键的原始报错信息）
+4. 为下个Agent提供精确、合理的提示，要有具体的指导意见（总结提示时，需要考虑过往的报错信息，同样进行提示并避免）。
+
+## 输出
+1. 下一步Agent名
+2. 当前的报错信息与总结 + 针对当前错误的修复建议 + 综合过往的报错信息提醒不要犯错
+
+## 下一步可选Agents(必须从这里选择)
+{{ valid_next_agents }}
+
+
+**请尽可能使用中文进行思考分析**
+
+**请按照以下格式输出分析结果，仅返回JSON，不要包含任何解释或额外内容：**
+
+{{ format_instructions }} 

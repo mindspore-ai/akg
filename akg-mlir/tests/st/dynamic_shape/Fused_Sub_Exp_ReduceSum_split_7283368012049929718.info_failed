@@ -1,0 +1,236 @@
+{
+    "composite": true,
+    "composite_graph": "601.601",
+    "id": 0,
+    "input_desc": [
+        [
+            {
+                "data_type": "float32",
+                "format": "DefaultFormat",
+                "shape": [
+                    32,
+                    12,
+                    -1,
+                    -1
+                ],
+                "tensor_name": "input_0"
+            }
+        ],
+        [
+            {
+                "data_type": "float32",
+                "format": "DefaultFormat",
+                "shape": [
+                    32,
+                    12,
+                    -1,
+                    1
+                ],
+                "tensor_name": "input_1"
+            }
+        ]
+    ],
+    "node_name": "Fused_Sub_Mul_Mul_Add_Softmax_fusion_13911402818667958957_2",
+    "op": "Fused_Sub_Exp_ReduceSum_split_7283368012049929718",
+    "op_desc": [
+        {
+            "attr": [
+                {
+                    "data_type": "bool",
+                    "name": "output_is_dynamic_shape",
+                    "value": true
+                },
+                {
+                    "data_type": "bool",
+                    "name": "input_is_dynamic_shape",
+                    "value": true
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            32,
+                            12,
+                            -1,
+                            -1
+                        ],
+                        "tensor_name": "input_0"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_1",
+                        "shape": [
+                            32,
+                            12,
+                            -1,
+                            1
+                        ],
+                        "tensor_name": "input_1"
+                    }
+                ]
+            ],
+            "name": "Sub",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output_0",
+                    "shape": [
+                        32,
+                        12,
+                        -1,
+                        -1
+                    ],
+                    "tensor_name": "output_0_0"
+                }
+            ],
+            "ptr_address": "Default/Sub-op113_5165"
+        },
+        {
+            "attr": [
+                {
+                    "data_type": "bool",
+                    "name": "output_is_dynamic_shape",
+                    "value": true
+                },
+                {
+                    "data_type": "bool",
+                    "name": "input_is_dynamic_shape",
+                    "value": true
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            32,
+                            12,
+                            -1,
+                            -1
+                        ],
+                        "tensor_name": "output_0_0"
+                    }
+                ]
+            ],
+            "name": "Exp",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output_0",
+                    "shape": [
+                        32,
+                        12,
+                        -1,
+                        -1
+                    ],
+                    "tensor_name": "output_0_1"
+                }
+            ],
+            "ptr_address": "Default/Exp-op114_5166"
+        },
+        {
+            "attr": [
+                {
+                    "data_type": "bool",
+                    "name": "keep_dims",
+                    "value": true
+                },
+                {
+                    "data_type": "bool",
+                    "name": "output_is_dynamic_shape",
+                    "value": true
+                },
+                {
+                    "data_type": "listInt",
+                    "name": "axis",
+                    "value": [
+                        3
+                    ]
+                },
+                {
+                    "data_type": "bool",
+                    "name": "input_is_dynamic_shape",
+                    "value": true
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            32,
+                            12,
+                            -1,
+                            -1
+                        ],
+                        "tensor_name": "output_0_1"
+                    }
+                ]
+            ],
+            "name": "ReduceSum",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output_0",
+                    "shape": [
+                        32,
+                        12,
+                        -1,
+                        1
+                    ],
+                    "tensor_name": "output_0_2"
+                }
+            ],
+            "ptr_address": "Default/ReduceSum-op115_5167"
+        }
+    ],
+    "output_desc": [
+        {
+            "data_type": "float32",
+            "format": "DefaultFormat",
+            "shape": [
+                32,
+                12,
+                -1,
+                -1
+            ],
+            "tensor_name": "output_0_1"
+        },
+        {
+            "data_type": "float32",
+            "format": "DefaultFormat",
+            "shape": [
+                32,
+                12,
+                -1,
+                1
+            ],
+            "tensor_name": "output_0_2"
+        }
+    ],
+    "platform": "AKG",
+    "process": "cpu",
+    "target_info": {
+        "arch": "aarch64",
+        "feature": "neon",
+        "system": "linux"
+    },
+    "version": 1
+}

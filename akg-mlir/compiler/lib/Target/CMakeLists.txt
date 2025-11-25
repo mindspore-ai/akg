@@ -1,0 +1,2 @@
+add_subdirectory(PTX)
+add_subdirectory(MindsporeDialect)

@@ -1,0 +1,82 @@
+你是一个专业的算子草图生成专家，需要将算子任务转换为通用的算子草图。如下为算子草图生成规范指南：
+
+{{ sketch_guide }}
+
+{% if evolve_first_round %}
+## 多种切分示例
+在草图中添加最优切分方式，在后续通过@llm_hint补充更多切分配置
+添加@llm_hint("available_tiling")来提示LLM有更多可选的切分方式，在草图结尾列出available_tiling的具体配置，例如：
+```sketch
+@llm_hint("avaliable_tiling")
+SKETCH
+
+avaliable_tiling:
+BLOCK_SIZE = 256, PARALLEL_NUM = 4
+BLOCK_SIZE = 128, PARALLEL_NUM = 4
+BLOCK_SIZE = 128, PARALLEL_NUM = 8
+```
+{% endif %}
+
+# 当前任务信息
+
+## 任务描述
+{{ task_desc }}
+
+{% if hardware_docs %}
+## {{ arch_name }} 硬件信息
+{{ hardware_docs }}
+{% endif %}
+
+{% if dsl_basic_docs %}
+## {{dsl}} 相关信息（仅供参考，生成的草图应保持DSL无关性）
+{{ dsl_basic_docs }}
+{% endif %}
+
+{% if inspirations %}
+## 进化探索方案
+**重要须知**：下面是一些过往经验生成的草图，以及对应草图生成的代码的性能指标，请参考这些信息，分析可用的优化方案，并生成对应的优化后的草图
+{{ inspirations }}
+请参考上述从进化探索方案中检索到的相关方案草图以及性能指标，分析可用的优化方案，并生成对应的优化后的草图
+一般而言，调整切分方式、修改计算逻辑、调整计算顺序、调整计算精度等，都是可行的优化方案
+请你尽最大努力来完成草图的优化，得到一个计算速度快的高效算子草图
+{% endif %}
+
+{% if handwrite_suggestions %}
+## 手写优化策略与实现参考
+以下是针对类似算子的专家级优化策略和实现，请深入理解这些优化思路并应用到草图设计中：
+
+{% for suggestion in handwrite_suggestions %}
+### 参考案例 {{ loop.index }}: {{ suggestion.name }}
+
+**原始实现：**
+```{{ dsl }}
+{{ suggestion.torch_code }}
+```
+
+**优化后的实现：**
+```{{ dsl }}
+{{ suggestion.triton_code }}
+```
+
+**优化策略与要点：**
+```markdown
+{{ suggestion.improvement }}
+```
+
+---
+{% endfor %}
+
+**重要提示**：请将上述优化策略融入到草图设计中
+{% endif %}
+
+{% if meta_prompts %}
+## 额外优化要点
+在设计草图中考虑以下优化建议：
+{{ meta_prompts }}
+{% endif %}
+
+请严格按照上述指南，为当前任务生成完整的算子设计草图。
+
+**请按照以下格式输出你的结果，仅返回json格式，不要包含任何解释或额外内容：**
+
+{{ format_instructions }}
