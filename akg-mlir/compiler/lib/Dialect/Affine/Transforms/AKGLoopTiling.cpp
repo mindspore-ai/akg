@@ -16,9 +16,10 @@
 
 #include "akg/Dialect/Affine/Transforms/AKGLoopTiling.h"
 
+#include <algorithm>
+#include <iterator>
 #include <memory>
 #include <unordered_set>
-#include <algorithm>
 #include "akg/Dialect/Affine/Analysis/AutoTiling.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -1037,8 +1038,10 @@ void AKGLoopTiling::runNpuOperation() {
   }
   mlir::func::FuncOp funcOp = getOperation();
   auto opType = mlir::CommonUtils::getOperatorType(funcOp);
+  // Use separateNoIf to handle tail blocks with separate for loops instead of if statements
+  // This improves NPU performance by avoiding conditional branches
   if (!isDynamicShape() || opType == mlir::OperatorTemplate::Reduce) {
-    inequalityConvertToIf = true;
+    separateNoIf = true;
   }
   tileEachBand();
   if (useAutoTiling && solver) {
@@ -1134,6 +1137,17 @@ void AKGLoopTiling::runOnOperation() {
     initGraph->setFeature(feature);
     initGraph->setIsDynamicShape(isDynamicShape());
     initGraph->setTilingMode(tilingMode);
+
+    if (target == mlir::kTargetNpu && !this->multiTileSizes.empty()) {
+      mlir::OpBuilder builder(funcOp);
+      SmallVector<Attribute, 4> tileSizeAttrs;
+      tileSizeAttrs.reserve(this->multiTileSizes.size());
+      std::transform(this->multiTileSizes.begin(), this->multiTileSizes.end(),
+                     std::back_inserter(tileSizeAttrs),
+                     [&builder](unsigned size) { return builder.getI32IntegerAttr(size); });
+      funcOp->setAttr("npu.multiTileSizes", builder.getArrayAttr(tileSizeAttrs));
+    }
+
     auto modelGraph = mlir::akg::autotiling::buildModelGraph(initGraph);
     solver = mlir::akg::autotiling::getHeuristicTilingSolver(modelGraph);
     levelToTile = modelGraph->levelToTile;

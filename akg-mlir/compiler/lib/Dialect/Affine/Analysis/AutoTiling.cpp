@@ -22,10 +22,14 @@
 #include "akg/Dialect/Affine/Analysis/Axis.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
+#include "llvm/ADT/SmallVector.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/Attributes.h"
 
 namespace mlir {
 namespace akg {
 namespace autotiling {
+using llvm::SmallVector;
 InitGraphPtr parseIr(Operation *funcOp, const std::vector<SmallVector<affine::AffineForOp, 6>> &bands) {
   auto initGraph = parseIr(bands);
   initGraph->funcOp = funcOp;
@@ -121,6 +125,28 @@ GpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategy
   npuGraph->funcOp = initGraph->funcOp;
   // UniquePrimeCollect(initGraph->funcOp);
   npuGraph->AnalyzeGraphTemplate();
+
+  // Only store if explicitly specified by user, otherwise let TilingStrategy calculate it
+  OpBuilder builder(initGraph->funcOp);
+  if (initGraph->funcOp->hasAttr("npu.multiTileSizes")) {
+    auto arrayAttr = dyn_cast<ArrayAttr>(initGraph->funcOp->getAttr("npu.multiTileSizes"));
+    if (arrayAttr) {
+      SmallVector<unsigned, 4> tileSizes;
+      for (auto attr : arrayAttr) {
+        if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
+          tileSizes.push_back(static_cast<unsigned>(intAttr.getInt()));
+        }
+      }
+      if (!tileSizes.empty()) {
+        SmallVector<Attribute, 4> tileSizeAttrs;
+        tileSizeAttrs.reserve(tileSizes.size());
+        std::transform(tileSizes.begin(), tileSizes.end(), std::back_inserter(tileSizeAttrs),
+                       [&builder](unsigned size) { return builder.getI32IntegerAttr(size); });
+        npuGraph->globalConfigs["npu.multiTileSizes"] = builder.getArrayAttr(tileSizeAttrs);
+      }
+    }
+  }
+
   tilingMgr->addStrategy(std::make_shared<NpuDefaultTileStrategy>());
   tilingMgr->processOn(npuGraph);
   return npuGraph;

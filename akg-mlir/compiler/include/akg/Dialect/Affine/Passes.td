@@ -80,6 +80,8 @@ def AKGAffineLoopTiling : Pass<"akg-affine-loop-tile", "func::FuncOp"> {
     ListOption<"tileSizes", "tile-sizes", "unsigned",
                "List of tile sizes for each perfect nest "
                "(overridden by -tile-size)">,
+    ListOption<"multiTileSizes", "multi-tile-sizes", "unsigned",
+               "List of tile sizes for multi-level tiling">,
   ];
 }
 
