@@ -45,3 +45,4 @@ createVectorTransferTensorizePass();
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_VECTORTRANSFERTENSORIZE_H_
+
