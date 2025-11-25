@@ -142,22 +142,13 @@ static FailureOr<tensor::ExtractSliceOp> buildOneDimensionalExtractSlice(OpBuild
   if (!tensorType || !tensorType.hasStaticShape()) return failure();
 
   unsigned rank = tensorType.getRank();
-  SmallVector<OpFoldResult> offsets, sizes, strides(rank, builder.getIndexAttr(1));
+  SmallVector<OpFoldResult> strides(rank, builder.getIndexAttr(1));
+  SmallVector<OpFoldResult> offsets(indices.begin(), indices.end());
+  SmallVector<OpFoldResult> sizes(rank, builder.getIndexAttr(1));
 
-  for (unsigned dim = 0; dim < rank - 1; ++dim) {
-    if (tensorType.getDimSize(dim) == 1)
-      offsets.push_back(builder.getIndexAttr(0));
-    else if (dim < indices.size())
-      offsets.push_back(indices[dim]);
-    else
-      offsets.push_back(builder.getIndexAttr(0));
-    sizes.push_back(builder.getIndexAttr(1));
-  }
-
-  offsets.push_back(builder.getIndexAttr(0));
   int64_t fullLength = tensorType.getShape().back();
   int64_t length = sliceLength ? static_cast<int64_t>(sliceLength) : fullLength;
-  sizes.push_back(builder.getIndexAttr(length));
+  sizes.back() = builder.getIndexAttr(length);
 
   auto resultTensorType = RankedTensorType::get({length}, tensorType.getElementType());
   return builder.create<tensor::ExtractSliceOp>(loc, resultTensorType, sourceTensor, offsets, sizes, strides);
@@ -246,19 +237,10 @@ static FailureOr<Operation *> convertTransferWriteOp(vector::TransferWriteOp wri
 
   auto destinationTensorType = destinationTensor.getType().cast<RankedTensorType>();
   unsigned rank = destinationTensorType.getRank();
-  SmallVector<OpFoldResult> offsets, sizes, strides(rank, state.builder.getIndexAttr(1));
-
-  for (unsigned dim = 0; dim < rank - 1; ++dim) {
-    if (destinationTensorType.getDimSize(dim) == 1)
-      offsets.push_back(state.builder.getIndexAttr(0));
-    else if (dim < writeOp.getIndices().size())
-      offsets.push_back(writeOp.getIndices()[dim]);
-    else
-      offsets.push_back(state.builder.getIndexAttr(0));
-    sizes.push_back(state.builder.getIndexAttr(1));
-  }
-  offsets.push_back(state.builder.getIndexAttr(0));
-  sizes.push_back(state.builder.getIndexAttr(sliceLength));
+  SmallVector<OpFoldResult> strides(rank, state.builder.getIndexAttr(1));
+  SmallVector<OpFoldResult> sizes(rank, state.builder.getIndexAttr(1));
+  sizes.back() = state.builder.getIndexAttr(sliceLength);
+  SmallVector<OpFoldResult> offsets(writeOp.getIndices().begin(), writeOp.getIndices().end());
 
   auto insertSliceOp = state.builder.create<tensor::InsertSliceOp>(writeOp.getLoc(), sourceSlice, destinationTensor,
                                                                    offsets, sizes, strides);
@@ -427,10 +409,13 @@ struct VectorTransferTensorizePass
     SmallVector<Operation *> workList;
     funcOp.walk([&](Operation *operation) { workList.push_back(operation); });
 
-    for (Operation *operation : workList) {
-      if (isa<func::FuncOp>(operation) || state.operationsToErase.contains(operation)) continue;
-      state.builder.setInsertionPoint(operation);
-      (void)tensorizeOperation(operation, state);
+    for (size_t idx = 0; idx < workList.size(); ++idx) {
+      Operation *op = workList[idx];
+      if (!op || op->getBlock() == nullptr) continue;
+      if (state.operationsToErase.contains(op)) continue;
+      if (isa<func::FuncOp>(op)) continue;
+      state.builder.setInsertionPoint(op);
+      (void)tensorizeOperation(op, state);
     }
 
     auto eraseDeadMarkedOps = [&]() {
