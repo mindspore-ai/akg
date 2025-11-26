@@ -88,6 +88,7 @@ struct TensorizationState {
   OpBuilder builder;
   IRMapping valueMapping;                       // original value → tensor value
   llvm::DenseSet<Operation *> operationsToErase;
+  llvm::DenseSet<const Operation *> invalidatedOps;
 
   void map(Value original, Value tensorized) { valueMapping.map(original, tensorized); }
   void replaceMapping(Value original, Value tensorized) {
@@ -96,6 +97,8 @@ struct TensorizationState {
   }
   Value lookup(Value value) const { return valueMapping.lookupOrNull(value); }
   void markForErasure(Operation *operation) { operationsToErase.insert(operation); }
+  void trackInvalid(Operation *operation) { invalidatedOps.insert(operation); }
+  bool isInvalid(Operation *operation) const { return invalidatedOps.contains(operation); }
 };
 
 //------------------------------------------------------------------------------
@@ -258,6 +261,7 @@ static FailureOr<Operation *> convertTransferWriteOp(vector::TransferWriteOp wri
 
   while (currentLoop) {
     IRRewriter rewriter(currentLoop.getContext());
+    state.trackInvalid(currentLoop.getOperation());
 
     auto newLoop = cast<affine::AffineForOp>(*currentLoop.replaceWithAdditionalYields(
         rewriter, /*initOperand=*/originalInitTensor, /*replaceInitOperandUsesInLoop=*/false,
@@ -411,8 +415,11 @@ struct VectorTransferTensorizePass
 
     for (size_t idx = 0; idx < workList.size(); ++idx) {
       Operation *op = workList[idx];
-      if (!op || op->getBlock() == nullptr) continue;
+      if (!op) continue;
       if (state.operationsToErase.contains(op)) continue;
+      if (state.isInvalid(op)) continue;
+      if (op == funcOp.getOperation()) continue;
+      if (!op->getBlock()) continue;
       if (isa<func::FuncOp>(op)) continue;
       state.builder.setInsertionPoint(op);
       (void)tensorizeOperation(op, state);
