@@ -194,16 +194,6 @@ def get_init_inputs():
 {% for suggestion in handwrite_suggestions %}
 ### 参考案例 {{ loop.index }}: {{ suggestion.name }}
 
-**原始实现：**
-```{{ dsl }}
-{{ suggestion.torch_code }}
-```
-
-**优化后的实现：**
-```{{ dsl }}
-{{ suggestion.triton_code }}
-```
-
 **优化策略与要点：**
 ```markdown
 {{ suggestion.improvement }}

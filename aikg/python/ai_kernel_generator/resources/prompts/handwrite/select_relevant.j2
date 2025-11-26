@@ -13,20 +13,20 @@
 
 ## 候选优化建议文档
 
-以下是所有可用的手写优化建议文档（共 {{ total_count }} 个），包含完整的torch实现、triton实现和优化建议：
+以下是所有可用的手写优化建议文档（共 {{ total_count }} 个），包含完整的任务描述、DSL实现和优化建议：
 
 {% for candidate in candidates %}
 ---
 ### 文档 {{ loop.index }}: {{ candidate.name }}
 
-#### Torch实现
+#### 任务描述
 ```python
-{{ candidate.torch_code }}
+{{ candidate.task_desc }}
 ```
 
-#### Triton实现
+#### DSL实现
 ```python
-{{ candidate.triton_code }}
+{{ candidate.dsl_code }}
 ```
 
 #### 优化建议

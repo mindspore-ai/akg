@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+from pathlib import Path
+from typing import Optional, Dict
+
+logger = logging.getLogger(__name__)
+
 
 def check_backend_arch(backend: str, arch: str):
     """
@@ -187,3 +193,106 @@ def check_task_config(framework: str, backend: str, arch: str, dsl: str):
     
     # 返回规范化后的DSL，供调用者使用
     return normalized_dsl
+
+
+def collect_and_save_all_examples(
+    arch: str,
+    dsl: str,
+    project_root_path: Path,
+    source_dirs: Dict[str, Path],
+) -> Optional[Path]:
+    """
+    汇总所有examples并保存到统一目录 database/all_examples/{arch}/{dsl}
+    
+    此函数将来自不同源目录的示例文件统一复制到目录中，Python文件和其他文件分别保存。
+    - Python文件保存到: database/all_examples/{arch}/{dsl}/code/
+    - 其他文件保存到: database/all_examples/{arch}/{dsl}/docs/
+    
+    Args:
+        arch: 硬件架构名称
+        dsl: DSL类型
+        project_root_path: 项目根路径
+        source_dirs: 源目录字典，格式为 {"prefix": Path("source_dir")}
+                    文件会被复制并重命名为 "{prefix}_{原文件名}"
+                    例如: {"user": Path("user_examples/"), "local": Path("local_examples/")}
+    
+    Returns:
+        Path: 统一保存目录的根路径，如果失败则返回None
+    """
+    if not arch or not dsl:
+        logger.warning("arch或dsl为空，无法汇总示例代码")
+        return None
+    
+    # 创建统一的保存目录
+    base_dir = project_root_path / "database" / "all_examples" / arch / dsl
+    code_dir = base_dir / "code"
+    doc_dir = base_dir / "docs"
+    
+    code_dir.mkdir(parents=True, exist_ok=True)
+    doc_dir.mkdir(parents=True, exist_ok=True)
+    
+    saved_code_count = 0
+    saved_doc_count = 0
+    
+    # 遍历所有源目录
+    for prefix, source_dir in source_dirs.items():
+        if not source_dir or not isinstance(source_dir, Path):
+            logger.warning(f"跳过无效的源目录: {prefix} -> {source_dir}")
+            continue
+            
+        if not source_dir.exists():
+            logger.warning(f"源目录不存在，跳过: {source_dir}")
+            continue
+        
+        try:
+            # 如果是目录，复制其中的所有文件
+            if source_dir.is_dir():
+                for file_path in source_dir.glob("*"):
+                    if not file_path.is_file():
+                        continue
+                    
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            content = f.read().strip()
+                        if content:
+                            # 根据文件扩展名选择目标目录
+                            if file_path.suffix == ".py":
+                                target_dir = code_dir
+                                saved_code_count += 1
+                            else:
+                                target_dir = doc_dir
+                                saved_doc_count += 1
+                            
+                            # 目标文件名：前缀_原文件名
+                            save_path = target_dir / f"{prefix}_{file_path.name}"
+                            with open(save_path, "w", encoding="utf-8") as f:
+                                f.write(content)
+                    except Exception as e:
+                        logger.warning(f"复制文件 {file_path} 失败: {e}")
+            
+            # 如果是单个文件，直接复制
+            elif source_dir.is_file():
+                try:
+                    with open(source_dir, "r", encoding="utf-8") as f:
+                        content = f.read().strip()
+                    if content:
+                        # 根据文件扩展名选择目标目录
+                        if source_dir.suffix == ".py":
+                            target_dir = code_dir
+                            saved_code_count += 1
+                        else:
+                            target_dir = doc_dir
+                            saved_doc_count += 1
+                        
+                        save_path = target_dir / f"{prefix}_{source_dir.name}"
+                        with open(save_path, "w", encoding="utf-8") as f:
+                            f.write(content)
+                except Exception as e:
+                    logger.warning(f"复制文件 {source_dir} 失败: {e}")
+                    
+        except Exception as e:
+            logger.warning(f"处理源目录 {prefix}:{source_dir} 时发生错误: {e}")
+    
+    logger.info(f"汇总完成，共保存 {saved_code_count} 个Python文件到: {code_dir}")
+    logger.info(f"汇总完成，共保存 {saved_doc_count} 个其他文件到: {doc_dir}")
+    return code_dir

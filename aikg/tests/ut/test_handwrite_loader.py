@@ -49,9 +49,12 @@ def mock_loader():
         'file_stem': p['file_stem'],
         'shape_type': p['shape_type'],
         'category': p['category'],
-        'torch_code': f"torch {p['name']}",
-        'triton_code': f"triton {p['name']}",
-        'improvement': f"improve {p['name']}"
+        'task_desc': f"task_desc {p['name']}",
+        'task_desc_path': str(p['torch_file']),
+        'dsl_code': f"dsl_code {p['name']}",
+        'dsl_code_path': str(p['triton_file']),
+        'improvement': f"improve {p['name']}",
+        'improvement_path': str(p['improvement_file'])
     }
     
     return loader
@@ -152,9 +155,10 @@ class TestHandwriteLoaderCore:
             
             assert isinstance(content, dict)
             assert all(k in content for k in ['name', 'file_stem', 'shape_type', 'category', 
-                                               'torch_code', 'triton_code', 'improvement'])
-            assert 'Triton' in content['triton_code']
-            assert 'Torch' in content['torch_code']
+                                               'task_desc', 'task_desc_path', 'dsl_code', 'dsl_code_path', 
+                                               'improvement', 'improvement_path'])
+            assert 'Triton' in content['dsl_code']
+            assert 'Torch' in content['task_desc']
             assert 'Optimization' in content['improvement']
     
     @pytest.mark.asyncio
@@ -261,9 +265,12 @@ class TestWeightedSampling:
             'file_stem': p['file_stem'],
             'shape_type': p['shape_type'],
             'category': p['category'],
-            'torch_code': f"torch {p['name']}",
-            'triton_code': f"triton {p['name']}",
-            'improvement': f"improve {p['name']}"
+            'task_desc': f"task_desc {p['name']}",
+            'task_desc_path': str(p['torch_file']),
+            'dsl_code': f"dsl_code {p['name']}",
+            'dsl_code_path': str(p['triton_file']),
+            'improvement': f"improve {p['name']}",
+            'improvement_path': str(p['improvement_file'])
         }
         
         return loader

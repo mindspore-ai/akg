@@ -124,11 +124,11 @@ class HandwriteLoader:
             data_pair: 数据对字典
             
         Returns:
-            包含name, torch_code, triton_code, improvement的字典，失败返回None
+            包含name, task_desc, dsl_code, improvement及其文件路径的字典，失败返回None
         """
         try:
-            torch_code = data_pair['torch_file'].read_text(encoding='utf-8')
-            triton_code = data_pair['triton_file'].read_text(encoding='utf-8')
+            task_desc = data_pair['torch_file'].read_text(encoding='utf-8')
+            dsl_code = data_pair['triton_file'].read_text(encoding='utf-8')
             improvement = data_pair['improvement_file'].read_text(encoding='utf-8')
             
             return {
@@ -136,9 +136,12 @@ class HandwriteLoader:
                 'file_stem': data_pair['file_stem'],
                 'shape_type': data_pair['shape_type'],
                 'category': data_pair['category'],
-                'torch_code': torch_code,
-                'triton_code': triton_code,
-                'improvement': improvement
+                'task_desc': task_desc,
+                'task_desc_path': str(data_pair['torch_file']),
+                'dsl_code': dsl_code,
+                'dsl_code_path': str(data_pair['triton_file']),
+                'improvement': improvement,
+                'improvement_path': str(data_pair['improvement_file'])
             }
         except Exception as e:
             logger.debug(f"Failed to read pair content for {data_pair['name']}: {e}")
@@ -275,7 +278,7 @@ class HandwriteSampler:
         使用加权随机采样，相关性高的文档被选中概率更大
         
         Returns:
-            采样的建议列表，每个包含name, torch_code, triton_code, improvement等
+            采样的建议列表，每个包含name, task_desc, dsl_code, improvement及其文件路径等
         """
         if self._total_count == 0:
             return []
