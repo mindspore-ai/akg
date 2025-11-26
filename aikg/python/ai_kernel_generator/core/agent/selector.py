@@ -83,9 +83,12 @@ class Selector(AgentBase):
         Args:
             candidates: 候选文档列表，每个元素包含：
                 - name: 文档名称
-                - torch_code: torch代码
-                - triton_code: triton代码
+                - task_desc: 任务描述代码（原torch代码）
+                - task_desc_path: 任务描述代码的文件路径
+                - dsl_code: DSL代码（原triton代码）
+                - dsl_code_path: DSL代码的文件路径
                 - improvement: 优化建议
+                - improvement_path: 优化建议的文件路径
         
         Returns:
             List[str]: 相关文档的名称列表

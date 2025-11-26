@@ -270,8 +270,8 @@ async def run_analysis(
     
     handwrite_suggestions = [{
         'name': example_name,
-        'torch_code': torch_code,
-        'triton_code': triton_reference_code,
+        'task_desc': torch_code,
+        'dsl_code': triton_reference_code,
         'improvement': improvement_doc
     }]
     

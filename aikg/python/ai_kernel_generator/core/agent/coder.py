@@ -21,6 +21,7 @@ from ai_kernel_generator.utils.parser_registry import create_step_parser
 from ai_kernel_generator.utils.hardware_utils import get_hardware_doc
 from ai_kernel_generator.utils.swft_docs_loader import get_swft_docs_content
 from ai_kernel_generator.core.agent.agent_base import AgentBase
+from ai_kernel_generator.core.utils import collect_and_save_all_examples
 from ai_kernel_generator import get_project_root
 
 logger = logging.getLogger(__name__)
@@ -185,9 +186,12 @@ class Coder(AgentBase):
 
         return "\n".join(all_code)
 
-    async def _samples_database_examples(self):
+    async def _samples_database_examples(self, unified_dir: Path = None):
         """
         根据算子特征从Database检索并加载对应的DSL示例代码
+
+        Args:
+            unified_dir: 统一的示例目录路径，如果提供则从该目录读取，否则使用默认的local目录
 
         Returns:
             str: 示例代码内容，如果找不到对应示例则返回空字符串
@@ -199,16 +203,17 @@ class Coder(AgentBase):
 
         all_code = []
 
+        # 确定检索目录：必须提供有效的unified_dir
+        if not unified_dir or not unified_dir.exists():
+            logger.warning(f"统一目录为空或不存在: {unified_dir}，无法检索示例")
+            return ""
+        
+        logger.info(f"从统一目录检索示例: {unified_dir}")
+
+        # 从统一目录读取示例文件
         try:
-            project_root = Path(get_project_root()).parent.parent / "database" / "local"
-            local_dir = Path(project_root) / self.arch / self.dsl
-
-            if not local_dir.exists():
-                logger.warning(f"local示例目录不存在: {local_dir}")
-                return ""
-
             # 查找所有Python文件
-            for file_path in local_dir.glob("*.py"):
+            for file_path in unified_dir.glob("*.py"):
                 # 检查文件名是否包含op_name（不区分大小写）
                 if file_path.stem.lower() in self.op_name.lower():
                     try:
@@ -216,14 +221,15 @@ class Coder(AgentBase):
                             content = f.read().strip()
                             if content:
                                 all_code.append(f"# Python File: {file_path.name}\n{content}\n")
-                                logger.info(f"找到匹配的local示例文件: {file_path}")
+                                logger.info(f"找到匹配的示例文件: {file_path}")
                     except Exception as e:
-                        logger.warning(f"读取local示例文件 {file_path} 时发生错误: {str(e)}")
+                        logger.warning(f"读取示例文件 {file_path} 时发生错误: {str(e)}")
                         continue
 
         except Exception as e:
-            logger.warning(f"从local目录获取示例代码失败: {e}")
+            logger.warning(f"从目录 {unified_dir} 获取示例代码失败: {e}")
 
+        # 从RAG数据库检索示例
         if self.database_config and self.database_config.get("enable_rag", False):
             try:
                 db_system = CoderDatabase(config=self.config)
@@ -330,43 +336,79 @@ class Coder(AgentBase):
             # 对于其他后端，使用父类的标准方法
             return super().load_doc(doc_path)
 
-    async def _select_optimal_examples(self) -> str:
+    async def _select_optimal_examples(self, task_info) -> str:
         """
         智能选择最优的示例代码，避免prompt过长
 
         策略：
-        1. 优先使用database_examples（相关性高）
-        2. 如果database_examples为空或过短，补充user_examples
+        1. 汇总所有示例文件到统一目录（user_examples, local, handwrite_suggestions）
+        2. 使用RAG从统一目录检索最相关的示例代码
         3. 控制总长度，避免prompt过长
 
         Returns:
             str: 选择后的示例代码
         """
-        database_examples = await self._samples_database_examples()
-
-        user_examples = self._load_user_examples()
-
-        # 优先使用database_examples
-        if database_examples:
-            logger.info("使用database_examples作为主要示例代码")
-            return database_examples
-
-        # 如果database_examples为空
-        if user_examples:
-            logger.info("database_examples为空，使用user_examples作为示例代码")
-            # 获取user_examples示例代码
-            # TODO
-            # user_examples_input_data = {
-            #     **self.base_doc,
-            #     "dsl_examples": user_examples
-            # }
-            # if len(user_examples) > 5000:  # 如果dsl示例代码过长，使用llm进行content压缩
-            #     user_examples, _, _ = await self.run_llm(self.user_examples_prompt, user_examples_input_data, self.model_config.get("example_compressor", "default"))
-
-            return user_examples
-
-        # 如果两者都为空，返回空字符串
-        logger.warning("user_examples和database_examples都为空，将不提供示例代码")
+        # 准备源目录字典
+        source_dirs = {}
+        project_root = Path(get_project_root())
+        
+        # 1. 添加 user_examples 源目录
+        try:
+            docs_dir_config = self.config.get('docs_dir', {})
+            if 'coder' in docs_dir_config:
+                coder_docs_dir = docs_dir_config['coder']
+                user_examples_dir = project_root / coder_docs_dir / "examples"
+                if user_examples_dir.exists():
+                    source_dirs["user"] = user_examples_dir
+        except Exception as e:
+            logger.warning(f"无法获取user_examples目录: {e}")
+        
+        # 2. 添加 local 源目录
+        try:
+            local_project_root = project_root.parent.parent / "database" / "local"
+            local_dir = local_project_root / self.arch / self.dsl
+            if local_dir.exists():
+                source_dirs["local"] = local_dir
+        except Exception as e:
+            logger.warning(f"无法获取local目录: {e}")
+        
+        # 3. 处理 handwrite_suggestions
+        handwrite_suggestions = task_info.get("handwrite_suggestions", [])
+        if handwrite_suggestions:
+            try:
+                # 处理每个 suggestion
+                for idx, suggestion in enumerate(handwrite_suggestions):
+                    # 处理 dsl_code_path - 直接添加到源目录
+                    dsl_code_path = suggestion.get("dsl_code_path", "")
+                    if dsl_code_path:
+                        dsl_code_path = Path(dsl_code_path)
+                        if dsl_code_path.exists():
+                            source_dirs[f"handwrite_code_{idx}"] = dsl_code_path
+                    
+                    # 处理 improvement_path - 直接添加到源目录
+                    improvement_path = suggestion.get("improvement_path", "")
+                    if improvement_path:
+                        improvement_path = Path(improvement_path)
+                        if improvement_path.exists():
+                            source_dirs[f"handwrite_docs_{idx}"] = improvement_path        
+                    
+            except Exception as e:
+                logger.warning(f"处理handwrite_suggestions失败: {e}")
+        
+        # 4. 调用 collect_and_save_all_examples 汇总所有示例
+        if source_dirs:
+            unified_dir = collect_and_save_all_examples(
+                arch=self.arch,
+                dsl=self.dsl,
+                project_root_path=project_root,
+                source_dirs=source_dirs
+            )
+            
+            if unified_dir:
+                logger.info(f"成功汇总所有示例到: {unified_dir}")
+                # 5. 使用 _samples_database_examples 从统一目录进行RAG检索
+                database_examples = await self._samples_database_examples(unified_dir=unified_dir)
+                return database_examples
         return ""
 
     async def run(self, task_info: dict) -> Tuple[str, str, str]:
@@ -389,7 +431,7 @@ class Coder(AgentBase):
             api_docs_suitable = await self._generate_api_docs(sketch, conductor_suggestion, task_info)
 
             # 智能选择最优的示例代码
-            dsl_examples = await self._select_optimal_examples()
+            dsl_examples = await self._select_optimal_examples(task_info)
 
             # ============ Hint模式：参数范围已在sketch的"设计适用范围"注释中 ============
             enable_hint_mode = self.config.get("enable_hint_mode", False)
