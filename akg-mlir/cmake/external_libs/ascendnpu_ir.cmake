@@ -24,7 +24,8 @@ akg_add_pkg(ascendnpu_ir
         VER 0.4.0
         HEAD_ONLY bishengir/include
         URL ${AscendNpuIR_URL}
-        MD5 ${AscendNpuIR_MD5})
+        MD5 ${AscendNpuIR_MD5}
+        PATCHES ${CMAKE_SOURCE_DIR}/third-party/patch/ascendnpu-ir/hacc.patch)
 
 execute_process(COMMAND chmod -R +x ${bisheng_ir_ROOT}/bin
                 WORKING_DIRECTORY ${bisheng_ir_ROOT}/bin
