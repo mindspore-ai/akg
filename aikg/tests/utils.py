@@ -427,8 +427,8 @@ def generate_beautiful_test_report(results, config, framework, dsl, backend, arc
     print('=' * 80)
     print(f"📊 总体统计:")
     print(f"   • 测试算子总数: {len(op_stats)}")
-    print(f"   • 通过算子数量: {len(passed_ops)} ✅")
-    print(f"   • 失败算子数量: {len(failed_ops)} ❌")
+    print(f"   • 通过算子数量: {len(passed_ops)} ")
+    print(f"   • 失败算子数量: {len(failed_ops)} ")
     print(f"   • 算子通过率: {len(passed_ops)/len(op_stats)*100:.1f}%")
     print('-' * 80)
 

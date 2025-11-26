@@ -31,6 +31,7 @@
   - [📐 6. Design Documentation](#-6-design-documentation)
     - [Core Framework](#core-framework)
     - [Core Components](#core-components)
+    - [Service Architecture](#service-architecture)
     - [Backend Support](#backend-support)
 
 </details>
@@ -41,6 +42,7 @@ Through LLM-based planning and control of (multi-)agents, AIKG collaboratively a
 Additionally, AIKG provides a rich set of submodules for kernel agents, which enables users to build custom agent tasks.
 
 ## 🗓️ 2. Changelog
+- 2025-11-25: Added service architecture support with the unified `register_worker()` helper (legacy `register_local_worker` / `register_remote_worker` are still available). Always register a Worker (remote via `AIKG_WORKER_URL` or local device list) before calling `evolve`. See [Service Architecture Documentation](./docs/ServerArchitecture.md).
 - 2025-10-14: Added TileLang_CUDA DSL support. See [Benchmark Results](./docs/DSLBenchmarkResults202509.md) for KernelBench Level1 success rates.
 - 2025-09-26: Added CUDA C and C++ DSL support. See [Benchmark Results](./docs/DSLBenchmarkResults202509.md) for KernelBench Level1 success rates.
 - 2025-09-14: KernelBench Level1 kernel generation success rate updated, see [Benchmark Results](./docs/BenchmarkResults202509.md).
@@ -87,8 +89,7 @@ export AIKG_VLLM_API_BASE=http://localhost:8000/v1
 # Other API interfaces. For detailed supported list, please refer to docs/API.md
 export AIKG_XXX_API_KEY=xxx
 
-# Ollama (https://ollama.com/)
-export AIKG_OLLAMA_API_BASE=http://localhost:11434
+...
 ```
 Additional configuration options:
 - **Task Orchestration Plan Configuration**: Declares a task's complete runtime scheme (including `agent_model_config`, `workflow_config_path`, `docs_dir`, etc.). Common plan files: `default_triton_cuda_config.yaml`, `default_triton_ascend_config.yaml`, `vllm_triton_cuda_coderonly_config.yaml`, `vllm_triton_ascend_coderonly_config.yaml`. See [Task Orchestration Plan Configuration](./docs/TaskOrchestrationPlan.md).
@@ -166,6 +167,9 @@ For more getting started steps and parameter notes, please refer to the [Tutoria
 - **[Coder](./docs/Coder.md)** - Code generator
 - **[Verifier](./docs/Verifier.md)** - Verifier
 - **[Conductor](./docs/Conductor.md)** - Task orchestrator
+
+### Service Architecture
+- **[Server Architecture](./docs/ServerArchitecture.md)** - Service architecture documentation, including Client-Server-Worker architecture, WorkerManager load balancing, convenience function usage, etc.
 
 ### Backend Support
 - **[SWFT Backend](./docs/SWFT.md)** - Huawei Atlas inference series backend

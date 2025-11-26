@@ -13,10 +13,12 @@
 # limitations under the License.
 
 import asyncio
+import os
+import argparse
 # 导入evolve函数和必要的模块
 from ai_kernel_generator.core.evolve import evolve
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
-from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+from ai_kernel_generator.core.worker.manager import register_worker
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 from ai_kernel_generator.utils.evolve.runner_manager import RunnerConfig, print_evolve_config, print_evolution_result
@@ -64,9 +66,14 @@ def get_init_inputs():
 '''
 
 
-async def run_torch_evolve_triton():
-    """运行Triton进化示例"""
-
+async def run_torch_evolve_triton(worker_mode="local", worker_url=None):
+    """
+    运行Triton进化示例
+    
+    Args:
+        worker_mode: "local" 或 "remote"，指定使用本地还是远程 Worker
+        worker_url: 当 worker_mode="remote" 时，指定远程 Worker Service 的 URL
+    """
     # 创建配置对象并设置硬编码参数
     config = RunnerConfig()
 
@@ -77,8 +84,8 @@ async def run_torch_evolve_triton():
     config.arch = "a100"
 
     # 进化参数
-    config.max_rounds = 3
-    config.parallel_num = 4
+    config.max_rounds = 2
+    config.parallel_num = 2
 
     # 岛屿模型参数
     config.num_islands = 2
@@ -98,14 +105,51 @@ async def run_torch_evolve_triton():
 
     # 打印配置信息
     print_evolve_config(config.op_name, config)
+    
+    # 打印 Worker 模式
+    print(f"\n{'='*60}")
+    print(f"Worker 模式: {worker_mode.upper()}")
+    if worker_mode == "remote":
+        worker_url = worker_url or os.getenv("AIKG_WORKER_URL")
+        if worker_url:
+            print(f"Remote Worker URL: {worker_url}")
+        else:
+            print(f"Remote Worker URL: 将从环境变量 AIKG_WORKER_URL 读取")
+    print(f"{'='*60}\n")
 
     # 初始化资源池
     task_pool = TaskPool(max_concurrency=config.parallel_num)
-    device_pool = DevicePool(config.device_list)
+    
+    # 根据 worker_mode 设置 worker
+    if worker_mode == "remote":
+        target_worker_url = worker_url or os.getenv("AIKG_WORKER_URL")
+        print(f"🔗 注册 RemoteWorker (url={target_worker_url or 'AIKG_WORKER_URL'})")
+        await register_worker(
+            backend=config.backend,
+            arch=config.arch,
+            worker_url=target_worker_url
+        )
+    else:
+        print(f"🔗 注册 LocalWorker: devices={config.device_list}")
+        await register_worker(
+            backend=config.backend,
+            arch=config.arch,
+            device_ids=config.device_list
+        )
+    print()
 
     # 加载配置并检查环境
     loaded_config = load_config(config_path=config.config_path)
-    check_env_for_task(config.framework, config.backend, config.dsl, loaded_config)
+    
+    # Remote 模式跳过硬件检查
+    is_remote = (worker_mode == "remote")
+    check_env_for_task(
+        config.framework, 
+        config.backend, 
+        config.dsl, 
+        loaded_config,
+        is_remote=is_remote
+    )
 
     # 调用evolve函数
     print("开始进化过程...")
@@ -117,7 +161,6 @@ async def run_torch_evolve_triton():
         backend=config.backend,
         arch=config.arch,
         config=loaded_config,
-        device_pool=device_pool,
         task_pool=task_pool,
         max_rounds=config.max_rounds,
         parallel_num=config.parallel_num,
@@ -132,4 +175,50 @@ async def run_torch_evolve_triton():
 
 
 if __name__ == "__main__":
-    asyncio.run(run_torch_evolve_triton())
+    parser = argparse.ArgumentParser(
+        description="运行 Triton 进化示例",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  # 使用本地 Worker（默认）
+  python run_torch_evolve_triton.py
+  
+  # 使用远程 Worker（通过环境变量）
+  export AIKG_WORKER_URL=http://localhost:9001
+  python run_torch_evolve_triton.py --worker remote
+  
+  # 使用远程 Worker（指定 URL）
+  python run_torch_evolve_triton.py --worker remote --worker-url http://192.168.1.100:9001
+        """
+    )
+    parser.add_argument(
+        "--worker",
+        choices=["local", "remote"],
+        default="local",
+        help="Worker 模式: local (本地) 或 remote (远程)，默认: local"
+    )
+    parser.add_argument(
+        "--worker-url",
+        type=str,
+        default=None,
+        help="远程 Worker Service 的 URL（仅 remote 模式需要）。也可通过环境变量 AIKG_WORKER_URL 设置"
+    )
+    
+    args = parser.parse_args()
+    
+    print("=" * 60)
+    print("Triton 进化示例")
+    print("=" * 60)
+    
+    if args.worker == "remote":
+        worker_url = args.worker_url or os.getenv("AIKG_WORKER_URL")
+        if worker_url:
+            print(f"\n⚠️  Remote Worker 模式")
+            print(f"   确保远程 Worker Service 正在运行: {worker_url}")
+            print(f"   如果使用 SSH 隧道，确保隧道已建立")
+        else:
+            print(f"\n⚠️  Remote Worker 模式")
+            print(f"   请设置环境变量 AIKG_WORKER_URL 或使用 --worker-url 参数")
+        print()
+    
+    asyncio.run(run_torch_evolve_triton(worker_mode=args.worker, worker_url=args.worker_url))

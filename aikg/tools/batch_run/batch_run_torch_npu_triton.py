@@ -13,8 +13,8 @@
 # limitations under the License.
 
 from ai_kernel_generator.config.config_validator import load_config
-from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
+from ai_kernel_generator.core.worker.manager import register_local_worker
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 import asyncio
@@ -101,6 +101,9 @@ async def run_single_task(op_name: str, task_desc: str):
 
     check_env_for_task("torch", "ascend", "triton_ascend", config)
 
+    # 新写法：注册 LocalWorker
+    await register_local_worker([device_id], backend=backend, arch=arch)
+
     task = Task(
         op_name=op_name,
         task_desc=task_desc,
@@ -109,7 +112,6 @@ async def run_single_task(op_name: str, task_desc: str):
         backend="ascend",
         arch="ascend910b4",
         config=config,
-        device_pool=device_pool,
         framework="torch",
         workflow="coder_only_workflow"
     )

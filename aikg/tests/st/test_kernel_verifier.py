@@ -17,6 +17,7 @@ import pytest
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
 from ai_kernel_generator.utils.common_utils import create_log_dir
 from ai_kernel_generator.config.config_validator import load_config
+from ai_kernel_generator.core.worker.manager import register_local_worker, get_worker_manager
 from ..utils import get_device_id
 
 device_id = get_device_id()
@@ -28,7 +29,8 @@ device_id = get_device_id()
 @pytest.mark.ascend
 @pytest.mark.ascend910b4
 @pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_ascend910b4_mindspore(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_ascend910b4_mindspore(op_name):
     framework = "mindspore"
     dsl = "triton_ascend"  # 根据测试场景，这里使用ascend
     backend = "ascend"
@@ -45,6 +47,13 @@ def test_kernel_verifier_ascend910b4_mindspore(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"  # 统一使用 ModelNew
     verifier = KernelVerifier(
         op_name=op_name,
@@ -54,11 +63,12 @@ def test_kernel_verifier_ascend910b4_mindspore(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
 
@@ -68,7 +78,8 @@ def test_kernel_verifier_ascend910b4_mindspore(op_name):
 @pytest.mark.ascend
 @pytest.mark.ascend910b4
 @pytest.mark.parametrize("op_name", ["linear"])
-def test_kernel_verifier_linear_ascend910b4_mindspore(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_linear_ascend910b4_mindspore(op_name):
     """测试linear算子（mindspore + triton_ascend），验证weight随机种子对齐"""
     framework = "mindspore"
     dsl = "triton_ascend"
@@ -86,6 +97,13 @@ def test_kernel_verifier_linear_ascend910b4_mindspore(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"  # 统一使用 ModelNew
     verifier = KernelVerifier(
         op_name=op_name,
@@ -95,11 +113,12 @@ def test_kernel_verifier_linear_ascend910b4_mindspore(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
 
@@ -109,7 +128,8 @@ def test_kernel_verifier_linear_ascend910b4_mindspore(op_name):
 @pytest.mark.ascend
 @pytest.mark.ascend910b4
 @pytest.mark.parametrize("op_name", ["relu","linear"])
-def test_kernel_verifier_ascend910b4_torch(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_ascend910b4_torch(op_name):
     framework = "torch"
     dsl = "triton_ascend"  # 根据测试场景，这里使用ascend
     backend = "ascend"
@@ -126,6 +146,13 @@ def test_kernel_verifier_ascend910b4_torch(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"  # 统一使用 ModelNew
     verifier = KernelVerifier(
         op_name=op_name,
@@ -135,11 +162,12 @@ def test_kernel_verifier_ascend910b4_torch(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
 # ascend310p3
@@ -151,7 +179,8 @@ def test_kernel_verifier_ascend910b4_torch(op_name):
 @pytest.mark.ascend
 @pytest.mark.ascend310p3
 @pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_ascend310p3_mindspore(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_ascend310p3_mindspore(op_name):
     framework = "mindspore"
     dsl = "swft"
     backend = "ascend"
@@ -168,6 +197,13 @@ def test_kernel_verifier_ascend310p3_mindspore(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
@@ -177,11 +213,12 @@ def test_kernel_verifier_ascend310p3_mindspore(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
 
@@ -191,7 +228,8 @@ def test_kernel_verifier_ascend310p3_mindspore(op_name):
 @pytest.mark.ascend
 @pytest.mark.ascend310p3
 @pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_ascend310p3_torch(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_ascend310p3_torch(op_name):
     framework = "torch"
     dsl = "swft"
     backend = "ascend"
@@ -208,6 +246,13 @@ def test_kernel_verifier_ascend310p3_torch(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
@@ -217,11 +262,12 @@ def test_kernel_verifier_ascend310p3_torch(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
 
@@ -231,7 +277,8 @@ def test_kernel_verifier_ascend310p3_torch(op_name):
 @pytest.mark.ascend
 @pytest.mark.ascend310p3
 @pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_ascend310p3_numpy(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_ascend310p3_numpy(op_name):
     framework = "numpy"
     dsl = "swft"
     backend = "ascend"
@@ -248,6 +295,13 @@ def test_kernel_verifier_ascend310p3_numpy(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
@@ -257,11 +311,12 @@ def test_kernel_verifier_ascend310p3_numpy(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
 # a100
@@ -273,7 +328,8 @@ def test_kernel_verifier_ascend310p3_numpy(op_name):
 @pytest.mark.cuda
 @pytest.mark.a100
 @pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_a100(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_a100(op_name):
     framework = "torch"
     dsl = "triton_cuda"  # cuda backend 使用 triton_cuda
     backend = "cuda"
@@ -290,6 +346,13 @@ def test_kernel_verifier_a100(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"  # 使用ModelNew而不是函数名
     verifier = KernelVerifier(
         op_name=op_name,
@@ -299,11 +362,12 @@ def test_kernel_verifier_a100(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
 # v100
@@ -315,7 +379,8 @@ def test_kernel_verifier_a100(op_name):
 @pytest.mark.cuda
 @pytest.mark.v100
 @pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_v100(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_v100(op_name):
     framework = "torch"
     dsl = "triton_cuda"  # cuda backend 使用 triton_cuda
     backend = "cuda"
@@ -332,6 +397,13 @@ def test_kernel_verifier_v100(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
@@ -341,11 +413,12 @@ def test_kernel_verifier_v100(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
 
@@ -357,7 +430,8 @@ def test_kernel_verifier_v100(op_name):
 @pytest.mark.ascend910b4
 @pytest.mark.profiling
 @pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
     framework = "mindspore"
     dsl = "triton_ascend"  # 根据测试场景，这里使用ascend
     backend = "ascend"
@@ -374,6 +448,13 @@ def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_profiling_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"  # 统一使用 ModelNew
     verifier = KernelVerifier(
         op_name=op_name,
@@ -384,13 +465,14 @@ def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
 
     # 先进行验证，确保验证通过
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
     # 进行性能分析
@@ -398,8 +480,8 @@ def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    result = verifier.run_profile(
-        current_step=0, device_id=device_id, profile_settings=profile_settings)
+    result = await verifier.run_profile(
+        task_info, current_step=0, device_id=device_id, profile_settings=profile_settings)
     gen_time = result['gen_time']
     base_time = result['base_time']
     speedup = result['speedup']
@@ -416,7 +498,8 @@ def test_kernel_verifier_profiling_ascend910b4_mindspore(op_name):
 @pytest.mark.ascend910b4
 @pytest.mark.profiling
 @pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
     framework = "torch"
     dsl = "triton_ascend"  # 根据测试场景，这里使用ascend
     backend = "ascend"
@@ -433,6 +516,13 @@ def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_profiling_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"  # 统一使用 ModelNew
     verifier = KernelVerifier(
         op_name=op_name,
@@ -443,13 +533,14 @@ def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
 
     # 先进行验证，确保验证通过
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
     # 进行性能分析
@@ -457,8 +548,8 @@ def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    result = verifier.run_profile(
-        current_step=0, device_id=device_id, profile_settings=profile_settings)
+    result = await verifier.run_profile(
+        task_info, current_step=0, device_id=device_id, profile_settings=profile_settings)
     gen_time = result['gen_time']
     base_time = result['base_time']
     speedup = result['speedup']
@@ -477,7 +568,8 @@ def test_kernel_verifier_profiling_ascend910b4_torch(op_name):
 @pytest.mark.a100
 @pytest.mark.profiling
 @pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_profiling_a100(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_profiling_a100(op_name):
     framework = "torch"
     dsl = "triton_cuda"  # cuda backend 使用 triton_cuda
     backend = "cuda"
@@ -494,6 +586,13 @@ def test_kernel_verifier_profiling_a100(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_profiling_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"  # 统一使用 ModelNew
     verifier = KernelVerifier(
         op_name=op_name,
@@ -504,13 +603,14 @@ def test_kernel_verifier_profiling_a100(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
 
     # 先进行验证，确保验证通过
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
     # 进行性能分析
@@ -518,8 +618,8 @@ def test_kernel_verifier_profiling_a100(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    result = verifier.run_profile(
-        current_step=0, device_id=device_id, profile_settings=profile_settings)
+    result = await verifier.run_profile(
+        task_info, current_step=0, device_id=device_id, profile_settings=profile_settings)
     gen_time = result['gen_time']
     base_time = result['base_time']
     speedup = result['speedup']
@@ -536,7 +636,8 @@ def test_kernel_verifier_profiling_a100(op_name):
 @pytest.mark.ascend910b4
 @pytest.mark.profiling
 @pytest.mark.parametrize("op_name", ["linear"])
-def test_kernel_verifier_profiling_linear_ascend910b4_torch(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_profiling_linear_ascend910b4_torch(op_name):
     """Linear profiling test for ascend910b4_torch"""
     framework = "torch"
     dsl = "triton_ascend"
@@ -554,6 +655,12 @@ def test_kernel_verifier_profiling_linear_ascend910b4_torch(op_name):
     with open(kernel_path, "r", encoding="utf-8") as f:
         kernel_code = f.read()
 
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"
     verifier = KernelVerifier(
         op_name=op_name,
@@ -564,13 +671,14 @@ def test_kernel_verifier_profiling_linear_ascend910b4_torch(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
 
     # 先进行验证，确保验证通过
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
     # 进行性能分析
@@ -578,8 +686,8 @@ def test_kernel_verifier_profiling_linear_ascend910b4_torch(op_name):
         "run_times": 50,
         "warmup_times": 5
     }
-    result = verifier.run_profile(
-        current_step=0, device_id=device_id, profile_settings=profile_settings)
+    result = await verifier.run_profile(
+        task_info, current_step=0, device_id=device_id, profile_settings=profile_settings)
     gen_time = result['gen_time']
     base_time = result['base_time']
     speedup = result['speedup']
@@ -598,7 +706,8 @@ def test_kernel_verifier_profiling_linear_ascend910b4_torch(op_name):
 @pytest.mark.x86_64
 @pytest.mark.profiling
 @pytest.mark.parametrize("op_name", ["relu"])
-def test_kernel_verifier_profiling_cpp(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_profiling_cpp(op_name):
     framework = "torch"
     dsl = "cpp"
     backend = "cpu"
@@ -615,6 +724,13 @@ def test_kernel_verifier_profiling_cpp(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_profiling_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"  # 使用ModelNew而不是函数名
     verifier = KernelVerifier(
         op_name=op_name,
@@ -625,13 +741,14 @@ def test_kernel_verifier_profiling_cpp(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
 
     # 先进行验证，确保验证通过
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
     # # 进行性能分析
@@ -639,7 +756,7 @@ def test_kernel_verifier_profiling_cpp(op_name):
     #     "run_times": 50,
     #     "warmup_times": 5
     # }
-    # gen_time, base_time, speedup = verifier.run_profile(
+    # gen_time, base_time, speedup = await verifier.run_profile(
     #     current_step=0, device_id=device_id, profile_settings=profile_settings)
     # print(f"orig performance is {base_time:.2f} us")
     # print(f"aikg performance is {gen_time:.2f} us")
@@ -652,7 +769,8 @@ def test_kernel_verifier_profiling_cpp(op_name):
 @pytest.mark.cpu
 @pytest.mark.x86_64
 @pytest.mark.parametrize("op_name", ["linear"])
-def test_kernel_verifier_linear_cpp(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_linear_cpp(op_name):
     """测试linear算子，验证weight随机种子对齐"""
     framework = "torch"
     dsl = "cpp"
@@ -670,6 +788,13 @@ def test_kernel_verifier_linear_cpp(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"  # 使用ModelNew而不是函数名
     verifier = KernelVerifier(
         op_name=op_name,
@@ -680,11 +805,12 @@ def test_kernel_verifier_linear_cpp(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
 
 
@@ -694,7 +820,8 @@ def test_kernel_verifier_linear_cpp(op_name):
 @pytest.mark.cuda
 @pytest.mark.a100
 @pytest.mark.parametrize("op_name", ["linear"])
-def test_kernel_verifier_linear_triton_cuda(op_name):
+@pytest.mark.asyncio
+async def test_kernel_verifier_linear_triton_cuda(op_name):
     """测试linear算子（triton_cuda），验证weight随机种子对齐"""
     framework = "torch"
     dsl = "triton_cuda"
@@ -712,6 +839,13 @@ def test_kernel_verifier_linear_triton_cuda(op_name):
         kernel_code = f.read()
 
     log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{dsl}_test')
+    
+    # 新写法：注册 LocalWorker 并从 WorkerManager 获取
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     impl_func_name = "ModelNew"  # 使用ModelNew而不是函数名
     verifier = KernelVerifier(
         op_name=op_name,
@@ -722,9 +856,10 @@ def test_kernel_verifier_linear_triton_cuda(op_name):
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     task_info = {}
     task_info["coder_code"] = kernel_code
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"

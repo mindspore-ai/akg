@@ -118,6 +118,33 @@ def gemv(N, K, BLOCK_N, BLOCK_K):
 - **类型转换**：在计算时进行精度转换
 - **⚠️ 注意**：避免使用 `T.get_thread_binding()`，推荐使用 `T.Parallel()`
 
+## 内核调用约定（out_idx）
+
+TileLang 的 `@tilelang.jit` / `tilelang.compile` 可以通过 `out_idx` 指定哪些张量属于输出。一旦设置了 `out_idx`，运行内核时只需要传入 `prim_func` 中定义的输入张量，输出会由 TileLang 自动创建并按顺序返回——这也是官方测试（如 `parallel_elementwise_static`）的默认写法。
+
+```python
+@tilelang.jit(out_idx=[1])
+def parallel_elementwise_static(length=256):
+    @T.prim_func
+    def main(A: T.Tensor((length,), "float32"),
+             B: T.Tensor((length,), "float32")):
+        with T.Kernel(1, threads=length) as _:
+            for i in T.Parallel(length):
+                B[i] = A[i] + 1.0
+    return main
+
+kernel = parallel_elementwise_static()
+result = kernel(data)              # ✅ 只传输入 data；TileLang 根据 out_idx 返回输出
+```
+
+常见错误是把 TileLang 内核当成 CUDA C 来写，例如先 `torch.empty_like` 一个输出张量，再调用 `kernel(x, y)`。由于 `prim_func` 只声明了两个输入（`A` / `B`），而你传了输入 `x` + 预分配的 `y` + out_idx 自动输出 `y`，运行时就会报 `ValueError: Expected 2 inputs, got 3 with 2 inputs and 1 outputs`。
+
+> **实践建议**
+>
+> 1. **推荐方式**：保留 `out_idx`，调用时只传输入；返回值用 Python 解包即可，支持多输出（`out1, out2 = kernel(x, y)`）。
+> 2. **确需手动管理输出**：不要设置 `out_idx`，并在 `prim_func` 里把输出张量也声明为输入参数，保证“定义多少参数就传多少参数”。
+> 3. **提示/示例中强调**：在 KernelBench tilelang_cuda 任务的 prompt、文档和示例里明确提醒“使用 out_idx 时不要额外传输出张量”，可以减少 AIGC 生成代码时的参数数量错误。
+
 
 ## 高级编程模式
 

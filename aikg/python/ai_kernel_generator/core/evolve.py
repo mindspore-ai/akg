@@ -17,6 +17,7 @@ import logging
 from typing import Dict, Any
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+from ai_kernel_generator.core.worker.manager import get_worker_manager
 from ai_kernel_generator.utils.collector import get_collector
 
 # 导入处理器和配置
@@ -41,8 +42,8 @@ async def evolve(
     backend: str,
     arch: str,
     config: dict,
-    device_pool: DevicePool,
     task_pool: TaskPool,
+    device_pool: DevicePool = None,
     max_rounds: int = 1,
     parallel_num: int = 1,
     # 岛屿模型参数（可选）
@@ -62,7 +63,7 @@ async def evolve(
         backend: 后端名称（如"ascend", "cuda"）
         arch: 架构名称（如"ascend910b4", "a100"）
         config: 配置字典
-        device_pool: 设备池
+        device_pool: 设备池（可选，用于向后兼容）
         task_pool: 任务池
         max_rounds: 最大进化轮数
         parallel_num: 每轮并行任务数
@@ -77,6 +78,48 @@ async def evolve(
     """
     # ========== 1. 创建运行时配置 ==========
     runtime_config = create_runtime_config(locals())
+
+    # 兼容逻辑：如果有 device_pool，自动注册到全局 WorkerManager
+    temp_worker = None
+    if device_pool:
+        import warnings
+        warnings.warn(
+            "⚠️  [DEPRECATED] 直接传递 device_pool 给 evolve() 是旧写法，将在未来版本移除。\n"
+            "推荐的新写法：\n"
+            "  1. 注册 LocalWorker 到 WorkerManager（一行代码）：\n"
+            "     from ai_kernel_generator.core.worker.manager import register_local_worker\n"
+            "     \n"
+            "     await register_local_worker([0, 1, 2, 3], backend='cuda', arch='a100')\n"
+            "  2. 调用 evolve 时不传 device_pool：\n"
+            "     await evolve(\n"
+            "         ...,\n"
+            "         device_pool=None,  # 不再传递\n"
+            "         ...\n"
+            "     )\n"
+            "参考示例：examples/run_torch_evolve_triton.py",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        logger.warning("⚠️  检测到使用旧的 device_pool 参数，请参考日志中的警告信息迁移到新写法")
+        
+        from ai_kernel_generator.core.worker.local_worker import LocalWorker
+        
+        # 创建临时 LocalWorker 并注册
+        temp_worker = LocalWorker(device_pool, backend=backend)
+        capacity = len(device_pool.devices) if hasattr(device_pool, 'devices') else 1
+        await get_worker_manager().register(
+            temp_worker, backend=backend, arch=arch, 
+            capacity=capacity
+        )
+    
+    manager = get_worker_manager()
+    if not await manager.has_worker(backend=backend, arch=arch):
+        raise RuntimeError(
+            f"未检测到可用的 Worker。请先注册 Worker 后再调用 evolve：\n"
+            f"  from ai_kernel_generator.core.worker.manager import register_worker\n"
+            f"  await register_worker(backend='{backend}', arch='{arch}', device_ids=[0])\n"
+            f"或设置环境变量 AIKG_WORKER_URL 指向远程 Worker 服务。"
+        )
     
     # ========== 2. 初始化阶段 ==========
     init_processor = InitializationProcessor(runtime_config)

@@ -18,7 +18,7 @@
 用法:
   python run_single_evolve.py                                    # 使用默认配置
   python run_single_evolve.py <config_file>                      # 使用YAML配置文件
-  python run_single_evolve.py <op_name> <task_file> <device> [config_file]  # 批量runner模式
+  python run_single_evolve.py <op_name> <task_file> [config_file]  # 批量runner模式
 """
 
 import sys
@@ -37,6 +37,7 @@ from ai_kernel_generator.utils.evolve.runner_manager import (
     run_single_evolve,
     print_evolve_config
 )
+from ai_kernel_generator.core.worker.manager import register_worker
 
 
 def print_usage():
@@ -123,7 +124,7 @@ def parse_batch_runner_mode(args):
     except Exception as e:
         print(f"警告: 无法加载配置文件 {config_path}: {e}")
 
-    # 设置设备
+    # 设置设备 (仅用于注册 Worker)
     config.device_list = [device]
 
     # 读取任务描述文件
@@ -145,6 +146,18 @@ def parse_batch_runner_mode(args):
             print(f"父代选择概率: {config.parent_selection_prob}")
 
     return op_name, task_desc, config
+
+
+async def run_wrapper(op_name, task_desc, config):
+    """包装运行函数，负责注册Worker"""
+    # 注册 Worker
+    await register_worker(
+        backend=config.backend,
+        arch=config.arch,
+        device_ids=config.device_list
+    )
+    
+    return await run_single_evolve(op_name=op_name, task_desc=task_desc, evolve_config=config)
 
 
 def main():
@@ -169,7 +182,7 @@ def main():
 
     # 运行任务
     try:
-        result = asyncio.run(run_single_evolve(op_name=op_name, task_desc=task_desc, evolve_config=config))
+        result = asyncio.run(run_wrapper(op_name=op_name, task_desc=task_desc, config=config))
 
         if result:
             print("\n进化式算子生成成功完成!")

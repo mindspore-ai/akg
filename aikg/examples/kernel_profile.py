@@ -47,8 +47,10 @@ Kernel性能对比工具
 
 import os
 import argparse
+import asyncio
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
 from ai_kernel_generator.config.config_validator import load_config
+from ai_kernel_generator.core.worker.manager import register_local_worker, get_worker_manager
 
 
 def get_custom_op_torch_code(torch_code_path=None):
@@ -143,7 +145,7 @@ def custom_op_triton_torch(x):
 '''
 
 
-def run_kernel_profile(
+async def run_kernel_profile(
     op_name="custom_op",
     op_task_str=None,
     kernel_code=None,
@@ -173,10 +175,18 @@ def run_kernel_profile(
     Returns:
         tuple: (gen_time, base_time, speedup) 生成代码性能、原始性能、加速比
     """
+    # 新写法：注册 LocalWorker
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    
+    # 从 WorkerManager 获取 worker
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}. Please register a worker first.")
+    
     # 加载配置
     config = load_config(dsl)
     
-    # 创建验证器
+    # 创建验证器，传递 worker
     impl_func_name = f"{op_name}_{dsl}_{framework}"
     verifier = KernelVerifier(
         op_name=op_name,
@@ -187,14 +197,15 @@ def run_kernel_profile(
         backend=backend,
         arch=arch,
         impl_func_name=impl_func_name,
-        config=config
+        config=config,
+        worker=worker
     )
     
     task_info = {"coder_code": kernel_code}
     
     # 先进行验证，确保验证通过
     print(f"正在验证 {op_name} kernel的正确性...")
-    result, error_log = verifier.run(task_info, device_id=device_id)
+    result, error_log = await verifier.run(task_info, device_id=device_id)
     if not result:
         print(f"❌ 验证失败: {error_log}")
         return None, None, None
@@ -209,8 +220,8 @@ def run_kernel_profile(
         "run_times": run_times,
         "warmup_times": warmup_times
     }
-    result = verifier.run_profile(
-        current_step=0, device_id=device_id, profile_settings=profile_settings
+    result = await verifier.run_profile(
+        task_info, current_step=0, device_id=device_id, profile_settings=profile_settings
     )
     gen_time = result['gen_time']
     base_time = result['base_time']
@@ -247,7 +258,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+async def main():
     """主函数 - 自定义算子性能测试（示例：ReLU）"""
     # 解析命令行参数
     args = parse_args()
@@ -283,7 +294,7 @@ def main():
     print(f"🔄 运行次数: {args.run_times}, 预热次数: {args.warmup_times}")
     
     # 运行性能测试
-    run_kernel_profile(
+    await run_kernel_profile(
         op_name=args.op_name,
         op_task_str=op_task_str,
         kernel_code=kernel_code,
@@ -298,5 +309,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 

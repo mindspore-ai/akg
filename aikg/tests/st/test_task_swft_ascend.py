@@ -1,7 +1,7 @@
 import pytest
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
-from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+from ai_kernel_generator.core.worker.manager import register_local_worker
 from ..utils import (
     get_kernelbench_op_name, get_kernelbench_task_desc, add_op_prefix,
     process_task_results, get_device_id
@@ -26,10 +26,13 @@ async def test_parallel_task_swft_ascend():
     backend = "ascend"
     arch = "ascend310p3"
     task_pool = TaskPool()
-    device_pool = DevicePool([device_id])
+    # device_pool = DevicePool([device_id])  # 旧写法
     config = load_config(dsl)
 
     check_env_for_task(framework, backend, dsl, config)
+
+    # 新写法：注册 LocalWorker
+    await register_local_worker([device_id], backend=backend, arch=arch)
 
     benchmark_name = get_kernelbench_op_name([19, 20], framework=framework)
 
@@ -48,7 +51,6 @@ async def test_parallel_task_swft_ascend():
             backend=backend,
             arch=arch,
             config=config,
-            device_pool=device_pool,
             framework=framework,
             workflow="coder_only_workflow"
         )

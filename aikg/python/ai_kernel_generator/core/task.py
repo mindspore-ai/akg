@@ -26,6 +26,7 @@ from ai_kernel_generator.core.agent.designer import Designer
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
 from ai_kernel_generator.utils.workflow_manager import WorkflowManager
 from ai_kernel_generator.utils.collector import get_collector
+from ai_kernel_generator.core.worker.manager import get_worker_manager
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +44,8 @@ class Task:
                  arch: str,
                  dsl: str,
                  config: dict,
-                 device_pool: DevicePool,
-                 framework: str,
+                 device_pool: Optional[DevicePool] = None,
+                 framework: str = "torch",
                  task_type="precision_only",
                  workflow: Optional[str] = None,
                  inspirations: Optional[List[str]] = None,
@@ -61,7 +62,7 @@ class Task:
             arch (str): 架构名称。
             dsl (str): 实现类型。
             config (dict): 配置agent_mode_config。
-            device_pool: 设备池。
+            device_pool: 设备池（可选，用于向后兼容）。
             framework (str): 框架名称。
             task_type (str, optional): 任务类型, 默认为"precision_only"。
             workflow (str, optional): workflow名称，可以是文件名或完整路径。
@@ -92,6 +93,32 @@ class Task:
 
         # 统一保存config，后续向下传递
         self.config = config
+
+        # 兼容旧代码：如果提供了device_pool，创建私有Worker
+        self._private_worker = None
+        if self.device_pool:
+            import warnings
+            warnings.warn(
+                "⚠️  [DEPRECATED] 直接传递 device_pool 给 Task() 是旧写法，将在未来版本移除。\n"
+                "推荐的新写法：\n"
+                "  1. 注册 LocalWorker 到 WorkerManager（一行代码）：\n"
+                "     from ai_kernel_generator.core.worker.manager import register_local_worker\n"
+                "     \n"
+                "     await register_local_worker([0], backend='cuda', arch='a100')\n"
+                "  2. 创建 Task 时不传 device_pool：\n"
+                "     task = Task(\n"
+                "         ...,\n"
+                "         # device_pool=device_pool,  # 不再传递\n"
+                "         ...\n"
+                "     )\n"
+                "参考示例：examples/run_torch_npu_triton_single.py",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            logger.warning("⚠️  检测到使用旧的 device_pool 参数，请参考日志中的警告信息迁移到新写法")
+            
+            from ai_kernel_generator.core.worker.local_worker import LocalWorker
+            self._private_worker = LocalWorker(self.device_pool, backend=self.backend)
 
         # 优先使用传入的workflow参数，否则使用config中的workflow_config_path
         if workflow:
@@ -241,23 +268,37 @@ class Task:
                         )
 
                     elif current_agent == "verifier":
-                        device_id = await self.device_pool.acquire_device()
+                        # 获取 Worker (兼容私有Worker和全局WorkerManager)
+                        worker = None
+                        if getattr(self, '_private_worker', None):
+                            worker = self._private_worker
+                        else:
+                            worker = await get_worker_manager().select(
+                                backend=self.backend,
+                                arch=self.arch
+                            )
+                            
+                        if not worker:
+                            raise RuntimeError(f"No available worker for backend={self.backend}, arch={self.arch}. Please register a worker first.")
+                        
+                        self.verifier.worker = worker
+                        
                         try:
                             current_step = len(self.conductor.trace.trace_list)
-                            loop = asyncio.get_running_loop()
-                            # 传递task_info而不是parsed_code
-                            verify_res, verify_log = await loop.run_in_executor(
-                                None,
-                                self.verifier.run,
-                                self.conductor.task_info, current_step, device_id
+                            
+                            # 直接异步调用 verifier.run
+                            # device_id 使用默认值 -1，verifier 内部会自动管理：
+                            # - LocalWorker: 从 device_pool 获取设备
+                            # - RemoteWorker: 使用 0 作为占位符（远程服务器管理设备）
+                            verify_res, verify_log = await self.verifier.run(
+                                self.conductor.task_info, current_step
                             )
+                            
                             profile_res = {}
                             if verify_res and self.task_type == "profile" and self.backend in ["ascend", "cuda"]:
                                 profile_settings = self.config.get("profile_settings", {})
-                                profile_res = await loop.run_in_executor(
-                                    None,
-                                    self.verifier.run_profile,
-                                    current_step, device_id, profile_settings
+                                profile_res = await self.verifier.run_profile(
+                                    self.conductor.task_info, current_step, profile_settings=profile_settings
                                 )
 
                             self.conductor.record_agent_execution(
@@ -267,7 +308,9 @@ class Task:
                                 profile_res=profile_res
                             )
                         finally:
-                            await self.device_pool.release_device(device_id)
+                            # 只有从 Manager 借来的才需要还
+                            if not getattr(self, '_private_worker', None) and worker:
+                                await get_worker_manager().release(worker)
                     else:
                         raise ValueError(f"Unsupported agent: {current_agent}")
 

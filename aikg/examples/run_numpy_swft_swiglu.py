@@ -13,9 +13,9 @@
 # limitations under the License.
 
 from ai_kernel_generator.config.config_validator import load_config
-from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.task import Task
+from ai_kernel_generator.core.worker.manager import register_local_worker
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 import asyncio
 import os
@@ -67,7 +67,10 @@ async def run_numpy_swft_single():
     task_desc = get_task_desc()
 
     task_pool = TaskPool()
-    device_pool = DevicePool([0])
+    
+    # 新写法：一行代码注册 LocalWorker
+    await register_local_worker([0], backend="ascend", arch="ascend310p3")
+    
     config = load_config("swft")  # or load_config("/your-path-to-config/xxx_config.yaml")
     # config = load_config(config_path="./python/ai_kernel_generator/config/default_swft_config.yaml")
 
@@ -81,7 +84,6 @@ async def run_numpy_swft_single():
         backend="ascend",
         arch="ascend310p3",
         config=config,
-        device_pool=device_pool,
         framework="numpy",
         workflow="coder_only_workflow"
     )
