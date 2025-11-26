@@ -169,6 +169,7 @@ class ModelNew(nn.Cell):
 {% endif %}
 ```
 {% endif %}
+**注意**：以上self属性只针对于需要用到内置参数的实现，对于使用get_inputs或get_init_inputs传入的参数，需要直接调用。
 
 2. 对于无参数的算子（如ReLU），`__init__`可以为空：
 ```python
@@ -216,6 +217,7 @@ class ModelNew(nn.Cell):
         return xxx_kernel(x, self.weight, self.bias)
 {% endif %}
 ```
+**注意**：以上self属性只针对于需要用到内置参数的实现，对于使用get_inputs或get_init_inputs传入的参数，需要直接调用。
 
 4. 如果生成的代码是函数形式（兼容旧代码），可以在ModelNew的forward/construct中直接调用：
 ```python
