@@ -13,13 +13,14 @@
 # limitations under the License.
 
 """
-进化算法工具函数集合
+进化核心功能模块
+
+包含实现的保存/加载、采样策略和岛屿模型逻辑
 """
 
 import os
 import json
 import random
-import uuid
 import logging
 from typing import List, Dict, Any, Tuple
 from pathlib import Path
@@ -27,104 +28,9 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def generate_unique_id() -> str:
-    """生成唯一ID
-
-    Returns:
-        str: 唯一ID字符串
-    """
-    return str(uuid.uuid4())
-
-
-def pretty_print_results(results: List[Tuple[str, bool]]):
-    """打印进化结果
-
-    Args:
-        results: 任务执行结果列表
-    """
-    logger.info("=" * 60)
-    logger.info("EVOLVE ROUND RESULTS")
-    logger.info("=" * 60)
-
-    success_count = 0
-    total_count = len(results)
-
-    for op_name, success in results:
-        status = "✓ SUCCESS" if success else "✗ FAILED"
-        logger.info(f"{op_name}: {status}")
-        if success:
-            success_count += 1
-
-    success_rate = success_count / total_count if total_count > 0 else 0
-    logger.info("-" * 60)
-    logger.info(f"Success Rate: {success_count}/{total_count} ({success_rate:.2%})")
-    logger.info("=" * 60)
-
-
-def load_meta_prompts(dsl: str, parallel_num: int) -> list[str]:
-    """
-    返回长度为 parallel_num 的 meta prompt 列表。
-
-    Args:
-        dsl: DSL类型（如 "triton_cuda", "triton_ascend", "swft" 等）
-        parallel_num: 并行任务数
-
-    Returns:
-        list[str]: meta prompts 字符串列表
-        ▪ 当parallel_num <= n时：随机不重复选择
-
-        ▪ 当parallel_num > n时：随机重复选择，保证parallel_num条数据
-
-    """
-    try:
-        # 根据DSL类型动态导入对应的meta_prompts
-        if dsl == "triton_ascend":
-            from ai_kernel_generator.resources.docs.triton_ascend_docs.meta_prompts import (
-                triton_meta_prompts,
-            )
-            meta_prompts = triton_meta_prompts
-        elif dsl == "triton_cuda":
-            # triton_cuda 目前可能没有单独的 meta_prompts，使用通用的或跳过
-            logger.warning(f"DSL '{dsl}' does not support meta prompts yet, using empty prompts")
-            return [""] * parallel_num
-        elif dsl == "swft":
-            # 如果swft有meta_prompts，可以在这里添加
-            # from ai_kernel_generator.resources.docs.swft_docs.meta_prompts import swft_meta_prompts
-            # meta_prompts = swft_meta_prompts
-            logger.warning(f"DSL '{dsl}' does not support meta prompts yet")
-            return [""] * parallel_num
-        else:
-            logger.warning(f"DSL '{dsl}' does not support meta prompts yet")
-            return [""] * parallel_num
-
-        assert meta_prompts
-        assert isinstance(
-            meta_prompts, list
-        ), f"{dsl}_meta_prompts should be a list"
-
-        n = len(meta_prompts)
-
-        if parallel_num <= n:
-            # 随机不重复选择parallel_num个
-            return random.sample(meta_prompts, parallel_num)
-        else:
-            # 需要重复选择，保证parallel_num条数据
-            result = []
-            while len(result) < parallel_num:
-                # 每轮随机打乱所有prompts
-                shuffled_prompts = meta_prompts.copy()
-                random.shuffle(shuffled_prompts)
-
-                # 取需要的数量
-                remaining = parallel_num - len(result)
-                result.extend(shuffled_prompts[:min(remaining, n)])
-
-            return result
-
-    except Exception as e:
-        logger.error(f"Failed to load meta prompts for DSL '{dsl}': {e}")
-        return [""] * parallel_num
-
+# ============================================================================
+# 存储功能：实现的保存和加载
+# ============================================================================
 
 def save_implementation(impl_data: Dict[str, Any], storage_dir: str) -> None:
     """保存实现到本地文件
@@ -138,12 +44,13 @@ def save_implementation(impl_data: Dict[str, Any], storage_dir: str) -> None:
 
         # 确保有唯一ID
         if 'id' not in impl_data:
+            from .evolution_utils import generate_unique_id
             impl_data['id'] = generate_unique_id()
 
         # 生成唯一文件名
         round_idx = impl_data.get('round', 0)
         task_id = impl_data.get('task_id', 'unknown')
-        impl_id = impl_data.get('id', 'unknown')[:8]  # 取ID前8位作为文件名的一部分
+        impl_id = impl_data.get('id', 'unknown')[:8]  # 取ID前8位
         filename = f"impl_{round_idx}_{task_id}_{impl_id}.json"
         filepath = os.path.join(storage_dir, filename)
 
@@ -180,6 +87,7 @@ def load_best_implementations(storage_dir: str, max_count: int = None) -> List[D
                         impl_data = json.load(f)
                         # 确保每个实现都有唯一ID
                         if 'id' not in impl_data:
+                            from .evolution_utils import generate_unique_id
                             impl_data['id'] = generate_unique_id()
                         implementations.append(impl_data)
                 except Exception as e:
@@ -199,6 +107,10 @@ def load_best_implementations(storage_dir: str, max_count: int = None) -> List[D
         logger.error(f"Failed to load implementations from {storage_dir}: {e}")
         return implementations
 
+
+# ============================================================================
+# 采样功能：性能分类和灵感采样
+# ============================================================================
 
 def classify_implementations_by_performance(implementations: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     """按性能将实现分为三层：差、中等、好
@@ -245,7 +157,13 @@ def classify_implementations_by_performance(implementations: List[Dict[str, Any]
     return classified
 
 
-def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int = 2, use_all: bool = False, use_tiered_sampling: bool = False, parent_implementations: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def sample_inspirations(
+    implementations: List[Dict[str, Any]], 
+    sample_num: int = 2, 
+    use_all: bool = False, 
+    use_tiered_sampling: bool = False, 
+    parent_implementations: List[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
     """从实现列表中采样inspiration格式的数据
 
     Args:
@@ -344,6 +262,10 @@ def sample_inspirations(implementations: List[Dict[str, Any]], sample_num: int =
     return inspirations
 
 
+# ============================================================================
+# 岛屿模型：精英迁移和父代选择
+# ============================================================================
+
 def migrate_elites(islands: List[List[Dict[str, Any]]], migration_size: int = 1) -> List[List[Dict[str, Any]]]:
     """在岛屿间迁移精英个体
 
@@ -403,7 +325,7 @@ def migrate_elites(islands: List[List[Dict[str, Any]]], migration_size: int = 1)
     return updated_islands
 
 
-def select_parent_from_elite(current_island_idx: int, elite_pool: List[Dict[str, Any]]) -> tuple:
+def select_parent_from_elite(current_island_idx: int, elite_pool: List[Dict[str, Any]]) -> Tuple:
     """从精英池中选择父代
 
     Args:
@@ -426,3 +348,4 @@ def select_parent_from_elite(current_island_idx: int, elite_pool: List[Dict[str,
     
     # 返回选中的精英个体和其来源岛屿
     return selected_elite, source_island
+

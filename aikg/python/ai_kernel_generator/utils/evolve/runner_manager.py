@@ -12,49 +12,386 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Runner管理模块
+
+整合单任务和批量执行的配置管理、CLI解析和执行逻辑
+"""
+
 import os
 import sys
+import asyncio
 import subprocess
 import json
-import asyncio
 import re
 import yaml
+import traceback
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-import traceback
+
 from ai_kernel_generator import get_project_root
-from ai_kernel_generator.tools.realtime_result_collector import RealtimeResultCollector
+from ai_kernel_generator.config.config_validator import load_config
+from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+from ai_kernel_generator.core.async_pool.task_pool import TaskPool
+from ai_kernel_generator.core.evolve import evolve
+from ai_kernel_generator.utils.environment_check import check_env_for_task
+from .result_collector import RealtimeResultCollector
 
-"""
-批量执行配置参数 - 默认从evolve_config.yaml读取配置
-
-该模块提供了一个用于批量执行进化式算子生成的工具，支持并行执行多个任务以提高效率。
-
-主要功能：
-1. 并行执行多个任务
-2. 动态设备分配避免冲突
-3. 详细的执行结果统计和报告生成
-4. 默认从evolve_config.yaml读取配置，支持自定义配置文件
-
-使用方法：
-1. 使用默认配置文件：python run_batch_evolve.py
-2. 使用自定义配置文件：python run_batch_evolve.py your_config.yaml
-
-配置文件说明：
-默认配置文件：config/evolve_config.yaml
-支持从该配置文件的以下部分读取配置：
-• base: 进化基础配置（dsl, framework, backend, arch）
-• evolve: 进化参数配置（max_rounds, parallel_num）
-• batch: 批量执行配置（parallel_num, device_pool, task_dir, output_dir）
-• custom_tasks: 特定任务的自定义配置
-
-"""
 
 # ============================================================================
-# 批量执行配置参数 - 从evolve_config.yaml读取配置
+# 配置管理
 # ============================================================================
 
+class RunnerConfig:
+    """进化Runner配置参数类"""
+
+    def __init__(self):
+        # 基本参数
+        self.dsl = "triton_cuda"
+        self.framework = "torch"
+        self.backend = "cuda"
+        self.arch = "a100"
+
+        # 进化参数
+        self.max_rounds = 5
+        self.parallel_num = 4
+
+        # 岛屿模型参数
+        self.num_islands = 1
+        self.migration_interval = 0
+        self.elite_size = 0
+        self.parent_selection_prob = 0.5
+        
+        # 手写建议采样参数
+        self.handwrite_decay_rate = 2.0
+
+        # 设备配置
+        self.device_list = [0]
+
+        # 配置文件路径
+        self.config_path = "config/default_evolve_config.yaml"
+
+        # 任务配置
+        self.op_name = "relu_op"
+        self.task_desc = "Path/to/your/tasks/relu_task.py"
+
+    @classmethod
+    def from_yaml(cls, config_path: str, skip_task_config: bool = False) -> 'RunnerConfig':
+        """从YAML配置文件加载配置"""
+        config = cls()
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                yaml_config = yaml.safe_load(f)
+
+            # 基础配置
+            if 'base' in yaml_config:
+                base = yaml_config['base']
+                config.dsl = base.get('dsl', config.dsl)
+                config.framework = base.get('framework', config.framework)
+                config.backend = base.get('backend', config.backend)
+                config.arch = base.get('arch', config.arch)
+                config_path_value = base.get('config_path', config.config_path)
+                if config_path_value and not Path(config_path_value).is_absolute():
+                    config.config_path = str(Path(get_project_root()) / config_path_value)
+                else:
+                    config.config_path = config_path_value
+            else:
+                raise ValueError("base section not found in config file")
+
+            # 进化参数
+            if 'evolve' in yaml_config:
+                evolve_config = yaml_config['evolve']
+                config.max_rounds = evolve_config.get('max_rounds', config.max_rounds)
+                config.parallel_num = evolve_config.get('parallel_num', config.parallel_num)
+            else:
+                raise ValueError("evolve section not found in config file")
+
+            # 岛屿模型配置
+            if 'island' in yaml_config:
+                island_config = yaml_config['island']
+                config.num_islands = island_config.get('num_islands', config.num_islands)
+                config.migration_interval = island_config.get('migration_interval', config.migration_interval)
+                config.elite_size = island_config.get('elite_size', config.elite_size)
+                config.parent_selection_prob = island_config.get('parent_selection_prob', config.parent_selection_prob)
+            else:
+                raise ValueError("island section not found in config file")
+
+            # 设备配置
+            if 'devices' in yaml_config:
+                config.device_list = yaml_config['devices'].get('device_list', config.device_list)
+            else:
+                raise ValueError("devices section not found in config file")
+
+            # 任务配置（仅在非批量调用模式下加载）
+            if not skip_task_config and 'task' in yaml_config:
+                task_config = yaml_config['task']
+                config.op_name = task_config.get('op_name', config.op_name)
+
+                task_desc_value = task_config.get('task_desc', config.task_desc)
+                if task_desc_value and isinstance(task_desc_value, str):
+                    try:
+                        with open(task_desc_value, 'r', encoding='utf-8') as f:
+                            config.task_desc = f.read().strip()
+                    except Exception as e:
+                        print(f"Error: Failed to read task description file {task_desc_value}: {e}")
+                        config.task_desc = None
+
+            return config
+        except Exception as e:
+            print(f"Warning: Failed to load config from {config_path}, using default config: {e}")
+            return config
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'dsl': self.dsl,
+            'framework': self.framework,
+            'backend': self.backend,
+            'arch': self.arch,
+            'max_rounds': self.max_rounds,
+            'parallel_num': self.parallel_num,
+            'num_islands': self.num_islands,
+            'migration_interval': self.migration_interval,
+            'elite_size': self.elite_size,
+            'parent_selection_prob': self.parent_selection_prob,
+            'device_list': self.device_list,
+            'config_path': self.config_path,
+            'op_name': self.op_name,
+            'task_desc': self.task_desc
+        }
+
+
+def apply_custom_task_config(config: RunnerConfig, config_path: str, op_name: str) -> None:
+    """应用自定义任务配置"""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            yaml_config = yaml.safe_load(f)
+
+        if 'custom_tasks' in yaml_config and yaml_config['custom_tasks']:
+            if op_name in yaml_config['custom_tasks']:
+                custom_config = yaml_config['custom_tasks'][op_name]
+                print(f"发现自定义配置 for {op_name}: {custom_config}")
+
+                config_mapping = {
+                    'max_rounds': 'max_rounds',
+                    'parallel_num': 'parallel_num',
+                    'num_islands': 'num_islands',
+                    'migration_interval': 'migration_interval',
+                    'elite_size': 'elite_size',
+                    'parent_selection_prob': 'parent_selection_prob'
+                }
+
+                for config_key, attr_name in config_mapping.items():
+                    if config_key in custom_config:
+                        setattr(config, attr_name, custom_config[config_key])
+                        print(f"   自定义 {config_key}: {custom_config[config_key]}")
+
+                print(f"已应用自定义配置")
+
+    except Exception as e:
+        print(f"提示: 无法解析custom_tasks配置: {e}")
+
+
+def load_task_description(task_file: str) -> str:
+    """加载任务描述文件"""
+    try:
+        with open(task_file, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"任务文件不存在: {task_file}")
+    except Exception as e:
+        raise Exception(f"读取任务文件失败: {e}")
+
+
+# ============================================================================
+# 结果打印函数
+# ============================================================================
+
+def print_evolve_config(op_name: str, evolve_config: RunnerConfig) -> None:
+    """打印进化配置信息"""
+    print("="*80)
+    print("AI KERNEL GENERATOR - 统一进化式算子生成")
+    print("="*80)
+    print(f"算子名称: {op_name}")
+    print(f"实现类型: {evolve_config.dsl}")
+    print(f"框架: {evolve_config.framework}")
+    print(f"后端: {evolve_config.backend}")
+    print(f"架构: {evolve_config.arch}")
+    print(f"进化轮数: {evolve_config.max_rounds}")
+    print(f"并行任务数: {evolve_config.parallel_num}")
+
+    if evolve_config.num_islands <= 1:
+        print("岛屿模型: 禁用（简单进化模式）")
+    else:
+        print(f"岛屿数量: {evolve_config.num_islands}")
+        if evolve_config.migration_interval <= 0:
+            print("迁移: 禁用")
+        else:
+            print(f"迁移间隔: {evolve_config.migration_interval}")
+
+    if evolve_config.elite_size <= 0:
+        print("精英机制: 禁用")
+    else:
+        print(f"精英数量: {evolve_config.elite_size}")
+
+    if evolve_config.num_islands > 1 and evolve_config.elite_size > 0:
+        print(f"父代选择概率: {evolve_config.parent_selection_prob}")
+    print("="*80)
+
+
+def print_evolution_result(evolution_result: Dict[str, Any], evolve_config: RunnerConfig) -> Dict[str, Any]:
+    """打印进化结果信息"""
+    if not evolution_result:
+        print("\n进化过程返回空结果")
+        return {}
+
+    print("\n" + "="*80)
+    print("进化完成！最终结果汇总:")
+    print("="*80)
+    print(f"算子名称: {evolution_result.get('op_name', 'Unknown')}")
+    print(f"总轮数: {evolution_result.get('total_rounds', 0)}")
+    print(f"总任务数: {evolution_result.get('total_tasks', 0)}")
+    print(f"成功任务数: {evolution_result.get('successful_tasks', 0)}")
+    print(f"最终成功率: {evolution_result.get('final_success_rate', 0.0):.2%}")
+    print(f"最佳成功率: {evolution_result.get('best_success_rate', 0.0):.2%}")
+    print(f"实现类型: {evolution_result.get('implementation_type', 'Unknown')}")
+    print(f"框架: {evolution_result.get('framework', 'Unknown')}")
+    print(f"后端: {evolution_result.get('backend', 'Unknown')}")
+    print(f"架构: {evolution_result.get('architecture', 'Unknown')}")
+
+    # 岛屿信息
+    island_info = evolution_result.get('island_info', {})
+    if island_info:
+        num_islands_used = island_info.get('num_islands', 'N/A')
+        if num_islands_used <= 1:
+            print("进化模式: 简单进化（无岛屿模型）")
+        else:
+            print(f"岛屿数量: {num_islands_used}")
+            migration_interval_used = island_info.get('migration_interval', 'N/A')
+            if migration_interval_used <= 0:
+                print("迁移: 禁用")
+            else:
+                print(f"迁移间隔: {migration_interval_used}")
+
+            elite_size_used = island_info.get('elite_size', 'N/A')
+            if elite_size_used <= 0:
+                print("精英机制: 禁用")
+            else:
+                print(f"精英数量: {elite_size_used}")
+
+    # 显示存储目录信息
+    storage_dir = evolution_result.get('storage_dir', '')
+    if storage_dir:
+        print(f"存储目录: {storage_dir}")
+    
+    task_folder = evolution_result.get('task_folder', '')
+    if task_folder:
+        print(f"Task文件夹: {task_folder}")
+    
+    log_dir = evolution_result.get('log_dir', '')
+    if log_dir:
+        print(f"Log目录: {log_dir}")
+
+    # 显示最佳实现
+    best_implementations = evolution_result.get('best_implementations', [])
+    if best_implementations:
+        print(f"\n最佳实现 (前{len(best_implementations)}个):")
+        for i, impl in enumerate(best_implementations, 1):
+            profile_data = impl.get('profile', {})
+
+            if isinstance(profile_data, dict):
+                gen_time = profile_data.get('gen_time', float('inf'))
+                base_time = profile_data.get('base_time', 0.0)
+                speedup = profile_data.get('speedup', 0.0)
+                
+                if gen_time != float('inf'):
+                    profile_str = f"生成代码: {gen_time:.4f}us, 基准代码: {base_time:.4f}us, 加速比: {speedup:.2f}x"
+                else:
+                    profile_str = "性能: N/A"
+            else:
+                profile_str = "性能: N/A"
+
+            info_parts = [f"{impl.get('op_name', 'Unknown')} (轮次 {impl.get('round', 'N/A')}"]
+
+            if evolution_result.get('island_info', {}).get('num_islands', 1) > 1:
+                source_island = impl.get('source_island', 'N/A')
+                info_parts.append(f"来源岛屿 {source_island}")
+            
+            unique_dir = impl.get('unique_dir', 'N/A')
+            info_parts.append(f"个体路径: {unique_dir}")
+
+            info_parts.append(profile_str)
+            print(f"  {i}. {', '.join(info_parts)}")
+    else:
+        print("\n没有找到成功的实现")
+
+    # 显示每轮详细结果
+    round_results = evolution_result.get('round_results', [])
+    if round_results:
+        print(f"\n每轮详细结果:")
+        for round_result in round_results:
+            round_num = round_result.get('round', 'N/A')
+            success_rate = round_result.get('success_rate', 0.0)
+            successful = round_result.get('successful_tasks', 0)
+            total = round_result.get('total_tasks', 0)
+            print(f"  轮次 {round_num}: {successful}/{total} 成功 ({success_rate:.2%})")
+
+    print("="*80)
+
+    return evolution_result
+
+
+# ============================================================================
+# 单任务执行
+# ============================================================================
+
+async def run_single_evolve(op_name: str = None, task_desc: str = None, evolve_config: RunnerConfig = None) -> Dict[str, Any]:
+    """运行自定义任务的进化过程"""
+    if evolve_config is None:
+        evolve_config = RunnerConfig()
+
+    if op_name is None:
+        op_name = evolve_config.op_name
+    if task_desc is None:
+        task_desc = evolve_config.task_desc
+
+    print_evolve_config(op_name, evolve_config)
+
+    # 初始化资源
+    task_pool = TaskPool(max_concurrency=evolve_config.parallel_num)
+    device_pool = DevicePool(evolve_config.device_list)
+
+    config = load_config(config_path=evolve_config.config_path)
+    check_env_for_task(evolve_config.framework, evolve_config.backend, evolve_config.dsl, config)
+
+    # 运行进化过程
+    print("开始进化过程...")
+    evolution_result = await evolve(
+        op_name=op_name,
+        task_desc=task_desc,
+        dsl=evolve_config.dsl,
+        framework=evolve_config.framework,
+        backend=evolve_config.backend,
+        arch=evolve_config.arch,
+        config=config,
+        device_pool=device_pool,
+        task_pool=task_pool,
+        max_rounds=evolve_config.max_rounds,
+        parallel_num=evolve_config.parallel_num,
+        num_islands=evolve_config.num_islands,
+        migration_interval=evolve_config.migration_interval,
+        elite_size=evolve_config.elite_size,
+        parent_selection_prob=evolve_config.parent_selection_prob,
+        handwrite_decay_rate=evolve_config.handwrite_decay_rate
+    )
+
+    return print_evolution_result(evolution_result, evolve_config)
+
+
+# ============================================================================
+# 批量执行
+# ============================================================================
 
 class BatchTaskPool:
     """批量任务池，用于管理并行执行的evolve任务"""
@@ -64,13 +401,11 @@ class BatchTaskPool:
                  collector: Optional[RealtimeResultCollector] = None):
         self.max_concurrency = max_concurrency
         self.config_path = config_path
-        self.collector = collector  # 实时结果收集器
+        self.collector = collector
         self.semaphore = asyncio.Semaphore(max_concurrency)
-        # 动态设备池管理
         self.available_devices = asyncio.Queue()
         self.device_lock = asyncio.Lock()
 
-        # 初始化设备池
         for device in device_pool:
             self.available_devices.put_nowait(device)
 
@@ -88,15 +423,13 @@ class BatchTaskPool:
     async def run_task_async(self, task_file: Path, output_dir: Path, index: int, total: int,
                              use_compact_output: bool = False) -> Dict[str, Any]:
         """异步运行单个任务"""
-        # 获取设备
         device = await self.acquire_device()
 
         if not use_compact_output:
-            print(f"🎯 任务 [{index}/{total}] {task_file.stem} 分配到设备 {device}")
+            print(f"任务 [{index}/{total}] {task_file.stem} 分配到设备 {device}")
 
         try:
             async with self.semaphore:
-                # 在线程池中运行同步的任务
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(
                     None,
@@ -107,14 +440,12 @@ class BatchTaskPool:
                 # 任务完成后立即收集结果
                 if self.collector and result.get('success', False):
                     try:
-                        # 读取输出文件内容
                         output_file = result.get('output_file')
                         output_content = ""
                         if output_file and Path(output_file).exists():
                             with open(output_file, 'r', encoding='utf-8') as f:
                                 output_content = f.read()
                         
-                        # 收集结果（只需要op_name和输出内容）
                         await loop.run_in_executor(
                             None,
                             self.collector.collect_task_result,
@@ -122,53 +453,44 @@ class BatchTaskPool:
                             output_content
                         )
                     except Exception as e:
-                        print(f"⚠️  收集结果失败: {e}")
+                        print(f"收集结果失败: {e}")
                 
                 return result
         finally:
-            # 确保设备被释放
             await self.release_device(device)
             if not use_compact_output:
-                print(f"♻️  任务 {task_file.stem} 完成，设备 {device} 已回收")
+                print(f"任务 {task_file.stem} 完成，设备 {device} 已回收")
 
     async def run_batch_parallel(self, task_files: List[Path], output_dir: Path) -> List[Dict[str, Any]]:
         """并行运行批量任务"""
         use_compact_output = self.max_concurrency > 1
 
         if use_compact_output:
-            print(f"🚀 启动并行执行，最大并发数: {self.max_concurrency}")
+            print(f"启动并行执行，最大并发数: {self.max_concurrency}")
 
-        # 使用工作者队列模式避免设备数不足时的死锁
         task_queue = asyncio.Queue()
         results = [None] * len(task_files)
 
-        # 将所有任务放入队列
         for i, task_file in enumerate(task_files):
             await task_queue.put((i, task_file))
 
-        # 工作者函数
         async def worker():
             while True:
                 try:
-                    # 从队列获取任务，超时退出避免无限等待
                     task_index, task_file = await asyncio.wait_for(
                         task_queue.get(), timeout=1.0
                     )
 
-                    # 执行任务
                     result = await self.run_task_async(
                         task_file, output_dir, task_index + 1, len(task_files), use_compact_output
                     )
 
-                    # 保存结果
                     results[task_index] = result
                     task_queue.task_done()
 
                 except asyncio.TimeoutError:
-                    # 队列为空，工作者退出
                     break
                 except Exception as e:
-                    # 处理异常，确保任务标记完成
                     if 'task_index' in locals():
                         results[task_index] = {
                             'op_name': task_file.stem,
@@ -181,20 +503,16 @@ class BatchTaskPool:
                         }
                         task_queue.task_done()
 
-        # 创建工作者
         workers = []
         for _ in range(self.max_concurrency):
             workers.append(asyncio.create_task(worker()))
 
-        # 等待所有任务完成
         await task_queue.join()
 
-        # 清理工作者
         for worker_task in workers:
             worker_task.cancel()
         await asyncio.gather(*workers, return_exceptions=True)
 
-        # 返回结果（异常已在工作者内部处理）
         return [r for r in results if r is not None]
 
 
@@ -205,9 +523,9 @@ def discover_task_files(task_dir: str) -> List[Path]:
         raise FileNotFoundError(f"任务目录不存在: {task_dir}")
 
     task_files = list(task_path.glob("*.py"))
-    task_files.sort()  # 按文件名排序
+    task_files.sort()
 
-    print(f"📁 发现 {len(task_files)} 个任务文件:")
+    print(f"发现 {len(task_files)} 个任务文件:")
     for i, file_path in enumerate(task_files, 1):
         print(f"  {i}. {file_path.name}")
 
@@ -221,48 +539,42 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
 
     if not use_compact_output:
         print(f"\n" + "="*80)
-        print(f"📋 开始执行任务 [{index}/{total}]: {op_name}")
+        print(f"开始执行任务 [{index}/{total}]: {op_name}")
         print("="*80)
     else:
-        print(f"🔄 [{index}/{total}] {op_name}")
+        print(f"[{index}/{total}] {op_name}")
 
     start_time = datetime.now()
 
-    # 准备输出文件路径（任务完成后保存）
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / f"output_{op_name}_{start_time.strftime('%Y%m%d_%H%M%S')}.txt"
 
     try:
-        # 设置环境变量
         env = os.environ.copy()
-        # 检查必要的目录和文件
-        tools_dir = Path(get_project_root()) / "tools"
-        single_evolve_script = tools_dir / "single_evolve_runner.py"
+        # get_project_root() 返回 python/ai_kernel_generator，需要向上两级到达真正的项目根目录
+        project_root = Path(get_project_root()).parent.parent
+        tools_dir = project_root / "tools"
+        single_evolve_script = tools_dir / "run_single_evolve.py"
 
         if not tools_dir.exists():
             raise FileNotFoundError(f"tools目录不存在: {tools_dir}")
 
         if not single_evolve_script.exists():
-            raise FileNotFoundError(f"single_evolve_runner.py不存在: {single_evolve_script}")
+            raise FileNotFoundError(f"run_single_evolve.py不存在: {single_evolve_script}")
 
-        # 使用绝对路径
         absolute_task_file = Path(task_file).resolve()
 
-        # 构建命令 - 传递简化参数
         cmd = [
             sys.executable, str(single_evolve_script),
-            op_name,                                    # 1. 算子名称
-            str(absolute_task_file),                   # 2. 任务文件路径
-            str(device)                                # 3. 设备ID
+            op_name,
+            str(absolute_task_file),
+            str(device)
         ]
 
-        # 如果有配置文件路径，则添加到命令中
         if config_path:
             cmd.append(config_path)
 
-        # 根据输出模式选择执行方式
         if use_compact_output:
-            # 精简模式：静默执行，只捕获输出用于解析
             subprocess_result = subprocess.run(cmd, capture_output=True, text=True, env=env, errors='replace')
             result = {
                 'returncode': subprocess_result.returncode,
@@ -270,8 +582,7 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
                 'stderr': subprocess_result.stderr
             }
         else:
-            # 详细模式：实时显示所有输出并实时写入文件
-            print(f"🔄 开始进化过程，实时输出:")
+            print(f"开始进化过程，实时输出:")
             print("-" * 60)
 
             try:
@@ -286,7 +597,6 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
                         stdout_lines.append(line)
 
                 process.wait()
-                # 直接使用字典存储结果
                 result = {
                     'returncode': process.returncode,
                     'stdout': '\n'.join(stdout_lines),
@@ -301,7 +611,6 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
                     'stderr': subprocess_result.stderr
                 }
 
-                # 如果是fallback模式，也要写入文件
                 if output_file and result['stdout']:
                     try:
                         with open(output_file, 'a', encoding='utf-8') as f:
@@ -312,21 +621,17 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
 
             print("-" * 60)
 
-        # 在精简模式下，解析并显示关键信息，同时实时写入文件
+        # 在精简模式下显示关键信息
         if use_compact_output and result['stdout']:
             lines = result['stdout'].split('\n')
             for line in lines:
                 line_clean = line.strip()
-                # 只显示关键的轮次结果和最终结果，过滤掉纯分隔线和带标识码的行
-                if any(keyword in line_clean for keyword in ['轮次', '最终全局最佳加速比', '🚀 加速比统计汇总', '进化完成！最终结果汇总']):
+                if any(keyword in line_clean for keyword in ['轮次', '最终全局最佳加速比', '加速比统计汇总', '进化完成！最终结果汇总']):
                     print(f"  {line_clean}")
                 elif '进化完成' in line_clean and '最终结果汇总' in line_clean:
                     print(f"  {line_clean}")
                 elif line_clean.startswith('算子名称:') or line_clean.startswith('总轮数:') or line_clean.startswith('成功任务数:'):
                     print(f"  {line_clean}")
-                # 跳过纯分隔线、带标识码的行、以及其他格式化输出
-                # elif line_clean and not (line_clean.startswith('=') or len(line_clean.split()) == 1 and '=' in line_clean):
-                #     pass  # 其他行暂时不显示
 
         end_time = datetime.now()
         execution_time = (end_time - start_time).total_seconds()
@@ -339,11 +644,9 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
         for line in output_lines:
             if "最终成功率:" in line or "完成" in line and "%" in line:
                 try:
-                    # 尝试从不同格式中提取成功率
                     if "最终成功率:" in line:
                         success_rate = float(line.split("最终成功率:")[1].split("%")[0].strip()) / 100
                     elif "完成" in line and "(" in line and "%" in line:
-                        # 匹配 "完成 2/4(50%)" 格式
                         match = re.search(r'(\d+\.?\d*)%', line)
                         if match:
                             success_rate = float(match.group(1)) / 100
@@ -354,27 +657,23 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
                     if "最终全局最佳加速比:" in line:
                         best_speedup = float(line.split("最终全局最佳加速比:")[1].split("x")[0].strip())
                     elif "最佳:" in line:
-                        # 匹配 "最佳:1.23x" 格式
                         match = re.search(r'最佳:(\d+\.?\d*)x', line)
                         if match:
                             best_speedup = float(match.group(1))
                     elif "加速比:" in line:
-                        # 匹配 "加速比: 6.07x" 格式
                         match = re.search(r'加速比:\s*(\d+\.?\d*)x', line)
                         if match:
                             speedup_value = float(match.group(1))
-                            # 如果当前加速比更好，则更新
                             if best_speedup is None or speedup_value > best_speedup:
                                 best_speedup = speedup_value
                 except:
                     pass
 
-        # 判断任务是否真正成功：进程正常退出 且 有有效的加速比结果
         task_success = (result['returncode'] == 0 and
                         best_speedup is not None and
                         best_speedup > 0.0)
 
-        # 任务完成后保存完整输出到文件
+        # 保存完整输出
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(f"任务名称: {op_name}\n")
@@ -392,16 +691,16 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
                     f.write("\n" + "="*50 + " 错误输出 " + "="*50 + "\n")
                     f.write(result['stderr'])
         except Exception as e:
-            print(f"⚠️  无法保存输出文件: {e}")
+            print(f"无法保存输出文件: {e}")
             output_file = None
 
         if result['returncode'] == 0:
             if task_success:
                 if not use_compact_output:
-                    print(f"✅ 任务 {op_name} 执行成功，最佳加速比: {best_speedup:.2f}x")
+                    print(f"任务 {op_name} 执行成功，最佳加速比: {best_speedup:.2f}x")
             else:
                 if not use_compact_output:
-                    print(f"⚠️  任务 {op_name} 进程正常结束，但未生成有效算子 (加速比: {best_speedup or 0.0:.2f}x)")
+                    print(f"任务 {op_name} 进程正常结束，但未生成有效算子 (加速比: {best_speedup or 0.0:.2f}x)")
 
             return {
                 'op_name': op_name,
@@ -417,10 +716,9 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
             }
         else:
             if use_compact_output:
-                print(f"❌ {op_name}: 执行失败(码:{result['returncode']})")
+                print(f"{op_name}: 执行失败(码:{result['returncode']})")
             else:
-                print(f"❌ 任务 {op_name} 执行失败，返回码: {result['returncode']}")
-                # 显示简要错误信息
+                print(f"任务 {op_name} 执行失败，返回码: {result['returncode']}")
                 if result['stderr']:
                     stderr_lines = result['stderr'].strip().split('\n')[-3:]
                     for line in stderr_lines:
@@ -445,13 +743,11 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
         execution_time = (end_time - start_time).total_seconds()
 
         error_msg = f"执行异常: {str(e)}"
-        print(f"❌ {error_msg}")
+        print(f"{error_msg}")
 
-        # 打印详细错误信息到控制台（调试模式）
-        print("🔧 详细错误堆栈:")
+        print("详细错误堆栈:")
         traceback.print_exc()
 
-        # 保存异常信息到文件
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(f"任务名称: {op_name}\n")
@@ -463,10 +759,10 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
                 f.write(f"错误信息: {error_msg}\n")
                 f.write("\n" + "="*50 + " 错误详情 " + "="*50 + "\n")
                 f.write(traceback.format_exc())
-            print(f"📁 错误信息已保存到: {output_file}")
+            print(f"错误信息已保存到: {output_file}")
             error_file_path = str(output_file)
         except Exception as file_error:
-            print(f"⚠️  无法保存错误文件: {file_error}")
+            print(f"无法保存错误文件: {file_error}")
             error_file_path = None
 
         return {
@@ -481,11 +777,9 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
         }
 
 
-def load_config(config_path: str = None) -> Dict[str, Any]:
-    """加载配置文件并返回配置字典"""
-    # 如果没有指定配置文件，则使用默认的evolve_config.yaml
+def load_batch_config(config_path: str = None) -> Dict[str, Any]:
+    """加载批量执行配置"""
     if config_path is None:
-        # 获取项目根目录下的配置文件路径
         project_root = get_project_root()
         config_path = os.path.join(project_root, "config", "evolve_config.yaml")
 
@@ -494,19 +788,16 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
 
-            # 检查必要的配置项
             if 'batch' not in config:
                 raise ValueError("配置文件中缺少 'batch' 部分")
 
             batch_config = config['batch']
 
-            # 检查必要的配置项
             required_keys = ['parallel_num', 'device_pool', 'task_dir', 'output_dir']
             missing_keys = [key for key in required_keys if key not in batch_config]
             if missing_keys:
                 raise ValueError(f"配置文件中 'batch' 部分缺少必要的配置项: {missing_keys}")
 
-            # 读取配置
             config_dict = {
                 "batch_parallel_num": batch_config['parallel_num'],
                 "task_dir": batch_config['task_dir'],
@@ -514,17 +805,17 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
                 "device_pool": batch_config['device_pool']
             }
 
-            print(f"✅ 成功加载配置文件: {config_path}")
+            print(f"成功加载配置文件: {config_path}")
             print(f"   任务目录: {config_dict['task_dir']}")
             print(f"   输出目录: {config_dict['output_dir']}")
             print(f"   设备池: {config_dict['device_pool']}")
             print(f"   批量并行数: {config_dict['batch_parallel_num']}")
 
         except Exception as e:
-            print(f"❌ 错误: 无法加载配置文件 {config_path}: {e}")
+            print(f"错误: 无法加载配置文件 {config_path}: {e}")
             raise
     else:
-        print(f"❌ 错误: 配置文件不存在: {config_path}")
+        print(f"错误: 配置文件不存在: {config_path}")
         raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
     return config_dict
@@ -538,7 +829,7 @@ def print_batch_summary(batch_results: List[Dict[str, Any]], total_start_time: d
     total_time = (datetime.now() - total_start_time).total_seconds()
 
     print("\n" + "="*100)
-    print("🎯 批量执行完成！最终统计报告")
+    print("批量执行完成！最终统计报告")
     print("="*100)
     print(f"总任务数: {len(batch_results)}")
     print(f"成功任务数: {len(successful_tasks)}")
@@ -548,7 +839,7 @@ def print_batch_summary(batch_results: List[Dict[str, Any]], total_start_time: d
 
     # 显示成功任务的性能统计
     if successful_tasks:
-        print(f"\n🏆 成功任务性能统计:")
+        print(f"\n成功任务性能统计:")
         performance_data = []
         for task in successful_tasks:
             if task.get('best_speedup'):
@@ -567,7 +858,7 @@ def print_batch_summary(batch_results: List[Dict[str, Any]], total_start_time: d
 
     # 显示失败任务
     if failed_tasks:
-        print(f"\n❌ 失败任务列表:")
+        print(f"\n失败任务列表:")
         for task in failed_tasks:
             error_msg = task.get('error', 'Unknown error')
             print(f"  • {task['op_name']}: {error_msg}")
@@ -575,26 +866,18 @@ def print_batch_summary(batch_results: List[Dict[str, Any]], total_start_time: d
     print("="*100)
 
 
-def main():
-    """主函数"""
-    # 检查命令行参数
-    config_path = None
-    if len(sys.argv) > 1:
-        config_path = sys.argv[1]
+async def run_batch_evolve(config_path: str = None) -> None:
+    """批量执行进化任务"""
+    config = load_batch_config(config_path)
 
-    # 加载配置文件（如果不指定配置文件，则使用默认的evolve_config.yaml）
-    config = load_config(config_path)
-
-    # 使用配置值
     task_dir = os.path.expanduser(config["task_dir"]) if config["task_dir"] else os.path.expanduser("~/aikg_tasks")
     output_dir = Path(os.path.expanduser(config["output_dir"])) if config["output_dir"] else Path(
         os.path.expanduser("~/aikg_batch_results"))
     parallel_num = config["batch_parallel_num"] if config["batch_parallel_num"] > 0 else 2
 
-    # 创建输出目录
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("🚀 开始批量进化执行")
+    print("开始批量进化执行")
     print("="*80)
     print(f"任务目录: {task_dir}")
     print(f"输出目录: {output_dir}")
@@ -606,21 +889,20 @@ def main():
     batch_results = []
 
     try:
-        # 发现所有任务文件
         task_files = discover_task_files(task_dir)
 
         if not task_files:
-            print("❌ 未找到任何.py文件")
+            print("未找到任何.py文件")
             return
 
         # 初始化实时结果收集器
         collector = RealtimeResultCollector(output_dir)
-        print(f"📊 实时结果收集器已启动")
+        print(f"实时结果收集器已启动")
         print(f"   TXT输出: {collector.txt_file}")
         print(f"   CSV输出: {collector.csv_file}")
         print("="*80)
 
-        # 创建批量任务池（传入设备池、配置文件路径和收集器）
+        # 创建批量任务池
         batch_pool = BatchTaskPool(
             max_concurrency=parallel_num,
             device_pool=config["device_pool"],
@@ -629,16 +911,16 @@ def main():
         )
 
         if parallel_num <= 1:
-            print(f"\n📋 将按顺序执行 {len(task_files)} 个算子的进化流程...")
+            print(f"\n将按顺序执行 {len(task_files)} 个算子的进化流程...")
         else:
-            print(f"\n🚀 将并行执行 {len(task_files)} 个算子的进化流程...")
-            print(f"📱 设备动态分配：{config['device_pool']} (任务完成后自动回收)")
+            print(f"\n将并行执行 {len(task_files)} 个算子的进化流程...")
+            print(f"设备动态分配：{config['device_pool']} (任务完成后自动回收)")
 
         # 运行任务
         try:
-            batch_results = asyncio.run(batch_pool.run_batch_parallel(task_files, output_dir))
+            batch_results = await batch_pool.run_batch_parallel(task_files, output_dir)
         except Exception as e:
-            print(f"❌ 执行过程中发生错误: {e}")
+            print(f"执行过程中发生错误: {e}")
             traceback.print_exc()
             return
 
@@ -661,14 +943,11 @@ def main():
 
         # 打印摘要
         print_batch_summary(batch_results, total_start_time)
-        print(f"\n💾 批量摘要已保存到: {summary_file}")
+        print(f"\n批量摘要已保存到: {summary_file}")
 
     except KeyboardInterrupt:
-        print("\n⚠️  用户中断执行")
+        print("\n用户中断执行")
     except Exception as e:
-        print(f"\n❌ 批量执行过程中发生错误: {e}")
+        print(f"\n批量执行过程中发生错误: {e}")
         traceback.print_exc()
 
-
-if __name__ == "__main__":
-    main()

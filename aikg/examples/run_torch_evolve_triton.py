@@ -19,7 +19,7 @@ from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
-from ai_kernel_generator.tools.single_evolve_runner import EvolveConfig, print_evolve_config, print_evolution_result
+from ai_kernel_generator.utils.evolve.runner_manager import RunnerConfig, print_evolve_config, print_evolution_result
 from ai_kernel_generator import get_project_root
 from pathlib import Path
 
@@ -68,7 +68,7 @@ async def run_torch_evolve_triton():
     """运行Triton进化示例"""
 
     # 创建配置对象并设置硬编码参数
-    config = EvolveConfig()
+    config = RunnerConfig()
 
     # 基础配置
     config.dsl = "triton_cuda"  # 使用triton_cuda替代通用的triton
