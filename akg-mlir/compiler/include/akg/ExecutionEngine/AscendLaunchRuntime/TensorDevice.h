@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Huawei Technologies Co., Ltd
+ * Copyright 2024-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,9 +25,8 @@ class TensorDevice {
       : host_address_(host_address), nbytes_(nbytes), is_output_(is_output) {}
   TensorDevice(void *host_address, void *device_address, size_t nbytes, bool is_output)
       : host_address_(host_address), device_address_(device_address), nbytes_(nbytes), is_output_(is_output) {
-        if(device_address_!=nullptr)
-          is_host_ = false;
-      }
+    if (device_address_ != nullptr) is_host_ = false;
+  }
   ~TensorDevice() {
     host_address_ = nullptr;
     device_address_ = nullptr;
@@ -41,9 +40,9 @@ class TensorDevice {
 
  private:
   void *host_address_{nullptr};
+  void *device_address_{nullptr};
   size_t nbytes_{0};
   bool is_output_{false};
-  void *device_address_{nullptr};
   bool is_host_{true};
 };
 using TensorDevicePtr = std::shared_ptr<TensorDevice>;

@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Huawei Technologies Co., Ltd
+ * Copyright 2024-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -98,7 +98,7 @@ void AscendMemoryManager::PoolAllocDeviceMem(size_t size, DeviceMemPtr *addr) {
     LOG(FATAL) << "Failed to alloc memory pool resource, the size is zero!";
   }
 
-  if (device_mem_offset_ - size < 0) {
+  if (device_mem_offset_ < size) {
     LOG(FATAL) << "size: " << size << "exceed the device memory offset: " << device_mem_offset_;
   }
   device_mem_offset_ -= size;

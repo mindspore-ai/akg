@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Huawei Technologies Co., Ltd
+ * Copyright 2024-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,9 @@
  */
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AKGAscendLaunchRuntime.h"
 #include <climits>
-#include <iostream>
 #include <limits>
+#include <algorithm>
+#include <iostream>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendMemoryManager.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/RuntimeErrorCodes.h"
 
@@ -58,7 +59,7 @@ void AscendKernelRuntime::SetCurrentContext() {
 }
 
 void AscendKernelRuntime::ReleaseDeviceRes() {
-  LOG(INFO) << "Ascend finalize start";
+  DLOG(INFO) << "Ascend finalize start";
   if (!initialized_) {
     return;
   }
@@ -67,7 +68,7 @@ void AscendKernelRuntime::ReleaseDeviceRes() {
     mem_manager_->FreeDeviceMemory();
   }
   (void)ResetDevice(device_id_);
-  LOG(INFO) << "Ascend finalize end";
+  DLOG(INFO) << "Ascend finalize end";
 }
 
 bool AscendKernelRuntime::Init() {
@@ -100,7 +101,7 @@ void AscendKernelRuntime::CreateContext() {
 }
 
 bool AscendKernelRuntime::InitDevice() {
-  LOG(INFO) << "InitDevice: " << device_id_;
+  DLOG(INFO) << "InitDevice: " << device_id_;
   uint32_t device_count = 0;
   auto ret = aclrtGetDeviceCount(&device_count);
   if (ret != ACL_SUCCESS) {
@@ -147,7 +148,7 @@ bool AscendKernelRuntime::ResetDevice(uint32_t device_id) {
   }
   // set to nullptr as its not created, only bounded to existing context
   rt_context_ = nullptr;
-  LOG(INFO) << "ResetDevice: " << device_id;
+  DLOG(INFO) << "ResetDevice: " << device_id;
   return true;
 }
 
@@ -160,19 +161,12 @@ inline unsigned int UlongToUint(uint64_t u) {
 
 void *AscendKernelRuntime::GetKernelFunc(const std::string &path, const std::string &kernel_name,
                                          const std::string &func_name) {
-  // const auto *f = Registry::Get("get_kernel_meta_path");
-  // CHECK(f != nullptr) << "Function get_kernel_meta_path is not registered";
-  std::string file_str;
-  auto dir_path = path;
-  (void)file_str.append(dir_path).append("/lib" + kernel_name).append(kBinFileSuffix);
-  char *file_c_str = (char *)file_str.c_str();
-
-  void *handle = dlopen(file_c_str, RTLD_LAZY | RTLD_LOCAL);
-  CHECK(handle != nullptr) << "dlopen failed, file: " << file_c_str;
+  std::string file_str = path + "/lib" + kernel_name + kBinFileSuffix;
+  void *handle = dlopen(file_str.c_str(), RTLD_LAZY | RTLD_LOCAL);
+  CHECK(handle != nullptr) << "dlopen failed, file: " << file_str << ", Error:" << dlerror();
 
   std::string func_str = func_name + kDoBinFileSuffix;
-  char *func_c_str = (char *)func_str.c_str();
-  void *func = dlsym(handle, func_c_str);
+  void *func = dlsym(handle, func_str.c_str());
   CHECK(func != nullptr) << "dlsym failed, symbol: " << func_str;
   cce_handle_ = handle;
   return func;
@@ -188,19 +182,18 @@ bool AscendKernelRuntime::UnLoadKernelFunc() {
   return true;
 }
 
-bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel_name,
-                              const bool is_dynamic, const std::vector<TensorDevicePtr> &input_tensors,
-                              const std::vector<std::vector<int64_t>> &input_shape_args,
-                              int64_t tiling_key, int64_t tiling_struct_size) {
+bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
+                              const std::vector<TensorDevicePtr> &input_tensors,
+                              const std::vector<std::vector<int64_t>> &input_shape_args, int64_t tiling_key,
+                              int64_t tiling_struct_size) {
   uint32_t blockdim = 40;  // default blockdim equal to 1.
-  int64_t offset = 0;
   std::string func_name = kernel_name;
   std::vector<void *> runtimeargs;
-  
+
   if (is_dynamic) {
+    int64_t offset = 0;
     size_t input_size = input_tensors.size();
-    if (tiling_struct_size > 0)
-      input_size -= 1;
+    if (tiling_struct_size > 0) input_size -= 1;
     for (size_t idx = 0; idx < input_size; idx++) {
       auto tensor = input_tensors[idx];
       auto shape = input_shape_args[idx];
@@ -213,7 +206,7 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
         runtimeargs.push_back(reinterpret_cast<void *>(dim));
         size *= dim;
       }
-      for (auto& dim : shape) {
+      for (auto &dim : shape) {
         int64_t stride = size / dim;
         runtimeargs.push_back(reinterpret_cast<void *>(stride));
         size = stride;
@@ -221,16 +214,17 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
     }
     if (tiling_struct_size > 0) {
       auto tensor = input_tensors[input_size];
-      runtimeargs.push_back(reinterpret_cast<void*>(&tiling_key));
+      runtimeargs.push_back(reinterpret_cast<void *>(&tiling_key));
       runtimeargs.push_back(tensor->GetDeviceAddress());
       runtimeargs.push_back(tensor->GetDeviceAddress());
-      runtimeargs.push_back(reinterpret_cast<void*>(offset));
-      runtimeargs.push_back(reinterpret_cast<void*>(tiling_struct_size));
-      runtimeargs.push_back(reinterpret_cast<void*>(1));
+      runtimeargs.push_back(reinterpret_cast<void *>(offset));
+      runtimeargs.push_back(reinterpret_cast<void *>(tiling_struct_size));
+      runtimeargs.push_back(reinterpret_cast<void *>(1));
     }
   } else {
-    for (auto tensor : input_tensors)
-      runtimeargs.push_back(tensor->GetDeviceAddress());
+    runtimeargs.resize(input_tensors.size());
+    std::transform(input_tensors.begin(), input_tensors.end(), runtimeargs.begin(),
+                   [](TensorDevicePtr in) { return in->GetDeviceAddress(); });
   }
 
   typedef void (*CallFunc)(uint32_t, void *, void *, void **);
@@ -243,14 +237,14 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
 
 bool AscendKernelRuntime::SyncDeviceToHost(size_t size, void *device_ptr, void *host_ptr) {
   CHECK_NOTNULL(host_ptr);
-  LOG(INFO) << "SyncDeviceToHost: " << size << " bytes from " << device_ptr << "(device) to " << host_ptr << "(host)";
+  DLOG(INFO) << "SyncDeviceToHost: " << size << " bytes from " << device_ptr << "(device) to " << host_ptr << "(host)";
   SyncMemory(host_ptr, device_ptr, size, ACL_MEMCPY_DEVICE_TO_HOST);
   return true;
 }
 
 bool AscendKernelRuntime::SyncHostToDevice(size_t size, const void *host_ptr, void *device_ptr) {
   CHECK_NOTNULL(host_ptr);
-  LOG(INFO) << "SyncHostToDevice: " << size << " bytes from " << host_ptr << "(host) to " << device_ptr << "(device)";
+  DLOG(INFO) << "SyncHostToDevice: " << size << " bytes from " << host_ptr << "(host) to " << device_ptr << "(device)";
   SyncMemory(device_ptr, host_ptr, size, ACL_MEMCPY_HOST_TO_DEVICE);
   return true;
 }
@@ -306,7 +300,7 @@ bool AscendKernelRuntime::SyncStream() {
 
 void AscendKernelRuntime::InitDeviceMemory(const std::vector<TensorDevicePtr> &tensors) {
   for (auto tensor : tensors) {
-    if(tensor->IsHostTensor()){
+    if (tensor->IsHostTensor()) {
       auto mem_size = tensor->GetDataSize();
       auto device_addr = mem_manager_->MallocMemFromMemPool(mem_size);
       tensor->SetDeviceAddress(device_addr);
@@ -314,10 +308,10 @@ void AscendKernelRuntime::InitDeviceMemory(const std::vector<TensorDevicePtr> &t
   }
 }
 
-void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &kernel_name,
-                                    const bool is_dynamic, const std::vector<TensorDevicePtr> &input_tensors,
-                                    const std::vector<std::vector<int64_t>> &input_shape_args,
-                                    int64_t tiling_key, int64_t tiling_struct_size) {
+void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
+                                    const std::vector<TensorDevicePtr> &input_tensors,
+                                    const std::vector<std::vector<int64_t>> &input_shape_args, int64_t tiling_key,
+                                    int64_t tiling_struct_size) {
   // InitResource
   if (!Init()) {
     LOG(FATAL) << "Kernel runtime init error.";
@@ -326,7 +320,7 @@ void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &
   InitDeviceMemory(input_tensors);
   // load input data to device
   for (const auto &tensor : input_tensors) {
-    if(tensor->IsHostTensor())
+    if (tensor->IsHostTensor())
       SyncHostToDevice(tensor->GetDataSize(), tensor->GetHostAddress(), tensor->GetDeviceAddress());
   }
   // run op
