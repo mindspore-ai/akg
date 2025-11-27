@@ -406,13 +406,20 @@ class CommonUtils {
   }
 
   static Value getStoreMemref(Operation *storeOp) {
-    Value memref;
-    if (dyn_cast<affine::AffineStoreOp>(storeOp)) {
-      memref = dyn_cast<affine::AffineStoreOp>(storeOp).getMemref();
-    } else if (dyn_cast<memref::StoreOp>(storeOp)) {
-      memref = dyn_cast<memref::StoreOp>(storeOp).getMemref();
-    } else {
+    if (!storeOp) {
+      return Value();
+    }
+    if (!isa<affine::AffineStoreOp>(storeOp) && !isa<memref::StoreOp>(storeOp)) {
       llvm::errs() << "can only get memref from AffineStore or memref::StoreOp.\n";
+      return Value();
+    }
+    if (storeOp->getNumOperands() < 2) {
+      llvm::errs() << "store op has insufficient operands when querying memref.\n";
+      return Value();
+    }
+    Value memref = storeOp->getOperand(1);
+    if (!memref || !isa<BaseMemRefType>(memref.getType())) {
+      return Value();
     }
     return memref;
   }
