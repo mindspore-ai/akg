@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Huawei Technologies Co., Ltd
+ * Copyright 2024-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,20 +48,24 @@
 #define RT_STREAM_CP_PROCESS_USE (0x800U)
 
 // profiling
-#define ACL_PROF_ACL_API                0x0001ULL
-#define ACL_PROF_TASK_TIME              0x0002ULL
-#define ACL_PROF_AICORE_METRICS         0x0004ULL
-#define ACL_PROF_AICPU                  0x0008ULL
-#define ACL_PROF_L2CACHE                0x0010ULL
-#define ACL_PROF_HCCL_TRACE             0x0020ULL
-#define ACL_PROF_TRAINING_TRACE         0x0040ULL
-#define ACL_PROF_MSPROFTX               0x0080ULL
-#define ACL_PROF_RUNTIME_API            0x0100ULL
-#define ACL_PROF_FWK_SCHEDULE_L0        0x0200ULL
-#define ACL_PROF_TASK_TIME_L0           0x0800ULL
-#define ACL_PROF_TASK_MEMORY            0x1000ULL
-#define ACL_PROF_FWK_SCHEDULE_L1        0x01000000ULL
-#define ACL_PROF_TASK_TIME_L2           0x2000ULL
+#define ACL_PROF_ACL_API 0x0001ULL
+#define ACL_PROF_TASK_TIME 0x0002ULL
+#define ACL_PROF_AICORE_METRICS 0x0004ULL
+#define ACL_PROF_AICPU 0x0008ULL
+#define ACL_PROF_L2CACHE 0x0010ULL
+#define ACL_PROF_HCCL_TRACE 0x0020ULL
+#define ACL_PROF_TRAINING_TRACE 0x0040ULL
+#define ACL_PROF_MSPROFTX 0x0080ULL
+#define ACL_PROF_RUNTIME_API 0x0100ULL
+#define ACL_PROF_FWK_SCHEDULE_L0 0x0200ULL
+#define ACL_PROF_TASK_TIME_L0 0x0800ULL
+#define ACL_PROF_TASK_MEMORY 0x1000ULL
+#define ACL_PROF_FWK_SCHEDULE_L1 0x01000000ULL
+#define ACL_PROF_TASK_TIME_L2 0x2000ULL
+
+#ifndef char_t
+typedef char char_t;
+#endif
 
 static const int ACL_SUCCESS = 0;
 static const int ACL_ERROR_NONE = 0;
@@ -112,7 +116,7 @@ static const int32_t ACL_ERROR_RT_SEND_MSG = 207019;             // hdc send msg
 static const int32_t ACL_ERROR_RT_COPY_USER_FAIL = 207020;       // copy data fail
 
 static const int32_t ACL_ERROR_RT_INTERNAL_ERROR = 507000;                   // runtime internal error
-static const int32_t ACL_ERROR_RT_TS_ERROR = 507001;                         // ts internel error
+static const int32_t ACL_ERROR_RT_TS_ERROR = 507001;                         // ts internal error
 static const int32_t ACL_ERROR_RT_STREAM_TASK_FULL = 507002;                 // task full in stream
 static const int32_t ACL_ERROR_RT_STREAM_TASK_EMPTY = 507003;                // task empty in stream
 static const int32_t ACL_ERROR_RT_STREAM_NOT_COMPLETE = 507004;              // stream not complete
@@ -171,6 +175,7 @@ typedef void *aclrtStream;
 typedef void *aclrtContext;
 typedef int aclError;
 typedef int rtError_t;
+typedef void *rtStream_t;
 
 typedef enum aclrtMemcpyKind {
   ACL_MEMCPY_HOST_TO_HOST,
@@ -207,15 +212,15 @@ typedef enum aclrtMemAttr {
 typedef struct aclprofConfig aclprofConfig;
 typedef struct aclprofAicoreEvents aclprofAicoreEvents;
 typedef enum {
-    ACL_AICORE_ARITHMETIC_UTILIZATION = 0,
-    ACL_AICORE_PIPE_UTILIZATION = 1,
-    ACL_AICORE_MEMORY_BANDWIDTH = 2,
-    ACL_AICORE_L0B_AND_WIDTH = 3,
-    ACL_AICORE_RESOURCE_CONFLICT_RATIO = 4,
-    ACL_AICORE_MEMORY_UB = 5,
-    ACL_AICORE_L2_CACHE = 6,
-    ACL_AICORE_PIPE_EXECUTE_UTILIZATION = 7,
-    ACL_AICORE_NONE = 0xFF
+  ACL_AICORE_ARITHMETIC_UTILIZATION = 0,
+  ACL_AICORE_PIPE_UTILIZATION = 1,
+  ACL_AICORE_MEMORY_BANDWIDTH = 2,
+  ACL_AICORE_L0B_AND_WIDTH = 3,
+  ACL_AICORE_RESOURCE_CONFLICT_RATIO = 4,
+  ACL_AICORE_MEMORY_UB = 5,
+  ACL_AICORE_L2_CACHE = 6,
+  ACL_AICORE_PIPE_EXECUTE_UTILIZATION = 7,
+  ACL_AICORE_NONE = 0xFF
 } aclprofAicoreMetrics;
 
 typedef struct tagRtDevBinary {
@@ -224,6 +229,26 @@ typedef struct tagRtDevBinary {
   const void *data;  // binary data
   uint64_t length;   // binary length
 } rtDevBinary_t;
+
+typedef struct tagRtSmData {
+  uint64_t L2_mirror_addr;
+  uint64_t L2_data_section_size;
+  uint8_t L2_preload;
+  uint8_t modified;
+  uint8_t priority;
+  int8_t pre_L2_page_offset_base;
+  uint8_t L2_page_offset_base;
+  uint8_t L2_load_to_ddr;
+  uint8_t reserved[2];
+} rtSmData_t;
+
+typedef struct tagRtSmCtrl {
+  rtSmData_t data[8];
+  uint64_t size;
+  uint8_t remap[64];
+  uint8_t l2_in_main;
+  uint8_t reserved[3];
+} rtSmDesc_t;
 
 aclError aclrtSetCurrentContext(aclrtContext context);
 aclError aclrtGetDeviceCount(uint32_t *count);
@@ -251,12 +276,21 @@ aclError aclprofInit(const char *profilerResultPath, size_t length);
 aclError aclprofStart(const aclprofConfig *profilerConfig);
 aclError aclprofStop(const aclprofConfig *profilerConfig);
 aclError aclprofFinalize();
-aclprofConfig *aclprofCreateConfig(uint32_t *deviceIdList, uint32_t deviceNums,
-                                   aclprofAicoreMetrics aicoreMetrics,
-                                   const aclprofAicoreEvents *aicoreEvents,
-                                   uint64_t dataTypeConfig);
+aclprofConfig *aclprofCreateConfig(uint32_t *deviceIdList, uint32_t deviceNums, aclprofAicoreMetrics aicoreMetrics,
+                                   const aclprofAicoreEvents *aicoreEvents, uint64_t dataTypeConfig);
 aclError aclprofDestroyConfig(const aclprofConfig *profilerConfig);
 
+extern "C" {
 rtError_t rtGetC2cCtrlAddr(uint64_t *addr, uint32_t *len);
+rtError_t rtConfigureCall(uint32_t numBlocks, rtSmDesc_t *smDesc = nullptr, rtStream_t stm = nullptr);
+rtError_t rtDevBinaryRegister(const rtDevBinary_t *bin, void **hdl);
+rtError_t rtDevBinaryUnRegister(void *hdl);
+rtError_t rtFunctionRegister(void *binHandle, const void *stubFunc, const char_t *stubName, const void *kernelInfoExt,
+                             uint32_t funcMode);
+rtError_t rtKernelLaunch(const void *stubFunc, uint32_t blockDim, void *arg, uint32_t argsSize, rtSmDesc_t *smDesc,
+                         rtStream_t stm);
+rtError_t rtLaunch(const void *stubFunc);
+rtError_t rtSetupArgument(const void *args, uint32_t size, uint32_t offset);
+}
 
 #endif  // COMPILER_INCLUDE_AKG_EXECUTIONENGINE_AKGASCENDLAUNCHRUNTIME_CCEACL_H_

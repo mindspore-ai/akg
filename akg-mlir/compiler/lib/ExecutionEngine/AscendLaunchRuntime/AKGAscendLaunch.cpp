@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Huawei Technologies Co., Ltd
+ * Copyright 2024-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -97,7 +97,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
       auto input_shape = std::vector<int64_t>();
       py::buffer_info shape_info = tensor_obj_ptr->shape_info.request();
       int64_t *shape = reinterpret_cast<int64_t *>(shape_info.ptr);
-      for (size_t idx = 0; idx < shape_info.size; idx++)
+      for (int64_t idx = 0; idx < shape_info.size; idx++)
         input_shape.push_back(reinterpret_cast<int64_t>(shape[idx]));
       input_shapes.push_back(input_shape);
     }

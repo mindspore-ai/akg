@@ -1,4 +1,4 @@
-# Copyright 2023 Huawei Technologies Co., Ltd
+# Copyright 2023-2025 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,31 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Module for kernel test and profiling"""
+import os
+import sys
 import argparse
 import ctypes
 import json
 import logging
 import multiprocessing
-import os
 import pathlib
 import shutil
 import subprocess
 import time
-
 import numpy as np
+from bfloat16 import bfloat16
+
 from akg import AkgMlirDriver
+from akg import akgProfileMgr
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
 from ..utils.dynamic_utils import dump_shape_arg_list, get_device_shape
-from ..utils.gen_runtime_code import (ProfilingParams,
-                                      gen_cuda_runtime_code)
+from ..utils.gen_runtime_code import (ProfilingParams, gen_cuda_runtime_code)
 from ..utils.result_analysis import get_compare_tolerance
 from ..ascend_profilier.cann_file_parser import CANNFileParser
 from ..ascend_profilier.op_summary_parser import OpSummaryParser
-from ..ascend_profilier.op_summary_headers import OpSummaryHeaders
-from bfloat16 import bfloat16
 
-import akg.akgAscendLaunch as akgAscendLaunch
-import akg.akgProfileMgr as akgProfileMgr
+flags = sys.getdlopenflags()
+sys.setdlopenflags(flags | os.RTLD_GLOBAL)
+# pylint: disable=wrong-import-position
+# pylint: disable=wrong-import-order
+from akg import akgAscendLaunch
+sys.setdlopenflags(flags)
+
 
 PROF_ERROR_CODE = 9999999999
 
@@ -78,8 +83,8 @@ def validate_and_normalize_path(
     try:
         # most unix systems allow
         normalized_path = os.path.realpath(path)
-    except ValueError:
-        raise RuntimeError("The path is invalid!")
+    except ValueError as e:
+        raise RuntimeError("The path is invalid!") from e
 
     return normalized_path
 
@@ -98,14 +103,20 @@ def _transform_data_to_ctypes(data,
                               backend="gpu",
                               is_profile_params=False,
                               ):
-    data_ctypes = list()
+    """ transform input data to ctypes """
+    def get_max_shape_length(shapes):
+        max_len = 0
+        for shape in shapes:
+            max_len = max(max_len, len(shape))
+        return max_len
+
+    data_ctypes = []
     if len(data) == 0:
         # dynamic shape info cannot generate inputs while compilation
         return data_ctypes
-    shape_arg_list = list()
+    shape_arg_list = []
     int_p = ctypes.POINTER(ctypes.c_int)
-    device_shape, _, _ = get_device_shape(
-        data, kernel_name, is_dyn_shape and not is_profile_params)
+    device_shape, _, _ = get_device_shape(data, kernel_name, is_dyn_shape and not is_profile_params)
 
     for data_idx, d in enumerate(data):
         shape_list = [0]
@@ -122,10 +133,8 @@ def _transform_data_to_ctypes(data,
                     data_shape[-idx - 1]
             shape_list += stride_list
         else:
-            raise TypeError("wrong data to cytpes, current type is '", type(d),
-                            "'")
-        shape_list += [0] * (1 + 2 * 0 if is_profile_params else max([len(shape)
-                             for shape in device_shape]) - len(shape_list))
+            raise TypeError("wrong data to cytpes, current type is '", type(d), "'")
+        shape_list += [0] * (1 + 2 * 0 if is_profile_params else get_max_shape_length(device_shape) - len(shape_list))
         shape_arg_list.append(shape_list)
     if is_profile_params or backend == "gpu":
         return data_ctypes
@@ -138,35 +147,33 @@ def _transform_data_to_ctypes(data,
 
     if backend == "cpu" and not is_dyn_shape:
         return [packed_tensors]
-    else:
-        # dynamic shape: array of pointers of data, array of [0, shape, stride] of data
-        # tensor_num * [0, shape_list 1,2,...,n, strides 0,1,2,...,n]
-        packed_shape_lists = (int_p * len(data))()
-        for idx, shape_list in enumerate(shape_arg_list):
-            packed_shapes = (int_p * len(shape_list))()
-            packed_shapes[:] = [
-                ctypes.cast(shape, int_p) for shape in shape_list
-            ]
-            packed_shape_lists[idx] = ctypes.cast(packed_shapes, int_p)
-        return [packed_tensors, packed_shape_lists]
+
+    # dynamic shape: array of pointers of data, array of [0, shape, stride] of data
+    # tensor_num * [0, shape_list 1,2,...,n, strides 0,1,2,...,n]
+    packed_shape_lists = (int_p * len(data))()
+    for idx, shape_list in enumerate(shape_arg_list):
+        packed_shapes = (int_p * len(shape_list))()
+        packed_shapes[:] = [
+            ctypes.cast(shape, int_p) for shape in shape_list
+        ]
+        packed_shape_lists[idx] = ctypes.cast(packed_shapes, int_p)
+    return [packed_tensors, packed_shape_lists]
 
 def _transform_data_to_ctypes_ascend(data,
-                              kernel_name,
-                              output_indexes,
-                              is_dyn_shape=False,
-                              backend="ascend",
-                              is_profile_params=False,
-                              ):
-    data_ctypes = list()
+                                     kernel_name,
+                                     output_indexes,
+                                     is_dyn_shape=False,
+                                     backend="ascend",
+                                     is_profile_params=False):
+    """ transform input data to ctypes for ascend """
+    data_ctypes = []
     if len(data) == 0:
         # dynamic shape info cannot generate inputs while compilation
         return data_ctypes
-    shape_arg_list = list()
-
     device_shape, _, _ = get_device_shape(
         data, kernel_name, is_dyn_shape and not is_profile_params)
 
-    output_idx_set = list()
+    output_idx_set = []
     for output_idx in output_indexes:
         if output_idx >= 0:
             output_idx_set.append(output_idx)
@@ -180,7 +187,7 @@ def _transform_data_to_ctypes_ascend(data,
         if isinstance(d, int):
             data_ctypes.append(ctypes.c_int(d))
         elif isinstance(d, np.ndarray):
-            if(d.dtype.name == "bfloat16"):
+            if d.dtype.name == "bfloat16":
                 d = d.astype(np.float32)
                 data[data_idx] = d
                 is_numpy_bf16 = True
@@ -219,7 +226,7 @@ def create_executable(kernel_name,
     tmp_file_path = _get_tmp_dir()
     tmp_file_name = os.path.join(
         tmp_file_path, "gen_func_" + kernel_name + ".so")
-    fake_output_indices = list()
+    fake_output_indices = []
     gen_cuda_runtime_code(kernel_name,
                           input_for_mod,
                           output_indexes,
@@ -228,20 +235,19 @@ def create_executable(kernel_name,
                           path=cur_path)
     try:
         _compile_lib(kernel_name, file_path=tmp_file_path)
-    except (Exception,):
-        raise RuntimeError("Compile cuda runtime lib fail")
+    except Exception as e:
+        raise RuntimeError("Compile cuda runtime lib fail") from e
     try:
         lib = ctypes.cdll.LoadLibrary(tmp_file_name)
-    except (Exception,):
-        raise RuntimeError("Load cuda runtime lib fail")
+    except Exception as e:
+        raise RuntimeError("Load cuda runtime lib fail") from e
     return lib
 
 
 def compare_results(kernel_name, desc, input_for_mod, output_indexes, expect):
     """Helper function to compare result"""
     output = list(input_for_mod[i] for i in output_indexes)
-    if isinstance(output, tuple) and len(output) > 0 and isinstance(
-            output[-1], dict):
+    if isinstance(output, tuple) and len(output) > 0 and isinstance(output[-1], dict):
         output = output[0]
     output = output if isinstance(output, (list, tuple)) else [output]
     expect = expect if isinstance(expect, (list, tuple)) else [expect]
@@ -271,6 +277,7 @@ def _create_dirs():
 
 
 def _clear_tmp_dirs(kernel_name):
+    """clear tmp dirs"""
     dir_paths = [_get_kernel_meta_dir(), _get_tmp_dir()]
     for file_path in dir_paths:
         if not os.path.exists(file_path):
@@ -295,6 +302,7 @@ def _auto_get_target(desc):
 
 def _run_gpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                     output_indexes, desc, profiling_trails, expect):
+    """run kernel for gpu"""
     if is_dyn_shape:
         dump_shape_arg_list(input_for_mod, kernel_name, str(
             pathlib.Path(__file__).absolute().parent))
@@ -332,6 +340,7 @@ def _run_gpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
 
 def _run_cpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                     output_indexes, desc, profiling_trails, expect, replace_dso):
+    """run kernel for cpu"""
     akg_mlir_driver.run_cpu()
     # Run executable and profiling
     if replace_dso:
@@ -349,7 +358,7 @@ def _run_cpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
         input_for_mod, kernel_name, is_dyn_shape, "cpu")
     # Profiling
     if profiling_trails > 0:
-        func = cur.__getattr__("main")
+        func = getattr(cur, "main")
         np_timers_ns = np.array([0], dtype=np.int64)
         input_for_mod_ctypes.append(
             np_timers_ns.ctypes.data_as(
@@ -359,7 +368,7 @@ def _run_cpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
               " times, the average execution time is ",
               np_timers_ns / 1000000 / profiling_trails, " ms.")
     else:
-        func = cur.__getattr__(kernel_name)
+        func = getattr(cur, kernel_name)
         # Run executable and compare results
         func(*input_for_mod_ctypes)
         compare_results(kernel_name, desc, input_for_mod,
@@ -376,7 +385,8 @@ def profiling_analyse(arch):
     return task_duration
 
 def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
-                    output_indexes, desc, profiling_trails, expect, replace_dso):
+                       output_indexes, desc, profiling_trails, expect, replace_dso):
+    """run kernel for npu"""
     ascend_path = os.getenv("ASCEND_HOME_PATH", "")
     if ascend_path == "":
         raise Exception("ASCEND_HOME_PATH is not sett, source <ascend-toolkit>/set_env.sh first")
@@ -393,10 +403,7 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
                 "Failed to find the customized dso file : " + dso_path)
     else:
         dso_path = os.path.join(_get_kernel_meta_dir(), "lib" + kernel_name + ".so")
-    # load ascend_run func
-    launch_func_name = "asend_run"
 
-    cur = ctypes.cdll.LoadLibrary(dso_path)
     input_for_mod_ctypes = _transform_data_to_ctypes_ascend(
         input_for_mod, kernel_name, output_indexes, is_dyn_shape, "ascend")
     # Run executable and compare results
@@ -410,7 +417,7 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
             output_indexes, expect)
     else:
         akgProfileMgr.ascend_start_profiling(device_id)
-        for i in range(5):
+        for _ in range(5):
             akgAscendLaunch.akg_ascend_run(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
         akgProfileMgr.ascend_stop_profiling()
         # analysis
@@ -426,7 +433,6 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
         compare_results(kernel_name, desc, input_for_mod,
             output_indexes, expect)
         print(kernel_name + " Task Duration(us) : " + str(cycle))
-    return
 
 def run_a_kernel(desc,
                  file_path,
@@ -439,7 +445,7 @@ def run_a_kernel(desc,
                  repo_path="",
                  enable_akg_loop_fusion=False):
     """function to run a single kernel"""
-    is_dyn_shape = (static_desc is not None)
+    is_dyn_shape = static_desc is not None
     if not backend:
         backend = _auto_get_target(desc)
 
@@ -449,14 +455,14 @@ def run_a_kernel(desc,
         static_desc if is_dyn_shape else desc, with_compute=True)
     # Init AkgMlirDriver
     akg_mlir_driver = AkgMlirDriver(input_file=file_path,
-                                output_dir=_get_kernel_meta_dir(),
-                                llvm_tools_dir=os.getenv("LLVM_HOME", ""),
-                                dynamic_shape=is_dyn_shape,
-                                dump_ir=dump_ir,
-                                repo_path=repo_path,
-                                profiling_trails=profiling_trails,
-                                runtime_provider="MLIR",
-                                enable_akg_loop_fusion=enable_akg_loop_fusion)
+                                    output_dir=_get_kernel_meta_dir(),
+                                    llvm_tools_dir=os.getenv("LLVM_HOME", ""),
+                                    dynamic_shape=is_dyn_shape,
+                                    dump_ir=dump_ir,
+                                    repo_path=repo_path,
+                                    profiling_trails=profiling_trails,
+                                    runtime_provider="MLIR",
+                                    enable_akg_loop_fusion=enable_akg_loop_fusion)
 
     if backend == "gpu":
         _run_gpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
@@ -468,7 +474,7 @@ def run_a_kernel(desc,
         _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                         output_indexes, desc, profiling_trails, expect, replace_dso)
     else:
-        TypeError("only support gpu, cpu, ascend backend currently")
+        raise TypeError("only support gpu, cpu, ascend backend currently")
     if clear_tmp:
         _clear_tmp_dirs(kernel_name)
 
@@ -483,6 +489,7 @@ def _get_compute(desc):
 
 
 def _get_input_shape(desc):
+    """get input shape."""
     is_dyn_shape = False
     desc_d = json.loads(desc)
     input_desc = desc_d.get("input_desc", [])
@@ -512,7 +519,8 @@ def _get_input_dtype(desc):
 
 
 def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
-    with open(file_path, "r") as f:
+    """run single info."""
+    with open(file_path, "r", encoding='utf-8') as f:
         desc = f.read()
         kernel_name = _get_kernel_name(desc)
         input_shape, is_dyn_shape = _get_input_shape(desc)
@@ -520,9 +528,8 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
         if is_dyn_shape:
             static_shape_path = file_path.replace(".info", "_static.info")
             if not os.path.exists(static_shape_path):
-                raise ValueError(
-                    "Dynamic shape info must come with static shape info.")
-            with open(static_shape_path, "r") as s_f:
+                raise ValueError("Dynamic shape info must come with static shape info.")
+            with open(static_shape_path, "r", encoding='utf-8') as s_f:
                 static_desc = s_f.read()
         if compile_args.profiling:
             print("profiling ", kernel_name)
@@ -560,7 +567,7 @@ class TestUtils:
         if os.environ.get(PERFORMANCE_TEST_FILE):
             result_file = os.environ.get(PERFORMANCE_TEST_FILE)
             with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
-                f.write("{0}\n".format(cycle))
+                f.write(f"{format(cycle)}\n")
 
     @staticmethod
     def record_core(stmt):
@@ -575,7 +582,7 @@ class TestUtils:
         if os.environ.get(PERFORMANCE_TEST_FILE):
             result_file = os.environ.get(PERFORMANCE_TEST_FILE)
             with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
-                f.write("{0}; ".format(get_core_num()))
+                f.write(f"{format(get_core_num())}; ")
 
 def main(args=None):
     # usage: python py_benchmark.py -e gpu --file ./info_cases/Fused_BiasAdd_1551558231201032373.info --prof_trails 100
@@ -646,7 +653,7 @@ def main(args=None):
 
         while _alive_task() > 0:
             time.sleep(1)
-        print("Finish profiling, total file {}".format(len(files)))
+        print(f"Finish profiling, total file {len(files)}")
         if args.ci_test and not _has_fail():
             print("dir test success")
     else:

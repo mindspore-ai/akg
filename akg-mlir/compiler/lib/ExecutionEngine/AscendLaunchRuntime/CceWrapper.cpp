@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Huawei Technologies Co., Ltd
+ * Copyright 2024-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -122,6 +122,13 @@ bool CceWrapper::LoadRuntime() {
 
   // rt
   LOAD_FUNCTION_PTR(rtGetC2cCtrlAddr);
+  LOAD_FUNCTION_PTR(rtConfigureCall);
+  LOAD_FUNCTION_PTR(rtDevBinaryRegister);
+  LOAD_FUNCTION_PTR(rtDevBinaryUnRegister);
+  LOAD_FUNCTION_PTR(rtFunctionRegister);
+  LOAD_FUNCTION_PTR(rtKernelLaunch);
+  LOAD_FUNCTION_PTR(rtLaunch);
+  LOAD_FUNCTION_PTR(rtSetupArgument);
 
   return true;
 }
@@ -268,10 +275,8 @@ aclError aclprofFinalize() {
   return func();
 }
 
-aclprofConfig *aclprofCreateConfig(uint32_t *deviceIdList, uint32_t deviceNums,
-                                   aclprofAicoreMetrics aicoreMetrics,
-                                   const aclprofAicoreEvents *aicoreEvents,
-                                   uint64_t dataTypeConfig) {
+aclprofConfig *aclprofCreateConfig(uint32_t *deviceIdList, uint32_t deviceNums, aclprofAicoreMetrics aicoreMetrics,
+                                   const aclprofAicoreEvents *aicoreEvents, uint64_t dataTypeConfig) {
   auto func = mlir::runtime::CceWrapper::GetInstance()->aclprofCreateConfig;
   CHECK_NOTNULL(func);
   return func(deviceIdList, deviceNums, aicoreMetrics, aicoreEvents, dataTypeConfig);
@@ -283,9 +288,52 @@ aclError aclprofDestroyConfig(const aclprofConfig *profilerConfig) {
   return func(profilerConfig);
 }
 
-
+extern "C" {
 rtError_t rtGetC2cCtrlAddr(uint64_t *addr, uint32_t *len) {
   auto func = mlir::runtime::CceWrapper::GetInstance()->rtGetC2cCtrlAddr;
   CHECK_NOTNULL(func);
   return func(addr, len);
+}
+
+rtError_t rtConfigureCall(uint32_t numBlocks, rtSmDesc_t *smDesc, rtStream_t stm) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->rtConfigureCall;
+  CHECK_NOTNULL(func);
+  return func(numBlocks, smDesc, stm);
+}
+
+rtError_t rtDevBinaryRegister(const rtDevBinary_t *bin, void **hdl) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->rtDevBinaryRegister;
+  CHECK_NOTNULL(func);
+  return func(bin, hdl);
+}
+
+rtError_t rtDevBinaryUnRegister(void *hdl) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->rtDevBinaryUnRegister;
+  CHECK_NOTNULL(func);
+  return func(hdl);
+}
+
+rtError_t rtFunctionRegister(void *binHandle, const void *stubFunc, const char_t *stubName, const void *kernelInfoExt,
+                             uint32_t funcMode) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->rtFunctionRegister;
+  CHECK_NOTNULL(func);
+  return func(binHandle, stubFunc, stubName, kernelInfoExt, funcMode);
+}
+
+rtError_t rtKernelLaunch(const void *stubFunc, uint32_t blockDim, void *arg, uint32_t argsSize, rtSmDesc_t *smDesc,
+                         rtStream_t stm) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->rtKernelLaunch;
+  CHECK_NOTNULL(func);
+  return func(stubFunc, blockDim, arg, argsSize, smDesc, stm);
+}
+rtError_t rtLaunch(const void *stubFunc) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->rtLaunch;
+  CHECK_NOTNULL(func);
+  return func(stubFunc);
+}
+rtError_t rtSetupArgument(const void *args, uint32_t size, uint32_t offset) {
+  auto func = mlir::runtime::CceWrapper::GetInstance()->rtSetupArgument;
+  CHECK_NOTNULL(func);
+  return func(args, size, offset);
+}
 }

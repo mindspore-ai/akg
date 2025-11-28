@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Huawei Technologies Co., Ltd
+ * Copyright 2024-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,8 +41,8 @@ class CceWrapper : public SymbolsWrapper {
   CceWrapper(const CceWrapper &) = delete;
   CceWrapper &operator=(const CceWrapper &) = delete;
   ~CceWrapper();
-  bool LoadLibraries();
-  bool UnLoadLibraries();
+  bool LoadLibraries() override;
+  bool UnLoadLibraries() override;
 
  private:
   CceWrapper();
@@ -76,12 +76,18 @@ class CceWrapper : public SymbolsWrapper {
   using aclprofStartFunc = aclError (*)(const aclprofConfig *);
   using aclprofStopFunc = aclError (*)(const aclprofConfig *);
   using aclprofFinalizeFunc = aclError (*)();
-  using aclprofCreateConfigFunc = aclprofConfig * (*)(uint32_t *, uint32_t , aclprofAicoreMetrics ,
-                                               const aclprofAicoreEvents *, uint64_t);
+  using aclprofCreateConfigFunc = aclprofConfig *(*)(uint32_t *, uint32_t, aclprofAicoreMetrics,
+                                                     const aclprofAicoreEvents *, uint64_t);
   using aclprofDestroyConfigFunc = aclError (*)(const aclprofConfig *);
 
   using rtGetC2cCtrlAddrFunc = rtError_t (*)(uint64_t *, uint32_t *);
-
+  using rtConfigureCallFunc = rtError_t (*)(uint32_t, rtSmDesc_t *, rtStream_t);
+  using rtDevBinaryRegisterFunc = rtError_t (*)(const rtDevBinary_t *, void **);
+  using rtDevBinaryUnRegisterFunc = rtError_t (*)(void *);
+  using rtFunctionRegisterFunc = rtError_t (*)(void *, const void *, const char_t *, const void *, uint32_t);
+  using rtKernelLaunchFunc = rtError_t (*)(const void *, uint32_t, void *, uint32_t, rtSmDesc_t *, rtStream_t);
+  using rtLaunchFunc = rtError_t (*)(const void *);
+  using rtSetupArgumentFunc = rtError_t (*)(const void *, uint32_t, uint32_t);
 
   // kernel launch
   DEFINE_FUNC_PTR(aclrtSetCurrentContext);
@@ -104,7 +110,7 @@ class CceWrapper : public SymbolsWrapper {
   DEFINE_FUNC_PTR(aclrtResetDevice);
   DEFINE_FUNC_PTR(aclrtGetDevice);
 
- // profiling
+  // profiling
   DEFINE_FUNC_PTR(aclprofInit);
   DEFINE_FUNC_PTR(aclprofStart);
   DEFINE_FUNC_PTR(aclprofStop);
@@ -113,6 +119,13 @@ class CceWrapper : public SymbolsWrapper {
   DEFINE_FUNC_PTR(aclprofDestroyConfig);
 
   DEFINE_FUNC_PTR(rtGetC2cCtrlAddr);
+  DEFINE_FUNC_PTR(rtConfigureCall);
+  DEFINE_FUNC_PTR(rtDevBinaryRegister);
+  DEFINE_FUNC_PTR(rtDevBinaryUnRegister);
+  DEFINE_FUNC_PTR(rtFunctionRegister);
+  DEFINE_FUNC_PTR(rtKernelLaunch);
+  DEFINE_FUNC_PTR(rtLaunch);
+  DEFINE_FUNC_PTR(rtSetupArgument);
 };
 
 }  // namespace runtime
