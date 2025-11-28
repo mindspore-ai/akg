@@ -35,4 +35,6 @@ class TestCase:
         Description: fuse sub and add.
         Expectation: success
          """
-        return self.run_case("ascend/fuse_sub_add.info")
+        pwd = os.path.dirname(os.path.abspath(__file__))
+        info = os.path.join(pwd, "ascend/fused_sub_add.info")
+        return self.run_case(info)
