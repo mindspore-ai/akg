@@ -22,6 +22,152 @@ BLOCK_SIZE = 128, PARALLEL_NUM = 8
 ## 任务描述
 {{ task_desc }}
 
+{% if enable_hint_mode and has_hint %}
+---
+
+## Hint模式：参数范围约束
+
+任务描述中包含hint标记（如 `@hint:`, `@range_hint`, `@elemwise_hint` 等），指定了算子需要支持的参数范围。
+
+### 任务1：提取hint信息并生成参数空间配置
+
+从task_desc的注释中识别所有hint标记行，生成规范的Python配置代码。
+
+**支持的hint格式**（灵活识别，以下格式均可）：
+```python
+# ===== 标准格式 =====
+# @hint: param in [val1, val2, ...]         → type='choice', values=[...]
+# @hint: param in range(min, max, step=N)   → type='range', min=..., max=..., step=...
+# @hint: param = value                      → type='fixed', value=...
+# @hint: param in pow2(min_pow, max_pow)    → type='power_of_2', min_pow=..., max_pow=...
+# @hint: param in pow of 2                  → type='power_of_2', 
+
+# ===== 兼容格式 =====
+# @range_hint("param", start=min, end=max)  → type='range', min=..., max=...
+# @elemwise_hint("param", [val1, val2])     → type='choice', values=[...]
+# @elem_hint("param", [val1, val2])         → type='choice', values=[...]
+
+# ===== 示例 =====
+# @hint: batch_size in pow of 2             → {'type': 'power_of_2', 'min_pow': 3, 'max_pow': 6}  # [8, 16, 32, 64]
+# @hint: dim in range(16, 65536)            → {'type': 'range', 'min': 16, 'max': 65536, 'step': 1}
+```
+
+**提取规则（重要）**：
+1. **识别所有hint**：包括被注释掉的hint（`# @range_hint`），都应识别并提取
+2. **完整提取**：如果有多个hint，必须全部提取，不能遗漏
+3. **设计适用范围标注**（关键！）：
+   - 无论sketch用几维，"设计适用范围"注释中必须对原始输入的每个维度分别说明范围
+   - 示例：输入 `x = torch.randn(batch_size, dim)`
+     * sketch可以用一维：`X[N]: f32`（其中N=batch_size*dim）
+     * 但"设计适用范围"必须写：`batch_size in [8, 64], dim in [16, 65536]`（分维度说明）
+   - 不要只写总元素数的范围，要分别写每个维度的范围
+   - 如果是2的幂次也需要标出
+4. **格式转换**：
+   - 装饰器格式（如`@range_hint("param", st=8, ed=64)`）→ 提取括号内信息
+   - 注释格式（如`# @hint: param in range(16, 65536)`）→ 提取冒号后声明
+   - 统一转换为标准的`SPACE_CONFIG`字典格式
+
+**参数空间配置模板**（必须严格按此格式生成完整Python代码）：
+```python
+"""参数空间配置"""
+{{ 'import torch' if framework == 'torch' else 'import mindspore as ms' }}
+import {{ framework }}.nn as nn
+
+# ===== 参数空间定义 =====
+SPACE_CONFIG = {
+    'param1': {'type': 'choice', 'values': [val1, val2, ...]},
+    'param2': {'type': 'range', 'min': min_val, 'max': max_val, 'step': step_val},
+    'param3': {'type': 'power_of_2', 'min_pow': min_exp, 'max_pow': max_exp},
+    # ... 根据hint提取的所有参数
+}
+
+# ===== 元信息 =====
+META_INFO = {
+    'op_name': '{{ op_name }}',
+    'framework': '{{ framework }}',
+    'param_names': ['param1', 'param2', ...]  # 参数名列表，保持顺序！
+}
+
+# ===== Model类 =====
+# 从task_desc中完整复制Model类定义
+class Model(...):
+    def __init__(self, ...):
+        ...
+    
+    def forward(self, ...):
+        ...
+
+# ===== 输入构造函数 =====
+def create_inputs(param1, param2, ...):
+    """
+    根据参数生成输入
+    参数顺序必须与META_INFO['param_names']一致
+    
+    从原始get_inputs()提取逻辑，将shape变量参数化：
+    - 原始: a = torch.randn(M, K)
+    - 参数化: a = torch.randn(param1, param3)
+    """
+    ...
+    return [tensor1, tensor2, ...]
+
+# ===== 初始化输入函数 =====
+# 如果task_desc中有get_init_inputs()，必须完整复制到这里
+def get_init_inputs():
+    """如果原始代码有此函数，完整复制其参数、返回值和实现"""
+    return []  # 或者其他返回值，如 ["auto"]
+```
+
+**重要规则**：
+1. `create_inputs()` 的参数顺序必须与 `META_INFO['param_names']` 一致
+2. 将原始 `get_inputs()` 中的全局变量（M, N等）替换为参数
+3. Model类完整复制，不要修改
+4. **如果Model的forward方法调用了外部函数**，必须在Model类之前复制这些函数的完整定义
+5. **如果task_desc中有`get_init_inputs()`函数**，必须完整复制（包括参数、返回值和函数体）
+6. 输出必须是完整的、可直接执行的Python代码
+
+---
+
+### 任务2：基于参数范围设计草图
+
+**核心原则（必须遵守）**：
+1. **完全支持hint范围**：草图设计必须支持hint指定的所有参数值
+2. **范围外拦截**：在"设计适用范围"注释中明确，范围外的输入应通过assert拦截
+3. **约束条件检查**：如果设计有额外约束（如整除要求），必须在注释中说明
+4. 上述限制必须输出到设计适用范围注释中
+
+#### BLOCK_SIZE配置选择原则
+
+根据hint范围选择合适的BLOCK_SIZE：
+
+- **参数范围较小**（如 M in [128, 256]）：
+  - 避免过大BLOCK_SIZE，推荐[32, 64, 128]
+  - 确保最小值（128）至少能容纳一个BLOCK
+  
+- **参数范围较大**（如 M in range(128, 8192)）：
+  - 提供多种选择[64, 128, 256, 512]
+  - 使用autotune适配不同大小
+
+#### 边界处理策略
+**选项A：使用mask（推荐）**
+- 支持任意shape
+- 在草图注释中说明：`使用mask，支持任意shape`
+
+**选项B：不使用mask（性能更优）**
+- 要求shape整除BLOCK_SIZE
+- 在草图注释中说明：`M % 64 == 0（不使用mask）`
+
+#### 在草图中添加"设计适用范围"注释
+```python
+# 设计适用范围：
+# - 参数范围：M in [128, 2048], N in [128, 4096]
+# - 边界处理：使用mask / 不使用mask（需整除）
+# - BLOCK_SIZE配置：[64, 128, 256]
+# - 约束条件：如不使用mask，M % 64 == 0
+```
+
+---
+{% endif %}
+
 {% if hardware_docs %}
 ## {{ arch_name }} 硬件信息
 {{ hardware_docs }}
@@ -75,8 +221,48 @@ BLOCK_SIZE = 128, PARALLEL_NUM = 8
 {{ meta_prompts }}
 {% endif %}
 
+{% if enable_llm_range_inference %}
+## 设计适用范围说明
+如果任务描述包含具体shape（如M=1024），在草图注释中说明本设计的适用输入范围：
+- **仔细分析**：不仅考虑显式的 shape 约束，还要分析隐含的逻辑约束
+  - 例如：如果代码中有 `indices[start:end]` 切片操作，确保 `end > start`
+  - 例如：如果有多个参数的关系（如 `topk * num_experts <= token_num`），必须明确
+- 推荐的shape范围（如：建议 128 <= M <= 8192）
+- 与BLOCK_SIZE配置的关系（如：M<256时某些大BLOCK配置可能不适用）
+- **重要**：确保任务描述中给出的输入shape在设计的适用范围内（如给出M=1024，则范围必须包含1024）
+- **边界处理**：
+  - 使用 mask：支持任意 shape
+  - 不使用 mask：必须说明整除约束（如 `M % 64 == 0`）
+- **最大值约束**：必须提供最大值，且建议的最大值不应超过 `max(65536, 原始输入的最大维度值)`
+  - 例如：原始输入是 (1024, 4096)，则建议范围最大值不超过 max(65536, 4096) = 65536
+  - 这样可以避免测试时生成过大的 tensor 导致内存或性能问题
+- **最小值约束**：不要盲目设置太小的最小值（如 16），要根据算法逻辑确定合理的最小值
+  - 建议最小值设为原始输入的 1/4 到 1/2，避免过小导致逻辑错误
+
+示例格式：
+```
+# 设计适用范围：
+# - 128 <= M <= 8192, 128 <= N <= 4096
+# - M % 64 == 0, N % 128 == 0（无mask，需整除）
+```
+{% endif %}
+```
+
 请严格按照上述指南，为当前任务生成完整的算子设计草图。
 
+{% if enable_hint_mode and has_hint %}
+**请按照以下JSON格式输出（包含三个字段）**：
+```json
+{
+    "sketch": "草图代码（必须包含'设计适用范围'注释，说明支持的参数范围，BLOCK_SIZE等配置考虑了hint范围）",
+    "space_config": "参数空间配置（完整的Python代码，按上述模板，用于后续生成多case测试）",
+    "reasoning": "设计思路（说明如何根据hint范围选择BLOCK_SIZE和边界处理策略）"
+}
+```
+
+仅返回JSON，不要包含任何解释或额外内容。
+{% else %}
 **请按照以下格式输出你的结果，仅返回json格式，不要包含任何解释或额外内容：**
 
 {{ format_instructions }}
+{% endif %}

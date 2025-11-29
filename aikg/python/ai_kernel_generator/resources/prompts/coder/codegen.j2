@@ -50,6 +50,105 @@
 ### 算子任务描述
 {{ task_desc }}
 
+{% if enable_hint_mode and has_param_space %}
+---
+
+### 参数适用范围
+
+**注意**：Designer在设计草图的"设计适用范围"注释中已经说明了参数范围和约束条件。
+
+**编码要求（必须遵守）**：
+1. **支持hint范围**：生成的代码必须支持hint指定的所有参数值
+2. **范围外拦截**：通过assert检查，范围外的输入必须报错
+3. **约束条件检查**：如果有整除约束、Grid限制等，必须添加对应的assert
+4. **分维度Assert检查（关键！）**：
+   - 必须对原始输入的每个维度分别生成assert
+   - 示例：输入是二维 `(batch_size, dim)`
+     * 必须分别检查：`assert 8 <= batch_size <= 64` 和 `assert 16 <= dim <= 65536`
+     * 识别到2的幂次需要检查: `assert B > 0 and (B & (B - 1)) == 0`
+     * 不要只写总元素数检查：`assert 128 <= n_elements <= 4194304`
+   - 从"设计适用范围"注释中提取每个维度的范围，分别生成assert
+
+从设计草图的"设计适用范围"注释中提取参数范围和约束条件，在生成的代码中添加assert检查。
+
+{% if framework == "torch" %}
+```python
+# 示例：假设输入是二维 x.shape = (B, N)
+# 设计草图的"设计适用范围"注释：B in [8, 64], N in [16, 65536]
+
+class ModelNew(nn.Module):
+    def forward(self, x, ...):
+        # 1. 提取原始维度参数（对每个维度分别检查）
+        B, N = x.shape  # 提取原始的两个维度
+        
+        # 2. ========== Assert检查（必须！）==========
+        # 对每个维度分别检查范围
+        assert 8 <= B <= 64, f"B ({B}) must be in [8, 64]"
+        assert 16 <= N <= 65536, f"N ({N}) must be in [16, 65536]"
+        
+        # 2的幂次检查（如果写了2的幂次范围，则需要检查）
+        import math
+        assert B > 0 and (B & (B - 1)) == 0, f"B ({B}) must be a power of 2"
+        # 或者使用：assert math.log2(B).is_integer(), f"B ({B}) must be a power of 2"
+        
+        # 整除约束检查（如果Designer说明不使用mask）
+        # assert B % 8 == 0, f"B ({B}) must be divisible by 8"
+        
+        # Grid大小检查（Ascend限制）
+        BLOCK_SIZE = 128
+        grid = (triton.cdiv(B * N, BLOCK_SIZE),)
+        assert grid[0] < 65536, f"Grid size {grid[0]} exceeds Ascend limit (65536)"
+        
+        # 调用kernel
+        return kernel(...)
+```
+{% elif framework == "mindspore" %}
+```python
+# 示例：假设输入是二维 x.shape = (B, N)
+# 设计草图的"设计适用范围"注释：B in [8, 64], N in [16, 65536]
+
+class ModelNew(nn.Cell):
+    def construct(self, x, ...):
+        # 1. 提取原始维度参数（对每个维度分别检查）
+        B, N = x.shape  # 提取原始的两个维度
+        
+        # 2. ========== Assert检查（必须！）==========
+        # 对每个维度分别检查范围
+        assert 8 <= B <= 64, f"B ({B}) must be in [8, 64]"
+        assert 16 <= N <= 65536, f"N ({N}) must be in [16, 65536]"
+        
+        # 2的幂次检查（如果写了2的幂次范围，则需要检查）
+        import math
+        assert B > 0 and (B & (B - 1)) == 0, f"B ({B}) must be a power of 2"
+        # 或者使用：assert math.log2(B).is_integer(), f"B ({B}) must be a power of 2"
+        
+        # 整除约束检查（如果需要）
+        # assert B % 8 == 0, f"B ({B}) must be divisible by 8"
+        
+        # Grid大小检查
+        BLOCK_SIZE = 128
+        grid = (triton.cdiv(B * N, BLOCK_SIZE),)
+        assert grid[0] < 65536, f"Grid size {grid[0]} exceeds limit"
+        
+        # 调用kernel
+        return kernel(...)
+```
+{% endif %}
+
+**重要**：
+- **分维度Assert**：对原始输入的每个维度分别生成assert，不要只检查总元素数
+  * 二维输入 `(B, N)` → 分别写 `assert 8 <= B <= 64` 和 `assert 16 <= N <= 65536`
+  * 三维输入 `(B, H, W)` → 分别写三个assert检查
+- **范围覆盖**：assert必须准确反映hint指定的范围，范围内的所有值都要支持
+- **范围外拦截**：范围外的输入必须被assert拦截并报错，不能静默失败
+- **约束检查**：根据Designer的"设计适用范围"说明添加对应的assert
+  * 整除约束（不使用mask）：`assert B % 8 == 0`
+  * 2的幂次约束：`assert B > 0 and (B & (B - 1)) == 0` 或 `assert math.log2(B).is_integer()`
+- **消息一致**：assert条件和错误消息必须一致（如 `assert B >= 8, f"B ({B}) must be >= 8"`）
+
+---
+{% endif %}
+
 {% if sketch %}
 ### 设计草图
 以下是为此算子设计的实现草图，请严格按照此草图生成{{dsl}}代码
@@ -290,6 +389,70 @@ class ModelNew(nn.Cell):
 {% endif %}
 ```
 请务必保证nn中调用的module要与任务代码中调用的module要一致，使用的参数要一致，device设置请参考不同的硬件后端（"cuda", "npu", "ascend"）。
+{% endif %}
+
+{% if enable_llm_range_inference %}
+7. **Shape适用范围Assert检查（重要）**：
+   从草图中的"设计适用范围"说明提取约束条件，在 {{ func_name }} 函数开头添加assert。
+   
+   **关键原则：分维度检查（不要摊平）**：
+   - 如果输入是多维张量（如 `x.shape = (batch_size, dim)`），必须对**每个维度分别检查**
+   - 不要只检查摊平后的总大小（如 `N = batch_size * dim`）
+   - 例如：输入 `x.shape = (batch_size, dim)`
+     * 正确：`assert 16 <= batch_size <= 2048` 和 `assert 16 <= dim <= 65536`
+     * 错误：只检查 `assert N <= 131072`（摊平后）
+   
+   **约束范围原则**：
+   - 每个维度的最大值不应超过 `max(65536, 该维度的原始最大值)`
+   - 例如：原始输入是 `(batch_size, dim)`，batch_size 最大 1024，dim 最大 4096
+     * batch_size 范围建议：不超过 max(65536, 1024) = 65536
+     * dim 范围建议：不超过 max(65536, 4096) = 65536
+   
+   **步骤**：
+   - 查找草图注释中的"设计适用范围"部分（如有）
+   - 提取**每个维度**的范围约束（如 batch_size in [16, 2048], dim in [16, 65536]）
+   - 提取约束条件（如是否需要整除、是否有mask等）
+   - 在host函数中添加相应的assert语句
+   - 分别对每个原始维度进行检查
+   
+   ```python
+   def {{ func_name }}(x, ...):
+       # 从输入张量获取**原始维度参数**（不要摊平）
+       batch_size, dim = x.shape
+       
+       # 根据草图中的"设计适用范围"对每个维度分别添加assert
+       # 示例1：草图说明 "参数范围：batch_size in [16, 2048], dim in [16, 65536]"
+       assert 16 <= batch_size <= 2048, f"batch_size ({batch_size}) must be in range [16, 2048]"
+       assert 16 <= dim <= 65536, f"dim ({dim}) must be in range [16, 65536]"
+       
+       # 如果有整除约束（无mask时）
+       assert batch_size % 16 == 0, f"batch_size ({batch_size}) must be divisible by 16"
+       assert dim % 64 == 0, f"dim ({dim}) must be divisible by 64"
+       
+       # 如果是2的幂次约束
+       # assert batch_size & (batch_size - 1) == 0, f"batch_size ({batch_size}) must be power of 2"
+       
+       # 然后再计算kernel需要的参数（如摊平后的N）
+       N = batch_size * dim
+       
+       # Grid大小检查（Ascend限制）
+       BLOCK_SIZE = 1024  # 根据实际配置
+       grid = (triton.cdiv(N, BLOCK_SIZE),)
+       assert grid[0] < 65536, f"Grid size ({grid[0]}) exceeds Ascend limit (65536)"
+       ...
+   ```
+   
+   **原则**：
+   - **分维度检查**：对原始输入的每个维度（batch_size, dim, M, N, K等）分别添加assert
+   - 从草图提取具体数值，如"batch_size应在16到2048之间" → `assert 16 <= batch_size <= 2048`
+   - 考虑边界处理，若不使用 mask：必须说明整除约束（如 `dim % 64 == 0`）
+   - **Grid大小检查**：计算grid并用assert检查 `< 65536`（Ascend限制）
+     * **禁止用min限制**：不要写 `grid = (min(xxx, 65535),)` ← 静默限制，错误！
+     * **直接assert报错**：应该写 `assert grid_size < 65536` ← 超出范围直接报错
+   - **关键**：assert条件和错误消息中的数值必须一致
+     * 正确：`assert batch_size >= 16, f"batch_size ({batch_size}) must be >= 16"`
+     * 错误：`assert batch_size >= 8, f"batch_size must be >= 16"` ← 矛盾！
+   - 最小值需>=max(BLOCK_SIZE)，否则大配置失效；
 {% endif %}
 
 **请尽可能使用中文进行思考分析**

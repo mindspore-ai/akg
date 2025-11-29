@@ -375,15 +375,22 @@ class Coder(AgentBase):
             # 智能选择最优的示例代码
             dsl_examples = await self._select_optimal_examples()
 
+            # ============ Hint模式：参数范围已在sketch的"设计适用范围"注释中 ============
+            enable_hint_mode = self.config.get("enable_hint_mode", False)
+            has_param_space = enable_hint_mode and "space_config_code" in task_info
+            
             # 基于base_doc构建输入，只更新变化的部分
             input_data = {
                 **self.base_doc,
-                "sketch": sketch,  # AUL代码作为sketch
+                "sketch": sketch,  # sketch中已包含"设计适用范围"注释（含hint信息）
                 "llm_suggestions": conductor_suggestion,  # Conductor建议
                 "coder_code": task_info.get('coder_code', ''),
                 "error_log": task_info.get('verifier_error', '')[:5000],
                 "api_docs_suitable": api_docs_suitable,
-                "dsl_examples": dsl_examples
+                "dsl_examples": dsl_examples,
+                "enable_llm_range_inference": self.config.get("enable_llm_range_inference", False),  # LLM推理模式
+                "enable_hint_mode": enable_hint_mode,  # Hint模式
+                "has_param_space": has_param_space,  # 是否有参数空间
             }
 
             # 执行LLM生成前更新context，确保正确性

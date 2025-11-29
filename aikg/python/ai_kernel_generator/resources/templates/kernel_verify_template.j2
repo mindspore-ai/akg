@@ -631,9 +631,9 @@ def verify_implementations():
     {% if is_dynamic_shape %}
     verification_info.update({
         "shape_type": "dynamic",
-        "case_count": len(inputs_list)
+        "case_count": len(framework_inputs_list)
     })
-    shape_info = f"形状类型: 动态 | 验证案例数: {len(inputs_list)}"
+    shape_info = f"形状类型: 动态 | 验证案例数: {len(framework_inputs_list)}"
     {% else %}
     output_shapes = [str(out.shape) if hasattr(out, 'shape') else str(type(out)) for out in framework_output]
     output_dtypes = [str(out.dtype) if hasattr(out, 'dtype') else str(type(out)) for out in framework_output]

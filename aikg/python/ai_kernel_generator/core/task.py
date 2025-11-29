@@ -23,6 +23,7 @@ from ai_kernel_generator.core.utils import check_task_config, check_task_type
 from ai_kernel_generator.core.agent.conductor import Conductor
 from ai_kernel_generator.core.agent.coder import Coder
 from ai_kernel_generator.core.agent.designer import Designer
+from ai_kernel_generator.core.agent.test_case_generator import TestCaseGenerator
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
 from ai_kernel_generator.utils.workflow_manager import WorkflowManager
 from ai_kernel_generator.utils.collector import get_collector
@@ -252,6 +253,12 @@ class Task:
                             prompt=designer_prompt,
                             reasoning=designer_reasoning
                         )
+                        
+                        # 如果生成了space_config，立即保存到文件（不依赖多case验证）
+                        if "space_config_code" in self.conductor.task_info:
+                            # 获取当前步骤数
+                            step = len(self.conductor.trace.trace_list)
+                            await self._save_space_config(step)
 
                     elif current_agent == "coder":
                         coder = self.get_agent('coder')
@@ -296,11 +303,16 @@ class Task:
                             
                             profile_res = {}
                             if verify_res and self.task_type == "profile" and self.backend in ["ascend", "cuda"]:
+                                logger.info(f"[{self.op_name}] 所有验证通过，开始性能测试（使用原始输入）...")
                                 profile_settings = self.config.get("profile_settings", {})
                                 profile_res = await self.verifier.run_profile(
                                     self.conductor.task_info, current_step, profile_settings=profile_settings
                                 )
-
+                            
+                            # 只有所有验证都通过后，才复制到 passed_cases
+                            if verify_res:
+                                self._save_to_passed_cases_sync(current_step)
+                            
                             self.conductor.record_agent_execution(
                                 agent_name="verifier",
                                 result=str(verify_res),
@@ -358,3 +370,291 @@ class Task:
         except Exception as e:
             logger.error(f"Task {self.task_id} failed: {e}")
             return self.op_name, False, self.conductor.task_info
+    
+    def _save_to_passed_cases_sync(self, current_step: int):
+        """
+        将验证通过的文件复制到 passed_cases 目录
+        
+        Args:
+            current_step: 当前步骤（用于构建目录名）
+        """
+        try:
+            import shutil
+            from pathlib import Path
+            
+            log_dir = self.config.get('log_dir', '')
+            if not log_dir:
+                return
+            
+            # 构建源目录路径
+            expanded_log_dir = os.path.expanduser(log_dir)
+            unique_dir_name = f"I{self.verifier.task_id}_S{current_step:02d}_verify"
+            src_dir = os.path.join(expanded_log_dir, self.op_name, unique_dir_name)
+            
+            # 构建目标目录路径
+            dst_dir = Path(log_dir) / "passed_cases" / self.op_name / unique_dir_name
+            
+            # 复制目录
+            if os.path.exists(src_dir):
+                shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+                logger.info(f"[{self.op_name}] 验证文件已保存到: {dst_dir}")
+            else:
+                logger.warning(f"[{self.op_name}] 源目录不存在: {src_dir}")
+        
+        except Exception as e:
+            logger.warning(f"[{self.op_name}] 保存到 passed_cases 失败: {e}")
+    
+    async def _save_space_config(self, current_step: int):
+        """
+        保存space_config到文件（独立于多case验证）
+        
+        Args:
+            current_step: 当前迭代步骤
+        """
+        try:
+            import os
+            
+            space_config_code = self.conductor.task_info.get("space_config_code", "")
+            if not space_config_code:
+                return
+            
+            # 确定保存目录
+            log_dir = self.config.get('log_dir', '')
+            if not log_dir:
+                logger.warning(f"[{self.op_name}] 未配置log_dir，无法保存space_config")
+                return
+            
+            expanded_log_dir = os.path.expanduser(log_dir)
+            # 保存到迭代目录下
+            iter_dir = os.path.join(expanded_log_dir, self.op_name, f"I{self.task_id}_S{current_step:02d}")
+            os.makedirs(iter_dir, exist_ok=True)
+            
+            # 保存space_config.py
+            space_config_path = os.path.join(iter_dir, f"{self.op_name}_space_config.py")
+            with open(space_config_path, 'w', encoding='utf-8') as f:
+                f.write(space_config_code)
+            
+            logger.info(f"[{self.op_name}] 保存参数空间配置: {space_config_path}")
+            
+        except Exception as e:
+            logger.warning(f"[{self.op_name}] 保存space_config失败: {e}")
+    
+    def _should_run_multi_case_test(self) -> bool:
+        """
+        判断是否需要运行多 case 测试
+        
+        Returns:
+            bool: 是否需要运行多 case 测试
+        """
+        # 首先检查多 case 验证的总开关
+        enable_multi_case_verification = self.config.get('enable_multi_case_verification', True)
+        
+        if not enable_multi_case_verification:
+            logger.info(f"[{self.op_name}] 多 case 验证已禁用（enable_multi_case_verification=false）")
+            return False
+        
+        # 如果总开关开启，检查具体模式
+        enable_hint = self.config.get('enable_hint_mode', False)
+        enable_llm_inference = self.config.get('enable_llm_range_inference', False)
+        
+        if enable_hint or enable_llm_inference:
+            if enable_hint:
+                logger.info(f"[{self.op_name}] Hint模式已启用，将在单 case 验证通过后运行")
+            if enable_llm_inference:
+                logger.info(f"[{self.op_name}] LLM推理模式已启用，将在单 case 验证通过后运行")
+            return True
+        else:
+            logger.debug(f"[{self.op_name}] 多 case 测试模式未启用")
+            return False
+    
+    async def _run_multi_case_verification(self, device_id: int, verify_step: int) -> tuple[bool, str]:
+        """
+        运行多 case 验证 - 支持两种模式
+        
+        Args:
+            device_id: 设备 ID
+            verify_step: 验证步骤
+            
+        Returns:
+            tuple[bool, str]: (验证结果, 错误日志)
+        """
+        enable_hint = self.config.get('enable_hint_mode', False)
+        enable_llm_inference = self.config.get('enable_llm_range_inference', False)
+        
+        # ============ 模式1：Hint模式（优先） ============
+        if enable_hint and "space_config_code" in self.conductor.task_info:
+            logger.info(f"[{self.op_name}] 使用Hint模式进行多case验证")
+            return await self._run_hint_mode_verification(device_id, verify_step)
+        
+        # ============ 模式2：LLM推理模式 ============
+        if enable_llm_inference:
+            logger.info(f"[{self.op_name}] 使用LLM推理模式进行多case验证")
+            return await self._run_llm_inference_mode_verification(device_id, verify_step)
+        
+        # 都未启用
+        return True, ""
+    
+    async def _run_hint_mode_verification(self, device_id: int, verify_step: int) -> tuple[bool, str]:
+        """Hint模式的多case验证"""
+        try:
+            import os
+            from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
+            from ai_kernel_generator.utils.case_generator import MultiCaseGenerator
+            
+            # 1. 获取space_config_code
+            space_config_code = self.conductor.task_info.get("space_config_code", "")
+            if not space_config_code:
+                logger.warning(f"[{self.op_name}] 未找到space_config_code，跳过Hint模式验证")
+                return True, ""
+            
+            # 2. 确定迭代目录
+            log_dir = self.config.get('log_dir', '')
+            if not log_dir:
+                logger.error(f"[{self.op_name}] 未配置log_dir，无法进行Hint模式验证")
+                return False, "log_dir not configured"
+            
+            expanded_log_dir = os.path.expanduser(log_dir)
+            iter_dir = os.path.join(expanded_log_dir, self.op_name, f"I{self.task_id}_multicase_S{verify_step:02d}_verify")
+            os.makedirs(iter_dir, exist_ok=True)
+            
+            # 3. 保存space_config.py
+            space_config_path = os.path.join(iter_dir, f"{self.op_name}_space_config.py")
+            with open(space_config_path, 'w', encoding='utf-8') as f:
+                f.write(space_config_code)
+            logger.info(f"[{self.op_name}] 保存参数空间配置: {space_config_path}")
+            
+            # 4. 使用MultiCaseGenerator生成测试文件
+            seed = self.config.get("sampling_seed", 42)
+            generator = MultiCaseGenerator(space_config_path, seed=seed)
+            multicase_file = os.path.join(iter_dir, f"{self.op_name}_multicase_{self.framework}.py")
+            
+            num_cases = self.config.get("multi_case_num", 10)
+            strategy = self.config.get("sampling_strategy", "mixed")
+            
+            generator.generate_multicase_file(
+                output_path=multicase_file,
+                num_cases=num_cases,
+                strategy=strategy
+            )
+            logger.info(f"[{self.op_name}] 生成多case测试文件: {multicase_file}")
+            
+            # 5. 读取生成的多case测试文件内容
+            with open(multicase_file, 'r', encoding='utf-8') as f:
+                multicase_task_desc = f.read()
+            
+            # 6. 创建验证器并验证
+            multi_case_verifier = KernelVerifier(
+                op_name=self.op_name,
+                framework_code=multicase_task_desc,  # 传递代码字符串
+                task_id=f"{self.task_id}_multicase",
+                framework=self.framework,
+                dsl=self.dsl,
+                backend=self.backend,
+                arch=self.arch,
+                impl_func_name=self.verifier.impl_func_name,
+                config=self.config
+            )
+            
+            # 7. 运行验证
+            loop = asyncio.get_running_loop()
+            multi_verify_res, multi_verify_log = await loop.run_in_executor(
+                None,
+                multi_case_verifier.run,
+                self.conductor.task_info,  # task_info
+                verify_step,                # current_step
+                device_id                   # device_id
+            )
+            
+            # 8. 处理验证结果
+            if multi_verify_res:
+                logger.info(f"[{self.op_name}] Hint模式多case验证通过")
+                # 清除之前的错误信息
+                self.conductor.task_info["multi_case_error"] = ""
+                return True, ""
+            else:
+                logger.warning(f"[{self.op_name}] Hint模式多case验证失败")
+                # 保存错误信息（供未来可能的错误分析使用）
+                self.conductor.task_info["multi_case_error"] = multi_verify_log
+                return False, multi_verify_log
+                
+        except Exception as e:
+            logger.error(f"[{self.op_name}] Hint模式多case验证异常: {e}")
+            import traceback
+            error_log = traceback.format_exc()
+            return False, error_log
+    
+    async def _run_llm_inference_mode_verification(self, device_id: int, verify_step: int) -> tuple[bool, str]:
+        """LLM推理模式的多case验证"""
+        try:
+            # 1. 创建 TestCaseGenerator
+            test_gen = TestCaseGenerator(
+                op_name=self.op_name,
+                task_desc=self.task_desc,
+                framework=self.framework,
+                dsl=self.dsl,
+                config=self.config
+            )
+            
+            # 1.1 准备输入数据（包含之前的错误信息）
+            task_info_with_error = self.conductor.task_info.copy()
+            # 获取之前的多 case 验证错误（如果有）
+            previous_error = self.conductor.task_info.get("multi_case_error", "")
+            task_info_with_error["previous_error"] = previous_error
+            
+            # 2. 生成多 case task_desc
+            new_task_desc, prompt, reasoning = await test_gen.run(task_info_with_error)
+            
+            logger.info(f"[{self.op_name}] 多 case task_desc 生成完成")
+            
+            # 2.1 记录 TestCaseGenerator 的执行结果（保存 prompt 和返回值）
+            self.conductor.record_agent_execution(
+                agent_name="test_case_generator",
+                result=new_task_desc,
+                prompt=prompt,
+                reasoning=reasoning
+            )
+            
+            # 3. 使用新 task_desc 创建临时 verifier 进行验证
+            # 注意：KernelVerifier 已经支持动态 shape 测试（通过 get_inputs_dyn_list）
+            multi_case_verifier = KernelVerifier(
+                op_name=self.op_name,
+                framework_code=new_task_desc,  # 使用新的 task_desc
+                task_id=f"{self.verifier.task_id}_multicase",
+                framework=self.framework,
+                dsl=self.dsl,
+                backend=self.backend,
+                arch=self.arch,
+                impl_func_name=self.verifier.impl_func_name,
+                config=self.config
+            )
+            
+            # 使用与单 case 验证相同的 step（同一轮验证）
+            loop = asyncio.get_running_loop()
+            multi_verify_res, multi_verify_log = await loop.run_in_executor(
+                None,
+                multi_case_verifier.run,
+                self.conductor.task_info,
+                verify_step,  # 使用单 case 验证的 step
+                device_id
+            )
+            
+            # 4. 返回验证结果
+            if multi_verify_res:
+                logger.info(f"[{self.op_name}] 多 case 验证通过")
+                # 清除之前的错误信息
+                self.conductor.task_info["multi_case_error"] = ""
+                return True, ""
+            else:
+                logger.warning(f"[{self.op_name}] 多 case 验证失败")
+                # 保存错误信息到 task_info，供下次迭代使用
+                self.conductor.task_info["multi_case_error"] = multi_verify_log
+                return False, multi_verify_log
+        
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"[{self.op_name}] 多 case 验证过程异常: {error_msg}")
+            import traceback
+            error_detail = traceback.format_exc()
+            # 保存异常信息到 task_info，供下次迭代使用
+            self.conductor.task_info["multi_case_error"] = f"多 case 验证异常: {error_msg}\n{error_detail}"
+            return False, f"多 case 验证异常: {error_msg}\n{error_detail}"
