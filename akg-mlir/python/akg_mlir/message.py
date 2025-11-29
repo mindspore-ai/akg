@@ -56,7 +56,7 @@ def write_code(js_dict, fname):
     Export kernel config files.
 
     Args:
-        js_dict: dict of kernel informations.
+        js_dict: dict of kernel information.
         fname: the name of json file to be generated.
     """
     if os.path.exists(fname):
@@ -134,6 +134,7 @@ class AkgMlirDriver:
         )
         self.log_level = log_level
         self.target_info = ""
+        self.arch = ""
         self.dump_ir = dump_ir
         self.repo_path = repo_path
         self.profiling_trails = profiling_trails
@@ -144,9 +145,11 @@ class AkgMlirDriver:
             kernel_info = json.loads(f.read())
             self.kernel_name = kernel_info["op"]
             self.backend = "ascend" if kernel_info["process"] == "aicore" else kernel_info["process"]
-            if kernel_info.get("target_info"):
-                compute_capability = kernel_info.get("target_info").get("compute_capability", "7.0")
+            target_info = kernel_info.get("target_info")
+            if target_info:
+                compute_capability = target_info.get("compute_capability", "7.0")
                 self.target_info = "v100" if compute_capability == "7.0" else "a100"
+                self.arch = target_info.get("arch", "")
         self.dynamic_shape = dynamic_shape
 
     def compile(self):
@@ -280,6 +283,11 @@ class AkgMlirDriver:
             ascend_opt_option += "=dynamic-shape=true"
         if self.enable_akg_loop_fusion:
             ascend_opt_option += "=enable-akg-loop-fusion=1"
+        if self.arch:
+            if "=" in ascend_opt_option:
+                ascend_opt_option += f" arch={self.arch}"
+            else:
+                ascend_opt_option += f"=arch={self.arch}"
         cmd = [os.path.join(self.akg_tools_dir, "bin/akg-opt"), input_file, ascend_opt_option, "-o", out_file]
         if self.dump_ir:
             cmd.append("--mlir-print-ir-after-all")
@@ -327,7 +335,7 @@ class AkgMlirDriver:
 
     def _run_ascend_generate_binary(self, kernel_name):
         """compile mlir to binary for ascend."""
-        logging.info("bishengir-compile code generater:")
+        logging.info("bishengir-compile code generator:")
         npu_compiler_path = get_npucompiler_path()
         input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
         out_file = os.path.join(self.output_dir, kernel_name + ".so")
