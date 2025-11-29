@@ -54,6 +54,39 @@ ArchType = Literal["a100", "v100", "h20", "l20", "rtx3090", "ascend910b4", "asce
 logger = logging.getLogger(__name__)
 
 
+def sync_artifacts_to_directory(artifacts: Dict[str, str], target_dir: str, task_id: str = "0") -> None:
+    """
+    将 artifacts 同步到目标目录。
+    
+    Args:
+        artifacts: 从 Worker 返回的 artifacts 字典，格式为 {relative_path: file_content}
+                   例如: {"autotune_info_case_0.json": "{...}", "subdir/result.jsonl": "..."}
+        target_dir: 目标目录路径（通常是 verify_dir）
+        task_id: 任务ID（用于日志）
+    """
+    if not artifacts:
+        return
+        
+    logger.info(f"[{task_id}] Syncing {len(artifacts)} artifact files to {target_dir}")
+    
+    for rel_path, content in artifacts.items():
+        # 构建完整路径
+        full_path = os.path.join(target_dir, rel_path)
+        
+        # 确保目录存在
+        dir_path = os.path.dirname(full_path)
+        if dir_path and not os.path.exists(dir_path):
+            os.makedirs(dir_path, exist_ok=True)
+            logger.debug(f"[{task_id}] Created directory: {dir_path}")
+        
+        try:
+            with open(full_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            logger.debug(f"[{task_id}] Synced artifact: {rel_path}")
+        except Exception as e:
+            logger.warning(f"[{task_id}] Failed to sync artifact {rel_path}: {e}")
+
+
 class KernelVerifier:
     def __init__(self,
                  op_name: str,
@@ -500,7 +533,11 @@ class KernelVerifier:
             
             # worker.verify() 只是执行脚本，不需要管理 device
             # device 已经在生成脚本时设置好了
-            success, log = await self.worker.verify(package_data, self.task_id, self.op_name, timeout)
+            success, log, artifacts = await self.worker.verify(package_data, self.task_id, self.op_name, timeout)
+            
+            # 同步 artifacts 到 verify_dir（用于 RemoteWorker 场景）
+            if artifacts:
+                sync_artifacts_to_directory(artifacts, verify_dir, self.task_id)
             
             if success:
                 logger.info(f"[{self.op_name}] 验证执行成功")
@@ -856,6 +893,11 @@ class KernelVerifier:
             }
             
             result = await self.worker.profile(package_data, self.task_id, self.op_name, full_settings)
+            
+            # 同步 artifacts 到 verify_dir（用于 RemoteWorker 场景）
+            artifacts = result.get('artifacts', {})
+            if artifacts:
+                sync_artifacts_to_directory(artifacts, verify_dir, self.task_id)
             
             # 从 Worker 返回的结果中提取数据
             gen_time = result.get('gen_time', float('inf'))

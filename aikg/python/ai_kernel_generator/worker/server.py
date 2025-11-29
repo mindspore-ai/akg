@@ -60,6 +60,11 @@ async def verify(
 ):
     """
     Execute verification task.
+    
+    Returns:
+        - success: 验证是否成功
+        - log: 执行日志
+        - artifacts: 执行过程中生成的 JSON 文件内容
     """
     if worker is None:
         raise HTTPException(status_code=503, detail="Worker not initialized")
@@ -70,12 +75,13 @@ async def verify(
         # Read package data
         package_data = await package.read()
         
-        # Execute verification
-        success, log = await worker.verify(package_data, task_id, op_name, timeout)
+        # Execute verification (now returns artifacts)
+        success, log, artifacts = await worker.verify(package_data, task_id, op_name, timeout)
         
         return {
             "success": success,
-            "log": log
+            "log": log,
+            "artifacts": artifacts
         }
         
     except Exception as e:

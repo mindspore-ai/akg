@@ -7,7 +7,7 @@ class WorkerInterface(ABC):
     """
 
     @abstractmethod
-    async def verify(self, package_data: Union[bytes, str], task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str]:
+    async def verify(self, package_data: Union[bytes, str], task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Execute verification task.
         
@@ -22,7 +22,11 @@ class WorkerInterface(ABC):
             timeout: Execution timeout in seconds.
 
         Returns:
-            Tuple[bool, str]: (success, log_output)
+            Tuple[bool, str, Dict[str, Any]]: (success, log_output, artifacts)
+            - success: 验证是否成功
+            - log_output: 执行日志
+            - artifacts: 执行过程中生成的文件内容，格式为 {relative_path: json_content}
+              例如: {"autotune_info_case_0.json": {...}, "subdir/result.json": {...}}
         """
         pass
 
@@ -38,6 +42,10 @@ class WorkerInterface(ABC):
             profile_settings: Settings for profiling (e.g., warmup_times, run_times).
 
         Returns:
-            Dict[str, Any]: Profiling results (gen_time, base_time, speedup, etc.)
+            Dict[str, Any]: Profiling results, including:
+                - gen_time: 生成代码执行时间
+                - base_time: 基准代码执行时间
+                - speedup: 加速比
+                - artifacts: 执行过程中生成的文件内容，格式为 {relative_path: json_content}
         """
         pass

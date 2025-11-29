@@ -23,6 +23,34 @@ from ..verifier.profiler_utils import (
 
 logger = logging.getLogger(__name__)
 
+
+def collect_json_artifacts(directory: str) -> Dict[str, str]:
+    """
+    收集目录中所有 JSON/JSONL 文件的原始内容。
+    
+    Args:
+        directory: 要扫描的目录路径
+        
+    Returns:
+        Dict[str, str]: 文件相对路径 -> 文件原始内容（字符串）
+        例如: {"autotune_info_case_0.json": "{...}", "subdir/result.jsonl": "..."}
+    """
+    artifacts = {}
+    if not os.path.exists(directory):
+        return artifacts
+        
+    for root, dirs, files in os.walk(directory):
+        for filename in files:
+            if filename.endswith('.json') or filename.endswith('.jsonl'):
+                file_path = os.path.join(root, filename)
+                rel_path = os.path.relpath(file_path, directory)
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        artifacts[rel_path] = f.read()
+                except Exception as e:
+                    logger.warning(f"Failed to read file {rel_path}: {e}")
+    return artifacts
+
 class LocalWorker(WorkerInterface):
     """
     Local implementation of WorkerInterface.
@@ -32,7 +60,7 @@ class LocalWorker(WorkerInterface):
         self.device_pool = device_pool
         self.backend = backend
 
-    async def verify(self, package_data: Union[bytes, str], task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str]:
+    async def verify(self, package_data: Union[bytes, str], task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Execute verification task locally.
         
@@ -44,6 +72,9 @@ class LocalWorker(WorkerInterface):
             task_id: 任务ID
             op_name: 算子名称
             timeout: 超时时间
+            
+        Returns:
+            Tuple[bool, str, Dict[str, Any]]: (success, log, artifacts)
         """
         try:
             with ExitStack() as stack:
@@ -58,16 +89,16 @@ class LocalWorker(WorkerInterface):
                         with tarfile.open(tar_path, 'r') as tar_ref:
                             tar_ref.extractall(extract_dir)
                     except Exception as e:
-                        return False, f"Failed to extract package: {e}"
+                        return False, f"Failed to extract package: {e}", {}
                 elif isinstance(package_data, str):
                     extract_dir = package_data
                 else:
-                    return False, "Unsupported package_data type for LocalWorker.verify"
+                    return False, "Unsupported package_data type for LocalWorker.verify", {}
 
                 script_name = f"verify_{op_name}.py"
                 script_path = os.path.join(extract_dir, script_name)
                 if not os.path.exists(script_path):
-                    return False, f"Verification script {script_name} not found."
+                    return False, f"Verification script {script_name} not found.", {}
 
                 # 注意：脚本中的 device_id 已在生成时设置正确
                 # worker 只负责执行脚本，不管理设备分配
@@ -92,23 +123,28 @@ class LocalWorker(WorkerInterface):
                     output_log = stdout.decode(errors='replace') + "\n" + stderr.decode(errors='replace')
                     success = (returncode == 0)
                     
+                    # 收集执行过程中生成的 JSON 文件
+                    artifacts = collect_json_artifacts(extract_dir)
+                    if artifacts:
+                        logger.info(f"[{task_id}] Collected {len(artifacts)} artifact files: {list(artifacts.keys())}")
+                    
                     if success:
                         logger.info(f"[{task_id}] Verification passed.")
                     else:
                         logger.error(f"[{task_id}] Verification failed with log:\n{output_log}")
                         
-                    return success, output_log
+                    return success, output_log, artifacts
                 except asyncio.TimeoutError:
                     try:
                         process.kill()
                     except ProcessLookupError:
                         pass
                     logger.error(f"[{task_id}] Verification timed out.")
-                    return False, f"Verification timed out after {timeout} seconds."
+                    return False, f"Verification timed out after {timeout} seconds.", {}
 
         except Exception as e:
             logger.error(f"[{task_id}] LocalWorker verification failed: {e}", exc_info=True)
-            return False, str(e)
+            return False, str(e), {}
 
     async def profile(self, package_data: bytes, task_id: str, op_name: str, profile_settings: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -116,6 +152,9 @@ class LocalWorker(WorkerInterface):
         
         注意：device 的管理（acquire/release）由调用方负责
         这个方法只负责执行已经生成好的 profile 脚本
+        
+        Returns:
+            Dict[str, Any]: 包含 gen_time, base_time, speedup, artifacts 等字段
         """
         try:
             # 2. Create temp directory and extract
@@ -132,7 +171,7 @@ class LocalWorker(WorkerInterface):
                     with tarfile.open(tar_path, 'r') as tar_ref:
                         tar_ref.extractall(extract_dir)
                 except Exception as e:
-                    return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'error': str(e)}
+                    return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
                 
                 # 注意：profile 脚本中的 device_id 应该在生成时就已经设置正确
                 # （与 verify 类似，通过预先获取设备ID）
@@ -171,24 +210,30 @@ class LocalWorker(WorkerInterface):
                         )
                     else:
                         logger.warning(f"[{task_id}] Unsupported backend for profiling: {backend}")
-                        return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0}
+                        return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'artifacts': {}}
                     
                     # 5. Calculate speedup
                     speedup = base_time / gen_time if gen_time > 0 else 0.0
                     
+                    # 6. 收集执行过程中生成的 JSON 文件
+                    artifacts = collect_json_artifacts(extract_dir)
+                    if artifacts:
+                        logger.info(f"[{task_id}] Collected {len(artifacts)} artifact files: {list(artifacts.keys())}")
+                    
                     return {
                         'gen_time': gen_time,
                         'base_time': base_time,
-                        'speedup': speedup
+                        'speedup': speedup,
+                        'artifacts': artifacts
                     }
                     
                 except Exception as e:
                     logger.error(f"[{task_id}] Profiling execution failed: {e}", exc_info=True)
-                    return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'error': str(e)}
+                    return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
         
         except Exception as e:
             logger.error(f"[{task_id}] LocalWorker profiling failed: {e}", exc_info=True)
-            return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'error': str(e)}
+            return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
     
     def _run_msprof_profiling(self, extract_dir: str, op_name: str, task_id: str, warmup_times: int, run_times: int) -> Tuple[float, float]:
         """Run msprof profiling for Ascend backend (synchronous)"""

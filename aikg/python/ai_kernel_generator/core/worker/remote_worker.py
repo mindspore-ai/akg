@@ -1,6 +1,7 @@
 import httpx
 import logging
 import io
+import json
 from typing import Tuple, Dict, Any
 
 from .interface import WorkerInterface
@@ -65,9 +66,12 @@ class RemoteWorker(WorkerInterface):
         except Exception as e:
             logger.error(f"[{task_id}] Failed to release remote device: {e}")
 
-    async def verify(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str]:
+    async def verify(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Send verification task to remote worker.
+        
+        Returns:
+            Tuple[bool, str, Dict[str, Any]]: (success, log, artifacts)
         """
         verify_url = f"{self.worker_url}/api/v1/verify"
         
@@ -89,29 +93,35 @@ class RemoteWorker(WorkerInterface):
                 result = response.json()
                 success = result.get('success', False)
                 log = result.get('log', '')
+                artifacts = result.get('artifacts', {})
                 
-                return success, log
+                if artifacts:
+                    logger.info(f"[{task_id}] Received {len(artifacts)} artifact files from remote worker")
+                
+                return success, log, artifacts
                 
         except httpx.RequestError as e:
             logger.error(f"[{task_id}] Network error communicating with worker: {e}")
-            return False, f"Network error: {e}"
+            return False, f"Network error: {e}", {}
         except httpx.HTTPStatusError as e:
             logger.error(f"[{task_id}] Worker returned error status: {e.response.status_code} - {e.response.text}")
-            return False, f"Worker error: {e.response.status_code} - {e.response.text}"
+            return False, f"Worker error: {e.response.status_code} - {e.response.text}", {}
         except Exception as e:
             logger.error(f"[{task_id}] Remote verification failed: {e}")
-            return False, f"Remote verification failed: {e}"
+            return False, f"Remote verification failed: {e}", {}
 
     async def profile(self, package_data: bytes, task_id: str, op_name: str, profile_settings: Dict[str, Any]) -> Dict[str, Any]:
         """
         Send profiling task to remote worker.
+        
+        Returns:
+            Dict[str, Any]: 包含 gen_time, base_time, speedup, artifacts 等字段
         """
         profile_url = f"{self.worker_url}/api/v1/profile"
         
         try:
             async with httpx.AsyncClient(timeout=300) as client: # Default timeout for profile
                 files = {'package': ('package.tar', package_data, 'application/x-tar')}
-                import json
                 data = {
                     'task_id': task_id, 
                     'op_name': op_name,
@@ -123,8 +133,13 @@ class RemoteWorker(WorkerInterface):
                 response = await client.post(profile_url, files=files, data=data)
                 response.raise_for_status()
                 
-                return response.json()
+                result = response.json()
+                artifacts = result.get('artifacts', {})
+                if artifacts:
+                    logger.info(f"[{task_id}] Received {len(artifacts)} artifact files from remote worker")
+                
+                return result
                 
         except Exception as e:
             logger.error(f"[{task_id}] Remote profiling failed: {e}")
-            return {}
+            return {'artifacts': {}}
