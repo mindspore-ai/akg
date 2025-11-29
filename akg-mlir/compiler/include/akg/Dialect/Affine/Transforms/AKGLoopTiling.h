@@ -32,6 +32,9 @@ std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::
                                                                      const std::string &tilingMode);
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target,
                                                                      const std::string &feature, bool useAutoTiling);
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target, bool useAutoTiling,
+                                                                     const std::string &arch,
+                                                                     const std::string &feature);
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(uint64_t cacheSizeBytes);
 
 }  // namespace mlir

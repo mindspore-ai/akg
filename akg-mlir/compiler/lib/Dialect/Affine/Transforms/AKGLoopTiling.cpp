@@ -78,6 +78,11 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
     this->useAutoTiling = useAutoTiling;
   }
 
+  AKGLoopTiling(const std::string &target, bool useAutoTiling, const std::string &arch, const std::string &feature)
+      : target(target), arch(arch), feature(feature) {
+    this->useAutoTiling = useAutoTiling;
+  }
+
   void runOnOperation() override;
 
  private:
@@ -122,6 +127,7 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   std::string target{mlir::kTargetCpu};
   std::string feature{mlir::kNEONInstructionSet};
   std::string tilingMode{"auto"};
+  [[maybe_unused]] std::string arch{};
 
   mlir::akg::autotiling::TilingSolverPtr solver{nullptr};
   size_t levelToTile{1};
@@ -155,6 +161,11 @@ std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTili
 std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(
   const std::string &target, const std::string &feature, bool useAutoTiling) {
   return std::make_unique<AKGLoopTiling>(target, feature, useAutoTiling);
+}
+
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(
+  const std::string &target, bool useAutoTiling, const std::string &arch, const std::string &feature) {
+  return std::make_unique<AKGLoopTiling>(target, useAutoTiling, arch, feature);
 }
 
 static void moveLoopBody(mlir::affine::AffineForOp src, mlir::affine::AffineForOp dest) {
@@ -1120,6 +1131,7 @@ void AKGLoopTiling::BandCheck(const std::vector<SmallVector<mlir::affine::Affine
 
 void AKGLoopTiling::runOnOperation() {
   // Bands of loops to tile.
+  llvm::dbgs() << "arch: " << arch << "\n";
   mlir::func::FuncOp funcOp = getOperation();
   std::vector<SmallVector<mlir::affine::AffineForOp, 6>> bands;
   mlir::affine::getTileableBands(funcOp, &bands);
