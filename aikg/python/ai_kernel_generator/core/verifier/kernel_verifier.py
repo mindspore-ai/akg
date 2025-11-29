@@ -990,10 +990,8 @@ class KernelVerifier:
             gen_time = result.get('gen_time', float('inf'))
             base_time = result.get('base_time', 0.0)
             speedup = result.get('speedup', 0.0)
-            
-            # 保存加速比结果
-            if speedup > 0:
-                self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
+
+            self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
             
             speedup_percent = speedup * 100.0
             logger.info(f"orig performance is {base_time:.2f} us")

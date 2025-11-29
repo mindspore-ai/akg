@@ -4,6 +4,13 @@ import triton
 import triton.language as tl
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE': 32}),
+        triton.Config({'BLOCK_SIZE': 64}),
+    ],
+    key=['batch_size', 'in_features', 'out_features'],
+)
 @triton.jit
 def linear_kernel(
     x_ptr,          # 输入指针 [batch_size, in_features]
@@ -89,12 +96,10 @@ class ModelNew(nn.Module):
             bias = self.bias.contiguous()
             bias_ptr = bias
         
-        # 启动kernel
-        BLOCK_SIZE = 32
+        # 启动kernel (BLOCK_SIZE 由 autotune 自动选择)
         linear_kernel[grid](
             x, weight, bias_ptr, output,
             batch_size, in_features, out_features,
-            BLOCK_SIZE=BLOCK_SIZE,
         )
         
         return output
