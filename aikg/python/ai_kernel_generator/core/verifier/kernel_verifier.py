@@ -735,135 +735,6 @@ class KernelVerifier:
 """
         return code
 
-    def run_msprof(self, script_path: str) -> Tuple[bool, str, Optional[str]]:
-        """运行msprof性能分析"""
-        try:
-            process = subprocess.run(
-                f'msprof --application="python {script_path}"',
-                shell=True, capture_output=True, text=True, timeout=600
-            )
-
-            for line in process.stdout.split('\n'):
-                if "[INFO] Process profiling data complete. Data is saved in" in line:
-                    match = re.search(r"Data is saved in (.+)$", line)
-                    if match:
-                        return True, "", match.group(1).strip()
-
-            return False, "未找到数据保存路径", None
-        except Exception as e:
-            return False, f"执行错误: {str(e)}", None
-
-    def analyze_prof_data(self, prof_path: str, warmup_times: int, run_times: int) -> Tuple[bool, str, float]:
-        """分析PROF数据"""
-        try:
-            csv_files = list(Path(prof_path).glob("mindstudio_profiler_output/op_summary_*.csv"))
-            if not csv_files:
-                return False, "未找到CSV文件", 0.0
-
-            df = pd.read_csv(csv_files[0])
-
-            # 移除特定的Op
-            df_filtered = df[~df["Op Name"].str.contains("aclnnIsClose_IsCloseAiCpu_IsClose|aclnnAll_ReduceAll_ReduceAll",
-                                                         regex=True, na=False)]
-
-            total_count = warmup_times + run_times
-            op_counts = df_filtered["Op Name"].value_counts()
-            valid_ops = op_counts[op_counts == total_count]
-
-            if len(valid_ops) == 0:
-                return False, "没有找到符合预期次数的Op", float('inf')
-
-            # 检查不匹配的Op
-            invalid_ops = op_counts[op_counts != total_count]
-            if len(invalid_ops) > 0:
-                logger.warning(f"[{self.task_id}:{self.op_name}] 发现{len(invalid_ops)}个Op次数不匹配")
-
-            # 计算平均时间
-            df_valid = df_filtered[df_filtered["Op Name"].isin(valid_ops.index)]
-            total_avg_time = 0.0
-
-            for op_name in valid_ops.index:
-                op_data = df_valid[df_valid["Op Name"] == op_name]["Task Duration(us)"].tolist()
-                if len(op_data) > warmup_times:
-                    valid_data = op_data[warmup_times:]
-                    avg_time = sum(valid_data) / len(valid_data)
-                    total_avg_time += avg_time
-
-            return True, "", total_avg_time
-
-        except Exception as e:
-            return False, f"分析数据时出错: {str(e)}", float('inf')
-
-    def run_nsys(self, script_path: str) -> Tuple[bool, str, Optional[str]]:
-        """运行nsys性能分析"""
-        try:
-            output_name = "nsys_report_" + os.path.basename(script_path).replace(".py", "")
-            cmd = f'nsys profile --output={output_name} python {script_path}'
-            logger.debug(f"Running nsys profile: {cmd}")
-            process = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
-            report_path = os.path.join(os.path.dirname(script_path), output_name + ".nsys-rep")
-
-            if os.path.exists(report_path):
-                return True, "", report_path
-            return False, "未找到nsys报告文件", None
-        except Exception as e:
-            return False, f"执行错误: {str(e)}", None
-
-    def analyze_nsys_data(self, rep_path: str, warmup_times: int, run_times: int, profile_type: str = "") -> Tuple[bool, str, float]:
-        """分析nsys生成的rep文件，返回平均耗时(us)，统计方式与analyze_prof_data一致"""
-
-        try:
-            dir_plib = Path(rep_path).resolve().parent
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            # 在CSV文件名中添加profile_type标识
-            type_suffix = f"_{profile_type}" if profile_type else ""
-            csv_base = f"nsys_report_{timestamp}{type_suffix}"
-            csv_path = dir_plib / csv_base  # rep_path.replace(".nsys-rep", ".csv")
-            # 导出csv
-            cmd = f'nsys stats --report gputrace  --timeunit us  --format csv --output {csv_path} {rep_path}'
-            logger.debug(f"Running nsys stats: {cmd}")
-            subprocess.run(cmd, shell=True, check=True)
-            csv_path = dir_plib / f"{csv_base}_gputrace.csv"
-
-            if not os.path.exists(csv_path):
-                return False, "未生成csv文件", float('inf')
-            df = pd.read_csv(csv_path)
-            # 兼容不同nsys版本的列名
-            name_col = None
-            for col in df.columns:
-                if col.lower() in ["name", "function name", "kernel name", "Name"]:
-                    name_col = col
-                    break
-            if not name_col:
-                # 兜底找包含name的列
-                for col in df.columns:
-                    if "name" in col.lower():
-                        name_col = col
-                        break
-            time_col = None
-            for col in df.columns:
-                if "time (ns)" in col.lower() or "average" in col.lower() or "duration" in col.lower():
-                    time_col = col
-                    break
-            if not name_col or not time_col:
-                return False, "未找到kernel名或耗时列", float('inf')
-            total_count = warmup_times + run_times
-            op_counts = df[name_col].value_counts()
-            valid_ops = op_counts[op_counts == total_count]
-            if len(valid_ops) == 0:
-                return False, "没有找到符合预期次数的kernel", float('inf')
-            df_valid = df[df[name_col].isin(valid_ops.index)]
-            total_avg_time = 0.0
-            for op_name in valid_ops.index:
-                op_data = df_valid[df_valid[name_col] == op_name][time_col].tolist()
-                if len(op_data) > warmup_times:
-                    valid_data = op_data[warmup_times:]
-                    avg_time = sum(valid_data) / len(valid_data)
-                    total_avg_time += avg_time  # timeunit us
-            return True, "", total_avg_time
-        except Exception as e:
-            return False, f"分析nsys数据时出错: {str(e)}", float('inf')
-
     def save_speedup_result(self, speedup: float, base_time: float, gen_time: float, unique_dir: str):
         """保存加速比结果到txt文件"""
         try:
@@ -990,10 +861,8 @@ class KernelVerifier:
             gen_time = result.get('gen_time', float('inf'))
             base_time = result.get('base_time', 0.0)
             speedup = result.get('speedup', 0.0)
-            
-            # 保存加速比结果
-            if speedup > 0:
-                self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
+
+            self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
             
             speedup_percent = speedup * 100.0
             logger.info(f"orig performance is {base_time:.2f} us")
@@ -1036,44 +905,6 @@ class KernelVerifier:
                 elif isinstance(self.worker, RemoteWorker):
                     await self.worker.release_device(acquired_device, task_id=self.task_id)
                     logger.info(f"[{self.op_name}] Released remote device {acquired_device}")
-
-    def run_profile_scripts_and_collect_results(self, verify_dir: str) -> Tuple[float, float]:
-        """运行性能测试脚本并收集结果
-
-        Args:
-            verify_dir: 验证目录，包含性能测试脚本
-
-        Returns:
-            (base_time_us, gen_time_us): 基准时间和生成时间（微秒）
-        
-        注意: 此函数是线程安全的，不使用 os.chdir()。
-        多个任务可以在线程池中并发执行而不会互相干扰。
-        """
-        try:
-            # 步骤1：运行基准性能测试脚本
-            # 使用 cwd 参数指定工作目录（线程安全），不使用 os.chdir()
-            base_script = f"profile_{self.op_name}_base.py"
-            base_result = run_command(["python", base_script], cmd_msg="base_profile", timeout=300, cwd=verify_dir)
-            if not base_result[0]:
-                logger.error(f"[{self.op_name}: {self.task_id}] 基准性能脚本执行失败: {base_result[1]}")
-                return float('inf'), float('inf')
-
-            # 步骤2：运行生成代码性能测试脚本
-            gen_script = f"profile_{self.op_name}_generation.py"
-            gen_result = run_command(["python", gen_script], cmd_msg="generation_profile", timeout=300, cwd=verify_dir)
-            if not gen_result[0]:
-                logger.error(f"[{self.op_name}: {self.task_id}] 生成代码性能脚本执行失败: {gen_result[1]}")
-                return float('inf'), float('inf')
-
-            # 步骤3：从JSON文件读取性能数据
-            base_time_us = self.read_profile_result_from_json(verify_dir, "base_profile_result.json")
-            gen_time_us = self.read_profile_result_from_json(verify_dir, "generation_profile_result.json")
-
-            return base_time_us, gen_time_us
-
-        except Exception as e:
-            logger.error(f"[{self.op_name}: {self.task_id}] 性能脚本执行和结果收集失败: {e}")
-            return float('inf'), float('inf')
 
     def read_autotune_results_from_directory(self, verify_dir: str) -> str:
         """从验证目录读取所有autotune结果并格式化输出
@@ -1137,47 +968,6 @@ class KernelVerifier:
                 logger.warning(f"[{self.op_name}: {self.task_id}] 读取autotune文件失败 {autotune_file.name}: {e}")
         
         return "\n".join(result_lines)
-
-    def read_profile_result_from_json(self, verify_dir: str, result_file: str) -> float:
-        """从JSON文件读取性能测试结果
-        
-        该方法读取性能测试脚本生成的JSON结果文件，提取执行时间。
-        
-        JSON文件格式示例：
-        {
-            "execution_time_us": 145.23,
-            "execution_time_ms": 0.14523,
-            "method": "triton_do_bench",
-            "warmup_times": 5,
-            "run_times": 50
-        }
-
-        Args:
-            verify_dir: 验证目录
-            result_file: 结果文件名（如 "base_profile_result.json"）
-
-        Returns:
-            execution_time_us: 执行时间（微秒），失败时返回 float('inf')
-        """
-        try:
-            result_path = os.path.join(verify_dir, result_file)
-            if not os.path.exists(result_path):
-                logger.error(f"[{self.op_name}: {self.task_id}] 性能结果文件不存在: {result_path}")
-                return float('inf')
-
-            with open(result_path, 'r') as f:
-                result_data = json.load(f)
-
-            # 获取时间结果（微秒）
-            execution_time_us = result_data.get("execution_time_us", float('inf'))
-            method = result_data.get("method", "unknown")
-
-            logger.info(f"[{self.op_name}: {self.task_id}] 从 {result_file} 读取性能数据: {execution_time_us:.4f} us (method: {method})")
-            return execution_time_us
-
-        except Exception as e:
-            logger.error(f"[{self.op_name}: {self.task_id}] 读取性能结果文件失败 {result_file}: {e}")
-            return float('inf')
 
     def _detect_triton_autotune(self, code: str) -> bool:
         """
