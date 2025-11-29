@@ -36,6 +36,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
@@ -245,6 +246,127 @@ class TilingBase {
     return deviceFunc;
   }
 
+  static Value getForInitViaOperands(AffineForOp forOp, unsigned idx) {
+    unsigned start = forOp.getLowerBoundOperands().size() + forOp.getUpperBoundOperands().size();
+    return forOp->getOperand(start + idx);
+  }
+
+  static void replaceForInit(AffineForOp forOp, unsigned idx, Value newInit) {
+    unsigned numIter = forOp.getNumIterOperands();
+    if (idx >= numIter) return;
+
+    SmallVector<Value, 4> inits;
+    inits.reserve(numIter);
+    for (unsigned i = 0; i < numIter; ++i) {
+      inits.push_back(i == idx ? newInit : getForInitViaOperands(forOp, i));
+    }
+    unsigned start = forOp.getLowerBoundOperands().size() + forOp.getUpperBoundOperands().size();
+    forOp.getOperation()->setOperands(start, static_cast<unsigned>(inits.size()), inits);
+  }
+
+  static void processBlockArgumentIfFromForIter(Value cur, SmallVector<Value, 16> &wl) {
+    if (auto barg = dyn_cast<BlockArgument>(cur)) {
+      Block *owner = barg.getOwner();
+      if (owner && owner->getParentOp()) {
+        if (auto forOp = dyn_cast<AffineForOp>(owner->getParentOp())) {
+          unsigned numIters = forOp.getNumIterOperands();
+          unsigned firstIterIndex = owner->getNumArguments() - numIters;
+          if (barg.getArgNumber() >= firstIterIndex) {
+            unsigned iterIdx = barg.getArgNumber() - firstIterIndex;
+            Value init = getForInitViaOperands(forOp, iterIdx);
+            wl.push_back(init);
+            if (!forOp.getRegion().empty()) {
+              for (Operation &op : forOp.getRegion().front()) {
+                if (auto y = dyn_cast<AffineYieldOp>(op)) {
+                  if (iterIdx < y.getNumOperands()) wl.push_back(y.getOperand(iterIdx));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  static bool isValueUpdatedByInsertSlice(Value v) {
+    if (!v) return false;
+    SmallVector<Value, 16> wl;
+    llvm::SmallPtrSet<void *, 32> seen;
+    wl.push_back(v);
+
+    while (!wl.empty()) {
+      Value cur = wl.pop_back_val();
+      if (!seen.insert(cur.getAsOpaquePointer()).second) continue;
+
+      if (auto res = dyn_cast<OpResult>(cur)) {
+        Operation *def = res.getDefiningOp();
+        if (!def) continue;
+
+        if (isa<tensor::InsertSliceOp>(def)) {
+          return true;
+        }
+        if (auto forOp = dyn_cast<AffineForOp>(def)) {
+          wl.append(def->operand_begin(), def->operand_end());
+          if (!forOp.getRegion().empty()) {
+            for (Operation &op : forOp.getRegion().front()) {
+              if (auto y = dyn_cast<AffineYieldOp>(op)) {
+                wl.append(y->operand_begin(), y->operand_end());
+              }
+            }
+          }
+          continue;
+        }
+        if (auto slice = dyn_cast<tensor::ExtractSliceOp>(def)) {
+          wl.push_back(slice.getSource());
+          continue;
+        }
+        wl.append(def->operand_begin(), def->operand_end());
+        continue;
+      }
+
+      processBlockArgumentIfFromForIter(cur, wl);
+    }
+    return false;
+  }
+
+  static bool forResultUpdatedByInsertSlice(AffineForOp forOp, unsigned resultIdx) {
+    if (resultIdx >= forOp.getNumResults()) return false;
+    Value res = forOp.getResult(resultIdx);
+    return isValueUpdatedByInsertSlice(res);
+  }
+
+  static std::optional<std::pair<AffineForOp, unsigned>> isResultDirectlyFromAffineFor(Value v) {
+    if (!v) return std::nullopt;
+    if (auto res = dyn_cast<OpResult>(v)) {
+      if (auto forOp = dyn_cast<AffineForOp>(res.getOwner())) {
+        auto results = forOp.getResults();
+        for (unsigned i = 0, e = results.size(); i < e; ++i) {
+          if (results[i] == v) return std::make_pair(forOp, i);
+        }
+      }
+    }
+    return std::nullopt;
+  }
+
+  void maybeRetargetForInitForDirectReturn(Value returned, Value outArg) {
+    if (!returned || !outArg) return;
+    auto info = isResultDirectlyFromAffineFor(returned);
+    if (!info) return;
+
+    AffineForOp forOp = info->first;
+    unsigned idx = info->second;
+
+    Value init = getForInitViaOperands(forOp, idx);
+    auto initRes = dyn_cast_or_null<OpResult>(init);
+    if (!initRes) return;
+    Operation *def = initRes.getDefiningOp();
+    if (!def || !isa<tensor::EmptyOp>(def)) return;
+
+    if (!forResultUpdatedByInsertSlice(forOp, idx)) return;
+
+    replaceForInit(forOp, idx, outArg);
+  }
+
   Value cloneKernelBodyToDeviceFunc(func::FuncOp originalKernel, func::FuncOp deviceFunc, unsigned nInputs,
                                     Value outArg) {
     Value returned;
@@ -282,33 +404,6 @@ class TilingBase {
     return returned;
   }
 
-  void retargetAffineForInitsIfNeeded(func::FuncOp deviceFunc, Value returned, Value outArg) {
-    if (!returned || !outArg || returned == outArg) return;
-
-    deviceFunc.walk([&](AffineForOp forOp) {
-      auto results = forOp.getResults();
-      if (results.empty()) return;
-
-      std::optional<unsigned> resultIdx;
-      for (unsigned i = 0, e = results.size(); i < e; ++i) {
-        if (results[i] == returned) {
-          resultIdx = i;
-          break;
-        }
-      }
-      if (!resultIdx) return;
-
-      SmallVector<Value> newInitArgs(forOp.getInits().begin(), forOp.getInits().end());
-      if (newInitArgs.empty() || newInitArgs.size() != results.size()) return;
-
-      newInitArgs[*resultIdx] = outArg;
-
-      unsigned start = forOp.getLowerBoundOperands().size() + forOp.getUpperBoundOperands().size();
-      unsigned len = static_cast<unsigned>(newInitArgs.size());
-      forOp.getOperation()->setOperands(start, len, newInitArgs);
-    });
-  }
-
   LogicalResult initTilingKernel(OpBuilder &builder) {
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPoint(originalKernel_);
@@ -329,11 +424,11 @@ class TilingBase {
     Value outArg = entry->getArgument(nInputs);
 
     Value returned = cloneKernelBodyToDeviceFunc(originalKernel_, deviceFunc, nInputs, outArg);
-    if (!returned) returned = outArg;
 
-    retargetAffineForInitsIfNeeded(deviceFunc, returned, outArg);
+    maybeRetargetForInitForDirectReturn(returned, outArg);
 
-    b.create<func::ReturnOp>(deviceFunc.getLoc(), ValueRange{returned});
+    Value finalReturn = returned ? returned : outArg;
+    b.create<func::ReturnOp>(deviceFunc.getLoc(), ValueRange{finalReturn});
     tilingKernel_ = deviceFunc;
 
     if (failed(createOrGetGetTilingStructSizeFunction(builder, deviceFunc))) return failure();
