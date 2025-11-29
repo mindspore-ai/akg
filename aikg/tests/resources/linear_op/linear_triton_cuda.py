@@ -7,7 +7,7 @@ import triton.language as tl
 @triton.autotune(
     configs=[
         triton.Config({'BLOCK_SIZE': 32}),
-        triton.Config({'BLOCK_SIZE': 64}),
+        triton.Config({'BLOCK_SIZE': 16}),
     ],
     key=['batch_size', 'in_features', 'out_features'],
 )
