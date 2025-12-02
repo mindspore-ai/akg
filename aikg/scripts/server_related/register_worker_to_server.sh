@@ -1,7 +1,8 @@
 #!/bin/bash
 # 向 AIKG Server 注册 Worker Service
 # 用法: ./scripts/server_related/register_worker_to_server.sh [server_url] [worker_url] [backend] [arch] [capacity]
-
+# ./scripts/server_related/register_worker_to_server.sh http://localhost:8000 http://localhost:9001 cuda a100 1
+#./scripts/server_related/register_worker_to_server.sh http://localhost:8000 http://localhost:9001 ascend ascend910b4 1
 set -e
 
 SERVER_URL=${1:-http://localhost:8000}
@@ -32,7 +33,7 @@ curl -X POST "$SERVER_URL/api/v1/workers/register" \
     }"
 
 echo ""
-echo "✅ Worker 注册完成！"
+echo "Worker 注册命令执行完成！"
 
 # 验证注册
 echo ""

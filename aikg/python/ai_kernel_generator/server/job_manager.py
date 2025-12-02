@@ -23,15 +23,28 @@ class ServerJobManager:
         if not arch:
             raise ValueError("arch is required when submitting a job.")
 
-        worker_available = await get_worker_manager().has_worker(
+        worker_manager = get_worker_manager()
+        worker_available = await worker_manager.has_worker(
             backend=backend,
             arch=arch
         )
         if not worker_available:
-            raise RuntimeError(
-                f"No available worker for backend={backend}, arch={arch}. "
-                "Please register a worker before submitting the job."
-            )
+            # 获取当前所有已注册的 Worker 状态
+            all_workers = await worker_manager.get_status()
+            
+            error_msg = f"No available worker found for backend='{backend}', arch='{arch}'.\n"
+            if not all_workers:
+                error_msg += "Reason: No workers are currently registered to the server."
+            else:
+                worker_list_str = "\n".join([
+                    f"- backend='{w['backend']}', arch='{w['arch']}', capacity={w['capacity']}, tags={w['tags']}"
+                    for w in all_workers
+                ])
+                error_msg += f"Reason: Registered workers do not match the requirements.\nCurrently registered workers:\n{worker_list_str}"
+            
+            error_msg += "\nPlease register a compatible worker before submitting the job."
+            
+            raise RuntimeError(error_msg)
 
         job_id = str(uuid.uuid4())
         job_type = request_data.get("job_type", "single")
@@ -86,8 +99,10 @@ class ServerJobManager:
             _, success, task_info = await task.run(init_task_info=init_task_info)
             
             self.jobs[job_id]["status"] = "completed" if success else "failed"
-            self.jobs[job_id]["result"] = success
-            # 可以在这里保存更多 task_info 信息
+            self.jobs[job_id]["result"] = {
+                "success": success,
+                "code": task_info.get("coder_code", ""),
+            }
         except Exception as e:
             self._handle_error(job_id, e)
 
@@ -115,8 +130,23 @@ class ServerJobManager:
                 parent_selection_prob=data.get("parent_selection_prob", 0.5)
             )
             
+            # 提取最优结果
+            best_result = {
+                "success": result.get("successful_tasks", 0) > 0,
+                "code": "",
+                "profile": {},
+                "op_name": result.get("op_name"),
+                "full_result": result  # 保留完整结果以备不时之需
+            }
+
+            best_impls = result.get("best_implementations", [])
+            if best_impls:
+                best_kernel = best_impls[0]
+                best_result["code"] = best_kernel.get("impl_code", "")
+                best_result["profile"] = best_kernel.get("profile", {})
+            
             self.jobs[job_id]["status"] = "completed"
-            self.jobs[job_id]["result"] = result # evolve 返回的是 dict
+            self.jobs[job_id]["result"] = best_result
         except Exception as e:
             self._handle_error(job_id, e)
 

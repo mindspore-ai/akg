@@ -235,7 +235,21 @@ def example_evolve_job(client: AIKGClient):
         result = status.get('result')
         if isinstance(result, dict):
             print(f"   ✅ Evolve 完成")
-            print(f"   结果详情: {result}")
+            # 只打印关键信息，避免打印过长的 code 和 full_result
+            profile = result.get('profile', {})
+            print(f"   性能数据: {profile}")
+            
+            # 简略显示代码信息
+            code = result.get('code', '')
+            code_preview = (code[:100] + '...') if len(code) > 100 else code
+            print(f"   生成的代码(前100字符): {code_preview}")
+            
+            if code:
+                # 可选：保存到文件
+                save_path = f"{op_name}_best.py"
+                with open(save_path, "w") as f:
+                    f.write(code)
+                print(f"   完整代码已保存至: {save_path}")
         else:
             print(f"   结果: {result}")
         return True

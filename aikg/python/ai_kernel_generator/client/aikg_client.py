@@ -10,6 +10,29 @@ class AIKGClient:
     def __init__(self, server_url: str):
         self.server_url = server_url.rstrip("/")
 
+    def _handle_response(self, resp: requests.Response):
+        """处理响应，如果出错则尝试提取详细错误信息"""
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            # 尝试从 Server 返回的 JSON 中获取 detail 字段
+            error_detail = ""
+            try:
+                error_json = resp.json()
+                if "detail" in error_json:
+                    error_detail = f"\nServer Error Details:\n{error_json['detail']}"
+            except Exception:
+                # 如果不是 JSON 格式，尝试获取文本内容
+                if resp.text:
+                    error_detail = f"\nServer Error Text: {resp.text[:200]}"
+            
+            # 将详细信息附加到异常消息中
+            if error_detail:
+                # 修改异常对象的 args，使其打印时包含详情
+                new_msg = f"{str(e)}{error_detail}"
+                raise requests.exceptions.HTTPError(new_msg, response=resp) from e
+            raise e
+
     def submit_job(self, 
                    op_name: str, 
                    task_desc: str, 
@@ -43,21 +66,21 @@ class AIKGClient:
             **kwargs
         }
         resp = requests.post(url, json=data)
-        resp.raise_for_status()
+        self._handle_response(resp)
         return resp.json()["job_id"]
 
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """查询作业状态"""
         url = f"{self.server_url}/api/v1/jobs/{job_id}/status"
         resp = requests.get(url)
-        resp.raise_for_status()
+        self._handle_response(resp)
         return resp.json()
 
     def get_workers_status(self) -> list:
         """查询 Worker 状态"""
         url = f"{self.server_url}/api/v1/workers/status"
         resp = requests.get(url)
-        resp.raise_for_status()
+        self._handle_response(resp)
         return resp.json()
 
     def wait_for_completion(self, job_id: str, interval: int = 2, timeout: int = 3600) -> Dict[str, Any]:

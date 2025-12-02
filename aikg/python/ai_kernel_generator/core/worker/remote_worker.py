@@ -101,14 +101,17 @@ class RemoteWorker(WorkerInterface):
                 return success, log, artifacts
                 
         except httpx.RequestError as e:
-            logger.error(f"[{task_id}] Network error communicating with worker: {e}")
-            return False, f"Network error: {e}", {}
+            error_msg = f"Network error communicating with worker at {self.worker_url}: {e}. Please check if the worker service is running and accessible."
+            logger.error(f"[{task_id}] {error_msg}")
+            return False, error_msg, {}
         except httpx.HTTPStatusError as e:
-            logger.error(f"[{task_id}] Worker returned error status: {e.response.status_code} - {e.response.text}")
-            return False, f"Worker error: {e.response.status_code} - {e.response.text}", {}
+            error_msg = f"Worker returned error status: {e.response.status_code} - {e.response.text}"
+            logger.error(f"[{task_id}] {error_msg}")
+            return False, error_msg, {}
         except Exception as e:
-            logger.error(f"[{task_id}] Remote verification failed: {e}")
-            return False, f"Remote verification failed: {e}", {}
+            error_msg = f"Remote verification failed: {e}"
+            logger.error(f"[{task_id}] {error_msg}")
+            return False, error_msg, {}
 
     async def profile(self, package_data: bytes, task_id: str, op_name: str, profile_settings: Dict[str, Any]) -> Dict[str, Any]:
         """

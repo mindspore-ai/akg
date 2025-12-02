@@ -62,6 +62,12 @@ async def get_job_status(job_id: str):
 async def register_worker(req: WorkerRegisterRequest):
     """Worker 注册接口"""
     logger.info(f"Registering worker: {req.url} ({req.backend}/{req.arch})")
+    
+    # 简单的 URL 检查提示
+    if "localhost" in req.url or "127.0.0.1" in req.url:
+        logger.warning(f"Worker registered with localhost URL: {req.url}. "
+                       "Ensure the Server can access this URL (e.g. they are on the same host).")
+
     worker = RemoteWorker(req.url)
     await get_worker_manager().register(
         worker, 

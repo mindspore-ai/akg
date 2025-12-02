@@ -2,6 +2,8 @@
 # 启动 AIKG Worker Service
 # 用法: ./scripts/server_related/start_worker_service.sh [backend] [arch] [devices] [port]
 # devices: 逗号分隔的设备ID列表，例如 "0,1,2,3,4,5" 或单个设备 "0"
+# ./scripts/server_related/start_worker_service.sh cuda a100 0,1,2,3 9001
+# ./scripts/server_related/start_worker_service.sh ascend ascend910b4 0,1,2,3 9001
 
 set -e
 
