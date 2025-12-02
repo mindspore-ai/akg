@@ -863,3 +863,166 @@ async def test_kernel_verifier_linear_triton_cuda(op_name):
     task_info["coder_code"] = kernel_code
     result, error_log = await verifier.run(task_info, device_id=device_id)
     assert result, f"验证失败: {error_log}"
+
+
+# task_desc 校验功能测试
+@pytest.mark.level0
+@pytest.mark.torch
+@pytest.mark.triton
+@pytest.mark.ascend
+@pytest.mark.ascend910b4
+@pytest.mark.parametrize("op_name", ["relu"])
+@pytest.mark.asyncio
+async def test_check_task_desc_static_valid(op_name):
+    """测试静态检查：有效的 task_desc 应该通过"""
+    framework = "torch"
+    dsl = "triton_ascend"
+    backend = "ascend"
+    arch = "ascend910b4"
+    config = load_config(dsl, backend=backend)
+    
+    # 读取有效的 task_desc
+    op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
+    with open(op_task_file, "r", encoding="utf-8") as f:
+        valid_task_desc = f.read()
+    
+    verifier = KernelVerifier(
+        op_name=op_name,
+        framework_code=valid_task_desc,
+        framework=framework,
+        dsl=dsl,
+        backend=backend,
+        arch=arch,
+        config=config
+    )
+    
+    valid, error = verifier.check_task_desc_static(valid_task_desc)
+    assert valid, f"静态检查应该通过，但失败了: {error}"
+
+
+@pytest.mark.level0
+@pytest.mark.torch
+@pytest.mark.triton
+@pytest.mark.ascend
+@pytest.mark.ascend910b4
+@pytest.mark.asyncio
+async def test_check_task_desc_static_missing_model():
+    """测试静态检查：缺少 Model 类应该失败"""
+    dsl = "triton_ascend"
+    backend = "ascend"
+    arch = "ascend910b4"
+    config = load_config(dsl, backend=backend)
+    
+    # 缺少 Model 类的代码
+    invalid_task_desc = """
+import torch
+
+def get_inputs():
+    return [torch.randn(16, 16384)]
+
+def get_init_inputs():
+    return []
+"""
+    
+    verifier = KernelVerifier(
+        op_name="test",
+        framework_code="",
+        framework="torch",
+        dsl=dsl,
+        backend=backend,
+        arch=arch,
+        config=config
+    )
+    
+    valid, error = verifier.check_task_desc_static(invalid_task_desc)
+    assert not valid, "静态检查应该失败（缺少 Model 类）"
+    assert "class Model" in error
+
+
+@pytest.mark.level0
+@pytest.mark.torch
+@pytest.mark.triton
+@pytest.mark.ascend
+@pytest.mark.ascend910b4
+@pytest.mark.asyncio
+async def test_check_task_desc_static_missing_get_inputs():
+    """测试静态检查：缺少 get_inputs 函数应该失败"""
+    dsl = "triton_ascend"
+    backend = "ascend"
+    arch = "ascend910b4"
+    config = load_config(dsl, backend=backend)
+    
+    # 缺少 get_inputs 函数的代码
+    invalid_task_desc = """
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
+    
+    def forward(self, x):
+        return torch.relu(x)
+
+def get_init_inputs():
+    return []
+"""
+    
+    verifier = KernelVerifier(
+        op_name="test",
+        framework_code="",
+        framework="torch",
+        dsl=dsl,
+        backend=backend,
+        arch=arch,
+        config=config
+    )
+    
+    valid, error = verifier.check_task_desc_static(invalid_task_desc)
+    assert not valid, "静态检查应该失败（缺少 get_inputs）"
+    assert "get_inputs" in error
+
+
+@pytest.mark.level0
+@pytest.mark.torch
+@pytest.mark.triton
+@pytest.mark.cuda
+@pytest.mark.a100
+@pytest.mark.parametrize("op_name", ["relu"])
+@pytest.mark.asyncio
+async def test_check_task_desc_runtime_valid(op_name):
+    """测试运行时检查：有效的 task_desc 应该通过"""
+    framework = "torch"
+    dsl = "triton_cuda"
+    backend = "cuda"
+    arch = "a100"
+    config = load_config(dsl, backend=backend)
+    
+    # 读取有效的 task_desc
+    op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
+    with open(op_task_file, "r", encoding="utf-8") as f:
+        valid_task_desc = f.read()
+    
+    # 注册 LocalWorker
+    await register_local_worker([device_id], backend=backend, arch=arch)
+    worker = await get_worker_manager().select(backend=backend, arch=arch)
+    if not worker:
+        raise RuntimeError(f"No available worker for backend={backend}, arch={arch}")
+    
+    try:
+        verifier = KernelVerifier(
+            op_name=op_name,
+            framework_code=valid_task_desc,
+            task_id="runtime_check_test",
+            framework=framework,
+            dsl=dsl,
+            backend=backend,
+            arch=arch,
+            config=config,
+            worker=worker
+        )
+        
+        valid, error = await verifier.check_task_desc_runtime(valid_task_desc, timeout=60)
+        assert valid, f"运行时检查应该通过，但失败了: {error}"
+    finally:
+        await get_worker_manager().release(worker)

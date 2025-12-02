@@ -7,8 +7,60 @@ from ai_kernel_generator.core.evolve import evolve
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.core.worker.manager import get_worker_manager
+from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
 
 logger = logging.getLogger(__name__)
+
+# task_desc 格式示例（KernelBench 格式）
+TASK_DESC_EXAMPLE = '''
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    """
+    Simple model that performs a ReLU activation.
+    """
+    def __init__(self):
+        super(Model, self).__init__()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Applies ReLU activation to the input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor of any shape.
+
+        Returns:
+            torch.Tensor: Output tensor with ReLU applied, same shape as input.
+        """
+        return torch.relu(x)
+
+batch_size = 16
+dim = 16384
+
+def get_inputs():
+    x = torch.randn(batch_size, dim)
+    return [x]
+
+def get_init_inputs():
+    return []  # No special initialization inputs needed
+'''.strip()
+
+def _get_task_desc_format_hint() -> str:
+    """返回 task_desc 格式提示信息"""
+    return f"""
+task_desc must follow the KernelBench format with the following required components:
+
+1. class Model: A model class with __init__ and forward methods
+2. def get_inputs(): A function that returns a list of input tensors for the model
+3. def get_init_inputs(): A function that returns initialization arguments for the Model class
+
+Example (PyTorch):
+{TASK_DESC_EXAMPLE}
+
+Note: The example above uses PyTorch. For other frameworks like MindSpore or NumPy, 
+please refer to the corresponding examples in the aikg/examples/ directory.
+"""
 
 class ServerJobManager:
     def __init__(self):
@@ -17,11 +69,31 @@ class ServerJobManager:
     async def submit_job(self, request_data: dict) -> str:
         backend = request_data.get("backend")
         arch = request_data.get("arch")
+        task_desc = request_data.get("task_desc", "")
 
         if not backend:
             raise ValueError("backend is required when submitting a job.")
         if not arch:
             raise ValueError("arch is required when submitting a job.")
+
+        # 静态检查 task_desc
+        if task_desc:
+            # 临时创建一个 verifier 实例用于检查 (不需要 worker)
+            verifier = KernelVerifier(
+                op_name="check", 
+                framework_code="", 
+                config={"log_dir": "/tmp"},
+                backend=backend,
+                arch=arch,
+                dsl=request_data.get("dsl", "triton") # 临时用
+            )
+            valid, error = verifier.check_task_desc_static(task_desc)
+            if not valid:
+                hint = _get_task_desc_format_hint()
+                raise ValueError(f"Task description static check failed: {error}\n\n{hint}")
+        else:
+            hint = _get_task_desc_format_hint()
+            raise ValueError(f"task_desc is required when submitting a job.\n\n{hint}")
 
         worker_manager = get_worker_manager()
         worker_available = await worker_manager.has_worker(
@@ -68,6 +140,54 @@ class ServerJobManager:
         logger.info(f"Job submitted: {job_id} ({job_type})")
         return job_id
 
+    async def _check_task_desc_runtime_wrapper(self, job_id: str, data: dict, config: dict) -> bool:
+        """
+        在任务开始前执行运行时检查
+        """
+        task_desc = data.get("task_desc", "")
+        if not task_desc:
+            hint = _get_task_desc_format_hint()
+            raise ValueError(f"task_desc is required but was not provided.\n\n{hint}")
+            
+        backend = data.get("backend")
+        arch = data.get("arch")
+        
+        logger.info(f"[{job_id}] Starting runtime check for task description...")
+        
+        worker_manager = get_worker_manager()
+        # 获取 worker
+        worker = await worker_manager.select(backend=backend, arch=arch)
+        if not worker:
+            raise RuntimeError(f"No available worker found for runtime check (backend={backend}, arch={arch})")
+            
+        try:
+            # 创建 verifier
+            verifier = KernelVerifier(
+                op_name=data.get("op_name"),
+                framework_code=task_desc, # 这里的 framework_code 不重要，只要 task_desc 传对了
+                task_id=job_id,
+                framework=data.get("framework"),
+                dsl=data.get("dsl"),
+                backend=backend,
+                arch=arch,
+                config=config,
+                worker=worker
+            )
+            
+            # 执行检查
+            valid, error = await verifier.check_task_desc_runtime(task_desc, timeout=60)
+            
+            if not valid:
+                hint = _get_task_desc_format_hint()
+                raise RuntimeError(f"Task description runtime check failed: {error}\n\n{hint}")
+                
+            logger.info(f"[{job_id}] Task description runtime check passed.")
+            return True
+            
+        finally:
+            # 释放 worker
+            await worker_manager.release(worker)
+
     async def _run_single_job(self, job_id: str, data: dict):
         self.jobs[job_id]["status"] = "running"
         try:
@@ -77,6 +197,9 @@ class ServerJobManager:
                 config = load_config(data.get("dsl"), backend=data.get("backend"))
             except Exception:
                 config = {}
+            
+            # 执行运行时检查
+            await self._check_task_desc_runtime_wrapper(job_id, data, config)
 
             # 创建 Core Task
             task = Task(
@@ -110,6 +233,9 @@ class ServerJobManager:
         self.jobs[job_id]["status"] = "running"
         try:
             config = load_config(data.get("dsl"), backend=data.get("backend"))
+            
+            # 执行运行时检查
+            await self._check_task_desc_runtime_wrapper(job_id, data, config)
             
             task_pool = TaskPool(max_concurrency=data.get("parallel_num", 1))
             
