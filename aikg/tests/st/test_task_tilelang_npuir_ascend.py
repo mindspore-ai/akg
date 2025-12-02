@@ -1,5 +1,4 @@
 import pytest
-from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.worker.manager import register_local_worker
 from ..utils import (
@@ -8,6 +7,15 @@ from ..utils import (
 )
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
+
+# 自动选择 Task 实现：优先使用 LangGraphTask，否则使用原 Task
+try:
+    import langgraph
+    from ai_kernel_generator.core.langgraph_task import LangGraphTask as AIKGTask
+    _USE_LANGGRAPH = True
+except ImportError:
+    from ai_kernel_generator.core.task import Task as AIKGTask
+    _USE_LANGGRAPH = False
 
 
 device_id = get_device_id()
@@ -50,7 +58,7 @@ async def test_kernelbench_torch_tilelang_npuir_ascend910b4():
             benchmark_name[i], framework=framework)
         op_name = add_op_prefix(benchmark_name[i], benchmark=benchmark)
 
-        task = Task(
+        task = AIKGTask(
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),

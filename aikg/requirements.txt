@@ -1,8 +1,8 @@
-langchain<1.0.0
+langchain>=1.0.0
 langchain-deepseek
 langchain-ollama
-langchain_ollama
-langchain_community
+langchain-community
+langgraph>=1.0.0
 autopep8
 jinja2
 numpy < 2 # mindspore related

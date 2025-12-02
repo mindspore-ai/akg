@@ -146,7 +146,7 @@ async def evolve(
         # 4.2 执行任务
         results = await task_pool.wait_all()
         task_pool.tasks.clear()
-        
+
         # 4.3 处理结果
         round_data = await result_processor.process_results(
             results,
@@ -164,7 +164,7 @@ async def evolve(
                 saved_files = await collector.prepare_and_remove_data()
             except Exception as e:
                 logger.error(f"Failed to prepare data for transmission in evolve round {round_idx}: {e}")
-        
+
         # 4.5 打印轮次结果
         round_result = round_data['round_result']
         pretty_print_results([

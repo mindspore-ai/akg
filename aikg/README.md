@@ -42,6 +42,7 @@ Through LLM-based planning and control of (multi-)agents, AIKG collaboratively a
 Additionally, AIKG provides a rich set of submodules for kernel agents, which enables users to build custom agent tasks.
 
 ## 🗓️ 2. Changelog
+- 2025-12-01: Introduced LangGraph refactoring for task orchestration. New `LangGraphTask` replaces original `Conductor + workflow.yaml` architecture. Features include Python-defined workflows, graph visualization, and type-safe state management. API fully compatible with original `Task`. See [LangGraph Documentation](./docs/LangGraph.md).
 - 2025-11-25: Added service architecture support with the unified `register_worker()` helper (legacy `register_local_worker` / `register_remote_worker` are still available). Always register a Worker (remote via `AIKG_WORKER_URL` or local device list) before calling `evolve`. See [Service Architecture Documentation](./docs/ServerArchitecture.md).
 - 2025-10-14: Added TileLang_CUDA DSL support. See [Benchmark Results](./docs/DSLBenchmarkResults202509.md) for KernelBench Level1 success rates.
 - 2025-09-26: Added CUDA C and C++ DSL support. See [Benchmark Results](./docs/DSLBenchmarkResults202509.md) for KernelBench Level1 success rates.

@@ -10,11 +10,16 @@ agent_model_config:
 log_dir: "~/aikg_logs"
 
 # Workflow configuration
-workflow_config_path: "config/coder_only_workflow.yaml"
+workflow_config_path: "config/coder_only_workflow.yaml"  # 原 Task 使用
+default_workflow: "coder_only_workflow"  # LangGraphTask 使用
+max_step: 20  # 最大迭代步数
+
+# Parser configuration (for LangGraphTask)
+# parser_config_path: "config/parser_config.yaml"  # 可选，默认使用 config/parser_config.yaml
 
 # Documentation directory configuration
 docs_dir:
-  designer: "resources/docs/triton_ascend_docs"
+  designer: "resources/docs/sketch_docs"
   coder: "resources/docs/triton_ascend_docs"
 
 # Performance analysis configuration

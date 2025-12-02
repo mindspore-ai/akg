@@ -18,6 +18,9 @@ from typing import Dict, Any, Optional
 from ai_kernel_generator import get_project_root
 from .common_utils import ParserFactory, load_yaml
 
+# 导入新的 parser loader（向后兼容）
+from .parser_loader import create_agent_parser
+
 logger = logging.getLogger(__name__)
 
 
@@ -60,52 +63,17 @@ def _convert_to_internal_format(parser_definition: Dict[str, Any]) -> Dict[str, 
 
 def create_step_parser(step_name: str, workflow_config_path: Optional[str] = None):
     """
-    为特定工作流步骤创建解析器
-
+    为特定工作流步骤创建解析器（向后兼容函数）
+    
+    注意：现在使用独立的 parser_config.yaml，不再依赖 workflow_config_path
+    workflow_config_path 参数保留用于向后兼容，但会被忽略
+    
     Args:
         step_name: 步骤名称（如'designer', 'coder'）
-        workflow_config_path: workflow配置文件路径，可选
-
+        workflow_config_path: 已废弃，保留用于向后兼容
+    
     Returns:
         解析器实例，如果该步骤不需要解析器则返回None
     """
-    try:
-        # 加载workflow配置
-        workflow_config = load_yaml(workflow_config_path)
-
-        # 获取agent_info
-        agent_info = workflow_config.get('agent_info', {})
-        if not agent_info:
-            raise ValueError("No 'agent_info' found in workflow config")
-
-        # 检查步骤是否存在
-        if step_name not in agent_info:
-            raise ValueError(f"Step '{step_name}' not found in agent_info")
-
-        step_config = agent_info[step_name]
-
-        # 检查是否有output_format配置
-        output_format = step_config.get('output_format')
-        if not output_format:
-            logger.info(f"Step '{step_name}' has no output_format, returning None (no parser needed)")
-            return None
-
-        parser_name = output_format.get('parser_name')
-        if not parser_name:
-            logger.warning(f"No parser_name found in step '{step_name}'")
-            return None
-
-        # 检查是否有parser_definition
-        parser_definition = output_format.get('parser_definition')
-        if not parser_definition:
-            logger.warning(f"No parser_definition found in step '{step_name}'")
-            return None
-
-        # 转换为内部格式并注册解析器
-        parser_config = _convert_to_internal_format(parser_definition)
-        ParserFactory.register_parser(parser_name, parser_config)
-        return ParserFactory.get_parser(parser_name)
-
-    except Exception as e:
-        logger.error(f"Failed to create parser for step '{step_name}': {e}")
-        raise
+    # 使用新的 parser loader（不依赖 workflow.yaml）
+    return create_agent_parser(step_name, parser_config_path=None)

@@ -34,7 +34,8 @@ class Coder(AgentBase):
                  framework: str,
                  backend: str,
                  arch: str = "",
-                 workflow_config_path: str = None,
+                 workflow_config_path: str = None,  # 已废弃，保留用于向后兼容
+                 parser_config_path: str = None,    # 新的 parser 配置路径
                  config: dict = None):
         self.op_name = op_name
         self.task_desc = remove_copyright_from_text(task_desc)
@@ -42,7 +43,8 @@ class Coder(AgentBase):
         self.framework = framework
         self.backend = backend
         self.arch = arch
-        self.workflow_config_path = workflow_config_path
+        self.workflow_config_path = workflow_config_path  # 保留用于向后兼容
+        self.parser_config_path = parser_config_path  # 新的配置路径
         self.config = config
         self.codegen_step_count = 0
         self.api_step_count = 0
@@ -64,11 +66,12 @@ class Coder(AgentBase):
         }
         super().__init__(context=context, config=config)
 
-        # 直接使用从workflow.yaml获取的coder解析器
-        self.code_parser = create_step_parser("coder", self.workflow_config_path)
+        # 使用新的 parser loader（不依赖 workflow.yaml）
+        from ai_kernel_generator.utils.parser_loader import create_agent_parser
+        self.code_parser = create_agent_parser("coder", self.parser_config_path)
         if not self.code_parser:
             raise ValueError(
-                "Failed to create coder parser from workflow config. Please check your workflow.yaml configuration.")
+                "Failed to create coder parser. Please check your parser_config.yaml configuration.")
         self.format_instructions = self.code_parser.get_format_instructions()
 
         if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
@@ -377,8 +380,9 @@ class Coder(AgentBase):
 
             # ============ Hint模式：参数范围已在sketch的"设计适用范围"注释中 ============
             enable_hint_mode = self.config.get("enable_hint_mode", False)
-            has_param_space = enable_hint_mode and "space_config_code" in task_info
-            
+            has_space_config = "space_config_code" in task_info and task_info.get("space_config_code")
+            has_param_space = enable_hint_mode and has_space_config
+                      
             # 基于base_doc构建输入，只更新变化的部分
             input_data = {
                 **self.base_doc,

@@ -12,7 +12,12 @@ agent_model_config:
 log_dir: "~/aikg_logs"
 
 # Workflow configuration
-workflow_config_path: "config/default_workflow.yaml"
+workflow_config_path: "config/default_workflow.yaml"  # 原 Task 使用
+default_workflow: "default_workflow"  # LangGraphTask 使用
+max_step: 20  # 最大迭代步数
+
+# Parser configuration (for LangGraphTask)
+# parser_config_path: "config/parser_config.yaml"  # 可选，默认使用 config/parser_config.yaml
 
 # Documentation directory configuration
 docs_dir:
@@ -29,9 +34,9 @@ profile_settings:
 verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
 
 # Multi-case testing configuration
-enable_multi_case_verification: false  # Master switch for multi-case verification (set to false to only generate space_config without verification)
-enable_hint_mode: false  # Enable hint mode (user provides @hint, Designer generates space_config)
-enable_llm_range_inference: false  # Enable LLM range inference mode (LLM infers parameter ranges and generates test cases)
+enable_multi_case_verification: false  # For Hint mode only: controls whether to run verification (false = only generate space_config file without verification)
+enable_hint_mode: false  # Hint mode: user provides @hint, Designer generates space_config
+enable_llm_range_inference: false  # LLM inference mode: LLM infers parameter ranges and generates test cases (always runs verification when enabled)
 
 # Hint mode sampling configuration (only used when enable_hint_mode=true and enable_multi_case_verification=true)
 multi_case_num: 10  # Number of test cases to sample

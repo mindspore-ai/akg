@@ -22,7 +22,11 @@ try:
 except ImportError:
     OpenAIAsyncClient = None
 
-from langchain.prompts import PromptTemplate
+try:
+    from langchain_core.prompts import PromptTemplate
+except ImportError:
+    # Fallback for older langchain versions
+    from langchain.prompts import PromptTemplate
 
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.llm.model_loader import create_model
@@ -246,7 +250,7 @@ class AgentBase(ABC):
                 is_empty = True
 
             # 记录状态
-            status = "空" if is_empty else "✅ 有值"
+            status = "空" if is_empty else "有值"
             value_preview = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
             logger.debug(f"{status} {key}: {value_preview}")
 

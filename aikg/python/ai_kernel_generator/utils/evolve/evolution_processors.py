@@ -26,7 +26,20 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 from functools import partial
 
-from ai_kernel_generator.core.task import Task
+# 自动选择 Task 实现：优先使用 LangGraphTask，否则使用原 Task
+try:
+    from ai_kernel_generator.core.langgraph_task import LangGraphTask as AIKGTask
+    _USE_LANGGRAPH = True
+except ImportError:
+    from ai_kernel_generator.core.task import Task as AIKGTask
+    _USE_LANGGRAPH = False
+
+import logging
+_logger = logging.getLogger(__name__)
+if _USE_LANGGRAPH:
+    _logger.info("Using LangGraphTask for evolve")
+else:
+    _logger.info("LangGraph not available, using original Task for evolve")
 from ai_kernel_generator.core.sketch import Sketch
 from ai_kernel_generator.utils.handwrite_loader import HandwriteLoader, HandwriteSampler
 
@@ -220,7 +233,7 @@ class TaskCreationProcessor:
         device_pool,
         task_pool,
         round_implementations: List[Dict[str, Any]] = None
-    ) -> List[Task]:
+    ) -> List[AIKGTask]:
         """为当前轮次创建所有任务
         
         Args:
@@ -411,7 +424,7 @@ class TaskCreationProcessor:
             for pid in range(self.config.tasks_per_island):
                 task_id = f"{round_idx}_{island_idx}_{pid}"
                 
-                task = Task(
+                task = AIKGTask(
                     op_name=self.config.op_name,
                     task_desc=self.config.task_desc,
                     task_id=task_id,
@@ -419,10 +432,10 @@ class TaskCreationProcessor:
                     arch=self.config.arch,
                     dsl=self.config.dsl,
                     config=self.config.config,
-                    device_pool=device_pool,
+                    device_pool=None,  # 新写法：使用 WorkerManager
                     framework=self.config.framework,
                     task_type="profile",
-                    workflow="default_workflow",
+                    workflow="default_workflow",  # LangGraph workflow 名称
                     inspirations=island_inspirations[island_idx][pid],
                     meta_prompts=island_meta_prompts[island_idx][pid] if island_meta_prompts[island_idx] else None,
                     handwrite_suggestions=island_handwrite_suggestions[island_idx],
@@ -440,7 +453,7 @@ class TaskCreationProcessor:
         inspirations_data: Dict[str, Any],
         device_pool,
         task_pool
-    ) -> List[Task]:
+    ) -> List[AIKGTask]:
         """创建简单模式的任务"""
         tasks = []
         inspirations = inspirations_data['inspirations']
@@ -450,7 +463,7 @@ class TaskCreationProcessor:
         for pid in range(self.config.parallel_num):
             task_id = f"{round_idx}_{pid}"
             
-            task = Task(
+            task = AIKGTask(
                 op_name=self.config.op_name,
                 task_desc=self.config.task_desc,
                 task_id=task_id,
@@ -458,10 +471,10 @@ class TaskCreationProcessor:
                 arch=self.config.arch,
                 dsl=self.config.dsl,
                 config=self.config.config,
-                device_pool=device_pool,
+                device_pool=None,  # 新写法：使用 WorkerManager
                 framework=self.config.framework,
                 task_type="profile",
-                workflow="default_workflow",
+                workflow="default_workflow",  # LangGraph workflow 名称
                 inspirations=inspirations[pid],
                 meta_prompts=meta_prompts[pid] if meta_prompts else None,
                 handwrite_suggestions=handwrite_suggestions_list[pid] if handwrite_suggestions_list else [],
@@ -586,11 +599,12 @@ class ResultProcessor:
             for task_op_name, success, task_info in current_island_results:
                 if success:
                     total_success_count += 1
-                    profile_res = task_info.get("profile_res", {
+                    # 处理 profile_res 可能为 None 的情况
+                    profile_res = task_info.get("profile_res") or {
                         'gen_time': float('inf'),
                         'base_time': 0.0,
                         'speedup': 0.0
-                    })
+                    }
                     
                     impl_info = {
                         'id': generate_unique_id(),
@@ -684,11 +698,12 @@ class ResultProcessor:
         for task_op_name, success, task_info in results:
             if success:
                 round_success_count += 1
-                profile_res = task_info.get("profile_res", {
+                # 处理 profile_res 可能为 None 的情况
+                profile_res = task_info.get("profile_res") or {
                     'gen_time': float('inf'),
                     'base_time': 0.0,
                     'speedup': 0.0
-                })
+                }
                 
                 impl_info = {
                     'id': generate_unique_id(),

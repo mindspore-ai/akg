@@ -42,6 +42,7 @@ AIKG 利用大语言模型(LLM)的代码生成能力，通过大语言模型规�
 同时 AIKG 提供丰富的算子Agent相关子模块，用户可组合构建自定义算子Agents任务。
 
 ## 🗓️ 2. 更新日志
+- 2025-12-01：引入 LangGraph 重构任务调度系统，新增 `LangGraphTask` 替代原 `Conductor + workflow.yaml` 架构。支持 Python 定义工作流、图结构可视化、类型安全状态管理，API 完全兼容原 `Task`。详见《[LangGraph 文档](./docs/CN/LangGraph.md)》。
 - 2025-11-25：支持服务化架构，新增统一的 `register_worker()` 便捷函数（原 `register_local_worker` / `register_remote_worker` 仍可使用）。在调用 `evolve` 前务必先注册 Worker，可通过 `AIKG_WORKER_URL` 配置远程 Worker 或传入本地设备列表。详见《[服务化架构文档](./docs/CN/ServerArchitecture.md)》。
 - 2025-10-14：支持 TileLang_CUDA后端代码生成能力。KernelBench Level1 的 TileLang_CUDA后端算子生成成功率结果详见《[基准测试结果](./docs/CN/DSLBenchmarkResults202509.md)》。
 - 2025-09-26：支持 CUDA C 与 CPP 后端代码生成能力。KernelBench Level1 的 CUDA C 与 CPP 后端算子生成成功率结果详见《[基准测试结果](./docs/CN/DSLBenchmarkResults202509.md)》。
