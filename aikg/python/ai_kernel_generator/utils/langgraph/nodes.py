@@ -53,16 +53,28 @@ class NodeFactory:
             # 只在 hint 模式启用时才尝试提取 space_config_code
             enable_hint_mode = config.get("enable_hint_mode", False)
             
+            # 使用与原 Task 相同的解析逻辑（ParserFactory.robust_parse）
+            # 这样可以处理 LangChain 1.0 后的各种输出格式
             try:
-                parsed = json.loads(result)
-                if isinstance(parsed, dict):
-                    code = parsed.get("code", result)
-                    # 只在 hint 模式下才提取 space_config_code
-                    if enable_hint_mode:
-                        space_config = parsed.get("space_config_code")
-            except (json.JSONDecodeError, TypeError):
-                # 不是 JSON 格式，直接使用原始结果
-                code = result
+                from ai_kernel_generator.utils.common_utils import ParserFactory
+                
+                # 获取 Designer 的 parser
+                agent_parser = getattr(designer_instance, 'code_parser', None)
+                if agent_parser:
+                    # 使用 robust_parse 进行解析（与原 Task 保持一致）
+                    parsed_result = ParserFactory.robust_parse(result, agent_parser)
+                    if parsed_result:
+                        # 从解析结果中提取 code
+                        code = getattr(parsed_result, 'code', result)
+                        # 只在 hint 模式下才提取 space_config_code
+                        if enable_hint_mode:
+                            space_config = getattr(parsed_result, 'space_config_code', None)
+                else:
+                    # 如果没有 parser，使用原始结果
+                    logger.warning(f"[Task {state.get('task_id', '0')}] Designer 没有 parser，使用原始输出")
+            except Exception as e:
+                # 解析失败，使用原始结果
+                logger.warning(f"[Task {state.get('task_id', '0')}] Designer JSON 解析失败: {e}，使用原始输出")
             
             # 计算新的 step_count
             new_step_count = state.get("step_count", 0) + 1
@@ -123,15 +135,33 @@ class NodeFactory:
             # 直接使用 state（KernelGenState 本质上是 dict）
             result, prompt, reasoning = await coder_instance.run(task_info=state)
             
-            # 解析 JSON 格式的结果（如果需要）
+            # 使用与原 Task 相同的解析逻辑（ParserFactory.robust_parse）
+            # 这样可以处理 LangChain 1.0 后的各种输出格式
             code = result
             try:
-                parsed = json.loads(result)
-                if isinstance(parsed, dict) and "code" in parsed:
-                    code = parsed["code"]
-            except (json.JSONDecodeError, TypeError):
-                # 不是 JSON 格式，直接使用原始结果
-                code = result
+                from ai_kernel_generator.utils.common_utils import ParserFactory
+                
+                # 获取 Coder 的 parser
+                agent_parser = getattr(coder_instance, 'code_parser', None)
+                if agent_parser:
+                    # 使用 robust_parse 进行解析（与原 Task 保持一致）
+                    parsed_result = ParserFactory.robust_parse(result, agent_parser)
+                    if parsed_result:
+                        # 从解析结果中提取 code
+                        code = getattr(parsed_result, 'code', result)
+                        task_id = state.get('task_id', '0')
+                        logger.info(f"[Task {task_id}] Coder 使用 robust_parse 解析成功 (原始长度: {len(result)}, 提取后长度: {len(code)})")
+                    else:
+                        task_id = state.get('task_id', '0')
+                        logger.warning(f"[Task {task_id}] Coder robust_parse 返回空，使用原始输出")
+                else:
+                    # 如果没有 parser，使用原始结果
+                    task_id = state.get('task_id', '0')
+                    logger.warning(f"[Task {task_id}] Coder 没有 parser，使用原始输出")
+            except Exception as e:
+                # 解析失败，使用原始结果
+                task_id = state.get('task_id', '0')
+                logger.warning(f"[Task {task_id}] Coder JSON 解析失败: {e}，使用原始输出")
             
             trace_instance.insert_agent_record(
                 agent_name="coder",
@@ -738,4 +768,3 @@ class NodeFactory:
         
         except Exception as e:
             logger.warning(f"[{state.get('op_name')}] 保存到 passed_cases 失败: {e}")
-
