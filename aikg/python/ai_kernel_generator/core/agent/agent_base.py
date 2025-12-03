@@ -28,7 +28,65 @@ except ImportError:
     # Fallback for older langchain versions
     from langchain.prompts import PromptTemplate
 
+# 使用原生 Jinja2
+# LangChain 1.0 的 PromptTemplate 使用 SandboxedEnvironment，限制了属性访问
+from jinja2 import Environment, BaseLoader
+
 from ai_kernel_generator import get_project_root
+
+
+class Jinja2TemplateWrapper:
+    """
+    原生 Jinja2 模板包装器，兼容 LangChain PromptTemplate 接口
+    
+    LangChain 1.0 的 PromptTemplate 使用 SandboxedEnvironment，
+    限制了对 loop.index 等属性的访问。此包装器使用原生 Jinja2，
+    支持完整的 Jinja2 功能。
+    """
+    
+    def __init__(self, template_str: str):
+        """
+        初始化 Jinja2 模板包装器
+        
+        Args:
+            template_str: 模板字符串
+        """
+        self._template_str = template_str
+        self._env = Environment(loader=BaseLoader())
+        self._template = self._env.from_string(template_str)
+    
+    def format(self, **kwargs) -> str:
+        """
+        渲染模板（兼容 PromptTemplate.format 接口）
+        
+        Args:
+            **kwargs: 模板变量
+            
+        Returns:
+            渲染后的字符串
+        """
+        return self._template.render(**kwargs)
+    
+    def __or__(self, other):
+        """
+        支持 prompt | model 链式调用（LangChain 风格）
+        
+        Args:
+            other: 链中的下一个组件（通常是 LLM）
+            
+        Returns:
+            RunnableSequence 或类似对象
+        """
+        # 创建一个可运行的序列
+        from langchain_core.runnables import RunnableLambda
+        
+        def render_template(inputs: dict) -> str:
+            return self.format(**inputs)
+        
+        runnable = RunnableLambda(render_template)
+        return runnable | other
+
+
 from ai_kernel_generator.core.llm.model_loader import create_model
 from ai_kernel_generator.utils.common_utils import get_prompt_path
 from ai_kernel_generator.utils.collector import get_collector
@@ -123,9 +181,10 @@ class AgentBase(ABC):
 
         Args:
             template_path (str): 模板文件的相对路径，相对于prompts目录
+            template_format (str): 模板格式，默认为 "jinja2"
 
         Returns:
-            PromptTemplate: 加载的模板对象
+            PromptTemplate: 加载的模板对象（对于 jinja2 格式返回原生 Jinja2Template 包装器）
 
         Raises:
             FileNotFoundError: 模板文件不存在时抛出异常
@@ -134,11 +193,18 @@ class AgentBase(ABC):
             prompt_dir = get_prompt_path()
             template_full_path = os.path.join(prompt_dir, template_path)
             template_str = self.read_file(template_full_path)
-            prompt_template = PromptTemplate(
-                template=template_str,
-                template_format=template_format
-            )
-            return prompt_template
+            
+            if template_format == "jinja2":
+                # 使用原生 Jinja2（支持完整功能，包括 loop.index）
+                # LangChain 1.0 的 PromptTemplate 使用 SandboxedEnvironment，限制了属性访问
+                return Jinja2TemplateWrapper(template_str)
+            else:
+                # 其他格式使用 LangChain 的 PromptTemplate
+                prompt_template = PromptTemplate(
+                    template=template_str,
+                    template_format=template_format
+                )
+                return prompt_template
         except Exception as e:
             raise ValueError(f"Failed to load template {template_path}: {e}")
 
