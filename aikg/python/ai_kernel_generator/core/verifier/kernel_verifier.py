@@ -587,6 +587,14 @@ if __name__ == "__main__":
             # 获取TensorType名称（完整路径）
             tensor_type_name = framework_adapter.get_tensor_type_name()
             logger.debug(f"[{self.op_name}] TensorType名称: {tensor_type_name}")
+            
+            # 生成 compare 函数代码（由 FrameworkAdapter 生成，使用框架原生操作）
+            compare_code = framework_adapter.get_compare_code()
+            logger.debug(f"[{self.op_name}] Compare code生成成功 (长度: {len(compare_code)})")
+            
+            # 生成 compare outputs 代码（用于调用 compare 函数）
+            compare_outputs_code = framework_adapter.get_compare_outputs_code()
+            logger.debug(f"[{self.op_name}] Compare outputs code生成成功 (长度: {len(compare_outputs_code)})")
         except Exception as e:
             logger.error(f"[{self.op_name}] 代码片段生成失败: {e}", exc_info=True)
             raise
@@ -618,6 +626,8 @@ if __name__ == "__main__":
                 binary_io_functions=self._prepare_code_lines(binary_io_functions),
                 needs_binary_io=needs_binary_io,
                 tensor_type_name=tensor_type_name,
+                compare_code=self._prepare_code_lines(compare_code),
+                compare_outputs_code=self._prepare_code_lines(compare_outputs_code),
             )
             logger.info(f"[{self.op_name}] 模板渲染成功，渲染后代码长度: {len(rendered_code)} 字符")
         except Exception as e:
