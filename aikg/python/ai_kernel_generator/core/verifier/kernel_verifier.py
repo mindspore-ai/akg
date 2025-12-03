@@ -35,6 +35,8 @@ from ai_kernel_generator.core.verifier.adapters.factory import (
 from ai_kernel_generator.core.worker.interface import WorkerInterface
 import tarfile
 import io
+import ast
+import asyncio
 
 # 模板路径
 TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "kernel_verify_template_refactored.j2")
@@ -149,6 +151,174 @@ class KernelVerifier:
 
         # 保存Worker实例（可以在运行时动态设置）
         self.worker = worker
+
+    def check_task_desc_static(self, code: str) -> Tuple[bool, str]:
+        """
+        静态检查 task_desc 代码是否符合规范
+        
+        Args:
+            code: task_desc 代码字符串
+            
+        Returns:
+            Tuple[bool, str]: (是否通过, 错误信息)
+        """
+        try:
+            tree = ast.parse(code)
+            
+            has_model_class = False
+            has_get_inputs = False
+            has_get_init_inputs = False
+            
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef) and node.name == 'Model':
+                    has_model_class = True
+                elif isinstance(node, ast.FunctionDef):
+                    if node.name == 'get_inputs':
+                        has_get_inputs = True
+                    elif node.name == 'get_init_inputs':
+                        has_get_init_inputs = True
+            
+            missing = []
+            if not has_model_class:
+                missing.append("class Model")
+            if not has_get_inputs:
+                missing.append("function get_inputs")
+            if not has_get_init_inputs:
+                missing.append("function get_init_inputs")
+                
+            if missing:
+                return False, f"Missing required components in task_desc: {', '.join(missing)}"
+                
+            return True, ""
+            
+        except SyntaxError as e:
+            return False, f"Syntax error in task_desc: {e}"
+        except Exception as e:
+            return False, f"Static check failed: {e}"
+
+    async def check_task_desc_runtime(self, task_desc: str, timeout: int = 60) -> Tuple[bool, str]:
+        """
+        运行时检查 task_desc 代码是否能正确执行
+        
+        Args:
+            task_desc: task_desc 代码字符串
+            timeout: 超时时间
+            
+        Returns:
+            Tuple[bool, str]: (是否通过, 错误信息)
+        """
+        # 1. 创建临时验证目录
+        check_dir = os.path.join(os.path.expanduser(self.log_dir), f"{self.op_name}_check_desc_{self.task_id}")
+        os.makedirs(check_dir, exist_ok=True)
+        
+        try:
+            # 2. 写入 task_desc 到 reference.py
+            ref_file = os.path.join(check_dir, "reference.py")
+            with open(ref_file, "w", encoding="utf-8") as f:
+                f.write(task_desc)
+                
+            # 3. 生成验证脚本 verify_{op_name}.py
+            verify_script_content = f"""
+import torch
+import sys
+import os
+
+# Add current directory to sys.path
+sys.path.append(os.getcwd())
+
+def run_check():
+    print("Starting reference check...")
+    try:
+        # Import from reference
+        try:
+            from reference import Model, get_inputs, get_init_inputs
+        except ImportError as e:
+            print(f"Import failed: {{e}}")
+            return False
+            
+        print("Successfully imported Model and helper functions.")
+        
+        # Determine device
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch, 'npu') and torch.npu.is_available():
+            device = "npu"
+            
+        print(f"Using device: {{device}}")
+        
+        # Instantiate model
+        try:
+            init_inputs = get_init_inputs()
+            model = Model(*init_inputs)
+            if device != "cpu":
+                model = model.to(device)
+            model.eval()
+        except Exception as e:
+            print(f"Model instantiation failed: {{e}}")
+            return False
+            
+        # Get inputs
+        try:
+            inputs = get_inputs()
+            if device != "cpu":
+                inputs = [inp.to(device) if isinstance(inp, torch.Tensor) else inp for inp in inputs]
+        except Exception as e:
+            print(f"get_inputs failed: {{e}}")
+            return False
+            
+        # Run forward pass
+        try:
+            output = model(*inputs)
+            print("Forward pass successful.")
+        except Exception as e:
+            print(f"Forward pass failed: {{e}}")
+            return False
+            
+        return True
+
+    except Exception as e:
+        print(f"Unexpected error: {{e}}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+if __name__ == "__main__":
+    success = run_check()
+    if success:
+        print("REFERENCE_CHECK_SUCCESS")
+        sys.exit(0)
+    else:
+        print("REFERENCE_CHECK_FAILED")
+        sys.exit(1)
+"""
+            verify_file = os.path.join(check_dir, f"verify_{self.op_name}.py")
+            with open(verify_file, "w", encoding="utf-8") as f:
+                f.write(verify_script_content)
+                
+            # 4. 打包目录
+            package_data = self._pack_directory(check_dir)
+            
+            # 5. 使用 Worker 执行
+            if not self.worker:
+                raise RuntimeError("Worker not set for runtime check")
+                
+            # 注意：这里我们不需要显式管理 device，因为 reference check 通常只做一个简单的 forward pass
+            # 如果是 remote worker，它会自动分发；如果是 local worker，它通常不需要特定的 device lock (除非 OOM)
+            # 但为了安全起见，调用方应该已经处理了 resource locking
+            
+            success, log, _ = await self.worker.verify(package_data, f"{self.task_id}_check", self.op_name, timeout)
+            
+            if success and "REFERENCE_CHECK_SUCCESS" in log:
+                return True, ""
+            else:
+                return False, f"Runtime check failed:\n{log}"
+                
+        except Exception as e:
+            return False, f"Runtime check exception: {str(e)}"
+        finally:
+            # 清理临时目录
+            shutil.rmtree(check_dir, ignore_errors=True)
 
     def _create_verify_dir(self, step_counter) -> str:
         """创建验证目录并返回目录路径"""
