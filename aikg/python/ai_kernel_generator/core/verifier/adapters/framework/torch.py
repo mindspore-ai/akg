@@ -289,4 +289,117 @@ torch.npu.manual_seed(0)
         else:
             return """torch.manual_seed(0)
 """
+    
+    def get_compare_code(self) -> str:
+        """Get compare function code using pure PyTorch operations."""
+        return '''def get_limit(data_type):
+    """Get precision limit for data type"""
+    if data_type == torch.float16:
+        return 0.004
+    elif data_type == torch.bfloat16:
+        return 0.03
+    elif data_type == torch.int8:
+        return 0.01
+    else:
+        return 0.02
+
+def compare(fw_out, impl_out, limit, data_type):
+    """Compare framework output and implementation output using pure PyTorch"""
+    # Flatten tensors
+    fw_flat = fw_out.flatten().detach().cpu()
+    impl_flat = impl_out.flatten()
+    if isinstance(impl_flat, torch.Tensor):
+        impl_flat = impl_flat.detach().cpu()
+    else:
+        impl_flat = torch.tensor(impl_flat, dtype=fw_flat.dtype)
+    
+    size = fw_flat.numel()
+    
+    # 1. 检查形状一致性
+    if fw_flat.shape != impl_flat.shape:
+        raise AssertionError(f"验证失败，输出形状不一致: framework={fw_flat.shape}, impl={impl_flat.shape}")
+    
+    # 2. 检查NaN值
+    fw_nan_count = torch.isnan(fw_flat).sum().item()
+    impl_nan_count = torch.isnan(impl_flat).sum().item()
+    
+    if fw_nan_count > 0 or impl_nan_count > 0:
+        raise AssertionError(f"验证失败，检测到NaN值: Framework={fw_nan_count}/{size}, Implementation={impl_nan_count}/{size}")
+    
+    # 3. 检查Inf值 - 只有当两边Inf位置和符号都匹配时才允许
+    fw_inf_mask = torch.isinf(fw_flat)
+    impl_inf_mask = torch.isinf(impl_flat)
+    
+    # 检查Inf位置是否匹配
+    if not torch.equal(fw_inf_mask, impl_inf_mask):
+        fw_inf_count = fw_inf_mask.sum().item()
+        impl_inf_count = impl_inf_mask.sum().item()
+        raise AssertionError(f"验证失败，Inf位置不匹配: Framework={fw_inf_count}/{size}, Implementation={impl_inf_count}/{size}")
+    
+    # 检查Inf符号是否匹配
+    if fw_inf_mask.any():
+        if not torch.equal(torch.sign(fw_flat[fw_inf_mask]), torch.sign(impl_flat[impl_inf_mask])):
+            raise AssertionError(f"验证失败，Inf符号不匹配")
+    
+    # 4. 对有限值进行精度比较
+    finite_mask = torch.isfinite(fw_flat) & torch.isfinite(impl_flat)
+    finite_count = finite_mask.sum().item()
+    
+    if finite_count == 0:
+        print(f"警告: 所有值都是Inf，跳过精度检查")
+        return
+    
+    # 提取有限值
+    fw_finite = fw_flat[finite_mask]
+    impl_finite = impl_flat[finite_mask]
+    
+    # 检查是否为布尔类型
+    if fw_finite.dtype == torch.bool:
+        if not torch.equal(fw_finite, impl_finite):
+            raise AssertionError(f"验证失败，布尔值不匹配: dtype={data_type}")
+        return
+    
+    # 确保数据类型一致（在torch层面转换）
+    if impl_finite.dtype != fw_finite.dtype:
+        impl_finite = impl_finite.to(fw_finite.dtype)
+    
+    # 计算相对误差
+    abs_diff = torch.abs(fw_finite.float() - impl_finite.float())
+    abs_ref = torch.abs(fw_finite.float())
+    eps = 1e-8
+    relative_error = torch.where(abs_ref > eps, abs_diff / abs_ref, abs_diff)
+    
+    # 统计错误
+    err_cnt = (relative_error > limit).sum().item()
+    limit_cnt = int(finite_count * limit)
+    
+    if err_cnt > limit_cnt:
+        max_error = relative_error.max().item()
+        mean_error = relative_error.mean().item()
+        
+        # 找出不一致的位置
+        mismatch_mask = relative_error > limit
+        mismatch_indices = torch.where(mismatch_mask)[0]
+        # 最多打印10个不一致的位置
+        num_to_show = min(10, len(mismatch_indices))
+
+        error_msg = f"验证失败，输出不一致: err_cnt={err_cnt} / {limit_cnt}, dtype={data_type}, limit={limit}\\n"
+        error_msg += f"最大相对误差: {max_error:.6e}, 平均相对误差: {mean_error:.6e}\\n"
+        error_msg += f"前 {num_to_show} 个不一致的值:\\n"
+        for i in range(num_to_show):
+            idx = mismatch_indices[i].item()
+            error_msg += f"  位置[{idx}]: framework={fw_finite[idx]:.6e}, "
+            error_msg += f"impl={impl_finite[idx]:.6e}, "
+            error_msg += f"相对误差={relative_error[idx]:.6e}\\n"
+        
+        raise AssertionError(error_msg)
+
+'''
+    
+    def get_compare_outputs_code(self) -> str:
+        """Get code for comparing framework output and impl output."""
+        return '''            data_type = framework_output[i].dtype
+            limit = get_limit(data_type)
+            compare(fw_out, impl_out, limit, data_type)
+'''
 

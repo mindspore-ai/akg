@@ -252,4 +252,127 @@ class FrameworkAdapterMindSpore(FrameworkAdapter):
         """
         return """ms.set_seed(0)
 """
+    
+    def get_compare_code(self) -> str:
+        """Get compare function code using pure MindSpore operations."""
+        return '''def get_limit(data_type):
+    """Get precision limit for data type"""
+    if data_type == ms.float16:
+        return 0.004
+    elif data_type == ms.bfloat16:
+        return 0.03
+    elif data_type == ms.int8:
+        return 0.01
+    else:
+        return 0.004
+
+def compare(fw_out, impl_out, limit, data_type):
+    """Compare framework output and implementation output using MindSpore"""
+    import mindspore.ops as ops
+    
+    # Flatten tensors
+    fw_flat = fw_out.flatten()
+    impl_flat = impl_out.flatten()
+    if isinstance(impl_flat, ms.Tensor):
+        pass
+    else:
+        impl_flat = ms.Tensor(impl_flat, dtype=fw_flat.dtype)
+    
+    size = fw_flat.size
+    
+    # 1. 检查形状一致性
+    if fw_flat.shape != impl_flat.shape:
+        raise AssertionError(f"验证失败，输出形状不一致: framework={fw_flat.shape}, impl={impl_flat.shape}")
+    
+    # 转换为numpy进行NaN和Inf检查（MindSpore的isnan/isinf支持有限）
+    fw_np = fw_flat.asnumpy()
+    impl_np = impl_flat.asnumpy()
+    
+    # 2. 检查NaN值
+    fw_nan_count = np.sum(np.isnan(fw_np))
+    impl_nan_count = np.sum(np.isnan(impl_np))
+    
+    if fw_nan_count > 0 or impl_nan_count > 0:
+        raise AssertionError(f"验证失败，检测到NaN值: Framework={fw_nan_count}/{size}, Implementation={impl_nan_count}/{size}")
+    
+    # 3. 检查Inf值 - 只有当两边Inf位置和符号都匹配时才允许
+    fw_inf_mask = np.isinf(fw_np)
+    impl_inf_mask = np.isinf(impl_np)
+    
+    # 检查Inf位置是否匹配
+    if not np.array_equal(fw_inf_mask, impl_inf_mask):
+        fw_inf_count = np.sum(fw_inf_mask)
+        impl_inf_count = np.sum(impl_inf_mask)
+        raise AssertionError(f"验证失败，Inf位置不匹配: Framework={fw_inf_count}/{size}, Implementation={impl_inf_count}/{size}")
+    
+    # 检查Inf符号是否匹配
+    if np.sum(fw_inf_mask) > 0:
+        inf_sign_match = np.array_equal(
+            np.sign(fw_np[fw_inf_mask]), 
+            np.sign(impl_np[impl_inf_mask])
+        )
+        if not inf_sign_match:
+            raise AssertionError(f"验证失败，Inf符号不匹配")
+    
+    # 4. 对有限值进行精度比较
+    finite_mask = np.isfinite(fw_np) & np.isfinite(impl_np)
+    finite_count = np.sum(finite_mask)
+    
+    if finite_count == 0:
+        print(f"警告: 所有值都是Inf，跳过精度检查")
+        return
+    
+    # 提取有限值
+    fw_finite = fw_np[finite_mask]
+    impl_finite = impl_np[finite_mask]
+    
+    # 检查是否为布尔类型
+    if fw_finite.dtype == bool or impl_finite.dtype == bool:
+        if not np.array_equal(fw_finite, impl_finite):
+            raise AssertionError(f"验证失败，布尔值不匹配: dtype={data_type}")
+        return
+    
+    # 统一数据类型
+    if impl_finite.dtype != fw_finite.dtype:
+        impl_finite = impl_finite.astype(fw_finite.dtype)
+    
+    # 计算相对误差
+    abs_diff = np.abs(fw_finite - impl_finite)
+    abs_ref = np.abs(fw_finite)
+    eps = 1e-8
+    relative_error = np.where(abs_ref > eps, abs_diff / abs_ref, abs_diff)
+    
+    # 统计错误
+    err_cnt = np.sum(relative_error > limit).astype(np.int32)
+    limit_cnt = int(finite_count * limit)
+    
+    if err_cnt > limit_cnt:
+        max_error = np.max(relative_error)
+        mean_error = np.mean(relative_error)
+        
+        # 找出不一致的位置
+        mismatch_mask = relative_error > limit
+        mismatch_indices = np.where(mismatch_mask)[0]
+        # 最多打印10个不一致的位置
+        num_to_show = min(10, len(mismatch_indices))
+
+        error_msg = f"验证失败，输出不一致: err_cnt={err_cnt} / {limit_cnt}, dtype={data_type}, limit={limit}\\n"
+        error_msg += f"最大相对误差: {max_error:.6e}, 平均相对误差: {mean_error:.6e}\\n"
+        error_msg += f"前 {num_to_show} 个不一致的值:\\n"
+        for i in range(num_to_show):
+            idx = mismatch_indices[i]
+            error_msg += f"  位置[{idx}]: framework={fw_np[idx]:.6e}, "
+            error_msg += f"impl={impl_np[idx]:.6e}, "
+            error_msg += f"相对误差={relative_error[idx]:.6e}\\n"
+        
+        raise AssertionError(error_msg)
+
+'''
+    
+    def get_compare_outputs_code(self) -> str:
+        """Get code for comparing framework output and impl output."""
+        return '''            data_type = framework_output[i].dtype
+            limit = get_limit(data_type)
+            compare(fw_out, impl_out, limit, data_type)
+'''
 
