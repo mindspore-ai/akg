@@ -18,9 +18,9 @@
 
 #include <deque>
 #include <map>
-#include <nlohmann/json.hpp>
 #include <set>
 #include <vector>
+#include <nlohmann/json.hpp>
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -274,7 +274,7 @@ bool isPostFusionSingleStmt(Operation *op) {
 }
 
 bool isPostFusionMultiStmt(Operation *op) {
-  if (auto andi = dyn_cast<arith::AndIOp>(op)) {
+  if (dyn_cast<arith::AndIOp>(op)) {
     for (auto operand : op->getOperands()) {
       if (isPostFusionMultiStmt(operand.getDefiningOp())) {
         return true;
@@ -324,10 +324,8 @@ static bool canMoveOpOutOfTarget(Operation *op, Operation *targetOp) {
   for (auto operand : op->getOperands()) {
     SmallVector<Operation *, 8> axesA;
     CommonUtils::collectRelatedAxes(operand, axesA);
-    for (auto a : axesA) {
-      if (targetOp == a) {
-        return false;
-      }
+    if (llvm::any_of(axesA, [targetOp](Operation *op) { return op == targetOp; })) {
+      return false;
     }
   }
 
@@ -687,7 +685,7 @@ static void SetRedutionMarkToParallelOp(Operation *funcOp) {
       std::reverse(parallelOps.begin(), parallelOps.end());
       for (auto attr : attrs) {
         auto idx = dyn_cast<IntegerAttr>(attr).getInt();
-        parallelOps[idx]->setAttr("reduceLoop", builder.getUnitAttr());
+        parallelOps[idx]->setAttr(kReductionLoopAttr, builder.getUnitAttr());
       }
       if (!redOp->hasAttr(kEnableParallelReduce)) {
         (void)redOp->emitWarning("This reduction op does not have a \"gpu_parallel_reduce\" mark, set to false.");
@@ -790,7 +788,7 @@ void AKGGPUMappingLoops::createMappingTask(ParallelOp parallelOp) {
   for (auto [loopVar, lowerBoundVar, upperBoundVar, stepVar] : llvm::zip(
          parallelOp.getInductionVars(), parallelOp.getLowerBound(), parallelOp.getUpperBound(), parallelOp.getStep())) {
     size_t dim = getNestedNum(parallelOp.getOperation());
-    bool isReduceAxis = (parallelOp.getOperation()->hasAttr("reduceLoop")) ? true : false;
+    bool isReduceAxis = (parallelOp.getOperation()->hasAttr(kReductionLoopAttr)) ? true : false;
     int reductionDim = isReduceAxis ? static_cast<int>(dim) : -1;
     auto lbConst = getMaxIntConst(lowerBoundVar);
     auto ubConst = getMaxIntConst(upperBoundVar);

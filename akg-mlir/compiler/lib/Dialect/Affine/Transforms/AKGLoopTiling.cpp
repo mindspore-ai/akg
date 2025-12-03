@@ -125,9 +125,9 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   bool avoidMaxMinBounds{true};
   // hardware information
   std::string target{mlir::kTargetCpu};
-  std::string feature{mlir::kNEONInstructionSet};
   std::string tilingMode{"auto"};
   [[maybe_unused]] std::string arch{};
+  std::string feature{mlir::kNEONInstructionSet};
 
   mlir::akg::autotiling::TilingSolverPtr solver{nullptr};
   size_t levelToTile{1};
@@ -1010,7 +1010,7 @@ void AKGLoopTiling::runCpuOperation() {
   if (opType == mlir::OperatorTemplate::Reduce) {
     SmallVector<mlir::Operation *, 8> reduceLoops = mlir::CommonUtils::collectReductionAxes(funcOp);
     for (auto reduceLoop : reduceLoops) {
-      reduceLoop->setAttr("reduceLoop", b.getUnitAttr());
+      reduceLoop->setAttr(kReductionLoopAttr, b.getUnitAttr());
     }
   } else if (opType == mlir::OperatorTemplate::Broadcast) {
     llvm::SmallSet<mlir::affine::AffineForOp, 6> allBroadcastFor;

@@ -57,6 +57,7 @@ constexpr auto kOperatorTypeStr = "OperatorType";
 constexpr auto kReduceStr = "Reduce";
 constexpr auto kReductionAxesStr = "reduction_axes";
 constexpr auto kReductionTypeStr = "reduction_type";
+constexpr auto kReductionLoopAttr = "reduction_loop";
 constexpr auto kVectorize128Bit = 128;
 constexpr auto kVectorize256Bit = 256;
 constexpr auto kVectorize512Bit = 512;
