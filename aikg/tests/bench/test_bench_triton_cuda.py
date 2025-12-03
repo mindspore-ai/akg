@@ -1,7 +1,15 @@
 import os
 import pytest
-from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
+
+# 自动选择 Task 实现：优先使用 LangGraphTask，否则使用原 Task
+try:
+    import langgraph
+    from ai_kernel_generator.core.langgraph_task import LangGraphTask as AIKGTask
+    _USE_LANGGRAPH = True
+except ImportError:
+    from ai_kernel_generator.core.task import Task as AIKGTask
+    _USE_LANGGRAPH = False
 from ai_kernel_generator.core.worker.manager import register_local_worker, register_remote_worker
 from ..utils import (
     get_kernelbench_op_name, get_kernelbench_task_desc, add_op_prefix,
@@ -53,7 +61,7 @@ async def test_bench_triton_cuda():
         task_desc = get_kernelbench_task_desc(benchmark_name[i], framework=framework, level=level)
         op_name = add_op_prefix(benchmark_name[i], benchmark="KernelBench")
 
-        task = Task(
+        task = AIKGTask(
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),
@@ -113,7 +121,7 @@ async def test_bench_triton_cuda_level_2():
         task_desc = get_kernelbench_task_desc(benchmark_name[i], framework=framework, level=level)
         op_name = add_op_prefix(benchmark_name[i], benchmark="KernelBench")
 
-        task = Task(
+        task = AIKGTask(
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),
