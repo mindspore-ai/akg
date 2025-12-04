@@ -635,11 +635,16 @@ if __name__ == "__main__":
             reference_data_bytes = self.config.get('reference_data')
             if reference_data_bytes:
                 # 将参考数据写入验证目录
-                reference_file = os.path.join(verify_dir, f"{self.op_name}_reference.pt")
+                # 注意：使用相对路径（只有文件名），这样在 RemoteWorker 场景下
+                # 脚本被打包发送到远程服务器后，可以正确从当前工作目录找到参考数据文件
+                reference_file_name = f"{self.op_name}_reference.pt"
+                reference_file_abs = os.path.join(verify_dir, reference_file_name)
                 try:
-                    with open(reference_file, 'wb') as f:
+                    with open(reference_file_abs, 'wb') as f:
                         f.write(reference_data_bytes)
-                    logger.info(f"[{self.op_name}] 参考数据已写入: {reference_file} ({len(reference_data_bytes)} bytes)")
+                    logger.info(f"[{self.op_name}] 参考数据已写入: {reference_file_abs} ({len(reference_data_bytes)} bytes)")
+                    # 传给模板的是相对路径（只有文件名），脚本执行时从 cwd 查找
+                    reference_file = reference_file_name
                 except Exception as e:
                     logger.error(f"[{self.op_name}] 参考数据写入失败: {e}")
                     use_reference_data = False

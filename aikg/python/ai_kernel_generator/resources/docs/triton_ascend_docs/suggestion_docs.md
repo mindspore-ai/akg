@@ -147,6 +147,62 @@ exp_data = tl.exp(stable_data)
 - 禁止 张量直接索引 → 使用tl.load/tl.store
 **Ascend后端**
 - 禁止 `tl.where` → 使用if-else
+- 禁止 `while` 循环 → 使用 for 替代（见下文）
+
+### while 循环替代方案（Ascend后端）
+
+Ascend后端不支持`while`循环，需根据循环上限是否为编译时常量选择替代方案。
+
+**情况1：循环上限是静态值（编译时常量）**
+
+直接用`for range`替代，无需额外处理：
+
+```python
+# ❌ 错误：while 循环
+i = 0
+while i < N_ITERS:  # N_ITERS 是编译时常量
+    # 处理逻辑
+    i += 1
+
+# ✅ 正确：直接用 for range
+for i in range(N_ITERS):  # N_ITERS: tl.constexpr
+    # 处理逻辑
+```
+
+**情况2：循环上限是动态值（运行时参数）**
+
+设置足够大的编译时常量作为循环上界，用`if`判断控制实际执行：
+
+```python
+# ❌ 错误：while 循环（n_iters 是运行时动态值）
+@triton.jit
+def kernel_while(ptr, n_iters, TILE: tl.constexpr):
+    i = 0
+    while i < n_iters:
+        offset = i * TILE + tl.arange(0, TILE)
+        data = tl.load(ptr + offset)
+        tl.store(ptr + offset, data * 2)
+        i += 1
+
+# ✅ 正确：for + if 替代方案
+@triton.jit
+def kernel_for_if(
+    ptr,
+    n_iters,              # 运行时动态值
+    TILE: tl.constexpr,
+    MAX_ITERS: tl.constexpr,  # 编译时常量上界（需足够大）
+):
+    for i in range(MAX_ITERS):
+        if i < n_iters:
+            offset = i * TILE + tl.arange(0, TILE)
+            data = tl.load(ptr + offset)
+            tl.store(ptr + offset, data * 2)
+```
+
+**注意事项**：
+- `MAX_ITERS` 需设置得足够大，覆盖所有可能的运行时值
+- 当实际迭代次数远小于上界时，会有空循环迭代开销
+- 上界设置过大会增加编译时间
 
 ### 切片操作规范
 Triton不支持Python风格的直接切片语法（如`b[0]`或`b[i:j]`），需使用专用API：
@@ -330,6 +386,7 @@ class ModelNew(torch.nn.Module):
 | 内存越界访问 | 运行时错误、结果异常、随机崩溃 | load/store缺少mask或boundary_check | 添加正确的mask或boundary_check保护 |
 | Grid超限 | 编译失败或运行时错误 | grid总大小超过65535 | 使用kernel内循环或host侧分批处理 |
 | 控制流错误 | 编译失败、语法错误 | 使用了return/break/continue | 移除禁用语句，使用mask控制流程 |
+| while循环错误 | 编译失败（Ascend后端） | 使用了while循环 | 改用for + if替代：`for i in range(MAX): if i < n:` |
 | 切片语法错误 | 编译失败 | 使用了`b[0]`或`b[i:j]`直接切片 | 使用`tl.get_element`或`tl.extract_slice` |
 | tl.arange索引错误 | 编译失败 | 对`tl.arange`结果使用`get_element` | 直接计算索引值而非提取 |
 | 类型转换错误 | 编译警告或错误 | 使用`tl.float16(scalar)`转换 | 改用`scalar.to(tl.float16)` |
