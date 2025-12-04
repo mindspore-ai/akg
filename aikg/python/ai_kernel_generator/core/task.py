@@ -51,7 +51,9 @@ class Task:
                  workflow: Optional[str] = None,
                  inspirations: Optional[List[str]] = None,
                  meta_prompts: Optional[str] = None,
-                 handwrite_suggestions: Optional[List[Dict[str, str]]] = None) -> None:
+                 handwrite_suggestions: Optional[List[Dict[str, str]]] = None,
+                 source_backend: Optional[str] = None,
+                 source_arch: Optional[str] = None) -> None:
         """
         初始化Task类，基于workflow配置进行工作流管理。
 
@@ -73,6 +75,8 @@ class Task:
             inspirations (List[str], optional): 启发示例列表。
             meta_prompts (str, optional): 元提示。
             handwrite_suggestions (List[Dict[str, str]], optional): 手写优化建议列表。
+            source_backend (str, optional): 源后端，用于跨后端转换场景（如 cuda -> ascend）。
+            source_arch (str, optional): 源架构，用于跨后端转换场景（如 a100 -> ascend910b4）。
         """
         # 验证任务配置并规范化DSL（自动转换triton为triton_cuda或triton_ascend）
         normalized_dsl = check_task_config(framework, backend, arch, dsl)
@@ -91,6 +95,8 @@ class Task:
         self.inspirations = inspirations
         self.meta_prompts = meta_prompts
         self.handwrite_suggestions = handwrite_suggestions if handwrite_suggestions else []
+        self.source_backend = source_backend.lower() if source_backend else None  # 跨后端转换的源后端
+        self.source_arch = source_arch.lower() if source_arch else None  # 跨后端转换的源架构
 
         # 统一保存config，后续向下传递
         self.config = config
@@ -160,7 +166,8 @@ class Task:
         if 'coder' in agent_names:
             self.coder = Coder(self.op_name, self.task_desc,
                                self.dsl, self.framework, self.backend, self.arch,
-                               workflow_config_path=self.workflow_config_path, config=self.config)
+                               workflow_config_path=self.workflow_config_path, config=self.config,
+                               source_backend=self.source_backend, source_arch=self.source_arch)
             self.agents['coder'] = self.coder
 
         if 'verifier' in agent_names:

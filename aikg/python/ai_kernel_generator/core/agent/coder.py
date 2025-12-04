@@ -36,7 +36,9 @@ class Coder(AgentBase):
                  arch: str = "",
                  workflow_config_path: str = None,  # 已废弃，保留用于向后兼容
                  parser_config_path: str = None,    # 新的 parser 配置路径
-                 config: dict = None):
+                 config: dict = None,
+                 source_backend: str = None,  # 源后端（如 cuda），用于跨后端转换场景
+                 source_arch: str = None):    # 源架构（如 a100），用于跨后端转换场景
         self.op_name = op_name
         self.task_desc = remove_copyright_from_text(task_desc)
         self.dsl = dsl
@@ -46,6 +48,8 @@ class Coder(AgentBase):
         self.workflow_config_path = workflow_config_path  # 保留用于向后兼容
         self.parser_config_path = parser_config_path  # 新的配置路径
         self.config = config
+        self.source_backend = source_backend  # 跨后端转换时的源后端
+        self.source_arch = source_arch  # 跨后端转换时的源架构
         self.codegen_step_count = 0
         self.api_step_count = 0
 
@@ -63,6 +67,8 @@ class Coder(AgentBase):
             "backend": backend,
             "arch": arch,
             "task_desc": task_desc,
+            "source_backend": source_backend,
+            "source_arch": source_arch,
         }
         super().__init__(context=context, config=config)
 
@@ -106,6 +112,10 @@ class Coder(AgentBase):
             # 可选参数
             "hardware_docs": get_hardware_doc(self.backend, self.arch),
             "arch_name": self.arch,
+            
+            # 跨后端转换参数
+            "source_backend": self.source_backend,  # 源后端（如 cuda -> ascend）
+            "source_arch": self.source_arch,        # 源架构（如 a100 -> ascend910b4）
         }
 
     def _load_user_examples(self) -> str:
