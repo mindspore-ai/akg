@@ -312,7 +312,7 @@ def compare(framework_out_flatten, impl_out_flatten, limit, data_type):
         # 最多打印10个不一致的位置
         num_to_show = min(10, len(mismatch_indices))
 
-        error_msg = f"验证失败，输出不一致: err_cnt={err_cnt} / {limit_cnt}, dtype={data_type}, limit={limit}\n"
+        error_msg = f"验证失败，输出不一致(误差数/最大容忍误差数): err_cnt={err_cnt} / {limit_cnt}, dtype={data_type}, limit={limit}\n"
         error_msg += f"最大相对误差: {max_error:.6e}, 平均相对误差: {mean_error:.6e}\n"
         error_msg += f"前 {num_to_show} 个不一致的值:\n"
         for i in range(num_to_show):
