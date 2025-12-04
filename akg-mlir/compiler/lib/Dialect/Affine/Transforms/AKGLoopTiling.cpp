@@ -133,6 +133,7 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   size_t levelToTile{1};
 
   SmallVector<unsigned, 6> bandTileSizes;
+  size_t currentBandIdx = 0;
   mlir::MutableArrayRef<mlir::affine::AffineForOp> band;
 };
 }  // namespace
@@ -414,13 +415,14 @@ void AKGLoopTiling::setNewUpperBound(mlir::MutableArrayRef<mlir::affine::AffineF
 void AKGLoopTiling::getTileSizes() {
   // TODO(akg-dev): Separately tile axis
   if (useAutoTiling && solver) {
-    // TODO(akg-dev): remove levelToTile
-    SmallVector<mlir::affine::AffineForOp, 6> curband;
-    curband.assign(band.begin(), band.end());
+    // TODO(akg-dev): remove levelToTiles
+    SmallVector<mlir::affine::AffineForOp, 6> curBand;
+    curBand.assign(band.begin(), band.end());
+
     for (size_t level = 0; level < levelToTile; ++level) {
       // TODO(akg-dev): Multiple band
-      mlir::akg::autotiling::getTileSizeWithSolver(solver, curband, &bandTileSizes,
-                                                   mlir::akg::autotiling::TilingTaskDesc(0, level));
+      mlir::akg::autotiling::getTileSizeWithSolver(solver, curBand, &bandTileSizes,
+                                                   mlir::akg::autotiling::TilingTaskDesc(currentBandIdx, level));
     }
   } else {
     if (!tileSizes.empty() && tileSize == 1) {
@@ -1166,7 +1168,12 @@ void AKGLoopTiling::runOnOperation() {
   }
 
   // Tile each band.
-  for (auto &curBand : bands) {
+  for (size_t i = 0; i < bands.size(); ++i) {
+    auto &curBand = bands[i];
+    // Set current band index
+    currentBandIdx = i;
+
+    // Set current band
     band = mlir::MutableArrayRef<mlir::affine::AffineForOp>(curBand);
     if (target == mlir::kTargetCpu) {
       runCpuOperation();
