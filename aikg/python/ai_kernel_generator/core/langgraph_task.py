@@ -64,7 +64,9 @@ class LangGraphTask:
                  workflow: str = "default",
                  inspirations: Optional[list] = None, 
                  meta_prompts: Optional[str] = None,
-                 handwrite_suggestions: Optional[list] = None):
+                 handwrite_suggestions: Optional[list] = None,
+                 source_backend: Optional[str] = None,
+                 source_arch: Optional[str] = None):
         """初始化 LangGraphTask
         
         Args:
@@ -82,6 +84,8 @@ class LangGraphTask:
             inspirations: 启发示例列表
             meta_prompts: 元提示
             handwrite_suggestions: 手写优化建议列表
+            source_backend: 源后端，用于跨后端转换场景（如 cuda -> ascend）
+            source_arch: 源架构，用于跨后端转换场景（如 a100 -> ascend910b4）
         """
         # 验证任务配置
         normalized_dsl = check_task_config(framework, backend, arch, dsl)
@@ -101,6 +105,8 @@ class LangGraphTask:
         self.inspirations = inspirations
         self.meta_prompts = meta_prompts
         self.handwrite_suggestions = handwrite_suggestions or []
+        self.source_backend = source_backend.lower() if source_backend else None  # 跨后端转换的源后端
+        self.source_arch = source_arch.lower() if source_arch else None  # 跨后端转换的源架构
         
         # 兼容旧代码：如果提供了device_pool，创建私有Worker
         self._private_worker = None
@@ -205,7 +211,9 @@ class LangGraphTask:
                 backend=self.backend,
                 arch=self.arch,
                 parser_config_path=parser_config_path,  # 使用新的配置
-                config=self.config
+                config=self.config,
+                source_backend=self.source_backend,  # 跨后端转换的源后端
+                source_arch=self.source_arch         # 跨后端转换的源架构
             )
         except Exception as e:
             logger.warning(f"Failed to initialize Coder: {e}")

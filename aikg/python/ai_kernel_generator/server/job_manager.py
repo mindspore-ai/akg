@@ -298,7 +298,9 @@ class ServerJobManager:
                 dsl=data.get("dsl"),
                 framework=data.get("framework"),
                 config=config,
-                workflow=data.get("workflow", "coder_only_workflow")
+                workflow=data.get("workflow", "coder_only_workflow"),
+                source_backend=data.get("source_backend"),  # 跨后端转换的源后端
+                source_arch=data.get("source_arch")         # 跨后端转换的源架构
             )
             
             # 支持注入初始代码 (用于测试或特定场景)

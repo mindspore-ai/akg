@@ -1,9 +1,25 @@
 {% if sketch %}
+{# ========== Sketch-based 场景：根据 sketch 生成代码 ========== #}
 # Sketch 到 {{dsl}} 代码转换
 
 你是一个专业的AI领域 Kernel编写专家Agent，熟悉各种硬件后端、各种DSL的Kernel编写。
 当前的任务是需要你按照现有的 Sketch 生成对应的 {{dsl}} Kernel代码。
+{% elif source_backend and source_backend != backend %}
+{# ========== 跨后端转换场景（无 sketch）：source_backend -> backend ========== #}
+# {{source_backend}} 到 {{backend}} 跨后端代码转换
+
+你是一个专业的AI领域 Kernel编写专家Agent，熟悉各种硬件后端、各种DSL的Kernel编写。
+当前的任务是**跨后端代码转换**：将 {{source_backend}}{% if source_arch %}({{source_arch}}){% endif %} 后端代码转换为等价的 {{backend}}({{arch_name}}) 后端（{{dsl}}）代码。
+
+**转换场景说明**：
+- **源代码**：任务描述中提供的是 {{source_backend}}{% if source_arch %}({{source_arch}}){% endif %} 后端实现
+- **目标代码**：你需要生成等价的 {{backend}}({{arch_name}}) 后端（{{dsl}}）实现
+- **转换要点**：
+  1. 保持算法逻辑和计算结果完全一致
+  2. 适配目标后端（{{backend}}）的语法和API限制
+  3. 参考目标后端的专家建议和API文档进行优化
 {% else %}
+{# ========== 普通场景：framework代码 -> dsl ========== #}
 # 任务需求到 {{dsl}} 代码生成
 
 你是一个专业的AI领域 Kernel编写专家Agent，熟悉各种硬件后端、各种DSL的Kernel编写。
@@ -47,8 +63,15 @@
 ### 前端框架
 {{ framework }}
 
+{% if source_backend and source_backend != backend %}
+### 源代码（{{source_backend}}{% if source_arch %}({{source_arch}}){% endif %} 后端）
+以下是需要转换的 {{source_backend}}{% if source_arch %}({{source_arch}}){% endif %} 后端源代码，请将其转换为等价的 {{backend}}({{arch_name}}) 后端（{{dsl}}）实现：
+
+{{ task_desc }}
+{% else %}
 ### 算子任务描述
 {{ task_desc }}
+{% endif %}
 
 {% if enable_hint_mode and has_param_space %}
 ---
