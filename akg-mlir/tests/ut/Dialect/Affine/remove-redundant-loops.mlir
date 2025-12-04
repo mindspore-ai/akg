@@ -16,7 +16,7 @@
 // CHECK-NEXT:         %1 = vector.transfer_read %arg1[%arg2, %arg3], %cst_2 : memref<4954x3xf32>, vector<4xf32>
 // CHECK-NEXT:         %2 = arith.addf %0, %1 {reduction_axes = [2 : index], reduction_type = "y"} : vector<4xf32>
 // CHECK-NEXT:         vector.transfer_write %2, %arg1[%arg2, %arg3] : vector<4xf32>, memref<4954x3xf32>
-// CHECK-NEXT:       } {reduceLoop}
+// CHECK-NEXT:       } {reduction_loop}
 // CHECK-NEXT:     }
 // CHECK-NEXT:   }
 // CHECK-NEXT:   return
@@ -46,7 +46,7 @@ func.func @Fused_ReduceSum_split_2679919397770605199(%arg0: memref<4954x4953x3xf
             }
           }
         }
-      } {reduceLoop}
+      } {reduction_loop}
     }
   }
   return
