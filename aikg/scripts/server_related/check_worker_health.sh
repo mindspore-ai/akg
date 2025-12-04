@@ -1,5 +1,22 @@
 #!/bin/bash
 # 检查 Worker Service 健康状态
+#
+# ========================================
+# IPv4/IPv6 配置说明:
+# ========================================
+# 通过环境变量或参数来指定 URL:
+#   - 参数方式: ./check_worker_health.sh <worker_url>
+#   - 环境变量: AIKG_WORKER_URL
+#
+# IPv4 示例:
+#   ./check_worker_health.sh http://192.168.1.100:9001
+#
+# IPv6 示例 (注意 IPv6 地址需要用方括号包围):
+#   ./check_worker_health.sh http://[2001:db8::1]:9001
+#   或者:
+#   export AIKG_WORKER_URL=http://[::1]:9001
+#   ./check_worker_health.sh
+# ========================================
 
 WORKER_URL=${1:-${AIKG_WORKER_URL:-http://localhost:9001}}
 
@@ -20,4 +37,3 @@ else
     echo "Response: $body"
     exit 1
 fi
-

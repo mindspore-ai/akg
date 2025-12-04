@@ -302,3 +302,93 @@ class LocalWorker(WorkerInterface):
         except Exception as e:
             logger.error(f"[{task_id}] nsys profiling failed: {e}", exc_info=True)
             return float('inf'), float('inf')
+
+    async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
+        """
+        Execute task_desc and generate reference data locally.
+        
+        用于 CUDA-to-Ascend 转换场景：执行 Triton-CUDA 代码，保存输出作为参考数据。
+        
+        Args:
+            package_data: 验证包数据（bytes）
+            task_id: 任务ID
+            op_name: 算子名称
+            timeout: 超时时间
+            
+        Returns:
+            Tuple[bool, str, bytes]: (success, log, reference_data_bytes)
+        """
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Extract package
+                tar_path = os.path.join(temp_dir, "package.tar")
+                with open(tar_path, "wb") as f:
+                    f.write(package_data)
+                
+                extract_dir = os.path.join(temp_dir, "extract")
+                os.makedirs(extract_dir, exist_ok=True)
+                
+                try:
+                    with tarfile.open(tar_path, 'r') as tar_ref:
+                        tar_ref.extractall(extract_dir)
+                except Exception as e:
+                    return False, f"Failed to extract package: {e}", b''
+                
+                # Find and run the verify script
+                script_name = f"verify_{op_name}.py"
+                script_path = os.path.join(extract_dir, script_name)
+                if not os.path.exists(script_path):
+                    return False, f"Verification script {script_name} not found.", b''
+                
+                env = os.environ.copy()
+                env['PYTHONUNBUFFERED'] = '1'
+                
+                python_exe = sys.executable
+                cmd = [python_exe, script_name]
+                logger.info(f"[{task_id}] Running reference generation for {op_name}")
+                
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=extract_dir,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                
+                try:
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+                    returncode = process.returncode
+                    
+                    output_log = stdout.decode(errors='replace') + "\n" + stderr.decode(errors='replace')
+                    success = (returncode == 0)
+                    
+                    if not success:
+                        logger.error(f"[{task_id}] Reference generation failed with log:\n{output_log}")
+                        return False, output_log, b''
+                    
+                    # Check for success marker
+                    if "REFERENCE_GENERATION_SUCCESS" not in output_log:
+                        return False, f"Reference generation did not complete successfully:\n{output_log}", b''
+                    
+                    # Read the generated .pt file
+                    ref_file = os.path.join(extract_dir, f"{op_name}_reference.pt")
+                    if not os.path.exists(ref_file):
+                        return False, f"Reference file {ref_file} not found after generation.", b''
+                    
+                    with open(ref_file, 'rb') as f:
+                        ref_bytes = f.read()
+                    
+                    logger.info(f"[{task_id}] Reference generation succeeded, .pt file size: {len(ref_bytes)} bytes")
+                    return True, output_log, ref_bytes
+                    
+                except asyncio.TimeoutError:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    logger.error(f"[{task_id}] Reference generation timed out.")
+                    return False, f"Reference generation timed out after {timeout} seconds.", b''
+        
+        except Exception as e:
+            logger.error(f"[{task_id}] LocalWorker generate_reference failed: {e}", exc_info=True)
+            return False, str(e), b''

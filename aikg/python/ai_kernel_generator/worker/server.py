@@ -115,6 +115,57 @@ async def profile(
         logger.error(f"[{task_id}] Profiling request failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/v1/generate_reference")
+async def generate_reference(
+    package: Annotated[UploadFile, File(...)],
+    task_id: Annotated[str, Form(...)],
+    op_name: Annotated[str, Form(...)],
+    timeout: Annotated[int, Form(...)] = 120
+):
+    """
+    Execute task_desc and generate reference data.
+    
+    用于 CUDA-to-Ascend 转换场景：执行 Triton-CUDA 代码，
+    保存输出作为参考数据（.pt 文件），并以 base64 编码返回。
+    
+    Returns:
+        - success: 是否成功生成参考数据
+        - log: 执行日志
+        - reference_data: base64 编码的 .pt 文件内容
+    """
+    import base64
+    
+    if worker is None:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+    
+    try:
+        logger.info(f"[{task_id}] Received generate_reference request for {op_name}")
+        
+        package_data = await package.read()
+        
+        success, log, ref_bytes = await worker.generate_reference(
+            package_data, task_id, op_name, timeout
+        )
+        
+        if success:
+            # 以 base64 编码返回二进制数据
+            ref_data_b64 = base64.b64encode(ref_bytes).decode('utf-8')
+            return {
+                "success": True,
+                "log": log,
+                "reference_data": ref_data_b64
+            }
+        else:
+            return {
+                "success": False,
+                "log": log,
+                "reference_data": ""
+            }
+        
+    except Exception as e:
+        logger.error(f"[{task_id}] Generate reference request failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/v1/acquire_device")
 async def acquire_device(
     task_id: Annotated[str, Form(...)]
@@ -169,10 +220,27 @@ async def status():
         # "available_devices": worker.device_pool.qsize() # DevicePool uses Queue
     }
 
-def start_server(host="0.0.0.0", port=9001):
+
+def start_server(host: Optional[str] = None, port: Optional[int] = None):
+    """
+    启动 AIKG Worker Service。
+    
+    Args:
+        host: 监听地址。可从环境变量 WORKER_HOST 设置。
+              - IPv4: "0.0.0.0" (所有接口), "127.0.0.1" (本地)
+              - IPv6: "::" (所有接口，双栈), "::1" (本地)
+              默认: "0.0.0.0"
+        port: 监听端口。可从环境变量 WORKER_PORT 设置。
+              默认: 9001
+    """
+    # 从环境变量读取配置，参数优先
+    if host is None:
+        host = os.environ.get("WORKER_HOST", "0.0.0.0")
+    if port is None:
+        port = int(os.environ.get("WORKER_PORT", "9001"))
+    
+    logger.info(f"Starting Worker Service on {host}:{port}")
     uvicorn.run(app, host=host, port=port)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("WORKER_PORT", 9001))
-    start_server(port=port)
-
+    start_server()

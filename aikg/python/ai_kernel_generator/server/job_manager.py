@@ -96,6 +96,8 @@ class ServerJobManager:
             raise ValueError(f"task_desc is required when submitting a job.\n\n{hint}")
 
         worker_manager = get_worker_manager()
+        
+        # 检查目标 backend 的 Worker 是否可用
         worker_available = await worker_manager.has_worker(
             backend=backend,
             arch=arch
@@ -117,6 +119,28 @@ class ServerJobManager:
             error_msg += "\nPlease register a compatible worker before submitting the job."
             
             raise RuntimeError(error_msg)
+        
+        # 检查是否是 CUDA-to-Ascend 转换场景
+        source_backend = request_data.get("source_backend")
+        source_arch = request_data.get("source_arch")
+        
+        if source_backend and source_backend != backend:
+            # CUDA-to-Ascend 转换场景，需要检查 source_backend 的 Worker 是否可用
+            source_worker_available = await worker_manager.has_worker(
+                backend=source_backend,
+                arch=source_arch
+            )
+            if not source_worker_available:
+                all_workers = await worker_manager.get_status()
+                error_msg = f"No available worker found for source_backend='{source_backend}', source_arch='{source_arch}'.\n"
+                if all_workers:
+                    worker_list_str = "\n".join([
+                        f"- backend='{w['backend']}', arch='{w['arch']}', capacity={w['capacity']}, tags={w['tags']}"
+                        for w in all_workers
+                    ])
+                    error_msg += f"Currently registered workers:\n{worker_list_str}"
+                error_msg += "\nPlease register a source backend worker for CUDA-to-Ascend conversion."
+                raise RuntimeError(error_msg)
 
         job_id = str(uuid.uuid4())
         job_type = request_data.get("job_type", "single")
@@ -143,6 +167,10 @@ class ServerJobManager:
     async def _check_task_desc_runtime_wrapper(self, job_id: str, data: dict, config: dict) -> bool:
         """
         在任务开始前执行运行时检查
+        
+        支持跨后端转换场景：
+        - 当 source_backend 与 backend 不同时，在源 Worker 上生成参考数据
+        - 将参考数据存入 config['reference_data']，供目标 Worker 验证时使用
         """
         task_desc = data.get("task_desc", "")
         if not task_desc:
@@ -151,42 +179,101 @@ class ServerJobManager:
             
         backend = data.get("backend")
         arch = data.get("arch")
-        
-        logger.info(f"[{job_id}] Starting runtime check for task description...")
+        source_backend = data.get("source_backend")
+        source_arch = data.get("source_arch")
         
         worker_manager = get_worker_manager()
-        # 获取 worker
-        worker = await worker_manager.select(backend=backend, arch=arch)
-        if not worker:
-            raise RuntimeError(f"No available worker found for runtime check (backend={backend}, arch={arch})")
+        
+        # 检查是否需要生成参考数据（只要有 source_backend 就需要）
+        need_reference_data = (source_backend is not None and source_backend != backend)
+        
+        if need_reference_data:
+            # ========== 阶段1: 在源 Worker 上生成参考数据 ==========
+            logger.info(f"[{job_id}] Cross-backend conversion detected (source={source_backend} -> target={backend}). Generating reference data...")
             
-        try:
-            # 创建 verifier
-            verifier = KernelVerifier(
-                op_name=data.get("op_name"),
-                framework_code=task_desc, # 这里的 framework_code 不重要，只要 task_desc 传对了
-                task_id=job_id,
-                framework=data.get("framework"),
-                dsl=data.get("dsl"),
-                backend=backend,
-                arch=arch,
-                config=config,
-                worker=worker
-            )
+            source_worker = await worker_manager.select(backend=source_backend, arch=source_arch)
+            if not source_worker:
+                raise RuntimeError(f"No available source worker found for reference generation (backend={source_backend}, arch={source_arch})")
             
-            # 执行检查
-            valid, error = await verifier.check_task_desc_runtime(task_desc, timeout=60)
-            
-            if not valid:
-                hint = _get_task_desc_format_hint()
-                raise RuntimeError(f"Task description runtime check failed: {error}\n\n{hint}")
+            try:
+                # 根据 source_backend 决定 dsl
+                source_dsl = data.get("source_dsl")
+                if not source_dsl:
+                    # 默认根据 source_backend 推断
+                    if source_backend == "cuda":
+                        source_dsl = "triton_cuda"
+                    elif source_backend == "ascend":
+                        source_dsl = "triton_ascend"
+                    else:
+                        source_dsl = "triton"
                 
-            logger.info(f"[{job_id}] Task description runtime check passed.")
-            return True
+                # 创建 verifier 用于生成参考数据
+                verifier = KernelVerifier(
+                    op_name=data.get("op_name"),
+                    framework_code=task_desc,
+                    task_id=job_id,
+                    framework=data.get("framework"),
+                    dsl=source_dsl,
+                    backend=source_backend,
+                    arch=source_arch,
+                    config=config,
+                    worker=source_worker
+                )
+                
+                # 生成参考数据
+                success, log, ref_bytes = await verifier.generate_reference_data(task_desc, timeout=120)
+                
+                if not success:
+                    raise RuntimeError(f"Reference data generation failed on source worker:\n{log}")
+                
+                # 将参考数据存入 config
+                config['use_reference_data'] = True
+                config['reference_data'] = ref_bytes
+                logger.info(f"[{job_id}] Reference data generated successfully ({len(ref_bytes)} bytes)")
+                
+            finally:
+                await worker_manager.release(source_worker)
             
-        finally:
-            # 释放 worker
-            await worker_manager.release(worker)
+            # ========== 阶段2: 不再需要在目标 Worker 上执行运行时检查 ==========
+            # 因为我们已经在源 Worker 上验证过 task_desc 可以正常运行
+            logger.info(f"[{job_id}] Skipping target runtime check (reference data already generated)")
+            return True
+        
+        else:
+            # ========== 普通场景: 在目标 Worker 上执行运行时检查 ==========
+            logger.info(f"[{job_id}] Starting runtime check for task description...")
+            
+            worker = await worker_manager.select(backend=backend, arch=arch)
+            if not worker:
+                raise RuntimeError(f"No available worker found for runtime check (backend={backend}, arch={arch})")
+                
+            try:
+                # 创建 verifier
+                verifier = KernelVerifier(
+                    op_name=data.get("op_name"),
+                    framework_code=task_desc,
+                    task_id=job_id,
+                    framework=data.get("framework"),
+                    dsl=data.get("dsl"),
+                    backend=backend,
+                    arch=arch,
+                    config=config,
+                    worker=worker
+                )
+                
+                # 执行检查
+                valid, error = await verifier.check_task_desc_runtime(task_desc, timeout=60)
+                
+                if not valid:
+                    hint = _get_task_desc_format_hint()
+                    raise RuntimeError(f"Task description runtime check failed: {error}\n\n{hint}")
+                    
+                logger.info(f"[{job_id}] Task description runtime check passed.")
+                return True
+                
+            finally:
+                # 释放 worker
+                await worker_manager.release(worker)
 
     async def _run_single_job(self, job_id: str, data: dict):
         self.jobs[job_id]["status"] = "running"

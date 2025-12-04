@@ -1,7 +1,25 @@
 #!/bin/bash
 # 检查 Client-Server-Worker 端到端环境是否就绪
+#
+# ========================================
+# IPv4/IPv6 配置说明:
+# ========================================
+# 通过环境变量或参数来指定 URL:
+#   - 参数方式: ./check_e2e_setup.sh <server_url> <worker_url>
+#   - 环境变量: AIKG_SERVER_URL, AIKG_WORKER_URL
+#
+# IPv4 示例:
+#   ./check_e2e_setup.sh http://192.168.1.100:8000 http://192.168.1.100:9001
+#
+# IPv6 示例 (注意 IPv6 地址需要用方括号包围):
+#   ./check_e2e_setup.sh http://[2001:db8::1]:8000 http://[2001:db8::1]:9001
+#   或者:
+#   export AIKG_SERVER_URL=http://[::1]:8000
+#   export AIKG_WORKER_URL=http://[::1]:9001
+#   ./check_e2e_setup.sh
+# ========================================
 
-SERVER_URL=${1:-http://localhost:8000}
+SERVER_URL=${1:-${AIKG_SERVER_URL:-http://localhost:8000}}
 WORKER_URL=${2:-${AIKG_WORKER_URL:-http://localhost:9001}}
 
 echo "=========================================="
@@ -53,4 +71,3 @@ echo ""
 echo "=========================================="
 echo "✅ 环境检查通过！可以运行 Client 测试了"
 echo "=========================================="
-

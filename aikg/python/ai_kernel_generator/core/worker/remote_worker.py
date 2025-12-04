@@ -146,3 +146,66 @@ class RemoteWorker(WorkerInterface):
         except Exception as e:
             logger.error(f"[{task_id}] Remote profiling failed: {e}")
             return {'artifacts': {}}
+
+    async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
+        """
+        Send reference generation task to remote worker.
+        
+        用于 CUDA-to-Ascend 转换场景：在远程 GPU Worker 上执行 Triton-CUDA 代码，
+        生成参考数据（.pt 文件）并返回其二进制内容。
+        
+        Args:
+            package_data: 验证包数据（TAR bytes）
+            task_id: 任务ID
+            op_name: 算子名称
+            timeout: 超时时间
+            
+        Returns:
+            Tuple[bool, str, bytes]: (success, log, reference_data_bytes)
+        """
+        import base64
+        
+        generate_ref_url = f"{self.worker_url}/api/v1/generate_reference"
+        
+        try:
+            async with httpx.AsyncClient(timeout=timeout + 10) as client:
+                files = {'package': ('package.tar', package_data, 'application/x-tar')}
+                data = {
+                    'task_id': task_id,
+                    'op_name': op_name,
+                    'timeout': str(timeout)
+                }
+                
+                logger.info(f"[{task_id}] Sending generate_reference request to {generate_ref_url}")
+                
+                response = await client.post(generate_ref_url, files=files, data=data)
+                response.raise_for_status()
+                
+                result = response.json()
+                success = result.get('success', False)
+                log = result.get('log', '')
+                
+                if success:
+                    # reference_data 以 base64 编码传输
+                    ref_data_b64 = result.get('reference_data', '')
+                    if ref_data_b64:
+                        ref_bytes = base64.b64decode(ref_data_b64)
+                        logger.info(f"[{task_id}] Received reference data: {len(ref_bytes)} bytes")
+                        return True, log, ref_bytes
+                    else:
+                        return False, f"No reference data in response:\n{log}", b''
+                else:
+                    return False, log, b''
+                
+        except httpx.RequestError as e:
+            error_msg = f"Network error communicating with worker at {self.worker_url}: {e}"
+            logger.error(f"[{task_id}] {error_msg}")
+            return False, error_msg, b''
+        except httpx.HTTPStatusError as e:
+            error_msg = f"Worker returned error status: {e.response.status_code} - {e.response.text}"
+            logger.error(f"[{task_id}] {error_msg}")
+            return False, error_msg, b''
+        except Exception as e:
+            error_msg = f"Remote generate_reference failed: {e}"
+            logger.error(f"[{task_id}] {error_msg}")
+            return False, error_msg, b''

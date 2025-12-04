@@ -49,3 +49,25 @@ class WorkerInterface(ABC):
                 - artifacts: 执行过程中生成的文件内容，格式为 {relative_path: json_content}
         """
         pass
+
+    @abstractmethod
+    async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
+        """
+        Execute task_desc and generate reference data.
+        
+        用于 CUDA-to-Ascend 转换场景：在 GPU Worker 上执行 Triton-CUDA 代码，
+        保存输出作为参考数据（.pt 文件），供 NPU Worker 验证转换后的代码正确性。
+
+        Args:
+            package_data: The compressed project (TAR bytes) containing reference.py and verify script.
+            task_id: Unique task identifier.
+            op_name: Operator name.
+            timeout: Execution timeout in seconds.
+
+        Returns:
+            Tuple[bool, str, bytes]: (success, log_output, reference_data_bytes)
+            - success: 是否成功生成参考数据
+            - log_output: 执行日志
+            - reference_data_bytes: .pt 文件的二进制内容（成功时），失败时为空 b''
+        """
+        pass

@@ -320,6 +320,165 @@ if __name__ == "__main__":
             # 清理临时目录
             shutil.rmtree(check_dir, ignore_errors=True)
 
+    async def generate_reference_data(self, task_desc: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
+        """
+        在 GPU 上执行 task_desc 并生成参考数据
+        
+        用于 CUDA-to-Ascend 转换场景：在 GPU Worker 上执行 Triton-CUDA 代码，
+        保存输出作为参考数据，供 NPU Worker 验证转换后的代码正确性。
+        
+        Args:
+            task_desc: task_desc 代码字符串（Triton-CUDA 代码）
+            timeout: 超时时间
+            
+        Returns:
+            Tuple[bool, str, bytes]: (是否成功, 日志, 参考数据bytes)
+            - 成功时 bytes 为 .pt 文件内容
+            - 失败时 bytes 为空 b''
+        """
+        # 1. 创建临时目录
+        ref_dir = os.path.join(os.path.expanduser(self.log_dir), f"{self.op_name}_gen_ref_{self.task_id}")
+        os.makedirs(ref_dir, exist_ok=True)
+        
+        try:
+            # 2. 写入 task_desc 到 reference.py
+            ref_file = os.path.join(ref_dir, "reference.py")
+            with open(ref_file, "w", encoding="utf-8") as f:
+                f.write(task_desc)
+            
+            # 3. 生成参考数据脚本
+            # 使用固定 seed=0 确保可复现性
+            gen_ref_script = f'''
+import torch
+import sys
+import os
+
+# Add current directory to sys.path
+sys.path.append(os.getcwd())
+
+def generate_reference():
+    print("Starting reference data generation...")
+    try:
+        # Import from reference
+        try:
+            from reference import Model, get_inputs, get_init_inputs
+        except ImportError as e:
+            print(f"Import failed: {{e}}")
+            return False
+        
+        print("Successfully imported Model and helper functions.")
+        
+        # Determine device
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch, 'npu') and torch.npu.is_available():
+            device = "npu"
+        
+        print(f"Using device: {{device}}")
+        
+        # Fixed seed for reproducibility
+        torch.manual_seed(0)
+        print("[INFO] Random seed: 0")
+        
+        # Instantiate model
+        try:
+            init_inputs = get_init_inputs()
+            model = Model(*init_inputs)
+            if device != "cpu":
+                model = model.to(device)
+            model.eval()
+        except Exception as e:
+            print(f"Model instantiation failed: {{e}}")
+            return False
+        
+        # Get inputs with fixed seed
+        torch.manual_seed(0)
+        try:
+            inputs = get_inputs()
+            if device != "cpu":
+                inputs = [inp.to(device) if isinstance(inp, torch.Tensor) else inp for inp in inputs]
+        except Exception as e:
+            print(f"get_inputs failed: {{e}}")
+            return False
+        
+        # Run forward pass
+        try:
+            with torch.no_grad():
+                outputs = model(*inputs)
+            print("Forward pass successful.")
+        except Exception as e:
+            print(f"Forward pass failed: {{e}}")
+            return False
+        
+        # Ensure outputs is a list
+        if not isinstance(outputs, (list, tuple)):
+            outputs = [outputs]
+        
+        # Move to CPU for saving
+        outputs_cpu = [x.cpu() if isinstance(x, torch.Tensor) else x for x in outputs]
+        
+        # Save reference data
+        ref_data = {{
+            'op_name': '{self.op_name}',
+            'seed': 0,
+            'outputs': outputs_cpu,
+            'output_shapes': [x.shape if isinstance(x, torch.Tensor) else None for x in outputs_cpu],
+        }}
+        
+        ref_file = os.path.join(os.getcwd(), "{self.op_name}_reference.pt")
+        torch.save(ref_data, ref_file)
+        print(f"[INFO] Reference data saved to: {{ref_file}}")
+        print(f"[INFO] Output count: {{len(outputs_cpu)}}")
+        for i, out in enumerate(outputs_cpu):
+            if isinstance(out, torch.Tensor):
+                print(f"  Output[{{i}}]: shape={{out.shape}}, dtype={{out.dtype}}")
+        
+        return True
+    
+    except Exception as e:
+        print(f"Unexpected error: {{e}}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+if __name__ == "__main__":
+    success = generate_reference()
+    if success:
+        print("REFERENCE_GENERATION_SUCCESS")
+        sys.exit(0)
+    else:
+        print("REFERENCE_GENERATION_FAILED")
+        sys.exit(1)
+'''
+            script_file = os.path.join(ref_dir, f"verify_{self.op_name}.py")
+            with open(script_file, "w", encoding="utf-8") as f:
+                f.write(gen_ref_script)
+            
+            # 4. 打包目录
+            package_data = self._pack_directory(ref_dir)
+            
+            # 5. 使用 Worker.generate_reference 执行
+            if not self.worker:
+                raise RuntimeError("Worker not set for reference generation")
+            
+            # 直接调用 Worker 的 generate_reference 方法
+            # 该方法会执行脚本并返回 .pt 文件的 bytes
+            success, log, ref_bytes = await self.worker.generate_reference(
+                package_data, f"{self.task_id}_gen_ref", self.op_name, timeout
+            )
+            
+            if not success:
+                return False, f"Reference generation failed:\n{log}", b''
+            
+            return True, log, ref_bytes
+            
+        except Exception as e:
+            return False, f"Reference generation exception: {str(e)}", b''
+        finally:
+            # 清理临时目录
+            shutil.rmtree(ref_dir, ignore_errors=True)
+
     def _create_verify_dir(self, step_counter) -> str:
         """创建验证目录并返回目录路径"""
         expanded_log_dir = os.path.expanduser(self.log_dir)
@@ -468,6 +627,27 @@ if __name__ == "__main__":
         """生成验证项目文件到指定目录"""
         logger.info(f"[{self.op_name}] 开始生成验证项目，目录: {verify_dir}, device_id={device_id}")
         
+        # ========== 处理参考数据模式 ==========
+        use_reference_data = self.config.get('use_reference_data', False)
+        reference_file = None
+        
+        if use_reference_data:
+            reference_data_bytes = self.config.get('reference_data')
+            if reference_data_bytes:
+                # 将参考数据写入验证目录
+                reference_file = os.path.join(verify_dir, f"{self.op_name}_reference.pt")
+                try:
+                    with open(reference_file, 'wb') as f:
+                        f.write(reference_data_bytes)
+                    logger.info(f"[{self.op_name}] 参考数据已写入: {reference_file} ({len(reference_data_bytes)} bytes)")
+                except Exception as e:
+                    logger.error(f"[{self.op_name}] 参考数据写入失败: {e}")
+                    use_reference_data = False
+                    reference_file = None
+            else:
+                logger.warning(f"[{self.op_name}] use_reference_data=True 但未找到 reference_data")
+                use_reference_data = False
+        
         # 创建框架实现文件
         framework_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
         try:
@@ -612,6 +792,9 @@ if __name__ == "__main__":
                 arch=self.arch,
                 is_dynamic_shape=is_dynamic_shape,
                 timeout=self.config.get('verify_timeout', 300),
+                # 参考数据模式（用于跨后端转换场景）
+                use_reference_data=use_reference_data,
+                reference_file=reference_file,
                 # Adapter生成的代码
                 framework_imports=self._prepare_code_lines(framework_imports),
                 framework_model_import=self._prepare_code_lines(framework_model_import),
