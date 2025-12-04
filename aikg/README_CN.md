@@ -22,10 +22,8 @@
       - [Step 1: 基础环境配置](#step-1-基础环境配置)
         - [API与模型配置](#api与模型配置)
         - [第三方依赖](#第三方依赖)
-      - [Step 2: 前端依赖配置](#step-2-前端依赖配置)
-        - [MindSpore 2.7版本 前端依赖（可选）](#mindspore-27版本-前端依赖可选)
-      - [Step 3: 后端依赖配置](#step-3-后端依赖配置)
-      - [Step 4: 可选工具配置](#step-4-可选工具配置)
+      - [Step 2: 后端依赖配置](#step-2-后端依赖配置)
+      - [Step 3: 可选工具配置](#step-3-可选工具配置)
         - [文本相似性检测依赖](#文本相似性检测依赖)
   - [▶️ 5. 教程示例](#️-5-教程示例)
   - [📐 6. 设计文档](#-6-设计文档)
@@ -38,12 +36,16 @@
 
 ## 📘 1. 项目简介
 AIKG 是一款 AI 驱动的算子生成器。
-AIKG 利用大语言模型(LLM)的代码生成能力，通过大语言模型规划和控制（多个）Agent 协同完成多后端、多类型的AI算子生成和自动优化。
-同时 AIKG 提供丰富的算子Agent相关子模块，用户可组合构建自定义算子Agents任务。
+AIKG 利用大语言模型(LLM)的代码生成能力，通过大语言模型规划和控制多 Agents 协同完成多后端、多类型的AI算子生成和自动优化。
+同时 AIKG 提供丰富的算子Agent相关子模块，用户可组合构建自定义算子 Agents 任务。
+
+<div align="center" style="background-color:white">
+  <img src="./aikg.png" alt="AIKG Architecture" width="600">
+</div>
 
 ## 🗓️ 2. 更新日志
-- 2025-12-01：引入 LangGraph 重构任务调度系统，新增 `LangGraphTask` 替代原 `Conductor + workflow.yaml` 架构。支持 Python 定义工作流、图结构可视化、类型安全状态管理，API 完全兼容原 `Task`。详见《[LangGraph 文档](./docs/CN/LangGraph.md)》。
-- 2025-11-25：支持服务化架构，新增统一的 `register_worker()` 便捷函数（原 `register_local_worker` / `register_remote_worker` 仍可使用）。在调用 `evolve` 前务必先注册 Worker，可通过 `AIKG_WORKER_URL` 配置远程 Worker 或传入本地设备列表。详见《[服务化架构文档](./docs/CN/ServerArchitecture.md)》。
+- 2025-12-01：引入 LangGraph 重构任务调度系统，新增 `LangGraphTask` 替代原 `Task 任务编排` 方案。支持 Python 定义工作流、图结构可视化、类型安全状态管理，API 完全兼容原 `Task`。详见《[LangGraph 文档](./docs/CN/LangGraph.md)》。
+- 2025-11-25：支持服务化架构，支持`client-server-worker`分离架构，支持各类灵活并发需求，详见《[服务化架构文档](./docs/CN/ServerArchitecture.md)》。
 - 2025-10-14：支持 TileLang_CUDA后端代码生成能力。KernelBench Level1 的 TileLang_CUDA后端算子生成成功率结果详见《[基准测试结果](./docs/CN/DSLBenchmarkResults202509.md)》。
 - 2025-09-26：支持 CUDA C 与 CPP 后端代码生成能力。KernelBench Level1 的 CUDA C 与 CPP 后端算子生成成功率结果详见《[基准测试结果](./docs/CN/DSLBenchmarkResults202509.md)》。
 - 2025-09-14：KernelBench Level1 算子生成成功率更新，详见《[基准测试结果](./docs/CN/BenchmarkResults202509.md)》。
@@ -54,7 +56,7 @@ AIKG 利用大语言模型(LLM)的代码生成能力，通过大语言模型规�
 ## 🛠️ 3. 安装部署流程
 ```bash
 # 1. 环境设置
-# 1.1 使用conda环境（可选， 推荐python3.9/3.10/3.11版本）
+# 1.1 使用conda环境（可选， 推荐python3.10/3.11/3.12版本）
 conda create -n aikg python=3.11
 conda activate aikg
 
@@ -66,13 +68,14 @@ source .venv/bin/active
 pip install -r requirements.txt
 
 # 3. whl安装/环境设置
-# 3.1 whl安装
+# 3.1 设置环境变量直接运行
+cd aikg
+source env.sh
+
+# 3.2 或通过 whl 安装
 bash build.sh
 pip install output/ai_kernel_generator-*-py3-none-any.whl
 
-# 3.2 或者设置环境变量
-cd aikg
-source env.sh
 ```
 
 
@@ -86,7 +89,7 @@ source env.sh
 AIKG 通过环境变量来设置不同大语言模型（LLM）服务的 API。请根据您使用的服务，配置相应的环境变量：
 
 ```bash
-# 各厂商API接口。详细支持列表请参考docs/API.md
+# 各厂商API接口。详细支持列表请参考 docs/API.md
 export AIKG_XXX_API_KEY=xxx
 
 # VLLM (https://github.com/vllm-project/vllm)
@@ -94,16 +97,17 @@ export AIKG_VLLM_API_BASE=http://localhost:8000/v1
 
 ...
 ```
+
 更多配置选项：
-- **任务编排方案配置（Task Orchestration Plan Configuration）**: 声明一次任务的完整运行方案（包含 `agent_model_config`、`workflow_config_path`、`docs_dir` 等）。常见方案文件：`default_triton_cuda_config.yaml`、`default_triton_ascend_config.yaml`、`vllm_triton_cuda_coderonly_config.yaml`、`vllm_triton_ascend_coderonly_config.yaml`。详见《[任务编排方案配置](./docs/CN/TaskOrchestrationPlan.md)》。
-- **模型配置**: `llm_config.yaml` 中预设了多种 LLM 服务商的模型配置（DeepSeek、Qwen、Moonshot 等）。编排配置中的 `agent_model_config` 取值来源于该文件的预设名称。
-- **工作流定义（Workflow）**: 通过 `workflow_config_path` 指定工作流 YAML，定义 Agent 执行顺序与约束，支持 `default_workflow.yaml`、`coder_only_workflow.yaml` 等。详见《[工作流系统设计文档](./docs/CN/Workflow.md)》。
-- **文档驱动式接入（Doc-Driven Integration）**: 通过编排配置的 `docs_dir` 为各 Agent 提供参考文档目录。详见《[文档驱动式接入指南](./docs/CN/DocDrivenIntegration.md)》。
+- **LangGraph 工作流配置**: 采用 LangGraph 定义任务执行流程，支持 Python 代码定义图结构、状态管理与可视化。详见《[LangGraph 文档](./docs/CN/LangGraph.md)》。
+  > 注：原 **任务编排方案配置（Task Orchestration Plan Configuration）** 暂时兼容，详见《[任务编排方案配置](./docs/CN/TaskOrchestrationPlan.md)》。
+- **模型配置**: `llm_config.yaml` 中预设了多种 LLM 服务商的模型配置（DeepSeek、Qwen、Moonshot 等）。
+- **文档驱动式接入 (Doc-Driven Integration)**: 通过配置 `docs_dir` 为各 Agent 提供参考文档目录。详见《[文档驱动式接入指南](./docs/CN/DocDrivenIntegration.md)》。
 
 详细配置说明请参考 [API配置文档](./docs/CN/API.md)。
 
 ##### 第三方依赖
-本项目使用 git submodule 管理部分第三方依赖。
+本项目使用 git submodule 管理部分第三方依赖（如： Kernelbench、MultiKernelbench等）。
 
 初次克隆或拉取更新后，请使用以下命令初始化并下载 `aikg` 相关的依赖：
 ```bash
@@ -111,17 +115,7 @@ export AIKG_VLLM_API_BASE=http://localhost:8000/v1
 git submodule update --init "aikg/thirdparty/*"
 ```
 
-#### Step 2: 前端依赖配置
-
-##### MindSpore 2.7版本 前端依赖（可选）
-支持python版本：python3.11、python3.10、python3.9
-支持系统版本：aarch64、x86_64
-推荐按官方安装指南选择环境与安装方式：[MindSpore 2.7 安装指南](https://www.mindspore.cn/install)
-```bash
-pip install mindspore==2.7.0 -i https://repo.mindspore.cn/pypi/simple --trusted-host repo.mindspore.cn --extra-index-url https://repo.huaweicloud.com/repository/pypi/simple
-```
-
-#### Step 3: 后端依赖配置
+#### Step 2: 后端依赖配置
 根据您的硬件平台选择相应的后端：
 
 | 平台 | 后端 | 参考链接 |
@@ -129,10 +123,13 @@ pip install mindspore==2.7.0 -i https://repo.mindspore.cn/pypi/simple --trusted-
 | 华为Atlas A2训练系列产品 | Triton | https://gitee.com/ascend/triton-ascend |
 | NVIDIA GPU | Triton | https://github.com/triton-lang/triton |
 | 华为Atlas推理系列产品 | SWFT | https://gitee.com/mindspore/akg/tree/br_aikg/swft |
+| NVIDIA GPU | TileLang | https://github.com/tile-ai/tilelang |
+| 华为Atlas A2训练系列产品 | TileLang | https://github.com/tile-ai/tilelang |
+| NVIDIA GPU | CUDA C/C++ | https://docs.nvidia.com/cuda/ |
 
-#### Step 4: 可选工具配置
+#### Step 3: 可选工具配置
 
-##### 文本相似性检测依赖
+##### 文本相似性检测依赖（RAG-related）
 文本句子相似性检测工具text2vec-large-chinese： 若无法自动加载模型，需要手动下载到thirdparty目录下
 将下载后的模型地址添加到database对应的yaml中，请参考  [DataBase](./docs/CN/DataBase.md) 文档
 ```bash
@@ -151,20 +148,24 @@ bash download.sh --with_local_model
 
 | 示例 | 说明 |
 |------|------|
-| `run_mindspore_triton_single.py` | 单算子示例（MindSpore + Triton，Ascend 910B4）。 |
-| `run_mindspore_triton_parallel.py` | 并行多算子示例（MindSpore + Triton，Ascend 910B4）。 |
+| `run_torch_npu_triton_single.py` | 单算子示例（Torch + Triton，Ascend）。 |
+| `run_torch_evolve_triton.py` | 进化算法算子优化示例（Torch + Triton）。 |
 | `run_numpy_swft_relu.py` | SWFT ReLU 示例（Ascend 310P3）。 |
 | `run_numpy_swft_swiglu.py` | SWFT SwiGLU 示例（Ascend 310P3）。 |
+| `run_cuda_to_ascend_conversion.py` | CUDA 到 Ascend 算子转换示例。 |
+| `run_client_server_worker.py` | Client-Server 分布式运行示例。 |
+| `kernel_profile.py` | 算子性能 Profiling 示例。 |
+| `handwrite_optimization_analyzer.py` | 手写优化分析器示例。 |
 
 更多上手流程与参数说明，请参考《[Tutorial](./docs/CN/Tutorial.md)》。
 
 
 ## 📐 6. 设计文档
 
-> 建议先阅读《[任务编排方案配置](./docs/CN/TaskOrchestrationPlan.md)》，了解任务运行方案与入口；工作流细节见《[Workflow](./docs/CN/Workflow.md)》，文档规范见《[文档驱动式接入指南](./docs/CN/DocDrivenIntegration.md)》。
+> 建议先阅读《[LangGraph 文档](./docs/CN/LangGraph.md)》，了解最新的任务编排方案；工作流细节见《[Workflow](./docs/CN/Workflow.md)》，文档规范见《[文档驱动式接入指南](./docs/CN/DocDrivenIntegration.md)》。
 
 ### 核心框架
-- **[Task](./docs/CN/Task.md)** - 任务管理模块
+- **[LangGraph Task](./docs/CN/LangGraph.md)** - 任务管理模块 (LangGraph 新版)
 - **[Trace](./docs/CN/Trace.md)** - 执行追踪模块  
 - **[TaskPool](./docs/CN/TaskPool.md)** - 任务池管理
 - **[DevicePool](./docs/CN/DevicePool.md)** - 设备池管理
@@ -180,5 +181,8 @@ bash download.sh --with_local_model
 - **[Server Architecture](./docs/CN/ServerArchitecture.md)** - 服务化架构文档，包含 Client-Server-Worker 架构、WorkerManager 负载均衡、便捷函数使用等
 
 ### 后端支持
+- **[Triton Backend (Ascend/CUDA)](./docs/CN/Triton.md)** - Triton 计算后端
+- **[TileLang Backend (Ascend/CUDA)](./docs/CN/DSLBenchmarkResults202509.md)** - TileLang 计算后端
+- **[CUDA C/C++ Backend](./docs/CN/DSLBenchmarkResults202509.md)** - CUDA Native 后端
 - **[SWFT Backend](./docs/CN/SWFT.md)** - 华为Atlas推理系列后端
-- **[Triton Backend](./docs/CN/Triton.md)** - Triton计算后端
+- **[CPU Backend](./docs/CN/DSLBenchmarkResults202509.md)** - CPU 后端
