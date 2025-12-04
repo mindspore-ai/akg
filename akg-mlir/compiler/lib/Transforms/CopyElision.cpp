@@ -14,15 +14,19 @@
  * limitations under the License.
  */
 
-// ===- CopyElision.cc - Removes unecessary copies -------------------------=== //
+// ===- CopyElision.cc - Removes unnecessary copies -------------------------=== //
 //
 //
 // ===----------------------------------------------------------------------=== //
 
 #include "akg/Transforms/CopyElision.h"
+#include <algorithm>
 
 #include "mlir/Interfaces/CopyOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/Builders.h"
+
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_COPYELISION
@@ -41,7 +45,7 @@ static constexpr const int kVectorSizeFour = 4;
 // CopyElisionPass
 // ===----------------------------------------------------------------------=== //
 
-/// This pass removes unecessary copy operations. Additionally, it
+/// This pass removes unnecessary copy operations. Additionally, it
 /// removes leftover definition and deallocation operations by erasing the
 /// copy operation.
 /// func() {
@@ -194,9 +198,8 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
         // If the parent of `fromOp` doesn't contain `untilOp`, add the
         // successors to the list of blocks to check.
         if (untilOpBlock != fromOpBlock) {
-          for (Block *succ : fromOpBlock->getSuccessors()) {
-            todoBlocks.push_back(succ);
-          }
+          auto succ = fromOpBlock->getSuccessors();
+          std::copy(succ.begin(), succ.end(), std::back_inserter(todoBlocks));
         }
       }
 
@@ -217,9 +220,8 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
             return true;
           }
           if (&op == blk->getTerminator()) {
-            for (Block *succ : blk->getSuccessors()) {
-              todoBlocks.push_back(succ);
-            }
+            auto succ = blk->getSuccessors();
+            std::copy(succ.begin(), succ.end(), std::back_inserter(todoBlocks));
           }
         }
       }
@@ -235,6 +237,79 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
   /// any uses or write of `source`
   /// 3) If there is some read operations on `destination`, there should not exist
   /// any write of the `source`
+
+  bool canReplaceDestWithSrc(
+      CopyOpInterface copyOp,
+      Value src,
+      Value dest,
+      Operation* srcDeallocOp,
+      Operation* destDefOp,
+      Operation* lastOpOfCurrentRegion) const {
+      Operation *lastOpUsingSrc = lastOpOfCurrentRegion;
+
+      // If `srcDeallocOp` is not null, `lastOpUsingSrc` will be `srcDeallocOp`.
+      if (srcDeallocOp) {
+        lastOpUsingSrc = srcDeallocOp;
+      }
+      Operation *firstOpUsingDest = &dest.getParentRegion()->front().front();
+
+      // If `destDefOp` is not null, `firstOpUsingDest` will be `destDefOp`.
+      if (destDefOp) {
+        firstOpUsingDest = destDefOp;
+      }
+
+      bool isDestReadBefore =
+        hasInterveningOp(dest, firstOpUsingDest, copyOp, &doesOpUseVal) || doesOpUseVal(dest, firstOpUsingDest);
+      bool isDestWriteAfter = hasInterveningOp(dest, copyOp, lastOpUsingSrc, &doesOpHaveWriteEffect) ||
+                              doesOpHaveWriteEffect(dest, lastOpUsingSrc);
+      bool isSrcWriteAfter = hasInterveningOp(src, copyOp, lastOpUsingSrc, &doesOpHaveWriteEffect) ||
+                            doesOpHaveWriteEffect(src, lastOpUsingSrc);
+      bool isSrcReadAfter =
+        hasInterveningOp(src, copyOp, lastOpUsingSrc, &doesOpUseVal) || doesOpUseVal(src, lastOpUsingSrc);
+      bool isDestReadAfter =
+        hasInterveningOp(dest, copyOp, lastOpUsingSrc, &doesOpUseVal) || doesOpUseVal(dest, lastOpUsingSrc);
+      // Capture all the cases when copy removal and replacing uses of `dest` with
+      // `src` is not possible
+      // 1. Check if dest value is used before the copy
+      // 2. Check if (src value is write or read after the copy) and dest value is write after the copy
+      // 3. Check if (src value is write after the copy) and dest value is read after the copy
+      // if (isDestReadBefore ||
+      //     ((isSrcWriteAfter || isSrcReadAfter) && isDestWriteAfter) ||
+      //     (isSrcWriteAfter && isDestReadAfter)
+      //     )
+      if (isDestReadBefore || (isSrcWriteAfter && (isDestReadAfter || isDestWriteAfter)) ||
+          (isSrcReadAfter && isDestWriteAfter)) {
+        return false;
+      }
+      return true;
+    }
+
+  bool isMemRefTypesCompatible(Value src, Value dest) const {
+    auto srcType = dyn_cast<MemRefType>(src.getType());
+    auto destType = dyn_cast<MemRefType>(dest.getType());
+    if (!destType || !srcType) {
+      return true;
+    }
+
+    if (srcType.getShape() != destType.getShape() ||
+        srcType.getElementType() != destType.getElementType() ||
+        srcType.getMemorySpace() != destType.getMemorySpace()) {
+      return false;
+    }
+
+    auto srcLayout = srcType.getLayout();
+    auto destLayout = destType.getLayout();
+
+    if (!srcLayout && !destLayout) {
+      return true;
+    }
+    if ((!srcLayout && destLayout) || (srcLayout && !destLayout)) {
+      return false;
+    }
+
+    return srcLayout == destLayout;
+  }
+
   void reuseCopySourceAsTarget(CopyOpInterface copyOp,
                                llvm::SmallPtrSet<Operation *, kVectorSizeFour> &opsToErase) const {
     if (opsToErase.count(copyOp) != 0) {
@@ -248,41 +323,18 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
     Operation *destDeallocOp = getDeallocationOp(dest);
     Operation *destDefOp = getAllocationOp(dest);
     Operation *lastOpOfCurrentRegion = &src.getParentRegion()->back().back();
-    Operation *lastOpUsingSrc = lastOpOfCurrentRegion;
 
-    // If `srcDeallocOp` is not null, `lastOpUsingSrc` will be `srcDeallocOp`.
-    if (srcDeallocOp) {
-      lastOpUsingSrc = srcDeallocOp;
-    }
-    Operation *firstOpUsingDest = &dest.getParentRegion()->front().front();
-
-    // If `destDefOp` is not null, `firstOpUsingDest` will be `destDefOp`.
-    if (destDefOp) {
-      firstOpUsingDest = destDefOp;
-    }
-
-    bool isDestReadBefore =
-      hasInterveningOp(dest, firstOpUsingDest, copyOp, &doesOpUseVal) || doesOpUseVal(dest, firstOpUsingDest);
-    bool isDestWriteAfter = hasInterveningOp(dest, copyOp, lastOpUsingSrc, &doesOpHaveWriteEffect) ||
-                            doesOpHaveWriteEffect(dest, lastOpUsingSrc);
-    bool isSrcWriteAfter = hasInterveningOp(src, copyOp, lastOpUsingSrc, &doesOpHaveWriteEffect) ||
-                           doesOpHaveWriteEffect(src, lastOpUsingSrc);
-    bool isSrcReadAfter =
-      hasInterveningOp(src, copyOp, lastOpUsingSrc, &doesOpUseVal) || doesOpUseVal(src, lastOpUsingSrc);
-    bool isDestReadAfter =
-      hasInterveningOp(dest, copyOp, lastOpUsingSrc, &doesOpUseVal) || doesOpUseVal(dest, lastOpUsingSrc);
-    // Capture all the cases when copy removal and replacing uses of `dest` with
-    // `src` is not possible
-    // 1. Check if dest value is used before the copy
-    // 2. Check if (src value is write or read after the copy) and dest value is write after the copy
-    // 3. Check if (src value is write after the copy) and dest value is read after the copy
-    // if (isDestReadBefore ||
-    //     ((isSrcWriteAfter || isSrcReadAfter) && isDestWriteAfter) ||
-    //     (isSrcWriteAfter && isDestReadAfter)
-    //     )
-    if (isDestReadBefore || (isSrcWriteAfter && (isDestReadAfter || isDestWriteAfter)) ||
-        (isSrcReadAfter && isDestWriteAfter)) {
+    // Check if a replacement of `dest` with `src` is possible.
+    if (!canReplaceDestWithSrc(copyOp, src, dest, srcDeallocOp, destDefOp, lastOpOfCurrentRegion)) {
       return;
+    }
+    // Check if a cast is needed.
+    Value replacement = src;
+
+    if (!isMemRefTypesCompatible(src, dest)) {
+      OpBuilder builder(copyOp);
+      builder.setInsertionPointAfter(copyOp);
+      replacement = builder.create<memref::CastOp>(copyOp.getLoc(), dest.getType(), src);
     }
 
     // Erase the `copyOp`, `destDefOp` and `destDeallocOp`. Also remove
@@ -302,8 +354,8 @@ struct CopyElisionPass : public mlir::impl::CopyElisionBase<CopyElisionPass> {
       (void)opsToErase.insert(destDeallocOp);
     }
 
-    // Replace all uses of `src` with `dest`.
-    dest.replaceAllUsesWith(src);
+    // Replace all uses of `src` or cast with `dest`.
+    dest.replaceAllUsesWith(replacement);
   }
 
   /// Remove copy statements when there are no uses of `destination` after the
