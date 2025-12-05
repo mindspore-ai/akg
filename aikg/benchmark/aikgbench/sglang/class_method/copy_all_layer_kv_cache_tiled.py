@@ -3,6 +3,9 @@ import torch.nn as nn
 import triton
 import triton.language as tl
 
+# Global to keep KV cache buffers alive (prevent garbage collection)
+_kv_caches = None
+
 # ============================================================================
 # SGLang参考信息
 # ============================================================================
@@ -133,13 +136,14 @@ def get_inputs():
     Generate test inputs for the copy_all_layer_kv_cache_tiled kernel
 
     Note: This kernel works with memory pointers and byte-level operations.
-    Since we don't have GPU, we'll create mock data structures.
+    We need to create actual GPU buffers and extract their data pointers.
     """
     # Example dimensions
     num_layers = 4
     num_locs = 8
     head_dim = 128
     num_heads = 8
+    max_cache_slots = 200  # Maximum number of cache slots
     dtype = torch.int64  # For pointers and strides
 
     # Each layer has a KV cache buffer
@@ -150,17 +154,27 @@ def get_inputs():
     # Create strides tensor (all layers have same stride in this example)
     strides = torch.full((num_layers,), stride_per_layer, dtype=dtype)
 
-    # Create mock data pointers
-    # In real usage, these would be actual memory addresses
-    # For testing without GPU, we use placeholder values
-    data_ptrs = torch.arange(num_layers, dtype=dtype) * 1000000
+    # Create actual GPU buffers for each layer's KV cache
+    # Each buffer needs to hold max_cache_slots * stride_per_layer bytes
+    kv_caches = []
+    data_ptrs = torch.empty(num_layers, dtype=torch.int64)
 
-    # Create source and target location indices
-    src_loc = torch.randint(0, 100, (num_locs,), dtype=torch.int32)
-    tgt_loc = torch.randint(0, 100, (num_locs,), dtype=torch.int32)
+    for i in range(num_layers):
+        # Create buffer as uint8 tensor (byte buffer) on CUDA
+        buffer_size = max_cache_slots * stride_per_layer
+        kv_cache = torch.zeros(buffer_size, dtype=torch.uint8, device='cuda')
+        kv_caches.append(kv_cache)
+        # Get the data pointer of this buffer
+        data_ptrs[i] = kv_cache.data_ptr()
 
-    # Make sure src and tgt are different to have meaningful copy
-    tgt_loc = tgt_loc + 100
+    # Create source and target location indices (must be within max_cache_slots)
+    src_loc = torch.randint(0, max_cache_slots // 2, (num_locs,), dtype=torch.int32)
+    tgt_loc = torch.randint(max_cache_slots // 2, max_cache_slots, (num_locs,), dtype=torch.int32)
+
+    # Store kv_caches in a global variable to prevent garbage collection
+    # This is necessary because data_ptrs only contains the memory addresses
+    global _kv_caches
+    _kv_caches = kv_caches
 
     return [data_ptrs, strides, tgt_loc, src_loc]
 
