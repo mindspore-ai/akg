@@ -108,6 +108,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     // nestedFusionPM.addPass(mlir::createAKGLoopParallelizePass(options.enableParallel));
 
     nestedFusionPM.addPass(mlir::affine::createVectorTransferTensorizePass());
+    nestedFusionPM.addPass(mlir::affine::createTensorizeLiveOutsPass());
     pm.addPass(mlir::affine::createTilingFuncPass());
     pm.nest<mlir::func::FuncOp>().addPass(mlir::createLowerAffinePass());
   }
