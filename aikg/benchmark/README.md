@@ -10,3 +10,4 @@
 
 - **vLLM**: 基于 [vLLM](https://github.com/vllm-project/vllm) 推理引擎的高性能算子，包括注意力机制、归一化层、位置编码等核心组件
 - **SGLang**: 基于 [SGLang](https://github.com/ShanHongNan/SGlang) 的高效推理算子，专注于优化的注意力kernel和状态管理
+- **Attention Kernel Triton**: 基于 [attention_kernel_triton](https://github.com/KiritoHugh/attention_kernel_triton/tree/hw-npu) 的Flash Attention实现变体，提供prefill、decode、sparse token等多种attention模式
