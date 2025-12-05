@@ -147,6 +147,49 @@ class RemoteWorker(WorkerInterface):
             logger.error(f"[{task_id}] Remote profiling failed: {e}")
             return {'artifacts': {}}
 
+    async def profile_single_task(self, package_data: bytes, task_id: str, op_name: str, 
+                                   profile_settings: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Send single task profiling request to remote worker.
+        
+        单独测量某段代码的执行性能，不进行 base vs generation 对比。
+        
+        Returns:
+            Dict[str, Any]: 包含 time_us, success, log 等字段
+        """
+        profile_url = f"{self.worker_url}/api/v1/profile_single_task"
+        
+        try:
+            timeout = profile_settings.get('timeout', 300)
+            async with httpx.AsyncClient(timeout=timeout + 10) as client:
+                files = {'package': ('package.tar', package_data, 'application/x-tar')}
+                data = {
+                    'task_id': task_id, 
+                    'op_name': op_name,
+                    'profile_settings': json.dumps(profile_settings)
+                }
+                
+                logger.info(f"[{task_id}] Sending profile_single_task request to {profile_url}")
+                
+                response = await client.post(profile_url, files=files, data=data)
+                response.raise_for_status()
+                
+                result = response.json()
+                return result
+                
+        except httpx.RequestError as e:
+            error_msg = f"Network error communicating with worker at {self.worker_url}: {e}"
+            logger.error(f"[{task_id}] {error_msg}")
+            return {'time_us': float('inf'), 'success': False, 'log': error_msg}
+        except httpx.HTTPStatusError as e:
+            error_msg = f"Worker returned error status: {e.response.status_code} - {e.response.text}"
+            logger.error(f"[{task_id}] {error_msg}")
+            return {'time_us': float('inf'), 'success': False, 'log': error_msg}
+        except Exception as e:
+            error_msg = f"Remote profile_single_task failed: {e}"
+            logger.error(f"[{task_id}] {error_msg}")
+            return {'time_us': float('inf'), 'success': False, 'log': error_msg}
+
     async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
         """
         Send reference generation task to remote worker.

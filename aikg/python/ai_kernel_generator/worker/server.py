@@ -166,6 +166,43 @@ async def generate_reference(
         logger.error(f"[{task_id}] Generate reference request failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/v1/profile_single_task")
+async def profile_single_task(
+    package: Annotated[UploadFile, File(...)],
+    task_id: Annotated[str, Form(...)],
+    op_name: Annotated[str, Form(...)],
+    profile_settings: Annotated[str, Form(...)] = "{}"
+):
+    """
+    Execute single task profiling (only measure task_desc performance, no base comparison).
+    
+    单独测量某段代码的执行性能，不进行 base vs generation 对比。
+    
+    Returns:
+        - time_us: 执行时间（微秒）
+        - success: 是否成功
+        - log: 执行日志
+    """
+    if worker is None:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+    
+    import json
+    try:
+        settings = json.loads(profile_settings)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON for profile_settings")
+    
+    try:
+        logger.info(f"[{task_id}] Received profile_single_task request for {op_name}")
+        
+        package_data = await package.read()
+        result = await worker.profile_single_task(package_data, task_id, op_name, settings)
+        return result
+        
+    except Exception as e:
+        logger.error(f"[{task_id}] Profile single task request failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/v1/acquire_device")
 async def acquire_device(
     task_id: Annotated[str, Form(...)]

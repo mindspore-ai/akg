@@ -43,6 +43,8 @@ TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "kern
 PROFILE_BASE_TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "prof_base_template_refactored.j2")
 PROFILE_GENERATION_TEMPLATE_PATH = os.path.join(
     get_project_root(), "resources", "templates", "prof_generation_template_refactored.j2")
+PROFILE_SINGLE_TASK_TEMPLATE_PATH = os.path.join(
+    get_project_root(), "resources", "templates", "prof_single_task_template.j2")
 # 生成CMakeLists.txt和运行脚本的路径
 CMAKE_TEMPLATE_PATH = os.path.join(get_project_root(), "resources", "templates", "cmake_template.j2")
 RUN_TEMPLATE_PATH = os.path.join(get_project_root(), "utils", "compile_tools", "ascend_compile", "run.sh")
@@ -478,6 +480,148 @@ if __name__ == "__main__":
         finally:
             # 清理临时目录
             shutil.rmtree(ref_dir, ignore_errors=True)
+
+    async def profile_single_task(self, task_desc: str, warmup_times: int = 5, 
+                                   run_times: int = 50, timeout: int = 300,
+                                   device_id: int = 0) -> Dict[str, Any]:
+        """
+        执行单个任务的性能测试（只测量 task_desc 的性能，不进行 base vs generation 对比）
+        
+        此功能用于单独测量某段代码（包含 Model 类）的执行性能，会临时创建目录并生成 profile 脚本。
+        
+        Args:
+            task_desc: 包含 Model, get_inputs, get_init_inputs 的代码字符串
+            warmup_times: 预热次数
+            run_times: 实际运行次数
+            timeout: 超时时间
+            device_id: 设备ID
+            
+        Returns:
+            Dict[str, Any]: 包含 time_us, success, log 等字段
+        """
+        # 1. 创建临时目录
+        profile_dir = os.path.join(os.path.expanduser(self.log_dir), 
+                                    f"{self.op_name}_profile_single_{self.task_id}")
+        os.makedirs(profile_dir, exist_ok=True)
+        
+        try:
+            # 2. 写入 task_desc 到 framework_model.py（供模板导入）
+            framework_file = os.path.join(profile_dir, "framework_model.py")
+            with open(framework_file, "w", encoding="utf-8") as f:
+                f.write(task_desc)
+            
+            # 3. 使用模板生成性能测试脚本
+            script_file = os.path.join(profile_dir, f"profile_single_{self.op_name}.py")
+            self.gen_profile_single_task_file(script_file, device_id, warmup_times, run_times)
+            
+            # 4. 打包目录
+            package_data = self._pack_directory(profile_dir)
+            
+            # 5. 使用 Worker.profile_single_task 执行
+            if not self.worker:
+                raise RuntimeError("Worker not set for profile_single_task")
+            
+            profile_settings = {
+                'warmup_times': warmup_times,
+                'run_times': run_times,
+                'timeout': timeout
+            }
+            
+            result = await self.worker.profile_single_task(
+                package_data, f"{self.task_id}_profile_single", self.op_name, profile_settings
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"[{self.op_name}] profile_single_task exception: {e}", exc_info=True)
+            return {'time_us': float('inf'), 'success': False, 'log': f"Profile single task exception: {str(e)}"}
+        finally:
+            # 清理临时目录
+            shutil.rmtree(profile_dir, ignore_errors=True)
+
+    def gen_profile_single_task_file(self, profile_file: str, device_id: int, 
+                                      warmup_times: int, run_times: int):
+        """使用模板生成单任务性能测试脚本"""
+        logger.info(f"[{self.op_name}] 开始生成单任务性能测试文件")
+        
+        # 从文件加载模板
+        try:
+            with open(PROFILE_SINGLE_TASK_TEMPLATE_PATH, "r", encoding="utf-8") as f:
+                template = Template(f.read())
+            logger.debug(f"[{self.op_name}] 单任务性能测试模板加载成功")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 模板加载失败: {e}")
+            raise
+
+        # 检测是否为动态shape
+        is_dynamic_shape = self._detect_dynamic_shape()
+
+        # 获取adapters
+        try:
+            framework_adapter = get_framework_adapter(self.framework)
+            backend_adapter = get_backend_adapter(self.backend)
+        except Exception as e:
+            logger.error(f"[{self.op_name}] Adapters初始化失败: {e}")
+            raise
+
+        # 使用adapter生成代码片段
+        try:
+            framework_imports = framework_adapter.get_import_statements()
+            # 注意：不使用 framework_adapter.get_framework_import()，因为模板从固定的 framework_model.py 导入
+            
+            # 生成设备设置代码
+            backend_adapter.setup_environment(device_id, self.arch)
+            device_setup_code = framework_adapter.get_device_setup_code(self.backend, self.arch, device_id)
+            
+            # 生成输入处理代码
+            process_input_code = framework_adapter.get_process_input_code(self.backend, self.dsl)
+            
+            # 生成set_seed代码
+            set_seed_code = framework_adapter.get_set_seed_code(self.backend)
+            
+            # 获取TensorType名称
+            tensor_type_name = framework_adapter.get_tensor_type_name()
+            
+            # 生成benchmark代码（使用base模式，测量framework_model的性能）
+            benchmark_code = self._generate_base_benchmark_code(framework_adapter, None, 
+                                                                 warmup_times, run_times)
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 代码片段生成失败: {e}", exc_info=True)
+            raise
+
+        # 渲染模板
+        try:
+            rendered_code = template.render(
+                op_name=self.op_name,
+                framework=self.framework,
+                backend=self.backend,
+                arch=self.arch,
+                device_id=device_id,
+                is_dynamic_shape=is_dynamic_shape,
+                warmup_times=warmup_times,
+                run_times=run_times,
+                # Adapter生成的代码（注意：Model导入由模板固定从framework_model.py获取）
+                framework_imports=self._prepare_code_lines(framework_imports),
+                device_setup_code=self._prepare_code_lines(device_setup_code),
+                process_input_code=self._prepare_code_lines(process_input_code),
+                set_seed_code=self._prepare_code_lines(set_seed_code),
+                tensor_type_name=tensor_type_name,
+                benchmark_code=self._prepare_code_lines(benchmark_code),
+            )
+            logger.info(f"[{self.op_name}] 模板渲染成功")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 模板渲染失败: {e}", exc_info=True)
+            raise
+
+        # 写入文件
+        try:
+            with open(profile_file, "w", encoding="utf-8") as f:
+                f.write(rendered_code)
+            logger.info(f"[{self.op_name}] 单任务性能测试脚本已写入: {profile_file}")
+        except Exception as e:
+            logger.error(f"[{self.op_name}] 脚本写入失败: {e}")
+            raise
 
     def _create_verify_dir(self, step_counter) -> str:
         """创建验证目录并返回目录路径"""
@@ -917,12 +1061,25 @@ if __name__ == "__main__":
             logger.error(f"[{self.op_name}] 验证执行异常: {e}", exc_info=True)
             return False, str(e)
 
-    def gen_profile_project(self, verify_dir: str, device_id: int = 0, warmup_times: int = 5, run_times: int = 50):
-        """生成profile项目文件到指定目录"""
-        # 生成基准性能测试脚本
-        profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_base.py")
-        self.gen_profile_file_from_template(PROFILE_BASE_TEMPLATE_PATH, profile_file,
-                                            device_id, warmup_times, run_times)
+    def gen_profile_project(self, verify_dir: str, device_id: int = 0, warmup_times: int = 5, 
+                            run_times: int = 50, skip_base: bool = False):
+        """生成profile项目文件到指定目录
+        
+        Args:
+            verify_dir: 验证目录
+            device_id: 设备ID
+            warmup_times: 预热次数
+            run_times: 运行次数
+            skip_base: 是否跳过 base profile（跨后端场景下设为 True）
+        """
+        # 生成基准性能测试脚本（如果不跳过）
+        if not skip_base:
+            profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_base.py")
+            self.gen_profile_file_from_template(PROFILE_BASE_TEMPLATE_PATH, profile_file,
+                                                device_id, warmup_times, run_times)
+        else:
+            logger.info(f"[{self.op_name}] 跳过 base profile 生成（跨后端场景）")
+        
         # 生成性能测试脚本
         profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_generation.py")
         self.gen_profile_file_from_template(PROFILE_GENERATION_TEMPLATE_PATH,
@@ -1208,7 +1365,9 @@ if __name__ == "__main__":
             # 生成profile脚本
             # 对于 RemoteWorker，代码生成时使用 0 作为占位符（实际设备由远程服务器管理）
             # 对于 LocalWorker，使用已经 acquired 的 actual_device_id
-            self.gen_profile_project(verify_dir, actual_device_id, warmup_times, run_times)
+            # 跨后端场景（使用参考数据）下，跳过 base profile
+            skip_base = self.config.get('use_reference_data', False)
+            self.gen_profile_project(verify_dir, actual_device_id, warmup_times, run_times, skip_base=skip_base)
 
             # 打包并发送给Worker执行
             package_data = self._pack_directory(verify_dir)
@@ -1268,15 +1427,20 @@ if __name__ == "__main__":
                 sync_artifacts_to_directory(artifacts, verify_dir, self.task_id)
             
             # 从 Worker 返回的结果中提取数据
-            gen_time = result.get('gen_time', float('inf'))
-            base_time = result.get('base_time', 0.0)
+            # 注意：跨后端场景下 base_time 可能是 None（跳过 base profile）
+            gen_time = result.get('gen_time')
+            base_time = result.get('base_time')
             speedup = result.get('speedup', 0.0)
+            
+            # 处理 None 值用于日志输出
+            gen_time_display = gen_time if gen_time is not None else float('inf')
+            base_time_display = base_time if base_time is not None else float('inf')
 
-            self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
+            self.save_speedup_result(speedup, base_time_display, gen_time_display, unique_dir_name)
             
             speedup_percent = speedup * 100.0
-            logger.info(f"orig performance is {base_time:.2f} us")
-            logger.info(f"aikg performance is {gen_time:.2f} us")
+            logger.info(f"orig performance is {base_time_display:.2f} us")
+            logger.info(f"aikg performance is {gen_time_display:.2f} us")
             logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，加速比（基准为100%）: {speedup_percent:.2f} %")
             
             # 构建返回结果
@@ -1298,8 +1462,8 @@ if __name__ == "__main__":
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
             return {
-                'gen_time': float('inf'),
-                'base_time': 0.0,
+                'gen_time': None,
+                'base_time': None,
                 'speedup': 0.0
             }
         finally:

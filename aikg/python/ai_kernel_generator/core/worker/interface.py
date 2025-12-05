@@ -71,3 +71,26 @@ class WorkerInterface(ABC):
             - reference_data_bytes: .pt 文件的二进制内容（成功时），失败时为空 b''
         """
         pass
+
+    @abstractmethod
+    async def profile_single_task(self, package_data: bytes, task_id: str, op_name: str, 
+                                   profile_settings: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute single task profiling (only measure task_desc performance, no base comparison).
+        
+        单独测量某段代码的执行性能，不进行 base vs generation 对比。
+        适用于需要单独测量某个 Model 执行时间的场景。
+
+        Args:
+            package_data: The compressed project (TAR bytes) containing profile script.
+            task_id: Unique task identifier.
+            op_name: Operator name.
+            profile_settings: Settings for profiling (e.g., warmup_times, run_times).
+
+        Returns:
+            Dict[str, Any]: Profiling results, including:
+                - time_us: 执行时间（微秒）
+                - success: 是否成功
+                - log: 执行日志
+        """
+        pass

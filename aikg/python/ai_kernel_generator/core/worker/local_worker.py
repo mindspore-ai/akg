@@ -171,7 +171,7 @@ class LocalWorker(WorkerInterface):
                     with tarfile.open(tar_path, 'r') as tar_ref:
                         tar_ref.extractall(extract_dir)
                 except Exception as e:
-                    return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
+                    return {'gen_time': None, 'base_time': None, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
                 
                 # 注意：profile 脚本中的 device_id 应该在生成时就已经设置正确
                 # （与 verify 类似，通过预先获取设备ID）
@@ -210,30 +210,36 @@ class LocalWorker(WorkerInterface):
                         )
                     else:
                         logger.warning(f"[{task_id}] Unsupported backend for profiling: {backend}")
-                        return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'artifacts': {}}
+                        return {'gen_time': None, 'base_time': None, 'speedup': 0.0, 'artifacts': {}}
                     
                     # 5. Calculate speedup
-                    speedup = base_time / gen_time if gen_time > 0 else 0.0
+                    # 注意：跨后端场景下 base_time 可能是 inf（跳过 base profile）
+                    if base_time < float('inf') and gen_time > 0:
+                        speedup = base_time / gen_time
+                    else:
+                        speedup = 0.0  # 无法计算 speedup
                     
                     # 6. 收集执行过程中生成的 JSON 文件
                     artifacts = collect_json_artifacts(extract_dir)
                     if artifacts:
                         logger.info(f"[{task_id}] Collected {len(artifacts)} artifact files: {list(artifacts.keys())}")
                     
+                    # 7. 处理返回值，确保 JSON 可序列化（inf -> None）
+                    # JSON 标准不支持 float('inf')
                     return {
-                        'gen_time': gen_time,
-                        'base_time': base_time,
+                        'gen_time': gen_time if gen_time < float('inf') else None,
+                        'base_time': base_time if base_time < float('inf') else None,
                         'speedup': speedup,
                         'artifacts': artifacts
                     }
                     
                 except Exception as e:
                     logger.error(f"[{task_id}] Profiling execution failed: {e}", exc_info=True)
-                    return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
+                    return {'gen_time': None, 'base_time': None, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
         
         except Exception as e:
             logger.error(f"[{task_id}] LocalWorker profiling failed: {e}", exc_info=True)
-            return {'gen_time': float('inf'), 'base_time': 0.0, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
+            return {'gen_time': None, 'base_time': None, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
     
     def _run_msprof_profiling(self, extract_dir: str, op_name: str, task_id: str, warmup_times: int, run_times: int) -> Tuple[float, float]:
         """Run msprof profiling for Ascend backend (synchronous)"""
@@ -302,6 +308,102 @@ class LocalWorker(WorkerInterface):
         except Exception as e:
             logger.error(f"[{task_id}] nsys profiling failed: {e}", exc_info=True)
             return float('inf'), float('inf')
+
+    async def profile_single_task(self, package_data: bytes, task_id: str, op_name: str, 
+                                   profile_settings: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute single task profiling locally.
+        
+        单独测量某段代码的执行性能，不进行 base vs generation 对比。
+        
+        Returns:
+            Dict[str, Any]: 包含 time_us, success, log 等字段
+        """
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Extract package
+                tar_path = os.path.join(temp_dir, "package.tar")
+                with open(tar_path, "wb") as f:
+                    f.write(package_data)
+                
+                extract_dir = os.path.join(temp_dir, "extract")
+                os.makedirs(extract_dir, exist_ok=True)
+                
+                try:
+                    with tarfile.open(tar_path, 'r') as tar_ref:
+                        tar_ref.extractall(extract_dir)
+                except Exception as e:
+                    return {'time_us': None, 'success': False, 'log': f'Failed to extract package: {e}'}
+                
+                # Find profile script
+                script_name = f"profile_single_{op_name}.py"
+                script_path = os.path.join(extract_dir, script_name)
+                if not os.path.exists(script_path):
+                    return {'time_us': None, 'success': False, 'log': f'Profile script {script_name} not found'}
+                
+                # Run profile script
+                env = os.environ.copy()
+                env['PYTHONUNBUFFERED'] = '1'
+                
+                python_exe = sys.executable
+                cmd = [python_exe, script_name]
+                logger.info(f"[{task_id}] Running single task profiling for {op_name}")
+                
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=extract_dir,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                
+                timeout = profile_settings.get('timeout', 300)
+                try:
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+                    returncode = process.returncode
+                    
+                    output_log = stdout.decode(errors='replace') + "\n" + stderr.decode(errors='replace')
+                    success = (returncode == 0)
+                    
+                    if not success:
+                        logger.error(f"[{task_id}] Profile single task failed with log:\n{output_log}")
+                        return {'time_us': None, 'success': False, 'log': output_log}
+                    
+                    # Read result from JSON file
+                    result_file = os.path.join(extract_dir, "profile_single_result.json")
+                    time_us = None
+                    if os.path.exists(result_file):
+                        with open(result_file, 'r', encoding='utf-8') as f:
+                            result_data = json.load(f)
+                            time_us = result_data.get('avg_time_us')
+                            # 确保不是 inf
+                            if time_us is not None and time_us >= float('inf'):
+                                time_us = None
+                    else:
+                        # Try to parse from output log
+                        for line in output_log.split('\n'):
+                            if 'avg_time_us' in line or 'PROFILE_RESULT' in line:
+                                try:
+                                    # Parse "PROFILE_RESULT: 123.45" format
+                                    if 'PROFILE_RESULT:' in line:
+                                        time_us = float(line.split('PROFILE_RESULT:')[1].strip())
+                                except:
+                                    pass
+                    
+                    logger.info(f"[{task_id}] Profile single task result: {time_us} us")
+                    return {'time_us': time_us, 'success': time_us is not None, 'log': output_log}
+                    
+                except asyncio.TimeoutError:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    logger.error(f"[{task_id}] Profile single task timed out.")
+                    return {'time_us': None, 'success': False, 'log': f'Timed out after {timeout} seconds'}
+        
+        except Exception as e:
+            logger.error(f"[{task_id}] LocalWorker profile_single_task failed: {e}", exc_info=True)
+            return {'time_us': None, 'success': False, 'log': str(e)}
 
     async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
         """

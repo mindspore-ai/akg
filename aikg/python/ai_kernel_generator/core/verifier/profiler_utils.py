@@ -41,28 +41,38 @@ def run_profile_scripts_and_collect_results(verify_dir: str, op_name: str, task_
 
     Returns:
         (base_time_us, gen_time_us): 基准时间和生成时间（微秒）
+        - 如果 base 脚本不存在（跨后端场景），base_time_us 返回 inf
     
     注意: 此函数是线程安全的，不使用 os.chdir()。
     多个任务可以在线程池中并发执行而不会互相干扰。
     """
     try:
-        # 步骤1：运行基准性能测试脚本
-        # 使用 cwd 参数指定工作目录（线程安全），不使用 os.chdir()
+        base_time_us = float('inf')
+        
+        # 步骤1：运行基准性能测试脚本（如果存在）
+        # 跨后端场景（使用参考数据）下，base 脚本可能不存在
         base_script = f"profile_{op_name}_base.py"
-        base_result = run_command(["python", base_script], cmd_msg="base_profile", timeout=300, cwd=verify_dir)
-        if not base_result[0]:
-            logger.error(f"[{op_name}: {task_id}] 基准性能脚本执行失败: {base_result[1]}")
-            return float('inf'), float('inf')
+        base_script_path = os.path.join(verify_dir, base_script)
+        
+        if os.path.exists(base_script_path):
+            # 使用 cwd 参数指定工作目录（线程安全），不使用 os.chdir()
+            base_result = run_command(["python", base_script], cmd_msg="base_profile", timeout=300, cwd=verify_dir)
+            if not base_result[0]:
+                logger.error(f"[{op_name}: {task_id}] 基准性能脚本执行失败: {base_result[1]}")
+                # base 失败不影响 generation 的执行
+            else:
+                base_time_us = read_profile_result_from_json(verify_dir, "base_profile_result.json")
+        else:
+            logger.info(f"[{op_name}: {task_id}] 基准性能脚本不存在（跨后端场景），跳过 base profile")
 
         # 步骤2：运行生成代码性能测试脚本
         gen_script = f"profile_{op_name}_generation.py"
         gen_result = run_command(["python", gen_script], cmd_msg="generation_profile", timeout=300, cwd=verify_dir)
         if not gen_result[0]:
             logger.error(f"[{op_name}: {task_id}] 生成代码性能脚本执行失败: {gen_result[1]}")
-            return float('inf'), float('inf')
+            return base_time_us, float('inf')
 
         # 步骤3：从JSON文件读取性能数据
-        base_time_us = read_profile_result_from_json(verify_dir, "base_profile_result.json")
         gen_time_us = read_profile_result_from_json(verify_dir, "generation_profile_result.json")
         
         logger.info(f"[{op_name}: {task_id}] Read profile results: base={base_time_us:.2f} us, gen={gen_time_us:.2f} us")
