@@ -37,6 +37,14 @@ device_id = get_device_id()
     "set_mla_kv_buffer",
     "set_mla_kv_scale_buffer",
     "write_req_to_token_pool",
+    "triton_tanh",
+    "merge_state_kernel",
+    "prefill_attention_fwd_kernel",
+    "extend_attention_fwd_kernel",
+    "decode_attention_fwd_kernel_stage1",
+    "decode_attention_fwd_kernel_stage2",
+    "decode_grouped_attention_fwd_kernel_stage1",
+    "_fwd_grouped_kernel_stage1_rope",
 ])
 async def test_sglang_verifier_a100(op_name):
     framework = "torch"
