@@ -158,15 +158,15 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
+    
     dtype = torch.float16
     
     num_tokens = 64
     hidden_dim = 512
     top_k = 8
     
-    hidden_states = torch.randn(num_tokens, hidden_dim, dtype=dtype, device=device)
-    expert_scales = torch.randn(num_tokens, top_k, dtype=torch.float32, device=device).abs()
+    hidden_states = torch.randn(num_tokens, hidden_dim, dtype=dtype)
+    expert_scales = torch.randn(num_tokens, top_k, dtype=torch.float32).abs()
     # 归一化scales
     expert_scales = expert_scales / expert_scales.sum(dim=-1, keepdim=True)
     

@@ -201,7 +201,6 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
     dtype = torch.float16
     
     batch_size = 4
@@ -210,12 +209,12 @@ def get_inputs():
     num_slots = 128
     
     # vLLM期望q, k, v是4维的 [B, H, 1, D]
-    q = torch.randn(batch_size, num_heads, 1, head_dim, dtype=dtype, device=device)
-    k = torch.randn(batch_size, num_heads, 1, head_dim, dtype=dtype, device=device)
-    v = torch.randn(batch_size, num_heads, 1, head_dim, dtype=dtype, device=device)
-    kv_caches = torch.randn(num_slots, num_heads, head_dim, head_dim, dtype=dtype, device=device)
-    slope_rate = torch.randn(num_heads, dtype=torch.float32, device=device).abs()
-    slot_idx = torch.randint(0, num_slots, (batch_size,), dtype=torch.long, device=device)
+    q = torch.randn(batch_size, num_heads, 1, head_dim, dtype=dtype)
+    k = torch.randn(batch_size, num_heads, 1, head_dim, dtype=dtype)
+    v = torch.randn(batch_size, num_heads, 1, head_dim, dtype=dtype)
+    kv_caches = torch.randn(num_slots, num_heads, head_dim, head_dim, dtype=dtype)
+    slope_rate = torch.randn(num_heads, dtype=torch.float32).abs()
+    slot_idx = torch.randint(0, num_slots, (batch_size,), dtype=torch.long)
     
     return [q, k, v, kv_caches, slope_rate, slot_idx]
 

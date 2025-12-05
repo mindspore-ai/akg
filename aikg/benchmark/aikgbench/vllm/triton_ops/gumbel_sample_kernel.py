@@ -182,15 +182,14 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
     
     num_reqs = 8
     vocab_size = 32000
     
-    logits = torch.randn(num_reqs, vocab_size, dtype=torch.float32, device=device)
-    temperature = torch.ones(num_reqs, dtype=torch.float32, device=device)
-    seed = torch.randint(0, 2**31, (num_reqs,), dtype=torch.long, device=device)
-    pos = torch.randint(0, 1000, (num_reqs,), dtype=torch.long, device=device)
+    logits = torch.randn(num_reqs, vocab_size, dtype=torch.float32)
+    temperature = torch.ones(num_reqs, dtype=torch.float32)
+    seed = torch.randint(0, 2**31, (num_reqs,), dtype=torch.long)
+    pos = torch.randint(0, 1000, (num_reqs,), dtype=torch.long)
     apply_temperature = True
     
     return [logits, temperature, seed, pos, apply_temperature]

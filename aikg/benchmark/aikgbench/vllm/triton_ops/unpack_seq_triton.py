@@ -190,7 +190,6 @@ def get_inputs():
     # 基于测试文件: tests/kernels/attention/test_pack_unpack_triton.py
     # 使用测试用例: test_pack_unpack_roundtrip_fp8 中的一个典型case
     
-    device = "cuda"
     dtype = torch.float16  # 使用float16而不是float8以便更广泛兼容
     
     # B=4, Lmax=5, H=16, D=32, lengths=[5, 5, 5, 5]
@@ -201,8 +200,8 @@ def get_inputs():
     lengths_list = [5, 5, 5, 5]
     
     # 创建已打包的输入张量 [B, Lmax, H, D]
-    packed_tensor = torch.randn(B, Lmax, H, D, dtype=dtype, device=device)
-    lengths = torch.tensor(lengths_list, dtype=torch.int32, device=device)
+    packed_tensor = torch.randn(B, Lmax, H, D, dtype=dtype)
+    lengths = torch.tensor(lengths_list, dtype=torch.int32)
     
     return [packed_tensor, lengths]
 

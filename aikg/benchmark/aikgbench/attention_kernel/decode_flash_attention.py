@@ -288,19 +288,18 @@ def get_inputs():
     head_dim = 64
     gqa_group_size = 4
     dtype = torch.float32
-    device = "cuda"
     
     q = torch.randn(
         batch_size, num_heads_kv * gqa_group_size, 1, head_dim,
-        dtype=dtype, device=device
+        dtype=dtype
     )
     K = torch.randn(
         batch_size, num_heads_kv, seq_len, head_dim,
-        dtype=dtype, device=device
+        dtype=dtype
     )
     V = torch.randn(
         batch_size, num_heads_kv, seq_len, head_dim,
-        dtype=dtype, device=device
+        dtype=dtype
     )
     
     return [q, K, V, gqa_group_size]

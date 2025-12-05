@@ -153,20 +153,19 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
     
     num_reqs = 4
     max_num_reqs = 16
     num_tokens = 64
     max_prefill_len = 128
     
-    input_ids = torch.zeros(num_tokens, dtype=torch.int32, device=device)
-    next_prefill_tokens = torch.zeros(max_num_reqs, dtype=torch.int32, device=device)
-    idx_mapping = torch.arange(num_reqs, dtype=torch.int32, device=device)
-    query_start_loc = torch.tensor([0, 16, 32, 48, 64], dtype=torch.int32, device=device)
-    prefill_token_ids = torch.randint(0, 32000, (max_num_reqs, max_prefill_len), dtype=torch.int32, device=device)
-    prefill_len = torch.randint(50, 100, (max_num_reqs,), dtype=torch.int32, device=device)
-    num_computed_tokens = torch.randint(0, 20, (max_num_reqs,), dtype=torch.int32, device=device)
+    input_ids = torch.zeros(num_tokens, dtype=torch.int32)
+    next_prefill_tokens = torch.zeros(max_num_reqs, dtype=torch.int32)
+    idx_mapping = torch.arange(num_reqs, dtype=torch.int32)
+    query_start_loc = torch.tensor([0, 16, 32, 48, 64], dtype=torch.int32)
+    prefill_token_ids = torch.randint(0, 32000, (max_num_reqs, max_prefill_len), dtype=torch.int32)
+    prefill_len = torch.randint(50, 100, (max_num_reqs,), dtype=torch.int32)
+    num_computed_tokens = torch.randint(0, 20, (max_num_reqs,), dtype=torch.int32)
     
     return [input_ids, next_prefill_tokens, idx_mapping, query_start_loc, prefill_token_ids, prefill_len, num_computed_tokens]
 

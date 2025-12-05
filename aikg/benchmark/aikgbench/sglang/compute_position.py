@@ -89,8 +89,8 @@ def get_inputs():
     max_seq_len = 128
     dtype_int64 = torch.int64
 
-    extend_prefix_lens = torch.randint(0, 50, (batch_size,), dtype=dtype_int64, device='cuda')
-    extend_seq_lens = torch.randint(20, max_seq_len, (batch_size,), dtype=dtype_int64, device='cuda')
+    extend_prefix_lens = torch.randint(0, 50, (batch_size,), dtype=dtype_int64)
+    extend_seq_lens = torch.randint(20, max_seq_len, (batch_size,), dtype=dtype_int64)
 
     return [extend_prefix_lens, extend_seq_lens]
 

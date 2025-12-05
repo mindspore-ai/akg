@@ -222,7 +222,7 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
+    
     dtype = torch.float32
     
     batch_size = 8
@@ -230,9 +230,9 @@ def get_inputs():
     num_heads = 4
     head_k_dim = 64
     
-    g = torch.randn(batch_size, seq_len, num_heads * head_k_dim, dtype=dtype, device=device)
-    A = torch.randn(num_heads, dtype=dtype, device=device)
-    g_bias = torch.randn(num_heads * head_k_dim, dtype=dtype, device=device)
+    g = torch.randn(batch_size, seq_len, num_heads * head_k_dim, dtype=dtype)
+    A = torch.randn(num_heads, dtype=dtype)
+    g_bias = torch.randn(num_heads * head_k_dim, dtype=dtype)
     
     return [g, A, g_bias]
 

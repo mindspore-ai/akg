@@ -139,13 +139,12 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
     
     batch_size = 8
     vocab_size = 32000
     
-    logits = torch.randn(batch_size, vocab_size, dtype=torch.float32, device=device)
-    token_ids = torch.randint(0, vocab_size, (batch_size,), dtype=torch.long, device=device)
+    logits = torch.randn(batch_size, vocab_size, dtype=torch.float32)
+    token_ids = torch.randint(0, vocab_size, (batch_size,), dtype=torch.long)
     
     return [logits, token_ids]
 

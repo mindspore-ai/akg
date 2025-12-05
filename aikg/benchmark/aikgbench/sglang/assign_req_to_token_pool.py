@@ -92,14 +92,14 @@ def get_inputs():
     max_tokens_per_req = 64
     dtype = torch.int64
 
-    req_to_token = torch.zeros(batch_size, pool_len, dtype=dtype, device='cuda')
-    req_pool_indices = torch.arange(batch_size, dtype=dtype, device='cuda')
+    req_to_token = torch.zeros(batch_size, pool_len, dtype=dtype)
+    req_pool_indices = torch.arange(batch_size, dtype=dtype)
 
-    start_offset = torch.randint(0, 100, (batch_size,), dtype=dtype, device='cuda')
-    end_offset = start_offset + torch.randint(10, max_tokens_per_req, (batch_size,), dtype=dtype, device='cuda')
+    start_offset = torch.randint(0, 100, (batch_size,), dtype=dtype)
+    end_offset = start_offset + torch.randint(10, max_tokens_per_req, (batch_size,), dtype=dtype)
 
     total_tokens = (end_offset - start_offset).sum().item()
-    out_cache_loc = torch.randint(0, 10000, (total_tokens,), dtype=dtype, device='cuda')
+    out_cache_loc = torch.randint(0, 10000, (total_tokens,), dtype=dtype)
 
     return [req_pool_indices, req_to_token, start_offset, end_offset, out_cache_loc, batch_size]
 

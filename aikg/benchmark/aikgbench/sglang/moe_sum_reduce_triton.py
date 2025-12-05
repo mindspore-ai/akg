@@ -141,7 +141,7 @@ def get_inputs():
     input_tensor = torch.randn(
         (token_num, topk_num, hidden_dim),
         dtype=dtype,
-        device='cuda'
+        
     )
     routed_scaling_factor = 1.0 / topk_num
 

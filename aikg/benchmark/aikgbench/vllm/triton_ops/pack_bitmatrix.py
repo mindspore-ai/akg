@@ -188,7 +188,6 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
     
     # MoE场景：128行，8个专家，每行选top-2
     n_rows = 128
@@ -196,7 +195,7 @@ def get_inputs():
     n_experts = 8
     
     # topk_ids: [n_rows, topk] - 每行的top-k专家ID
-    topk_ids = torch.randint(0, n_experts, (n_rows, topk), dtype=torch.int64, device=device)
+    topk_ids = torch.randint(0, n_experts, (n_rows, topk), dtype=torch.int64)
     
     return [topk_ids, n_experts]
 

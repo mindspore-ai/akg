@@ -204,7 +204,7 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
+    
     dtype = torch.float16
     
     # 测试场景：计算序列维度的均值
@@ -212,7 +212,7 @@ def get_inputs():
     seq_len = 256
     hidden_size = 1024
     
-    input = torch.randn(batch_size, seq_len, hidden_size, dtype=dtype, device=device)
+    input = torch.randn(batch_size, seq_len, hidden_size, dtype=dtype)
     
     return [input]
 

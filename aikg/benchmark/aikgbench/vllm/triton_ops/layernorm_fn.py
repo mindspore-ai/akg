@@ -213,7 +213,7 @@ def get_inputs():
     seq_len = 128
     hidden_size = 1024
     
-    x = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.float16, device="cuda")
+    x = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.float16)
     
     return [x]
 

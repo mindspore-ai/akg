@@ -146,17 +146,16 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
     
     num_reqs = 4
     max_num_reqs = 16
     num_tokens = 64
     
-    idx_mapping = torch.arange(num_reqs, dtype=torch.int32, device=device)
-    query_start_loc = torch.tensor([0, 16, 32, 48, 64], dtype=torch.int32, device=device)
-    num_computed_tokens = torch.randint(0, 50, (max_num_reqs,), dtype=torch.int32, device=device)
-    pos = torch.zeros(num_tokens, dtype=torch.int64, device=device)
-    seq_lens = torch.zeros(max_num_reqs, dtype=torch.int32, device=device)
+    idx_mapping = torch.arange(num_reqs, dtype=torch.int32)
+    query_start_loc = torch.tensor([0, 16, 32, 48, 64], dtype=torch.int32)
+    num_computed_tokens = torch.randint(0, 50, (max_num_reqs,), dtype=torch.int32)
+    pos = torch.zeros(num_tokens, dtype=torch.int64)
+    seq_lens = torch.zeros(max_num_reqs, dtype=torch.int32)
     
     return [idx_mapping, query_start_loc, num_computed_tokens, pos, seq_lens]
 

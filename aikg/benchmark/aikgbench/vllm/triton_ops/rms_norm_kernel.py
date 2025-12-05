@@ -161,7 +161,7 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
+    
     dtype = torch.float16
     
     # 典型场景
@@ -169,7 +169,7 @@ def get_inputs():
     seq_len = 128
     hidden_size = 4096
     
-    input = torch.randn(batch_size, seq_len, hidden_size, dtype=dtype, device=device)
+    input = torch.randn(batch_size, seq_len, hidden_size, dtype=dtype)
     
     return [input]
 

@@ -153,22 +153,22 @@ def get_inputs():
     prefix_output = torch.randn(
         (num_tokens, num_heads, head_size),
         dtype=dtype,
-        device='cuda'
+        
     )
     prefix_lse = torch.randn(
         (num_tokens, num_heads),
         dtype=torch.float32,
-        device='cuda'
+        
     )
     suffix_output = torch.randn(
         (num_tokens, num_heads, head_size),
         dtype=dtype,
-        device='cuda'
+        
     )
     suffix_lse = torch.randn(
         (num_tokens, num_heads),
         dtype=torch.float32,
-        device='cuda'
+        
     )
 
     return [prefix_output, prefix_lse, suffix_output, suffix_lse]

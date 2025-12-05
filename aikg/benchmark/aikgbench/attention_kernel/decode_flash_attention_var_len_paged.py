@@ -344,7 +344,6 @@ def get_inputs():
     """生成测试输入"""
     torch.manual_seed(42)
     
-    device = "cuda"
     dtype = torch.float32
     num_kv_heads = 2
     gqa_group_size = 2
@@ -356,14 +355,14 @@ def get_inputs():
     
     paged_kv_cache = torch.randn(
         max_num_pages, 2, num_kv_heads, page_size, head_dim,
-        device=device, dtype=dtype
+        dtype=dtype
     )
     
-    kv_page_indptr = torch.tensor([0, 4, 5, 8], dtype=torch.int32, device=device)
-    kv_page_indices = torch.tensor([0, 1, 3, 5, 2, 6, 7, 4], dtype=torch.int32, device=device)
-    kv_last_page_len = torch.tensor([2, 22, 3], dtype=torch.int32, device=device)
+    kv_page_indptr = torch.tensor([0, 4, 5, 8], dtype=torch.int32)
+    kv_page_indices = torch.tensor([0, 1, 3, 5, 2, 6, 7, 4], dtype=torch.int32)
+    kv_last_page_len = torch.tensor([2, 22, 3], dtype=torch.int32)
     
-    q = torch.randn(batch_size, num_qo_heads, 1, head_dim, device=device, dtype=dtype)
+    q = torch.randn(batch_size, num_qo_heads, 1, head_dim, dtype=dtype)
     
     return [q, paged_kv_cache, kv_page_indptr, kv_page_indices, kv_last_page_len]
 

@@ -131,8 +131,8 @@ def get_inputs():
     max_extend_len = 64
     dtype = torch.int64
 
-    req_to_token = torch.zeros(batch_size, max_context_len, dtype=dtype, device='cuda')
-    req_pool_indices = torch.arange(batch_size, dtype=dtype, device='cuda')
+    req_to_token = torch.zeros(batch_size, max_context_len, dtype=dtype)
+    req_pool_indices = torch.arange(batch_size, dtype=dtype)
 
     # Create prefix tensors for each request
     prefix_tensors_list = []
@@ -146,17 +146,17 @@ def get_inputs():
         extend_len = torch.randint(10, max_extend_len, (1,)).item()
         seq_len = prefix_len + extend_len
 
-        prefix_tensor = torch.randint(0, 1000, (prefix_len,), dtype=dtype, device='cuda')
+        prefix_tensor = torch.randint(0, 1000, (prefix_len,), dtype=dtype)
         prefix_tensors_list.append(prefix_tensor)
         prefix_lens_list.append(prefix_len)
         seq_lens_list.append(seq_len)
         extend_lens_list.append(extend_len)
         total_extend_tokens += extend_len
 
-    prefix_lens = torch.tensor(prefix_lens_list, dtype=dtype, device='cuda')
-    seq_lens = torch.tensor(seq_lens_list, dtype=dtype, device='cuda')
-    extend_lens = torch.tensor(extend_lens_list, dtype=dtype, device='cuda')
-    out_cache_loc = torch.randint(0, 10000, (total_extend_tokens,), dtype=dtype, device='cuda')
+    prefix_lens = torch.tensor(prefix_lens_list, dtype=dtype)
+    seq_lens = torch.tensor(seq_lens_list, dtype=dtype)
+    extend_lens = torch.tensor(extend_lens_list, dtype=dtype)
+    out_cache_loc = torch.randint(0, 10000, (total_extend_tokens,), dtype=dtype)
 
     return [req_to_token, req_pool_indices, prefix_tensors_list, prefix_lens,
             seq_lens, extend_lens, out_cache_loc]

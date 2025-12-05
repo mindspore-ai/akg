@@ -364,19 +364,18 @@ def get_inputs():
     gqa_group_size = 4
     causal = True
     dtype = torch.float32
-    device = "cuda"
     
     Q = torch.randn(
         batch_size, num_heads_kv * gqa_group_size, seq_len, head_dim,
-        dtype=dtype, device=device
+        dtype=dtype
     )
     K = torch.randn(
         batch_size, num_heads_kv, seq_len, head_dim,
-        dtype=dtype, device=device
+        dtype=dtype
     )
     V = torch.randn(
         batch_size, num_heads_kv, seq_len, head_dim,
-        dtype=dtype, device=device
+        dtype=dtype
     )
     
     return [Q, K, V, causal, gqa_group_size]

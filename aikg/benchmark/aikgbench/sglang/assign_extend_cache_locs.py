@@ -65,7 +65,6 @@ class Model(nn.Module):
         out_cache_loc = torch.empty(
             (batch_size * draft_token_num,),
             dtype=torch.int64,
-            device=device,
         )
         assign_extend_cache_locs_kernel[(batch_size,)](
             req_pool_indices,
@@ -98,11 +97,11 @@ def get_inputs():
     draft_token_num = 16
     dtype = torch.int64
 
-    req_to_token = torch.randint(0, 10000, (batch_size, pool_len), dtype=dtype, device='cuda')
-    req_pool_indices = torch.arange(batch_size, dtype=dtype, device='cuda')
+    req_to_token = torch.randint(0, 10000, (batch_size, pool_len), dtype=dtype)
+    req_pool_indices = torch.arange(batch_size, dtype=dtype)
 
-    start_offset = torch.randint(0, pool_len - draft_token_num, (batch_size,), dtype=dtype, device='cuda')
-    end_offset = start_offset + torch.randint(1, draft_token_num, (batch_size,), dtype=dtype, device='cuda')
+    start_offset = torch.randint(0, pool_len - draft_token_num, (batch_size,), dtype=dtype)
+    end_offset = start_offset + torch.randint(1, draft_token_num, (batch_size,), dtype=dtype)
 
     return [req_pool_indices, req_to_token, start_offset, end_offset, batch_size, draft_token_num]
 

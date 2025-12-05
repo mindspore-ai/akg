@@ -189,7 +189,6 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
     
     num_kv_cache_groups = 1
     num_reqs = 4
@@ -197,16 +196,16 @@ def get_inputs():
     max_num_blocks = 32
     num_new_blocks = 8
     
-    req_indices = torch.arange(num_reqs, dtype=torch.int32, device=device)
-    cu_num_new_blocks = torch.tensor([[0, 2, 4, 6, 8]], dtype=torch.int32, device=device)
-    new_block_ids = torch.randint(0, 1000, (num_kv_cache_groups, num_new_blocks), dtype=torch.int32, device=device)
-    overwrite = torch.tensor([False, False, False, False], dtype=torch.bool, device=device)
+    req_indices = torch.arange(num_reqs, dtype=torch.int32)
+    cu_num_new_blocks = torch.tensor([[0, 2, 4, 6, 8]], dtype=torch.int32)
+    new_block_ids = torch.randint(0, 1000, (num_kv_cache_groups, num_new_blocks), dtype=torch.int32)
+    overwrite = torch.tensor([False, False, False, False], dtype=torch.bool)
     
     # 创建块表
-    block_tables = torch.zeros(max_num_reqs, max_num_blocks, dtype=torch.int32, device=device)
-    block_table_ptrs = torch.tensor([block_tables.data_ptr()], dtype=torch.uint64, device=device)
-    block_table_strides = torch.tensor([block_tables.stride(0)], dtype=torch.int64, device=device)
-    num_blocks = torch.zeros(num_kv_cache_groups, max_num_reqs, dtype=torch.int32, device=device)
+    block_tables = torch.zeros(max_num_reqs, max_num_blocks, dtype=torch.int32)
+    block_table_ptrs = torch.tensor([block_tables.data_ptr()], dtype=torch.uint64)
+    block_table_strides = torch.tensor([block_tables.stride(0)], dtype=torch.int64)
+    num_blocks = torch.zeros(num_kv_cache_groups, max_num_reqs, dtype=torch.int32)
     
     # 返回block_tables作为最后一个参数
     return [req_indices, cu_num_new_blocks, new_block_ids, overwrite, block_table_strides, block_table_ptrs, num_blocks, block_tables]

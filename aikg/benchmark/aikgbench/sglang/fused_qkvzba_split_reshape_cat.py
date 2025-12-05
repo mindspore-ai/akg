@@ -169,8 +169,8 @@ def get_inputs():
     qkvz_dim = num_heads_qk * (head_qk * 2 + num_heads_v // num_heads_qk * head_v * 2)
     ba_dim = num_heads_qk * (num_heads_v // num_heads_qk * 2)
 
-    mixed_qkvz = torch.randn(batch, qkvz_dim, dtype=dtype, device='cuda')
-    mixed_ba = torch.randn(batch, ba_dim, dtype=dtype, device='cuda')
+    mixed_qkvz = torch.randn(batch, qkvz_dim, dtype=dtype)
+    mixed_ba = torch.randn(batch, ba_dim, dtype=dtype)
 
     return [mixed_qkvz, mixed_ba, num_heads_qk, num_heads_v, head_qk, head_v]
 

@@ -206,16 +206,16 @@ def get_inputs():
     block_size = 16
     num_blocks = 1024
     
-    key = torch.randn(num_tokens, num_heads, head_size, dtype=torch.bfloat16, device="cuda")
-    value = torch.randn(num_tokens, num_heads, head_size, dtype=torch.bfloat16, device="cuda")
-    key_cache = torch.zeros(num_blocks, block_size, num_heads, head_size, dtype=torch.bfloat16, device="cuda")
-    value_cache = torch.zeros(num_blocks, block_size, num_heads, head_size, dtype=torch.bfloat16, device="cuda")
+    key = torch.randn(num_tokens, num_heads, head_size, dtype=torch.bfloat16)
+    value = torch.randn(num_tokens, num_heads, head_size, dtype=torch.bfloat16)
+    key_cache = torch.zeros(num_blocks, block_size, num_heads, head_size, dtype=torch.bfloat16)
+    value_cache = torch.zeros(num_blocks, block_size, num_heads, head_size, dtype=torch.bfloat16)
     
     # 生成slot_mapping（每个token映射到cache中的一个slot）
-    slot_mapping = torch.randint(0, num_blocks * block_size, (num_tokens,), dtype=torch.int64, device="cuda")
+    slot_mapping = torch.randint(0, num_blocks * block_size, (num_tokens,), dtype=torch.int64)
     
-    k_scale = torch.tensor(1.0, dtype=torch.float32, device="cuda")
-    v_scale = torch.tensor(1.0, dtype=torch.float32, device="cuda")
+    k_scale = torch.tensor(1.0, dtype=torch.float32)
+    v_scale = torch.tensor(1.0, dtype=torch.float32)
     
     return [key, value, key_cache, value_cache, slot_mapping, k_scale, v_scale]
 

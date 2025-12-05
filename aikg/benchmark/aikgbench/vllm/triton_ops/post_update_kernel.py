@@ -162,21 +162,20 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
     
     num_reqs = 4
     max_num_reqs = 16
     vocab_size = 32000
     num_speculative_steps = 5
     
-    idx_mapping = torch.arange(num_reqs, dtype=torch.int32, device=device)
-    num_computed_tokens = torch.randint(0, 50, (max_num_reqs,), dtype=torch.int32, device=device)
-    last_sampled_tokens = torch.randint(0, vocab_size, (max_num_reqs,), dtype=torch.int32, device=device)
-    output_bin_counts = torch.zeros(max_num_reqs, vocab_size, dtype=torch.int32, device=device)
-    sampled_tokens = torch.randint(0, vocab_size, (num_reqs, num_speculative_steps + 1), dtype=torch.int32, device=device)
-    num_sampled = torch.randint(1, num_speculative_steps + 1, (num_reqs,), dtype=torch.int32, device=device)
-    num_rejected = torch.randint(0, 3, (num_reqs,), dtype=torch.int32, device=device)
-    query_start_loc = torch.tensor([0, 16, 32, 48, 64], dtype=torch.int32, device=device)
+    idx_mapping = torch.arange(num_reqs, dtype=torch.int32)
+    num_computed_tokens = torch.randint(0, 50, (max_num_reqs,), dtype=torch.int32)
+    last_sampled_tokens = torch.randint(0, vocab_size, (max_num_reqs,), dtype=torch.int32)
+    output_bin_counts = torch.zeros(max_num_reqs, vocab_size, dtype=torch.int32)
+    sampled_tokens = torch.randint(0, vocab_size, (num_reqs, num_speculative_steps + 1), dtype=torch.int32)
+    num_sampled = torch.randint(1, num_speculative_steps + 1, (num_reqs,), dtype=torch.int32)
+    num_rejected = torch.randint(0, 3, (num_reqs,), dtype=torch.int32)
+    query_start_loc = torch.tensor([0, 16, 32, 48, 64], dtype=torch.int32)
     
     return [idx_mapping, num_computed_tokens, last_sampled_tokens, output_bin_counts, sampled_tokens, num_sampled, num_rejected, query_start_loc]
 

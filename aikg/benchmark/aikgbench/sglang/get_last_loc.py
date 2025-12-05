@@ -77,9 +77,9 @@ def get_inputs():
     num_tokens = batch_size
     dtype = torch.int64
 
-    req_to_token = torch.randint(0, 1000, (batch_size, max_context_len), dtype=dtype, device='cuda')
-    req_pool_indices_tensor = torch.randint(0, batch_size, (num_tokens,), dtype=dtype, device='cuda')
-    prefix_lens_tensor = torch.randint(1, max_context_len, (num_tokens,), dtype=dtype, device='cuda')
+    req_to_token = torch.randint(0, 1000, (batch_size, max_context_len), dtype=dtype)
+    req_pool_indices_tensor = torch.randint(0, batch_size, (num_tokens,), dtype=dtype)
+    prefix_lens_tensor = torch.randint(1, max_context_len, (num_tokens,), dtype=dtype)
 
     return [req_to_token, req_pool_indices_tensor, prefix_lens_tensor]
 

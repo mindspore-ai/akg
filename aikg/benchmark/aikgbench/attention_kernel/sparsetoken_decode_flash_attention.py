@@ -264,7 +264,6 @@ def get_inputs():
     """生成测试输入"""
     torch.manual_seed(42)
     
-    device = "cuda"
     dtype = torch.float32
     num_kv_heads = 8
     gqa_group_size = 4
@@ -275,17 +274,17 @@ def get_inputs():
     kept_ratio = 0.02
     L_max = int(seq_len * (kept_ratio + 0.1))
     
-    q = torch.randn(batch_size, num_qo_heads, 1, head_dim, device=device, dtype=dtype)
-    K = torch.randn(batch_size, num_kv_heads, seq_len, head_dim, device=device, dtype=dtype)
-    V = torch.randn(batch_size, num_kv_heads, seq_len, head_dim, device=device, dtype=dtype)
+    q = torch.randn(batch_size, num_qo_heads, 1, head_dim, dtype=dtype)
+    K = torch.randn(batch_size, num_kv_heads, seq_len, head_dim, dtype=dtype)
+    V = torch.randn(batch_size, num_kv_heads, seq_len, head_dim, dtype=dtype)
     
     # 生成sparse indices
-    sparse_nnz = torch.zeros((batch_size, num_qo_heads, 1), dtype=torch.int32, device=device)
-    sparse_ind = torch.zeros((batch_size, num_qo_heads, L_max), dtype=torch.int32, device=device) - 1
+    sparse_nnz = torch.zeros((batch_size, num_qo_heads, 1), dtype=torch.int32)
+    sparse_ind = torch.zeros((batch_size, num_qo_heads, L_max), dtype=torch.int32) - 1
     
     for b in range(batch_size):
         for h in range(num_qo_heads):
-            sample_prob = torch.rand((seq_len,), device=device)
+            sample_prob = torch.rand((seq_len,))
             kept_mask = sample_prob < kept_ratio
             kept_nnz = kept_mask.sum().item()
             if kept_nnz == 0:

@@ -240,7 +240,7 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
+    
     dtype = torch.float16
     
     batch_size = 2
@@ -251,10 +251,10 @@ def get_inputs():
     block_size = 64
     num_blocks = triton.cdiv(seq_len, block_size)
     
-    query = torch.randn(batch_size, num_heads, seq_len, head_dim_qk, dtype=dtype, device=device)
-    output = torch.randn(batch_size, num_heads, seq_len, head_dim_v, dtype=dtype, device=device)
-    s = torch.randn(num_heads, dtype=torch.float32, device=device).abs()
-    kv = torch.randn(batch_size, num_heads, num_blocks, head_dim_qk, head_dim_v, dtype=dtype, device=device)
+    query = torch.randn(batch_size, num_heads, seq_len, head_dim_qk, dtype=dtype)
+    output = torch.randn(batch_size, num_heads, seq_len, head_dim_v, dtype=dtype)
+    s = torch.randn(num_heads, dtype=torch.float32).abs()
+    kv = torch.randn(batch_size, num_heads, num_blocks, head_dim_qk, head_dim_v, dtype=dtype)
     
     return [query, output, s, kv]
 

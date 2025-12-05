@@ -156,23 +156,22 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
     
     num_kv_cache_groups = 1
     num_reqs = 4
     max_num_reqs = 16
     max_num_blocks = 32
     
-    idx_mapping = torch.tensor([0, 2, 4, 6], dtype=torch.int64, device=device)
+    idx_mapping = torch.tensor([0, 2, 4, 6], dtype=torch.int64)
     
     # 创建源和目标块表
-    src_block_tables = torch.randint(0, 1000, (max_num_reqs, max_num_blocks), dtype=torch.int32, device=device)
-    dst_block_tables = torch.zeros(max_num_reqs, max_num_blocks, dtype=torch.int32, device=device)
+    src_block_tables = torch.randint(0, 1000, (max_num_reqs, max_num_blocks), dtype=torch.int32)
+    dst_block_tables = torch.zeros(max_num_reqs, max_num_blocks, dtype=torch.int32)
     
-    src_block_table_ptrs = torch.tensor([src_block_tables.data_ptr()], dtype=torch.uint64, device=device)
-    dst_block_table_ptrs = torch.tensor([dst_block_tables.data_ptr()], dtype=torch.uint64, device=device)
-    block_table_strides = torch.tensor([src_block_tables.stride(0)], dtype=torch.int64, device=device)
-    num_blocks = torch.randint(1, 16, (num_kv_cache_groups, max_num_reqs), dtype=torch.int32, device=device)
+    src_block_table_ptrs = torch.tensor([src_block_tables.data_ptr()], dtype=torch.uint64)
+    dst_block_table_ptrs = torch.tensor([dst_block_tables.data_ptr()], dtype=torch.uint64)
+    block_table_strides = torch.tensor([src_block_tables.stride(0)], dtype=torch.int64)
+    num_blocks = torch.randint(1, 16, (num_kv_cache_groups, max_num_reqs), dtype=torch.int32)
     
     # 返回dst_block_tables作为最后一个参数
     return [idx_mapping, src_block_table_ptrs, dst_block_table_ptrs, block_table_strides, num_blocks, dst_block_tables]

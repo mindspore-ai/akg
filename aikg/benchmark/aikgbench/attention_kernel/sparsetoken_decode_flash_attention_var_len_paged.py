@@ -320,7 +320,6 @@ def get_inputs():
     """生成测试输入"""
     torch.manual_seed(42)
     
-    device = "cuda"
     dtype = torch.float32
     num_kv_heads = 8
     gqa_group_size = 4
@@ -333,23 +332,23 @@ def get_inputs():
     
     paged_kv_cache = torch.randn(
         max_num_pages, 2, num_kv_heads, page_size, head_dim,
-        device=device, dtype=dtype
+        dtype=dtype
     )
     
-    kv_page_indptr = torch.tensor([0, 3, 7], dtype=torch.int32, device=device)
-    kv_page_indices = torch.tensor([0, 1, 2, 5, 6, 7, 8], dtype=torch.int32, device=device)
+    kv_page_indptr = torch.tensor([0, 3, 7], dtype=torch.int32)
+    kv_page_indices = torch.tensor([0, 1, 2, 5, 6, 7, 8], dtype=torch.int32)
     
-    q = torch.randn(batch_size, num_qo_heads, 1, head_dim, device=device, dtype=dtype)
+    q = torch.randn(batch_size, num_qo_heads, 1, head_dim, dtype=dtype)
     
     # 生成sparse indices
     total_tokens = page_size * 4  # 假设每个batch有4个pages的tokens
     L_max = int(total_tokens * (kept_ratio + 0.1))
-    sparse_nnz = torch.zeros((batch_size, num_qo_heads), dtype=torch.int32, device=device)
-    sparse_ind = torch.zeros((batch_size, num_qo_heads, L_max), dtype=torch.int32, device=device) - 1
+    sparse_nnz = torch.zeros((batch_size, num_qo_heads), dtype=torch.int32)
+    sparse_ind = torch.zeros((batch_size, num_qo_heads, L_max), dtype=torch.int32) - 1
     
     for b in range(batch_size):
         for h in range(num_qo_heads):
-            sample_prob = torch.rand((total_tokens,), device=device)
+            sample_prob = torch.rand((total_tokens,))
             kept_mask = sample_prob < kept_ratio
             kept_nnz = kept_mask.sum().item()
             if kept_nnz == 0:

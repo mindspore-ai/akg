@@ -218,7 +218,7 @@ def get_inputs():
 
     # Generate random expert assignments
     topk_ids = torch.argsort(
-        torch.rand(num_tokens, num_experts + 1, device='cuda'),
+        torch.rand(num_tokens, num_experts + 1),
         dim=1
     )[:, :topk].contiguous().flatten().to(torch.int32)
 

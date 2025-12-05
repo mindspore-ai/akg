@@ -283,7 +283,7 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
+    
     dtype = torch.float16
     
     # 基于tests/kernels/attention/test_lightning_attn.py
@@ -293,10 +293,10 @@ def get_inputs():
     head_dim_qk = 64
     head_dim_v = 64
     
-    query = torch.randn(batch_size, num_heads, seq_len, head_dim_qk, dtype=dtype, device=device)
-    key = torch.randn(batch_size, num_heads, seq_len, head_dim_qk, dtype=dtype, device=device)
-    value = torch.randn(batch_size, num_heads, seq_len, head_dim_v, dtype=dtype, device=device)
-    s = torch.randn(num_heads, dtype=torch.float32, device=device).abs()  # 衰减率为正
+    query = torch.randn(batch_size, num_heads, seq_len, head_dim_qk, dtype=dtype)
+    key = torch.randn(batch_size, num_heads, seq_len, head_dim_qk, dtype=dtype)
+    value = torch.randn(batch_size, num_heads, seq_len, head_dim_v, dtype=dtype)
+    s = torch.randn(num_heads, dtype=torch.float32).abs()  # 衰减率为正
     
     return [query, key, value, s]
 

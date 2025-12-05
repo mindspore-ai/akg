@@ -162,7 +162,7 @@ def get_inputs():
     for i in range(num_layers):
         # Create buffer as uint8 tensor (byte buffer) on CUDA
         buffer_size = max_cache_slots * stride_per_layer
-        kv_cache = torch.zeros(buffer_size, dtype=torch.uint8, device='cuda')
+        kv_cache = torch.zeros(buffer_size, dtype=torch.uint8)
         kv_caches.append(kv_cache)
         # Get the data pointer of this buffer
         data_ptrs[i] = kv_cache.data_ptr()

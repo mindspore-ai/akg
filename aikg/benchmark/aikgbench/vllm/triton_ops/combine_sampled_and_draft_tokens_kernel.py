@@ -190,7 +190,6 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
     
     num_reqs = 4
     max_num_reqs = 16
@@ -198,14 +197,14 @@ def get_inputs():
     num_speculative_steps = 5
     num_logits = num_reqs * (num_speculative_steps + 1)
     
-    input_ids = torch.zeros(num_tokens, dtype=torch.int32, device=device)
-    idx_mapping = torch.arange(num_reqs, dtype=torch.int32, device=device)
-    last_sampled_tokens = torch.randint(0, 32000, (max_num_reqs,), dtype=torch.int32, device=device)
-    query_start_loc = torch.tensor([0, 16, 32, 48, 64], dtype=torch.int32, device=device)
-    seq_lens = torch.randint(60, 100, (num_reqs,), dtype=torch.int32, device=device)
-    prefill_len = torch.randint(50, 80, (max_num_reqs,), dtype=torch.int32, device=device)
-    draft_tokens = torch.randint(0, 32000, (max_num_reqs, num_speculative_steps), dtype=torch.int32, device=device)
-    cu_num_logits = torch.arange(0, num_logits + 1, num_speculative_steps + 1, dtype=torch.int32, device=device)
+    input_ids = torch.zeros(num_tokens, dtype=torch.int32)
+    idx_mapping = torch.arange(num_reqs, dtype=torch.int32)
+    last_sampled_tokens = torch.randint(0, 32000, (max_num_reqs,), dtype=torch.int32)
+    query_start_loc = torch.tensor([0, 16, 32, 48, 64], dtype=torch.int32)
+    seq_lens = torch.randint(60, 100, (num_reqs,), dtype=torch.int32)
+    prefill_len = torch.randint(50, 80, (max_num_reqs,), dtype=torch.int32)
+    draft_tokens = torch.randint(0, 32000, (max_num_reqs, num_speculative_steps), dtype=torch.int32)
+    cu_num_logits = torch.arange(0, num_logits + 1, num_speculative_steps + 1, dtype=torch.int32)
     
     return [input_ids, idx_mapping, last_sampled_tokens, query_start_loc, seq_lens, prefill_len, draft_tokens, cu_num_logits, num_logits]
 

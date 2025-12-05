@@ -209,10 +209,10 @@ def get_inputs():
     head_size = 128
     rotary_dim = 128
     
-    q = torch.randn(num_tokens, num_heads * head_size, dtype=torch.float16, device="cuda")
-    k = torch.randn(num_tokens, num_kv_heads * head_size, dtype=torch.float16, device="cuda")
-    cos = torch.randn(3, num_tokens, head_size // 2, dtype=torch.float32, device="cuda")
-    sin = torch.randn(3, num_tokens, head_size // 2, dtype=torch.float32, device="cuda")
+    q = torch.randn(num_tokens, num_heads * head_size, dtype=torch.float16)
+    k = torch.randn(num_tokens, num_kv_heads * head_size, dtype=torch.float16)
+    cos = torch.randn(3, num_tokens, head_size // 2, dtype=torch.float32)
+    sin = torch.randn(3, num_tokens, head_size // 2, dtype=torch.float32)
     
     return [q, k, cos, sin]
 

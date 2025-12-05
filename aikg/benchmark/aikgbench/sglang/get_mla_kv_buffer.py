@@ -93,10 +93,10 @@ def get_inputs():
     total_dim = nope_dim + rope_dim
     dtype = torch.float16
 
-    kv_buffer = torch.randn(buffer_size, total_dim, dtype=dtype, device='cuda')
-    loc = torch.randint(0, buffer_size, (n_loc,), dtype=torch.int64, device='cuda')
-    cache_k_nope = torch.empty(n_loc, nope_dim, dtype=dtype, device='cuda')
-    cache_k_rope = torch.empty(n_loc, rope_dim, dtype=dtype, device='cuda')
+    kv_buffer = torch.randn(buffer_size, total_dim, dtype=dtype)
+    loc = torch.randint(0, buffer_size, (n_loc,), dtype=torch.int64)
+    cache_k_nope = torch.empty(n_loc, nope_dim, dtype=dtype)
+    cache_k_rope = torch.empty(n_loc, rope_dim, dtype=dtype)
 
     return [kv_buffer, loc, cache_k_nope, cache_k_rope]
 

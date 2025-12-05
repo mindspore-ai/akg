@@ -150,7 +150,7 @@ class ModelVLLM(nn.Module):
 
 def get_inputs():
     """生成测试输入"""
-    device = "cuda"
+    
     dtype = torch.int64
     
     # MoE场景：8个专家，128个token，每个token选择top-2专家
@@ -160,7 +160,7 @@ def get_inputs():
     
     # topk_ids: [num_tokens * topk] - 每个token的top-k专家ID
     # 随机分配专家，范围0-7
-    topk_ids = torch.randint(0, num_experts, (num_tokens * topk,), dtype=dtype, device=device)
+    topk_ids = torch.randint(0, num_experts, (num_tokens * topk,), dtype=dtype)
     
     # 不使用expert_map（简单场景）
     num_local_experts = num_experts
