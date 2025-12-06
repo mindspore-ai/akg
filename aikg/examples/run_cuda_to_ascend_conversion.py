@@ -262,9 +262,9 @@ async def run_direct_with_workers(num_concurrent: int = 4, task_desc_dir: str = 
             arch="a100",
             worker_url=cuda_worker_url
         )
-        print(f"  ✓ CUDA Worker 注册成功")
+        print(f"  [OK] CUDA Worker 注册成功")
     except Exception as e:
-        print(f"  ✗ CUDA Worker 注册失败: {e}")
+        print(f"  [FAIL] CUDA Worker 注册失败: {e}")
         return
     
     try:
@@ -273,9 +273,9 @@ async def run_direct_with_workers(num_concurrent: int = 4, task_desc_dir: str = 
             arch="ascend910b4",
             worker_url=ascend_worker_url
         )
-        print(f"  ✓ Ascend Worker 注册成功")
+        print(f"  [OK] Ascend Worker 注册成功")
     except Exception as e:
-        print(f"  ✗ Ascend Worker 注册失败: {e}")
+        print(f"  [FAIL] Ascend Worker 注册失败: {e}")
         return
     
     worker_manager = get_worker_manager()
@@ -296,7 +296,7 @@ async def run_direct_with_workers(num_concurrent: int = 4, task_desc_dir: str = 
         
         cuda_worker = await worker_manager.select(backend="cuda", arch="a100")
         if not cuda_worker:
-            print("  ✗ 无法获取 CUDA Worker")
+            print("  [FAIL] 无法获取 CUDA Worker")
             all_results.append((op_name, False, {"error": "无法获取 CUDA Worker"}))
             continue
         
@@ -316,12 +316,12 @@ async def run_direct_with_workers(num_concurrent: int = 4, task_desc_dir: str = 
             success, log, ref_bytes = await verifier.generate_reference_data(task_desc, timeout=120)
             
             if not success:
-                print(f"  ✗ 参考数据生成失败:")
+                print(f"  [FAIL] 参考数据生成失败:")
                 print(log)
                 all_results.append((op_name, False, {"error": log}))
                 continue
             
-            print(f"  ✓ 参考数据生成成功 ({len(ref_bytes)} bytes)")
+            print(f"  [OK] 参考数据生成成功 ({len(ref_bytes)} bytes)")
         finally:
             await worker_manager.release(cuda_worker)
         
@@ -398,13 +398,14 @@ async def run_quick_verify():
     快速验证模式：测试参考数据生成、传输和性能测试
     
     流程：
-    1. CUDA Worker 生成参考数据 (.pt) 并进行性能测试（profile_single_task 单独测量执行时间）
+    1. CUDA Worker 生成参考数据 (.pt) 并进行性能测试（复用 cross_platform.generate_reference_with_profile）
     2. 传输 .pt 到 Ascend Worker
-    3. Ascend Worker 执行验证（使用 NPU 实现代码）并进行性能测试（run_profile generation only，跳过 base）
+    3. Ascend Worker 执行验证（使用 NPU 实现代码）并进行性能测试
     """
     from ai_kernel_generator.config.config_validator import load_config
     from ai_kernel_generator.core.worker.manager import register_remote_worker, get_worker_manager
     from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
+    from ai_kernel_generator.utils.cross_platform import generate_reference_with_profile
     
     op_name = get_op_name()
     task_desc = get_task_desc()
@@ -429,9 +430,9 @@ async def run_quick_verify():
             arch="a100",
             worker_url=cuda_worker_url
         )
-        print(f"  ✓ CUDA Worker 注册成功")
+        print(f"  [OK] CUDA Worker 注册成功")
     except Exception as e:
-        print(f"  ✗ CUDA Worker 注册失败: {e}")
+        print(f"  [FAIL] CUDA Worker 注册失败: {e}")
         return False
     
     try:
@@ -440,86 +441,54 @@ async def run_quick_verify():
             arch="ascend910b4",
             worker_url=ascend_worker_url
         )
-        print(f"  ✓ Ascend Worker 注册成功")
+        print(f"  [OK] Ascend Worker 注册成功")
     except Exception as e:
-        print(f"  ✗ Ascend Worker 注册失败: {e}")
+        print(f"  [FAIL] Ascend Worker 注册失败: {e}")
         return False
     
     worker_manager = get_worker_manager()
     print()
     
-    # ========== 2. CUDA Worker 生成参考数据 ==========
-    print("[Step 2] CUDA Worker 生成参考数据...")
-    
-    cuda_config = load_config("triton_cuda", backend="cuda")
+    # ========== 2. CUDA Worker 生成参考数据 + 性能测试 ==========
+    print("[Step 2] CUDA Worker 生成参考数据并测量性能...")
+    print("  (复用 cross_platform.generate_reference_with_profile)")
     
     cuda_worker = await worker_manager.select(backend="cuda", arch="a100")
     if not cuda_worker:
-        print("  ✗ 无法获取 CUDA Worker")
+        print("  [FAIL] 无法获取 CUDA Worker")
         return False
     
-    cuda_profile_result = None
+    cuda_time = None
     try:
-        verifier = KernelVerifier(
+        # 复用 cross_platform 模块的函数
+        result = await generate_reference_with_profile(
             op_name=op_name,
-            framework_code=task_desc,
-            task_id="quick_verify_001",
-            framework="torch",
+            task_desc=task_desc,
+            worker=cuda_worker,
             dsl="triton_cuda",
             backend="cuda",
             arch="a100",
-            config=cuda_config,
-            worker=cuda_worker
+            framework="torch",
+            task_id="quick_verify_001",
+            warmup_times=5,
+            run_times=50,
+            timeout=180
         )
         
-        success, log, ref_bytes = await verifier.generate_reference_data(task_desc, timeout=120)
-        
-        if not success:
-            print(f"  ✗ 参考数据生成失败:")
-            print(log)
+        if not result.success:
+            print(f"  [FAIL] 参考数据生成失败: {result.log}")
             return False
         
-        print(f"  ✓ 参考数据生成成功 ({len(ref_bytes)} bytes)")
+        ref_bytes = result.reference_bytes
+        cuda_time = result.kernel_time_us
         
-        # 解析并显示参考数据信息
-        import tempfile
-        import torch
-        with tempfile.NamedTemporaryFile(suffix='.pt', delete=False) as f:
-            f.write(ref_bytes)
-            temp_path = f.name
-        
-        try:
-            ref_data = torch.load(temp_path)
-            outputs = ref_data.get('outputs', [])
-            print(f"    种子: {ref_data.get('seed', 'unknown')}")
-            print(f"    输出数量: {len(outputs)} {'(多输出)' if len(outputs) > 1 else ''}")
-            for i, out in enumerate(outputs):
-                if hasattr(out, 'shape'):
-                    print(f"    输出[{i}]: shape={out.shape}, dtype={out.dtype}")
-        finally:
-            os.unlink(temp_path)
-        
-        # ========== 2.1 CUDA Worker 性能测试（使用 profile_single_task）==========
-        print()
-        print("[Step 2.1] CUDA Worker 性能测试（profile_single_task）...")
-        
-        try:
-            cuda_profile_result = await verifier.profile_single_task(
-                task_desc,
-                warmup_times=5,
-                run_times=50,
-                timeout=300
-            )
-            
-            if cuda_profile_result.get('success', False):
-                time_us = cuda_profile_result.get('time_us', float('inf'))
-                print(f"  ✓ CUDA 性能测试完成")
-                print(f"    执行时间: {time_us:.2f} us")
-            else:
-                print(f"  ⚠ CUDA 性能测试失败:")
-                print(f"    {cuda_profile_result.get('log', 'Unknown error')}")
-        except Exception as e:
-            print(f"  ⚠ CUDA 性能测试异常: {e}")
+        print(f"  [OK] 参考数据生成成功 ({len(ref_bytes)} bytes)")
+        print(f"    输出数量: {result.output_count}")
+        if cuda_time > 0:
+            print(f"  [OK] GPU Kernel 性能测量完成")
+            print(f"    执行时间: {cuda_time:.2f} us")
+        else:
+            print(f"  [WARN] GPU Kernel 性能测量失败")
             
     finally:
         await worker_manager.release(cuda_worker)
@@ -537,13 +506,12 @@ async def run_quick_verify():
     
     ascend_worker = await worker_manager.select(backend="ascend", arch="ascend910b4")
     if not ascend_worker:
-        print("  ✗ 无法获取 Ascend Worker")
+        print("  [FAIL] 无法获取 Ascend Worker")
         return False
     
-    ascend_profile_result = None
+    ascend_time = None
     try:
         # 创建一个简单的验证：使用 PyTorch 原始代码作为 impl
-        # 这里只是验证参考数据传输和加载是否正常
         verifier = KernelVerifier(
             op_name=op_name,
             framework_code=task_desc,
@@ -557,7 +525,6 @@ async def run_quick_verify():
         )
         
         # 构造 task_info，使用 PyTorch 代码作为 impl（只是为了验证流程）
-        # 这里的 coder_code 是一个简单的透传实现，用于验证参考数据传输
         simple_impl_code = get_npu_impl_code()
         task_info = {'coder_code': simple_impl_code}
         
@@ -565,41 +532,33 @@ async def run_quick_verify():
         verify_result, verify_log = await verifier.run(task_info, current_step=0)
         
         if verify_result:
-            print("  ✓ Ascend Worker 验证成功！")
+            print("  [OK] Ascend Worker 验证成功")
             print("    参考数据传输和加载正常")
         else:
-            print("  ✗ Ascend Worker 验证失败:")
+            print("  [FAIL] Ascend Worker 验证失败:")
             print(verify_log)
             return False
         
-        # ========== 3.1 Ascend Worker 性能测试（使用 run_profile）==========
+        # ========== 3.1 Ascend Worker 性能测试 ==========
         print()
-        print("[Step 3.1] Ascend Worker 性能测试（run_profile generation only）...")
+        print("[Step 3.1] Ascend Worker 性能测试...")
         
-        # 使用 run_profile 测量生成代码性能
-        # 由于 config 中设置了 use_reference_data=True，会自动跳过 base profile
-        # 只测量 generation（ModelNew）的性能
         try:
             ascend_profile_result = await verifier.run_profile(
-                task_info,  # 复用验证时的 task_info（包含 coder_code）
+                task_info,
                 current_step=0,
                 profile_settings={'warmup_times': 5, 'run_times': 50}
             )
             
             gen_time = ascend_profile_result.get('gen_time')
-            if gen_time is not None:
-                print(f"  ✓ Ascend 性能测试完成")
-                print(f"    执行时间: {gen_time:.2f} us")
-                # 将结果格式调整为与 profile_single_task 一致，方便后续汇总
-                ascend_profile_result['time_us'] = gen_time
-                ascend_profile_result['success'] = True
+            if gen_time is not None and gen_time != float('inf'):
+                ascend_time = gen_time
+                print(f"  [OK] Ascend 性能测试完成")
+                print(f"    执行时间: {ascend_time:.2f} us")
             else:
-                print(f"  ⚠ Ascend 性能测试失败:")
-                print(f"    gen_time=None")
-                ascend_profile_result['success'] = False
+                print(f"  [WARN] Ascend 性能测试失败")
         except Exception as e:
-            print(f"  ⚠ Ascend 性能测试异常: {e}")
-            ascend_profile_result = {'success': False}
+            print(f"  [WARN] Ascend 性能测试异常: {e}")
             
     finally:
         await worker_manager.release(ascend_worker)
@@ -615,33 +574,22 @@ async def run_quick_verify():
     print("性能测试汇总")
     print("=" * 60)
     
-    cuda_time = None
-    ascend_time = None
-    
-    if cuda_profile_result and cuda_profile_result.get('success', False):
-        cuda_time = cuda_profile_result.get('time_us')
-        if cuda_time is not None:
-            print(f"[GPU - CUDA a100]")
-            print(f"  执行时间: {cuda_time:.2f} us")
-        else:
-            print(f"[GPU - CUDA a100] 未获取到性能数据")
+    if cuda_time is not None and cuda_time > 0:
+        print(f"[GPU - CUDA a100]")
+        print(f"  执行时间: {cuda_time:.2f} us")
     else:
         print(f"[GPU - CUDA a100] 未获取到性能数据")
     
     print()
     
-    if ascend_profile_result and ascend_profile_result.get('success', False):
-        ascend_time = ascend_profile_result.get('time_us')
-        if ascend_time is not None:
-            print(f"[NPU - Ascend 910b4]")
-            print(f"  执行时间: {ascend_time:.2f} us")
-        else:
-            print(f"[NPU - Ascend 910b4] 未获取到性能数据")
+    if ascend_time is not None and ascend_time > 0:
+        print(f"[NPU - Ascend 910b4]")
+        print(f"  执行时间: {ascend_time:.2f} us")
     else:
         print(f"[NPU - Ascend 910b4] 未获取到性能数据")
     
     # 计算性能对比
-    if cuda_time is not None and ascend_time is not None:
+    if cuda_time is not None and cuda_time > 0 and ascend_time is not None and ascend_time > 0:
         print()
         print("-" * 40)
         ratio = cuda_time / ascend_time
