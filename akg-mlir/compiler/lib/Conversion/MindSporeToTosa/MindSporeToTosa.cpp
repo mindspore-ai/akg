@@ -20,6 +20,7 @@
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Tosa/Utils/ConversionUtils.h"
@@ -41,9 +42,7 @@ namespace mlir {
 #endif
 }  // namespace mlir
 
-using namespace mlir;
-using namespace mlir::mindspore;
-
+namespace mlir {
 class ConvertMindSporeConcatOp : public OpRewritePattern<mindspore::ConcatOp> {
  public:
   using OpRewritePattern<mindspore::ConcatOp>::OpRewritePattern;
@@ -190,17 +189,16 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<SourceOp> {
 
     // create one tosa.reduce operation for each axis
     for (int64_t i = 0; i < adaptor.getAxisAttr().size(); i++) {
-      int64_t axis = (int64_t)adaptor.getAxisAttr()[(unsigned long)i];
-      reduce_output_shape[(unsigned long)axis] = (int64_t)1;
+      int64_t axis = (int64_t)adaptor.getAxisAttr()[i];
+      reduce_output_shape[axis] = 1;
       auto reduce_inter_tensor = RankedTensorType::get(reduce_output_shape, resultElementTy);
       llvm::SmallVector<NamedAttribute> attrs_once;
       (void)attrs_once.emplace_back(
         NamedAttribute(StringAttr::get(context, "axis"), IntegerAttr::get(rewriter.getI64Type(), axis)));
       (void)attrs_once.emplace_back(NamedAttribute(StringAttr::get(context, "keepdims"), keepdims_attr));
       if (sym_shape) {
-        (*sym_shape)[(unsigned long)axis] = "1";
-        reduce_inter_tensor =
-          dyn_cast<RankedTensorType>(analysis.updateSymbolicShape(reduce_inter_tensor, *sym_shape));
+        (*sym_shape)[axis] = "1";
+        reduce_inter_tensor = dyn_cast<RankedTensorType>(analysis.updateSymbolicShape(reduce_inter_tensor, *sym_shape));
       }
       auto reduce_op_once = rewriter.create<TargetOp>(loc, reduce_inter_tensor, opnd, attrs_once);
       opnd = reduce_op_once.getResult();
@@ -284,12 +282,8 @@ std::optional<Value> getConstTensor(PatternRewriter &rewriter, Operation *op, co
 template <>
 std::optional<Value> getConstTensor<float>(PatternRewriter &rewriter, Operation *op, const ArrayRef<float> vec,
                                            ArrayRef<int64_t> shape) {
-  uint64_t elemNum = 1;
-  for (int64_t a : shape) {
-    elemNum *= (uint64_t)a;
-  }
-
-  if (vec.size() != elemNum) {
+  int64_t elemNum = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int64_t>());
+  if (vec.size() != (uint64_t)elemNum) {
     (void)op->emitOpError("getConstTensor(): number of elements mismatch.");
     return std::nullopt;
   }
@@ -348,13 +342,13 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
     // Initialize all the tensor dim padding with 0;
     SmallVector<int64_t> lowPadding(rank, 0);
     SmallVector<int64_t> highPadding(rank, 0);
-    for (unsigned int i = 0; i < padRank; i++) {
-      lowPadding[(unsigned long)rank - i - 1] = padInts[i * doubleSize];
-      highPadding[(unsigned long)rank - i - 1] = padInts[i * doubleSize + 1];
+    for (uint64_t i = 0; i < padRank; i++) {
+      lowPadding[rank - i - 1] = padInts[i * doubleSize];
+      highPadding[rank - i - 1] = padInts[i * doubleSize + 1];
     }
 
     SmallVector<int64_t> paddingList;
-    for (unsigned int i = 0; i < rank; i++) {
+    for (int64_t i = 0; i < rank; i++) {
       paddingList.push_back(lowPadding[i]);
       paddingList.push_back(highPadding[i]);
     }
@@ -510,6 +504,7 @@ struct ConvertMindSporeToTosaPass : public ConvertMindSporeToTosaBase<ConvertMin
   }
 };
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createMindSporeToTosaPass() {
+std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToTosaPass() {
   return std::make_unique<ConvertMindSporeToTosaPass>();
 }
+}  // namespace mlir

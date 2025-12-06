@@ -110,6 +110,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::affine::createTilingFuncPass());
 
     pm.nest<mlir::func::FuncOp>().addPass(mlir::createInsertLoadAndStorePass());
+    pm.nest<mlir::func::FuncOp>().addPass(mlir::createConvertAffineToSCFPass());
     pm.nest<mlir::func::FuncOp>().addPass(mlir::createLowerAffinePass());
   }
 }

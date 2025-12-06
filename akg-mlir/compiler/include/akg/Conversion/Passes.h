@@ -29,6 +29,7 @@
 #include "akg/Conversion/SCFToGPUExt/SCFToGPUPassExt.h"
 #include "akg/Conversion/TosaToLinalgUpdate/TosaMultiReduceToLinalg.h"
 #include "akg/Conversion/VectorTransferLower/VectorTransferLower.h"
+#include "akg/Conversion/AffineToSCF/AffineToSCF.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
