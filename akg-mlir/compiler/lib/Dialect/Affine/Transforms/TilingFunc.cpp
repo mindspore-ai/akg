@@ -130,25 +130,21 @@ class TilingBase {
     static_assert(kN >= 1, "host tiling function must return at least 1 result");
 
     auto origTy = originalKernel_.getFunctionType();
-    if (origTy.getNumResults() != 1) {
-      originalKernel_.emitError("expect exactly 1 result before rewriting");
-      return failure();
-    }
 
     SmallVector<Type> argTypes;
-    argTypes.reserve(origTy.getNumInputs() + 1);
+    argTypes.reserve(origTy.getNumInputs() + origTy.getNumResults());
     for (Type ty : origTy.getInputs()) {
       if (auto memrefType = dyn_cast<MemRefType>(ty)) {
         ty = RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
       }
       argTypes.push_back(ty);
     }
-
-    Type outTy = origTy.getResult(0);
-    if (auto memrefType = dyn_cast<MemRefType>(outTy)) {
-      outTy = RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
+    for (Type ty : origTy.getResults()) {
+      if (auto memrefType = dyn_cast<MemRefType>(ty)) {
+        ty = RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
+      }
+      argTypes.push_back(ty);
     }
-    argTypes.push_back(outTy);
 
     SmallVector<Type> resTypes;
     resTypes.reserve(kN);
@@ -163,12 +159,17 @@ class TilingBase {
     host->setAttr(mockattr::kHostFuncType, StringAttr::get(builder.getContext(), mockattr::kHostTilingFunction));
 
     unsigned nInputs = origTy.getNumInputs();
+    unsigned nResults = origTy.getNumResults();
+
     for (unsigned i = 0; i < nInputs; ++i) {
       host.setArgAttr(i, "hacc.arg_type", StringAttr::get(builder.getContext(), "input"));
       host.setArgAttr(i, "hacc.input_idx", builder.getI64IntegerAttr(i));
     }
-    host.setArgAttr(nInputs, "hacc.arg_type", StringAttr::get(builder.getContext(), "output"));
-    host.setArgAttr(nInputs, "hacc.output_idx", builder.getI64IntegerAttr(0));
+    for (unsigned i = 0; i < nResults; ++i) {
+      unsigned argIdx = nInputs + i;
+      host.setArgAttr(argIdx, "hacc.arg_type", StringAttr::get(builder.getContext(), "output"));
+      host.setArgAttr(argIdx, "hacc.output_idx", builder.getI64IntegerAttr(i));
+    }
 
     host.setResultAttr(0, "hacc.arg_type", StringAttr::get(builder.getContext(), "tiling_key"));
     for (unsigned i = 1; i < kN; ++i) {
@@ -188,15 +189,11 @@ class TilingBase {
     return success();
   }
 
-  LogicalResult collectDeviceSignature(func::FuncOp orig, SmallVector<Type> &devInputs, Type &outTy,
-                                       SmallVector<Type> &devResults) {
+  LogicalResult collectDeviceSignature(func::FuncOp orig, SmallVector<Type> &devInputs, SmallVector<Type> &devResults) {
     auto origTy = orig.getFunctionType();
-    if (origTy.getNumResults() != 1) {
-      orig.emitError("expect exactly 1 result");
-      return failure();
-    }
+
     devInputs.clear();
-    devInputs.reserve(origTy.getNumInputs() + 1);
+    devInputs.reserve(origTy.getNumInputs() + origTy.getNumResults());
 
     for (Type ty : origTy.getInputs()) {
       if (auto memrefType = dyn_cast<MemRefType>(ty)) {
@@ -204,26 +201,32 @@ class TilingBase {
       }
       devInputs.push_back(ty);
     }
-
-    outTy = origTy.getResult(0);
-    if (auto memrefType = dyn_cast<MemRefType>(outTy)) {
-      outTy = RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
+    for (Type ty : origTy.getResults()) {
+      if (auto memrefType = dyn_cast<MemRefType>(ty)) {
+        ty = RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
+      }
+      devInputs.push_back(ty);
     }
-    devInputs.push_back(outTy);
 
     devResults.clear();
-    devResults.push_back(outTy);
+    for (Type ty : origTy.getResults()) {
+      if (auto memrefType = dyn_cast<MemRefType>(ty)) {
+        ty = RankedTensorType::get(memrefType.getShape(), memrefType.getElementType());
+      }
+      devResults.push_back(ty);
+    }
     return success();
   }
 
-  void setHaccIOArgAttrs(func::FuncOp f, unsigned nInputs, OpBuilder &builder, bool isOutputOnLastArg) {
+  void setHaccIOArgAttrs(func::FuncOp f, unsigned nInputs, unsigned nOutputs, OpBuilder &builder) {
     for (unsigned i = 0; i < nInputs; ++i) {
       f.setArgAttr(i, "hacc.arg_type", StringAttr::get(builder.getContext(), "input"));
       f.setArgAttr(i, "hacc.input_idx", builder.getI64IntegerAttr(i));
     }
-    if (isOutputOnLastArg) {
-      f.setArgAttr(nInputs, "hacc.arg_type", StringAttr::get(builder.getContext(), "output"));
-      f.setArgAttr(nInputs, "hacc.output_idx", builder.getI64IntegerAttr(0));
+    for (unsigned i = 0; i < nOutputs; ++i) {
+      unsigned argIdx = nInputs + i;
+      f.setArgAttr(argIdx, "hacc.arg_type", StringAttr::get(builder.getContext(), "output"));
+      f.setArgAttr(argIdx, "hacc.output_idx", builder.getI64IntegerAttr(i));
     }
   }
 
@@ -231,8 +234,9 @@ class TilingBase {
                                            FunctionType origTy, unsigned blockDim, func::FuncOp hostTiling) {
     auto deviceFunc = builder.create<func::FuncOp>(loc, name, devTy);
     unsigned nInputs = origTy.getNumInputs();
+    unsigned nOutputs = origTy.getNumResults();
 
-    setHaccIOArgAttrs(deviceFunc, nInputs, builder, /*isOutputOnLastArg=*/true);
+    setHaccIOArgAttrs(deviceFunc, nInputs, nOutputs, builder);
 
     deviceFunc->setAttr(mockattr::kEnableAutoMarkBufferSize, builder.getUnitAttr());
     deviceFunc->setAttr(mockattr::kFunctionKind, StringAttr::get(builder.getContext(), mockattr::kDevice));
@@ -367,20 +371,20 @@ class TilingBase {
     replaceForInit(forOp, idx, outArg);
   }
 
-  Value cloneKernelBodyToDeviceFunc(func::FuncOp originalKernel, func::FuncOp deviceFunc, unsigned nInputs,
-                                    Value outArg) {
-    Value returned;
-    if (originalKernel.empty()) return returned;
+  SmallVector<Value> cloneKernelBodyToDeviceFunc(func::FuncOp originalKernel, func::FuncOp deviceFunc, unsigned nInputs,
+                                                 unsigned nOutputs, ArrayRef<Value> outArgs) {
+    SmallVector<Value> returnedValues;
+    if (originalKernel.empty()) return returnedValues;
 
     IRMapping map;
     Block &oldEntry = originalKernel.front();
 
-    unsigned argToMap = std::min<unsigned>(oldEntry.getNumArguments(), nInputs);
-    for (unsigned i = 0; i < argToMap; ++i) {
+    for (unsigned i = 0; i < std::min<unsigned>(oldEntry.getNumArguments(), nInputs); ++i) {
       map.map(oldEntry.getArgument(i), deviceFunc.getBody().front().getArgument(i));
     }
-    if (oldEntry.getNumArguments() > nInputs) {
-      map.map(oldEntry.getArgument(nInputs), outArg);
+
+    if (oldEntry.getNumArguments() > nInputs && !outArgs.empty()) {
+      map.map(oldEntry.getArgument(nInputs), outArgs[0]);
     }
 
     func::ReturnOp oldRet = nullptr;
@@ -397,11 +401,15 @@ class TilingBase {
     OpBuilder b = OpBuilder::atBlockEnd(&deviceFunc.getBody().front());
     for (Operation *op : toClone) b.clone(*op, map);
 
-    if (oldRet && oldRet.getNumOperands() == 1) {
-      Value mapped = map.lookupOrNull(oldRet.getOperand(0));
-      if (mapped) returned = mapped;
+    if (oldRet) {
+      unsigned numRet = oldRet.getNumOperands();
+      returnedValues.resize(numRet);
+      for (unsigned i = 0; i < numRet; ++i) {
+        Value mapped = map.lookupOrNull(oldRet.getOperand(i));
+        if (mapped) returnedValues[i] = mapped;
+      }
     }
-    return returned;
+    return returnedValues;
   }
 
   LogicalResult initTilingKernel(OpBuilder &builder) {
@@ -409,8 +417,7 @@ class TilingBase {
     builder.setInsertionPoint(originalKernel_);
 
     SmallVector<Type> devInputs, devResults;
-    Type outTy = nullptr;
-    if (failed(collectDeviceSignature(originalKernel_, devInputs, outTy, devResults))) return failure();
+    if (failed(collectDeviceSignature(originalKernel_, devInputs, devResults))) return failure();
 
     std::string name = kernelInfo_->baseKernelName + "_single_outlined_0_0_0";
     auto devTy = FunctionType::get(builder.getContext(), devInputs, devResults);
@@ -421,14 +428,28 @@ class TilingBase {
     Block *entry = deviceFunc.addEntryBlock();
     OpBuilder b = OpBuilder::atBlockEnd(entry);
     unsigned nInputs = origTy.getNumInputs();
-    Value outArg = entry->getArgument(nInputs);
+    unsigned nOutputs = origTy.getNumResults();
 
-    Value returned = cloneKernelBodyToDeviceFunc(originalKernel_, deviceFunc, nInputs, outArg);
+    SmallVector<Value> outArgs;
+    outArgs.reserve(nOutputs);
+    for (unsigned i = 0; i < nOutputs; ++i) {
+      outArgs.push_back(entry->getArgument(nInputs + i));
+    }
 
-    maybeRetargetForInitForDirectReturn(returned, outArg);
+    SmallVector<Value> returned = cloneKernelBodyToDeviceFunc(originalKernel_, deviceFunc, nInputs, nOutputs, outArgs);
 
-    Value finalReturn = returned ? returned : outArg;
-    b.create<func::ReturnOp>(deviceFunc.getLoc(), ValueRange{finalReturn});
+    SmallVector<Value> finalReturns;
+    finalReturns.reserve(nOutputs);
+    for (unsigned i = 0; i < nOutputs; ++i) {
+      Value ret = (i < returned.size()) ? returned[i] : Value();
+      Value outArg = (i < outArgs.size()) ? outArgs[i] : Value();
+      if (ret) {
+        maybeRetargetForInitForDirectReturn(ret, outArg);
+      }
+      finalReturns.push_back(ret ? ret : outArg);
+    }
+
+    b.create<func::ReturnOp>(deviceFunc.getLoc(), finalReturns);
     tilingKernel_ = deviceFunc;
 
     if (failed(createOrGetGetTilingStructSizeFunction(builder, deviceFunc))) return failure();
@@ -442,15 +463,29 @@ class TilingBase {
 
     auto oldTy = originalKernel_.getFunctionType();
     unsigned nInputs = oldTy.getNumInputs();
-    Type outTy = oldTy.getResult(0);
+    unsigned nOutputs = oldTy.getNumResults();
 
-    SmallVector<Type> newInputs(oldTy.getInputs().begin(), oldTy.getInputs().end());
-    newInputs.push_back(outTy);
-    SmallVector<Type> newResults = {outTy};
+    SmallVector<Type> newInputs;
+    newInputs.reserve(oldTy.getNumInputs() + oldTy.getNumResults());
+    {
+      auto in = oldTy.getInputs();
+      std::copy(in.begin(), in.end(), std::back_inserter(newInputs));
+    }
+    {
+      auto outs = oldTy.getResults();
+      std::copy(outs.begin(), outs.end(), std::back_inserter(newInputs));
+    }
+
+    SmallVector<Type> newResults;
+    newResults.reserve(oldTy.getNumResults());
+    {
+      auto outs = oldTy.getResults();
+      std::copy(outs.begin(), outs.end(), std::back_inserter(newResults));
+    }
 
     originalKernel_.setFunctionType(FunctionType::get(builder.getContext(), newInputs, newResults));
 
-    setHaccIOArgAttrs(originalKernel_, nInputs, builder, /*isOutputOnLastArg=*/true);
+    setHaccIOArgAttrs(originalKernel_, nInputs, nOutputs, builder);
 
     while (!originalKernel_.getBody().empty()) {
       originalKernel_.getBody().front().erase();
@@ -461,7 +496,7 @@ class TilingBase {
     Location loc = originalKernel_.getLoc();
 
     SmallVector<Value> passArgs(entry->args_begin(), entry->args_end());
-    auto call = b.create<func::CallOp>(loc, tilingKernel_.getSymName(), TypeRange{outTy}, passArgs);
+    auto call = b.create<func::CallOp>(loc, tilingKernel_.getSymName(), TypeRange(newResults), passArgs);
     b.create<func::ReturnOp>(loc, call.getResults());
 
     return success();
