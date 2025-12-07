@@ -12,10 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AIKG Agents module."""
+"""TaskInit Tools Package for AI Kernel Generator"""
 
-from ai_kernel_generator.core.agent.task_init_agent import TaskInitAgent
+from .taskinit import main as taskinit_main
 
-__all__ = [
-    "TaskInitAgent",
-]
+__all__ = ['taskinit_main']
