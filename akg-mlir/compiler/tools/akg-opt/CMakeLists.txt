@@ -25,6 +25,17 @@ set(LIBS
   ${conversion_libs}
   ${AKG_MLIR_LIBS}
   AKGLinalgPasses
+  BiShengIRDialectUtils
+  BiShengIRAnnotationDialect
+  BiShengIRHACCDialect
+  BiShengIRHFusionDialect
+  BiShengIRSymbolDialect
+  BiShengIRMathExtDialect
+  BiShengIRDialectUtils
+  BiShengIRTensorDialect
+  BiShengIRMemRefDialect
+  BiShengIRHIVMDialect
+  BiShengIRHIVMUtils
   MLIRAnalysis
   MLIRDialect
   MLIROptLib
@@ -37,9 +48,7 @@ set(LIBS
   MLIRMlirOptMain
   )
 
-link_directories(
-  ${AKG_MLIR_BIN_LIB_DIR}
-  ${BISHENG_IR_INSTALL_PATH}/lib)
+link_directories(${AKG_MLIR_BIN_LIB_DIR})
 
 add_executable(akg-opt akg-opt.cpp)
 add_dependencies(akg-opt ${LIBS})

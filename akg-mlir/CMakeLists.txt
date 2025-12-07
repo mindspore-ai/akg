@@ -97,7 +97,7 @@ set(LLVM_REQUIRES_RTTI ON)
 
 include(${CMAKE_SOURCE_DIR}/cmake/MLIR.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/glog.cmake)
-#include(${CMAKE_SOURCE_DIR}/cmake/external_libs/ascendnpu_ir.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/external_libs/ascendnpu_ir.cmake)
 
 set(JSON_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/JSON-for-Modern-CPP-v3.10.1.zip")
 
@@ -115,12 +115,12 @@ add_subdirectory(${AKG_MLIR_SOURCE_DIR}/include ${AKG_MLIR_BINARY_DIR}/include)
 add_subdirectory(${AKG_MLIR_SOURCE_DIR}/tools ${AKG_MLIR_BINARY_DIR}/tools)
 
 
-if (AKG_INCLUDE_TESTS)
+if(AKG_INCLUDE_TESTS)
   add_definitions(-DAKG_INCLUDE_TESTS)
 endif()
 
 # Build tests
-if (AKG_INCLUDE_TESTS)
+if(AKG_INCLUDE_TESTS)
   add_subdirectory(tests)
 endif()
 

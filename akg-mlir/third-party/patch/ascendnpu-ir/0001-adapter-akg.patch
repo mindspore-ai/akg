@@ -1,0 +1,397 @@
+From 2df014eabd4cb402b6b1593177946e493ab5b744 Mon Sep 17 00:00:00 2001
+From: liuchao <liuchao195@huawei.com>
+Date: Sun, 7 Dec 2025 18:45:35 +0800
+Subject: [PATCH] adapter akg
+
+---
+ CMakeLists.txt                                |  9 +-
+ bishengir/include/bishengir/CMakeLists.txt    | 10 +--
+ .../Dialect/Annotation/CMakeLists.txt         |  2 +-
+ .../include/bishengir/Dialect/CMakeLists.txt  |  8 +-
+ .../bishengir/Dialect/HACC/CMakeLists.txt     |  2 +-
+ .../bishengir/Dialect/HFusion/CMakeLists.txt  |  4 +-
+ .../bishengir/Dialect/HIVM/CMakeLists.txt     |  4 +-
+ .../bishengir/Dialect/MemRef/CMakeLists.txt   |  2 +-
+ .../Dialect/MemRef/IR/ExpandShapeUtils.h      | 89 +++++++++++++++++++
+ .../bishengir/Dialect/Symbol/CMakeLists.txt   |  2 +-
+ .../lib/Dialect/Annotation/CMakeLists.txt     |  2 +-
+ bishengir/lib/Dialect/HACC/CMakeLists.txt     |  4 +-
+ bishengir/lib/Dialect/HFusion/CMakeLists.txt  | 10 +--
+ bishengir/lib/Dialect/HIVM/CMakeLists.txt     |  8 +-
+ bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp |  4 +-
+ bishengir/lib/Dialect/HIVM/Utils/Utils.cpp    |  6 +-
+ bishengir/lib/Dialect/MemRef/CMakeLists.txt   |  2 +-
+ .../lib/Dialect/MemRef/IR/MemRefImpl.cpp      |  4 +-
+ bishengir/lib/Dialect/Symbol/CMakeLists.txt   |  4 +-
+ bishengir/lib/Dialect/Tensor/CMakeLists.txt   |  4 +-
+ 20 files changed, 134 insertions(+), 46 deletions(-)
+ create mode 100644 bishengir/include/bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2bbad54..e6bfa37 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,5 +1,5 @@
+ # BiShengIR Project.
+-cmake_minimum_required(VERSION 3.28.0)
++cmake_minimum_required(VERSION 3.14.0)
+ project(bishengir)
+
+ # bishengir-target-spec-tblgen related target has ninja version requirement
+@@ -123,11 +123,6 @@ if(BISHENGIR_ENABLE_TORCH_CONVERSIONS)
+   include_directories(${TORCH_MLIR_INCLUDE_DIRS})
+ endif()
+
+-if(MLIR_ENABLE_BINDINGS_PYTHON)
+-  include(MLIRDetectPythonEnv)
+-  mlir_configure_python_dev_packages()
+-endif()
+-
+ if(BISHENGIR_BUILD_EXAMPLES)
+   set(ASCEND_HOME_PATH $ENV{ASCEND_HOME_PATH}
+         CACHE STRING "Ascend CANN install path")
+@@ -173,6 +168,7 @@ if (BISHENGIR_BUILD_STANDALONE_IR_ONLY)
+   add_subdirectory(bishengir/include/bishengir/Interfaces)
+   set(STANDALONE_IR_BUILD_DIALECT
+   Annotation
++  HACC
+   HFusion
+   HIVM
+   MemRef
+@@ -188,6 +184,7 @@ if (BISHENGIR_BUILD_STANDALONE_IR_ONLY)
+   add_subdirectory(bishengir/include/bishengir/Dialect/MathExt)
+   add_subdirectory(bishengir/lib/Dialect/Math)
+   add_subdirectory(bishengir/lib/Dialect/Utils)
++  add_subdirectory(bishengir/lib/Dialect/HIVM/Utils)
+ else()
+   add_subdirectory(bishengir/include/bishengir)
+   add_subdirectory(bishengir/lib)
+diff --git a/bishengir/include/bishengir/CMakeLists.txt b/bishengir/include/bishengir/CMakeLists.txt
+index 8d16a4a..0ed288c 100644
+--- a/bishengir/include/bishengir/CMakeLists.txt
++++ b/bishengir/include/bishengir/CMakeLists.txt
+@@ -1,6 +1,6 @@
+-add_subdirectory(Conversion)
++#add_subdirectory(Conversion)
+ add_subdirectory(Dialect)
+-add_subdirectory(ExecutionEngine)
+-add_subdirectory(Interfaces)
+-add_subdirectory(Tools)
+-add_subdirectory(Transforms)
++#add_subdirectory(ExecutionEngine)
++#add_subdirectory(Interfaces)
++#add_subdirectory(Tools)
++#add_subdirectory(Transforms)
+diff --git a/bishengir/include/bishengir/Dialect/Annotation/CMakeLists.txt b/bishengir/include/bishengir/Dialect/Annotation/CMakeLists.txt
+index 9f57627..218c20c 100644
+--- a/bishengir/include/bishengir/Dialect/Annotation/CMakeLists.txt
++++ b/bishengir/include/bishengir/Dialect/Annotation/CMakeLists.txt
+@@ -1,2 +1,2 @@
+ add_subdirectory(IR)
+-add_subdirectory(Transforms)
++#add_subdirectory(Transforms)
+diff --git a/bishengir/include/bishengir/Dialect/CMakeLists.txt b/bishengir/include/bishengir/Dialect/CMakeLists.txt
+index 83e1673..6b436fe 100644
+--- a/bishengir/include/bishengir/Dialect/CMakeLists.txt
++++ b/bishengir/include/bishengir/Dialect/CMakeLists.txt
+@@ -3,12 +3,12 @@ add_subdirectory(HACC)
+ add_subdirectory(HFusion)
+ add_subdirectory(HIVM)
+ add_subdirectory(MathExt)
+-add_subdirectory(MemRef)
++#add_subdirectory(MemRef)
+ add_subdirectory(MemRefExt)
+-add_subdirectory(SCF)
++#add_subdirectory(SCF)
+ add_subdirectory(Symbol)
+-add_subdirectory(Tensor)
++#add_subdirectory(Tensor)
+
+ if(BISHENGIR_ENABLE_TORCH_CONVERSIONS)
+-  add_subdirectory(Torch)
++  #add_subdirectory(Torch)
+ endif()
+diff --git a/bishengir/include/bishengir/Dialect/HACC/CMakeLists.txt b/bishengir/include/bishengir/Dialect/HACC/CMakeLists.txt
+index c76ed85..fbd0621 100644
+--- a/bishengir/include/bishengir/Dialect/HACC/CMakeLists.txt
++++ b/bishengir/include/bishengir/Dialect/HACC/CMakeLists.txt
+@@ -1,3 +1,3 @@
+ add_subdirectory(IR)
+ add_subdirectory(Targets)
+-add_subdirectory(Transforms)
++#add_subdirectory(Transforms)
+diff --git a/bishengir/include/bishengir/Dialect/HFusion/CMakeLists.txt b/bishengir/include/bishengir/Dialect/HFusion/CMakeLists.txt
+index 660deb2..29ac6ff 100644
+--- a/bishengir/include/bishengir/Dialect/HFusion/CMakeLists.txt
++++ b/bishengir/include/bishengir/Dialect/HFusion/CMakeLists.txt
+@@ -1,3 +1,3 @@
+ add_subdirectory(IR)
+-add_subdirectory(TransformOps)
+-add_subdirectory(Transforms)
++#add_subdirectory(TransformOps)
++#add_subdirectory(Transforms)
+diff --git a/bishengir/include/bishengir/Dialect/HIVM/CMakeLists.txt b/bishengir/include/bishengir/Dialect/HIVM/CMakeLists.txt
+index 3593635..ad02aa3 100644
+--- a/bishengir/include/bishengir/Dialect/HIVM/CMakeLists.txt
++++ b/bishengir/include/bishengir/Dialect/HIVM/CMakeLists.txt
+@@ -1,4 +1,4 @@
+ add_subdirectory(Interfaces)
+ add_subdirectory(IR)
+-add_subdirectory(TransformOps)
+-add_subdirectory(Transforms)
++#add_subdirectory(TransformOps)
++#add_subdirectory(Transforms)
+diff --git a/bishengir/include/bishengir/Dialect/MemRef/CMakeLists.txt b/bishengir/include/bishengir/Dialect/MemRef/CMakeLists.txt
+index 5c919f7..e31af32 100644
+--- a/bishengir/include/bishengir/Dialect/MemRef/CMakeLists.txt
++++ b/bishengir/include/bishengir/Dialect/MemRef/CMakeLists.txt
+@@ -1 +1 @@
+-add_subdirectory(Transforms)
+\ No newline at end of file
++add_subdirectory(Transforms)
+diff --git a/bishengir/include/bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h b/bishengir/include/bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h
+new file mode 100644
+index 0000000..00a7272
+--- /dev/null
++++ b/bishengir/include/bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h
+@@ -0,0 +1,89 @@
++//===- ExpandShapeUtils.h - Helpers related to expand shape ops -*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This header file defines utilities and common canonicalization patterns for
++// expand shape operations.
++//
++//===----------------------------------------------------------------------===//
++
++#include "mlir/Dialect/MemRef/IR/MemRef.h"
++#include "mlir/Dialect/Tensor/IR/Tensor.h"
++
++namespace mlir {
++
++template <typename ExpandShapeOpTy, typename CastOpTy>
++struct FoldConstantDimOfOutputShape : public OpRewritePattern<ExpandShapeOpTy> {
++  using OpRewritePattern<ExpandShapeOpTy>::OpRewritePattern;
++
++  LogicalResult matchAndRewrite(ExpandShapeOpTy expandOp,
++                                PatternRewriter &rewriter) const final {
++    // no constant to fold
++    ValueRange dynamicShapes = expandOp.getOutputShape();
++    if (dynamicShapes.empty()) {
++      return failure();
++    }
++
++    // fold constant dynamic output shape values into static shape values
++    ArrayRef<int64_t> staticShapes = expandOp.getStaticOutputShape();
++    SmallVector<OpFoldResult> ofrs =
++        getMixedValues(staticShapes, dynamicShapes, rewriter);
++    LogicalResult fold = foldDynamicIndexList(ofrs);
++    if (failed(fold)) {
++      return failure();
++    }
++    SmallVector<Value> foldedDynamicShape;
++    SmallVector<int64_t> foldedStaticShapes;
++    dispatchIndexOpFoldResults(ofrs, foldedDynamicShape, foldedStaticShapes);
++
++    // clarify the reassociation type for overload resolution
++    SmallVector<ReassociationIndices> reassociation =
++        expandOp.getReassociationIndices();
++    auto resultType = expandOp.getResultType();
++    auto foldedResultType = resultType.clone(foldedStaticShapes);
++    auto srcType = expandOp.getSrcType();
++
++    // infer the src shape based on the folded result shape
++    ShapedType foldedSrcType;
++    if constexpr (std::is_same_v<ExpandShapeOpTy, tensor::ExpandShapeOp>) {
++      RankedTensorType tensorTy = cast<RankedTensorType>(foldedResultType);
++      foldedSrcType =
++          tensor::CollapseShapeOp::inferCollapsedType(tensorTy, reassociation);
++    } else if constexpr (std::is_same_v<ExpandShapeOpTy,
++                                        memref::ExpandShapeOp>) {
++      MemRefType memrefTy = cast<MemRefType>(foldedResultType);
++      foldedSrcType = memref::CollapseShapeOp::computeCollapsedType(
++          memrefTy, reassociation);
++    } else {
++      // only support ExpandShapeOp for tensor and memref
++      return failure();
++    }
++
++    // if src shape is changed, insert cast between src and op for compatibility
++    Value castFromSource = expandOp.getSrc();
++    if (srcType != foldedSrcType) {
++      castFromSource = rewriter.create<CastOpTy>(
++          expandOp.getSrc().getLoc(), foldedSrcType, expandOp.getSrc());
++    }
++
++    // create new op with folded result shapes and (maybe new) source
++    auto newOp =
++        rewriter.create<ExpandShapeOpTy>(expandOp.getLoc(), foldedResultType,
++                                         castFromSource, reassociation, ofrs);
++    // if resultType of new op is changed, insert cast between new op and all
++    // uses of origin op for compatibility
++    Value castToResult = newOp.getResult();
++    if (castToResult.getType() != expandOp.getType()) {
++      castToResult = rewriter.create<CastOpTy>(expandOp.getLoc(),
++                                               expandOp.getType(), newOp);
++    }
++    rewriter.replaceOp(expandOp, castToResult);
++    return success();
++  }
++};
++
++} // namespace mlir
+diff --git a/bishengir/include/bishengir/Dialect/Symbol/CMakeLists.txt b/bishengir/include/bishengir/Dialect/Symbol/CMakeLists.txt
+index 3b88171..218c20c 100644
+--- a/bishengir/include/bishengir/Dialect/Symbol/CMakeLists.txt
++++ b/bishengir/include/bishengir/Dialect/Symbol/CMakeLists.txt
+@@ -1,2 +1,2 @@
+ add_subdirectory(IR)
+-add_subdirectory(Transforms)
+\ No newline at end of file
++#add_subdirectory(Transforms)
+diff --git a/bishengir/lib/Dialect/Annotation/CMakeLists.txt b/bishengir/lib/Dialect/Annotation/CMakeLists.txt
+index 9f57627..218c20c 100644
+--- a/bishengir/lib/Dialect/Annotation/CMakeLists.txt
++++ b/bishengir/lib/Dialect/Annotation/CMakeLists.txt
+@@ -1,2 +1,2 @@
+ add_subdirectory(IR)
+-add_subdirectory(Transforms)
++#add_subdirectory(Transforms)
+diff --git a/bishengir/lib/Dialect/HACC/CMakeLists.txt b/bishengir/lib/Dialect/HACC/CMakeLists.txt
+index 31167e6..fa8bb0d 100644
+--- a/bishengir/lib/Dialect/HACC/CMakeLists.txt
++++ b/bishengir/lib/Dialect/HACC/CMakeLists.txt
+@@ -1,3 +1,3 @@
+ add_subdirectory(IR)
+-add_subdirectory(Transforms)
+-add_subdirectory(Utils)
++#add_subdirectory(Transforms)
++#add_subdirectory(Utils)
+diff --git a/bishengir/lib/Dialect/HFusion/CMakeLists.txt b/bishengir/lib/Dialect/HFusion/CMakeLists.txt
+index 680d074..a26e20a 100644
+--- a/bishengir/lib/Dialect/HFusion/CMakeLists.txt
++++ b/bishengir/lib/Dialect/HFusion/CMakeLists.txt
+@@ -1,6 +1,6 @@
+-add_subdirectory(Analysis)
++#add_subdirectory(Analysis)
+ add_subdirectory(IR)
+-add_subdirectory(Pipelines)
+-add_subdirectory(TransformOps)
+-add_subdirectory(Transforms)
+-add_subdirectory(Utils)
++#add_subdirectory(Pipelines)
++#add_subdirectory(TransformOps)
++#add_subdirectory(Transforms)
++#add_subdirectory(Utils)
+diff --git a/bishengir/lib/Dialect/HIVM/CMakeLists.txt b/bishengir/lib/Dialect/HIVM/CMakeLists.txt
+index 680d074..3807071 100644
+--- a/bishengir/lib/Dialect/HIVM/CMakeLists.txt
++++ b/bishengir/lib/Dialect/HIVM/CMakeLists.txt
+@@ -1,6 +1,6 @@
+-add_subdirectory(Analysis)
++#add_subdirectory(Analysis)
+ add_subdirectory(IR)
+-add_subdirectory(Pipelines)
+-add_subdirectory(TransformOps)
+-add_subdirectory(Transforms)
++#add_subdirectory(Pipelines)
++#add_subdirectory(TransformOps)
++#add_subdirectory(Transforms)
+ add_subdirectory(Utils)
+diff --git a/bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp b/bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp
+index b7437ee..f509b46 100644
+--- a/bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp
++++ b/bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp
+@@ -17,9 +17,9 @@
+
+ #include "bishengir/Config/bishengir-config.h"
+ #include "bishengir/Dialect/HIVM/IR/HIVM.h"
+-#if (!BISHENGIR_BUILD_STANDALONE_IR_ONLY)
++// #if (!BISHENGIR_BUILD_STANDALONE_IR_ONLY)
+ #include "bishengir/Dialect/HACC/IR/HACC.h"
+-#endif // BISHENGIR_BUILD_STANDALONE_IR_ONLY
++// #endif // BISHENGIR_BUILD_STANDALONE_IR_ONLY
+ #include "bishengir/Dialect/HIVM/IR/HIVMImpl.h"
+ #include "bishengir/Dialect/HIVM/IR/HIVMInterfaces.h"
+ #include "bishengir/Dialect/HIVM/Utils/Utils.h"
+diff --git a/bishengir/lib/Dialect/HIVM/Utils/Utils.cpp b/bishengir/lib/Dialect/HIVM/Utils/Utils.cpp
+index b2419f4..a267fdd 100644
+--- a/bishengir/lib/Dialect/HIVM/Utils/Utils.cpp
++++ b/bishengir/lib/Dialect/HIVM/Utils/Utils.cpp
+@@ -1031,9 +1031,9 @@ Value createNestedIndexModular(OpBuilder &builder, Operation *op, int modular) {
+                                                loopInfoVec, modular);
+ }
+
+-Value mlir::hivm::createNestedIndexModular(OpBuilder &builder,
+-                                           LoopLikeOpInterface loopOp,
+-                                           int modular) {
++Value createNestedIndexModular(OpBuilder &builder,
++                               LoopLikeOpInterface loopOp,
++                               int modular) {
+   auto loopInfoVec = getLoopsInfo(loopOp);
+   // Insert at the beginning of the For loop.
+   auto forOp = dyn_cast<scf::ForOp>(loopOp.getOperation());
+diff --git a/bishengir/lib/Dialect/MemRef/CMakeLists.txt b/bishengir/lib/Dialect/MemRef/CMakeLists.txt
+index 3b88171..218c20c 100644
+--- a/bishengir/lib/Dialect/MemRef/CMakeLists.txt
++++ b/bishengir/lib/Dialect/MemRef/CMakeLists.txt
+@@ -1,2 +1,2 @@
+ add_subdirectory(IR)
+-add_subdirectory(Transforms)
+\ No newline at end of file
++#add_subdirectory(Transforms)
+diff --git a/bishengir/lib/Dialect/MemRef/IR/MemRefImpl.cpp b/bishengir/lib/Dialect/MemRef/IR/MemRefImpl.cpp
+index 18266dd..e65fc84 100644
+--- a/bishengir/lib/Dialect/MemRef/IR/MemRefImpl.cpp
++++ b/bishengir/lib/Dialect/MemRef/IR/MemRefImpl.cpp
+@@ -16,7 +16,7 @@
+ //===----------------------------------------------------------------------===//
+
+ #include "bishengir/Dialect/MemRef/IR/MemRefImpl.h"
+-#include "mlir/Dialect/Utils/ExpandShapeUtils.h"
++#include "bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h"
+ #include "mlir/IR/TypeUtilities.h"
+
+ namespace {
+@@ -219,10 +219,12 @@ Value createMemRefAllocOp(OpBuilder &builder, Location loc, Value source) {
+
+ void getExtendedCanonicalizationPatterns(mlir::RewritePatternSet &results) {
+   auto *context = results.getContext();
++  /*
+   results.add<OpWithOffsetSizesAndStridesConstantArgumentFolder<
+       ReinterpretCastOp, ReinterpretCastReturnTypeCanonicalizer,
+       ReinterpretCastCanonicalizer>>(context,
+                                      "ReinterpretCastConstantArgumentFolder");
++                                     */
+   results.add<FoldRedundantCopy>(context);
+   results.add<FoldConstantDimOfOutputShape<ExpandShapeOp, CastOp>>(context);
+ }
+diff --git a/bishengir/lib/Dialect/Symbol/CMakeLists.txt b/bishengir/lib/Dialect/Symbol/CMakeLists.txt
+index 1a8b75d..fa8bb0d 100644
+--- a/bishengir/lib/Dialect/Symbol/CMakeLists.txt
++++ b/bishengir/lib/Dialect/Symbol/CMakeLists.txt
+@@ -1,3 +1,3 @@
+ add_subdirectory(IR)
+-add_subdirectory(Transforms)
+-add_subdirectory(Utils)
+\ No newline at end of file
++#add_subdirectory(Transforms)
++#add_subdirectory(Utils)
+diff --git a/bishengir/lib/Dialect/Tensor/CMakeLists.txt b/bishengir/lib/Dialect/Tensor/CMakeLists.txt
+index 1a8b75d..fa8bb0d 100644
+--- a/bishengir/lib/Dialect/Tensor/CMakeLists.txt
++++ b/bishengir/lib/Dialect/Tensor/CMakeLists.txt
+@@ -1,3 +1,3 @@
+ add_subdirectory(IR)
+-add_subdirectory(Transforms)
+-add_subdirectory(Utils)
+\ No newline at end of file
++#add_subdirectory(Transforms)
++#add_subdirectory(Utils)
+--
+2.51.0
+
