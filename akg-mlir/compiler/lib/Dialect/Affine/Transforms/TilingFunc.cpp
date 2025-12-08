@@ -352,23 +352,82 @@ class TilingBase {
     return std::nullopt;
   }
 
-  void maybeRetargetForInitForDirectReturn(Value returned, Value outArg) {
+  void maybeRetargetInitAtTopmostEmpty(Value returned, Value outArg) {
     if (!returned || !outArg) return;
-    auto info = isResultDirectlyFromAffineFor(returned);
-    if (!info) return;
 
-    AffineForOp forOp = info->first;
-    unsigned idx = info->second;
+    auto target = findTopmostEmptyInitForAndIter(returned);
+    if (!target) return;
 
-    Value init = getForInitViaOperands(forOp, idx);
-    auto initRes = dyn_cast_or_null<OpResult>(init);
-    if (!initRes) return;
-    Operation *def = initRes.getDefiningOp();
+    AffineForOp forOp = target->first;
+    unsigned iterIdx = target->second;
+
+    if (!forResultUpdatedByInsertSlice(forOp, iterIdx)) return;
+
+    Value init = getForInitViaOperands(forOp, iterIdx);
+    Value initUnwrapped = unwrapViewLikeProducers(init);
+    Operation *def = initUnwrapped.getDefiningOp();
     if (!def || !isa<tensor::EmptyOp>(def)) return;
 
-    if (!forResultUpdatedByInsertSlice(forOp, idx)) return;
+    replaceForInit(forOp, iterIdx, outArg);
+  }
 
-    replaceForInit(forOp, idx, outArg);
+  static std::optional<std::pair<AffineForOp, unsigned>> findTopmostEmptyInitForAndIter(Value fromReturned) {
+    Value start = unwrapViewLikeProducers(fromReturned);
+    auto info = isResultDirectlyFromAffineFor(start);
+    if (!info) return std::nullopt;
+
+    AffineForOp curFor = info->first;
+    unsigned curResIdx = info->second;
+    unsigned curIterIdx = curResIdx;
+
+    std::optional<std::pair<AffineForOp, unsigned>> topmost;
+
+    llvm::SmallDenseSet<std::pair<void *, unsigned>, 8> seen;
+
+    while (true) {
+      if (!forResultUpdatedByInsertSlice(curFor, curResIdx)) break;
+
+      Value init = getForInitViaOperands(curFor, curIterIdx);
+      Value initUnwrapped = unwrapViewLikeProducers(init);
+
+      if (Operation *def = initUnwrapped.getDefiningOp()) {
+        if (isa<tensor::EmptyOp>(def)) {
+          topmost = std::make_pair(curFor, curIterIdx);
+          break;
+        }
+      }
+
+      auto up = isResultDirectlyFromAffineFor(initUnwrapped);
+      if (!up) break;
+
+      auto key = std::make_pair(up->first.getOperation(), up->second);
+      if (seen.contains(key)) break;
+      seen.insert(key);
+
+      curFor = up->first;
+      curResIdx = up->second;
+      curIterIdx = curResIdx;
+    }
+
+    return topmost;
+  }
+
+  static Value unwrapViewLikeProducers(Value v) {
+    Value cur = v;
+    while (true) {
+      Operation *def = cur ? cur.getDefiningOp() : nullptr;
+      if (!def) break;
+      if (isa<tensor::CastOp>(def)) {
+        cur = def->getOperand(0);
+        continue;
+      }
+      if (auto ext = dyn_cast<tensor::ExtractSliceOp>(def)) {
+        cur = ext.getSource();
+        continue;
+      }
+      break;
+    }
+    return cur;
   }
 
   SmallVector<Value> cloneKernelBodyToDeviceFunc(func::FuncOp originalKernel, func::FuncOp deviceFunc, unsigned nInputs,
@@ -444,7 +503,7 @@ class TilingBase {
       Value ret = (i < returned.size()) ? returned[i] : Value();
       Value outArg = (i < outArgs.size()) ? outArgs[i] : Value();
       if (ret) {
-        maybeRetargetForInitForDirectReturn(ret, outArg);
+        maybeRetargetInitAtTopmostEmpty(ret, outArg);
       }
       finalReturns.push_back(ret ? ret : outArg);
     }
