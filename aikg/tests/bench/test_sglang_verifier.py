@@ -52,6 +52,16 @@ device_id = get_device_id()
     "decode_attention_fwd_kernel_stage2",
     "decode_grouped_attention_fwd_kernel_stage1",
     "_fwd_grouped_kernel_stage1_rope",
+    "add_tree_reduce_u64",
+    "chunked_sgmv_lora_expand",
+    "chunked_sgmv_lora_shrink",
+    "fmix32",
+    "hash_tiles32_kernel_blocked",
+    "rotl32",
+    "sgemm_lora_a",
+    "sgemm_lora_b",
+    "qkv_lora_b",
+    "gate_up_lora_b",
 ])
 async def test_sglang_verifier_a100(op_name):
     framework = "torch"
