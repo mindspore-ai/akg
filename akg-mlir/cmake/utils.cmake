@@ -302,31 +302,10 @@ function(akg_add_pkg pkg_name)
     file(COPY ${${pkg_name}_SOURCE_DIR}/ DESTINATION ${${pkg_name}_PATCHED_DIR})
     set(${pkg_name}_SOURCE_DIR ${${pkg_name}_PATCHED_DIR})
 
-    # Convert line endings to LF before applying patches to avoid line ending mismatch
-    execute_process(COMMAND find ${${pkg_name}_SOURCE_DIR} -type f -name "*.txt" -o -name "*.cmake"
-                    -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" -o -name "*.c"
-                    WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}
-                    OUTPUT_VARIABLE FILES_TO_CONVERT
-                    OUTPUT_STRIP_TRAILING_WHITESPACE)
-    if(FILES_TO_CONVERT)
-        set(convert_command "find ${${pkg_name}_SOURCE_DIR} -type f \\( -name '*.txt' -o -name '*.cmake' ")
-        string(APPEND convert_command "-o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' -o -name '*.c' \\) ")
-        string(APPEND convert_command "-exec sed -i 's/\\r$//' {} +")
-        execute_process(COMMAND bash -c "${convert_command}"
-                        WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}
-                        RESULT_VARIABLE CONVERT_RESULT)
-        if(NOT CONVERT_RESULT EQUAL "0")
-            message(WARNING "Failed to convert line endings for some files, patch may still fail")
-        endif()
-    endif()
-
     # Apply patches on pkg
     foreach(_PATCH_FILE ${PKG_PATCHES})
-        get_filename_component(_PATCH_FILE_NAME ${_PATCH_FILE} NAME)
-        set(_LF_PATCH_FILE ${CMAKE_BINARY_DIR}/_ms_patch/${_PATCH_FILE_NAME})
-        configure_file(${_PATCH_FILE} ${_LF_PATCH_FILE} NEWLINE_STYLE LF)
-        message("patching ${${pkg_name}_SOURCE_DIR} -p1 < ${_LF_PATCH_FILE}")
-        execute_process(COMMAND patch -p1 INPUT_FILE ${_LF_PATCH_FILE}
+        message("patching ${${pkg_name}_SOURCE_DIR} --binary -p1 < ${_PATCH_FILE}")
+        execute_process(COMMAND patch --binary -p1 INPUT_FILE ${_PATCH_FILE}
                         WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}
                         RESULT_VARIABLE Result)
         if(NOT Result EQUAL "0")

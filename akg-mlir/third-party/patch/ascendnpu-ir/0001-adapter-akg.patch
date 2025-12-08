@@ -1,7 +1,7 @@
-From 2df014eabd4cb402b6b1593177946e493ab5b744 Mon Sep 17 00:00:00 2001
+From 434582d0b3f80a21e68b6dcad6beb7d415302875 Mon Sep 17 00:00:00 2001
 From: liuchao <liuchao195@huawei.com>
 Date: Sun, 7 Dec 2025 18:45:35 +0800
-Subject: [PATCH] adapter akg
+Subject: [PATCH 1/1] adapter akg
 
 ---
  CMakeLists.txt                                |  9 +-
@@ -36,12 +36,12 @@ index 2bbad54..e6bfa37 100644
 -cmake_minimum_required(VERSION 3.28.0)
 +cmake_minimum_required(VERSION 3.14.0)
  project(bishengir)
-
+ 
  # bishengir-target-spec-tblgen related target has ninja version requirement
 @@ -123,11 +123,6 @@ if(BISHENGIR_ENABLE_TORCH_CONVERSIONS)
    include_directories(${TORCH_MLIR_INCLUDE_DIRS})
  endif()
-
+ 
 -if(MLIR_ENABLE_BINDINGS_PYTHON)
 -  include(MLIRDetectPythonEnv)
 -  mlir_configure_python_dev_packages()
@@ -106,7 +106,7 @@ index 83e1673..6b436fe 100644
  add_subdirectory(Symbol)
 -add_subdirectory(Tensor)
 +#add_subdirectory(Tensor)
-
+ 
  if(BISHENGIR_ENABLE_TORCH_CONVERSIONS)
 -  add_subdirectory(Torch)
 +  #add_subdirectory(Torch)
@@ -307,7 +307,7 @@ index b7437ee..f509b46 100644
 --- a/bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp
 +++ b/bishengir/lib/Dialect/HIVM/IR/HIVMDialect.cpp
 @@ -17,9 +17,9 @@
-
+ 
  #include "bishengir/Config/bishengir-config.h"
  #include "bishengir/Dialect/HIVM/IR/HIVM.h"
 -#if (!BISHENGIR_BUILD_STANDALONE_IR_ONLY)
@@ -325,7 +325,7 @@ index b2419f4..a267fdd 100644
 @@ -1031,9 +1031,9 @@ Value createNestedIndexModular(OpBuilder &builder, Operation *op, int modular) {
                                                 loopInfoVec, modular);
  }
-
+ 
 -Value mlir::hivm::createNestedIndexModular(OpBuilder &builder,
 -                                           LoopLikeOpInterface loopOp,
 -                                           int modular) {
@@ -350,15 +350,15 @@ index 18266dd..e65fc84 100644
 +++ b/bishengir/lib/Dialect/MemRef/IR/MemRefImpl.cpp
 @@ -16,7 +16,7 @@
  //===----------------------------------------------------------------------===//
-
+ 
  #include "bishengir/Dialect/MemRef/IR/MemRefImpl.h"
 -#include "mlir/Dialect/Utils/ExpandShapeUtils.h"
 +#include "bishengir/Dialect/MemRef/IR/ExpandShapeUtils.h"
  #include "mlir/IR/TypeUtilities.h"
-
+ 
  namespace {
 @@ -219,10 +219,12 @@ Value createMemRefAllocOp(OpBuilder &builder, Location loc, Value source) {
-
+ 
  void getExtendedCanonicalizationPatterns(mlir::RewritePatternSet &results) {
    auto *context = results.getContext();
 +  /*
@@ -392,6 +392,6 @@ index 1a8b75d..fa8bb0d 100644
 \ No newline at end of file
 +#add_subdirectory(Transforms)
 +#add_subdirectory(Utils)
---
+-- 
 2.51.0
 
