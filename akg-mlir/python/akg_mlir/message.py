@@ -338,24 +338,44 @@ class AkgMlirDriver:
         logging.info("bishengir-compile code generator:")
         npu_compiler_path = get_npucompiler_path()
         input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
-        out_file = os.path.join(self.output_dir, kernel_name + ".so")
+        so_file = os.path.join(self.output_dir, kernel_name + ".so")
+
+        if self.enable_akg_loop_fusion:
+            opt_file = os.path.join(self.output_dir, kernel_name + "_opt.mlir")
+            opt_cmd = ["bishengir-opt",
+                       input_file,
+                       "-convert-math-to-hfusion",
+                       "-convert-linalg-to-hfusion",
+                       "-convert-tensor-to-hfusion",
+                       "-convert-arith-to-hfusion",
+                       "-hfusion-reorder-ops",
+                       "-o",
+                       opt_file]
+            if self.dump_ir:
+                opt_cmd.append("-mlir-print-ir-after-all")
+            input_file = opt_file
+            try:
+                subprocess.run(opt_cmd, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                logging.error("run bishengir-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+                raise RuntimeError("generate hfusion mlir: " + input_file + "!\n") from e
 
         cmd = [
             npu_compiler_path,
             input_file,
-            "-enable-hfusion-compile=true",
             "-enable-hivm-compile=true",
             "-enable-bin-relocation=false",
             "-block-dim=40",
             "-enable-auto-multi-buffer=true",
             "-o",
-            out_file,
+            so_file,
         ]
 
         if self.enable_akg_loop_fusion:
-            cmd.append("--enable-triton-kernel-compile=true")
-        if self.dump_ir:
-            cmd.append("--mlir-print-ir-after-all")
+            cmd.append("-enable-hfusion-compile=false")
+        else:
+            cmd.append("-enable-hfusion-compile=true")
+
         dump_log = os.path.join(self.output_dir, kernel_name + "_dump_bishengir.log")
         with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
             try:
