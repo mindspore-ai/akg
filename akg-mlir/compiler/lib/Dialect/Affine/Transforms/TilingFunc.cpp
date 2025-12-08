@@ -41,6 +41,9 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
 
+// HACC dialect enums/attrs
+#include "bishengir/Dialect/HACC/IR/HACC.h"
+
 #define DEBUG_TYPE "tiling-func"
 
 namespace mlir {
@@ -52,19 +55,24 @@ namespace mlir {
 namespace mlir::affine {
 
 namespace mockattr {
-static constexpr const char *kFunctionKind = "hacc.function_kind";
-static constexpr const char *kHostFuncType = "hacc.host_func_type";
 static constexpr const char *kEnableAutoMarkBufferSize = "enable_auto_mark_buffer_size";
-static constexpr const char *kBlockDim = "hacc.block_dim";
-static constexpr const char *kTilingFunction = "hacc.tiling_function";
 static constexpr const char *kFusionKind = "hfusion.fusion_kind";
-static constexpr const char *kDevice = "DEVICE";
-static constexpr const char *kHost = "HOST";
-static constexpr const char *kHostTilingFunction = "tiling_function";
 static constexpr const char *kFusionKindPureElemwise = "PURE_ELEMWISE";
 }  // namespace mockattr
 
 namespace {
+
+using hacc::BlockDimAttr;
+using hacc::HACCFuncType;
+using hacc::HACCFuncTypeAttr;
+using hacc::HACCToLLVMIRTranslateAttr;
+using hacc::HostFuncType;
+using hacc::HostFuncTypeAttr;
+using hacc::InputIdxAttr;
+using hacc::KernelArgType;
+using hacc::KernelArgTypeAttr;
+using hacc::OutputIdxAttr;
+using hacc::TilingFunctionAttr;
 
 struct AutoTilingOptions {
   unsigned blockDim = 40;
@@ -107,8 +115,16 @@ class TilingBase {
 
  protected:
   LogicalResult runPreTilingProcedure(OpBuilder &) {
+    if (auto *ctx = originalKernel_.getContext()) {
+      ctx->getOrLoadDialect<hacc::HACCDialect>();
+    }
+
     kernelInfo_->baseKernelName = originalKernel_.getSymName().str();
     kernelInfo_->blockDim = options_.blockDim;
+
+    // annotate original as HOST (enum attr)
+    auto *ctx = originalKernel_.getContext();
+    originalKernel_->setAttr(HACCFuncTypeAttr::name, HACCFuncTypeAttr::get(ctx, HACCFuncType::HOST));
     return success();
   }
 
@@ -155,25 +171,27 @@ class TilingBase {
     auto host = builder.create<func::FuncOp>(originalKernel_.getLoc(), name, funcTy);
     host.addEntryBlock();
 
-    host->setAttr(mockattr::kFunctionKind, StringAttr::get(builder.getContext(), mockattr::kHost));
-    host->setAttr(mockattr::kHostFuncType, StringAttr::get(builder.getContext(), mockattr::kHostTilingFunction));
+    host->setAttr(HACCFuncTypeAttr::name, HACCFuncTypeAttr::get(builder.getContext(), HACCFuncType::HOST));
+    host->setAttr(HostFuncTypeAttr::name, HostFuncTypeAttr::get(builder.getContext(), HostFuncType::kTilingFunction));
 
     unsigned nInputs = origTy.getNumInputs();
     unsigned nResults = origTy.getNumResults();
 
+    auto *ctx = builder.getContext();
+
     for (unsigned i = 0; i < nInputs; ++i) {
-      host.setArgAttr(i, "hacc.arg_type", StringAttr::get(builder.getContext(), "input"));
-      host.setArgAttr(i, "hacc.input_idx", builder.getI64IntegerAttr(i));
+      host.setArgAttr(i, KernelArgTypeAttr::name, KernelArgTypeAttr::get(ctx, KernelArgType::kInput));
+      host.setArgAttr(i, InputIdxAttr::name, InputIdxAttr::get(ctx, i));
     }
     for (unsigned i = 0; i < nResults; ++i) {
       unsigned argIdx = nInputs + i;
-      host.setArgAttr(argIdx, "hacc.arg_type", StringAttr::get(builder.getContext(), "output"));
-      host.setArgAttr(argIdx, "hacc.output_idx", builder.getI64IntegerAttr(i));
+      host.setArgAttr(argIdx, KernelArgTypeAttr::name, KernelArgTypeAttr::get(ctx, KernelArgType::kOutput));
+      host.setArgAttr(argIdx, OutputIdxAttr::name, OutputIdxAttr::get(ctx, i));
     }
 
-    host.setResultAttr(0, "hacc.arg_type", StringAttr::get(builder.getContext(), "tiling_key"));
+    host.setResultAttr(0, KernelArgTypeAttr::name, KernelArgTypeAttr::get(ctx, KernelArgType::kTilingKey));
     for (unsigned i = 1; i < kN; ++i) {
-      host.setResultAttr(i, "hacc.arg_type", StringAttr::get(builder.getContext(), "tiling_data"));
+      host.setResultAttr(i, KernelArgTypeAttr::name, KernelArgTypeAttr::get(ctx, KernelArgType::kTilingData));
     }
 
     builder.setInsertionPointToEnd(&host.getBody().front());
@@ -219,14 +237,15 @@ class TilingBase {
   }
 
   void setHaccIOArgAttrs(func::FuncOp f, unsigned nInputs, unsigned nOutputs, OpBuilder &builder) {
+    auto *ctx = builder.getContext();
     for (unsigned i = 0; i < nInputs; ++i) {
-      f.setArgAttr(i, "hacc.arg_type", StringAttr::get(builder.getContext(), "input"));
-      f.setArgAttr(i, "hacc.input_idx", builder.getI64IntegerAttr(i));
+      f.setArgAttr(i, KernelArgTypeAttr::name, KernelArgTypeAttr::get(ctx, KernelArgType::kInput));
+      f.setArgAttr(i, InputIdxAttr::name, InputIdxAttr::get(ctx, i));
     }
     for (unsigned i = 0; i < nOutputs; ++i) {
       unsigned argIdx = nInputs + i;
-      f.setArgAttr(argIdx, "hacc.arg_type", StringAttr::get(builder.getContext(), "output"));
-      f.setArgAttr(argIdx, "hacc.output_idx", builder.getI64IntegerAttr(i));
+      f.setArgAttr(argIdx, KernelArgTypeAttr::name, KernelArgTypeAttr::get(ctx, KernelArgType::kOutput));
+      f.setArgAttr(argIdx, OutputIdxAttr::name, OutputIdxAttr::get(ctx, i));
     }
   }
 
@@ -239,13 +258,18 @@ class TilingBase {
     setHaccIOArgAttrs(deviceFunc, nInputs, nOutputs, builder);
 
     deviceFunc->setAttr(mockattr::kEnableAutoMarkBufferSize, builder.getUnitAttr());
-    deviceFunc->setAttr(mockattr::kFunctionKind, StringAttr::get(builder.getContext(), mockattr::kDevice));
+    deviceFunc->setAttr(HACCFuncTypeAttr::name, HACCFuncTypeAttr::get(builder.getContext(), HACCFuncType::DEVICE));
     deviceFunc->setAttr(mockattr::kFusionKind,
                         StringAttr::get(builder.getContext(), mockattr::kFusionKindPureElemwise));
-    deviceFunc->setAttr(mockattr::kBlockDim, builder.getI64IntegerAttr(blockDim));
-    deviceFunc->setAttr("hacc.entry", builder.getUnitAttr());
+
+    deviceFunc->setAttr(BlockDimAttr::name, builder.getI64IntegerAttr(blockDim));
+    deviceFunc->setAttr(
+      StringAttr::get(builder.getContext(), stringifyHACCToLLVMIRTranslateAttr(HACCToLLVMIRTranslateAttr::ENTRY)),
+      builder.getUnitAttr());
     if (hostTiling) {
-      deviceFunc->setAttr(mockattr::kTilingFunction, FlatSymbolRefAttr::get(hostTiling.getSymNameAttr()));
+      deviceFunc->setAttr(
+        TilingFunctionAttr::name,
+        TilingFunctionAttr::get(builder.getContext(), FlatSymbolRefAttr::get(hostTiling.getSymNameAttr())));
     }
     return deviceFunc;
   }
@@ -582,7 +606,9 @@ class TilingBase {
     auto funcTy = FunctionType::get(module.getContext(), TypeRange{}, TypeRange{builder.getI64Type()});
     auto host = builder.create<func::FuncOp>(deviceFunc.getLoc(), hostName, funcTy);
     host.setVisibility(SymbolTable::Visibility::Public);
-    host->setAttr(mockattr::kFunctionKind, StringAttr::get(builder.getContext(), mockattr::kHost));
+    auto *ctx = builder.getContext();
+    host->setAttr(HACCFuncTypeAttr::name, HACCFuncTypeAttr::get(ctx, HACCFuncType::HOST));
+    host->setAttr(HostFuncTypeAttr::name, HostFuncTypeAttr::get(ctx, HostFuncType::kGetTilingStructSizeFunction));
 
     Block *entry = host.addEntryBlock();
     OpBuilder b = OpBuilder::atBlockEnd(entry);
@@ -619,8 +645,7 @@ struct TilingFunc : public mlir::impl::TilingFuncBase<TilingFunc> {
 
     SmallVector<func::FuncOp> kernels;
     module.walk([&](func::FuncOp f) {
-      if (auto kind = f->getAttrOfType<StringAttr>(mockattr::kFunctionKind);
-          !kind || kind.getValue() == mockattr::kDevice) {
+      if (auto kind = f->getAttrOfType<StringAttr>(HACCFuncTypeAttr::name); !kind || kind.getValue() == "DEVICE") {
         kernels.push_back(f);
       }
     });
