@@ -66,6 +66,9 @@ constexpr auto kAVXInstructionSet = "avx";
 constexpr auto kAVX2InstructionSet = "avx2";
 constexpr auto kAVX512InstructionSet = "avx512";
 constexpr auto kNEONInstructionSet = "neon";
+constexpr auto kTileForOneAttr = "__tiled_for___1";
+constexpr auto kMapForToForallAttr = "map_for_to_forall";
+constexpr auto kVectorAttr = "vector";
 
 enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduce, Matmul, Conv };
 const std::unordered_map<int, std::string> operatorTemplateMap = {{0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"},
