@@ -18,6 +18,7 @@
 #define COMPILER_INCLUDE_AKG_CONVERSION_PASSES_H_
 
 #include "akg/Conversion/ArithToLinalg/ArithToLinalg.h"
+#include "akg/Conversion/ArithToHIVM/ArithToHIVM.h"
 #include "akg/Conversion/FuncToLLVMExt/FuncToLLVMExtPass.h"
 #include "akg/Conversion/FusionToMemVec/FusionToMemVecPass.h"
 #include "akg/Conversion/LinalgExtLower/LinalgExtLower.h"
