@@ -312,4 +312,9 @@ def AddOutParameter : Pass<"add-out-parameter", "mlir::ModuleOp"> {
   let constructor = "mlir::affine::createAddOutParameterPass()";
 }
 
+def MemrefTilingFunc : Pass<"memref-tiling-func", "mlir::ModuleOp"> {
+  let summary = "This pass applies tiling to operations on tensors, dynamically processing tiles";
+  let constructor = "mlir::affine::createMemrefTilingFuncPass()";
+}
+
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES
