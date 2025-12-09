@@ -145,4 +145,22 @@ def PureOpenMPToLLVM : Pass<"convert-pure-omp-to-llvm", "mlir::ModuleOp"> {
 // SCFToGPU
 //===----------------------------------------------------------------------===//
 
+//===----------------------------------------------------------------------===//
+// AffineToSCF
+//===----------------------------------------------------------------------===//
+
+def ConvertAffineToSCF : Pass<"convert-affine-to-scf", "func::FuncOp"> {
+  let summary = "Convert affine.for to scf.for, preserving all attributes";
+  let description = [{
+    This pass converts affine.for operations to scf.for operations while
+    preserving all attributes from the original affine.for operation.
+  }];
+  let constructor = "mlir::createConvertAffineToSCFPass()";
+  let dependentDialects = [
+    "affine::AffineDialect",
+    "scf::SCFDialect",
+    "arith::ArithDialect",
+  ];
+}
+
 #endif // AKG_CONVERSION_PASSES
