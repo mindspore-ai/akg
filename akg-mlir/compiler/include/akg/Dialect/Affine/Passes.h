@@ -47,6 +47,7 @@
 #include "akg/Dialect/Affine/Transforms/WorkaroundFixReduceInitialization.h"
 #include "akg/Dialect/Affine/Transforms/TilingFunc.h"
 #include "akg/Dialect/Affine/Transforms/InsertLoadAndStore.h"
+#include "akg/Dialect/Affine/Transforms/AddOutParameter.h"
 
 namespace mlir {
 

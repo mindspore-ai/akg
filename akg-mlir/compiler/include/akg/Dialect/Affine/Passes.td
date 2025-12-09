@@ -307,4 +307,9 @@ def InsertLoadAndStore : Pass<"insert-load-and-store", "func::FuncOp"> {
   ];
 }
 
+def AddOutParameter : Pass<"add-out-parameter", "mlir::ModuleOp"> {
+  let summary = "This pass applies to adding out parameters";
+  let constructor = "mlir::affine::createAddOutParameterPass()";
+}
+
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES
