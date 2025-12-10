@@ -21,6 +21,7 @@
 #include <memory>
 #include <unordered_set>
 #include "akg/Dialect/Affine/Analysis/AutoTiling.h"
+#include "akg/Dialect/Affine/Analysis/BufferAnalysis.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Utils/AnalysisForGpu.hpp"
@@ -183,23 +184,27 @@ std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTili
 }
 /// Creates a pass to perform loop tiling using auto-tiling strategy
 std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(const std::string &target,
-                                                                                      bool useAutoTiling) {
+                                                                                       bool useAutoTiling) {
   return std::make_unique<AKGLoopTiling>(target, useAutoTiling);
 }
 
 /// Creates a pass to perform loop tiling using auto-tiling strategy for dynamic shape
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(
-  const std::string &target, bool useAutoTiling, const std::string &tilingMode) {
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(const std::string &target,
+                                                                                       bool useAutoTiling,
+                                                                                       const std::string &tilingMode) {
   return std::make_unique<AKGLoopTiling>(target, useAutoTiling, tilingMode);
 }
 
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(
-  const std::string &target, const std::string &feature, bool useAutoTiling) {
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(const std::string &target,
+                                                                                       const std::string &feature,
+                                                                                       bool useAutoTiling) {
   return std::make_unique<AKGLoopTiling>(target, feature, useAutoTiling);
 }
 
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(
-  const std::string &target, bool useAutoTiling, const std::string &arch, const std::string &feature) {
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(const std::string &target,
+                                                                                       bool useAutoTiling,
+                                                                                       const std::string &arch,
+                                                                                       const std::string &feature) {
   return std::make_unique<AKGLoopTiling>(target, useAutoTiling, arch, feature);
 }
 
@@ -436,8 +441,8 @@ void AKGLoopTiling::setNewUpperBound(mlir::MutableArrayRef<mlir::affine::AffineF
     if (insertLoopUb) {
       ubExprs.push_back(b.getAffineConstantExpr(largestDiv));
     }
-    mlir::AffineMap ubMap = mlir::AffineMap::get(lastTileUbMap.getNumDims() + 1, lastTileUbMap.getNumSymbols(),
-                                                ubExprs, b.getContext());
+    mlir::AffineMap ubMap =
+      mlir::AffineMap::get(lastTileUbMap.getNumDims() + 1, lastTileUbMap.getNumSymbols(), ubExprs, b.getContext());
     newLoops[curTile].setUpperBound(ubOperands, ubMap);
   } else {
     mlir::AffineExpr dim = b.getAffineDimExpr(0);
@@ -492,9 +497,8 @@ void AKGLoopTiling::getTileSizes() {
 //   }
 // }
 // ```
-mlir::LogicalResult AKGLoopTiling::createFullBlock(
-  mlir::MutableArrayRef<mlir::affine::AffineForOp> intraTileLoops,
-  SmallVectorImpl<mlir::affine::AffineForOp> &fullTileLoops) {
+mlir::LogicalResult AKGLoopTiling::createFullBlock(mlir::MutableArrayRef<mlir::affine::AffineForOp> intraTileLoops,
+                                                   SmallVectorImpl<mlir::affine::AffineForOp> &fullTileLoops) {
   if (intraTileLoops.size() == 0) {
     return mlir::success();
   }
@@ -542,8 +546,7 @@ mlir::LogicalResult AKGLoopTiling::createFullBlock(
   }
   // Add the body for the full tile loop nest.
   for (const auto &loopEn : llvm::enumerate(intraTileLoops)) {
-    mlir::replaceAllUsesInRegionWith(loopEn.value().getInductionVar(),
-                                     fullTileLoops[loopEn.index()].getInductionVar(),
+    mlir::replaceAllUsesInRegionWith(loopEn.value().getInductionVar(), fullTileLoops[loopEn.index()].getInductionVar(),
                                      fullTileLoops[loopEn.index()].getRegion());
   }
 
@@ -635,8 +638,7 @@ mlir::LogicalResult AKGLoopTiling::createTailBlock(mlir::affine::AffineForOp for
   return mlir::success();
 }
 
-mlir::LogicalResult AKGLoopTiling::createTailBlockStatic(mlir::affine::AffineForOp forOp,
-                                                         int64_t differenceUbAndLb) {
+mlir::LogicalResult AKGLoopTiling::createTailBlockStatic(mlir::affine::AffineForOp forOp, int64_t differenceUbAndLb) {
   auto origUbMap = forOp.getUpperBoundMap();
   auto origLbMap = forOp.getLowerBoundMap();
   int64_t origStep = forOp.getStepAsInt();
@@ -699,8 +701,7 @@ mlir::LogicalResult AKGLoopTiling::createTailBlockStatic(mlir::affine::AffineFor
   tailForOp.setLowerBoundMap(ubMap);
   tailForOp.setUpperBoundMap(origUbMap);
   tailForOp.setStep(tailSize);
-  mlir::replaceAllUsesInRegionWith(forOp.getInductionVar(), tailForOp.getInductionVar(),
-                                   tailForOp.getRegion());
+  mlir::replaceAllUsesInRegionWith(forOp.getInductionVar(), tailForOp.getInductionVar(), tailForOp.getRegion());
   updateForOpUsers(tailForOp, tailSize);
 
   // Recursively processes the tailForOp body.
@@ -1076,9 +1077,7 @@ void AKGLoopTiling::runCpuOperation() {
   }
 }
 
-bool AKGLoopTiling::isDynamicShape() const {
-  return akgglobal::ShapeAlignTool::getInstance().getFuncArgSizes() > 0;
-}
+bool AKGLoopTiling::isDynamicShape() const { return akgglobal::ShapeAlignTool::getInstance().getFuncArgSizes() > 0; }
 
 // Helper function to calculate nesting depth of a loop relative to funcOp
 // Counts only affine.for loops in the path
@@ -1558,6 +1557,11 @@ void AKGLoopTiling::runOnOperation() {
   }
 
   if (useAutoTiling) {
+    mlir::akg::BufferAnalysisOptions options;
+    options.enableDmaOpt = false;
+    auto maxBuffer = countMaxBuffer(funcOp, options);
+    llvm::outs() << "maxBuffer: " << maxBuffer << "\n";
+
     auto initGraph = mlir::akg::autotiling::parseIr(funcOp, bands);
     initGraph->setHardware(target);
     initGraph->setFeature(feature);
@@ -1568,8 +1572,7 @@ void AKGLoopTiling::runOnOperation() {
       mlir::OpBuilder builder(funcOp);
       SmallVector<Attribute, 4> tileSizeAttrs;
       tileSizeAttrs.reserve(this->multiTileSizes.size());
-      std::transform(this->multiTileSizes.begin(), this->multiTileSizes.end(),
-                     std::back_inserter(tileSizeAttrs),
+      std::transform(this->multiTileSizes.begin(), this->multiTileSizes.end(), std::back_inserter(tileSizeAttrs),
                      [&builder](unsigned size) { return builder.getI32IntegerAttr(size); });
       funcOp->setAttr("npu.multiTileSizes", builder.getArrayAttr(tileSizeAttrs));
     }
