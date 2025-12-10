@@ -17,6 +17,7 @@
 #include "akg/Pipelines/AscendPipelines/AscendOpt.h"
 
 #include <cstdlib>
+#include "llvm/ADT/SmallVector.h"
 #include <nlohmann/json.hpp>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Affine/Passes.h"
@@ -94,7 +95,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     // tiling
     // nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
     nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
-    nestedFusionPM.addPass(mlir::createAKGLoopTilingPass(options.target, true, options.arch, ""));
+    nestedFusionPM.addPass(mlir::createAKGLoopTilingPass(options.target, true, options.arch, "", {}));
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
 
     // vector
