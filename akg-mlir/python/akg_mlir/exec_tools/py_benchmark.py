@@ -28,6 +28,7 @@ from bfloat16 import bfloat16
 
 from akg import AkgMlirDriver
 from akg import akgProfileMgr
+from akg.backends.ascend import transform_data_to_ascend, launch
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
 from ..utils.dynamic_utils import dump_shape_arg_list, get_device_shape
 from ..utils.gen_runtime_code import (ProfilingParams, gen_cuda_runtime_code)
@@ -39,7 +40,6 @@ flags = sys.getdlopenflags()
 sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 # pylint: disable=wrong-import-position
 # pylint: disable=wrong-import-order
-from akg import akgAscendLaunch
 sys.setdlopenflags(flags)
 
 
@@ -159,49 +159,6 @@ def _transform_data_to_ctypes(data,
         packed_shape_lists[idx] = ctypes.cast(packed_shapes, int_p)
     return [packed_tensors, packed_shape_lists]
 
-def _transform_data_to_ctypes_ascend(data,
-                                     kernel_name,
-                                     output_indexes,
-                                     is_dyn_shape=False,
-                                     backend="ascend",
-                                     is_profile_params=False):
-    """ transform input data to ctypes for ascend """
-    data_ctypes = []
-    if len(data) == 0:
-        # dynamic shape info cannot generate inputs while compilation
-        return data_ctypes
-    device_shape, _, _ = get_device_shape(
-        data, kernel_name, is_dyn_shape and not is_profile_params)
-
-    output_idx_set = []
-    for output_idx in output_indexes:
-        if output_idx >= 0:
-            output_idx_set.append(output_idx)
-        else:
-            output_idx_set.append(output_idx + len(data))
-    output_idx_set = set(output_idx_set)
-    for data_idx, d in enumerate(data):
-        data_shape = np.array(device_shape[data_idx])
-        data_bytes = d.nbytes
-        is_numpy_bf16 = False
-        if isinstance(d, int):
-            data_ctypes.append(ctypes.c_int(d))
-        elif isinstance(d, np.ndarray):
-            if d.dtype.name == "bfloat16":
-                d = d.astype(np.float32)
-                data[data_idx] = d
-                is_numpy_bf16 = True
-
-        ascend_tensor_obj = akgAscendLaunch.AscendTensorObjStructPyTorch()
-        is_output = data_idx in output_idx_set
-        ascend_tensor_obj.tensor_info = d
-        ascend_tensor_obj.shape_info = data_shape
-        ascend_tensor_obj.nbytes = data_bytes
-        ascend_tensor_obj.is_output = is_output
-        ascend_tensor_obj.is_bf16 = is_numpy_bf16
-        data_ctypes.append(ascend_tensor_obj)
-
-    return data_ctypes
 
 def _compile_lib(kernel_name, file_path="./tmp_files/"):
     so_file = os.path.join(file_path, "gen_func_" + kernel_name + ".so")
@@ -400,13 +357,13 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
     else:
         dso_path = os.path.join(_get_kernel_meta_dir(), "lib" + kernel_name + ".so")
 
-    input_for_mod_ctypes = _transform_data_to_ctypes_ascend(
+    input_for_mod_ctypes = transform_data_to_ascend(
         input_for_mod, kernel_name, output_indexes, is_dyn_shape, "ascend")
     # Run executable and compare results
     device_id = int(os.environ.get("DEVICE_ID", 0))
     dso_path = _get_kernel_meta_dir()
     if profiling_trails == 0:
-        akgAscendLaunch.akg_ascend_run(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
+        launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
         for idx, d in enumerate(expect):
             expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
         compare_results(kernel_name, desc, input_for_mod,
@@ -414,7 +371,7 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
     else:
         akgProfileMgr.ascend_start_profiling(device_id)
         for _ in range(5):
-            akgAscendLaunch.akg_ascend_run(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
+            launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
         akgProfileMgr.ascend_stop_profiling()
         # analysis
         cycle = profiling_analyse(None)
