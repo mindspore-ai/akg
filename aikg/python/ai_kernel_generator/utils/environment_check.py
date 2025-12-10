@@ -87,6 +87,11 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
                 return check_env(framework, backend, dsl, config_path, config, is_remote)
             else:
                 issues.append("❌ dsl='triton' is no longer supported. Please use 'triton_cuda' or 'triton_ascend' explicitly, or provide backend parameter for automatic conversion.")
+        elif dsl == 'torch':
+            try:
+                importlib.import_module('torch')
+            except ImportError:
+                issues.append(f"❌ 缺少 torch (required for {dsl})")
         elif dsl == 'swft':
             try:
                 importlib.import_module('swft')

@@ -38,7 +38,7 @@ except ImportError:
     
     def get_impl_import(self, op_name: str, impl_func_name: str) -> str:
         """Return implementation function import."""
-        return f"from {op_name}_tilelang_npuir import {impl_func_name}\n"
+        return f"from {op_name}_tilelang_npuir_impl import {impl_func_name}\n"
     
     def call_impl(self, impl_func_name: str, inputs: str, device_id: int,
                   framework_adapter: Any, op_name: str, 

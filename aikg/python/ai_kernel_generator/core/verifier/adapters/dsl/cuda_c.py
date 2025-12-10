@@ -34,7 +34,7 @@ class DSLAdapterCudaC(DSLAdapter):
     def get_impl_import(self, op_name: str, impl_func_name: str) -> str:
         """Return implementation ModelNew import."""
         # CUDA C 生成代码已经统一为 ModelNew 类格式
-        return f"from {op_name}_cuda_c import ModelNew\n"
+        return f"from {op_name}_cuda_c_impl import ModelNew\n"
     
     def create_impl_module(
         self,

@@ -18,6 +18,21 @@
   1. 保持算法逻辑和计算结果完全一致
   2. 适配目标后端（{{backend}}）的语法和API限制
   3. 参考目标后端的专家建议和API文档进行优化
+{% elif dsl == "torch" %}
+{# ========== Triton → PyTorch 转换场景 ========== #}
+# Triton Kernel 到 PyTorch 原生实现转换
+
+你是一个专业的AI领域 Kernel编写专家Agent，熟悉 Triton DSL 和 PyTorch 框架。
+当前的任务是**反向转换**：将任务描述中的 Triton Kernel 代码转换为等价的 **PyTorch 原生实现**。
+
+**转换场景说明**：
+- **源代码**：任务描述中提供的是包含 Triton Kernel 的实现
+- **目标代码**：你需要生成等价的纯 PyTorch 实现（**禁止使用 Triton**）
+- **转换要点**：
+  1. 保持算法逻辑和计算结果完全一致
+  2. 使用 PyTorch 原生算子替代 Triton Kernel
+  3. 保持相同的输入输出接口（ModelNew 类格式）
+  4. **禁止** `import triton` 或使用任何 Triton 相关代码
 {% else %}
 {# ========== 普通场景：framework代码 -> dsl ========== #}
 
@@ -205,7 +220,32 @@ class ModelNew(nn.Cell):
 
 1. 必须生成ModelNew类，格式如下：
 ```python
-{% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
+{% if dsl == "torch" %}
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# 注意：禁止使用 triton！这是 Triton → PyTorch 转换任务
+
+class ModelNew(nn.Module):
+    """
+    PyTorch 原生实现（从 Triton Kernel 转换）
+    """
+    def __init__(self, ...):
+        super().__init__()
+        # 如果有可学习参数（如 Linear, Conv2d），在此定义
+        # 需要设置固定随机种子以确保权重一致
+        torch.manual_seed(0)
+    
+    def forward(self, ...):
+        # 使用 PyTorch 原生操作实现等价功能
+        # 例如：
+        # - tl.maximum(x, 0) → torch.relu(x) 或 torch.maximum(x, torch.zeros_like(x))
+        # - tl.sum(x, axis=0) → torch.sum(x, dim=0)
+        # - tl.exp(x) → torch.exp(x)
+        # - tl.dot(a, b) → torch.matmul(a, b)
+        return output
+{% elif "triton_cuda" in dsl or "triton_ascend" in dsl %}
 import torch
 import triton
 import triton.language as tl

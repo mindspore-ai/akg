@@ -31,7 +31,7 @@ class DSLAdapterCpp(DSLAdapter):
         
         统一使用 ModelNew 类格式（KernelBench 风格）。
         """
-        return f"from {op_name}_cpp import ModelNew\n"
+        return f"from {op_name}_cpp_impl import ModelNew\n"
     
     def create_impl_module(self, framework: str,
                           framework_adapter: Any, 

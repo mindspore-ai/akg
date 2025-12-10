@@ -31,7 +31,7 @@ class DSLAdapterTilelangCuda(DSLAdapter):
     
     def get_impl_import(self, op_name: str, impl_func_name: str) -> str:
         """Return implementation ModelNew import."""
-        return f"from {op_name}_tilelang_cuda import ModelNew\n"
+        return f"from {op_name}_tilelang_cuda_impl import ModelNew\n"
     
     def create_impl_module(
         self,

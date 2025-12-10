@@ -51,7 +51,7 @@ RUN_TEMPLATE_PATH = os.path.join(get_project_root(), "utils", "compile_tools", "
 
 # 类型定义
 FrameworkType = Literal["torch", "mindspore", "numpy"]
-ImplType = Literal["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc"]
+ImplType = Literal["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc", "torch"]
 BackendType = Literal["cuda", "ascend", "cpu"]
 ArchType = Literal["a100", "v100", "h20", "l20", "rtx3090", "ascend910b4", "ascend310p3", "x86_64", "aarch64"]
 
@@ -136,6 +136,9 @@ class KernelVerifier:
             raise ValueError("config is required for KernelVerifier")
         if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
             # 对于 triton_cuda 和 triton_ascend，统一使用 ModelNew 类格式
+            self.impl_func_name = impl_func_name or "ModelNew"
+        elif self.dsl == "torch":
+            # 对于 torch DSL (Triton → PyTorch 转换)，统一使用 ModelNew 类格式
             self.impl_func_name = impl_func_name or "ModelNew"
         elif self.dsl == "ascendc":
             self.impl_func_name = impl_func_name or f"{op_name}_kernel"
@@ -656,6 +659,14 @@ if __name__ == "__main__":
                     "import triton",
                     "import triton.language as tl"
                 ]
+        elif self.dsl == "torch":
+            # Triton → PyTorch 转换场景
+            # 生成的代码是纯 PyTorch，不需要 triton
+            import_lines = [
+                "import torch",
+                "import torch.nn as nn",
+                "import torch.nn.functional as F"
+            ]
         elif self.dsl == "tilelang_npuir":
             if self.framework == "torch":
                 import_lines = [
@@ -812,7 +823,8 @@ if __name__ == "__main__":
             logger.info(f"[{self.op_name}] 检测到AscendC DSL，生成编译项目")
             self.generate_ascendc_project(impl_code, verify_dir)
         else:
-            file_name = f"{self.op_name}_{self.dsl}.py"
+            # 统一使用 _impl 后缀，与 framework 文件区分
+            file_name = f"{self.op_name}_{self.dsl}_impl.py"
             impl_file = os.path.join(verify_dir, file_name)
 
             # 使用adapter生成import语句
@@ -1216,7 +1228,34 @@ if __name__ == "__main__":
     
     def _generate_base_benchmark_code(self, framework_adapter, dsl_adapter, warmup, runs):
         """生成base benchmark代码（benchmark framework model）"""
-        if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
+        if self.dsl == "torch":
+            # Triton → PyTorch 转换场景：使用传统计时方法
+            sync_code = "torch.cuda.synchronize()" if self.backend == "cuda" else (
+                "torch.npu.synchronize()" if self.backend == "ascend" else ""
+            )
+            code = f"""        # PyTorch 原生实现，使用传统循环计时
+        import time
+        def base_benchmark_fn():
+            result = framework_model(*inputs)
+            return result
+        
+        # 预热
+        for _ in range({warmup}):
+            _ = base_benchmark_fn()
+            {sync_code}
+        
+        # 计时
+        start_time = time.time()
+        for _ in range({runs}):
+            _ = base_benchmark_fn()
+            {sync_code}
+        end_time = time.time()
+        
+        execution_time_ms = (end_time - start_time) * 1000 / {runs}
+        method = "pytorch_loop_timer"
+"""
+            return code
+        elif "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
             if self.backend == "ascend":
                 code = f"""        # 导入profiler以支持性能测试
         try:

@@ -28,7 +28,7 @@ class DSLAdapterSwft(DSLAdapter):
     
     def get_impl_import(self, op_name: str, impl_func_name: str) -> str:
         """Return implementation function import."""
-        return f"from {op_name}_swft import ModelNew\n"
+        return f"from {op_name}_swft_impl import ModelNew\n"
     
     def create_impl_module(self, framework: str,
                           framework_adapter: Any, 

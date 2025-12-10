@@ -47,7 +47,7 @@ class DSLAdapter(ABC):
             impl_func_name: Implementation function name
             
         Returns:
-            str: Import statement (e.g., "from {op_name}_triton_cuda import {impl_func_name}\n")
+            str: Import statement (e.g., "from {op_name}_triton_cuda_impl import {impl_func_name}\n")
         """
         pass
     
