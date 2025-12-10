@@ -21,12 +21,16 @@ class RemoteWorker(WorkerInterface):
     def __init__(self, worker_url: str):
         self.worker_url = worker_url.rstrip('/')
     
-    async def acquire_device(self, task_id: str = "unknown") -> int:
+    async def acquire_device(self, task_id: str = "unknown", timeout: float = None) -> int:
         """
         从远程服务器获取一个可用设备。
         
         Args:
             task_id: 任务ID（用于日志）
+            timeout: 请求超时时间（秒）。默认为 None（无限等待），
+                     因为在高并发 evolve 场景下，设备可能被长时间占用，
+                     需要等待直到有设备可用。
+                     取消等待：由上层 asyncio task 的 cancel 机制处理。
         
         Returns:
             int: 设备ID
@@ -34,7 +38,10 @@ class RemoteWorker(WorkerInterface):
         acquire_url = f"{self.worker_url}/api/v1/acquire_device"
         
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            # 使用 timeout=None (无限等待) 作为默认值，因为在并发高时
+            # 设备可能被长时间占用，我们需要等待直到有设备可用。
+            # httpx 默认 timeout 是 5s，之前硬编码是 10.0s，这在 evolve 流程中是不够的。
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 data = {'task_id': task_id}
                 response = await client.post(acquire_url, data=data)
                 response.raise_for_status()
@@ -123,7 +130,10 @@ class RemoteWorker(WorkerInterface):
         profile_url = f"{self.worker_url}/api/v1/profile"
         
         try:
-            async with httpx.AsyncClient(timeout=300) as client: # Default timeout for profile
+            # 获取 timeout 设置，默认为 300s (5分钟)
+            # 加上 10s 缓冲时间用于网络传输等
+            timeout = profile_settings.get('timeout', 300)
+            async with httpx.AsyncClient(timeout=timeout + 10) as client:
                 files = {'package': ('package.tar', package_data, 'application/x-tar')}
                 data = {
                     'task_id': task_id, 

@@ -53,10 +53,10 @@ app = FastAPI(title="AIKG Worker Service", lifespan=lifespan)
 
 @app.post("/api/v1/verify")
 async def verify(
-    package: Annotated[UploadFile, File(...)],
-    task_id: Annotated[str, Form(...)],
-    op_name: Annotated[str, Form(...)],
-    timeout: Annotated[int, Form(...)] = 300
+    package: UploadFile = File(...),
+    task_id: str = Form(...),
+    op_name: str = Form(...),
+    timeout: int = Form(300)
 ):
     """
     Execute verification task.
@@ -90,10 +90,10 @@ async def verify(
 
 @app.post("/api/v1/profile")
 async def profile(
-    package: Annotated[UploadFile, File(...)],
-    task_id: Annotated[str, Form(...)],
-    op_name: Annotated[str, Form(...)],
-    profile_settings: Annotated[str, Form(...)] = "{}"
+    package: UploadFile = File(...),
+    task_id: str = Form(...),
+    op_name: str = Form(...),
+    profile_settings: str = Form("{}")
 ):
     """
     Execute profiling task.
@@ -117,10 +117,10 @@ async def profile(
 
 @app.post("/api/v1/generate_reference")
 async def generate_reference(
-    package: Annotated[UploadFile, File(...)],
-    task_id: Annotated[str, Form(...)],
-    op_name: Annotated[str, Form(...)],
-    timeout: Annotated[int, Form(...)] = 120
+    package: UploadFile = File(...),
+    task_id: str = Form(...),
+    op_name: str = Form(...),
+    timeout: int = Form(120)
 ):
     """
     Execute task_desc and generate reference data.
@@ -168,10 +168,10 @@ async def generate_reference(
 
 @app.post("/api/v1/profile_single_task")
 async def profile_single_task(
-    package: Annotated[UploadFile, File(...)],
-    task_id: Annotated[str, Form(...)],
-    op_name: Annotated[str, Form(...)],
-    profile_settings: Annotated[str, Form(...)] = "{}"
+    package: UploadFile = File(...),
+    task_id: str = Form(...),
+    op_name: str = Form(...),
+    profile_settings: str = Form("{}")
 ):
     """
     Execute single task profiling (only measure task_desc performance, no base comparison).
@@ -205,7 +205,7 @@ async def profile_single_task(
 
 @app.post("/api/v1/acquire_device")
 async def acquire_device(
-    task_id: Annotated[str, Form(...)]
+    task_id: str = Form(...)
 ):
     """
     Acquire a device from the device pool.
@@ -224,8 +224,8 @@ async def acquire_device(
 
 @app.post("/api/v1/release_device")
 async def release_device(
-    task_id: Annotated[str, Form(...)],
-    device_id: Annotated[int, Form(...)]
+    task_id: str = Form(...),
+    device_id: int = Form(...)
 ):
     """
     Release a device back to the device pool.

@@ -66,6 +66,19 @@ async def get_job_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return status
 
+@app.post("/api/v1/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    """取消作业"""
+    logger.info(f"Received cancel request for job: {job_id}")
+    success = await get_job_manager().cancel_job(job_id)
+    if not success:
+        status = get_job_manager().get_job_status(job_id)
+        if not status:
+            raise HTTPException(status_code=404, detail="Job not found")
+        # Job 存在但无法取消（可能已完成）
+        return {"cancelled": False, "reason": f"Job status is {status.get('status')}"}
+    return {"cancelled": True}
+
 def _is_loopback_url(url: str) -> bool:
     """
     检查 URL 是否为本地回环地址。

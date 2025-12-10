@@ -65,6 +65,7 @@ please refer to the corresponding examples in the aikg/examples/ directory.
 class ServerJobManager:
     def __init__(self):
         self.jobs: Dict[str, Dict[str, Any]] = {}
+        self._tasks: Dict[str, asyncio.Task] = {}  # 保存 asyncio.Task 引用，用于取消
     
     async def submit_job(self, request_data: dict) -> str:
         backend = request_data.get("backend")
@@ -155,11 +156,16 @@ class ServerJobManager:
             "error": None
         }
         
-        # 根据类型启动不同的后台任务
+        # 根据类型启动不同的后台任务，并保存 task 引用
         if job_type == "evolve":
-            asyncio.create_task(self._run_evolve_job(job_id, request_data))
+            task = asyncio.create_task(self._run_evolve_job(job_id, request_data))
         else:
-            asyncio.create_task(self._run_single_job(job_id, request_data))
+            task = asyncio.create_task(self._run_single_job(job_id, request_data))
+        
+        self._tasks[job_id] = task
+        
+        # 任务完成后清理 task 引用
+        task.add_done_callback(lambda t: self._tasks.pop(job_id, None))
             
         logger.info(f"Job submitted: {job_id} ({job_type})")
         return job_id
@@ -315,6 +321,10 @@ class ServerJobManager:
                 "success": success,
                 "code": task_info.get("coder_code", ""),
             }
+        except asyncio.CancelledError:
+            # 用户取消，状态已在 cancel_job 中设置
+            logger.info(f"Job {job_id} was cancelled")
+            raise  # 重新抛出让 asyncio 正确处理
         except Exception as e:
             self._handle_error(job_id, e)
 
@@ -362,6 +372,10 @@ class ServerJobManager:
             
             self.jobs[job_id]["status"] = "completed"
             self.jobs[job_id]["result"] = best_result
+        except asyncio.CancelledError:
+            # 用户取消，状态已在 cancel_job 中设置
+            logger.info(f"Job {job_id} was cancelled")
+            raise  # 重新抛出让 asyncio 正确处理
         except Exception as e:
             self._handle_error(job_id, e)
 
@@ -372,6 +386,37 @@ class ServerJobManager:
 
     def get_job_status(self, job_id: str) -> Optional[Dict]:
         return self.jobs.get(job_id)
+
+    async def cancel_job(self, job_id: str) -> bool:
+        """
+        取消指定的 job。
+        
+        Args:
+            job_id: 要取消的 job ID
+            
+        Returns:
+            bool: 是否成功取消
+        """
+        if job_id not in self.jobs:
+            logger.warning(f"Cancel request for unknown job: {job_id}")
+            return False
+        
+        job_status = self.jobs[job_id].get("status")
+        if job_status in ["completed", "failed", "error", "cancelled"]:
+            logger.info(f"Job {job_id} already finished with status: {job_status}")
+            return False
+        
+        # 取消 asyncio task
+        task = self._tasks.get(job_id)
+        if task and not task.done():
+            task.cancel()
+            logger.info(f"Cancelled asyncio task for job {job_id}")
+        
+        # 更新状态
+        self.jobs[job_id]["status"] = "cancelled"
+        self.jobs[job_id]["error"] = "Job cancelled by user"
+        logger.info(f"Job {job_id} cancelled")
+        return True
 
 _GLOBAL_JOB_MANAGER = ServerJobManager()
 

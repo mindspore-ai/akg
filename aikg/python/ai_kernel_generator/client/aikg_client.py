@@ -83,17 +83,61 @@ class AIKGClient:
         self._handle_response(resp)
         return resp.json()
 
-    def wait_for_completion(self, job_id: str, interval: int = 2, timeout: int = 3600) -> Dict[str, Any]:
-        """等待作业完成"""
-        start_time = time.time()
-        while True:
-            if time.time() - start_time > timeout:
-                raise TimeoutError(f"Job {job_id} timed out after {timeout} seconds")
-                
-            status = self.get_job_status(job_id)
-            state = status.get("status")
+    def cancel_job(self, job_id: str) -> Dict[str, Any]:
+        """
+        取消作业
+        
+        Args:
+            job_id: 要取消的作业ID
             
-            if state in ["completed", "failed", "error"]:
-                return status
+        Returns:
+            Dict: {"cancelled": True/False, "reason": "..."}
+        """
+        url = f"{self.server_url}/api/v1/jobs/{job_id}/cancel"
+        resp = requests.post(url)
+        self._handle_response(resp)
+        return resp.json()
+
+    def wait_for_completion(self, job_id: str, interval: int = 2, timeout: int = 3600, 
+                            cancel_on_interrupt: bool = True) -> Dict[str, Any]:
+        """
+        等待作业完成
+        
+        Args:
+            job_id: 作业ID
+            interval: 轮询间隔（秒）
+            timeout: 超时时间（秒）
+            cancel_on_interrupt: 当用户 Ctrl+C 时是否自动取消 Server 端的 job（默认 True）
+            
+        Returns:
+            Dict: 作业状态
+            
+        Raises:
+            TimeoutError: 超时
+            KeyboardInterrupt: 用户中断（如果 cancel_on_interrupt=False）
+        """
+        start_time = time.time()
+        try:
+            while True:
+                if time.time() - start_time > timeout:
+                    raise TimeoutError(f"Job {job_id} timed out after {timeout} seconds")
+                    
+                status = self.get_job_status(job_id)
+                state = status.get("status")
                 
-            time.sleep(interval)
+                if state in ["completed", "failed", "error", "cancelled"]:
+                    return status
+                    
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            if cancel_on_interrupt:
+                print(f"\n⚠️  用户中断，正在取消 Server 端的 job {job_id}...")
+                try:
+                    result = self.cancel_job(job_id)
+                    if result.get("cancelled"):
+                        print(f"✅ Job {job_id} 已取消")
+                    else:
+                        print(f"⚠️  无法取消 job: {result.get('reason', 'unknown')}")
+                except Exception as e:
+                    print(f"❌ 取消 job 失败: {e}")
+            raise  # 重新抛出，让调用方知道是用户中断
