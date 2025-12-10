@@ -1,0 +1,355 @@
+# SGLang参考信息
+# ============================================================================
+# 源文件: python/sglang/srt/lora/triton_ops/gate_up_lora_b.py
+# 测试文件: 无独立测试文件
+# SGLang API调用:
+#   gate_up_lora_b_fwd(x, gate_up_lora_b, batch_info, output_dim, base_output)
+# Triton Kernel:
+#   gate_up_lora_b_kernel - 这个内核函数主要实现计算Gate Up LoRA B矩阵的乘积。
+# ============================================================================
+
+from typing import Optional
+
+import torch
+import triton
+import triton.language as tl
+import torch.nn as nn
+
+
+@triton.jit
+def _gate_up_lora_b_kernel(
+    # Pointers to matrices
+    x,
+    weights,
+    output,
+    # Parameters of size
+    K,  # K = R
+    output_dim,
+    # Strides
+    x_stride_0,
+    x_stride_1,
+    w_stride_0,
+    w_stride_1,
+    w_stride_2,
+    output_stride_0,
+    output_stride_1,
+    # Information on sequence lengths,ranks and weight id
+    seg_lens,
+    seg_indptr,
+    weight_indices,
+    lora_ranks,
+    # Meta parameters
+    BLOCK_S: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    # For fused output scaling
+    scalings,
+):
+    """
+    This kernel packs 2 sgemms (gate/up) into a single kernel. The multiplication
+    results are accumulated into the output tensor.
+
+    When a sequence's rank is 0, the kernel is essentially a no-op, following
+    the convention in pytorch where the product of two matrices of shape (m, 0)
+    and (0, n) is an all-zero matrix of shape (m, n).
+
+    Args:
+        x (Tensor): The input tensor, which is the result of the LoRA A projection.
+            Shape: (s, 2 * K), where s is the sum of all sequence lengths in the
+            batch and K is the maximum LoRA rank.
+        weights (Tensor): The LoRA B weights for all adapters.
+            Shape: (num_lora, 2 * output_dim, K).
+        output (Tensor): The output tensor where the result is stored.
+            Shape: (s, 2 * output_dim).
+    """
+    # output_dim >> K
+
+    # Current block computes sequence with batch_id,
+    # which starts from row seg_start of x with length seg_len.
+    # gate_up_id decides which of gate or up (0: gate, 1: up)
+    batch_id = tl.program_id(axis=2)
+    w_index = tl.load(weight_indices + batch_id)
+    rank = tl.load(lora_ranks + w_index)
+
+    # If rank is 0, this kernel is a no-op.
+    if rank == 0:
+        return
+
+    gate_up_id = tl.program_id(axis=1)
+    pid = tl.program_id(axis=0)
+    seg_len = tl.load(seg_lens + batch_id)
+    seg_start = tl.load(seg_indptr + batch_id)
+    n_start = gate_up_id * output_dim  # offset on output dim
+    scaling = tl.load(scalings + w_index)
+
+    # Adjust K (rank) according to the specific LoRA adapter
+    K = tl.minimum(K, rank)
+
+    # The tile in output matrix will have (pid_s, pid_n) as id
+    num_pid_n = tl.cdiv(output_dim, BLOCK_N)
+    pid_s = pid // num_pid_n
+    pid_n = pid % num_pid_n
+
+    # Create pointers for the first block of x and weights
+    # The pointers will be advanced as we move in the K direction
+    # and accumulate
+    s_offset = tl.arange(0, BLOCK_S) + pid_s * BLOCK_S
+    n_offset = tl.arange(0, BLOCK_N) + pid_n * BLOCK_N
+    k_offset = tl.arange(0, BLOCK_K)
+
+    x_ptrs = (x + seg_start * x_stride_0 + (gate_up_id * K) * x_stride_1) + (
+        s_offset[:, None] * x_stride_0 + k_offset[None, :] * x_stride_1
+    )
+    w_ptrs = (weights + w_index * w_stride_0 + n_start * w_stride_1) + (
+        k_offset[:, None] * w_stride_2 + n_offset[None, :] * w_stride_1
+    )
+
+    # Iterate to compute the block in output matrix
+    partial_sum = tl.zeros((BLOCK_S, BLOCK_N), dtype=tl.float32)
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        x_tile = tl.load(
+            x_ptrs,
+            mask=(s_offset[:, None] < seg_len) & (k_offset[None, :] < K - k * BLOCK_K),
+            other=0.0,
+        )
+        w_tile = tl.load(
+            w_ptrs,
+            mask=(k_offset[:, None] < K - k * BLOCK_K)
+            & (n_offset[None, :] < output_dim),
+            other=0.0,
+        )
+        partial_sum += tl.dot(x_tile, w_tile)
+
+        x_ptrs += BLOCK_K * x_stride_1
+        w_ptrs += BLOCK_K * w_stride_2
+
+    # Store result to output matrix
+    partial_sum *= scaling
+    partial_sum = partial_sum.to(x.dtype.element_ty)
+    output_ptr = (output + seg_start * output_stride_0 + n_start * output_stride_1) + (
+        s_offset[:, None] * output_stride_0 + n_offset[None, :] * output_stride_1
+    )
+    output_mask = (s_offset[:, None] < seg_len) & (n_offset[None, :] < output_dim)
+    partial_sum += tl.load(output_ptr, mask=output_mask)
+    tl.store(output_ptr, partial_sum, mask=output_mask)
+
+
+def gate_up_lora_b_fwd(
+    x: torch.Tensor,
+    gate_up_lora_b: torch.Tensor,
+    use_cuda_graph: bool,
+    bs: int,
+    num_segments: int,
+    seg_indptr: torch.Tensor,
+    weight_indices: torch.Tensor,
+    lora_ranks: torch.Tensor,
+    scalings: torch.Tensor,
+    max_len: Optional[int],
+    seg_lens: Optional[torch.Tensor],
+    permutation: Optional[torch.Tensor],
+    output_dim: int,
+    base_output: torch.Tensor = None,
+) -> torch.Tensor:
+
+    # x: (s, 2 * r)
+    # gate_up_lora_b: (num_lora, 2 * output_dim, r)
+    # output: (s, 2 * output_dim)
+
+    # Compute lora_output with shape (s, output_dim) as follows:
+    # lora_output[:, :output_dim] = sgemm(x[:, :r], gate_up_lora_b[:, :output_dim, :])
+    # lora_output[:, output_dim:]
+    #      = sgemm(x[:, r:], gate_up_lora_b[:, output_dim:, :])
+
+    # Get dims
+    s = x.shape[0]
+    input_dim = x.shape[1]
+    r = gate_up_lora_b.shape[-1]
+    assert input_dim == 2 * r
+
+    BLOCK_S = 16
+    BLOCK_R = 16
+    BLOCK_OUT = 64
+
+    grid_b = (
+        triton.cdiv(max_len, BLOCK_S) * triton.cdiv(output_dim, BLOCK_OUT),
+        2,  # this dimension decides current block computes on gate or up proj
+        bs,
+    )
+
+    if base_output is None:
+        output = torch.zeros((s, 2 * output_dim), device=x.device, dtype=x.dtype)
+    else:
+        output = base_output
+
+    _gate_up_lora_b_kernel[grid_b](
+        x,
+        gate_up_lora_b,
+        output,
+        r,
+        output_dim,
+        x.stride(0),
+        x.stride(1),
+        gate_up_lora_b.stride(0),
+        gate_up_lora_b.stride(1),
+        gate_up_lora_b.stride(2),
+        output.stride(0),
+        output.stride(1),
+        seg_lens,
+        seg_indptr,
+        weight_indices,
+        lora_ranks,
+        BLOCK_S,
+        BLOCK_OUT,
+        BLOCK_R,
+        scalings,
+    )
+
+    return output
+
+
+class Model(nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
+    
+    def forward(
+        self,
+        x,
+        gate_up_lora_b,
+        use_cuda_graph,
+        bs,
+        num_segments,
+        seg_indptr,
+        weight_indices,
+        lora_ranks,
+        scalings,
+        max_len,
+        seg_lens,
+        permutation,
+        output_dim,
+        base_output=None,
+    ):
+        return gate_up_lora_b_fwd(
+            x,
+            gate_up_lora_b,
+            use_cuda_graph,
+            bs,
+            num_segments,
+            seg_indptr,
+            weight_indices,
+            lora_ranks,
+            scalings,
+            max_len,
+            seg_lens,
+            permutation,
+            output_dim,
+            base_output,
+        )
+
+
+class ModelSglang(nn.Module):
+    def __init__(self):
+        super(ModelSglang, self).__init__()
+    
+    def forward(
+        self,
+        x,
+        gate_up_lora_b,
+        use_cuda_graph,
+        bs,
+        num_segments,
+        seg_indptr,
+        weight_indices,
+        lora_ranks,
+        scalings,
+        max_len,
+        seg_lens,
+        permutation,
+        output_dim,
+        base_output=None,
+    ):
+        from sglang.srt.lora.triton_ops.gate_up_lora_b import gate_up_lora_b_fwd
+        # Note: SGLang's function still uses LoRABatchInfo, so we need to reconstruct it
+        from sglang.srt.lora.utils import LoRABatchInfo
+        batch_info = LoRABatchInfo(
+            use_cuda_graph=use_cuda_graph,
+            bs=bs,
+            num_segments=num_segments,
+            seg_indptr=seg_indptr,
+            weight_indices=weight_indices,
+            lora_ranks=lora_ranks,
+            scalings=scalings,
+            max_len=max_len,
+            seg_lens=seg_lens,
+            permutation=permutation,
+        )
+        return gate_up_lora_b_fwd(x, gate_up_lora_b, batch_info, output_dim, base_output)
+
+
+def get_inputs():
+    batch_size = 4
+    max_seq_len = 32
+    rank = 64  # LoRA rank (r)
+    output_dim = 4096  # 输出维度
+    
+    # 生成序列长度
+    seq_lengths = [max_seq_len] * batch_size
+    total_seq_len = sum(seq_lengths)
+    
+    # x (lora_a_output): (total_seq_len, 2 * r) - LoRA A 的输出
+    # 用户说可以构造一个 tensor 就行
+    x = torch.randn(
+        total_seq_len, 2 * rank, dtype=torch.float16
+    )
+    
+    # gate_up_lora_b: (num_lora, 2 * output_dim, r) - LoRA B weights
+    # 假设有 2 个 LoRA adapters
+    num_loras = 2
+    gate_up_lora_b = torch.randn(
+        num_loras, 2 * output_dim, rank, dtype=torch.float16
+    )
+    
+    # output_dim: int - 输出维度
+    # 从 gate_up_lora_b 的形状计算（与 triton_backend.py 中的逻辑一致）
+    output_dim = gate_up_lora_b.shape[1] // 2
+    
+    # 创建简化的 batch_info
+    # 假设每个序列使用第一个 LoRA adapter
+    num_segments = batch_size
+    seg_indptr = torch.zeros(num_segments + 1, dtype=torch.int32)
+    for i in range(1, num_segments + 1):
+        seg_indptr[i] = seg_indptr[i - 1] + seq_lengths[i - 1]
+    
+    weight_indices = torch.zeros(num_segments, dtype=torch.int32)  # 都使用第一个 LoRA
+    lora_ranks = torch.tensor([rank, 32], dtype=torch.int32)  # 两个 LoRA 的 rank
+    scalings = torch.ones(num_loras, dtype=torch.float32)  # 缩放因子
+    
+    permutation = torch.arange(total_seq_len, dtype=torch.int32)
+    
+    use_cuda_graph = False
+    bs = batch_size
+    max_len = max_seq_len
+    seg_lens = torch.tensor(seq_lengths, dtype=torch.int32)
+    
+    base_output = None
+    
+    return [
+        x,
+        gate_up_lora_b,
+        use_cuda_graph,
+        bs,
+        num_segments,
+        seg_indptr,
+        weight_indices,
+        lora_ranks,
+        scalings,
+        max_len,
+        seg_lens,
+        permutation,
+        output_dim,
+        base_output,
+    ]
+
+
+def get_init_inputs():
+    return []
+

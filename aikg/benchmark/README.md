@@ -6,4 +6,8 @@
 
 在`kernelbench`目录下，存放了我们为 KernelBench 任务适配的 MindSpore 和 NumPy 实现。原始的 PyTorch 实现已通过 git submodule 方式引入（位于`../thirdparty/KernelBench`），从而实现了对不同计算框架的广泛支持和验证。
 
-在`aikg_bench`目录下，提供aikg项目中有较高使用价值的Kernel场景，整理成对应的benchmark。
+在`aikgbench`目录下，提供aikg项目中有较高使用价值的Kernel场景，整理成对应的benchmark：
+
+- **vLLM**: 基于 [vLLM](https://github.com/vllm-project/vllm) 推理引擎的高性能算子，包括注意力机制、归一化层、位置编码等核心组件
+- **SGLang**: 基于 [SGLang](https://github.com/ShanHongNan/SGlang) 的高效推理算子，专注于优化的注意力kernel和状态管理
+- **Attention Kernel Triton**: 基于 [attention_kernel_triton](https://github.com/KiritoHugh/attention_kernel_triton/tree/hw-npu) 的Flash Attention实现变体，提供prefill、decode、sparse token等多种attention模式
