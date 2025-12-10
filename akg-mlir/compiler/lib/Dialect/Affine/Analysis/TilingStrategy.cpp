@@ -789,10 +789,8 @@ unsigned getOuterTileSize(const AxisPtr axis, unsigned blockNumber) {
   unsigned upperBound = axis->loop->getConstantUpperBound();
   unsigned lowerBound = axis->loop->getConstantLowerBound();
   unsigned extent = upperBound - lowerBound;
-  // Calculate tile size to get approximately blockNumber blocks
-  unsigned tileSizePerBlock = (extent + blockNumber - 1) / blockNumber;
   // Simple ceiling division, no power of 2 alignment to avoid extreme cases
-  // (e.g., only 21 blocks when kernel can use about half)
+  unsigned tileSizePerBlock = (extent + blockNumber - 1) / blockNumber;
 
   // tileSizePerBlock = llvm::bit_ceil(tileSizePerBlock);
   const unsigned MIN_TILE_SIZE = 512;
@@ -857,12 +855,23 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
   }
 
   size_t numLevels = usedTileSizes.size();
-  for (size_t level = 1; level < numLevels; ++level) {
+  size_t currentTileLevel = axis->configs[kTileCfg].size();
+
+  // clean extra levels
+  if (currentTileLevel > numLevels) {
+    auto &cfgs = axis->configs[kTileCfg];
+    cfgs.resize(numLevels);
+    currentTileLevel = numLevels;
+  }
+
+  size_t levelsToAdd = (numLevels > currentTileLevel) ? (numLevels - currentTileLevel) : 0;
+  for (size_t level = 0; level < levelsToAdd; ++level) {
     axis->doExtraTile();
   }
+
   maxLevelToTile = std::max(maxLevelToTile, numLevels);
 
-  // Set tile sizes for each level
+  // Set tile sizes for each level (only up to numLevels)
   for (size_t level = 0; level < numLevels; ++level) {
     auto tileConfig = axis->tryGetConfig(static_cast<int>(level), kTileCfg);
     if (tileConfig != nullptr) {
@@ -877,25 +886,29 @@ void NpuDefaultTileStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
     return;
   }
 
-  // Check if this is a Reduce operation
   bool isReduceOp = false;
   if (gpuGraph->funcOp) {
     auto opType = CommonUtils::getOperatorType(gpuGraph->funcOp);
     isReduceOp = (opType == OperatorTemplate::Reduce);
   }
 
+  // avoid multiple loops
+  SmallVector<AxisPtr> axes;
+  gpuGraph->rootAxis->forEachAxisTopDown([&axes](const AxisPtr axis) {
+    if (axis) {
+      axes.push_back(axis);
+    }
+  });
+
   std::unordered_map<size_t, unsigned> bandRankMap;
   // get depth of each band
-  gpuGraph->rootAxis->forEachAxisTopDown([&bandRankMap](const AxisPtr axis) {
-    if (axis == nullptr) {
-      return;
-    }
+  for (const auto &axis : axes) {
     auto currentDepth = static_cast<unsigned>(axis->axisIdx + 1);
     auto it = bandRankMap.find(axis->bandIdx);
     if (it == bandRankMap.end() || currentDepth > it->second) {
       bandRankMap[axis->bandIdx] = currentDepth;
     }
-  });
+  }
 
   SmallVector<unsigned, 4> tileSizes;
   auto tileSizesIt = gpuGraph->globalConfigs.find("npu.multiTileSizes");
@@ -921,14 +934,10 @@ void NpuDefaultTileStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
   unsigned innerTileSize = 512;
   unsigned blockNumber = 40;
 
-  gpuGraph->rootAxis->forEachAxisTopDown([&bandRankMap, &maxLevelToTile, tileSizes,
-    innerTileSize, blockNumber, isReduceOp](const AxisPtr axis) {
-    if (axis == nullptr) {
-      return;
-    }
+  for (const auto &axis : axes) {
     auto rankIt = bandRankMap.find(axis->bandIdx);
     if (rankIt == bandRankMap.end()) {
-      return;
+      continue;
     }
 
     // Check if this axis is a reduction axis
@@ -938,7 +947,7 @@ void NpuDefaultTileStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
     }
 
     processAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, isReduceAxis);
-  });
+  }
 
   gpuGraph->levelToTile = std::max(gpuGraph->levelToTile, maxLevelToTile);
 

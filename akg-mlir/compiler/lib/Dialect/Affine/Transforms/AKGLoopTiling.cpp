@@ -90,7 +90,7 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   void runCpuOperation();
   void runCudaOperation();
   void runNpuOperation();
-  void addOuterKernelMappingLoop(mlir::func::FuncOp funcOp);
+  void addOuterKernelMappingLoop(mlir::affine::AffineForOp bandRootLoop);
 
   // Helper structures and functions for kernel mapping
   struct DimensionInfo {
@@ -116,7 +116,7 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
     int32_t ub;
     int32_t numKernels;
   };
-  MappingContext collectAndSelectMappingDimension(mlir::func::FuncOp funcOp);
+  MappingContext collectAndSelectMappingDimension(mlir::affine::AffineForOp bandRootLoop);
   mlir::affine::AffineForOp createKernelLoopAndMapFullBlock(OpBuilder &builder,
                                                             mlir::func::FuncOp funcOp,
                                                             MappingContext &ctx);
@@ -984,6 +984,7 @@ void AKGLoopTiling::tileEachBand() {
 
   unsigned forNum = band.size();
   unsigned tileSizesNum = bandTileSizes.size();
+
   if (forNum == tileSizesNum) {
     SmallVector<mlir::affine::AffineForOp, 6> tiledNest;
     if (mlir::failed(mlir::affine::tilePerfectlyNested(band, bandTileSizes, &tiledNest))) {
@@ -1101,25 +1102,76 @@ static bool isInnermostLoop(mlir::affine::AffineForOp forOp) {
 }
 
 // Collect outermost tiled loops, dimension info, select mapping dimension, and calculate numKernels
-AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(mlir::func::FuncOp funcOp) {
+
+AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(mlir::affine::AffineForOp bandRootLoop) {
   MappingContext ctx = {};
 
-  // Collect outermost tiled loops
+  if (!bandRootLoop) {
+    ctx.numKernels = 1;
+    return ctx;
+  }
+
+  // Collect outermost tiled loops that belong to this band
+  // After tiling, the band's outermost loops are in the same block as bandRootLoop
+  // and are the outermost loops (no affine.for parent except funcOp)
   SmallVector<mlir::affine::AffineForOp> outermostTiledLoops;
-  funcOp->walk([&](mlir::affine::AffineForOp forOp) {
-    Operation *parentOp = forOp->getParentOp();
-    bool isOutermost = true;
-    while (parentOp && parentOp != funcOp.getOperation()) {
-      if (isa<mlir::affine::AffineForOp>(parentOp)) {
-        isOutermost = false;
-        break;
+
+  // Find the block where the band's outermost loops are
+  // bandRootLoop should be an outermost loop, so its block should contain all band outermost loops
+  Block *bandBlock = bandRootLoop->getBlock();
+
+  // Find the range of loops belonging to this band
+  // The band's outermost loops are consecutive in the block, starting from bandRootLoop
+  // We collect loops starting from bandRootLoop and continuing until we hit a non-loop op
+  // or a loop that doesn't belong to this band (e.g., is already processed)
+  bool foundRoot = false;
+  for (Operation &op : *bandBlock) {
+    if (auto forOp = dyn_cast<mlir::affine::AffineForOp>(&op)) {
+      // Check if we've reached the root
+      if (forOp == bandRootLoop) {
+        foundRoot = true;
       }
-      parentOp = parentOp->getParentOp();
+
+      // Only collect loops starting from the root
+      if (foundRoot) {
+        // Check if it's outermost: no affine.for parent (except possibly funcOp)
+        Operation *parentOp = forOp->getParentOp();
+        bool isOutermost = true;
+        while (parentOp) {
+          if (isa<mlir::affine::AffineForOp>(parentOp)) {
+            isOutermost = false;
+            break;
+          }
+          if (isa<mlir::func::FuncOp>(parentOp)) {
+            break;
+          }
+          parentOp = parentOp->getParentOp();
+        }
+
+        // Only collect outermost loops with constant bounds that haven't been processed
+        if (isOutermost && forOp.hasConstantBounds() &&
+            !forOp->hasAttr(kTileForOneAttr)) {
+          outermostTiledLoops.push_back(forOp);
+        } else {
+          // If we hit a non-outermost loop, non-constant-bound loop, or processed loop,
+          // we've moved beyond this band's outermost loops
+          // Stop collecting (but don't break if we haven't found root yet)
+          if (isOutermost && !forOp->hasAttr(kTileForOneAttr)) {
+            // Non-constant-bound outermost loop - likely a different band
+            break;
+          }
+          // If it's processed, also stop (we've moved to next band)
+          if (forOp->hasAttr(kTileForOneAttr)) {
+            break;
+          }
+        }
+      }
+    } else if (foundRoot) {
+      // If we hit a non-loop operation after starting collection, stop
+      // This separates bands
+      break;
     }
-    if (isOutermost && forOp.hasConstantBounds()) {
-      outermostTiledLoops.push_back(forOp);
-    }
-  });
+  }
 
   if (outermostTiledLoops.empty()) {
     ctx.numKernels = 1;
@@ -1303,8 +1355,8 @@ void AKGLoopTiling::mapTailBlockToKernel(OpBuilder &builder, mlir::affine::Affin
 }
 
 // Add outer kernel mapping loop to distribute work across NPU cores
-void AKGLoopTiling::addOuterKernelMappingLoop(mlir::func::FuncOp funcOp) {
-  MappingContext ctx = collectAndSelectMappingDimension(funcOp);
+void AKGLoopTiling::addOuterKernelMappingLoop(mlir::affine::AffineForOp bandRootLoop) {
+  MappingContext ctx = collectAndSelectMappingDimension(bandRootLoop);
   if (!ctx.fullBlock) {
     return;
   }
@@ -1321,6 +1373,8 @@ void AKGLoopTiling::addOuterKernelMappingLoop(mlir::func::FuncOp funcOp) {
   builder.setInsertionPoint(ctx.fullBlock);
 
   // Create kernel loop and map full block
+  // Note: funcOp parameter is not used in createKernelLoopAndMapFullBlock, but kept for API consistency
+  mlir::func::FuncOp funcOp = bandRootLoop->getParentOfType<mlir::func::FuncOp>();
   auto kernelLoop = createKernelLoopAndMapFullBlock(builder, funcOp, ctx);
   Value kernelId = kernelLoop.getInductionVar();
 
@@ -1338,14 +1392,53 @@ void AKGLoopTiling::runNpuOperation() {
   // use tail block without if
   separateNoIf = true;
 
+  // Clear bandTileSizes to avoid pollution from previous bands
+  bandTileSizes.clear();
+
+  // Save the original band root to find the tiled root later
+  mlir::affine::AffineForOp originalBandRoot = band[0];
+  Block *parentBlock = originalBandRoot->getBlock();
+
+  // Get the location of the original root to help identify the tiled root
+  mlir::Location originalLoc = originalBandRoot.getLoc();
+
   tileEachBand();
 
+  mlir::affine::AffineForOp tiledBandRoot = nullptr;
+
+  for (auto &op : *parentBlock) {
+    if (auto forOp = dyn_cast<mlir::affine::AffineForOp>(&op)) {
+      // Skip if already processed
+      if (forOp->hasAttr(kTileForOneAttr)) {
+        continue;
+      }
+
+      // Check if it's outermost and has constant bounds
+      Operation *parentOp = forOp->getParentOp();
+      bool isOutermost = true;
+      while (parentOp && parentOp != funcOp.getOperation()) {
+        if (isa<mlir::affine::AffineForOp>(parentOp)) {
+          isOutermost = false;
+          break;
+        }
+        parentOp = parentOp->getParentOp();
+      }
+      if (isOutermost && forOp.hasConstantBounds()) {
+        // Found a candidate - use the first one we encounter
+        // (it should be the band root at or near the original position)
+        tiledBandRoot = forOp;
+        break;
+      }
+    }
+  }
+
   // Add outer kernel mapping loop to distribute work across NPU cores
-  addOuterKernelMappingLoop(funcOp);
+  if (tiledBandRoot) {
+    addOuterKernelMappingLoop(tiledBandRoot);
+  }
 
   OpBuilder builder(funcOp);
 
-  // Find outermost and innermost loops
   unsigned minDepth = UINT_MAX;
   SmallVector<std::pair<mlir::affine::AffineForOp, unsigned>> innermostCandidates;
 
