@@ -102,6 +102,18 @@ def ConvertArithToLinalg : Pass<"convert-arith-to-linalg", "func::FuncOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// ConvertArithToHIVM
+//===----------------------------------------------------------------------===//
+def ConvertArithToHIVM : Pass<"convert-arith-to-hivm", "func::FuncOp"> {
+  let summary = "Convert arith ops to HIVM ops";
+  let description = [{
+    Pass that converts element-wise arithmetic operations from the Arith dialect
+    to equivalent operations in the HIVM dialect to enable further lowering.
+  }];
+  let constructor = "mlir::createArithToHIVMConversionPass()";
+}
+
+//===----------------------------------------------------------------------===//
 // MindSporeFinalizingLower
 //===----------------------------------------------------------------------===//
 def MindSporeFinalizingLower : Pass<"mindspore-finalizing-lower", "func::FuncOp"> {
