@@ -76,6 +76,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createConvertLinalgToAffineLoopsPass());
 
     // pre-process
+    nestedFusionPM.addPass(mlir::createBF16ToF32Pass());
     nestedFusionPM.addPass(mlir::createCSEPass());
     nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
     bool promoteSingleIter = true;

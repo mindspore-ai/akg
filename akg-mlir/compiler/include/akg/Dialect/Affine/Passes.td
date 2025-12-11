@@ -335,4 +335,18 @@ def MemrefTilingFunc : Pass<"memref-tiling-func", "mlir::ModuleOp"> {
   let constructor = "mlir::affine::createMemrefTilingFuncPass()";
 }
 
+def BF16ToF32 : Pass<"bf16-to-f32", "func::FuncOp"> {
+  let summary = "Convert bf16 operands to float32 in affine operations";
+  let description = [{
+    This pass converts bf16 operands to float32 type in affine operations.
+    It inserts type conversion operations (arith::ExtFOp) to extend bf16 values
+    to float32 before they are used in affine operations.
+  }];
+  let constructor = "mlir::createBF16ToF32Pass()";
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "affine::AffineDialect"
+  ];
+}
+
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES
