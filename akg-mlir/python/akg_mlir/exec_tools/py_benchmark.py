@@ -13,7 +13,6 @@
 # limitations under the License.
 """Module for kernel test and profiling"""
 import os
-import sys
 import argparse
 import ctypes
 import json
@@ -35,12 +34,6 @@ from ..utils.gen_runtime_code import (ProfilingParams, gen_cuda_runtime_code)
 from ..utils.result_analysis import get_compare_tolerance
 from ..ascend_profilier.cann_file_parser import CANNFileParser
 from ..ascend_profilier.op_summary_parser import OpSummaryParser
-
-flags = sys.getdlopenflags()
-sys.setdlopenflags(flags | os.RTLD_GLOBAL)
-# pylint: disable=wrong-import-position
-# pylint: disable=wrong-import-order
-sys.setdlopenflags(flags)
 
 
 PROF_ERROR_CODE = 9999999999
