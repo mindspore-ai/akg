@@ -239,17 +239,6 @@ class LangGraphTask:
         
         return agents
     
-    # 已废弃：不再需要 workflow_config_path
-    # 保留此方法用于向后兼容（如果某些代码仍在使用）
-    def _get_workflow_config_path(self) -> str:
-        """已废弃：不再需要 workflow_config_path
-        
-        保留此方法用于向后兼容，但返回 None
-        """
-        logger.warning("_get_workflow_config_path() is deprecated. "
-                      "LangGraphTask no longer requires workflow_config_path.")
-        return None
-    
     async def run(self, init_task_info: Optional[Dict[str, Any]] = None) -> Tuple[str, bool, dict]:
         """执行任务（API 兼容现有 Task）
         
@@ -262,12 +251,16 @@ class LangGraphTask:
         try:
             # 准备初始状态
             initial_state = self._prepare_initial_state(init_task_info)
+            max_iter = initial_state.get("max_iterations", 20)
+            recursion_limit = max(25, max_iter * 3 + 5)
             
             logger.info(f"Task {self.task_id}, op_name: {self.op_name}")
             
             # 执行图
-            final_state = await self.app.ainvoke(initial_state)
-            
+            final_state = await self.app.ainvoke(
+                initial_state,
+                config={"recursion_limit": recursion_limit}
+            )
             # 处理结果
             success = final_state.get("verifier_result", False)
             
