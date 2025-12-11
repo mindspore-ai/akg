@@ -24,7 +24,7 @@ import subprocess
 import shutil
 
 from .utils.cpu_profiling_wrapper import wrap_timer_func
-from .backends.ascend import run_akg_opt, run_bishengir_opt
+from .backends.ascend import run_akg_opt
 
 HOST_SHAPES = "hostShapes"
 DEVICE_SHAPES = "deviceShapes"
@@ -330,16 +330,6 @@ class AkgMlirDriver:
         npu_compiler_path = get_npucompiler_path()
         input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
         so_file = os.path.join(self.output_dir, kernel_name + ".so")
-
-        if self.enable_akg_loop_fusion:
-            opt_file = os.path.join(self.output_dir, kernel_name + "_opt.mlir")
-            run_bishengir_opt(
-                input_file=input_file,
-                output_file=opt_file,
-                dump_ir=self.dump_ir
-            )
-            input_file = opt_file
-
         cmd = [
             npu_compiler_path,
             input_file,
