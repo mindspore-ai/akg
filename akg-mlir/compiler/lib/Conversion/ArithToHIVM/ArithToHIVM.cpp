@@ -579,12 +579,26 @@ struct VectorTransferReadToHIVM : public OpConversionPattern<vector::TransferRea
     SmallVector<OpFoldResult> offsets = getAsOpFoldResult(op.getIndices());
     SmallVector<OpFoldResult> sizes;
     SmallVector<OpFoldResult> strides;
+
+    auto memRefType = cast<MemRefType>(source.getType());
+    int64_t memRefRank = memRefType.getRank();
+    int64_t vecRank = vecType.getRank();
+
+    for (int64_t i = 0; i < memRefRank - vecRank; ++i) {
+      sizes.push_back(rewriter.getIndexAttr(1));
+      strides.push_back(rewriter.getIndexAttr(1));
+    }
+
     for (auto dim : vecType.getShape()) {
       sizes.push_back(rewriter.getIndexAttr(dim));
       strides.push_back(rewriter.getIndexAttr(1));
     }
+
+    auto resultType = memref::SubViewOp::inferRankReducedResultType(
+        vecType.getShape(), memRefType, offsets, sizes, strides);
+
     Value slicedSource = rewriter.create<memref::SubViewOp>(
-        loc, source, offsets, sizes, strides);
+        loc, cast<MemRefType>(resultType), source, offsets, sizes, strides);
 
     Value finalSource = slicedSource;
     Type elemType = vecType.getElementType();
@@ -636,13 +650,25 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
     SmallVector<OpFoldResult> sizes;
     SmallVector<OpFoldResult> strides;
 
+    auto memRefType = cast<MemRefType>(dest.getType());
+    int64_t memRefRank = memRefType.getRank();
+    int64_t vecRank = vecType.getRank();
+
+    for (int64_t i = 0; i < memRefRank - vecRank; ++i) {
+      sizes.push_back(rewriter.getIndexAttr(1));
+      strides.push_back(rewriter.getIndexAttr(1));
+    }
+
     for (auto dim : vecType.getShape()) {
       sizes.push_back(rewriter.getIndexAttr(dim));
       strides.push_back(rewriter.getIndexAttr(1));
     }
 
+    auto resultType = memref::SubViewOp::inferRankReducedResultType(
+        vecType.getShape(), memRefType, offsets, sizes, strides);
+
     Value slicedDest = rewriter.create<memref::SubViewOp>(
-        loc, dest, offsets, sizes, strides);
+        loc, cast<MemRefType>(resultType), dest, offsets, sizes, strides);
 
     Value finalData = dataToWrite;
     Value finalDest = slicedDest;
