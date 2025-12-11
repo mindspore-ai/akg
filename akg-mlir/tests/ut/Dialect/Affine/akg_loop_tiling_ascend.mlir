@@ -95,78 +95,78 @@
 // CHECK-NEXT:               }
 // CHECK-NEXT:             }
 // CHECK-NEXT:           }
-// CHECK-NEXT:           affine.if #set1(%arg1) {
-// CHECK-NEXT:             affine.for %arg2 = 20007 to 20500 step 493 {
-// CHECK-NEXT:               affine.for %arg3 = 0 to 5120 step 512 {
-// CHECK-NEXT:                 affine.for %arg4 = 0 to 2560 step 512 {
-// CHECK-NEXT:                   affine.for %arg5 = #map2(%arg2) to #map7(%arg2) step 493 {
-// CHECK-NEXT:                     affine.for %arg6 = #map2(%arg3) to #map4(%arg3) step 512 {
-// CHECK-NEXT:                       affine.for %arg7 = #map2(%arg4) to #map4(%arg4) step 512 {
-// CHECK-NEXT:                         affine.for %arg8 = #map2(%arg5) to #map7(%arg5) {
-// CHECK-NEXT:                           affine.for %arg9 = #map2(%arg6) to #map4(%arg6) {
-// CHECK-NEXT:                             affine.for %arg10 = #map2(%arg7) to #map4(%arg7) {
-// CHECK-NEXT:                               %2 = affine.load %0[%arg8, %arg9, %arg10] : memref<20500x5300x2605xf32, strided<[?, ?, ?], offset: ?>>
-// CHECK-NEXT:                               %3 = affine.load %alloc[%arg8] : memref<20500xf32>
-// CHECK-NEXT:                               %4 = arith.addf %2, %3 : f32
-// CHECK-NEXT:                               affine.store %4, %alloc[%arg8] : memref<20500xf32>
-// CHECK-NEXT:                             } {vector}
-// CHECK-NEXT:                           }
-// CHECK-NEXT:                         }
-// CHECK-NEXT:                       }
-// CHECK-NEXT:                     }
-// CHECK-NEXT:                   }
-// CHECK-NEXT:                 }
-// CHECK-NEXT:                 affine.for %arg4 = 2560 to 2605 step 45 {
-// CHECK-NEXT:                   affine.for %arg5 = #map2(%arg2) to #map7(%arg2) step 493 {
-// CHECK-NEXT:                     affine.for %arg6 = #map2(%arg3) to #map4(%arg3) step 512 {
-// CHECK-NEXT:                       affine.for %arg7 = #map2(%arg4) to #map5(%arg4) step 45 {
-// CHECK-NEXT:                         affine.for %arg8 = #map2(%arg5) to #map7(%arg5) {
-// CHECK-NEXT:                           affine.for %arg9 = #map2(%arg6) to #map4(%arg6) {
-// CHECK-NEXT:                             affine.for %arg10 = #map2(%arg7) to #map5(%arg7) {
-// CHECK-NEXT:                               %2 = affine.load %0[%arg8, %arg9, %arg10] : memref<20500x5300x2605xf32, strided<[?, ?, ?], offset: ?>>
-// CHECK-NEXT:                               %3 = affine.load %alloc[%arg8] : memref<20500xf32>
-// CHECK-NEXT:                               %4 = arith.addf %2, %3 : f32
-// CHECK-NEXT:                               affine.store %4, %alloc[%arg8] : memref<20500xf32>
-// CHECK-NEXT:                             } {vector}
-// CHECK-NEXT:                           }
+// CHECK-NEXT:         }
+// CHECK-NEXT:         affine.if #set1(%arg1) {
+// CHECK-NEXT:           affine.for %arg2 = 20007 to 20500 step 493 {
+// CHECK-NEXT:             affine.for %arg3 = 0 to 5120 step 512 {
+// CHECK-NEXT:               affine.for %arg4 = 0 to 2560 step 512 {
+// CHECK-NEXT:                 affine.for %arg5 = #map2(%arg2) to #map7(%arg2) step 493 {
+// CHECK-NEXT:                   affine.for %arg6 = #map2(%arg3) to #map4(%arg3) step 512 {
+// CHECK-NEXT:                     affine.for %arg7 = #map2(%arg4) to #map4(%arg4) step 512 {
+// CHECK-NEXT:                       affine.for %arg8 = #map2(%arg5) to #map7(%arg5) {
+// CHECK-NEXT:                         affine.for %arg9 = #map2(%arg6) to #map4(%arg6) {
+// CHECK-NEXT:                           affine.for %arg10 = #map2(%arg7) to #map4(%arg7) {
+// CHECK-NEXT:                             %2 = affine.load %0[%arg8, %arg9, %arg10] : memref<20500x5300x2605xf32, strided<[?, ?, ?], offset: ?>>
+// CHECK-NEXT:                             %3 = affine.load %alloc[%arg8] : memref<20500xf32>
+// CHECK-NEXT:                             %4 = arith.addf %2, %3 : f32
+// CHECK-NEXT:                             affine.store %4, %alloc[%arg8] : memref<20500xf32>
+// CHECK-NEXT:                           } {vector}
 // CHECK-NEXT:                         }
 // CHECK-NEXT:                       }
 // CHECK-NEXT:                     }
 // CHECK-NEXT:                   }
 // CHECK-NEXT:                 }
 // CHECK-NEXT:               }
-// CHECK-NEXT:               affine.for %arg3 = 5120 to 5300 step 180 {
-// CHECK-NEXT:                 affine.for %arg4 = 0 to 2560 step 512 {
-// CHECK-NEXT:                   affine.for %arg5 = #map2(%arg2) to #map7(%arg2) step 493 {
-// CHECK-NEXT:                     affine.for %arg6 = #map2(%arg3) to #map6(%arg3) step 180 {
-// CHECK-NEXT:                       affine.for %arg7 = #map2(%arg4) to #map4(%arg4) step 512 {
-// CHECK-NEXT:                         affine.for %arg8 = #map2(%arg5) to #map7(%arg5) {
-// CHECK-NEXT:                           affine.for %arg9 = #map2(%arg6) to #map6(%arg6) {
-// CHECK-NEXT:                             affine.for %arg10 = #map2(%arg7) to #map4(%arg7) {
-// CHECK-NEXT:                               %2 = affine.load %0[%arg8, %arg9, %arg10] : memref<20500x5300x2605xf32, strided<[?, ?, ?], offset: ?>>
-// CHECK-NEXT:                               %3 = affine.load %alloc[%arg8] : memref<20500xf32>
-// CHECK-NEXT:                               %4 = arith.addf %2, %3 : f32
-// CHECK-NEXT:                               affine.store %4, %alloc[%arg8] : memref<20500xf32>
-// CHECK-NEXT:                             } {vector}
-// CHECK-NEXT:                           }
+// CHECK-NEXT:               affine.for %arg4 = 2560 to 2605 step 45 {
+// CHECK-NEXT:                 affine.for %arg5 = #map2(%arg2) to #map7(%arg2) step 493 {
+// CHECK-NEXT:                   affine.for %arg6 = #map2(%arg3) to #map4(%arg3) step 512 {
+// CHECK-NEXT:                     affine.for %arg7 = #map2(%arg4) to #map5(%arg4) step 45 {
+// CHECK-NEXT:                       affine.for %arg8 = #map2(%arg5) to #map7(%arg5) {
+// CHECK-NEXT:                         affine.for %arg9 = #map2(%arg6) to #map4(%arg6) {
+// CHECK-NEXT:                           affine.for %arg10 = #map2(%arg7) to #map5(%arg7) {
+// CHECK-NEXT:                             %2 = affine.load %0[%arg8, %arg9, %arg10] : memref<20500x5300x2605xf32, strided<[?, ?, ?], offset: ?>>
+// CHECK-NEXT:                             %3 = affine.load %alloc[%arg8] : memref<20500xf32>
+// CHECK-NEXT:                             %4 = arith.addf %2, %3 : f32
+// CHECK-NEXT:                             affine.store %4, %alloc[%arg8] : memref<20500xf32>
+// CHECK-NEXT:                           } {vector}
 // CHECK-NEXT:                         }
 // CHECK-NEXT:                       }
 // CHECK-NEXT:                     }
 // CHECK-NEXT:                   }
 // CHECK-NEXT:                 }
-// CHECK-NEXT:                 affine.for %arg4 = 2560 to 2605 step 45 {
-// CHECK-NEXT:                   affine.for %arg5 = #map2(%arg2) to #map7(%arg2) step 493 {
-// CHECK-NEXT:                     affine.for %arg6 = #map2(%arg3) to #map6(%arg3) step 180 {
-// CHECK-NEXT:                       affine.for %arg7 = #map2(%arg4) to #map5(%arg4) step 45 {
-// CHECK-NEXT:                         affine.for %arg8 = #map2(%arg5) to #map7(%arg5) {
-// CHECK-NEXT:                           affine.for %arg9 = #map2(%arg6) to #map6(%arg6) {
-// CHECK-NEXT:                             affine.for %arg10 = #map2(%arg7) to #map5(%arg7) {
-// CHECK-NEXT:                               %2 = affine.load %0[%arg8, %arg9, %arg10] : memref<20500x5300x2605xf32, strided<[?, ?, ?], offset: ?>>
-// CHECK-NEXT:                               %3 = affine.load %alloc[%arg8] : memref<20500xf32>
-// CHECK-NEXT:                               %4 = arith.addf %2, %3 : f32
-// CHECK-NEXT:                               affine.store %4, %alloc[%arg8] : memref<20500xf32>
-// CHECK-NEXT:                             } {vector}
-// CHECK-NEXT:                           }
+// CHECK-NEXT:               }
+// CHECK-NEXT:             }
+// CHECK-NEXT:             affine.for %arg3 = 5120 to 5300 step 180 {
+// CHECK-NEXT:               affine.for %arg4 = 0 to 2560 step 512 {
+// CHECK-NEXT:                 affine.for %arg5 = #map2(%arg2) to #map7(%arg2) step 493 {
+// CHECK-NEXT:                   affine.for %arg6 = #map2(%arg3) to #map6(%arg3) step 180 {
+// CHECK-NEXT:                     affine.for %arg7 = #map2(%arg4) to #map4(%arg4) step 512 {
+// CHECK-NEXT:                       affine.for %arg8 = #map2(%arg5) to #map7(%arg5) {
+// CHECK-NEXT:                         affine.for %arg9 = #map2(%arg6) to #map6(%arg6) {
+// CHECK-NEXT:                           affine.for %arg10 = #map2(%arg7) to #map4(%arg7) {
+// CHECK-NEXT:                             %2 = affine.load %0[%arg8, %arg9, %arg10] : memref<20500x5300x2605xf32, strided<[?, ?, ?], offset: ?>>
+// CHECK-NEXT:                             %3 = affine.load %alloc[%arg8] : memref<20500xf32>
+// CHECK-NEXT:                             %4 = arith.addf %2, %3 : f32
+// CHECK-NEXT:                             affine.store %4, %alloc[%arg8] : memref<20500xf32>
+// CHECK-NEXT:                           } {vector}
+// CHECK-NEXT:                         }
+// CHECK-NEXT:                       }
+// CHECK-NEXT:                     }
+// CHECK-NEXT:                   }
+// CHECK-NEXT:                 }
+// CHECK-NEXT:               }
+// CHECK-NEXT:               affine.for %arg4 = 2560 to 2605 step 45 {
+// CHECK-NEXT:                 affine.for %arg5 = #map2(%arg2) to #map7(%arg2) step 493 {
+// CHECK-NEXT:                   affine.for %arg6 = #map2(%arg3) to #map6(%arg3) step 180 {
+// CHECK-NEXT:                     affine.for %arg7 = #map2(%arg4) to #map5(%arg4) step 45 {
+// CHECK-NEXT:                       affine.for %arg8 = #map2(%arg5) to #map7(%arg5) {
+// CHECK-NEXT:                         affine.for %arg9 = #map2(%arg6) to #map6(%arg6) {
+// CHECK-NEXT:                           affine.for %arg10 = #map2(%arg7) to #map5(%arg7) {
+// CHECK-NEXT:                             %2 = affine.load %0[%arg8, %arg9, %arg10] : memref<20500x5300x2605xf32, strided<[?, ?, ?], offset: ?>>
+// CHECK-NEXT:                             %3 = affine.load %alloc[%arg8] : memref<20500xf32>
+// CHECK-NEXT:                             %4 = arith.addf %2, %3 : f32
+// CHECK-NEXT:                             affine.store %4, %alloc[%arg8] : memref<20500xf32>
+// CHECK-NEXT:                           } {vector}
 // CHECK-NEXT:                         }
 // CHECK-NEXT:                       }
 // CHECK-NEXT:                     }

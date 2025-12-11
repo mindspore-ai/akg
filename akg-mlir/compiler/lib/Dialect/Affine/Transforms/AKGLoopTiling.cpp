@@ -85,6 +85,12 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
     this->useAutoTiling = useAutoTiling;
   }
 
+  AKGLoopTiling(const std::string &target, bool useAutoTiling, const std::string &arch, const std::string &feature,
+                const SmallVector<unsigned, 6> &inputTileSizes)
+      : target(target), arch(arch), feature(feature), inputTileSizes(inputTileSizes) {
+    this->useAutoTiling = useAutoTiling;
+  }
+
   void runOnOperation() override;
 
  private:
@@ -168,6 +174,7 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   size_t levelToTile{1};
 
   SmallVector<unsigned, 6> bandTileSizes;
+  SmallVector<unsigned, 6> inputTileSizes;
   size_t currentBandIdx = 0;
   mlir::MutableArrayRef<mlir::affine::AffineForOp> band;
 };
@@ -206,6 +213,12 @@ std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTili
                                                                                        const std::string &arch,
                                                                                        const std::string &feature) {
   return std::make_unique<AKGLoopTiling>(target, useAutoTiling, arch, feature);
+}
+
+std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopTilingPass(
+  const std::string &target, bool useAutoTiling, const std::string &arch, const std::string &feature,
+  const llvm::SmallVector<unsigned, 6> &inputTileSizes) {
+  return std::make_unique<AKGLoopTiling>(target, useAutoTiling, arch, feature, inputTileSizes);
 }
 
 static void moveLoopBody(mlir::affine::AffineForOp src, mlir::affine::AffineForOp dest) {
@@ -694,8 +707,9 @@ mlir::LogicalResult AKGLoopTiling::createTailBlockStatic(mlir::affine::AffineFor
   }
 
   // Insert the tail tiles
-  mlir::OpBuilder b(forOp);
-  b.setInsertionPointAfter(forOp);
+  // Ensure tail block is inserted after forOp in the same parent block, not inside forOp's body
+  mlir::Block *parentBlock = forOp->getBlock();
+  mlir::OpBuilder b(parentBlock, std::next(forOp->getIterator()));
   auto tailOp = b.clone(*forOp.getOperation());
   auto tailForOp = mlir::dyn_cast<mlir::affine::AffineForOp>(tailOp);
   tailForOp.setLowerBoundMap(ubMap);
@@ -741,8 +755,9 @@ mlir::LogicalResult AKGLoopTiling::createTailBlockDynamic(mlir::affine::AffineFo
   }
 
   // Insert the tail tiles
-  mlir::OpBuilder b(forOp);
-  b.setInsertionPointAfter(forOp);
+  // Ensure tail block is inserted after forOp in the same parent block, not inside forOp's body
+  mlir::Block *parentBlock = forOp->getBlock();
+  mlir::OpBuilder b(parentBlock, std::next(forOp->getIterator()));
   mlir::affine::AffineForOp tailForOp =
     b.create<mlir::affine::AffineForOp>(forOp.getLoc(), forOp.getUpperBoundOperands(), ubMap, origUbOp, origUbMap, 1);
 
@@ -1101,7 +1116,6 @@ static bool isInnermostLoop(mlir::affine::AffineForOp forOp) {
 }
 
 // Collect outermost tiled loops, dimension info, select mapping dimension, and calculate numKernels
-
 AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(mlir::affine::AffineForOp bandRootLoop) {
   MappingContext ctx = {};
 
@@ -1111,18 +1125,12 @@ AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(ml
   }
 
   // Collect outermost tiled loops that belong to this band
-  // After tiling, the band's outermost loops are in the same block as bandRootLoop
-  // and are the outermost loops (no affine.for parent except funcOp)
   SmallVector<mlir::affine::AffineForOp> outermostTiledLoops;
 
-  // Find the block where the band's outermost loops are
   // bandRootLoop should be an outermost loop, so its block should contain all band outermost loops
   Block *bandBlock = bandRootLoop->getBlock();
 
   // Find the range of loops belonging to this band
-  // The band's outermost loops are consecutive in the block, starting from bandRootLoop
-  // We collect loops starting from bandRootLoop and continuing until we hit a non-loop op
-  // or a loop that doesn't belong to this band (e.g., is already processed)
   bool foundRoot = false;
   for (Operation &op : *bandBlock) {
     if (auto forOp = dyn_cast<mlir::affine::AffineForOp>(&op)) {
@@ -1152,22 +1160,15 @@ AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(ml
             !forOp->hasAttr(kTileForOneAttr)) {
           outermostTiledLoops.push_back(forOp);
         } else {
-          // If we hit a non-outermost loop, non-constant-bound loop, or processed loop,
-          // we've moved beyond this band's outermost loops
-          // Stop collecting (but don't break if we haven't found root yet)
           if (isOutermost && !forOp->hasAttr(kTileForOneAttr)) {
-            // Non-constant-bound outermost loop - likely a different band
             break;
           }
-          // If it's processed, also stop (we've moved to next band)
           if (forOp->hasAttr(kTileForOneAttr)) {
             break;
           }
         }
       }
     } else if (foundRoot) {
-      // If we hit a non-loop operation after starting collection, stop
-      // This separates bands
       break;
     }
   }
@@ -1278,7 +1279,6 @@ mlir::affine::AffineForOp AKGLoopTiling::createKernelLoopAndMapFullBlock(OpBuild
   mlir::Location loc = fullLoop.getLoc();
 
   // Insertion point should already be set in addOuterKernelMappingLoop
-  // Just verify it's correct before creating the loop
   auto kernelLoop = builder.create<mlir::affine::AffineForOp>(
     loc, 0, ctx.numKernels, 1);
 
@@ -1310,10 +1310,37 @@ mlir::affine::AffineForOp AKGLoopTiling::createKernelLoopAndMapFullBlock(OpBuild
     SmallVector<AffineExpr> exprs = {condExpr};
     SmallVector<bool> eqFlags = {false};
     auto condSet = IntegerSet::get(1, 0, exprs, eqFlags);
-    builder.setInsertionPoint(fullLoop);
+
+    // Ensure if is inserted before fullLoop, and if tailBlock exists after fullLoop,
+    mlir::Block *parentBlock = fullLoop->getBlock();
+
+    // Temporarily move tailBlock out of the way if it's in the same block after fullLoop
+    bool tailBlockMoved = false;
+    mlir::Block *originalTailBlock = nullptr;
+    if (ctx.tailBlock && ctx.tailBlock->getBlock() == parentBlock) {
+      // Check if tailBlock comes after fullLoop in the block
+      bool foundFullLoop = false;
+      for (auto it = parentBlock->begin(); it != parentBlock->end(); ++it) {
+        if (&*it == fullLoop.getOperation()) {
+          foundFullLoop = true;
+        } else if (foundFullLoop && &*it == ctx.tailBlock.getOperation()) {
+          // Tail block is after fullLoop, temporarily move it out
+          originalTailBlock = ctx.tailBlock->getBlock();
+          ctx.tailBlock->moveBefore(parentBlock, parentBlock->end());
+          tailBlockMoved = true;
+          break;
+        }
+      }
+    }
+    // Set insertion point before fullLoop
+    builder.setInsertionPoint(parentBlock, fullLoop->getIterator());
     auto ifOp = builder.create<mlir::affine::AffineIfOp>(fullLoop.getLoc(), condSet,
                                                          ValueRange{kernelId}, /*hasElse=*/false);
     fullLoop->moveBefore(&ifOp.getThenBlock()->front());
+    // Restore tailBlock position if it was moved
+    if (tailBlockMoved && originalTailBlock) {
+      ctx.tailBlock->moveBefore(originalTailBlock, ifOp->getIterator());
+    }
   }
   fullLoop.setLowerBound(ValueRange{kernelId}, startMap);
   fullLoop.setUpperBound(ValueRange{kernelId}, endMap);
@@ -1331,8 +1358,34 @@ void AKGLoopTiling::mapTailBlockToKernel(OpBuilder &builder, mlir::affine::Affin
 
   Block *kernelBody = kernelLoop.getBody();
 
-  // Move tail block into kernel body (after full block)
-  builder.setInsertionPointAfter(fullLoop);
+  // Find the if operation that wraps fullLoop (if it exists)
+  mlir::Operation *insertAfterOp = fullLoop.getOperation();
+  mlir::Operation *parentOp = fullLoop->getParentOp();
+  // First check if fullLoop's direct parent is an ifOp
+  if (parentOp) {
+    if (auto ifOp = mlir::dyn_cast<mlir::affine::AffineIfOp>(parentOp)) {
+      // Found the if that wraps fullLoop, insert tail block after this if
+      insertAfterOp = ifOp;
+    } else {
+      // Walk up the parent chain to find ifOp
+      // Note: we need to check all parents, even if they're in kernelBody,
+      // because ifOp might be in kernelBody but still wrap fullLoop
+      mlir::Operation *currentOp = parentOp;
+      while (currentOp) {
+        if (auto ifOp = mlir::dyn_cast<mlir::affine::AffineIfOp>(currentOp)) {
+          insertAfterOp = ifOp;
+          break;
+        }
+        // Stop if we've reached kernelBody and it's not an ifOp
+        if (currentOp->getBlock() == kernelBody) {
+          break;
+        }
+        currentOp = currentOp->getParentOp();
+      }
+    }
+  }
+  // Move tail block into kernel body (after full block or its wrapping if)
+  builder.setInsertionPointAfter(insertAfterOp);
   if (tailLoop->getBlock() != kernelBody) {
     tailLoop->moveBefore(builder.getInsertionBlock(), builder.getInsertionPoint());
   }
@@ -1423,8 +1476,7 @@ void AKGLoopTiling::runNpuOperation() {
         parentOp = parentOp->getParentOp();
       }
       if (isOutermost && forOp.hasConstantBounds()) {
-        // Found a candidate - use the first one we encounter
-        // (it should be the band root at or near the original position)
+        // Found a candidate - use the first one(it should be the band root at or near the original position)
         tiledBandRoot = forOp;
         break;
       }
@@ -1568,6 +1620,10 @@ void AKGLoopTiling::runOnOperation() {
     initGraph->setIsDynamicShape(isDynamicShape());
     initGraph->setTilingMode(tilingMode);
 
+    // If inputTileSizes is provided, use it to override multiTileSizes
+    if (target == mlir::kTargetNpu && this->multiTileSizes.empty()) {
+      this->multiTileSizes = this->inputTileSizes;
+    }
     if (target == mlir::kTargetNpu && !this->multiTileSizes.empty()) {
       mlir::OpBuilder builder(funcOp);
       SmallVector<Attribute, 4> tileSizeAttrs;
@@ -1601,4 +1657,3 @@ void AKGLoopTiling::runOnOperation() {
     }
   }
 }
-
