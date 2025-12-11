@@ -12,14 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ akg launch and compile utils """
+import os
+import sys
 import ctypes
 import logging
 import subprocess
 import numpy as np
 
 from akg.message import get_npucompiler_path
-from akg import akgAscendLaunch
 from akg.utils.dynamic_utils import get_device_shape
+
+flags = sys.getdlopenflags()
+sys.setdlopenflags(flags | os.RTLD_GLOBAL)
+# pylint: disable=wrong-import-position
+# pylint: disable=wrong-import-order
+from akg import akgAscendLaunch
+sys.setdlopenflags(flags)
 
 
 def ascend_compile(input_file, output_so_path):
