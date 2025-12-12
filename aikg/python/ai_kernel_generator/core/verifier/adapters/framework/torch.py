@@ -319,12 +319,20 @@ def compare(fw_out, impl_out, limit, data_type):
     if fw_flat.shape != impl_flat.shape:
         raise AssertionError(f"验证失败，输出形状不一致: framework={fw_flat.shape}, impl={impl_flat.shape}")
     
-    # 2. 检查NaN值
-    fw_nan_count = torch.isnan(fw_flat).sum().item()
-    impl_nan_count = torch.isnan(impl_flat).sum().item()
+    # 2. 检查NaN值 - 只有当两边NaN位置都匹配时才允许
+    fw_nan_mask = torch.isnan(fw_flat)
+    impl_nan_mask = torch.isnan(impl_flat)
     
-    if fw_nan_count > 0 or impl_nan_count > 0:
-        raise AssertionError(f"验证失败，检测到NaN值: Framework={fw_nan_count}/{size}, Implementation={impl_nan_count}/{size}")
+    # 检查NaN位置是否匹配
+    if not torch.equal(fw_nan_mask, impl_nan_mask):
+        fw_nan_count = fw_nan_mask.sum().item()
+        impl_nan_count = impl_nan_mask.sum().item()
+        raise AssertionError(f"验证失败，NaN位置不匹配: Framework={fw_nan_count}/{size}, Implementation={impl_nan_count}/{size}")
+    
+    # 如果有NaN，打印信息但继续验证
+    if fw_nan_mask.any():
+        nan_count = fw_nan_mask.sum().item()
+        print(f"检测到NaN值: {nan_count}/{size} (位置一致，继续验证)")
     
     # 3. 检查Inf值 - 只有当两边Inf位置和符号都匹配时才允许
     fw_inf_mask = torch.isinf(fw_flat)
