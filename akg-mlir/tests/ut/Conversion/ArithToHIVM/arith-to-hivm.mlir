@@ -1765,3 +1765,37 @@ func.func @test_vector_transfer(%arg0: memref<16xf32>, %arg1: memref<16xf32>) {
   vector.transfer_write %0, %arg1[%c0] : vector<16xf32>, memref<16xf32>
   return
 }
+
+// -----
+
+func.func @minimal_loop() {
+  // CHECK: %[[CST:.*]] = arith.constant 1.000000e+00 : f32
+  // CHECK: %[[UB:.*]] = memref.alloc() : memref<3072xf32>
+  // CHECK: hivm.hir.vbrc ins(%[[CST]] : f32) outs(%[[UB]] : memref<3072xf32>)
+  // CHECK: %[[RES:.*]] = affine.for %[[I:.*]] = 0 to 3072 step 3072 iter_args(%[[ACC:.*]] = %[[UB]]) -> (memref<3072xf32>) {
+  // CHECK:   affine.yield %[[ACC]] : memref<3072xf32>
+  // CHECK: }
+  
+  %cst = arith.constant dense<1.0> : vector<3072xf32>
+  %0 = affine.for %i = 0 to 3072 step 3072 iter_args(%acc = %cst) -> (vector<3072xf32>) {
+   affine.yield %acc : vector<3072xf32>
+  }
+  return
+}
+
+// -----
+
+func.func @test_standalone(%buffer: memref<20480xf32>) {
+  // CHECK: %[[CST_SCALAR:.*]] = arith.constant 1.000000e+00 : f32
+  // CHECK: %[[CST_BUF:.*]] = memref.alloc() : memref<3072xf32>
+  // CHECK: hivm.hir.vbrc ins(%[[CST_SCALAR]] : f32) outs(%[[CST_BUF]] : memref<3072xf32>)
+  // CHECK: %[[SUM_BUF:.*]] = memref.alloc() : memref<1xf32>
+  // CHECK: hivm.hir.vreduce <sum> ins(%[[CST_BUF]] : memref<3072xf32>) outs(%[[SUM_BUF]] : memref<1xf32>) reduce_dims = [0]
+  // CHECK: %[[BUFFER_SUBVIEW:.*]] = memref.subview %arg0[0] [1] [1] : memref<20480xf32> to memref<1xf32, strided<[1]>>
+  // CHECK: hivm.hir.store ins(%[[SUM_BUF]] : memref<1xf32>) outs(%[[BUFFER_SUBVIEW]] : memref<1xf32, strided<[1]>>)
+
+  %cst_vec = arith.constant dense<1.0> : vector<3072xf32>
+  %sum = vector.reduction <add>, %cst_vec : vector<3072xf32> into f32
+  affine.store %sum, %buffer[0] : memref<20480xf32>
+  return
+}
