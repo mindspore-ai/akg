@@ -64,9 +64,6 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
     Value rhsMemRef = adaptor.getRhs();
 
     Type elemType = vectorType.getElementType();
-    if (elemType.isInteger(1)) {
-        elemType = rewriter.getIntegerType(8);
-    }
     auto memRefType = MemRefType::get(vectorType.getShape(), elemType);
 
     Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
@@ -151,9 +148,6 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     Value srcMemRef = adaptor.getOperands()[0];
 
     Type elemType = vectorType.getElementType();
-    if (elemType.isInteger(1)) {
-        elemType = rewriter.getIntegerType(8);
-    }
     auto memRefType = MemRefType::get(vectorType.getShape(), elemType);
     Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
 
@@ -266,9 +260,6 @@ struct ArithCmpToHIVM : OpConversionPattern<CompareOp> {
     Value rhs = adaptor.getRhs();
 
     Type elemType = vectorType.getElementType();
-    if (elemType.isInteger(1)) {
-        elemType = rewriter.getIntegerType(8);
-    }
     auto memRefType = MemRefType::get(vectorType.getShape(), elemType);
     Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
 
@@ -338,9 +329,6 @@ struct ElementwiseOpToHIVMBinary : public OpConversionPattern<ArithOp> {
     Value rhs = adaptor.getRhs();
 
     Type elemType = vectorType.getElementType();
-    if (elemType.isInteger(1)) {
-        elemType = rewriter.getIntegerType(8);
-    }
     auto memRefType = MemRefType::get(vectorType.getShape(), elemType);
     Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
 
@@ -377,9 +365,6 @@ struct ArithSelectToHIVM : public OpConversionPattern<SelectOp> {
     Value falseVal = adaptor.getFalseValue();
 
     Type elemType = vectorType.getElementType();
-    if (elemType.isInteger(1)) {
-        elemType = rewriter.getIntegerType(8);
-    }
     auto memRefType = MemRefType::get(vectorType.getShape(), elemType);
     Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
 
@@ -464,26 +449,6 @@ struct VectorReductionToHIVM : public OpConversionPattern<vector::ReductionOp> {
     }
   }
 
-  static Value getInitValue(vector::ReductionOp op, Type elemType,
-                            vector::CombiningKind kind,
-                            ConversionPatternRewriter &rewriter, Location loc) {
-    if (op.getNumOperands() == 2) {
-      return op.getOperand(1);
-    }
-
-    TypedAttr identityAttr;
-    if (isa<FloatType>(elemType)) {
-      double val = (kind == vector::CombiningKind::MUL) ? 1.0 : 0.0;
-      identityAttr = rewriter.getFloatAttr(elemType, val);
-    } else {
-      int64_t val = 0;
-      if (kind == vector::CombiningKind::MUL) val = 1;
-      if (kind == vector::CombiningKind::AND) val = -1;
-      identityAttr = rewriter.getIntegerAttr(elemType, val);
-    }
-    return rewriter.create<arith::ConstantOp>(loc, identityAttr);
-  }
-
   LogicalResult matchAndRewrite(vector::ReductionOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
@@ -508,12 +473,6 @@ struct VectorReductionToHIVM : public OpConversionPattern<vector::ReductionOp> {
     auto resultMemRefType = MemRefType::get(targetShape, elemType);
     Value resultBuf = rewriter.create<memref::AllocOp>(loc, resultMemRefType);
 
-    Value initVal = getInitValue(op, elemType, kind, rewriter, loc);
-
-    SmallVector<Value> zeros;
-    for (int i = 0; i < rank; ++i) zeros.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
-    rewriter.create<memref::StoreOp>(loc, initVal, resultBuf, zeros);
-
     SmallVector<int64_t> reduceDims;
     for (int64_t i = 0; i < rank; ++i) reduceDims.push_back(i);
 
@@ -522,8 +481,7 @@ struct VectorReductionToHIVM : public OpConversionPattern<vector::ReductionOp> {
         loc, TypeRange{}, sourceMemRef, resultBuf, Value(),
         reduceOpAttr, rewriter.getDenseI64ArrayAttr(reduceDims), Value());
 
-    Value scalarResult = rewriter.create<memref::LoadOp>(loc, resultBuf, zeros);
-    rewriter.replaceOp(op, scalarResult);
+    rewriter.replaceOp(op, resultBuf);
 
     return success();
   }
@@ -538,12 +496,19 @@ struct VectorBroadcastToHIVM : public OpConversionPattern<vector::BroadcastOp> {
     Location loc = op.getLoc();
     Value source = adaptor.getSource();
 
-    if (isa<VectorType>(source.getType()) || isa<MemRefType>(source.getType())) {
-       return rewriter.notifyMatchFailure(op, "only scalar broadcast supported");
+    if (isa<VectorType>(source.getType())) {
+       return rewriter.notifyMatchFailure(op, "vector broadcast not supported");
     }
 
     auto vecType = op.getVector().getType();
     auto memRefType = MemRefType::get(vecType.getShape(), vecType.getElementType());
+
+    if (auto srcMemRefType = dyn_cast<MemRefType>(source.getType())) {
+      if (srcMemRefType == memRefType) {
+        rewriter.replaceOp(op, source);
+        return success();
+      }
+    }
 
     Value resultBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
 
@@ -603,13 +568,7 @@ struct VectorTransferReadToHIVM : public OpConversionPattern<vector::TransferRea
     Value finalSource = slicedSource;
     Type elemType = vecType.getElementType();
 
-    if (elemType.isInteger(1)) {
-       elemType = rewriter.getIntegerType(8);
 
-       auto i8MemRefType = MemRefType::get(vecType.getShape(), elemType);
-
-       finalSource = rewriter.create<hivm::BitcastOp>(loc, i8MemRefType, slicedSource);
-    }
 
     auto targetMemRefType = MemRefType::get(vecType.getShape(), elemType);
     Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType);
@@ -644,7 +603,9 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
       return rewriter.notifyMatchFailure(op, "expected memref data source");
     }
 
-    auto vecType = op.getVectorType();
+    auto vecType = dyn_cast<VectorType>(op.getVector().getType());
+    int64_t vecRank = vecType ? vecType.getRank() : 0;
+    ArrayRef<int64_t> vecShape = vecType ? vecType.getShape() : ArrayRef<int64_t>{};
 
     SmallVector<OpFoldResult> offsets = getAsOpFoldResult(op.getIndices());
     SmallVector<OpFoldResult> sizes;
@@ -652,20 +613,19 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
 
     auto memRefType = cast<MemRefType>(dest.getType());
     int64_t memRefRank = memRefType.getRank();
-    int64_t vecRank = vecType.getRank();
 
     for (int64_t i = 0; i < memRefRank - vecRank; ++i) {
       sizes.push_back(rewriter.getIndexAttr(1));
       strides.push_back(rewriter.getIndexAttr(1));
     }
 
-    for (auto dim : vecType.getShape()) {
+    for (auto dim : vecShape) {
       sizes.push_back(rewriter.getIndexAttr(dim));
       strides.push_back(rewriter.getIndexAttr(1));
     }
 
     auto resultType = memref::SubViewOp::inferRankReducedResultType(
-        vecType.getShape(), memRefType, offsets, sizes, strides);
+        vecShape, memRefType, offsets, sizes, strides);
 
     Value slicedDest = rewriter.create<memref::SubViewOp>(
         loc, cast<MemRefType>(resultType), dest, offsets, sizes, strides);
@@ -676,20 +636,17 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
     auto destMemRefType = cast<MemRefType>(slicedDest.getType());
     auto dataMemRefType = cast<MemRefType>(dataToWrite.getType());
 
-    if (destMemRefType.getElementType().isInteger(1)) {
-      auto i8Type = rewriter.getIntegerType(8);
-      auto i8MemRefType = MemRefType::get(destMemRefType.getShape(), i8Type);
-
-      finalDest = rewriter.create<hivm::BitcastOp>(loc, i8MemRefType, finalDest);
-
-      if (dataMemRefType.getElementType().isInteger(1)) {
-        Value dataI8Buf = rewriter.create<memref::AllocOp>(loc, i8MemRefType);
-        auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::RINT);
-        rewriter.create<hivm::VCastOp>(
-            loc, TypeRange{}, finalData, dataI8Buf, roundingAttr);
-        finalData = dataI8Buf;
-      }
+    if (dataMemRefType.getRank() != destMemRefType.getRank()) {
+       if (dataMemRefType.getRank() > destMemRefType.getRank()) {
+          SmallVector<int64_t> scalarShape;
+          auto targetType = MemRefType::get(scalarShape, dataMemRefType.getElementType());
+          SmallVector<ReassociationIndices> reassociation;
+          finalData = rewriter.create<memref::CollapseShapeOp>(
+              loc, targetType, finalData, reassociation);
+       }
     }
+
+
     rewriter.create<hivm::StoreOp>(
         loc,
         TypeRange{},
