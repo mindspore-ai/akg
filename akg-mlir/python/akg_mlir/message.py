@@ -24,6 +24,7 @@ import subprocess
 import shutil
 
 from .utils.cpu_profiling_wrapper import wrap_timer_func
+from .backends.ascend import run_akg_opt, run_bishengir_opt
 
 HOST_SHAPES = "hostShapes"
 DEVICE_SHAPES = "deviceShapes"
@@ -278,31 +279,21 @@ class AkgMlirDriver:
         """compile mlir use ascend pipeline."""
         input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
         out_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
-        ascend_opt_option = "--ascend-opt"
-        if dyn_shape:
-            ascend_opt_option += "=dynamic-shape=true"
-        if self.enable_akg_loop_fusion:
-            ascend_opt_option += "=enable-akg-loop-fusion=1"
-        if self.arch:
-            if "=" in ascend_opt_option:
-                ascend_opt_option += f" arch={self.arch}"
-            else:
-                ascend_opt_option += f"=arch={self.arch}"
-        cmd = [os.path.join(self.akg_tools_dir, "bin/akg-opt"), input_file, ascend_opt_option, "-o", out_file]
+
+        dump_log_path = None
         if self.dump_ir:
-            cmd.append("--mlir-print-ir-after-all")
-        try:
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            if self.dump_ir:
-                dump_log = os.path.join(self.output_dir, kernel_name + "_dump_ascend_state1.log")
-                with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
-                    f.write(result.stderr)
-        except subprocess.CalledProcessError as e:
-            logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
-            raise RuntimeError("mlir pipeline failed in case: " + kernel_name + "!\n") from e
+            dump_log_path = os.path.join(self.output_dir, kernel_name + "_dump_ascend_state1.log")
 
-
-        logging.info("mlir pipeline success")
+        run_akg_opt(
+            input_file=input_file,
+            output_file=out_file,
+            akg_tools_dir=self.akg_tools_dir,
+            dyn_shape=dyn_shape,
+            enable_akg_loop_fusion=self.enable_akg_loop_fusion,
+            arch=self.arch,
+            dump_ir=self.dump_ir,
+            dump_log_path=dump_log_path
+        )
 
     def _dump_ascend_meta_data(self, block_dim, kernel_name):
         """dump ascend meta data."""
@@ -342,23 +333,12 @@ class AkgMlirDriver:
 
         if self.enable_akg_loop_fusion:
             opt_file = os.path.join(self.output_dir, kernel_name + "_opt.mlir")
-            opt_cmd = ["bishengir-opt",
-                       input_file,
-                       "-convert-math-to-hfusion",
-                       "-convert-linalg-to-hfusion",
-                       "-convert-tensor-to-hfusion",
-                       "-convert-arith-to-hfusion",
-                       "-hfusion-reorder-ops",
-                       "-o",
-                       opt_file]
-            if self.dump_ir:
-                opt_cmd.append("-mlir-print-ir-after-all")
+            run_bishengir_opt(
+                input_file=input_file,
+                output_file=opt_file,
+                dump_ir=self.dump_ir
+            )
             input_file = opt_file
-            try:
-                subprocess.run(opt_cmd, check=True, capture_output=True, text=True)
-            except subprocess.CalledProcessError as e:
-                logging.error("run bishengir-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
-                raise RuntimeError("generate hfusion mlir: " + input_file + "!\n") from e
 
         cmd = [
             npu_compiler_path,
