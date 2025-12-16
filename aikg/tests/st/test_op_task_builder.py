@@ -12,23 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TaskInitAgent ST测试用例
+"""OpTaskBuilderAgent ST测试用例
 
 测试多轮交互将用户文字需求转换为KernelBench格式的完整流程。
 
 运行方式：
     cd aikg && source env.sh
-    pytest tests/st/test_task_init_agent.py -v -s
+    pytest tests/st/test_op_task_builder.py -v -s
 """
 
 import pytest
-import asyncio
-from typing import Dict, Any
+import os
 
-from ai_kernel_generator.workflows.task_init_workflow import TaskInitWorkflow, run_task_init
-from ai_kernel_generator.utils.langgraph.task_init_state import TaskInitStatus
+from ai_kernel_generator.workflows.op_task_builder_workflow import OpTaskBuilderWorkflow, run_op_task_builder
+from ai_kernel_generator.utils.langgraph.op_task_builder_state import OpTaskBuilderStatus
 from ai_kernel_generator.utils.common_utils import ParserFactory
 from ai_kernel_generator.config.config_validator import load_config
+from ai_kernel_generator.core.worker.manager import register_remote_worker
+
+cuda_worker_url = os.environ.get("CUDA_WORKER_URL", "http://localhost:9001")
+
+
+async def ensure_worker_registered():
+    """确保 worker 已注册（如果已注册则跳过）"""
+    from ai_kernel_generator.core.worker.manager import get_worker_manager
+    if not await get_worker_manager().has_worker(backend="cuda", arch="a100"):
+        await register_remote_worker(backend="cuda", arch="a100", worker_url=cuda_worker_url)
 
 
 def get_test_config() -> dict:
@@ -39,47 +48,47 @@ def get_test_config() -> dict:
     """
     try:
         config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")
-        # 确保task_init模型配置存在（使用coder模型作为fallback）
-        if "agent_model_config" in config and "task_init" not in config["agent_model_config"]:
-            config["agent_model_config"]["task_init"] = config["agent_model_config"].get("coder", "default")
+        # 确保op_task_builder模型配置存在（使用coder模型作为fallback）
+        if "agent_model_config" in config and "op_task_builder" not in config["agent_model_config"]:
+            config["agent_model_config"]["op_task_builder"] = config["agent_model_config"].get("coder", "default")
         return config
     except Exception as e:
         print(f"Warning: Failed to load config file: {e}, using minimal config")
         return {
             "agent_model_config": {
-                "task_init": "default",
+                "op_task_builder": "default",
                 "coder": "default",
             },
             "log_dir": "/tmp/aikg_test",
-            "task_init_max_iterations": 5,
+            "op_task_builder_max_iterations": 5,
         }
 
 
-class TestTaskInitParser:
-    """测试TaskInit解析器"""
+class TestOpTaskBuilderParser:
+    """测试OpTaskBuilder解析器"""
     
     def test_parser_creation(self):
         """测试解析器创建"""
-        parser = ParserFactory.get_task_init_parser()
+        parser = ParserFactory.get_op_task_builder_parser()
         assert parser is not None
         
         # 检查format_instructions
         instructions = parser.get_format_instructions()
         assert "op_name" in instructions
         assert "status" in instructions
-        assert "task_desc" in instructions
+        assert "task_code" in instructions
     
     def test_parser_parse_ready(self):
         """测试解析ready状态的输出"""
-        parser = ParserFactory.get_task_init_parser()
+        parser = ParserFactory.get_op_task_builder_parser()
         
         # 模拟LLM输出
         llm_output = '''```json
 {
     "op_name": "relu",
     "status": "ready",
-    "task_desc": "import torch\\nimport torch.nn as nn\\n\\nclass Model(nn.Module):\\n    def __init__(self):\\n        super(Model, self).__init__()\\n    \\n    def forward(self, x):\\n        return torch.relu(x)\\n\\nbatch_size = 16\\ndim = 16384\\n\\ndef get_inputs():\\n    return [torch.randn(batch_size, dim)]\\n\\ndef get_init_inputs():\\n    return []",
-    "message": "已生成ReLU算子代码",
+    "task_code": "import torch\\nimport torch.nn as nn\\n\\nclass Model(nn.Module):\\n    def __init__(self):\\n        super(Model, self).__init__()\\n    \\n    def forward(self, x):\\n        return torch.relu(x)\\n\\nbatch_size = 16\\ndim = 16384\\n\\ndef get_inputs():\\n    return [torch.randn(batch_size, dim)]\\n\\ndef get_init_inputs():\\n    return []",
+    "description": "已生成ReLU算子代码",
     "reasoning": "用户需要ReLU激活函数，这是一个简单的元素级操作"
 }
 ```'''
@@ -88,18 +97,18 @@ class TestTaskInitParser:
         assert result is not None
         assert result.op_name == "relu"
         assert result.status == "ready"
-        assert "class Model" in result.task_desc
+        assert "class Model" in result.task_code
     
     def test_parser_parse_need_clarification(self):
         """测试解析need_clarification状态的输出"""
-        parser = ParserFactory.get_task_init_parser()
+        parser = ParserFactory.get_op_task_builder_parser()
         
         llm_output = '''```json
 {
     "op_name": "",
     "status": "need_clarification",
-    "task_desc": "",
-    "message": "请问您需要的矩阵乘法的输入形状是什么？例如：两个1024x1024的方阵",
+    "task_code": "",
+    "description": "请问您需要的矩阵乘法的输入形状是什么？例如：两个1024x1024的方阵",
     "reasoning": "用户只说了矩阵乘法，没有指定具体的形状"
 }
 ```'''
@@ -107,18 +116,18 @@ class TestTaskInitParser:
         result = ParserFactory.robust_parse(llm_output, parser)
         assert result is not None
         assert result.status == "need_clarification"
-        assert "形状" in result.message
+        assert "形状" in result.description
 
 
-class TestTaskInitStaticCheck:
+class TestOpTaskBuilderStaticCheck:
     """测试静态检查功能"""
     
     def test_valid_task_desc(self):
         """测试有效的task_desc"""
-        from ai_kernel_generator.core.agent.task_init_agent import TaskInitAgent
+        from ai_kernel_generator.core.agent.op_task_builder import OpTaskBuilder
         
         config = get_test_config()
-        agent = TaskInitAgent(config)
+        agent = OpTaskBuilder(config)
         
         valid_code = '''import torch
 import torch.nn as nn
@@ -145,10 +154,10 @@ def get_init_inputs():
     
     def test_missing_model_class(self):
         """测试缺少Model类"""
-        from ai_kernel_generator.core.agent.task_init_agent import TaskInitAgent
+        from ai_kernel_generator.core.agent.op_task_builder import OpTaskBuilder
         
         config = get_test_config()
-        agent = TaskInitAgent(config)
+        agent = OpTaskBuilder(config)
         
         invalid_code = '''import torch
 
@@ -165,10 +174,10 @@ def get_init_inputs():
     
     def test_missing_forward_method(self):
         """测试缺少forward方法"""
-        from ai_kernel_generator.core.agent.task_init_agent import TaskInitAgent
+        from ai_kernel_generator.core.agent.op_task_builder import OpTaskBuilder
         
         config = get_test_config()
-        agent = TaskInitAgent(config)
+        agent = OpTaskBuilder(config)
         
         invalid_code = '''import torch
 import torch.nn as nn
@@ -193,10 +202,10 @@ def get_init_inputs():
     
     def test_missing_get_inputs(self):
         """测试缺少get_inputs函数"""
-        from ai_kernel_generator.core.agent.task_init_agent import TaskInitAgent
+        from ai_kernel_generator.core.agent.op_task_builder import OpTaskBuilder
         
         config = get_test_config()
-        agent = TaskInitAgent(config)
+        agent = OpTaskBuilder(config)
         
         invalid_code = '''import torch
 import torch.nn as nn
@@ -218,10 +227,10 @@ def get_init_inputs():
     
     def test_syntax_error(self):
         """测试语法错误"""
-        from ai_kernel_generator.core.agent.task_init_agent import TaskInitAgent
+        from ai_kernel_generator.core.agent.op_task_builder import OpTaskBuilder
         
         config = get_test_config()
-        agent = TaskInitAgent(config)
+        agent = OpTaskBuilder(config)
         
         invalid_code = '''import torch
 class Model(nn.Module)
@@ -234,21 +243,21 @@ class Model(nn.Module)
         assert "Syntax error" in error or "Error" in error
 
 
-class TestTaskInitWorkflow:
-    """测试TaskInitWorkflow"""
+class TestOpTaskBuilderWorkflow:
+    """测试OpTaskBuilderWorkflow"""
     
     def test_workflow_creation(self):
         """测试workflow创建"""
         config = get_test_config()
-        workflow = TaskInitWorkflow(config)
+        workflow = OpTaskBuilderWorkflow(config)
         
-        assert workflow.task_init_agent is not None
-        assert workflow.max_iterations == config.get("task_init_max_iterations", 5)
+        assert workflow.op_task_builder_agent is not None
+        assert workflow.max_iterations == config.get("op_task_builder_max_iterations", 5)
     
     def test_workflow_graph_build(self):
         """测试workflow图构建"""
         config = get_test_config()
-        workflow = TaskInitWorkflow(config)
+        workflow = OpTaskBuilderWorkflow(config)
         
         graph = workflow.build_graph()
         assert graph is not None
@@ -260,11 +269,11 @@ class TestTaskInitWorkflow:
     def test_workflow_visualize(self):
         """测试workflow可视化"""
         config = get_test_config()
-        workflow = TaskInitWorkflow(config)
+        workflow = OpTaskBuilderWorkflow(config)
         
         mermaid = workflow.visualize()
         assert mermaid is not None
-        assert "task_init" in mermaid
+        assert "op_task_builder" in mermaid
 
 
 @pytest.mark.level0
@@ -275,9 +284,10 @@ async def test_simple_relu_request():
     
     用户输入明确的需求，应该能一轮生成ready的task_desc
     """
+    await ensure_worker_registered()
     config = get_test_config()
     
-    result = await run_task_init(
+    result = await run_op_task_builder(
         user_input="我需要一个ReLU激活函数的算子，输入是16x16384的张量",
         config=config,
         framework="torch",
@@ -291,9 +301,9 @@ async def test_simple_relu_request():
     print(f"Message: {result.get('agent_message')}")
     
     # 验证结果
-    assert result.get("status") in [TaskInitStatus.READY, TaskInitStatus.NEED_CLARIFICATION]
+    assert result.get("status") in [OpTaskBuilderStatus.READY, OpTaskBuilderStatus.NEED_CLARIFICATION]
     
-    if result.get("status") == TaskInitStatus.READY:
+    if result.get("status") == OpTaskBuilderStatus.READY:
         assert result.get("op_name") is not None
         assert result.get("generated_task_desc") is not None
         assert "class Model" in result.get("generated_task_desc", "")
@@ -306,9 +316,10 @@ async def test_simple_relu_request():
 @pytest.mark.asyncio
 async def test_matmul_request():
     """测试矩阵乘法需求"""
+    await ensure_worker_registered()
     config = get_test_config()
     
-    result = await run_task_init(
+    result = await run_op_task_builder(
         user_input="实现两个1024x1024矩阵的乘法运算",
         config=config,
         framework="torch",
@@ -321,7 +332,7 @@ async def test_matmul_request():
     print(f"Op Name: {result.get('op_name')}")
     print(f"Message: {result.get('agent_message')}")
     
-    assert result.get("status") in [TaskInitStatus.READY, TaskInitStatus.NEED_CLARIFICATION]
+    assert result.get("status") in [OpTaskBuilderStatus.READY, OpTaskBuilderStatus.NEED_CLARIFICATION]
 
 
 @pytest.mark.level0
@@ -329,9 +340,10 @@ async def test_matmul_request():
 @pytest.mark.asyncio
 async def test_layernorm_request():
     """测试LayerNorm需求"""
+    await ensure_worker_registered()
     config = get_test_config()
     
-    result = await run_task_init(
+    result = await run_op_task_builder(
         user_input="我需要一个Layer Normalization层，处理shape为(batch=32, seq=512, hidden=768)的输入",
         config=config,
         framework="torch",
@@ -344,7 +356,7 @@ async def test_layernorm_request():
     print(f"Op Name: {result.get('op_name')}")
     print(f"Message: {result.get('agent_message')}")
     
-    assert result.get("status") in [TaskInitStatus.READY, TaskInitStatus.NEED_CLARIFICATION]
+    assert result.get("status") in [OpTaskBuilderStatus.READY, OpTaskBuilderStatus.NEED_CLARIFICATION]
 
 
 @pytest.mark.level0
@@ -352,9 +364,10 @@ async def test_layernorm_request():
 @pytest.mark.asyncio
 async def test_vague_request_need_clarification():
     """测试模糊需求：应该返回need_clarification"""
+    await ensure_worker_registered()
     config = get_test_config()
     
-    result = await run_task_init(
+    result = await run_op_task_builder(
         user_input="帮我优化一下性能",  # 模糊需求
         config=config,
         framework="torch",
@@ -367,7 +380,7 @@ async def test_vague_request_need_clarification():
     print(f"Message: {result.get('agent_message')}")
     
     # 模糊需求应该返回need_clarification或unsupported
-    assert result.get("status") in [TaskInitStatus.NEED_CLARIFICATION, TaskInitStatus.UNSUPPORTED]
+    assert result.get("status") in [OpTaskBuilderStatus.NEED_CLARIFICATION, OpTaskBuilderStatus.UNSUPPORTED]
     # 应该有提示消息
     assert result.get("agent_message") is not None and len(result.get("agent_message", "")) > 0
 
@@ -377,9 +390,10 @@ async def test_vague_request_need_clarification():
 @pytest.mark.asyncio
 async def test_unsupported_request():
     """测试不支持的需求：应该返回unsupported"""
+    await ensure_worker_registered()
     config = get_test_config()
     
-    result = await run_task_init(
+    result = await run_op_task_builder(
         user_input="帮我写一个网页登录功能",  # 非算子需求
         config=config,
         framework="torch",
@@ -392,7 +406,7 @@ async def test_unsupported_request():
     print(f"Message: {result.get('agent_message')}")
     
     # 非算子需求应该返回unsupported
-    assert result.get("status") == TaskInitStatus.UNSUPPORTED
+    assert result.get("status") == OpTaskBuilderStatus.UNSUPPORTED
     assert result.get("agent_message") is not None
 
 
@@ -404,8 +418,9 @@ async def test_multi_turn_interaction():
     
     模拟用户先给出模糊需求，然后补充信息的场景
     """
+    await ensure_worker_registered()
     config = get_test_config()
-    workflow = TaskInitWorkflow(config)
+    workflow = OpTaskBuilderWorkflow(config)
     
     # 第一轮：模糊需求
     result1 = await workflow.run(
@@ -420,7 +435,7 @@ async def test_multi_turn_interaction():
     print(f"Message: {result1.get('agent_message')}")
     
     # 如果第一轮就ready了，测试也通过
-    if result1.get("status") == TaskInitStatus.READY:
+    if result1.get("status") == OpTaskBuilderStatus.READY:
         print("First round already returned READY")
         return
     
@@ -447,9 +462,10 @@ async def test_multi_turn_interaction():
 @pytest.mark.asyncio
 async def test_softmax_request():
     """测试Softmax需求"""
+    await ensure_worker_registered()
     config = get_test_config()
     
-    result = await run_task_init(
+    result = await run_op_task_builder(
         user_input="实现一个Softmax函数，输入shape是(batch=64, classes=1000)",
         config=config,
         framework="torch",
@@ -462,7 +478,7 @@ async def test_softmax_request():
     print(f"Op Name: {result.get('op_name')}")
     print(f"Message: {result.get('agent_message')}")
     
-    assert result.get("status") in [TaskInitStatus.READY, TaskInitStatus.NEED_CLARIFICATION]
+    assert result.get("status") in [OpTaskBuilderStatus.READY, OpTaskBuilderStatus.NEED_CLARIFICATION]
 
 
 @pytest.mark.level1
@@ -473,8 +489,9 @@ async def test_workflow_run_until_ready():
     
     使用mock的用户反馈回调
     """
+    await ensure_worker_registered()
     config = get_test_config()
-    workflow = TaskInitWorkflow(config)
+    workflow = OpTaskBuilderWorkflow(config)
     
     # 模拟用户反馈
     feedback_count = [0]
@@ -505,10 +522,10 @@ async def test_workflow_run_until_ready():
     
     # 最终应该达到某个终止状态
     assert result.get("status") in [
-        TaskInitStatus.READY, 
-        TaskInitStatus.UNSUPPORTED, 
-        TaskInitStatus.NEED_CLARIFICATION,
-        TaskInitStatus.NEED_MODIFICATION
+        OpTaskBuilderStatus.READY, 
+        OpTaskBuilderStatus.UNSUPPORTED, 
+        OpTaskBuilderStatus.NEED_CLARIFICATION,
+        OpTaskBuilderStatus.NEED_MODIFICATION
     ]
 
 

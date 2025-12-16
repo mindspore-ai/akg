@@ -113,7 +113,7 @@ class ParserFactory:
     _sketch_parser = None
     _conductor_parser = None
     _selector_parser = None
-    _task_init_parser = None
+    _op_task_builder_parser = None
 
     @classmethod
     def register_parser(cls, parser_name: str, parser_config: dict):
@@ -270,19 +270,19 @@ class ParserFactory:
         return cls._conductor_parser
 
     @classmethod
-    def get_task_init_parser(cls):
-        """获取TaskInit解析器
+    def get_op_task_builder_parser(cls):
+        """获取OpTaskBuilder解析器
         
-        用于解析TaskInitAgent的输出，包含：
+        用于解析OpTaskBuilder的输出，包含：
         - op_name: 算子名称
         - status: 状态（ready/need_clarification/unsupported）
         - task_desc: 生成的KernelBench格式代码
         - message: 给用户的消息
         - reasoning: 推理过程
         """
-        if cls._task_init_parser is None:
-            cls._task_init_parser = cls.create_output_parser(
-                "TaskInitOutput",
+        if cls._op_task_builder_parser is None:
+            cls._op_task_builder_parser = cls.create_output_parser(
+                "OpTaskBuilderOutput",
                 {
                     'op_name': (str, ""),           # 算子名称
                     'status': (str, ...),           # ready/need_clarification/unsupported
@@ -291,7 +291,7 @@ class ParserFactory:
                     'reasoning': (str, "")          # 推理过程
                 }
             )
-        return cls._task_init_parser
+        return cls._op_task_builder_parser
 
     @staticmethod
     def create_output_parser(parser_name, fields):

@@ -844,39 +844,39 @@ class NodeFactory:
             logger.warning(f"[{state.get('op_name')}] 保存到 passed_cases 失败: {e}")
     
     @staticmethod
-    def create_task_init_node(task_init_agent, trace_instance=None):
-        """创建 TaskInit 节点函数
+    def create_op_task_builder_node(op_task_builder, trace_instance=None):
+        """创建 OpTaskBuilder 节点函数
         
         Args:
-            task_init_agent: TaskInitAgent实例
+            op_task_builder: OpTaskBuilder实例
             trace_instance: Trace实例（可选）
             
         Returns:
             异步节点函数
         """
-        from ai_kernel_generator.utils.langgraph.task_init_state import TaskInitState
+        from ai_kernel_generator.utils.langgraph.op_task_builder_state import OpTaskBuilderState
         
-        async def task_init_node(state: TaskInitState) -> dict:
-            """TaskInit 节点：将用户文字需求转换为KernelBench格式"""
+        async def op_task_builder_node(state: OpTaskBuilderState) -> dict:
+            """OpTaskBuilder 节点：将用户文字需求转换为KernelBench格式"""
             # 记录任务信息
             user_input = state.get('user_input', '')
             iteration = state.get('iteration', 0)
-            logger.info(f"TaskInit iteration {iteration}, user_input: {user_input[:50]}...")
+            logger.info(f"OpTaskBuilder iteration {iteration}, user_input: {user_input[:50]}...")
             
-            # 调用 TaskInitAgent
-            result = await task_init_agent.run(state)
+            # 调用 OpTaskBuilder
+            result = await op_task_builder.run(state)
             
             # 记录到 Trace（如果提供）
             if trace_instance:
                 trace_instance.insert_agent_record(
-                    agent_name="task_init",
+                    agent_name="OpTaskBuilder",
                     result=result.get("generated_task_desc", ""),
-                    prompt=result.get("task_init_prompt", ""),
+                    prompt=result.get("op_task_builder_prompt", ""),
                     reasoning=result.get("agent_reasoning", "")
                 )
             
-            logger.info(f"TaskInit result: status={result.get('status')}, op_name={result.get('op_name')}")
+            logger.info(f"OpTaskBuilder result: status={result.get('status')}, op_name={result.get('op_name')}")
             
             return result
         
-        return task_init_node
+        return op_task_builder_node

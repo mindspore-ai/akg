@@ -12,17 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""State definition for TaskInit multi-turn interaction workflow."""
+"""State definition for OpTaskBuilder multi-turn interaction workflow."""
 
 from typing import TypedDict, Annotated, Optional, List, Dict, Any
 from operator import add
 
 
-class TaskInitState(TypedDict, total=False):
-    """State definition for TaskInit workflow.
+class OpTaskBuilderState(TypedDict, total=False):
+    """State definition for OpTaskBuilder workflow.
     
     This state is used for multi-turn interaction to convert user's natural language
-    requirements into KernelBench format task description.
+    requirements into KernelBench format op_task_desc.
     """
     
     # === 用户输入 ===
@@ -54,14 +54,18 @@ class TaskInitState(TypedDict, total=False):
     # === 检查结果 ===
     static_check_passed: bool           # 静态检查是否通过
     static_check_error: Optional[str]   # 静态检查错误信息
+    runtime_check_passed: bool          # 运行时检查是否通过
+    runtime_check_error: Optional[str]   # 运行时检查错误信息
+    check_retry_count: int              # 当前连续检查失败次数（内部重试计数，包括静态和运行时检查）
+    max_check_retries: int              # 最大检查重试次数（从配置读取，包括静态和运行时检查）
     
     # === Prompt/日志记录 ===
-    task_init_prompt: Optional[str]     # TaskInit Agent使用的prompt
+    op_task_builder_prompt: Optional[str]     # OpTaskBuilder Agent使用的prompt
 
 
 # Status常量定义
-class TaskInitStatus:
-    """TaskInit状态枚举"""
+class OpTaskBuilderStatus:
+    """OpTaskBuilder状态枚举"""
     READY = "ready"                     # 格式检查通过，可以启动原workflow
     NEED_CLARIFICATION = "need_clarification"  # 需要用户澄清
     NEED_MODIFICATION = "need_modification"    # 需要用户确认修改

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TaskInit CLI Tool: 将用户想法转换为KernelBench格式的交互式工具
+"""OpTaskBuilder CLI Tool: 将用户想法转换为KernelBench格式的交互式工具
 
 此工具允许用户输入一个想法（自然语言描述），然后通过多轮交互
 逐步构建为正确的KernelBench格式输入。
@@ -31,18 +31,18 @@ def create_mock_config():
     """创建模拟配置，实际使用时应从配置文件加载"""
     return {
         "agent_model_config": {
-            "task_init": "default",
+            "op_task_builder": "default",
             "coder": "default",
         },
         "log_dir": "/tmp/aikg_test",
-        "task_init_max_iterations": 5,
+        "op_task_builder_max_iterations": 5,
     }
 
 
 def print_welcome():
     """打印欢迎信息"""
     print("=" * 60)
-    print("AI Kernel Generator - Task Initialization Tool")
+    print("AI Kernel Generator - OpTaskBuilder Tool")
     print("=" * 60)
     print("这是一个交互式工具，帮助您将自然语言描述转换为KernelBench格式。")
     print("\n使用指南：")
@@ -72,22 +72,22 @@ def get_user_input(prompt: str = "请输入您的需求: ") -> str:
         sys.exit(0)
 
 
-async def run_task_init_simulation(user_input: str,
-                                 user_feedback: Optional[str] = None,
-                                 previous_state: Optional[Dict[str, Any]] = None,
-                                 framework: str = "torch",
-                                 backend: str = "cuda",
-                                 arch: str = "a100") -> Dict[str, Any]:
-    """运行TaskInit流程
+async def run_op_task_builder_simulation(user_input: str,
+                                         user_feedback: Optional[str] = None,
+                                         previous_state: Optional[Dict[str, Any]] = None,
+                                         framework: str = "torch",
+                                         backend: str = "cuda",
+                                         arch: str = "a100") -> Dict[str, Any]:
+    """运行OpTaskBuilder流程
 
-    Note: 当前实现为模拟版本，当LLM API可用时，可以替换为真实的TaskInitWorkflow调用
+    Note: 当前实现为模拟版本，当LLM API可用时，可以替换为真实的OpTaskBuilderWorkflow调用
     """
     print(f"处理需求: {user_input}")
 
-    # 如果有可用的LLM API，这里应该调用真实的TaskInitWorkflow
+    # 如果有可用的LLM API，这里应该调用真实的OpTaskBuilderWorkflow
     # 示例（当前注释）:
-    # from ai_kernel_generator.workflows.task_init_workflow import run_task_init
-    # result = await run_task_init(
+    # from ai_kernel_generator.workflows.op_task_builder_workflow import run_op_task_builder
+    # result = await run_op_task_builder(
     #     user_input=user_input,
     #     config=config,  # 从上下文获取配置
     #     user_feedback=user_feedback,
@@ -307,7 +307,7 @@ def save_task_desc_to_file(task_desc: str, op_name: str = "task"):
 
 async def main():
     """主函数"""
-    parser = argparse.ArgumentParser(description='AIKG Task Initialization Tool')
+    parser = argparse.ArgumentParser(description='AIKG OpTaskBuilder Tool')
     parser.add_argument('--framework', type=str, default='torch', help='目标框架 (default: torch)')
     parser.add_argument('--backend', type=str, default='cuda', help='目标后端 (default: cuda)')
     parser.add_argument('--arch', type=str, default='a100', help='目标架构 (default: a100)')
@@ -323,7 +323,7 @@ async def main():
     state = None
     current_input = ""
     feedback = None
-    max_iterations = config.get("task_init_max_iterations", 5)
+    max_iterations = config.get("op_task_builder_max_iterations", 5)
     
     print(f"\n开始交互，最多 {max_iterations} 轮对话...")
     
@@ -340,8 +340,8 @@ async def main():
                 print(f"系统: {clarification_question}")
                 feedback = get_user_input("请补充信息: ")
         
-        # 运行一轮task init
-        result = await run_task_init_simulation(
+        # 运行一轮op_task_builder
+        result = await run_op_task_builder_simulation(
             user_input=current_input,
             user_feedback=feedback,
             previous_state=state,
@@ -401,7 +401,7 @@ async def main():
         print(f"\n已达到最大交互次数({max_iterations})，未能生成满足要求的代码。")
         print("请尝试提供更明确的需求描述。")
     
-    print("\n感谢使用AIKG Task Initialization Tool！")
+    print("\n感谢使用AIKG OpTaskBuilder Tool！")
 
 
 if __name__ == "__main__":

@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TaskInit Tools Package for AI Kernel Generator"""
+"""OpTaskBuilder Tools Package for AI Kernel Generator"""
 
-from .taskinit import main as taskinit_main
+from .op_task_builder import main as op_task_builder_main
 
-__all__ = ['taskinit_main']
+__all__ = ['op_task_builder_main']

@@ -19,7 +19,7 @@ from ai_kernel_generator.workflows.default_workflow import DefaultWorkflow
 from ai_kernel_generator.workflows.coder_only_workflow import CoderOnlyWorkflow
 from ai_kernel_generator.workflows.verifier_only_workflow import VerifierOnlyWorkflow
 from ai_kernel_generator.workflows.connect_all_workflow import ConnectAllWorkflow
-from ai_kernel_generator.workflows.task_init_workflow import TaskInitWorkflow, run_task_init
+from ai_kernel_generator.workflows.op_task_builder_workflow import OpTaskBuilderWorkflow, run_op_task_builder
 
 __all__ = [
     "BaseWorkflow",
@@ -27,7 +27,7 @@ __all__ = [
     "CoderOnlyWorkflow",
     "VerifierOnlyWorkflow",
     "ConnectAllWorkflow",
-    "TaskInitWorkflow",
-    "run_task_init",
+    "OpTaskBuilderWorkflow",
+    "run_op_task_builder",
 ]
 
