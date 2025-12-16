@@ -13,10 +13,12 @@
 # limitations under the License.
 """ Module for akg support ascend_npu_ir test """
 import os
-import re
 import logging
 
-from akg.backends.ascend import transform_data_to_ascend, launch, ascend_compile
+from akg.backends.ascend import (
+    transform_data_to_ascend, launch, ascend_compile,
+    run_mlir_ascend_pipeline
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -39,20 +41,34 @@ class Kernel:
 
     def _write_mlir(self, input_mlir):
         mlir_path = os.path.join(self.output_so_dir, f"{self.kernel_name}_out.mlir")
-        if not self.dynamic:
-            pattern = r'(\{[^{}]*\{[^{}]*)<[^<>]*>'
-            replacement = r'\1<HOST>'
-            input_mlir = re.sub(pattern, replacement, input_mlir, count=1)
         with open(mlir_path, "w", encoding="utf-8") as f:
             f.write(input_mlir)
         return mlir_path
 
     def compile(self, input_mlir: str):
         """ Compile .mlir file to .so file. """
-        mlir_file_path = self._write_mlir(input_mlir)
+        self._write_mlir(input_mlir)
+
+        input_file = os.path.join(self.output_so_dir, self.kernel_name + "_out.mlir")
+        out_file = os.path.join(self.output_so_dir, self.kernel_name + "_opt.mlir")
+
+        # get akg_tools_dir
+        akg_tools_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # run akg-opt
+        out_mlir_file_path = run_mlir_ascend_pipeline(
+            input_file=input_file,
+            output_file=out_file,
+            akg_tools_dir=akg_tools_dir,
+            dyn_shape=self.dynamic,
+            enable_akg_loop_fusion=not self.dynamic,
+            dump_ir=True,
+            run_bishengir=True  # run bishengir-opt
+        )
+
         output_so_path = os.path.join(self.output_so_dir, f"{self.kernel_name}.so")
         try:
-            ascend_compile(mlir_file_path, output_so_path)
+            ascend_compile(out_mlir_file_path, output_so_path)
             logging.info("compile finish, lib.so save to %s", os.path.abspath(output_so_path))
         except Exception as compile_err:
             raise Exception(

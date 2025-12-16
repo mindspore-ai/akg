@@ -19,24 +19,189 @@ import logging
 import subprocess
 import numpy as np
 
-from akg.message import get_npucompiler_path
-from akg.utils.dynamic_utils import get_device_shape
-
 flags = sys.getdlopenflags()
 sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 # pylint: disable=wrong-import-position
 # pylint: disable=wrong-import-order
 from akg import akgAscendLaunch
 sys.setdlopenflags(flags)
+from akg.utils.dynamic_utils import get_device_shape
 
+def get_akg_opt_path(akg_tools_dir=None):
+    """Get the path of akg-opt executable."""
+    if akg_tools_dir is None:
+        # Default to the directory containing this file
+        akg_tools_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(akg_tools_dir, "bin", "akg-opt")
+
+def run_akg_opt(
+    input_file,
+    output_file,
+    akg_tools_dir=None,
+    dyn_shape=False,
+    enable_akg_loop_fusion=False,
+    arch=None,
+    dump_ir=False,
+    dump_log_path=None
+):
+    """
+    Run akg-opt to optimize MLIR for Ascend backend.
+
+    Args:
+        input_file: Input MLIR file path
+        output_file: Output MLIR file path
+        akg_tools_dir: Directory containing akg tools (default: auto-detect)
+        dyn_shape: Whether to enable dynamic shape optimization
+        enable_akg_loop_fusion: Whether to enable akg loop fusion
+        arch: Architecture specification (optional)
+        dump_ir: Whether to dump IR after all passes
+        dump_log_path: Path to dump log file (optional)
+
+    Returns:
+        subprocess.CompletedProcess result
+
+    Raises:
+        RuntimeError: If akg-opt execution fails
+    """
+    akg_opt_path = get_akg_opt_path(akg_tools_dir)
+
+    # Build ascend-opt option
+    ascend_opt_option = "--ascend-opt"
+    options = []
+
+    if dyn_shape:
+        options.append("dynamic-shape=true")
+    if enable_akg_loop_fusion:
+        options.append("enable-akg-loop-fusion=1")
+    if arch:
+        options.append(f"arch={arch}")
+
+    if options:
+        ascend_opt_option += "=" + " ".join(options)
+
+    cmd = [akg_opt_path, input_file, ascend_opt_option, "-o", output_file]
+
+    if dump_ir:
+        cmd.append("--mlir-print-ir-after-all")
+
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if dump_ir and dump_log_path:
+            with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+                f.write(result.stderr)
+        logging.info("akg-opt pipeline success")
+        return result
+    except subprocess.CalledProcessError as e:
+        logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+        raise RuntimeError("mlir pipeline failed in case: " + os.path.basename(input_file) + "!\n") from e
+
+
+def run_bishengir_opt(
+    input_file,
+    output_file,
+    dump_ir=False
+):
+    """
+    Run bishengir-opt to convert MLIR to hfusion format.
+
+    Args:
+        input_file: Input MLIR file path
+        output_file: Output MLIR file path
+        dump_ir: Whether to dump IR after all passes
+
+    Returns:
+        subprocess.CompletedProcess result
+
+    Raises:
+        RuntimeError: If bishengir-opt execution fails
+    """
+    bisheng_opt = "bishengir-opt"
+    bisheng_cmd = [
+        bisheng_opt,
+        input_file,
+        "-convert-math-to-hfusion",
+        "-convert-linalg-to-hfusion",
+        "-convert-tensor-to-hfusion",
+        "-convert-arith-to-hfusion",
+        "-hfusion-reorder-ops",
+        "-o",
+        output_file,
+    ]
+
+    if dump_ir:
+        bisheng_cmd.append("-mlir-print-ir-after-all")
+
+    try:
+        result = subprocess.run(bisheng_cmd, check=True, capture_output=True, text=True)
+        logging.info("bishengir-opt success")
+        return result
+    except subprocess.CalledProcessError as e:
+        logging.error("run bishengir-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+        raise RuntimeError("bishengir-opt failed in case: " + os.path.basename(input_file) + "!\n") from e
+
+
+def run_mlir_ascend_pipeline(
+    input_file,
+    output_file,
+    akg_tools_dir=None,
+    dyn_shape=False,
+    enable_akg_loop_fusion=False,
+    arch=None,
+    dump_ir=False,
+    dump_log_path=None,
+    run_bishengir=True
+):
+    """
+    Run complete MLIR pipeline for Ascend: akg-opt + bishengir-opt.
+
+    Args:
+        input_file: Input MLIR file path
+        output_file: Final output MLIR file path (after bishengir-opt)
+        akg_tools_dir: Directory containing akg tools (default: auto-detect)
+        dyn_shape: Whether to enable dynamic shape optimization
+        enable_akg_loop_fusion: Whether to enable akg loop fusion
+        arch: Architecture specification (optional)
+        dump_ir: Whether to dump IR after all passes
+        dump_log_path: Path to dump log file (optional)
+        run_bishengir: Whether to run bishengir-opt after akg-opt (default: True)
+
+    Returns:
+        Path to final output file
+    """
+    # Step 1: Run akg-opt
+    if run_bishengir:
+        # Use temporary file for akg-opt output
+        akg_opt_output = output_file.replace(".mlir", "_akg_opt.mlir")
+    else:
+        akg_opt_output = output_file
+
+    run_akg_opt(
+        input_file=input_file,
+        output_file=akg_opt_output,
+        akg_tools_dir=akg_tools_dir,
+        dyn_shape=dyn_shape,
+        enable_akg_loop_fusion=enable_akg_loop_fusion,
+        arch=arch,
+        dump_ir=dump_ir,
+        dump_log_path=dump_log_path
+    )
+
+    # Step 2: Run bishengir-opt (if needed)
+    if run_bishengir:
+        run_bishengir_opt(
+            input_file=akg_opt_output,
+            output_file=output_file,
+            dump_ir=dump_ir
+        )
+        return output_file
+    return akg_opt_output
 
 def ascend_compile(input_file, output_so_path):
     """ using bisheng-compile """
-    bishengir_compile_path = get_npucompiler_path()
     compile_cmd = [
-        bishengir_compile_path,
+        "bishengir-compile",
         input_file,
-        "-enable-hfusion-compile=true",
+        "-enable-hfusion-compile=false",
         "-enable-hivm-compile=true",
         "-enable-bin-relocation=false",
         "-block-dim=40",
