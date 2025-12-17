@@ -19,3 +19,4 @@ einops
 fastapi
 uvicorn
 python-multipart
+Ninja

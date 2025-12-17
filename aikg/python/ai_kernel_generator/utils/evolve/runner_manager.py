@@ -410,12 +410,22 @@ class BatchTaskPool:
         self,
         max_concurrency: int,
         config_path: Optional[str] = None,
-        collector: Optional[RealtimeResultCollector] = None
+        collector: Optional[RealtimeResultCollector] = None,
+        device_pool: Optional[List[int]] = None
     ):
         self.max_concurrency = max_concurrency
         self.config_path = config_path
         self.collector = collector
+        self.device_pool = device_pool or []
         self.semaphore = asyncio.Semaphore(max_concurrency)
+        
+        # 本地模式：创建设备分配队列（用于跨子进程互斥）
+        # 如果设置了 AIKG_WORKER_URL，则使用远程模式，不需要设备队列
+        self.device_queue = None
+        if self.device_pool and not os.getenv("AIKG_WORKER_URL"):
+            self.device_queue = asyncio.Queue()
+            for device_id in self.device_pool:
+                self.device_queue.put_nowait(device_id)
 
     async def run_task_async(
         self,
@@ -429,38 +439,53 @@ class BatchTaskPool:
         if not use_compact_output:
             print(f"任务 [{index}/{total}] {task_file.stem} 开始执行")
 
-        async with self.semaphore:
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                run_single_task_subprocess,
-                task_file,
-                output_dir,
-                index,
-                total,
-                use_compact_output,
-                self.config_path
-            )
+        # 本地模式：从设备队列获取设备
+        assigned_device = None
+        if self.device_queue:
+            assigned_device = await self.device_queue.get()
+            if not use_compact_output:
+                print(f"任务 [{index}/{total}] 分配设备: {assigned_device}")
 
-            # 任务完成后立即收集结果
-            if self.collector and result.get('success', False):
-                try:
-                    output_file = result.get('output_file')
-                    output_content = ""
-                    if output_file and Path(output_file).exists():
-                        with open(output_file, 'r', encoding='utf-8') as f:
-                            output_content = f.read()
+        try:
+            async with self.semaphore:
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    run_single_task_subprocess,
+                    task_file,
+                    output_dir,
+                    index,
+                    total,
+                    use_compact_output,
+                    self.config_path,
+                    assigned_device
+                )
 
-                    await loop.run_in_executor(
-                        None,
-                        self.collector.collect_task_result,
-                        result['op_name'],
-                        output_content
-                    )
-                except Exception as e:
-                    print(f"收集结果失败: {e}")
+                # 任务完成后立即收集结果
+                if self.collector and result.get('success', False):
+                    try:
+                        output_file = result.get('output_file')
+                        output_content = ""
+                        if output_file and Path(output_file).exists():
+                            with open(output_file, 'r', encoding='utf-8') as f:
+                                output_content = f.read()
 
-            return result
+                        await loop.run_in_executor(
+                            None,
+                            self.collector.collect_task_result,
+                            result['op_name'],
+                            output_content
+                        )
+                    except Exception as e:
+                        print(f"收集结果失败: {e}")
+
+                return result
+        finally:
+            # 本地模式：释放设备回队列
+            if self.device_queue and assigned_device is not None:
+                await self.device_queue.put(assigned_device)
+                if not use_compact_output:
+                    print(f"任务 [{index}/{total}] 释放设备: {assigned_device}")
 
     async def run_batch_parallel(self, task_files: List[Path], output_dir: Path) -> List[Dict[str, Any]]:
         """并行运行批量任务"""
@@ -534,8 +559,13 @@ def discover_task_files(task_dir: str) -> List[Path]:
 
 
 def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, total: int,
-                               use_compact_output: bool = False, config_path: Optional[str] = None) -> Dict[str, Any]:
-    """使用subprocess方式运行单个任务"""
+                               use_compact_output: bool = False, config_path: Optional[str] = None,
+                               assigned_device: Optional[int] = None) -> Dict[str, Any]:
+    """使用subprocess方式运行单个任务
+    
+    Args:
+        assigned_device: 分配给此任务的设备ID（本地模式），如果为None则从配置文件读取device_pool（远程模式）
+    """
     op_name = "aikg_" + task_file.stem
 
     if not use_compact_output:
@@ -565,11 +595,15 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
 
         absolute_task_file = Path(task_file).resolve()
 
+        # 使用分配的设备ID，如果没有分配则使用0（远程模式或单设备）
+        device_arg = str(assigned_device) if assigned_device is not None else "0"
+        
         cmd = [
             sys.executable,
             str(single_evolve_script),
             op_name,
-            str(absolute_task_file)
+            str(absolute_task_file),
+            device_arg
         ]
 
         if config_path:
@@ -915,7 +949,8 @@ async def run_batch_evolve(config_path: str = None) -> None:
         batch_pool = BatchTaskPool(
             max_concurrency=parallel_num,
             config_path=resolved_config_path,
-            collector=collector
+            collector=collector,
+            device_pool=config.get('device_pool')
         )
 
         if parallel_num <= 1:

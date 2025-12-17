@@ -125,7 +125,24 @@ def parse_batch_runner_mode(args):
         print(f"警告: 无法加载配置文件 {config_path}: {e}")
 
     # 设置设备 (仅用于注册 Worker)
-    config.device_list = [device]
+    # 
+    # 两种模式：
+    # 1. 远程模式：设置 AIKG_WORKER_URL，连接远程 Worker 服务
+    #    - device 参数被忽略，远程服务统一管理设备
+    # 
+    # 2. 本地模式：不设置 AIKG_WORKER_URL
+    #    - 在批量执行中，父进程已经为每个子进程分配了特定的设备
+    #    - 使用命令行传入的 device 参数（已分配的设备ID）
+    #    - 每个子进程只注册分配给它的单个设备，确保设备互斥
+    
+    if os.getenv("AIKG_WORKER_URL"):
+        # 远程模式：device_list 设为 None，register_worker 会自动使用远程 Worker
+        config.device_list = None
+        print(f"远程 Worker 模式: 使用 AIKG_WORKER_URL={os.getenv('AIKG_WORKER_URL')}")
+    else:
+        # 本地模式：使用分配的设备
+        config.device_list = [device]
+        print(f"本地 Worker 模式: 使用分配的设备 {device}")
 
     # 读取任务描述文件
     task_desc = load_task_description(task_file)
