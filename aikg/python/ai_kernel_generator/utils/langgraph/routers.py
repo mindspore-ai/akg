@@ -224,6 +224,59 @@ class RouterFactory:
         ]
     
     @staticmethod
+    def create_code_checker_router(config: dict, max_check_retries: int = 2):
+        """创建 CodeChecker 后的路由决策
+        
+        Args:
+            config: 配置字典
+            max_check_retries: 最大重试次数（检查失败后回到 Coder 的次数）
+        
+        Returns:
+            路由函数
+        """
+        async def route_after_code_checker(state: KernelGenState) -> str:
+            """CodeChecker 后的路由决策
+            
+            - 检查通过 → 进入 verifier
+            - 检查失败 → 回到 coder 修复（带上错误信息）
+            - 多次失败 → 强制进入 verifier（避免死循环）
+            """
+            task_id = state.get('task_id', '0')
+            passed = state.get("code_check_passed", True)
+            
+            if passed:
+                logger.info(f"[Task {task_id}] CodeChecker passed, routing to verifier")
+                return "verifier"
+            
+            # 检查失败，统计重试次数
+            agent_history = list(state.get("agent_history", []))
+            
+            # 统计连续的 code_checker -> coder 循环次数
+            check_retry_count = 0
+            for i in range(len(agent_history) - 1, -1, -1):
+                if agent_history[i] == "code_checker":
+                    check_retry_count += 1
+                elif agent_history[i] == "coder":
+                    continue  # 跳过 coder，继续统计
+                else:
+                    break  # 遇到其他 agent，停止统计
+            
+            if check_retry_count >= max_check_retries:
+                logger.warning(
+                    f"[Task {task_id}] CodeChecker failed {check_retry_count} times, "
+                    f"forcing to verifier to avoid infinite loop"
+                )
+                return "verifier"
+            
+            logger.info(
+                f"[Task {task_id}] CodeChecker failed (retry {check_retry_count}/{max_check_retries}), "
+                f"routing back to coder for fix"
+            )
+            return "coder"
+        
+        return route_after_code_checker
+    
+    @staticmethod
     def create_smart_router(config, conductor_template, model_config):
         """智能路由器（用于 ConnectAll workflow）"""
         async def smart_route(state: KernelGenState) -> str:

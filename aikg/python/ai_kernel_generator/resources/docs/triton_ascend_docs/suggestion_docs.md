@@ -146,7 +146,7 @@ exp_data = tl.exp(stable_data)
 - 禁止 链式布尔运算 → 分步计算mask
 - 禁止 张量直接索引 → 使用tl.load/tl.store
 **Ascend后端**
-- 禁止 `tl.where` → 使用if-else
+- 复杂场景 `tl.where` → 使用if-else
 - 禁止 `while` 循环 → 使用 for 替代（见下文）
 
 ### while 循环替代方案（Ascend后端）

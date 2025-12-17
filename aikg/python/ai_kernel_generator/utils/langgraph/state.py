@@ -58,6 +58,11 @@ class KernelGenState(TypedDict, total=False):
     history_attempts: Annotated[List[Dict[str, Any]], add]
     agent_history: Annotated[List[str], add]
     
+    # === Code Checker 结果 ===
+    code_check_passed: Optional[bool]
+    code_check_errors: Optional[str]  # 格式化的错误信息
+    code_check_details: Optional[List[Dict[str, Any]]]  # 详细错误列表
+    
     # === Conductor 建议 ===
     conductor_suggestion: Optional[str]
     conductor_decision: Optional[str]  # Conductor 的决策结果
