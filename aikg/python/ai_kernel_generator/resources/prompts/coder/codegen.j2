@@ -202,6 +202,15 @@ class ModelNew(nn.Cell):
 {{ coder_code }}
 {% endif %}
 
+{% if code_check_errors %}
+### ⚠️ 代码静态检查错误（需优先修复）
+**以下是代码静态检查发现的问题，这些是语法级别的错误，必须修复：**
+
+{{ code_check_errors }}
+
+**注意：上述问题是基于编程规范的静态检查，请严格按照建议修改。**
+{% endif %}
+
 {% if error_log %}
 ### 错误日志
 当前任务执行失败，请分析错误原因

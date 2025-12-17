@@ -121,6 +121,7 @@ class NodeFactory:
             # 记录是否有错误信息传递给 Coder
             verifier_error = state.get('verifier_error', '')
             conductor_suggestion = state.get('conductor_suggestion', '')
+            code_check_errors = state.get('code_check_errors', '')
             
             if verifier_error:
                 task_id = state.get('task_id', '0')
@@ -131,6 +132,11 @@ class NodeFactory:
                 task_id = state.get('task_id', '0')
                 logger.info(f"[Task {task_id}] Coder 收到 Conductor 建议 (长度: {len(conductor_suggestion)})")
                 logger.debug(f"[Task {task_id}] 建议内容: {conductor_suggestion[:200]}...")
+            
+            if code_check_errors:
+                task_id = state.get('task_id', '0')
+                logger.info(f"[Task {task_id}] Coder 收到 CodeChecker 静态检查错误 (长度: {len(code_check_errors)})")
+                logger.debug(f"[Task {task_id}] 检查错误: {code_check_errors[:300]}...")
             
             # 直接使用 state（KernelGenState 本质上是 dict）
             result, prompt, reasoning = await coder_instance.run(task_info=state)
@@ -177,7 +183,10 @@ class NodeFactory:
                 "iteration": state.get("iteration", 0) + 1,
                 "step_count": state.get("step_count", 0) + 1,
                 "agent_history": ["coder"],
-                "conductor_suggestion": None  # 清除旧建议
+                "conductor_suggestion": None,  # 清除旧建议
+                "code_check_errors": None,     # 清除旧的检查错误
+                "code_check_passed": None,     # 重置检查状态
+                "code_check_details": None     # 清除旧的检查详情
             }
         
         return coder_node
@@ -726,6 +735,71 @@ class NodeFactory:
             import traceback
             error_detail = traceback.format_exc()
             return False, f"多 case 验证异常: {error_msg}\n{error_detail}"
+    
+    @staticmethod
+    def create_code_checker_node(checker_instance, trace_instance, config: dict):
+        """创建 CodeChecker 节点函数
+        
+        Args:
+            checker_instance: CodeChecker 实例
+            trace_instance: Trace 实例
+            config: 配置字典
+        """
+        async def code_checker_node(state: KernelGenState) -> dict:
+            """CodeChecker 节点：在 Verifier 之前进行代码静态检查
+            
+            检查 Coder 生成的代码是否符合规范，避免将明显错误的代码送入 Verifier 浪费时间
+            """
+            # 记录任务信息
+            task_id = state.get('task_id', '0')
+            op_name = state.get('op_name', 'unknown')
+            logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: code_checker")
+            
+            # 获取 Coder 生成的代码
+            code = state.get("coder_code", "")
+            if not code:
+                logger.warning(f"[Task {task_id}] CodeChecker: No code to check")
+                return {
+                    "code_check_passed": True,
+                    "code_check_errors": "",
+                    "code_check_details": [],
+                    "step_count": state.get("step_count", 0) + 1,
+                    "agent_history": ["code_checker"]
+                }
+            
+            # 执行检查
+            passed, error_message, errors = await checker_instance.check(code, state)
+            
+            # 记录到 Trace
+            check_result = {
+                "passed": passed,
+                "error_count": len(errors),
+                "errors": errors[:5]  # 只记录前5个错误
+            }
+            trace_instance.insert_agent_record(
+                agent_name="code_checker",
+                result=json.dumps(check_result, ensure_ascii=False),
+                prompt="",  # 静态检查无 prompt
+                reasoning=""
+            )
+            
+            # 记录检查结果
+            if passed:
+                logger.info(f"[Task {task_id}] CodeChecker: ✅ Code check passed")
+            else:
+                logger.warning(f"[Task {task_id}] CodeChecker: ❌ Found {len(errors)} issues")
+                for err in errors[:3]:
+                    logger.warning(f"[Task {task_id}]   Line {err.get('line', '?')}: {err.get('detail', '')[:80]}")
+            
+            return {
+                "code_check_passed": passed,
+                "code_check_errors": error_message,
+                "code_check_details": errors,
+                "step_count": state.get("step_count", 0) + 1,
+                "agent_history": ["code_checker"]
+            }
+        
+        return code_checker_node
     
     @staticmethod
     def _save_to_passed_cases(state, verifier_instance, current_step: int, config: dict):
