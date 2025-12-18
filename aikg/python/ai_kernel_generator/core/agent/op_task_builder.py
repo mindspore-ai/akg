@@ -722,51 +722,9 @@ class OpTaskBuilder(AgentBase):
             max_iterations = state.get("max_iterations", 5)
             max_check_retries = state.get("max_check_retries", self.max_check_retries)
             
-<<<<<<< HEAD
-            # 构建prompt输入
-            input_data = {
-                "user_input": user_input,
-                "user_feedback": user_feedback,
-                "conversation_history": conversation_context,
-                "previous_error": previous_error,
-                "previous_task_desc": previous_task_desc,
-                "format_instructions": self.format_instructions,
-                "framework": state.get("framework", "torch"),
-                "backend": state.get("backend", "cuda"),
-            }
-            
-            # 更新context用于日志
-            self.context.update({
-                "hash": f"OpTaskBuilder@{self.step_count}",
-                "step": self.step_count,
-            })
-            
-            # 调用LLM
-            model_name = self.model_config.get("op_task_builder", "default")
-            llm_result, prompt, reasoning = await self.run_llm(
-                self.op_task_builder_prompt, 
-                input_data, 
-                model_name
-            )
-            
-            # 解析LLM输出
-            try:
-                parsed = ParserFactory.robust_parse(llm_result, self.parser)
-                
-                op_name = getattr(parsed, 'op_name', None)
-                status = getattr(parsed, 'status', OpTaskBuilderStatus.NEED_CLARIFICATION)
-                task_desc = getattr(parsed, 'task_desc', "")
-                message = getattr(parsed, 'message', "")
-                llm_reasoning = getattr(parsed, 'reasoning', reasoning)
-                
-            except Exception as parse_error:
-                logger.warning(f"Failed to parse LLM output: {parse_error}, using fallback")
-                # 解析失败，返回需要澄清的状态
-=======
             # 检查是否达到最大迭代次数（整个 while True 循环算一次迭代）
             if current_iteration >= max_iterations:
                 logger.warning(f"OpTaskBuilder: Reached max iterations ({max_iterations}), returning NEED_CLARIFICATION")
->>>>>>> 2035f541 (fix op_task_builder)
                 return {
                     "status": OpTaskBuilderStatus.NEED_CLARIFICATION,
                     "agent_message": f"已达到最大交互次数（{max_iterations}次），请提供更清晰的需求描述。",
@@ -828,18 +786,6 @@ class OpTaskBuilder(AgentBase):
                 # 准备 LLM 输入
                 input_data = self._prepare_llm_input(state)
                 
-<<<<<<< HEAD
-                return {
-                    "status": OpTaskBuilderStatus.NEED_CLARIFICATION,
-                    "clarification_question": message,  # 用于MainOpAgent展示给用户
-                    "agent_message": message or "请提供更多信息以便生成算子代码。",  # 给用户的消息
-                    "agent_reasoning": llm_reasoning,
-                    "op_name": op_name,
-                    "op_task_builder_prompt": prompt,
-                    "iteration": state.get("iteration", 0) + 1,
-                    "conversation_history": current_round_history,  # LangGraph会自动累积
-                }
-=======
                 # 调用 LLM 并解析输出
                 parse_result = await self._call_llm_and_parse(input_data)
                 
@@ -900,7 +846,6 @@ class OpTaskBuilder(AgentBase):
                     result["static_check_error"] = ""  # 重置错误信息，不影响下次用户交互
                     result["runtime_check_error"] = ""  # 重置错误信息，不影响下次用户交互
                     return result
->>>>>>> 2035f541 (fix op_task_builder)
                 
         except Exception as e:
             logger.error(f"OpTaskBuilder.run() failed: {e}")
@@ -915,132 +860,4 @@ class OpTaskBuilder(AgentBase):
                 "runtime_check_passed": True,
                 "runtime_check_error": "",
             }
-<<<<<<< HEAD
-=======
-
-    # ============================================================================
-    # 兼容层方法：为了与 MainOpAgent 的 OpTaskBuildAgent 接口兼容
-    # ============================================================================
-    
-    async def build_task_code(self, 
-                              user_request: str,
-                              conversation_history: list = None,
-                              previous_task_code: str = None) -> Tuple[str, str, str, str]:
-        """兼容方法：生成 task 代码（兼容 OpTaskBuildAgent 接口）
-        
-        这个方法是为了兼容 MainOpAgent 中对 OpTaskBuildAgent 的调用。
-        它将内部的 run() 方法包装成与旧接口一致的形式。
-        
-        Args:
-            user_request: 用户的当前需求/指令
-            conversation_history: 对话历史（可选）
-            previous_task_code: 之前生成的 task 代码（用于修改场景）
             
-        Returns:
-            Tuple[str, str, str, str]: (task_code, op_name, description, reasoning)
-        """
-        try:
-            # 转换对话历史格式（如果有）
-            formatted_history = []
-            if conversation_history:
-                for msg in conversation_history:
-                    if isinstance(msg, dict):
-                        formatted_history.append(msg)
-                    else:
-                        # 如果是其他格式，尝试转换
-                        formatted_history.append({
-                            "role": getattr(msg, "role", "unknown"),
-                            "content": getattr(msg, "content", str(msg))
-                        })
-            
-            # 构建状态
-            state = {
-                "user_input": user_request,
-                "user_feedback": None,
-                "conversation_history": formatted_history,
-                "generated_task_desc": previous_task_code,
-                "framework": getattr(self, 'framework', 'torch'),
-                "backend": getattr(self, 'backend', 'cuda'),
-                "arch": getattr(self, 'arch', 'a100'),
-                "dsl": getattr(self, 'dsl', 'triton'),
-                "iteration": 0,
-                "max_iterations": 5,
-                "check_retry_count": 0,
-                "max_check_retries": self.max_check_retries,
-                "static_check_error": "",
-                "runtime_check_error": "",
-            }
-            
-            # 调用 run() 方法
-            result = await self.run(state)
-            
-            # 提取结果
-            status = result.get("status", OpTaskBuilderStatus.NEED_CLARIFICATION)
-            task_code = result.get("generated_task_desc", "")
-            op_name = result.get("op_name", "custom_op")
-            description = result.get("agent_message", "")
-            reasoning = result.get("agent_reasoning", "")
-            
-            # 如果状态不是 READY，抛出异常（保持与原接口一致的错误处理）
-            if status != OpTaskBuilderStatus.READY:
-                error_msg = result.get("agent_message", "Failed to generate task code")
-                if status == OpTaskBuilderStatus.NEED_CLARIFICATION:
-                    raise ValueError(f"需要更多信息: {error_msg}")
-                elif status == OpTaskBuilderStatus.UNSUPPORTED:
-                    raise ValueError(f"不支持的需求: {error_msg}")
-                else:
-                    raise ValueError(f"生成失败: {error_msg}")
-            
-            logger.info(f"Successfully built task code for op: {op_name} (via build_task_code compat)")
-            return task_code, op_name, description, reasoning
-            
-        except Exception as e:
-            logger.error(f"Failed to build task code (compat method): {e}")
-            raise
-    
-    def validate_task_code(self, task_code: str) -> Tuple[bool, str]:
-        """兼容方法：验证生成的 task 代码是否合法（兼容 OpTaskBuildAgent 接口）
-        
-        这个方法复用内部的 _check_task_desc_static 方法。
-        
-        Args:
-            task_code: 待验证的 task 代码
-            
-        Returns:
-            Tuple[bool, str]: (是否合法, 错误信息)
-        """
-        return self._check_task_desc_static(task_code)
-    
-    def format_task_code_for_display(self, task_code: str, op_name: str, description: str) -> str:
-        """兼容方法：格式化 task 代码用于展示给用户（兼容 OpTaskBuildAgent 接口）
-        
-        Args:
-            task_code: task 代码
-            op_name: 算子名称
-            description: 算子描述
-            
-        Returns:
-            str: 格式化的显示字符串
-        """
-        display = f"""
-{'=' * 80}
-OpTaskBuilder - Generated Task Code
-{'=' * 80}
-
-Op Name: {op_name}
-Description: {description}
-
-Task Code (KernelBench Format):
-{'-' * 80}
-{task_code}
-{'-' * 80}
-
-Please review the task code above. You can:
-1. Confirm and proceed to code generation
-2. Request modifications
-3. Start over with a new description
-
-{'=' * 80}
-"""
-        return display
->>>>>>> 2035f541 (fix op_task_builder)
