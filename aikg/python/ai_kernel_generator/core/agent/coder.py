@@ -108,6 +108,7 @@ class Coder(AgentBase):
             "api_docs": self.load_doc("api/api.md"),
             "dsl_basic_docs": self.load_doc("basic_docs.md"),
             "expert_suggestion": self.load_doc("suggestion_docs.md"),
+            "backend": self.backend,
 
             # 可选参数
             "hardware_docs": get_hardware_doc(self.backend, self.arch),

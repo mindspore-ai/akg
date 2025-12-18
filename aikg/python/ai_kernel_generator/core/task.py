@@ -309,7 +309,7 @@ class Task:
                             )
                             
                             profile_res = {}
-                            if verify_res and self.task_type == "profile" and self.backend in ["ascend", "cuda"]:
+                            if verify_res and self.task_type == "profile" and self.backend in ["ascend", "cuda", "cpu"]:
                                 logger.info(f"[{self.op_name}] 所有验证通过，开始性能测试（使用原始输入）...")
                                 profile_settings = self.config.get("profile_settings", {})
                                 profile_res = await self.verifier.run_profile(
