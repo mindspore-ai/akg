@@ -138,7 +138,7 @@ class KernelVerifier:
             # 对于 triton_cuda 和 triton_ascend，统一使用 ModelNew 类格式
             self.impl_func_name = impl_func_name or "ModelNew"
         elif self.dsl == "torch":
-            # 对于 torch DSL (Triton → PyTorch 转换)，统一使用 ModelNew 类格式
+            # 对于 torch DSL (Kernel → PyTorch 转换，支持 Triton/CUDA C 等)，统一使用 ModelNew 类格式
             self.impl_func_name = impl_func_name or "ModelNew"
         elif self.dsl == "ascendc":
             self.impl_func_name = impl_func_name or f"{op_name}_kernel"
@@ -660,8 +660,8 @@ if __name__ == "__main__":
                     "import triton.language as tl"
                 ]
         elif self.dsl == "torch":
-            # Triton → PyTorch 转换场景
-            # 生成的代码是纯 PyTorch，不需要 triton
+            # Kernel → PyTorch 转换场景（支持 Triton/CUDA C 等）
+            # 生成的代码是纯 PyTorch，不需要任何自定义 Kernel
             import_lines = [
                 "import torch",
                 "import torch.nn as nn",
@@ -1229,7 +1229,7 @@ if __name__ == "__main__":
     def _generate_base_benchmark_code(self, framework_adapter, dsl_adapter, warmup, runs):
         """生成base benchmark代码（benchmark framework model）"""
         if self.dsl == "torch":
-            # Triton → PyTorch 转换场景：使用传统计时方法
+            # Kernel → PyTorch 转换场景（支持 Triton/CUDA C 等）：使用传统计时方法
             sync_code = "torch.cuda.synchronize()" if self.backend == "cuda" else (
                 "torch.npu.synchronize()" if self.backend == "ascend" else ""
             )

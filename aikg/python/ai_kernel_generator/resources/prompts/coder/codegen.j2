@@ -19,20 +19,20 @@
   2. 适配目标后端（{{backend}}）的语法和API限制
   3. 参考目标后端的专家建议和API文档进行优化
 {% elif dsl == "torch" %}
-{# ========== Triton → PyTorch 转换场景 ========== #}
-# Triton Kernel 到 PyTorch 原生实现转换
+{# ========== Kernel → PyTorch 转换场景（支持 Triton/CUDA C/其他 Kernel） ========== #}
+# Kernel 到 PyTorch 原生实现转换
 
-你是一个专业的AI领域 Kernel编写专家Agent，熟悉 Triton DSL 和 PyTorch 框架。
-当前的任务是**反向转换**：将任务描述中的 Triton Kernel 代码转换为等价的 **PyTorch 原生实现**。
+你是一个专业的AI领域 Kernel编写专家Agent，熟悉各种 Kernel DSL（Triton、CUDA C 等）和 PyTorch 框架。
+当前的任务是**反向转换**：将任务描述中的 Kernel 代码转换为等价的 **PyTorch 原生实现**。
 
 **转换场景说明**：
-- **源代码**：任务描述中提供的是包含 Triton Kernel 的实现
-- **目标代码**：你需要生成等价的纯 PyTorch 实现（**禁止使用 Triton**）
+- **源代码**：任务描述中提供的是包含自定义 Kernel 的实现（可能是 Triton、CUDA C 或其他）
+- **目标代码**：你需要生成等价的纯 PyTorch 实现（**禁止使用任何自定义 Kernel**）
 - **转换要点**：
   1. 保持算法逻辑和计算结果完全一致
-  2. 使用 PyTorch 原生算子替代 Triton Kernel
+  2. 使用 PyTorch 原生算子替代 Kernel 实现
   3. 保持相同的输入输出接口（ModelNew 类格式）
-  4. **禁止** `import triton` 或使用任何 Triton 相关代码
+  4. **禁止** `import triton` 或 `torch.utils.cpp_extension.load_inline` 等自定义 Kernel 调用
 {% else %}
 {# ========== 普通场景：framework代码 -> dsl ========== #}
 
@@ -234,11 +234,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# 注意：禁止使用 triton！这是 Triton → PyTorch 转换任务
+# 注意：禁止使用自定义 Kernel（如 triton、cuda_extension）！这是 Kernel → PyTorch 转换任务
 
 class ModelNew(nn.Module):
     """
-    PyTorch 原生实现（从 Triton Kernel 转换）
+    PyTorch 原生实现（从自定义 Kernel 转换）
     """
     def __init__(self, ...):
         super().__init__()
@@ -248,11 +248,11 @@ class ModelNew(nn.Module):
     
     def forward(self, ...):
         # 使用 PyTorch 原生操作实现等价功能
-        # 例如：
-        # - tl.maximum(x, 0) → torch.relu(x) 或 torch.maximum(x, torch.zeros_like(x))
-        # - tl.sum(x, axis=0) → torch.sum(x, dim=0)
-        # - tl.exp(x) → torch.exp(x)
-        # - tl.dot(a, b) → torch.matmul(a, b)
+        # 常见转换示例：
+        # Triton: tl.maximum(x, 0) → torch.relu(x)
+        # Triton: tl.sum(x, axis=0) → torch.sum(x, dim=0)
+        # CUDA: max(a, b) → torch.maximum(a, b)
+        # CUDA: __syncthreads() → (PyTorch 自动同步，无需显式调用)
         return output
 {% elif "triton_cuda" in dsl or "triton_ascend" in dsl %}
 import torch

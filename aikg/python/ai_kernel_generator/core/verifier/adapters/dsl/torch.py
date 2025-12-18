@@ -13,10 +13,14 @@
 # limitations under the License.
 
 """
-PyTorch DSL adapter - 用于 Triton → PyTorch 转换场景
+PyTorch DSL adapter - 用于 Kernel → PyTorch 转换场景
 
-支持 ModelNew (KernelBench) 格式，生成的代码是纯 PyTorch 实现（不使用 Triton）。
-验证时会将生成的 PyTorch 代码与原始 Triton 实现的输出进行对比。
+支持 ModelNew (KernelBench) 格式，生成的代码是纯 PyTorch 实现（不使用任何自定义 Kernel）。
+验证时会将生成的 PyTorch 代码与原始 Kernel 实现（Triton/CUDA C/其他）的输出进行对比。
+
+使用方式：
+    - dsl="torch": 目标是纯 PyTorch 实现
+    - framework="torch": 输入框架（Triton/CUDA C 代码都是通过 PyTorch 运行的）
 """
 
 from typing import Any, Optional
@@ -25,7 +29,7 @@ from .base import DSLAdapter
 
 
 class DSLAdapterTorch(DSLAdapter):
-    """Adapter for PyTorch DSL (Triton → PyTorch conversion)."""
+    """Adapter for PyTorch DSL (Kernel → PyTorch conversion, supports Triton/CUDA C/etc.)."""
     
     def get_import_statements(self, framework: str) -> str:
         """Return PyTorch import statements.
