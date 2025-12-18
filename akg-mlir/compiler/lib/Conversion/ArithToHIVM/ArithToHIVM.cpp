@@ -24,6 +24,7 @@
 #include "akg/Conversion/ArithToHIVM/ArithToHIVM.h"
 
 #include "bishengir/Dialect/HIVM/IR/HIVM.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
@@ -526,6 +527,114 @@ struct VectorBroadcastToHIVM : public OpConversionPattern<vector::BroadcastOp> {
 };
 
 
+struct AffineForToHIVM : public OpConversionPattern<affine::AffineForOp> {
+  using OpConversionPattern<affine::AffineForOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(affine::AffineForOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (llvm::none_of(op.getResultTypes(), [](Type t) { return isa<VectorType>(t); })) {
+      return failure();
+    }
+
+    auto lbOperands = adaptor.getLowerBoundOperands();
+    auto ubOperands = adaptor.getUpperBoundOperands();
+    auto allOperands = adaptor.getOperands();
+    auto iterOperands = allOperands.drop_front(lbOperands.size() + ubOperands.size());
+
+    SmallVector<Value> newIterOperands(iterOperands.begin(), iterOperands.end());
+
+    auto newForOp = rewriter.create<affine::AffineForOp>(
+        op.getLoc(), lbOperands, op.getLowerBoundMap(),
+        ubOperands, op.getUpperBoundMap(), op.getStep().getSExtValue(), newIterOperands);
+
+    Block &oldBlock = op.getRegion().front();
+    Block &newBlock = newForOp.getRegion().front();
+
+    SmallVector<Value> newBlockArgs(newBlock.getArguments().begin(), newBlock.getArguments().end());
+
+    rewriter.mergeBlocks(&oldBlock, &newBlock, newBlockArgs);
+
+    rewriter.replaceOp(op, newForOp.getResults());
+
+    return success();
+  }
+};
+
+
+struct AffineYieldToHIVM : public OpConversionPattern<affine::AffineYieldOp> {
+  using OpConversionPattern<affine::AffineYieldOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(affine::AffineYieldOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (llvm::none_of(op.getOperands(), [](Value v) { return isa<VectorType>(v.getType()); })) {
+      return failure();
+    }
+
+    rewriter.replaceOpWithNewOp<affine::AffineYieldOp>(op, adaptor.getOperands());
+    return success();
+  }
+};
+
+
+struct AffineStoreToHIVM : public OpConversionPattern<affine::AffineStoreOp> {
+  using OpConversionPattern<affine::AffineStoreOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(affine::AffineStoreOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto operands = adaptor.getOperands();
+    Value valToStore = operands[0];
+    Value memref = operands[1];
+
+    auto memRefType = cast<MemRefType>(memref.getType());
+    int64_t rank = memRefType.getRank();
+
+    Value storeValueMemref = valToStore;
+    if (!isa<MemRefType>(valToStore.getType())) {
+      return failure();
+    }
+
+    ValueRange mapOperands = operands.drop_front(2);
+
+    auto map = op.getAffineMap();
+    SmallVector<OpFoldResult> offsets;
+    offsets.reserve(map.getNumResults());
+    for (unsigned i = 0; i < map.getNumResults(); ++i) {
+      AffineExpr expr = map.getResult(i);
+      if (auto cstExpr = dyn_cast<AffineConstantExpr>(expr)) {
+        offsets.push_back(rewriter.getIndexAttr(cstExpr.getValue()));
+        continue;
+      }
+      if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
+        offsets.push_back(mapOperands[dimExpr.getPosition()]);
+        continue;
+      }
+      if (auto symExpr = dyn_cast<AffineSymbolExpr>(expr)) {
+        offsets.push_back(mapOperands[map.getNumDims() + symExpr.getPosition()]);
+        continue;
+      }
+      auto apply = rewriter.create<affine::AffineApplyOp>(loc, map.getSubMap({i}), mapOperands);
+      offsets.push_back(apply.getResult());
+    }
+
+    SmallVector<OpFoldResult> sizes(rank, rewriter.getIndexAttr(1));
+    SmallVector<OpFoldResult> strides(rank, rewriter.getIndexAttr(1));
+
+    SmallVector<int64_t> resultShape(rank, 1);
+    auto resultType = memref::SubViewOp::inferRankReducedResultType(
+        resultShape, memRefType, offsets, sizes, strides);
+    Value subView = rewriter.create<memref::SubViewOp>(
+        loc, cast<MemRefType>(resultType), memref, offsets, sizes, strides);
+
+    rewriter.create<hivm::StoreOp>(loc, TypeRange{}, storeValueMemref, subView);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct VectorTransferReadToHIVM : public OpConversionPattern<vector::TransferReadOp> {
   using OpConversionPattern<vector::TransferReadOp>::OpConversionPattern;
 
@@ -567,8 +676,6 @@ struct VectorTransferReadToHIVM : public OpConversionPattern<vector::TransferRea
 
     Value finalSource = slicedSource;
     Type elemType = vecType.getElementType();
-
-
 
     auto targetMemRefType = MemRefType::get(vecType.getShape(), elemType);
     Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType);
@@ -646,7 +753,6 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
        }
     }
 
-
     rewriter.create<hivm::StoreOp>(
         loc,
         TypeRange{},
@@ -718,6 +824,9 @@ void hivm::populateArithToHIVMConversionPatterns(
   patterns.add<ArithConstantToHIVM>(patterns.getContext());
   patterns.add<VectorReductionToHIVM>(patterns.getContext());
   patterns.add<VectorBroadcastToHIVM>(patterns.getContext());
+  patterns.add<AffineForToHIVM>(patterns.getContext());
+  patterns.add<AffineYieldToHIVM>(patterns.getContext());
+  patterns.add<AffineStoreToHIVM>(patterns.getContext());
 }
 
 namespace {
@@ -726,7 +835,7 @@ struct ArithToHIVMConversionPass
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<hivm::HIVMDialect, tensor::TensorDialect,
                     memref::MemRefDialect, vector::VectorDialect,
-                    arith::ArithDialect>();
+                    arith::ArithDialect, affine::AffineDialect>();
   }
   void runOnOperation() override;
 };
@@ -735,7 +844,7 @@ void ArithToHIVMConversionPass::runOnOperation() {
   ConversionTarget target(getContext());
   // HIVM and Tensor are legal
   target.addLegalDialect<hivm::HIVMDialect, tensor::TensorDialect,
-                          memref::MemRefDialect, BuiltinDialect>();
+                          memref::MemRefDialect, affine::AffineDialect, BuiltinDialect>();
   target.addDynamicallyLegalDialect<arith::ArithDialect>([](Operation *op) {
     if (auto constantOp = dyn_cast<arith::ConstantOp>(op)) {
       return !isa<RankedTensorType>(constantOp.getType()) &&
@@ -747,6 +856,25 @@ void ArithToHIVMConversionPass::runOnOperation() {
     }
     return true;
   });
+  target.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp op) {
+    for (Type type : op.getResultTypes()) {
+      if (isa<VectorType>(type))
+        return false;
+    }
+    for (auto arg : op.getRegion().getArguments()) {
+      if (isa<VectorType>(arg.getType()))
+        return false;
+    }
+    return true;
+  });
+  target.addDynamicallyLegalOp<affine::AffineYieldOp>([](affine::AffineYieldOp op) {
+    for (auto operand : op.getOperands()) {
+      if (isa<VectorType>(operand.getType()))
+        return false;
+    }
+    return true;
+  });
+  target.addIllegalOp<affine::AffineStoreOp>();
   target.addIllegalOp<vector::ReductionOp, vector::TransferReadOp, vector::TransferWriteOp, vector::BroadcastOp>();
 
   RewritePatternSet patterns(&getContext());
