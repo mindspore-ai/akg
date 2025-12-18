@@ -20,6 +20,7 @@
 #include <memory>
 #include <numeric>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "akg/Dialect/Affine/Analysis/Axis.h"
@@ -27,6 +28,7 @@
 #include "akg/Dialect/Affine/Analysis/Model.h"
 #include "akg/Dialect/Affine/Analysis/GpuTemplateTilingSolver.h"
 #include "akg/Utils/AnalysisForGpu.hpp"
+#include "akg/Utils/AnalysisForNpu.hpp"
 
 namespace mlir {
 namespace akg {
@@ -55,7 +57,7 @@ class TilingStrategy {
   explicit TilingStrategy(const std::unordered_set<std::string> &work_for_ops) : workForOps(work_for_ops) {}
   explicit TilingStrategy(Axis::AxisLabel axisLabel) : workForAxisLabel(axisLabel) {}
   virtual void AddConstraint(ModelGraphPtr initGraph) {}
-  virtual void AddNpuConstraint(InitGraphPtr initGraph) {}
+  virtual void AddNpuConstraint(NpuModelGraphPtr initGraph) {}
   virtual void AddGpuConstraint(GpuModelGraphPtr initGraph) {}
   virtual void AddCpuConstraint(CpuModelGraphPtr initGraph) {}
   std::unordered_set<std::string> workForOps;
@@ -124,6 +126,9 @@ class BroadcastStrategy : public TilingStrategy {
   int getMaxBroadcastAxes(const CpuModelGraphPtr cpuGraph, std::vector<AxisPtr> maxloopNest);
   bool searchForSmallShape(const GpuModelGraphPtr gpuGraph, const AxisPtr a);
   bool searchForLargeShape(const GpuModelGraphPtr gpuGraph, const AxisPtr a);
+  NodePtr findMinRankNode(const GpuModelGraphPtr gpuGraph);
+  int computeExpectedSeq(const GpuModelGraphPtr gpuGraph, const AxisPtr innerMostReadAxis);
+  void searchSeqAxisFromInnerToOuter(const GpuModelGraphPtr gpuGraph, const NodePtr maxRankNode, int expectSeq);
   int proposedGrid = 1;
   int proposedBlock = 1;
   int minExpectSeq = 2;
@@ -147,17 +152,47 @@ class ParallelStrategy : public TilingStrategy {
 
   void AddGpuConstraint(GpuModelGraphPtr gpuGraph) override;
   void AddCpuConstraint(CpuModelGraphPtr cpuGraph) override;
+  void AddNpuConstraint(NpuModelGraphPtr npuGraph) override;
 
  private:
   void InitProposalResource(const GpuModelGraphPtr gpuGraph);
   bool tryMapBlock(const GpuModelGraphPtr gpuGraph, const AxisPtr axis);
   bool tryMapGrid(const GpuModelGraphPtr gpuGraph, const AxisPtr axis);
+
+  // Helper functions for AddNpuConstraint
+  void collectAxesInfo(const SmallVector<AxisPtr> &axes, int pos);
+  std::pair<int64_t, int64_t> allocateCoresForAxes(int64_t totalCores);
+  void applyParallelTiling(const SmallVector<AxisPtr> &axes, int64_t coresForParallel, int64_t coresForReduce,
+                           int64_t coreNum, int pos);
+  // GPU
   bool currHasMinMax{false};
   int proposedGrid = 1;
   int proposedBlock = 1;
   int gridWasteCoef = 1;
   int blockWasteCoef = 8;
   int blockLimitCoef = 2;
+
+  // NPU
+  SmallVector<bool> isParallelAxis;
+  int64_t totalParallelSize{0};
+  int64_t totalReduceSize{0};
+};
+
+class VectorizationStrategy : public TilingStrategy {
+ public:
+  VectorizationStrategy() : TilingStrategy() {}
+  virtual ~VectorizationStrategy() = default;
+
+  void AddNpuConstraint(NpuModelGraphPtr npuGraph) override;
+
+ private:
+  SmallVector<int64_t> getDimSizes(const SmallVector<AxisPtr> &axes);
+  int64_t computeVectorizationTilingKey(int64_t ubAvailableNum, const SmallVector<int64_t> &dims);
+  void applyVectorizationTiling(const SmallVector<AxisPtr> &axes, int64_t ubAvailableNum, int64_t tilingKey, int pos);
+
+  // UB size constants
+  static constexpr int64_t kUBAlignSizeInBytes = 32;  // 32-byte alignment
+  static constexpr int64_t kNumBitsInByte = 8;
 };
 
 class NpuDefaultTileStrategy : public TilingStrategy {
@@ -165,7 +200,15 @@ class NpuDefaultTileStrategy : public TilingStrategy {
   NpuDefaultTileStrategy() : TilingStrategy() {}
   ~NpuDefaultTileStrategy() override = default;
 
-  void AddGpuConstraint(GpuModelGraphPtr gpuGraph) override;
+  void AddNpuConstraint(NpuModelGraphPtr npuGraph) override;
+
+ private:
+  llvm::SmallVector<AxisPtr> collectAxes(const NpuModelGraphPtr npuGraph);
+  std::unordered_map<size_t, unsigned> buildBandRankMap(const llvm::SmallVector<AxisPtr> &axes);
+  llvm::SmallVector<unsigned, 4> parseTileSizesConfig(const NpuModelGraphPtr npuGraph);
+  void applyTilingToAxes(const NpuModelGraphPtr npuGraph, const llvm::SmallVector<AxisPtr> &axes,
+                         const std::unordered_map<size_t, unsigned> &bandRankMap,
+                         const llvm::SmallVector<unsigned, 4> &tileSizes, bool isReduceOp);
 };
 
 class TilingStrategyManager {
@@ -183,7 +226,9 @@ class TilingStrategyManager {
 
   void processOn(const GpuModelGraphPtr gpuGraph);
 
-  void processOn(const CpuModelGraphPtr gpuGraph);
+  void processOn(const CpuModelGraphPtr cpuGraph);
+
+  void processOn(const NpuModelGraphPtr npuGraph);
 
  private:
   std::vector<TilingStrategyPtr> strategies_;
@@ -195,4 +240,3 @@ using TilingStrategyManagerPtr = std::shared_ptr<TilingStrategyManager>;
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_TILINGSTRATEGY_H_
-

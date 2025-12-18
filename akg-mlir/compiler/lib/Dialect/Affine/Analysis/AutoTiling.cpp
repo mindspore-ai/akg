@@ -119,39 +119,6 @@ void UniquePrimeCollect(Operation *op) {
   });
 }
 
-// todo Implement buildAscendModelGraph to optimize UB/Cube/Vector scheduling
-GpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {
-  auto npuGraph = std::make_shared<GpuModelGraph>(initGraph);
-  npuGraph->funcOp = initGraph->funcOp;
-  // UniquePrimeCollect(initGraph->funcOp);
-  npuGraph->AnalyzeGraphTemplate();
-
-  // Only store if explicitly specified by user, otherwise let TilingStrategy calculate it
-  OpBuilder builder(initGraph->funcOp);
-  if (initGraph->funcOp->hasAttr("npu.multiTileSizes")) {
-    auto arrayAttr = dyn_cast<ArrayAttr>(initGraph->funcOp->getAttr("npu.multiTileSizes"));
-    if (arrayAttr) {
-      SmallVector<unsigned, 4> tileSizes;
-      for (auto attr : arrayAttr) {
-        if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
-          tileSizes.push_back(static_cast<unsigned>(intAttr.getInt()));
-        }
-      }
-      if (!tileSizes.empty()) {
-        SmallVector<Attribute, 4> tileSizeAttrs;
-        tileSizeAttrs.reserve(tileSizes.size());
-        std::transform(tileSizes.begin(), tileSizes.end(), std::back_inserter(tileSizeAttrs),
-                       [&builder](unsigned size) { return builder.getI32IntegerAttr(size); });
-        npuGraph->globalConfigs["npu.multiTileSizes"] = builder.getArrayAttr(tileSizeAttrs);
-      }
-    }
-  }
-
-  tilingMgr->addStrategy(std::make_shared<NpuDefaultTileStrategy>());
-  tilingMgr->processOn(npuGraph);
-  return npuGraph;
-}
-
 GpuModelGraphPtr buildGpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {
   auto gpuGraph = std::make_shared<GpuModelGraph>(initGraph);
   gpuGraph->funcOp = initGraph->funcOp;
@@ -180,6 +147,20 @@ GpuModelGraphPtr buildGpuModelGraph(InitGraphPtr initGraph, const TilingStrategy
   }
   tilingMgr->processOn(gpuGraph);
   return gpuGraph;
+}
+
+NpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {
+  auto npuGraph = std::make_shared<NpuModelGraph>(initGraph);
+  npuGraph->funcOp = initGraph->funcOp;
+  npuGraph->AnalyzeGraphTemplate();
+  npuGraph->AnalyzeBufferInfo();
+  npuGraph->InitResource();
+
+  tilingMgr->addStrategy(std::make_shared<VectorizationStrategy>());
+  tilingMgr->addStrategy(std::make_shared<ParallelStrategy>());
+
+  tilingMgr->processOn(npuGraph);
+  return npuGraph;
 }
 
 CpuModelGraphPtr buildCpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {

@@ -41,10 +41,10 @@ InitGraphPtr parseIr(const std::vector<SmallVector<affine::AffineForOp, 6>> &ban
 ModelGraphPtr buildModelGraph(InitGraphPtr initGraph);
 
 /// Because these preliminary analyses are hardware-specific, ModelGraph subclass inheritance for different
-/// hardware platforms can be (e.g., GpuModelGraph and CpuModelGraph).
+/// hardware platforms can be (e.g., GpuModelGraph, CpuModelGraph and NpuModelGraph).
 GpuModelGraphPtr buildGpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr);
+NpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr);
 CpuModelGraphPtr buildCpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr);
-GpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr);
 
 /// Encapsulates the steps required to solve sharding, and supports two solution methods: heuristic and search (Tuning);
 TilingSolverPtr getHeuristicTilingSolver(ModelGraphPtr modelGraph);
