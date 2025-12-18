@@ -70,7 +70,7 @@ async def test_sglang_verifier_a100(op_name):
     arch = "a100"
     config = load_config(dsl, backend=backend)
 
-    op_task_file = f"./benchmark/aikgbench/sglang/{op_name}.py"
+    op_task_file = f"./benchmark/aikgbench/thirdparty/sglang/{op_name}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
         framework_code = f.read()
 
@@ -123,7 +123,7 @@ def test_sglang_class_method_no_reference_a100(op_name):
     无标杆验证：针对 class_method kernels，只检查输出是否包含 nan 或 inf
     """
     # 动态导入 kernel 模块
-    op_task_file = f"./benchmark/aikgbench/sglang/class_method/{op_name}.py"
+    op_task_file = f"./benchmark/aikgbench/thirdparty/sglang/class_method/{op_name}.py"
     spec = importlib.util.spec_from_file_location(f"sglang_class_method_{op_name}", op_task_file)
     module = importlib.util.module_from_spec(spec)
     sys.modules[f"sglang_class_method_{op_name}"] = module
