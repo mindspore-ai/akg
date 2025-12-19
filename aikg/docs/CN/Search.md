@@ -125,10 +125,7 @@ DB 中的记录：
 │     b) DB 非空 → UCB 选父代 → 层次化灵感采样 → 生成进化任务           │
 │     c) DB 为空 → 生成初始任务（继续探索）                            │
 │                                                                  │
-│  4. 检查停止条件                                                   │
-│     - 达到 max_total_tasks                                        │
-│     - 达到 target_success_count                                   │
-│     - 达到 target_speedup                                         │
+│  4. 检查停止条件：达到 max_total_tasks                             │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -161,14 +158,10 @@ DB 中的记录：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `max_total_tasks` | int | 100 | 最大总任务数 |
-| `target_success_count` | int | 10 | 目标成功数 |
-| `target_speedup` | float | 2.0 | 目标加速比 |
+| `max_total_tasks` | int | 100 | 最大总任务数（唯一停止条件） |
 
 **停止条件行为**：
-- `max_total_tasks` 触发：**等待**剩余任务完成后结束
-- `target_success_count` 触发：**取消**正在运行和等待的任务，立即结束
-- `target_speedup` 触发：**取消**正在运行和等待的任务，立即结束
+- 达到 `max_total_tasks` 后，等待所有正在运行的任务完成，然后返回结果。
 
 ### 6.4 灵感采样参数
 
@@ -210,9 +203,7 @@ result = await adaptive_search(
     random_factor=0.1,
     
     # 停止条件
-    max_total_tasks=50,
-    target_success_count=5,
-    target_speedup=1.5
+    max_total_tasks=50
 )
 
 # 3. 获取最佳实现

@@ -126,10 +126,7 @@ Records in DB:
 │                          Generate evolved tasks                   │
 │     c) If DB empty → Generate initial tasks (continue exploring) │
 │                                                                  │
-│  4. Check stop conditions                                        │
-│     - Reached max_total_tasks                                    │
-│     - Reached target_success_count                               │
-│     - Reached target_speedup                                     │
+│  4. Check stop condition: max_total_tasks reached                │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -187,18 +184,14 @@ For evolved tasks, select **parent + tiered sampling inspirations**:
 | `random_factor` | float | 0.1 | Random perturbation during selection |
 | `use_softmax` | bool | False | Use softmax sampling instead of argmax |
 
-### 6.3 Stop Conditions
+### 6.3 Stop Condition
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `max_total_tasks` | int | 100 | Maximum total tasks |
-| `target_success_count` | int | 10 | Target success count |
-| `target_speedup` | float | 2.0 | Target speedup ratio |
+| `max_total_tasks` | int | 100 | Maximum total tasks (only stop condition) |
 
 **Stop Condition Behavior**:
-- `max_total_tasks` triggered: **Wait** for remaining tasks to complete
-- `target_success_count` triggered: **Cancel** running and waiting tasks, return immediately
-- `target_speedup` triggered: **Cancel** running and waiting tasks, return immediately
+- When `max_total_tasks` is reached, wait for all running tasks to complete, then return results.
 
 ### 6.4 Inspiration Sampling Parameters
 
@@ -239,10 +232,8 @@ result = await adaptive_search(
     exploration_coef=1.414,
     random_factor=0.1,
     
-    # Stop conditions
-    max_total_tasks=50,
-    target_success_count=5,
-    target_speedup=1.5
+    # Stop condition
+    max_total_tasks=50
 )
 
 # 3. Get best implementations

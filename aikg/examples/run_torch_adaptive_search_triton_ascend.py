@@ -99,8 +99,6 @@ def print_config(args):
     print(f"最大并发数: {args.max_concurrent}")
     print(f"初始任务数: {args.initial_tasks}")
     print(f"最大总任务数: {args.max_tasks}")
-    print(f"目标成功数: {args.target_success}")
-    print(f"目标加速比: {args.target_speedup}x")
     print("-" * 60)
     print(f"UCB 探索系数: {args.exploration_coef}")
     print(f"随机扰动: {args.random_factor}")
@@ -219,8 +217,6 @@ async def run_adaptive_search(args):
         
         # 停止条件
         max_total_tasks=args.max_tasks,
-        target_success_count=args.target_success,
-        target_speedup=args.target_speedup,
         
         # 灵感采样参数（父代 + 层次化采样）
         inspiration_sample_num=args.inspiration_num,
@@ -249,7 +245,7 @@ def main():
   python run_torch_adaptive_search_triton_ascend.py --devices 0 1 2 3 --max-concurrent 4
   
   # 自定义参数
-  python run_torch_adaptive_search_triton_ascend.py --max-tasks 30 --target-success 8
+  python run_torch_adaptive_search_triton_ascend.py --max-tasks 30
   
   # 更多探索
   python run_torch_adaptive_search_triton_ascend.py --exploration-coef 2.0
@@ -286,19 +282,6 @@ def main():
         default=20,
         help="最大总任务数，默认: 20"
     )
-    parser.add_argument(
-        "--target-success",
-        type=int,
-        default=5,
-        help="目标成功数，默认: 5"
-    )
-    parser.add_argument(
-        "--target-speedup",
-        type=float,
-        default=1.5,
-        help="目标加速比，默认: 1.5"
-    )
-    
     # UCB 参数
     parser.add_argument(
         "--exploration-coef",

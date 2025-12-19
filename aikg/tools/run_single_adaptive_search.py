@@ -59,8 +59,6 @@ class AdaptiveSearchRunnerConfig:
     max_concurrent: int = 4
     initial_task_count: int = 4
     max_total_tasks: int = 50
-    target_success_count: int = 10
-    target_speedup: float = 2.0
     
     # UCB 参数
     exploration_coef: float = 1.414
@@ -114,8 +112,6 @@ class AdaptiveSearchRunnerConfig:
         # 停止条件
         stopping_config = config_dict.get("stopping", {})
         instance.max_total_tasks = stopping_config.get("max_total_tasks", instance.max_total_tasks)
-        instance.target_success_count = stopping_config.get("target_success_count", instance.target_success_count)
-        instance.target_speedup = stopping_config.get("target_speedup", instance.target_speedup)
         
         # UCB 参数
         ucb_config = config_dict.get("ucb_selection", {})
@@ -165,8 +161,6 @@ def print_config(op_name: str, config: AdaptiveSearchRunnerConfig):
     print(f"最大并发数: {config.max_concurrent}")
     print(f"初始任务数: {config.initial_task_count}")
     print(f"最大总任务数: {config.max_total_tasks}")
-    print(f"目标成功数: {config.target_success_count}")
-    print(f"目标加速比: {config.target_speedup}x")
     print("-" * 60)
     print(f"UCB 探索系数: {config.exploration_coef}")
     print(f"随机扰动: {config.random_factor}")
@@ -308,8 +302,6 @@ def parse_batch_runner_mode(args):
             config.max_concurrent = file_config.max_concurrent
             config.initial_task_count = file_config.initial_task_count
             config.max_total_tasks = file_config.max_total_tasks
-            config.target_success_count = file_config.target_success_count
-            config.target_speedup = file_config.target_speedup
             config.exploration_coef = file_config.exploration_coef
             config.random_factor = file_config.random_factor
             config.use_tiered_sampling = file_config.use_tiered_sampling
@@ -369,8 +361,6 @@ async def run_wrapper(op_name: str, task_desc: str, config: AdaptiveSearchRunner
         
         # 停止条件
         max_total_tasks=config.max_total_tasks,
-        target_success_count=config.target_success_count,
-        target_speedup=config.target_speedup,
         
         # 灵感采样参数
         inspiration_sample_num=config.inspiration_sample_num,

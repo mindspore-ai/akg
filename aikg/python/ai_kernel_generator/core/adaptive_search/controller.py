@@ -21,15 +21,14 @@ Adaptive Search Controller
 import asyncio
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from dataclasses import dataclass
+from typing import Dict, Any, Optional
 from datetime import datetime
 
 from ai_kernel_generator.core.adaptive_search.success_db import SuccessDB
-from ai_kernel_generator.core.adaptive_search.task_pool import AsyncTaskPool, TaskResult
+from ai_kernel_generator.core.adaptive_search.task_pool import AsyncTaskPool
 from ai_kernel_generator.core.adaptive_search.ucb_selector import UCBParentSelector
 from ai_kernel_generator.core.adaptive_search.task_generator import TaskGenerator, TaskGeneratorConfig
-from ai_kernel_generator.core.langgraph_task import LangGraphTask
 from ai_kernel_generator.core.sketch import Sketch
 
 logger = logging.getLogger(__name__)
@@ -43,10 +42,8 @@ class SearchConfig:
     initial_task_count: int = 8
     tasks_per_parent: int = 1  # 每次选择父代后生成的任务数
     
-    # 停止条件
+    # 停止条件（唯一停止条件：达到最大任务数）
     max_total_tasks: int = 100
-    target_success_count: int = 10
-    target_speedup: float = 2.0
     
     # UCB 选择参数
     exploration_coef: float = 1.414
@@ -299,33 +296,19 @@ class AdaptiveSearchController:
                 logger.warning(f"Exception generating sketch for {record.id}: {e}")
                 self.db.update_sketch(record.id, "")
     
-    def _check_stop_conditions(self) -> str:
+    def _check_stop_conditions(self) -> bool:
         """
         检查停止条件
         
         Returns:
-            str: 停止原因类型（空字符串表示不停止）
-                 - "max_total_tasks": 达到最大任务数，需要等待剩余任务
-                 - "target_success_count": 达到目标成功数，不需要等待
-                 - "target_speedup": 达到目标加速比，不需要等待
+            bool: 是否应该停止
         """
-        # 达到目标成功数（不需要等待剩余任务）
-        if self._total_success >= self.search_config.target_success_count:
-            self._stop_reason = f"Reached target_success_count ({self.search_config.target_success_count})"
-            return "target_success_count"
-        
-        # 达到目标加速比（不需要等待剩余任务）
-        best_speedup = self.db.get_best_speedup()
-        if best_speedup >= self.search_config.target_speedup:
-            self._stop_reason = f"Reached target_speedup ({self.search_config.target_speedup}x, actual={best_speedup:.2f}x)"
-            return "target_speedup"
-        
-        # 达到最大任务数（需要等待剩余任务）
+        # 唯一的停止条件：达到最大任务数
         if self._total_submitted >= self.search_config.max_total_tasks:
             self._stop_reason = f"Reached max_total_tasks ({self.search_config.max_total_tasks})"
-            return "max_total_tasks"
+            return True
         
-        return ""
+        return False
     
     async def _refill_task_pool(self) -> int:
         """
@@ -382,11 +365,8 @@ class AdaptiveSearchController:
         self._start_time = datetime.now()
         logger.info(f"Starting adaptive search for {self.op_name}")
         logger.info(f"Config: max_concurrent={self.search_config.max_concurrent}, "
-                   f"max_total_tasks={self.search_config.max_total_tasks}, "
-                   f"target_success={self.search_config.target_success_count}, "
-                   f"target_speedup={self.search_config.target_speedup}x")
+                   f"max_total_tasks={self.search_config.max_total_tasks}, ")
         
-        stop_type = ""
         try:
             # 1. 提交初始任务
             logger.info(f"Submitting {self.search_config.initial_task_count} initial tasks...")
@@ -404,9 +384,8 @@ class AdaptiveSearchController:
                 # 处理完成的结果（更新 _total_success 等计数器）
                 await self._process_results()
                 
-                # 检查停止条件（在处理结果之后，确保计数器已更新）
-                stop_type = self._check_stop_conditions()
-                if stop_type:
+                # 检查停止条件：达到最大任务数
+                if self._check_stop_conditions():
                     logger.info(f"Stop condition met: {self._stop_reason}")
                     break
                 
@@ -425,32 +404,12 @@ class AdaptiveSearchController:
                 # 避免空转
                 await asyncio.sleep(0.1)
             
-            # 3. 处理剩余任务
+            # 3. 等待剩余任务完成
             remaining = self.task_pool.get_running_count()
-            waiting = self.task_pool.get_waiting_count()
-            
-            if remaining > 0 or waiting > 0:
-                # max_total_tasks 触发时需要等待剩余任务
-                # target_success_count 或 target_speedup 触发时取消剩余任务
-                should_wait = (stop_type == "max_total_tasks")
-                
-                if should_wait:
-                    logger.info(f"Waiting for {remaining} remaining tasks to complete...")
-                    while self.task_pool.get_running_count() > 0:
-                        await self.task_pool.wait_for_any(timeout=1.0)
-                        await self._process_results()
-                else:
-                    # 目标达成，取消所有正在运行和等待的任务
-                    logger.info(f"Target reached, cancelling {remaining} running and {waiting} waiting tasks")
-                    
-                    # 清空等待队列
-                    self.task_pool.clear_waiting_queue()
-                    
-                    # 取消正在运行的任务
-                    cancelled = await self.task_pool.cancel_all_running()
-                    logger.info(f"Cancelled {cancelled} tasks, processing completed results...")
-                    
-                    # 处理已完成的结果（取消前可能有任务刚完成）
+            if remaining > 0:
+                logger.info(f"Waiting for {remaining} remaining tasks to complete...")
+                while self.task_pool.get_running_count() > 0:
+                    await self.task_pool.wait_for_any(timeout=1.0)
                     await self._process_results()
             
         except Exception as e:
@@ -477,12 +436,6 @@ class AdaptiveSearchController:
         for record in self.db.get_all_sorted_by_performance()[:10]:
             # 从 profile 中获取 unique_dir（格式如 Iinit_1_S02_verify）
             unique_dir = record.profile.get('unique_dir', '')
-            
-            # 构建完整验证文件夹路径
-            if unique_dir and log_dir:
-                verify_dir = os.path.join(os.path.expanduser(log_dir), self.op_name, unique_dir)
-            else:
-                verify_dir = ""
             
             best_implementations.append({
                 'id': record.id,  # 完整任务 ID
@@ -521,8 +474,6 @@ class AdaptiveSearchController:
                 'initial_task_count': self.search_config.initial_task_count,
                 'tasks_per_parent': self.search_config.tasks_per_parent,
                 'max_total_tasks': self.search_config.max_total_tasks,
-                'target_success_count': self.search_config.target_success_count,
-                'target_speedup': self.search_config.target_speedup,
                 'exploration_coef': self.search_config.exploration_coef,
                 'random_factor': self.search_config.random_factor
             }
