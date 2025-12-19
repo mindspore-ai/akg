@@ -153,7 +153,7 @@ class CodeOnlySubAgent(SubAgentBase):
             "performance": "适中（约 30-90 秒），适合大部分算子的标准生成场景"
         }
     
-    async def execute(self, 
+    async def execute(self,
                      task_code: str,
                      op_name: str,
                      task_id: str,
@@ -162,8 +162,11 @@ class CodeOnlySubAgent(SubAgentBase):
         执行 codeonly workflow
         """
         logger.info(f"Executing CodeOnly sub-agent for {op_name}")
-        
+
         try:
+            # 延迟导入避免循环依赖
+            from ai_kernel_generator.core.langgraph_task import LangGraphTask
+
             # 使用 LangGraphTask 调用 codeonly workflow
             task = LangGraphTask(
                 op_name=op_name,

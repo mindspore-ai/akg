@@ -1,18 +1,20 @@
 import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 import logging
 
 from ai_kernel_generator.server.job_manager import get_job_manager
 from ai_kernel_generator.core.worker.manager import get_worker_manager
 from ai_kernel_generator.core.worker.remote_worker import RemoteWorker
+from ai_kernel_generator.cli.server.cli_workflow_routes import router as cli_workflow_router
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AIKG Server")
+app.include_router(cli_workflow_router)
 
 class JobSubmitRequest(BaseModel):
     op_name: str

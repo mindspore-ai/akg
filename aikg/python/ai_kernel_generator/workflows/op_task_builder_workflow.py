@@ -223,7 +223,11 @@ class OpTaskBuilderWorkflow:
                 "max_check_retries": self.max_check_retries,
                 "conversation_history": [],
             }
-        
+        # session_id 非 TUI 场景可为空；如提供则写入 state 以便日志/流式输出关联
+        session_id = str((self.config or {}).get("session_id") or "").strip()
+        if session_id:
+            state["session_id"] = session_id
+
         # 检查是否超过最大迭代次数
         if state.get("iteration", 0) >= self.max_iterations:
             logger.warning(f"OpTaskBuilder: Reached max iterations ({self.max_iterations})")

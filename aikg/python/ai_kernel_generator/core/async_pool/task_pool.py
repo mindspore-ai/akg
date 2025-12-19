@@ -14,7 +14,7 @@
 
 import asyncio
 import logging
-from typing import Any, List
+from typing import Any, List, Optional
 from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
@@ -34,18 +34,20 @@ class TaskPool:
         >>> await pool.wait_all()  # 等待所有任务完成
     """
 
-    def __init__(self, max_concurrency: int = 4):
+    def __init__(self, max_concurrency: int = 4, on_task_event: Optional[Callable[[str, str], None]] = None):
         # 通过信号量控制最大并发量
         self.semaphore = asyncio.Semaphore(max_concurrency)
         self.tasks: List[asyncio.Task] = []  # 跟踪所有活动任务
+        self.on_task_event = on_task_event  # (task_name, state)
 
-    def create_task(self, coro_func: Callable, *args: Any, **kwargs: Any) -> asyncio.Task:
+    def create_task(self, coro_func: Callable, *args: Any, task_name: Optional[str] = None, **kwargs: Any) -> asyncio.Task:
         """
         创建并跟踪异步任务
 
         Args:
             coro_func: 需要执行的协程函数
             *args: 传递给协程函数的位置参数
+            task_name: 可选的任务名称（用于进度展示/跟踪）
             **kwargs: 传递给协程函数的关键字参数
 
         Returns:
@@ -55,7 +57,18 @@ class TaskPool:
             >>> pool = TaskPool()
             >>> task = pool.create_task(my_coro, arg1, kwarg1=value)
         """
-        task = asyncio.create_task(self.run(coro_func, *args, **kwargs))
+        if task_name and self.on_task_event:
+            try:
+                self.on_task_event(task_name, "queued")
+            except Exception:
+                pass
+
+        task = asyncio.create_task(self.run(coro_func, *args, task_name=task_name, **kwargs))
+        if task_name:
+            try:
+                task.set_name(str(task_name))
+            except Exception:
+                pass
         self.tasks.append(task)
         # 添加自动清理回调
         task.add_done_callback(
@@ -66,13 +79,14 @@ class TaskPool:
         )
         return task
 
-    async def run(self, coro_func: Callable, *args: Any, **kwargs: Any) -> Any:
+    async def run(self, coro_func: Callable, *args: Any, task_name: Optional[str] = None, **kwargs: Any) -> Any:
         """
         在任务池中执行协程函数
 
         Args:
             coro_func: 需要执行的协程函数引用
             *args: 位置参数
+            task_name: 可选任务名称（用于进度展示/跟踪）
             **kwargs: 关键字参数
 
         Returns:
@@ -83,11 +97,32 @@ class TaskPool:
         """
         async with self.semaphore:
             try:
-                return await coro_func(*args, **kwargs)
+                if task_name and self.on_task_event:
+                    try:
+                        self.on_task_event(task_name, "running")
+                    except Exception:
+                        pass
+                result = await coro_func(*args, **kwargs)
+                if task_name and self.on_task_event:
+                    try:
+                        self.on_task_event(task_name, "done")
+                    except Exception:
+                        pass
+                return result
             except asyncio.CancelledError:
+                if task_name and self.on_task_event:
+                    try:
+                        self.on_task_event(task_name, "cancelled")
+                    except Exception:
+                        pass
                 raise
             except Exception as e:
                 logger.error(f'Task execution failed: {str(e)}')
+                if task_name and self.on_task_event:
+                    try:
+                        self.on_task_event(task_name, "fail")
+                    except Exception:
+                        pass
                 raise
 
     async def wait_all(self) -> List[Any]:

@@ -19,6 +19,7 @@ MainOpAgent - 基于 LangGraph 的对话式算子生成系统
 
 import logging
 import os
+import traceback
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from langgraph.graph import StateGraph, END
@@ -53,6 +54,10 @@ class MainOpAgent(AgentBase):
         context = {
             "agent_name": "main_op_agent",
         }
+        # 如果 config 中包含 session_id，添加到 context 中
+        # 这样在流式输出启用时，run_llm 方法可以正确获取 session_id
+        if "session_id" in config:
+            context["session_id"] = config["session_id"]
         super().__init__(context=context, config=config)
         
         self.config = config
@@ -60,7 +65,7 @@ class MainOpAgent(AgentBase):
         self.backend = backend
         self.arch = arch
         self.dsl = dsl
-        
+
         self.model_config = config.get("agent_model_config", {})
         
         # 创建 OpTaskBuilder
@@ -119,7 +124,7 @@ class MainOpAgent(AgentBase):
                 self.use_auto_action_analysis = False
         else:
             logger.info("Auto user action analysis disabled")
-        
+
         # 获取子 Agent 注册中心
         self.sub_agent_registry = get_registry()
         
@@ -292,7 +297,7 @@ class MainOpAgent(AgentBase):
                     else:
                         # 多轮对话中：显示简短的提示
                         rejection_msg = "⚠️ 您的输入似乎与当前算子开发任务无关。请按照上述任务继续生成！"
-                    
+
                     return {
                         "task_code": "",
                         "op_name": "",
@@ -365,6 +370,7 @@ class MainOpAgent(AgentBase):
                     "op_name": op_name,
                     "op_description": clarification_msg,
                     "task_reasoning": reasoning,
+                    "task_init_status": status,  # 添加这个字段
                     "conversation_history": [new_message],
                     "current_step": "user_confirm",
                     "user_feedback": None,
@@ -386,6 +392,7 @@ class MainOpAgent(AgentBase):
                     "op_name": op_name,
                     "op_description": description,
                     "task_reasoning": reasoning,
+                    "task_init_status": status,  # 添加这个字段
                     "conversation_history": [new_message],
                     "current_step": "unsupported",
                     "user_feedback": None,
@@ -395,26 +402,29 @@ class MainOpAgent(AgentBase):
             else:
                 # READY 或其他状态：正常返回
                 logger.info(f"OpTaskBuilder returned status: {status}")
-                
+
                 # 添加 assistant 消息到历史
                 new_message = Message(
                     role="assistant",
                     content=f"Generated task code for '{op_name}':\n{description}",
                     timestamp=datetime.now().isoformat()
                 )
-                
-                return {
+
+                result_state = {
                     "task_code": task_code,
                     "op_name": op_name,
                     "op_description": description,
                     "task_reasoning": reasoning,
+                    "task_init_status": status,  # 添加这个字段
                     "conversation_history": [new_message],
                     "current_step": "user_confirm",
                     # 清除 user_feedback 和 user_confirmed，防止 LangGraph 自动循环
                     "user_feedback": None,
                     "user_confirmed": False
                 }
-            
+                logger.info(f"Returning state with task_init_status: {result_state.get('task_init_status')}")
+                return result_state
+
         except Exception as e:
             logger.error(f"OpTaskBuild node failed: {e}")
             return {
@@ -549,7 +559,7 @@ class MainOpAgent(AgentBase):
             }
             
         except Exception as e:
-            logger.error(f"Sub-agent selection failed: {e}, using default: codeonly")
+            logger.exception(f"Sub-agent selection failed: {e}, using default: codeonly")
             return {
                 "sub_workflow": "codeonly",
                 "sub_agent_selection_reasoning": f"Selection failed: {str(e)}, using default",
@@ -658,18 +668,18 @@ class MainOpAgent(AgentBase):
     async def _analyze_user_action(self, state: Dict[str, Any], user_input: str) -> str:
         """
         使用 LLM 分析用户的动作意图
-        
+
         Args:
             state: 当前状态
             user_input: 用户输入
-            
+
         Returns:
             建议的 action: 'confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel'
         """
         if not self.use_auto_action_analysis:
             # 如果禁用了自动分析，使用简单的启发式规则
             return self._simple_action_heuristic(state, user_input)
-        
+
         try:
             # 构建对话历史文本
             conversation_history = state.get("conversation_history", [])
@@ -679,7 +689,7 @@ class MainOpAgent(AgentBase):
                     f"[{msg.get('role', 'unknown')}]: {msg.get('content', '')}"
                     for msg in conversation_history[-10:]  # 保留最近10轮
                 ])
-            
+
             # 构建 prompt 输入
             input_data = {
                 "user_input": user_input,
@@ -689,7 +699,7 @@ class MainOpAgent(AgentBase):
                 "op_name": state.get("op_name", ""),
                 "format_instructions": self.action_analyzer_format_instructions,
             }
-            
+
             # 调用 LLM 分析用户动作
             model_name = self.model_config.get("action_analyzer", "default")
             llm_result, prompt, reasoning = await self.run_llm(
@@ -697,7 +707,7 @@ class MainOpAgent(AgentBase):
                 input_data,
                 model_name
             )
-            
+
             # 解析 LLM 输出
             try:
                 parsed = ParserFactory.robust_parse(llm_result, self.action_analyzer_parser)
@@ -708,35 +718,35 @@ class MainOpAgent(AgentBase):
                 logger.warning(f"Failed to parse action analysis result: {parse_error}")
                 # 解析失败，使用启发式规则
                 return self._simple_action_heuristic(state, user_input)
-            
+
             logger.info(f"LLM suggested action: {suggested_action} (confidence: {confidence:.2f})")
             logger.debug(f"Analysis reasoning: {analysis_reasoning}")
-            
+
             # 保存分析推理到状态中（用于后续处理无关问题）
             state["last_action_reasoning"] = analysis_reasoning
-            
+
             # 验证建议的 action 是否合法
             valid_actions = ['confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel']
             if suggested_action not in valid_actions:
                 logger.warning(f"Invalid suggested action: {suggested_action}, using revise")
                 return 'revise'
-            
+
             return suggested_action
-            
+
         except Exception as e:
             logger.error(f"Action analysis failed: {e}, using heuristic")
             return self._simple_action_heuristic(state, user_input)
-    
+
     def _simple_action_heuristic(self, state: Dict[str, Any], user_input: str) -> str:
         """简单的启发式规则来决定 action（作为 fallback）"""
         user_lower = user_input.lower()
         has_task_code = bool(state.get("task_code"))
         has_generated_code = bool(state.get("generated_code"))
-        
+
         # 检查取消意图
         if any(kw in user_lower for kw in ['取消', '退出', '结束', 'cancel', 'quit', 'exit']):
             return 'cancel'
-        
+
         # 已生成代码的情况
         if has_generated_code:
             # 明确提到 task/torch → retry
@@ -744,7 +754,7 @@ class MainOpAgent(AgentBase):
                 return 'retry'
             # 其他情况 → retry_sub_agent
             return 'retry_sub_agent'
-        
+
         # 有 task_code 但未生成代码
         if has_task_code:
             # 检查确认意图
@@ -752,7 +762,7 @@ class MainOpAgent(AgentBase):
                 return 'confirm'
             # 其他情况 → revise
             return 'revise'
-        
+
         # 默认 revise
         return 'revise'
 
@@ -800,7 +810,8 @@ class MainOpAgent(AgentBase):
         result = await self.app.ainvoke(initial_state, {
             "recursion_limit": 100
         })
-        
+
+        logger.info(f"start_conversation result has task_init_status: {result.get('task_init_status')}")
         return result
 
     async def continue_conversation(self, 
@@ -839,7 +850,7 @@ class MainOpAgent(AgentBase):
         if action == "auto":
             action = await self._analyze_user_action(current_state, user_input)
             logger.info(f"Auto-analyzed action: {action}")
-        
+
         if action == "confirm":
             # 用户确认，继续生成代码
             current_state["user_confirmed"] = True
@@ -877,7 +888,7 @@ class MainOpAgent(AgentBase):
             # 判断是正常退出还是无关问题
             reasoning = current_state.get("last_action_reasoning", "")
             is_irrelevant = "无关" in reasoning or "不相关" in reasoning or "irrelevant" in reasoning.lower()
-            
+
             if is_irrelevant:
                 # 用户输入与算子开发无关，但继续对话
                 logger.info("User input is irrelevant to operator development, continue conversation")
@@ -896,7 +907,7 @@ class MainOpAgent(AgentBase):
                 logger.info("User requested to end conversation")
                 current_state["current_step"] = "cancelled"
                 current_state["should_continue"] = False  # 退出对话
-            
+
             current_state["retry_requested"] = False
             current_state["retry_sub_agent_only"] = False
             return current_state
@@ -908,7 +919,7 @@ class MainOpAgent(AgentBase):
             current_state["user_request"] = user_input
             current_state["retry_requested"] = False
             current_state["retry_sub_agent_only"] = False
-        
+
         # 继续执行流程
         result = await self.app.ainvoke(current_state, {
             "recursion_limit": 100
@@ -958,11 +969,11 @@ class MainOpAgent(AgentBase):
 
     def _is_modification_request(self, user_request: str, state: Dict[str, Any]) -> bool:
         """判断用户输入是否是修改请求
-        
+
         Args:
             user_request: 用户输入
             state: 当前状态
-            
+
         Returns:
             bool: 是否是修改请求
         """
@@ -973,26 +984,26 @@ class MainOpAgent(AgentBase):
         
         # 修改相关的关键词
         modification_keywords = [
-            
+
             "修改", "改成", "改为", "换成", "调整", "优化", "更新",
             "变成", "改一下", "换一下", "调成", "设为", "设成",
-            
+
             "change", "modify", "update", "adjust", "alter", 
             "revise", "refine", "optimize", "improve"
         ]
-        
+
         # 检查是否包含修改关键词
         user_request_lower = user_request.lower()
         contains_modification = any(kw in user_request_lower for kw in modification_keywords)
-        
+
         if contains_modification:
             logger.info(f"Detected modification request, skipping intent classification")
             return True
-        
+
         # 如果用户输入很短且包含"shape"、"size"等，可能是修改请求
         if len(user_request) < 50 and any(kw in user_request_lower for kw in ["shape", "size", "dim", "维度", "形状"]):
             logger.info(f"Detected potential modification request (short input with shape/size), skipping intent classification")
             return True
-        
+
         return False
 

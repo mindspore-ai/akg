@@ -50,6 +50,7 @@ class OpTaskBuilderState(TypedDict, total=False):
     status: str  # "need_clarification" | "need_modification" | "ready" | "unsupported"
     iteration: int                      # 当前交互轮次
     max_iterations: int                 # 最大交互轮次
+    session_id: str                     # Session ID，用于 hook 管理（必填）
     
     # === 检查结果 ===
     static_check_passed: bool           # 静态检查是否通过

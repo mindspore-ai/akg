@@ -14,8 +14,9 @@
 
 import os
 import logging
+import time
 from abc import ABC
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 try:
     from openai import AsyncOpenAI as OpenAIAsyncClient
@@ -32,7 +33,11 @@ except ImportError:
 # LangChain 1.0 的 PromptTemplate 使用 SandboxedEnvironment，限制了属性访问
 from jinja2 import Environment, BaseLoader
 
+from textual import log as textual_log
+
 from ai_kernel_generator import get_project_root
+from ai_kernel_generator.cli.messages import LLMEndMessage, LLMStartMessage, LLMStreamMessage
+from ai_kernel_generator.cli.server.message_sender import send_message
 
 
 class Jinja2TemplateWrapper:
@@ -322,8 +327,46 @@ class AgentBase(ABC):
 
         logger.debug("=" * 60)
 
+    @staticmethod
+    def _stream_enabled() -> bool:
+        """检查是否启用流式输出"""
+        return os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
+
+    @staticmethod
+    def _extract_task_id(ctx: Dict[str, Any]) -> str:
+        """从上下文中提取 task_id"""
+        task_id = ctx.get("task_id")
+        if isinstance(task_id, str) and task_id.strip():
+            return task_id.strip()
+        return ""
+
+    @staticmethod
+    def _safe_int(value: Any) -> Optional[int]:
+        """安全转换为整数"""
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str) and value.strip():
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None
+
+    def _safe_send(self, session_id: str, message) -> None:
+        """安全发送消息，失败不影响主流程"""
+        if not session_id:
+            return
+        try:
+            send_message(session_id, message)
+        except Exception as e:
+            textual_log.warning("[Agent] send_message failed; ignored", exc_info=e)
+
     async def run_llm(self, prompt: PromptTemplate, input: Dict[str, Any], model_name: str) -> tuple[str, str, str]:
-        """运行LLM
+        """运行LLM（整合了消息发送和 token 统计功能）
 
         Args:
             prompt: 提示模板
@@ -333,122 +376,191 @@ class AgentBase(ABC):
         Returns:
             tuple: (生成内容, 格式化提示词, 推理内容)
         """
+        start_time = time.time()
+
+        # 格式化 prompt
         formatted_prompt = prompt.format(**input)
         self._check_input_dict(input)
-        # self.count_tokens(formatted_prompt, model_name, self.context) # 暂不开启token统计
+
+        # 提取上下文信息
+        context = self.context if isinstance(self.context, dict) else {}
+        agent_name = str(context.get("agent_name") or "unknown")
+        session_id = str(context.get("session_id") or "").strip()
+        task_id = self._extract_task_id(context)
+
+        # 检查流式输出和 session_id
+        stream = self._stream_enabled()
+        if stream and not session_id:
+            raise ValueError(f"[Agent] agent={agent_name} 的 context 中必须包含 session_id（AIKG_STREAM_OUTPUT=on）")
+
         # 创建模型
         model = create_model(model_name)
         effective_model_name = getattr(model, "model_name", model_name)
-        is_openai_async_client = OpenAIAsyncClient is not None and isinstance(model, OpenAIAsyncClient)
+
+        # 发送开始消息
+        self._safe_send(
+            session_id,
+            LLMStartMessage(agent=agent_name, model=effective_model_name, task_id=task_id)
+        )
+
+        content = ""
+        reasoning_content = ""
+        usage_metadata = None
 
         try:
-            # 如果是VLLM模型（openai.AsyncOpenAI客户端）
-            if effective_model_name.startswith("vllm_") or is_openai_async_client:
-                # 将formatted_prompt转换为OpenAI格式的消息
-                messages = [
-                    {"role": "system", "content": ""},  # 空的system prompt
-                    {"role": "user", "content": formatted_prompt}
-                ]
+            # 检查是否是 OpenAI AsyncClient
+            is_openai_async = False
+            try:
+                from openai import AsyncOpenAI as OpenAIAsyncClient
+                is_openai_async = isinstance(model, OpenAIAsyncClient)
+            except ImportError:
+                is_openai_async = False
 
-                # 统一构造调用参数，可通过模型实例上的 extra_body 配置 thinking
+            # VLLM 或 OpenAI AsyncClient 模型
+            if effective_model_name.startswith("vllm_") or is_openai_async:
+                messages = [{"role": "system", "content": ""}, {"role": "user", "content": formatted_prompt}]
                 create_kwargs = {
-                    "model": model.model_name,
+                    "model": getattr(model, "model_name", model_name),
                     "messages": messages,
-                    "temperature": model.temperature,
-                    "top_p": model.top_p,
+                    "temperature": getattr(model, "temperature", 0.0),
+                    "top_p": getattr(model, "top_p", 1.0),
+                    "stream": bool(stream),
                 }
                 extra_body = getattr(model, "extra_body", None)
                 if extra_body:
                     create_kwargs["extra_body"] = extra_body
 
-                if not aikg_stream_output:
-                    # 非流式模式
-                    create_kwargs["stream"] = False
+                if not stream:
                     response = await model.chat.completions.create(**create_kwargs)
-
                     content = response.choices[0].message.content
-                    reasoning_content = getattr(response.choices[0].message, 'reasoning_content', "")
-
-                    response_metadata = f"completion_tokens: {response.usage.completion_tokens}, " + \
-                        f"prompt_tokens: {response.usage.prompt_tokens}, total_tokens: {response.usage.total_tokens}"
-                    logger.info(f"response_metadata: {response_metadata}")
+                    reasoning_content = getattr(response.choices[0].message, "reasoning_content", "") or ""
                 else:
-                    # 流式模式
-                    create_kwargs["stream"] = True
-                    content = ""
-                    reasoning_content = ""
-                    stream = await model.chat.completions.create(**create_kwargs)
-                    async for chunk in stream:
+                    stream_iter = await model.chat.completions.create(**create_kwargs)
+                    async for chunk in stream_iter:
                         delta = chunk.choices[0].delta
-                        if delta.content:
-                            chunk_content = delta.content
-                            print(chunk_content, end='', flush=True)
-                            content += chunk_content
-                        elif getattr(delta, 'reasoning_content', None):
-                            chunk_reasoning = delta.reasoning_content
-                            print(chunk_reasoning, end='', flush=True)
-                            reasoning_content += chunk_reasoning
-                    response_metadata = ""
-
+                        delta_text = getattr(delta, "content", None)
+                        if isinstance(delta_text, str) and delta_text:
+                            print(delta_text, end="", flush=True)
+                            content += delta_text
+                            self._safe_send(session_id, LLMStreamMessage(agent=agent_name, chunk=delta_text, task_id=task_id))
+                            continue
+                        delta_reasoning = getattr(delta, "reasoning_content", None)
+                        if isinstance(delta_reasoning, str) and delta_reasoning:
+                            print(delta_reasoning, end="", flush=True)
+                            reasoning_content += delta_reasoning
+                            self._safe_send(session_id, LLMStreamMessage(agent=agent_name, chunk=delta_reasoning, task_id=task_id))
+                    print()
             else:
-                # 其他模型使用原来的chain方式
+                # 其他模型使用 LangChain chain
                 chain = prompt | model
-
-                if not aikg_stream_output:
+                if not stream:
                     raw_result = await chain.ainvoke(input)
                     content = raw_result.content
-                    reasoning_content = raw_result.additional_kwargs.get("reasoning_content", "")
+                    reasoning_content = raw_result.additional_kwargs.get("reasoning_content", "") or ""
+                    usage_metadata = getattr(raw_result, "usage_metadata", None)
                 else:
-                    content = ""
-                    reasoning_content = ""
                     async for raw_result in chain.astream(input):
-                        if raw_result.content != "":
-                            print(raw_result.content, end='', flush=True)
-                            content += raw_result.content
-                        elif "reasoning_content" in raw_result.additional_kwargs:
-                            print(raw_result.additional_kwargs.get("reasoning_content"), end='', flush=True)
-                            reasoning_content += raw_result.additional_kwargs.get("reasoning_content")
+                        chunk_text = getattr(raw_result, "content", "")
+                        if chunk_text:
+                            print(chunk_text, end="", flush=True)
+                            content += chunk_text
+                            self._safe_send(session_id, LLMStreamMessage(agent=agent_name, chunk=chunk_text, task_id=task_id))
+                            continue
+                        additional_kwargs = getattr(raw_result, "additional_kwargs", {}) or {}
+                        if isinstance(additional_kwargs, dict) and "reasoning_content" in additional_kwargs:
+                            chunk_reasoning = additional_kwargs.get("reasoning_content") or ""
+                            if chunk_reasoning:
+                                print(chunk_reasoning, end="", flush=True)
+                                reasoning_content += chunk_reasoning
+                                self._safe_send(session_id, LLMStreamMessage(agent=agent_name, chunk=chunk_reasoning, task_id=task_id))
                     print()
-
-                response_metadata = f"response_metadata: {raw_result.response_metadata}\n" + \
-                    f"usage_metadata: {raw_result.usage_metadata}"
-                logger.info(response_metadata)
-
-            logger.debug(f"LLM End:    [status] %s -- [model] %s",
-                         self.context.get('agent_name', ''), effective_model_name)
+                    usage_metadata = getattr(raw_result, "usage_metadata", None)
 
             # 后处理：从 content 中剥离可能包含的 reasoning 片段
-            content, extracted_reasoning = self.split_think(content)
-            if extracted_reasoning:
-                reasoning_content = extracted_reasoning
+            if hasattr(self, "split_think"):
+                content, extracted = self.split_think(content)
+                if extracted:
+                    reasoning_content = extracted
 
+            # 提取 token 统计信息
+            prompt_tokens = None
+            output_tokens = None
+            reasoning_tokens = None
+            total_tokens = None
+
+            usage_md = usage_metadata if isinstance(usage_metadata, dict) else None
+            if usage_md:
+                prompt_tokens = self._safe_int(usage_md.get("input_tokens"))
+                completion_tokens = self._safe_int(usage_md.get("output_tokens"))
+                total_tokens = self._safe_int(usage_md.get("total_tokens"))
+                out_details = usage_md.get("output_token_details") or {}
+                if isinstance(out_details, dict):
+                    reasoning_tokens = self._safe_int(out_details.get("reasoning"))
+                    if reasoning_tokens is None:
+                        reasoning_tokens = self._safe_int(out_details.get("reasoning_tokens"))
+
+                if completion_tokens is None:
+                    output_tokens = None
+                elif reasoning_tokens is None:
+                    output_tokens = completion_tokens
+                else:
+                    output_tokens = max(completion_tokens - reasoning_tokens, 0)
+
+            # 发送结束消息
+            self._safe_send(
+                session_id,
+                LLMEndMessage(
+                    agent=agent_name,
+                    model=effective_model_name,
+                    response=content,
+                    duration=time.time() - start_time,
+                    task_id=task_id,
+                    prompt_tokens=prompt_tokens,
+                    output_tokens=output_tokens,
+                    reasoning_tokens=reasoning_tokens,
+                    total_tokens=total_tokens,
+                )
+            )
+
+            # 数据收集
             if os.getenv("AIKG_DATA_COLLECT", "off").lower() == "on":
-                # 使用collector收集数据
                 try:
                     collector = await get_collector()
                     collected_data = {
-                        "hash": self.context.get('hash', ''),
-                        "agent_name": self.context.get('agent_name', ''),
-                        "op_name": self.context.get('op_name', ''),
-                        "dsl": self.context.get('dsl', ''),
-                        "backend": self.context.get('backend', ''),
-                        "arch": self.context.get('arch', ''),
-                        "framework": self.context.get('framework', ''),
-                        "workflow_name": self.context.get('workflow_name', ''),
-                        "task_desc": self.context.get('task_desc', ''),
+                        "hash": context.get("hash", ""),
+                        "agent_name": context.get("agent_name", ""),
+                        "op_name": context.get("op_name", ""),
+                        "dsl": context.get("dsl", ""),
+                        "backend": context.get("backend", ""),
+                        "arch": context.get("arch", ""),
+                        "framework": context.get("framework", ""),
+                        "workflow_name": context.get("workflow_name", ""),
+                        "task_desc": context.get("task_desc", ""),
                         "model_name": effective_model_name,
                         "content": content,
                         "formatted_prompt": formatted_prompt,
                         "reasoning_content": reasoning_content,
-                        "response_metadata": response_metadata,
+                        "response_metadata": "",
+                        "prompt_tokens": prompt_tokens,
+                        "output_tokens": output_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                        "total_tokens": total_tokens,
                     }
                     await collector.collect(collected_data)
                 except Exception as e:
-                    logger.warning(f"Failed to collect data: {e}")
+                    textual_log.warning("[Agent] data collect failed; ignored", exc_info=e)
 
             return content, formatted_prompt, reasoning_content
-        except Exception as e:
-            logger.error(f"LLM Failed: [status] %s -- [model] %s -- [error] %s",
-                         self.context.get('agent_name', ''), effective_model_name, e)
-            logger.error(f"Exception in run_llm: {type(e).__name__}: {e}")
+        except Exception:
+            # 发送失败消息
+            self._safe_send(
+                session_id,
+                LLMEndMessage(
+                    agent=agent_name,
+                    model=effective_model_name,
+                    response=content or "",
+                    duration=time.time() - start_time,
+                    task_id=task_id,
+                )
+            )
             raise
