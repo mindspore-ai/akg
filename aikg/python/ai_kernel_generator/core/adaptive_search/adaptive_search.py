@@ -64,8 +64,6 @@ def _create_search_config(
     initial_task_count: Optional[int] = None,
     tasks_per_parent: Optional[int] = None,
     max_total_tasks: Optional[int] = None,
-    target_success_count: Optional[int] = None,
-    target_speedup: Optional[float] = None,
     exploration_coef: Optional[float] = None,
     random_factor: Optional[float] = None,
     use_softmax: Optional[bool] = None,
@@ -94,10 +92,8 @@ def _create_search_config(
         initial_task_count=initial_task_count or concurrency.get("initial_task_count", 8),
         tasks_per_parent=tasks_per_parent or concurrency.get("tasks_per_parent", 1),
         
-        # 停止条件
+        # 停止条件（唯一停止条件：达到最大任务数）
         max_total_tasks=max_total_tasks or stopping.get("max_total_tasks", 100),
-        target_success_count=target_success_count or stopping.get("target_success_count", 10),
-        target_speedup=target_speedup or stopping.get("target_speedup", 2.0),
         
         # UCB 参数
         exploration_coef=exploration_coef or ucb.get("exploration_coef", 1.414),
@@ -130,8 +126,6 @@ async def adaptive_search(
     tasks_per_parent: Optional[int] = None,
     # 停止条件
     max_total_tasks: Optional[int] = None,
-    target_success_count: Optional[int] = None,
-    target_speedup: Optional[float] = None,
     # UCB 参数
     exploration_coef: Optional[float] = None,
     random_factor: Optional[float] = None,
@@ -166,9 +160,7 @@ async def adaptive_search(
         tasks_per_parent: 每次选择父代后生成的任务数
         
         # 停止条件
-        max_total_tasks: 最大总任务数
-        target_success_count: 目标成功数
-        target_speedup: 目标加速比
+        max_total_tasks: 最大总任务数（唯一停止条件）
         
         # UCB 参数
         exploration_coef: UCB 探索系数
@@ -214,8 +206,6 @@ async def adaptive_search(
         initial_task_count=initial_task_count,
         tasks_per_parent=tasks_per_parent,
         max_total_tasks=max_total_tasks,
-        target_success_count=target_success_count,
-        target_speedup=target_speedup,
         exploration_coef=exploration_coef,
         random_factor=random_factor,
         use_softmax=use_softmax,
