@@ -133,6 +133,14 @@ class RouterFactory:
         from ai_kernel_generator.core.llm.model_loader import create_model
         from ai_kernel_generator.utils.common_utils import ParserFactory
         from ai_kernel_generator.utils.result_processor import ResultProcessor
+        from ai_kernel_generator.cli.server.message_sender import send_message
+        from ai_kernel_generator.cli.messages import NodeStartMessage, NodeEndMessage
+        import time
+
+        session_id = state.get('session_id', '')
+        start_time = time.time()
+        if session_id:
+            send_message(session_id, NodeStartMessage(node="conductor", task_id=str(state.get("task_id", "")), state=state))
         
         try:
             # 获取 Conductor 解析器
@@ -197,6 +205,14 @@ class RouterFactory:
             
             if agent_decision:
                 logger.info(f"LLM decided: {agent_decision}, suggestion: {suggestion[:100] if suggestion else 'None'}")
+                if session_id:
+                    duration = time.time() - start_time
+                    updates = {
+                        "conductor_suggestion": suggestion or "",
+                        "conductor_decision": agent_decision
+                    }
+                    send_message(session_id, NodeEndMessage(node="conductor", duration=duration, task_id=str(state.get("task_id", "")), result=updates))
+
                 return agent_decision, suggestion
             else:
                 logger.warning(f"LLM decision not in valid options, using default")
@@ -205,6 +221,9 @@ class RouterFactory:
             logger.warning(f"LLM routing failed: {e}, using default")
             import traceback
             logger.debug(traceback.format_exc())
+            if session_id:
+                duration = time.time() - start_time
+                send_message(session_id, NodeEndMessage(node="conductor", duration=duration, task_id=str(state.get("task_id", "")), result={"error": str(e)}))
         
         # 默认：如果有 coder 就返回 coder，否则 finish
         return ("coder" if "coder" in valid_options else "finish"), ""

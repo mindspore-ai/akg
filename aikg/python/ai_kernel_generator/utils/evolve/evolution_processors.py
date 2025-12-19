@@ -441,7 +441,7 @@ class TaskCreationProcessor:
                     handwrite_suggestions=island_handwrite_suggestions[island_idx],
                 )
                 
-                task_pool.create_task(partial(task.run,))
+                task_pool.create_task(partial(task.run,), task_name=task_id)
                 all_tasks.append(task)
                 task_mapping.append(island_idx)
         
@@ -480,7 +480,7 @@ class TaskCreationProcessor:
                 handwrite_suggestions=handwrite_suggestions_list[pid] if handwrite_suggestions_list else [],
             )
             
-            task_pool.create_task(partial(task.run,))
+            task_pool.create_task(partial(task.run,), task_name=task_id)
             tasks.append(task)
         
         return tasks

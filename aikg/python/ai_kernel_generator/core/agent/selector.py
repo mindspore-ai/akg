@@ -64,6 +64,8 @@ class Selector(AgentBase):
             "dsl": self.dsl,
             "op_name": self.op_name,
         }
+        if config and config.get("session_id"):
+            context["session_id"] = config["session_id"]
         super().__init__(context=context, config=config)
         
         # 创建解析器

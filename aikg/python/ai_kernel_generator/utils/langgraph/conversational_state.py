@@ -89,7 +89,8 @@ class ConversationalOpGenState(TypedDict, total=False):
     task_code: Optional[str]  # 生成的 task 代码
     op_name: Optional[str]  # 算子名称
     op_description: Optional[str]  # 算子描述
-    task_reasoning: Optional[str]  
+    task_reasoning: Optional[str]
+    task_init_status: Optional[str]  # OpTaskBuilder 的状态（ready/need_clarification/unsupported）  
     
     
     sub_workflow: Optional[str]  

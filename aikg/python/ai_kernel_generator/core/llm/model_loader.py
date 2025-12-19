@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 # 环境变量
 OLLAMA_API_BASE_ENV = "AIKG_OLLAMA_API_BASE"
 VLLM_API_BASE_ENV = "AIKG_VLLM_API_BASE"
+DISABLE_REPEAT_PENALTY_ENV = "AIKG_DISABLE_REPEAT_PENALTY"
 
 
 def create_model(name: Optional[str] = None, config_path: Optional[str] = None) -> Union[ChatDeepSeek, ChatOllama]:
@@ -75,6 +76,21 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
 
         return extra_body
 
+    def _strip_repeat_penalty(params: dict) -> dict:
+        """可选地移除重复惩罚参数，默认保持与 llm_config.yaml 兼容。"""
+        raw = os.getenv(DISABLE_REPEAT_PENALTY_ENV)
+        if raw is None or raw == "":
+            return params
+
+        normalized = raw.strip().lower()
+        if normalized not in {"1", "true", "yes", "on"}:
+            return params
+
+        overridden = dict(params)
+        overridden.pop("frequency_penalty", None)
+        overridden.pop("presence_penalty", None)
+        return overridden
+
     # 【最高优先级】检查环境变量覆盖
     env_base_url = os.getenv("AIKG_BASE_URL")
     env_model_name = os.getenv("AIKG_MODEL_NAME")
@@ -96,9 +112,15 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         logger.info("=" * 60)
         
         # 设置默认参数
-        default_temperature = 0.2
-        default_max_tokens = 8192
-        default_top_p = 0.9
+        defaults = {
+            "temperature": 0.2,
+            "max_tokens": 8192,
+            "top_p": 0.9,
+        }
+        defaults = _strip_repeat_penalty(defaults)
+        default_temperature = defaults["temperature"]
+        default_max_tokens = defaults["max_tokens"]
+        default_top_p = defaults["top_p"]
         
         logger.info(f"使用默认参数: temperature={default_temperature}, max_tokens={default_max_tokens}, top_p={default_top_p}")
         
@@ -163,6 +185,7 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
     if name.startswith("ollama_"):
         # 提取模型参数
         model_params = {k: v for k, v in preset_config.items()}
+        model_params = _strip_repeat_penalty(model_params)
 
         # 检查是否有环境变量覆盖api_base
         if OLLAMA_API_BASE_ENV in os.environ:
@@ -191,6 +214,7 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         # 判断是否为VLLM模型
         # 提取模型参数
         model_params = {k: v for k, v in preset_config.items()}
+        model_params = _strip_repeat_penalty(model_params)
 
         # 检查是否有环境变量覆盖api_base
         if VLLM_API_BASE_ENV in os.environ:
@@ -242,6 +266,7 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         # 提取模型参数 - 只排除api_key_env
         model_params = {k: v for k, v in preset_config.items()
                         if k != "api_key_env"}
+        model_params = _strip_repeat_penalty(model_params)
 
         # 统一处理 thinking 配置，允许在 YAML 中通过 thinking_mode 字段控制
         thinking_mode = model_params.pop("thinking_mode", None)

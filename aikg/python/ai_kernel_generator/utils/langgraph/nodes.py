@@ -15,6 +15,7 @@
 """Node factory for wrapping Agents as LangGraph nodes."""
 
 from ai_kernel_generator.utils.langgraph.state import KernelGenState
+from ai_kernel_generator.utils.langgraph.node_tracker import track_node
 import logging
 import asyncio
 import json
@@ -105,9 +106,9 @@ class NodeFactory:
                 await NodeFactory._save_space_config(state, space_config, new_step_count, config)
             
             return updates
-        
-        return designer_node
-    
+
+        return track_node("designer")(designer_node)
+
     @staticmethod
     def create_coder_node(coder_instance, trace_instance):
         """创建 Coder 节点函数"""
@@ -188,9 +189,9 @@ class NodeFactory:
                 "code_check_passed": None,     # 重置检查状态
                 "code_check_details": None     # 清除旧的检查详情
             }
-        
-        return coder_node
-    
+
+        return track_node("coder")(coder_node)
+
     @staticmethod
     def create_verifier_node(verifier_instance, device_pool, trace_instance, config,
                            private_worker=None, worker_manager=None, backend=None, arch=None):
@@ -307,9 +308,9 @@ class NodeFactory:
                 # 只有从 Manager 借来的才需要还
                 if not _private_worker and _worker_manager:
                     await _worker_manager.release(worker)
-        
-        return verifier_node
-    
+
+        return track_node("verifier")(verifier_node)
+
     @staticmethod
     def create_conductor_node(trace_instance, config, conductor_template):
         """创建 Conductor 分析节点"""
@@ -318,7 +319,7 @@ class NodeFactory:
             
             注意：此节点只在验证失败时被调用（由 verifier router 决定）
             """
-            from ai_kernel_generator.core.llm.model_loader import create_model
+            from ai_kernel_generator.core.agent.agent_base import AgentBase
             from ai_kernel_generator.utils.common_utils import ParserFactory
             from ai_kernel_generator.utils.result_processor import ResultProcessor
             
@@ -356,37 +357,43 @@ class NodeFactory:
                     'valid_next_agents': 'coder, finish',  # 固定选项
                     'format_instructions': format_instructions,
                 }
-                
-                # 渲染模板
-                prompt = conductor_template.render(**input_data)
-                
-                # 调用 LLM
+
+                # 获取模型名称
                 model_config = config.get("agent_model_config", {})
                 model_name = model_config.get("conductor")
                 if not model_name:
                     task_id = state.get('task_id', '0')
                     logger.warning(f"[Task {task_id}] No conductor model configured")
                     return {"conductor_suggestion": ""}
-                
-                model = create_model(model_name)
-                
-                # 判断模型类型并调用
-                if hasattr(model, 'ainvoke'):
-                    response = await model.ainvoke(prompt)
-                    response_text = response.content if hasattr(response, 'content') else str(response)
-                    reasoning = ""
-                else:
-                    completion = await model.chat.completions.create(
-                        model=model.model_name,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=model.temperature,
-                        max_tokens=model.max_tokens,
-                        top_p=model.top_p,
-                        **({"extra_body": model.extra_body} if hasattr(model, 'extra_body') and model.extra_body else {})
-                    )
-                    response_text = completion.choices[0].message.content
-                    reasoning = ""
-                
+
+                # 创建临时的 AgentBase 实例用于调用 run_llm
+                # 构建 context（包含 session_id 等信息，支持流式输出）
+                context = {
+                    "agent_name": "conductor",
+                    "session_id": state.get("session_id", ""),
+                    "task_id": task_id,
+                    "op_name": op_name,
+                    "dsl": state.get("dsl", ""),
+                    "backend": state.get("backend", ""),
+                    "arch": state.get("arch", ""),
+                    "framework": state.get("framework", ""),
+                    "workflow_name": state.get("workflow_name", ""),
+                    "task_desc": state.get("task_desc", ""),
+                    "hash": state.get("hash", ""),
+                }
+
+                agent_base = AgentBase(context=context, config=config)
+
+                # 使用 AgentBase.load_template() 加载模板（返回 Jinja2TemplateWrapper）
+                conductor_prompt = agent_base.load_template("conductor/analyze.j2")
+
+                # 使用 run_llm 调用 LLM（支持流式输出、token统计、消息发送等）
+                response_text, prompt, reasoning = await agent_base.run_llm(
+                    prompt=conductor_prompt,
+                    input=input_data,
+                    model_name=model_name
+                )
+
                 # 解析结果
                 agent_decision, suggestion = ResultProcessor.parse_conductor_decision(
                     response_text, conductor_parser, {"coder", "finish"}
@@ -435,9 +442,9 @@ class NodeFactory:
                     "conductor_decision": "coder",
                     "agent_history": ["conductor"]
                 }
-        
-        return conductor_node
-    
+
+        return track_node("conductor")(conductor_node)
+
     @staticmethod
     async def _save_space_config(state: KernelGenState, space_config_code: str, step_count: int, config: dict):
         """
@@ -878,5 +885,5 @@ class NodeFactory:
             logger.info(f"OpTaskBuilder result: status={result.get('status')}, op_name={result.get('op_name')}")
             
             return result
-        
-        return op_task_builder_node
+
+        return track_node("task_init")(op_task_builder_node)
