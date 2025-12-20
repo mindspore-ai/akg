@@ -311,7 +311,6 @@ def TilingFunc : Pass<"tiling-func", "mlir::ModuleOp"> {
   let constructor = "mlir::affine::createTilingFuncPass()";
 }
 
-
 def InsertLoadAndStore : Pass<"insert-load-and-store", "func::FuncOp"> {
   let summary = "Insert hfusion.load and hfusion.store operations";
   let description = [{

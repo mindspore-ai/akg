@@ -8,6 +8,7 @@ set(AKG_MLIR_LIBS
   MLIRLinalgExtDialect
   MLIRFusionDialect
   AKGMLIRAnalysis
+  NPUVectorDialect
 )
 
 set(LLVM_LINK_COMPONENTS
