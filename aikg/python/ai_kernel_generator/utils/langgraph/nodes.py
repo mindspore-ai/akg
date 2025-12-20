@@ -261,7 +261,7 @@ class NodeFactory:
                 profile_res = {}
                 task_type = state.get("task_type", "precision_only")
                 backend = state.get("backend", "")
-                if verify_res and task_type == "profile" and backend in ["ascend", "cuda"]:
+                if verify_res and task_type == "profile" and backend in ["ascend", "cuda", "cpu"]:
                     task_id = state.get('task_id', '0')
                     logger.info(f"[Task {task_id}] All verifications passed, starting performance test...")
                     profile_res = await verifier_instance.run_profile(

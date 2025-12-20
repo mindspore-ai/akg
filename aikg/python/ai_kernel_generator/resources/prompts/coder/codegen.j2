@@ -50,6 +50,149 @@
 {{ hardware_docs }}
 {% endif %}
 
+{% if backend == "cpu" and dsl == "cpp" %}
+## CPU 指令集优化代码生成指南
+
+**重要**：请根据上述硬件描述中的指令集信息，选择最优的指令集生成高性能 C++ 代码。
+
+### 指令集选择策略
+
+1. **优先使用最高优先级的 SIMD 指令集**：
+   - 如果支持 AVX-512 → 使用 `<immintrin.h>` 中的 `_mm512_*` 系列函数
+   - 如果支持 AVX2 → 使用 `<immintrin.h>` 中的 `_mm256_*` 系列函数
+   - 如果支持 AVX → 使用 `<immintrin.h>` 中的 `_mm256_*` 系列函数
+   - 如果支持 SSE4/SSE2 → 使用 `<emmintrin.h>` 或 `<smmintrin.h>` 中的 `_mm_*` 系列函数
+   - ARM 平台（NEON）→ 使用 `<arm_neon.h>` 中的向量 intrinsic 函数
+
+2. **如果支持 FMA（融合乘加）**：
+   - 将 `a * b + c` 操作融合为 FMA 指令
+   - x86: 使用 `_mm256_fmadd_ps(a, b, c)` 代替分开的乘法和加法
+   - 这可以同时提升性能和精度
+
+3. **数据对齐要求**：
+   - AVX-512: 64字节对齐 (`alignas(64)`)
+   - AVX/AVX2: 32字节对齐 (`alignas(32)`)
+   - SSE: 16字节对齐 (`alignas(16)`)
+   - 使用 `_mm256_load_ps`（对齐加载）比 `_mm256_loadu_ps`（非对齐加载）更快
+
+### C++ 代码生成模板
+
+请按照以下模板生成 CPU 优化的 C++ 代码：
+
+```cpp
+#include <torch/extension.h>
+#include <immintrin.h>  // AVX/AVX2/AVX-512 intrinsics
+// 如果是 ARM 平台: #include <arm_neon.h>
+
+// 编译选项（根据检测到的指令集选择）：
+// AVX-512: -mavx512f -mavx512dq -mavx512bw -mavx512vl
+// AVX2+FMA: -mavx2 -mfma
+// AVX: -mavx
+// SSE4.2: -msse4.2
+
+// 内联的高性能 kernel 实现
+inline void {{ op_name }}_kernel_impl(
+    const float* __restrict__ input,
+    float* __restrict__ output,
+    int64_t N
+) {
+    // ========== 根据检测到的最优指令集选择实现 ==========
+    
+    // 示例：AVX2 + FMA 实现（256位向量，单次处理8个float）
+    constexpr int VECTOR_SIZE = 8;  // AVX2: 256位 = 8 x float32
+    
+    int64_t i = 0;
+    
+    // 向量化主循环
+    for (; i + VECTOR_SIZE <= N; i += VECTOR_SIZE) {
+        // 加载数据（使用对齐加载或非对齐加载）
+        __m256 vec = _mm256_loadu_ps(&input[i]);
+        
+        // 向量化计算（根据算子逻辑选择合适的 intrinsic）
+        // 例如 ReLU: vec = _mm256_max_ps(vec, _mm256_setzero_ps());
+        // 例如 FMA: result = _mm256_fmadd_ps(a, b, c);  // a*b+c
+        
+        // 存储结果
+        _mm256_storeu_ps(&output[i], vec);
+    }
+    
+    // 处理剩余元素（标量 fallback）
+    for (; i < N; i++) {
+        output[i] = /* 标量计算 */;
+    }
+}
+
+// PyTorch 接口
+torch::Tensor {{ op_name }}_cpu(torch::Tensor input) {
+    TORCH_CHECK(input.device().is_cpu(), "Input must be a CPU tensor");
+    TORCH_CHECK(input.is_contiguous(), "Input must be contiguous");
+    
+    auto output = torch::empty_like(input);
+    
+    {{ op_name }}_kernel_impl(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        input.numel()
+    );
+    
+    return output;
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("{{ op_name }}", &{{ op_name }}_cpu, "{{ op_name }} CPU implementation");
+}
+```
+
+### 常用 SIMD Intrinsic 参考
+
+**AVX2/AVX (256位，8个float32)**:
+| 操作 | Intrinsic 函数 |
+|------|---------------|
+| 加载 | `_mm256_load_ps` (对齐) / `_mm256_loadu_ps` (非对齐) |
+| 存储 | `_mm256_store_ps` (对齐) / `_mm256_storeu_ps` (非对齐) |
+| 加法 | `_mm256_add_ps(a, b)` |
+| 乘法 | `_mm256_mul_ps(a, b)` |
+| FMA | `_mm256_fmadd_ps(a, b, c)` → a*b+c |
+| 最大值 | `_mm256_max_ps(a, b)` |
+| 最小值 | `_mm256_min_ps(a, b)` |
+| 比较 | `_mm256_cmp_ps(a, b, _CMP_GT_OQ)` |
+| 广播 | `_mm256_set1_ps(val)` |
+| 零向量 | `_mm256_setzero_ps()` |
+| 水平求和 | `_mm256_hadd_ps` + 提取 |
+
+**AVX-512 (512位，16个float32)**:
+| 操作 | Intrinsic 函数 |
+|------|---------------|
+| 加载 | `_mm512_load_ps` / `_mm512_loadu_ps` |
+| 存储 | `_mm512_store_ps` / `_mm512_storeu_ps` |
+| FMA | `_mm512_fmadd_ps(a, b, c)` |
+| 规约求和 | `_mm512_reduce_add_ps(v)` |
+| Mask加载 | `_mm512_mask_loadu_ps(src, k, addr)` |
+
+**ARM NEON (128位，4个float32)**:
+| 操作 | Intrinsic 函数 |
+|------|---------------|
+| 加载 | `vld1q_f32(ptr)` |
+| 存储 | `vst1q_f32(ptr, vec)` |
+| 加法 | `vaddq_f32(a, b)` |
+| 乘法 | `vmulq_f32(a, b)` |
+| FMA | `vfmaq_f32(c, a, b)` → a*b+c |
+| 最大值 | `vmaxq_f32(a, b)` |
+
+### 性能优化要点
+
+1. **循环展开**：考虑手动展开循环以提高指令级并行
+2. **预取**：对于大数据，使用 `_mm_prefetch` 预取数据到缓存
+3. **避免分支**：使用 SIMD 比较和 blend 操作代替 if-else
+4. **内存访问模式**：保证连续内存访问以获得最佳缓存性能
+5. **OpenMP 并行**：对于多核 CPU，结合 OpenMP 进行多线程并行
+   ```cpp
+   #pragma omp parallel for
+   for (int64_t i = 0; i < N; i += VECTOR_SIZE) { ... }
+   ```
+
+{% endif %}
+
 {% if expert_suggestion %}
 ## 专家建议
 {{ expert_suggestion }}
