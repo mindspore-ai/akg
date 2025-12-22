@@ -78,9 +78,13 @@ class ConversationalOpGenState(TypedDict, total=False):
     retry_requested: Optional[bool]  # 用户是否请求重新生成 task（在子 Agent 执行后）
     retry_sub_agent_only: Optional[bool]  # 用户是否只重新调用子 Agent（不重新生成 task）
     
+    # === 子Agent选择相关 ===
+    sub_workflow_specified_by_user: Optional[bool]  # 用户是否明确指定了子Agent（True则跳过LLM选择）
+    
     # === 意图分类相关 ===
     last_intent: Optional[str]  # 上次的意图类型（operator_dev/general_question/unclear）
     last_intent_confidence: Optional[float]  # 上次的意图置信度（0.0-1.0）
+    last_action_reasoning: Optional[str]  # 上次的动作分析推理（用于判断无关问题等）
 
     # 对话历史（自动限制长度，避免无限增长）
     conversation_history: Annotated[List[Message], limit_conversation_history]
