@@ -15,7 +15,9 @@
 """AIKG Agents module."""
 
 from ai_kernel_generator.core.agent.op_task_builder import OpTaskBuilder
+from ai_kernel_generator.core.agent.main_op_agent import MainOpAgent
 
 __all__ = [
     "OpTaskBuilder",
+    "MainOpAgent",
 ]
