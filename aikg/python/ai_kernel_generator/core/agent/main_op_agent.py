@@ -42,13 +42,6 @@ class MainOpAgent(AgentBase):
                  dsl: str = "triton"):
         """
         初始化 MainOpAgent
-        
-        Args:
-            config: 配置字典
-            framework: 框架类型
-            backend: 后端类型
-            arch: 硬件架构
-            dsl: DSL 类型
                                  
         """
         context = {
@@ -505,6 +498,15 @@ class MainOpAgent(AgentBase):
         op_name = state.get("op_name", "")
         op_description = state.get("op_description", "")
         user_request = state.get("user_request", "")
+        
+        # 🔍 首先检查用户是否明确要求使用 evolve
+        if self._user_explicitly_requests_evolve(user_request, state):
+            logger.info("User explicitly requested evolve, using evolve sub-agent")
+            return {
+                "sub_workflow": "evolve",
+                "sub_agent_selection_reasoning": "用户明确要求使用 evolve 进行性能优化",
+                "sub_agent_selection_confidence": 1.0
+            }
         
         try:
             # 获取所有子 Agent 的详细信息
@@ -967,6 +969,59 @@ class MainOpAgent(AgentBase):
             # unclear 或低置信度 → 让后续流程处理（安全策略）
             return True
 
+    def _user_explicitly_requests_evolve(self, user_request: str, state: Dict[str, Any]) -> bool:
+        """判断用户是否明确要求使用 evolve 流程
+        
+        Args:
+            user_request: 用户输入
+            state: 当前状态
+            
+        Returns:
+            bool: 是否明确要求 evolve
+        """
+        user_request_lower = user_request.lower()
+        
+        # 明确的 evolve 关键词（优先级最高）
+        explicit_evolve_keywords = [
+            "使用evolve", "用evolve", "evolve流程", "evolve优化",
+            "use evolve", "using evolve", "with evolve",
+            "走evolve", "选evolve", "要evolve"
+        ]
+        
+        if any(kw in user_request_lower for kw in explicit_evolve_keywords):
+            logger.info(f"User explicitly mentioned 'evolve' keyword")
+            return True
+        
+        # 强烈的性能优化要求（组合关键词）
+        performance_keywords = [
+            "性能优化", "极致性能", "最优性能", "最佳性能",
+            "performance optimization", "best performance", "optimal performance",
+            "highest performance", "maximum performance"
+        ]
+        
+        optimization_keywords = [
+            "多轮优化", "迭代优化", "进化优化", "自动优化",
+            "iterative optimization", "evolutionary optimization", "auto-tune"
+        ]
+        
+        # 如果包含性能优化 + 迭代优化，判断为 evolve
+        has_performance = any(kw in user_request_lower for kw in performance_keywords)
+        has_optimization = any(kw in user_request_lower for kw in optimization_keywords)
+        
+        if has_performance and has_optimization:
+            logger.info(f"User requested performance + iterative optimization, using evolve")
+            return True
+        
+        # 检查对话历史中是否有明确要求
+        conversation_history = state.get("conversation_history", [])
+        for msg in conversation_history[-3:]:  # 检查最近3轮对话
+            content = msg.get("content", "").lower()
+            if any(kw in content for kw in explicit_evolve_keywords):
+                logger.info(f"Found evolve keyword in conversation history")
+                return True
+        
+        return False
+    
     def _is_modification_request(self, user_request: str, state: Dict[str, Any]) -> bool:
         """判断用户输入是否是修改请求
 
