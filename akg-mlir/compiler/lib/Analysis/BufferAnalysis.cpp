@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Analysis/BufferAnalysis.h"
+#include "akg/Analysis/BufferAnalysis.h"
 
 #include <algorithm>
 #include <limits>
@@ -23,6 +23,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/PriorityQueue.h"
 #include "llvm/ADT/SetVector.h"
@@ -312,47 +313,12 @@ bool BufferAnalysis::IsBufferDeadAfter(Operation *op, Value buffer, Liveness liv
   return true;
 }
 
-void BufferAnalysis::UpdateForOpInitArgsAlias(mlir::affine::AffineForOp forOp) {
-  if (forOp.getInits().empty()) {
-    return;
-  }
-  assert(forOp.getInits().size() == forOp.getRegionIterArgs().size());
-  for (auto [i, arg] : llvm::enumerate(forOp.getInits())) {
-    // init args alias region iter args
-    UpdateBufferAlias(forOp.getRegionIterArgs()[i], arg);
-  }
-}
+//===----------------------------------------------------------------------===//
+// Template Helper Implementation for ForOp
+//===----------------------------------------------------------------------===//
 
-void BufferAnalysis::UpdateForOpBufferAlias(mlir::affine::AffineForOp forOp) {
-  if (forOp.getResults().empty()) {
-    return;
-  }
-  if (!forOp.getRegionIterArgs().empty()) {
-    assert(forOp.getYieldedValues().size() == forOp.getRegionIterArgs().size());
-    assert(forOp.getInits().size() == forOp.getRegionIterArgs().size());
-    for (auto [i, arg] : llvm::enumerate(forOp.getRegionIterArgs())) {
-      // yielded values alias region iter args
-      UpdateBufferAlias(forOp.getYieldedValues()[i], arg);
-    }
-  }
-  assert(forOp->getResults().size() == forOp.getYieldedValues().size());
-  for (auto [i, arg] : llvm::enumerate(forOp.getYieldedValues())) {
-    // forOp result values alias region iter yielded values
-    UpdateBufferAlias(forOp->getResult(i), arg);
-  }
-}
-
-void BufferAnalysis::RecursiveForOp(mlir::affine::AffineForOp forOp, Liveness live) {
-  auto forBeginSeq = UpdateLinearOperation(forOp.getOperation());
-  UpdateOpGenInfo(forBeginSeq, GetLiveBuffersInLoop(forOp, live));
-  UpdateForOpInitArgsAlias(forOp);
-  RecursionIR(&forOp.getRegion(), live);
-  UpdateForOpBufferAlias(forOp);
-  auto forEndSeq = UpdateLinearOperation(forOp.getOperation());
-  OpKillHandle(forEndSeq, live, forOp->getBlock());
-}
-
-SmallVector<Value> BufferAnalysis::GetLiveBuffersInLoop(mlir::affine::AffineForOp loopOp, Liveness live) {
+template <typename ForOpType>
+SmallVector<Value> BufferAnalysis::GetLiveBuffersInLoopImpl(ForOpType loopOp, Liveness live) {
   SmallVector<Value> allocBeforeLoopBuffers;
   const auto *liveBlockInfo = live.getLiveness(loopOp->getBlock());
   assert(liveBlockInfo != nullptr);
@@ -375,7 +341,80 @@ SmallVector<Value> BufferAnalysis::GetLiveBuffersInLoop(mlir::affine::AffineForO
   return allocBeforeLoopBuffers;
 }
 
-void BufferAnalysis::UpdateIfOpBufferAlias(mlir::affine::AffineIfOp ifOp, mlir::affine::AffineYieldOp yieldOp) {
+template <typename ForOpType>
+void BufferAnalysis::UpdateForOpInitArgsAliasImpl(ForOpType forOp) {
+  // Get init args - different API for affine vs scf
+  SmallVector<Value> inits;
+  if constexpr (std::is_same_v<ForOpType, mlir::affine::AffineForOp>) {
+    inits = forOp.getInits();
+  } else {
+    inits = forOp.getInitArgs();
+  }
+
+  if (inits.empty()) {
+    return;
+  }
+  assert(inits.size() == forOp.getRegionIterArgs().size());
+  for (auto [i, arg] : llvm::enumerate(inits)) {
+    // init args alias region iter args
+    UpdateBufferAlias(forOp.getRegionIterArgs()[i], arg);
+  }
+}
+
+template <typename ForOpType>
+void BufferAnalysis::UpdateForOpBufferAliasImpl(ForOpType forOp) {
+  if (forOp.getResults().empty()) {
+    return;
+  }
+
+  // Get yielded values - different API for affine vs scf
+  SmallVector<Value> yieldedValues;
+  if constexpr (std::is_same_v<ForOpType, mlir::affine::AffineForOp>) {
+    yieldedValues = forOp.getYieldedValues();
+  } else {
+    // For SCF, get yielded values from the yield operation
+    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    yieldedValues = SmallVector<Value>(yieldOp.getOperands().begin(), yieldOp.getOperands().end());
+  }
+
+  if (!forOp.getRegionIterArgs().empty()) {
+    assert(yieldedValues.size() == forOp.getRegionIterArgs().size());
+    SmallVector<Value> inits;
+    if constexpr (std::is_same_v<ForOpType, mlir::affine::AffineForOp>) {
+      inits = forOp.getInits();
+    } else {
+      inits = forOp.getInitArgs();
+    }
+    assert(inits.size() == forOp.getRegionIterArgs().size());
+    for (auto [i, arg] : llvm::enumerate(forOp.getRegionIterArgs())) {
+      // yielded values alias region iter args
+      UpdateBufferAlias(yieldedValues[i], arg);
+    }
+  }
+  assert(forOp->getResults().size() == yieldedValues.size());
+  for (auto [i, arg] : llvm::enumerate(yieldedValues)) {
+    // forOp result values alias region iter yielded values
+    UpdateBufferAlias(forOp->getResult(i), arg);
+  }
+}
+
+template <typename ForOpType>
+void BufferAnalysis::RecursiveForOpImpl(ForOpType forOp, Liveness live) {
+  auto forBeginSeq = UpdateLinearOperation(forOp.getOperation());
+  UpdateOpGenInfo(forBeginSeq, GetLiveBuffersInLoopImpl(forOp, live));
+  UpdateForOpInitArgsAliasImpl(forOp);
+  RecursionIR(&forOp.getRegion(), live);
+  UpdateForOpBufferAliasImpl(forOp);
+  auto forEndSeq = UpdateLinearOperation(forOp.getOperation());
+  OpKillHandle(forEndSeq, live, forOp->getBlock());
+}
+
+//===----------------------------------------------------------------------===//
+// Template Helper Implementation for IfOp
+//===----------------------------------------------------------------------===//
+
+template <typename IfOpType, typename YieldOpType>
+void BufferAnalysis::UpdateIfOpBufferAliasImpl(IfOpType ifOp, YieldOpType yieldOp) {
   if (ifOp.getResults().empty()) {
     return;
   }
@@ -386,12 +425,13 @@ void BufferAnalysis::UpdateIfOpBufferAlias(mlir::affine::AffineIfOp ifOp, mlir::
   }
 }
 
-void BufferAnalysis::RecursiveIfOp(mlir::affine::AffineIfOp ifOp, Liveness live) {
-  // Process the operation of affine.if as follows:
-  // %0 = affine.if %cond -> (memref<16xf16>)
-  //        affine.yield %alloc0: memref<16xf16>
+template <typename IfOpType, typename YieldOpType>
+void BufferAnalysis::RecursiveIfOpImpl(IfOpType ifOp, Liveness live) {
+  // Process the operation of if as follows:
+  // %0 = if %cond -> (memref<16xf16>)
+  //        yield %alloc0: memref<16xf16>
   //      else:
-  //        affine.yield %alloc1 : memref<16xf16>
+  //        yield %alloc1 : memref<16xf16>
   (void)UpdateLinearOperation(ifOp.getOperation());
   RecursionIR(&ifOp.getThenRegion(), live);
   auto curIfElse = UpdateLinearOperation(ifOp.getOperation());
@@ -399,34 +439,55 @@ void BufferAnalysis::RecursiveIfOp(mlir::affine::AffineIfOp ifOp, Liveness live)
   // Get then yield op
   if (!ifOp.getThenRegion().empty()) {
     auto &thenBlock = ifOp.getThenRegion().front();
-    if (auto thenYield = dyn_cast<mlir::affine::AffineYieldOp>(thenBlock.getTerminator())) {
-      UpdateIfOpBufferAlias(ifOp, thenYield);
+    if (auto thenYield = dyn_cast<YieldOpType>(thenBlock.getTerminator())) {
+      UpdateIfOpBufferAliasImpl(ifOp, thenYield);
     }
   }
 
   auto curIfEnd = curIfElse;
-  if (ifOp.hasElse()) {
+  // Check if else region exists - different API for affine vs scf
+  bool hasElse = false;
+  if constexpr (std::is_same_v<IfOpType, mlir::affine::AffineIfOp>) {
+    hasElse = ifOp.hasElse();
+  } else {
+    hasElse = !ifOp.getElseRegion().empty();
+  }
+
+  if (hasElse) {
     RecursionIR(&ifOp.getElseRegion(), live);
     curIfEnd = UpdateLinearOperation(ifOp.getOperation());
     // Get else yield op
     if (!ifOp.getElseRegion().empty()) {
       auto &elseBlock = ifOp.getElseRegion().front();
-      if (auto elseYield = dyn_cast<mlir::affine::AffineYieldOp>(elseBlock.getTerminator())) {
-        UpdateIfOpBufferAlias(ifOp, elseYield);
+      if (auto elseYield = dyn_cast<YieldOpType>(elseBlock.getTerminator())) {
+        UpdateIfOpBufferAliasImpl(ifOp, elseYield);
       }
     }
   }
   OpKillHandle(curIfEnd, live, ifOp->getBlock());
 }
 
+//===----------------------------------------------------------------------===//
+// Common IR Recursion
+//===----------------------------------------------------------------------===//
+
 void BufferAnalysis::RecursionIR(Region *region, Liveness live) {
   auto result = region->walk<WalkOrder::PreOrder>([&](Operation *op) {
-    // Recursive control flow - affine.for
-    if (auto forOp = dyn_cast<mlir::affine::AffineForOp>(op)) {
-      RecursiveForOp(forOp, live);
+    if (auto affineForOp = dyn_cast<mlir::affine::AffineForOp>(op)) {
+      // Recursive control flow - affine.for
+      RecursiveForOpImpl(affineForOp, live);
       return WalkResult::skip();
-    } else if (auto ifOp = dyn_cast<mlir::affine::AffineIfOp>(op)) {
-      RecursiveIfOp(ifOp, live);
+    } else if (auto affineIfOp = dyn_cast<mlir::affine::AffineIfOp>(op)) {
+      // Recursive control flow - affine.if
+      RecursiveIfOpImpl<mlir::affine::AffineIfOp, mlir::affine::AffineYieldOp>(affineIfOp, live);
+      return WalkResult::skip();
+    } else if (auto scfForOp = dyn_cast<mlir::scf::ForOp>(op)) {
+      // Recursive control flow - scf.for
+      RecursiveForOpImpl(scfForOp, live);
+      return WalkResult::skip();
+    } else if (auto scfIfOp = dyn_cast<mlir::scf::IfOp>(op)) {
+      // Recursive control flow - scf.if
+      RecursiveIfOpImpl<mlir::scf::IfOp, mlir::scf::YieldOp>(scfIfOp, live);
       return WalkResult::skip();
     }
 
@@ -446,13 +507,21 @@ void BufferAnalysis::RecursionIR(Region *region, Liveness live) {
     } else if (isa<memref::AllocOp, memref::AllocaOp>(op)) {
       // Handle memref alloc
       UpdateOpBufferInfo(op, op->getResults());
-    } else if (auto loadOp = dyn_cast<mlir::affine::AffineLoadOp>(op)) {
+    } else if (auto affineLoadOp = dyn_cast<mlir::affine::AffineLoadOp>(op)) {
       // AffineLoad produces a scalar result, register it as buffer
       UpdateOpBufferInfo(op, op->getResults());
       UpdateOpGenInfo(curOpInfo, op->getResults());
       OpKillHandle(curOpInfo, live, op->getBlock());
-    } else if (auto storeOp = dyn_cast<mlir::affine::AffineStoreOp>(op)) {
-      UpdateStoreOpInfo(curOpInfo, storeOp.getMemRef(), live);
+    } else if (auto memrefLoadOp = dyn_cast<memref::LoadOp>(op)) {
+      // memref.load produces a scalar result, register it as buffer (corresponding to affine.load)
+      UpdateOpBufferInfo(op, op->getResults());
+      UpdateOpGenInfo(curOpInfo, op->getResults());
+      OpKillHandle(curOpInfo, live, op->getBlock());
+    } else if (auto affineStoreOp = dyn_cast<mlir::affine::AffineStoreOp>(op)) {
+      UpdateStoreOpInfo(curOpInfo, affineStoreOp.getMemRef(), live);
+    } else if (auto memrefStoreOp = dyn_cast<memref::StoreOp>(op)) {
+      // memref.store (corresponding to affine.store)
+      UpdateStoreOpInfo(curOpInfo, memrefStoreOp.getMemRef(), live);
     } else if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
       // Handle arith.select - establishes conditional alias relationships
       UpdateBufferAlias(selectOp.getResult(), selectOp.getTrueValue(), /*hasCond=*/true);

@@ -21,7 +21,6 @@
 #include <memory>
 #include <unordered_set>
 #include "akg/Dialect/Affine/Analysis/AutoTiling.h"
-#include "akg/Dialect/Affine/Analysis/BufferAnalysis.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Utils/AnalysisForGpu.hpp"

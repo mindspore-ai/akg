@@ -15,7 +15,7 @@
  */
 
 #include "akg/Dialect/Affine/Analysis/Model.h"
-#include "akg/Dialect/Affine/Analysis/BufferAnalysis.h"
+#include "akg/Analysis/BufferAnalysis.h"
 #include "akg/Dialect/Affine/Analysis/TilingStrategy.h"
 
 namespace mlir {
