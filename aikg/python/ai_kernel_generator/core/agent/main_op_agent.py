@@ -487,8 +487,14 @@ class MainOpAgent(AgentBase):
         
         # 如果用户已经指定了 sub_workflow，跳过自动选择
         if state.get("sub_workflow_specified_by_user"):
-            logger.info(f"Using user-specified sub-agent: {state.get('sub_workflow')}")
-            return {}
+            specified_sub_agent = state.get("sub_workflow", "codeonly")
+            logger.info(f"✅ User has explicitly specified sub-agent: {specified_sub_agent}")
+            logger.info(f"   Skipping LLM selection, using user's choice directly")
+            return {
+                "sub_workflow": specified_sub_agent,
+                "sub_agent_selection_reasoning": f"用户明确要求使用 {specified_sub_agent} 子Agent",
+                "sub_agent_selection_confidence": 1.0
+            }
         
         # 如果禁用了自动选择，使用默认的 codeonly
         if not self.use_auto_sub_agent_selection:
@@ -654,7 +660,9 @@ class MainOpAgent(AgentBase):
                 "verification_error": verifier_error,
                 "profile_result": profile_res,
                 "conversation_history": [new_message],
-                "current_step": "completed"
+                "current_step": "completed",
+                "retry_requested": False,  # 重置标志，防止无限循环
+                "retry_sub_agent_only": False  # 重置标志，防止无限循环
             }
             
         except Exception as e:
@@ -668,7 +676,9 @@ class MainOpAgent(AgentBase):
                 "generation_success": False,
                 "generation_error": str(e),
                 "conversation_history": [error_message],
-                "current_step": "failed"
+                "current_step": "failed",
+                "retry_requested": False,  # 重置标志，防止无限循环
+                "retry_sub_agent_only": False  # 重置标志，防止无限循环
             }
 
     async def _analyze_user_action(self, state: Dict[str, Any], user_input: str) -> str:
@@ -1048,8 +1058,9 @@ class MainOpAgent(AgentBase):
         # 检测换成 evolve 的关键词
         switch_to_evolve_keywords = [
             "换evolve", "用evolve", "使用evolve", "改用evolve", "试试evolve", "换成evolve",
+            "换用evolve", "改为evolve", "切换evolve", "选evolve", "要evolve",
             "evolve重新生成", "evolve生成", "evolve优化", "用一下evolve",
-            "switch to evolve", "use evolve", "try evolve", "with evolve"
+            "switch to evolve", "use evolve", "try evolve", "with evolve", "change to evolve"
         ]
         
         for keyword in switch_to_evolve_keywords:
@@ -1060,8 +1071,9 @@ class MainOpAgent(AgentBase):
         # 检测换成 codeonly 的关键词
         switch_to_codeonly_keywords = [
             "换codeonly", "用codeonly", "使用codeonly", "改用codeonly", "试试codeonly", "换成codeonly",
+            "换用codeonly", "改为codeonly", "切换codeonly", "选codeonly", "要codeonly",
             "codeonly重新生成", "codeonly生成", "用一下codeonly",
-            "switch to codeonly", "use codeonly", "try codeonly", "with codeonly"
+            "switch to codeonly", "use codeonly", "try codeonly", "with codeonly", "change to codeonly"
         ]
         
         for keyword in switch_to_codeonly_keywords:
