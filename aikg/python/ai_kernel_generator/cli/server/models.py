@@ -29,7 +29,7 @@ class CliMainAgentRequest(BaseModel):
         default="", description="客户端会话 ID，用于隔离不同客户端的请求"
     )
     action: str = Field(
-        description="动作：start/revise/confirm/cancel（start 会覆盖该 session 的历史状态）"
+        description="动作：start/revise/confirm/cancel/auto/retry/retry_sub_agent（start 会覆盖该 session 的历史状态）"
     )
     user_input: str = Field(
         default="",
