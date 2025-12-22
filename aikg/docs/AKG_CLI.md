@@ -5,6 +5,14 @@ AKG CLI (`akg_cli`) is the command-line interface for AI Kernel Generator. This 
 - Start a Worker Service: `akg_cli worker --start`
 - Generate an operator: `akg_cli op ...`
 
+## 0. Installation
+
+First, install `akg_cli` by running the following command in the `aikg` directory:
+
+```bash
+pip install -e .
+```
+
 ## 1. Start a Worker Service
 
 A Worker Service provides the backend runtime for kernel generation. Start it before running `akg_cli op`.
