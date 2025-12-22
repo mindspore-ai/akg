@@ -70,7 +70,7 @@ class MainOpAgent(AgentBase):
         self.op_task_builder.arch = arch
         self.op_task_builder.dsl = dsl
         
-        # 意图分类功能（可选，默认启用）
+        # 意图分类功能
         self.use_intent_classification = config.get("use_intent_classification", True)
         if self.use_intent_classification:
             try:
@@ -86,7 +86,7 @@ class MainOpAgent(AgentBase):
         else:
             logger.info("Intent classification disabled")
         
-        # 子 Agent 选择功能（可选，默认启用）
+        # 子 Agent 选择功能
         self.use_auto_sub_agent_selection = config.get("use_auto_sub_agent_selection", True)
         if self.use_auto_sub_agent_selection:
             try:
@@ -306,8 +306,12 @@ class MainOpAgent(AgentBase):
                 # 继续执行，让 OpTaskBuilder 处理
         
         # 如果用户已确认当前的 task_code，跳过重新生成
-        if state.get("user_confirmed") and state.get("task_code"):
-            logger.info("User confirmed existing task code, skipping rebuild")
+        user_confirmed = state.get("user_confirmed", False)
+        has_task_code = bool(state.get("task_code"))
+        logger.info(f"OpTaskBuild check: user_confirmed={user_confirmed}, has_task_code={has_task_code}")
+        
+        if user_confirmed and has_task_code:
+            logger.info("✓ User confirmed existing task code, skipping rebuild")
             return {
                 "current_step": "proceed_to_generation"
             }
@@ -848,10 +852,41 @@ class MainOpAgent(AgentBase):
             current_state["conversation_history"] = []
         current_state["conversation_history"].append(user_message)
         
+        # 🔍 快速匹配：检查用户是否明确要求换子Agent（减少LLM调用）
+        quick_matched_sub_agent = self._quick_match_sub_agent_preference(user_input)
+        if quick_matched_sub_agent:
+            logger.info(f"⚡ Quick match: User requested '{quick_matched_sub_agent}' sub-agent")
+            current_state["sub_workflow"] = quick_matched_sub_agent
+            current_state["sub_workflow_specified_by_user"] = True
+            
+            # 根据当前状态决定action
+            # 判断是否已经执行过 sub_agent（不管成功失败）
+            has_attempted_generation = (
+                current_state.get("generated_code") or  # 有生成的代码（可能失败）
+                current_state.get("generation_success") is not None or  # 有生成成功标记
+                current_state.get("verification_result") is not None or  # 有验证结果标记
+                "sub_agent" in current_state.get("current_step", "")  # 当前在sub_agent阶段
+            )
+            
+            if has_attempted_generation:
+                action = "retry_sub_agent"
+                logger.info("Quick match: Setting action to 'retry_sub_agent' (has attempted generation)")
+            elif current_state.get("task_code"):
+                action = "confirm"
+                logger.info("Quick match: Setting action to 'confirm' (has task_code, no generation yet)")
+        
         # 如果 action 是 'auto'，使用 LLM 自动分析用户意图
         if action == "auto":
             action = await self._analyze_user_action(current_state, user_input)
             logger.info(f"Auto-analyzed action: {action}")
+            
+            # 🧠 LLM识别：检查LLM推理中是否提到子Agent（备选方案）
+            if action == "retry_sub_agent" and not current_state.get("sub_workflow_specified_by_user"):
+                llm_detected_sub_agent = self._extract_sub_agent_from_reasoning(current_state)
+                if llm_detected_sub_agent:
+                    logger.info(f"🧠 LLM detected: User wants '{llm_detected_sub_agent}' sub-agent")
+                    current_state["sub_workflow"] = llm_detected_sub_agent
+                    current_state["sub_workflow_specified_by_user"] = True
 
         if action == "confirm":
             # 用户确认，继续生成代码
@@ -883,9 +918,36 @@ class MainOpAgent(AgentBase):
             # 用户要求只重新调用子 Agent，保持当前 task code
             current_state["retry_sub_agent_only"] = True
             current_state["retry_requested"] = False
-            current_state["user_confirmed"] = False
-            current_state["user_feedback"] = user_input if user_input else None
+            
+            # 清除之前生成的代码，让工作流可以重新执行 sub_agent
+            current_state["generated_code"] = ""
+            current_state["generation_success"] = False
+            current_state["verification_result"] = False
+            current_state["verification_error"] = ""
+            current_state["profile_result"] = None
+            
+            # 跳过 op_task_build 的重新生成，直接进入 select_sub_agent
+            current_state["user_confirmed"] = True
+            current_state["user_feedback"] = None
             # 保持原有的 user_request，不更新
+            
+            # 安全检查：确保有 task_code
+            if not current_state.get("task_code"):
+                logger.error("❌ Cannot retry sub-agent: No task_code available!")
+                logger.error("This should not happen. Please check the workflow.")
+                # 回退到重新生成 task
+                current_state["retry_requested"] = True
+                current_state["retry_sub_agent_only"] = False
+                current_state["user_confirmed"] = False
+            else:
+                logger.info("=" * 80)
+                logger.info("🔄 Retry sub-agent mode activated:")
+                logger.info(f"  - sub_workflow: {current_state.get('sub_workflow')}")
+                logger.info(f"  - sub_workflow_specified_by_user: {current_state.get('sub_workflow_specified_by_user')}")
+                logger.info(f"  - user_confirmed: True (skip op_task_build rebuild)")
+                logger.info(f"  - has task_code: {bool(current_state.get('task_code'))}")
+                logger.info(f"  - cleared generated_code: True")
+                logger.info("=" * 80)
         elif action == "cancel":  # cancel
             # 判断是正常退出还是无关问题
             reasoning = current_state.get("last_action_reasoning", "")
@@ -969,6 +1031,87 @@ class MainOpAgent(AgentBase):
             # unclear 或低置信度 → 让后续流程处理（安全策略）
             return True
 
+    def _quick_match_sub_agent_preference(self, user_input: str) -> Optional[str]:
+        """快速匹配用户是否明确要求使用特定的子Agent（字符串匹配，减少LLM调用）
+        
+        Args:
+            user_input: 用户输入
+            
+        Returns:
+            Optional[str]: 如果匹配到，返回子Agent名称 ("evolve" 或 "codeonly")，否则返回 None
+        """
+        if not user_input:
+            return None
+            
+        user_input_lower = user_input.lower()
+        
+        # 检测换成 evolve 的关键词
+        switch_to_evolve_keywords = [
+            "换evolve", "用evolve", "使用evolve", "改用evolve", "试试evolve", "换成evolve",
+            "evolve重新生成", "evolve生成", "evolve优化", "用一下evolve",
+            "switch to evolve", "use evolve", "try evolve", "with evolve"
+        ]
+        
+        for keyword in switch_to_evolve_keywords:
+            if keyword in user_input_lower:
+                logger.info(f"Quick matched evolve keyword: '{keyword}'")
+                return "evolve"
+        
+        # 检测换成 codeonly 的关键词
+        switch_to_codeonly_keywords = [
+            "换codeonly", "用codeonly", "使用codeonly", "改用codeonly", "试试codeonly", "换成codeonly",
+            "codeonly重新生成", "codeonly生成", "用一下codeonly",
+            "switch to codeonly", "use codeonly", "try codeonly", "with codeonly"
+        ]
+        
+        for keyword in switch_to_codeonly_keywords:
+            if keyword in user_input_lower:
+                logger.info(f"Quick matched codeonly keyword: '{keyword}'")
+                return "codeonly"
+        
+        return None
+    
+    def _extract_sub_agent_from_reasoning(self, state: Dict[str, Any]) -> Optional[str]:
+        """从LLM的推理中提取用户要求的子Agent
+        
+        Args:
+            state: 当前状态（包含last_action_reasoning）
+            
+        Returns:
+            Optional[str]: 如果LLM推理中提到子Agent，返回名称，否则返回 None
+        """
+        reasoning = state.get("last_action_reasoning", "")
+        if not reasoning:
+            return None
+        
+        reasoning_lower = reasoning.lower()
+        
+        # 检查推理中是否提到 evolve
+        evolve_indicators = [
+            "使用 evolve", "用 evolve", "evolve 子agent", "evolve子agent",
+            "要求使用 evolve", "明确要求 evolve", "指定 evolve",
+            "use evolve", "using evolve", "evolve sub-agent", "evolve subagent"
+        ]
+        
+        for indicator in evolve_indicators:
+            if indicator in reasoning_lower:
+                logger.info(f"LLM reasoning indicates evolve: '{indicator}'")
+                return "evolve"
+        
+        # 检查推理中是否提到 codeonly
+        codeonly_indicators = [
+            "使用 codeonly", "用 codeonly", "codeonly 子agent", "codeonly子agent",
+            "要求使用 codeonly", "明确要求 codeonly", "指定 codeonly",
+            "use codeonly", "using codeonly", "codeonly sub-agent", "codeonly subagent"
+        ]
+        
+        for indicator in codeonly_indicators:
+            if indicator in reasoning_lower:
+                logger.info(f"LLM reasoning indicates codeonly: '{indicator}'")
+                return "codeonly"
+        
+        return None
+    
     def _user_explicitly_requests_evolve(self, user_request: str, state: Dict[str, Any]) -> bool:
         """判断用户是否明确要求使用 evolve 流程
         
