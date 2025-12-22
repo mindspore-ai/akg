@@ -140,17 +140,36 @@ async def interactive_demo(
     Args:
         backend: 后端类型 (cuda, ascend, cpu)
         arch: 硬件架构 (a100, ascend910b4, etc.)
-        device_ids: 设备ID列表 (默认: [0])
+        device_ids: 设备ID列表 (默认: 从 evolve 配置文件读取，如果没有则使用 [0])
         dsl: 目标DSL (triton, ascendc, etc.)
         framework: 框架类型 (torch)
     """
+    # 1. 根据 backend 加载对应的配置文件
+    config_filename = f"default_triton_{backend}_config.yaml"
+    config_path = os.path.join(get_project_root(), "config", config_filename)
+    
+    # 如果对应的配置文件不存在，使用默认的 CUDA 配置
+    if not os.path.exists(config_path):
+        logger.warning(f"Config file not found: {config_path}")
+        config_filename = "default_triton_cuda_config.yaml"
+        config_path = os.path.join(get_project_root(), "config", config_filename)
+        logger.info(f"Fallback to default config: {config_path}")
+    
+    config = load_yaml(config_path)
+    logger.info(f"✓ Loaded config from: {config_path}")
+    
+    # 2. 处理设备列表（只从函数参数传入，不从配置文件读取）
     if device_ids is None:
         device_ids = [0]
+        logger.info("Using default device: [0]")
+    else:
+        logger.info(f"✓ Device IDs from parameter: {device_ids}")
     
     print("=" * 80)
     print("🚀 AI Kernel Assistant - 对话式算子生成")
     print("=" * 80)
-    print(f"\n⚙️  硬件配置:")
+    print(f"\n⚙️  配置信息:")
+    print(f"   • 配置文件: {config_filename}")
     print(f"   • Backend: {backend}")
     print(f"   • Arch: {arch}")
     print(f"   • Device IDs: {device_ids}")
@@ -162,12 +181,7 @@ async def interactive_demo(
     print("   • 其他输入将由 AI 智能理解您的意图")
     print()
     
-    # 1. 加载配置
-    config_path = os.path.join(get_project_root(), "config", "default_triton_cuda_config.yaml")
-    config = load_yaml(config_path)
-    logger.info(f"✓ Loaded config from: {config_path}")
-    
-    # 2. 注册 Worker
+    # 3. 注册 Worker
     logger.info(f"Registering local worker: backend={backend}, arch={arch}, devices={device_ids}")
     from ai_kernel_generator.core.worker.manager import register_local_worker
     try:
@@ -181,7 +195,7 @@ async def interactive_demo(
         logger.warning(f"Failed to register worker: {e}")
         logger.warning("Continuing without worker registration.")
     
-    # 3. 创建 MainOpAgent
+    # 4. 创建 MainOpAgent
     agent = MainOpAgent(
         config=config,
         framework=framework,
@@ -191,7 +205,7 @@ async def interactive_demo(
     )
     logger.info("✓ MainOpAgent initialized")
     
-    # 4. 开始对话
+    # 5. 开始对话
     print("\n" + "-" * 80)
     user_request = input("👤 请输入您的需求: ")
     

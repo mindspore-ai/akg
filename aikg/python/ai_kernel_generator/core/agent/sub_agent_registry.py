@@ -203,7 +203,193 @@ class CodeOnlySubAgent(SubAgentBase):
                 "profile_result": None
             }
 
-    # todo evolve sub-agent
+
+class EvolveSubAgent(SubAgentBase):
+    """
+    Evolve 子 Agent
+    
+    进化优化算子性能
+    流程: 多轮迭代优化
+    
+    """
+    
+    def get_name(self) -> str:
+        return "evolve"
+    
+    def get_description(self) -> str:
+        return "Evolutionary optimization for performance"
+    
+    def get_detailed_info(self) -> Dict[str, Any]:
+        """返回详细信息用于 LLM 决策"""
+        return {
+            "name": "evolve",
+            "description": "进化式性能优化流程",
+            "workflow_steps": [
+                "初始代码生成: 生成基础算子实现",
+                "性能测试: 运行并收集性能数据",
+                "Evolve Agent: 分析性能瓶颈，提出优化方案",
+                "迭代优化: 多轮演化，持续提升性能",
+                "最优选择: 选择性能最佳的版本"
+            ],
+            "use_cases": [
+                "性能要求极高的算子",
+                "需要探索多种优化策略的场景",
+                "性能优化空间较大的算子",
+                "需要自动调优的算子",
+                "benchmark 对比场景",
+                "已有基础实现但需要进一步优化"
+            ],
+            "advantages": [
+                "性能最优：通过多轮迭代寻找最佳方案",
+                "自动调优：无需人工介入的性能优化",
+                "探索性强：尝试多种优化策略",
+                "适应性好：根据实际性能数据调整",
+                "可追溯：保留每轮优化的历史"
+            ],
+            "limitations": [
+                "时间长：需要多轮迭代，耗时最多",
+                "资源消耗极高：多次编译、运行、LLM 调用",
+                "不确定性：优化效果受迭代次数影响",
+                "可能过拟合：针对特定 shape 的优化可能不通用",
+                "复杂度高：流程最复杂"
+            ],
+            "performance": "非常慢（约 180-600 秒，取决于迭代次数），适合对性能要求极高且允许较长优化时间的场景"
+        }
+    
+    def _get_evolve_config_path(self) -> str:
+        """
+        获取 evolve 配置文件路径
+        
+        Returns:
+            evolve 配置文件的完整路径
+        """
+        from ai_kernel_generator import get_project_root
+        import os
+        
+        # 统一使用 evolve_config.yaml，不根据 backend 区分
+        config_path = os.path.join(get_project_root(), "config", "evolve_config.yaml")
+        return config_path
+    
+    async def execute(self, 
+                     task_code: str,
+                     op_name: str,
+                     task_id: str,
+                     **kwargs) -> Tuple[bool, Dict[str, Any]]:
+        """
+        执行 evolve 进化优化
+        """
+        logger.info(f"Executing Evolve sub-agent for {op_name}")
+        
+        try:
+            # 导入 evolve 相关模块
+            from ai_kernel_generator.core.evolve import evolve
+            from ai_kernel_generator.core.async_pool.task_pool import TaskPool
+            from ai_kernel_generator.core.utils import normalize_dsl
+            from ai_kernel_generator.utils.common_utils import load_yaml
+            from ai_kernel_generator import get_project_root
+            import os
+            
+            # 加载 evolve 专用配置文件
+            # 根据 backend 选择对应的配置文件
+            evolve_config_file = self._get_evolve_config_path()
+            logger.info(f"Loading evolve config from: {evolve_config_file}")
+            
+            try:
+                evolve_yaml = load_yaml(evolve_config_file)
+                logger.info(f"✓ Loaded evolve config: {evolve_config_file}")
+            except Exception as e:
+                logger.warning(f"Failed to load evolve config {evolve_config_file}: {e}")
+                logger.warning("Using default config and parameters")
+                evolve_yaml = {}
+            
+            # 从 evolve_config.yaml 读取参数（如果没有则使用默认值）
+            evolve_params = evolve_yaml.get("evolve", {})
+            island_params = evolve_yaml.get("island", {})
+            
+            # 获取 evolve 相关参数
+            max_rounds = evolve_params.get("max_rounds", 5)
+            parallel_num = evolve_params.get("parallel_num", 4)
+            
+            # 岛屿模型参数（可选，默认禁用）
+            num_islands = island_params.get("num_islands", 1)
+            migration_interval = island_params.get("migration_interval", 0)
+            elite_size = island_params.get("elite_size", 0)
+            parent_selection_prob = island_params.get("parent_selection_prob", 0.5)
+            handwrite_decay_rate = evolve_params.get("handwrite_decay_rate", 2.0)
+            
+            logger.info(f"Evolve parameters: max_rounds={max_rounds}, parallel_num={parallel_num}, "
+                       f"num_islands={num_islands}, migration_interval={migration_interval}, "
+                       f"elite_size={elite_size}")
+            
+            # 规范化 DSL
+            normalized_dsl = normalize_dsl(self.dsl, self.backend)
+            logger.info(f"Normalized DSL: {self.dsl} -> {normalized_dsl}")
+            
+            task_pool = TaskPool(max_concurrency=parallel_num)
+            
+            logger.info(f"Starting evolve with config: {evolve_config_file}")
+            logger.info(f"Parameters: max_rounds={max_rounds}, parallel_num={parallel_num}")
+            
+            evolution_result = await evolve(
+                op_name=op_name,
+                task_desc=task_code,
+                dsl=normalized_dsl,
+                framework=self.framework,
+                backend=self.backend,
+                arch=self.arch,
+                config=self.config,  # 使用主配置（包含 DeepSeek API key 等）
+                task_pool=task_pool,
+                max_rounds=max_rounds,
+                parallel_num=parallel_num,
+                num_islands=num_islands,
+                migration_interval=migration_interval,
+                elite_size=elite_size,
+                parent_selection_prob=parent_selection_prob,
+                handwrite_decay_rate=handwrite_decay_rate,
+            )
+            
+            # 判断成功与否
+            success = evolution_result.get("successful_tasks", 0) > 0
+            best_implementations = evolution_result.get("best_implementations", [])
+            
+            # 提取最佳实现的代码
+            generated_code = ""
+            profile_result = None
+            if best_implementations:
+                best = best_implementations[0]
+                generated_code = best.get("code", "")
+                profile_result = best.get("profile", {})
+            
+            result = {
+                "generated_code": generated_code,
+                "verification_result": success,
+                "verification_error": "" if success else "No successful implementations",
+                "profile_result": profile_result,
+                "evolution_history": evolution_result.get("round_results", []),
+                "best_implementations": best_implementations,
+                "total_rounds": evolution_result.get("total_rounds", 0),
+                "total_tasks": evolution_result.get("total_tasks", 0),
+                "successful_tasks": evolution_result.get("successful_tasks", 0),
+                "final_success_rate": evolution_result.get("final_success_rate", 0.0),
+                "storage_dir": evolution_result.get("storage_dir", ""),
+                "final_state": evolution_result
+            }
+            
+            logger.info(f"Evolve completed: {evolution_result.get('successful_tasks', 0)}/{evolution_result.get('total_tasks', 0)} successful")
+            
+            return success, result
+            
+        except Exception as e:
+            logger.error(f"Evolve sub-agent failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return False, {
+                "generated_code": "",
+                "verification_result": False,
+                "verification_error": str(e),
+                "profile_result": None
+            }
+
 
 class SubAgentRegistry:
     """
@@ -222,6 +408,7 @@ class SubAgentRegistry:
     def _register_builtin_agents(self):
         """注册内置的子 Agent"""
         self.register(CodeOnlySubAgent)
+        self.register(EvolveSubAgent)
         
         logger.info(f"Registered {len(self._agents)} built-in sub-agents")
     
