@@ -94,14 +94,14 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
 
     // tiling
-    // nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
+    nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
     nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
     nestedFusionPM.addPass(mlir::createAKGLoopTilingPass(options.target, true, options.arch, "", {}));
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
 
     // vector
     nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
-    // nestedFusionPM.addPass(mlir::createExtractIfOpPass(options.target));
+    nestedFusionPM.addPass(mlir::createExtractIfOpPass(options.target));
     nestedFusionPM.addPass(mlir::affine::createAffineForVectPass());
 
     // parallel

@@ -18,11 +18,9 @@
 #define AKG_DIALECT_AFFINE_ANALYSIS_BUFFERANALYSIS_H
 
 #include <map>
-#include <numeric>
-#include <vector>
 
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -75,41 +73,10 @@ struct ValueComparator {
 };
 
 //===----------------------------------------------------------------------===//
-// UnionFind
-//===----------------------------------------------------------------------===//
-
-/// Union-Find data structure for alias analysis.
-/// Tracks connected components and maintains the minimum index in each set.
-class UnionFind {
- public:
-  explicit UnionFind(size_t n = 0) : minIndex(n), parent(n, -1) { std::iota(minIndex.begin(), minIndex.end(), 0); }
-
-  /// Find the representative of the set containing x.
-  int find(int x);
-
-  /// Join the sets containing a and b.
-  bool join(int a, int b);
-
-  /// Minimum index in each connected component.
-  std::vector<int> minIndex;
-
- private:
-  /// Ensure capacity for index n.
-  void ensureCapacity(size_t n);
-
-  /// Parent array for union-find. Negative values indicate root with size.
-  std::vector<int> parent;
-};
-
-//===----------------------------------------------------------------------===//
 // Type Aliases
 //===----------------------------------------------------------------------===//
 
-using IdxToValMap = std::map<uint32_t, Value>;
-using IdxToOpMap = std::map<uint32_t, Operation *>;
 using DataTypeWeightMap = llvm::DenseMap<Value, uint32_t>;
-using ValToIdxMap = llvm::DenseMap<Value, uint32_t>;
-using OpToIdxMap = llvm::DenseMap<Operation *, uint32_t>;
 
 //===----------------------------------------------------------------------===//
 // WeightedLiveRange
@@ -120,8 +87,10 @@ struct WeightedLiveRange {
   uint32_t start;
   uint32_t end;
   int64_t weight;
+  Operation *op{nullptr};
 
-  explicit WeightedLiveRange(uint32_t s = 0, uint32_t e = 0, int64_t w = 1) : start(s), end(e), weight(w) {}
+  explicit WeightedLiveRange(uint32_t s = 0, uint32_t e = 0, int64_t w = 1, Operation *o = nullptr)
+      : start(s), end(e), weight(w), op(o) {}
 
   bool operator<(const WeightedLiveRange &other) const {
     return std::tie(start, end, weight) < std::tie(other.start, other.end, other.weight);
@@ -141,107 +110,194 @@ struct BufferAnalysisOptions {
   /// Mapping from `value` to the multi-buffer count.
   MultiBufferMap multiBufferCount;
 
-  /// If enabled, the buffer used by DMA operations will not be reused by Vector
-  /// operations.
-  bool enableDmaOpt = false;
-
-  /// If enabled, print live range information for debugging.
-  bool printLiveRange = false;
-};
-
-//===----------------------------------------------------------------------===//
-// ValOperationIndexer
-//===----------------------------------------------------------------------===//
-
-/// Class to index values and operations with sequential indices.
-class ValOperationIndexer {
- public:
-  ValToIdxMap valToIdx;
-  OpToIdxMap opToIdx;
-  IdxToValMap idxToVal;
-  IdxToOpMap idxToOp;
-
-  static constexpr uint32_t kOpNotFoundLiveRange = static_cast<uint32_t>(-1);
-
-  mlir::FailureOr<Value> getVal(uint32_t idx) const;
-  mlir::FailureOr<Operation *> getOp(uint32_t idx) const;
-  uint32_t getClosestOpIdx(uint32_t idx) const;
-  uint32_t getIndex(Value val) const { return valToIdx.at(val); }
-  uint32_t getIndex(Operation *op) const { return opToIdx.at(op); }
-  uint32_t getCurrentCount() const { return opCount; }
-  bool insert(Value val);
-  bool insert(Operation *op);
-
- private:
-  uint32_t opCount = 0;
+  /// If enabled, print detailed buffer analysis information.
+  bool printBufferInfo{false};
 };
 
 //===----------------------------------------------------------------------===//
 // BufferAnalysis
 //===----------------------------------------------------------------------===//
 
+/// Buffer status enumeration
+enum BufferStatus { UNDEFINED = 0, DEFINED, GENED, KILLED };
+
+/// Buffer information structure
+struct BufferInfo {
+  Operation *operation{nullptr};
+  int64_t constBits{0};
+  Type elementType;
+};
+
+/// Record buffer life interval information
+struct BufferLife {
+  explicit BufferLife(Value buffer, int64_t start, int64_t end) : buffer(buffer), allocTime(start), freeTime(end) {}
+  explicit BufferLife(Value buffer) : buffer(buffer) {}
+  Value buffer;
+  int64_t allocTime{-1};
+  int64_t freeTime{-1};
+};
+
+/// Linear operation info
+struct OpInfo {
+  explicit OpInfo(Operation *operation, int index) : operation(operation), index(index) {}
+  Operation *operation{nullptr};
+  int index{0};
+};
+
+/// Gen-kill entry
+struct GenKillEntry {
+  SmallVector<Value> gen;
+  SmallVector<Value> kill;
+};
+
 /// Main buffer analysis class for affine dialect.
 /// Computes the maximum buffer requirement using live range analysis.
+/// Reference: MemLivenessAnalysis from PlanMemory.cpp
 class BufferAnalysis {
  public:
-  BufferAnalysis(Block &block, const BufferAnalysisOptions &options, mlir::func::FuncOp op)
-      : block(block), options(options), liveness(op) {}
+  explicit BufferAnalysis(mlir::func::FuncOp func, const BufferAnalysisOptions &options)
+      : func(func), options(options) {}
 
-  /// Count the maximum number of buffers needed simultaneously.
-  int64_t countMaxBuffer();
+  /// Calculate the maximum buffer requirement in bits.
+  /// Returns a pair of (maxBuffer, smallestTypeBits).
+  std::pair<int64_t, uint32_t> calculateMaxBuffer();
+
+  /// Print live ranges in a format similar to BufferUtils.cpp's printLiveRanges.
+  /// Shows each buffer's index, defining operation, size, and life range.
+  void printLiveRanges() const;
+
+  /// Print detailed buffer analysis information.
+  /// Includes: linear operations with gen/kill info, live ranges, buffer usage over time,
+  /// max buffer summary, and active buffers at max buffer time.
+  void printBufferAnalysisInfo() const;
 
  private:
-  Block &block;
+  mlir::func::FuncOp func;
   BufferAnalysisOptions options;
-  mlir::Liveness liveness;
 
-  DataTypeWeightMap dataTypeWeightMap;
-  llvm::DenseMap<Value, uint32_t> valToLiveRangeIdx;
+  /// Linear operation sequence
+  SmallVector<std::unique_ptr<OpInfo>> linearOperation;
+  /// Map from buffer value to its buffer information
+  llvm::DenseMap<Value, BufferInfo> bufferInfos;
+  /// Map from buffer to its lifetime
+  llvm::DenseMap<Value, std::unique_ptr<BufferLife>> buffer2Life;
+  /// Map from operation to its gen and kill buffer
+  llvm::DenseMap<OpInfo *, GenKillEntry> genKillMap;
+  /// Gen-kill status corresponding to buffer
+  llvm::DenseMap<Value, BufferStatus> buffer2status;
+  /// Map on buffer alias
+  llvm::DenseMap<Value, SmallVector<std::pair<Value, bool>>> buffer2AliasVec;
+  int seqIndex{0};
+  /// Live ranges collected during analysis
+  /// Note: buffer2Life stores raw lifetime (allocTime, freeTime) for each buffer,
+  /// while liveRanges stores processed live ranges with weights derived from buffer2Life
   LiveRanges liveRanges;
-  llvm::DenseMap<int64_t, llvm::DenseSet<uint32_t>> opToEndValIdx;
-  llvm::DenseMap<uint32_t, int64_t> aliasFurthest;
+  /// Smallest type bits across all buffers (used for normalization)
+  uint32_t smallestTypeBits{0};
+  /// Data type weight map (normalized by smallest type bits)
+  DataTypeWeightMap dataTypeWeightMap;
 
-  /// Alias information using union-find.
-  UnionFind aliasSet;
-  ValOperationIndexer indexer;
+  /// Update linear operation info
+  OpInfo *UpdateLinearOperation(Operation *op);
 
-  /// Check if a value is a buffer value (memref type).
-  static bool isUsingBuffer(const Value &value) { return isa<MemRefType>(value.getType()); }
+  /// Obtain all information about the buffer
+  void UpdateOpBufferInfo(Operation *op, const ValueRange &results);
 
-  /// Skip operations that are ignorable for buffer analysis.
-  static bool skippableOperation(Operation *op) { return isa<memref::AllocOp, memref::AllocaOp>(op); }
+  /// Update the relationship of buffer aliases
+  void UpdateBufferAlias(Value buffer, Value aliasBuffer);
 
-  /// Check if an operation is an affine memory read operation.
-  static bool isAffineReadOp(Operation *op) { return isa<mlir::affine::AffineLoadOp>(op); }
+  /// Update the relationship of buffer aliases with condition flag
+  void UpdateBufferAlias(Value buffer, Value aliasBuffer, bool hasCond);
 
-  /// Check if an operation is an affine memory write operation.
-  static bool isAffineWriteOp(Operation *op) { return isa<mlir::affine::AffineStoreOp>(op); }
+  /// Update alias buffer and its condition
+  void UpdateBuffer2AliasVec(const llvm::SetVector<Value> &buffers, const llvm::SetVector<Value> &aliasBuffers,
+                             bool hasCond);
 
-  /// Check if an operation is a control flow operation (for, if, etc.)
-  static bool isControlFlowOp(Operation *op) { return isa<mlir::affine::AffineForOp, mlir::affine::AffineIfOp>(op); }
+  /// Get alias buffers
+  llvm::SetVector<Value> GetAliasBuffers(Value aliasBuffer);
 
-  /// Get the memref from a load/store operation.
-  static Value getMemRefFromOp(Operation *op);
+  /// Process gen buffer based on the result value of op
+  void UpdateOpGenInfo(OpInfo *opInfo, const ValueRange &results);
 
-  void adjustInplaceReuseOp(Operation *op);
-  void adjustCopyInCopyOut(Operation *op);
-  uint32_t insertValue(const Value &value, uint32_t pos, uint32_t weight = 1);
-  void recordDataTypeWeight(const Value &value, uint32_t *smallestTypeBits);
+  /// Update normal operand gen information on buffer
+  void UpdateOperandGenInfo(OpInfo *opInfo, Value operand);
+
+  /// Kill buffer handle
+  void OpKillHandle(OpInfo *opInfo, mlir::Liveness live, Block *block);
+
+  /// Process kill buffer based on the result live of op
+  void UpdateOpKillInfo(OpInfo *opInfo, Value operand, mlir::Liveness live);
+
+  /// Determine whether two operations are in the same block or op2 is the ancestor of op1
+  bool isParentOpDominate(Operation *op1, Operation *op2) const;
+
+  /// Whether afterBlock is after beforeBlock
+  bool IsBlockAfter(Block *afterBlock, Block *beforeBlock) const;
+
+  /// Whether the value is dead after a certain block
+  bool IsDeadAfterBlock(Value value, Block *block) const;
+
+  /// Check if a single buffer is dead after the given operation
+  bool IsBufferDeadAfter(Operation *op, Value buffer, mlir::Liveness live) const;
+
+  /// Update for Op init args region iter args alias info
+  void UpdateForOpInitArgsAlias(mlir::affine::AffineForOp forOp);
+
+  /// Update forOp result buffer/region iter arg/yielded buffer args alias info
+  void UpdateForOpBufferAlias(mlir::affine::AffineForOp forOp);
+
+  /// Recursive operation for affine.for
+  void RecursiveForOp(mlir::affine::AffineForOp forOp, mlir::Liveness live);
+
+  /// Recursive operation for affine.if
+  void RecursiveIfOp(mlir::affine::AffineIfOp ifOp, mlir::Liveness live);
+
+  /// Update affine.if op buffer alias
+  void UpdateIfOpBufferAlias(mlir::affine::AffineIfOp ifOp, mlir::affine::AffineYieldOp yieldOp);
+
+  /// Get the buffer used within the loop and defined outside the loop
+  SmallVector<Value> GetLiveBuffersInLoop(mlir::affine::AffineForOp loopOp, mlir::Liveness live);
+
+  /// Recursively traverse IR
+  void RecursionIR(Region *region, mlir::Liveness live);
+
+  /// Update store op information
+  void UpdateStoreOpInfo(OpInfo *opInfo, const Value storeValue, mlir::Liveness live);
+
+  /// Generate buffer's life time
+  void GenerateBufferLife();
+
+  /// Get multi-buffer count for a value
+  uint32_t getValMultiBuffer(const Value &value, uint32_t def) const;
+
+  /// Get data type weight for a value
+  uint32_t getValDataTypeWeight(const Value &value, uint32_t def, const DataTypeWeightMap &weightMap) const;
+
+  /// Get extra buffer size for reduce operations (similar to BufferUtils.cpp)
+  /// Returns extra buffer size as ratio, or 0 if not applicable
   int64_t getExtraBufferSizeByFactor(Operation *op) const;
-  llvm::SmallVector<Value> getOperands(Operation &op) const;
-  uint32_t getValMultiBuffer(const Value &value, uint32_t def = 1) const;
-  uint32_t getValDataTypeWeight(const Value &value, uint32_t def = 1) const;
-  void gatherLiveRanges(const mlir::LivenessBlockInfo *blockInfo);
-  void processOperationForLiveRange(Operation *op, const mlir::LivenessBlockInfo *blockInfo);
-  void processOperationForPostProcess(Operation *op);
-  uint32_t updateAliasIntoFurthest(const Value &value, Operation *endOp);
+
+  /// Gather live ranges from buffer life (similar to BufferUtils.cpp's gatherLiveRanges)
+  /// Collects live ranges with gen, kill, and weight information
+  void gatherLiveRanges();
+
+  /// Collect inplace reuse buffers (buffers that can reuse killed buffers)
+  llvm::DenseSet<Value> gatherInplaceReuseBuffers() const;
+
+  /// Gather and normalize data type weights
+  /// Initializes smallestTypeBits and dataTypeWeightMap member variables
   void gatherDataTypeWeights();
-  void processOperationForDataTypeWeight(Operation *op, uint32_t *smallestTypeBits);
-  void gatherIndexingAndAlias();
-  void processOperationForIndexing(Operation *op);
-  void printLiveRanges() const;
-  void printAliasInfo();
-  int64_t lineSweepRanges();
+
+  /// Create live ranges from buffer life with weights
+  void createLiveRangesFromBufferLife(const llvm::DenseSet<Value> &inplaceReuseBuffers,
+                                      const DataTypeWeightMap &dataTypeWeightMap);
+
+  /// Add extra buffer live ranges for reduce operations
+  void addExtraBufferLiveRanges(const DataTypeWeightMap &dataTypeWeightMap);
+
+  /// Line sweep algorithm to find max buffer (similar to BufferUtils.cpp's lineSweepRanges)
+  /// Returns the maximum buffer usage ratio
+  int64_t lineSweepRanges() const;
 };
 
 //===----------------------------------------------------------------------===//
@@ -249,8 +305,9 @@ class BufferAnalysis {
 //===----------------------------------------------------------------------===//
 
 /// Count the maximum number of buffers needed simultaneously for a function.
-/// Returns -1 if the function has more than one block.
-int64_t countMaxBuffer(mlir::func::FuncOp func, const BufferAnalysisOptions &options = {});
+/// Returns a pair of (maxBuffer, smallestTypeBits).
+/// Returns (-1, 0) if the function has more than one block.
+std::pair<int64_t, uint32_t> countMaxBuffer(mlir::func::FuncOp func, const BufferAnalysisOptions &options = {});
 
 }  // namespace akg
 }  // namespace mlir

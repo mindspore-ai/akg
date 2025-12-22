@@ -89,6 +89,7 @@ class InitGraph {
   void setGraphType(const StringAttr &attrs);
   void setHardware(const std::string &hw);
   void setFeature(const std::string &fea);
+  void setArch(const std::string &arch);
   void setIsDynamicShape(bool isDyn);
   void setTilingMode(const std::string &tm);
 
@@ -107,6 +108,7 @@ class InitGraph {
   std::string graphType;
   std::string hardware;
   std::string feature;
+  std::string arch;
   std::string tilingMode{"auto"};
   Operation *funcOp{nullptr};
   bool isDynamicShape{false};
@@ -181,9 +183,26 @@ class CpuModelGraph : public ModelGraph {
   int tileNum = 0;
 };
 using CpuModelGraphPtr = std::shared_ptr<CpuModelGraph>;
+
+class NpuModelGraph : public ModelGraph {
+ public:
+  explicit NpuModelGraph(const InitGraphPtr &initGraph);
+  virtual ~NpuModelGraph() = default;
+
+  void AnalyzeBufferInfo();
+  void InitResource();
+
+  // NPU resources - direct access to member variables
+  int64_t ubSize{0};             // Unified Buffer size in bytes
+  int64_t coreNum{0};            // Number of available cores (AIV or AIC)
+  int64_t maxBufferCnt{0};       // Maximum buffer count from buffer analysis
+  uint32_t smallestTypeBits{0};  // Smallest element type in bits
+
+  int tileNum{0};
+};
+using NpuModelGraphPtr = std::shared_ptr<NpuModelGraph>;
 }  // namespace autotiling
 }  // namespace akg
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_MODEL_H_
-

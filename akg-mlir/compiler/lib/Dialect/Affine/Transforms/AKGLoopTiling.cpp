@@ -99,19 +99,23 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   void runNpuOperation();
   void addOuterKernelMappingLoop(mlir::affine::AffineForOp bandRootLoop);
 
+  // Helper functions for runNpuOperation
+  mlir::affine::AffineForOp findTiledBandRoot(Block *parentBlock, mlir::func::FuncOp funcOp);
+  void collectAndMarkInnermostLoops(mlir::func::FuncOp funcOp);
+
   // Helper structures and functions for kernel mapping
   struct DimensionInfo {
-    mlir::affine::AffineForOp fullBlock;      // Full tiled block
-    mlir::affine::AffineForOp tailBlock;      // Tail block (may be null)
-    int32_t numBlocks;                        // Number of blocks (full blocks only, excluding tail)
-    int32_t step;                             // Step size
-    int32_t lb;                               // Lower bound of full block
-    int32_t ub;                               // Upper bound of full block (may be adjusted)
-    int32_t extent;                           // Extent of full block
-    int32_t tailLb;                           // Lower bound of tail block
-    int32_t tailUb;                           // Upper bound of tail block
-    int32_t tailStep;                         // Step size of tail block
-    bool isReduceAxis;                        // Whether this is a reduction axis
+    mlir::affine::AffineForOp fullBlock;  // Full tiled block
+    mlir::affine::AffineForOp tailBlock;  // Tail block (may be null)
+    int32_t numBlocks;                    // Number of blocks (full blocks only, excluding tail)
+    int32_t step;                         // Step size
+    int32_t lb;                           // Lower bound of full block
+    int32_t ub;                           // Upper bound of full block (may be adjusted)
+    int32_t extent;                       // Extent of full block
+    int32_t tailLb;                       // Lower bound of tail block
+    int32_t tailUb;                       // Upper bound of tail block
+    int32_t tailStep;                     // Step size of tail block
+    bool isReduceAxis;                    // Whether this is a reduction axis
   };
 
   struct MappingContext {
@@ -124,12 +128,17 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
     int32_t numKernels;
   };
   MappingContext collectAndSelectMappingDimension(mlir::affine::AffineForOp bandRootLoop);
-  mlir::affine::AffineForOp createKernelLoopAndMapFullBlock(OpBuilder &builder,
-                                                            mlir::func::FuncOp funcOp,
+  // Helper functions for collectAndSelectMappingDimension
+  SmallVector<mlir::affine::AffineForOp> collectOutermostTiledLoops(mlir::affine::AffineForOp bandRootLoop);
+  SmallVector<DimensionInfo> collectDimensionInfos(const SmallVector<mlir::affine::AffineForOp> &outermostTiledLoops,
+                                                   int32_t &maxNumBlocks);
+  DimensionInfo *selectMappingDimension(SmallVector<DimensionInfo> &dimInfos, int32_t maxNumBlocks);
+
+  mlir::affine::AffineForOp createKernelLoopAndMapFullBlock(OpBuilder &builder, mlir::func::FuncOp funcOp,
                                                             MappingContext &ctx);
   void mapTailBlockToKernel(OpBuilder &builder, mlir::affine::AffineForOp kernelLoop,
-                            mlir::affine::AffineForOp fullLoop, mlir::affine::AffineForOp tailLoop,
-                            int32_t numKernels, Value kernelId);
+                            mlir::affine::AffineForOp fullLoop, mlir::affine::AffineForOp tailLoop, int32_t numKernels,
+                            Value kernelId);
   void BandCheck(const std::vector<SmallVector<mlir::affine::AffineForOp, 6>> &bands);
   void getTileSizes();
   std::string getHardware();
@@ -167,7 +176,7 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   // hardware information
   std::string target{mlir::kTargetCpu};
   std::string tilingMode{"auto"};
-  [[maybe_unused]] std::string arch{};
+  std::string arch{mlir::akg::kSoc910B2};
   std::string feature{mlir::kNEONInstructionSet};
 
   mlir::akg::autotiling::TilingSolverPtr solver{nullptr};
@@ -1110,22 +1119,19 @@ static unsigned getLoopNestingDepth(mlir::affine::AffineForOp forOp, mlir::func:
 
 // Helper function to check if a loop is innermost (no nested affine.for inside)
 static bool isInnermostLoop(mlir::affine::AffineForOp forOp) {
-  return !forOp.getBody()->walk([&](mlir::affine::AffineForOp nestedForOp) {
-    return WalkResult::interrupt();
-  }).wasInterrupted();
+  return !forOp.getBody()
+            ->walk([&](mlir::affine::AffineForOp nestedForOp) { return WalkResult::interrupt(); })
+            .wasInterrupted();
 }
 
-// Collect outermost tiled loops, dimension info, select mapping dimension, and calculate numKernels
-AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(mlir::affine::AffineForOp bandRootLoop) {
-  MappingContext ctx = {};
+// Collect outermost tiled loops that belong to the band starting from bandRootLoop
+SmallVector<mlir::affine::AffineForOp> AKGLoopTiling::collectOutermostTiledLoops(
+  mlir::affine::AffineForOp bandRootLoop) {
+  SmallVector<mlir::affine::AffineForOp> outermostTiledLoops;
 
   if (!bandRootLoop) {
-    ctx.numKernels = 1;
-    return ctx;
+    return outermostTiledLoops;
   }
-
-  // Collect outermost tiled loops that belong to this band
-  SmallVector<mlir::affine::AffineForOp> outermostTiledLoops;
 
   // bandRootLoop should be an outermost loop, so its block should contain all band outermost loops
   Block *bandBlock = bandRootLoop->getBlock();
@@ -1156,8 +1162,7 @@ AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(ml
         }
 
         // Only collect outermost loops with constant bounds that haven't been processed
-        if (isOutermost && forOp.hasConstantBounds() &&
-            !forOp->hasAttr(kTileForOneAttr)) {
+        if (isOutermost && forOp.hasConstantBounds() && !forOp->hasAttr(kTileForOneAttr)) {
           outermostTiledLoops.push_back(forOp);
         } else {
           if (isOutermost && !forOp->hasAttr(kTileForOneAttr)) {
@@ -1173,14 +1178,15 @@ AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(ml
     }
   }
 
-  if (outermostTiledLoops.empty()) {
-    ctx.numKernels = 1;
-    return ctx;
-  }
+  return outermostTiledLoops;
+}
 
-  // Collect dimension information and find tail blocks
+// Collect dimension information and find tail blocks for each outermost tiled loop
+SmallVector<AKGLoopTiling::DimensionInfo> AKGLoopTiling::collectDimensionInfos(
+  const SmallVector<mlir::affine::AffineForOp> &outermostTiledLoops, int32_t &maxNumBlocks) {
   SmallVector<DimensionInfo> dimInfos;
-  int32_t maxNumBlocks = 0;
+  maxNumBlocks = 0;
+
   for (auto fullLoop : outermostTiledLoops) {
     bool isReduceAxis = fullLoop->hasAttr(mlir::kReductionLoopAttr);
     int32_t lb = fullLoop.getConstantLowerBound();
@@ -1200,8 +1206,7 @@ AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(ml
     Operation *nextOp = fullLoop->getNextNode();
     if (nextOp && isa<mlir::affine::AffineForOp>(nextOp)) {
       auto candidateTail = dyn_cast<mlir::affine::AffineForOp>(nextOp);
-      if (candidateTail.hasConstantBounds() &&
-          candidateTail->getParentOp() == fullLoop->getParentOp()) {
+      if (candidateTail.hasConstantBounds() && candidateTail->getParentOp() == fullLoop->getParentOp()) {
         int32_t candidateLb = candidateTail.getConstantLowerBound();
         int32_t candidateUb = candidateTail.getConstantUpperBound();
         // Tail block typically starts at or after full block's upper bound
@@ -1214,8 +1219,7 @@ AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(ml
       }
     }
 
-    dimInfos.push_back({fullLoop, tailBlock, numBlocks, step, lb, ub, extent,
-                        tailLb, tailUb, tailStep, isReduceAxis});
+    dimInfos.push_back({fullLoop, tailBlock, numBlocks, step, lb, ub, extent, tailLb, tailUb, tailStep, isReduceAxis});
 
     // Only consider non-reduction dimensions for max blocks calculation
     if (!isReduceAxis) {
@@ -1223,31 +1227,65 @@ AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(ml
     }
   }
 
+  return dimInfos;
+}
+
+// Select the dimension to map: prefer non-reduction dimension with maximum blocks
+AKGLoopTiling::DimensionInfo *AKGLoopTiling::selectMappingDimension(SmallVector<DimensionInfo> &dimInfos,
+                                                                    int32_t maxNumBlocks) {
+  if (dimInfos.empty()) {
+    return nullptr;
+  }
+
+  // Prefer non-reduction dimension with maximum blocks
+  auto itMax = std::find_if(dimInfos.begin(), dimInfos.end(),
+                            [&](const DimensionInfo &d) { return !d.isReduceAxis && d.numBlocks == maxNumBlocks; });
+  if (itMax != dimInfos.end()) {
+    return &(*itMax);
+  }
+
+  // If all dimensions are reduction axes, use first non-reduction or first dimension
+  auto itNonReduce =
+    std::find_if(dimInfos.begin(), dimInfos.end(), [](const DimensionInfo &d) { return !d.isReduceAxis; });
+  if (itNonReduce != dimInfos.end()) {
+    return &(*itNonReduce);
+  }
+
+  return &dimInfos[0];
+}
+
+// Collect outermost tiled loops, dimension info, select mapping dimension, and calculate numKernels
+AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(mlir::affine::AffineForOp bandRootLoop) {
+  MappingContext ctx = {};
+
+  if (!bandRootLoop) {
+    ctx.numKernels = 1;
+    return ctx;
+  }
+
+  // Step 1: Collect outermost tiled loops
+  SmallVector<mlir::affine::AffineForOp> outermostTiledLoops = collectOutermostTiledLoops(bandRootLoop);
+  if (outermostTiledLoops.empty()) {
+    ctx.numKernels = 1;
+    return ctx;
+  }
+
+  // Step 2: Collect dimension information and find tail blocks
+  int32_t maxNumBlocks = 0;
+  SmallVector<DimensionInfo> dimInfos = collectDimensionInfos(outermostTiledLoops, maxNumBlocks);
   if (dimInfos.empty()) {
     ctx.numKernels = 1;
     return ctx;
   }
 
-  // Select the dimension to map: prefer non-reduction dimension with maximum blocks
-  DimensionInfo *selectedDim = nullptr;
-  auto itMax = std::find_if(dimInfos.begin(), dimInfos.end(), [&](const DimensionInfo &d) {
-    return !d.isReduceAxis && d.numBlocks == maxNumBlocks;
-  });
-  if (itMax != dimInfos.end()) {
-    selectedDim = &(*itMax);
-  } else {
-    // If all dimensions are reduction axes, use first non-reduction or first dimension
-    auto itNonReduce = std::find_if(dimInfos.begin(), dimInfos.end(), [](const DimensionInfo &d) {
-      return !d.isReduceAxis;
-    });
-    if (itNonReduce != dimInfos.end()) {
-      selectedDim = &(*itNonReduce);
-    } else {
-      selectedDim = &dimInfos[0];
-    }
+  // Step 3: Select the dimension to map
+  DimensionInfo *selectedDim = selectMappingDimension(dimInfos, maxNumBlocks);
+  if (!selectedDim) {
+    ctx.numKernels = 1;
+    return ctx;
   }
 
-  // Calculate number of kernels (limit to 40)
+  // Step 4: Calculate number of kernels (limit to 40)
   int32_t totalBlocks = selectedDim->numBlocks + (selectedDim->tailBlock ? 1 : 0);
   ctx.fullBlock = selectedDim->fullBlock;
   ctx.tailBlock = selectedDim->tailBlock;
@@ -1255,15 +1293,13 @@ AKGLoopTiling::MappingContext AKGLoopTiling::collectAndSelectMappingDimension(ml
   ctx.step = selectedDim->step;
   ctx.lb = selectedDim->lb;
   ctx.ub = selectedDim->ub;
-  ctx.numKernels = std::min(totalBlocks > 0 ? totalBlocks : static_cast<int32_t>(1),
-                            static_cast<int32_t>(40));
+  ctx.numKernels = std::min(totalBlocks > 0 ? totalBlocks : static_cast<int32_t>(1), static_cast<int32_t>(40));
   return ctx;
 }
 
 // Create kernel loop and map full block to kernel iterations
-mlir::affine::AffineForOp AKGLoopTiling::createKernelLoopAndMapFullBlock(OpBuilder &builder,
-                                                                          mlir::func::FuncOp funcOp,
-                                                                          MappingContext &ctx) {
+mlir::affine::AffineForOp AKGLoopTiling::createKernelLoopAndMapFullBlock(OpBuilder &builder, mlir::func::FuncOp funcOp,
+                                                                         MappingContext &ctx) {
   auto fullLoop = ctx.fullBlock;
 
   if (!fullLoop || ctx.numKernels <= 0) {
@@ -1279,8 +1315,7 @@ mlir::affine::AffineForOp AKGLoopTiling::createKernelLoopAndMapFullBlock(OpBuild
   mlir::Location loc = fullLoop.getLoc();
 
   // Insertion point should already be set in addOuterKernelMappingLoop
-  auto kernelLoop = builder.create<mlir::affine::AffineForOp>(
-    loc, 0, ctx.numKernels, 1);
+  auto kernelLoop = builder.create<mlir::affine::AffineForOp>(loc, 0, ctx.numKernels, 1);
 
   kernelLoop->setAttr(kTileForOneAttr, builder.getUnitAttr());
   kernelLoop->setAttr(kMapForToForallAttr, builder.getUnitAttr());
@@ -1314,9 +1349,6 @@ mlir::affine::AffineForOp AKGLoopTiling::createKernelLoopAndMapFullBlock(OpBuild
     // Ensure if is inserted before fullLoop, and if tailBlock exists after fullLoop,
     mlir::Block *parentBlock = fullLoop->getBlock();
 
-    // Temporarily move tailBlock out of the way if it's in the same block after fullLoop
-    bool tailBlockMoved = false;
-    mlir::Block *originalTailBlock = nullptr;
     if (ctx.tailBlock && ctx.tailBlock->getBlock() == parentBlock) {
       // Check if tailBlock comes after fullLoop in the block
       bool foundFullLoop = false;
@@ -1325,22 +1357,14 @@ mlir::affine::AffineForOp AKGLoopTiling::createKernelLoopAndMapFullBlock(OpBuild
           foundFullLoop = true;
         } else if (foundFullLoop && &*it == ctx.tailBlock.getOperation()) {
           // Tail block is after fullLoop, temporarily move it out
-          originalTailBlock = ctx.tailBlock->getBlock();
           ctx.tailBlock->moveBefore(parentBlock, parentBlock->end());
-          tailBlockMoved = true;
           break;
         }
       }
     }
     // Set insertion point before fullLoop
     builder.setInsertionPoint(parentBlock, fullLoop->getIterator());
-    auto ifOp = builder.create<mlir::affine::AffineIfOp>(fullLoop.getLoc(), condSet,
-                                                         ValueRange{kernelId}, /*hasElse=*/false);
-    fullLoop->moveBefore(&ifOp.getThenBlock()->front());
-    // Restore tailBlock position if it was moved
-    if (tailBlockMoved && originalTailBlock) {
-      ctx.tailBlock->moveBefore(originalTailBlock, ifOp->getIterator());
-    }
+    (void)builder.create<mlir::affine::AffineIfOp>(fullLoop.getLoc(), condSet, ValueRange{kernelId}, /*hasElse=*/false);
   }
   fullLoop.setLowerBound(ValueRange{kernelId}, startMap);
   fullLoop.setUpperBound(ValueRange{kernelId}, endMap);
@@ -1350,8 +1374,8 @@ mlir::affine::AffineForOp AKGLoopTiling::createKernelLoopAndMapFullBlock(OpBuild
 
 // Map tail block to the last kernel iteration
 void AKGLoopTiling::mapTailBlockToKernel(OpBuilder &builder, mlir::affine::AffineForOp kernelLoop,
-                                          mlir::affine::AffineForOp fullLoop, mlir::affine::AffineForOp tailLoop,
-                                          int32_t numKernels, Value kernelId) {
+                                         mlir::affine::AffineForOp fullLoop, mlir::affine::AffineForOp tailLoop,
+                                         int32_t numKernels, Value kernelId) {
   if (!tailLoop) {
     return;
   }
@@ -1400,8 +1424,8 @@ void AKGLoopTiling::mapTailBlockToKernel(OpBuilder &builder, mlir::affine::Affin
   auto lastIterSet = IntegerSet::get(1, 0, exprs, eqFlags);
 
   builder.setInsertionPoint(tailLoop);
-  auto tailIfOp = builder.create<mlir::affine::AffineIfOp>(
-    tailLoop.getLoc(), lastIterSet, ValueRange{kernelId}, /*hasElse=*/false);
+  auto tailIfOp =
+    builder.create<mlir::affine::AffineIfOp>(tailLoop.getLoc(), lastIterSet, ValueRange{kernelId}, /*hasElse=*/false);
 
   tailLoop->moveBefore(&tailIfOp.getThenBlock()->front());
 }
@@ -1431,33 +1455,11 @@ void AKGLoopTiling::addOuterKernelMappingLoop(mlir::affine::AffineForOp bandRoot
   Value kernelId = kernelLoop.getInductionVar();
 
   // Map tail block to last kernel iteration
-  mapTailBlockToKernel(builder, kernelLoop, ctx.fullBlock, ctx.tailBlock,
-                       ctx.numKernels, kernelId);
+  mapTailBlockToKernel(builder, kernelLoop, ctx.fullBlock, ctx.tailBlock, ctx.numKernels, kernelId);
 }
 
-void AKGLoopTiling::runNpuOperation() {
-  if (band.empty()) {
-    return;
-  }
-  mlir::func::FuncOp funcOp = getOperation();
-
-  // use tail block without if
-  separateNoIf = true;
-
-  // Clear bandTileSizes to avoid pollution from previous bands
-  bandTileSizes.clear();
-
-  // Save the original band root to find the tiled root later
-  mlir::affine::AffineForOp originalBandRoot = band[0];
-  Block *parentBlock = originalBandRoot->getBlock();
-
-  // Get the location of the original root to help identify the tiled root
-  mlir::Location originalLoc = originalBandRoot.getLoc();
-
-  tileEachBand();
-
-  mlir::affine::AffineForOp tiledBandRoot = nullptr;
-
+// Find the tiled band root loop after tiling transformation
+mlir::affine::AffineForOp AKGLoopTiling::findTiledBandRoot(Block *parentBlock, mlir::func::FuncOp funcOp) {
   for (auto &op : *parentBlock) {
     if (auto forOp = dyn_cast<mlir::affine::AffineForOp>(&op)) {
       // Skip if already processed
@@ -1476,56 +1478,77 @@ void AKGLoopTiling::runNpuOperation() {
         parentOp = parentOp->getParentOp();
       }
       if (isOutermost && forOp.hasConstantBounds()) {
-        // Found a candidate - use the first one(it should be the band root at or near the original position)
-        tiledBandRoot = forOp;
-        break;
+        // Found a candidate - use the first one (it should be the band root at or near the original position)
+        return forOp;
       }
     }
   }
+  return nullptr;
+}
 
-  // Add outer kernel mapping loop to distribute work across NPU cores
-  if (tiledBandRoot) {
-    addOuterKernelMappingLoop(tiledBandRoot);
-  }
-
+// Collect innermost loops with maximum depth and mark them with vector attribute
+void AKGLoopTiling::collectAndMarkInnermostLoops(mlir::func::FuncOp funcOp) {
   OpBuilder builder(funcOp);
-
-  unsigned minDepth = UINT_MAX;
   SmallVector<std::pair<mlir::affine::AffineForOp, unsigned>> innermostCandidates;
 
+  // Collect all innermost loops with their depths
   funcOp->walk([&](mlir::affine::AffineForOp forOp) {
     unsigned depth = getLoopNestingDepth(forOp, funcOp);
-    // Collect innermost loop candidates with their depths
     if (isInnermostLoop(forOp)) {
       innermostCandidates.push_back({forOp, depth});
     }
   });
 
-  // Select innermost loops with maximum depth
-  SmallVector<mlir::affine::AffineForOp> innermostLoops;
-  if (!innermostCandidates.empty()) {
-    unsigned maxDepth = innermostCandidates[0].second;
-    for (const auto &[loop, depth] : innermostCandidates) {
-      if (depth > maxDepth) {
-        maxDepth = depth;
-      }
-    }
-    for (const auto &[loop, depth] : innermostCandidates) {
-      if (depth == maxDepth) {
-        innermostLoops.push_back(loop);
-      }
+  if (innermostCandidates.empty()) {
+    return;
+  }
+
+  // Find maximum depth
+  unsigned maxDepth = innermostCandidates[0].second;
+  for (const auto &[loop, depth] : innermostCandidates) {
+    if (depth > maxDepth) {
+      maxDepth = depth;
     }
   }
 
-  // Add vector attribute to innermost loops
-  for (auto forOp : innermostLoops) {
-    forOp->setAttr(kVectorAttr, builder.getUnitAttr());
+  // Add vector attribute to innermost loops with maximum depth
+  for (const auto &[loop, depth] : innermostCandidates) {
+    if (depth == maxDepth) {
+      loop->setAttr(kVectorAttr, builder.getUnitAttr());
+    }
   }
+}
+
+void AKGLoopTiling::runNpuOperation() {
+  if (band.empty()) {
+    return;
+  }
+  mlir::func::FuncOp funcOp = getOperation();
+
+  // Use tail block without if
+  separateNoIf = true;
+
+  // Clear bandTileSizes to avoid pollution from previous bands
+  bandTileSizes.clear();
+
+  // Save the parent block before tiling to find the tiled root later
+  Block *parentBlock = band[0]->getBlock();
+
+  // Execute tiling transformation
+  tileEachBand();
+
+  // Find and process the tiled band root
+  mlir::affine::AffineForOp tiledBandRoot = findTiledBandRoot(parentBlock, funcOp);
+  if (tiledBandRoot) {
+    addOuterKernelMappingLoop(tiledBandRoot);
+  }
+
+  // Collect and mark innermost loops with vector attribute
+  collectAndMarkInnermostLoops(funcOp);
 
   if (useAutoTiling && solver) {
     // TODO(ascend-tiling): annotate loops for cooperative scheduling
   }
-  return;
 }
 
 void AKGLoopTiling::runCudaOperation() {
@@ -1609,14 +1632,10 @@ void AKGLoopTiling::runOnOperation() {
   }
 
   if (useAutoTiling) {
-    mlir::akg::BufferAnalysisOptions options;
-    options.enableDmaOpt = false;
-    auto maxBuffer = countMaxBuffer(funcOp, options);
-    llvm::outs() << "maxBuffer: " << maxBuffer << "\n";
-
     auto initGraph = mlir::akg::autotiling::parseIr(funcOp, bands);
     initGraph->setHardware(target);
     initGraph->setFeature(feature);
+    initGraph->setArch(arch);
     initGraph->setIsDynamicShape(isDynamicShape());
     initGraph->setTilingMode(tilingMode);
 
