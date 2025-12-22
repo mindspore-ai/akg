@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef AKG_DIALECT_AFFINE_ANALYSIS_BUFFERANALYSIS_H
-#define AKG_DIALECT_AFFINE_ANALYSIS_BUFFERANALYSIS_H
+#ifndef AKG_ANALYSIS_BUFFERANALYSIS_H
+#define AKG_ANALYSIS_BUFFERANALYSIS_H
 
 #include <map>
 
@@ -28,6 +28,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 namespace mlir {
 namespace akg {
@@ -150,7 +151,7 @@ struct GenKillEntry {
   SmallVector<Value> kill;
 };
 
-/// Main buffer analysis class for affine dialect.
+/// Main buffer analysis class for affine and scf dialects.
 /// Computes the maximum buffer requirement using live range analysis.
 /// Reference: MemLivenessAnalysis from PlanMemory.cpp
 class BufferAnalysis {
@@ -240,23 +241,37 @@ class BufferAnalysis {
   /// Check if a single buffer is dead after the given operation
   bool IsBufferDeadAfter(Operation *op, Value buffer, mlir::Liveness live) const;
 
-  /// Update for Op init args region iter args alias info
-  void UpdateForOpInitArgsAlias(mlir::affine::AffineForOp forOp);
+  //===--------------------------------------------------------------------===//
+  // Template Helper Functions for ForOp and IfOp
+  //===--------------------------------------------------------------------===//
 
-  /// Update forOp result buffer/region iter arg/yielded buffer args alias info
-  void UpdateForOpBufferAlias(mlir::affine::AffineForOp forOp);
+  /// Template helper for recursive ForOp processing (affine.for and scf.for)
+  template <typename ForOpType>
+  void RecursiveForOpImpl(ForOpType forOp, mlir::Liveness live);
 
-  /// Recursive operation for affine.for
-  void RecursiveForOp(mlir::affine::AffineForOp forOp, mlir::Liveness live);
+  /// Template helper for recursive IfOp processing (affine.if and scf.if)
+  template <typename IfOpType, typename YieldOpType>
+  void RecursiveIfOpImpl(IfOpType ifOp, mlir::Liveness live);
 
-  /// Recursive operation for affine.if
-  void RecursiveIfOp(mlir::affine::AffineIfOp ifOp, mlir::Liveness live);
+  /// Template helper for getting live buffers in loop (affine.for and scf.for)
+  template <typename ForOpType>
+  SmallVector<Value> GetLiveBuffersInLoopImpl(ForOpType loopOp, mlir::Liveness live);
 
-  /// Update affine.if op buffer alias
-  void UpdateIfOpBufferAlias(mlir::affine::AffineIfOp ifOp, mlir::affine::AffineYieldOp yieldOp);
+  /// Template helper for updating ForOp init args alias (affine.for and scf.for)
+  template <typename ForOpType>
+  void UpdateForOpInitArgsAliasImpl(ForOpType forOp);
 
-  /// Get the buffer used within the loop and defined outside the loop
-  SmallVector<Value> GetLiveBuffersInLoop(mlir::affine::AffineForOp loopOp, mlir::Liveness live);
+  /// Template helper for updating ForOp buffer alias (affine.for and scf.for)
+  template <typename ForOpType>
+  void UpdateForOpBufferAliasImpl(ForOpType forOp);
+
+  /// Template helper for updating IfOp buffer alias (affine.if and scf.if)
+  template <typename IfOpType, typename YieldOpType>
+  void UpdateIfOpBufferAliasImpl(IfOpType ifOp, YieldOpType yieldOp);
+
+  //===--------------------------------------------------------------------===//
+  // Common Methods
+  //===--------------------------------------------------------------------===//
 
   /// Recursively traverse IR
   void RecursionIR(Region *region, mlir::Liveness live);
@@ -312,4 +327,4 @@ std::pair<int64_t, uint32_t> countMaxBuffer(mlir::func::FuncOp func, const Buffe
 }  // namespace akg
 }  // namespace mlir
 
-#endif  // AKG_DIALECT_AFFINE_ANALYSIS_BUFFERANALYSIS_H
+#endif  // AKG_ANALYSIS_BUFFERANALYSIS_H
