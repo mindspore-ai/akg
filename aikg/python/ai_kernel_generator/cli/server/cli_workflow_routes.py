@@ -68,6 +68,9 @@ def _load_workflow_config(backend: str, dsl: str) -> Dict:
 def _build_main_agent_task_init_payload(state: dict) -> dict:
     """构造与 TaskInit 元数据对齐的 payload（供 CLI 复用现有展示逻辑）。"""
     status = str(state.get("task_init_status") or "").strip()
+    current_step = str(state.get("current_step") or "").strip().lower()
+    if current_step in ["cancelled", "irrelevant_input", "rejected_by_intent"]:
+        status = current_step
     return {
         "status": status,
         "op_name": state.get("op_name") or "",
@@ -164,7 +167,11 @@ def _create_main_op_agent(request: CliMainAgentRequest, session_id: str):
 
 
 def _build_confirm_response(
-    state: dict, state2: dict, task_init_payload: dict, dt: float
+    state: dict,
+    state2: dict,
+    task_init_payload: dict,
+    dt: float,
+    action: str = "confirm",
 ) -> CliExecuteResponse:
     """构建 confirm action 的响应。"""
     sub_workflow = (
@@ -196,7 +203,7 @@ def _build_confirm_response(
         metadata={
             "task_init": task_init_payload,
             "main_agent": {
-                "action": "confirm",
+                "action": action,
                 "current_step": state2.get("current_step", ""),
                 "available_workflows": state2.get("available_workflows", []),
                 "sub_workflow": sub_workflow,
@@ -244,6 +251,13 @@ def _build_task_init_response(
     )
 
 
+def _state_has_generation(state: dict) -> bool:
+    current_step = str(state.get("current_step") or "").strip().lower()
+    if current_step in ["completed", "failed"]:
+        return True
+    return bool(str(state.get("generated_code") or "").strip())
+
+
 async def _handle_confirm_action(
     request: CliMainAgentRequest, session_id: str, websocket: WebSocket
 ) -> None:
@@ -269,7 +283,40 @@ async def _handle_confirm_action(
     # task_init 元数据沿用 start/revise 生成的（便于 CLI 展示对齐）
     task_init_payload = _build_main_agent_task_init_payload(state)
 
-    result = _build_confirm_response(state, state2, task_init_payload, dt)
+    result = _build_confirm_response(state, state2, task_init_payload, dt, action="confirm")
+
+    await _safe_send_json(
+        websocket, pack_message(FinalResultMessage(result=result.model_dump()))
+    )
+
+
+async def _handle_continue_action(
+    request: CliMainAgentRequest, session_id: str, action: str, websocket: WebSocket
+) -> None:
+    """处理 auto/retry/retry_sub_agent 等 continue action。"""
+    prev = _main_agent_states.get(session_id)
+    if not isinstance(prev, dict):
+        raise ValueError("no main agent state found for this session; call start first")
+
+    agent = _create_main_op_agent(request, session_id)
+
+    t0 = asyncio.get_event_loop().time()
+    state = await agent.continue_conversation(
+        current_state=prev,
+        user_input=request.user_input,
+        action=action,
+    )
+    dt = asyncio.get_event_loop().time() - t0
+
+    if isinstance(state, dict):
+        state.pop("config", None)
+    _main_agent_states[session_id] = state
+
+    task_init_payload = _build_main_agent_task_init_payload(state)
+    if _state_has_generation(state):
+        result = _build_confirm_response(state, state, task_init_payload, dt, action=action)
+    else:
+        result = _build_task_init_response(state, action, task_init_payload, dt)
 
     await _safe_send_json(
         websocket, pack_message(FinalResultMessage(result=result.model_dump()))
@@ -341,16 +388,29 @@ async def main_agent_stream(websocket: WebSocket):
         os.environ["AIKG_STREAM_OUTPUT"] = "on" if request.use_stream else "off"
 
         action = (request.action or "").strip().lower()
-        if action not in {"start", "revise", "confirm", "cancel"}:
-            raise ValueError("action must be one of: start/revise/confirm/cancel")
+        allowed_actions = {
+            "start",
+            "revise",
+            "confirm",
+            "cancel",
+            "auto",
+            "retry",
+            "retry_sub_agent",
+        }
+        if action not in allowed_actions:
+            raise ValueError(
+                "action must be one of: start/revise/confirm/cancel/auto/retry/retry_sub_agent"
+            )
 
         # 根据 action 调用相应的处理函数
         if action == "cancel":
             await _handle_cancel_action(session_id, websocket)
         elif action == "confirm":
             await _handle_confirm_action(request, session_id, websocket)
-        else:  # start or revise
+        elif action in ["start", "revise"]:
             await _handle_start_revise_action(request, session_id, action, websocket)
+        else:
+            await _handle_continue_action(request, session_id, action, websocket)
 
     except WebSocketDisconnect:
         if session_id:
