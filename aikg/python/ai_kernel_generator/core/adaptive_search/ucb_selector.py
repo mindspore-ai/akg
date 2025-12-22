@@ -38,10 +38,15 @@ class UCBParentSelector:
         UCB(s) = Q(s) + c * sqrt(ln(N_total) / (N(s) + 1))
     
     其中:
-        - Q(s): 质量得分，基于性能计算
+        - Q(s): 质量得分，基于排名计算（Rank-based）
         - N(s): 该记录被选择的次数
         - N_total: 全局总选择次数
         - c: 探索系数
+    
+    Rank-based Quality 的优势:
+        - 量纲无关：Q 值范围固定在 [0, 1]，不受算子性能量级影响
+        - 区分度好：性能排第1的得 1.0，排最后的得 0.0
+        - 对不同算子（如 ReLU 3us vs Matmul 30us）具有一致的选择行为
     """
     
     def __init__(self,
@@ -68,30 +73,40 @@ class UCBParentSelector:
         
         logger.info(f"UCBParentSelector initialized: c={exploration_coef}, random={random_factor}, softmax={use_softmax}")
     
-    def _compute_quality(self, record: SuccessRecord, baseline_gen_time: float) -> float:
+    def _compute_quality(self, record: SuccessRecord, all_records: List[SuccessRecord]) -> float:
         """
-        计算质量得分 Q(s)
+        计算质量得分 Q(s) - 基于排名 (Rank-based)
         
-        性能越好（gen_time 越小），得分越高。
+        使用排名而非绝对性能值，使得 Q 值对不同算子具有一致的范围 [0, 1]。
+        
+        公式: Q = (n - rank) / (n - 1)
+            - rank=1 (最佳) → Q=1.0
+            - rank=n (最差) → Q=0.0
         
         Args:
             record: 成功记录
-            baseline_gen_time: 基准 gen_time（用于归一化）
+            all_records: 所有成功记录列表（用于计算排名）
             
         Returns:
             float: 质量得分 (0~1)
         """
-        gen_time = record.gen_time
+        n = len(all_records)
         
-        if gen_time == float('inf') or gen_time <= 0:
-            return 0.0
+        if n <= 1:
+            return 1.0  # 只有一条记录，得分为最高
         
-        if baseline_gen_time == float('inf') or baseline_gen_time <= 0:
-            baseline_gen_time = gen_time
+        # 按 gen_time 升序排序（性能好的排名靠前）
+        sorted_records = sorted(all_records, key=lambda r: r.gen_time)
         
-        # 归一化质量得分：baseline / (baseline + gen_time)
-        # gen_time 越小，得分越高
-        quality = baseline_gen_time / (baseline_gen_time + gen_time)
+        # 找到当前记录的排名 (1-based)
+        rank = 1
+        for i, r in enumerate(sorted_records):
+            if r.id == record.id:
+                rank = i + 1
+                break
+        
+        # 排名得分：rank=1 → 1.0, rank=n → 0.0
+        quality = (n - rank) / (n - 1)
         
         return quality
     
@@ -101,20 +116,23 @@ class UCBParentSelector:
         """
         计算探索项
         
+        公式: E = c × √(ln(N+1) / (n+1))
+        
+        使用 n+1 作为分母避免除零，同时让未被选过的任务(n=0)有较大但有限的 E 值。
+        
         Args:
-            selection_count: 该记录被选择的次数
-            total_selections: 全局总选择次数
+            selection_count: 该记录被选择的次数 n
+            total_selections: 全局总选择次数 N
             
         Returns:
             float: 探索得分
         """
         if total_selections == 0:
-            return float('inf')  # 首次选择，给最大探索奖励
+            # 首次选择，给一个基础探索值
+            return self.exploration_coef
         
-        if selection_count == 0:
-            return float('inf')  # 从未被选过，给最大探索奖励
-        
-        # UCB1 探索项: c * sqrt(ln(N) / n)
+        # UCB1 探索项: c * sqrt(ln(N+1) / (n+1))
+        # 使用 +1 避免除零，让 count=0 的任务 E 值较大但不是无穷
         exploration = self.exploration_coef * math.sqrt(
             math.log(total_selections + 1) / (selection_count + 1)
         )
@@ -123,20 +141,20 @@ class UCBParentSelector:
     
     def _compute_ucb_score(self, 
                            record: SuccessRecord,
-                           baseline_gen_time: float,
+                           all_records: List[SuccessRecord],
                            total_selections: int) -> float:
         """
         计算 UCB 得分
         
         Args:
             record: 成功记录
-            baseline_gen_time: 基准 gen_time
+            all_records: 所有成功记录列表
             total_selections: 全局总选择次数
             
         Returns:
             float: UCB 得分
         """
-        quality = self._compute_quality(record, baseline_gen_time)
+        quality = self._compute_quality(record, all_records)
         exploration = self._compute_exploration(record.selection_count, total_selections)
         
         # 添加随机扰动
@@ -145,9 +163,9 @@ class UCBParentSelector:
         ucb_score = quality + exploration + random_term
         
         logger.debug(
-            f"Record {record.id[:8]}: Q={quality:.4f}, E={exploration:.4f}, "
+            f"Record {record.id}: Q={quality:.4f}, E={exploration:.4f}, "
             f"R={random_term:.4f}, UCB={ucb_score:.4f} "
-            f"(gen_time={record.gen_time:.4f}, count={record.selection_count})"
+            f"(gen_time={record.gen_time:.4f}us, count={record.selection_count})"
         )
         
         return ucb_score
@@ -165,7 +183,6 @@ class UCBParentSelector:
         
         records = self.db.get_all()
         total_selections = self.db.get_total_selections()
-        baseline_gen_time = self.db.get_best_gen_time()
         
         if len(records) == 1:
             # 只有一条记录，直接返回
@@ -174,10 +191,10 @@ class UCBParentSelector:
             logger.info(f"Only one record, selecting {selected.id}")
             return selected
         
-        # 计算所有记录的 UCB 得分
+        # 计算所有记录的 UCB 得分（使用 Rank-based Quality）
         scores: List[tuple] = []
         for record in records:
-            score = self._compute_ucb_score(record, baseline_gen_time, total_selections)
+            score = self._compute_ucb_score(record, records, total_selections)
             scores.append((record, score))
         
         if self.use_softmax:

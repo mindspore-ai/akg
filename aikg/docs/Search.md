@@ -72,32 +72,48 @@ ai_kernel_generator/core/adaptive_search/
 
 ### 3.1 UCB Formula
 
-$$UCB(s) = Q(s) + c \cdot \sqrt{\frac{\ln N_{total}}{N(s) + 1}}$$
+$$UCB(s) = Q(s) + c \cdot \sqrt{\frac{\ln (N_{total}+1)}{N(s) + 1}}$$
 
 Where:
-- **Q(s)**: Quality score based on performance, lower gen_time is better
+- **Q(s)**: Quality score based on **rank** (Rank-based)
 - **N(s)**: Number of times this node has been selected
 - **N_total**: Global total selection count
 - **c**: Exploration coefficient (default √2 ≈ 1.414)
 
-### 3.2 Quality Score Calculation
+### 3.2 Quality Score Calculation (Rank-based)
 
-$$Q(s) = \frac{baseline}{baseline + gen\_time}$$
+$$Q(s) = \frac{n - rank}{n - 1}$$
 
-Where baseline is the current best gen_time.
+Where:
+- **n**: Total number of records in DB
+- **rank**: Task's rank by gen_time ascending (1 = best)
 
-### 3.3 Selection Example
+**Advantages of Rank-based**:
+- **Scale-invariant**: Q values are fixed in [0, 1], independent of operator performance scale
+- **Clear differentiation**: rank=1 → Q=1.0, rank=n → Q=0.0
+- **Cross-operator consistency**: Same selection behavior for ReLU (3us) and Matmul (300us)
+
+### 3.3 Exploration Term Calculation
+
+$$E(s) = c \cdot \sqrt{\frac{\ln (N_{total}+1)}{N(s) + 1}}$$
+
+- Uses `N(s)+1` as denominator to avoid division by zero
+- Unselected tasks (N(s)=0) get a larger but **finite** exploration value
+- Does NOT unconditionally prioritize unselected tasks
+
+### 3.4 Selection Example
 
 ```
-Records in DB:
+Records in DB (n=4):
 ┌────────────────────────────────────────────────────────────────┐
-│ ID     │ gen_time │ selection_count │ Q(s)  │ explore │ UCB   │
+│ ID     │ gen_time │ rank │ Q(s)  │ count │ E     │ UCB   │
 ├────────────────────────────────────────────────────────────────┤
-│ task_1 │ 0.5ms    │ 5               │ 0.67  │ 0.42    │ 1.09  │ ← Good perf but selected too much
-│ task_2 │ 0.8ms    │ 1               │ 0.56  │ 0.89    │ 1.45  │ ← Highest UCB, selected
-│ task_3 │ 1.2ms    │ 0               │ 0.45  │ 1.20    │ 1.65  │ ← Never selected, high explore
-│ task_4 │ 0.6ms    │ 3               │ 0.63  │ 0.58    │ 1.21  │
+│ task_1 │ 0.5ms    │  1   │ 1.00  │   5   │ 0.60  │ 1.60  │ ← Best performance
+│ task_4 │ 0.6ms    │  2   │ 0.67  │   3   │ 0.73  │ 1.40  │
+│ task_2 │ 0.8ms    │  3   │ 0.33  │   1   │ 0.95  │ 1.28  │
+│ task_3 │ 1.2ms    │  4   │ 0.00  │   0   │ 1.34  │ 1.34  │ ← Never selected
 └────────────────────────────────────────────────────────────────┘
+Result: task_1 has highest UCB (1.60), selected
 ```
 
 ---
