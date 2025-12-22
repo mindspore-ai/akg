@@ -618,6 +618,275 @@ def my_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
         print("正确代码: 无错误")
 
 
+class TestComplexKernelScenarios:
+    """测试复杂的 kernel 场景（多行定义、多装饰器、混合函数等）"""
+    
+    @pytest.fixture
+    def checker(self):
+        return CodeChecker(backend="ascend", dsl="triton_ascend")
+    
+    @pytest.mark.asyncio
+    async def test_multiline_function_definition(self, checker):
+        """测试多行函数定义中的 continue/break 能被检测"""
+        code = '''
+import triton
+import triton.language as tl
+
+@triton.jit
+def complex_kernel(
+    input_ptr,
+    output_ptr,
+    n_elements,
+    stride_x, stride_y, stride_z,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    for i in range(BLOCK_M):
+        if i > 5: continue
+        if i < 2: break
+'''
+        passed, error_message, errors = await checker.check(code)
+        
+        assert passed is False
+        assert len(errors) == 2
+        error_details = [e["detail"].lower() for e in errors]
+        assert any("continue" in d for d in error_details)
+        assert any("break" in d for d in error_details)
+        
+        print("\n=== 测试: 多行函数定义 ===")
+        print(f"检测到 {len(errors)} 个错误 ✓")
+    
+    @pytest.mark.asyncio
+    async def test_multiple_decorators(self, checker):
+        """测试多个装饰器叠加的 kernel"""
+        code = '''
+import triton
+import triton.language as tl
+
+@triton.autotune(
+    configs=[triton.Config({'BLOCK_M': 64})],
+    key=['n_elements'],
+)
+@triton.jit
+def autotuned_kernel(
+    input_ptr, output_ptr, n_elements,
+    BLOCK_M: tl.constexpr,
+):
+    for i in range(10):
+        if i > 5: continue
+'''
+        passed, error_message, errors = await checker.check(code)
+        
+        assert passed is False
+        assert len(errors) >= 1
+        assert any("continue" in e["detail"].lower() for e in errors)
+        
+        print("\n=== 测试: 多装饰器叠加 ===")
+        print(f"检测到 {len(errors)} 个错误 ✓")
+    
+    @pytest.mark.asyncio
+    async def test_multiple_kernels_in_file(self, checker):
+        """测试同一文件中多个 kernel 函数"""
+        code = '''
+import triton
+import triton.language as tl
+
+@triton.jit
+def kernel_one(ptr, N: tl.constexpr):
+    for i in range(N):
+        if i > 5: continue  # 第一个 kernel 的 continue
+
+@triton.jit
+def kernel_two(ptr, M: tl.constexpr):
+    for j in range(M):
+        if j < 2: break     # 第二个 kernel 的 break
+'''
+        passed, error_message, errors = await checker.check(code)
+        
+        assert passed is False
+        assert len(errors) == 2
+        
+        # 验证两个 kernel 的错误都被检测到
+        error_lines = [e["line"] for e in errors]
+        assert len(set(error_lines)) == 2  # 两个不同的行
+        
+        print("\n=== 测试: 多个 kernel 函数 ===")
+        print(f"检测到 {len(errors)} 个错误，分别在行 {error_lines} ✓")
+    
+    @pytest.mark.asyncio
+    async def test_kernel_and_helper_mixed(self, checker):
+        """测试 kernel 和普通函数混合，只检测 kernel 内的错误"""
+        code = '''
+import triton
+import triton.language as tl
+
+def helper_function(x):
+    """普通的 Python 函数"""
+    for i in range(10):
+        if i > 5:
+            continue  # 普通函数中的 continue，不应该报错
+        if i < 2:
+            break     # 普通函数中的 break，不应该报错
+    return x * 2
+
+@triton.jit
+def my_kernel(ptr, N: tl.constexpr):
+    for i in range(N):
+        if i > 5: continue  # kernel 中的 continue，应该报错
+
+def launcher(x, y):
+    """launcher 函数"""
+    for i in range(len(x)):
+        if i > 10:
+            continue  # launcher 中的 continue，不应该报错
+    my_kernel[(1,)](x, 64)
+'''
+        passed, error_message, errors = await checker.check(code)
+        
+        assert passed is False
+        assert len(errors) == 1  # 只有 kernel 内的一个 continue
+        assert "continue" in errors[0]["detail"].lower()
+        
+        print("\n=== 测试: kernel 和普通函数混合 ===")
+        print(f"只检测到 kernel 内的 1 个错误（行 {errors[0]['line']}） ✓")
+    
+    @pytest.mark.asyncio
+    async def test_decorator_with_arguments(self, checker):
+        """测试带参数的装饰器"""
+        code = '''
+import triton
+import triton.language as tl
+
+@triton.jit(do_not_specialize=['n_elements'])
+def kernel_with_args(
+    ptr,
+    n_elements,
+    BLOCK: tl.constexpr,
+):
+    for i in range(BLOCK):
+        if i > 5: continue
+'''
+        passed, error_message, errors = await checker.check(code)
+        
+        assert passed is False
+        assert len(errors) >= 1
+        assert any("continue" in e["detail"].lower() for e in errors)
+        
+        print("\n=== 测试: 带参数的装饰器 ===")
+        print(f"检测到 {len(errors)} 个错误 ✓")
+    
+    @pytest.mark.asyncio
+    async def test_same_line_statements(self, checker):
+        """测试同一行的各种写法"""
+        code = '''
+import triton
+import triton.language as tl
+
+@triton.jit
+def kernel(ptr, N: tl.constexpr):
+    for i in range(N):
+        if i > 5: continue
+        if i < 2: break
+        if i == 3: return
+'''
+        passed, error_message, errors = await checker.check(code)
+        
+        assert passed is False
+        assert len(errors) == 3  # continue, break, return
+        
+        error_types = [e["detail"].lower() for e in errors]
+        assert any("continue" in t for t in error_types)
+        assert any("break" in t for t in error_types)
+        assert any("return" in t for t in error_types)
+        
+        print("\n=== 测试: 同一行的语句 ===")
+        print(f"检测到 continue, break, return 共 {len(errors)} 个错误 ✓")
+    
+    @pytest.mark.asyncio
+    async def test_ascend_specific_while(self, checker):
+        """测试 Ascend 特有的规则（while）"""
+        code = '''
+import triton
+import triton.language as tl
+
+@triton.jit
+def kernel(ptr, N: tl.constexpr):
+    i = 0
+    while i < 10:
+        i += 1
+'''
+        passed, error_message, errors = await checker.check(code)
+        
+        assert passed is False
+        assert len(errors) == 1  # while
+        
+        error_details = [e["detail"].lower() for e in errors]
+        assert any("while" in d for d in error_details)
+        
+        print("\n=== 测试: Ascend 特有规则 (while) ===")
+        print(f"检测到 while 共 {len(errors)} 个错误 ✓")
+    
+    @pytest.mark.asyncio
+    async def test_kernel_range_detection_with_ast(self, checker):
+        """直接测试 AST kernel 范围检测"""
+        code = '''
+import triton
+
+def helper():
+    pass
+
+@triton.jit
+def kernel_one(ptr):
+    x = 1
+
+@triton.jit
+def kernel_two(ptr):
+    y = 2
+
+def another_helper():
+    pass
+'''
+        ranges = checker._find_kernel_ranges(code)
+        
+        assert len(ranges) == 2  # 应该找到 2 个 kernel
+        
+        # 验证范围合理（kernel_one 和 kernel_two）
+        print("\n=== 测试: AST kernel 范围检测 ===")
+        print(f"检测到 {len(ranges)} 个 kernel 范围: {ranges} ✓")
+    
+    @pytest.mark.asyncio
+    async def test_very_long_kernel(self, checker):
+        """测试很长的 kernel 函数（模拟真实场景）"""
+        # 构造一个较长的 kernel，中间有 continue
+        body_lines = []
+        for i in range(50):
+            body_lines.append(f"    x{i} = tl.load(ptr + {i})")
+        body_lines.insert(25, "    if condition: continue  # 在中间位置")
+        
+        code = f'''
+import triton
+import triton.language as tl
+
+@triton.jit
+def long_kernel(
+    ptr,
+    condition,
+    BLOCK: tl.constexpr,
+):
+{chr(10).join(body_lines)}
+'''
+        passed, error_message, errors = await checker.check(code)
+        
+        assert passed is False
+        assert len(errors) >= 1
+        assert any("continue" in e["detail"].lower() for e in errors)
+        
+        print("\n=== 测试: 很长的 kernel 函数 ===")
+        print(f"在 {len(code.splitlines())} 行代码中检测到 {len(errors)} 个错误 ✓")
+
+
 # 运行测试的简便方法
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
