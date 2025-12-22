@@ -420,7 +420,7 @@ class CliClient:
         """
         if hasattr(message, "task_id"):
             # 只有当 AIKG_ONLY_USE_MAIN_TAB=1 时才重置 task_id，默认为 0
-            if os.getenv("AIKG_ONLY_USE_MAIN_TAB", "1") == "1":
+            if os.getenv("AIKG_ONLY_USE_MAIN_TAB", "0") == "1":
                 message.task_id = ""
         if not self.presenter:
             logger.warning(

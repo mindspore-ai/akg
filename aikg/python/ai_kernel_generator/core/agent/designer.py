@@ -237,7 +237,7 @@ class Designer(AgentBase):
             "agent_name": "designer",
             "framework": task_info.get("framework", ""),
             "hash": task_info.get("task_id", "Designer"),
-            "task_id": "",
+            "task_id": task_info.get("task_id", ""),
             "step": self.llm_step_count,
             "workflow_name": task_info.get("workflow_name", ""),
         }
