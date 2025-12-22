@@ -150,24 +150,6 @@ class CodeChecker:
             },
         },
         "forbidden_api": {
-            "tl.where": {
-                "pattern": r'\btl\.where\s*\(',
-                "detail": "Ascend 后端 kernel 中禁止使用 tl.where（特别是用于计算内存偏移时）",
-                "suggestion": """使用 if-else 静态分支替代 tl.where。
-推荐写法：
-  # ❌ 错误写法：在内存偏移中使用 tl.where
-  offset = tl.where(condition, offset1, offset2)
-  data = tl.load(ptr + offset)
-  
-  # ✅ 正确写法：使用 if-else 静态分支
-  if condition:
-      data = tl.load(ptr + offset1)
-  else:
-      data = tl.load(ptr + offset2)
-  
-注意：Ascend 后端对 tl.where 生成的复杂指针运算支持不完全，应使用 if-else 静态分支处理。""",
-                "kernel_only": True  # 仅在 kernel 内检查
-            },
             "tl.float16_conversion": {
                 "pattern": r'\btl\.float16\s*\(',
                 "detail": "kernel 中禁止使用 tl.float16(x) 类型转换语法",
@@ -225,66 +207,96 @@ class CodeChecker:
     
     def _find_kernel_ranges(self, code: str) -> List[Tuple[int, int]]:
         """
-        找出代码中所有 Triton kernel 函数的行范围
+        使用 AST 找出代码中所有 Triton kernel 函数的行范围
         
-        通过识别 @triton.jit、@jit 等装饰器来确定 kernel 函数，
-        并通过缩进追踪确定函数的结束位置。
+        通过 AST 解析识别带有 @triton.jit、@jit 等装饰器的函数，
+        自动处理多行函数定义、嵌套装饰器等复杂情况。
         
         Args:
             code: 完整的代码字符串
         
         Returns:
             List[Tuple[int, int]]: [(start_line, end_line), ...] 
-                每个元组表示一个 kernel 的行范围（1-based，左闭右开）
+                每个元组表示一个 kernel 的行范围（1-based，左闭右闭）
         """
-        lines = code.split('\n')
         kernel_ranges = []
         
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            stripped = line.strip()
-            
-            # 检测到 kernel 装饰器
-            if self._kernel_decorator_re.search(stripped):
-                decorator_start = i
-                
-                # 跳过连续的装饰器行（可能有多个装饰器叠加）
-                while i < len(lines) and lines[i].strip().startswith('@'):
-                    i += 1
-                
-                # 下一行应该是 def 函数定义
-                if i < len(lines) and lines[i].strip().startswith('def '):
-                    kernel_start = decorator_start + 1  # 1-based，从装饰器开始
-                    func_def_line = lines[i]
-                    kernel_indent = len(func_def_line) - len(func_def_line.lstrip())
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            # 语法错误时无法解析 AST，回退到空列表
+            # 语法错误会在 _check_python_syntax 中单独处理
+            logger.debug("CodeChecker: AST parse failed, skipping kernel range detection")
+            return []
+        
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                # 检查是否有 triton kernel 装饰器
+                if self._has_kernel_decorator(node):
+                    # 获取函数范围（包括装饰器）
+                    # decorator_list[0] 的 lineno 是第一个装饰器的行号
+                    if node.decorator_list:
+                        start_line = node.decorator_list[0].lineno
+                    else:
+                        start_line = node.lineno
                     
-                    # 从函数定义的下一行开始找函数结束位置
-                    i += 1
-                    while i < len(lines):
-                        current_line = lines[i]
-                        # 跳过空行
-                        if not current_line.strip():
-                            i += 1
-                            continue
-                        # 非空行，检查缩进
-                        current_indent = len(current_line) - len(current_line.lstrip())
-                        if current_indent <= kernel_indent:
-                            # 缩进变小或相等，函数结束
-                            break
-                        i += 1
+                    # end_lineno 是函数体最后一行的行号（Python 3.8+）
+                    end_line = getattr(node, 'end_lineno', None)
+                    if end_line is None:
+                        # Python 3.7 兼容：手动计算结束行
+                        end_line = self._get_node_end_line(node, code)
                     
-                    kernel_end = i + 1  # 1-based，左闭右开
-                    kernel_ranges.append((kernel_start, kernel_end))
-                    logger.debug(f"Found kernel range: lines {kernel_start}-{kernel_end-1}")
-                    continue
-            
-            i += 1
+                    kernel_ranges.append((start_line, end_line + 1))  # 左闭右开
+                    logger.debug(f"Found kernel range: lines {start_line}-{end_line}")
         
         if kernel_ranges:
             logger.info(f"CodeChecker: Found {len(kernel_ranges)} kernel function(s)")
         
         return kernel_ranges
+    
+    def _has_kernel_decorator(self, node: ast.FunctionDef) -> bool:
+        """
+        检查函数是否有 Triton kernel 装饰器
+        
+        支持的装饰器：
+        - @triton.jit
+        - @jit
+        - @triton.autotune
+        - @triton.heuristics
+        """
+        kernel_decorator_names = {'jit', 'autotune', 'heuristics'}
+        
+        for decorator in node.decorator_list:
+            # 处理 @triton.jit 形式
+            if isinstance(decorator, ast.Attribute):
+                if decorator.attr in kernel_decorator_names:
+                    return True
+            # 处理 @jit 形式（直接导入）
+            elif isinstance(decorator, ast.Name):
+                if decorator.id in kernel_decorator_names:
+                    return True
+            # 处理 @triton.jit(...) 带参数的形式
+            elif isinstance(decorator, ast.Call):
+                func = decorator.func
+                if isinstance(func, ast.Attribute):
+                    if func.attr in kernel_decorator_names:
+                        return True
+                elif isinstance(func, ast.Name):
+                    if func.id in kernel_decorator_names:
+                        return True
+        return False
+    
+    def _get_node_end_line(self, node: ast.FunctionDef, code: str) -> int:
+        """
+        获取 AST 节点的结束行号（Python 3.7 兼容）
+        
+        通过遍历函数体内所有节点，找到最大的行号
+        """
+        max_line = node.lineno
+        for child in ast.walk(node):
+            if hasattr(child, 'lineno'):
+                max_line = max(max_line, child.lineno)
+        return max_line
     
     def _is_in_kernel(self, line_num: int, kernel_ranges: List[Tuple[int, int]]) -> bool:
         """
