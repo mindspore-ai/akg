@@ -24,10 +24,25 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List
 from langgraph.graph import StateGraph, END
 from ai_kernel_generator.core.agent.op_task_builder import OpTaskBuilder
-from ai_kernel_generator.core.agent.sub_agent_registry import get_registry
+from ai_kernel_generator.core.sub_agent_registry import get_registry
 from ai_kernel_generator.core.agent.agent_base import AgentBase
 from ai_kernel_generator.utils.langgraph.conversational_state import ConversationalOpGenState, Message
 from ai_kernel_generator.utils.common_utils import ParserFactory
+
+from ai_kernel_generator.utils.main_op_agent_utils import (
+    is_operator_related_intent,
+    quick_match_sub_agent_preference,
+    extract_sub_agent_from_reasoning,
+    user_explicitly_requests_evolve,
+    is_modification_request,
+    simple_action_heuristic,
+    format_agents_info_for_llm
+)
+
+from ai_kernel_generator.utils.main_op_agent_display import (
+    format_display_message,
+    get_hint_message
+)
 
 logger = logging.getLogger(__name__)
 
@@ -192,17 +207,13 @@ class MainOpAgent(AgentBase):
             logger.warning(f"⚠️ Conversation history is getting long: {len(conversation_history)}/{MAX_CONVERSATION_HISTORY_LENGTH} messages. "
                           f"Older messages will be automatically dropped.")
         
-        # ========== 意图分类（在 OpTaskBuilder 之前过滤） ==========
-        # 只在第一轮对话时进行意图分类，后续轮次由动作分析处理
-        # 判断是否需要进行意图分类：
-        # - 只在第一轮（conversation_history <= 1）
-        # - 且不是修改请求（"把shape改成..."）
         user_request = state.get("user_request", "")
         conversation_history = state.get("conversation_history", [])
         is_first_turn = len(conversation_history) <= 1  # 只有用户的第一条消息
-        is_modification_request = self._is_modification_request(user_request, state)
+        has_previous_code = bool(state.get("task_code"))
+        is_modification_req = is_modification_request(user_request, has_previous_code)
         
-        if self.use_intent_classification and is_first_turn and not is_modification_request:
+        if self.use_intent_classification and is_first_turn and not is_modification_req:
             conversation_history = state.get("conversation_history", [])
             
             try:
@@ -245,7 +256,7 @@ class MainOpAgent(AgentBase):
                     confidence = 0.3
                 
                 # 判断是否是算子相关
-                is_operator_related = self._is_operator_related_intent(intent, confidence, threshold=0.6)
+                is_operator_related = is_operator_related_intent(intent, confidence, threshold=0.6)
                 
                 logger.info(f"Intent classification result: intent={intent}, confidence={confidence:.2f}, operator_related={is_operator_related}")
                 
@@ -433,9 +444,6 @@ class MainOpAgent(AgentBase):
     async def _user_confirm_node(self, state: ConversationalOpGenState) -> Dict[str, Any]:
         """
         用户确认节点: 标记等待用户确认状态
-        
-        注意：task code 的显示由外部调用者（如 run_main_op_agent.py）负责，
-        这样可以更好地控制交互体验。
         """
         logger.info("=== User Confirm Node ===")
         
@@ -510,7 +518,8 @@ class MainOpAgent(AgentBase):
         user_request = state.get("user_request", "")
         
         # 🔍 首先检查用户是否明确要求使用 evolve
-        if self._user_explicitly_requests_evolve(user_request, state):
+        conversation_history = state.get("conversation_history", [])
+        if user_explicitly_requests_evolve(user_request, conversation_history):
             logger.info("User explicitly requested evolve, using evolve sub-agent")
             return {
                 "sub_workflow": "evolve",
@@ -523,7 +532,7 @@ class MainOpAgent(AgentBase):
             agents_info = self.sub_agent_registry.get_agents_detailed_info()
             
             # 格式化子 Agent 信息供 LLM 选择
-            agents_info_text = self._format_agents_info_for_llm(agents_info)
+            agents_info_text = format_agents_info_for_llm(agents_info)
             
             # 构建 prompt 输入
             input_data = {
@@ -578,29 +587,6 @@ class MainOpAgent(AgentBase):
                 "sub_agent_selection_confidence": 0.0
             }
 
-    def _format_agents_info_for_llm(self, agents_info: Dict[str, Dict[str, Any]]) -> str:
-        """格式化子 Agent 信息供 LLM 理解"""
-        lines = []
-        for agent_name, info in agents_info.items():
-            lines.append(f"\n{'='*60}")
-            lines.append(f"Agent: {info['name']}")
-            lines.append(f"Description: {info['description']}")
-            lines.append(f"\nWorkflow Steps:")
-            for step in info['workflow_steps']:
-                lines.append(f"  - {step}")
-            lines.append(f"\nUse Cases:")
-            for case in info['use_cases']:
-                lines.append(f"  - {case}")
-            lines.append(f"\nAdvantages:")
-            for adv in info['advantages']:
-                lines.append(f"  + {adv}")
-            lines.append(f"\nLimitations:")
-            for lim in info['limitations']:
-                lines.append(f"  - {lim}")
-            lines.append(f"\nPerformance: {info['performance']}")
-        lines.append(f"{'='*60}\n")
-        return "\n".join(lines)
-
     async def _sub_agent_execution_node(self, state: ConversationalOpGenState) -> Dict[str, Any]:
         """
         子 Agent 执行节点: 通过注册中心调用子 Agent 生成算子代码
@@ -626,7 +612,8 @@ class MainOpAgent(AgentBase):
             if sub_agent is None:
                 raise ValueError(f"Sub-agent '{sub_workflow}' not found in registry")
             
-            logger.info(f"Using sub-agent: {sub_agent.get_name()} - {sub_agent.get_description()}")
+            agent_info = sub_agent.get_detailed_info()
+            logger.info(f"Using sub-agent: {sub_agent.get_name()} - {agent_info.get('description', '')}")
             
             # 执行子 Agent
             success, result = await sub_agent.execute(
@@ -693,8 +680,7 @@ class MainOpAgent(AgentBase):
             建议的 action: 'confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel'
         """
         if not self.use_auto_action_analysis:
-            # 如果禁用了自动分析，使用简单的启发式规则
-            return self._simple_action_heuristic(state, user_input)
+            return simple_action_heuristic(state, user_input)
 
         try:
             # 构建对话历史文本
@@ -733,7 +719,7 @@ class MainOpAgent(AgentBase):
             except Exception as parse_error:
                 logger.warning(f"Failed to parse action analysis result: {parse_error}")
                 # 解析失败，使用启发式规则
-                return self._simple_action_heuristic(state, user_input)
+                return simple_action_heuristic(state, user_input)
 
             logger.info(f"LLM suggested action: {suggested_action} (confidence: {confidence:.2f})")
             logger.debug(f"Analysis reasoning: {analysis_reasoning}")
@@ -751,36 +737,7 @@ class MainOpAgent(AgentBase):
 
         except Exception as e:
             logger.error(f"Action analysis failed: {e}, using heuristic")
-            return self._simple_action_heuristic(state, user_input)
-
-    def _simple_action_heuristic(self, state: Dict[str, Any], user_input: str) -> str:
-        """简单的启发式规则来决定 action（作为 fallback）"""
-        user_lower = user_input.lower()
-        has_task_code = bool(state.get("task_code"))
-        has_generated_code = bool(state.get("generated_code"))
-
-        # 检查取消意图
-        if any(kw in user_lower for kw in ['取消', '退出', '结束', 'cancel', 'quit', 'exit']):
-            return 'cancel'
-
-        # 已生成代码的情况
-        if has_generated_code:
-            # 明确提到 task/torch → retry
-            if any(kw in user_lower for kw in ['task', 'torch', '任务', 'pytorch']):
-                return 'retry'
-            # 其他情况 → retry_sub_agent
-            return 'retry_sub_agent'
-
-        # 有 task_code 但未生成代码
-        if has_task_code:
-            # 检查确认意图
-            if any(kw in user_lower for kw in ['确认', 'ok', 'yes', '好', '生成', 'generate']):
-                return 'confirm'
-            # 其他情况 → revise
-            return 'revise'
-
-        # 默认 revise
-        return 'revise'
+            return simple_action_heuristic(state, user_input)
 
     async def start_conversation(self, user_request: str, task_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -828,6 +785,11 @@ class MainOpAgent(AgentBase):
         })
 
         logger.info(f"start_conversation result has task_init_status: {result.get('task_init_status')}")
+        
+        # 添加显示消息和提示消息
+        result["display_message"] = format_display_message(result)
+        result["hint_message"] = get_hint_message(result)
+        
         return result
 
     async def continue_conversation(self, 
@@ -862,18 +824,17 @@ class MainOpAgent(AgentBase):
             current_state["conversation_history"] = []
         current_state["conversation_history"].append(user_message)
         
-        # 🔍 快速匹配：检查用户是否明确要求换子Agent（减少LLM调用）
-        quick_matched_sub_agent = self._quick_match_sub_agent_preference(user_input)
+        quick_matched_sub_agent = quick_match_sub_agent_preference(user_input)
         if quick_matched_sub_agent:
             logger.info(f"⚡ Quick match: User requested '{quick_matched_sub_agent}' sub-agent")
             current_state["sub_workflow"] = quick_matched_sub_agent
             current_state["sub_workflow_specified_by_user"] = True
             
             # 根据当前状态决定action
-            # 判断是否已经执行过 sub_agent（不管成功失败）
+            # 判断是否已经执行过 sub_agent
             has_attempted_generation = (
-                current_state.get("generated_code") or  # 有生成的代码（可能失败）
-                current_state.get("generation_success") is not None or  # 有生成成功标记
+                current_state.get("generated_code") or  # 有生成的代码
+                current_state.get("generation_success") is not None or
                 current_state.get("verification_result") is not None or  # 有验证结果标记
                 "sub_agent" in current_state.get("current_step", "")  # 当前在sub_agent阶段
             )
@@ -890,11 +851,12 @@ class MainOpAgent(AgentBase):
             action = await self._analyze_user_action(current_state, user_input)
             logger.info(f"Auto-analyzed action: {action}")
             
-            # 🧠 LLM识别：检查LLM推理中是否提到子Agent（备选方案）
+            # 检查LLM推理中是否提到子Agent
             if action == "retry_sub_agent" and not current_state.get("sub_workflow_specified_by_user"):
-                llm_detected_sub_agent = self._extract_sub_agent_from_reasoning(current_state)
+                reasoning = current_state.get("last_action_reasoning", "")
+                llm_detected_sub_agent = extract_sub_agent_from_reasoning(reasoning)
                 if llm_detected_sub_agent:
-                    logger.info(f"🧠 LLM detected: User wants '{llm_detected_sub_agent}' sub-agent")
+                    logger.info(f"LLM detected: User wants '{llm_detected_sub_agent}' sub-agent")
                     current_state["sub_workflow"] = llm_detected_sub_agent
                     current_state["sub_workflow_specified_by_user"] = True
 
@@ -956,7 +918,6 @@ class MainOpAgent(AgentBase):
                 logger.info(f"  - sub_workflow_specified_by_user: {current_state.get('sub_workflow_specified_by_user')}")
                 logger.info(f"  - user_confirmed: True (skip op_task_build rebuild)")
                 logger.info(f"  - has task_code: {bool(current_state.get('task_code'))}")
-                logger.info(f"  - cleared generated_code: True")
                 logger.info("=" * 80)
         elif action == "cancel":  # cancel
             # 判断是正常退出还是无关问题
@@ -999,6 +960,10 @@ class MainOpAgent(AgentBase):
             "recursion_limit": 100
         })
         
+        # 添加显示消息和提示消息
+        result["display_message"] = format_display_message(result)
+        result["hint_message"] = get_hint_message(result)
+        
         return result
 
     def save_conversation(self, state: Dict[str, Any], filepath: str):
@@ -1019,201 +984,3 @@ class MainOpAgent(AgentBase):
             json.dump(conversation_data, f, indent=2, ensure_ascii=False)
         
         logger.info(f"Conversation saved to: {filepath}")
-
-    def _is_operator_related_intent(self, intent: str, confidence: float, threshold: float = 0.6) -> bool:
-        """判断是否是算子相关的意图
-        
-        Args:
-            intent: 意图类型（operator_dev/general_question/unclear）
-            confidence: 置信度（0.0-1.0）
-            threshold: 置信度阈值
-            
-        Returns:
-            bool: 是否是算子相关
-        """
-        if intent == "operator_dev":
-            # 明确是算子开发相关
-            return True
-        elif intent == "general_question" and confidence >= threshold:
-            # 高置信度的一般问题 → 拒绝
-            return False
-        else:
-            # unclear 或低置信度 → 让后续流程处理（安全策略）
-            return True
-
-    def _quick_match_sub_agent_preference(self, user_input: str) -> Optional[str]:
-        """快速匹配用户是否明确要求使用特定的子Agent（字符串匹配，减少LLM调用）
-        
-        Args:
-            user_input: 用户输入
-            
-        Returns:
-            Optional[str]: 如果匹配到，返回子Agent名称 ("evolve" 或 "codeonly")，否则返回 None
-        """
-        if not user_input:
-            return None
-            
-        user_input_lower = user_input.lower()
-        
-        # 检测换成 evolve 的关键词
-        switch_to_evolve_keywords = [
-            "换evolve", "用evolve", "使用evolve", "改用evolve", "试试evolve", "换成evolve",
-            "换用evolve", "改为evolve", "切换evolve", "选evolve", "要evolve",
-            "evolve重新生成", "evolve生成", "evolve优化", "用一下evolve",
-            "switch to evolve", "use evolve", "try evolve", "with evolve", "change to evolve"
-        ]
-        
-        for keyword in switch_to_evolve_keywords:
-            if keyword in user_input_lower:
-                logger.info(f"Quick matched evolve keyword: '{keyword}'")
-                return "evolve"
-        
-        # 检测换成 codeonly 的关键词
-        switch_to_codeonly_keywords = [
-            "换codeonly", "用codeonly", "使用codeonly", "改用codeonly", "试试codeonly", "换成codeonly",
-            "换用codeonly", "改为codeonly", "切换codeonly", "选codeonly", "要codeonly",
-            "codeonly重新生成", "codeonly生成", "用一下codeonly",
-            "switch to codeonly", "use codeonly", "try codeonly", "with codeonly", "change to codeonly"
-        ]
-        
-        for keyword in switch_to_codeonly_keywords:
-            if keyword in user_input_lower:
-                logger.info(f"Quick matched codeonly keyword: '{keyword}'")
-                return "codeonly"
-        
-        return None
-    
-    def _extract_sub_agent_from_reasoning(self, state: Dict[str, Any]) -> Optional[str]:
-        """从LLM的推理中提取用户要求的子Agent
-        
-        Args:
-            state: 当前状态（包含last_action_reasoning）
-            
-        Returns:
-            Optional[str]: 如果LLM推理中提到子Agent，返回名称，否则返回 None
-        """
-        reasoning = state.get("last_action_reasoning", "")
-        if not reasoning:
-            return None
-        
-        reasoning_lower = reasoning.lower()
-        
-        # 检查推理中是否提到 evolve
-        evolve_indicators = [
-            "使用 evolve", "用 evolve", "evolve 子agent", "evolve子agent",
-            "要求使用 evolve", "明确要求 evolve", "指定 evolve",
-            "use evolve", "using evolve", "evolve sub-agent", "evolve subagent"
-        ]
-        
-        for indicator in evolve_indicators:
-            if indicator in reasoning_lower:
-                logger.info(f"LLM reasoning indicates evolve: '{indicator}'")
-                return "evolve"
-        
-        # 检查推理中是否提到 codeonly
-        codeonly_indicators = [
-            "使用 codeonly", "用 codeonly", "codeonly 子agent", "codeonly子agent",
-            "要求使用 codeonly", "明确要求 codeonly", "指定 codeonly",
-            "use codeonly", "using codeonly", "codeonly sub-agent", "codeonly subagent"
-        ]
-        
-        for indicator in codeonly_indicators:
-            if indicator in reasoning_lower:
-                logger.info(f"LLM reasoning indicates codeonly: '{indicator}'")
-                return "codeonly"
-        
-        return None
-    
-    def _user_explicitly_requests_evolve(self, user_request: str, state: Dict[str, Any]) -> bool:
-        """判断用户是否明确要求使用 evolve 流程
-        
-        Args:
-            user_request: 用户输入
-            state: 当前状态
-            
-        Returns:
-            bool: 是否明确要求 evolve
-        """
-        user_request_lower = user_request.lower()
-        
-        # 明确的 evolve 关键词（优先级最高）
-        explicit_evolve_keywords = [
-            "使用evolve", "用evolve", "evolve流程", "evolve优化",
-            "use evolve", "using evolve", "with evolve",
-            "走evolve", "选evolve", "要evolve"
-        ]
-        
-        if any(kw in user_request_lower for kw in explicit_evolve_keywords):
-            logger.info(f"User explicitly mentioned 'evolve' keyword")
-            return True
-        
-        # 强烈的性能优化要求（组合关键词）
-        performance_keywords = [
-            "性能优化", "极致性能", "最优性能", "最佳性能",
-            "performance optimization", "best performance", "optimal performance",
-            "highest performance", "maximum performance"
-        ]
-        
-        optimization_keywords = [
-            "多轮优化", "迭代优化", "进化优化", "自动优化",
-            "iterative optimization", "evolutionary optimization", "auto-tune"
-        ]
-        
-        # 如果包含性能优化 + 迭代优化，判断为 evolve
-        has_performance = any(kw in user_request_lower for kw in performance_keywords)
-        has_optimization = any(kw in user_request_lower for kw in optimization_keywords)
-        
-        if has_performance and has_optimization:
-            logger.info(f"User requested performance + iterative optimization, using evolve")
-            return True
-        
-        # 检查对话历史中是否有明确要求
-        conversation_history = state.get("conversation_history", [])
-        for msg in conversation_history[-3:]:  # 检查最近3轮对话
-            content = msg.get("content", "").lower()
-            if any(kw in content for kw in explicit_evolve_keywords):
-                logger.info(f"Found evolve keyword in conversation history")
-                return True
-        
-        return False
-    
-    def _is_modification_request(self, user_request: str, state: Dict[str, Any]) -> bool:
-        """判断用户输入是否是修改请求
-
-        Args:
-            user_request: 用户输入
-            state: 当前状态
-
-        Returns:
-            bool: 是否是修改请求
-        """
-        # 如果没有之前的 task_code，一定不是修改请求
-        has_previous_code = bool(state.get("task_code"))
-        if not has_previous_code:
-            return False
-        
-        # 修改相关的关键词
-        modification_keywords = [
-
-            "修改", "改成", "改为", "换成", "调整", "优化", "更新",
-            "变成", "改一下", "换一下", "调成", "设为", "设成",
-
-            "change", "modify", "update", "adjust", "alter", 
-            "revise", "refine", "optimize", "improve"
-        ]
-
-        # 检查是否包含修改关键词
-        user_request_lower = user_request.lower()
-        contains_modification = any(kw in user_request_lower for kw in modification_keywords)
-
-        if contains_modification:
-            logger.info(f"Detected modification request, skipping intent classification")
-            return True
-
-        # 如果用户输入很短且包含"shape"、"size"等，可能是修改请求
-        if len(user_request) < 50 and any(kw in user_request_lower for kw in ["shape", "size", "dim", "维度", "形状"]):
-            logger.info(f"Detected potential modification request (short input with shape/size), skipping intent classification")
-            return True
-
-        return False
-

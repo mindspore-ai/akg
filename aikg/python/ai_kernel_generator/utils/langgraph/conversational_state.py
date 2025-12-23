@@ -128,7 +128,11 @@ class ConversationalOpGenState(TypedDict, total=False):
     
     
     error_count: int  
-    last_error: Optional[str]  
+    last_error: Optional[str]
+    
+    # === 前端显示相关 ===
+    display_message: Optional[str]  # 格式化后的显示消息（供前端直接打印）
+    hint_message: Optional[str]  # 提示消息（告诉用户下一步可以做什么）  
 
 
 class SubAgentState(TypedDict, total=False):
