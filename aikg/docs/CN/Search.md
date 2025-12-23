@@ -227,19 +227,104 @@ for impl in result['best_implementations']:
     print(f"gen_time: {impl['gen_time']:.4f}ms, speedup: {impl['speedup']:.2f}x")
 ```
 
-### 7.2 使用配置文件
+### 7.2 使用命令行工具
 
-```python
-from ai_kernel_generator.core.adaptive_search import adaptive_search_from_config
+通过 `run_single_adaptive_search.py` 脚本运行：
 
-result = await adaptive_search_from_config(
-    op_name="my_kernel",
-    task_desc=task_code,
-    dsl="triton_cuda",
-    framework="torch",
-    backend="cuda",
-    arch="a100",
-    config=config,
-    search_config_path="config/adaptive_search_config.yaml"
-)
+```bash
+# 使用默认配置
+python aikg/tools/run_single_adaptive_search.py
+
+# 使用指定配置文件
+python aikg/tools/run_single_adaptive_search.py config/adaptive_search_config.yaml
+```
+
+配置文件示例（`adaptive_search_config.yaml`）：
+
+```yaml
+# 任务配置
+task:
+  op_name: "aikg_relu"
+  task_desc: "path/to/task.py"  # 任务描述文件路径
+
+# 环境配置
+environment:
+  dsl: "triton_ascend"
+  framework: "torch"
+  backend: "ascend"
+  arch: "ascend910b4"
+  device_list: [0, 1]
+
+# 并发配置
+concurrency:
+  max_concurrent: 4
+  initial_task_count: 4
+  tasks_per_parent: 1
+
+# 停止条件
+stopping:
+  max_total_tasks: 50
+
+# UCB 选择参数
+ucb_selection:
+  exploration_coef: 1.414
+  random_factor: 0.1
+
+# LLM 配置文件路径（必填）
+config_path: "python/ai_kernel_generator/config/vllm_triton_ascend_evolve_config.yaml"
+```
+
+---
+
+## 8. 输出结果
+
+### 8.1 结果字典
+
+搜索完成后返回的结果字典包含：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `op_name` | str | 算子名称 |
+| `total_submitted` | int | 提交的任务总数 |
+| `total_success` | int | 成功的任务数 |
+| `total_failed` | int | 失败的任务数 |
+| `success_rate` | float | 成功率 |
+| `elapsed_time` | float | 总耗时（秒） |
+| `stop_reason` | str | 停止原因 |
+| `best_implementations` | list | 最佳实现列表（按 gen_time 排序） |
+| `storage_dir` | str | 存储目录 |
+| `log_dir` | str | 日志目录 |
+| `lineage_graph` | str | 谱系图文件路径 |
+
+### 8.2 谱系图
+
+搜索完成后会自动生成任务谱系图（Mermaid 格式），保存到 Log 目录：
+
+```
+{log_dir}/{op_name}_lineage_graph.md
+```
+
+谱系图包含：
+- **流程图**：展示任务的父子关系，按代数分层
+- **颜色标记**：🟢 绿色=性能好，🟡 橙色=中等，🔴 红色=性能差
+- **任务详情表**：包含 gen_time、speedup、父代、被选次数等信息
+
+示例：
+
+```mermaid
+flowchart TB
+    subgraph 初始任务
+        init_1["init_1<br/>3.44us | 0.83x"]
+        init_2["init_2<br/>4.17us | 0.69x"]
+    end
+
+    subgraph Gen1
+        gen1_3["gen1_3<br/>3.17us | 0.94x<br/>选1次"]
+    end
+
+    init_1 --> gen1_3
+
+    style init_1 fill:#FFE4B5
+    style init_2 fill:#FFB6C1
+    style gen1_3 fill:#90EE90
 ```

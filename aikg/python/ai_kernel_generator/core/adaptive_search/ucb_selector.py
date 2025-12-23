@@ -35,7 +35,7 @@ class UCBParentSelector:
     使用 UCB1 算法选择父代，平衡利用（选择性能好的）和探索（选择被选次数少的）。
     
     UCB 公式:
-        UCB(s) = Q(s) + c * sqrt(ln(N_total) / (N(s) + 1))
+        UCB(s) = Q(s) + c * sqrt(ln(N_total + 1) / (N(s) + 1))
     
     其中:
         - Q(s): 质量得分，基于排名计算（Rank-based）
