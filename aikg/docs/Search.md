@@ -257,19 +257,104 @@ for impl in result['best_implementations']:
     print(f"gen_time: {impl['gen_time']:.4f}ms, speedup: {impl['speedup']:.2f}x")
 ```
 
-### 7.2 Using Config File
+### 7.2 Using Command Line Tool
 
-```python
-from ai_kernel_generator.core.adaptive_search import adaptive_search_from_config
+Run via `run_single_adaptive_search.py` script:
 
-result = await adaptive_search_from_config(
-    op_name="my_kernel",
-    task_desc=task_code,
-    dsl="triton_cuda",
-    framework="torch",
-    backend="cuda",
-    arch="a100",
-    config=config,
-    search_config_path="config/adaptive_search_config.yaml"
-)
+```bash
+# Use default config
+python aikg/tools/run_single_adaptive_search.py
+
+# Use specified config file
+python aikg/tools/run_single_adaptive_search.py config/adaptive_search_config.yaml
+```
+
+Config file example (`adaptive_search_config.yaml`):
+
+```yaml
+# Task config
+task:
+  op_name: "aikg_relu"
+  task_desc: "path/to/task.py"  # Task description file path
+
+# Environment config
+environment:
+  dsl: "triton_ascend"
+  framework: "torch"
+  backend: "ascend"
+  arch: "ascend910b4"
+  device_list: [0, 1]
+
+# Concurrency config
+concurrency:
+  max_concurrent: 4
+  initial_task_count: 4
+  tasks_per_parent: 1
+
+# Stop condition
+stopping:
+  max_total_tasks: 50
+
+# UCB selection parameters
+ucb_selection:
+  exploration_coef: 1.414
+  random_factor: 0.1
+
+# LLM config file path (required)
+config_path: "python/ai_kernel_generator/config/vllm_triton_ascend_evolve_config.yaml"
+```
+
+---
+
+## 8. Output Results
+
+### 8.1 Result Dictionary
+
+The result dictionary returned after search completion contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `op_name` | str | Operator name |
+| `total_submitted` | int | Total tasks submitted |
+| `total_success` | int | Successful tasks |
+| `total_failed` | int | Failed tasks |
+| `success_rate` | float | Success rate |
+| `elapsed_time` | float | Total elapsed time (seconds) |
+| `stop_reason` | str | Reason for stopping |
+| `best_implementations` | list | Best implementations (sorted by gen_time) |
+| `storage_dir` | str | Storage directory |
+| `log_dir` | str | Log directory |
+| `lineage_graph` | str | Lineage graph file path |
+
+### 8.2 Lineage Graph
+
+After search completion, a task lineage graph (Mermaid format) is automatically generated and saved to the Log directory:
+
+```
+{log_dir}/{op_name}_lineage_graph.md
+```
+
+The lineage graph includes:
+- **Flowchart**: Shows parent-child relationships, layered by generation
+- **Color coding**: 🟢 Green=good performance, 🟡 Orange=medium, 🔴 Red=poor performance
+- **Task details table**: Contains gen_time, speedup, parent, selection count, etc.
+
+Example:
+
+```mermaid
+flowchart TB
+    subgraph Initial
+        init_1["init_1<br/>3.44us | 0.83x"]
+        init_2["init_2<br/>4.17us | 0.69x"]
+    end
+
+    subgraph Gen1
+        gen1_3["gen1_3<br/>3.17us | 0.94x<br/>sel:1"]
+    end
+
+    init_1 --> gen1_3
+
+    style init_1 fill:#FFE4B5
+    style init_2 fill:#FFB6C1
+    style gen1_3 fill:#90EE90
 ```

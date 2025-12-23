@@ -128,6 +128,11 @@ def print_result(result):
     if log_dir:
         print(f"Log目录：{log_dir}")
     
+    # 打印谱系图路径
+    lineage_graph = result.get('lineage_graph', '')
+    if lineage_graph:
+        print(f"谱系图：{lineage_graph}")
+    
     # 打印最佳实现
     print("\n最佳实现（前5个）：")
     

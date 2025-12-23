@@ -22,7 +22,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 
 from ai_kernel_generator.core.adaptive_search.success_db import SuccessDB
@@ -454,6 +454,9 @@ class AdaptiveSearchController:
         log_dir = self.config.get('log_dir', '')
         task_folder = os.path.basename(log_dir) if log_dir else ''
         
+        # 生成谱系图
+        lineage_graph_path = self._generate_lineage_graph(log_dir)
+        
         return {
             'op_name': self.op_name,
             'total_submitted': self._total_submitted,
@@ -469,6 +472,7 @@ class AdaptiveSearchController:
             'storage_dir': self.search_config.storage_dir,
             'task_folder': task_folder,  # Task 文件夹名
             'log_dir': str(log_dir),  # 完整 log_dir 路径
+            'lineage_graph': lineage_graph_path,  # 谱系图路径
             'config': {
                 'max_concurrent': self.search_config.max_concurrent,
                 'initial_task_count': self.search_config.initial_task_count,
@@ -478,3 +482,164 @@ class AdaptiveSearchController:
                 'random_factor': self.search_config.random_factor
             }
         }
+    
+    def _generate_lineage_graph(self, log_dir: str) -> Optional[str]:
+        """
+        生成任务谱系图（父子关系图）- Mermaid 格式
+        
+        Args:
+            log_dir: 日志目录路径
+            
+        Returns:
+            str: Mermaid 文件保存路径，失败返回 None
+        """
+        if not log_dir:
+            logger.warning("log_dir not specified, skipping lineage graph generation")
+            return None
+        
+        records = self.db.get_all()
+        if not records:
+            logger.warning("No successful tasks, skipping lineage graph generation")
+            return None
+        
+        # 构建节点数据
+        nodes: Dict[str, Dict[str, Any]] = {}
+        edges: List[Tuple[str, str]] = []
+        record_ids = {r.id for r in records}
+        
+        for record in records:
+            nodes[record.id] = {
+                'gen_time': record.gen_time,
+                'speedup': record.speedup,
+                'generation': record.generation,
+                'parent_id': record.parent_id,
+                'selection_count': record.selection_count
+            }
+            if record.parent_id and record.parent_id in record_ids:
+                edges.append((record.parent_id, record.id))
+        
+        # 按代数分组
+        generations: Dict[int, List[str]] = {}
+        for node_id, data in nodes.items():
+            gen = data['generation']
+            if gen not in generations:
+                generations[gen] = []
+            generations[gen].append(node_id)
+        
+        # 对每代内按 gen_time 排序
+        for gen in generations:
+            generations[gen] = sorted(generations[gen], key=lambda x: nodes[x]['gen_time'])
+        
+        max_gen = max(generations.keys()) if generations else 0
+        
+        # 获取性能范围用于着色
+        valid_times = [data['gen_time'] for data in nodes.values() if data['gen_time'] != float('inf')]
+        best_gen_time = min(valid_times) if valid_times else 0
+        worst_gen_time = max(valid_times) if valid_times else 1
+        
+        # 生成 Mermaid 代码
+        mermaid_lines = []
+        mermaid_lines.append("```mermaid")
+        mermaid_lines.append("flowchart TB")
+        mermaid_lines.append("")
+        
+        # 添加子图（按代数分组）
+        for gen in sorted(generations.keys()):
+            node_ids = generations[gen]
+            gen_label = "初始任务" if gen == 0 else f"Gen{gen}"
+            
+            mermaid_lines.append(f"    subgraph {gen_label}")
+            for node_id in node_ids:
+                data = nodes[node_id]
+                gen_time = data['gen_time']
+                speedup = data['speedup']
+                sel_count = data['selection_count']
+                
+                # 节点显示内容
+                if gen_time != float('inf'):
+                    node_label = f"{node_id}<br/>{gen_time:.2f}us | {speedup:.2f}x"
+                    if sel_count > 0:
+                        node_label += f"<br/>选{sel_count}次"
+                else:
+                    node_label = f"{node_id}<br/>∞"
+                
+                # 节点 ID 需要转换为合法的 Mermaid ID
+                safe_id = node_id.replace('-', '_')
+                mermaid_lines.append(f'        {safe_id}["{node_label}"]')
+            
+            mermaid_lines.append("    end")
+            mermaid_lines.append("")
+        
+        # 添加边（父子关系）
+        mermaid_lines.append("    %% 父子关系")
+        for parent_id, child_id in edges:
+            safe_parent = parent_id.replace('-', '_')
+            safe_child = child_id.replace('-', '_')
+            mermaid_lines.append(f"    {safe_parent} --> {safe_child}")
+        
+        mermaid_lines.append("")
+        
+        # 添加样式（根据性能着色）
+        mermaid_lines.append("    %% 样式：绿色=性能好，红色=性能差")
+        for node_id, data in nodes.items():
+            gen_time = data['gen_time']
+            safe_id = node_id.replace('-', '_')
+            
+            if gen_time != float('inf') and worst_gen_time > best_gen_time:
+                ratio = (gen_time - best_gen_time) / (worst_gen_time - best_gen_time)
+                # 从绿色(#90EE90)到红色(#FFB6C1)
+                if ratio < 0.33:
+                    color = "#90EE90"  # 浅绿
+                elif ratio < 0.67:
+                    color = "#FFE4B5"  # 浅橙
+                else:
+                    color = "#FFB6C1"  # 浅红
+            else:
+                color = "#D3D3D3"  # 浅灰
+            
+            mermaid_lines.append(f"    style {safe_id} fill:{color}")
+        
+        mermaid_lines.append("```")
+        
+        # 构建完整的 Markdown 内容
+        md_content = []
+        md_content.append(f"# Task Lineage Graph - {self.op_name}")
+        md_content.append("")
+        md_content.append(f"**总任务数**: {len(nodes)} | **代数**: {max_gen + 1} | **最佳性能**: {best_gen_time:.2f}us")
+        md_content.append("")
+        md_content.append("## 谱系图")
+        md_content.append("")
+        md_content.extend(mermaid_lines)
+        md_content.append("")
+        md_content.append("## 图例")
+        md_content.append("")
+        md_content.append("- 🟢 浅绿色：性能好（前 33%）")
+        md_content.append("- 🟡 浅橙色：性能中等（中间 34%）")
+        md_content.append("- 🔴 浅红色：性能差（后 33%）")
+        md_content.append("- 箭头：父代 → 子代")
+        md_content.append("")
+        md_content.append("## 任务详情")
+        md_content.append("")
+        md_content.append("| 任务 ID | 代数 | gen_time | speedup | 父代 | 被选次数 |")
+        md_content.append("|---------|------|----------|---------|------|----------|")
+        
+        # 按 gen_time 排序输出详情
+        sorted_nodes = sorted(nodes.items(), key=lambda x: x[1]['gen_time'])
+        for node_id, data in sorted_nodes:
+            gen = "初始" if data['generation'] == 0 else f"G{data['generation']}"
+            parent = data['parent_id'] if data['parent_id'] else "-"
+            if data['gen_time'] != float('inf'):
+                md_content.append(f"| {node_id} | {gen} | {data['gen_time']:.2f}us | {data['speedup']:.2f}x | {parent} | {data['selection_count']} |")
+            else:
+                md_content.append(f"| {node_id} | {gen} | ∞ | - | {parent} | {data['selection_count']} |")
+        
+        # 保存文件
+        save_dir = os.path.expanduser(log_dir)
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, f"{self.op_name}_lineage_graph.md")
+        
+        with open(save_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(md_content))
+        
+        logger.info(f"Lineage graph saved to: {save_path}")
+        return save_path
