@@ -53,19 +53,41 @@ def quick_match_sub_agent_preference(user_input: str) -> Optional[str]:
         user_input: 用户输入
         
     Returns:
-        Optional[str]: 如果匹配到，返回子Agent名称 ("evolve" 或 "codeonly")，否则返回 None
+        Optional[str]: 如果匹配到，返回子Agent名称 ("evolve"、"codeonly" 或 "kernel_verifier")，否则返回 None
     """
     if not user_input:
         return None
         
     user_input_lower = user_input.lower()
     
+    # 检测性能测试关键词（kernel_verifier）- 优先级最高
+    performance_test_keywords = [
+        "性能测试", "测试性能", "性能分析", "分析性能", "跑性能",
+        "测一下性能", "测下性能", "测试一下性能", "测试下性能",
+        "验证性能", "验证一下性能", "验证下性能",
+        "测试一下", "测一下", "测下", "跑一下", "跑下",
+        "性能怎么样", "加速比", "速度对比", "性能对比",
+        "看看性能", "看下性能", "看一下性能",
+        "benchmark", "performance test", "test performance", "profile",
+        "check performance", "verify performance"
+    ]
+    
+    for keyword in performance_test_keywords:
+        if keyword in user_input_lower:
+            logger.info(f"Quick matched kernel_verifier keyword: '{keyword}'")
+            return "kernel_verifier"
+    
     # 检测换成 evolve 的关键词
+    # 注意：只包含明确的 evolve 关键词和纯优化词，不包含"性能"相关词
     switch_to_evolve_keywords = [
+        # 明确提到 evolve
         "换evolve", "用evolve", "使用evolve", "改用evolve", "试试evolve", "换成evolve",
         "换用evolve", "改为evolve", "切换evolve", "选evolve", "要evolve",
-        "evolve重新生成", "evolve生成", "evolve优化", "用一下evolve",
-        "switch to evolve", "use evolve", "try evolve", "with evolve", "change to evolve"
+        "evolve重新生成", "evolve生成", "evolve优化", "用一下evolve", "走evolve",
+        "switch to evolve", "use evolve", "try evolve", "with evolve", "change to evolve",
+        # 纯优化关键词（不涉及性能）
+        "多轮优化", "迭代优化", "进化优化", "自动调优", "多次迭代",
+        "iterative optimization", "evolutionary optimization", "auto-tune"
     ]
     
     for keyword in switch_to_evolve_keywords:
@@ -142,35 +164,31 @@ def user_explicitly_requests_evolve(user_request: str, conversation_history: lis
     """
     user_request_lower = user_request.lower()
     
-    # 明确的 evolve 关键词（优先级最高）
+    # 只有明确提到 "evolve" 的才走 evolve 流程
+    # 所有涉及"性能"的请求都走 kernel_verifier（性能测试）
     explicit_evolve_keywords = [
-        "使用evolve", "用evolve", "evolve流程", "evolve优化",
+        "使用evolve", "用evolve", "evolve流程", "evolve优化", "evolve生成",
         "use evolve", "using evolve", "with evolve",
-        "走evolve", "选evolve", "要evolve"
+        "走evolve", "选evolve", "要evolve", "换evolve", "改用evolve",
+        "切换到evolve", "改成evolve", "试试evolve"
     ]
     
     if any(kw in user_request_lower for kw in explicit_evolve_keywords):
         logger.info(f"User explicitly mentioned 'evolve' keyword")
         return True
     
-    # 强烈的性能优化要求（组合关键词）
-    performance_keywords = [
-        "性能优化", "极致性能", "最优性能", "最佳性能",
-        "performance optimization", "best performance", "optimal performance",
-        "highest performance", "maximum performance"
-    ]
-    
+    # 只保留纯优化关键词（不涉及性能），且需要组合才触发
+    # 注意：删除了所有"性能"相关的关键词，避免与 kernel_verifier 冲突
     optimization_keywords = [
-        "多轮优化", "迭代优化", "进化优化", "自动优化",
-        "iterative optimization", "evolutionary optimization", "auto-tune"
+        "多轮优化", "迭代优化", "进化优化", "自动调优", "自动优化",
+        "iterative optimization", "evolutionary optimization", "auto-tune",
+        "多次迭代", "多轮迭代"
     ]
     
-    # 如果包含性能优化 + 迭代优化，判断为 evolve
-    has_performance = any(kw in user_request_lower for kw in performance_keywords)
-    has_optimization = any(kw in user_request_lower for kw in optimization_keywords)
-    
-    if has_performance and has_optimization:
-        logger.info(f"User requested performance + iterative optimization, using evolve")
+    # 只有明确要求"多轮优化"、"迭代优化"等才走 evolve
+    # 单独的"优化"不够，必须是组合词
+    if any(kw in user_request_lower for kw in optimization_keywords):
+        logger.info(f"User requested iterative optimization, using evolve")
         return True
     
     # 检查对话历史中是否有明确要求

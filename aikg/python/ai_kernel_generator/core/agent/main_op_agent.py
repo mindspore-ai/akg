@@ -541,6 +541,7 @@ class MainOpAgent(AgentBase):
                 "op_description": op_description,
                 "user_request": user_request,
                 "available_agents": agents_info_text,
+                "has_generated_code": bool(state.get("generated_code")),  # 是否已有生成的代码
                 "format_instructions": self.sub_agent_format_instructions,
             }
             
@@ -615,11 +616,13 @@ class MainOpAgent(AgentBase):
             agent_info = sub_agent.get_detailed_info()
             logger.info(f"Using sub-agent: {sub_agent.get_name()} - {agent_info.get('description', '')}")
             
-            # 执行子 Agent
+            
             success, result = await sub_agent.execute(
                 task_code=task_code,
                 op_name=op_name,
-                task_id=task_id
+                task_id=task_id,
+                generated_code=state.get("generated_code", ""),  # 传递已生成的代码
+                device_id=state.get("device_id", 0)
             )
             
             # 提取结果
@@ -891,12 +894,20 @@ class MainOpAgent(AgentBase):
             current_state["retry_sub_agent_only"] = True
             current_state["retry_requested"] = False
             
-            # 清除之前生成的代码，让工作流可以重新执行 sub_agent
-            current_state["generated_code"] = ""
-            current_state["generation_success"] = False
-            current_state["verification_result"] = False
-            current_state["verification_error"] = ""
-            current_state["profile_result"] = None
+            # 关键修改：只有切换到 codeonly/evolve 时才清空代码
+            # kernel_verifier 需要保留已生成的代码进行性能分析
+            target_sub_agent = current_state.get("sub_workflow", "codeonly")
+            if target_sub_agent != "kernel_verifier":
+                # 清除之前生成的代码，让工作流可以重新执行 sub_agent
+                logger.info(f"Clearing generated_code for sub-agent: {target_sub_agent}")
+                current_state["generated_code"] = ""
+                current_state["generation_success"] = False
+                current_state["verification_result"] = False
+                current_state["verification_error"] = ""
+                current_state["profile_result"] = None
+            else:
+                # kernel_verifier 需要保留代码进行性能测试
+                logger.info("Keeping generated_code for kernel_verifier (performance analysis)")
             
             # 跳过 op_task_build 的重新生成，直接进入 select_sub_agent
             current_state["user_confirmed"] = True

@@ -325,7 +325,7 @@ class EvolveSubAgent(SubAgentBase):
                 framework=self.framework,
                 backend=self.backend,
                 arch=self.arch,
-                config=self.config,  # 使用主配置（包含 DeepSeek API key 等）
+                config=self.config,
                 task_pool=task_pool,
                 max_rounds=max_rounds,
                 parallel_num=parallel_num,
@@ -378,6 +378,196 @@ class EvolveSubAgent(SubAgentBase):
                 "profile_result": None
             }
 
+class KernelVerifierSubAgent(SubAgentBase):
+    """
+    KernelVerifier 子 Agent
+    
+    对已生成的算子代码进行性能分析
+    流程: 验证 → 性能分析 → 返回结果
+    """
+    
+    def get_name(self) -> str:
+        return "kernel_verifier"
+    
+    def get_detailed_info(self) -> Dict[str, Any]:
+        """返回详细信息用于 LLM 决策"""
+        return {
+            "name": "kernel_verifier",
+            "description": "对已生成的算子代码进行性能分析",
+            "workflow_steps": [
+                "代码验证: 确保生成的代码可以正确编译和运行",
+                "性能测试: 运行多次测试收集性能数据",
+                "结果对比: 对比生成代码与原始实现的性能",
+                "生成报告: 返回详细的性能分析结果（耗时、加速比等）"
+            ],
+            "use_cases": [
+                "用户想了解生成算子的性能表现",
+                "用户明确要求进行性能测试或性能分析",
+                "用户询问生成代码的速度、加速比、性能对比",
+                "用户想知道生成的 triton 代码是否比原始torch的描述实现更快",
+                "需要验证优化效果的场景"
+            ],
+            "advantages": [
+                "准确测量：多次运行，结果可靠",
+                "完整对比：同时测试原始实现和生成代码",
+                "详细报告：提供耗时、加速比等指标",
+                "跨设备支持：支持 CUDA 和 Ascend 等不同硬件",
+                "自动化：无需手动编写性能测试脚本"
+            ],
+            "limitations": [
+                "【重要前置条件】必须先使用 codeonly生成 triton 代码后才能使用",
+                "【重要前置条件】必须已有 torch task 代码（由 OpTaskBuilder 生成）",
+                "只做性能分析：不会生成或修改代码，只测试已有代码的性能",
+                "需要硬件资源：需要实际的 GPU/NPU 设备进行测试",
+                "如果用户还没生成代码就要求性能测试，应该先引导用户生成代码"
+            ],
+            "performance": "取决于算子复杂度和测试轮数"
+        }
+    
+    async def execute(self, 
+                     task_code: str,
+                     op_name: str,
+                     task_id: str,
+                     **kwargs) -> Tuple[bool, Dict[str, Any]]:
+        """
+        执行性能分析
+        
+        Args:
+            task_code: OpTaskBuilder 生成的 task 代码（torch 实现）
+            op_name: 算子名称
+            task_id: 任务 ID
+            **kwargs: 其他参数，应包含：
+                - generated_code: 之前生成的 triton 代码
+                - device_id: 设备 ID（可选，默认 0）
+                - profile_settings: 性能测试配置（可选）
+        """
+        logger.info(f"Executing KernelVerifier sub-agent for {op_name}")
+        
+        try:
+            # 导入必要的模块
+            from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
+            from ai_kernel_generator.core.worker.manager import get_worker_manager
+            from ai_kernel_generator.core.utils import normalize_dsl
+            
+            # 获取已生成的代码
+            generated_code = kwargs.get("generated_code", "")
+            if not generated_code:
+                error_msg = "No generated code found. Please generate code first before performance analysis."
+                logger.error(error_msg)
+                return False, {
+                    "generated_code": "",
+                    "verification_result": False,
+                    "verification_error": error_msg,
+                    "profile_result": None
+                }
+            
+            # 获取设备 ID
+            device_id = kwargs.get("device_id", 0)
+            
+            # 获取性能测试配置
+            profile_settings = kwargs.get("profile_settings", {
+                "run_times": 50,
+                "warmup_times": 5
+            })
+            
+            # 规范化 DSL
+            normalized_dsl = normalize_dsl(self.dsl, self.backend)
+            logger.info(f"Normalized DSL: {self.dsl} -> {normalized_dsl}")
+            
+            # 从 WorkerManager 获取 worker
+            worker = await get_worker_manager().select(backend=self.backend, arch=self.arch)
+            if not worker:
+                error_msg = f"No available worker for backend={self.backend}, arch={self.arch}. Please register a worker first."
+                logger.error(error_msg)
+                return False, {
+                    "generated_code": generated_code,
+                    "verification_result": False,
+                    "verification_error": error_msg,
+                    "profile_result": None
+                }
+            
+            logger.info(f"Using worker: {worker}")
+            
+            # 创建 KernelVerifier 实例
+            impl_func_name = "ModelNew"
+            verifier = KernelVerifier(
+                op_name=op_name,
+                framework_code=task_code,
+                task_id=task_id,
+                framework=self.framework,
+                dsl=normalized_dsl,
+                backend=self.backend,
+                arch=self.arch,
+                impl_func_name=impl_func_name,
+                config=self.config,
+                worker=worker
+            )
+            
+            task_info = {"coder_code": generated_code}
+            
+            # 步骤 1: 先进行验证
+            logger.info(f"Step 1: Verifying generated code...")
+            verify_result, error_log = await verifier.run(task_info, device_id=device_id)
+            
+            if not verify_result:
+                logger.error(f"Verification failed: {error_log}")
+                return False, {
+                    "generated_code": generated_code,
+                    "verification_result": False,
+                    "verification_error": error_log,
+                    "profile_result": None
+                }
+            
+            logger.info(f"✓ Verification passed!")
+            
+            # 步骤 2: 进行性能分析
+            logger.info(f"Step 2: Running performance analysis...")
+            logger.info(f"Profile settings: run_times={profile_settings['run_times']}, warmup_times={profile_settings['warmup_times']}")
+            
+            profile_result = await verifier.run_profile(
+                task_info, 
+                current_step=0, 
+                device_id=device_id, 
+                profile_settings=profile_settings
+            )
+            
+            # 提取性能数据
+            gen_time = profile_result.get('gen_time', 0.0)
+            base_time = profile_result.get('base_time', 0.0)
+            speedup = profile_result.get('speedup', 0.0)
+            
+            logger.info(f"✓ Performance analysis completed!")
+            logger.info(f"  Original performance: {base_time:.2f} us")
+            logger.info(f"  Generated performance: {gen_time:.2f} us")
+            logger.info(f"  Speedup: {speedup:.2f}x")
+            
+            result = {
+                "generated_code": generated_code,
+                "verification_result": True,
+                "verification_error": "",
+                "profile_result": profile_result,
+                "performance_summary": {
+                    "base_time_us": base_time,
+                    "gen_time_us": gen_time,
+                    "speedup": speedup,
+                    "run_times": profile_settings['run_times'],
+                    "warmup_times": profile_settings['warmup_times']
+                }
+            }
+            
+            return True, result
+            
+        except Exception as e:
+            logger.error(f"KernelVerifier sub-agent failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return False, {
+                "generated_code": kwargs.get("generated_code", ""),
+                "verification_result": False,
+                "verification_error": str(e),
+                "profile_result": None
+            }
+
 
 class SubAgentRegistry:
     """
@@ -397,6 +587,7 @@ class SubAgentRegistry:
         """注册内置的子 Agent"""
         self.register(CodeOnlySubAgent)
         self.register(EvolveSubAgent)
+        self.register(KernelVerifierSubAgent)
         
         logger.info(f"Registered {len(self._agents)} built-in sub-agents")
     
