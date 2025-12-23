@@ -265,9 +265,15 @@ class SplitViewApp(App):
     """
 
     BINDINGS = [
-        Binding("ctrl+c", "quit", "退出", show=True),
-        Binding("ctrl+s", "save_tui", t("tui.binding.save_tui"), show=False),
-        Binding("ctrl+e", "scroll_end", "跳到底部", show=True),
+        Binding("ctrl+c", "quit", "退出", show=True, key_display="Ctrl+C"),
+        Binding(
+            "ctrl+s",
+            "save_tui",
+            t("tui.binding.save_tui"),
+            show=False,
+            key_display="Ctrl+S",
+        ),
+        Binding("ctrl+e", "scroll_end", "跳到底部", show=True, key_display="Ctrl+E"),
         Binding("f8", "watch_next", "下一个并发任务", show=True),
         Binding("f9", "toggle_language", "切换语言", show=True),
         Binding("f10", "toggle_theme", "切换主题", show=True),
