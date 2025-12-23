@@ -70,15 +70,34 @@
 
 ## 决策规则（优先级从高到低）
 
-### 第一优先级：检查是否请求性能分析
-**选择 `kernel_verifier` 如果满足所有条件：**
-1. has_generated_code = True（已有生成的代码）
-2. 用户明确要求：
-   - "性能测试"、"性能分析"、"测试性能"
-   - "加速比"、"速度对比"、"性能怎么样"
-   - "跑一下性能"、"测一下"、"benchmark"
-3. 如果 has_generated_code = False，即使用户要求性能测试，也**不能**选择 kernel_verifier
-   - 应该选择 codeonly 或 evolve 先生成代码
+### 第一优先级：检查是否请求性能相关功能
+
+**🚨 关键区分规则（必须严格遵守）：**
+
+判断方法：检查用户请求中是否**同时**包含"生成"和"性能测试"
+
+**情况1：用户要求"生成" + "性能测试"** → 选择 `codeonly`
+- 判断标准：用户请求中**同时包含**以下两类词汇：
+  - 生成类：生成、创建、写、实现
+  - 性能类：性能测试、测试性能、benchmark、验证性能、加速比
+- 示例：
+  - "生成一个relu算子并性能测试" → `codeonly`
+  - "生成relu并进行benchmark" → `codeonly`
+  - "实现tanh算子并测试性能" → `codeonly`
+- 原理：codeonly 会自动设置 task_type="profile"，一次性完成生成+测试
+
+**情况2：用户只要求"性能测试"（不要求生成）** → 选择 `kernel_verifier`
+- 判断标准：用户请求中**只包含**性能测试类词汇，**不包含**生成类词汇
+- 前提：has_generated_code = True（必须已有生成的代码）
+- 示例：
+  - "性能测试" → `kernel_verifier`
+  - "测试一下性能" → `kernel_verifier`
+  - "benchmark一下" → `kernel_verifier`
+  - "看看加速比" → `kernel_verifier`
+
+**⚠️ 特别注意：**
+- 如果用户说"生成xxx并yyy"，其中yyy包含性能测试，**必须**选择 `codeonly`，不能选 `kernel_verifier`
+- 如果不确定，看是否有"生成"/"创建"等词，有就选 `codeonly`，没有才选 `kernel_verifier`
 
 ### 第二优先级：用户明确指定代码生成方式
 - 用户说"使用 evolve" → **必须选择 evolve**
@@ -143,20 +162,40 @@
 → confidence: 0.95
 ```
 
-### 示例3：性能测试需求
+### 示例3：生成并测试性能（关键场景）
 ```
-用户请求："验证一下性能"或"测试一下加速比"
-前置条件：has_generated_code = True
-→ selected_agent: "kernel_verifier"
-→ reasoning: "用户要求性能测试/分析，已有生成的代码，选择 kernel_verifier"
+用户请求："生成一个 ReLU 算子并进行性能测试"
+分析：包含"生成" + "性能测试"
+→ selected_agent: "codeonly"
+→ reasoning: "用户同时要求生成和性能测试，选择 codeonly（会自动使用 task_type='profile'）"
 → confidence: 1.0
 ```
 
-### 示例4：标准需求
+### 示例4：生成并测试（另一种表述）
+```
+用户请求："生成一个relu算子并性能测试"
+分析：包含"生成" + "性能测试"
+→ selected_agent: "codeonly"
+→ reasoning: "用户要求生成算子并性能测试，选择 codeonly 并设置 task_type='profile'"
+→ confidence: 1.0
+```
+
+### 示例5：纯性能测试（已有代码）
+```
+用户请求："验证一下性能"或"测试一下加速比"
+分析：只有"性能测试"，没有"生成"
+前置条件：has_generated_code = True
+→ selected_agent: "kernel_verifier"
+→ reasoning: "用户只要求性能测试，不要求生成，已有代码，选择 kernel_verifier"
+→ confidence: 1.0
+```
+
+### 示例6：标准需求（不测试）
 ```
 用户请求："生成一个 ReLU 激活函数，输入 shape 是 (1024, 1024)"
+分析：只有"生成"，没有"性能测试"
 → selected_agent: "codeonly"
-→ reasoning: "标准算子需求，无明确多轮优化要求，选择 codeonly 快速生成"
+→ reasoning: "标准算子生成需求，无性能测试要求，选择 codeonly（task_type='precision_only'）"
 → confidence: 0.85
 ```
 

@@ -363,6 +363,7 @@ class ParserFactory:
         - suggested_action: 建议的操作（confirm/revise/retry/retry_sub_agent/cancel）
         - reasoning: 推理过程
         - confidence: 置信度（0.0-1.0）
+        - is_new_operator: 是否是新算子需求（bool）
         """
         if cls._user_action_analyzer_parser is None:
             cls._user_action_analyzer_parser = cls.create_output_parser(
@@ -370,10 +371,12 @@ class ParserFactory:
                 {
                     'suggested_action': (str, ...),  # 建议的操作
                     'reasoning': (str, ...),         # 推理过程
-                    'confidence': (float, 0.8)       # 置信度
+                    'confidence': (float, 0.8),      # 置信度
+                    'is_new_operator': (bool, False) # 是否是新算子需求
                 }
             )
         return cls._user_action_analyzer_parser
+    
 
     @staticmethod
     def create_output_parser(parser_name, fields):

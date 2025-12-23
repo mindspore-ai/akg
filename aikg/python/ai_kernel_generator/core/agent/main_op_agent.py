@@ -34,6 +34,7 @@ from ai_kernel_generator.utils.main_op_agent_utils import (
     quick_match_sub_agent_preference,
     extract_sub_agent_from_reasoning,
     user_explicitly_requests_evolve,
+    user_requests_profile,
     is_modification_request,
     simple_action_heuristic,
     format_agents_info_for_llm
@@ -132,6 +133,7 @@ class MainOpAgent(AgentBase):
                 self.use_auto_action_analysis = False
         else:
             logger.info("Auto user action analysis disabled")
+        
 
         # 获取子 Agent 注册中心
         self.sub_agent_registry = get_registry()
@@ -444,11 +446,23 @@ class MainOpAgent(AgentBase):
     async def _user_confirm_node(self, state: ConversationalOpGenState) -> Dict[str, Any]:
         """
         用户确认节点: 标记等待用户确认状态
+        
+        如果用户在第一轮就明确要求"生成并测试性能"，自动确认继续执行
         """
         logger.info("=== User Confirm Node ===")
         
         task_code = state.get("task_code", "")
         op_name = state.get("op_name", "")
+        user_request = state.get("user_request", "")
+        
+        # 检查用户是否明确要求"生成并测试性能"
+        # 如果是，自动确认，不需要用户再次确认
+        if user_requests_profile(user_request):
+            logger.info(f"User requested generate + profile in initial request, auto-confirming")
+            return {
+                "current_step": "user_confirm",
+                "user_confirmed": True  # 自动确认
+            }
         
         logger.info(f"Task code generated for op: {op_name}, waiting for user confirmation")
         
@@ -616,13 +630,32 @@ class MainOpAgent(AgentBase):
             agent_info = sub_agent.get_detailed_info()
             logger.info(f"Using sub-agent: {sub_agent.get_name()} - {agent_info.get('description', '')}")
             
+            # 准备子 Agent 执行参数
+            execute_kwargs = {
+                "generated_code": state.get("generated_code", ""),  # 传递已生成的代码
+                "device_id": state.get("device_id", 0)
+            }
+            
+            # 如果是 codeonly 子 Agent，根据用户请求判断 task_type
+            if sub_workflow == "codeonly":
+                # 优先使用当前轮的用户输入，如果没有则使用初始请求
+                # 这样可以支持多轮对话中切换 task_type
+                current_input = state.get("current_user_input", "")
+                user_request = state.get("user_request", "")
+                check_input = current_input if current_input else user_request
+                
+                if user_requests_profile(check_input):
+                    execute_kwargs["task_type"] = "profile"
+                    logger.info(f"User requested performance testing (check_input: '{check_input[:50]}...'), setting task_type='profile'")
+                else:
+                    execute_kwargs["task_type"] = "precision_only"
+                    logger.info(f"Standard code generation (check_input: '{check_input[:50]}...'), setting task_type='precision_only'")
             
             success, result = await sub_agent.execute(
                 task_code=task_code,
                 op_name=op_name,
                 task_id=task_id,
-                generated_code=state.get("generated_code", ""),  # 传递已生成的代码
-                device_id=state.get("device_id", 0)
+                **execute_kwargs
             )
             
             # 提取结果
@@ -671,7 +704,7 @@ class MainOpAgent(AgentBase):
                 "retry_sub_agent_only": False  # 重置标志，防止无限循环
             }
 
-    async def _analyze_user_action(self, state: Dict[str, Any], user_input: str) -> str:
+    async def _analyze_user_action(self, state: Dict[str, Any], user_input: str) -> tuple:
         """
         使用 LLM 分析用户的动作意图
 
@@ -680,10 +713,12 @@ class MainOpAgent(AgentBase):
             user_input: 用户输入
 
         Returns:
-            建议的 action: 'confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel'
+            tuple: (action, is_new_operator)
+            - action: 建议的操作 ('confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel')
+            - is_new_operator: 是否是新算子需求 (bool)
         """
         if not self.use_auto_action_analysis:
-            return simple_action_heuristic(state, user_input)
+            return simple_action_heuristic(state, user_input), False
 
         try:
             # 构建对话历史文本
@@ -719,13 +754,17 @@ class MainOpAgent(AgentBase):
                 suggested_action = getattr(parsed, 'suggested_action', 'revise')
                 analysis_reasoning = getattr(parsed, 'reasoning', '')
                 confidence = float(getattr(parsed, 'confidence', 0.5))
+                is_new_operator = getattr(parsed, 'is_new_operator', False)
             except Exception as parse_error:
                 logger.warning(f"Failed to parse action analysis result: {parse_error}")
                 # 解析失败，使用启发式规则
-                return simple_action_heuristic(state, user_input)
+                return simple_action_heuristic(state, user_input), False
 
             logger.info(f"LLM suggested action: {suggested_action} (confidence: {confidence:.2f})")
             logger.debug(f"Analysis reasoning: {analysis_reasoning}")
+            
+            if is_new_operator:
+                logger.info(f"🆕 LLM detected NEW OPERATOR request (is_new_operator=True)")
 
             # 保存分析推理到状态中（用于后续处理无关问题）
             state["last_action_reasoning"] = analysis_reasoning
@@ -734,13 +773,13 @@ class MainOpAgent(AgentBase):
             valid_actions = ['confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel']
             if suggested_action not in valid_actions:
                 logger.warning(f"Invalid suggested action: {suggested_action}, using revise")
-                return 'revise'
+                return 'revise', False
 
-            return suggested_action
+            return suggested_action, is_new_operator
 
         except Exception as e:
             logger.error(f"Action analysis failed: {e}, using heuristic")
-            return simple_action_heuristic(state, user_input)
+            return simple_action_heuristic(state, user_input), False
 
     async def start_conversation(self, user_request: str, task_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -827,6 +866,9 @@ class MainOpAgent(AgentBase):
             current_state["conversation_history"] = []
         current_state["conversation_history"].append(user_message)
         
+        # 保存当前轮的用户输入（用于多轮对话中判断task_type等）
+        current_state["current_user_input"] = user_input
+        
         quick_matched_sub_agent = quick_match_sub_agent_preference(user_input)
         if quick_matched_sub_agent:
             logger.info(f"⚡ Quick match: User requested '{quick_matched_sub_agent}' sub-agent")
@@ -850,9 +892,10 @@ class MainOpAgent(AgentBase):
                 logger.info("Quick match: Setting action to 'confirm' (has task_code, no generation yet)")
         
         # 如果 action 是 'auto'，使用 LLM 自动分析用户意图
+        is_new_operator = False  # 默认不是新算子
         if action == "auto":
-            action = await self._analyze_user_action(current_state, user_input)
-            logger.info(f"Auto-analyzed action: {action}")
+            action, is_new_operator = await self._analyze_user_action(current_state, user_input)
+            logger.info(f"Auto-analyzed action: {action}, is_new_operator: {is_new_operator}")
             
             # 检查LLM推理中是否提到子Agent
             if action == "retry_sub_agent" and not current_state.get("sub_workflow_specified_by_user"):
@@ -878,17 +921,52 @@ class MainOpAgent(AgentBase):
             current_state["retry_sub_agent_only"] = False
         elif action == "retry":
             # 用户要求在子 Agent 执行后重新生成 task code
-            current_state["retry_requested"] = True
-            current_state["retry_sub_agent_only"] = False
-            current_state["user_confirmed"] = False
-            current_state["user_feedback"] = user_input if user_input else None
-            current_state["user_request"] = user_input if user_input else current_state.get("user_request", "")
-            # 清空之前生成的代码，因为要重新生成 task
-            current_state["generated_code"] = ""
-            current_state["generation_success"] = False
-            current_state["verification_result"] = False
-            current_state["verification_error"] = ""
-            current_state["profile_result"] = None
+            # 如果是新算子需求，需要清空更多状态
+            if is_new_operator:
+                logger.info("=" * 80)
+                logger.info("🆕 NEW OPERATOR REQUEST DETECTED (is_new_operator=True)")
+                logger.info(f"   Current operator: '{current_state.get('op_name', 'None')}'")
+                logger.info(f"   New request: '{user_input[:80]}...'")
+                logger.info("   Clearing all previous state and restarting...")
+                logger.info("=" * 80)
+                
+                # 更新 user_request 为新需求
+                current_state["user_request"] = user_input
+                current_state["user_feedback"] = user_input
+                
+                # 清空所有旧状态（包括 task_code 和 op_name）
+                current_state["task_code"] = ""
+                current_state["op_name"] = ""
+                current_state["op_description"] = ""
+                current_state["task_reasoning"] = ""
+                current_state["task_init_status"] = None
+                
+                # 清空生成的代码和验证结果
+                current_state["generated_code"] = ""
+                current_state["generation_success"] = False
+                current_state["verification_result"] = False
+                current_state["verification_error"] = ""
+                current_state["profile_result"] = None
+                
+                # 重置标志
+                current_state["retry_requested"] = True
+                current_state["retry_sub_agent_only"] = False
+                current_state["user_confirmed"] = False
+                current_state["sub_workflow_specified_by_user"] = False
+                current_state["sub_workflow"] = "codeonly"  # 重置为默认
+            else:
+                # 普通的 retry（不是新算子）
+                current_state["retry_requested"] = True
+                current_state["retry_sub_agent_only"] = False
+                current_state["user_confirmed"] = False
+                current_state["user_feedback"] = user_input if user_input else None
+                current_state["user_request"] = user_input if user_input else current_state.get("user_request", "")
+                # 清空之前生成的代码，因为要重新生成 task
+                current_state["generated_code"] = ""
+                current_state["generation_success"] = False
+                current_state["verification_result"] = False
+                current_state["verification_error"] = ""
+                current_state["profile_result"] = None
         elif action == "retry_sub_agent":
             # 用户要求只重新调用子 Agent，保持当前 task code
             current_state["retry_sub_agent_only"] = True

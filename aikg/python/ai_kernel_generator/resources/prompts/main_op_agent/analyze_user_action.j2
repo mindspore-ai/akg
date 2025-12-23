@@ -15,6 +15,8 @@
 **已生成 Triton 代码**: 否
 {% endif %}
 
+**当前正在开发的算子**: {% if op_name %}{{ op_name }}{% else %}无（对话刚开始）{% endif %}
+
 ## 对话历史
 
 {{ conversation_history }}
@@ -77,14 +79,17 @@
      - 提供新的需求描述
    - 前提条件：`has_task_code=True` 或 `has_task_code=False`（需要更多信息）
 
-3. **retry** - 重新生成 Task 代码
-   - 适用场景：已生成 Triton 代码后，用户想要重新生成 Task 代码
+3. **retry** - 重新生成 Task 代码（包括切换到新算子）
+   - 适用场景：
+     - **A) 已生成 Triton 代码后，用户想要重新生成当前算子的 Task 代码**
+     - **B) 用户明确要求生成一个不同类型的算子**（新算子需求）
    - 典型表达：
-     - "重新生成 task"
-     - "换个 task"
-     - "修改 torch 代码"
-     - "重做任务描述"
-   - 前提条件：`has_generated_code=True`
+     - "重新生成 task"、"换个 task"、"修改 torch 代码"
+     - **"生成一个 Tanh 算子"（当前是 ReLU）** ← 新算子
+     - **"创建一个 Softmax"（当前是 Sigmoid）** ← 新算子
+     - **"实现 LayerNorm"（当前是 MatMul）** ← 新算子
+   - 前提条件：`has_generated_code=True` 或 当前有算子但用户要求生成不同类型的算子
+   - **特别注意**：如果用户明确提到不同类型的算子名称（ReLU→Tanh, Sigmoid→Softmax等），在 `reasoning` 中说明"用户要求生成新的算子"
 
 4. **retry_sub_agent** - 重新生成 Triton 代码 / 换子Agent
    - 适用场景：
@@ -187,6 +192,14 @@
 严格按照以下 JSON 格式输出：
 
 {{ format_instructions }}
+
+**重要字段说明：**
+- `suggested_action`: 建议的操作（confirm/revise/retry/retry_sub_agent/cancel）
+- `reasoning`: 推理过程（必须说明判断依据）
+- `confidence`: 置信度（0.0-1.0）
+- `is_new_operator`: 是否是新算子需求（bool, 默认false）
+  - 如果用户要求生成**不同类型**的算子，设置为 `true`
+  - 如果只是修改/测试/优化当前算子，设置为 `false`
 
 ---
 
@@ -297,6 +310,36 @@
   "suggested_action": "cancel",
   "reasoning": "用户说'讲个笑话'，虽然已经在对话中（has_task_code=True），但这明显与算子开发无关。在 reasoning 中说明这是无关问题，系统会礼貌地拒绝并引导回算子开发。",
   "confidence": 0.90
+}
+```
+
+### 示例 13: 新算子需求（切换算子类型）
+```json
+{
+  "suggested_action": "retry",
+  "reasoning": "当前正在开发 ReLU 算子，用户说'生成一个 Tanh 算子'，Tanh 与 ReLU 是不同类型的激活函数，这是用户要求生成新的算子。应该选择 retry 操作，清空之前的状态，重新生成新算子的 Task 代码。",
+  "confidence": 0.95,
+  "is_new_operator": true
+}
+```
+
+### 示例 14: 新算子需求（生成并测试）
+```json
+{
+  "suggested_action": "retry",
+  "reasoning": "当前正在开发 Sigmoid 算子，用户说'生成一个 Softmax 并测试性能'，Softmax 与 Sigmoid 不同，这是新算子需求。虽然包含'测试性能'，但关键是算子类型改变了，应该选择 retry 重新开始。",
+  "confidence": 0.92,
+  "is_new_operator": true
+}
+```
+
+### 示例 15: 不是新算子（修改当前算子）
+```json
+{
+  "suggested_action": "revise",
+  "reasoning": "当前正在开发 ReLU 算子，用户说'修改输入 shape 为 (2048, 2048)'，这是对当前算子参数的修改，不是新的算子需求。选择 revise 操作。",
+  "confidence": 0.98,
+  "is_new_operator": false
 }
 ```
 
