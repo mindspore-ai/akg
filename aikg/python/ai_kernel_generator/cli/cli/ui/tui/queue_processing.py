@@ -80,9 +80,56 @@ class _QueueProcessorBase:
 class OutputQueueProcessor(_QueueProcessorBase):
     """负责处理 worker->UI 的 output_queue。"""
 
+    def _snapshot_chat_scroll(self) -> tuple[float, int] | None:
+        if self.app.chat_log is None:
+            return None
+        try:
+            scroll_y = float(self.app.chat_log.scroll_y)
+        except Exception as e:
+            log.debug("[OutputQueue] read scroll_y failed; skip snapshot", exc_info=e)
+            return None
+        try:
+            start_line = int(getattr(self.app.chat_log, "_start_line", 0) or 0)
+        except (TypeError, ValueError) as e:
+            log.debug("[OutputQueue] read _start_line failed; fallback 0", exc_info=e)
+            start_line = 0
+        return (scroll_y, start_line)
+
+    def _restore_chat_scroll(self, snapshot: tuple[float, int] | None) -> None:
+        if snapshot is None or self.app.chat_log is None:
+            return
+        scroll_y_before, start_line_before = snapshot
+        try:
+            start_line_after = int(getattr(self.app.chat_log, "_start_line", 0) or 0)
+        except (TypeError, ValueError) as e:
+            log.debug("[OutputQueue] read _start_line failed; keep snapshot", exc_info=e)
+            start_line_after = start_line_before
+        trimmed = max(0, start_line_after - start_line_before)
+        target_y = float(scroll_y_before - trimmed)
+        if target_y < 0:
+            target_y = 0.0
+        try:
+            max_y = float(self.app.chat_log.max_scroll_y)
+        except Exception:
+            max_y = None
+        if max_y is not None and target_y > max_y:
+            target_y = max_y
+        try:
+            current_y = float(self.app.chat_log.scroll_y)
+        except Exception:
+            current_y = target_y
+        if abs(current_y - target_y) < 0.5:
+            return
+        try:
+            # Keep the view stable when tail is off, even if lines are trimmed.
+            self.app.chat_log.scroll_to(y=target_y, animate=False, immediate=True)
+        except Exception as e:
+            log.debug("[OutputQueue] restore scroll failed", exc_info=e)
+
     def drain(self) -> None:
         wrote_output = False
         was_at_bottom = self._was_chat_at_bottom()
+        scroll_snapshot = self._snapshot_chat_scroll()
         drained = 0
         try:
             while True:
@@ -98,14 +145,17 @@ class OutputQueueProcessor(_QueueProcessorBase):
         except Empty:
             pass
 
-        if wrote_output and was_at_bottom and self.app.chat_log is not None:
-            if self.app.follow_tail:
+        if wrote_output and self.app.chat_log is not None:
+            should_auto_scroll = bool(self.app.follow_tail and was_at_bottom)
+            if should_auto_scroll:
                 try:
                     self.app.chat_log.scroll_end(animate=False)
                     if _LOG_OUTPUT_VERBOSE:
                         log.debug("[OutputQueue] auto_scroll_end")
                 except Exception as e:
                     log.debug("[OutputQueue] auto_scroll_end failed", exc_info=e)
+            else:
+                self._restore_chat_scroll(scroll_snapshot)
         if drained and not _LOG_OUTPUT_VERBOSE:
             log.debug(
                 "[OutputQueue] drained",
@@ -143,12 +193,36 @@ class OutputQueueProcessor(_QueueProcessorBase):
                 task_id=str(content.task_id or ""),
                 event_idx=int(content.event_idx or 0),
             )
+            task_id_s = str(content.task_id or "")
+            try:
+                event_idx_i = int(content.event_idx or 0)
+            except (TypeError, ValueError) as e:
+                log.debug(
+                    "[OutputQueue] event_idx cast failed; fallback 0", exc_info=e
+                )
+                event_idx_i = 0
             try:
                 self.app.chat.record_trace_anchor(
-                    str(content.task_id or ""), int(content.event_idx or 0)
+                    task_id_s, event_idx_i
                 )
             except Exception as e:
                 log.warning("[OutputQueue] record_trace_anchor failed", exc_info=e)
+            try:
+                anchor_y = int(
+                    self.app.trace_anchors.get((task_id_s, event_idx_i), 0) or 0
+                )
+            except (TypeError, ValueError) as e:
+                log.debug("[OutputQueue] anchor_y cast failed; fallback 0", exc_info=e)
+                anchor_y = 0
+            try:
+                if self.app.trace_panel is not None and hasattr(
+                    self.app.trace_panel, "update_anchor"
+                ):
+                    self.app.trace_panel.update_anchor(
+                        task_id_s, event_idx_i, anchor_y
+                    )
+            except Exception as e:
+                log.debug("[OutputQueue] update_anchor failed", exc_info=e)
             # 不写入 chat
             return False
 

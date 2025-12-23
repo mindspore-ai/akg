@@ -332,6 +332,10 @@ class SplitViewApp(App):
         self._task_id_to_tab_id: dict[str, str] = {}
         # 是否追底（Tail 模式）：默认开启；用户点 Trace/上滑后自动关闭
         self.follow_tail: bool = True
+        # 当前视图位置与上次点击的 Trace 目标位置（用于定位确认）
+        self._current_scroll_y: Optional[int] = None
+        self._current_trace_anchor_y: Optional[int] = None
+        self._chat_subtitle_cache: str = ""
         # 是否展示顶部任务 Tabs（仅 evolve 并发时需要）
         self.show_task_tabs: bool = self._env_bool("AIKG_TUI_TASK_TABS", True)
         # 可恢复会话：默认写入临时目录；用户 Ctrl+C 退出时选择“保存/丢弃”
@@ -360,16 +364,57 @@ class SplitViewApp(App):
             log.info("[TUI] follow_tail", enabled=bool(self.follow_tail))
         except Exception as e:
             log.debug("[TUI] log follow_tail failed", exc_info=e)
-        # 给用户一个明确的可见状态：Chat 标题副标题显示 Tail 状态
+        # 给用户一个明确的可见状态：Chat 标题副标题显示 Tail 状态/位置
+        self._update_chat_subtitle()
+
+    def set_current_scroll_y(self, value: float | int | None) -> None:
+        if value is None:
+            new_value = None
+        else:
+            try:
+                new_value = int(value)
+            except (TypeError, ValueError):
+                return
+        if new_value == self._current_scroll_y:
+            return
+        self._current_scroll_y = new_value
+        self._update_chat_subtitle()
+
+    def set_trace_anchor_y(self, anchor_y: int | None) -> None:
+        if anchor_y is None:
+            new_value = None
+        else:
+            try:
+                new_value = int(anchor_y)
+            except (TypeError, ValueError):
+                return
+        if new_value == self._current_trace_anchor_y:
+            return
+        self._current_trace_anchor_y = new_value
+        self._update_chat_subtitle()
+
+    def _format_chat_subtitle(self) -> str:
+        tail_text = t("tui.tail.on") if self.follow_tail else t("tui.tail.off")
+        parts = [tail_text]
+        if self._current_scroll_y is not None:
+            parts.append(f"y:{self._current_scroll_y}")
+        if self._current_trace_anchor_y is not None:
+            parts.append(f"anchor_y:{self._current_trace_anchor_y}")
+        return " | ".join(parts)
+
+    def _update_chat_subtitle(self) -> None:
         try:
-            if self.chat_log is not None:
-                self.chat_log.border_subtitle = (
-                    t("tui.tail.on") if self.follow_tail else t("tui.tail.off")
-                )
-                try:
-                    self.chat_log.refresh()
-                except Exception as e:
-                    log.debug("[TUI] chat_log.refresh failed", exc_info=e)
+            if self.chat_log is None:
+                return
+            subtitle = self._format_chat_subtitle()
+            if subtitle == self._chat_subtitle_cache:
+                return
+            self._chat_subtitle_cache = subtitle
+            self.chat_log.border_subtitle = subtitle
+            try:
+                self.chat_log.refresh()
+            except Exception as e:
+                log.debug("[TUI] chat_log.refresh failed", exc_info=e)
         except Exception as e:
             log.debug("[TUI] set chat_log.border_subtitle failed", exc_info=e)
 
@@ -384,8 +429,8 @@ class SplitViewApp(App):
                 yield self.task_tabs
 
         with Container(id="main-container"):
-            # 回放模式需要尽量保留历史，避免只看到最后一段输出
-            chat_max_lines = 200_000 if self.resume_mode else 1000
+            # 尽量保留历史，避免只看到最后一段输出
+            chat_max_lines = 200_000
             self.chat_log = LogPane(
                 t("tui.title.chat"), id="chat-log", max_lines=chat_max_lines
             )
@@ -417,6 +462,11 @@ class SplitViewApp(App):
         if self.user_input is not None:
             self.user_input.focus()
         self.i18n.apply()
+        if self.chat_log is not None:
+            try:
+                self.set_current_scroll_y(self.chat_log.scroll_y)
+            except Exception as e:
+                log.debug("[TUI] init scroll_y failed", exc_info=e)
 
         # 通知 Presenter 应用已挂载（打印 Logo 等）
         try:
