@@ -87,11 +87,6 @@ class SubAgentBase(ABC):
         pass
     
     @abstractmethod
-    def get_description(self) -> str:
-        """返回子 Agent 的描述（用于 LLM 决策）"""
-        pass
-    
-    @abstractmethod
     def get_detailed_info(self) -> Dict[str, Any]:
         """
         返回子 Agent 的详细信息（用于 LLM 决策选择）
@@ -120,9 +115,6 @@ class CodeOnlySubAgent(SubAgentBase):
     def get_name(self) -> str:
         return "codeonly"
     
-    def get_description(self) -> str:
-        return "Direct code generation without design phase (Coder → Verifier)"
-    
     def get_detailed_info(self) -> Dict[str, Any]:
         """返回详细信息用于 LLM 决策"""
         return {
@@ -144,7 +136,7 @@ class CodeOnlySubAgent(SubAgentBase):
                 "流程简单：仅两个步骤（生成 + 验证）",
                 "适用范围广：适合大多数标准算子",
                 "资源消耗合理：LLM 调用次数适中",
-                "成熟稳定：基于成熟的 Coder Agent"
+                "稳定：基于 Coder Agent"
             ],
             "limitations": [
                 "不支持迭代优化：无法通过多轮优化提升性能",
@@ -216,9 +208,6 @@ class EvolveSubAgent(SubAgentBase):
     def get_name(self) -> str:
         return "evolve"
     
-    def get_description(self) -> str:
-        return "Evolutionary optimization for performance"
-    
     def get_detailed_info(self) -> Dict[str, Any]:
         """返回详细信息用于 LLM 决策"""
         return {
@@ -236,7 +225,6 @@ class EvolveSubAgent(SubAgentBase):
                 "需要探索多种优化策略的场景",
                 "性能优化空间较大的算子",
                 "需要自动调优的算子",
-                "benchmark 对比场景",
                 "已有基础实现但需要进一步优化"
             ],
             "advantages": [
@@ -476,7 +464,8 @@ class SubAgentRegistry:
         result = {}
         for agent_name, agent_class in self._agents.items():
             temp_instance = agent_class(config={})
-            result[agent_name] = temp_instance.get_description()
+            detailed_info = temp_instance.get_detailed_info()
+            result[agent_name] = detailed_info.get("description", "")
         return result
     
     def get_agents_detailed_info(self) -> Dict[str, Dict[str, Any]]:
