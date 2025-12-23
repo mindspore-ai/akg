@@ -23,8 +23,13 @@
 
 #include "akg/Conversion/ArithToHIVM/ArithToHIVM.h"
 
+#include <algorithm>
+#include "akg/Dialect/NPUVector/IR/NPUVector.h"
+#include "akg/Utils/AnalysisCommon.hpp"
+#include "bishengir/Dialect/Annotation/IR/Annotation.h"
 #include "bishengir/Dialect/HIVM/IR/HIVM.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
@@ -45,6 +50,32 @@ namespace mlir {
 
 namespace mlir {
 namespace {
+
+static void propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value src, Value dest) {
+  for (Operation *user : src.getUsers()) {
+    if (auto markOp = dyn_cast<annotation::MarkOp>(user)) {
+      if (auto attr = markOp->getAttrOfType<IntegerAttr>(kBufferSizeInByteAttr)) {
+        auto srcType = cast<ShapedType>(src.getType()).getElementType();
+        auto destType = cast<ShapedType>(dest.getType()).getElementType();
+
+        if (srcType.isIndex() || destType.isIndex()) return;
+
+        unsigned srcWidth = srcType.getIntOrFloatBitWidth();
+        unsigned destWidth = destType.getIntOrFloatBitWidth();
+
+        if (srcWidth == 0) return;
+
+        int64_t oldSize = attr.getInt();
+        int64_t newSize = (oldSize * destWidth) / srcWidth;
+
+        auto newMarkOp = rewriter.create<annotation::MarkOp>(loc, dest);
+        newMarkOp->setAttr(kBufferSizeInByteAttr, rewriter.getIndexAttr(newSize));
+        break;
+      }
+    }
+  }
+}
+
 template <typename ArithOp, typename HIVMOp>
 struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
   using OpConversionPattern<ArithOp>::OpConversionPattern;
@@ -56,18 +87,32 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
     Location loc = op.getLoc();
     Type resType = op.getResult().getType();
 
-    auto vectorType = dyn_cast<VectorType>(resType);
-    if (!vectorType) {
+    ArrayRef<int64_t> shape;
+    Type elemType;
+    if (auto vectorType = dyn_cast<VectorType>(resType)) {
+      shape = vectorType.getShape();
+      elemType = vectorType.getElementType();
+    } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
+      shape = npuVectorType.getShape();
+      elemType = npuVectorType.getElementType();
+    } else {
       return failure();
     }
 
     Value lhsMemRef = adaptor.getLhs();
     Value rhsMemRef = adaptor.getRhs();
 
-    Type elemType = vectorType.getElementType();
-    auto memRefType = MemRefType::get(vectorType.getShape(), elemType);
+    auto memRefType = MemRefType::get(shape, elemType);
 
-    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
+    SmallVector<Value> allocOperands;
+    for (int i = 0; i < memRefType.getRank(); ++i) {
+      if (memRefType.isDynamicDim(i)) {
+        Value dim = rewriter.create<memref::DimOp>(loc, lhsMemRef, i);
+        allocOperands.push_back(dim);
+      }
+    }
+    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    propagateBufferSizeMark(rewriter, loc, lhsMemRef, resBuf);
 
     rewriter.create<HIVMOp>(
         loc,
@@ -141,16 +186,30 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     Location loc = op.getLoc();
     Type resType = op.getResult().getType();
 
-    auto vectorType = dyn_cast<VectorType>(resType);
-    if (!vectorType) {
+    ArrayRef<int64_t> shape;
+    Type elemType;
+    if (auto vectorType = dyn_cast<VectorType>(resType)) {
+      shape = vectorType.getShape();
+      elemType = vectorType.getElementType();
+    } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
+      shape = npuVectorType.getShape();
+      elemType = npuVectorType.getElementType();
+    } else {
       return failure();
     }
 
     Value srcMemRef = adaptor.getOperands()[0];
 
-    Type elemType = vectorType.getElementType();
-    auto memRefType = MemRefType::get(vectorType.getShape(), elemType);
-    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
+    auto memRefType = MemRefType::get(shape, elemType);
+    SmallVector<Value> allocOperands;
+    for (int i = 0; i < memRefType.getRank(); ++i) {
+      if (memRefType.isDynamicDim(i)) {
+        Value dim = rewriter.create<memref::DimOp>(loc, srcMemRef, i);
+        allocOperands.push_back(dim);
+      }
+    }
+    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
 
     hivm::RoundMode rounding = selectRoundMode(op);
     auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(rounding);
@@ -177,14 +236,21 @@ struct ArithBitcastToHIVM : public OpConversionPattern<arith::BitcastOp> {
     Location loc = op.getLoc();
     Type resType = op.getResult().getType();
 
-    auto vectorType = dyn_cast<VectorType>(resType);
-    if (!vectorType) {
+    ArrayRef<int64_t> shape;
+    Type elemType;
+    if (auto vectorType = dyn_cast<VectorType>(resType)) {
+      shape = vectorType.getShape();
+      elemType = vectorType.getElementType();
+    } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
+      shape = npuVectorType.getShape();
+      elemType = npuVectorType.getElementType();
+    } else {
       return failure();
     }
 
     Value srcMemRef = adaptor.getIn();
 
-    auto memRefType = MemRefType::get(vectorType.getShape(), vectorType.getElementType());
+    auto memRefType = MemRefType::get(shape, elemType);
 
     Value res = rewriter.create<hivm::BitcastOp>(
         loc,
@@ -253,16 +319,30 @@ struct ArithCmpToHIVM : OpConversionPattern<CompareOp> {
                                 ConversionPatternRewriter &rewriter) const final {
     Location loc = op.getLoc();
     Type resType = op.getResult().getType();
-    auto vectorType = dyn_cast<VectorType>(resType);
-    if (!vectorType)
+    ArrayRef<int64_t> shape;
+    Type elemType;
+    if (auto vectorType = dyn_cast<VectorType>(resType)) {
+      shape = vectorType.getShape();
+      elemType = vectorType.getElementType();
+    } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
+      shape = npuVectorType.getShape();
+      elemType = npuVectorType.getElementType();
+    } else {
       return failure();
+    }
 
     Value lhs = adaptor.getLhs();
     Value rhs = adaptor.getRhs();
 
-    Type elemType = vectorType.getElementType();
-    auto memRefType = MemRefType::get(vectorType.getShape(), elemType);
-    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
+    auto memRefType = MemRefType::get(shape, elemType);
+    SmallVector<Value> allocOperands;
+    for (int i = 0; i < memRefType.getRank(); ++i) {
+      if (memRefType.isDynamicDim(i)) {
+        Value dim = rewriter.create<memref::DimOp>(loc, lhs, i);
+        allocOperands.push_back(dim);
+      }
+    }
+    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
 
     hivm::CompareMode predicate = selectPredicate(op);
     auto predicateAttr = rewriter.getAttr<hivm::CompareModeAttr>(predicate);
@@ -290,17 +370,52 @@ struct ArithMulExtToHIVM : public OpConversionPattern<ArithOp> {
     Type lowType = op.getLow().getType();
     Type highType = op.getHigh().getType();
 
-    auto lowVectorType = dyn_cast<VectorType>(lowType);
-    auto highVectorType = dyn_cast<VectorType>(highType);
-
-    if (!lowVectorType || !highVectorType)
+    ArrayRef<int64_t> lowShape;
+    Type lowElemType;
+    if (auto lowVectorType = dyn_cast<VectorType>(lowType)) {
+      lowShape = lowVectorType.getShape();
+      lowElemType = lowVectorType.getElementType();
+    } else if (auto lowNpuVectorType = dyn_cast<npuvector::NPUVectorType>(lowType)) {
+      lowShape = lowNpuVectorType.getShape();
+      lowElemType = lowNpuVectorType.getElementType();
+    } else {
       return failure();
+    }
 
-    auto lowMemRefType = MemRefType::get(lowVectorType.getShape(), lowVectorType.getElementType());
-    auto highMemRefType = MemRefType::get(highVectorType.getShape(), highVectorType.getElementType());
+    ArrayRef<int64_t> highShape;
+    Type highElemType;
+    if (auto highVectorType = dyn_cast<VectorType>(highType)) {
+      highShape = highVectorType.getShape();
+      highElemType = highVectorType.getElementType();
+    } else if (auto highNpuVectorType = dyn_cast<npuvector::NPUVectorType>(highType)) {
+      highShape = highNpuVectorType.getShape();
+      highElemType = highNpuVectorType.getElementType();
+    } else {
+      return failure();
+    }
 
-    Value lowBuf = rewriter.create<memref::AllocOp>(loc, lowMemRefType);
-    Value highBuf = rewriter.create<memref::AllocOp>(loc, highMemRefType);
+    auto lowMemRefType = MemRefType::get(lowShape, lowElemType);
+    auto highMemRefType = MemRefType::get(highShape, highElemType);
+
+    SmallVector<Value> lowAllocOperands;
+    for (int i = 0; i < lowMemRefType.getRank(); ++i) {
+      if (lowMemRefType.isDynamicDim(i)) {
+        Value dim = rewriter.create<memref::DimOp>(loc, lhs, i);
+        lowAllocOperands.push_back(dim);
+      }
+    }
+    Value lowBuf = rewriter.create<memref::AllocOp>(loc, lowMemRefType, lowAllocOperands);
+    propagateBufferSizeMark(rewriter, loc, lhs, lowBuf);
+
+    SmallVector<Value> highAllocOperands;
+    for (int i = 0; i < highMemRefType.getRank(); ++i) {
+      if (highMemRefType.isDynamicDim(i)) {
+        Value dim = rewriter.create<memref::DimOp>(loc, lhs, i);
+        highAllocOperands.push_back(dim);
+      }
+    }
+    Value highBuf = rewriter.create<memref::AllocOp>(loc, highMemRefType, highAllocOperands);
+    propagateBufferSizeMark(rewriter, loc, lhs, highBuf);
 
     SmallVector<Value> dsts = {lowBuf, highBuf};
 
@@ -322,16 +437,31 @@ struct ElementwiseOpToHIVMBinary : public OpConversionPattern<ArithOp> {
                                 ConversionPatternRewriter &rewriter) const final {
     Location loc = op.getLoc();
     Type resType = op.getResult().getType();
-    auto vectorType = dyn_cast<VectorType>(resType);
-    if (!vectorType)
+    ArrayRef<int64_t> shape;
+    Type elemType;
+    if (auto vectorType = dyn_cast<VectorType>(resType)) {
+      shape = vectorType.getShape();
+      elemType = vectorType.getElementType();
+    } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
+      shape = npuVectorType.getShape();
+      elemType = npuVectorType.getElementType();
+    } else {
       return failure();
+    }
 
     Value lhs = adaptor.getLhs();
     Value rhs = adaptor.getRhs();
 
-    Type elemType = vectorType.getElementType();
-    auto memRefType = MemRefType::get(vectorType.getShape(), elemType);
-    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
+    auto memRefType = MemRefType::get(shape, elemType);
+    SmallVector<Value> allocOperands;
+    for (int i = 0; i < memRefType.getRank(); ++i) {
+      if (memRefType.isDynamicDim(i)) {
+        Value dim = rewriter.create<memref::DimOp>(loc, lhs, i);
+        allocOperands.push_back(dim);
+      }
+    }
+    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    propagateBufferSizeMark(rewriter, loc, lhs, resBuf);
 
     if constexpr (std::is_same_v<HIVMOp, hivm::VShROp>) {
       rewriter.create<HIVMOp>(
@@ -357,17 +487,32 @@ struct ArithSelectToHIVM : public OpConversionPattern<SelectOp> {
                                 ConversionPatternRewriter &rewriter) const final {
     Location loc = op.getLoc();
     Type resType = op.getResult().getType();
-    auto vectorType = dyn_cast<VectorType>(resType);
-    if (!vectorType)
+    ArrayRef<int64_t> shape;
+    Type elemType;
+    if (auto vectorType = dyn_cast<VectorType>(resType)) {
+      shape = vectorType.getShape();
+      elemType = vectorType.getElementType();
+    } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
+      shape = npuVectorType.getShape();
+      elemType = npuVectorType.getElementType();
+    } else {
       return failure();
+    }
 
     Value cond = adaptor.getCondition();
     Value trueVal = adaptor.getTrueValue();
     Value falseVal = adaptor.getFalseValue();
 
-    Type elemType = vectorType.getElementType();
-    auto memRefType = MemRefType::get(vectorType.getShape(), elemType);
-    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
+    auto memRefType = MemRefType::get(shape, elemType);
+    SmallVector<Value> allocOperands;
+    for (int i = 0; i < memRefType.getRank(); ++i) {
+      if (memRefType.isDynamicDim(i)) {
+        Value dim = rewriter.create<memref::DimOp>(loc, cond, i);
+        allocOperands.push_back(dim);
+      }
+    }
+    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    propagateBufferSizeMark(rewriter, loc, cond, resBuf);
 
     rewriter.create<hivm::VSelOp>(
         loc,
@@ -389,9 +534,19 @@ struct ArithConstantToHIVM : public OpConversionPattern<arith::ConstantOp> {
   LogicalResult matchAndRewrite(arith::ConstantOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const final {
-    auto vectorType = dyn_cast<VectorType>(op.getType());
-    if (!vectorType)
+    Type type = op.getType();
+    ArrayRef<int64_t> shape;
+    Type elementType;
+
+    if (auto vectorType = dyn_cast<VectorType>(type)) {
+      shape = vectorType.getShape();
+      elementType = vectorType.getElementType();
+    } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(type)) {
+      shape = npuVectorType.getShape();
+      elementType = npuVectorType.getElementType();
+    } else {
       return failure();
+    }
 
     auto denseAttr = dyn_cast<DenseElementsAttr>(op.getValue());
     if (!denseAttr)
@@ -403,7 +558,7 @@ struct ArithConstantToHIVM : public OpConversionPattern<arith::ConstantOp> {
       return failure();
     Value scalarConstant = rewriter.create<arith::ConstantOp>(loc, typedScalarAttr);
 
-    auto memRefType = MemRefType::get(vectorType.getShape(), vectorType.getElementType());
+    auto memRefType = MemRefType::get(shape, elementType);
     Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType);
 
     rewriter.create<hivm::VBrcOp>(
@@ -515,9 +670,9 @@ struct VectorBroadcastToHIVM : public OpConversionPattern<vector::BroadcastOp> {
 
     rewriter.create<hivm::VBrcOp>(
         loc,
-        TypeRange{},  // void return
-        source,       // Scalar Input
-        resultBuf,    // Output MemRef
+        TypeRange{},
+        source,
+        resultBuf,
         rewriter.getDenseI64ArrayAttr({}));
 
     rewriter.replaceOp(op, resultBuf);
@@ -533,7 +688,10 @@ struct AffineForToHIVM : public OpConversionPattern<affine::AffineForOp> {
   LogicalResult matchAndRewrite(affine::AffineForOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    if (llvm::none_of(op.getResultTypes(), [](Type t) { return isa<VectorType>(t); })) {
+    // Only handle loops that have at least one vector-typed iteration argument.
+    if (llvm::none_of(op.getResultTypes(), [](Type t) {
+          return isa<VectorType>(t) || isa<npuvector::NPUVectorType>(t);
+        })) {
       return failure();
     }
 
@@ -568,11 +726,63 @@ struct AffineYieldToHIVM : public OpConversionPattern<affine::AffineYieldOp> {
   LogicalResult matchAndRewrite(affine::AffineYieldOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    if (llvm::none_of(op.getOperands(), [](Value v) { return isa<VectorType>(v.getType()); })) {
+    if (llvm::none_of(op.getOperands(), [](Value v) {
+          return isa<VectorType>(v.getType()) || isa<npuvector::NPUVectorType>(v.getType());
+        })) {
       return failure();
     }
 
     rewriter.replaceOpWithNewOp<affine::AffineYieldOp>(op, adaptor.getOperands());
+    return success();
+  }
+};
+
+
+struct ScfForToHIVM : public OpConversionPattern<scf::ForOp> {
+  using OpConversionPattern<scf::ForOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(scf::ForOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    // Only handle loops that have at least one vector-typed iteration argument.
+    if (llvm::none_of(op.getResultTypes(), [](Type t) {
+          return isa<VectorType>(t) || isa<npuvector::NPUVectorType>(t);
+        })) {
+      return failure();
+    }
+
+    auto newForOp = rewriter.create<scf::ForOp>(
+        op.getLoc(), adaptor.getLowerBound(), adaptor.getUpperBound(),
+        adaptor.getStep(), adaptor.getInitArgs());
+
+    Block &oldBlock = op.getRegion().front();
+    Block &newBlock = newForOp.getRegion().front();
+
+    SmallVector<Value> newBlockArgs(newBlock.getArguments().begin(), newBlock.getArguments().end());
+
+    rewriter.mergeBlocks(&oldBlock, &newBlock, newBlockArgs);
+
+    rewriter.replaceOp(op, newForOp.getResults());
+
+    return success();
+  }
+};
+
+
+struct ScfYieldToHIVM : public OpConversionPattern<scf::YieldOp> {
+  using OpConversionPattern<scf::YieldOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(scf::YieldOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (llvm::none_of(op.getOperands(), [](Value v) {
+          return isa<VectorType>(v.getType()) ||
+             isa<npuvector::NPUVectorType>(v.getType());
+        })) {
+      return failure();
+    }
+
+    rewriter.replaceOpWithNewOp<scf::YieldOp>(op, adaptor.getOperands());
     return success();
   }
 };
@@ -635,6 +845,44 @@ struct AffineStoreToHIVM : public OpConversionPattern<affine::AffineStoreOp> {
   }
 };
 
+struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
+  using OpConversionPattern<memref::StoreOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(memref::StoreOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value valToStore = adaptor.getValue();
+    Value memref = adaptor.getMemref();
+
+    auto valType = dyn_cast<MemRefType>(valToStore.getType());
+    auto memRefType = dyn_cast<MemRefType>(memref.getType());
+
+    if (!valType || !memRefType) {
+      return failure();
+    }
+
+    if (valType.getRank() == 1 && valType.getDimSize(0) == 1 && memRefType.getRank() == 0) {
+      auto newType = MemRefType::get({1}, memRefType.getElementType());
+      OpFoldResult offset = rewriter.getIndexAttr(0);
+      SmallVector<OpFoldResult> sizes = {rewriter.getIndexAttr(1)};
+      SmallVector<OpFoldResult> strides = {rewriter.getIndexAttr(1)};
+      Value casted = rewriter.create<memref::ReinterpretCastOp>(
+          op.getLoc(), newType, memref, offset, sizes, strides);
+      rewriter.create<hivm::StoreOp>(op.getLoc(), TypeRange{}, valToStore, casted);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    if (valType) {
+       rewriter.create<hivm::StoreOp>(op.getLoc(), TypeRange{}, valToStore, memref);
+       rewriter.eraseOp(op);
+       return success();
+    }
+
+    return failure();
+  }
+};
+
 struct VectorTransferReadToHIVM : public OpConversionPattern<vector::TransferReadOp> {
   using OpConversionPattern<vector::TransferReadOp>::OpConversionPattern;
 
@@ -658,25 +906,26 @@ struct VectorTransferReadToHIVM : public OpConversionPattern<vector::TransferRea
     int64_t memRefRank = memRefType.getRank();
     int64_t vecRank = vecType.getRank();
 
+    // Handle leading dimensions for rank reduction.
     for (int64_t i = 0; i < memRefRank - vecRank; ++i) {
       sizes.push_back(rewriter.getIndexAttr(1));
       strides.push_back(rewriter.getIndexAttr(1));
     }
 
+    // Set sizes to match vector shape.
     for (auto dim : vecType.getShape()) {
       sizes.push_back(rewriter.getIndexAttr(dim));
       strides.push_back(rewriter.getIndexAttr(1));
     }
 
+    // Infer result type for the rank-reduced subview.
     auto resultType = memref::SubViewOp::inferRankReducedResultType(
         vecType.getShape(), memRefType, offsets, sizes, strides);
 
-    Value slicedSource = rewriter.create<memref::SubViewOp>(
+    Value finalSource = rewriter.create<memref::SubViewOp>(
         loc, cast<MemRefType>(resultType), source, offsets, sizes, strides);
 
-    Value finalSource = slicedSource;
     Type elemType = vecType.getElementType();
-
     auto targetMemRefType = MemRefType::get(vecType.getShape(), elemType);
     Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType);
 
@@ -721,16 +970,19 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
     auto memRefType = cast<MemRefType>(dest.getType());
     int64_t memRefRank = memRefType.getRank();
 
+    // Handle leading dimensions for rank reduction.
     for (int64_t i = 0; i < memRefRank - vecRank; ++i) {
       sizes.push_back(rewriter.getIndexAttr(1));
       strides.push_back(rewriter.getIndexAttr(1));
     }
 
+    // Set sizes to match vector shape.
     for (auto dim : vecShape) {
       sizes.push_back(rewriter.getIndexAttr(dim));
       strides.push_back(rewriter.getIndexAttr(1));
     }
 
+    // Infer result type for the rank-reduced subview.
     auto resultType = memref::SubViewOp::inferRankReducedResultType(
         vecShape, memRefType, offsets, sizes, strides);
 
@@ -743,7 +995,9 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
     auto destMemRefType = cast<MemRefType>(slicedDest.getType());
     auto dataMemRefType = cast<MemRefType>(dataToWrite.getType());
 
+    // Align ranks between source data and destination slice.
     if (dataMemRefType.getRank() != destMemRefType.getRank()) {
+       // Collapse source data to scalar if it has higher rank (e.g., memref<1> to memref<>).
        if (dataMemRefType.getRank() > destMemRefType.getRank()) {
           SmallVector<int64_t> scalarShape;
           auto targetType = MemRefType::get(scalarShape, dataMemRefType.getElementType());
@@ -761,6 +1015,274 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
 
     rewriter.eraseOp(op);
 
+    return success();
+  }
+};
+
+struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::ReductionOp> {
+  using OpConversionPattern<npuvector::ReductionOp>::OpConversionPattern;
+
+  static LogicalResult getReduceOperation(vector::CombiningKind kind, hivm::ReduceOperation &reduceKind) {
+    switch (kind) {
+      case vector::CombiningKind::ADD:
+        reduceKind = hivm::ReduceOperation::sum;
+        return success();
+      case vector::CombiningKind::MUL:
+        reduceKind = hivm::ReduceOperation::prod;
+        return success();
+      case vector::CombiningKind::MINUI:
+      case vector::CombiningKind::MINSI:
+      case vector::CombiningKind::MINNUMF:
+        reduceKind = hivm::ReduceOperation::min;
+        return success();
+      case vector::CombiningKind::MAXUI:
+      case vector::CombiningKind::MAXSI:
+      case vector::CombiningKind::MAXNUMF:
+        reduceKind = hivm::ReduceOperation::max;
+        return success();
+      case vector::CombiningKind::AND:
+        reduceKind = hivm::ReduceOperation::andi;
+        return success();
+      case vector::CombiningKind::OR:
+        reduceKind = hivm::ReduceOperation::ori;
+        return success();
+      case vector::CombiningKind::XOR:
+        reduceKind = hivm::ReduceOperation::xori;
+        return success();
+      default:
+        return failure();
+    }
+  }
+
+  LogicalResult matchAndRewrite(npuvector::ReductionOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    Value sourceMemRef = adaptor.getVector();
+    if (!isa<MemRefType>(sourceMemRef.getType())) {
+      return rewriter.notifyMatchFailure(op, "expected memref source");
+    }
+
+    auto srcMemRefType = cast<MemRefType>(sourceMemRef.getType());
+    Type elemType = srcMemRefType.getElementType();
+    int64_t rank = srcMemRefType.getRank();
+
+    auto kind = op.getKind();
+    hivm::ReduceOperation reduceKind;
+    if (failed(getReduceOperation(kind, reduceKind))) {
+      return failure();
+    }
+
+    SmallVector<int64_t> targetShape(rank, 1);
+    auto resultMemRefType = MemRefType::get(targetShape, elemType);
+    Value resultBuf = rewriter.create<memref::AllocOp>(loc, resultMemRefType);
+
+    SmallVector<int64_t> reduceDims;
+    for (int64_t i = 0; i < rank; ++i) reduceDims.push_back(i);
+
+    auto reduceOpAttr = hivm::ReduceOpAttr::get(op.getContext(), reduceKind);
+    rewriter.create<hivm::VReduceOp>(
+        loc, TypeRange{}, sourceMemRef, resultBuf, Value(),
+        reduceOpAttr, rewriter.getDenseI64ArrayAttr(reduceDims), Value());
+
+    rewriter.replaceOp(op, resultBuf);
+
+    return success();
+  }
+};
+
+struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::TransferReadOp> {
+  using OpConversionPattern<npuvector::TransferReadOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(npuvector::TransferReadOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value source = adaptor.getSource();
+
+    if (!isa<MemRefType>(source.getType())) {
+      return rewriter.notifyMatchFailure(op, "expected memref source");
+    }
+
+    Type resultType = op.getResult().getType();
+    auto npuVecType = dyn_cast<npuvector::NPUVectorType>(resultType);
+    if (!npuVecType) return failure();
+
+    SmallVector<OpFoldResult> offsets = getAsOpFoldResult(adaptor.getIndices());
+    SmallVector<OpFoldResult> sizes;
+    SmallVector<OpFoldResult> strides;
+
+    auto memRefType = cast<MemRefType>(source.getType());
+    int64_t memRefRank = memRefType.getRank();
+    int64_t vecRank = npuVecType.getRank();
+
+    // Handle leading dimensions for rank reduction.
+    for (int64_t i = 0; i < memRefRank - vecRank; ++i) {
+      sizes.push_back(rewriter.getIndexAttr(1));
+      strides.push_back(rewriter.getIndexAttr(1));
+    }
+
+    auto dynamicSizes = adaptor.getDynamicSizes();
+    size_t dynamicSizeIdx = 0;
+
+    // Set sizes to match vector shape.
+    for (int64_t i = 0; i < vecRank; ++i) {
+      if (npuVecType.isDynamicDim(i)) {
+         if (dynamicSizeIdx < dynamicSizes.size()) {
+             sizes.push_back(dynamicSizes[dynamicSizeIdx++]);
+         } else {
+             return failure();
+         }
+      } else {
+         sizes.push_back(rewriter.getIndexAttr(npuVecType.getDimSize(i)));
+      }
+      strides.push_back(rewriter.getIndexAttr(1));
+    }
+
+    // Infer result type for the rank-reduced subview.
+    auto subViewResultType = memref::SubViewOp::inferRankReducedResultType(
+        npuVecType.getShape(), memRefType, offsets, sizes, strides);
+
+    Value finalSource = rewriter.create<memref::SubViewOp>(
+        loc, cast<MemRefType>(subViewResultType), source, offsets, sizes, strides);
+
+    Type elemType = npuVecType.getElementType();
+    auto targetMemRefType = MemRefType::get(npuVecType.getShape(), elemType);
+
+    // Prepare allocation operands for dynamic shapes.
+    SmallVector<Value> allocOperands(dynamicSizes.size());
+    std::copy(dynamicSizes.begin(), dynamicSizes.end(), allocOperands.begin());
+    Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType, allocOperands);
+
+    Value maxSize = adaptor.getMaxSize();
+    if (maxSize && !npuVecType.hasStaticShape()) {
+      if (auto constOp = maxSize.getDefiningOp<arith::ConstantOp>()) {
+        auto markOp = rewriter.create<annotation::MarkOp>(loc, tempBuf);
+        if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+          auto byteWidth = elemType.getIntOrFloatBitWidth() / 8;
+          markOp->setAttr(kBufferSizeInByteAttr, rewriter.getIndexAttr(intAttr.getInt() * byteWidth));
+        }
+      } else {
+        return failure();
+      }
+    }
+
+    rewriter.create<hivm::LoadOp>(
+        loc,
+        TypeRange{},
+        finalSource,
+        tempBuf);
+
+    rewriter.replaceOp(op, tempBuf);
+    return success();
+  }
+};
+
+struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::TransferWriteOp> {
+  using OpConversionPattern<npuvector::TransferWriteOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(npuvector::TransferWriteOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    Value dataToWrite = adaptor.getVector();
+    Value dest = adaptor.getSource();
+
+    if (!isa<MemRefType>(dest.getType())) {
+      return rewriter.notifyMatchFailure(op, "expected memref destination");
+    }
+    if (!isa<MemRefType>(dataToWrite.getType())) {
+      return rewriter.notifyMatchFailure(op, "expected memref data source");
+    }
+
+    auto dataMemRefType = cast<MemRefType>(dataToWrite.getType());
+    auto destMemRefType = cast<MemRefType>(dest.getType());
+
+    SmallVector<OpFoldResult> offsets = getAsOpFoldResult(adaptor.getIndices());
+    SmallVector<OpFoldResult> sizes;
+    SmallVector<OpFoldResult> strides;
+
+    int64_t memRefRank = destMemRefType.getRank();
+    int64_t dataRank = dataMemRefType.getRank();
+
+    // Handle leading dimensions for rank reduction.
+    for (int64_t i = 0; i < memRefRank - dataRank; ++i) {
+      sizes.push_back(rewriter.getIndexAttr(1));
+      strides.push_back(rewriter.getIndexAttr(1));
+    }
+
+    // Set sizes to match vector shape.
+    for (int64_t i = 0; i < dataRank; ++i) {
+      if (dataMemRefType.isDynamicDim(i)) {
+          Value dim = rewriter.create<memref::DimOp>(loc, dataToWrite, i);
+          sizes.push_back(dim);
+      } else {
+          sizes.push_back(rewriter.getIndexAttr(dataMemRefType.getDimSize(i)));
+      }
+      strides.push_back(rewriter.getIndexAttr(1));
+    }
+
+    // Infer result type for the rank-reduced subview.
+    auto resultType = memref::SubViewOp::inferRankReducedResultType(
+        dataMemRefType.getShape(), destMemRefType, offsets, sizes, strides);
+
+    Value slicedDest = rewriter.create<memref::SubViewOp>(
+        loc, cast<MemRefType>(resultType), dest, offsets, sizes, strides);
+
+    rewriter.create<hivm::StoreOp>(
+        loc,
+        TypeRange{},
+        dataToWrite,
+        slicedDest);
+
+    rewriter.eraseOp(op);
+
+    return success();
+  }
+};
+
+struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::BroadcastOp> {
+  using OpConversionPattern<npuvector::BroadcastOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(npuvector::BroadcastOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value source = adaptor.getSource();
+
+    Type resultType = op.getResult().getType();
+    auto npuVecType = dyn_cast<npuvector::NPUVectorType>(resultType);
+    if (!npuVecType) {
+      return failure();
+    }
+
+    Type elemType = npuVecType.getElementType();
+    auto memRefType = MemRefType::get(npuVecType.getShape(), elemType);
+
+    Value resultBuf = rewriter.create<memref::AllocOp>(loc, memRefType, op.getDynamicSizes());
+
+    // Similarly, use op.getMaxSize() instead of adaptor.getMaxSize()
+    Value maxSize = op.getMaxSize();
+    if (maxSize && !npuVecType.hasStaticShape()) {
+      if (auto constOp = maxSize.getDefiningOp<arith::ConstantOp>()) {
+        auto markOp = rewriter.create<annotation::MarkOp>(loc, resultBuf);
+        if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+          auto byteWidth = elemType.getIntOrFloatBitWidth() / 8;
+          markOp->setAttr(kBufferSizeInByteAttr, rewriter.getIndexAttr(intAttr.getInt() * byteWidth));
+        }
+      }
+    }
+
+    rewriter.create<hivm::VBrcOp>(
+        loc,
+        TypeRange{},
+        source,
+        resultBuf,
+        rewriter.getDenseI64ArrayAttr({}));
+
+    rewriter.replaceOp(op, resultBuf);
     return success();
   }
 };
@@ -823,19 +1345,92 @@ void hivm::populateArithToHIVMConversionPatterns(
   patterns.add<ArithSelectToHIVM<arith::SelectOp>>(patterns.getContext());
   patterns.add<ArithConstantToHIVM>(patterns.getContext());
   patterns.add<VectorReductionToHIVM>(patterns.getContext());
+  patterns.add<NPUVectorReductionToHIVM>(patterns.getContext());
+  patterns.add<
+      NPUVectorTransferReadToHIVM,
+      NPUVectorTransferWriteToHIVM,
+      NPUVectorBroadcastToHIVM>(patterns.getContext());
   patterns.add<VectorBroadcastToHIVM>(patterns.getContext());
   patterns.add<AffineForToHIVM>(patterns.getContext());
   patterns.add<AffineYieldToHIVM>(patterns.getContext());
   patterns.add<AffineStoreToHIVM>(patterns.getContext());
+  patterns.add<MemRefStoreToHIVM>(patterns.getContext());
+  patterns.add<ScfForToHIVM>(patterns.getContext());
+  patterns.add<ScfYieldToHIVM>(patterns.getContext());
 }
 
 namespace {
+static bool isVectorOrNPUVectorType(Type type) {
+  return isa<VectorType>(type) || isa<npuvector::NPUVectorType>(type);
+}
+
+static bool isLegalArithOp(Operation *op) {
+  if (auto constantOp = dyn_cast<arith::ConstantOp>(op)) {
+    return !isVectorOrNPUVectorType(constantOp.getType());
+  }
+  return !std::any_of(op->getResultTypes().begin(), op->getResultTypes().end(), isVectorOrNPUVectorType);
+}
+
+static bool isLegalAffineForOp(affine::AffineForOp op) {
+  if (std::any_of(op.getResultTypes().begin(), op.getResultTypes().end(), isVectorOrNPUVectorType)) {
+    return false;
+  }
+  for (auto arg : op.getRegion().getArguments()) {
+    if (isVectorOrNPUVectorType(arg.getType())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool isLegalAffineYieldOp(affine::AffineYieldOp op) {
+  for (auto operand : op.getOperands()) {
+    if (isVectorOrNPUVectorType(operand.getType())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool isLegalSCFForOp(scf::ForOp op) {
+  if (std::any_of(op.getResultTypes().begin(), op.getResultTypes().end(), isVectorOrNPUVectorType)) {
+    return false;
+  }
+  for (auto arg : op.getRegion().getArguments()) {
+    if (isVectorOrNPUVectorType(arg.getType())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool isLegalSCFYieldOp(scf::YieldOp op) {
+  for (auto operand : op.getOperands()) {
+    if (isVectorOrNPUVectorType(operand.getType())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool isLegalMemRefStoreOp(memref::StoreOp op) {
+  if (auto defOp = op.getValue().getDefiningOp()) {
+    if (isa<vector::ReductionOp, vector::TransferReadOp, vector::BroadcastOp,
+            npuvector::ReductionOp, npuvector::TransferReadOp, npuvector::BroadcastOp,
+            arith::MulSIExtendedOp, arith::MulUIExtendedOp>(defOp)) {
+      return false;
+    }
+  }
+  return !isa<MemRefType>(op.getValue().getType());
+}
+
 struct ArithToHIVMConversionPass
     : public impl::ConvertArithToHIVMBase<ArithToHIVMConversionPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<hivm::HIVMDialect, tensor::TensorDialect,
                     memref::MemRefDialect, vector::VectorDialect,
-                    arith::ArithDialect, affine::AffineDialect>();
+                    arith::ArithDialect, affine::AffineDialect, scf::SCFDialect,
+                    annotation::AnnotationDialect>();
   }
   void runOnOperation() override;
 };
@@ -844,38 +1439,19 @@ void ArithToHIVMConversionPass::runOnOperation() {
   ConversionTarget target(getContext());
   // HIVM and Tensor are legal
   target.addLegalDialect<hivm::HIVMDialect, tensor::TensorDialect,
-                          memref::MemRefDialect, affine::AffineDialect, BuiltinDialect>();
-  target.addDynamicallyLegalDialect<arith::ArithDialect>([](Operation *op) {
-    if (auto constantOp = dyn_cast<arith::ConstantOp>(op)) {
-      return !isa<RankedTensorType>(constantOp.getType()) &&
-             !isa<VectorType>(constantOp.getType());
-    }
-    for (Type type : op->getResultTypes()) {
-      if (isa<VectorType>(type))
-        return false;
-    }
-    return true;
-  });
-  target.addDynamicallyLegalOp<affine::AffineForOp>([](affine::AffineForOp op) {
-    for (Type type : op.getResultTypes()) {
-      if (isa<VectorType>(type))
-        return false;
-    }
-    for (auto arg : op.getRegion().getArguments()) {
-      if (isa<VectorType>(arg.getType()))
-        return false;
-    }
-    return true;
-  });
-  target.addDynamicallyLegalOp<affine::AffineYieldOp>([](affine::AffineYieldOp op) {
-    for (auto operand : op.getOperands()) {
-      if (isa<VectorType>(operand.getType()))
-        return false;
-    }
-    return true;
-  });
+                          memref::MemRefDialect, affine::AffineDialect, scf::SCFDialect, BuiltinDialect,
+                          annotation::AnnotationDialect>();
+  target.addDynamicallyLegalDialect<arith::ArithDialect>(isLegalArithOp);
+  target.addDynamicallyLegalOp<affine::AffineForOp>(isLegalAffineForOp);
+  target.addDynamicallyLegalOp<affine::AffineYieldOp>(isLegalAffineYieldOp);
+  target.addDynamicallyLegalOp<scf::ForOp>(isLegalSCFForOp);
+  target.addDynamicallyLegalOp<scf::YieldOp>(isLegalSCFYieldOp);
+  target.addDynamicallyLegalOp<memref::StoreOp>(isLegalMemRefStoreOp);
   target.addIllegalOp<affine::AffineStoreOp>();
-  target.addIllegalOp<vector::ReductionOp, vector::TransferReadOp, vector::TransferWriteOp, vector::BroadcastOp>();
+  target.addIllegalOp<vector::ReductionOp, vector::TransferReadOp,
+                          vector::TransferWriteOp, vector::BroadcastOp>();
+  target.addIllegalOp<npuvector::ReductionOp, npuvector::TransferReadOp,
+                          npuvector::TransferWriteOp, npuvector::BroadcastOp>();
 
   RewritePatternSet patterns(&getContext());
   hivm::populateArithToHIVMConversionPatterns(patterns);

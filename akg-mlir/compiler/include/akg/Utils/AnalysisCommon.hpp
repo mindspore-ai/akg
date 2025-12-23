@@ -69,6 +69,8 @@ constexpr auto kNEONInstructionSet = "neon";
 constexpr auto kTileForOneAttr = "__tiled_for___1";
 constexpr auto kMapForToForallAttr = "map_for_to_forall";
 constexpr auto kVectorAttr = "vector";
+constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
+
 
 enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduce, Matmul, Conv };
 const std::unordered_map<int, std::string> operatorTemplateMap = {{0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"},
