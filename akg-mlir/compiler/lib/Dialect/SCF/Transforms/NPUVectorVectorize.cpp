@@ -323,20 +323,6 @@ static scf::ForOp createVectorizedLoop(VectorizationContext &ctx) {
   }
 }
 
-static AffineMap getMinorIdentityMap(ShapedType shapedType, ArrayRef<int64_t> vectorShape,
-                                      MLIRContext *context) {
-  int64_t memRefRank = shapedType.getRank();
-  int64_t vectorRank = vectorShape.size();
-
-  SmallVector<AffineExpr, 4> results;
-  for (int64_t i = 0; i < vectorRank; ++i) {
-    int64_t memRefDim = memRefRank - vectorRank + i;
-    results.push_back(getAffineDimExpr(memRefDim, context));
-  }
-
-  return AffineMap::get(memRefRank, 0, results, context);
-}
-
 static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
   MemRefType memRefType = loadOp.getMemRefType();
   Type elemType = memRefType.getElementType();
@@ -355,15 +341,9 @@ static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
     indices.push_back(newIdx);
   }
 
-  AffineMap permMap = getMinorIdentityMap(memRefType, vecType.getShape(),
-                                           ctx.builder.getContext());
-
   Value padding = ctx.builder.create<arith::ConstantOp>(
       loc,
       ctx.builder.getZeroAttr(elemType));
-
-  SmallVector<bool> inBoundsVec(vecType.getRank(), false);
-  ArrayAttr inBoundsAttr = ctx.builder.getBoolArrayAttr(inBoundsVec);
 
   SmallVector<Value> dynamicSizes;
   if (ctx.isDynamic && ctx.vectorSizeValue) {
@@ -375,12 +355,10 @@ static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
       vecType,
       loadOp.getMemRef(),
       ValueRange(indices),
-      permMap,
       padding,
       Value(),
       ValueRange(dynamicSizes),
-      ctx.maxStepValue,
-      inBoundsAttr);
+      ctx.maxStepValue);
 
   return transferRead.getResult();
 }
@@ -399,21 +377,11 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
     indices.push_back(newIdx);
   }
 
-  MemRefType memRefType = storeOp.getMemRefType();
-
   auto npuVecType = vectorValue.getType().dyn_cast<npuvector::NPUVectorType>();
   if (!npuVecType) {
     llvm_unreachable("vectorizeStore: vector value must be NPUVectorType");
     return;
   }
-
-  unsigned vectorRank = npuVecType.getRank();
-
-  AffineMap permMap = getMinorIdentityMap(memRefType, npuVecType.getShape(),
-                                           ctx.builder.getContext());
-
-  SmallVector<bool> inBoundsVec(vectorRank, false);
-  ArrayAttr inBoundsAttr = ctx.builder.getBoolArrayAttr(inBoundsVec);
 
   ctx.builder.create<npuvector::TransferWriteOp>(
       loc,
@@ -421,9 +389,7 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
       vectorValue,
       storeOp.getMemRef(),
       ValueRange(indices),
-      permMap,
-      Value(),
-      inBoundsAttr);
+      Value());
 }
 
 static Value vectorizeArithOp(Operation *op, VectorizationContext &ctx) {

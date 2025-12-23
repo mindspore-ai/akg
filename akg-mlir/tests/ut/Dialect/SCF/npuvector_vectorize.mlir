@@ -54,7 +54,7 @@ func.func @test_elementwise_dynamic(
   // CHECK: %[[SCALE_VEC:.*]] = npuvector.broadcast %{{.*}}[%[[DIM]]] [%[[MAX]]] : f32 to !npuvector<?xf32>
   // CHECK: %[[BIAS_VEC:.*]] = npuvector.broadcast %{{.*}}[%[[DIM]]] [%[[MAX]]] : f32 to !npuvector<?xf32>
   // CHECK: scf.for %{{.*}} = %{{.*}} to %[[DIM]] step %[[DIM]] {
-  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}][%[[DIM]]][%[[MAX]]], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
+  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[DIM]]] [%[[MAX]]], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
   // CHECK:   %[[SCALED_VEC:.*]] = arith.mulf %[[V_VEC]], %[[SCALE_VEC]] : !npuvector<?xf32>
   // CHECK:   %[[RESULT_VEC:.*]] = arith.addf %[[SCALED_VEC]], %[[BIAS_VEC]] : !npuvector<?xf32>
   // CHECK:   npuvector.transfer_write %[[RESULT_VEC]], %{{.*}} : !npuvector<?xf32>, memref<?xf32>
@@ -120,7 +120,7 @@ func.func @test_reduction_dynamic(%input: memref<?xf32>, %output: memref<f32>) {
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[NEUTRAL:.*]] = npuvector.broadcast %{{.*}}[%[[DIM]]] [%[[MAX]]] : f32 to !npuvector<?xf32>
   // CHECK: %[[SUM_VEC:.*]] = scf.for %{{.*}} = %{{.*}} to %[[DIM]] step %[[DIM]] iter_args(%[[ACC_VEC:.*]] = %[[NEUTRAL]]) -> (!npuvector<?xf32>) {
-  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}][%[[DIM]]][%[[MAX]]], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
+  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[DIM]]] [%[[MAX]]], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
   // CHECK:   %[[NEW_ACC_VEC:.*]] = arith.addf %[[ACC_VEC]], %[[V_VEC]] : !npuvector<?xf32>
   // CHECK:   scf.yield %[[NEW_ACC_VEC]] : !npuvector<?xf32>
   // CHECK: }

@@ -35,19 +35,18 @@ include "mlir/IR/BuiltinAttributes.td"
 
 def NPUVector_TransferReadOp :
   NPUVector_Op<"transfer_read", [
-      DeclareOpInterfaceMethods<VectorTransferOpInterface>,
       DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
       AttrSizedOperandSegments,
-      DestinationStyleOpInterface
+      TypesMatchWith<"padding type matches source element type",
+                     "source", "padding", 
+                     "getElementTypeOrSelf($_self)">
     ]>,
     Arguments<(ins AnyShaped:$source,
                    Variadic<Index>:$indices,
-                   AffineMapAttr:$permutation_map,
                    AnyType:$padding,
                    Optional<VectorOf<[I1]>>:$mask,
                    Variadic<Index>:$dynamicSizes,
-                   Optional<Index>:$maxSize,
-                   BoolArrayAttr:$in_bounds)>,
+                   Optional<Index>:$maxSize)>,
     Results<(outs AnyVectorOrNPUVectorOfAnyRank:$vector)> {
 
   let summary = "Reads a supervector from memory into an SSA vector value with dynamic shape support.";
@@ -104,39 +103,15 @@ def NPUVector_TransferReadOp :
     ```
   }];
 
-  let builders = [
-    /// Builder that sets padding to zero and an empty mask (variant with attrs).
-    OpBuilder<(ins "VectorType":$vectorType,
-                   "Value":$source,
-                   "ValueRange":$indices,
-                   "AffineMapAttr":$permutationMapAttr,
-                   "ArrayAttr":$inBoundsAttr)>,
-    /// Builder that sets padding to zero and an empty mask (variant without attrs).
-    OpBuilder<(ins "VectorType":$vectorType,
-                   "Value":$source,
-                   "ValueRange":$indices,
-                   "AffineMap":$permutationMap,
-                   CArg<"std::optional<ArrayRef<bool>>", "::std::nullopt">:$inBounds)>,
-    /// Builder that sets permutation map to 'getMinorIdentityMap'.
-    OpBuilder<(ins "VectorType":$vectorType,
-                   "Value":$source,
-                   "ValueRange":$indices,
-                   "Value":$padding,
-                   CArg<"std::optional<ArrayRef<bool>>", "::std::nullopt">:$inBounds)>,
-    /// Builder that sets padding to zero and permutation map to
-    /// 'getMinorIdentityMap'.
-    OpBuilder<(ins "VectorType":$vectorType,
-                   "Value":$source,
-                   "ValueRange":$indices,
-                   CArg<"std::optional<ArrayRef<bool>>", "::std::nullopt">:$inBounds)>,
-    /// Builder for vectorization: VectorType, Value, ValueRange, Value, AffineMap
-    OpBuilder<(ins "VectorType":$vectorType,
-                   "Value":$source,
-                   "ValueRange":$indices,
-                   "Value":$padding,
-                   "AffineMap":$permutationMap,
-                   CArg<"std::optional<ArrayRef<bool>>", "::std::nullopt">:$inBounds)>,
-  ];
+  let assemblyFormat = [{
+    $source `[` $indices `]`
+    (`[` $dynamicSizes^ `]`)?
+    (`[` $maxSize^ `]`)?
+    `,` $padding
+    (`,` $mask^ `:` type($mask))?
+    attr-dict
+    `:` type($source) `,` type($vector)
+  }];
 
   let extraClassDeclaration = [{
     // MaskableOpInterface methods.
@@ -145,15 +120,12 @@ def NPUVector_TransferReadOp :
     MutableOperandRange getDpsInitsMutable() {
       return MutableOperandRange(getOperation(), /*start=*/0, /*length=*/0);
     }
-
-    // Override VectorTransferOpInterface::getVectorType to handle NPUVectorType
-    VectorType getVectorType();
+    
+    // Helper method to get shaped type
+    ShapedType getShapedType() {
+      return llvm::cast<ShapedType>(getSource().getType());
+    }
   }];
-
-  let hasCanonicalizer = 1;
-  let hasCustomAssemblyFormat = 1;
-  let hasFolder = 1;
-  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -162,7 +134,6 @@ def NPUVector_TransferReadOp :
 
 def NPUVector_TransferWriteOp :
   NPUVector_Op<"transfer_write", [
-      DeclareOpInterfaceMethods<VectorTransferOpInterface>,
       DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
       AttrSizedOperandSegments,
       DestinationStyleOpInterface
@@ -170,9 +141,7 @@ def NPUVector_TransferWriteOp :
     Arguments<(ins AnyVectorOrNPUVectorOfAnyRank:$vector,
                    AnyShaped:$source,
                    Variadic<Index>:$indices,
-                   AffineMapAttr:$permutation_map,
-                   Optional<VectorOf<[I1]>>:$mask,
-                   BoolArrayAttr:$in_bounds)>,
+                   Optional<VectorOf<[I1]>>:$mask)>,
     Results<(outs Optional<AnyRankedTensor>:$result)> {
 
   let summary = "The npu_vector.transfer_write op writes a supervector to memory with dynamic shape support.";
@@ -227,39 +196,24 @@ def NPUVector_TransferWriteOp :
     ```
   }];
 
-  let builders = [
-    /// Builder that sets an empty mask (variant with attrs).
-    OpBuilder<(ins "Value":$vector,
-                   "Value":$source,
-                   "ValueRange":$indices,
-                   "AffineMapAttr":$permutationMapAttr,
-                   "ArrayAttr":$inBoundsAttr)>,
-    /// Builder that sets an empty mask (variant without attrs).
-    OpBuilder<(ins "Value":$vector,
-                   "Value":$source,
-                   "ValueRange":$indices,
-                   "AffineMap":$permutationMap,
-                   CArg<"std::optional<ArrayRef<bool>>", "::std::nullopt">:$inBounds)>,
-    /// Builder that sets permutation map to 'getMinorIdentityMap'.
-    OpBuilder<(ins "Value":$vector,
-                   "Value":$source,
-                   "ValueRange":$indices,
-                   CArg<"std::optional<ArrayRef<bool>>", "::std::nullopt">:$inBounds)>,
-  ];
+  let assemblyFormat = [{
+    $vector `,` $source `[` $indices `]`
+    (`,` $mask^ `:` type($mask))?
+    attr-dict
+    `:` type($vector) `,` type($source)
+    (`->` type($result)^)?
+  }];
 
   let extraClassDeclaration = [{
     MutableOperandRange getDpsInitsMutable() {
       return MutableOperandRange(getOperation(), /*start=*/1, /*length=*/1);
     }
-
-    // Override VectorTransferOpInterface::getVectorType to handle NPUVectorType
-    VectorType getVectorType();
+    
+    // Helper method to get shaped type
+    ShapedType getShapedType() {
+      return llvm::cast<ShapedType>(getSource().getType());
+    }
   }];
-
-  let hasCanonicalizer = 1;
-  let hasCustomAssemblyFormat = 1;
-  let hasFolder = 1;
-  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -319,8 +273,6 @@ def NPUVector_ReductionOp :
   ];
   let assemblyFormat = "$kind `,` $vector (`,` $acc^)? (`fastmath` `` $fastmath^)?"
                        " attr-dict `:` type($vector) `into` type($dest)";
-  let hasCanonicalizer = 1;
-  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -372,48 +324,6 @@ def NPUVector_BroadcastOp :
       build($_builder, $_state, resultType, source, dynamicSizes, /*maxSize=*/Value());
     }]>
   ];
-  
-  let hasFolder = 1;
-  let hasCanonicalizer = 1;
-  let hasVerifier = 1;
-}
-
-//===----------------------------------------------------------------------===//
-// DimOp
-//===----------------------------------------------------------------------===//
-
-def NPUVector_DimOp :
-  NPUVector_Op<"dim", [Pure]>,
-    Arguments<(ins NPUVectorOfAnyRank:$source,
-                   Index:$index)>,
-    Results<(outs Index:$result)> {
-
-  let summary = "dimension index operation for NPU vector";
-  
-  let description = [{
-    The `npuvector.dim` operation returns the size of the specified dimension
-    of an NPU vector. For static dimensions, this is folded to a constant.
-    For dynamic dimensions, this returns the dynamic size that was provided
-    when the vector was created.
-    
-    Example:
-    
-    ```mlir
-    // Static dimension
-    %v : npuvector<1024xf32>
-    %size = npuvector.dim %v, %c0 : npuvector<1024xf32>
-    // %size is folded to constant 1024
-    
-    // Dynamic dimension
-    %v : npuvector<?xf32>
-    %size = npuvector.dim %v, %c0 : npuvector<?xf32>
-    // %size returns the dynamic size from the defining op
-    ```
-  }];
-  
-  let assemblyFormat = "$source `,` $index attr-dict `:` qualified(type($source))";
-  
-  let hasFolder = 1;
 }
 
 #endif // NPUVECTOR_OPS
