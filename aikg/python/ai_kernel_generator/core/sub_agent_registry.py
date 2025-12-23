@@ -152,8 +152,19 @@ class CodeOnlySubAgent(SubAgentBase):
                      **kwargs) -> Tuple[bool, Dict[str, Any]]:
         """
         执行 codeonly workflow
+        
+        Args:
+            task_code: OpTaskBuilder 生成的 task 代码
+            op_name: 算子名称
+            task_id: 任务 ID
+            **kwargs: 其他参数，可选：
+                - task_type: 任务类型（"precision_only" 或 "profile"）
+                  - "precision_only": 只生成并验证代码（默认）
+                  - "profile": 生成代码并进行性能测试
         """
-        logger.info(f"Executing CodeOnly sub-agent for {op_name}")
+        # 获取任务类型（默认为 precision_only）
+        task_type = kwargs.get("task_type", "precision_only")
+        logger.info(f"Executing CodeOnly sub-agent for {op_name}, task_type={task_type}")
 
         try:
             # 延迟导入避免循环依赖
@@ -170,6 +181,7 @@ class CodeOnlySubAgent(SubAgentBase):
                 config=self.config,
                 framework=self.framework,
                 workflow="coder_only_workflow",  # codeonly 对应的 workflow
+                task_type=task_type,  # 传递任务类型
             )
             
             # 执行

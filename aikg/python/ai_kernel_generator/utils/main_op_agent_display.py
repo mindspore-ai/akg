@@ -82,7 +82,23 @@ def format_display_message(state: Dict[str, Any]) -> str:
                 lines.append("\n✅ 验证通过!")
                 profile = state.get("profile_result")
                 if profile:
-                    lines.append(f"📊 性能数据: {profile}")
+                    # 格式化显示性能数据
+                    lines.append("\n📊 性能测试结果:")
+                    base_time = profile.get("base_time", 0)
+                    gen_time = profile.get("gen_time", 0)
+                    speedup = profile.get("speedup", 0)
+                    if base_time > 0:
+                        lines.append(f"   • 原始性能: {base_time:.2f} us")
+                    if gen_time > 0:
+                        lines.append(f"   • 生成性能: {gen_time:.2f} us")
+                    if speedup > 0:
+                        lines.append(f"   • 加速比: {speedup:.2f}x")
+                    
+                    # 显示其他性能数据
+                    run_times = profile.get("run_times")
+                    warmup_times = profile.get("warmup_times")
+                    if run_times:
+                        lines.append(f"   • 测试轮数: {run_times} 次" + (f"（预热 {warmup_times} 次）" if warmup_times else ""))
             else:
                 verification_error = state.get("verification_error", "未知错误")
                 lines.append(f"\n⚠️ 验证未通过: {verification_error}")

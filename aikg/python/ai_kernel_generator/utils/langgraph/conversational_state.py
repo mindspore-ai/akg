@@ -72,7 +72,8 @@ class Message(TypedDict):
 class ConversationalOpGenState(TypedDict, total=False):
     """对话式算子生成的状态定义"""
     
-    user_request: str  # 当前用户请求
+    user_request: str  # 初始用户请求（用于 OpTaskBuilder）
+    current_user_input: Optional[str]  # 当前轮的用户输入（用于多轮对话中判断task_type等）
     user_feedback: Optional[str]  # 用户对 task 代码的反馈
     user_confirmed: bool  # 用户是否确认 task 代码
     retry_requested: Optional[bool]  # 用户是否请求重新生成 task（在子 Agent 执行后）

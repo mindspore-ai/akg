@@ -60,22 +60,29 @@ def quick_match_sub_agent_preference(user_input: str) -> Optional[str]:
         
     user_input_lower = user_input.lower()
     
-    # 检测性能测试关键词（kernel_verifier）- 优先级最高
-    performance_test_keywords = [
-        "性能测试", "测试性能", "性能分析", "分析性能", "跑性能",
-        "测一下性能", "测下性能", "测试一下性能", "测试下性能",
-        "验证性能", "验证一下性能", "验证下性能",
-        "测试一下", "测一下", "测下", "跑一下", "跑下",
-        "性能怎么样", "加速比", "速度对比", "性能对比",
-        "看看性能", "看下性能", "看一下性能",
-        "benchmark", "performance test", "test performance", "profile",
-        "check performance", "verify performance"
-    ]
+    # 关键判断：是否包含"生成"相关词汇
+    has_generate = any(kw in user_input_lower for kw in [
+        "生成", "创建", "写", "实现", "generate", "create", "implement", "write"
+    ])
     
-    for keyword in performance_test_keywords:
-        if keyword in user_input_lower:
-            logger.info(f"Quick matched kernel_verifier keyword: '{keyword}'")
-            return "kernel_verifier"
+    # 关键判断：是否包含"性能测试"相关词汇
+    has_performance_test = any(kw in user_input_lower for kw in [
+        "性能测试", "测试性能", "性能分析", "分析性能",
+        "验证性能", "性能怎么样", "加速比", "速度对比", "性能对比",
+        "benchmark", "performance test", "test performance", "profile",
+        "check performance", "verify performance",
+        "测试", "测一下", "跑一下", "看看性能"
+    ])
+    
+    # 场景1：包含"生成" + "性能测试" → 返回 None，让LLM判断或走默认codeonly（会设置task_type="profile"）
+    if has_generate and has_performance_test:
+        logger.info(f"User requests BOTH generate AND performance test, returning None (will use codeonly with task_type='profile')")
+        return None  # 返回 None，让后续逻辑选择 codeonly，task_type会被设置为profile
+    
+    # 场景2：只包含"性能测试"，不包含"生成" → kernel_verifier
+    if has_performance_test and not has_generate:
+        logger.info(f"User requests ONLY performance test (no generate), returning kernel_verifier")
+        return "kernel_verifier"
     
     # 检测换成 evolve 的关键词
     # 注意：只包含明确的 evolve 关键词和纯优化词，不包含"性能"相关词
@@ -150,6 +157,52 @@ def extract_sub_agent_from_reasoning(reasoning: str) -> Optional[str]:
             return "codeonly"
     
     return None
+
+
+def user_requests_profile(user_request: str) -> bool:
+    """判断用户是否要求性能测试（用于 codeonly task_type 判断）
+    
+    这个函数用于判断当走codeonly时，是否需要设置task_type="profile"
+    
+    Args:
+        user_request: 用户输入
+        
+    Returns:
+        bool: 是否要求性能测试
+    """
+    if not user_request:
+        return False
+    
+    user_request_lower = user_request.lower()
+    
+    # 关键判断：同时包含"生成"和"性能测试"相关词汇
+    has_generate = any(kw in user_request_lower for kw in [
+        "生成", "创建", "写", "实现", "generate", "create", "implement", "write"
+    ])
+    
+    has_performance_test = any(kw in user_request_lower for kw in [
+        # 性能测试相关
+        "性能测试", "测试性能", "性能分析", "分析性能",
+        "验证性能", "验证一下性能", "验证下性能",
+        "测试一下性能", "测下性能", "测一下性能",
+        "性能怎么样", "加速比", "速度对比", "性能对比",
+        "看看性能", "看下性能", "看一下性能",
+        "跑一下性能", "跑下性能",
+        # 带"并"的组合
+        "并测试", "并进行测试", "并测试性能", "并进行性能测试",
+        "并分析性能", "并验证性能", "并benchmark", "并测一下",
+        # 英文
+        "benchmark", "performance test", "test performance", "profile",
+        "check performance", "verify performance",
+        "and test", "and profile", "and benchmark"
+    ])
+    
+    # 如果同时包含"生成"和"性能测试"，返回True
+    if has_generate and has_performance_test:
+        logger.info(f"User requests generate + profile (has_generate=True, has_performance_test=True)")
+        return True
+    
+    return False
 
 
 def user_explicitly_requests_evolve(user_request: str, conversation_history: list) -> bool:
