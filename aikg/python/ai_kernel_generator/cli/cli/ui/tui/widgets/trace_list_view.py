@@ -33,6 +33,7 @@ class TraceListView(ListView):
         super().__init__(*args, **kwargs)
         self._chat_log: Optional[LogPane] = None
         self._on_item_selected: Optional[Callable[[], None]] = None
+        self._last_selected: Optional[tuple[str, int]] = None
 
     def set_chat_log(self, chat_log: LogPane) -> None:
         """注入 chat_log 依赖"""
@@ -63,6 +64,11 @@ class TraceListView(ListView):
         except Exception as e:
             log.warning("[TraceListView] log selection failed", exc_info=e)
 
+        try:
+            self._last_selected = (str(item.task_id or ""), int(item.event_idx or 0))
+        except Exception:
+            self._last_selected = None
+
         # 执行回调（如果有）- 例如 set_follow_tail(False)
         if self._on_item_selected is not None:
             try:
@@ -71,6 +77,13 @@ class TraceListView(ListView):
                 log.warning(
                     "[TraceListView] on_item_selected callback failed", exc_info=e
                 )
+
+        # 更新当前选择的 anchor_y（用于状态显示）
+        try:
+            if self.app is not None:
+                getattr(self.app, "set_trace_anchor_y", lambda *_: None)(anchor_y)
+        except Exception as e:
+            log.debug("[TraceListView] set_trace_anchor_y failed", exc_info=e)
 
         # 聚焦到 chat_log
         try:
@@ -90,3 +103,34 @@ class TraceListView(ListView):
                 self._chat_log.scroll_to(y=float(anchor_y), animate=False)
             except Exception as e2:
                 log.warning("[TraceListView] scroll_to failed", exc_info=e2)
+
+    def update_anchor(self, task_id: str, event_idx: int, anchor_y: int) -> None:
+        """回填/更新指定 Trace 条目的 anchor_y。"""
+        task_id_s = str(task_id or "")
+        try:
+            event_idx_i = int(event_idx or 0)
+        except (TypeError, ValueError):
+            return
+        updated = False
+        try:
+            for item in self.query(TraceListItem):
+                if (
+                    str(getattr(item, "task_id", "") or "") == task_id_s
+                    and int(getattr(item, "event_idx", 0) or 0) == event_idx_i
+                ):
+                    item.update_anchor_y(anchor_y)
+                    updated = True
+                    break
+        except Exception as e:
+            log.debug("[TraceListView] update_anchor query failed", exc_info=e)
+            return
+        if not updated:
+            return
+        if self._last_selected == (task_id_s, event_idx_i):
+            try:
+                if self.app is not None:
+                    getattr(self.app, "set_trace_anchor_y", lambda *_: None)(anchor_y)
+            except Exception as e:
+                log.debug(
+                    "[TraceListView] update current anchor_y failed", exc_info=e
+                )

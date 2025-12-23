@@ -23,7 +23,26 @@ class TraceListItem(ListItem):
     def __init__(
         self, text: str, *, task_id: str, event_idx: int, anchor_y: int = 0, **kwargs
     ):
-        super().__init__(Label(text, markup=True), **kwargs)
         self.task_id = str(task_id or "")
         self.event_idx = int(event_idx or 0)
         self.anchor_y = int(anchor_y or 0)
+        self.raw_text = str(text or "")
+        self._label = Label(self._format_display_text(), markup=True)
+        super().__init__(self._label, **kwargs)
+
+    def _format_display_text(self) -> str:
+        return f"{self.raw_text} [dim](y:{self.anchor_y})[/]"
+
+    def update_anchor_y(self, anchor_y: int) -> None:
+        try:
+            new_anchor = int(anchor_y or 0)
+        except (TypeError, ValueError):
+            return
+        if new_anchor == self.anchor_y:
+            return
+        self.anchor_y = new_anchor
+        try:
+            self._label.update(self._format_display_text())
+        except Exception:
+            # Label update failure shouldn't break Trace rendering.
+            pass

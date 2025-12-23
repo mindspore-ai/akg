@@ -26,7 +26,7 @@ class LogPane(RichLog):
         # 同时默认 wrap=False，会导致长行触发横向滚动条。
         kwargs.setdefault("min_width", 0)
         kwargs.setdefault("wrap", True)
-        kwargs.setdefault("max_lines", 1000)
+        kwargs.setdefault("max_lines", 200_000)
         # 实现"tmux tail"体验：
         # - 在底部：自动追踪最新输出
         # - 向上滚动离开底部：固定视图，不被新输出强制拉回底部
@@ -38,7 +38,7 @@ class LogPane(RichLog):
             self.max_lines = int(kwargs.get("max_lines", 1000) or 0)
         except (TypeError, ValueError) as e:
             log.debug("[LogPane] max_lines cast failed; fallback 1000", exc_info=e)
-            self.max_lines = 1000
+            self.max_lines = 200_000
 
     # 禁用滚动动画（大日志量时更顺滑）
     def action_page_up(self) -> None:
@@ -78,6 +78,17 @@ class LogPane(RichLog):
         except Exception as e:
             log.debug("[LogPane] set_follow_tail(True) failed", exc_info=e)
         self.scroll_end(animate=False)
+
+    def watch_scroll_y(self, value: float) -> None:
+        if getattr(self, "id", "") != "chat-log":
+            return
+        app = getattr(self, "app", None)
+        if app is None:
+            return
+        try:
+            getattr(app, "set_current_scroll_y", lambda *_: None)(value)
+        except Exception as e:
+            log.debug("[LogPane] set_current_scroll_y failed", exc_info=e)
 
     def action_scroll_left(self) -> None:
         self.scroll_left(animate=False)
