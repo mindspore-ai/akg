@@ -165,6 +165,24 @@ def _create_main_op_agent(request: CliMainAgentRequest, session_id: str):
     )
     config["session_id"] = session_id
     config["task_label"] = "main"
+    
+    # RAG 参数处理：优先使用 request 中的值，如果没有则从 session state 中读取
+    # 确保整个会话过程中 rag 参数保持一致
+    state = _main_agent_states.get(session_id)
+    if request.rag is True:
+        # 如果 request 中明确指定了 rag=True，使用它并保存到 state
+        config["rag"] = True
+        if state is not None:
+            state["rag"] = True
+        logger.info(f"[RAG] Setting rag=True from request for session {session_id}")
+    elif state is not None and "rag" in state:
+        # 如果 request 中没有明确指定，但从 state 中有，使用 state 中的值
+        config["rag"] = state.get("rag", False)
+        logger.info(f"[RAG] Using rag={config['rag']} from state for session {session_id}")
+    else:
+        # 默认值：使用 request.rag（可能是 False 或 None）
+        config["rag"] = bool(request.rag) if request.rag is not None else False
+        logger.info(f"[RAG] Using rag={config['rag']} from request (default) for session {session_id}")
 
     return MainOpAgent(
         config=config,
@@ -188,6 +206,12 @@ async def _handle_start_action(
     state = await agent.start_conversation(
         user_request=user_input, task_id=session_id
     )
+    # 确保将 rag 值保存到 state 中，以便后续调用可以使用
+    if not isinstance(state, dict):
+        state = {}
+    # 保存 rag 参数到 state，确保后续调用可以使用
+    state["rag"] = bool(request.rag) if request.rag is not None else False
+    logger.info(f"[RAG] Saved rag={state['rag']} to state for session {session_id} (start action)")
     _main_agent_states[session_id] = state
     return _build_response_state(state)
 

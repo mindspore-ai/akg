@@ -33,6 +33,7 @@ class OpCommandArgs:
     worker_url: Optional[str]
     devices: Optional[str]
     stream: bool
+    rag: bool
 
 
 @dataclass(frozen=True)

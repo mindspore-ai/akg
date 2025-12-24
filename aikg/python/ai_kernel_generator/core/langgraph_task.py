@@ -204,6 +204,9 @@ class LangGraphTask:
         
         # Coder
         try:
+            # 添加调试日志
+            logger.info(f"[LangGraphTask] _init_agents: self.config.get('rag')={self.config.get('rag')}, config keys: {list(self.config.keys()) if self.config else 'None'}")
+            
             agents['coder'] = Coder(
                 op_name=self.op_name,
                 task_desc=self.task_desc,

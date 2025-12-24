@@ -165,6 +165,7 @@ class CodeOnlySubAgent(SubAgentBase):
         # 获取任务类型（默认为 precision_only）
         task_type = kwargs.get("task_type", "precision_only")
         logger.info(f"Executing CodeOnly sub-agent for {op_name}, task_type={task_type}")
+        logger.info(f"[RAG] CodeOnlySubAgent.execute: config.rag={self.config.get('rag')}, config keys: {list(self.config.keys()) if self.config else 'None'}")
 
         try:
             # 延迟导入避免循环依赖
@@ -172,6 +173,9 @@ class CodeOnlySubAgent(SubAgentBase):
 
             # 使用 LangGraphTask 调用 codeonly workflow
             cfg = dict(self.config or {})
+            # 确保保留所有重要参数，特别是 rag
+            if "rag" in self.config:
+                cfg["rag"] = self.config["rag"]
             task_label = str(kwargs.get("task_label") or "").strip()
             if not task_label:
                 from ai_kernel_generator.utils.task_label import resolve_task_label
@@ -183,6 +187,7 @@ class CodeOnlySubAgent(SubAgentBase):
             if not task_label:
                 raise ValueError("[CodeOnlySubAgent] missing task_label")
             cfg["task_label"] = task_label
+            logger.info(f"[RAG] CodeOnlySubAgent: passing config with rag={cfg.get('rag')} to LangGraphTask")
             task = LangGraphTask(
                 op_name=op_name,
                 task_desc=task_code,
@@ -343,6 +348,9 @@ class EvolveSubAgent(SubAgentBase):
             logger.info(f"Parameters: max_rounds={max_rounds}, parallel_num={parallel_num}")
             
             cfg = dict(self.config or {})
+            # 确保保留所有重要参数，特别是 rag
+            if "rag" in self.config:
+                cfg["rag"] = self.config["rag"]
             task_label = str(kwargs.get("task_label") or "").strip()
             if not task_label:
                 from ai_kernel_generator.utils.task_label import resolve_task_label
@@ -354,6 +362,7 @@ class EvolveSubAgent(SubAgentBase):
             if not task_label:
                 raise ValueError("[EvolveSubAgent] missing task_label")
             cfg["task_label"] = task_label
+            logger.info(f"[RAG] EvolveSubAgent: passing config with rag={cfg.get('rag')} to evolve")
             evolution_result = await evolve(
                 op_name=op_name,
                 task_desc=task_code,
@@ -527,6 +536,9 @@ class KernelVerifierSubAgent(SubAgentBase):
             # 创建 KernelVerifier 实例
             impl_func_name = "ModelNew"
             cfg = dict(self.config or {})
+            # 确保保留所有重要参数，特别是 rag
+            if "rag" in self.config:
+                cfg["rag"] = self.config["rag"]
             task_label = str(kwargs.get("task_label") or "").strip()
             if not task_label:
                 from ai_kernel_generator.utils.task_label import resolve_task_label
@@ -538,6 +550,7 @@ class KernelVerifierSubAgent(SubAgentBase):
             if not task_label:
                 raise ValueError("[KernelVerifierSubAgent] missing task_label")
             cfg["task_label"] = task_label
+            logger.info(f"[RAG] KernelVerifierSubAgent: passing config with rag={cfg.get('rag')} to KernelVerifier")
             verifier = KernelVerifier(
                 op_name=op_name,
                 framework_code=task_code,

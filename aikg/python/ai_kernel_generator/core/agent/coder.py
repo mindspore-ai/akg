@@ -16,12 +16,10 @@ import logging
 from typing import Tuple, List
 from pathlib import Path
 from ai_kernel_generator.database.coder_database import CoderDatabase
-from ai_kernel_generator.utils.common_utils import ParserFactory, remove_copyright_from_text
-from ai_kernel_generator.utils.parser_registry import create_step_parser
+from ai_kernel_generator.utils.common_utils import ParserFactory, remove_copyright_from_text, get_md5_hash
 from ai_kernel_generator.utils.hardware_utils import get_hardware_doc
 from ai_kernel_generator.utils.swft_docs_loader import get_swft_docs_content
 from ai_kernel_generator.core.agent.agent_base import AgentBase
-from ai_kernel_generator.core.utils import collect_and_save_all_examples
 from ai_kernel_generator import get_project_root
 
 logger = logging.getLogger(__name__)
@@ -54,10 +52,15 @@ class Coder(AgentBase):
         self.codegen_step_count = 0
         self.api_step_count = 0
 
-        # 从config中获取model_config, database_config
+        self.sample_num = 3 # RAG默认样本数
+        
+        # RAG检索结果缓存，避免相同任务参数重复检索
+        # key: 任务参数的hash, value: 检索结果字符串
+        self._rag_cache = {}
+
+        # 从config中获取model_config
         if config:
             self.model_config = config.get("agent_model_config", {})
-            self.database_config = config.get("database_config", {})
         else:
             raise ValueError("config is required for Coder")
 
@@ -186,73 +189,6 @@ class Coder(AgentBase):
 
         return "\n".join(all_code)
 
-    async def _samples_database_examples(self, unified_dir: Path = None):
-        """
-        根据算子特征从Database检索并加载对应的DSL示例代码
-
-        Args:
-            unified_dir: 统一的示例目录路径，如果提供则从该目录读取，否则使用默认的local目录
-
-        Returns:
-            str: 示例代码内容，如果找不到对应示例则返回空字符串
-        """
-
-        if not self.arch or not self.dsl:
-            logger.warning("arch或dsl为空，无法加载示例代码")
-            return ""
-
-        all_code = []
-
-        # 确定检索目录：必须提供有效的unified_dir
-        if not unified_dir or not unified_dir.exists():
-            logger.warning(f"统一目录为空或不存在: {unified_dir}，无法检索示例")
-            return ""
-        
-        logger.info(f"从统一目录检索示例: {unified_dir}")
-
-        # 从统一目录读取示例文件
-        try:
-            # 查找所有Python文件
-            for file_path in unified_dir.glob("*.py"):
-                # 检查文件名是否包含op_name（不区分大小写）
-                if file_path.stem.lower() in self.op_name.lower():
-                    try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            content = f.read().strip()
-                            if content:
-                                all_code.append(f"# Python File: {file_path.name}\n{content}\n")
-                                logger.info(f"找到匹配的示例文件: {file_path}")
-                    except Exception as e:
-                        logger.warning(f"读取示例文件 {file_path} 时发生错误: {str(e)}")
-                        continue
-
-        except Exception as e:
-            logger.warning(f"从目录 {unified_dir} 获取示例代码失败: {e}")
-
-        # 从RAG数据库检索示例
-        if self.database_config and self.database_config.get("enable_rag", False):
-            try:
-                db_system = CoderDatabase(config=self.config)
-                docs = await db_system.samples(
-                    output_content=["op_name", "impl_code"],
-                    framework_code=self.task_desc,
-                    framework=self.framework,
-                    backend=self.backend,
-                    arch=self.arch,
-                    dsl=self.dsl,
-                    sample_num=self.database_config["sample_num"]
-                )
-
-                for doc in docs:
-                    file_name = doc["op_name"] + f"_{self.dsl}.py"
-                    content = doc["impl_code"]
-                    all_code.append(f"# Python File: {file_name}\n{content}\n")
-
-            except Exception as e:
-                logger.warning(f"从数据库获取示例代码失败: {e}")
-
-        return "\n".join(all_code)
-
     async def _generate_api_docs(self, sketch: str, conductor_suggestion: str, task_info: dict) -> str:
         """
         生成API文档，如果原始API文档过长则使用LLM进行内容压缩
@@ -341,75 +277,123 @@ class Coder(AgentBase):
         智能选择最优的示例代码，避免prompt过长
 
         策略：
-        1. 汇总所有示例文件到统一目录（user_examples, local, handwrite_suggestions）
-        2. 使用RAG从统一目录检索最相关的示例代码
-        3. 控制总长度，避免prompt过长
+        1. 有Designer手写优化建议：复用Designer的RAG结果，提取impl_code
+        2. 无Designer手写优化建议：根据rag参数决定是否使用RAG检索
 
         Returns:
             str: 选择后的示例代码
         """
-        # 准备源目录字典
-        source_dirs = {}
-        project_root = Path(get_project_root())
-        
-        # 1. 添加 user_examples 源目录
-        try:
-            docs_dir_config = self.config.get('docs_dir', {})
-            if 'coder' in docs_dir_config:
-                coder_docs_dir = docs_dir_config['coder']
-                user_examples_dir = project_root / coder_docs_dir / "examples"
-                if user_examples_dir.exists():
-                    source_dirs["user"] = user_examples_dir
-        except Exception as e:
-            logger.warning(f"无法获取user_examples目录: {e}")
-        
-        # 2. 添加 local 源目录
-        try:
-            local_project_root = project_root.parent.parent / "database" / "local"
-            local_dir = local_project_root / self.arch / self.dsl
-            if local_dir.exists():
-                source_dirs["local"] = local_dir
-        except Exception as e:
-            logger.warning(f"无法获取local目录: {e}")
-        
-        # 3. 处理 handwrite_suggestions
+        # 检查是否有Designer阶段的RAG结果
         handwrite_suggestions = task_info.get("handwrite_suggestions", [])
-        if handwrite_suggestions:
-            try:
-                # 处理每个 suggestion
-                for idx, suggestion in enumerate(handwrite_suggestions):
-                    # 处理 dsl_code_path - 直接添加到源目录
-                    dsl_code_path = suggestion.get("dsl_code_path", "")
-                    if dsl_code_path:
-                        dsl_code_path = Path(dsl_code_path)
-                        if dsl_code_path.exists():
-                            source_dirs[f"handwrite_code_{idx}"] = dsl_code_path
-                    
-                    # 处理 improvement_path - 直接添加到源目录
-                    improvement_path = suggestion.get("improvement_path", "")
-                    if improvement_path:
-                        improvement_path = Path(improvement_path)
-                        if improvement_path.exists():
-                            source_dirs[f"handwrite_docs_{idx}"] = improvement_path        
-                    
-            except Exception as e:
-                logger.warning(f"处理handwrite_suggestions失败: {e}")
         
-        # 4. 调用 collect_and_save_all_examples 汇总所有示例
-        if source_dirs:
-            unified_dir = collect_and_save_all_examples(
-                arch=self.arch,
+        # 添加调试日志
+        logger.info(f"[Coder] _select_optimal_examples: handwrite_suggestions={len(handwrite_suggestions) if handwrite_suggestions else 0} items")
+        rag_enabled = self.config.get("rag", False)
+        logger.info(f"[Coder] _select_optimal_examples: config.rag={rag_enabled}, config keys: {list(self.config.keys()) if self.config else 'None'}")
+        
+        if handwrite_suggestions:
+            # 全流程模式：复用Designer的RAG结果
+            logger.info(f"[Coder] Using Designer RAG results (handwrite_suggestions found)")
+            return self._reuse_designer_rag_results(handwrite_suggestions)
+
+        # Coder-only模式：根据rag参数决定是否使用RAG
+        if rag_enabled:
+            logger.info(f"[Coder] RAG enabled, using _independent_rag_for_impl_code()")
+            return await self._independent_rag_for_impl_code()
+        else:
+            # rag=False时，直接使用本地示例
+            logger.info(f"[Coder] RAG disabled (rag=False), using local examples")
+            return self._load_user_examples()
+
+    def _reuse_designer_rag_results(self, handwrite_suggestions: list) -> str:
+        """复用Designer阶段的RAG结果，提取impl_code"""
+        all_code = []
+        
+        for suggestion in handwrite_suggestions:
+            name = suggestion.get("name", "")
+            impl_code = suggestion.get("impl_code", "")
+            
+            if impl_code:
+                all_code.append(f"# Reference Implementation: {name}\n{impl_code}\n")
+        
+        if all_code:
+            logger.info(f"Successfully loaded {len(all_code)} reference implementations")
+        
+        return "\n".join(all_code)
+
+    async def _independent_rag_for_impl_code(self) -> str:
+        """优先尝试RAG检索impl_code，失败后自动降级到本地示例
+        
+        使用缓存机制避免相同任务参数的重复检索
+        """
+        # 生成缓存key，基于任务参数
+        cache_key = get_md5_hash(
+            framework_code=self.task_desc,
+            backend=self.backend,
+            arch=self.arch,
+            dsl=self.dsl,
+            framework=self.framework,
+            sample_num=self.sample_num
+        )
+        
+        # 检查缓存
+        if cache_key in self._rag_cache:
+            logger.info(f"Using cached RAG retrieval result for task: {self.op_name}")
+            return self._rag_cache[cache_key]
+        
+        # 尝试创建 CoderDatabase，如果失败则让异常向上传播
+        # VectorStore 初始化时会检查依赖，如果缺少会抛出明确的错误信息
+        database = CoderDatabase(config=self.config)
+        
+        try:
+            await database.auto_update(
                 dsl=self.dsl,
-                project_root_path=project_root,
-                source_dirs=source_dirs
+                framework=self.framework,
+                backend=self.backend,
+                arch=self.arch,
+                ref_type="impl",
+                update_mode="skip"
             )
             
-            if unified_dir:
-                logger.info(f"成功汇总所有示例到: {unified_dir}")
-                # 5. 使用 _samples_database_examples 从统一目录进行RAG检索
-                database_examples = await self._samples_database_examples(unified_dir=unified_dir)
-                return database_examples
-        return ""
+            selected_pairs = await database.samples(
+                output_content=["name", "impl_code"],
+                framework_code=self.task_desc,
+                backend=self.backend,
+                arch=self.arch,
+                dsl=self.dsl,
+                framework=self.framework,
+                sample_num=self.sample_num
+            )
+            
+            # 如果RAG检索没有结果，降级到本地示例
+            if not selected_pairs:
+                logger.warning("RAG retrieval found no relevant implementations, using local examples")
+                result = self._load_user_examples()
+                # 缓存结果（即使是降级到本地示例，也缓存，避免重复判断）
+                self._rag_cache[cache_key] = result
+                return result
+            
+            all_code = []
+            for pair in selected_pairs:
+                name = pair.get("name", "")
+                impl_code = pair.get("impl_code", "")
+                
+                if impl_code:
+                    all_code.append(f"# Reference Implementation: {name}\n{impl_code}\n")
+            
+            result = "\n".join(all_code)
+            logger.info(f"RAG retrieved {len(all_code)} reference implementations")
+            
+            # 缓存检索结果
+            self._rag_cache[cache_key] = result
+            return result
+        except Exception as e:
+            # RAG检索失败，降级到本地示例
+            logger.warning(f"RAG retrieval failed: {e}, using local examples")
+            result = self._load_user_examples()
+            # 缓存降级结果，避免重复尝试
+            self._rag_cache[cache_key] = result
+            return result
 
     async def run(self, task_info: dict) -> Tuple[str, str, str]:
         """执行代码生成

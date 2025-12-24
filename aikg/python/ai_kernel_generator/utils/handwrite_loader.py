@@ -23,40 +23,125 @@ import numpy as np
 
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.agent.selector import Selector
+from ai_kernel_generator.database.coder_database import CoderDatabase
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_HANDWRITE_DATABASE_PATH = Path(get_project_root()).parent.parent / "handwrite_database" / "local"
 
 class HandwriteLoader:
-    """手写优化建议和实现加载器"""
+    """手写优化建议和实现加载器
     
-    def __init__(self, dsl: str = "triton_ascend", op_name: str = None, task_desc: str = None, config: dict = None):
+    支持两种模式：
+    1. RAG模式：基于CoderDatabase进行语义检索
+    2. 文件系统模式：遍历文件系统直接加载
+    """
+    
+    def __init__(self, 
+        dsl: str = "triton_ascend", 
+        framework: str = "torch",
+        task_desc: str = None, 
+        arch: str = None,
+        backend: str = None,
+        database_path: str = None, 
+        config: dict = None,
+        op_name: str = None,
+        rag: bool = False,
+    ):
         """初始化加载器
         
         Args:
             dsl: DSL类型，默认为"triton_ascend"（也支持"triton_cuda"）
-            op_name: 算子名称
+            framework: 框架类型，默认为"torch"
             task_desc: 任务描述
+            arch: 架构类型
+            backend: 后端类型
+            database_path: 手写优化建议数据库路径
             config: 配置字典
+            op_name: 算子名称（文件系统模式需要）
+            rag: 是否使用RAG模式，默认为False（使用文件系统模式）
         """
         self.dsl = dsl
-        self.op_name = op_name
+        self.framework = framework
         self.task_desc = task_desc
         self.config = config
-        self.project_root = Path(get_project_root())
-        
-        aikg_root = self.project_root.parent.parent
-        self.aikgbench_root = aikg_root / "benchmark" / "aikgbench"
-        self.torch_base_dir = self.aikgbench_root
-        # 根据dsl类型动态设置triton路径
-        self.triton_impl_base_dir = self.aikgbench_root / self.dsl / "impl"
-        self.triton_docs_base_dir = self.aikgbench_root / self.dsl / "docs"
-        
-        # 缓存所有可用的数据对
+        self.arch = arch
+        self.backend = backend
+        self.op_name = op_name
+        self.rag = rag
+        self.database_path = database_path or str(DEFAULT_HANDWRITE_DATABASE_PATH)
+        self.database = None
         self._all_data_pairs = []
         self._selected_data_pairs = []
-        self._load_data_pairs()
+
+        self.load_num = 20
+
+    async def select_relevant_pairs(self) -> None:
+        """根据rag参数决定使用RAG模式或文件系统模式
         
+        如果rag=True，优先使用RAG模式，失败后自动降级到文件系统模式
+        如果rag=False，直接使用文件系统模式
+        """
+        if not (self.task_desc and self.config):
+            raise ValueError("task_desc and config must be provided")
+
+        # 如果rag=False，直接使用文件系统模式
+        if not self.rag:
+            await self._select_relevant_pairs_filesystem()
+            return
+
+        # rag=True时，尝试使用RAG模式
+        if not (self.arch and self.backend):
+            logger.warning("arch or backend not provided, using filesystem mode")
+            await self._select_relevant_pairs_filesystem()
+            return
+        
+        # 尝试创建 CoderDatabase，如果失败则让异常向上传播
+        # VectorStore 初始化时会检查依赖，如果缺少会抛出明确的错误信息
+        self.database = CoderDatabase(
+            database_path=self.database_path,
+            config=self.config
+        )
+        
+        try:
+            await self.database.auto_update(
+                dsl=self.dsl, 
+                framework=self.framework, 
+                backend=self.backend,
+                arch=self.arch, 
+                ref_type="docs", 
+                update_mode="skip"
+            )
+            self._selected_data_pairs = await self.database.samples(
+                output_content=["name", "framework_code", "impl_code", "improvement_doc"],
+                framework_code=self.task_desc, 
+                backend=self.backend,
+                arch=self.arch, 
+                dsl=self.dsl, 
+                framework=self.framework,
+                sample_num=self.load_num
+            )
+            
+            logger.info(f"RAG mode: Loaded {len(self._selected_data_pairs)} pairs: "
+                        f"{', '.join([pair['name'] for pair in self._selected_data_pairs])}")
+            # 如果RAG检索没有结果，降级到文件系统模式
+            if not self._selected_data_pairs:
+                logger.warning("RAG retrieval found no relevant documents, falling back to filesystem mode")
+                await self._select_relevant_pairs_filesystem()
+                return
+        except Exception as e:
+            # RAG检索失败，降级到文件系统模式
+            logger.warning(f"RAG sampling failed: {e}, falling back to filesystem mode")
+            await self._select_relevant_pairs_filesystem()
+
+    def _init_filesystem_mode(self) -> None:
+        """初始化文件系统模式的路径"""
+        aikg_root = Path(get_project_root()).parent.parent
+        self.aikgbench_root = aikg_root / "benchmark" / "aikgbench"
+        self.torch_base_dir = self.aikgbench_root
+        self.triton_impl_base_dir = self.aikgbench_root / self.dsl / "impl"
+        self.triton_docs_base_dir = self.aikgbench_root / self.dsl / "docs"
+
     def _load_data_pairs(self) -> None:
         """加载所有可用的数据对（torch文件，triton文件，优化建议文件）
         
@@ -75,23 +160,23 @@ class HandwriteLoader:
             return
         
         # 递归遍历docs目录下的所有.md文件
-        for improvement_file in self.triton_docs_base_dir.rglob("*.md"):
+        for improvement_path in self.triton_docs_base_dir.rglob("*.md"):
             # 获取相对路径和文件名
             # 例如: dynamic_shape/reduction/softmax_001.md
-            rel_path = improvement_file.relative_to(self.triton_docs_base_dir)
-            file_stem = improvement_file.stem  # softmax_001
+            rel_path = improvement_path.relative_to(self.triton_docs_base_dir)
+            file_stem = improvement_path.stem  # softmax_001
             
             # 构建对应的triton实现文件路径
             # 例如: impl/dynamic_shape/reduction/softmax_001.py
-            triton_file = self.triton_impl_base_dir / rel_path.parent / f"{file_stem}.py"
-            if not triton_file.exists():
+            impl_path = self.triton_impl_base_dir / rel_path.parent / f"{file_stem}.py"
+            if not impl_path.exists():
                 logger.debug(f"Triton implementation not found for {rel_path}, skipping")
                 continue
             
             # 构建对应的torch文件路径
             # 例如: aikgbench/dynamic_shape/reduction/softmax_001.py
-            torch_file = self.torch_base_dir / rel_path.parent / f"{file_stem}.py"
-            if not torch_file.exists():
+            framework_path = self.torch_base_dir / rel_path.parent / f"{file_stem}.py"
+            if not framework_path.exists():
                 logger.debug(f"Torch task file not found for {rel_path}, skipping")
                 continue
             
@@ -102,12 +187,9 @@ class HandwriteLoader:
             # 添加数据对
             data_pair = {
                 'name': unique_name,  # 使用完整路径作为唯一标识
-                'file_stem': file_stem,  # 原始文件名
-                'torch_file': torch_file,
-                'triton_file': triton_file,
-                'improvement_file': improvement_file,
-                'shape_type': rel_path.parts[0] if len(rel_path.parts) > 0 else 'unknown',  # dynamic_shape/static_shape
-                'category': rel_path.parts[1] if len(rel_path.parts) > 1 else 'unknown'  # reduction/sorting等
+                'framework_path': framework_path,
+                'impl_path': impl_path,
+                'improvement_path': improvement_path,
             }
             self._all_data_pairs.append(data_pair)
             logger.debug(f"Loaded data pair: {unique_name}")
@@ -124,29 +206,28 @@ class HandwriteLoader:
             data_pair: 数据对字典
             
         Returns:
-            包含name, task_desc, dsl_code, improvement及其文件路径的字典，失败返回None
+            包含name, framework_code, impl_code, improvement_doc字典，失败返回None
         """
         try:
-            task_desc = data_pair['torch_file'].read_text(encoding='utf-8')
-            dsl_code = data_pair['triton_file'].read_text(encoding='utf-8')
-            improvement = data_pair['improvement_file'].read_text(encoding='utf-8')
+            # 如果data_pair中已有impl_code和improvement_doc字段（RAG模式），直接返回
+            if 'impl_code' in data_pair and 'improvement_doc' in data_pair:
+                return data_pair
+            
+            # 否则从文件读取（文件系统模式）
+            framework_code = data_pair['framework_path'].read_text(encoding='utf-8')
+            impl_code = data_pair['impl_path'].read_text(encoding='utf-8')
+            improvement_doc = data_pair['improvement_path'].read_text(encoding='utf-8')
             
             return {
                 'name': data_pair['name'],
-                'file_stem': data_pair['file_stem'],
-                'shape_type': data_pair['shape_type'],
-                'category': data_pair['category'],
-                'task_desc': task_desc,
-                'task_desc_path': str(data_pair['torch_file']),
-                'dsl_code': dsl_code,
-                'dsl_code_path': str(data_pair['triton_file']),
-                'improvement': improvement,
-                'improvement_path': str(data_pair['improvement_file'])
+                'framework_code': framework_code,
+                'impl_code': impl_code,
+                'improvement_doc': improvement_doc
             }
         except Exception as e:
             logger.debug(f"Failed to read pair content for {data_pair['name']}: {e}")
             return None
-    
+
     def _load_all_candidates(self) -> List[Dict[str, str]]:
         """加载所有候选文档的完整内容，用于LLM筛选
         
@@ -159,15 +240,15 @@ class HandwriteLoader:
             if content:
                 candidates.append(content)
         return candidates
-    
-    async def select_relevant_pairs(self) -> None:
-        """使用Selector Agent异步筛选相关的数据对
-        
-        根据op_name和task_desc，调用LLM筛选出最相关的优化建议
-        """
+
+    async def _select_relevant_pairs_filesystem(self) -> None:
+        """使用文件系统模式筛选相关的数据对"""
         if not self.op_name or not self.task_desc or not self.config:
-            logger.warning("op_name, task_desc, or config not provided, skipping selection")
+            logger.warning("op_name, task_desc, or config not provided, using all pairs in filesystem mode")
             return
+
+        self._init_filesystem_mode()
+        self._load_data_pairs()
         
         # 加载所有候选文档
         candidates = self._load_all_candidates()
@@ -176,26 +257,25 @@ class HandwriteLoader:
             logger.warning("No valid candidates for selection, using all pairs")
             return
         
-        logger.info(f"Running Selector Agent for {self.op_name}...")
+        logger.info(f"Filesystem mode: Running Selector Agent for {self.op_name}...")
         
-        # 创建Selector Agent
-        selector = Selector(
-            op_name=self.op_name,
-            task_desc=self.task_desc,
-            dsl=self.dsl,
-            config=self.config
-        )
-        
-        # 调用LLM进行筛选
-        selected_names = await selector.run(candidates)
-        
-        # 根据筛选结果更新_selected_data_pairs
-        self._selected_data_pairs = [
-            pair for pair in self._all_data_pairs
-            if pair['name'] in selected_names
-        ]
-        
-        logger.info(f"Selected {len(self._selected_data_pairs)}/{len(self._all_data_pairs)} documents")
+        try:
+            # 创建Selector Agent
+            selector = Selector(
+                op_name=self.op_name,
+                task_desc=self.task_desc,
+                dsl=self.dsl,
+                config=self.config
+            )
+            
+            # 调用LLM进行筛选
+            selected_names = await selector.run(candidates)
+            self._selected_data_pairs = [p for p in self._all_data_pairs if p['name'] in selected_names]
+            logger.info(f"Filesystem mode: Selected {len(self._selected_data_pairs)}/{len(self._all_data_pairs)} pairs: "
+                        f"{', '.join([pair['name'] for pair in self._selected_data_pairs])}")
+        except ImportError as e:
+            logger.warning(f"Selector not available: {e}, using all pairs")
+            self._selected_data_pairs = self._all_data_pairs
     
     def get_selected_pairs(self) -> List[Dict[str, Any]]:
         """获取筛选后的数据对列表
@@ -278,7 +358,7 @@ class HandwriteSampler:
         使用加权随机采样，相关性高的文档被选中概率更大
         
         Returns:
-            采样的建议列表，每个包含name, task_desc, dsl_code, improvement及其文件路径等
+            采样的建议列表，每个包含name, task_desc, impl_code, improvement及其文件路径等
         """
         if self._total_count == 0:
             return []

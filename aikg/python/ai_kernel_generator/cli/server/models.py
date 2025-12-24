@@ -52,6 +52,9 @@ class CliMainAgentRequest(BaseModel):
     migration_interval: int = Field(default=0, description="Evolve 迁移间隔")
     elite_size: int = Field(default=0, description="Evolve 精英数量")
     parent_selection_prob: float = Field(default=0.5, description="Evolve 父代选择概率")
+    
+    # RAG 参数
+    rag: bool = Field(default=False, description="是否使用 RAG 模式")
 
 
 class StepTiming(BaseModel):
