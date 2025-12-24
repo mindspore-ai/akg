@@ -16,10 +16,9 @@ import os
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Dict
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ai_kernel_generator.cli.messages import (
     ErrorMessage,
@@ -33,11 +32,15 @@ from ai_kernel_generator.cli.server.message_sender import (
     unregister_message_sender,
 )
 from ai_kernel_generator.cli.server.models import (
-    CliExecuteResponse,
     CliMainAgentRequest,
     ServerStatusResponse,
 )
 from ai_kernel_generator.config.config_validator import load_config
+from ai_kernel_generator.utils.main_op_agent_display import (
+    format_display_message,
+    get_hint_message,
+    is_simple_command,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,32 +68,63 @@ def _load_workflow_config(backend: str, dsl: str) -> Dict:
     return config
 
 
-def _build_main_agent_task_init_payload(state: dict) -> dict:
-    """构造与 TaskInit 元数据对齐的 payload（供 CLI 复用现有展示逻辑）。"""
-    status = str(state.get("task_init_status") or "").strip()
-    current_step = str(state.get("current_step") or "").strip().lower()
-    if current_step in ["cancelled", "irrelevant_input", "rejected_by_intent"]:
-        status = current_step
-    return {
-        "status": status,
-        "op_name": state.get("op_name") or "",
-        "generated_task_desc": state.get("task_code") or "",
-        "agent_message": state.get("op_description") or "",
-        "clarification_question": state.get("clarification_question") or "",
-        "modification_suggestion": state.get("modification_suggestion") or "",
-        "agent_reasoning": state.get("task_reasoning") or "",
-        "static_check_passed": bool(state.get("static_check_passed", False)),
-        "static_check_error": state.get("static_check_error") or "",
-    }
+def _sanitize_state_for_client(state: dict) -> dict:
+    payload = dict(state) if isinstance(state, dict) else {}
+    payload.pop("config", None)
+    payload.pop("conversation_history", None)
+    return payload
 
 
-def _workflow_name_from_sub_workflow(name: str) -> str:
-    n = (name or "").strip().lower()
-    if n == "taskopcreate":
-        return "default_workflow"
-    if n == "evolve":
-        return "evolve_workflow"
-    return "coder_only_workflow"
+def _ensure_display_messages(state: dict) -> None:
+    if not state.get("display_message"):
+        state["display_message"] = format_display_message(state)
+    if not state.get("hint_message"):
+        state["hint_message"] = get_hint_message(state)
+
+
+def _build_response_state(state: dict) -> dict:
+    _ensure_display_messages(state)
+    payload = _sanitize_state_for_client(state)
+    if "should_continue" not in payload:
+        payload["should_continue"] = True
+    if "current_step" not in payload:
+        payload["current_step"] = ""
+    workflow_name = str(
+        payload.get("workflow_name") or payload.get("sub_workflow") or ""
+    )
+    if workflow_name:
+        payload["workflow_name"] = workflow_name
+    payload.setdefault("display_message", "")
+    payload.setdefault("hint_message", "")
+    return payload
+
+
+def _resolve_log_dir(state: dict) -> str:
+    config = state.get("config") if isinstance(state, dict) else None
+    if isinstance(config, dict):
+        log_dir = config.get("log_dir")
+    else:
+        log_dir = None
+    if not log_dir:
+        log_dir = "~/aikg_logs"
+    return os.path.expanduser(str(log_dir))
+
+
+def _build_command_response(
+    state: dict,
+    *,
+    command: str,
+    message: str,
+    save_path: str | None = None,
+) -> dict:
+    payload = _sanitize_state_for_client(state)
+    payload["current_step"] = "saved" if command == "save" else "cancelled"
+    payload["should_continue"] = False
+    payload["display_message"] = message
+    payload["hint_message"] = ""
+    if save_path:
+        payload["saved_path"] = save_path
+    return payload
 
 
 @router.get("/api/v1/workflow/status", response_model=ServerStatusResponse)
@@ -122,32 +156,6 @@ async def _safe_send_json(websocket: WebSocket, payload: dict) -> None:
         logger.debug(f"WebSocket send skipped: {e}", exc_info=True)
 
 
-async def _handle_cancel_action(session_id: str, websocket: WebSocket) -> None:
-    """处理 cancel action：清理状态并返回取消响应。"""
-    _main_agent_states.pop(session_id, None)
-    result = CliExecuteResponse(
-        success=False,
-        op_name="",
-        task_init_status="cancelled",
-        task_desc="",
-        kernel_code="",
-        verification_result=False,
-        step_timings=[
-            {
-                "stage": "MainAgent",
-                "duration": 0.0,
-                "timestamp": datetime.now().isoformat(),
-            }
-        ],
-        total_time=0.0,
-        error="cancelled by client",
-        metadata={},
-    )
-    await _safe_send_json(
-        websocket, pack_message(FinalResultMessage(result=result.model_dump()))
-    )
-
-
 def _create_main_op_agent(request: CliMainAgentRequest, session_id: str):
     """创建 MainOpAgent 实例。"""
     from ai_kernel_generator.core.agent.main_op_agent import MainOpAgent
@@ -156,6 +164,7 @@ def _create_main_op_agent(request: CliMainAgentRequest, session_id: str):
         request.backend, request.dsl
     )
     config["session_id"] = session_id
+    config["task_label"] = "main"
 
     return MainOpAgent(
         config=config,
@@ -166,197 +175,66 @@ def _create_main_op_agent(request: CliMainAgentRequest, session_id: str):
     )
 
 
-def _build_confirm_response(
-    state: dict,
-    state2: dict,
-    task_init_payload: dict,
-    dt: float,
-    action: str = "confirm",
-) -> CliExecuteResponse:
-    """构建 confirm action 的响应。"""
-    sub_workflow = (
-        str(state2.get("sub_workflow") or state.get("sub_workflow") or "")
-    ).strip() or "codeonly"
-    workflow_name = _workflow_name_from_sub_workflow(sub_workflow)
+async def _handle_start_action(
+    request: CliMainAgentRequest, session_id: str
+) -> dict:
+    """start action: 开启新对话"""
+    user_input = request.user_input or ""
+    if not user_input.strip():
+        raise ValueError("user_input is required for start action")
 
-    return CliExecuteResponse(
-        success=bool(state2.get("generation_success", False)),
-        op_name=str(state2.get("op_name") or task_init_payload.get("op_name") or ""),
-        task_init_status=str(task_init_payload.get("status") or ""),
-        task_desc=str(task_init_payload.get("generated_task_desc") or ""),
-        kernel_code=str(state2.get("generated_code") or ""),
-        verification_result=bool(state2.get("verification_result", False)),
-        step_timings=[
-            {
-                "stage": "MainAgent.Confirm",
-                "duration": round(dt, 2),
-                "timestamp": datetime.now().isoformat(),
-            }
-        ],
-        total_time=round(dt, 2),
-        error=(
-            str(
-                state2.get("verification_error") or state2.get("generation_error") or ""
-            )
-        )
-        or None,
-        metadata={
-            "task_init": task_init_payload,
-            "main_agent": {
-                "action": action,
-                "current_step": state2.get("current_step", ""),
-                "available_workflows": state2.get("available_workflows", []),
-                "sub_workflow": sub_workflow,
-                "workflow_name": workflow_name,
-            },
-        },
-    )
-
-
-def _build_task_init_response(
-    state: dict, action: str, task_init_payload: dict, dt: float
-) -> CliExecuteResponse:
-    """构建 start/revise action 的响应。"""
-    status = task_init_payload.get("status", "")
-    generated = task_init_payload.get("generated_task_desc", "") or ""
-    ok = bool(status == "ready" and isinstance(generated, str) and generated.strip())
-
-    step_timings = [
-        {
-            "stage": "MainAgent.TaskInit",
-            "duration": round(dt, 2),
-            "timestamp": datetime.now().isoformat(),
-        }
-    ]
-
-    return CliExecuteResponse(
-        success=ok,
-        op_name=task_init_payload.get("op_name") or "",
-        task_init_status=status or "",
-        task_desc=generated or "",
-        kernel_code="",
-        verification_result=False,
-        step_timings=step_timings,
-        total_time=round(dt, 2),
-        error=None,
-        metadata={
-            "task_init": task_init_payload,
-            "main_agent": {
-                "action": action,
-                "current_step": state.get("current_step", ""),
-                "available_workflows": state.get("available_workflows", []),
-                "sub_workflow": state.get("sub_workflow", ""),
-            },
-        },
-    )
-
-
-def _state_has_generation(state: dict) -> bool:
-    current_step = str(state.get("current_step") or "").strip().lower()
-    if current_step in ["completed", "failed"]:
-        return True
-    return bool(str(state.get("generated_code") or "").strip())
-
-
-async def _handle_confirm_action(
-    request: CliMainAgentRequest, session_id: str, websocket: WebSocket
-) -> None:
-    """处理 confirm action：执行选中的 sub-agent 并返回结果。"""
-    state = _main_agent_states.get(session_id)
-    if not isinstance(state, dict):
-        raise ValueError("no main agent state found for this session; call start first")
-
+    _main_agent_states.pop(session_id, None)
     agent = _create_main_op_agent(request, session_id)
-
-    t0 = asyncio.get_event_loop().time()
-    state2 = await agent.continue_conversation(
-        current_state=state,
-        user_input="",
-        action="confirm",
+    state = await agent.start_conversation(
+        user_request=user_input, task_id=session_id
     )
-    dt = asyncio.get_event_loop().time() - t0
-
-    if isinstance(state2, dict):
-        state2.pop("config", None)
-    _main_agent_states[session_id] = state2
-
-    # task_init 元数据沿用 start/revise 生成的（便于 CLI 展示对齐）
-    task_init_payload = _build_main_agent_task_init_payload(state)
-
-    result = _build_confirm_response(state, state2, task_init_payload, dt, action="confirm")
-
-    await _safe_send_json(
-        websocket, pack_message(FinalResultMessage(result=result.model_dump()))
-    )
+    _main_agent_states[session_id] = state
+    return _build_response_state(state)
 
 
 async def _handle_continue_action(
-    request: CliMainAgentRequest, session_id: str, action: str, websocket: WebSocket
-) -> None:
-    """处理 auto/retry/retry_sub_agent 等 continue action。"""
+    request: CliMainAgentRequest, session_id: str
+) -> dict:
+    """continue action: 继续对话（所有逻辑由 server 统一处理）"""
     prev = _main_agent_states.get(session_id)
     if not isinstance(prev, dict):
         raise ValueError("no main agent state found for this session; call start first")
 
-    agent = _create_main_op_agent(request, session_id)
+    user_input = request.user_input or ""
+    if not user_input.strip():
+        raise ValueError("user_input is required for continue action")
 
-    t0 = asyncio.get_event_loop().time()
+    is_cmd, command_type = is_simple_command(user_input)
+    if is_cmd and command_type == "exit":
+        _main_agent_states.pop(session_id, None)
+        return _build_command_response(
+            prev, command="exit", message="Conversation ended."
+        )
+    if is_cmd and command_type == "save":
+        agent = _create_main_op_agent(request, session_id)
+        log_dir = _resolve_log_dir(prev)
+        os.makedirs(log_dir, exist_ok=True)
+        task_id = str(prev.get("task_id") or session_id)
+        save_path = os.path.join(log_dir, f"conversation_{task_id}.json")
+        agent.save_conversation(prev, save_path)
+        _main_agent_states.pop(session_id, None)
+        return _build_command_response(
+            prev,
+            command="save",
+            message=f"Conversation saved to: {save_path}",
+            save_path=save_path,
+        )
+
+    agent = _create_main_op_agent(request, session_id)
+    if "config" not in prev:
+        prev["config"] = agent.config
     state = await agent.continue_conversation(
         current_state=prev,
-        user_input=request.user_input,
-        action=action,
+        user_input=user_input,
+        action="auto",
     )
-    dt = asyncio.get_event_loop().time() - t0
-
-    if isinstance(state, dict):
-        state.pop("config", None)
     _main_agent_states[session_id] = state
-
-    task_init_payload = _build_main_agent_task_init_payload(state)
-    if _state_has_generation(state):
-        result = _build_confirm_response(state, state, task_init_payload, dt, action=action)
-    else:
-        result = _build_task_init_response(state, action, task_init_payload, dt)
-
-    await _safe_send_json(
-        websocket, pack_message(FinalResultMessage(result=result.model_dump()))
-    )
-
-
-async def _handle_start_revise_action(
-    request: CliMainAgentRequest, session_id: str, action: str, websocket: WebSocket
-) -> None:
-    """处理 start/revise action：生成或修改 task_desc。"""
-    agent = _create_main_op_agent(request, session_id)
-
-    t0 = asyncio.get_event_loop().time()
-    if action == "start":
-        state = await agent.start_conversation(
-            user_request=request.user_input, task_id=session_id
-        )
-    else:
-        prev = _main_agent_states.get(session_id)
-        if not isinstance(prev, dict):
-            raise ValueError(
-                "no main agent state found for this session; call start first"
-            )
-        state = await agent.continue_conversation(
-            current_state=prev,
-            user_input=request.user_input,
-            action="revise",
-        )
-    dt = asyncio.get_event_loop().time() - t0
-
-    if isinstance(state, dict):
-        state.pop("config", None)
-    _main_agent_states[session_id] = state
-
-    task_init_payload = _build_main_agent_task_init_payload(state)
-    result = _build_task_init_response(state, action, task_init_payload, dt)
-
-    await _safe_send_json(
-        websocket, pack_message(FinalResultMessage(result=result.model_dump()))
-    )
+    return _build_response_state(state)
 
 
 @router.websocket("/api/v1/main_agent/stream")
@@ -365,7 +243,6 @@ async def main_agent_stream(websocket: WebSocket):
     await websocket.accept()
 
     session_id: str | None = None
-    job_id: str | None = None
 
     try:
         data = await websocket.receive_json()
@@ -383,34 +260,21 @@ async def main_agent_stream(websocket: WebSocket):
         )
 
         # 与 JobManager 保持一致：用环境变量控制 stream
-        import os
-
         os.environ["AIKG_STREAM_OUTPUT"] = "on" if request.use_stream else "off"
 
         action = (request.action or "").strip().lower()
-        allowed_actions = {
-            "start",
-            "revise",
-            "confirm",
-            "cancel",
-            "auto",
-            "retry",
-            "retry_sub_agent",
-        }
+        allowed_actions = {"start", "continue"}
         if action not in allowed_actions:
-            raise ValueError(
-                "action must be one of: start/revise/confirm/cancel/auto/retry/retry_sub_agent"
-            )
+            raise ValueError("action must be start/continue")
 
-        # 根据 action 调用相应的处理函数
-        if action == "cancel":
-            await _handle_cancel_action(session_id, websocket)
-        elif action == "confirm":
-            await _handle_confirm_action(request, session_id, websocket)
-        elif action in ["start", "revise"]:
-            await _handle_start_revise_action(request, session_id, action, websocket)
+        if action == "start":
+            result = await _handle_start_action(request, session_id)
         else:
-            await _handle_continue_action(request, session_id, action, websocket)
+            result = await _handle_continue_action(request, session_id)
+
+        await _safe_send_json(
+            websocket, pack_message(FinalResultMessage(result=result))
+        )
 
     except WebSocketDisconnect:
         if session_id:
@@ -425,21 +289,15 @@ async def main_agent_stream(websocket: WebSocket):
         if session_id:
             send_message(session_id, ErrorMessage(error=str(e)))
 
-        error_result = CliExecuteResponse(
-            success=False,
-            op_name="",
-            task_init_status="error",
-            task_desc="",
-            kernel_code="",
-            verification_result=False,
-            step_timings=[],
-            total_time=0,
-            error=str(e),
-            metadata={},
-        )
+        error_result = {
+            "error": str(e),
+            "current_step": "error",
+            "should_continue": False,
+            "display_message": "",
+            "hint_message": "",
+        }
         await _safe_send_json(
-            websocket,
-            pack_message(FinalResultMessage(result=error_result.model_dump())),
+            websocket, pack_message(FinalResultMessage(result=error_result))
         )
     finally:
         if session_id:

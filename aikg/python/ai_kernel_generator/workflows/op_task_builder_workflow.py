@@ -227,6 +227,9 @@ class OpTaskBuilderWorkflow:
         session_id = str((self.config or {}).get("session_id") or "").strip()
         if session_id:
             state["session_id"] = session_id
+        task_label = str((self.config or {}).get("task_label") or "").strip()
+        if task_label:
+            state["task_label"] = task_label
 
         # 检查是否超过最大迭代次数
         if state.get("iteration", 0) >= self.max_iterations:

@@ -42,6 +42,8 @@ class SyntaxBlockMainContent:
     add_end_separator: bool = True
     # 用于“自维护行号”模式：从该行号开始，对渲染后的物理行逐行编号
     line_number_start: int | None = None
+    # 推理内容弱化显示
+    dim: bool = False
 
 
 MainContent: TypeAlias = (

@@ -45,6 +45,7 @@ class OpTaskBuilderState(TypedDict, total=False):
     backend: str                        # 后端：cuda/ascend
     arch: str                           # 架构：a100/ascend910b4等
     dsl: str                            # DSL类型
+    task_label: Optional[str]           # 任务标签（用于路由）
     
     # === 状态控制 ===
     status: str  # "need_clarification" | "need_modification" | "ready" | "unsupported"

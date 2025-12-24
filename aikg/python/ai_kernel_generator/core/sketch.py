@@ -20,6 +20,7 @@ from ai_kernel_generator.cli.server.message_sender import send_message
 from ai_kernel_generator.core.agent.agent_base import AgentBase
 from ai_kernel_generator.utils.common_utils import remove_copyright_from_text, ParserFactory
 from ai_kernel_generator.utils.hardware_utils import get_hardware_doc
+from ai_kernel_generator.utils.task_label import resolve_task_label
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +100,19 @@ class Sketch(AgentBase):
         start_time = time.time()
         session_id = str(task_info.get("session_id") or "").strip()
         task_id = str(task_info.get("task_id") or "")
+        task_label = str(task_info.get("task_label") or "").strip()
+        if not task_label:
+            raise ValueError("[Sketch] task_info must include task_label")
         if session_id:
-            send_message(session_id, NodeStartMessage(node="sketch", task_id=task_id, state=task_info))
+            send_message(
+                session_id,
+                NodeStartMessage(
+                    node="sketch",
+                    task_id=task_id,
+                    task_label=task_label,
+                    state=task_info,
+                ),
+            )
 
         # 从task_info中获取coder生成的代码
         coder_code = task_info.get("coder_code", "")
@@ -124,7 +136,8 @@ class Sketch(AgentBase):
             "agent_name": "sketch",
             "framework": task_info.get("framework", ""),
             "hash": task_info.get("task_id", "Sketch"),
-            "task_id": "",
+            "task_id": task_id,
+            "task_label": task_label,
             "workflow_name": task_info.get("workflow_name", ""),
             "step": self.llm_step_count,
         }
@@ -156,6 +169,7 @@ class Sketch(AgentBase):
                         node="sketch",
                         duration=time.time() - start_time,
                         task_id=task_id,
+                        task_label=task_label,
                         result={"sketch": sketch_content},
                     ),
                 )
@@ -170,6 +184,7 @@ class Sketch(AgentBase):
                         node="sketch",
                         duration=time.time() - start_time,
                         task_id=task_id,
+                        task_label=task_label,
                         result={"error": str(e)},
                     ),
                 )

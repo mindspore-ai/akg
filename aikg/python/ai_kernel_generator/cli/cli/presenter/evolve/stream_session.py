@@ -35,7 +35,7 @@ class TaskStreamSession:
 
         self._renderer: StreamRenderer | None = None
         self._started: bool = False
-        self._buffer_chunks: list[str] = []
+        self._buffer_chunks: list[tuple[str, bool]] = []
 
         # 记录最近一次 llm_start 的元信息，供“切回后补渲染/首 chunk start”使用
         self._agent: str = ""
@@ -99,12 +99,12 @@ class TaskStreamSession:
         r.start(self._agent, self._model, self._language, str(self._p.op_name or ""))
         self._started = True
 
-    def on_llm_stream(self, chunk: str, *, active: bool) -> None:
+    def on_llm_stream(self, chunk: str, *, is_reasoning: bool, active: bool) -> None:
         c = str(chunk or "")
         if not c:
             return
         if not active:
-            self._buffer_chunks.append(c)
+            self._buffer_chunks.append((c, bool(is_reasoning)))
             return
 
         # active：先把之前积累的 buffer 补上（避免切 tab 的竞态导致乱序）
@@ -116,7 +116,7 @@ class TaskStreamSession:
                 self._agent, self._model, self._language, str(self._p.op_name or "")
             )
             self._started = True
-        r.add_chunk(c)
+        r.add_chunk(c, is_reasoning=bool(is_reasoning))
 
     def flush_buffer(self, *, active: bool) -> None:
         if not active:
@@ -124,10 +124,11 @@ class TaskStreamSession:
         if not self._buffer_chunks:
             return
 
-        buf = "".join(self._buffer_chunks)
-        self._buffer_chunks.clear()
-        if not buf:
+        if not self._buffer_chunks:
             return
+
+        chunks = list(self._buffer_chunks)
+        self._buffer_chunks.clear()
 
         r = self._ensure_renderer()
         if not self._started:
@@ -144,7 +145,8 @@ class TaskStreamSession:
                 task_id=self._task_id,
                 exc_info=e,
             )
-        r.add_chunk(buf)
+        for text, is_reasoning in _merge_chunks(chunks):
+            r.add_chunk(text, is_reasoning=bool(is_reasoning))
 
     def on_llm_end(self, *, active: bool, replaying: bool, response: str) -> None:
         if replaying:
@@ -204,3 +206,18 @@ class TaskStreamSession:
                 exc_info=e,
             )
         return self._renderer
+
+
+def _merge_chunks(
+    chunks: list[tuple[str, bool]],
+) -> list[tuple[str, bool]]:
+    """合并连续同类型 chunk，减少 renderer 调用次数。"""
+    merged: list[tuple[str, bool]] = []
+    for text, is_reasoning in chunks:
+        if not text:
+            continue
+        if merged and merged[-1][1] == bool(is_reasoning):
+            merged[-1] = (merged[-1][0] + text, merged[-1][1])
+        else:
+            merged.append((text, bool(is_reasoning)))
+    return merged

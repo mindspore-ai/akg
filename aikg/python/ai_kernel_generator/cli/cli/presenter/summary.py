@@ -29,6 +29,74 @@ class SummaryRenderer:
     def __init__(self, console: Console) -> None:
         self.console = console
 
+    @staticmethod
+    def _normalize_bool(value: Any) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("true", "yes", "1", "pass", "passed"):
+                return True
+            if v in ("false", "no", "0", "fail", "failed", "error"):
+                return False
+        return None
+
+    @staticmethod
+    def _is_failure(result: dict) -> bool | None:
+        if not isinstance(result, dict):
+            return None
+        for key in ("verification_result", "success", "generation_success"):
+            flag = SummaryRenderer._normalize_bool(result.get(key))
+            if flag is not None:
+                return not flag
+        status = str(result.get("status") or "").strip().lower()
+        if status in ("failed", "fail", "error", "cancelled", "canceled"):
+            return True
+        if status in ("completed", "success", "succeeded", "ok", "done"):
+            return False
+        return None
+
+    @staticmethod
+    def _pick_error_text(result: dict) -> str:
+        if not isinstance(result, dict):
+            return ""
+        for key in (
+            "error_log",
+            "verification_error",
+            "verifier_error",
+            "error",
+            "message",
+        ):
+            val = result.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        return ""
+
+    @staticmethod
+    def _extract_subagent_groups(result: dict) -> List[Dict[str, Any]]:
+        meta = result.get("metadata") or {}
+        groups: List[Dict[str, Any]] = []
+
+        subagents = meta.get("subagents")
+        if isinstance(subagents, list):
+            for item in subagents:
+                if isinstance(item, dict):
+                    groups.append(item)
+        elif isinstance(subagents, dict):
+            for name, item in subagents.items():
+                if isinstance(item, dict):
+                    item = dict(item)
+                    item.setdefault("name", name)
+                    item.setdefault("label", name)
+                    groups.append(item)
+
+        if not groups:
+            evolve = meta.get("evolve")
+            if isinstance(evolve, dict):
+                groups.append({"name": "evolve", "label": "evolve", **evolve})
+
+        return groups
+
     def display(
         self,
         *,
@@ -45,18 +113,37 @@ class SummaryRenderer:
 
         table.add_row(t("summary.row.op_name"), result.get("op_name", "N/A"))
 
-        verify_pass = result.get("verification_result")
-        verify_text = (
-            f"[{DisplayStyle.BOLD_GREEN}]PASS[/{DisplayStyle.BOLD_GREEN}]"
-            if verify_pass
-            else f"[{DisplayStyle.BOLD_RED}]FAIL[/{DisplayStyle.BOLD_RED}]"
-        )
+        verify_pass = self._normalize_bool(result.get("verification_result"))
+        if verify_pass is True:
+            verify_text = f"[{DisplayStyle.BOLD_GREEN}]PASS[/{DisplayStyle.BOLD_GREEN}]"
+        elif verify_pass is False:
+            verify_text = f"[{DisplayStyle.BOLD_RED}]FAIL[/{DisplayStyle.BOLD_RED}]"
+        else:
+            verify_text = f"[{DisplayStyle.DIM}]-[/{DisplayStyle.DIM}]"
         table.add_row(t("summary.row.verify"), verify_text)
 
-        # 错误信息（如果有）
-        err = result.get("error")
-        if isinstance(err, str) and err.strip():
-            table.add_row(t("summary.row.error"), err.strip())
+        # 子 agent / workflow
+        subagent = ""
+        for key in ("subagent", "sub_agent", "sub_workflow", "workflow_name"):
+            val = result.get(key)
+            if isinstance(val, str) and val.strip():
+                subagent = val.strip()
+                break
+        meta = result.get("metadata") or {}
+        if not subagent and isinstance(meta, dict):
+            for key in ("subagent", "sub_agent", "sub_workflow", "workflow_name"):
+                val = meta.get(key)
+                if isinstance(val, str) and val.strip():
+                    subagent = val.strip()
+                    break
+        if subagent:
+            table.add_row(t("summary.row.subagent"), subagent)
+
+        # 错误信息（仅在失败时展示）
+        is_failure = self._is_failure(result)
+        err = self._pick_error_text(result)
+        if is_failure is True and err:
+            table.add_row(t("summary.row.error"), err)
 
         try:
             if performance_history:
@@ -115,7 +202,6 @@ class SummaryRenderer:
             f"{result.get('total_time', 0):.2f} {t('summary.unit.seconds')}",
         )
 
-        meta = result.get("metadata") or {}
         if isinstance(meta, dict):
             log_dir = meta.get("log_dir")
             task_desc_path = meta.get("task_desc_path")
@@ -129,25 +215,30 @@ class SummaryRenderer:
 
         self.console.print(table)
 
-        # ========= Evolve 汇总（多轮 + 多并发）=========
+        # ========= 子 agent 汇总（多轮 + 多并发）=========
         try:
-            evolve = meta.get("evolve") if isinstance(meta, dict) else None
-            if isinstance(evolve, dict):
+            groups = self._extract_subagent_groups(result)
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
                 tasks = (
-                    evolve.get("tasks") if isinstance(evolve.get("tasks"), dict) else {}
-                )
-                watch_tid = str(evolve.get("watch_task_id") or "").strip()
-                round_snaps = (
-                    evolve.get("round_snapshots")
-                    if isinstance(evolve.get("round_snapshots"), dict)
+                    group.get("tasks")
+                    if isinstance(group.get("tasks"), dict)
                     else {}
                 )
+                watch_tid = str(group.get("watch_task_id") or "").strip()
+                round_snaps = (
+                    group.get("round_snapshots")
+                    if isinstance(group.get("round_snapshots"), dict)
+                    else {}
+                )
+                label = str(group.get("label") or group.get("name") or "subagent")
 
                 # 轮次汇总
                 if round_snaps:
                     self.console.print("\n")
                     rt = Table(
-                        title=t("summary.evolve.round_summary"),
+                        title=f"{label} {t('summary.subagents.round_summary')}",
                         box=box.ROUNDED,
                         show_header=True,
                     )
@@ -171,7 +262,7 @@ class SummaryRenderer:
                 if tasks:
                     self.console.print("\n")
                     tt = Table(
-                        title=t("summary.evolve.task_detail"),
+                        title=f"{label} {t('summary.subagents.task_detail')}",
                         box=box.SIMPLE_HEAVY,
                         show_header=True,
                     )
@@ -179,21 +270,26 @@ class SummaryRenderer:
                     tt.add_column("status", style=DisplayStyle.YELLOW)
                     tt.add_column("verify", style=DisplayStyle.YELLOW)
                     tt.add_column(
-                        t("summary.evolve.error_brief"), style=DisplayStyle.DIM
+                        t("summary.subagents.error_brief"), style=DisplayStyle.DIM
                     )
                     for tid in sorted(tasks.keys()):
                         info = tasks.get(tid) or {}
                         st = str(info.get("status") or "")
-                        vr = info.get("verifier_result", None)
+                        vr = self._normalize_bool(
+                            info.get("verification_result")
+                            if "verification_result" in info
+                            else info.get("verifier_result")
+                        )
                         if vr is True:
                             vtxt = f"[{DisplayStyle.BOLD_GREEN}]PASS[/{DisplayStyle.BOLD_GREEN}]"
                         elif vr is False:
                             vtxt = f"[{DisplayStyle.BOLD_RED}]FAIL[/{DisplayStyle.BOLD_RED}]"
                         else:
                             vtxt = "-"
-                        err = str(
-                            info.get("verifier_error") or info.get("error") or ""
-                        ).strip()
+                        err = self._pick_error_text(info)
+                        task_failed = self._is_failure(info)
+                        if task_failed is not True:
+                            err = ""
                         if len(err) > 120:
                             err = err[:120] + "..."
                         # 标注当前观察目标
@@ -203,7 +299,7 @@ class SummaryRenderer:
                         tt.add_row(tid_disp, st or "-", vtxt, err or "-")
                     self.console.print(tt)
         except Exception as e:
-            log.warning("[Summary] render evolve section failed; skip", exc_info=e)
+            log.warning("[Summary] render subagent section failed; skip", exc_info=e)
 
         token_table = Table(
             title=t("summary.tokens.title"), box=box.ROUNDED, show_header=True

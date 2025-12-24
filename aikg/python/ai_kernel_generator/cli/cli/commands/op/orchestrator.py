@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import urllib.parse
 from typing import List
 
 import typer
@@ -33,6 +34,7 @@ from .types import OpCommandArgs, ResolvedRuntimeOptions, ResolvedTargetConfig
 from ai_kernel_generator.cli.client import CliClient
 from ai_kernel_generator.cli.cli.utils.ui_helpers import print_logo_once
 from ai_kernel_generator.cli.cli.service import validate_target_config
+from ai_kernel_generator.cli.cli.utils.device_parser import parse_devices
 
 
 class OpCommandOrchestrator:
@@ -60,6 +62,17 @@ class OpCommandOrchestrator:
             if self._port_available(port):
                 return port
         raise RuntimeError("8000-9000 范围内没有可用端口")
+
+    @staticmethod
+    def _is_local_server_url(server_url: str) -> bool:
+        if not server_url:
+            return False
+        url = server_url.strip()
+        if "://" not in url:
+            url = f"http://{url}"
+        parsed = urllib.parse.urlparse(url)
+        host = (parsed.hostname or "").strip().lower()
+        return host in ["localhost", "127.0.0.1", "::1"]
 
     def _resolve_runtime_options(
         self, ctx: typer.Context, args: OpCommandArgs
@@ -199,6 +212,22 @@ class OpCommandOrchestrator:
 
         runtime = self._resolve_runtime_options(ctx, args)
 
+        if args.worker_url and args.devices:
+            self.console.print(
+                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] --devices 与 --worker_url 不能同时使用"
+            )
+            raise typer.Exit(code=2)
+
+        device_ids: List[int] = []
+        if args.devices:
+            try:
+                device_ids = parse_devices(args.devices)
+            except ValueError as exc:
+                self.console.print(
+                    f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] {exc}"
+                )
+                raise typer.Exit(code=2) from exc
+
         if args.worker_url:
             try:
                 self.services.workers.workers = self.services.workers.parse_workers(
@@ -210,19 +239,19 @@ class OpCommandOrchestrator:
                 )
                 raise typer.Exit(code=2)
 
+        if args.devices and runtime.server_url and not self._is_local_server_url(
+            runtime.server_url
+        ):
+            self.console.print(
+                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 使用 --devices 时仅支持本地 server（当前为: {runtime.server_url}）。"
+            )
+            raise typer.Exit(code=2)
+
         server_url = runtime.server_url
         auto_server_started = False
 
         cli: CliClient | None = None
         try:
-            # 关键点：server 与 worker 是两回事；op 必须显式提供 worker_url。
-            if not self.services.workers.workers:
-                self.console.print(
-                    f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 缺少 worker_url。请先启动 worker（例如: akg_cli worker --start --devices 0 --port 9001），"
-                    f"并在 op 命令中通过 --worker_url 指定（例如: --worker_url localhost:9001）。"
-                )
-                raise typer.Exit(code=2)
-
             target, resolved_items = self._resolve_target_config(args)
             errs = validate_target_config(
                 target.framework, target.backend, target.arch, target.dsl
@@ -260,8 +289,24 @@ class OpCommandOrchestrator:
                     f"[{DisplayStyle.GREEN}]{UISymbol.DONE} 已自动启动本地 server: {server_url}[/{DisplayStyle.GREEN}]\n"
                 )
 
-            # 如果指定了 worker_url，则在提交任务前注册到 server
-            self.services.workers.register_if_any(self.console, server_url)
+            if args.devices:
+                self.services.workers.register_local_devices(
+                    self.console,
+                    server_url,
+                    backend=target.backend,
+                    arch=target.arch,
+                    devices=device_ids,
+                )
+            else:
+                # 关键点：server 与 worker 是两回事；op 必须显式提供 worker_url。
+                if not self.services.workers.workers:
+                    self.console.print(
+                        f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 缺少 worker_url 或 devices。请先启动 worker（例如: akg_cli worker --start --devices 0 --port 9001），"
+                        f"并在 op 命令中通过 --worker_url 指定（例如: --worker_url localhost:9001），或直接使用 --devices 注册本地 worker。"
+                    )
+                    raise typer.Exit(code=2)
+                # 如果指定了 worker_url，则在提交任务前注册到 server
+                self.services.workers.register_if_any(self.console, server_url)
 
             cli = CliClient.create_for_cli(
                 self.console,

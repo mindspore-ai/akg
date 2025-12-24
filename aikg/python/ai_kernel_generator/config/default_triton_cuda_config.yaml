@@ -1,5 +1,7 @@
 # Model preset configuration
 agent_model_config:
+  action_analyzer: deepseek_v3_default
+  intent_classifier: deepseek_v3_default
   sub_agent_selector: deepseek_v3_default
   op_task_builder: deepseek_v3_default
   designer: deepseek_v3_default

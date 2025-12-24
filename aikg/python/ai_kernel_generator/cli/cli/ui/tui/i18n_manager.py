@@ -73,7 +73,10 @@ class I18nManager:
         """刷新 UI 文案（标题/placeholder/快捷键描述）。"""
         # 标题/提示
         if self.app.task_tabs is not None:
-            self.app.task_tabs.border_title = t("tui.title.tasks_bar")
+            try:
+                self.app.task_tabs.border_title = self.app._tasks_bar_title()
+            except Exception:
+                self.app.task_tabs.border_title = t("tui.title.tasks_bar")
         if self.app.chat_log is not None:
             self.app.chat_log.border_title = t("tui.title.chat")
         if self.app.info_panel is not None:
@@ -81,35 +84,41 @@ class I18nManager:
         if self.app.workflow_panel is not None:
             self.app.workflow_panel.border_title = t("tui.title.workflow")
         if self.app.trace_panel is not None:
-            self.app.trace_panel.border_title = t("tui.title.trace")
+            try:
+                self.app.trace_panel.border_title = self.app._trace_title()
+            except Exception:
+                self.app.trace_panel.border_title = t("tui.title.trace")
 
         # placeholder（按当前状态尽力推断）
         try:
             if self.app.user_input is not None:
-                if getattr(self.app.user_input, "disabled", False):
-                    self.app.user_input.placeholder = t(
-                        "tui.placeholder.input_disabled"
-                    )
+                if hasattr(self.app, "refresh_input_placeholder"):
+                    self.app.refresh_input_placeholder()
                 else:
-                    wf_done = bool(
-                        self.app.workflow_task is not None
-                        and self.app._workflow_runner_task is not None
-                        and getattr(
-                            self.app._workflow_runner_task, "done", lambda: False
-                        )()
-                    )
-                    if wf_done:
+                    if getattr(self.app.user_input, "disabled", False):
                         self.app.user_input.placeholder = t(
-                            "tui.placeholder.input_done"
-                        )
-                    elif self.app.workflow_running:
-                        self.app.user_input.placeholder = t(
-                            "tui.placeholder.input_enabled_hint"
+                            "tui.placeholder.input_disabled"
                         )
                     else:
-                        self.app.user_input.placeholder = t(
-                            "tui.placeholder.input_initial"
+                        wf_done = bool(
+                            self.app.workflow_task is not None
+                            and self.app._workflow_runner_task is not None
+                            and getattr(
+                                self.app._workflow_runner_task, "done", lambda: False
+                            )()
                         )
+                        if wf_done:
+                            self.app.user_input.placeholder = t(
+                                "tui.placeholder.input_done"
+                            )
+                        elif self.app.workflow_running:
+                            self.app.user_input.placeholder = t(
+                                "tui.placeholder.input_enabled_hint"
+                            )
+                        else:
+                            self.app.user_input.placeholder = t(
+                                "tui.placeholder.input_initial"
+                            )
         except Exception as e:
             log.debug("[I18n] update placeholder failed", exc_info=e)
 

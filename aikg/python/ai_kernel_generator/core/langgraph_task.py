@@ -290,11 +290,15 @@ class LangGraphTask:
         stream_enabled = os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
         if stream_enabled and not session_id:
             raise ValueError("[LangGraphTask] config 中必须包含 session_id（AIKG_STREAM_OUTPUT=on）！")
+        task_label = str(self.config.get("task_label") or "").strip()
+        if not task_label:
+            raise ValueError("[LangGraphTask] config 中必须包含 task_label")
 
         state = {
             "op_name": self.op_name,
             "task_desc": self.task_desc,
             "task_id": self.task_id,
+            "task_label": task_label,
             "dsl": self.dsl,
             "framework": self.framework,
             "backend": self.backend,
@@ -337,4 +341,3 @@ class LangGraphTask:
             return f"Workflow visualization saved to {output_path}"
         else:
             return WorkflowVisualizer.generate_mermaid(self.app)
-

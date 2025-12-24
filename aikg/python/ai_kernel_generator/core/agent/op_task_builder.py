@@ -45,6 +45,7 @@ class OpTaskBuilder(AgentBase):
         """
         context = {
             "agent_name": "op_task_builder",
+            "task_label": "main",
         }
         if config and config.get("session_id"):
             context["session_id"] = config["session_id"]

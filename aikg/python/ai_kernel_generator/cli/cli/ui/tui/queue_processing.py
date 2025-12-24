@@ -14,7 +14,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import time
+from pathlib import Path
 from queue import Empty
 from typing import TYPE_CHECKING, Callable
 
@@ -31,6 +34,8 @@ from ai_kernel_generator.cli.cli.ui.commands import (
     Quit,
     SetActiveTaskTab,
     SetInput,
+    SetMainTaskId,
+    ResetTaskTabs,
     SetTaskTabs,
     SetTrace,
     SetTraceTitle,
@@ -45,7 +50,6 @@ from ai_kernel_generator.cli.cli.ui.types import (
     SyntaxBlockMainContent,
     TraceAnchorMainContent,
 )
-from ai_kernel_generator.cli.cli.utils.i18n import t
 
 if TYPE_CHECKING:
     from .app import SplitViewApp
@@ -60,6 +64,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 # 输出队列可能非常高频（流式输出时会刷屏）；默认只记录关键事件，避免 textual.log 爆量。
 _LOG_OUTPUT_VERBOSE: bool = _env_bool("AIKG_TUI_LOG_OUTPUT_VERBOSE", False)
+_UI_PERF_RECORD: bool = _env_bool("AIKG_TUI_PERF_RECORD", True)
 
 
 class _QueueProcessorBase:
@@ -79,6 +84,46 @@ class _QueueProcessorBase:
 
 class OutputQueueProcessor(_QueueProcessorBase):
     """负责处理 worker->UI 的 output_queue。"""
+
+    def __init__(self, app: "SplitViewApp") -> None:
+        super().__init__(app)
+        self._perf_seq = 0
+        self._perf_path: Path | None = None
+        if _UI_PERF_RECORD and not getattr(app, "resume_mode", False):
+            session_dir = getattr(app, "session_dir", None)
+            if session_dir:
+                try:
+                    self._perf_path = Path(session_dir) / "ui_perf.jsonl"
+                except Exception:
+                    self._perf_path = None
+
+    def _write_perf(self, payload: dict[str, object]) -> None:
+        if self._perf_path is None:
+            return
+        try:
+            obj = {
+                "seq": int(self._perf_seq),
+                "ts": float(time.time()),
+                "mono": float(time.monotonic()),
+                "payload": payload,
+            }
+            self._perf_seq += 1
+            line = json.dumps(obj, ensure_ascii=True)
+            with open(self._perf_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            self._perf_path = None
+
+    def _classify_content(self, content: MainContent) -> str:
+        if isinstance(content, ClearMainContent):
+            return "clear"
+        if isinstance(content, TraceAnchorMainContent):
+            return "trace_anchor"
+        if isinstance(content, SyntaxBlockMainContent):
+            return "syntax"
+        if isinstance(content, str):
+            return "markup"
+        return "renderable"
 
     def _snapshot_chat_scroll(self) -> tuple[float, int] | None:
         if self.app.chat_log is None:
@@ -131,10 +176,27 @@ class OutputQueueProcessor(_QueueProcessorBase):
         was_at_bottom = self._was_chat_at_bottom()
         scroll_snapshot = self._snapshot_chat_scroll()
         drained = 0
+        perf_t0 = time.perf_counter()
+        handle_ms_total = 0.0
+        stats = {
+            "clear": {"count": 0, "ms": 0.0},
+            "trace_anchor": {"count": 0, "ms": 0.0},
+            "syntax": {"count": 0, "ms": 0.0, "lines": 0, "chars": 0},
+            "markup": {"count": 0, "ms": 0.0},
+            "renderable": {"count": 0, "ms": 0.0},
+        }
+        qsize_before = None
+        qsize_after = None
+        try:
+            qsize_before = int(self.app.output_queue.qsize())
+        except Exception:
+            qsize_before = None
         try:
             while True:
                 content = self.app.output_queue.get_nowait()
                 drained += 1
+                content_type = self._classify_content(content)
+                item_t0 = time.perf_counter()
                 if _LOG_OUTPUT_VERBOSE:
                     log.debug(
                         "[OutputQueue] content",
@@ -142,8 +204,25 @@ class OutputQueueProcessor(_QueueProcessorBase):
                     )
                 if self._handle_content(content):
                     wrote_output = True
+                item_ms = (time.perf_counter() - item_t0) * 1000.0
+                handle_ms_total += item_ms
+                st = stats.get(content_type)
+                if st is not None:
+                    st["count"] += 1
+                    st["ms"] += item_ms
+                    if content_type == "syntax":
+                        try:
+                            code = str(getattr(content, "code", "") or "")
+                            st["lines"] += len(code.splitlines())
+                            st["chars"] += len(code)
+                        except Exception:
+                            pass
         except Empty:
             pass
+        try:
+            qsize_after = int(self.app.output_queue.qsize())
+        except Exception:
+            qsize_after = None
 
         if wrote_output and self.app.chat_log is not None:
             should_auto_scroll = bool(self.app.follow_tail and was_at_bottom)
@@ -161,6 +240,33 @@ class OutputQueueProcessor(_QueueProcessorBase):
                 "[OutputQueue] drained",
                 n=drained,
                 wrote_output=bool(wrote_output),
+            )
+        if drained and self._perf_path is not None:
+            drain_ms = (time.perf_counter() - perf_t0) * 1000.0
+            items_per_sec = (drained / (drain_ms / 1000.0)) if drain_ms > 0 else 0.0
+            self._write_perf(
+                {
+                    "type": "ui_output_queue",
+                    "drained": drained,
+                    "drain_ms": round(drain_ms, 3),
+                    "handle_ms": round(handle_ms_total, 3),
+                    "items_per_sec": round(items_per_sec, 2),
+                    "wrote_output": bool(wrote_output),
+                    "qsize_before": qsize_before,
+                    "qsize_after": qsize_after,
+                    "syntax_count": stats["syntax"]["count"],
+                    "syntax_ms": round(stats["syntax"]["ms"], 3),
+                    "syntax_lines": stats["syntax"]["lines"],
+                    "syntax_chars": stats["syntax"]["chars"],
+                    "markup_count": stats["markup"]["count"],
+                    "markup_ms": round(stats["markup"]["ms"], 3),
+                    "renderable_count": stats["renderable"]["count"],
+                    "renderable_ms": round(stats["renderable"]["ms"], 3),
+                    "trace_anchor_count": stats["trace_anchor"]["count"],
+                    "trace_anchor_ms": round(stats["trace_anchor"]["ms"], 3),
+                    "clear_count": stats["clear"]["count"],
+                    "clear_ms": round(stats["clear"]["ms"], 3),
+                }
             )
 
     def _was_chat_at_bottom(self) -> bool:
@@ -230,6 +336,7 @@ class OutputQueueProcessor(_QueueProcessorBase):
             code = str(content.code or "")
             lexer_name = str(content.lexer_name or "text")
             add_end_separator = bool(content.add_end_separator)
+            dim = bool(getattr(content, "dim", False))
             line_number_start = (
                 int(content.line_number_start)
                 if content.line_number_start is not None
@@ -240,6 +347,7 @@ class OutputQueueProcessor(_QueueProcessorBase):
                 lexer=lexer_name,
                 lines=len(code.splitlines()),
                 add_end_separator=bool(add_end_separator),
+                dim=bool(dim),
                 line_number_start=line_number_start
                 if line_number_start is not None
                 else "",
@@ -249,6 +357,7 @@ class OutputQueueProcessor(_QueueProcessorBase):
                 lexer_name,
                 add_end_separator=add_end_separator,
                 line_number_start=line_number_start,
+                dim=dim,
             )
             return True
 
@@ -328,6 +437,12 @@ class CommandQueueProcessor(_QueueProcessorBase):
             if isinstance(command, SetActiveTaskTab):
                 self._cmd_set_task_tab_active(command.task_id)
                 return
+            if isinstance(command, ResetTaskTabs):
+                self._cmd_reset_task_tabs(command.items, command.active_task_id)
+                return
+            if isinstance(command, SetMainTaskId):
+                self._cmd_set_main_task_id(command.task_id)
+                return
         except Exception as e:
             log(f"[CommandQueue] Failed to handle UICommand: {command!r}", exc_info=e)
             return
@@ -340,18 +455,10 @@ class CommandQueueProcessor(_QueueProcessorBase):
 
         enabled_b = bool(enabled)
         log(f"[CommandQueue] SetInput: enabled={enabled_b}")
-        self.app._input_enabled = enabled_b
-        self.app.user_input.disabled = not enabled_b
-        self.app.user_input.placeholder = (
-            t("tui.placeholder.input_enabled_hint")
-            if enabled_b
-            else t("tui.placeholder.input_disabled")
-        )
-        if enabled_b:
-            try:
-                self.app.user_input.focus()
-            except Exception as e:
-                log.debug("[CommandQueue] user_input.focus failed", exc_info=e)
+        try:
+            self.app.set_input_enabled(enabled_b)
+        except Exception as e:
+            log.debug("[CommandQueue] set_input_enabled failed", exc_info=e)
 
     def _cmd_focus(self, target: str) -> None:
         target_n = str(target or "").strip().lower()
@@ -600,9 +707,7 @@ class CommandQueueProcessor(_QueueProcessorBase):
                         tid_s = str(tid or "").strip()
                         if not tid_s:
                             continue
-                        lab_s = str(label or tid_s).strip()
-                        if not lab_s:
-                            lab_s = tid_s
+                        lab_s = str(label or "").strip()
                         normalized.append((tid_s, lab_s))
             except Exception as e:
                 log.warning("[CommandQueue] normalize tabs failed", exc_info=e)
@@ -667,7 +772,10 @@ class CommandQueueProcessor(_QueueProcessorBase):
                         try:
                             self.app._suppress_tab_event = True
                             self.app.task_tabs.active = tab_id
-                            self.app._active_task_id = active
+                            try:
+                                self.app.set_active_task_id(active)
+                            except Exception:
+                                self.app._active_task_id = active
                             log(
                                 f"[CommandQueue] SetTaskTabs: Set active tab to {tab_id}"
                             )
@@ -715,7 +823,10 @@ class CommandQueueProcessor(_QueueProcessorBase):
             try:
                 self.app._suppress_tab_event = True
                 self.app.task_tabs.active = tab_id
-                self.app._active_task_id = task_id_s
+                try:
+                    self.app.set_active_task_id(task_id_s)
+                except Exception:
+                    self.app._active_task_id = task_id_s
                 log(f"[CommandQueue] SetActiveTaskTab: Activated tab {tab_id}")
                 try:
                     self.app.task_tabs.refresh()
@@ -739,6 +850,44 @@ class CommandQueueProcessor(_QueueProcessorBase):
                     self.app._suppress_tab_event = False
 
         self._call_later(_do_set_active)
+
+    def _cmd_reset_task_tabs(
+        self, items: list[tuple[str, str]], active: str = ""
+    ) -> None:
+        def _do_reset() -> None:
+            if self.app.task_tabs is None:
+                return
+            try:
+                for tab in list(self.app.task_tabs.query(Tab)):
+                    try:
+                        tab.remove()
+                    except Exception:
+                        pass
+            except Exception as e:
+                log.debug("[CommandQueue] reset tabs remove failed", exc_info=e)
+            self.app._tab_id_to_task_id.clear()
+            self.app._task_id_to_tab_id.clear()
+            try:
+                self.app.set_active_task_id("")
+            except Exception:
+                self.app._active_task_id = ""
+
+            if items:
+                self._cmd_set_task_tabs(items, active)
+
+        self._call_later(_do_reset)
+
+    def _cmd_set_main_task_id(self, task_id: str) -> None:
+        task_id_s = str(task_id or "").strip()
+        log(f"[CommandQueue] SetMainTaskId: task_id={task_id_s}")
+
+        def _do_set_main() -> None:
+            try:
+                self.app.set_main_task_id(task_id_s)
+            except Exception as e:
+                log.warning("[CommandQueue] set_main_task_id failed", exc_info=e)
+
+        self._call_later(_do_set_main)
 
 
 class SplitViewQueueProcessor:

@@ -99,6 +99,20 @@ class ConsolePainter:
         width = self._calc_left_panel_width()
         return Text("─" * width, style=style)
 
+    def _syntax_theme_name(self) -> str:
+        if self.layout_manager:
+            app = getattr(self.layout_manager, "app", None)
+            theme_mgr = getattr(app, "theme_manager", None)
+            if theme_mgr is not None and hasattr(theme_mgr, "syntax_theme_name"):
+                try:
+                    return str(theme_mgr.syntax_theme_name() or "monokai")
+                except Exception as e:
+                    log.debug(
+                        "[Painter] theme_manager.syntax_theme_name failed",
+                        exc_info=e,
+                    )
+        return "monokai"
+
     def print_divider(self, title: str = "") -> None:
         if title:
             self._emit(
@@ -118,13 +132,15 @@ class ConsolePainter:
             f"[{DisplayStyle.DIM}]{int(line_number):3d}[/{DisplayStyle.DIM}] {UISymbol.VERTICAL_BAR} "
         )
 
-    def print_normal_line(self, line: str, line_number: int) -> None:
+    def print_normal_line(self, line: str, line_number: int, *, dim: bool = False) -> None:
         console_width = self._calc_left_panel_width()
 
         prefix_text = self._line_number_prefix(line_number)
 
         rich_line = apply_basic_markdown(line)
         is_list, rich_line, indent_str = self._process_list_style(rich_line)
+        if dim:
+            rich_line.stylize(DisplayStyle.DIM)
 
         subsequent_indent_str = " " * (
             prefix_text.plain.find(UISymbol.VERTICAL_BAR)
@@ -161,6 +177,7 @@ class ConsolePainter:
         add_end_separator: bool = True,
         *,
         line_number_start: int | None = None,
+        dim: bool = False,
     ) -> int:
         """打印语法高亮代码块。
 
@@ -179,6 +196,7 @@ class ConsolePainter:
                             if line_number_start is not None
                             else None
                         ),
+                        dim=bool(dim),
                     )
                 )
             except Exception as e:
@@ -202,7 +220,7 @@ class ConsolePainter:
             syntax = Syntax(
                 str(code or ""),
                 str(lexer_name or "text"),
-                theme=build_syntax_theme("monokai", suppress_error_tokens=True),
+                theme=build_syntax_theme(self._syntax_theme_name(), suppress_error_tokens=True),
                 word_wrap=True,
                 padding=(0, 1),
             )
@@ -221,7 +239,7 @@ class ConsolePainter:
             syntax = Syntax(
                 code,
                 lexer_name or "text",
-                theme=build_syntax_theme("monokai", suppress_error_tokens=True),
+                theme=build_syntax_theme(self._syntax_theme_name(), suppress_error_tokens=True),
                 word_wrap=True,
                 padding=(0, 1),
             )
@@ -232,6 +250,8 @@ class ConsolePainter:
                 line_text = Text.assemble(
                     *((seg.text, seg.style) for seg in line_segments)
                 )
+                if dim:
+                    line_text.stylize(DisplayStyle.DIM)
                 if self.layout_manager:
                     self._emit(prefix + line_text)
                 else:
@@ -250,7 +270,7 @@ class ConsolePainter:
         syntax = Syntax(
             code,
             lexer_name or "text",
-            theme=build_syntax_theme("monokai", suppress_error_tokens=True),
+            theme=build_syntax_theme(self._syntax_theme_name(), suppress_error_tokens=True),
             word_wrap=True,
             padding=(0, 1),
         )
@@ -262,6 +282,8 @@ class ConsolePainter:
             current_no = int(line_number_start) + i
             prefix = self._line_number_prefix(current_no)
             line_text = Text.assemble(*((seg.text, seg.style) for seg in line_segments))
+            if dim:
+                line_text.stylize(DisplayStyle.DIM)
             if self.layout_manager:
                 self._emit(prefix + line_text)
             else:
@@ -277,14 +299,20 @@ class ConsolePainter:
         return consumed
 
     def print_json_line(
-        self, text: str, line_number: int, is_code: bool = False
+        self, text: str, line_number: int, is_code: bool = False, *, dim: bool = False
     ) -> int:
         if is_code:
             output = f"[{DisplayStyle.DIM}]{line_number:3d}[/{DisplayStyle.DIM}] {UISymbol.VERTICAL_BAR} [{DisplayStyle.CYAN}]{escape(text)}[/{DisplayStyle.CYAN}]"
             if self.layout_manager:
-                self._emit(Text.from_markup(output))
+                rich_text = Text.from_markup(output)
+                if dim:
+                    rich_text.stylize(DisplayStyle.DIM)
+                self._emit(rich_text)
             else:
-                self.console.print(output)
+                rich_text = Text.from_markup(output)
+                if dim:
+                    rich_text.stylize(DisplayStyle.DIM)
+                self.console.print(rich_text)
             return 1
 
         console_width = self._calc_left_panel_width()
@@ -294,8 +322,9 @@ class ConsolePainter:
         # 再保守扣 1，避免长字符串贴边导致软换行
         effective_width = console_width - prefix_width - 3
 
+        content_style = DisplayStyle.DIM if dim else "default"
         rich_text = Text.from_markup(
-            f"[{DisplayStyle.DIM}]{escape(text)}[/{DisplayStyle.DIM}]"
+            f"[{content_style}]{escape(text)}[/{content_style}]"
         )
         wrapped_lines = wrap_rich_text_with_display_width(
             rich_text, effective_width, "", self.console
@@ -319,12 +348,17 @@ class ConsolePainter:
                 self.console.print(prefix_text + line)
         return 1
 
-    def print_json_structure_line(self, line: str, line_number: int) -> int:
-        output = f"[{DisplayStyle.DIM}]{line_number:3d}[/{DisplayStyle.DIM}] {UISymbol.VERTICAL_BAR} [{DisplayStyle.DIM}]{escape(line)}[/{DisplayStyle.DIM}]"
+    def print_json_structure_line(
+        self, line: str, line_number: int, *, dim: bool = False
+    ) -> int:
+        content_style = DisplayStyle.DIM if dim else "default"
+        output = f"[{DisplayStyle.DIM}]{line_number:3d}[/{DisplayStyle.DIM}] {UISymbol.VERTICAL_BAR} [{content_style}]{escape(line)}[/{content_style}]"
         if self.layout_manager:
-            self._emit(Text.from_markup(output))
+            rich_text = Text.from_markup(output)
+            self._emit(rich_text)
         else:
-            self.console.print(output)
+            rich_text = Text.from_markup(output)
+            self.console.print(rich_text)
         return 1
 
     def _process_list_style(self, text: Text) -> Tuple[bool, Text, str]:

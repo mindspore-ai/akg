@@ -80,6 +80,11 @@ def register_op_command(
             "--worker-url",
             help="必填：多个 Worker Service 地址，逗号分隔（例如: localhost:9001,1.2.3.4:9002）。请先执行 akg_cli worker start。",
         ),
+        devices: Optional[str] = typer.Option(
+            None,
+            "--devices",
+            help="本地设备列表，逗号分隔（如 0,1,2,3）。与 --worker_url 互斥。",
+        ),
         stream: bool = typer.Option(
             True, "--stream/--no-stream", help="启用/关闭 LLM 流式输出（默认开启）"
         ),
@@ -100,6 +105,7 @@ def register_op_command(
                 auto_yes=auto_yes,
                 server_url=server_url,
                 worker_url=worker_url,
+                devices=devices,
                 stream=stream,
             ),
         )

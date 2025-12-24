@@ -64,6 +64,7 @@ class MainOpAgent(AgentBase):
         """
         context = {
             "agent_name": "main_op_agent",
+            "task_label": "main",
         }
         # 如果 config 中包含 session_id，添加到 context 中
         # 这样在流式输出启用时，run_llm 方法可以正确获取 session_id
@@ -224,7 +225,7 @@ class MainOpAgent(AgentBase):
             op_description = state.get("op_description", "用户提供的 torch task 代码")
             user_feedback = state.get("user_feedback")
             is_user_provided_complete = state.get("user_provided_complete_code", False)  # 🔑 代码是否完整
-            
+
             # 🔑 关键判断：只有以下情况才直接使用代码：
             # 1. 用户提供的是完整代码（不是LLM补充的）
             # 2. 用户已确认（要求生成triton）
@@ -235,7 +236,7 @@ class MainOpAgent(AgentBase):
                 not user_feedback and  # 没有feedback
                 not state.get("retry_requested")  # 没有重试请求
             )
-            
+
             if should_use_directly:
                 logger.info("=" * 80)
                 logger.info("🎯 USING USER-PROVIDED COMPLETE TORCH TASK CODE")
@@ -244,14 +245,14 @@ class MainOpAgent(AgentBase):
                 logger.info(f"   Description: {op_description}")
                 logger.info("   Skipping OpTaskBuilder (complete code + user confirmed)")
                 logger.info("=" * 80)
-                
+
                 # 直接使用用户提供的完整代码
                 new_message = Message(
                     role="assistant",
                     content=f"✓ 已接收您提供的 {op_name} 算子完整代码，准备进行后续处理。",
                     timestamp=datetime.now().isoformat()
                 )
-                
+
                 return {
                     "task_code": provided_task_code,
                     "op_name": op_name,
@@ -275,7 +276,7 @@ class MainOpAgent(AgentBase):
                     reason.append(f"用户要求修改: {user_feedback[:50]}")
                 if not state.get("user_confirmed"):
                     reason.append("用户未确认")
-                    
+
                 logger.info("=" * 80)
                 logger.info("📝 WILL CALL OpTaskBuilder")
                 logger.info(f"   Current op_name: {op_name if op_name else 'None'}")
@@ -283,7 +284,7 @@ class MainOpAgent(AgentBase):
                 logger.info("   OpTaskBuilder will validate/modify the code")
                 logger.info("=" * 80)
                 # 继续往下执行，让OpTaskBuilder处理
-        
+
         if self.use_intent_classification and is_first_turn and not is_modification_req:
             conversation_history = state.get("conversation_history", [])
             
@@ -418,6 +419,7 @@ class MainOpAgent(AgentBase):
                 "dsl": state.get("dsl", "triton"),
                 "iteration": state.get("iteration", 0),
                 "max_iterations": state.get("max_iterations", 10),
+                "task_label": state.get("task_label", ""),
             }
             
             # 直接调用 OpTaskBuilder.run()，传递完整的 state
@@ -515,7 +517,7 @@ class MainOpAgent(AgentBase):
     async def _user_confirm_node(self, state: ConversationalOpGenState) -> Dict[str, Any]:
         """
         用户确认节点: 标记等待用户确认状态
-        
+
         如果用户在第一轮就明确要求"生成并测试性能"，或者LLM已经分析确认，自动确认继续执行
         """
         logger.info("=== User Confirm Node ===")
@@ -523,7 +525,7 @@ class MainOpAgent(AgentBase):
         task_code = state.get("task_code", "")
         op_name = state.get("op_name", "")
         user_request = state.get("user_request", "")
-        
+
         # 🆕 优先检查初始状态中是否已经通过 LLM 分析设置了 user_confirmed
         # 这种情况通常是用户直接提供了代码并明确要求生成
         if state.get("user_confirmed", False):
@@ -532,7 +534,7 @@ class MainOpAgent(AgentBase):
                 "current_step": "user_confirm",
                 "user_confirmed": True  # 保持确认状态
             }
-        
+
         # 检查用户是否明确要求"生成并测试性能"
         # 如果是，自动确认，不需要用户再次确认
         if user_requests_profile(user_request):
@@ -541,7 +543,7 @@ class MainOpAgent(AgentBase):
                 "current_step": "user_confirm",
                 "user_confirmed": True  # 自动确认
             }
-        
+
         logger.info(f"Task code generated for op: {op_name}, waiting for user confirmation")
         
         return {
@@ -690,7 +692,9 @@ class MainOpAgent(AgentBase):
         op_name = state.get("op_name", "")
         task_id = state.get("task_id", "default_task")
         sub_workflow = state.get("sub_workflow", "codeonly")
-        
+        if not op_name:
+            raise ValueError("[MainOpAgent] missing op_name before sub-agent execution")
+
         try:
             # 从注册中心获取子 Agent
             sub_agent = self.sub_agent_registry.get_agent(
@@ -713,7 +717,7 @@ class MainOpAgent(AgentBase):
                 "generated_code": state.get("generated_code", ""),  # 传递已生成的代码
                 "device_id": state.get("device_id", 0)
             }
-            
+
             # 如果是 codeonly 子 Agent，根据用户请求判断 task_type
             if sub_workflow == "codeonly":
                 # 优先使用当前轮的用户输入，如果没有则使用初始请求
@@ -721,18 +725,25 @@ class MainOpAgent(AgentBase):
                 current_input = state.get("current_user_input", "")
                 user_request = state.get("user_request", "")
                 check_input = current_input if current_input else user_request
-                
+
                 if user_requests_profile(check_input):
                     execute_kwargs["task_type"] = "profile"
                     logger.info(f"User requested performance testing (check_input: '{check_input[:50]}...'), setting task_type='profile'")
                 else:
                     execute_kwargs["task_type"] = "precision_only"
                     logger.info(f"Standard code generation (check_input: '{check_input[:50]}...'), setting task_type='precision_only'")
-            
+
+            from ai_kernel_generator.utils.task_label import resolve_task_label
+
+            sub_task_label = resolve_task_label(
+                op_name=op_name,
+                parallel_index=1,
+            )
             success, result = await sub_agent.execute(
                 task_code=task_code,
                 op_name=op_name,
                 task_id=task_id,
+                task_label=sub_task_label,
                 **execute_kwargs
             )
             
@@ -848,10 +859,10 @@ class MainOpAgent(AgentBase):
 
             logger.info(f"LLM suggested action: {suggested_action} (confidence: {confidence:.2f})")
             logger.debug(f"Analysis reasoning: {analysis_reasoning}")
-            
+
             if is_new_operator:
                 logger.info(f"🆕 LLM detected NEW OPERATOR request (is_new_operator=True)")
-            
+
             if has_provided_task_code:
                 logger.info(f"🎯 LLM detected USER PROVIDED TASK CODE (has_provided_task_code=True)")
                 logger.info(f"   Code completeness: {'COMPLETE' if is_complete_code else 'PARTIAL (需要OpTaskBuilder验证)'}")
@@ -898,11 +909,11 @@ class MainOpAgent(AgentBase):
         user_confirmed = False  # 默认需要确认
         op_name = ''
         extracted_op_description = ''
-        
+
         logger.info("=" * 80)
         logger.info("🔍 Analyzing user input with LLM...")
         logger.info("=" * 80)
-        
+
         try:
             # 构建一个临时状态用于分析
             temp_state = {
@@ -911,25 +922,25 @@ class MainOpAgent(AgentBase):
                 "generated_code": "",
                 "op_name": ""
             }
-            
+
             # 🆕 调用统一的 LLM 分析：检测torch代码、提取并补充、分析意图
             action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(
-                temp_state, 
+                temp_state,
                 user_request
             )
-            
+
             # 🆕 如果 LLM 检测到并提取了torch代码
             if has_provided_task_code and extracted_task_code:
                 provided_task_code = extracted_task_code
                 op_name = extracted_op_name if extracted_op_name else 'custom_op'
-                
+
                 logger.info("🎯 LLM DETECTED & EXTRACTED TORCH TASK CODE")
                 logger.info(f"   Code completeness: {'COMPLETE ✓' if is_complete_code else 'PARTIAL (需要OpTaskBuilder验证)'}")
                 logger.info(f"   Code length: {len(provided_task_code)} characters")
                 logger.info(f"   Extracted op_name: {op_name}")
                 if extracted_op_description:
                     logger.info(f"   Description: {extracted_op_description}")
-                
+
                 # 🔑 关键逻辑：只有完整代码 + action==confirm 才自动确认
                 if is_complete_code and action == "confirm":
                     user_confirmed = True
@@ -949,7 +960,7 @@ class MainOpAgent(AgentBase):
             logger.warning(f"Failed to analyze user action: {e}, treating as normal request")
             user_confirmed = False
             op_name = ''
-        
+
         # 初始化状态
         initial_state = {
             "user_request": user_request,
@@ -958,6 +969,7 @@ class MainOpAgent(AgentBase):
             "arch": self.arch,
             "dsl": self.dsl,
             "task_id": task_id,
+            "task_label": "main",
             "config": self.config,
             "conversation_history": [Message(
                 role="user",
@@ -981,7 +993,7 @@ class MainOpAgent(AgentBase):
             if 'extracted_op_description' in locals() and extracted_op_description:
                 initial_state["op_description"] = extracted_op_description
             logger.info(f"✓ Set task_code in initial_state (length: {len(provided_task_code)} chars, complete={is_complete_code})")
-        
+
         # 执行到用户确认节点
         result = await self.app.ainvoke(initial_state, {
             "recursion_limit": 100
@@ -1026,10 +1038,12 @@ class MainOpAgent(AgentBase):
         if "conversation_history" not in current_state:
             current_state["conversation_history"] = []
         current_state["conversation_history"].append(user_message)
-        
+        if "task_label" not in current_state:
+            current_state["task_label"] = "main"
+
         # 保存当前轮的用户输入（用于多轮对话中判断task_type等）
         current_state["current_user_input"] = user_input
-        
+
         quick_matched_sub_agent = quick_match_sub_agent_preference(user_input)
         if quick_matched_sub_agent:
             logger.info(f"⚡ Quick match: User requested '{quick_matched_sub_agent}' sub-agent")
@@ -1059,7 +1073,7 @@ class MainOpAgent(AgentBase):
         extracted_task_code = ''  # 默认空（LLM提取并补充的完整代码）
         extracted_op_name = ''  # 默认空
         extracted_op_description = ''  # 默认空
-        
+
         if action == "auto":
             # 🆕 调用统一的分析方法，返回 7 个值
             action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(current_state, user_input)
@@ -1072,7 +1086,7 @@ class MainOpAgent(AgentBase):
                 logger.info(f"  - extracted_task_code length: {len(extracted_task_code)} chars")
             if extracted_op_name:
                 logger.info(f"  - extracted_op_name: {extracted_op_name}")
-            
+
             # 检查LLM推理中是否提到子Agent
             if action == "retry_sub_agent" and not current_state.get("sub_workflow_specified_by_user"):
                 reasoning = current_state.get("last_action_reasoning", "")
@@ -1081,16 +1095,16 @@ class MainOpAgent(AgentBase):
                     logger.info(f"LLM detected: User wants '{llm_detected_sub_agent}' sub-agent")
                     current_state["sub_workflow"] = llm_detected_sub_agent
                     current_state["sub_workflow_specified_by_user"] = True
-            
+
             # 🎯 处理用户直接提供 torch task 代码的情况
             if has_provided_task_code and extracted_task_code:
                 # 🆕 使用 LLM 提取并补充的完整代码（而不是正则匹配）
                 provided_code = extracted_task_code
-                
+
                 # 使用 LLM 提取的算子信息（已经在 _analyze_user_action 中分析过了）
                 op_name = extracted_op_name if extracted_op_name else 'custom_op'
                 op_description = extracted_op_description if extracted_op_description else '用户提供的 torch task 代码'
-                
+
                 logger.info("=" * 80)
                 logger.info("🎯 LLM EXTRACTED & COMPLETED TORCH TASK CODE IN MULTI-TURN")
                 logger.info(f"   Code completeness: {'COMPLETE ✓' if is_complete_code else 'PARTIAL (需要OpTaskBuilder验证)'}")
@@ -1098,13 +1112,13 @@ class MainOpAgent(AgentBase):
                 logger.info(f"   Extracted op_name: {op_name}")
                 logger.info(f"   Detected action: {action}")
                 logger.info("=" * 80)
-                
+
                 # 更新 task_code
                 current_state["task_code"] = provided_code
                 current_state["op_name"] = op_name  # 🆕 使用 LLM 分析得到的算子名称
                 current_state["op_description"] = op_description  # 🆕 使用 LLM 分析得到的描述
                 current_state["user_provided_complete_code"] = is_complete_code  # 🔑 标记代码是否完整
-                
+
                 # 🔑 根据 action 和 is_complete_code 决定下一步
                 if is_complete_code and action == "confirm":
                     # 完整代码 + 用户要求生成 triton → 直接确认
@@ -1120,7 +1134,7 @@ class MainOpAgent(AgentBase):
                     current_state["user_confirmed"] = False
                     current_state["user_feedback"] = user_input
                     logger.info(f"Wait for confirmation: action={action}")
-                
+
                 # 重置一些标志
                 current_state["retry_requested"] = False
                 current_state["retry_sub_agent_only"] = False
@@ -1148,25 +1162,25 @@ class MainOpAgent(AgentBase):
                 logger.info(f"   New request: '{user_input[:80]}...'")
                 logger.info("   Clearing all previous state and restarting...")
                 logger.info("=" * 80)
-                
+
                 # 更新 user_request 为新需求
                 current_state["user_request"] = user_input
                 current_state["user_feedback"] = user_input
-                
+
                 # 清空所有旧状态（包括 task_code 和 op_name）
                 current_state["task_code"] = ""
                 current_state["op_name"] = ""
                 current_state["op_description"] = ""
                 current_state["task_reasoning"] = ""
                 current_state["task_init_status"] = None
-                
+
                 # 清空生成的代码和验证结果
                 current_state["generated_code"] = ""
                 current_state["generation_success"] = False
                 current_state["verification_result"] = False
                 current_state["verification_error"] = ""
                 current_state["profile_result"] = None
-                
+
                 # 重置标志
                 current_state["retry_requested"] = True
                 current_state["retry_sub_agent_only"] = False

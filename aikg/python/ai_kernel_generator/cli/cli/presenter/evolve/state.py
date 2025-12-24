@@ -49,6 +49,8 @@ class EvolveTaskStore:
     task_start_trace_items: dict[str, list[tuple[str, str, int]]] = field(
         default_factory=dict
     )
+    # task_id -> label（由 server 下发，client 仅展示）
+    task_labels: dict[str, str] = field(default_factory=dict)
 
     # UI 事件泵：让 [ / ] 切换即时生效（不依赖 server 新消息）
     ui_pump_task: Any | None = None
@@ -179,6 +181,23 @@ class TaskStateRepository:
             tid = "main"
         self.ensure_task_known(tid)
         return self._s.task_llm_state.get(tid) or {}
+
+    def set_task_label(self, task_id: str, label: str) -> bool:
+        tid = (task_id or "").strip()
+        lab = (label or "").strip()
+        if not tid or not lab:
+            return False
+        old = str(self._s.task_labels.get(tid) or "")
+        if old == lab:
+            return False
+        self._s.task_labels[tid] = lab
+        return True
+
+    def task_label(self, task_id: str) -> str:
+        tid = (task_id or "").strip()
+        if not tid:
+            return ""
+        return str(self._s.task_labels.get(tid) or "")
 
     def sorted_task_ids(self) -> list[str]:
         def _key(tid: str):

@@ -67,7 +67,9 @@ class StreamRenderer:
         self.save_log = bool(save_log)
         # 核心数据
         self.full_buffer = ""
-        self.rendered_length = 0
+        self._pending_chunks: list[tuple[str, bool]] = []
+        self._pending_text = ""
+        self._pending_dim = False
 
         # 状态
         self.state = RenderState()
@@ -94,13 +96,19 @@ class StreamRenderer:
         self.op_name = op_name
         self.default_lang = language
         self.full_buffer = ""
-        self.rendered_length = 0
+        self._pending_chunks.clear()
+        self._pending_text = ""
+        self._pending_dim = False
         self.state.reset()
 
         self.painter.print_divider()
 
-    def add_chunk(self, chunk: str):
-        self.full_buffer += chunk
+    def add_chunk(self, chunk: str, *, is_reasoning: bool = False):
+        c = str(chunk or "")
+        if not c:
+            return
+        self.full_buffer += c
+        self._pending_chunks.append((c, bool(is_reasoning)))
 
         # 限流更新
         now = time.time()
@@ -121,30 +129,48 @@ class StreamRenderer:
 
     def _render_incremental(self, force_all: bool = False):
         """增量渲染循环"""
-        new_content = self.full_buffer[self.rendered_length :]
-        if not new_content:
-            return
+        while True:
+            if not self._pending_text:
+                if not self._pending_chunks:
+                    return
+                text, is_reasoning = self._pending_chunks.pop(0)
+                self._pending_text = str(text or "")
+                self._pending_dim = bool(is_reasoning)
+                if not self._pending_text:
+                    continue
 
-        # 1. 计算安全渲染位置
-        if force_all:
-            limit = len(new_content)
-        else:
-            limit = find_safe_render_position(
-                new_content, self.state.in_code_block, self.state.in_json_block
-            )
+            # 1. 计算安全渲染位置
+            if force_all:
+                limit = len(self._pending_text)
+            else:
+                limit = find_safe_render_position(
+                    self._pending_text,
+                    self.state.in_code_block,
+                    self.state.in_json_block,
+                )
 
-        if limit == 0:
-            return
+            if limit == 0:
+                if self._pending_chunks:
+                    next_text, next_dim = self._pending_chunks.pop(0)
+                    if next_text:
+                        self._pending_text += str(next_text)
+                        if bool(next_dim) != self._pending_dim:
+                            # 混合不同类型时，保守降级为非 dim，避免过度弱化输出。
+                            self._pending_dim = False
+                    continue
+                return
 
-        chunk_to_render = new_content[:limit]
+            chunk_to_render = self._pending_text[:limit]
 
-        # 2. 逐行处理
-        self._process_content_lines(chunk_to_render)
+            # 2. 逐行处理
+            self._process_content_lines(chunk_to_render, dim=self._pending_dim)
 
-        # 3. 更新指针
-        self.rendered_length += limit
+            # 3. 更新指针
+            self._pending_text = self._pending_text[limit:]
+            if not self._pending_text:
+                self._pending_dim = False
 
-    def _process_content_lines(self, content: str):
+    def _process_content_lines(self, content: str, *, dim: bool = False):
         """逐行解析并分发给 Painter 或 JsonProcessor"""
         lines = content.split("\n")
 
@@ -167,43 +193,55 @@ class StreamRenderer:
                     and not self.state.in_code_block
                     and not self.state.in_json_block
                 ):
-                    self.painter.print_normal_line(pre_text, self.state.line_number)
-                    self.state.line_number += 1
+                    self.painter.print_normal_line(
+                        pre_text,
+                        self.state.get_line_number(dim=dim),
+                        dim=dim,
+                    )
+                    self.state.advance_line_number(dim=dim)
 
                 # 调用处理逻辑
-                self._handle_fence(fence_line, line)
+                self._handle_fence(fence_line, line, dim=dim)
                 continue
 
             # 处理 Markdown Fence (```) - 保留旧逻辑作为兜底 (虽然上面的 regex 应该覆盖了大部分情况)
             stripped = line.strip()
             if stripped.startswith("```"):
-                self._handle_fence(stripped, line)
+                self._handle_fence(stripped, line, dim=dim)
                 continue
 
             # 处理 JSON 块内容
             if self.state.in_json_block:
-                self.json_processor.process_line(line, self.state)
+                if self.state.json_dim != bool(dim):
+                    self.state.json_dim = bool(dim)
+                self.json_processor.process_line(line, self.state, dim=self.state.json_dim)
                 continue
 
             # 处理普通代码块内容
             if self.state.in_code_block:
+                if self.state.code_dim != bool(dim):
+                    self.state.code_dim = bool(dim)
                 self.state.code_buffer.append(line)
                 continue
 
             # 检测隐式 JSON 开始 (Heuristic)
-            if self._try_detect_implicit_json(line):
+            if self._try_detect_implicit_json(line, dim=dim):
                 continue
 
             # 普通文本渲染
             if line.strip():  # 忽略纯空行，或者也可以渲染空行
-                self.painter.print_normal_line(line, self.state.line_number)
-                self.state.line_number += 1
+                self.painter.print_normal_line(
+                    line, self.state.get_line_number(dim=dim), dim=dim
+                )
+                self.state.advance_line_number(dim=dim)
 
-    def _handle_fence(self, stripped_line: str, original_line: str):
+    def _handle_fence(self, stripped_line: str, original_line: str, *, dim: bool = False):
         """处理 ``` 标记"""
         # 如果在隐式 JSON 中遇到 ```，这通常是 JSON 字符串的一部分，而不是 Markdown Fence
         if self.state.is_implicit_json:
-            self.json_processor.process_line(original_line, self.state)
+            self.json_processor.process_line(
+                original_line, self.state, dim=self.state.json_dim
+            )
             return
 
         # 正常 Markdown Fence 逻辑
@@ -211,6 +249,7 @@ class StreamRenderer:
             # 结束当前块
             if self.state.in_json_block:
                 self.state.in_json_block = False
+                self.state.json_dim = False
                 logger.debug("显式 JSON 块结束")
             elif self.state.in_code_block:
                 # 渲染累积的代码块
@@ -218,11 +257,15 @@ class StreamRenderer:
                 consumed = self.painter.print_syntax_block(
                     full_code,
                     self.state.code_lang,
-                    line_number_start=self.state.line_number,
+                    line_number_start=self.state.get_line_number(dim=self.state.code_dim),
+                    dim=self.state.code_dim,
                 )
-                self.state.line_number += int(consumed or 0)
+                self.state.advance_line_number(
+                    dim=self.state.code_dim, count=int(consumed or 0)
+                )
                 self.state.code_buffer.clear()
                 self.state.in_code_block = False
+                self.state.code_dim = False
                 logger.debug("普通代码块结束")
         else:
             # 开始新块
@@ -230,17 +273,19 @@ class StreamRenderer:
             if lang in ("json", "output_json"):
                 self.state.in_json_block = True
                 self.state.is_implicit_json = False
+                self.state.json_dim = bool(dim)
                 logger.debug("进入显式 JSON 块")
             else:
                 self.state.in_code_block = True
                 self.state.code_lang = lang
+                self.state.code_dim = bool(dim)
                 logger.debug(f"进入普通代码块: {lang}")
 
             # 打印围栏线
             if lang not in ("json", "output_json"):
                 pass  # self.painter.print_json_structure_line("    │")
 
-    def _try_detect_implicit_json(self, line: str) -> bool:
+    def _try_detect_implicit_json(self, line: str, *, dim: bool = False) -> bool:
         """尝试检测是否开始了一个隐式的 JSON 块"""
         # 简单启发式：如果是 { 开头，或者包含 {"code": ...
         if "{" not in line:
@@ -255,17 +300,22 @@ class StreamRenderer:
             # 1. 渲染该行前面的普通文本
             pre_text = line[:json_start]
             if pre_text.strip():
-                self.painter.print_normal_line(pre_text, self.state.line_number)
-                self.state.line_number += 1
+                self.painter.print_normal_line(
+                    pre_text, self.state.get_line_number(dim=dim), dim=dim
+                )
+                self.state.advance_line_number(dim=dim)
 
             # 2. 切换状态
             self.state.in_json_block = True
             self.state.is_implicit_json = True
             self.state.brace_balance = 0
+            self.state.json_dim = bool(dim)
 
             # 3. 处理该行剩下的部分
             json_part = line[json_start:]
-            self.json_processor.process_line(json_part, self.state)
+            self.json_processor.process_line(
+                json_part, self.state, dim=self.state.json_dim
+            )
             return True
 
         return False
@@ -278,9 +328,12 @@ class StreamRenderer:
             consumed = self.painter.print_syntax_block(
                 full_code,
                 self.state.code_lang,
-                line_number_start=self.state.line_number,
+                line_number_start=self.state.get_line_number(dim=self.state.code_dim),
+                dim=self.state.code_dim,
             )
-            self.state.line_number += int(consumed or 0)
+            self.state.advance_line_number(
+                dim=self.state.code_dim, count=int(consumed or 0)
+            )
             self.state.code_buffer.clear()
 
     def _save_log(self):

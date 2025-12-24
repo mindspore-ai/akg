@@ -23,46 +23,13 @@ from textual import log
 
 from ..service import CLIAppServices
 from ai_kernel_generator.cli.cli.constants import DisplayStyle
+from ai_kernel_generator.cli.cli.utils.device_parser import parse_devices
 from ..utils.ui_helpers import print_logo_once
 
 
 def register_misc_commands(
     app: typer.Typer, console: Console, services: CLIAppServices
 ) -> None:
-    def _parse_devices(devices_str: str) -> list[int]:
-        devices_str = (devices_str or "").strip()
-        if not devices_str:
-            console.print(
-                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] --devices 不能为空（例如 0 或 0,1,2,3）"
-            )
-            raise typer.Exit(code=2)
-
-        try:
-            device_ids = [
-                int(x.strip()) for x in devices_str.split(",") if x.strip() != ""
-            ]
-        except (TypeError, ValueError):
-            console.print(
-                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] --devices 格式非法: {devices_str}（期望逗号分隔整数）"
-            )
-            raise typer.Exit(code=2)
-        if not device_ids:
-            console.print(
-                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] --devices 解析结果为空: {devices_str}"
-            )
-            raise typer.Exit(code=2)
-        if len(set(device_ids)) != len(device_ids):
-            console.print(
-                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] --devices 不允许重复: {devices_str}"
-            )
-            raise typer.Exit(code=2)
-        if any(d < 0 for d in device_ids):
-            console.print(
-                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] --devices 不能包含负数: {devices_str}"
-            )
-            raise typer.Exit(code=2)
-        return device_ids
-
     @app.command("list")
     def list_cmd() -> None:
         """列出 akg_cli 当前支持的功能"""
@@ -133,7 +100,13 @@ def register_misc_commands(
             raise typer.Exit(code=2)
 
         arch_n = (arch or "").strip()
-        device_ids = _parse_devices(devices)
+        try:
+            device_ids = parse_devices(devices)
+        except ValueError as exc:
+            console.print(
+                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] {exc}"
+            )
+            raise typer.Exit(code=2) from exc
 
         host_n = (host or "").strip()
         if not host_n:

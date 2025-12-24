@@ -58,7 +58,10 @@ class TraceController:
                     if tid
                     else t("presenter.trace.title_no_task")
                 )
-                p.layout_manager.set_trace_title(title + t("tui.hint.trace_click"))
+                hint = ""
+                if bool(getattr(p.layout_manager, "mouse_enabled", False)):
+                    hint = t("tui.hint.trace_click")
+                p.layout_manager.set_trace_title(title + hint)
         except Exception as e:
             log.warning("[Trace] refresh_trace_panel failed", exc_info=e)
 
@@ -74,14 +77,13 @@ class TraceController:
                 t_id = str(tid or "")
                 if not t_id:
                     continue
-                if t_id == "main":
-                    label = "main"
-                else:
-                    label = t_id
+                label = str(self._p.tasks.task_label(t_id) or "").strip()
                 items.append((t_id, label))
-            active = (self._get_watch_task_id() or "").strip() or (
-                ids[-1] if ids else ""
-            )
+            active = (self._get_watch_task_id() or "").strip()
+            if not active:
+                main_id = str(getattr(self._p, "main_task_id", "") or "").strip()
+                if main_id and main_id in ids:
+                    active = main_id
             p.layout_manager.set_task_tabs(items, str(active or ""))
         except Exception as e:
             log.warning("[Trace] refresh_task_tabs failed", exc_info=e)

@@ -34,6 +34,8 @@ from ai_kernel_generator.cli.cli.ui.commands import (
     Quit,
     SetActiveTaskTab,
     SetInput,
+    SetMainTaskId,
+    ResetTaskTabs,
     SetTaskTabs,
     SetTrace,
     SetTraceTitle,
@@ -54,9 +56,18 @@ class TextualLayoutManager:
     def __init__(self, app: Optional[SplitViewApp] = None):
         self.app = app
         self._started = False
+        self._main_task_id: str = ""
+        self.mouse_enabled = False
+        self._main_task_id: str = ""
+        self.mouse_enabled = False
 
     def set_app(self, app: SplitViewApp) -> None:
         self.app = app
+        if self._main_task_id:
+            try:
+                self.app.command_queue.put(SetMainTaskId(self._main_task_id))
+            except Exception as e:
+                log.warning("[TUI] enqueue SetMainTaskId failed", exc_info=e)
 
     def is_ui_active(self) -> bool:
         """UI 是否已创建（best-effort）。"""
@@ -75,6 +86,11 @@ class TextualLayoutManager:
         # 关键：TUI 运行时把 stdout/stderr logging 重定向到文件，避免污染界面
         self._configure_logging_for_tui()
         self.app = SplitViewApp(workflow_task=workflow_task)
+        if self._main_task_id:
+            try:
+                self.app.command_queue.put(SetMainTaskId(self._main_task_id))
+            except Exception as e:
+                log.warning("[TUI] enqueue SetMainTaskId failed", exc_info=e)
 
         # 说明：
         # - 许多 SSH 客户端（例如 Termius）在 Textual 捕获鼠标时，无法进行“拖拽选中即复制”。
@@ -127,11 +143,16 @@ class TextualLayoutManager:
         except Exception as e:
             log.debug("[TUI] log run info failed", exc_info=e)
 
+        try:
+            self.app.mouse_enabled = mouse
+        except Exception:
+            pass
         self.app.run(
             inline=inline,
             inline_no_clear=True,
             mouse=mouse,
         )
+        self.mouse_enabled = mouse
         self._started = True
 
         # 退出后把 session-id 打印到终端（用于 resume）
@@ -151,6 +172,11 @@ class TextualLayoutManager:
         """以 resume 模式打开一个已保存的会话（只回放展示，不再驱动 workflow）。"""
         self._configure_logging_for_tui()
         self.app = SplitViewApp(workflow_task=None, resume_session_id=str(session_id))
+        if self._main_task_id:
+            try:
+                self.app.command_queue.put(SetMainTaskId(self._main_task_id))
+            except Exception as e:
+                log.warning("[TUI] enqueue SetMainTaskId failed", exc_info=e)
         # 回放模式更偏向“查看/点击回看”，默认打开 mouse（便于点击 Footer/Trace）
 
         def _env_bool(name: str, default: bool) -> bool:
@@ -161,7 +187,12 @@ class TextualLayoutManager:
 
         inline = _env_bool("AIKG_TUI_INLINE", False)
         mouse = _env_bool("AIKG_TUI_MOUSE", False)
+        try:
+            self.app.mouse_enabled = mouse
+        except Exception:
+            pass
         self.app.run(inline=inline, inline_no_clear=True, mouse=mouse)
+        self.mouse_enabled = mouse
         self._started = True
 
     def run_replay(self, *, session_id: str, workflow_task: Coroutine) -> None:
@@ -171,6 +202,11 @@ class TextualLayoutManager:
         self.app = SplitViewApp(
             workflow_task=workflow_task, resume_session_id=str(session_id)
         )
+        if self._main_task_id:
+            try:
+                self.app.command_queue.put(SetMainTaskId(self._main_task_id))
+            except Exception as e:
+                log.warning("[TUI] enqueue SetMainTaskId failed", exc_info=e)
 
         def _env_bool(name: str, default: bool) -> bool:
             raw = os.environ.get(name)
@@ -180,7 +216,12 @@ class TextualLayoutManager:
 
         inline = _env_bool("AIKG_TUI_INLINE", False)
         mouse = _env_bool("AIKG_TUI_MOUSE", False)
+        try:
+            self.app.mouse_enabled = mouse
+        except Exception:
+            pass
         self.app.run(inline=inline, inline_no_clear=True, mouse=mouse)
+        self.mouse_enabled = mouse
         self._started = True
 
     @staticmethod
@@ -422,6 +463,17 @@ class TextualLayoutManager:
             except Exception as e:
                 log.warning("[TUI] enqueue SetTaskTabs failed", exc_info=e)
 
+    def reset_task_tabs(
+        self, items: list[tuple[str, str]], active_task_id: str = ""
+    ) -> None:
+        if self.app:
+            try:
+                self.app.command_queue.put(
+                    ResetTaskTabs(list(items), str(active_task_id or ""))
+                )
+            except Exception as e:
+                log.warning("[TUI] enqueue ResetTaskTabs failed", exc_info=e)
+
     def set_active_task_tab(self, task_id: str) -> None:
         """仅更新当前高亮的 task tab（线程安全）。"""
         if self.app:
@@ -429,6 +481,39 @@ class TextualLayoutManager:
                 self.app.command_queue.put(SetActiveTaskTab(str(task_id or "")))
             except Exception as e:
                 log.warning("[TUI] enqueue SetActiveTaskTab failed", exc_info=e)
+
+    def set_main_task_id(self, task_id: str) -> None:
+        """设置 main tab 的 task_id（由上层注入）。"""
+        self._main_task_id = str(task_id or "").strip()
+        if self.app:
+            try:
+                self.app.command_queue.put(SetMainTaskId(self._main_task_id))
+            except Exception as e:
+                log.warning("[TUI] enqueue SetMainTaskId failed", exc_info=e)
+
+    def get_main_task_id(self) -> str:
+        if not self.app:
+            return str(self._main_task_id or "")
+        try:
+            return str(getattr(self.app, "_main_task_id", "") or "")
+        except Exception:
+            return str(self._main_task_id or "")
+
+    def get_active_task_id(self) -> str:
+        if not self.app:
+            return ""
+        try:
+            return str(getattr(self.app, "_active_task_id", "") or "")
+        except Exception:
+            return ""
+
+    def is_on_main_tab(self) -> bool:
+        if not self.app:
+            return True
+        try:
+            return bool(getattr(self.app, "is_on_main_tab", lambda: True)())
+        except Exception:
+            return True
 
     def set_input_enabled(self, enabled: bool) -> None:
         if not self.app or self.app.user_input is None:
@@ -442,25 +527,28 @@ class TextualLayoutManager:
         if not self.app:
             raise RuntimeError("Textual app is not running")
 
-        content: MainContent
-        try:
-            content = Text.from_markup(f"[bold]{prompt}[/bold]")
-        except Exception as e:
-            log.debug(
-                "[TUI] render prompt as markup failed; fallback plain", exc_info=e
-            )
-            content = str(prompt)
-
-        app = self.app
-        q = getattr(app, "ui_event_queue", None) if app is not None else None
-        if q is not None:
+        prompt_s = str(prompt or "").strip()
+        if prompt_s:
+            content: MainContent
             try:
-                q.put_nowait(WriteMainContent(content=content))
+                content = Text.from_markup(f"[bold]{prompt_s}[/bold]")
             except Exception as e:
                 log.debug(
-                    "[TUI] enqueue WriteMainContent failed; fallback output_queue",
+                    "[TUI] render prompt as markup failed; fallback plain",
                     exc_info=e,
                 )
+                content = prompt_s
+
+            app = self.app
+            q = getattr(app, "ui_event_queue", None) if app is not None else None
+            if q is not None:
+                try:
+                    q.put_nowait(WriteMainContent(content=content))
+                except Exception as e:
+                    log.debug(
+                        "[TUI] enqueue WriteMainContent failed; fallback output_queue",
+                        exc_info=e,
+                    )
 
         self.set_input_enabled(True)
         value = await self.app.input_queue.get()

@@ -31,6 +31,7 @@ class OpCommandArgs:
 
     server_url: Optional[str]
     worker_url: Optional[str]
+    devices: Optional[str]
     stream: bool
 
 

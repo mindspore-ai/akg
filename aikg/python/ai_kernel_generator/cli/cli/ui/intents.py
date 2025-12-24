@@ -49,6 +49,11 @@ class LangChanged(UIIntent):
 
 
 @dataclass(frozen=True)
+class ThemeChanged(UIIntent):
+    theme: str
+
+
+@dataclass(frozen=True)
 class AppMounted(UIIntent):
     pass
 

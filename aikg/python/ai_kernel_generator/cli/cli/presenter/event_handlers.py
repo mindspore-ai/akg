@@ -118,6 +118,8 @@ class PresenterEventHandlers:
         self._p = presenter
         # agent -> 最近一次 llm_start 对应的 task_id（用于 llm_stream 未带 task_id 时做归属）
         self._llm_agent_task: dict[str, str] = {}
+        # main tab 提示已覆盖的 task_id（避免刷屏）
+        self._main_tab_hint_tasks: set[str] = set()
 
     def render_task_stream_buffer(self, task_id: str) -> None:
         """
@@ -225,13 +227,55 @@ class PresenterEventHandlers:
         hint = getattr(message, hint_attr, "") or ""
         return p.tasks.task_id_from_message(message, node_hint=hint)
 
+    def _capture_task_label(self, task_id: Optional[str], message: Any) -> None:
+        """记录 server 下发的 task label（client 只展示）。"""
+        p = self._p
+        tid = str(task_id or "").strip()
+        if not tid:
+            return
+        label = str(getattr(message, "task_label", "") or "").strip()
+        if not label:
+            meta = getattr(message, "metadata", None)
+            if isinstance(meta, dict):
+                label = str(
+                    meta.get("task_label")
+                    or meta.get("label")
+                    or meta.get("task_label_name")
+                    or ""
+                ).strip()
+        if label:
+            try:
+                p.tasks.set_task_label(tid, label)
+            except Exception as e:
+                textual_log.debug(
+                    "[Presenter] set_task_label failed", task_id=tid, exc_info=e
+                )
+
+    def _maybe_emit_main_tab_hint(self, task_id: Optional[str]) -> None:
+        """在 main tab 提示其他任务已输出（避免刷屏）。"""
+        p = self._p
+        tid = str(task_id or "").strip()
+        if not tid or tid in ["main", "task_init"]:
+            return
+        if tid in self._main_tab_hint_tasks:
+            return
+        watch = str(getattr(p.tasks, "watch_task_id", "") or "").strip()
+        if watch not in ["", "main"]:
+            return
+        label = str(p.tasks.task_label(tid) or "").strip()
+        if not label:
+            return
+        self._main_tab_hint_tasks.add(tid)
+        hint = t("presenter.hint.other_tab_output", label=label)
+        self._emit_main("main", Text.from_markup(hint))
+
     def _resolve_llm_stream_task_id(self, message: LLMStreamMessage) -> Optional[str]:
         """
         llm_stream 可能不带 task_id（可能会被 TaskIdPolicy 归到 watch_task_id），
         这里优先通过“最近一次 llm_start 的 agent->task 映射”或“正在 running 的 llm_state”反推归属，
         避免切 tab 后后台流被错归到前台。
         """
-        raw = str(getattr(message, "task_id", "") or "").strip()
+        raw = str(getattr(message, "task_label", "") or "").strip()
         if raw:
             return self._task_id(message, hint_attr="agent")
 
@@ -270,7 +314,7 @@ class PresenterEventHandlers:
         - 若 message 带 task_id：沿用 TaskIdPolicy
         - 若不带：优先用 on_llm_start 记录的 agent->task 映射（避免切 tab 后错归）
         """
-        raw = str(getattr(message, "task_id", "") or "").strip()
+        raw = str(getattr(message, "task_label", "") or "").strip()
         if raw:
             return self._task_id(message, hint_attr=agent_attr)
         agent = str(getattr(message, agent_attr, "") or "").strip()
@@ -542,6 +586,7 @@ class PresenterEventHandlers:
         p = self._p
         replaying = self._is_replaying()
         task_id = self._resolve_llm_task_id(message, agent_attr="agent")
+        self._capture_task_label(task_id, message)
         if task_id and (not replaying):
             self._record_llm_start(task_id, message)
 
@@ -578,6 +623,7 @@ class PresenterEventHandlers:
         p = self._p
         replaying = self._is_replaying()
         task_id = self._resolve_llm_task_id(message, agent_attr="agent")
+        self._capture_task_label(task_id, message)
         if task_id and (not replaying):
             self._record_llm_end(task_id, message)
 
@@ -657,9 +703,10 @@ class PresenterEventHandlers:
     def on_llm_stream(self, message: LLMStreamMessage) -> None:
         p = self._p
         task_id = self._resolve_llm_stream_task_id(message)
+        self._capture_task_label(task_id, message)
         self._debug_stream_route(
             phase="llm_stream",
-            raw_tid=str(getattr(message, "task_id", "") or ""),
+            raw_tid=str(getattr(message, "task_label", "") or ""),
             resolved_tid=str(task_id or ""),
             agent=str(getattr(message, "agent", "") or ""),
             watch=str(p.tasks.watch_task_id or ""),
@@ -670,6 +717,7 @@ class PresenterEventHandlers:
             try:
                 p.tasks.stream_session(str(task_id or "")).on_llm_stream(
                     str(getattr(message, "chunk", "") or ""),
+                    is_reasoning=bool(getattr(message, "is_reasoning", False)),
                     active=bool(active),
                 )
             except Exception as e:
@@ -760,6 +808,7 @@ class PresenterEventHandlers:
         replaying = self._is_replaying()
         p.tasks.poll_ui_events()
         task_id = self._task_id(message, hint_attr="node")
+        self._capture_task_label(task_id, message)
         if task_id and (not replaying):
             p.tasks.ensure_task_known(task_id)
             event_idx = p.tasks.record_task_event(
@@ -832,6 +881,8 @@ class PresenterEventHandlers:
                 p.tasks.refresh_task_tabs()
                 p.tasks.refresh_trace_panel()
 
+            self._maybe_emit_main_tab_hint(task_id)
+
         if not replaying:
             p.current_agent = message.node
 
@@ -866,6 +917,7 @@ class PresenterEventHandlers:
         replaying = self._is_replaying()
         p.tasks.poll_ui_events()
         task_id = self._task_id(message, hint_attr="node")
+        self._capture_task_label(task_id, message)
         if task_id and (not replaying):
             p.tasks.ensure_task_known(task_id)
             node_end_payload = {

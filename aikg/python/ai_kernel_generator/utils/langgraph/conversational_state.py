@@ -123,6 +123,7 @@ class ConversationalOpGenState(TypedDict, total=False):
     arch: str 
     dsl: str  
     task_id: str  
+    task_label: str  
     
 
     config: Dict[str, Any]  
@@ -141,6 +142,7 @@ class SubAgentState(TypedDict, total=False):
     op_name: str
     task_desc: str  
     task_id: str
+    task_label: str
     dsl: str
     framework: str
     backend: str
@@ -155,4 +157,3 @@ class SubAgentState(TypedDict, total=False):
     verifier_result: bool
     verifier_error: Optional[str]
     profile_res: Optional[Dict[str, Any]]
-

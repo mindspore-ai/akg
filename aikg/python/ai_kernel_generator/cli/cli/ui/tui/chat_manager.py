@@ -158,6 +158,7 @@ class ChatManager:
         *,
         add_end_separator: bool = True,
         line_number_start: int | None = None,
+        dim: bool = False,
     ) -> list[Text]:
         def _prefix_for(n: int | None) -> Text:
             if n is None:
@@ -209,9 +210,15 @@ class ChatManager:
         out: list[Text] = []
         for i, line_text in enumerate(base_lines):
             ln = (int(line_number_start) + i) if line_number_start is not None else None
-            out.append(_prefix_for(ln) + line_text)
+            combined = _prefix_for(ln) + line_text
+            if dim:
+                combined.stylize(DisplayStyle.DIM)
+            out.append(combined)
         if add_end_separator:
-            out.append(_end_sep())
+            end_sep = _end_sep()
+            if dim:
+                end_sep.stylize(DisplayStyle.DIM)
+            out.append(end_sep)
         return out
 
     def write_text(self, text: Text) -> None:
@@ -258,6 +265,7 @@ class ChatManager:
         *,
         add_end_separator: bool = True,
         line_number_start: int | None = None,
+        dim: bool = False,
     ) -> None:
         if self.app.chat_log is None:
             return
@@ -267,6 +275,7 @@ class ChatManager:
                 str(lexer_name or "text"),
                 add_end_separator=add_end_separator,
                 line_number_start=line_number_start,
+                dim=dim,
             ):
                 self.app.chat_log.write(line)
         except Exception as e:
