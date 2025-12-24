@@ -95,7 +95,6 @@ class SymbolicShapeAnalysis {
   Type createNewSymbolicShape(Type type);
   Type updateSymbolicShape(Type type, NamedAttribute &nameAttr) const;
   Type updateSymbolicShape(Type type, const llvm::SmallVector<std::string> &symbolicShape) const;
-  bool isRankedTensorStaticShape(Type type);
   bool isSameSymbolicDim(std::string lhs, std::string rhs);
   bool isSameSymbolicDim(Type lhs, uint64_t lhsIdx, Type rhs, uint64_t rhsIdx);
   bool isSameSymbolicShape(Type lhs, Type rhs);

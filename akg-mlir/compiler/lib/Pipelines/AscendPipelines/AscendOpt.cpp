@@ -65,7 +65,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::bufferization::createEmptyTensorToAllocTensorPass());
 
     mlir::bufferization::OneShotBufferizationOptions bufferizationOpts;
-    bufferizationOpts.bufferizeFunctionBoundaries = false;
+    bufferizationOpts.bufferizeFunctionBoundaries = true;
     bufferizationOpts.setFunctionBoundaryTypeConversion(mlir::bufferization::LayoutMapOption::IdentityLayoutMap);
     bufferizationOpts.allowReturnAllocsFromLoops = true;
     pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufferizationOpts));
