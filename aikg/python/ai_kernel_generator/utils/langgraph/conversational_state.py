@@ -28,29 +28,6 @@ MAX_CONVERSATION_HISTORY_LENGTH = 40
 def limit_conversation_history(existing: List[Dict], new: List[Dict]) -> List[Dict]:
     """
     限制对话历史长度的累积函数
-    
-    用于 LangGraph 的 Annotated 类型，自动限制对话历史的长度，
-    避免在长对话场景下内存无限增长。
-    
-    Args:
-        existing: 现有的对话历史列表
-        new: 新增的对话消息列表
-        
-    Returns:
-        限制长度后的对话历史列表（保留最近的消息）
-        
-    Example:
-        >>> existing = [{"role": "user", "content": "msg1"}, ...]  # 35 条消息
-        >>> new = [{"role": "user", "content": "msg36"}]
-        >>> result = limit_conversation_history(existing, new)
-        >>> len(result)  # 36 条，未超过限制
-        36
-        
-        >>> existing = [{"role": "user", "content": "msg1"}, ...]  # 40 条消息
-        >>> new = [{"role": "user", "content": "msg41"}]
-        >>> result = limit_conversation_history(existing, new)
-        >>> len(result)  # 40 条，丢弃最旧的消息
-        40
     """
     # 合并现有历史和新消息
     combined = (existing or []) + (new or [])
@@ -80,7 +57,7 @@ class ConversationalOpGenState(TypedDict, total=False):
     retry_sub_agent_only: Optional[bool]  # 用户是否只重新调用子 Agent（不重新生成 task）
     
     # === 子Agent选择相关 ===
-    sub_workflow_specified_by_user: Optional[bool]  # 用户是否明确指定了子Agent（True则跳过LLM选择）
+    sub_workflow_specified_by_user: Optional[bool]  # 用户是否明确指定了子Agent
     
     # === 意图分类相关 ===
     last_intent: Optional[str]  # 上次的意图类型（operator_dev/general_question/unclear）
@@ -100,7 +77,6 @@ class ConversationalOpGenState(TypedDict, total=False):
     
     sub_workflow: Optional[str]  
     available_workflows: List[str]  
-    
     
     generated_code: Optional[str]  
     generation_success: bool  
@@ -127,7 +103,6 @@ class ConversationalOpGenState(TypedDict, total=False):
     
 
     config: Dict[str, Any]  
-    
     
     error_count: int  
     last_error: Optional[str]
