@@ -15,6 +15,7 @@
 import logging
 from typing import List, Dict
 from pathlib import Path
+import asyncio
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 from ai_kernel_generator.database.coder_vector_store import CoderVectorStore
@@ -24,14 +25,15 @@ from ai_kernel_generator.utils.common_utils import get_md5_hash
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CODER_DATABASE_PATH = Path(get_project_root()).parent.parent / "coder_database"
+DEFAULT_CODER_DATABASE_PATH = Path(get_project_root()).parent.parent / "coder_database" / "local"
+DEFAULT_BENCHMARK_PATH = Path(get_project_root()).parent.parent / "benchmark" / "aikgbench"
 
 class CoderDatabase(Database):
     # 单例模式实现
     _instances: Dict[str, 'CoderDatabase'] = {}
     _lock = False  # 简单的锁机制避免并发问题
     
-    def __new__(cls, database_path: str = "", config: dict = None):
+    def __new__(cls, database_path: str = "", benchmark_path: str = "", config: dict = None):
         database_path = database_path or str(DEFAULT_CODER_DATABASE_PATH)
         # 使用数据库路径作为实例的唯一标识
         instance_key = get_md5_hash(database_path=database_path)
@@ -51,12 +53,13 @@ class CoderDatabase(Database):
         
         return cls._instances[instance_key]
         
-    def __init__(self, database_path: str = "", config: dict = None):
+    def __init__(self, database_path: str = "", benchmark_path: str = "", config: dict = None):
         # 防止重复初始化
         if hasattr(self, '_initialized') and self._initialized:
             return
         
         self.database_path = database_path or str(DEFAULT_CODER_DATABASE_PATH)
+        self.benchmark_path = benchmark_path or DEFAULT_BENCHMARK_PATH
         self.computation_vector_store = CoderVectorStore(
             database_path=self.database_path,
             index_name="computation_vector_store",
@@ -65,8 +68,128 @@ class CoderDatabase(Database):
         )
         self.vector_stores = [self.computation_vector_store]
         super().__init__(self.database_path, self.vector_stores, config)
+        self._auto_update_completed = set() # 用于追踪已完成的auto_update配置（基于参数hash）
         self._initialized = True
     
+    async def update_single_ref_file(self, file_path, dsl, framework, backend, arch, ref_type, update_mode):
+        """处理单个参考文件
+        
+        Args:
+            file_path: 文件路径（Path对象）
+            dsl: DSL类型（如 'triton_ascend'）
+            framework: 框架类型（如 'torch'）
+            backend: 后端类型
+            arch: 架构类型
+            ref_type: 参考类型（'docs' 或 'impl'）
+            update_mode: 更新模式（'skip' 或 'overwrite'）
+        """
+        # 跳过隐藏目录中的文件
+        if any(part.startswith('.') for part in file_path.parts):
+            return None
+        
+        benchmark_path = Path(self.benchmark_path)
+        relative_path = file_path.relative_to(benchmark_path)
+        parts = relative_path.parts
+        if len(parts) < 5:
+            return None
+        shape_type = parts[2]
+        manual_op_type = parts[3]
+        manual_op_name = file_path.stem
+
+        try:
+            impl_path = benchmark_path / dsl / "impl" / shape_type / manual_op_type / f"{manual_op_name}.py"
+            with open(impl_path, 'r', encoding='utf-8') as f:
+                impl_code = f.read()
+            
+            framework_path = benchmark_path / shape_type / manual_op_type / f"{manual_op_name}.py"
+            with open(framework_path, 'r', encoding='utf-8') as f:
+                framework_code = f.read()
+            
+            # 读取优化文档（如果是docs类型）
+            improvement_doc = ""
+            if ref_type == "docs":
+                doc_path = benchmark_path / dsl / "docs" / shape_type / manual_op_type / f"{manual_op_name}.md"
+                if doc_path.exists():
+                    with open(doc_path, 'r', encoding='utf-8') as f:
+                        improvement_doc = f.read()
+                else:
+                    logger.warning(f"Document file not found: {doc_path}")
+            
+            # 构建自定义元数据
+            custom = {
+                "name": f"{shape_type}/{manual_op_type}/{manual_op_name}",
+                "shape_type": shape_type
+            }
+
+            # 插入数据库
+            await self.insert(impl_code, framework_code, backend, arch, dsl, framework, 
+                            improvement_doc=improvement_doc, custom=custom, mode=update_mode)
+            logger.debug(f"Successfully processed: {shape_type}/{manual_op_type}/{manual_op_name}")
+        except Exception as e:
+            logger.error(f"Error processing file {file_path}: {str(e)}")
+            return None
+    
+    async def process_ref_file(self, file_path, dsl, framework, backend, arch, ref_type, semaphore, update_mode):
+        """通过信号量控制并发处理文件"""
+        async with semaphore:
+            await self.update_single_ref_file(file_path, dsl, framework, backend, arch, ref_type, update_mode)
+
+    async def auto_update(self, dsl: str, framework: str, backend: str, arch: str, 
+                          ref_type: str = "docs", max_concurrency: int = 4, update_mode: str = "skip"):
+        """从benchmark目录自动更新数据库
+        
+        Args:
+            dsl: DSL类型（如 'triton_ascend'）
+            framework: 框架类型（如 'torch'）
+            backend: 后端类型
+            arch: 架构类型
+            ref_type: 参考类型，'docs' 或 'impl'
+                - 'docs': 从docs目录加载，包含优化文档
+                - 'impl': 从impl目录加载，不包含优化文档
+            max_concurrency: 最大并发处理数，默认4
+            update_mode: 更新模式
+                - 'skip': 已存在的条目跳过
+                - 'overwrite': 已存在的条目覆盖
+        
+        Returns:
+            list: 处理结果列表，每个元素对应一个文件的处理结果（None表示成功或跳过）
+        """
+        # 生成配置唯一标识
+        config_key = get_md5_hash(
+            dsl=dsl, 
+            framework=framework, 
+            backend=backend, 
+            arch=arch, 
+            ref_type=ref_type
+        )
+        
+        # 检查是否已经执行过相同配置的auto_update
+        if config_key in self._auto_update_completed:
+            logger.info(f"auto_update already completed for dsl={dsl}, framework={framework}, "
+                       f"backend={backend}, arch={arch}, ref_type={ref_type}, skipping")
+            return
+        
+        # 验证参数
+        if ref_type not in ('docs', 'impl'):
+            raise ValueError("ref_type must be either 'docs' or 'impl'")
+        
+        # 检查目录是否存在
+        ref_dir = Path(self.benchmark_path / dsl / ref_type)
+        ref_files = list(ref_dir.rglob("*.md")) if ref_type == "docs" else list(ref_dir.rglob("*.py"))
+        tasks = []
+        semaphore = asyncio.Semaphore(max_concurrency)
+        for file_path in ref_files:
+            tasks.append(self.process_ref_file(file_path, dsl, framework, backend, arch, ref_type, semaphore, update_mode))
+        
+        results = await asyncio.gather(*tasks)
+        
+        # 标记为已完成
+        self._auto_update_completed.add(config_key)
+        logger.info(f"auto_update completed for dsl={dsl}, framework={framework}, "
+                    f"backend={backend}, arch={arch}, ref_type={ref_type}")
+        
+        return
+
     def hierarchy_search(self, features: dict, feature_invariants: str, k: int = 5):
         """层次检索：先按计算逻辑检索，再按shape检索"""
         op_type = features["op_type"]
@@ -96,11 +219,10 @@ class CoderDatabase(Database):
         )
         return docs
 
-
     async def samples(self, output_content:List[str], sample_num:int = 5, impl_code: str = "", framework_code:str = "",
                       backend: str = "", arch: str = "", dsl: str = "", framework: str = ""):
         """
-        Evolve采样方案，根据当前算子的特征信息，从数据库中采样出优化性和随机性的算子实现。
+        Coder采样方案，多层级混合检索
         """
         need_extract_features = False
         for vector_store in self.vector_stores:

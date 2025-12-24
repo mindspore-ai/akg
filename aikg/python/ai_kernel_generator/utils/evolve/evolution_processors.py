@@ -84,6 +84,9 @@ class EvolveRuntimeConfig:
     parent_selection_prob: float
     handwrite_decay_rate: float
     
+    # RAG 参数
+    rag: bool = False
+    
     # 采样配置
     handwrite_sample_num: int = 2
     inspiration_sample_num: int = 3
@@ -142,7 +145,8 @@ def create_runtime_config(params: Dict[str, Any]) -> EvolveRuntimeConfig:
         migration_interval=params['migration_interval'],
         elite_size=params['elite_size'],
         parent_selection_prob=params['parent_selection_prob'],
-        handwrite_decay_rate=params['handwrite_decay_rate']
+        handwrite_decay_rate=params['handwrite_decay_rate'],
+        rag=params.get('rag', False)  # 从 params 读取 rag，默认为 False
     )
 
 
@@ -174,9 +178,13 @@ class InitializationProcessor:
         # 创建HandwriteLoader（共享）
         handwrite_loader = HandwriteLoader(
             dsl=self.config.dsl,
-            op_name=self.config.op_name,
+            framework=self.config.framework,
             task_desc=self.config.task_desc,
-            config=self.config.config
+            config=self.config.config,
+            arch=self.config.arch,
+            backend=self.config.backend,
+            op_name=self.config.op_name,
+            rag=self.config.rag  # 传递 rag 参数
         )
         await handwrite_loader.select_relevant_pairs()
         logger.info(f"Shared HandwriteLoader created with {len(handwrite_loader.get_selected_pairs())} selected documents")

@@ -42,6 +42,7 @@ class InteractiveOpRunner:
         auto_yes: bool,
         target: ResolvedTargetConfig,
         intent: Optional[str],
+        rag: bool = False,
     ):
         self.console = console
         self.services = services
@@ -50,6 +51,7 @@ class InteractiveOpRunner:
         self.auto_yes = auto_yes
         self.target = target
         self.intent = intent
+        self.rag = rag
         self._slash_commands = build_default_slash_commands()
 
     async def _execute_main_agent_action(
@@ -83,6 +85,7 @@ class InteractiveOpRunner:
                 backend=resolved.get("backend", ""),
                 arch=resolved.get("arch", ""),
                 dsl=resolved.get("dsl", ""),
+            rag=self.rag,
             )
             self.cli.presenter.print_workflow_complete()
             return res

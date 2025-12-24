@@ -696,6 +696,9 @@ class MainOpAgent(AgentBase):
             raise ValueError("[MainOpAgent] missing op_name before sub-agent execution")
 
         try:
+            # 添加调试日志
+            logger.info(f"[MainOpAgent] _sub_agent_execution_node: self.config.get('rag')={self.config.get('rag')}, config keys: {list(self.config.keys()) if self.config else 'None'}")
+            
             # 从注册中心获取子 Agent
             sub_agent = self.sub_agent_registry.get_agent(
                 agent_name=sub_workflow,

@@ -88,6 +88,9 @@ def register_op_command(
         stream: bool = typer.Option(
             True, "--stream/--no-stream", help="启用/关闭 LLM 流式输出（默认开启）"
         ),
+        rag: bool = typer.Option(
+            False, "--rag/--no-rag", help="启用/关闭 RAG（默认关闭）"
+        ),
     ) -> None:
         """算子生成入口。"""
 
@@ -107,5 +110,6 @@ def register_op_command(
                 worker_url=worker_url,
                 devices=devices,
                 stream=stream,
+                rag=rag,
             ),
         )

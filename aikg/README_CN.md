@@ -131,14 +131,14 @@ git submodule update --init "aikg/thirdparty/*"
 
 ##### 文本相似性检测依赖（RAG-related）
 文本句子相似性检测工具text2vec-large-chinese： 若无法自动加载模型，需要手动下载到thirdparty目录下
-将下载后的模型地址添加到database对应的yaml中，请参考  [DataBase](./docs/CN/DataBase.md) 文档
+将下载后的模型地址添加到database对应的yaml中，请参考  [DataBase](./docs/CN/Database.md) 文档
 ```bash
 bash download.sh --with_local_model
 ```
 
 > 💡 **配置提示**: 
 > - 详细的API配置请参考 [API文档](./docs/CN/API.md) 
-> - 数据库配置请参考 [DataBase文档](./docs/CN/DataBase.md)
+> - 数据库配置请参考 [DataBase文档](./docs/CN/Database.md)
 > - 更多配置选项请参考各组件的专门文档
 
 

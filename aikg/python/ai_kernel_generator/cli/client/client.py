@@ -179,6 +179,7 @@ class CliClient:
         arch: str = "a100",
         dsl: str = "triton_cuda",
         use_stream: bool | None = None,
+        rag: bool = False,
     ) -> Dict[str, Any]:
         """执行 MainOpAgent 对话（start/continue），返回 server 侧状态。"""
         from ai_kernel_generator.cli.cli.constants import DisplayStyle
@@ -220,6 +221,7 @@ class CliClient:
             "arch": arch,
             "dsl": dsl,
             "use_stream": effective_use_stream,
+            "rag": rag,
         }
 
         ws_url = self._make_ws_url("/api/v1/main_agent/stream")

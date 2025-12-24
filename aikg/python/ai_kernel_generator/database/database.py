@@ -45,6 +45,7 @@ class Database():
         
         if config:
             self.model_config = config.get("agent_model_config", {})
+            self.config = config  # 保存完整 config，用于传递给 FeatureExtractor
         else:
             raise ValueError("config is required for Database")
 
@@ -54,7 +55,8 @@ class Database():
         feature_extractor = FeatureExtractor(
             model_config=self.model_config,
             impl_code=impl_code,
-            framework_code=framework_code
+            framework_code=framework_code,
+            config=self.config  # 传递完整 config，包含 session_id
         )
         feature_content, _, _ = await feature_extractor.run()
         parsed_content = feature_extractor.feature_parser.parse(feature_content)
@@ -77,24 +79,41 @@ class Database():
         if not case_path.exists():
             raise FileNotFoundError(f"Case path not found: {case_path}")
         
-        res_dict = {"strategy_mode": strategy_mode}
+        res_dict = {}
         for content in output_content:
-            if content == "impl_code" and dsl:
-                    code_file_path = case_path / f"{dsl}.py"
-                    if not code_file_path.exists():
-                        raise FileNotFoundError(f"Code file not found: {code_file_path}")
-                    with open(code_file_path, "r", encoding="utf-8") as f:
-                        impl_code = f.read()
-                    res_dict[content] = impl_code
-                    continue
+            if content == "strategy_mode":
+                res_dict[content] = strategy_mode
+                continue
+
+            if content == "impl_code":
+                if not dsl:
+                    raise ValueError("dsl is required for impl_code")
+                code_file_path = case_path / f"{dsl}.py"
+                if not code_file_path.exists():
+                    raise FileNotFoundError(f"Code file not found: {code_file_path}")
+                with open(code_file_path, "r", encoding="utf-8") as f:
+                    impl_code = f.read()
+                res_dict[content] = impl_code
+                continue
                 
-            if content == "framework_code" and framework:
+            if content == "framework_code":
+                if not framework:
+                    raise ValueError("framework is required for framework_code")
                 code_file_path = case_path / f"{framework}.py"
                 if not code_file_path.exists():
                     raise FileNotFoundError(f"Code file not found: {code_file_path}")
                 with open(code_file_path, "r", encoding="utf-8") as f:
                     framework_code = f.read()
                 res_dict[content] = framework_code
+                continue
+
+            if content == "improvement_doc":
+                doc_file = case_path / "doc.md"
+                if not doc_file.exists():
+                    raise FileNotFoundError(f"Document file not found: {doc_file}")
+                with open(doc_file, "r", encoding="utf-8") as f:
+                    improvement_doc = f.read()
+                res_dict[content] = improvement_doc
                 continue
             
             metadata_file = case_path / "metadata.json"
@@ -168,14 +187,30 @@ class Database():
                 result = self.randomicity_search(output_content, sample_num, backend, arch, dsl, framework)
             return result
     
-    async def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, dsl: str, framework: str, profile=float('inf')):
+    async def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, dsl: str, framework: str, improvement_doc: str = None, profile=float('inf'), custom: dict = None, mode: str = "skip"):
         """
         插入新的算子实现
         """
+        if mode not in ('skip', 'overwrite'):
+            raise ValueError("mode must be either 'skip' or 'overwrite'")
+
         md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
         file_path = Path(self.database_path) / arch / dsl / md5_hash
 
+        if mode == 'skip' and file_path.exists():
+                vector_store_to_insert = []
+                for vector_store in self.vector_stores:
+                    if not vector_store.has_doc(f"{arch}/{dsl}/{md5_hash}"):
+                        vector_store_to_insert.append(vector_store)
+                if not vector_store_to_insert:
+                    return
+        else:
+            vector_store_to_insert = self.vector_stores
+
         features = await self.extract_features(impl_code, framework_code, backend, arch, dsl, profile)
+        if custom:
+            features.update(custom)
+
         file_path.mkdir(parents=True, exist_ok=True)
         metadata_file = file_path / "metadata.json"
         with open(metadata_file, "w", encoding="utf-8") as f:
@@ -188,7 +223,12 @@ class Database():
         with open(impl_file, "w", encoding="utf-8") as f:
             f.write(impl_code)
 
-        for vector_store in self.vector_stores:
+        if improvement_doc:
+            doc_file = file_path / "doc.md"
+            with open(doc_file, "w", encoding="utf-8") as f:
+                f.write(improvement_doc)
+
+        for vector_store in vector_store_to_insert:
             vector_store.insert(f"{arch}/{dsl}/{md5_hash}")
         logger.info(f"Operator implementation inserted successfully, file path: {file_path}")
 
@@ -221,4 +261,3 @@ class Database():
         for vector_store in self.vector_stores:
             vector_store.clear()
         shutil.rmtree(self.database_path)
-

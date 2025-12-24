@@ -46,15 +46,9 @@ def mock_loader():
     loader.get_selected_pairs.return_value = mock_pairs
     loader.read_pair_content.side_effect = lambda p: {
         'name': p['name'],
-        'file_stem': p['file_stem'],
-        'shape_type': p['shape_type'],
-        'category': p['category'],
-        'task_desc': f"task_desc {p['name']}",
-        'task_desc_path': str(p['torch_file']),
-        'dsl_code': f"dsl_code {p['name']}",
-        'dsl_code_path': str(p['triton_file']),
-        'improvement': f"improve {p['name']}",
-        'improvement_path': str(p['improvement_file'])
+        'framework_code': f"framework_code {p['name']}",
+        'impl_code': f"impl_code {p['name']}",
+        'improvement_doc': f"improve {p['name']}",
     }
     
     return loader
@@ -154,12 +148,10 @@ class TestHandwriteLoaderCore:
             content = loader.read_pair_content(first_pair)
             
             assert isinstance(content, dict)
-            assert all(k in content for k in ['name', 'file_stem', 'shape_type', 'category', 
-                                               'task_desc', 'task_desc_path', 'dsl_code', 'dsl_code_path', 
-                                               'improvement', 'improvement_path'])
-            assert 'Triton' in content['dsl_code']
-            assert 'Torch' in content['task_desc']
-            assert 'Optimization' in content['improvement']
+            assert all(k in content for k in ['name', 'framework_code', 'impl_code', 'improvement_doc'])
+            assert 'Triton' in content['impl_code']
+            assert 'Torch' in content['framework_code']
+            assert 'Optimization' in content['improvement_doc']
     
     @pytest.mark.asyncio
     async def test_select_with_mock_llm(self, temp_handwrite_dir):
@@ -262,15 +254,9 @@ class TestWeightedSampling:
         loader.get_selected_pairs.return_value = mock_pairs
         loader.read_pair_content.side_effect = lambda p: {
             'name': p['name'],
-            'file_stem': p['file_stem'],
-            'shape_type': p['shape_type'],
-            'category': p['category'],
-            'task_desc': f"task_desc {p['name']}",
-            'task_desc_path': str(p['torch_file']),
-            'dsl_code': f"dsl_code {p['name']}",
-            'dsl_code_path': str(p['triton_file']),
-            'improvement': f"improve {p['name']}",
-            'improvement_path': str(p['improvement_file'])
+            'framework_code': f"framework_code {p['name']}",
+            'impl_code': f"impl_code {p['name']}",
+            'improvement_doc': f"improve {p['name']}",
         }
         
         return loader

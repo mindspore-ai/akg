@@ -18,17 +18,22 @@
 2. 这是需要参考返回内容的要求，下面是核心解析规则：
 ## 算子基础信息
   **op_name**: 根据算子功能和输入特征简洁命名，如hinge_loss, matmul, reduce_mean, softmax等；
-  **op_type**：算子的类型，如：
-    - elementwise：逐元素
+  **op_type**：算子的类型，包括：
+  - 基础算子：
+    - elementwise：逐元素，不涉及任何维度扩展、对齐或广播
+    - broadcast：广播，输入张量形状不同，需通过维度扩展对齐后进行计算
     - reduce：归约 reduce_all，reduce_x，reduce_y
-    - broadcast：广播
     - tranpose：维度重排
     - reshape：改变维度数量，不改变数据顺序
     - matmul：矩阵乘法，常用A@B、matmul(A, B)表示
-    - conv
-    - shuffle
-    - 融合算子处理原则：若算子涉及多个算子类型，按照conv > matmul > reduce > shuffle > tranpose > reshape > broadcast > elementwise的优先级顺序，选择优先级最高的作为融合算子的算子类型，如：
-      一个融合算子计算涉及elementwise+reduce，那么该融合算子的类型记为reduce
+    - conv：卷积
+  - 其他算子：
+    - index：对索引的操作
+  - 融合算子处理原则：
+    - 原则一：若算子涉及多个**基础算子类型**，则按照conv > matmul > reduce > tranpose > reshape > broadcast > elementwise的优先级顺序，选择优先级最高的作为融合算子的算子类型，如：
+      一个融合算子计算涉及elementwise和reduce，则该融合算子的类型记为reduce
+    - 原则二：若算子还包含非基础其他算子，则**在原则一的基础上**，加上其他算子类别，注意：基础算子在前，其他算子在后，如
+      一个融合算子计算涉及elementwise，reduce和index，则该融合算子的类型记为reduce+index
   **input_specs**：输入tensor的shape，dtype等，明确给出具体值，不要用变量替代，输入tensor的变量名限定为input0, input1等。举例：
     - 输入 input0: shape (1024, 4096), dtype float16; 输入 input1: shape (4096, 2048), dtype float16; 输入 input2: 标量值, dtype float16
   **output_specs**：输出tensor的shape，dtype等，不包含临时tensor，明确给出具体值，不要用变量替代，输出tensor的变量名限定为output0, output1等。举例：

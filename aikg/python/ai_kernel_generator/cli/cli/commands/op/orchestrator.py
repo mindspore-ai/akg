@@ -355,6 +355,7 @@ class OpCommandOrchestrator:
                 auto_yes=args.auto_yes,
                 target=target,
                 intent=args.intent,
+                rag=args.rag,
             )
             runner.run_textual()
 
