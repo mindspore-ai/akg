@@ -17,7 +17,7 @@ from __future__ import annotations
 from textual import log
 from rich.text import Text
 
-from ...ui.intents import AppMounted, LangChanged, TraceJump, WatchNext, WatchSet, WriteMainContent
+from ...ui.intents import AppMounted, LangChanged, ThemeChanged, TraceJump, WatchNext, WatchSet, WriteMainContent
 from ...constants import make_gradient_logo
 from ...utils.i18n import set_lang
 
@@ -95,8 +95,13 @@ class UiIntentController:
         for intent in intents:
             if isinstance(intent, AppMounted):
                 try:
+                    app = getattr(getattr(p, "layout_manager", None), "app", None)
+                    if app is not None and getattr(app, "logo_printed", False):
+                        continue
                     p._handlers._emit_main_global(make_gradient_logo())
                     p._handlers._emit_main_global(Text("\n"))
+                    if app is not None:
+                        app.logo_printed = True
                 except Exception as e:
                     log.debug("[UIIntent] handle AppMounted failed", exc_info=e)
                 continue
@@ -148,6 +153,13 @@ class UiIntentController:
                     self._refresh_trace_panel()
                 except Exception as e:
                     log.debug("[UIIntent] refresh_trace_panel failed", exc_info=e)
+                continue
+            if isinstance(intent, ThemeChanged):
+                tid = str(getattr(self._p.tasks, "watch_task_id", "") or "") or "main"
+                try:
+                    self._set_watch_task(tid, force=True)
+                except Exception as e:
+                    log.debug("[UIIntent] handle ThemeChanged failed", exc_info=e)
                 continue
             if isinstance(intent, WriteMainContent):
                 content = getattr(intent, "content", None)

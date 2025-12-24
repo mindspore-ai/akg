@@ -89,3 +89,14 @@ class SetTaskTabs(UICommand):
 @dataclass(frozen=True)
 class SetActiveTaskTab(UICommand):
     task_id: str
+
+
+@dataclass(frozen=True)
+class SetMainTaskId(UICommand):
+    task_id: str
+
+
+@dataclass(frozen=True)
+class ResetTaskTabs(UICommand):
+    items: list[tuple[str, str]]
+    active_task_id: str = ""

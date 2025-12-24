@@ -149,6 +149,15 @@ class EvolveTaskManager:
     def task_llm_state(self, task_id: str) -> dict[str, Any]:
         return self._repo.task_llm_state(task_id)
 
+    def set_task_label(self, task_id: str, label: str) -> None:
+        self.ensure_task_known(task_id)
+        changed = self._repo.set_task_label(task_id, label)
+        if changed:
+            self._trace.refresh_task_tabs()
+
+    def task_label(self, task_id: str) -> str:
+        return self._repo.task_label(task_id)
+
     def stream_session(self, task_id: str) -> TaskStreamSession:
         """获取某个 task 的流式渲染会话（每个 task 唯一）。"""
         tid = str(task_id or "").strip()

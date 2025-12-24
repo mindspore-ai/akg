@@ -163,9 +163,76 @@ class WorkerRegistry:
                         f"[{DisplayStyle.BOLD_RED}]FAIL[/{DisplayStyle.BOLD_RED}] {e}",
                     )
                     console.print(table)
+                    console.print(
+                        f"[{DisplayStyle.YELLOW}]提示: 注册失败，请检查 worker 服务是否可访问、设备号与 backend/arch 匹配。[/{DisplayStyle.YELLOW}]"
+                    )
                     raise typer.Exit(code=2)
 
         console.print(table)
+
+    def register_local_devices(
+        self,
+        console: Console,
+        server_url: str,
+        *,
+        backend: str,
+        arch: str,
+        devices: List[int],
+    ) -> None:
+        if not devices:
+            return
+
+        import httpx
+
+        server_url = server_url.rstrip("/")
+        console.print(
+            f"[{DisplayStyle.CYAN}]正在注册 local worker 到 server: {server_url}（无需端口）[/{DisplayStyle.CYAN}]"
+        )
+        table = Table(title="Worker 注册结果", box=box.ROUNDED, show_header=True)
+        table.add_column("worker_url", style=DisplayStyle.CYAN)
+        table.add_column("backend/arch", style=DisplayStyle.YELLOW)
+        table.add_column("capacity", style=DisplayStyle.YELLOW, justify="right")
+        table.add_column("结果", style=DisplayStyle.GREEN)
+
+        try:
+            payload = {
+                "backend": backend,
+                "arch": arch,
+                "devices": devices,
+                "tags": ["local"],
+            }
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.post(
+                    f"{server_url}/api/v1/workers/register-local", json=payload
+                )
+                resp.raise_for_status()
+            table.add_row(
+                "local",
+                f"{backend}/{arch}",
+                str(len(devices)),
+                f"[{DisplayStyle.BOLD_GREEN}]OK[/{DisplayStyle.BOLD_GREEN}]",
+            )
+            console.print(table)
+        except Exception as e:
+            log.warning(
+                "[Workers] register local failed",
+                server_url=str(server_url or ""),
+                backend=str(backend or ""),
+                arch=str(arch or ""),
+                devices=str(devices),
+                exc_info=e,
+            )
+            table.add_row(
+                "local",
+                f"{backend}/{arch}",
+                str(len(devices)),
+                f"[{DisplayStyle.BOLD_RED}]FAIL[/{DisplayStyle.BOLD_RED}] {e}",
+            )
+            console.print(table)
+            console.print(
+                f"[{DisplayStyle.YELLOW}]提示: 注册失败，请检查设备号与 backend/arch 匹配，并确认 server 为本地地址。[/{DisplayStyle.YELLOW}]"
+            )
+            raise typer.Exit(code=2) from e
 
     def server_has_worker(self, server_url: str, backend: str, arch: str) -> bool:
         try:

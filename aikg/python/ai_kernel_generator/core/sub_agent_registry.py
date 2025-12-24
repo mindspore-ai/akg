@@ -171,6 +171,18 @@ class CodeOnlySubAgent(SubAgentBase):
             from ai_kernel_generator.core.langgraph_task import LangGraphTask
 
             # 使用 LangGraphTask 调用 codeonly workflow
+            cfg = dict(self.config or {})
+            task_label = str(kwargs.get("task_label") or "").strip()
+            if not task_label:
+                from ai_kernel_generator.utils.task_label import resolve_task_label
+
+                task_label = resolve_task_label(
+                    op_name=op_name,
+                    parallel_index=1,
+                )
+            if not task_label:
+                raise ValueError("[CodeOnlySubAgent] missing task_label")
+            cfg["task_label"] = task_label
             task = LangGraphTask(
                 op_name=op_name,
                 task_desc=task_code,
@@ -178,7 +190,7 @@ class CodeOnlySubAgent(SubAgentBase):
                 backend=self.backend,
                 arch=self.arch,
                 dsl=self.dsl,
-                config=self.config,
+                config=cfg,
                 framework=self.framework,
                 workflow="coder_only_workflow",  # codeonly 对应的 workflow
                 task_type=task_type,  # 传递任务类型
@@ -330,6 +342,18 @@ class EvolveSubAgent(SubAgentBase):
             logger.info(f"Starting evolve with config: {evolve_config_file}")
             logger.info(f"Parameters: max_rounds={max_rounds}, parallel_num={parallel_num}")
             
+            cfg = dict(self.config or {})
+            task_label = str(kwargs.get("task_label") or "").strip()
+            if not task_label:
+                from ai_kernel_generator.utils.task_label import resolve_task_label
+
+                task_label = resolve_task_label(
+                    op_name=op_name,
+                    parallel_index=1,
+                )
+            if not task_label:
+                raise ValueError("[EvolveSubAgent] missing task_label")
+            cfg["task_label"] = task_label
             evolution_result = await evolve(
                 op_name=op_name,
                 task_desc=task_code,
@@ -337,7 +361,7 @@ class EvolveSubAgent(SubAgentBase):
                 framework=self.framework,
                 backend=self.backend,
                 arch=self.arch,
-                config=self.config,
+                config=cfg,
                 task_pool=task_pool,
                 max_rounds=max_rounds,
                 parallel_num=parallel_num,
@@ -502,6 +526,18 @@ class KernelVerifierSubAgent(SubAgentBase):
             
             # 创建 KernelVerifier 实例
             impl_func_name = "ModelNew"
+            cfg = dict(self.config or {})
+            task_label = str(kwargs.get("task_label") or "").strip()
+            if not task_label:
+                from ai_kernel_generator.utils.task_label import resolve_task_label
+
+                task_label = resolve_task_label(
+                    op_name=op_name,
+                    parallel_index=1,
+                )
+            if not task_label:
+                raise ValueError("[KernelVerifierSubAgent] missing task_label")
+            cfg["task_label"] = task_label
             verifier = KernelVerifier(
                 op_name=op_name,
                 framework_code=task_code,
@@ -511,7 +547,7 @@ class KernelVerifierSubAgent(SubAgentBase):
                 backend=self.backend,
                 arch=self.arch,
                 impl_func_name=impl_func_name,
-                config=self.config,
+                config=cfg,
                 worker=worker
             )
             
@@ -701,4 +737,3 @@ def get_registry() -> SubAgentRegistry:
 def register_sub_agent(agent_class: type):
     _global_registry.register(agent_class)
     return agent_class
-

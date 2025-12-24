@@ -20,7 +20,7 @@ from textual import log
 
 
 class MetadataInjector:
-    """把 evolve 的并发信息注入到 summary result 里（便于上层保存/展示）。"""
+    """把并发任务信息注入到 summary result 里（便于上层保存/展示）。"""
 
     def __init__(self, store) -> None:
         self._s = store
@@ -47,6 +47,57 @@ class MetadataInjector:
             for tid, info in (self._s.evolve_task_summary or {}).items():
                 tasks.setdefault(str(tid), {}).update(info)
 
+            # 规范化字段（兼容 summary 契约）
+            for tid, info in tasks.items():
+                if not isinstance(info, dict):
+                    tasks[tid] = {"task_id": str(tid)}
+                    continue
+                info.setdefault("task_id", str(tid))
+                if "verification_result" not in info and "verifier_result" in info:
+                    info["verification_result"] = info.get("verifier_result")
+                if "error_log" not in info:
+                    ve = info.get("verifier_error")
+                    if isinstance(ve, str) and ve.strip():
+                        info["error_log"] = ve
+            # 识别子 agent 名称（可来自 result 或 metadata）
+            def _pick_group_name() -> str:
+                for key in (
+                    "subagent",
+                    "sub_agent",
+                    "sub_workflow",
+                    "workflow_name",
+                ):
+                    val = result.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+                for key in ("subagent", "sub_agent", "sub_workflow", "workflow_name"):
+                    val = meta.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+                # 有 evolve 轮次信息时可判定为 evolve
+                if self._s.evolve_round_snapshots:
+                    return "evolve"
+                return "subagent"
+
+            group_name = _pick_group_name()
+            group_payload = {
+                "name": group_name,
+                "label": group_name,
+                "watch_task_id": self._s.watch_task_id or "",
+                "round_snapshots": dict(self._s.evolve_round_snapshots),
+                "tasks": tasks,
+            }
+
+            # 新契约：统一并发任务摘要
+            subagents = meta.get("subagents")
+            if isinstance(subagents, dict):
+                subagents[group_name] = group_payload
+            elif isinstance(subagents, list):
+                subagents.append(group_payload)
+            else:
+                meta["subagents"] = {group_name: group_payload}
+
+            # 兼容旧字段
             meta["evolve"] = {
                 "watch_task_id": self._s.watch_task_id or "",
                 "round_snapshots": dict(self._s.evolve_round_snapshots),

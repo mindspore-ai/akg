@@ -178,36 +178,16 @@ class CliClient:
         backend: str = "cuda",
         arch: str = "a100",
         dsl: str = "triton_cuda",
-        # None 表示不指定，让 server/MainOpAgent 自己决定（避免客户端覆盖自动选择结果）
-        sub_workflow: str | None = None,
         use_stream: bool | None = None,
     ) -> Dict[str, Any]:
-        """执行 MainAgent（多轮 TaskInit + 确认 + 触发 Job），并返回适配 CLI 的结果结构。"""
-        from ai_kernel_generator.cli.cli.constants import Defaults, DisplayStyle
+        """执行 MainOpAgent 对话（start/continue），返回 server 侧状态。"""
+        from ai_kernel_generator.cli.cli.constants import DisplayStyle
 
         action_l = (action or "").strip().lower()
-        if action_l in ["start", "revise"] and not (user_input or "").strip():
-            return {
-                "user_input": user_input,
-                "task_desc": "",
-                "framework": framework,
-                "backend": backend,
-                "arch": arch,
-                "dsl": dsl,
-                "workflow_name": Defaults.WORKFLOW_NAME,
-                "success": False,
-                "op_name": "",
-                "task_init_status": "error",
-                "langgraph_status": "failed",
-                "generated_task_desc": "",
-                "kernel_code": "",
-                "verification_result": False,
-                "step_timings": [],
-                "total_time": 0.0,
-                "current_stage": "",
-                "error": f"action={action_l} requires non-empty user_input",
-                "metadata": {},
-            }
+        if action_l not in ["start", "continue"]:
+            raise ValueError("action must be start/continue")
+        if not (user_input or "").strip():
+            raise ValueError(f"action={action_l} requires non-empty user_input")
 
         effective_use_stream = (
             bool(use_stream) if use_stream is not None else bool(self.use_stream)
@@ -241,8 +221,6 @@ class CliClient:
             "dsl": dsl,
             "use_stream": effective_use_stream,
         }
-        if isinstance(sub_workflow, str) and sub_workflow.strip():
-            request_data["sub_workflow"] = sub_workflow.strip()
 
         ws_url = self._make_ws_url("/api/v1/main_agent/stream")
         logger.info(
@@ -252,54 +230,34 @@ class CliClient:
             len(user_input) if isinstance(user_input, str) else 0,
         )
         result = await self._execute_ws(ws_url, request_data)
-        wrapped = {
-            "user_input": user_input,
-            "task_desc": "",
-            "framework": framework,
-            "backend": backend,
-            "arch": arch,
-            "dsl": dsl,
-            "workflow_name": Defaults.WORKFLOW_NAME,
-            "success": bool(result.get("success", False)),
-            "op_name": result.get("op_name", ""),
-            "task_init_status": result.get("task_init_status", ""),
-            "langgraph_status": "success" if result.get("success") else "failed",
-            "generated_task_desc": result.get("task_desc", ""),
-            "kernel_code": result.get("kernel_code", ""),
-            "verification_result": result.get("verification_result", False),
-            "step_timings": result.get("step_timings", []),
-            "total_time": result.get("total_time", 0.0),
-            "current_stage": "",
-            "error": result.get("error") or "",
-            "metadata": result.get("metadata") or {},
-        }
-        # 用 server 返回的 workflow_name 更新本地（避免展示永远是 Defaults）
+        if not isinstance(result, dict):
+            raise RuntimeError("invalid main agent response")
+
+        # 用 server 返回的 workflow_name 更新本地
         try:
-            meta = wrapped.get("metadata") or {}
-            main_agent_meta = meta.get("main_agent") if isinstance(meta, dict) else {}
-            if isinstance(main_agent_meta, dict):
-                wf_name = (main_agent_meta.get("workflow_name") or "").strip()
-                if wf_name:
-                    self.workflow_name = wf_name
-                    try:
-                        if self.presenter and hasattr(
-                            self.presenter, "set_task_context"
-                        ):
-                            self.presenter.set_task_context(
-                                framework=framework,
-                                backend=backend,
-                                arch=arch,
-                                dsl=dsl,
-                                workflow_name=wf_name,
-                            )
-                    except Exception as e:
-                        log.debug(
-                            "[Client] presenter.set_task_context failed after workflow_name update",
-                            exc_info=e,
+            wf_name = (
+                str(result.get("workflow_name") or result.get("sub_workflow") or "")
+                .strip()
+            )
+            if wf_name:
+                self.workflow_name = wf_name
+                try:
+                    if self.presenter and hasattr(self.presenter, "set_task_context"):
+                        self.presenter.set_task_context(
+                            framework=framework,
+                            backend=backend,
+                            arch=arch,
+                            dsl=dsl,
+                            workflow_name=wf_name,
                         )
+                except Exception as e:
+                    log.debug(
+                        "[Client] presenter.set_task_context failed after workflow_name update",
+                        exc_info=e,
+                    )
         except Exception as e:
             log.debug("[Client] update workflow_name from metadata failed", exc_info=e)
-        return wrapped
+        return result
 
     def _make_ws_url(self, path: str) -> str:
         # 将 http:// 替换为 ws://
@@ -316,7 +274,8 @@ class CliClient:
         try:
             logger.info(f"Connecting to WebSocket: {ws_url}")
 
-            async with websockets.connect(ws_url) as websocket:
+            # 调试 server 时事件循环可能被阻塞，禁用客户端 keepalive ping 避免超时断连
+            async with websockets.connect(ws_url, ping_interval=None) as websocket:
                 # 发送请求
                 await websocket.send(json.dumps(request_data))
 
@@ -379,7 +338,8 @@ class CliClient:
                     raise RuntimeError("未收到最终结果")
 
                 logger.info(
-                    f"Workflow execution completed: success={final_result.get('success')}"
+                    "Main agent response received: step=%s",
+                    str(final_result.get("current_step", "")),
                 )
                 return final_result
 

@@ -38,6 +38,7 @@ from textual import log as textual_log
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.cli.messages import LLMEndMessage, LLMStartMessage, LLMStreamMessage
 from ai_kernel_generator.cli.server.message_sender import send_message
+from ai_kernel_generator.utils.task_label import resolve_task_label
 
 
 class Jinja2TemplateWrapper:
@@ -387,6 +388,14 @@ class AgentBase(ABC):
         agent_name = str(context.get("agent_name") or "unknown")
         session_id = str(context.get("session_id") or "").strip()
         task_id = self._extract_task_id(context)
+        task_label = str(context.get("task_label") or "").strip()
+        if not task_label and isinstance(self.config, dict):
+            task_label = str(self.config.get("task_label") or "").strip()
+        if not task_label:
+            task_label = resolve_task_label(
+                op_name=str(context.get("op_name") or ""),
+                parallel_index=1,
+            )
 
         # 检查流式输出和 session_id
         stream = self._stream_enabled()
@@ -400,7 +409,12 @@ class AgentBase(ABC):
         # 发送开始消息
         self._safe_send(
             session_id,
-            LLMStartMessage(agent=agent_name, model=effective_model_name, task_id=task_id)
+            LLMStartMessage(
+                agent=agent_name,
+                model=effective_model_name,
+                task_id=task_id,
+                task_label=task_label,
+            )
         )
 
         content = ""
@@ -442,13 +456,31 @@ class AgentBase(ABC):
                         if isinstance(delta_text, str) and delta_text:
                             print(delta_text, end="", flush=True)
                             content += delta_text
-                            self._safe_send(session_id, LLMStreamMessage(agent=agent_name, chunk=delta_text, task_id=task_id))
+                            self._safe_send(
+                                session_id,
+                                LLMStreamMessage(
+                                    agent=agent_name,
+                                    chunk=delta_text,
+                                    task_id=task_id,
+                                    is_reasoning=False,
+                                    task_label=task_label,
+                                ),
+                            )
                             continue
                         delta_reasoning = getattr(delta, "reasoning_content", None)
                         if isinstance(delta_reasoning, str) and delta_reasoning:
                             print(delta_reasoning, end="", flush=True)
                             reasoning_content += delta_reasoning
-                            self._safe_send(session_id, LLMStreamMessage(agent=agent_name, chunk=delta_reasoning, task_id=task_id))
+                            self._safe_send(
+                                session_id,
+                                LLMStreamMessage(
+                                    agent=agent_name,
+                                    chunk=delta_reasoning,
+                                    task_id=task_id,
+                                    is_reasoning=True,
+                                    task_label=task_label,
+                                ),
+                            )
                     print()
             else:
                 # 其他模型使用 LangChain chain
@@ -464,7 +496,16 @@ class AgentBase(ABC):
                         if chunk_text:
                             print(chunk_text, end="", flush=True)
                             content += chunk_text
-                            self._safe_send(session_id, LLMStreamMessage(agent=agent_name, chunk=chunk_text, task_id=task_id))
+                            self._safe_send(
+                                session_id,
+                                LLMStreamMessage(
+                                    agent=agent_name,
+                                    chunk=chunk_text,
+                                    task_id=task_id,
+                                    is_reasoning=False,
+                                    task_label=task_label,
+                                ),
+                            )
                             continue
                         additional_kwargs = getattr(raw_result, "additional_kwargs", {}) or {}
                         if isinstance(additional_kwargs, dict) and "reasoning_content" in additional_kwargs:
@@ -472,7 +513,16 @@ class AgentBase(ABC):
                             if chunk_reasoning:
                                 print(chunk_reasoning, end="", flush=True)
                                 reasoning_content += chunk_reasoning
-                                self._safe_send(session_id, LLMStreamMessage(agent=agent_name, chunk=chunk_reasoning, task_id=task_id))
+                                self._safe_send(
+                                    session_id,
+                                    LLMStreamMessage(
+                                        agent=agent_name,
+                                        chunk=chunk_reasoning,
+                                        task_id=task_id,
+                                        is_reasoning=True,
+                                        task_label=task_label,
+                                    ),
+                                )
                     print()
                     usage_metadata = getattr(raw_result, "usage_metadata", None)
 
@@ -515,6 +565,7 @@ class AgentBase(ABC):
                     response=content,
                     duration=time.time() - start_time,
                     task_id=task_id,
+                    task_label=task_label,
                     prompt_tokens=prompt_tokens,
                     output_tokens=output_tokens,
                     reasoning_tokens=reasoning_tokens,
@@ -561,6 +612,7 @@ class AgentBase(ABC):
                     response=content or "",
                     duration=time.time() - start_time,
                     task_id=task_id,
+                    task_label=task_label,
                 )
             )
             raise

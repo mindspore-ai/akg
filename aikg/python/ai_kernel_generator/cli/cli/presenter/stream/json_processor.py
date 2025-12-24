@@ -32,7 +32,7 @@ class JsonStreamProcessor:
     def __init__(self, painter: ConsolePainter):
         self.painter = painter
 
-    def process_line(self, line: str, state: RenderState) -> bool:
+    def process_line(self, line: str, state: RenderState, *, dim: bool = False) -> bool:
         state.brace_balance += line.count("{") - line.count("}")
 
         current_text = line
@@ -43,23 +43,29 @@ class JsonStreamProcessor:
                 state.in_json_code_field = True
                 end_pos = match.end()
                 key_part = current_text[:end_pos]
-                self.painter.print_json_structure_line(key_part, state.line_number)
-                state.line_number += 1
+                self.painter.print_json_structure_line(
+                    key_part, state.get_line_number(dim=dim), dim=dim
+                )
+                state.advance_line_number(dim=dim)
                 current_text = current_text[end_pos:]
 
         if state.in_json_code_field:
-            return self._process_json_code_value(current_text, state)
+            return self._process_json_code_value(current_text, state, dim=dim)
 
         display_lines = current_text.replace("\\n", "\n").split("\n")
         for dl in display_lines:
             if dl or len(display_lines) == 1:
-                self.painter.print_json_line(dl, state.line_number)
-                state.line_number += 1
+                self.painter.print_json_line(
+                    dl, state.get_line_number(dim=dim), dim=dim
+                )
+                state.advance_line_number(dim=dim)
 
         self._check_implicit_json_end(state)
         return True
 
-    def _process_json_code_value(self, text: str, state: RenderState) -> bool:
+    def _process_json_code_value(
+        self, text: str, state: RenderState, *, dim: bool = False
+    ) -> bool:
         end_idx = -1
         idx = 0
         while idx < len(text):
@@ -90,12 +96,15 @@ class JsonStreamProcessor:
                     display_code,
                     "python",
                     add_end_separator=False,
-                    line_number_start=state.line_number,
+                    line_number_start=state.get_line_number(dim=dim),
+                    dim=dim,
                 )
-                state.line_number += int(consumed or 0)
+                state.advance_line_number(dim=dim, count=int(consumed or 0))
 
-            self.painter.print_json_structure_line(suffix, state.line_number)
-            state.line_number += 1
+            self.painter.print_json_structure_line(
+                suffix, state.get_line_number(dim=dim), dim=dim
+            )
+            state.advance_line_number(dim=dim)
             state.in_json_code_field = False
         else:
             if text:
@@ -109,14 +118,18 @@ class JsonStreamProcessor:
                         display,
                         "python",
                         add_end_separator=False,
-                        line_number_start=state.line_number,
+                        line_number_start=state.get_line_number(dim=dim),
+                        dim=dim,
                     )
-                    state.line_number += int(consumed or 0)
+                    state.advance_line_number(dim=dim, count=int(consumed or 0))
                 else:
                     self.painter.print_json_line(
-                        display, state.line_number, is_code=True
+                        display,
+                        state.get_line_number(dim=dim),
+                        is_code=True,
+                        dim=dim,
                     )
-                    state.line_number += 1
+                    state.advance_line_number(dim=dim)
 
         return True
 
@@ -127,7 +140,11 @@ class JsonStreamProcessor:
             and not state.in_json_code_field
         ):
             logger.debug("隐式 JSON 块结束")
+            dim_used = bool(state.json_dim)
             state.in_json_block = False
             state.is_implicit_json = False
-            self.painter.print_json_structure_line("", state.line_number)
-            state.line_number += 1
+            self.painter.print_json_structure_line(
+                "", state.get_line_number(dim=dim_used), dim=dim_used
+            )
+            state.json_dim = False
+            state.advance_line_number(dim=dim_used)

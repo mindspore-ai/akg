@@ -45,6 +45,9 @@ class Message(ABC):
         """序列化为字典（用于网络传输）"""
         result = {"type": self.get_type(), "timestamp": self.timestamp}
         result.update(self._get_payload())
+        task_label = getattr(self, "task_label", "") or ""
+        if task_label:
+            result["task_label"] = task_label
         return result
 
     @abstractmethod
@@ -63,6 +66,8 @@ class NodeStartMessage(Message):
     node: str
     # 任务ID（用于 evolve 并发时区分不同子任务；非 evolve 可为空）
     task_id: str = ""
+    # 任务标签（由 server 侧生成；不回退到 task_id）
+    task_label: str = ""
     state: Dict = field(default_factory=dict)
 
     def get_type(self) -> str:
@@ -80,6 +85,8 @@ class NodeEndMessage(Message):
     duration: float
     # 任务ID（用于 evolve 并发时区分不同子任务；非 evolve 可为空）
     task_id: str = ""
+    # 任务标签（由 server 侧生成；不回退到 task_id）
+    task_label: str = ""
     result: Any = None
 
     def get_type(self) -> str:
@@ -105,6 +112,8 @@ class LLMStartMessage(Message):
     model: str
     # 任务ID（用于 evolve 并发时区分不同子任务；非 evolve 可为空）
     task_id: str = ""
+    # 任务标签（由 server 侧生成；不回退到 task_id）
+    task_label: str = ""
 
     def get_type(self) -> str:
         return "llm_start"
@@ -127,6 +136,8 @@ class LLMEndMessage(Message):
     duration: float
     # 任务ID（用于 evolve 并发时区分不同子任务；非 evolve 可为空）
     task_id: str = ""
+    # 任务标签（由 server 侧生成；不回退到 task_id）
+    task_label: str = ""
     prompt_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     reasoning_tokens: Optional[int] = None
@@ -157,6 +168,10 @@ class LLMStreamMessage(Message):
     chunk: str
     # 任务ID（用于 evolve 并发时区分不同子任务；非 evolve 可为空）
     task_id: str = ""
+    # 是否为推理内容（由输出协议标识；UI 不应猜测）
+    is_reasoning: bool = False
+    # 任务标签（由 server 侧生成；不回退到 task_id）
+    task_label: str = ""
 
     def get_type(self) -> str:
         return "llm_stream"
@@ -166,6 +181,8 @@ class LLMStreamMessage(Message):
             "agent": self.agent,
             "chunk": self.chunk,
             "task_id": self.task_id,
+            "is_reasoning": self.is_reasoning,
+            "task_label": self.task_label,
         }
 
 

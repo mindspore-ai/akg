@@ -32,6 +32,7 @@ from textual import log as textual_log
 
 from ai_kernel_generator.cli.messages import NodeEndMessage, NodeStartMessage
 from ai_kernel_generator.cli.server.message_sender import send_message
+from ai_kernel_generator.utils.task_label import resolve_task_label
 
 
 def _stream_enabled() -> bool:
@@ -74,14 +75,31 @@ def track_node(node_name: str):
                 raise ValueError(f"[{node_name}_node] state 中必须包含 session_id（AIKG_STREAM_OUTPUT=on）")
 
             task_id = str(state.get("task_id") or "")
+            task_label = str(state.get("task_label") or "").strip()
+            if not task_label:
+                raise ValueError(f"[{node_name}_node] state 中必须包含 task_label")
             start = time.time()
-            _safe_send(session_id, NodeStartMessage(node=node_name, task_id=task_id, state=state))
+            _safe_send(
+                session_id,
+                NodeStartMessage(
+                    node=node_name,
+                    task_id=task_id,
+                    task_label=task_label,
+                    state=state,
+                ),
+            )
 
             try:
                 result = await node_fn(state)
                 _safe_send(
                     session_id,
-                    NodeEndMessage(node=node_name, duration=time.time() - start, task_id=task_id, result=result),
+                    NodeEndMessage(
+                        node=node_name,
+                        duration=time.time() - start,
+                        task_id=task_id,
+                        task_label=task_label,
+                        result=result,
+                    ),
                 )
                 return result
             except Exception as e:
@@ -91,6 +109,7 @@ def track_node(node_name: str):
                         node=node_name,
                         duration=time.time() - start,
                         task_id=task_id,
+                        task_label=task_label,
                         result={"error": str(e)},
                     ),
                 )

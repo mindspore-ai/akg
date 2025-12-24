@@ -61,12 +61,76 @@ class TaskIdPolicy:
         if tid:
             return tid
 
-        watch_task_id = str(self._get_watch_task_id() or "").strip()
-        if watch_task_id:
-            return watch_task_id
-
-        return "main"
+        # 不再做任何回退（仅使用 task_label）
+        return ""
 
     def task_id_from_message(self, message: Any, *, node_hint: str = "") -> str:
-        raw = str(getattr(message, "task_id", "") or "").strip()
+        raw = str(getattr(message, "task_label", "") or "").strip()
+        if not raw:
+            def _summarize_message(obj: Any) -> str:
+                try:
+                    data = (
+                        obj.__dict__
+                        if hasattr(obj, "__dict__")
+                        else {k: getattr(obj, k) for k in dir(obj)}
+                    )
+                except Exception:
+                    data = {}
+                fields = {}
+                if isinstance(data, dict):
+                    for k in sorted(data.keys()):
+                        if k.startswith("_"):
+                            continue
+                        try:
+                            v = data.get(k)
+                        except Exception:
+                            continue
+                        if callable(v):
+                            continue
+                        fields[k] = v
+                try:
+                    import json
+
+                    return json.dumps(fields, ensure_ascii=True, default=str)
+                except Exception:
+                    return str(fields)
+
+            msg = (
+                "[TaskRouting] missing task_label in message; strict mode enabled\n"
+                f"node_hint={node_hint!r}\n"
+                f"message_type={type(message).__name__}\n"
+                f"message_fields={_summarize_message(message)}"
+            )
+            import sys
+            try:
+                from textual.app import App
+
+                app = App.get_running_app()
+            except Exception:
+                app = None
+            if app is not None:
+                try:
+                    from rich.traceback import Traceback
+
+                    try:
+                        raise RuntimeError(msg)
+                    except RuntimeError as exc:
+                        err = exc
+
+                    def _panic_and_block() -> None:
+                        tb = Traceback.from_exception(
+                            type(err),
+                            err,
+                            err.__traceback__,
+                            show_locals=True,
+                        )
+                        app.panic(tb)
+
+                    app.call_from_thread(_panic_and_block)
+                except Exception:
+                    pass
+            try:
+                print(msg, file=sys.stderr, flush=True)
+            except Exception:
+                pass
         return self.normalize_task_id(raw, node_hint=node_hint)

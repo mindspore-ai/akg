@@ -54,12 +54,14 @@ from ai_kernel_generator.cli.cli.ui.commands import UICommand
 from ai_kernel_generator.cli.cli.ui.intents import (
     AppMounted,
     LangChanged,
+    ThemeChanged,
     UIIntent,
     WatchNext,
     WatchSet,
     WriteMainContent,
 )
 from ai_kernel_generator.cli.cli.ui.types import MainContent
+from ai_kernel_generator.cli.cli.constants import make_gradient_logo
 from ai_kernel_generator.cli.cli.utils.i18n import t, toggle_lang
 
 
@@ -178,6 +180,9 @@ class SplitViewApp(App):
         overflow-x: auto;
         overflow-y: hidden;
     }
+    #task-tabs:focus {
+        border: round $primary;
+    }
 
     /* 选中 tab 更醒目：主题色背景 + 加粗 */
     #task-tabs Tab.-active {
@@ -275,7 +280,7 @@ class SplitViewApp(App):
         ),
         Binding("ctrl+e", "scroll_end", "跳到底部", show=True, key_display="Ctrl+E"),
         Binding("f8", "watch_next", "下一个并发任务", show=True),
-        Binding("f9", "toggle_language", "切换语言", show=True),
+        # Binding("f9", "toggle_language", "切换语言", show=True),
         Binding("f10", "toggle_theme", "切换主题", show=True),
     ]
 
@@ -316,6 +321,9 @@ class SplitViewApp(App):
         self.workflow_running = False
         self._workflow_runner_task: Optional[asyncio.Task] = None
         self._input_enabled = True
+        self._input_block_reason: str = ""
+        self._main_task_id: str = "main"
+        self._active_task_id: str = ""
 
         # workflow 协程可 await
         self.input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -338,6 +346,9 @@ class SplitViewApp(App):
         self._chat_subtitle_cache: str = ""
         # 是否展示顶部任务 Tabs（仅 evolve 并发时需要）
         self.show_task_tabs: bool = self._env_bool("AIKG_TUI_TASK_TABS", True)
+        self.logo_printed: bool = False
+        # 是否开启鼠标（影响提示文案）
+        self.mouse_enabled: bool = self._env_bool("AIKG_TUI_MOUSE", False)
         # 可恢复会话：默认写入临时目录；用户 Ctrl+C 退出时选择“保存/丢弃”
         self.resume_mode: bool = bool(resume_session_id)
         env_sid = (os.environ.get("AIKG_SESSION_ID") or "").strip()
@@ -357,6 +368,94 @@ class SplitViewApp(App):
         if raw is None:
             return default
         return str(raw).strip().lower() in ["1", "true", "yes", "on", "y"]
+
+    def set_main_task_id(self, task_id: str) -> None:
+        tid = str(task_id or "").strip()
+        self._main_task_id = tid or "main"
+        self._apply_input_state()
+
+    def set_active_task_id(self, task_id: str) -> None:
+        self._active_task_id = str(task_id or "").strip()
+        try:
+            if self.task_tabs is not None:
+                self.task_tabs.set_active_task_id(self._active_task_id)
+        except Exception as e:
+            log.debug("[TUI] task_tabs.set_active_task_id failed", exc_info=e)
+        self._apply_input_state()
+
+    def is_on_main_tab(self) -> bool:
+        if not self.show_task_tabs or self.task_tabs is None:
+            return True
+        main_id = str(self._main_task_id or "").strip()
+        if not main_id:
+            return True
+        active = str(self._active_task_id or "").strip()
+        if not active:
+            return True
+        return active == main_id
+
+    def set_input_enabled(self, enabled: bool) -> None:
+        self._input_enabled = bool(enabled)
+        self._apply_input_state()
+
+    def _resolve_input_placeholder(self) -> str:
+        if self.resume_mode:
+            return t("tui.placeholder.resume_readonly")
+        if self._input_block_reason == "non_main":
+            return t("tui.placeholder.input_only_main", main=self._main_task_id or "main")
+        if not self._input_enabled:
+            return t("tui.placeholder.input_disabled")
+        wf_done = bool(
+            self.workflow_task is not None
+            and self._workflow_runner_task is not None
+            and getattr(self._workflow_runner_task, "done", lambda: False)()
+        )
+        if wf_done:
+            return t("tui.placeholder.input_done")
+        if self.workflow_running:
+            return t("tui.placeholder.input_enabled_hint")
+        return t("tui.placeholder.input_initial")
+
+    def _apply_input_state(self) -> None:
+        if self.user_input is None:
+            return
+        if self.resume_mode:
+            self.user_input.disabled = True
+            self.user_input.placeholder = self._resolve_input_placeholder()
+            return
+        is_main = self.is_on_main_tab()
+        if not is_main:
+            self._input_block_reason = "non_main"
+        elif not self._input_enabled:
+            self._input_block_reason = "disabled"
+        else:
+            self._input_block_reason = ""
+        enabled = bool(self._input_enabled) and is_main
+        self.user_input.disabled = not enabled
+        self.user_input.placeholder = self._resolve_input_placeholder()
+        if enabled:
+            try:
+                self.user_input.focus()
+            except Exception as e:
+                log.debug("[TUI] user_input.focus failed", exc_info=e)
+
+    def refresh_input_placeholder(self) -> None:
+        if self.user_input is None:
+            return
+        try:
+            self.user_input.placeholder = self._resolve_input_placeholder()
+        except Exception as e:
+            log.debug("[TUI] refresh_input_placeholder failed", exc_info=e)
+
+    def _tasks_bar_title(self) -> str:
+        if self.mouse_enabled:
+            return t("tui.title.tasks_bar_mouse")
+        return t("tui.title.tasks_bar_nomouse")
+
+    def _trace_title(self) -> str:
+        if self.mouse_enabled:
+            return t("tui.title.trace_mouse")
+        return t("tui.title.trace_nomouse")
 
     def set_follow_tail(self, enabled: bool) -> None:
         self.follow_tail = bool(enabled)
@@ -425,7 +524,7 @@ class SplitViewApp(App):
             # 顶部 Tasks 一行（全宽）
             with Container(id="tasks-bar"):
                 self.task_tabs = TaskTabs(id="task-tabs")
-                self.task_tabs.border_title = t("tui.title.tasks_bar")
+                self.task_tabs.border_title = self._tasks_bar_title()
                 yield self.task_tabs
 
         with Container(id="main-container"):
@@ -443,7 +542,7 @@ class SplitViewApp(App):
                 )
                 self.workflow_panel.border_title = t("tui.title.workflow")
                 self.trace_panel = TraceListView(id="trace-panel")
-                self.trace_panel.border_title = t("tui.title.trace")
+                self.trace_panel.border_title = self._trace_title()
                 yield self.info_panel
                 yield self.workflow_panel
                 yield self.trace_panel
@@ -459,6 +558,13 @@ class SplitViewApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        if not self.logo_printed:
+            try:
+                self.output_queue.put(make_gradient_logo())
+                self.output_queue.put(Text("\n"))
+                self.logo_printed = True
+            except Exception as e:
+                log.debug("[TUI] enqueue logo failed", exc_info=e)
         if self.user_input is not None:
             self.user_input.focus()
         self.i18n.apply()
@@ -529,19 +635,13 @@ class SplitViewApp(App):
         if self.task_tabs is not None:
             self.task_tabs.set_ui_event_queue(self.ui_event_queue)
             self.task_tabs.set_tab_mapping(self._tab_id_to_task_id)
-            # 禁用 task_tabs 的 can_focus
-            try:
-                self.task_tabs.can_focus = False
-            except Exception as e:
-                log.debug("[TUI] disable task_tabs focus failed", exc_info=e)
 
         self.set_interval(0.1, self._queue_processor.process)
 
         if self.workflow_task:
             self.workflow_running = True
             if self.user_input is not None:
-                self.user_input.disabled = True
-                self.user_input.placeholder = t("tui.placeholder.input_disabled")
+                self.set_input_enabled(False)
             self._workflow_runner_task = asyncio.create_task(self._run_workflow())
 
     def _deserialize_output_payload(
@@ -595,6 +695,8 @@ class SplitViewApp(App):
                 PatchWorkflowState,
                 SetActiveTaskTab,
                 SetInput,
+                SetMainTaskId,
+                ResetTaskTabs,
                 SetTaskTabs,
                 SetTrace,
                 SetTraceTitle,
@@ -618,6 +720,8 @@ class SplitViewApp(App):
             "ClearTrace": ClearTrace,
             "SetTaskTabs": SetTaskTabs,
             "SetActiveTaskTab": SetActiveTaskTab,
+            "SetMainTaskId": SetMainTaskId,
+            "ResetTaskTabs": ResetTaskTabs,
         }
         cls = mapping.get(tp)
         if cls is None:
@@ -683,8 +787,7 @@ class SplitViewApp(App):
         finally:
             self.workflow_running = False
             if self.user_input is not None:
-                self.user_input.disabled = False
-                self.user_input.placeholder = t("tui.placeholder.input_done")
+                self.set_input_enabled(True)
             try:
                 log.info("[TUI] workflow_task done")
             except Exception as e:
@@ -723,11 +826,16 @@ class SplitViewApp(App):
                 log.debug("[TUI] ignored exception", exc_info=e)
             if self.chat_log is not None:
                 try:
+                    warn_key = "tui.msg.input_disabled_warn"
+                    warn_kwargs = {}
+                    if self._input_block_reason == "non_main":
+                        warn_key = "tui.msg.input_only_main_warn"
+                        warn_kwargs = {"main": self._main_task_id or "main"}
                     self.ui_event_queue.put_nowait(
                         WriteMainContent(
                             content=self.chat.tagged_line(
                                 "[WARN]",
-                                t("tui.msg.input_disabled_warn"),
+                                t(warn_key, **warn_kwargs),
                                 color_var="warning",
                             )
                         )
@@ -830,6 +938,11 @@ class SplitViewApp(App):
             except Exception as e:
                 log.debug("[TUI] ignored exception", exc_info=e)
             return
+
+        try:
+            self.ui_event_queue.put_nowait(ThemeChanged(theme=str(new_theme)))
+        except Exception as e:
+            log.debug("[TUI] emit ThemeChanged failed", exc_info=e)
 
     async def action_quit(self) -> None:
         try:

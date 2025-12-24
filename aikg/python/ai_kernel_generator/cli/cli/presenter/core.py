@@ -107,6 +107,18 @@ class CLIPresenter:
         self.tasks = EvolveTaskManager(self)
         # 事件处理器（LLM/Node/Progress 等）
         self._handlers = PresenterEventHandlers(self)
+        self.main_task_id: str = "main"
+        # 默认观察主任务，避免新 task 自动切走当前 tab
+        try:
+            self.tasks.ensure_task_known(self.main_task_id)
+            self.tasks.watch_task_id = self.main_task_id
+            self.tasks.refresh_task_tabs()
+        except Exception as e:
+            log.debug("[Presenter] init main watch failed", exc_info=e)
+        try:
+            self.layout_manager.set_main_task_id(self.main_task_id)
+        except Exception as e:
+            log.debug("[Presenter] set_main_task_id failed", exc_info=e)
 
     # ========= 右侧面板：Task Info / Workflow =========
 
@@ -286,3 +298,81 @@ class CLIPresenter:
             import traceback
 
             self._handlers._emit_main_global(Text(traceback.format_exc()))
+
+    def reset_state(self) -> None:
+        """重置 CLI 会话状态（不退出应用）。"""
+        try:
+            self.tasks.stop_ui_pump()
+        except Exception as e:
+            log.debug("[Presenter] stop_ui_pump failed", exc_info=e)
+
+        self._handlers = PresenterEventHandlers(self)
+        self.tasks = EvolveTaskManager(self)
+
+        main_id = str(self.main_task_id or "main")
+        self.main_task_id = main_id
+        try:
+            self.layout_manager.set_main_task_id(main_id)
+        except Exception as e:
+            log.debug("[Presenter] set_main_task_id failed", exc_info=e)
+
+        self.llm_buffer = ""
+        self.current_agent = ""
+        self.current_model = ""
+        self.llm_running = False
+        self.op_name = ""
+        self.last_prompt_tokens = None
+        self.last_reasoning_tokens = None
+        self.last_output_tokens = None
+        self.last_total_tokens = None
+        self.llm_records = []
+        self.last_task_desc = ""
+        self.last_kernel_code = ""
+        self.last_job_id = ""
+        try:
+            self.stream_renderer.full_buffer = ""
+            self.stream_renderer.rendered_length = 0
+            self.stream_renderer.agent_name = ""
+            self.stream_renderer.op_name = ""
+            self.stream_renderer.last_update_time = 0
+            try:
+                self.stream_renderer.state.reset()
+            except Exception:
+                pass
+        except Exception as e:
+            log.debug("[Presenter] reset stream_renderer failed", exc_info=e)
+
+        self._task_context = {
+            "framework": "",
+            "backend": "",
+            "arch": "",
+            "dsl": "",
+            "workflow_name": "",
+        }
+        self._current_node = ""
+        self._current_node_status = ""
+        self._seen_nodes = []
+        self._node_run_counts = {}
+        self._current_node_run_no = 0
+        self._node_trace = []
+        self.node_timings = []
+        self.performance_history = []
+
+        try:
+            self.layout_manager.clear_log()
+        except Exception as e:
+            log.debug("[Presenter] clear_log failed", exc_info=e)
+        try:
+            self.layout_manager.clear_trace()
+        except Exception as e:
+            log.debug("[Presenter] clear_trace failed", exc_info=e)
+        try:
+            self.layout_manager.reset_task_tabs([(main_id, main_id)], main_id)
+        except Exception as e:
+            log.debug("[Presenter] reset_task_tabs failed", exc_info=e)
+
+        try:
+            self._refresh_info_panel()
+            self._refresh_workflow_panel()
+        except Exception as e:
+            log.debug("[Presenter] refresh panels failed", exc_info=e)
