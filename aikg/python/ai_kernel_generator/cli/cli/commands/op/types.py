@@ -25,8 +25,6 @@ class OpCommandArgs:
     backend: str
     arch: str
     dsl: str
-    notify: bool
-    bark_key: str
     auto_yes: bool
 
     server_url: Optional[str]
@@ -39,8 +37,6 @@ class OpCommandArgs:
 @dataclass(frozen=True)
 class ResolvedRuntimeOptions:
     stream: bool
-    notify: bool
-    bark_key: str
 
     server_url: str | None
 

@@ -58,7 +58,6 @@ akg_cli op \
 - `--worker-url` 支持多个 Worker 地址，使用逗号分隔。
 - `--devices` 将本地设备注册到本地 server（无需 worker_url）。与 `--worker-url` 互斥，且仅支持本地 server。
 - `--stream/--no-stream` 控制是否启用流式输出。
-- `--notify/--no-notify` 与 `--bark-key` 用于推送通知。
 - `--yes` 自动确认所有提示。
 
 示例：

@@ -25,7 +25,6 @@ from .normalization import (
     validate_basic,
     validate_target_config,
 )
-from .notify import BarkNotifier
 from .processes import WorkflowServerProcessManager, WorkerServiceProcessManager
 from .workers import WorkerRegistry
 
@@ -41,7 +40,6 @@ __all__ = [
     "WorkerRegistry",
     "WorkflowServerProcessManager",
     "WorkerServiceProcessManager",
-    "BarkNotifier",
     "JobInspector",
     "CLIAppServices",
 ]
