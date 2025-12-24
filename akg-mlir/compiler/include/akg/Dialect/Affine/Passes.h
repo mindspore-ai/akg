@@ -49,7 +49,6 @@
 #include "akg/Dialect/Affine/Transforms/TilingFunc.h"
 #include "akg/Dialect/Affine/Transforms/InsertLoadAndStore.h"
 #include "akg/Dialect/Affine/Transforms/AddOutParameter.h"
-#include "akg/Dialect/Affine/Transforms/MemrefTilingFunc.h"
 #include "akg/Dialect/Affine/Transforms/BF16ToF32.h"
 
 namespace mlir {

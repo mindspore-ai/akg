@@ -25,6 +25,7 @@
 #include "akg/Transforms/FoldDimension.h"
 #include "akg/Transforms/CopyElision.h"
 #include "akg/Transforms/CopyRemoval.h"
+#include "akg/Transforms/NPUTilingFunc.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
