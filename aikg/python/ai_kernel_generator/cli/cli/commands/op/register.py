@@ -20,7 +20,6 @@ import typer
 from rich.console import Console
 
 from ai_kernel_generator.cli.cli.service import CLIAppServices
-from ai_kernel_generator.cli.cli.constants import Defaults
 from .orchestrator import OpCommandOrchestrator
 from .types import OpCommandArgs
 
@@ -55,16 +54,6 @@ def register_op_command(
             help="必填（仅命令行）：DSL（如 triton_cuda/triton_ascend/cpp 等）。",
         ),
         # 常用参数
-        notify: bool = typer.Option(
-            True,
-            "--notify/--no-notify",
-            help="任务结束时通过 Bark 发送推送通知（默认启用）",
-        ),
-        bark_key: str = typer.Option(
-            Defaults.BARK_KEY,
-            "--bark-key",
-            help="Bark 推送 API Key（默认使用内置 Key）",
-        ),
         auto_yes: bool = typer.Option(
             False, "--yes", "-y", help="自动确认所有提示，使用默认值"
         ),
@@ -103,8 +92,6 @@ def register_op_command(
                 backend=backend or "",
                 arch=arch or "",
                 dsl=dsl or "",
-                notify=notify,
-                bark_key=bark_key,
                 auto_yes=auto_yes,
                 server_url=server_url,
                 worker_url=worker_url,

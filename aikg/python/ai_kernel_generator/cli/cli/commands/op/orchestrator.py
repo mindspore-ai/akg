@@ -92,37 +92,11 @@ class OpCommandOrchestrator:
         )
         stream = bool(r_stream.value)
 
-        r_notify = cfg.resolve_from_sources(
-            ctx,
-            param_name="notify",
-            cli_value=args.notify,
-            config_keys=["notify"],
-            env_keys=[],
-            default_value=True,
-            cast=lambda v: bool(v)
-            if isinstance(v, bool)
-            else str(v).strip().lower() in ["1", "true", "yes", "on"],
-        )
-        notify = bool(r_notify.value)
-
-        r_bark_key = cfg.resolve_from_sources(
-            ctx,
-            param_name="bark_key",
-            cli_value=args.bark_key,
-            config_keys=["bark_key"],
-            env_keys=[],
-            default_value=Defaults.BARK_KEY,
-            cast=lambda v: str(v),
-        )
-        bark_key = str(r_bark_key.value)
-
         # server_url：允许 config/env 覆盖；为空则后续自动拉起本地 server
         server_url = args.server_url or self.services.get_server_url()
 
         return ResolvedRuntimeOptions(
             stream=stream,
-            notify=notify,
-            bark_key=bark_key,
             server_url=server_url,
         )
 
@@ -315,8 +289,6 @@ class OpCommandOrchestrator:
                 timeout=600.0,
                 use_stream=runtime.stream,
                 default_user_input=Defaults.DEFAULT_USER_INPUT,
-                notify=runtime.notify,
-                bark_key=runtime.bark_key,
             )
 
             if self.services.config.config_path:

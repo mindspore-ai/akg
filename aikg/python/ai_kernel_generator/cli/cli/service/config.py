@@ -83,8 +83,6 @@ class CLIConfigManager:
             "dsl",
             "stream",
             "use_stream",
-            "notify",
-            "bark_key",
         }
 
         unknown = sorted([k for k in cfg.keys() if k not in known_keys])
@@ -99,12 +97,7 @@ class CLIConfigManager:
         table.add_row("config_path", str(self.config_path), "path")
         for key in sorted([k for k in cfg.keys() if k in known_keys]):
             val = cfg.get(key)
-            # 避免把敏感 key 直接打出来
-            if key in ["bark_key"] and isinstance(val, str) and len(val) > 8:
-                masked = f"{val[:4]}...{val[-4:]}"
-                table.add_row(key, masked, type(val).__name__)
-            else:
-                table.add_row(key, str(val), type(val).__name__)
+            table.add_row(key, str(val), type(val).__name__)
 
         if unknown:
             table.add_row("unknown_keys", ", ".join(unknown), "list[str]")

@@ -58,7 +58,6 @@ Optional parameters:
 - `--worker-url` accepts multiple worker addresses separated by commas.
 - `--devices` registers local devices to the local server (no worker URL needed). It is mutually exclusive with `--worker-url` and only works with the local server.
 - `--stream/--no-stream` to enable/disable streaming output.
-- `--notify/--no-notify` and `--bark-key` for push notifications.
 - `--yes` to auto-confirm all prompts.
 
 Examples:

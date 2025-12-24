@@ -166,7 +166,6 @@ class Defaults:
     DEFAULT_USER_INPUT = PredefinedTasks.RMSNORM  # 使用预定义任务
     STREAM_UPDATE_INTERVAL = 0.3  # 流式渲染更新间隔（秒）- 真流式渲染
     MAX_DISPLAY_LINES = 100  # 流式渲染最大显示行数（增量渲染模式下可以更大）
-    BARK_KEY = "DM4kSUFaw33Sy7iFe4ujXM"  # 默认 Bark 推送 Key
 
 
 # ===== 语法高亮语言 =====

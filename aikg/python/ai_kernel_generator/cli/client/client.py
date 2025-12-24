@@ -127,14 +127,11 @@ class CliClient:
         timeout: float = 600.0,
         use_stream: bool = False,
         default_user_input: Optional[str] = None,
-        notify: bool = True,
-        bark_key: str = "",
         record_path: str | None = None,
         session_id: str | None = None,
     ) -> "CliClient":
         from ai_kernel_generator.cli.cli.constants import Defaults
         from ai_kernel_generator.cli.cli.presenter import CLIPresenter
-        from ai_kernel_generator.cli.cli.service.notify import BarkNotifier
 
         server_url0 = (server_url or Defaults.SERVER_URL).rstrip("/")
 
@@ -166,7 +163,6 @@ class CliClient:
         )
         client.use_stream = bool(use_stream)
         client.workflow_name = Defaults.WORKFLOW_NAME
-        client.notifier = BarkNotifier(console, bark_key=bark_key, enabled=notify)
         return client
 
     async def execute_main_agent(
