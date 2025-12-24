@@ -364,19 +364,28 @@ class ParserFactory:
         - reasoning: 推理过程
         - confidence: 置信度（0.0-1.0）
         - is_new_operator: 是否是新算子需求（bool）
+        - has_provided_task_code: 用户是否直接提供了torch task代码（bool）
+        - is_complete_code: 用户提供的代码是否完整（bool，区分完整代码vs部分代码）
+        - extracted_task_code: LLM提取并补充的完整KernelBench代码（str）
+        - extracted_op_name: 从代码中提取的算子名称（str）
+        - extracted_op_description: 从代码中提取的算子描述（str）
         """
         if cls._user_action_analyzer_parser is None:
             cls._user_action_analyzer_parser = cls.create_output_parser(
                 "UserActionAnalyzerOutput",
                 {
-                    'suggested_action': (str, ...),  # 建议的操作
-                    'reasoning': (str, ...),         # 推理过程
-                    'confidence': (float, 0.8),      # 置信度
-                    'is_new_operator': (bool, False) # 是否是新算子需求
+                    'suggested_action': (str, ...),            # 建议的操作
+                    'reasoning': (str, ...),                   # 推理过程
+                    'confidence': (float, 0.8),                # 置信度
+                    'is_new_operator': (bool, False),          # 是否是新算子需求
+                    'has_provided_task_code': (bool, False),   # 是否提供了torch task代码
+                    'is_complete_code': (bool, False),         # 代码是否完整
+                    'extracted_task_code': (str, ''),          # LLM提取并补充的完整代码
+                    'extracted_op_name': (str, ''),            # 从代码中提取的算子名称
+                    'extracted_op_description': (str, '')      # 从代码中提取的算子描述
                 }
             )
         return cls._user_action_analyzer_parser
-    
 
     @staticmethod
     def create_output_parser(parser_name, fields):

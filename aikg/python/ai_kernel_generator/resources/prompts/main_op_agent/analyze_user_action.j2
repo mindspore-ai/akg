@@ -61,14 +61,20 @@
 
 ### 可选操作 (suggested_action)
 
-1. **confirm** - 确认生成
-   - 适用场景：用户满意当前的 Task 代码，想要开始生成 Triton 算子代码
+1. **confirm** - 确认生成 / 用户直接提供 torch task 代码并要求生成
+   - 适用场景：
+     - **A) 用户满意当前的 Task 代码，想要开始生成 Triton 算子代码**
+     - **B) 用户直接提供了完整的 KernelBench 格式的 torch task 代码，并要求生成 triton 实现**
    - 典型表达：
      - "确认"、"ok"、"yes"、"好的"
      - "请帮我生成对应的 triton"
      - "生成代码"、"开始生成"
      - "继续"、"可以"
-   - 前提条件：`has_task_code=True` 且 `has_generated_code=False`
+     - **"给你一段代码：```python [torch task code] ``` 请帮我生成 triton"**
+     - **"这是我的 torch 实现：[code] 请生成对应的高性能实现"**
+   - 前提条件：
+     - `has_task_code=True` 且 `has_generated_code=False`
+     - 或用户输入包含完整的 torch task 代码
 
 2. **revise** - 修改/补充信息
    - 适用场景：用户想要修改 Task 代码，或需要补充更多信息
@@ -200,6 +206,130 @@
 - `is_new_operator`: 是否是新算子需求（bool, 默认false）
   - 如果用户要求生成**不同类型**的算子，设置为 `true`
   - 如果只是修改/测试/优化当前算子，设置为 `false`
+- `has_provided_task_code`: 是否直接提供了torch task代码（bool, 默认false）
+  - **重要**：只要用户输入包含torch代码片段（即使不完整），就设置为 `true`
+- `is_complete_code`: 用户提供的代码是否完整（bool, 默认false）
+  - **关键区分**：
+    - `true`: 用户提供了**完整的**KernelBench格式代码（包含所有必需函数，无需补充）
+    - `false`: 用户只提供了**部分代码**（如只有核心逻辑、只有forward方法等，需要补充或验证）
+  - **判断标准**：
+    - 完整代码：包含 `import torch`, `import torch.nn as nn`, `class Model(nn.Module)`, `def __init__`, `def forward`, `def get_inputs()`, `def get_init_inputs()`，且格式规范
+    - 部分代码：只有其中一部分（如 `x = torch.relu(input)`, `def forward(...)`, 等）
+- `extracted_task_code`: 如果用户提供了代码，提取并补充为完整的KernelBench格式（str, 默认""）
+  - **必须是完整的、可执行的Python代码**
+  - 必须包含：`import torch`, `import torch.nn as nn`, `class Model(nn.Module)`, `def __init__`, `def forward`, `def get_inputs()`, `def get_init_inputs()`
+  - 如果用户只提供了部分代码（如只有forward逻辑），你需要补充完整
+  - 代码必须有正确的缩进和格式
+- `extracted_op_name`: 如果提供了代码，从代码中提取的算子名称（str, 默认""）
+  - 例如：`relu`, `sigmoid`, `matmul` 等
+  - 如果无法识别，使用 `custom_op`
+- `extracted_op_description`: 如果提供了代码，简短描述算子功能（str, 默认""）
+  - 例如：`ReLU激活函数`, `矩阵乘法` 等
+
+**torch代码提取和补充规则：**
+
+### 1. 检测用户是否提供了torch代码
+用户输入可能包含：
+- 完整的KernelBench代码（包含所有必需函数）
+- 不完整的代码片段（只有部分函数或逻辑）
+- 代码片段 + 文字说明（如"这是我的代码：[code] 请生成triton"）
+
+只要用户输入包含任何torch相关的代码，就设置 `has_provided_task_code=true`
+
+### 2. 提取用户的核心逻辑
+从用户输入中识别：
+- 核心计算逻辑（如 `torch.relu(x)`, `x @ y`, `torch.matmul(a, b)` 等）
+- 模型结构（如 `self.relu = nn.ReLU()`, `self.linear = nn.Linear(...)` 等）
+- 输入输出的shape和dtype
+
+### 3. 补充成完整的KernelBench格式
+如果用户的代码不完整，你需要补充成完整的KernelBench格式：
+
+```python
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # [根据用户逻辑补充初始化代码]
+    
+    def forward(self, [参数]):
+        # [用户的核心逻辑]
+        return [结果]
+
+def get_inputs():
+    # [根据forward参数推断合理的输入shape和dtype]
+    return [torch.randn(...)]
+
+def get_init_inputs():
+    # [如果__init__有参数就提供，否则返回空列表]
+    return []
+```
+
+**补充示例：**
+
+**用户输入1（只有核心逻辑）：**
+```
+x = torch.relu(input) 请生成triton
+```
+
+**你应该补充为：**
+```python
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = nn.ReLU()
+    
+    def forward(self, x):
+        return self.relu(x)
+
+def get_inputs():
+    return [torch.randn(16, 1024, dtype=torch.float32, device='cuda')]
+
+def get_init_inputs():
+    return []
+```
+
+**用户输入2（部分结构）：**
+```
+class Model:
+    def forward(self, x):
+        return torch.sigmoid(x)
+生成对应的triton
+```
+
+**你应该补充为：**
+```python
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, x):
+        return torch.sigmoid(x)
+
+def get_inputs():
+    return [torch.randn(32, 512, dtype=torch.float32, device='cuda')]
+
+def get_init_inputs():
+    return []
+```
+
+**用户输入3（已经完整）：**
+如果用户已经提供了完整的代码（包含所有必需函数），直接使用，但要确保格式正确（去除多余的文字说明）。
+
+### 4. 代码分析
+补充完代码后，分析代码并填写：
+- `extracted_op_name`: 识别算子类型（relu, sigmoid, matmul等）
+- `extracted_op_description`: 简短描述算子功能
+- 常见算子名称：relu, sigmoid, tanh, gelu, softmax, layernorm, batchnorm, matmul, conv2d, abs, add, mul, div, exp, log 等
+- 如果无法明确识别，使用 `custom_op` 并描述代码逻辑
 
 ---
 
@@ -340,6 +470,104 @@
   "reasoning": "当前正在开发 ReLU 算子，用户说'修改输入 shape 为 (2048, 2048)'，这是对当前算子参数的修改，不是新的算子需求。选择 revise 操作。",
   "confidence": 0.98,
   "is_new_operator": false
+}
+```
+
+### 示例 16: 用户提供完整的 torch task 代码并要求生成 triton
+```json
+{
+  "suggested_action": "confirm",
+  "reasoning": "用户直接提供了完整的 KernelBench 格式的 torch task 代码，包含所有必需函数（import、class Model、__init__、forward、get_inputs、get_init_inputs），代码格式规范。识别为 relu 算子。用户要求'帮我生成对应的 triton'。代码完整，可以直接使用。",
+  "confidence": 0.95,
+  "has_provided_task_code": true,
+  "is_complete_code": true,
+  "extracted_task_code": "import torch\nimport torch.nn as nn\n\nclass Model(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.relu = nn.ReLU()\n    \n    def forward(self, x):\n        return self.relu(x)\n\ndef get_inputs():\n    return [torch.randn(16, 1024, dtype=torch.float32, device='cuda')]\n\ndef get_init_inputs():\n    return []",
+  "extracted_op_name": "relu",
+  "extracted_op_description": "ReLU激活函数，将负值置为0"
+}
+```
+
+### 示例 17: 用户只提供核心逻辑，需要补充完整（部分代码）
+```json
+{
+  "suggested_action": "revise",
+  "reasoning": "用户输入'x = torch.relu(input) 请生成triton'，只提供了核心计算逻辑，不是完整的KernelBench代码。虽然识别为 relu 算子并补充了完整结构，但这是LLM补充的，不是用户原始提供的。应该选择 revise，让 OpTaskBuilder 验证和完善这个代码。",
+  "confidence": 0.85,
+  "has_provided_task_code": true,
+  "is_complete_code": false,
+  "extracted_task_code": "import torch\nimport torch.nn as nn\n\nclass Model(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.relu = nn.ReLU()\n    \n    def forward(self, x):\n        return self.relu(x)\n\ndef get_inputs():\n    return [torch.randn(16, 1024, dtype=torch.float32, device='cuda')]\n\ndef get_init_inputs():\n    return []",
+  "extracted_op_name": "relu",
+  "extracted_op_description": "ReLU激活函数"
+}
+```
+
+### 示例 18: 用户提供部分代码结构，需要补充（部分代码）
+```json
+{
+  "suggested_action": "revise",
+  "reasoning": "用户提供了部分代码'class Model: def forward(self, x): return torch.sigmoid(x)'，缺少 import 语句、完整的类定义和辅助函数。这是部分代码，不是完整的KernelBench格式。虽然已补充完整，但应该让 OpTaskBuilder 验证。选择 revise。",
+  "confidence": 0.85,
+  "has_provided_task_code": true,
+  "is_complete_code": false,
+  "extracted_task_code": "import torch\nimport torch.nn as nn\n\nclass Model(nn.Module):\n    def __init__(self):\n        super().__init__()\n    \n    def forward(self, x):\n        return torch.sigmoid(x)\n\ndef get_inputs():\n    return [torch.randn(32, 512, dtype=torch.float32, device='cuda')]\n\ndef get_init_inputs():\n    return []",
+  "extracted_op_name": "sigmoid",
+  "extracted_op_description": "Sigmoid激活函数"
+}
+```
+
+### 示例 19: 用户提供完整代码并要求修改
+```json
+{
+  "suggested_action": "revise",
+  "reasoning": "用户提供了完整的 torch task 代码（sigmoid算子），但要求'修改一下 shape'。虽然代码完整，但用户意图是修改，应该让 OpTaskBuilder 基于提供的代码进行修改。选择 revise。",
+  "confidence": 0.90,
+  "has_provided_task_code": true,
+  "is_complete_code": true,
+  "extracted_task_code": "import torch\nimport torch.nn as nn\n\nclass Model(nn.Module):\n    def __init__(self):\n        super().__init__()\n    \n    def forward(self, x):\n        return torch.sigmoid(x)\n\ndef get_inputs():\n    return [torch.randn(32, 512, dtype=torch.float32, device='cuda')]\n\ndef get_init_inputs():\n    return []",
+  "extracted_op_name": "sigmoid",
+  "extracted_op_description": "Sigmoid激活函数"
+}
+```
+
+### 示例 20: 用户提供部分MatMul代码并要求生成triton和测试性能
+```json
+{
+  "suggested_action": "revise",
+  "reasoning": "用户提供了 matmul 的代码片段'result = torch.matmul(a, b)'，这是部分代码。虽然补充为完整格式，但应该让 OpTaskBuilder 验证和完善。用户要求'生成triton并测试性能'，但由于代码不完整，应该先让 OpTaskBuilder 处理。选择 revise。",
+  "confidence": 0.88,
+  "has_provided_task_code": true,
+  "is_complete_code": false,
+  "extracted_task_code": "import torch\nimport torch.nn as nn\n\nclass Model(nn.Module):\n    def __init__(self):\n        super().__init__()\n    \n    def forward(self, a, b):\n        return torch.matmul(a, b)\n\ndef get_inputs():\n    return [torch.randn(1024, 512, dtype=torch.float32, device='cuda'),\n            torch.randn(512, 256, dtype=torch.float32, device='cuda')]\n\ndef get_init_inputs():\n    return []",
+  "extracted_op_name": "matmul",
+  "extracted_op_description": "矩阵乘法运算"
+}
+```
+
+### 示例 21: 用户提供自定义运算代码（部分代码）
+```json
+{
+  "suggested_action": "revise",
+  "reasoning": "用户提供了自定义运算'out = x * 2 + 1'，这是部分代码。虽然补充为完整结构，但应该让 OpTaskBuilder 验证。使用 custom_op 作为算子名称。选择 revise。",
+  "confidence": 0.80,
+  "has_provided_task_code": true,
+  "is_complete_code": false,
+  "extracted_task_code": "import torch\nimport torch.nn as nn\n\nclass Model(nn.Module):\n    def __init__(self):\n        super().__init__()\n    \n    def forward(self, x):\n        return x * 2 + 1\n\ndef get_inputs():\n    return [torch.randn(128, 256, dtype=torch.float32, device='cuda')]\n\ndef get_init_inputs():\n    return []",
+  "extracted_op_name": "custom_op",
+  "extracted_op_description": "自定义算子: x * 2 + 1"
+}
+```
+
+### 示例 22: 用户提供代码混杂在文字中（部分代码）
+```json
+{
+  "suggested_action": "revise",
+  "reasoning": "用户输入'这是我的代码：import torch; def forward(x): return torch.tanh(x) 请生成对应的triton'。从混杂的文字中提取核心逻辑，这是部分代码（只有import和forward）。识别为 tanh 算子，补充完整的KernelBench代码。但由于不是完整代码，应该让 OpTaskBuilder 验证。选择 revise。",
+  "confidence": 0.82,
+  "has_provided_task_code": true,
+  "is_complete_code": false,
+  "extracted_task_code": "import torch\nimport torch.nn as nn\n\nclass Model(nn.Module):\n    def __init__(self):\n        super().__init__()\n    \n    def forward(self, x):\n        return torch.tanh(x)\n\ndef get_inputs():\n    return [torch.randn(64, 128, dtype=torch.float32, device='cuda')]\n\ndef get_init_inputs():\n    return []",
+  "extracted_op_name": "tanh",
+  "extracted_op_description": "Tanh激活函数"
 }
 ```
 
