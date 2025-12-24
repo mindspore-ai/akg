@@ -30,7 +30,7 @@ akg_cli worker --start \
 
 - `--backend` 支持 `cuda` 或 `ascend`。未指定时优先读取 `WORKER_BACKEND`，否则默认 `cuda`。
 - `--arch` 未指定时优先读取 `WORKER_ARCH`，否则默认 `a100`。
-- `--devices` 为逗号分隔的设备列表（如 `0,1,2`）。
+- `--devices` 为本地设备列表，逗号分隔（如 `0` 或 `0,1,2`），不能为空、不能重复、不能包含负数。
 - `--host` 默认 `0.0.0.0`，`--port` 默认 `9001`。
 
 需要停止服务时：
@@ -56,7 +56,7 @@ akg_cli op \
 
 - `--intent "..."` 直接输入需求（跳过交互提示）。
 - `--worker-url` 支持多个 Worker 地址，使用逗号分隔。
-- `--server-url` 指定已有 server；否则 CLI 可能自动拉起本地 server。
+- `--devices` 将本地设备注册到本地 server（无需 worker_url）。与 `--worker-url` 互斥，且仅支持本地 server。
 - `--stream/--no-stream` 控制是否启用流式输出。
 - `--notify/--no-notify` 与 `--bark-key` 用于推送通知。
 - `--yes` 自动确认所有提示。
@@ -82,11 +82,22 @@ akg_cli op \
   --worker-url 127.0.0.1:9001,127.0.0.1:9002
 ```
 
+```bash
+akg_cli op \
+  --framework torch \
+  --backend cuda \
+  --arch a100 \
+  --dsl triton_cuda \
+  --devices 0
+```
+
 ## 3. TUI 基本说明
 
 `akg_cli op` 默认使用 TUI 交互界面，主要包含以下区域：
 
-- 顶部：任务 Tabs（仅并发任务时显示）。
+- 顶部：任务 Tabs。
+  - `main` 为主对话。
+  - 子 Agent 在独立 Tab 中执行，需要切换查看其输出。
 - 左侧：聊天日志（主输出区域）。
 - 右侧：任务信息面板、流程面板、Trace 列表。
 - 底部：输入框。

@@ -30,7 +30,7 @@ Notes:
 
 - `--backend` supports `cuda` or `ascend`. If omitted, defaults to `WORKER_BACKEND` or `cuda`.
 - `--arch` defaults to `WORKER_ARCH` or `a100`.
-- `--devices` is a comma-separated list (e.g., `0,1,2`).
+- `--devices` is a comma-separated list of local device IDs (e.g., `0` or `0,1,2`). It must be non-empty, contain no duplicates, and have no negative numbers.
 - `--host` defaults to `0.0.0.0`, `--port` defaults to `9001`.
 
 Stop the service when needed:
@@ -56,7 +56,7 @@ Optional parameters:
 
 - `--intent "..."` to provide requirements directly (skip interactive prompt).
 - `--worker-url` accepts multiple worker addresses separated by commas.
-- `--server-url` to use an existing server; otherwise CLI may launch a local server.
+- `--devices` registers local devices to the local server (no worker URL needed). It is mutually exclusive with `--worker-url` and only works with the local server.
 - `--stream/--no-stream` to enable/disable streaming output.
 - `--notify/--no-notify` and `--bark-key` for push notifications.
 - `--yes` to auto-confirm all prompts.
@@ -82,11 +82,22 @@ akg_cli op \
   --worker-url 127.0.0.1:9001,127.0.0.1:9002
 ```
 
+```bash
+akg_cli op \
+  --framework torch \
+  --backend cuda \
+  --arch a100 \
+  --dsl triton_cuda \
+  --devices 0
+```
+
 ## 3. TUI Basics
 
 The TUI is the default interactive interface for `akg_cli op`. It is split into several panels:
 
-- Top: task tabs (only shown when there are concurrent tasks).
+- Top: task tabs.
+  - The `main` tab is the primary dialogue.
+  - Each sub-agent runs in its own tab; switch tabs to view their outputs.
 - Left: chat log (main output stream).
 - Right: task info panel, workflow panel, and trace list.
 - Bottom: input box.
