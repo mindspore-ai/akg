@@ -14,162 +14,322 @@
 
 """
 MainOpAgent 辅助工具函数
-
-提供意图判断、子Agent选择、修改请求检测等辅助功能
 """
 
+import re
 import logging
-from typing import Dict, Any, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-def is_operator_related_intent(intent: str, confidence: float, threshold: float = 0.6) -> bool:
-    """判断是否是算子相关的意图
-    
-    Args:
-        intent: 意图类型（operator_dev/general_question/unclear）
-        confidence: 置信度（0.0-1.0）
-        threshold: 置信度阈值
-        
-    Returns:
-        bool: 是否是算子相关
+def extract_torch_task_code(user_input: str) -> Optional[str]:
     """
-    if intent == "operator_dev":
-        # 明确是算子开发相关
-        return True
-    elif intent == "general_question" and confidence >= threshold:
-        # 高置信度的一般问题 → 拒绝
-        return False
-    else:
-        # unclear 或低置信度 → 让后续流程处理（安全策略）
-        return True
-
-
-def quick_match_sub_agent_preference(user_input: str) -> Optional[str]:
-    """快速匹配用户是否明确要求使用特定的子Agent（字符串匹配，减少LLM调用）
+    从用户输入中提取 KernelBench 格式的 torch task 代码
+    
+    KernelBench 格式必须包含：
+    - import torch
+    - class Model(nn.Module)
+    - def forward(self, ...)
+    - def get_inputs()
+    - def get_init_inputs()  ← 必须有，即使返回空列表
     
     Args:
         user_input: 用户输入
         
     Returns:
-        Optional[str]: 如果匹配到，返回子Agent名称 ("evolve"、"codeonly" 或 "kernel_verifier")，否则返回 None
+        提取的 torch task 代码，如果没有则返回 None
     """
-    if not user_input:
+    # 检查是否包含必要的 KernelBench 标志（5个必需字段）
+    required_patterns = [
+        r"import\s+torch",
+        r"class\s+Model\s*\(",
+        r"def\s+forward\s*\(",
+        r"def\s+get_inputs\s*\(",
+        r"def\s+get_init_inputs\s*\(",  # 🆕 必须有
+    ]
+    
+    # 检查是否所有必要模式都存在
+    if not all(re.search(pattern, user_input, re.MULTILINE) for pattern in required_patterns):
         return None
+    
+    # 尝试提取代码块
+    # 方法1: 查找 ```python 代码块
+    code_block_match = re.search(r"```(?:python)?\s*\n(.*?)\n```", user_input, re.DOTALL)
+    if code_block_match:
+        code = code_block_match.group(1).strip()
+        # 验证提取的代码是否符合要求
+        if all(re.search(pattern, code, re.MULTILINE) for pattern in required_patterns):
+            logger.info("Extracted torch task code from markdown code block")
+            return code
+    
+    # 方法2: 直接提取整段代码（没有代码块标记）
+    # 查找从 import torch 开始，到最后一个必需函数结束
+    import_match = re.search(r"import\s+torch", user_input)
+    if not import_match:
+        return None
+    
+    start_pos = import_match.start()
+    
+    # 找到最后一个必需函数的结束位置
+    # 查找 def get_init_inputs() 之后的第一个 return 语句或函数结束
+    get_init_inputs_match = re.search(r"def\s+get_init_inputs\s*\([^)]*\)\s*:", user_input[start_pos:])
+    if not get_init_inputs_match:
+        return None
+    
+    # 从 get_init_inputs 开始查找，找到这个函数的结束位置
+    func_start = start_pos + get_init_inputs_match.end()
+    
+    # 查找函数体（缩进的代码或 return 语句）
+    # 匹配：return [...] 或 return [] 或多行的函数体
+    func_body_match = re.search(r"return\s+\[.*?\]", user_input[func_start:], re.DOTALL)
+    if func_body_match:
+        # 找到 return 语句的结束位置
+        code_end = func_start + func_body_match.end()
+    else:
+        # 如果没找到 return，尝试找到函数体结束（下一个非缩进行或文件结束）
+        remaining = user_input[func_start:]
+        # 跳过空白，找到下一个非函数体的内容
+        body_end_match = re.search(r"\n(?=\S)", remaining)
+        if body_end_match:
+            code_end = func_start + body_end_match.start()
+        else:
+            code_end = len(user_input)
+    
+    # 提取代码
+    code = user_input[start_pos:code_end].strip()
+    
+    # 进一步清理：移除代码后面可能的非代码文本
+    # 查找代码后是否有中文或明显的自然语言（作为结束标记）
+    # 在最后一个 ] 或 ) 之后，如果有中文字符，就截断
+    last_bracket = max(code.rfind(']'), code.rfind(')'))
+    if last_bracket > 0:
+        # 从最后一个括号之后查找中文或请求性文字
+        after_bracket = code[last_bracket + 1:]
+        chinese_match = re.search(r'[\u4e00-\u9fff]', after_bracket)
+        if chinese_match:
+            # 找到中文，截断到最后一个括号
+            code = code[:last_bracket + 1].strip()
+    
+    # 验证提取的代码是否符合要求
+    if all(re.search(pattern, code, re.MULTILINE) for pattern in required_patterns):
+        # 如果代码是一行连续的，在关键位置添加换行
+        if '\n' not in code or code.count('\n') < 3:
+            # 步骤1：在每个 import 后添加换行
+            code = re.sub(r'\b(import\s+[\w.]+(?:\s+as\s+\w+)?)\s+', r'\1\n', code)
+            
+            # 步骤2：在 class 定义前添加两个换行
+            code = re.sub(r'\s*(class\s+)', r'\n\n\1', code)
+            
+            # 步骤3：在 class 内的方法之间添加换行
+            # 先处理 __init__ 方法
+            code = re.sub(r'(class\s+\w+[^:]*:)\s*(def\s+__init__)', r'\1\n    \2', code)
+            # __init__ 方法的冒号后换行
+            code = re.sub(r'(def\s+__init__[^:]*:)\s*', r'\1\n        ', code)
+            # 处理 __init__ 之后的 forward 等方法
+            code = re.sub(r'(\)\s+)(def\s+\w+\s*\()', r')\n    \2', code)
+            
+            # 步骤4：在顶层函数 def 前添加换行（class 外的函数）
+            # 匹配 "] def " 或 ") def " 模式（在 class 之后）
+            code = re.sub(r'([\]\)])\s*(def\s+(?:get_inputs|get_init_inputs))', r'\1\n\n\2', code)
+            
+            # 步骤5：在方法体内的语句之间添加换行
+            # super().__init__() 后换行
+            code = re.sub(r'(super\(\).__init__\(\))\s+', r'\1\n        ', code)
+            # self.xxx = 后，如果还有 def，添加换行
+            code = re.sub(r'(self\.\w+\s*=\s*[^\n]+?)\s+(def\s+)', r'\1\n    \2', code)
+            # forward 等方法的冒号后换行
+            code = re.sub(r'(def\s+forward[^:]*:)\s*', r'\1\n        ', code)
+            
+            # 步骤6：顶层函数的 return 语句处理
+            code = re.sub(r'(get_inputs\(\):)\s*(return\s+)', r'\1\n    \2', code)
+            code = re.sub(r'(get_init_inputs\(\):)\s*(return\s+)', r'\1\n    \2', code)
+            
+            # 清理多余的空行
+            code = re.sub(r'\n{3,}', r'\n\n', code)
+            code = code.strip()
         
+        logger.info(f"Extracted torch task code from plain text, length: {len(code)} chars")
+        return code
+    
+    return None
+
+
+def has_torch_task_code(user_input: str) -> bool:
+    """
+    判断用户输入中是否包含 KernelBench 格式的 torch task 代码
+    
+    Args:
+        user_input: 用户输入
+        
+    Returns:
+        是否包含 torch task 代码
+    """
+    return extract_torch_task_code(user_input) is not None
+
+
+def is_operator_related_intent(intent: str, confidence: float, threshold: float = 0.6) -> bool:
+    """
+    判断意图是否与算子开发相关
+    
+    Args:
+        intent: 意图分类结果
+        confidence: 置信度
+        threshold: 置信度阈值
+        
+    Returns:
+        是否与算子开发相关
+    """
+    if confidence < threshold:
+        # 置信度太低，无法判断
+        return True  # 默认允许继续（善意理解）
+    
+    operator_related = [
+        "operator_development",
+        "operator_dev",  # 🆕 添加简短形式
+        "code_generation",
+        "modification",
+        "optimization",
+        "unclear"
+    ]
+    
+    # 🆕 更宽松的判断：只要包含 "operator" 关键词，就认为是相关的
+    if "operator" in intent.lower():
+        return True
+    
+    return intent in operator_related
+
+
+def quick_match_sub_agent_preference(user_input: str) -> Optional[str]:
+    """
+    快速匹配用户是否明确指定了子 Agent 偏好
+    
+    Args:
+        user_input: 用户输入
+        
+    Returns:
+        子 Agent 名称 (codeonly/evolve/kernel_verifier) 或 None
+    """
     user_input_lower = user_input.lower()
     
-    # 关键判断：是否包含"生成"相关词汇
+    # 1. 检查是否同时包含"生成"和"性能测试"
     has_generate = any(kw in user_input_lower for kw in [
         "生成", "创建", "写", "实现", "generate", "create", "implement", "write"
     ])
     
-    # 关键判断：是否包含"性能测试"相关词汇
     has_performance_test = any(kw in user_input_lower for kw in [
+        # 性能测试相关
         "性能测试", "测试性能", "性能分析", "分析性能",
-        "验证性能", "性能怎么样", "加速比", "速度对比", "性能对比",
+        "验证性能", "验证一下性能", "验证下性能",
+        "测试一下性能", "测下性能", "测一下性能",
+        "性能怎么样", "加速比", "速度对比", "性能对比",
+        "看看性能", "看下性能", "看一下性能",
+        "跑一下性能", "跑下性能",
+        # 带"并"的组合
+        "并测试", "并进行测试", "并测试性能", "并进行性能测试",
+        "并分析性能", "并验证性能", "并benchmark", "并测一下",
+        # 英文
         "benchmark", "performance test", "test performance", "profile",
         "check performance", "verify performance",
-        "测试", "测一下", "跑一下", "看看性能"
+        "and test", "and profile", "and benchmark"
     ])
     
-    # 场景1：包含"生成" + "性能测试" → 返回 None，让LLM判断或走默认codeonly（会设置task_type="profile"）
+    # 如果同时包含"生成"和"性能测试"，返回 None（让 codeonly 处理，task_type="profile"）
     if has_generate and has_performance_test:
-        logger.info(f"User requests BOTH generate AND performance test, returning None (will use codeonly with task_type='profile')")
-        return None  # 返回 None，让后续逻辑选择 codeonly，task_type会被设置为profile
+        logger.info("User requests generate + profile, returning None (codeonly will handle with task_type='profile')")
+        return None
     
-    # 场景2：只包含"性能测试"，不包含"生成" → kernel_verifier
+    # 2. 如果只有性能测试（没有生成），明确返回 kernel_verifier
     if has_performance_test and not has_generate:
-        logger.info(f"User requests ONLY performance test (no generate), returning kernel_verifier")
+        logger.info("User requests pure performance test, returning 'kernel_verifier'")
         return "kernel_verifier"
     
-    # 检测换成 evolve 的关键词
-    # 注意：只包含明确的 evolve 关键词和纯优化词，不包含"性能"相关词
-    switch_to_evolve_keywords = [
-        # 明确提到 evolve
-        "换evolve", "用evolve", "使用evolve", "改用evolve", "试试evolve", "换成evolve",
-        "换用evolve", "改为evolve", "切换evolve", "选evolve", "要evolve",
-        "evolve重新生成", "evolve生成", "evolve优化", "用一下evolve", "走evolve",
-        "switch to evolve", "use evolve", "try evolve", "with evolve", "change to evolve",
-        # 纯优化关键词（不涉及性能）
-        "多轮优化", "迭代优化", "进化优化", "自动调优", "多次迭代",
-        "iterative optimization", "evolutionary optimization", "auto-tune"
+    # 3. 检查是否明确要求使用 evolve（必须是纯优化相关，排除性能测试）
+    # 注意：这些关键词应该明确表示"要求最高性能/多轮优化"，而不是"测试性能"
+    evolve_keywords = [
+        # 明确指定evolve
+        "使用evolve", "用evolve", "换evolve", "改用evolve",
+        "use evolve", "evolve", "进化",
+        # 多轮优化相关
+        "多轮优化", "迭代优化", "自动调优", "进化优化",
+        # 极致性能要求（与"性能测试"区分）
+        "极致性能", "最优性能", "最佳性能", 
+        "性能最优", "性能极致",
+        "高性能算子", "超高性能",  # 🆕 增加高性能关键词
+        # 明确的优化需求
+        "追求性能", "优化到极致", "最大化性能"
     ]
     
-    for keyword in switch_to_evolve_keywords:
-        if keyword in user_input_lower:
-            logger.info(f"Quick matched evolve keyword: '{keyword}'")
-            return "evolve"
+    if any(kw in user_input_lower for kw in evolve_keywords):
+        logger.info("User explicitly requests evolve (high performance optimization)")
+        return "evolve"
     
-    # 检测换成 codeonly 的关键词
-    switch_to_codeonly_keywords = [
-        "换codeonly", "用codeonly", "使用codeonly", "改用codeonly", "试试codeonly", "换成codeonly",
-        "换用codeonly", "改为codeonly", "切换codeonly", "选codeonly", "要codeonly",
-        "codeonly重新生成", "codeonly生成", "用一下codeonly",
-        "switch to codeonly", "use codeonly", "try codeonly", "with codeonly", "change to codeonly"
+    # 4. 检查是否明确要求使用 codeonly
+    codeonly_keywords = [
+        "使用codeonly", "用codeonly", "换codeonly", "改用codeonly",
+        "use codeonly", "快速生成", "直接生成"
     ]
     
-    for keyword in switch_to_codeonly_keywords:
-        if keyword in user_input_lower:
-            logger.info(f"Quick matched codeonly keyword: '{keyword}'")
-            return "codeonly"
+    if any(kw in user_input_lower for kw in codeonly_keywords):
+        logger.info("User explicitly requests codeonly")
+        return "codeonly"
     
+    # 默认返回 None，让 LLM 进行选择
     return None
 
 
 def extract_sub_agent_from_reasoning(reasoning: str) -> Optional[str]:
-    """从LLM的推理中提取用户要求的子Agent
+    """
+    从 LLM 的推理过程中提取子 Agent 名称
     
     Args:
-        reasoning: LLM推理文本
+        reasoning: LLM 的推理过程
         
     Returns:
-        Optional[str]: 如果LLM推理中提到子Agent，返回名称，否则返回 None
+        子 Agent 名称 或 None
     """
-    if not reasoning:
-        return None
-    
     reasoning_lower = reasoning.lower()
     
-    # 检查推理中是否提到 evolve
-    evolve_indicators = [
-        "使用 evolve", "用 evolve", "evolve 子agent", "evolve子agent",
-        "要求使用 evolve", "明确要求 evolve", "指定 evolve",
-        "use evolve", "using evolve", "evolve sub-agent", "evolve subagent"
-    ]
-    
-    for indicator in evolve_indicators:
-        if indicator in reasoning_lower:
-            logger.info(f"LLM reasoning indicates evolve: '{indicator}'")
-            return "evolve"
-    
-    # 检查推理中是否提到 codeonly
-    codeonly_indicators = [
-        "使用 codeonly", "用 codeonly", "codeonly 子agent", "codeonly子agent",
-        "要求使用 codeonly", "明确要求 codeonly", "指定 codeonly",
-        "use codeonly", "using codeonly", "codeonly sub-agent", "codeonly subagent"
-    ]
-    
-    for indicator in codeonly_indicators:
-        if indicator in reasoning_lower:
-            logger.info(f"LLM reasoning indicates codeonly: '{indicator}'")
-            return "codeonly"
+    if "evolve" in reasoning_lower:
+        return "evolve"
+    elif "codeonly" in reasoning_lower:
+        return "codeonly"
+    elif "kernel_verifier" in reasoning_lower or "性能" in reasoning_lower:
+        return "kernel_verifier"
     
     return None
 
 
-def user_requests_profile(user_request: str) -> bool:
-    """判断用户是否要求性能测试（用于 codeonly task_type 判断）
-    
-    这个函数用于判断当走codeonly时，是否需要设置task_type="profile"
+def user_explicitly_requests_evolve(user_request: str, conversation_history: list) -> bool:
+    """
+    判断用户是否明确要求使用 evolve
     
     Args:
-        user_request: 用户输入
+        user_request: 用户请求
+        conversation_history: 对话历史
         
     Returns:
-        bool: 是否要求性能测试
+        是否明确要求 evolve
     """
+    user_request_lower = user_request.lower()
+    
+    # 明确的 evolve 关键词（不包含性能相关）
+    evolve_keywords = [
+        "使用evolve", "用evolve", "换evolve", "改用evolve",
+        "use evolve", "with evolve",
+        "多轮优化", "迭代优化", "进化优化", "自动调优",
+        "多次迭代", "iterative", "multi-round"
+    ]
+    
+    if any(kw in user_request_lower for kw in evolve_keywords):
+        logger.info(f"User explicitly requests evolve: matched keyword")
+        return True
+    
+    return False
+
+
+def user_requests_profile(user_request: str) -> bool:
+    """判断用户是否要求性能测试（用于 codeonly task_type 判断）"""
     if not user_request:
         return False
     
@@ -205,158 +365,91 @@ def user_requests_profile(user_request: str) -> bool:
     return False
 
 
-def user_explicitly_requests_evolve(user_request: str, conversation_history: list) -> bool:
-    """判断用户是否明确要求使用 evolve 流程
+def is_modification_request(user_input: str, has_previous_code: bool) -> bool:
+    """
+    判断用户输入是否是对现有代码的修改请求
     
     Args:
-        user_request: 用户输入
-        conversation_history: 对话历史
+        user_input: 用户输入
+        has_previous_code: 是否已有生成的代码
         
     Returns:
-        bool: 是否明确要求 evolve
+        是否是修改请求
     """
-    user_request_lower = user_request.lower()
-    
-    # 只有明确提到 "evolve" 的才走 evolve 流程
-    # 所有涉及"性能"的请求都走 kernel_verifier（性能测试）
-    explicit_evolve_keywords = [
-        "使用evolve", "用evolve", "evolve流程", "evolve优化", "evolve生成",
-        "use evolve", "using evolve", "with evolve",
-        "走evolve", "选evolve", "要evolve", "换evolve", "改用evolve",
-        "切换到evolve", "改成evolve", "试试evolve"
-    ]
-    
-    if any(kw in user_request_lower for kw in explicit_evolve_keywords):
-        logger.info(f"User explicitly mentioned 'evolve' keyword")
-        return True
-    
-    # 只保留纯优化关键词（不涉及性能），且需要组合才触发
-    # 注意：删除了所有"性能"相关的关键词，避免与 kernel_verifier 冲突
-    optimization_keywords = [
-        "多轮优化", "迭代优化", "进化优化", "自动调优", "自动优化",
-        "iterative optimization", "evolutionary optimization", "auto-tune",
-        "多次迭代", "多轮迭代"
-    ]
-    
-    # 只有明确要求"多轮优化"、"迭代优化"等才走 evolve
-    # 单独的"优化"不够，必须是组合词
-    if any(kw in user_request_lower for kw in optimization_keywords):
-        logger.info(f"User requested iterative optimization, using evolve")
-        return True
-    
-    # 检查对话历史中是否有明确要求
-    for msg in conversation_history[-3:]:  # 检查最近3轮对话
-        content = msg.get("content", "").lower()
-        if any(kw in content for kw in explicit_evolve_keywords):
-            logger.info(f"Found evolve keyword in conversation history")
-            return True
-    
-    return False
-
-
-def is_modification_request(user_request: str, has_previous_code: bool) -> bool:
-    """判断用户输入是否是修改请求
-
-    Args:
-        user_request: 用户输入
-        has_previous_code: 是否有之前的代码
-
-    Returns:
-        bool: 是否是修改请求
-    """
-    # 如果没有之前的 task_code，一定不是修改请求
     if not has_previous_code:
         return False
     
+    user_input_lower = user_input.lower()
+    
     # 修改相关的关键词
     modification_keywords = [
-        "修改", "改成", "改为", "换成", "调整", "优化", "更新",
-        "变成", "改一下", "换一下", "调成", "设为", "设成",
-        "change", "modify", "update", "adjust", "alter", 
-        "revise", "refine", "optimize", "improve"
+        "修改", "改成", "改为", "换成", "调整",
+        "shape", "dtype", "batch", "size", "dim",
+        "modify", "change", "update", "adjust"
     ]
-
-    # 检查是否包含修改关键词
-    user_request_lower = user_request.lower()
-    contains_modification = any(kw in user_request_lower for kw in modification_keywords)
-
-    if contains_modification:
-        logger.info(f"Detected modification request, skipping intent classification")
+    
+    # 检查是否是短输入 + 包含修改关键词
+    is_short = len(user_input) < 100
+    has_modification_keyword = any(kw in user_input_lower for kw in modification_keywords)
+    
+    if is_short and has_modification_keyword:
+        logger.info(f"Detected potential modification request (short input with modification keyword)")
         return True
-
-    # 如果用户输入很短且包含"shape"、"size"等，可能是修改请求
-    if len(user_request) < 50 and any(kw in user_request_lower for kw in ["shape", "size", "dim", "维度", "形状"]):
-        logger.info(f"Detected potential modification request (short input with shape/size), skipping intent classification")
-        return True
-
+    
     return False
 
 
-def simple_action_heuristic(state: Dict[str, Any], user_input: str) -> str:
-    """简单的启发式规则来决定 action（作为 fallback）
+def simple_action_heuristic(state: dict, user_input: str) -> tuple:
+    """
+    简单的启发式规则判断用户动作
     
     Args:
         state: 当前状态
         user_input: 用户输入
         
     Returns:
-        str: 建议的action ('confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel')
+        tuple: (action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description)
     """
-    user_lower = user_input.lower()
-    has_task_code = bool(state.get("task_code"))
-    has_generated_code = bool(state.get("generated_code"))
-
-    # 检查取消意图
-    if any(kw in user_lower for kw in ['取消', '退出', '结束', 'cancel', 'quit', 'exit']):
-        return 'cancel'
-
-    # 已生成代码的情况
-    if has_generated_code:
-        # 明确提到 task/torch → retry
-        if any(kw in user_lower for kw in ['task', 'torch', '任务', 'pytorch']):
-            return 'retry'
-        # 其他情况 → retry_sub_agent
-        return 'retry_sub_agent'
-
-    # 有 task_code 但未生成代码
-    if has_task_code:
-        # 检查确认意图
-        if any(kw in user_lower for kw in ['确认', 'ok', 'yes', '好', '生成', 'generate']):
-            return 'confirm'
-        # 其他情况 → revise
-        return 'revise'
-
-    # 默认 revise
-    return 'revise'
+    user_input_lower = user_input.lower()
+    
+    # 确认关键词
+    confirm_keywords = ["确认", "ok", "yes", "好的", "可以", "继续", "confirm"]
+    if any(kw in user_input_lower for kw in confirm_keywords):
+        return "confirm", False, False, False, '', '', ''
+    
+    # 取消关键词
+    cancel_keywords = ["取消", "退出", "结束", "再见", "cancel", "quit", "exit"]
+    if any(kw in user_input_lower for kw in cancel_keywords):
+        return "cancel", False, False, False, '', '', ''
+    
+    # 重试关键词
+    retry_keywords = ["重新", "再试", "retry", "重做"]
+    if any(kw in user_input_lower for kw in retry_keywords):
+        if state.get("generated_code"):
+            return "retry_sub_agent", False, False, False, '', '', ''
+        else:
+            return "retry", False, False, False, '', '', ''
+    
+    # 默认：修改
+    return "revise", False, False, False, '', '', ''
 
 
-def format_agents_info_for_llm(agents_info: Dict[str, Dict[str, Any]]) -> str:
-    """格式化子 Agent 信息供 LLM 理解
+def format_agents_info_for_llm(agents_info: dict) -> str:
+    """
+    格式化子 Agent 信息供 LLM 选择
     
     Args:
-        agents_info: 子Agent详细信息字典
+        agents_info: 子 Agent 详细信息字典
         
     Returns:
-        str: 格式化后的文本
+        格式化的字符串
     """
-    lines = []
-    for agent_name, info in agents_info.items():
-        lines.append(f"\n{'='*60}")
-        lines.append(f"Agent: {info['name']}")
-        lines.append(f"Description: {info['description']}")
-        lines.append(f"\nWorkflow Steps:")
-        for step in info['workflow_steps']:
-            lines.append(f"  - {step}")
-        lines.append(f"\nUse Cases:")
-        for case in info['use_cases']:
-            lines.append(f"  - {case}")
-        lines.append(f"\nAdvantages:")
-        for adv in info['advantages']:
-            lines.append(f"  + {adv}")
-        lines.append(f"\nLimitations:")
-        for lim in info['limitations']:
-            lines.append(f"  - {lim}")
-        lines.append(f"\nPerformance: {info['performance']}")
-    lines.append(f"{'='*60}\n")
-    return "\n".join(lines)
-
+    formatted = []
+    for name, info in agents_info.items():
+        formatted.append(f"### {name}")
+        formatted.append(f"- 描述: {info.get('description', '')}")
+        formatted.append(f"- 适用场景: {info.get('use_cases', '')}")
+        formatted.append(f"- 优势: {info.get('advantages', '')}")
+        formatted.append("")
+    
+    return "\n".join(formatted)

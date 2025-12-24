@@ -22,6 +22,9 @@
      * "优化 Softmax 性能"
      * "修改上面的算子，输入shape改为..."
      * "帮我写一个卷积算子"
+     * **【特殊】用户直接提供了完整的 KernelBench 格式的 torch task 代码**
+       - 必须包含：`import torch`, `class Model`, `def forward`, `def get_inputs`, `def get_init_inputs`
+       - 可能附带修改要求（如"帮我修改一下shape"）或生成要求（如"帮我生成对应的triton"）
 
 2. **general_question**：用户在询问与算子开发无关的一般性问题
    - 示例：

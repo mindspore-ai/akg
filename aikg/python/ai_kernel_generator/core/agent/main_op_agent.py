@@ -37,7 +37,9 @@ from ai_kernel_generator.utils.main_op_agent_utils import (
     user_requests_profile,
     is_modification_request,
     simple_action_heuristic,
-    format_agents_info_for_llm
+    format_agents_info_for_llm,
+    extract_torch_task_code,
+    has_torch_task_code
 )
 
 from ai_kernel_generator.utils.main_op_agent_display import (
@@ -133,7 +135,6 @@ class MainOpAgent(AgentBase):
                 self.use_auto_action_analysis = False
         else:
             logger.info("Auto user action analysis disabled")
-        
 
         # 获取子 Agent 注册中心
         self.sub_agent_registry = get_registry()
@@ -214,6 +215,74 @@ class MainOpAgent(AgentBase):
         is_first_turn = len(conversation_history) <= 1  # 只有用户的第一条消息
         has_previous_code = bool(state.get("task_code"))
         is_modification_req = is_modification_request(user_request, has_previous_code)
+        
+        # 🆕 检查是否已经有 LLM 提取并补充的代码（在 start_conversation 或 continue_conversation 中已完成）
+        # 需要判断代码是否完整，以及用户是否要修改
+        if state.get("task_code") and state.get("op_name"):
+            provided_task_code = state.get("task_code")
+            op_name = state.get("op_name")
+            op_description = state.get("op_description", "用户提供的 torch task 代码")
+            user_feedback = state.get("user_feedback")
+            is_user_provided_complete = state.get("user_provided_complete_code", False)  # 🔑 代码是否完整
+            
+            # 🔑 关键判断：只有以下情况才直接使用代码：
+            # 1. 用户提供的是完整代码（不是LLM补充的）
+            # 2. 用户已确认（要求生成triton）
+            # 3. 没有修改请求
+            should_use_directly = (
+                is_user_provided_complete and  # 必须是完整代码
+                state.get("user_confirmed") == True and  # 用户已确认
+                not user_feedback and  # 没有feedback
+                not state.get("retry_requested")  # 没有重试请求
+            )
+            
+            if should_use_directly:
+                logger.info("=" * 80)
+                logger.info("🎯 USING USER-PROVIDED COMPLETE TORCH TASK CODE")
+                logger.info(f"   Code length: {len(provided_task_code)} characters")
+                logger.info(f"   Op name: {op_name}")
+                logger.info(f"   Description: {op_description}")
+                logger.info("   Skipping OpTaskBuilder (complete code + user confirmed)")
+                logger.info("=" * 80)
+                
+                # 直接使用用户提供的完整代码
+                new_message = Message(
+                    role="assistant",
+                    content=f"✓ 已接收您提供的 {op_name} 算子完整代码，准备进行后续处理。",
+                    timestamp=datetime.now().isoformat()
+                )
+                
+                return {
+                    "task_code": provided_task_code,
+                    "op_name": op_name,
+                    "op_description": op_description,
+                    "task_reasoning": f"使用用户提供的完整 {op_name} 算子代码",
+                    "task_init_status": "READY",
+                    "conversation_history": [new_message],
+                    "current_step": "user_confirm",
+                    "user_feedback": None,
+                    # 不设置 user_confirmed，保持原有状态
+                }
+            else:
+                # 需要调用OpTaskBuilder的情况：
+                # 1. 代码不完整（LLM补充的）
+                # 2. 用户要求修改
+                # 3. 用户未确认
+                reason = []
+                if not is_user_provided_complete:
+                    reason.append("代码不完整（LLM补充的，需要验证）")
+                if user_feedback:
+                    reason.append(f"用户要求修改: {user_feedback[:50]}")
+                if not state.get("user_confirmed"):
+                    reason.append("用户未确认")
+                    
+                logger.info("=" * 80)
+                logger.info("📝 WILL CALL OpTaskBuilder")
+                logger.info(f"   Current op_name: {op_name if op_name else 'None'}")
+                logger.info(f"   Reason: {' | '.join(reason)}")
+                logger.info("   OpTaskBuilder will validate/modify the code")
+                logger.info("=" * 80)
+                # 继续往下执行，让OpTaskBuilder处理
         
         if self.use_intent_classification and is_first_turn and not is_modification_req:
             conversation_history = state.get("conversation_history", [])
@@ -447,13 +516,22 @@ class MainOpAgent(AgentBase):
         """
         用户确认节点: 标记等待用户确认状态
         
-        如果用户在第一轮就明确要求"生成并测试性能"，自动确认继续执行
+        如果用户在第一轮就明确要求"生成并测试性能"，或者LLM已经分析确认，自动确认继续执行
         """
         logger.info("=== User Confirm Node ===")
         
         task_code = state.get("task_code", "")
         op_name = state.get("op_name", "")
         user_request = state.get("user_request", "")
+        
+        # 🆕 优先检查初始状态中是否已经通过 LLM 分析设置了 user_confirmed
+        # 这种情况通常是用户直接提供了代码并明确要求生成
+        if state.get("user_confirmed", False):
+            logger.info(f"✓ Initial state already confirmed (LLM analyzed user intent)")
+            return {
+                "current_step": "user_confirm",
+                "user_confirmed": True  # 保持确认状态
+            }
         
         # 检查用户是否明确要求"生成并测试性能"
         # 如果是，自动确认，不需要用户再次确认
@@ -531,7 +609,7 @@ class MainOpAgent(AgentBase):
         op_description = state.get("op_description", "")
         user_request = state.get("user_request", "")
         
-        # 🔍 首先检查用户是否明确要求使用 evolve
+        # 首先检查用户是否明确要求使用 evolve
         conversation_history = state.get("conversation_history", [])
         if user_explicitly_requests_evolve(user_request, conversation_history):
             logger.info("User explicitly requested evolve, using evolve sub-agent")
@@ -713,12 +791,15 @@ class MainOpAgent(AgentBase):
             user_input: 用户输入
 
         Returns:
-            tuple: (action, is_new_operator)
+            tuple: (action, is_new_operator, has_provided_task_code, extracted_op_name, extracted_op_description)
             - action: 建议的操作 ('confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel')
             - is_new_operator: 是否是新算子需求 (bool)
+            - has_provided_task_code: 是否直接提供了torch task代码 (bool)
+            - extracted_op_name: 从代码中提取的算子名称 (str)
+            - extracted_op_description: 从代码中提取的算子描述 (str)
         """
         if not self.use_auto_action_analysis:
-            return simple_action_heuristic(state, user_input), False
+            return simple_action_heuristic(state, user_input)
 
         try:
             # 构建对话历史文本
@@ -755,16 +836,30 @@ class MainOpAgent(AgentBase):
                 analysis_reasoning = getattr(parsed, 'reasoning', '')
                 confidence = float(getattr(parsed, 'confidence', 0.5))
                 is_new_operator = getattr(parsed, 'is_new_operator', False)
+                has_provided_task_code = getattr(parsed, 'has_provided_task_code', False)
+                is_complete_code = getattr(parsed, 'is_complete_code', False)  # 🆕 代码是否完整
+                extracted_task_code = getattr(parsed, 'extracted_task_code', '')
+                extracted_op_name = getattr(parsed, 'extracted_op_name', '')
+                extracted_op_description = getattr(parsed, 'extracted_op_description', '')
             except Exception as parse_error:
                 logger.warning(f"Failed to parse action analysis result: {parse_error}")
                 # 解析失败，使用启发式规则
-                return simple_action_heuristic(state, user_input), False
+                return simple_action_heuristic(state, user_input)
 
             logger.info(f"LLM suggested action: {suggested_action} (confidence: {confidence:.2f})")
             logger.debug(f"Analysis reasoning: {analysis_reasoning}")
             
             if is_new_operator:
                 logger.info(f"🆕 LLM detected NEW OPERATOR request (is_new_operator=True)")
+            
+            if has_provided_task_code:
+                logger.info(f"🎯 LLM detected USER PROVIDED TASK CODE (has_provided_task_code=True)")
+                logger.info(f"   Code completeness: {'COMPLETE' if is_complete_code else 'PARTIAL (需要OpTaskBuilder验证)'}")
+                if extracted_task_code:
+                    logger.info(f"   Extracted task code length: {len(extracted_task_code)} chars")
+                if extracted_op_name:
+                    logger.info(f"   Extracted op_name: {extracted_op_name}")
+                    logger.info(f"   Extracted description: {extracted_op_description}")
 
             # 保存分析推理到状态中（用于后续处理无关问题）
             state["last_action_reasoning"] = analysis_reasoning
@@ -773,13 +868,13 @@ class MainOpAgent(AgentBase):
             valid_actions = ['confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel']
             if suggested_action not in valid_actions:
                 logger.warning(f"Invalid suggested action: {suggested_action}, using revise")
-                return 'revise', False
+                return 'revise', False, False, False, '', '', ''
 
-            return suggested_action, is_new_operator
+            return suggested_action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description
 
         except Exception as e:
             logger.error(f"Action analysis failed: {e}, using heuristic")
-            return simple_action_heuristic(state, user_input), False
+            return simple_action_heuristic(state, user_input)
 
     async def start_conversation(self, user_request: str, task_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -798,6 +893,63 @@ class MainOpAgent(AgentBase):
         if task_id is None:
             task_id = hashlib.md5(f"{user_request}_{time.time()}".encode()).hexdigest()[:8]
         
+        # 🆕 使用 LLM 分析用户输入，包括检测和提取torch代码（如果有）
+        provided_task_code = None
+        user_confirmed = False  # 默认需要确认
+        op_name = ''
+        extracted_op_description = ''
+        
+        logger.info("=" * 80)
+        logger.info("🔍 Analyzing user input with LLM...")
+        logger.info("=" * 80)
+        
+        try:
+            # 构建一个临时状态用于分析
+            temp_state = {
+                "conversation_history": [],
+                "task_code": "",
+                "generated_code": "",
+                "op_name": ""
+            }
+            
+            # 🆕 调用统一的 LLM 分析：检测torch代码、提取并补充、分析意图
+            action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(
+                temp_state, 
+                user_request
+            )
+            
+            # 🆕 如果 LLM 检测到并提取了torch代码
+            if has_provided_task_code and extracted_task_code:
+                provided_task_code = extracted_task_code
+                op_name = extracted_op_name if extracted_op_name else 'custom_op'
+                
+                logger.info("🎯 LLM DETECTED & EXTRACTED TORCH TASK CODE")
+                logger.info(f"   Code completeness: {'COMPLETE ✓' if is_complete_code else 'PARTIAL (需要OpTaskBuilder验证)'}")
+                logger.info(f"   Code length: {len(provided_task_code)} characters")
+                logger.info(f"   Extracted op_name: {op_name}")
+                if extracted_op_description:
+                    logger.info(f"   Description: {extracted_op_description}")
+                
+                # 🔑 关键逻辑：只有完整代码 + action==confirm 才自动确认
+                if is_complete_code and action == "confirm":
+                    user_confirmed = True
+                    logger.info("   → Auto-confirm: User provided COMPLETE code and wants to generate triton")
+                elif action == "revise" or not is_complete_code:
+                    user_confirmed = False
+                    logger.info(f"   → Need OpTaskBuilder: {'User wants to revise' if action == 'revise' else 'Code is PARTIAL'}")
+                else:
+                    user_confirmed = False
+                    logger.info(f"   → Wait for confirmation: action={action}")
+            else:
+                # 没有检测到代码，这是正常的"生成算子"请求
+                logger.info("✓ No torch code detected, proceeding with normal workflow")
+                logger.info(f"   Action: {action}")
+                op_name = ''
+        except Exception as e:
+            logger.warning(f"Failed to analyze user action: {e}, treating as normal request")
+            user_confirmed = False
+            op_name = ''
+        
         # 初始化状态
         initial_state = {
             "user_request": user_request,
@@ -815,11 +967,20 @@ class MainOpAgent(AgentBase):
             "iteration": 0,
             "max_iterations": 10,
             "error_count": 0,
-            "user_confirmed": False,
+            "user_confirmed": user_confirmed,  # 🆕 根据 LLM 分析结果设置
             "should_continue": True,
             "available_workflows": self.available_workflows,
             "sub_workflow": "codeonly",  # 默认使用 codeonly
         }
+        
+        # 🆕 如果 LLM 提取并补充了完整的代码，将其添加到 initial_state
+        if provided_task_code and op_name:
+            initial_state["task_code"] = provided_task_code  # 🔑 关键：设置 LLM 提取/补充的代码
+            initial_state["op_name"] = op_name
+            initial_state["user_provided_complete_code"] = is_complete_code  # 🔑 标记代码是否完整
+            if 'extracted_op_description' in locals() and extracted_op_description:
+                initial_state["op_description"] = extracted_op_description
+            logger.info(f"✓ Set task_code in initial_state (length: {len(provided_task_code)} chars, complete={is_complete_code})")
         
         # 执行到用户确认节点
         result = await self.app.ainvoke(initial_state, {
@@ -893,9 +1054,24 @@ class MainOpAgent(AgentBase):
         
         # 如果 action 是 'auto'，使用 LLM 自动分析用户意图
         is_new_operator = False  # 默认不是新算子
+        has_provided_task_code = False  # 默认没有提供代码
+        is_complete_code = False  # 默认不完整
+        extracted_task_code = ''  # 默认空（LLM提取并补充的完整代码）
+        extracted_op_name = ''  # 默认空
+        extracted_op_description = ''  # 默认空
+        
         if action == "auto":
-            action, is_new_operator = await self._analyze_user_action(current_state, user_input)
-            logger.info(f"Auto-analyzed action: {action}, is_new_operator: {is_new_operator}")
+            # 🆕 调用统一的分析方法，返回 7 个值
+            action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(current_state, user_input)
+            logger.info(f"Auto-analyzed action: {action}")
+            logger.info(f"  - is_new_operator: {is_new_operator}")
+            logger.info(f"  - has_provided_task_code: {has_provided_task_code}")
+            if has_provided_task_code:
+                logger.info(f"  - is_complete_code: {is_complete_code}")
+            if extracted_task_code:
+                logger.info(f"  - extracted_task_code length: {len(extracted_task_code)} chars")
+            if extracted_op_name:
+                logger.info(f"  - extracted_op_name: {extracted_op_name}")
             
             # 检查LLM推理中是否提到子Agent
             if action == "retry_sub_agent" and not current_state.get("sub_workflow_specified_by_user"):
@@ -905,6 +1081,49 @@ class MainOpAgent(AgentBase):
                     logger.info(f"LLM detected: User wants '{llm_detected_sub_agent}' sub-agent")
                     current_state["sub_workflow"] = llm_detected_sub_agent
                     current_state["sub_workflow_specified_by_user"] = True
+            
+            # 🎯 处理用户直接提供 torch task 代码的情况
+            if has_provided_task_code and extracted_task_code:
+                # 🆕 使用 LLM 提取并补充的完整代码（而不是正则匹配）
+                provided_code = extracted_task_code
+                
+                # 使用 LLM 提取的算子信息（已经在 _analyze_user_action 中分析过了）
+                op_name = extracted_op_name if extracted_op_name else 'custom_op'
+                op_description = extracted_op_description if extracted_op_description else '用户提供的 torch task 代码'
+                
+                logger.info("=" * 80)
+                logger.info("🎯 LLM EXTRACTED & COMPLETED TORCH TASK CODE IN MULTI-TURN")
+                logger.info(f"   Code completeness: {'COMPLETE ✓' if is_complete_code else 'PARTIAL (需要OpTaskBuilder验证)'}")
+                logger.info(f"   Code length: {len(provided_code)} characters")
+                logger.info(f"   Extracted op_name: {op_name}")
+                logger.info(f"   Detected action: {action}")
+                logger.info("=" * 80)
+                
+                # 更新 task_code
+                current_state["task_code"] = provided_code
+                current_state["op_name"] = op_name  # 🆕 使用 LLM 分析得到的算子名称
+                current_state["op_description"] = op_description  # 🆕 使用 LLM 分析得到的描述
+                current_state["user_provided_complete_code"] = is_complete_code  # 🔑 标记代码是否完整
+                
+                # 🔑 根据 action 和 is_complete_code 决定下一步
+                if is_complete_code and action == "confirm":
+                    # 完整代码 + 用户要求生成 triton → 直接确认
+                    current_state["user_confirmed"] = True
+                    current_state["user_feedback"] = None
+                    logger.info("User provided COMPLETE code and wants to generate triton")
+                elif action == "revise" or not is_complete_code:
+                    # 用户要修改 OR 代码不完整 → 需要 OpTaskBuilder 处理
+                    current_state["user_confirmed"] = False
+                    current_state["user_feedback"] = user_input
+                    logger.info(f"Need OpTaskBuilder: {'User wants to revise' if action == 'revise' else 'Code is PARTIAL'}")
+                else:
+                    current_state["user_confirmed"] = False
+                    current_state["user_feedback"] = user_input
+                    logger.info(f"Wait for confirmation: action={action}")
+                
+                # 重置一些标志
+                current_state["retry_requested"] = False
+                current_state["retry_sub_agent_only"] = False
 
         if action == "confirm":
             # 用户确认，继续生成代码
