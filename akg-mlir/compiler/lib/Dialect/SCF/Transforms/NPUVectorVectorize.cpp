@@ -189,7 +189,7 @@ static Value createNeutralValue(
 
   if (ctx.isDynamic) {
     Value neutralScalar = ctx.builder.create<arith::ConstantOp>(
-        loc, neutralAttr.cast<TypedAttr>());
+        loc, mlir::cast<TypedAttr>(neutralAttr));
 
     npuvector::NPUVectorType vecType =
         npuvector::NPUVectorType::get({ShapedType::kDynamic}, elemType);
@@ -377,7 +377,7 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
     indices.push_back(newIdx);
   }
 
-  auto npuVecType = vectorValue.getType().dyn_cast<npuvector::NPUVectorType>();
+  auto npuVecType = mlir::dyn_cast<npuvector::NPUVectorType>(vectorValue.getType());
   if (!npuVecType) {
     llvm_unreachable("vectorizeStore: vector value must be NPUVectorType");
     return;
@@ -415,7 +415,7 @@ static Value vectorizeArithOp(Operation *op, VectorizationContext &ctx) {
       }
     }
 
-    if (!vecOperand.getType().isa<npuvector::NPUVectorType>()) {
+    if (!mlir::isa<npuvector::NPUVectorType>(vecOperand.getType())) {
       llvm_unreachable("vectorizeArithOp: all operands must be NPUVectorType");
     }
 
@@ -588,7 +588,7 @@ static void finalizeReduction(VectorizationContext &ctx) {
 
   Value vectorAcc = ctx.vecLoop.getResult(0);
 
-  auto npuVectorType = vectorAcc.getType().cast<npuvector::NPUVectorType>();
+  auto npuVectorType = mlir::cast<npuvector::NPUVectorType>(vectorAcc.getType());
   Type elemType = npuVectorType.getElementType();
 
   auto reductionOp = ctx.builder.create<npuvector::ReductionOp>(
