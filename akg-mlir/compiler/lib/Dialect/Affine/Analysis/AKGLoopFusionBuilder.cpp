@@ -15,6 +15,10 @@
  */
 
 #include "akg/Dialect/Affine/Analysis/AKGLoopFusionBuilder.h"
+
+#include <algorithm>
+#include <queue>
+
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
 
@@ -46,7 +50,6 @@ namespace mlir {
 namespace akg {
 
 using llvm::DenseMap;
-using llvm::outs;
 using llvm::raw_ostream;
 using llvm::SetVector;
 using llvm::SmallVector;
@@ -103,20 +106,6 @@ GroupPtr MemRefDependenceGraphForFusion::getGroup(unsigned groupId) {
 // Get group by node ID, returns nullptr if node is not in any group
 GroupPtr MemRefDependenceGraphForFusion::getGroupByNode(unsigned nodeId) {
   return nodeToGroup.find(nodeId) != nodeToGroup.end() ? nodeToGroup[nodeId] : nullptr;
-}
-
-// Get all groups that contain any of the specified nodes
-std::unordered_set<GroupPtr> MemRefDependenceGraphForFusion::getGroupsByNode(llvm::DenseSet<unsigned> nodeIds) {
-  std::unordered_set<GroupPtr> allgroups;
-  for (auto id : nodeIds) {
-    auto group = getGroupByNode(id);
-    if (group == nullptr) {
-      continue;
-    } else {
-      allgroups.insert(group);
-    }
-  }
-  return allgroups;
 }
 
 // Collect loop nest state from operations in the block
@@ -204,8 +193,8 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
       memrefAccesses[memref].insert(node.id);
       nodes.insert({node.id, node});
     } else if (op->getNumRegions() != 0 ||
-               isa<memref::AllocOp, arith::ConstantOp, affine::AffineApplyOp,
-                   affine::AffineYieldOp, func::ReturnOp>(op)) {
+               isa<memref::AllocOp, arith::ConstantOp, affine::AffineApplyOp, affine::AffineYieldOp, func::ReturnOp>(
+                 op)) {
       // Return false if another region is found (not currently supported).
       return;
     } else {
@@ -218,15 +207,91 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
   });
 }
 
+bool MemRefDependenceGraphForFusion::createEdges(const DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
+  // First call the base class method to create edges for producer-consumer relationships
+  if (!MemRefDependenceGraph::createEdges(memrefAccesses)) {
+    return false;
+  }
+
+  // Add edges for multiple loads from the same memref
+  // If multiple load statements in different loops load the same memref,
+  // build edges between the AffineLoadOp nodes according to id order
+  for (auto &memrefAndList : memrefAccesses) {
+    Value memref = memrefAndList.first;
+    const SetVector<unsigned> &nodeIds = memrefAndList.second;
+
+    // Only process if there are multiple nodes accessing this memref
+    if (nodeIds.size() < 2) {
+      continue;
+    }
+
+    // Collect all AffineLoadOp nodes that load this memref
+    SmallVector<unsigned> loadNodeIds;
+
+    for (unsigned nodeId : nodeIds) {
+      Node *node = getNode(nodeId);
+
+      // If the node itself is an AffineLoadOp and loads this memref
+      if (auto loadOpInterface = dyn_cast<affine::AffineReadOpInterface>(node->op)) {
+        if (loadOpInterface.getMemRef() == memref) {
+          loadNodeIds.push_back(nodeId);
+        }
+      } else if (isa<affine::AffineForOp>(node->op)) {
+        // If the node is an AffineForOp, check its internal loads
+        // Find all AffineLoadOp operations inside this loop that load this memref
+        for (Operation *loadOpInst : node->loads) {
+          if (auto loadOpInterface = dyn_cast<affine::AffineReadOpInterface>(loadOpInst)) {
+            if (loadOpInterface.getMemRef() == memref) {
+              // Check if this load operation has its own node
+              int loadNodeId = getNodeId(loadOpInst);
+              if (loadNodeId != -1) {
+                // This load has its own node, add it
+                if (std::find(loadNodeIds.begin(), loadNodeIds.end(), loadNodeId) == loadNodeIds.end()) {
+                  loadNodeIds.push_back(loadNodeId);
+                }
+              } else {
+                // This load doesn't have its own node (it's inside a loop)
+                // Create a node for it so we can add edges between AffineLoadOp nodes
+                Node loadNode(nextNodeId++, loadOpInst);
+                loadNode.loads.push_back(loadOpInst);
+                nodes.insert({loadNode.id, loadNode});
+                loadNodeIds.push_back(loadNode.id);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // If we found multiple load nodes, create edges between them
+    if (loadNodeIds.size() >= 2) {
+      // Sort by node id to ensure we process from smaller to larger
+      std::sort(loadNodeIds.begin(), loadNodeIds.end());
+
+      // Create edges from smaller id to larger id
+      for (unsigned i = 0; i < loadNodeIds.size(); ++i) {
+        for (unsigned j = i + 1; j < loadNodeIds.size(); ++j) {
+          unsigned srcId = loadNodeIds[i];
+          unsigned dstId = loadNodeIds[j];
+          // Add edge from smaller id to larger id
+          if (!hasEdge(srcId, dstId, memref)) {
+            addEdge(srcId, dstId, memref);
+          }
+        }
+      }
+    }
+  }
+  return true;
+}
+
 void MemRefDependenceGraphForFusion::print(raw_ostream &os) const {
   os << "MemRefDependenceGraphForFusion!!!\n";
   MemRefDependenceGraph::print(os);
   for (auto it : groups) {
     auto g = it.second;
     std::string groupTemplateString = g->getGroupTemplateString();
-    os << "Group " << g->groupId << " (GroupTemplate " << groupTemplateString
-       << ") IsGlobalOut (" << g->isGlobalOut << ") root is " << g->rootId
-       << " has " << g->nodesId.size() << " nodes inside: [";
+    os << "Group " << g->groupId << " (GroupTemplate " << groupTemplateString << ") IsGlobalOut (" << g->isGlobalOut
+       << ") root is " << g->rootId << " has " << g->nodesId.size() << " nodes inside: [";
     for (auto nid : g->nodesId) {
       os << nid << ", ";
     }
@@ -305,66 +370,67 @@ int MemRefDependenceGraphForFusion::getMemrefSourceOfNode(unsigned id) {
   return -1;
 }
 
-// Check if a node represents a global memory reference
-// Global memrefs are those that write to function arguments or have specific patterns
-// Case1: Direct store to function argument (global output)
-//   affine.store %2, %arg3[%arg4] : memref<15xf32>  --> return true
-// Case2: Store to local alloc followed by load and store to global
-//   affine.for ...
-//     affine.store ..., %alloc_2[] : memref<f32>  --> return true
-//   %1 = affine.load %alloc_2[] : memref<f32>
-//   affine.store %1, %arg2[0] : memref<1xf32>
-bool MemRefDependenceGraphForFusion::isGlobalMemref(unsigned id) {
-  // Get the operation for this node
-  auto op = getNode(id)->op;
-  if (!op) {
+// Gets all dependent groups (predecessor groups) of a given group.
+std::vector<unsigned> MemRefDependenceGraphForFusion::getDependentGroups(unsigned groupId) {
+  std::vector<unsigned> depGroups;
+  auto group = getGroup(groupId);
+  if (group == nullptr) {
+    return depGroups;
+  }
+
+  for (auto nodeId : group->nodesId) {
+    std::vector<unsigned> predecessorIds;
+    bool isLoad = isa<affine::AffineLoadOp>(getNode(nodeId)->op);
+    getPredecessorNodes(nodeId, predecessorIds);
+    for (auto predId : predecessorIds) {
+      if (isLoad && isa<affine::AffineLoadOp>(getNode(predId)->op)) {
+        continue;
+      }
+      auto predGroup = getGroupByNode(predId);
+      if (predGroup != nullptr && predGroup->groupId != groupId) {
+        if (std::find(depGroups.begin(), depGroups.end(), predGroup->groupId) == depGroups.end()) {
+          depGroups.push_back(predGroup->groupId);
+        }
+      }
+    }
+  }
+  return depGroups;
+}
+
+// Checks if fromGroupId is a direct or indirect dependency of toGroupId in the dependency graph.
+bool MemRefDependenceGraphForFusion::isDependencyInGraph(unsigned fromGroupId, unsigned toGroupId) {
+  auto toGroup = getGroup(toGroupId);
+  if (toGroup == nullptr) {
     return false;
   }
+  // Get all predecessor nodes of to
+  std::unordered_set<unsigned> visited;
+  std::queue<unsigned> queue;
 
-  // Must be a store operation
-  auto write = dyn_cast<affine::AffineStoreOp>(op);
-  if (!write) {
-    return false;
+  // Initialize: add all predecessor nodes of to to the queue
+  auto toDepGroups = getDependentGroups(toGroupId);
+  for (auto depGroupId : toDepGroups) {
+    if (visited.insert(depGroupId).second) {
+      queue.push(depGroupId);
+    }
   }
 
-  // Get the memref being written to
-  auto memref = write.getMemref();
-  if (!memref) {
-    return false;
-  }
+  // BFS traverse all predecessor groups
+  while (!queue.empty()) {
+    unsigned currentGroupId = queue.front();
+    queue.pop();
 
-  // Case1: Direct store to function argument (no defining operation)
-  if (!memref.getDefiningOp()) {
-    return true;
-  }
-
-  // Case2: Check for local alloc -> load -> global store pattern
-  std::vector<unsigned> successorIds;
-  getSuccessorNodes(id, successorIds);
-
-  // 1. Must have exactly one successor
-  if (successorIds.size() != 1) {
-    return false;
-  }
-
-  // 2. Successor must be a load operation
-  auto writeTo = getNode(successorIds.back())->op;
-  if (!writeTo || !isa<affine::AffineLoadOp>(writeTo)) {
-    return false;
-  }
-
-  // 3. Load must have exactly one successor
-  std::vector<unsigned> grandchild;
-  getSuccessorNodes(successorIds.back(), grandchild);
-  if (grandchild.size() != 1) {
-    return false;
-  }
-
-  // 4. Grandchild must be a store to global memory
-  if (auto store = dyn_cast<affine::AffineStoreOp>(getNode(grandchild.back())->op)) {
-    auto storemem = store.getMemref();
-    if (!storemem.getDefiningOp()) {
+    // If from is found, it means from is a dependency of to
+    if (currentGroupId == fromGroupId) {
       return true;
+    }
+
+    // Continue searching for predecessors of the current group
+    auto currentDepGroups = getDependentGroups(currentGroupId);
+    for (auto depGroupId : currentDepGroups) {
+      if (visited.insert(depGroupId).second) {
+        queue.push(depGroupId);
+      }
     }
   }
 
@@ -379,45 +445,254 @@ unsigned FusionCodeGenHelper::getAliasId(unsigned srcId) {
   while (nodeAlias.find(currentId) != nodeAlias.end()) {
     if (visited.count(currentId)) {
       // Circular alias detected, break to avoid infinite loop
-      llvm::outs() << "Warning: Circular alias detected for node " << srcId << "\n";
       break;
     }
     visited.insert(currentId);
     currentId = nodeAlias[currentId];
   }
 
-  if (currentId != srcId) {
-    llvm::outs() << "Find alias chain " << srcId << " -> " << currentId << "\n";
-  }
-
   return currentId;
 }
 
+// Collect all loops in a loop nest starting from the given loop
+// This includes the loop itself and all nested loops, ordered from outermost to innermost
+static void collectLoopNest(affine::AffineForOp rootLoop, SmallVector<affine::AffineForOp, 4> &loops) {
+  loops.clear();
+
+  // First, collect all parent loops (from outermost to the root loop's parent)
+  SmallVector<affine::AffineForOp, 4> parentLoops;
+  affine::getAffineForIVs(*rootLoop, &parentLoops);
+  loops.append(parentLoops.begin(), parentLoops.end());
+
+  // Then add the root loop itself
+  loops.push_back(rootLoop);
+
+  // Finally, recursively collect nested loops in depth-first order
+  std::function<void(affine::AffineForOp)> collectNested = [&](affine::AffineForOp loop) {
+    for (auto &op : *loop.getBody()) {
+      if (auto nestedLoop = dyn_cast<affine::AffineForOp>(op)) {
+        loops.push_back(nestedLoop);
+        collectNested(nestedLoop);
+      }
+    }
+  };
+  collectNested(rootLoop);
+}
+
+// Check if two loops have the same structure (same nesting depth and same bounds)
+static bool hasSameLoopStructure(SmallVector<affine::AffineForOp, 4> srcLoops,
+                                 SmallVector<affine::AffineForOp, 4> dstLoops) {
+  // Check if they have the same nesting depth
+  if (srcLoops.size() != dstLoops.size()) {
+    return false;
+  }
+
+  // Check if corresponding loops have the same bounds
+  for (unsigned i = 0; i < srcLoops.size(); ++i) {
+    auto srcLoop = srcLoops[i];
+    auto dstLoop = dstLoops[i];
+
+    // Check step
+    if (srcLoop.getStep() != dstLoop.getStep()) {
+      return false;
+    }
+
+    // Check lower bound maps
+    auto srcLbMap = srcLoop.getLowerBoundMap();
+    auto dstLbMap = dstLoop.getLowerBoundMap();
+    if (srcLbMap != dstLbMap) {
+      return false;
+    }
+
+    // Check upper bound maps
+    auto srcUbMap = srcLoop.getUpperBoundMap();
+    auto dstUbMap = dstLoop.getUpperBoundMap();
+    if (srcUbMap != dstUbMap) {
+      return false;
+    }
+
+    // Check operands (bounds may depend on different values, but maps should match)
+    auto srcLbOperands = srcLoop.getLowerBoundOperands();
+    auto dstLbOperands = dstLoop.getLowerBoundOperands();
+    if (srcLbOperands.size() != dstLbOperands.size()) {
+      return false;
+    }
+
+    auto srcUbOperands = srcLoop.getUpperBoundOperands();
+    auto dstUbOperands = dstLoop.getUpperBoundOperands();
+    if (srcUbOperands.size() != dstUbOperands.size()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+// Overloaded version: Check if two single loops have the same structure
+static bool hasSameLoopStructure(affine::AffineForOp srcLoop, affine::AffineForOp dstLoop) {
+  SmallVector<affine::AffineForOp, 4> srcLoops;
+  collectLoopNest(srcLoop, srcLoops);
+  SmallVector<affine::AffineForOp, 4> dstLoops;
+  collectLoopNest(dstLoop, dstLoops);
+  return hasSameLoopStructure(srcLoops, dstLoops);
+}
+
+// Create ComputationSliceState for loops with same structure but no dependencies
+// This creates a slice state that represents the full loop bounds (no slicing)
+// For loops without dependencies, the source loop should execute completely for each
+// iteration of the destination loop at the fusion depth
+static bool createSliceStateForSameStructure(affine::AffineForOp srcForOp, affine::AffineForOp dstForOp,
+                                             unsigned loopDepth, affine::ComputationSliceState *sliceState) {
+  // Get loop nests (including the loops themselves)
+  SmallVector<affine::AffineForOp, 4> srcLoops;
+  collectLoopNest(srcForOp, srcLoops);
+  SmallVector<affine::AffineForOp, 4> dstLoops;
+  collectLoopNest(dstForOp, dstLoops);
+
+  if (loopDepth == 0 || loopDepth > dstLoops.size() || loopDepth > srcLoops.size()) {
+    return false;
+  }
+
+  // Check if src precedes dst in the block
+  bool isSrcBeforeDst = srcForOp->isBeforeInBlock(dstForOp);
+
+  // Clear the slice state
+  sliceState->clearBounds();
+  sliceState->ivs.clear();
+
+  // For fusion, we need to slice the source loop nest starting from loopDepth
+  // The slice should represent the full iteration space of source loops
+  unsigned numSliceLoops = srcLoops.size() - (loopDepth - 1);
+  if (numSliceLoops == 0) {
+    return false;
+  }
+
+  // Get the slice loop IVs (from loopDepth-1 to innermost of src)
+  for (unsigned i = loopDepth - 1; i < srcLoops.size(); ++i) {
+    sliceState->ivs.push_back(srcLoops[i].getInductionVar());
+  }
+
+  // Set up bounds - use the original source loop bounds
+  unsigned numSliceLoopIVs = sliceState->ivs.size();
+  sliceState->lbs.resize(numSliceLoopIVs);
+  sliceState->ubs.resize(numSliceLoopIVs);
+
+  // Collect bound operands from outer loops (up to loopDepth-1)
+  // These will be used as symbols in the slice bounds
+  SmallVector<Value, 4> outerBoundOperands;
+  for (unsigned i = 0; i < loopDepth - 1; ++i) {
+    auto lbOps = dstLoops[i].getLowerBoundOperands();
+    auto ubOps = dstLoops[i].getUpperBoundOperands();
+    outerBoundOperands.append(lbOps.begin(), lbOps.end());
+    outerBoundOperands.append(ubOps.begin(), ubOps.end());
+  }
+
+  // Set bounds for each slice loop
+  // For loops with same structure, we need to ensure that AffineMaps and operands match
+  // The key issue is that AffineMap's symbol indices must match the operands order
+  sliceState->lbOperands.resize(numSliceLoopIVs);
+  sliceState->ubOperands.resize(numSliceLoopIVs);
+
+  // Check if all source loops have the same bound operands
+  // If they do, we can use source loop's maps and operands directly
+  bool allOperandsMatch = true;
+  auto firstSrcLoop = srcLoops[loopDepth - 1];
+  auto firstLbOps = firstSrcLoop.getLowerBoundOperands();
+  auto firstUbOps = firstSrcLoop.getUpperBoundOperands();
+
+  for (unsigned i = 1; i < numSliceLoopIVs; ++i) {
+    auto srcLoop = srcLoops[loopDepth - 1 + i];
+    auto lbOps = srcLoop.getLowerBoundOperands();
+    auto ubOps = srcLoop.getUpperBoundOperands();
+
+    if (lbOps.size() != firstLbOps.size() || ubOps.size() != firstUbOps.size()) {
+      allOperandsMatch = false;
+      break;
+    }
+    for (unsigned j = 0; j < lbOps.size(); ++j) {
+      if (lbOps[j] != firstLbOps[j]) {
+        allOperandsMatch = false;
+        break;
+      }
+    }
+    if (!allOperandsMatch) break;
+    for (unsigned j = 0; j < ubOps.size(); ++j) {
+      if (ubOps[j] != firstUbOps[j]) {
+        allOperandsMatch = false;
+        break;
+      }
+    }
+    if (!allOperandsMatch) break;
+  }
+
+  if (!allOperandsMatch) {
+    // If operands don't match, we cannot safely create slice state
+    // Return false to skip this fusion depth
+    return false;
+  }
+
+  // Build unified operands list
+  // For same-structure loops, we use source loop's maps and their original operands
+  // The maps expect these specific operands in this specific order
+  // We don't add outer loop IVs here because the maps may not expect them as symbols
+  SmallVector<Value, 4> unifiedLbOperands;
+  SmallVector<Value, 4> unifiedUbOperands;
+
+  // Use source loop's bound operands directly (all loops have the same operands)
+  // This ensures the AffineMap's symbol indices match the operands
+  unifiedLbOperands.append(firstLbOps.begin(), firstLbOps.end());
+  unifiedUbOperands.append(firstUbOps.begin(), firstUbOps.end());
+
+  // Set bounds for each slice loop using source loop's maps
+  // All lbOperands and ubOperands must be the same (as required by getAsConstraints)
+  for (unsigned i = 0; i < numSliceLoopIVs; ++i) {
+    auto srcLoop = srcLoops[loopDepth - 1 + i];
+
+    // Use source loop's maps since slice IVs are from source loops
+    // and maps must match their original operands to avoid symbol index mismatches
+    sliceState->lbs[i] = srcLoop.getLowerBoundMap();
+    sliceState->ubs[i] = srcLoop.getUpperBoundMap();
+
+    // All operands must be the same for all loops (as per getAsConstraints requirement)
+    // Use source loop's original operands to match the maps
+    sliceState->lbOperands[i] = unifiedLbOperands;
+    sliceState->ubOperands[i] = unifiedUbOperands;
+  }
+
+  // Set insertion point in destination loop
+  if (isSrcBeforeDst) {
+    // Forward slice: insert at the end of the destination loop at loopDepth-1
+    sliceState->insertPoint = std::prev(dstLoops[loopDepth - 1].getBody()->end());
+  } else {
+    // Backward slice: insert at the beginning of the destination loop at loopDepth-1
+    sliceState->insertPoint = dstLoops[loopDepth - 1].getBody()->begin();
+  }
+
+  return true;
+}
+
 static unsigned findMaxLegalFusionDepth(affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
-                                         unsigned dstLoopDepthTest, const affine::FusionStrategy &strategy,
-                                         llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions) {
+                                        unsigned dstLoopDepthTest, const affine::FusionStrategy &strategy,
+                                        llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions) {
   depthSliceUnions.clear();
   depthSliceUnions.resize(dstLoopDepthTest);
   unsigned maxLegalFusionDepth = 0;
+
+  // Try normal fusion with dependencies
   for (unsigned i = 1; i <= dstLoopDepthTest; ++i) {
     affine::FusionResult result = canFuseLoops(srcAffineForOp, dstAffineForOp,
                                                /*dstLoopDepth=*/i, &depthSliceUnions[i - 1], strategy);
 
     if (result.value == affine::FusionResult::Success) {
       maxLegalFusionDepth = i;
-      llvm::outs() << "fuseNodes to maxLegalFusionDepth " << maxLegalFusionDepth << "\n";
     }
   }
+
   return maxLegalFusionDepth;
 }
 
-void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId,
-                                   affine::AffineForOp sibAffineForOp,
-                                   affine::AffineForOp dstAffineForOp,
-                                   unsigned maxLegalFusionDepth,
-                                   unsigned dstLoopDepthTest) {
-  // dstId = getAliasId(dstId);
-  llvm::outs() << "Perform V Fusion at " << srcId << " to " << dstId << "\n";
+void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
+                                  affine::AffineForOp dstAffineForOp) {
   auto *dstNode = mdg.getNode(dstId);
   mlir::Value memref;
   for (auto op : dstNode->loads) {
@@ -429,42 +704,40 @@ void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId,
       memref = loadOp.getMemRef();
     }
   }
+
+  unsigned dstLoopDepthTest = 0;
+  dstAffineForOp.walk([&](mlir::affine::AffineForOp op) { dstLoopDepthTest++; });
+
+  SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
+  unsigned maxLegalFusionDepth = 0;
   if (memref) {
-    SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
     affine::FusionStrategy strategy(memref);
-    maxLegalFusionDepth = findMaxLegalFusionDepth(sibAffineForOp, dstAffineForOp, dstLoopDepthTest,
-                                                  strategy, depthSliceUnions);
-
-    if (maxLegalFusionDepth == 0 || depthSliceUnions[maxLegalFusionDepth - 1].isEmpty()) {
-      affine::FusionStrategy new_strategy(affine::FusionStrategy::ProducerConsumer);
-      maxLegalFusionDepth = findMaxLegalFusionDepth(sibAffineForOp, dstAffineForOp, dstLoopDepthTest,
-                                                    new_strategy, depthSliceUnions);
-    }
-    // Skip if fusion is not feasible at any loop depths.
-    if (maxLegalFusionDepth == 0) {
-      llvm::outs() << "fusion is not feasible at any loop depths.\n";
-      return;
-    }
-
-    unsigned bestDstLoopDepth = maxLegalFusionDepth;
-    assert(bestDstLoopDepth > 0 && "Unexpected loop fusion depth");
-    assert(!depthSliceUnions[bestDstLoopDepth - 1].isEmpty() && "Fusion depth has no computed slice union");
-    bool isInnermostInsertion = true;  //?
-    fuseLoops(sibAffineForOp, dstAffineForOp, depthSliceUnions[bestDstLoopDepth - 1], isInnermostInsertion);
-    sibAffineForOp.erase();
-    nodeAlias[srcId] = dstId;
+    maxLegalFusionDepth =
+      findMaxLegalFusionDepth(srcAffineForOp, dstAffineForOp, dstLoopDepthTest, strategy, depthSliceUnions);
+  } else {
+    // No memref found, try generic strategy for structure-based fusion
+    affine::FusionStrategy strategy(affine::FusionStrategy::Generic);
+    maxLegalFusionDepth =
+      findMaxLegalFusionDepth(srcAffineForOp, dstAffineForOp, dstLoopDepthTest, strategy, depthSliceUnions);
   }
+
+  // Skip if fusion is not feasible at any loop depths.
+  if (maxLegalFusionDepth == 0) {
+    doIFuse(srcId, dstId, srcAffineForOp, dstAffineForOp);
+    return;
+  }
+
+  unsigned bestDstLoopDepth = maxLegalFusionDepth;
+  assert(bestDstLoopDepth > 0 && "Unexpected loop fusion depth");
+  affine::ComputationSliceState &bestSlice = depthSliceUnions[bestDstLoopDepth - 1];
+  assert(!bestSlice.isEmpty() && "Fusion depth has no computed slice union");
+  fuseLoops(srcAffineForOp, dstAffineForOp, bestSlice, true);
+  srcAffineForOp.erase();
+  nodeAlias[srcId] = dstId;
 }
 
 void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
                                   affine::AffineForOp dstAffineForOp) {
-  // dstId = getAliasId(dstId);
-  llvm::outs() << "Perform H Fusion at " << srcId << " to " << dstId << "\n";
-  auto *srcNode = mdg.getNode(srcId);
-  auto *dstNode = mdg.getNode(dstId);
-  mlir::DenseSet<mlir::Value> producerConsumerMemrefs;
-  affine::gatherProducerConsumerMemrefs(srcNode->stores, dstNode->loads, producerConsumerMemrefs);
-
   unsigned dstLoopDepthTest = 0;
   dstAffineForOp.walk([&](affine::AffineForOp op) { dstLoopDepthTest++; });
 
@@ -472,53 +745,112 @@ void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::Affine
   // at loop depths in range [1, dstLoopDepthTest].
   SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
   affine::FusionStrategy strategy(affine::FusionStrategy::ProducerConsumer);
-  unsigned maxLegalFusionDepth = findMaxLegalFusionDepth(srcAffineForOp, dstAffineForOp, dstLoopDepthTest,
-                                                         strategy, depthSliceUnions);
+  unsigned maxLegalFusionDepth =
+    findMaxLegalFusionDepth(srcAffineForOp, dstAffineForOp, dstLoopDepthTest, strategy, depthSliceUnions);
 
   if (maxLegalFusionDepth == 0) {
-    llvm::outs() << "Can't fuse: fusion is not legal at any depth\n";
+    doIFuse(srcId, dstId, srcAffineForOp, dstAffineForOp);
     return;
   }
-  llvm::outs() << "Final maxLegalFusionDepth: " << maxLegalFusionDepth << "\n";
 
   unsigned bestDstLoopDepth = maxLegalFusionDepth;
-  // Retrieve producer stores from the src loop.
-  SmallVector<Operation *, 2> producerStores;
-  for (Operation *op : srcNode->stores) {
-    if (producerConsumerMemrefs.count(cast<affine::AffineWriteOpInterface>(op).getMemRef())) {
-      producerStores.push_back(op);
-    }
-  }
-
-  // TODO(hjh): Support multiple producer stores in profitability
-  // analysis. We limit profitability analysis to only scenarios with
-  // a single producer store for now. Note that some multi-store
-  // producer scenarios will still go through profitability analysis
-  // if only one of the stores is involved the producer-consumer
-  // relationship of the candidate loops.
-  if (producerStores.empty()) {
-    llvm::outs() << "TODO: remove this into analysis part.\n";
-    doVFuse(srcId, dstId, srcAffineForOp, dstAffineForOp, maxLegalFusionDepth, dstLoopDepthTest);
-    return;
-  }
-  assert(!producerStores.empty() && "Expected producer store");
-  if (producerStores.size() > 1) {
-    llvm::outs() << "Skipping profitability analysis. Not supported for this case\n";
-  }
-
   assert(bestDstLoopDepth > 0 && "Unexpected loop fusion depth");
   affine::ComputationSliceState &bestSlice = depthSliceUnions[bestDstLoopDepth - 1];
-  if (bestSlice.isEmpty()) {
-    return;
-  }
   assert(!bestSlice.isEmpty() && "Missing slice union for depth");
-
   fuseLoops(srcAffineForOp, dstAffineForOp, bestSlice);
 
   // srcNode is no longer valid after it is removed from mdg.
   srcAffineForOp.erase();
-  // mdg.removeNode(srcId);
-  // srcNode = nullptr;
+  nodeAlias[srcId] = dstId;
+}
+
+// Helper function to perform loop fusion at a specific depth
+// This function handles the common logic of cloning operations from source to destination loops
+static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcLoops,
+                              SmallVector<affine::AffineForOp, 4> dstLoops, unsigned bestDstLoopDepth) {
+  // Create IRMapping to map source loop IVs to destination loop IVs
+  IRMapping mapper;
+  for (unsigned i = 0; i < bestDstLoopDepth && i < srcLoops.size() && i < dstLoops.size(); ++i) {
+    mapper.map(srcLoops[i].getInductionVar(), dstLoops[i].getInductionVar());
+  }
+
+  // Recursively clone operations from source loop body to destination loop body
+  // This function handles nested loops by merging their operations
+  std::function<void(affine::AffineForOp, affine::AffineForOp)> cloneLoopBody = [&](affine::AffineForOp srcLoop,
+                                                                                    affine::AffineForOp dstLoop) {
+    // Map the induction variables
+    mapper.map(srcLoop.getInductionVar(), dstLoop.getInductionVar());
+
+    // Set insertion point at the end of destination loop body (before terminator)
+    OpBuilder builder(dstLoop.getBody(), std::prev(dstLoop.getBody()->end()));
+
+    // Clone all operations from source loop body to destination loop body
+    for (Operation &op : srcLoop.getBody()->getOperations()) {
+      // Skip the terminator (affine.yield)
+      if (isa<affine::AffineYieldOp>(op)) {
+        continue;
+      }
+
+      // Handle nested loops - find corresponding loop in destination and merge operations
+      if (auto nestedSrcFor = dyn_cast<affine::AffineForOp>(op)) {
+        // Find corresponding nested loop in destination with same structure
+        affine::AffineForOp correspondingDstLoop;
+        for (auto &dstOp : dstLoop.getBody()->getOperations()) {
+          if (auto dstFor = dyn_cast<affine::AffineForOp>(dstOp)) {
+            // Check if loops have same structure (same bounds)
+            if (hasSameLoopStructure(nestedSrcFor, dstFor)) {
+              correspondingDstLoop = dstFor;
+              break;
+            }
+          }
+        }
+
+        if (correspondingDstLoop) {
+          // Found corresponding loop - merge operations from nested source loop
+          // into the corresponding destination loop (recursive call)
+          cloneLoopBody(nestedSrcFor, correspondingDstLoop);
+        } else {
+          // No corresponding loop found - clone the entire nested loop
+          builder.clone(op, mapper);
+        }
+      } else {
+        // Clone regular operations
+        builder.clone(op, mapper);
+      }
+    }
+  };
+
+  // Get the destination loop at fusion depth
+  affine::AffineForOp targetLoop = dstLoops[bestDstLoopDepth - 1];
+
+  // Get the corresponding source loop
+  affine::AffineForOp sourceLoop = srcLoops[bestDstLoopDepth - 1];
+
+  // Clone operations from source loop body to destination loop body
+  cloneLoopBody(sourceLoop, targetLoop);
+}
+
+void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
+                                  affine::AffineForOp dstAffineForOp) {
+  // Collect loop nests to determine fusion depth
+  SmallVector<affine::AffineForOp, 4> srcLoops;
+  collectLoopNest(srcAffineForOp, srcLoops);
+  SmallVector<affine::AffineForOp, 4> dstLoops;
+  collectLoopNest(dstAffineForOp, dstLoops);
+
+  // Check if loops have the same structure - if so, fuse directly without slice state checks
+  if (!hasSameLoopStructure(srcLoops, dstLoops)) {
+    return;
+  }
+
+  // For same-structure loops, use the full depth for fusion
+  unsigned bestDstLoopDepth = dstLoops.size();
+  assert(bestDstLoopDepth > 0 && "Unexpected loop fusion depth");
+
+  // Perform fusion using the helper function
+  performLoopFusion(srcLoops, dstLoops, bestDstLoopDepth);
+
+  srcAffineForOp.erase();
   nodeAlias[srcId] = dstId;
 }
 
