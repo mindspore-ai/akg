@@ -24,7 +24,7 @@ namespace mlir {
 // If the original encoding is empty or non-DictionaryAttr, initialize it.
 // We expect the mlir community to have a conventional rule that the attr is a dictionary and
 // different types of NamedAttributes do not interfere with each other.
-RankedTensorType updateTensorEncodingAttr(RankedTensorType origin, NamedAttribute &attr);
+Type updateTypeSymbolAttr(Type origin, NamedAttribute &attr);
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_ANALYSIS_TYPEUTILS_H_

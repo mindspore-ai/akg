@@ -21,12 +21,17 @@
 #include "mlir/IR/OperationSupport.h"
 
 namespace mlir {
-// append namedAttribute to origin type's encoding
-RankedTensorType updateTensorEncodingAttr(RankedTensorType origin, NamedAttribute &attr) {
+// append namedAttribute to origin type's attr
+Type updateTypeSymbolAttr(Type origin, NamedAttribute &attr) {
   if (!origin) {
     return origin;
   }
-  DictionaryAttr dict = dyn_cast_or_null<DictionaryAttr>(origin.getEncoding());
+  mlir::DictionaryAttr dict;
+  if (auto tensorType = dyn_cast<RankedTensorType>(origin)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
+  } else if (auto memRefType = dyn_cast<MemRefType>(origin)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  }
   if (!dict) {
     // If the original encoding is empty or non-DictionaryAttr, initialize it.
     llvm::SmallVector<NamedAttribute> namedAttrs{attr};
@@ -40,7 +45,12 @@ RankedTensorType updateTensorEncodingAttr(RankedTensorType origin, NamedAttribut
     attrList.append(attr);
     dict = attrList.getDictionary(attr.getValue().getContext());
   }
-  return RankedTensorType::get(origin.getShape(), origin.getElementType(), dict);
+  if (auto tensorType = dyn_cast<RankedTensorType>(origin)) {
+    return RankedTensorType::get(tensorType.getShape(), tensorType.getElementType(), dict);
+  } else if (auto memRefType = dyn_cast<MemRefType>(origin)) {
+    return MemRefType::get(memRefType.getShape(), memRefType.getElementType(), AffineMap{}, dict);
+  }
+  return origin;
 }
 
 }  // namespace mlir

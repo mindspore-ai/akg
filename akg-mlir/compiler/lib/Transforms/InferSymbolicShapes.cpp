@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,26 +14,27 @@
  * limitations under the License.
  */
 
+#include <optional>
+#include <string>
+#include <numeric>
+
 #include "llvm/Support/FormatVariadic.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Tosa/Transforms/Passes.h"
 #include "mlir/Dialect/Tosa/Utils/ShapeUtils.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Transforms/Passes.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
-
-#include <optional>
-#include <string>
 #include "symengine/expression.h"
 
 namespace mlir {
@@ -45,10 +46,7 @@ namespace mlir {
 #endif
 #endif
 }  // namespace mlir
-using namespace akgglobal;
-using namespace mlir;
-using namespace mlir::tosa;
-using namespace mlir::mindspore;
+namespace mlir {
 namespace {
 static const SymEngine::Expression constOneExpr = 1;
 static const SymEngine::Expression constZeroExpr = 0;
@@ -171,10 +169,8 @@ static std::optional<llvm::SmallVector<std::string>> GetInferenceShape(const llv
   // (n, m) + (1) => (n, m)
   // (n, m, k) + (1, 1) => (n, m, k)
   auto isShortShapeAllOne = [&](const llvm::SmallVector<std::string> &shortShape) -> bool {
-    for (auto u : shortShape) {
-      if (u != "1") {
-        return false;
-      }
+    if (std::any_of(shortShape.begin(), shortShape.end(), [](std::string u) { return u != std::string("1"); })) {
+      return false;
     }
     return true;
   };
@@ -214,6 +210,73 @@ static std::optional<llvm::SmallVector<std::string>> GetInferenceShape(const llv
   assert(resShape.size() == longRank);
   return resShape;
 }
+
+struct PropagateMemRefDimOp : public OpRewritePattern<memref::DimOp> {
+  using OpRewritePattern<memref::DimOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(memref::DimOp op, PatternRewriter &rewriter) const override {
+    SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
+    mlir::Value srcVal = op.getSource();
+    if (analysis.hasSymbolicShape(srcVal.getType())) {
+      return success();
+    }
+    srcVal.setType(analysis.createNewSymbolicShape(srcVal.getType()));
+    return success();
+  }
+};
+
+struct PropagateMemRefAllocOp : public OpRewritePattern<memref::AllocOp> {
+  using OpRewritePattern<memref::AllocOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(memref::AllocOp op, PatternRewriter &rewriter) const override {
+    SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
+    mlir::Value resVal = op.getResult();
+    if (analysis.hasSymbolicShape(resVal.getType())) {
+      return success();
+    }
+    resVal.setType(analysis.createNewSymbolicShape(resVal.getType()));
+    std::optional<llvm::SmallVector<std::string>> symShape = analysis.getSymbolicShape(resVal.getType());
+    if (!symShape) {
+      return success();
+    }
+    int64_t ctr = 0;
+    for (int64_t i = 0, e = op.getType().getRank(); i < e; ++i) {
+      if (op.getType().isDynamicDim(i)) {
+        auto dim = op.getDynamicSizes()[ctr++];
+        if (auto dimOp = dyn_cast<memref::DimOp>(dim.getDefiningOp())) {
+          if (auto cop = dyn_cast<arith::ConstantOp>(dimOp.getIndex().getDefiningOp())) {
+            if (auto attr = dyn_cast<IntegerAttr>(cop.getValue())) {
+              std::optional<llvm::SmallVector<std::string>> srcSymShape =
+                analysis.getSymbolicShape(dimOp.getSource().getType());
+              (*symShape)[i] = (*srcSymShape)[attr.getInt()];
+            }
+          }
+        }
+      }
+    }
+    resVal.setType(analysis.updateSymbolicShape(resVal.getType(), *symShape));
+    return success();
+  }
+};
+
+template <typename OpTy>
+struct PropagateSameOprandsAndResultsShapeLinalgOp : public OpRewritePattern<OpTy> {
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+  LogicalResult matchAndRewrite(OpTy op, PatternRewriter &rewriter) const override {
+    SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
+    // operand0
+    mlir::Value opnd0 = op.getOperation()->getOperands()[0];
+    opnd0.setType(analysis.createNewSymbolicShape(opnd0.getType()));
+    std::optional<NamedAttribute> namedAttr = analysis.getSymbolShapeNamedAttr(opnd0.getType());
+    if (!namedAttr) {
+      return success();
+    }
+    // operand1~n
+    for (uint i = 1; i < op.getOperation()->getOperands().size(); i++) {
+      mlir::Value opndN = op.getOperation()->getOperands()[i];
+      opndN.setType(analysis.updateSymbolicShape(opndN.getType(), *namedAttr));
+    }
+    return success();
+  }
+};
 
 template <typename OpTy>
 struct PropagateElementWiseOp : public OpRewritePattern<OpTy> {
@@ -283,7 +346,7 @@ struct PropagateElementWiseOp : public OpRewritePattern<OpTy> {
       }
       //            or (?) + (4) => (4)
       if (cast<ShapedType>(opnd1.getType()).getShape()[i] > 1 &&
-         cast<ShapedType>( opnd0.getType()).getShape()[i] == ShapedType::kDynamic) {
+          cast<ShapedType>(opnd0.getType()).getShape()[i] == ShapedType::kDynamic) {
         (void)symShape.emplace_back(std::to_string(cast<ShapedType>(opnd1.getType()).getShape()[i]));
         continue;
       }
@@ -367,10 +430,9 @@ struct PropagateMindSporeReshapeOp : public OpRewritePattern<mindspore::ReshapeO
     std::optional<llvm::SmallVector<std::string>> opndShape = analysis.getSymbolicShape(opnd.getType());
     std::optional<llvm::SmallVector<std::string>> resShape = analysis.getSymbolicShape(resVal.getType());
 
-    std::string intermediateShape("1");
-    for (auto sym : *opndShape) {
-      intermediateShape += "*" + sym;
-    }
+    std::string intermediateShape =
+      std::accumulate((*opndShape).begin(), (*opndShape).end(), std::string("1"),
+                      [](const std::string &a, const std::string &b) { return a + "*" + b; });
     uint dimIdx = 0, inferDim = 0;
     for (auto sym : *resShape) {
       if (cast<ShapedType>(resVal.getType()).getShape()[dimIdx] == ShapedType::kDynamic) {
@@ -483,6 +545,8 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
 
     // 2.infer symbolic shapes in mlir
     // Add the generated patterns to the list.
+    (void)patterns.add<PropagateMemRefDimOp>(ctx);
+    (void)patterns.add<PropagateMemRefAllocOp>(ctx);
     (void)patterns.add<PropagateElementWiseOp<mindspore::AddOp>>(ctx);
     (void)patterns.add<PropagateElementWiseOp<mindspore::SubOp>>(ctx);
     (void)patterns.add<PropagateElementWiseOp<mindspore::MulOp>>(ctx);
@@ -494,6 +558,8 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
     (void)patterns.add<PropagateMindsporeReduceOp<mindspore::ReduceProdOp>>(ctx);
     (void)patterns.add<PropagateMindsporeReduceOp<mindspore::ReduceSumOp>>(ctx);
     (void)patterns.add<PropagateMindsporeCastOp<mindspore::CastOp>>(ctx);
+    (void)patterns.add<PropagateSameOprandsAndResultsShapeLinalgOp<linalg::ElemwiseUnaryOp>>(ctx);
+    (void)patterns.add<PropagateSameOprandsAndResultsShapeLinalgOp<linalg::ElemwiseBinaryOp>>(ctx);
     (void)patterns.add<PropagateSameOprandsAndResultsShapeTosaOp<mindspore::ExpOp>>(ctx);
     (void)patterns.add<PropagateSameOprandsAndResultsShapeTosaOp<mindspore::AddNOp>>(ctx);
     (void)patterns.add<PropagateSameOprandsAndResultsShapeTosaOp<mindspore::AssignOp>>(ctx);
@@ -515,14 +581,12 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
   void initGlobalHostShapeInfo() {
     func::FuncOp func = getOperation();
     SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
-    ShapeAlignTool &tool = ShapeAlignTool::getInstance();
-    std::map<size_t, ShapeInfo> hostShapes = {};
+    akgglobal::ShapeAlignTool &tool = akgglobal::ShapeAlignTool::getInstance();
+    std::map<size_t, akgglobal::ShapeInfo> hostShapes = {};
 
-    auto convertToShapeInfo = [&](std::optional<llvm::SmallVector<std::string>> symShape) -> ShapeInfo {
-      ShapeInfo record;
-      for (auto shape : *symShape) {
-        record.push_back(shape);
-      }
+    auto convertToShapeInfo = [&](std::optional<llvm::SmallVector<std::string>> symShape) -> akgglobal::ShapeInfo {
+      akgglobal::ShapeInfo record;
+      std::copy((*symShape).begin(), (*symShape).end(), std::back_inserter(record));
       return record;
     };
     // 1. init inputs
@@ -548,5 +612,6 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
   }
 };
 }  // namespace
+}  // namespace mlir
 
 std::unique_ptr<mlir::Pass> mlir::createInferSymbolicShapesPass() { return std::make_unique<InferSymbolicShapes>(); }
