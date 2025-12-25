@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Huawei Technologies Co., Ltd
+ * Copyright 2024-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #include "akg/Pipelines/AscendPipelines/AscendOpt.h"
 
 #include <cstdlib>
+#include "llvm/ADT/SmallVector.h"
 #include <nlohmann/json.hpp>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Affine/Passes.h"
@@ -64,7 +65,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::bufferization::createEmptyTensorToAllocTensorPass());
 
     mlir::bufferization::OneShotBufferizationOptions bufferizationOpts;
-    bufferizationOpts.bufferizeFunctionBoundaries = false;
+    bufferizationOpts.bufferizeFunctionBoundaries = true;
     bufferizationOpts.setFunctionBoundaryTypeConversion(mlir::bufferization::LayoutMapOption::IdentityLayoutMap);
     bufferizationOpts.allowReturnAllocsFromLoops = true;
     pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufferizationOpts));
@@ -76,6 +77,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createConvertLinalgToAffineLoopsPass());
 
     // pre-process
+    nestedFusionPM.addPass(mlir::createBF16ToF32Pass());
     nestedFusionPM.addPass(mlir::createCSEPass());
     nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
     bool promoteSingleIter = true;
@@ -92,15 +94,14 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
 
     // tiling
-    // nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
+    nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
     nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
-    nestedFusionPM.addPass(mlir::createAKGLoopTilingPass(options.target, true));
-    nestedFusionPM.addPass(mlir::createRemoveRedundantLoopsPass());
+    nestedFusionPM.addPass(mlir::createAKGLoopTilingPass(options.target, true, options.arch, "", {}));
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
 
     // vector
-    // nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
-    // nestedFusionPM.addPass(mlir::createExtractIfOpPass(options.target));
+    nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
+    nestedFusionPM.addPass(mlir::createExtractIfOpPass(options.target));
     nestedFusionPM.addPass(mlir::affine::createAffineForVectPass());
 
     // parallel
@@ -108,7 +109,11 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     // nestedFusionPM.addPass(mlir::createAKGLoopParallelizePass(options.enableParallel));
 
     nestedFusionPM.addPass(mlir::affine::createVectorTransferTensorizePass());
+    nestedFusionPM.addPass(mlir::affine::createTensorizeLiveOutsPass());
     pm.addPass(mlir::affine::createTilingFuncPass());
+
+    pm.nest<mlir::func::FuncOp>().addPass(mlir::createInsertLoadAndStorePass());
+    pm.nest<mlir::func::FuncOp>().addPass(mlir::createConvertAffineToSCFPass());
     pm.nest<mlir::func::FuncOp>().addPass(mlir::createLowerAffinePass());
   }
 }

@@ -168,7 +168,7 @@ void AffineReductionAnnotation::annotateReductionOps(Operation *funcOp) {
   // collect reduction axes and update attributes
   SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
   for (auto reduceLoop : reduceLoops) {
-    reduceLoop->setAttr("reduceLoop", builder.getUnitAttr());
+    reduceLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
   }
 
   (void)funcOp->walk([&](Operation *redOp) {
@@ -188,7 +188,7 @@ void AffineReductionAnnotation::annotateReductionOps(Operation *funcOp) {
               }
             }
           }
-          if (curOp->hasAttr("reduceLoop")) {
+          if (curOp->hasAttr(kReductionLoopAttr)) {
             redFlags.push_back(true);
           } else {
             redFlags.push_back(false);

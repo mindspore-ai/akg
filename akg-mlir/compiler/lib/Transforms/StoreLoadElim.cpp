@@ -36,7 +36,7 @@ namespace mlir {
 
 #define DEBUG_TYPE "elim-store-load"
 
-using namespace mlir;
+namespace mlir {
 namespace {
 
 // ===----------------------------------------------------------------------===//
@@ -56,7 +56,7 @@ namespace {
 //    load alloc
 //    ...
 //    memref.copy alloc, %global_out
-// 2. store and load are not located in the same branch (whatever comes from differnt If or For)
+// 2. store and load are not located in the same branch (whatever comes from different If or For)
 //    because the stored variable %x will be out of scope for load
 //  e.g.
 //    for arg0
@@ -89,6 +89,10 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
   SmallVector<Operation *> getPossibleElimLoads(Operation *storeOp) const {
     SmallVector<Operation *> elimLoads;
     auto memref = CommonUtils::getStoreMemref(storeOp);
+    // check if the memref is valid and the type is correct
+    if (!memref || !isa<MemRefType>(memref.getType())) {
+      return SmallVector<Operation *>();
+    }
     for (auto user : memref.getUsers()) {
       if (user == storeOp) {
         continue;
@@ -118,6 +122,11 @@ void StoreLoadElimPass::runOnOperation() {
   SmallVector<Operation *> toElimLoads;
   getOperation()->walk([&](Operation *op) {
     if (dyn_cast<memref::StoreOp>(op) || dyn_cast<affine::AffineStoreOp>(op)) {
+      // check if the memref is valid and the type is correct, skip invalid store operations
+      auto memref = CommonUtils::getStoreMemref(op);
+      if (!memref || !isa<MemRefType>(memref.getType())) {
+        return;
+      }
       auto elimLoads = getPossibleElimLoads(op);
       size_t eraseSize = 0;
       for (auto loadOp : elimLoads) {
@@ -129,7 +138,7 @@ void StoreLoadElimPass::runOnOperation() {
           eraseSize++;
         }
       }
-      bool isGlobalBuffer = CommonUtils::getStoreMemref(op).getDefiningOp() == nullptr;
+      bool isGlobalBuffer = memref.getDefiningOp() == nullptr;
       bool elimAllLoads = eraseSize > 0 && eraseSize == elimLoads.size();
       if (elimAllLoads && !isGlobalBuffer) {
         toElimStores.push_back(op);
@@ -140,15 +149,20 @@ void StoreLoadElimPass::runOnOperation() {
     loadOp->erase();
   }
   for (auto storeOp : toElimStores) {
+    // before erasing storeOp, capture the memref
+    auto memref = CommonUtils::getStoreMemref(storeOp);
     if (storeOp->use_empty()) {
       storeOp->erase();
     }
-    auto memrefOp = CommonUtils::getStoreMemref(storeOp).getDefiningOp();
-    if (memrefOp->use_empty()) {
-      memrefOp->erase();
+    if (memref && isa<MemRefType>(memref.getType())) {
+      auto memrefOp = memref.getDefiningOp();
+      if (memrefOp && memrefOp->use_empty()) {
+        memrefOp->erase();
+      }
     }
   }
 }
 }  // end anonymous namespace
 
-std::unique_ptr<Pass> mlir::createStoreLoadElimPass() { return std::make_unique<StoreLoadElimPass>(); }
+std::unique_ptr<Pass> createStoreLoadElimPass() { return std::make_unique<StoreLoadElimPass>(); }
+}  // namespace mlir

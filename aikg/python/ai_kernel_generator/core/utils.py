@@ -50,7 +50,7 @@ def normalize_dsl(dsl: str, backend: str = None) -> str:
     dsl = dsl.lower()
     
     # 如果已经是规范化的类型，直接返回
-    if dsl in ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc"]:
+    if dsl in ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc", "torch"]:
         return dsl
     
     # 如果是通用的triton，需要根据backend转换
@@ -80,9 +80,9 @@ def check_dsl(dsl: str):
     """
     验证实现类型
     Args:
-        dsl: 实现类型(triton_cuda/triton_ascend/triton-russia/swft等)
+        dsl: 实现类型(triton_cuda/triton_ascend/triton-russia/swft/torch等)
     """
-    valid_dsls = ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc"]
+    valid_dsls = ["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc", "torch"]
     if dsl not in valid_dsls:
         raise ValueError(
             f"dsl must be one of {valid_dsls}. "
@@ -116,18 +116,18 @@ VALID_CONFIGS = {
     },
     "torch": {
         "ascend": {
-            "ascend910b1": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc"],
-            "ascend910b2": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc"],
-            "ascend910b2c": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc"],
-            "ascend910b3": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc"],
-            "ascend910b4": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc"],
-            "ascend310p3": ["swft", "ascendc"]
+            "ascend910b1": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch"],
+            "ascend910b2": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch"],
+            "ascend910b2c": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch"],
+            "ascend910b3": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch"],
+            "ascend910b4": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch"],
+            "ascend310p3": ["swft", "ascendc", "torch"]
         },
         "cuda": {
-            "a100": ["triton_cuda", "cuda_c", "tilelang_cuda"],
-            "h20": ["triton_cuda", "cuda_c", "tilelang_cuda"],
-            "l20": ["triton_cuda", "cuda_c", "tilelang_cuda"],
-            "rtx3090": ["triton_cuda", "cuda_c", "tilelang_cuda"],
+            "a100": ["triton_cuda", "cuda_c", "tilelang_cuda", "torch"],
+            "h20": ["triton_cuda", "cuda_c", "tilelang_cuda", "torch"],
+            "l20": ["triton_cuda", "cuda_c", "tilelang_cuda", "torch"],
+            "rtx3090": ["triton_cuda", "cuda_c", "tilelang_cuda", "torch"],
         },
         "cpu": {
             "x86_64": ["cpp"],

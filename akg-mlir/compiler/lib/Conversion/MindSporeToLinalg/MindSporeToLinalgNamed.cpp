@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Huawei Technologies Co., Ltd
+ * Copyright 2024-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@
 #include <numeric>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
-// #include "bishengir/Dialect/HACC/IR/HACC.h"
-// #include "bishengir/Dialect/HFusion/IR/HFusion.h"
+#include "bishengir/Dialect/HACC/IR/HACC.h"
+#include "bishengir/Dialect/HFusion/IR/HFusion.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -86,7 +86,7 @@ static Attribute getOperationKindAttribute(Operation *op) {
   return attr;
 }
 
-static SmallVector<ReassociationExprs> getExpandMap(SmallVector<int64_t> axes, int64_t expandInputRank,
+static SmallVector<ReassociationExprs> getExpandMap(ArrayRef<int64_t> axes, int64_t expandInputRank,
                                                     int64_t expandOutputRank, PatternRewriter &rewriter) {
   int64_t posAtInput = 0;
   SmallVector<ReassociationExprs> reassociation_map = {};
@@ -106,12 +106,28 @@ static SmallVector<ReassociationExprs> getExpandMap(SmallVector<int64_t> axes, i
 }
 
 static Value createExpandShapeOp(Operation *op, PatternRewriter &rewriter, Value expandSrc, Value expandDst,
-                                 uint64_t axis) {
-  SmallVector<int64_t> dims = {static_cast<int64_t>(axis)};
+                                 ArrayRef<int64_t> axes) {
   int64_t expandInputRank = cast<ShapedType>(expandSrc.getType()).getRank();
   int64_t expandOutputRank = cast<ShapedType>(expandDst.getType()).getRank();
-  auto reassociation = getExpandMap(dims, expandInputRank, expandOutputRank, rewriter);
-  return rewriter.create<tensor::ExpandShapeOp>(op->getLoc(), expandDst.getType(), expandSrc, reassociation);
+  SmallVector<ReassociationIndices> reassociation;
+  if (expandInputRank == 0) {
+    reassociation = {};
+  } else {
+    SmallVector<int64_t> dims(axes.begin(), axes.end());
+    auto reassociationExprs = getExpandMap(dims, expandInputRank, expandOutputRank, rewriter);
+    for (const auto &exprs : reassociationExprs) {
+      ReassociationIndices indices;
+      for (const auto &expr : exprs) {
+        if (auto dimExpr = llvm::dyn_cast<AffineDimExpr>(expr)) {
+          indices.push_back(dimExpr.getPosition());
+        }
+      }
+      reassociation.push_back(indices);
+    }
+  }
+  Value expandShapeOp =
+    rewriter.create<tensor::ExpandShapeOp>(op->getLoc(), expandDst.getType(), expandSrc, reassociation);
+  return expandShapeOp;
 }
 
 static Operation *createElemwiseOp(Operation *op, Value emptyTensor, SmallVector<NamedAttribute> &attrs,
@@ -274,104 +290,43 @@ static Value createLinalgBodyCalculationForReduceOp(Operation *op, ValueRange ar
 // Performs the match and rewrite for reduction operations. This includes
 // declaring a correctly sized initial value, and the linalg.generic operation
 // that reduces across the specified axis.
-static LogicalResult reduceMatchAndRewriteHelper(Operation *op, uint64_t axis, PatternRewriter &rewriter) {
+static LogicalResult reduceMatchAndRewriteHelper(Operation *op, ArrayRef<int64_t> axes, PatternRewriter &rewriter) {
   auto loc = op->getLoc();
   auto inputTy = cast<ShapedType>(op->getOperand(0).getType());
   auto resultTy = cast<ShapedType>(op->getResult(0).getType());
   auto elementTy = resultTy.getElementType();
   Value input = op->getOperand(0);
-
-  bool useInputAxis = true;
-  SmallVector<int64_t> axes;
   SmallVector<int64_t> reduceShape;
-
-  for (int64_t i = 0, e = inputTy.getRank(); i < e; ++i) {
-    if (static_cast<int64_t>(i) != static_cast<int64_t>(axis)) {
-      reduceShape.push_back(inputTy.getDimSize(i));
-    }
-  }
-  if (reduceShape.size() != resultTy.getRank()) {
-    useInputAxis = false;
-  } else {
-    for (int64_t i = 0; i < reduceShape.size(); ++i) {
-      if (reduceShape[i] != resultTy.getDimSize(i)) {
-        useInputAxis = false;
-        break;
-      }
-    }
-  }
-
-  if (!useInputAxis) {
-    reduceShape.clear();
-    int64_t reduceFactor = inputTy.getNumElements() / resultTy.getNumElements();
-    int64_t currentFactor = 1;
-    for (int64_t i = inputTy.getRank() - 1; i >= 0; --i) {
-      int64_t dimSize = inputTy.getDimSize(i);
-      if (dimSize == ShapedType::kDynamic) {
-        axes.clear();
-        break;
-      }
-      currentFactor *= dimSize;
-      axes.insert(axes.begin(), i);
-      if (currentFactor == reduceFactor) {
-        break;
-      } else if (currentFactor > reduceFactor) {
-        axes.clear();
-        break;
-      }
-    }
-    if (axes.empty()) {
-      axes.push_back(static_cast<int64_t>(axis));
-    }
-    for (int64_t i = 0; i < inputTy.getRank(); i++) {
-      if (!llvm::is_contained(axes, i)) {
-        reduceShape.push_back(inputTy.getDimSize(i));
-      }
-    }
-  } else {
-    axes.push_back(static_cast<int64_t>(axis));
-  }
-
   SmallVector<Value> dynDims;
-  for (int64_t i = 0; i < inputTy.getRank(); i++) {
-    if (inputTy.isDynamicDim(i) && !llvm::is_contained(axes, i)) {
-      dynDims.push_back(rewriter.create<tensor::DimOp>(loc, input, i));
+  for (unsigned i = 0; i < inputTy.getRank(); i++) {
+    if (!llvm::is_contained(axes, i)) {
+      reduceShape.push_back(inputTy.getDimSize(i));
+      if (inputTy.isDynamicDim(i)) {
+        dynDims.push_back(rewriter.create<tensor::DimOp>(loc, input, i));
+      }
     }
   }
   // First fill the output buffer with the init value.
   auto emptyTensor = rewriter.create<tensor::EmptyOp>(loc, reduceShape, elementTy, dynDims).getResult();
   auto fillValueAttr = createInitialValueForReduceOp(op, elementTy, rewriter);
-  if (!fillValueAttr) {
-    return rewriter.notifyMatchFailure(op, "No initial value found for reduction operation");
-  }
-  auto fillValue = rewriter.create<arith::ConstantOp>(loc, elementTy, fillValueAttr);
+  if (!fillValueAttr) return rewriter.notifyMatchFailure(op, "No initial value found for reduction operation");
+
+  auto fillValue = rewriter.create<arith::ConstantOp>(loc, fillValueAttr);
   auto filledTensor = rewriter.create<linalg::FillOp>(loc, ValueRange{fillValue}, ValueRange{emptyTensor}).result();
 
   bool didEncounterError = false;
   auto reduceOp = rewriter.create<linalg::ReduceOp>(
-    loc, ValueRange{input}, ValueRange{filledTensor}, axes,
-    [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+    loc, input, filledTensor, axes, [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
       auto result = createLinalgBodyCalculationForReduceOp(op, blockArgs, elementTy, rewriter);
-      if (!result) didEncounterError = true;
+      if (result) didEncounterError = true;
+
       nestedBuilder.create<linalg::YieldOp>(nestedLoc, result);
     });
 
-  if (didEncounterError) {
-    return rewriter.notifyMatchFailure(op, "unable to create linalg.generic body for reduce op");
-  }
+  if (!didEncounterError) return rewriter.notifyMatchFailure(op, "unable to create linalg.generic body for reduce op");
 
-  Value result = reduceOp.getOperation()->getResult(0);
-  if (result.getType() != resultTy) {
-    if (useInputAxis) {
-      result = createExpandShapeOp(op, rewriter, result, op->getResult(0), axis);
-    } else {
-        int64_t targetRank = resultTy.getRank();
-        SmallVector<Value> ones(targetRank, rewriter.create<arith::ConstantIndexOp>(loc, 1));
-        Value shape = rewriter.create<tensor::FromElementsOp>(loc, ones);
-        result = rewriter.create<tensor::ReshapeOp>(loc, resultTy, result, shape);
-    }
-  }
-  rewriter.replaceOp(op, result);
+  auto expandShapeOp = createExpandShapeOp(op, rewriter, reduceOp.getResult(0), op->getResult(0), axes);
+  rewriter.replaceOp(op, expandShapeOp);
   return success();
 }
 
@@ -673,7 +628,7 @@ static LogicalResult roundMatchAndRewriteHelper(mindspore::RoundOp roundOp, Patt
   Value output = roundOp.getResult();
 
   SmallVector<Value> dynDims;
-  ShapedType shapedType = input.getType().cast<ShapedType>();
+  ShapedType shapedType = dyn_cast<ShapedType>(input.getType());
   ArrayRef<int64_t> typeShapes = shapedType.getShape();
   for (size_t i = 0; i < typeShapes.size(); i++) {
     if (typeShapes[i] == ShapedType::kDynamic) {
@@ -698,7 +653,7 @@ static LogicalResult selectMatchAndRewriteHelper(mindspore::SelectOp selectOp, P
   Value output = selectOp.getResult();
 
   SmallVector<Value> dynDims;
-  auto resultTy = output.getType().cast<ShapedType>();
+  auto resultTy = dyn_cast<ShapedType>(output.getType());
   Value emptyTensor = rewriter.create<tensor::EmptyOp>(loc, resultTy.getShape(), resultTy.getElementType(), dynDims);
 
   rewriter.replaceOpWithNewOp<linalg::SelectOp>(selectOp, ValueRange{condition, trueValue, falseValue},
@@ -707,8 +662,10 @@ static LogicalResult selectMatchAndRewriteHelper(mindspore::SelectOp selectOp, P
 }
 
 static LogicalResult isFiniteMatchAndRewriteHelper(Operation *op, PatternRewriter &rewriter) {
-  // auto namedOp = rewriter.create<hfusion::IsFiniteOp>(loc, resultTy, op->getOperands()[0]);
-  // rewriter.replaceOp(op, namedOp->getResults());
+  auto loc = op->getLoc();
+  auto resultTy = dyn_cast<ShapedType>(op->getResult(0).getType());
+  auto namedOp = rewriter.create<hfusion::IsFiniteOp>(loc, resultTy, op->getOperands()[0]);
+  rewriter.replaceOp(op, namedOp->getResults());
   return success();
 }
 
@@ -728,7 +685,8 @@ class MindSporeReduceConverter : public OpRewritePattern<SrcOp> {
   using OpRewritePattern<SrcOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(SrcOp op, PatternRewriter &rewriter) const final {
-    return reduceMatchAndRewriteHelper(op, *(op.getAxis().data()), rewriter);
+    auto axisData = op.getAxis();
+    return reduceMatchAndRewriteHelper(op, axisData, rewriter);
   }
 };
 
@@ -854,8 +812,8 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
     registry.insert<linalg::LinalgDialect>();
     registry.insert<tensor::TensorDialect>();
     registry.insert<math::MathDialect>();
-    // registry.insert<hacc::HACCDialect>();
-    // registry.insert<hfusion::HFusionDialect>();
+    registry.insert<hacc::HACCDialect>();
+    registry.insert<hfusion::HFusionDialect>();
     registry.insert<arith::ArithDialect>();
   }
 
@@ -863,12 +821,10 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
     RewritePatternSet patterns(&getContext());
     ConversionTarget target(getContext());
 
-    target.addLegalDialect<arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect,
-                           math::MathDialect>();  //, hfusion::HFusionDialect>();
-
-    // func->setAttr("hacc.function_kind",
-    //   hacc::HACCFuncTypeAttr::get(func->getContext(), hacc::HACCFuncType::HOST));
-
+    target.addLegalDialect<arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect, math::MathDialect,
+                           hfusion::HFusionDialect>();
+    FunctionOpInterface func = getOperation();
+    func->setAttr("hacc.function_kind", hacc::HACCFuncTypeAttr::get(func->getContext(), hacc::HACCFuncType::HOST));
     populateLowerMindSporeToLinalgNamedPattern(patterns);
     populateLowerMindSporeCompareToLinalgPattern(patterns);
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {

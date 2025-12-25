@@ -17,16 +17,16 @@
 #include "akg/Dialect/Affine/Analysis/TilingStrategy.h"
 
 #include <algorithm>
-#include <iostream>
-#include <unordered_map>
-#include <vector>
+#include <numeric>
 #include "akg/Utils/AKGGlobalVars.hpp"
+#include "llvm/Support/MathExtras.h"
 
 namespace mlir {
 namespace akg {
 namespace autotiling {
 using akg::utils::GpuInfo;
 using akg::utils::StrategyHelper;
+using llvm::SmallVector;
 
 bool TilingStrategy::IsRelevant(const AxisPtr &a, const InitGraphPtr graph) {
   if (a->axisType.find(workForAxisLabel) != a->axisType.end()) {
@@ -395,11 +395,7 @@ bool BroadcastStrategy::searchForLargeShape(const GpuModelGraphPtr gpuGraph, con
   return succ;
 }
 
-void BroadcastStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
-  NodePtr maxRankNode = gpuGraph->getMaxRankTensor();
-  if (!maxRankNode || maxRankNode->loopNest_.size() <= 1) {
-    return;
-  }
+NodePtr BroadcastStrategy::findMinRankNode(const GpuModelGraphPtr gpuGraph) {
   NodePtr minRankNode = nullptr;
   for (auto node : gpuGraph->nodes()) {
     if (node->loopNest_.empty() || (node->opType != "Load" && node->opType != "Store")) {
@@ -409,21 +405,22 @@ void BroadcastStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
       minRankNode = node;
     }
   }
-  if (!minRankNode || minRankNode->loopNest_.size() == maxRankNode->loopNest_.size()) {
-    return;
-  }
-  auto innerMostReadAxis = maxRankNode->loopNest_.back();
+  return minRankNode;
+}
+
+int BroadcastStrategy::computeExpectedSeq(const GpuModelGraphPtr gpuGraph, const AxisPtr innerMostReadAxis) {
   auto maxAvailBlocks = gpuGraph->gpuBlock.totalAvailableSize;
   assert(maxExpectSeq > 0 && innerMostReadAxis->range.second > 0);
   auto maxBlocks = StrategyHelper::getLargestDivisor(maxAvailBlocks, innerMostReadAxis->range.second / maxExpectSeq);
-  int expectSeq =
-    std::min<int>(maxExpectSeq, (maxBlocks * maxExpectSeq * blockWasteCoef - 1) / innerMostReadAxis->range.second + 1);
+  return std::min<int>(maxExpectSeq,
+                       (maxBlocks * maxExpectSeq * blockWasteCoef - 1) / innerMostReadAxis->range.second + 1);
+}
+
+void BroadcastStrategy::searchSeqAxisFromInnerToOuter(const GpuModelGraphPtr gpuGraph, const NodePtr maxRankNode,
+                                                      int expectSeq) {
   int currBlocks = 1;
   auto warpSize = GpuInfo::getInstance(gpuGraph->hardware).getWarpSizes();
-  std::tie(proposedGrid, proposedBlock) =
-    StrategyHelper::getProposalParallelSize(gpuGraph->problemSize, gpuGraph->hardware);
 
-  // Search for seq-axis from inner to outer
   for (int i = static_cast<int>(maxRankNode->loopNest_.size()) - 1; i >= 0; --i) {
     auto a = maxRankNode->loopNest_[static_cast<unsigned>(i)];
     if (expectSeq <= 1 || currBlocks >= proposedBlock || currBlocks >= warpSize) {
@@ -441,6 +438,26 @@ void BroadcastStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
     }
     currBlocks *= static_cast<int>(a->range.second);
   }
+}
+
+void BroadcastStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
+  NodePtr maxRankNode = gpuGraph->getMaxRankTensor();
+  if (!maxRankNode || maxRankNode->loopNest_.size() <= 1) {
+    return;
+  }
+
+  NodePtr minRankNode = findMinRankNode(gpuGraph);
+  if (!minRankNode || minRankNode->loopNest_.size() == maxRankNode->loopNest_.size()) {
+    return;
+  }
+
+  auto innerMostReadAxis = maxRankNode->loopNest_.back();
+  int expectSeq = computeExpectedSeq(gpuGraph, innerMostReadAxis);
+
+  std::tie(proposedGrid, proposedBlock) =
+    StrategyHelper::getProposalParallelSize(gpuGraph->problemSize, gpuGraph->hardware);
+
+  searchSeqAxisFromInnerToOuter(gpuGraph, maxRankNode, expectSeq);
 }
 
 void ParallelStrategy::InitProposalResource(const GpuModelGraphPtr gpuGraph) {
@@ -785,77 +802,190 @@ void ParallelStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
   }
 }
 
-unsigned computeDefaultNpuTileSize(unsigned bandRank) {
-  constexpr unsigned kTile32 = 32;
-  constexpr unsigned kTile16 = 16;
-  constexpr unsigned kTile8 = 8;
-  if (bandRank >= 5) {
-    return kTile8;
+unsigned getOuterTileSize(const AxisPtr axis, unsigned blockNumber) {
+  unsigned upperBound = axis->loop->getConstantUpperBound();
+  unsigned lowerBound = axis->loop->getConstantLowerBound();
+  unsigned extent = upperBound - lowerBound;
+  // Simple ceiling division, no power of 2 alignment to avoid extreme cases
+  unsigned tileSizePerBlock = (extent + blockNumber - 1) / blockNumber;
+
+  // tileSizePerBlock = llvm::bit_ceil(tileSizePerBlock);
+  const unsigned MIN_TILE_SIZE = 512;
+  if (tileSizePerBlock < MIN_TILE_SIZE && extent >= MIN_TILE_SIZE) {
+    tileSizePerBlock = MIN_TILE_SIZE;
   }
-  if (bandRank == 4) {
-    return kTile16;
-  }
-  return kTile32;
+  return tileSizePerBlock;
 }
 
-void NpuDefaultTileStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
-  if (gpuGraph == nullptr || gpuGraph->rootAxis == nullptr) {
+// Helper function to process tiling for a single axis
+static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4> &tileSizes, unsigned innerTileSize,
+                              unsigned blockNumber, size_t &maxLevelToTile, bool isReduceAxis = false) {
+  if (axis == nullptr) {
+    return;
+  }
+  auto loop = axis->loop;
+
+  // Skip tiling for reduce axes
+  if (isReduceAxis) {
+    auto tileConfig = axis->tryGetConfig(0, kTileCfg);
+    if (tileConfig != nullptr) {
+      tileConfig->value = 1;
+      axis->tryAddConstraint(0, Constraint({1}));
+    }
     return;
   }
 
-  std::unordered_map<size_t, unsigned> bandRankMap;
-  gpuGraph->rootAxis->forEachAxisTopDown([&bandRankMap](const AxisPtr axis) {
-    if (axis == nullptr) {
-      return;
+  bool hasStaticBounds = loop && loop->hasConstantLowerBound() && loop->hasConstantUpperBound();
+  bool isDynamic = axis->axisType.find(Axis::AxisLabel::kDynamic) != axis->axisType.end();
+  if (!hasStaticBounds || isDynamic) {
+    auto tileConfig = axis->tryGetConfig(0, kTileCfg);
+    if (tileConfig != nullptr) {
+      tileConfig->value = 1;
+      axis->tryAddConstraint(0, Constraint({1}));
     }
+    return;
+  }
+  int32_t lowerBound = loop->getConstantLowerBound();
+  int32_t upperBound = loop->getConstantUpperBound();
+  int32_t extent = upperBound - lowerBound;
+
+  // Get default tile sizes if not specified by user
+  SmallVector<unsigned, 4> currentTileSizes = tileSizes;
+  if (currentTileSizes.empty()) {
+    currentTileSizes = {std::max(getOuterTileSize(axis, blockNumber), innerTileSize), innerTileSize};
+  }
+
+  SmallVector<unsigned, 4> usedTileSizes;
+  int32_t currentSize = extent;
+
+  for (size_t i = 0; i < currentTileSizes.size(); ++i) {
+    int32_t tileSize = static_cast<int32_t>(currentTileSizes[i]);
+    int32_t minRequired = (i == currentTileSizes.size() - 1) ? tileSize * 2 : tileSize;
+    if (currentSize >= minRequired) {
+      usedTileSizes.push_back(tileSize);
+      currentSize = tileSize;
+    } else {
+      usedTileSizes.push_back(currentSize);
+    }
+  }
+
+  size_t numLevels = usedTileSizes.size();
+  size_t currentTileLevel = axis->configs[kTileCfg].size();
+
+  // clean extra levels
+  if (currentTileLevel > numLevels) {
+    auto &cfgs = axis->configs[kTileCfg];
+    cfgs.resize(numLevels);
+    currentTileLevel = numLevels;
+  }
+
+  size_t levelsToAdd = (numLevels > currentTileLevel) ? (numLevels - currentTileLevel) : 0;
+  for (size_t level = 0; level < levelsToAdd; ++level) {
+    axis->doExtraTile();
+  }
+
+  maxLevelToTile = std::max(maxLevelToTile, numLevels);
+
+  // Set tile sizes for each level (only up to numLevels)
+  for (size_t level = 0; level < numLevels; ++level) {
+    auto tileConfig = axis->tryGetConfig(static_cast<int>(level), kTileCfg);
+    if (tileConfig != nullptr) {
+      tileConfig->value = static_cast<int>(usedTileSizes[level]);
+      axis->tryAddConstraint(static_cast<int>(level), Constraint({static_cast<int>(usedTileSizes[level])}));
+    }
+  }
+}
+
+SmallVector<AxisPtr> NpuDefaultTileStrategy::collectAxes(const NpuModelGraphPtr npuGraph) {
+  SmallVector<AxisPtr> axes;
+  npuGraph->rootAxis->forEachAxisTopDown([&axes](const AxisPtr axis) {
+    if (axis) {
+      axes.push_back(axis);
+    }
+  });
+  return axes;
+}
+
+std::unordered_map<size_t, unsigned> NpuDefaultTileStrategy::buildBandRankMap(const SmallVector<AxisPtr> &axes) {
+  std::unordered_map<size_t, unsigned> bandRankMap;
+  for (const auto &axis : axes) {
     auto currentDepth = static_cast<unsigned>(axis->axisIdx + 1);
     auto it = bandRankMap.find(axis->bandIdx);
     if (it == bandRankMap.end() || currentDepth > it->second) {
       bandRankMap[axis->bandIdx] = currentDepth;
     }
-  });
+  }
+  return bandRankMap;
+}
 
-  gpuGraph->rootAxis->forEachAxisTopDown([&bandRankMap](const AxisPtr axis) {
-    if (axis == nullptr) {
-      return;
+SmallVector<unsigned, 4> NpuDefaultTileStrategy::parseTileSizesConfig(const NpuModelGraphPtr npuGraph) {
+  SmallVector<unsigned, 4> tileSizes;
+  auto tileSizesIt = npuGraph->globalConfigs.find("npu.multiTileSizes");
+  if (tileSizesIt != npuGraph->globalConfigs.end()) {
+    auto arrayAttr = dyn_cast<ArrayAttr>(tileSizesIt->second);
+    if (arrayAttr) {
+      for (auto attr : arrayAttr) {
+        if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
+          tileSizes.push_back(static_cast<unsigned>(intAttr.getInt()));
+        }
+      }
     }
+  }
+
+  // Ensure tile sizes are in non-increasing order (largest to smallest)
+  for (size_t i = 1; i < tileSizes.size(); ++i) {
+    if (tileSizes[i] > tileSizes[i - 1]) {
+      tileSizes[i] = tileSizes[i - 1];
+    }
+  }
+  return tileSizes;
+}
+
+void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, const SmallVector<AxisPtr> &axes,
+                                               const std::unordered_map<size_t, unsigned> &bandRankMap,
+                                               const SmallVector<unsigned, 4> &tileSizes, bool isReduceOp) {
+  size_t maxLevelToTile = 1;
+  constexpr unsigned innerTileSize = 512;
+  constexpr unsigned blockNumber = 40;
+
+  for (const auto &axis : axes) {
     auto rankIt = bandRankMap.find(axis->bandIdx);
     if (rankIt == bandRankMap.end()) {
-      return;
+      continue;
     }
-    unsigned bandRank = rankIt->second;
-    auto tileConfig = axis->tryGetConfig(0, kTileCfg);
-    if (tileConfig == nullptr) {
-      return;
+
+    // Check if this axis is a reduction axis
+    bool isReduceAxis = false;
+    if (isReduceOp && axis->loop) {
+      isReduceAxis = axis->loop->getOperation()->hasAttr(kReductionLoopAttr);
     }
-    unsigned targetTile = computeDefaultNpuTileSize(bandRank);
-    auto loop = axis->loop;
-    bool hasStaticBounds = loop && loop->hasConstantLowerBound() && loop->hasConstantUpperBound();
-    bool isDynamic = axis->axisType.find(Axis::AxisLabel::kDynamic) != axis->axisType.end();
-    if (!hasStaticBounds || isDynamic) {
-      tileConfig->value = 1;
-      axis->tryAddConstraint(0, Constraint({1}));
-      return;
-    }
-    int64_t lowerBound = loop->getConstantLowerBound();
-    int64_t upperBound = loop->getConstantUpperBound();
-    int64_t extent = upperBound - lowerBound;
-    if (extent <= 1) {
-      tileConfig->value = 1;
-      axis->tryAddConstraint(0, Constraint({1}));
-      return;
-    }
-    while (targetTile > 1 && extent <= static_cast<int64_t>(targetTile)) {
-      targetTile /= 2;
-    }
-    if (targetTile <= 1) {
-      tileConfig->value = 1;
-      axis->tryAddConstraint(0, Constraint({1}));
-      return;
-    }
-    tileConfig->value = static_cast<int>(targetTile);
-    axis->tryAddConstraint(0, Constraint({static_cast<int>(targetTile)}));
-  });
+
+    processAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, isReduceAxis);
+  }
+
+  npuGraph->levelToTile = std::max(npuGraph->levelToTile, maxLevelToTile);
+}
+
+void NpuDefaultTileStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
+  if (npuGraph == nullptr || npuGraph->rootAxis == nullptr) {
+    return;
+  }
+
+  bool isReduceOp = false;
+  if (npuGraph->funcOp) {
+    auto opType = CommonUtils::getOperatorType(npuGraph->funcOp);
+    isReduceOp = (opType == OperatorTemplate::Reduce);
+  }
+
+  SmallVector<AxisPtr> axes = collectAxes(npuGraph);
+  std::unordered_map<size_t, unsigned> bandRankMap = buildBandRankMap(axes);
+  SmallVector<unsigned, 4> tileSizes = parseTileSizesConfig(npuGraph);
+
+  applyTilingToAxes(npuGraph, axes, bandRankMap, tileSizes, isReduceOp);
+
+  if (npuGraph->funcOp && npuGraph->funcOp->hasAttr("npu.multiTileSizes")) {
+    (void)npuGraph->funcOp->removeAttr("npu.multiTileSizes");
+  }
 }
 
 void TilingStrategyManager::processOn(const ModelGraphPtr modelGraph) {
@@ -877,6 +1007,338 @@ void TilingStrategyManager::processOn(const CpuModelGraphPtr cpuGraph) {
   for (auto strategy : this->strategies_) {
     strategy->AddCpuConstraint(cpuGraph);
   }
+}
+
+void TilingStrategyManager::processOn(const NpuModelGraphPtr npuGraph) {
+  npuGraph->name = npuGraph->name + "_AfterStrategy";
+  for (auto strategy : this->strategies_) {
+    strategy->AddNpuConstraint(npuGraph);
+  }
+}
+
+SmallVector<int64_t> VectorizationStrategy::getDimSizes(const SmallVector<AxisPtr> &axes) {
+  SmallVector<int64_t> dims;
+  for (const auto &axis : axes) {
+    if (axis && axis->loop && axis->loop->hasConstantBounds()) {
+      int64_t extent = axis->loop->getConstantUpperBound() - axis->loop->getConstantLowerBound();
+      dims.push_back(extent > 0 ? extent : 1);
+    } else if (axis) {
+      dims.push_back(axis->range.second > 0 ? axis->range.second : 1);
+    }
+  }
+  return dims;
+}
+
+int64_t VectorizationStrategy::computeVectorizationTilingKey(int64_t ubAvailableNum, const SmallVector<int64_t> &dims) {
+  // The tiling key determines from which dimension we start partial loading.
+  // If ubAvailableNum <= accumulatedDims[N-1], tilingKey = N-1
+  // If ubAvailableNum <= accumulatedDims[N-2], tilingKey = N-2
+  // ...
+  // Otherwise, tilingKey = 0 (we can load all data)
+  int64_t acc = 1;
+  int64_t tilingKey = 0;
+  // Accumulate from inner to outer (reverse order)
+  for (int64_t i = static_cast<int64_t>(dims.size()) - 1; i >= 0; --i) {
+    acc *= dims[static_cast<size_t>(i)];
+    if (ubAvailableNum <= acc) {
+      tilingKey = static_cast<int64_t>(i);
+    } else {
+      break;
+    }
+  }
+  return tilingKey;
+}
+
+void VectorizationStrategy::applyVectorizationTiling(const SmallVector<AxisPtr> &axes, int64_t ubAvailableNum,
+                                                     int64_t tilingKey, int pos) {
+  int64_t numAxes = static_cast<int64_t>(axes.size());
+  int64_t ubRemainingNum = std::max<int64_t>(ubAvailableNum, 1);
+
+  // Compute tile sizes from outer to inner
+  for (int64_t dimIdx = 0; dimIdx < numAxes; ++dimIdx) {
+    auto axis = axes[static_cast<size_t>(dimIdx)];
+    if (!axis) {
+      continue;
+    }
+
+    if (pos) {
+      axis->doExtraTile();
+    }
+
+    // Skip reduction axes - they should not be tiled for vectorization
+    // if (axis->axisType.find(Axis::AxisLabel::kReduction) != axis->axisType.end()) {
+    //   auto tileConfig = axis->tryGetConfig(0, kTileCfg);
+    //   if (tileConfig != nullptr) {
+    //     tileConfig->value = 1;
+    //     axis->tryAddConstraint(pos, Constraint({1}));
+    //   }
+    //   continue;
+    // }
+
+    // Skip dynamic axes
+    if (axis->axisType.find(Axis::AxisLabel::kDynamic) != axis->axisType.end()) {
+      auto tileConfig = axis->tryGetConfig(0, kTileCfg);
+      if (tileConfig != nullptr) {
+        tileConfig->value = 1;
+        axis->tryAddConstraint(pos, Constraint({1}));
+      }
+      continue;
+    }
+
+    int64_t dimSize = axis->range.second > 0 ? axis->range.second : 1;
+    int64_t tileSize = 1;
+
+    // Tiling logic based on the reference algorithm:
+    // - If tilingKey > dimIdx: tileSize = 1 (cannot load more than one line)
+    // - If tilingKey == dimIdx: tileSize = min(ubRemainingNum, dimSize) (partial load)
+    // - If tilingKey < dimIdx: tileSize = dimSize (full load)
+    if (tilingKey > dimIdx) {
+      tileSize = 1;
+    } else if (tilingKey == dimIdx) {
+      tileSize = std::min(ubRemainingNum, dimSize);
+    } else {
+      tileSize = dimSize;
+    }
+
+    // Ensure tile size is at least 1
+    tileSize = std::max<int64_t>(tileSize, 1);
+
+    // Add constraint for tiling
+    axis->tryAddConstraint(pos, Constraint({static_cast<int>(tileSize)}));
+    auto vectorizationConfig = axis->tryGetConfig(pos);
+    if (vectorizationConfig != nullptr) {
+      vectorizationConfig->value = static_cast<int>(tileSize);
+    }
+
+    // Mark innermost axis for vectorization
+    if (axis->isInnerMost) {
+      (void)axis->axisType.insert(Axis::AxisLabel::kVectorization);
+    }
+
+    // Update remaining UB capacity for next dimension
+    if (tileSize > 0) {
+      ubRemainingNum = ubRemainingNum / tileSize;
+      ubRemainingNum = std::max<int64_t>(ubRemainingNum, 1);
+    }
+  }
+}
+
+void VectorizationStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
+  SmallVector<AxisPtr> axes;
+  npuGraph->rootAxis->forEachAxisTopDown([this, &axes](const AxisPtr a) { axes.push_back(a); });
+
+  // Get dimension sizes
+  SmallVector<int64_t> dims = getDimSizes(axes);
+  if (dims.empty()) {
+    return;
+  }
+
+  // Get buffer info from NpuModelGraph (populated by buffer analysis)
+  int64_t maxBufferCnt = npuGraph->maxBufferCnt;
+  int64_t smallestTypeBits = static_cast<int64_t>(npuGraph->smallestTypeBits);
+  int64_t ubSizeInBytes = npuGraph->ubSize;
+
+  // Calculate UB available number in terms of smallest type elements
+  // UB available = UB size / (smallest type size * buffer count)
+  int64_t ubMaxSizeInBits = ubSizeInBytes * kNumBitsInByte;
+  int64_t ubAvailableNumInSmallestType = ubMaxSizeInBits / smallestTypeBits / maxBufferCnt;
+
+  // Align down to alignment boundary
+  int64_t alignedBufferSizeInBits = (ubAvailableNumInSmallestType * smallestTypeBits) /
+                                    (kUBAlignSizeInBytes * kNumBitsInByte) * (kUBAlignSizeInBytes * kNumBitsInByte);
+  ubAvailableNumInSmallestType = alignedBufferSizeInBits / smallestTypeBits;
+
+  // Compute tiling key
+  int64_t tilingKey = computeVectorizationTilingKey(ubAvailableNumInSmallestType, dims);
+
+  // Compute and apply tile sizes
+  int pos = npuGraph->tileNum;
+  applyVectorizationTiling(axes, ubAvailableNumInSmallestType, tilingKey, pos);
+  ++npuGraph->tileNum;
+}
+
+void ParallelStrategy::collectAxesInfo(const SmallVector<AxisPtr> &axes, int pos) {
+  totalParallelSize = 1;
+  totalReduceSize = 1;
+  isParallelAxis.clear();
+
+  for (const auto &axis : axes) {
+    if (!axis) {
+      isParallelAxis.push_back(true);
+      continue;
+    }
+
+    int64_t axisSize = axis->range.second > 0 ? axis->range.second : 1;
+
+    // Check if it's a reduction axis
+    bool isReduction = axis->axisType.find(Axis::AxisLabel::kReduction) != axis->axisType.end();
+    isParallelAxis.push_back(!isReduction);
+
+    // Consider existing tile configuration
+    auto tileConfig = axis->tryGetConfig(pos - 1);
+    int64_t effectiveSize = axisSize;
+    if (tileConfig && tileConfig->value > 0) {
+      effectiveSize = (axisSize + tileConfig->value - 1) / tileConfig->value;
+    }
+
+    if (isReduction) {
+      totalReduceSize *= effectiveSize;
+    } else {
+      totalParallelSize *= effectiveSize;
+    }
+  }
+}
+
+std::pair<int64_t, int64_t> ParallelStrategy::allocateCoresForAxes(int64_t totalCores) {
+  int64_t coresForParallel = 1;
+  int64_t coresForReduce = 1;
+
+  if (totalParallelSize >= totalCores) {
+    coresForParallel = totalCores;
+    coresForReduce = 1;
+  } else if (totalParallelSize > 0) {
+    coresForParallel = totalParallelSize;
+    int64_t remainingCores = totalCores / coresForParallel;
+    coresForReduce = std::min(remainingCores, totalReduceSize);
+    coresForReduce = std::max<int64_t>(coresForReduce, 1);
+  }
+
+  return {coresForParallel, coresForReduce};
+}
+
+void ParallelStrategy::applyParallelTiling(const SmallVector<AxisPtr> &axes, int64_t coresForParallel,
+                                           int64_t coresForReduce, int64_t coreNum, int pos) {
+  int64_t remainingParallelCores = coresForParallel;
+  int64_t remainingReduceCores = coresForReduce;
+
+  for (size_t i = 0; i < axes.size(); ++i) {
+    auto axis = axes[i];
+    if (!axis) {
+      continue;
+    }
+
+    if (pos) {
+      axis->doExtraTile();
+    }
+
+    // Get axis size directly from axis
+    int64_t axisSize = axis->range.second > 0 ? axis->range.second : 1;
+
+    // Check for dynamic axes - skip by setting tile size to 1
+    if (axis->axisType.find(Axis::AxisLabel::kDynamic) != axis->axisType.end()) {
+      axis->tryAddConstraint(pos, Constraint({1}));
+      continue;
+    }
+
+    // Get existing tile configuration (inner/vectorized tile size)
+    auto existingTileConfig = axis->tryGetConfig(pos - 1);
+    int64_t innerTileSize = 1;
+    if (existingTileConfig && existingTileConfig->value > 0) {
+      innerTileSize = existingTileConfig->value;
+    }
+
+    // Calculate outer size after inner tiling
+    int64_t outerSize = (axisSize + innerTileSize - 1) / innerTileSize;
+    int64_t tileSize = outerSize;
+
+    // Apply parallel tiling for parallel axes
+    if (isParallelAxis[i] && remainingParallelCores > 1 && outerSize > 1) {
+      int64_t parallelTileSize = (outerSize + remainingParallelCores - 1) / remainingParallelCores;
+      parallelTileSize = std::max<int64_t>(parallelTileSize, 1);
+
+      // Ensure parallel tile size is at least the inner tile size
+      // i.e., each parallel thread should process at least the vectorized iterations
+      if (parallelTileSize == 1 && outerSize > 1) {
+        // If computed parallel tile size is 1 but cores remain, try adjustment
+        // Reduce core usage to make each thread handle more work
+        int64_t adjustedCores = std::max<int64_t>((outerSize + 1) / 2, 1);
+        if (adjustedCores < remainingParallelCores) {
+          remainingParallelCores = adjustedCores;
+          parallelTileSize = (outerSize + remainingParallelCores - 1) / remainingParallelCores;
+          parallelTileSize = std::max<int64_t>(parallelTileSize, 1);
+        }
+      }
+
+      tileSize = std::min(tileSize, parallelTileSize);
+
+      if (parallelTileSize < outerSize) {
+        remainingParallelCores = (remainingParallelCores + tileSize - 1) / tileSize;
+      } else {
+        remainingParallelCores = 1;
+      }
+    } else if (!isParallelAxis[i] && remainingReduceCores > 1 && outerSize > 1) {
+      // Apply parallel tiling for reduction axes
+      int64_t reduceTileSize = (outerSize + remainingReduceCores - 1) / remainingReduceCores;
+      reduceTileSize = std::max<int64_t>(reduceTileSize, 1);
+
+      tileSize = std::min(tileSize, reduceTileSize);
+
+      if (reduceTileSize < outerSize) {
+        remainingReduceCores = (remainingReduceCores + tileSize - 1) / tileSize;
+      } else {
+        remainingReduceCores = 1;
+      }
+    } else {
+      // Skip this axis - set tile size to outerSize (not 1)
+      tileSize = outerSize;
+    }
+
+    // Calculate final tile size
+    int64_t finalTileSize = tileSize * innerTileSize;
+    finalTileSize = std::min(finalTileSize, axisSize);
+    finalTileSize = std::max<int64_t>(finalTileSize, 1);
+
+    // Ensure the number of blocks after tiling does not exceed coreNum
+    int64_t numBlocks = (axisSize + finalTileSize - 1) / finalTileSize;
+    if (numBlocks > coreNum) {
+      // Adjust tile size to ensure numBlocks <= coreNum (ceiling division)
+      finalTileSize = (axisSize + coreNum - 1) / coreNum;
+      finalTileSize = std::max<int64_t>(finalTileSize, 1);
+    }
+
+    // Add constraint
+    // First Tile: Parallel
+    existingTileConfig->value = static_cast<int>(finalTileSize);
+    // First Tile: Vectorization
+    axis->tryAddConstraint(pos, Constraint({static_cast<int>(innerTileSize)}));
+  }
+}
+
+void ParallelStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
+  // Get total available cores from NPU resource
+  int64_t totalCores = npuGraph->coreNum;
+
+  // Collect axes
+  SmallVector<AxisPtr> axes;
+  npuGraph->rootAxis->forEachAxisTopDown([&axes](const AxisPtr axis) {
+    if (axis) {
+      axes.push_back(axis);
+    }
+  });
+
+  if (axes.empty()) {
+    return;
+  }
+
+  // Collect axes information
+  int pos = npuGraph->tileNum;
+  collectAxesInfo(axes, pos);
+
+  // Allocate cores for parallel and reduce axes
+  auto [coresForParallel, coresForReduce] = allocateCoresForAxes(totalCores);
+
+  // Compute and apply tile sizes for all axes
+  applyParallelTiling(axes, coresForParallel, coresForReduce, totalCores, pos);
+
+  // Mark the outermost parallel axis for multi-core execution
+  for (const auto &axis : axes) {
+    if (axis && axis->axisType.find(Axis::AxisLabel::kReduction) == axis->axisType.end()) {
+      (void)axis->axisType.insert(Axis::AxisLabel::kMultiCore);
+      break;
+    }
+  }
+
+  ++npuGraph->tileNum;
 }
 }  // namespace autotiling
 }  // namespace akg

@@ -206,6 +206,79 @@ class TestDSLAdapterCpp:
         assert "warmup" in code.lower()
 
 
+class TestDSLAdapterCudaC:
+    """Test CUDA C DSL Adapter."""
+    
+    def test_get_import_statements(self):
+        """CUDA C adapter should emit torch cpp extension imports."""
+        adapter = get_dsl_adapter("cuda_c")
+        imports = adapter.get_import_statements("torch")
+        assert "from torch.utils.cpp_extension import load_inline" in imports
+    
+    def test_get_impl_import(self):
+        """CUDA C adapter now imports ModelNew."""
+        adapter = get_dsl_adapter("cuda_c")
+        imports = adapter.get_impl_import("test_op", "test_func")
+        assert "from test_op_cuda_c import ModelNew" in imports
+    
+    def test_create_impl_module(self):
+        """Impl model should be instantiated once and moved to device."""
+        adapter = get_dsl_adapter("cuda_c")
+        framework_adapter = get_framework_adapter("torch")
+        code = adapter.create_impl_module("torch", framework_adapter)
+        assert "impl_model = ModelNew(*init_params)" in code
+        assert "impl_model = impl_model.to(device)" in code
+    
+    def test_call_impl(self):
+        """Call site should reuse impl_model."""
+        adapter = get_dsl_adapter("cuda_c")
+        framework_adapter = get_framework_adapter("torch")
+        code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
+        assert "impl_output = impl_model(*inputs)" in code
+    
+    def test_benchmark_impl(self):
+        """Benchmark section should invoke impl_model."""
+        adapter = get_dsl_adapter("cuda_c")
+        code = adapter.benchmark_impl("test_func", "inputs", 5, 50, "cuda", "test_op")
+        assert "def cuda_c_benchmark_fn()" in code
+        assert "impl_model(*inputs)" in code
+        assert "torch.cuda.synchronize()" in code
+
+
+class TestDSLAdapterTilelangCuda:
+    """Test TileLang CUDA DSL Adapter."""
+    
+    def test_get_import_statements(self):
+        adapter = get_dsl_adapter("tilelang_cuda")
+        imports = adapter.get_import_statements("torch")
+        assert "import tilelang.language as T" in imports
+    
+    def test_get_impl_import(self):
+        adapter = get_dsl_adapter("tilelang_cuda")
+        imports = adapter.get_impl_import("test_op", "test_func")
+        assert "from test_op_tilelang_cuda import ModelNew" in imports
+    
+    def test_create_impl_module(self):
+        adapter = get_dsl_adapter("tilelang_cuda")
+        framework_adapter = get_framework_adapter("torch")
+        code = adapter.create_impl_module("torch", framework_adapter)
+        assert "impl_model = ModelNew(*init_params)" in code
+        assert "impl_model = impl_model.to(device)" in code
+    
+    def test_call_impl(self):
+        adapter = get_dsl_adapter("tilelang_cuda")
+        framework_adapter = get_framework_adapter("torch")
+        code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
+        assert "impl_output = impl_model(*inputs)" in code
+    
+    def test_benchmark_impl(self):
+        adapter = get_dsl_adapter("tilelang_cuda")
+        code = adapter.benchmark_impl("test_func", "inputs", 5, 50, "cuda", "test_op")
+        assert "tilelang_cuda_benchmark_fn" in code
+        assert "impl_model(*inputs)" in code
+        assert "torch.cuda.synchronize()" in code
+
+
 class TestDSLAdapterFactory:
     """Test DSL Adapter Factory."""
     

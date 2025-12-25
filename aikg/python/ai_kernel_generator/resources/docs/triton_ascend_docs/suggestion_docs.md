@@ -146,7 +146,63 @@ exp_data = tl.exp(stable_data)
 - 禁止 链式布尔运算 → 分步计算mask
 - 禁止 张量直接索引 → 使用tl.load/tl.store
 **Ascend后端**
-- 禁止 `tl.where` → 使用if-else
+- 复杂场景 `tl.where` → 使用if-else
+- 禁止 `while` 循环 → 使用 for 替代（见下文）
+
+### while 循环替代方案（Ascend后端）
+
+Ascend后端不支持`while`循环，需根据循环上限是否为编译时常量选择替代方案。
+
+**情况1：循环上限是静态值（编译时常量）**
+
+直接用`for range`替代，无需额外处理：
+
+```python
+# ❌ 错误：while 循环
+i = 0
+while i < N_ITERS:  # N_ITERS 是编译时常量
+    # 处理逻辑
+    i += 1
+
+# ✅ 正确：直接用 for range
+for i in range(N_ITERS):  # N_ITERS: tl.constexpr
+    # 处理逻辑
+```
+
+**情况2：循环上限是动态值（运行时参数）**
+
+设置足够大的编译时常量作为循环上界，用`if`判断控制实际执行：
+
+```python
+# ❌ 错误：while 循环（n_iters 是运行时动态值）
+@triton.jit
+def kernel_while(ptr, n_iters, TILE: tl.constexpr):
+    i = 0
+    while i < n_iters:
+        offset = i * TILE + tl.arange(0, TILE)
+        data = tl.load(ptr + offset)
+        tl.store(ptr + offset, data * 2)
+        i += 1
+
+# ✅ 正确：for + if 替代方案
+@triton.jit
+def kernel_for_if(
+    ptr,
+    n_iters,              # 运行时动态值
+    TILE: tl.constexpr,
+    MAX_ITERS: tl.constexpr,  # 编译时常量上界（需足够大）
+):
+    for i in range(MAX_ITERS):
+        if i < n_iters:
+            offset = i * TILE + tl.arange(0, TILE)
+            data = tl.load(ptr + offset)
+            tl.store(ptr + offset, data * 2)
+```
+
+**注意事项**：
+- `MAX_ITERS` 需设置得足够大，覆盖所有可能的运行时值
+- 当实际迭代次数远小于上界时，会有空循环迭代开销
+- 上界设置过大会增加编译时间
 
 ### 切片操作规范
 Triton不支持Python风格的直接切片语法（如`b[0]`或`b[i:j]`），需使用专用API：
@@ -204,11 +260,113 @@ Ascend 后端对`tl.where`生成的复杂指针运算支持不完全。复杂条
 
 对于输入shape较大的算子，直接按照`BLOCK_SIZE`切分得到的grid总数可能超过65535，这在Triton-Ascend中是不支持的。有两种解决方案：
 
-**方案1：kernel内循环处理（推荐）**
+**方案1：交错循环处理（强烈推荐，适用于按行/按块独立处理的场景）**
 
-将grid设置得更小，让每个grid处理更多数据。由于UB（Unified Buffer）大小有限制，不能在一个grid中一次性处理所有分配的数据，而应该通过for循环分步分块处理：
+将grid固定为核心数，每个核心以步长方式交错处理数据。这种方案代码最简洁，负载均衡最好：
 
 ```python
+import torch_npu
+
+# 示例：处理shape为(M, N)的张量，M可能非常大（如327680）
+@triton.jit
+def row_processing_kernel(
+    input_ptr, output_ptr, 
+    M, N,
+    stride_m, stride_n,
+    BLOCK_N: tl.constexpr,
+    CORE_NUM: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    
+    # 交错处理：每个核心处理 pid, pid+CORE_NUM, pid+2*CORE_NUM, ... 行
+    # pid=0 处理第 0, CORE_NUM, 2*CORE_NUM, ... 行
+    # pid=1 处理第 1, CORE_NUM+1, 2*CORE_NUM+1, ... 行
+    # 这样所有行都会被恰好处理一次，负载均衡
+    for row_idx in range(pid, M, CORE_NUM):
+        # 计算当前行的指针偏移
+        row_ptr = input_ptr + row_idx * stride_m
+        out_row_ptr = output_ptr + row_idx * stride_m
+        
+        # 处理当前行的数据（可根据需要进一步分块）
+        for col_start in range(0, N, BLOCK_N):
+            col_offsets = col_start + tl.arange(0, BLOCK_N)
+            mask = col_offsets < N
+            
+            data = tl.load(row_ptr + col_offsets * stride_n, mask=mask)
+            result = compute_function(data)
+            tl.store(out_row_ptr + col_offsets * stride_n, result, mask=mask)
+
+# 启动方式
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # 在初始化阶段获取核心数，向量计算类算子使用VEC核心数
+        try:
+            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
+        except:
+            self.VEC_CORE_NUM = 40  # Ascend 910B4 默认: 20个AI Core × 2个VEC/Core = 40
+
+    def forward(self, input_tensor):
+        M, N = input_tensor.shape
+        output_tensor = torch.empty_like(input_tensor)
+        
+        grid = (self.VEC_CORE_NUM,)
+        
+        row_processing_kernel[grid](
+            input_tensor, output_tensor,
+            M, N,
+            input_tensor.stride(0), input_tensor.stride(1),
+            BLOCK_N=256,
+            CORE_NUM=self.VEC_CORE_NUM,
+        )
+        return output_tensor
+```
+
+**动态获取核心数**：
+
+根据算子类型选择对应的核心数，**必须在`__init__`中获取**（避免forward中重复调用导致同步开销）：
+- **向量计算类算子**（element-wise、softmax、归一化等）：使用VEC核心数
+- **矩阵计算类算子**（matmul、attention等）：使用CUBE核心数
+
+```python
+import torch_npu
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # 在__init__中获取核心数，只执行一次，避免forward中的同步开销
+        try:
+            # 向量计算类算子使用VEC核心数
+            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
+            # 矩阵计算类算子使用CUBE核心数
+            self.CUBE_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("cube_core_num", 20)
+        except:
+            self.VEC_CORE_NUM = 40   # Ascend 910B4 默认: 20个AI Core × 2个VEC/Core = 40
+            self.CUBE_CORE_NUM = 20  # Ascend 910B4 默认: 20个AI Core × 1个CUBE/Core = 20
+```
+
+**注意**：`torch_npu`的import和`get_device_limit`调用会触发设备同步，因此**禁止在forward中调用**，必须放在`__init__`初始化阶段。
+
+**核心模式**：`for i in range(pid, total_items, core_num)` 是经典的并行工作分配模式。
+
+**优点**：
+- 代码极其简洁，一行for循环解决问题
+- 负载天然均衡（每个核心处理的任务数差最多为1）
+- 无需计算ELEMENTS_PER_GRID等复杂参数
+- 适用于任意大小的输入shape
+
+**适用场景及核心选择**：
+- **VEC核心**：按行独立处理的算子（逐行softmax、逐行归一化、逐行reduce、element-wise等）
+- **CUBE核心**：矩阵乘法类算子（matmul、attention等）
+- 总任务数（行数/块数）远大于核心数的场景
+
+**方案2：连续分块处理（适用于需要连续内存访问优化的场景）**
+
+将grid设置得更小，让每个grid处理连续的一段数据。适用于对内存连续性有要求的场景：
+
+```python
+import torch_npu
+
 # 示例：处理大shape的向量操作
 @triton.jit
 def large_vector_kernel(
@@ -236,60 +394,32 @@ def large_vector_kernel(
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
+        # 在__init__中获取核心数
+        try:
+            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
+        except:
+            self.VEC_CORE_NUM = 40
 
     def forward(self, input_tensor):
-    n_elements = input_tensor.numel()
-    BLOCK_SIZE = * # 设置为尽可能大的合适的每次处理的值，充分利用ub
-    MAX_GRID_SIZE = * # 设置为对应处理核的整数倍（区分vec与cube），小于65535的值
-    
-    # 计算每个grid需要处理的元素数
-    ELEMENTS_PER_GRID = triton.cdiv(n_elements, MAX_GRID_SIZE)
-    # 向上取整到BLOCK_SIZE的倍数，确保循环能完整处理
-    ELEMENTS_PER_GRID = triton.cdiv(ELEMENTS_PER_GRID, BLOCK_SIZE) * BLOCK_SIZE
-    
-    # 计算实际需要的grid数量
-    grid_size = triton.cdiv(n_elements, ELEMENTS_PER_GRID)
-    
-    output_tensor = torch.empty_like(input_tensor)
-    large_vector_kernel[grid_size,](
-        input_tensor, output_tensor, n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
-        ELEMENTS_PER_GRID=ELEMENTS_PER_GRID,
-    )
+        n_elements = input_tensor.numel()
+        BLOCK_SIZE = *  # 设置为尽可能大的合适的每次处理的值，充分利用ub
+        MAX_GRID_SIZE = self.VEC_CORE_NUM  # 使用初始化时获取的核心数
+        
+        # 计算每个grid需要处理的元素数
+        ELEMENTS_PER_GRID = triton.cdiv(n_elements, MAX_GRID_SIZE)
+        # 向上取整到BLOCK_SIZE的倍数，确保循环能完整处理
+        ELEMENTS_PER_GRID = triton.cdiv(ELEMENTS_PER_GRID, BLOCK_SIZE) * BLOCK_SIZE
+        
+        # 计算实际需要的grid数量
+        grid_size = triton.cdiv(n_elements, ELEMENTS_PER_GRID)
+        
+        output_tensor = torch.empty_like(input_tensor)
+        large_vector_kernel[grid_size,](
+            input_tensor, output_tensor, n_elements,
+            BLOCK_SIZE=BLOCK_SIZE,
+            ELEMENTS_PER_GRID=ELEMENTS_PER_GRID,
+        )
         return output_tensor
-```
-
-**方案2：host侧多次启动kernel**
-
-如果一次内核启动无法处理整个张量，可以在host侧将张量分成多个部分，通过多次启动内核来完成计算：
-
-```python
-class ModelNew(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-    M = x.shape[0]
-    BLOCK_SIZE = * # 设置为尽可能大的合适的每次处理的值，充分利用ub
-    MAX_GRID_SIZE = * # 设置为对应处理核的整数倍（区分vec与cube），小于65535的值
-    
-    if M > MAX_GRID_SIZE:
-        # 使用多批次处理
-        for start_row in range(0, M, MAX_GRID_SIZE):
-            end_row = min(start_row + MAX_GRID_SIZE, M)
-            batch_size = end_row - start_row
-            
-            # 提取当前批次的数据
-            x_batch = x[start_row:end_row]
-            
-            # 启动内核处理当前批次
-            grid = (batch_size,)
-            op_kernel[grid](x_batch, x_batch.stride(0), BLOCK_SIZE)
-    else:
-        # 单次启动即可
-        grid = (M,)
-        op_kernel[grid](x, x.stride(0), BLOCK_SIZE)
-        return x
 ```
 
 ## 5. 调试与排查清单
@@ -306,7 +436,7 @@ class ModelNew(torch.nn.Module):
 
 ### Grid与Block配置检查
 - [ ] Grid总大小是否不超过65535？
-- [ ] 对于大shape算子，是否采用了kernel内循环或host侧分批处理？
+- [ ] 对于大shape算子，是否采用了交错循环`for i in range(pid, total, core_num)`处理？
 - [ ] Grid维度是否为tuple类型且不超过3维？
 
 ### 并发与原子操作检查
@@ -328,8 +458,9 @@ class ModelNew(torch.nn.Module):
 | 错误类型 | 典型症状 | 常见原因 | 解决方案 |
 |---------|---------|---------|---------|
 | 内存越界访问 | 运行时错误、结果异常、随机崩溃 | load/store缺少mask或boundary_check | 添加正确的mask或boundary_check保护 |
-| Grid超限 | 编译失败或运行时错误 | grid总大小超过65535 | 使用kernel内循环或host侧分批处理 |
+| Grid超限 | 编译失败或运行时错误 | grid总大小超过65535 | 使用交错循环`for i in range(pid, total, core_num)`或连续分块处理 |
 | 控制流错误 | 编译失败、语法错误 | 使用了return/break/continue | 移除禁用语句，使用mask控制流程 |
+| while循环错误 | 编译失败（Ascend后端） | 使用了while循环 | 改用for + if替代：`for i in range(MAX): if i < n:` |
 | 切片语法错误 | 编译失败 | 使用了`b[0]`或`b[i:j]`直接切片 | 使用`tl.get_element`或`tl.extract_slice` |
 | tl.arange索引错误 | 编译失败 | 对`tl.arange`结果使用`get_element` | 直接计算索引值而非提取 |
 | 类型转换错误 | 编译警告或错误 | 使用`tl.float16(scalar)`转换 | 改用`scalar.to(tl.float16)` |

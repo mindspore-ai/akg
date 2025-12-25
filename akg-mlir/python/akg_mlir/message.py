@@ -24,6 +24,7 @@ import subprocess
 import shutil
 
 from .utils.cpu_profiling_wrapper import wrap_timer_func
+from .backends.ascend import run_akg_opt, run_bishengir_opt
 
 HOST_SHAPES = "hostShapes"
 DEVICE_SHAPES = "deviceShapes"
@@ -56,7 +57,7 @@ def write_code(js_dict, fname):
     Export kernel config files.
 
     Args:
-        js_dict: dict of kernel informations.
+        js_dict: dict of kernel information.
         fname: the name of json file to be generated.
     """
     if os.path.exists(fname):
@@ -134,6 +135,7 @@ class AkgMlirDriver:
         )
         self.log_level = log_level
         self.target_info = ""
+        self.arch = ""
         self.dump_ir = dump_ir
         self.repo_path = repo_path
         self.profiling_trails = profiling_trails
@@ -144,9 +146,11 @@ class AkgMlirDriver:
             kernel_info = json.loads(f.read())
             self.kernel_name = kernel_info["op"]
             self.backend = "ascend" if kernel_info["process"] == "aicore" else kernel_info["process"]
-            if kernel_info.get("target_info"):
-                compute_capability = kernel_info.get("target_info").get("compute_capability", "7.0")
+            target_info = kernel_info.get("target_info")
+            if target_info:
+                compute_capability = target_info.get("compute_capability", "7.0")
                 self.target_info = "v100" if compute_capability == "7.0" else "a100"
+                self.arch = target_info.get("arch", "")
         self.dynamic_shape = dynamic_shape
 
     def compile(self):
@@ -275,26 +279,21 @@ class AkgMlirDriver:
         """compile mlir use ascend pipeline."""
         input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
         out_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
-        ascend_opt_option = "--ascend-opt"
-        if dyn_shape:
-            ascend_opt_option += "=dynamic-shape=true"
-        if self.enable_akg_loop_fusion:
-            ascend_opt_option += "=enable-akg-loop-fusion=1"
-        cmd = [os.path.join(self.akg_tools_dir, "bin/akg-opt"), input_file, ascend_opt_option, "-o", out_file]
+
+        dump_log_path = None
         if self.dump_ir:
-            cmd.append("--mlir-print-ir-after-all")
-        try:
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            if self.dump_ir:
-                dump_log = os.path.join(self.output_dir, kernel_name + "_dump_ascend_state1.log")
-                with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
-                    f.write(result.stderr)
-        except subprocess.CalledProcessError as e:
-            logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
-            raise RuntimeError("mlir pipeline failed in case: " + kernel_name + "!\n") from e
+            dump_log_path = os.path.join(self.output_dir, kernel_name + "_dump_ascend_state1.log")
 
-
-        logging.info("mlir pipeline success")
+        run_akg_opt(
+            input_file=input_file,
+            output_file=out_file,
+            akg_tools_dir=self.akg_tools_dir,
+            dyn_shape=dyn_shape,
+            enable_akg_loop_fusion=self.enable_akg_loop_fusion,
+            arch=self.arch,
+            dump_ir=self.dump_ir,
+            dump_log_path=dump_log_path
+        )
 
     def _dump_ascend_meta_data(self, block_dim, kernel_name):
         """dump ascend meta data."""
@@ -327,27 +326,36 @@ class AkgMlirDriver:
 
     def _run_ascend_generate_binary(self, kernel_name):
         """compile mlir to binary for ascend."""
-        logging.info("bishengir-compile code generater:")
+        logging.info("bishengir-compile code generator:")
         npu_compiler_path = get_npucompiler_path()
         input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
-        out_file = os.path.join(self.output_dir, kernel_name + ".so")
+        so_file = os.path.join(self.output_dir, kernel_name + ".so")
+
+        if self.enable_akg_loop_fusion:
+            opt_file = os.path.join(self.output_dir, kernel_name + "_opt.mlir")
+            run_bishengir_opt(
+                input_file=input_file,
+                output_file=opt_file,
+                dump_ir=self.dump_ir
+            )
+            input_file = opt_file
 
         cmd = [
             npu_compiler_path,
             input_file,
-            "-enable-hfusion-compile=true",
             "-enable-hivm-compile=true",
             "-enable-bin-relocation=false",
             "-block-dim=40",
             "-enable-auto-multi-buffer=true",
             "-o",
-            out_file,
+            so_file,
         ]
 
         if self.enable_akg_loop_fusion:
-            cmd.append("--enable-triton-kernel-compile=true")
-        if self.dump_ir:
-            cmd.append("--mlir-print-ir-after-all")
+            cmd.append("-enable-hfusion-compile=false")
+        else:
+            cmd.append("-enable-hfusion-compile=true")
+
         dump_log = os.path.join(self.output_dir, kernel_name + "_dump_bishengir.log")
         with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
             try:

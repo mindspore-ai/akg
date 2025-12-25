@@ -22,10 +22,14 @@
 #include "akg/Dialect/Affine/Analysis/Axis.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
+#include "llvm/ADT/SmallVector.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/Attributes.h"
 
 namespace mlir {
 namespace akg {
 namespace autotiling {
+using llvm::SmallVector;
 InitGraphPtr parseIr(Operation *funcOp, const std::vector<SmallVector<affine::AffineForOp, 6>> &bands) {
   auto initGraph = parseIr(bands);
   initGraph->funcOp = funcOp;
@@ -115,17 +119,6 @@ void UniquePrimeCollect(Operation *op) {
   });
 }
 
-// todo Implement buildAscendModelGraph to optimize UB/Cube/Vector scheduling
-GpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {
-  auto npuGraph = std::make_shared<GpuModelGraph>(initGraph);
-  npuGraph->funcOp = initGraph->funcOp;
-  // UniquePrimeCollect(initGraph->funcOp);
-  npuGraph->AnalyzeGraphTemplate();
-  tilingMgr->addStrategy(std::make_shared<NpuDefaultTileStrategy>());
-  tilingMgr->processOn(npuGraph);
-  return npuGraph;
-}
-
 GpuModelGraphPtr buildGpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {
   auto gpuGraph = std::make_shared<GpuModelGraph>(initGraph);
   gpuGraph->funcOp = initGraph->funcOp;
@@ -154,6 +147,20 @@ GpuModelGraphPtr buildGpuModelGraph(InitGraphPtr initGraph, const TilingStrategy
   }
   tilingMgr->processOn(gpuGraph);
   return gpuGraph;
+}
+
+NpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {
+  auto npuGraph = std::make_shared<NpuModelGraph>(initGraph);
+  npuGraph->funcOp = initGraph->funcOp;
+  npuGraph->AnalyzeGraphTemplate();
+  npuGraph->AnalyzeBufferInfo();
+  npuGraph->InitResource();
+
+  tilingMgr->addStrategy(std::make_shared<VectorizationStrategy>());
+  tilingMgr->addStrategy(std::make_shared<ParallelStrategy>());
+
+  tilingMgr->processOn(npuGraph);
+  return npuGraph;
 }
 
 CpuModelGraphPtr buildCpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {

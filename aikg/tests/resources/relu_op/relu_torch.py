@@ -16,7 +16,7 @@ dim = 16384
 
 
 def get_inputs():
-    x = torch.randn(batch_size, dim)
+    x = torch.randn(batch_size, dim).to(torch.bfloat16)
     return [x]
 
 

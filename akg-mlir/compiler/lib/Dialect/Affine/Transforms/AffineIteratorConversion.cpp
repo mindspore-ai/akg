@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,9 @@
  */
 
 #include "akg/Dialect/Affine/Transforms/AffineIteratorConversion.h"
-#include "akg/Utils/AnalysisCommon.hpp"
 
+#include <algorithm>
+#include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/CommandLine.h"
@@ -32,6 +33,7 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
+
 
 namespace mlir {
 #define GEN_PASS_DECL_AFFINEITERATORCONVERSION
@@ -129,15 +131,7 @@ static affine::AffineLoadOp getLoadOp(affine::AffineForOp reduceForOp, Operation
     if (op != lhs.getDefiningOp() && op != rhs.getDefiningOp()) {
       return;
     }
-    auto indices = op.getIndices();
-    bool flag = false;
-    for (auto index : indices) {
-      if (index == iv) {
-        flag = true;
-        break;
-      }
-    }
-    if (!flag) {
+    if (llvm::find(op.getIndices(), iv) == op.getIndices().end()) {
       loadOp = op;
     }
   });
@@ -147,7 +141,7 @@ static affine::AffineLoadOp getLoadOp(affine::AffineForOp reduceForOp, Operation
 static Operation *getInnermostReduceOp(Operation *curOp) {
   Operation *innermostReduceOp = nullptr;
   curOp->walk([&](affine::AffineForOp op) -> WalkResult {
-    if (op->getAttr("reduceLoop")) {
+    if (op->getAttr(kReductionLoopAttr)) {
       innermostReduceOp = op.getOperation();
       return WalkResult::interrupt();
     }
@@ -176,7 +170,7 @@ void AffineIteratorConversion::loadRemoveEachBand(Operation *curOp) {
     return;
   }
   affine::AffineStoreOp initStoreOp = nullptr;
-  while (isa<affine::AffineForOp>(reduceLoopOp) && reduceLoopOp->getAttr("reduceLoop")) {
+  while (isa<affine::AffineForOp>(reduceLoopOp) && reduceLoopOp->getAttr(kReductionLoopAttr)) {
     affine::AffineForOp reduceLoop = cast<affine::AffineForOp>(reduceLoopOp);
     // init load statement
     affine::AffineLoadOp loadOp = getLoadOp(reduceLoop, reduceArithOp);
@@ -212,16 +206,15 @@ void AffineIteratorConversion::loadRemoveEachBand(Operation *curOp) {
       Operation *user = use.getOwner();
       return newLoop->isProperAncestor(user);
     });
-    b.setInsertionPoint(reduceLoop);
+    b.setInsertionPointAfter(newLoop.getOperation());
     auto parentOp = newLoop.getOperation()->getParentOp();
-    if (isa<affine::AffineForOp>(parentOp) && parentOp->getAttr("reduceLoop")) {
-      CreateArithOp rewriter(b, newLoop, loadOp, storeOp, reduceArithOp);
-      reduceArithOp = identifyAndCreateArithOp(rewriter);
+    if (isa<affine::AffineForOp>(parentOp) && parentOp->getAttr(kReductionLoopAttr)) {
+      CreateArithOp arithOpCreater(b, newLoop, loadOp, storeOp, reduceArithOp);
+      reduceArithOp = identifyAndCreateArithOp(arithOpCreater);
     } else {
       b.create<affine::AffineStoreOp>(storeOp.getLoc(), newLoop.getResults().back(), storeOp.getMemRef(),
                                       storeOp.getAffineMapAttr().getValue(), storeOp.getIndices());
     }
-    reduceLoop.erase();
     loadOp.erase();
     storeOp.erase();
     reduceLoopOp = newLoop.getOperation()->getParentOp();
@@ -245,16 +238,15 @@ void AffineIteratorConversion::runOnOperation() {
   }
 
   removeInitMemoryCopy(func);
-  // todo(yanzhi): bugfix this function
+
   SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(func);
   for (auto reduceLoop : reduceLoops) {
-    reduceLoop->setAttr("reduceLoop", b.getUnitAttr());
+    reduceLoop->setAttr(kReductionLoopAttr, b.getUnitAttr());
   }
 
   SmallVector<affine::AffineForOp, 6> bands;
-  for (auto band : func.getOps<affine::AffineForOp>()) {
-    bands.push_back(band);
-  }
+  (void)std::copy(func.getOps<affine::AffineForOp>().begin(), func.getOps<affine::AffineForOp>().end(),
+                  std::back_inserter(bands));
   for (auto band : bands) {
     loadRemoveEachBand(band);
   }

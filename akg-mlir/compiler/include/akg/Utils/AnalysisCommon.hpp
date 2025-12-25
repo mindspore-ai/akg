@@ -57,6 +57,7 @@ constexpr auto kOperatorTypeStr = "OperatorType";
 constexpr auto kReduceStr = "Reduce";
 constexpr auto kReductionAxesStr = "reduction_axes";
 constexpr auto kReductionTypeStr = "reduction_type";
+constexpr auto kReductionLoopAttr = "reduction_loop";
 constexpr auto kVectorize128Bit = 128;
 constexpr auto kVectorize256Bit = 256;
 constexpr auto kVectorize512Bit = 512;
@@ -65,6 +66,11 @@ constexpr auto kAVXInstructionSet = "avx";
 constexpr auto kAVX2InstructionSet = "avx2";
 constexpr auto kAVX512InstructionSet = "avx512";
 constexpr auto kNEONInstructionSet = "neon";
+constexpr auto kTileForOneAttr = "__tiled_for___1";
+constexpr auto kMapForToForallAttr = "map_for_to_forall";
+constexpr auto kVectorAttr = "vector";
+constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
+
 
 enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduce, Matmul, Conv };
 const std::unordered_map<int, std::string> operatorTemplateMap = {{0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"},
@@ -406,13 +412,20 @@ class CommonUtils {
   }
 
   static Value getStoreMemref(Operation *storeOp) {
-    Value memref;
-    if (dyn_cast<affine::AffineStoreOp>(storeOp)) {
-      memref = dyn_cast<affine::AffineStoreOp>(storeOp).getMemref();
-    } else if (dyn_cast<memref::StoreOp>(storeOp)) {
-      memref = dyn_cast<memref::StoreOp>(storeOp).getMemref();
-    } else {
+    if (!storeOp) {
+      return Value();
+    }
+    if (!isa<affine::AffineStoreOp>(storeOp) && !isa<memref::StoreOp>(storeOp)) {
       llvm::errs() << "can only get memref from AffineStore or memref::StoreOp.\n";
+      return Value();
+    }
+    if (storeOp->getNumOperands() < 2) {
+      llvm::errs() << "store op has insufficient operands when querying memref.\n";
+      return Value();
+    }
+    Value memref = storeOp->getOperand(1);
+    if (!memref || !isa<BaseMemRefType>(memref.getType())) {
+      return Value();
     }
     return memref;
   }

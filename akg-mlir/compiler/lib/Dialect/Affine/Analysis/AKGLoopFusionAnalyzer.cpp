@@ -165,6 +165,165 @@ static std::unordered_map<unsigned, unsigned> findReachableGroups(
   return reachable;
 }
 
+// Helper function to find all last nodes in paths starting from srcGroupId
+// Returns a vector of groupIds of all last nodes in paths, or empty vector if no path exists
+// Example: If fusionPlans contains 33->38, 38->42, 33->52, and srcGroupId=33,
+//          the function returns [42, 52] (all last nodes in different paths)
+static std::vector<unsigned> findLastNodesInPath(unsigned srcGroupId, const std::vector<FusionPlan> &plans) {
+  std::vector<unsigned> lastNodes;
+  auto reachable = findReachableGroups(srcGroupId, plans);
+  if (reachable.empty()) {
+    return lastNodes;
+  }
+
+  // Find all nodes that have no outgoing edges in the path
+  // These are the last nodes in different paths from srcGroupId
+  for (const auto &[groupId, pathLen] : reachable) {
+    // Check if this node has outgoing edges in the path
+    bool hasOutgoing = false;
+    for (const auto &plan : plans) {
+      if (plan.fusedGroup.from == groupId) {
+        // Check if the target is also in the reachable set (part of the path)
+        if (reachable.find(plan.fusedGroup.to) != reachable.end()) {
+          hasOutgoing = true;
+          break;
+        }
+      }
+    }
+
+    // If this node has no outgoing edges in the path, it's a last node
+    if (!hasOutgoing) {
+      lastNodes.push_back(groupId);
+    }
+  }
+
+  return lastNodes;
+}
+
+// Connects all last nodes in paths from srcGroupId to dstGroupId.
+// Creates fusion plans from each last node to dstGroupId if they don't already exist.
+// Example: If srcGroupId=33, paths are 33->38->42 and 33->52, and dstGroupId=60,
+//          creates plans 42->60 and 52->60
+// Returns true if paths were found and connected (i.e., lastNodes exist and are not just srcGroupId),
+// false otherwise
+bool FusionAnalyzer::connectLastNodesToTarget(unsigned srcGroupId, unsigned dstGroupId) {
+  // Find all last nodes in paths starting from srcGroupId
+  std::vector<unsigned> lastNodes = findLastNodesInPath(srcGroupId, fusionPlans);
+
+  // Check if real paths were found (lastNodes contains nodes other than srcGroupId)
+  bool hasRealPaths = std::any_of(lastNodes.begin(), lastNodes.end(),
+      [srcGroupId](unsigned nodeId) { return nodeId != srcGroupId; });
+
+  if (lastNodes.empty()) {
+    // If no paths exist, connect srcGroupId directly to dstGroupId
+    lastNodes.push_back(srcGroupId);
+  }
+
+  // For each last node, create a fusion plan to dstGroupId if it doesn't exist
+  for (unsigned lastNodeId : lastNodes) {
+    // Skip if lastNodeId is the same as dstGroupId
+    if (lastNodeId == dstGroupId) {
+      continue;
+    }
+
+    // Check if a plan from lastNodeId to dstGroupId already exists
+    bool planExists = std::any_of(fusionPlans.begin(), fusionPlans.end(),
+        [lastNodeId, dstGroupId](const FusionPlan &plan) {
+          return plan.fusedGroup.from == lastNodeId && plan.fusedGroup.to == dstGroupId;
+        });
+
+    // Create new fusion plan if it doesn't exist
+    if (!planExists) {
+      auto lastNodeGroup = depGraph.getGroup(lastNodeId);
+      auto dstGroup = depGraph.getGroup(dstGroupId);
+
+      if (lastNodeGroup != nullptr && dstGroup != nullptr) {
+        FusionPlan newPlan;
+        newPlan.fusedGroup = FuseEdge(lastNodeId, dstGroupId);
+        newPlan.fusedBand = FuseEdge(
+            depGraph.getNodeId(lastNodeGroup->getLeadingFor()),
+            depGraph.getNodeId(dstGroup->getLeadingFor()));
+        newPlan.fusionType = "V";
+
+        llvm::outs() << "Creating new plan: group " << lastNodeId << " -> " << dstGroupId
+                     << " (node " << newPlan.fusedBand.from << " -> " << newPlan.fusedBand.to << ")\n";
+        fusionPlans.emplace_back(newPlan);
+      }
+    }
+  }
+
+  // Return true if real paths were found (not just srcGroupId itself)
+  return hasRealPaths;
+}
+
+// Redirects shorter path to longer path's starting group.
+// Modifies fusion plans to redirect paths ending at intersectionId to targetGroup.
+void FusionAnalyzer::redirectFusionPlanToTarget(unsigned intersectionId,
+                                                 const std::unordered_map<unsigned, unsigned> &reachable,
+                                                 unsigned pathLen, GroupPtr targetGroup) {
+  auto targetGroupId = targetGroup->groupId;
+  auto targetNodeId = depGraph.getNodeId(targetGroup->getLeadingFor());
+  for (auto it = fusionPlans.begin(); it != fusionPlans.end(); ++it) {
+    if (it->fusedGroup.to != intersectionId) {
+      continue;
+    }
+
+    auto fromIt = reachable.find(it->fusedGroup.from);
+    if (fromIt != reachable.end() && fromIt->second == pathLen - 1) {
+      it->fusedGroup.to = targetGroupId;
+      it->fusedBand.to = targetNodeId;
+      it->fusionType = "V";
+
+      auto group = depGraph.getGroup(it->fusedGroup.from);
+      unsigned fromNodeId = 0;
+      if (group != nullptr) {
+        fromNodeId = depGraph.getNodeId(group->getLeadingFor());
+      }
+
+      auto intersectionGroup = depGraph.getGroup(intersectionId);
+      unsigned toNodeId = 0;
+      if (intersectionGroup != nullptr) {
+        toNodeId = depGraph.getNodeId(intersectionGroup->getLeadingFor());
+      }
+      llvm::outs() << "Modifying plan from nodeId " << fromNodeId
+                    << " -> " << toNodeId
+                    << " to nodeId " << fromNodeId << " -> " << targetNodeId << "\n";
+      return;
+    }
+  }
+}
+
+// Sets up direct fusion plan from srcGroup to dstGroup and links all source groups to destination group.
+// Updates fusePlan, oldPlan, and redirects all fusion plans pointing to srcGroup to dstGroup.
+void FusionAnalyzer::setupDirectFusionPlan(FusionPlan &fusePlan, FusionPlan &oldPlan,
+                                            const GroupPtr srcGroup, const GroupPtr dstGroup) {
+  // Set up direct fusion plan from srcGroup to dstGroup
+  fusePlan.fusedGroup.from = srcGroup->groupId;
+  fusePlan.fusedGroup.to = dstGroup->groupId;
+  fusePlan.fusedBand.from = depGraph.getNodeId(srcGroup->getLeadingFor());
+  fusePlan.fusedBand.to = depGraph.getNodeId(dstGroup->getLeadingFor());
+
+  // Update oldPlan to point to srcGroup
+  oldPlan.fusedGroup.to = srcGroup->groupId;
+  oldPlan.fusedBand.to = depGraph.getNodeId(srcGroup->getLeadingFor());
+
+  // Link all source groups to destination group
+  for (size_t i = 0; i < fusionPlans.size(); ++i) {
+    if (fusionPlans[i].fusedGroup.to == srcGroup->groupId) {
+      llvm::outs() << "Update fusePlan!!!\n";
+      llvm::outs() << "Old plan node " << fusionPlans[i].fusedBand.from << " -> "
+                   << fusionPlans[i].fusedBand.to << " to ";
+      fusionPlans[i].fusedGroup.to = dstGroup->groupId;
+      fusionPlans[i].fusedBand.to = fusePlan.fusedBand.to;
+      llvm::outs() << "Updated plan node " << fusionPlans[i].fusedBand.from << " -> "
+                   << fusionPlans[i].fusedBand.to << "\n";
+    }
+  }
+
+  llvm::outs() << "New Plan node " << fusePlan.fusedBand.from << " to " << fusePlan.fusedBand.to << "\n";
+  fusePlan.fusionType = "V";
+}
+
 std::pair<GroupPtr, GroupPtr> FusionAnalyzer::determineFusionOrder(
     const GroupPtr oldGroup, const GroupPtr newGroup) {
   std::string oldTemplateString = oldGroup->getGroupTemplateString();
@@ -204,12 +363,27 @@ std::pair<GroupPtr, GroupPtr> FusionAnalyzer::determineFusionOrder(
   return std::make_pair(newGroup, oldGroup);
 }
 
-GroupPtr FusionAnalyzer::handleIntersectionPoints(const GroupPtr oldGroup, const GroupPtr newGroup) {
+// Handles backward intersection points between two groups, finds the closest backward
+// intersection point and redirects fusion paths.
+//
+// Description:
+// When oldGroup and newGroup have backward intersection points in the fusion graph,
+// finds the closest backward intersection point (shortest total path), and redirects
+// the shorter path to the starting group of the longer path to optimize the fusion structure.
+//
+// Example:
+// Assume: newGroup has groupId=19 with fusion plan 19->29
+//         oldGroup has groupId=19 with fusion plan 19->34
+//         fusionPlans contains: 29->39, 34->39
+//
+// Fusion result:
+// 19->29, 29->34, 34->39
+GroupPtr FusionAnalyzer::handleBackwardIntersectionPoints(const GroupPtr oldGroup, const GroupPtr newGroup) {
   // Find all reachable groups from oldGroup and newGroup
   auto oldReachable = findReachableGroups(oldGroup->groupId, fusionPlans);
   auto newReachable = findReachableGroups(newGroup->groupId, fusionPlans);
 
-  // Find the intersection point with the shortest total distance (oldPathLen + newPathLen)
+  // Find the backward intersection point with the shortest total distance (oldPathLen + newPathLen)
   unsigned closestIntersectionId = 0;
   unsigned minTotalDistance = std::numeric_limits<unsigned>::max();
   unsigned minOldPathLen = std::numeric_limits<unsigned>::max();
@@ -221,7 +395,7 @@ GroupPtr FusionAnalyzer::handleIntersectionPoints(const GroupPtr oldGroup, const
       unsigned newPathLen = newReachable[groupId];
       unsigned totalDistance = oldPathLen + newPathLen;
 
-      // Track the intersection point with the shortest total distance
+      // Track the backward intersection point with the shortest total distance
       // If total distances are equal, prefer the one with shorter individual path
       if (totalDistance < minTotalDistance) {
         minTotalDistance = totalDistance;
@@ -233,7 +407,7 @@ GroupPtr FusionAnalyzer::handleIntersectionPoints(const GroupPtr oldGroup, const
     }
   }
 
-  // If no intersection points, return nullptr
+  // If no backward intersection points, return nullptr
   if (!foundIntersection) {
     return nullptr;
   }
@@ -256,50 +430,15 @@ GroupPtr FusionAnalyzer::handleIntersectionPoints(const GroupPtr oldGroup, const
     }
   }
 
-  // Lambda function to redirect shorter path to longer path's starting group
-  auto redirectFusionPlanToTarget = [&](unsigned intersectionId,
-                                        const std::unordered_map<unsigned, unsigned> &reachable,
-                                        unsigned pathLen, GroupPtr targetGroup) -> void {
-    auto targetGroupId = targetGroup->groupId;
-    auto targetNodeId = depGraph.getNodeId(targetGroup->getLeadingFor());
-    for (auto it = fusionPlans.begin(); it != fusionPlans.end(); ++it) {
-      if (it->fusedGroup.to != intersectionId) {
-        continue;
-      }
 
-      auto fromIt = reachable.find(it->fusedGroup.from);
-      if (fromIt != reachable.end() && fromIt->second == pathLen - 1) {
-        it->fusedGroup.to = targetGroupId;
-        it->fusedBand.to = targetNodeId;
-        it->fusionType = "V";
-
-        auto group = depGraph.getGroup(it->fusedGroup.from);
-        unsigned fromNodeId = 0;
-        if (group != nullptr) {
-          fromNodeId = depGraph.getNodeId(group->getLeadingFor());
-        }
-
-        auto intersectionGroup = depGraph.getGroup(intersectionId);
-        unsigned toNodeId = 0;
-        if (intersectionGroup != nullptr) {
-          toNodeId = depGraph.getNodeId(intersectionGroup->getLeadingFor());
-        }
-        llvm::outs() << "Modifying plan from nodeId " << fromNodeId
-                      << " -> " << toNodeId
-                      << " to nodeId " << fromNodeId << " -> " << targetNodeId << "\n";
-        return;
-      }
-    }
-  };
-
-  // Process only the closest intersection point
+  // Process only the closest backward intersection point
   auto intersectionGroup = depGraph.getGroup(closestIntersectionId);
   unsigned intersectionNodeId = 0;
   if (intersectionGroup != nullptr) {
     intersectionNodeId = depGraph.getNodeId(intersectionGroup->getLeadingFor());
   }
 
-  llvm::outs() << "Found closest intersection point: nodeId " << intersectionNodeId
+  llvm::outs() << "Found closest backward intersection point: nodeId " << intersectionNodeId
                << ", oldGroup path length: " << minOldPathLen
                << ", newGroup path length: " << minNewPathLen
                << ", total distance: " << minTotalDistance << "\n";
@@ -349,7 +488,7 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
       auto oldGroup = depGraph.getGroup(oldPlan.fusedGroup.to);
       auto newGroup = depGraph.getGroup(fusePlan.fusedGroup.to);
 
-      auto targetGroup = handleIntersectionPoints(oldGroup, newGroup);
+      auto targetGroup = handleBackwardIntersectionPoints(oldGroup, newGroup);
       if (targetGroup != nullptr) {
         oldPlan.fusedGroup.to = targetGroup->groupId;
         oldPlan.fusedBand.to = depGraph.getNodeId(targetGroup->getLeadingFor());
@@ -358,29 +497,24 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
 
       // Handle non-dependency case
       auto [srcGroup, dstGroup] = determineFusionOrder(oldGroup, newGroup);
-      fusePlan.fusedGroup.from = srcGroup->groupId;
-      fusePlan.fusedGroup.to = dstGroup->groupId;
-      fusePlan.fusedBand.from = depGraph.getNodeId(srcGroup->getLeadingFor());
-      fusePlan.fusedBand.to = depGraph.getNodeId(dstGroup->getLeadingFor());
 
-      oldPlan.fusedGroup.to = srcGroup->groupId;
-      oldPlan.fusedBand.to = depGraph.getNodeId(srcGroup->getLeadingFor());
+      // Connect all last nodes in paths from srcGroup to dstGroup
+      // Example: If srcGroup=33, paths are 33->38->42 and 33->52, and dstGroup=60,
+      //          creates plans 42->60 and 52->60
+      llvm::outs() << "Connecting last nodes from srcGroup " << srcGroup->groupId
+                   << " to dstGroup " << dstGroup->groupId << "\n";
+      bool pathsConnected = connectLastNodesToTarget(srcGroup->groupId, dstGroup->groupId);
 
-      // link all source group to dst group
-      for (size_t i = 0; i < fusionPlans.size(); ++i) {
-        if (fusionPlans[i].fusedGroup.to == srcGroup->groupId) {
-          llvm::outs() << "Update fusePlan!!!\n";
-          llvm::outs() << "Old plan node " << fusionPlans[i].fusedBand.from << " -> "
-                       << fusionPlans[i].fusedBand.to << " to ";
-          fusionPlans[i].fusedGroup.to = dstGroup->groupId;
-          fusionPlans[i].fusedBand.to = fusePlan.fusedBand.to;
-          llvm::outs() << "Updated plan node " << fusionPlans[i].fusedBand.from << " -> "
-                       << fusionPlans[i].fusedBand.to << "\n";
-        }
+      // If paths were successfully connected, don't insert srcGroup->dstGroup directly
+      if (pathsConnected) {
+        oldPlan.fusedGroup.to = srcGroup->groupId;
+        oldPlan.fusedBand.to = depGraph.getNodeId(srcGroup->getLeadingFor());
+        llvm::outs() << "Paths connected successfully, skipping direct srcGroup->dstGroup plan\n";
+        return false;  // Don't insert fusePlan
       }
 
-      llvm::outs() << "New Plan node " << fusePlan.fusedBand.from << " to " << fusePlan.fusedBand.to << "\n";
-      fusePlan.fusionType = "V";
+      // No paths found, set up direct fusion plan
+      setupDirectFusionPlan(fusePlan, oldPlan, srcGroup, dstGroup);
       return true;  // Need to insert fusePlan
     }
   }

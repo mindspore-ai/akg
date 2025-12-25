@@ -24,7 +24,11 @@ import hashlib
 from pathlib import Path
 from dataclasses import dataclass
 from pydantic import create_model as create_pydantic_model
-from langchain.output_parsers import PydanticOutputParser
+try:
+    from langchain_core.output_parsers import PydanticOutputParser
+except ImportError:
+    # Fallback for older langchain versions
+    from langchain.output_parsers import PydanticOutputParser
 
 logger = logging.getLogger(__name__)
 

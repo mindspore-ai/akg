@@ -18,6 +18,7 @@
 #define COMPILER_INCLUDE_AKG_CONVERSION_PASSES_H_
 
 #include "akg/Conversion/ArithToLinalg/ArithToLinalg.h"
+#include "akg/Conversion/ArithToHIVM/ArithToHIVM.h"
 #include "akg/Conversion/FuncToLLVMExt/FuncToLLVMExtPass.h"
 #include "akg/Conversion/FusionToMemVec/FusionToMemVecPass.h"
 #include "akg/Conversion/LinalgExtLower/LinalgExtLower.h"
@@ -29,6 +30,7 @@
 #include "akg/Conversion/SCFToGPUExt/SCFToGPUPassExt.h"
 #include "akg/Conversion/TosaToLinalgUpdate/TosaMultiReduceToLinalg.h"
 #include "akg/Conversion/VectorTransferLower/VectorTransferLower.h"
+#include "akg/Conversion/AffineToSCF/AffineToSCF.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 

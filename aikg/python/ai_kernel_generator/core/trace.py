@@ -84,7 +84,7 @@ class Trace:
         self.trace_list.append(record)
 
         # 对于所有agent，保存原始json数据
-        if agent_name in ["designer", "coder"]:
+        if agent_name in ["designer", "coder", "test_case_generator"]:
             self.save_parameters_to_files(agent_name, [
                 ('result', result),  # 保存原始json
                 ('prompt', prompt),

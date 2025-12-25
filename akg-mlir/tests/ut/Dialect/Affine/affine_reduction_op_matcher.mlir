@@ -27,7 +27,7 @@
 // CHECK-NEXT:         %2 = arith.addf %0, %1 {reduction_axes = [1 : index], reduction_type = "y"} : f32
 // CHECK-NEXT:         affine.store %2, %alloc_0[%arg1, %arg3] : memref<1x3072xf32>
 // CHECK-NEXT:       }
-// CHECK-NEXT:    } {reduceLoop}
+// CHECK-NEXT:    } {reduction_loop}
 // CHECK-NEXT:   }
 // CHECK-NEXT:   %expand_shape = memref.expand_shape %alloc_0 {{\[\[0\], \[1, 2\]\]}} output_shape [1, 1, 3072] : memref<1x3072xf32> into memref<1x1x3072xf32>
 // CHECK-NEXT:   return %expand_shape : memref<1x1x3072xf32>

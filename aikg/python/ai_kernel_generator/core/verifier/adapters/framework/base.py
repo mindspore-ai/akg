@@ -237,4 +237,26 @@ class FrameworkAdapter(ABC):
             str: Set seed code
         """
         pass
+    
+    @abstractmethod
+    def get_compare_code(self) -> str:
+        """Get compare function code for this framework.
+        
+        Each framework should implement its own compare logic using native operations.
+        
+        Returns:
+            str: Compare function code
+        """
+        pass
+    
+    @abstractmethod
+    def get_compare_outputs_code(self) -> str:
+        """Get code for comparing framework output and impl output.
+        
+        This code will be used in the template to compare outputs.
+        
+        Returns:
+            str: Code for comparing outputs
+        """
+        pass
 

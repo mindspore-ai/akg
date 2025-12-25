@@ -14,88 +14,57 @@
 # limitations under the License.
 
 set -e
-export AKG_MLIR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/" && pwd )"
+
+AKG_MLIR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/" && pwd )"
 BUILD_DIR="${AKG_MLIR_DIR}/build"
-C_COMPILER_PATH=$(which gcc)
-CXX_COMPILER_PATH=$(which g++)
+# Parse arguments
+THREAD_NUM=$(nproc)
+CMAKE_ARGS="-DENABLE_GITEE=ON"
+AKG_MLIR_CMAKE_ARGS=""
+AKG_MLIR_ARGS=""
+BUILD_TYPE="Release"
+ENABLE_BINDINGS_PYTHON="OFF"
 
 usage()
 {
     echo "Usage:"
-    echo "bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t on|off] [-b] [-o] [-u] [-s] [-c] [-h]"
+    echo "bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t] [-b] [-u] [-s path] [-c] [-h]"
     echo ""
     echo "Options:"
-    echo "    -h Print usage"
-    echo "    -b enable binds python (Default: off)"
+    echo "    -b enable binds python (Default: disable)"
+    echo "    -c Clean built files, default: off"
     echo "    -d Debug mode"
     echo "    -e Hardware environment: cpu, gpu, ascend or all"
-    echo "    -j[n] Set the threads when building (Default: -j8)"
-    echo "    -t Unit test: on or off (Default: off)"
-    echo "    -o Output .o file directory"
-    echo "    -u Enable auto tune"
-    echo "    -s Specifies the source path of third-party, default: none \n\tllvm-project"
-    echo "    -c Clean built files, default: off"
+    echo "    -h Print usage"
+    echo "    -j[n] Set the threads when building (Default: the number of cpu)"
+    echo "    -s Specifies the source path of third-party, default: none"
+    echo "    -t Enable unit test (Default: disable)"
+    echo "    -u Enable auto tune (Default: disable)"
 }
 
-mk_new_dir()
+make_clean()
 {
-    local create_dir="$1"
-
-    if [[ -d "${create_dir}" ]]; then
-        rm -rf "${create_dir}"
-    fi
-
-    mkdir -pv "${create_dir}"
+  echo "enable make clean"
+  cd "${BUILD_PATH}"
+  cmake --build . --target clean
 }
 
-check_binary_file()
-{
-  local binary_dir="$1"
-  for cur_file in `ls "${binary_dir}"/*.o`
-  do
-    file_lines=`cat "${cur_file}" | wc -l`
-    if [ ${file_lines} -eq 3 ]; then
-        check_sha=`cat ${cur_file} | grep "oid sha256"`
-        if [ $? -eq 0 ]; then
-            echo "-- Warning: ${cur_file} is not a valid binary file."
-            return 1
-        fi
-    fi
-  done
-  return 0
-}
-
-if [ ! -n "$1" ]; then
-    echo "Must input parameter!"
-    usage
-    exit 1
-fi
-
-# Parse arguments
-THREAD_NUM=$(nproc)
-SIMD_SET=off
-CMAKE_ARGS="-DENABLE_GITEE=ON"
-COMPILE_AKG_MLIR="off"
-AKG_MLIR_CMAKE_ARGS=""
-AKG_MLIR_ARGS=""
-BUILD_TYPE="Release"
-BACKEND_ENV="CPU"
-ENABLE_BINDINGS_PYTHON="OFF"
-
-while getopts 'bhe:j:u:t:o:d:m:s:c:r' opt
+while getopts 'bcde:hj:s:tu' opt
 do
     case "${opt}" in
         b)
             ENABLE_BINDINGS_PYTHON="ON"
             ;;
-        h)
-            usage
-            exit 0
-                ;;
+        c)
+            CLEAN_BUILT="on"
+            ;;
+        d)
+            CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_BUILD_TYPE=Debug -DUSE_AKG_LOG=1"
+            BUILD_TYPE=Debug
+            ;;
         e)
             if [[ "${OPTARG}" == "gpu" ]]; then
                 CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON"
-                BACKEND_ENV="GPU"
             elif [[ "${OPTARG}" == "ascend" ]]; then
                 CMAKE_ARGS="${CMAKE_ARGS} -DUSE_LLVM=ON"
             elif [[ "${OPTARG}" == "cpu" ]]; then
@@ -110,69 +79,21 @@ do
                 exit 1
             fi
             ;;
+        h)
+            usage
+            exit 0
+            ;;
         j)
             THREAD_NUM=${OPTARG}
-            ;;
-        t)
-            ENABLE_UNIT_TEST="on"
-            ;;
-        u)
-            CMAKE_ARGS="${CMAKE_ARGS} -DUSE_AUTO_TUNE=1"
-            ;;
-        d)
-            CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_BUILD_TYPE=Debug -DUSE_AKG_LOG=1"
-            BUILD_TYPE=Debug
-            ;;
-        o)
-            arch_info=`arch | tr '[A-Z]' '[a-z]'`
-            arch_name=""
-            if [[ "${arch_info}" =~ "aarch64" ]]; then
-              arch_name="aarch64"
-            elif [[ "${arch_info}" =~ "x86_64" ]]; then
-              arch_name="x86_64"
-            else
-              echo "-- Warning: Only supports aarch64 and x86_64, but current is ${arch_info}"
-              exit 1
-            fi
-
-            akg_extend_dir="${AKG_MLIR_DIR}/prebuild/${arch_name}"
-            if [ ! -d "${akg_extend_dir}" ]; then
-              echo "-- Warning: Prebuild binary file directory ${akg_extend_dir} not exits"
-              exit 1
-            fi
-
-            check_binary_file "${akg_extend_dir}"
-            if [ $? -ne 0 ]; then
-              GIT_LFS=`which git-lfs`
-              if [ $? -ne 0 ]; then
-                echo "-- Warning: git lfs not found, you can perform the following steps:"
-                echo "            1. Install git lfs, refer https://github.com/git-lfs/git-lfs/wiki/installation"
-                echo "            2. After installing git lfs, do not forget executing the following command:"
-                echo "               git lfs install"
-                echo "            3. Download the files tracked by git lfs, executing the following commands:"
-                echo "               cd ${AKG_MLIR_DIR}"
-                echo "               git lfs pull"
-                echo "            4. Re-compile the source codes"
-                exit 1
-              else
-                echo "-- Warning: git lfs found, but lfs files are not downloaded, you can perform the following steps:"
-                echo "            1. After installing git lfs, do not forget executing the following command:"
-                echo "               git lfs install"
-                echo "            2. Download the files tracked by git lfs, executing the following commands:"
-                echo "               cd ${AKG_MLIR_DIR}"
-                echo "               git lfs pull"
-                echo "            3. Re-compile the source codes"
-                exit 1
-              fi
-            fi
-            echo "${akg_extend_dir}"
-            exit 0
             ;;
         s)
             PREFIX_PATH=${OPTARG}
             ;;
-        c)
-            CLEAN_BUILT="on"
+        t)
+            AKG_MLIR_ARGS="${AKG_MLIR_ARGS} --target check-akg-mlir"
+            ;;
+        u)
+            CMAKE_ARGS="${CMAKE_ARGS} -DUSE_AUTO_TUNE=1"
             ;;
         *)
             echo "Unknown option ${opt}!"
@@ -180,27 +101,13 @@ do
             exit 1
     esac
 done
+
 echo "CMAKE_ARGS: ${CMAKE_ARGS}"
 
 # Create directories
 mkdir -pv "${BUILD_DIR}"
 
-make_clean()
-{
-  echo "enable make clean"
-  cd "${BUILD_PATH}"
-  cmake --build . --target clean
-}
-
-get_akg_mlir_cmake_args() {
-  if [[ "X${ENABLE_UNIT_TEST}" = "Xon" ]]; then
-    AKG_MLIR_ARGS="${AKG_MLIR_ARGS} --target check-akg-mlir"
-  fi
-}
-
 echo "---------------- AKG: build start ----------------"
-
-get_akg_mlir_cmake_args
 
 if [[ "X$CLEAN_BUILT" = "Xon" ]]; then
     make_clean
@@ -211,8 +118,6 @@ cd $BUILD_DIR
 set -x
 cmake .. ${CMAKE_ARGS} ${AKG_MLIR_CMAKE_ARGS} \
     -DAKG_ENABLE_BINDINGS_PYTHON=${ENABLE_BINDINGS_PYTHON} \
-    -DCMAKE_C_COMPILER=${C_COMPILER_PATH} \
-    -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH} \
     -DCMAKE_PREFIX_PATH=${PREFIX_PATH}
 cmake --build . --config ${BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
 

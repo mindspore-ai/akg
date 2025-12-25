@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import asyncio
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from ai_kernel_generator.core.agent.agent_base import AgentBase
 
 

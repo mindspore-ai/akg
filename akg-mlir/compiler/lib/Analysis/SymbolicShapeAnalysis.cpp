@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,20 +31,28 @@ SymEngine::Expression SymbolicShapeAnalysis::getSymbolicExprFromStr(const std::s
 }
 
 bool SymbolicShapeAnalysis::hasSymbolicShape(Type type) const {
-  RankedTensorType ty = dyn_cast<RankedTensorType>(type);
-  if (!ty) {
+  if (!isa<RankedTensorType, MemRefType>(type)) {
     return false;
   }
-  mlir::DictionaryAttr dict = dyn_cast_or_null<mlir::DictionaryAttr>(ty.getEncoding());
+  mlir::DictionaryAttr dict;
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
+  } else if (auto memRefType = dyn_cast<MemRefType>(type)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  }
   return dict && dict.contains(getSymbolShapeAttrName());
 }
 
 std::optional<llvm::SmallVector<std::string>> SymbolicShapeAnalysis::getSymbolicShape(Type type) const {
-  RankedTensorType ty = dyn_cast<RankedTensorType>(type);
-  if (!ty || !hasSymbolicShape(ty)) {
+  if (!hasSymbolicShape(type)) {
     return std::nullopt;
   }
-  mlir::DictionaryAttr dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(ty.getEncoding());
+  mlir::DictionaryAttr dAttrs;
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
+  } else if (auto memRefType = dyn_cast<MemRefType>(type)) {
+    dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  }
   ArrayAttr aAttrs = dAttrs.getAs<ArrayAttr>(getSymbolShapeAttrName());
   llvm::SmallVector<std::string> symbolicShape;
   (void)std::transform(aAttrs.getValue().begin(), aAttrs.getValue().end(), std::back_inserter(symbolicShape),
@@ -53,11 +61,15 @@ std::optional<llvm::SmallVector<std::string>> SymbolicShapeAnalysis::getSymbolic
 }
 
 std::optional<NamedAttribute> SymbolicShapeAnalysis::getSymbolShapeNamedAttr(Type type) const {
-  auto ty = dyn_cast<RankedTensorType>(type);
-  if (!ty || !hasSymbolicShape(ty)) {
+  if (!hasSymbolicShape(type)) {
     return std::nullopt;
   }
-  mlir::DictionaryAttr dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(ty.getEncoding());
+  mlir::DictionaryAttr dAttrs;
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
+  } else if (auto memRefType = dyn_cast<MemRefType>(type)) {
+    dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  }
   return dAttrs.getNamed(getSymbolShapeAttrName());
 }
 
@@ -95,59 +107,53 @@ std::optional<SymEngine::Expression> SymbolicShapeAnalysis::getSymbolicDimExpr(T
 }
 
 Type SymbolicShapeAnalysis::createNewSymbolicShape(Type type) {
-  auto ty = dyn_cast<RankedTensorType>(type);
-  if (!ty) {
+  if (!isa<RankedTensorType, MemRefType>(type)) {
     return type;
   }
-  mlir::DictionaryAttr dict = dyn_cast_or_null<mlir::DictionaryAttr>(ty.getEncoding());
+  mlir::DictionaryAttr dict;
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
+  } else if (auto memRefType = dyn_cast<MemRefType>(type)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  }
   if (dict && dict.contains(getSymbolShapeAttrName())) {
     return type;
   }
-  uint64_t rank = cast<ShapedType>(ty).getRank();
-  ArrayRef<int64_t> shape = cast<ShapedType>(ty).getShape();
+  uint64_t rank = cast<ShapedType>(type).getRank();
+  ArrayRef<int64_t> shape = cast<ShapedType>(type).getShape();
   llvm::SmallVector<Attribute> symShapeAttr;
   for (uint i = 0; i < rank; i++) {
     if (shape[i] == ShapedType::kDynamic) {
-      (void)symShapeAttr.emplace_back(StringAttr::get(ty.getContext(), newSymbolicDim()));
+      (void)symShapeAttr.emplace_back(StringAttr::get(type.getContext(), newSymbolicDim()));
     } else {
-      (void)symShapeAttr.emplace_back(StringAttr::get(ty.getContext(), newSymbolicDimFromNumber(shape[i])));
+      (void)symShapeAttr.emplace_back(StringAttr::get(type.getContext(), newSymbolicDimFromNumber(shape[i])));
     }
   }
-  NamedAttribute namedAttr(StringAttr::get(ty.getContext(), getSymbolShapeAttrName()),
-                           ArrayAttr::get(ty.getContext(), symShapeAttr));
-  return updateTensorEncodingAttr(ty, namedAttr);
+  NamedAttribute namedAttr(StringAttr::get(type.getContext(), getSymbolShapeAttrName()),
+                           ArrayAttr::get(type.getContext(), symShapeAttr));
+  return updateTypeSymbolAttr(type, namedAttr);
 }
 
 Type SymbolicShapeAnalysis::updateSymbolicShape(Type type, NamedAttribute &namedAttr) const {
-  auto ty = dyn_cast<RankedTensorType>(type);
-  if (!ty) {
+  if (!isa<RankedTensorType, MemRefType>(type)) {
     return type;
   }
-  return updateTensorEncodingAttr(ty, namedAttr);
+  return updateTypeSymbolAttr(type, namedAttr);
 }
 
 Type SymbolicShapeAnalysis::updateSymbolicShape(Type type, const llvm::SmallVector<std::string> &symbolicShape) const {
-  auto ty = dyn_cast<RankedTensorType>(type);
-  if (!ty) {
+  if (!isa<RankedTensorType, MemRefType>(type)) {
     return type;
   }
   llvm::SmallVector<Attribute> symShapeAttr;
   (void)std::transform(symbolicShape.begin(), symbolicShape.end(), std::back_inserter(symShapeAttr),
-                       [&ty](const std::string &s) {
-                         Attribute attr = StringAttr::get(ty.getContext(), s);
+                       [&type](const std::string &s) {
+                         Attribute attr = StringAttr::get(type.getContext(), s);
                          return attr;
                        });
-  NamedAttribute namedAttr(StringAttr::get(ty.getContext(), getSymbolShapeAttrName()),
-                           ArrayAttr::get(ty.getContext(), symShapeAttr));
-  return updateTensorEncodingAttr(ty, namedAttr);
-}
-
-bool SymbolicShapeAnalysis::isRankedTensorStaticShape(Type type) {
-  auto ty = dyn_cast<RankedTensorType>(type);
-  if (!ty) {
-    return false;
-  }
-  return cast<ShapedType>(ty).hasStaticShape();
+  NamedAttribute namedAttr(StringAttr::get(type.getContext(), getSymbolShapeAttrName()),
+                           ArrayAttr::get(type.getContext(), symShapeAttr));
+  return updateTypeSymbolAttr(type, namedAttr);
 }
 
 bool SymbolicShapeAnalysis::isSameSymbolicDim(std::string lhs, std::string rhs) {

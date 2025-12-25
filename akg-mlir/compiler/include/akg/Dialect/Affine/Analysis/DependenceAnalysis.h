@@ -64,8 +64,6 @@ struct Edge {
 // MemRefDependenceGraph is a graph data structure where graph nodes are
 // top-level operations in a `Block` which contain load/store ops, and edges
 // are memref dependences between the nodes.
-// TODO: Add a more flexible dependence graph representation.
-// TODO: Add a depth parameter to dependence graph construction.
 struct MemRefDependenceGraph {
  public:
   // Map from node id to Node.
@@ -84,7 +82,7 @@ struct MemRefDependenceGraph {
   // Whether to use AKG-specific analysis.
   bool useAKGAnalysis;
 
-  explicit MemRefDependenceGraph(Block *block, bool useAKGAnalysis = true) 
+  explicit MemRefDependenceGraph(Block *block, bool useAKGAnalysis = false)
       : block(block), useAKGAnalysis(useAKGAnalysis) {}
 
   void createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses);

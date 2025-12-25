@@ -42,9 +42,6 @@ namespace mlir {
 #include "akg/Dialect/Linalg/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;
-using namespace akgglobal;
-
 namespace mlir {
 namespace linalg {
 namespace {
@@ -84,7 +81,7 @@ static void MatchAndMarkRedOpInLinalg(Operation *funcOp) {
       }
       auto strAttr = builder.getStringAttr(reduceDirectionMap.at(reduceDirection));
       op->setAttr(kReductionTypeStr, strAttr);
-      GpuScheduleTool::getInstance().setReduceDirection((size_t)reduceDirection);
+      akgglobal::GpuScheduleTool::getInstance().setReduceDirection((size_t)reduceDirection);
     }
   });
 }
@@ -94,7 +91,7 @@ static void MatchAndMarkRedOpInAffine(Operation *funcOp) {
   OpBuilder builder(funcOp);
   SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
   for (auto reduceLoop : reduceLoops) {
-    reduceLoop->setAttr("reduceLoop", builder.getUnitAttr());
+    reduceLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
   }
   (void)funcOp->walk([&](Operation *redOp) {
     if (!isa<mlir::func::FuncOp>(redOp) && redOp->hasAttr(kReductionAxesStr)) {
@@ -102,7 +99,7 @@ static void MatchAndMarkRedOpInAffine(Operation *funcOp) {
       auto curOp = redOp;
       while (curOp) {
         if (isa<affine::AffineForOp>(curOp)) {
-          if (curOp->hasAttr("reduceLoop")) {
+          if (curOp->hasAttr(kReductionLoopAttr)) {
             redFlags.push_back(true);
           } else {
             redFlags.push_back(false);
@@ -128,12 +125,11 @@ static void MatchAndMarkRedOpInAffine(Operation *funcOp) {
 
 struct MatchAndMarkReductionOps : public impl::MatchAndMarkReductionOpsBase<MatchAndMarkReductionOps> {
   MatchAndMarkReductionOps() = default;
-  explicit MatchAndMarkReductionOps(const std::string dialect) { this->dialect = dialect; }
+  explicit MatchAndMarkReductionOps(const std::string &dialect) { this->dialect = dialect; }
   void runOnOperation() override {
     Operation *funcOp = getOperation();
 
-    if (!(funcOp->hasAttr(kOperatorTypeStr) &&
-          dyn_cast<StringAttr>(funcOp->getAttr(kOperatorTypeStr)) == kReduceStr)) {
+    if (!(funcOp->hasAttr(kOperatorTypeStr) && dyn_cast<StringAttr>(funcOp->getAttr(kOperatorTypeStr)) == kReduceStr)) {
       return;
     }
     if (this->dialect == "linalg") {

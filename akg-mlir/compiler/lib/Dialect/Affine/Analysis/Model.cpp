@@ -15,6 +15,7 @@
  */
 
 #include "akg/Dialect/Affine/Analysis/Model.h"
+#include "akg/Analysis/BufferAnalysis.h"
 #include "akg/Dialect/Affine/Analysis/TilingStrategy.h"
 
 namespace mlir {
@@ -98,6 +99,7 @@ void InitGraph::setGraphType(const StringAttr &attrs) { graphType = attrs.getVal
 
 void InitGraph::setHardware(const std::string &hw) { hardware = hw; }
 void InitGraph::setFeature(const std::string &fea) { feature = fea; }
+void InitGraph::setArch(const std::string &architecture) { arch = architecture; }
 void InitGraph::setIsDynamicShape(bool isDyn) { isDynamicShape = isDyn; }
 void InitGraph::setTilingMode(const std::string &tm) { tilingMode = tm; }
 
@@ -138,6 +140,7 @@ ModelGraph::ModelGraph(const InitGraphPtr &initGraph)
   graphType = initGraph->graphType;
   hardware = initGraph->hardware;
   feature = initGraph->feature;
+  arch = initGraph->arch;
   tilingMode = initGraph->tilingMode;
   isDynamicShape = initGraph->isDynamicShape;
 }
@@ -249,6 +252,37 @@ void GpuModelGraph::InitResource() {
 }
 
 CpuModelGraph::CpuModelGraph(const InitGraphPtr &initGraph) : ModelGraph(initGraph) { name = "cpuGraph"; }
+
+NpuModelGraph::NpuModelGraph(const InitGraphPtr &initGraph) : ModelGraph(initGraph) { name = "npuGraph"; }
+
+void NpuModelGraph::AnalyzeBufferInfo() {
+  BufferAnalysisOptions options;
+  options.printBufferInfo = false;
+  auto func = dyn_cast<func::FuncOp>(funcOp);
+  if (func) {
+    auto [maxBuffer, typeBits] = countMaxBuffer(func, options);
+    maxBufferCnt = maxBuffer;
+    smallestTypeBits = typeBits;
+    llvm::outs() << "maxBuffer: " << maxBuffer << ", smallestTypeBits: " << typeBits << "\n";
+  }
+}
+
+void NpuModelGraph::InitResource() {
+  sortedAxes.clear();
+  auto maxRankTensor = getMaxRankTensor();
+  if (!maxRankTensor) {
+    return;
+  }
+
+  for (auto axis : maxRankTensor->loopNest_) {
+    sortedAxes.push_front(axis);
+  }
+
+  // Initialize NPU hardware resources from NpuInfo
+  auto &npuInfo = akg::NpuInfo::getInstance(arch);
+  coreNum = npuInfo.getCoreNumAiv();
+  ubSize = npuInfo.getUbSize();
+}
 
 int64_t Resource::rest() {
   if (currSize == 0) {

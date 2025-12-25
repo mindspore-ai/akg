@@ -1,8 +1,16 @@
 import os
 import pytest
-from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
-from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+
+# 自动选择 Task 实现：优先使用 LangGraphTask，否则使用原 Task
+try:
+    import langgraph
+    from ai_kernel_generator.core.langgraph_task import LangGraphTask as AIKGTask
+    _USE_LANGGRAPH = True
+except ImportError:
+    from ai_kernel_generator.core.task import Task as AIKGTask
+    _USE_LANGGRAPH = False
+from ai_kernel_generator.core.worker.manager import register_local_worker, register_remote_worker
 from ..utils import (
     get_kernelbench_op_name, get_kernelbench_task_desc, add_op_prefix,
     generate_beautiful_test_report, get_device_id
@@ -28,10 +36,21 @@ async def test_bench_triton_cuda():
     arch = "a100"
     level = "level1"  # 可以设置为 "level1", "level2", "level3" 等
     task_pool = TaskPool(1)
-    device_pool = DevicePool([device_id])
+    # device_pool = DevicePool([device_id])  # 旧写法
     config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")
 
-    check_env_for_task(framework, backend, dsl, config)
+    # 根据环境变量判断使用哪种 worker
+    worker_url = os.getenv("AIKG_WORKER_URL")
+    use_remote_worker = worker_url is not None
+
+    # Remote 模式跳过硬件检查
+    check_env_for_task(framework, backend, dsl, config, is_remote=use_remote_worker)
+
+    # 根据环境变量注册对应的 Worker
+    if use_remote_worker:
+        await register_remote_worker(backend=backend, arch=arch, worker_url=worker_url)
+    else:
+        await register_local_worker([device_id], backend=backend, arch=arch)
 
     benchmark_name = get_kernelbench_op_name([19], framework=framework, level=level)
 
@@ -42,7 +61,7 @@ async def test_bench_triton_cuda():
         task_desc = get_kernelbench_task_desc(benchmark_name[i], framework=framework, level=level)
         op_name = add_op_prefix(benchmark_name[i], benchmark="KernelBench")
 
-        task = Task(
+        task = AIKGTask(
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),
@@ -50,7 +69,6 @@ async def test_bench_triton_cuda():
             backend=backend,
             arch=arch,
             config=config,
-            device_pool=device_pool,
             framework=framework,
             workflow="coder_only_workflow"
         )
@@ -78,10 +96,21 @@ async def test_bench_triton_cuda_level_2():
     arch = "a100"
     level = "level2"  # 可以设置为 "level1", "level2", "level3" 等
     task_pool = TaskPool(1)
-    device_pool = DevicePool([device_id])
+    # device_pool = DevicePool([device_id])  # 旧写法
     config = load_config(config_path="./python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")
 
-    check_env_for_task(framework, backend, dsl, config)
+    # 根据环境变量判断使用哪种 worker
+    worker_url = os.getenv("AIKG_WORKER_URL")
+    use_remote_worker = worker_url is not None
+
+    # Remote 模式跳过硬件检查
+    check_env_for_task(framework, backend, dsl, config, is_remote=use_remote_worker)
+
+    # 根据环境变量注册对应的 Worker
+    if use_remote_worker:
+        await register_remote_worker(backend=backend, arch=arch, worker_url=worker_url)
+    else:
+        await register_local_worker([device_id], backend=backend, arch=arch)
 
     benchmark_name = get_kernelbench_op_name([63], framework=framework, level=level)
 
@@ -92,7 +121,7 @@ async def test_bench_triton_cuda_level_2():
         task_desc = get_kernelbench_task_desc(benchmark_name[i], framework=framework, level=level)
         op_name = add_op_prefix(benchmark_name[i], benchmark="KernelBench")
 
-        task = Task(
+        task = AIKGTask(
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),
@@ -100,7 +129,6 @@ async def test_bench_triton_cuda_level_2():
             backend=backend,
             arch=arch,
             config=config,
-            device_pool=device_pool,
             framework=framework,
             workflow="coder_only_workflow"
         )

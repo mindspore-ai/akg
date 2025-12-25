@@ -34,16 +34,22 @@ class Coder(AgentBase):
                  framework: str,
                  backend: str,
                  arch: str = "",
-                 workflow_config_path: str = None,
-                 config: dict = None):
+                 workflow_config_path: str = None,  # 已废弃，保留用于向后兼容
+                 parser_config_path: str = None,    # 新的 parser 配置路径
+                 config: dict = None,
+                 source_backend: str = None,  # 源后端（如 cuda），用于跨后端转换场景
+                 source_arch: str = None):    # 源架构（如 a100），用于跨后端转换场景
         self.op_name = op_name
         self.task_desc = remove_copyright_from_text(task_desc)
         self.dsl = dsl
         self.framework = framework
         self.backend = backend
         self.arch = arch
-        self.workflow_config_path = workflow_config_path
+        self.workflow_config_path = workflow_config_path  # 保留用于向后兼容
+        self.parser_config_path = parser_config_path  # 新的配置路径
         self.config = config
+        self.source_backend = source_backend  # 跨后端转换时的源后端
+        self.source_arch = source_arch  # 跨后端转换时的源架构
         self.codegen_step_count = 0
         self.api_step_count = 0
 
@@ -61,14 +67,17 @@ class Coder(AgentBase):
             "backend": backend,
             "arch": arch,
             "task_desc": task_desc,
+            "source_backend": source_backend,
+            "source_arch": source_arch,
         }
         super().__init__(context=context, config=config)
 
-        # 直接使用从workflow.yaml获取的coder解析器
-        self.code_parser = create_step_parser("coder", self.workflow_config_path)
+        # 使用新的 parser loader（不依赖 workflow.yaml）
+        from ai_kernel_generator.utils.parser_loader import create_agent_parser
+        self.code_parser = create_agent_parser("coder", self.parser_config_path)
         if not self.code_parser:
             raise ValueError(
-                "Failed to create coder parser from workflow config. Please check your workflow.yaml configuration.")
+                "Failed to create coder parser. Please check your parser_config.yaml configuration.")
         self.format_instructions = self.code_parser.get_format_instructions()
 
         if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
@@ -99,10 +108,15 @@ class Coder(AgentBase):
             "api_docs": self.load_doc("api/api.md"),
             "dsl_basic_docs": self.load_doc("basic_docs.md"),
             "expert_suggestion": self.load_doc("suggestion_docs.md"),
+            "backend": self.backend,
 
             # 可选参数
             "hardware_docs": get_hardware_doc(self.backend, self.arch),
             "arch_name": self.arch,
+            
+            # 跨后端转换参数
+            "source_backend": self.source_backend,  # 源后端（如 cuda -> ascend）
+            "source_arch": self.source_arch,        # 源架构（如 a100 -> ascend910b4）
         }
 
     def _load_user_examples(self) -> str:
@@ -375,15 +389,24 @@ class Coder(AgentBase):
             # 智能选择最优的示例代码
             dsl_examples = await self._select_optimal_examples()
 
+            # ============ Hint模式：参数范围已在sketch的"设计适用范围"注释中 ============
+            enable_hint_mode = self.config.get("enable_hint_mode", False)
+            has_space_config = "space_config_code" in task_info and task_info.get("space_config_code")
+            has_param_space = enable_hint_mode and has_space_config
+                      
             # 基于base_doc构建输入，只更新变化的部分
             input_data = {
                 **self.base_doc,
-                "sketch": sketch,  # AUL代码作为sketch
+                "sketch": sketch,  # sketch中已包含"设计适用范围"注释（含hint信息）
                 "llm_suggestions": conductor_suggestion,  # Conductor建议
                 "coder_code": task_info.get('coder_code', ''),
                 "error_log": task_info.get('verifier_error', '')[:5000],
+                "code_check_errors": task_info.get('code_check_errors', ''),  # CodeChecker静态检查错误
                 "api_docs_suitable": api_docs_suitable,
-                "dsl_examples": dsl_examples
+                "dsl_examples": dsl_examples,
+                "enable_llm_range_inference": self.config.get("enable_llm_range_inference", False),  # LLM推理模式
+                "enable_hint_mode": enable_hint_mode,  # Hint模式
+                "has_param_space": has_param_space,  # 是否有参数空间
             }
 
             # 执行LLM生成前更新context，确保正确性

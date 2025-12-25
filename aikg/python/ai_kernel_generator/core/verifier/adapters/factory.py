@@ -74,6 +74,9 @@ def get_dsl_adapter(dsl: str):
     elif dsl_lower == "tilelang_cuda":
         from .dsl.tilelang_cuda import DSLAdapterTilelangCuda
         return DSLAdapterTilelangCuda()
+    elif dsl_lower == "torch":
+        from .dsl.torch import DSLAdapterTorch
+        return DSLAdapterTorch()
     else:
         raise ValueError(f"Unsupported DSL: {dsl}")
 

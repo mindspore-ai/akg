@@ -19,6 +19,7 @@
 
 #include "akg/Dialect/SCF/Transforms/PrimeNumReplaceForDynamicShape.h"
 #include "akg/Dialect/SCF/Transforms/RewriteReduceInMultiLevelMemory.h"
+#include "akg/Dialect/SCF/Transforms/NPUVectorVectorize.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"

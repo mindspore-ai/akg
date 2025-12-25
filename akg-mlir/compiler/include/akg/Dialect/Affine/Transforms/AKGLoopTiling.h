@@ -19,7 +19,11 @@
 
 #include <memory>
 #include <string>
+#include "llvm/ADT/SmallVector.h"
 #include "mlir/Pass/Pass.h"
+
+using llvm::SmallVector;
+using llvm::SmallVectorImpl;
 
 namespace mlir {
 namespace func {
@@ -32,6 +36,13 @@ std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::
                                                                      const std::string &tilingMode);
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target,
                                                                      const std::string &feature, bool useAutoTiling);
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target, bool useAutoTiling,
+                                                                     const std::string &arch,
+                                                                     const std::string &feature);
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(const std::string &target, bool useAutoTiling,
+                                                                     const std::string &arch,
+                                                                     const std::string &feature,
+                                                                     const SmallVector<unsigned, 6> &inputTileSizes);
 std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopTilingPass(uint64_t cacheSizeBytes);
 
 }  // namespace mlir

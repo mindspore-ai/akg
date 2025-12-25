@@ -21,7 +21,7 @@ import platform
 logger = logging.getLogger(__name__)
 
 
-def run_command(cmd_list, cmd_msg="untitled_command", env=None, timeout=300):
+def run_command(cmd_list, cmd_msg="untitled_command", env=None, timeout=300, cwd=None):
     """
     运行命令行程序
 
@@ -30,6 +30,7 @@ def run_command(cmd_list, cmd_msg="untitled_command", env=None, timeout=300):
         cmd_msg: 命令描述信息
         env: 环境变量
         timeout: 超时时间（秒），默认5分钟。设置为None禁用timeout
+        cwd: 工作目录。如果指定，命令将在该目录下执行（线程安全，不使用 os.chdir）
 
     Returns:
         tuple: (是否成功, 错误信息)
@@ -46,7 +47,8 @@ def run_command(cmd_list, cmd_msg="untitled_command", env=None, timeout=300):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=0,  # 改为无缓冲
-            env=env)
+            env=env,
+            cwd=cwd)  # 指定工作目录（线程安全）
 
         # 根据timeout参数决定是否使用超时
         if timeout is None:

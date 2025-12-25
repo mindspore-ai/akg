@@ -35,21 +35,17 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-using namespace akgglobal;
-
 namespace mlir {
 #define GEN_PASS_DECL_REWRITEREDUCEINMULTILEVELMEMORY
 #define GEN_PASS_DEF_REWRITEREDUCEINMULTILEVELMEMORY
 #include "akg/Dialect/SCF/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;
-
 namespace mlir {
 namespace scf {
 namespace {
 
-void cloneAndReplaceOps(SmallVector<Operation *, 8> &ops, OpBuilder &builder) {
+void cloneAndReplaceOps(const SmallVector<Operation *, 8> &ops, OpBuilder &builder) {
   for (Operation *op : ops) {
     if (op) {
       Operation *clonedOp = builder.clone(*op);
@@ -86,8 +82,8 @@ Value createInitialValue(Operation *op, mlir::Location loc, OpBuilder &builder) 
     initialValue =
       builder.create<arith::ConstantIntOp>(loc, std::numeric_limits<int64_t>::max(), cast<IntegerType>(elementType));
   } else if (isa<arith::MaxSIOp>(op)) {
-    initialValue = builder.create<arith::ConstantIntOp>(loc, std::numeric_limits<int64_t>::lowest(),
-                                                        cast<IntegerType>(elementType));
+    initialValue =
+      builder.create<arith::ConstantIntOp>(loc, std::numeric_limits<int64_t>::lowest(), cast<IntegerType>(elementType));
   } else if (isa<arith::MinUIOp>(op)) {
     initialValue =
       builder.create<arith::ConstantIntOp>(loc, std::numeric_limits<uint64_t>::max(), cast<IntegerType>(elementType));
@@ -136,7 +132,7 @@ static Operation *getOutermostSeqLoop(Operation *redOp) {
   Operation *outerSeqReduceLoop = nullptr;
   auto curOp = redOp;
   while (curOp) {
-    if (isa<scf::ParallelOp>(curOp) && curOp->getAttr("reduceLoop")) {
+    if (isa<scf::ParallelOp>(curOp) && curOp->getAttr(kReductionLoopAttr)) {
       if (gpu::GpuAttrUtils::getProcessorFromParallelOp(curOp) == gpu::Processor::Sequential) {
         outerSeqReduceLoop = curOp;
       } else {
@@ -172,7 +168,7 @@ struct RewriteReduceInMultiLevelMemory
   void runOnOperation() override {
     auto funcOp = getOperation();
     SmallVector<Operation *, 2> redOps;
-    bool isReduceY = GpuScheduleTool::getInstance().getReduceDirection() == (unsigned long)ReduceDirection::Y;
+    bool isReduceY = akgglobal::GpuScheduleTool::getInstance().getReduceDirection() == (size_t)ReduceDirection::Y;
     funcOp.walk([&](Operation *op) {
       if (!isa<mlir::func::FuncOp>(op)) {
         bool parallelReduce = (op->hasAttr(akg::utils::kEnableParallelReduce) &&

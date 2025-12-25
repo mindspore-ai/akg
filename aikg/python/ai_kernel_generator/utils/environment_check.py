@@ -27,7 +27,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
-def check_env(framework=None, backend=None, dsl=None, config_path=None, config=None):
+def check_env(framework=None, backend=None, dsl=None, config_path=None, config=None, is_remote=False):
     """
     检查环境是否满足要求
 
@@ -37,71 +37,83 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
         dsl: DSL类型 (triton_cuda/triton_ascend/swft)
         config_path: 任务配置文件路径，用于检查具体使用的模型API
         config: 已加载的配置字典，优先于config_path使用
+        is_remote: 是否为远程模式，若为True，则跳过本地软件和硬件检查，仅检查LLM API
 
     Returns:
         bool: 环境检查是否通过
     """
     print("🔍 正在检查环境...")
+    if is_remote:
+        print("ℹ️  使用远程模式，跳过本地软件和硬件检查，仅检查LLM API连接")
     issues = []
 
     # 1. 检查基础包
-    base_packages = ['numpy', 'jinja2', 'httpx']
-    for pkg in base_packages:
-        try:
-            importlib.import_module(pkg)
-        except ImportError:
-            issues.append(f"❌ 缺少基础包: {pkg}")
+    if not is_remote:
+        base_packages = ['numpy', 'jinja2', 'httpx']
+        for pkg in base_packages:
+            try:
+                importlib.import_module(pkg)
+            except ImportError:
+                issues.append(f"❌ 缺少基础包: {pkg}")
 
     # 2. 检查框架
-    if framework == 'mindspore':
-        try:
-            importlib.import_module('mindspore')
-        except ImportError:
-            issues.append("❌ 缺少 mindspore")
-    elif framework == 'torch':
-        try:
-            importlib.import_module('torch')
-        except ImportError:
-            issues.append("❌ 缺少 torch")
+    if not is_remote:
+        if framework == 'mindspore':
+            try:
+                importlib.import_module('mindspore')
+            except ImportError:
+                issues.append("❌ 缺少 mindspore")
+        elif framework == 'torch':
+            try:
+                importlib.import_module('torch')
+            except ImportError:
+                issues.append("❌ 缺少 torch")
 
     # 3. 检查DSL
-    if dsl in ['triton_cuda', 'triton_ascend']:
-        try:
-            importlib.import_module('triton')
-        except ImportError:
-            issues.append(f"❌ 缺少 triton (required for {dsl})")
-    elif dsl == 'triton':
-        # 自动转换逻辑：根据backend推断
-        if backend:
-            if backend == 'cuda':
-                dsl = 'triton_cuda'
-            elif backend == 'ascend':
-                dsl = 'triton_ascend'
-            # 递归检查转换后的DSL
-            return check_env(framework, backend, dsl, config_path, config)
-        else:
-            issues.append("❌ dsl='triton' is no longer supported. Please use 'triton_cuda' or 'triton_ascend' explicitly, or provide backend parameter for automatic conversion.")
-    elif dsl == 'swft':
-        try:
-            importlib.import_module('swft')
-        except ImportError:
-            issues.append("❌ 缺少 swft")
+    if not is_remote:
+        if dsl in ['triton_cuda', 'triton_ascend']:
+            try:
+                importlib.import_module('triton')
+            except ImportError:
+                issues.append(f"❌ 缺少 triton (required for {dsl})")
+        elif dsl == 'triton':
+            # 自动转换逻辑：根据backend推断
+            if backend:
+                if backend == 'cuda':
+                    dsl = 'triton_cuda'
+                elif backend == 'ascend':
+                    dsl = 'triton_ascend'
+                # 递归检查转换后的DSL
+                return check_env(framework, backend, dsl, config_path, config, is_remote)
+            else:
+                issues.append("❌ dsl='triton' is no longer supported. Please use 'triton_cuda' or 'triton_ascend' explicitly, or provide backend parameter for automatic conversion.")
+        elif dsl == 'torch':
+            try:
+                importlib.import_module('torch')
+            except ImportError:
+                issues.append(f"❌ 缺少 torch (required for {dsl})")
+        elif dsl == 'swft':
+            try:
+                importlib.import_module('swft')
+            except ImportError:
+                issues.append("❌ 缺少 swft")
 
     # 4. 检查硬件
-    if backend == 'cuda':
-        try:
-            result = subprocess.run(['nvidia-smi'], capture_output=True, timeout=5)
-            if result.returncode != 0:
-                issues.append("⚠️ CUDA设备可能不可用")
-        except:
-            issues.append("⚠️ 未找到 nvidia-smi")
-    elif backend == 'ascend':
-        try:
-            result = subprocess.run(['npu-smi', 'info'], capture_output=True, timeout=5)
-            if result.returncode != 0:
-                issues.append("⚠️ 昇腾设备可能不可用")
-        except:
-            issues.append("⚠️ 未找到 npu-smi")
+    if not is_remote:
+        if backend == 'cuda':
+            try:
+                result = subprocess.run(['nvidia-smi'], capture_output=True, timeout=5)
+                if result.returncode != 0:
+                    issues.append("⚠️ CUDA设备可能不可用")
+            except:
+                issues.append("⚠️ 未找到 nvidia-smi")
+        elif backend == 'ascend':
+            try:
+                result = subprocess.run(['npu-smi', 'info'], capture_output=True, timeout=5)
+                if result.returncode != 0:
+                    issues.append("⚠️ 昇腾设备可能不可用")
+            except:
+                issues.append("⚠️ 未找到 npu-smi")
 
     # 5. 检查API配置
     api_ok = _check_llm_api(config_path, config)
@@ -388,7 +400,7 @@ def _test_api_connection(api_base, api_key_env=None):
         return False
 
 
-def check_env_for_task(framework, backend, dsl, config):
+def check_env_for_task(framework, backend, dsl, config, is_remote=False):
     """
     为tests目录提供的便捷环境检查函数
     失败时直接抛出异常
@@ -398,6 +410,7 @@ def check_env_for_task(framework, backend, dsl, config):
         backend: 后端类型
         dsl: DSL类型
         config: 通过load_config()加载的配置字典
+        is_remote: 是否为远程模式，若为True，则跳过本地软件和硬件检查，仅检查LLM API
 
     Raises:
         RuntimeError: 环境检查失败时抛出异常
@@ -406,7 +419,8 @@ def check_env_for_task(framework, backend, dsl, config):
         framework=framework,
         backend=backend,
         dsl=dsl,
-        config=config
+        config=config,
+        is_remote=is_remote
     )
     if not success:
         raise RuntimeError("环境检查失败，请解决上述问题后重试")
