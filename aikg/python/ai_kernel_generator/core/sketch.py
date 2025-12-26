@@ -13,10 +13,14 @@
 # limitations under the License.
 
 import logging
+import time
 
+from ai_kernel_generator.cli.messages import NodeEndMessage, NodeStartMessage
+from ai_kernel_generator.cli.server.message_sender import send_message
 from ai_kernel_generator.core.agent.agent_base import AgentBase
 from ai_kernel_generator.utils.common_utils import remove_copyright_from_text, ParserFactory
 from ai_kernel_generator.utils.hardware_utils import get_hardware_doc
+from ai_kernel_generator.utils.task_label import resolve_task_label
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +66,8 @@ class Sketch(AgentBase):
             "arch": self.arch,
             "task_desc": self.task_desc,
         }
+        if config and "session_id" in config:
+            context["session_id"] = config["session_id"]
         super().__init__(context=context, config=config)
 
         # 使用common_utils中的sketch解析器
@@ -91,6 +97,23 @@ class Sketch(AgentBase):
         Returns:
             str: 解析后的算子草图内容
         """
+        start_time = time.time()
+        session_id = str(task_info.get("session_id") or "").strip()
+        task_id = str(task_info.get("task_id") or "")
+        task_label = str(task_info.get("task_label") or "").strip()
+        if not task_label:
+            raise ValueError("[Sketch] task_info must include task_label")
+        if session_id:
+            send_message(
+                session_id,
+                NodeStartMessage(
+                    node="sketch",
+                    task_id=task_id,
+                    task_label=task_label,
+                    state=task_info,
+                ),
+            )
+
         # 从task_info中获取coder生成的代码
         coder_code = task_info.get("coder_code", "")
         if not coder_code:
@@ -113,7 +136,8 @@ class Sketch(AgentBase):
             "agent_name": "sketch",
             "framework": task_info.get("framework", ""),
             "hash": task_info.get("task_id", "Sketch"),
-            "task_id": "",
+            "task_id": task_id,
+            "task_label": task_label,
             "workflow_name": task_info.get("workflow_name", ""),
             "step": self.llm_step_count,
         }
@@ -136,16 +160,32 @@ class Sketch(AgentBase):
             )
 
             # 使用解析器解析content
-            try:
-                parsed_result = ParserFactory.robust_parse(content, self.code_parser)
-                sketch_content = parsed_result.sketch
-
-                return sketch_content
-
-            except Exception as parse_error:
-                logger.error(f"Failed to parse sketch content: {parse_error}")
-                raise
+            parsed_result = ParserFactory.robust_parse(content, self.code_parser)
+            sketch_content = parsed_result.sketch
+            if session_id:
+                send_message(
+                    session_id,
+                    NodeEndMessage(
+                        node="sketch",
+                        duration=time.time() - start_time,
+                        task_id=task_id,
+                        task_label=task_label,
+                        result={"sketch": sketch_content},
+                    ),
+                )
+            return sketch_content
 
         except Exception as e:
-            logger.error(f"Failed to generate sketch for {self.op_name}: {e}")
+            logger.error(f"Failed to generate sketch for {self.op_name}: {e}", exc_info=True)
+            if session_id:
+                send_message(
+                    session_id,
+                    NodeEndMessage(
+                        node="sketch",
+                        duration=time.time() - start_time,
+                        task_id=task_id,
+                        task_label=task_label,
+                        result={"error": str(e)},
+                    ),
+                )
             raise

@@ -100,6 +100,16 @@ class Task:
 
         # 统一保存config，后续向下传递
         self.config = config
+        try:
+            if isinstance(self.config, dict) and "task_label" not in self.config:
+                from ai_kernel_generator.utils.task_label import resolve_task_label
+
+                self.config["task_label"] = resolve_task_label(
+                    op_name=op_name,
+                    parallel_index=1,
+                )
+        except Exception:
+            pass
 
         # 兼容旧代码：如果提供了device_pool，创建私有Worker
         self._private_worker = None

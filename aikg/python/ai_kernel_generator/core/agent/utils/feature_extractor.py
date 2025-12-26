@@ -28,16 +28,21 @@ class FeatureExtractor(AgentBase):
         - 特征信息总结
     """
 
-    def __init__(self, model_config: dict, impl_code: str = "", framework_code: str = "", dsl: str = ""):
+    def __init__(self, model_config: dict, impl_code: str = "", framework_code: str = "", dsl: str = "", config: dict = None):
         self.model_config = model_config
         self.impl_code = impl_code
         self.framework_code = framework_code
         self.dsl = dsl
+        self.config = config
 
         context = {
             "agent_name": "feature_extractor",
         }
-        super().__init__(context=context)
+        # 如果 config 中包含 session_id，添加到 context 中
+        # 这样在流式输出启用时，run_llm 方法可以正确获取 session_id
+        if config and config.get("session_id"):
+            context["session_id"] = config["session_id"]
+        super().__init__(context=context, config=config)
 
         # 初始化解析器
         self.feature_parser = ParserFactory.get_feature_parser()

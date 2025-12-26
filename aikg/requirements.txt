@@ -19,4 +19,7 @@ einops
 fastapi
 uvicorn
 python-multipart
-Ninja
+importlib-metadata
+typer
+textual
+websockets

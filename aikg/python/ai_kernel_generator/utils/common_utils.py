@@ -113,6 +113,10 @@ class ParserFactory:
     _sketch_parser = None
     _conductor_parser = None
     _selector_parser = None
+    _main_op_parser = None
+    _op_task_builder_parser = None  # OpTaskBuilder 解析器
+    _intent_classifier_parser = None  # IntentClassifier 解析器
+    _sub_agent_selector_parser = None  # SubAgentSelector 解析器
 
     @classmethod
     def register_parser(cls, parser_name: str, parser_config: dict):
@@ -267,6 +271,121 @@ class ParserFactory:
                 }
             )
         return cls._conductor_parser
+
+    @classmethod
+    def get_main_op_parser(cls):
+        """获取MainOpAgent解析器"""
+        if cls._main_op_parser is None:
+            cls._main_op_parser = cls.create_output_parser(
+                "MainOpAgentOutput",
+                {
+                    'task_code': (str, ...),  # 生成的task代码（KernelBench格式）
+                    'op_name': (str, ...),  # 算子名称
+                    'recommended_workflow': (str, ...),  # 推荐的workflow (codeonly/taskopcreate/evolve)
+                    'reasoning': (str, "")  # 推理说明
+                }
+            )
+        return cls._main_op_parser
+
+    @classmethod
+    def get_op_task_builder_parser(cls):
+        """获取OpTaskBuilder解析器（统一字段名版本）
+        
+        用于解析OpTaskBuilder的输出，字段名与OpTaskBuildAgent保持一致：
+        - op_name: 算子名称
+        - status: 状态（ready/need_clarification/need_modification/unsupported）
+        - task_code: 生成的KernelBench格式代码（统一字段名）
+        - description: 给用户的消息/算子描述（统一字段名）
+        - reasoning: 推理过程
+        """
+        if cls._op_task_builder_parser is None:
+            cls._op_task_builder_parser = cls.create_output_parser(
+                "OpTaskBuilderOutput",
+                {
+                    'op_name': (str, ""),           # 算子名称
+                    'status': (str, ...),           # ready/need_clarification/need_modification/unsupported
+                    'task_code': (str, ""),         # 生成的KernelBench格式代码（统一字段名）
+                    'description': (str, ""),       # 给用户的消息（统一字段名）
+                    'reasoning': (str, "")          # 推理过程
+                }
+            )
+        return cls._op_task_builder_parser
+
+    @classmethod
+    def get_intent_classifier_parser(cls):
+        """获取IntentClassifier解析器
+        
+        用于解析意图分类的输出：
+        - intent: 意图类型（operator_dev/general_question/unclear）
+        - message: 给用户的消息
+        - confidence: 置信度（0.0-1.0）
+        - reasoning: 推理过程（可选）
+        """
+        if cls._intent_classifier_parser is None:
+            cls._intent_classifier_parser = cls.create_output_parser(
+                "IntentClassifierOutput",
+                {
+                    'intent': (str, ...),           # operator_dev/general_question/unclear
+                    'message': (str, ...),          # 给用户的消息
+                    'confidence': (float, 0.5),     # 置信度
+                    'reasoning': (str, "")          # 推理过程（可选）
+                }
+            )
+        return cls._intent_classifier_parser
+    
+    @classmethod
+    def get_sub_agent_selector_parser(cls):
+        """获取SubAgentSelector解析器
+        
+        用于解析子 Agent 选择的输出：
+        - selected_agent: 选择的子 Agent 名称（codeonly/taskopcreate/evolve）
+        - reasoning: 选择理由
+        - confidence: 置信度（0.0-1.0）
+        """
+        if cls._sub_agent_selector_parser is None:
+            cls._sub_agent_selector_parser = cls.create_output_parser(
+                "SubAgentSelectorOutput",
+                {
+                    'selected_agent': (str, ...),   # 选择的子 Agent 名称
+                    'reasoning': (str, ...),        # 选择理由
+                    'confidence': (float, 0.8)      # 置信度
+                }
+            )
+        return cls._sub_agent_selector_parser
+    
+    _user_action_analyzer_parser = None
+    
+    @classmethod
+    def get_user_action_analyzer_parser(cls):
+        """获取UserActionAnalyzer解析器
+        
+        用于解析用户动作意图分析的输出：
+        - suggested_action: 建议的操作（confirm/revise/retry/retry_sub_agent/cancel）
+        - reasoning: 推理过程
+        - confidence: 置信度（0.0-1.0）
+        - is_new_operator: 是否是新算子需求（bool）
+        - has_provided_task_code: 用户是否直接提供了torch task代码（bool）
+        - is_complete_code: 用户提供的代码是否完整（bool，区分完整代码vs部分代码）
+        - extracted_task_code: LLM提取并补充的完整KernelBench代码（str）
+        - extracted_op_name: 从代码中提取的算子名称（str）
+        - extracted_op_description: 从代码中提取的算子描述（str）
+        """
+        if cls._user_action_analyzer_parser is None:
+            cls._user_action_analyzer_parser = cls.create_output_parser(
+                "UserActionAnalyzerOutput",
+                {
+                    'suggested_action': (str, ...),            # 建议的操作
+                    'reasoning': (str, ...),                   # 推理过程
+                    'confidence': (float, 0.8),                # 置信度
+                    'is_new_operator': (bool, False),          # 是否是新算子需求
+                    'has_provided_task_code': (bool, False),   # 是否提供了torch task代码
+                    'is_complete_code': (bool, False),         # 代码是否完整
+                    'extracted_task_code': (str, ''),          # LLM提取并补充的完整代码
+                    'extracted_op_name': (str, ''),            # 从代码中提取的算子名称
+                    'extracted_op_description': (str, '')      # 从代码中提取的算子描述
+                }
+            )
+        return cls._user_action_analyzer_parser
 
     @staticmethod
     def create_output_parser(parser_name, fields):

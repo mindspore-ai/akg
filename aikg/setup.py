@@ -75,6 +75,7 @@ setup(
             '**/*.json',
             '**/*.yaml',
             '**/*.py',
+            '**/*.ans',
         ],
     },
     include_package_data=True,
@@ -83,4 +84,9 @@ setup(
         "License :: OSI Approved :: Apache Software License",
     ],
     python_requires=">=3.8",
+    entry_points={
+        "console_scripts": [
+            "akg_cli=ai_kernel_generator.cli.cli.cli:app",
+        ],
+    },
 )

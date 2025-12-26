@@ -15,12 +15,15 @@
 """LangGraph utilities for workflow management."""
 
 from ai_kernel_generator.utils.langgraph.state import KernelGenState
+from ai_kernel_generator.utils.langgraph.op_task_builder_state import OpTaskBuilderState, OpTaskBuilderStatus
 from ai_kernel_generator.utils.langgraph.nodes import NodeFactory
 from ai_kernel_generator.utils.langgraph.routers import RouterFactory
 from ai_kernel_generator.utils.langgraph.visualizer import WorkflowVisualizer
 
 __all__ = [
     "KernelGenState",
+    "OpTaskBuilderState",
+    "OpTaskBuilderStatus",
     "NodeFactory",
     "RouterFactory",
     "WorkflowVisualizer",

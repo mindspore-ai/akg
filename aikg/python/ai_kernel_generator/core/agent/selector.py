@@ -64,6 +64,8 @@ class Selector(AgentBase):
             "dsl": self.dsl,
             "op_name": self.op_name,
         }
+        if config and config.get("session_id"):
+            context["session_id"] = config["session_id"]
         super().__init__(context=context, config=config)
         
         # 创建解析器
@@ -81,9 +83,9 @@ class Selector(AgentBase):
         Args:
             candidates: 候选文档列表，每个元素包含：
                 - name: 文档名称
-                - torch_code: torch代码
-                - triton_code: triton代码
-                - improvement: 优化建议
+                - framework_code: 任务描述代码（原torch代码）
+                - impl_code: DSL代码（原triton代码）
+                - improvement_doc: 优化建议
         
         Returns:
             List[str]: 相关文档的名称列表

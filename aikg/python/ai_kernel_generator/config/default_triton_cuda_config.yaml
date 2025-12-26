@@ -1,13 +1,16 @@
 # Model preset configuration
 agent_model_config:
-  designer: deepseek_r1_default
-  coder: deepseek_r1_default
-  conductor: deepseek_r1_default
-  api_generator: deepseek_r1_default
-  api_generator: deepseek_r1_default
-  example_compressor: deepseek_r1_default
-  feature_extractor: deepseek_r1_default
-  default: deepseek_r1_default
+  action_analyzer: deepseek_v3_default
+  intent_classifier: deepseek_v3_default
+  sub_agent_selector: deepseek_v3_default
+  op_task_builder: deepseek_v3_default
+  designer: deepseek_v3_default
+  coder: deepseek_v3_default
+  conductor: deepseek_v3_default
+  api_generator: deepseek_v3_default
+  example_compressor: deepseek_v3_default
+  feature_extractor: deepseek_v3_default
+  default: deepseek_v3_default
 
 # Log configuration
 log_dir: "~/aikg_logs"
@@ -22,8 +25,9 @@ max_step: 20  # 最大迭代步数
 
 # Documentation directory configuration
 docs_dir:
-  designer: "resources/docs/triton_cuda_docs"
+  designer: "resources/docs/sketch_docs"
   coder: "resources/docs/triton_cuda_docs"
+  sketch: "resources/docs/sketch_docs"
 
 # Performance analysis configuration
 profile_settings:
