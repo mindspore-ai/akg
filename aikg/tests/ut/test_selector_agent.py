@@ -50,21 +50,21 @@ def sample_candidates():
     return [
         {
             'name': 'relu_001',
-            'torch_code': 'def relu_torch(x): return torch.relu(x)',
-            'triton_code': '@triton.jit\ndef relu_kernel(): pass',
-            'improvement': '# ReLU优化建议\n使用向量化操作'
+            'framework_code': 'def relu_torch(x): return torch.relu(x)',
+            'impl_code': '@triton.jit\ndef relu_kernel(): pass',
+            'improvement_doc': '# ReLU优化建议\n使用向量化操作'
         },
         {
             'name': 'gelu_001',
-            'torch_code': 'def gelu_torch(x): return F.gelu(x)',
-            'triton_code': '@triton.jit\ndef gelu_kernel(): pass',
-            'improvement': '# GELU优化建议\n使用近似计算'
+            'framework_code': 'def gelu_torch(x): return F.gelu(x)',
+            'impl_code': '@triton.jit\ndef gelu_kernel(): pass',
+            'improvement_doc': '# GELU优化建议\n使用近似计算'
         },
         {
             'name': 'matmul_001',
-            'torch_code': 'def matmul_torch(a, b): return torch.matmul(a, b)',
-            'triton_code': '@triton.jit\ndef matmul_kernel(): pass',
-            'improvement': '# MatMul优化建议\n使用tile优化'
+            'framework_code': 'def matmul_torch(a, b): return torch.matmul(a, b)',
+            'impl_code': '@triton.jit\ndef matmul_kernel(): pass',
+            'improvement_doc': '# MatMul优化建议\n使用tile优化'
         }
     ]
 

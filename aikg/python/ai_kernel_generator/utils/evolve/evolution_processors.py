@@ -25,6 +25,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 from functools import partial
+from ai_kernel_generator.utils.task_label import resolve_task_label
 
 # 自动选择 Task 实现：优先使用 LangGraphTask，否则使用原 Task
 try:
@@ -83,6 +84,9 @@ class EvolveRuntimeConfig:
     parent_selection_prob: float
     handwrite_decay_rate: float
     
+    # RAG 参数
+    rag: bool = False
+    
     # 采样配置
     handwrite_sample_num: int = 2
     inspiration_sample_num: int = 3
@@ -92,6 +96,7 @@ class EvolveRuntimeConfig:
     tasks_per_island: int = field(init=False)
     storage_dir: str = field(init=False)
     islands_storage_dirs: List[str] = field(default_factory=list, init=False)
+    label_prefix: str = field(init=False)
     
     def __post_init__(self):
         """初始化后计算派生属性"""
@@ -104,6 +109,9 @@ class EvolveRuntimeConfig:
             f"~/aikg_evolve/{self.op_name}_{self.dsl}_{self.framework}_{self.backend}_{self.arch}/{random_hash}/"
         )
         os.makedirs(self.storage_dir, exist_ok=True)
+
+        # 单次 evolve 调用内固定 label 前缀，避免多轮导致 label 失稳
+        self.label_prefix = f"{uuid.uuid4().int % 10000:04d}"
         
         # 初始化岛屿存储目录
         if self.use_islands:
@@ -137,7 +145,8 @@ def create_runtime_config(params: Dict[str, Any]) -> EvolveRuntimeConfig:
         migration_interval=params['migration_interval'],
         elite_size=params['elite_size'],
         parent_selection_prob=params['parent_selection_prob'],
-        handwrite_decay_rate=params['handwrite_decay_rate']
+        handwrite_decay_rate=params['handwrite_decay_rate'],
+        rag=params.get('rag', False)  # 从 params 读取 rag，默认为 False
     )
 
 
@@ -169,9 +178,13 @@ class InitializationProcessor:
         # 创建HandwriteLoader（共享）
         handwrite_loader = HandwriteLoader(
             dsl=self.config.dsl,
-            op_name=self.config.op_name,
+            framework=self.config.framework,
             task_desc=self.config.task_desc,
-            config=self.config.config
+            config=self.config.config,
+            arch=self.config.arch,
+            backend=self.config.backend,
+            op_name=self.config.op_name,
+            rag=self.config.rag  # 传递 rag 参数
         )
         await handwrite_loader.select_relevant_pairs()
         logger.info(f"Shared HandwriteLoader created with {len(handwrite_loader.get_selected_pairs())} selected documents")
@@ -423,7 +436,15 @@ class TaskCreationProcessor:
             
             for pid in range(self.config.tasks_per_island):
                 task_id = f"{round_idx}_{island_idx}_{pid}"
-                
+                parallel_index = island_idx * self.config.tasks_per_island + pid + 1
+
+                task_config = dict(self.config.config or {})
+                task_label = resolve_task_label(
+                    op_name=self.config.op_name,
+                    parallel_index=parallel_index,
+                    uuid_prefix=self.config.label_prefix,
+                )
+                task_config["task_label"] = task_label
                 task = AIKGTask(
                     op_name=self.config.op_name,
                     task_desc=self.config.task_desc,
@@ -431,7 +452,7 @@ class TaskCreationProcessor:
                     backend=self.config.backend,
                     arch=self.config.arch,
                     dsl=self.config.dsl,
-                    config=self.config.config,
+                    config=task_config,
                     device_pool=None,  # 新写法：使用 WorkerManager
                     framework=self.config.framework,
                     task_type="profile",
@@ -441,7 +462,7 @@ class TaskCreationProcessor:
                     handwrite_suggestions=island_handwrite_suggestions[island_idx],
                 )
                 
-                task_pool.create_task(partial(task.run,))
+                task_pool.create_task(partial(task.run,), task_name=task_id)
                 all_tasks.append(task)
                 task_mapping.append(island_idx)
         
@@ -463,6 +484,13 @@ class TaskCreationProcessor:
         for pid in range(self.config.parallel_num):
             task_id = f"{round_idx}_{pid}"
             
+            task_config = dict(self.config.config or {})
+            task_label = resolve_task_label(
+                op_name=self.config.op_name,
+                parallel_index=pid + 1,
+                uuid_prefix=self.config.label_prefix,
+            )
+            task_config["task_label"] = task_label
             task = AIKGTask(
                 op_name=self.config.op_name,
                 task_desc=self.config.task_desc,
@@ -470,7 +498,7 @@ class TaskCreationProcessor:
                 backend=self.config.backend,
                 arch=self.config.arch,
                 dsl=self.config.dsl,
-                config=self.config.config,
+                config=task_config,
                 device_pool=None,  # 新写法：使用 WorkerManager
                 framework=self.config.framework,
                 task_type="profile",
@@ -480,7 +508,7 @@ class TaskCreationProcessor:
                 handwrite_suggestions=handwrite_suggestions_list[pid] if handwrite_suggestions_list else [],
             )
             
-            task_pool.create_task(partial(task.run,))
+            task_pool.create_task(partial(task.run,), task_name=task_id)
             tasks.append(task)
         
         return tasks
@@ -755,4 +783,3 @@ class ResultProcessor:
             'successful_tasks': round_success_count,
             'success_rate': round_success_rate
         }
-

@@ -7,7 +7,7 @@ import triton.language as tl
         triton.Config({'BLOCK_SIZE': 131072, 'SUB_BLOCK_SIZE': 16384}),
         triton.Config({'BLOCK_SIZE': 131072, 'SUB_BLOCK_SIZE': 8192}),
         triton.Config({'BLOCK_SIZE': 104858, 'SUB_BLOCK_SIZE': 16384}),
-        triton.Config({'BLOCK_SIZE': 65536, 'SUB_BLOCK_SIZE': 32768}),
+        triton.Config({'BLOCK_SIZE': 65536, 'SUB_BLOCK_SIZE': 16384}),
     ],
     key=['n_elements']
 )

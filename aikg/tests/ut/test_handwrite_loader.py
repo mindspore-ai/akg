@@ -46,12 +46,9 @@ def mock_loader():
     loader.get_selected_pairs.return_value = mock_pairs
     loader.read_pair_content.side_effect = lambda p: {
         'name': p['name'],
-        'file_stem': p['file_stem'],
-        'shape_type': p['shape_type'],
-        'category': p['category'],
-        'torch_code': f"torch {p['name']}",
-        'triton_code': f"triton {p['name']}",
-        'improvement': f"improve {p['name']}"
+        'framework_code': f"framework_code {p['name']}",
+        'impl_code': f"impl_code {p['name']}",
+        'improvement_doc': f"improve {p['name']}",
     }
     
     return loader
@@ -151,11 +148,10 @@ class TestHandwriteLoaderCore:
             content = loader.read_pair_content(first_pair)
             
             assert isinstance(content, dict)
-            assert all(k in content for k in ['name', 'file_stem', 'shape_type', 'category', 
-                                               'torch_code', 'triton_code', 'improvement'])
-            assert 'Triton' in content['triton_code']
-            assert 'Torch' in content['torch_code']
-            assert 'Optimization' in content['improvement']
+            assert all(k in content for k in ['name', 'framework_code', 'impl_code', 'improvement_doc'])
+            assert 'Triton' in content['impl_code']
+            assert 'Torch' in content['framework_code']
+            assert 'Optimization' in content['improvement_doc']
     
     @pytest.mark.asyncio
     async def test_select_with_mock_llm(self, temp_handwrite_dir):
@@ -258,12 +254,9 @@ class TestWeightedSampling:
         loader.get_selected_pairs.return_value = mock_pairs
         loader.read_pair_content.side_effect = lambda p: {
             'name': p['name'],
-            'file_stem': p['file_stem'],
-            'shape_type': p['shape_type'],
-            'category': p['category'],
-            'torch_code': f"torch {p['name']}",
-            'triton_code': f"triton {p['name']}",
-            'improvement': f"improve {p['name']}"
+            'framework_code': f"framework_code {p['name']}",
+            'impl_code': f"impl_code {p['name']}",
+            'improvement_doc': f"improve {p['name']}",
         }
         
         return loader
