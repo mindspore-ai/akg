@@ -28,11 +28,11 @@
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "bishengir/Dialect/Annotation/IR/Annotation.h"
 #include "bishengir/Dialect/HIVM/IR/HIVM.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
@@ -197,6 +197,100 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     } else {
       return failure();
     }
+
+    Value srcMemRef = adaptor.getOperands()[0];
+
+    auto memRefType = MemRefType::get(shape, elemType);
+    SmallVector<Value> allocOperands;
+    if (memRefType.getNumDynamicDims() > 0) {
+      if (auto allocOp = srcMemRef.getDefiningOp<memref::AllocOp>()) {
+        auto allocType = dyn_cast<MemRefType>(allocOp.getType());
+        if (allocType && allocType.getRank() == memRefType.getRank() &&
+            allocType.getNumDynamicDims() == memRefType.getNumDynamicDims()) {
+          auto dynSizes = allocOp.getDynamicSizes();
+          allocOperands.append(dynSizes.begin(), dynSizes.end());
+        }
+      }
+      if (allocOperands.empty()) {
+        for (int i = 0; i < memRefType.getRank(); ++i) {
+          if (memRefType.isDynamicDim(i)) {
+            Value dim = rewriter.create<memref::DimOp>(loc, srcMemRef, i);
+            allocOperands.push_back(dim);
+          }
+        }
+      }
+    }
+    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+
+    hivm::RoundMode rounding = selectRoundMode(op);
+    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(rounding);
+
+    rewriter.create<hivm::VCastOp>(
+        loc,
+        TypeRange{},
+        srcMemRef,
+        resBuf,
+        roundingAttr);
+
+    rewriter.replaceOp(op, resBuf);
+    return success();
+  }
+};
+
+template <typename CastOp>
+struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
+  using OpConversionPattern<CastOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<CastOp>::OpAdaptor;
+
+  static hivm::RoundMode selectRoundModeForTruncF(Type inType, Type outType) {
+    if (inType.isF32() && (outType.isF16() || outType.isBF16() || outType.isF32()))
+      return hivm::RoundMode::RINT;
+    llvm_unreachable("unsupported datatype for npuvector::TruncFOp to hivm");
+  }
+
+  static hivm::RoundMode selectRoundModeForExtF(Type inType, Type outType) {
+    if ((inType.isF16() || inType.isBF16()) && outType.isF32())
+      return hivm::RoundMode::RINT;
+    llvm_unreachable("unsupported datatype for npuvector::ExtFOp to hivm");
+  }
+
+  static hivm::RoundMode selectRoundMode(CastOp op) {
+    auto inType = getElementTypeOrSelf(op.getOperand().getType());
+    auto outType = getElementTypeOrSelf(op.getResult().getType());
+
+    if (isa<npuvector::TruncFOp>(op)) {
+      return selectRoundModeForTruncF(inType, outType);
+    } else if (isa<npuvector::ExtFOp>(op)) {
+      return selectRoundModeForExtF(inType, outType);
+    } else if (isa<npuvector::TruncIOp>(op)) {
+      if (isOverFlowMode(inType, outType)) {
+        return hivm::RoundMode::TRUNCWITHOVERFLOW;
+      }
+      return hivm::RoundMode::RINT;
+    } else if (isa<npuvector::ExtSIOp>(op) || isa<npuvector::ExtUIOp>(op) ||
+               isa<npuvector::SIToFPOp>(op) || isa<npuvector::UIToFPOp>(op)) {
+      return hivm::RoundMode::RINT;
+    } else if (isa<npuvector::FPToSIOp>(op) || isa<npuvector::FPToUIOp>(op)) {
+      if (isOverFlowMode(inType, outType)) {
+        return hivm::RoundMode::TRUNCWITHOVERFLOW;
+      }
+      return hivm::RoundMode::TRUNC;
+    }
+    llvm_unreachable("unsupported npuvector op to hivm");
+  }
+
+  LogicalResult matchAndRewrite(CastOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(op.getResult().getType());
+    if (!npuVectorType) {
+      return failure();
+    }
+
+    ArrayRef<int64_t> shape = npuVectorType.getShape();
+    Type elemType = npuVectorType.getElementType();
 
     Value srcMemRef = adaptor.getOperands()[0];
 
@@ -570,6 +664,107 @@ struct ArithConstantToHIVM : public OpConversionPattern<arith::ConstantOp> {
   }
 };
 
+struct ArithNegfToHIVM : public OpConversionPattern<arith::NegFOp> {
+  using OpConversionPattern<arith::NegFOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<arith::NegFOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(arith::NegFOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+
+    ArrayRef<int64_t> shape;
+    Type elemType;
+    if (auto vectorType = dyn_cast<VectorType>(resType)) {
+      shape = vectorType.getShape();
+      elemType = vectorType.getElementType();
+    } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
+      shape = npuVectorType.getShape();
+      elemType = npuVectorType.getElementType();
+    } else {
+      return failure();
+    }
+
+    if (!isa<FloatType>(elemType)) {
+      return failure();
+    }
+
+    Value inputMemRef = adaptor.getOperand();
+
+    auto memRefType = MemRefType::get(shape, elemType);
+    SmallVector<Value> allocOperands;
+    for (int i = 0; i < memRefType.getRank(); ++i) {
+      if (memRefType.isDynamicDim(i)) {
+        Value dim = rewriter.create<memref::DimOp>(loc, inputMemRef, i);
+        allocOperands.push_back(dim);
+      }
+    }
+
+    Value zeroScalar = rewriter.create<arith::ConstantOp>(
+        loc, rewriter.getFloatAttr(elemType, 0.0));
+    Value zeroBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    rewriter.create<hivm::VBrcOp>(
+        loc, TypeRange{}, zeroScalar, zeroBuf,
+        rewriter.getDenseI64ArrayAttr({}));
+
+    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, resBuf);
+    rewriter.create<hivm::VSubOp>(
+        loc, TypeRange{}, ValueRange{zeroBuf, inputMemRef}, ValueRange{resBuf});
+
+    rewriter.replaceOp(op, resBuf);
+    return success();
+  }
+};
+
+struct MathExpToHIVM : public OpConversionPattern<math::ExpOp> {
+  using OpConversionPattern<math::ExpOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::ExpOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::ExpOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+
+    ArrayRef<int64_t> shape;
+    Type elemType;
+    if (auto vectorType = dyn_cast<VectorType>(resType)) {
+      shape = vectorType.getShape();
+      elemType = vectorType.getElementType();
+    } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
+      shape = npuVectorType.getShape();
+      elemType = npuVectorType.getElementType();
+    } else {
+      return failure();
+    }
+
+    if (!isa<FloatType>(elemType)) {
+      return failure();
+    }
+
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+
+    SmallVector<Value> allocOperands;
+    for (int i = 0; i < memRefType.getRank(); ++i) {
+      if (memRefType.isDynamicDim(i)) {
+        Value dim = rewriter.create<memref::DimOp>(loc, inputMemRef, i);
+        allocOperands.push_back(dim);
+      }
+    }
+
+    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, resBuf);
+    rewriter.create<hivm::VExpOp>(
+        loc, TypeRange{}, inputMemRef, resBuf);
+
+    rewriter.replaceOp(op, resBuf);
+    return success();
+  }
+};
+
 struct VectorReductionToHIVM : public OpConversionPattern<vector::ReductionOp> {
   using OpConversionPattern<vector::ReductionOp>::OpConversionPattern;
 
@@ -682,62 +877,6 @@ struct VectorBroadcastToHIVM : public OpConversionPattern<vector::BroadcastOp> {
 };
 
 
-struct AffineForToHIVM : public OpConversionPattern<affine::AffineForOp> {
-  using OpConversionPattern<affine::AffineForOp>::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(affine::AffineForOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    // Only handle loops that have at least one vector-typed iteration argument.
-    if (llvm::none_of(op.getResultTypes(), [](Type t) {
-          return isa<VectorType>(t) || isa<npuvector::NPUVectorType>(t);
-        })) {
-      return failure();
-    }
-
-    auto lbOperands = adaptor.getLowerBoundOperands();
-    auto ubOperands = adaptor.getUpperBoundOperands();
-    auto allOperands = adaptor.getOperands();
-    auto iterOperands = allOperands.drop_front(lbOperands.size() + ubOperands.size());
-
-    SmallVector<Value> newIterOperands(iterOperands.begin(), iterOperands.end());
-
-    auto newForOp = rewriter.create<affine::AffineForOp>(
-        op.getLoc(), lbOperands, op.getLowerBoundMap(),
-        ubOperands, op.getUpperBoundMap(), op.getStep().getSExtValue(), newIterOperands);
-
-    Block &oldBlock = op.getRegion().front();
-    Block &newBlock = newForOp.getRegion().front();
-
-    SmallVector<Value> newBlockArgs(newBlock.getArguments().begin(), newBlock.getArguments().end());
-
-    rewriter.mergeBlocks(&oldBlock, &newBlock, newBlockArgs);
-
-    rewriter.replaceOp(op, newForOp.getResults());
-
-    return success();
-  }
-};
-
-
-struct AffineYieldToHIVM : public OpConversionPattern<affine::AffineYieldOp> {
-  using OpConversionPattern<affine::AffineYieldOp>::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(affine::AffineYieldOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    if (llvm::none_of(op.getOperands(), [](Value v) {
-          return isa<VectorType>(v.getType()) || isa<npuvector::NPUVectorType>(v.getType());
-        })) {
-      return failure();
-    }
-
-    rewriter.replaceOpWithNewOp<affine::AffineYieldOp>(op, adaptor.getOperands());
-    return success();
-  }
-};
-
-
 struct ScfForToHIVM : public OpConversionPattern<scf::ForOp> {
   using OpConversionPattern<scf::ForOp>::OpConversionPattern;
 
@@ -787,63 +926,6 @@ struct ScfYieldToHIVM : public OpConversionPattern<scf::YieldOp> {
   }
 };
 
-
-struct AffineStoreToHIVM : public OpConversionPattern<affine::AffineStoreOp> {
-  using OpConversionPattern<affine::AffineStoreOp>::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(affine::AffineStoreOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    auto operands = adaptor.getOperands();
-    Value valToStore = operands[0];
-    Value memref = operands[1];
-
-    auto memRefType = cast<MemRefType>(memref.getType());
-    int64_t rank = memRefType.getRank();
-
-    Value storeValueMemref = valToStore;
-    if (!isa<MemRefType>(valToStore.getType())) {
-      return failure();
-    }
-
-    ValueRange mapOperands = operands.drop_front(2);
-
-    auto map = op.getAffineMap();
-    SmallVector<OpFoldResult> offsets;
-    offsets.reserve(map.getNumResults());
-    for (unsigned i = 0; i < map.getNumResults(); ++i) {
-      AffineExpr expr = map.getResult(i);
-      if (auto cstExpr = dyn_cast<AffineConstantExpr>(expr)) {
-        offsets.push_back(rewriter.getIndexAttr(cstExpr.getValue()));
-        continue;
-      }
-      if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
-        offsets.push_back(mapOperands[dimExpr.getPosition()]);
-        continue;
-      }
-      if (auto symExpr = dyn_cast<AffineSymbolExpr>(expr)) {
-        offsets.push_back(mapOperands[map.getNumDims() + symExpr.getPosition()]);
-        continue;
-      }
-      auto apply = rewriter.create<affine::AffineApplyOp>(loc, map.getSubMap({i}), mapOperands);
-      offsets.push_back(apply.getResult());
-    }
-
-    SmallVector<OpFoldResult> sizes(rank, rewriter.getIndexAttr(1));
-    SmallVector<OpFoldResult> strides(rank, rewriter.getIndexAttr(1));
-
-    SmallVector<int64_t> resultShape(rank, 1);
-    auto resultType = memref::SubViewOp::inferRankReducedResultType(
-        resultShape, memRefType, offsets, sizes, strides);
-    Value subView = rewriter.create<memref::SubViewOp>(
-        loc, cast<MemRefType>(resultType), memref, offsets, sizes, strides);
-
-    rewriter.create<hivm::StoreOp>(loc, TypeRange{}, storeValueMemref, subView);
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
 
 struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
   using OpConversionPattern<memref::StoreOp>::OpConversionPattern;
@@ -1344,16 +1426,25 @@ void hivm::populateArithToHIVMConversionPatterns(
   patterns.add<ArithBitcastToHIVM>(patterns.getContext());
   patterns.add<ArithSelectToHIVM<arith::SelectOp>>(patterns.getContext());
   patterns.add<ArithConstantToHIVM>(patterns.getContext());
+  patterns.add<ArithNegfToHIVM>(patterns.getContext());
+  patterns.add<MathExpToHIVM>(patterns.getContext());
   patterns.add<VectorReductionToHIVM>(patterns.getContext());
   patterns.add<NPUVectorReductionToHIVM>(patterns.getContext());
   patterns.add<
       NPUVectorTransferReadToHIVM,
       NPUVectorTransferWriteToHIVM,
       NPUVectorBroadcastToHIVM>(patterns.getContext());
+  patterns.add<
+      UnaryNPUVectorToHIVMCast<npuvector::ExtFOp>,
+      UnaryNPUVectorToHIVMCast<npuvector::TruncFOp>,
+      UnaryNPUVectorToHIVMCast<npuvector::ExtSIOp>,
+      UnaryNPUVectorToHIVMCast<npuvector::ExtUIOp>,
+      UnaryNPUVectorToHIVMCast<npuvector::TruncIOp>,
+      UnaryNPUVectorToHIVMCast<npuvector::SIToFPOp>,
+      UnaryNPUVectorToHIVMCast<npuvector::UIToFPOp>,
+      UnaryNPUVectorToHIVMCast<npuvector::FPToSIOp>,
+      UnaryNPUVectorToHIVMCast<npuvector::FPToUIOp>>(patterns.getContext());
   patterns.add<VectorBroadcastToHIVM>(patterns.getContext());
-  patterns.add<AffineForToHIVM>(patterns.getContext());
-  patterns.add<AffineYieldToHIVM>(patterns.getContext());
-  patterns.add<AffineStoreToHIVM>(patterns.getContext());
   patterns.add<MemRefStoreToHIVM>(patterns.getContext());
   patterns.add<ScfForToHIVM>(patterns.getContext());
   patterns.add<ScfYieldToHIVM>(patterns.getContext());
@@ -1371,25 +1462,9 @@ static bool isLegalArithOp(Operation *op) {
   return !std::any_of(op->getResultTypes().begin(), op->getResultTypes().end(), isVectorOrNPUVectorType);
 }
 
-static bool isLegalAffineForOp(affine::AffineForOp op) {
-  if (std::any_of(op.getResultTypes().begin(), op.getResultTypes().end(), isVectorOrNPUVectorType)) {
-    return false;
-  }
-  for (auto arg : op.getRegion().getArguments()) {
-    if (isVectorOrNPUVectorType(arg.getType())) {
-      return false;
-    }
-  }
-  return true;
-}
-
-static bool isLegalAffineYieldOp(affine::AffineYieldOp op) {
-  for (auto operand : op.getOperands()) {
-    if (isVectorOrNPUVectorType(operand.getType())) {
-      return false;
-    }
-  }
-  return true;
+static bool isLegalMathOp(Operation *op) {
+  return !std::any_of(op->getResultTypes().begin(), op->getResultTypes().end(),
+                      isVectorOrNPUVectorType);
 }
 
 static bool isLegalSCFForOp(scf::ForOp op) {
@@ -1429,7 +1504,7 @@ struct ArithToHIVMConversionPass
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<hivm::HIVMDialect, tensor::TensorDialect,
                     memref::MemRefDialect, vector::VectorDialect,
-                    arith::ArithDialect, affine::AffineDialect, scf::SCFDialect,
+                    arith::ArithDialect, math::MathDialect, scf::SCFDialect,
                     annotation::AnnotationDialect>();
   }
   void runOnOperation() override;
@@ -1439,19 +1514,22 @@ void ArithToHIVMConversionPass::runOnOperation() {
   ConversionTarget target(getContext());
   // HIVM and Tensor are legal
   target.addLegalDialect<hivm::HIVMDialect, tensor::TensorDialect,
-                          memref::MemRefDialect, affine::AffineDialect, scf::SCFDialect, BuiltinDialect,
+                          memref::MemRefDialect, scf::SCFDialect, BuiltinDialect,
                           annotation::AnnotationDialect>();
   target.addDynamicallyLegalDialect<arith::ArithDialect>(isLegalArithOp);
-  target.addDynamicallyLegalOp<affine::AffineForOp>(isLegalAffineForOp);
-  target.addDynamicallyLegalOp<affine::AffineYieldOp>(isLegalAffineYieldOp);
+  target.addDynamicallyLegalDialect<math::MathDialect>(isLegalMathOp);
   target.addDynamicallyLegalOp<scf::ForOp>(isLegalSCFForOp);
   target.addDynamicallyLegalOp<scf::YieldOp>(isLegalSCFYieldOp);
   target.addDynamicallyLegalOp<memref::StoreOp>(isLegalMemRefStoreOp);
-  target.addIllegalOp<affine::AffineStoreOp>();
   target.addIllegalOp<vector::ReductionOp, vector::TransferReadOp,
                           vector::TransferWriteOp, vector::BroadcastOp>();
   target.addIllegalOp<npuvector::ReductionOp, npuvector::TransferReadOp,
-                          npuvector::TransferWriteOp, npuvector::BroadcastOp>();
+                          npuvector::TransferWriteOp, npuvector::BroadcastOp,
+                          npuvector::ExtFOp, npuvector::TruncFOp,
+                          npuvector::ExtSIOp, npuvector::ExtUIOp,
+                          npuvector::TruncIOp, npuvector::SIToFPOp,
+                          npuvector::UIToFPOp, npuvector::FPToSIOp,
+                          npuvector::FPToUIOp>();
 
   RewritePatternSet patterns(&getContext());
   hivm::populateArithToHIVMConversionPatterns(patterns);
