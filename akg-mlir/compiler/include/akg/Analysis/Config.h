@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_CONFIG_H_
-#define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_CONFIG_H_
+#ifndef COMPILER_INCLUDE_AKG_ANALYSIS_CONFIG_H_
+#define COMPILER_INCLUDE_AKG_ANALYSIS_CONFIG_H_
 #include <climits>
 #include <memory>
 #include <set>
@@ -24,7 +24,6 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 
 namespace mlir {
-namespace akg {
 namespace autotiling {
 constexpr auto kTileCfg = "Tile";
 constexpr auto kGpuGridCfg = "GpuGrid";
@@ -122,8 +121,7 @@ class GpuSeq : public Config {
   virtual ~GpuSeq() = default;
 };
 }  // namespace autotiling
-}  // namespace akg
 }  // namespace mlir
 
-#endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_CONFIG_H_
+#endif  // COMPILER_INCLUDE_AKG_ANALYSIS_CONFIG_H_
 

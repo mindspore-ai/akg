@@ -1,6 +1,13 @@
 add_mlir_library(AKGMLIRAnalysis
+  AutoTiling.cpp
+  Axis.cpp
   BufferAnalysis.cpp
+  Config.cpp
+  LoopTiling.cpp
+  Model.cpp
   SymbolicShapeAnalysis.cpp
+  TilingSolver.cpp
+  TilingStrategy.cpp
   TypeUtils.cpp
 
   ADDITIONAL_HEADER_DIRS
@@ -17,6 +24,7 @@ add_mlir_library(AKGMLIRAnalysis
   MLIRSCFDialect
   MLIRShapeDialect
   MLIRTensorDialect
+  BiShengIRHACCDialect
 )
 
 

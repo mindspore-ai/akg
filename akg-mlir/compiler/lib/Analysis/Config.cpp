@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Analysis/Config.h"
+#include "akg/Analysis/Config.h"
 
 #include <limits>
 #include <numeric>
 
 namespace mlir {
-namespace akg {
 namespace autotiling {
 
 void Config::mergeConstraints() {
@@ -46,6 +45,5 @@ std::vector<int> Config::getValidCandidates() {
   return validCandidates;
 }
 }  // namespace autotiling
-}  // namespace akg
 }  // namespace mlir
 

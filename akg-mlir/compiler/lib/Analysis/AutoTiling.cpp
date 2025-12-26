@@ -14,22 +14,24 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Analysis/AutoTiling.h"
+#include "akg/Analysis/AutoTiling.h"
 
 #include <algorithm>
 #include <iterator>
 
-#include "akg/Dialect/Affine/Analysis/Axis.h"
+#include "akg/Analysis/Axis.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 namespace mlir {
-namespace akg {
 namespace autotiling {
 using llvm::SmallVector;
+using mlir::autotiling::kTileCfg;
 InitGraphPtr parseIr(Operation *funcOp, const std::vector<SmallVector<affine::AffineForOp, 6>> &bands) {
   auto initGraph = parseIr(bands);
   initGraph->funcOp = funcOp;
@@ -45,7 +47,7 @@ InitGraphPtr parseIr(const std::vector<SmallVector<affine::AffineForOp, 6>> &ban
     std::vector<AxisPtr> loopNest;
     for (size_t j = 0; j < band.size(); ++j) {
       auto loop = band[j];
-      auto axis = std::make_shared<Axis>(i, j, std::make_shared<affine::AffineForOp>(loop));
+      auto axis = std::make_shared<Axis>(i, j, loop);
       loopNest.push_back(axis);
       if (!akgglobal::GpuScheduleTool::getInstance().getIsCustomConfig()) {
         akgglobal::GpuScheduleTool::getInstance().recordLoopStructure(axis->name);
@@ -77,12 +79,16 @@ ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
   if (initGraph->graphType == "Reduce") {
     auto funcReductionAxes = CommonUtils::collectReductionAxesEachDim(initGraph->funcOp);
     initGraph->rootAxis->forEachAxisTopDown([&initGraph, &funcReductionAxes](const AxisPtr a) {
-      if (a == nullptr || a->loop.get() == nullptr) {
+      if (a == nullptr || a->loop == nullptr || a->loop.get() == nullptr) {
+        return;
+      }
+      auto loopOp = a->getLoopOperation();
+      if (!loopOp) {
         return;
       }
       for (size_t dim = 0; dim < funcReductionAxes.size(); ++dim) {
-        if (CommonUtils::isReduceAxis(funcReductionAxes[dim], a->loop->getOperation())) {
-          (void)a->axisType.insert(Axis::AxisLabel::kReduction);
+        if (CommonUtils::isReduceAxis(funcReductionAxes[dim], loopOp)) {
+          (void)a->axisType.insert(mlir::autotiling::Axis::AxisLabel::kReduction);
         }
       }
     });
@@ -156,8 +162,10 @@ NpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategy
   npuGraph->AnalyzeBufferInfo();
   npuGraph->InitResource();
 
-  tilingMgr->addStrategy(std::make_shared<VectorizationStrategy>());
-  tilingMgr->addStrategy(std::make_shared<ParallelStrategy>());
+  // Use unified NpuDefaultTileStrategy (works for both Affine and SCF)
+  tilingMgr->addStrategy(std::make_shared<NpuDefaultTileStrategy>());
+  // tilingMgr->addStrategy(std::make_shared<VectorizationStrategy>());
+  // tilingMgr->addStrategy(std::make_shared<ParallelStrategy>());
 
   tilingMgr->processOn(npuGraph);
   return npuGraph;
@@ -200,7 +208,7 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<affine::Af
       return -1;
     }
     for (size_t i = 0; i < band.size(); ++i) {
-      if (band[i].getInductionVar() == a->loop->getInductionVar()) {
+      if (band[i].getInductionVar() == a->getInductionVar()) {
         return static_cast<int>(i);
       }
     }
@@ -231,6 +239,101 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<affine::Af
   std::transform(resMap.begin(), resMap.end(), std::back_inserter(*tileSizes),
                  [](const auto &entry) { return entry.second; });
 }
+// SCF version implementations
+InitGraphPtr parseIr(Operation *funcOp, const std::vector<SmallVector<scf::ForOp, 6>> &bands) {
+  auto initGraph = parseIr(bands);
+  initGraph->funcOp = funcOp;
+  return initGraph;
+}
+
+InitGraphPtr parseIr(const std::vector<SmallVector<scf::ForOp, 6>> &bands) {
+  auto initGraph = std::make_shared<InitGraph>("initGraph");
+  initGraph->rootAxis = std::make_shared<Axis>("Root");
+  for (size_t i = 0; i < bands.size(); ++i) {
+    auto band = bands[i];
+    AxisPtr currAxis = nullptr;
+    std::vector<AxisPtr> loopNest;
+    for (size_t j = 0; j < band.size(); ++j) {
+      auto loop = band[j];
+      auto axis = std::make_shared<Axis>(i, j, loop);
+      loopNest.push_back(axis);
+      if (!akgglobal::GpuScheduleTool::getInstance().getIsCustomConfig()) {
+        akgglobal::GpuScheduleTool::getInstance().recordLoopStructure(axis->name);
+      }
+      auto body = loop.getBody();
+      // Check if body's first operation is scf.for (nested loop) or not (basic block)
+      bool isBasicBlock = dyn_cast<scf::ForOp>(&body->front()) == nullptr;
+      if (isBasicBlock) {
+        body->walk([&](Operation *op) {
+          auto node = std::make_shared<Node>(op, loopNest);
+          initGraph->drawNode(node);
+        });
+      }
+      if (currAxis == nullptr) {
+        initGraph->rootAxis->children.push_back(axis);
+      } else {
+        currAxis->children.push_back(axis);
+      }
+      currAxis = axis;
+    }
+  }
+  return initGraph;
+}
+
+void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<scf::ForOp, 6> band,
+                           SmallVectorImpl<unsigned> *tileSizes, const TilingTaskDesc &taskDesc) {
+  size_t level = taskDesc.level;
+  size_t bandIdx = taskDesc.bandIdx;
+  std::map<unsigned, unsigned> resMap;
+  if (solver->modelGraph == nullptr || solver->modelGraph->rootAxis == nullptr) {
+    llvm::errs() << "Create model graph before solve.";
+    return;
+  }
+  auto getAxisIdx = [&band](const AxisPtr a) {
+    if (a == nullptr || a->loop == nullptr || a->loop.get() == nullptr) {
+      return -1;
+    }
+    for (size_t i = 0; i < band.size(); ++i) {
+      // For scf.for, compare induction variables
+      if (band[i].getInductionVar() == a->getInductionVar()) {
+        return static_cast<int>(i);
+      }
+    }
+    return -1;
+  };
+  if (bandIdx >= solver->modelGraph->rootAxis->children.size()) {
+    return;
+  }
+  auto TrySolve = [&solver, &getAxisIdx, &resMap, &level](const AxisPtr a) {
+    auto axisIdx = getAxisIdx(a);
+    if (axisIdx == -1) {
+      return;
+    }
+    if (solver->solved.find(a) == solver->solved.end()) {
+      solver->solve(a);
+    }
+    if (level < a->configs[kTileCfg].size()) {
+      int tileValue = a->configs[kTileCfg][level]->value;
+      // Convert -1 (dynamic axis marker) to UINT_MAX for storage in unsigned vector
+      // This will be detected and handled specially in constructTiledIndex
+      if (tileValue == -1) {
+        resMap[axisIdx] = static_cast<unsigned>(-1);  // UINT_MAX
+      } else {
+        resMap[axisIdx] = static_cast<unsigned>(tileValue);
+      }
+    } else {
+      resMap[axisIdx] = 1;
+    }
+  };
+  auto sortedAxes = solver->sortAxis(bandIdx);
+  for (auto axis : sortedAxes) {
+    TrySolve(axis);
+  }
+
+  tileSizes->reserve(tileSizes->size() + resMap.size());
+  std::transform(resMap.begin(), resMap.end(), std::back_inserter(*tileSizes),
+                 [](const auto &entry) { return entry.second; });
+}
+
 }  // namespace autotiling
-}  // namespace akg
 }  // namespace mlir

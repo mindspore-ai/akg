@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_TILINGSOLVER_H_
-#define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_TILINGSOLVER_H_
+#ifndef COMPILER_INCLUDE_AKG_ANALYSIS_TILINGSOLVER_H_
+#define COMPILER_INCLUDE_AKG_ANALYSIS_TILINGSOLVER_H_
 #include <deque>
 #include <map>
 #include <memory>
@@ -23,16 +23,14 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include "akg/Dialect/Affine/Analysis/Axis.h"
-#include "akg/Dialect/Affine/Analysis/Config.h"
-#include "akg/Dialect/Affine/Analysis/Model.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "akg/Analysis/Axis.h"
+#include "akg/Analysis/Config.h"
+#include "akg/Analysis/Model.h"
 
 namespace mlir {
 namespace func {
 class FuncOp;
 }  // namespace func
-namespace akg {
 namespace autotiling {
 
 using Rule = std::function<std::deque<int>(const AxisPtr &, std::vector<int> &)>;
@@ -95,8 +93,7 @@ class GlobalConfigSolver {
 };
 
 }  // namespace autotiling
-}  // namespace akg
 }  // namespace mlir
 
-#endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_TILINGSOLVER_H_
+#endif  // COMPILER_INCLUDE_AKG_ANALYSIS_TILINGSOLVER_H_
 

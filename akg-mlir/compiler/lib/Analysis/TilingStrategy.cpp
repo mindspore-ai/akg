@@ -14,19 +14,20 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Analysis/TilingStrategy.h"
+#include "akg/Analysis/TilingStrategy.h"
 
 #include <algorithm>
 #include <numeric>
+#include "akg/Dialect/Affine/Analysis/GpuTemplateTilingSolver.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "llvm/Support/MathExtras.h"
 
 namespace mlir {
-namespace akg {
 namespace autotiling {
 using akg::utils::GpuInfo;
 using akg::utils::StrategyHelper;
 using llvm::SmallVector;
+using mlir::akg::autotiling::GpuTemplateSolver;
 
 bool TilingStrategy::IsRelevant(const AxisPtr &a, const InitGraphPtr graph) {
   if (a->axisType.find(workForAxisLabel) != a->axisType.end()) {
@@ -110,7 +111,7 @@ Sketch DynamicShapeStrategy::SketchAnalysis(std::vector<int64_t> shapes) {
 void DynamicShapeStrategy::AddCpuConstraint(CpuModelGraphPtr initGraph) {
   // This is a very naive strategy to tile a dynamic-shape axis with a fix size.
   initGraph->rootAxis->forEachAxisTopDown([this](const AxisPtr a) {
-    if (a->axisType.find(Axis::AxisLabel::kDynamic) != a->axisType.end()) {
+    if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != a->axisType.end()) {
       auto tile1_cons = Constraint({microTileSize});
       a->tryAddConstraint(0, tile1_cons);
     }
@@ -129,7 +130,7 @@ void DynamicShapeStrategy::DoConstTile(const GpuModelGraphPtr initGraph, Sketch 
   }
   int staticTiles = 1;
   initGraph->rootAxis->forEachAxisBottomUp([&](const AxisPtr a) {
-    if (a->axisType.find(Axis::AxisLabel::kDynamic) != a->axisType.end()) {
+    if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != a->axisType.end()) {
       if (dynamicTiles.empty()) {
         if (sketch == Sketch::kSmallStaticInner && staticTiles < totalBlocks) {
           a->tryAddConstraint(0, Constraint({totalBlocks / staticTiles}));
@@ -169,7 +170,7 @@ void DynamicShapeStrategy::DoVariableTile(const GpuModelGraphPtr initGraph, Sket
   size_t totalAxis = 0;
   initGraph->rootAxis->forEachAxisBottomUp([&, currMapDim = size_t{0}](const AxisPtr a) mutable {
     ++totalAxis;
-    if (a->axisType.find(Axis::AxisLabel::kDynamic) != a->axisType.end()) {
+    if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != a->axisType.end()) {
       return;
     }
     // Static shape
@@ -183,7 +184,7 @@ void DynamicShapeStrategy::DoVariableTile(const GpuModelGraphPtr initGraph, Sket
 
   size_t currDynAxis = 0;
   initGraph->rootAxis->forEachAxisBottomUp([&](const AxisPtr a) {
-    if (a->axisType.find(Axis::AxisLabel::kDynamic) == a->axisType.end()) {
+    if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) == a->axisType.end()) {
       return;
     }
     // Dynamic shape
@@ -227,7 +228,7 @@ void DynamicShapeStrategy::DoVariableTile(const GpuModelGraphPtr initGraph, Sket
 void DynamicShapeStrategy::AddGpuConstraint(GpuModelGraphPtr initGraph) {
   std::vector<int64_t> shapes;
   initGraph->rootAxis->forEachAxisTopDown([&](const AxisPtr a) {
-    if (a->axisType.find(Axis::AxisLabel::kDynamic) != a->axisType.end()) {
+    if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != a->axisType.end()) {
       shapes.push_back(-1);
     } else if (a->range.second > 1) {
       shapes.push_back(a->range.second);
@@ -505,7 +506,7 @@ bool ParallelStrategy::tryMapGrid(const GpuModelGraphPtr gpuGraph, const AxisPtr
     if (gpuGraph->globalConfigs.find(akg::utils::kEnableAtomicAdd) == gpuGraph->globalConfigs.end()) {
       return false;
     }
-    if (axis->axisType.find(Axis::AxisLabel::kReduction) == axis->axisType.end()) {
+    if (axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kReduction) == axis->axisType.end()) {
       return false;
     }
     return !dyn_cast<BoolAttr>(gpuGraph->globalConfigs[akg::utils::kEnableAtomicAdd]).getValue();
@@ -736,7 +737,7 @@ void UnrollStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
         axis->tryAddConstraint(pos, Constraint({static_cast<int>(curVectorSize)}), kTileCfg);
       }
       // Vectorization and unroll are on the same axis.
-      (void)axis->axisType.insert(Axis::AxisLabel::kVectorization);
+      (void)axis->axisType.insert(mlir::autotiling::Axis::AxisLabel::kVectorization);
       isNewBand = false;
     }
   }
@@ -757,12 +758,12 @@ void ParallelStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
       if (axis->axisIdx != 0) {
         continue;
       }
-      (void)axis->axisType.insert(Axis::AxisLabel::kMultiCore);
+      (void)axis->axisType.insert(mlir::autotiling::Axis::AxisLabel::kMultiCore);
       int64_t axisSize = axis->range.second;
       int parallelNum = BEST_PARALLEL_NUM;
       int unrollTileValue = 1;
       // Vectorization and unroll are on the same axis.
-      bool isUnroll = axis->axisType.count(Axis::AxisLabel::kVectorization);
+      bool isUnroll = axis->axisType.count(mlir::autotiling::Axis::AxisLabel::kVectorization);
       if (isUnroll) {
         auto unrollConfig = axis->tryGetConfig(1, kTileCfg);
         unrollConfig->mergeConstraints();
@@ -803,9 +804,13 @@ void ParallelStrategy::AddCpuConstraint(CpuModelGraphPtr cpuGraph) {
 }
 
 unsigned getOuterTileSize(const AxisPtr axis, unsigned blockNumber) {
-  unsigned upperBound = axis->loop->getConstantUpperBound();
-  unsigned lowerBound = axis->loop->getConstantLowerBound();
-  unsigned extent = upperBound - lowerBound;
+  if (!axis || !axis->hasConstantBounds()) {
+    const unsigned MIN_TILE_SIZE = 512;
+    return MIN_TILE_SIZE;
+  }
+  int64_t upperBound = axis->getConstantUpperBound();
+  int64_t lowerBound = axis->getConstantLowerBound();
+  unsigned extent = static_cast<unsigned>(upperBound - lowerBound);
   // Simple ceiling division, no power of 2 alignment to avoid extreme cases
   unsigned tileSizePerBlock = (extent + blockNumber - 1) / blockNumber;
 
@@ -817,13 +822,13 @@ unsigned getOuterTileSize(const AxisPtr axis, unsigned blockNumber) {
   return tileSizePerBlock;
 }
 
-// Helper function to process tiling for a single axis
+// Helper function to process tiling for a single axis (unified algorithm for both static and dynamic axes)
+// For dynamic axes, calculate tile sizes based on 40 blocks (including tail block)
 static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4> &tileSizes, unsigned innerTileSize,
                               unsigned blockNumber, size_t &maxLevelToTile, bool isReduceAxis = false) {
   if (axis == nullptr) {
     return;
   }
-  auto loop = axis->loop;
 
   // Skip tiling for reduce axes
   if (isReduceAxis) {
@@ -835,19 +840,48 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
     return;
   }
 
-  bool hasStaticBounds = loop && loop->hasConstantLowerBound() && loop->hasConstantUpperBound();
-  bool isDynamic = axis->axisType.find(Axis::AxisLabel::kDynamic) != axis->axisType.end();
-  if (!hasStaticBounds || isDynamic) {
-    auto tileConfig = axis->tryGetConfig(0, kTileCfg);
-    if (tileConfig != nullptr) {
-      tileConfig->value = 1;
-      axis->tryAddConstraint(0, Constraint({1}));
+  // Check if axis has constant bounds (specifically check upper bound for dynamic detection)
+  bool hasStaticBounds = axis->hasConstantBounds();
+  // Check upper bound specifically to detect dynamic axis
+  bool hasDynamicUpperBound = !axis->hasConstantUpperBound();
+
+  // For dynamic axes (detected by dynamic upper bound), use special tiling strategy:
+  // First level: -1 (will be converted to UINT_MAX in unsigned storage, indicates dynamic calculation)
+  // Second level: default minimum tile size (512)
+  if (hasDynamicUpperBound || !hasStaticBounds) {
+    // For dynamic axes, set first level to -1, second level to minimum tile size
+    size_t currentTileLevel = axis->configs[kTileCfg].size();
+
+    // Ensure we have at least 2 levels for dynamic axes
+    while (currentTileLevel < 2) {
+      axis->doExtraTile();
+      currentTileLevel = axis->configs[kTileCfg].size();
     }
+
+    // First level: set to -1 (will be handled specially in constructTiledIndex)
+    auto tileConfig0 = axis->tryGetConfig(0, kTileCfg);
+    if (tileConfig0 != nullptr) {
+      unsigned value = UINT_MAX;
+      tileConfig0->value = value;  // Special marker for dynamic axis
+      axis->tryAddConstraint(0, Constraint({value}));
+    }
+
+    // Second level: use default minimum tile size
+    const unsigned MIN_TILE_SIZE = 512;
+    auto tileConfig1 = axis->tryGetConfig(1, kTileCfg);
+    if (tileConfig1 != nullptr) {
+      tileConfig1->value = static_cast<int>(MIN_TILE_SIZE);
+      axis->tryAddConstraint(1, Constraint({static_cast<int>(MIN_TILE_SIZE)}));
+    }
+
+    maxLevelToTile = std::max(maxLevelToTile, static_cast<size_t>(2));
     return;
   }
-  int32_t lowerBound = loop->getConstantLowerBound();
-  int32_t upperBound = loop->getConstantUpperBound();
-  int32_t extent = upperBound - lowerBound;
+
+  // Static bounds case
+  int64_t lowerBound = axis->getConstantLowerBound();
+  int64_t upperBound = axis->getConstantUpperBound();
+  int64_t extent = upperBound - lowerBound;
 
   // Get default tile sizes if not specified by user
   SmallVector<unsigned, 4> currentTileSizes = tileSizes;
@@ -856,16 +890,16 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
   }
 
   SmallVector<unsigned, 4> usedTileSizes;
-  int32_t currentSize = extent;
+  int64_t currentSize = extent;
 
   for (size_t i = 0; i < currentTileSizes.size(); ++i) {
-    int32_t tileSize = static_cast<int32_t>(currentTileSizes[i]);
-    int32_t minRequired = (i == currentTileSizes.size() - 1) ? tileSize * 2 : tileSize;
+    int64_t tileSize = static_cast<int64_t>(currentTileSizes[i]);
+    int64_t minRequired = (i == currentTileSizes.size() - 1) ? tileSize * 2 : tileSize;
     if (currentSize >= minRequired) {
-      usedTileSizes.push_back(tileSize);
+      usedTileSizes.push_back(static_cast<unsigned>(tileSize));
       currentSize = tileSize;
     } else {
-      usedTileSizes.push_back(currentSize);
+      usedTileSizes.push_back(static_cast<unsigned>(currentSize));
     }
   }
 
@@ -956,8 +990,11 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
 
     // Check if this axis is a reduction axis
     bool isReduceAxis = false;
-    if (isReduceOp && axis->loop) {
-      isReduceAxis = axis->loop->getOperation()->hasAttr(kReductionLoopAttr);
+    if (isReduceOp && axis && axis->loop) {
+      auto loopOp = axis->getLoopOperation();
+      if (loopOp) {
+        isReduceAxis = loopOp->hasAttr(kReductionLoopAttr);
+      }
     }
 
     processAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, isReduceAxis);
@@ -1019,8 +1056,8 @@ void TilingStrategyManager::processOn(const NpuModelGraphPtr npuGraph) {
 SmallVector<int64_t> VectorizationStrategy::getDimSizes(const SmallVector<AxisPtr> &axes) {
   SmallVector<int64_t> dims;
   for (const auto &axis : axes) {
-    if (axis && axis->loop && axis->loop->hasConstantBounds()) {
-      int64_t extent = axis->loop->getConstantUpperBound() - axis->loop->getConstantLowerBound();
+    if (axis && axis->hasConstantBounds()) {
+      int64_t extent = axis->getConstantUpperBound() - axis->getConstantLowerBound();
       dims.push_back(extent > 0 ? extent : 1);
     } else if (axis) {
       dims.push_back(axis->range.second > 0 ? axis->range.second : 1);
@@ -1076,7 +1113,7 @@ void VectorizationStrategy::applyVectorizationTiling(const SmallVector<AxisPtr> 
     // }
 
     // Skip dynamic axes
-    if (axis->axisType.find(Axis::AxisLabel::kDynamic) != axis->axisType.end()) {
+    if (axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != axis->axisType.end()) {
       auto tileConfig = axis->tryGetConfig(0, kTileCfg);
       if (tileConfig != nullptr) {
         tileConfig->value = 1;
@@ -1112,7 +1149,7 @@ void VectorizationStrategy::applyVectorizationTiling(const SmallVector<AxisPtr> 
 
     // Mark innermost axis for vectorization
     if (axis->isInnerMost) {
-      (void)axis->axisType.insert(Axis::AxisLabel::kVectorization);
+      (void)axis->axisType.insert(mlir::autotiling::Axis::AxisLabel::kVectorization);
     }
 
     // Update remaining UB capacity for next dimension
@@ -1171,7 +1208,7 @@ void ParallelStrategy::collectAxesInfo(const SmallVector<AxisPtr> &axes, int pos
     int64_t axisSize = axis->range.second > 0 ? axis->range.second : 1;
 
     // Check if it's a reduction axis
-    bool isReduction = axis->axisType.find(Axis::AxisLabel::kReduction) != axis->axisType.end();
+    bool isReduction = axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kReduction) != axis->axisType.end();
     isParallelAxis.push_back(!isReduction);
 
     // Consider existing tile configuration
@@ -1225,7 +1262,7 @@ void ParallelStrategy::applyParallelTiling(const SmallVector<AxisPtr> &axes, int
     int64_t axisSize = axis->range.second > 0 ? axis->range.second : 1;
 
     // Check for dynamic axes - skip by setting tile size to 1
-    if (axis->axisType.find(Axis::AxisLabel::kDynamic) != axis->axisType.end()) {
+    if (axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != axis->axisType.end()) {
       axis->tryAddConstraint(pos, Constraint({1}));
       continue;
     }
@@ -1332,8 +1369,8 @@ void ParallelStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
 
   // Mark the outermost parallel axis for multi-core execution
   for (const auto &axis : axes) {
-    if (axis && axis->axisType.find(Axis::AxisLabel::kReduction) == axis->axisType.end()) {
-      (void)axis->axisType.insert(Axis::AxisLabel::kMultiCore);
+    if (axis && axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kReduction) == axis->axisType.end()) {
+      (void)axis->axisType.insert(mlir::autotiling::Axis::AxisLabel::kMultiCore);
       break;
     }
   }
@@ -1341,5 +1378,4 @@ void ParallelStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
   ++npuGraph->tileNum;
 }
 }  // namespace autotiling
-}  // namespace akg
 }  // namespace mlir

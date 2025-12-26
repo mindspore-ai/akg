@@ -14,27 +14,34 @@
  * limitations under the License.
  */
 
-#ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_AUTOTILING_H_
-#define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_AUTOTILING_H_
+#ifndef COMPILER_INCLUDE_AKG_ANALYSIS_AUTOTILING_H_
+#define COMPILER_INCLUDE_AKG_ANALYSIS_AUTOTILING_H_
 #include <vector>
-#include "akg/Dialect/Affine/Analysis/Model.h"
-#include "akg/Dialect/Affine/Analysis/TilingSolver.h"
-#include "akg/Dialect/Affine/Analysis/TilingStrategy.h"
+#include "akg/Analysis/Model.h"
+#include "akg/Analysis/TilingSolver.h"
+#include "akg/Analysis/TilingStrategy.h"
 #include "akg/Utils/AnalysisForGpu.hpp"
+#include "llvm/ADT/SmallVector.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 namespace mlir {
-namespace akg {
 namespace autotiling {
+using llvm::SmallVector;
 /// That is a data structure that wrap the info for tiling task.
 struct TilingTaskDesc {
   TilingTaskDesc(size_t b, size_t l) : bandIdx(b), level(l) {}
   size_t bandIdx;
   size_t level;
 };
+
+// Affine version
 InitGraphPtr parseIr(Operation *funcOp, const std::vector<SmallVector<affine::AffineForOp, 6>> &bands);
-/// Extracts all the information needed to analyze tiling from the mlir: name, nodes, inputs, outputs, root_axis,
-/// abstracted into InitGraph
 InitGraphPtr parseIr(const std::vector<SmallVector<affine::AffineForOp, 6>> &bands);
+
+// SCF version
+InitGraphPtr parseIr(Operation *funcOp, const std::vector<SmallVector<scf::ForOp, 6>> &bands);
+InitGraphPtr parseIr(const std::vector<SmallVector<scf::ForOp, 6>> &bands);
 
 /// Analyze some contextual information (such as whether subsequent passes need to be opened double_buffer), as well as
 /// some preliminary strategies (such as operator priority, memory bottleneck statements)
@@ -49,10 +56,14 @@ CpuModelGraphPtr buildCpuModelGraph(InitGraphPtr initGraph, const TilingStrategy
 /// Encapsulates the steps required to solve sharding, and supports two solution methods: heuristic and search (Tuning);
 TilingSolverPtr getHeuristicTilingSolver(ModelGraphPtr modelGraph);
 
+// Affine version
 void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<affine::AffineForOp, 6> band,
                            SmallVectorImpl<unsigned> *tileSizes, const TilingTaskDesc &taskDesc);
+
+// SCF version
+void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<scf::ForOp, 6> band,
+                           SmallVectorImpl<unsigned> *tileSizes, const TilingTaskDesc &taskDesc);
 }  // namespace autotiling
-}  // namespace akg
 }  // namespace mlir
 
-#endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_AUTOTILING_H_
+#endif  // COMPILER_INCLUDE_AKG_ANALYSIS_AUTOTILING_H_

@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,23 +14,26 @@
  * limitations under the License.
  */
 
-#ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_MODEL_H_
-#define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_MODEL_H_
+#ifndef COMPILER_INCLUDE_AKG_ANALYSIS_MODEL_H_
+#define COMPILER_INCLUDE_AKG_ANALYSIS_MODEL_H_
+
 #include <deque>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include "akg/Dialect/Affine/Analysis/Axis.h"
-#include "akg/Dialect/Affine/Analysis/Config.h"
+
+#include "akg/Analysis/Axis.h"
+#include "akg/Analysis/Config.h"
 #include "akg/Utils/AnalysisCommon.hpp"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
 
 namespace mlir {
-namespace akg {
 namespace autotiling {
 class Op {
  public:
@@ -202,7 +205,7 @@ class NpuModelGraph : public ModelGraph {
 };
 using NpuModelGraphPtr = std::shared_ptr<NpuModelGraph>;
 }  // namespace autotiling
-}  // namespace akg
 }  // namespace mlir
 
-#endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_MODEL_H_
+#endif  // COMPILER_INCLUDE_AKG_ANALYSIS_MODEL_H_
+

@@ -15,19 +15,23 @@
  */
 
 #include "akg/Dialect/Affine/Analysis/GpuTemplateTilingSolver.h"
-#include "akg/Utils/AKGGlobalVars.hpp"
 
-#include <algorithm>
-#include <iostream>
-#include <unordered_map>
 #include <vector>
-
-using namespace akgglobal;
+#include "akg/Utils/AKGGlobalVars.hpp"
+#include "akg/Utils/AnalysisCommon.hpp"
 
 namespace mlir {
 namespace akg {
 namespace autotiling {
-using namespace mlir::akg::utils;
+using mlir::autotiling::AxisPtr;
+using mlir::autotiling::ConfigPtr;
+using mlir::autotiling::GpuBlock;
+using mlir::autotiling::GpuGrid;
+using mlir::autotiling::ConfigPos;
+using mlir::autotiling::kGpuBlockCfg;
+using mlir::autotiling::kGpuGridCfg;
+using mlir::autotiling::kGpuSeqCfg;
+using mlir::ReduceDirection;
 
 // Template reduction-X or reduction-All strategy
 std::tuple<int, int> GpuTemplateSolver::getProperRedConfigsX(int reductionSize, bool useAtmoicReturn) {
@@ -92,7 +96,7 @@ void GpuTemplateSolver::SolveRedAxesWithoutThreadReduction(std::vector<AxisPtr> 
                                                            const std::vector<int> &processOrder,
                                                            const std::vector<int> &redFlags,
                                                            const std::vector<int> &dynFlags) {
-  auto &tool = PrimeNumTool::getInstance();
+  auto &tool = akgglobal::PrimeNumTool::getInstance();
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   int num = axes.size();
   for (int idx = num - 1; idx >= 0; idx--) {
@@ -139,9 +143,9 @@ static void initPrimes(std::vector<int> &primes, akgglobal::PrimeNumTool &tool) 
   primes.push_back(tool.getOnePrimeWithIdxUpdate());
 }
 
-static void processDynamicThreadUse(autotiling::AxisPtr &a, autotiling::ConfigPtr &threadTile, const int &i,
+static void processDynamicThreadUse(AxisPtr &a, ConfigPtr &threadTile, const int &i,
                                     const int &num, const bool &handleRedAxis, const std::vector<int> &primes,
-                                    std::vector<std::string> &axisMap, GpuScheduleTool &gpuTool) {
+                                    std::vector<std::string> &axisMap, akgglobal::GpuScheduleTool &gpuTool) {
   auto blockcfg = std::make_shared<GpuBlock>("DynBlock");
   auto dynTile = primes[0];
   threadTile->value = dynTile;
@@ -154,7 +158,7 @@ static void processDynamicThreadUse(autotiling::AxisPtr &a, autotiling::ConfigPt
   gpuTool.updateRuntimeArgument(argBlock);
 }
 
-static void processFullThreadUse(autotiling::AxisPtr &a, autotiling::ConfigPtr &threadTile, int &len, int &threadNum,
+static void processFullThreadUse(AxisPtr &a, ConfigPtr &threadTile, int &len, int &threadNum,
                                  std::vector<std::string> &axisMap) {
   threadTile->value = len;
   auto blockcfg = std::make_shared<GpuBlock>("Manual");
@@ -166,7 +170,7 @@ static void processFullThreadUse(autotiling::AxisPtr &a, autotiling::ConfigPtr &
   len = 1;
 }
 
-static void processPartThreadUse(autotiling::AxisPtr &a, autotiling::ConfigPtr &threadTile, int &len, int &threadNum,
+static void processPartThreadUse(AxisPtr &a, ConfigPtr &threadTile, int &len, int &threadNum,
                                  std::vector<std::string> &axisMap) {
   threadTile->value = threadNum;
   auto blockcfg = std::make_shared<GpuBlock>("Manual");
@@ -178,7 +182,7 @@ static void processPartThreadUse(autotiling::AxisPtr &a, autotiling::ConfigPtr &
   threadNum = 0;
 }
 
-static void processDynamicBlockUse(autotiling::AxisPtr &a, const std::vector<int> &primes,
+static void processDynamicBlockUse(AxisPtr &a, const std::vector<int> &primes,
                                    std::vector<std::string> &axisMap) {
   auto gridcfg = std::make_shared<GpuGrid>("DynGrid");
   auto dynTile = primes[1];  // a placeholder prime for blockidx
@@ -187,7 +191,7 @@ static void processDynamicBlockUse(autotiling::AxisPtr &a, const std::vector<int
   axisMap[0] = kGpuGridCfg;
 }
 
-static void processFullBlockUse(autotiling::AxisPtr &a, int &len, int &blockNum, std::vector<std::string> &axisMap) {
+static void processFullBlockUse(AxisPtr &a, int &len, int &blockNum, std::vector<std::string> &axisMap) {
   auto gridcfg = std::make_shared<GpuGrid>("Manual");
   gridcfg->value = len;
   gridcfg->index = ConfigPos::kOuter;
@@ -201,7 +205,7 @@ static void processFullBlockUse(autotiling::AxisPtr &a, int &len, int &blockNum,
   len = 1;
 }
 
-static void processPartBlockUse(autotiling::AxisPtr &a, int &len, int &blockNum, std::vector<std::string> &axisMap) {
+static void processPartBlockUse(AxisPtr &a, int &len, int &blockNum, std::vector<std::string> &axisMap) {
   auto gridcfg = std::make_shared<GpuGrid>("Manual");
   gridcfg->value = blockNum;
   gridcfg->index = ConfigPos::kOuter;
@@ -211,8 +215,9 @@ static void processPartBlockUse(autotiling::AxisPtr &a, int &len, int &blockNum,
   blockNum = 0;
 }
 
-static void processLeftDynamic(autotiling::ConfigPtr &seqTile, autotiling::ConfigPtr &threadTile,
-                               const bool &handleRedAxis, const std::vector<int> &primes, GpuScheduleTool &gpuTool) {
+static void processLeftDynamic(ConfigPtr &seqTile, const ConfigPtr &threadTile,
+                               const bool &handleRedAxis, const std::vector<int> &primes,
+                               akgglobal::GpuScheduleTool &gpuTool) {
   auto prime = primes[2];
   seqTile->value = prime * threadTile->value;
   auto arg0 = gpuTool.addRuntimeArgument(prime);
@@ -232,7 +237,7 @@ void GpuTemplateSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<AxisPtr> 
   // since we do reorder thread/seq later for coalescing access, inner-tile maps to thread and outer-tile maps to
   // sequential
   int num = axes.size();
-  auto &tool = PrimeNumTool::getInstance();
+  auto &tool = akgglobal::PrimeNumTool::getInstance();
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   for (int idx = num - 1; idx >= 0; idx--) {
     auto i = processOrder[idx];
@@ -287,7 +292,7 @@ void GpuTemplateSolver::SolveAxesWithBlockSeqThreadPattern(std::vector<AxisPtr> 
   }
 }
 
-static void processYDynamicBlock(autotiling::AxisPtr &a, PrimeNumTool &tool, std::vector<std::string> &axisMap) {
+static void processYDynamicBlock(AxisPtr &a, akgglobal::PrimeNumTool &tool, std::vector<std::string> &axisMap) {
   auto gridcfg = std::make_shared<GpuGrid>("Manual");
   auto dynTile = tool.getOnePrimeWithIdxUpdate();
   gridcfg->value = dynTile;  // a placeholder prime for blockidx
@@ -295,7 +300,7 @@ static void processYDynamicBlock(autotiling::AxisPtr &a, PrimeNumTool &tool, std
   axisMap[0] = kGpuGridCfg;
 }
 
-static void processYFullBlock(autotiling::AxisPtr &a, int &len, int &blockNum, std::vector<std::string> &axisMap) {
+static void processYFullBlock(AxisPtr &a, int &len, int &blockNum, std::vector<std::string> &axisMap) {
   auto gridcfg = std::make_shared<GpuGrid>("Manual");
   gridcfg->value = len;
   gridcfg->index = ConfigPos::kOuter;
@@ -309,7 +314,7 @@ static void processYFullBlock(autotiling::AxisPtr &a, int &len, int &blockNum, s
   len = 1;
 }
 
-static void processFakeMapThread(autotiling::AxisPtr &a, std::vector<std::string> &axisMap) {
+static void processFakeMapThread(AxisPtr &a, std::vector<std::string> &axisMap) {
   auto seqOuterTile = a->tryGetConfig(1);
   seqOuterTile->value = 1;
   auto blockcfg = std::make_shared<GpuBlock>("Manual");
@@ -324,7 +329,7 @@ void GpuTemplateSolver::SolveRedAxesWithReductionY(std::vector<AxisPtr> &axes, c
                                                    const std::vector<int> &redFlags, const std::vector<int> &dynFlags,
                                                    int blockNum, int &gridDimsLeft) {
   int num = axes.size();
-  auto &tool = PrimeNumTool::getInstance();
+  auto &tool = akgglobal::PrimeNumTool::getInstance();
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   for (int idx = num - 1; idx >= 0; idx--) {
     auto i = processOrder[idx];
@@ -369,8 +374,8 @@ void GpuTemplateSolver::SolveRedAxesWithReductionY(std::vector<AxisPtr> &axes, c
 void GpuTemplateSolver::collectReduceAxesFlags(const std::vector<AxisPtr> &axes, std::vector<int> &redFlags,
                                                std::vector<int> &dynamicFlags, bool &hasLastUnknownRedAxis) {
   for (size_t i = 0; i < axes.size(); i++) {
-    redFlags[i] = axes[i]->axisType.find(Axis::AxisLabel::kReduction) != axes[i]->axisType.end();
-    dynamicFlags[i] = axes[i]->axisType.find(Axis::AxisLabel::kDynamic) != axes[i]->axisType.end();
+    redFlags[i] = axes[i]->axisType.find(mlir::autotiling::Axis::AxisLabel::kReduction) != axes[i]->axisType.end();
+    dynamicFlags[i] = axes[i]->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != axes[i]->axisType.end();
     if (redFlags[i] && (i == axes.size() - 1) && dynamicFlags[i]) {
       hasLastUnknownRedAxis = true;
     }
@@ -428,7 +433,7 @@ void GpuTemplateSolver::SolveScheduleForReductionOps(std::vector<AxisPtr> &axes,
   auto &gpuTool = akgglobal::GpuScheduleTool::getInstance();
   gpuTool.reduceSizeStatic = reductionSize;
   gpuTool.parallelSizeStatic = parallelSize;
-  bool isReduceY = GpuScheduleTool::getInstance().getReduceDirection() == ReduceDirection::Y;
+  bool isReduceY = akgglobal::GpuScheduleTool::getInstance().getReduceDirection() == ReduceDirection::Y;
 
   // reuse to map non-reduce-axes
   std::vector<int> parallelFlags(redFlags.size());
