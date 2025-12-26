@@ -366,9 +366,17 @@ static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
 static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
   Location loc = storeOp.getLoc();
 
-  Value vectorValue = ctx.valueMapping.lookupOrNull(storeOp.getValue());
+  Value storeValue = storeOp.getValue();
+  Value vectorValue = ctx.valueMapping.lookupOrNull(storeValue);
   if (!vectorValue) {
-    return;
+    OpBuilder::InsertionGuard guard(ctx.builder);
+    ctx.builder.setInsertionPoint(ctx.vecLoop);
+
+    vectorValue = vectorizeUniform(storeValue, ctx);
+    if (!vectorValue) {
+      return;
+    }
+    ctx.valueMapping.map(storeValue, vectorValue);
   }
 
   SmallVector<Value> indices;
@@ -533,6 +541,13 @@ static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
       vectorizeStore(storeOp, ctx);
 
     } else if (auto constOp = dyn_cast<arith::ConstantOp>(&op)) {
+      Type constType = constOp.getType();
+      if (constType == ctx.builder.getIndexType()) {
+        Value scalarConst = ctx.builder.create<arith::ConstantOp>(
+            constOp.getLoc(), constOp.getValue());
+        ctx.valueMapping.map(constOp.getResult(), scalarConst);
+        continue;
+      }
       Value vecValue = vectorizeConstant(constOp, ctx);
       if (!vecValue) {
         return failure();
