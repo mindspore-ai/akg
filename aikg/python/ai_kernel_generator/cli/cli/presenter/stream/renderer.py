@@ -129,6 +129,30 @@ class StreamRenderer:
 
     def _render_incremental(self, force_all: bool = False):
         """增量渲染循环"""
+        if force_all:
+            # 强制刷完时合并同类型 chunk，避免 token 级分片导致拆行
+            merged: list[tuple[str, bool]] = []
+            if self._pending_text:
+                merged.append((self._pending_text, bool(self._pending_dim)))
+            for text, is_reasoning in self._pending_chunks:
+                c = str(text or "")
+                if not c:
+                    continue
+                dim = bool(is_reasoning)
+                if merged and merged[-1][1] == dim:
+                    merged[-1] = (merged[-1][0] + c, dim)
+                else:
+                    merged.append((c, dim))
+
+            self._pending_text = ""
+            self._pending_dim = False
+            self._pending_chunks.clear()
+
+            for text, dim in merged:
+                if text:
+                    self._process_content_lines(text, dim=dim)
+            return
+
         while True:
             if not self._pending_text:
                 if not self._pending_chunks:
