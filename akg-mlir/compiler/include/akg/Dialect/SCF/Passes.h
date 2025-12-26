@@ -17,9 +17,9 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_SCF_PASSES_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_SCF_PASSES_H_
 
+#include "akg/Dialect/SCF/Transforms/NPUVectorVectorize.h"
 #include "akg/Dialect/SCF/Transforms/PrimeNumReplaceForDynamicShape.h"
 #include "akg/Dialect/SCF/Transforms/RewriteReduceInMultiLevelMemory.h"
-#include "akg/Dialect/SCF/Transforms/NPUVectorVectorize.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -28,8 +28,10 @@
 namespace mlir {
 
 /// Generate the code for registering transforms passes.
+#ifndef GEN_PASS_REGISTRATION
 #define GEN_PASS_REGISTRATION
 #include "akg/Dialect/SCF/Passes.h.inc"
+#endif
 
 }  // namespace mlir
 
