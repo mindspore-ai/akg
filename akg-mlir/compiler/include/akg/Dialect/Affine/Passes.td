@@ -329,10 +329,6 @@ def AddOutParameter : Pass<"add-out-parameter", "mlir::ModuleOp"> {
   let constructor = "mlir::affine::createAddOutParameterPass()";
 }
 
-def MemrefTilingFunc : Pass<"memref-tiling-func", "mlir::ModuleOp"> {
-  let summary = "This pass applies tiling to operations on tensors, dynamically processing tiles";
-  let constructor = "mlir::affine::createMemrefTilingFuncPass()";
-}
 
 def BF16ToF32 : Pass<"bf16-to-f32", "func::FuncOp"> {
   let summary = "Convert bf16 operands to float32 in affine operations";

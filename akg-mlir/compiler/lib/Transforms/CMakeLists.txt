@@ -14,6 +14,7 @@ add_mlir_dialect_library(AKGTransformsPasses
   DumpShapeInfo.cpp
   LoadGlobalConfig.cpp
   AKGFuncOutlining.cpp
+  NPUTilingFunc.cpp
   AKGParallelLaunch.cpp
   AKGOperatorIdentify.cpp
   FoldDimension.cpp

@@ -14,21 +14,18 @@
  * limitations under the License.
  */
 
-#ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_MEMREFTILINGFUNC_H_
-#define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_MEMREFTILINGFUNC_H_
+#ifndef COMPILER_INCLUDE_AKG_TRANSFORMS_NPUTILINGFUNC_H_
+#define COMPILER_INCLUDE_AKG_TRANSFORMS_NPUTILINGFUNC_H_
 
 #include <memory>
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-
 class ModuleOp;
-
-namespace affine {
-
-std::unique_ptr<OperationPass<ModuleOp>> createMemrefTilingFuncPass();
-
-}  // namespace affine
 }  // namespace mlir
 
-#endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_MEMREFTILINGFUNC_H_
+namespace mlir {
+std::unique_ptr<OperationPass<ModuleOp>> createNPUTilingFuncPass();
+}  // namespace mlir
+
+#endif  // COMPILER_INCLUDE_AKG_TRANSFORMS_NPUTILINGFUNC_H_

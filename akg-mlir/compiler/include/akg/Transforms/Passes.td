@@ -35,9 +35,9 @@ def CopyRemoval : Pass<"copy-removal"> {
 }
 
 def CopyElision : Pass<"copy-elision"> {
-  let summary = "Remove unecessary copy operations";
+  let summary = "Remove unnecessary copy operations";
   let description = [{
-    Remove unecessary copy operations
+    Remove unnecessary copy operations
   }];
   let constructor = "mlir::createCopyElisionPass()";
 }
@@ -103,6 +103,11 @@ def AKGFuncOutlining : Pass<"akg-func-outlining", "mlir::ModuleOp"> {
 def AKGParallelLaunch : Pass<"akg-parallel-launch","mlir::ModuleOp"> {
   let summary = "add support parallel launch callback for Mindspore runtimes";
   let constructor = "mlir::createAKGParallelLaunchPass()";
+}
+
+def NPUTilingFunc : Pass<"npu-tiling-func", "mlir::ModuleOp"> {
+  let summary = "This pass applies tiling to operations on memref, dynamically processing tiles";
+  let constructor = "mlir::createNPUTilingFuncPass()";
 }
 
 #endif // AKG_MLIR_TRANSFORMS_PASSES
