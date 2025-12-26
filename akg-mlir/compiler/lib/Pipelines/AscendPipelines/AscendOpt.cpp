@@ -21,6 +21,8 @@
 #include <nlohmann/json.hpp>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Affine/Passes.h"
+#include "akg/Dialect/SCF/Passes.h"
+#include "akg/Dialect/Tensor/Passes.h"
 #include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/Linalg/Passes.h"
 #include "akg/Dialect/MindSpore/Passes.h"
@@ -53,7 +55,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
   pm.addPass(mlir::createMindsporeMakeBroadcastablePass());
   pm.addPass(mlir::createEliminateDimensionPass());
   pm.addPass(mlir::createLegalizeTypePass());
-  pm.addPass(mlir::createFoldDimensionPass());
+  // pm.addPass(mlir::createFoldDimensionPass());
   pm.addPass(mlir::createMindSporeToLinalgNamedPass());
   pm.addPass(mlir::createMindSporeToTosaPass());
   OpPassManager &nestedFunctionPM = pm.nest<mlir::func::FuncOp>();
@@ -61,13 +63,14 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
 
   if (options.enableAKGLoopFusion) {
     bool keepFakeOuts = true;
+    pm.addPass(mlir::createDecomposeTensorPass());
     pm.addPass(mlir::createLinalgCopyBufferizePass(keepFakeOuts));
     pm.addPass(mlir::bufferization::createEmptyTensorToAllocTensorPass());
 
     mlir::bufferization::OneShotBufferizationOptions bufferizationOpts;
+    bufferizationOpts.allowReturnAllocsFromLoops = true;
     bufferizationOpts.bufferizeFunctionBoundaries = true;
     bufferizationOpts.setFunctionBoundaryTypeConversion(mlir::bufferization::LayoutMapOption::IdentityLayoutMap);
-    bufferizationOpts.allowReturnAllocsFromLoops = true;
     pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufferizationOpts));
 
     pm.addPass(mlir::createCanonicalizerPass());
@@ -93,28 +96,25 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createAKGLoopFusionPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
 
-    // tiling
     nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
     nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
-    nestedFusionPM.addPass(mlir::createAKGLoopTilingPass(options.target, true, options.arch, "", {}));
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
 
-    // vector
     nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
     nestedFusionPM.addPass(mlir::createExtractIfOpPass(options.target));
-    nestedFusionPM.addPass(mlir::affine::createAffineForVectPass());
+    nestedFusionPM.addPass(mlir::createLowerAffinePass());
 
     // parallel
     // nestedFusionPM.addPass(mlir::createRemoveRedundantLoopsPass());
     // nestedFusionPM.addPass(mlir::createAKGLoopParallelizePass(options.enableParallel));
 
-    nestedFusionPM.addPass(mlir::affine::createVectorTransferTensorizePass());
-    nestedFusionPM.addPass(mlir::affine::createTensorizeLiveOutsPass());
-    pm.addPass(mlir::affine::createTilingFuncPass());
+    pm.addPass(mlir::affine::createAddOutParameterPass());
 
-    pm.nest<mlir::func::FuncOp>().addPass(mlir::createInsertLoadAndStorePass());
-    pm.nest<mlir::func::FuncOp>().addPass(mlir::createConvertAffineToSCFPass());
-    pm.nest<mlir::func::FuncOp>().addPass(mlir::createLowerAffinePass());
+    // tiling
+    pm.addPass(mlir::createNPUTilingFuncPass());
+    // vector
+    pm.addPass(mlir::scf::createNPUVectorVectorizePass());
+    pm.addPass(mlir::createArithToHIVMConversionPass());
   }
 }
 }  // namespace

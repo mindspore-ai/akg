@@ -1,6 +1,7 @@
 set(AKG_MLIR_LIBS
   AKGTransformsPasses
   AKGLinalgPasses
+  AKGTensorPasses
   AKGLLVMIRPasses
   AKGMLIRAnalysis
   )

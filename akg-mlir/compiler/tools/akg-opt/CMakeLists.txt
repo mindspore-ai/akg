@@ -2,6 +2,7 @@ set(AKG_MLIR_LIBS
   AKGAffinePasses
   AKGTransformsPasses
   AKGSCFPasses
+  AKGTensorPasses
   AKGGPUPasses
   AKGLinalgPasses
   AkgPipelines
