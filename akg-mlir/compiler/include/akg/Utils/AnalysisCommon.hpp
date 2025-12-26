@@ -17,9 +17,9 @@
 #ifndef AKG_UTILS_ANALYSISCOMMON_H
 #define AKG_UTILS_ANALYSISCOMMON_H
 
-#include <algorithm>
-#include <cmath>
 #include <string>
+#include <unordered_map>
+#include <vector>
 #include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "llvm/ADT/DenseSet.h"
@@ -70,6 +70,10 @@ constexpr auto kTileForOneAttr = "__tiled_for___1";
 constexpr auto kMapForToForallAttr = "map_for_to_forall";
 constexpr auto kVectorAttr = "vector";
 
+const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 100000037, 100000039, 100000049,
+                                         100000073, 100000079, 100000081, 100000091};
+const std::vector<unsigned> primeTailSteps = {100000153, 100000157, 100000163, 100000169, 100000171, 100000177,
+                                             100000181, 100000183, 100000187, 100000189};
 enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduce, Matmul, Conv };
 const std::unordered_map<int, std::string> operatorTemplateMap = {{0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"},
                                                                   {3, "Reshape"}, {4, "Transpose"},   {5, "Reduce"},

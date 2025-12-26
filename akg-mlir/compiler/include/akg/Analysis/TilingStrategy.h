@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_TILINGSTRATEGY_H_
-#define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_TILINGSTRATEGY_H_
+#ifndef COMPILER_INCLUDE_AKG_ANALYSIS_TILINGSTRATEGY_H_
+#define COMPILER_INCLUDE_AKG_ANALYSIS_TILINGSTRATEGY_H_
 #include <deque>
 #include <memory>
 #include <numeric>
@@ -23,16 +23,17 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include "akg/Dialect/Affine/Analysis/Axis.h"
-#include "akg/Dialect/Affine/Analysis/Config.h"
-#include "akg/Dialect/Affine/Analysis/Model.h"
+#include "akg/Analysis/Axis.h"
+#include "akg/Analysis/Config.h"
+#include "akg/Analysis/Model.h"
 #include "akg/Dialect/Affine/Analysis/GpuTemplateTilingSolver.h"
 #include "akg/Utils/AnalysisForGpu.hpp"
 #include "akg/Utils/AnalysisForNpu.hpp"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
-namespace akg {
 namespace autotiling {
+using llvm::SmallVector;
 
 constexpr auto BEST_UNROLL_NUM = 256;
 constexpr auto MIN_UNROLL_NUM = 8;
@@ -55,13 +56,13 @@ class TilingStrategy {
   virtual ~TilingStrategy() = default;
 
   explicit TilingStrategy(const std::unordered_set<std::string> &work_for_ops) : workForOps(work_for_ops) {}
-  explicit TilingStrategy(Axis::AxisLabel axisLabel) : workForAxisLabel(axisLabel) {}
+  explicit TilingStrategy(mlir::autotiling::Axis::AxisLabel axisLabel) : workForAxisLabel(axisLabel) {}
   virtual void AddConstraint(ModelGraphPtr initGraph) {}
   virtual void AddNpuConstraint(NpuModelGraphPtr initGraph) {}
   virtual void AddGpuConstraint(GpuModelGraphPtr initGraph) {}
   virtual void AddCpuConstraint(CpuModelGraphPtr initGraph) {}
   std::unordered_set<std::string> workForOps;
-  Axis::AxisLabel workForAxisLabel{Axis::AxisLabel::kDefault};
+  mlir::autotiling::Axis::AxisLabel workForAxisLabel{mlir::autotiling::Axis::AxisLabel::kDefault};
   bool IsRelevant(const AxisPtr &a, const InitGraphPtr graph);
   bool IsRelevant(const AxisPtr &a, const InitGraphPtr graph, std::unordered_set<std::string> workForOps);
 };
@@ -115,7 +116,7 @@ class TransposeStrategy : public TilingStrategy {
 
 class BroadcastStrategy : public TilingStrategy {
  public:
-  BroadcastStrategy() : TilingStrategy({Axis::AxisLabel::kVectorization}) {}
+  BroadcastStrategy() : TilingStrategy({mlir::autotiling::Axis::AxisLabel::kVectorization}) {}
   virtual ~BroadcastStrategy() = default;
 
   void AddGpuConstraint(GpuModelGraphPtr gpuGraph) override;
@@ -236,7 +237,6 @@ class TilingStrategyManager {
 using TilingStrategyManagerPtr = std::shared_ptr<TilingStrategyManager>;
 
 }  // namespace autotiling
-}  // namespace akg
 }  // namespace mlir
 
-#endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_TILINGSTRATEGY_H_
+#endif  // COMPILER_INCLUDE_AKG_ANALYSIS_TILINGSTRATEGY_H_

@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,16 +14,25 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Analysis/Model.h"
+#include "akg/Analysis/Model.h"
 #include "akg/Analysis/BufferAnalysis.h"
-#include "akg/Dialect/Affine/Analysis/TilingStrategy.h"
+#include "akg/Utils/AnalysisForGpu.hpp"
+#include "akg/Utils/AnalysisForNpu.hpp"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 
 namespace mlir {
-namespace akg {
 namespace autotiling {
+// Use types from mlir::akg and mlir::autotiling namespaces
+using mlir::akg::BufferAnalysisOptions;
+using mlir::akg::countMaxBuffer;
+using mlir::autotiling::GpuGrid;
+using mlir::autotiling::GpuBlock;
+
 // The score will sum up to axis's priority.
 constexpr auto kLoadScore = 1.0;
 constexpr auto kStoreScore = 1.5;
+
 template <typename T>
 void Tensor::SetLoadTensor(T loadOp, const std::vector<AxisPtr> &loopNest) {
   opType = "Load";
@@ -33,7 +42,8 @@ void Tensor::SetLoadTensor(T loadOp, const std::vector<AxisPtr> &loopNest) {
   CommonUtils::collectRelatedAxes(loadResult, loadRelatedFor);
   for (size_t i = 0; i < loadRelatedFor.size(); ++i) {
     for (auto axis : loopNest) {
-      if (axis->loop->getOperation() == loadRelatedFor[i]) {
+      // Use unified interface: getLoopOperation()
+      if (axis->loop && axis->getLoopOperation() == loadRelatedFor[i]) {
         loopNest_.push_back(axis);
         axis->isInnerMost = (i == (loadRelatedFor.size() - 1)) || axis->isInnerMost;
         if (axis->isInnerMost) {
@@ -52,8 +62,11 @@ void Tensor::SetStoreTensor(T storeOp, const std::vector<AxisPtr> &loopNest) {
   auto indices = storeOp.getIndices();
   for (size_t i = 0; i < indices.size(); ++i) {
     for (auto axis : loopNest) {
-      auto forOp = dyn_cast<affine::AffineForOp>(axis->loop->getOperation());
-      auto inductionVar = forOp.getInductionVar();
+      if (!axis->loop) {
+        continue;
+      }
+      // Use unified interface: getInductionVar()
+      auto inductionVar = axis->getInductionVar();
       if (indices[i] == inductionVar) {
         axis->isInnerMost = (i == (indices.size() - 1)) || axis->isInnerMost;
         if (axis->isInnerMost) {
@@ -66,6 +79,103 @@ void Tensor::SetStoreTensor(T storeOp, const std::vector<AxisPtr> &loopNest) {
   }
 }
 
+// Template specializations
+template <>
+void Tensor::SetLoadTensor<affine::AffineLoadOp>(affine::AffineLoadOp loadOp, const std::vector<AxisPtr> &loopNest) {
+  opType = "Load";
+  dataType = loadOp.getMemRefType().getElementType();
+  Value loadResult = loadOp.getResult();
+  SmallVector<Operation *, 8> loadRelatedFor;
+  CommonUtils::collectRelatedAxes(loadResult, loadRelatedFor);
+  for (size_t i = 0; i < loadRelatedFor.size(); ++i) {
+    for (auto axis : loopNest) {
+      if (axis->loop && axis->getLoopOperation() == loadRelatedFor[i]) {
+        loopNest_.push_back(axis);
+        axis->isInnerMost = (i == (loadRelatedFor.size() - 1)) || axis->isInnerMost;
+        if (axis->isInnerMost) {
+          axis->priority = axis->priority + kLoadScore;
+        }
+        break;
+      }
+    }
+  }
+}
+
+template <>
+void Tensor::SetLoadTensor<memref::LoadOp>(memref::LoadOp loadOp, const std::vector<AxisPtr> &loopNest) {
+  opType = "Load";
+  dataType = loadOp.getMemRefType().getElementType();
+  Value loadResult = loadOp.getResult();
+  SmallVector<Operation *, 8> loadRelatedFor;
+  CommonUtils::collectRelatedAxes(loadResult, loadRelatedFor);
+  for (size_t i = 0; i < loadRelatedFor.size(); ++i) {
+    for (auto axis : loopNest) {
+      if (axis->loop && axis->getLoopOperation() == loadRelatedFor[i]) {
+        loopNest_.push_back(axis);
+        axis->isInnerMost = (i == (loadRelatedFor.size() - 1)) || axis->isInnerMost;
+        if (axis->isInnerMost) {
+          axis->priority = axis->priority + kLoadScore;
+        }
+        break;
+      }
+    }
+  }
+}
+
+template <>
+void Tensor::SetStoreTensor<affine::AffineStoreOp>(affine::AffineStoreOp storeOp,
+                                                   const std::vector<AxisPtr> &loopNest) {
+  opType = "Store";
+  dataType = storeOp.getMemRefType().getElementType();
+  auto indices = storeOp.getIndices();
+  for (size_t i = 0; i < indices.size(); ++i) {
+    for (auto axis : loopNest) {
+      if (!axis->loop) {
+        continue;
+      }
+      auto inductionVar = axis->getInductionVar();
+      if (indices[i] == inductionVar) {
+        axis->isInnerMost = (i == (indices.size() - 1)) || axis->isInnerMost;
+        if (axis->isInnerMost) {
+          axis->priority = axis->priority + kStoreScore;
+        }
+        loopNest_.push_back(axis);
+        break;
+      }
+    }
+  }
+}
+
+template <>
+void Tensor::SetStoreTensor<memref::StoreOp>(memref::StoreOp storeOp, const std::vector<AxisPtr> &loopNest) {
+  opType = "Store";
+  dataType = storeOp.getMemRefType().getElementType();
+  auto indices = storeOp.getIndices();
+  for (size_t i = 0; i < indices.size(); ++i) {
+    for (auto axis : loopNest) {
+      if (!axis->loop) {
+        continue;
+      }
+      auto inductionVar = axis->getInductionVar();
+      if (indices[i] == inductionVar) {
+        axis->isInnerMost = (i == (indices.size() - 1)) || axis->isInnerMost;
+        if (axis->isInnerMost) {
+          axis->priority = axis->priority + kStoreScore;
+        }
+        loopNest_.push_back(axis);
+        break;
+      }
+    }
+  }
+}
+
+// Explicit template instantiation
+template void Tensor::SetLoadTensor<affine::AffineLoadOp>(affine::AffineLoadOp, const std::vector<AxisPtr> &);
+template void Tensor::SetLoadTensor<memref::LoadOp>(memref::LoadOp, const std::vector<AxisPtr> &);
+template void Tensor::SetStoreTensor<affine::AffineStoreOp>(affine::AffineStoreOp, const std::vector<AxisPtr> &);
+template void Tensor::SetStoreTensor<memref::StoreOp>(memref::StoreOp, const std::vector<AxisPtr> &);
+
+// Implement Tensor constructor
 Tensor::Tensor(mlir::Operation *op, const std::vector<AxisPtr> &loopNest) : op_(op) {
   // 1. get op_type
   if (op->hasAttr("OperatorType")) {
@@ -77,10 +187,10 @@ Tensor::Tensor(mlir::Operation *op, const std::vector<AxisPtr> &loopNest) : op_(
     SetLoadTensor<affine::AffineLoadOp>(loadOp, loopNest);
   } else if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
     SetLoadTensor<memref::LoadOp>(loadOp, loopNest);
-  } else if (auto loadOp = dyn_cast<affine::AffineStoreOp>(op)) {
-    SetStoreTensor<affine::AffineStoreOp>(loadOp, loopNest);
-  } else if (auto loadOp = dyn_cast<memref::StoreOp>(op)) {
-    SetStoreTensor<memref::StoreOp>(loadOp, loopNest);
+  } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op)) {
+    SetStoreTensor<affine::AffineStoreOp>(storeOp, loopNest);
+  } else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+    SetStoreTensor<memref::StoreOp>(storeOp, loopNest);
   } else {
     loopNest_ = loopNest;
     if (isa<mlir::math::ExpOp, mlir::math::LogOp, mlir::math::TanhOp, mlir::math::SqrtOp>(op)) {
@@ -89,6 +199,7 @@ Tensor::Tensor(mlir::Operation *op, const std::vector<AxisPtr> &loopNest) : op_(
   }
 }
 
+// Implement InitGraph methods
 InitGraph::InitGraph(const std::string &name) : name{name} {}
 InitGraph::InitGraph(const std::string &name, const std::vector<std::shared_ptr<Node>> &nodes,
                      const std::vector<std::shared_ptr<Node>> &inputs,
@@ -134,6 +245,7 @@ NodePtr InitGraph::getMaxRankTensor() {
   return maxRankNode;
 }
 
+// Implement ModelGraph methods
 ModelGraph::ModelGraph(const InitGraphPtr &initGraph)
     : InitGraph(initGraph->name, initGraph->nodes_, initGraph->inputs_, initGraph->outputs_) {
   rootAxis = initGraph->rootAxis;
@@ -326,6 +438,7 @@ ConfigPtr Resource::alloc(const AxisPtr axis, int64_t size) {
   currSize *= size;
   return config;
 }
+
 }  // namespace autotiling
-}  // namespace akg
 }  // namespace mlir
+

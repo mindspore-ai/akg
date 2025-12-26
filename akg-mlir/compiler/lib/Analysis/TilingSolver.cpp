@@ -14,17 +14,23 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Analysis/TilingSolver.h"
+#include "akg/Analysis/TilingSolver.h"
 
 #include <algorithm>
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Utils/AnalysisForGpu.hpp"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 using akgglobal::AxisInfo;
 
 namespace mlir {
-namespace akg {
 namespace autotiling {
+using mlir::autotiling::kTileCfg;
+using mlir::autotiling::kGpuBlockCfg;
+using mlir::autotiling::kGpuGridCfg;
+using mlir::autotiling::kGpuSeqCfg;
+using mlir::autotiling::ConfigPos;
+using mlir::autotiling::ConfigPtr;
 static bool isDynamicShape() { return akgglobal::ShapeAlignTool::getInstance().getFuncArgSizes() > 0; }
 
 void TilingSolver::initMinSize() {
@@ -104,7 +110,7 @@ bool HeuristicTilingSolver::genSolveTarget() {
   target = std::make_shared<SolveTarget>("Heuristic");
   target->addRule([](const AxisPtr a, std::vector<int> &candidates) -> std::deque<int> {
     std::deque<int> chosen;
-    if (a->axisType.find(Axis::AxisLabel::kMultiCore) != a->axisType.end()) {
+    if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kMultiCore) != a->axisType.end()) {
       for (auto cand : candidates) {
         chosen.push_front(cand);
         if (a->range.second % cand == 0) {
@@ -113,11 +119,11 @@ bool HeuristicTilingSolver::genSolveTarget() {
       }
       return chosen;
     }
-    if (a->axisType.find(Axis::AxisLabel::kReduction) != a->axisType.end()) {
+    if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kReduction) != a->axisType.end()) {
       chosen.push_front(candidates.back());
       return chosen;
     }
-    if (a->axisType.find(Axis::AxisLabel::kVectorization) != a->axisType.end()) {
+    if (a->axisType.find(mlir::autotiling::Axis::AxisLabel::kVectorization) != a->axisType.end()) {
       for (int i = static_cast<int>(candidates.size()) - 1; i >= 0; --i) {
         auto cand = candidates[i];
         chosen.push_front(cand);
@@ -163,7 +169,8 @@ void GlobalConfigSolver::setEnableVectorize() {
     }
     auto innerTile = innerMostAxis->tryGetConfig(0, kTileCfg);
     innerAlignSize =
-      innerMostAxis->axisType.find(Axis::AxisLabel::kDynamic) == innerMostAxis->axisType.end() ? innerTile->value : -1;
+      innerMostAxis->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) ==
+                                   innerMostAxis->axisType.end() ? innerTile->value : -1;
     innerDivisible = innerMostAxis->range.second % innerAlignSize == 0;
   });
   if (std::any_of(modelGraph->nodes().begin(), modelGraph->nodes().end(),
@@ -225,11 +232,21 @@ static std::pair<int, int> CollectAllAxesInfo(func::FuncOp funcOp, const ModelGr
   }
   for (auto node : modelGraph->nodes()) {
     int tensorId = -1;
-    if (node->opType == "Load" && isa<affine::AffineLoadOp>(node->op_)) {
-      auto loadOp = dyn_cast<affine::AffineLoadOp>(node->op_);
-      tensorId = getArgIndex(loadOp.getMemref());
-    } else if (node->opType == "Store" && isa<affine::AffineStoreOp>(node->op_)) {
-      if (auto storeOp = dyn_cast<affine::AffineStoreOp>(node->op_)) {
+    // Support both Affine and SCF dialects
+    if (node->opType == "Load") {
+      if (isa<affine::AffineLoadOp>(node->op_)) {
+        auto loadOp = dyn_cast<affine::AffineLoadOp>(node->op_);
+        tensorId = getArgIndex(loadOp.getMemref());
+      } else if (isa<memref::LoadOp>(node->op_)) {
+        auto loadOp = dyn_cast<memref::LoadOp>(node->op_);
+        tensorId = getArgIndex(loadOp.getMemref());
+      }
+    } else if (node->opType == "Store") {
+      if (isa<affine::AffineStoreOp>(node->op_)) {
+        auto storeOp = dyn_cast<affine::AffineStoreOp>(node->op_);
+        tensorId = getArgIndex(storeOp.getMemref());
+      } else if (isa<memref::StoreOp>(node->op_)) {
+        auto storeOp = dyn_cast<memref::StoreOp>(node->op_);
         tensorId = getArgIndex(storeOp.getMemref());
       }
     }
@@ -350,5 +367,4 @@ void GlobalConfigSolver::UpdateGlobalInfo(func::FuncOp funcOp) {
 }
 
 }  // namespace autotiling
-}  // namespace akg
 }  // namespace mlir

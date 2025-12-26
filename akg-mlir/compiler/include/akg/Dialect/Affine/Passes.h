@@ -17,10 +17,10 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_PASSES_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_PASSES_H_
 
-#include "akg/Dialect/Affine/Analysis/AutoTiling.h"
-#include "akg/Dialect/Affine/Analysis/Axis.h"
-#include "akg/Dialect/Affine/Analysis/Config.h"
-#include "akg/Dialect/Affine/Analysis/Model.h"
+#include "akg/Analysis/AutoTiling.h"
+#include "akg/Analysis/Axis.h"
+#include "akg/Analysis/Config.h"
+#include "akg/Analysis/Model.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopParallelize.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopTiling.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopUnroll.h"

@@ -19,15 +19,16 @@
 #include <deque>
 #include <tuple>
 #include <vector>
-#include "akg/Dialect/Affine/Analysis/Axis.h"
-#include "akg/Dialect/Affine/Analysis/Config.h"
-#include "akg/Dialect/Affine/Analysis/Model.h"
+#include "akg/Analysis/Axis.h"
+#include "akg/Analysis/Config.h"
+#include "akg/Analysis/Model.h"
 #include "akg/Utils/AnalysisForGpu.hpp"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 
 namespace mlir {
 namespace akg {
 namespace autotiling {
+using mlir::autotiling::AxisPtr;
 
 static constexpr int kMinReductionLengthForParallel = 64;
 static constexpr int kMinReductionLengthForAtomic = 1024;
