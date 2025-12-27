@@ -324,12 +324,6 @@ def InsertLoadAndStore : Pass<"insert-load-and-store", "func::FuncOp"> {
   ];
 }
 
-def AddOutParameter : Pass<"add-out-parameter", "mlir::ModuleOp"> {
-  let summary = "This pass applies to adding out parameters";
-  let constructor = "mlir::affine::createAddOutParameterPass()";
-}
-
-
 def BF16ToF32 : Pass<"bf16-to-f32", "func::FuncOp"> {
   let summary = "Convert bf16 operands to float32 in affine operations";
   let description = [{

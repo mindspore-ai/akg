@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Transforms/AddOutParameter.h"
+#include "akg/Transforms/AddOutParameter.h"
 
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
@@ -37,10 +37,10 @@
 namespace mlir {
 #define GEN_PASS_DECL_ADDOUTPARAMETER
 #define GEN_PASS_DEF_ADDOUTPARAMETER
-#include "akg/Dialect/Affine/Passes.h.inc"
+#include "akg/Transforms/Passes.h.inc"
 }  // namespace mlir
 
-namespace mlir::affine {
+namespace mlir {
 
 using hacc::InputIdxAttr;
 using hacc::KernelArgType;
@@ -195,8 +195,8 @@ struct AddOutParameter : public mlir::impl::AddOutParameterBase<AddOutParameter>
 };
 
 }  // namespace
-}  // namespace mlir::affine
+}  // namespace mlir
 
-std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::affine::createAddOutParameterPass() {
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::createAddOutParameterPass() {
   return std::make_unique<AddOutParameter>();
 }
