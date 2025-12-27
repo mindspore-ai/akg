@@ -22,6 +22,7 @@ import pathlib
 import shutil
 import subprocess
 import time
+import distutils
 import numpy as np
 from bfloat16 import bfloat16
 
@@ -243,11 +244,15 @@ def _clear_tmp_dirs(kernel_name):
 
 
 def _auto_get_target(desc):
+    process_map = {'cpu':'cpu', 'cuda':'gpu', 'aicore':'ascend'}
     desc_d = json.loads(desc)
     process = desc_d.get("process", None)
     if process is None:
         raise RuntimeError("Can't get process in the json desc")
-    return "gpu" if process == "cuda" else "cpu"
+    target = process_map.get(process)
+    if target is None:
+        raise RuntimeError(f"Can't get target for process({process}) in desc")
+    return target
 
 
 def _run_gpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
@@ -382,14 +387,14 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
 
 def run_a_kernel(desc,
                  file_path,
-                 backend="gpu",
+                 backend=None,
                  profiling_trails=0,
                  static_desc=None,
                  clear_tmp=False,
                  dump_ir=False,
                  replace_dso=False,
                  repo_path="",
-                 enable_akg_loop_fusion=False):
+                 enable_loop_fusion=True):
     """function to run a single kernel"""
     is_dyn_shape = static_desc is not None
     if not backend:
@@ -408,7 +413,7 @@ def run_a_kernel(desc,
                                     repo_path=repo_path,
                                     profiling_trails=profiling_trails,
                                     runtime_provider="MLIR",
-                                    enable_akg_loop_fusion=enable_akg_loop_fusion)
+                                    enable_loop_fusion=enable_loop_fusion)
 
     if backend == "gpu":
         _run_gpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
@@ -491,10 +496,10 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
                          profiling_trails=compile_args.prof_trails,
                          static_desc=static_desc,
                          clear_tmp=compile_args.clear_tmp,
-                         dump_ir=bool(compile_args.dump_ir),
+                         dump_ir=compile_args.dump_ir,
                          replace_dso=compile_args.replace_dso,
                          repo_path=compile_args.repo_path,
-                         enable_akg_loop_fusion=compile_args.akg_fusion)
+                         enable_loop_fusion=compile_args.akg_fusion)
         except ValueError:
             print(kernel_name + " precision error = 9999999997ms")
             if run_res is not None and run_idx is not None:
@@ -551,10 +556,10 @@ def main(args=None):
     parser.add_argument("-c", "--clear_tmp", type=bool, default=False)
     parser.add_argument("-ci", "--ci_test", type=bool, default=False)
     parser.add_argument("-t", "--threads", type=int, default=1)
-    parser.add_argument("-dump", "--dump_ir", type=int, default=0)
+    parser.add_argument("-dump", "--dump_ir", type=bool, default=False)
     parser.add_argument("-r", "--replace_dso", type=bool, default=False)
     parser.add_argument("-repo", "--repo_path", type=str, default="")
-    parser.add_argument("-af", "--akg_fusion", type=bool, default=False)
+    parser.add_argument("-af", "--akg_fusion", type=distutils.util.strtobool, default=True)
 
     args = parser.parse_args()
     _create_dirs()

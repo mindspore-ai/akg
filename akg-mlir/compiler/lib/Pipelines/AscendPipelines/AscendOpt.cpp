@@ -61,7 +61,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
   OpPassManager &nestedFunctionPM = pm.nest<mlir::func::FuncOp>();
   nestedFunctionPM.addPass(mlir::tosa::createTosaToLinalg());
 
-  if (options.enableAKGLoopFusion) {
+  if (options.enableLoopFusion) {
     bool keepFakeOuts = true;
     pm.addPass(mlir::createDecomposeTensorPass());
     pm.addPass(mlir::createLinalgCopyBufferizePass(keepFakeOuts));
@@ -111,7 +111,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::createAddOutParameterPass());
 
     // tiling
-    pm.addPass(mlir::createNPUTilingFuncPass());
+    pm.addPass(mlir::createNPUAutoTilingPass());
     // vector
     pm.addPass(mlir::scf::createNPUVectorVectorizePass());
     pm.addPass(mlir::createArithToHIVMConversionPass());

@@ -61,7 +61,6 @@ class Kernel:
             output_file=out_file,
             akg_tools_dir=akg_tools_dir,
             dyn_shape=self.dynamic,
-            enable_akg_loop_fusion=True,
             dump_ir=True
         )
 
