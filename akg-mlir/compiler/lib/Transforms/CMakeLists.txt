@@ -1,24 +1,10 @@
 include(FetchContent)
 FetchContent_Declare(json URL ${JSON_TARBALL_URL})
 FetchContent_MakeAvailable(json)
+file(GLOB_RECURSE SRC_LIST *.cpp)
 
 add_mlir_dialect_library(AKGTransformsPasses
-  CopyRemoval.cpp
-  CopyElision.cpp
-  InferSymbolicShapes.cpp
-  RemoveSymbolic.cpp
-  SymbolRemoval.cpp
-  StoreLoadElim.cpp
-  PromoteTempBuffer.cpp
-  CopyAttributesToGpu.cpp
-  DumpShapeInfo.cpp
-  LoadGlobalConfig.cpp
-  AKGFuncOutlining.cpp
-  NPUTilingFunc.cpp
-  AddOutParameter.cpp
-  AKGParallelLaunch.cpp
-  AKGOperatorIdentify.cpp
-  FoldDimension.cpp
+  ${SRC_LIST}
 
   ADDITIONAL_HEADER_DIRS
   ${AKG_MLIR_SOURCE_DIR}/akg/Transforms

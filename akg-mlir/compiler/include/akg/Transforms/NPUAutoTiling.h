@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef COMPILER_INCLUDE_AKG_TRANSFORMS_NPUTILINGFUNC_H_
-#define COMPILER_INCLUDE_AKG_TRANSFORMS_NPUTILINGFUNC_H_
+#ifndef COMPILER_INCLUDE_AKG_TRANSFORMS_NPUAUTOTILINGFUNC_H_
+#define COMPILER_INCLUDE_AKG_TRANSFORMS_NPUAUTOTILINGFUNC_H_
 
 #include <memory>
 #include "mlir/Pass/Pass.h"
@@ -25,7 +25,7 @@ class ModuleOp;
 }  // namespace mlir
 
 namespace mlir {
-std::unique_ptr<OperationPass<ModuleOp>> createNPUTilingFuncPass();
+std::unique_ptr<OperationPass<ModuleOp>> createNPUAutoTilingPass();
 }  // namespace mlir
 
-#endif  // COMPILER_INCLUDE_AKG_TRANSFORMS_NPUTILINGFUNC_H_
+#endif  // COMPILER_INCLUDE_AKG_TRANSFORMS_NPUAUTOTILINGFUNC_H_
