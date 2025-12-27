@@ -154,6 +154,13 @@ class AdaptiveSearchController:
         self._task_generations: Dict[str, int] = {}  # task_id -> generation
         self._task_parents: Dict[str, Optional[str]] = {}  # task_id -> parent_id
         
+        # 选择批次追踪（用于失败时回滚 selection_count）
+        # task_id -> batch_id
+        self._task_to_batch: Dict[str, int] = {}
+        # batch_id -> {parent_id, child_ids, completed, success_count}
+        self._selection_batches: Dict[int, Dict[str, Any]] = {}
+        self._next_batch_id: int = 0
+        
         # Sketch agent 用于根据最终代码重新生成 sketch
         self._sketch_agent: Optional[Sketch] = None
         
@@ -240,9 +247,11 @@ class AdaptiveSearchController:
         
         for result in results:
             self._total_completed += 1
+            task_success = False
             
             if result.success:
                 self._total_success += 1
+                task_success = True
                 
                 # 添加到 DB（sketch 暂时为空）
                 record = self.db.add_from_result(
@@ -261,9 +270,56 @@ class AdaptiveSearchController:
                 self._total_failed += 1
                 error = result.error or result.final_state.get("error", "Unknown error")
                 logger.warning(f"Task {result.task_id} failed: {error}")
+            
+            # 更新选择批次状态
+            self._update_selection_batch(result.task_id, task_success)
         
         # 异步生成 sketch（根据最终代码重新生成）
         await self._generate_pending_sketches()
+    
+    def _update_selection_batch(self, task_id: str, success: bool) -> None:
+        """
+        更新选择批次状态，如果批次完成且全部失败则回滚父代的 selection_count
+        
+        Args:
+            task_id: 完成的任务 ID
+            success: 任务是否成功
+        """
+        if task_id not in self._task_to_batch:
+            # 初始任务不属于任何批次
+            return
+        
+        batch_id = self._task_to_batch[task_id]
+        if batch_id not in self._selection_batches:
+            return
+        
+        batch = self._selection_batches[batch_id]
+        batch['completed'] += 1
+        if success:
+            batch['success_count'] += 1
+        
+        # 检查批次是否完成
+        total_children = len(batch['child_ids'])
+        if batch['completed'] >= total_children:
+            # 批次完成，检查是否全部失败
+            if batch['success_count'] == 0:
+                # 全部失败，回滚父代的 selection_count
+                parent_id = batch['parent_id']
+                self.db.decrement_selection(parent_id)
+                logger.info(
+                    f"Selection batch {batch_id} all failed ({total_children} tasks), "
+                    f"decremented selection_count for parent {parent_id}"
+                )
+            else:
+                logger.debug(
+                    f"Selection batch {batch_id} completed: "
+                    f"{batch['success_count']}/{total_children} succeeded"
+                )
+            
+            # 清理批次数据
+            for child_id in batch['child_ids']:
+                self._task_to_batch.pop(child_id, None)
+            del self._selection_batches[batch_id]
     
     async def _generate_pending_sketches(self) -> None:
         """为待处理的成功任务生成 sketch"""
@@ -341,12 +397,24 @@ class AdaptiveSearchController:
                     # DB 非空，选择一个父代，生成 tasks_per_parent 个进化任务
                     parent = self.selector.select()
                     if parent:
+                        # 创建选择批次，用于追踪子任务成功/失败
+                        batch_id = self._next_batch_id
+                        self._next_batch_id += 1
+                        self._selection_batches[batch_id] = {
+                            'parent_id': parent.id,
+                            'child_ids': [],
+                            'completed': 0,
+                            'success_count': 0
+                        }
+                        
                         # 生成 n 个任务（有空位运行，其余放等待队列）
                         for _ in range(self.search_config.tasks_per_parent):
                             if self._total_submitted >= self.search_config.max_total_tasks:
                                 break
                             task_id = await self._submit_evolved_task_with_parent(parent)
                             if task_id:
+                                self._selection_batches[batch_id]['child_ids'].append(task_id)
+                                self._task_to_batch[task_id] = batch_id
                                 submitted += 1
                     else:
                         # 无法选择父代，生成初始任务

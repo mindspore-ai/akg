@@ -101,6 +101,15 @@ $$E(s) = c \cdot \sqrt{\frac{\ln (N_{total}+1)}{N(s) + 1}}$$
 - Unselected tasks (N(s)=0) get a larger but **finite** exploration value
 - Does NOT unconditionally prioritize unselected tasks
 
+### 3.4 Selection Count Update Strategy
+
+Uses "optimistic update + rollback on failure" strategy:
+
+1. **+1 on selection**: When a parent is selected, immediately `selection_count += 1`
+2. **-1 on failure**: If **all child tasks from this batch fail**, then `selection_count -= 1`
+
+This ensures timely exploration term updates while avoiding unfair penalty to parents when child tasks fail.
+
 ### 3.4 Selection Example
 
 ```

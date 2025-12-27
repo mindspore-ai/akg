@@ -252,9 +252,15 @@ class Designer(AgentBase):
         # ============ 处理Hint模式的输出 ============
         if enable_hint_mode and has_hint:
             import json
+            from ai_kernel_generator.utils.common_utils import ParserFactory
             try:
-                # 解析JSON格式的生成内容
-                result_dict = json.loads(llm_result)
+                # 使用robust方法解析JSON格式的生成内容（支持markdown代码块包裹等多种格式）
+                extracted_json = ParserFactory._extract_json_comprehensive(llm_result)
+                if extracted_json:
+                    result_dict = json.loads(extracted_json)
+                else:
+                    # 尝试直接解析
+                    result_dict = json.loads(llm_result)
                 sketch = result_dict.get("sketch", "")
                 reasoning = result_dict.get("reasoning", llm_reasoning)
                 

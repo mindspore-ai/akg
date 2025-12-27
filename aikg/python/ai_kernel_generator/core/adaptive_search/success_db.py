@@ -211,6 +211,15 @@ class SuccessDB:
             self._total_selections += 1
             logger.debug(f"Record {record_id} selection count: {self._records[record_id].selection_count}")
     
+    def decrement_selection(self, record_id: str) -> None:
+        """减少选择次数（用于子任务全部失败时回滚）"""
+        if record_id in self._records:
+            if self._records[record_id].selection_count > 0:
+                self._records[record_id].selection_count -= 1
+            if self._total_selections > 0:
+                self._total_selections -= 1
+            logger.debug(f"Record {record_id} selection count decremented to: {self._records[record_id].selection_count}")
+    
     def get_total_selections(self) -> int:
         """获取全局总选择次数"""
         return self._total_selections
