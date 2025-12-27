@@ -110,4 +110,9 @@ def NPUTilingFunc : Pass<"npu-tiling-func", "mlir::ModuleOp"> {
   let constructor = "mlir::createNPUTilingFuncPass()";
 }
 
+def AddOutParameter : Pass<"add-out-parameter", "mlir::ModuleOp"> {
+  let summary = "This pass applies to adding out parameters";
+  let constructor = "mlir::createAddOutParameterPass()";
+}
+
 #endif // AKG_MLIR_TRANSFORMS_PASSES

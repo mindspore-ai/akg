@@ -108,7 +108,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     // nestedFusionPM.addPass(mlir::createRemoveRedundantLoopsPass());
     // nestedFusionPM.addPass(mlir::createAKGLoopParallelizePass(options.enableParallel));
 
-    pm.addPass(mlir::affine::createAddOutParameterPass());
+    pm.addPass(mlir::createAddOutParameterPass());
 
     // tiling
     pm.addPass(mlir::createNPUTilingFuncPass());
