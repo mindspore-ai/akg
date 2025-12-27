@@ -276,6 +276,199 @@ def NPUVector_ReductionOp :
 }
 
 //===----------------------------------------------------------------------===//
+// ExtFOp - Floating Point Extension
+//===----------------------------------------------------------------------===//
+
+def NPUVector_ExtFOp :
+  NPUVector_Op<"extf", [Pure, SameOperandsAndResultShape,
+                        DeclareOpInterfaceMethods<ArithFastMathInterface>]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in,
+                   DefaultValuedAttr<Arith_FastMathAttr,
+                     "::mlir::arith::FastMathFlags::none">:$fastmath)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector floating point extension operation";
+  let description = [{
+    Cast a floating-point NPU vector to a larger floating-point NPU vector of the same shape.
+    The destination type must be strictly wider than the source type.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.extf %0 : !npuvector<?xbf16> to !npuvector<?xf32>
+    %2 = npuvector.extf %0 : !npuvector<128xf16> to !npuvector<128xf32>
+    ```
+  }];
+  let assemblyFormat = "$in (`fastmath` `` $fastmath^)? attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
+// TruncFOp - Floating Point Truncation
+//===----------------------------------------------------------------------===//
+
+def NPUVector_TruncFOp :
+  NPUVector_Op<"truncf", [Pure, SameOperandsAndResultShape,
+                          DeclareOpInterfaceMethods<ArithFastMathInterface>]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in,
+                   DefaultValuedAttr<Arith_FastMathAttr,
+                     "::mlir::arith::FastMathFlags::none">:$fastmath)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector floating point truncation operation";
+  let description = [{
+    Truncate a floating-point NPU vector to a smaller floating-point NPU vector of the same shape.
+    The destination type must be strictly narrower than the source type.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.truncf %0 : !npuvector<?xf32> to !npuvector<?xbf16>
+    %2 = npuvector.truncf %0 : !npuvector<128xf32> to !npuvector<128xf16>
+    ```
+  }];
+  let assemblyFormat = "$in (`fastmath` `` $fastmath^)? attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
+// ExtSIOp - Signed Integer Extension
+//===----------------------------------------------------------------------===//
+
+def NPUVector_ExtSIOp :
+  NPUVector_Op<"extsi", [Pure, SameOperandsAndResultShape]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector signed integer extension operation";
+  let description = [{
+    Cast a signed integer NPU vector to a wider signed integer NPU vector of the same shape.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.extsi %0 : !npuvector<?xi8> to !npuvector<?xi32>
+    %2 = npuvector.extsi %0 : !npuvector<128xi16> to !npuvector<128xi32>
+    ```
+  }];
+  let assemblyFormat = "$in attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
+// ExtUIOp - Unsigned Integer Extension
+//===----------------------------------------------------------------------===//
+
+def NPUVector_ExtUIOp :
+  NPUVector_Op<"extui", [Pure, SameOperandsAndResultShape]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector unsigned integer extension operation";
+  let description = [{
+    Cast an unsigned integer NPU vector to a wider unsigned integer NPU vector of the same shape.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.extui %0 : !npuvector<?xi8> to !npuvector<?xi32>
+    %2 = npuvector.extui %0 : !npuvector<128xi16> to !npuvector<128xi32>
+    ```
+  }];
+  let assemblyFormat = "$in attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
+// TruncIOp - Integer Truncation
+//===----------------------------------------------------------------------===//
+
+def NPUVector_TruncIOp :
+  NPUVector_Op<"trunci", [Pure, SameOperandsAndResultShape]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector integer truncation operation";
+  let description = [{
+    Truncate an integer NPU vector to a narrower integer NPU vector of the same shape.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.trunci %0 : !npuvector<?xi32> to !npuvector<?xi8>
+    %2 = npuvector.trunci %0 : !npuvector<128xi32> to !npuvector<128xi16>
+    ```
+  }];
+  let assemblyFormat = "$in attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
+// SIToFPOp - Signed Integer to Float
+//===----------------------------------------------------------------------===//
+
+def NPUVector_SIToFPOp :
+  NPUVector_Op<"sitofp", [Pure, SameOperandsAndResultShape]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector signed integer to floating-point conversion";
+  let description = [{
+    Convert a signed integer NPU vector to a floating-point NPU vector of the same shape.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.sitofp %0 : !npuvector<?xi32> to !npuvector<?xf32>
+    ```
+  }];
+  let assemblyFormat = "$in attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
+// UIToFPOp - Unsigned Integer to Float
+//===----------------------------------------------------------------------===//
+
+def NPUVector_UIToFPOp :
+  NPUVector_Op<"uitofp", [Pure, SameOperandsAndResultShape]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector unsigned integer to floating-point conversion";
+  let description = [{
+    Convert an unsigned integer NPU vector to a floating-point NPU vector of the same shape.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.uitofp %0 : !npuvector<?xi32> to !npuvector<?xf32>
+    ```
+  }];
+  let assemblyFormat = "$in attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
+// FPToSIOp - Float to Signed Integer
+//===----------------------------------------------------------------------===//
+
+def NPUVector_FPToSIOp :
+  NPUVector_Op<"fptosi", [Pure, SameOperandsAndResultShape]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector floating-point to signed integer conversion";
+  let description = [{
+    Convert a floating-point NPU vector to a signed integer NPU vector of the same shape.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.fptosi %0 : !npuvector<?xf32> to !npuvector<?xi32>
+    ```
+  }];
+  let assemblyFormat = "$in attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
+// FPToUIOp - Float to Unsigned Integer
+//===----------------------------------------------------------------------===//
+
+def NPUVector_FPToUIOp :
+  NPUVector_Op<"fptoui", [Pure, SameOperandsAndResultShape]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector floating-point to unsigned integer conversion";
+  let description = [{
+    Convert a floating-point NPU vector to an unsigned integer NPU vector of the same shape.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.fptoui %0 : !npuvector<?xf32> to !npuvector<?xi32>
+    ```
+  }];
+  let assemblyFormat = "$in attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
 // BroadcastOp
 //===----------------------------------------------------------------------===//
 
