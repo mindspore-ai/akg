@@ -26,6 +26,7 @@
 #include "akg/Transforms/CopyElision.h"
 #include "akg/Transforms/CopyRemoval.h"
 #include "akg/Transforms/NPUTilingFunc.h"
+#include "akg/Transforms/AddOutParameter.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {

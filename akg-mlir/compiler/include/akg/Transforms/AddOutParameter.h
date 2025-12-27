@@ -21,14 +21,11 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-
 class ModuleOp;
+}  // namespace mlir
 
-namespace affine {
-
+namespace mlir {
 std::unique_ptr<OperationPass<ModuleOp>> createAddOutParameterPass();
-
-}  // namespace affine
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_ADDOUTPARAMETER_H_
