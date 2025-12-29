@@ -444,30 +444,44 @@ def save_verification_directory(state: dict, config: dict) -> dict:
         result["message"] = f"对话历史已保存到: {conversation_path}\n💡 当前还没有生成算子代码，无验证目录可保存。"
         return result
     
-    # 查找最新的验证目录
-    op_log_dir = os.path.join(log_dir, op_name)
-    if not os.path.exists(op_log_dir):
-        result["message"] = f"对话历史已保存到: {conversation_path}\n💡 未找到验证目录（可能还未运行验证）。"
-        return result
+    # 优先检查是否有 log_dir（evolve/adaptive_search 的验证目录）
+    log_dir_from_state = state.get("log_dir", "")
+    sub_agent_type = state.get("sub_agent_type", "")
     
-    # 查找所有验证目录（格式：I{task_id}_S{step}_verify）
-    verify_dirs = []
-    try:
-        for item in os.listdir(op_log_dir):
-            item_path = os.path.join(op_log_dir, item)
-            if os.path.isdir(item_path) and "_verify" in item and item.startswith(f"I{task_id}"):
-                verify_dirs.append(item_path)
-    except Exception as e:
-        logger.warning(f"扫描验证目录时出错: {e}")
-    
-    if not verify_dirs:
-        result["message"] = f"对话历史已保存到: {conversation_path}\n💡 未找到验证目录（可能还未运行验证）。"
-        return result
-    
-    # 使用最新的验证目录（按修改时间排序）
-    verify_dirs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-    latest_verify_dir = verify_dirs[0]
-    result["verify_dir"] = latest_verify_dir
+    if log_dir_from_state and os.path.exists(log_dir_from_state):
+        # evolve 或 adaptive_search 生成的结果，使用它们的 log_dir（包含所有验证目录）
+        logger.info(f"Found {sub_agent_type} log_dir: {log_dir_from_state}")
+        latest_verify_dir = log_dir_from_state
+        result["verify_dir"] = log_dir_from_state
+        result["sub_agent_type"] = sub_agent_type
+    else:
+        # 标准的 codeonly 验证目录，使用原有逻辑
+        logger.info("Looking for standard verification directory (codeonly)")
+        
+        # 查找最新的验证目录
+        op_log_dir = os.path.join(log_dir, op_name)
+        if not os.path.exists(op_log_dir):
+            result["message"] = f"对话历史已保存到: {conversation_path}\n💡 未找到验证目录（可能还未运行验证）。"
+            return result
+        
+        # 查找所有验证目录
+        verify_dirs = []
+        try:
+            for item in os.listdir(op_log_dir):
+                item_path = os.path.join(op_log_dir, item)
+                if os.path.isdir(item_path) and "_verify" in item and item.startswith(f"I{task_id}"):
+                    verify_dirs.append(item_path)
+        except Exception as e:
+            logger.warning(f"扫描验证目录时出错: {e}")
+        
+        if not verify_dirs:
+            result["message"] = f"对话历史已保存到: {conversation_path}\n💡 未找到验证目录（可能还未运行验证）。"
+            return result
+        
+        # 使用最新的验证目录（按修改时间排序）
+        verify_dirs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        latest_verify_dir = verify_dirs[0]
+        result["verify_dir"] = latest_verify_dir
     
     # 3. 复制验证目录到保存位置
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -477,9 +491,20 @@ def save_verification_directory(state: dict, config: dict) -> dict:
     try:
         os.makedirs(saved_to, exist_ok=True)
         
-        # 复制验证目录
-        verify_basename = os.path.basename(latest_verify_dir)
-        shutil.copytree(latest_verify_dir, os.path.join(saved_to, verify_basename), dirs_exist_ok=True)
+        # 根据子 Agent 类型决定复制策略
+        if sub_agent_type in ["evolve", "adaptive_search"]:
+            # evolve/adaptive_search 的 log_dir 包含所有任务的验证目录
+            logger.info(f"Copying {sub_agent_type} log directory: {latest_verify_dir}")
+            
+            # 复制整个 log_dir（包含所有验证子目录）
+            sub_agent_dir = os.path.join(saved_to, f"{sub_agent_type}_results")
+            shutil.copytree(latest_verify_dir, sub_agent_dir, dirs_exist_ok=True)
+            logger.info(f"✓ Copied {sub_agent_type} results to: {sub_agent_dir}")
+        else:
+            # codeonly 的标准验证目录（保持原有逻辑）
+            verify_basename = os.path.basename(latest_verify_dir)
+            shutil.copytree(latest_verify_dir, os.path.join(saved_to, verify_basename), dirs_exist_ok=True)
+            logger.info(f"✓ Copied standard verification directory: {verify_basename}")
         
         # 同时复制对话历史到该目录
         shutil.copy2(conversation_path, os.path.join(saved_to, f"conversation_{task_id}.json"))
@@ -510,7 +535,37 @@ def save_verification_directory(state: dict, config: dict) -> dict:
             logger.info(f"✓ 打包完成: {tar_path}")
             logger.info(f"  - 压缩包大小: {tar_size_mb:.2f} MB")
             
-            result["message"] = f"""保存成功！
+            if sub_agent_type in ["evolve", "adaptive_search"]:
+                # 提取统计信息
+                if sub_agent_type == "evolve":
+                    total_rounds = state.get("total_rounds", "N/A")
+                    total_tasks = state.get("total_tasks", "N/A")
+                    successful_tasks = state.get("successful_tasks", "N/A")
+                    detail_info = f"   • 进化轮数: {total_rounds}\n   • 总任务数: {total_tasks}\n   • 成功任务数: {successful_tasks}"
+                elif sub_agent_type == "adaptive_search":
+                    total_completed = state.get("total_completed", "N/A")
+                    total_success = state.get("total_success", "N/A")
+                    success_rate = state.get("success_rate", 0.0)
+                    detail_info = f"   • 完成任务数: {total_completed}\n   • 成功任务数: {total_success}\n   • 成功率: {success_rate:.1%}"
+                else:
+                    detail_info = ""
+                
+                result["message"] = f"""保存成功！（{sub_agent_type.upper()} 完整结果）
+
+保存位置: {saved_to}
+   • 结果目录: {sub_agent_type}_results/
+   • 文件总数: {file_count}
+{detail_info}
+
+压缩包: {tar_filename}
+   • 大小: {tar_size_mb:.2f} MB
+   • 路径: {tar_path}
+
+💡 已保存所有轮次的验证结果（包括成功和失败的）。您可以继续当前对话或开始新的算子开发。"""
+            else:
+                # codeonly 的消息（保持原有格式）
+                verify_basename = os.path.basename(latest_verify_dir)
+                result["message"] = f"""保存成功！
 
 保存位置: {saved_to}
    • 验证目录: {verify_basename}
@@ -523,12 +578,25 @@ def save_verification_directory(state: dict, config: dict) -> dict:
 💡 您可以继续当前对话或开始新的算子开发。"""
             
             logger.info(f"✓ 验证目录已保存到: {saved_to}")
-            logger.info(f"  - 验证目录: {verify_basename}")
             logger.info(f"  - 文件总数: {file_count}")
             
         except Exception as tar_error:
             logger.warning(f"打包失败: {tar_error}, 但文件已保存")
-            result["message"] = f"""保存成功！
+            
+            # 根据子 Agent 类型构建不同的消息
+            if sub_agent_type in ["evolve", "adaptive_search"]:
+                result["message"] = f"""保存成功！（{sub_agent_type.upper()} 完整结果）
+
+  保存位置: {saved_to}
+   • 结果目录: {sub_agent_type}_results/
+   • 文件总数: {file_count}
+
+⚠️ 注意: 自动打包失败 ({tar_error})，但文件已正常保存。
+
+💡 已保存所有轮次的验证结果（包括成功和失败的）。您可以继续当前对话或开始新的算子开发。"""
+            else:
+                verify_basename = os.path.basename(latest_verify_dir)
+                result["message"] = f"""保存成功！
 
   保存位置: {saved_to}
    • 验证目录: {verify_basename}
@@ -539,7 +607,6 @@ def save_verification_directory(state: dict, config: dict) -> dict:
 💡 您可以继续当前对话或开始新的算子开发。"""
             
             logger.info(f"✓ 验证目录已保存到: {saved_to}")
-            logger.info(f"  - 验证目录: {verify_basename}")
             logger.info(f"  - 文件总数: {file_count}")
         
     except Exception as e:
