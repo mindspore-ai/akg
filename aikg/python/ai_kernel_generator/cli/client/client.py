@@ -17,6 +17,8 @@
 import logging
 import json
 import os
+import urllib.parse
+import ipaddress
 from typing import Dict, Any, Optional
 import asyncio
 import httpx
@@ -102,6 +104,25 @@ class CliClient:
             self._recorder = None
             self._recorder_disabled = True
 
+    @staticmethod
+    def _is_loopback_url(url: str) -> bool:
+        if not url:
+            return False
+        raw = url.strip()
+        if "://" not in raw:
+            raw = f"http://{raw}"
+        parsed = urllib.parse.urlparse(raw)
+        host = (parsed.hostname or "").strip().lower()
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    def _httpx_trust_env(self) -> bool:
+        return not self._is_loopback_url(self.server_url)
+
     def set_presenter(self, presenter):
         """设置 presenter"""
         self.presenter = presenter
@@ -109,7 +130,9 @@ class CliClient:
     async def check_status(self) -> Dict[str, Any]:
         """检查服务器状态"""
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(
+                timeout=10.0, trust_env=self._httpx_trust_env()
+            ) as client:
                 response = await client.get(f"{self.server_url}/api/v1/workflow/status")
                 response.raise_for_status()
                 return response.json()
@@ -361,7 +384,9 @@ class CliClient:
             return False
         try:
             url = f"{self.server_url}/api/v1/jobs/{self.current_job_id}/cancel"
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(
+                timeout=5.0, trust_env=self._httpx_trust_env()
+            ) as client:
                 resp = await client.post(url, params={"reason": reason})
                 resp.raise_for_status()
             return True

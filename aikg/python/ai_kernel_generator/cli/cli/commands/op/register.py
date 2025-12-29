@@ -80,6 +80,9 @@ def register_op_command(
         rag: bool = typer.Option(
             False, "--rag/--no-rag", help="启用/关闭 RAG（默认关闭）"
         ),
+        ipv6: bool = typer.Option(
+            False, "--ipv6", help="强制本地 server 走 IPv6（仅自动拉起时生效）"
+        ),
     ) -> None:
         """算子生成入口。"""
 
@@ -98,5 +101,6 @@ def register_op_command(
                 devices=devices,
                 stream=stream,
                 rag=rag,
+                ipv6=ipv6,
             ),
         )

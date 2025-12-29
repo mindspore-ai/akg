@@ -14,6 +14,9 @@
 
 from __future__ import annotations
 
+import ipaddress
+import urllib.parse
+
 from rich import box
 from rich.console import Console
 from rich.table import Table
@@ -25,6 +28,22 @@ from textual import log
 class JobInspector:
     """尽力而为的 job 状态摘要输出（用于 Ctrl+C/异常收尾）。"""
 
+    @staticmethod
+    def _trust_env_for_url(url: str) -> bool:
+        if not url:
+            return True
+        raw = url.strip()
+        if "://" not in raw:
+            raw = f"http://{raw}"
+        parsed = urllib.parse.urlparse(raw)
+        host = (parsed.hostname or "").strip().lower()
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return False
+        try:
+            return not ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return True
+
     def try_print_job_summary(
         self, console: Console, server_url: str, job_id: str
     ) -> None:
@@ -34,7 +53,9 @@ class JobInspector:
             import httpx
 
             url = f"{server_url.rstrip('/')}/api/v1/jobs/{job_id}/status"
-            with httpx.Client(timeout=5.0) as client:
+            with httpx.Client(
+                timeout=5.0, trust_env=self._trust_env_for_url(server_url)
+            ) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 status = resp.json() or {}
