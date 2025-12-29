@@ -16,7 +16,7 @@
 - [AI-driven Kernel Generator (AIKG)](#ai-driven-kernel-generator-aikg)
   - [📘 1. Project Overview](#-1-project-overview)
   - [🗓️ 2. Changelog](#️-2-changelog)
-  - [🛠️ 3. Installation \& Deployment Guide](#️-3-installation--deployment-guide)
+  - [🛠️ 3. AKG_CLI Quick Start](#️-3-akg_cli-quick-start)
   - [⚙️ 4. Configuration](#️-4-configuration)
     - [Configuration Quick Guide](#configuration-quick-guide)
       - [Step 1: Basic Environment Configuration](#step-1-basic-environment-configuration)
@@ -53,30 +53,60 @@ Additionally, AIKG provides a rich set of submodules for kernel agents, enabling
 - 2025-06-27: Initial AIKG release with code generation support for Triton and SWFT backends.
 
 
-## 🛠️ 3. Installation & Deployment Guide
+## 🛠️ 3. AKG_CLI Quick Start
+
+### Basic Installation
 ```bash
-# 1. Environment Setup
-# 1.1 Use conda environment (optional, recommended Python 3.10/3.11/3.12)
+# 1. Environment setup (optional, recommended Python 3.10/3.11/3.12)
+# Use conda environment
 conda create -n aikg python=3.11
 conda activate aikg
 
-# 1.2 Or create virtual environment (optional)
-python -m venv .venv
-source .venv/bin/active
+# 2. Clone the repository
+git clone https://gitcode.com/mindspore/akg.git -b br_aikg
+cd akg
 
-# 2. Install dependencies via pip
-pip install -r requirements.txt
+# 3. Install dependencies
+pip install -r aikg/requirements.txt
+# pip install -r aikg/rag_requirements.txt  # Optional: if RAG features are needed
 
-# 3. whl installation / environment setup
-# 3.1 Setup environment variables to run directly
-cd aikg
+# 4. Install AIKG
+pip install -e ./aikg
+
+# 5. Setup environment variables
+cd ./aikg
 source env.sh
-
-# 3.2 Or install via whl
-bash build.sh
-pip install output/ai_kernel_generator-*-py3-none-any.whl
-
 ```
+
+### API Configuration Example
+```bash
+# Using DeepSeek as an example; can be replaced with other supported model providers (see docs/API.md)
+export AIKG_BASE_URL="https://api.deepseek.com/beta/"
+export AIKG_MODEL_NAME="deepseek-chat"
+export AIKG_API_KEY="YOUR_API_KEY"
+export AIKG_MODEL_ENABLE_THINK="enabled"  # or "disabled"
+```
+
+### Launch AKG_CLI
+```bash
+akg_cli op \
+  --framework torch \          # Frontend framework: torch/mindspore/numpy
+  --backend ascend \            # Backend platform: ascend/cuda/cpu
+  --arch ascend910b2 \          # Hardware architecture: ascend910b2/a100, etc.
+  --dsl triton_ascend \         # Target DSL: triton_ascend/triton_cuda/cuda/tilelang_cuda, etc.
+  --devices 0,1,2,3,4,5,6,7     # Available device list
+```
+
+### Usage
+After launching AKG_CLI, you can use it in the following ways:
+
+1. **Direct prompts**: For example, "help me generate a relu operator"
+2. **Provide code**: Paste existing KernelBench-style code
+   - AIKG will first write a baseline torch code for result comparison
+   - After verification, you can ask it to generate the target code (the DSL type is determined by the `--dsl` parameter at launch)
+
+> 💡 **Tip**: For more usage examples and detailed instructions, please refer to the [AKG_CLI Documentation](./docs/AKG_CLI.md)
+
 
 
 ## ⚙️ 4. Configuration
