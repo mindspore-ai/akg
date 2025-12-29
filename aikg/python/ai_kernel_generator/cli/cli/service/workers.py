@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import time
 import urllib.parse
 from typing import Any, Dict, List, Optional
@@ -48,7 +49,14 @@ class WorkerRegistry:
         for item in raw_items:
             url = item
             if "://" not in url:
-                url = f"http://{url}"
+                if url.count(":") > 1 and "[" not in url:
+                    host_part, port_part = url.rsplit(":", 1)
+                    if port_part.isdigit():
+                        url = f"http://[{host_part}]:{port_part}"
+                    else:
+                        url = f"http://{url}"
+                else:
+                    url = f"http://{url}"
 
             parsed = urllib.parse.urlparse(url)
             if not parsed.scheme or not parsed.hostname or parsed.port is None:
@@ -56,7 +64,10 @@ class WorkerRegistry:
                     f"worker_url 格式非法: {item}（期望形如 https://host:port 或 host:port）"
                 )
 
-            normalized.append(f"{parsed.scheme}://{parsed.hostname}:{parsed.port}")
+            hostname = parsed.hostname
+            if hostname and ":" in hostname:
+                hostname = f"[{hostname}]"
+            normalized.append(f"{parsed.scheme}://{hostname}:{parsed.port}")
 
         # 去重但保持顺序
         dedup: List[str] = []
@@ -98,7 +109,7 @@ class WorkerRegistry:
         table.add_column("capacity", style=DisplayStyle.YELLOW, justify="right")
         table.add_column("结果", style=DisplayStyle.GREEN)
 
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=10.0, trust_env=False) as client:
             for w in workers:
                 try:
                     status_url = f"{w}/api/v1/status"
@@ -201,7 +212,7 @@ class WorkerRegistry:
                 "devices": devices,
                 "tags": ["local"],
             }
-            with httpx.Client(timeout=10.0) as client:
+            with httpx.Client(timeout=10.0, trust_env=False) as client:
                 resp = client.post(
                     f"{server_url}/api/v1/workers/register-local", json=payload
                 )
@@ -239,7 +250,9 @@ class WorkerRegistry:
             import httpx
 
             url = f"{server_url.rstrip('/')}/api/v1/workers/status"
-            with httpx.Client(timeout=5.0) as client:
+            with httpx.Client(
+                timeout=5.0, trust_env=self._trust_env_for_server(server_url)
+            ) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 workers = resp.json() or []
@@ -259,4 +272,20 @@ class WorkerRegistry:
                 arch=str(arch or ""),
                 exc_info=e,
             )
+            return True
+
+    @staticmethod
+    def _trust_env_for_server(url: str) -> bool:
+        if not url:
+            return True
+        raw = url.strip()
+        if "://" not in raw:
+            raw = f"http://{raw}"
+        parsed = urllib.parse.urlparse(raw)
+        host = (parsed.hostname or "").strip().lower()
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return False
+        try:
+            return not ipaddress.ip_address(host).is_loopback
+        except ValueError:
             return True

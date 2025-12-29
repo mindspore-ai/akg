@@ -32,6 +32,7 @@ class OpCommandArgs:
     devices: Optional[str]
     stream: bool
     rag: bool
+    ipv6: bool
 
 
 @dataclass(frozen=True)
