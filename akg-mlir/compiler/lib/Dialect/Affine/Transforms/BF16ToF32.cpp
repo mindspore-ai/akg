@@ -48,10 +48,10 @@ static Value convertBF16ToF32(OpBuilder &builder, Location loc, Value value) {
   return value;
 }
 
-// Helper function to convert f32 value to bf16
-static Value convertF32ToBF16(OpBuilder &builder, Location loc, Value value) {
+// Helper function to convert wider float value to bf16
+static Value convertWideFPToBF16(OpBuilder &builder, Location loc, Value value) {
   Type valueType = value.getType();
-  if (isa<Float32Type>(valueType)) {
+  if (isa<Float32Type, Float64Type>(valueType)) {
     auto bf16Type = builder.getBF16Type();
     if (auto constantOp = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
       FloatAttr floatAttr = dyn_cast<FloatAttr>(constantOp.getValue());
@@ -148,9 +148,13 @@ struct TruncFOpPattern : public OpRewritePattern<arith::TruncFOp> {
       : OpRewritePattern<arith::TruncFOp>(context, benefit) {}
   LogicalResult matchAndRewrite(arith::TruncFOp truncOp, PatternRewriter &rewriter) const override {
     Value value = truncOp.getIn();
-    if (value.getType().isBF16()) {
+    if (value.getType() == truncOp.getResult().getType()) {
       rewriter.replaceOp(truncOp, value);
       return success();
+    }
+    if (isa<arith::ConstantOp>(value.getDefiningOp())) {
+      Value bf16Value = convertWideFPToBF16(rewriter, truncOp.getLoc(), value);
+      rewriter.replaceOp(truncOp, bf16Value);
     }
     return failure();
   }
@@ -160,19 +164,19 @@ struct ExtFOpPattern : public OpRewritePattern<arith::ExtFOp> {
   explicit ExtFOpPattern(MLIRContext *context, PatternBenefit benefit = 2)
       : OpRewritePattern<arith::ExtFOp>(context, benefit) {}
   LogicalResult matchAndRewrite(arith::ExtFOp extfOp, PatternRewriter &rewriter) const override {
-    auto operand = extfOp.getOperand();
-    if (isa<Float32Type>(operand.getType())) {
-      rewriter.replaceOp(extfOp, operand);
+    Value value = extfOp.getIn();
+    if (value.getType() == extfOp.getResult().getType()) {
+      rewriter.replaceOp(extfOp, value);
       return success();
     }
     return failure();
   }
 };
 
-// Pattern to convert affine.store f32 value to bf16 memref
+// Pattern to convert affine.store wider float value to bf16 memref
 // Benefit = 2: Medium priority, process stores after loads but before arithmetic ops
-struct AffineStoreF32ToBF16Pattern : public OpRewritePattern<affine::AffineStoreOp> {
-  explicit AffineStoreF32ToBF16Pattern(MLIRContext *context, PatternBenefit benefit = 2)
+struct AffineStoreWideFPToBF16Pattern : public OpRewritePattern<affine::AffineStoreOp> {
+  explicit AffineStoreWideFPToBF16Pattern(MLIRContext *context, PatternBenefit benefit = 2)
       : OpRewritePattern<affine::AffineStoreOp>(context, benefit) {}
   LogicalResult matchAndRewrite(affine::AffineStoreOp storeOp, PatternRewriter &rewriter) const override {
     Value valueToStore = storeOp.getValueToStore();
@@ -183,21 +187,14 @@ struct AffineStoreF32ToBF16Pattern : public OpRewritePattern<affine::AffineStore
       return failure();
     }
 
-    // Check if memref is bf16 type and value is f32
-    bool isBF16Memref = isa<BFloat16Type>(memrefType.getElementType());
-    bool isF32Value = isa<Float32Type>(valueToStore.getType());
-
-    if (!isBF16Memref || !isF32Value) {
+    // Check if memref is bf16 type and value is wider float
+    if (!isa<BFloat16Type>(memrefType.getElementType()) || !isa<Float32Type, Float64Type>(valueToStore.getType())) {
       return failure();  // Not storing f32 to bf16 memref, skip
     }
 
-    // Convert f32 value to bf16 before storing
-    Location loc = storeOp.getLoc();
-    Value bf16Value = convertF32ToBF16(rewriter, loc, valueToStore);
-
-    // Create new store with bf16 value
+    // Convert wider float value to bf16 before storing
+    Value bf16Value = convertWideFPToBF16(rewriter, storeOp.getLoc(), valueToStore);
     rewriter.replaceOpWithNewOp<affine::AffineStoreOp>(storeOp, bf16Value, memref, storeOp.getIndices());
-
     return success();
   }
 };
@@ -254,7 +251,7 @@ class BF16ToF32Pass : public impl::BF16ToF32Base<BF16ToF32Pass> {
 
     // Add patterns for affine operations
     patterns.add<AffineLoadBF16ToF32Pattern>(context);
-    patterns.add<AffineStoreF32ToBF16Pattern>(context);
+    patterns.add<AffineStoreWideFPToBF16Pattern>(context);
     patterns.add<ExtFOpPattern>(context);
     patterns.add<TruncFOpPattern>(context);
     patterns.add<ConstantOpBF16ToF32Pattern>(context);
