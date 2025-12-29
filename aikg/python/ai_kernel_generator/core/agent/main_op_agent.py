@@ -48,6 +48,56 @@ from ai_kernel_generator.utils.main_op_agent_display import (
 logger = logging.getLogger(__name__)
 
 
+# ==================== 提示消息模板 ====================
+
+# 功能介绍
+OPERATOR_ASSISTANT_INTRO = """我是 AI Kernel 算子开发助手，专门帮助您：
+• 生成高性能算子代码（如 ReLU、MatMul、LayerNorm 等）
+• 优化现有算子的性能
+• 提供算子开发的技术建议"""
+
+# 无关问题提示:第一轮
+IRRELEVANT_INPUT_MESSAGE_FIRST_TURN = f"""⚠️ 抱歉，您的输入似乎与算子开发无关。
+
+{OPERATOR_ASSISTANT_INTRO}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 如果您有算子开发需求，请告诉我：
+
+• 算子类型（例如：ReLU、MatMul等）
+• 输入 tensor 的 shape 和数据类型
+• 算子的参数要求
+• 目标硬件平台（CUDA GPU、Ascend NPU 等）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+示例请求：
+"生成 ReLU 激活函数，输入 shape 是 (1024, 1024)"
+"实现矩阵乘法，A 是 (m, k)，B 是 (k, n)"
+"""
+
+# 无关问题提示 - 多轮（简短）
+IRRELEVANT_INPUT_MESSAGE = f"""⚠️ 抱歉，您的输入似乎与算子开发无关。
+
+{OPERATOR_ASSISTANT_INTRO}
+
+如果您有算子开发需求，请告诉我具体的算子类型和参数要求。"""
+
+# 用户尝试退出对话时的友好提示
+USER_EXIT_ATTEMPT_MESSAGE = """💡 我会一直在这里帮助您！
+
+如果您：
+• 想继续当前的算子开发，请告诉我需要调整的地方
+• 想开发新的算子，请直接描述新的算子需求
+
+"""
+
+# 取消操作相关消息
+CANCELLATION_IN_PROGRESS_MESSAGE = "⚠️ 正在取消当前操作..."
+OPERATION_CANCELLED_MESSAGE = "⚠️ 操作已被用户取消"
+
+
 class MainOpAgent(AgentBase):
 
     def __init__(self, 
@@ -75,6 +125,9 @@ class MainOpAgent(AgentBase):
         self.backend = backend
         self.arch = arch
         self.dsl = dsl
+        
+        # 取消标志（供前端主动取消时使用）
+        self._cancellation_requested = False
 
         self.model_config = config.get("agent_model_config", {})
         
@@ -147,6 +200,39 @@ class MainOpAgent(AgentBase):
         
         logger.info("MainOpAgent initialized successfully")
 
+    def request_cancellation(self) -> Dict[str, Any]:
+        """
+        请求取消当前对话和所有正在进行的操作
+        Returns:
+            Dict: 包含取消状态的字典
+        """
+        self._cancellation_requested = True
+        logger.warning(" Cancellation requested by frontend (e.g., Ctrl+C)")
+        logger.warning("   Current operations will be terminated as soon as possible")
+        
+        return {
+            "status": "cancellation_requested",
+            "message": CANCELLATION_IN_PROGRESS_MESSAGE,
+            "current_step": "cancelled_by_user"
+        }
+    
+    def _reset_cancellation_flag(self):
+        """重置取消标志（每次新的对话轮次开始时调用）"""
+        if self._cancellation_requested:
+            logger.info("Resetting cancellation flag for new conversation turn")
+        self._cancellation_requested = False
+    
+    def _check_cancellation(self):
+        """
+        检查是否有取消请求
+        
+        Raises:
+            Exception: 如果检测到取消请求，抛出异常以中断当前操作
+        """
+        if self._cancellation_requested:
+            logger.warning("⚠️ Cancellation detected, interrupting current operation")
+            raise Exception("Operation cancelled by user request")
+
     def _build_conversation_graph(self) -> StateGraph:
         """
         构建基于 LangGraph 的对话流程图
@@ -198,6 +284,9 @@ class MainOpAgent(AgentBase):
         OpTaskBuilder 节点: 生成或修改 task 代码
         """
         logger.info("=== OpTaskBuild Node ===")
+        
+        # 检查是否有取消请求
+        self._check_cancellation()
         
         # 监控对话历史长度
         conversation_history = state.get("conversation_history", [])
@@ -337,39 +426,12 @@ class MainOpAgent(AgentBase):
                 if not is_operator_related:
                     logger.info("Non-operator request detected, returning rejection message")
                     
-                    # 根据是否是第一轮对话，显示不同的拒绝消息
                     if is_first_turn:
                         # 第一轮对话：显示详细的引导消息
-                        rejection_msg = f"""⚠️ 很抱歉，我无法处理您的请求。
-
-{message}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-💡 我是 AI Kernel 算子开发助手，专门帮助您：
-
-1. 生成高性能算子代码（如 ReLU、MatMul、LayerNorm、Softmax 等）
-2. 优化现有算子的性能
-3. 提供算子开发的技术建议
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📝 如果您有算子开发需求，请告诉我：
-
-• 算子类型（例如：ReLU 激活函数、矩阵乘法、Layer Normalization 等）
-• 输入 tensor 的 shape 和数据类型（例如：(batch_size, channels, height, width), dtype=float32）
-• 算子的参数要求（例如：Softmax 的 dim 维度、LayerNorm 的 normalized_shape 等）
-• 目标硬件平台（例如：CUDA GPU、Ascend NPU 等）
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-示例请求：
-"生成 ReLU 激活函数，输入 shape 是 (1024, 1024)"
-"实现矩阵乘法，A 是 (m, k)，B 是 (k, n)"
-"""
+                        rejection_msg = IRRELEVANT_INPUT_MESSAGE_FIRST_TURN
                     else:
                         # 多轮对话中：显示简短的提示
-                        rejection_msg = "⚠️ 您的输入似乎与当前算子开发任务无关。请按照上述任务继续生成！"
+                        rejection_msg = IRRELEVANT_INPUT_MESSAGE
 
                     return {
                         "task_code": "",
@@ -519,6 +581,9 @@ class MainOpAgent(AgentBase):
         """
         logger.info("=== User Confirm Node ===")
         
+        # 检查是否有取消请求
+        self._check_cancellation()
+        
         task_code = state.get("task_code", "")
         op_name = state.get("op_name", "")
         user_request = state.get("user_request", "")
@@ -583,6 +648,9 @@ class MainOpAgent(AgentBase):
         子 Agent 选择节点: 使用 LLM 选择最合适的子 Agent
         """
         logger.info("=== Select Sub Agent Node ===")
+        
+        # 检查是否有取消请求
+        self._check_cancellation()
         
         # 如果用户已经指定了 sub_workflow，跳过自动选择
         if state.get("sub_workflow_specified_by_user"):
@@ -684,6 +752,9 @@ class MainOpAgent(AgentBase):
         子 Agent 执行节点: 通过注册中心调用子 Agent 生成算子代码
         """
         logger.info("=== Sub Agent Execution Node ===")
+        
+        # 检查是否有取消请求
+        self._check_cancellation()
         
         task_code = state.get("task_code", "")
         op_name = state.get("op_name", "")
@@ -802,10 +873,13 @@ class MainOpAgent(AgentBase):
             user_input: 用户输入
 
         Returns:
-            tuple: (action, is_new_operator, has_provided_task_code, extracted_op_name, extracted_op_description)
-            - action: 建议的操作 ('confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel')
+            tuple: (action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description)
+            - action: 建议的操作 ('confirm', 'revise', 'retry', 'retry_sub_agent')
             - is_new_operator: 是否是新算子需求 (bool)
+            - is_irrelevant: 用户输入是否与算子开发无关 (bool)
             - has_provided_task_code: 是否直接提供了torch task代码 (bool)
+            - is_complete_code: 代码是否完整 (bool)
+            - extracted_task_code: LLM提取并补充的完整代码 (str)
             - extracted_op_name: 从代码中提取的算子名称 (str)
             - extracted_op_description: 从代码中提取的算子描述 (str)
         """
@@ -847,6 +921,7 @@ class MainOpAgent(AgentBase):
                 analysis_reasoning = getattr(parsed, 'reasoning', '')
                 confidence = float(getattr(parsed, 'confidence', 0.5))
                 is_new_operator = getattr(parsed, 'is_new_operator', False)
+                is_irrelevant = getattr(parsed, 'is_irrelevant', False)  # 是否与算子开发无关
                 has_provided_task_code = getattr(parsed, 'has_provided_task_code', False)
                 is_complete_code = getattr(parsed, 'is_complete_code', False)  # 🆕 代码是否完整
                 extracted_task_code = getattr(parsed, 'extracted_task_code', '')
@@ -872,16 +947,27 @@ class MainOpAgent(AgentBase):
                     logger.info(f"   Extracted op_name: {extracted_op_name}")
                     logger.info(f"   Extracted description: {extracted_op_description}")
 
-            # 保存分析推理到状态中（用于后续处理无关问题）
             state["last_action_reasoning"] = analysis_reasoning
 
-            # 验证建议的 action 是否合法
-            valid_actions = ['confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel']
+            # 特殊处理 'cancel' 操作
+            if suggested_action == 'cancel':
+                if not is_irrelevant:
+                    # 退出意图：添加标记，并设置 is_irrelevant=True 以触发拦截
+                    logger.info(f"LLM detected user exit attempt (cancel with is_irrelevant=False)")
+                    state["last_action_reasoning"] = "[USER_EXIT_ATTEMPT] " + analysis_reasoning
+                    is_irrelevant = True  
+                else:
+                    # 无关问题：保持 is_irrelevant=True
+                    logger.info(f"LLM detected irrelevant input (cancel with is_irrelevant=True)")
+                
+                suggested_action = 'revise'
+            
+            valid_actions = ['confirm', 'revise', 'retry', 'retry_sub_agent']
             if suggested_action not in valid_actions:
                 logger.warning(f"Invalid suggested action: {suggested_action}, using revise")
-                return 'revise', False, False, False, '', '', ''
+                suggested_action = 'revise'
 
-            return suggested_action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description
+            return suggested_action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description
 
         except Exception as e:
             logger.error(f"Action analysis failed: {e}, using heuristic")
@@ -900,6 +986,9 @@ class MainOpAgent(AgentBase):
         """
         import hashlib
         import time
+        
+        # 重置取消标志
+        self._reset_cancellation_flag()
         
         if task_id is None:
             task_id = hashlib.md5(f"{user_request}_{time.time()}".encode()).hexdigest()[:8]
@@ -924,7 +1013,7 @@ class MainOpAgent(AgentBase):
             }
             
             # 调用统一的 LLM 分析：检测torch代码、提取并补充、分析意图
-            action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(
+            action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(
                 temp_state,
                 user_request
             )
@@ -995,17 +1084,35 @@ class MainOpAgent(AgentBase):
             logger.info(f"✓ Set task_code in initial_state (length: {len(provided_task_code)} chars, complete={is_complete_code})")
 
         # 执行到用户确认节点
-        result = await self.app.ainvoke(initial_state, {
-            "recursion_limit": 100
-        })
+        try:
+            result = await self.app.ainvoke(initial_state, {
+                "recursion_limit": 100
+            })
 
-        logger.info(f"start_conversation result has task_init_status: {result.get('task_init_status')}")
+            logger.info(f"start_conversation result has task_init_status: {result.get('task_init_status')}")
+            
+            # 添加显示消息和提示消息
+            result["display_message"] = format_display_message(result)
+            result["hint_message"] = get_hint_message(result)
+            
+            return result
         
-        # 添加显示消息和提示消息
-        result["display_message"] = format_display_message(result)
-        result["hint_message"] = get_hint_message(result)
-        
-        return result
+        except Exception as e:
+            # 检查是否是取消操作导致的异常
+            if "cancelled by user" in str(e).lower() or self._cancellation_requested:
+                logger.warning("🛑 Conversation cancelled by user request")
+                return {
+                    "current_step": "cancelled_by_user",
+                    "should_continue": False,
+                    "op_description": OPERATION_CANCELLED_MESSAGE,
+                    "conversation_history": initial_state.get("conversation_history", []),
+                    "display_message": OPERATION_CANCELLED_MESSAGE,
+                    "hint_message": ""
+                }
+            else:
+                # 其他异常，重新抛出
+                logger.error(f"Error in start_conversation: {e}")
+                raise
 
     async def continue_conversation(self, 
                                    current_state: Dict[str, Any],
@@ -1023,11 +1130,10 @@ class MainOpAgent(AgentBase):
                 - 'confirm': 确认并生成代码
                 - 'retry': 重新生成 task 代码
                 - 'retry_sub_agent': 重新生成 Triton 代码
-                - 'cancel': 取消对话
-            
-        Returns:
-            更新后的状态
         """
+        # 重置取消标志（新的对话轮次开始）
+        self._reset_cancellation_flag()
+        
         # 添加用户消息到历史
         user_message = Message(
             role="user",
@@ -1068,6 +1174,7 @@ class MainOpAgent(AgentBase):
         
         # 如果 action 是 'auto'，使用 LLM 自动分析用户意图
         is_new_operator = False  # 默认不是新算子
+        is_irrelevant = False  # 默认相关
         has_provided_task_code = False  # 默认没有提供代码
         is_complete_code = False  # 默认不完整
         extracted_task_code = ''  # 默认空（LLM提取并补充的完整代码）
@@ -1076,9 +1183,10 @@ class MainOpAgent(AgentBase):
 
         if action == "auto":
             # 调用统一的分析方法
-            action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(current_state, user_input)
+            action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(current_state, user_input)
             logger.info(f"Auto-analyzed action: {action}")
             logger.info(f"  - is_new_operator: {is_new_operator}")
+            logger.info(f"  - is_irrelevant: {is_irrelevant}")
             logger.info(f"  - has_provided_task_code: {has_provided_task_code}")
             if has_provided_task_code:
                 logger.info(f"  - is_complete_code: {is_complete_code}")
@@ -1086,6 +1194,40 @@ class MainOpAgent(AgentBase):
                 logger.info(f"  - extracted_task_code length: {len(extracted_task_code)} chars")
             if extracted_op_name:
                 logger.info(f"  - extracted_op_name: {extracted_op_name}")
+            
+            # 提前拦截
+            if is_irrelevant:
+                reasoning = current_state.get("last_action_reasoning", "")
+                is_exit_attempt = "[USER_EXIT_ATTEMPT]" in reasoning
+                
+                if is_exit_attempt:
+                    # 退出意图：显示友好提示
+                    logger.info("LLM detected exit attempt, showing friendly message")
+                    response_message = USER_EXIT_ATTEMPT_MESSAGE
+                    hint = "我随时准备帮助您开发算子！"
+                    step = "user_exit_attempt"
+                else:
+                    # 无关问题：显示标准引导
+                    logger.info("LLM detected irrelevant input, showing guidance message")
+                    response_message = IRRELEVANT_INPUT_MESSAGE
+                    hint = "请继续提出算子开发相关的需求"
+                    step = "irrelevant_input"
+                
+                assistant_message = Message(
+                    role="assistant",
+                    content=response_message,
+                    timestamp=datetime.now().isoformat()
+                )
+                current_state["conversation_history"].append(assistant_message)
+                
+                # 更新状态并返回
+                current_state["op_description"] = response_message
+                current_state["current_step"] = step
+                current_state["should_continue"] = True
+                current_state["display_message"] = response_message
+                current_state["hint_message"] = hint
+                
+                return current_state
 
             # 检查LLM推理中是否提到子Agent
             if action == "retry_sub_agent" and not current_state.get("sub_workflow_specified_by_user"):
@@ -1101,7 +1243,6 @@ class MainOpAgent(AgentBase):
                 # 使用 LLM 提取并补充的完整代码
                 provided_code = extracted_task_code
 
-                # 使用 LLM 提取的算子信息（已经在 _analyze_user_action 中分析过了）
                 op_name = extracted_op_name if extracted_op_name else 'custom_op'
                 op_description = extracted_op_description if extracted_op_description else '用户提供的 torch task 代码'
 
@@ -1241,33 +1382,6 @@ class MainOpAgent(AgentBase):
                 logger.info(f"  - user_confirmed: True (skip op_task_build rebuild)")
                 logger.info(f"  - has task_code: {bool(current_state.get('task_code'))}")
                 logger.info("=" * 80)
-        elif action == "cancel":  # cancel
-            # 判断是正常退出还是无关问题
-            reasoning = current_state.get("last_action_reasoning", "")
-            is_irrelevant = "无关" in reasoning or "不相关" in reasoning or "irrelevant" in reasoning.lower()
-
-            if is_irrelevant:
-                # 用户输入与算子开发无关，但继续对话
-                logger.info("User input is irrelevant to operator development, continue conversation")
-                current_state["current_step"] = "irrelevant_input"
-                current_state["op_description"] = """⚠️ 抱歉，您的输入似乎与算子开发无关。
-
-我是 AI Kernel 算子开发助手，专门帮助您：
-• 生成高性能算子代码（如 ReLU、MatMul、LayerNorm 等）
-• 优化现有算子的性能
-• 提供算子开发的技术建议
-
-如果您有算子开发需求，请告诉我具体的算子类型和参数要求。"""
-                current_state["should_continue"] = True  # 继续对话
-            else:
-                # 正常退出
-                logger.info("User requested to end conversation")
-                current_state["current_step"] = "cancelled"
-                current_state["should_continue"] = False  # 退出对话
-
-            current_state["retry_requested"] = False
-            current_state["retry_sub_agent_only"] = False
-            return current_state
         else:
             # 未知的 action，默认使用 revise
             logger.warning(f"Unknown action: {action}, using revise")
@@ -1278,15 +1392,41 @@ class MainOpAgent(AgentBase):
             current_state["retry_sub_agent_only"] = False
 
         # 继续执行流程
-        result = await self.app.ainvoke(current_state, {
-            "recursion_limit": 100
-        })
+        try:
+            result = await self.app.ainvoke(current_state, {
+                "recursion_limit": 100
+            })
+            
+            # 添加显示消息和提示消息
+            result["display_message"] = format_display_message(result)
+            result["hint_message"] = get_hint_message(result)
+            
+            return result
         
-        # 添加显示消息和提示消息
-        result["display_message"] = format_display_message(result)
-        result["hint_message"] = get_hint_message(result)
-        
-        return result
+        except Exception as e:
+            # 检查是否是取消操作导致的异常
+            if "cancelled by user" in str(e).lower() or self._cancellation_requested:
+                logger.warning(" Conversation cancelled by user request")
+                
+                # 添加取消消息到历史
+                cancel_message = Message(
+                    role="assistant",
+                    content=OPERATION_CANCELLED_MESSAGE,
+                    timestamp=datetime.now().isoformat()
+                )
+                current_state.get("conversation_history", []).append(cancel_message)
+                
+                return {
+                    **current_state,
+                    "current_step": "cancelled_by_user",
+                    "should_continue": False,
+                    "op_description": OPERATION_CANCELLED_MESSAGE,
+                    "display_message": OPERATION_CANCELLED_MESSAGE,
+                    "hint_message": ""
+                }
+            else:
+                logger.error(f"Error in continue_conversation: {e}")
+                raise
 
     def save_conversation(self, state: Dict[str, Any], filepath: str):
         """保存对话历史到文件"""
