@@ -78,9 +78,9 @@ async def interactive_demo(
     print(f"   • DSL: {dsl}")
     print(f"   • Framework: {framework}")
     print("\n💡 提示: 您可以用自然语言描述您的算子需求")
-    print("   • 输入 '退出' 结束对话")
-    print("   • 输入 '保存' 保存对话历史")
-    print("   • 其他输入将由 AI 智能理解您的意图")
+    print("   • 输入 '保存' 保存对话历史并退出")
+    print("   • 按 Ctrl+C 强制退出")
+    print("   • 所有其他输入将由 AI 智能理解您的意图")
     print()
     
     # 4. 注册 Worker
@@ -109,7 +109,14 @@ async def interactive_demo(
     
     # 6. 开始对话
     print("\n" + "-" * 80)
-    user_request = input("👤 请输入您的需求: ")
+    try:
+        user_request = input("👤 请输入您的需求: ")
+    except KeyboardInterrupt:
+        print("\n\n⚠️ 检测到 Ctrl+C，退出程序")
+        print("\n" + "=" * 80)
+        print("🎉 感谢使用 AI Kernel Assistant!")
+        print("=" * 80)
+        return
     
     # 第一轮：生成 task 代码
     state = await agent.start_conversation(user_request)
@@ -122,22 +129,22 @@ async def interactive_demo(
     
     # 7. 对话循环
     while True:
-        print()
-        user_input = input("👤 请输入您的需求: ").strip()
+        try:
+            print()
+            user_input = input("👤 请输入您的需求: ").strip()
+        except KeyboardInterrupt:
+            # Ctrl+C 强制退出
+            print("\n\n⚠️ 检测到 Ctrl+C，正在取消操作...")
+            agent.request_cancellation()
+            print("🤖 再见！")
+            break
         
         if not user_input:
             print("💡 请输入您的回复")
             continue
         
-        # 检查是否是简单的控制命令
+        # 检查是否是保存命令（控制命令）
         is_cmd, command_type = is_simple_command(user_input)
-        
-        # 处理退出命令
-        if is_cmd and command_type == 'exit':
-            print("\n🤖 好的，再见！")
-            break
-        
-        # 处理保存命令
         if is_cmd and command_type == 'save':
             log_dir = os.path.expanduser(config.get("log_dir", "~/aikg_logs"))
             os.makedirs(log_dir, exist_ok=True)
@@ -147,7 +154,7 @@ async def interactive_demo(
             print("   再见！")
             break
         
-        # 其他输入：调用 MainOpAgent 处理
+        # 所有其他输入（包括"退出"、"结束"等）都交给 MainOpAgent 处理
         print("\n🤖 正在处理您的需求...")
         state = await agent.continue_conversation(
             current_state=state,
@@ -155,10 +162,9 @@ async def interactive_demo(
             action="auto"
         )
         
-        # 检查是否需要退出
         current_step = state.get("current_step", "")
-        if current_step == "cancelled" or not state.get("should_continue", True):
-            print("\n🤖 好的，再见！")
+        if current_step == "cancelled_by_user":
+            print("\n🤖 操作已取消，再见！")
             break
         
         # 显示返回的消息

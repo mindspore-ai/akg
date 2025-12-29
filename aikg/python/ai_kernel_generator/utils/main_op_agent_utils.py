@@ -262,30 +262,25 @@ def simple_action_heuristic(state: dict, user_input: str) -> tuple:
         user_input: 用户输入
         
     Returns:
-        tuple: (action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description)
+        tuple: (action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description)
     """
     user_input_lower = user_input.lower()
     
     # 确认关键词
     confirm_keywords = ["确认", "ok", "yes", "好的", "可以", "继续", "confirm"]
     if any(kw in user_input_lower for kw in confirm_keywords):
-        return "confirm", False, False, False, '', '', ''
-    
-    # 取消关键词
-    cancel_keywords = ["取消", "退出", "结束", "再见", "cancel", "quit", "exit"]
-    if any(kw in user_input_lower for kw in cancel_keywords):
-        return "cancel", False, False, False, '', '', ''
+        return "confirm", False, False, False, False, '', '', ''
     
     # 重试关键词
     retry_keywords = ["重新", "再试", "retry", "重做"]
     if any(kw in user_input_lower for kw in retry_keywords):
         if state.get("generated_code"):
-            return "retry_sub_agent", False, False, False, '', '', ''
+            return "retry_sub_agent", False, False, False, False, '', '', ''
         else:
-            return "retry", False, False, False, '', '', ''
+            return "retry", False, False, False, False, '', '', ''
     
     # 默认：修改
-    return "revise", False, False, False, '', '', ''
+    return "revise", False, False, False, False, '', '', ''
 
 
 def format_agents_info_for_llm(agents_info: dict) -> str:
