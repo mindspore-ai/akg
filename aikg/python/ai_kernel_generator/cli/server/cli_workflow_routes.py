@@ -234,20 +234,20 @@ async def _handle_continue_action(
         return _build_command_response(
             prev, command="exit", message="Conversation ended."
         )
-    if is_cmd and command_type == "save":
-        agent = _create_main_op_agent(request, session_id)
-        log_dir = _resolve_log_dir(prev)
-        os.makedirs(log_dir, exist_ok=True)
-        task_id = str(prev.get("task_id") or session_id)
-        save_path = os.path.join(log_dir, f"conversation_{task_id}.json")
-        agent.save_conversation(prev, save_path)
-        _main_agent_states.pop(session_id, None)
-        return _build_command_response(
-            prev,
-            command="save",
-            message=f"Conversation saved to: {save_path}",
-            save_path=save_path,
-        )
+    # if is_cmd and command_type == "save":
+    #     agent = _create_main_op_agent(request, session_id)
+    #     log_dir = _resolve_log_dir(prev)
+    #     os.makedirs(log_dir, exist_ok=True)
+    #     task_id = str(prev.get("task_id") or session_id)
+    #     save_path = os.path.join(log_dir, f"conversation_{task_id}.json")
+    #     agent.save_conversation(prev, save_path)
+    #     _main_agent_states.pop(session_id, None)
+    #     return _build_command_response(
+    #         prev,
+    #         command="save",
+    #         message=f"Conversation saved to: {save_path}",
+    #         save_path=save_path,
+    #     )
 
     agent = _create_main_op_agent(request, session_id)
     if "config" not in prev:
