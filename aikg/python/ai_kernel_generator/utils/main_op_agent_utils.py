@@ -255,7 +255,7 @@ def is_modification_request(user_input: str, has_previous_code: bool) -> bool:
 
 def simple_action_heuristic(state: dict, user_input: str) -> tuple:
     """
-    简单的启发式规则判断用户动作
+    简单的启发式规则判断用户动作（LLM 分析失败时的回退方案）
     
     Args:
         state: 当前状态
@@ -264,7 +264,37 @@ def simple_action_heuristic(state: dict, user_input: str) -> tuple:
     Returns:
         tuple: (action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description)
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     user_input_lower = user_input.lower()
+    user_input_stripped = user_input.strip()
+    
+    # 检测明显的无关问题（即使 LLM 失败也应该拒绝）
+    # 1. 身份询问
+    identity_keywords = ["你是谁", "who are you", "你叫什么", "what's your name", "你能做什么", "what can you do"]
+    if any(kw in user_input_lower for kw in identity_keywords):
+        logger.info(f"Heuristic: Detected identity question, marking as irrelevant")
+        return "cancel", False, True, False, False, '', '', ''
+    
+    # 2. 闲聊话题
+    chitchat_keywords = ["天气", "weather", "笑话", "joke", "故事", "story", "新闻", "news"]
+    if any(kw in user_input_lower for kw in chitchat_keywords):
+        logger.info(f"Heuristic: Detected chitchat topic, marking as irrelevant")
+        return "cancel", False, True, False, False, '', '', ''
+    
+    # 3. 完全无关的问题（输入太短且不包含算子相关词汇）
+    if len(user_input_stripped) < 20:
+        operator_related_keywords = [
+            "算子", "operator", "kernel", "生成", "generate", "实现", "implement",
+            "relu", "sigmoid", "tanh", "softmax", "matmul", "conv", "layernorm",
+            "torch", "triton", "cuda", "代码", "code", "性能", "performance"
+        ]
+        has_operator_keyword = any(kw in user_input_lower for kw in operator_related_keywords)
+        if not has_operator_keyword and not state.get("task_code"):
+            # 输入很短，没有算子关键词，且对话刚开始 → 可能是无关问题
+            logger.info(f"Heuristic: Short input with no operator keywords, marking as irrelevant")
+            return "cancel", False, True, False, False, '', '', ''
     
     # 确认关键词
     confirm_keywords = ["确认", "ok", "yes", "好的", "可以", "继续", "confirm"]
@@ -279,7 +309,7 @@ def simple_action_heuristic(state: dict, user_input: str) -> tuple:
         else:
             return "retry", False, False, False, False, '', '', ''
     
-    # 默认：修改
+    # 默认：修改（假设相关）
     return "revise", False, False, False, False, '', '', ''
 
 

@@ -304,6 +304,33 @@ class MainOpAgent(AgentBase):
         has_previous_code = bool(state.get("task_code"))
         is_modification_req = is_modification_request(user_request, has_previous_code)
         
+        # 如果在 start_conversation 中已经通过 _analyze_user_action 判断过，直接使用结果
+        if is_first_turn and state.get("is_irrelevant") is not None:
+            if state.get("is_irrelevant"):
+                logger.info("✓ User input already identified as irrelevant in start_conversation, returning early")
+                
+                # 检查是退出意图还是无关问题
+                reasoning = state.get("last_action_reasoning", "")
+                is_exit_attempt = "[USER_EXIT_ATTEMPT]" in reasoning
+                
+                if is_exit_attempt:
+                    rejection_msg = USER_EXIT_ATTEMPT_MESSAGE
+                    step = "user_exit_attempt"
+                else:
+                    rejection_msg = IRRELEVANT_INPUT_MESSAGE_FIRST_TURN
+                    step = "irrelevant_input"
+                
+                return {
+                    "task_code": "",
+                    "op_name": "",
+                    "op_description": rejection_msg,
+                    "current_step": step,
+                    "user_confirmed": False,
+                    "user_feedback": None
+                }
+            else:
+                logger.info("✓ User input already analyzed as relevant in start_conversation, skipping intent classification")
+        
         # 检查是否已经有 LLM 提取并补充的代码（在 start_conversation 或 continue_conversation 中已完成）
         # 需要判断代码是否完整，以及用户是否要修改
         if state.get("task_code") and state.get("op_name"):
@@ -369,83 +396,6 @@ class MainOpAgent(AgentBase):
                 logger.info(f"   Reason: {' | '.join(reason)}")
                 logger.info("   OpTaskBuilder will validate/modify the code")
                 logger.info("=" * 80)
-                # 继续往下执行，让OpTaskBuilder处理
-
-        if self.use_intent_classification and is_first_turn and not is_modification_req:
-            conversation_history = state.get("conversation_history", [])
-            
-            try:
-                logger.info(f"Running intent classification for: {user_request[:50]}...")
-                
-                # 构建对话历史上下文
-                history_context = ""
-                if conversation_history:
-                    history_context = "\n".join([
-                        f"[{msg.get('role', 'unknown')}]: {msg.get('content', '')}"
-                        for msg in conversation_history[-3:]  # 只保留最近3轮
-                    ])
-                
-                # 构建 prompt 输入
-                input_data = {
-                    "user_input": user_request,
-                    "conversation_history": history_context,
-                    "format_instructions": self.intent_format_instructions,
-                }
-                
-                # 调用 LLM 进行意图分类
-                model_name = self.model_config.get("intent_classifier", "default")
-                llm_result, prompt, reasoning = await self.run_llm(
-                    self.intent_classification_prompt,
-                    input_data,
-                    model_name
-                )
-                
-                # 解析 LLM 输出
-                try:
-                    parsed = ParserFactory.robust_parse(llm_result, self.intent_parser)
-                    intent = getattr(parsed, 'intent', 'unclear')
-                    message = getattr(parsed, 'message', '')
-                    confidence = float(getattr(parsed, 'confidence', 0.5))
-                except Exception as parse_error:
-                    logger.warning(f"Failed to parse intent classification result: {parse_error}")
-                    # 解析失败，默认允许继续
-                    intent = "unclear"
-                    message = ""
-                    confidence = 0.3
-                
-                # 判断是否是算子相关
-                is_operator_related = is_operator_related_intent(intent, confidence, threshold=0.6)
-                
-                logger.info(f"Intent classification result: intent={intent}, confidence={confidence:.2f}, operator_related={is_operator_related}")
-                
-                # 记录意图信息（用于调试和日志）
-                state["last_intent"] = intent
-                state["last_intent_confidence"] = confidence
-                
-                # 如果不是算子相关，直接返回拒绝消息
-                if not is_operator_related:
-                    logger.info("Non-operator request detected, returning rejection message")
-                    
-                    if is_first_turn:
-                        # 第一轮对话：显示详细的引导消息
-                        rejection_msg = IRRELEVANT_INPUT_MESSAGE_FIRST_TURN
-                    else:
-                        # 多轮对话中：显示简短的提示
-                        rejection_msg = IRRELEVANT_INPUT_MESSAGE
-
-                    return {
-                        "task_code": "",
-                        "op_name": "",
-                        "op_description": rejection_msg,
-                        "current_step": "rejected_by_intent",
-                        "user_confirmed": False,
-                        "user_feedback": None
-                    }
-            
-            except Exception as e:
-                # 意图分类失败，记录日志但继续执行
-                logger.warning(f"Intent classification failed: {e}, continuing to OpTaskBuilder")
-                # 继续执行，让 OpTaskBuilder 处理
         
         # 如果用户已确认当前的 task_code，跳过重新生成
         user_confirmed = state.get("user_confirmed", False)
@@ -998,6 +948,8 @@ class MainOpAgent(AgentBase):
         user_confirmed = False  # 默认需要确认
         op_name = ''
         extracted_op_description = ''
+        is_irrelevant = False  # 默认相关
+        temp_state = {}  # 默认空字典
 
         logger.info("=" * 80)
         logger.info(" Analyzing user input with LLM...")
@@ -1072,6 +1024,8 @@ class MainOpAgent(AgentBase):
             "should_continue": True,
             "available_workflows": self.available_workflows,
             "sub_workflow": "codeonly",  # 默认使用 codeonly
+            "is_irrelevant": is_irrelevant,
+            "last_action_reasoning": temp_state.get("last_action_reasoning", ""),
         }
         
         # 如果 LLM 提取并补充了完整的代码，将其添加到 initial_state
