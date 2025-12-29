@@ -105,6 +105,7 @@ class SplitViewApp(App):
     """分屏应用主类。"""
 
     TITLE = "akg_cli"
+    AUTO_FOCUS = "#user-input"
 
     CSS = """
     Screen {
@@ -433,11 +434,7 @@ class SplitViewApp(App):
         enabled = bool(self._input_enabled) and is_main
         self.user_input.disabled = not enabled
         self.user_input.placeholder = self._resolve_input_placeholder()
-        if enabled:
-            try:
-                self.user_input.focus()
-            except Exception as e:
-                log.debug("[TUI] user_input.focus failed", exc_info=e)
+        # 仅在启动时 focus 一次；切回 main 不自动抢焦点
 
     def refresh_input_placeholder(self) -> None:
         if self.user_input is None:
@@ -640,8 +637,6 @@ class SplitViewApp(App):
 
         if self.workflow_task:
             self.workflow_running = True
-            if self.user_input is not None:
-                self.set_input_enabled(False)
             self._workflow_runner_task = asyncio.create_task(self._run_workflow())
 
     def _deserialize_output_payload(
