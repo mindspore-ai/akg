@@ -302,9 +302,9 @@ class ModelNew(torch.nn.Module):
         super().__init__()
         # 在初始化阶段获取核心数，向量计算类算子使用VEC核心数
         try:
-            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
+            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 48)
         except:
-            self.VEC_CORE_NUM = 40  # Ascend 910B4 默认: 20个AI Core × 2个VEC/Core = 40
+            self.VEC_CORE_NUM = 48  # Ascend 910B2 默认: 24个AI Core × 2个VEC/Core = 48
 
     def forward(self, input_tensor):
         M, N = input_tensor.shape
