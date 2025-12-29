@@ -37,7 +37,9 @@ from ai_kernel_generator.utils.main_op_agent_utils import (
     user_requests_profile,
     is_modification_request,
     simple_action_heuristic,
-    format_agents_info_for_llm
+    format_agents_info_for_llm,
+    save_conversation_to_file,
+    save_verification_directory
 )
 
 from ai_kernel_generator.utils.main_op_agent_display import (
@@ -96,6 +98,23 @@ USER_EXIT_ATTEMPT_MESSAGE = """💡 我会一直在这里帮助您！
 # 取消操作相关消息
 CANCELLATION_IN_PROGRESS_MESSAGE = "⚠️ 正在取消当前操作..."
 OPERATION_CANCELLED_MESSAGE = "⚠️ 操作已被用户取消"
+
+# 保存操作相关消息
+SAVE_WITHOUT_TORCH_CODE_MESSAGE = """💡 当前还没有生成任何算子代码。
+
+请先描述您的算子需求，例如：
+• "生成 ReLU 激活函数"
+• "实现矩阵乘法算子"
+
+生成并验证完成后，就可以保存了。"""
+
+SAVE_WITHOUT_TRITON_CODE_MESSAGE = """💡 当前只生成了 Torch Task 代码，还未生成 Triton 实现。
+
+请先确认 Task 代码并生成 Triton 算子，然后再保存。
+
+您可以：
+• 输入"确认"或"生成"来生成 Triton 代码
+• 继续修改 Task 代码"""
 
 
 class MainOpAgent(AgentBase):
@@ -823,7 +842,7 @@ class MainOpAgent(AgentBase):
             user_input: 用户输入
 
         Returns:
-            tuple: (action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description)
+            tuple: (action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description, wants_to_save)
             - action: 建议的操作 ('confirm', 'revise', 'retry', 'retry_sub_agent')
             - is_new_operator: 是否是新算子需求 (bool)
             - is_irrelevant: 用户输入是否与算子开发无关 (bool)
@@ -832,6 +851,7 @@ class MainOpAgent(AgentBase):
             - extracted_task_code: LLM提取并补充的完整代码 (str)
             - extracted_op_name: 从代码中提取的算子名称 (str)
             - extracted_op_description: 从代码中提取的算子描述 (str)
+            - wants_to_save: 用户是否表达了保存意图 (bool)
         """
         if not self.use_auto_action_analysis:
             return simple_action_heuristic(state, user_input)
@@ -873,10 +893,11 @@ class MainOpAgent(AgentBase):
                 is_new_operator = getattr(parsed, 'is_new_operator', False)
                 is_irrelevant = getattr(parsed, 'is_irrelevant', False)  # 是否与算子开发无关
                 has_provided_task_code = getattr(parsed, 'has_provided_task_code', False)
-                is_complete_code = getattr(parsed, 'is_complete_code', False)  # 🆕 代码是否完整
+                is_complete_code = getattr(parsed, 'is_complete_code', False)  # 代码是否完整
                 extracted_task_code = getattr(parsed, 'extracted_task_code', '')
                 extracted_op_name = getattr(parsed, 'extracted_op_name', '')
                 extracted_op_description = getattr(parsed, 'extracted_op_description', '')
+                wants_to_save = getattr(parsed, 'wants_to_save', False)  #是否要保存
             except Exception as parse_error:
                 logger.warning(f"Failed to parse action analysis result: {parse_error}")
                 # 解析失败，使用启发式规则
@@ -896,6 +917,9 @@ class MainOpAgent(AgentBase):
                 if extracted_op_name:
                     logger.info(f"   Extracted op_name: {extracted_op_name}")
                     logger.info(f"   Extracted description: {extracted_op_description}")
+            
+            if wants_to_save:
+                logger.info(f" LLM detected SAVE INTENT (wants_to_save=True)")
 
             state["last_action_reasoning"] = analysis_reasoning
 
@@ -917,7 +941,7 @@ class MainOpAgent(AgentBase):
                 logger.warning(f"Invalid suggested action: {suggested_action}, using revise")
                 suggested_action = 'revise'
 
-            return suggested_action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description
+            return suggested_action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description, wants_to_save
 
         except Exception as e:
             logger.error(f"Action analysis failed: {e}, using heuristic")
@@ -965,7 +989,7 @@ class MainOpAgent(AgentBase):
             }
             
             # 调用统一的 LLM 分析：检测torch代码、提取并补充、分析意图
-            action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(
+            action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description, wants_to_save = await self._analyze_user_action(
                 temp_state,
                 user_request
             )
@@ -1104,6 +1128,54 @@ class MainOpAgent(AgentBase):
         # 保存当前轮的用户输入（用于多轮对话中判断task_type等）
         current_state["current_user_input"] = user_input
 
+        # 清除上一轮的显示消息，确保每轮对话都是干净的开始
+        # 避免保存操作后的消息在下一轮对话中仍然显示
+        if "display_message" in current_state:
+            del current_state["display_message"]
+        if "hint_message" in current_state:
+            del current_state["hint_message"]
+
+        from ai_kernel_generator.utils.main_op_agent_display import is_simple_command
+        is_cmd, command_type = is_simple_command(user_input)
+        if is_cmd and command_type == 'save':
+            logger.info("User requested to save verification directory")
+            
+            # 先检查是否有值得保存的内容
+            has_generated_code = bool(current_state.get("generated_code"))
+            current_step = current_state.get("current_step", "")
+            
+            if not has_generated_code:
+                # 没有生成triton代码，不执行保存，友好提示
+                logger.info("Cannot save: No triton code generated yet")
+                
+                if current_state.get("task_code"):
+                    # 有torch代码但没有triton代码
+                    save_message = SAVE_WITHOUT_TRITON_CODE_MESSAGE
+                else:
+                    # 什么都没有
+                    save_message = SAVE_WITHOUT_TORCH_CODE_MESSAGE
+            else:
+                # 有triton代码，执行保存
+                logger.info("Triton code exists, performing save")
+                save_result = save_verification_directory(current_state, self.config)
+                save_message = save_result.get("message", "保存完成")
+            
+            # 添加 assistant 消息到历史
+            assistant_message = Message(
+                role="assistant",
+                content=save_message,
+                timestamp=datetime.now().isoformat()
+            )
+            current_state["conversation_history"].append(assistant_message)
+            
+            # 更新状态并返回（继续对话）
+            current_state["display_message"] = save_message
+            current_state["hint_message"] = "随时准备为您服务！"
+            current_state["current_step"] = "saved" if has_generated_code else "save_not_ready"
+            current_state["should_continue"] = True
+            
+            return current_state
+
         quick_matched_sub_agent = quick_match_sub_agent_preference(user_input)
         if quick_matched_sub_agent:
             logger.info(f"⚡ Quick match: User requested '{quick_matched_sub_agent}' sub-agent")
@@ -1135,13 +1207,21 @@ class MainOpAgent(AgentBase):
         extracted_op_name = ''  # 默认空
         extracted_op_description = ''  # 默认空
 
+        wants_to_save = False  # 默认不保存
+        
         if action == "auto":
             # 调用统一的分析方法
-            action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(current_state, user_input)
+            action_result = await self._analyze_user_action(current_state, user_input)
+            action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description, new_save_intent = action_result
+            
+            # 只使用当前轮次的保存意图
+            wants_to_save = new_save_intent
+            
             logger.info(f"Auto-analyzed action: {action}")
             logger.info(f"  - is_new_operator: {is_new_operator}")
             logger.info(f"  - is_irrelevant: {is_irrelevant}")
             logger.info(f"  - has_provided_task_code: {has_provided_task_code}")
+            logger.info(f"  - wants_to_save: {wants_to_save}")
             if has_provided_task_code:
                 logger.info(f"  - is_complete_code: {is_complete_code}")
             if extracted_task_code:
@@ -1351,9 +1431,49 @@ class MainOpAgent(AgentBase):
                 "recursion_limit": 100
             })
             
-            # 添加显示消息和提示消息
-            result["display_message"] = format_display_message(result)
-            result["hint_message"] = get_hint_message(result)
+            if wants_to_save:
+                current_step = result.get("current_step", "")
+                has_generated_code = bool(result.get("generated_code"))
+                
+                # 只有在生成并验证了triton代码后才执行保存
+                # 如果只是生成了torch task代码（op_task_build阶段），不执行保存
+                if current_step == "completed" and has_generated_code:
+                    logger.info("=" * 80)
+                    logger.info("  User requested save, performing auto-save after triton generation & verification")
+                    logger.info("=" * 80)
+                    
+                    # 执行保存
+                    save_result = save_verification_directory(result, self.config)
+                    save_message = save_result.get("message", "保存完成")
+                    
+                    # 添加保存消息到对话历史
+                    save_assistant_message = Message(
+                        role="assistant",
+                        content=save_message,
+                        timestamp=datetime.now().isoformat()
+                    )
+                    result.get("conversation_history", []).append(save_assistant_message)
+                    
+                    # 如果有原始显示消息，在其后追加保存消息
+                    original_display = result.get("display_message", "")
+                    if original_display:
+                        result["display_message"] = f"{original_display}\n\n{save_message}"
+                    else:
+                        result["display_message"] = save_message
+                else:
+                    # 如果还没有生成triton代码，给用户提示
+                    if not has_generated_code:
+                        logger.info("User requested save, but triton code not generated yet. Providing hint to user.")
+                        # 不执行保存，不追加消息到 display_message
+                        # 用户可以在生成完成后再次输入"保存"
+                    else:
+                        logger.warning(f"User requested save, but current_step is '{current_step}' (expected 'completed'). Skipping auto-save.")
+            
+            # 添加显示消息和提示消息（如果还没有）
+            if not result.get("display_message"):
+                result["display_message"] = format_display_message(result)
+            if not result.get("hint_message"):
+                result["hint_message"] = get_hint_message(result)
             
             return result
         
@@ -1381,22 +1501,3 @@ class MainOpAgent(AgentBase):
             else:
                 logger.error(f"Error in continue_conversation: {e}")
                 raise
-
-    def save_conversation(self, state: Dict[str, Any], filepath: str):
-        """保存对话历史到文件"""
-        import json
-        
-        conversation_data = {
-            "task_id": state.get("task_id"),
-            "op_name": state.get("op_name"),
-            "conversation_history": state.get("conversation_history", []),
-            "task_code": state.get("task_code"),
-            "generated_code": state.get("generated_code"),
-            "success": state.get("generation_success", False)
-        }
-        
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(conversation_data, f, indent=2, ensure_ascii=False)
-        
-        logger.info(f"Conversation saved to: {filepath}")
