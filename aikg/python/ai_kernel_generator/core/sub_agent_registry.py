@@ -210,6 +210,7 @@ class CodeOnlySubAgent(SubAgentBase):
                 "verification_result": final_state.get("verifier_result", False),
                 "verification_error": final_state.get("verifier_error", ""),
                 "profile_result": final_state.get("profile_res"),
+                "sub_agent_type": "codeonly",  # 🔥 标记子 Agent 类型
                 "final_state": final_state  # 保存完整状态
             }
             
@@ -393,6 +394,7 @@ class EvolveSubAgent(SubAgentBase):
                 generated_code = best.get("code", "")
                 profile_result = best.get("profile", {})
             
+            # 直接返回 evolve 提供的原始 log_dir（配置路径），由 main_op_agent 负责拼接 op_name
             result = {
                 "generated_code": generated_code,
                 "verification_result": success,
@@ -404,7 +406,10 @@ class EvolveSubAgent(SubAgentBase):
                 "total_tasks": evolution_result.get("total_tasks", 0),
                 "successful_tasks": evolution_result.get("successful_tasks", 0),
                 "final_success_rate": evolution_result.get("final_success_rate", 0.0),
-                "storage_dir": evolution_result.get("storage_dir", ""),
+                "storage_dir": evolution_result.get("storage_dir", ""),  # 搜索状态元数据目录
+                "log_dir": evolution_result.get("log_dir", ""),  # 基础 log 路径（如 ~/aikg_logs），需要拼接 op_name
+                "task_folder": evolution_result.get("task_folder", ""),
+                "sub_agent_type": "evolve",  # 标记子 Agent 类型
                 "final_state": evolution_result
             }
             
@@ -420,7 +425,11 @@ class EvolveSubAgent(SubAgentBase):
                 "generated_code": "",
                 "verification_result": False,
                 "verification_error": str(e),
-                "profile_result": None
+                "profile_result": None,
+                "storage_dir": "",
+                "log_dir": "",
+                "task_folder": "",
+                "sub_agent_type": "evolve"
             }
 
 class KernelVerifierSubAgent(SubAgentBase):
@@ -856,6 +865,7 @@ class AdaptiveSearchSubAgent(SubAgentBase):
                 generated_code = best.get("code", "")
                 profile_result = best.get("profile", {})
             
+            # 直接返回 adaptive_search 提供的原始 log_dir（配置路径），由 main_op_agent 负责拼接 op_name
             result = {
                 "generated_code": generated_code,
                 "verification_result": success,
@@ -869,10 +879,11 @@ class AdaptiveSearchSubAgent(SubAgentBase):
                 "success_rate": search_result.get("success_rate", 0.0),
                 "elapsed_time": search_result.get("elapsed_time", 0.0),
                 "stop_reason": search_result.get("stop_reason", ""),
-                "storage_dir": search_result.get("storage_dir", ""),
+                "storage_dir": search_result.get("storage_dir", ""),  # 搜索状态元数据目录
+                "log_dir": search_result.get("log_dir", ""),  # 基础 log 路径（如 ~/aikg_logs），需要拼接 op_name
                 "task_folder": search_result.get("task_folder", ""),
-                "log_dir": search_result.get("log_dir", ""),
                 "lineage_graph": search_result.get("lineage_graph", ""),
+                "sub_agent_type": "adaptive_search",  
                 "final_state": search_result
             }
             
@@ -892,7 +903,11 @@ class AdaptiveSearchSubAgent(SubAgentBase):
                 "generated_code": "",
                 "verification_result": False,
                 "verification_error": str(e),
-                "profile_result": None
+                "profile_result": None,
+                "storage_dir": "",
+                "log_dir": "",
+                "task_folder": "",
+                "sub_agent_type": "adaptive_search"
             }
 
 

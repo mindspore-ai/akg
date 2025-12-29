@@ -82,6 +82,21 @@ class ConversationalOpGenState(TypedDict, total=False):
     generation_success: bool  
     generation_error: Optional[str]  
     
+    # === 子 Agent 相关 ===
+    storage_dir: Optional[str]  # evolve/adaptive_search 的搜索状态元数据目录
+    log_dir: Optional[str]  # 验证目录（包含所有任务的代码和验证脚本）
+    task_folder: Optional[str]  # Task 文件夹名（log_dir 的最后部分）
+    sub_agent_type: Optional[str]  # 子 Agent 类型（codeonly/evolve/adaptive_search）
+    
+    # === evolve/adaptive_search 统计信息 ===
+    total_rounds: Optional[int]  # evolve: 总轮数
+    total_tasks: Optional[int]  # evolve: 总任务数
+    successful_tasks: Optional[int]  # evolve: 成功任务数
+    final_success_rate: Optional[float]  # evolve: 最终成功率
+    total_submitted: Optional[int]  # adaptive_search: 提交任务数
+    total_completed: Optional[int]  # adaptive_search: 完成任务数
+    total_success: Optional[int]  # adaptive_search: 成功任务数
+    success_rate: Optional[float]  # adaptive_search: 成功率
     
     verification_result: bool  
     verification_error: Optional[str]  

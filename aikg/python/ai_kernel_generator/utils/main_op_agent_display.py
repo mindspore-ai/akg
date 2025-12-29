@@ -162,9 +162,9 @@ def get_hint_message(state: Dict[str, Any]) -> str:
     
     # 根据状态返回不同的提示
     if current_step in ["rejected_by_intent", "irrelevant_input"]:
-        return "\n💡 请输入您的算子开发需求，或输入 '退出' 结束对话"
+        return "\n💡 请输入您的算子开发需求"
     elif current_step == "completed":
-        return "\n💡 您可以继续提问、输入 '保存' 保存结果，或 '退出' 结束对话"
+        return "\n💡 您可以继续提问、输入 '保存' 保存结果"
     elif has_task_code and not has_generated_code:
         return "\n💡 请确认是否按照上述的任务描述开始生成，或者增加您想要的修改"
     else:
