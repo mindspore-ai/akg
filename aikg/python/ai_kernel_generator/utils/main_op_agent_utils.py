@@ -65,7 +65,7 @@ def quick_match_sub_agent_preference(user_input: str) -> Optional[str]:
         user_input: 用户输入
         
     Returns:
-        子 Agent 名称 (codeonly/evolve/kernel_verifier) 或 None
+        子 Agent 名称 (codeonly/evolve/kernel_verifier/adaptive_search) 或 None
     """
     user_input_lower = user_input.lower()
     
@@ -121,7 +121,25 @@ def quick_match_sub_agent_preference(user_input: str) -> Optional[str]:
         logger.info("User explicitly requests evolve (high performance optimization)")
         return "evolve"
     
-    # 4. 检查是否明确要求使用 codeonly
+    # 4. 检查是否明确要求使用 adaptive_search（树搜索）
+    adaptive_search_keywords = [
+        # 明确指定 adaptive_search
+        "使用adaptive_search", "用adaptive_search", "换adaptive_search", "改用adaptive_search",
+        "使用自适应搜索", "用自适应搜索", "换自适应搜索",
+        "use adaptive_search", "adaptive search", "adaptive_search",
+        # 树搜索相关
+        "树搜索", "tree search", "搜索树", "search tree",
+        "ucb搜索", "ucb search", "上界置信区间",
+        # 智能搜索/探索
+        "智能搜索", "intelligent search", "智能探索",
+        "自适应优化", "adaptive optimization"
+    ]
+    
+    if any(kw in user_input_lower for kw in adaptive_search_keywords):
+        logger.info("User explicitly requests adaptive_search (tree search optimization)")
+        return "adaptive_search"
+    
+    # 5. 检查是否明确要求使用 codeonly
     codeonly_keywords = [
         "使用codeonly", "用codeonly", "换codeonly", "改用codeonly",
         "use codeonly", "快速生成", "直接生成"
@@ -147,11 +165,22 @@ def extract_sub_agent_from_reasoning(reasoning: str) -> Optional[str]:
     """
     reasoning_lower = reasoning.lower()
     
-    if "evolve" in reasoning_lower:
+    # 按优先级检查（更具体的放在前面）
+    if "adaptive_search" in reasoning_lower or "adaptive search" in reasoning_lower:
+        return "adaptive_search"
+    elif "树搜索" in reasoning_lower or "tree search" in reasoning_lower:
+        return "adaptive_search"
+    elif "自适应搜索" in reasoning_lower:
+        return "adaptive_search"
+    elif "ucb" in reasoning_lower and ("搜索" in reasoning_lower or "search" in reasoning_lower or "策略" in reasoning_lower):
+        return "adaptive_search"
+    elif "智能搜索" in reasoning_lower or "intelligent search" in reasoning_lower:
+        return "adaptive_search"
+    elif "evolve" in reasoning_lower or "进化" in reasoning_lower:
         return "evolve"
     elif "codeonly" in reasoning_lower:
         return "codeonly"
-    elif "kernel_verifier" in reasoning_lower or "性能" in reasoning_lower:
+    elif "kernel_verifier" in reasoning_lower or ("性能" in reasoning_lower and "测试" in reasoning_lower):
         return "kernel_verifier"
     
     return None
@@ -483,11 +512,11 @@ def save_verification_directory(state: dict, config: dict) -> dict:
             
             result["message"] = f"""保存成功！
 
-📁 保存位置: {saved_to}
+保存位置: {saved_to}
    • 验证目录: {verify_basename}
    • 文件总数: {file_count}
 
-📦 压缩包: {tar_filename}
+压缩包: {tar_filename}
    • 大小: {tar_size_mb:.2f} MB
    • 路径: {tar_path}
 

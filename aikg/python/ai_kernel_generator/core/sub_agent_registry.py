@@ -630,6 +630,272 @@ class KernelVerifierSubAgent(SubAgentBase):
             }
 
 
+class AdaptiveSearchSubAgent(SubAgentBase):
+    """
+    AdaptiveSearch 子 Agent
+    
+    使用自适应树搜索优化算子性能
+    """
+    
+    def get_name(self) -> str:
+        return "adaptive_search"
+    
+    def get_detailed_info(self) -> Dict[str, Any]:
+        """返回详细信息用于 LLM 决策"""
+        return {
+            "name": "adaptive_search",
+            "description": "基于自适应树搜索的智能优化流程",
+            "workflow_steps": [
+                "初始种群: 生成多个初始算子实现",
+                "UCB选择: 使用上界置信区间算法选择最有潜力的父代",
+                "灵感采样: 从历史成功案例中采样优化灵感",
+                "代码生成: 基于父代和灵感生成新的优化版本",
+                "性能评估: 测试并收集性能数据",
+                "迭代优化: 多轮自适应搜索，动态调整策略",
+                "最优选择: 返回性能最佳的实现"
+            ],
+            "use_cases": [
+                "需要极致性能且接受投入时间优化的场景",
+                "复杂算子的性能优化（如矩阵运算、卷积等）",
+                "需要探索大量优化策略组合的场景",
+                "对性能有明确指标要求的生产环境",
+            ],
+            "advantages": [
+                "智能搜索: 基于UCB算法，自动平衡探索与利用",
+                "灵感驱动: 从历史成功案例学习优化模式",
+                "自适应调整: 根据搜索进展动态调整策略",
+                "高效收敛: 相比纯随机搜索，更快找到最优解",
+                "可扩展: 支持并行搜索，充分利用计算资源",
+                "可追溯: 保留完整的搜索树和谱系图"
+            ],
+            "limitations": [
+                "时间较长: 需要多轮迭代，耗时较evolve稍长",
+                "资源消耗高: 多次并发编译和运行测试",
+                "复杂度高: 涉及UCB选择、灵感采样等复杂逻辑",
+            ],
+            "performance": "较慢（取决于并发数和总任务数），但通常能找到比evolve更优的解"
+        }
+    
+    def _load_adaptive_search_config(self) -> Dict[str, Any]:
+        """
+        加载自适应搜索配置
+        
+        Returns:
+            配置字典，包含所有自适应搜索参数
+        """
+        from ai_kernel_generator.utils.common_utils import load_yaml
+        from ai_kernel_generator import get_project_root
+        import os
+        
+        # 默认配置
+        default_config = {
+            "max_concurrent": 4,
+            "initial_task_count": 4,
+            "tasks_per_parent": 1,  #
+            "max_total_tasks": 50,
+            "exploration_coef": 1.414,
+            "random_factor": 0.1,
+            "use_softmax": False,
+            "softmax_temperature": 1.0,
+            "inspiration_sample_num": 3,
+            "use_tiered_sampling": True,
+            "handwrite_sample_num": 2,
+            "handwrite_decay_rate": 2.0
+        }
+        
+        # 尝试加载自适应搜索配置文件
+        config_path = os.path.join(get_project_root(), "config", "adaptive_search_config.yaml")
+        
+        if not os.path.exists(config_path):
+            logger.warning(f"Adaptive search config not found at {config_path}, using defaults")
+            return default_config
+        
+        try:
+            # 直接加载 yaml 配置
+            config_dict = load_yaml(config_path)
+            logger.info(f"✓ Loaded adaptive search config from: {config_path}")
+            
+            # 提取各个配置部分
+            concurrency_config = config_dict.get("concurrency", {})
+            stopping_config = config_dict.get("stopping", {})
+            ucb_config = config_dict.get("ucb_selection", {})
+            inspiration_config = config_dict.get("inspiration", {})
+            handwrite_config = config_dict.get("handwrite", {})
+            
+            loaded_config = {
+                # 并发配置
+                "max_concurrent": concurrency_config.get("max_concurrent", default_config["max_concurrent"]),
+                "initial_task_count": concurrency_config.get("initial_task_count", default_config["initial_task_count"]),
+                "tasks_per_parent": concurrency_config.get("tasks_per_parent", default_config["tasks_per_parent"]), 
+                
+                # 停止条件
+                "max_total_tasks": stopping_config.get("max_total_tasks", default_config["max_total_tasks"]),
+                
+                # UCB 参数
+                "exploration_coef": ucb_config.get("exploration_coef", default_config["exploration_coef"]),
+                "random_factor": ucb_config.get("random_factor", default_config["random_factor"]),
+                "use_softmax": ucb_config.get("use_softmax", default_config["use_softmax"]),
+                "softmax_temperature": ucb_config.get("softmax_temperature", default_config["softmax_temperature"]),
+                
+                # 灵感采样参数
+                "inspiration_sample_num": inspiration_config.get("sample_num", default_config["inspiration_sample_num"]),
+                "use_tiered_sampling": inspiration_config.get("use_tiered_sampling", default_config["use_tiered_sampling"]),
+                
+                # 手写建议参数
+                "handwrite_sample_num": handwrite_config.get("sample_num", default_config["handwrite_sample_num"]),
+                "handwrite_decay_rate": handwrite_config.get("decay_rate", default_config["handwrite_decay_rate"])
+            }
+            
+            logger.info(f"Adaptive search config loaded successfully:")
+            logger.info(f"  - max_concurrent: {loaded_config['max_concurrent']}")
+            logger.info(f"  - initial_task_count: {loaded_config['initial_task_count']}")
+            logger.info(f"  - tasks_per_parent: {loaded_config['tasks_per_parent']}")
+            logger.info(f"  - max_total_tasks: {loaded_config['max_total_tasks']}")
+            
+            return loaded_config
+            
+        except Exception as e:
+            logger.error(f"Failed to load adaptive search config from {config_path}: {e}")
+            logger.warning("Using default configuration")
+            return default_config
+    
+    async def execute(self, 
+                     task_code: str,
+                     op_name: str,
+                     task_id: str,
+                     **kwargs) -> Tuple[bool, Dict[str, Any]]:
+        """
+        执行自适应搜索优化
+        
+        Args:
+            task_code: OpTaskBuilder 生成的 task 代码
+            op_name: 算子名称
+            task_id: 任务 ID
+            **kwargs: 其他参数
+        """
+        logger.info(f"Executing AdaptiveSearch sub-agent for {op_name}")
+        
+        try:
+            # 导入自适应搜索模块
+            from ai_kernel_generator.core.adaptive_search import adaptive_search
+            from ai_kernel_generator.core.utils import normalize_dsl
+            
+            # 加载自适应搜索配置
+            search_config = self._load_adaptive_search_config()
+            
+            logger.info(f"Adaptive search parameters:")
+            logger.info(f"  - max_concurrent: {search_config['max_concurrent']}")
+            logger.info(f"  - initial_task_count: {search_config['initial_task_count']}")
+            logger.info(f"  - tasks_per_parent: {search_config['tasks_per_parent']}")
+            logger.info(f"  - max_total_tasks: {search_config['max_total_tasks']}")
+            logger.info(f"  - exploration_coef: {search_config['exploration_coef']}")
+            logger.info(f"  - inspiration_sample_num: {search_config['inspiration_sample_num']}")
+            
+            # 规范化 DSL
+            normalized_dsl = normalize_dsl(self.dsl, self.backend)
+            logger.info(f"Normalized DSL: {self.dsl} -> {normalized_dsl}")
+            
+            # 准备配置
+            cfg = dict(self.config or {})
+            if "rag" in self.config:
+                cfg["rag"] = self.config["rag"]
+            task_label = str(kwargs.get("task_label") or "").strip()
+            if not task_label:
+                from ai_kernel_generator.utils.task_label import resolve_task_label
+                task_label = resolve_task_label(
+                    op_name=op_name,
+                    parallel_index=1,
+                )
+            if not task_label:
+                raise ValueError("[AdaptiveSearchSubAgent] missing task_label")
+            cfg["task_label"] = task_label
+            
+            logger.info(f"[RAG] AdaptiveSearchSubAgent: passing config with rag={cfg.get('rag')} to adaptive_search")
+            logger.info(f"Starting adaptive search for {op_name}...")
+            
+            # 执行自适应搜索
+            search_result = await adaptive_search(
+                op_name=op_name,
+                task_desc=task_code,
+                dsl=normalized_dsl,
+                framework=self.framework,
+                backend=self.backend,
+                arch=self.arch,
+                config=cfg,
+                
+                # 并发控制
+                max_concurrent=search_config["max_concurrent"],
+                initial_task_count=search_config["initial_task_count"],
+                tasks_per_parent=search_config["tasks_per_parent"],  
+                
+                # 停止条件
+                max_total_tasks=search_config["max_total_tasks"],
+                
+                # UCB 参数
+                exploration_coef=search_config["exploration_coef"],
+                random_factor=search_config["random_factor"],
+                use_softmax=search_config["use_softmax"],
+                softmax_temperature=search_config["softmax_temperature"],
+                
+                # 灵感采样参数
+                inspiration_sample_num=search_config["inspiration_sample_num"],
+                use_tiered_sampling=search_config["use_tiered_sampling"],
+                handwrite_sample_num=search_config["handwrite_sample_num"],
+                handwrite_decay_rate=search_config["handwrite_decay_rate"]
+            )
+            
+            # 判断成功与否
+            success = search_result.get("total_success", 0) > 0
+            best_implementations = search_result.get("best_implementations", [])
+            
+            # 提取最佳实现的代码和性能数据
+            generated_code = ""
+            profile_result = None
+            if best_implementations:
+                best = best_implementations[0]
+                generated_code = best.get("code", "")
+                profile_result = best.get("profile", {})
+            
+            result = {
+                "generated_code": generated_code,
+                "verification_result": success,
+                "verification_error": "" if success else "No successful implementations found",
+                "profile_result": profile_result,
+                "best_implementations": best_implementations,
+                "total_submitted": search_result.get("total_submitted", 0),
+                "total_completed": search_result.get("total_completed", 0),
+                "total_success": search_result.get("total_success", 0),
+                "total_failed": search_result.get("total_failed", 0),
+                "success_rate": search_result.get("success_rate", 0.0),
+                "elapsed_time": search_result.get("elapsed_time", 0.0),
+                "stop_reason": search_result.get("stop_reason", ""),
+                "storage_dir": search_result.get("storage_dir", ""),
+                "task_folder": search_result.get("task_folder", ""),
+                "log_dir": search_result.get("log_dir", ""),
+                "lineage_graph": search_result.get("lineage_graph", ""),
+                "final_state": search_result
+            }
+            
+            logger.info(f"Adaptive search completed:")
+            logger.info(f"  - Success: {search_result.get('total_success', 0)}/{search_result.get('total_completed', 0)}")
+            logger.info(f"  - Success rate: {search_result.get('success_rate', 0.0):.1%}")
+            logger.info(f"  - Elapsed time: {search_result.get('elapsed_time', 0.0):.1f}s")
+            logger.info(f"  - Stop reason: {search_result.get('stop_reason', '')}")
+            
+            return success, result
+            
+        except Exception as e:
+            logger.error(f"AdaptiveSearch sub-agent failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return False, {
+                "generated_code": "",
+                "verification_result": False,
+                "verification_error": str(e),
+                "profile_result": None
+            }
+
+
 class SubAgentRegistry:
     """
     子 Agent 注册中心
@@ -649,6 +915,7 @@ class SubAgentRegistry:
         self.register(CodeOnlySubAgent)
         self.register(EvolveSubAgent)
         self.register(KernelVerifierSubAgent)
+        self.register(AdaptiveSearchSubAgent)
         
         logger.info(f"Registered {len(self._agents)} built-in sub-agents")
     
