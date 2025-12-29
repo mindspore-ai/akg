@@ -89,12 +89,7 @@ class WatchController:
         except Exception as e:
             log.warning("[Watch] clear_log failed", exc_info=e)
 
-        # 切换后默认把焦点放到 Chat，保证可以立即上滑回看（Esc 也可）
-        try:
-            if hasattr(p.layout_manager, "focus_chat"):
-                p.layout_manager.focus_chat()
-        except Exception as e:
-            log.warning("[Watch] focus_chat failed", exc_info=e)
+        # 切换 Tab 时不自动改变焦点，便于连续左右切换
 
         # 注意：流式渲染的 renderer/buffer 状态由 TaskStreamSession 持有，
         # watch 切换不再直接操作 StreamRenderer，避免重复 start 导致重编号/分割线问题。
