@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import os
 import socket
 import urllib.parse
 from typing import List
@@ -43,10 +45,71 @@ class OpCommandOrchestrator:
         self.services = services
 
     @staticmethod
-    def _port_available(port: int) -> bool:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    def _resolve_server_host() -> str:
+        env_host = (os.environ.get("AIKG_SERVER_HOST") or "").strip()
+        if env_host:
+            return env_host
+        sock = None
         try:
-            sock.bind(("127.0.0.1", int(port)))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(("127.0.0.1", 0))
+            return "0.0.0.0"
+        except OSError:
+            try:
+                sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                sock.bind(("::1", 0))
+                return "::"
+            except OSError:
+                return "0.0.0.0"
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _format_url_host(host: str) -> str:
+        host_n = (host or "").strip()
+        if host_n in ["0.0.0.0", ""]:
+            host_n = "127.0.0.1"
+        elif host_n in ["::", "[::]"]:
+            host_n = "::1"
+        elif host_n.startswith("[") and host_n.endswith("]"):
+            host_n = host_n[1:-1]
+
+        try:
+            is_ipv6 = isinstance(ipaddress.ip_address(host_n), ipaddress.IPv6Address)
+        except ValueError:
+            is_ipv6 = ":" in host_n
+
+        if is_ipv6:
+            return f"[{host_n}]"
+        return host_n
+
+    def _port_available(self, port: int) -> bool:
+        host = self._resolve_server_host()
+        bind_host = host
+        family = socket.AF_INET
+        if host in ["0.0.0.0", ""]:
+            bind_host = "127.0.0.1"
+        elif host in ["::", "[::]"]:
+            bind_host = "::1"
+            family = socket.AF_INET6
+        else:
+            if host.startswith("[") and host.endswith("]"):
+                bind_host = host[1:-1]
+            try:
+                if isinstance(
+                    ipaddress.ip_address(bind_host), ipaddress.IPv6Address
+                ):
+                    family = socket.AF_INET6
+            except ValueError:
+                family = socket.AF_INET
+
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            sock.bind((bind_host, int(port)))
         except OSError:
             return False
         finally:
@@ -184,6 +247,13 @@ class OpCommandOrchestrator:
         print_logo_once(self.console)
         self.services.config.print_report_if_any(self.console)
 
+        if args.ipv6:
+            os.environ["AIKG_SERVER_HOST"] = "::"
+            if args.server_url:
+                self.console.print(
+                    f"[{DisplayStyle.YELLOW}]提示:[/{DisplayStyle.YELLOW}] --ipv6 仅影响自动拉起的本地 server；已提供 --server-url 时不会强制改写。"
+                )
+
         runtime = self._resolve_runtime_options(ctx, args)
 
         if args.worker_url and args.devices:
@@ -250,7 +320,9 @@ class OpCommandOrchestrator:
                     )
                     raise typer.Exit(code=1)
                 try:
-                    proc, _ = self.services.server.start(self.console, port=port)
+                    proc, _, server_url = self.services.server.start(
+                        self.console, port=port
+                    )
                     auto_server_started = proc is not None
                 except Exception as e:
                     log.error("[Orchestrator] start server failed", exc_info=e)
@@ -258,7 +330,7 @@ class OpCommandOrchestrator:
                         f"[{DisplayStyle.RED}]{UISymbol.ERROR} 启动 server 失败: {e}[/{DisplayStyle.RED}]"
                     )
                     raise typer.Exit(code=1)
-                server_url = f"http://localhost:{port}"
+                server_url = server_url or f"http://{self._format_url_host(self._resolve_server_host())}:{port}"
                 self.console.print(
                     f"[{DisplayStyle.GREEN}]{UISymbol.DONE} 已自动启动本地 server: {server_url}[/{DisplayStyle.GREEN}]\n"
                 )

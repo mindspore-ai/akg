@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import signal
 import socket
@@ -55,13 +56,59 @@ class WorkflowServerProcessManager:
         return self._log_file
 
     @staticmethod
-    def _probe_local_server(port: int) -> bool:
+    def _format_url_host(host: str) -> str:
+        host_n = (host or "").strip()
+        if host_n in ["0.0.0.0", ""]:
+            host_n = "127.0.0.1"
+        elif host_n in ["::", "[::]"]:
+            host_n = "::1"
+        elif host_n.startswith("[") and host_n.endswith("]"):
+            host_n = host_n[1:-1]
+
+        try:
+            is_ipv6 = isinstance(ipaddress.ip_address(host_n), ipaddress.IPv6Address)
+        except ValueError:
+            is_ipv6 = ":" in host_n
+
+        if is_ipv6:
+            return f"[{host_n}]"
+        return host_n
+
+    @staticmethod
+    def _default_server_host() -> str:
+        env_host = (os.environ.get("AIKG_SERVER_HOST") or "").strip()
+        if env_host:
+            return env_host
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(("127.0.0.1", 0))
+            return "0.0.0.0"
+        except OSError:
+            try:
+                sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                sock.bind(("::1", 0))
+                return "::"
+            except OSError:
+                return "0.0.0.0"
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _probe_local_server(port: int, host: Optional[str] = None) -> bool:
         """探测本地端口是否已有可用的 AIKG server。"""
         try:
             import httpx
 
-            url = f"http://127.0.0.1:{int(port)}/api/v1/workflow/status"
-            with httpx.Client(timeout=1.0) as client:
+            access_host = WorkflowServerProcessManager._format_url_host(
+                host or os.environ.get("AIKG_SERVER_HOST", "0.0.0.0")
+            )
+            url = f"http://{access_host}:{int(port)}/api/v1/workflow/status"
+            with httpx.Client(timeout=1.0, trust_env=False) as client:
                 resp = client.get(url)
                 if resp.status_code != 200:
                     return False
@@ -78,11 +125,29 @@ class WorkflowServerProcessManager:
             )
             return False
 
-    @staticmethod
-    def _port_available(port: int) -> bool:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    def _port_available(self, port: int) -> bool:
+        host = self._default_server_host()
+        bind_host = host
+        family = socket.AF_INET
+        if host in ["0.0.0.0", ""]:
+            bind_host = "127.0.0.1"
+        elif host in ["::", "[::]"]:
+            bind_host = "::1"
+            family = socket.AF_INET6
+        else:
+            if host.startswith("[") and host.endswith("]"):
+                bind_host = host[1:-1]
+            try:
+                if isinstance(
+                    ipaddress.ip_address(bind_host), ipaddress.IPv6Address
+                ):
+                    family = socket.AF_INET6
+            except ValueError:
+                family = socket.AF_INET
+
+        sock = socket.socket(family, socket.SOCK_STREAM)
         try:
-            sock.bind(("127.0.0.1", int(port)))
+            sock.bind((bind_host, int(port)))
         except OSError:
             return False
         finally:
@@ -94,10 +159,11 @@ class WorkflowServerProcessManager:
 
     def start(
         self, console: Console, port: int = 8000
-    ) -> Tuple[Optional[subprocess.Popen], str]:
+    ) -> Tuple[Optional[subprocess.Popen], str, str]:
         if self._process is not None and self._process.poll() is None:
             # 已由本 manager 启动且仍在运行：直接复用
-            return self._process, self._log_file or ""
+            url = f"http://{self._format_url_host(self._default_server_host())}:{port}"
+            return self._process, self._log_file or "", url
 
         if not self._port_available(port):
             raise RuntimeError(f"端口 {port} 已被占用，无法启动 server")
@@ -122,6 +188,8 @@ class WorkflowServerProcessManager:
 
         log_f = open(log_file, "w", encoding="utf-8")
         env = os.environ.copy()
+        host = self._default_server_host()
+        env["AIKG_SERVER_HOST"] = host
         env["AIKG_SERVER_PORT"] = str(port)
 
         process = subprocess.Popen(
@@ -140,7 +208,7 @@ class WorkflowServerProcessManager:
         # 这里改为：短轮询 + 健康探测 + poll，直到成功/失败/超时。
         deadline = time.time() + 15.0
         while time.time() < deadline:
-            if self._probe_local_server(port):
+            if self._probe_local_server(port, host):
                 break
             if process.poll() is not None:
                 log_f.close()
@@ -180,9 +248,10 @@ class WorkflowServerProcessManager:
             f"[{DisplayStyle.GREEN}]{UISymbol.DONE} Server 已启动 (PID: {process.pid})[/{DisplayStyle.GREEN}]"
         )
 
+        url = f"http://{self._format_url_host(host)}:{port}"
         self._process = process
         self._log_file = log_file
-        return process, log_file
+        return process, log_file, url
 
     def stop(self, console: Console) -> None:
         if self._process is not None:
@@ -250,7 +319,7 @@ class WorkerServiceProcessManager:
             import httpx
 
             status_url = f"{url.rstrip('/')}/api/v1/status"
-            with httpx.Client(timeout=1.0) as client:
+            with httpx.Client(timeout=1.0, trust_env=False) as client:
                 resp = client.get(status_url)
                 if resp.status_code != 200:
                     return False
@@ -260,6 +329,25 @@ class WorkerServiceProcessManager:
         except Exception as e:
             log.debug("[Processes] probe local worker failed", url=url, exc_info=e)
             return False
+
+    @staticmethod
+    def _format_url_host(host: str) -> str:
+        host_n = (host or "").strip()
+        if host_n in ["0.0.0.0", ""]:
+            host_n = "127.0.0.1"
+        elif host_n in ["::", "[::]"]:
+            host_n = "::1"
+        elif host_n.startswith("[") and host_n.endswith("]"):
+            host_n = host_n[1:-1]
+
+        try:
+            is_ipv6 = isinstance(ipaddress.ip_address(host_n), ipaddress.IPv6Address)
+        except ValueError:
+            is_ipv6 = ":" in host_n
+
+        if is_ipv6:
+            return f"[{host_n}]"
+        return host_n
 
     def start(
         self,
@@ -282,7 +370,7 @@ class WorkerServiceProcessManager:
             if isinstance(pid, int) and pid > 0 and pid_alive(pid):
                 url = str(entry.get("url") or "")
                 if not url:
-                    access_host = "127.0.0.1" if host in ["0.0.0.0", "::"] else host
+                    access_host = self._format_url_host(host)
                     url = f"http://{access_host}:{port}"
                 if self._probe_local_worker(url):
                     console.print(
@@ -368,7 +456,7 @@ class WorkerServiceProcessManager:
             )
 
         # url：用于 server 注册（本地默认用 localhost/127.0.0.1）
-        access_host = "127.0.0.1" if host in ["0.0.0.0", "::"] else host
+        access_host = self._format_url_host(host)
         url = f"http://{access_host}:{port}"
 
         console.print(
