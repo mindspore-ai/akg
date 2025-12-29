@@ -18,6 +18,7 @@ MainOpAgent 辅助工具函数
 
 import re
 import logging
+import tarfile
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -459,18 +460,58 @@ def save_verification_directory(state: dict, config: dict) -> dict:
         # 统计文件数量
         file_count = sum([len(files) for _, _, files in os.walk(saved_to)])
         
-        result["message"] = f"""保存成功！
+        # 4. 打包成 .tar.gz 格式
+        tar_filename = f"{saved_dir_name}.tar.gz"
+        tar_path = os.path.join(log_dir, "saved_verifications", tar_filename)
+        
+        logger.info(f"开始打包验证目录: {tar_path}")
+        
+        try:
+            with tarfile.open(tar_path, "w:gz") as tar:
+                # 将整个目录打包，使用 arcname 保持目录结构
+                tar.add(saved_to, arcname=saved_dir_name)
+            
+            # 获取压缩包大小
+            tar_size_bytes = os.path.getsize(tar_path)
+            tar_size_mb = tar_size_bytes / (1024 * 1024)
+            
+            result["tar_path"] = tar_path
+            result["tar_size_mb"] = tar_size_mb
+            
+            logger.info(f"✓ 打包完成: {tar_path}")
+            logger.info(f"  - 压缩包大小: {tar_size_mb:.2f} MB")
+            
+            result["message"] = f"""保存成功！
+
+📁 保存位置: {saved_to}
+   • 验证目录: {verify_basename}
+   • 文件总数: {file_count}
+
+📦 压缩包: {tar_filename}
+   • 大小: {tar_size_mb:.2f} MB
+   • 路径: {tar_path}
+
+💡 您可以继续当前对话或开始新的算子开发。"""
+            
+            logger.info(f"✓ 验证目录已保存到: {saved_to}")
+            logger.info(f"  - 验证目录: {verify_basename}")
+            logger.info(f"  - 文件总数: {file_count}")
+            
+        except Exception as tar_error:
+            logger.warning(f"打包失败: {tar_error}, 但文件已保存")
+            result["message"] = f"""保存成功！
 
   保存位置: {saved_to}
    • 验证目录: {verify_basename}
-   • 对话历史: conversation_{task_id}.json
    • 文件总数: {file_count}
 
+⚠️ 注意: 自动打包失败 ({tar_error})，但文件已正常保存。
+
 💡 您可以继续当前对话或开始新的算子开发。"""
-        
-        logger.info(f"✓ 验证目录已保存到: {saved_to}")
-        logger.info(f"  - 验证目录: {verify_basename}")
-        logger.info(f"  - 文件总数: {file_count}")
+            
+            logger.info(f"✓ 验证目录已保存到: {saved_to}")
+            logger.info(f"  - 验证目录: {verify_basename}")
+            logger.info(f"  - 文件总数: {file_count}")
         
     except Exception as e:
         logger.error(f"复制验证目录失败: {e}")
