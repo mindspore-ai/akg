@@ -78,8 +78,8 @@ async def interactive_demo(
     print(f"   • DSL: {dsl}")
     print(f"   • Framework: {framework}")
     print("\n💡 提示: 您可以用自然语言描述您的算子需求")
-    print("   • 输入 '保存' 保存对话历史并退出")
-    print("   • 按 Ctrl+C 强制退出")
+    print("   • 输入 '保存' 保存验证目录和对话历史（保存后继续对话）")
+    print("   • 按 Ctrl+C 退出对话")
     print("   • 所有其他输入将由 AI 智能理解您的意图")
     print()
     
@@ -142,19 +142,6 @@ async def interactive_demo(
         if not user_input:
             print("💡 请输入您的回复")
             continue
-        
-        # 检查是否是保存命令（控制命令）
-        is_cmd, command_type = is_simple_command(user_input)
-        if is_cmd and command_type == 'save':
-            log_dir = os.path.expanduser(config.get("log_dir", "~/aikg_logs"))
-            os.makedirs(log_dir, exist_ok=True)
-            save_path = os.path.join(log_dir, f"conversation_{state.get('task_id')}.json")
-            agent.save_conversation(state, save_path)
-            print(f"\n🤖 ✅ 对话历史已保存到: {save_path}")
-            print("   再见！")
-            break
-        
-        # 所有其他输入（包括"退出"、"结束"等）都交给 MainOpAgent 处理
         print("\n🤖 正在处理您的需求...")
         state = await agent.continue_conversation(
             current_state=state,

@@ -370,6 +370,7 @@ class ParserFactory:
         - extracted_task_code: LLM提取并补充的完整KernelBench代码（str）
         - extracted_op_name: 从代码中提取的算子名称（str）
         - extracted_op_description: 从代码中提取的算子描述（str）
+        - wants_to_save: 用户是否表达了保存意图（bool）
         """
         if cls._user_action_analyzer_parser is None:
             cls._user_action_analyzer_parser = cls.create_output_parser(
@@ -384,7 +385,8 @@ class ParserFactory:
                     'is_complete_code': (bool, False),         # 代码是否完整
                     'extracted_task_code': (str, ''),          # LLM提取并补充的完整代码
                     'extracted_op_name': (str, ''),            # 从代码中提取的算子名称
-                    'extracted_op_description': (str, '')      # 从代码中提取的算子描述
+                    'extracted_op_description': (str, ''),     # 从代码中提取的算子描述
+                    'wants_to_save': (bool, False)             # 用户是否表达了保存意图
                 }
             )
         return cls._user_action_analyzer_parser

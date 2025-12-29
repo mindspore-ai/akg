@@ -262,7 +262,7 @@ def simple_action_heuristic(state: dict, user_input: str) -> tuple:
         user_input: 用户输入
         
     Returns:
-        tuple: (action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description)
+        tuple: (action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description, wants_to_save)
     """
     import logging
     logger = logging.getLogger(__name__)
@@ -270,18 +270,24 @@ def simple_action_heuristic(state: dict, user_input: str) -> tuple:
     user_input_lower = user_input.lower()
     user_input_stripped = user_input.strip()
     
-    # 检测明显的无关问题（即使 LLM 失败也应该拒绝）
+    # 检测保存意图
+    save_keywords = ["保存", "save", "存一下", "保存一下", "并保存"]
+    wants_to_save = any(kw in user_input_lower for kw in save_keywords)
+    if wants_to_save:
+        logger.info(f"Heuristic: Detected save intent")
+    
+    # 检测明显的无关问题
     # 1. 身份询问
     identity_keywords = ["你是谁", "who are you", "你叫什么", "what's your name", "你能做什么", "what can you do"]
     if any(kw in user_input_lower for kw in identity_keywords):
         logger.info(f"Heuristic: Detected identity question, marking as irrelevant")
-        return "cancel", False, True, False, False, '', '', ''
+        return "cancel", False, True, False, False, '', '', '', wants_to_save
     
     # 2. 闲聊话题
     chitchat_keywords = ["天气", "weather", "笑话", "joke", "故事", "story", "新闻", "news"]
     if any(kw in user_input_lower for kw in chitchat_keywords):
         logger.info(f"Heuristic: Detected chitchat topic, marking as irrelevant")
-        return "cancel", False, True, False, False, '', '', ''
+        return "cancel", False, True, False, False, '', '', '', wants_to_save
     
     # 3. 完全无关的问题（输入太短且不包含算子相关词汇）
     if len(user_input_stripped) < 20:
@@ -294,23 +300,23 @@ def simple_action_heuristic(state: dict, user_input: str) -> tuple:
         if not has_operator_keyword and not state.get("task_code"):
             # 输入很短，没有算子关键词，且对话刚开始 → 可能是无关问题
             logger.info(f"Heuristic: Short input with no operator keywords, marking as irrelevant")
-            return "cancel", False, True, False, False, '', '', ''
+            return "cancel", False, True, False, False, '', '', '', wants_to_save
     
     # 确认关键词
     confirm_keywords = ["确认", "ok", "yes", "好的", "可以", "继续", "confirm"]
     if any(kw in user_input_lower for kw in confirm_keywords):
-        return "confirm", False, False, False, False, '', '', ''
+        return "confirm", False, False, False, False, '', '', '', wants_to_save
     
     # 重试关键词
     retry_keywords = ["重新", "再试", "retry", "重做"]
     if any(kw in user_input_lower for kw in retry_keywords):
         if state.get("generated_code"):
-            return "retry_sub_agent", False, False, False, False, '', '', ''
+            return "retry_sub_agent", False, False, False, False, '', '', '', wants_to_save
         else:
-            return "retry", False, False, False, False, '', '', ''
+            return "retry", False, False, False, False, '', '', '', wants_to_save
     
     # 默认：修改（假设相关）
-    return "revise", False, False, False, False, '', '', ''
+    return "revise", False, False, False, False, '', '', '', wants_to_save
 
 
 def format_agents_info_for_llm(agents_info: dict) -> str:
@@ -332,3 +338,142 @@ def format_agents_info_for_llm(agents_info: dict) -> str:
         formatted.append("")
     
     return "\n".join(formatted)
+
+
+def save_conversation_to_file(state: dict, filepath: str) -> None:
+    """
+    保存对话历史到文件
+    
+    Args:
+        state: 当前对话状态
+        filepath: 保存路径
+    """
+    import json
+    import os
+    
+    conversation_data = {
+        "task_id": state.get("task_id"),
+        "op_name": state.get("op_name"),
+        "conversation_history": state.get("conversation_history", []),
+        "task_code": state.get("task_code"),
+        "generated_code": state.get("generated_code"),
+        "success": state.get("generation_success", False)
+    }
+    
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(conversation_data, f, indent=2, ensure_ascii=False)
+    
+    logger.info(f"Conversation saved to: {filepath}")
+
+
+def save_verification_directory(state: dict, config: dict) -> dict:
+    """
+    保存验证目录（包含生成的triton代码和验证脚本）
+    
+    Args:
+        state: 当前对话状态
+        config: 配置字典
+        
+    Returns:
+        Dict: 包含保存路径信息的字典
+            - conversation_path: 对话历史保存路径
+            - verify_dir: 验证目录路径（如果存在）
+            - saved_to: 保存到的目标目录
+            - message: 结果消息
+    """
+    import os
+    import shutil
+    import time
+    
+    result = {
+        "conversation_path": "",
+        "verify_dir": "",
+        "saved_to": "",
+        "message": ""
+    }
+    
+    # 1. 保存对话历史
+    log_dir = os.path.expanduser(config.get("log_dir", "~/aikg_logs"))
+    task_id = state.get("task_id", "unknown")
+    op_name = state.get("op_name", "")
+    
+    # 保存对话历史
+    conversation_path = os.path.join(log_dir, f"conversation_{task_id}.json")
+    try:
+        save_conversation_to_file(state, conversation_path)
+        result["conversation_path"] = conversation_path
+        logger.info(f"✓ 对话历史已保存到: {conversation_path}")
+    except Exception as e:
+        logger.error(f"保存对话历史失败: {e}")
+        result["message"] = f"⚠️ 保存对话历史失败: {e}"
+        return result
+    
+    # 2. 保存验证目录（如果存在）
+    if not op_name:
+        result["message"] = f"对话历史已保存到: {conversation_path}\n💡 当前还没有生成算子代码，无验证目录可保存。"
+        return result
+    
+    # 查找最新的验证目录
+    op_log_dir = os.path.join(log_dir, op_name)
+    if not os.path.exists(op_log_dir):
+        result["message"] = f"对话历史已保存到: {conversation_path}\n💡 未找到验证目录（可能还未运行验证）。"
+        return result
+    
+    # 查找所有验证目录（格式：I{task_id}_S{step}_verify）
+    verify_dirs = []
+    try:
+        for item in os.listdir(op_log_dir):
+            item_path = os.path.join(op_log_dir, item)
+            if os.path.isdir(item_path) and "_verify" in item and item.startswith(f"I{task_id}"):
+                verify_dirs.append(item_path)
+    except Exception as e:
+        logger.warning(f"扫描验证目录时出错: {e}")
+    
+    if not verify_dirs:
+        result["message"] = f"对话历史已保存到: {conversation_path}\n💡 未找到验证目录（可能还未运行验证）。"
+        return result
+    
+    # 使用最新的验证目录（按修改时间排序）
+    verify_dirs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+    latest_verify_dir = verify_dirs[0]
+    result["verify_dir"] = latest_verify_dir
+    
+    # 3. 复制验证目录到保存位置
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    saved_dir_name = f"{op_name}_{task_id}_{timestamp}"
+    saved_to = os.path.join(log_dir, "saved_verifications", saved_dir_name)
+    
+    try:
+        os.makedirs(saved_to, exist_ok=True)
+        
+        # 复制验证目录
+        verify_basename = os.path.basename(latest_verify_dir)
+        shutil.copytree(latest_verify_dir, os.path.join(saved_to, verify_basename), dirs_exist_ok=True)
+        
+        # 同时复制对话历史到该目录
+        shutil.copy2(conversation_path, os.path.join(saved_to, f"conversation_{task_id}.json"))
+        
+        result["saved_to"] = saved_to
+        
+        # 统计文件数量
+        file_count = sum([len(files) for _, _, files in os.walk(saved_to)])
+        
+        result["message"] = f"""保存成功！
+
+  保存位置: {saved_to}
+   • 验证目录: {verify_basename}
+   • 对话历史: conversation_{task_id}.json
+   • 文件总数: {file_count}
+
+💡 您可以继续当前对话或开始新的算子开发。"""
+        
+        logger.info(f"✓ 验证目录已保存到: {saved_to}")
+        logger.info(f"  - 验证目录: {verify_basename}")
+        logger.info(f"  - 文件总数: {file_count}")
+        
+    except Exception as e:
+        logger.error(f"复制验证目录失败: {e}")
+        result["message"] = f"对话历史已保存\n 但验证目录复制失败: {e}"
+    
+    return result

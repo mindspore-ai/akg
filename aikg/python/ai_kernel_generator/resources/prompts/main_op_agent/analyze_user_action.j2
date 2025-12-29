@@ -235,6 +235,15 @@
   - 如果无法识别，使用 `custom_op`
 - `extracted_op_description`: 如果提供了代码，简短描述算子功能（str, 默认""）
   - 例如：`ReLU激活函数`, `矩阵乘法` 等
+- `wants_to_save`: 用户是否表达了保存意图（bool, 默认false）
+  - **判断标准**：
+    - `true`: 用户明确表达要保存（"保存"、"save"、"并保存"、"保存一下"、"存一下"等）
+    - `false`: 用户没有提到保存
+  - **复合意图识别**：
+    - "生成ReLU算子并保存" → `suggested_action='confirm'`, `wants_to_save=true`
+    - "测试性能并保存结果" → 根据上下文选择action, `wants_to_save=true`
+    - "保存" → `suggested_action='revise'`, `wants_to_save=true`
+  - **注意**：保存操作会在当前操作完成后自动执行
 
 **torch代码提取和补充规则：**
 
