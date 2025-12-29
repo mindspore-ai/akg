@@ -31,7 +31,7 @@ akg_cli worker --start \
 - `--backend` 支持 `cuda` 或 `ascend`。未指定时优先读取 `WORKER_BACKEND`，否则默认 `cuda`。
 - `--arch` 未指定时优先读取 `WORKER_ARCH`，否则默认 `a100`。
 - `--devices` 为本地设备列表，逗号分隔（如 `0` 或 `0,1,2`），不能为空、不能重复、不能包含负数。
-- `--host` 默认 `0.0.0.0`，`--port` 默认 `9001`。
+- `--host` 默认 `0.0.0.0`，`--port` 默认 `9001`。IPv6-only 机器可使用 `--host ::`（双栈/IPv6 监听）。
 
 需要停止服务时：
 
@@ -59,6 +59,7 @@ akg_cli op \
 - `--devices` 将本地设备注册到本地 server（无需 worker_url）。与 `--worker-url` 互斥，且仅支持本地 server。
 - `--stream/--no-stream` 控制是否启用流式输出。
 - `--yes` 自动确认所有提示。
+- `--ipv6` 强制本地 server 使用 IPv6（仅自动拉起本地 server 时生效）。
 
 示例：
 
@@ -70,6 +71,18 @@ akg_cli op \
   --dsl triton_cuda \
   --worker-url 127.0.0.1:9001 \
   --intent "实现 fused softmax，输入为 [batch, head, seq, dim]"
+```
+
+IPv6-only 示例（注意方括号）：
+
+```bash
+akg_cli worker --start --host :: --port 9001
+akg_cli op \
+  --framework torch \
+  --backend cuda \
+  --arch a100 \
+  --dsl triton_cuda \
+  --worker-url [::1]:9001
 ```
 
 ```bash

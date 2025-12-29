@@ -31,7 +31,7 @@ Notes:
 - `--backend` supports `cuda` or `ascend`. If omitted, defaults to `WORKER_BACKEND` or `cuda`.
 - `--arch` defaults to `WORKER_ARCH` or `a100`.
 - `--devices` is a comma-separated list of local device IDs (e.g., `0` or `0,1,2`). It must be non-empty, contain no duplicates, and have no negative numbers.
-- `--host` defaults to `0.0.0.0`, `--port` defaults to `9001`.
+- `--host` defaults to `0.0.0.0`, `--port` defaults to `9001`. For IPv6-only machines, use `--host ::` (dual-stack/IPv6 bind).
 
 Stop the service when needed:
 
@@ -59,6 +59,7 @@ Optional parameters:
 - `--devices` registers local devices to the local server (no worker URL needed). It is mutually exclusive with `--worker-url` and only works with the local server.
 - `--stream/--no-stream` to enable/disable streaming output.
 - `--yes` to auto-confirm all prompts.
+- `--ipv6` to force the local auto-started server to use IPv6.
 
 Examples:
 
@@ -70,6 +71,18 @@ akg_cli op \
   --dsl triton_cuda \
   --worker-url 127.0.0.1:9001 \
   --intent "implement fused softmax kernel for input [batch, head, seq, dim]"
+```
+
+IPv6-only example (note the brackets):
+
+```bash
+akg_cli worker --start --host :: --port 9001
+akg_cli op \
+  --framework torch \
+  --backend cuda \
+  --arch a100 \
+  --dsl triton_cuda \
+  --worker-url [::1]:9001
 ```
 
 ```bash
