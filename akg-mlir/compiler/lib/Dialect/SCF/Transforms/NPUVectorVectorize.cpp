@@ -400,7 +400,63 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
       Value());
 }
 
+static Value vectorizeTypeConversion(Operation *op, VectorizationContext &ctx) {
+  Location loc = op->getLoc();
+
+  Value vecOperand = ctx.valueMapping.lookupOrNull(op->getOperand(0));
+  if (!vecOperand) {
+    return nullptr;
+  }
+
+  auto inputVecType = mlir::dyn_cast<npuvector::NPUVectorType>(vecOperand.getType());
+  if (!inputVecType) {
+    return nullptr;
+  }
+
+  Type outputScalarType = op->getResult(0).getType();
+
+  npuvector::NPUVectorType outputVecType;
+  if (ctx.isDynamic) {
+    outputVecType = npuvector::NPUVectorType::get({ShapedType::kDynamic}, outputScalarType);
+  } else {
+    outputVecType = npuvector::NPUVectorType::get({ctx.vectorFactor}, outputScalarType);
+  }
+
+  // Convert arith.* operation name to npuvector.* operation name
+  // e.g., "arith.extf" -> "npuvector.extf"
+  StringRef arithOpName = op->getName().getStringRef();
+  std::string npuvectorOpName = "npuvector." + arithOpName.split('.').second.str();
+  OperationName npuvectorName(npuvectorOpName, ctx.builder.getContext());
+
+  // Create the npuvector operation generically
+  // Operation name is automatically mapped: arith.extf -> npuvector.extf
+  OperationState state(loc, npuvectorName);
+  state.addOperands({vecOperand});
+  state.addTypes(outputVecType);
+  state.addAttributes(op->getAttrs());  // Copy all attributes (including fastmath)
+
+  Operation *npuvectorOp = ctx.builder.create(state);
+
+  // Verify the created operation is valid
+  if (!npuvectorOp || npuvectorOp->getNumResults() == 0) {
+    LLVM_DEBUG(llvm::dbgs() << "Failed to create npuvector operation: "
+                            << npuvectorOpName << "\n");
+    return nullptr;
+  }
+
+  return npuvectorOp->getResult(0);
+}
+
 static Value vectorizeArithOp(Operation *op, VectorizationContext &ctx) {
+  // Special handling for all type conversion operations
+  // Arith type conversion ops don't support NPUVectorType, convert to npuvector versions
+  if (isa<arith::ExtFOp, arith::TruncFOp,
+          arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
+          arith::SIToFPOp, arith::UIToFPOp,
+          arith::FPToSIOp, arith::FPToUIOp>(op)) {
+    return vectorizeTypeConversion(op, ctx);
+  }
+
   SmallVector<Value, 4> vectorOperands;
   for (Value operand : op->getOperands()) {
     Value vecOperand = ctx.valueMapping.lookupOrNull(operand);
