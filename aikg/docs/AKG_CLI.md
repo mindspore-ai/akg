@@ -57,6 +57,7 @@ Optional parameters:
 - `--intent "..."` to provide requirements directly (skip interactive prompt).
 - `--worker-url` accepts multiple worker addresses separated by commas.
 - `--devices` registers local devices to the local server (no worker URL needed). It is mutually exclusive with `--worker-url` and only works with the local server.
+- `--output-path` sets the base directory for `saved_verifications` (default: current working directory where `akg_cli` is started).
 - `--stream/--no-stream` to enable/disable streaming output.
 - `--yes` to auto-confirm all prompts.
 - `--ipv6` to force the local auto-started server to use IPv6.
@@ -126,3 +127,6 @@ Common shortcuts:
 - `Ctrl+E`: scroll to bottom.
 - `Enter`: submit input (in the input box).
 - `Ctrl+J`: insert newline (in the input box).
+
+Notes:
+- When input is disabled during generation, the input placeholder will show that `Ctrl+C` cancels the current run.

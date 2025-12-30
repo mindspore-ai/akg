@@ -123,9 +123,17 @@ class TestCaseGenerator(AgentBase):
                 self.model_config.get("test_case_generator") or self.model_config.get("default")
             )
             
-            # 解析 JSON 输出，提取 new_task_desc
+            # 使用 robust 方法解析 JSON 输出，提取 new_task_desc（支持多种格式输出）
+            from ai_kernel_generator.utils.common_utils import ParserFactory
             try:
-                result = json.loads(llm_output)
+                # 优先使用 robust 方法提取 JSON（支持 markdown 代码块等格式）
+                extracted_json = ParserFactory._extract_json_comprehensive(llm_output)
+                if extracted_json:
+                    result = json.loads(extracted_json)
+                else:
+                    # 尝试直接解析
+                    result = json.loads(llm_output)
+                    
                 new_task_desc = result.get("new_task_desc", "")
                 llm_reasoning = result.get("reasoning", "")
                 

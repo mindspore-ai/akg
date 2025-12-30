@@ -28,9 +28,6 @@ class CliMainAgentRequest(BaseModel):
     session_id: str = Field(
         default="", description="客户端会话 ID，用于隔离不同客户端的请求"
     )
-    action: str = Field(
-        description="动作：start/revise/confirm/cancel/auto/retry/retry_sub_agent（start 会覆盖该 session 的历史状态）"
-    )
     user_input: str = Field(
         default="",
         description="用户输入：start=初始需求；revise=补充/反馈；confirm/cancel 可为空",
@@ -44,42 +41,13 @@ class CliMainAgentRequest(BaseModel):
     # 影响 job 执行的参数（confirm 阶段生效）
     use_stream: bool = Field(default=False, description="是否启用 LLM 流式输出")
 
-    # Evolve 参数（confirm 阶段生效）
-    use_evolve: bool = Field(default=False, description="是否使用 evolve 模式")
-    max_rounds: int = Field(default=1, description="Evolve 最大轮数")
-    parallel_num: int = Field(default=1, description="Evolve 并行任务数")
-    num_islands: int = Field(default=1, description="Evolve 岛屿数量")
-    migration_interval: int = Field(default=0, description="Evolve 迁移间隔")
-    elite_size: int = Field(default=0, description="Evolve 精英数量")
-    parent_selection_prob: float = Field(default=0.5, description="Evolve 父代选择概率")
-    
     # RAG 参数
     rag: bool = Field(default=False, description="是否使用 RAG 模式")
 
-
-class StepTiming(BaseModel):
-    """阶段耗时信息"""
-
-    stage: str
-    duration: float
-    timestamp: str
-    error: Optional[str] = None
-
-
-class CliExecuteResponse(BaseModel):
-    """工作流执行响应"""
-
-    success: bool
-    op_name: str
-    task_init_status: str
-    task_desc: str = Field(default="", description="KernelBench 格式代码")
-    kernel_code: str = Field(default="", description="生成的 Kernel 代码")
-    verification_result: bool
-    step_timings: List[StepTiming]
-    total_time: float
-    error: Optional[str] = None
-    metadata: Optional[dict] = Field(
-        default_factory=dict, description="额外元数据，如性能分析结果"
+    # 输出路径（保存 saved_verifications）
+    output_path: Optional[str] = Field(
+        default=None,
+        description="保存目录根路径（用于 saved_verifications）",
     )
 
 

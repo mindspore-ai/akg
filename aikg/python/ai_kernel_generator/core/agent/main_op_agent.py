@@ -37,7 +37,9 @@ from ai_kernel_generator.utils.main_op_agent_utils import (
     user_requests_profile,
     is_modification_request,
     simple_action_heuristic,
-    format_agents_info_for_llm
+    format_agents_info_for_llm,
+    save_conversation_to_file,
+    save_verification_directory
 )
 
 from ai_kernel_generator.utils.main_op_agent_display import (
@@ -46,6 +48,73 @@ from ai_kernel_generator.utils.main_op_agent_display import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== 提示消息模板 ====================
+
+# 功能介绍
+OPERATOR_ASSISTANT_INTRO = """我是 AI Kernel 算子开发助手，专门帮助您：
+• 生成高性能算子代码（如 ReLU、MatMul、LayerNorm 等）
+• 优化现有算子的性能
+• 提供算子开发的技术建议"""
+
+# 无关问题提示:第一轮
+IRRELEVANT_INPUT_MESSAGE_FIRST_TURN = f"""⚠️ 抱歉，您的输入似乎与算子开发无关。
+
+{OPERATOR_ASSISTANT_INTRO}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 如果您有算子开发需求，请告诉我：
+
+• 算子类型（例如：ReLU、MatMul等）
+• 输入 tensor 的 shape 和数据类型
+• 算子的参数要求
+• 目标硬件平台（CUDA GPU、Ascend NPU 等）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+示例请求：
+"生成 ReLU 激活函数，输入 shape 是 (1024, 1024)"
+"实现矩阵乘法，A 是 (m, k)，B 是 (k, n)"
+"""
+
+# 无关问题提示 - 多轮（简短）
+IRRELEVANT_INPUT_MESSAGE = f"""⚠️ 抱歉，您的输入似乎与算子开发无关。
+
+{OPERATOR_ASSISTANT_INTRO}
+
+如果您有算子开发需求，请告诉我具体的算子类型和参数要求。"""
+
+# 用户尝试退出对话时的友好提示
+USER_EXIT_ATTEMPT_MESSAGE = """💡 我会一直在这里帮助您！
+
+如果您：
+• 想继续当前的算子开发，请告诉我需要调整的地方
+• 想开发新的算子，请直接描述新的算子需求
+
+"""
+
+# 取消操作相关消息
+CANCELLATION_IN_PROGRESS_MESSAGE = "⚠️ 正在取消当前操作..."
+OPERATION_CANCELLED_MESSAGE = "⚠️ 操作已被用户取消"
+
+# 保存操作相关消息
+SAVE_WITHOUT_TORCH_CODE_MESSAGE = """💡 当前还没有生成任何算子代码。
+
+请先描述您的算子需求，例如：
+• "生成 ReLU 激活函数"
+• "实现矩阵乘法算子"
+
+生成并验证完成后，就可以保存了。"""
+
+SAVE_WITHOUT_TRITON_CODE_MESSAGE = """💡 当前只生成了 Torch Task 代码，还未生成 Triton 实现。
+
+请先确认 Task 代码并生成 Triton 算子，然后再保存。
+
+您可以：
+• 输入"确认"或"生成"来生成 Triton 代码
+• 继续修改 Task 代码"""
 
 
 class MainOpAgent(AgentBase):
@@ -75,6 +144,9 @@ class MainOpAgent(AgentBase):
         self.backend = backend
         self.arch = arch
         self.dsl = dsl
+        
+        # 取消标志（供前端主动取消时使用）
+        self._cancellation_requested = False
 
         self.model_config = config.get("agent_model_config", {})
         
@@ -147,6 +219,39 @@ class MainOpAgent(AgentBase):
         
         logger.info("MainOpAgent initialized successfully")
 
+    def request_cancellation(self) -> Dict[str, Any]:
+        """
+        请求取消当前对话和所有正在进行的操作
+        Returns:
+            Dict: 包含取消状态的字典
+        """
+        self._cancellation_requested = True
+        logger.warning(" Cancellation requested by frontend (e.g., Ctrl+C)")
+        logger.warning("   Current operations will be terminated as soon as possible")
+        
+        return {
+            "status": "cancellation_requested",
+            "message": CANCELLATION_IN_PROGRESS_MESSAGE,
+            "current_step": "cancelled_by_user"
+        }
+    
+    def _reset_cancellation_flag(self):
+        """重置取消标志（每次新的对话轮次开始时调用）"""
+        if self._cancellation_requested:
+            logger.info("Resetting cancellation flag for new conversation turn")
+        self._cancellation_requested = False
+    
+    def _check_cancellation(self):
+        """
+        检查是否有取消请求
+        
+        Raises:
+            Exception: 如果检测到取消请求，抛出异常以中断当前操作
+        """
+        if self._cancellation_requested:
+            logger.warning("⚠️ Cancellation detected, interrupting current operation")
+            raise Exception("Operation cancelled by user request")
+
     def _build_conversation_graph(self) -> StateGraph:
         """
         构建基于 LangGraph 的对话流程图
@@ -199,6 +304,9 @@ class MainOpAgent(AgentBase):
         """
         logger.info("=== OpTaskBuild Node ===")
         
+        # 检查是否有取消请求
+        self._check_cancellation()
+        
         # 监控对话历史长度
         conversation_history = state.get("conversation_history", [])
         logger.debug(f"Conversation history length: {len(conversation_history)} messages")
@@ -209,11 +317,42 @@ class MainOpAgent(AgentBase):
             logger.warning(f"⚠️ Conversation history is getting long: {len(conversation_history)}/{MAX_CONVERSATION_HISTORY_LENGTH} messages. "
                           f"Older messages will be automatically dropped.")
         
+        # 🔥 优先使用当前轮的用户输入，如果没有则使用初始请求
+        current_user_input = state.get("current_user_input", "")
         user_request = state.get("user_request", "")
+        effective_user_input = current_user_input if current_user_input else user_request
+        
         conversation_history = state.get("conversation_history", [])
         is_first_turn = len(conversation_history) <= 1  # 只有用户的第一条消息
         has_previous_code = bool(state.get("task_code"))
-        is_modification_req = is_modification_request(user_request, has_previous_code)
+        is_modification_req = is_modification_request(effective_user_input, has_previous_code)
+        
+        # 如果在 start_conversation 中已经通过 _analyze_user_action 判断过，直接使用结果
+        if is_first_turn and state.get("is_irrelevant") is not None:
+            if state.get("is_irrelevant"):
+                logger.info("✓ User input already identified as irrelevant in start_conversation, returning early")
+                
+                # 检查是退出意图还是无关问题
+                reasoning = state.get("last_action_reasoning", "")
+                is_exit_attempt = "[USER_EXIT_ATTEMPT]" in reasoning
+                
+                if is_exit_attempt:
+                    rejection_msg = USER_EXIT_ATTEMPT_MESSAGE
+                    step = "user_exit_attempt"
+                else:
+                    rejection_msg = IRRELEVANT_INPUT_MESSAGE_FIRST_TURN
+                    step = "irrelevant_input"
+                
+                return {
+                    "task_code": "",
+                    "op_name": "",
+                    "op_description": rejection_msg,
+                    "current_step": step,
+                    "user_confirmed": False,
+                    "user_feedback": None
+                }
+            else:
+                logger.info("✓ User input already analyzed as relevant in start_conversation, skipping intent classification")
         
         # 检查是否已经有 LLM 提取并补充的代码（在 start_conversation 或 continue_conversation 中已完成）
         # 需要判断代码是否完整，以及用户是否要修改
@@ -280,110 +419,6 @@ class MainOpAgent(AgentBase):
                 logger.info(f"   Reason: {' | '.join(reason)}")
                 logger.info("   OpTaskBuilder will validate/modify the code")
                 logger.info("=" * 80)
-                # 继续往下执行，让OpTaskBuilder处理
-
-        if self.use_intent_classification and is_first_turn and not is_modification_req:
-            conversation_history = state.get("conversation_history", [])
-            
-            try:
-                logger.info(f"Running intent classification for: {user_request[:50]}...")
-                
-                # 构建对话历史上下文
-                history_context = ""
-                if conversation_history:
-                    history_context = "\n".join([
-                        f"[{msg.get('role', 'unknown')}]: {msg.get('content', '')}"
-                        for msg in conversation_history[-3:]  # 只保留最近3轮
-                    ])
-                
-                # 构建 prompt 输入
-                input_data = {
-                    "user_input": user_request,
-                    "conversation_history": history_context,
-                    "format_instructions": self.intent_format_instructions,
-                }
-                
-                # 调用 LLM 进行意图分类
-                model_name = self.model_config.get("intent_classifier", "default")
-                llm_result, prompt, reasoning = await self.run_llm(
-                    self.intent_classification_prompt,
-                    input_data,
-                    model_name
-                )
-                
-                # 解析 LLM 输出
-                try:
-                    parsed = ParserFactory.robust_parse(llm_result, self.intent_parser)
-                    intent = getattr(parsed, 'intent', 'unclear')
-                    message = getattr(parsed, 'message', '')
-                    confidence = float(getattr(parsed, 'confidence', 0.5))
-                except Exception as parse_error:
-                    logger.warning(f"Failed to parse intent classification result: {parse_error}")
-                    # 解析失败，默认允许继续
-                    intent = "unclear"
-                    message = ""
-                    confidence = 0.3
-                
-                # 判断是否是算子相关
-                is_operator_related = is_operator_related_intent(intent, confidence, threshold=0.6)
-                
-                logger.info(f"Intent classification result: intent={intent}, confidence={confidence:.2f}, operator_related={is_operator_related}")
-                
-                # 记录意图信息（用于调试和日志）
-                state["last_intent"] = intent
-                state["last_intent_confidence"] = confidence
-                
-                # 如果不是算子相关，直接返回拒绝消息
-                if not is_operator_related:
-                    logger.info("Non-operator request detected, returning rejection message")
-                    
-                    # 根据是否是第一轮对话，显示不同的拒绝消息
-                    if is_first_turn:
-                        # 第一轮对话：显示详细的引导消息
-                        rejection_msg = f"""⚠️ 很抱歉，我无法处理您的请求。
-
-{message}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-💡 我是 AI Kernel 算子开发助手，专门帮助您：
-
-1. 生成高性能算子代码（如 ReLU、MatMul、LayerNorm、Softmax 等）
-2. 优化现有算子的性能
-3. 提供算子开发的技术建议
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📝 如果您有算子开发需求，请告诉我：
-
-• 算子类型（例如：ReLU 激活函数、矩阵乘法、Layer Normalization 等）
-• 输入 tensor 的 shape 和数据类型（例如：(batch_size, channels, height, width), dtype=float32）
-• 算子的参数要求（例如：Softmax 的 dim 维度、LayerNorm 的 normalized_shape 等）
-• 目标硬件平台（例如：CUDA GPU、Ascend NPU 等）
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-示例请求：
-"生成 ReLU 激活函数，输入 shape 是 (1024, 1024)"
-"实现矩阵乘法，A 是 (m, k)，B 是 (k, n)"
-"""
-                    else:
-                        # 多轮对话中：显示简短的提示
-                        rejection_msg = "⚠️ 您的输入似乎与当前算子开发任务无关。请按照上述任务继续生成！"
-
-                    return {
-                        "task_code": "",
-                        "op_name": "",
-                        "op_description": rejection_msg,
-                        "current_step": "rejected_by_intent",
-                        "user_confirmed": False,
-                        "user_feedback": None
-                    }
-            
-            except Exception as e:
-                # 意图分类失败，记录日志但继续执行
-                logger.warning(f"Intent classification failed: {e}, continuing to OpTaskBuilder")
-                # 继续执行，让 OpTaskBuilder 处理
         
         # 如果用户已确认当前的 task_code，跳过重新生成
         user_confirmed = state.get("user_confirmed", False)
@@ -396,7 +431,11 @@ class MainOpAgent(AgentBase):
                 "current_step": "proceed_to_generation"
             }
         
+        # 🔥 优先使用当前轮的用户输入，如果没有则使用初始请求
+        current_user_input = state.get("current_user_input", "")
         user_request = state.get("user_request", "")
+        effective_user_input = current_user_input if current_user_input else user_request
+        
         conversation_history = state.get("conversation_history", [])
         previous_task_code = state.get("task_code")
         user_feedback = state.get("user_feedback")
@@ -406,7 +445,7 @@ class MainOpAgent(AgentBase):
             from ai_kernel_generator.utils.langgraph.op_task_builder_state import OpTaskBuilderState
             
             op_task_builder_state: OpTaskBuilderState = {
-                "user_input": user_request,
+                "user_input": effective_user_input,  # 🔥 使用最新的用户输入
                 "user_feedback": user_feedback,
                 "conversation_history": conversation_history,
                 "generated_task_desc": previous_task_code,
@@ -519,9 +558,16 @@ class MainOpAgent(AgentBase):
         """
         logger.info("=== User Confirm Node ===")
         
+        # 检查是否有取消请求
+        self._check_cancellation()
+        
         task_code = state.get("task_code", "")
         op_name = state.get("op_name", "")
+        
+        # 🔥 优先使用当前轮的用户输入，如果没有则使用初始请求
+        current_user_input = state.get("current_user_input", "")
         user_request = state.get("user_request", "")
+        effective_user_input = current_user_input if current_user_input else user_request
         
         # 优先检查初始状态中是否已经通过 LLM 分析设置了 user_confirmed
         # 这种情况是用户直接提供了代码并明确要求生成
@@ -534,8 +580,9 @@ class MainOpAgent(AgentBase):
 
         # 检查用户是否明确要求"生成并测试性能"
         # 如果是，自动确认，不需要用户再次确认
-        if user_requests_profile(user_request):
-            logger.info(f"User requested generate + profile in initial request, auto-confirming")
+        if user_requests_profile(effective_user_input):  # 🔥 使用最新的用户输入
+            logger.info(f"User requested generate + profile in current request, auto-confirming")
+            logger.info(f"  - effective_user_input: '{effective_user_input[:80]}...'")
             return {
                 "current_step": "user_confirm",
                 "user_confirmed": True  # 自动确认
@@ -568,14 +615,24 @@ class MainOpAgent(AgentBase):
         retry_requested = state.get("retry_requested", False)
         retry_sub_agent_only = state.get("retry_sub_agent_only", False)
         
+        logger.info("=" * 80)
+        logger.info("_should_retry_or_end: Checking state after sub_agent_execution")
+        logger.info(f"  - retry_requested: {retry_requested}")
+        logger.info(f"  - retry_sub_agent_only: {retry_sub_agent_only}")
+        logger.info(f"  - current_step: {state.get('current_step', 'unknown')}")
+        logger.info(f"  - generation_success: {state.get('generation_success', 'unknown')}")
+        logger.info("=" * 80)
+        
         if retry_requested:
-            logger.info("User requested retry task, returning to op_task_build")
+            logger.info("→ Decision: retry_task (returning to op_task_build)")
             return "retry_task"
         elif retry_sub_agent_only:
-            logger.info("User requested retry sub-agent only, returning to select_sub_agent")
+            logger.warning("⚠️ retry_sub_agent_only is still True! This should have been reset!")
+            logger.warning("→ Decision: retry_sub_agent (returning to select_sub_agent)")
+            logger.warning("This may cause an infinite loop if not handled properly")
             return "retry_sub_agent"
         else:
-            logger.info("No retry requested, ending workflow")
+            logger.info("→ Decision: end (workflow complete)")
             return "end"
 
     async def _select_sub_agent_node(self, state: ConversationalOpGenState) -> Dict[str, Any]:
@@ -583,6 +640,9 @@ class MainOpAgent(AgentBase):
         子 Agent 选择节点: 使用 LLM 选择最合适的子 Agent
         """
         logger.info("=== Select Sub Agent Node ===")
+        
+        # 检查是否有取消请求
+        self._check_cancellation()
         
         # 如果用户已经指定了 sub_workflow，跳过自动选择
         if state.get("sub_workflow_specified_by_user"):
@@ -606,11 +666,19 @@ class MainOpAgent(AgentBase):
         task_code = state.get("task_code", "")
         op_name = state.get("op_name", "")
         op_description = state.get("op_description", "")
+        
+        current_user_input = state.get("current_user_input", "")
         user_request = state.get("user_request", "")
+        effective_user_input = current_user_input if current_user_input else user_request
+        
+        logger.info(f"Select sub-agent with:")
+        logger.info(f"  - current_user_input: '{current_user_input[:80] if current_user_input else 'None'}...'")
+        logger.info(f"  - user_request: '{user_request[:80] if user_request else 'None'}...'")
+        logger.info(f"  - effective_user_input (used): '{effective_user_input[:80] if effective_user_input else 'None'}...'")
         
         # 首先检查用户是否明确要求使用 evolve
         conversation_history = state.get("conversation_history", [])
-        if user_explicitly_requests_evolve(user_request, conversation_history):
+        if user_explicitly_requests_evolve(effective_user_input, conversation_history):
             logger.info("User explicitly requested evolve, using evolve sub-agent")
             return {
                 "sub_workflow": "evolve",
@@ -630,7 +698,7 @@ class MainOpAgent(AgentBase):
                 "task_code": task_code,
                 "op_name": op_name,
                 "op_description": op_description,
-                "user_request": user_request,
+                "user_request": effective_user_input,  #
                 "available_agents": agents_info_text,
                 "has_generated_code": bool(state.get("generated_code")),  # 是否已有生成的代码
                 "format_instructions": self.sub_agent_format_instructions,
@@ -668,7 +736,9 @@ class MainOpAgent(AgentBase):
             return {
                 "sub_workflow": selected_agent,
                 "sub_agent_selection_reasoning": selection_reasoning,
-                "sub_agent_selection_confidence": confidence
+                "sub_agent_selection_confidence": confidence,
+                # 注意：不在这里重置 retry_requested 和 retry_sub_agent_only
+                # 这些标志应该在 sub_agent_execution 完成后才重置
             }
             
         except Exception as e:
@@ -676,7 +746,8 @@ class MainOpAgent(AgentBase):
             return {
                 "sub_workflow": "codeonly",
                 "sub_agent_selection_reasoning": f"Selection failed: {str(e)}, using default",
-                "sub_agent_selection_confidence": 0.0
+                "sub_agent_selection_confidence": 0.0,
+                # 注意：不在这里重置 retry 标志
             }
 
     async def _sub_agent_execution_node(self, state: ConversationalOpGenState) -> Dict[str, Any]:
@@ -684,6 +755,9 @@ class MainOpAgent(AgentBase):
         子 Agent 执行节点: 通过注册中心调用子 Agent 生成算子代码
         """
         logger.info("=== Sub Agent Execution Node ===")
+        
+        # 检查是否有取消请求
+        self._check_cancellation()
         
         task_code = state.get("task_code", "")
         op_name = state.get("op_name", "")
@@ -753,6 +827,52 @@ class MainOpAgent(AgentBase):
             verifier_error = result.get("verification_error", "")
             profile_res = result.get("profile_result")
             
+            # 提取验证目录信息和子Agent类型（用于保存完整的验证目录）
+            storage_dir = result.get("storage_dir", "")
+            base_log_dir = result.get("log_dir", "")  # evolve/adaptive_search 返回的是配置路径（如 ~/aikg_logs）
+            task_folder = result.get("task_folder", "")
+            sub_agent_type = result.get("sub_agent_type", "")
+            
+            # 对于 evolve/adaptive_search，需要拼接 op_name 得到实际验证目录
+            # 实际验证目录 = {log_dir}/{op_name}/
+            actual_log_dir = ""
+            if sub_agent_type in ["evolve", "adaptive_search"] and base_log_dir:
+                import os
+                actual_log_dir = os.path.join(os.path.expanduser(base_log_dir), op_name)
+                logger.info(f"Constructed verification directory for {sub_agent_type}:")
+                logger.info(f"  base_log_dir: '{base_log_dir}' + op_name: '{op_name}' → '{actual_log_dir}'")
+            else:
+                # codeonly 不需要特殊处理，或者 base_log_dir 为空
+                actual_log_dir = base_log_dir
+            
+            logger.info("=" * 80)
+            logger.info(f"Sub-agent result extracted:")
+            logger.info(f"  - sub_agent_type: '{sub_agent_type}'")
+            logger.info(f"  - storage_dir: '{storage_dir}'")
+            logger.info(f"  - base_log_dir (from sub-agent): '{base_log_dir}'")
+            logger.info(f"  - actual_log_dir (verification dir): '{actual_log_dir}'")
+            logger.info(f"  - task_folder: '{task_folder}'")
+            logger.info(f"  - generated_code length: {len(generated_code)}")
+            logger.info(f"  - success: {success}")
+            logger.info("=" * 80)
+            
+            # 这些信息用于在保存时显示详细的统计数据
+            extra_stats = {}
+            if sub_agent_type == "evolve":
+                extra_stats = {
+                    "total_rounds": result.get("total_rounds", 0),
+                    "total_tasks": result.get("total_tasks", 0),
+                    "successful_tasks": result.get("successful_tasks", 0),
+                    "final_success_rate": result.get("final_success_rate", 0.0),
+                }
+            elif sub_agent_type == "adaptive_search":
+                extra_stats = {
+                    "total_submitted": result.get("total_submitted", 0),
+                    "total_completed": result.get("total_completed", 0),
+                    "total_success": result.get("total_success", 0),
+                    "success_rate": result.get("success_rate", 0.0),
+                }
+            
             # 添加结果消息到历史
             if success:
                 result_msg = f"✓ Successfully generated {op_name} using {sub_workflow} sub-agent"
@@ -765,20 +885,52 @@ class MainOpAgent(AgentBase):
                 timestamp=datetime.now().isoformat()
             )
             
-            return {
+            logger.info("=" * 80)
+            logger.info("Sub-agent execution completed, resetting all control flags:")
+            logger.info("  - retry_requested: False")
+            logger.info("  - retry_sub_agent_only: False")
+            logger.info("  - user_confirmed: False (reset to prevent auto-retry)")
+            logger.info("  - sub_workflow_specified_by_user: False (allow LLM to reselect sub-agent in next round)")
+            if actual_log_dir:
+                logger.info(f"  - actual_log_dir (for save): {actual_log_dir}")
+                logger.info(f"  - storage_dir: {storage_dir}")
+                logger.info(f"  - task_folder: {task_folder}")
+                logger.info(f"  - sub_agent_type: {sub_agent_type}")
+            logger.info("=" * 80)
+            
+            # 构建返回状态
+            return_state = {
                 "generated_code": generated_code,
                 "generation_success": success,
                 "verification_result": verifier_result,
                 "verification_error": verifier_error,
                 "profile_result": profile_res,
+                "storage_dir": storage_dir,  # 搜索状态元数据目录
+                "log_dir": actual_log_dir,  # 实际验证目录（已拼接 op_name）：{log_dir}/{op_name}/
+                "task_folder": op_name,  # Task 文件夹名就是 op_name
+                "sub_agent_type": sub_agent_type,  # 保存子 Agent 类型
                 "conversation_history": [new_message],
                 "current_step": "completed",
                 "retry_requested": False,  # 重置标志，防止无限循环
-                "retry_sub_agent_only": False  # 重置标志，防止无限循环
+                "retry_sub_agent_only": False,  
+                "user_confirmed": False,
+                "sub_workflow_specified_by_user": False  #重置子Agent指定标志，下次对话允许重新选择
             }
+            
+            return_state.update(extra_stats)
+            
+            return return_state
             
         except Exception as e:
             logger.error(f"Sub agent execution failed: {e}")
+            logger.error("=" * 80)
+            logger.error("Sub-agent execution failed, resetting all control flags:")
+            logger.error("  - retry_requested: False")
+            logger.error("  - retry_sub_agent_only: False")
+            logger.error("  - user_confirmed: False")
+            logger.error("  - sub_workflow_specified_by_user: False")
+            logger.error("=" * 80)
+            
             error_message = Message(
                 role="assistant",
                 content=f"✗ Sub agent execution failed: {str(e)}",
@@ -789,8 +941,10 @@ class MainOpAgent(AgentBase):
                 "generation_error": str(e),
                 "conversation_history": [error_message],
                 "current_step": "failed",
-                "retry_requested": False,  # 重置标志，防止无限循环
-                "retry_sub_agent_only": False  # 重置标志，防止无限循环
+                "retry_requested": False,  
+                "retry_sub_agent_only": False,  
+                "user_confirmed": False,
+                "sub_workflow_specified_by_user": False  
             }
 
     async def _analyze_user_action(self, state: Dict[str, Any], user_input: str) -> tuple:
@@ -802,12 +956,16 @@ class MainOpAgent(AgentBase):
             user_input: 用户输入
 
         Returns:
-            tuple: (action, is_new_operator, has_provided_task_code, extracted_op_name, extracted_op_description)
-            - action: 建议的操作 ('confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel')
+            tuple: (action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description, wants_to_save)
+            - action: 建议的操作 ('confirm', 'revise', 'retry', 'retry_sub_agent')
             - is_new_operator: 是否是新算子需求 (bool)
+            - is_irrelevant: 用户输入是否与算子开发无关 (bool)
             - has_provided_task_code: 是否直接提供了torch task代码 (bool)
+            - is_complete_code: 代码是否完整 (bool)
+            - extracted_task_code: LLM提取并补充的完整代码 (str)
             - extracted_op_name: 从代码中提取的算子名称 (str)
             - extracted_op_description: 从代码中提取的算子描述 (str)
+            - wants_to_save: 用户是否表达了保存意图 (bool)
         """
         if not self.use_auto_action_analysis:
             return simple_action_heuristic(state, user_input)
@@ -847,11 +1005,13 @@ class MainOpAgent(AgentBase):
                 analysis_reasoning = getattr(parsed, 'reasoning', '')
                 confidence = float(getattr(parsed, 'confidence', 0.5))
                 is_new_operator = getattr(parsed, 'is_new_operator', False)
+                is_irrelevant = getattr(parsed, 'is_irrelevant', False)  # 是否与算子开发无关
                 has_provided_task_code = getattr(parsed, 'has_provided_task_code', False)
-                is_complete_code = getattr(parsed, 'is_complete_code', False)  # 🆕 代码是否完整
+                is_complete_code = getattr(parsed, 'is_complete_code', False)  # 代码是否完整
                 extracted_task_code = getattr(parsed, 'extracted_task_code', '')
                 extracted_op_name = getattr(parsed, 'extracted_op_name', '')
                 extracted_op_description = getattr(parsed, 'extracted_op_description', '')
+                wants_to_save = getattr(parsed, 'wants_to_save', False)  #是否要保存
             except Exception as parse_error:
                 logger.warning(f"Failed to parse action analysis result: {parse_error}")
                 # 解析失败，使用启发式规则
@@ -871,17 +1031,31 @@ class MainOpAgent(AgentBase):
                 if extracted_op_name:
                     logger.info(f"   Extracted op_name: {extracted_op_name}")
                     logger.info(f"   Extracted description: {extracted_op_description}")
+            
+            if wants_to_save:
+                logger.info(f" LLM detected SAVE INTENT (wants_to_save=True)")
 
-            # 保存分析推理到状态中（用于后续处理无关问题）
             state["last_action_reasoning"] = analysis_reasoning
 
-            # 验证建议的 action 是否合法
-            valid_actions = ['confirm', 'revise', 'retry', 'retry_sub_agent', 'cancel']
+            # 特殊处理 'cancel' 操作
+            if suggested_action == 'cancel':
+                if not is_irrelevant:
+                    # 退出意图：添加标记，并设置 is_irrelevant=True 以触发拦截
+                    logger.info(f"LLM detected user exit attempt (cancel with is_irrelevant=False)")
+                    state["last_action_reasoning"] = "[USER_EXIT_ATTEMPT] " + analysis_reasoning
+                    is_irrelevant = True  
+                else:
+                    # 无关问题：保持 is_irrelevant=True
+                    logger.info(f"LLM detected irrelevant input (cancel with is_irrelevant=True)")
+                
+                suggested_action = 'revise'
+            
+            valid_actions = ['confirm', 'revise', 'retry', 'retry_sub_agent']
             if suggested_action not in valid_actions:
                 logger.warning(f"Invalid suggested action: {suggested_action}, using revise")
-                return 'revise', False, False, False, '', '', ''
+                suggested_action = 'revise'
 
-            return suggested_action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description
+            return suggested_action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description, wants_to_save
 
         except Exception as e:
             logger.error(f"Action analysis failed: {e}, using heuristic")
@@ -901,6 +1075,9 @@ class MainOpAgent(AgentBase):
         import hashlib
         import time
         
+        # 重置取消标志
+        self._reset_cancellation_flag()
+        
         if task_id is None:
             task_id = hashlib.md5(f"{user_request}_{time.time()}".encode()).hexdigest()[:8]
         
@@ -909,6 +1086,8 @@ class MainOpAgent(AgentBase):
         user_confirmed = False  # 默认需要确认
         op_name = ''
         extracted_op_description = ''
+        is_irrelevant = False  # 默认相关
+        temp_state = {}  # 默认空字典
 
         logger.info("=" * 80)
         logger.info(" Analyzing user input with LLM...")
@@ -924,7 +1103,7 @@ class MainOpAgent(AgentBase):
             }
             
             # 调用统一的 LLM 分析：检测torch代码、提取并补充、分析意图
-            action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(
+            action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description, wants_to_save = await self._analyze_user_action(
                 temp_state,
                 user_request
             )
@@ -983,6 +1162,8 @@ class MainOpAgent(AgentBase):
             "should_continue": True,
             "available_workflows": self.available_workflows,
             "sub_workflow": "codeonly",  # 默认使用 codeonly
+            "is_irrelevant": is_irrelevant,
+            "last_action_reasoning": temp_state.get("last_action_reasoning", ""),
         }
         
         # 如果 LLM 提取并补充了完整的代码，将其添加到 initial_state
@@ -993,19 +1174,76 @@ class MainOpAgent(AgentBase):
             if 'extracted_op_description' in locals() and extracted_op_description:
                 initial_state["op_description"] = extracted_op_description
             logger.info(f"✓ Set task_code in initial_state (length: {len(provided_task_code)} chars, complete={is_complete_code})")
+        
+        # 关键修复：在调用工作流之前检查是否是无关输入
+        # 如果是无关输入，直接返回提示消息，不执行工作流
+        if is_irrelevant:
+            logger.info("=" * 80)
+            logger.info("⚠️ IRRELEVANT INPUT DETECTED - Returning early without executing workflow")
+            logger.info("=" * 80)
+            
+            # 检查是退出意图还是无关问题
+            reasoning = temp_state.get("last_action_reasoning", "")
+            is_exit_attempt = "[USER_EXIT_ATTEMPT]" in reasoning
+            
+            if is_exit_attempt:
+                rejection_msg = USER_EXIT_ATTEMPT_MESSAGE
+                step = "user_exit_attempt"
+                logger.info("  → Exit attempt detected")
+            else:
+                rejection_msg = IRRELEVANT_INPUT_MESSAGE_FIRST_TURN
+                step = "irrelevant_input"
+                logger.info("  → Irrelevant question detected")
+            
+            # 添加助手消息到对话历史
+            initial_state["conversation_history"].append(Message(
+                role="assistant",
+                content=rejection_msg,
+                timestamp=datetime.now().isoformat()
+            ))
+            
+            return {
+                **initial_state,
+                "task_code": "",
+                "op_name": "",
+                "op_description": rejection_msg,
+                "display_message": rejection_msg,
+                "hint_message": "随时准备为您服务！",
+                "current_step": step,
+                "user_confirmed": False,
+                "should_continue": True  # 允许用户继续对话
+            }
 
         # 执行到用户确认节点
-        result = await self.app.ainvoke(initial_state, {
-            "recursion_limit": 100
-        })
+        try:
+            result = await self.app.ainvoke(initial_state, {
+                "recursion_limit": 100
+            })
 
-        logger.info(f"start_conversation result has task_init_status: {result.get('task_init_status')}")
+            logger.info(f"start_conversation result has task_init_status: {result.get('task_init_status')}")
+            
+            # 添加显示消息和提示消息
+            result["display_message"] = format_display_message(result)
+            result["hint_message"] = get_hint_message(result)
+            
+            return result
         
-        # 添加显示消息和提示消息
-        result["display_message"] = format_display_message(result)
-        result["hint_message"] = get_hint_message(result)
-        
-        return result
+        except Exception as e:
+            # 检查是否是取消操作导致的异常
+            if "cancelled by user" in str(e).lower() or self._cancellation_requested:
+                logger.warning("🛑 Conversation cancelled by user request")
+                return {
+                    "current_step": "cancelled_by_user",
+                    "should_continue": False,
+                    "op_description": OPERATION_CANCELLED_MESSAGE,
+                    "conversation_history": initial_state.get("conversation_history", []),
+                    "display_message": OPERATION_CANCELLED_MESSAGE,
+                    "hint_message": ""
+                }
+            else:
+                # 其他异常，重新抛出
+                logger.error(f"Error in start_conversation: {e}")
+                raise
 
     async def continue_conversation(self, 
                                    current_state: Dict[str, Any],
@@ -1023,11 +1261,10 @@ class MainOpAgent(AgentBase):
                 - 'confirm': 确认并生成代码
                 - 'retry': 重新生成 task 代码
                 - 'retry_sub_agent': 重新生成 Triton 代码
-                - 'cancel': 取消对话
-            
-        Returns:
-            更新后的状态
         """
+        # 重置取消标志（新的对话轮次开始）
+        self._reset_cancellation_flag()
+        
         # 添加用户消息到历史
         user_message = Message(
             role="user",
@@ -1043,6 +1280,93 @@ class MainOpAgent(AgentBase):
 
         # 保存当前轮的用户输入（用于多轮对话中判断task_type等）
         current_state["current_user_input"] = user_input
+
+        # 清除上一轮的显示消息，确保每轮对话都是干净的开始
+        # 避免保存操作后的消息在下一轮对话中仍然显示
+        if "display_message" in current_state:
+            del current_state["display_message"]
+        if "hint_message" in current_state:
+            del current_state["hint_message"]
+
+        from ai_kernel_generator.utils.main_op_agent_display import is_simple_command
+        is_cmd, command_type = is_simple_command(user_input)
+        if is_cmd and command_type == 'save':
+            logger.info("=" * 80)
+            logger.info("User requested to save verification directory")
+            logger.info(f"Current state keys: {list(current_state.keys())}")
+            logger.info("=" * 80)
+            
+            # 先检查是否有值得保存的内容
+            generated_code = current_state.get("generated_code", "")
+            generation_success = current_state.get("generation_success")
+            current_step = current_state.get("current_step", "")
+            sub_agent_type = current_state.get("sub_agent_type", "")
+            log_dir = current_state.get("log_dir", "")
+            
+            logger.info(f"State values for save check:")
+            logger.info(f"  - sub_agent_type: '{sub_agent_type}'")
+            logger.info(f"  - log_dir: '{log_dir}'")
+            logger.info(f"  - generated_code length: {len(generated_code)}")
+            logger.info(f"  - generation_success: {generation_success}")
+            logger.info(f"  - current_step: '{current_step}'")
+            
+            # 判断是否真的生成了代码：
+            # 1. evolve/adaptive_search: 检查 storage_dir
+            # 2. codeonly: 检查 generated_code
+            logger.info("Checking which branch to use:")
+            logger.info(f"  - sub_agent_type: '{sub_agent_type}'")
+            logger.info(f"  - Is evolve/adaptive_search: {sub_agent_type in ['evolve', 'adaptive_search']}")
+            
+            if sub_agent_type in ["evolve", "adaptive_search"]:
+                # evolve/adaptive_search: 检查 log_dir（验证目录，即使验证失败也要保存）
+                log_dir = current_state.get("log_dir", "")
+                has_generated_code = bool(log_dir) and os.path.exists(log_dir) and current_step == "completed"
+                logger.info(f"✓ Using evolve/adaptive_search branch")
+                logger.info(f"  - log_dir exists: {bool(log_dir) and os.path.exists(log_dir)}")
+                logger.info(f"  - log_dir value: '{log_dir}'")
+                logger.info(f"  - current_step: '{current_step}'")
+                logger.info(f"  - has_generated_code: {has_generated_code}")
+            else:
+                # codeonly: 检查 generated_code
+                has_generated_code = bool(generated_code) and (generation_success or current_step == "completed")
+                logger.info(f"✓ Using codeonly branch (sub_agent_type='{sub_agent_type}')")
+                logger.info(f"  - generated_code length: {len(generated_code)}")
+                logger.info(f"  - generation_success: {generation_success}")
+                logger.info(f"  - current_step: '{current_step}'")
+                logger.info(f"  - has_generated_code: {has_generated_code}")
+            
+            logger.info("=" * 80)
+            
+            if not has_generated_code:
+                # 没有生成triton代码，不执行保存，友好提示
+                logger.info("Cannot save: No triton code generated yet")
+                
+                if current_state.get("task_code"):
+                    # 有torch代码但没有triton代码
+                    save_message = SAVE_WITHOUT_TRITON_CODE_MESSAGE
+                else:
+                    save_message = SAVE_WITHOUT_TORCH_CODE_MESSAGE
+            else:
+                # 有triton代码，执行保存
+                logger.info("Triton code exists, performing save")
+                save_result = save_verification_directory(current_state, self.config)
+                save_message = save_result.get("message", "保存完成")
+            
+            # 添加 assistant 消息到历史
+            assistant_message = Message(
+                role="assistant",
+                content=save_message,
+                timestamp=datetime.now().isoformat()
+            )
+            current_state["conversation_history"].append(assistant_message)
+            
+            # 更新状态并返回（继续对话）
+            current_state["display_message"] = save_message
+            current_state["hint_message"] = "随时准备为您服务！"
+            current_state["current_step"] = "saved" if has_generated_code else "save_not_ready"
+            current_state["should_continue"] = True
+            
+            return current_state
 
         quick_matched_sub_agent = quick_match_sub_agent_preference(user_input)
         if quick_matched_sub_agent:
@@ -1068,24 +1392,68 @@ class MainOpAgent(AgentBase):
         
         # 如果 action 是 'auto'，使用 LLM 自动分析用户意图
         is_new_operator = False  # 默认不是新算子
+        is_irrelevant = False  # 默认相关
         has_provided_task_code = False  # 默认没有提供代码
         is_complete_code = False  # 默认不完整
         extracted_task_code = ''  # 默认空（LLM提取并补充的完整代码）
         extracted_op_name = ''  # 默认空
         extracted_op_description = ''  # 默认空
 
+        wants_to_save = False  # 默认不保存
+        
         if action == "auto":
             # 调用统一的分析方法
-            action, is_new_operator, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description = await self._analyze_user_action(current_state, user_input)
+            action_result = await self._analyze_user_action(current_state, user_input)
+            action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description, new_save_intent = action_result
+            
+            # 只使用当前轮次的保存意图
+            wants_to_save = new_save_intent
+            
             logger.info(f"Auto-analyzed action: {action}")
             logger.info(f"  - is_new_operator: {is_new_operator}")
+            logger.info(f"  - is_irrelevant: {is_irrelevant}")
             logger.info(f"  - has_provided_task_code: {has_provided_task_code}")
+            logger.info(f"  - wants_to_save: {wants_to_save}")
             if has_provided_task_code:
                 logger.info(f"  - is_complete_code: {is_complete_code}")
             if extracted_task_code:
                 logger.info(f"  - extracted_task_code length: {len(extracted_task_code)} chars")
             if extracted_op_name:
                 logger.info(f"  - extracted_op_name: {extracted_op_name}")
+            
+            # 提前拦截
+            if is_irrelevant:
+                reasoning = current_state.get("last_action_reasoning", "")
+                is_exit_attempt = "[USER_EXIT_ATTEMPT]" in reasoning
+                
+                if is_exit_attempt:
+                    # 退出意图：显示友好提示
+                    logger.info("LLM detected exit attempt, showing friendly message")
+                    response_message = USER_EXIT_ATTEMPT_MESSAGE
+                    hint = "我随时准备帮助您开发算子！"
+                    step = "user_exit_attempt"
+                else:
+                    # 无关问题：显示标准引导
+                    logger.info("LLM detected irrelevant input, showing guidance message")
+                    response_message = IRRELEVANT_INPUT_MESSAGE
+                    hint = "请继续提出算子开发相关的需求"
+                    step = "irrelevant_input"
+                
+                assistant_message = Message(
+                    role="assistant",
+                    content=response_message,
+                    timestamp=datetime.now().isoformat()
+                )
+                current_state["conversation_history"].append(assistant_message)
+                
+                # 更新状态并返回
+                current_state["op_description"] = response_message
+                current_state["current_step"] = step
+                current_state["should_continue"] = True
+                current_state["display_message"] = response_message
+                current_state["hint_message"] = hint
+                
+                return current_state
 
             # 检查LLM推理中是否提到子Agent
             if action == "retry_sub_agent" and not current_state.get("sub_workflow_specified_by_user"):
@@ -1101,7 +1469,6 @@ class MainOpAgent(AgentBase):
                 # 使用 LLM 提取并补充的完整代码
                 provided_code = extracted_task_code
 
-                # 使用 LLM 提取的算子信息（已经在 _analyze_user_action 中分析过了）
                 op_name = extracted_op_name if extracted_op_name else 'custom_op'
                 op_description = extracted_op_description if extracted_op_description else '用户提供的 torch task 代码'
 
@@ -1180,6 +1547,16 @@ class MainOpAgent(AgentBase):
                 current_state["verification_result"] = False
                 current_state["verification_error"] = ""
                 current_state["profile_result"] = None
+                # 清空 evolve/adaptive_search 的验证目录信息
+                current_state["storage_dir"] = ""
+                current_state["log_dir"] = ""
+                current_state["task_folder"] = ""
+                current_state["sub_agent_type"] = ""
+                # 清空统计信息
+                for key in ["total_rounds", "total_tasks", "successful_tasks", "final_success_rate",
+                           "total_submitted", "total_completed", "total_success", "success_rate"]:
+                    if key in current_state:
+                        del current_state[key]
 
                 # 重置标志
                 current_state["retry_requested"] = True
@@ -1194,28 +1571,46 @@ class MainOpAgent(AgentBase):
                 current_state["user_confirmed"] = False
                 current_state["user_feedback"] = user_input if user_input else None
                 current_state["user_request"] = user_input if user_input else current_state.get("user_request", "")
-                # 清空之前生成的代码，因为要重新生成 task
+                # 清空之前生成的代码和相关状态，因为要重新生成 task
                 current_state["generated_code"] = ""
                 current_state["generation_success"] = False
                 current_state["verification_result"] = False
                 current_state["verification_error"] = ""
                 current_state["profile_result"] = None
+                # 清空 evolve/adaptive_search 的验证目录信息
+                current_state["storage_dir"] = ""
+                current_state["log_dir"] = ""
+                current_state["task_folder"] = ""
+                current_state["sub_agent_type"] = ""
+                # 清空统计信息
+                for key in ["total_rounds", "total_tasks", "successful_tasks", "final_success_rate",
+                           "total_submitted", "total_completed", "total_success", "success_rate"]:
+                    if key in current_state:
+                        del current_state[key]
         elif action == "retry_sub_agent":
             # 用户要求只重新调用子 Agent，保持当前 task code
             current_state["retry_sub_agent_only"] = True
             current_state["retry_requested"] = False
             
-            # 关键修改：只有切换到 codeonly/evolve 时才清空代码
+            # 关键修改：只有切换到 codeonly/evolve/adaptive_search 时才清空代码
             # kernel_verifier 需要保留已生成的代码进行性能分析
             target_sub_agent = current_state.get("sub_workflow", "codeonly")
             if target_sub_agent != "kernel_verifier":
-                # 清除之前生成的代码，让工作流可以重新执行 sub_agent
-                logger.info(f"Clearing generated_code for sub-agent: {target_sub_agent}")
+                # 清除之前生成的代码和相关状态，让工作流可以重新执行 sub_agent
+                logger.info(f"Clearing generated_code and related states for sub-agent: {target_sub_agent}")
                 current_state["generated_code"] = ""
                 current_state["generation_success"] = False
                 current_state["verification_result"] = False
                 current_state["verification_error"] = ""
                 current_state["profile_result"] = None
+                # 清空 evolve/adaptive_search 的 storage_dir（避免保存判断误用旧数据）
+                current_state["storage_dir"] = ""
+                current_state["sub_agent_type"] = ""
+                # 清空统计信息
+                for key in ["total_rounds", "total_tasks", "successful_tasks", "final_success_rate",
+                           "total_submitted", "total_completed", "total_success", "success_rate"]:
+                    if key in current_state:
+                        del current_state[key]
             else:
                 # kernel_verifier 需要保留代码进行性能测试
                 logger.info("Keeping generated_code for kernel_verifier (performance analysis)")
@@ -1241,33 +1636,6 @@ class MainOpAgent(AgentBase):
                 logger.info(f"  - user_confirmed: True (skip op_task_build rebuild)")
                 logger.info(f"  - has task_code: {bool(current_state.get('task_code'))}")
                 logger.info("=" * 80)
-        elif action == "cancel":  # cancel
-            # 判断是正常退出还是无关问题
-            reasoning = current_state.get("last_action_reasoning", "")
-            is_irrelevant = "无关" in reasoning or "不相关" in reasoning or "irrelevant" in reasoning.lower()
-
-            if is_irrelevant:
-                # 用户输入与算子开发无关，但继续对话
-                logger.info("User input is irrelevant to operator development, continue conversation")
-                current_state["current_step"] = "irrelevant_input"
-                current_state["op_description"] = """⚠️ 抱歉，您的输入似乎与算子开发无关。
-
-我是 AI Kernel 算子开发助手，专门帮助您：
-• 生成高性能算子代码（如 ReLU、MatMul、LayerNorm 等）
-• 优化现有算子的性能
-• 提供算子开发的技术建议
-
-如果您有算子开发需求，请告诉我具体的算子类型和参数要求。"""
-                current_state["should_continue"] = True  # 继续对话
-            else:
-                # 正常退出
-                logger.info("User requested to end conversation")
-                current_state["current_step"] = "cancelled"
-                current_state["should_continue"] = False  # 退出对话
-
-            current_state["retry_requested"] = False
-            current_state["retry_sub_agent_only"] = False
-            return current_state
         else:
             # 未知的 action，默认使用 revise
             logger.warning(f"Unknown action: {action}, using revise")
@@ -1278,31 +1646,85 @@ class MainOpAgent(AgentBase):
             current_state["retry_sub_agent_only"] = False
 
         # 继续执行流程
-        result = await self.app.ainvoke(current_state, {
-            "recursion_limit": 100
-        })
-        
-        # 添加显示消息和提示消息
-        result["display_message"] = format_display_message(result)
-        result["hint_message"] = get_hint_message(result)
-        
-        return result
+        try:
+            result = await self.app.ainvoke(current_state, {
+                "recursion_limit": 100
+            })
+            
+            if wants_to_save:
+                current_step = result.get("current_step", "")
+                generated_code = result.get("generated_code", "")
+                generation_success = result.get("generation_success")
 
-    def save_conversation(self, state: Dict[str, Any], filepath: str):
-        """保存对话历史到文件"""
-        import json
+                # 1. generated_code 不为空 AND
+                # 2. (generation_success 为 True OR current_step 为 "completed")
+                has_generated_code = bool(generated_code) and (generation_success or current_step == "completed")
+                
+                logger.info(f"Auto-save check: generated_code length={len(generated_code)}, generation_success={generation_success}, current_step={current_step}, has_generated_code={has_generated_code}")
+                
+                # 只有在生成并验证了triton代码后才执行保存
+                # 如果只是生成了torch task代码（op_task_build阶段），不执行保存
+                if current_step == "completed" and has_generated_code:
+                    logger.info("=" * 80)
+                    logger.info("  User requested save, performing auto-save after triton generation & verification")
+                    logger.info("=" * 80)
+                    
+                    # 执行保存
+                    save_result = save_verification_directory(result, self.config)
+                    save_message = save_result.get("message", "保存完成")
+                    
+                    # 添加保存消息到对话历史
+                    save_assistant_message = Message(
+                        role="assistant",
+                        content=save_message,
+                        timestamp=datetime.now().isoformat()
+                    )
+                    result.get("conversation_history", []).append(save_assistant_message)
+                    
+                    # 如果有原始显示消息，在其后追加保存消息
+                    original_display = result.get("display_message", "")
+                    if original_display:
+                        result["display_message"] = f"{original_display}\n\n{save_message}"
+                    else:
+                        result["display_message"] = save_message
+                else:
+                    # 如果还没有生成triton代码，给用户提示
+                    if not has_generated_code:
+                        logger.info("User requested save, but triton code not generated yet. Providing hint to user.")
+                        # 不执行保存，不追加消息到 display_message
+                        # 用户可以在生成完成后再次输入"保存"
+                    else:
+                        logger.warning(f"User requested save, but current_step is '{current_step}' (expected 'completed'). Skipping auto-save.")
+            
+            # 添加显示消息和提示消息（如果还没有）
+            if not result.get("display_message"):
+                result["display_message"] = format_display_message(result)
+            if not result.get("hint_message"):
+                result["hint_message"] = get_hint_message(result)
+            
+            return result
         
-        conversation_data = {
-            "task_id": state.get("task_id"),
-            "op_name": state.get("op_name"),
-            "conversation_history": state.get("conversation_history", []),
-            "task_code": state.get("task_code"),
-            "generated_code": state.get("generated_code"),
-            "success": state.get("generation_success", False)
-        }
-        
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(conversation_data, f, indent=2, ensure_ascii=False)
-        
-        logger.info(f"Conversation saved to: {filepath}")
+        except Exception as e:
+            # 检查是否是取消操作导致的异常
+            if "cancelled by user" in str(e).lower() or self._cancellation_requested:
+                logger.warning(" Conversation cancelled by user request")
+                
+                # 添加取消消息到历史
+                cancel_message = Message(
+                    role="assistant",
+                    content=OPERATION_CANCELLED_MESSAGE,
+                    timestamp=datetime.now().isoformat()
+                )
+                current_state.get("conversation_history", []).append(cancel_message)
+                
+                return {
+                    **current_state,
+                    "current_step": "cancelled_by_user",
+                    "should_continue": False,
+                    "op_description": OPERATION_CANCELLED_MESSAGE,
+                    "display_message": OPERATION_CANCELLED_MESSAGE,
+                    "hint_message": ""
+                }
+            else:
+                logger.error(f"Error in continue_conversation: {e}")
+                raise

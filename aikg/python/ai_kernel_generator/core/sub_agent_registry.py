@@ -119,30 +119,32 @@ class CodeOnlySubAgent(SubAgentBase):
         """返回详细信息用于 LLM 决策"""
         return {
             "name": "codeonly",
-            "description": "直接生成代码的标准流程",
+            "description": "标准的算子代码生成流程（生成 + 验证，可选性能测试）",
             "workflow_steps": [
-                "Coder: 使用 LLM 直接生成高性能算子代码",
-                "Verifier: 编译、运行、验证生成的代码"
+                "Coder: 使用 LLM 直接生成 Triton 算子代码",
+                "Verifier: 编译、运行、验证代码正确性",
+                "Profile（可选）: 如果用户要求测性能，进行性能测试"
             ],
             "use_cases": [
-                "各种算子实现（简单到中等复杂度）",
-                "标准的数学运算算子（如 ReLU、Add、Mul、MatMul 等）",
-                "大部分常见算子（如激活函数、归一化层等）",
-                "需要快速生成和验证的场景",
-                "算子逻辑清晰、实现直接的情况"
+                "【默认选择】用户没有明确的性能优化需求，只是要生成算子代码",
+                "【标准生成】各种算子实现（ReLU、MatMul、LayerNorm 等）",
+                "【快速生成】需要快速生成并验证代码的场景",
+                "【性能测试】用户要求测试性能，但不需要性能优化（设置 profile 模式）",
+                "用户说「生成算子」、「实现算子」、「写一个算子」等",
+                "用户说「测一下性能」但没有要求优化（只测试，不优化）"
             ],
             "advantages": [
-                "速度适中：直接生成代码，流程简洁",
-                "流程简单：仅两个步骤（生成 + 验证）",
+                "速度快：单次生成，流程简洁（30-90秒）",
+                "流程简单：生成 + 验证（可选性能测试）",
                 "适用范围广：适合大多数标准算子",
-                "资源消耗合理：LLM 调用次数适中",
-                "稳定：基于 Coder Agent"
+                "资源消耗低：单次 LLM 调用，不迭代优化"
             ],
             "limitations": [
-                "不支持迭代优化：无法通过多轮优化提升性能",
-                "性能可能不是最优：相比 evolve，缺少性能调优过程"
+                "不进行性能优化：生成的代码性能可能不是最优",
+                "单次生成：不会通过多轮迭代提升性能",
+                "如果用户明确要求「高性能」、「性能优化」，应该使用 evolve 或 adaptive_search"
             ],
-            "performance": "适中（约 30-90 秒），适合大部分算子的标准生成场景"
+            "performance": "快速（约 30-90 秒），适合标准算子生成和基础性能测试"
         }
     
     async def execute(self,
@@ -210,6 +212,7 @@ class CodeOnlySubAgent(SubAgentBase):
                 "verification_result": final_state.get("verifier_result", False),
                 "verification_error": final_state.get("verifier_error", ""),
                 "profile_result": final_state.get("profile_res"),
+                "sub_agent_type": "codeonly",  # 🔥 标记子 Agent 类型
                 "final_state": final_state  # 保存完整状态
             }
             
@@ -241,36 +244,36 @@ class EvolveSubAgent(SubAgentBase):
         """返回详细信息用于 LLM 决策"""
         return {
             "name": "evolve",
-            "description": "进化式性能优化流程",
+            "description": "进化式性能优化流程（多轮迭代优化，追求极致性能，耗时较长）",
             "workflow_steps": [
                 "初始代码生成: 生成基础算子实现",
                 "性能测试: 运行并收集性能数据",
                 "Evolve Agent: 分析性能瓶颈，提出优化方案",
-                "迭代优化: 多轮演化，持续提升性能",
+                "迭代优化: 多轮演化（5-20轮），持续提升性能",
                 "最优选择: 选择性能最佳的版本"
             ],
             "use_cases": [
-                "性能要求极高的算子",
-                "需要探索多种优化策略的场景",
-                "性能优化空间较大的算子",
-                "需要自动调优的算子",
-                "已有基础实现但需要进一步优化"
+                "【关键场景】用户明确要求「高性能」、「性能优化」、「极致性能」、「最优性能」",
+                "【关键场景】用户说「我要一个高性能的算子」、「帮我优化性能」",
+                "用户对性能指标有明确要求（如「加速比大于 2x」）",
+                "性能优化空间较大的算子（如矩阵运算、卷积等）",
+                "用户允许较长的优化时间（3-10 分钟）以换取更好的性能",
+                "需要探索多种优化策略的场景"
             ],
             "advantages": [
-                "性能最优：通过多轮迭代寻找最佳方案",
+                "性能极致：通过多轮迭代寻找最佳方案",
                 "自动调优：无需人工介入的性能优化",
                 "探索性强：尝试多种优化策略",
                 "适应性好：根据实际性能数据调整",
                 "可追溯：保留每轮优化的历史"
             ],
             "limitations": [
-                "时间长：需要多轮迭代，耗时最多",
-                "资源消耗极高：多次编译、运行、LLM 调用",
-                "不确定性：优化效果受迭代次数影响",
-                "可能过拟合：针对特定 shape 的优化可能不通用",
-                "复杂度高：流程最复杂"
+                "【关键】耗时长：需要多轮迭代，通常需要 3-10 分钟",
+                "【关键】如果用户要求「快速生成」或时间有限，应该使用 adaptive_search（更快）",
+                "资源消耗高：多次编译、运行、LLM 调用",
+                "不确定性：优化效果受迭代次数影响"
             ],
-            "performance": "非常慢（约 180-600 秒，取决于迭代次数），适合对性能要求极高且允许较长优化时间的场景"
+            "performance": "慢（约 180-600 秒），适合对性能要求极高且允许较长优化时间的场景"
         }
     
     def _get_evolve_config_path(self) -> str:
@@ -393,6 +396,7 @@ class EvolveSubAgent(SubAgentBase):
                 generated_code = best.get("code", "")
                 profile_result = best.get("profile", {})
             
+            # 直接返回 evolve 提供的原始 log_dir（配置路径），由 main_op_agent 负责拼接 op_name
             result = {
                 "generated_code": generated_code,
                 "verification_result": success,
@@ -404,7 +408,10 @@ class EvolveSubAgent(SubAgentBase):
                 "total_tasks": evolution_result.get("total_tasks", 0),
                 "successful_tasks": evolution_result.get("successful_tasks", 0),
                 "final_success_rate": evolution_result.get("final_success_rate", 0.0),
-                "storage_dir": evolution_result.get("storage_dir", ""),
+                "storage_dir": evolution_result.get("storage_dir", ""),  # 搜索状态元数据目录
+                "log_dir": evolution_result.get("log_dir", ""),  # 基础 log 路径（如 ~/aikg_logs），需要拼接 op_name
+                "task_folder": evolution_result.get("task_folder", ""),
+                "sub_agent_type": "evolve",  # 标记子 Agent 类型
                 "final_state": evolution_result
             }
             
@@ -420,7 +427,11 @@ class EvolveSubAgent(SubAgentBase):
                 "generated_code": "",
                 "verification_result": False,
                 "verification_error": str(e),
-                "profile_result": None
+                "profile_result": None,
+                "storage_dir": "",
+                "log_dir": "",
+                "task_folder": "",
+                "sub_agent_type": "evolve"
             }
 
 class KernelVerifierSubAgent(SubAgentBase):
@@ -438,35 +449,33 @@ class KernelVerifierSubAgent(SubAgentBase):
         """返回详细信息用于 LLM 决策"""
         return {
             "name": "kernel_verifier",
-            "description": "对已生成的算子代码进行性能分析",
+            "description": "【仅用于已生成代码】对已有 Triton 代码进行性能测试和分析",
             "workflow_steps": [
-                "代码验证: 确保生成的代码可以正确编译和运行",
+                "前提检查: 确保已有生成的 Triton 代码",
                 "性能测试: 运行多次测试收集性能数据",
                 "结果对比: 对比生成代码与原始实现的性能",
                 "生成报告: 返回详细的性能分析结果（耗时、加速比等）"
             ],
             "use_cases": [
-                "用户想了解生成算子的性能表现",
-                "用户明确要求进行性能测试或性能分析",
-                "用户询问生成代码的速度、加速比、性能对比",
-                "用户想知道生成的 triton 代码是否比原始torch的描述实现更快",
-                "需要验证优化效果的场景"
+                "【关键场景】用户在多轮对话中，对前面已生成的 Triton 代码要求测试性能",
+                "用户说「测一下性能」、「看看加速比」、「性能怎么样」，且已有生成的代码",
+                "用户想知道生成的 Triton 代码是否比原始 Torch 实现更快",
+                "需要验证已有代码的优化效果"
             ],
             "advantages": [
+                "专注性能测试：只测试，不生成新代码",
                 "准确测量：多次运行，结果可靠",
                 "完整对比：同时测试原始实现和生成代码",
-                "详细报告：提供耗时、加速比等指标",
-                "跨设备支持：支持 CUDA 和 Ascend 等不同硬件",
-                "自动化：无需手动编写性能测试脚本"
+                "详细报告：提供耗时、加速比等指标"
             ],
             "limitations": [
-                "【重要前置条件】必须先使用 codeonly生成 triton 代码后才能使用",
-                "【重要前置条件】必须已有 torch task 代码（由 OpTaskBuilder 生成）",
-                "只做性能分析：不会生成或修改代码，只测试已有代码的性能",
-                "需要硬件资源：需要实际的 GPU/NPU 设备进行测试",
-                "如果用户还没生成代码就要求性能测试，应该先引导用户生成代码"
+                "【关键限制】必须在多轮对话中，前面已经使用 codeonly 生成了 Triton 代码",
+                "【关键限制】如果用户是第一次对话或还没生成代码，不能使用此 Agent",
+                "【关键限制】只做性能测试，不会生成或优化代码",
+                "如果用户要求「生成并测性能」，应该使用 codeonly（profile 模式）",
+                "如果用户要求「高性能优化」，应该使用 evolve 或 adaptive_search"
             ],
-            "performance": "取决于算子复杂度和测试轮数"
+            "performance": "快速（取决于测试轮数），只测试不生成"
         }
     
     async def execute(self, 
@@ -630,6 +639,281 @@ class KernelVerifierSubAgent(SubAgentBase):
             }
 
 
+class AdaptiveSearchSubAgent(SubAgentBase):
+    """
+    AdaptiveSearch 子 Agent
+    
+    使用自适应树搜索优化算子性能
+    """
+    
+    def get_name(self) -> str:
+        return "adaptive_search"
+    
+    def get_detailed_info(self) -> Dict[str, Any]:
+        """返回详细信息用于 LLM 决策"""
+        return {
+            "name": "adaptive_search",
+            "description": "基于自适应树搜索的智能优化流程（追求极致性能，比 evolve 更快）",
+            "workflow_steps": [
+                "初始种群: 并行生成多个初始算子实现",
+                "UCB选择: 使用上界置信区间算法选择最有潜力的父代",
+                "灵感采样: 从历史成功案例中采样优化灵感",
+                "代码生成: 基于父代和灵感生成新的优化版本",
+                "性能评估: 并行测试并收集性能数据",
+                "迭代优化: 多轮自适应搜索，动态调整策略",
+                "最优选择: 返回性能最佳的实现"
+            ],
+            "use_cases": [
+                "【关键场景】用户要求「高性能」且希望「比 evolve 更快」、「快速优化」",
+                "【关键场景】用户说「我要高性能算子，但时间不要太长」",
+                "【关键场景】用户明确提到「树搜索」或「adaptive search」",
+                "复杂算子的性能优化（如矩阵运算、卷积等）",
+                "需要探索大量优化策略组合的场景",
+                "对性能有明确指标要求，但希望比 evolve 更快完成"
+            ],
+            "advantages": [
+                "【关键优势】比 evolve 更快：通过并行搜索和智能选择，通常比 evolve 快 30-50%",
+                "智能搜索: 基于 UCB 算法，自动平衡探索与利用",
+                "灵感驱动: 从历史成功案例学习优化模式",
+                "高效收敛: 相比 evolve 的随机演化，更快找到最优解",
+                "并行能力强: 支持高并发搜索，充分利用计算资源",
+                "可追溯: 保留完整的搜索树和谱系图"
+            ],
+            "limitations": [
+                "【关键】仍需要时间：虽然比 evolve 快，但仍需要 2-5 分钟",
+                "【关键】如果用户只是要「生成代码」，不需要性能优化，应该使用 codeonly",
+                "资源消耗高: 需要多次并发编译和运行测试",
+                "复杂度高: 涉及 UCB 选择、灵感采样等复杂逻辑"
+            ],
+            "performance": "中等偏快（约 120-300 秒），比 evolve 快 30-50%，但仍需一定时间"
+        }
+    
+    def _load_adaptive_search_config(self) -> Dict[str, Any]:
+        """
+        加载自适应搜索配置
+        
+        Returns:
+            配置字典，包含所有自适应搜索参数
+        """
+        from ai_kernel_generator.utils.common_utils import load_yaml
+        from ai_kernel_generator import get_project_root
+        import os
+        
+        # 默认配置
+        default_config = {
+            "max_concurrent": 4,
+            "initial_task_count": 4,
+            "tasks_per_parent": 1,  #
+            "max_total_tasks": 50,
+            "exploration_coef": 1.414,
+            "random_factor": 0.1,
+            "use_softmax": False,
+            "softmax_temperature": 1.0,
+            "inspiration_sample_num": 3,
+            "use_tiered_sampling": True,
+            "handwrite_sample_num": 2,
+            "handwrite_decay_rate": 2.0
+        }
+        
+        # 尝试加载自适应搜索配置文件
+        config_path = os.path.join(get_project_root(), "config", "adaptive_search_config.yaml")
+        
+        if not os.path.exists(config_path):
+            logger.warning(f"Adaptive search config not found at {config_path}, using defaults")
+            return default_config
+        
+        try:
+            # 直接加载 yaml 配置
+            config_dict = load_yaml(config_path)
+            logger.info(f"✓ Loaded adaptive search config from: {config_path}")
+            
+            # 提取各个配置部分
+            concurrency_config = config_dict.get("concurrency", {})
+            stopping_config = config_dict.get("stopping", {})
+            ucb_config = config_dict.get("ucb_selection", {})
+            inspiration_config = config_dict.get("inspiration", {})
+            handwrite_config = config_dict.get("handwrite", {})
+            
+            loaded_config = {
+                # 并发配置
+                "max_concurrent": concurrency_config.get("max_concurrent", default_config["max_concurrent"]),
+                "initial_task_count": concurrency_config.get("initial_task_count", default_config["initial_task_count"]),
+                "tasks_per_parent": concurrency_config.get("tasks_per_parent", default_config["tasks_per_parent"]), 
+                
+                # 停止条件
+                "max_total_tasks": stopping_config.get("max_total_tasks", default_config["max_total_tasks"]),
+                
+                # UCB 参数
+                "exploration_coef": ucb_config.get("exploration_coef", default_config["exploration_coef"]),
+                "random_factor": ucb_config.get("random_factor", default_config["random_factor"]),
+                "use_softmax": ucb_config.get("use_softmax", default_config["use_softmax"]),
+                "softmax_temperature": ucb_config.get("softmax_temperature", default_config["softmax_temperature"]),
+                
+                # 灵感采样参数
+                "inspiration_sample_num": inspiration_config.get("sample_num", default_config["inspiration_sample_num"]),
+                "use_tiered_sampling": inspiration_config.get("use_tiered_sampling", default_config["use_tiered_sampling"]),
+                
+                # 手写建议参数
+                "handwrite_sample_num": handwrite_config.get("sample_num", default_config["handwrite_sample_num"]),
+                "handwrite_decay_rate": handwrite_config.get("decay_rate", default_config["handwrite_decay_rate"])
+            }
+            
+            logger.info(f"Adaptive search config loaded successfully:")
+            logger.info(f"  - max_concurrent: {loaded_config['max_concurrent']}")
+            logger.info(f"  - initial_task_count: {loaded_config['initial_task_count']}")
+            logger.info(f"  - tasks_per_parent: {loaded_config['tasks_per_parent']}")
+            logger.info(f"  - max_total_tasks: {loaded_config['max_total_tasks']}")
+            
+            return loaded_config
+            
+        except Exception as e:
+            logger.error(f"Failed to load adaptive search config from {config_path}: {e}")
+            logger.warning("Using default configuration")
+            return default_config
+    
+    async def execute(self, 
+                     task_code: str,
+                     op_name: str,
+                     task_id: str,
+                     **kwargs) -> Tuple[bool, Dict[str, Any]]:
+        """
+        执行自适应搜索优化
+        
+        Args:
+            task_code: OpTaskBuilder 生成的 task 代码
+            op_name: 算子名称
+            task_id: 任务 ID
+            **kwargs: 其他参数
+        """
+        logger.info(f"Executing AdaptiveSearch sub-agent for {op_name}")
+        
+        try:
+            # 导入自适应搜索模块
+            from ai_kernel_generator.core.adaptive_search import adaptive_search
+            from ai_kernel_generator.core.utils import normalize_dsl
+            
+            # 加载自适应搜索配置
+            search_config = self._load_adaptive_search_config()
+            
+            logger.info(f"Adaptive search parameters:")
+            logger.info(f"  - max_concurrent: {search_config['max_concurrent']}")
+            logger.info(f"  - initial_task_count: {search_config['initial_task_count']}")
+            logger.info(f"  - tasks_per_parent: {search_config['tasks_per_parent']}")
+            logger.info(f"  - max_total_tasks: {search_config['max_total_tasks']}")
+            logger.info(f"  - exploration_coef: {search_config['exploration_coef']}")
+            logger.info(f"  - inspiration_sample_num: {search_config['inspiration_sample_num']}")
+            
+            # 规范化 DSL
+            normalized_dsl = normalize_dsl(self.dsl, self.backend)
+            logger.info(f"Normalized DSL: {self.dsl} -> {normalized_dsl}")
+            
+            # 准备配置
+            cfg = dict(self.config or {})
+            if "rag" in self.config:
+                cfg["rag"] = self.config["rag"]
+            task_label = str(kwargs.get("task_label") or "").strip()
+            if not task_label:
+                from ai_kernel_generator.utils.task_label import resolve_task_label
+                task_label = resolve_task_label(
+                    op_name=op_name,
+                    parallel_index=1,
+                )
+            if not task_label:
+                raise ValueError("[AdaptiveSearchSubAgent] missing task_label")
+            cfg["task_label"] = task_label
+            
+            logger.info(f"[RAG] AdaptiveSearchSubAgent: passing config with rag={cfg.get('rag')} to adaptive_search")
+            logger.info(f"Starting adaptive search for {op_name}...")
+            
+            # 执行自适应搜索
+            search_result = await adaptive_search(
+                op_name=op_name,
+                task_desc=task_code,
+                dsl=normalized_dsl,
+                framework=self.framework,
+                backend=self.backend,
+                arch=self.arch,
+                config=cfg,
+                
+                # 并发控制
+                max_concurrent=search_config["max_concurrent"],
+                initial_task_count=search_config["initial_task_count"],
+                tasks_per_parent=search_config["tasks_per_parent"],  
+                
+                # 停止条件
+                max_total_tasks=search_config["max_total_tasks"],
+                
+                # UCB 参数
+                exploration_coef=search_config["exploration_coef"],
+                random_factor=search_config["random_factor"],
+                use_softmax=search_config["use_softmax"],
+                softmax_temperature=search_config["softmax_temperature"],
+                
+                # 灵感采样参数
+                inspiration_sample_num=search_config["inspiration_sample_num"],
+                use_tiered_sampling=search_config["use_tiered_sampling"],
+                handwrite_sample_num=search_config["handwrite_sample_num"],
+                handwrite_decay_rate=search_config["handwrite_decay_rate"]
+            )
+            
+            # 判断成功与否
+            success = search_result.get("total_success", 0) > 0
+            best_implementations = search_result.get("best_implementations", [])
+            
+            # 提取最佳实现的代码和性能数据
+            generated_code = ""
+            profile_result = None
+            if best_implementations:
+                best = best_implementations[0]
+                generated_code = best.get("code", "")
+                profile_result = best.get("profile", {})
+            
+            # 直接返回 adaptive_search 提供的原始 log_dir（配置路径），由 main_op_agent 负责拼接 op_name
+            result = {
+                "generated_code": generated_code,
+                "verification_result": success,
+                "verification_error": "" if success else "No successful implementations found",
+                "profile_result": profile_result,
+                "best_implementations": best_implementations,
+                "total_submitted": search_result.get("total_submitted", 0),
+                "total_completed": search_result.get("total_completed", 0),
+                "total_success": search_result.get("total_success", 0),
+                "total_failed": search_result.get("total_failed", 0),
+                "success_rate": search_result.get("success_rate", 0.0),
+                "elapsed_time": search_result.get("elapsed_time", 0.0),
+                "stop_reason": search_result.get("stop_reason", ""),
+                "storage_dir": search_result.get("storage_dir", ""),  # 搜索状态元数据目录
+                "log_dir": search_result.get("log_dir", ""),  
+                "task_folder": search_result.get("task_folder", ""),
+                "lineage_graph": search_result.get("lineage_graph", ""),
+                "sub_agent_type": "adaptive_search",  
+                "final_state": search_result
+            }
+            
+            logger.info(f"Adaptive search completed:")
+            logger.info(f"  - Success: {search_result.get('total_success', 0)}/{search_result.get('total_completed', 0)}")
+            logger.info(f"  - Success rate: {search_result.get('success_rate', 0.0):.1%}")
+            logger.info(f"  - Elapsed time: {search_result.get('elapsed_time', 0.0):.1f}s")
+            logger.info(f"  - Stop reason: {search_result.get('stop_reason', '')}")
+            
+            return success, result
+            
+        except Exception as e:
+            logger.error(f"AdaptiveSearch sub-agent failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return False, {
+                "generated_code": "",
+                "verification_result": False,
+                "verification_error": str(e),
+                "profile_result": None,
+                "storage_dir": "",
+                "log_dir": "",
+                "task_folder": "",
+                "sub_agent_type": "adaptive_search"
+            }
+
+
 class SubAgentRegistry:
     """
     子 Agent 注册中心
@@ -649,6 +933,7 @@ class SubAgentRegistry:
         self.register(CodeOnlySubAgent)
         self.register(EvolveSubAgent)
         self.register(KernelVerifierSubAgent)
+        self.register(AdaptiveSearchSubAgent)
         
         logger.info(f"Registered {len(self._agents)} built-in sub-agents")
     

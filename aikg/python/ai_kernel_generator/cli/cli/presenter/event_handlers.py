@@ -734,7 +734,7 @@ class PresenterEventHandlers:
         if not job_id:
             return
         p.last_job_id = job_id
-        output = f"[{DisplayStyle.DIM}]job_id: {job_id}[/{DisplayStyle.DIM}]"
+        output = f"[{DisplayStyle.DIM}]task_id: {job_id}[/{DisplayStyle.DIM}]"
         p._refresh_info_panel()
         p._refresh_workflow_panel()
         self._emit_main_global(Text.from_markup(output))
