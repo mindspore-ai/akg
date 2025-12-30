@@ -53,6 +53,7 @@ from .widgets import (
 from ai_kernel_generator.cli.cli.ui.commands import UICommand
 from ai_kernel_generator.cli.cli.ui.intents import (
     AppMounted,
+    CancelRequest,
     LangChanged,
     ThemeChanged,
     UIIntent,
@@ -271,7 +272,7 @@ class SplitViewApp(App):
     """
 
     BINDINGS = [
-        Binding("ctrl+c", "quit", "退出", show=True, key_display="Ctrl+C"),
+        Binding("ctrl+c", "cancel_or_quit", "取消/退出", show=True, key_display="Ctrl+C"),
         Binding(
             "ctrl+s",
             "save_tui",
@@ -283,6 +284,7 @@ class SplitViewApp(App):
         Binding("f8", "watch_next", "下一个并发任务", show=True),
         # Binding("f9", "toggle_language", "切换语言", show=True),
         Binding("f10", "toggle_theme", "切换主题", show=True),
+        Binding("f12", "toggle_mouse", t("tui.binding.mouse_on"), show=True),
     ]
 
     def __init__(
@@ -321,6 +323,7 @@ class SplitViewApp(App):
         self.workflow_task = workflow_task
         self.workflow_running = False
         self._workflow_runner_task: Optional[asyncio.Task] = None
+        self._cancel_requested: bool = False
         self._input_enabled = True
         self._input_block_reason: str = ""
         self._main_task_id: str = "main"
@@ -346,10 +349,9 @@ class SplitViewApp(App):
         self._current_trace_anchor_y: Optional[int] = None
         self._chat_subtitle_cache: str = ""
         # 是否展示顶部任务 Tabs（仅 evolve 并发时需要）
-        self.show_task_tabs: bool = self._env_bool("AIKG_TUI_TASK_TABS", True)
         self.logo_printed: bool = False
         # 是否开启鼠标（影响提示文案）
-        self.mouse_enabled: bool = self._env_bool("AIKG_TUI_MOUSE", False)
+        self.mouse_enabled: bool = self._env_bool("AIKG_TUI_MOUSE", True)
         # 可恢复会话：默认写入临时目录；用户 Ctrl+C 退出时选择“保存/丢弃”
         self.resume_mode: bool = bool(resume_session_id)
         env_sid = (os.environ.get("AIKG_SESSION_ID") or "").strip()
@@ -385,7 +387,7 @@ class SplitViewApp(App):
         self._apply_input_state()
 
     def is_on_main_tab(self) -> bool:
-        if not self.show_task_tabs or self.task_tabs is None:
+        if self.task_tabs is None:
             return True
         main_id = str(self._main_task_id or "").strip()
         if not main_id:
@@ -397,6 +399,9 @@ class SplitViewApp(App):
 
     def set_input_enabled(self, enabled: bool) -> None:
         self._input_enabled = bool(enabled)
+        if self._input_enabled:
+            # 输入重新可用，允许再次触发取消
+            self._cancel_requested = False
         self._apply_input_state()
 
     def _resolve_input_placeholder(self) -> str:
@@ -517,12 +522,11 @@ class SplitViewApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
 
-        if self.show_task_tabs:
-            # 顶部 Tasks 一行（全宽）
-            with Container(id="tasks-bar"):
-                self.task_tabs = TaskTabs(id="task-tabs")
-                self.task_tabs.border_title = self._tasks_bar_title()
-                yield self.task_tabs
+        # 顶部 Tasks 一行（全宽）
+        with Container(id="tasks-bar"):
+            self.task_tabs = TaskTabs(id="task-tabs")
+            self.task_tabs.border_title = self._tasks_bar_title()
+            yield self.task_tabs
 
         with Container(id="main-container"):
             # 尽量保留历史，避免只看到最后一段输出
@@ -781,6 +785,7 @@ class SplitViewApp(App):
                 log.debug("[TUI] ignored exception", exc_info=e)
         finally:
             self.workflow_running = False
+            self._cancel_requested = False
             if self.user_input is not None:
                 self.set_input_enabled(True)
             try:
@@ -847,6 +852,7 @@ class SplitViewApp(App):
                 )
             except Exception as e:
                 log.debug("[TUI] ignored exception", exc_info=e)
+        if self.chat_log is not None:
             try:
                 self.ui_event_queue.put_nowait(
                     WriteMainContent(
@@ -939,6 +945,61 @@ class SplitViewApp(App):
         except Exception as e:
             log.debug("[TUI] emit ThemeChanged failed", exc_info=e)
 
+    def _apply_mouse_enabled(self, enabled: bool) -> bool:
+        driver = getattr(self, "_driver", None)
+        if driver is None:
+            return False
+        try:
+            try:
+                setattr(driver, "_mouse", True)
+            except Exception:
+                pass
+            if enabled:
+                if hasattr(driver, "_enable_mouse_support"):
+                    driver._enable_mouse_support()
+            else:
+                if hasattr(driver, "_disable_mouse_support"):
+                    driver._disable_mouse_support()
+            return True
+        except Exception as e:
+            log.debug("[TUI] toggle mouse failed", exc_info=e)
+            return False
+
+    def _refresh_mouse_titles(self) -> None:
+        if self.task_tabs is not None:
+            try:
+                self.task_tabs.border_title = self._tasks_bar_title()
+            except Exception as e:
+                log.debug("[TUI] update tasks_bar title failed", exc_info=e)
+        if self.trace_panel is not None:
+            try:
+                self.trace_panel.border_title = self._trace_title()
+            except Exception as e:
+                log.debug("[TUI] update trace title failed", exc_info=e)
+
+    def action_toggle_mouse(self) -> None:
+        """切换鼠标模式（交互/原生选区）。"""
+        new_enabled = not bool(self.mouse_enabled)
+        if not self._apply_mouse_enabled(new_enabled):
+            try:
+                self.notify(t("tui.msg.mouse_toggle_failed"), severity="error")
+            except Exception as e:
+                log.debug("[TUI] notify mouse toggle failed", exc_info=e)
+            return
+        self.mouse_enabled = new_enabled
+        self._refresh_mouse_titles()
+        try:
+            self.i18n.apply()
+        except Exception as e:
+            log.debug("[TUI] refresh bindings after mouse toggle failed", exc_info=e)
+        try:
+            if new_enabled:
+                self.notify(t("tui.msg.mouse_enabled"), timeout=1)
+            else:
+                self.notify(t("tui.msg.mouse_disabled"), timeout=1)
+        except Exception as e:
+            log.debug("[TUI] notify mouse status failed", exc_info=e)
+
     async def action_quit(self) -> None:
         try:
             log.info("[TUI] action_quit")
@@ -977,6 +1038,34 @@ class SplitViewApp(App):
             except Exception as e:
                 log.debug("[TUI] ignored exception", exc_info=e)
         self.exit()
+
+    async def action_cancel_or_quit(self) -> None:
+        """Ctrl+C：生成中取消；空闲时退出。"""
+        if (
+            self.workflow_running
+            and self._workflow_runner_task is not None
+            and not self._workflow_runner_task.done()
+        ):
+            if not self._input_enabled:
+                if not self._cancel_requested:
+                    self._cancel_requested = True
+                    try:
+                        self.ui_event_queue.put_nowait(
+                            CancelRequest(reason="cancelled by ctrl+c")
+                        )
+                    except Exception as e:
+                        log.debug("[TUI] emit CancelRequest failed", exc_info=e)
+                    try:
+                        self.ui_event_queue.put_nowait(
+                            WriteMainContent(content=t("tui.msg.workflow_cancel_request"))
+                        )
+                    except Exception as e:
+                        log.debug("[TUI] emit cancel notice failed", exc_info=e)
+                return
+            # 空闲可输入时，Ctrl+C 直接退出
+            await self.action_quit()
+            return
+        await self.action_quit()
 
     async def _export_tui_text(self) -> str:
         """导出当前 TUI 的纯文本（优先导出当前渲染屏幕）。

@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _main_agent_states: dict[str, dict] = {}
+_main_agent_tasks: dict[str, asyncio.Task] = {}
+_main_agent_state_snapshots: dict[str, dict | None] = {}
 
 
 def _load_workflow_config(backend: str, dsl: str) -> Dict:
@@ -99,17 +101,6 @@ def _build_response_state(state: dict) -> dict:
     return payload
 
 
-def _resolve_log_dir(state: dict) -> str:
-    config = state.get("config") if isinstance(state, dict) else None
-    if isinstance(config, dict):
-        log_dir = config.get("log_dir")
-    else:
-        log_dir = None
-    if not log_dir:
-        log_dir = "~/aikg_logs"
-    return os.path.expanduser(str(log_dir))
-
-
 def _build_command_response(
     state: dict,
     *,
@@ -149,6 +140,19 @@ async def get_workflow_status():
         )
 
 
+@router.post("/api/v1/main_agent/cancel")
+async def cancel_main_agent(session_id: str, reason: str | None = None):
+    """取消正在运行的 MainOpAgent（best-effort）。"""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"cancelled": False, "reason": "session_id is required"}
+    task = _main_agent_tasks.get(sid)
+    if task is not None and not task.done():
+        task.cancel()
+        return {"cancelled": True, "result": "task_cancelled", "reason": reason or ""}
+    return {"cancelled": False, "reason": "no active task for this session"}
+
+
 async def _safe_send_json(websocket: WebSocket, payload: dict) -> None:
     try:
         await websocket.send_json(payload)
@@ -156,15 +160,22 @@ async def _safe_send_json(websocket: WebSocket, payload: dict) -> None:
         logger.debug(f"WebSocket send skipped: {e}", exc_info=True)
 
 
-def _create_main_op_agent(request: CliMainAgentRequest, session_id: str):
+def _create_main_op_agent(
+    request: CliMainAgentRequest, session_id: str, base_config: dict | None = None
+):
     """创建 MainOpAgent 实例。"""
     from ai_kernel_generator.core.agent.main_op_agent import MainOpAgent
 
-    config = _load_workflow_config(  # type: ignore[attr-defined]
-        request.backend, request.dsl
-    )
+    if base_config is not None:
+        config = dict(base_config)
+    else:
+        config = _load_workflow_config(  # type: ignore[attr-defined]
+            request.backend, request.dsl
+        )
     config["session_id"] = session_id
     config["task_label"] = "main"
+    if request.output_path and "output_path" not in config:
+        config["output_path"] = request.output_path
     
     # RAG 参数处理：优先使用 request 中的值，如果没有则从 session state 中读取
     # 确保整个会话过程中 rag 参数保持一致
@@ -249,7 +260,7 @@ async def _handle_continue_action(
     #         save_path=save_path,
     #     )
 
-    agent = _create_main_op_agent(request, session_id)
+    agent = _create_main_op_agent(request, session_id, prev.get("config"))
     if "config" not in prev:
         prev["config"] = agent.config
     state = await agent.continue_conversation(
@@ -286,19 +297,52 @@ async def main_agent_stream(websocket: WebSocket):
         # 与 JobManager 保持一致：用环境变量控制 stream
         os.environ["AIKG_STREAM_OUTPUT"] = "on" if request.use_stream else "off"
 
-        action = (request.action or "").strip().lower()
-        allowed_actions = {"start", "continue"}
-        if action not in allowed_actions:
-            raise ValueError("action must be start/continue")
+        prev_state = _main_agent_states.get(session_id)
+        should_start = not isinstance(prev_state, dict)
 
-        if action == "start":
-            result = await _handle_start_action(request, session_id)
-        else:
-            result = await _handle_continue_action(request, session_id)
+        async def _run_action() -> dict:
+            if should_start:
+                return await _handle_start_action(request, session_id)
+            return await _handle_continue_action(request, session_id)
 
-        await _safe_send_json(
-            websocket, pack_message(FinalResultMessage(result=result))
-        )
+        # 快照当前 state，用于取消时回滚
+        try:
+            import copy
+
+            _main_agent_state_snapshots[session_id] = (
+                copy.deepcopy(prev_state) if isinstance(prev_state, dict) else None
+            )
+        except Exception as e:
+            logger.debug("[MainAgent] snapshot failed; fallback None", exc_info=e)
+            _main_agent_state_snapshots[session_id] = (
+                prev_state if isinstance(prev_state, dict) else None
+            )
+
+        task = asyncio.create_task(_run_action())
+        _main_agent_tasks[session_id] = task
+        try:
+            result = await task
+            await _safe_send_json(
+                websocket, pack_message(FinalResultMessage(result=result))
+            )
+        except asyncio.CancelledError:
+            snapshot = _main_agent_state_snapshots.get(session_id)
+            if snapshot is None:
+                _main_agent_states.pop(session_id, None)
+            else:
+                _main_agent_states[session_id] = snapshot
+            cancel_result = {
+                "current_step": "cancelled",
+                "should_continue": True,
+                "display_message": "操作已取消",
+                "hint_message": "",
+            }
+            await _safe_send_json(
+                websocket, pack_message(FinalResultMessage(result=cancel_result))
+            )
+        finally:
+            _main_agent_state_snapshots.pop(session_id, None)
+            _main_agent_tasks.pop(session_id, None)
 
     except WebSocketDisconnect:
         if session_id:

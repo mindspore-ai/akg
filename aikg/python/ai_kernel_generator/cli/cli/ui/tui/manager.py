@@ -112,15 +112,8 @@ class TextualLayoutManager:
                 return default
             return str(raw).strip().lower() in ["1", "true", "yes", "on", "y"]
 
-        # 重要：默认值必须"保持历史行为不变"，避免影响跑批/录屏/交互习惯：
-        # - inline=False：使用 alternate screen（Textual 默认体验）
-        # - mouse=True：默认开启鼠标支持（便于点击/滚动交互）
-        #
-        # 如果你明确需要"终端回滚/鼠标滚轮"，再用环境变量显式开启：
-        # - AIKG_TUI_INLINE=on/off
-        # - AIKG_TUI_MOUSE=on/off
-        inline = _env_bool("AIKG_TUI_INLINE", False)
-        mouse = _env_bool("AIKG_TUI_MOUSE", False)
+        inline = False
+        mouse = _env_bool("AIKG_TUI_MOUSE", True)
 
         try:
             import textual.constants as textual_constants
@@ -168,33 +161,6 @@ class TextualLayoutManager:
         except Exception as e:
             log.debug("[TUI] print session-id failed", exc_info=e)
 
-    def run_resume(self, session_id: str) -> None:
-        """以 resume 模式打开一个已保存的会话（只回放展示，不再驱动 workflow）。"""
-        self._configure_logging_for_tui()
-        self.app = SplitViewApp(workflow_task=None, resume_session_id=str(session_id))
-        if self._main_task_id:
-            try:
-                self.app.command_queue.put(SetMainTaskId(self._main_task_id))
-            except Exception as e:
-                log.warning("[TUI] enqueue SetMainTaskId failed", exc_info=e)
-        # 回放模式更偏向“查看/点击回看”，默认打开 mouse（便于点击 Footer/Trace）
-
-        def _env_bool(name: str, default: bool) -> bool:
-            raw = os.environ.get(name)
-            if raw is None:
-                return default
-            return str(raw).strip().lower() in ["1", "true", "yes", "on", "y"]
-
-        inline = _env_bool("AIKG_TUI_INLINE", False)
-        mouse = _env_bool("AIKG_TUI_MOUSE", False)
-        try:
-            self.app.mouse_enabled = mouse
-        except Exception:
-            pass
-        self.app.run(inline=inline, inline_no_clear=True, mouse=mouse)
-        self.mouse_enabled = mouse
-        self._started = True
-
     def run_replay(self, *, session_id: str, workflow_task: Coroutine) -> None:
         """以“消息回放”模式打开会话：用同一路径重放 messages.jsonl。"""
         self._configure_logging_for_tui()
@@ -214,8 +180,8 @@ class TextualLayoutManager:
                 return default
             return str(raw).strip().lower() in ["1", "true", "yes", "on", "y"]
 
-        inline = _env_bool("AIKG_TUI_INLINE", False)
-        mouse = _env_bool("AIKG_TUI_MOUSE", False)
+        inline = False
+        mouse = _env_bool("AIKG_TUI_MOUSE", True)
         try:
             self.app.mouse_enabled = mouse
         except Exception:

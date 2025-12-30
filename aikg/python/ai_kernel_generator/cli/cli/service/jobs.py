@@ -26,7 +26,7 @@ from textual import log
 
 
 class JobInspector:
-    """尽力而为的 job 状态摘要输出（用于 Ctrl+C/异常收尾）。"""
+    """尽力而为的任务状态摘要输出（用于 Ctrl+C/异常收尾）。"""
 
     @staticmethod
     def _trust_env_for_url(url: str) -> bool:
@@ -66,7 +66,7 @@ class JobInspector:
             table.add_column("项目", style=DisplayStyle.CYAN, width=18)
             table.add_column("内容", style=DisplayStyle.YELLOW)
 
-            table.add_row("job_id", job_id)
+            table.add_row("task_id", job_id)
             table.add_row("status", str(status.get("status")))
             if isinstance(meta, dict):
                 if meta.get("log_dir"):

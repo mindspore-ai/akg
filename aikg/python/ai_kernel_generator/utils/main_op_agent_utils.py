@@ -425,6 +425,11 @@ def save_verification_directory(state: dict, config: dict) -> dict:
     
     # 1. 保存对话历史
     log_dir = os.path.expanduser(config.get("log_dir", "~/aikg_logs"))
+    output_path = config.get("output_path")
+    if output_path:
+        output_path = os.path.abspath(os.path.expanduser(str(output_path)))
+    else:
+        output_path = log_dir
     task_id = state.get("task_id", "unknown")
     op_name = state.get("op_name", "")
     
@@ -486,7 +491,7 @@ def save_verification_directory(state: dict, config: dict) -> dict:
     # 3. 复制验证目录到保存位置
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     saved_dir_name = f"{op_name}_{task_id}_{timestamp}"
-    saved_to = os.path.join(log_dir, "saved_verifications", saved_dir_name)
+    saved_to = os.path.join(output_path, "saved_verifications", saved_dir_name)
     
     try:
         os.makedirs(saved_to, exist_ok=True)
@@ -516,7 +521,7 @@ def save_verification_directory(state: dict, config: dict) -> dict:
         
         # 4. 打包成 .tar.gz 格式
         tar_filename = f"{saved_dir_name}.tar.gz"
-        tar_path = os.path.join(log_dir, "saved_verifications", tar_filename)
+        tar_path = os.path.join(output_path, "saved_verifications", tar_filename)
         
         logger.info(f"开始打包验证目录: {tar_path}")
         
