@@ -17,7 +17,16 @@ from __future__ import annotations
 from textual import log
 from rich.text import Text
 
-from ...ui.intents import AppMounted, LangChanged, ThemeChanged, TraceJump, WatchNext, WatchSet, WriteMainContent
+from ...ui.intents import (
+    AppMounted,
+    CancelRequest,
+    LangChanged,
+    ThemeChanged,
+    TraceJump,
+    WatchNext,
+    WatchSet,
+    WriteMainContent,
+)
 from ...constants import make_gradient_logo
 from ...utils.i18n import set_lang
 
@@ -153,6 +162,14 @@ class UiIntentController:
                     self._refresh_trace_panel()
                 except Exception as e:
                     log.debug("[UIIntent] refresh_trace_panel failed", exc_info=e)
+                continue
+            if isinstance(intent, CancelRequest):
+                try:
+                    p.request_cancel(
+                        reason=str(getattr(intent, "reason", "") or "cancelled by ctrl+c")
+                    )
+                except Exception as e:
+                    log.debug("[UIIntent] cancel request failed", exc_info=e)
                 continue
             if isinstance(intent, ThemeChanged):
                 tid = str(getattr(self._p.tasks, "watch_task_id", "") or "") or "main"

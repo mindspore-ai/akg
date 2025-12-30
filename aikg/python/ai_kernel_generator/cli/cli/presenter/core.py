@@ -81,6 +81,7 @@ class CLIPresenter:
         self.last_task_desc: str = ""
         self.last_kernel_code: str = ""
         self.last_job_id: str = ""
+        self._cancel_handler = None
 
         # ========= 右侧面板状态（Task Info / Workflow）=========
         self._task_context: dict[str, str] = {
@@ -217,6 +218,29 @@ class CLIPresenter:
             title=f"[{DisplayStyle.BOLD_CYAN}]AKG CLI[/{DisplayStyle.BOLD_CYAN}]",
         )
         self.console.print(logo_panel)
+
+    def set_cancel_handler(self, handler) -> None:
+        """设置取消当前生成的回调（由 CliClient 注入）。"""
+        self._cancel_handler = handler
+
+    def request_cancel(self, *, reason: str = "cancelled by ctrl+c") -> bool:
+        handler = self._cancel_handler
+        if handler is None:
+            return False
+        try:
+            result = handler(reason)
+            try:
+                import asyncio
+
+                if asyncio.iscoroutine(result):
+                    asyncio.create_task(result)
+            except Exception:
+                # 若无法创建任务，忽略等待
+                pass
+            return True
+        except Exception as e:
+            log.warning("[Presenter] cancel handler failed", exc_info=e)
+            return False
 
     def print_welcome(self, use_mock: bool, server_url: str | None = None) -> None:
         """打印欢迎信息"""

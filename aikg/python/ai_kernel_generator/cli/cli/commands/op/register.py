@@ -83,6 +83,11 @@ def register_op_command(
         ipv6: bool = typer.Option(
             False, "--ipv6", help="强制本地 server 走 IPv6（仅自动拉起时生效）"
         ),
+        output_path: Optional[str] = typer.Option(
+            None,
+            "--output-path",
+            help="保存目录根路径（用于 saved_verifications，默认使用启动 akg_cli 的当前目录）",
+        ),
     ) -> None:
         """算子生成入口。"""
 
@@ -102,5 +107,6 @@ def register_op_command(
                 stream=stream,
                 rag=rag,
                 ipv6=ipv6,
+                output_path=output_path,
             ),
         )

@@ -57,6 +57,7 @@ akg_cli op \
 - `--intent "..."` 直接输入需求（跳过交互提示）。
 - `--worker-url` 支持多个 Worker 地址，使用逗号分隔。
 - `--devices` 将本地设备注册到本地 server（无需 worker_url）。与 `--worker-url` 互斥，且仅支持本地 server。
+- `--output-path` 指定 `saved_verifications` 的保存根目录（默认：启动 `akg_cli` 时的当前工作目录）。
 - `--stream/--no-stream` 控制是否启用流式输出。
 - `--yes` 自动确认所有提示。
 - `--ipv6` 强制本地 server 使用 IPv6（仅自动拉起本地 server 时生效）。
@@ -126,3 +127,6 @@ akg_cli op \
 - `Ctrl+E`：滚动到底部。
 - `Enter`：提交输入（在输入框内）。
 - `Ctrl+J`：插入换行（在输入框内）。
+
+说明：
+- 生成期间输入被禁用时，输入框占位符会提示 `Ctrl+C` 可取消当前生成。
