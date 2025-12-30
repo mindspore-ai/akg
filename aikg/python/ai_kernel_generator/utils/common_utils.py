@@ -328,7 +328,7 @@ class ParserFactory:
                     'intent': (str, ...),           # operator_dev/general_question/unclear
                     'message': (str, ...),          # 给用户的消息
                     'confidence': (float, 0.5),     # 置信度
-                    'reasoning': (str, "")          # 推理过程（可选）
+                    'reasoning': (str, "")          # 推理过程
                 }
             )
         return cls._intent_classifier_parser
@@ -364,11 +364,13 @@ class ParserFactory:
         - reasoning: 推理过程
         - confidence: 置信度（0.0-1.0）
         - is_new_operator: 是否是新算子需求（bool）
+        - is_irrelevant: 用户输入是否与算子开发无关（bool）
         - has_provided_task_code: 用户是否直接提供了torch task代码（bool）
         - is_complete_code: 用户提供的代码是否完整（bool，区分完整代码vs部分代码）
         - extracted_task_code: LLM提取并补充的完整KernelBench代码（str）
         - extracted_op_name: 从代码中提取的算子名称（str）
         - extracted_op_description: 从代码中提取的算子描述（str）
+        - wants_to_save: 用户是否表达了保存意图（bool）
         """
         if cls._user_action_analyzer_parser is None:
             cls._user_action_analyzer_parser = cls.create_output_parser(
@@ -378,11 +380,13 @@ class ParserFactory:
                     'reasoning': (str, ...),                   # 推理过程
                     'confidence': (float, 0.8),                # 置信度
                     'is_new_operator': (bool, False),          # 是否是新算子需求
+                    'is_irrelevant': (bool, False),            # 用户输入是否与算子开发无关
                     'has_provided_task_code': (bool, False),   # 是否提供了torch task代码
                     'is_complete_code': (bool, False),         # 代码是否完整
                     'extracted_task_code': (str, ''),          # LLM提取并补充的完整代码
                     'extracted_op_name': (str, ''),            # 从代码中提取的算子名称
-                    'extracted_op_description': (str, '')      # 从代码中提取的算子描述
+                    'extracted_op_description': (str, ''),     # 从代码中提取的算子描述
+                    'wants_to_save': (bool, False)             # 用户是否表达了保存意图
                 }
             )
         return cls._user_action_analyzer_parser

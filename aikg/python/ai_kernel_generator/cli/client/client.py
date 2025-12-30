@@ -27,6 +27,7 @@ import uuid
 from pathlib import Path
 
 from textual import log
+from rich.text import Text
 
 from ..messages import (
     unpack_message,
@@ -123,10 +124,6 @@ class CliClient:
     def _httpx_trust_env(self) -> bool:
         return not self._is_loopback_url(self.server_url)
 
-    def set_presenter(self, presenter):
-        """设置 presenter"""
-        self.presenter = presenter
-
     async def check_status(self) -> Dict[str, Any]:
         """检查服务器状态"""
         try:
@@ -178,6 +175,10 @@ class CliClient:
             record_path=record_path,
             console=console,
         )
+        try:
+            presenter.set_cancel_handler(client.cancel_main_agent)
+        except Exception:
+            pass
         client.auto_yes = bool(auto_yes)
         client.default_user_input = (
             (default_user_input or Defaults.DEFAULT_USER_INPUT)
@@ -191,7 +192,6 @@ class CliClient:
     async def execute_main_agent(
         self,
         *,
-        action: str,
         user_input: str = "",
         framework: str = "torch",
         backend: str = "cuda",
@@ -199,15 +199,13 @@ class CliClient:
         dsl: str = "triton_cuda",
         use_stream: bool | None = None,
         rag: bool = False,
+        output_path: str | None = None,
     ) -> Dict[str, Any]:
         """执行 MainOpAgent 对话（start/continue），返回 server 侧状态。"""
         from ai_kernel_generator.cli.cli.constants import DisplayStyle
 
-        action_l = (action or "").strip().lower()
-        if action_l not in ["start", "continue"]:
-            raise ValueError("action must be start/continue")
         if not (user_input or "").strip():
-            raise ValueError(f"action={action_l} requires non-empty user_input")
+            raise ValueError("user_input is required")
 
         effective_use_stream = (
             bool(use_stream) if use_stream is not None else bool(self.use_stream)
@@ -233,7 +231,6 @@ class CliClient:
 
         request_data = {
             "session_id": self.session_id,
-            "action": action_l,
             "user_input": user_input,
             "framework": framework,
             "backend": backend,
@@ -241,12 +238,12 @@ class CliClient:
             "dsl": dsl,
             "use_stream": effective_use_stream,
             "rag": rag,
+            "output_path": output_path,
         }
 
         ws_url = self._make_ws_url("/api/v1/main_agent/stream")
         logger.info(
-            "[Client] main_agent action=%s session_id=%s input_len=%s",
-            str(action or ""),
+            "[Client] main_agent session_id=%s input_len=%s",
             str(self.session_id),
             len(user_input) if isinstance(user_input, str) else 0,
         )
@@ -350,7 +347,15 @@ class CliClient:
 
                     # 处理错误
                     if isinstance(message, ErrorMessage):
-                        raise RuntimeError(f"服务器错误: {message.error}")
+                        if self.presenter is not None:
+                            try:
+                                if hasattr(self.presenter, "_handlers"):
+                                    self.presenter._handlers._emit_main_global(
+                                        Text(f"错误: {message.error}")
+                                    )
+                            except Exception:
+                                pass
+                        continue
 
                     # 路由到 presenter
                     self._route_to_presenter(message)
@@ -366,10 +371,10 @@ class CliClient:
 
         except asyncio.CancelledError:
             # asyncio.run() 在 Ctrl+C 时可能会取消当前协程
-            await self.cancel_current_job(reason="client cancelled (asyncio)")
+            await self.cancel_main_agent(reason="client cancelled (asyncio)")
             raise
         except KeyboardInterrupt:
-            await self.cancel_current_job(reason="client cancelled (keyboardinterrupt)")
+            await self.cancel_main_agent(reason="client cancelled (keyboardinterrupt)")
             raise
         except websockets.exceptions.WebSocketException as e:
             logger.error(f"WebSocket error: {e}")
@@ -378,20 +383,24 @@ class CliClient:
             logger.error(f"Workflow execution failed: {e}")
             raise RuntimeError(f"工作流执行失败: {str(e)}") from e
 
-    async def cancel_current_job(self, reason: str = "cancelled by client") -> bool:
-        """尽力取消当前 job（需要 server 支持 /api/v1/jobs/{job_id}/cancel）"""
-        if not self.current_job_id:
+    async def cancel_main_agent(self, reason: str = "cancelled by client") -> bool:
+        """尽力取消当前 main_agent（需要 server 支持 /api/v1/main_agent/cancel）。"""
+        if not self.session_id:
             return False
         try:
-            url = f"{self.server_url}/api/v1/jobs/{self.current_job_id}/cancel"
+            url = f"{self.server_url}/api/v1/main_agent/cancel"
             async with httpx.AsyncClient(
                 timeout=5.0, trust_env=self._httpx_trust_env()
             ) as client:
-                resp = await client.post(url, params={"reason": reason})
+                resp = await client.post(
+                    url, params={"session_id": self.session_id, "reason": reason}
+                )
                 resp.raise_for_status()
             return True
         except Exception as e:
-            logger.warning(f"Cancel job failed: job_id={self.current_job_id}, err={e}")
+            logger.warning(
+                f"Cancel main_agent failed: session_id={self.session_id}, err={e}"
+            )
             return False
 
     def _route_to_presenter(self, message):

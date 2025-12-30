@@ -129,7 +129,9 @@ class I18nManager:
             log.debug("[I18n] set_follow_tail failed", exc_info=e)
 
         # 更新快捷键文案
-        self._update_binding_desc("ctrl+c", "quit", t("tui.binding.quit"))
+        self._update_binding_desc(
+            "ctrl+c", "cancel_or_quit", t("tui.binding.cancel_or_quit")
+        )
         self._update_binding_desc("ctrl+l", "clear_chat", t("tui.binding.clear_chat"))
         self._update_binding_desc("ctrl+k", "clear_task", t("tui.binding.clear_task"))
         self._update_binding_desc("ctrl+e", "scroll_end", t("tui.binding.scroll_end"))
@@ -148,6 +150,12 @@ class I18nManager:
             "f10", "toggle_language", t("tui.binding.toggle_language")
         )
         self._update_binding_desc("f11", "toggle_theme", t("tui.binding.toggle_theme"))
+        mouse_desc = (
+            t("tui.binding.mouse_off")
+            if bool(getattr(self.app, "mouse_enabled", False))
+            else t("tui.binding.mouse_on")
+        )
+        self._update_binding_desc("f12", "toggle_mouse", mouse_desc)
         self._update_binding_desc("[", "watch_prev", t("tui.binding.watch_prev"))
         self._update_binding_desc("]", "watch_next", t("tui.binding.watch_next"))
         self._update_binding_desc("f8", "watch_prev", t("tui.binding.watch_prev"))

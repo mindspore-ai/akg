@@ -59,6 +59,11 @@ class AppMounted(UIIntent):
 
 
 @dataclass(frozen=True)
+class CancelRequest(UIIntent):
+    reason: str = "cancelled by ctrl+c"
+
+
+@dataclass(frozen=True)
 class WriteMainContent(UIIntent):
     """写入主内容区域（会同时更新缓存）。"""
     content: Any  # 可以是 Text、str 或其他 MainContent 类型

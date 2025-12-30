@@ -33,6 +33,7 @@ class OpCommandArgs:
     stream: bool
     rag: bool
     ipv6: bool
+    output_path: Optional[str]
 
 
 @dataclass(frozen=True)

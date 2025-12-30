@@ -256,6 +256,11 @@ class OpCommandOrchestrator:
 
         runtime = self._resolve_runtime_options(ctx, args)
 
+        output_path = (args.output_path or "").strip()
+        if not output_path:
+            output_path = os.getcwd()
+        output_path = os.path.abspath(os.path.expanduser(output_path))
+
         if args.worker_url and args.devices:
             self.console.print(
                 f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] --devices 与 --worker_url 不能同时使用"
@@ -400,6 +405,7 @@ class OpCommandOrchestrator:
                 target=target,
                 intent=args.intent,
                 rag=args.rag,
+                output_path=output_path,
             )
             runner.run_textual()
 
@@ -409,14 +415,9 @@ class OpCommandOrchestrator:
             )
             try:
                 if cli is not None:
-                    asyncio.run(cli.cancel_current_job(reason="cancelled by ctrl+c"))
-                    job_id = getattr(cli, "current_job_id", None)
-                    if isinstance(job_id, str) and job_id:
-                        self.services.jobs.try_print_job_summary(
-                            self.console, server_url, job_id
-                        )
+                    asyncio.run(cli.cancel_main_agent(reason="cancelled by ctrl+c"))
             except Exception as e:
-                log.warning("[Op] cancel_current_job or job_summary failed", exc_info=e)
+                log.warning("[Op] cancel_main_agent failed", exc_info=e)
             self.console.print(
                 f"[{DisplayStyle.DIM}]已发送 cancel 请求（若 server 支持）。日志请查看 server 端输出与 log_dir。[/{DisplayStyle.DIM}]"
             )

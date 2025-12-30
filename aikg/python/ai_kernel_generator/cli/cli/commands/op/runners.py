@@ -43,6 +43,7 @@ class InteractiveOpRunner:
         target: ResolvedTargetConfig,
         intent: Optional[str],
         rag: bool = False,
+        output_path: Optional[str] = None,
     ):
         self.console = console
         self.services = services
@@ -52,6 +53,7 @@ class InteractiveOpRunner:
         self.target = target
         self.intent = intent
         self.rag = rag
+        self.output_path = output_path
         self._slash_commands = build_default_slash_commands()
 
     async def _execute_main_agent_action(
@@ -59,9 +61,7 @@ class InteractiveOpRunner:
         *,
         textual_manager,
         resolved: dict,
-        action: str,
         user_input: str,
-        display_input: str | None = None,
     ) -> dict:
         textual_manager.set_input_enabled(False)
         try:
@@ -76,16 +76,15 @@ class InteractiveOpRunner:
             except Exception as e:
                 log.warning("[OpRunner] set_task_context failed; continue", exc_info=e)
 
-            shown_input = display_input if display_input is not None else user_input
             self.cli.presenter.print_workflow_start()
             res = await self.cli.execute_main_agent(
-                action=action,
                 user_input=user_input,
                 framework=resolved.get("framework", ""),
                 backend=resolved.get("backend", ""),
                 arch=resolved.get("arch", ""),
                 dsl=resolved.get("dsl", ""),
-            rag=self.rag,
+                rag=self.rag,
+                output_path=self.output_path,
             )
             self.cli.presenter.print_workflow_complete()
             return res
@@ -141,7 +140,7 @@ class InteractiveOpRunner:
             return "main"
         return "main"
 
-    async def _await_user_input(self, textual_manager, prompt: str) -> str:
+    async def _await_user_input(self, textual_manager) -> str:
         while True:
             user_input = await textual_manager.await_user_input("")
             if not user_input:
@@ -215,7 +214,7 @@ class InteractiveOpRunner:
         base_intent = (base_intent or "").strip()
         if not base_intent:
             base_intent = await self._await_user_input(
-                textual_manager, t("ops.prompt.op_intent")
+                textual_manager
             )
         if not base_intent:
             self._emit_main_global(
@@ -233,6 +232,21 @@ class InteractiveOpRunner:
         hint_message = str(state.get("hint_message") or "").rstrip()
         if hint_message:
             self._emit_main(self._main_task_id(), Text(hint_message))
+        current_step = str(state.get("current_step") or "").strip().lower()
+        if current_step == "error":
+            error_message = str(
+                state.get("error")
+                or state.get("error_message")
+                or state.get("message")
+                or ""
+            ).rstrip()
+            if error_message:
+                self._emit_main(
+                    self._main_task_id(),
+                    Text.from_markup(
+                        f"[{DisplayStyle.BOLD_RED}]错误:[/{DisplayStyle.BOLD_RED}] {error_message}"
+                    ),
+                )
 
     async def _run_workflow(self, textual_manager) -> None:
         resolved = self._build_resolved()
@@ -247,12 +261,10 @@ class InteractiveOpRunner:
         if not user_input:
             return
 
-        action = "start"
         while True:
             state = await self._execute_main_agent_action(
                 textual_manager=textual_manager,
                 resolved=resolved,
-                action=action,
                 user_input=user_input,
             )
             self._render_agent_messages(state)
@@ -260,19 +272,16 @@ class InteractiveOpRunner:
                 return
             current_step = str(state.get("current_step") or "").strip().lower()
             if not state.get("should_continue", True) or current_step in [
-                "cancelled",
-                "saved",
                 "error",
             ]:
                 return
 
             user_input = await self._await_user_input(
-                textual_manager, t("ops.prompt.op_intent")
+                textual_manager
             )
             if not user_input or not user_input.strip():
                 continue
             user_input = user_input.strip()
-            action = "continue"
 
     def run_textual(self) -> None:
         textual_manager = self.cli.presenter.layout_manager

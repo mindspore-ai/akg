@@ -162,9 +162,9 @@ def get_hint_message(state: Dict[str, Any]) -> str:
     
     # 根据状态返回不同的提示
     if current_step in ["rejected_by_intent", "irrelevant_input"]:
-        return "\n💡 请输入您的算子开发需求，或输入 '退出' 结束对话"
+        return "\n💡 请输入您的算子开发需求"
     elif current_step == "completed":
-        return "\n💡 您可以继续提问、输入 '保存' 保存结果，或 '退出' 结束对话"
+        return "\n💡 您可以继续提问、输入 '保存' 保存结果"
     elif has_task_code and not has_generated_code:
         return "\n💡 请确认是否按照上述的任务描述开始生成，或者增加您想要的修改"
     else:
@@ -193,11 +193,25 @@ def is_simple_command(user_input: str) -> Tuple[bool, str]:
         if not any(neg in user_input_lower for neg in ['不', '别', '不要', '不想', 'not', "don't"]):
             return True, 'exit'
     
-    # 保存相关的关键词
+    # 保存相关的关键词 - 严格匹配，避免复合指令被误判
+    # 只有当输入几乎只包含"保存"或"save"时才认为是简单保存命令
     save_keywords = ['保存', 'save']
+    
+    # 移除保存关键词后，检查剩余内容
+    temp_input = user_input_lower
+    for kw in save_keywords:
+        temp_input = temp_input.replace(kw, '')
+    
+    # 移除常见的无意义字符（标点、空格、助词等）
+    temp_input = temp_input.strip()
+    for char in ['一下', '吧', '呗', '。', '，', '！', '？', '.', ',', '!', '?', ' ']:
+        temp_input = temp_input.replace(char, '')
+    
+    # 如果去掉保存关键词和无意义字符后，输入为空或很短，才认为是简单保存命令
     if any(kw in user_input_lower for kw in save_keywords):
-        if not any(neg in user_input_lower for neg in ['不', '别', '不要', 'not', "don't"]):
-            return True, 'save'
+        if len(temp_input) <= 2:  # 剩余内容很少（容忍一些助词残留）
+            if not any(neg in user_input_lower for neg in ['不', '别', '不要', 'not', "don't"]):
+                return True, 'save'
     
     return False, ''
 
