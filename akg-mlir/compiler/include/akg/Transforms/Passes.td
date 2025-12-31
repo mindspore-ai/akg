@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -105,9 +105,9 @@ def AKGParallelLaunch : Pass<"akg-parallel-launch","mlir::ModuleOp"> {
   let constructor = "mlir::createAKGParallelLaunchPass()";
 }
 
-def NPUTilingFunc : Pass<"npu-tiling-func", "mlir::ModuleOp"> {
-  let summary = "This pass applies tiling to operations on memref, dynamically processing tiles";
-  let constructor = "mlir::createNPUTilingFuncPass()";
+def NPUAutoTiling : Pass<"npu-auto-tiling", "mlir::ModuleOp"> {
+  let summary = "Auto tile loop nests for NPU";
+  let constructor = "mlir::createNPUAutoTilingPass()";
 }
 
 def AddOutParameter : Pass<"add-out-parameter", "mlir::ModuleOp"> {
