@@ -1,4 +1,4 @@
-// RUN: akg-opt %s --npu-tiling-func | FileCheck %s
+// RUN: akg-opt %s --npu-auto-tiling | FileCheck %s
 
 // CHECK-LABEL: module {
 // CHECK-NEXT:  func.func @test_loop_tiling_static_get_tiling_struct_size_function() -> i64 attributes {hacc.function_kind = #hacc.function_kind<HOST>, hacc.host_func_type = #hacc.host_func_type<get_tiling_struct_size_function>} {

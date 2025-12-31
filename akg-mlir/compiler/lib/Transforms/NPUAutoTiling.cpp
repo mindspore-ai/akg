@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "akg/Transforms/NPUTilingFunc.h"
+#include "akg/Transforms/NPUAutoTiling.h"
 
 #include <algorithm>
 #include <memory>
@@ -48,11 +48,11 @@
 // HACC dialect enums/attrs
 #include "bishengir/Dialect/HACC/IR/HACC.h"
 
-#define DEBUG_TYPE "npu-tiling-func"
+#define DEBUG_TYPE "npu-auto-tiling"
 
 namespace mlir {
-#define GEN_PASS DECL_NPUTILINGFUNC
-#define GEN_PASS_DEF_NPUTILINGFUNC
+#define GEN_PASS DECL_NPUAUTOTILING
+#define GEN_PASS_DEF_NPUAUTOTILING
 #include "akg/Transforms/Passes.h.inc"
 }  // namespace mlir
 
@@ -994,8 +994,8 @@ class PureElemwiseTiling : public TilingBase {
   // LogicalResult applyTilingImpl(OpBuilder &) override { return success(); }
 };
 
-struct NPUTilingFunc : public mlir::impl::NPUTilingFuncBase<NPUTilingFunc> {
-  NPUTilingFunc() = default;
+struct NPUAutoTiling : public mlir::impl::NPUAutoTilingBase<NPUAutoTiling> {
+  NPUAutoTiling() = default;
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -1031,6 +1031,6 @@ struct NPUTilingFunc : public mlir::impl::NPUTilingFuncBase<NPUTilingFunc> {
 }  // namespace
 }  // namespace mlir
 
-std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::createNPUTilingFuncPass() {
-  return std::make_unique<NPUTilingFunc>();
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::createNPUAutoTilingPass() {
+  return std::make_unique<NPUAutoTiling>();
 }
