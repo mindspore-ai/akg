@@ -25,7 +25,6 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple
-from ai_kernel_generator.core.langgraph_task import LangGraphTask
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +164,6 @@ class CodeOnlySubAgent(SubAgentBase):
                   - "precision_only": 只生成并验证代码（默认）
                   - "profile": 生成代码并进行性能测试
         """
-        # 获取任务类型（默认为 precision_only）
         task_type = kwargs.get("task_type", "precision_only")
         logger.info(f"Executing CodeOnly sub-agent for {op_name}, task_type={task_type}")
         logger.info(f"[RAG] CodeOnlySubAgent.execute: config.rag={self.config.get('rag')}, config keys: {list(self.config.keys()) if self.config else 'None'}")
@@ -213,7 +211,7 @@ class CodeOnlySubAgent(SubAgentBase):
                 "verification_result": final_state.get("verifier_result", False),
                 "verification_error": final_state.get("verifier_error", ""),
                 "profile_result": final_state.get("profile_res"),
-                "sub_agent_type": "codeonly",  # 🔥 标记子 Agent 类型
+                "sub_agent_type": "codeonly",  
                 "final_state": final_state  # 保存完整状态
             }
             
@@ -956,9 +954,121 @@ class AdaptiveSearchSubAgent(SubAgentBase):
             }
 
 
+class OpTaskBuilderSubAgent(SubAgentBase):
+
+    
+    def __init__(self, 
+                 config: dict,
+                 framework: str = "torch",
+                 backend: str = "cuda",
+                 arch: str = "a100",
+                 dsl: str = "triton"):
+        super().__init__(config, framework, backend, arch, dsl)
+        self._op_task_builder = None  
+    
+    def _get_op_task_builder(self):
+        if self._op_task_builder is None:
+            from ai_kernel_generator.core.agent.op_task_builder import OpTaskBuilder
+            self._op_task_builder = OpTaskBuilder(config=self.config)
+            self._op_task_builder.framework = self.framework
+            self._op_task_builder.backend = self.backend
+            self._op_task_builder.arch = self.arch
+            self._op_task_builder.dsl = self.dsl
+        return self._op_task_builder
+    
+    def get_name(self) -> str:
+        return "op_task_builder"
+    
+    def get_detailed_info(self) -> Dict[str, Any]:
+        """返回详细信息用于 LLM 决策"""
+        return {
+            "name": "op_task_builder",
+            "description": "将用户的自然语言需求转换为 KernelBench 格式的 Torch task 代码",
+            "workflow_steps": [
+                "理解需求: 分析用户的算子需求描述",
+                "生成代码: 生成 KernelBench 格式的 task_desc 代码",
+                "代码检查: 静态检查和运行时检查代码正确性",
+                "返回结果: 返回生成的 task_desc 供后续子 Agent 使用"
+            ],
+            "use_cases": [
+                "【首要调用】用户描述算子需求，但没有提供 task 代码",
+                "用户说「生成 ReLU 算子」、「实现矩阵乘法」等自然语言需求",
+                "用户要求修改已生成的 task 代码",
+                "需要将自然语言转换为 KernelBench 格式代码"
+            ],
+            "advantages": [
+                "自然语言理解：能理解用户的算子需求描述",
+                "格式标准：生成标准的 KernelBench 格式代码",
+                "代码验证：自动进行静态和运行时检查",
+                "支持修改：可根据用户反馈修改已生成的代码"
+            ],
+            "limitations": [
+                "仅生成 task_desc：不生成最终的 Triton 代码",
+                "需要后续处理：生成的 task_desc 需要传给其他子 Agent 生成 Triton 代码"
+            ],
+            "performance": "快速（约 10-30 秒），主要耗时在 LLM 理解和代码验证"
+        }
+    
+    async def execute(self, 
+                     task_code: str,
+                     op_name: str,
+                     task_id: str,
+                     **kwargs) -> Tuple[bool, Dict[str, Any]]:
+        user_request = kwargs.get("user_request", "")
+        user_feedback = kwargs.get("user_feedback", "")
+        
+        if not user_request:
+            logger.error("OpTaskBuilder: user_request is required")
+            return False, {
+                "status": "ERROR",
+                "generated_task_desc": "",
+                "op_name": op_name or "",
+                "agent_message": "缺少 user_request 参数，无法生成 task_desc",
+                "sub_agent_type": "op_task_builder"
+            }
+        
+        logger.info(f"Executing OpTaskBuilder sub-agent, user_request: {user_request[:50]}...")
+        
+        try:
+            op_task_builder = self._get_op_task_builder()
+            
+            state = {
+                "user_input": user_request,
+                "user_feedback": user_feedback,
+                "generated_task_desc": task_code, 
+                "framework": self.framework,
+                "backend": self.backend,
+                "arch": self.arch,
+                "dsl": self.dsl,
+            }
+            
+            # 调用 OpTaskBuilder.run()
+            result = await op_task_builder.run(state)
+            
+            from ai_kernel_generator.utils.langgraph.op_task_builder_state import OpTaskBuilderStatus
+            status = result.get("status", OpTaskBuilderStatus.NEED_CLARIFICATION)
+            success = (status == OpTaskBuilderStatus.READY)
+            
+            # 添加 sub_agent_type 标识
+            result["sub_agent_type"] = "op_task_builder"
+            
+            return success, result
+            
+        except Exception as e:
+            logger.error(f"OpTaskBuilder sub-agent failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return False, {
+                "status": "ERROR",
+                "generated_task_desc": "",
+                "op_name": op_name or "",
+                "agent_message": f"生成 task_desc 失败：{str(e)}",
+                "sub_agent_type": "op_task_builder"
+            }
+
+
 class SubAgentRegistry:
     """
-    子 Agent 注册中心
     
     管理所有可用的子 Agent
     """
@@ -972,6 +1082,7 @@ class SubAgentRegistry:
     
     def _register_builtin_agents(self):
         """注册内置的子 Agent"""
+        self.register(OpTaskBuilderSubAgent)
         self.register(CodeOnlySubAgent)
         self.register(EvolveSubAgent)
         self.register(KernelVerifierSubAgent)
@@ -984,12 +1095,11 @@ class SubAgentRegistry:
         注册一个子 Agent
         
         Args:
-            agent_class: 子 Agent 类（必须继承 SubAgentBase）
+            agent_class: 子 Agent 类
         """
         if not issubclass(agent_class, SubAgentBase):
             raise ValueError(f"{agent_class} must inherit from SubAgentBase")
         
-        # 创建临时实例获取名称
         temp_instance = agent_class(config={})
         agent_name = temp_instance.get_name()
         
