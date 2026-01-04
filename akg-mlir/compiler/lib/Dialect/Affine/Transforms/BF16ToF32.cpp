@@ -61,6 +61,10 @@ static Value convertWideFPToBF16(OpBuilder &builder, Location loc, Value value) 
       bf16Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
       FloatAttr bf16Attr = FloatAttr::get(bf16Type, bf16Value);
       return builder.create<arith::ConstantOp>(loc, bf16Type, bf16Attr);
+    } else if (auto extFOp = dyn_cast<arith::ExtFOp>(value.getDefiningOp())) {
+      if (extFOp.getIn().getType().isBF16()) {
+        return extFOp.getIn();
+      }
     }
     return builder.create<arith::TruncFOp>(loc, bf16Type, value);
   }
@@ -85,9 +89,10 @@ struct AffineLoadBF16ToF32Pattern : public OpRewritePattern<affine::AffineLoadOp
 
     // Check if all uses are only affine.store or arith::ExtFOp
     // If so, we don't need to convert (store will handle it, or ExtFOp already exists)
-    if (!llvm::any_of(loadedValue.getUses(),
-                      [](OpOperand &use) { return !isa<affine::AffineStoreOp, arith::ExtFOp>(use.getOwner()); })) {
-      return failure();  // All uses are store or ExtFOp, skip conversion
+    if (!llvm::any_of(loadedValue.getUses(), [](OpOperand &use) {
+          return !isa<affine::AffineStoreOp, arith::ExtFOp, arith::BitcastOp>(use.getOwner());
+        })) {
+      return failure();  // All uses are store BitcastOp or ExtFOp, skip conversion
     }
     // The memref has bf16 element type, so the load will return a bf16 value
     // We need to convert the loaded bf16 value to f32
@@ -163,11 +168,29 @@ struct TruncFOpPattern : public OpRewritePattern<arith::TruncFOp> {
 struct ExtFOpPattern : public OpRewritePattern<arith::ExtFOp> {
   explicit ExtFOpPattern(MLIRContext *context, PatternBenefit benefit = 2)
       : OpRewritePattern<arith::ExtFOp>(context, benefit) {}
-  LogicalResult matchAndRewrite(arith::ExtFOp extfOp, PatternRewriter &rewriter) const override {
-    Value value = extfOp.getIn();
-    if (value.getType() == extfOp.getResult().getType()) {
-      rewriter.replaceOp(extfOp, value);
+  LogicalResult matchAndRewrite(arith::ExtFOp extFOp, PatternRewriter &rewriter) const override {
+    Value value = extFOp.getIn();
+    if (value.getType() == extFOp.getResult().getType()) {
+      rewriter.replaceOp(extFOp, value);
       return success();
+    }
+    return failure();
+  }
+};
+
+struct BitcastOpPattern : public OpRewritePattern<arith::BitcastOp> {
+  explicit BitcastOpPattern(MLIRContext *context, PatternBenefit benefit = 2)
+      : OpRewritePattern<arith::BitcastOp>(context, benefit) {}
+  LogicalResult matchAndRewrite(arith::BitcastOp bitcastOp, PatternRewriter &rewriter) const override {
+    Value value = bitcastOp.getIn();
+    if (value.getType() == bitcastOp.getResult().getType()) {
+      rewriter.replaceOp(bitcastOp, value);
+      return success();
+    }
+    auto resType = bitcastOp.getResult().getType();
+    if (isa<Float32Type>(value.getType()) && resType.getIntOrFloatBitWidth() == 16) {
+      Value bf16Value = convertWideFPToBF16(rewriter, bitcastOp.getLoc(), value);
+      rewriter.replaceOpWithNewOp<arith::BitcastOp>(bitcastOp, resType, bf16Value);
     }
     return failure();
   }
@@ -221,7 +244,7 @@ struct LegalizeBF16RewritePattern final : RewritePattern {
   explicit LegalizeBF16RewritePattern(MLIRContext *context, const TypeConverter &converter, PatternBenefit benefit = 1)
       : RewritePattern(MatchAnyOpTypeTag{}, benefit, context), typeConverter(converter) {}
   LogicalResult matchAndRewrite(Operation *op, PatternRewriter &rewriter) const override {
-    if (isa<affine::AffineLoadOp, affine::AffineStoreOp, arith::TruncFOp, arith::ConstantOp>(op)) {
+    if (isa<affine::AffineLoadOp, affine::AffineStoreOp, arith::TruncFOp, arith::ConstantOp, arith::BitcastOp>(op)) {
       return failure();
     }
     FailureOr<Operation *> legalized = convertOpResultTypes(op, op->getOperands(), typeConverter, rewriter);
@@ -254,8 +277,8 @@ class BF16ToF32Pass : public impl::BF16ToF32Base<BF16ToF32Pass> {
     patterns.add<AffineStoreWideFPToBF16Pattern>(context);
     patterns.add<ExtFOpPattern>(context);
     patterns.add<TruncFOpPattern>(context);
+    patterns.add<BitcastOpPattern>(context);
     patterns.add<ConstantOpBF16ToF32Pattern>(context);
-
     patterns.add<LegalizeBF16RewritePattern>(context, typeConverter);
 
     GreedyRewriteConfig config;
