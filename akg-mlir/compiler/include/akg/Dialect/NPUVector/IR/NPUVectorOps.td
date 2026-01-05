@@ -469,6 +469,83 @@ def NPUVector_FPToUIOp :
 }
 
 //===----------------------------------------------------------------------===//
+// BitcastOp
+//===----------------------------------------------------------------------===//
+
+def NPUVector_BitcastOp :
+  NPUVector_Op<"bitcast", [Pure, SameOperandsAndResultShape]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector bitcast between values of equal bit width";
+  let description = [{
+    Bitcast an integer or floating-point NPU vector to another integer or
+    floating-point NPU vector of equal bit width. Casts elementwise and
+    preserves shape.
+    
+    Semantics match `arith.bitcast`, but on `!npuvector` types.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.bitcast %0 : !npuvector<?xbf16> to !npuvector<?xi16>
+    %2 = npuvector.bitcast %0 : !npuvector<128xf32> to !npuvector<128xi32>
+    ```
+  }];
+  let assemblyFormat = "$in attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
+// IndexCastOp
+//===----------------------------------------------------------------------===//
+
+def NPUVector_IndexCastOp :
+  NPUVector_Op<"index_cast", [Pure, SameOperandsAndResultShape]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector cast between index and integer element types";
+  let description = [{
+    Casts between NPU vectors of index elements and NPU vectors of signless
+    integer elements, preserving shape. If casting to a wider integer, the
+    value is sign-extended. If casting to a narrower integer, the value is
+    truncated.
+    
+    Semantics match `arith.index_cast`.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.index_cast %0 : !npuvector<?xindex> to !npuvector<?xi64>
+    %2 = npuvector.index_cast %0 : !npuvector<128xi32> to !npuvector<128xindex>
+    ```
+  }];
+  let assemblyFormat = "$in attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
+// IndexCastUIOp
+//===----------------------------------------------------------------------===//
+
+def NPUVector_IndexCastUIOp :
+  NPUVector_Op<"index_castui", [Pure, SameOperandsAndResultShape]>,
+    Arguments<(ins NPUVectorOfAnyRank:$in)>,
+    Results<(outs NPUVectorOfAnyRank:$out)> {
+  let summary = "NPU vector unsigned cast between index and integer element types";
+  let description = [{
+    Casts between NPU vectors of index elements and NPU vectors of signless
+    integer elements, preserving shape. If casting to a wider integer, the
+    value is zero-extended. If casting to a narrower integer, the value is
+    truncated.
+    
+    Semantics match `arith.index_castui`.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.index_castui %0 : !npuvector<?xindex> to !npuvector<?xi64>
+    %2 = npuvector.index_castui %0 : !npuvector<128xi32> to !npuvector<128xindex>
+    ```
+  }];
+  let assemblyFormat = "$in attr-dict `:` qualified(type($in)) `to` qualified(type($out))";
+}
+
+//===----------------------------------------------------------------------===//
 // BroadcastOp
 //===----------------------------------------------------------------------===//
 
