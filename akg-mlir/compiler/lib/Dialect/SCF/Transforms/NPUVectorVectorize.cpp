@@ -122,12 +122,7 @@ static std::tuple<int64_t, Value, bool, bool> decideVectorFactor(
 
   if (ubConst && lbConst) {
     int64_t tripCount = ubConst.value() - lbConst.value();
-
-    if (tripCount > 1) {
-      return {tripCount, Value(), false, false};
-    } else {
-      return {defaultVF, Value(), false, false};
-    }
+    return {tripCount, Value(), false, false};
   } else {
     return {defaultVF, loop.getUpperBound(), false, true};
   }
@@ -271,13 +266,9 @@ static scf::ForOp createVectorizedLoop(VectorizationContext &ctx) {
   Value newStepValue;
 
   if (ctx.isDynamic) {
-    newStepValue = ctx.scalarLoop.getUpperBound();
-
+    newStepValue = ctx.vectorSizeValue;
   } else {
-    auto stepConst = ctx.scalarLoop.getStep().getDefiningOp<arith::ConstantIndexOp>();
-    int64_t oldStep = stepConst.value();
-    int64_t newStep = oldStep * ctx.vectorFactor;
-    newStepValue = ctx.builder.create<arith::ConstantIndexOp>(loc, newStep);
+    newStepValue = ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.vectorFactor);
   }
 
   if (ctx.mode == VectorizationMode::Elementwise) {
@@ -370,7 +361,9 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
   Value vectorValue = ctx.valueMapping.lookupOrNull(storeValue);
   if (!vectorValue) {
     OpBuilder::InsertionGuard guard(ctx.builder);
-    ctx.builder.setInsertionPoint(ctx.vecLoop);
+    if (ctx.vecLoop) {
+      ctx.builder.setInsertionPoint(ctx.vecLoop);
+    }
 
     vectorValue = vectorizeUniform(storeValue, ctx);
     if (!vectorValue) {
@@ -422,22 +415,17 @@ static Value vectorizeTypeConversion(Operation *op, VectorizationContext &ctx) {
     outputVecType = npuvector::NPUVectorType::get({ctx.vectorFactor}, outputScalarType);
   }
 
-  // Convert arith.* operation name to npuvector.* operation name
-  // e.g., "arith.extf" -> "npuvector.extf"
   StringRef arithOpName = op->getName().getStringRef();
   std::string npuvectorOpName = "npuvector." + arithOpName.split('.').second.str();
   OperationName npuvectorName(npuvectorOpName, ctx.builder.getContext());
 
-  // Create the npuvector operation generically
-  // Operation name is automatically mapped: arith.extf -> npuvector.extf
   OperationState state(loc, npuvectorName);
   state.addOperands({vecOperand});
   state.addTypes(outputVecType);
-  state.addAttributes(op->getAttrs());  // Copy all attributes (including fastmath)
+  state.addAttributes(op->getAttrs());
 
   Operation *npuvectorOp = ctx.builder.create(state);
 
-  // Verify the created operation is valid
   if (!npuvectorOp || npuvectorOp->getNumResults() == 0) {
     LLVM_DEBUG(llvm::dbgs() << "Failed to create npuvector operation: "
                             << npuvectorOpName << "\n");
@@ -448,12 +436,11 @@ static Value vectorizeTypeConversion(Operation *op, VectorizationContext &ctx) {
 }
 
 static Value vectorizeArithOp(Operation *op, VectorizationContext &ctx) {
-  // Special handling for all type conversion operations
-  // Arith type conversion ops don't support NPUVectorType, convert to npuvector versions
   if (isa<arith::ExtFOp, arith::TruncFOp,
           arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
           arith::SIToFPOp, arith::UIToFPOp,
-          arith::FPToSIOp, arith::FPToUIOp>(op)) {
+          arith::FPToSIOp, arith::FPToUIOp,
+          arith::BitcastOp, arith::IndexCastOp, arith::IndexCastUIOp>(op)) {
     return vectorizeTypeConversion(op, ctx);
   }
 
@@ -463,10 +450,11 @@ static Value vectorizeArithOp(Operation *op, VectorizationContext &ctx) {
 
     if (!vecOperand) {
       if (operand.getParentBlock() != ctx.scalarLoop.getBody()) {
-        // Loop-invariant: use broadcast
         OpBuilder::InsertionGuard guard(ctx.builder);
 
-        ctx.builder.setInsertionPoint(ctx.vecLoop);
+        if (ctx.vecLoop) {
+          ctx.builder.setInsertionPoint(ctx.vecLoop);
+        }
 
         vecOperand = vectorizeUniform(operand, ctx);
         if (!vecOperand) {
@@ -572,10 +560,14 @@ static Value vectorizeUniform(Value uniformVal, VectorizationContext &ctx) {
 }
 
 static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
-  ctx.builder.setInsertionPointToStart(ctx.vecLoop.getBody());
+  if (ctx.vecLoop) {
+    ctx.builder.setInsertionPointToStart(ctx.vecLoop.getBody());
+  }
 
-  ctx.valueMapping.map(ctx.scalarLoop.getInductionVar(),
-                       ctx.vecLoop.getInductionVar());
+  if (ctx.vecLoop) {
+    ctx.valueMapping.map(ctx.scalarLoop.getInductionVar(),
+                         ctx.vecLoop.getInductionVar());
+  }
 
   if (ctx.mode == VectorizationMode::Reduction) {
     for (auto [scalarArg, vecArg] : llvm::zip(
@@ -627,6 +619,21 @@ static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
       }
     }
   }
+
+  return success();
+}
+
+static LogicalResult vectorizeElementwiseInline(VectorizationContext &ctx) {
+  ctx.builder.setInsertionPoint(ctx.scalarLoop);
+
+  ctx.valueMapping.map(ctx.scalarLoop.getInductionVar(),
+                       ctx.scalarLoop.getLowerBound());
+
+  if (failed(vectorizeLoopBody(ctx))) {
+    return failure();
+  }
+
+  ctx.scalarLoop.erase();
 
   return success();
 }
@@ -713,23 +720,23 @@ static LogicalResult vectorizeLoop(
 
   VectorizationContext ctx(builder, vf, vfValue, maxStepValue, mode, scalarLoop, isDynamic);
 
-  ctx.vecLoop = createVectorizedLoop(ctx);
-  if (!ctx.vecLoop) {
-    return failure();
-  }
-
-  if (failed(vectorizeLoopBody(ctx))) {
-    ctx.vecLoop.erase();
-    return failure();
-  }
-
   if (ctx.mode == VectorizationMode::Elementwise) {
-    finalizeElementwise(ctx);
-  } else {
-    finalizeReduction(ctx);
-  }
+    return vectorizeElementwiseInline(ctx);
 
-  return success();
+  } else {
+    ctx.vecLoop = createVectorizedLoop(ctx);
+    if (!ctx.vecLoop) {
+      return failure();
+    }
+
+    if (failed(vectorizeLoopBody(ctx))) {
+      ctx.vecLoop.erase();
+      return failure();
+    }
+
+    finalizeReduction(ctx);
+    return success();
+  }
 }
 
 class NPUVectorVectorizePass
@@ -775,6 +782,13 @@ class NPUVectorVectorizePass
       auto [vf, vfValue, skip, isDynamic] = decideVectorFactor(loop, defaultVF);
       if (skip || vf <= 0) {
         continue;
+      }
+
+      if (isDynamic) {
+        OpBuilder sizeBuilder(&getContext());
+        sizeBuilder.setInsertionPoint(loop);
+        vfValue = sizeBuilder.create<arith::SubIOp>(
+            loop.getLoc(), loop.getUpperBound(), loop.getLowerBound());
       }
 
       Value maxStepValue;
