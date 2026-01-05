@@ -206,37 +206,32 @@ static LogicalResult invMatchAndRewriteHelper(Operation *op, PatternRewriter &re
 // Returns the constant initial value for a given reduction operation. The
 // attribute type varies depending on the element type required.
 static TypedAttr createInitialValueForReduceOp(Operation *op, Type elementTy, PatternRewriter &rewriter) {
-  if (isa<mindspore::ReduceSumOp>(op) && isa<FloatType>(elementTy)) return rewriter.getFloatAttr(elementTy, 0.0);
+  if (auto intTy = dyn_cast<IntegerType>(elementTy)) {
+    if (intTy.isInteger(1)) {
+      if (isa<mindspore::ReduceAllOp>(op)) return rewriter.getIntegerAttr(intTy, APInt::getAllOnes(1));
+      if (isa<mindspore::ReduceAnyOp>(op)) return rewriter.getIntegerAttr(intTy, APInt::getZero(1));
+    }
+  }
 
-  if (isa<mindspore::ReduceSumOp>(op) && isa<IntegerType>(elementTy)) return rewriter.getIntegerAttr(elementTy, 0);
+  if (auto floatTy = dyn_cast<FloatType>(elementTy)) {
+    if (isa<mindspore::ReduceSumOp>(op)) return rewriter.getFloatAttr(floatTy, 0.0);
+    if (isa<mindspore::ReduceProdOp>(op)) return rewriter.getFloatAttr(floatTy, 1.0);
+    if (isa<mindspore::ReduceMinOp>(op))
+      return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), /*Negative=*/false));
+    if (isa<mindspore::ReduceMaxOp>(op) || isa<mindspore::ArgMaxOp>(op))
+      return rewriter.getFloatAttr(floatTy, APFloat::getLargest(floatTy.getFloatSemantics(), /*Negative=*/true));
+    return {};
+  }
 
-  if (isa<mindspore::ReduceProdOp>(op) && isa<FloatType>(elementTy)) return rewriter.getFloatAttr(elementTy, 1.0);
-
-  if (isa<mindspore::ReduceProdOp>(op) && isa<IntegerType>(elementTy)) return rewriter.getIntegerAttr(elementTy, 1);
-
-  if (isa<mindspore::ReduceMinOp>(op) && isa<FloatType>(elementTy))
-    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(cast<FloatType>(elementTy).getFloatSemantics(), false));
-
-  if (isa<mindspore::ReduceMinOp>(op) && isa<IntegerType>(elementTy))
-    return rewriter.getIntegerAttr(elementTy, APInt::getSignedMaxValue(elementTy.getIntOrFloatBitWidth()));
-
-  if (isa<mindspore::ReduceMaxOp>(op) && isa<FloatType>(elementTy))
-    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(cast<FloatType>(elementTy).getFloatSemantics(), true));
-
-  if (isa<mindspore::ReduceMaxOp>(op) && isa<IntegerType>(elementTy))
-    return rewriter.getIntegerAttr(elementTy, APInt::getSignedMinValue(elementTy.getIntOrFloatBitWidth()));
-
-  if (isa<mindspore::ReduceAllOp>(op) && elementTy.isInteger(1))
-    return rewriter.getIntegerAttr(elementTy, APInt::getAllOnes(1));
-
-  if (isa<mindspore::ReduceAnyOp>(op) && elementTy.isInteger(1))
-    return rewriter.getIntegerAttr(elementTy, APInt::getZero(1));
-
-  if (isa<mindspore::ArgMaxOp>(op) && isa<FloatType>(elementTy))
-    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(cast<FloatType>(elementTy).getFloatSemantics(), true));
-
-  if (isa<mindspore::ArgMaxOp>(op) && isa<IntegerType>(elementTy))
-    return rewriter.getIntegerAttr(elementTy, APInt::getSignedMinValue(elementTy.getIntOrFloatBitWidth()));
+  if (auto intTy = dyn_cast<IntegerType>(elementTy)) {
+    unsigned bitWidth = intTy.getIntOrFloatBitWidth();
+    if (isa<mindspore::ReduceSumOp>(op)) return rewriter.getIntegerAttr(intTy, 0);
+    if (isa<mindspore::ReduceProdOp>(op)) return rewriter.getIntegerAttr(intTy, 1);
+    if (isa<mindspore::ReduceMinOp>(op)) return rewriter.getIntegerAttr(intTy, APInt::getSignedMaxValue(bitWidth));
+    if (isa<mindspore::ReduceMaxOp>(op) || isa<mindspore::ArgMaxOp>(op))
+      return rewriter.getIntegerAttr(intTy, APInt::getSignedMinValue(bitWidth));
+    return {};
+  }
 
   return {};
 }
@@ -246,43 +241,37 @@ static TypedAttr createInitialValueForReduceOp(Operation *op, Type elementTy, Pa
 static Value createLinalgBodyCalculationForReduceOp(Operation *op, ValueRange args, Type elementTy,
                                                     PatternRewriter &rewriter) {
   Location loc = op->getLoc();
-  if (isa<mindspore::ReduceSumOp>(op) && isa<FloatType>(elementTy)) {
-    return rewriter.create<arith::AddFOp>(loc, args);
+
+  if (auto intTy = dyn_cast<IntegerType>(elementTy)) {
+    if (intTy.isInteger(1)) {
+      if (isa<mindspore::ReduceAllOp>(op)) return rewriter.create<arith::AndIOp>(loc, args);
+      if (isa<mindspore::ReduceAnyOp>(op)) return rewriter.create<arith::OrIOp>(loc, args);
+    }
   }
 
-  if (isa<mindspore::ReduceSumOp>(op) && isa<IntegerType>(elementTy)) {
-    return rewriter.create<arith::AddIOp>(loc, args);
+  if (auto floatTy = dyn_cast<FloatType>(elementTy)) {
+    (void)floatTy;
+    if (isa<mindspore::ReduceSumOp>(op)) return rewriter.create<arith::AddFOp>(loc, args);
+    if (isa<mindspore::ReduceProdOp>(op)) return rewriter.create<arith::MulFOp>(loc, args);
+    if (isa<mindspore::ReduceMinOp>(op)) return rewriter.create<arith::MinimumFOp>(loc, args[0], args[1]);
+    if (isa<mindspore::ReduceMaxOp>(op)) return rewriter.create<arith::MaximumFOp>(loc, args[0], args[1]);
+    return {};
   }
 
-  if (isa<mindspore::ReduceProdOp>(op) && isa<FloatType>(elementTy)) {
-    return rewriter.create<arith::MulFOp>(loc, args);
+  if (auto intTy = dyn_cast<IntegerType>(elementTy)) {
+    (void)intTy;
+    if (isa<mindspore::ReduceSumOp>(op)) return rewriter.create<arith::AddIOp>(loc, args);
+    if (isa<mindspore::ReduceProdOp>(op)) return rewriter.create<arith::MulIOp>(loc, args);
+    if (isa<mindspore::ReduceMinOp>(op)) {
+      auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, args[0], args[1]);
+      return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
+    }
+    if (isa<mindspore::ReduceMaxOp>(op)) {
+      auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, args[0], args[1]);
+      return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
+    }
+    return {};
   }
-
-  if (isa<mindspore::ReduceProdOp>(op) && isa<IntegerType>(elementTy)) {
-    return rewriter.create<arith::MulIOp>(loc, args);
-  }
-
-  if (isa<mindspore::ReduceMinOp>(op) && isa<FloatType>(elementTy)) {
-    return rewriter.create<arith::MinimumFOp>(loc, args[0], args[1]);
-  }
-
-  if (isa<mindspore::ReduceMinOp>(op) && isa<IntegerType>(elementTy)) {
-    auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, args[0], args[1]);
-    return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
-  }
-
-  if (isa<mindspore::ReduceMaxOp>(op) && isa<FloatType>(elementTy)) {
-    return rewriter.create<arith::MaximumFOp>(loc, args[0], args[1]);
-  }
-
-  if (isa<mindspore::ReduceMaxOp>(op) && isa<IntegerType>(elementTy)) {
-    auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, args[0], args[1]);
-    return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
-  }
-
-  if (isa<mindspore::ReduceAllOp>(op) && elementTy.isInteger(1)) return rewriter.create<arith::AndIOp>(loc, args);
-
-  if (isa<mindspore::ReduceAnyOp>(op) && elementTy.isInteger(1)) return rewriter.create<arith::OrIOp>(loc, args);
 
   return {};
 }
@@ -579,7 +568,7 @@ static DenseI64ArrayAttr computeDimension(mindspore::BroadcastToOp brcOp) {
 
 static Value getDynamicRankTensor(mindspore::BroadcastToOp brcOp) {
   SmallVector<Operation *, 8> msOps;
-  auto func = brcOp.getOperation()->getParentOp();
+  auto func = brcOp->getParentOp();
   func->walk([&](Operation *op) {
     if (isa<mindspore::AddOp, mindspore::MulOp, mindspore::SubOp, mindspore::DivOp, mindspore::PowOp,
             mindspore::MaximumOp, mindspore::MinimumOp, mindspore::EqualOp, mindspore::GreaterOp,
@@ -589,36 +578,76 @@ static Value getDynamicRankTensor(mindspore::BroadcastToOp brcOp) {
   });
   for (auto msOp : msOps) {
     if (isa<LLVM::ReturnOp>(msOp)) {
-      auto oper0 = msOp->getOperands()[0];
-      if (oper0.getDefiningOp() == brcOp) return oper0;
+      if (msOp->getNumOperands() == 0)
+        continue;
+      auto oper0 = msOp->getOperand(0);
+      if (oper0.getDefiningOp() == brcOp)
+        return oper0;
+      continue;
     }
-    auto oper0 = msOp->getOperands()[0];
-    auto oper1 = msOp->getOperands()[1];
-    if (oper0.getDefiningOp() == brcOp) return oper1;
-    if (oper1.getDefiningOp() == brcOp) return oper0;
+
+    if (msOp->getNumOperands() < 2)
+      continue;
+
+    auto oper0 = msOp->getOperand(0);
+    auto oper1 = msOp->getOperand(1);
+
+    if (oper0.getDefiningOp() == brcOp)
+      return oper1;
+    if (oper1.getDefiningOp() == brcOp)
+      return oper0;
   }
-  return Value();
+  return brcOp.getOutput();
 }
 
-static LogicalResult broadcastMatchAndRewriteHelper(mindspore::BroadcastToOp brcOp, PatternRewriter &rewriter) {
-  auto loc = brcOp.getLoc();
+static LogicalResult broadcastMatchAndRewriteHelper(mindspore::BroadcastToOp brcOp,
+                                                    PatternRewriter &rewriter) {
+  auto loc    = brcOp.getLoc();
   Value input = brcOp.getInput();
   Value output = brcOp.getOutput();
 
+  auto resultTy = dyn_cast<ShapedType>(output.getType());
+  if (!resultTy) {
+    return rewriter.notifyMatchFailure(
+        brcOp, "BroadcastToOp result is not a ShapedType");
+  }
+
+  Value dynRef = getDynamicRankTensor(brcOp);
+  ShapedType dynRefTy;
+  if (auto st = dyn_cast<ShapedType>(dynRef.getType()))
+    dynRefTy = st;
+
+  if (!dynRefTy || dynRefTy.getRank() == 0 ||
+      dynRefTy.getRank() != resultTy.getRank()) {
+    dynRef   = output;
+    dynRefTy = resultTy;
+  }
+
   SmallVector<Value> dynDims;
-  auto brcDst = getDynamicRankTensor(brcOp);
-  auto brcDstTy = cast<ShapedType>(brcDst.getType());
-  for (int i = 0; i < brcDstTy.getRank(); i++) {
-    if (brcDstTy.isDynamicDim(i)) {
-      dynDims.push_back(rewriter.create<tensor::DimOp>(loc, brcDst, i));
+  for (int64_t i = 0, e = dynRefTy.getRank(); i < e; ++i) {
+    if (dynRefTy.isDynamicDim(i)) {
+      dynDims.push_back(rewriter.create<tensor::DimOp>(loc, dynRef, i));
     }
   }
 
-  auto resultTy = cast<ShapedType>(output.getType());
-  Value emptyTensor = rewriter.create<tensor::EmptyOp>(loc, resultTy.getShape(), resultTy.getElementType(), dynDims);
-  auto dimension = computeDimension(brcOp);
+  Value emptyTensor = rewriter.create<tensor::EmptyOp>(
+      loc, resultTy.getShape(), resultTy.getElementType(), dynDims);
 
-  rewriter.replaceOpWithNewOp<linalg::BroadcastOp>(brcOp, input, emptyTensor, dimension);
+  auto *op = brcOp.getOperation();
+  auto symbolAttr = op->getAttrOfType<DictionaryAttr>("frontend_symbol");
+  if (!symbolAttr) {
+    return rewriter.notifyMatchFailure(
+        brcOp, "missing frontend_symbol attribute on BroadcastToOp");
+  }
+  auto inputShapeAttr = dyn_cast_or_null<ArrayAttr>(symbolAttr.get("input_0"));
+  if (!inputShapeAttr) {
+    return rewriter.notifyMatchFailure(
+        brcOp, "missing frontend_symbol.input_0 attribute on BroadcastToOp");
+  }
+
+  DenseI64ArrayAttr dimension = computeDimension(brcOp);
+  rewriter.replaceOpWithNewOp<linalg::BroadcastOp>(
+      brcOp, input, emptyTensor, dimension);
   return success();
 }
 
@@ -771,7 +800,7 @@ class MindSporeConstConverter : public OpRewritePattern<mindspore::ConstOp> {
   }
 };
 
-void populateLowerMindSporeToLinalgNamedPattern(RewritePatternSet &patterns) {
+void populateLowerMindSporeToLinalgNamedPattern(RewritePatternSet &patterns, bool enableHFusion) {
   // clang-format off
   (void)patterns.add<
     MindSporeElemwiseConverter<mindspore::AddOp>,
@@ -796,17 +825,21 @@ void populateLowerMindSporeToLinalgNamedPattern(RewritePatternSet &patterns) {
     MindSporeBroadcastConverter,
     MindSporeRoundConverter,
     MindSporeSelectConverter,
-    MindSporeIsFiniteConverter,
     MindSporeInvConverter,
     MindSporeConstConverter
   >(patterns.getContext());
+
+  if (enableHFusion) {
+    patterns.add<MindSporeIsFiniteConverter>(patterns.getContext());
+  }
+
   // clang-format on
   return;
 }
 
 struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedBase<ConvertMindSporeToLinalgNamedPass> {
  public:
-  ConvertMindSporeToLinalgNamedPass() = default;
+  explicit ConvertMindSporeToLinalgNamedPass(bool enableHFusion = true) : enableHFusion(enableHFusion) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<linalg::LinalgDialect>();
@@ -825,15 +858,22 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
                            hfusion::HFusionDialect>();
     FunctionOpInterface func = getOperation();
     func->setAttr("hacc.function_kind", hacc::HACCFuncTypeAttr::get(func->getContext(), hacc::HACCFuncType::HOST));
-    populateLowerMindSporeToLinalgNamedPattern(patterns);
+    populateLowerMindSporeToLinalgNamedPattern(patterns, enableHFusion);
     populateLowerMindSporeCompareToLinalgPattern(patterns);
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
       signalPassFailure();
     }
   }
+
+ private:
+  bool enableHFusion;
 };
 
 std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToLinalgNamedPass() {
   return std::make_unique<ConvertMindSporeToLinalgNamedPass>();
+}
+
+std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToLinalgNamedPass(bool enableHFusion) {
+  return std::make_unique<ConvertMindSporeToLinalgNamedPass>(enableHFusion);
 }
 }  // namespace mlir

@@ -29,8 +29,9 @@ class FuncOp;
 
 std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToLinalgNamedPass();
 
-void populateLowerMindSporeToLinalgNamedPattern(RewritePatternSet &patterns);
+std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToLinalgNamedPass(bool enableHFusion = true);
+
+void populateLowerMindSporeToLinalgNamedPattern(RewritePatternSet &patterns, bool enableHFusion);
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_CONVERSION_MINDSPORETOLINALG_MINDSPORETOLINALGNAMED_H_
-
