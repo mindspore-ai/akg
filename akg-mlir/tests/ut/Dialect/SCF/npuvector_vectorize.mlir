@@ -474,24 +474,86 @@ func.func @test_index_cast_static(%input: memref<128xindex>, %output: memref<128
 // -----
 
 // ============================================================================
-// Type Conversion: IndexCastUI
+// CmpIOp
 // ============================================================================
 
-// CHECK-LABEL: func.func @test_index_castui_static
-func.func @test_index_castui_static(%input: memref<128xi32>, %output: memref<128xindex>) {
+// CHECK-LABEL: func.func @test_cmpi_static
+func.func @test_cmpi_static(%input: memref<128xi32>, %output: memref<128xi1>) {
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
   %c1 = arith.constant 1 : index
+  %threshold = arith.constant 100 : i32
 
   // CHECK: %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}], %{{.*}} : memref<128xi32>, !npuvector<128xi32>
-  // CHECK: %[[RESULT_VEC:.*]] = npuvector.index_castui %[[V_VEC]] : !npuvector<128xi32> to !npuvector<128xindex>
-  // CHECK: npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<128xindex>, memref<128xindex>
+  // CHECK: %[[THRESH_VEC:.*]] = npuvector.broadcast %{{.*}} : i32 to !npuvector<128xi32>
+  // CHECK: %[[RESULT_VEC:.*]] = npuvector.cmpi sgt, %[[V_VEC]], %[[THRESH_VEC]] : !npuvector<128xi32> to !npuvector<128xi1>
+  // CHECK: npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<128xi1>, memref<128xi1>
   // CHECK-NOT: scf.for
 
   scf.for %i = %c0 to %c128 step %c1 {
     %v = memref.load %input[%i] : memref<128xi32>
-    %result = arith.index_castui %v : i32 to index
-    memref.store %result, %output[%i] : memref<128xindex>
+    %result = arith.cmpi sgt, %v, %threshold : i32
+    memref.store %result, %output[%i] : memref<128xi1>
+  } {vector=128}
+  return
+}
+
+// -----
+
+// ============================================================================
+// CmpFOp
+// ============================================================================
+
+// CHECK-LABEL: func.func @test_cmpf_static
+func.func @test_cmpf_static(%input: memref<128xf32>, %output: memref<128xi1>) {
+  %c0 = arith.constant 0 : index
+  %c128 = arith.constant 128 : index
+  %c1 = arith.constant 1 : index
+  %zero = arith.constant 0.0 : f32
+
+  // CHECK: %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}], %{{.*}} : memref<128xf32>, !npuvector<128xf32>
+  // CHECK: %[[ZERO_VEC:.*]] = npuvector.broadcast %{{.*}} : f32 to !npuvector<128xf32>
+  // CHECK: %[[RESULT_VEC:.*]] = npuvector.cmpf ogt, %[[V_VEC]], %[[ZERO_VEC]] : !npuvector<128xf32> to !npuvector<128xi1>
+  // CHECK: npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<128xi1>, memref<128xi1>
+  // CHECK-NOT: scf.for
+
+  scf.for %i = %c0 to %c128 step %c1 {
+    %v = memref.load %input[%i] : memref<128xf32>
+    %result = arith.cmpf ogt, %v, %zero : f32
+    memref.store %result, %output[%i] : memref<128xi1>
+  } {vector=128}
+  return
+}
+
+// -----
+
+// ============================================================================
+// SelectOp
+// ============================================================================
+
+// CHECK-LABEL: func.func @test_select_static
+func.func @test_select_static(
+    %cond: memref<128xi1>,
+    %input_a: memref<128xf32>,
+    %input_b: memref<128xf32>,
+    %output: memref<128xf32>) {
+  %c0 = arith.constant 0 : index
+  %c128 = arith.constant 128 : index
+  %c1 = arith.constant 1 : index
+
+  // CHECK: %[[COND_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}], %{{.*}} : memref<128xi1>, !npuvector<128xi1>
+  // CHECK: %[[A_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}], %{{.*}} : memref<128xf32>, !npuvector<128xf32>
+  // CHECK: %[[B_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}], %{{.*}} : memref<128xf32>, !npuvector<128xf32>
+  // CHECK: %[[RESULT_VEC:.*]] = npuvector.select %[[COND_VEC]], %[[A_VEC]], %[[B_VEC]] : !npuvector<128xi1>, !npuvector<128xf32>
+  // CHECK: npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<128xf32>, memref<128xf32>
+  // CHECK-NOT: scf.for
+
+  scf.for %i = %c0 to %c128 step %c1 {
+    %c = memref.load %cond[%i] : memref<128xi1>
+    %a = memref.load %input_a[%i] : memref<128xf32>
+    %b = memref.load %input_b[%i] : memref<128xf32>
+    %result = arith.select %c, %a, %b : f32
+    memref.store %result, %output[%i] : memref<128xf32>
   } {vector=128}
   return
 }
