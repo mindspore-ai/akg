@@ -27,13 +27,44 @@ namespace runtime {
 bool ProfileMgr::StartupProfiling(const uint32_t device_id) {
   LOG(INFO) << "Start to profile";
 
+  int32_t current_device = -1;
+  aclError ret = aclrtGetDevice(&current_device);
+
+  if (ret != ACL_SUCCESS || current_device != static_cast<int32_t>(device_id)) {
+    ret = aclrtSetDevice(device_id);
+    if (ret != ACL_SUCCESS) {
+      LOG(ERROR) << "Failed to set device " << device_id << ", ret = " << ret;
+      return false;
+    }
+  }
+
+  aclrtContext context = nullptr;
+  ret = aclrtGetCurrentContext(&context);
+  if (ret != ACL_SUCCESS || context == nullptr) {
+    LOG(ERROR) << "No valid ACL context on current thread!";
+    LOG(ERROR) << "This may indicate ACL runtime is not properly initialized";
+    return false;
+  }
+
+  uint32_t device_count = 0;
+  ret = aclrtGetDeviceCount(&device_count);
+  if (ret != ACL_SUCCESS || device_count == 0) {
+    LOG(ERROR) << "No devices available!";
+    return false;
+  }
+  if (device_id >= device_count) {
+    LOG(ERROR) << "Invalid device_id " << device_id
+                << ", only " << device_count << " devices available";
+    return false;
+  }
+
   char *profile_dir = std::getenv("PROFILING_DIR");
   if (profile_dir == nullptr) {
     LOG(ERROR) << "Environment PROFILING_DIR not set";
     return false;
   }
 
-  aclError ret = aclprofInit(profile_dir, strlen(profile_dir));
+  ret = aclprofInit(profile_dir, strlen(profile_dir));
   if (ret != ACL_ERROR_NONE) {
     LOG(ERROR) << "aclprofInit failed, ret = " << ret;
     return false;
@@ -53,6 +84,7 @@ bool ProfileMgr::StartupProfiling(const uint32_t device_id) {
     LOG(ERROR) << "aclprofStart start failed, ret = " << ret;
     return false;
   }
+
   return true;
 }
 
@@ -92,11 +124,12 @@ void ascend_stop_profiling() {
 }
 
 // PYBIND interface
+// cppcheck-suppress syntaxError
 PYBIND11_MODULE(akgProfileMgr, m) {
-  m.doc() = "pybind ascend profiling"; // optional module docstring
+  m.doc() = "pybind ascend profiling";  // optional module docstring
   m.def("ascend_start_profiling", &ascend_start_profiling);
   m.def("ascend_stop_profiling", &ascend_stop_profiling);
 }
 
 }  // namespace runtime
-}  // namespace air
+}  // namespace mlir

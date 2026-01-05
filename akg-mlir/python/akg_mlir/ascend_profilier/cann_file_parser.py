@@ -1,3 +1,4 @@
+"""CANN profiling file parser module."""
 import os
 import re
 import subprocess
@@ -8,6 +9,7 @@ from .path_manager import PathManager
 
 
 class CANNDataEnum(Enum):
+    """Enum for CANN data types."""
     OP_SUMMARY = 0
     NPU_MEMORY = 1
     MSPROF_TIMELINE = 2
@@ -21,6 +23,7 @@ class CANNDataEnum(Enum):
 
 
 class CANNFileParser:
+    """Parser for CANN profiling files."""
     COMMAND_SUCCESS = 0
     ACL_TO_NPU = "acl_to_npu"
     START_FLOW = "s"
@@ -28,9 +31,9 @@ class CANNFileParser:
     SUMMARY = "summary"
     TIMELINE = "timeline"
     ANALYZE = "analyze"
+    MINDSTUDIO_PROFILER_OUTPUT = "mindstudio_profiler_output"
     CANN_DATA_MATCH = {
-        CANNDataEnum.OP_SUMMARY: [r"^op_summary_\d+_\d+\.csv", r"^op_summary_\d+_\d+_\d+\.csv",
-                                  r"^op_summary_\d+_\d+_\d+_\d+\.csv"],
+        CANNDataEnum.OP_SUMMARY: [r"^op_summary_\d+(_\d+)*\.csv"],
     }
 
     def __init__(self, profiler_path: str):
@@ -39,25 +42,29 @@ class CANNFileParser:
         self._file_dispatch()
 
     def export_cann_profiling(self):
+        """Export CANN profiling data."""
         if not os.path.isdir(self._cann_path):
             return
         self._del_summary_and_timeline_data()
-        completed_process = subprocess.run(["msprof", "--export=on", f"--output={self._cann_path}"],
-                                           capture_output=True)
-        if completed_process.returncode != self.COMMAND_SUCCESS:
+        try:
+            subprocess.run(["msprof", "--export=on", f"--output={self._cann_path}"],
+                          capture_output=True, check=True)
+        except subprocess.CalledProcessError as error:
             raise RuntimeError(
                 f"Export CANN Profiling data failed, please verify that the ascend-toolkit is installed and set-env.sh "
                 f"is sourced. or you can execute the command to confirm the CANN Profiling export result: "
-                f"msprof --export=on --output={self._cann_path}")
+                f"msprof --export=on --output={self._cann_path}") from error
 
 
     def get_file_list_by_type(self, file_type: CANNDataEnum) -> set:
         return self._file_dict.get(file_type, set())
 
     def _file_dispatch(self):
+        """Dispatch files by type."""
         all_file_list = PathManager.get_device_all_file_list_by_type(self._cann_path, self.SUMMARY)
         all_file_list += PathManager.get_device_all_file_list_by_type(self._cann_path, self.TIMELINE)
         all_file_list += PathManager.get_analyze_all_file(self._cann_path, self.ANALYZE)
+        all_file_list += PathManager.get_analyze_all_file(self._cann_path, self.MINDSTUDIO_PROFILER_OUTPUT)
         for file_path in all_file_list:
             if not os.path.isfile(file_path):
                 continue
