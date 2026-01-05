@@ -869,10 +869,6 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
   bool enableHFusion;
 };
 
-std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToLinalgNamedPass() {
-  return std::make_unique<ConvertMindSporeToLinalgNamedPass>();
-}
-
 std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToLinalgNamedPass(bool enableHFusion) {
   return std::make_unique<ConvertMindSporeToLinalgNamedPass>(enableHFusion);
 }
