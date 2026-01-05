@@ -78,10 +78,10 @@ struct AKGLoopFusion : public mlir::impl::AKGLoopFusionBase<AKGLoopFusion> {
   void collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
                                      llvm::StringMap<llvm::SmallVector<mlir::Value>> &axisToDimValues);
 
-  // Map: prime constant -> axis key (symbol name)
-  llvm::DenseMap<mlir::Value, std::string> primeToAxisKeyMap;
-  // Map: axis key -> representative dim value (first dim in the group)
-  llvm::StringMap<mlir::Value> axisKeyToRepresentativeDimMap;
+  // Map: prime constant -> representative dim value (first dim in the group)
+  llvm::DenseMap<mlir::Value, mlir::Value> primeToDimMap;
+  // Whether to print fusion information
+  bool printFusionInfo{false};
   // Large primes for replacing dim values
   static constexpr int64_t kPrimes[] = {1000003, 1000033, 1000037, 1000039, 1000081,
                                         1000099, 1000117, 1000121, 1000133, 1000139};
@@ -216,18 +216,15 @@ void AKGLoopFusion::replaceDimWithPrimes(mlir::func::FuncOp funcOp) {
     auto &dimValues = entry.getValue();
 
     // Select first dim as representative (will be used when restoring)
-    axisKeyToRepresentativeDimMap[axisKey] = dimValues.front();
+    mlir::Value representativeDim = dimValues.front();
+    builder.setInsertionPointAfterValue(representativeDim);
+    auto primeConst = builder.create<mlir::arith::ConstantIndexOp>(representativeDim.getLoc(), kPrimes[primeIndex]);
+
+    // Directly map prime constant to representative dim
+    primeToDimMap[primeConst] = representativeDim;
 
     // Replace all dim values in this group with the same prime
     for (mlir::Value dimValue : dimValues) {
-      builder.setInsertionPointAfterValue(dimValue);
-      auto primeConst = builder.create<mlir::arith::ConstantIndexOp>(dimValue.getLoc(), kPrimes[primeIndex]);
-
-      primeToAxisKeyMap[primeConst] = axisKey.str();
-
-      llvm::outs() << "Replacing dim value: " << dimValue << " (axis: " << axisKey
-                   << ") with prime: " << kPrimes[primeIndex] << "\n";
-
       dimValue.replaceAllUsesWith(primeConst);
     }
 
@@ -238,42 +235,20 @@ void AKGLoopFusion::replaceDimWithPrimes(mlir::func::FuncOp funcOp) {
 // Restore the original dim values after fusion is complete.
 // All dim values in the same axis group are replaced with a single representative dim value.
 void AKGLoopFusion::restoreDimFromPrimes(mlir::func::FuncOp funcOp) {
-  // Step 1: Group all prime constants by their axis key
-  llvm::StringMap<llvm::SmallVector<mlir::Value>> axisKeyToPrimes;
-  for (auto &[primeConst, axisKey] : primeToAxisKeyMap) {
-    axisKeyToPrimes[axisKey].push_back(primeConst);
-  }
+  // Replace each prime with its corresponding representative dim
+  for (auto &[primeConst, representativeDim] : primeToDimMap) {
+    primeConst.replaceAllUsesWith(representativeDim);
 
-  // Step 2: Replace each prime with the representative dim for its axis
-  for (auto &entry : axisKeyToPrimes) {
-    llvm::StringRef axisKey = entry.getKey();
-    auto &primeValues = entry.getValue();
-
-    auto it = axisKeyToRepresentativeDimMap.find(axisKey);
-    if (it == axisKeyToRepresentativeDimMap.end()) {
-      continue;
-    }
-
-    mlir::Value representativeDim = it->second;
-
-    for (mlir::Value primeConst : primeValues) {
-      llvm::outs() << "Restoring prime: " << primeConst << " -> dim: " << representativeDim << " (axis: " << axisKey
-                   << ")\n";
-
-      primeConst.replaceAllUsesWith(representativeDim);
-
-      // Clean up unused prime constant
-      if (auto constOp = primeConst.getDefiningOp<mlir::arith::ConstantIndexOp>()) {
-        if (constOp.use_empty()) {
-          constOp.erase();
-        }
+    // Clean up unused prime constant
+    if (auto constOp = primeConst.getDefiningOp<mlir::arith::ConstantIndexOp>()) {
+      if (constOp.use_empty()) {
+        constOp.erase();
       }
     }
   }
 
-  // Step 3: Clear state for next run
-  primeToAxisKeyMap.clear();
-  axisKeyToRepresentativeDimMap.clear();
+  // Clear state for next run
+  primeToDimMap.clear();
 }
 
 void AKGLoopFusion::runOnBlock(mlir::Block *block) {
@@ -282,19 +257,21 @@ void AKGLoopFusion::runOnBlock(mlir::Block *block) {
   if (!dependenceGraph.init()) {
     return;
   }
-  dependenceGraph.dump();
+
+  if (printFusionInfo) {
+    dependenceGraph.dump();
+  }
 
   mlir::func::FuncOp funcOp = getOperation();
   mlir::akg::FusionAnalyzer analyzer(dependenceGraph, funcOp);
   // Plan the fusion strategy based on analysis
   analyzer.plan();
-  for (auto &fusion : analyzer.fusionPlans) {
-    llvm::outs() << "Fusion group " << fusion.fusedGroup.from << " to " << fusion.fusedGroup.to << ", node "
-                 << fusion.fusedBand.from << " to " << fusion.fusedBand.to << "\n";
-  }
-
   if (analyzer.fusionPlans.empty()) {
     return;
+  }
+
+  if (printFusionInfo) {
+    analyzer.dump();
   }
 
   mlir::akg::FusionCodeGenHelper codegenerator = mlir::akg::FusionCodeGenHelper(dependenceGraph);
@@ -309,8 +286,6 @@ void AKGLoopFusion::runOnBlock(mlir::Block *block) {
 
     // Skip if source node has been fused into destination (alias exists)
     if (actualSrcId == actualDstId) {
-      llvm::outs() << "Skipping fusion plan: source " << plan.fusedBand.from << " already fused into destination "
-                   << plan.fusedBand.to << "\n";
       continue;
     }
 
@@ -324,15 +299,12 @@ void AKGLoopFusion::runOnBlock(mlir::Block *block) {
       // Check for bidirectional conflict: current (src->dst) conflicts with future (dst->src)
       if ((actualSrcId == futureDstId && actualDstId == futureSrcId) ||
           (actualSrcId == futureSrcId && actualDstId == futureDstId)) {
-        llvm::outs() << "Conflict detected: current plan " << actualSrcId << " -> " << actualDstId
-                     << " conflicts with future plan " << futureSrcId << " -> " << futureDstId << "\n";
         hasConflict = true;
         break;
       }
     }
 
     if (hasConflict) {
-      llvm::outs() << "Skipping fusion plan due to conflict: " << actualSrcId << " -> " << actualDstId << "\n";
       continue;
     }
 
@@ -343,12 +315,13 @@ void AKGLoopFusion::runOnBlock(mlir::Block *block) {
     if (srcFor && dstFor) {
       if (plan.fusionType == "V") {
         // Vertical fusion: calculate loop depth for the destination loop
-        unsigned dstLoopDepthTest = 0;
-        dstFor.walk([&](mlir::affine::AffineForOp op) { dstLoopDepthTest++; });
-        codegenerator.doVFuse(actualSrcId, actualDstId, srcFor, dstFor, dstLoopDepthTest, dstLoopDepthTest);
-      } else {
+        codegenerator.doVFuse(actualSrcId, actualDstId, srcFor, dstFor);
+      } else if (plan.fusionType == "H") {
         // Horizontal fusion: fuse loops at the same nesting level
         codegenerator.doHFuse(actualSrcId, actualDstId, srcFor, dstFor);
+      } else {
+        llvm::outs() << "Warning: Could not find valid operations for fusion plan: node " << plan.fusedBand.from
+                     << " to " << plan.fusedBand.to << "\n";
       }
     } else {
       llvm::outs() << "Warning: Could not find valid operations for fusion plan: node " << plan.fusedBand.from << " to "
