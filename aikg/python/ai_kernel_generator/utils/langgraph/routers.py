@@ -133,8 +133,8 @@ class RouterFactory:
         from ai_kernel_generator.core.llm.model_loader import create_model
         from ai_kernel_generator.utils.common_utils import ParserFactory
         from ai_kernel_generator.utils.result_processor import ResultProcessor
-        from ai_kernel_generator.cli.server.message_sender import send_message
-        from ai_kernel_generator.cli.messages import NodeStartMessage, NodeEndMessage
+        from ai_kernel_generator.cli.runtime.message_sender import send_message
+        from ai_kernel_generator.cli.messages import DisplayMessage
         from ai_kernel_generator.utils.task_label import resolve_task_label
         import time
 
@@ -147,11 +147,8 @@ class RouterFactory:
         if session_id:
             send_message(
                 session_id,
-                NodeStartMessage(
-                    node="conductor",
-                    task_id=task_id,
-                    task_label=task_label,
-                    state=state,
+                DisplayMessage(
+                    text="[conductor] start",
                 ),
             )
         
@@ -220,18 +217,13 @@ class RouterFactory:
                 logger.info(f"LLM decided: {agent_decision}, suggestion: {suggestion[:100] if suggestion else 'None'}")
                 if session_id:
                     duration = time.time() - start_time
-                    updates = {
-                        "conductor_suggestion": suggestion or "",
-                        "conductor_decision": agent_decision
-                    }
+                    summary = f"[conductor] done ({duration:.2f}s) decision={agent_decision}"
+                    if suggestion:
+                        summary += f" suggestion={suggestion}"
                     send_message(
                         session_id,
-                        NodeEndMessage(
-                            node="conductor",
-                            duration=duration,
-                            task_id=task_id,
-                            task_label=task_label,
-                            result=updates,
+                        DisplayMessage(
+                            text=summary,
                         ),
                     )
 
@@ -247,12 +239,8 @@ class RouterFactory:
                 duration = time.time() - start_time
                 send_message(
                     session_id,
-                    NodeEndMessage(
-                        node="conductor",
-                        duration=duration,
-                        task_id=task_id,
-                        task_label=task_label,
-                        result={"error": str(e)},
+                    DisplayMessage(
+                        text=f"[conductor] error ({duration:.2f}s): {str(e)}",
                     ),
                 )
         
