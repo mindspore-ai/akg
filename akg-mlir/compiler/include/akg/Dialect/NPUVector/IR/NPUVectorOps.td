@@ -546,6 +546,99 @@ def NPUVector_IndexCastUIOp :
 }
 
 //===----------------------------------------------------------------------===//
+// CmpIOp
+//===----------------------------------------------------------------------===//
+
+def NPUVector_CmpIOp :
+  NPUVector_Op<"cmpi", [Pure, SameOperandsAndResultShape,
+                        TypesMatchWith<"rhs type matches lhs type",
+                                       "lhs", "rhs", "$_self">]>,
+    Arguments<(ins Arith_CmpIPredicateAttr:$predicate,
+                   NPUVectorOfAnyRank:$lhs,
+                   NPUVectorOfAnyRank:$rhs)>,
+    Results<(outs NPUVectorOfAnyRank:$result)> {
+  let summary = "NPU vector integer comparison operation";
+  let description = [{
+    Integer comparison for NPU vectors. Compares two NPU vectors elementwise
+    according to the predicate (eq/ne/slt/sle/sgt/sge/ult/ule/ugt/uge).
+    Result is an NPU vector of i1 with the same shape.
+    
+    Semantics match `arith.cmpi`, but on `!npuvector` types.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.cmpi eq, %a, %b : !npuvector<128xi32> to !npuvector<128xi1>
+    %2 = npuvector.cmpi slt, %x, %y : !npuvector<?xi16> to !npuvector<?xi1>
+    ```
+  }];
+  let assemblyFormat = "$predicate `,` $lhs `,` $rhs attr-dict `:` qualified(type($lhs)) `to` qualified(type($result))";
+}
+
+//===----------------------------------------------------------------------===//
+// CmpFOp
+//===----------------------------------------------------------------------===//
+
+def NPUVector_CmpFOp :
+  NPUVector_Op<"cmpf", [Pure, SameOperandsAndResultShape,
+                        TypesMatchWith<"rhs type matches lhs type",
+                                       "lhs", "rhs", "$_self">]>,
+    Arguments<(ins Arith_CmpFPredicateAttr:$predicate,
+                   NPUVectorOfAnyRank:$lhs,
+                   NPUVectorOfAnyRank:$rhs,
+                   DefaultValuedAttr<Arith_FastMathAttr,
+                     "::mlir::arith::FastMathFlags::none">:$fastmath)>,
+    Results<(outs NPUVectorOfAnyRank:$result)> {
+  let summary = "NPU vector floating-point comparison operation";
+  let description = [{
+    Floating-point comparison for NPU vectors. Compares two NPU vectors
+    elementwise according to the predicate (oeq/ogt/oge/olt/ole/one/ord/
+    ueq/ugt/uge/ult/ule/une/uno). Result is an NPU vector of i1 with the
+    same shape.
+    
+    Semantics match `arith.cmpf`, but on `!npuvector` types.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.cmpf oeq, %a, %b : !npuvector<128xf32> to !npuvector<128xi1>
+    %2 = npuvector.cmpf ult, %x, %y : !npuvector<?xbf16> to !npuvector<?xi1>
+    ```
+  }];
+  let assemblyFormat = "$predicate `,` $lhs `,` $rhs (`fastmath` `` $fastmath^)? attr-dict `:` qualified(type($lhs)) `to` qualified(type($result))";
+}
+
+//===----------------------------------------------------------------------===//
+// SelectOp
+//===----------------------------------------------------------------------===//
+
+def NPUVector_SelectOp :
+  NPUVector_Op<"select", [Pure,
+    AllTypesMatch<["true_value", "false_value", "result"]>,
+    TypesMatchWith<"false_value type matches true_value type",
+                   "true_value", "false_value", "$_self">
+  ]>,
+    Arguments<(ins NPUVectorOfAnyRank:$condition,
+                   NPUVectorOfAnyRank:$true_value,
+                   NPUVectorOfAnyRank:$false_value)>,
+    Results<(outs NPUVectorOfAnyRank:$result)> {
+  let summary = "NPU vector conditional selection operation";
+  let description = [{
+    Selects elements from two NPU vectors based on a condition vector.
+    The condition must be an NPU vector of i1 with the same shape as the
+    value operands. For each element, if condition[i] is 1, result[i] =
+    true_value[i], otherwise result[i] = false_value[i].
+    
+    Semantics match `arith.select`, but on `!npuvector` types.
+    
+    Example:
+    ```mlir
+    %1 = npuvector.select %cond, %a, %b : !npuvector<128xi1>, !npuvector<128xf32>
+    %2 = npuvector.select %mask, %x, %y : !npuvector<?xi1>, !npuvector<?xi32>
+    ```
+  }];
+  let assemblyFormat = "$condition `,` $true_value `,` $false_value attr-dict `:` qualified(type($condition)) `,` qualified(type($result))";
+}
+
+//===----------------------------------------------------------------------===//
 // BroadcastOp
 //===----------------------------------------------------------------------===//
 
