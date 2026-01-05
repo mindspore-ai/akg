@@ -33,11 +33,9 @@ except ImportError:
 # LangChain 1.0 的 PromptTemplate 使用 SandboxedEnvironment，限制了属性访问
 from jinja2 import Environment, BaseLoader
 
-from textual import log as textual_log
-
 from ai_kernel_generator import get_project_root
-from ai_kernel_generator.cli.messages import LLMEndMessage, LLMStartMessage, LLMStreamMessage
-from ai_kernel_generator.cli.server.message_sender import send_message
+from ai_kernel_generator.cli.messages import DisplayMessage, LLMStreamMessage
+from ai_kernel_generator.cli.runtime.message_sender import send_message
 from ai_kernel_generator.utils.task_label import resolve_task_label
 
 
@@ -364,7 +362,7 @@ class AgentBase(ABC):
         try:
             send_message(session_id, message)
         except Exception as e:
-            textual_log.warning("[Agent] send_message failed; ignored", exc_info=e)
+            logger.warning("[Agent] send_message failed; ignored", exc_info=e)
 
     async def run_llm(self, prompt: PromptTemplate, input: Dict[str, Any], model_name: str) -> tuple[str, str, str]:
         """运行LLM（整合了消息发送和 token 统计功能）
@@ -406,17 +404,6 @@ class AgentBase(ABC):
         model = create_model(model_name)
         effective_model_name = getattr(model, "model_name", model_name)
 
-        # 发送开始消息
-        self._safe_send(
-            session_id,
-            LLMStartMessage(
-                agent=agent_name,
-                model=effective_model_name,
-                task_id=task_id,
-                task_label=task_label,
-            )
-        )
-
         content = ""
         reasoning_content = ""
         usage_metadata = None
@@ -454,34 +441,30 @@ class AgentBase(ABC):
                         delta = chunk.choices[0].delta
                         delta_text = getattr(delta, "content", None)
                         if isinstance(delta_text, str) and delta_text:
-                            print(delta_text, end="", flush=True)
+                            #print(delta_text, end="", flush=True)
                             content += delta_text
                             self._safe_send(
                                 session_id,
                                 LLMStreamMessage(
                                     agent=agent_name,
                                     chunk=delta_text,
-                                    task_id=task_id,
                                     is_reasoning=False,
-                                    task_label=task_label,
                                 ),
                             )
                             continue
                         delta_reasoning = getattr(delta, "reasoning_content", None)
                         if isinstance(delta_reasoning, str) and delta_reasoning:
-                            print(delta_reasoning, end="", flush=True)
+                            #print(delta_reasoning, end="", flush=True)
                             reasoning_content += delta_reasoning
                             self._safe_send(
                                 session_id,
                                 LLMStreamMessage(
                                     agent=agent_name,
                                     chunk=delta_reasoning,
-                                    task_id=task_id,
                                     is_reasoning=True,
-                                    task_label=task_label,
                                 ),
                             )
-                    print()
+                    #print()
             else:
                 # 其他模型使用 LangChain chain
                 chain = prompt | model
@@ -494,16 +477,14 @@ class AgentBase(ABC):
                     async for raw_result in chain.astream(input):
                         chunk_text = getattr(raw_result, "content", "")
                         if chunk_text:
-                            print(chunk_text, end="", flush=True)
+                            #print(chunk_text, end="", flush=True)
                             content += chunk_text
                             self._safe_send(
                                 session_id,
                                 LLMStreamMessage(
                                     agent=agent_name,
                                     chunk=chunk_text,
-                                    task_id=task_id,
                                     is_reasoning=False,
-                                    task_label=task_label,
                                 ),
                             )
                             continue
@@ -511,19 +492,17 @@ class AgentBase(ABC):
                         if isinstance(additional_kwargs, dict) and "reasoning_content" in additional_kwargs:
                             chunk_reasoning = additional_kwargs.get("reasoning_content") or ""
                             if chunk_reasoning:
-                                print(chunk_reasoning, end="", flush=True)
+                                #print(chunk_reasoning, end="", flush=True)
                                 reasoning_content += chunk_reasoning
                                 self._safe_send(
                                     session_id,
                                     LLMStreamMessage(
                                         agent=agent_name,
                                         chunk=chunk_reasoning,
-                                        task_id=task_id,
                                         is_reasoning=True,
-                                        task_label=task_label,
                                     ),
                                 )
-                    print()
+                    #print()
                     usage_metadata = getattr(raw_result, "usage_metadata", None)
 
             # 后处理：从 content 中剥离可能包含的 reasoning 片段
@@ -558,23 +537,6 @@ class AgentBase(ABC):
                 else:
                     output_tokens = max(completion_tokens - reasoning_tokens, 0)
 
-            # 发送结束消息
-            self._safe_send(
-                session_id,
-                LLMEndMessage(
-                    agent=agent_name,
-                    model=effective_model_name,
-                    response=content,
-                    duration=time.time() - start_time,
-                    task_id=task_id,
-                    task_label=task_label,
-                    prompt_tokens=prompt_tokens,
-                    output_tokens=output_tokens,
-                    reasoning_tokens=reasoning_tokens,
-                    total_tokens=total_tokens,
-                )
-            )
-
             # 数据收集
             if os.getenv("AIKG_DATA_COLLECT", "off").lower() == "on":
                 try:
@@ -601,20 +563,16 @@ class AgentBase(ABC):
                     }
                     await collector.collect(collected_data)
                 except Exception as e:
-                    textual_log.warning("[Agent] data collect failed; ignored", exc_info=e)
+                    logger.warning("[Agent] data collect failed; ignored", exc_info=e)
+
+            if stream:
+                self._safe_send(
+                    session_id,
+                    DisplayMessage(
+                        text="",
+                    ),
+                )
 
             return content, formatted_prompt, reasoning_content
         except Exception:
-            # 发送失败消息
-            self._safe_send(
-                session_id,
-                LLMEndMessage(
-                    agent=agent_name,
-                    model=effective_model_name,
-                    response=content or "",
-                    duration=time.time() - start_time,
-                    task_id=task_id,
-                    task_label=task_label,
-                )
-            )
             raise

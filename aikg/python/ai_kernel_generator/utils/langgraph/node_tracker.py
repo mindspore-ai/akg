@@ -4,8 +4,7 @@ LangGraph 节点埋点（给 CLI 的 WS 流式输出）。
 本模块的职责：
 - 将 LangGraph 的 node 函数包装为"带开始/结束事件"的版本；
 - 通过 `send_message(session_id, Message)` 向当前 WebSocket session 推送：
-  - `NodeStartMessage`
-  - `NodeEndMessage`
+  - `DisplayMessage`
 
 触发策略：
 - 当 `AIKG_STREAM_OUTPUT=on` 时，要求 `state` 中必须包含非空 `session_id`；
@@ -25,13 +24,14 @@ async def designer_node(state):
 """
 
 import functools
+import logging
 import time
 from typing import Any, Callable, Dict
 
-from textual import log as textual_log
+from ai_kernel_generator.cli.messages import DisplayMessage
 
-from ai_kernel_generator.cli.messages import NodeEndMessage, NodeStartMessage
-from ai_kernel_generator.cli.server.message_sender import send_message
+logger = logging.getLogger(__name__)
+from ai_kernel_generator.cli.runtime.message_sender import send_message
 from ai_kernel_generator.utils.task_label import resolve_task_label
 
 
@@ -48,7 +48,7 @@ def _safe_send(session_id: str, message) -> None:
     try:
         send_message(session_id, message)
     except Exception as e:
-        textual_log.warning("[Node] send_message failed; ignored", exc_info=e)
+        logger.warning("[Node] send_message failed; ignored", exc_info=e)
 
 
 def track_node(node_name: str):
@@ -81,11 +81,8 @@ def track_node(node_name: str):
             start = time.time()
             _safe_send(
                 session_id,
-                NodeStartMessage(
-                    node=node_name,
-                    task_id=task_id,
-                    task_label=task_label,
-                    state=state,
+                DisplayMessage(
+                    text=f"▶ {node_name}",
                 ),
             )
 
@@ -93,24 +90,16 @@ def track_node(node_name: str):
                 result = await node_fn(state)
                 _safe_send(
                     session_id,
-                    NodeEndMessage(
-                        node=node_name,
-                        duration=time.time() - start,
-                        task_id=task_id,
-                        task_label=task_label,
-                        result=result,
+                    DisplayMessage(
+                        text=f"✅ {node_name} {time.time() - start:.2f}s",
                     ),
                 )
                 return result
             except Exception as e:
                 _safe_send(
                     session_id,
-                    NodeEndMessage(
-                        node=node_name,
-                        duration=time.time() - start,
-                        task_id=task_id,
-                        task_label=task_label,
-                        result={"error": str(e)},
+                    DisplayMessage(
+                        text=f"⚠️ {node_name} {str(e)}",
                     ),
                 )
                 raise

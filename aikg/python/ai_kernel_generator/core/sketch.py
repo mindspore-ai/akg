@@ -15,8 +15,8 @@
 import logging
 import time
 
-from ai_kernel_generator.cli.messages import NodeEndMessage, NodeStartMessage
-from ai_kernel_generator.cli.server.message_sender import send_message
+from ai_kernel_generator.cli.messages import DisplayMessage
+from ai_kernel_generator.cli.runtime.message_sender import send_message
 from ai_kernel_generator.core.agent.agent_base import AgentBase
 from ai_kernel_generator.utils.common_utils import remove_copyright_from_text, ParserFactory
 from ai_kernel_generator.utils.hardware_utils import get_hardware_doc
@@ -106,11 +106,8 @@ class Sketch(AgentBase):
         if session_id:
             send_message(
                 session_id,
-                NodeStartMessage(
-                    node="sketch",
-                    task_id=task_id,
-                    task_label=task_label,
-                    state=task_info,
+                DisplayMessage(
+                    text="[sketch] start",
                 ),
             )
 
@@ -165,12 +162,8 @@ class Sketch(AgentBase):
             if session_id:
                 send_message(
                     session_id,
-                    NodeEndMessage(
-                        node="sketch",
-                        duration=time.time() - start_time,
-                        task_id=task_id,
-                        task_label=task_label,
-                        result={"sketch": sketch_content},
+                    DisplayMessage(
+                        text=f"[sketch] done ({time.time() - start_time:.2f}s)",
                     ),
                 )
             return sketch_content
@@ -180,12 +173,8 @@ class Sketch(AgentBase):
             if session_id:
                 send_message(
                     session_id,
-                    NodeEndMessage(
-                        node="sketch",
-                        duration=time.time() - start_time,
-                        task_id=task_id,
-                        task_label=task_label,
-                        result={"error": str(e)},
+                    DisplayMessage(
+                        text=f"[sketch] error ({time.time() - start_time:.2f}s): {str(e)}",
                     ),
                 )
             raise

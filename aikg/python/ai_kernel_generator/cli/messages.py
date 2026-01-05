@@ -45,9 +45,6 @@ class Message(ABC):
         """序列化为字典（用于网络传输）"""
         result = {"type": self.get_type(), "timestamp": self.timestamp}
         result.update(self._get_payload())
-        task_label = getattr(self, "task_label", "") or ""
-        if task_label:
-            result["task_label"] = task_label
         return result
 
     @abstractmethod
@@ -56,108 +53,23 @@ class Message(ABC):
         pass
 
 
-# ==================== Node 事件 ====================
+# ==================== 文本显示消息 ====================
 
 
 @dataclass
-class NodeStartMessage(Message):
-    """节点开始消息"""
+class DisplayMessage(Message):
+    """纯文本显示消息"""
 
-    node: str
-    # 任务ID（用于 evolve 并发时区分不同子任务；非 evolve 可为空）
-    task_id: str = ""
-    # 任务标签（由 server 侧生成；不回退到 task_id）
-    task_label: str = ""
-    state: Dict = field(default_factory=dict)
+    text: str
 
     def get_type(self) -> str:
-        return "node_start"
+        return "display"
 
     def _get_payload(self) -> Dict[str, Any]:
-        return {"node": self.node, "task_id": self.task_id}
+        return {"text": self.text}
 
 
-@dataclass
-class NodeEndMessage(Message):
-    """节点结束消息"""
-
-    node: str
-    duration: float
-    # 任务ID（用于 evolve 并发时区分不同子任务；非 evolve 可为空）
-    task_id: str = ""
-    # 任务标签（由 server 侧生成；不回退到 task_id）
-    task_label: str = ""
-    result: Any = None
-
-    def get_type(self) -> str:
-        return "node_end"
-
-    def _get_payload(self) -> Dict[str, Any]:
-        return {
-            "node": self.node,
-            "duration": self.duration,
-            "task_id": self.task_id,
-            "result": self.result,
-        }
-
-
-# ==================== LLM 事件 ====================
-
-
-@dataclass
-class LLMStartMessage(Message):
-    """LLM 开始调用消息"""
-
-    agent: str
-    model: str
-    # 任务ID（用于 evolve 并发时区分不同子任务；非 evolve 可为空）
-    task_id: str = ""
-    # 任务标签（由 server 侧生成；不回退到 task_id）
-    task_label: str = ""
-
-    def get_type(self) -> str:
-        return "llm_start"
-
-    def _get_payload(self) -> Dict[str, Any]:
-        return {
-            "agent": self.agent,
-            "model": self.model,
-            "task_id": self.task_id,
-        }
-
-
-@dataclass
-class LLMEndMessage(Message):
-    """LLM 结束调用消息"""
-
-    agent: str
-    model: str
-    response: str
-    duration: float
-    # 任务ID（用于 evolve 并发时区分不同子任务；非 evolve 可为空）
-    task_id: str = ""
-    # 任务标签（由 server 侧生成；不回退到 task_id）
-    task_label: str = ""
-    prompt_tokens: Optional[int] = None
-    output_tokens: Optional[int] = None
-    reasoning_tokens: Optional[int] = None
-    total_tokens: Optional[int] = None
-
-    def get_type(self) -> str:
-        return "llm_end"
-
-    def _get_payload(self) -> Dict[str, Any]:
-        return {
-            "agent": self.agent,
-            "model": self.model,
-            "response": self.response,
-            "duration": self.duration,
-            "task_id": self.task_id,
-            "prompt_tokens": self.prompt_tokens,
-            "output_tokens": self.output_tokens,
-            "reasoning_tokens": self.reasoning_tokens,
-            "total_tokens": self.total_tokens,
-        }
+# ==================== LLM 流式消息 ====================
 
 
 @dataclass
@@ -166,12 +78,8 @@ class LLMStreamMessage(Message):
 
     agent: str
     chunk: str
-    # 任务ID（用于 evolve 并发时区分不同子任务；非 evolve 可为空）
-    task_id: str = ""
     # 是否为推理内容（由输出协议标识；UI 不应猜测）
     is_reasoning: bool = False
-    # 任务标签（由 server 侧生成；不回退到 task_id）
-    task_label: str = ""
 
     def get_type(self) -> str:
         return "llm_stream"
@@ -180,9 +88,7 @@ class LLMStreamMessage(Message):
         return {
             "agent": self.agent,
             "chunk": self.chunk,
-            "task_id": self.task_id,
             "is_reasoning": self.is_reasoning,
-            "task_label": self.task_label,
         }
 
 
@@ -215,46 +121,35 @@ class ErrorMessage(Message):
         return {"error": self.error}
 
 
-@dataclass
-class JobSubmittedMessage(Message):
-    """Job 已提交消息（用于客户端获取 job_id，以支持取消/跟踪）"""
-
-    job_id: str
-
-    def get_type(self) -> str:
-        return "job_submitted"
-
-    def _get_payload(self) -> Dict[str, Any]:
-        return {"job_id": self.job_id}
+# ==================== 面板数据消息 ====================
 
 
 @dataclass
-class ProgressMessage(Message):
-    """进度消息（用于 search/evolve 多并发任务的进度展示）"""
+class PanelDataMessage(Message):
+    """面板数据更新消息"""
 
-    scope: str  # e.g. "evolve"
+    action: str
     data: Dict[str, Any] = field(default_factory=dict)
 
     def get_type(self) -> str:
-        return "progress"
+        return "panel_data"
 
     def _get_payload(self) -> Dict[str, Any]:
-        return {"scope": self.scope, "data": self.data}
+        return {
+            "action": self.action,
+            "data": self.data,
+        }
 
 
 # ==================== 消息注册表和工具函数 ====================
 
 # 消息类型注册表：type -> Message 类
 MESSAGE_REGISTRY: Dict[str, type] = {
-    "node_start": NodeStartMessage,
-    "node_end": NodeEndMessage,
-    "llm_start": LLMStartMessage,
-    "llm_end": LLMEndMessage,
+    "display": DisplayMessage,
     "llm_stream": LLMStreamMessage,
     "final_result": FinalResultMessage,
     "error": ErrorMessage,
-    "job_submitted": JobSubmittedMessage,
-    "progress": ProgressMessage,
+    "panel_data": PanelDataMessage,
 }
 
 
