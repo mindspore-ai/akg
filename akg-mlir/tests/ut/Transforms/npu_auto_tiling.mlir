@@ -26,7 +26,7 @@
 // CHECK-NEXT:    call @test_loop_tiling_static_00_tiling_function(%arg0, %arg1, %arg2, %arg3) : (memref<1024x1024xf32>, memref<1024x1024xf32>, !llvm.ptr, memref<64xi64>) -> ()
 // CHECK-NEXT:    return
 // CHECK-NEXT:  }
-// CHECK-NEXT:  func.func @test_loop_tiling_static_00(%arg0: memref<1024x1024xf32> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<0>}, %arg1: memref<1024x1024xf32> {hacc.arg_type = #hacc.arg_type<output>, hacc.output_idx = #hacc.output_idx<0>}) -> memref<1024x1024xf32> attributes {OperatorType = "Elementwise", compute_capability = "", enable_auto_mark_buffer_size, hacc.block_dim = 40 : i64, hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>, hacc.tiling_function = #hacc.tiling_function<@test_loop_tiling_static_00_tiling_function>, hfusion.fusion_kind = "PURE_ELEMWISE", process = "aicore"} {
+// CHECK-NEXT:  func.func @test_loop_tiling_static_00(%arg0: memref<1024x1024xf32> {hacc.arg_type = #hacc.arg_type<input>, hacc.input_idx = #hacc.input_idx<0>}, %arg1: memref<1024x1024xf32> {hacc.arg_type = #hacc.arg_type<output>, hacc.output_idx = #hacc.output_idx<0>}) -> memref<1024x1024xf32> attributes {OperatorType = "Elementwise", compute_capability = "", enable_auto_mark_buffer_size, hacc.block_dim = 40 : i64, hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>, hacc.tiling_function = #hacc.tiling_function<@test_loop_tiling_static_00_tiling_function>, process = "aicore"} {
 // CHECK-NEXT:    %c512 = arith.constant 512 : index
 // CHECK-NEXT:    %c512_0 = arith.constant 512 : index
 // CHECK-NEXT:    %c512_1 = arith.constant 512 : index
