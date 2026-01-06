@@ -1084,6 +1084,40 @@ int64_t getSelectedTilingStrategyIndex() {
   return 0;
 }
 
+static LogicalResult wrapFunctionBodyWithFor(func::FuncOp func,
+                                             OpBuilder &builder) {
+  Location loc = func.getLoc();
+
+  if (!func.getBody().hasOneBlock()) {
+    func.emitError("wrapFunctionBodyWithFor currently supports only single-block functions");
+    return failure();
+  }
+
+  Block &entryBlock = func.getBody().front();
+  Operation *terminator = entryBlock.getTerminator();
+  if (!terminator) {
+    func.emitError("entry block has no terminator");
+    return failure();
+  }
+
+  llvm::SmallVector<Operation *, 16> opsToMove;
+  for (auto it = entryBlock.begin(); it != Block::iterator(terminator); ++it) {
+    opsToMove.push_back(&*it);
+  }
+  builder.setInsertionPointToStart(&entryBlock);
+
+  Value lb   = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value ub   = builder.create<arith::ConstantIndexOp>(loc, 1);
+  Value step = builder.create<arith::ConstantIndexOp>(loc, 1);
+  scf::ForOp forOp = builder.create<scf::ForOp>(loc, lb, ub, step);
+  Block *forBody = forOp.getBody();
+  Operation *forTerminator = forBody->getTerminator();
+  for (Operation *op : opsToMove) {
+    op->moveBefore(forTerminator);
+  }
+  return success();
+}
+
 LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &builder, bool isStaticShape) {
   auto loc = originalKernel.getLoc();
 
@@ -1093,6 +1127,8 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
   }
 
   if (bands.empty()) {
+    if (failed(wrapFunctionBodyWithFor(originalKernel, builder))) return failure();
+    markInnermostLoopsWithVectorAttr(originalKernel, builder);
     return success();
   }
 
