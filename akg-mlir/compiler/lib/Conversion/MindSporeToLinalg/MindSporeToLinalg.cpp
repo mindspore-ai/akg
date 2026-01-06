@@ -1471,6 +1471,7 @@ struct ConvertMindSporeToLinalgPass : public ConvertMindSporeToLinalgBase<Conver
     target.addLegalOp<mindspore::ReshapeOp>();
     target.addLegalOp<mindspore::SliceOp>();
     target.addLegalOp<mindspore::Strided_SliceOp>();
+    target.addLegalOp<mindspore::CastOp>();
 
     FunctionOpInterface func = getOperation();
     mlir::populateLowerMindSporeToLinalgPattern(patterns);
