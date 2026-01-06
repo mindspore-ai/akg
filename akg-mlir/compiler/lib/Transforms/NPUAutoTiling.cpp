@@ -60,8 +60,6 @@ namespace mlir {
 
 namespace mockattr {
 static constexpr const char *kEnableAutoMarkBufferSize = "enable_auto_mark_buffer_size";
-static constexpr const char *kFusionKind = "hfusion.fusion_kind";
-static constexpr const char *kFusionKindPureElemwise = "PURE_ELEMWISE";
 }  // namespace mockattr
 
 namespace {
@@ -650,8 +648,6 @@ class TilingBase {
 
     deviceFunc->setAttr(mockattr::kEnableAutoMarkBufferSize, builder.getUnitAttr());
     deviceFunc->setAttr(HACCFuncTypeAttr::name, HACCFuncTypeAttr::get(builder.getContext(), HACCFuncType::DEVICE));
-    deviceFunc->setAttr(mockattr::kFusionKind,
-                        StringAttr::get(builder.getContext(), mockattr::kFusionKindPureElemwise));
     deviceFunc->setAttr(BlockDimAttr::name, builder.getI64IntegerAttr(blockDim));
     deviceFunc->setAttr(
       StringAttr::get(builder.getContext(), stringifyHACCToLLVMIRTranslateAttr(HACCToLLVMIRTranslateAttr::ENTRY)),
