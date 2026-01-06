@@ -58,6 +58,7 @@ constexpr auto kReduceStr = "Reduce";
 constexpr auto kReductionAxesStr = "reduction_axes";
 constexpr auto kReductionTypeStr = "reduction_type";
 constexpr auto kReductionLoopAttr = "reduction_loop";
+constexpr auto kVectorSize = 4096;
 constexpr auto kVectorize128Bit = 128;
 constexpr auto kVectorize256Bit = 256;
 constexpr auto kVectorize512Bit = 512;
@@ -70,6 +71,8 @@ constexpr auto kTileForOneAttr = "__tiled_for___1";
 constexpr auto kMapForToForallAttr = "map_for_to_forall";
 constexpr auto kVectorAttr = "vector";
 constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
+constexpr auto kBlockDimAttr = "hacc.block_dim";
+constexpr auto kBlockDimSize = 40;
 
 
 const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 100000037, 100000039, 100000049,
