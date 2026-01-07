@@ -26,11 +26,11 @@ from __future__ import annotations
 # 这样当 __init__.py 执行时就能读取到正确的日志级别
 import os
 if "AIKG_LOG_LEVEL" not in os.environ:
-    os.environ["AIKG_LOG_LEVEL"] = "2"
+    os.environ["AIKG_LOG_LEVEL"] = "3"
 
 import logging
 # 立即配置日志级别，确保即使 __init__.py 已经执行过也能生效
-log_level_str = os.getenv("AIKG_LOG_LEVEL", "2")
+log_level_str = os.getenv("AIKG_LOG_LEVEL", "3")
 level_map = {
     "0": logging.DEBUG,
     "1": logging.INFO,
