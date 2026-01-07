@@ -187,6 +187,10 @@ static FailureOr<Value> getMemRefDimValue(Value memref, int64_t dim) {
 
   Value curMemRef = memref;
   for (unsigned step = 0; step < 32; ++step) {
+    if (auto bitcastOp = curMemRef.getDefiningOp<hivm::BitcastOp>()) {
+      curMemRef = bitcastOp.getSrc();
+      continue;
+    }
     if (auto allocOp = curMemRef.getDefiningOp<memref::AllocOp>()) {
       if (auto dimVal = getDynamicDimFromAllocLike(allocOp, dim, baseType)) {
         return *dimVal;
@@ -1076,17 +1080,12 @@ struct MathExpToHIVM : public OpConversionPattern<math::ExpOp> {
     Location loc = op.getLoc();
     Type resType = op.getResult().getType();
 
-    ArrayRef<int64_t> shape;
-    Type elemType;
-    if (auto vectorType = dyn_cast<VectorType>(resType)) {
-      shape = vectorType.getShape();
-      elemType = vectorType.getElementType();
-    } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
-      shape = npuVectorType.getShape();
-      elemType = npuVectorType.getElementType();
-    } else {
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
       return failure();
     }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
 
     if (!isa<FloatType>(elemType)) {
       return failure();
@@ -1110,6 +1109,50 @@ struct MathExpToHIVM : public OpConversionPattern<math::ExpOp> {
     propagateBufferSizeMark(rewriter, loc, inputMemRef, resBuf);
     rewriter.create<hivm::VExpOp>(
         loc, TypeRange{}, inputMemRef, resBuf);
+
+    rewriter.replaceOp(op, resBuf);
+    return success();
+  }
+};
+
+struct MathSqrtToHIVM : public OpConversionPattern<math::SqrtOp> {
+  using OpConversionPattern<math::SqrtOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::SqrtOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::SqrtOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
+    }
+
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+
+    SmallVector<Value> allocOperands;
+    for (int i = 0; i < memRefType.getRank(); ++i) {
+      if (memRefType.isDynamicDim(i)) {
+        auto dimVal = getMemRefDimValue(inputMemRef, i);
+        if (failed(dimVal)) {
+          return failure();
+        }
+        allocOperands.push_back(*dimVal);
+      }
+    }
+
+    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, resBuf);
+    rewriter.create<hivm::VSqrtOp>(loc, TypeRange{}, inputMemRef, resBuf);
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -1889,6 +1932,7 @@ void hivm::populateArithToHIVMConversionPatterns(
   patterns.add<ArithConstantToHIVM>(patterns.getContext());
   patterns.add<ArithNegfToHIVM>(patterns.getContext());
   patterns.add<MathExpToHIVM>(patterns.getContext());
+  patterns.add<MathSqrtToHIVM>(patterns.getContext());
   patterns.add<VectorReductionToHIVM>(patterns.getContext());
   patterns.add<NPUVectorReductionToHIVM>(patterns.getContext());
   patterns.add<
