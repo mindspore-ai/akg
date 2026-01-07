@@ -16,7 +16,10 @@
 
 import logging
 import os
+import sys
 import uuid
+from contextlib import redirect_stdout
+from io import StringIO
 from typing import Dict, Any, Optional
 
 from ai_kernel_generator.core.agent.main_op_agent import MainOpAgent
@@ -198,6 +201,10 @@ class LocalExecutor:
             )
             self._main_agent = agent
 
+            # 重定向 stdout 以避免 main_op_agent 执行过程中的 print 输出干扰 prompt_toolkit
+            # 使用 StringIO 捕获输出，但不显示（或者可以记录到日志）
+            null_output = StringIO()
+            
             if should_start:
                 # start action: 开启新对话
                 user_input = user_input or ""
@@ -205,7 +212,9 @@ class LocalExecutor:
                     raise ValueError("user_input is required for start action")
 
                 self._main_agent_state = None
-                state = await agent.start_conversation(user_request=user_input)
+                # 重定向 stdout 以避免 print 输出到控制台
+                with redirect_stdout(null_output):
+                    state = await agent.start_conversation(user_request=user_input)
                 # 确保将 rag 值保存到 state 中
                 if not isinstance(state, dict):
                     state = {}
@@ -238,11 +247,13 @@ class LocalExecutor:
 
                 if "config" not in prev:
                     prev["config"] = agent.config
-                state = await agent.continue_conversation(
-                    current_state=prev,
-                    user_input=user_input,
-                    action="auto",
-                )
+                # 重定向 stdout 以避免 print 输出到控制台
+                with redirect_stdout(null_output):
+                    state = await agent.continue_conversation(
+                        current_state=prev,
+                        user_input=user_input,
+                        action="auto",
+                    )
                 self._main_agent_state = state
 
             # 更新 workflow_name

@@ -26,7 +26,8 @@ level_map = {
     '0': logging.DEBUG,
     '1': logging.INFO,
     '2': logging.WARNING,
-    '3': logging.ERROR
+    '3': logging.ERROR,
+    '4': logging.CRITICAL,
 }
 log_level = level_map.get(glog_level, logging.INFO)  # 如果环境变量值无效，默认使用INFO
 
