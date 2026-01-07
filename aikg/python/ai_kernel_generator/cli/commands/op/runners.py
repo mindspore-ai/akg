@@ -48,6 +48,8 @@ from prompt_toolkit.patch_stdout import patch_stdout
 import logging
 
 from rich.text import Text
+from rich.panel import Panel
+from rich.box import ROUNDED
 
 log = logging.getLogger(__name__)
 
@@ -571,10 +573,27 @@ class InteractiveOpRunner:
             # 使用 Text.from_ansi() 正确处理包含 ANSI 转义序列的字符串
             try:
                 ansi_text = Text.from_ansi(display_message)
-                self.console.print(" " + ansi_text)
+                # 使用 Panel 添加精美边框
+                panel = Panel(
+                    ansi_text,
+                    box=ROUNDED,
+                    border_style="dim",
+                    padding=(0, 1),
+                )
+                self.console.print(panel)
             except Exception:
                 # 如果解析失败，回退到直接打印
-                self.console.print(" " + display_message, markup=False)
+                try:
+                    panel = Panel(
+                        display_message,
+                        box=ROUNDED,
+                        border_style="dim",
+                        padding=(0, 1),
+                    )
+                    self.console.print(panel, markup=False)
+                except Exception:
+                    # 最后的回退方案
+                    self.console.print(" " + display_message, markup=False)
 
         hint_message = str(state.get("hint_message") or "").rstrip()
         if hint_message:
