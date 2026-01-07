@@ -571,10 +571,10 @@ class InteractiveOpRunner:
             # 使用 Text.from_ansi() 正确处理包含 ANSI 转义序列的字符串
             try:
                 ansi_text = Text.from_ansi(display_message)
-                self.console.print(ansi_text)
+                self.console.print(" " + ansi_text)
             except Exception:
                 # 如果解析失败，回退到直接打印
-                self.console.print(display_message, markup=False)
+                self.console.print(" " + display_message, markup=False)
 
         hint_message = str(state.get("hint_message") or "").rstrip()
         if hint_message:

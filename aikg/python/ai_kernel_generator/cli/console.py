@@ -165,6 +165,6 @@ class AKGConsole:
         if not text:
             return
         try:
-            self._write(Text.from_ansi(text))
+            self._write(Text.from_ansi(" " + text))
         except Exception:
-            self._write(text)
+            self._write(" " + text)
