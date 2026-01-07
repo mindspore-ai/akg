@@ -20,6 +20,8 @@ import logging
 
 from rich.console import Console
 from rich.text import Text
+from rich.panel import Panel
+from rich.box import ROUNDED
 
 from ai_kernel_generator.cli.constants import DisplayStyle, SyntaxLanguage
 from ai_kernel_generator.cli.stream import StreamRenderer
@@ -74,7 +76,10 @@ class AKGConsole:
     def _write(self, content: Any) -> None:
         """统一写入接口"""
         try:
-            if isinstance(content, Text):
+            # Panel 和其他 rich renderable 对象直接打印
+            if hasattr(content, "__rich__") or hasattr(content, "__rich_console__"):
+                self._console.print(content)
+            elif isinstance(content, Text):
                 self._console.print(content)
             elif isinstance(content, str):
                 try:
@@ -165,6 +170,25 @@ class AKGConsole:
         if not text:
             return
         try:
-            self._write(Text.from_ansi(" " + text))
+            ansi_text = Text.from_ansi(text)
+            # 使用 Panel 添加精美边框
+            panel = Panel(
+                ansi_text,
+                box=ROUNDED,
+                border_style="dim",
+                padding=(0, 1),
+            )
+            self._write(panel)
         except Exception:
-            self._write(" " + text)
+            try:
+                # 如果解析失败，尝试直接使用文本创建 Panel
+                panel = Panel(
+                    text,
+                    box=ROUNDED,
+                    border_style="dim",
+                    padding=(0, 1),
+                )
+                self._write(panel)
+            except Exception:
+                # 最后的回退方案
+                self._write(" " + text)
