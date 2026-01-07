@@ -26,22 +26,22 @@ from __future__ import annotations
 # 这样当 __init__.py 执行时就能读取到正确的日志级别
 import os
 if "AIKG_LOG_LEVEL" not in os.environ:
-    os.environ["AIKG_LOG_LEVEL"] = "3"
+    os.environ["AIKG_LOG_LEVEL"] = "4"
 
 import logging
 # 立即配置日志级别，确保即使 __init__.py 已经执行过也能生效
-log_level_str = os.getenv("AIKG_LOG_LEVEL", "3")
+log_level_str = os.getenv("AIKG_LOG_LEVEL", "4")
 level_map = {
     "0": logging.DEBUG,
     "1": logging.INFO,
     "2": logging.WARNING,
     "3": logging.ERROR,
+    "4": logging.CRITICAL,
 }
 log_level = level_map.get(log_level_str, logging.WARNING)
 root_logger = logging.getLogger()
 # Root 级别放开到 DEBUG，具体输出由各 handler 控制
 root_logger.setLevel(logging.DEBUG)
-# 同时更新所有已存在的 handler 的级别（仅影响控制台）
 for handler in root_logger.handlers:
     handler.setLevel(log_level)
 
