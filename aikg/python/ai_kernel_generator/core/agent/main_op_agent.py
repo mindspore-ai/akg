@@ -842,7 +842,8 @@ class MainOpAgent(AgentBase):
                 parallel_index=1,
             )
             original_stream_output =  os.environ["AIKG_STREAM_OUTPUT"]
-            os.environ["AIKG_STREAM_OUTPUT"] = "off"
+            if sub_workflow not in ["codeonly"]:
+                os.environ["AIKG_STREAM_OUTPUT"] = "off"
             success, result = await sub_agent.execute(
                 task_code=task_code,
                 op_name=op_name,
