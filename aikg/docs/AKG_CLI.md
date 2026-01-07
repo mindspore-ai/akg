@@ -18,12 +18,11 @@ pip install -e .
 A Worker Service provides the backend runtime for kernel generation. Start it before running `akg_cli op`.
 
 ```bash
-akg_cli worker --start \
-  --backend cuda \
-  --arch a100 \
-  --devices 0 \
-  --host 127.0.0.1 \
-  --port 9001
+# Ascend 910B2
+akg_cli worker --start --backend ascend --arch ascend910b2 --devices 0 --host 127.0.0.1 --port 9001
+
+# CUDA A100: --backend cuda --arch a100
+# akg_cli worker --start --backend cuda --arch a100 --devices 0 --host 127.0.0.1 --port 9001
 ```
 
 Notes:
@@ -44,12 +43,11 @@ akg_cli worker --stop --port 9001
 Use `akg_cli op` to start operator generation. The target config must be provided explicitly from CLI.
 
 ```bash
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --worker-url 127.0.0.1:9001
+# Ascend 910B2
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001
+
+# CUDA A100: --backend cuda --arch a100 --dsl triton_cuda
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --worker-url 127.0.0.1:9001
 ```
 
 Optional parameters:
@@ -65,43 +63,35 @@ Optional parameters:
 Examples:
 
 ```bash
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --worker-url 127.0.0.1:9001 \
-  --intent "implement fused softmax kernel for input [batch, head, seq, dim]"
+# Ascend 910B2 with intent
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001 --intent "implement fused softmax kernel for input [batch, head, seq, dim]"
+
+# CUDA A100 with intent
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --worker-url 127.0.0.1:9001 --intent "implement fused softmax kernel for input [batch, head, seq, dim]"
+```
+
+Multiple workers example:
+
+```bash
+# Ascend 910B2 with multiple workers
+akg_cli op --framework mindspore --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001,127.0.0.1:9002
+```
+
+Local devices example (no worker URL needed):
+
+```bash
+# Ascend 910B2 with local devices
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --devices 0
+
+# CUDA A100 with local devices
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --devices 0
 ```
 
 IPv6-only example (note the brackets):
 
 ```bash
 akg_cli worker --start --host :: --port 9001
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --worker-url [::1]:9001
-```
-
-```bash
-akg_cli op \
-  --framework mindspore \
-  --backend ascend \
-  --arch ascend910b4 \
-  --dsl triton_ascend \
-  --worker-url 127.0.0.1:9001,127.0.0.1:9002
-```
-
-```bash
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --devices 0
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url [::1]:9001
 ```
 
 ## 3. TUI Basics
