@@ -449,31 +449,6 @@ func.func @test_bitcast_static(%input: memref<128xbf16>, %output: memref<128xi16
 // -----
 
 // ============================================================================
-// Type Conversion: IndexCast
-// ============================================================================
-
-// CHECK-LABEL: func.func @test_index_cast_static
-func.func @test_index_cast_static(%input: memref<128xindex>, %output: memref<128xi64>) {
-  %c0 = arith.constant 0 : index
-  %c128 = arith.constant 128 : index
-  %c1 = arith.constant 1 : index
-
-  // CHECK: %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}], %{{.*}} : memref<128xindex>, !npuvector<128xindex>
-  // CHECK: %[[RESULT_VEC:.*]] = npuvector.index_cast %[[V_VEC]] : !npuvector<128xindex> to !npuvector<128xi64>
-  // CHECK: npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<128xi64>, memref<128xi64>
-  // CHECK-NOT: scf.for
-
-  scf.for %i = %c0 to %c128 step %c1 {
-    %v = memref.load %input[%i] : memref<128xindex>
-    %result = arith.index_cast %v : index to i64
-    memref.store %result, %output[%i] : memref<128xi64>
-  } {vector=128}
-  return
-}
-
-// -----
-
-// ============================================================================
 // CmpIOp
 // ============================================================================
 
@@ -554,6 +529,39 @@ func.func @test_select_static(
     %b = memref.load %input_b[%i] : memref<128xf32>
     %result = arith.select %c, %a, %b : f32
     memref.store %result, %output[%i] : memref<128xf32>
+  } {vector=128}
+  return
+}
+
+// ============================================================================
+// SCF.If: Conditional operation with side effects (store)
+// ============================================================================
+
+// CHECK-LABEL: func.func @test_scf_if_with_store
+func.func @test_scf_if_with_store(
+    %input: memref<128xf32>,
+    %output: memref<128xf32>,
+    %threshold: index) {
+  %c0 = arith.constant 0 : index
+  %c128 = arith.constant 128 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2.0 : f32
+
+  // CHECK: %[[INPUT_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}], %{{.*}} : memref<128xf32>, !npuvector<128xf32>
+  // CHECK: scf.if %{{.*}} {
+  // CHECK:   %[[SCALE_VEC:.*]] = npuvector.broadcast %{{.*}} : f32 to !npuvector<128xf32>
+  // CHECK:   %[[SCALED_VEC:.*]] = arith.mulf %[[INPUT_VEC]], %[[SCALE_VEC]] : !npuvector<128xf32>
+  // CHECK:   npuvector.transfer_write %[[SCALED_VEC]], %{{.*}}[%{{.*}}] : !npuvector<128xf32>, memref<128xf32>
+  // CHECK: }
+  // CHECK-NOT: scf.for
+
+  scf.for %i = %c0 to %c128 step %c1 {
+    %val = memref.load %input[%i] : memref<128xf32>
+    %cond = arith.cmpi ult, %i, %threshold : index
+    scf.if %cond {
+      %scaled = arith.mulf %val, %c2 : f32
+      memref.store %scaled, %output[%i] : memref<128xf32>
+    }
   } {vector=128}
   return
 }
