@@ -30,13 +30,11 @@ This command downloads the `text2vec-large-chinese` model to `~/.aikg/text2vec-l
 Enable RAG when generating operators by adding the `--rag` flag:
 
 ```bash
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --worker-url 127.0.0.1:9001 \
-  --rag
+# Ascend 910B2
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001 --rag
+
+# CUDA A100: --backend cuda --arch a100 --dsl triton_cuda
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --worker-url 127.0.0.1:9001 --rag
 ```
 
 **Notes:**
@@ -47,14 +45,11 @@ akg_cli op \
 **Complete example:**
 
 ```bash
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --worker-url 127.0.0.1:9001 \
-  --rag \
-  --intent "implement fused softmax kernel for input [batch, head, seq, dim]"
+# Ascend 910B2 with RAG and intent
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001 --rag --intent "implement fused softmax kernel for input [batch, head, seq, dim]"
+
+# CUDA A100 with RAG and intent
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --worker-url 127.0.0.1:9001 --rag --intent "implement fused softmax kernel for input [batch, head, seq, dim]"
 ```
 
 ## 4. Notes
