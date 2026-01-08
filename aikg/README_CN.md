@@ -110,6 +110,8 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_as
    - 验证无误后，可以让它生成目标代码（生成的 DSL 类型由启动时的 `--dsl` 参数决定）
 
 > 💡 **提示**：更多使用示例和详细说明，请参考《[AKG_CLI 文档](./docs/CN/AKG_CLI.md)》
+>
+> 💡 **二次开发**：如果你需要扩展消息类型、接入自定义面板、或理解 MainOpAgent/子 Agent 与 TUI 的交互机制，请参考《[AKG_CLI 二次开发指南](./docs/CN/AKG_CLI_Develop.md)》
 
 
 
