@@ -27,11 +27,14 @@
 | `call_evolve` | 生成 Triton 代码（性能优化模式，但是时间长） | task_code, op_name |
 | `call_adaptive_search` | 生成 Triton 代码（性能优化模式，但是生成的时间较call_evolve短） | task_code, op_name |
 | `ask_user` | 向用户询问/展示信息 | message |
-| `finish` | 完成任务 | final_answer |
+| `finish` | 完成任务（**调用后流程结束，不要再调用其他工具**） | final_answer |
 | `read_file` | 读取文件（读取 SKILL.md、代码文件等） | file_path |
-| `write_file` | 保存代码到文件（自动创建目录） | content |
+| `write_file` | 保存代码到文件（**仅当用户明确要求保存时使用**） | content |
 
 ### write_file 工具说明
+
+⚠️ **重要：只有当用户明确要求「保存」「导出」「存到文件」等操作时，才使用此工具。**
+**不要自动保存代码，除非用户明确要求。**
 
 `write_file` 用于保存生成的代码，支持自动路径生成：
 
@@ -179,7 +182,7 @@ Observation: [SUCCESS] 文件已保存!
 💡 查看命令: cat /path/to/aikg_outputs/relu/kernel.py
 
 Think: 代码已保存，告知用户保存路径。
-Action: finish(final_answer="✅ 代码已保存到: aikg_outputs/relu/kernel.py\n\n您可以使用以下命令查看:\ncat aikg_outputs/relu/kernel.py")
+Action: finish(final_answer="代码已保存到: aikg_outputs/relu/kernel.py\n\n您可以使用以下命令查看:\ncat aikg_outputs/relu/kernel.py")
 ```
 
 ```
@@ -198,6 +201,13 @@ Observation: [SUCCESS] 文件已保存!
 2. **生成 task 后必须 ask_user 确认**，不能直接调用子 Agent
 3. **用户确认后才能调用子 Agent**
 4. **其他类型的任务可以先读取 Skill**
-5. **用户要求「保存代码」时使用 write_file**，传入 op_name 和 file_type 自动生成路径
+5. **finish 后任务结束**：调用 finish 后，不要再调用任何其他工具
+6. **write_file 仅限用户要求时使用**：不要自动保存代码，只有用户明确说「保存」「导出」等才使用
+
+### ⚠️ 禁止行为
+
+- ❌ finish 后继续调用其他工具（如 write_file）
+- ❌ 用户没有要求保存，自动调用 write_file
+- ❌ 在用户确认前调用子 Agent（call_codeonly/evolve/adaptive_search）
 
 请按照 ReAct 模式执行任务。
