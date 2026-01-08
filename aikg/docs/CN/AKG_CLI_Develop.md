@@ -46,6 +46,9 @@
 - **Runtime**
   - `aikg/python/ai_kernel_generator/cli/runtime/local_executor.py`
     - `LocalExecutor`：会话级状态管理；为 MainOpAgent 注入 `session_id`；注册/注销 session sender；把消息路由给 Console
+    - 支持两种主代理模式：
+      - `langgraph`：旧版 `MainOpAgent`（start/continue + state dict）
+      - `react`：ReAct 主代理（LangGraph `agent.astream(..., stream_mode="updates")`）
 
 - **Message Bus（会话路由层）**
   - `aikg/python/ai_kernel_generator/cli/runtime/message_sender.py`
@@ -151,6 +154,10 @@ sequenceDiagram
 
   E->>MS: unregister_message_sender(session_id)
 ```
+
+### 4.3 React 模式的流式收尾（重要）
+
+ReAct 模式不走 `AgentBase.run_llm()`，因此需要在一轮 `astream` 结束时**主动发送一个空的 `DisplayMessage(text="")`**，以触发 `AKGConsole.stream_renderer.finish()` 正常收尾；否则 UI 可能一直停留在“流式进行中”的状态。
 
 ### 4.2 关键“为什么能到达 UI”
 

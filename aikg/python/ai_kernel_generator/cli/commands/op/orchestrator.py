@@ -116,6 +116,7 @@ class OpCommandOrchestrator:
                 akg_console,
                 auto_yes=args.auto_yes,
                 use_stream=args.stream,
+                agent_mode=args.agent_mode,
             )
 
             # interactive
