@@ -88,20 +88,8 @@ def track_node(node_name: str):
 
             try:
                 result = await node_fn(state)
-                _safe_send(
-                    session_id,
-                    DisplayMessage(
-                        text=f"✅ {node_name} {time.time() - start:.2f}s",
-                    ),
-                )
                 return result
             except Exception as e:
-                _safe_send(
-                    session_id,
-                    DisplayMessage(
-                        text=f"⚠️ {node_name} {str(e)}",
-                    ),
-                )
                 raise
 
         return wrapped

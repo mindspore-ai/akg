@@ -19,6 +19,7 @@ from ai_kernel_generator.utils.langgraph.node_tracker import track_node
 import logging
 import asyncio
 import json
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +38,18 @@ class NodeFactory:
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: designer")
             
             # 直接使用 state（KernelGenState 本质上是 dict）
+            t0 = time.time()
             result, prompt, reasoning = await designer_instance.run(task_info=state)
+            elapsed = time.time() - t0
             
             # 记录到 Trace
             trace_instance.insert_agent_record(
                 agent_name="designer",
                 result=result,
                 prompt=prompt,
-                reasoning=reasoning
+                reasoning=reasoning,
+                session_id=state.get("session_id"),
+                elapsed_s=elapsed,
             )
             
             # 解析结果（如果有 space_config）
@@ -140,7 +145,9 @@ class NodeFactory:
                 logger.debug(f"[Task {task_id}] 检查错误: {code_check_errors[:300]}...")
             
             # 直接使用 state（KernelGenState 本质上是 dict）
+            t0 = time.time()
             result, prompt, reasoning = await coder_instance.run(task_info=state)
+            elapsed = time.time() - t0
             
             # 使用与原 Task 相同的解析逻辑（ParserFactory.robust_parse）
             # 这样可以处理 LangChain 1.0 后的各种输出格式
@@ -174,7 +181,9 @@ class NodeFactory:
                 agent_name="coder",
                 result=result,  # 原始结果记录到 trace
                 prompt=prompt,
-                reasoning=reasoning
+                reasoning=reasoning,
+                session_id=state.get("session_id"),
+                elapsed_s=elapsed,
             )
             
             return {
@@ -208,6 +217,7 @@ class NodeFactory:
             task_id = state.get('task_id', '0')
             op_name = state.get('op_name', 'unknown')
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: verifier")
+            t0 = time.time()
             
             # 获取 Worker (兼容私有Worker和全局WorkerManager)
             worker = None
@@ -287,7 +297,9 @@ class NodeFactory:
                     agent_name="verifier",
                     result=str(verify_res),
                     error_log=verify_log,
-                    profile_res=profile_res
+                    profile_res=profile_res,
+                    session_id=state.get("session_id"),
+                    elapsed_s=(time.time() - t0),
                 )
                 
                 # 记录验证结果
@@ -688,7 +700,9 @@ class NodeFactory:
             state_with_error["previous_error"] = state.get("multi_case_error", "")
             
             # 2. 生成多 case task_desc
+            t0 = time.time()
             new_task_desc, prompt, reasoning = await test_gen.run(state_with_error)
+            elapsed = time.time() - t0
             
             task_id = state.get('task_id', '0')
             logger.info(f"[Task {task_id}] 多 case task_desc 生成完成")
@@ -698,7 +712,9 @@ class NodeFactory:
                 agent_name="test_case_generator",
                 result=new_task_desc,
                 prompt=prompt,
-                reasoning=reasoning
+                reasoning=reasoning,
+                session_id=state.get("session_id"),
+                elapsed_s=elapsed,
             )
             
             # 3. 使用新 task_desc 创建临时 verifier 进行验证
