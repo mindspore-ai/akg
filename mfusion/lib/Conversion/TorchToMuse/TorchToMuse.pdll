@@ -1,0 +1,53 @@
+#include "mlir/Transforms/DialectConversion.pdll"
+#include "torch-mlir/Dialect/Torch/IR/TorchOps.td"
+#include "mfusion/Dialect/Muse/MuseOps.td"
+#include "mfusion/Dialect/Muse/MuseConstantOps.td"
+
+#include "TorchToMuseAten.pdll"
+#include "TorchToMuseNpu.pdll"
+#include "TorchToMuseConstant.pdll"
+
+Pattern ConvertSymbolicInt {
+  let root = op<torch.symbolic_int> {
+    symbol_name = symbolNameValue: Attr,
+    min_val = minValValue: Attr,
+    max_val = maxValValue: Attr
+  } -> (resType: Type);
+
+  replace root with op<muse.symbolic_int> {
+    symbol_name = symbolNameValue,
+    min_val = minValValue,
+    max_val = maxValValue
+  } -> (convertType(resType));
+}
+
+Pattern ConvertBindSymbolicShape {
+  let root = op<torch.bind_symbolic_shape>(
+    operand: Value,
+    shape_symbols: ValueRange
+  ) {
+    shape_expressions = shapeExpressionsValue: Attr
+  };
+
+  replace root with op<muse.bind_symbolic_shape>(
+    convertValue(operand),
+    convertValues(shape_symbols)
+  ) {
+    shape_expressions = shapeExpressionsValue
+  };
+}
+
+Pattern ConvertReturnOp {
+  let root = op<func.return>(operands: ValueRange);
+  replace root with op<func.return>(convertValues(operands));
+}
+
+Pattern ConvertTorchListConstruct {
+  let root = op<torch.prim.ListConstruct>(elements: ValueRange) -> (resType: Type);
+  replace root with op<muse.make_list>(convertValues(elements)) -> (convertType(resType));
+}
+
+Pattern ConvertTorchListUnpack {
+  let root = op<torch.prim.ListUnpack>(list: Value) -> (resTypes: TypeRange);
+  replace root with op<muse.unpack_list>(convertValue(list)) -> (convertTypes(resTypes));
+}

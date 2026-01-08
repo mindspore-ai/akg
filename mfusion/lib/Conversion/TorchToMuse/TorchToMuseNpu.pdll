@@ -1,0 +1,34 @@
+Pattern ConvertNpuAddRmsNorm {
+  let root = op<torch.operator>(operands: ValueRange) { name = attr<"\"torch.npu.npu_add_rms_norm\""> } -> (resTypes: TypeRange);
+  replace root with op<muse.add_rms_norm>(convertValues(operands)) -> (convertTypes(resTypes));
+}
+
+Pattern ConvertNpuMoeGatingTopKSoftmax {
+  let root = op<torch.operator>(operands: ValueRange) { name = attr<"\"torch.npu.npu_moe_gating_top_k_softmax\""> } -> (resTypes: TypeRange);
+  replace root with op<muse.moe_gating_top_k_softmax>(convertValues(operands)) -> (convertTypes(resTypes));
+}
+
+Pattern ConvertNpuMoeInitRoutingV3 {
+  let root = op<torch.operator>(operands: ValueRange) { name = attr<"\"torch.npu.npu_moe_init_routing_v2\""> } -> (resTypes: TypeRange);
+  replace root with op<muse.moe_init_routing_v3>(convertValues(operands)) -> (convertTypes(resTypes));
+}
+
+Pattern ConvertNpuMoeTokenUnpermute {
+  let root = op<torch.operator>(operands: ValueRange) { name = attr<"\"torch.npu.npu_moe_token_unpermute\""> } -> (resTypes: TypeRange);
+  replace root with op<muse.moe_token_unpermute>(convertValues(operands)) -> (convertTypes(resTypes));
+}
+
+Pattern ConvertNpuRmsNorm {
+  let root = op<torch.operator>(operands: ValueRange) { name = attr<"\"torch.npu.npu_rms_norm\""> } -> (resTypes: TypeRange);
+  replace root with op<muse.rms_norm>(convertValues(operands)) -> (convertTypes(resTypes));
+}
+
+Pattern ConvertNpuScatterNdUpdate {
+  let root = op<torch.operator>(operands: ValueRange) { name = attr<"\"torch.npu.npu_scatter_nd_update\""> } -> (resTypes: TypeRange);
+  replace root with op<muse.scatter_nd_update>(convertValues(operands)) -> (convertTypes(resTypes));
+}
+
+Pattern ConvertNpuSwiGlu {
+  let root = op<torch.operator>(operands: ValueRange) { name = attr<"\"torch.npu.npu_swiglu\""> } -> (resTypes: TypeRange);
+  replace root with op<muse.swiglu>(convertValues(operands)) -> (convertTypes(resTypes));
+}
