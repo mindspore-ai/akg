@@ -21,6 +21,7 @@ import logging
 from pathlib import Path
 
 from langchain.tools import tool
+from langgraph.types import interrupt
 
 from ai_kernel_generator.core.tools.tool_schemas import (
     AskUserInput,
@@ -42,19 +43,26 @@ def ask_user(message: str) -> str:
     - 需要向用户展示当前进度并等待反馈
     """
     logger.info(f"ask_user: {message}")
-    
-    print(f"Agent 询问:")
-    for line in message.split('\n'):
-        print(f"   {line}")
-    print(f"{'='*60}")
-    
+
+    # 关键：不要使用 print()/input() 抢占 stdin（会导致 prompt_toolkit TUI 卡死/崩溃）。
+    # 使用 LangGraph 的 interrupt 机制实现“可恢复暂停”：
+    # - 首次调用会中断图执行，并把 message 返回给客户端
+    # - 客户端下一轮通过 Command(resume=...) 提供回复后，interrupt 会返回该回复
     try:
-        user_input = input("请输入您的回复: ").strip()
-    except EOFError:
-        user_input = "[用户未输入]"
-    
-    logger.info(f"ask_user 用户回复: {user_input}")
-    return f"用户回复: {user_input}"
+        user_input = interrupt(message)
+    except KeyError as e:
+        # 保护：如果脱离 LangGraph runtime 直接调用 tool（无 pregel scratchpad），给出更可读的错误
+        raise RuntimeError(
+            "ask_user 必须在 LangGraph 运行时（带 checkpointer）中执行，才能使用 interrupt/resume 机制。"
+        ) from e
+
+    try:
+        user_input_str = str(user_input).strip()
+    except Exception:
+        user_input_str = ""
+
+    logger.info(f"ask_user 用户回复: {user_input_str}")
+    return f"用户回复: {user_input_str}"
 
 
 @tool("finish", args_schema=FinishInput)
