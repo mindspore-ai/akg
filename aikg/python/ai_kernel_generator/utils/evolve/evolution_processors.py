@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 from functools import partial
 from ai_kernel_generator.utils.task_label import resolve_task_label
+from ai_kernel_generator.cli.runtime.message_sender import send_message
+from ai_kernel_generator.cli.messages import PanelDataMessage
 
 # 自动选择 Task 实现：优先使用 LangGraphTask，否则使用原 Task
 try:
@@ -525,6 +527,56 @@ class ResultProcessor:
         self.config = runtime_config
         self.init_data = init_data
     
+    def _send_profile_to_history(self, profile_res: Dict[str, Any], op_name: str) -> None:
+        """
+        立即发送性能结果到历史记录
+        
+        Args:
+            profile_res: 性能结果字典
+            op_name: 算子名称
+        """
+        if not isinstance(profile_res, dict):
+            return
+        
+        try:
+            gen_time = float(profile_res.get("gen_time") or 0.0)
+            base_time = float(profile_res.get("base_time") or 0.0)
+            speedup = float(profile_res.get("speedup") or 0.0)
+        except Exception:
+            gen_time = base_time = speedup = 0.0
+        
+        # 检查是否有有效的性能数据
+        if gen_time > 0.0 or base_time > 0.0 or speedup > 0.0:
+            session_id = str(self.config.config.get("session_id") or "").strip()
+            if session_id:
+                # 构造 log_dir: {base_log_dir}/{op_name}/{unique_dir}
+                unique_dir = profile_res.get('unique_dir', '')
+                base_log_dir = self.config.config.get('log_dir', '')
+                log_dir = ""
+                
+                if base_log_dir and unique_dir:
+                    log_dir = os.path.join(os.path.expanduser(base_log_dir), op_name, unique_dir)
+                elif unique_dir:
+                    # 如果没有 base_log_dir，尝试使用 unique_dir 作为相对路径
+                    log_dir = unique_dir
+                
+                try:
+                    send_message(
+                        session_id,
+                        PanelDataMessage(
+                            action="move_to_history",
+                            data={
+                                "speedup": speedup,
+                                "gen_time": gen_time,
+                                "base_time": base_time,
+                                "log_dir": log_dir,
+                            },
+                        ),
+                    )
+                    _logger.debug(f"Sent profile result to history immediately: op_name={op_name}, speedup={speedup:.2f}x")
+                except Exception as e:
+                    _logger.warning(f"Failed to send profile result to history: {e}")
+    
     async def process_results(
         self,
         results: List,
@@ -652,6 +704,9 @@ class ResultProcessor:
                         'source_island': island_idx
                     }
                     successful_impls.append(impl_info)
+                    
+                    # 立即发送性能结果到历史记录
+                    self._send_profile_to_history(profile_res, task_op_name)
             
             # 异步生成sketch
             if successful_impls:
@@ -750,6 +805,9 @@ class ResultProcessor:
                     'sketch': '',
                 }
                 successful_impls.append(impl_info)
+                
+                # 立即发送性能结果到历史记录
+                self._send_profile_to_history(profile_res, task_op_name)
         
         # 异步生成sketch
         if successful_impls:

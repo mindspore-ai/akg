@@ -221,23 +221,23 @@ class MainOpAgent(AgentBase):
         
         logger.info("MainOpAgent initialized successfully")
 
-    def _send_panel_current(self, *, op_name: str = "", save_path: str = "") -> None:
+    def _send_panel_current(self, *, op_name: str = "", phase: str = "") -> None:
         """更新面板当前任务（仅在字段变更处调用）"""
         session_id = str(self.config.get("session_id") or "").strip()
         if not session_id:
             return
         op_name = str(op_name or "").strip()
-        save_path = str(save_path or "").strip()
-        if not op_name and not save_path:
+        phase = str(phase or "").strip()
+        if not op_name and not phase:
             return
-        logger.info(f"[panel] update_current: op_name='{op_name}', save_path='{save_path}'")
+        logger.info(f"[panel] update_current: op_name='{op_name}', phase='{phase}'")
         send_message(
             session_id,
             PanelDataMessage(
                 action="update_current",
                 data={
                     "task_name": op_name,
-                    "save_path": save_path,
+                    "phase": phase,
                 },
             ),
         )
@@ -841,6 +841,7 @@ class MainOpAgent(AgentBase):
                 op_name=op_name,
                 parallel_index=1,
             )
+            self._send_panel_current(op_name=op_name, phase=sub_workflow)
             original_stream_output =  os.environ["AIKG_STREAM_OUTPUT"]
             if sub_workflow not in ["codeonly"]:
                 os.environ["AIKG_STREAM_OUTPUT"] = "off"
@@ -949,31 +950,6 @@ class MainOpAgent(AgentBase):
             }
             
             return_state.update(extra_stats)
-            self._send_panel_current(op_name=op_name)
-
-            # 有性能数据则直接入历史
-            if isinstance(profile_res, dict):
-                try:
-                    gen_time = float(profile_res.get("gen_time") or 0.0)
-                    base_time = float(profile_res.get("base_time") or 0.0)
-                    speedup = float(profile_res.get("speedup") or 0.0)
-                except Exception:
-                    gen_time = base_time = speedup = 0.0
-                if gen_time > 0.0 or base_time > 0.0 or speedup > 0.0:
-                    session_id = str(self.config.get("session_id") or "").strip()
-                    if session_id:
-                        send_message(
-                            session_id,
-                            PanelDataMessage(
-                                action="move_to_history",
-                                data={
-                                    "speedup": speedup,
-                                    "gen_time": gen_time,
-                                    "base_time": base_time,
-                                },
-                            ),
-                        )
-            
             return return_state
             
         except Exception as e:
@@ -1410,9 +1386,11 @@ class MainOpAgent(AgentBase):
                 save_path = save_result.get("save_path", "")
                 if save_path:
                     current_state["output_path"] = save_path
+                    # 获取当前 phase（如果有 sub_agent_type 则使用，否则为空）
+                    phase = current_state.get("sub_agent_type", "")
                     self._send_panel_current(
                         op_name=str(current_state.get("op_name") or ""),
-                        save_path=save_path,
+                        phase=phase,
                     )
             
             # 添加 assistant 消息到历史
@@ -1739,9 +1717,11 @@ class MainOpAgent(AgentBase):
                     save_path = save_result.get("save_path", "")
                     if save_path:
                         result["output_path"] = save_path
+                        # 获取当前 phase（如果有 sub_agent_type 则使用，否则为空）
+                        phase = result.get("sub_agent_type", "")
                         self._send_panel_current(
                             op_name=str(result.get("op_name") or ""),
-                            save_path=save_path,
+                            phase=phase,
                         )
                     
                     # 添加保存消息到对话历史
