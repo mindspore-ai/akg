@@ -26,7 +26,7 @@ func.func @reduction(%in: memref<256x512x1024xf32>, %out: memref<256x512xf32>) a
        %sum = affine.load %out[%i, %j] : memref<256x512xf32>
        %add = arith.addf %sum, %ld {reduction_axes = [2:index], reduction_type = "x"}: f32
        affine.store %add, %out[%i, %j] : memref<256x512xf32>
-     } {reduction_loop}
+     } {reduction}
    }
  }
  return

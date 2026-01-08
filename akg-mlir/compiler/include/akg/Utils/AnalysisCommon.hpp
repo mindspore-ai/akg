@@ -57,7 +57,7 @@ constexpr auto kOperatorTypeStr = "OperatorType";
 constexpr auto kReduceStr = "Reduce";
 constexpr auto kReductionAxesStr = "reduction_axes";
 constexpr auto kReductionTypeStr = "reduction_type";
-constexpr auto kReductionLoopAttr = "reduction_loop";
+constexpr auto kReductionLoopAttr = "reduction";
 constexpr auto kVectorSize = 4096;
 constexpr auto kVectorize128Bit = 128;
 constexpr auto kVectorize256Bit = 256;
@@ -610,9 +610,13 @@ class CommonUtils {
         SmallVector<Operation *, 8> axesSrc;
         collectRelatedAxes(idx, axesSrc);
         (void)std::unique(axesSrc.begin(), axesSrc.end());
+        // Skip empty arrays (e.g., from constant indices)
+        if (axesSrc.empty()) {
+          continue;
+        }
         bool isDuplicated = false;
         for (auto arr : axesSrcEachDim) {
-          if (arr[0] == axesSrc[0]) {
+          if (!arr.empty() && arr[0] == axesSrc[0]) {
             isDuplicated = true;
             break;
           }
@@ -646,7 +650,7 @@ class CommonUtils {
         }
         bool isDuplicated = false;
         for (auto arr : res) {
-          if (arr[0] == subRes[0]) {
+          if (!arr.empty() && arr[0] == subRes[0]) {
             isDuplicated = true;
             break;
           }

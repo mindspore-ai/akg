@@ -82,9 +82,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createConvertLinalgToAffineLoopsPass());
 
     // pre-process
-    nestedFusionPM.addPass(mlir::createBF16ToF32Pass());
     nestedFusionPM.addPass(mlir::createCSEPass());
     nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
+    nestedFusionPM.addPass(mlir::createBF16ToF32Pass());
     bool promoteSingleIter = true;
     nestedFusionPM.addPass(mlir::affine::createAffineLoopNormalizePass(promoteSingleIter));
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
@@ -102,8 +102,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
 
-    nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
     nestedFusionPM.addPass(mlir::createExtractIfOpPass(options.target));
+    nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
+    nestedFusionPM.addPass(mlir::createConvertAffineToSCFPass());
     nestedFusionPM.addPass(mlir::createLowerAffinePass());
 
     // parallel
