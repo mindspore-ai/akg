@@ -63,10 +63,6 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_as
 可选参数：
 
 - `--intent "..."` 直接输入需求（跳过交互提示）。
-- `--agent-mode langgraph|react` 选择主代理模式：
-  - `langgraph`：旧版 `MainOpAgent`（默认，保持历史行为）
-  - `react`：ReAct 模式（基于 LangChain/LangGraph runtime）
-  - 默认值读取环境变量 `AIKG_MAIN_AGENT_MODE`，未设置则为 `langgraph`
 - `--worker-url` 支持多个 Worker 地址，使用逗号分隔。CLI 同时接受 `--worker-url` 与 `--worker_url` 两种写法。
 - 下面两种方式二选一：
   - 使用远端 Worker Service 时用 `--worker-url/--worker_url`。
@@ -79,7 +75,7 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_as
 
 提示：如果希望“尽量非交互”，可使用 `--intent "..." --yes`（尽力而为；在部分场景下 CLI 仍可能需要你补充输入）。
 
-### React 模式注意事项
+### ReAct 模式注意事项
 
 - **不会使用 `ask_user` 工具**：在 CLI/TUI 中会抢占 stdin 导致卡死；react 模式需要补充信息时会直接以文本提问，等待你下一轮输入。
 - 如果你依赖 openai-compatible endpoint（例如 vLLM，或通过 `AIKG_BASE_URL/AIKG_MODEL_NAME/AIKG_API_KEY` 指定模型），react 模式需要安装 `langchain-openai`：

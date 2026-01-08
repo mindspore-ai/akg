@@ -25,8 +25,6 @@ class OpCommandArgs:
     backend: str
     arch: str
     dsl: str
-    # 主代理模式：langgraph（旧版 MainOpAgent）/ react（ReAct MainOpAgent）
-    agent_mode: str
     auto_yes: bool
 
     worker_url: Optional[str]
