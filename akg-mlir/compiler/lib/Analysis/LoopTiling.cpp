@@ -65,15 +65,15 @@ namespace mlir {
 namespace autotiling {
 
 // Main tiling functions
-static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder,
-                                             func::FuncOp &tilingFunc, bool isStaticShape);
+static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder, func::FuncOp &tilingFunc,
+                                             bool isStaticShape);
 static LogicalResult calculateAllBandTileSizes(func::FuncOp funcOp, bool useAutoTiling,
                                                std::vector<SmallVector<mlir::scf::ForOp, 6>> &bands,
                                                std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
                                                size_t &levelToTile);
 static LogicalResult applyTilingToBand(ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
-                                       OpBuilder &builder, std::map<int64_t, Value> &constantCache,
-                                       func::FuncOp funcOp);
+                                       ArrayRef<unsigned> tileSizesInt, OpBuilder &builder,
+                                       std::map<int64_t, Value> &constantCache, func::FuncOp funcOp);
 static LogicalResult collectBands(func::FuncOp funcOp, std::vector<SmallVector<mlir::scf::ForOp, 6>> &bands);
 
 // Helper struct for loop bounds
@@ -93,56 +93,53 @@ struct DynamicAxisMapping {
 // Loop tiling core helpers
 static Value calculateOffsetForPointLoop(mlir::Location loc, ArrayRef<std::pair<Value, Value>> levelInfo,
                                          Value tilesize, OpBuilder &builder);
-static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop,
-                                                 Value tilesize, OpBuilder &builder,
+static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop, Value tilesize,
+                                                 unsigned tilesizeInt, OpBuilder &builder,
                                                  std::map<int64_t, Value> &constantCache);
-static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop,
-                                                  Value curTilesize, mlir::scf::ForOp prevLoop,
-                                                  mlir::scf::ForOp upperLoop, OpBuilder &builder,
-                                                  std::map<int64_t, Value> &constantCache);
-static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop,
-                                        Value lastTilesize, ArrayRef<std::pair<Value, Value>> levelInfo,
-                                        mlir::scf::ForOp prevLoop, OpBuilder &builder,
-                                        std::map<int64_t, Value> &constantCache);
-static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const LoopBounds &bounds,
-                                                 mlir::Location loc, OpBuilder &builder);
+static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop, Value curTilesize,
+                                                  mlir::scf::ForOp prevLoop, mlir::scf::ForOp upperLoop,
+                                                  OpBuilder &builder, std::map<int64_t, Value> &constantCache);
+static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop, Value lastTilesize,
+                                        ArrayRef<std::pair<Value, Value>> levelInfo, mlir::scf::ForOp prevLoop,
+                                        OpBuilder &builder, std::map<int64_t, Value> &constantCache);
+static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const LoopBounds &bounds, mlir::Location loc,
+                                                 OpBuilder &builder);
 static void insertArgInnerCalculationInPointLoop(mlir::scf::ForOp newLoop, mlir::scf::ForOp origLoop,
-                                                  ArrayRef<std::pair<Value, Value>> levelInfo,
-                                                  Value lastTilesize, mlir::Location loc,
-                                                  int lastTile, ArrayRef<Value> tileSizeValues);
-static void processSingleTileLoop(int i, int j, int bandSize, int tileNum,
-                                  MutableArrayRef<mlir::scf::ForOp> newLoops,
-                                  ArrayRef<mlir::scf::ForOp> band,
-                                  ArrayRef<Value> tileSizeValues,
+                                                 ArrayRef<std::pair<Value, Value>> levelInfo, Value lastTilesize,
+                                                 mlir::Location loc, int lastTile, ArrayRef<Value> tileSizeValues);
+static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, MutableArrayRef<mlir::scf::ForOp> newLoops,
+                                  ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
+                                  ArrayRef<unsigned> tileSizesInt,
                                   SmallVectorImpl<SmallVector<std::pair<Value, Value>, 4>> &tileLevelInfo,
                                   Value kernelsizeConstant, mlir::Location loc,
                                   std::map<int64_t, Value> &constantCache);
 static void constructTiledIndexStatic(MutableArrayRef<mlir::scf::ForOp> newLoops, ArrayRef<mlir::scf::ForOp> band,
-                                      ArrayRef<Value> tileSizeValues, OpBuilder &builder,
-                                      std::map<int64_t, Value> &constantCache, mlir::IRMapping &mapping);
+                                      ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
+                                      OpBuilder &builder, std::map<int64_t, Value> &constantCache,
+                                      mlir::IRMapping &mapping);
 
 // Dynamic axis mapping and tile size helpers
-static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(
-    ArrayRef<mlir::scf::ForOp> band, ArrayRef<unsigned> bandTileSizes, func::FuncOp originalKernel);
-static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mapping,
-                                                 func::FuncOp originalKernel,
+static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(ArrayRef<mlir::scf::ForOp> band,
+                                                                      ArrayRef<unsigned> bandTileSizes,
+                                                                      func::FuncOp originalKernel);
+static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mapping, func::FuncOp originalKernel,
                                                  mlir::Location loc, OpBuilder &builder, Value &result);
-static LogicalResult prepareTileSizesForStaticShape(
-    func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
-    std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-    std::vector<SmallVector<Value, 6>> &allTileSizeValues);
-static LogicalResult prepareTileSizesFromMemref(
-    func::FuncOp originalKernel, ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
-    mlir::Location loc, OpBuilder &builder,
-    std::vector<SmallVector<Value, 6>> &allTileSizeValues);
+static LogicalResult prepareTileSizesForStaticShape(func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
+                                                    std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
+                                                    std::vector<SmallVector<Value, 6>> &allTileSizeValues,
+                                                    std::vector<SmallVector<unsigned, 6>> &allBandTileSizesOut);
+static LogicalResult prepareTileSizesFromMemref(func::FuncOp originalKernel,
+                                                ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands, mlir::Location loc,
+                                                OpBuilder &builder,
+                                                std::vector<SmallVector<Value, 6>> &allTileSizeValues,
+                                                std::vector<SmallVector<unsigned, 6>> &allBandTileSizesInt);
 
 // Tiling function creation helpers
 static void buildTilingFunctionSignature(FunctionType origTy, MLIRContext *ctx, OpBuilder &builder,
                                          SmallVector<Type> &argTypes, SmallVector<Type> &resTypes);
 static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRef<Type> argTypes,
                                             ArrayRef<Type> resTypes, OpBuilder &builder);
-static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc,
-                                            ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
+static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
                                             ArrayRef<SmallVector<unsigned, 6>> allBandTileSizes,
                                             ArrayRef<std::vector<DynamicAxisMapping>> allBandDynamicMappings,
                                             OpBuilder &builder);
@@ -406,7 +403,7 @@ static LogicalResult calculateAllBandTileSizes(func::FuncOp funcOp, bool useAuto
     }
   }
 
-  // Check if dynamic shape (similar to isDynamicShape() member function)
+  // Check if dynamic shape (for autoTiling, not loop dynamic shape)
   bool isDynamicShape = akgglobal::ShapeAlignTool::getInstance().getFuncArgSizes() > 0;
 
   if (!useAutoTiling) {
@@ -539,8 +536,8 @@ static void constructTiledLoopStatic(mlir::scf::ForOp rootScfForOp, unsigned wid
 
 // Helper: Calculate offset for point loop (offset = sum(ivs) * tilesize)
 [[maybe_unused]] static Value calculateOffsetForPointLoop(mlir::Location loc,
-                                                          ArrayRef<std::pair<Value, Value>> levelInfo,
-                                                          Value tilesize, OpBuilder &builder) {
+                                                          ArrayRef<std::pair<Value, Value>> levelInfo, Value tilesize,
+                                                          OpBuilder &builder) {
   SmallVector<Value> ivs;
   for (const auto &[iv, _] : levelInfo) {
     ivs.push_back(iv);
@@ -560,34 +557,43 @@ static void constructTiledLoopStatic(mlir::scf::ForOp rootScfForOp, unsigned wid
     sumIvs = builder.create<mlir::affine::AffineApplyOp>(loc, sumMap, ivs);
   }
 
-  auto mulMap = AffineMap::get(1, 1,
-      builder.getAffineDimExpr(0) * builder.getAffineSymbolExpr(0),
-      builder.getContext());
-  return builder.create<mlir::affine::AffineApplyOp>(
-      loc, mulMap, ValueRange{sumIvs, tilesize});
+  auto mulMap =
+    AffineMap::get(1, 1, builder.getAffineDimExpr(0) * builder.getAffineSymbolExpr(0), builder.getContext());
+  return builder.create<mlir::affine::AffineApplyOp>(loc, mulMap, ValueRange{sumIvs, tilesize});
 }
 
 // Helper: Create bounds for first level tile loop
-static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop,
-                                                 Value tilesize, OpBuilder &builder,
+static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop, Value tilesize,
+                                                 unsigned tilesizeInt, OpBuilder &builder,
                                                  std::map<int64_t, Value> &constantCache) {
   LoopBounds bounds;
+
+  // Special handling for reduction loops: skip tiling by setting bounds to [0, 1)
+  if (origLoop->hasAttr(kReductionLoopAttr)) {
+    bounds.lb = getOrCreateConstantStatic(loc, 0, builder, constantCache);
+    bounds.ub = getOrCreateConstantStatic(loc, 1, builder, constantCache);
+    bounds.step = getOrCreateConstantStatic(loc, 1, builder, constantCache);
+    bounds.inits = origLoop.getInitArgs();
+    return bounds;
+  }
+
   Value origUb = origLoop.getUpperBound();
 
   // lb = 0
   bounds.lb = getOrCreateConstantStatic(loc, 0, builder, constantCache);
 
-  // ub = ceildiv(origUb, tilesize) or just tilesize if already ceildiv
-  auto tilesizeConst = getConstantIndexValue(tilesize);
+  // Determine if this is a dynamic axis by checking origUb
   auto origUbConst = getConstantIndexValue(origUb);
 
-  if (tilesizeConst && origUbConst) {
-    // Both constants: compute ceildiv statically
-    int64_t numBlocks = (origUbConst.value() + tilesizeConst.value() - 1) / tilesizeConst.value();
+  if (origUbConst && tilesizeInt != static_cast<unsigned>(-1) && tilesizeInt != 0) {
+    // Static axis with known tilesize: compute ceildiv statically
+    // Use tilesizeInt (original unsigned value) instead of trying to extract from Value
+    int64_t numBlocks = (origUbConst.value() + tilesizeInt - 1) / tilesizeInt;
     bounds.ub = getOrCreateConstantStatic(loc, numBlocks, builder, constantCache);
   } else {
-    // Dynamic: tilesize should already be ceildiv(origUb, kernelsize)
-    bounds.ub = recreateConstantOrSelf(tilesize, builder);
+    // Dynamic axis: ub = kBlockDimSize (40)
+    // tilesize should already be ceildiv(origUb, kernelsize)
+    bounds.ub = getOrCreateConstantStatic(loc, kBlockDimSize, builder, constantCache);
   }
 
   // step = 1
@@ -598,11 +604,20 @@ static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::
 }
 
 // Helper: Create bounds for middle level tile loop
-static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop,
-                                                  Value curTilesize, mlir::scf::ForOp prevLoop,
-                                                  mlir::scf::ForOp upperLoop, OpBuilder &builder,
-                                                  std::map<int64_t, Value> &constantCache) {
+static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop, Value curTilesize,
+                                                  mlir::scf::ForOp prevLoop, mlir::scf::ForOp upperLoop,
+                                                  OpBuilder &builder, std::map<int64_t, Value> &constantCache) {
   LoopBounds bounds;
+
+  // Special handling for reduction loops: skip tiling by setting bounds to [0, 1)
+  if (origLoop->hasAttr(kReductionLoopAttr)) {
+    bounds.lb = getOrCreateConstantStatic(loc, 0, builder, constantCache);
+    bounds.ub = getOrCreateConstantStatic(loc, 1, builder, constantCache);
+    bounds.step = getOrCreateConstantStatic(loc, 1, builder, constantCache);
+    bounds.inits = prevLoop.getResults();
+    return bounds;
+  }
+
   Value origUb = origLoop.getUpperBound();
 
   // lb = 0
@@ -611,16 +626,23 @@ static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf:
   // ub = ceildiv(origUb, curTilesize)
   auto origUbConst = getConstantIndexValue(origUb);
   auto curConst = getConstantIndexValue(curTilesize);
+
   if (origUbConst && curConst && curConst.value() != 0) {
+    // Both are compile-time constants: compute ceildiv statically
     int64_t ubVal = (origUbConst.value() + curConst.value() - 1) / curConst.value();
     bounds.ub = getOrCreateConstantStatic(loc, ubVal, builder, constantCache);
-  } else {
-    // Dynamic: use affine.apply ceildiv
-    auto ceildivMap = AffineMap::get(1, 1,
-        builder.getAffineDimExpr(0).ceilDiv(builder.getAffineSymbolExpr(0)),
-        builder.getContext());
+  } else if (origUbConst) {
+    // origUb is constant but curTilesize is from memref: compute ceildiv dynamically
+    auto ceildivMap =
+      AffineMap::get(1, 1, builder.getAffineDimExpr(0).ceilDiv(builder.getAffineSymbolExpr(0)), builder.getContext());
     bounds.ub = builder.create<mlir::affine::AffineApplyOp>(
-        loc, ceildivMap, ValueRange{recreateConstantOrSelf(origUb, builder), curTilesize});
+      loc, ceildivMap, ValueRange{recreateConstantOrSelf(origUb, builder), curTilesize});
+  } else {
+    // origUb is dynamic: compute ceildiv dynamically
+    auto ceildivMap =
+      AffineMap::get(1, 1, builder.getAffineDimExpr(0).ceilDiv(builder.getAffineSymbolExpr(0)), builder.getContext());
+    bounds.ub = builder.create<mlir::affine::AffineApplyOp>(
+      loc, ceildivMap, ValueRange{recreateConstantOrSelf(origUb, builder), curTilesize});
   }
 
   // step = upper ub (kernel number)
@@ -635,11 +657,19 @@ static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf:
 }
 
 // Helper: Create bounds for point loop
-static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop,
-                                        Value lastTilesize, ArrayRef<std::pair<Value, Value>> levelInfo,
-                                        mlir::scf::ForOp prevLoop, OpBuilder &builder,
-                                        std::map<int64_t, Value> &constantCache) {
+static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop, Value lastTilesize,
+                                        ArrayRef<std::pair<Value, Value>> levelInfo, mlir::scf::ForOp prevLoop,
+                                        OpBuilder &builder, std::map<int64_t, Value> &constantCache) {
   LoopBounds bounds;
+
+  // Special handling for reduction loops: use original loop bounds and step
+  if (origLoop->hasAttr(kReductionLoopAttr)) {
+    bounds.lb = recreateConstantOrSelf(origLoop.getLowerBound(), builder);
+    bounds.ub = recreateConstantOrSelf(origLoop.getUpperBound(), builder);
+    bounds.step = recreateConstantOrSelf(origLoop.getStep(), builder);
+    bounds.inits = prevLoop.getResults();
+    return bounds;
+  }
 
   // Calculate sum of upper layer IVs
   SmallVector<Value> ivs;
@@ -662,25 +692,20 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
   }
 
   // lb = sum(ivs) * lastTilesize
-  auto mulMap = AffineMap::get(1, 1,
-      builder.getAffineDimExpr(0) * builder.getAffineSymbolExpr(0),
-      builder.getContext());
-  bounds.lb = builder.create<mlir::affine::AffineApplyOp>(
-      loc, mulMap, ValueRange{sumIvs, lastTilesize});
+  auto mulMap =
+    AffineMap::get(1, 1, builder.getAffineDimExpr(0) * builder.getAffineSymbolExpr(0), builder.getContext());
+  bounds.lb = builder.create<mlir::affine::AffineApplyOp>(loc, mulMap, ValueRange{sumIvs, lastTilesize});
 
   // ub = min((sum(ivs) + 1) * lastTilesize, origUb)
-  Value sumIvsPlus1 = builder.create<arith::AddIOp>(loc, sumIvs,
-      builder.create<arith::ConstantIndexOp>(loc, 1));
-  Value ubCandidate = builder.create<mlir::affine::AffineApplyOp>(
-      loc, mulMap, ValueRange{sumIvsPlus1, lastTilesize});
+  Value sumIvsPlus1 = builder.create<arith::AddIOp>(loc, sumIvs, builder.create<arith::ConstantIndexOp>(loc, 1));
+  Value ubCandidate = builder.create<mlir::affine::AffineApplyOp>(loc, mulMap, ValueRange{sumIvsPlus1, lastTilesize});
 
   Value origUb = origLoop.getUpperBound();
   Value clampedOrigUb = recreateConstantOrSelf(origUb, builder);
 
   // ub = min(ubCandidate, origUb)
   auto minMap = AffineMap::getMultiDimIdentityMap(2, builder.getContext());
-  bounds.ub = builder.create<mlir::affine::AffineMinOp>(
-      loc, minMap, ValueRange{ubCandidate, clampedOrigUb});
+  bounds.ub = builder.create<mlir::affine::AffineMinOp>(loc, minMap, ValueRange{ubCandidate, clampedOrigUb});
 
   // step = 1
   bounds.step = getOrCreateConstantStatic(loc, 1, builder, constantCache);
@@ -690,16 +715,15 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
 }
 
 // Helper: Replace loop with new bounds (create new loop, move body, replace old)
-static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const LoopBounds &bounds,
-                                                 mlir::Location loc, OpBuilder &builder) {
+static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const LoopBounds &bounds, mlir::Location loc,
+                                                 OpBuilder &builder) {
   builder.setInsertionPoint(oldLoop);
 
   // Create new loop with custom empty body builder
-  auto newLoop = builder.create<mlir::scf::ForOp>(
-    loc, bounds.lb, bounds.ub, bounds.step, bounds.inits,
-    [](mlir::OpBuilder &, mlir::Location, mlir::Value, mlir::ValueRange) {
-      // Empty body - we'll move content manually
-    });
+  auto newLoop = builder.create<mlir::scf::ForOp>(loc, bounds.lb, bounds.ub, bounds.step, bounds.inits,
+                                                  [](mlir::OpBuilder &, mlir::Location, mlir::Value, mlir::ValueRange) {
+                                                    // Empty body - we'll move content manually
+                                                  });
 
   // Move body operations from old to new (excluding terminator)
   auto *oldBody = oldLoop.getBody();
@@ -733,9 +757,9 @@ static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const
 
 // Helper: Insert argInner calculation in point loop body
 [[maybe_unused]] static void insertArgInnerCalculationInPointLoop(mlir::scf::ForOp newLoop, mlir::scf::ForOp origLoop,
-                                                  ArrayRef<std::pair<Value, Value>> levelInfo,
-                                                  Value lastTilesize, mlir::Location loc,
-                                                  int lastTile, ArrayRef<Value> tileSizeValues) {
+                                                                  ArrayRef<std::pair<Value, Value>> levelInfo,
+                                                                  Value lastTilesize, mlir::Location loc, int lastTile,
+                                                                  ArrayRef<Value> tileSizeValues) {
   auto *newBody = newLoop.getBody();
 
   // Calculate offset
@@ -761,11 +785,9 @@ static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const
     sumIvs = bodyBuilder.create<mlir::affine::AffineApplyOp>(loc, sumMap, ivs);
   }
 
-  auto mulMap = AffineMap::get(1, 1,
-      bodyBuilder.getAffineDimExpr(0) * bodyBuilder.getAffineSymbolExpr(0),
-      bodyBuilder.getContext());
-  Value offset = bodyBuilder.create<mlir::affine::AffineApplyOp>(
-      loc, mulMap, ValueRange{sumIvs, lastTilesize});
+  auto mulMap = AffineMap::get(1, 1, bodyBuilder.getAffineDimExpr(0) * bodyBuilder.getAffineSymbolExpr(0),
+                               bodyBuilder.getContext());
+  Value offset = bodyBuilder.create<mlir::affine::AffineApplyOp>(loc, mulMap, ValueRange{sumIvs, lastTilesize});
 
   // argInner = point_iv + offset
   Value argInner = bodyBuilder.create<arith::AddIOp>(loc, newLoop.getInductionVar(), offset);
@@ -780,10 +802,9 @@ static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const
 }
 
 // Helper: Process a single tile loop (extracted to reduce cyclomatic complexity)
-static void processSingleTileLoop(int i, int j, int bandSize, int tileNum,
-                                  MutableArrayRef<mlir::scf::ForOp> newLoops,
-                                  ArrayRef<mlir::scf::ForOp> band,
-                                  ArrayRef<Value> tileSizeValues,
+static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, MutableArrayRef<mlir::scf::ForOp> newLoops,
+                                  ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
+                                  ArrayRef<unsigned> tileSizesInt,
                                   SmallVectorImpl<SmallVector<std::pair<Value, Value>, 4>> &tileLevelInfo,
                                   Value kernelsizeConstant, mlir::Location loc,
                                   std::map<int64_t, Value> &constantCache) {
@@ -801,16 +822,19 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum,
   // Determine loop bounds based on level
   if (i == 0) {
     // First level tile loop
-    bounds = createFirstLevelTileLoopBounds(loc, origLoop, tileSizeValues[curTile],
-                                            loopBuilder, constantCache);
+    unsigned tilesizeInt =
+      (curTile < static_cast<int>(tileSizesInt.size())) ? tileSizesInt[curTile] : static_cast<unsigned>(-1);
+
+    bounds =
+      createFirstLevelTileLoopBounds(loc, origLoop, tileSizeValues[curTile], tilesizeInt, loopBuilder, constantCache);
   } else if (i == tileNum) {
     // Point loop
     if (lastTile < 0 || lastTile >= static_cast<int>(newLoops.size())) return;
     mlir::scf::ForOp prevLoop = newLoops[lastTile];
     if (!prevLoop) return;
 
-    bounds = createPointLoopBounds(loc, origLoop, tileSizeValues[lastTile], tileLevelInfo[j],
-                                   prevLoop, loopBuilder, constantCache);
+    bounds = createPointLoopBounds(loc, origLoop, tileSizeValues[lastTile], tileLevelInfo[j], prevLoop, loopBuilder,
+                                   constantCache);
   } else {
     // Middle level tile loop
     if (lastTile < 0 || lastTile >= static_cast<int>(newLoops.size())) return;
@@ -818,17 +842,22 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum,
     if (!prevLoop) return;
 
     int upperTile = (i - 1) * bandSize + j;
-    mlir::scf::ForOp upperLoop = (upperTile >= 0 && upperTile < static_cast<int>(newLoops.size()))
-                                  ? newLoops[upperTile] : mlir::scf::ForOp();
+    mlir::scf::ForOp upperLoop =
+      (upperTile >= 0 && upperTile < static_cast<int>(newLoops.size())) ? newLoops[upperTile] : mlir::scf::ForOp();
 
-    bounds = createMiddleLevelTileLoopBounds(loc, origLoop, tileSizeValues[curTile],
-                                             prevLoop, upperLoop, loopBuilder, constantCache);
+    bounds = createMiddleLevelTileLoopBounds(loc, origLoop, tileSizeValues[curTile], prevLoop, upperLoop, loopBuilder,
+                                             constantCache);
   }
 
   // Replace old loop with new one
   mlir::scf::ForOp newLoop = replaceLoopWithNewBounds(loop, bounds, loc, loopBuilder);
 
   newLoops[curTile] = newLoop;
+
+  // For point loop: preserve reduction attribute from original loop
+  if (i == tileNum && origLoop->hasAttr(kReductionLoopAttr)) {
+    newLoop->setAttr(kReductionLoopAttr, loopBuilder.getI64IntegerAttr(kVectorSize));
+  }
 
   // Record tile level info for future offset calculations
   if (i < tileNum && curTile < static_cast<int>(tileSizeValues.size())) {
@@ -845,8 +874,9 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum,
 
 // Helper function to construct tiled index (bounds and steps) using tileSizeValues from memref
 static void constructTiledIndexStatic(MutableArrayRef<mlir::scf::ForOp> newLoops, ArrayRef<mlir::scf::ForOp> band,
-                                      ArrayRef<Value> tileSizeValues, OpBuilder &builder,
-                                      std::map<int64_t, Value> &constantCache, mlir::IRMapping &mapping) {
+                                      ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
+                                      OpBuilder &builder, std::map<int64_t, Value> &constantCache,
+                                      mlir::IRMapping &mapping) {
   int bandSize = static_cast<int>(band.size());
   if (bandSize == 0 || tileSizeValues.size() == 0) {
     return;
@@ -868,8 +898,8 @@ static void constructTiledIndexStatic(MutableArrayRef<mlir::scf::ForOp> newLoops
   // Process each tile level and dimension
   for (int i = 0; i <= tileNum; ++i) {
     for (int j = 0; j < bandSize; ++j) {
-      processSingleTileLoop(i, j, bandSize, tileNum, newLoops, band, tileSizeValues,
-                           tileLevelInfo, kernelsizeConstant, loc, constantCache);
+      processSingleTileLoop(i, j, bandSize, tileNum, newLoops, band, tileSizeValues, tileSizesInt, tileLevelInfo,
+                            kernelsizeConstant, loc, constantCache);
     }
   }
 }
@@ -1070,8 +1100,8 @@ static LogicalResult createTailBlockDynamicImpl(mlir::scf::ForOp forOp, mlir::Va
 
 // Helper function to apply tiling to a single band using tileSizeValues from memref
 static LogicalResult applyTilingToBand(ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
-                                       OpBuilder &builder, std::map<int64_t, Value> &constantCache,
-                                       func::FuncOp funcOp) {
+                                       ArrayRef<unsigned> tileSizesInt, OpBuilder &builder,
+                                       std::map<int64_t, Value> &constantCache, func::FuncOp funcOp) {
   if (band.empty() || tileSizeValues.empty()) {
     return success();
   }
@@ -1093,12 +1123,17 @@ static LogicalResult applyTilingToBand(ArrayRef<mlir::scf::ForOp> band, ArrayRef
 
     constructTiledLoopStatic(rootScfForOp, width, tiledLoops, builder, constantCache);
 
+    // CRITICAL: Replace all dummy loops first, BEFORE cloning any operations!
+    // This ensures that when we clone ops and establish IV mapping,
+    // we map to the FINAL loop IVs, not the dummy ones.
+    mlir::IRMapping dummyMapping;  // Unused, but required by constructTiledIndexStatic
+    constructTiledIndexStatic(tiledLoops, band, tileSizeValues, tileSizesInt, builder, constantCache, dummyMapping);
+
+    // NOW clone operations with correct IV mapping to final loops
     mlir::IRMapping mapping;
     if (failed(cloneNonPerfectChainIntoPointLoops(band, tiledLoops, tileSizesNum, builder, mapping))) {
       return failure();
     }
-
-    constructTiledIndexStatic(tiledLoops, band, tileSizeValues, builder, constantCache, mapping);
 
     if (failed(cloneComputeIntoInnermostPointLoop(band, tiledLoops, tileSizesNum, rootScfForOp, builder))) {
       return failure();
@@ -1142,7 +1177,10 @@ static bool isInnermostScfLoop(mlir::scf::ForOp forOp) {
 static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &builder, int64_t vectorSize) {
   funcOp->walk([&](mlir::scf::ForOp forOp) {
     if (isInnermostScfLoop(forOp)) {
-      forOp->setAttr(kVectorAttr, builder.getI64IntegerAttr(vectorSize));
+      // set vector attribute to innermost loops
+      if (!forOp->hasAttr(kReductionLoopAttr)) {
+        forOp->setAttr(kVectorAttr, builder.getI64IntegerAttr(vectorSize));
+      }
     }
   });
 }
@@ -1167,8 +1205,8 @@ static void setBlockDimAttribute(func::FuncOp funcOp, OpBuilder &builder) {
     if (auto constantKernelnum = getConstantIndexValue(kernelnum)) {
       funcOp->setAttr(kBlockDimAttr, builder.getI64IntegerAttr(constantKernelnum.value()));
     } else {
-      // Dynamic kernelnum: set to -1 as placeholder
-      funcOp->setAttr(kBlockDimAttr, builder.getI64IntegerAttr(-1));
+      // use kBlockDimSize as block dimension
+      funcOp->setAttr(kBlockDimAttr, builder.getI64IntegerAttr(kBlockDimSize));
     }
   }
 }
@@ -1248,8 +1286,7 @@ static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRe
 }
 
 // Helper: Store tile sizes to memref
-static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc,
-                                            ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
+static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
                                             ArrayRef<SmallVector<unsigned, 6>> allBandTileSizes,
                                             ArrayRef<std::vector<DynamicAxisMapping>> allBandDynamicMappings,
                                             OpBuilder &builder) {
@@ -1380,9 +1417,9 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
 int64_t getSelectedTilingStrategyIndex() { return 0; }
 
 // Helper: Build dynamic axis mapping for a single band
-static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(
-    ArrayRef<mlir::scf::ForOp> band, ArrayRef<unsigned> bandTileSizes,
-    func::FuncOp originalKernel) {
+static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(ArrayRef<mlir::scf::ForOp> band,
+                                                                      ArrayRef<unsigned> bandTileSizes,
+                                                                      func::FuncOp originalKernel) {
   std::vector<DynamicAxisMapping> bandDynamicMapping;
 
   for (size_t tileIdx = 0; tileIdx < bandTileSizes.size(); ++tileIdx) {
@@ -1416,10 +1453,8 @@ static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(
 }
 
 // Helper: Compute dynamic tile size value (ceildiv(dim, 40))
-static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mapping,
-                                                 func::FuncOp originalKernel,
-                                                 mlir::Location loc, OpBuilder &builder,
-                                                 Value &result) {
+static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mapping, func::FuncOp originalKernel,
+                                                 mlir::Location loc, OpBuilder &builder, Value &result) {
   if (mapping.inputMemrefIndex == UINT_MAX || mapping.dimIndex == UINT_MAX) {
     return failure();
   }
@@ -1445,11 +1480,10 @@ static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mappi
 }
 
 // Helper: Prepare tile sizes for static shape
-static LogicalResult prepareTileSizesForStaticShape(
-    func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
-    std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-    std::vector<SmallVector<Value, 6>> &allTileSizeValues) {
-
+static LogicalResult prepareTileSizesForStaticShape(func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
+                                                    std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
+                                                    std::vector<SmallVector<Value, 6>> &allTileSizeValues,
+                                                    std::vector<SmallVector<unsigned, 6>> &allBandTileSizesOut) {
   std::vector<SmallVector<unsigned, 6>> allBandTileSizes;
   size_t levelToTile = 0;
 
@@ -1479,8 +1513,8 @@ static LogicalResult prepareTileSizesForStaticShape(
         // Dynamic tile size
         const auto &mapping = bandDynamicMapping[tileIdx];
         if (failed(computeDynamicTileSizeValue(mapping, originalKernel, loc, builder, tileSizeValue))) {
-          originalKernel.emitError("Failed to compute dynamic tile size for band " +
-                                  std::to_string(bandIdx) + " tile " + std::to_string(tileIdx));
+          originalKernel.emitError("Failed to compute dynamic tile size for band " + std::to_string(bandIdx) +
+                                   " tile " + std::to_string(tileIdx));
           return failure();
         }
       } else {
@@ -1494,15 +1528,18 @@ static LogicalResult prepareTileSizesForStaticShape(
     allTileSizeValues.push_back(tileSizeValues);
   }
 
+  // Output the original unsigned tile sizes
+  allBandTileSizesOut = allBandTileSizes;
+
   return success();
 }
 
 // Helper: Prepare tile sizes from memref (dynamic shape)
-static LogicalResult prepareTileSizesFromMemref(
-    func::FuncOp originalKernel, ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
-    mlir::Location loc, OpBuilder &builder,
-    std::vector<SmallVector<Value, 6>> &allTileSizeValues) {
-
+static LogicalResult prepareTileSizesFromMemref(func::FuncOp originalKernel,
+                                                ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands, mlir::Location loc,
+                                                OpBuilder &builder,
+                                                std::vector<SmallVector<Value, 6>> &allTileSizeValues,
+                                                std::vector<SmallVector<unsigned, 6>> &allBandTileSizesInt) {
   auto args = originalKernel.getArguments();
   if (args.empty()) {
     originalKernel.emitError("originalKernel must have at least one argument (tileSizesMemref)");
@@ -1528,14 +1565,32 @@ static LogicalResult prepareTileSizesFromMemref(
     unsigned bandTileSizesCount = forNum * 2;
 
     SmallVector<Value, 6> tileSizeValues;
+    SmallVector<unsigned, 6> tileSizesInt;
+
     for (unsigned i = 0; i < bandTileSizesCount; ++i) {
       Value idx = builder.create<arith::ConstantIndexOp>(loc, memrefOffset + i);
       Value loaded = builder.create<memref::LoadOp>(loc, tileSizesMemref, ValueRange{idx});
       Value tileSizeIndex = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), loaded);
       tileSizeValues.push_back(tileSizeIndex);
+
+      // Try to extract constant tilesize by looking at the defining op chain
+      unsigned tileSizeIntValue = static_cast<unsigned>(-1);
+
+      // Trace back through index_cast -> load to find the stored constant
+      if (auto indexCastOp = tileSizeIndex.getDefiningOp<arith::IndexCastOp>()) {
+        Value castSource = indexCastOp.getIn();
+        if (castSource.getDefiningOp<memref::LoadOp>()) {
+          // Can't directly get the stored value, but we can check the tiling function
+          // For now, mark as dynamic
+          tileSizeIntValue = static_cast<unsigned>(-1);
+        }
+      }
+
+      tileSizesInt.push_back(tileSizeIntValue);
     }
 
     allTileSizeValues.push_back(tileSizeValues);
+    allBandTileSizesInt.push_back(tileSizesInt);
     memrefOffset += bandTileSizesCount;
   }
 
@@ -1561,18 +1616,29 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
   builder.setInsertionPointToStart(body);
 
   // Step 3: Prepare tile sizes
+  // Always calculate tile sizes first to get unsigned values
+  std::vector<SmallVector<unsigned, 6>> allBandTileSizesInt;
+  std::vector<SmallVector<mlir::scf::ForOp, 6>> bandsToUse = bands;
+  size_t levelToTile = 0;
+  if (failed(calculateAllBandTileSizes(originalKernel, true, bandsToUse, allBandTileSizesInt, levelToTile))) {
+    return failure();
+  }
+
+  // Then prepare Value representations based on shape type
   std::vector<SmallVector<Value, 6>> allTileSizeValues;
   allTileSizeValues.reserve(bands.size());
-  std::vector<SmallVector<mlir::scf::ForOp, 6>> bandsToUse = bands;
 
   if (isStaticShape) {
-    // Static shape: use auto-tiling to compute tile sizes
-    if (failed(prepareTileSizesForStaticShape(originalKernel, loc, builder, bandsToUse, allTileSizeValues))) {
+    // Static shape: create Value constants from unsigned values
+    std::vector<SmallVector<unsigned, 6>> tempTileSizes;  // Will be overwritten
+    if (failed(
+          prepareTileSizesForStaticShape(originalKernel, loc, builder, bandsToUse, allTileSizeValues, tempTileSizes))) {
       return failure();
     }
   } else {
-    // Dynamic shape: load tile sizes from memref
-    if (failed(prepareTileSizesFromMemref(originalKernel, bands, loc, builder, allTileSizeValues))) {
+    // Dynamic shape: load tile sizes from memref (but we already have unsigned values)
+    std::vector<SmallVector<unsigned, 6>> tempTileSizes;  // Will be overwritten
+    if (failed(prepareTileSizesFromMemref(originalKernel, bands, loc, builder, allTileSizeValues, tempTileSizes))) {
       return failure();
     }
   }
@@ -1581,11 +1647,12 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
   for (size_t bandIdx = 0; bandIdx < bandsToUse.size(); ++bandIdx) {
     const auto &band = bandsToUse[bandIdx];
     const auto &tileSizeValues = allTileSizeValues[bandIdx];
+    const auto &tileSizesInt = allBandTileSizesInt[bandIdx];
 
     std::map<int64_t, Value> constantCache;
     builder.setInsertionPointAfter(tileSizeValues.back().getDefiningOp());
 
-    if (failed(applyTilingToBand(band, tileSizeValues, builder, constantCache, originalKernel))) {
+    if (failed(applyTilingToBand(band, tileSizeValues, tileSizesInt, builder, constantCache, originalKernel))) {
       originalKernel.emitError("Failed to apply tiling to band " + std::to_string(bandIdx));
       return failure();
     }
@@ -1601,14 +1668,18 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
 
 static bool isAncestorOp(mlir::Operation *maybeAncestor, mlir::Operation *op) {
   for (mlir::Operation *p = op->getParentOp(); p != nullptr; p = p->getParentOp()) {
-    if (p == maybeAncestor) return true;
+    if (p == maybeAncestor) {
+      return true;
+    }
   }
   return false;
 }
 
 static mlir::LogicalResult verifyBandIsNestedChain(llvm::ArrayRef<mlir::scf::ForOp> band) {
   for (size_t i = 0; i + 1 < band.size(); ++i) {
-    if (!band[i] || !band[i + 1]) return mlir::failure();
+    if (!band[i] || !band[i + 1]) {
+      return mlir::failure();
+    }
     mlir::scf::ForOp loopI = band[i];
     mlir::scf::ForOp loopI1 = band[i + 1];
     if (!isAncestorOp(loopI.getOperation(), loopI1.getOperation())) {
@@ -1622,21 +1693,13 @@ static mlir::LogicalResult verifyBandIsNestedChain(llvm::ArrayRef<mlir::scf::For
 static void collectChainComputeOps(llvm::ArrayRef<mlir::scf::ForOp> band,
                                    llvm::SmallVectorImpl<mlir::Operation *> &ops) {
   ops.clear();
-  if (band.empty()) return;
-
-  // for each layer (except innermost layer): collect ops in its body before the next loop
-  for (size_t i = 0; i + 1 < band.size(); ++i) {
-    mlir::scf::ForOp loopI = band[i];
-    mlir::scf::ForOp loopI1 = band[i + 1];
-    mlir::Block *body = loopI.getBody();
-    mlir::Operation *nextLoopOp = loopI1.getOperation();
-
-    for (mlir::Operation &op : body->getOperations()) {
-      if (&op == nextLoopOp) break;                  // break at next loop
-      if (mlir::isa<mlir::scf::YieldOp>(op)) break;  // yield is at the end
-      ops.push_back(&op);
-    }
+  if (band.empty()) {
+    return;
   }
+
+  // NOTE: We only collect ops from the innermost layer!
+  // Middle layer ops (pre/post) are already handled by cloneNonPerfectChainIntoPointLoops.
+  // If we collect them here, they will be cloned twice, causing SSA dominance errors.
 
   // innermost layer: collect all ops in its body except terminator
   mlir::scf::ForOp innerLoop = band.back();
@@ -1664,7 +1727,12 @@ static mlir::LogicalResult cloneComputeIntoInnermostPointLoop(llvm::ArrayRef<mli
   for (unsigned i = 0; i < forNum; ++i) {
     mlir::scf::ForOp origLoop = band[i];
     mlir::scf::ForOp tiledLoop = tiledLoops[tileSizesNum + i];
-    mapping.map(origLoop.getInductionVar(), tiledLoop.getInductionVar());
+    if (!origLoop || !tiledLoop) {
+      continue;
+    }
+    Value origIV = origLoop.getInductionVar();
+    Value tiledIV = tiledLoop.getInductionVar();
+    mapping.map(origIV, tiledIV);
   }
 
   // 3) set insertion point: before rootScfForOp (root is still in some block of innermostPoint)
@@ -1691,10 +1759,11 @@ static void splitOpsAroundChildLoop(mlir::scf::ForOp parent, mlir::Operation *ch
       seenChild = true;
       continue;
     }
-    if (!seenChild)
+    if (!seenChild) {
       preOps.push_back(&op);
-    else
+    } else {
       postOps.push_back(&op);
+    }
   }
 }
 
@@ -1703,7 +1772,13 @@ static void initIVMapping(llvm::ArrayRef<mlir::scf::ForOp> band, llvm::MutableAr
                           unsigned tileSizesNum, mlir::IRMapping &mapping) {
   for (unsigned i = 0; i < band.size(); ++i) {
     mlir::scf::ForOp loop = band[i];
-    mapping.map(loop.getInductionVar(), tiledLoops[tileSizesNum + i].getInductionVar());
+    mlir::scf::ForOp tiledLoop = tiledLoops[tileSizesNum + i];
+    if (!loop || !tiledLoop) {
+      continue;
+    }
+    Value origIV = loop.getInductionVar();
+    Value tiledIV = tiledLoop.getInductionVar();
+    mapping.map(origIV, tiledIV);
   }
 }
 
@@ -1735,9 +1810,13 @@ static mlir::LogicalResult cloneNonPerfectChainIntoPointLoops(llvm::ArrayRef<mli
                                                               unsigned tileSizesNum, mlir::OpBuilder &builder,
                                                               mlir::IRMapping &mapping) {
   unsigned forNum = band.size();
-  if (forNum == 0) return mlir::success();
+  if (forNum == 0) {
+    return mlir::success();
+  }
 
-  if (tiledLoops.size() < tileSizesNum + forNum) return mlir::failure();
+  if (tiledLoops.size() < tileSizesNum + forNum) {
+    return mlir::failure();
+  }
 
   initIVMapping(band, tiledLoops, tileSizesNum, mapping);
 
@@ -1749,13 +1828,19 @@ static mlir::LogicalResult cloneNonPerfectChainIntoPointLoops(llvm::ArrayRef<mli
 
     // put into the parent loop of tile level 0 (index=i)
     mlir::scf::ForOp parentTile0 = tiledLoops[tileSizesNum + i];
-    if (!parentTile0) return mlir::failure();
+    if (!parentTile0) {
+      return mlir::failure();
+    }
 
     // pre: put into the beginning of the body (before the child loop op)
-    cloneOpsToPointLoop(parentTile0, pre, /*insertAtStart=*/true, builder, mapping);
+    if (!pre.empty()) {
+      cloneOpsToPointLoop(parentTile0, pre, /*insertAtStart=*/true, builder, mapping);
+    }
 
     // post: put into the end of the body (before the yield)
-    cloneOpsToPointLoop(parentTile0, post, /*insertAtStart=*/false, builder, mapping);
+    if (!post.empty()) {
+      cloneOpsToPointLoop(parentTile0, post, /*insertAtStart=*/false, builder, mapping);
+    }
   }
 
   return mlir::success();
@@ -1763,8 +1848,12 @@ static mlir::LogicalResult cloneNonPerfectChainIntoPointLoops(llvm::ArrayRef<mli
 
 // Helper function to remap or return self if not mapped
 [[maybe_unused]] static mlir::Value remapOrSelf(mlir::Value v, mlir::IRMapping &mapping) {
-  if (!v) return v;
-  if (mapping.contains(v)) return mapping.lookup(v);
+  if (!v) {
+    return v;
+  }
+  if (mapping.contains(v)) {
+    return mapping.lookup(v);
+  }
   return v;
 }
 
