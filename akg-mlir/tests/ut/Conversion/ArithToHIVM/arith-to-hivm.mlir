@@ -1944,6 +1944,26 @@ func.func @test_exp_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) {
 
 // -----
 
+func.func @test_sqrt_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) {
+  // CHECK-LABEL: func.func @test_sqrt_npuvector
+  // CHECK-SAME: (%[[IN:.*]]: memref<1024xf32>, %[[OUT:.*]]: memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_SRC:.*]] = memref.subview %[[IN]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: %[[IN_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.load ins(%[[SUBVIEW_SRC]] : memref<1024xf32, strided<[1]>>) outs(%[[IN_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[RES_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.vsqrt ins(%[[IN_ALLOC]] : memref<1024xf32>) outs(%[[RES_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_DST:.*]] = memref.subview %[[OUT]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: hivm.hir.store ins(%[[RES_ALLOC]] : memref<1024xf32>) outs(%[[SUBVIEW_DST]] : memref<1024xf32, strided<[1]>>)
+  %c0 = arith.constant 0 : index
+  %padding = arith.constant 0.0 : f32
+  %vec = npuvector.transfer_read %in[%c0], %padding : memref<1024xf32>, !npuvector<1024xf32>
+  %res = math.sqrt %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %res, %out[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  return
+}
+
+// -----
+
 func.func @dynamic_npuvector_transfer_read_write(%in: memref<?xf32>, %out: memref<?xf32>) {
   // CHECK-LABEL: func.func @dynamic_npuvector_transfer_read_write
   // CHECK-SAME: (%[[IN:.*]]: memref<?xf32>, %[[OUT:.*]]: memref<?xf32>)
@@ -2724,5 +2744,48 @@ func.func @test_rank0_transfer_read_write_static(%arg0: memref<f32>, %arg1: memr
   %vec_arg2 = npuvector.transfer_read %arg2[%c0], %pad : memref<170xf32>, !npuvector<170xf32>
   %vec_add = arith.addf %vec_scalar, %vec_arg2 : !npuvector<170xf32>
   npuvector.transfer_write %vec_add, %arg1[%c0, %c0] : !npuvector<170xf32>, memref<1x170xf32>
+  return
+}
+
+// -----
+
+func.func @test_npuvector_bitcast_dynamic_shape(%arg0: memref<128xbf16>, %arg1: memref<128xi16>) {
+  // CHECK-LABEL: func.func @test_npuvector_bitcast_dynamic_shape
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: %[[C128:.*]] = arith.constant 128 : index
+  // CHECK: %[[C1:.*]] = arith.constant 1 : index
+  // CHECK: %[[C128_0:.*]] = arith.constant 128 : index
+  // CHECK: %[[C4096:.*]] = arith.constant 4096 : index
+  // CHECK: %[[DIM:.*]] = arith.constant 128 : index
+  // CHECK: scf.for %[[ARG2:.*]] = %[[C0]] to %[[C128]] step %[[C128_0]] {
+  // CHECK:   %[[CST:.*]] = arith.constant 0.000000e+00 : bf16
+  // CHECK:   %[[SUBVIEW0:.*]] = memref.subview %arg0[0] [%[[DIM]]] [1] : memref<128xbf16> to memref<?xbf16, strided<[1]>>
+  // CHECK:   %[[ALLOC0:.*]] = memref.alloc(%[[DIM]]) : memref<?xbf16>
+  // CHECK:   annotation.mark %[[ALLOC0]] {buffer_size_in_byte = 8192 : index}
+  // CHECK:   hivm.hir.load ins(%[[SUBVIEW0]] : memref<?xbf16, strided<[1]>>) outs(%[[ALLOC0]] : memref<?xbf16>) init_out_buffer = false may_implicit_transpose_with_last_axis = false
+  // CHECK:   %[[BC:.*]] = hivm.hir.bitcast %[[ALLOC0]] : memref<?xbf16> -> memref<?xi16>
+  // CHECK:   %[[C1_I16:.*]] = arith.constant 1 : i16
+  // CHECK:   %[[ALLOC1:.*]] = memref.alloc(%[[DIM]]) : memref<?xi16>
+  // CHECK:   annotation.mark %[[ALLOC1]] {buffer_size_in_byte = 8192 : index}
+  // CHECK:   hivm.hir.vbrc ins(%[[C1_I16]] : i16) outs(%[[ALLOC1]] : memref<?xi16>)
+  // CHECK:   %[[ALLOC2:.*]] = memref.alloc(%[[DIM]]) : memref<?xi16>
+  // CHECK:   hivm.hir.vand ins(%[[BC]], %[[ALLOC1]] : memref<?xi16>, memref<?xi16>) outs(%[[ALLOC2]] : memref<?xi16>)
+  // CHECK:   %[[SUBVIEW1:.*]] = memref.subview %arg1[0] [%[[DIM]]] [1] : memref<128xi16> to memref<?xi16, strided<[1]>>
+  // CHECK:   hivm.hir.store ins(%[[ALLOC2]] : memref<?xi16>) outs(%[[SUBVIEW1]] : memref<?xi16, strided<[1]>>)
+  %c0 = arith.constant 0 : index
+  %c128 = arith.constant 128 : index
+  %c1 = arith.constant 1 : index
+  %c128_0 = arith.constant 128 : index
+  %c4096 = arith.constant 4096 : index
+  %dim = arith.constant 128 : index
+  scf.for %arg2 = %c0 to %c128 step %c128_0 {
+    %cst = arith.constant 0.000000e+00 : bf16
+    %0 = npuvector.transfer_read %arg0[%c0][%dim][%c4096], %cst : memref<128xbf16>, !npuvector<?xbf16>
+    %1 = npuvector.bitcast %0 : !npuvector<?xbf16> to !npuvector<?xi16>
+    %2 = arith.constant 1 : i16
+    %3 = npuvector.broadcast %2[%dim] [%c4096] : i16 to !npuvector<?xi16>
+    %res = arith.andi %1, %3 : !npuvector<?xi16>
+    npuvector.transfer_write %res, %arg1[%c0] : !npuvector<?xi16>, memref<128xi16>
+  }
   return
 }
