@@ -65,9 +65,52 @@ def create_checkpointer(backend: str = "memory", db_path: Optional[str] = None) 
         from langgraph.checkpoint.memory import InMemorySaver
         return InMemorySaver()
 
+def _find_safe_trim_index(messages: list, target_keep: int) -> int:
+    """
+    为了保证截取之后的message是能够配对的，因为aimessage(有tool_Call)后面必须紧跟对应的toolmessage
+    """
+    from langchain_core.messages import AIMessage, ToolMessage
+    
+    if len(messages) <= target_keep:
+        return 0
+    
+    target_start = len(messages) - target_keep
+    safe_start = target_start
+    
+    if safe_start > 0 and safe_start < len(messages):
+        start_msg = messages[safe_start]
+        
+        # 如果起始位置是 ToolMessage，要向前包含对应的 AIMessage
+        if isinstance(start_msg, ToolMessage):
+            for i in range(safe_start - 1, -1, -1):
+                msg = messages[i]
+                if isinstance(msg, AIMessage):
+                    tool_calls = getattr(msg, 'tool_calls', None)
+                    if tool_calls:
+                        safe_start = i
+                        break
+                # 如果遇到非 ToolMessage 且非相关 AIMessage不截取
+                elif not isinstance(msg, ToolMessage):
+                    break
+    
+    #检查起始位置前一条是否是带有 tool_calls 的 AIMessage
+    if safe_start > 0:
+        prev_msg = messages[safe_start - 1]
+        if isinstance(prev_msg, AIMessage):
+            tool_calls = getattr(prev_msg, 'tool_calls', None)
+            if tool_calls:
+                if safe_start < len(messages) and isinstance(messages[safe_start], ToolMessage):
+                    safe_start -= 1
+    
+    logger.debug(f"Safe trim: target_start={target_start}, safe_start={safe_start}")
+    return safe_start
+
 
 @before_model
 def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
+    """
+    保存对话历史
+    """
     messages = state["messages"]
     max_messages = DEFAULT_MAX_MESSAGES
     
@@ -75,10 +118,14 @@ def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
         return None
     
     first_msg = messages[0]
-    keep_count = max_messages - 1 if len(messages) % 2 == 0 else max_messages
-    recent_messages = messages[-keep_count:]
+    remaining_messages = messages[1:]
     
-    logger.info(f"Trimming messages: {len(messages)} -> {1 + len(recent_messages)}")
+    target_keep = max_messages - 1
+    
+    safe_start = _find_safe_trim_index(remaining_messages, target_keep)
+    recent_messages = remaining_messages[safe_start:]
+    
+    logger.info(f"Trimming messages: {len(messages)} -> {1 + len(recent_messages)} (safe_start={safe_start})")
     
     return {
         "messages": [

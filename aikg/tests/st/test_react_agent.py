@@ -353,7 +353,6 @@ async def demo_react_agent(
                             
                             # Action: 检查工具调用
                             tool_calls = getattr(msg, 'tool_calls', [])
-                            print(f"tool_calls: {tool_calls}")
                             if tool_calls:
                                 for tc in tool_calls:
                                     tc_name = tc.get('name', 'unknown') if isinstance(tc, dict) else getattr(tc, 'name', 'unknown')
@@ -430,10 +429,6 @@ async def demo_react_agent(
                                 else:
                                     preview = content[:100] + ('...' if len(content) > 100 else '')
                                     print(f"   📤 {tool_name}: {preview}")
-                        
-                        # 如果是 finish，结束循环
-                        if task_finished:
-                            break
             
             # 打印本轮总结
             print("\n" + "=" * 80)
