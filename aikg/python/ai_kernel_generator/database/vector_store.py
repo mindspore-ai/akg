@@ -22,6 +22,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from ai_kernel_generator.utils.common_utils import get_md5_hash
+from ai_kernel_generator.core.llm.model_loader import create_embedding_model
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +92,22 @@ class VectorStore(ABC):
         self._initialized = True
 
     def _load_embedding_model(self, embedding_model_name: str = "GanymedeNil/text2vec-large-chinese"):
-        """从配置文件加载嵌入模型"""
-        logger.info(f"Loading embedding model: {embedding_model_name}")
+        """加载嵌入模型
+        
+        优先级：
+        1. 远程 API（通过 create_embedding_model，自动检查环境变量）
+        2. 本地 HuggingFace 模型
+        """
+        # 【最高优先级】尝试使用远程 embedding API（自动检查环境变量）
+        try:
+            embedding = create_embedding_model()
+            logger.info("Using remote embedding API")
+            return embedding
+        except Exception as e:
+            logger.info(f"Remote embedding API not available: {e}, trying local model")
+        
+        # 【次优先级】使用本地 HuggingFace 模型
+        logger.info(f"Loading local embedding model: {embedding_model_name}")
         
         def load_huggingface_embedding_model(model_name: str):
             """加载HuggingFace嵌入模型"""
@@ -121,8 +136,9 @@ class VectorStore(ABC):
         # 所有加载尝试都失败，抛出异常
         error_msg = (
             f"Failed to load embedding model '{embedding_model_name}'. "
-            f"Please download the embedding model to local by running: "
-            f"bash download.sh --with_local_model"
+            f"Please either:\n"
+            f"  1. Set environment variables: AIKG_EMBEDDING_BASE_URL, AIKG_EMBEDDING_MODEL_NAME, AIKG_EMBEDDING_API_KEY\n"
+            f"  2. Download the local model by running: bash download.sh --with_local_model"
         )
         logger.error(error_msg)
         raise RuntimeError(error_msg)
