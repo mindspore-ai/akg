@@ -17,6 +17,8 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_PASSES_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_PASSES_H_
 
+#include <memory>
+
 #include "akg/Analysis/AutoTiling.h"
 #include "akg/Analysis/Axis.h"
 #include "akg/Analysis/Config.h"
@@ -46,6 +48,14 @@
 #include "akg/Dialect/Affine/Transforms/BF16ToF32.h"
 
 namespace mlir {
+namespace func {
+class FuncOp;
+}
+
+template <typename>
+class OperationPass;
+
+std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeBoolPass();
 
 /// Generate the code for registering transforms passes.
 #ifndef GEN_PASS_REGISTRATION
