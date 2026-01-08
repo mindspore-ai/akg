@@ -3,7 +3,15 @@ langchain-deepseek
 langchain-ollama
 langchain-community
 langgraph>=1.0.0
+attrs==24.2.0
+numpy==1.26.4
+scipy==1.13.1
+decorator==5.1.1
+triton-ascend
 autopep8
+ninja
+cmake
+wheel
 jinja2
 numpy
 httpx

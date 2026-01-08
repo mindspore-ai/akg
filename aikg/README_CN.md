@@ -89,12 +89,11 @@ export AIKG_MODEL_ENABLE_THINK="enabled"  # 或 "disabled"
 
 ### 启动 AKG_CLI
 ```bash
-akg_cli op \
-  --framework torch \          # 前端框架：torch/mindspore/numpy
-  --backend ascend \            # 后端平台：ascend/cuda/cpu
-  --arch ascend910b2 \          # 硬件架构：ascend910b2/a100 等
-  --dsl triton_ascend \         # 目标 DSL：triton_ascend/triton_cuda/cuda/tilelang_cuda 等
-  --devices 0,1,2,3,4,5,6,7     # 可用设备列表
+# Ascend 910B2（--framework torch/mindspore/numpy，--dsl triton_ascend/triton_cuda/cuda/tilelang_cuda 等）
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --devices 0,1,2,3,4,5,6,7
+
+# CUDA A100: --backend cuda --arch a100 --dsl triton_cuda
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --devices 0,1,2,3,4,5,6,7
 ```
 
 ### 使用方法
