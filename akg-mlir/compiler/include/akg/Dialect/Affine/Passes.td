@@ -283,4 +283,15 @@ def BF16ToF32 : Pass<"bf16-to-f32", "func::FuncOp"> {
   ];
 }
 
+def LegalizeBool : Pass<"legalize-bool", "func::FuncOp"> {
+  let summary = "Legalize i1 element types to i8";
+  let constructor = "mlir::createLegalizeBoolPass()";
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "func::FuncDialect",
+    "linalg::LinalgDialect",
+    "memref::MemRefDialect"
+  ];
+}
+
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES
