@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Optional
 
 import typer
@@ -53,11 +52,6 @@ def register_op_command(
             "--dsl",
             help="必填（仅命令行）：DSL（如 triton_cuda/triton_ascend/cpp 等）。",
         ),
-        agent_mode: str = typer.Option(
-            os.getenv("AIKG_MAIN_AGENT_MODE", "langgraph"),
-            "--agent-mode",
-            help="主代理模式：langgraph（旧版）/ react（ReAct）。默认读取 AIKG_MAIN_AGENT_MODE，兜底 langgraph。",
-        ),
         # 常用参数
         auto_yes: bool = typer.Option(
             False, "--yes", "-y", help="自动确认所有提示，使用默认值"
@@ -87,12 +81,6 @@ def register_op_command(
     ) -> None:
         """算子生成入口。"""
 
-        agent_mode = (agent_mode or "").strip().lower()
-        if agent_mode not in ("langgraph", "react"):
-            raise typer.BadParameter(
-                "--agent-mode 仅支持 langgraph/react（也可通过环境变量 AIKG_MAIN_AGENT_MODE 设置）"
-            )
-
         orchestrator = OpCommandOrchestrator(console=console, services=services)
         orchestrator.run(
             OpCommandArgs(
@@ -101,7 +89,6 @@ def register_op_command(
                 backend=backend or "",
                 arch=arch or "",
                 dsl=dsl or "",
-                agent_mode=agent_mode,
                 auto_yes=auto_yes,
                 worker_url=worker_url,
                 devices=devices,
