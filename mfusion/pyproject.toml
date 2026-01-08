@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mfusion"
+version = "1.0"
+description = "Python bindings for MFusion MLIR dialects"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{name = "MFusion Team", email = "mfusion-team@example.com"}]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+]
+keywords = ["mlir", "compiler", "dialects"]
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=6.0.0", "black>=21.0.0"]
+
+[project.urls]
+Homepage = "https://gitee.com/mindspore/vllm-mindspore"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+ext-modules = [
+    {name = "mfusion._mlir_libs._mfusion", sources = ["python/MFusionModule.cc"]}
+]
