@@ -28,6 +28,7 @@ from ai_kernel_generator.cli.runtime.message_sender import (
     unregister_message_sender,
 )
 from ai_kernel_generator.utils.main_op_agent_display import is_simple_command
+from ai_kernel_generator.utils.stream_output import stream_output_override
 
 logger = logging.getLogger(__name__)
 
@@ -115,9 +116,6 @@ class LocalExecutor:
             bool(use_stream) if use_stream is not None else bool(self.use_stream)
         )
 
-        # 设置 Stream 环境变量
-        os.environ["AIKG_STREAM_OUTPUT"] = "on" if effective_use_stream else "off"
-
         # 注册消息发送器（本地模式：直接调用 console）
         def _local_message_sender(message):
             """本地消息发送器：直接路由到 console"""
@@ -182,11 +180,25 @@ class LocalExecutor:
             self._main_agent_state = {"config": config, "rag": bool(rag)}
 
             null_output = StringIO()
-            with redirect_stdout(null_output):
-                state = await self._react_executor.run_turn(
-                    user_input=user_input,
-                    use_stream=effective_use_stream,
-                )
+            with stream_output_override(bool(effective_use_stream)):
+                with redirect_stdout(null_output):
+                    state = await self._react_executor.run_turn(
+                        user_input=user_input,
+                        use_stream=effective_use_stream,
+                    )
+            # CLI 语义：finish 表示“一次任务完成”，不代表退出 akg_cli 会话。
+            # 因此在 completed 后：
+            # - 允许继续输入新需求（should_continue=True）
+            # - 不重置 thread/executor：保留上下文，支持在同一会话里持续对话
+            if isinstance(state, dict):
+                cur = str(state.get("current_step") or "").strip().lower()
+                if cur == "completed" or state.get("should_continue") is False:
+                    state["should_continue"] = True
+                    # 给一点提示（dim 区域）
+                    state.setdefault(
+                        "hint_message",
+                        "💡 本轮任务已完成。你可以继续输入新的需求（Ctrl+C 退出）。",
+                    )
             return self._build_response_state(state)
 
         finally:
@@ -276,9 +288,6 @@ class LocalExecutor:
         # 会话 id：用于 TUI resume + 录制目录
         sid = str(session_id or uuid.uuid4())
         os.environ["AIKG_SESSION_ID"] = sid
-
-        # 设置 Stream 环境变量
-        os.environ["AIKG_STREAM_OUTPUT"] = "on" if use_stream else "off"
 
         executor = cls(
             console=akg_console,

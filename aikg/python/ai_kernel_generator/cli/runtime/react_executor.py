@@ -126,6 +126,10 @@ class ReactTurnExecutor:
 
         collected_content: list[str] = []
         collected_reasoning: list[str] = []
+        # 允许“子 Agent 自己的 LLMStreamMessage”流式输出的工具集合：
+        # - codeonly：单并发执行，允许流式
+        # - op_task_builder：单线程，允许流式
+        allow_tool_streaming = {"call_codeonly", "call_op_task_builder"}
 
         async def _run() -> None:
             nonlocal display_message, hint_message, should_continue, finished, interrupted
@@ -156,7 +160,7 @@ class ReactTurnExecutor:
                     should_continue = True
                     self._awaiting_resume = True
                     # interrupt 后本轮结束，等待用户下一次输入（resume）
-                    continue
+                    return
 
                 # model/agent 节点输出：LLM 内容 + tool_calls
                 node_output = None
@@ -218,6 +222,13 @@ class ReactTurnExecutor:
                             if tool_name:
                                 self._panel_update_current(phase=tool_name, op_name=op_name)
 
+                                # 关键：如果即将调用“允许子 Agent 自己 stream”的工具，
+                                # 先结束当前 ReAct 的 stream，避免两个来源的 LLMStreamMessage 混到同一个 StreamRenderer。
+                                if use_stream and tool_name in allow_tool_streaming:
+                                    from ai_kernel_generator.cli.messages import DisplayMessage
+
+                                    send_message(self.session_id, DisplayMessage(text=""))
+
                             # 如果模型直接调用 finish，通常最终答案在 tool output 中
                             if tool_name == "finish":
                                 # 不在这里置 finished：以 tools event 为准
@@ -236,7 +247,8 @@ class ReactTurnExecutor:
                             display_message = content.strip() if content else ""
                             finished = True
                             should_continue = False
-                            # 不 break：让流式事件自然收尾
+                            # 关键：立即结束本轮 astream，避免 finish 之后又触发一轮新的 model 调用而“卡住”
+                            return
 
                         # 有些 tool 可能返回结构化 JSON 字符串；这里不强依赖，只尽量提取
                         if (not finished) and (not use_stream) and content:
@@ -245,6 +257,7 @@ class ReactTurnExecutor:
                                 display_message = str(parsed.get("final_answer") or "").strip()
                                 finished = True
                                 should_continue = False
+                                return
 
         # 让 cancel_main_agent 能取消到这一轮
         try:
@@ -281,7 +294,11 @@ class ReactTurnExecutor:
             send_message(self.session_id, DisplayMessage(text=""))
 
         return {
-            "current_step": "waiting_for_user_input" if interrupted else "react",
+            "current_step": (
+                "waiting_for_user_input"
+                if interrupted
+                else ("completed" if finished else "react")
+            ),
             "should_continue": bool(should_continue),
             "display_message": str(display_message or ""),
             "hint_message": str(hint_message or ""),

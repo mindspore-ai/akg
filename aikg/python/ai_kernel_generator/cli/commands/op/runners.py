@@ -513,6 +513,22 @@ class InteractiveOpRunner:
             erase_when_done=True,
         )
 
+        # prompt_toolkit：重复调用 app.exit() 会报错：
+        #   "Return value already set. Application.exit() failed."
+        # 用一个本地 guard 保证只调用一次。
+        _did_app_exit = False
+
+        def _safe_app_exit() -> None:
+            nonlocal _did_app_exit
+            if _did_app_exit:
+                return
+            _did_app_exit = True
+            try:
+                app.exit()
+            except Exception:
+                # 退出路径中的重复调用/竞态不应导致 CLI 崩溃
+                return
+
         async def _spinner(stop_event: asyncio.Event) -> None:
             frames = ["-", "\\", "|", "/"]
             idx = 0
@@ -580,14 +596,14 @@ class InteractiveOpRunner:
                 cont = await _process_input(initial_input)
                 if not cont:
                     should_exit.set()
-                    app.exit()
+                    _safe_app_exit()
                     return
             while not should_exit.is_set():
                 user_input = await input_queue.get()
                 cont = await _process_input(user_input)
                 if not cont:
                     should_exit.set()
-                    app.exit()
+                    _safe_app_exit()
                     return
 
         app_task = asyncio.create_task(app.run_async())
@@ -597,7 +613,7 @@ class InteractiveOpRunner:
             return_when=asyncio.FIRST_COMPLETED,
         )
         if workflow_task in done and not app_task.done():
-            app.exit()
+            _safe_app_exit()
         await app_task
         if not workflow_task.done():
             workflow_task.cancel()
