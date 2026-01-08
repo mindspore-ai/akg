@@ -22,6 +22,7 @@
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple
 from ai_kernel_generator.core.langgraph_task import LangGraphTask
@@ -610,6 +611,47 @@ class KernelVerifierSubAgent(SubAgentBase):
             logger.info(f"  Original performance: {base_time:.2f} us")
             logger.info(f"  Generated performance: {gen_time:.2f} us")
             logger.info(f"  Speedup: {speedup:.2f}x")
+            
+            # 立即发送性能结果到历史记录
+            if isinstance(profile_result, dict):
+                try:
+                    gen_time_val = float(gen_time or 0.0)
+                    base_time_val = float(base_time or 0.0)
+                    speedup_val = float(speedup or 0.0)
+                except Exception:
+                    gen_time_val = base_time_val = speedup_val = 0.0
+                
+                if gen_time_val > 0.0 or base_time_val > 0.0 or speedup_val > 0.0:
+                    session_id = str(self.config.get("session_id") or "").strip()
+                    if session_id:
+                        # 构造 log_dir：从 profile_result 中获取 unique_dir
+                        unique_dir = profile_result.get('unique_dir', '')
+                        log_dir = ""
+                        if unique_dir:
+                            # 从 config 中获取基础 log_dir，如果没有则使用默认路径
+                            base_log_dir = self.config.get('log_dir', '')
+                            if base_log_dir:
+                                log_dir = os.path.join(os.path.expanduser(base_log_dir), op_name, unique_dir)
+                            else:
+                                # 如果没有 base_log_dir，尝试从 profile_result 中获取完整路径
+                                log_dir = profile_result.get('log_dir', unique_dir)
+                        
+                        from ai_kernel_generator.cli.runtime.message_sender import send_message
+                        from ai_kernel_generator.cli.messages import PanelDataMessage
+                        
+                        send_message(
+                            session_id,
+                            PanelDataMessage(
+                                action="move_to_history",
+                                data={
+                                    "speedup": speedup_val,
+                                    "gen_time": gen_time_val,
+                                    "base_time": base_time_val,
+                                    "log_dir": log_dir,
+                                },
+                            ),
+                        )
+                        logger.info(f"Sent profile result to history immediately: speedup={speedup_val:.2f}x")
             
             result = {
                 "generated_code": generated_code,

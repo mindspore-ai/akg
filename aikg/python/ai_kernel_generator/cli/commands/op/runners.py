@@ -349,15 +349,77 @@ class InteractiveOpRunner:
                 width = 80
             return self._render_panel_fragments(max(1, width))
 
-        panel_container = ConditionalContainer(
-            content=Window(
-                FormattedTextControl(_panel_text),
+        # 检查是否是 KernelImplListPlugin，如果是则使用 Frame 方式
+        plugin = get_default_plugin()
+        is_kernel_impl_plugin = (
+            plugin is not None
+            and hasattr(plugin, "render_current_task_fragments")
+            and hasattr(plugin, "render_history_fragments")
+        )
+
+        if is_kernel_impl_plugin:
+            # 为 KernelImplListPlugin 使用 Frame 方式
+            def _current_task_text():
+                if not self._panel_visible:
+                    return [("", "")]
+                try:
+                    width = get_app().output.get_size().columns
+                except Exception:
+                    width = 80
+                # Frame 有左右边框，内侧再留一些空间
+                inner_width = max(1, width - 4)
+                return plugin.render_current_task_fragments(inner_width)
+
+            def _history_text():
+                if not self._panel_visible:
+                    return [("", "")]
+                try:
+                    width = get_app().output.get_size().columns
+                except Exception:
+                    width = 80
+                # Frame 有左右边框，内侧再留一些空间
+                inner_width = max(1, width - 4)
+                return plugin.render_history_fragments(inner_width)
+
+            current_task_window = Window(
+                FormattedTextControl(_current_task_text),
                 wrap_lines=False,
                 dont_extend_height=True,
                 style="class:panel",
-            ),
-            filter=Condition(lambda: self._panel_visible),
-        )
+            )
+            current_task_frame = Frame(
+                body=current_task_window,
+                title="当前任务",
+                style="class:panel-frame",
+            )
+
+            history_window = Window(
+                FormattedTextControl(_history_text),
+                wrap_lines=False,
+                dont_extend_height=True,
+                style="class:panel",
+            )
+            history_frame = Frame(
+                body=history_window,
+                title="实现历史 Top 5",
+                style="class:panel-frame",
+            )
+
+            panel_container = ConditionalContainer(
+                content=HSplit([current_task_frame, history_frame]),
+                filter=Condition(lambda: self._panel_visible),
+            )
+        else:
+            # 使用原有的方式
+            panel_container = ConditionalContainer(
+                content=Window(
+                    FormattedTextControl(_panel_text),
+                    wrap_lines=False,
+                    dont_extend_height=True,
+                    style="class:panel",
+                ),
+                filter=Condition(lambda: self._panel_visible),
+            )
 
         input_body = Window(
             BufferControl(buffer=buffer),
@@ -441,6 +503,7 @@ class InteractiveOpRunner:
                     "input-frame": "fg:#4aa3ff",
                     "placeholder": "italic fg:#7a7a7a",
                     "panel": "fg:#c8d0d8",
+                    "panel-frame": "fg:#4aa3ff",
                     "panel.separator": "fg:#3f5366",
                     "panel.title": "bold fg:#7dd3fc",
                     "panel.body": "fg:#c8d0d8",

@@ -30,6 +30,8 @@ from ai_kernel_generator.core.adaptive_search.task_pool import AsyncTaskPool
 from ai_kernel_generator.core.adaptive_search.ucb_selector import UCBParentSelector
 from ai_kernel_generator.core.adaptive_search.task_generator import TaskGenerator, TaskGeneratorConfig
 from ai_kernel_generator.core.sketch import Sketch
+from ai_kernel_generator.cli.runtime.message_sender import send_message
+from ai_kernel_generator.cli.messages import PanelDataMessage
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +182,59 @@ class AdaptiveSearchController:
             )
         return self._sketch_agent
     
+    def _send_profile_to_history(self, record) -> None:
+        """
+        立即发送性能结果到历史记录
+        
+        Args:
+            record: SuccessRecord 对象
+        """
+        if not record:
+            return
+        
+        profile = record.profile
+        if not isinstance(profile, dict):
+            return
+        
+        try:
+            gen_time = float(profile.get("gen_time") or 0.0)
+            base_time = float(profile.get("base_time") or 0.0)
+            speedup = float(record.speedup or 0.0)
+        except Exception:
+            gen_time = base_time = speedup = 0.0
+        
+        # 检查是否有有效的性能数据
+        if gen_time > 0.0 or base_time > 0.0 or speedup > 0.0:
+            session_id = str(self.config.get("session_id") or "").strip()
+            if session_id:
+                # 构造 log_dir: {base_log_dir}/{op_name}/{unique_dir}
+                unique_dir = profile.get('unique_dir', '')
+                base_log_dir = self.config.get('log_dir', '')
+                log_dir = ""
+                
+                if base_log_dir and unique_dir:
+                    log_dir = os.path.join(os.path.expanduser(base_log_dir), self.op_name, unique_dir)
+                elif unique_dir:
+                    # 如果没有 base_log_dir，尝试使用 unique_dir 作为相对路径
+                    log_dir = unique_dir
+                
+                try:
+                    send_message(
+                        session_id,
+                        PanelDataMessage(
+                            action="move_to_history",
+                            data={
+                                "speedup": speedup,
+                                "gen_time": gen_time,
+                                "base_time": base_time,
+                                "log_dir": log_dir,
+                            },
+                        ),
+                    )
+                    logger.debug(f"Sent profile result to history immediately: op_name={self.op_name}, speedup={speedup:.2f}x")
+                except Exception as e:
+                    logger.warning(f"Failed to send profile result to history: {e}")
+    
     async def _submit_initial_task(self) -> str:
         """提交一个初始任务"""
         task = await self.generator.generate_initial_task()
@@ -266,6 +321,9 @@ class AdaptiveSearchController:
                         f"Task {result.task_id} succeeded: "
                         f"gen_time={record.gen_time:.4f}ms, speedup={record.speedup:.2f}x"
                     )
+                    
+                    # 立即发送性能结果到历史记录
+                    self._send_profile_to_history(record)
             else:
                 self._total_failed += 1
                 error = result.error or result.final_state.get("error", "Unknown error")
