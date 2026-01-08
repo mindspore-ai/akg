@@ -163,6 +163,8 @@ git submodule update --init "aikg/thirdparty/*"
 将下载后的模型地址添加到database对应的yaml中，请参考  [DataBase](./docs/CN/Database.md) 文档
 ```bash
 bash download.sh --with_local_model
+# 若下载速度较慢，可尝试镜像
+HF_ENDPOINT=https://hf-mirror.com bash download.sh --with_local_model
 ```
 
 > 💡 **配置提示**: 

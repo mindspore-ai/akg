@@ -283,23 +283,15 @@ class Coder(AgentBase):
         Returns:
             str: 选择后的示例代码
         """
-        # 检查是否有Designer阶段的RAG结果
-        handwrite_suggestions = task_info.get("handwrite_suggestions", [])
-        
-        # 添加调试日志
-        logger.info(f"[Coder] _select_optimal_examples: handwrite_suggestions={len(handwrite_suggestions) if handwrite_suggestions else 0} items")
         rag_enabled = self.config.get("rag", False)
-        logger.info(f"[Coder] _select_optimal_examples: config.rag={rag_enabled}, config keys: {list(self.config.keys()) if self.config else 'None'}")
-        
-        if handwrite_suggestions:
-            # 全流程模式：复用Designer的RAG结果
-            logger.info(f"[Coder] Using Designer RAG results (handwrite_suggestions found)")
-            return self._reuse_designer_rag_results(handwrite_suggestions)
-
-        # Coder-only模式：根据rag参数决定是否使用RAG
         if rag_enabled:
-            logger.info(f"[Coder] RAG enabled, using _independent_rag_for_impl_code()")
-            return await self._independent_rag_for_impl_code()
+            handwrite_suggestions = task_info.get("handwrite_suggestions", [])
+            if handwrite_suggestions:
+                logger.info(f"[Coder] Using Designer results (handwrite_suggestions found)")
+                return self._reuse_designer_rag_results(handwrite_suggestions)
+            else:
+                logger.info(f"[Coder] RAG enabled, using _independent_rag_for_impl_code()")
+                return await self._independent_rag_for_impl_code()
         else:
             # rag=False时，直接使用本地示例
             logger.info(f"[Coder] RAG disabled (rag=False), using local examples")
