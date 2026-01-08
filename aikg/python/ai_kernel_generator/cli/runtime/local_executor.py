@@ -20,9 +20,8 @@ import sys
 import uuid
 from contextlib import redirect_stdout
 from io import StringIO
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 
-from ai_kernel_generator.core.agent.main_op_agent import MainOpAgent
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.cli.runtime.message_sender import (
     register_message_sender,
@@ -36,6 +35,11 @@ from ai_kernel_generator.utils.main_op_agent_display import (
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    # 注意：这里仅用于类型检查；运行时按 agent_mode lazy import
+    from ai_kernel_generator.core.agent.main_op_agent import MainOpAgent as LangGraphMainOpAgent
+    from ai_kernel_generator.core.agent.react_agent import MainOpAgent as ReactMainOpAgent
+
 
 class LocalExecutor:
     """本地执行器，直接调用 MainOpAgent"""
@@ -44,10 +48,18 @@ class LocalExecutor:
         self,
         console=None,
         *,
+        agent_mode: str = "langgraph",
         session_id: str | None = None,
     ):
         self.session_id = str(session_id or uuid.uuid4())
         self.console = console
+        mode = str(agent_mode or "langgraph").strip().lower()
+        if mode not in ("langgraph", "react"):
+            logger.warning(
+                "[LocalExecutor] unknown agent_mode=%s; fallback to langgraph", mode
+            )
+            mode = "langgraph"
+        self.agent_mode = mode
         self.current_job_id: Optional[str] = None
 
         # 兼容原 AIKGCLI 会话字段
@@ -59,7 +71,11 @@ class LocalExecutor:
 
         # 会话状态管理
         self._main_agent_state: dict | None = None
-        self._main_agent: MainOpAgent | None = None
+        # 运行时按模式创建（避免硬依赖某一套 MainOpAgent）
+        self._main_agent: Any | None = None
+
+        # react 模式：跨轮次复用 executor（保留 memory/checkpointer）
+        self._react_executor = None
 
     def _load_workflow_config(self, backend: str, dsl: str) -> Dict:
         """加载工作流配置"""
@@ -86,8 +102,10 @@ class LocalExecutor:
         dsl: str,
         rag: bool = False,
         output_path: str | None = None,
-    ) -> MainOpAgent:
-        """创建 MainOpAgent 实例"""
+    ):
+        """创建 MainOpAgent 实例（langgraph 模式）。"""
+        # lazy import：避免 react/旧版接口互相污染
+        from ai_kernel_generator.core.agent.main_op_agent import MainOpAgent
         base_config = None
         if self._main_agent_state and isinstance(self._main_agent_state, dict):
             base_config = self._main_agent_state.get("config")
@@ -129,10 +147,12 @@ class LocalExecutor:
 
     def _build_response_state(self, state: dict) -> dict:
         """构建响应状态"""
-        if not state.get("display_message"):
-            state["display_message"] = format_display_message(state)
-        if not state.get("hint_message"):
-            state["hint_message"] = get_hint_message(state)
+        # react 分支返回的是“最小状态”，不应依赖旧版 LangGraph state 字段
+        if self.agent_mode != "react":
+            if not state.get("display_message"):
+                state["display_message"] = format_display_message(state)
+            if not state.get("hint_message"):
+                state["hint_message"] = get_hint_message(state)
 
         payload = dict(state)
         payload.pop("config", None)
@@ -186,6 +206,72 @@ class LocalExecutor:
         register_message_sender(self.session_id, _local_message_sender)
 
         try:
+            # react 模式：完全不同的对话协议（LangGraph astream）
+            if self.agent_mode == "react":
+                user_input = (user_input or "").strip()
+                is_cmd, command_type = is_simple_command(user_input)
+                if is_cmd and command_type == "exit":
+                    # 结束会话
+                    self._main_agent_state = None
+                    self._react_executor = None
+                    return {
+                        "current_step": "cancelled",
+                        "should_continue": False,
+                        "display_message": "Conversation ended.",
+                        "hint_message": "",
+                        "workflow_name": "react",
+                    }
+
+                # 复用/重建 ReactTurnExecutor（当 target 变化时重置）
+                from ai_kernel_generator.cli.runtime.react_executor import (
+                    ReactTurnExecutor,
+                    ReactTarget,
+                )
+
+                target = ReactTarget(
+                    framework=framework,
+                    backend=backend,
+                    arch=arch,
+                    dsl=dsl,
+                )
+
+                base_config = None
+                if self._main_agent_state and isinstance(self._main_agent_state, dict):
+                    base_config = self._main_agent_state.get("config")
+                if base_config is not None:
+                    config = dict(base_config)
+                else:
+                    config = self._load_workflow_config(backend, dsl)
+
+                config["session_id"] = self.session_id
+                # react 模式：显式打开 CLI 模式（prompt + tools 行为）
+                config["cli_mode"] = True
+                if output_path and "output_path" not in config:
+                    config["output_path"] = output_path
+                config["rag"] = bool(rag)
+
+                if (
+                    self._react_executor is None
+                    or getattr(self._react_executor, "target", None) != target
+                ):
+                    self._react_executor = ReactTurnExecutor(
+                        session_id=self.session_id,
+                        config=config,
+                        target=target,
+                        thread_id=self.session_id,
+                    )
+
+                # 保存最小 state（用于后续轮次复用 config）
+                self._main_agent_state = {"config": config, "rag": bool(rag)}
+
+                null_output = StringIO()
+                with redirect_stdout(null_output):
+                    state = await self._react_executor.run_turn(
+                        user_input=user_input,
+                        use_stream=effective_use_stream,
+                    )
+                return self._build_response_state(state)
+
             # 判断是 start 还是 continue
             prev_state = self._main_agent_state
             should_start = not isinstance(prev_state, dict)
@@ -276,6 +362,23 @@ class LocalExecutor:
 
     async def cancel_main_agent(self, reason: str = "cancelled by client") -> bool:
         """取消当前 main_agent"""
+        if self.agent_mode == "react":
+            try:
+                ex = self._react_executor
+                task = getattr(ex, "running_task", None) if ex is not None else None
+                if task is not None and hasattr(task, "cancel"):
+                    task.cancel()
+                    logger.info(
+                        f"[LocalExecutor] React cancellation requested for session {self.session_id}: {reason}"
+                    )
+                    return True
+            except Exception as e:
+                logger.warning(
+                    f"Cancel react executor failed: session_id={self.session_id}, err={e}"
+                )
+                return False
+            return False
+
         if self._main_agent:
             try:
                 self._main_agent._cancellation_requested = True
@@ -339,6 +442,7 @@ class LocalExecutor:
         *,
         auto_yes: bool = False,
         use_stream: bool = False,
+        agent_mode: str = "langgraph",
         session_id: str | None = None,
     ) -> "LocalExecutor":
         """创建用于 CLI 的本地执行器"""
@@ -362,6 +466,7 @@ class LocalExecutor:
 
         executor = cls(
             console=akg_console,
+            agent_mode=str(agent_mode or "langgraph").strip().lower(),
             session_id=sid,
         )
         try:

@@ -17,7 +17,7 @@ import yaml
 import logging
 import requests
 from pathlib import Path
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Any
 
 import httpx
 from langchain_deepseek import ChatDeepSeek
@@ -299,12 +299,200 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
     return model
 
 
+def create_langchain_chat_model(
+    name: Optional[str] = None, config_path: Optional[str] = None
+) -> Any:
+    """
+    ReAct 专用：创建 LangChain ChatModel（BaseChatModel）。
+
+    注意：
+    - 不改动原 create_model() 的返回类型与行为（旧链路可能依赖 openai.AsyncOpenAI）。
+    - 本函数确保返回的是 LangChain ChatModel，以满足 langchain.agents.create_agent 的要求。
+    """
+
+    def _strip_repeat_penalty(params: dict) -> dict:
+        raw = os.getenv(DISABLE_REPEAT_PENALTY_ENV)
+        if raw is None or raw == "":
+            return params
+        normalized = str(raw).strip().lower()
+        if normalized not in {"1", "true", "yes", "on"}:
+            return params
+        overridden = dict(params)
+        overridden.pop("frequency_penalty", None)
+        overridden.pop("presence_penalty", None)
+        return overridden
+
+    def _build_thinking_extra_body(
+        thinking_mode: Optional[str], extra_body: Optional[dict]
+    ) -> Optional[dict]:
+        if thinking_mode is None:
+            return extra_body
+        normalized = str(thinking_mode).strip().lower()
+        extra_body = dict(extra_body or {})
+        if normalized in {"enabled", "disabled"}:
+            extra_body["thinking"] = {"type": normalized}
+            return extra_body
+        if normalized in {"true", "false"}:
+            chat_template_kwargs = dict(extra_body.get("chat_template_kwargs", {}))
+            chat_template_kwargs["thinking"] = normalized == "true"
+            extra_body["chat_template_kwargs"] = chat_template_kwargs
+            return extra_body
+        logger.warning(
+            "不支持的 thinking_mode '%s'，请使用 enabled/disabled 或 true/false",
+            thinking_mode,
+        )
+        return extra_body if extra_body else None
+
+    def _create_chat_openai(
+        *,
+        model: str,
+        base_url: str,
+        api_key: str,
+        temperature: float,
+        max_tokens: int,
+        top_p: float,
+        extra_body: Optional[dict],
+    ):
+        try:
+            from langchain_openai import ChatOpenAI
+        except Exception as e:
+            raise RuntimeError(
+                "ReAct 模式需要 LangChain ChatModel。\n"
+                "当前配置走的是 openai-compatible endpoint（如 vllm / 自定义 base_url），"
+                "需要安装 `langchain-openai` 才能创建 ChatOpenAI。\n"
+                "可选方案：\n"
+                "  - pip install -U langchain-openai\n"
+                "  - 或改用 deepseek/ollama preset\n"
+            ) from e
+
+        timeout = httpx.Timeout(60, read=60 * 20)
+        http_client = httpx.Client(verify=False, timeout=timeout)
+        http_async_client = httpx.AsyncClient(verify=False, timeout=timeout)
+
+        kwargs: dict = {
+            "model": model,
+            "api_key": api_key,
+            "base_url": base_url,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "http_client": http_client,
+            "http_async_client": http_async_client,
+            "max_retries": 3,
+        }
+        if top_p is not None:
+            kwargs["top_p"] = top_p
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        return ChatOpenAI(**kwargs)
+
+    # 【最高优先级】环境变量覆盖（openai-compatible）
+    env_base_url = os.getenv("AIKG_BASE_URL")
+    env_model_name = os.getenv("AIKG_MODEL_NAME")
+    env_api_key = os.getenv("AIKG_API_KEY")
+    env_enable_think = os.getenv("AIKG_MODEL_ENABLE_THINK")
+    if env_base_url and env_model_name and env_api_key:
+        defaults = _strip_repeat_penalty(
+            {"temperature": 0.2, "max_tokens": 8192, "top_p": 0.9}
+        )
+        extra_body = _build_thinking_extra_body(env_enable_think, None)
+        return _create_chat_openai(
+            model=env_model_name,
+            base_url=env_base_url,
+            api_key=env_api_key,
+            temperature=float(defaults["temperature"]),
+            max_tokens=int(defaults["max_tokens"]),
+            top_p=float(defaults["top_p"]),
+            extra_body=extra_body,
+        )
+
+    # 使用默认路径或指定路径
+    config_path = config_path or CONFIG_PATH
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"配置文件未找到: {config_path}")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    name = name or config.get("default_preset")
+    if name not in config:
+        available_presets = [k for k in config.keys() if k != "default_preset"]
+        raise ValueError(f"预设 '{name}' 未找到。可用预设: {', '.join(available_presets)}")
+
+    preset_config = config[name] or {}
+
+    # Ollama：天然是 LangChain ChatModel
+    if str(name).startswith("ollama_"):
+        model_params = {k: v for k, v in preset_config.items()}
+        model_params = _strip_repeat_penalty(model_params)
+        api_base = (
+            os.getenv(OLLAMA_API_BASE_ENV)
+            or model_params.pop("api_base", None)
+            or "http://localhost:11434"
+        )
+        return ChatOllama(
+            base_url=api_base,
+            model=model_params.pop("model"),
+            **model_params,
+        )
+
+    # vLLM/openai-compatible：需要 ChatOpenAI
+    if str(name).startswith("vllm_"):
+        model_params = {k: v for k, v in preset_config.items()}
+        model_params = _strip_repeat_penalty(model_params)
+        api_base = (
+            os.getenv(VLLM_API_BASE_ENV)
+            or model_params.pop("api_base", None)
+            or "http://localhost:8001/v1"
+        )
+        model_name = model_params.pop("model")
+        temperature = float(model_params.pop("temperature", 0.1))
+        max_tokens = int(model_params.pop("max_tokens", 8192))
+        top_p = float(model_params.pop("top_p", 0.95))
+        thinking_mode = model_params.pop("thinking_mode", None)
+        extra_body = model_params.pop("extra_body", None)
+        extra_body = _build_thinking_extra_body(thinking_mode, extra_body)
+        # vllm 通常无需真实 key；沿用旧逻辑 dummy
+        return _create_chat_openai(
+            model=model_name,
+            base_url=api_base,
+            api_key="dummy",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            extra_body=extra_body,
+        )
+
+    # 其他 preset：沿用 ChatDeepSeek（LangChain ChatModel）
+    api_key_env = preset_config.get("api_key_env")
+    if not api_key_env:
+        raise ValueError(f"预设 '{name}' 未配置 api_key_env")
+    api_key = os.getenv(api_key_env)
+    if not api_key:
+        raise ValueError(f"API密钥未找到。请设置环境变量 {api_key_env}")
+
+    model_params = {k: v for k, v in preset_config.items() if k != "api_key_env"}
+    model_params = _strip_repeat_penalty(model_params)
+
+    thinking_mode = model_params.pop("thinking_mode", None)
+    extra_body = model_params.pop("extra_body", None)
+    extra_body = _build_thinking_extra_body(thinking_mode, extra_body)
+    if extra_body:
+        model_params["extra_body"] = extra_body
+
+    timeout = httpx.Timeout(60, read=60 * 10)
+    return ChatDeepSeek(
+        api_key=api_key,
+        http_client=httpx.Client(verify=False, timeout=timeout),
+        http_async_client=httpx.AsyncClient(verify=False, timeout=timeout),
+        **model_params,
+    )
+
+
 class OpenAICompatibleEmbeddings(Embeddings):
     """
     调用 OpenAI 兼容格式的 Embedding API。
     支持本地部署（如 vllm）和远程 API（如硅流平台）。
     """
-
     def __init__(
         self,
         api_url: str,

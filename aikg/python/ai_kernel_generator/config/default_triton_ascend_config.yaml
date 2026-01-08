@@ -8,6 +8,9 @@ agent_model_config:
   feature_extractor: deepseek_v3_default
   default: deepseek_v3_default
 
+# Main agent mode configuration (CLI 默认不改变历史行为)
+main_agent_mode: langgraph
+
 # Log configuration
 log_dir: "~/aikg_logs"
 
