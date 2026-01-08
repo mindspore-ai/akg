@@ -850,12 +850,9 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
   // Second level: default minimum tile size (512)
   if (hasDynamicUpperBound || !hasStaticBounds) {
     // For dynamic axes, set first level to -1, second level to minimum tile size
-    size_t currentTileLevel = axis->configs[kTileCfg].size();
-
     // Ensure we have at least 2 levels for dynamic axes
-    while (currentTileLevel < 2) {
+    for (size_t i = axis->configs[kTileCfg].size(); i < 2; ++i) {
       axis->doExtraTile();
-      currentTileLevel = axis->configs[kTileCfg].size();
     }
 
     // First level: set to -1 (will be handled specially in constructTiledIndex)

@@ -52,7 +52,7 @@ def NPUVectorVectorizePass : Pass<"npuvector-vectorize", "mlir::func::FuncOp"> {
     
     Reads attributes from loops:
       - "vector" attribute → Elementwise vectorization
-      - "reduction_loop" attribute → Reduction vectorization
+      - "reduction" attribute → Reduction vectorization
     
     Loop bounds can be:
       - Static (constant index) → generates vector<VF×T>
