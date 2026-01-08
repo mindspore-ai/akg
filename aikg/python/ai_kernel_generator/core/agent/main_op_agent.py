@@ -842,17 +842,21 @@ class MainOpAgent(AgentBase):
                 parallel_index=1,
             )
             self._send_panel_current(op_name=op_name, phase=sub_workflow)
-            original_stream_output =  os.environ["AIKG_STREAM_OUTPUT"]
-            if sub_workflow not in ["codeonly"]:
-                os.environ["AIKG_STREAM_OUTPUT"] = "off"
-            success, result = await sub_agent.execute(
-                task_code=task_code,
-                op_name=op_name,
-                task_id=task_id,
-                task_label=sub_task_label,
-                **execute_kwargs
-            )
-            os.environ["AIKG_STREAM_OUTPUT"] = original_stream_output
+            # 避免通过 os.environ 临时开关导致的并发冲突：
+            # 使用 ContextVar 覆盖 stream 开关，使“对子 Agent 是否允许流式消息”成为协程上下文级别的局部状态。
+            from ai_kernel_generator.utils.stream_output import stream_output_override
+            from contextlib import nullcontext
+
+            # codeonly 单并发，允许流式：不要覆盖（继承外层 stream 设置）。
+            cm = nullcontext() if sub_workflow in ["codeonly"] else stream_output_override(False)
+            with cm:
+                success, result = await sub_agent.execute(
+                    task_code=task_code,
+                    op_name=op_name,
+                    task_id=task_id,
+                    task_label=sub_task_label,
+                    **execute_kwargs
+                )
 
             # 提取结果
             generated_code = result.get("generated_code", "")

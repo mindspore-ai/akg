@@ -19,10 +19,12 @@ SubAgent Tools - 将 SubAgent 包装为 LangChain Tool
 import logging
 from typing import Dict, Any, List
 
+from contextlib import nullcontext
 from langchain.tools import tool
 
 from ai_kernel_generator.core.sub_agent_registry import SubAgentBase, SubAgentRegistry
 from ai_kernel_generator.core.tools.tool_schemas import SubAgentInput, OpTaskBuilderInput
+from ai_kernel_generator.utils.stream_output import stream_output_override
 
 logger = logging.getLogger(__name__)
 
@@ -102,16 +104,25 @@ def _create_tool(sub_agent: SubAgentBase):
         logger.info(f"Calling {sub_agent.get_name()}, op={op_name}")
         
         try:
-            # 调用
-            success, result = await sub_agent.execute(
-                task_code=task_code,
-                op_name=op_name,
-                task_id=task_id,
-                task_label=task_label,
-                task_type=task_type,
-                generated_code=generated_code,
-                device_id=device_id,
+            # 关键：避免通过 os.environ 临时开关导致的并发冲突。
+            # 使用 ContextVar 覆盖 stream 开关：默认保持调用方环境；对非 codeonly 子 agent 强制关闭流式消息。
+            # （在 ReAct 主流式输出场景下，可避免子 agent 的 LLMStreamMessage 与主 stream 互相穿插。）
+            # 注意：codeonly 是单并发执行，允许流式；因此不要覆盖（继承外层 stream 设置）。
+            cm = (
+                nullcontext()
+                if sub_agent.get_name() in ("codeonly",)
+                else stream_output_override(False)
             )
+            with cm:
+                success, result = await sub_agent.execute(
+                    task_code=task_code,
+                    op_name=op_name,
+                    task_id=task_id,
+                    task_label=task_label,
+                    task_type=task_type,
+                    generated_code=generated_code,
+                    device_id=device_id,
+                )
             
             result["success"] = success
             return result

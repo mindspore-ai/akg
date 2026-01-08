@@ -329,6 +329,15 @@ class AgentBase(ABC):
     @staticmethod
     def _stream_enabled() -> bool:
         """检查是否启用流式输出"""
+        try:
+            from ai_kernel_generator.utils.stream_output import get_stream_output_override
+
+            override = get_stream_output_override()
+            if override is not None:
+                return bool(override)
+        except Exception:
+            # 任何异常都不影响主流程：回退到环境变量
+            pass
         return os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
 
     @staticmethod

@@ -37,7 +37,14 @@ from ai_kernel_generator.utils.task_label import resolve_task_label
 
 def _stream_enabled() -> bool:
     import os
+    try:
+        from ai_kernel_generator.utils.stream_output import get_stream_output_override
 
+        override = get_stream_output_override()
+        if override is not None:
+            return bool(override)
+    except Exception:
+        pass
     return os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
 
 
