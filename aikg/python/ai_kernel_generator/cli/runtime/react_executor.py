@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from langgraph.types import Command
+
 from ai_kernel_generator.cli.messages import LLMStreamMessage, PanelDataMessage
 from ai_kernel_generator.cli.runtime.message_sender import send_message
 
@@ -44,13 +46,10 @@ class ReactTurnExecutor:
 
         self._react_agent = self._create_react_agent()
         self._last_panel_phase: str = ""
+        self._awaiting_resume: bool = False
 
     def _create_react_agent(self):
-        # 让 react_agent 在 CLI 模式下：
-        # - 加载 system_prompt_cli.md
-        # - 不注册 ask_user（避免 stdin/input 抢占导致 TUI 崩溃）
         cfg = dict(self.config)
-        cfg.setdefault("cli_mode", True)
 
         model_preset = (
             (cfg.get("agent_model_config") or {}).get("default") or "deepseek_r1_default"
@@ -118,22 +117,45 @@ class ReactTurnExecutor:
             raise ValueError("user_input is required")
 
         stream_config = {"configurable": {"thread_id": self.thread_id}}
-        inputs = {"messages": [{"role": "user", "content": user_input}]}
 
         display_message = ""
         hint_message = ""
         should_continue = True
         finished = False
+        interrupted = False
 
         collected_content: list[str] = []
         collected_reasoning: list[str] = []
 
         async def _run() -> None:
-            nonlocal display_message, hint_message, should_continue, finished
+            nonlocal display_message, hint_message, should_continue, finished, interrupted
+            # 如果上一轮触发了 interrupt，则这一轮必须用 Command(resume=...) 恢复
+            if self._awaiting_resume:
+                invoke_input: Any = Command(resume=user_input)
+                self._awaiting_resume = False
+            else:
+                invoke_input = {"messages": [{"role": "user", "content": user_input}]}
+
             async for event in self._react_agent.agent.astream(
-                inputs, stream_config, stream_mode="updates"
+                invoke_input, stream_config, stream_mode="updates"
             ):
                 if not isinstance(event, dict):
+                    continue
+
+                # interrupt：ask_user 会触发 GraphInterrupt，stream 中会出现 __interrupt__
+                if "__interrupt__" in event:
+                    interrupted = True
+                    intrs = event.get("__interrupt__") or ()
+                    value = ""
+                    try:
+                        if intrs and len(intrs) > 0:
+                            value = getattr(intrs[0], "value", "")  # Interrupt.value
+                    except Exception:
+                        value = ""
+                    display_message = str(value or "").strip()
+                    should_continue = True
+                    self._awaiting_resume = True
+                    # interrupt 后本轮结束，等待用户下一次输入（resume）
                     continue
 
                 # model/agent 节点输出：LLM 内容 + tool_calls
@@ -239,7 +261,7 @@ class ReactTurnExecutor:
         finally:
             self.running_task = None
 
-        if not finished:
+        if not finished and not interrupted:
             # 非 finish：视为等待用户下一轮输入
             should_continue = True
             if not use_stream:
@@ -259,7 +281,7 @@ class ReactTurnExecutor:
             send_message(self.session_id, DisplayMessage(text=""))
 
         return {
-            "current_step": "react",
+            "current_step": "waiting_for_user_input" if interrupted else "react",
             "should_continue": bool(should_continue),
             "display_message": str(display_message or ""),
             "hint_message": str(hint_message or ""),

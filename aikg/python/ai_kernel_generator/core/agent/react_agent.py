@@ -17,7 +17,6 @@ ReActAgent - 基于 ReAct 架构的算子生成 Agent
 """
 
 import logging
-import os
 from typing import List, Optional, Any
 from pathlib import Path
 
@@ -40,24 +39,6 @@ DEFAULT_MAX_MESSAGES = 50
 
 PROMPT_DIR = Path(__file__).parent.parent.parent / "resources" / "prompts" / "react_agent"
 SYSTEM_PROMPT_FILE = PROMPT_DIR / "system_prompt.md"
-SYSTEM_PROMPT_CLI_FILE = PROMPT_DIR / "system_prompt_cli.md"
-
-
-def _env_flag_on(name: str) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return False
-    s = str(raw).strip().lower()
-    return s in {"1", "true", "yes", "on"}
-
-
-def _is_cli_mode(config: dict) -> bool:
-    try:
-        if bool(config.get("cli_mode")):
-            return True
-    except Exception:
-        pass
-    return _env_flag_on("AIKG_CLI_MODE")
 def create_checkpointer(backend: str = "memory", db_path: Optional[str] = None) -> Any:
     """
     创建 checkpointer 用于保存对话历史（短期记忆）
@@ -167,11 +148,8 @@ class MainOpAgent(AgentBaseV2):
         """
         获取系统提示词
         """
-
-        cli_mode = _is_cli_mode(self.config or {})
-        prompt_file = SYSTEM_PROMPT_CLI_FILE if cli_mode else SYSTEM_PROMPT_FILE
-        base_prompt = prompt_file.read_text(encoding="utf-8")
-        logger.info(f"Loaded system prompt from: {prompt_file}")
+        base_prompt = SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
+        logger.info(f"Loaded system prompt from: {SYSTEM_PROMPT_FILE}")
         
         # 注入 Skills 元数据到 system prompt
         skills_metadata = self._build_skills_metadata()
@@ -218,9 +196,6 @@ class MainOpAgent(AgentBaseV2):
         
         # 基础 tools
         basic_tools = create_basic_tools()
-        # CLI 模式：禁用 ask_user（会抢占 stdin 导致 TUI 崩溃）
-        if _is_cli_mode(self.config or {}):
-            basic_tools = [t for t in basic_tools if getattr(t, "name", "") != "ask_user"]
         tools.extend(basic_tools)
         
         logger.info(f"  - SubAgent tools: {len(sub_agent_tools)}")

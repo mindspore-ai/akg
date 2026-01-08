@@ -163,7 +163,6 @@ class LocalExecutor:
                 config = self._load_workflow_config(backend, dsl)
 
             config["session_id"] = self.session_id
-            config["cli_mode"] = True
             if output_path and "output_path" not in config:
                 config["output_path"] = output_path
             config["rag"] = bool(rag)

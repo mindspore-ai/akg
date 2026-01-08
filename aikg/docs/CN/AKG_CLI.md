@@ -77,7 +77,9 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_as
 
 ### ReAct 模式注意事项
 
-- **不会使用 `ask_user` 工具**：在 CLI/TUI 中会抢占 stdin 导致卡死；react 模式需要补充信息时会直接以文本提问，等待你下一轮输入。
+- `ask_user` **不会再使用 `input()` 抢占 stdin**：已改为基于 LangGraph `interrupt` 的可恢复暂停机制。
+  - 当 Agent 需要你确认/补充信息时，会触发一次中断并展示问题；
+  - 你在下一轮输入的内容会作为 `Command(resume=...)` 回填给 `ask_user`，Agent 随后继续执行。
 - 如果你依赖 openai-compatible endpoint（例如 vLLM，或通过 `AIKG_BASE_URL/AIKG_MODEL_NAME/AIKG_API_KEY` 指定模型），react 模式需要安装 `langchain-openai`：
 
 ```bash
