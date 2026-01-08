@@ -1,0 +1,59 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b309e85c..a1234567 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -197,9 +197,6 @@ add_subdirectory(include)
+ add_subdirectory(lib)
+ add_subdirectory(tools)
+ 
+-add_custom_target(check-torch-mlir-all)
+-add_dependencies(check-torch-mlir-all check-torch-mlir)
+-
+ if(MLIR_ENABLE_BINDINGS_PYTHON)
+   # If parent projects want to configure where to place the python packages,
+   # respect that.
+@@ -208,8 +205,6 @@ if(MLIR_ENABLE_BINDINGS_PYTHON)
+   endif()
+ endif()
+ 
+-add_subdirectory(test)
+-
+ if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
+   install(DIRECTORY include/torch-mlir include/torch-mlir-c
+           DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+diff --git a/projects/pt1/CMakeLists.txt b/projects/pt1/CMakeLists.txt
+index 160197b2..46f09cce 100644
+--- a/projects/pt1/CMakeLists.txt
++++ b/projects/pt1/CMakeLists.txt
+@@ -16,12 +16,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/python/torch_mlir/cma
+ ################################################################################
+ 
+ if(MLIR_ENABLE_BINDINGS_PYTHON)
+-  add_dependencies(check-torch-mlir-all
+-    check-torch-mlir-pt1
+-  )
+   add_subdirectory(python)
+ else()
+   add_custom_target(TorchMLIRPythonModules)
+ endif()
+-
+-add_subdirectory(test)
+diff --git a/projects/pt1/python/CMakeLists.txt b/projects/pt1/python/CMakeLists.txt
+index c86e8e52..d32119dc 100644
+--- a/projects/pt1/python/CMakeLists.txt
++++ b/projects/pt1/python/CMakeLists.txt
+@@ -71,5 +71,3 @@ if(TORCH_MLIR_ENABLE_LTC)
+     reference_lazy_backend
+   )
+ endif()
+-
+-add_subdirectory(test)
+diff --git a/projects/pt1/python/test/CMakeLists.txt b/projects/pt1/python/test/CMakeLists.txt
+index 9eb5f85a..04fda6c3 100644
+--- a/projects/pt1/python/test/CMakeLists.txt
++++ b/projects/pt1/python/test/CMakeLists.txt
+@@ -18,4 +18,3 @@ add_lit_testsuite(check-torch-mlir-python "Running the torch-mlir Python regress
+ set_target_properties(check-torch-mlir-python PROPERTIES FOLDER "Tests")
+ 
+ add_lit_testsuites(TORCH_MLIR_PYTHON ${CMAKE_CURRENT_SOURCE_DIR} DEPENDS ${TEST_DEPENDS})
+-add_dependencies(check-torch-mlir-all check-torch-mlir-python)

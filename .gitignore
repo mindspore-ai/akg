@@ -51,6 +51,7 @@ cscope.*
 # Python files
 *__pycache__*
 .pytest_cache
+*.egg-info
 
 # Mac files
 *.DS_Store

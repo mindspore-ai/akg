@@ -1,0 +1,20 @@
+diff --git a/mlir/CMakeLists.txt b/mlir/CMakeLists.txt
+index 1a211f5495..1c2ca5f46f 100644
+--- a/mlir/CMakeLists.txt
++++ b/mlir/CMakeLists.txt
+@@ -282,6 +282,7 @@ if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
+     PATTERN "*.def"
+     PATTERN "*.h"
+     PATTERN "*.inc"
++    PATTERN "*.pdll"
+     PATTERN "*.td"
+     PATTERN "LICENSE.TXT"
+     )
+@@ -294,6 +295,7 @@ if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
+     PATTERN "*.h"
+     PATTERN "*.gen"
+     PATTERN "*.inc"
++    PATTERN "*.pdll"
+     PATTERN "*.td"
+     PATTERN "CMakeFiles" EXCLUDE
+     PATTERN "config.h" EXCLUDE
