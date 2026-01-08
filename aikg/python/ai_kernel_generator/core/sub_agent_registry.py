@@ -206,14 +206,65 @@ class CodeOnlySubAgent(SubAgentBase):
             final_op_name, success, final_state = await task.run()
             
             # 提取结果
+            profile_res = final_state.get("profile_res")
             result = {
                 "generated_code": final_state.get("coder_code", ""),
                 "verification_result": final_state.get("verifier_result", False),
                 "verification_error": final_state.get("verifier_error", ""),
-                "profile_result": final_state.get("profile_res"),
+                "profile_result": profile_res,
                 "sub_agent_type": "codeonly",  
                 "final_state": final_state  # 保存完整状态
             }
+
+            # 如果 codeonly 进行了 profile：把性能结果推送到面板历史（Top 5）
+            # 说明：CLI 面板历史依赖 PanelDataMessage(action="move_to_history")。
+            if task_type == "profile" and isinstance(profile_res, dict):
+                try:
+                    gen_time = float(profile_res.get("gen_time") or 0.0)
+                    base_time = float(profile_res.get("base_time") or 0.0)
+                    speedup = float(profile_res.get("speedup") or 0.0)
+                except Exception:
+                    gen_time = base_time = speedup = 0.0
+
+                if gen_time > 0.0 or base_time > 0.0 or speedup > 0.0:
+                    session_id = str((self.config or {}).get("session_id") or "").strip()
+                    if session_id:
+                        unique_dir = str(profile_res.get("unique_dir") or "").strip()
+                        log_dir = ""
+                        base_log_dir = str((self.config or {}).get("log_dir") or "").strip()
+                        if unique_dir:
+                            if base_log_dir:
+                                log_dir = os.path.join(
+                                    os.path.expanduser(base_log_dir), op_name, unique_dir
+                                )
+                            else:
+                                log_dir = str(profile_res.get("log_dir") or unique_dir)
+                        else:
+                            log_dir = str(profile_res.get("log_dir") or "")
+
+                        try:
+                            from ai_kernel_generator.cli.runtime.message_sender import (
+                                send_message,
+                            )
+                            from ai_kernel_generator.cli.messages import PanelDataMessage
+
+                            send_message(
+                                session_id,
+                                PanelDataMessage(
+                                    action="move_to_history",
+                                    data={
+                                        "speedup": speedup,
+                                        "gen_time": gen_time,
+                                        "base_time": base_time,
+                                        "log_dir": log_dir,
+                                    },
+                                ),
+                            )
+                            logger.info(
+                                f"[panel] Sent codeonly profile to history: speedup={speedup:.2f}x"
+                            )
+                        except Exception:
+                            pass
             
             return success, result
             

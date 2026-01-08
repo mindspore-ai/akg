@@ -1,8 +1,8 @@
-# AKG CLI 二次开发指南：MainOpAgent / 子 Agent 与 CLI（TUI/Console）交互机制
+# AKG CLI 二次开发指南（ReAct 版）：主 Agent / 子 Agent 与 CLI（TUI/Console）交互机制
 
 本文面向 **二次开发者**，解释 AKG 本地交互式 CLI/TUI 的关键链路：**消息发送**、**扩展消息类型**、**自定义面板（Panel Plugin）**。
 
-> 范围说明：本文聚焦 **本地执行链路**（`LocalExecutor` 驱动），不展开 ServerJobManager / HTTP job 的服务化模式。
+> 范围说明：本文聚焦 **本地执行链路**（`LocalExecutor` 驱动），当前 CLI **仅使用 ReAct 主代理**，不再介绍旧版 MainOpAgent（start/continue）链路。
 
 ---
 
@@ -21,12 +21,12 @@
 
 ## 1. 架构概览
 
-本地交互式链路的核心是：**CLI/TUI 只与 `MainOpAgent` 交互**；子 Agent（`codeonly/evolve/adaptive_search/kernel_verifier`）是 MainOpAgent 内部工作流的实现细节。
+本地交互式链路的核心是：**CLI/TUI 只与 ReAct 主代理交互**；子 Agent（`codeonly/evolve/adaptive_search/kernel_verifier`）通过 **tools** 被 ReAct 调度执行。
 
 典型数据流（概念级）：
 
 - **用户输入** → `InteractiveOpRunner`（TUI）→ `LocalExecutor.execute_main_agent()`
-- **MainOpAgent** 驱动对话与子 Agent 调度
+- **ReAct 主代理（LangGraph runtime）** 驱动对话与 tools / 子 Agent 调度
 - **消息输出**（流式/文本/面板）→ `MessageSender`（按 `session_id` 路由）→ `AKGConsole`（Console 输出 + TUI 刷新）
 
 ---
@@ -45,10 +45,9 @@
 
 - **Runtime**
   - `aikg/python/ai_kernel_generator/cli/runtime/local_executor.py`
-    - `LocalExecutor`：会话级状态管理；为 MainOpAgent 注入 `session_id`；注册/注销 session sender；把消息路由给 Console
-    - 支持两种主代理模式：
-      - `langgraph`：旧版 `MainOpAgent`（start/continue + state dict）
-      - `react`：ReAct 主代理（LangGraph `agent.astream(..., stream_mode="updates")`）
+    - `LocalExecutor`：会话级状态管理；注入 `session_id`；注册/注销 session sender；把消息路由给 Console；驱动 ReAct 每轮执行
+  - `aikg/python/ai_kernel_generator/cli/runtime/react_executor.py`
+    - `ReactTurnExecutor`：调用 `agent.astream(..., stream_mode="updates")` 并把事件映射为 CLI 消息（`LLMStreamMessage/PanelDataMessage/DisplayMessage`）
 
 - **Message Bus（会话路由层）**
   - `aikg/python/ai_kernel_generator/cli/runtime/message_sender.py`
@@ -62,10 +61,12 @@
     - `MESSAGE_REGISTRY` + `pack_message()/unpack_message()`（扩展入口）
 
 - **Agent**
+  - `aikg/python/ai_kernel_generator/core/agent/agent_base_v2.py`
+    - `AgentBaseV2`：通过 `langchain.agents.create_agent(...)` 构建 ReAct agent（LangGraph runtime）
+  - `aikg/python/ai_kernel_generator/core/agent/react_agent.py`
+    - `MainOpAgent`（ReAct）：提供 system prompt、tools 列表、middleware（如 trim messages）
   - `aikg/python/ai_kernel_generator/core/agent/agent_base.py`
-    - `AgentBase.run_llm()`：在流式模式下自动发送 `LLMStreamMessage`（以及结尾空 `DisplayMessage(text="")` 用于 UI 收尾）
-  - `aikg/python/ai_kernel_generator/core/agent/main_op_agent.py`
-    - `MainOpAgent`：对话图 + 子 Agent 选择/执行 + 面板更新（`PanelDataMessage`）
+    - 子 Agent（如 codeonly）内部仍可能通过 `AgentBase.run_llm()` 发送 `LLMStreamMessage`（见下文“流式与并发策略”）
 
 - **子 Agent 注册中心**
   - `aikg/python/ai_kernel_generator/core/sub_agent_registry.py`
@@ -81,22 +82,31 @@
 
 ---
 
-## 3. MainOpAgent 与子 Agent：客户端视角的调用关系
+## 3. ReAct 主代理与子 Agent：客户端视角的调用关系
 
 客户端无需直接感知子 Agent；你可以把 MainOpAgent 看成“唯一入口”。
 
-### 3.1 MainOpAgent 的对话图（LangGraph 节点）
+### 3.1 ReAct 的执行方式（事件流）
 
-在 `aikg/python/ai_kernel_generator/core/agent/main_op_agent.py` 中，`MainOpAgent._build_conversation_graph()` 构建并编译图，包含节点：
+ReAct 主代理由 `langchain.agents.create_agent(...)` 构建，CLI 侧通过：
 
-- `op_task_build` → `user_confirm` → `select_sub_agent` → `sub_agent_execution`
+- `agent.astream(..., stream_mode="updates")`
 
-### 3.2 子 Agent 的选择与执行
+获得事件流（model 输出、tool 输出、`__interrupt__` 等），并由 `ReactTurnExecutor` 将事件映射为 CLI 消息。
 
-- MainOpAgent 在 `select_sub_agent` 节点里选择子 Agent（可 LLM 选择、也可用户显式指定）
-- 执行阶段通过注册中心获取实例：
-  - `self.sub_agent_registry = get_registry()`
-  - `self.sub_agent_registry.get_agent(agent_name=..., config=..., ...)`
+### 3.2 子 Agent 的选择与执行（tools）
+
+ReAct 通过 tools 调用子 Agent：
+
+- `call_op_task_builder`
+- `call_codeonly`
+- `call_evolve`
+- `call_adaptive_search`
+- `call_kernel_verifier`
+
+tools 的封装位于：
+
+- `aikg/python/ai_kernel_generator/core/tools/sub_agent_tool.py`
 
 ### 3.3 子 Agent 返回结构（典型字段）
 
@@ -113,7 +123,7 @@
 
 本地模式的核心原则：**所有消息都必须带 `session_id`，由 MessageSender 按会话路由到 UI**。
 
-### 4.1 时序图：一次对话轮次中的消息流
+### 4.1 时序图：一次对话轮次中的消息流（ReAct）
 
 ```mermaid
 sequenceDiagram
@@ -122,8 +132,8 @@ sequenceDiagram
   participant R as InteractiveOpRunner (TUI)
   participant E as LocalExecutor
   participant MS as MessageSender (session_id->sender)
-  participant A as MainOpAgent
-  participant B as AgentBase.run_llm()
+  participant X as ReactTurnExecutor
+  participant A as ReAct Agent (LangGraph runtime)
   participant C as AKGConsole
   participant SR as StreamRenderer
   participant P as PanelPlugin
@@ -131,21 +141,20 @@ sequenceDiagram
   U->>R: 输入并提交
   R->>E: execute_main_agent(user_input,...)
   E->>MS: register_message_sender(session_id, _local_message_sender)
-  E->>A: start/continue conversation (config 注入 session_id)
+  E->>X: run_turn(user_input,...)
+  X->>A: agent.astream(..., stream_mode="updates")
 
-  alt 流式输出 (AIKG_STREAM_OUTPUT=on)
-    A->>B: run_llm(prompt, input, model)
-    B->>MS: send_message(session_id, LLMStreamMessage)
+  alt 流式输出（主 ReAct LLM）
+    A-->>X: updates(model/agent)
+    X->>MS: send_message(session_id, LLMStreamMessage)
     MS->>E: _local_message_sender(message)
-    E->>C: _route_to_console() -> on_llm_stream()
-    C->>SR: add_chunk(chunk)
-    B->>MS: send_message(session_id, DisplayMessage(text=""))  (收尾)
-    MS->>E: _local_message_sender(message)
-    E->>C: on_display_message("") -> finish stream
+    E->>C: on_llm_stream()
+    C->>SR: add_chunk()
+    X->>MS: send_message(session_id, DisplayMessage(text="")) (收尾)
   end
 
   opt 面板更新
-    A->>MS: send_message(session_id, PanelDataMessage)
+    X->>MS: send_message(session_id, PanelDataMessage)
     MS->>E: _local_message_sender(message)
     E->>C: on_panel_data()
     C->>P: runner._update_panel_data() -> plugin.on_data_update()
@@ -155,9 +164,26 @@ sequenceDiagram
   E->>MS: unregister_message_sender(session_id)
 ```
 
-### 4.3 React 模式的流式收尾（重要）
+### 4.2 流式与并发策略（重要）
 
-ReAct 模式不走 `AgentBase.run_llm()`，因此需要在一轮 `astream` 结束时**主动发送一个空的 `DisplayMessage(text="")`**，以触发 `AKGConsole.stream_renderer.finish()` 正常收尾；否则 UI 可能一直停留在“流式进行中”的状态。
+本仓库同时存在两种“流式来源”：
+
+- **主 ReAct LLM 流式**：由 `ReactTurnExecutor` 从 `astream` 的 `AIMessage` 提取内容并发送 `LLMStreamMessage`
+- **子 Agent 内部流式**：如 `call_op_task_builder` / `call_codeonly` 的实现内部仍可能通过 `AgentBase.run_llm()` 发送 `LLMStreamMessage`
+
+为避免两路流式混到同一个 `StreamRenderer`，约定：
+
+- 在 ReAct 侧检测到即将调用 `call_op_task_builder/call_codeonly` 时，先发送一次 `DisplayMessage(text="")` 结束当前主流式渲染
+- 对可能并发/长流程的子 Agent（如 evolve/adaptive_search）强制关闭其内部 `LLMStreamMessage` 流式（避免乱序）
+
+对应实现：
+
+- `aikg/python/ai_kernel_generator/utils/stream_output.py`：ContextVar 级别的 stream 开关覆盖
+- `aikg/python/ai_kernel_generator/core/tools/sub_agent_tool.py`：除 `codeonly` 外的子 Agent 强制关闭内部流式
+
+### 4.3 ask_user：interrupt/resume（不抢 stdin）
+
+`ask_user` 不使用 `input()`，而是使用 LangGraph `interrupt(message)` 触发 `__interrupt__` 事件并暂停图执行；下一轮用户输入会以 `Command(resume=...)` 恢复执行。
 
 ### 4.2 关键“为什么能到达 UI”
 
@@ -405,8 +431,8 @@ send_message(
 - `llm_stream` 极高频（chunk 级）；但面板应保持低频更新（关键事件点刷新即可）。
 - 典型建议：只在 `update_current / move_to_history / reset` 这类事件触发时更新面板。
 
-### 8.4 action/data 的向后兼容
+### 8.4 action/data 的稳定性约定
 
-- `data` 字段新增应保持可选（旧插件能容错）
+- `data` 字段新增应保持可选（插件应容错）
 - 插件实现 `on_data_update()` 建议对未知 action 忽略而不是抛错
 
