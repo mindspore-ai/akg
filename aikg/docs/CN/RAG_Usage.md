@@ -25,18 +25,16 @@ bash download.sh --with_local_model
 - 如果模型目录已存在，脚本会跳过下载
 - 如需重新下载，请先删除 `~/.aikg/text2vec-large-chinese` 目录
 
-## 3. AKG CLI使用 RAG 功能
+## 3. AKG CLI 使用 RAG 功能
 
 在生成算子时，通过 `--rag` 参数启用 RAG 功能：
 
 ```bash
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --worker-url 127.0.0.1:9001 \
-  --rag
+# Ascend 910B2
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001 --rag
+
+# CUDA A100: --backend cuda --arch a100 --dsl triton_cuda
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --worker-url 127.0.0.1:9001 --rag
 ```
 
 **说明：**
@@ -47,14 +45,11 @@ akg_cli op \
 **完整示例：**
 
 ```bash
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --worker-url 127.0.0.1:9001 \
-  --rag \
-  --intent "实现 fused softmax，输入为 [batch, head, seq, dim]"
+# Ascend 910B2 使用 RAG 和 intent
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001 --rag --intent "实现 fused softmax，输入为 [batch, head, seq, dim]"
+
+# CUDA A100 使用 RAG 和 intent
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --worker-url 127.0.0.1:9001 --rag --intent "实现 fused softmax，输入为 [batch, head, seq, dim]"
 ```
 
 ## 4. 注意事项

@@ -18,12 +18,11 @@ pip install -e .
 Worker Service 提供算子生成的后端运行时，执行 `akg_cli op` 前需要先启动。
 
 ```bash
-akg_cli worker --start \
-  --backend cuda \
-  --arch a100 \
-  --devices 0 \
-  --host 127.0.0.1 \
-  --port 9001
+# Ascend 910B2
+akg_cli worker --start --backend ascend --arch ascend910b2 --devices 0 --host 127.0.0.1 --port 9001
+
+# CUDA A100: --backend cuda --arch a100
+# akg_cli worker --start --backend cuda --arch a100 --devices 0 --host 127.0.0.1 --port 9001
 ```
 
 说明：
@@ -44,12 +43,11 @@ akg_cli worker --stop --port 9001
 使用 `akg_cli op` 启动算子生成。目标配置必须通过命令行显式提供。
 
 ```bash
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --worker-url 127.0.0.1:9001
+# Ascend 910B2
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001
+
+# CUDA A100: --backend cuda --arch a100 --dsl triton_cuda
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --worker-url 127.0.0.1:9001
 ```
 
 可选参数：
@@ -65,43 +63,35 @@ akg_cli op \
 示例：
 
 ```bash
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --worker-url 127.0.0.1:9001 \
-  --intent "实现 fused softmax，输入为 [batch, head, seq, dim]"
+# Ascend 910B2 带 intent
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001 --intent "实现 fused softmax，输入为 [batch, head, seq, dim]"
+
+# CUDA A100 带 intent
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --worker-url 127.0.0.1:9001 --intent "实现 fused softmax，输入为 [batch, head, seq, dim]"
+```
+
+多 Worker 示例：
+
+```bash
+# Ascend 910B2 使用多个 Worker
+akg_cli op --framework mindspore --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001,127.0.0.1:9002
+```
+
+本地设备示例（无需 worker URL）：
+
+```bash
+# Ascend 910B2 使用本地设备
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --devices 0
+
+# CUDA A100 使用本地设备
+# akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --devices 0
 ```
 
 IPv6-only 示例（注意方括号）：
 
 ```bash
 akg_cli worker --start --host :: --port 9001
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --worker-url [::1]:9001
-```
-
-```bash
-akg_cli op \
-  --framework mindspore \
-  --backend ascend \
-  --arch ascend910b4 \
-  --dsl triton_ascend \
-  --worker-url 127.0.0.1:9001,127.0.0.1:9002
-```
-
-```bash
-akg_cli op \
-  --framework torch \
-  --backend cuda \
-  --arch a100 \
-  --dsl triton_cuda \
-  --devices 0
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url [::1]:9001
 ```
 
 ## 3. TUI 基本说明
