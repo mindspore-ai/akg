@@ -67,6 +67,7 @@ void ConvertToFP32(py::buffer_info &bf16_buf, py::buffer_info &fp32_buf) {
 }
 
 void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bool is_dynamic, const py::args &args) {
+  akg_log_init();
   // 1. we get input_tensor and output tensor
   auto input_tensors = std::vector<mlir::runtime::TensorDevicePtr>();
   auto input_shapes = std::vector<std::vector<int64_t>>();

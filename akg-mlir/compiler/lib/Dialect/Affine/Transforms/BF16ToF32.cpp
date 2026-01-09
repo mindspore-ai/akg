@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Huawei Technologies Co., Ltd
+ * Copyright 2025-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,18 @@ static Value convertBF16ToF32(OpBuilder &builder, Location loc, Value value) {
   Type valueType = value.getType();
   if (isa<BFloat16Type>(valueType)) {
     auto f32Type = builder.getF32Type();
+    if (auto constantOp = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
+      FloatAttr floatAttr = dyn_cast<FloatAttr>(constantOp.getValue());
+      APFloat bf16Value = floatAttr.getValue();
+      bool losesInfo = false;
+      APFloat f32Value(bf16Value);
+      f32Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
+      return builder.create<arith::ConstantOp>(loc, f32Type, FloatAttr::get(f32Type, f32Value));
+    } else if (auto truncFOp = dyn_cast<arith::TruncFOp>(value.getDefiningOp())) {
+      if (isa<Float32Type>(truncFOp.getIn().getType())) {
+        return truncFOp.getIn();
+      }
+    }
     return builder.create<arith::ExtFOp>(loc, f32Type, value);
   }
   return value;
@@ -111,39 +123,6 @@ struct AffineLoadBF16ToF32Pattern : public OpRewritePattern<affine::AffineLoadOp
       return use.getOwner() != conversionOp;
     });
 
-    return success();
-  }
-};
-
-// Pattern to convert affine.const from bf16 to f32
-struct ConstantOpBF16ToF32Pattern : public OpRewritePattern<arith::ConstantOp> {
-  explicit ConstantOpBF16ToF32Pattern(MLIRContext *context, PatternBenefit benefit = 3)
-      : OpRewritePattern<arith::ConstantOp>(context, benefit) {}
-
-  LogicalResult matchAndRewrite(arith::ConstantOp constantOp, PatternRewriter &rewriter) const override {
-    auto floatType = dyn_cast<FloatType>(constantOp.getType());
-    if (!floatType || !floatType.isBF16()) return failure();
-
-    if (!isa<FloatAttr>(constantOp.getValue())) return failure();
-
-    // Check if all uses are only affine.store or arith::ExtFOp
-    // If so, we don't need to convert (store will handle it, or ExtFOp already exists)
-    if (!llvm::any_of(constantOp.getResult().getUsers(),
-                      [](OpOperand use) { return !isa<affine::AffineStoreOp, arith::ExtFOp>(use.getOwner()); })) {
-      return failure();  // All uses are store or ExtFOp, skip conversion
-    }
-
-    FloatAttr floatAttr = dyn_cast<FloatAttr>(constantOp.getValue());
-    APFloat bf16Value = floatAttr.getValue();
-
-    bool losesInfo = false;
-    APFloat fp32Value(bf16Value);
-    fp32Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
-
-    Type fp32Type = rewriter.getF32Type();
-    FloatAttr fp32Attr = FloatAttr::get(fp32Type, fp32Value);
-
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(constantOp, fp32Type, fp32Attr);
     return success();
   }
 };
@@ -217,7 +196,8 @@ struct AffineStoreWideFPToBF16Pattern : public OpRewritePattern<affine::AffineSt
 
     // Convert wider float value to bf16 before storing
     Value bf16Value = convertWideFPToBF16(rewriter, storeOp.getLoc(), valueToStore);
-    rewriter.replaceOpWithNewOp<affine::AffineStoreOp>(storeOp, bf16Value, memref, storeOp.getIndices());
+    rewriter.replaceOpWithNewOp<affine::AffineStoreOp>(storeOp, bf16Value, memref,
+                                                       storeOp.getAffineMapAttr().getValue(), storeOp.getIndices());
     return success();
   }
 };
@@ -229,7 +209,17 @@ FailureOr<Operation *> convertOpResultTypes(Operation *op, ValueRange operands, 
   if (converter.isLegal(op->getResultTypes())) return rewriter.notifyMatchFailure(loc, "op already legal");
 
   OperationState newOp(loc, op->getName());
-  newOp.addOperands(operands);
+
+  SmallVector<Value, 4> newOperands;
+  for (auto operand : operands) {
+    if (isa<BFloat16Type>(operand.getType())) {
+      Value f32Value = convertBF16ToF32(rewriter, loc, operand);
+      newOperands.push_back(f32Value);
+    } else {
+      newOperands.push_back(operand);
+    }
+  }
+  newOp.addOperands(newOperands);
 
   SmallVector<Type> newResultTypes;
   if (failed(converter.convertTypes(op->getResultTypes(), newResultTypes)))
@@ -278,7 +268,6 @@ class BF16ToF32Pass : public impl::BF16ToF32Base<BF16ToF32Pass> {
     patterns.add<ExtFOpPattern>(context);
     patterns.add<TruncFOpPattern>(context);
     patterns.add<BitcastOpPattern>(context);
-    patterns.add<ConstantOpBF16ToF32Pattern>(context);
     patterns.add<LegalizeBF16RewritePattern>(context, typeConverter);
 
     GreedyRewriteConfig config;
