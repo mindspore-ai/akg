@@ -161,10 +161,18 @@ class ParallelStrategy : public TilingStrategy {
   bool tryMapGrid(const GpuModelGraphPtr gpuGraph, const AxisPtr axis);
 
   // Helper functions for AddNpuConstraint
+  bool hasDynamicAxis(const SmallVector<AxisPtr> &axes);
+  // Dynamic shape: simplified parallel tiling based on vectorization constraint
+  void applyDynamicParallelTiling(const SmallVector<AxisPtr> &axes, int64_t coreNum, int pos);
+  // Static shape: detailed parallel tiling with core allocation
   void collectAxesInfo(const SmallVector<AxisPtr> &axes, int pos);
   std::pair<int64_t, int64_t> allocateCoresForAxes(int64_t totalCores);
-  void applyParallelTiling(const SmallVector<AxisPtr> &axes, int64_t coresForParallel, int64_t coresForReduce,
-                           int64_t coreNum, int pos);
+  void applyStaticParallelTiling(const SmallVector<AxisPtr> &axes, int64_t coresForParallel, int64_t coresForReduce,
+                                 int64_t coreNum, int pos);
+  // Helper functions for applyStaticParallelTiling
+  int64_t calculateParallelTileSize(int64_t outerSize, int64_t &remainingParallelCores);
+  int64_t calculateReduceTileSize(int64_t outerSize, int64_t &remainingReduceCores);
+  int64_t adjustTileSizeForCoreLimit(int64_t axisSize, int64_t tileSize, int64_t coreNum);
   // GPU
   bool currHasMinMax{false};
   int proposedGrid = 1;
@@ -188,8 +196,13 @@ class VectorizationStrategy : public TilingStrategy {
 
  private:
   SmallVector<int64_t> getDimSizes(const SmallVector<AxisPtr> &axes);
-  int64_t computeVectorizationTilingKey(int64_t ubAvailableNum, const SmallVector<int64_t> &dims);
-  void applyVectorizationTiling(const SmallVector<AxisPtr> &axes, int64_t ubAvailableNum, int64_t tilingKey, int pos);
+  void applyVectorizationTiling(const SmallVector<AxisPtr> &axes, int64_t ubAvailableNum, int pos);
+
+  // Helper functions for applyVectorizationTiling
+  int64_t findConsecutiveStaticEnd(const SmallVector<AxisPtr> &axes);
+  void handleDynamicAxisForVectorization(const AxisPtr &axis, int pos, int64_t &ubRemainingNum);
+  void handleConsecutiveStaticAxis(const AxisPtr &axis, int pos, int64_t dimSize, int64_t &ubRemainingNum);
+  void handleNonConsecutiveStaticAxis(const AxisPtr &axis, int pos, int64_t dimSize, int64_t &ubRemainingNum);
 
   // UB size constants
   static constexpr int64_t kUBAlignSizeInBytes = 32;  // 32-byte alignment
