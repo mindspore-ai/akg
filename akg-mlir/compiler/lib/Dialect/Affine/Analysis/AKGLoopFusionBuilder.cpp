@@ -781,8 +781,13 @@ static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcLoops,
     // Map the induction variables
     mapper.map(srcLoop.getInductionVar(), dstLoop.getInductionVar());
 
-    // Set insertion point at the end of destination loop body (before terminator)
-    OpBuilder builder(dstLoop.getBody(), std::prev(dstLoop.getBody()->end()));
+    // This ensures srcLoops operations are placed before dstLoops operations
+    Block::iterator insertPoint = dstLoop.getBody()->begin();
+    // Find first non-terminator operation (skip terminator if it exists)
+    while (insertPoint != dstLoop.getBody()->end() && isa<affine::AffineYieldOp>(*insertPoint)) {
+      ++insertPoint;
+    }
+    OpBuilder builder(dstLoop.getBody(), insertPoint);
 
     // Clone all operations from source loop body to destination loop body
     for (Operation &op : srcLoop.getBody()->getOperations()) {
