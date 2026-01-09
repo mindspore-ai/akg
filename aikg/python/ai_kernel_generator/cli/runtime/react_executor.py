@@ -140,124 +140,167 @@ class ReactTurnExecutor:
             else:
                 invoke_input = {"messages": [{"role": "user", "content": user_input}]}
 
+            def _extract_kind_payload(evt: dict[str, Any]) -> tuple[str, Any]:
+                """严格解析 updates event；不符合形态直接报错。"""
+                if "__interrupt__" in evt:
+                    if len(evt) != 1:
+                        raise RuntimeError(
+                            f"Unexpected interrupt event shape: event={evt!r}"
+                        )
+                    return "__interrupt__", evt.get("__interrupt__")
+                if len(evt) != 1:
+                    raise RuntimeError(
+                        f"Unexpected updates event shape (expect single-key dict): event={evt!r}"
+                    )
+                return next(iter(evt.items()))
+
+            def _should_ignore_node(kind: str) -> bool:
+                # middleware(before_model) 节点：本项目 react_agent.py 使用了 @before_model(trim_messages)，
+                # 因此 updates 流里会出现类似 "trim_messages.before_model" 的节点更新；CLI 不消费其更新。
+                return str(kind).endswith(".before_model")
+
+            def _emit_llm_chunk(*, chunk: str, is_reasoning: bool) -> None:
+                if not chunk:
+                    return
+                if use_stream:
+                    send_message(
+                        self.session_id,
+                        LLMStreamMessage(
+                            agent="react",
+                            chunk=chunk,
+                            is_reasoning=bool(is_reasoning),
+                        ),
+                    )
+                else:
+                    if is_reasoning:
+                        collected_reasoning.append(chunk)
+                    else:
+                        collected_content.append(chunk)
+
+            def _handle_tool_call(tc: Any) -> None:
+                if isinstance(tc, dict):
+                    tool_name = str(tc.get("name") or "").strip()
+                    tool_args = tc.get("args") or {}
+                else:
+                    tool_name = str(getattr(tc, "name", "") or "").strip()
+                    tool_args = getattr(tc, "args", {}) or {}
+
+                op_name = ""
+                try:
+                    if isinstance(tool_args, dict):
+                        op_name = str(tool_args.get("op_name") or "").strip()
+                except Exception:
+                    op_name = ""
+
+                if tool_name:
+                    self._panel_update_current(phase=tool_name, op_name=op_name)
+
+                    # 关键：如果即将调用“允许子 Agent 自己 stream”的工具，
+                    # 先结束当前 ReAct 的 stream，避免两个来源的 LLMStreamMessage 混到同一个 StreamRenderer。
+                    if use_stream and tool_name in allow_tool_streaming:
+                        from ai_kernel_generator.cli.messages import DisplayMessage
+
+                        send_message(self.session_id, DisplayMessage(text=""))
+
+                # 如果模型直接调用 finish，通常最终答案在 tool output 中
+                if tool_name == "finish":
+                    # 不在这里置 finished：以 tools event 为准
+                    return
+
+            def _handle_model_payload(payload: Any) -> None:
+                node_output = payload
+                if not isinstance(node_output, dict):
+                    raise TypeError(f"Invalid 'model' payload type: {type(node_output)}")
+
+                messages = node_output.get("messages", []) or []
+                for msg in messages:
+                    # reasoning_content（DeepSeek reasoner 的 think）
+                    reasoning = self._extract_reasoning_content(msg)
+                    if reasoning:
+                        _emit_llm_chunk(chunk=reasoning, is_reasoning=True)
+
+                    # assistant content
+                    content = str(getattr(msg, "content", "") or "")
+                    if content:
+                        _emit_llm_chunk(chunk=content, is_reasoning=False)
+
+                    # tool calls（用于面板 phase）
+                    tool_calls = getattr(msg, "tool_calls", None) or []
+                    for tc in tool_calls:
+                        _handle_tool_call(tc)
+
+            def _handle_tools_payload(payload: Any) -> bool:
+                """返回 True 表示本轮应立即结束（例如 finish）。"""
+                nonlocal display_message, finished, should_continue
+
+                tools_output = payload
+                if not isinstance(tools_output, dict):
+                    raise TypeError(f"Invalid 'tools' payload type: {type(tools_output)}")
+
+                messages = tools_output.get("messages", []) or []
+                for msg in messages:
+                    tool_name = str(getattr(msg, "name", "") or "").strip()
+                    content = str(getattr(msg, "content", "") or "")
+
+                    if tool_name == "finish":
+                        # basic_tools.finish 返回 final_answer（string）
+                        display_message = content.strip() if content else ""
+                        finished = True
+                        should_continue = False
+                        # 关键：立即结束本轮 astream，避免 finish 之后又触发一轮新的 model 调用而“卡住”
+                        return True
+
+                    # 有些 tool 可能返回结构化 JSON 字符串；这里不强依赖，只尽量提取
+                    if (not finished) and (not use_stream) and content:
+                        parsed = self._safe_json_loads(content)
+                        if isinstance(parsed, dict) and "final_answer" in parsed:
+                            display_message = str(parsed.get("final_answer") or "").strip()
+                            finished = True
+                            should_continue = False
+                            return True
+
+                return False
+
             async for event in self._react_agent.agent.astream(
                 invoke_input, stream_config, stream_mode="updates"
             ):
                 if not isinstance(event, dict):
                     continue
 
-                # interrupt：ask_user 会触发 GraphInterrupt，stream 中会出现 __interrupt__
-                if "__interrupt__" in event:
-                    interrupted = True
-                    intrs = event.get("__interrupt__") or ()
-                    value = ""
-                    try:
-                        if intrs and len(intrs) > 0:
-                            value = getattr(intrs[0], "value", "")  # Interrupt.value
-                    except Exception:
+                kind, payload = _extract_kind_payload(event)
+
+                match kind:
+                    # interrupt：ask_user 会触发 GraphInterrupt，stream 中会出现 __interrupt__
+                    case "__interrupt__":
+                        interrupted = True
+                        intrs = payload or ()
                         value = ""
-                    display_message = str(value or "").strip()
-                    should_continue = True
-                    self._awaiting_resume = True
-                    # interrupt 后本轮结束，等待用户下一次输入（resume）
-                    return
+                        try:
+                            if intrs and len(intrs) > 0:
+                                value = getattr(intrs[0], "value", "")  # Interrupt.value
+                        except Exception:
+                            value = ""
+                        display_message = str(value or "").strip()
+                        should_continue = True
+                        self._awaiting_resume = True
+                        # interrupt 后本轮结束，等待用户下一次输入（resume）
+                        return
 
-                # model/agent 节点输出：LLM 内容 + tool_calls
-                node_output = None
-                if "model" in event:
-                    node_output = event.get("model")
-                elif "agent" in event:
-                    node_output = event.get("agent")
+                    # model 节点输出：LLM 内容 + tool_calls
+                    case "model":
+                        _handle_model_payload(payload)
 
-                if isinstance(node_output, dict):
-                    messages = node_output.get("messages", []) or []
-                    for msg in messages:
-                        # reasoning_content（DeepSeek reasoner 的 think）
-                        reasoning = self._extract_reasoning_content(msg)
-                        if reasoning:
-                            if use_stream:
-                                send_message(
-                                    self.session_id,
-                                    LLMStreamMessage(
-                                        agent="react",
-                                        chunk=reasoning,
-                                        is_reasoning=True,
-                                    ),
-                                )
-                            else:
-                                collected_reasoning.append(reasoning)
-
-                        # assistant content
-                        content = str(getattr(msg, "content", "") or "")
-                        if content:
-                            if use_stream:
-                                send_message(
-                                    self.session_id,
-                                    LLMStreamMessage(
-                                        agent="react",
-                                        chunk=content,
-                                        is_reasoning=False,
-                                    ),
-                                )
-                            else:
-                                collected_content.append(content)
-
-                        # tool calls（用于面板 phase）
-                        tool_calls = getattr(msg, "tool_calls", None) or []
-                        for tc in tool_calls:
-                            if isinstance(tc, dict):
-                                tool_name = str(tc.get("name") or "").strip()
-                                tool_args = tc.get("args") or {}
-                            else:
-                                tool_name = str(getattr(tc, "name", "") or "").strip()
-                                tool_args = getattr(tc, "args", {}) or {}
-
-                            op_name = ""
-                            try:
-                                if isinstance(tool_args, dict):
-                                    op_name = str(tool_args.get("op_name") or "").strip()
-                            except Exception:
-                                op_name = ""
-
-                            if tool_name:
-                                self._panel_update_current(phase=tool_name, op_name=op_name)
-
-                                # 关键：如果即将调用“允许子 Agent 自己 stream”的工具，
-                                # 先结束当前 ReAct 的 stream，避免两个来源的 LLMStreamMessage 混到同一个 StreamRenderer。
-                                if use_stream and tool_name in allow_tool_streaming:
-                                    from ai_kernel_generator.cli.messages import DisplayMessage
-
-                                    send_message(self.session_id, DisplayMessage(text=""))
-
-                            # 如果模型直接调用 finish，通常最终答案在 tool output 中
-                            if tool_name == "finish":
-                                # 不在这里置 finished：以 tools event 为准
-                                pass
-
-                # tools 节点输出：Observation（含 finish 的最终答案）
-                tools_output = event.get("tools")
-                if isinstance(tools_output, dict):
-                    messages = tools_output.get("messages", []) or []
-                    for msg in messages:
-                        tool_name = str(getattr(msg, "name", "") or "").strip()
-                        content = str(getattr(msg, "content", "") or "")
-
-                        if tool_name == "finish":
-                            # basic_tools.finish 返回 final_answer（string）
-                            display_message = content.strip() if content else ""
-                            finished = True
-                            should_continue = False
-                            # 关键：立即结束本轮 astream，避免 finish 之后又触发一轮新的 model 调用而“卡住”
+                    # tools 节点输出：Observation（含 finish 的最终答案）
+                    case "tools":
+                        if _handle_tools_payload(payload):
                             return
 
-                        # 有些 tool 可能返回结构化 JSON 字符串；这里不强依赖，只尽量提取
-                        if (not finished) and (not use_stream) and content:
-                            parsed = self._safe_json_loads(content)
-                            if isinstance(parsed, dict) and "final_answer" in parsed:
-                                display_message = str(parsed.get("final_answer") or "").strip()
-                                finished = True
-                                should_continue = False
-                                return
+                    case _ if _should_ignore_node(str(kind)):
+                        continue
+                    case _:
+                        raise RuntimeError(
+                            f"Unexpected updates event node: {kind!r}, event={event!r}"
+                        )
 
         # 让 cancel_main_agent 能取消到这一轮
         try:
