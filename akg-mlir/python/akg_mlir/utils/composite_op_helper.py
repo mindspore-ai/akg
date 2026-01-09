@@ -1,4 +1,4 @@
-# Copyright 2023 Huawei Technologies Co., Ltd
+# Copyright 2023-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -102,15 +102,18 @@ def compare_tensor(acu_output, exp_output, rtol=1.e-5, atol=1.e-8, equal_nan=Fal
     """
     res = np.allclose(acu_output, exp_output, rtol, atol, equal_nan)
     if not res:
-        pandora_logger_ = Log(case_name=os.path.dirname(
-            __file__), case_path=os.getcwd())
-        pandora_logger_.log.error(
-            "This shape precision is not up to standard, compare failed.")
+        absolute_err = np.abs(acu_output - exp_output)
+        max_err = np.max(absolute_err)
+        index = np.argmax(absolute_err)
+        relative_err = max_err / acu_output.reshape(-1)[index]
+        logging.error("This shape precision is not up to standard, compare failed.")
+        logging.error("Max absolute error is %s", max_err)
+        logging.error("Max absolute error's relative error is %s", relative_err)
     return res
 
 
 def get_rtol_atol(op_name, dtype, rtol=5e-03, atol=5e-03):
-    """return rtol and atol for precision comparation"""
+    """return rtol and atol for precision comparison"""
     run_mode = os.environ.get('RUNTIME_MODE')
     if run_mode in ("rpc_cloud", "air_cloud"):
         if dtype == "float16":

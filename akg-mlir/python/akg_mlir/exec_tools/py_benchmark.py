@@ -204,8 +204,6 @@ def compare_results(kernel_name, desc, input_for_mod, output_indexes, expect):
     expect = expect if isinstance(expect, (list, tuple)) else [expect]
     output = list(output)
     expect = list(expect)
-    print("output:", output)
-    print("expect:", expect)
     compare_tolerance = get_compare_tolerance(desc, output_indexes)
     compare_res = list(map(_compare_func, output, expect, compare_tolerance))
     if not all(compare_res):
