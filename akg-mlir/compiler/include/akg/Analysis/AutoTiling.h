@@ -61,8 +61,11 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<affine::Af
                            SmallVectorImpl<unsigned> *tileSizes, const TilingTaskDesc &taskDesc);
 
 // SCF version
+// For dynamic axes (tileSize == UINT_MAX), constraintMax contains the upper bound from finalConstraint.max
+// For static axes, constraintMax is set to 0 (not used)
 void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<scf::ForOp, 6> band,
-                           SmallVectorImpl<unsigned> *tileSizes, const TilingTaskDesc &taskDesc);
+                           SmallVectorImpl<unsigned> *tileSizes, SmallVectorImpl<int> *constraintMaxs,
+                           const TilingTaskDesc &taskDesc);
 }  // namespace autotiling
 }  // namespace mlir
 
