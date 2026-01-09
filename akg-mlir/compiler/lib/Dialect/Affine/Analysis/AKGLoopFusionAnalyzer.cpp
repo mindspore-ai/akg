@@ -361,9 +361,6 @@ bool FusionAnalyzer::hasEdgeInFusionPlans(unsigned depGroupId, unsigned fromGrou
 std::string FusionAnalyzer::determineFusionType(unsigned fromGroupId, unsigned toGroupId) {
   auto fromGroup = depGraph.getGroup(fromGroupId);
   auto toGroup = depGraph.getGroup(toGroupId);
-  if (toGroup == nullptr) {
-    return "V";
-  }
 
   // 1. If from itself is a node that to directly or indirectly depends on (in the dependency graph), return H
   if (depGraph.isDependencyInGraph(fromGroupId, toGroupId)) {
@@ -383,12 +380,12 @@ std::string FusionAnalyzer::determineFusionType(unsigned fromGroupId, unsigned t
       continue;
     }
 
-    if (!hasEdgeInFusionPlans(depGroupId, fromGroupId)) {
-      return "V";
+    if (hasEdgeInFusionPlans(depGroupId, fromGroupId)) {
+      return "H";
     }
   }
 
-  return "H";
+  return "V";
 }
 
 std::pair<GroupPtr, GroupPtr> FusionAnalyzer::determineFusionOrder(const GroupPtr oldGroup, const GroupPtr newGroup) {
