@@ -227,6 +227,7 @@ async def demo_react_agent(
     同一 thread_id 内的多轮对话会保留上下文，退出对话后，记忆会丢失
     """
     from ai_kernel_generator.core.agent.react_agent import MainOpAgent
+    from langgraph.types import Command
     
     TASK_BUILD_TOOLS = {"call_op_task_builder"}  
     SUB_AGENT_TOOLS = {"call_codeonly", "call_evolve", "call_adaptive_search", "call_kernel_verifier"}
@@ -238,6 +239,8 @@ async def demo_react_agent(
     
     thread_id = str(uuid.uuid4())
     stream_config = {"configurable": {"thread_id": thread_id}}
+    
+    pending_interrupt = False
     
     print("\n" + "=" * 80)
     print("🚀 ReActAgent Demo 演示")
@@ -301,7 +304,10 @@ async def demo_react_agent(
     
     while True:
         try:
-            user_input = input("👤 请输入您的需求: ").strip()
+            if pending_interrupt:
+                user_input = input("👤 请输入您的回复（继续对话）: ").strip()
+            else:
+                user_input = input("👤 请输入您的需求: ").strip()
         except KeyboardInterrupt:
             print("\n\n⚠️ 检测到 Ctrl+C，退出程序")
             break
@@ -319,7 +325,13 @@ async def demo_react_agent(
         current_action = None  
         
         try:
-            inputs = {"messages": [{"role": "user", "content": user_input}]}
+            if pending_interrupt:
+                inputs = Command(resume=user_input)
+                pending_interrupt = False  # 重置状态
+                logger.info(f"Resuming from interrupt with user input: {user_input[:50]}...")
+            else:
+                # 新的对话轮次
+                inputs = {"messages": [{"role": "user", "content": user_input}]}
             
             async for event in agent.agent.astream(inputs, stream_config, stream_mode="updates"):
                 # print(f"event: {event}")
@@ -377,7 +389,10 @@ async def demo_react_agent(
                                     
                                     elif tc_name == "ask_user":
                                         message = tc_args.get('message', '')
+                                        print(f"   💬 类型: 交互式询问（等待用户回复）")
                                         print(f"   📤 消息预览: {message[:100]}{'...' if len(message) > 100 else ''}")
+                                        # 标记 ask_user 被调用，可能会触发 interrupt
+                                        current_action = "ask_user"
                                     
                                     elif tc_name == "finish":
                                         print(f"   ✅ 类型: 任务完成")
@@ -416,9 +431,11 @@ async def demo_react_agent(
                                 print(f"   📤 {tool_name}: 已生成 Triton 代码")
                             
                             elif tool_name == "ask_user":
-                                # ask_user 现在是阻塞式的，返回用户的实际回复
+                                # ask_user 返回了用户的回复（说明 interrupt 已恢复）
                                 preview = content[:100] + ('...' if len(content) > 100 else '')
                                 print(f"   📤 {tool_name}: {preview}")
+                                # 重置 current_action，因为 ask_user 已完成
+                                current_action = None
                             
                             elif tool_name == "finish":
                                 print(f"   📤 {tool_name}: 任务完成")
@@ -451,7 +468,13 @@ async def demo_react_agent(
             
             print(f"\n   📈 执行轮次: {loop_count}")
             
-            if task_finished:
+            # 检查是否因为 ask_user 的 interrupt 而暂停
+            # 如果最后一个 action 是 ask_user，且没有收到对应的 ToolMessage，说明触发了 interrupt
+            if current_action == "ask_user":
+                pending_interrupt = True
+                print("\n   ⏸️  状态: 等待用户回复（interrupt 暂停）")
+                print("   💡 提示: 下次输入将恢复对话，继续执行后续流程")
+            elif task_finished:
                 print("\n   ✅ 状态: 任务完成")
             else:
                 print("\n   🔄 状态: 循环结束")
