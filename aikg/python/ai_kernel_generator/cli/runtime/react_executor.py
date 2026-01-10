@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -104,6 +105,68 @@ class ReactTurnExecutor:
                 data={"task_name": op_name, "phase": phase},
             ),
         )
+
+    async def _rollback_incomplete_tool_calls(self) -> None:
+        """
+        回滚取消后不完整的对话历史。
+        
+        当 LLM 生成了 tool_calls 但工具还没执行完就被取消时，
+        删除最后那条带有未完成 tool_calls 的 AIMessage，回到 tool 调用前的状态。
+        """
+        try:
+            from langchain_core.messages import AIMessage, ToolMessage, RemoveMessage
+            
+            config = {"configurable": {"thread_id": self.thread_id}}
+            
+            # 获取当前状态
+            state = await self._react_agent.agent.aget_state(config)
+            if not state or not state.values:
+                return
+            
+            messages = state.values.get("messages", [])
+            if not messages:
+                return
+            
+            # 收集已回复的 tool_call_id
+            answered_tool_call_ids = set()
+            for msg in messages:
+                if isinstance(msg, ToolMessage):
+                    tool_call_id = getattr(msg, "tool_call_id", None)
+                    if tool_call_id:
+                        answered_tool_call_ids.add(tool_call_id)
+            
+            # 从后往前找需要删除的消息（带有未完成 tool_calls 的 AIMessage）
+            messages_to_remove = []
+            for msg in reversed(messages):
+                if isinstance(msg, AIMessage):
+                    tool_calls = getattr(msg, "tool_calls", None) or []
+                    if tool_calls:
+                        # 检查是否有未完成的 tool_call
+                        has_pending = False
+                        for tc in tool_calls:
+                            tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                            if tc_id and tc_id not in answered_tool_call_ids:
+                                has_pending = True
+                                break
+                        
+                        if has_pending:
+                            msg_id = getattr(msg, "id", None)
+                            if msg_id:
+                                messages_to_remove.append(RemoveMessage(id=msg_id))
+                                logger.info(f"[ReactTurnExecutor] Removing incomplete AIMessage: {msg_id}")
+                        break  # 只处理最后一个带 tool_calls 的 AIMessage
+            
+            if messages_to_remove:
+                await self._react_agent.agent.aupdate_state(
+                    config,
+                    {"messages": messages_to_remove}
+                )
+                logger.info(f"[ReactTurnExecutor] Rolled back {len(messages_to_remove)} incomplete message(s)")
+            
+        except Exception as e:
+            # 如果回滚失败，重置 thread_id
+            logger.warning(f"[ReactTurnExecutor] Rollback failed: {e}, resetting thread_id")
+            self.thread_id = f"{self.session_id}_{uuid.uuid4().hex[:8]}"
 
     async def run_turn(self, user_input: str, use_stream: bool) -> dict:
         """
@@ -307,6 +370,9 @@ class ReactTurnExecutor:
             self.running_task = asyncio.create_task(_run())
             await self.running_task
         except asyncio.CancelledError:
+            # 取消后回滚：删除最后那条带有未完成 tool_calls 的消息，回到 tool 调用前
+            self._awaiting_resume = False
+            await self._rollback_incomplete_tool_calls()
             return {
                 "current_step": "cancelled_by_user",
                 "should_continue": True,

@@ -537,6 +537,15 @@ class AdaptiveSearchController:
                 while self.task_pool.get_running_count() > 0:
                     await self.task_pool.wait_for_any(timeout=1.0)
                     await self._process_results()
+        
+        except asyncio.CancelledError:
+            # 用户取消操作，清理所有正在运行的任务
+            logger.info(f"Adaptive search for {self.op_name} was cancelled by user")
+            cancelled_count = await self.task_pool.cancel_all_running()
+            cleared_count = self.task_pool.clear_waiting_queue()
+            logger.info(f"Cleanup: cancelled {cancelled_count} running tasks, cleared {cleared_count} waiting tasks")
+            self._stop_reason = "Cancelled by user"
+            raise  # 重新抛出让上层处理
             
         except Exception as e:
             logger.error(f"Search failed with exception: {e}", exc_info=True)
