@@ -16,6 +16,7 @@
 SubAgent Tools - 将 SubAgent 包装为 LangChain Tool
 """
 
+import asyncio
 import logging
 from typing import Dict, Any, List
 
@@ -126,6 +127,10 @@ def _create_tool(sub_agent: SubAgentBase):
             
             result["success"] = success
             return result
+        except asyncio.CancelledError:
+            # 用户取消操作，记录日志并向上传播
+            logger.info(f"SubAgent {sub_agent.get_name()} was cancelled by user")
+            raise  # 重新抛出让上层正确处理取消
         except Exception as e:
             logger.error(f"SubAgent {sub_agent.get_name()} failed: {e}")
             return {"success": False, "error": str(e)}
@@ -163,6 +168,9 @@ def _create_op_task_builder_tool(sub_agent: SubAgentBase, tool_name: str, tool_d
             
             result["success"] = success
             return result
+        except asyncio.CancelledError:
+            logger.info("OpTaskBuilder was cancelled by user")
+            raise
         except Exception as e:
             logger.error(f"OpTaskBuilder failed: {e}")
             return {"success": False, "error": str(e)}
