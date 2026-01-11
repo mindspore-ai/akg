@@ -34,9 +34,9 @@ class PanelPlugin(ABC):
         """
         pass
 
-    def on_data_update(self, data: dict) -> None:
-        """接收数据更新（可选实现）"""
-        pass
+    def on_data_update(self, data: dict) -> bool:
+        """接收数据更新（可选实现），返回是否有实际变化"""
+        return False
 
     def get_height(self) -> int:
         """返回面板高度（可选，默认返回固定高度）"""
