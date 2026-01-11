@@ -165,13 +165,14 @@ class InteractiveOpRunner:
         
         return fragments
 
-    def _update_panel_data(self, action: str, data: dict) -> None:
-        """更新面板插件数据"""
+    def _update_panel_data(self, action: str, data: dict) -> bool:
+        """更新面板插件数据，返回是否有实际变化"""
         if self._panel_plugin:
-            self._panel_plugin.on_data_update({
+            return self._panel_plugin.on_data_update({
                 "action": action,
                 "data": data
             })
+        return False
 
     def _build_resolved(self) -> dict:
         return {
@@ -530,13 +531,9 @@ class InteractiveOpRunner:
                 return
 
         async def _spinner(stop_event: asyncio.Event) -> None:
-            frames = ["-", "\\", "|", "/"]
-            idx = 0
-            while not stop_event.is_set():
-                state.loading_text = f"运行中... {frames[idx % len(frames)]}"
-                idx += 1
-                app.invalidate()
-                await asyncio.sleep(0.2)
+            # 不再使用动画，只设置静态文本，避免频繁刷新导致闪烁
+            state.loading_text = "运行中..."
+            await stop_event.wait()
 
         async def _process_input(user_input: str) -> bool:
             user_input = (user_input or "").strip()

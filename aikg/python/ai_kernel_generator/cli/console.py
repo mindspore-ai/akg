@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import logging
@@ -57,6 +58,10 @@ class AKGConsole:
 
         # Runner 引用（用于更新面板数据）
         self._runner_ref = None
+        
+        # 防抖：最后一次 invalidate 的时间
+        self._last_invalidate_time: float = 0
+        self._invalidate_min_interval: float = 0.3  # 最小间隔 300ms
 
     def set_cancel_handler(self, handler: Callable[[str], None]) -> None:
         """设置取消处理器"""
@@ -150,13 +155,21 @@ class AKGConsole:
             return
         logger.info(f"[panel] received: action={action}, data={data}")
         if self._runner_ref:
-            self._runner_ref._update_panel_data(action, dict(data))
-            try:
-                from prompt_toolkit.application.current import get_app
+            # 只在数据真正变化时才刷新 UI
+            changed = self._runner_ref._update_panel_data(action, dict(data))
+            if changed:
+                # 防抖：避免短时间内多次 invalidate 导致闪烁
+                now = time.time()
+                if now - self._last_invalidate_time < self._invalidate_min_interval:
+                    logger.debug("[panel] invalidate skipped (debounce)")
+                    return
+                self._last_invalidate_time = now
+                try:
+                    from prompt_toolkit.application.current import get_app
 
-                get_app().invalidate()
-            except Exception:
-                pass
+                    get_app().invalidate()
+                except Exception:
+                    pass
 
     def on_display_message(self, message: "DisplayMessage") -> None:
         """处理显示消息"""

@@ -109,16 +109,22 @@ class KernelImplListPlugin(PanelPlugin):
         fragments.extend(self.render_history_fragments(content_width))
         return fragments
 
-    def on_data_update(self, data: dict) -> None:
-        """更新数据"""
+    def on_data_update(self, data: dict) -> bool:
+        """更新数据，返回是否有实际变化"""
         action = data.get("action")
+        changed = False
+        
         if action == "update_current":
             # 更新当前任务
             update_data = data.get("data", {})
-            self.current_task = {
+            new_task = {
                 "task_name": update_data.get("task_name", ""),
                 "phase": update_data.get("phase", ""),
             }
+            # 检查是否有变化
+            if new_task != self.current_task:
+                self.current_task = new_task
+                changed = True
         elif action == "move_to_history":
             # 将当前任务移到历史（只要有性能数据就添加，不检查状态）
             history_data = data.get("data", {})
@@ -137,11 +143,17 @@ class KernelImplListPlugin(PanelPlugin):
                 self.history.append(history_item)
                 self.history.sort(key=lambda x: x.get("speedup", 0), reverse=True)
                 self.history = self.history[:5]
+                changed = True
                 # 保留当前任务显示
         elif action == "reset":
+            # 检查是否有变化
+            if self.current_task.get("task_name") or self.current_task.get("phase") or self.history:
+                changed = True
             # 重置状态
             self.current_task = {
                 "task_name": "",
                 "phase": "",
             }
             self.history = []
+        
+        return changed
