@@ -806,13 +806,35 @@ class NodeFactory:
                 reasoning=""
             )
             
-            # 记录检查结果
-            if passed:
-                logger.info(f"[Task {task_id}] CodeChecker: ✅ Code check passed")
+            # 向 CLI 发送检查结果消息
+            session_id = state.get('session_id', '')
+            if session_id:
+                try:
+                    from ai_kernel_generator.cli.runtime.message_sender import send_message
+                    from ai_kernel_generator.cli.messages import DisplayMessage
+                    if passed:
+                        logger.info(f"[Task {task_id}] CodeChecker: ✅ Code check passed")
+                        send_message(session_id, DisplayMessage(
+                            text="✅ 代码静态检查通过"
+                        ))
+                    else:
+                        logger.warning(f"[Task {task_id}] CodeChecker: ❌ Found {len(errors)} issues")
+                        for err in errors[:3]:
+                            logger.warning(f"[Task {task_id}]   Line {err.get('line', '?')}: {err.get('detail', '')[:80]}")
+                        send_message(session_id, DisplayMessage(
+                            text=f"⚠️ 代码静态检查发现 {len(errors)} 个问题"
+                        ))
+                except Exception:
+                    # 发送失败不影响主流程
+                    pass
             else:
-                logger.warning(f"[Task {task_id}] CodeChecker: ❌ Found {len(errors)} issues")
-                for err in errors[:3]:
-                    logger.warning(f"[Task {task_id}]   Line {err.get('line', '?')}: {err.get('detail', '')[:80]}")
+                # 没有 session_id 时只记录日志
+                if passed:
+                    logger.info(f"[Task {task_id}] CodeChecker: ✅ Code check passed")
+                else:
+                    logger.warning(f"[Task {task_id}] CodeChecker: ❌ Found {len(errors)} issues")
+                    for err in errors[:3]:
+                        logger.warning(f"[Task {task_id}]   Line {err.get('line', '?')}: {err.get('detail', '')[:80]}")
             
             return {
                 "code_check_passed": passed,
@@ -822,7 +844,7 @@ class NodeFactory:
                 "agent_history": ["code_checker"]
             }
         
-        return code_checker_node
+        return track_node("code_checker")(code_checker_node)
     
     @staticmethod
     def _save_to_passed_cases(state, verifier_instance, current_step: int, config: dict):

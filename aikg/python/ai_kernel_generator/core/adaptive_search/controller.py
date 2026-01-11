@@ -493,63 +493,67 @@ class AdaptiveSearchController:
         logger.info(f"Config: max_concurrent={self.search_config.max_concurrent}, "
                    f"max_total_tasks={self.search_config.max_total_tasks}, ")
         
-        try:
-            # 1. 提交初始任务
-            logger.info(f"Submitting {self.search_config.initial_task_count} initial tasks...")
-            for _ in range(self.search_config.initial_task_count):
-                if self._total_submitted >= self.search_config.max_total_tasks:
-                    break
-                await self._submit_initial_task()
-            
-            # 2. 主搜索循环
-            while True:
-                # 等待任务完成
-                if self.task_pool.get_running_count() > 0:
-                    await self.task_pool.wait_for_any(timeout=self.search_config.poll_interval)
+        # 使用上下文管理器，自动清理所有子任务（正常退出或异常都会清理）
+        async with self.task_pool:
+            try:
+                # 1. 提交初始任务
+                logger.info(f"Submitting {self.search_config.initial_task_count} initial tasks...")
+                for _ in range(self.search_config.initial_task_count):
+                    if self._total_submitted >= self.search_config.max_total_tasks:
+                        break
+                    await self._submit_initial_task()
                 
-                # 处理完成的结果（更新 _total_success 等计数器）
-                await self._process_results()
-                
-                # 检查停止条件：达到最大任务数
-                if self._check_stop_conditions():
-                    logger.info(f"Stop condition met: {self._stop_reason}")
-                    break
-                
-                # 如果任务池空闲且已达到最大任务数，退出
-                if self.task_pool.is_idle() and self._total_submitted >= self.search_config.max_total_tasks:
-                    logger.info("All tasks completed")
-                    break
-                
-                # 填充任务池
-                await self._refill_task_pool()
-                
-                # 如果任务池空闲但还没达到最大任务数，继续生成
-                if self.task_pool.is_idle() and self._total_submitted < self.search_config.max_total_tasks:
-                    await self._refill_task_pool()
-                
-                # 避免空转
-                await asyncio.sleep(0.1)
-            
-            # 3. 等待剩余任务完成
-            remaining = self.task_pool.get_running_count()
-            if remaining > 0:
-                logger.info(f"Waiting for {remaining} remaining tasks to complete...")
-                while self.task_pool.get_running_count() > 0:
-                    await self.task_pool.wait_for_any(timeout=1.0)
+                # 2. 主搜索循环
+                while True:
+                    # 等待任务完成
+                    if self.task_pool.get_running_count() > 0:
+                        await self.task_pool.wait_for_any(timeout=self.search_config.poll_interval)
+                    
+                    # 处理完成的结果（更新 _total_success 等计数器）
                     await self._process_results()
-        
-        except asyncio.CancelledError:
-            # 用户取消操作，清理所有正在运行的任务
-            logger.info(f"Adaptive search for {self.op_name} was cancelled by user")
-            cancelled_count = await self.task_pool.cancel_all_running()
-            cleared_count = self.task_pool.clear_waiting_queue()
-            logger.info(f"Cleanup: cancelled {cancelled_count} running tasks, cleared {cleared_count} waiting tasks")
-            self._stop_reason = "Cancelled by user"
-            raise  # 重新抛出让上层处理
+                    
+                    # 检查停止条件：达到最大任务数
+                    if self._check_stop_conditions():
+                        logger.info(f"Stop condition met: {self._stop_reason}")
+                        break
+                    
+                    # 如果任务池空闲且已达到最大任务数，退出
+                    if self.task_pool.is_idle() and self._total_submitted >= self.search_config.max_total_tasks:
+                        logger.info("All tasks completed")
+                        break
+                    
+                    # 填充任务池
+                    await self._refill_task_pool()
+                    
+                    # 如果任务池空闲但还没达到最大任务数，继续生成
+                    if self.task_pool.is_idle() and self._total_submitted < self.search_config.max_total_tasks:
+                        await self._refill_task_pool()
+                    
+                    # 避免空转
+                    await asyncio.sleep(0.1)
+                
+                # 3. 等待剩余任务完成
+                remaining = self.task_pool.get_running_count()
+                if remaining > 0:
+                    logger.info(f"Waiting for {remaining} remaining tasks to complete...")
+                    while self.task_pool.get_running_count() > 0:
+                        await self.task_pool.wait_for_any(timeout=1.0)
+                        await self._process_results()
             
-        except Exception as e:
-            logger.error(f"Search failed with exception: {e}", exc_info=True)
-            self._stop_reason = f"Exception: {e}"
+            except asyncio.CancelledError:
+                # 用户取消操作，记录日志并向上传播
+                # 清理工作由上下文管理器自动完成
+                logger.info(f"Adaptive search for {self.op_name} was cancelled by user")
+                self._stop_reason = "Cancelled by user"
+                raise  # 重新抛出，__aexit__ 会自动清理
+                
+            except Exception as e:
+                # 其他异常，记录日志
+                # 清理工作由上下文管理器自动完成
+                logger.error(f"Search failed with exception: {e}", exc_info=True)
+                self._stop_reason = f"Exception: {e}"
+        
+        # 退出 async with 时，上下文管理器已自动清理所有子任务
         
         # 4. 收集结果
         elapsed_time = (datetime.now() - self._start_time).total_seconds()
