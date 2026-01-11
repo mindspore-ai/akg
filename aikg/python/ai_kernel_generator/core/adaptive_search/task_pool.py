@@ -97,6 +97,47 @@ class AsyncTaskPool:
         
         logger.info(f"AsyncTaskPool initialized with max_concurrent={max_concurrent}")
     
+    async def __aenter__(self):
+        """进入上下文管理器"""
+        logger.debug("[TaskPool] Context entered")
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """
+        退出上下文管理器，自动清理所有子任务
+        
+        无论是正常退出还是异常退出（包括 CancelledError），
+        都会自动取消所有正在运行的任务和清空等待队列。
+        
+        Args:
+            exc_type: 异常类型
+            exc_val: 异常值
+            exc_tb: 异常追踪
+            
+        Returns:
+            bool: False 表示不抑制异常
+        """
+        if self._running or self._waiting:
+            cancelled = await self.cancel_all_running()
+            cleared = self.clear_waiting_queue()
+            
+            if exc_type is asyncio.CancelledError:
+                logger.info(
+                    f"[TaskPool] User cancelled: cleaned up {cancelled} running tasks, "
+                    f"{cleared} waiting tasks"
+                )
+            elif exc_type is not None:
+                logger.warning(
+                    f"[TaskPool] Exception cleanup: {cancelled} running tasks cancelled, "
+                    f"{cleared} waiting tasks cleared due to {exc_type.__name__}"
+                )
+            else:
+                logger.debug(
+                    f"[TaskPool] Normal exit: {cancelled} running tasks, {cleared} waiting tasks"
+                )
+        
+        return False  # 不抑制异常，让异常继续传播
+    
     def generate_task_id(self, prefix: str = "task") -> str:
         """生成唯一任务 ID"""
         self._task_counter += 1
