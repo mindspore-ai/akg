@@ -271,7 +271,7 @@ class InteractiveOpRunner:
     class _TuiState:
         def __init__(self) -> None:
             self.is_generating = False
-            self.loading_text = "生成中..."
+            self.loading_text = "运行中..."
 
     async def _run_tui_app(
         self,
@@ -290,7 +290,7 @@ class InteractiveOpRunner:
             if not text.strip():
                 return
             state.is_generating = True
-            state.loading_text = "生成中..."
+            state.loading_text = "运行中..."
             app.invalidate()
             input_queue.put_nowait(text)
 
@@ -478,7 +478,7 @@ class InteractiveOpRunner:
         )
         loading_container = Frame(
             body=loading_body,
-            title="生成中",
+            title="运行中",
             height=3,
             style="class:input-frame",
         )
@@ -533,7 +533,7 @@ class InteractiveOpRunner:
             frames = ["-", "\\", "|", "/"]
             idx = 0
             while not stop_event.is_set():
-                state.loading_text = f"生成中... {frames[idx % len(frames)]}"
+                state.loading_text = f"运行中... {frames[idx % len(frames)]}"
                 idx += 1
                 app.invalidate()
                 await asyncio.sleep(0.2)
@@ -591,7 +591,7 @@ class InteractiveOpRunner:
         async def _workflow_loop() -> None:
             if initial_input:
                 state.is_generating = True
-                state.loading_text = "生成中..."
+                state.loading_text = "运行中..."
                 app.invalidate()
                 cont = await _process_input(initial_input)
                 if not cont:
