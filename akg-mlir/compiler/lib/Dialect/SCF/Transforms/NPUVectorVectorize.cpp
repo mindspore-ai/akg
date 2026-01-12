@@ -320,6 +320,32 @@ static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
   Type elemType = memRefType.getElementType();
   Location loc = loadOp.getLoc();
 
+  bool allIndicesLoopInvariant = true;
+  for (Value idx : loadOp.getIndices()) {
+    if (idx == ctx.scalarLoop.getInductionVar()) {
+      allIndicesLoopInvariant = false;
+      break;
+    }
+
+    if (idx.getParentBlock() == ctx.scalarLoop.getBody()) {
+      allIndicesLoopInvariant = false;
+      break;
+    }
+  }
+
+  if (allIndicesLoopInvariant) {
+    SmallVector<Value> indices;
+    for (Value idx : loadOp.getIndices()) {
+      Value newIdx = ctx.valueMapping.lookupOrDefault(idx);
+      indices.push_back(newIdx);
+    }
+
+    Value scalarLoad = ctx.builder.create<memref::LoadOp>(
+        loc, loadOp.getMemRef(), indices);
+
+    return vectorizeUniform(scalarLoad, ctx);
+  }
+
   mlir::npuvector::NPUVectorType vecType;
   if (ctx.isDynamic) {
     vecType = mlir::npuvector::NPUVectorType::get({ShapedType::kDynamic}, elemType);
@@ -598,6 +624,306 @@ static void cloneScalarOp(Operation &op, VectorizationContext &ctx) {
   }
 }
 
+static Value vectorizeIf(scf::IfOp ifOp, VectorizationContext &ctx);
+
+static LogicalResult handleConstantOp(arith::ConstantOp constOp, VectorizationContext &ctx) {
+  Type constType = constOp.getType();
+  if (constType == ctx.builder.getIndexType()) {
+    Value scalarConst = ctx.builder.create<arith::ConstantOp>(
+        constOp.getLoc(), constOp.getValue());
+    ctx.valueMapping.map(constOp.getResult(), scalarConst);
+    return success();
+  }
+
+  Value vecValue = vectorizeConstant(constOp, ctx);
+  if (!vecValue) {
+    return failure();
+  }
+  ctx.valueMapping.map(constOp.getResult(), vecValue);
+  return success();
+}
+
+static bool shouldCloneScalarOp(Operation &op, VectorizationContext &ctx) {
+  if (isa<affine::AffineApplyOp, affine::AffineMaxOp, affine::AffineMinOp>(&op)) {
+    return true;
+  }
+
+  if (op.getNumResults() == 1 &&
+      op.getResult(0).getType() == ctx.builder.getIndexType()) {
+    return true;
+  }
+
+  if (llvm::any_of(op.getOperands(), [&](Value operand) {
+        return operand.getType() == ctx.builder.getIndexType();
+      })) {
+    return true;
+  }
+
+  return false;
+}
+
+static LogicalResult handleArithOrMathOpInRegion(Operation &op, VectorizationContext &ctx) {
+  StringRef dialectName = op.getDialect()->getNamespace();
+  if (dialectName != "arith" && dialectName != "math") {
+    return success();
+  }
+
+  if (op.getNumRegions() != 0) {
+    return failure();
+  }
+  if (op.getNumResults() == 0) {
+    return success();
+  }
+
+  Value vecValue = vectorizeArithOp(&op, ctx);
+  if (!vecValue) {
+    return failure();
+  }
+
+  if (op.getNumResults() == 1) {
+    ctx.valueMapping.map(op.getResult(0), vecValue);
+  }
+
+  return success();
+}
+
+static LogicalResult handleArithOrMathOpInLoopBody(Operation &op, VectorizationContext &ctx) {
+  StringRef dialectName = op.getDialect()->getNamespace();
+  if (dialectName != "arith" && dialectName != "math") {
+    return success();
+  }
+
+  if (op.getNumRegions() != 0) {
+    return failure();
+  }
+  if (op.getNumResults() == 0) {
+    return success();
+  }
+
+  Value vecValue = vectorizeArithOp(&op, ctx);
+  if (!vecValue) {
+    return failure();
+  }
+
+  if (op.getNumResults() == 1) {
+    ctx.valueMapping.map(op.getResult(0), vecValue);
+  } else {
+    ctx.valueMapping.map(op.getResult(0), vecValue);
+  }
+
+  return success();
+}
+
+static LogicalResult handleIfOpInRegion(scf::IfOp ifOp, VectorizationContext &ctx) {
+  Value vecIfResult = vectorizeIf(ifOp, ctx);
+  if (!vecIfResult) {
+    return failure();
+  }
+
+  if (ifOp.getNumResults() == 1) {
+    ctx.valueMapping.map(ifOp.getResult(0), vecIfResult);
+  } else if (ifOp.getNumResults() > 1) {
+    // Multiple return values: currently handled in a simplified way by mapping only the first result.
+    ctx.valueMapping.map(ifOp.getResult(0), vecIfResult);
+  }
+
+  return success();
+}
+
+static LogicalResult handleIfOpInLoopBody(scf::IfOp ifOp, VectorizationContext &ctx) {
+  Value vecIfResult = vectorizeIf(ifOp, ctx);
+  if (!vecIfResult && ifOp.getNumResults() > 0) {
+    return failure();
+  }
+
+  // The result needs to be mapped only when scf.if has return values.
+  if (ifOp.getNumResults() > 0) {
+    ctx.valueMapping.map(ifOp.getResult(0), vecIfResult);
+  }
+
+  return success();
+}
+
+static LogicalResult vectorizeOneOpInRegion(Operation &op, VectorizationContext &ctx) {
+  if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
+    Value vecValue = vectorizeLoad(loadOp, ctx);
+    if (!vecValue) {
+      return failure();
+    }
+    ctx.valueMapping.map(loadOp.getResult(), vecValue);
+    return success();
+  }
+
+  if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
+    vectorizeStore(storeOp, ctx);
+    return success();
+  }
+
+  if (auto constOp = dyn_cast<arith::ConstantOp>(&op)) {
+    return handleConstantOp(constOp, ctx);
+  }
+
+  if (auto ifOp = dyn_cast<scf::IfOp>(&op)) {
+    return handleIfOpInRegion(ifOp, ctx);
+  }
+
+  if (shouldCloneScalarOp(op, ctx)) {
+    cloneScalarOp(op, ctx);
+    return success();
+  }
+
+  StringRef dialectName = op.getDialect()->getNamespace();
+  if (dialectName == "arith" || dialectName == "math") {
+    return handleArithOrMathOpInRegion(op, ctx);
+  }
+
+  cloneScalarOp(op, ctx);
+  return success();
+}
+
+static LogicalResult vectorizeOneOpInLoopBody(Operation &op, VectorizationContext &ctx) {
+  if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
+    Value vecValue = vectorizeLoad(loadOp, ctx);
+    if (!vecValue) {
+      return failure();
+    }
+    ctx.valueMapping.map(loadOp.getResult(), vecValue);
+    return success();
+  }
+
+  if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
+    vectorizeStore(storeOp, ctx);
+    return success();
+  }
+
+  if (auto constOp = dyn_cast<arith::ConstantOp>(&op)) {
+    return handleConstantOp(constOp, ctx);
+  }
+
+  if (auto ifOp = dyn_cast<scf::IfOp>(&op)) {
+    return handleIfOpInLoopBody(ifOp, ctx);
+  }
+
+  if (shouldCloneScalarOp(op, ctx)) {
+    cloneScalarOp(op, ctx);
+    return success();
+  }
+
+  StringRef dialectName = op.getDialect()->getNamespace();
+  if (dialectName != "arith" && dialectName != "math") {
+    return success();
+  }
+
+  return handleArithOrMathOpInLoopBody(op, ctx);
+}
+
+static LogicalResult vectorizeRegion(Region &region, VectorizationContext &ctx) {
+  Block *block = &region.front();
+
+  for (Operation &op : block->without_terminator()) {
+    if (failed(vectorizeOneOpInRegion(op, ctx))) {
+      return failure();
+    }
+  }
+
+  Operation *originalTerminator = block->getTerminator();
+  if (auto originalYieldOp = dyn_cast<scf::YieldOp>(originalTerminator)) {
+    SmallVector<Value> vecYieldOperands;
+
+    for (Value operand : originalYieldOp.getOperands()) {
+      Value vecOperand = ctx.valueMapping.lookupOrNull(operand);
+
+      if (!vecOperand) {
+        if (operand.getParentBlock() != ctx.scalarLoop.getBody() ||
+            operand.getDefiningOp() == nullptr) {
+          vecOperand = vectorizeUniform(operand, ctx);
+          if (!vecOperand) {
+            return failure();
+          }
+          ctx.valueMapping.map(operand, vecOperand);
+        } else {
+          return failure();
+        }
+      }
+      vecYieldOperands.push_back(vecOperand);
+    }
+
+    Block *currentBlock = ctx.builder.getInsertionBlock();
+    if (!currentBlock) {
+      return failure();
+    }
+
+    Operation *autoTerminator = currentBlock->getTerminator();
+    if (auto autoYieldOp = dyn_cast<scf::YieldOp>(autoTerminator)) {
+      ctx.builder.setInsertionPoint(autoYieldOp);
+      ctx.builder.create<scf::YieldOp>(originalYieldOp.getLoc(), vecYieldOperands);
+      autoYieldOp.erase();
+    } else {
+      ctx.builder.setInsertionPointToEnd(currentBlock);
+      ctx.builder.create<scf::YieldOp>(originalYieldOp.getLoc(), vecYieldOperands);
+    }
+  }
+
+  return success();
+}
+
+static Value vectorizeIf(scf::IfOp ifOp, VectorizationContext &ctx) {
+  Location loc = ifOp.getLoc();
+  Value condition = ifOp.getCondition();
+  Value vecCondition = ctx.valueMapping.lookupOrNull(condition);
+  if (!vecCondition) {
+    vecCondition = condition;
+  }
+
+  SmallVector<Type> vecResultTypes;
+  if (ifOp.getNumResults() > 0) {
+    for (Type resultType : ifOp.getResultTypes()) {
+      if (mlir::isa<npuvector::NPUVectorType>(resultType)) {
+        vecResultTypes.push_back(resultType);
+      } else {
+        npuvector::NPUVectorType vecType;
+        if (ctx.isDynamic) {
+          vecType = npuvector::NPUVectorType::get({ShapedType::kDynamic}, resultType);
+        } else {
+          vecType = npuvector::NPUVectorType::get({ctx.vectorFactor}, resultType);
+        }
+        vecResultTypes.push_back(vecType);
+      }
+    }
+  }
+
+  // Currently, only support scf.if without an else branch, and therefore do not support scf.if with return values.
+  bool hasElse = !ifOp.getElseRegion().empty();
+  if (hasElse) {
+    return nullptr;
+  }
+
+  if (ifOp.getNumResults() > 0) {
+    return nullptr;
+  }
+
+  auto vecIfOp = ctx.builder.create<scf::IfOp>(loc, vecResultTypes, vecCondition, false);
+
+  {
+    OpBuilder::InsertionGuard guard(ctx.builder);
+    ctx.builder.setInsertionPointToStart(vecIfOp.thenBlock());
+
+    if (failed(vectorizeRegion(ifOp.getThenRegion(), ctx))) {
+      vecIfOp.erase();
+      return nullptr;
+    }
+  }
+
+  if (vecIfOp.getNumResults() == 1) {
+    return vecIfOp.getResult(0);
+  } else if (vecIfOp.getNumResults() > 1) {
+    // Multiple return values: currently handled in a simplified way by mapping only the first result.
+    return vecIfOp.getResult(0);
+  }
+
+  return Value();
+}
+
 static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
   if (ctx.vecLoop) {
     ctx.builder.setInsertionPointToStart(ctx.vecLoop.getBody());
@@ -617,52 +943,8 @@ static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
   }
 
   for (Operation &op : ctx.scalarLoop.getBody()->without_terminator()) {
-    if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
-      Value vecValue = vectorizeLoad(loadOp, ctx);
-      if (!vecValue) {
-        return failure();
-      }
-      ctx.valueMapping.map(loadOp.getResult(), vecValue);
-
-    } else if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
-      vectorizeStore(storeOp, ctx);
-
-    } else if (auto constOp = dyn_cast<arith::ConstantOp>(&op)) {
-      Type constType = constOp.getType();
-      if (constType == ctx.builder.getIndexType()) {
-        Value scalarConst = ctx.builder.create<arith::ConstantOp>(
-            constOp.getLoc(), constOp.getValue());
-        ctx.valueMapping.map(constOp.getResult(), scalarConst);
-        continue;
-      }
-      Value vecValue = vectorizeConstant(constOp, ctx);
-      if (!vecValue) {
-        return failure();
-      }
-      ctx.valueMapping.map(constOp.getResult(), vecValue);
-
-    } else if (isa<affine::AffineApplyOp, affine::AffineMaxOp, affine::AffineMinOp>(&op)) {
-      cloneScalarOp(op, ctx);
-
-    } else if (op.getNumResults() == 1 &&
-               op.getResult(0).getType() == ctx.builder.getIndexType()) {
-      cloneScalarOp(op, ctx);
-
-    } else {
-      if (op.getNumRegions() != 0) {
-        return failure();
-      }
-
-      Value vecValue = vectorizeArithOp(&op, ctx);
-      if (!vecValue) {
-        return failure();
-      }
-
-      if (op.getNumResults() == 1) {
-        ctx.valueMapping.map(op.getResult(0), vecValue);
-      } else {
-        ctx.valueMapping.map(op.getResult(0), vecValue);
-      }
+    if (failed(vectorizeOneOpInLoopBody(op, ctx))) {
+      return failure();
     }
   }
 
