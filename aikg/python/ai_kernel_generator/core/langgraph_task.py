@@ -15,6 +15,7 @@
 """LangGraph-based task execution (replacing Conductor-based Task)."""
 
 import logging
+import os
 from typing import Optional, Dict, Any, Tuple
 from ai_kernel_generator.core.trace import Trace
 from ai_kernel_generator.core.agent.designer import Designer
@@ -203,6 +204,9 @@ class LangGraphTask:
         
         # Coder
         try:
+            # 添加调试日志
+            logger.info(f"[LangGraphTask] _init_agents: self.config.get('rag')={self.config.get('rag')}, config keys: {list(self.config.keys()) if self.config else 'None'}")
+            
             agents['coder'] = Coder(
                 op_name=self.op_name,
                 task_desc=self.task_desc,
@@ -283,11 +287,21 @@ class LangGraphTask:
         """
         # max_iterations 优先级：配置文件 > 默认值 20
         max_iterations = self.config.get("max_step", 20)
-        
+
+        # 获取 session_id（非 TUI 场景可为空；仅在流式输出开启时必填）
+        session_id = str(self.config.get("session_id") or "").strip()
+        stream_enabled = os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
+        if stream_enabled and not session_id:
+            raise ValueError("[LangGraphTask] config 中必须包含 session_id（AIKG_STREAM_OUTPUT=on）！")
+        task_label = str(self.config.get("task_label") or "").strip()
+        if not task_label:
+            raise ValueError("[LangGraphTask] config 中必须包含 task_label")
+
         state = {
             "op_name": self.op_name,
             "task_desc": self.task_desc,
             "task_id": self.task_id,
+            "task_label": task_label,
             "dsl": self.dsl,
             "framework": self.framework,
             "backend": self.backend,
@@ -304,6 +318,9 @@ class LangGraphTask:
             "meta_prompts": self.meta_prompts,
             "handwrite_suggestions": self.handwrite_suggestions,
         }
+
+        if session_id:
+            state["session_id"] = session_id
         
         # 合并初始代码（如果有）
         if init_task_info:
@@ -327,4 +344,3 @@ class LangGraphTask:
             return f"Workflow visualization saved to {output_path}"
         else:
             return WorkflowVisualizer.generate_mermaid(self.app)
-

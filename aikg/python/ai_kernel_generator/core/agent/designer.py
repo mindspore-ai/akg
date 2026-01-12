@@ -140,6 +140,8 @@ class Designer(AgentBase):
             "arch": self.arch,
             "task_desc": self.task_desc,
         }
+        if config and config.get("session_id"):
+            context["session_id"] = config["session_id"]
         super().__init__(context=context, config=config)
 
         # 使用新的 parser loader（不依赖 workflow.yaml）
@@ -235,7 +237,7 @@ class Designer(AgentBase):
             "agent_name": "designer",
             "framework": task_info.get("framework", ""),
             "hash": task_info.get("task_id", "Designer"),
-            "task_id": "",
+            "task_id": task_info.get("task_id", ""),
             "step": self.llm_step_count,
             "workflow_name": task_info.get("workflow_name", ""),
         }
@@ -250,9 +252,15 @@ class Designer(AgentBase):
         # ============ 处理Hint模式的输出 ============
         if enable_hint_mode and has_hint:
             import json
+            from ai_kernel_generator.utils.common_utils import ParserFactory
             try:
-                # 解析JSON格式的生成内容
-                result_dict = json.loads(llm_result)
+                # 使用robust方法解析JSON格式的生成内容（支持markdown代码块包裹等多种格式）
+                extracted_json = ParserFactory._extract_json_comprehensive(llm_result)
+                if extracted_json:
+                    result_dict = json.loads(extracted_json)
+                else:
+                    # 尝试直接解析
+                    result_dict = json.loads(llm_result)
                 sketch = result_dict.get("sketch", "")
                 reasoning = result_dict.get("reasoning", llm_reasoning)
                 

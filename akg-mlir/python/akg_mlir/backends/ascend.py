@@ -39,7 +39,7 @@ def run_akg_opt(
     output_file,
     akg_tools_dir=None,
     dyn_shape=False,
-    enable_akg_loop_fusion=False,
+    enable_loop_fusion=False,
     arch=None,
     dump_ir=False,
     dump_log_path=None
@@ -52,7 +52,7 @@ def run_akg_opt(
         output_file: Output MLIR file path
         akg_tools_dir: Directory containing akg tools (default: auto-detect)
         dyn_shape: Whether to enable dynamic shape optimization
-        enable_akg_loop_fusion: Whether to enable akg loop fusion
+        enable_loop_fusion: Whether to enable loop fusion
         arch: Architecture specification (optional)
         dump_ir: Whether to dump IR after all passes
         dump_log_path: Path to dump log file (optional)
@@ -71,8 +71,8 @@ def run_akg_opt(
 
     if dyn_shape:
         options.append("dynamic-shape=true")
-    if enable_akg_loop_fusion:
-        options.append("enable-akg-loop-fusion=1")
+    if not enable_loop_fusion:
+        options.append("enable-loop-fusion=0")
     if arch:
         options.append(f"arch={arch}")
 
@@ -96,105 +96,42 @@ def run_akg_opt(
         raise RuntimeError("mlir pipeline failed in case: " + os.path.basename(input_file) + "!\n") from e
 
 
-def run_bishengir_opt(
-    input_file,
-    output_file,
-    dump_ir=False
-):
-    """
-    Run bishengir-opt to convert MLIR to hfusion format.
-
-    Args:
-        input_file: Input MLIR file path
-        output_file: Output MLIR file path
-        dump_ir: Whether to dump IR after all passes
-
-    Returns:
-        subprocess.CompletedProcess result
-
-    Raises:
-        RuntimeError: If bishengir-opt execution fails
-    """
-    bisheng_opt = "bishengir-opt"
-    bisheng_cmd = [
-        bisheng_opt,
-        input_file,
-        "-convert-math-to-hfusion",
-        "-convert-linalg-to-hfusion",
-        "-convert-tensor-to-hfusion",
-        "-convert-arith-to-hfusion",
-        "-hfusion-reorder-ops",
-        "-o",
-        output_file,
-    ]
-
-    if dump_ir:
-        bisheng_cmd.append("-mlir-print-ir-after-all")
-
-    try:
-        result = subprocess.run(bisheng_cmd, check=True, capture_output=True, text=True)
-        logging.info("bishengir-opt success")
-        return result
-    except subprocess.CalledProcessError as e:
-        logging.error("run bishengir-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
-        raise RuntimeError("bishengir-opt failed in case: " + os.path.basename(input_file) + "!\n") from e
-
-
 def run_mlir_ascend_pipeline(
     input_file,
     output_file,
     akg_tools_dir=None,
     dyn_shape=False,
-    enable_akg_loop_fusion=False,
+    enable_loop_fusion=True,
     arch=None,
     dump_ir=False,
     dump_log_path=None,
-    run_bishengir=True
 ):
     """
-    Run complete MLIR pipeline for Ascend: akg-opt + bishengir-opt.
+    Run complete MLIR pipeline for Ascend: akg-opt.
 
     Args:
         input_file: Input MLIR file path
-        output_file: Final output MLIR file path (after bishengir-opt)
+        output_file: Final output MLIR file path
         akg_tools_dir: Directory containing akg tools (default: auto-detect)
         dyn_shape: Whether to enable dynamic shape optimization
-        enable_akg_loop_fusion: Whether to enable akg loop fusion
+        enable_loop_fusion: Whether to enable loop fusion
         arch: Architecture specification (optional)
         dump_ir: Whether to dump IR after all passes
         dump_log_path: Path to dump log file (optional)
-        run_bishengir: Whether to run bishengir-opt after akg-opt (default: True)
-
     Returns:
         Path to final output file
     """
-    # Step 1: Run akg-opt
-    if run_bishengir:
-        # Use temporary file for akg-opt output
-        akg_opt_output = output_file.replace(".mlir", "_akg_opt.mlir")
-    else:
-        akg_opt_output = output_file
-
     run_akg_opt(
         input_file=input_file,
-        output_file=akg_opt_output,
+        output_file=output_file,
         akg_tools_dir=akg_tools_dir,
         dyn_shape=dyn_shape,
-        enable_akg_loop_fusion=enable_akg_loop_fusion,
+        enable_loop_fusion=enable_loop_fusion,
         arch=arch,
         dump_ir=dump_ir,
         dump_log_path=dump_log_path
     )
-
-    # Step 2: Run bishengir-opt (if needed)
-    if run_bishengir:
-        run_bishengir_opt(
-            input_file=akg_opt_output,
-            output_file=output_file,
-            dump_ir=dump_ir
-        )
-        return output_file
-    return akg_opt_output
+    return output_file
 
 def ascend_compile(input_file, output_so_path):
     """ using bisheng-compile """
@@ -210,13 +147,17 @@ def ascend_compile(input_file, output_so_path):
         output_so_path
     ]
     logging.info("exec command: %s", compile_cmd)
-    subprocess.run(
-        compile_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True
-    )
+    try:
+        subprocess.run(
+            compile_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+    except subprocess.CalledProcessError as e:
+        logging.error("run bishengir-compile failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
+        raise RuntimeError("bishengir-compile failed in case: " + os.path.basename(input_file) + "!\n") from e
 
 
 def transform_data_to_ascend(

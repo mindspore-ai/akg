@@ -61,9 +61,7 @@ class Kernel:
             output_file=out_file,
             akg_tools_dir=akg_tools_dir,
             dyn_shape=self.dynamic,
-            enable_akg_loop_fusion=not self.dynamic,
-            dump_ir=True,
-            run_bishengir=True  # run bishengir-opt
+            dump_ir=True
         )
 
         output_so_path = os.path.join(self.output_so_dir, f"{self.kernel_name}.so")
@@ -78,9 +76,14 @@ class Kernel:
     def run(self, *args, **kwargs):
         """ launch .so file by akg_ascend_backend """
         n = len(args)
+
+        # When the PTA side inherits from MLIR, all attributes of data_args here are data;
+        # when it inherits from Triton, the last dimension represents the number of elements.
+        data_args = args
+        # data_args = args[:n-1]
         try:
             input_for_mod_ctypes = transform_data_to_ascend(
-                args[:n-1],
+                data_args,
                 self.kernel_name,
                 self.output_indexes,
                 self.dynamic,

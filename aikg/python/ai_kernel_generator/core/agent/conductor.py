@@ -64,6 +64,8 @@ class Conductor(AgentBase):
             "framework": framework,
             "arch": arch,
         }
+        if config and config.get("session_id"):
+            context["session_id"] = config["session_id"]
         super().__init__(context=context, config=config)
 
         self.op_name = op_name

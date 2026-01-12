@@ -25,6 +25,16 @@ from ai_kernel_generator.utils.common_utils import get_md5_hash
 
 logger = logging.getLogger(__name__)
 
+def _auto_detect_device() -> str:
+    """自动检测可用的设备"""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except ImportError:
+        pass
+    return "cpu"
+
 class VectorStore(ABC):
     """
     基于RAG的优化方案检索器，检索最相似的算子调度方案
@@ -71,10 +81,12 @@ class VectorStore(ABC):
         os.environ["OMP_NUM_THREADS"] = "8"
         self.database_path = database_path
         self.features = features or ["op_name", "op_type", "input_specs", "output_specs", "computation", "schedule"]
+        self.index_name = index_name
         self.index_path = str(Path(self.database_path) / index_name)
         self.config = config or {}
         self.enable_vector_store = True
         self.embedding_model = self._load_embedding_model(embedding_model_name) 
+        self.is_exist = (Path(self.index_path) / "index.faiss").exists()
         self.vector_store = self._load_or_create_store(None)
         self._initialized = True
 
@@ -87,30 +99,33 @@ class VectorStore(ABC):
             try:
                 embedding = HuggingFaceEmbeddings(
                     model_name=model_name,
-                    model_kwargs={'device': self.config.get("database_config", {}).get("embedding_device", "cpu")},
+                    model_kwargs={'device': _auto_detect_device()},
                     encode_kwargs={'normalize_embeddings': True}
                 )
                 return embedding
-            except Exception:
-                logger.warning(f"Failed to load HuggingFace model: {model_name}")
+            except Exception as e:
+                logger.warning(f"Failed to load HuggingFace model: {model_name}, error: {e}")
                 return None
         
-        embedding = load_huggingface_embedding_model(embedding_model_name)
-        if embedding:
-            return embedding
-        
-        logger.warning("Automatic download of embedding model failed, using local embedding model")
-        value = os.getenv("EMBEDDING_MODEL_PATH")  # 获取环境变量
-        if value is None:
-            logger.warning("EMBEDDING_MODEL_PATH environment variable not set")
-        else:
-            embedding = load_huggingface_embedding_model(value)
+        # 优先使用本地模型路径
+        local_model_path = os.path.join(os.path.expanduser("~"), ".aikg", "text2vec-large-chinese")
+        if os.path.exists(local_model_path):
+            logger.info(f"Trying to load local embedding model from {local_model_path}")
+            embedding = load_huggingface_embedding_model(local_model_path)
             if embedding:
                 return embedding
-            
-        logger.warning("The embedding model was not found and the vector index library could not be enabled.")
-        self.enable_vector_store = False
-        return None
+            logger.warning(f"Failed to load local embedding model from {local_model_path}")
+        else:
+            logger.info(f"Local embedding model not found at {local_model_path}")
+        
+        # 所有加载尝试都失败，抛出异常
+        error_msg = (
+            f"Failed to load embedding model '{embedding_model_name}'. "
+            f"Please download the embedding model to local by running: "
+            f"bash download.sh --with_local_model"
+        )
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
     
     def _load_or_create_store(self, other_args: Any = None):
         """加载或创建向量存储"""
@@ -120,8 +135,8 @@ class VectorStore(ABC):
         index_path = Path(self.index_path)
         
         # 如果索引不存在则创建
-        if not (index_path / "index.faiss").exists():
-            logger.info(f"Building operator feature vector database: {index_path.name}...")
+        if not self.is_exist:
+            logger.info(f"Building vector database: {index_path.name}...")
             return self._build_vector_store(other_args)
         
         # 加载现有索引
@@ -232,15 +247,28 @@ class VectorStore(ABC):
         if not self.enable_vector_store:
             return
         
+        op_dir = str(Path(self.database_path) / doc_path)
         existing_ids = list(self.vector_store.index_to_docstore_id.values())
         for doc_id in existing_ids:
             existing_doc = self.vector_store.docstore.search(doc_id)
-            if existing_doc.metadata.get("file_path") == doc_path:
+            if existing_doc.metadata.get("file_path") == op_dir:
                 self.vector_store.delete([doc_id])
                 self.vector_store.save_local(self.index_path)
                 logger.info(f"Successfully removed document with path={doc_path} from vector index")
                 return
         logger.info(f"Document with path={doc_path} not found in vector index")
+    
+    def has_doc(self, doc_path: str):
+        """检查文档是否已存在"""
+        if not self.enable_vector_store:
+            return False
+        op_dir = str(Path(self.database_path) / doc_path)
+        existing_ids = list(self.vector_store.index_to_docstore_id.values())
+        for doc_id in existing_ids:
+            existing_doc = self.vector_store.docstore.search(doc_id)
+            if existing_doc.metadata.get("file_path") == op_dir:
+                return True
+        return False
     
     def clear(self):
         """清空向量存储"""

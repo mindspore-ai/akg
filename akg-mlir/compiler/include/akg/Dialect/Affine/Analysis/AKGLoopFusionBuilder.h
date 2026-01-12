@@ -17,108 +17,105 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_AKGLOOPFUSIONBUILDER_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_AKGLOOPFUSIONBUILDER_H_
 
-#include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
-#include "akg/Utils/AnalysisCommon.hpp"
-
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
 
+#include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
+#include "akg/Utils/AnalysisCommon.hpp"
+
 namespace mlir {
 namespace akg {
 
-// Forward declarations
-enum LoopTransform {
-  Replicate,
-  Permute,
-  StripMine,
-  Collapse,
-  BackTracking
-};
+enum LoopTransform { Replicate, Permute, StripMine, Collapse, BackTracking };
 
-// Group of nodes that can be fused together
 struct Group {
-public:
-  Group(unsigned groupId, unsigned rootId, affine::AffineForOp root) 
-  : groupId(groupId), rootId(rootId), root(root) {}
+ public:
+  Group(unsigned groupId, unsigned rootId, affine::AffineForOp root) : groupId(groupId), rootId(rootId), root(root) {}
+
+  // Group management
+  affine::AffineForOp getLeadingFor() const { return root; }
+  void addNode(unsigned nodeId) { nodesId.push_back(nodeId); }
+  void setIsGlobalOut(bool isOut) { isGlobalOut = isOut; }
+
+  // Debug and print
+  void dump() const { print(llvm::errs()); }
+  void print(llvm::raw_ostream &os) const;
+  std::string getGroupTemplateString() const;
 
   unsigned groupId;
   unsigned rootId;
   affine::AffineForOp root;
   std::vector<unsigned> nodesId;
-
   OperatorTemplate groupTemplate{OperatorTemplate::Default};
   bool isGlobalOut{false};
   std::vector<unsigned> fusedGroupId;
   std::unordered_map<unsigned, std::vector<LoopTransform>> nodeTransformRecords;
 
-  affine::AffineForOp getLeadingFor() const { return root; }
-  void addNode(unsigned nodeId) { nodesId.push_back(nodeId); }
-  void setIsGlobalOut(bool isOut) { isGlobalOut = isOut; }
-  void dump() const { print(llvm::errs()); }
-  void print(llvm::raw_ostream &os) const;
-  std::string getGroupTemplateString() const;
-
-private:
+ private:
   std::unordered_map<int, std::string> loopTransformToStr{
     {static_cast<int>(LoopTransform::Replicate), "Replicate"},
     {static_cast<int>(LoopTransform::Permute), "Permute"},
     {static_cast<int>(LoopTransform::StripMine), "StripMine"},
     {static_cast<int>(LoopTransform::Collapse), "Collapse"},
-    {static_cast<int>(LoopTransform::BackTracking), "BackTracking"}
-  };
+    {static_cast<int>(LoopTransform::BackTracking), "BackTracking"}};
 };
 using GroupPtr = std::shared_ptr<Group>;
 
-// Loop nest state collector for analyzing loop structures
 struct LoopNestStateCollector {
+  void collect(Operation *opToWalk);
+
   llvm::SmallVector<affine::AffineForOp, 4> forOps;
   llvm::SmallVector<Operation *, 4> loadOpInsts;
   llvm::SmallVector<Operation *, 4> storeOpInsts;
   llvm::SmallVector<Operation *, 4> otherInsts;
   bool hasNonAffineRegionOp = false;
-
-  void collect(Operation *opToWalk);
 };
 
-// Extended MemRef dependence graph for fusion analysis
-// Inherits from MemRefDependenceGraph and adds fusion-specific functionality
 struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
-public:
+ public:
   explicit MemRefDependenceGraphForFusion(Block *block) : MemRefDependenceGraph(block, false) {}
 
+  // Group management
   GroupPtr getGroup(unsigned groupId);
   GroupPtr getGroupByNode(unsigned nodeId);
-  std::unordered_set<GroupPtr> getGroupsByNode(llvm::DenseSet<unsigned> nodeIds);
+
+  // Graph initialization
   bool init();
-  void print(llvm::raw_ostream &os) const override;
-  void dump() const override { print(llvm::errs()); }
   void createInitNode(llvm::DenseMap<Value, llvm::SetVector<unsigned>> &memrefAccesses);
+  bool createEdges(const llvm::DenseMap<Value, llvm::SetVector<unsigned>> &memrefAccesses);
+
+  // Group type analysis
   OperatorTemplate getGroupType(const std::vector<unsigned> &nodes);
   bool elementwiseMatch(Operation *op);
   int getMemrefSourceOfNode(unsigned id);
-  bool isGlobalMemref(unsigned id);
 
+  // Dependency analysis
+  bool isDependencyInGraph(unsigned fromGroupId, unsigned toGroupId);
+  std::vector<unsigned> getDependentGroups(unsigned groupId);
+
+  // Debug and print
+  void print(llvm::raw_ostream &os) const override;
+  void dump() const override { print(llvm::errs()); }
 
   std::unordered_map<unsigned, GroupPtr> groups;
   std::unordered_map<unsigned, GroupPtr> nodeToGroup;
   unsigned nextGroupId = 0;
 };
 
-// Helper class for fusion code generation
 struct FusionCodeGenHelper {
-public:
+ public:
   explicit FusionCodeGenHelper(MemRefDependenceGraphForFusion &mdg) : mdg(mdg) {}
 
+  // Alias management
   unsigned getAliasId(unsigned srcId);
-  // Perform vertical fusion (V-fusion)
-  void doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp sibAffineForOp,
-               affine::AffineForOp dstAffineForOp, unsigned maxLegalFusionDepth, unsigned dstLoopDepthTest);
 
-  // Perform horizontal fusion (H-fusion)
-  void doHFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
-               affine::AffineForOp dstAffineForOp);
+  // Fusion operation: perform different types of loop fusion
+  void doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp);
+  void doHFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp);
+  void doIFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp);
 
+ private:
   MemRefDependenceGraphForFusion &mdg;
   std::unordered_map<unsigned, unsigned> nodeAlias;
 };

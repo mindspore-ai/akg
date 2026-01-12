@@ -30,9 +30,9 @@
 // CHECK-NEXT:                 %8 = math.log %7 : f32
 // CHECK-NEXT:                 affine.store %8, %arg3[%arg6] : memref<233008xf32>
 // CHECK-NEXT:               }
-// CHECK-NEXT:             } {reduction_loop}
+// CHECK-NEXT:             } {reduction}
 // CHECK-NEXT:           }
-// CHECK-NEXT:         } {reduction_loop}
+// CHECK-NEXT:         } {reduction}
 // CHECK-NEXT:       }
 // CHECK-NEXT:       return
 // CHECK-NEXT:     }

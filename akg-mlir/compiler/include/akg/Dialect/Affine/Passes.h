@@ -17,10 +17,10 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_PASSES_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_PASSES_H_
 
-#include "akg/Dialect/Affine/Analysis/AutoTiling.h"
-#include "akg/Dialect/Affine/Analysis/Axis.h"
-#include "akg/Dialect/Affine/Analysis/Config.h"
-#include "akg/Dialect/Affine/Analysis/Model.h"
+#include "akg/Analysis/AutoTiling.h"
+#include "akg/Analysis/Axis.h"
+#include "akg/Analysis/Config.h"
+#include "akg/Analysis/Model.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopParallelize.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopTiling.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopUnroll.h"
@@ -31,9 +31,6 @@
 #include "akg/Dialect/Affine/Transforms/AffineLoopReorder.h"
 #include "akg/Dialect/Affine/Transforms/AffineReductionAnnotation.h"
 #include "akg/Dialect/Affine/Transforms/AKGLoopFusion.h"
-#include "akg/Dialect/Affine/Transforms/VectorTransferTensorize.h"
-#include "akg/Dialect/Affine/Transforms/TensorizeLiveOuts.h"
-#include "akg/Dialect/Affine/Transforms/AffineForVectorize.h"
 #include "akg/Dialect/Affine/Transforms/AffineMemoryPromotion.h"
 #include "akg/Dialect/Affine/Transforms/AffineTailBlockTiling.h"
 #include "akg/Dialect/Affine/Transforms/ExtractIfOp.h"
@@ -46,10 +43,6 @@
 #include "akg/Dialect/Affine/Transforms/SimplifyShape.h"
 #include "akg/Dialect/Affine/Transforms/UnifyShape.h"
 #include "akg/Dialect/Affine/Transforms/WorkaroundFixReduceInitialization.h"
-#include "akg/Dialect/Affine/Transforms/TilingFunc.h"
-#include "akg/Dialect/Affine/Transforms/InsertLoadAndStore.h"
-#include "akg/Dialect/Affine/Transforms/AddOutParameter.h"
-#include "akg/Dialect/Affine/Transforms/MemrefTilingFunc.h"
 #include "akg/Dialect/Affine/Transforms/BF16ToF32.h"
 
 namespace mlir {

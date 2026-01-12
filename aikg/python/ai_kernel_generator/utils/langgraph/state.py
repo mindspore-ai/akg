@@ -25,6 +25,8 @@ class KernelGenState(TypedDict, total=False):
     op_name: str
     task_desc: str
     task_id: str
+    task_label: str
+    session_id: str  # 会话 ID，用于 session 隔离和 hook 管理
     dsl: str
     framework: str
     backend: str
@@ -77,4 +79,3 @@ class KernelGenState(TypedDict, total=False):
     framework_api_doc: Optional[str]
     backend_api_doc: Optional[str]
     workflow_name: Optional[str]
-
