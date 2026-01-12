@@ -448,6 +448,7 @@ struct ConvertMindSporeToTosaPass : public ConvertMindSporeToTosaBase<ConvertMin
     target.addLegalOp<mindspore::SplitOp>();
     target.addLegalOp<mindspore::IsnanOp>();
     target.addLegalOp<mindspore::IsinfOp>();
+    target.addLegalOp<mindspore::IsFiniteOp>();
     target.addLegalOp<mindspore::InplaceAssignOp>();
     target.addLegalOp<mindspore::ReduceAllOp>();
     target.addLegalOp<mindspore::ReduceAnyOp>();

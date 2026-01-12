@@ -24,4 +24,6 @@ add_mlir_dialect_library(AKGSCFPasses
   MLIRSideEffectInterfaces
   MLIRSupport
   MLIRTransformUtils
+  AKGMLIRAnalysis
+  BiShengIRHACCDialect
   )

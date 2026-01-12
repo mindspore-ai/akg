@@ -257,6 +257,139 @@ struct PropagateMemRefAllocOp : public OpRewritePattern<memref::AllocOp> {
   }
 };
 
+struct PropagateMemRefExpandShapeOp : public OpRewritePattern<memref::ExpandShapeOp> {
+  using OpRewritePattern<memref::ExpandShapeOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(memref::ExpandShapeOp op, PatternRewriter &rewriter) const override {
+    SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
+    mlir::Value srcVal = op.getSrc();
+    mlir::Value resVal = op.getResult();
+
+    // Ensure source has symbolic shape
+    if (!analysis.hasSymbolicShape(srcVal.getType())) {
+      srcVal.setType(analysis.createNewSymbolicShape(srcVal.getType()));
+    }
+
+    // If result already has symbolic shape, skip
+    if (analysis.hasSymbolicShape(resVal.getType())) {
+      return success();
+    }
+
+    // Get source symbolic shape
+    std::optional<llvm::SmallVector<std::string>> srcSymShape = analysis.getSymbolicShape(srcVal.getType());
+    if (!srcSymShape) {
+      resVal.setType(analysis.createNewSymbolicShape(resVal.getType()));
+      return success();
+    }
+
+    // Create result symbolic shape based on reassociation
+    // For expand_shape, the symbolic shape array length should match the input's symbolic shape array length
+    // because each input dimension expands to multiple output dimensions, but only the first output dim
+    // in each group inherits the input dimension's symbolic shape
+    auto resultType = cast<MemRefType>(resVal.getType());
+    auto reassociation = op.getReassociationIndices();
+    llvm::SmallVector<std::string> resSymShape;
+    resSymShape.reserve(srcSymShape->size());
+
+    // Map input dimensions to output dimensions based on reassociation
+    // For each input dimension group, find the first dynamic output dimension and use the input's symbolic shape
+    for (size_t groupIdx = 0; groupIdx < reassociation.size(); ++groupIdx) {
+      const auto &group = reassociation[groupIdx];
+      bool foundDynamic = false;
+
+      // Find the first dynamic output dimension in this group
+      for (int64_t outDim : group) {
+        if (resultType.isDynamicDim(outDim)) {
+          // Use the input dimension's symbolic shape for the first dynamic output dim in the group
+          if (groupIdx < srcSymShape->size()) {
+            resSymShape.push_back((*srcSymShape)[groupIdx]);
+          } else {
+            resSymShape.push_back(analysis.newSymbolicDim());
+          }
+          foundDynamic = true;
+          break;
+        }
+      }
+
+      // If no dynamic dimension found in this group, create a new symbolic dim
+      if (!foundDynamic && groupIdx < srcSymShape->size()) {
+        resSymShape.push_back((*srcSymShape)[groupIdx]);
+      } else if (!foundDynamic) {
+        resSymShape.push_back(analysis.newSymbolicDim());
+      }
+    }
+
+    resVal.setType(analysis.updateSymbolicShape(resVal.getType(), resSymShape));
+    return success();
+  }
+};
+
+struct PropagateMemRefSubviewOp : public OpRewritePattern<memref::SubViewOp> {
+  using OpRewritePattern<memref::SubViewOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(memref::SubViewOp op, PatternRewriter &rewriter) const override {
+    SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
+    mlir::Value srcVal = op.getSource();
+    mlir::Value resVal = op.getResult();
+
+    // Ensure source has symbolic shape
+    if (!analysis.hasSymbolicShape(srcVal.getType())) {
+      srcVal.setType(analysis.createNewSymbolicShape(srcVal.getType()));
+    }
+
+    // If result already has symbolic shape, skip
+    if (analysis.hasSymbolicShape(resVal.getType())) {
+      return success();
+    }
+
+    // Get source symbolic shape
+    std::optional<llvm::SmallVector<std::string>> srcSymShape = analysis.getSymbolicShape(srcVal.getType());
+    if (!srcSymShape) {
+      resVal.setType(analysis.createNewSymbolicShape(resVal.getType()));
+      return success();
+    }
+
+    // For subview, we need to compute the new symbolic shape based on sizes
+    // Each output dimension i corresponds to a slice of input dimension i
+    // The symbolic shape should inherit from the source dimension when possible
+    auto resultType = cast<MemRefType>(resVal.getType());
+
+    // Get the static sizes
+    auto staticSizes = op.getStaticSizes();
+
+    llvm::SmallVector<std::string> resSymShape;
+    resSymShape.reserve(resultType.getRank());
+
+    // For subview, each output dimension i maps to input dimension i
+    // For dynamic dimensions, inherit the symbolic shape from source
+    // For static dimensions, use the static size
+    for (int64_t i = 0; i < resultType.getRank(); ++i) {
+      if (resultType.isDynamicDim(i)) {
+        // Dynamic dimension - check if size is statically specified
+        int64_t size = staticSizes[i];
+        if (size != ShapedType::kDynamic) {
+          // Static size specified in subview operation
+          resSymShape.push_back(std::to_string(size));
+        } else {
+          // Dynamic size - inherit symbolic shape from source dimension i
+          // Subview creates a view, so the dimension's symbolic shape should
+          // be inherited from the source, even though the actual size may differ
+          if (i < static_cast<int64_t>(srcSymShape->size())) {
+            resSymShape.push_back((*srcSymShape)[i]);
+          } else {
+            // Fallback: create new symbolic dim if source doesn't have enough dimensions
+            resSymShape.push_back(analysis.newSymbolicDim());
+          }
+        }
+      } else {
+        // Static dimension - use the static size from result type
+        resSymShape.push_back(std::to_string(resultType.getDimSize(i)));
+      }
+    }
+
+    resVal.setType(analysis.updateSymbolicShape(resVal.getType(), resSymShape));
+    return success();
+  }
+};
+
 template <typename OpTy>
 struct PropagateSameOprandsAndResultsShapeLinalgOp : public OpRewritePattern<OpTy> {
   using OpRewritePattern<OpTy>::OpRewritePattern;
@@ -547,6 +680,8 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
     // Add the generated patterns to the list.
     (void)patterns.add<PropagateMemRefDimOp>(ctx);
     (void)patterns.add<PropagateMemRefAllocOp>(ctx);
+    (void)patterns.add<PropagateMemRefExpandShapeOp>(ctx);
+    (void)patterns.add<PropagateMemRefSubviewOp>(ctx);
     (void)patterns.add<PropagateElementWiseOp<mindspore::AddOp>>(ctx);
     (void)patterns.add<PropagateElementWiseOp<mindspore::SubOp>>(ctx);
     (void)patterns.add<PropagateElementWiseOp<mindspore::MulOp>>(ctx);
@@ -586,26 +721,40 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
 
     auto convertToShapeInfo = [&](std::optional<llvm::SmallVector<std::string>> symShape) -> akgglobal::ShapeInfo {
       akgglobal::ShapeInfo record;
-      std::copy((*symShape).begin(), (*symShape).end(), std::back_inserter(record));
+      if (symShape.has_value()) {
+        std::copy((*symShape).begin(), (*symShape).end(), std::back_inserter(record));
+      }
       return record;
     };
     // 1. init inputs
     for (size_t argIdx = 0; argIdx < func.getBody().front().getArguments().size(); ++argIdx) {
       auto arg = func.getBody().front().getArgument(argIdx);
-      auto symShape = analysis.getSymbolicShape(arg.getType());
-      auto record = convertToShapeInfo(symShape);
-      hostShapes[argIdx] = record;
+      // Only process memref/tensor types, use empty ShapeInfo for scalar types like i64
+      if (isa<RankedTensorType, MemRefType>(arg.getType())) {
+        auto symShape = analysis.getSymbolicShape(arg.getType());
+        auto record = convertToShapeInfo(symShape);
+        hostShapes[argIdx] = record;
+      } else {
+        // For scalar types (e.g., i64), use empty ShapeInfo to maintain index consistency
+        hostShapes[argIdx] = akgglobal::ShapeInfo();
+      }
     }
 
     // 2. init outputs and indices
     std::unordered_set<size_t> outputIndices;
     func.walk([&](func::ReturnOp op) {
       for (mlir::Value opnd : op.getOperation()->getOperands()) {
-        auto symShape = analysis.getSymbolicShape(opnd.getType());
-        auto record = convertToShapeInfo(symShape);
+        // Only process memref/tensor types, use empty ShapeInfo for scalar types
         auto outIdx = hostShapes.size();
-        (void)outputIndices.insert(outIdx);
-        hostShapes[outIdx] = record;
+        if (isa<RankedTensorType, MemRefType>(opnd.getType())) {
+          auto symShape = analysis.getSymbolicShape(opnd.getType());
+          auto record = convertToShapeInfo(symShape);
+          (void)outputIndices.insert(outIdx);
+          hostShapes[outIdx] = record;
+        } else {
+          // For scalar types, use empty ShapeInfo
+          hostShapes[outIdx] = akgglobal::ShapeInfo();
+        }
       }
     });
     tool.initHost(hostShapes, outputIndices);

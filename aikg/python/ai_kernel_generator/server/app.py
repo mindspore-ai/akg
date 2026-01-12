@@ -1,18 +1,23 @@
 import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 import logging
 
 from ai_kernel_generator.server.job_manager import get_job_manager
-from ai_kernel_generator.core.worker.manager import get_worker_manager
+from ai_kernel_generator.core.worker.manager import (
+    get_worker_manager,
+    register_local_worker,
+)
 from ai_kernel_generator.core.worker.remote_worker import RemoteWorker
+from ai_kernel_generator.cli.server.cli_workflow_routes import router as cli_workflow_router
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AIKG Server")
+app.include_router(cli_workflow_router)
 
 class JobSubmitRequest(BaseModel):
     op_name: str
@@ -44,6 +49,12 @@ class WorkerRegisterRequest(BaseModel):
     backend: str
     arch: str
     capacity: int = 1
+    tags: List[str] = []
+
+class LocalWorkerRegisterRequest(BaseModel):
+    backend: str
+    arch: str
+    devices: List[int]
     tags: List[str] = []
 
 @app.post("/api/v1/jobs/submit")
@@ -107,6 +118,31 @@ async def register_worker(req: WorkerRegisterRequest):
     )
     return {"status": "registered"}
 
+@app.post("/api/v1/workers/register-local")
+async def register_local_worker_api(req: LocalWorkerRegisterRequest):
+    """本地 Worker 注册接口（无需端口，仅适用于本机 server）"""
+    logger.info(
+        "Registering local worker: backend=%s arch=%s devices=%s",
+        req.backend,
+        req.arch,
+        req.devices,
+    )
+    devices = req.devices or []
+    if not devices:
+        raise HTTPException(status_code=400, detail="devices 不能为空")
+    if len(set(devices)) != len(devices):
+        raise HTTPException(status_code=400, detail="devices 不允许重复")
+    if any(d < 0 for d in devices):
+        raise HTTPException(status_code=400, detail="devices 不能包含负数")
+
+    await register_local_worker(
+        devices,
+        backend=req.backend,
+        arch=req.arch,
+        tags=set(req.tags),
+    )
+    return {"status": "registered", "capacity": len(devices)}
+
 @app.get("/api/v1/workers/status")
 async def get_workers_status():
     """查询所有 Worker 状态"""
@@ -133,8 +169,27 @@ def start_server(host: Optional[str] = None, port: Optional[int] = None):
     if port is None:
         port = int(os.environ.get("AIKG_SERVER_PORT", "8000"))
     
+    def _parse_ws_env(value: Optional[str]):
+        if value is None:
+            return _UNSET
+        value = value.strip().lower()
+        if value in {"", "none", "null", "off", "disable", "disabled"}:
+            return None
+        return float(value)
+
+    _UNSET = object()
+
+    ws_ping_interval = _parse_ws_env(os.environ.get("AIKG_WS_PING_INTERVAL"))
+    ws_ping_timeout = _parse_ws_env(os.environ.get("AIKG_WS_PING_TIMEOUT"))
+
+    kwargs = {}
+    if ws_ping_interval is not _UNSET:
+        kwargs["ws_ping_interval"] = ws_ping_interval
+    if ws_ping_timeout is not _UNSET:
+        kwargs["ws_ping_timeout"] = ws_ping_timeout
+
     logger.info(f"Starting AIKG Server on {host}:{port}")
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, **kwargs)
 
 if __name__ == "__main__":
     start_server()

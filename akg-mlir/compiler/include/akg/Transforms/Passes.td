@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2025 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,9 +35,9 @@ def CopyRemoval : Pass<"copy-removal"> {
 }
 
 def CopyElision : Pass<"copy-elision"> {
-  let summary = "Remove unecessary copy operations";
+  let summary = "Remove unnecessary copy operations";
   let description = [{
-    Remove unecessary copy operations
+    Remove unnecessary copy operations
   }];
   let constructor = "mlir::createCopyElisionPass()";
 }
@@ -103,6 +103,16 @@ def AKGFuncOutlining : Pass<"akg-func-outlining", "mlir::ModuleOp"> {
 def AKGParallelLaunch : Pass<"akg-parallel-launch","mlir::ModuleOp"> {
   let summary = "add support parallel launch callback for Mindspore runtimes";
   let constructor = "mlir::createAKGParallelLaunchPass()";
+}
+
+def NPUAutoTiling : Pass<"npu-auto-tiling", "mlir::ModuleOp"> {
+  let summary = "Auto tile loop nests for NPU";
+  let constructor = "mlir::createNPUAutoTilingPass()";
+}
+
+def AddOutParameter : Pass<"add-out-parameter", "mlir::ModuleOp"> {
+  let summary = "This pass applies to adding out parameters";
+  let constructor = "mlir::createAddOutParameterPass()";
 }
 
 #endif // AKG_MLIR_TRANSFORMS_PASSES

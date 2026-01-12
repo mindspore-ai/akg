@@ -5,7 +5,7 @@ langchain-community
 langgraph>=1.0.0
 autopep8
 jinja2
-numpy < 2 # mindspore related
+numpy
 httpx
 ollama
 pandas
@@ -13,10 +13,11 @@ pybind11
 pytest
 pytest-asyncio
 tiktoken
-torch
-sentence-transformers
 einops
 fastapi
 uvicorn
 python-multipart
-Ninja
+importlib-metadata
+typer
+textual
+websockets

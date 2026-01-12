@@ -20,7 +20,7 @@
 #include <iterator>
 #include <memory>
 #include <unordered_set>
-#include "akg/Dialect/Affine/Analysis/AutoTiling.h"
+#include "akg/Analysis/AutoTiling.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Utils/AnalysisForGpu.hpp"
@@ -178,7 +178,7 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   std::string arch{mlir::akg::kSoc910B2};
   std::string feature{mlir::kNEONInstructionSet};
 
-  mlir::akg::autotiling::TilingSolverPtr solver{nullptr};
+  mlir::autotiling::TilingSolverPtr solver{nullptr};
   size_t levelToTile{1};
 
   SmallVector<unsigned, 6> bandTileSizes;
@@ -481,8 +481,8 @@ void AKGLoopTiling::getTileSizes() {
 
     for (size_t level = 0; level < levelToTile; ++level) {
       // TODO(akg-dev): Multiple band
-      mlir::akg::autotiling::getTileSizeWithSolver(solver, curBand, &bandTileSizes,
-                                                   mlir::akg::autotiling::TilingTaskDesc(currentBandIdx, level));
+      mlir::autotiling::getTileSizeWithSolver(solver, curBand, &bandTileSizes,
+                                                   mlir::autotiling::TilingTaskDesc(currentBandIdx, level));
     }
   } else {
     if (!tileSizes.empty() && tileSize == 1) {
@@ -1559,7 +1559,7 @@ void AKGLoopTiling::runCudaOperation() {
   tileEachBand();
 
   if (useAutoTiling && solver) {
-    auto configSolver = std::make_shared<mlir::akg::autotiling::GlobalConfigSolver>(solver);
+    auto configSolver = std::make_shared<mlir::autotiling::GlobalConfigSolver>(solver);
 
     configSolver->solve(funcOp);
 
@@ -1631,7 +1631,7 @@ void AKGLoopTiling::runOnOperation() {
   }
 
   if (useAutoTiling) {
-    auto initGraph = mlir::akg::autotiling::parseIr(funcOp, bands);
+    auto initGraph = mlir::autotiling::parseIr(funcOp, bands);
     initGraph->setHardware(target);
     initGraph->setFeature(feature);
     initGraph->setArch(arch);
@@ -1651,8 +1651,8 @@ void AKGLoopTiling::runOnOperation() {
       funcOp->setAttr("npu.multiTileSizes", builder.getArrayAttr(tileSizeAttrs));
     }
 
-    auto modelGraph = mlir::akg::autotiling::buildModelGraph(initGraph);
-    solver = mlir::akg::autotiling::getHeuristicTilingSolver(modelGraph);
+    auto modelGraph = mlir::autotiling::buildModelGraph(initGraph);
+    solver = mlir::autotiling::getHeuristicTilingSolver(modelGraph);
     levelToTile = modelGraph->levelToTile;
   }
 

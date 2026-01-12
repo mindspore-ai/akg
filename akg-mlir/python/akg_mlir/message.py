@@ -24,7 +24,7 @@ import subprocess
 import shutil
 
 from .utils.cpu_profiling_wrapper import wrap_timer_func
-from .backends.ascend import run_akg_opt, run_bishengir_opt
+from .backends.ascend import run_akg_opt
 
 HOST_SHAPES = "hostShapes"
 DEVICE_SHAPES = "deviceShapes"
@@ -117,7 +117,7 @@ class AkgMlirDriver:
         repo_path: str = "",
         profiling_trails=0,
         runtime_provider="MindSpore",
-        enable_akg_loop_fusion=False,
+        enable_loop_fusion=True,
     ):
         super().__init__()
 
@@ -140,7 +140,7 @@ class AkgMlirDriver:
         self.repo_path = repo_path
         self.profiling_trails = profiling_trails
         self.runtime_provider = runtime_provider
-        self.enable_akg_loop_fusion = enable_akg_loop_fusion
+        self.enable_loop_fusion = enable_loop_fusion
 
         with open(input_file, "r", encoding='utf-8') as f:
             kernel_info = json.loads(f.read())
@@ -289,7 +289,7 @@ class AkgMlirDriver:
             output_file=out_file,
             akg_tools_dir=self.akg_tools_dir,
             dyn_shape=dyn_shape,
-            enable_akg_loop_fusion=self.enable_akg_loop_fusion,
+            enable_loop_fusion=self.enable_loop_fusion,
             arch=self.arch,
             dump_ir=self.dump_ir,
             dump_log_path=dump_log_path
@@ -330,16 +330,6 @@ class AkgMlirDriver:
         npu_compiler_path = get_npucompiler_path()
         input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
         so_file = os.path.join(self.output_dir, kernel_name + ".so")
-
-        if self.enable_akg_loop_fusion:
-            opt_file = os.path.join(self.output_dir, kernel_name + "_opt.mlir")
-            run_bishengir_opt(
-                input_file=input_file,
-                output_file=opt_file,
-                dump_ir=self.dump_ir
-            )
-            input_file = opt_file
-
         cmd = [
             npu_compiler_path,
             input_file,
@@ -351,7 +341,7 @@ class AkgMlirDriver:
             so_file,
         ]
 
-        if self.enable_akg_loop_fusion:
+        if self.enable_loop_fusion:
             cmd.append("-enable-hfusion-compile=false")
         else:
             cmd.append("-enable-hfusion-compile=true")

@@ -17,9 +17,9 @@
 #ifndef AKG_UTILS_ANALYSISCOMMON_H
 #define AKG_UTILS_ANALYSISCOMMON_H
 
-#include <algorithm>
-#include <cmath>
 #include <string>
+#include <unordered_map>
+#include <vector>
 #include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "llvm/ADT/DenseSet.h"
@@ -57,7 +57,8 @@ constexpr auto kOperatorTypeStr = "OperatorType";
 constexpr auto kReduceStr = "Reduce";
 constexpr auto kReductionAxesStr = "reduction_axes";
 constexpr auto kReductionTypeStr = "reduction_type";
-constexpr auto kReductionLoopAttr = "reduction_loop";
+constexpr auto kReductionLoopAttr = "reduction";
+constexpr auto kVectorSize = 4096;
 constexpr auto kVectorize128Bit = 128;
 constexpr auto kVectorize256Bit = 256;
 constexpr auto kVectorize512Bit = 512;
@@ -70,8 +71,14 @@ constexpr auto kTileForOneAttr = "__tiled_for___1";
 constexpr auto kMapForToForallAttr = "map_for_to_forall";
 constexpr auto kVectorAttr = "vector";
 constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
+constexpr auto kBlockDimAttr = "hacc.block_dim";
+constexpr auto kBlockDimSize = 40;
 
 
+const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 100000037, 100000039, 100000049,
+                                         100000073, 100000079, 100000081, 100000091};
+const std::vector<unsigned> primeTailSteps = {100000153, 100000157, 100000163, 100000169, 100000171, 100000177,
+                                             100000181, 100000183, 100000187, 100000189};
 enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduce, Matmul, Conv };
 const std::unordered_map<int, std::string> operatorTemplateMap = {{0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"},
                                                                   {3, "Reshape"}, {4, "Transpose"},   {5, "Reduce"},
@@ -603,9 +610,13 @@ class CommonUtils {
         SmallVector<Operation *, 8> axesSrc;
         collectRelatedAxes(idx, axesSrc);
         (void)std::unique(axesSrc.begin(), axesSrc.end());
+        // Skip empty arrays (e.g., from constant indices)
+        if (axesSrc.empty()) {
+          continue;
+        }
         bool isDuplicated = false;
         for (auto arr : axesSrcEachDim) {
-          if (arr[0] == axesSrc[0]) {
+          if (!arr.empty() && arr[0] == axesSrc[0]) {
             isDuplicated = true;
             break;
           }
@@ -639,7 +650,7 @@ class CommonUtils {
         }
         bool isDuplicated = false;
         for (auto arr : res) {
-          if (arr[0] == subRes[0]) {
+          if (!arr.empty() && arr[0] == subRes[0]) {
             isDuplicated = true;
             break;
           }
