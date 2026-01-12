@@ -531,6 +531,8 @@ class AgentBase(ABC):
                 content, extracted = self.split_think(content)
                 if extracted:
                     reasoning_content = extracted
+            if not content:
+                content = reasoning_content
 
             # 提取 token 统计信息
             prompt_tokens = None
