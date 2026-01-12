@@ -70,3 +70,28 @@ handwrite:
 # ============================================================================
 # 基础配置文件路径（必填，用于加载 LLM 模型、文档目录等配置）
 config_path: "python/ai_kernel_generator/config/vllm_triton_ascend_evolve_config.yaml"
+
+# ============================================================================
+# 批量执行配置（用于 run_batch_adaptive_search.py）
+# ============================================================================
+batch:
+  parallel_num: 2                    # 同时运行的算子数量（需 <= device_pool 长度）
+  device_pool: [0, 1, 2, 3]          # 设备池，每个算子分配一个设备
+  task_dir: "Path/to/your/tasks"     # 任务文件目录（包含多个 .py 任务文件）
+  output_dir: "Path/to/your/aikg_adaptive_search/batch_results"  # 输出目录
+
+# ============================================================================
+# 特定任务的自定义配置（可选）
+# ============================================================================
+# 格式：{算子名: 配置参数字典}
+# 算子名需以 aikg_ 开头，加上文件名（不含 .py 后缀）
+custom_tasks:
+  # 示例：为特定算子配置不同参数
+  # aikg_relu:
+  #   max_concurrent: 2
+  #   initial_task_count: 2
+  #   max_total_tasks: 30
+  # aikg_softmax:
+  #   max_concurrent: 4
+  #   max_total_tasks: 100
+  #   exploration_coef: 2.0
