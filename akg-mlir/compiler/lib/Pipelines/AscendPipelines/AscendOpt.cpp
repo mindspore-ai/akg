@@ -80,6 +80,10 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     bufferizationOpts.setFunctionBoundaryTypeConversion(mlir::bufferization::LayoutMapOption::IdentityLayoutMap);
     pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufferizationOpts));
 
+    if (options.dynamicShape) {
+      pm.addPass(mlir::createInferSymbolicShapesPass());
+    }
+
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createMemrefCopyToLoopsPass());
 
@@ -100,21 +104,16 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
 
     // fusion
     nestedFusionPM.addPass(mlir::createAKGLoopFusionPass());
-    nestedFusionPM.addPass(mlir::createCanonicalizerPass());
-
-    nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
+    if (options.dynamicShape) {
+      nestedFusionPM.addPass(mlir::createSymbolicRemovalPass());
+    }
     nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
 
-    nestedFusionPM.addPass(mlir::createExtractIfOpPass(options.target));
     nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
     nestedFusionPM.addPass(mlir::createBF16ToF32Pass());
     nestedFusionPM.addPass(mlir::createConvertAffineToSCFPass());
     nestedFusionPM.addPass(mlir::createLowerAffinePass());
-
-    // parallel
-    // nestedFusionPM.addPass(mlir::createRemoveRedundantLoopsPass());
-    // nestedFusionPM.addPass(mlir::createAKGLoopParallelizePass(options.enableParallel));
 
     pm.addPass(mlir::createAddOutParameterPass());
 
