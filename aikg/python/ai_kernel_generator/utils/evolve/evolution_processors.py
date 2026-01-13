@@ -447,6 +447,8 @@ class TaskCreationProcessor:
                     uuid_prefix=self.config.label_prefix,
                 )
                 task_config["task_label"] = task_label
+                # 从 config 中获取 user_requirements（来自 ReAct 多轮对话）
+                user_requirements = (self.config.config or {}).get("user_requirements", "")
                 task = AIKGTask(
                     op_name=self.config.op_name,
                     task_desc=self.config.task_desc,
@@ -462,6 +464,7 @@ class TaskCreationProcessor:
                     inspirations=island_inspirations[island_idx][pid],
                     meta_prompts=island_meta_prompts[island_idx][pid] if island_meta_prompts[island_idx] else None,
                     handwrite_suggestions=island_handwrite_suggestions[island_idx],
+                    user_requirements=user_requirements,  # 用户额外需求
                 )
                 
                 task_pool.create_task(partial(task.run,), task_name=task_id)
@@ -493,6 +496,8 @@ class TaskCreationProcessor:
                 uuid_prefix=self.config.label_prefix,
             )
             task_config["task_label"] = task_label
+            # 从 config 中获取 user_requirements（来自 ReAct 多轮对话）
+            user_requirements = (self.config.config or {}).get("user_requirements", "")
             task = AIKGTask(
                 op_name=self.config.op_name,
                 task_desc=self.config.task_desc,
@@ -508,6 +513,7 @@ class TaskCreationProcessor:
                 inspirations=inspirations[pid],
                 meta_prompts=meta_prompts[pid] if meta_prompts else None,
                 handwrite_suggestions=handwrite_suggestions_list[pid] if handwrite_suggestions_list else [],
+                user_requirements=user_requirements,  # 用户额外需求
             )
             
             task_pool.create_task(partial(task.run,), task_name=task_id)

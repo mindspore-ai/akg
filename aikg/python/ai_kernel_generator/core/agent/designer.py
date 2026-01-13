@@ -229,6 +229,7 @@ class Designer(AgentBase):
             "enable_llm_range_inference": self.config.get("enable_llm_range_inference", False),  # LLM推理模式
             "enable_hint_mode": enable_hint_mode,  # Hint模式
             "has_hint": has_hint,  # 是否检测到hint
+            "user_requirements": task_info.get("user_requirements", ""),  # 用户额外需求（来自 ReAct）
         }
 
         # 执行LLM生成前更新context，确保正确性

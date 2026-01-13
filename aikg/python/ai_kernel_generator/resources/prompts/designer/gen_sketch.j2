@@ -211,6 +211,16 @@ def get_init_inputs():
 {{ meta_prompts }}
 {% endif %}
 
+{% if user_requirements %}
+## 用户额外需求（重要！）
+
+**用户在多轮对话交互中明确提出了以下需求，请在设计草图时必须满足：**
+
+{{ user_requirements }}
+
+**请确保草图设计能够支持上述需求，这些需求会在后续代码生成阶段被传递给 Coder。**
+{% endif %}
+
 {% if enable_llm_range_inference %}
 ## 设计适用范围说明
 如果任务描述包含具体shape（如M=1024），在草图注释中说明本设计的适用输入范围：

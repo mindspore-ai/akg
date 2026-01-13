@@ -163,9 +163,13 @@ class CodeOnlySubAgent(SubAgentBase):
                 - task_type: 任务类型（"precision_only" 或 "profile"）
                   - "precision_only": 只生成并验证代码（默认）
                   - "profile": 生成代码并进行性能测试
+                - user_requirements: 用户的额外需求说明（传递给 Coder prompt）
         """
         task_type = kwargs.get("task_type", "precision_only")
+        user_requirements = kwargs.get("user_requirements", "")
         logger.info(f"Executing CodeOnly sub-agent for {op_name}, task_type={task_type}")
+        if user_requirements:
+            logger.info(f"  user_requirements: {user_requirements[:100]}...")
         logger.info(f"[RAG] CodeOnlySubAgent.execute: config.rag={self.config.get('rag')}, config keys: {list(self.config.keys()) if self.config else 'None'}")
 
         try:
@@ -200,6 +204,7 @@ class CodeOnlySubAgent(SubAgentBase):
                 framework=self.framework,
                 workflow="coder_only_workflow",  # codeonly 对应的 workflow
                 task_type=task_type,  # 传递任务类型
+                user_requirements=user_requirements,  # 传递用户需求到 Coder prompt
             )
             
             # 执行
@@ -347,8 +352,15 @@ class EvolveSubAgent(SubAgentBase):
                      **kwargs) -> Tuple[bool, Dict[str, Any]]:
         """
         执行 evolve 进化优化
+        
+        Args:
+            **kwargs: 其他参数，可选：
+                - user_requirements: 用户的额外需求说明（传递给 Coder prompt）
         """
+        user_requirements = kwargs.get("user_requirements", "")
         logger.info(f"Executing Evolve sub-agent for {op_name}")
+        if user_requirements:
+            logger.info(f"  user_requirements: {user_requirements[:100]}...")
         
         try:
             # 导入 evolve 相关模块
@@ -415,6 +427,9 @@ class EvolveSubAgent(SubAgentBase):
             if not task_label:
                 raise ValueError("[EvolveSubAgent] missing task_label")
             cfg["task_label"] = task_label
+            # 传递用户需求到 config，LangGraphTask 会读取并放入 state
+            if user_requirements:
+                cfg["user_requirements"] = user_requirements
             logger.info(f"[RAG] EvolveSubAgent: passing config with rag={cfg.get('rag')} to evolve")
             evolution_result = await evolve(
                 op_name=op_name,
@@ -874,9 +889,13 @@ class AdaptiveSearchSubAgent(SubAgentBase):
             task_code: OpTaskBuilder 生成的 task 代码
             op_name: 算子名称
             task_id: 任务 ID
-            **kwargs: 其他参数
+            **kwargs: 其他参数，可选：
+                - user_requirements: 用户的额外需求说明（传递给 Coder prompt）
         """
+        user_requirements = kwargs.get("user_requirements", "")
         logger.info(f"Executing AdaptiveSearch sub-agent for {op_name}")
+        if user_requirements:
+            logger.info(f"  user_requirements: {user_requirements[:100]}...")
         
         try:
             # 导入自适应搜索模块
@@ -912,6 +931,9 @@ class AdaptiveSearchSubAgent(SubAgentBase):
             if not task_label:
                 raise ValueError("[AdaptiveSearchSubAgent] missing task_label")
             cfg["task_label"] = task_label
+            # 传递用户需求到 config，LangGraphTask 会读取并放入 state
+            if user_requirements:
+                cfg["user_requirements"] = user_requirements
             
             logger.info(f"[RAG] AdaptiveSearchSubAgent: passing config with rag={cfg.get('rag')} to adaptive_search")
             logger.info(f"Starting adaptive search for {op_name}...")
@@ -944,7 +966,7 @@ class AdaptiveSearchSubAgent(SubAgentBase):
                 inspiration_sample_num=search_config["inspiration_sample_num"],
                 use_tiered_sampling=search_config["use_tiered_sampling"],
                 handwrite_sample_num=search_config["handwrite_sample_num"],
-                handwrite_decay_rate=search_config["handwrite_decay_rate"]
+                handwrite_decay_rate=search_config["handwrite_decay_rate"],
             )
             
             # 判断成功与否

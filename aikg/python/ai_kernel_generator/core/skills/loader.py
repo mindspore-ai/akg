@@ -11,16 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-"""
-Agent Skills 加载器
-加载流程：
-    1. SkillLoader 启动时扫描 resources/skills/ 目录
-    2. 解析每个子目录下的 SKILL.md 的 YAML frontmatter
-    3. 提取 name, description, path 等元数据
-    4. 元数据注入 system prompt，Agent 使用 read_file 读取完整内容
-"""
-
 import re
 import logging
 from pathlib import Path
@@ -38,8 +28,7 @@ DEFAULT_SKILLS_DIR = Path(__file__).parent.parent.parent / "resources" / "skills
 
 class SkillMetadata(TypedDict, total=False):
     """
-    Skill 元数据（从 SKILL.md 的 YAML frontmatter 解析）
-
+    Skill 元数据，解析一下两个必要的字段
     """
     
     name: str
@@ -55,7 +44,6 @@ class SkillMetadata(TypedDict, total=False):
 def parse_skill_metadata(skill_md_path: Path) -> Optional[SkillMetadata]:
     """
     解析 SKILL.md 文件的 YAML
-    
     """
     if yaml is None:
         logger.warning("PyYAML not installed, cannot parse SKILL.md frontmatter")
@@ -64,7 +52,7 @@ def parse_skill_metadata(skill_md_path: Path) -> Optional[SkillMetadata]:
     try:
         content = skill_md_path.read_text(encoding="utf-8")
         
-        # 匹配 YAML frontmatter: --- ... ---
+        # 匹配 YAML frontmatter: --- ... ---，这里建议后者添加skill的时候遵循agentskill的规范！
         frontmatter_pattern = r"^---\s*\n(.*?)\n---\s*\n"
         match = re.match(frontmatter_pattern, content, re.DOTALL)
         
@@ -134,16 +122,9 @@ def list_skills(skills_dir: Optional[Path] = None) -> List[SkillMetadata]:
 class SkillLoader:
     """
     Skills 加载器
-    
     """
     
     def __init__(self, skills_dir: Optional[Path] = None):
-        """
-        初始化 SkillLoader，加载所有 skill 元数据
-        
-        Args:
-            skills_dir: Skills 目录路径，默认使用 resources/skills/
-        """
         self.skills_dir = skills_dir or DEFAULT_SKILLS_DIR
         self._skills: List[SkillMetadata] = []
         self._skills_by_name: Dict[str, SkillMetadata] = {}
@@ -151,7 +132,6 @@ class SkillLoader:
         self._load_skills()
     
     def _load_skills(self) -> None:
-        """扫描目录，加载所有 skill 元数据"""
         self._skills = list_skills(self.skills_dir)
         self._skills_by_name = {s["name"]: s for s in self._skills}
         logger.info(f"SkillLoader initialized with {len(self._skills)} skills")
