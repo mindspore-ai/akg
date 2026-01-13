@@ -75,6 +75,7 @@ class InteractiveOpRunner:
         auto_yes: bool,
         target: ResolvedTargetConfig,
         intent: Optional[str],
+        task_file_content: Optional[str] = None,
         rag: bool = False,
         output_path: Optional[str] = None,
         device_ids: Optional[List[int]] = None,
@@ -85,6 +86,7 @@ class InteractiveOpRunner:
         self.auto_yes = auto_yes
         self.target = target
         self.intent = intent
+        self.task_file_content = task_file_content
         self.rag = rag
         self.output_path = output_path
         self.device_ids = device_ids
@@ -266,6 +268,7 @@ class InteractiveOpRunner:
             dsl=resolved.get("dsl", ""),
             rag=self.rag,
             output_path=self.output_path,
+            task_file_content=self.task_file_content,
         )
         return res
 

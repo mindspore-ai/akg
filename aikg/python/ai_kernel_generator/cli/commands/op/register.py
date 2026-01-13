@@ -32,6 +32,12 @@ def register_op_command(
         intent: Optional[str] = typer.Option(
             None, "--intent", help="直接提供需求文本（不进入输入提示）"
         ),
+        task_file: Optional[str] = typer.Option(
+            None, 
+            "--task-file",
+            "--task_file",
+            help="直接读取 task_desc 文件（KernelBench 格式），跳过 OpTaskBuilder 转换"
+        ),
         framework: Optional[str] = typer.Option(
             None,
             "--framework",
@@ -85,6 +91,7 @@ def register_op_command(
         orchestrator.run(
             OpCommandArgs(
                 intent=intent,
+                task_file=task_file,
                 framework=framework or "",
                 backend=backend or "",
                 arch=arch or "",

@@ -107,6 +107,7 @@ class LocalExecutor:
         use_stream: bool | None = None,
         rag: bool = False,
         output_path: str | None = None,
+        task_file_content: str | None = None,
     ) -> Dict[str, Any]:
         """执行 MainOpAgent 对话（start/continue），返回状态"""
         if not (user_input or "").strip():
@@ -164,6 +165,9 @@ class LocalExecutor:
             if output_path and "output_path" not in config:
                 config["output_path"] = output_path
             config["rag"] = bool(rag)
+            # 传递 task_file_content（跳过 OpTaskBuilder 转换）
+            if task_file_content:
+                config["task_file_content"] = task_file_content
 
             if (
                 self._react_executor is None
