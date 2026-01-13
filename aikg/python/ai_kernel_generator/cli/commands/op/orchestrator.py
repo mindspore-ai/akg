@@ -68,6 +68,27 @@ class OpCommandOrchestrator:
             output_path = os.getcwd()
         output_path = os.path.abspath(os.path.expanduser(output_path))
 
+        # 处理 task_file 参数：读取文件内容作为 task_desc
+        task_file_content: str | None = None
+        if args.task_file:
+            task_file_path = os.path.abspath(os.path.expanduser(args.task_file))
+            if not os.path.isfile(task_file_path):
+                akg_console.print(
+                    f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] task_file 不存在: {task_file_path}"
+                )
+                raise typer.Exit(code=2)
+            try:
+                with open(task_file_path, "r", encoding="utf-8") as f:
+                    task_file_content = f.read()
+                akg_console.print(
+                    f"[{DisplayStyle.DIM}]已读取 task_file: {task_file_path} ({len(task_file_content)} 字符)[/{DisplayStyle.DIM}]"
+                )
+            except Exception as e:
+                akg_console.print(
+                    f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 读取 task_file 失败: {e}"
+                )
+                raise typer.Exit(code=2)
+
         if args.worker_url and args.devices:
             akg_console.print(
                 f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] --devices 与 --worker_url 不能同时使用"
@@ -126,6 +147,7 @@ class OpCommandOrchestrator:
                 auto_yes=args.auto_yes,
                 target=target,
                 intent=args.intent,
+                task_file_content=task_file_content,
                 rag=args.rag,
                 output_path=output_path,
                 device_ids=device_ids,

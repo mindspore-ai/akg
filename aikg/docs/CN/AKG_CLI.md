@@ -63,6 +63,7 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_as
 可选参数：
 
 - `--intent "..."` 直接输入需求（跳过交互提示）。
+- `--task-file <path>` 直接读取 task_desc 文件（KernelBench 格式），跳过 OpTaskBuilder 的转换流程。适用于已有完整 task_desc 代码的场景。
 - `--worker-url` 支持多个 Worker 地址，使用逗号分隔。CLI 同时接受 `--worker-url` 与 `--worker_url` 两种写法。
 - 下面两种方式二选一：
   - 使用远端 Worker Service 时用 `--worker-url/--worker_url`。
@@ -112,6 +113,18 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_as
 # CUDA A100 使用本地设备
 # akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda --devices 0
 ```
+
+使用 task_file 示例（跳过 OpTaskBuilder 转换）：
+
+```bash
+# 直接读取已有的 task_desc 文件，跳过 OpTaskBuilder 转换
+akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url 127.0.0.1:9001 --task-file ./my_task_desc.py --intent "生成优化的 kernel"
+```
+
+说明：
+- `--task-file` 适用于已有完整 KernelBench 格式 task_desc 代码的场景
+- 文件应包含 `class Model`、`get_inputs()`、`get_init_inputs()` 等标准组件
+- 使用该参数后，CLI 会跳过 OpTaskBuilder 的自然语言理解和代码转换步骤，直接使用文件内容进行算子生成
 
 IPv6-only 示例（注意方括号）：
 

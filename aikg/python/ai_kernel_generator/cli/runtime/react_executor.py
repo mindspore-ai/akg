@@ -48,6 +48,10 @@ class ReactTurnExecutor:
         self._react_agent = self._create_react_agent()
         self._last_panel_phase: str = ""
         self._awaiting_resume: bool = False
+        
+        # 如果提供了 task_file_content，标记为跳过 OpTaskBuilder
+        self._task_file_content: str | None = self.config.get("task_file_content")
+        self._task_file_used: bool = False
 
     def _create_react_agent(self):
         cfg = dict(self.config)
@@ -178,6 +182,23 @@ class ReactTurnExecutor:
         user_input = (user_input or "").strip()
         if not user_input:
             raise ValueError("user_input is required")
+
+        # 如果提供了 task_file_content 且尚未使用，将其作为特殊指令注入
+        if self._task_file_content and not self._task_file_used:
+            self._task_file_used = True
+            # 构建特殊指令：告诉 ReAct Agent 直接使用提供的 task_desc，跳过 OpTaskBuilder
+            task_file_instruction = f"""用户已提供完整的 KernelBench 格式 task_desc 文件，请直接使用以下代码作为 task_code，**不要**调用 call_op_task_builder 进行转换。
+
+用户的原始请求：{user_input}
+
+已提供的 task_desc 代码：
+```python
+{self._task_file_content}
+```
+
+请直接调用 call_codeonly 或其他代码生成工具，使用上述 task_code 进行算子代码生成。"""
+            user_input = task_file_instruction
+            logger.info("[ReactTurnExecutor] Injected task_file_content, skipping OpTaskBuilder")
 
         stream_config = {"configurable": {"thread_id": self.thread_id}}
 

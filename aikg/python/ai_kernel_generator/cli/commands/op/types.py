@@ -21,6 +21,7 @@ from typing import Optional
 @dataclass(frozen=True)
 class OpCommandArgs:
     intent: Optional[str]
+    task_file: Optional[str]
     framework: str
     backend: str
     arch: str
