@@ -211,6 +211,10 @@ static mlir::Value remapOrSelf(mlir::Value v, mlir::IRMapping &mapping);
 
 // Helper function to get constant index value from Value
 static std::optional<int64_t> getConstantIndexValue(mlir::Value value) {
+  // BlockArgument (e.g., iter_args) has no defining op, getDefiningOp() returns nullptr
+  if (!value || !value.getDefiningOp()) {
+    return std::nullopt;
+  }
   if (auto constOp = value.getDefiningOp<mlir::arith::ConstantIndexOp>()) {
     return constOp.value();
   }
@@ -569,7 +573,7 @@ static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::
                                                  std::map<int64_t, Value> &constantCache) {
   LoopBounds bounds;
 
-  // Special handling for reduction loops: skip tiling by setting bounds to [0, 1)
+  // Special handling for reduction loops: skip tiling
   if (origLoop->hasAttr(kReductionLoopAttr)) {
     bounds.lb = getOrCreateConstantStatic(loc, 0, builder, constantCache);
     bounds.ub = getOrCreateConstantStatic(loc, 1, builder, constantCache);
@@ -613,8 +617,10 @@ static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf:
   // Special handling for reduction loops: skip tiling by setting bounds to [0, 1)
   if (origLoop->hasAttr(kReductionLoopAttr)) {
     bounds.lb = getOrCreateConstantStatic(loc, 0, builder, constantCache);
-    bounds.ub = getOrCreateConstantStatic(loc, 1, builder, constantCache);
-    bounds.step = getOrCreateConstantStatic(loc, 1, builder, constantCache);
+    auto ubConst = getConstantIndexValue(origLoop.getUpperBound());
+    auto stepConst = getConstantIndexValue(prevLoop.getUpperBound());
+    bounds.ub = getOrCreateConstantStatic(loc, ubConst.value(), builder, constantCache);
+    bounds.step = getOrCreateConstantStatic(loc, stepConst.value(), builder, constantCache);
     bounds.inits = prevLoop.getResults();
     return bounds;
   }
@@ -632,14 +638,8 @@ static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf:
     // Both are compile-time constants: compute ceildiv statically
     int64_t ubVal = (origUbConst.value() + curConst.value() - 1) / curConst.value();
     bounds.ub = getOrCreateConstantStatic(loc, ubVal, builder, constantCache);
-  } else if (origUbConst) {
-    // origUb is constant but curTilesize is from memref: compute ceildiv dynamically
-    auto ceildivMap =
-      AffineMap::get(1, 1, builder.getAffineDimExpr(0).ceilDiv(builder.getAffineSymbolExpr(0)), builder.getContext());
-    bounds.ub = builder.create<mlir::affine::AffineApplyOp>(
-      loc, ceildivMap, ValueRange{recreateConstantOrSelf(origUb, builder), curTilesize});
   } else {
-    // origUb is dynamic: compute ceildiv dynamically
+    // curTilesize is dynamic: compute ceildiv dynamically
     auto ceildivMap =
       AffineMap::get(1, 1, builder.getAffineDimExpr(0).ceilDiv(builder.getAffineSymbolExpr(0)), builder.getContext());
     bounds.ub = builder.create<mlir::affine::AffineApplyOp>(
@@ -663,11 +663,11 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
                                         OpBuilder &builder, std::map<int64_t, Value> &constantCache) {
   LoopBounds bounds;
 
-  // Special handling for reduction loops: use original loop bounds and step
+  // Special handling for reduction loops
   if (origLoop->hasAttr(kReductionLoopAttr)) {
-    bounds.lb = recreateConstantOrSelf(origLoop.getLowerBound(), builder);
-    bounds.ub = recreateConstantOrSelf(origLoop.getUpperBound(), builder);
-    bounds.step = recreateConstantOrSelf(origLoop.getStep(), builder);
+    bounds.lb = getOrCreateConstantStatic(loc, 0, builder, constantCache);
+    bounds.ub = getOrCreateConstantStatic(loc, 1, builder, constantCache);
+    bounds.step = getOrCreateConstantStatic(loc, 1, builder, constantCache);
     bounds.inits = prevLoop.getResults();
     return bounds;
   }
@@ -832,7 +832,6 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, Mutab
     // Point loop
     if (lastTile < 0 || lastTile >= static_cast<int>(newLoops.size())) return;
     mlir::scf::ForOp prevLoop = newLoops[lastTile];
-    if (!prevLoop) return;
 
     bounds = createPointLoopBounds(loc, origLoop, tileSizeValues[lastTile], tileLevelInfo[j], prevLoop, loopBuilder,
                                    constantCache);
@@ -840,7 +839,6 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, Mutab
     // Middle level tile loop
     if (lastTile < 0 || lastTile >= static_cast<int>(newLoops.size())) return;
     mlir::scf::ForOp prevLoop = newLoops[lastTile];
-    if (!prevLoop) return;
 
     int upperTile = (i - 1) * bandSize + j;
     mlir::scf::ForOp upperLoop =
@@ -1181,6 +1179,11 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
       // set vector attribute to innermost loops
       if (!forOp->hasAttr(kReductionLoopAttr)) {
         forOp->setAttr(kVectorAttr, builder.getI64IntegerAttr(vectorSize));
+      } else if (forOp->getParentOp() && isa<mlir::scf::ForOp>(forOp->getParentOp())) {
+        // if reduction loop, remove reduction attribute and set vector attribute to parent loop
+        forOp->removeAttr(kReductionLoopAttr);
+        forOp->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
+        forOp->getParentOp()->setAttr(kVectorAttr, builder.getI64IntegerAttr(vectorSize));
       }
     }
   });
@@ -1233,6 +1236,57 @@ static void markOutermostLoopsForParallelMapping(func::FuncOp funcOp, OpBuilder 
   // Mark all outermost loops with map_for_to_forall attribute
   for (auto loop : outermostLoops) {
     loop->setAttr(kMapForToForallAttr, builder.getUnitAttr());
+  }
+}
+
+// Inline reduce PointLoops that execute only once (lb=0, ub=1, step=1)
+// These loops have kReductionLoopAttr and their IV is not actually used
+static void inlineReducePointLoops(func::FuncOp funcOp, OpBuilder &builder) {
+  // Collect all reduce point loops that need to be inlined
+  SmallVector<mlir::scf::ForOp, 8> loopsToInline;
+
+  funcOp->walk([&](mlir::scf::ForOp forOp) {
+    // Check if this loop has delete attribute
+    if (!forOp->hasAttr(kDeleteLoopAttr)) {
+      return;
+    }
+    loopsToInline.push_back(forOp);
+  });
+
+  // Inline these loops by moving their body operations to their parent block
+  for (auto loop : loopsToInline) {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPoint(loop);
+
+    Block *loopBody = loop.getBody();
+    [[maybe_unused]] Block *parentBlock = loop->getBlock();
+
+    // Handle iter_args: replace region iter args with loop's init args
+    for (auto [regionArg, initArg] : llvm::zip(loop.getRegionIterArgs(), loop.getInitArgs())) {
+      regionArg.replaceAllUsesWith(initArg);
+    }
+
+    // Replace loop IV with constant 0 (since it only executes once with iv=0)
+    Value iv = loop.getInductionVar();
+    Value c0 = builder.create<arith::ConstantIndexOp>(loop.getLoc(), 0);
+    iv.replaceAllUsesWith(c0);
+
+    // Move all operations from loop body to parent block (except terminator)
+    SmallVector<Operation *, 16> opsToMove;
+    std::transform(loopBody->without_terminator().begin(), loopBody->without_terminator().end(),
+                   std::back_inserter(opsToMove), [](Operation &op) { return &op; });
+    std::for_each(opsToMove.begin(), opsToMove.end(), [&](Operation *op) { op->moveBefore(loop); });
+
+    // Handle yield operands: these become the loop's results
+    auto yieldOp = dyn_cast<mlir::scf::YieldOp>(loopBody->getTerminator());
+    if (yieldOp) {
+      loop.replaceAllUsesWith(yieldOp.getOperands());
+    } else {
+      loop.replaceAllUsesWith(ValueRange{});
+    }
+
+    // Erase the loop
+    loop.erase();
   }
 }
 
@@ -1304,10 +1358,19 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, ArrayRef<Sm
   for (size_t bandIdx = 0; bandIdx < bands.size(); ++bandIdx) {
     const auto &bandTileSizes = allBandTileSizes[bandIdx];
     const auto &bandDynamicMapping = allBandDynamicMappings[bandIdx];
+    size_t bandSize = bands[bandIdx].size();
+
+    // Cache first level step values (as i64) for dynamic axes to avoid recomputation
+    SmallVector<Value, 6> firstLevelStepI64Cache(bandSize, Value());
 
     for (size_t tileIdx = 0; tileIdx < bandTileSizes.size(); ++tileIdx) {
       Value idx = b.create<arith::ConstantIndexOp>(loc, memrefOffset);
       unsigned tileSize = bandTileSizes[tileIdx];
+
+      // Calculate level and dimIdx for current tile
+      size_t level = tileIdx / bandSize;
+      size_t dimIdx = tileIdx % bandSize;
+      size_t firstLevelIdx = 0 * bandSize + dimIdx;
 
       if (tileSize == static_cast<unsigned>(-1)) {
         // Dynamic tile size: compute ceildiv(dim, 40) and store
@@ -1332,17 +1395,34 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, ArrayRef<Sm
         Value dimIndexVal = b.create<arith::ConstantIndexOp>(loc, mapping.dimIndex);
         Value dim = b.create<memref::DimOp>(loc, memrefArg, dimIndexVal);
 
-        Value c39 = b.create<arith::ConstantIndexOp>(loc, kBlockDimSize - 1);
         Value c40 = b.create<arith::ConstantIndexOp>(loc, kBlockDimSize);
-        Value dimPlus39 = b.create<arith::AddIOp>(loc, dim, c39);
-        Value step = b.create<arith::DivSIOp>(loc, dimPlus39, c40);
+        Value step = b.create<arith::CeilDivSIOp>(loc, dim, c40);
 
         Value stepI64 = b.create<arith::IndexCastOp>(loc, i64Ty, step);
         b.create<memref::StoreOp>(loc, stepI64, dataMem, ValueRange{idx});
+
+        // Cache first level step for later use
+        if (level == 0) {
+          firstLevelStepI64Cache[dimIdx] = stepI64;
+        }
       } else {
-        // Static tile size: store constant
-        Value val = b.create<arith::ConstantIntOp>(loc, static_cast<int64_t>(tileSize), 64);
-        b.create<memref::StoreOp>(loc, val, dataMem, ValueRange{idx});
+        // if first level is dynamic, need to compute min of second level
+        if (level >= 1 && bandTileSizes[firstLevelIdx] == static_cast<unsigned>(-1)) {
+          // First level is dynamic, use cached value
+          Value firstLevelStepI64 = firstLevelStepI64Cache[dimIdx];
+
+          Value staticTileSizeI64 = b.create<arith::ConstantIntOp>(loc, static_cast<int64_t>(tileSize), 64);
+          Value staticTileSize = b.create<arith::IndexCastOp>(loc, builder.getIndexType(), staticTileSizeI64);
+
+          Value firstLevelStep = b.create<arith::IndexCastOp>(loc, builder.getIndexType(), firstLevelStepI64);
+          Value minVal = b.create<arith::MinSIOp>(loc, staticTileSize, firstLevelStep);
+          Value stepI64 = b.create<arith::IndexCastOp>(loc, i64Ty, minVal);
+          b.create<memref::StoreOp>(loc, stepI64, dataMem, ValueRange{idx});
+        } else {
+          // Static tile size: store constant
+          Value val = b.create<arith::ConstantIntOp>(loc, static_cast<int64_t>(tileSize), 64);
+          b.create<memref::StoreOp>(loc, val, dataMem, ValueRange{idx});
+        }
       }
 
       memrefOffset++;
@@ -1472,10 +1552,8 @@ static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mappi
   Value dimIndexVal = builder.create<arith::ConstantIndexOp>(loc, mapping.dimIndex);
   Value dim = builder.create<memref::DimOp>(loc, memrefArg, dimIndexVal);
 
-  Value c39 = builder.create<arith::ConstantIndexOp>(loc, kBlockDimSize - 1);
   Value c40 = builder.create<arith::ConstantIndexOp>(loc, kBlockDimSize);
-  Value dimPlus39 = builder.create<arith::AddIOp>(loc, dim, c39);
-  result = builder.create<arith::DivSIOp>(loc, dimPlus39, c40);
+  result = builder.create<arith::CeilDivSIOp>(loc, dim, c40);
 
   return success();
 }
@@ -1619,8 +1697,8 @@ static LogicalResult wrapFunctionBodyWithFor(func::FuncOp func, OpBuilder &build
   }
   builder.setInsertionPointToStart(&entryBlock);
 
-  Value lb   = builder.create<arith::ConstantIndexOp>(loc, 0);
-  Value ub   = builder.create<arith::ConstantIndexOp>(loc, 1);
+  Value lb = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value ub = builder.create<arith::ConstantIndexOp>(loc, 1);
   Value step = builder.create<arith::ConstantIndexOp>(loc, 1);
   scf::ForOp forOp = builder.create<scf::ForOp>(loc, lb, ub, step);
   Block *forBody = forOp.getBody();
@@ -1699,6 +1777,9 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
   setBlockDimAttribute(originalKernel, builder);
   markOutermostLoopsForParallelMapping(originalKernel, builder);
 
+  // Step 6: Inline reduce point loops (they execute only once, IV is unused)
+  inlineReducePointLoops(originalKernel, builder);
+
   return success();
 }
 
@@ -1759,10 +1840,17 @@ static mlir::LogicalResult cloneComputeIntoInnermostPointLoop(llvm::ArrayRef<mli
   collectChainComputeOps(band, computeOps);
 
   // 2) establish mapping: original band each layer iv -> new point each layer iv
+  // For reduce loops: map to middle level loop IV instead of point loop IV
   mlir::IRMapping mapping;
   for (unsigned i = 0; i < forNum; ++i) {
     mlir::scf::ForOp origLoop = band[i];
-    mlir::scf::ForOp tiledLoop = tiledLoops[tileSizesNum + i];
+
+    // For reduce loops, use middle level loop IV (tileSizesNum/tileNum + i)
+    // For normal loops, use point loop IV (tileSizesNum + i)
+    unsigned tileNum = tileSizesNum / forNum;
+    unsigned targetIdx = origLoop->hasAttr(kReductionLoopAttr) ? (tileNum + i) : (tileSizesNum + i);
+
+    mlir::scf::ForOp tiledLoop = tiledLoops[targetIdx];
     if (!origLoop || !tiledLoop) {
       continue;
     }
@@ -1806,9 +1894,17 @@ static void splitOpsAroundChildLoop(mlir::scf::ForOp parent, mlir::Operation *ch
 // Helper function to initialize the induction variable mapping
 static void initIVMapping(llvm::ArrayRef<mlir::scf::ForOp> band, llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                           unsigned tileSizesNum, mlir::IRMapping &mapping) {
+  unsigned forNum = band.size();
+  unsigned tileNum = (forNum > 0) ? (tileSizesNum / forNum) : 0;
+
   for (unsigned i = 0; i < band.size(); ++i) {
     mlir::scf::ForOp loop = band[i];
-    mlir::scf::ForOp tiledLoop = tiledLoops[tileSizesNum + i];
+
+    // For reduce loops, use middle level loop IV (tileNum + i)
+    // For normal loops, use point loop IV (tileSizesNum + i)
+    unsigned targetIdx = loop->hasAttr(kReductionLoopAttr) ? (tileNum + i) : (tileSizesNum + i);
+
+    mlir::scf::ForOp tiledLoop = tiledLoops[targetIdx];
     if (!loop || !tiledLoop) {
       continue;
     }
