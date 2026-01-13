@@ -356,6 +356,7 @@ class NodeFactory:
                     })
                 
                 # 构建输入数据（与原 Conductor 一致）
+                # 注意：coder_code 和 error_log 不再截断，由模板或 LLM 处理上下文长度
                 input_data = {
                     'dsl': state.get('dsl', ''),
                     'expert_suggestion': state.get('expert_suggestion', ''),
@@ -363,8 +364,8 @@ class NodeFactory:
                     'framework': state.get('framework', ''),
                     'task_desc': state.get('task_desc', ''),
                     'agent_name': 'verifier',
-                    'agent_result': state.get('coder_code', '')[:2000],
-                    'error_log': state.get('verifier_error', '')[:5000],
+                    'agent_result': state.get('coder_code', ''),  # 完整代码，不截断
+                    'error_log': state.get('verifier_error', ''),  # 完整错误日志，不截断
                     'history_attempts': history_for_analysis,
                     'valid_next_agents': 'coder, finish',  # 固定选项
                     'format_instructions': format_instructions,
