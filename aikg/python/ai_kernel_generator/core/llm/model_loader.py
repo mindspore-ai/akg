@@ -366,8 +366,26 @@ def create_langchain_chat_model(
             ) from e
 
         timeout = httpx.Timeout(60, read=60 * 20)
+        
+        # 检查是否需要启用 thinking mode
+        thinking_enabled = (
+            extra_body 
+            and extra_body.get("thinking", {}).get("type") == "enabled"
+        )
+
+        if thinking_enabled:
+            logger.warning(
+                "如需使用 thinking mode，请使用 ChatDeepSeek preset。"
+            )
+            extra_body["thinking"] = {"type": "disabled"}
+        
+        # 使用标准 httpx 客户端
         http_client = httpx.Client(verify=False, timeout=timeout)
         http_async_client = httpx.AsyncClient(verify=False, timeout=timeout)
+        
+        extra_body = extra_body or {}
+        if "thinking" not in extra_body:
+            extra_body["thinking"] = {"type": "disabled"}
 
         kwargs: dict = {
             "model": model,
@@ -378,11 +396,10 @@ def create_langchain_chat_model(
             "http_client": http_client,
             "http_async_client": http_async_client,
             "max_retries": 3,
+            "extra_body": extra_body,
         }
         if top_p is not None:
             kwargs["top_p"] = top_p
-        if extra_body:
-            kwargs["extra_body"] = extra_body
         return ChatOpenAI(**kwargs)
 
     # 【最高优先级】环境变量覆盖（openai-compatible）
@@ -473,20 +490,42 @@ def create_langchain_chat_model(
     model_params = {k: v for k, v in preset_config.items() if k != "api_key_env"}
     model_params = _strip_repeat_penalty(model_params)
 
+    # 处理 thinking_mode 配置
     thinking_mode = model_params.pop("thinking_mode", None)
     extra_body = model_params.pop("extra_body", None)
     extra_body = _build_thinking_extra_body(thinking_mode, extra_body)
-    if extra_body:
-        model_params["extra_body"] = extra_body
-
-    timeout = httpx.Timeout(60, read=60 * 10)
-    return ChatDeepSeek(
-        api_key=api_key,
-        http_client=httpx.Client(verify=False, timeout=timeout),
-        http_async_client=httpx.AsyncClient(verify=False, timeout=timeout),
-        **model_params,
+    
+    # 检查是否需要启用 thinking mode
+    thinking_enabled = (
+        extra_body 
+        and extra_body.get("thinking", {}).get("type") == "enabled"
     )
-
+    
+    timeout = httpx.Timeout(60, read=60 * 10)
+    
+    if thinking_enabled:
+        # 使用支持 thinking mode 的自定义 ChatModel
+        from ai_kernel_generator.core.llm.thinking_chat_model import ThinkingAwareChatDeepSeek
+        logger.info("[ReAct] 使用 ThinkingAwareChatDeepSeek，支持 DeepSeek thinking mode")
+        return ThinkingAwareChatDeepSeek(
+            api_key=api_key,
+            timeout=timeout,
+            extra_body=extra_body,
+            **model_params,
+        )
+    else:
+        # 使用标准 ChatDeepSeek，显式禁用 thinking mode
+        extra_body = extra_body or {}
+        if "thinking" not in extra_body:
+            extra_body["thinking"] = {"type": "disabled"}
+        logger.info("[ReAct] 使用标准 ChatDeepSeek，thinking mode 已禁用")
+        return ChatDeepSeek(
+            api_key=api_key,
+            http_client=httpx.Client(verify=False, timeout=timeout),
+            http_async_client=httpx.AsyncClient(verify=False, timeout=timeout),
+            extra_body=extra_body,
+            **model_params,
+        )
 
 class OpenAICompatibleEmbeddings(Embeddings):
     """

@@ -11,12 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-"""
-基础 Tools
-
-"""
-
 import logging
 from pathlib import Path
 
@@ -25,6 +19,7 @@ from langgraph.types import interrupt
 
 from ai_kernel_generator.core.tools.tool_schemas import (
     AskUserInput,
+    ExecuteScriptInput,
     FinishInput,
     ReadFileInput,
     WriteFileInput,
@@ -32,7 +27,6 @@ from ai_kernel_generator.core.tools.tool_schemas import (
 
 logger = logging.getLogger(__name__)
 
-# 这里是把描述写到了函数体里面，langchain框架的实现会自己获取
 @tool("ask_user", args_schema=AskUserInput)
 def ask_user(message: str) -> str:
     """向用户询问问题并等待回复。
@@ -78,30 +72,53 @@ def finish(final_answer: str, success: bool = True) -> str:
     return final_answer
 
 
+def _resolve_resource_path(file_path: str) -> Path:
+    path = Path(file_path)
+    
+    if path.is_absolute():
+        return path
+    if file_path.startswith("resources/"):
+        try:
+            from ai_kernel_generator import get_project_root
+            project_root = Path(get_project_root())
+            resolved = project_root / file_path
+            logger.debug(f"Resolved resource path: {file_path} -> {resolved}")
+            return resolved
+        except ImportError:
+            logger.warning("Cannot import get_project_root, using relative path")
+    
+    return path
+
+
 @tool("read_file", args_schema=ReadFileInput)
 def read_file(file_path: str, encoding: str = "utf-8") -> str:
     """读取指定文件的内容。
     
     使用场景：
-    - 读取 SKILL.md 获取 Skill 的完整指导
+    - 读取 SKILL.md 获取 Skill 的完整指导（如 `resources/skills/kernel-workflow/SKILL.md`）
     - 读取配置文件、代码文件
     - 读取日志或输出文件
+    
+    路径解析：
+    - `resources/...` 开头的路径会基于项目根目录解析
+    - 绝对路径直接使用
+    - 其他相对路径相对于当前工作目录
     
     返回：成功时返回文件内容，失败时返回 [ERROR] 开头的错误信息
     """
     logger.info(f"read_file: {file_path}")
     
     try:
-        path = Path(file_path)
+        path = _resolve_resource_path(file_path)
         
         if not path.exists():
-            return f"[ERROR] 文件不存在: {file_path}"
+            return f"[ERROR] 文件不存在: {file_path} (解析为: {path})"
         
         if not path.is_file():
             return f"[ERROR] 路径不是文件: {file_path}"
         
         content = path.read_text(encoding=encoding)
-        logger.info(f"read_file 成功: {file_path}, 大小: {len(content)} 字符")
+        logger.info(f"read_file 成功: {path}, 大小: {len(content)} 字符")
         return content
         
     except PermissionError:
@@ -112,7 +129,6 @@ def read_file(file_path: str, encoding: str = "utf-8") -> str:
         return f"[ERROR] 读取文件失败: {str(e)}"
 
 
-# 默认输出目录
 DEFAULT_OUTPUT_DIR = "./aikg_outputs"
 
 # 文件类型到默认文件名的映射
@@ -169,13 +185,13 @@ def write_file(
     
     使用场景：
     - 用户有保存文件的意愿
-    - 保存生成的 Torch task 代码（file_type="task_desc"）
-    - 保存生成的 Triton kernel 代码（file_type="kernel"）
+    - 保存生成的 task 代码（file_type="task_desc"）
+    - 保存生成的 kernel 代码（file_type="kernel"）
     
     默认路径：
     - 目录: ./aikg_outputs/{op_name}/
     - task_desc 代码: task_desc.py
-    - kernel 代码: triton.py
+    - kernel 代码: kernel.py
     
     特性：
     - 自动递归创建不存在的父目录
@@ -200,7 +216,6 @@ def write_file(
         path.write_text(content, encoding=encoding)
         logger.info(f"write_file 成功: {path}, 大小: {len(content)} 字符")
         
-        # 返回完整信息
         return (
             f"[SUCCESS] 文件已保存!\n"
             f"📁 保存路径: {path}\n"
@@ -216,21 +231,116 @@ def write_file(
         return f"[ERROR] 写入文件失败: {str(e)}"
 
 
+@tool("execute_script", args_schema=ExecuteScriptInput)
+def execute_script(
+    script_path: str,
+    args: str = "",
+    stdin_input: str = None,
+    timeout: int = 60,
+    working_dir: str = None
+) -> str:
+    """执行 Skill 中的脚本文件（Python/Bash）。
+    
+    使用场景：
+    - 执行 Skill 提供的验证脚本（如 check_torch_code.py）
+    - 执行代码格式化、转换脚本
+    - 执行任何 Skill 目录下的辅助脚本
+    
+    路径解析：
+    - `resources/...` 开头的路径会基于项目根目录解析
+    - 绝对路径直接使用
+    
+    脚本类型：
+    - `.py` 文件使用 Python 执行
+    - `.sh` 文件使用 Bash 执行
+    
+    返回：
+    - [SUCCESS] 开头：脚本执行成功，包含 stdout
+    - [ERROR] 开头：脚本执行失败，包含错误信息
+    """
+    import subprocess
+    import sys
+    
+    logger.info(f"execute_script: {script_path}, args={args}, timeout={timeout}")
+    
+    try:
+        path = _resolve_resource_path(script_path)
+        
+        if not path.exists():
+            return f"[ERROR] 脚本不存在: {script_path} (解析为: {path})"
+        
+        if not path.is_file():
+            return f"[ERROR] 路径不是文件: {script_path}"
+        
+        if working_dir:
+            cwd = _resolve_resource_path(working_dir)
+        else:
+            try:
+                from ai_kernel_generator import get_project_root
+                cwd = Path(get_project_root())
+            except ImportError:
+                cwd = path.parent
+        suffix = path.suffix.lower()
+        if suffix == ".py":
+            cmd = [sys.executable, str(path)]
+        elif suffix == ".sh":
+            cmd = ["bash", str(path)]
+        else:
+            cmd = [str(path)]
+        
+        if args:
+            import shlex
+            cmd.extend(shlex.split(args))
+        
+        logger.info(f"execute_script: cmd={cmd}, cwd={cwd}")
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(cwd),
+            input=stdin_input
+        )
+        
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        
+        if result.returncode == 0:
+            output = f"[SUCCESS] 脚本执行成功\n"
+            output += f"脚本: {script_path}\n"
+            if stdout:
+                output += f"\n输出:\n{stdout}"
+            if stderr:
+                output += f"\n警告:\n{stderr}"
+            return output
+        else:
+            output = f"[ERROR] 脚本执行失败 (exit code: {result.returncode})\n"
+            output += f"脚本: {script_path}\n"
+            if stdout:
+                output += f"\n stdout:\n{stdout}"
+            if stderr:
+                output += f"\n stderr:\n{stderr}"
+            return output
+            
+    except subprocess.TimeoutExpired:
+        return f"[ERROR] 脚本执行超时 ({timeout}秒): {script_path}"
+    except PermissionError:
+        return f"[ERROR] 没有权限执行脚本: {script_path}"
+    except Exception as e:
+        return f"[ERROR] 脚本执行失败: {type(e).__name__}: {str(e)}"
+
+
 def create_basic_tools() -> list:
     """
     创建基础 tools
-    
-    注意：call_generate_task_desc（OpTaskBuilder）现在作为子 Agent 注册，
-    通过 create_sub_agent_tools() 自动创建 call_op_task_builder tool。
-        
-    Returns:
-        基础 tools 列表
     """
     tools = [
         ask_user,
         finish,
         read_file,
         write_file,
+        execute_script,
     ]
     
     logger.info(f"Created {len(tools)} basic tools: {[t.name for t in tools]}")

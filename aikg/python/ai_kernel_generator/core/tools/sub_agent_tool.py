@@ -11,11 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-"""
-SubAgent Tools - 将 SubAgent 包装为 LangChain Tool
-"""
-
 import asyncio
 import logging
 from typing import Dict, Any, List
@@ -68,7 +63,6 @@ def create_sub_agent_tools(
                 logger.warning(f"Failed to create SubAgent: {agent_name}")
                 continue
             
-            # 创建 tools
             tool_func = _create_tool(sub_agent)
             tools.append(tool_func)
             logger.info(f"Created tool: call_{agent_name}")
@@ -81,7 +75,6 @@ def create_sub_agent_tools(
 
 
 def _create_tool(sub_agent: SubAgentBase):
-    """为单个 SubAgent 创建 Tool"""
     info = sub_agent.get_detailed_info()
     agent_name = sub_agent.get_name()
     tool_name = f"call_{agent_name}"
@@ -99,16 +92,22 @@ def _create_tool(sub_agent: SubAgentBase):
         task_label: str = "",
         task_type: str = "precision_only",
         generated_code: str = "",
-        device_id: int = 0
+        device_id: int = 0,
+        user_requirements: str = ""
     ) -> Dict[str, Any]:
-        """调用 SubAgent"""
+        """调用 SubAgent
+        
+        Args:
+            user_requirements: 用户的额外需求说明，如'高性能优化'、'使用向量化'等。
+                              会传递给 Coder 作为优化指导。
+        """
         logger.info(f"Calling {sub_agent.get_name()}, op={op_name}")
+        if user_requirements:
+            logger.info(f"  user_requirements: {user_requirements[:100]}...")
         
         try:
             # 关键：避免通过 os.environ 临时开关导致的并发冲突。
-            # 使用 ContextVar 覆盖 stream 开关：默认保持调用方环境；对非 codeonly 子 agent 强制关闭流式消息。
             # （在 ReAct 主流式输出场景下，可避免子 agent 的 LLMStreamMessage 与主 stream 互相穿插。）
-            # 注意：codeonly 是单并发执行，允许流式；因此不要覆盖（继承外层 stream 设置）。
             cm = (
                 nullcontext()
                 if sub_agent.get_name() in ("codeonly",)
@@ -123,6 +122,7 @@ def _create_tool(sub_agent: SubAgentBase):
                     task_type=task_type,
                     generated_code=generated_code,
                     device_id=device_id,
+                    user_requirements=user_requirements,
                 )
             
             result["success"] = success
@@ -151,13 +151,12 @@ def _create_op_task_builder_tool(sub_agent: SubAgentBase, tool_name: str, tool_d
     ) -> Dict[str, Any]:
         """调用 OpTaskBuilder 生成 task_desc 代码
         
-        将用户的自然语言需求转换为 KernelBench 格式的 Torch task 代码。
-        生成的 task_desc 需要传给其他子 Agent（如 call_codeonly）生成 Triton 代码。
+        将用户的自然语言需求转换为 KernelBench 格式的 task 代码。
+        生成的 task 需要传给其他子 Agent 生成 Triton 代码。
         """
         logger.info(f"Calling op_task_builder, user_request: {user_request[:50]}...")
         
         try:
-            # 调用
             success, result = await sub_agent.execute(
                 task_code=task_code,
                 op_name=op_name,

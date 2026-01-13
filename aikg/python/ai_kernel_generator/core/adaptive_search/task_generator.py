@@ -211,6 +211,8 @@ class TaskGenerator:
         meta_prompts = self._get_meta_prompts()
         handwrite_suggestions = self._get_handwrite_suggestions()
         
+        # 从 config 中获取 user_requirements（来自 ReAct 多轮对话）
+        user_requirements = self.config.get("user_requirements", "")
         task = LangGraphTask(
             op_name=self.op_name,
             task_desc=self.task_desc,
@@ -224,7 +226,8 @@ class TaskGenerator:
             workflow="default_workflow",
             inspirations=[],  # 初始任务无灵感
             meta_prompts=meta_prompts,
-            handwrite_suggestions=handwrite_suggestions
+            handwrite_suggestions=handwrite_suggestions,
+            user_requirements=user_requirements,  # 用户额外需求
         )
         
         logger.info(f"Generated initial task: {task_id}")
@@ -250,6 +253,8 @@ class TaskGenerator:
         handwrite_suggestions = self._get_handwrite_suggestions()
         inspirations = self._prepare_inspirations(parent=parent)
         
+        # 从 config 中获取 user_requirements（来自 ReAct 多轮对话）
+        user_requirements = self.config.get("user_requirements", "")
         task = LangGraphTask(
             op_name=self.op_name,
             task_desc=self.task_desc,
@@ -263,7 +268,8 @@ class TaskGenerator:
             workflow="default_workflow",
             inspirations=inspirations,
             meta_prompts=meta_prompts,
-            handwrite_suggestions=handwrite_suggestions
+            handwrite_suggestions=handwrite_suggestions,
+            user_requirements=user_requirements,  # 用户额外需求
         )
         
         logger.info(f"Generated evolved task: {task_id} (parent={parent.id[:16]}, gen={generation})")

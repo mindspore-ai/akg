@@ -34,17 +34,14 @@ from ai_kernel_generator.core.skills import SkillLoader
 
 logger = logging.getLogger(__name__)
 
-# 默认最大消息数
-DEFAULT_MAX_MESSAGES = 50
+DEFAULT_MAX_MESSAGES = 100
 
 PROMPT_DIR = Path(__file__).parent.parent.parent / "resources" / "prompts" / "react_agent"
 SYSTEM_PROMPT_FILE = PROMPT_DIR / "system_prompt.md"
 def create_checkpointer(backend: str = "memory", db_path: Optional[str] = None) -> Any:
     """
-    创建 checkpointer 用于保存对话历史（短期记忆）
-    
+    创建 checkpointer 用于保存对话历史
     """
-    #内存
     if backend == "memory":
         from langgraph.checkpoint.memory import InMemorySaver
         logger.info("Created InMemorySaver for short-term memory")
@@ -80,7 +77,6 @@ def _find_safe_trim_index(messages: list, target_keep: int) -> int:
     if safe_start > 0 and safe_start < len(messages):
         start_msg = messages[safe_start]
         
-        # 如果起始位置是 ToolMessage，要向前包含对应的 AIMessage
         if isinstance(start_msg, ToolMessage):
             for i in range(safe_start - 1, -1, -1):
                 msg = messages[i]
@@ -89,11 +85,8 @@ def _find_safe_trim_index(messages: list, target_keep: int) -> int:
                     if tool_calls:
                         safe_start = i
                         break
-                # 如果遇到非 ToolMessage 且非相关 AIMessage不截取
                 elif not isinstance(msg, ToolMessage):
                     break
-    
-    #检查起始位置前一条是否是带有 tool_calls 的 AIMessage
     if safe_start > 0:
         prev_msg = messages[safe_start - 1]
         if isinstance(prev_msg, AIMessage):
@@ -138,7 +131,6 @@ def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
 class MainOpAgent(AgentBaseV2):
     """
     使用 ReAct 循环（Thought → Action → Observation）来生成算子代码。
-    
     """
     
     def __init__(self,
@@ -152,21 +144,6 @@ class MainOpAgent(AgentBaseV2):
                  enable_memory: bool = True,
                  memory_backend: str = "memory",
                  enable_trim: bool = True):
-        """
-        初始化 ReActAgent
-        
-        Args:
-            config: 配置字典
-            model: LangChain BaseChatModel 实例
-            framework: 框架类型
-            backend: 后端类型（cuda/ascend/cpu）
-            arch: 硬件架构
-            dsl: DSL 类型
-            checkpointer: 自定义 Memory checkpointer
-            enable_memory: 是否启用短期记忆（默认 True）
-            memory_backend: 记忆后端类型，"memory"（内存）
-            enable_trim: 是否启用消息裁剪（默认 True）
-        """
         self.framework = framework
         self.backend = backend
         self.arch = arch
@@ -174,7 +151,6 @@ class MainOpAgent(AgentBaseV2):
         
         self.skill_loader = SkillLoader()
         
-        # 创建 checkpointer 用于短期记忆
         if checkpointer is None and enable_memory:
             checkpointer = create_checkpointer(memory_backend)
             logger.info(f"Memory enabled with backend: {memory_backend}")
@@ -193,12 +169,10 @@ class MainOpAgent(AgentBaseV2):
     
     def get_system_prompt(self) -> str:
         """
-        获取系统提示词
+        获取system-promprt
         """
         base_prompt = SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
         logger.info(f"Loaded system prompt from: {SYSTEM_PROMPT_FILE}")
-        
-        # 注入 Skills 元数据到 system prompt
         skills_metadata = self._build_skills_metadata()
         if skills_metadata:
             base_prompt = base_prompt + "\n\n" + skills_metadata
@@ -207,26 +181,31 @@ class MainOpAgent(AgentBaseV2):
         return base_prompt
     
     def _build_skills_metadata(self) -> str:
-        """构建 Skills 元数据"""
+        """
+        构建 Skills 元数据，注入到 System Prompt
+        """
         if not self.skill_loader.skills:
             return ""
+        # 下面要加skill
+        lines = [
+            "## Skills（按需加载）",
+            "",
+            "当需要详细流程指导时，使用 `read_file` 工具加载 Skill 完整内容：",
+            ""
+        ]
         
-        lines = ["## Skills"]
         for skill in self.skill_loader.skills:
             name = skill["name"]
             desc = skill["description"]
-            path = skill.get("path", "")
-            lines.append(f"- **{name}**: {desc} (`{path}`)")
+            relative_path = f"resources/skills/{name}/SKILL.md"
+            lines.append(f"- **{name}**: {desc}")
+            lines.append(f"  → `read_file(file_path=\"{relative_path}\")`")
         
         return "\n".join(lines)
     
     def create_tools(self) -> List:
         """
         创建 tools
-        
-        包括：
-        - SubAgent tools：call_op_task_builder, call_codeonly, call_evolve 等
-        - Basic tools：ask_user, finish, read_file
         """
         tools = []
         
@@ -241,7 +220,6 @@ class MainOpAgent(AgentBaseV2):
         )
         tools.extend(sub_agent_tools)
         
-        # 基础 tools
         basic_tools = create_basic_tools()
         tools.extend(basic_tools)
         
