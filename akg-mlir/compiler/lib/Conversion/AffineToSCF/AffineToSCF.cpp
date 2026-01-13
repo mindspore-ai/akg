@@ -16,6 +16,7 @@
 
 #include "akg/Conversion/AffineToSCF/AffineToSCF.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
+#include "mlir/Dialect/Affine/Transforms/Transforms.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Utils.h"
@@ -34,56 +35,11 @@ namespace mlir {
 
 namespace mlir {
 namespace {
-/// Convert affine.load to memref.load
-class AffineLoadToMemRefPattern : public OpRewritePattern<affine::AffineLoadOp> {
- public:
-  using OpRewritePattern<affine::AffineLoadOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(affine::AffineLoadOp op, PatternRewriter &rewriter) const override {
-    // Expand affine map from 'affineLoadOp'.
-    SmallVector<Value, 8> indices(op.getMapOperands());
-    auto resultOperands = affine::expandAffineMap(rewriter, op.getLoc(), op.getAffineMap(), indices);
-    if (!resultOperands) return failure();
-
-    // Build memref.load memref[expandedMap.results].
-    rewriter.replaceOpWithNewOp<memref::LoadOp>(op, op.getMemRef(), *resultOperands);
-    return success();
-  }
-};
-
-/// Convert affine.store to memref.store
-class AffineStoreToMemRefPattern : public OpRewritePattern<affine::AffineStoreOp> {
- public:
-  using OpRewritePattern<affine::AffineStoreOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(affine::AffineStoreOp op, PatternRewriter &rewriter) const override {
-    // Expand affine map from 'affineStoreOp'.
-    SmallVector<Value, 8> indices(op.getMapOperands());
-    auto resultOperands = affine::expandAffineMap(rewriter, op.getLoc(), op.getAffineMap(), indices);
-    if (!resultOperands) return failure();
-
-    // Build memref.store value, memref[expandedMap.results].
-    rewriter.replaceOpWithNewOp<memref::StoreOp>(op, op.getValue(), op.getMemRef(), *resultOperands);
-    return success();
-  }
-};
-
-/// Convert affine.yield to scf.yield
-class AffineYieldToSCFPattern : public OpRewritePattern<affine::AffineYieldOp> {
- public:
-  using OpRewritePattern<affine::AffineYieldOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(affine::AffineYieldOp op, PatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<scf::YieldOp>(op, op.getOperands());
-    return success();
-  }
-};
-
 /// Convert affine.for to scf.for, preserving all attributes
 class AffineForToSCFPattern : public OpRewritePattern<affine::AffineForOp> {
  public:
-  using OpRewritePattern<affine::AffineForOp>::OpRewritePattern;
-
+  explicit AffineForToSCFPattern(MLIRContext *context, PatternBenefit benefit = 2)
+      : OpRewritePattern<affine::AffineForOp>(context, benefit) {}
   LogicalResult matchAndRewrite(affine::AffineForOp op, PatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
 
@@ -124,15 +80,11 @@ class ConvertAffineToSCF : public impl::ConvertAffineToSCFBase<ConvertAffineToSC
     // Mark scf and memref dialects as legal
     target.addLegalDialect<scf::SCFDialect, arith::ArithDialect, memref::MemRefDialect>();
 
-    // Mark affine.for, affine.yield, affine.load, and affine.store as illegal (needs conversion)
-    target.addIllegalOp<affine::AffineForOp, affine::AffineYieldOp, affine::AffineLoadOp, affine::AffineStoreOp>();
-
-    // Mark other affine ops as legal (they will be handled by other passes)
-    target.addLegalDialect<affine::AffineDialect>();
-
     RewritePatternSet patterns(context);
-    patterns.add<AffineForToSCFPattern, AffineYieldToSCFPattern, AffineLoadToMemRefPattern, AffineStoreToMemRefPattern>(
-      patterns.getContext());
+    patterns.add<AffineForToSCFPattern>(context);
+    populateAffineToStdConversionPatterns(patterns);
+    populateAffineToVectorConversionPatterns(patterns);
+    affine::populateAffineExpandIndexOpsPatterns(patterns);
 
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
       return signalPassFailure();
