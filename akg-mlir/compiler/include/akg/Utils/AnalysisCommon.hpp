@@ -73,6 +73,7 @@ constexpr auto kVectorAttr = "vector";
 constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
 constexpr auto kBlockDimAttr = "hacc.block_dim";
 constexpr auto kBlockDimSize = 40;
+constexpr auto kDeleteLoopAttr = "delete";
 
 
 const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 100000037, 100000039, 100000049,
