@@ -202,23 +202,55 @@ struct AffineStoreWideFPToBF16Pattern : public OpRewritePattern<affine::AffineSt
   }
 };
 
-FailureOr<Operation *> convertOpResultTypes(Operation *op, ValueRange operands, const TypeConverter &converter,
-                                            PatternRewriter &rewriter) {
+// Pattern to convert affine.for wider float value to bf16 memref
+struct AffineForFPToBF16Pattern : public OpRewritePattern<affine::AffineForOp> {
+  explicit AffineForFPToBF16Pattern(MLIRContext *context, PatternBenefit benefit = 3)
+      : OpRewritePattern<affine::AffineForOp>(context, benefit) {}
+  LogicalResult matchAndRewrite(affine::AffineForOp forOp, PatternRewriter &rewriter) const override {
+    auto inits = forOp.getInitsMutable();
+    if (inits.empty()) {
+      return failure();
+    }
+    auto args = forOp.getRegionIterArgs();
+    auto results = forOp.getResults();
+    bool isMatch = false;
+    for (size_t i = 0; i < inits.size(); i++) {
+      Type valueType = inits[i].get().getType();
+      if (isa<BFloat16Type>(valueType)) {
+        isMatch = true;
+        auto value = convertBF16ToF32(rewriter, forOp.getLoc(), inits[i].get());
+        args[i].setType(value.getType());
+        results[i].setType(value.getType());
+        inits[i].set(value);
+      }
+    }
+    if (!isMatch) {
+      return failure();
+    }
+    return success();
+  }
+};
+
+FailureOr<Operation *> legalizeOp(Operation *op, ValueRange operands, const TypeConverter &converter,
+                                  PatternRewriter &rewriter) {
   assert(op && "Invalid op");
   Location loc = op->getLoc();
-  if (converter.isLegal(op->getResultTypes())) return rewriter.notifyMatchFailure(loc, "op already legal");
 
-  OperationState newOp(loc, op->getName());
-
+  bool isMatch = false;
   SmallVector<Value, 4> newOperands;
   for (auto operand : operands) {
     if (isa<BFloat16Type>(operand.getType())) {
+      isMatch = true;
       Value f32Value = convertBF16ToF32(rewriter, loc, operand);
       newOperands.push_back(f32Value);
     } else {
       newOperands.push_back(operand);
     }
   }
+  if (!isMatch && converter.isLegal(op->getResultTypes())) {
+    return rewriter.notifyMatchFailure(loc, "op already legal");
+  }
+  OperationState newOp(loc, op->getName());
   newOp.addOperands(newOperands);
 
   SmallVector<Type> newResultTypes;
@@ -234,10 +266,11 @@ struct LegalizeBF16RewritePattern final : RewritePattern {
   explicit LegalizeBF16RewritePattern(MLIRContext *context, const TypeConverter &converter, PatternBenefit benefit = 1)
       : RewritePattern(MatchAnyOpTypeTag{}, benefit, context), typeConverter(converter) {}
   LogicalResult matchAndRewrite(Operation *op, PatternRewriter &rewriter) const override {
-    if (isa<affine::AffineLoadOp, affine::AffineStoreOp, arith::TruncFOp, arith::ConstantOp, arith::BitcastOp>(op)) {
+    if (isa<affine::AffineLoadOp, affine::AffineStoreOp, arith::ExtFOp, arith::TruncFOp, arith::ConstantOp,
+            arith::BitcastOp>(op)) {
       return failure();
     }
-    FailureOr<Operation *> legalized = convertOpResultTypes(op, op->getOperands(), typeConverter, rewriter);
+    FailureOr<Operation *> legalized = legalizeOp(op, op->getOperands(), typeConverter, rewriter);
     if (failed(legalized)) return failure();
 
     rewriter.replaceOp(op, (*legalized));
@@ -265,6 +298,7 @@ class BF16ToF32Pass : public impl::BF16ToF32Base<BF16ToF32Pass> {
     // Add patterns for affine operations
     patterns.add<AffineLoadBF16ToF32Pattern>(context);
     patterns.add<AffineStoreWideFPToBF16Pattern>(context);
+    patterns.add<AffineForFPToBF16Pattern>(context);
     patterns.add<ExtFOpPattern>(context);
     patterns.add<TruncFOpPattern>(context);
     patterns.add<BitcastOpPattern>(context);
