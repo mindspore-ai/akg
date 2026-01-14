@@ -1721,7 +1721,7 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
   if (bands.empty()) {
     if (failed(wrapFunctionBodyWithFor(originalKernel, builder))) return failure();
     markInnermostLoopsWithVectorAttr(originalKernel, builder, kVectorSize);
-    return success();
+    collectBands(originalKernel, bands);
   }
 
   // Step 2: Setup builder
