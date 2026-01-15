@@ -72,15 +72,37 @@ def Muse_AclnnAddRmsNormOp : Muse_Op<"aclnn.add_rms_norm", [Pure]> {
   }];
 }
 
+def Muse_AclnnGeluBackwardOp : Muse_Op<"aclnn.gelu_backward", [Pure]> {
+  let summary = "The aclnnGeluBackwardV2 operation";
+  let description = [{
+    Computes backward of gelu op element-wise.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$grad_output,
+    AnyRankedTensor:$self,
+    Muse_StringType:$approximate
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $grad_output `,` $self `,` $approximate attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_AclnnGeluOp : Muse_Op<"aclnn.gelu", [Pure]> {
   let summary = "The aclnnGelu operation";
   let description = [{
-    Applies the Gaussian Error Linear Unit (GELU) activation function.
-    GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))).
+    Computes GELU(x) = x * Φ(x) element-wise, where Φ(x) is the cumulative
+    distribution function of the standard normal distribution.
   }];
 
-  let arguments = (ins AnyRankedTensor:$input);
-  let results = (outs AnyRankedTensor:$result);
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
 
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
@@ -132,14 +154,37 @@ def Muse_AclnnSubOp : Muse_Op<"aclnn.sub", [Pure]> {
   }];
 }
 
+def Muse_AclnnSigmoidOp : Muse_Op<"aclnn.sigmoid", [Pure]> {
+  let summary = "The aclnnSigmoid operation";
+  let description = [{
+    Computes the sigmoid function of each element in the input tensor.
+    Computes: result = 1 / (1 + exp(-x))
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_AclnnTanhOp : Muse_Op<"aclnn.tanh", [Pure]> {
   let summary = "The aclnnTanh operation";
   let description = [{
-    Applies the element-wise hyperbolic tangent function.
+    Compute hyperbolic tangent of input element-wise.
   }];
 
-  let arguments = (ins AnyRankedTensor:$input);
-  let results = (outs AnyRankedTensor:$result);
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs
+    AnyRankedTensor:$output
+  );
 
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
