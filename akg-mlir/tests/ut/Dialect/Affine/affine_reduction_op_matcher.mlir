@@ -16,7 +16,7 @@
 // CHECK-NEXT:   %alloc_0 = memref.alloc() {alignment = 64 : i64} : memref<1x3072xf32>
 // CHECK-NEXT:   affine.for %arg1 = 0 to 1 {
 // CHECK-NEXT:     affine.for %arg2 = 0 to 3072 {
-// CHECK-NEXT:       affine.store %cst, %alloc_0[%arg1, %arg2] : memref<1x3072xf32>
+// CHECK-NEXT:       affine.store %cst, %alloc_0[%arg1, %arg2] {reduction_init} : memref<1x3072xf32>
 // CHECK-NEXT:     }
 // CHECK-NEXT:   }
 // CHECK-NEXT:   affine.for %arg1 = 0 to 1 {
