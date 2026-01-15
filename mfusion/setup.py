@@ -65,6 +65,11 @@ class CMakeBuild(build_ext):
             shutil.rmtree(target_dir)
         shutil.copytree(python_package_dir, target_dir)
 
+        # Merge Python sources from the repo.
+        source_python_dir = Path(__file__).parent / "python" / "mfusion"
+        if source_python_dir.exists():
+            shutil.copytree(source_python_dir, target_dir, dirs_exist_ok=True)
+
         # Copy tests
         if build_tests == "ON":
             tests_dir = Path(self.build_temp) / "tests"

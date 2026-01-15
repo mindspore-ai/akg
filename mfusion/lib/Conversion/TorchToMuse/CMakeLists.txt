@@ -16,7 +16,6 @@ add_mlir_conversion_library(MFusionConversionTorchToMuse
 
   ADDITIONAL_HEADER_DIRS
   ${CMAKE_CURRENT_BINARY_DIR}
-  ${PROJECT_SOURCE_DIR}/include/mfusion/Conversion/TorchToMuse
 
   DEPENDS
   MFusionConversionPassIncGen
