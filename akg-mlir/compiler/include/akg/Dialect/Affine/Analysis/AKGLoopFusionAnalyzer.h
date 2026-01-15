@@ -24,9 +24,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
 #include "akg/Dialect/Affine/Analysis/AKGLoopFusionBuilder.h"
-#include "akg/Utils/AnalysisCommon.hpp"
+#include "akg/Dialect/Affine/Analysis/LoopFusionUtils.h"
 
 namespace mlir {
 namespace akg {
@@ -40,32 +39,35 @@ struct TupleHash {
   }
 };
 
-struct FuseEdge {
-  FuseEdge(unsigned from, unsigned to) : from(from), to(to) {}
-  unsigned from;
-  unsigned to;
+struct PairHash {
+  std::size_t operator()(const std::pair<unsigned, unsigned> &p) const {
+    std::size_t h1 = std::hash<unsigned>{}(p.first);
+    std::size_t h2 = std::hash<unsigned>{}(p.second);
+    return h1 ^ (h2 << 1);
+  }
 };
 
-struct FusionPlan {
-  FuseEdge fusedGroup{FuseEdge(0, 0)};
-  FuseEdge fusedBand{FuseEdge(0, 0)};
-  std::string fusionType{"H"};
+// Structure to store direct predecessor node ID and corresponding memref
+struct DirectPredecessor {
+  DirectPredecessor(unsigned id, Value ref, unsigned depth = 0) : nodeId(id), memref(ref), loopDepth(depth) {}
+  unsigned nodeId;
+  Value memref;
+  unsigned loopDepth;
 };
 
 struct FusionAnalyzer {
  public:
-  FusionAnalyzer(MemRefDependenceGraphForFusion depGraph, func::FuncOp funcOp) : depGraph(depGraph), funcOp(funcOp) {}
+  FusionAnalyzer(MemRefDependenceGraphForFusion &depGraph, func::FuncOp funcOp) : depGraph(depGraph), funcOp(funcOp) {}
 
   void plan();
-  void applyAndFuse(std::vector<LoopTransform> loopTransforms, const GroupPtr targetGroup, const GroupPtr sourceGroup);
+  void applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup);
   bool checkAndFixMultiOut(FusionPlan &fusePlan);
-  std::vector<LoopTransform> inferLoopTransforms(const GroupPtr targetGroup, const GroupPtr sourceGroup);
 
   // Debug and print
   void print(llvm::raw_ostream &os) const;
   void dump() const { print(llvm::errs()); }
 
-  MemRefDependenceGraphForFusion depGraph{nullptr};
+  MemRefDependenceGraphForFusion &depGraph;
   func::FuncOp funcOp{nullptr};
   std::unordered_map<unsigned, GroupPtr> groups;
   std::vector<FusionPlan> fusionPlans;
@@ -76,7 +78,6 @@ struct FusionAnalyzer {
   void topoSortInit();
   std::vector<FusionPlan> topoSortFusionPlans(unsigned numNodes);
   GroupPtr getFusionTargetGroup();
-  void getDirectlyPredecessors(unsigned id, std::vector<unsigned> &predecessorIds);
   bool finishPlan();
 
   // Fusion Plan Management
@@ -96,7 +97,8 @@ struct FusionAnalyzer {
   bool connectLastNodesToTarget(unsigned srcGroupId, unsigned dstGroupId);
 
   // Fusion Type and Order Determination
-  std::string determineFusionType(unsigned fromGroupId, unsigned toGroupId);
+  void setFusionType(FusionPlan &plan);
+  void inferLoopTransforms(FusionPlan &plan);
   bool hasEdgeInFusionPlans(unsigned depGroupId, unsigned fromGroupId);
   std::pair<GroupPtr, GroupPtr> determineFusionOrder(const GroupPtr oldGroup, const GroupPtr newGroup);
 
@@ -107,10 +109,21 @@ struct FusionAnalyzer {
   void setupDirectFusionPlan(FusionPlan &fusePlan, FusionPlan &oldPlan, const GroupPtr srcGroup,
                              const GroupPtr dstGroup);
 
+  // Precomputation
+  void precomputeDirectPredecessors();
+
+  // Get dependent operations and memrefs between source and target groups
+  // This function efficiently retrieves dependencies using cached direct predecessors
+  DependenceInfo getGroupDependencies(const GroupPtr targetGroup, const GroupPtr sourceGroup);
+
   // Member Variables
   std::unordered_set<unsigned> finished;
   std::vector<unsigned> topoSortNodeIds;
   std::unordered_map<std::tuple<unsigned, unsigned, unsigned>, unsigned, TupleHash> intersectionCache;
+  // Cache for direct predecessors of each node with corresponding memrefs (computed once, used many times)
+  std::unordered_map<unsigned, std::vector<DirectPredecessor>> directPredecessorsCache;
+  // Cache for group dependencies (groupId pair -> DependenceInfo)
+  std::unordered_map<std::pair<unsigned, unsigned>, DependenceInfo, PairHash> groupDependenciesCache;
 };
 
 }  // namespace akg
