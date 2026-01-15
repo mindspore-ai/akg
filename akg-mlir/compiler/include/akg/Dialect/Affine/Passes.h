@@ -46,6 +46,7 @@
 #include "akg/Dialect/Affine/Transforms/UnifyShape.h"
 #include "akg/Dialect/Affine/Transforms/WorkaroundFixReduceInitialization.h"
 #include "akg/Dialect/Affine/Transforms/BF16ToF32.h"
+#include "akg/Dialect/Affine/Transforms/Normalize.h"
 
 namespace mlir {
 namespace func {
