@@ -61,6 +61,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::createLinalgGeneralizeNamedOpsPass());
     pm.addPass(mlir::createMindSporeToTosaPass());
     pm.addPass(mlir::createMindSporeToLinalgPass());
+    pm.addPass(mlir::createCloneTensorEmptyPass());
   } else {
     pm.addPass(mlir::createMindSporeToLinalgNamedPass());
     pm.addPass(mlir::createMindSporeToTosaPass());
@@ -122,6 +123,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     // vector
     pm.addPass(mlir::scf::createNPUVectorVectorizePass());
     pm.addPass(mlir::createArithToHIVMConversionPass());
+    pm.addPass(mlir::createCanonicalizerPass());
   }
 }
 }  // namespace
