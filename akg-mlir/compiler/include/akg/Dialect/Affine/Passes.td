@@ -294,4 +294,12 @@ def LegalizeBool : Pass<"legalize-bool", "func::FuncOp"> {
   ];
 }
 
+def Normalize : Pass<"normalize", "func::FuncOp"> {
+    let summary = "Normalize Math ops";
+    let description = [{
+      This pass normalizes complex math ops.
+    }];
+    let constructor = "mlir::createNormalizePass()";
+  }
+
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES
