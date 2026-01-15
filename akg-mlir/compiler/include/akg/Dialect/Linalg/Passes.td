@@ -120,4 +120,11 @@ def MemrefCopyToLoops : Pass<"memref-copy-to-loops", "func::FuncOp"> {
   ];
 }
 
+def CloneTensorEmpty : Pass<"clone-tensor-empty", "func::FuncOp"> {
+  let summary = "Output clones to different empty tensors based on linalg Op.";
+  let description = [{This pass clone different tensor.empty to linalg Op output}];
+  let constructor = "mlir::createCloneTensorEmptyPass()";
+  let dependentDialects = ["linalg::LinalgDialect", "tensor::TensorDialect"];
+}
+
 #endif // AKG_MLIR_DIALECT_LINAGLG_PASSES
