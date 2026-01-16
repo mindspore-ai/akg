@@ -122,7 +122,6 @@ static LogicalResult rewriteSrcOutShapeOpToOutViewImpl(SrcOpTy shapeOp, Value ou
   Block &entry = func.front();
 
   auto reassoc = parseReassociation(shapeOp.getReassociation());
-  if (reassoc.empty()) return success();
 
   OpBuilder topBuilder(&entry, entry.begin());
   auto backViewOp = topBuilder.template create<BackViewOpTy>(shapeOp.getLoc(), srcTy, outArg, reassoc);
@@ -160,7 +159,6 @@ static LogicalResult rewriteTempSourceToOutViewImpl(SrcOpTy srcOp, Value outArg)
   if (!tmpTy || !outTy) return success();
 
   auto reassoc = parseReassociation(srcOp.getReassociation());
-  if (reassoc.empty()) return success();
 
   Operation *tmpDef = tmp.getDefiningOp();
   Value newViewVal;
