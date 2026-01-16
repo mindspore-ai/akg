@@ -20,20 +20,22 @@ BUILD_DIR="${MFUSION_DIR}/build"
 # Parse arguments
 THREAD_NUM=$(nproc)
 BUILD_TYPE="Release"
+BUILD_TESTS="OFF"
 
 usage()
 {
     echo "Usage:"
-    echo "bash build.sh [-d] [-h] [-i] [-j[n]]"
+    echo "bash build.sh [-d] [-h] [-i] [-j[n]] [-t]"
     echo ""
     echo "Options:"
     echo "    -d Debug mode"
     echo "    -h Print usage"
     echo "    -i Incremental build"
     echo "    -j[n] Set the threads when building (Default: the number of cpu)"
+    echo "    -t Enable unit test (Default: disable)"
 }
 
-while getopts 'dhij:' opt
+while getopts 'dhij:t' opt
 do
     case "${opt}" in
         d)
@@ -48,6 +50,9 @@ do
             ;;
         j)
             THREAD_NUM=${OPTARG}
+            ;;
+        t)
+            BUILD_TESTS="ON"
             ;;
         *)
             echo "Unknown option ${opt}!"
@@ -72,6 +77,7 @@ echo "---------------- MFusion: build start ----------------"
 # Set environment variables
 export BUILD_JOBS=${THREAD_NUM}
 export BUILD_TYPE=${BUILD_TYPE}
+export BUILD_TESTS=${BUILD_TESTS}
 if [[ "X$INC_BUILD" = "X1" ]]; then
     export INC_BUILD=1
 else
