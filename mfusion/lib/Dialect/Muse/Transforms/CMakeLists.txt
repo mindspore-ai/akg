@@ -1,4 +1,4 @@
-file(GLOB MUSE_TRANSFORMS_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.cc")
+file(GLOB_RECURSE MUSE_TRANSFORMS_SRC "*.cc")
 
 add_mlir_dialect_library(MLIRMuseTransforms
   ${MUSE_TRANSFORMS_SRC}
