@@ -1219,6 +1219,41 @@ struct MathSqrtToHIVM : public OpConversionPattern<math::SqrtOp> {
   }
 };
 
+struct MathRsqrtToHIVM : public OpConversionPattern<math::RsqrtOp> {
+  using OpConversionPattern<math::RsqrtOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::RsqrtOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::RsqrtOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
+    }
+
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VRsqrtOp>(loc, TypeRange{}, inputMemRef, *resBuf);
+
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
 struct VectorReductionToHIVM : public OpConversionPattern<vector::ReductionOp> {
   using OpConversionPattern<vector::ReductionOp>::OpConversionPattern;
 
@@ -1995,6 +2030,7 @@ void hivm::populateArithToHIVMConversionPatterns(
   patterns.add<MathLogToHIVM>(patterns.getContext());
   patterns.add<MathAbsFToHIVM>(patterns.getContext());
   patterns.add<MathSqrtToHIVM>(patterns.getContext());
+  patterns.add<MathRsqrtToHIVM>(patterns.getContext());
   patterns.add<VectorReductionToHIVM>(patterns.getContext());
   patterns.add<NPUVectorReductionToHIVM>(patterns.getContext());
   patterns.add<
