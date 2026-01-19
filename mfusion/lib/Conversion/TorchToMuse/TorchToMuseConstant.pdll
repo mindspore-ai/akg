@@ -1,0 +1,29 @@
+Pattern ConvertTorchConstantInt {
+  let root = op<torch.constant.int> { value = val: Attr } -> (resType: Type);
+  replace root with op<muse.constant.i64> { value = val } -> (convertType(resType));
+}
+
+Pattern ConvertTorchConstantBool {
+  let root = op<torch.constant.bool> { value = val: Attr } -> (resType: Type);
+  replace root with op<muse.constant.boolean> { value = val } -> (convertType(resType));
+}
+
+Pattern ConvertTorchConstantFloat {
+  let root = op<torch.constant.float> { value = val: Attr } -> (resType: Type);
+  replace root with op<muse.constant.f64> { value = val } -> (convertType(resType));
+}
+
+Pattern ConvertTorchConstantStr {
+  let root = op<torch.constant.str> { value = val: Attr } -> (resType: Type);
+  replace root with op<muse.constant.string> { value = val } -> (convertType(resType));
+}
+
+Pattern ConvertTorchConstantNone {
+  let root = op<torch.constant.none>;
+  replace root with op<muse.constant.none>;
+}
+
+Pattern ConvertTorchConstantDevice {
+  let root = op<torch.constant.device> { value = val: Attr } -> (resType: Type);
+  replace root with op<muse.constant.string> { value = val } -> (convertType(resType));
+}

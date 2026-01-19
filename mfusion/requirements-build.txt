@@ -1,0 +1,6 @@
+typing_extensions>=4.13.1
+build
+setuptools==80.9.0
+packaging>=24.2
+wheel>=0.34.2
+pybind11
