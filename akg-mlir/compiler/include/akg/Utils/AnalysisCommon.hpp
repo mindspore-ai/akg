@@ -570,7 +570,11 @@ class CommonUtils {
       }
     }
     if (indexRoot.empty()) {
-      indexRoot = getStoreLoadIndices(operandRoot.getDefiningOp());
+      // Check if operandRoot has a defining op before calling getStoreLoadIndices
+      // BlockArguments (e.g., iter_args in scf.for) don't have defining ops
+      if (operandRoot.getDefiningOp()) {
+        indexRoot = getStoreLoadIndices(operandRoot.getDefiningOp());
+      }
     }
     if (indexRoot.empty()) {
       indexRoot.push_back(operandRoot);
