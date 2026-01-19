@@ -830,16 +830,6 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
     return;
   }
 
-  // Skip tiling for reduce axes
-  if (isReduceAxis) {
-    auto tileConfig = axis->tryGetConfig(0, kTileCfg);
-    if (tileConfig != nullptr) {
-      tileConfig->value = 1;
-      axis->tryAddConstraint(0, Constraint({1}));
-    }
-    return;
-  }
-
   // Check if axis has constant bounds (specifically check upper bound for dynamic detection)
   bool hasStaticBounds = axis->hasConstantBounds();
   // Check upper bound specifically to detect dynamic axis
@@ -882,6 +872,10 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
 
   // Get default tile sizes if not specified by user
   SmallVector<unsigned, 4> currentTileSizes = tileSizes;
+  // Skip tiling for reduce axes
+  if (isReduceAxis) {
+    currentTileSizes = {1, 1};
+  }
   if (currentTileSizes.empty()) {
     currentTileSizes = {std::max(getOuterTileSize(axis, blockNumber), innerTileSize), innerTileSize};
   }
