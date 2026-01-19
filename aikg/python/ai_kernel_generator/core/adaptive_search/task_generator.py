@@ -100,7 +100,10 @@ class TaskGenerator:
                 dsl=self.dsl,
                 op_name=self.op_name,
                 task_desc=self.task_desc,
-                config=self.config
+                config=self.config,
+                arch=self.arch,
+                backend=self.backend,
+                rag=self.config.get('rag', False)  # 从 config 读取 rag
             )
             await self._handwrite_loader.select_relevant_pairs()
             

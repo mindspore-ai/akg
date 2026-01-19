@@ -33,6 +33,9 @@ profile_settings:
 # Verification configuration
 verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
 
+# RAG configuration
+rag: false  # Enable RAG mode for handwrite suggestions and coder examples
+
 # Multi-case testing configuration
 enable_multi_case_verification: false  # For Hint mode only: controls whether to run verification (false = only generate space_config file without verification)
 enable_hint_mode: false  # Hint mode: user provides @hint, Designer generates space_config
