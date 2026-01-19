@@ -18,6 +18,7 @@ import logging
 from typing import Any, List, Dict
 from pathlib import Path
 from abc import ABC, abstractmethod
+
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
@@ -25,6 +26,20 @@ from ai_kernel_generator.utils.common_utils import get_md5_hash
 from ai_kernel_generator.core.llm.model_loader import create_embedding_model
 
 logger = logging.getLogger(__name__)
+
+
+def _restore_root_logger_level():
+    """
+    恢复根 logger 的日志级别。
+    
+    FAISS/langchain 在初始化时会将根 logger 的 level 从 INFO 改为 WARNING，
+    导致其他模块的 INFO 日志无法输出。此函数在 FAISS 操作后恢复日志级别。
+    """
+    from ai_kernel_generator import log_level
+    
+    root_logger = logging.getLogger()
+    if root_logger.level > log_level:
+        root_logger.setLevel(log_level)
 
 def _auto_detect_device() -> str:
     """自动检测可用的设备"""
@@ -117,6 +132,8 @@ class VectorStore(ABC):
                     model_kwargs={'device': _auto_detect_device()},
                     encode_kwargs={'normalize_embeddings': True}
                 )
+                # HuggingFaceEmbeddings 初始化可能会影响日志配置，恢复之
+                _restore_root_logger_level()
                 return embedding
             except Exception as e:
                 logger.warning(f"Failed to load HuggingFace model: {model_name}, error: {e}")
@@ -157,11 +174,14 @@ class VectorStore(ABC):
         
         # 加载现有索引
         logger.info(f"Loading existing vector index: {index_path.name}...")
-        return FAISS.load_local(
+        result = FAISS.load_local(
             folder_path=self.index_path,
             embeddings=self.embedding_model,
             allow_dangerous_deserialization=True  # 注意安全性
         )
+        # FAISS.load_local 可能会影响日志配置，恢复之
+        _restore_root_logger_level()
+        return result
 
     @abstractmethod
     def gen_document(self, metadata: dict, file_path: str, other_args: Any = None) -> Document:
@@ -202,6 +222,8 @@ class VectorStore(ABC):
             # 创建空向量存储
             dummy_doc = Document(page_content="", metadata={})
             vector_store = FAISS.from_documents([dummy_doc], self.embedding_model)
+            # FAISS.from_documents 可能会影响日志配置，恢复之
+            _restore_root_logger_level()
             # 删除 dummy 文档
             dummy_id = list(vector_store.index_to_docstore_id.values())[0]
             vector_store.delete([dummy_id])
@@ -210,6 +232,8 @@ class VectorStore(ABC):
                 documents=documents,
                 embedding=self.embedding_model,
             )
+            # FAISS.from_documents 可能会影响日志配置，恢复之
+            _restore_root_logger_level()
         
         # 保存索引
         vector_store.save_local(self.index_path)
