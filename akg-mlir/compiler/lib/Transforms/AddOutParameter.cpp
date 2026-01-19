@@ -205,6 +205,143 @@ static LogicalResult rewriteTempExpandSourceToOutView(memref::ExpandShapeOp expa
   return rewriteTempSourceToOutViewImpl<memref::ExpandShapeOp, memref::CollapseShapeOp>(expandOp, outArg);
 }
 
+static Value buildReshapeFromOut(OpBuilder &b, Location loc, MemRefType tmpTy, Value outArg,
+                                 ArrayRef<int64_t> staticDims) {
+  MLIRContext *ctx = b.getContext();
+  unsigned rank = tmpTy.getRank();
+
+  auto idxTy = IndexType::get(ctx);
+  auto shapeMemrefTy = MemRefType::get({static_cast<int64_t>(rank)}, idxTy);
+  Value shapeMemref = b.create<memref::AllocOp>(loc, shapeMemrefTy).getResult();
+
+  for (unsigned i = 0; i < rank; ++i) {
+    Value dimVal;
+    if (ShapedType::isDynamic(staticDims[i])) {
+      dimVal = b.create<memref::DimOp>(loc, outArg, i);
+    } else {
+      dimVal = b.create<arith::ConstantIndexOp>(loc, staticDims[i]);
+    }
+
+    Value idx = b.create<arith::ConstantIndexOp>(loc, i);
+    b.create<memref::StoreOp>(loc, dimVal, shapeMemref, ValueRange{idx});
+  }
+
+  auto newView = b.create<memref::ReshapeOp>(loc, tmpTy, outArg, shapeMemref);
+  return newView.getResult();
+}
+
+static void tryEraseOldShapeMemref(Value tmpShape) {
+  auto shapeAlloc = tmpShape.getDefiningOp<memref::AllocOp>();
+  if (!shapeAlloc) return;
+
+  SmallVector<Operation *> shapeUsers;
+  std::copy(tmpShape.getUsers().begin(), tmpShape.getUsers().end(), std::back_inserter(shapeUsers));
+
+  bool onlyStoreUsers = true;
+  SmallVector<memref::StoreOp> storeOpsToErase;
+
+  for (Operation *user : shapeUsers) {
+    if (auto store = dyn_cast<memref::StoreOp>(user)) {
+      if (store.getMemRef() == tmpShape)
+        storeOpsToErase.push_back(store);
+      else
+        onlyStoreUsers = false;
+    } else {
+      onlyStoreUsers = false;
+    }
+  }
+
+  if (!onlyStoreUsers) return;
+
+  for (memref::StoreOp s : storeOpsToErase) s.erase();
+
+  if (shapeAlloc->use_empty()) shapeAlloc->erase();
+}
+
+static LogicalResult rewriteTempReshapeSourceToOutView(memref::ReshapeOp reshapeOp, Value outArg) {
+  Value tmp = reshapeOp.getSource();
+  auto tmpTy = dyn_cast<MemRefType>(tmp.getType());
+  auto outTy = dyn_cast<MemRefType>(outArg.getType());
+  if (!tmpTy || !outTy) return success();
+
+  SmallVector<int64_t, 4> staticDims(tmpTy.getShape().begin(), tmpTy.getShape().end());
+
+  Operation *tmpDef = tmp.getDefiningOp();
+  Value newViewVal;
+
+  Location loc = reshapeOp.getLoc();
+  Value tmpShape = reshapeOp.getShape();
+
+  if (!tmpDef) {
+    BlockArgument ba = mlir::cast<BlockArgument>(tmp);
+    Block *parentBlock = ba.getOwner();
+    if (!parentBlock) return success();
+
+    auto insertPt = parentBlock->begin();
+    OpBuilder b(parentBlock, insertPt);
+    newViewVal = buildReshapeFromOut(b, loc, tmpTy, outArg, staticDims);
+  } else {
+    Block *parentBlock = tmpDef->getBlock();
+    auto insertPt = std::next(Block::iterator(tmpDef));
+    OpBuilder b(parentBlock, insertPt);
+    newViewVal = buildReshapeFromOut(b, loc, tmpTy, outArg, staticDims);
+  }
+
+  SmallVector<OpOperand *> uses;
+  for (OpOperand &use : tmp.getUses()) {
+    if (use.getOwner() == reshapeOp) continue;
+    uses.push_back(&use);
+  }
+  for (auto *u : uses) u->set(newViewVal);
+
+  reshapeOp.getResult().replaceAllUsesWith(outArg);
+  reshapeOp.erase();
+
+  if (auto tmpAlloc = tmp.getDefiningOp<memref::AllocOp>()) {
+    if (tmpAlloc->use_empty()) tmpAlloc->erase();
+  }
+
+  tryEraseOldShapeMemref(tmpShape);
+
+  return success();
+}
+
+static LogicalResult rewriteSrcOutReshapeOpToOutView(memref::ReshapeOp reshapeOp, Value outArg) {
+  Value src = reshapeOp.getSource();
+  auto srcTy = dyn_cast<MemRefType>(src.getType());
+  auto outTy = dyn_cast<MemRefType>(outArg.getType());
+  if (!srcTy || !outTy) return success();
+
+  auto func = reshapeOp->getParentOfType<func::FuncOp>();
+  if (!func || func.empty()) return success();
+
+  Block &entry = func.front();
+
+  SmallVector<int64_t, 4> staticDims(srcTy.getShape().begin(), srcTy.getShape().end());
+
+  OpBuilder topBuilder(&entry, entry.begin());
+  Value backView = buildReshapeFromOut(topBuilder, reshapeOp.getLoc(), srcTy, outArg, staticDims);
+
+  SmallVector<memref::StoreOp, 4> srcStores;
+  for (Operation *user : src.getUsers()) {
+    if (auto store = dyn_cast<memref::StoreOp>(user)) {
+      if (store.getMemRef() == src) srcStores.push_back(store);
+    }
+  }
+
+  for (auto store : srcStores) {
+    OpBuilder b(store->getContext());
+    b.setInsertionPointAfter(store);
+    b.create<memref::StoreOp>(store.getLoc(), store.getValue(), backView, store.getIndices());
+  }
+
+  reshapeOp.erase();
+
+  tryEraseOldShapeMemref(reshapeOp.getShape());
+
+  return success();
+}
+
 static LogicalResult handleAllocReturn(Value oldResVal, Value outArg) {
   if (auto allocOp = oldResVal.getDefiningOp<memref::AllocOp>()) {
     Value root = allocOp.getResult();
@@ -242,6 +379,20 @@ static LogicalResult handleExpandReturn(Value oldResVal, Value outArg, SmallVect
   return rewriteTempExpandSourceToOutView(expandOp, outArg);
 }
 
+static LogicalResult handleReshapeReturn(Value oldResVal, Value outArg, SmallVector<Value> &origReturnValues,
+                                         SmallVector<Value> &newReturnValues) {
+  auto reshapeOp = oldResVal.getDefiningOp<memref::ReshapeOp>();
+  if (!reshapeOp) return success();
+
+  Value src = reshapeOp.getSource();
+
+  if (llvm::is_contained(origReturnValues, src) || llvm::is_contained(newReturnValues, src)) {
+    return rewriteSrcOutReshapeOpToOutView(reshapeOp, outArg);
+  }
+
+  return rewriteTempReshapeSourceToOutView(reshapeOp, outArg);
+}
+
 static LogicalResult processReturnValue(unsigned resultIdx, Value oldResVal, Value maybeOutArg, func::ReturnOp ret,
                                         SmallVector<Value> &origReturnValues, SmallVector<Value> &newReturnValues) {
   if (mlir::isa<BlockArgument>(oldResVal)) {
@@ -277,6 +428,12 @@ static LogicalResult processReturnValue(unsigned resultIdx, Value oldResVal, Val
 
   if (isa<memref::ExpandShapeOp>(oldResVal.getDefiningOp())) {
     if (failed(handleExpandReturn(oldResVal, outArg, origReturnValues, newReturnValues))) return failure();
+    newReturnValues[resultIdx] = outArg;
+    return success();
+  }
+
+  if (isa<memref::ReshapeOp>(oldResVal.getDefiningOp())) {
+    if (failed(handleReshapeReturn(oldResVal, outArg, origReturnValues, newReturnValues))) return failure();
     newReturnValues[resultIdx] = outArg;
     return success();
   }
