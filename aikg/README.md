@@ -80,11 +80,16 @@ source env.sh
 
 ### API Configuration Example
 ```bash
-# Using DeepSeek as an example; can be replaced with other supported model providers (see docs/API.md)
+# LLM API (Using DeepSeek as an example; can be replaced with other supported model providers, see docs/API.md)
 export AIKG_BASE_URL="https://api.deepseek.com/beta/"
 export AIKG_MODEL_NAME="deepseek-chat"
 export AIKG_API_KEY="YOUR_API_KEY"
 export AIKG_MODEL_ENABLE_THINK="enabled"  # or "disabled"
+
+# Embedding API (Optional, for RAG retrieval)
+export AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
+export AIKG_EMBEDDING_MODEL_NAME="Qwen/Qwen3-Embedding-8B"
+export AIKG_EMBEDDING_API_KEY="YOUR_API_KEY"
 ```
 
 ### Launch AKG_CLI

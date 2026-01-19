@@ -132,3 +132,39 @@ export AIKG_MODEL_ENABLE_THINK="enabled"  # 可选，启用thinking模式
 - **GLM 风格**：设置为 `"true"` 或 `"false"`
 
 如果不设置此环境变量，则不启用 thinking 模式。
+
+## 5. Embedding 模型环境变量设置
+
+您可以通过高优先级环境变量直接指定 Embedding API，用于 RAG 检索等功能。
+
+```bash
+export AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
+export AIKG_EMBEDDING_MODEL_NAME="Qwen/Qwen3-Embedding-8B"
+export AIKG_EMBEDDING_API_KEY="your-api-key"
+```
+
+**参数说明**：
+- `AIKG_EMBEDDING_BASE_URL`：Embedding API 的基础 URL
+- `AIKG_EMBEDDING_MODEL_NAME`：模型名称，支持两种格式：
+  - **预设名**：如 `sflow_qwen3_embedding_8b`（会自动从 `llm_config.yaml` 读取实际模型名）
+  - **实际模型名**：如 `Qwen/Qwen3-Embedding-8B`（直接使用）
+- `AIKG_EMBEDDING_API_KEY`：API 密钥
+
+**优先级**：
+1. 环境变量（三者都设置时生效）
+2. 本地 HuggingFace 模型（`~/.aikg/text2vec-large-chinese`）
+
+**使用示例**：
+
+```bash
+# 使用硅流平台的 Embedding 模型
+AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1" \
+AIKG_EMBEDDING_MODEL_NAME="Qwen/Qwen3-Embedding-8B" \
+AIKG_EMBEDDING_API_KEY="sk-xxx" \
+python tools/run_single_adaptive_search.py config.yaml
+```
+
+**可用的预设名**（在 `llm_config.yaml` 中定义）：
+- `sflow_qwen3_embedding_8b`：Qwen3-Embedding-8B（1024 维）
+- `sflow_qwen3_embedding_4b`：Qwen3-Embedding-4B（768 维）
+- `sflow_qwen3_embedding_0.6b`：Qwen3-Embedding-0.6B（512 维）
