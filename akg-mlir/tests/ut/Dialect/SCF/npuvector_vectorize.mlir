@@ -14,12 +14,13 @@ func.func @test_elementwise_static(
   %c1024 = arith.constant 1024 : index
   %c1 = arith.constant 1 : index
   
-  // CHECK: %[[X_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}], %{{.*}} : memref<1024xf32>, !npuvector<1024xf32>
-  // CHECK: %[[Y_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}], %{{.*}} : memref<1024xf32>, !npuvector<1024xf32>
-  // CHECK: %[[ALPHA_VEC:.*]] = npuvector.broadcast %{{.*}} : f32 to !npuvector<1024xf32>
-  // CHECK: %[[AX_VEC:.*]] = arith.mulf %[[ALPHA_VEC]], %[[X_VEC]] : !npuvector<1024xf32>
-  // CHECK: %[[RESULT_VEC:.*]] = arith.addf %[[AX_VEC]], %[[Y_VEC]] : !npuvector<1024xf32>
-  // CHECK: npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<1024xf32>, memref<1024xf32>
+  // CHECK: %[[MAX:.*]] = arith.constant 4096 : index
+  // CHECK: %[[X_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[MAX]]], %{{.*}} : memref<1024xf32>, !npuvector<4096xf32>
+  // CHECK: %[[Y_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[MAX]]], %{{.*}} : memref<1024xf32>, !npuvector<4096xf32>
+  // CHECK: %[[ALPHA_VEC:.*]] = npuvector.broadcast %{{.*}}[%[[MAX]]] : f32 to !npuvector<4096xf32>
+  // CHECK: %[[AX_VEC:.*]] = arith.mulf %[[ALPHA_VEC]], %[[X_VEC]] : !npuvector<4096xf32>
+  // CHECK: %[[RESULT_VEC:.*]] = arith.addf %[[AX_VEC]], %[[Y_VEC]] : !npuvector<4096xf32>
+  // CHECK: npuvector.transfer_write %[[RESULT_VEC]], %{{.*}}[%{{.*}}] : !npuvector<4096xf32>, memref<1024xf32>
   // CHECK-NOT: scf.for
   
   scf.for %i = %c0 to %c1024 step %c1 {
@@ -81,20 +82,21 @@ func.func @test_reduction_static(%input: memref<1024xf32>, %output: memref<f32>)
   %c1 = arith.constant 1 : index
   %init = arith.constant 0.0 : f32
   
-  // CHECK: %[[NEUTRAL:.*]] = arith.constant dense<0.000000e+00> : !npuvector<1024xf32>
-  // CHECK: %[[SUM_VEC:.*]] = scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ACC_VEC:.*]] = %[[NEUTRAL]]) -> (!npuvector<1024xf32>) {
-  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}} : memref<1024xf32>, !npuvector<1024xf32>
-  // CHECK:   %[[NEW_ACC_VEC:.*]] = arith.addf %[[ACC_VEC]], %[[V_VEC]] : !npuvector<1024xf32>
-  // CHECK:   scf.yield %[[NEW_ACC_VEC]] : !npuvector<1024xf32>
+  // CHECK: %[[VF:.*]] = arith.constant 128 : index
+  // CHECK: %[[NEUTRAL:.*]] = arith.constant dense<0.000000e+00> : !npuvector<128xf32>
+  // CHECK: %[[SUM_VEC:.*]] = scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ACC_VEC:.*]] = %[[NEUTRAL]]) -> (!npuvector<128xf32>) {
+  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[VF]]], %{{.*}} : memref<1024xf32>, !npuvector<128xf32>
+  // CHECK:   %[[NEW_ACC_VEC:.*]] = arith.addf %[[ACC_VEC]], %[[V_VEC]] : !npuvector<128xf32>
+  // CHECK:   scf.yield %[[NEW_ACC_VEC]] : !npuvector<128xf32>
   // CHECK: }
-  // CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %[[SUM_VEC]] : !npuvector<1024xf32> into f32
+  // CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %[[SUM_VEC]] : !npuvector<128xf32> into f32
   // CHECK: memref.store %[[SUM]], %{{.*}}[] : memref<f32>
   
   %sum = scf.for %i = %c0 to %c1024 step %c1 iter_args(%acc = %init) -> f32 {
     %v = memref.load %input[%i] : memref<1024xf32>
     %new_acc = arith.addf %acc, %v : f32
     scf.yield %new_acc : f32
-  } {reduction=4096}
+  } {reduction=128}
   
   memref.store %sum, %output[] : memref<f32>
   return
@@ -115,23 +117,77 @@ func.func @test_reduction_dynamic(%input: memref<?xf32>, %output: memref<f32>) {
   
   // CHECK: %[[DIM:.*]] = memref.dim %{{.*}}, %{{.*}} : memref<?xf32>
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
-  // CHECK: %[[TRIP:.*]] = arith.subi %[[DIM]], %{{.*}} : index
-  // CHECK: %[[MAX:.*]] = arith.constant 4096 : index
+  // CHECK: %{{.*}} = arith.subi %[[DIM]], %{{.*}} : index
+  // CHECK: %[[VF:.*]] = arith.constant 128 : index
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
-  // CHECK: %[[NEUTRAL:.*]] = npuvector.broadcast %{{.*}}[%[[TRIP]]] [%[[MAX]]] : f32 to !npuvector<?xf32>
-  // CHECK: %[[SUM_VEC:.*]] = scf.for %{{.*}} = %{{.*}} to %[[DIM]] step %[[TRIP]] iter_args(%[[ACC_VEC:.*]] = %[[NEUTRAL]]) -> (!npuvector<?xf32>) {
-  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[TRIP]]] [%[[MAX]]], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
+  // CHECK: %[[NEUTRAL:.*]] = npuvector.broadcast %{{.*}}[%{{.*}}] [%[[VF]]] : f32 to !npuvector<?xf32>
+  // CHECK: %[[TRIP:.*]] = arith.subi %[[DIM]], %{{.*}} : index
+  // CHECK: %[[DIV:.*]] = arith.divsi %[[TRIP]], %{{.*}} : index
+  // CHECK: %[[MUL:.*]] = arith.muli %[[DIV]], %{{.*}} : index
+  // CHECK: %[[ALIGNED_UB:.*]] = arith.addi %[[MUL]], %{{.*}} : index
+  // CHECK: %[[SUM_VEC:.*]] = scf.for %{{.*}} = %{{.*}} to %[[ALIGNED_UB]] step %{{.*}} iter_args(%[[ACC_VEC:.*]] = %[[NEUTRAL]]) -> (!npuvector<?xf32>) {
+  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%{{.*}}] [%{{.*}}], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
   // CHECK:   %[[NEW_ACC_VEC:.*]] = arith.addf %[[ACC_VEC]], %[[V_VEC]] : !npuvector<?xf32>
   // CHECK:   scf.yield %[[NEW_ACC_VEC]] : !npuvector<?xf32>
   // CHECK: }
   // CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %[[SUM_VEC]] : !npuvector<?xf32> into f32
-  // CHECK: memref.store %[[SUM]], %{{.*}}[] : memref<f32>
+  // CHECK: %{{.*}} = arith.subi %[[DIM]], %{{.*}} : index
+  // CHECK: %[[REMAINDER:.*]] = arith.remsi %{{.*}}, %{{.*}} : index
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: %[[NEED_TAIL:.*]] = arith.cmpi ne, %[[REMAINDER]], %[[C0]] : index
+  // CHECK: %[[FINAL:.*]] = scf.if %[[NEED_TAIL]] -> (f32) {
+  // CHECK:   %[[TAIL_READ:.*]] = npuvector.transfer_read %{{.*}}[%[[ALIGNED_UB]]] [%[[REMAINDER]]] [%{{.*}}], %{{.*}} : memref<?xf32>, !npuvector<?xf32>
+  // CHECK:   %[[TAIL_REDUCED:.*]] = npuvector.reduction <add>, %[[TAIL_READ]] : !npuvector<?xf32> into f32
+  // CHECK:   %[[MERGED:.*]] = arith.addf %[[SUM]], %[[TAIL_REDUCED]] : f32
+  // CHECK:   scf.yield %[[MERGED]] : f32
+  // CHECK: } else {
+  // CHECK:   scf.yield %[[SUM]] : f32
+  // CHECK: }
+  // CHECK: memref.store %[[FINAL]], %{{.*}}[] : memref<f32>
   
   %sum = scf.for %i = %c0 to %N step %c1 iter_args(%acc = %init) -> f32 {
     %v = memref.load %input[%i] : memref<?xf32>
     %new_acc = arith.addf %acc, %v : f32
     scf.yield %new_acc : f32
-  } {reduction=4096}
+  } {reduction=128}
+  
+  memref.store %sum, %output[] : memref<f32>
+  return
+}
+
+// -----
+
+// ============================================================================
+// Static Reduction with Tail Block
+// ============================================================================
+
+// CHECK-LABEL: func.func @test_reduction_static_with_tail
+func.func @test_reduction_static_with_tail(%input: memref<300xf32>, %output: memref<f32>) {
+  %c0 = arith.constant 0 : index
+  %c300 = arith.constant 300 : index
+  %c1 = arith.constant 1 : index
+  %init = arith.constant 0.0 : f32
+  
+  // CHECK: %[[VF:.*]] = arith.constant 128 : index
+  // CHECK: %[[NEUTRAL:.*]] = arith.constant dense<0.000000e+00> : !npuvector<128xf32>
+  // CHECK: %[[ALIGNED_UB:.*]] = arith.constant 256 : index
+  // CHECK: %[[SUM_VEC:.*]] = scf.for %{{.*}} = %{{.*}} to %[[ALIGNED_UB]] step %{{.*}} iter_args(%[[ACC_VEC:.*]] = %[[NEUTRAL]]) -> (!npuvector<128xf32>) {
+  // CHECK:   %[[V_VEC:.*]] = npuvector.transfer_read %{{.*}}[%{{.*}}] [%[[VF]]], %{{.*}} : memref<300xf32>, !npuvector<128xf32>
+  // CHECK:   %[[NEW_ACC_VEC:.*]] = arith.addf %[[ACC_VEC]], %[[V_VEC]] : !npuvector<128xf32>
+  // CHECK:   scf.yield %[[NEW_ACC_VEC]] : !npuvector<128xf32>
+  // CHECK: }
+  // CHECK: %[[SUM:.*]] = npuvector.reduction <add>, %[[SUM_VEC]] : !npuvector<128xf32> into f32
+  // CHECK: %[[TAIL_SIZE:.*]] = arith.constant 44 : index
+  // CHECK: %[[TAIL_READ:.*]] = npuvector.transfer_read %{{.*}}[%[[ALIGNED_UB]]] [%[[TAIL_SIZE]]], %{{.*}} : memref<300xf32>, !npuvector<44xf32>
+  // CHECK: %[[TAIL_REDUCED:.*]] = npuvector.reduction <add>, %[[TAIL_READ]] : !npuvector<44xf32> into f32
+  // CHECK: %[[FINAL:.*]] = arith.addf %[[SUM]], %[[TAIL_REDUCED]] : f32
+  // CHECK: memref.store %[[FINAL]], %{{.*}}[] : memref<f32>
+  
+  %sum = scf.for %i = %c0 to %c300 step %c1 iter_args(%acc = %init) -> f32 {
+    %v = memref.load %input[%i] : memref<300xf32>
+    %new_acc = arith.addf %acc, %v : f32
+    scf.yield %new_acc : f32
+  } {reduction=128}
   
   memref.store %sum, %output[] : memref<f32>
   return
