@@ -66,13 +66,11 @@ void ConvertToFP32(py::buffer_info &bf16_buf, py::buffer_info &fp32_buf) {
   return;
 }
 
-void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bool is_dynamic, const py::args &args) {
-  akg_log_init();
-  // 1. we get input_tensor and output tensor
-  auto input_tensors = std::vector<mlir::runtime::TensorDevicePtr>();
-  auto input_shapes = std::vector<std::vector<int64_t>>();
-  std::map<uint64_t, py::buffer_info> bf16_buf_map;
-
+void PrepareInputTensors(bool is_dynamic,
+                         std::vector<mlir::runtime::TensorDevicePtr> &input_tensors,
+                         std::vector<std::vector<int64_t>> &input_shapes,
+                         std::map<uint64_t, py::buffer_info> &bf16_buf_map,
+                         const py::args &args) {
   for (uint16_t i = 0; i < args.size(); i++) {
     auto tensor_obj_ptr = args[i].cast<AscendTensorObjStructPyTorchPtr>();
     auto tensor = tensor_obj_ptr->tensor_info;
@@ -103,6 +101,16 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
       input_shapes.push_back(input_shape);
     }
   }
+}
+
+void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bool is_dynamic,
+                    bool use_mem_pool, const py::args &args) {
+  akg_log_init();
+  // 1. we get input_tensor and output tensor
+  auto input_tensors = std::vector<mlir::runtime::TensorDevicePtr>();
+  auto input_shapes = std::vector<std::vector<int64_t>>();
+  std::map<uint64_t, py::buffer_info> bf16_buf_map;
+  PrepareInputTensors(is_dynamic, input_tensors, input_shapes, bf16_buf_map, args);
 
   int64_t tiling_key;
   int64_t tiling_struct_size;
@@ -167,7 +175,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
     }
   }
 
-  auto kernel_runtime = mlir::runtime::AscendKernelRuntime(device_id);
+  auto kernel_runtime = mlir::runtime::AscendKernelRuntime(device_id, use_mem_pool);
   kernel_runtime.RunOpImpl(path, kernel_name, is_dynamic, input_tensors, input_shapes, tiling_key, tiling_struct_size);
 
   for (auto iter = bf16_buf_map.begin(); iter != bf16_buf_map.end(); iter++) {

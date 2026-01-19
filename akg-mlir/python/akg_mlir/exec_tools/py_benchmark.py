@@ -359,7 +359,7 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
     device_id = int(os.environ.get("DEVICE_ID", 0))
     dso_path = _get_kernel_meta_dir()
     if profiling_trails == 0:
-        launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
+        launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes, use_mem_pool = True)
         for idx, d in enumerate(expect):
             expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
         compare_results(kernel_name, desc, input_for_mod,
@@ -367,7 +367,7 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
     else:
         akgProfileMgr.ascend_start_profiling(device_id)
         for _ in range(5):
-            launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
+            launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes, use_mem_pool = True)
         akgProfileMgr.ascend_stop_profiling()
         # analysis
         cycle = profiling_analyse(None)
