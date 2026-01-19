@@ -302,7 +302,7 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
 class OpenAICompatibleEmbeddings(Embeddings):
     """
     调用 OpenAI 兼容格式的 Embedding API。
-    支持本地部署（如 vllm）和远程 API（如硅流平台），可禁用 SSL 验证以适配内网环境。
+    支持本地部署（如 vllm）和远程 API（如硅流平台）。
     """
 
     def __init__(
@@ -319,7 +319,7 @@ class OpenAICompatibleEmbeddings(Embeddings):
             api_url: Embedding API 的完整 URL（如 http://localhost:8001/v1/embeddings）
             model_name: 模型名称
             api_key: API 密钥（可选，远程 API 需要）
-            verify_ssl: 是否验证 SSL 证书（内网环境可设为 False）
+            verify_ssl: 是否验证 SSL 证书
         """
         self.api_url = api_url
         self.model_name = model_name
@@ -428,7 +428,7 @@ def create_embedding_model(name: Optional[str] = None, config_path: Optional[str
             api_url=embedding_url,
             model_name=actual_model_name,
             api_key=env_api_key,
-            verify_ssl=False  # 内网环境禁用 SSL 验证
+            verify_ssl=False
         )
 
         logger.info("环境变量覆盖模式：Embedding模型创建完成")
@@ -482,7 +482,7 @@ def create_embedding_model(name: Optional[str] = None, config_path: Optional[str
             api_url=embedding_url,
             model_name=preset_config.get("model"),
             api_key=api_key,
-            verify_ssl=False  # 内网环境禁用 SSL 验证
+            verify_ssl=False
         )
 
     return embedding_model

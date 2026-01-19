@@ -29,6 +29,3 @@ profile_settings:
 
 # Verification configuration
 verify_timeout: 600  # Timeout for verification in seconds (default 10 minutes)
-
-# RAG configuration
-rag: false  # Enable RAG mode for handwrite suggestions and coder examples
