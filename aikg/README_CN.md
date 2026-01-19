@@ -80,11 +80,16 @@ source env.sh
 
 ### API 配置示例
 ```bash
-# 以 DeepSeek 为例，可替换为其他支持的模型服务商（详见 docs/CN/API.md）
+# LLM API（以 DeepSeek 为例，可替换为其他支持的模型服务商，详见 docs/CN/API.md）
 export AIKG_BASE_URL="https://api.deepseek.com/beta/"
 export AIKG_MODEL_NAME="deepseek-chat"
 export AIKG_API_KEY="YOUR_API_KEY"
 export AIKG_MODEL_ENABLE_THINK="enabled"  # 或 "disabled"
+
+# Embedding API（可选，用于 RAG 检索功能）
+export AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
+export AIKG_EMBEDDING_MODEL_NAME="Qwen/Qwen3-Embedding-8B"
+export AIKG_EMBEDDING_API_KEY="YOUR_API_KEY"
 ```
 
 ### 启动 AKG_CLI
@@ -163,6 +168,8 @@ git submodule update --init "aikg/thirdparty/*"
 将下载后的模型地址添加到database对应的yaml中，请参考  [DataBase](./docs/CN/Database.md) 文档
 ```bash
 bash download.sh --with_local_model
+# 若下载速度较慢，可尝试镜像
+HF_ENDPOINT=https://hf-mirror.com bash download.sh --with_local_model
 ```
 
 > 💡 **配置提示**: 

@@ -23,7 +23,6 @@ import httpx
 from langchain_deepseek import ChatDeepSeek
 from langchain_ollama import ChatOllama
 from langchain_core.embeddings import Embeddings
-from langchain_community.embeddings import OpenAIEmbeddings
 import openai
 
 
@@ -300,12 +299,32 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
     return model
 
 
-class LocalAPIEmbeddings(Embeddings):
-    """使用本地部署的 Embedding API"""
+class OpenAICompatibleEmbeddings(Embeddings):
+    """
+    调用 OpenAI 兼容格式的 Embedding API。
+    支持本地部署（如 vllm）和远程 API（如硅流平台）。
+    """
 
-    def __init__(self, api_url: str, model_name: str):
+    def __init__(
+        self,
+        api_url: str,
+        model_name: str,
+        api_key: Optional[str] = None,
+        verify_ssl: bool = True
+    ):
+        """
+        初始化 Embedding 客户端
+
+        Args:
+            api_url: Embedding API 的完整 URL（如 http://localhost:8001/v1/embeddings）
+            model_name: 模型名称
+            api_key: API 密钥（可选，远程 API 需要）
+            verify_ssl: 是否验证 SSL 证书
+        """
         self.api_url = api_url
         self.model_name = model_name
+        self.api_key = api_key
+        self.verify_ssl = verify_ssl
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """为文档生成 Embeddings"""
@@ -323,15 +342,16 @@ class LocalAPIEmbeddings(Embeddings):
         }
 
         headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
             response = requests.post(
                 self.api_url,
                 json=payload,
                 headers=headers,
-                # 如果部署在内网需要代理，添加以下参数
-                proxies={"http": "", "https": ""},  # 清除代理
-                timeout=30
+                verify=self.verify_ssl,
+                timeout=60
             )
             response.raise_for_status()
 
@@ -351,13 +371,11 @@ class LocalAPIEmbeddings(Embeddings):
             return embeddings
 
         except requests.exceptions.RequestException as e:
-            # 处理异常情况
-            print(f"API请求失败: {e}")
-            # 返回零向量，维度为1024（根据Qwen3-Embedding-8B的实际维度）
-            return [[0.0] * 1024] * len(texts)
+            logger.error(f"Embedding API请求失败: {e}")
+            raise RuntimeError(f"Embedding API请求失败: {e}") from e
 
 
-def create_embedding_model(name: Optional[str] = None, config_path: Optional[str] = None):
+def create_embedding_model(name: Optional[str] = None, config_path: Optional[str] = None) -> Embeddings:
     """
     根据预设名称创建embedding模型
 
@@ -366,18 +384,59 @@ def create_embedding_model(name: Optional[str] = None, config_path: Optional[str
         config_path: 配置文件路径，如果为None则使用默认路径
 
     Returns:
-        OpenAIEmbeddings: 创建的embedding模型实例，兼容LangChain
+        Embeddings: 创建的embedding模型实例，兼容LangChain
     """
     # 使用默认路径或指定路径
     config_path = config_path or CONFIG_PATH
+    
+    # 加载配置文件（用于检查预设名和获取默认值）
+    config = {}
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
 
-    # 检查配置文件是否存在
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"配置文件未找到: {config_path}")
+    # 【最高优先级】检查环境变量覆盖
+    env_base_url = os.getenv("AIKG_EMBEDDING_BASE_URL")
+    env_model_name = os.getenv("AIKG_EMBEDDING_MODEL_NAME")
+    env_api_key = os.getenv("AIKG_EMBEDDING_API_KEY")
 
-    # 加载配置
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+    if env_base_url and env_model_name and env_api_key:
+        # 检查 env_model_name 是否是预设名（存在于配置文件中）
+        # 如果是预设名，从配置文件读取实际模型名
+        actual_model_name = env_model_name
+        if env_model_name in config:
+            preset_config = config[env_model_name]
+            actual_model_name = preset_config.get("model", env_model_name)
+            logger.info(f"检测到预设名 '{env_model_name}'，使用实际模型名: {actual_model_name}")
+        
+        # 使用环境变量创建embedding模型
+        logger.info("=" * 60)
+        logger.info("使用环境变量覆盖模式创建Embedding模型")
+        logger.info(f"  AIKG_EMBEDDING_BASE_URL: {env_base_url}")
+        logger.info(f"  AIKG_EMBEDDING_MODEL_NAME: {env_model_name}")
+        if actual_model_name != env_model_name:
+            logger.info(f"  实际模型名: {actual_model_name}")
+        # 只显示前8位和后4位，保护API密钥安全
+        masked_key = env_api_key[:8] + "*" * (len(env_api_key) - 12) + \
+            env_api_key[-4:] if len(env_api_key) > 12 else "***"
+        logger.info(f"  AIKG_EMBEDDING_API_KEY: {masked_key}")
+        logger.info("=" * 60)
+
+        # 构建 embedding API 端点
+        embedding_url = f"{env_base_url.rstrip('/')}/embeddings"
+        embedding_model = OpenAICompatibleEmbeddings(
+            api_url=embedding_url,
+            model_name=actual_model_name,
+            api_key=env_api_key,
+            verify_ssl=False
+        )
+
+        logger.info("环境变量覆盖模式：Embedding模型创建完成")
+        return embedding_model
+
+    # 检查配置文件是否存在（如果前面没有加载成功）
+    if not config:
+        raise FileNotFoundError(f"配置文件未找到或为空: {config_path}")
 
     # 如果未指定预设名称，使用默认embedding预设
     name = name or config.get("default_embedding_preset", "sflow_qwen3_embedding_8b")
@@ -401,7 +460,7 @@ def create_embedding_model(name: Optional[str] = None, config_path: Optional[str
 
         # 构建完整的embedding API端点
         embedding_url = f"{api_base.rstrip('/')}/embeddings"
-        embedding_model = LocalAPIEmbeddings(
+        embedding_model = OpenAICompatibleEmbeddings(
             api_url=embedding_url,
             model_name=preset_config.get("model")
         )
@@ -416,12 +475,14 @@ def create_embedding_model(name: Optional[str] = None, config_path: Optional[str
         if not api_key:
             raise ValueError(f"API密钥未找到。请设置环境变量 {api_key_env}")
 
-        # 使用LangChain的OpenAIEmbeddings，配置硅流平台
-        embedding_model = OpenAIEmbeddings(
-            openai_api_key=api_key,
-            openai_api_base=preset_config.get("api_base"),
-            model=preset_config.get("model"),
-            **({"dimensions": preset_config.get("dimensions")} if preset_config.get("dimensions") else {})
+        # 使用 OpenAICompatibleEmbeddings，绕过 tiktoken 和 SSL 验证问题
+        api_base = preset_config.get("api_base", "").rstrip("/")
+        embedding_url = f"{api_base}/embeddings"
+        embedding_model = OpenAICompatibleEmbeddings(
+            api_url=embedding_url,
+            model_name=preset_config.get("model"),
+            api_key=api_key,
+            verify_ssl=False
         )
 
     return embedding_model

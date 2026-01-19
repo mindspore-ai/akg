@@ -146,7 +146,7 @@ def create_runtime_config(params: Dict[str, Any]) -> EvolveRuntimeConfig:
         elite_size=params['elite_size'],
         parent_selection_prob=params['parent_selection_prob'],
         handwrite_decay_rate=params['handwrite_decay_rate'],
-        rag=params.get('rag', False)  # 从 params 读取 rag，默认为 False
+        rag=params.get('config', {}).get('rag', False)  # 从 config 字典读取 rag，默认为 False
     )
 
 

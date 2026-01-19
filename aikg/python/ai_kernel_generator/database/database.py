@@ -187,14 +187,14 @@ class Database():
                 result = self.randomicity_search(output_content, sample_num, backend, arch, dsl, framework)
             return result
     
-    async def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, dsl: str, framework: str, improvement_doc: str = None, profile=float('inf'), custom: dict = None, mode: str = "skip"):
+    async def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, dsl: str, framework: str, improvement_doc: str = None, profile=float('inf'), custom: dict = None, mode: str = "skip", md5_hash: str = None):
         """
         插入新的算子实现
         """
         if mode not in ('skip', 'overwrite'):
             raise ValueError("mode must be either 'skip' or 'overwrite'")
 
-        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
+        md5_hash = md5_hash or get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
         file_path = Path(self.database_path) / arch / dsl / md5_hash
 
         if mode == 'skip' and file_path.exists():
@@ -232,12 +232,10 @@ class Database():
             vector_store.insert(f"{arch}/{dsl}/{md5_hash}")
         logger.info(f"Operator implementation inserted successfully, file path: {file_path}")
 
-    async def delete(self, impl_code:str, backend: str, arch: str, dsl: str):
+    def delete_by_hash(self, md5_hash: str, arch: str, dsl: str):
         """
-        删除算子实现
+        根据 md5_hash 删除算子实现
         """
-        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
-
         operator_path = Path(self.database_path)
         file_path = operator_path / arch / dsl / md5_hash
         if not file_path.exists():
@@ -256,6 +254,13 @@ class Database():
         for vector_store in self.vector_stores:
             vector_store.delete(f"{arch}/{dsl}/{md5_hash}")
         logger.info(f"Operator implementation deleted successfully, file path: {file_path}")
+
+    async def delete(self, impl_code:str, backend: str, arch: str, dsl: str):
+        """
+        删除算子实现
+        """
+        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
+        self.delete_by_hash(md5_hash, arch, dsl)
     
     def clear(self):
         for vector_store in self.vector_stores:
