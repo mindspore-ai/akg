@@ -1289,6 +1289,7 @@ struct VectorReductionToHIVM : public OpConversionPattern<vector::ReductionOp> {
         reduceOpAttr, rewriter.getDenseI64ArrayAttr(reduceDims), Value());
 
     rewriter.replaceOp(op, resultBuf);
+
     return success();
   }
 };
@@ -1624,19 +1625,8 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
         loc, TypeRange{}, sourceMemRef, resultBuf, Value(),
         reduceOpAttr, rewriter.getDenseI64ArrayAttr(reduceDims), Value());
 
-    Type resultType = op.getResult().getType();
-    if (isa<MemRefType>(resultType)) {
-      rewriter.replaceOp(op, resultBuf);
-      return success();
-    }
+    rewriter.replaceOp(op, resultBuf);
 
-    SmallVector<Value> indices;
-    indices.reserve(rank);
-    for (int64_t i = 0; i < rank; ++i) {
-      indices.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
-    }
-    Value scalar = rewriter.create<memref::LoadOp>(loc, resultBuf, indices);
-    rewriter.replaceOp(op, scalar);
     return success();
   }
 };
