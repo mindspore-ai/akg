@@ -18,12 +18,28 @@ import logging
 from typing import Any, List, Dict
 from pathlib import Path
 from abc import ABC, abstractmethod
+
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from ai_kernel_generator.utils.common_utils import get_md5_hash
+from ai_kernel_generator.core.llm.model_loader import create_embedding_model
 
 logger = logging.getLogger(__name__)
+
+
+def _restore_root_logger_level():
+    """
+    恢复根 logger 的日志级别。
+    
+    FAISS/langchain 在初始化时会将根 logger 的 level 从 INFO 改为 WARNING，
+    导致其他模块的 INFO 日志无法输出。此函数在 FAISS 操作后恢复日志级别。
+    """
+    from ai_kernel_generator import log_level
+    
+    root_logger = logging.getLogger()
+    if root_logger.level > log_level:
+        root_logger.setLevel(log_level)
 
 def _auto_detect_device() -> str:
     """自动检测可用的设备"""
@@ -91,8 +107,22 @@ class VectorStore(ABC):
         self._initialized = True
 
     def _load_embedding_model(self, embedding_model_name: str = "GanymedeNil/text2vec-large-chinese"):
-        """从配置文件加载嵌入模型"""
-        logger.info(f"Loading embedding model: {embedding_model_name}")
+        """加载嵌入模型
+        
+        优先级：
+        1. 远程 API（通过 create_embedding_model，自动检查环境变量）
+        2. 本地 HuggingFace 模型
+        """
+        # 【最高优先级】尝试使用远程 embedding API（自动检查环境变量）
+        try:
+            embedding = create_embedding_model()
+            logger.info("Using remote embedding API")
+            return embedding
+        except Exception as e:
+            logger.info(f"Remote embedding API not available: {e}, trying local model")
+        
+        # 【次优先级】使用本地 HuggingFace 模型
+        logger.info(f"Loading local embedding model: {embedding_model_name}")
         
         def load_huggingface_embedding_model(model_name: str):
             """加载HuggingFace嵌入模型"""
@@ -102,6 +132,8 @@ class VectorStore(ABC):
                     model_kwargs={'device': _auto_detect_device()},
                     encode_kwargs={'normalize_embeddings': True}
                 )
+                # HuggingFaceEmbeddings 初始化可能会影响日志配置，恢复之
+                _restore_root_logger_level()
                 return embedding
             except Exception as e:
                 logger.warning(f"Failed to load HuggingFace model: {model_name}, error: {e}")
@@ -121,8 +153,9 @@ class VectorStore(ABC):
         # 所有加载尝试都失败，抛出异常
         error_msg = (
             f"Failed to load embedding model '{embedding_model_name}'. "
-            f"Please download the embedding model to local by running: "
-            f"bash download.sh --with_local_model"
+            f"Please either:\n"
+            f"  1. Set environment variables: AIKG_EMBEDDING_BASE_URL, AIKG_EMBEDDING_MODEL_NAME, AIKG_EMBEDDING_API_KEY\n"
+            f"  2. Download the local model by running: bash download.sh --with_local_model"
         )
         logger.error(error_msg)
         raise RuntimeError(error_msg)
@@ -141,11 +174,14 @@ class VectorStore(ABC):
         
         # 加载现有索引
         logger.info(f"Loading existing vector index: {index_path.name}...")
-        return FAISS.load_local(
+        result = FAISS.load_local(
             folder_path=self.index_path,
             embeddings=self.embedding_model,
             allow_dangerous_deserialization=True  # 注意安全性
         )
+        # FAISS.load_local 可能会影响日志配置，恢复之
+        _restore_root_logger_level()
+        return result
 
     @abstractmethod
     def gen_document(self, metadata: dict, file_path: str, other_args: Any = None) -> Document:
@@ -186,6 +222,8 @@ class VectorStore(ABC):
             # 创建空向量存储
             dummy_doc = Document(page_content="", metadata={})
             vector_store = FAISS.from_documents([dummy_doc], self.embedding_model)
+            # FAISS.from_documents 可能会影响日志配置，恢复之
+            _restore_root_logger_level()
             # 删除 dummy 文档
             dummy_id = list(vector_store.index_to_docstore_id.values())[0]
             vector_store.delete([dummy_id])
@@ -194,6 +232,8 @@ class VectorStore(ABC):
                 documents=documents,
                 embedding=self.embedding_model,
             )
+            # FAISS.from_documents 可能会影响日志配置，恢复之
+            _restore_root_logger_level()
         
         # 保存索引
         vector_store.save_local(self.index_path)
