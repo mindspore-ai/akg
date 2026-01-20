@@ -46,6 +46,8 @@ from ai_kernel_generator.utils.main_op_agent_display import (
     format_display_message,
     get_hint_message
 )
+from ai_kernel_generator.cli.runtime.message_sender import send_message
+from ai_kernel_generator.cli.messages import PanelDataMessage
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +220,27 @@ class MainOpAgent(AgentBase):
         self.app = self._build_conversation_graph()
         
         logger.info("MainOpAgent initialized successfully")
+
+    def _send_panel_current(self, *, op_name: str = "", phase: str = "") -> None:
+        """更新面板当前任务（仅在字段变更处调用）"""
+        session_id = str(self.config.get("session_id") or "").strip()
+        if not session_id:
+            return
+        op_name = str(op_name or "").strip()
+        phase = str(phase or "").strip()
+        if not op_name and not phase:
+            return
+        logger.info(f"[panel] update_current: op_name='{op_name}', phase='{phase}'")
+        send_message(
+            session_id,
+            PanelDataMessage(
+                action="update_current",
+                data={
+                    "task_name": op_name,
+                    "phase": phase,
+                },
+            ),
+        )
 
     def request_cancellation(self) -> Dict[str, Any]:
         """
@@ -482,7 +505,7 @@ class MainOpAgent(AgentBase):
                     timestamp=datetime.now().isoformat()
                 )
                 
-                return {
+                result_state = {
                     "task_code": "",
                     "op_name": op_name,
                     "op_description": clarification_msg,
@@ -493,6 +516,8 @@ class MainOpAgent(AgentBase):
                     "user_feedback": None,
                     "user_confirmed": False
                 }
+                self._send_panel_current(op_name=op_name)
+                return result_state
             
             elif status == OpTaskBuilderStatus.UNSUPPORTED:
                 # 不支持的需求
@@ -504,7 +529,7 @@ class MainOpAgent(AgentBase):
                     timestamp=datetime.now().isoformat()
                 )
                 
-                return {
+                result_state = {
                     "task_code": "",
                     "op_name": op_name,
                     "op_description": description,
@@ -515,6 +540,8 @@ class MainOpAgent(AgentBase):
                     "user_feedback": None,
                     "user_confirmed": False
                 }
+                self._send_panel_current(op_name=op_name)
+                return result_state
             
             else:
                 # READY 或其他状态：正常返回
@@ -540,6 +567,7 @@ class MainOpAgent(AgentBase):
                     "user_confirmed": False
                 }
                 logger.info(f"Returning state with task_init_status: {result_state.get('task_init_status')}")
+                self._send_panel_current(op_name=op_name)
                 return result_state
 
         except Exception as e:
@@ -813,14 +841,23 @@ class MainOpAgent(AgentBase):
                 op_name=op_name,
                 parallel_index=1,
             )
-            success, result = await sub_agent.execute(
-                task_code=task_code,
-                op_name=op_name,
-                task_id=task_id,
-                task_label=sub_task_label,
-                **execute_kwargs
-            )
-            
+            self._send_panel_current(op_name=op_name, phase=sub_workflow)
+            # 避免通过 os.environ 临时开关导致的并发冲突：
+            # 使用 ContextVar 覆盖 stream 开关，使“对子 Agent 是否允许流式消息”成为协程上下文级别的局部状态。
+            from ai_kernel_generator.utils.stream_output import stream_output_override
+            from contextlib import nullcontext
+
+            # codeonly 单并发，允许流式：不要覆盖（继承外层 stream 设置）。
+            cm = nullcontext() if sub_workflow in ["codeonly"] else stream_output_override(False)
+            with cm:
+                success, result = await sub_agent.execute(
+                    task_code=task_code,
+                    op_name=op_name,
+                    task_id=task_id,
+                    task_label=sub_task_label,
+                    **execute_kwargs
+                )
+
             # 提取结果
             generated_code = result.get("generated_code", "")
             verifier_result = result.get("verification_result", False)
@@ -837,7 +874,6 @@ class MainOpAgent(AgentBase):
             # 实际验证目录 = {log_dir}/{op_name}/
             actual_log_dir = ""
             if sub_agent_type in ["evolve", "adaptive_search"] and base_log_dir:
-                import os
                 actual_log_dir = os.path.join(os.path.expanduser(base_log_dir), op_name)
                 logger.info(f"Constructed verification directory for {sub_agent_type}:")
                 logger.info(f"  base_log_dir: '{base_log_dir}' + op_name: '{op_name}' → '{actual_log_dir}'")
@@ -918,7 +954,6 @@ class MainOpAgent(AgentBase):
             }
             
             return_state.update(extra_stats)
-            
             return return_state
             
         except Exception as e:
@@ -1171,6 +1206,7 @@ class MainOpAgent(AgentBase):
             initial_state["task_code"] = provided_task_code  # 设置 LLM 提取/补充的代码
             initial_state["op_name"] = op_name
             initial_state["user_provided_complete_code"] = is_complete_code  # 标记代码是否完整
+            self._send_panel_current(op_name=op_name)
             if 'extracted_op_description' in locals() and extracted_op_description:
                 initial_state["op_description"] = extracted_op_description
             logger.info(f"✓ Set task_code in initial_state (length: {len(provided_task_code)} chars, complete={is_complete_code})")
@@ -1225,7 +1261,7 @@ class MainOpAgent(AgentBase):
             # 添加显示消息和提示消息
             result["display_message"] = format_display_message(result)
             result["hint_message"] = get_hint_message(result)
-            
+
             return result
         
         except Exception as e:
@@ -1351,6 +1387,15 @@ class MainOpAgent(AgentBase):
                 logger.info("Triton code exists, performing save")
                 save_result = save_verification_directory(current_state, self.config)
                 save_message = save_result.get("message", "保存完成")
+                save_path = save_result.get("save_path", "")
+                if save_path:
+                    current_state["output_path"] = save_path
+                    # 获取当前 phase（如果有 sub_agent_type 则使用，否则为空）
+                    phase = current_state.get("sub_agent_type", "")
+                    self._send_panel_current(
+                        op_name=str(current_state.get("op_name") or ""),
+                        phase=phase,
+                    )
             
             # 添加 assistant 消息到历史
             assistant_message = Message(
@@ -1485,6 +1530,7 @@ class MainOpAgent(AgentBase):
                 current_state["op_name"] = op_name  # 使用 LLM 分析得到的算子名称
                 current_state["op_description"] = op_description  # 使用 LLM 分析得到的描述
                 current_state["user_provided_complete_code"] = is_complete_code  # 标记代码是否完整
+                self._send_panel_current(op_name=op_name)
                 
                 # 根据 action 和 is_complete_code 决定下一步
                 if is_complete_code and action == "confirm":
@@ -1672,6 +1718,15 @@ class MainOpAgent(AgentBase):
                     # 执行保存
                     save_result = save_verification_directory(result, self.config)
                     save_message = save_result.get("message", "保存完成")
+                    save_path = save_result.get("save_path", "")
+                    if save_path:
+                        result["output_path"] = save_path
+                        # 获取当前 phase（如果有 sub_agent_type 则使用，否则为空）
+                        phase = result.get("sub_agent_type", "")
+                        self._send_panel_current(
+                            op_name=str(result.get("op_name") or ""),
+                            phase=phase,
+                        )
                     
                     # 添加保存消息到对话历史
                     save_assistant_message = Message(
@@ -1701,7 +1756,7 @@ class MainOpAgent(AgentBase):
                 result["display_message"] = format_display_message(result)
             if not result.get("hint_message"):
                 result["hint_message"] = get_hint_message(result)
-            
+
             return result
         
         except Exception as e:

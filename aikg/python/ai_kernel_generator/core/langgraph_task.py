@@ -67,7 +67,8 @@ class LangGraphTask:
                  meta_prompts: Optional[str] = None,
                  handwrite_suggestions: Optional[list] = None,
                  source_backend: Optional[str] = None,
-                 source_arch: Optional[str] = None):
+                 source_arch: Optional[str] = None,
+                 user_requirements: Optional[str] = None):
         """初始化 LangGraphTask
         
         Args:
@@ -87,6 +88,7 @@ class LangGraphTask:
             handwrite_suggestions: 手写优化建议列表
             source_backend: 源后端，用于跨后端转换场景（如 cuda -> ascend）
             source_arch: 源架构，用于跨后端转换场景（如 a100 -> ascend910b4）
+            user_requirements: 用户对算子生成的额外需求（来自 ReAct 多轮对话）
         """
         # 验证任务配置
         normalized_dsl = check_task_config(framework, backend, arch, dsl)
@@ -108,6 +110,8 @@ class LangGraphTask:
         self.handwrite_suggestions = handwrite_suggestions or []
         self.source_backend = source_backend.lower() if source_backend else None  # 跨后端转换的源后端
         self.source_arch = source_arch.lower() if source_arch else None  # 跨后端转换的源架构
+        # 用户需求：优先使用参数传入，其次从 config 读取（支持 evolve/adaptive_search 场景）
+        self.user_requirements = user_requirements or config.get("user_requirements", "")
         
         # 兼容旧代码：如果提供了device_pool，创建私有Worker
         self._private_worker = None
@@ -317,6 +321,7 @@ class LangGraphTask:
             "inspirations": self.inspirations,
             "meta_prompts": self.meta_prompts,
             "handwrite_suggestions": self.handwrite_suggestions,
+            "user_requirements": self.user_requirements,  # 用户额外需求（来自 ReAct）
         }
 
         if session_id:

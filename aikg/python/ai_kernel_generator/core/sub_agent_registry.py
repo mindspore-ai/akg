@@ -22,9 +22,9 @@
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple
-from ai_kernel_generator.core.langgraph_task import LangGraphTask
 
 logger = logging.getLogger(__name__)
 
@@ -163,10 +163,13 @@ class CodeOnlySubAgent(SubAgentBase):
                 - task_type: 任务类型（"precision_only" 或 "profile"）
                   - "precision_only": 只生成并验证代码（默认）
                   - "profile": 生成代码并进行性能测试
+                - user_requirements: 用户的额外需求说明（传递给 Coder prompt）
         """
-        # 获取任务类型（默认为 precision_only）
         task_type = kwargs.get("task_type", "precision_only")
+        user_requirements = kwargs.get("user_requirements", "")
         logger.info(f"Executing CodeOnly sub-agent for {op_name}, task_type={task_type}")
+        if user_requirements:
+            logger.info(f"  user_requirements: {user_requirements[:100]}...")
         logger.info(f"[RAG] CodeOnlySubAgent.execute: config.rag={self.config.get('rag')}, config keys: {list(self.config.keys()) if self.config else 'None'}")
 
         try:
@@ -201,20 +204,72 @@ class CodeOnlySubAgent(SubAgentBase):
                 framework=self.framework,
                 workflow="coder_only_workflow",  # codeonly 对应的 workflow
                 task_type=task_type,  # 传递任务类型
+                user_requirements=user_requirements,  # 传递用户需求到 Coder prompt
             )
             
             # 执行
             final_op_name, success, final_state = await task.run()
             
             # 提取结果
+            profile_res = final_state.get("profile_res")
             result = {
                 "generated_code": final_state.get("coder_code", ""),
                 "verification_result": final_state.get("verifier_result", False),
                 "verification_error": final_state.get("verifier_error", ""),
-                "profile_result": final_state.get("profile_res"),
-                "sub_agent_type": "codeonly",  # 🔥 标记子 Agent 类型
+                "profile_result": profile_res,
+                "sub_agent_type": "codeonly",  
                 "final_state": final_state  # 保存完整状态
             }
+
+            # 如果 codeonly 进行了 profile：把性能结果推送到面板历史（Top 5）
+            # 说明：CLI 面板历史依赖 PanelDataMessage(action="move_to_history")。
+            if task_type == "profile" and isinstance(profile_res, dict):
+                try:
+                    gen_time = float(profile_res.get("gen_time") or 0.0)
+                    base_time = float(profile_res.get("base_time") or 0.0)
+                    speedup = float(profile_res.get("speedup") or 0.0)
+                except Exception:
+                    gen_time = base_time = speedup = 0.0
+
+                if gen_time > 0.0 or base_time > 0.0 or speedup > 0.0:
+                    session_id = str((self.config or {}).get("session_id") or "").strip()
+                    if session_id:
+                        unique_dir = str(profile_res.get("unique_dir") or "").strip()
+                        log_dir = ""
+                        base_log_dir = str((self.config or {}).get("log_dir") or "").strip()
+                        if unique_dir:
+                            if base_log_dir:
+                                log_dir = os.path.join(
+                                    os.path.expanduser(base_log_dir), op_name, unique_dir
+                                )
+                            else:
+                                log_dir = str(profile_res.get("log_dir") or unique_dir)
+                        else:
+                            log_dir = str(profile_res.get("log_dir") or "")
+
+                        try:
+                            from ai_kernel_generator.cli.runtime.message_sender import (
+                                send_message,
+                            )
+                            from ai_kernel_generator.cli.messages import PanelDataMessage
+
+                            send_message(
+                                session_id,
+                                PanelDataMessage(
+                                    action="move_to_history",
+                                    data={
+                                        "speedup": speedup,
+                                        "gen_time": gen_time,
+                                        "base_time": base_time,
+                                        "log_dir": log_dir,
+                                    },
+                                ),
+                            )
+                            logger.info(
+                                f"[panel] Sent codeonly profile to history: speedup={speedup:.2f}x"
+                            )
+                        except Exception:
+                            pass
             
             return success, result
             
@@ -297,8 +352,15 @@ class EvolveSubAgent(SubAgentBase):
                      **kwargs) -> Tuple[bool, Dict[str, Any]]:
         """
         执行 evolve 进化优化
+        
+        Args:
+            **kwargs: 其他参数，可选：
+                - user_requirements: 用户的额外需求说明（传递给 Coder prompt）
         """
+        user_requirements = kwargs.get("user_requirements", "")
         logger.info(f"Executing Evolve sub-agent for {op_name}")
+        if user_requirements:
+            logger.info(f"  user_requirements: {user_requirements[:100]}...")
         
         try:
             # 导入 evolve 相关模块
@@ -365,6 +427,9 @@ class EvolveSubAgent(SubAgentBase):
             if not task_label:
                 raise ValueError("[EvolveSubAgent] missing task_label")
             cfg["task_label"] = task_label
+            # 传递用户需求到 config，LangGraphTask 会读取并放入 state
+            if user_requirements:
+                cfg["user_requirements"] = user_requirements
             logger.info(f"[RAG] EvolveSubAgent: passing config with rag={cfg.get('rag')} to evolve")
             evolution_result = await evolve(
                 op_name=op_name,
@@ -611,6 +676,47 @@ class KernelVerifierSubAgent(SubAgentBase):
             logger.info(f"  Generated performance: {gen_time:.2f} us")
             logger.info(f"  Speedup: {speedup:.2f}x")
             
+            # 立即发送性能结果到历史记录
+            if isinstance(profile_result, dict):
+                try:
+                    gen_time_val = float(gen_time or 0.0)
+                    base_time_val = float(base_time or 0.0)
+                    speedup_val = float(speedup or 0.0)
+                except Exception:
+                    gen_time_val = base_time_val = speedup_val = 0.0
+                
+                if gen_time_val > 0.0 or base_time_val > 0.0 or speedup_val > 0.0:
+                    session_id = str(self.config.get("session_id") or "").strip()
+                    if session_id:
+                        # 构造 log_dir：从 profile_result 中获取 unique_dir
+                        unique_dir = profile_result.get('unique_dir', '')
+                        log_dir = ""
+                        if unique_dir:
+                            # 从 config 中获取基础 log_dir，如果没有则使用默认路径
+                            base_log_dir = self.config.get('log_dir', '')
+                            if base_log_dir:
+                                log_dir = os.path.join(os.path.expanduser(base_log_dir), op_name, unique_dir)
+                            else:
+                                # 如果没有 base_log_dir，尝试从 profile_result 中获取完整路径
+                                log_dir = profile_result.get('log_dir', unique_dir)
+                        
+                        from ai_kernel_generator.cli.runtime.message_sender import send_message
+                        from ai_kernel_generator.cli.messages import PanelDataMessage
+                        
+                        send_message(
+                            session_id,
+                            PanelDataMessage(
+                                action="move_to_history",
+                                data={
+                                    "speedup": speedup_val,
+                                    "gen_time": gen_time_val,
+                                    "base_time": base_time_val,
+                                    "log_dir": log_dir,
+                                },
+                            ),
+                        )
+                        logger.info(f"Sent profile result to history immediately: speedup={speedup_val:.2f}x")
+            
             result = {
                 "generated_code": generated_code,
                 "verification_result": True,
@@ -783,9 +889,13 @@ class AdaptiveSearchSubAgent(SubAgentBase):
             task_code: OpTaskBuilder 生成的 task 代码
             op_name: 算子名称
             task_id: 任务 ID
-            **kwargs: 其他参数
+            **kwargs: 其他参数，可选：
+                - user_requirements: 用户的额外需求说明（传递给 Coder prompt）
         """
+        user_requirements = kwargs.get("user_requirements", "")
         logger.info(f"Executing AdaptiveSearch sub-agent for {op_name}")
+        if user_requirements:
+            logger.info(f"  user_requirements: {user_requirements[:100]}...")
         
         try:
             # 导入自适应搜索模块
@@ -821,6 +931,9 @@ class AdaptiveSearchSubAgent(SubAgentBase):
             if not task_label:
                 raise ValueError("[AdaptiveSearchSubAgent] missing task_label")
             cfg["task_label"] = task_label
+            # 传递用户需求到 config，LangGraphTask 会读取并放入 state
+            if user_requirements:
+                cfg["user_requirements"] = user_requirements
             
             logger.info(f"[RAG] AdaptiveSearchSubAgent: passing config with rag={cfg.get('rag')} to adaptive_search")
             logger.info(f"Starting adaptive search for {op_name}...")
@@ -853,7 +966,7 @@ class AdaptiveSearchSubAgent(SubAgentBase):
                 inspiration_sample_num=search_config["inspiration_sample_num"],
                 use_tiered_sampling=search_config["use_tiered_sampling"],
                 handwrite_sample_num=search_config["handwrite_sample_num"],
-                handwrite_decay_rate=search_config["handwrite_decay_rate"]
+                handwrite_decay_rate=search_config["handwrite_decay_rate"],
             )
             
             # 判断成功与否
@@ -914,9 +1027,121 @@ class AdaptiveSearchSubAgent(SubAgentBase):
             }
 
 
+class OpTaskBuilderSubAgent(SubAgentBase):
+
+    
+    def __init__(self, 
+                 config: dict,
+                 framework: str = "torch",
+                 backend: str = "cuda",
+                 arch: str = "a100",
+                 dsl: str = "triton"):
+        super().__init__(config, framework, backend, arch, dsl)
+        self._op_task_builder = None  
+    
+    def _get_op_task_builder(self):
+        if self._op_task_builder is None:
+            from ai_kernel_generator.core.agent.op_task_builder import OpTaskBuilder
+            self._op_task_builder = OpTaskBuilder(config=self.config)
+            self._op_task_builder.framework = self.framework
+            self._op_task_builder.backend = self.backend
+            self._op_task_builder.arch = self.arch
+            self._op_task_builder.dsl = self.dsl
+        return self._op_task_builder
+    
+    def get_name(self) -> str:
+        return "op_task_builder"
+    
+    def get_detailed_info(self) -> Dict[str, Any]:
+        """返回详细信息用于 LLM 决策"""
+        return {
+            "name": "op_task_builder",
+            "description": "将用户的自然语言需求转换为 KernelBench 格式的 Torch task 代码",
+            "workflow_steps": [
+                "理解需求: 分析用户的算子需求描述",
+                "生成代码: 生成 KernelBench 格式的 task_desc 代码",
+                "代码检查: 静态检查和运行时检查代码正确性",
+                "返回结果: 返回生成的 task_desc 供后续子 Agent 使用"
+            ],
+            "use_cases": [
+                "【首要调用】用户描述算子需求，但没有提供 task 代码",
+                "用户说「生成 ReLU 算子」、「实现矩阵乘法」等自然语言需求",
+                "用户要求修改已生成的 task 代码",
+                "需要将自然语言转换为 KernelBench 格式代码"
+            ],
+            "advantages": [
+                "自然语言理解：能理解用户的算子需求描述",
+                "格式标准：生成标准的 KernelBench 格式代码",
+                "代码验证：自动进行静态和运行时检查",
+                "支持修改：可根据用户反馈修改已生成的代码"
+            ],
+            "limitations": [
+                "仅生成 task_desc：不生成最终的 Triton 代码",
+                "需要后续处理：生成的 task_desc 需要传给其他子 Agent 生成 Triton 代码"
+            ],
+            "performance": "快速（约 10-30 秒），主要耗时在 LLM 理解和代码验证"
+        }
+    
+    async def execute(self, 
+                     task_code: str,
+                     op_name: str,
+                     task_id: str,
+                     **kwargs) -> Tuple[bool, Dict[str, Any]]:
+        user_request = kwargs.get("user_request", "")
+        user_feedback = kwargs.get("user_feedback", "")
+        
+        if not user_request:
+            logger.error("OpTaskBuilder: user_request is required")
+            return False, {
+                "status": "ERROR",
+                "generated_task_desc": "",
+                "op_name": op_name or "",
+                "agent_message": "缺少 user_request 参数，无法生成 task_desc",
+                "sub_agent_type": "op_task_builder"
+            }
+        
+        logger.info(f"Executing OpTaskBuilder sub-agent, user_request: {user_request[:50]}...")
+        
+        try:
+            op_task_builder = self._get_op_task_builder()
+            
+            state = {
+                "user_input": user_request,
+                "user_feedback": user_feedback,
+                "generated_task_desc": task_code, 
+                "framework": self.framework,
+                "backend": self.backend,
+                "arch": self.arch,
+                "dsl": self.dsl,
+            }
+            
+            # 调用 OpTaskBuilder.run()
+            result = await op_task_builder.run(state)
+            
+            from ai_kernel_generator.utils.langgraph.op_task_builder_state import OpTaskBuilderStatus
+            status = result.get("status", OpTaskBuilderStatus.NEED_CLARIFICATION)
+            success = (status == OpTaskBuilderStatus.READY)
+            
+            # 添加 sub_agent_type 标识
+            result["sub_agent_type"] = "op_task_builder"
+            
+            return success, result
+            
+        except Exception as e:
+            logger.error(f"OpTaskBuilder sub-agent failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return False, {
+                "status": "ERROR",
+                "generated_task_desc": "",
+                "op_name": op_name or "",
+                "agent_message": f"生成 task_desc 失败：{str(e)}",
+                "sub_agent_type": "op_task_builder"
+            }
+
+
 class SubAgentRegistry:
     """
-    子 Agent 注册中心
     
     管理所有可用的子 Agent
     """
@@ -930,6 +1155,7 @@ class SubAgentRegistry:
     
     def _register_builtin_agents(self):
         """注册内置的子 Agent"""
+        self.register(OpTaskBuilderSubAgent)
         self.register(CodeOnlySubAgent)
         self.register(EvolveSubAgent)
         self.register(KernelVerifierSubAgent)
@@ -942,12 +1168,11 @@ class SubAgentRegistry:
         注册一个子 Agent
         
         Args:
-            agent_class: 子 Agent 类（必须继承 SubAgentBase）
+            agent_class: 子 Agent 类
         """
         if not issubclass(agent_class, SubAgentBase):
             raise ValueError(f"{agent_class} must inherit from SubAgentBase")
         
-        # 创建临时实例获取名称
         temp_instance = agent_class(config={})
         agent_name = temp_instance.get_name()
         

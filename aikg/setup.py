@@ -86,7 +86,7 @@ setup(
     python_requires=">=3.8",
     entry_points={
         "console_scripts": [
-            "akg_cli=ai_kernel_generator.cli.cli.cli:app",
+            "akg_cli=ai_kernel_generator.cli.cli:app",
         ],
     },
 )
