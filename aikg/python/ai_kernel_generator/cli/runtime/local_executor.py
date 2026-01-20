@@ -27,7 +27,6 @@ from ai_kernel_generator.cli.runtime.message_sender import (
     register_message_sender,
     unregister_message_sender,
 )
-from ai_kernel_generator.utils.main_op_agent_display import is_simple_command
 from ai_kernel_generator.utils.stream_output import stream_output_override
 
 logger = logging.getLogger(__name__)
@@ -128,17 +127,8 @@ class LocalExecutor:
 
         try:
             user_input = (user_input or "").strip()
-            is_cmd, command_type = is_simple_command(user_input)
-            if is_cmd and command_type == "exit":
-                self._main_agent_state = None
-                self._react_executor = None
-                return {
-                    "current_step": "cancelled",
-                    "should_continue": False,
-                    "display_message": "Conversation ended.",
-                    "hint_message": "",
-                    "workflow_name": "react",
-                }
+            
+            # 多轮对话决策完全由 react_agent 控制，不用硬编码控制了
 
             # 复用/重建 ReactTurnExecutor（当 target 变化时重置）
             from ai_kernel_generator.cli.runtime.react_executor import (

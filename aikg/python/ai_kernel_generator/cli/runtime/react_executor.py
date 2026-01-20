@@ -182,6 +182,8 @@ class ReactTurnExecutor:
         user_input = (user_input or "").strip()
         if not user_input:
             raise ValueError("user_input is required")
+        # 清理之前会话遗留的不完整状态（跨会话恢复、CLI 重启）
+        await self._rollback_incomplete_tool_calls()
 
         # 如果提供了 task_file_content 且尚未使用，将其作为特殊指令注入
         if self._task_file_content and not self._task_file_used:
