@@ -230,6 +230,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 {{ task_desc }}
 {% endif %}
 
+{% if user_requirements %}
+### 用户的额外需求说明
+
+**重要**：用户在多轮对话交互中明确提出了以下需求，请在生成代码时必须满足：
+
+{{ user_requirements }}
+{% endif %}
+
 {% if enable_hint_mode and has_param_space %}
 ---
 

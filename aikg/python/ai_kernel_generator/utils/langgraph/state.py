@@ -73,6 +73,7 @@ class KernelGenState(TypedDict, total=False):
     inspirations: Optional[List[str]]
     meta_prompts: Optional[str]
     handwrite_suggestions: Optional[List[Dict[str, str]]]
+    user_requirements: Optional[str]  # 用户额外需求（来自 ReAct 多轮对话）
     
     # === Base Doc 字段 ===
     dsl_api_doc: Optional[str]

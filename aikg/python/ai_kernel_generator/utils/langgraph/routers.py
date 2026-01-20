@@ -133,8 +133,8 @@ class RouterFactory:
         from ai_kernel_generator.core.llm.model_loader import create_model
         from ai_kernel_generator.utils.common_utils import ParserFactory
         from ai_kernel_generator.utils.result_processor import ResultProcessor
-        from ai_kernel_generator.cli.server.message_sender import send_message
-        from ai_kernel_generator.cli.messages import NodeStartMessage, NodeEndMessage
+        from ai_kernel_generator.cli.runtime.message_sender import send_message
+        from ai_kernel_generator.cli.messages import DisplayMessage
         from ai_kernel_generator.utils.task_label import resolve_task_label
         import time
 
@@ -147,11 +147,8 @@ class RouterFactory:
         if session_id:
             send_message(
                 session_id,
-                NodeStartMessage(
-                    node="conductor",
-                    task_id=task_id,
-                    task_label=task_label,
-                    state=state,
+                DisplayMessage(
+                    text="[conductor] start",
                 ),
             )
         
@@ -161,6 +158,7 @@ class RouterFactory:
             format_instructions = conductor_parser.get_format_instructions()
             
             # 构建输入数据（类似 Conductor._llm_decide_next_agent）
+            # 注意：coder_code 和 error_log 不再截断，由模板或 LLM 处理上下文长度
             input_data = {
                 'dsl': state.get('dsl', ''),
                 'expert_suggestion': state.get('expert_suggestion', ''),  # 添加 expert_suggestion
@@ -168,8 +166,8 @@ class RouterFactory:
                 'framework': state.get('framework', ''),
                 'task_desc': state.get('task_desc', ''),
                 'agent_name': 'verifier',
-                'agent_result': state.get('coder_code', '')[:2000],
-                'error_log': state.get('verifier_error', '')[:5000],
+                'agent_result': state.get('coder_code', ''),  # 完整代码，不截断
+                'error_log': state.get('verifier_error', ''),  # 完整错误日志，不截断
                 'history_attempts': RouterFactory._format_history(state),
                 'valid_next_agents': ', '.join(sorted(valid_options)),
                 'format_instructions': format_instructions,
@@ -220,18 +218,13 @@ class RouterFactory:
                 logger.info(f"LLM decided: {agent_decision}, suggestion: {suggestion[:100] if suggestion else 'None'}")
                 if session_id:
                     duration = time.time() - start_time
-                    updates = {
-                        "conductor_suggestion": suggestion or "",
-                        "conductor_decision": agent_decision
-                    }
+                    summary = f"[conductor] done ({duration:.2f}s) decision={agent_decision}"
+                    if suggestion:
+                        summary += f" suggestion={suggestion}"
                     send_message(
                         session_id,
-                        NodeEndMessage(
-                            node="conductor",
-                            duration=duration,
-                            task_id=task_id,
-                            task_label=task_label,
-                            result=updates,
+                        DisplayMessage(
+                            text=summary,
                         ),
                     )
 
@@ -247,12 +240,8 @@ class RouterFactory:
                 duration = time.time() - start_time
                 send_message(
                     session_id,
-                    NodeEndMessage(
-                        node="conductor",
-                        duration=duration,
-                        task_id=task_id,
-                        task_label=task_label,
-                        result={"error": str(e)},
+                    DisplayMessage(
+                        text=f"[conductor] error ({duration:.2f}s): {str(e)}",
                     ),
                 )
         

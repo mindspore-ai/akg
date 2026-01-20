@@ -30,6 +30,8 @@ from ai_kernel_generator.core.adaptive_search.task_pool import AsyncTaskPool
 from ai_kernel_generator.core.adaptive_search.ucb_selector import UCBParentSelector
 from ai_kernel_generator.core.adaptive_search.task_generator import TaskGenerator, TaskGeneratorConfig
 from ai_kernel_generator.core.sketch import Sketch
+from ai_kernel_generator.cli.runtime.message_sender import send_message
+from ai_kernel_generator.cli.messages import PanelDataMessage
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +182,59 @@ class AdaptiveSearchController:
             )
         return self._sketch_agent
     
+    def _send_profile_to_history(self, record) -> None:
+        """
+        立即发送性能结果到历史记录
+        
+        Args:
+            record: SuccessRecord 对象
+        """
+        if not record:
+            return
+        
+        profile = record.profile
+        if not isinstance(profile, dict):
+            return
+        
+        try:
+            gen_time = float(profile.get("gen_time") or 0.0)
+            base_time = float(profile.get("base_time") or 0.0)
+            speedup = float(record.speedup or 0.0)
+        except Exception:
+            gen_time = base_time = speedup = 0.0
+        
+        # 检查是否有有效的性能数据
+        if gen_time > 0.0 or base_time > 0.0 or speedup > 0.0:
+            session_id = str(self.config.get("session_id") or "").strip()
+            if session_id:
+                # 构造 log_dir: {base_log_dir}/{op_name}/{unique_dir}
+                unique_dir = profile.get('unique_dir', '')
+                base_log_dir = self.config.get('log_dir', '')
+                log_dir = ""
+                
+                if base_log_dir and unique_dir:
+                    log_dir = os.path.join(os.path.expanduser(base_log_dir), self.op_name, unique_dir)
+                elif unique_dir:
+                    # 如果没有 base_log_dir，尝试使用 unique_dir 作为相对路径
+                    log_dir = unique_dir
+                
+                try:
+                    send_message(
+                        session_id,
+                        PanelDataMessage(
+                            action="move_to_history",
+                            data={
+                                "speedup": speedup,
+                                "gen_time": gen_time,
+                                "base_time": base_time,
+                                "log_dir": log_dir,
+                            },
+                        ),
+                    )
+                    logger.debug(f"Sent profile result to history immediately: op_name={self.op_name}, speedup={speedup:.2f}x")
+                except Exception as e:
+                    logger.warning(f"Failed to send profile result to history: {e}")
+    
     async def _submit_initial_task(self) -> str:
         """提交一个初始任务"""
         task = await self.generator.generate_initial_task()
@@ -266,6 +321,9 @@ class AdaptiveSearchController:
                         f"Task {result.task_id} succeeded: "
                         f"gen_time={record.gen_time:.4f}ms, speedup={record.speedup:.2f}x"
                     )
+                    
+                    # 立即发送性能结果到历史记录
+                    self._send_profile_to_history(record)
             else:
                 self._total_failed += 1
                 error = result.error or result.final_state.get("error", "Unknown error")
@@ -435,54 +493,67 @@ class AdaptiveSearchController:
         logger.info(f"Config: max_concurrent={self.search_config.max_concurrent}, "
                    f"max_total_tasks={self.search_config.max_total_tasks}, ")
         
-        try:
-            # 1. 提交初始任务
-            logger.info(f"Submitting {self.search_config.initial_task_count} initial tasks...")
-            for _ in range(self.search_config.initial_task_count):
-                if self._total_submitted >= self.search_config.max_total_tasks:
-                    break
-                await self._submit_initial_task()
-            
-            # 2. 主搜索循环
-            while True:
-                # 等待任务完成
-                if self.task_pool.get_running_count() > 0:
-                    await self.task_pool.wait_for_any(timeout=self.search_config.poll_interval)
+        # 使用上下文管理器，自动清理所有子任务（正常退出或异常都会清理）
+        async with self.task_pool:
+            try:
+                # 1. 提交初始任务
+                logger.info(f"Submitting {self.search_config.initial_task_count} initial tasks...")
+                for _ in range(self.search_config.initial_task_count):
+                    if self._total_submitted >= self.search_config.max_total_tasks:
+                        break
+                    await self._submit_initial_task()
                 
-                # 处理完成的结果（更新 _total_success 等计数器）
-                await self._process_results()
-                
-                # 检查停止条件：达到最大任务数
-                if self._check_stop_conditions():
-                    logger.info(f"Stop condition met: {self._stop_reason}")
-                    break
-                
-                # 如果任务池空闲且已达到最大任务数，退出
-                if self.task_pool.is_idle() and self._total_submitted >= self.search_config.max_total_tasks:
-                    logger.info("All tasks completed")
-                    break
-                
-                # 填充任务池
-                await self._refill_task_pool()
-                
-                # 如果任务池空闲但还没达到最大任务数，继续生成
-                if self.task_pool.is_idle() and self._total_submitted < self.search_config.max_total_tasks:
-                    await self._refill_task_pool()
-                
-                # 避免空转
-                await asyncio.sleep(0.1)
-            
-            # 3. 等待剩余任务完成
-            remaining = self.task_pool.get_running_count()
-            if remaining > 0:
-                logger.info(f"Waiting for {remaining} remaining tasks to complete...")
-                while self.task_pool.get_running_count() > 0:
-                    await self.task_pool.wait_for_any(timeout=1.0)
+                # 2. 主搜索循环
+                while True:
+                    # 等待任务完成
+                    if self.task_pool.get_running_count() > 0:
+                        await self.task_pool.wait_for_any(timeout=self.search_config.poll_interval)
+                    
+                    # 处理完成的结果（更新 _total_success 等计数器）
                     await self._process_results()
+                    
+                    # 检查停止条件：达到最大任务数
+                    if self._check_stop_conditions():
+                        logger.info(f"Stop condition met: {self._stop_reason}")
+                        break
+                    
+                    # 如果任务池空闲且已达到最大任务数，退出
+                    if self.task_pool.is_idle() and self._total_submitted >= self.search_config.max_total_tasks:
+                        logger.info("All tasks completed")
+                        break
+                    
+                    # 填充任务池
+                    await self._refill_task_pool()
+                    
+                    # 如果任务池空闲但还没达到最大任务数，继续生成
+                    if self.task_pool.is_idle() and self._total_submitted < self.search_config.max_total_tasks:
+                        await self._refill_task_pool()
+                    
+                    # 避免空转
+                    await asyncio.sleep(0.1)
+                
+                # 3. 等待剩余任务完成
+                remaining = self.task_pool.get_running_count()
+                if remaining > 0:
+                    logger.info(f"Waiting for {remaining} remaining tasks to complete...")
+                    while self.task_pool.get_running_count() > 0:
+                        await self.task_pool.wait_for_any(timeout=1.0)
+                        await self._process_results()
             
-        except Exception as e:
-            logger.error(f"Search failed with exception: {e}", exc_info=True)
-            self._stop_reason = f"Exception: {e}"
+            except asyncio.CancelledError:
+                # 用户取消操作，记录日志并向上传播
+                # 清理工作由上下文管理器自动完成
+                logger.info(f"Adaptive search for {self.op_name} was cancelled by user")
+                self._stop_reason = "Cancelled by user"
+                raise  # 重新抛出，__aexit__ 会自动清理
+                
+            except Exception as e:
+                # 其他异常，记录日志
+                # 清理工作由上下文管理器自动完成
+                logger.error(f"Search failed with exception: {e}", exc_info=True)
+                self._stop_reason = f"Exception: {e}"
+        
+        # 退出 async with 时，上下文管理器已自动清理所有子任务
         
         # 4. 收集结果
         elapsed_time = (datetime.now() - self._start_time).total_seconds()

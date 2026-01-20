@@ -58,7 +58,8 @@ class Trace:
                 f.write(str(content))
 
     def insert_agent_record(self, agent_name: str, result: str = "", prompt: str = "", reasoning: str = "",
-                            error_log: str = "", profile_res: Optional[dict] = None) -> None:
+                            error_log: str = "", profile_res: Optional[dict] = None,
+                            session_id: Optional[str] = None, elapsed_s: Optional[float] = None) -> None:
         """
         插入agent执行记录（只保存原始数据，不进行解析）
 
@@ -69,6 +70,8 @@ class Trace:
             reasoning: 推理过程
             error_log: 错误日志（主要用于verifier）
             profile_res: 性能数据字典
+            session_id: 可选，用于向 CLI WS session 推送 DisplayMessage
+            elapsed_s: 可选，调用方计时后传入，用于展示耗时
         """
         if profile_res is None:
             profile_res = {}
@@ -84,18 +87,126 @@ class Trace:
         self.trace_list.append(record)
 
         # 对于所有agent，保存原始json数据
-        if agent_name in ["designer", "coder", "test_case_generator"]:
+        wrote_files = False
+        if agent_name in ["designer", "coder", "sketch", "test_case_generator"]:
             self.save_parameters_to_files(agent_name, [
                 ('result', result),  # 保存原始json
                 ('prompt', prompt),
                 ('reasoning', reasoning)
             ])
+            wrote_files = True
         elif agent_name == "verifier":
             # verifier记录错误日志
             if error_log:
                 self.save_parameters_to_files(agent_name, [
                     ('error_log', error_log)
                 ])
+            # verifier 总是发送消息（包含结果和 profile 数据）
+            self._send_verifier_result_message(
+                session_id=session_id,
+                elapsed_s=elapsed_s,
+                verify_result=result,
+                error_log=error_log,
+                profile_res=profile_res,
+            )
+            return  # verifier 使用专用方法发送消息，不走通用逻辑
+
+        # 当且仅当本次确实写出了 trace 文件时，发送 related_files 消息（每条消息一个框）
+        if wrote_files:
+            self._send_related_files_message(
+                agent_name=agent_name,
+                session_id=session_id,
+                elapsed_s=elapsed_s,
+            )
+
+    def _send_verifier_result_message(
+        self,
+        session_id: Optional[str],
+        elapsed_s: Optional[float],
+        verify_result: str,
+        error_log: str,
+        profile_res: dict,
+    ) -> None:
+        """
+        发送 verifier 结果消息，包含验证结果和 profile 数据。
+
+        仅用于 CLI 展示，不影响主流程；失败时吞掉异常。
+        """
+        try:
+            session_id = str(session_id or "").strip()
+            if not session_id:
+                return
+
+            # 延迟导入，避免 core 层引入过重的 CLI 依赖
+            from ai_kernel_generator.cli.runtime.message_sender import send_message
+            from ai_kernel_generator.cli.messages import DisplayMessage
+
+            # 构建结果状态
+            is_passed = verify_result.lower() == "true"
+            status = "✅ PASSED" if is_passed else "❌ FAILED"
+
+            # 组装消息（每个信息一行，没有内容则不添加）
+            if elapsed_s is not None:
+                lines = [f"◀ verifier done in {elapsed_s:.2f}s, status: {status}"]
+            else:
+                lines = [f"◀ verifier status: {status}"]
+            
+            # profile 信息（如果有）
+            if profile_res and is_passed:
+                lines.append(f"  profile: {profile_res}")
+            
+            # 相关文件路径（如果有 error_log）
+            if error_log and self.log_dir:
+                expanded_log_dir = os.path.expanduser(str(self.log_dir))
+                target_dir = os.path.join(expanded_log_dir, self.op_name)
+                step_index = len(self.trace_list)
+                prefix = f"I{self.task_id}_S{step_index:02d}_{self.op_name}_verifier_"
+                glob_path = os.path.abspath(os.path.join(target_dir, prefix + "*"))
+                lines.append(f"  realated_files: {glob_path}")
+
+            text = "\n".join(lines)
+
+            send_message(session_id, DisplayMessage(text=text))
+        except Exception:
+            # 过程展示失败不应影响主流程
+            return
+
+    def _send_related_files_message(self, agent_name: str, session_id: Optional[str], elapsed_s: Optional[float]) -> None:
+        """
+        发送包含相关落盘文件 glob 的 DisplayMessage。
+
+        仅用于 CLI 展示，不影响主流程；失败时吞掉异常。
+        """
+        try:
+            session_id = str(session_id or "").strip()
+            if not session_id:
+                return
+
+            # log_dir 为空时不发送（避免无意义路径）
+            if not self.log_dir:
+                return
+
+            expanded_log_dir = os.path.expanduser(str(self.log_dir))
+            target_dir = os.path.join(expanded_log_dir, self.op_name)
+            step_index = len(self.trace_list)  # append 后，需与 save_parameters_to_files 的 Sxx 一致
+            prefix = f"I{self.task_id}_S{step_index:02d}_{self.op_name}_{agent_name}_"
+            glob_path = os.path.abspath(os.path.join(target_dir, prefix + "*"))
+
+            # 延迟导入，避免 core 层引入过重的 CLI 依赖
+            from ai_kernel_generator.cli.runtime.message_sender import send_message
+            from ai_kernel_generator.cli.messages import DisplayMessage
+
+            # 组装消息（换行显示）
+            # 注意：这里沿用历史拼写 realated_files（避免下游依赖破坏）
+            if elapsed_s is not None:
+                text = f"◀ {agent_name} done in {elapsed_s:.2f}s\n  realated_files: {glob_path}"
+            else:
+                text = f"◀ {agent_name} done\n  realated_files: {glob_path}"
+
+            send_message(session_id, DisplayMessage(text=text))
+        except Exception:
+            # 过程展示失败不应影响主流程
+            return
 
     def save_parsed_code(self, agent_name: str, params: list) -> None:
         """

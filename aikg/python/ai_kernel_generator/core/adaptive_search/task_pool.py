@@ -97,6 +97,47 @@ class AsyncTaskPool:
         
         logger.info(f"AsyncTaskPool initialized with max_concurrent={max_concurrent}")
     
+    async def __aenter__(self):
+        """进入上下文管理器"""
+        logger.debug("[TaskPool] Context entered")
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """
+        退出上下文管理器，自动清理所有子任务
+        
+        无论是正常退出还是异常退出（包括 CancelledError），
+        都会自动取消所有正在运行的任务和清空等待队列。
+        
+        Args:
+            exc_type: 异常类型
+            exc_val: 异常值
+            exc_tb: 异常追踪
+            
+        Returns:
+            bool: False 表示不抑制异常
+        """
+        if self._running or self._waiting:
+            cancelled = await self.cancel_all_running()
+            cleared = self.clear_waiting_queue()
+            
+            if exc_type is asyncio.CancelledError:
+                logger.info(
+                    f"[TaskPool] User cancelled: cleaned up {cancelled} running tasks, "
+                    f"{cleared} waiting tasks"
+                )
+            elif exc_type is not None:
+                logger.warning(
+                    f"[TaskPool] Exception cleanup: {cancelled} running tasks cancelled, "
+                    f"{cleared} waiting tasks cleared due to {exc_type.__name__}"
+                )
+            else:
+                logger.debug(
+                    f"[TaskPool] Normal exit: {cancelled} running tasks, {cleared} waiting tasks"
+                )
+        
+        return False  # 不抑制异常，让异常继续传播
+    
     def generate_task_id(self, prefix: str = "task") -> str:
         """生成唯一任务 ID"""
         self._task_counter += 1
@@ -160,6 +201,7 @@ class AsyncTaskPool:
                                parent_id: Optional[str]) -> None:
         """执行任务并收集结果"""
         started_at = datetime.now().isoformat()
+        task_result: Optional[TaskResult] = None  # 预先初始化，防止 CancelledError 导致未定义
         try:
             # 调用协程工厂获取协程并执行
             result = await coroutine_factory()
@@ -184,6 +226,21 @@ class AsyncTaskPool:
                 logger.info(f"Task {task_id} completed successfully")
             else:
                 logger.warning(f"Task {task_id} completed with failure")
+        
+        except asyncio.CancelledError:
+            # 处理任务被取消的情况（Ctrl+C 等）
+            logger.info(f"Task {task_id} was cancelled")
+            task_result = TaskResult(
+                task_id=task_id,
+                success=False,
+                final_state={"error": "Task was cancelled"},
+                generation=generation,
+                parent_id=parent_id,
+                error="Task was cancelled",
+                started_at=started_at
+            )
+            # 重新抛出以保持取消语义
+            raise
                 
         except Exception as e:
             logger.error(f"Task {task_id} raised exception: {e}", exc_info=True)
@@ -198,8 +255,9 @@ class AsyncTaskPool:
             )
         
         finally:
-            # 存储结果
-            self._results[task_id] = task_result
+            # 存储结果（确保 task_result 已定义）
+            if task_result is not None:
+                self._results[task_id] = task_result
             # 从运行列表中移除
             if task_id in self._running:
                 del self._running[task_id]
