@@ -340,6 +340,13 @@ async def run_wrapper(op_name: str, task_desc: str, config: AdaptiveSearchRunner
     else:
         loaded_config = load_config(dsl=config.dsl, backend=config.backend)
     
+    # 添加 task_label 到配置（adaptive_search 内部的 LangGraphTask 需要）
+    from ai_kernel_generator.utils.task_label import resolve_task_label
+    loaded_config["task_label"] = resolve_task_label(
+        op_name=op_name,
+        parallel_index=1,
+    )
+    
     # 检查环境
     check_env_for_task(config.framework, config.backend, config.dsl, loaded_config)
     

@@ -18,7 +18,7 @@ from ai_kernel_generator.core.evolve import evolve
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.utils.environment_check import check_env_for_task
-from ai_kernel_generator.tools.single_evolve_runner import EvolveConfig, print_evolve_config, print_evolution_result
+from ai_kernel_generator.utils.evolve.runner_manager import RunnerConfig, print_evolve_config, print_evolution_result
 from ai_kernel_generator import get_project_root
 from pathlib import Path
 from ai_kernel_generator.core.worker.manager import register_local_worker
@@ -69,7 +69,7 @@ async def run_torch_evolve_triton_ascend():
     """运行Triton Ascend进化示例 (使用 WorkerManager 新架构)"""
 
     # 创建配置对象并设置硬编码参数
-    config = EvolveConfig()
+    config = RunnerConfig()
 
     # 基础配置
     config.dsl = "triton_ascend"
