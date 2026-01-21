@@ -196,6 +196,13 @@ async def run_adaptive_search(args):
         print(f"Config file {config_path} not found, using default.")
         loaded_config = load_config(dsl=dsl, backend=backend)
     
+    # 添加 task_label 到配置（LangGraphTask 需要）
+    from ai_kernel_generator.utils.task_label import resolve_task_label
+    loaded_config["task_label"] = resolve_task_label(
+        op_name=get_op_name(),
+        parallel_index=1,
+    )
+    
     check_env_for_task(framework, backend, dsl, loaded_config)
     
     # 运行自适应搜索
