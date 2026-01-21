@@ -216,7 +216,8 @@ def launch(
     kernel_name,
     device_id,
     is_dyn_shape,
-    *input_for_mod_ctypes
+    *input_for_mod_ctypes,
+    use_mem_pool = False
 ):
     """ launch .so file by akg_ascend_backend """
     akgAscendLaunch.akg_ascend_run(
@@ -224,5 +225,6 @@ def launch(
         kernel_name,
         device_id,
         is_dyn_shape,
+        use_mem_pool,
         *input_for_mod_ctypes
     )

@@ -44,10 +44,25 @@ uint64_t GetDeviceMemSize() {
 }
 
 uint64_t GetDefaultDeviceMemSize() {
-  auto total = GetDeviceMemSize();
-  auto ret = total * 15 / 16;  // reserved memory is 1/16 of total
-  LOG(INFO) << "The Device total memory size is " << total << ", allocate " << ret << " for backend.";
-  return ret;
+  size_t free = 0;
+  size_t total = 0;
+  aclError ret = aclrtGetMemInfo(ACL_HBM_MEM, &free, &total);
+  if (ret != ACL_SUCCESS) {
+    LOG(FATAL) << "Get Device HBM memory size failed, ret = " << ret << ", total = " << total;
+  }
+  if (total == 0) {
+    ret = aclrtGetMemInfo(ACL_DDR_MEM, &free, &total);
+    if (ret != ACL_SUCCESS) {
+      LOG(FATAL) << "Get Device DDR memory size failed, ret = " << ret << ", total = " << total;
+    }
+  }
+  uint64_t by_total = total * 15 / 16;
+  uint64_t by_free  = free  * 8  / 10;
+  uint64_t want     = std::min<uint64_t>(by_free, by_total);
+  constexpr uint64_t kMinAlloc = 256ULL << 20;
+  if (want < kMinAlloc) want = kMinAlloc;
+  LOG(INFO) << "HBM total=" << total << " free=" << free << " alloc=" << want;
+  return want;
 }
 }  // namespace
 
