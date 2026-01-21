@@ -1417,44 +1417,6 @@ struct ScfYieldToHIVM : public OpConversionPattern<scf::YieldOp> {
 };
 
 
-struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
-  using OpConversionPattern<memref::StoreOp>::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(memref::StoreOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    Value valToStore = adaptor.getValue();
-    Value memref = adaptor.getMemref();
-
-    auto valType = dyn_cast<MemRefType>(valToStore.getType());
-    auto memRefType = dyn_cast<MemRefType>(memref.getType());
-
-    if (!valType || !memRefType) {
-      return failure();
-    }
-
-    if (valType.getRank() == 1 && valType.getDimSize(0) == 1 && memRefType.getRank() == 0) {
-      auto newType = MemRefType::get({1}, memRefType.getElementType());
-      OpFoldResult offset = rewriter.getIndexAttr(0);
-      SmallVector<OpFoldResult> sizes = {rewriter.getIndexAttr(1)};
-      SmallVector<OpFoldResult> strides = {rewriter.getIndexAttr(1)};
-      Value casted = rewriter.create<memref::ReinterpretCastOp>(
-          op.getLoc(), newType, memref, offset, sizes, strides);
-      rewriter.create<hivm::StoreOp>(op.getLoc(), TypeRange{}, valToStore, casted);
-      rewriter.eraseOp(op);
-      return success();
-    }
-
-    if (valType) {
-       rewriter.create<hivm::StoreOp>(op.getLoc(), TypeRange{}, valToStore, memref);
-       rewriter.eraseOp(op);
-       return success();
-    }
-
-    return failure();
-  }
-};
-
 struct VectorTransferReadToHIVM : public OpConversionPattern<vector::TransferReadOp> {
   using OpConversionPattern<vector::TransferReadOp>::OpConversionPattern;
 
@@ -1660,8 +1622,19 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
         loc, TypeRange{}, sourceMemRef, resultBuf, Value(),
         reduceOpAttr, rewriter.getDenseI64ArrayAttr(reduceDims), Value());
 
-    rewriter.replaceOp(op, resultBuf);
+    Type resultType = op.getResult().getType();
+    if (isa<MemRefType>(resultType)) {
+      rewriter.replaceOp(op, resultBuf);
+      return success();
+    }
 
+    SmallVector<Value> indices;
+    indices.reserve(rank);
+    for (int64_t i = 0; i < rank; ++i) {
+      indices.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
+    }
+    Value scalar = rewriter.create<memref::LoadOp>(loc, resultBuf, indices);
+    rewriter.replaceOp(op, scalar);
     return success();
   }
 };
@@ -2051,7 +2024,6 @@ void hivm::populateArithToHIVMConversionPatterns(
       NPUVectorCmpToHIVM<npuvector::CmpFOp>,
       NPUVectorCmpToHIVM<npuvector::CmpIOp>>(patterns.getContext());
   patterns.add<VectorBroadcastToHIVM>(patterns.getContext());
-  patterns.add<MemRefStoreToHIVM>(patterns.getContext());
   patterns.add<ScfForToHIVM>(patterns.getContext());
   patterns.add<ScfYieldToHIVM>(patterns.getContext());
 }
@@ -2091,17 +2063,6 @@ static bool isLegalSCFYieldOp(scf::YieldOp op) {
   return true;
 }
 
-static bool isLegalMemRefStoreOp(memref::StoreOp op) {
-  if (auto defOp = op.getValue().getDefiningOp()) {
-    if (isa<vector::ReductionOp, vector::TransferReadOp, vector::BroadcastOp,
-            npuvector::ReductionOp, npuvector::TransferReadOp, npuvector::BroadcastOp,
-            arith::MulSIExtendedOp, arith::MulUIExtendedOp>(defOp)) {
-      return false;
-    }
-  }
-  return !isa<MemRefType>(op.getValue().getType());
-}
-
 struct ArithToHIVMConversionPass
     : public impl::ConvertArithToHIVMBase<ArithToHIVMConversionPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -2123,7 +2084,6 @@ void ArithToHIVMConversionPass::runOnOperation() {
   target.addDynamicallyLegalDialect<math::MathDialect>(isLegalMathOp);
   target.addDynamicallyLegalOp<scf::ForOp>(isLegalSCFForOp);
   target.addDynamicallyLegalOp<scf::YieldOp>(isLegalSCFYieldOp);
-  target.addDynamicallyLegalOp<memref::StoreOp>(isLegalMemRefStoreOp);
   target.addIllegalOp<vector::ReductionOp, vector::TransferReadOp,
                           vector::TransferWriteOp, vector::BroadcastOp>();
   target.addIllegalOp<npuvector::ReductionOp, npuvector::TransferReadOp,
