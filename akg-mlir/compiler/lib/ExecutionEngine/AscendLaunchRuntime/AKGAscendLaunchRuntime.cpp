@@ -18,6 +18,8 @@
 #include <limits>
 #include <algorithm>
 #include <iostream>
+#include <cstdlib>
+#include <string>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendMemoryManager.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/RuntimeErrorCodes.h"
 
@@ -32,7 +34,10 @@ constexpr auto kMIXStr = "MIX";
 
 static thread_local aclrtContext thread_local_rt_context{nullptr};
 
-AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id) { set_device_id(device_id); }
+AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id, bool use_mem_pool) {
+  set_device_id(device_id); use_mem_pool_ = use_mem_pool;
+  use_mem_pool_ = use_mem_pool;
+}
 
 void AscendKernelRuntime::SetContext() {
   if (rt_context_ == nullptr) {
@@ -81,10 +86,11 @@ bool AscendKernelRuntime::Init() {
   if (!ret) {
     return ret;
   }
-
-  mem_manager_ = std::make_shared<AscendMemoryManager>();
-  CHECK_NOTNULL(mem_manager_);
-  mem_manager_->MallocDeviceMemory();
+  if (use_mem_pool_) {
+    mem_manager_ = std::make_shared<AscendMemoryManager>();
+    CHECK_NOTNULL(mem_manager_);
+    mem_manager_->MallocDeviceMemory();
+  }
 
   initialized_ = true;
   return ret;
@@ -299,6 +305,7 @@ bool AscendKernelRuntime::SyncStream() {
 }
 
 void AscendKernelRuntime::InitDeviceMemory(const std::vector<TensorDevicePtr> &tensors) {
+  if (!use_mem_pool_) return;
   for (auto tensor : tensors) {
     if (tensor->IsHostTensor()) {
       auto mem_size = tensor->GetDataSize();

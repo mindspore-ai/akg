@@ -42,7 +42,7 @@ namespace mlir {
 namespace runtime {
 class AscendKernelRuntime {
  public:
-  explicit AscendKernelRuntime(uint32_t device_id);
+  explicit AscendKernelRuntime(uint32_t device_id, bool use_mem_pool);
   ~AscendKernelRuntime();
   bool Init();
   void SetContext();
@@ -79,6 +79,7 @@ class AscendKernelRuntime {
   void *stream_{nullptr};
   std::shared_ptr<AscendMemoryManager> mem_manager_{nullptr};
   void *cce_handle_{nullptr};
+  bool use_mem_pool_{true};
 };
 
 }  // namespace runtime
