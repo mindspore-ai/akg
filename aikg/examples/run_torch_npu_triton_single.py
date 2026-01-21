@@ -19,7 +19,8 @@ from ai_kernel_generator.core.worker.manager import register_local_worker
 from ai_kernel_generator.utils.environment_check import check_env_for_task
 import asyncio
 import os
-os.environ['AIKG_STREAM_OUTPUT'] = 'on'
+# 注释掉流式输出，因为需要 session_id（TUI 模式才使用）
+# os.environ['AIKG_STREAM_OUTPUT'] = 'on'
 
 
 def get_op_name():
