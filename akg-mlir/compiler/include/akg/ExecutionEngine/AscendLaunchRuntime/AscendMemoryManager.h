@@ -36,7 +36,6 @@ class AscendMemoryManager {
   void *MallocMemFromMemPool(size_t size);
 
  private:
-  static size_t GetCommonAlignSize(size_t input_size);
   void PoolAllocDeviceMem(size_t size, DeviceMemPtr *addr);
   uint8_t *device_mem_base_{nullptr};
   uint64_t device_mem_offset_{0};

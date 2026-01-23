@@ -22,25 +22,8 @@
 namespace mlir {
 namespace runtime {
 namespace {
-constexpr uint64_t kAscendInitDeviceMemGB = 30;
-constexpr uint64_t kMemSizeGB = 30;
-constexpr uint64_t kAscendDeviceMemSize = (kAscendInitDeviceMemGB << kMemSizeGB);
-
-uint64_t GetDeviceMemSize() {
-  size_t free = 0;
-  size_t total = 0;
-  aclError ret = aclrtGetMemInfo(ACL_HBM_MEM, &free, &total);
-  if (ret != ACL_SUCCESS) {
-    LOG(FATAL) << "Get Device HBM memory size failed, ret = " << ret << ", total =  " << total;
-  }
-  if (total != 0) {
-    return total;
-  }
-  ret = aclrtGetMemInfo(ACL_DDR_MEM, &free, &total);
-  if (ret != ACL_SUCCESS) {
-    LOG(FATAL) << "Get Device DDR memory size failed, ret = " << ret << ", total =  " << total;
-  }
-  return total;
+size_t GetCommonAlignSize(size_t input_size) {
+  return (input_size + kMemAlignSize - 1) / kMemAlignSize * kMemAlignSize;
 }
 
 uint64_t GetDefaultDeviceMemSize() {
@@ -61,6 +44,7 @@ uint64_t GetDefaultDeviceMemSize() {
   uint64_t want     = std::min<uint64_t>(by_free, by_total);
   constexpr uint64_t kMinAlloc = 256ULL << 20;
   if (want < kMinAlloc) want = kMinAlloc;
+  want = GetCommonAlignSize(want);
   LOG(INFO) << "HBM total=" << total << " free=" << free << " alloc=" << want;
   return want;
 }
@@ -98,12 +82,6 @@ void AscendMemoryManager::FreeDeviceMemory() {
     }
     device_mem_base_ = nullptr;
   }
-}
-
-constexpr size_t kAlignBytes = 32;
-
-size_t AscendMemoryManager::GetCommonAlignSize(size_t input_size) {
-  return (input_size + kMemAlignSize + kAlignBytes - 1) / kMemAlignSize * kMemAlignSize;
 }
 
 void AscendMemoryManager::PoolAllocDeviceMem(size_t size, DeviceMemPtr *addr) {
