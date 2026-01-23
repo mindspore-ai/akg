@@ -14,18 +14,20 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
-#define MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
+#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_ADD_RMS_NORM_H
+#define MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_ADD_RMS_NORM_H
 
-#include "mfusion/Dialect/Muse/Transforms/Fusion/FuseAddRmsNorm.h"
+#include <memory>
+
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
 
 namespace mlir {
 
-/// Generate the code for registering transforms passes.
-#ifndef GEN_PASS_REGISTRATION
-#define GEN_PASS_REGISTRATION
-#include "mfusion/Dialect/Muse/Transforms/Passes.h.inc"
-#endif
+/// Create a pass to fuse Add and RmsNorm into AddRmsNorm.
+std::unique_ptr<Pass> createFuseAddRmsNormPass();
+
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
+#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_ADD_RMS_NORM_H
