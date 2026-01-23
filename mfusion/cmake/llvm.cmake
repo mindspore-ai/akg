@@ -37,7 +37,6 @@ akg_add_pkg(llvm_project
     CMAKE_PATH llvm
     CMAKE_OPTION ${LLVM_CMAKE_OPTIONS}
     CUSTOM_CMAKE_GENERATOR Ninja
-    PATCHES ${TOP_DIR}/third_party/patch/llvm/001-install-pdll-files.patch
 )
 
 set(LLVM_BUILD_DIR "${llvm_project_DIRPATH}")

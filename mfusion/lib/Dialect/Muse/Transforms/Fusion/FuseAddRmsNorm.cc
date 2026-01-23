@@ -18,6 +18,8 @@
 
 #include "mfusion/Dialect/Muse/Muse.h"
 #include "mfusion/Dialect/Muse/Transforms/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -30,21 +32,28 @@ namespace muse {
 namespace {
 // Check if Value is a constant with value 1.0
 bool isScalarOne(Value value) {
-  Operation *defOp = value.getDefiningOp();
-  if (!defOp) return false;
+  auto constOp = value.getDefiningOp<mlir::arith::ConstantOp>();
+  if (!constOp) {
+    return false;
+  }
 
-  if (auto op = dyn_cast<CreateF64Op>(defOp)) {
-    return op.getValue().isExactlyValue(1.0);
+  auto attr = constOp.getValue();
+  if (auto denseAttr = dyn_cast<mlir::DenseElementsAttr>(attr)) {
+    auto elementType = denseAttr.getElementType();
+    if (elementType.isa<mlir::FloatType>()) {
+      auto floatVal = denseAttr.getSplatValue<mlir::APFloat>();
+      return floatVal.isExactlyValue(1.0);
+    }
+    if (elementType.isa<mlir::IntegerType>()) {
+      auto intVal = denseAttr.getSplatValue<mlir::APInt>();
+      return intVal.isOne();
+    }
+    return false;
   }
-  if (auto op = dyn_cast<CreateI64Op>(defOp)) {
-    return op.getValue() == 1;
-  }
-  if (auto op = dyn_cast<CreateBooleanOp>(defOp)) {
-    return op.getValue() == true;
-  }
+
   return false;
 }
-} // namespace
+}  // namespace
 
 /**
  * @brief Fuse Add and RmsNorm into AddRmsNorm.
@@ -56,18 +65,18 @@ bool isScalarOne(Value value) {
  * %0 = AddRmsNorm(%x, %y, %gamma, %epsilon)
  * return %0
  */
-class FuseAddRmsNormPattern : public OpRewritePattern<RmsNormOp> {
+class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
  public:
-  using OpRewritePattern<RmsNormOp>::OpRewritePattern;
+  using OpRewritePattern<AclnnRmsNormOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(RmsNormOp rmsNormOp, PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(AclnnRmsNormOp rmsNormOp, PatternRewriter &rewriter) const override {
     // Get RmsNorm inputs
     Value x = rmsNormOp.getX();
     Value gamma = rmsNormOp.getGamma();
-    Value epsilon = rmsNormOp.getEpsilon();
+    FloatAttr epsilon = rmsNormOp.getEpsilonAttr();
 
-    // Match if x is defined by muse.add
-    auto addOp = x.getDefiningOp<AddOp>();
+    // Match only muse.aclnn.add for now
+    auto addOp = x.getDefiningOp<AclnnAddOp>();
     if (!addOp || !isScalarOne(addOp.getAlpha())) {
       return failure();
     }
@@ -94,15 +103,8 @@ class FuseAddRmsNormPattern : public OpRewritePattern<RmsNormOp> {
     resultTypes.push_back(rmsNormOp.getRstdOut().getType());
     resultTypes.push_back(addOp.getResult().getType());
 
-    // Must pass epsilon of Value type, directly forwarding RmsNorm's epsilon input
-    auto addRmsNormOp = rewriter.create<AddRmsNormOp>(
-        rmsNormOp.getLoc(),
-        resultTypes,
-        x1,
-        x2,
-        gamma,
-        epsilon 
-    );
+    // Must pass epsilon attribute
+    auto addRmsNormOp = rewriter.create<AclnnAddRmsNormOp>(rmsNormOp.getLoc(), resultTypes, x1, x2, gamma, epsilon);
 
     // Replace results
     rewriter.replaceOp(rmsNormOp, {addRmsNormOp.getYOut(), addRmsNormOp.getRstdOut()});
@@ -115,17 +117,15 @@ struct FuseAddRmsNormPass : public impl::FuseAddRmsNormBase<FuseAddRmsNormPass> 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     patterns.add<FuseAddRmsNormPattern>(&getContext());
-    
+
     if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
     }
   }
 };
 
-} // namespace muse
+}  // namespace muse
 
-std::unique_ptr<Pass> createFuseAddRmsNormPass() {
-  return std::make_unique<muse::FuseAddRmsNormPass>();
-}
+std::unique_ptr<Pass> createFuseAddRmsNormPass() { return std::make_unique<muse::FuseAddRmsNormPass>(); }
 
-} // namespace mlir
+}  // namespace mlir

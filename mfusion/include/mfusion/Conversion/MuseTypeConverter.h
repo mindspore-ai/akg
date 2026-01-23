@@ -24,54 +24,32 @@
 namespace mlir {
 namespace muse {
 
-// Populate type conversions for converting standard MLIR types to Muse types.
-// This adds conversions for RankedTensorType -> mlir::muse::TensorType.
-inline void populateMuseTensorTypeConversions(mlir::TypeConverter &converter) {
-  converter.addConversion([](mlir::RankedTensorType type) -> mlir::Type {
-    return mlir::muse::TensorType::get(type.getContext(), type.getShape(), type.getElementType(), nullptr);
-  });
-}
-
-// Populate type conversions for standard MLIR scalar types to Muse scalar types.
+// Populate type conversions for converting scalar types to tensor types.
 // This adds conversions for:
-//   - IntegerType(1)      -> mlir::muse::BooleanType
-//   - IntegerType(8-64)   -> mlir::muse::I64Type
-//   - Float16Type/BF16    -> mlir::muse::F64Type
-//   - Float32Type         -> mlir::muse::F64Type
-//   - Float64Type         -> mlir::muse::F64Type
-//   - IndexType           -> mlir::muse::I64Type
+//   - IntegerType         -> tensor<int>
+//   - Float16Type/BF16    -> tensor<f16/bf16>
+//   - Float32Type         -> tensor<f32>
+//   - Float64Type         -> tensor<f64>
+//   - IndexType           -> tensor<i64>
 inline void populateMuseScalarTypeConversions(mlir::TypeConverter &converter) {
   // Integer types
-  converter.addConversion([](mlir::IntegerType type) -> mlir::Type {
-    unsigned width = type.getWidth();
-    if (width == 1) {
-      return mlir::muse::BooleanType::get(type.getContext());
-    }
-    if (width <= 64) {
-      return mlir::muse::I64Type::get(type.getContext());
-    }
-    return type;  // Keep unsupported widths as-is
-  });
+  converter.addConversion([](mlir::IntegerType type) -> mlir::Type { return mlir::RankedTensorType::get({}, type); });
 
   // Float types
-  converter.addConversion(
-    [](mlir::Float16Type type) -> mlir::Type { return mlir::muse::F64Type::get(type.getContext()); });
-  converter.addConversion(
-    [](mlir::BFloat16Type type) -> mlir::Type { return mlir::muse::F64Type::get(type.getContext()); });
-  converter.addConversion(
-    [](mlir::Float32Type type) -> mlir::Type { return mlir::muse::F64Type::get(type.getContext()); });
-  converter.addConversion(
-    [](mlir::Float64Type type) -> mlir::Type { return mlir::muse::F64Type::get(type.getContext()); });
+  converter.addConversion([](mlir::Float16Type type) -> mlir::Type { return mlir::RankedTensorType::get({}, type); });
+  converter.addConversion([](mlir::BFloat16Type type) -> mlir::Type { return mlir::RankedTensorType::get({}, type); });
+  converter.addConversion([](mlir::Float32Type type) -> mlir::Type { return mlir::RankedTensorType::get({}, type); });
+  converter.addConversion([](mlir::Float64Type type) -> mlir::Type { return mlir::RankedTensorType::get({}, type); });
 
   // Index type
-  converter.addConversion(
-    [](mlir::IndexType type) -> mlir::Type { return mlir::muse::I64Type::get(type.getContext()); });
+  converter.addConversion([](mlir::IndexType type) -> mlir::Type {
+    return mlir::RankedTensorType::get({}, mlir::IntegerType::get(type.getContext(), 64));
+  });
 }
 
 // Populate all type conversions for converting standard MLIR types to Muse types.
-// This includes both tensor and scalar type conversions.
+// This includes scalar type conversions. Tensor types use built-in RankedTensorType.
 inline void populateMuseTypeConversions(mlir::TypeConverter &converter) {
-  populateMuseTensorTypeConversions(converter);
   populateMuseScalarTypeConversions(converter);
 }
 
