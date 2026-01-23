@@ -31,7 +31,10 @@ Type updateTypeSymbolAttr(Type origin, NamedAttribute &attr) {
     dict = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
   } else if (auto memRefType = dyn_cast<MemRefType>(origin)) {
     dict = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  } else if (auto unrankedMemRefType = dyn_cast<UnrankedMemRefType>(origin)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(unrankedMemRefType.getMemorySpace());
   }
+
   if (!dict) {
     // If the original encoding is empty or non-DictionaryAttr, initialize it.
     llvm::SmallVector<NamedAttribute> namedAttrs{attr};
@@ -48,7 +51,9 @@ Type updateTypeSymbolAttr(Type origin, NamedAttribute &attr) {
   if (auto tensorType = dyn_cast<RankedTensorType>(origin)) {
     return RankedTensorType::get(tensorType.getShape(), tensorType.getElementType(), dict);
   } else if (auto memRefType = dyn_cast<MemRefType>(origin)) {
-    return MemRefType::get(memRefType.getShape(), memRefType.getElementType(), AffineMap{}, dict);
+    return MemRefType::get(memRefType.getShape(), memRefType.getElementType(), memRefType.getLayout(), dict);
+  } else if (auto unrankedMemRefType = dyn_cast<UnrankedMemRefType>(origin)) {
+    return UnrankedMemRefType::get(unrankedMemRefType.getElementType(), dict);
   }
   return origin;
 }

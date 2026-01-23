@@ -281,44 +281,267 @@ struct PropagateMemRefExpandShapeOp : public OpRewritePattern<memref::ExpandShap
       return success();
     }
 
+    std::optional<NamedAttribute> srcNamedAttr = analysis.getSymbolShapeNamedAttr(srcVal.getType());
+    if (srcNamedAttr) {
+      Type resWithSrcSym = analysis.updateSymbolicShape(resVal.getType(), *srcNamedAttr);
+      resVal.setType(resWithSrcSym);
+    }
+
     // Create result symbolic shape based on reassociation
     // For expand_shape, the symbolic shape array length should match the input's symbolic shape array length
     // because each input dimension expands to multiple output dimensions, but only the first output dim
     // in each group inherits the input dimension's symbolic shape
-    auto resultType = cast<MemRefType>(resVal.getType());
+    auto srcType = dyn_cast<MemRefType>(srcVal.getType());
+    auto resultType = dyn_cast<MemRefType>(resVal.getType());
+
+    int64_t srcRank = srcType.getRank();
+    int64_t resRank = resultType.getRank();
+
     auto reassociation = op.getReassociationIndices();
+    if (static_cast<int64_t>(reassociation.size()) != srcRank) return success();
+
+    llvm::SmallVector<int64_t> resDimToSrcDim(resRank, -1);
+    llvm::SmallVector<int64_t> srcDimToGroupSize(srcRank, 0);
+
+    for (int64_t srcDim = 0; srcDim < srcRank; ++srcDim) {
+      const auto &group = reassociation[srcDim];
+      srcDimToGroupSize[srcDim] = static_cast<int64_t>(group.size());
+      for (int64_t resDim : group) {
+        if (resDim < 0 || resDim >= resRank)
+          return success();
+        resDimToSrcDim[resDim] = srcDim;
+      }
+    }
+
     llvm::SmallVector<std::string> resSymShape;
-    resSymShape.reserve(srcSymShape->size());
+    resSymShape.reserve(resRank);
 
-    // Map input dimensions to output dimensions based on reassociation
-    // For each input dimension group, find the first dynamic output dimension and use the input's symbolic shape
-    for (size_t groupIdx = 0; groupIdx < reassociation.size(); ++groupIdx) {
-      const auto &group = reassociation[groupIdx];
-      bool foundDynamic = false;
+    for (int64_t resDim = 0; resDim < resRank; ++resDim) {
+      bool isDynamic = resultType.isDynamicDim(resDim);
+      int64_t dimSize = resultType.getDimSize(resDim);
 
-      // Find the first dynamic output dimension in this group
-      for (int64_t outDim : group) {
-        if (resultType.isDynamicDim(outDim)) {
-          // Use the input dimension's symbolic shape for the first dynamic output dim in the group
-          if (groupIdx < srcSymShape->size()) {
-            resSymShape.push_back((*srcSymShape)[groupIdx]);
-          } else {
-            resSymShape.push_back(analysis.newSymbolicDim());
-          }
-          foundDynamic = true;
+      if (!isDynamic) {
+        resSymShape.push_back(std::to_string(dimSize));
+        continue;
+      }
+
+      int64_t srcDim = resDimToSrcDim[resDim];
+      std::string srcDimSym;
+      if (srcDim < static_cast<int64_t>(srcSymShape->size())) {
+        srcDimSym = (*srcSymShape)[srcDim];
+      } else {
+        srcDimSym = analysis.newSymbolicDim();
+      }
+
+      int64_t groupSize = srcDimToGroupSize[srcDim];
+
+      if (groupSize == 1) {
+        resSymShape.push_back(srcDimSym);
+      } else {
+        std::string newSym = analysis.newSymbolicDim();
+        resSymShape.push_back(newSym);
+      }
+    }
+
+    Type realResTy = analysis.updateSymbolicShape(resVal.getType(), resSymShape);
+
+    std::optional<llvm::SmallVector<std::string>> curSym = analysis.getSymbolicShape(resVal.getType());
+    bool needCast = true;
+    if (curSym && curSym->size() == resSymShape.size()) {
+      needCast = false;
+      for (size_t i = 0; i < resSymShape.size(); ++i) {
+        if ((*curSym)[i] != resSymShape[i]) {
+          needCast = true;
           break;
         }
       }
+    }
 
-      // If no dynamic dimension found in this group, create a new symbolic dim
-      if (!foundDynamic && groupIdx < srcSymShape->size()) {
-        resSymShape.push_back((*srcSymShape)[groupIdx]);
-      } else if (!foundDynamic) {
+    if (!needCast) return success();
+
+    rewriter.setInsertionPointAfter(op);
+    auto castOp = rewriter.create<memref::MemorySpaceCastOp>(op.getLoc(), realResTy, resVal);
+    resVal.replaceAllUsesExcept(castOp.getResult(), castOp);
+
+    return success();
+  }
+};
+
+struct PropagateMemRefCollapseShapeOp : public OpRewritePattern<memref::CollapseShapeOp> {
+  using OpRewritePattern<memref::CollapseShapeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(memref::CollapseShapeOp op, PatternRewriter &rewriter) const override {
+    SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
+    mlir::Value srcVal = op.getSrc();
+    mlir::Value resVal = op.getResult();
+
+    if (!analysis.hasSymbolicShape(srcVal.getType())) {
+      srcVal.setType(analysis.createNewSymbolicShape(srcVal.getType()));
+    }
+
+    if (analysis.hasSymbolicShape(resVal.getType())) {
+      return success();
+    }
+
+    std::optional<llvm::SmallVector<std::string>> srcSymShape = analysis.getSymbolicShape(srcVal.getType());
+    if (!srcSymShape) {
+      resVal.setType(analysis.createNewSymbolicShape(resVal.getType()));
+      return success();
+    }
+
+    std::optional<NamedAttribute> srcNamedAttr = analysis.getSymbolShapeNamedAttr(srcVal.getType());
+    if (srcNamedAttr) {
+      Type resWithSrcSym = analysis.updateSymbolicShape(resVal.getType(), *srcNamedAttr);
+      resVal.setType(resWithSrcSym);
+    }
+
+    auto srcType = dyn_cast<MemRefType>(srcVal.getType());
+    auto resultType = dyn_cast<MemRefType>(resVal.getType());
+
+    int64_t srcRank = srcType.getRank();
+    int64_t resRank = resultType.getRank();
+
+    auto reassociation = op.getReassociationIndices();
+    if (static_cast<int64_t>(reassociation.size()) != resRank)
+      return success();
+
+    llvm::SmallVector<int64_t> srcDimToResDim(srcRank, -1);
+    llvm::SmallVector<int64_t> resDimToGroupSize(resRank, 0);
+
+    for (int64_t resDim = 0; resDim < resRank; ++resDim) {
+      const auto &group = reassociation[resDim];
+      int64_t groupSize = static_cast<int64_t>(group.size());
+      resDimToGroupSize[resDim] = groupSize;
+      for (int64_t srcDim : group) {
+        if (srcDim < 0 || srcDim >= srcRank)
+          return success();
+        srcDimToResDim[srcDim] = resDim;
+      }
+    }
+
+
+    llvm::SmallVector<std::string> resSymShape;
+    resSymShape.reserve(resRank);
+
+    for (int64_t resDim = 0; resDim < resRank; ++resDim) {
+      bool isDynamic = resultType.isDynamicDim(resDim);
+      int64_t dimSize = resultType.getDimSize(resDim);
+
+      if (!isDynamic) {
+        resSymShape.push_back(std::to_string(dimSize));
+        continue;
+      }
+
+      int64_t srcDim = srcDimToResDim[resDim];
+      std::string srcDimSym;
+      if (srcDim < static_cast<int64_t>(srcSymShape->size())) {
+        srcDimSym = (*srcSymShape)[srcDim];
+      } else {
+        srcDimSym = analysis.newSymbolicDim();
+      }
+
+      int64_t groupSize = resDimToGroupSize[srcDim];
+
+      if (groupSize == 1) {
+        resSymShape.push_back(srcDimSym);
+      } else {
+        std::string newSym = analysis.newSymbolicDim();
+        resSymShape.push_back(newSym);
+      }
+    }
+
+    Type realResTy = analysis.updateSymbolicShape(resVal.getType(), resSymShape);
+
+    std::optional<llvm::SmallVector<std::string>> curSym = analysis.getSymbolicShape(resVal.getType());
+    bool needCast = true;
+    if (curSym && curSym->size() == resSymShape.size()) {
+      needCast = false;
+      for (size_t i = 0; i < resSymShape.size(); ++i) {
+        if ((*curSym)[i] != resSymShape[i]) {
+          needCast = true;
+          break;
+        }
+      }
+    }
+
+    if (!needCast) return success();
+
+    rewriter.setInsertionPointAfter(op);
+    auto castOp = rewriter.create<memref::MemorySpaceCastOp>(op.getLoc(), realResTy, resVal);
+    resVal.replaceAllUsesExcept(castOp.getResult(), castOp);
+
+    return success();
+  }
+};
+
+struct PropagateMemRefReshapeOp : public OpRewritePattern<memref::ReshapeOp> {
+  using OpRewritePattern<memref::ReshapeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(memref::ReshapeOp op, PatternRewriter &rewriter) const override {
+    SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
+    Value shapeVal = op.getShape();
+    Value resVal   = op.getResult();
+
+    if (analysis.hasSymbolicShape(resVal.getType()))
+      return success();
+
+    Type resType = resVal.getType();
+
+    auto memrefResTy   = dyn_cast<MemRefType>(resType);
+    auto unrankedResTy = dyn_cast<UnrankedMemRefType>(resType);
+
+    if (unrankedResTy) {
+      llvm::SmallVector<std::string> resSymShape;
+      resSymShape.emplace_back("unranked");
+      Type newType = analysis.updateSymbolicShape(resType, resSymShape);
+      resVal.setType(newType);
+      return success();
+    }
+
+    if (!memrefResTy) return success();
+
+    auto shapeMemrefTy   = dyn_cast<MemRefType>(shapeVal.getType());
+    auto unrankedShapeTy = dyn_cast<UnrankedMemRefType>(shapeVal.getType());
+
+    bool shapeDimStatic = true;
+
+    if (!shapeMemrefTy || unrankedShapeTy) {
+      shapeDimStatic = false;
+    } else {
+      for (int64_t d = 0, e = shapeMemrefTy.getRank(); d < e; ++d) {
+        if (shapeMemrefTy.isDynamicDim(d)) {
+          shapeDimStatic = false;
+          break;
+        }
+      }
+    }
+
+    if (!shapeDimStatic) {
+      llvm::SmallVector<std::string> resSymShape;
+      resSymShape.emplace_back("unranked");
+      Type newResTy = analysis.updateSymbolicShape(resType, resSymShape);
+      resVal.setType(newResTy);
+      return success();
+    }
+
+    int64_t resRank = memrefResTy.getRank();
+    llvm::SmallVector<std::string> resSymShape;
+    resSymShape.reserve(resRank);
+
+    for (int64_t dim = 0; dim < resRank; ++dim) {
+      bool isDynamic = memrefResTy.isDynamicDim(dim);
+      int64_t dimSize = memrefResTy.getDimSize(dim);
+
+      if (!isDynamic) {
+        resSymShape.push_back(std::to_string(dimSize));
+      } else {
         resSymShape.push_back(analysis.newSymbolicDim());
       }
     }
 
-    resVal.setType(analysis.updateSymbolicShape(resVal.getType(), resSymShape));
+    Type newResTy = analysis.updateSymbolicShape(resVal.getType(), resSymShape);
+    resVal.setType(newResTy);
+
     return success();
   }
 };
@@ -346,6 +569,10 @@ struct PropagateMemRefSubviewOp : public OpRewritePattern<memref::SubViewOp> {
       resVal.setType(analysis.createNewSymbolicShape(resVal.getType()));
       return success();
     }
+
+    std::optional<NamedAttribute> srcNamedAttr = analysis.getSymbolShapeNamedAttr(srcVal.getType());
+    Type subViewResWithSrcSym = analysis.updateSymbolicShape(resVal.getType(), *srcNamedAttr);
+    resVal.setType(subViewResWithSrcSym);
 
     // For subview, we need to compute the new symbolic shape based on sizes
     // Each output dimension i corresponds to a slice of input dimension i
@@ -385,7 +612,27 @@ struct PropagateMemRefSubviewOp : public OpRewritePattern<memref::SubViewOp> {
       }
     }
 
-    resVal.setType(analysis.updateSymbolicShape(resVal.getType(), resSymShape));
+    Type realResTy = analysis.updateSymbolicShape(resVal.getType(), resSymShape);
+    std::optional<llvm::SmallVector<std::string>> curSym = analysis.getSymbolicShape(resVal.getType());
+    bool needCast = true;
+    if (curSym && curSym->size() == resSymShape.size()) {
+      needCast = false;
+      for (size_t i = 0; i < resSymShape.size(); ++i) {
+        if ((*curSym)[i] != resSymShape[i]) {
+          needCast = true;
+          break;
+        }
+      }
+    }
+
+    if (!needCast) {
+      return success();
+    }
+
+    rewriter.setInsertionPointAfter(op);
+    auto castOp = rewriter.create<memref::MemorySpaceCastOp>(op.getLoc(), realResTy, resVal);
+    resVal.replaceAllUsesExcept(castOp.getResult(), castOp);
+
     return success();
   }
 };
@@ -681,6 +928,8 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
     (void)patterns.add<PropagateMemRefDimOp>(ctx);
     (void)patterns.add<PropagateMemRefAllocOp>(ctx);
     (void)patterns.add<PropagateMemRefExpandShapeOp>(ctx);
+    (void)patterns.add<PropagateMemRefCollapseShapeOp>(ctx);
+    (void)patterns.add<PropagateMemRefReshapeOp>(ctx);
     (void)patterns.add<PropagateMemRefSubviewOp>(ctx);
     (void)patterns.add<PropagateElementWiseOp<mindspore::AddOp>>(ctx);
     (void)patterns.add<PropagateElementWiseOp<mindspore::SubOp>>(ctx);
