@@ -1,0 +1,13 @@
+#include "mlir/Transforms/DialectConversion.pdll"
+#include "torch-mlir/Dialect/Torch/IR/TorchOps.td"
+#include "mfusion/Dialect/Muse/MuseOps.td"
+
+Pattern ConvertMuseMul {
+  let root = op<muse.mul>(operands: ValueRange) -> (resType: Type);
+  replace root with op<torch.aten.mul.Tensor>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertReturnOp {
+  let root = op<func.return>(operands: ValueRange);
+  replace root with op<func.return>(convertValues(operands));
+}

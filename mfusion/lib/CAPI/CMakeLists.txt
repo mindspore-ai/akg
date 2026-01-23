@@ -15,6 +15,7 @@ add_mlir_public_c_api_library(MFusionCAPI
   MLIRSupport
   MLIRMuseDialect
   MFusionConversionTorchToMuse
+  MFusionConversionMuseToTorch
   MLIRMuseTransforms
 )
 
