@@ -34,4 +34,19 @@ def ConvertTorchToMuse : Pass<"convert-torch-to-muse", "::mlir::ModuleOp"> {
   ];
 }
 
+def ConvertMuseToTorch : Pass<"convert-muse-to-torch", "::mlir::ModuleOp"> {
+  let summary = "Convert Muse operations to Torch dialect operations";
+
+  let description = [{
+    This pass converts Muse dialect operations to the Torch dialect.
+  }];
+
+  let constructor = "mlir::createConvertMuseToTorchPass()";
+
+  let dependentDialects = [
+    "::mlir::torch::TorchDialect",
+    "::mlir::muse::MuseDialect"
+  ];
+}
+
 #endif // MFUSION_CONVERSION_PASSES

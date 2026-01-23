@@ -41,6 +41,9 @@ std::unique_ptr<Pass> createConvertArithToMusePass();
 /// Create a pass to convert Torch operations to Muse dialect operations.
 std::unique_ptr<Pass> createConvertTorchToMusePass();
 
+/// Create a pass to convert Muse operations to Torch dialect operations.
+std::unique_ptr<Pass> createConvertMuseToTorchPass();
+
 //===----------------------------------------------------------------------===//
 // Registration
 //===----------------------------------------------------------------------===//
