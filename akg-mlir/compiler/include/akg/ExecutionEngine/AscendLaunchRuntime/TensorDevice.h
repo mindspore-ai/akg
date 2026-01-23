@@ -15,36 +15,89 @@
  */
 #ifndef COMPILER_INCLUDE_AKG_EXECUTIONENGINE_AKGASCENDLAUNCHRUNTIME_TENSORDEVICE_H_
 #define COMPILER_INCLUDE_AKG_EXECUTIONENGINE_AKGASCENDLAUNCHRUNTIME_TENSORDEVICE_H_
+#include <cstddef>
 #include <memory>
+#include <type_traits>
+#include <cstring>
+#include <stdexcept>
 
 namespace mlir {
 namespace runtime {
-class TensorDevice {
+
+class BaseDevice {
  public:
-  TensorDevice(void *host_address, size_t nbytes, bool is_output)
-      : host_address_(host_address), nbytes_(nbytes), is_output_(is_output) {}
-  TensorDevice(void *host_address, void *device_address, size_t nbytes, bool is_output)
-      : host_address_(host_address), device_address_(device_address), nbytes_(nbytes), is_output_(is_output) {
-    if (device_address_ != nullptr) is_host_ = false;
+  virtual ~BaseDevice() = default;
+ protected:
+  BaseDevice() = default;
+};
+
+class ScalarDevice : public BaseDevice {
+ public:
+  explicit ScalarDevice(void* data_ptr) : data_ptr_(data_ptr) {}
+
+  ~ScalarDevice() override = default;
+
+  void* GetScalarValuePtr() const {
+    return data_ptr_;
   }
-  ~TensorDevice() {
-    host_address_ = nullptr;
-    device_address_ = nullptr;
-  }
-  size_t GetDataSize() { return nbytes_; }
-  void *GetHostAddress() { return host_address_; }
-  void *GetDeviceAddress() { return device_address_; }
-  void SetDeviceAddress(void *device_address) { device_address_ = device_address; }
-  bool IsOutput() { return is_output_; }
-  bool IsHostTensor() { return is_host_; }
 
  private:
-  void *host_address_{nullptr};
-  void *device_address_{nullptr};
-  size_t nbytes_{0};
-  bool is_output_{false};
+  void* data_ptr_;
+};
+
+class TensorDevice : public BaseDevice {
+ public:
+  TensorDevice(void *host_address, size_t nbytes, bool is_output)
+      : host_address_(host_address),
+        device_address_(nullptr),
+        nbytes_(nbytes),
+        is_output_(is_output) {}
+
+  TensorDevice(void *host_address, void *device_address, size_t nbytes, bool is_output)
+      : host_address_(host_address),
+        device_address_(device_address),
+        nbytes_(nbytes),
+        is_output_(is_output) {
+    if (device_address_ != nullptr) is_host_ = false;
+  }
+
+  ~TensorDevice() override = default;
+
+  size_t GetDataSize() const { return nbytes_; }
+  void *GetHostAddress() const { return host_address_; }
+  void *GetDeviceAddress() const { return device_address_; }
+  bool IsOutput() const { return is_output_; }
+  bool IsHostTensor() const { return is_host_; }
+
+  void SetDeviceAddress(void *device_address) {
+    device_address_ = device_address;
+  }
+
+ private:
+  void *host_address_;
+  void *device_address_;
+  size_t nbytes_;
+  bool is_output_;
   bool is_host_{true};
 };
+
+inline std::shared_ptr<TensorDevice> AsTensorDevice(const std::shared_ptr<BaseDevice>& base) {
+  return std::dynamic_pointer_cast<TensorDevice>(base);
+}
+
+inline std::shared_ptr<ScalarDevice> AsScalarDevice(const std::shared_ptr<BaseDevice>& base) {
+  return std::dynamic_pointer_cast<ScalarDevice>(base);
+}
+
+inline void* GetScalarValuePtr(const std::shared_ptr<BaseDevice>& base) {
+  if (auto scalar = AsScalarDevice(base)) {
+    return scalar->GetScalarValuePtr();
+  }
+  throw std::runtime_error("GetScalarValuePtr() called on non-scalar device");
+}
+
+using BaseDevicePtr = std::shared_ptr<BaseDevice>;
+using ScalarDevicePtr = std::shared_ptr<ScalarDevice>;
 using TensorDevicePtr = std::shared_ptr<TensorDevice>;
 }  // namespace runtime
 }  // namespace mlir

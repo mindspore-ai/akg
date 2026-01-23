@@ -35,7 +35,7 @@ constexpr auto kMIXStr = "MIX";
 static thread_local aclrtContext thread_local_rt_context{nullptr};
 
 AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id, bool use_mem_pool) {
-  set_device_id(device_id); use_mem_pool_ = use_mem_pool;
+  set_device_id(device_id);
   use_mem_pool_ = use_mem_pool;
 }
 
@@ -189,7 +189,7 @@ bool AscendKernelRuntime::UnLoadKernelFunc() {
 }
 
 bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
-                              const std::vector<TensorDevicePtr> &input_tensors,
+                              const std::vector<BaseDevicePtr> &input_tensors,
                               const std::vector<std::vector<int64_t>> &input_shape_args, int64_t tiling_key,
                               int64_t tiling_struct_size) {
   uint32_t blockdim = 40;  // default blockdim equal to 1.
@@ -201,25 +201,32 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
     size_t input_size = input_tensors.size();
     if (tiling_struct_size > 0) input_size -= 1;
     for (size_t idx = 0; idx < input_size; idx++) {
-      auto tensor = input_tensors[idx];
+      auto base = input_tensors[idx];
       auto shape = input_shape_args[idx];
-      runtimeargs.push_back(tensor->GetDeviceAddress());
-      runtimeargs.push_back(tensor->GetDeviceAddress());
-      runtimeargs.push_back(reinterpret_cast<void *>(offset));
 
-      int64_t size = 1;
-      for (auto dim : shape) {
-        runtimeargs.push_back(reinterpret_cast<void *>(dim));
-        size *= dim;
-      }
-      for (auto &dim : shape) {
-        int64_t stride = size / dim;
-        runtimeargs.push_back(reinterpret_cast<void *>(stride));
-        size = stride;
+      auto tensor = mlir::runtime::AsTensorDevice(base);
+      if (!tensor) {
+        runtimeargs.push_back(mlir::runtime::GetScalarValuePtr(base));
+      } else {
+        runtimeargs.push_back(tensor->GetDeviceAddress());
+        runtimeargs.push_back(tensor->GetDeviceAddress());
+        runtimeargs.push_back(reinterpret_cast<void *>(offset));
+
+        int64_t size = 1;
+        for (auto dim : shape) {
+          runtimeargs.push_back(reinterpret_cast<void *>(dim));
+          size *= dim;
+        }
+        for (auto &dim : shape) {
+          int64_t stride = size / dim;
+          runtimeargs.push_back(reinterpret_cast<void *>(stride));
+          size = stride;
+        }
       }
     }
+
     if (tiling_struct_size > 0) {
-      auto tensor = input_tensors[input_size];
+      auto tensor = mlir::runtime::AsTensorDevice(input_tensors[input_size]);
       runtimeargs.push_back(reinterpret_cast<void *>(&tiling_key));
       runtimeargs.push_back(tensor->GetDeviceAddress());
       runtimeargs.push_back(tensor->GetDeviceAddress());
@@ -228,9 +235,10 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
       runtimeargs.push_back(reinterpret_cast<void *>(1));
     }
   } else {
-    runtimeargs.resize(input_tensors.size());
-    std::transform(input_tensors.begin(), input_tensors.end(), runtimeargs.begin(),
-                   [](TensorDevicePtr in) { return in->GetDeviceAddress(); });
+    for (const auto &base : input_tensors) {
+      auto tensor = mlir::runtime::AsTensorDevice(base);
+      runtimeargs.push_back(tensor->GetDeviceAddress());
+    }
   }
 
   typedef void (*CallFunc)(uint32_t, void *, void *, void **);
@@ -304,9 +312,11 @@ bool AscendKernelRuntime::SyncStream() {
   return true;
 }
 
-void AscendKernelRuntime::InitDeviceMemory(const std::vector<TensorDevicePtr> &tensors) {
+void AscendKernelRuntime::InitDeviceMemory(const std::vector<BaseDevicePtr> &tensors) {
   if (!use_mem_pool_) return;
-  for (auto tensor : tensors) {
+  for (auto base : tensors) {
+    auto tensor = mlir::runtime::AsTensorDevice(base);
+    if (!tensor) continue;
     if (tensor->IsHostTensor()) {
       auto mem_size = tensor->GetDataSize();
       auto device_addr = mem_manager_->MallocMemFromMemPool(mem_size);
@@ -316,7 +326,7 @@ void AscendKernelRuntime::InitDeviceMemory(const std::vector<TensorDevicePtr> &t
 }
 
 void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
-                                    const std::vector<TensorDevicePtr> &input_tensors,
+                                    const std::vector<BaseDevicePtr> &input_tensors,
                                     const std::vector<std::vector<int64_t>> &input_shape_args, int64_t tiling_key,
                                     int64_t tiling_struct_size) {
   // InitResource
@@ -326,22 +336,29 @@ void AscendKernelRuntime::RunOpImpl(const std::string &path, const std::string &
   // malloc mem
   InitDeviceMemory(input_tensors);
   // load input data to device
-  for (const auto &tensor : input_tensors) {
-    if (tensor->IsHostTensor())
+  for (const auto &base : input_tensors) {
+    auto tensor = mlir::runtime::AsTensorDevice(base);
+    if (!tensor) continue;
+    if (tensor->IsHostTensor()) {
       SyncHostToDevice(tensor->GetDataSize(), tensor->GetHostAddress(), tensor->GetDeviceAddress());
+    }
   }
   // run op
   if (!Run(path, kernel_name, is_dynamic, input_tensors, input_shape_args, tiling_key, tiling_struct_size)) {
     LOG(FATAL) << "Kernel runtime run error.";
   }
   // get output
-  for (const auto &tensor : input_tensors) {
+  for (const auto &base : input_tensors) {
+    auto tensor = mlir::runtime::AsTensorDevice(base);
+    if (!tensor) continue;
     if (tensor->IsOutput() && tensor->IsHostTensor()) {
       SyncDeviceToHost(tensor->GetDataSize(), tensor->GetDeviceAddress(), tensor->GetHostAddress());
     }
   }
   // FreeResource
-  for (const auto &tensor : input_tensors) {
+  for (const auto &base : input_tensors) {
+    auto tensor = mlir::runtime::AsTensorDevice(base);
+    if (!tensor) continue;
     tensor->SetDeviceAddress(nullptr);
   }
 }
