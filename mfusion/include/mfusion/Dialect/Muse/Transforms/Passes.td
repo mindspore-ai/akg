@@ -20,28 +20,16 @@
 include "mlir/Pass/PassBase.td"
 
 //===----------------------------------------------------------------------===//
-// SetTensorDevice pass
+// FuseAddRmsNorm pass
 //===----------------------------------------------------------------------===//
 
-def SetTensorDevice : Pass<"set-tensor-device", "::mlir::ModuleOp"> {
-  let summary = "Set device information for tensors in MUSE dialect";
-
+def FuseAddRmsNorm : Pass<"fuse-addrmsnorm", "::mlir::ModuleOp"> {
+  let summary = "Fuse Add and RmsNorm into AddRmsNorm";
   let description = [{
-    This pass sets device information for all tensors in MUSE dialect operations.
-    It propagates device information from network inputs (function arguments) to
-    all operation outputs. The device information is set from the first example_input
-    and applied to all function arguments.
+    Fuses a pattern of RmsNorm(Add(x1, x2), gamma, eps) into a single AddRmsNorm operator.
+    Checks that the Add operation has a scaling factor of 1.0.
   }];
-
-  let options = [
-    Option<"deviceType", "device-type", "std::string", "\"cpu\"",
-           "Device type (e.g., 'cpu', 'npu') for all input tensors">,
-    Option<"deviceIndex", "device-index", "int64_t", "-1",
-           "Device index for all input tensors">
-  ];
-
-  let constructor = "mlir::createSetTensorDevice()";
-
+  let constructor = "mlir::createFuseAddRmsNormPass()";
   let dependentDialects = [
     "::mlir::muse::MuseDialect",
     "::mlir::func::FuncDialect"
