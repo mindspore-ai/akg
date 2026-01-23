@@ -1,0 +1,19 @@
+#include "torch-mlir/Dialect/Torch/IR/TorchOps.td"
+#include "mfusion/Dialect/Muse/MuseOps.td"
+#include "mfusion/Dialect/Muse/MuseConstantOps.td"
+
+// Native helper to extract float attribute from value.
+Rewrite GetF64Attr(val: Value) -> Attr;
+
+// Native helpers to extract fixed indices from ValueRange.
+Rewrite Get0(inputs: ValueRange) -> Value;
+Rewrite Get1(inputs: ValueRange) -> Value;
+Rewrite Get2(inputs: ValueRange) -> Value;
+Rewrite Get3(inputs: ValueRange) -> Value;
+Rewrite Get4(inputs: ValueRange) -> Value;
+Rewrite Get5(inputs: ValueRange) -> Value;
+Rewrite Get6(inputs: ValueRange) -> Value;
+Rewrite Get7(inputs: ValueRange) -> Value;
+Rewrite Get8(inputs: ValueRange) -> Value;
+Rewrite Get9(inputs: ValueRange) -> Value;
+Rewrite Get10(inputs: ValueRange) -> Value;

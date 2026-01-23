@@ -55,21 +55,9 @@ class Muse_TypeWithContainedType<string name, string typeMnemonic> : Muse_Type<n
   }];
 }
 
-// Markers for aclnn configuration dag structure
-def AclnnConfig;
-def IORef;
-
 // Base class for all MUSE dialect operations.
 class Muse_Op<string mnemonic, list<Trait> traits = []> :
     Op<Muse_Dialect, mnemonic, traits> {
-  // Optional string for aclnn operation name.
-  // When set, specifies the aclnn function name to use for code generation.
-  string genAclnnOp = ?;
-
-  // Optional dag for aclnn configuration with IORef list.
-  // Structure: (AclnnConfig (IORef out0, in0), (IORef out1, in1), ...)
-  // If not set, defaults to empty dag.
-  dag genAclnnCfg = ?;
 }
 
 #endif // MUSE_DIALECT_MUSE_DIALECT_TD
