@@ -14,7 +14,6 @@
 """ akg launch and compile utils """
 import os
 import sys
-import ctypes
 import logging
 import subprocess
 import numpy as np
@@ -186,13 +185,14 @@ def transform_data_to_ascend(
             output_idx_set.append(output_idx + len(data))
     output_idx_set = set(output_idx_set)
     for data_idx, d in enumerate(data):
+        if isinstance(d, (int, float, bool, complex)):
+            data_ctypes.append(d)
+            continue
         data_shape = np.array(device_shape[data_idx])
         data_bytes = d.nbytes
         is_numpy_bf16 = False
         is_numpy_output = False
-        if isinstance(d, int):
-            data_ctypes.append(ctypes.c_int(d))
-        elif isinstance(d, np.ndarray):
+        if isinstance(d, np.ndarray):
             if data_idx in output_idx_set:
                 is_numpy_output = True
             if d.dtype.name == "bfloat16":
