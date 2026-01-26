@@ -428,7 +428,7 @@ class AgentBase(ABC):
 
             # VLLM 或 OpenAI AsyncClient 模型
             if effective_model_name.startswith("vllm_") or is_openai_async:
-                messages = [{"role": "system", "content": ""}, {"role": "user", "content": formatted_prompt}]
+                messages = [{"role": "system", "content": " "}, {"role": "user", "content": formatted_prompt}]
                 create_kwargs = {
                     "model": getattr(model, "model_name", model_name),
                     "messages": messages,
