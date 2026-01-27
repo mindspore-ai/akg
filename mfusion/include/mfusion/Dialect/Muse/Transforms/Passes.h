@@ -18,6 +18,7 @@
 #define MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
 
 #include "mfusion/Dialect/Muse/Transforms/Decompose/Decompose.h"
+#include "mfusion/Dialect/Muse/Transforms/Cluster/DVMCluster.h"
 #include "mfusion/Dialect/Muse/Transforms/Fusion/FuseAddRmsNorm.h"
 #include "mfusion/Dialect/Muse/Transforms/Fusion/GeluFusion.h"
 
