@@ -1,0 +1,13 @@
+# The CODEOWNERS file is used to define the maintainer of a specific file or directory in the code repository.
+# Its main purpose is to automatically request designated maintainers to conduct code review in Pull Request (PR),
+# in order to clarify code ownership, improve code quality, and accelerate the review process.
+# Lines starting with # are comments.
+# Each line corresponds to a specified file or directory and maintainers separated by spaces with @ prefixes.
+# The rules are applied from top to bottom, and the last matching rule will take effect.
+
+/.gitee/ @anyrenwei @zichun_ye @corleoneliu @zhengzuohe @yiyanzhi_akane 
+/.github/ @anyrenwei @zichun_ye @corleoneliu @zhengzuohe @yiyanzhi_akane 
+/.jenkins/ @anyrenwei @zichun_ye @corleoneliu @zhengzuohe @yiyanzhi_akane 
+/aikg/ @yiyanzhi_akane @anyrenwei
+/akg-mlir/ @corleoneliu @zichun_ye @anyrenwei
+/docs/ @anyrenwei @zichun_ye @corleoneliu @zhengzuohe @yiyanzhi_akane
