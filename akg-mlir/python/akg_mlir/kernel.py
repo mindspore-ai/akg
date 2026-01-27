@@ -29,6 +29,7 @@ class Kernel:
         self.kernel_name = kernel_meta.get('kernel_name')
         self.dynamic = kernel_meta.get('dynamic')
         self.device_id = kernel_meta.get('device_index')
+        self.arch = kernel_meta.get('device_name')
         self.output_so_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
         os.makedirs(self.output_so_dir, exist_ok=True)
         backend = kernel_meta.get('backend')
@@ -61,6 +62,7 @@ class Kernel:
             output_file=out_file,
             akg_tools_dir=akg_tools_dir,
             dyn_shape=self.dynamic,
+            arch = self.arch,
             dump_ir=True
         )
 
@@ -75,8 +77,6 @@ class Kernel:
 
     def run(self, *args, **kwargs):
         """ launch .so file by akg_ascend_backend """
-        n = len(args)
-
         # When the PTA side inherits from MLIR, all attributes of data_args here are data;
         # when it inherits from Triton, the last dimension represents the number of elements.
         data_args = args

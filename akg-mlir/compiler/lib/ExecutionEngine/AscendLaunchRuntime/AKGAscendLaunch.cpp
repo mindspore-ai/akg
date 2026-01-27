@@ -67,7 +67,21 @@ void ConvertToFP32(py::buffer_info &bf16_buf, py::buffer_info &fp32_buf) {
 }
 
 mlir::runtime::BaseDevicePtr CreateScalarDevice(const py::handle& arg) {
-  return std::make_shared<mlir::runtime::ScalarDevice>(arg.ptr());
+  void* data_ptr = nullptr;
+
+  if (py::isinstance<py::int_>(arg)) {
+    int64_t val = arg.cast<int64_t>();
+    data_ptr = reinterpret_cast<void*>(val);
+  } else if (py::isinstance<py::float_>(arg)) {
+    double val = arg.cast<double>();
+    static_assert(sizeof(double) == sizeof(void*), "double size mismatch");
+    std::memcpy(&data_ptr, &val, sizeof(void*));
+  } else if (py::isinstance<py::bool_>(arg)) {
+    bool val = arg.cast<bool>();
+    data_ptr = reinterpret_cast<void*>(static_cast<intptr_t>(val));
+  }
+
+  return std::make_shared<mlir::runtime::ScalarDevice>(data_ptr);
 }
 
 void ParseInputArgs(bool is_dynamic,
@@ -190,7 +204,10 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
           }
         }
       }
-
+      DLOG(INFO) << "Tiling args - tiling_key: " << tiling_key
+           << ", offset: " << offset
+           << ", tiling_struct_size: " << tiling_struct_size
+           << ", arg_tiling_host: " << arg_tiling_host;
       runtimeargs.push_back(reinterpret_cast<void*>(&tiling_key));
       runtimeargs.push_back(reinterpret_cast<void*>(arg_tiling_host));
       runtimeargs.push_back(reinterpret_cast<void*>(arg_tiling_host));
