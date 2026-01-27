@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-#include "akg/Analysis/SymbolicShapeAnalysis.h"
-
 #include <algorithm>
 #include <iterator>
-
+#include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/OperationSupport.h"
 
 namespace mlir {
@@ -31,9 +30,6 @@ namespace mlir {
 #include "akg/Transforms/Passes.h.inc"
 #endif
 #endif
-}  // namespace mlir
-
-using namespace mlir;
 
 static Type RemoveTypeSymbolic(Type type) {
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
@@ -91,6 +87,14 @@ namespace {
 struct RemoveSymbolic : public impl::RemoveSymbolicBase<RemoveSymbolic> {
   void runOnOperation() override {
     (void)getOperation()->walk([&](Operation *op) {
+      if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(op)) {
+        Value src = castOp.getSource();
+        src.setType(RemoveTypeSymbolic(src.getType()));
+        castOp.getResult().replaceAllUsesWith(src);
+        castOp.erase();
+        return WalkResult::advance();
+      }
+
       if (isa<func::FuncOp>(op)) {
         func::FuncOp func = dyn_cast<func::FuncOp>(op);
         RemoveFuncSymbolic(func);
@@ -106,5 +110,6 @@ struct RemoveSymbolic : public impl::RemoveSymbolicBase<RemoveSymbolic> {
   }
 };
 }  // namespace
+}  // namespace mlir
 
 std::unique_ptr<mlir::Pass> mlir::createSymbolicRemovalPass() { return std::make_unique<RemoveSymbolic>(); }
