@@ -2091,6 +2091,146 @@ func.func @test_sqrt_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) {
 
 // -----
 
+func.func @test_tanh_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) {
+  // CHECK-LABEL: func.func @test_tanh_npuvector
+  // CHECK-SAME: (%[[IN:.*]]: memref<1024xf32>, %[[OUT:.*]]: memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_SRC:.*]] = memref.subview %[[IN]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: %[[IN_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.load ins(%[[SUBVIEW_SRC]] : memref<1024xf32, strided<[1]>>) outs(%[[IN_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[RES_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.vtanh ins(%[[IN_ALLOC]] : memref<1024xf32>) outs(%[[RES_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_DST:.*]] = memref.subview %[[OUT]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: hivm.hir.store ins(%[[RES_ALLOC]] : memref<1024xf32>) outs(%[[SUBVIEW_DST]] : memref<1024xf32, strided<[1]>>)
+  %c0 = arith.constant 0 : index
+  %padding = arith.constant 0.0 : f32
+  %vec = npuvector.transfer_read %in[%c0], %padding : memref<1024xf32>, !npuvector<1024xf32>
+  %res = math.tanh %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %res, %out[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  return
+}
+
+// -----
+
+func.func @test_sin_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) {
+  // CHECK-LABEL: func.func @test_sin_npuvector
+  // CHECK-SAME: (%[[IN:.*]]: memref<1024xf32>, %[[OUT:.*]]: memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_SRC:.*]] = memref.subview %[[IN]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: %[[IN_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.load ins(%[[SUBVIEW_SRC]] : memref<1024xf32, strided<[1]>>) outs(%[[IN_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[RES_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.vsin ins(%[[IN_ALLOC]] : memref<1024xf32>) outs(%[[RES_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_DST:.*]] = memref.subview %[[OUT]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: hivm.hir.store ins(%[[RES_ALLOC]] : memref<1024xf32>) outs(%[[SUBVIEW_DST]] : memref<1024xf32, strided<[1]>>)
+  %c0 = arith.constant 0 : index
+  %padding = arith.constant 0.0 : f32
+  %vec = npuvector.transfer_read %in[%c0], %padding : memref<1024xf32>, !npuvector<1024xf32>
+  %res = math.sin %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %res, %out[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  return
+}
+
+// -----
+
+func.func @test_cos_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) {
+  // CHECK-LABEL: func.func @test_cos_npuvector
+  // CHECK-SAME: (%[[IN:.*]]: memref<1024xf32>, %[[OUT:.*]]: memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_SRC:.*]] = memref.subview %[[IN]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: %[[IN_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.load ins(%[[SUBVIEW_SRC]] : memref<1024xf32, strided<[1]>>) outs(%[[IN_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[RES_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.vcos ins(%[[IN_ALLOC]] : memref<1024xf32>) outs(%[[RES_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_DST:.*]] = memref.subview %[[OUT]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: hivm.hir.store ins(%[[RES_ALLOC]] : memref<1024xf32>) outs(%[[SUBVIEW_DST]] : memref<1024xf32, strided<[1]>>)
+  %c0 = arith.constant 0 : index
+  %padding = arith.constant 0.0 : f32
+  %vec = npuvector.transfer_read %in[%c0], %padding : memref<1024xf32>, !npuvector<1024xf32>
+  %res = math.cos %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %res, %out[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  return
+}
+
+// -----
+
+func.func @test_erf_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) {
+  // CHECK-LABEL: func.func @test_erf_npuvector
+  // CHECK-SAME: (%[[IN:.*]]: memref<1024xf32>, %[[OUT:.*]]: memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_SRC:.*]] = memref.subview %[[IN]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: %[[IN_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.load ins(%[[SUBVIEW_SRC]] : memref<1024xf32, strided<[1]>>) outs(%[[IN_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[RES_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.verf ins(%[[IN_ALLOC]] : memref<1024xf32>) outs(%[[RES_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_DST:.*]] = memref.subview %[[OUT]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: hivm.hir.store ins(%[[RES_ALLOC]] : memref<1024xf32>) outs(%[[SUBVIEW_DST]] : memref<1024xf32, strided<[1]>>)
+  %c0 = arith.constant 0 : index
+  %padding = arith.constant 0.0 : f32
+  %vec = npuvector.transfer_read %in[%c0], %padding : memref<1024xf32>, !npuvector<1024xf32>
+  %res = math.erf %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %res, %out[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  return
+}
+
+// -----
+
+func.func @test_ceil_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) {
+  // CHECK-LABEL: func.func @test_ceil_npuvector
+  // CHECK-SAME: (%[[IN:.*]]: memref<1024xf32>, %[[OUT:.*]]: memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_SRC:.*]] = memref.subview %[[IN]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: %[[IN_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.load ins(%[[SUBVIEW_SRC]] : memref<1024xf32, strided<[1]>>) outs(%[[IN_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[RES_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.vcast ins(%[[IN_ALLOC]] : memref<1024xf32>) outs(%[[RES_ALLOC]] : memref<1024xf32>) round_mode = <ceil>
+  // CHECK: %[[SUBVIEW_DST:.*]] = memref.subview %[[OUT]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: hivm.hir.store ins(%[[RES_ALLOC]] : memref<1024xf32>) outs(%[[SUBVIEW_DST]] : memref<1024xf32, strided<[1]>>)
+  %c0 = arith.constant 0 : index
+  %padding = arith.constant 0.0 : f32
+  %vec = npuvector.transfer_read %in[%c0], %padding : memref<1024xf32>, !npuvector<1024xf32>
+  %res = math.ceil %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %res, %out[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  return
+}
+
+// -----
+
+func.func @test_floor_npuvector(%in: memref<1024xf32>, %out: memref<1024xf32>) {
+  // CHECK-LABEL: func.func @test_floor_npuvector
+  // CHECK-SAME: (%[[IN:.*]]: memref<1024xf32>, %[[OUT:.*]]: memref<1024xf32>)
+  // CHECK: %[[SUBVIEW_SRC:.*]] = memref.subview %[[IN]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: %[[IN_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.load ins(%[[SUBVIEW_SRC]] : memref<1024xf32, strided<[1]>>) outs(%[[IN_ALLOC]] : memref<1024xf32>)
+  // CHECK: %[[RES_ALLOC:.*]] = memref.alloc() : memref<1024xf32>
+  // CHECK: hivm.hir.vcast ins(%[[IN_ALLOC]] : memref<1024xf32>) outs(%[[RES_ALLOC]] : memref<1024xf32>) round_mode = <floor>
+  // CHECK: %[[SUBVIEW_DST:.*]] = memref.subview %[[OUT]][0] [1024] [1] : memref<1024xf32> to memref<1024xf32, strided<[1]>>
+  // CHECK: hivm.hir.store ins(%[[RES_ALLOC]] : memref<1024xf32>) outs(%[[SUBVIEW_DST]] : memref<1024xf32, strided<[1]>>)
+  %c0 = arith.constant 0 : index
+  %padding = arith.constant 0.0 : f32
+  %vec = npuvector.transfer_read %in[%c0], %padding : memref<1024xf32>, !npuvector<1024xf32>
+  %res = math.floor %vec : !npuvector<1024xf32>
+  npuvector.transfer_write %res, %out[%c0] : !npuvector<1024xf32>, memref<1024xf32>
+  return
+}
+
+// -----
+
+func.func @test_absi_npuvector(%in: memref<1024xi32>, %out: memref<1024xi32>) {
+  // CHECK-LABEL: func.func @test_absi_npuvector
+  // CHECK-SAME: (%[[IN:.*]]: memref<1024xi32>, %[[OUT:.*]]: memref<1024xi32>)
+  // CHECK: %[[SUBVIEW_SRC:.*]] = memref.subview %[[IN]][0] [1024] [1] : memref<1024xi32> to memref<1024xi32, strided<[1]>>
+  // CHECK: %[[IN_ALLOC:.*]] = memref.alloc() : memref<1024xi32>
+  // CHECK: hivm.hir.load ins(%[[SUBVIEW_SRC]] : memref<1024xi32, strided<[1]>>) outs(%[[IN_ALLOC]] : memref<1024xi32>)
+  // CHECK: %[[RES_ALLOC:.*]] = memref.alloc() : memref<1024xi32>
+  // CHECK: hivm.hir.vabs ins(%[[IN_ALLOC]] : memref<1024xi32>) outs(%[[RES_ALLOC]] : memref<1024xi32>)
+  // CHECK: %[[SUBVIEW_DST:.*]] = memref.subview %[[OUT]][0] [1024] [1] : memref<1024xi32> to memref<1024xi32, strided<[1]>>
+  // CHECK: hivm.hir.store ins(%[[RES_ALLOC]] : memref<1024xi32>) outs(%[[SUBVIEW_DST]] : memref<1024xi32, strided<[1]>>)
+  %c0 = arith.constant 0 : index
+  %padding = arith.constant 0 : i32
+  %vec = npuvector.transfer_read %in[%c0], %padding : memref<1024xi32>, !npuvector<1024xi32>
+  %res = math.absi %vec : !npuvector<1024xi32>
+  npuvector.transfer_write %res, %out[%c0] : !npuvector<1024xi32>, memref<1024xi32>
+  return
+}
+
+// -----
+
 func.func @dynamic_npuvector_transfer_read_write(%in: memref<?xf32>, %out: memref<?xf32>) {
   // CHECK-LABEL: func.func @dynamic_npuvector_transfer_read_write
   // CHECK-SAME: (%[[IN:.*]]: memref<?xf32>, %[[OUT:.*]]: memref<?xf32>)
