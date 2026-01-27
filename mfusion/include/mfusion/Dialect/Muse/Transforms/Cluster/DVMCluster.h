@@ -14,21 +14,20 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
-#define MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
+#ifndef MFUSION_INCLUDE_DIALECT_MUSE_TRANSFORMS_CLUSTER_DVM_CLUSTER_H_
+#define MFUSION_INCLUDE_DIALECT_MUSE_TRANSFORMS_CLUSTER_DVM_CLUSTER_H_
 
-#include "mfusion/Dialect/Muse/Transforms/Decompose/Decompose.h"
-#include "mfusion/Dialect/Muse/Transforms/Cluster/DVMCluster.h"
-#include "mfusion/Dialect/Muse/Transforms/Fusion/FuseAddRmsNorm.h"
-#include "mfusion/Dialect/Muse/Transforms/Fusion/GeluFusion.h"
+#include <memory>
+
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
 
 namespace mlir {
 
-/// Generate the code for registering transforms passes.
-#ifndef GEN_PASS_REGISTRATION
-#define GEN_PASS_REGISTRATION
-#include "mfusion/Dialect/Muse/Transforms/Passes.h.inc"
-#endif
+/// Create a pass to cluster Muse operations checked by DVM backend into muse.fused.
+std::unique_ptr<Pass> createDVMClusterPass();
+
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
+#endif  // MFUSION_INCLUDE_DIALECT_MUSE_TRANSFORMS_CLUSTER_DVM_CLUSTER_H_
