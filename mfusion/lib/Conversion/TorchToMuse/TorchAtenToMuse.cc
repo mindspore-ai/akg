@@ -16,16 +16,14 @@
 
 #include "mfusion/Conversion/TorchToMuse/TorchAtenToMuse.h"
 
-#include <limits>
 #include <numeric>
 #include <string>
 
 #include "llvm/ADT/SmallVector.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
-#include "torch-mlir/Dialect/Torch/Utils/TorchUpstream.h"
 #include "torch-mlir/Dialect/Torch/Utils/Utils.h"
 #include "mfusion/Dialect/Muse/Muse.h"
 
@@ -140,6 +138,52 @@ struct ConvertAtenTransposeInt : public OpConversionPattern<TorchD::AtenTranspos
   }
 };
 
+struct ConvertAtenSliceTensor : public OpConversionPattern<TorchD::AtenSliceTensorOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenSliceTensorOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value self = adaptor.getSelf();
+    auto inType = cast<RankedTensorType>(self.getType());
+    auto outType = cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
+
+    int64_t dim, start, end, step;
+    if (!matchPattern(op.getDim(), TorchD::m_TorchConstantInt(&dim))) {
+      return rewriter.notifyMatchFailure(op, "dim must be constant");
+    }
+    if (!matchPattern(op.getStart(), TorchD::m_TorchConstantInt(&start))) {
+      return rewriter.notifyMatchFailure(op, "start must be constant");
+    }
+    if (!matchPattern(op.getEnd(), TorchD::m_TorchConstantInt(&end))) {
+      return rewriter.notifyMatchFailure(op, "end must be constant");
+    }
+    if (!matchPattern(op.getStep(), TorchD::m_TorchConstantInt(&step))) {
+      return rewriter.notifyMatchFailure(op, "step must be constant");
+    }
+
+    int64_t inputRank = inType.getRank();
+    dim = TorchD::toPositiveDim(dim, inputRank);
+    if (!TorchD::isValidDim(dim, inputRank)) {
+      return rewriter.notifyMatchFailure(op, "dim out of range");
+    }
+
+    int64_t dimSize = inType.getDimSize(dim);
+
+    start = TorchD::toPositiveDim(start, dimSize);
+    if (start < 0) start = 0;
+    if (start > dimSize) start = dimSize;
+
+    end = TorchD::toPositiveDim(end, dimSize);
+    if (end < start) end = start;
+    if (end > dimSize) end = dimSize;
+
+    rewriter.replaceOpWithNewOp<mlir::muse::SliceOp>(op, outType, self, rewriter.getI64IntegerAttr(dim),
+                                                     rewriter.getI64IntegerAttr(start), rewriter.getI64IntegerAttr(end),
+                                                     rewriter.getI64IntegerAttr(step));
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Pattern population
 //===----------------------------------------------------------------------===//
@@ -150,6 +194,7 @@ static void populateAtenToMuseCustomPatterns(TypeConverter &converter, RewritePa
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
   patterns.add<ConvertAtenToDtype>(converter, context);
   patterns.add<ConvertAtenTransposeInt>(converter, context);
+  patterns.add<ConvertAtenSliceTensor>(converter, context);
 }
 
 // Populate all Aten ops to Muse conversion patterns
