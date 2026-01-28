@@ -46,13 +46,13 @@ done
 # run ut test cases (lit)
 if [[ "X${TEST_TYPE}" = "Xut" ]] || [[ "X${TEST_TYPE}" = "Xall" ]]; then
     # check if tests directory exists
-    UT_TEST_PATH=${MFUSION_BUILD_PATH}/tests/ut
-    if [[ ! -d "${UT_TEST_PATH}" ]]; then
+    TEST_PATH=${MFUSION_BUILD_PATH}/tests
+    if [[ ! -d "${TEST_PATH}" ]]; then
         echo "Error: Tests directory is not built."
         echo "Please build with -t option (e.g., bash build.sh -t)"
         exit 1
     fi
-    llvm-lit -sv ${UT_TEST_PATH}
+    lit -sv ${TEST_PATH}
 fi
 
 # run st test cases (not supported yet)
