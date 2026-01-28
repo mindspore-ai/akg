@@ -18,6 +18,7 @@
 
 #include "mfusion/Dialect/Muse/Muse.h"
 #include "mfusion/Dialect/Muse/Transforms/Passes.h"
+#include "mfusion/Dialect/Muse/Utils/ArithUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -30,29 +31,6 @@ namespace mlir {
 
 namespace muse {
 namespace {
-// Check if Value is a constant with value 1.0
-bool isScalarOne(Value value) {
-  auto constOp = value.getDefiningOp<mlir::arith::ConstantOp>();
-  if (!constOp) {
-    return false;
-  }
-
-  auto attr = constOp.getValue();
-  if (auto denseAttr = dyn_cast<mlir::DenseElementsAttr>(attr)) {
-    auto elementType = denseAttr.getElementType();
-    if (elementType.isa<mlir::FloatType>()) {
-      auto floatVal = denseAttr.getSplatValue<mlir::APFloat>();
-      return floatVal.isExactlyValue(1.0);
-    }
-    if (elementType.isa<mlir::IntegerType>()) {
-      auto intVal = denseAttr.getSplatValue<mlir::APInt>();
-      return intVal.isOne();
-    }
-    return false;
-  }
-
-  return false;
-}
 }  // namespace
 
 /**
@@ -77,7 +55,7 @@ class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
 
     // Match only muse.aclnn.add for now
     auto addOp = x.getDefiningOp<AclnnAddOp>();
-    if (!addOp || !isScalarOne(addOp.getAlpha())) {
+    if (!addOp || !isConstOne(addOp.getAlpha())) {
       return failure();
     }
 
