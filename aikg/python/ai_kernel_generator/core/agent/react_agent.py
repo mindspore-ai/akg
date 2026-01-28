@@ -107,6 +107,9 @@ def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
     messages = state["messages"]
     max_messages = DEFAULT_MAX_MESSAGES
     
+    if any(isinstance(msg, RemoveMessage) for msg in messages):
+        return None
+    
     if len(messages) <= max_messages:
         return None
     

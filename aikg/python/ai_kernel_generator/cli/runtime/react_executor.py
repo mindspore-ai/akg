@@ -168,9 +168,10 @@ class ReactTurnExecutor:
                 logger.info(f"[ReactTurnExecutor] Rolled back {len(messages_to_remove)} incomplete message(s)")
             
         except Exception as e:
-            # 如果回滚失败，重置 thread_id
-            logger.warning(f"[ReactTurnExecutor] Rollback failed: {e}, resetting thread_id")
-            self.thread_id = f"{self.session_id}_{uuid.uuid4().hex[:8]}"
+            # 如果回滚失败，只记录警告，保持 thread_id 不变以保留对话历史
+            logger.warning(f"[ReactTurnExecutor] Rollback failed: {e}, but keeping thread_id to preserve conversation history")
+            # 注释掉重置 thread_id，以保留多轮对话历史
+            # self.thread_id = f"{self.session_id}_{uuid.uuid4().hex[:8]}"
 
     async def run_turn(self, user_input: str, use_stream: bool) -> dict:
         """
