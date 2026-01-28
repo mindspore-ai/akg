@@ -72,6 +72,21 @@ def Muse_AclnnAddRmsNormOp : Muse_Op<"aclnn.add_rms_norm", [Pure]> {
   }];
 }
 
+def Muse_AclnnGeluOp : Muse_Op<"aclnn.gelu", [Pure]> {
+  let summary = "The aclnnGelu operation";
+  let description = [{
+    Applies the Gaussian Error Linear Unit (GELU) activation function.
+    GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))).
+  }];
+
+  let arguments = (ins AnyRankedTensor:$input);
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_AclnnRmsNormOp : Muse_Op<"aclnn.rms_norm", [Pure]> {
   let summary = "The aclnnRmsNorm operation";
   let description = [{
@@ -114,6 +129,20 @@ def Muse_AclnnSubOp : Muse_Op<"aclnn.sub", [Pure]> {
 
   let assemblyFormat = [{
     $x `,` $y `,` $alpha attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_AclnnTanhOp : Muse_Op<"aclnn.tanh", [Pure]> {
+  let summary = "The aclnnTanh operation";
+  let description = [{
+    Applies the element-wise hyperbolic tangent function.
+  }];
+
+  let arguments = (ins AnyRankedTensor:$input);
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
   }];
 }
 
