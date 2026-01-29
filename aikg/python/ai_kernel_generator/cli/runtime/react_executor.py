@@ -404,6 +404,43 @@ class ReactTurnExecutor:
                 "hint_message": "",
                 "workflow_name": "react",
             }
+        except Exception as e:
+            # 捕获 LLM API 错误（如 BadRequestError）
+            logger.error(f"[ReactTurnExecutor] 执行失败: {type(e).__name__}: {e}")
+            
+            # 构建友好的错误消息
+            error_type = type(e).__name__
+            error_message = str(e)
+            
+            # 检查是否是 LLMAPIError
+            from ai_kernel_generator.core.agent.agent_base import LLMAPIError
+            if isinstance(e, LLMAPIError):
+                user_message = e.user_message
+            else:
+                # 其他错误，构建基本的错误消息
+                user_message = (
+                    f"❌ 执行失败\n\n"
+                    f"错误类型: {error_type}\n"
+                    f"错误信息: {error_message}\n\n"
+                )
+                
+                # 如果是 API 配置错误，添加提示
+                if "max_tokens" in error_message.lower() or "invalid" in error_message.lower():
+                    user_message += (
+                        "可能的原因：\n"
+                        "1. 模型配置参数超出限制（如 max_tokens）\n"
+                        "2. API 密钥无效或过期\n"
+                        "3. 模型服务不可用\n\n"
+                        "请检查配置文件和环境变量设置"
+                    )
+            
+            return {
+                "current_step": "error",
+                "should_continue": False,
+                "display_message": user_message,
+                "hint_message": "请检查配置后重试",
+                "workflow_name": "react",
+            }
         finally:
             self.running_task = None
 
