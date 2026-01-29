@@ -21,19 +21,16 @@ include "mfusion/Dialect/Muse/MuseDialect.td"
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinDialect.td"
 include "mlir/IR/BuiltinTypeInterfaces.td"
+include "mlir/IR/BuiltinAttributes.td"
 include "mlir/IR/CommonTypeConstraints.td"
 
 //===----------------------------------------------------------------------===//
 // Supported argument/result types for operations:
-//   Tensor          --> Muse_TensorType
-//   Tensor List     --> MuseTensorList
-//   Integer         --> Muse_I64Type (replaces I64Attr)
-//   Integer Array   --> Muse_I64ArrayType (replaces I64ArrayAttr, for axis, strides, shape, etc.)
-//   Boolean         --> Muse_BooleanType (replaces BoolAttr)
-//   Boolean Array   --> Muse_BooleanArrayType (replaces BoolArrayAttr)
-//   Float           --> Muse_F64Type (replaces F64Attr)
-//   Float Array     --> Muse_F64ArrayType (replaces F64ArrayAttr)
+//   List            --> Muse_ListType
 //   String          --> Muse_StringType (replaces StrAttr)
+//   Dtype           --> Muse_DtypeType (wraps element type)
+//   None            --> Muse_NoneType
+//   Scalar values   --> Rank-0 tensor (AnyScalar constraint)
 //===----------------------------------------------------------------------===//
 
 // This type represents a list/collection of elements and is distinct from tensor types.
@@ -80,105 +77,6 @@ def Muse_DeviceAttr : AttrDef<Muse_Dialect, "Device"> {
   let hasCustomAssemblyFormat = 1;
 }
 
-//===----------------------------------------------------------------------===//
-// Tensor Types
-//===----------------------------------------------------------------------===//
-
-def Muse_TensorType : Muse_Type<"Tensor", "tensor", [ShapedTypeInterface]> {
-  let summary = "Tensor type for MUSE dialect";
-  let description = [{
-    Represents a multi-dimensional array with shape, element type, and optional device information.
-    Device information includes device type (e.g., "cpu", "npu") and device index.
-    Format: muse.tensor<shape x elementType, device=...> (e.g., muse.tensor<2x3xf32, device=<npu, 0>>)
-  }];
-
-  let parameters = (ins
-    OptionalArrayRefParameter<"int64_t">:$shape,
-    "mlir::Type":$elementType,
-    OptionalParameter<"mlir::muse::DeviceAttr">:$device
-  );
-
-  let extraClassDeclaration = [{
-    bool hasRank() const;
-    mlir::ShapedType cloneWith(std::optional<llvm::ArrayRef<int64_t>> shape, mlir::Type elementType) const;
-  }];
-
-  let hasCustomAssemblyFormat = 1;
-}
-
-
-// Tensor type constraint for MUSE dialect operations
-def MuseAnyTensor : Type<CPred<"::llvm::isa<::mlir::muse::TensorType>($_self)">,
-                        "MUSE tensor type",
-                        "::mlir::muse::TensorType">;
-
-//===----------------------------------------------------------------------===//
-// Scalar Types
-//===----------------------------------------------------------------------===//
-
-// 64-bit floating point scalar type (replaces F64Attr)
-// This type wraps a 64-bit floating point value and is distinct from tensor types.
-// Use this type as an operand to pass scalar double values to operations.
-def Muse_F64Type : Muse_Type<"F64", "f64"> {
-  let summary = "64-bit floating point scalar type for MUSE dialect";
-  let description = [{
-    Represents a 64-bit floating point scalar value. This type is used as an operand
-    to replace F64Attr, allowing all parameters to be passed as operands.
-    This type is distinct from tensor types and can be used to pass scalar
-    floating point values to operations.
-  }];
-
-  let builders = [
-    TypeBuilderWithInferredContext<(ins), [{
-      return Base::get(context);
-    }]>
-  ];
-
-  let assemblyFormat = "";
-}
-
-// 64-bit integer scalar type (replaces I64Attr)
-// This type wraps a 64-bit integer value and is distinct from tensor types.
-// Use this type as an operand to pass scalar integer values to operations.
-def Muse_I64Type : Muse_Type<"I64", "i64"> {
-  let summary = "64-bit integer scalar type for MUSE dialect";
-  let description = [{
-    Represents a 64-bit integer scalar value. This type is used as an operand
-    to replace I64Attr, allowing all parameters to be passed as operands.
-    This type is distinct from tensor types and can be used to pass scalar
-    integer values to operations.
-  }];
-
-  let builders = [
-    TypeBuilderWithInferredContext<(ins), [{
-      return Base::get(context);
-    }]>
-  ];
-
-  let assemblyFormat = "";
-}
-
-// Boolean scalar type (replaces BoolAttr)
-// This type wraps a boolean value and is distinct from tensor types.
-// Use this type as an operand to pass scalar boolean values to operations.
-def Muse_BooleanType : Muse_Type<"Boolean", "boolean"> {
-  let summary = "Boolean scalar type for MUSE dialect";
-  let description = [{
-    Represents a boolean scalar value. This type is used as an operand
-    to replace BoolAttr, allowing all parameters to be passed as operands.
-    This type is distinct from tensor types and can be used to pass scalar
-    boolean values to operations.
-  }];
-
-  let builders = [
-    TypeBuilderWithInferredContext<(ins), [{
-      return Base::get(context);
-    }]>
-  ];
-
-  let assemblyFormat = "";
-}
-
 // String type (replaces StrAttr)
 // This type wraps a string value and is distinct from tensor types.
 // Use this type as an operand to pass string values to operations.
@@ -199,16 +97,6 @@ def Muse_StringType : Muse_Type<"String", "string"> {
 
   let assemblyFormat = "";
 }
-
-//===----------------------------------------------------------------------===//
-// Array Types
-//===----------------------------------------------------------------------===//
-
-// Tensor list type for Muse dialect operations
-def MuseTensorList : Muse_List<MuseAnyTensor>;
-def Muse_I64ArrayType : Muse_List<Muse_I64Type>;
-def Muse_F64ArrayType : Muse_List<Muse_F64Type>;
-def Muse_BooleanArrayType : Muse_List<Muse_BooleanType>;
 
 // Dtype type (stores mlir::Type directly)
 // This type wraps a MLIR element type and is distinct from tensor types.
@@ -231,15 +119,8 @@ def Muse_DtypeType : Muse_Type<"Dtype", "dtype"> {
   }];
 }
 
-// Scalar type constraint (accepts any scalar type)
-// This is a type constraint, not a concrete type. It accepts f64, i64, or boolean.
-// Use this constraint for operation arguments that can accept any scalar type.
-// For example, it can be used for the alpha parameter in Add operation.
-def Muse_ScalarType : AnyTypeOf<[
-  Muse_F64Type,
-  Muse_I64Type,
-  Muse_BooleanType
-], "scalar type (f64/i64/boolean)">;
+// Use rank-0 tensor to represent scalar in Muse dialect.
+def AnyScalar : 0DTensorOf<[AnyType]>;
 
 // None type (represents null/none values)
 // This type wraps a None value and is distinct from tensor types.

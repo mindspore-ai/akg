@@ -16,27 +16,24 @@
 
 #include "mfusion/Conversion/TorchToMuse/TorchToMuse.h"
 
-#include <algorithm>
-#include <iterator>
-#include <numeric>
-
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Func/Transforms/FuncConversions.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Func/Transforms/FuncConversions.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Matchers.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchDialect.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 #include "torch-mlir/Dialect/Torch/Utils/TorchUpstream.h"
 #include "torch-mlir/Dialect/Torch/Utils/Utils.h"
-#include "torch-mlir/Dialect/TorchConversion/IR/TorchConversionOps.h"
 #include "mfusion/Conversion/MuseTypeConverter.h"
 #include "mfusion/Conversion/TorchToMuse/TorchAtenToMuse.h"
 #include "mfusion/Conversion/TorchToMuse/TorchNpuToMuse.h"
-#include "mfusion/Conversion/TorchToMuse/TorchArithToMuse.h"
+#include "mfusion/Conversion/PdllHelper.h"
 #include "mfusion/Dialect/Muse/Muse.h"
 #include "mfusion/Dialect/Muse/MuseDialect.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
@@ -48,31 +45,24 @@ namespace {
 
 namespace TorchD = mlir::torch::Torch;
 
-// Populate Torch-specific type conversions to Muse types
+// Populate Torch-specific type conversions to Muse types (built-in RankedTensorType/UnrankedTensorType)
 void populateTorchToMuseTypeConversions(mlir::TypeConverter &converter) {
-  converter.addConversion([](TorchD::ValueTensorType type) -> mlir::Type {
-    auto optionalSizes = type.getOptionalSizes();
-    if (optionalSizes.has_value()) {
-      // Normalize dynamic dims: Torch uses -1 / kUnknownSize, Muse uses ShapedType::kDynamic
-      llvm::SmallVector<int64_t> shape;
-      auto sizes = optionalSizes.value();
-      shape.reserve(sizes.size());
-      std::transform(sizes.begin(), sizes.end(), std::back_inserter(shape),
-                     [](int64_t dim) { return dim < 0 ? mlir::ShapedType::kDynamic : dim; });
-      return mlir::muse::TensorType::get(type.getContext(), shape, type.getOptionalDtype(), nullptr);
-    } else {
-      return mlir::muse::TensorType::get(type.getContext(), std::nullopt, type.getOptionalDtype(), nullptr);
-    }
+  converter.addConversion([](TorchD::ValueTensorType type) -> mlir::Type { return type.toBuiltinTensor(); });
+
+  converter.addConversion([](TorchD::IntType type) -> mlir::Type {
+    auto elementType = mlir::IntegerType::get(type.getContext(), 64);
+    return mlir::RankedTensorType::get({}, elementType);
   });
 
-  converter.addConversion(
-    [](TorchD::IntType type) -> mlir::Type { return mlir::muse::I64Type::get(type.getContext()); });
+  converter.addConversion([](TorchD::FloatType type) -> mlir::Type {
+    auto elementType = mlir::Float64Type::get(type.getContext());
+    return mlir::RankedTensorType::get({}, elementType);
+  });
 
-  converter.addConversion(
-    [](TorchD::FloatType type) -> mlir::Type { return mlir::muse::F64Type::get(type.getContext()); });
-
-  converter.addConversion(
-    [](TorchD::BoolType type) -> mlir::Type { return mlir::muse::BooleanType::get(type.getContext()); });
+  converter.addConversion([](TorchD::BoolType type) -> mlir::Type {
+    auto elementType = mlir::IntegerType::get(type.getContext(), 1);
+    return mlir::RankedTensorType::get({}, elementType);
+  });
 
   converter.addConversion(
     [](TorchD::StringType type) -> mlir::Type { return mlir::muse::StringType::get(type.getContext()); });
@@ -96,22 +86,42 @@ class TorchToMuseTypeConverter : public mlir::TypeConverter {
     mlir::muse::populateMuseTypeConversions(*this);
     mlir::muse::populateMuseTypeMaterializations(*this);
     populateTorchToMuseTypeConversions(*this);
+    addTorchMaterializations();
   }
-};
 
-// Pattern to remove torch_c conversion ops (they become identity/casts in Muse)
-template <typename OpTy>
-class TorchConversionOpToMusePattern : public mlir::OpConversionPattern<OpTy> {
- public:
-  using mlir::OpConversionPattern<OpTy>::OpConversionPattern;
-
-  mlir::LogicalResult matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
-                                      mlir::ConversionPatternRewriter &rewriter) const override {
-    if (adaptor.getOperands().size() != 1 || op->getNumResults() != 1) {
-      return mlir::failure();
+ private:
+  template <typename OpTy>
+  static mlir::Value tryConvertConstant(mlir::OpBuilder &builder, mlir::Type toType, mlir::Value input,
+                                        mlir::Location loc) {
+    if (auto op = input.getDefiningOp<OpTy>()) {
+      if (auto ranked = toType.dyn_cast<mlir::RankedTensorType>()) {
+        auto denseAttr = mlir::DenseElementsAttr::get(ranked, op.getValueAttr());
+        return builder.create<mlir::arith::ConstantOp>(loc, ranked, denseAttr).getResult();
+      }
     }
-    rewriter.replaceOp(op, adaptor.getOperand());
-    return mlir::success();
+    return {};
+  }
+
+  void addTorchMaterializations() {
+    // Torch -> builtin/muse materialization.
+    addTargetMaterialization(
+      [](mlir::OpBuilder &builder, mlir::Type toType, mlir::ValueRange inputs, mlir::Location loc) -> mlir::Value {
+        if (inputs.size() != 1) return {};
+        mlir::Value input = inputs[0];
+
+        if (auto v = tryConvertConstant<TorchD::ConstantIntOp>(builder, toType, input, loc)) return v;
+        if (auto v = tryConvertConstant<TorchD::ConstantFloatOp>(builder, toType, input, loc)) return v;
+        if (auto v = tryConvertConstant<TorchD::ConstantBoolOp>(builder, toType, input, loc)) return v;
+
+        return builder.create<mlir::UnrealizedConversionCastOp>(loc, toType, inputs).getResult(0);
+      });
+
+    // builtin/muse -> Torch materialization.
+    addSourceMaterialization(
+      [](mlir::OpBuilder &builder, mlir::Type toType, mlir::ValueRange inputs, mlir::Location loc) -> mlir::Value {
+        if (inputs.size() != 1) return {};
+        return builder.create<mlir::UnrealizedConversionCastOp>(loc, toType, inputs).getResult(0);
+      });
   }
 };
 
@@ -126,6 +136,7 @@ struct ConvertTorchToMusePass : public mlir::PassWrapper<ConvertTorchToMusePass,
 
   void getDependentDialects(mlir::DialectRegistry &registry) const override {
     registry.insert<TorchD::TorchDialect>();
+    registry.insert<mlir::arith::ArithDialect>();
     registry.insert<mlir::muse::MuseDialect>();
     registry.insert<mlir::func::FuncDialect>();
     registry.insert<mlir::pdl::PDLDialect>();
@@ -135,21 +146,13 @@ struct ConvertTorchToMusePass : public mlir::PassWrapper<ConvertTorchToMusePass,
   mlir::LogicalResult initialize(mlir::MLIRContext *ctx) override {
     mlir::RewritePatternSet patternList(ctx);
     mlir::registerConversionPDLFunctions(patternList);
+    mlir::registerPDLLHelperFunctions(patternList);
     populateGeneratedPDLLPatterns(patternList, mlir::PDLConversionConfig(&converter_));
-    mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(patternList, converter_);
-
     // Aten ops
     mlir::populateAtenToMuseConversionPatterns(converter_, patternList);
 
     // Npu ops
     mlir::populateNpuToMuseConversionPatterns(converter_, patternList);
-
-    // Integer arithmetic ops
-    mlir::populateArithToMuseConversionPatterns(converter_, patternList);
-
-    // TorchConversion ops
-    patternList.add<TorchConversionOpToMusePattern<mlir::torch::TorchConversion::ToBuiltinTensorOp>,
-                    TorchConversionOpToMusePattern<mlir::torch::TorchConversion::FromBuiltinTensorOp>>(converter_, ctx);
 
     patterns_ = std::move(patternList);
     return mlir::success();
@@ -160,16 +163,9 @@ struct ConvertTorchToMusePass : public mlir::PassWrapper<ConvertTorchToMusePass,
     mlir::MLIRContext *ctx = &getContext();
 
     mlir::ConversionTarget target(*ctx);
-    target.addIllegalDialect<TorchD::TorchDialect>();
-    target.addIllegalOp<mlir::torch::TorchConversion::ToBuiltinTensorOp,
-                        mlir::torch::TorchConversion::FromBuiltinTensorOp>();
+    target.addLegalDialect<mlir::arith::ArithDialect>();
     target.addLegalDialect<mlir::muse::MuseDialect>();
     target.addLegalOp<mlir::UnrealizedConversionCastOp>();
-    target.addDynamicallyLegalOp<mlir::func::FuncOp>(
-      [&](mlir::func::FuncOp op) { return converter_.isSignatureLegal(op.getFunctionType()); });
-    target.addDynamicallyLegalOp<mlir::func::ReturnOp>(
-      [&](mlir::func::ReturnOp op) { return converter_.isLegal(op.getOperandTypes()); });
-
     if (mlir::failed(mlir::applyPartialConversion(module, target, patterns_))) {
       signalPassFailure();
     }

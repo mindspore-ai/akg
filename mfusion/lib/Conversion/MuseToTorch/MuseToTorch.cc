@@ -40,24 +40,18 @@ namespace {
 namespace TorchD = mlir::torch::Torch;
 
 void populateMuseToTorchTypeConversions(mlir::TypeConverter &converter) {
-  converter.addConversion([](mlir::muse::TensorType type) -> mlir::Type {
-    if (type.hasRank()) {
-      llvm::SmallVector<int64_t> shape;
-      auto sizes = type.getShape();
-      shape.reserve(sizes.size());
-      std::transform(sizes.begin(), sizes.end(), std::back_inserter(shape),
-                     [](int64_t dim) { return dim == mlir::ShapedType::kDynamic ? TorchD::kUnknownSize : dim; });
-      return TorchD::ValueTensorType::get(type.getContext(), llvm::ArrayRef<int64_t>(shape), type.getElementType());
-    }
+  converter.addConversion([](mlir::RankedTensorType type) -> mlir::Type {
+    llvm::SmallVector<int64_t> shape;
+    auto sizes = type.getShape();
+    shape.reserve(sizes.size());
+    std::transform(sizes.begin(), sizes.end(), std::back_inserter(shape),
+                   [](int64_t dim) { return dim == mlir::ShapedType::kDynamic ? TorchD::kUnknownSize : dim; });
+    return TorchD::ValueTensorType::get(type.getContext(), llvm::ArrayRef<int64_t>(shape), type.getElementType());
+  });
+  converter.addConversion([](mlir::UnrankedTensorType type) -> mlir::Type {
     return TorchD::ValueTensorType::get(type.getContext(), std::nullopt, type.getElementType());
   });
 
-  converter.addConversion(
-    [](mlir::muse::I64Type type) -> mlir::Type { return TorchD::IntType::get(type.getContext()); });
-  converter.addConversion(
-    [](mlir::muse::F64Type type) -> mlir::Type { return TorchD::FloatType::get(type.getContext()); });
-  converter.addConversion(
-    [](mlir::muse::BooleanType type) -> mlir::Type { return TorchD::BoolType::get(type.getContext()); });
   converter.addConversion(
     [](mlir::muse::StringType type) -> mlir::Type { return TorchD::StringType::get(type.getContext()); });
   converter.addConversion(

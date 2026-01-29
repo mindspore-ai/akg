@@ -25,13 +25,6 @@ extern "C" {
 
 MLIR_DECLARE_CAPI_DIALECT_REGISTRATION(Muse, muse);
 
-// Muse TensorType CAPI
-MLIR_CAPI_EXPORTED bool mlirTypeIsAMuseTensorType(MlirType type);
-MLIR_CAPI_EXPORTED MlirTypeID mlirMuseTensorTypeGetTypeID(void);
-MLIR_CAPI_EXPORTED MlirType mlirMuseTensorTypeGetElementType(MlirType type);
-MLIR_CAPI_EXPORTED MlirAttribute mlirMuseTensorTypeGetShape(MlirType type);
-MLIR_CAPI_EXPORTED MlirAttribute mlirMuseTensorTypeGetDevice(MlirType type);
-
 // Muse DeviceAttr CAPI
 MLIR_CAPI_EXPORTED bool mlirAttributeIsAMuseDeviceAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirTypeID mlirMuseDeviceAttrGetTypeID(void);
