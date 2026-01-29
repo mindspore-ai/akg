@@ -156,3 +156,7 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_as
 
 - 使用上下方向键浏览历史输入。
 - 历史记录保存于 `~/.akg_cli_history`。
+
+## 4. 详细的使用说明
+
+请参考《[AKG_CLI使用说明](./AKG_CLI_usage.md)》
