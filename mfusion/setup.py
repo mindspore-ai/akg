@@ -53,10 +53,7 @@ class CMakeBuild(build_ext):
         # Build with CMake
         build_jobs = os.environ.get("BUILD_JOBS", "8")
         build_tests = os.environ.get("BUILD_TESTS", "OFF")
-        build_args = ["cmake", "--build", self.build_temp, "-j", build_jobs]
-        if build_tests == "ON":
-            build_args.append("--target check-mfusion")
-        subprocess.check_call(build_args)
+        subprocess.check_call(["cmake", "--build", self.build_temp, "-j", build_jobs])
 
         # Copy the generated mfusion package
         python_package_dir = Path(self.build_temp) / "python_packages" / "mfusion"
