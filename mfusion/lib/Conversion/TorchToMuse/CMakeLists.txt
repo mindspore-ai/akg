@@ -5,7 +5,6 @@ add_mlir_pdll_library(TorchToMusePDLLIncGen
 
   DEPENDS
   TorchToMuseAten.pdll
-  TorchToMuseConstant.pdll
   TorchToMuseNpu.pdll
 )
 

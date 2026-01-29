@@ -24,26 +24,6 @@
 
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Muse, muse, mlir::muse::MuseDialect)
 
-bool mlirTypeIsAMuseTensorType(MlirType type) { return llvm::isa<mlir::muse::TensorType>(unwrap(type)); }
-
-MlirTypeID mlirMuseTensorTypeGetTypeID(void) { return wrap(mlir::muse::TensorType::getTypeID()); }
-
-MlirType mlirMuseTensorTypeGetElementType(MlirType type) {
-  return wrap(mlir::cast<mlir::muse::TensorType>(unwrap(type)).getElementType());
-}
-
-MlirAttribute mlirMuseTensorTypeGetShape(MlirType type) {
-  auto tensorType = mlir::cast<mlir::muse::TensorType>(unwrap(type));
-  auto shape = tensorType.getShape();
-  llvm::SmallVector<int64_t> shapeVec(shape.begin(), shape.end());
-  return wrap(mlir::DenseI64ArrayAttr::get(tensorType.getContext(), shapeVec));
-}
-
-MlirAttribute mlirMuseTensorTypeGetDevice(MlirType type) {
-  auto deviceAttr = mlir::cast<mlir::muse::TensorType>(unwrap(type)).getDevice();
-  return deviceAttr ? wrap(deviceAttr) : mlirAttributeGetNull();
-}
-
 bool mlirAttributeIsAMuseDeviceAttr(MlirAttribute attr) { return llvm::isa<mlir::muse::DeviceAttr>(unwrap(attr)); }
 
 MlirTypeID mlirMuseDeviceAttrGetTypeID(void) { return wrap(mlir::muse::DeviceAttr::getTypeID()); }
