@@ -24,7 +24,6 @@
 
 namespace py = pybind11;
 using mlir::python::adaptors::mlir_attribute_subclass;
-using mlir::python::adaptors::mlir_type_subclass;
 
 PYBIND11_MODULE(_mfusion, m) {
   mlirRegisterMFusionPasses();
@@ -61,22 +60,4 @@ PYBIND11_MODULE(_mfusion, m) {
         },
         "Get the device index");
 
-  // Bind Muse::TensorType through CAPI
-  // Expose shape and element_type as properties (like RankedTensorType)
-  mlir_type_subclass(m, "TensorType", mlirTypeIsAMuseTensorType, mlirMuseTensorTypeGetTypeID)
-    .def_property_readonly(
-      "element_type", [](MlirType self) { return mlirMuseTensorTypeGetElementType(self); },
-      "Get the element type of the tensor")
-    .def_property_readonly(
-      "shape", [](MlirType self) { return mlirMuseTensorTypeGetShape(self); }, "Get the shape of the tensor")
-    .def_property_readonly(
-      "device",
-      [](MlirType self) -> py::object {
-        MlirAttribute deviceAttr = mlirMuseTensorTypeGetDevice(self);
-        if (!mlirAttributeIsNull(deviceAttr)) {
-          return py::cast(deviceAttr);
-        }
-        return py::none();
-      },
-      "Get the device attribute of the tensor");
 }
