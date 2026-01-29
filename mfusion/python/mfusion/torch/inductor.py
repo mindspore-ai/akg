@@ -47,6 +47,10 @@ def fuse_and_optimize(torch_dialect_str: str) -> str:
     )
 
     runner.run(
+        pipeline="builtin.module(func.func(split),canonicalize)",
+        stage="Mfuse Split")
+
+    runner.run(
         pipeline="builtin.module(recompose, canonicalize)",
         stage="Recompose meta ops to aclnn ops",
     )
