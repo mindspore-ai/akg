@@ -36,4 +36,21 @@ def FuseAddRmsNorm : Pass<"fuse-addrmsnorm", "::mlir::ModuleOp"> {
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// GeluFusion pass
+//===----------------------------------------------------------------------===//
+
+def FuseGelu : Pass<"fuse-gelu", "::mlir::ModuleOp"> {
+  let summary = "Fuse Pow, Mul, Add, Tanh into Gelu";
+  let description = [{
+    Fuses the GELU approximation pattern 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    into a single muse.gelu operator.
+  }];
+  let constructor = "mlir::createFuseGeluPass()";
+  let dependentDialects = [
+    "::mlir::muse::MuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
 #endif // MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES

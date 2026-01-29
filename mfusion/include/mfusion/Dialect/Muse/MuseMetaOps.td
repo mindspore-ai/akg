@@ -27,7 +27,7 @@ include "mfusion/Dialect/Muse/MuseTypes.td"
 // NOTE: All operations in this file are sorted alphabetically by their class name.
 //===----------------------------------------------------------------------===//
 
-def Muse_AddOp : Muse_Op<"add", [Pure]> {
+def Muse_AddOp : Muse_Op<"add", [Pure, Commutative]> {
   let summary = "Element-wise addition of two tensors.";
   let description = [{
     Computes element-wise sum of two tensors: result = x + y.
@@ -271,6 +271,25 @@ def Muse_PermuteOp : Muse_Op<"permute", [Pure]> {
 
   let assemblyFormat = [{
     $input `,` $perm attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_PowOp : Muse_Op<"pow", [Pure]> {
+  let summary = "Element-wise power operation.";
+  let description = [{
+    Raises each element of the base tensor to the power of the exponent.
+    Exponent is represented as tensor.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$base,
+    AnyRankedTensor:$exponent
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $base `,` $exponent attr-dict `:` functional-type(operands, results)
   }];
 }
 
