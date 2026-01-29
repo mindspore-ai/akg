@@ -25,6 +25,7 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Outlining/OutlineMfuseFusedSubgraphs.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Outlining/CopyFusedSubgraphs.h"
 #include "mfusion/Dialect/Mfuse/Transforms/ConvertDvmSubgraphToMfuseDvmCall.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Split/Split.h"
 
 namespace mlir {
 
