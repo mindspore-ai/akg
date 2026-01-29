@@ -163,12 +163,56 @@ class LocalExecutor:
                 self._react_executor is None
                 or getattr(self._react_executor, "target", None) != target
             ):
-                self._react_executor = ReactTurnExecutor(
-                    session_id=self.session_id,
-                    config=config,
-                    target=target,
-                    thread_id=self.session_id,
-                )
+                try:
+                    self._react_executor = ReactTurnExecutor(
+                        session_id=self.session_id,
+                        config=config,
+                        target=target,
+                        thread_id=self.session_id,
+                    )
+                except Exception as e:
+                    # 捕获 React Agent 创建时的错误（如 API 密钥未设置）
+                    logger.error(f"[LocalExecutor] 创建 React Agent 失败: {type(e).__name__}: {e}")
+                    error_type = type(e).__name__
+                    error_message = str(e)
+                    
+                    user_message = (
+                        f"❌ 创建 React Agent 失败\n\n"
+                        f"错误类型: {error_type}\n"
+                        f"错误信息: {error_message}\n\n"
+                    )
+                    
+                    # 针对常见错误提供提示
+                    if "API密钥未找到" in error_message or "api_key" in error_message.lower():
+                        user_message += (
+                            "请检查环境变量设置：\n"
+                            "1. AIKG_DEEPSEEK_API_KEY - DeepSeek API 密钥\n"
+                            "2. 或使用环境变量覆盖：\n"
+                            "   - AIKG_MODEL_NAME\n"
+                            "   - AIKG_BASE_URL\n"
+                            "   - AIKG_API_KEY\n\n"
+                            "示例：\n"
+                            "export AIKG_DEEPSEEK_API_KEY='your_api_key'\n"
+                            "或\n"
+                            "export AIKG_MODEL_NAME='your_model'\n"
+                            "export AIKG_BASE_URL='http://localhost:8001/v1'\n"
+                            "export AIKG_API_KEY='dummy'"
+                        )
+                    elif "模型名称未设置" in error_message or "AIKG_MODEL_NAME" in error_message:
+                        user_message += (
+                            "请设置环境变量：\n"
+                            "export AIKG_MODEL_NAME='your_model_name'\n"
+                            "export AIKG_BASE_URL='http://localhost:8001/v1'\n"
+                            "export AIKG_API_KEY='dummy'"
+                        )
+                    
+                    return self._build_response_state({
+                        "current_step": "error",
+                        "should_continue": False,
+                        "display_message": user_message,
+                        "hint_message": "请检查配置后重试",
+                        "workflow_name": "react",
+                    })
 
             # 保存最小 state（用于后续轮次复用 config）
             self._main_agent_state = {"config": config, "rag": bool(rag)}

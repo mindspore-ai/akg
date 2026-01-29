@@ -39,6 +39,21 @@ from ai_kernel_generator.cli.runtime.message_sender import send_message
 from ai_kernel_generator.utils.task_label import resolve_task_label
 
 
+class LLMAPIError(Exception):
+    """LLM API 调用失败的自定义异常
+    
+    这个异常包含用户友好的错误消息，会被 agent 的异常处理机制捕获并显示给用户
+    """
+    def __init__(self, message: str, original_error: Exception = None):
+        super().__init__(message)
+        self.original_error = original_error
+        self.user_message = message
+    
+    def __str__(self):
+        """返回友好的错误消息"""
+        return self.user_message
+
+
 class Jinja2TemplateWrapper:
     """
     原生 Jinja2 模板包装器，兼容 LangChain PromptTemplate 接口
@@ -583,5 +598,35 @@ class AgentBase(ABC):
                 )
 
             return content, formatted_prompt, reasoning_content
-        except Exception:
-            raise
+        except Exception as e:
+            # 提取上下文信息用于错误报告
+            context = self.context if isinstance(self.context, dict) else {}
+            agent_name = str(context.get("agent_name") or "unknown")
+            
+            # 构建详细的错误信息
+            error_type = type(e).__name__
+            error_message = str(e)
+            
+            # 记录详细错误到日志
+            logger.error(f"[Agent] agent={agent_name} 调用模型 API 失败: {error_type}: {error_message}", exc_info=e)
+            
+            # 构建用户友好的错误消息
+            user_friendly_error = (
+                f"❌ 模型 API 调用失败\n\n"
+                f"错误类型: {error_type}\n"
+                f"错误信息: {error_message}\n\n"
+                f"请检查：\n"
+                f"1. 模型服务是否正常运行（如 vLLM 服务）\n"
+                f"2. 网络连接是否正常\n"
+                f"3. 环境变量配置是否正确：\n"
+                f"   - AIKG_MODEL_NAME: 模型名称\n"
+                f"   - AIKG_BASE_URL: API 服务地址\n"
+                f"   - AIKG_API_KEY: API 密钥\n"
+                f"4. 如果使用预设配置（如 vllm_deepseek_r1_default），请确保对应的环境变量已设置\n\n"
+                f"使用的模型: {model_name}\n"
+                f"Agent: {agent_name}"
+            )
+            
+            # 抛出自定义异常，包含友好的错误消息
+            # 这个异常会被 agent 的现有异常处理机制捕获
+            raise LLMAPIError(user_friendly_error, original_error=e) from e
