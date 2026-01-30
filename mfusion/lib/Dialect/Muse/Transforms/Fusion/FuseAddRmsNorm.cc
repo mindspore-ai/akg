@@ -76,7 +76,8 @@ class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
     }
 
     // Create AddRmsNormOp
-    SmallVector<Type, 3> resultTypes;
+    constexpr int kAddRmsNormResultCount = 3;  // Number of results: y_out, rstd_out, x_out
+    SmallVector<Type, kAddRmsNormResultCount> resultTypes;
     resultTypes.push_back(rmsNormOp.getYOut().getType());
     resultTypes.push_back(rmsNormOp.getRstdOut().getType());
     resultTypes.push_back(addOp.getResult().getType());

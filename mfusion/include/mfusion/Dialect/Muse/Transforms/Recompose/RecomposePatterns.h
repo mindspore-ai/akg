@@ -14,17 +14,22 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Muse/Transforms/Decompose/DecomposePatterns.h"
+#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_RECOMPOSE_RECOMPOSE_PATTERNS_H
+#define MFUSION_DIALECT_MUSE_TRANSFORMS_RECOMPOSE_RECOMPOSE_PATTERNS_H
 
-#include "mfusion/Dialect/Muse/Muse.h"
-#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 
 namespace mlir::muse {
-/// Populate the given pattern set with decompose patterns.
-/// This function registers all available decompose patterns with a RewritePatternSet.
-void registerDecomposePatterns(RewritePatternSet &patterns) {
-  registerDecomposeMathOpPatterns(patterns);
-}
+
+/// Populate the given pattern set with recompose patterns.
+/// This function registers OpRewritePattern-based recompose patterns
+/// that lower Muse operations to aclnn operations.
+void registerRecomposePatterns(RewritePatternSet &patterns);
+
+/// Lower Muse meta ops (e.g. muse.matmul / muse.matmul_with_bias) to aclnn.matmul / aclnn.mm
+/// (matmul_with_bias also lower to aclnn.add for bias).
+void registerMuseMetaOpsToAclnnPatterns(RewritePatternSet &patterns);
 
 }  // namespace mlir::muse
+
+#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_RECOMPOSE_RECOMPOSE_PATTERNS_H

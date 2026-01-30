@@ -11,6 +11,7 @@ add_mlir_dialect_library(MLIRMuseTransforms
 
   LINK_LIBS PUBLIC
   MFusionAnalysis
+  MLIRArithDialect
   MLIRFuncDialect
   MLIRLinalgDialect
   MLIRAsmParser
