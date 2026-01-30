@@ -19,7 +19,9 @@
 
 #include "mfusion/Dialect/Muse/Transforms/Decompose/Decompose.h"
 #include "mfusion/Dialect/Muse/Transforms/Cluster/DVMCluster.h"
+#include "mfusion/Dialect/Muse/Transforms/Recompose/Recompose.h"
 #include "mfusion/Dialect/Muse/Transforms/Fusion/FuseAddRmsNorm.h"
+#include "mfusion/Dialect/Muse/Transforms/Fusion/FuseMatMul.h"
 #include "mfusion/Dialect/Muse/Transforms/Fusion/GeluFusion.h"
 
 namespace mlir {

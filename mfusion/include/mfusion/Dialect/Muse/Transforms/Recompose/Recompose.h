@@ -14,17 +14,20 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Muse/Transforms/Decompose/DecomposePatterns.h"
+#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_RECOMPOSE_H
+#define MFUSION_DIALECT_MUSE_TRANSFORMS_RECOMPOSE_H
 
-#include "mfusion/Dialect/Muse/Muse.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/PatternMatch.h"
+#include <memory>
 
-namespace mlir::muse {
-/// Populate the given pattern set with decompose patterns.
-/// This function registers all available decompose patterns with a RewritePatternSet.
-void registerDecomposePatterns(RewritePatternSet &patterns) {
-  registerDecomposeMathOpPatterns(patterns);
-}
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
 
-}  // namespace mlir::muse
+namespace mlir {
+
+/// Create a pass to recompose (lower) operations in MUSE dialect to aclnn operations.
+std::unique_ptr<Pass> createRecomposePass();
+
+}  // namespace mlir
+
+#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_RECOMPOSE_H

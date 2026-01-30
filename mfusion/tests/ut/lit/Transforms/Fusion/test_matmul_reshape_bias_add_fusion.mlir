@@ -1,0 +1,69 @@
+// RUN: mfusion-opt %s --fuse-matmul-reshape-bias-add | FileCheck %s
+
+module {
+  // MatMul -> Reshape -> Add(bias) => MatMul(with bias) -> Reshape
+  // CHECK-LABEL: func @fuse_reshape_bias_add
+  func.func @fuse_reshape_bias_add(%arg0: tensor<2x4xf32>, %arg1: tensor<4x8xf32>, %bias: tensor<8xf32>) -> tensor<2x8xf32> {
+    %0 = muse.matmul %arg0, %arg1 : (tensor<2x4xf32>, tensor<4x8xf32>) -> tensor<2x8xf32>
+    %shape = arith.constant dense<[2, 8]> : tensor<2xi64>
+    %1 = muse.reshape %0, %shape : (tensor<2x8xf32>, tensor<2xi64>) -> tensor<2x8xf32>
+    %2 = muse.add %1, %bias : (tensor<2x8xf32>, tensor<8xf32>) -> tensor<2x8xf32>
+    // After fusion: matmul_with_bias then reshape, no separate add
+    // CHECK-NOT: muse.add
+    // CHECK: muse.matmul_with_bias
+    // CHECK: muse.reshape
+    return %2 : tensor<2x8xf32>
+  }
+
+  // Reshape between matmul and add: MatMul [2,8] -> Reshape [2,4,2] -> Add(bias [8])
+  // CHECK-LABEL: func @fuse_matmul_reshape_bias
+  func.func @fuse_matmul_reshape_bias(%arg0: tensor<2x4xf32>, %arg1: tensor<4x8xf32>, %bias: tensor<8xf32>) -> tensor<2x4x2xf32> {
+    %0 = muse.matmul %arg0, %arg1 : (tensor<2x4xf32>, tensor<4x8xf32>) -> tensor<2x8xf32>
+    %shape = arith.constant dense<[2, 4, 2]> : tensor<3xi64>
+    %1 = muse.reshape %0, %shape : (tensor<2x8xf32>, tensor<3xi64>) -> tensor<2x4x2xf32>
+    %2 = muse.add %1, %bias : (tensor<2x4x2xf32>, tensor<8xf32>) -> tensor<2x4x2xf32>
+    // CHECK: muse.matmul_with_bias
+    // CHECK: muse.reshape
+    return %2 : tensor<2x4x2xf32>
+  }
+
+  // MatMul -> Reshape -> Add(bias) => MatMulWithBias -> Reshape (2D case)
+  // CHECK-LABEL: func @fuse_mm_reshape_bias_add
+  func.func @fuse_mm_reshape_bias_add(%arg0: tensor<2x4xf32>, %arg1: tensor<4x8xf32>, %bias: tensor<8xf32>) -> tensor<2x8xf32> {
+    %0 = muse.matmul %arg0, %arg1 : (tensor<2x4xf32>, tensor<4x8xf32>) -> tensor<2x8xf32>
+    %shape = arith.constant dense<[2, 8]> : tensor<2xi64>
+    %1 = muse.reshape %0, %shape : (tensor<2x8xf32>, tensor<2xi64>) -> tensor<2x8xf32>
+    %2 = muse.add %1, %bias : (tensor<2x8xf32>, tensor<8xf32>) -> tensor<2x8xf32>
+    // CHECK-NOT: muse.add
+    // CHECK: muse.matmul_with_bias
+    // CHECK: muse.reshape
+    return %2 : tensor<2x8xf32>
+  }
+
+  // MatmulWithBias -> Reshape -> Add(extra bias) => MatmulWithBias(combined bias) -> Reshape
+  // Combined bias = old_bias + add_bias (one muse.add for the two bias values)
+  // CHECK-LABEL: func @fuse_mm_with_bias_reshape_bias_add
+  func.func @fuse_mm_with_bias_reshape_bias_add(%arg0: tensor<2x4xf32>, %arg1: tensor<4x8xf32>, %bias0: tensor<8xf32>, %bias1: tensor<8xf32>) -> tensor<2x8xf32> {
+    %0 = muse.matmul_with_bias %arg0, %arg1, %bias0 : (tensor<2x4xf32>, tensor<4x8xf32>, tensor<8xf32>) -> tensor<2x8xf32>
+    %shape = arith.constant dense<[2, 8]> : tensor<2xi64>
+    %1 = muse.reshape %0, %shape : (tensor<2x8xf32>, tensor<2xi64>) -> tensor<2x8xf32>
+    %2 = muse.add %1, %bias1 : (tensor<2x8xf32>, tensor<8xf32>) -> tensor<2x8xf32>
+    // CHECK: muse.add
+    // CHECK: muse.matmul_with_bias
+    // CHECK: muse.reshape
+    return %2 : tensor<2x8xf32>
+  }
+
+  // MatmulWithBias -> Reshape -> Add(extra bias) => MatmulWithBias(combined bias) -> Reshape
+  // CHECK-LABEL: func @fuse_matmul_with_bias_reshape_bias_add
+  func.func @fuse_matmul_with_bias_reshape_bias_add(%arg0: tensor<2x4xf32>, %arg1: tensor<4x8xf32>, %bias0: tensor<8xf32>, %bias1: tensor<8xf32>) -> tensor<2x8xf32> {
+    %0 = muse.matmul_with_bias %arg0, %arg1, %bias0 : (tensor<2x4xf32>, tensor<4x8xf32>, tensor<8xf32>) -> tensor<2x8xf32>
+    %shape = arith.constant dense<[2, 8]> : tensor<2xi64>
+    %1 = muse.reshape %0, %shape : (tensor<2x8xf32>, tensor<2xi64>) -> tensor<2x8xf32>
+    %2 = muse.add %1, %bias1 : (tensor<2x8xf32>, tensor<8xf32>) -> tensor<2x8xf32>
+    // CHECK: muse.add
+    // CHECK: muse.matmul_with_bias
+    // CHECK: muse.reshape
+    return %2 : tensor<2x8xf32>
+  }
+}
