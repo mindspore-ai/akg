@@ -1,0 +1,315 @@
+import os
+import json
+import numpy as np
+import signal
+import functools
+import traceback
+from typing import Union, Literal, List, Tuple, Any
+
+# Framework imports
+{% for line in framework_imports %}
+{{ line }}
+{% endfor %}
+{% for line in framework_model_import %}
+{{ line }}
+{% endfor %}
+TensorType = {{ tensor_type_name }}
+
+# DSL imports
+{% for line in dsl_imports %}
+{{ line }}
+{% endfor %}
+{% for line in dsl_impl_import %}
+{{ line }}
+{% endfor %}
+
+# Special setup code
+{% for line in special_setup_code %}
+{{ line }}
+{% endfor %}
+
+# Binary I/O functions
+{% if needs_binary_io %}
+{% for line in binary_io_functions %}
+{{ line }}
+{% endfor %}
+{% endif %}
+
+# Device setup code
+{% for line in device_setup_code %}
+{{ line }}
+{% endfor %}
+
+# Process input code (定义process_input函数)
+{% for line in process_input_code %}
+{{ line }}
+{% endfor %}
+
+# Timeout装饰器函数
+def timeout_handler(signum, frame):
+    raise TimeoutError("计算超时")
+
+def with_timeout(timeout_seconds):
+    """装饰器：为函数添加超时控制"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            # 设置信号处理器
+            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(timeout_seconds)
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                # 恢复原来的信号处理器
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+        return wrapper
+    return decorator
+
+def get_limit(data_type):
+    """Get precision limit for data type"""
+    {% if framework == "torch" %}
+    import torch
+    if data_type == torch.float16:
+        return 0.004
+    elif data_type == torch.bfloat16:
+        return 0.03
+    elif data_type == torch.int8:
+        return 0.01
+    else:
+        return 0.02
+    {% endif %}
+
+def compare(impl_output, framework_output, limit, data_type):
+    """Compare implementation output with framework output"""
+    np.testing.assert_allclose(impl_output, framework_output, rtol=limit, atol=limit, verbose=True)
+
+def verify_single_case(inputs_for_framework, inputs_for_impl):
+    """验证单个case"""
+    # Run framework model
+    framework_output = framework_model(*inputs_for_framework)
+    
+    # Call implementation
+    {% for line in call_impl_code %}
+    {{ line }}
+    {% endfor %}
+    
+    # Compare outputs
+    if isinstance(framework_output, (list, tuple)):
+        for fw_out, impl_out in zip(framework_output, impl_output):
+            {% if framework == "torch" %}
+            data_type = fw_out.dtype
+            limit = get_limit(data_type)
+            framework_out_flatten = fw_out.flatten().detach().cpu().numpy()
+            impl_out_flatten = impl_out.flatten().detach().cpu().numpy()
+            {% endif %}
+            
+            if framework_out_flatten.dtype != impl_out_flatten.dtype:
+                impl_out_flatten = impl_out_flatten.astype(framework_out_flatten.dtype)
+            
+            compare(impl_out_flatten, framework_out_flatten, limit, data_type)
+    else:
+        {% if framework == "torch" %}
+        data_type = framework_output.dtype
+        limit = get_limit(data_type)
+        framework_out_flatten = framework_output.flatten().detach().cpu().numpy()
+        impl_out_flatten = impl_output.flatten().detach().cpu().numpy()
+        {% endif %}
+        
+        if framework_out_flatten.dtype != impl_out_flatten.dtype:
+            impl_out_flatten = impl_out_flatten.astype(framework_out_flatten.dtype)
+        
+        compare(impl_out_flatten, framework_out_flatten, limit, data_type)
+    
+    return True, framework_output
+
+def verify_with_timeout(inputs_for_framework, inputs_for_impl, timeout_seconds):
+    """带超时控制的验证函数"""
+    @with_timeout(timeout_seconds)
+    def verify_case():
+        return verify_single_case(inputs_for_framework, inputs_for_impl)
+    
+    try:
+        verify_result, framework_output = verify_case()
+        return verify_result, framework_output
+    except TimeoutError as e:
+        raise TimeoutError(f"验证超时（{timeout_seconds}秒）")
+
+if __name__ == "__main__":
+    # 获取初始化参数和输入数据
+    init_params = get_init_inputs()
+    
+    # 设置随机种子
+    {% for line in set_seed_code %}
+    {{ line }}
+    {% endfor %}
+    
+    framework_model = FrameworkModel(*init_params)
+    {% if framework == "torch" %}
+    framework_model = framework_model.to(device)
+    {% endif %}
+    
+    # 创建 impl_model
+    {% for line in create_impl_code %}
+    {{ line }}
+    {% endfor %}
+    
+    # ===== 泛化性测试：收集所有case结果，不中途停止 =====
+    # 获取多组输入数据
+    {% for line in set_seed_code %}
+    {{ line }}
+    {% endfor %}
+    impl_inputs_list = get_inputs_dyn_list()
+    
+    {% for line in set_seed_code %}
+    {{ line }}
+    {% endfor %}
+    framework_inputs_list = get_inputs_dyn_list()
+    
+    total_cases = len(framework_inputs_list)
+    print(f"=" * 80, flush=True)
+    print(f"泛化性验证: {{ op_name }}", flush=True)
+    print(f"=" * 80, flush=True)
+    print(f"总共 {total_cases} 个测试cases\n", flush=True)
+    
+    # 存储所有结果
+    all_results = []
+    status_counts = {
+        'passed': 0,
+        'assert_error': 0,
+        'precision_error': 0,
+        'crash': 0,
+        'timeout': 0
+    }
+    
+    # 对每组输入进行验证
+    for case_idx, (inputs_for_impl, inputs_for_framework) in enumerate(zip(impl_inputs_list, framework_inputs_list)):
+        result = {
+            'case_idx': case_idx,
+            'status': 'unknown',
+            'error_msg': '',
+            'execution_time': 0.0
+        }
+        
+        print(f"[{case_idx + 1}/{total_cases}] 验证 case {case_idx}...", end=" ", flush=True)
+        
+        try:
+            import time
+            start_time = time.time()
+            
+            # 处理输入（将输入移到正确的设备上）
+            {% if framework == "torch" %}
+            inputs_for_impl = [process_input(x) for x in inputs_for_impl]
+            inputs_for_framework = [process_input(x) for x in inputs_for_framework]
+            {% elif framework == "mindspore" %}
+            # MindSpore也可能需要处理输入
+            inputs_for_impl = list(inputs_for_impl)
+            inputs_for_framework = list(inputs_for_framework)
+            {% else %}
+            # Numpy不需要特殊处理
+            inputs_for_impl = list(inputs_for_impl)
+            inputs_for_framework = list(inputs_for_framework)
+            {% endif %}
+            
+            # 执行验证
+            verify_result, _ = verify_with_timeout(
+                inputs_for_framework, 
+                inputs_for_impl,
+                timeout_seconds={{ timeout }}
+            )
+            
+            result['status'] = 'passed'
+            result['execution_time'] = time.time() - start_time
+            status_counts['passed'] += 1
+            print("PASS (passed)", flush=True)
+            
+        except AssertionError as e:
+            error_str = str(e)
+            result['execution_time'] = time.time() - start_time
+            
+            # 区分assert错误和精度错误
+            if 'assert' in error_str.lower() and 'shape' not in error_str.lower():
+                # Kernel内部的assert
+                result['status'] = 'assert_error'
+                result['error_msg'] = f"Assert caught: {error_str[:200]}"
+                status_counts['assert_error'] += 1
+                print("A (assert_error)", flush=True)
+            else:
+                # 精度错误
+                result['status'] = 'precision_error'
+                result['error_msg'] = f"Precision error: {error_str[:200]}"
+                status_counts['precision_error'] += 1
+                print("P (precision_error)", flush=True)
+            
+            if result['error_msg']:
+                print(f"    错误: {result['error_msg'][:100]}", flush=True)
+                
+        except TimeoutError as e:
+            result['status'] = 'timeout'
+            result['error_msg'] = str(e)
+            result['execution_time'] = {{ timeout }}
+            status_counts['timeout'] += 1
+            print("T (timeout)", flush=True)
+            print(f"    错误: {result['error_msg'][:100]}", flush=True)
+            
+        except Exception as e:
+            result['status'] = 'crash'
+            result['error_msg'] = f"Kernel execution failed: {str(e)}"
+            result['execution_time'] = time.time() - start_time if 'start_time' in locals() else 0.0
+            status_counts['crash'] += 1
+            print("C (crash)", flush=True)
+            print(f"    错误: {result['error_msg'][:100]}", flush=True)
+        
+        all_results.append(result)
+        
+        # 清理CUDA缓存
+        {% if backend == 'cuda' %}
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except:
+            pass
+        {% elif backend == 'ascend' %}
+        try:
+            import torch
+            torch.npu.empty_cache()
+        except:
+            pass
+        {% endif %}
+    
+    # 统计结果
+    pass_rate = status_counts['passed'] / total_cases if total_cases > 0 else 0.0
+    
+    print("\n" + "=" * 80, flush=True)
+    print("验证结果统计", flush=True)
+    print("=" * 80, flush=True)
+    print(f"总cases数: {total_cases}", flush=True)
+    print(f"PASS 通过: {status_counts['passed']}", flush=True)
+    print(f"A Assert错误: {status_counts['assert_error']}", flush=True)
+    print(f"P 精度错误: {status_counts['precision_error']}", flush=True)
+    print(f"C 崩溃: {status_counts['crash']}", flush=True)
+    print(f"T 超时: {status_counts['timeout']}", flush=True)
+    print(f"\n通过率: {pass_rate * 100:.2f}%", flush=True)
+    
+    # 保存详细结果到JSON
+    summary = {
+        'total_cases': total_cases,
+        'status_counts': status_counts,
+        'pass_rate': pass_rate,
+        'detailed_results': all_results
+    }
+    
+    with open('verification_results.json', 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    
+    print("\n详细结果已保存到: verification_results.json", flush=True)
+    
+    # 返回退出码
+    if status_counts['passed'] == total_cases:
+        print("\n所有cases通过!", flush=True)
+        exit(0)
+    else:
+        print(f"\n{total_cases - status_counts['passed']} 个cases未通过", flush=True)
+        exit(1)
+
