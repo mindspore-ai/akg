@@ -20,6 +20,27 @@
 include "mlir/Pass/PassBase.td"
 
 //===----------------------------------------------------------------------===//
+// Decompose pass
+//===----------------------------------------------------------------------===//
+
+def Decompose : Pass<"decompose", "::mlir::ModuleOp"> {
+  let summary = "Decompose operations in MUSE dialect";
+
+  let description = [{
+    This pass decomposes operations in MUSE dialect into simpler operations.
+    The pass uses OpRewritePattern-based decomposition that automatically
+    matches and decomposes some operations.
+  }];
+
+  let constructor = "mlir::createDecomposePass()";
+
+  let dependentDialects = [
+    "::mlir::muse::MuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // FuseAddRmsNorm pass
 //===----------------------------------------------------------------------===//
 

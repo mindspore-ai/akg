@@ -105,6 +105,24 @@ def Muse_EqOp : Muse_Op<"eq", [Pure]> {
   }];
 }
 
+def Muse_ExpOp : Muse_Op<"exp", [Pure]> {
+  let summary = "The exp operation";
+  let description = [{
+    Operation for exponential computation.
+    Computes the exponential value (e^x) for each element in the input tensor.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$out);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_GeOp : Muse_Op<"ge", [Pure]> {
   let summary = "Element-wise greater-than-or-equal comparison of two tensors.";
   let description = [{
@@ -236,6 +254,23 @@ def Muse_MulOp : Muse_Op<"mul", [Pure, Commutative]> {
   }];
 }
 
+def Muse_NegOp : Muse_Op<"neg", [Pure]> {
+  let summary = "The neg operation";
+  let description = [{
+    Get the element-wise negation of the input tensor.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$out);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_NeOp : Muse_Op<"ne", [Pure]> {
   let summary = "Element-wise not-equal comparison of two tensors.";
   let description = [{
@@ -290,6 +325,23 @@ def Muse_PowOp : Muse_Op<"pow", [Pure]> {
 
   let assemblyFormat = [{
     $base `,` $exponent attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_ReciprocalOp : Muse_Op<"reciprocal", [Pure]> {
+  let summary = "The reciprocal operation";
+  let description = [{
+    Get the the reciprocal of input tensor.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
   }];
 }
 

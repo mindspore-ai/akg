@@ -14,20 +14,17 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
-#define MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
+#include "mfusion/Dialect/Muse/Transforms/Decompose/DecomposePatterns.h"
 
-#include "mfusion/Dialect/Muse/Transforms/Decompose/Decompose.h"
-#include "mfusion/Dialect/Muse/Transforms/Fusion/FuseAddRmsNorm.h"
-#include "mfusion/Dialect/Muse/Transforms/Fusion/GeluFusion.h"
+#include "mfusion/Dialect/Muse/Muse.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/BuiltinTypes.h"
 
-namespace mlir {
+namespace mlir::muse {
+/// Populate the given pattern set with decompose patterns.
+/// This function registers all available decompose patterns with a RewritePatternSet.
+void registerDecomposePatterns(RewritePatternSet &patterns) {
+  registerDecomposeMathOpPatterns(patterns);
+}
 
-/// Generate the code for registering transforms passes.
-#ifndef GEN_PASS_REGISTRATION
-#define GEN_PASS_REGISTRATION
-#include "mfusion/Dialect/Muse/Transforms/Passes.h.inc"
-#endif
-}  // namespace mlir
-
-#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
+}  // namespace mlir::muse
