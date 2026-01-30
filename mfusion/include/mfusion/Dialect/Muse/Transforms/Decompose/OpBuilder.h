@@ -103,9 +103,11 @@ class OpBuilder {
     if constexpr (std::is_same_v<T, float>) {
       elementType = rewriter.getF32Type();
     } else if constexpr (std::is_same_v<T, double>) {
-      auto elementType = rewriter.getF64Type();
-    } else if constexpr (std::is_same_v<T, int> || std::is_same_v<T, long long>) {
-      auto elementType = rewriter.getI64Type();
+      elementType = rewriter.getF64Type();
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+      elementType = rewriter.getI32Type();
+    } else if constexpr (std::is_same_v<T, int64_t>) {
+      elementType = rewriter.getI64Type();
     } else {
       return nullptr;
     }
@@ -127,7 +129,7 @@ class OpBuilder {
 // Expr wrapper class to support operator overloading
 class Expr {
  public:
-  Expr(OpBuilder &builder, Value value, Type resultType) : builder(builder), value(value), resultType(resultType) {};
+  Expr(OpBuilder &builder, Value value, Type resultType) : builder(builder), value(value), resultType(resultType) {}
 
   // Implementations of Expr operators
   Expr operator*(const Expr &other) const {

@@ -28,6 +28,6 @@ void registerDecomposePatterns(RewritePatternSet &patterns);
 
 void registerDecomposeMathOpPatterns(RewritePatternSet &patterns);
 
-} // namespace mlir::muse
+}  // namespace mlir::muse
 
-#endif // MFUSION_DIALECT_MUSE_TRANSFORMS_DECOMPOSE_DECOMPOSE_PATTERNS_H
+#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_DECOMPOSE_DECOMPOSE_PATTERNS_H
