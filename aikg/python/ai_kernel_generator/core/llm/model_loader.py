@@ -25,6 +25,14 @@ from langchain_ollama import ChatOllama
 from langchain_core.embeddings import Embeddings
 import openai
 
+# 导入华为适配器（延迟导入，避免循环依赖）
+_huawei_adapter_available = False
+try:
+    from ai_kernel_generator.core.llm.huawei_langchain_adapter import create_huawei_chat_model
+    _huawei_adapter_available = True
+except ImportError:
+    _huawei_adapter_available = False
+
 
 # 配置文件路径
 CONFIG_PATH = Path(__file__).parent / "llm_config.yaml"
@@ -90,7 +98,50 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         overridden.pop("presence_penalty", None)
         return overridden
 
-    # 【最高优先级】检查环境变量覆盖
+    # 【最高优先级】华为AKSK环境变量检测
+    env_hw_apigw_host = os.getenv("AIKG_HW_APIGW_HOST")
+    
+    if env_hw_apigw_host:
+        # 检测到华为环境变量，使用华为模式
+        env_hw_access_key = os.getenv("AIKG_HW_ACCESS_KEY")
+        env_hw_secret_key = os.getenv("AIKG_HW_SECRET_KEY")
+        
+        if not env_hw_access_key or not env_hw_secret_key:
+            raise ValueError(
+                "检测到 AIKG_HW_APIGW_HOST，但缺少认证信息。\n"
+                "请设置: AIKG_HW_ACCESS_KEY 和 AIKG_HW_SECRET_KEY"
+            )
+        
+        if not _huawei_adapter_available:
+            raise RuntimeError(
+                "华为AKSK模式需要 huawei_langchain_adapter 模块。\n"
+                "请确保 huawei_langchain_adapter.py 已放置在 "
+                "ai_kernel_generator/core/llm/ 目录下。"
+            )
+        
+        # 使用通用环境变量
+        env_model_name = os.getenv("AIKG_MODEL_NAME", "Qwen3-30B-A3B-Instruct-2507")
+        
+        logger.info("=" * 60)
+        logger.info("使用华为AKSK认证模式创建模型 (create_model)")
+        logger.info(f"  AIKG_HW_APIGW_HOST: {env_hw_apigw_host}")
+        logger.info(f"  AIKG_MODEL_NAME: {env_model_name}")
+        masked_key = env_hw_access_key[:8] + "*" * (len(env_hw_access_key) - 12) + \
+            env_hw_access_key[-4:] if len(env_hw_access_key) > 12 else "***"
+        logger.info(f"  AIKG_HW_ACCESS_KEY: {masked_key}")
+        logger.info("=" * 60)
+        
+        model = create_huawei_chat_model(
+            access_key=env_hw_access_key,
+            secret_key=env_hw_secret_key,
+            apigw_host=env_hw_apigw_host,
+            model_name=env_model_name,
+        )
+        
+        logger.info("华为AKSK模式：模型创建完成")
+        return model
+    
+    # OpenAI兼容环境变量覆盖
     env_base_url = os.getenv("AIKG_BASE_URL")
     env_model_name = os.getenv("AIKG_MODEL_NAME")
     env_api_key = os.getenv("AIKG_API_KEY")
@@ -402,7 +453,51 @@ def create_langchain_chat_model(
             kwargs["top_p"] = top_p
         return ChatOpenAI(**kwargs)
 
-    # 【最高优先级】环境变量覆盖（openai-compatible）
+    # 【最高优先级】华为AKSK环境变量检测
+    env_hw_apigw_host = os.getenv("AIKG_HW_APIGW_HOST")
+    
+    if env_hw_apigw_host:
+        # 检测到华为环境变量，使用华为模式
+        env_hw_access_key = os.getenv("AIKG_HW_ACCESS_KEY")
+        env_hw_secret_key = os.getenv("AIKG_HW_SECRET_KEY")
+        
+        if not env_hw_access_key or not env_hw_secret_key:
+            raise ValueError(
+                "检测到 AIKG_HW_APIGW_HOST，但缺少认证信息。\n"
+                "请设置: AIKG_HW_ACCESS_KEY 和 AIKG_HW_SECRET_KEY"
+            )
+        
+        if not _huawei_adapter_available:
+            raise RuntimeError(
+                "华为AKSK模式需要 huawei_langchain_adapter 模块。\n"
+                "请确保 huawei_langchain_adapter.py 已放置在 "
+                "ai_kernel_generator/core/llm/ 目录下。"
+            )
+        
+        # 使用通用环境变量，其他参数用默认值
+        env_model_name = os.getenv("AIKG_MODEL_NAME", "Qwen3-30B-A3B-Instruct-2507")
+        
+        logger.info("=" * 60)
+        logger.info("使用华为AKSK认证模式创建LangChain ChatModel")
+        logger.info(f"  AIKG_HW_APIGW_HOST: {env_hw_apigw_host}")
+        logger.info(f"  AIKG_MODEL_NAME: {env_model_name}")
+        masked_key = env_hw_access_key[:8] + "*" * (len(env_hw_access_key) - 12) + \
+            env_hw_access_key[-4:] if len(env_hw_access_key) > 12 else "***"
+        logger.info(f"  AIKG_HW_ACCESS_KEY: {masked_key}")
+        logger.info("=" * 60)
+        
+        model = create_huawei_chat_model(
+            access_key=env_hw_access_key,
+            secret_key=env_hw_secret_key,
+            apigw_host=env_hw_apigw_host,
+            model_name=env_model_name,
+            # 其他参数使用默认值
+        )
+        
+        logger.info("华为AKSK模式：LangChain ChatModel 创建完成")
+        return model
+    
+    # OpenAI兼容环境变量覆盖
     env_base_url = os.getenv("AIKG_BASE_URL")
     env_model_name = os.getenv("AIKG_MODEL_NAME")
     env_api_key = os.getenv("AIKG_API_KEY")
