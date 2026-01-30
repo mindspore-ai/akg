@@ -25,17 +25,18 @@ BUILD_TESTS="OFF"
 usage()
 {
     echo "Usage:"
-    echo "bash build.sh [-d] [-h] [-i] [-j[n]] [-t]"
+    echo "bash build.sh [-d] [-h] [-i] [-j[n]] [-s path] [-t]"
     echo ""
     echo "Options:"
     echo "    -d Debug mode"
     echo "    -h Print usage"
     echo "    -i Incremental build"
     echo "    -j[n] Set the threads when building (Default: the number of cpu)"
+    echo "    -s Specifies the CMAKE_PREFIX_PATH for dependencies"
     echo "    -t Enable unit test (Default: disable)"
 }
 
-while getopts 'dhij:t' opt
+while getopts 'dhij:s:t' opt
 do
     case "${opt}" in
         d)
@@ -51,6 +52,9 @@ do
         j)
             THREAD_NUM=${OPTARG}
             ;;
+        s)
+            PREFIX_PATH=${OPTARG}
+            ;;
         t)
             BUILD_TESTS="ON"
             ;;
@@ -60,6 +64,22 @@ do
             exit 1
     esac
 done
+
+##################################################
+# Install build dependencies
+##################################################
+python -c "import build" 2>/dev/null || {
+    echo "Installing Python build package..."
+    pip install build
+}
+
+# packaging>=24.2
+python -c "
+import packaging
+from packaging.version import parse
+assert parse(packaging.__version__) >= parse('24.2'), f'packaging {packaging.__version__} < 24.2'
+" 2>/dev/null || pip install "packaging>=24.2"
+
 
 # Clean build directory if not incremental build
 if [[ "X$INC_BUILD" != "X1" ]]; then
@@ -78,6 +98,9 @@ echo "---------------- MFusion: build start ----------------"
 export BUILD_JOBS=${THREAD_NUM}
 export BUILD_TYPE=${BUILD_TYPE}
 export BUILD_TESTS=${BUILD_TESTS}
+if [[ -n "${PREFIX_PATH}" ]]; then
+    export CMAKE_PREFIX_PATH="${PREFIX_PATH}"
+fi
 if [[ "X$INC_BUILD" = "X1" ]]; then
     export INC_BUILD=1
 else
