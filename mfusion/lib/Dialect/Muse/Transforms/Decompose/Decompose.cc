@@ -19,6 +19,7 @@
 #include "mfusion/Dialect/Muse/Transforms/Decompose/DecomposePatterns.h"
 #include "mfusion/Dialect/Muse/Muse.h"
 #include "mfusion/Dialect/Muse/MuseDialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
@@ -43,6 +44,7 @@ struct DecomposePass : public impl::DecomposeBase<DecomposePass> {
   void getDependentDialects(mlir::DialectRegistry &registry) const override {
     registry.insert<mlir::muse::MuseDialect>();
     registry.insert<mlir::func::FuncDialect>();
+    registry.insert<mlir::arith::ArithDialect>();
   }
 
   void runOnOperation() override {

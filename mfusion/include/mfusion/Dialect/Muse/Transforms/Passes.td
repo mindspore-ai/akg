@@ -102,4 +102,99 @@ def DVMCluster : Pass<"muse-dvm-cluster", "::mlir::func::FuncOp"> {
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// MatMul fusion passes
+//===----------------------------------------------------------------------===//
+
+def FuseMatMulCast : Pass<"fuse-matmul-cast", "::mlir::ModuleOp"> {
+  let summary = "Fuse MatMul/Mm (f16) and Cast (f32) into MatMul with f32 result";
+  let description = [{
+    Fuses MatMul or Mm with float16 inputs followed by Cast to float32
+    into a single MatMul/Mm with float32 result type.
+  }];
+  let constructor = "mlir::createFuseMatMulCastPass()";
+  let dependentDialects = [
+    "::mlir::muse::MuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def FuseMatmulUnsqueezeSqueeze : Pass<"fuse-matmul-unsqueeze-squeeze", "::mlir::ModuleOp"> {
+  let summary = "Handle MatMul/Mm with 1D inputs via reshape (unsqueeze/squeeze)";
+  let description = [{
+    For MatMul/Mm with 1D inputs (1D x N-D, N-D x 1D, 1D x 1D), inserts
+    muse.reshape to emulate unsqueeze before inputs and squeeze after output.
+  }];
+  let constructor = "mlir::createFuseMatmulUnsqueezeSqueezePass()";
+  let dependentDialects = [
+    "::mlir::muse::MuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def FuseMatmulTransposeWeight : Pass<"fuse-matmul-transpose-weight", "::mlir::ModuleOp"> {
+  let summary = "Insert permute for unaligned MatMul inputs; set trans_x1/trans_x2";
+  let description = [{
+    For MatMulOp, if an input's inner axis (last dim * element size) is not
+    a multiple of 512 bytes, inserts muse.permute and sets trans_x1/trans_x2 accordingly.
+    Does not re-match on outputs of its own transformations.
+  }];
+  let constructor = "mlir::createFuseMatmulTransposeWeightPass()";
+  let dependentDialects = [
+    "::mlir::muse::MuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def FuseMatmulReshapeBiasAdd : Pass<"fuse-matmul-reshape-bias-add", "::mlir::ModuleOp"> {
+  let summary = "Fuse MatMul -> Reshape -> Add(bias) into MatMul(with bias) -> Reshape";
+  let description = [{
+    Fuses MatMul -> Reshape -> Add(bias) into MatMul(with bias) -> Reshape.
+    Reshape must not split MatMul output's last axis; bias must broadcast to
+    Reshape output and size must match MatMul output's last dimension.
+  }];
+  let constructor = "mlir::createFuseMatmulReshapeBiasAddPass()";
+  let dependentDialects = [
+    "::mlir::muse::MuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def ConvertAclnnMatmulToMatmul : Pass<"convert-aclnn-matmul-to-matmul", "::mlir::ModuleOp"> {
+  let summary = "Convert aclnn.mm / aclnn.matmul / aclnn.batch_matmul to muse.matmul or muse.matmul_with_bias";
+  let description = [{
+    Converts muse.aclnn.mm, muse.aclnn.matmul, and muse.aclnn.batch_matmul to muse.matmul
+    (trans_x1=false, trans_x2=false). Fuses aclnn matmul-like + aclnn.add(result, bias, alpha=1)
+    into muse.matmul_with_bias, so that downstream MatMul fusion passes can operate on a
+    unified matmul representation.
+  }];
+  let constructor = "mlir::createConvertAclnnMatmulToMatmulPass()";
+  let dependentDialects = [
+    "::mlir::muse::MuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
+// Recompose pass
+//===----------------------------------------------------------------------===//
+
+def Recompose : Pass<"recompose", "::mlir::ModuleOp"> {
+  let summary = "Recompose (lower) operations in MUSE dialect to aclnn operations";
+
+  let description = [{
+    This pass recomposes (lowers) operations in MUSE dialect to aclnn operations.
+    The pass uses OpRewritePattern-based recomposition that automatically
+    matches and lowers Muse operations to aclnn operations.
+  }];
+
+  let constructor = "mlir::createRecomposePass()";
+
+  let dependentDialects = [
+    "::mlir::muse::MuseDialect",
+    "::mlir::func::FuncDialect",
+    "::mlir::arith::ArithDialect"
+  ];
+}
+
 #endif // MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES

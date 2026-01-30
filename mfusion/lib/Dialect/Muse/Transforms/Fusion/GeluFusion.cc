@@ -17,6 +17,7 @@
 #include "mfusion/Dialect/Muse/Transforms/Fusion/GeluFusion.h"
 
 #include <cmath>
+#include <utility>
 
 #include "mfusion/Dialect/Muse/Muse.h"
 #include "mfusion/Dialect/Muse/Transforms/Passes.h"
@@ -39,7 +40,25 @@ namespace {
 
 constexpr double kSqrt2OverPi = 0.79788456080286535588;  // sqrt(2/pi)
 constexpr double kGeluCoeff = 0.044715;
+constexpr double kGeluHalfCoeff = 0.5;                  // 0.5 coefficient in GELU formula
+constexpr double kGeluPowExponent = 3.0;                 // Exponent for x^3 in GELU formula
 constexpr double kTolerance = 1e-6;
+
+/// If \p v is defined by muse.add or muse.aclnn.add (with alpha=1), set \p outX, \p outY and return true.
+static bool getAddLikeOperands(Value v, Value &outX, Value &outY) {
+  if (auto a = v.getDefiningOp<AddOp>()) {
+    outX = a.getX();
+    outY = a.getY();
+    return true;
+  }
+  if (auto a = v.getDefiningOp<AclnnAddOp>()) {
+    if (!isConstOne(a.getAlpha(), kTolerance)) return false;
+    outX = a.getX();
+    outY = a.getY();
+    return true;
+  }
+  return false;
+}
 
 }  // namespace
 
@@ -67,104 +86,98 @@ class FuseGeluPattern : public OpRewritePattern<MulOp> {
 
     // Pattern 1: Mul(Mul(x, 0.5), Add(tanh(...), 1)) - original form
     // Pattern 2: Mul(x, Mul(Add(tanh(...), 1), 0.5)) - canonicalized form
-    // Both operands are non-constants, so handle commutativity
+    // Add can be muse.add or muse.aclnn.add (alpha=1) from Torch convert.
     MulOp halfMul = nullptr;
-    AddOp addOneTanh = nullptr;
+    Value addOneTanhOpX, addOneTanhOpY;
     Value x;
+
+    auto setAddOneTanh = [&](Value ax, Value ay, Value tx, MulOp hm) {
+      addOneTanhOpX = ax;
+      addOneTanhOpY = ay;
+      x = tx;
+      halfMul = hm;
+    };
 
     // Try Pattern 1: Mul(Mul(x, 0.5), Add(...))
     if (auto m = lhs.getDefiningOp<MulOp>()) {
       double scalar;
       Value tensorOp;
-      if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - 0.5) <= kTolerance) {
-        if (auto a = rhs.getDefiningOp<AddOp>()) {
-          // Check Add(tanh(...), 1) - after canonicalization, 1 is on right
-          // But handle both orders for non-constant Add
-          Value tanhVal = a.getX();
-          Value ones = a.getY();
+      if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
+        Value addX, addY;
+        if (getAddLikeOperands(rhs, addX, addY)) {
+          Value tanhVal = addX;
+          Value ones = addY;
           if (!isConstOne(ones, kTolerance)) {
-            tanhVal = a.getY();
-            ones = a.getX();
+            tanhVal = addY;
+            ones = addX;
           }
-          if (isConstOne(ones, kTolerance)) {
-            x = tensorOp;  // x is the non-scalar operand of Mul(x, 0.5)
-            halfMul = m;
-            addOneTanh = a;
-          }
+          if (isConstOne(ones, kTolerance)) setAddOneTanh(addX, addY, tensorOp, m);
         }
       }
     }
     // Try Pattern 1 commutative: Mul(Add(...), Mul(x, 0.5))
-    if (!halfMul || !addOneTanh) {
+    if (!halfMul) {
       if (auto m = rhs.getDefiningOp<MulOp>()) {
         double scalar;
         Value tensorOp;
-        if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - 0.5) <= kTolerance) {
-          if (auto a = lhs.getDefiningOp<AddOp>()) {
-            Value tanhVal = a.getX();
-            Value ones = a.getY();
+        if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
+          Value addX, addY;
+          if (getAddLikeOperands(lhs, addX, addY)) {
+            Value tanhVal = addX;
+            Value ones = addY;
             if (!isConstOne(ones, kTolerance)) {
-              tanhVal = a.getY();
-              ones = a.getX();
+              tanhVal = addY;
+              ones = addX;
             }
-            if (isConstOne(ones, kTolerance)) {
-              x = tensorOp;
-              halfMul = m;
-              addOneTanh = a;
-            }
+            if (isConstOne(ones, kTolerance)) setAddOneTanh(addX, addY, tensorOp, m);
           }
         }
       }
     }
 
     // Try Pattern 2: Mul(x, Mul(Add(...), 0.5))
-    if (!halfMul || !addOneTanh) {
+    if (!halfMul) {
       if (auto m = rhs.getDefiningOp<MulOp>()) {
         double scalar;
         Value tensorOp;
-        if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - 0.5) <= kTolerance) {
-          if (auto a = tensorOp.getDefiningOp<AddOp>()) {
-            // After canonicalization: Add(tanh(...), 1) - tanh on left, 1 on right (constant)
-            Value tanhVal = a.getX();
-            Value ones = a.getY();
-            if (isConstOne(ones, kTolerance)) {
-              x = lhs;
-              halfMul = m;
-              addOneTanh = a;
-            }
+        if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
+          Value addX, addY;
+          if (getAddLikeOperands(tensorOp, addX, addY) && isConstOne(addY, kTolerance)) {
+            x = lhs;
+            halfMul = m;
+            addOneTanhOpX = addX;
+            addOneTanhOpY = addY;
           }
         }
       }
     }
     // Try Pattern 2 commutative: Mul(Mul(Add(...), 0.5), x)
-    if (!halfMul || !addOneTanh) {
+    if (!halfMul) {
       if (auto m = lhs.getDefiningOp<MulOp>()) {
         double scalar;
         Value tensorOp;
-        if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - 0.5) <= kTolerance) {
-          if (auto a = tensorOp.getDefiningOp<AddOp>()) {
-            Value tanhVal = a.getX();
-            Value ones = a.getY();
-            if (isConstOne(ones, kTolerance)) {
-              x = rhs;
-              halfMul = m;
-              addOneTanh = a;
-            }
+        if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
+          Value addX, addY;
+          if (getAddLikeOperands(tensorOp, addX, addY) && isConstOne(addY, kTolerance)) {
+            x = rhs;
+            halfMul = m;
+            addOneTanhOpX = addX;
+            addOneTanhOpY = addY;
           }
         }
       }
     }
 
-    if (!halfMul || !addOneTanh) {
+    if (!halfMul) {
       return failure();
     }
 
     // Extract ones and tanhVal, handling commutativity for Add
-    Value ones = addOneTanh.getX();
-    Value tanhVal = addOneTanh.getY();
+    Value ones = addOneTanhOpX;
+    Value tanhVal = addOneTanhOpY;
     if (!isConstOne(ones, kTolerance)) {
-      ones = addOneTanh.getY();
-      tanhVal = addOneTanh.getX();
+      ones = addOneTanhOpY;
+      tanhVal = addOneTanhOpX;
     }
 
     auto tanhOp = tanhVal.getDefiningOp<AclnnTanhOp>();
@@ -190,18 +203,13 @@ class FuseGeluPattern : public OpRewritePattern<MulOp> {
       return failure();
     }
 
-    auto addOp = addInner.getDefiningOp<AddOp>();
-    if (!addOp) {
+    Value xAdd, mulC;
+    if (!getAddLikeOperands(addInner, xAdd, mulC)) {
       return failure();
     }
-
-    // Add(x, Mul(x^3, 0.044715)) - both operands are non-constants, handle commutativity
-    Value xAdd = addOp.getX();
-    Value mulC = addOp.getY();
+    // Add(x, Mul(x^3, 0.044715)) - handle commutativity for non-constant operands
     if (xAdd != x) {
-      // Try Add(Mul(x^3, 0.044715), x) - commutativity for non-constant operands
-      xAdd = addOp.getY();
-      mulC = addOp.getX();
+      std::swap(xAdd, mulC);
       if (xAdd != x) {
         return failure();
       }
@@ -230,7 +238,7 @@ class FuseGeluPattern : public OpRewritePattern<MulOp> {
     }
     Value xPow = powOp.getBase();
     Value exponent = powOp.getExponent();
-    if (!isSingleElementFloat(exponent, 3.0)) {
+    if (!isSingleElementFloat(exponent, kGeluPowExponent)) {
       return failure();
     }
 
@@ -248,17 +256,6 @@ class FuseGeluPattern : public OpRewritePattern<MulOp> {
     // Create AclnnGeluOp
     auto gelu = rewriter.create<AclnnGeluOp>(rootMul.getLoc(), x.getType(), x);
     rewriter.replaceOp(rootMul, gelu.getResult());
-
-    // Erase unused operations
-    SmallVector<Operation *, 16> toErase = {halfMul, addOneTanh, tanhOp, mulSqrt, addOp, mulCoz, powOp};
-    if (auto onesOp = ones.getDefiningOp()) {
-      toErase.push_back(onesOp);
-    }
-    for (Operation *op : toErase) {
-      if (op && op->use_empty()) {
-        rewriter.eraseOp(op);
-      }
-    }
     return success();
   }
 };

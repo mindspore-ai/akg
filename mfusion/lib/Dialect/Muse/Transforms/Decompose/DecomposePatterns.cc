@@ -17,8 +17,8 @@
 #include "mfusion/Dialect/Muse/Transforms/Decompose/DecomposePatterns.h"
 
 #include "mfusion/Dialect/Muse/Muse.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
 
 namespace mlir::muse {
 /// Populate the given pattern set with decompose patterns.
