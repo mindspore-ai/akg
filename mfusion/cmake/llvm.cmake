@@ -15,6 +15,18 @@ if(NOT COMMAND akg_add_pkg)
     include(${CMAKE_CURRENT_LIST_DIR}/utils.cmake)
 endif()
 
+if(LLVM_DIR AND MLIR_DIR)
+    message(STATUS "Using preconfigured LLVM/MLIR: LLVM_DIR=${LLVM_DIR}, MLIR_DIR=${MLIR_DIR}")
+    return()
+endif()
+
+find_package(LLVM CONFIG QUIET)
+find_package(MLIR CONFIG QUIET)
+if(LLVM_FOUND AND MLIR_FOUND)
+    message(STATUS "Found external LLVM/MLIR, skip download/build")
+    return()
+endif()
+
 set(LLVM_VERSION "19.1.7" CACHE INTERNAL "llvmorg-19.1.7")
 set(LLVM_COMMIT "cd708029e0b2869e80abe31ddb175f7c35361f90" CACHE INTERNAL "LLVM commit hash")
 set(LLVM_SHA256 "a7e9c2b2f3c9774ff422693ab8b76e932615a5ef4a8a7ae04b968544bc47ca54")
@@ -39,10 +51,9 @@ akg_add_pkg(llvm_project
     CUSTOM_CMAKE_GENERATOR Ninja
 )
 
-set(LLVM_BUILD_DIR "${llvm_project_DIRPATH}")
 set(LLVM_DIR "${llvm_project_DIRPATH}/lib/cmake/llvm")
 set(MLIR_DIR "${llvm_project_DIRPATH}/lib/cmake/mlir")
 
-message(STATUS "LLVM build directory: ${LLVM_BUILD_DIR}")
+message(STATUS "LLVM build directory: ${llvm_project_DIRPATH}")
 message(STATUS "LLVM directory: ${LLVM_DIR}")
 message(STATUS "MLIR directory: ${MLIR_DIR}")
