@@ -2281,6 +2281,93 @@ static void replaceUsesInOps(ValueRange oldResults, ValueRange newResults, Array
   }
 }
 
+static bool isTriviallyRecreatableConst(Operation *op) { return isa<arith::ConstantOp, arith::ConstantIndexOp>(op); }
+
+static LogicalResult ensureNoExternalUsers(const llvm::SmallSet<Operation *, 16> &opSet) {
+  for (Operation *op : opSet) {
+    for (Value res : op->getResults()) {
+      for (Operation *user : res.getUsers()) {
+        if (!opSet.count(user)) {
+          llvm::errs() << "Sink failed. External user found: " << *user << "\n";
+          return failure();
+        }
+      }
+    }
+  }
+  return success();
+}
+
+// Collect operand dependencies for ops to be moved. For constant-like defs after the outer loop,
+// mark them for recreation instead of moving.
+static LogicalResult collectOperandClosure(Operation *outerLoopOp, llvm::SmallSet<Operation *, 16> &opSet,
+                                           llvm::SmallSet<Operation *, 16> &recreateOps,
+                                           const llvm::DenseSet<Value> &ignoreValues) {
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    SmallVector<Operation *, 16> currentOps(opSet.begin(), opSet.end());
+    for (Operation *op : currentOps) {
+      for (Value operand : op->getOperands()) {
+        if (ignoreValues.contains(operand)) {
+          continue;
+        }
+        Operation *defOp = operand.getDefiningOp();
+        if (!defOp) {
+          continue;  // Block argument.
+        }
+        if (defOp->getBlock() != outerLoopOp->getBlock()) {
+          return failure();
+        }
+        if (defOp->isBeforeInBlock(outerLoopOp)) {
+          continue;  // Dominates moved ops from outer scope.
+        }
+        if (isTriviallyRecreatableConst(defOp)) {
+          recreateOps.insert(defOp);
+          continue;
+        }
+        if (opSet.insert(defOp).second) {
+          changed = true;
+        }
+      }
+    }
+  }
+
+  // Ensure moved ops won't leave behind users outside the move set.
+  return ensureNoExternalUsers(opSet);
+}
+
+static void recreateConstantsForMovedOps(ArrayRef<Operation *> movedOps,
+                                         const llvm::SmallSet<Operation *, 16> &recreateOps, mlir::OpBuilder &builder) {
+  if (movedOps.empty() || recreateOps.empty()) {
+    return;
+  }
+
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(movedOps.front());
+
+  DenseMap<Value, Value> constMap;
+  auto getRecreated = [&](Value v) -> Value {
+    auto it = constMap.find(v);
+    if (it != constMap.end()) {
+      return it->second;
+    }
+    Value recreated = recreateConstantOrSelf(v, builder);
+    constMap[v] = recreated;
+    return recreated;
+  };
+
+  for (Operation *op : movedOps) {
+    for (OpOperand &operand : op->getOpOperands()) {
+      Value v = operand.get();
+      Operation *defOp = v.getDefiningOp();
+      if (!defOp || !recreateOps.count(defOp)) {
+        continue;
+      }
+      operand.set(getRecreated(v));
+    }
+  }
+}
+
 static LogicalResult sinkReduceLoopResultsToMiddleLevel(mlir::scf::ForOp rootLoop,
                                                         llvm::MutableArrayRef<mlir::scf::ForOp> tiledLoops,
                                                         unsigned tileSizesNum, unsigned bandSize,
@@ -2320,9 +2407,17 @@ static LogicalResult sinkReduceLoopResultsToMiddleLevel(mlir::scf::ForOp rootLoo
     return success();
   }
 
+  llvm::SmallSet<Operation *, 16> recreateOps;
+  llvm::DenseSet<Value> ignoreValues;
+  ignoreValues.insert(rootResults.begin(), rootResults.end());
+  if (failed(collectOperandClosure(outerLoop.getOperation(), opSet, recreateOps, ignoreValues))) {
+    return failure();
+  }
+
   SmallVector<Operation *, 16> opsInOrder;
   collectOpsInOrderAfter(outerLoop.getOperation(), opSet, opsInOrder);
   moveOpsAfterLoop(middleLoop, opsInOrder, builder);
+  recreateConstantsForMovedOps(opsInOrder, recreateOps, builder);
   replaceUsesInOps(rootResults, middleLoop.getResults(), opsInOrder);
 
   return rootLoop.use_empty() ? success() : failure();
