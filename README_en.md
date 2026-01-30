@@ -12,7 +12,8 @@ After version 2.4, we have completely upgraded AKG. The current AKG project incl
 
 Each subproject in the AKG repository supports independent installation and building. Please refer to the respective documentation for each subproject.
 
-- **AIKG:** Refer to the [AIKG](./aikg/README.md) documentation.
+- **AIKG:** Refer to the [AIKG](./akg_agents/README.md) documentation.
+- **AKG-TVM:** Refer to the [AKG-TVM](./akg-tvm/README.md) documentation.
 - **AKG-MLIR:** Refer to the [AKG-MLIR](./akg-mlir/README.md) documentation.
 
 ## Contributions

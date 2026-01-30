@@ -1,0 +1,17 @@
+# Verifier Only Mode: Simplified workflow with only verifier for testing existing code
+# Suitable for scenarios that only need code verification without generation
+
+agent_info:
+  verifier:
+    possible_next_agent: [finish]
+    # verifier is programmatic verification, returns structured data directly, no parser needed
+
+start_agent: verifier
+
+# Agents that require LLM analysis even when only one option is available
+# Verifier typically doesn't need LLM analysis as it's programmatic
+mandatory_llm_analysis: []
+
+limitation_info:
+  required:
+    max_step: 2

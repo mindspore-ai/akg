@@ -1,0 +1,28 @@
+# Coder Only 模式：只有 Coder 和 Verifier 的简化流程
+# 适用于只需要代码生成和验证的场景，跳过算法设计阶段
+
+agent_info:
+  coder:
+    possible_next_agent: [verifier]
+    output_format:
+      parser_name: coder_parser
+      parser_definition:
+        output_fields:
+          code:
+            field_type: str
+            mandatory: true
+            field_description: "完整的代码实现"
+
+  verifier:
+    possible_next_agent: [finish, coder]
+    # verifier是程序化验证，直接返回结构化数据，不需要解析器
+
+start_agent: coder
+
+# Agents that require LLM analysis even when only one option is available
+# In coder-only mode, coder needs analysis for error fixing and optimization
+mandatory_llm_analysis: [verifier]
+
+limitation_info:
+  required:
+    max_step: 15

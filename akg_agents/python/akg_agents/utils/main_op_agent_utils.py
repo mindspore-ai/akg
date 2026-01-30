@@ -1,0 +1,621 @@
+# Copyright 2025 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+MainOpAgent 辅助工具函数
+"""
+
+import re
+import logging
+import tarfile
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+
+def is_operator_related_intent(intent: str, confidence: float, threshold: float = 0.6) -> bool:
+    """
+    判断意图是否与算子开发相关
+    
+    Args:
+        intent: 意图分类结果
+        confidence: 置信度
+        threshold: 置信度阈值
+        
+    Returns:
+        是否与算子开发相关
+    """
+    if confidence < threshold:
+        # 置信度太低，无法判断
+        return True  # 默认允许继续（善意理解）
+    
+    operator_related = [
+        "operator_development",
+        "operator_dev",  # 添加简短形式
+        "code_generation",
+        "modification",
+        "optimization",
+        "unclear"
+    ]
+    
+    # 更宽松的判断：只要包含 "operator" 关键词，就认为是相关的
+    if "operator" in intent.lower():
+        return True
+    
+    return intent in operator_related
+
+
+def quick_match_sub_agent_preference(user_input: str) -> Optional[str]:
+    """
+    快速匹配用户是否明确指定了子 Agent 偏好
+    
+    Args:
+        user_input: 用户输入
+        
+    Returns:
+        子 Agent 名称 (codeonly/evolve/kernel_verifier/adaptive_search) 或 None
+    """
+    user_input_lower = user_input.lower()
+    
+    # 1. 检查是否同时包含"生成"和"性能测试"
+    has_generate = any(kw in user_input_lower for kw in [
+        "生成", "创建", "写", "实现", "generate", "create", "implement", "write"
+    ])
+    
+    has_performance_test = any(kw in user_input_lower for kw in [
+        # 性能测试相关
+        "性能测试", "测试性能", "性能分析", "分析性能",
+        "验证性能", "验证一下性能", "验证下性能",
+        "测试一下性能", "测下性能", "测一下性能",
+        "性能怎么样", "加速比", "速度对比", "性能对比",
+        "看看性能", "看下性能", "看一下性能",
+        "跑一下性能", "跑下性能",
+        # 带"并"的组合
+        "并测试", "并进行测试", "并测试性能", "并进行性能测试",
+        "并分析性能", "并验证性能", "并benchmark", "并测一下",
+        # 英文
+        "benchmark", "performance test", "test performance", "profile",
+        "check performance", "verify performance",
+        "and test", "and profile", "and benchmark"
+    ])
+    
+    # 如果同时包含"生成"和"性能测试"，返回 None（让 codeonly 处理，task_type="profile"）
+    if has_generate and has_performance_test:
+        logger.info("User requests generate + profile, returning None (codeonly will handle with task_type='profile')")
+        return None
+    
+    # 2. 如果只有性能测试（没有生成），明确返回 kernel_verifier
+    if has_performance_test and not has_generate:
+        logger.info("User requests pure performance test, returning 'kernel_verifier'")
+        return "kernel_verifier"
+    
+    # 3. 检查是否明确要求使用 evolve（必须是纯优化相关，排除性能测试）
+    # 注意：这些关键词应该明确表示"要求最高性能/多轮优化"，而不是"测试性能"
+    evolve_keywords = [
+        # 明确指定evolve
+        "使用evolve", "用evolve", "换evolve", "改用evolve",
+        "use evolve", "evolve", "进化",
+        # 多轮优化相关
+        "多轮优化", "迭代优化", "自动调优", "进化优化",
+        # 极致性能要求（与"性能测试"区分）
+        "极致性能", "最优性能", "最佳性能", 
+        "性能最优", "性能极致",
+        "高性能算子", "超高性能", 
+        # 明确的优化需求
+        "追求性能", "优化到极致", "最大化性能"
+    ]
+    
+    if any(kw in user_input_lower for kw in evolve_keywords):
+        logger.info("User explicitly requests evolve (high performance optimization)")
+        return "evolve"
+    
+    # 4. 检查是否明确要求使用 adaptive_search（树搜索）
+    adaptive_search_keywords = [
+        # 明确指定 adaptive_search
+        "使用adaptive_search", "用adaptive_search", "换adaptive_search", "改用adaptive_search",
+        "使用自适应搜索", "用自适应搜索", "换自适应搜索",
+        "use adaptive_search", "adaptive search", "adaptive_search",
+        # 树搜索相关
+        "树搜索", "tree search", "搜索树", "search tree",
+        "ucb搜索", "ucb search", "上界置信区间",
+        # 智能搜索/探索
+        "智能搜索", "intelligent search", "智能探索",
+        "自适应优化", "adaptive optimization"
+    ]
+    
+    if any(kw in user_input_lower for kw in adaptive_search_keywords):
+        logger.info("User explicitly requests adaptive_search (tree search optimization)")
+        return "adaptive_search"
+    
+    # 5. 检查是否明确要求使用 codeonly
+    codeonly_keywords = [
+        "使用codeonly", "用codeonly", "换codeonly", "改用codeonly",
+        "use codeonly", "快速生成", "直接生成"
+    ]
+    
+    if any(kw in user_input_lower for kw in codeonly_keywords):
+        logger.info("User explicitly requests codeonly")
+        return "codeonly"
+    
+    # 默认返回 None，让 LLM 进行选择
+    return None
+
+
+def extract_sub_agent_from_reasoning(reasoning: str) -> Optional[str]:
+    """
+    从 LLM 的推理过程中提取子 Agent 名称
+    
+    Args:
+        reasoning: LLM 的推理过程
+        
+    Returns:
+        子 Agent 名称 或 None
+    """
+    reasoning_lower = reasoning.lower()
+    
+    # 按优先级检查（更具体的放在前面）
+    if "adaptive_search" in reasoning_lower or "adaptive search" in reasoning_lower:
+        return "adaptive_search"
+    elif "树搜索" in reasoning_lower or "tree search" in reasoning_lower:
+        return "adaptive_search"
+    elif "自适应搜索" in reasoning_lower:
+        return "adaptive_search"
+    elif "ucb" in reasoning_lower and ("搜索" in reasoning_lower or "search" in reasoning_lower or "策略" in reasoning_lower):
+        return "adaptive_search"
+    elif "智能搜索" in reasoning_lower or "intelligent search" in reasoning_lower:
+        return "adaptive_search"
+    elif "evolve" in reasoning_lower or "进化" in reasoning_lower:
+        return "evolve"
+    elif "codeonly" in reasoning_lower:
+        return "codeonly"
+    elif "kernel_verifier" in reasoning_lower or ("性能" in reasoning_lower and "测试" in reasoning_lower):
+        return "kernel_verifier"
+    
+    return None
+
+
+def user_explicitly_requests_evolve(user_request: str, conversation_history: list) -> bool:
+    """
+    判断用户是否明确要求使用 evolve
+    
+    Args:
+        user_request: 用户请求
+        conversation_history: 对话历史
+        
+    Returns:
+        是否明确要求 evolve
+    """
+    user_request_lower = user_request.lower()
+    
+    # 明确的 evolve 关键词（不包含性能相关）
+    evolve_keywords = [
+        "使用evolve", "用evolve", "换evolve", "改用evolve",
+        "use evolve", "with evolve",
+        "多轮优化", "迭代优化", "进化优化", "自动调优",
+        "多次迭代", "iterative", "multi-round"
+    ]
+    
+    if any(kw in user_request_lower for kw in evolve_keywords):
+        logger.info(f"User explicitly requests evolve: matched keyword")
+        return True
+    
+    return False
+
+
+def user_requests_profile(user_request: str) -> bool:
+    """判断用户是否要求性能测试（用于 codeonly task_type 判断）"""
+    if not user_request:
+        return False
+    
+    user_request_lower = user_request.lower()
+    
+    # 关键判断：同时包含"生成"和"性能测试"相关词汇
+    has_generate = any(kw in user_request_lower for kw in [
+        "生成", "创建", "写", "实现", "generate", "create", "implement", "write"
+    ])
+    
+    has_performance_test = any(kw in user_request_lower for kw in [
+        # 性能测试相关
+        "性能测试", "测试性能", "性能分析", "分析性能",
+        "验证性能", "验证一下性能", "验证下性能",
+        "测试一下性能", "测下性能", "测一下性能",
+        "性能怎么样", "加速比", "速度对比", "性能对比",
+        "看看性能", "看下性能", "看一下性能",
+        "跑一下性能", "跑下性能",
+        "并测试", "并进行测试", "并测试性能", "并进行性能测试",
+        "并分析性能", "并验证性能", "并benchmark", "并测一下",
+        "benchmark", "performance test", "test performance", "profile",
+        "check performance", "verify performance",
+        "and test", "and profile", "and benchmark"
+    ])
+    
+    # 如果同时包含"生成"和"性能测试"，返回True
+    if has_generate and has_performance_test:
+        logger.info(f"User requests generate + profile (has_generate=True, has_performance_test=True)")
+        return True
+    
+    return False
+
+
+def is_modification_request(user_input: str, has_previous_code: bool) -> bool:
+    """
+    判断用户输入是否是对现有代码的修改请求
+    
+    Args:
+        user_input: 用户输入
+        has_previous_code: 是否已有生成的代码
+        
+    Returns:
+        是否是修改请求
+    """
+    if not has_previous_code:
+        return False
+    
+    user_input_lower = user_input.lower()
+    
+    # 修改相关的关键词
+    modification_keywords = [
+        "修改", "改成", "改为", "换成", "调整",
+        "shape", "dtype", "batch", "size", "dim",
+        "modify", "change", "update", "adjust"
+    ]
+    
+    # 检查是否是短输入 + 包含修改关键词
+    is_short = len(user_input) < 100
+    has_modification_keyword = any(kw in user_input_lower for kw in modification_keywords)
+    
+    if is_short and has_modification_keyword:
+        logger.info(f"Detected potential modification request (short input with modification keyword)")
+        return True
+    
+    return False
+
+
+def simple_action_heuristic(state: dict, user_input: str) -> tuple:
+    """
+    简单的启发式规则判断用户动作（LLM 分析失败时的回退方案）
+    
+    Args:
+        state: 当前状态
+        user_input: 用户输入
+        
+    Returns:
+        tuple: (action, is_new_operator, is_irrelevant, has_provided_task_code, is_complete_code, extracted_task_code, extracted_op_name, extracted_op_description, wants_to_save)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    user_input_lower = user_input.lower()
+    user_input_stripped = user_input.strip()
+    
+    # 检测保存意图
+    save_keywords = ["保存", "save", "存一下", "保存一下", "并保存"]
+    wants_to_save = any(kw in user_input_lower for kw in save_keywords)
+    if wants_to_save:
+        logger.info(f"Heuristic: Detected save intent")
+    
+    # 检测明显的无关问题
+    # 1. 身份询问
+    identity_keywords = ["你是谁", "who are you", "你叫什么", "what's your name", "你能做什么", "what can you do"]
+    if any(kw in user_input_lower for kw in identity_keywords):
+        logger.info(f"Heuristic: Detected identity question, marking as irrelevant")
+        return "cancel", False, True, False, False, '', '', '', wants_to_save
+    
+    # 2. 闲聊话题
+    chitchat_keywords = ["天气", "weather", "笑话", "joke", "故事", "story", "新闻", "news"]
+    if any(kw in user_input_lower for kw in chitchat_keywords):
+        logger.info(f"Heuristic: Detected chitchat topic, marking as irrelevant")
+        return "cancel", False, True, False, False, '', '', '', wants_to_save
+    
+    # 3. 完全无关的问题（输入太短且不包含算子相关词汇）
+    if len(user_input_stripped) < 20:
+        operator_related_keywords = [
+            "算子", "operator", "kernel", "生成", "generate", "实现", "implement",
+            "relu", "sigmoid", "tanh", "softmax", "matmul", "conv", "layernorm",
+            "torch", "triton", "cuda", "代码", "code", "性能", "performance"
+        ]
+        has_operator_keyword = any(kw in user_input_lower for kw in operator_related_keywords)
+        if not has_operator_keyword and not state.get("task_code"):
+            # 输入很短，没有算子关键词，且对话刚开始 → 可能是无关问题
+            logger.info(f"Heuristic: Short input with no operator keywords, marking as irrelevant")
+            return "cancel", False, True, False, False, '', '', '', wants_to_save
+    
+    # 确认关键词
+    confirm_keywords = ["确认", "ok", "yes", "好的", "可以", "继续", "confirm"]
+    if any(kw in user_input_lower for kw in confirm_keywords):
+        return "confirm", False, False, False, False, '', '', '', wants_to_save
+    
+    # 重试关键词
+    retry_keywords = ["重新", "再试", "retry", "重做"]
+    if any(kw in user_input_lower for kw in retry_keywords):
+        if state.get("generated_code"):
+            return "retry_sub_agent", False, False, False, False, '', '', '', wants_to_save
+        else:
+            return "retry", False, False, False, False, '', '', '', wants_to_save
+    
+    # 默认：修改（假设相关）
+    return "revise", False, False, False, False, '', '', '', wants_to_save
+
+
+def format_agents_info_for_llm(agents_info: dict) -> str:
+    """
+    格式化子 Agent 信息供 LLM 选择
+    
+    Args:
+        agents_info: 子 Agent 详细信息字典
+        
+    Returns:
+        格式化的字符串
+    """
+    formatted = []
+    for name, info in agents_info.items():
+        formatted.append(f"### {name}")
+        formatted.append(f"- 描述: {info.get('description', '')}")
+        formatted.append(f"- 适用场景: {info.get('use_cases', '')}")
+        formatted.append(f"- 优势: {info.get('advantages', '')}")
+        formatted.append("")
+    
+    return "\n".join(formatted)
+
+
+def save_conversation_to_file(state: dict, filepath: str) -> None:
+    """
+    保存对话历史到文件
+    
+    Args:
+        state: 当前对话状态
+        filepath: 保存路径
+    """
+    import json
+    import os
+    
+    conversation_data = {
+        "task_id": state.get("task_id"),
+        "op_name": state.get("op_name"),
+        "conversation_history": state.get("conversation_history", []),
+        "task_code": state.get("task_code"),
+        "generated_code": state.get("generated_code"),
+        "success": state.get("generation_success", False)
+    }
+    
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(conversation_data, f, indent=2, ensure_ascii=False)
+    
+    logger.info(f"Conversation saved to: {filepath}")
+
+
+def save_verification_directory(state: dict, config: dict) -> dict:
+    """
+    保存验证目录（包含生成的triton代码和验证脚本）
+    
+    Args:
+        state: 当前对话状态
+        config: 配置字典
+        
+    Returns:
+        Dict: 包含保存路径信息的字典
+            - conversation_path: 对话历史保存路径
+            - verify_dir: 验证目录路径（如果存在）
+            - save_path: 保存到的目标目录
+            - message: 结果消息
+    """
+    import os
+    import shutil
+    import time
+    
+    result = {
+        "conversation_path": "",
+        "verify_dir": "",
+        "save_path": "",
+        "message": ""
+    }
+    
+    # 1. 保存对话历史
+    log_dir = os.path.expanduser(config.get("log_dir", "~/akg_agents_logs"))
+    output_path = config.get("output_path")
+    if output_path:
+        output_path = os.path.abspath(os.path.expanduser(str(output_path)))
+    else:
+        output_path = log_dir
+    task_id = state.get("task_id", "unknown")
+    op_name = state.get("op_name", "")
+    
+    # 保存对话历史
+    conversation_path = os.path.join(log_dir, f"conversation_{task_id}.json")
+    try:
+        save_conversation_to_file(state, conversation_path)
+        result["conversation_path"] = conversation_path
+        logger.info(f"✓ 对话历史已保存到: {conversation_path}")
+    except Exception as e:
+        logger.error(f"保存对话历史失败: {e}")
+        result["message"] = f"⚠️ 保存对话历史失败: {e}"
+        return result
+    
+    # 2. 保存验证目录（如果存在）
+    if not op_name:
+        result["message"] = f"对话历史已保存到: {conversation_path}\n💡 当前还没有生成算子代码，无验证目录可保存。"
+        return result
+    
+    # 优先检查是否有 log_dir（evolve/adaptive_search 的验证目录）
+    log_dir_from_state = state.get("log_dir", "")
+    sub_agent_type = state.get("sub_agent_type", "")
+    
+    if log_dir_from_state and os.path.exists(log_dir_from_state):
+        # evolve 或 adaptive_search 生成的结果，使用它们的 log_dir（包含所有验证目录）
+        logger.info(f"Found {sub_agent_type} log_dir: {log_dir_from_state}")
+        latest_verify_dir = log_dir_from_state
+        result["verify_dir"] = log_dir_from_state
+        result["sub_agent_type"] = sub_agent_type
+    else:
+        # 标准的 codeonly 验证目录，使用原有逻辑
+        logger.info("Looking for standard verification directory (codeonly)")
+        
+        # 查找最新的验证目录
+        op_log_dir = os.path.join(log_dir, op_name)
+        if not os.path.exists(op_log_dir):
+            result["message"] = f"对话历史已保存到: {conversation_path}\n💡 未找到验证目录（可能还未运行验证）。"
+            return result
+        
+        # 查找所有验证目录
+        verify_dirs = []
+        try:
+            for item in os.listdir(op_log_dir):
+                item_path = os.path.join(op_log_dir, item)
+                if os.path.isdir(item_path) and "_verify" in item and item.startswith(f"I{task_id}"):
+                    verify_dirs.append(item_path)
+        except Exception as e:
+            logger.warning(f"扫描验证目录时出错: {e}")
+        
+        if not verify_dirs:
+            result["message"] = f"对话历史已保存到: {conversation_path}\n💡 未找到验证目录（可能还未运行验证）。"
+            return result
+        
+        # 使用最新的验证目录（按修改时间排序）
+        verify_dirs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        latest_verify_dir = verify_dirs[0]
+        result["verify_dir"] = latest_verify_dir
+    
+    # 3. 复制验证目录到保存位置
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    saved_dir_name = f"{op_name}_{task_id}_{timestamp}"
+    save_path = os.path.join(output_path, "saved_verifications", saved_dir_name)
+    
+    try:
+        os.makedirs(save_path, exist_ok=True)
+        
+        # 根据子 Agent 类型决定复制策略
+        if sub_agent_type in ["evolve", "adaptive_search"]:
+            # evolve/adaptive_search 的 log_dir 包含所有任务的验证目录
+            logger.info(f"Copying {sub_agent_type} log directory: {latest_verify_dir}")
+            
+            # 复制整个 log_dir（包含所有验证子目录）
+            sub_agent_dir = os.path.join(save_path, f"{sub_agent_type}_results")
+            shutil.copytree(latest_verify_dir, sub_agent_dir, dirs_exist_ok=True)
+            logger.info(f"✓ Copied {sub_agent_type} results to: {sub_agent_dir}")
+        else:
+            # codeonly 的标准验证目录（保持原有逻辑）
+            verify_basename = os.path.basename(latest_verify_dir)
+            shutil.copytree(latest_verify_dir, os.path.join(save_path, verify_basename), dirs_exist_ok=True)
+            logger.info(f"✓ Copied standard verification directory: {verify_basename}")
+        
+        # 同时复制对话历史到该目录
+        shutil.copy2(conversation_path, os.path.join(save_path, f"conversation_{task_id}.json"))
+        
+        result["save_path"] = save_path
+        
+        # 统计文件数量
+        file_count = sum([len(files) for _, _, files in os.walk(save_path)])
+        
+        # 4. 打包成 .tar.gz 格式
+        tar_filename = f"{saved_dir_name}.tar.gz"
+        tar_path = os.path.join(output_path, "saved_verifications", tar_filename)
+        
+        logger.info(f"开始打包验证目录: {tar_path}")
+        
+        try:
+            with tarfile.open(tar_path, "w:gz") as tar:
+                # 将整个目录打包，使用 arcname 保持目录结构
+                tar.add(save_path, arcname=saved_dir_name)
+            
+            # 获取压缩包大小
+            tar_size_bytes = os.path.getsize(tar_path)
+            tar_size_mb = tar_size_bytes / (1024 * 1024)
+            
+            result["tar_path"] = tar_path
+            result["tar_size_mb"] = tar_size_mb
+            
+            logger.info(f"✓ 打包完成: {tar_path}")
+            logger.info(f"  - 压缩包大小: {tar_size_mb:.2f} MB")
+            
+            if sub_agent_type in ["evolve", "adaptive_search"]:
+                # 提取统计信息
+                if sub_agent_type == "evolve":
+                    total_rounds = state.get("total_rounds", "N/A")
+                    total_tasks = state.get("total_tasks", "N/A")
+                    successful_tasks = state.get("successful_tasks", "N/A")
+                    detail_info = f"   • 进化轮数: {total_rounds}\n   • 总任务数: {total_tasks}\n   • 成功任务数: {successful_tasks}"
+                elif sub_agent_type == "adaptive_search":
+                    total_completed = state.get("total_completed", "N/A")
+                    total_success = state.get("total_success", "N/A")
+                    success_rate = state.get("success_rate", 0.0)
+                    detail_info = f"   • 完成任务数: {total_completed}\n   • 成功任务数: {total_success}\n   • 成功率: {success_rate:.1%}"
+                else:
+                    detail_info = ""
+                
+                result["message"] = f"""保存成功！（{sub_agent_type.upper()} 完整结果）
+
+保存位置: {save_path}
+   • 结果目录: {sub_agent_type}_results/
+   • 文件总数: {file_count}
+{detail_info}
+
+压缩包: {tar_filename}
+   • 大小: {tar_size_mb:.2f} MB
+   • 路径: {tar_path}
+
+💡 已保存所有轮次的验证结果（包括成功和失败的）。您可以继续当前对话或开始新的算子开发。"""
+            else:
+                # codeonly 的消息（保持原有格式）
+                verify_basename = os.path.basename(latest_verify_dir)
+                result["message"] = f"""保存成功！
+
+保存位置: {save_path}
+   • 验证目录: {verify_basename}
+   • 文件总数: {file_count}
+
+压缩包: {tar_filename}
+   • 大小: {tar_size_mb:.2f} MB
+   • 路径: {tar_path}
+
+💡 您可以继续当前对话或开始新的算子开发。"""
+            
+            logger.info(f"✓ 验证目录已保存到: {save_path}")
+            logger.info(f"  - 文件总数: {file_count}")
+            
+        except Exception as tar_error:
+            logger.warning(f"打包失败: {tar_error}, 但文件已保存")
+            
+            # 根据子 Agent 类型构建不同的消息
+            if sub_agent_type in ["evolve", "adaptive_search"]:
+                result["message"] = f"""保存成功！（{sub_agent_type.upper()} 完整结果）
+
+  保存位置: {save_path}
+   • 结果目录: {sub_agent_type}_results/
+   • 文件总数: {file_count}
+
+⚠️ 注意: 自动打包失败 ({tar_error})，但文件已正常保存。
+
+💡 已保存所有轮次的验证结果（包括成功和失败的）。您可以继续当前对话或开始新的算子开发。"""
+            else:
+                verify_basename = os.path.basename(latest_verify_dir)
+                result["message"] = f"""保存成功！
+
+  保存位置: {save_path}
+   • 验证目录: {verify_basename}
+   • 文件总数: {file_count}
+
+⚠️ 注意: 自动打包失败 ({tar_error})，但文件已正常保存。
+
+💡 您可以继续当前对话或开始新的算子开发。"""
+            
+            logger.info(f"✓ 验证目录已保存到: {save_path}")
+            logger.info(f"  - 文件总数: {file_count}")
+        
+    except Exception as e:
+        logger.error(f"复制验证目录失败: {e}")
+        result["message"] = f"对话历史已保存\n 但验证目录复制失败: {e}"
+    
+    return result

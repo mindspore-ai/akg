@@ -1,0 +1,33 @@
+{
+  "models": {
+    "complex": {
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "your-api-key-here",
+      "model_name": "gpt-4",
+      "temperature": 0.0,
+      "max_tokens": 4096
+    },
+    "standard": {
+      "base_url": "https://api.deepseek.com/beta/",
+      "api_key": "your-deepseek-api-key",
+      "model_name": "deepseek-chat",
+      "temperature": 0.0,
+      "max_tokens": 2048,
+      "thinking_enabled": true
+    },
+    "fast": {
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "your-api-key-here",
+      "model_name": "gpt-3.5-turbo",
+      "temperature": 0.3,
+      "max_tokens": 1024
+    }
+  },
+  "embedding": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "api_key": "your-siliconflow-api-key",
+    "model_name": "BAAI/bge-large-zh-v1.5"
+  },
+  "default_model": "standard",
+  "stream_output": false
+}

@@ -1,0 +1,24 @@
+# Log configuration
+log_dir: "~/akg_agents_logs"
+
+# Workflow configuration
+workflow_config_path: "op/config/default_workflow.yaml"  # 原 Task 使用
+default_workflow: "default_workflow"  # LangGraphTask 使用
+max_step: 20  # 最大迭代步数
+
+# Parser configuration (for LangGraphTask)
+# parser_config_path: "op/config/parser_config.yaml"  # 可选，默认使用 op/config/parser_config.yaml
+
+# Documentation directory configuration
+docs_dir:
+  designer: "op/resources/docs/tilelang_cuda_docs"
+  coder: "op/resources/docs/tilelang_cuda_docs"
+
+# Performance analysis configuration
+profile_settings:
+  run_times: 50
+  warmup_times: 5
+
+# Verification configuration
+verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
+

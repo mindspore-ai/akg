@@ -1,0 +1,449 @@
+# Copyright 2025 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import logging
+from typing import Tuple, List
+from pathlib import Path
+from akg_agents.op.database.coder_database import CoderDatabase
+from akg_agents.utils.common_utils import ParserFactory, remove_copyright_from_text, get_md5_hash
+from akg_agents.utils.hardware_utils import get_hardware_doc
+from akg_agents.utils.swft_docs_loader import get_swft_docs_content
+from akg_agents.core_v2.agents import AgentBase, register_agent
+from akg_agents import get_project_root
+
+logger = logging.getLogger(__name__)
+
+
+@register_agent
+class Coder(AgentBase):
+    def __init__(self,
+                 op_name: str,
+                 task_desc: str,
+                 dsl: str,
+                 framework: str,
+                 backend: str,
+                 arch: str = "",
+                 workflow_config_path: str = None,  # 已废弃，保留用于向后兼容
+                 parser_config_path: str = None,    # 新的 parser 配置路径
+                 config: dict = None,
+                 source_backend: str = None,  # 源后端（如 cuda），用于跨后端转换场景
+                 source_arch: str = None):    # 源架构（如 a100），用于跨后端转换场景
+        self.op_name = op_name
+        self.task_desc = remove_copyright_from_text(task_desc)
+        self.dsl = dsl
+        self.framework = framework
+        self.backend = backend
+        self.arch = arch
+        self.workflow_config_path = workflow_config_path  # 保留用于向后兼容
+        self.parser_config_path = parser_config_path  # 新的配置路径
+        self.config = config
+        self.source_backend = source_backend  # 跨后端转换时的源后端
+        self.source_arch = source_arch  # 跨后端转换时的源架构
+        self.codegen_step_count = 0
+        self.api_step_count = 0
+
+        self.sample_num = 3 # RAG默认样本数
+        
+        # RAG检索结果缓存，避免相同任务参数重复检索
+        # key: 任务参数的hash, value: 检索结果字符串
+        self._rag_cache = {}
+
+        # 从config中获取model_config
+        if config:
+            self.model_config = config.get("agent_model_config", {})
+        else:
+            raise ValueError("config is required for Coder")
+
+        context = {
+            "dsl": dsl,
+            "op_name": op_name,
+            "framework": framework,
+            "backend": backend,
+            "arch": arch,
+            "task_desc": task_desc,
+            "source_backend": source_backend,
+            "source_arch": source_arch,
+        }
+        if config and config.get("session_id"):
+            context["session_id"] = config["session_id"]
+        super().__init__(context=context, config=config)
+
+        # 使用新的 parser loader（不依赖 workflow.yaml）
+        from akg_agents.utils.parser_loader import create_agent_parser
+        self.code_parser = create_agent_parser("coder", self.parser_config_path)
+        if not self.code_parser:
+            raise ValueError(
+                "Failed to create coder parser. Please check your parser_config.yaml configuration.")
+        self.format_instructions = self.code_parser.get_format_instructions()
+
+        if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
+            if self.dsl == "triton_cuda":
+                self.func_name = f"{self.op_name}_triton_cuda_{self.framework}"
+            elif self.dsl == "triton_ascend":
+                self.func_name = f"{self.op_name}_triton_ascend_{self.framework}"
+            else:
+                # 兼容旧代码，如果dsl包含triton_cuda或triton_ascend但不是精确匹配
+                self.func_name = f"{self.op_name}_{self.dsl}_{self.framework}"
+        else:
+            self.func_name = f"{self.op_name}_{self.dsl}_{self.framework}"
+
+        # 初始化coder生成模板
+        self.coder_prompt = self.load_template("coder/codegen.j2")
+        self.api_docs_prompt = self.load_template("utils/api_gen_template.j2")
+        self.user_examples_prompt = self.load_template("utils/examples_compression_template.j2")
+
+        # 准备基础文档数据
+        self.base_doc = {
+            "op_name": self.op_name,
+            "task_desc": self.task_desc,
+            "framework": self.framework,
+            "dsl": self.dsl,
+            "func_name": self.func_name,
+            "format_instructions": self.format_instructions,
+
+            "api_docs": self.load_doc("api/api.md"),
+            "dsl_basic_docs": self.load_doc("basic_docs.md"),
+            "expert_suggestion": self.load_doc("suggestion_docs.md"),
+            "backend": self.backend,
+
+            # 可选参数
+            "hardware_docs": get_hardware_doc(self.backend, self.arch),
+            "arch_name": self.arch,
+            
+            # 跨后端转换参数
+            "source_backend": self.source_backend,  # 源后端（如 cuda -> ascend）
+            "source_arch": self.source_arch,        # 源架构（如 a100 -> ascend910b4）
+        }
+
+    def _load_user_examples(self) -> str:
+        """
+        根据framework加载对应的DSL示例代码
+
+        Returns:
+            str: 示例代码内容，如果找不到对应示例则返回空字符串
+        """
+        if not self.framework:
+            logger.warning("framework为空，无法加载示例代码")
+            return ""
+
+        # 使用配置化的文档路径
+        try:
+            # 从config中获取coder的docs_dir
+            if not self.config:
+                raise ValueError("No config provided. Cannot resolve document path.")
+
+            docs_dir_config = self.config.get('docs_dir', {})
+            if 'coder' not in docs_dir_config:
+                raise ValueError("No doc directory configured for coder agent.")
+
+            coder_docs_dir = docs_dir_config['coder']
+            base_dir = Path(get_project_root()) / coder_docs_dir / "examples"
+
+        except Exception as e:
+            logger.warning(f"Failed to resolve configurable doc path: {e}, using fallback path")
+            # 降级到硬编码路径（根据DSL类型选择）
+            docs_subdir = f"{self.dsl}_docs"
+            base_dir = Path(get_project_root()) / "op" / "resources" / "docs" / docs_subdir / "examples"
+
+        if not base_dir.exists():
+            logger.warning(f"Triton示例目录不存在: {base_dir}, 返回空字符串")
+            return ""
+
+        all_code = []
+        # 支持多种文件格式：py, md, txt等
+        supported_extensions = ['*.py', '*.md', '*.txt']
+
+        for extension in supported_extensions:
+            # 使用glob模式匹配framework开头的文件
+            for file_path in base_dir.glob(f"{self.framework}_{extension}"):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read().strip()
+                        if content:
+                            # 根据文件类型添加不同的注释标识
+                            if file_path.suffix == '.py':
+                                all_code.append(f"# Python File: {file_path.name}\n{content}\n")
+                            elif file_path.suffix == '.md':
+                                all_code.append(f"# Markdown File: {file_path.name}\n{content}\n")
+                            elif file_path.suffix == '.txt':
+                                all_code.append(f"# Text File: {file_path.name}\n{content}\n")
+                            else:
+                                all_code.append(f"# File: {file_path.name}\n{content}\n")
+                except Exception as e:
+                    logger.warning(f"读取示例文件 {file_path} 时发生错误: {str(e)}")
+                    continue
+
+        if not all_code:
+            logger.warning(f"未找到{self.framework}相关的示例文件")
+            return ""
+
+        return "\n".join(all_code)
+
+    async def _generate_api_docs(self, sketch: str, conductor_suggestion: str, task_info: dict) -> str:
+        """
+        生成API文档，如果原始API文档过长则使用LLM进行内容压缩
+
+        Args:
+            sketch: AUL代码作为sketch
+            conductor_suggestion: Conductor建议
+            task_info: 任务信息字典
+
+        Returns:
+            str: 适合的API文档内容
+        """
+        if len(self.base_doc["api_docs"]) > 6000:  # 如果api文档过长，使用llm进行content压缩
+            api_parser = ParserFactory.get_api_parser()
+            format_api_instructions = api_parser.get_format_instructions()
+            api_input_data = {
+                **self.base_doc,
+                "sketch": sketch,  # AUL代码作为sketch
+                "llm_suggestions": conductor_suggestion,  # Conductor建议
+                "error_log": task_info.get('verifier_error', ''),
+                "format_instructions": format_api_instructions
+            }
+
+            self.api_step_count += 1
+            to_update_api_details = {
+                "agent_name": "api",
+                "hash": task_info.get("task_id", "Api") + "@" + str(self.api_step_count),
+                "task_id": "",
+                "step": self.api_step_count,
+            }
+            self.context.update(to_update_api_details)
+
+            api_docs_json, _, _ = await self.run_llm(self.api_docs_prompt, api_input_data, self.model_config.get("api_generator") or "standard")
+            parsed_content = api_parser.parse(api_docs_json)
+            api_docs_suitable = "\n\n".join(
+                f"API name: {name}\nAPI description:{desc}\nAPI implement：\n{impl}"
+                for name, desc, impl in zip(
+                    parsed_content.api_name,
+                    parsed_content.api_desc,
+                    parsed_content.api_example
+                )
+            )
+        else:
+            api_docs_suitable = self.base_doc["api_docs"]
+
+        return api_docs_suitable
+
+    def load_doc(self, doc_path: str) -> str:
+        """
+        重写load_doc方法，特殊处理swft后端
+        逻辑：
+        1. 常规后端：使用标准的文档读取方式
+        2. swft后端：
+           - 如果指定的文档路径存在，就读取该文档
+           - 如果指定的文档路径不存在，则默认使用swft的本地文档
+
+        Args:
+            doc_path (str): 文档文件的相对路径
+
+        Returns:
+            str: 文档内容
+        """
+        # 检查是否是swft后端
+        if self.dsl.lower() == "swft":
+            logger.info(f"检测到swft后端，尝试读取文档: {doc_path}")
+
+            try:
+                # 首先尝试使用父类的标准方法读取指定文档
+                standard_content = super().load_doc(doc_path)
+                if standard_content:
+                    logger.info(f"成功读取到swft的指定文档: {doc_path}")
+                    return standard_content
+                else:
+                    logger.info(f"swft指定文档为空，使用默认的swft本地文档")
+                    return get_swft_docs_content()
+
+            except Exception as e:
+                logger.warning(f"读取swft指定文档失败: {str(e)}，使用默认的swft本地文档")
+                return get_swft_docs_content()
+        else:
+            # 对于其他后端，使用父类的标准方法
+            return super().load_doc(doc_path)
+
+    async def _select_optimal_examples(self, task_info) -> str:
+        """
+        智能选择最优的示例代码，避免prompt过长
+
+        策略：
+        1. 有Designer手写优化建议：复用Designer的RAG结果，提取impl_code
+        2. 无Designer手写优化建议：根据rag参数决定是否使用RAG检索
+
+        Returns:
+            str: 选择后的示例代码
+        """
+        rag_enabled = self.config.get("rag", False)
+        if rag_enabled:
+            handwrite_suggestions = task_info.get("handwrite_suggestions", [])
+            if handwrite_suggestions:
+                logger.info(f"[Coder] Using Designer results (handwrite_suggestions found)")
+                return self._reuse_designer_rag_results(handwrite_suggestions)
+            else:
+                logger.info(f"[Coder] RAG enabled, using _independent_rag_for_impl_code()")
+                return await self._independent_rag_for_impl_code()
+        else:
+            # rag=False时，直接使用本地示例
+            logger.info(f"[Coder] RAG disabled (rag=False), using local examples")
+            return self._load_user_examples()
+
+    def _reuse_designer_rag_results(self, handwrite_suggestions: list) -> str:
+        """复用Designer阶段的RAG结果，提取impl_code"""
+        all_code = []
+        
+        for suggestion in handwrite_suggestions:
+            name = suggestion.get("name", "")
+            impl_code = suggestion.get("impl_code", "")
+            
+            if impl_code:
+                all_code.append(f"# Reference Implementation: {name}\n{impl_code}\n")
+        
+        if all_code:
+            logger.info(f"Successfully loaded {len(all_code)} reference implementations")
+        
+        return "\n".join(all_code)
+
+    async def _independent_rag_for_impl_code(self) -> str:
+        """优先尝试RAG检索impl_code，失败后自动降级到本地示例
+        
+        使用缓存机制避免相同任务参数的重复检索
+        """
+        # 生成缓存key，基于任务参数
+        cache_key = get_md5_hash(
+            framework_code=self.task_desc,
+            backend=self.backend,
+            arch=self.arch,
+            dsl=self.dsl,
+            framework=self.framework,
+            sample_num=self.sample_num
+        )
+        
+        # 检查缓存
+        if cache_key in self._rag_cache:
+            logger.info(f"Using cached RAG retrieval result for task: {self.op_name}")
+            return self._rag_cache[cache_key]
+        
+        # 尝试创建 CoderDatabase，如果失败则让异常向上传播
+        # VectorStore 初始化时会检查依赖，如果缺少会抛出明确的错误信息
+        database = CoderDatabase(config=self.config)
+        
+        try:
+            await database.auto_update(
+                dsl=self.dsl,
+                framework=self.framework,
+                backend=self.backend,
+                arch=self.arch,
+                ref_type="impl",
+                update_mode="skip"
+            )
+            
+            selected_pairs = await database.samples(
+                output_content=["name", "impl_code"],
+                framework_code=self.task_desc,
+                backend=self.backend,
+                arch=self.arch,
+                dsl=self.dsl,
+                framework=self.framework,
+                sample_num=self.sample_num
+            )
+            
+            # 如果RAG检索没有结果，降级到本地示例
+            if not selected_pairs:
+                logger.warning("RAG retrieval found no relevant implementations, using local examples")
+                result = self._load_user_examples()
+                # 缓存结果（即使是降级到本地示例，也缓存，避免重复判断）
+                self._rag_cache[cache_key] = result
+                return result
+            
+            all_code = []
+            for pair in selected_pairs:
+                name = pair.get("name", "")
+                impl_code = pair.get("impl_code", "")
+                
+                if impl_code:
+                    all_code.append(f"# Reference Implementation: {name}\n{impl_code}\n")
+            
+            result = "\n".join(all_code)
+            logger.info(f"RAG retrieved {len(all_code)} reference implementations")
+            
+            # 缓存检索结果
+            self._rag_cache[cache_key] = result
+            return result
+        except Exception as e:
+            # RAG检索失败，降级到本地示例
+            logger.warning(f"RAG retrieval failed: {e}, using local examples")
+            result = self._load_user_examples()
+            # 缓存降级结果，避免重复尝试
+            self._rag_cache[cache_key] = result
+            return result
+
+    async def run(self, task_info: dict) -> Tuple[str, str, str]:
+        """执行代码生成
+
+        Args:
+            task_info: 任务信息字典，包含当前所有代码和状态
+
+        Returns:
+            Tuple[str, str, str]: 生成的代码、提示信息和推理过程
+        """
+        try:
+            # 从task_info中获取代码信息
+            sketch = task_info.get('designer_code', '')
+
+            # 从task_info中获取conductor的建议
+            conductor_suggestion = task_info.get('conductor_suggestion', '')
+
+            # 获取api文档
+            api_docs_suitable = await self._generate_api_docs(sketch, conductor_suggestion, task_info)
+
+            # 智能选择最优的示例代码
+            dsl_examples = await self._select_optimal_examples(task_info)
+
+            # ============ Hint模式：参数范围已在sketch的"设计适用范围"注释中 ============
+            enable_hint_mode = self.config.get("enable_hint_mode", False)
+            has_space_config = "space_config_code" in task_info and task_info.get("space_config_code")
+            has_param_space = enable_hint_mode and has_space_config
+                      
+            # 基于base_doc构建输入，只更新变化的部分
+            input_data = {
+                **self.base_doc,
+                "sketch": sketch,  # sketch中已包含"设计适用范围"注释（含hint信息）
+                "llm_suggestions": conductor_suggestion,  # Conductor建议
+                "coder_code": task_info.get('coder_code', ''),
+                "error_log": task_info.get('verifier_error', '')[:5000],
+                "code_check_errors": task_info.get('code_check_errors', ''),  # CodeChecker静态检查错误
+                "api_docs_suitable": api_docs_suitable,
+                "dsl_examples": dsl_examples,
+                "enable_llm_range_inference": self.config.get("enable_llm_range_inference", False),  # LLM推理模式
+                "enable_hint_mode": enable_hint_mode,  # Hint模式
+                "has_param_space": has_param_space,  # 是否有参数空间
+                "user_requirements": task_info.get('user_requirements', ''),  # 用户额外需求（来自 ReAct）
+            }
+
+            # 执行LLM生成前更新context，确保正确性
+            self.codegen_step_count += 1
+            to_update_codegen_details = {
+                "agent_name": "coder",
+                "hash": task_info.get("task_id", "Coder") + "@" + str(self.codegen_step_count),
+                "task_id": task_info.get("task_id", ""),
+                "step": self.codegen_step_count,
+                "workflow_name": task_info.get("workflow_name", ""),
+            }
+            self.context.update(to_update_codegen_details)
+
+            # 执行LLM生成
+            return await self.run_llm(self.coder_prompt, input_data, self.model_config.get("coder") or "standard")
+        except Exception as e:
+            logger.error(f"Exception in coder.run: {type(e).__name__}: {e}")
+            raise

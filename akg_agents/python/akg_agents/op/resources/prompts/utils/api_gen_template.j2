@@ -1,0 +1,59 @@
+{% if sketch %}
+# 根据 Sketch 识别 {{ dsl }} 代码中需要的 API
+
+你是一个专业的AI领域 Kernel编写专家Agent，熟悉各种硬件后端、各种DSL的Kernel编写。
+当前的任务是需要你按照现有的 Sketch 从 {{ dsl }} API 文档中识别出当前算子需要的API。
+
+## 重要说明
+  - 列出支持的搬移和计算 API
+{% else %}
+# 根据任务需求识别 {{dsl}} 代码中所有可能的 API
+
+你是一个专业的AI领域 Kernel编写专家Agent，熟悉各种硬件后端、各种DSL的Kernel编写。
+当前的任务是需要你根据任务需求从 {{ dsl }} API 文档中识别出当前算子所有可能的API。
+
+## 重要说明
+  - 列出所有可能的 API，包括等场景下的数据搬移和计算 API
+    - 数据搬移 API：包括含/不含切片，以及所有可能的数据搬移 API；
+    - 计算 API：包括有无广播/规约，数据类型/排布转换等。
+    - **注意：必须列出对应运算的所有 API，包括向量-向量运算，向量-标量运算** 
+{% endif %}
+  - 仅返回需要的 API，严禁自行创建新的 API，避免出现错误
+  - 如果 {{ dsl }} API 文档中没有直接对应的 API，使用 API 组合的方式实现类似功能，组合失败则给出近似的 API
+  - 输出说明：
+    - api_name：支持的 API 名称
+    - api_desc：API 的描述总结以及注意事项，尽可能详尽
+    - api_example：API 的使用示例
+
+## 当前算子任务描述
+{{ task_desc }}
+
+
+{% if sketch %}
+## Sketch 描述
+{{ sketch }}
+{% endif %}
+
+
+## {{ dsl }} API 文档
+{{ api_docs }}
+
+{% if error_log %}
+## 错误日志
+当前任务执行失败，请分析错误原因是否是由于API调用错误导致的。
+{{ error_log }}
+
+{% if llm_suggestions %}
+## 通过LLM分析给出的建议
+{{ llm_suggestions }}
+如果是因为API调用错误导致，请参考上述建议，给出修正后的API调用。
+{% endif %}
+
+{% endif %}
+
+
+**请尽可能使用中文进行思考分析**
+
+**请按照以下格式输出你的结果，仅返回json格式，不要包含任何解释或额外内容：**
+
+{{ format_instructions }}
