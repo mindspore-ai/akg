@@ -63,6 +63,11 @@ Pattern ConvertAtenLog {
   replace root with op<mfuse.log>(convertValue(input)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenExpTensor {
+  let root = op<torch.aten.exp>(operands: ValueRange) -> (resType: Type);
+  replace root with op<mfuse.exp>(convertValues(operands)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenLogicalAnd {
   let root = op<torch.aten.logical_and>(operands: ValueRange) -> (resType: Type);
   replace root with op<mfuse.logical_and>(convertValues(operands)) -> (convertType(resType));
@@ -138,6 +143,11 @@ Pattern ConvertAtenSubTensor {
   replace root with op<mfuse.aclnn.sub>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenTanh {
+  let root = op<torch.aten.tanh>(input: Value) -> (resType: Type);
+  replace root with op<mfuse.aclnn.tanh>(convertValue(input)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenTrunc {
   let root = op<torch.aten.trunc>(input: Value) -> (resType: Type);
   replace root with op<mfuse.trunc>(convertValue(input)) -> (convertType(resType));
@@ -146,9 +156,4 @@ Pattern ConvertAtenTrunc {
 Pattern ConvertAtenWhereSelf {
   let root = op<torch.aten.where.self>(condition: Value, self: Value, other: Value) -> (resType: Type);
   replace root with op<mfuse.select>(convertValue(condition), convertValue(self), convertValue(other)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenTanh {
-  let root = op<torch.aten.tanh>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.aclnn.tanh>(convertValues(operands)) -> (convertType(resType));
 }

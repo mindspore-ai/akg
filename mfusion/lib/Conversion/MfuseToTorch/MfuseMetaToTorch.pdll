@@ -12,6 +12,11 @@ Pattern ConvertMfuseEq {
   replace root with op<torch.aten.eq.Tensor>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertMfuseExp {
+  let root = op<mfuse.exp>(operand: Value) -> (resType: Type);
+  replace root with op<torch.aten.exp>(convertValue(operand)) -> (convertType(resType));
+}
+
 Pattern ConvertMfuseGe {
   let root = op<mfuse.ge>(operands: ValueRange) -> (resType: Type);
   replace root with op<torch.aten.ge.Tensor>(convertValues(operands)) -> (convertType(resType));

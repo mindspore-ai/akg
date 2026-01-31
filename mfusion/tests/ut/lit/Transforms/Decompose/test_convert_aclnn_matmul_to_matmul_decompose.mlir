@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s -convert-aclnn-matmul-to-matmul | FileCheck %s
+// RUN: mfusion-opt %s -decompose="pattern-type=BEFORE_MANUAL_FUSION" -allow-unregistered-dialect -mlir-print-ir-after-all | FileCheck %s
 
 module {
   // convert-aclnn-matmul-to-matmul: mfuse.aclnn.mm -> mfuse.matmul (trans_x1=false, trans_x2=false)

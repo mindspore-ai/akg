@@ -43,6 +43,9 @@ bool isConstOne(Value v, double tolerance = 1e-6);
 // This function checks both operands to identify which one is scalar
 bool isScalarMul(MulOp mulOp, double &scalarVal, Value &tensorOperand);
 
+// Check if tensor shape is empty (rank-0) or all dimensions are 1
+bool isScalarOrSingleElement(RankedTensorType tensorType);
+
 // Match both operands of a binary operation with specific Op types, considering commutativity.
 template <typename TargetLhsOpType, typename TargetRhsOpType>
 inline bool matchCommutativeOperands(Value x, Value y, TargetLhsOpType &matchedLhsOp, TargetRhsOpType &matchedRhsOp) {
