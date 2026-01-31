@@ -1,2 +1,3 @@
 add_subdirectory(TorchToMfuse)
 add_subdirectory(MfuseToTorch)
+add_subdirectory(MfuseToDvm)

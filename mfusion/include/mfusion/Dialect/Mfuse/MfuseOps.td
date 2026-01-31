@@ -21,24 +21,32 @@ include "mfusion/Dialect/Mfuse/MfuseConstantOps.td"
 include "mfusion/Dialect/Mfuse/MfuseMetaOps.td"
 include "mfusion/Dialect/Mfuse/MfuseAclnnOps.td"
 
-def Mfuse_CustomCallOp : Mfuse_Op<"custom_call"> {
-  let summary = "Invoke a custom operator";
+def Mfuse_DvmCallOp : Mfuse_Op<"dvm_call"> {
+  let summary = "Invoke a DVM fused subgraph";
   let description = [{
-    Invokes a custom operator by name.
-    The op_name operand contains the name of the custom operator to invoke.
+    Invokes a DVM fused subgraph.
+
+    Attributes:
+    - `subgraph_mlir`: The DVM dialect MLIR of the fused subgraph, used for
+      backend DVM kernel generation.
+    - `subgraph`: The function name of the fused subgraph in the current MLIR
+      Module.
+    - `is_dynamic`: Whether the fused subgraph has dynamic shape.
   }];
 
   let arguments = (ins
-    Mfuse_StringType:$op_name,
-    Variadic<AnyType>:$inputs
+    Variadic<AnyRankedTensor>:$inputs,
+    StrAttr:$subgraph_mlir,
+    StrAttr:$subgraph,
+    BoolAttr:$is_dynamic
   );
 
   let results = (outs
-    Variadic<AnyType>:$outputs
+    Variadic<AnyRankedTensor>:$outputs
   );
 
   let assemblyFormat = [{
-    $op_name `,` $inputs attr-dict `:` functional-type(operands, results)
+    $inputs attr-dict `:` functional-type(operands, results)
   }];
 }
 

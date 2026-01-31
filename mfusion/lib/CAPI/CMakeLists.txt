@@ -14,7 +14,9 @@ add_mlir_public_c_api_library(MFusionCAPI
   MLIRIR
   MLIRSupport
   MLIRMfuseDialect
+  MLIRDvmDialect
   MFusionConversionTorchToMfuse
+  MFusionConversionMfuseToDvm
   MFusionConversionMfuseToTorch
   MLIRMfuseTransforms
 )

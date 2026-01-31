@@ -41,6 +41,17 @@ PYBIND11_MODULE(_mfusion, m) {
     },
     py::arg("context"), py::arg("load") = true, "Register MFUSE dialect");
 
+  m.def(
+    "register_dvm_dialect",
+    [](MlirContext context, bool load) {
+      MlirDialectHandle handle = mlirGetDialectHandle__dvm__();
+      mlirDialectHandleRegisterDialect(handle, context);
+      if (load) {
+        mlirDialectHandleLoadDialect(handle, context);
+      }
+    },
+    py::arg("context"), py::arg("load") = true, "Register DVM dialect");
+
   // Bind Mfuse::DeviceAttr through CAPI
   auto deviceAttrClass =
     mlir_attribute_subclass(m, "DeviceAttr", mlirAttributeIsAMfuseDeviceAttr, mlirMfuseDeviceAttrGetTypeID)

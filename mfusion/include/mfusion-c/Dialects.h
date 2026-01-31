@@ -24,6 +24,7 @@ extern "C" {
 #endif
 
 MLIR_DECLARE_CAPI_DIALECT_REGISTRATION(Mfuse, mfuse);
+MLIR_DECLARE_CAPI_DIALECT_REGISTRATION(Dvm, dvm);
 
 // Mfuse DeviceAttr CAPI
 MLIR_CAPI_EXPORTED bool mlirAttributeIsAMfuseDeviceAttr(MlirAttribute attr);
