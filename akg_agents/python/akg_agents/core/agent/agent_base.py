@@ -94,9 +94,10 @@ class Jinja2TemplateWrapper:
 from akg_agents.core.llm.model_loader import create_model
 from akg_agents.utils.common_utils import get_prompt_path
 from akg_agents.utils.collector import get_collector
+from akg_agents.core_v2.config.settings import get_akg_env_var
 
 logger = logging.getLogger(__name__)
-akg_agents_stream_output = os.getenv("AKG_AGENTS_STREAM_OUTPUT", "off").lower() == "on"
+akg_agents_stream_output = get_akg_env_var("STREAM_OUTPUT", "off").lower() == "on"
 
 
 class AgentBase(ABC):
@@ -328,7 +329,7 @@ class AgentBase(ABC):
 
     @staticmethod
     def _stream_enabled() -> bool:
-        """检查是否启用流式输出"""
+        """检查是否启用流式输出（支持 AKG_AGENTS_* 和 AIKG_*）"""
         try:
             from akg_agents.utils.stream_output import get_stream_output_override
 
@@ -338,7 +339,7 @@ class AgentBase(ABC):
         except Exception:
             # 任何异常都不影响主流程：回退到环境变量
             pass
-        return os.getenv("AKG_AGENTS_STREAM_OUTPUT", "off").lower() == "on"
+        return get_akg_env_var("STREAM_OUTPUT", "off").lower() == "on"
 
     @staticmethod
     def _extract_task_id(ctx: Dict[str, Any]) -> str:
@@ -546,8 +547,8 @@ class AgentBase(ABC):
                 else:
                     output_tokens = max(completion_tokens - reasoning_tokens, 0)
 
-            # 数据收集
-            if os.getenv("AKG_AGENTS_DATA_COLLECT", "off").lower() == "on":
+            # 数据收集（支持 AKG_AGENTS_* 和 AIKG_*）
+            if get_akg_env_var("DATA_COLLECT", "off").lower() == "on":
                 try:
                     collector = await get_collector()
                     collected_data = {

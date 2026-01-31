@@ -29,6 +29,7 @@ from akg_agents.op.verifier.kernel_verifier import KernelVerifier
 from akg_agents.core.async_pool.device_pool import DevicePool
 from akg_agents.core.utils import check_task_config, check_task_type
 from akg_agents.core.worker.manager import get_worker_manager
+from akg_agents.core_v2.config.settings import get_akg_env_var
 
 logger = logging.getLogger(__name__)
 
@@ -261,9 +262,9 @@ class LangGraphTask(BaseLangGraphTask):
         # max_iterations 优先级：配置文件 > 默认值 20
         max_iterations = self.config.get("max_step", 20)
 
-        # 获取 session_id（非 TUI 场景可为空；仅在流式输出开启时必填）
+        # 获取 session_id（非 TUI 场景可为空；仅在流式输出开启时必填）（支持 AKG_AGENTS_* 和 AIKG_*）
         session_id = str(self.config.get("session_id") or "").strip()
-        stream_enabled = os.getenv("AKG_AGENTS_STREAM_OUTPUT", "off").lower() == "on"
+        stream_enabled = get_akg_env_var("STREAM_OUTPUT", "off").lower() == "on"
         if stream_enabled and not session_id:
             raise ValueError("[LangGraphTask] config 中必须包含 session_id（AKG_AGENTS_STREAM_OUTPUT=on）！")
         task_label = str(self.config.get("task_label") or "none").strip()

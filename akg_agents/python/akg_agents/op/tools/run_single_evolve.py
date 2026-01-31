@@ -38,6 +38,7 @@ from akg_agents.op.utils.evolve.runner_manager import (
     print_evolve_config
 )
 from akg_agents.core.worker.manager import register_worker
+from akg_agents.core_v2.config.settings import get_akg_env_var
 
 
 def print_usage():
@@ -135,10 +136,10 @@ def parse_batch_runner_mode(args):
     #    - 使用命令行传入的 device 参数（已分配的设备ID）
     #    - 每个子进程只注册分配给它的单个设备，确保设备互斥
     
-    if os.getenv("AKG_AGENTS_WORKER_URL"):
+    if get_akg_env_var("WORKER_URL"):
         # 远程模式：device_list 设为 None，register_worker 会自动使用远程 Worker
         config.device_list = None
-        print(f"远程 Worker 模式: 使用 AKG_AGENTS_WORKER_URL={os.getenv('AKG_AGENTS_WORKER_URL')}")
+        print(f"远程 Worker 模式: 使用 AKG_AGENTS_WORKER_URL={get_akg_env_var('WORKER_URL')}")
     else:
         # 本地模式：使用分配的设备
         config.device_list = [device]

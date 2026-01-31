@@ -362,7 +362,8 @@ class Task:
             # 获取最终结果
             final_success = self.conductor.task_info.get('verifier_result', False)
 
-            if os.getenv("AKG_AGENTS_DATA_COLLECT", "off").lower() == "on":
+            # 数据收集（支持 AKG_AGENTS_* 和 AIKG_*）
+            if get_akg_env_var("DATA_COLLECT", "off").lower() == "on":
                 try:
                     collector = await get_collector()
                     collector.set_config(self.config)

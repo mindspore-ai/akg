@@ -25,6 +25,8 @@ from langchain_ollama import ChatOllama
 from langchain_core.embeddings import Embeddings
 import openai
 
+from akg_agents.core_v2.config.settings import get_akg_env_var
+
 
 # 配置文件路径
 CONFIG_PATH = Path(__file__).parent / "llm_config.yaml"
@@ -90,22 +92,22 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         overridden.pop("presence_penalty", None)
         return overridden
 
-    # 【最高优先级】检查环境变量覆盖
-    env_base_url = os.getenv("AKG_AGENTS_BASE_URL")
-    env_model_name = os.getenv("AKG_AGENTS_MODEL_NAME")
-    env_api_key = os.getenv("AKG_AGENTS_API_KEY")
-    env_enable_think = os.getenv("AKG_AGENTS_MODEL_ENABLE_THINK")
+    # 【最高优先级】检查环境变量覆盖（支持 AKG_AGENTS_* 和 AIKG_*）
+    env_base_url = get_akg_env_var("BASE_URL")
+    env_model_name = get_akg_env_var("MODEL_NAME")
+    env_api_key = get_akg_env_var("API_KEY")
+    env_enable_think = get_akg_env_var("MODEL_ENABLE_THINK")
     
     if env_base_url and env_model_name and env_api_key:
         # 使用环境变量创建模型
         logger.info("=" * 60)
         logger.info("使用环境变量覆盖模式创建模型")
-        logger.info(f"  AKG_AGENTS_BASE_URL: {env_base_url}")
-        logger.info(f"  AKG_AGENTS_MODEL_NAME: {env_model_name}")
+        logger.info(f"  BASE_URL: {env_base_url}")
+        logger.info(f"  MODEL_NAME: {env_model_name}")
         # 只显示前8位和后4位，保护API密钥安全
         masked_key = env_api_key[:8] + "*" * (len(env_api_key) - 12) + \
             env_api_key[-4:] if len(env_api_key) > 12 else "***"
-        logger.info(f"  AKG_AGENTS_API_KEY: {masked_key}")
+        logger.info(f"  API_KEY: {masked_key}")
         if env_enable_think:
             logger.info(f"  AKG_AGENTS_MODEL_ENABLE_THINK: {env_enable_think}")
         logger.info("=" * 60)
@@ -402,11 +404,11 @@ def create_langchain_chat_model(
             kwargs["top_p"] = top_p
         return ChatOpenAI(**kwargs)
 
-    # 【最高优先级】环境变量覆盖（openai-compatible）
-    env_base_url = os.getenv("AKG_AGENTS_BASE_URL")
-    env_model_name = os.getenv("AKG_AGENTS_MODEL_NAME")
-    env_api_key = os.getenv("AKG_AGENTS_API_KEY")
-    env_enable_think = os.getenv("AKG_AGENTS_MODEL_ENABLE_THINK")
+    # 【最高优先级】环境变量覆盖（openai-compatible）（支持 AKG_AGENTS_* 和 AIKG_*）
+    env_base_url = get_akg_env_var("BASE_URL")
+    env_model_name = get_akg_env_var("MODEL_NAME")
+    env_api_key = get_akg_env_var("API_KEY")
+    env_enable_think = get_akg_env_var("MODEL_ENABLE_THINK")
     if env_base_url and env_model_name and env_api_key:
         defaults = _strip_repeat_penalty(
             {"temperature": 0.2, "max_tokens": 8192, "top_p": 0.9}
@@ -622,10 +624,10 @@ def create_embedding_model(name: Optional[str] = None, config_path: Optional[str
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f) or {}
 
-    # 【最高优先级】检查环境变量覆盖
-    env_base_url = os.getenv("AKG_AGENTS_EMBEDDING_BASE_URL")
-    env_model_name = os.getenv("AKG_AGENTS_EMBEDDING_MODEL_NAME")
-    env_api_key = os.getenv("AKG_AGENTS_EMBEDDING_API_KEY")
+    # 【最高优先级】检查环境变量覆盖（支持 AKG_AGENTS_* 和 AIKG_*）
+    env_base_url = get_akg_env_var("EMBEDDING_BASE_URL")
+    env_model_name = get_akg_env_var("EMBEDDING_MODEL_NAME")
+    env_api_key = get_akg_env_var("EMBEDDING_API_KEY")
 
     if env_base_url and env_model_name and env_api_key:
         # 检查 env_model_name 是否是预设名（存在于配置文件中）

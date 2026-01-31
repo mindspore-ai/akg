@@ -33,6 +33,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from akg_agents import get_project_root
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.core.async_pool.task_pool import TaskPool
+from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.op.evolve import evolve
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.utils.environment_check import check_env_for_task
@@ -378,8 +379,8 @@ async def run_single_evolve(op_name: str = None, task_desc: str = None, evolve_c
     for agent_name in ["designer", "coder", "conductor", "verifier", "selector", "op_task_builder"]:
         mc.setdefault(agent_name, mc["default"])
     
-    # 判断是否为远程模式（通过环境变量）
-    is_remote = os.getenv("AKG_AGENTS_WORKER_URL") is not None
+    # 判断是否为远程模式（通过环境变量，支持 AKG_AGENTS_* 和 AIKG_*）
+    is_remote = get_akg_env_var("WORKER_URL") is not None
     check_env_for_task(evolve_config.framework, evolve_config.backend, evolve_config.dsl, config, is_remote=is_remote)
 
     # 确保在运行任务前已注册 Worker
@@ -435,9 +436,9 @@ class BatchTaskPool:
         self.semaphore = asyncio.Semaphore(max_concurrency)
         
         # 本地模式：创建设备分配队列（用于跨子进程互斥）
-        # 如果设置了 AKG_AGENTS_WORKER_URL，则使用远程模式，不需要设备队列
+        # 如果设置了 AKG_AGENTS_WORKER_URL/AIKG_WORKER_URL，则使用远程模式，不需要设备队列
         self.device_queue = None
-        if self.device_pool and not os.getenv("AKG_AGENTS_WORKER_URL"):
+        if self.device_pool and not get_akg_env_var("WORKER_URL"):
             self.device_queue = asyncio.Queue()
             for device_id in self.device_pool:
                 self.device_queue.put_nowait(device_id)
