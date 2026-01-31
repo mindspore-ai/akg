@@ -10,7 +10,7 @@ def _read_version():
         with open("version.txt", "r", encoding="utf-8") as f:
             return f.read().strip()
     except FileNotFoundError:
-        return "0.1.0"
+        return "0.2.0"
 
 
 def _read_readme():
@@ -30,18 +30,18 @@ setup(
     long_description_content_type="text/markdown",
     url="https://www.mindspore.cn/",
     project_urls={
-        "Sources": "https://gitee.com/mindspore/akg",
-        "Issue Tracker": "https://gitee.com/mindspore/akg/issues",
+        "Sources": "https://gitee.com/mindspore/akg_agents",
+        "Issue Tracker": "https://gitee.com/mindspore/akg_agents/issues",
     },
     license="Apache-2.0",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
-    install_requires=[f"ai-kernel-generator=={version}"],
+    install_requires=[f"akg_agents=={version}"],
     python_requires=">=3.10",
     entry_points={
         "console_scripts": [
-            "akg_cli=ai_kernel_generator.cli.cli:app",
-            "akg-cli=ai_kernel_generator.cli.cli:app",
+            "akg_cli=akg_agents.cli.cli:app",
+            "akg-cli=akg_agents.cli.cli:app",
         ],
     },
     classifiers=[

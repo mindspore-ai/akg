@@ -9,7 +9,7 @@ SET_VERSION=""
 usage() {
   cat <<'EOF'
 用法:
-  bash aikg/scripts/publish_akg_cli.sh --version VERSION [--mode dev|post|patch] [--repo testpypi|pypi] [--publish]
+  bash akg_agents/scripts/publish_akg_cli.sh --version VERSION [--mode dev|post|patch] [--repo testpypi|pypi] [--publish]
 
 说明:
   - version 为必填，脚本不再自动递增版本号
@@ -104,16 +104,16 @@ TWINE_USERNAME="${TWINE_USERNAME:-__token__}"
 
 python -m pip install -U build twine >/dev/null
 
-echo "==> Build ai-kernel-generator"
+echo "==> Build akg_agents"
 (cd "${AIKG_DIR}" && python -m build --no-isolation)
 
 echo "==> Build akg-cli"
 (cd "${CLI_DIR}" && python -m build --no-isolation)
 
-echo "==> Upload ai-kernel-generator"
+echo "==> Upload akg_agents"
 env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
   TWINE_USERNAME="${TWINE_USERNAME}" TWINE_PASSWORD="${TWINE_PASSWORD}" \
-  twine upload -r "${REPO}" --skip-existing "${AIKG_DIR}/dist/ai_kernel_generator-${NEXT_VERSION}"*
+  twine upload -r "${REPO}" --skip-existing "${AIKG_DIR}/dist/akg_agents-${NEXT_VERSION}"*
 
 echo "==> Upload akg-cli"
 env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \

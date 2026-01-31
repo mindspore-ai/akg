@@ -1,7 +1,7 @@
 # akg-cli
 
 这是一个轻量包装包，用于提供 `akg_cli`/`akg-cli` 命令行入口。
-它依赖 `ai-kernel-generator` 并复用其实现。
+它依赖 `akg_agents` 并复用其实现。
 
 安装：
 
