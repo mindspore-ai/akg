@@ -204,27 +204,27 @@ def matmul_kernel_optimized(
 
 ### 1. 核心数配置
 
-- ✅ 使用 CUBE_CORE_NUM（矩阵计算核心）
-- ✅ 在 `__init__` 中获取，避免 forward 中重复调用
-- ✅ `grid=(num_cores,)` 固定启动
+- 正确：使用 CUBE_CORE_NUM（矩阵计算核心）
+- 正确：在 `__init__` 中获取，避免 forward 中重复调用
+- 正确：`grid=(num_cores,)` 固定启动
 
 ### 2. 切分配置
 
-- ✅ 行宽对齐到 512B（256 个 fp16 元素）
-- ✅ 根据转置情况选择合适的 M0/N0/K0
-- ✅ 常用配置: (128, 256, 256)
+- 正确：行宽对齐到 512B（256 个 fp16 元素）
+- 正确：根据转置情况选择合适的 M0/N0/K0
+- 正确：常用配置: (128, 256, 256)
 
 ### 3. 精度控制
 
-- ✅ 累加器使用 float32: `tl.zeros(..., dtype=tl.float32)`
-- ✅ 即使输入是 fp16/bf16，也用 float32 累加
-- ✅ 最后存储时自动转回目标精度
+- 正确：累加器使用 float32: `tl.zeros(..., dtype=tl.float32)`
+- 正确：即使输入是 fp16/bf16，也用 float32 累加
+- 正确：最后存储时自动转回目标精度
 
 ### 4. 内存访问
 
-- ✅ 优先使用 `tl.make_block_ptr` 和 `boundary_check`
-- ✅ 注意 stride 参数设置
-- ✅ 使用 `tl.advance` 移动块指针
+- 正确：优先使用 `tl.make_block_ptr` 和 `boundary_check`
+- 正确：注意 stride 参数设置
+- 正确：使用 `tl.advance` 移动块指针
 
 ## 性能检查清单
 

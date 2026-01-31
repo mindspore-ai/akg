@@ -47,10 +47,10 @@ def reduction_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr
 **关键**: 对于涉及 exp 的操作（softmax、logsoftmax），必须减去最大值防止溢出。
 
 ```python
-# ❌ 错误：直接 exp 可能溢出
+# 错误：错误：直接 exp 可能溢出
 scores = tl.math.exp2(x)
 
-# ✅ 正确：减去最大值
+# 正确：正确：减去最大值
 max_val = tl.max(x, axis=0)
 scores = tl.math.exp2(x - max_val)
 ```
@@ -93,9 +93,9 @@ def softmax_kernel(input_ptr, output_ptr, n_cols, BLOCK_SIZE: tl.constexpr):
 ```
 
 **关键点**:
-- ✅ 必须减去最大值（数值稳定性）
-- ✅ 使用 `tl.math.exp2` 而非 `tl.exp`（Triton 推荐）
-- ✅ 注意 `exp2` 需要乘以 log2(e) = 1.44269504
+- 正确：必须减去最大值（数值稳定性）
+- 正确：使用 `tl.math.exp2` 而非 `tl.exp`（Triton 推荐）
+- 正确：注意 `exp2` 需要乘以 log2(e) = 1.44269504
 
 ### LayerNorm
 
@@ -144,9 +144,9 @@ def layernorm_kernel(
 ```
 
 **关键点**:
-- ✅ 防止方差为负：`tl.maximum(variance, 0.0)`
-- ✅ 添加 eps 防止除零
-- ✅ 使用 float32 进行中间计算（即使输入是 fp16）
+- 正确：防止方差为负：`tl.maximum(variance, 0.0)`
+- 正确：添加 eps 防止除零
+- 正确：使用 float32 进行中间计算（即使输入是 fp16）
 
 ### LogSoftmax
 
