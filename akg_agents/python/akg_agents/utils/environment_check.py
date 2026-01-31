@@ -21,6 +21,8 @@ import requests
 from pathlib import Path
 import urllib3
 
+from akg_agents.core_v2.config.settings import get_akg_env_var
+
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -150,10 +152,10 @@ def _load_llm_config():
 
 def _check_llm_api(config_path=None, config=None):
     """检查LLM API配置和连接（使用 core_v2 配置系统）"""
-    # 【最高优先级】检查环境变量覆盖模式
-    env_base_url = os.getenv("AKG_AGENTS_BASE_URL")
-    env_model_name = os.getenv("AKG_AGENTS_MODEL_NAME")
-    env_api_key = os.getenv("AKG_AGENTS_API_KEY")
+    # 【最高优先级】检查环境变量覆盖模式（支持 AKG_AGENTS_* 和 AIKG_*）
+    env_base_url = get_akg_env_var("BASE_URL")
+    env_model_name = get_akg_env_var("MODEL_NAME")
+    env_api_key = get_akg_env_var("API_KEY")
     
     if env_base_url and env_model_name and env_api_key:
         print("=" * 60)

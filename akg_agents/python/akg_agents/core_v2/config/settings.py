@@ -16,7 +16,7 @@
 配置管理系统 - 支持多层级配置
 
 优先级（从高到低）：
-1. 环境变量（AKG_AGENTS_* 前缀）
+1. 环境变量（AKG_AGENTS_* 或 AIKG_* 前缀，兼容旧版）
 2. Local: .akg/settings.local.json（仅本人此项目，gitignored）
 3. Project: .akg/settings.json（此项目所有协作者，提交到 git）
 4. User: ~/.akg/settings.json（跨所有项目）
@@ -33,6 +33,43 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+
+# ========================= 环境变量工具函数 =========================
+
+def get_akg_env_var(var_name: str, default: Optional[str] = None) -> Optional[str]:
+    """
+    获取 AKG 环境变量，同时支持 AIKG_* 和 AKG_AGENTS_* 两种前缀
+    
+    优先级：
+    1. AKG_AGENTS_{var_name} (新版)
+    2. AIKG_{var_name} (旧版，兼容性)
+    
+    Args:
+        var_name: 环境变量名（不含前缀），如 "BASE_URL", "API_KEY"
+        default: 默认值
+        
+    Returns:
+        环境变量值，如果都不存在则返回 default
+        
+    Examples:
+        get_akg_env_var("BASE_URL") -> 查找 AKG_AGENTS_BASE_URL 或 AIKG_BASE_URL
+        get_akg_env_var("MODEL_NAME", "gpt-4") -> 查找变量，不存在返回 "gpt-4"
+    """
+    # 优先使用新版 AKG_AGENTS_*
+    new_key = f"AKG_AGENTS_{var_name}"
+    value = os.getenv(new_key)
+    if value is not None:
+        return value
+    
+    # 降级到旧版 AIKG_*
+    old_key = f"AIKG_{var_name}"
+    value = os.getenv(old_key)
+    if value is not None:
+        logger.debug(f"Using legacy env var {old_key} (consider migrating to {new_key})")
+        return value
+    
+    return default
 
 
 @dataclass
@@ -323,10 +360,10 @@ def load_from_env(settings: AKGSettings) -> AKGSettings:
     从环境变量加载配置（最高优先级）
     
     支持两种方式：
-    1. 单模型配置（兼容旧版）：AKG_AGENTS_BASE_URL, AKG_AGENTS_API_KEY 等
+    1. 单模型配置（兼容旧版）：AKG_AGENTS_BASE_URL/AIKG_BASE_URL, AKG_AGENTS_API_KEY/AIKG_API_KEY 等
        -> 自动设置为 'standard' 级别
     
-    2. 多模型配置：AKG_AGENTS_COMPLEX_BASE_URL, AKG_AGENTS_STANDARD_API_KEY 等
+    2. 多模型配置：AKG_AGENTS_COMPLEX_BASE_URL/AIKG_COMPLEX_BASE_URL, AKG_AGENTS_STANDARD_API_KEY/AIKG_STANDARD_API_KEY 等
        -> 分别设置 complex/standard/fast
     """
     
@@ -336,17 +373,17 @@ def load_from_env(settings: AKGSettings) -> AKGSettings:
             return False
         return env_value.lower() in ("enabled", "true", "1", "yes", "on")
     
-    thinking_enabled = _parse_thinking_enabled(os.getenv("AKG_AGENTS_MODEL_ENABLE_THINK"))
+    thinking_enabled = _parse_thinking_enabled(get_akg_env_var("MODEL_ENABLE_THINK"))
     
     # 方式 1：单模型配置（兼容旧版，自动设置为 standard）
-    if os.getenv("AKG_AGENTS_BASE_URL") or os.getenv("AKG_AGENTS_API_KEY") or os.getenv("AKG_AGENTS_MODEL_NAME"):
+    if get_akg_env_var("BASE_URL") or get_akg_env_var("API_KEY") or get_akg_env_var("MODEL_NAME"):
         standard_config = ModelConfig(
-            base_url=os.getenv("AKG_AGENTS_BASE_URL", "https://api.openai.com/v1"),
-            api_key=os.getenv("AKG_AGENTS_API_KEY", ""),
-            model_name=os.getenv("AKG_AGENTS_MODEL_NAME", "gpt-4"),
-            temperature=float(os.getenv("AKG_AGENTS_TEMPERATURE", "0.0")),
-            max_tokens=int(os.getenv("AKG_AGENTS_MAX_TOKENS")) if os.getenv("AKG_AGENTS_MAX_TOKENS") else None,
-            timeout=int(os.getenv("AKG_AGENTS_TIMEOUT", "300")),
+            base_url=get_akg_env_var("BASE_URL", "https://api.openai.com/v1"),
+            api_key=get_akg_env_var("API_KEY", ""),
+            model_name=get_akg_env_var("MODEL_NAME", "gpt-4"),
+            temperature=float(get_akg_env_var("TEMPERATURE", "0.0")),
+            max_tokens=int(get_akg_env_var("MAX_TOKENS")) if get_akg_env_var("MAX_TOKENS") else None,
+            timeout=int(get_akg_env_var("TIMEOUT", "300")),
             thinking_enabled=thinking_enabled,
         )
         settings.models["standard"] = standard_config
@@ -354,46 +391,46 @@ def load_from_env(settings: AKGSettings) -> AKGSettings:
     
     # 方式 2：多模型配置
     for level in ["complex", "standard", "fast"]:
-        prefix = f"AKG_AGENTS_{level.upper()}_"
+        level_upper = level.upper()
         
-        if os.getenv(f"{prefix}BASE_URL") or os.getenv(f"{prefix}API_KEY"):
+        if get_akg_env_var(f"{level_upper}_BASE_URL") or get_akg_env_var(f"{level_upper}_API_KEY"):
             model_config = ModelConfig(
-                base_url=os.getenv(f"{prefix}BASE_URL", "https://api.openai.com/v1"),
-                api_key=os.getenv(f"{prefix}API_KEY", ""),
-                model_name=os.getenv(f"{prefix}MODEL_NAME", "gpt-4"),
-                temperature=float(os.getenv(f"{prefix}TEMPERATURE", "0.0")),
-                max_tokens=int(os.getenv(f"{prefix}MAX_TOKENS")) if os.getenv(f"{prefix}MAX_TOKENS") else None,
-                timeout=int(os.getenv(f"{prefix}TIMEOUT", "300"))
+                base_url=get_akg_env_var(f"{level_upper}_BASE_URL", "https://api.openai.com/v1"),
+                api_key=get_akg_env_var(f"{level_upper}_API_KEY", ""),
+                model_name=get_akg_env_var(f"{level_upper}_MODEL_NAME", "gpt-4"),
+                temperature=float(get_akg_env_var(f"{level_upper}_TEMPERATURE", "0.0")),
+                max_tokens=int(get_akg_env_var(f"{level_upper}_MAX_TOKENS")) if get_akg_env_var(f"{level_upper}_MAX_TOKENS") else None,
+                timeout=int(get_akg_env_var(f"{level_upper}_TIMEOUT", "300"))
             )
             settings.models[level] = model_config
             logger.debug(f"Loaded '{level}' model config from env")
     
-    # AKG_AGENTS_DEFAULT_MODEL
-    if default_model := os.getenv("AKG_AGENTS_DEFAULT_MODEL"):
+    # AKG_AGENTS_DEFAULT_MODEL / AIKG_DEFAULT_MODEL
+    if default_model := get_akg_env_var("DEFAULT_MODEL"):
         settings.default_model = default_model
         logger.debug(f"Loaded default_model from env: {default_model}")
     
-    # AKG_AGENTS_STREAM_OUTPUT
-    if stream := os.getenv("AKG_AGENTS_STREAM_OUTPUT"):
+    # AKG_AGENTS_STREAM_OUTPUT / AIKG_STREAM_OUTPUT
+    if stream := get_akg_env_var("STREAM_OUTPUT"):
         settings.stream_output = stream.lower() in ("true", "1", "yes", "on")
         logger.debug(f"Loaded stream_output from env: {settings.stream_output}")
     
-    # AKG_AGENTS_DATA_COLLECT
-    if collect := os.getenv("AKG_AGENTS_DATA_COLLECT"):
+    # AKG_AGENTS_DATA_COLLECT / AIKG_DATA_COLLECT
+    if collect := get_akg_env_var("DATA_COLLECT"):
         settings.data_collect = collect.lower() in ("true", "1", "yes", "on")
         logger.debug(f"Loaded data_collect from env: {settings.data_collect}")
     
-    # Embedding 配置（AKG_AGENTS_EMBEDDING_*）
-    env_emb_base_url = os.getenv("AKG_AGENTS_EMBEDDING_BASE_URL")
-    env_emb_model_name = os.getenv("AKG_AGENTS_EMBEDDING_MODEL_NAME")
-    env_emb_api_key = os.getenv("AKG_AGENTS_EMBEDDING_API_KEY")
+    # Embedding 配置（AKG_AGENTS_EMBEDDING_* / AIKG_EMBEDDING_*）
+    env_emb_base_url = get_akg_env_var("EMBEDDING_BASE_URL")
+    env_emb_model_name = get_akg_env_var("EMBEDDING_MODEL_NAME")
+    env_emb_api_key = get_akg_env_var("EMBEDDING_API_KEY")
     
     if env_emb_base_url or env_emb_model_name or env_emb_api_key:
         settings.embedding = EmbeddingConfig(
             base_url=env_emb_base_url or "",
             api_key=env_emb_api_key or "",
             model_name=env_emb_model_name or "",
-            timeout=int(os.getenv("AKG_AGENTS_EMBEDDING_TIMEOUT", "60")),
+            timeout=int(get_akg_env_var("EMBEDDING_TIMEOUT", "60")),
         )
         logger.debug(f"Loaded embedding config from env: model={env_emb_model_name}")
     
@@ -409,7 +446,7 @@ def get_settings() -> AKGSettings:
     2. User: ~/.akg/settings.json
     3. Project: .akg/settings.json
     4. Local: .akg/settings.local.json
-    5. 环境变量（AKG_AGENTS_*）
+    5. 环境变量（AKG_AGENTS_* 或 AIKG_*，兼容旧版）
     
     高优先级配置会覆盖低优先级配置（只覆盖显式设置的字段）
     
@@ -483,14 +520,18 @@ def get_all_settings_paths() -> Dict[str, Optional[Path]]:
 def print_settings_info() -> None:
     """打印配置信息（用于调试）"""
     import os
-    # 检查环境变量
-    env_vars = {
-        "AKG_AGENTS_BASE_URL": os.getenv("AKG_AGENTS_BASE_URL"),
-        "AKG_AGENTS_API_KEY": os.getenv("AKG_AGENTS_API_KEY"),
-        "AKG_AGENTS_MODEL_NAME": os.getenv("AKG_AGENTS_MODEL_NAME"),
-        "AKG_AGENTS_MODEL_ENABLE_THINK": os.getenv("AKG_AGENTS_MODEL_ENABLE_THINK"),
-    }
-    has_env = any(v for v in env_vars.values())
+    # 检查环境变量（同时检查新旧两种前缀）
+    env_vars = {}
+    for key in ["BASE_URL", "API_KEY", "MODEL_NAME", "MODEL_ENABLE_THINK"]:
+        value = get_akg_env_var(key)
+        if value:
+            # 显示实际使用的环境变量名
+            new_key = f"AKG_AGENTS_{key}"
+            old_key = f"AIKG_{key}"
+            actual_key = new_key if os.getenv(new_key) else old_key
+            env_vars[actual_key] = value
+    
+    has_env = bool(env_vars)
     
     if has_env:
         print("=" * 60)
@@ -532,6 +573,7 @@ def print_settings_info() -> None:
             print(f"     thinking_enabled: {model.thinking_enabled}")
     
     print("\n💡 优先级: 环境变量 > Local > Project > User > 默认值")
+    print("💡 环境变量支持: AKG_AGENTS_* (推荐) 和 AIKG_* (兼容)")
     print("=" * 60)
 
 
@@ -547,22 +589,23 @@ def create_default_settings_file() -> None:
     default_settings = AKGSettings()
     
     # 添加示例模型配置
+    api_key_value = get_akg_env_var("API_KEY", "your-api-key-here")
     default_settings.models = {
         "complex": ModelConfig(
             base_url="https://api.openai.com/v1",
-            api_key=os.getenv("AKG_AGENTS_API_KEY", "your-api-key-here"),
+            api_key=api_key_value,
             model_name="gpt-4",
             temperature=0.0
         ),
         "standard": ModelConfig(
             base_url="https://api.openai.com/v1",
-            api_key=os.getenv("AKG_AGENTS_API_KEY", "your-api-key-here"),
+            api_key=api_key_value,
             model_name="gpt-3.5-turbo",
             temperature=0.0
         ),
         "fast": ModelConfig(
             base_url="https://api.openai.com/v1",
-            api_key=os.getenv("AKG_AGENTS_API_KEY", "your-api-key-here"),
+            api_key=api_key_value,
             model_name="gpt-3.5-turbo",
             temperature=0.3
         )
@@ -572,7 +615,7 @@ def create_default_settings_file() -> None:
     
     print(f"✨ Created default settings file at: {settings_path}")
     print("\n📝 Configuration priority (high to low):")
-    print("   1. Environment variables (AKG_AGENTS_*)")
+    print("   1. Environment variables (AKG_AGENTS_* or AIKG_*)")
     print("   2. Local:   .akg/settings.local.json  (gitignored)")
     print("   3. Project: .akg/settings.json        (shared with team)")
     print("   4. User:    ~/.akg/settings.json      (personal)")

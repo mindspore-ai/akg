@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from akg_agents import get_project_root
 from akg_agents.core.worker.manager import register_worker
 from akg_agents.utils.common_utils import load_yaml
+from akg_agents.core_v2.config.settings import get_akg_env_var
 
 
 # ============================================================================
@@ -296,9 +297,9 @@ class BatchAdaptiveSearchPool:
         self.device_pool = device_pool
         self.semaphore = asyncio.Semaphore(max_concurrency)
         
-        # 设备分配队列（用于避免设备冲突）
+        # 设备分配队列（用于避免设备冲突）（支持 AKG_AGENTS_* 和 AIKG_*）
         self.device_queue: Optional[asyncio.Queue] = None
-        if self.device_pool and not os.getenv("AKG_AGENTS_WORKER_URL"):
+        if self.device_pool and not get_akg_env_var("WORKER_URL"):
             self.device_queue = asyncio.Queue()
             for device_id in self.device_pool:
                 self.device_queue.put_nowait(device_id)

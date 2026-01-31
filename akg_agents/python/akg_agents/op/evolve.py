@@ -19,6 +19,7 @@ from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core.async_pool.device_pool import DevicePool
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.utils.collector import get_collector
+from akg_agents.core_v2.config.settings import get_akg_env_var
 
 # 导入处理器和配置
 from akg_agents.op.utils.evolve.evolution_processors import (
@@ -156,8 +157,8 @@ async def evolve(
         )
         round_implementations = round_data['round_implementations']
         
-        # 4.4 数据收集
-        if os.getenv("AKG_AGENTS_DATA_COLLECT", "off").lower() == "on":
+        # 4.4 数据收集（支持 AKG_AGENTS_* 和 AIKG_*）
+        if get_akg_env_var("DATA_COLLECT", "off").lower() == "on":
             try:
                 collector = await get_collector()
                 collector.set_config(config)

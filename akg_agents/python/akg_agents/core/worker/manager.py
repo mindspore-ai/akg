@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from .interface import WorkerInterface
+from akg_agents.core_v2.config.settings import get_akg_env_var
 
 logger = logging.getLogger(__name__)
 
@@ -189,10 +190,10 @@ async def register_remote_worker(backend: str, arch: str, worker_url: Optional[s
     from .remote_worker import RemoteWorker
     
     if worker_url is None:
-        worker_url = os.getenv("AKG_AGENTS_WORKER_URL")
+        worker_url = get_akg_env_var("WORKER_URL")
         if worker_url is None:
             raise ValueError(
-                "worker_url 未提供且环境变量 AKG_AGENTS_WORKER_URL 未设置。\n"
+                "worker_url 未提供且环境变量 AKG_AGENTS_WORKER_URL/AIKG_WORKER_URL 未设置。\n"
                 "请提供 worker_url 参数或设置环境变量：\n"
                 "  export AKG_AGENTS_WORKER_URL=http://localhost:9001"
             )
@@ -243,7 +244,7 @@ async def register_worker(
       2. 否则若提供 device_ids，则注册 LocalWorker
       3. 若均未提供，则抛出错误提示用户如何注册
     """
-    resolved_worker_url = worker_url or os.getenv("AKG_AGENTS_WORKER_URL")
+    resolved_worker_url = worker_url or get_akg_env_var("WORKER_URL")
     if resolved_worker_url:
         await register_remote_worker(
             backend=backend,

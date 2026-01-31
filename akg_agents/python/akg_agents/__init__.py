@@ -20,8 +20,9 @@ import os
 log_format = '%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s'
 log_datefmt = '%Y-%m-%d %H:%M:%S'
 
-# 根据AKG_AGENTS_LOG_LEVEL环境变量设置日志级别
-glog_level = os.getenv('AKG_AGENTS_LOG_LEVEL', '1')  # 默认为1 (INFO)
+# 根据 AKG_AGENTS_LOG_LEVEL/AIKG_LOG_LEVEL 环境变量设置日志级别（支持新旧两种前缀）
+from akg_agents.core_v2.config.settings import get_akg_env_var
+glog_level = get_akg_env_var('LOG_LEVEL', '1')  # 默认为1 (INFO)
 level_map = {
     '0': logging.DEBUG,
     '1': logging.INFO,

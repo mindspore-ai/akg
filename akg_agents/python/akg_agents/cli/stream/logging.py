@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 
 from akg_agents.cli.utils.paths import get_log_dir
+from akg_agents.core_v2.config.settings import get_akg_env_var
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,8 @@ def init_stream_renderer_logger(name: str) -> logging.Logger:
     if logger.handlers:
         return logger
 
-    log_level = _LOG_LEVEL_MAP.get(os.getenv("AKG_AGENTS_LOG_LEVEL", "1"), logging.INFO)
+    # 支持 AKG_AGENTS_LOG_LEVEL 和 AIKG_LOG_LEVEL（兼容）
+    log_level = _LOG_LEVEL_MAP.get(get_akg_env_var("LOG_LEVEL", "1"), logging.INFO)
     logger.setLevel(log_level)
 
     # 仅在需要时创建文件 Handler

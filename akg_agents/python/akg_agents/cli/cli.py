@@ -25,12 +25,14 @@ from __future__ import annotations
 # 在导入任何其他模块之前设置日志级别环境变量
 # 这样当 __init__.py 执行时就能读取到正确的日志级别
 import os
-if "AKG_AGENTS_LOG_LEVEL" not in os.environ:
+# 支持 AKG_AGENTS_LOG_LEVEL 和 AIKG_LOG_LEVEL（兼容）
+if "AKG_AGENTS_LOG_LEVEL" not in os.environ and "AIKG_LOG_LEVEL" not in os.environ:
     os.environ["AKG_AGENTS_LOG_LEVEL"] = "4"
 
 import logging
 # 立即配置日志级别，确保即使 __init__.py 已经执行过也能生效
-log_level_str = os.getenv("AKG_AGENTS_LOG_LEVEL", "4")
+from akg_agents.core_v2.config.settings import get_akg_env_var
+log_level_str = get_akg_env_var("LOG_LEVEL", "4")
 level_map = {
     "0": logging.DEBUG,
     "1": logging.INFO,

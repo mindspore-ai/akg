@@ -26,12 +26,13 @@ AgentBase - Agent 基类
 import os
 import logging
 from abc import ABC
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 
 # Jinja2 模板支持
 from jinja2 import Environment, BaseLoader
 
 from akg_agents.core_v2.config import get_settings
+from akg_agents.core_v2.config.settings import get_akg_env_var
 from akg_agents.core_v2.llm.factory import create_llm_client
 
 logger = logging.getLogger(__name__)
@@ -202,7 +203,7 @@ class AgentBase(ABC):
                 f"请检查模型配置文件：\n"
                 f"1. `.akg/settings.json` (项目级配置)\n"
                 f"2. `~/.akg/settings.json` (用户级配置)\n"
-                f"3. 或使用环境变量覆盖 (AKG_AGENTS_BASE_URL, AKG_AGENTS_API_KEY, AKG_AGENTS_MODEL_NAME)\n\n"
+                f"3. 或使用环境变量覆盖 (AKG_AGENTS_* 或 AIKG_*)\n\n"
                 f"详细配置说明请参考: docs/API.md\n\n"
                 f"使用的模型级别: {model_level}\n"
                 f"Agent: {agent_name}"
@@ -219,7 +220,7 @@ class AgentBase(ABC):
         
         优先级（从高到低）：
         1. ContextVar 覆盖（stream_output_override）
-        2. 环境变量 AKG_AGENTS_STREAM_OUTPUT
+        2. 环境变量 AKG_AGENTS_STREAM_OUTPUT 或 AIKG_STREAM_OUTPUT
         3. settings.json 中的 stream_output
         4. 默认值 False
         
@@ -237,8 +238,8 @@ class AgentBase(ABC):
         except Exception:
             pass
         
-        # 2. 环境变量
-        env_value = os.getenv("AKG_AGENTS_STREAM_OUTPUT")
+        # 2. 环境变量（支持 AKG_AGENTS_* 和 AIKG_*）
+        env_value = get_akg_env_var("STREAM_OUTPUT")
         if env_value is not None:
             return env_value.lower() == "on"
         
