@@ -102,7 +102,7 @@ class TorchToMfuseTypeConverter : public mlir::TypeConverter {
   static mlir::Value tryConvertConstant(mlir::OpBuilder &builder, mlir::Type toType, mlir::Value input,
                                         mlir::Location loc) {
     if (auto op = input.getDefiningOp<OpTy>()) {
-      if (auto ranked = toType.dyn_cast<mlir::RankedTensorType>()) {
+      if (auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(toType)) {
         auto denseAttr = mlir::DenseElementsAttr::get(ranked, op.getValueAttr());
         return builder.create<mlir::arith::ConstantOp>(loc, ranked, denseAttr).getResult();
       }

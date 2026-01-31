@@ -17,6 +17,7 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Recompose/RecomposePatterns.h"
 
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -50,8 +51,7 @@ class MfuseMetaOpsToAclnnPattern {
   }
 
   /// If trans is true, insert PermuteOp to swap last two dimensions and return new value; else return v.
-  static Value applyTransToValue(Value v, RankedTensorType type, bool trans,
-                                 PatternRewriter &rewriter) {
+  static Value applyTransToValue(Value v, RankedTensorType type, bool trans, PatternRewriter &rewriter) {
     if (!trans || type.getRank() < kRank2D) return v;
     SmallVector<int64_t> perm = permForTrans(type.getRank(), true);
     SmallVector<int64_t> outShape(type.getRank());
@@ -59,14 +59,12 @@ class MfuseMetaOpsToAclnnPattern {
       outShape[i] = type.getShape()[perm[i]];
     }
     auto outType = RankedTensorType::get(outShape, type.getElementType());
-    return rewriter.create<PermuteOp>(v.getLoc(), outType, v,
-                                      rewriter.getI64ArrayAttr(perm));
+    return rewriter.create<PermuteOp>(v.getLoc(), outType, v, rewriter.getI64ArrayAttr(perm));
   }
 
   /// Check if two shapes are compatible for broadcasting (bias can broadcast to result).
   /// Returns true if shapes are compatible, false otherwise.
-  static bool areShapesCompatibleForBroadcast(ArrayRef<int64_t> resultShape,
-                                              ArrayRef<int64_t> biasShape) {
+  static bool areShapesCompatibleForBroadcast(ArrayRef<int64_t> resultShape, ArrayRef<int64_t> biasShape) {
     if (resultShape == biasShape) {
       return true;
     }
@@ -80,8 +78,7 @@ class MfuseMetaOpsToAclnnPattern {
     for (int64_t i = 0; i < biasRank; ++i) {
       int64_t resultDim = resultShape[resultRank - biasRank + i];
       int64_t biasDim = biasShape[i];
-      if (resultDim != biasDim && resultDim != ShapedType::kDynamic &&
-          biasDim != ShapedType::kDynamic) {
+      if (resultDim != biasDim && resultDim != ShapedType::kDynamic && biasDim != ShapedType::kDynamic) {
         return false;
       }
     }
@@ -90,9 +87,8 @@ class MfuseMetaOpsToAclnnPattern {
 
   /// Reshape bias to be compatible with result shape for broadcasting.
   /// If bias shape already matches trailing dimensions, insert Reshape to add leading 1s.
-  static Value reshapeBiasForBroadcast(Value bias, RankedTensorType biasType,
-                                        RankedTensorType resultType,
-                                        PatternRewriter &rewriter) {
+  static Value reshapeBiasForBroadcast(Value bias, RankedTensorType biasType, RankedTensorType resultType,
+                                       PatternRewriter &rewriter) {
     Location loc = bias.getLoc();
     auto resultShape = resultType.getShape();
     auto biasShape = biasType.getShape();
@@ -115,19 +111,16 @@ class MfuseMetaOpsToAclnnPattern {
     }
 
     auto broadcastType = RankedTensorType::get(broadcastShape, biasType.getElementType());
-    auto shapeTensorType = RankedTensorType::get(
-        {static_cast<int64_t>(broadcastShape.size())},
-        rewriter.getIntegerType(64));
-    auto shapeAttr = DenseElementsAttr::get(shapeTensorType,
-                                            llvm::ArrayRef<int64_t>(broadcastShape));
+    auto shapeTensorType =
+      RankedTensorType::get({static_cast<int64_t>(broadcastShape.size())}, rewriter.getIntegerType(64));
+    auto shapeAttr = DenseElementsAttr::get(shapeTensorType, llvm::ArrayRef<int64_t>(broadcastShape));
     Value shapeVal = rewriter.create<arith::ConstantOp>(loc, shapeAttr);
     return rewriter.create<ReshapeOp>(loc, broadcastType, bias, shapeVal);
   }
 };
 
 /// Lower mfuse.matmul to aclnn.matmul, aclnn.mm (2D), or aclnn.batch_matmul. Inherits base for trans helpers.
-class MatmulToAclnnPattern : public OpRewritePattern<MatmulOp>,
-                             public MfuseMetaOpsToAclnnPattern {
+class MatmulToAclnnPattern : public OpRewritePattern<MatmulOp>, public MfuseMetaOpsToAclnnPattern {
  public:
   using OpRewritePattern<MatmulOp>::OpRewritePattern;
 
@@ -161,7 +154,7 @@ class MatmulToAclnnPattern : public OpRewritePattern<MatmulOp>,
 
 /// Lower mfuse.matmul_with_bias to aclnn.matmul/aclnn.mm/batch_matmul + aclnn.add. Inherits base for trans helpers.
 class MfuseMetaOpsMatMulWithBiasToAclnnPattern : public OpRewritePattern<MatmulWithBiasOp>,
-                                                public MfuseMetaOpsToAclnnPattern {
+                                                 public MfuseMetaOpsToAclnnPattern {
  public:
   using OpRewritePattern<MatmulWithBiasOp>::OpRewritePattern;
 
@@ -205,9 +198,70 @@ class MfuseMetaOpsMatMulWithBiasToAclnnPattern : public OpRewritePattern<MatmulW
     }
 
     auto scalarType = RankedTensorType::get({}, rewriter.getF32Type());
-    Value alphaOne = rewriter.create<arith::ConstantOp>(
-        loc, scalarType, DenseElementsAttr::get(scalarType, kAlphaOne));
+    Value alphaOne = rewriter.create<arith::ConstantOp>(loc, scalarType, DenseElementsAttr::get(scalarType, kAlphaOne));
     Value addResult = rewriter.create<AclnnAddOp>(loc, resultType, matmulResult, biasForAdd, alphaOne);
+    rewriter.replaceOp(op, addResult);
+    return success();
+  }
+};
+
+/// Lower mfuse.add to aclnn.add with alpha=1.0.
+class AddToAclnnAddPattern : public OpRewritePattern<AddOp> {
+ public:
+  using OpRewritePattern<AddOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(AddOp op, PatternRewriter &rewriter) const override {
+    Value x = op.getX();
+    Value y = op.getY();
+    auto xType = dyn_cast<RankedTensorType>(x.getType());
+    auto yType = dyn_cast<RankedTensorType>(y.getType());
+    // Only one operand allowed to be scalar (rank 0)
+    if (!xType || !yType) {
+      return failure();
+    }
+
+    Location loc = op.getLoc();
+    Type resultType = op.getResult().getType();
+    Value addX = x;
+    Value addY = y;
+
+    // Check if either operand is a mul operation with a scalar
+    double alphaScalar = kAlphaOne;
+    auto scalarType = RankedTensorType::get({}, rewriter.getF32Type());
+    Value alphaValue = nullptr;
+    // Helper function to process MulOp and extract tensor operand and alpha
+    auto processMulOp = [&](MulOp m, Value otherOperand, bool isXOperand) {
+      Value tensorOp;
+      if (isScalarMul(m, alphaScalar, tensorOp)) {
+        // mul(tensorOp, alphaScalar) ==> use tensorOp directly
+        addY = tensorOp;
+      } else if (isScalarOrSingleElement(m.getRhs().getType())) {
+        // mul(tensorOp, alphaScalar) ==> use tensorOp as addY, rhs as alpha
+        addY = m.getLhs();
+        alphaValue = m.getRhs();
+      } else if (isScalarOrSingleElement(m.getLhs().getType())) {
+        // mul(alphaScalar, tensorOp) ==> use tensorOp as addY, lhs as alpha
+        addY = m.getRhs();
+        alphaValue = m.getLhs();
+      } else {
+        return;
+      }
+      if (isXOperand) {
+        addX = otherOperand;
+      }
+    };
+
+    // Process MulOp for x first
+    if (auto m = x.getDefiningOp<MulOp>()) {
+      processMulOp(m, y, true);
+    } else if (auto m = y.getDefiningOp<MulOp>()) {
+      processMulOp(m, x, false);
+    }
+    if (!alphaValue) {
+      alphaValue = rewriter.create<arith::ConstantOp>(loc, scalarType, DenseElementsAttr::get(scalarType, alphaScalar));
+    }
+    // Replace with aclnn.add
+    Value addResult = rewriter.create<AclnnAddOp>(loc, resultType, addX, addY, alphaValue);
     rewriter.replaceOp(op, addResult);
     return success();
   }
@@ -216,8 +270,8 @@ class MfuseMetaOpsMatMulWithBiasToAclnnPattern : public OpRewritePattern<MatmulW
 }  // namespace
 
 void registerMfuseMetaOpsToAclnnPatterns(RewritePatternSet &patterns) {
-  patterns.add<MatmulToAclnnPattern, MfuseMetaOpsMatMulWithBiasToAclnnPattern>(
-      patterns.getContext());
+  patterns.add<AddToAclnnAddPattern>(patterns.getContext());
+  patterns.add<MatmulToAclnnPattern, MfuseMetaOpsMatMulWithBiasToAclnnPattern>(patterns.getContext());
 }
 
 }  // namespace mlir::mfuse

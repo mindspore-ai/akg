@@ -26,6 +26,7 @@
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchTypes.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
 
 namespace mlir {
 
@@ -46,7 +47,7 @@ class ConvertMfuseAclnnAdd : public mlir::OpConversionPattern<mlir::mfuse::Aclnn
                                       mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Value x = adaptor.getX();
     mlir::Value y = adaptor.getY();
-    mlir::Value alpha = adaptor.getAlpha();
+    mlir::Value alpha = op.getAlpha();
     // Adaptor may give type-converted operands; look through UnrealizedConversionCastOp to find the source constant.
     mlir::Value alphaForConst = alpha;
     if (auto cast = alpha.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
@@ -64,9 +65,8 @@ class ConvertMfuseAclnnAdd : public mlir::OpConversionPattern<mlir::mfuse::Aclnn
         mlir::FloatAttr valueAttr = rewriter.getFloatAttr(rewriter.getF64Type(), val);
         alphaScalar = rewriter.create<TorchD::ConstantFloatOp>(op.getLoc(), valueAttr);
       }
-    }
-    if (!alphaScalar) {
-      return rewriter.notifyMatchFailure(op, "alpha must be a constant rank-0 float tensor");
+    } else {
+      alphaScalar = alphaForConst;
     }
 
     mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
@@ -74,6 +74,39 @@ class ConvertMfuseAclnnAdd : public mlir::OpConversionPattern<mlir::mfuse::Aclnn
       return mlir::failure();
     }
     rewriter.replaceOpWithNewOp<TorchD::AtenAddTensorOp>(op, resultType, x, y, alphaScalar);
+    return mlir::success();
+  }
+};
+
+/// Converts mfuse.aclnn.add_rms_norm -> torch.npu.npu_add_rms_norm, materializing epsilon as Torch scalar.
+class ConvertMfuseAclnnAddRmsNorm : public mlir::OpConversionPattern<mlir::mfuse::AclnnAddRmsNormOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnAddRmsNormOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value x1 = adaptor.getX1();
+    mlir::Value x2 = adaptor.getX2();
+    mlir::Value gamma = adaptor.getGamma();
+    // Create epsilon scalar as Torch constant directly from the existing FloatAttr
+    mlir::Value epsilonScalar = rewriter.create<TorchD::ConstantFloatOp>(
+      op.getLoc(), mlir::FloatAttr::get(mlir::Float64Type::get(rewriter.getContext()), op.getEpsilon()));
+    // Get all result types
+    mlir::SmallVector<mlir::Type> resultTypes;
+    resultTypes.reserve(op.getNumResults());
+    for (unsigned i = 0; i < op.getNumResults(); ++i) {
+      mlir::Type convertedType = getTypeConverter()->convertType(op.getResult(i).getType());
+      if (!convertedType) {
+        return mlir::failure();
+      }
+      resultTypes.push_back(convertedType);
+    }
+
+    // Create torch.operator for npu_add_rms_norm
+    mlir::SmallVector<mlir::Value> operands = {x1, x2, gamma, epsilonScalar};
+    unsigned numRegions = 0;
+    rewriter.replaceOpWithNewOp<TorchD::OperatorOp>(
+      op, resultTypes, rewriter.getStringAttr("torch.npu.npu_add_rms_norm"), operands, numRegions);
     return mlir::success();
   }
 };
@@ -87,6 +120,7 @@ class ConvertMfuseAclnnAdd : public mlir::OpConversionPattern<mlir::mfuse::Aclnn
 void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseAclnnAdd>(converter, context);
+  patterns.add<ConvertMfuseAclnnAddRmsNorm>(converter, context);
 }
 
 }  // namespace mlir
