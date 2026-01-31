@@ -114,6 +114,7 @@ class AkgMlirDriver:
         dynamic_shape: bool = False,
         log_level: bool = "INFO",
         dump_ir=False,
+        mlir_timing=False,
         repo_path: str = "",
         profiling_trails=0,
         runtime_provider="MindSpore",
@@ -137,6 +138,7 @@ class AkgMlirDriver:
         self.target_info = ""
         self.arch = ""
         self.dump_ir = dump_ir
+        self.mlir_timing = mlir_timing
         self.repo_path = repo_path
         self.profiling_trails = profiling_trails
         self.runtime_provider = runtime_provider
@@ -263,6 +265,9 @@ class AkgMlirDriver:
         cmd = [os.path.join(self.akg_tools_dir, "bin/akg-opt"), input_file, cpu_opt_option, "-o", out_file]
         if self.dump_ir:
             cmd.append("--mlir-print-ir-after-all")
+        if self.mlir_timing:
+            cmd.append("--mlir-timing")
+
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
             if self.dump_ir:
@@ -292,6 +297,7 @@ class AkgMlirDriver:
             enable_loop_fusion=self.enable_loop_fusion,
             arch=self.arch,
             dump_ir=self.dump_ir,
+            mlir_timing=self.mlir_timing,
             dump_log_path=dump_log_path
         )
 
@@ -528,6 +534,9 @@ class AkgMlirDriver:
         cmd = [os.path.join(self.akg_tools_dir, "bin/akg-opt"), input_file, opt_pipeline, "-o", out_file]
         if self.dump_ir:
             cmd.append("--mlir-print-ir-after-all")
+        if self.mlir_timing:
+            cmd.append("--mlir-timing")
+
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
             if self.dump_ir:
