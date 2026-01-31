@@ -65,4 +65,24 @@ def ConvertMfuseToTorch : Pass<"convert-mfuse-to-torch", "::mlir::ModuleOp"> {
   ];
 }
 
+def ConvertMfuseToDvm : Pass<"convert-mfuse-to-dvm", "::mlir::ModuleOp"> {
+  let summary = "Convert outlined Mfuse subgraphs to DVM dialect operations";
+
+  let description = [{
+    This pass converts Mfuse operations inside functions tagged with
+    'mfusion.outlined' and fusion_type == "dvm" into DVM dialect operations,
+    while leaving the main graph in Mfuse dialect. It also lifts constants to
+    arguments and inserts dvm.load/dvm.store for graph IO semantics.
+  }];
+
+  let constructor = "mlir::createConvertMfuseToDvmPass()";
+
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::dvm::DvmDialect",
+    "::mlir::func::FuncDialect",
+    "::mlir::arith::ArithDialect"
+  ];
+}
+
 #endif // MFUSION_CONVERSION_PASSES
