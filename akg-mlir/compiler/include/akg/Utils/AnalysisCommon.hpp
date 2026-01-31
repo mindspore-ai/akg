@@ -70,6 +70,7 @@ constexpr auto kNEONInstructionSet = "neon";
 constexpr auto kTileForOneAttr = "__tiled_for___1";
 constexpr auto kMapForToForallAttr = "map_for_to_forall";
 constexpr auto kVectorAttr = "vector";
+constexpr auto kSkipVectorizeAttr = "skip_vectorize";
 constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
 constexpr auto kBlockDimAttr = "hacc.block_dim";
 constexpr auto kBlockDimSize = 40;
@@ -592,6 +593,37 @@ class CommonUtils {
     return redOps;
   }
 
+  static void collectDestEachDim(SmallVector<Value> &dest, SmallVector<SmallVector<Operation *, 8>> &axesDestEachDim) {
+    for (auto idx : dest) {
+      SmallVector<Operation *, 8> axesDesc;
+      collectRelatedAxes(idx, axesDesc);
+      (void)std::unique(axesDesc.begin(), axesDesc.end());
+      axesDestEachDim.push_back(axesDesc);
+    }
+  }
+
+  static void collectSrcEachDim(SmallVector<Value> &src, SmallVector<SmallVector<Operation *, 8>> &axesSrcEachDim) {
+    for (auto idx : src) {
+      SmallVector<Operation *, 8> axesSrc;
+      collectRelatedAxes(idx, axesSrc);
+      (void)std::unique(axesSrc.begin(), axesSrc.end());
+      // Skip empty arrays (e.g., from constant indices)
+      if (axesSrc.empty()) {
+        continue;
+      }
+      bool isDuplicated = false;
+      for (auto arr : axesSrcEachDim) {
+        if (!arr.empty() && arr[0] == axesSrc[0]) {
+          isDuplicated = true;
+          break;
+        }
+      }
+      if (!isDuplicated) {
+        axesSrcEachDim.push_back(axesSrc);
+      }
+    }
+  }
+
   static void collectReductionAxesEachDimImpl(Operation *funcOp, SmallVector<SmallVector<Operation *, 8>> &res,
                                               SmallVector<Operation *> &redOps) {
     for (auto redOp : redOps) {
@@ -605,31 +637,8 @@ class CommonUtils {
 
       SmallVector<SmallVector<Operation *, 8>> axesDestEachDim;
       SmallVector<SmallVector<Operation *, 8>> axesSrcEachDim;
-      for (auto idx : indexDest) {
-        SmallVector<Operation *, 8> axesDesc;
-        collectRelatedAxes(idx, axesDesc);
-        (void)std::unique(axesDesc.begin(), axesDesc.end());
-        axesDestEachDim.push_back(axesDesc);
-      }
-      for (auto idx : indexSrc) {
-        SmallVector<Operation *, 8> axesSrc;
-        collectRelatedAxes(idx, axesSrc);
-        (void)std::unique(axesSrc.begin(), axesSrc.end());
-        // Skip empty arrays (e.g., from constant indices)
-        if (axesSrc.empty()) {
-          continue;
-        }
-        bool isDuplicated = false;
-        for (auto arr : axesSrcEachDim) {
-          if (!arr.empty() && arr[0] == axesSrc[0]) {
-            isDuplicated = true;
-            break;
-          }
-        }
-        if (!isDuplicated) {
-          axesSrcEachDim.push_back(axesSrc);
-        }
-      }
+      collectDestEachDim(indexDest, axesDestEachDim);
+      collectSrcEachDim(indexSrc, axesSrcEachDim);
       SmallVector<Operation *, 8> axesDestFlatten;
       for (auto axesDesc : axesDestEachDim) {
         for (auto axisDest : axesDesc) {
