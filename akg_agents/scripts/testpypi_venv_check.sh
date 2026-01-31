@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PKG_NAME="${1:-ai-kernel-generator}"
+PKG_NAME="${1:-akg_agents}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_VERSION="$(cat "${SCRIPT_DIR}/../version.txt" 2>/dev/null || echo "0.1.0")"
 PKG_VERSION="${2:-${DEFAULT_VERSION}}"
