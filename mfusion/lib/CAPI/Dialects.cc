@@ -16,6 +16,8 @@
 
 #include "mfusion-c/Dialects.h"
 
+#include "mfusion/Dialect/Dvm/DvmDialect.h"
+#include "mfusion/Dialect/Dvm/Dvm.h"
 #include "mfusion/Dialect/Mfuse/MfuseDialect.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mlir/CAPI/Registration.h"
@@ -23,6 +25,7 @@
 #include "mlir-c/BuiltinAttributes.h"
 
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Mfuse, mfuse, mlir::mfuse::MfuseDialect)
+MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Dvm, dvm, mlir::dvm::DvmDialect)
 
 bool mlirAttributeIsAMfuseDeviceAttr(MlirAttribute attr) { return llvm::isa<mlir::mfuse::DeviceAttr>(unwrap(attr)); }
 

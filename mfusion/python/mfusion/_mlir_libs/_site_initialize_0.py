@@ -34,9 +34,10 @@ def context_init_hook(context):
         context: MlirContext object to initialize
     """
 
-    from ._mfusion import register_mfuse_dialect
+    from ._mfusion import register_mfuse_dialect, register_dvm_dialect
 
     register_mfuse_dialect(context)
+    register_dvm_dialect(context)
 
     # Allow unregistered dialects for flexibility
     context.allow_unregistered_dialects = True
