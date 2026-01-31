@@ -36,6 +36,9 @@ class CMakeBuild(build_ext):
         # Get BUILD_TYPE from environment variable, default to Release
         build_type = os.environ.get("BUILD_TYPE", "Release")
         cmake_args.append(f"-DCMAKE_BUILD_TYPE={build_type}")
+        cmake_prefix_path = os.environ.get("CMAKE_PREFIX_PATH")
+        if cmake_prefix_path:
+            cmake_args.append(f"-DCMAKE_PREFIX_PATH={cmake_prefix_path}")
 
         # Configure with CMake
         if os.environ.get("INC_BUILD", "0") != "1":
