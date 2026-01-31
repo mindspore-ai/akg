@@ -299,6 +299,104 @@ void MemRefDependenceGraphForFusion::print(raw_ostream &os) const {
   }
 }
 
+static llvm::ArrayRef<int64_t> getStaticShape(Value memrefVal,
+                                              llvm::SmallVector<int64_t, 4> &shapeBuf) {
+  auto memrefType = memrefVal.getType().dyn_cast<mlir::MemRefType>();
+  if (!memrefType || !memrefType.hasStaticShape()) {
+    return {};
+  }
+  shapeBuf.assign(memrefType.getShape().begin(), memrefType.getShape().end());
+  return shapeBuf;
+}
+
+static int64_t getShapeProduct(llvm::ArrayRef<int64_t> shape) {
+  if (shape.empty())
+    return -1;
+  int64_t prod = 1;
+  for (int64_t d : shape) {
+    if (d < 0)
+      return -1;
+    prod *= d;
+  }
+  return prod;
+}
+
+static bool isSameShape(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
+  if (a.size() != b.size())
+    return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (a[i] != b[i])
+      return false;
+  }
+  return true;
+}
+
+static bool isPermutationShape(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
+  if (a.size() != b.size())
+    return false;
+  llvm::SmallVector<int64_t, 4> aSorted(a.begin(), a.end());
+  llvm::SmallVector<int64_t, 4> bSorted(b.begin(), b.end());
+  std::sort(aSorted.begin(), aSorted.end());
+  std::sort(bSorted.begin(), bSorted.end());
+  return isSameShape(aSorted, bSorted);
+}
+
+static bool isBroadcastLike(llvm::ArrayRef<int64_t> inShape,
+                            llvm::ArrayRef<int64_t> outShape) {
+  if (inShape.size() != outShape.size())
+    return false;
+
+  bool diffFound = false;
+  for (size_t i = 0; i < inShape.size(); ++i) {
+    auto inD  = inShape[i];
+    auto outD = outShape[i];
+    if (inD == outD)
+      continue;
+
+    diffFound = true;
+    if (inD != 1) {
+      return false;
+    }
+  }
+  return diffFound;
+}
+
+static void classifyIOShape(llvm::ArrayRef<int64_t> inShape,
+                            llvm::ArrayRef<int64_t> outShape,
+                            bool &hasElementwise,
+                            bool &hasBroadcast,
+                            bool &hasReshape,
+                            bool &hasTranspose) {
+  if (inShape.empty() || outShape.empty())
+    return;
+
+  if (isSameShape(inShape, outShape)) {
+    hasElementwise = true;
+    return;
+  }
+
+  if (inShape.size() == outShape.size()) {
+    if (isPermutationShape(inShape, outShape)) {
+      hasTranspose = true;
+      return;
+    }
+    if (isBroadcastLike(inShape, outShape)) {
+      hasBroadcast = true;
+      return;
+    }
+
+    hasBroadcast = true;
+    return;
+  }
+
+  auto inProd  = getShapeProduct(inShape);
+  auto outProd = getShapeProduct(outShape);
+  if (inProd > 0 && outProd > 0 && inProd == outProd) {
+    hasReshape = true;
+  }
+}
+
+
 OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<unsigned> &nodes) {
   SmallVector<affine::AffineLoadOp> loads;
   SmallVector<affine::AffineStoreOp> stores;
@@ -307,28 +405,72 @@ OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<
     if (op->hasAttr("reduction_type")) {
       return OperatorTemplate::Reduce;
     }
-    if (isElementwiseOp(op)) {
-      if (elementwiseMatch(op)) {
-        return OperatorTemplate::Elementwise;
-      } else {
-        return OperatorTemplate::Broadcast;
-      }
-    }
+
     if (isa<memref::ExpandShapeOp, memref::CollapseShapeOp>(op)) {
       // TODO(baiji): cannot identify reshape by op after FoldMemRefAliasOps pass
       return OperatorTemplate::Reshape;
     }
-    if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
-      loads.emplace_back(load);
-    }
+  }
+
+  for (auto nid : nodes) {
+    auto *op = getNode(nid)->op;
     if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
-      stores.emplace_back(store);
+      stores.push_back(store);
+    } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
+      loads.push_back(load);
     }
   }
-  if (loads.size() == 1 && stores.size() == 1) {
-    // TODO(hjh): check transpose
+
+  if (stores.size() != 1) {
+    return OperatorTemplate::Default;
+  }
+
+  if (loads.empty()) {
+      return OperatorTemplate::Elementwise;
+  }
+
+  auto store = stores.front();
+  Value outMemref = store.getMemRef();
+
+  llvm::SmallVector<int64_t, 4> outShapeBuf;
+  auto outShape = getStaticShape(outMemref, outShapeBuf);
+  if (outShape.empty()) {
+    return OperatorTemplate::Default;
+  }
+
+  bool hasElementwise = false;
+  bool hasBroadcast   = false;
+  bool hasReshape     = false;
+  bool hasTranspose   = false;
+
+  for (auto load : loads) {
+    Value inMemref = load.getMemRef();
+    llvm::SmallVector<int64_t, 4> inShapeBuf;
+    auto inShape = getStaticShape(inMemref, inShapeBuf);
+    if (inShape.empty()) {
+      continue;
+    }
+
+    classifyIOShape(inShape, outShape,
+                    hasElementwise,
+                    hasBroadcast,
+                    hasReshape,
+                    hasTranspose);
+  }
+
+  if (hasTranspose) {
     return OperatorTemplate::Transpose;
   }
+  if (hasReshape) {
+    return OperatorTemplate::Reshape;
+  }
+  if (hasBroadcast) {
+    return OperatorTemplate::Broadcast;
+  }
+  if (hasElementwise) {
+    return OperatorTemplate::Elementwise;
+  }
+
   return OperatorTemplate::Default;
 }
 
