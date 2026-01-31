@@ -267,6 +267,20 @@ static WalkResult legalizeMemrefCollapseShapeOp(memref::CollapseShapeOp collapse
   return WalkResult::advance();
 }
 
+static WalkResult legalizeMemrefReshapeOp(memref::ReshapeOp reshapeOp) {
+  auto srcType = dyn_cast<MemRefType>(reshapeOp.getSource().getType());
+  auto dstType = dyn_cast<MemRefType>(reshapeOp.getResult().getType());
+  if (!srcType || !dstType) {
+    return WalkResult::advance();
+  }
+  Type expectedElemType = srcType.getElementType();
+  if (dstType.getElementType() != expectedElemType) {
+    reshapeOp.getResult().setType(
+        MemRefType::get(dstType.getShape(), expectedElemType, dstType.getLayout(), dstType.getMemorySpace()));
+  }
+  return WalkResult::advance();
+}
+
 static WalkResult legalizeArithSelectOp(arith::SelectOp selectOp) {
   Value cond = selectOp.getCondition();
   if (cond.getType().isInteger(8)) {
@@ -335,6 +349,10 @@ static LogicalResult legalizeOpsWithSingleWalk(func::FuncOp func) {
 
     if (auto collapseOp = dyn_cast<memref::CollapseShapeOp>(op)) {
       return legalizeMemrefCollapseShapeOp(collapseOp);
+    }
+
+    if (auto reshapeOp = dyn_cast<memref::ReshapeOp>(op)) {
+      return legalizeMemrefReshapeOp(reshapeOp);
     }
 
     if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
