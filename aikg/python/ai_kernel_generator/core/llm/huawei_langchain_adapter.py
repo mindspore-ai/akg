@@ -18,9 +18,13 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     SystemMessage,
+    ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.callbacks import CallbackManagerForLLMRun, AsyncCallbackManagerForLLMRun
+from langchain_core.tools import BaseTool
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from langchain_core.runnables import Runnable, RunnableBinding
 from pydantic import Field
 
 
@@ -54,7 +58,7 @@ def sign_request(app_id, app_key, service_uri, http_method, request_date, args):
     return signature
 
 
-class HuaweiCloudChatModel(BaseChatModel):
+class HuaweiChatModel(BaseChatModel):
     """
     华为AKSK认证的LangChain Chat Model
     
@@ -80,7 +84,7 @@ class HuaweiCloudChatModel(BaseChatModel):
     @property
     def _llm_type(self) -> str:
         """返回LLM类型标识"""
-        return "huawei_cloud_chat"
+        return "huawei_chat"
     
     @property
     def _identifying_params(self) -> Dict[str, Any]:
@@ -116,7 +120,7 @@ class HuaweiCloudChatModel(BaseChatModel):
         
         return headers
     
-    def _convert_messages_to_api_format(self, messages: List[BaseMessage]) -> List[Dict[str, str]]:
+    def _convert_messages_to_api_format(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
         """将LangChain消息格式转换为API格式"""
         api_messages = []
         
@@ -126,7 +130,18 @@ class HuaweiCloudChatModel(BaseChatModel):
             elif isinstance(msg, HumanMessage):
                 api_messages.append({"role": "user", "content": msg.content})
             elif isinstance(msg, AIMessage):
-                api_messages.append({"role": "assistant", "content": msg.content})
+                msg_dict = {"role": "assistant", "content": msg.content or ""}
+                # 处理tool_calls
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    msg_dict["tool_calls"] = msg.tool_calls
+                api_messages.append(msg_dict)
+            elif isinstance(msg, ToolMessage):
+                # 将ToolMessage转换为tool响应格式
+                api_messages.append({
+                    "role": "tool",
+                    "content": msg.content,
+                    "tool_call_id": msg.tool_call_id
+                })
             else:
                 # 其他类型消息转为用户消息
                 api_messages.append({"role": "user", "content": str(msg.content)})
@@ -154,6 +169,14 @@ class HuaweiCloudChatModel(BaseChatModel):
         if stop:
             request_body["stop"] = stop
         
+        # 添加tools参数（如果有）
+        if "tools" in kwargs and kwargs["tools"]:
+            request_body["tools"] = kwargs["tools"]
+        
+        # 添加tool_choice参数（如果有）
+        if "tool_choice" in kwargs and kwargs["tool_choice"]:
+            request_body["tool_choice"] = kwargs["tool_choice"]
+        
         # 构造请求头
         headers = self._build_headers(method="POST")
         
@@ -180,10 +203,26 @@ class HuaweiCloudChatModel(BaseChatModel):
             raise Exception(f"API返回格式错误: {result}")
         
         choice = result["choices"][0]
-        message_content = choice.get("message", {}).get("content", "")
+        message_data = choice.get("message", {})
+        message_content = message_data.get("content", "") or ""
         
         # 构造LangChain响应
-        message = AIMessage(content=message_content)
+        additional_kwargs = {}
+        tool_calls = message_data.get("tool_calls", [])
+        
+        if tool_calls:
+            additional_kwargs["tool_calls"] = tool_calls
+        
+        message = AIMessage(
+            content=message_content,
+            additional_kwargs=additional_kwargs
+        )
+        
+        # 如果有tool_calls，将其设置为message的属性
+        if tool_calls:
+            # LangChain需要的格式
+            message.tool_calls = tool_calls
+        
         generation = ChatGeneration(message=message)
         
         # 添加token使用信息（如果有）
@@ -232,6 +271,14 @@ class HuaweiCloudChatModel(BaseChatModel):
         if stop:
             request_body["stop"] = stop
         
+        # 添加tools参数（如果有）
+        if "tools" in kwargs and kwargs["tools"]:
+            request_body["tools"] = kwargs["tools"]
+        
+        # 添加tool_choice参数（如果有）
+        if "tool_choice" in kwargs and kwargs["tool_choice"]:
+            request_body["tool_choice"] = kwargs["tool_choice"]
+        
         # 构造请求头
         headers = self._build_headers(method="POST")
         
@@ -278,15 +325,28 @@ class HuaweiCloudChatModel(BaseChatModel):
                     if "choices" in data and len(data["choices"]) > 0:
                         delta = data["choices"][0].get("delta", {})
                         content = delta.get("content", "")
+                        tool_calls = delta.get("tool_calls", [])
                         
-                        if content:
+                        # 构造additional_kwargs
+                        additional_kwargs = {}
+                        if tool_calls:
+                            additional_kwargs["tool_calls"] = tool_calls
+                        
+                        if content or tool_calls:
                             # 构造LangChain chunk
-                            chunk = ChatGenerationChunk(
-                                message=AIMessageChunk(content=content)
+                            chunk_message = AIMessageChunk(
+                                content=content,
+                                additional_kwargs=additional_kwargs
                             )
                             
+                            # 如果有tool_calls，设置为属性
+                            if tool_calls:
+                                chunk_message.tool_calls = tool_calls
+                            
+                            chunk = ChatGenerationChunk(message=chunk_message)
+                            
                             # 回调
-                            if run_manager:
+                            if run_manager and content:
                                 run_manager.on_llm_new_token(content)
                             
                             yield chunk
@@ -309,6 +369,39 @@ class HuaweiCloudChatModel(BaseChatModel):
             if run_manager:
                 await run_manager.on_llm_new_token(chunk.message.content)
             yield chunk
+    
+    def bind_tools(
+        self,
+        tools: List[Union[Dict[str, Any], type, BaseTool]],
+        **kwargs: Any,
+    ) -> Runnable:
+        """
+        绑定工具到模型
+        
+        Args:
+            tools: 工具列表，可以是dict、type或BaseTool
+            **kwargs: 其他参数，例如tool_choice
+        
+        Returns:
+            一个绑定了工具的Runnable
+        """
+        # 将工具转换为OpenAI格式（华为API兼容OpenAI格式）
+        formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
+        
+        # 构建bind参数
+        bind_kwargs = {"tools": formatted_tools}
+        
+        # 处理tool_choice参数
+        if "tool_choice" in kwargs:
+            tool_choice = kwargs.pop("tool_choice")
+            if tool_choice:
+                bind_kwargs["tool_choice"] = tool_choice
+        
+        # 添加其他kwargs
+        bind_kwargs.update(kwargs)
+        
+        # 调用父类的bind方法
+        return super().bind(**bind_kwargs)
 
 
 def create_huawei_chat_model(
@@ -317,7 +410,7 @@ def create_huawei_chat_model(
     apigw_host: str,
     model_name: str = "Qwen3-30B-A3B-Instruct-2507",
     **kwargs
-) -> HuaweiCloudChatModel:
+) -> HuaweiChatModel:
     """
     便捷函数：创建华为Chat Model
     
@@ -329,9 +422,9 @@ def create_huawei_chat_model(
         **kwargs: 其他参数（temperature, max_tokens等）
     
     Returns:
-        HuaweiCloudChatModel实例
+        HuaweiChatModel实例
     """
-    return HuaweiCloudChatModel(
+    return HuaweiChatModel(
         access_key=access_key,
         secret_key=secret_key,
         apigw_host=apigw_host,
