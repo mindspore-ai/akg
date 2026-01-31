@@ -245,10 +245,10 @@ grid = (self.VEC_CORE_NUM,)  # 在 kernel 内循环
 
 ### 4. 参数传递
 ```python
-# ✅ 正确：所有参数作为位置参数传递
+# 正确：正确：所有参数作为位置参数传递
 kernel[grid](output, input, M, N, BLOCK_SIZE=1024)
 
-# ❌ 错误：使用关键字参数传递非 constexpr 参数
+# 错误：错误：使用关键字参数传递非 constexpr 参数
 kernel[grid](output=output, input=input, M=M, N=N)
 ```
 

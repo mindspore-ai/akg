@@ -58,9 +58,9 @@ def elementwise_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constex
 ```
 
 **优势**:
-- ✅ `.contiguous()` 一次性开销 vs stride 每次访问都有开销
-- ✅ 更好的缓存命中率
-- ✅ 编译器优化更容易
+- 正确：`.contiguous()` 一次性开销 vs stride 每次访问都有开销
+- 正确：更好的缓存命中率
+- 正确：编译器优化更容易
 
 **方案 2: 使用 stride 访问（不推荐）**
 

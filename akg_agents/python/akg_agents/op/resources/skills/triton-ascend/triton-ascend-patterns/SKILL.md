@@ -43,9 +43,9 @@ def vector_add_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
 - 数学函数: exp, log, sqrt, pow
 
 ### 关键要点
-- ✅ 使用一维索引和偏移
-- ✅ 边界处理用 `mask`
-- ✅ 简单直接的数据流：加载 → 计算 → 存储
+- 正确：使用一维索引和偏移
+- 正确：边界处理用 `mask`
+- 正确：简单直接的数据流：加载 → 计算 → 存储
 
 ## 3.2 归约模式
 
@@ -77,9 +77,9 @@ def reduction_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr
 - 统计: variance, std
 
 ### 关键要点
-- ✅ 块内归约：使用 `tl.sum`, `tl.max` 等
-- ✅ 原子操作：使用 `tl.atomic_add` 等写回全局内存
-- ✅ 数值稳定性：减去最大值防止溢出（见 triton-ascend-reduce）
+- 正确：块内归约：使用 `tl.sum`, `tl.max` 等
+- 正确：原子操作：使用 `tl.atomic_add` 等写回全局内存
+- 正确：数值稳定性：减去最大值防止溢出（见 triton-ascend-reduce）
 
 ## 3.3 矩阵乘法模式
 
@@ -167,11 +167,11 @@ class ModelNew(torch.nn.Module):
 - 其他多维计算
 
 ### 关键要点
-- ✅ **固定核心数启动**: 使用 `grid=(num_cores,)` 而非 `(NUM_BLOCKS,)`
-- ✅ **循环处理多块**: 每个核心通过 `for block_idx in range(pid, NUM_BLOCKS, num_cores)` 循环处理多个块
-- ✅ **分块计算**: 将大矩阵分成小块，减少内存占用
-- ✅ **K维度循环**: 累加多个部分乘积
-- ❌ **避免错误**: 不要为每个块启动一个程序
+- 正确：**固定核心数启动**: 使用 `grid=(num_cores,)` 而非 `(NUM_BLOCKS,)`
+- 正确：**循环处理多块**: 每个核心通过 `for block_idx in range(pid, NUM_BLOCKS, num_cores)` 循环处理多个块
+- 正确：**分块计算**: 将大矩阵分成小块，减少内存占用
+- 正确：**K维度循环**: 累加多个部分乘积
+- 错误：**避免错误**: 不要为每个块启动一个程序
 
 ## 模式选择指南
 

@@ -22,12 +22,12 @@ Grid 配置是 Triton Kernel 启动的关键。本文档提供 Triton Ascend 的
 - 支持的格式：`(x,)`, `(x, y)`, `(x, y, z)`
 
 ```python
-# ✅ 正确
+# 正确：正确
 grid = (100,)
 grid = (100, 200)
 grid = (100, 200, 50)
 
-# ❌ 错误
+# 错误：错误
 grid = 100  # 必须是 tuple
 grid = [100, 200]  # 必须是 tuple，不能是 list
 ```
@@ -37,12 +37,12 @@ grid = [100, 200]  # 必须是 tuple，不能是 list
 - 即 `x * y * z <= 65535`
 
 ```python
-# ✅ 正确
+# 正确：正确
 grid = (65535,)  # 65535 <= 65535
 grid = (255, 255)  # 255 * 255 = 65025 <= 65535
 grid = (40, 40, 40)  # 40 * 40 * 40 = 64000 <= 65535
 
-# ❌ 错误
+# 错误：错误
 grid = (70000,)  # 70000 > 65535
 grid = (300, 300)  # 300 * 300 = 90000 > 65535
 ```
@@ -89,7 +89,7 @@ def large_kernel(
 - 输入 shape: `(327680, 1024)`
 - BLOCK_SIZE: 1024
 - Grid 需求: `327680 / 1024 = 320` (每行一个 block)
-- 如果有多行：`327680 > 65535` ❌ 超限！
+- 如果有多行：`327680 > 65535` 错误：超限！
 
 ---
 
@@ -238,14 +238,14 @@ class ModelNew(torch.nn.Module):
 **禁止在 forward 中调用 `get_device_limit`**
 
 ```python
-# ❌ 错误：每次 forward 都调用，触发设备同步
+# 错误：错误：每次 forward 都调用，触发设备同步
 class ModelNew(torch.nn.Module):
     def forward(self, input_tensor):
         core_num = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 48)
         grid = (core_num,)
         ...
 
-# ✅ 正确：在 __init__ 中调用，只执行一次
+# 正确：正确：在 __init__ 中调用，只执行一次
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()

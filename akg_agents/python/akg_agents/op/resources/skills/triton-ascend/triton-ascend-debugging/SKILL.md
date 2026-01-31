@@ -100,11 +100,11 @@ metadata:
 
 **常见修复**:
 ```python
-# ❌ 错误：while 循环
+# 错误：错误：while 循环
 while condition:
     do_something()
 
-# ✅ 正确：for + if
+# 正确：正确：for + if
 for i in range(MAX_ITERS):
     if i < condition:
         do_something()

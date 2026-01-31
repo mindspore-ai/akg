@@ -143,7 +143,7 @@ def elementwise_kernel(
 ### 不推荐方案：使用 stride 访问
 
 ```python
-# ❌ 不推荐：每次 load/store 都需计算 stride 偏移
+# 错误：不推荐：每次 load/store 都需计算 stride 偏移
 @triton.jit
 def elementwise_kernel_stride(
     input_ptr, output_ptr, 
@@ -175,10 +175,10 @@ def elementwise_kernel_stride(
 **建议**：非连续张量先调用 `.contiguous()` 转换，再用一维访问，整体性能更优。
 
 ### 要点总结
-- ✅ 优先使用 `.contiguous()` 转换 + 一维访问
-- ✅ 连续内存访问效率远高于 stride 计算开销
-- ✅ `torch.empty_like()` 创建的输出默认连续
-- ✅ 输入输出同形状的 element-wise 算子无需 reshape
+- 正确：优先使用 `.contiguous()` 转换 + 一维访问
+- 正确：连续内存访问效率远高于 stride 计算开销
+- 正确：`torch.empty_like()` 创建的输出默认连续
+- 正确：输入输出同形状的 element-wise 算子无需 reshape
 
 ---
 
@@ -211,10 +211,10 @@ def elementwise_kernel_stride(
 3. 注意 stride 设计
 
 ### 避免的陷阱
-- ❌ 非连续张量直接用 stride 访问
-- ❌ BLOCK_SIZE 设置过大或过小
-- ❌ 忘记边界检查导致越界访问
-- ❌ 未对齐导致性能下降
+- 错误：非连续张量直接用 stride 访问
+- 错误：BLOCK_SIZE 设置过大或过小
+- 错误：忘记边界检查导致越界访问
+- 错误：未对齐导致性能下降
 
 ---
 
