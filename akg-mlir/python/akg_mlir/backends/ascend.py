@@ -41,6 +41,7 @@ def run_akg_opt(
     enable_loop_fusion=False,
     arch=None,
     dump_ir=False,
+    mlir_timing=False,
     dump_log_path=None
 ):
     """
@@ -54,6 +55,7 @@ def run_akg_opt(
         enable_loop_fusion: Whether to enable loop fusion
         arch: Architecture specification (optional)
         dump_ir: Whether to dump IR after all passes
+        mlir_timing: Whether to print every pass time
         dump_log_path: Path to dump log file (optional)
 
     Returns:
@@ -82,6 +84,8 @@ def run_akg_opt(
 
     if dump_ir:
         cmd.append("--mlir-print-ir-after-all")
+    if mlir_timing:
+        cmd.append("--mlir-timing")
 
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -103,6 +107,7 @@ def run_mlir_ascend_pipeline(
     enable_loop_fusion=True,
     arch=None,
     dump_ir=False,
+    mlir_timing=False,
     dump_log_path=None,
 ):
     """
@@ -116,6 +121,7 @@ def run_mlir_ascend_pipeline(
         enable_loop_fusion: Whether to enable loop fusion
         arch: Architecture specification (optional)
         dump_ir: Whether to dump IR after all passes
+        mlir_timing: Whether to print every pass time
         dump_log_path: Path to dump log file (optional)
     Returns:
         Path to final output file
@@ -128,6 +134,7 @@ def run_mlir_ascend_pipeline(
         enable_loop_fusion=enable_loop_fusion,
         arch=arch,
         dump_ir=dump_ir,
+        mlir_timing=mlir_timing,
         dump_log_path=dump_log_path
     )
     return output_file

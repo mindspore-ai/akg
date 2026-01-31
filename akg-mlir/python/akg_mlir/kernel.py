@@ -63,7 +63,8 @@ class Kernel:
             akg_tools_dir=akg_tools_dir,
             dyn_shape=self.dynamic,
             arch = self.arch,
-            dump_ir=True
+            dump_ir=True,
+            mlir_timing=True
         )
 
         output_so_path = os.path.join(self.output_so_dir, f"{self.kernel_name}.so")
