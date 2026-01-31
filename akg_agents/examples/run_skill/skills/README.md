@@ -1,6 +1,6 @@
-# AIKG测试Skills
+# AKG Agents 测试 Skills
 
-> **用于测试Skill System的完整示例**
+> **用于测试 Skill System 的完整示例**
 
 ---
 
@@ -297,7 +297,7 @@ structure:  # 可选，用于声明层级关系
 - ✅ 提供具体的代码示例
 
 ### 2. 实用性
-- ✅ 基于真实AIKG项目场景
+- ✅ 基于真实 AKG Agents 项目场景
 - ✅ 包含最佳实践和陷阱
 - ✅ 提供性能分析和优化建议
 
@@ -359,7 +359,7 @@ structure:  # 可选，用于声明层级关系
 Skills内容参考了：
 - CUDA Programming Guide
 - Triton Documentation
-- AIKG实际项目经验
+- AKG Agents 实际项目经验
 - GPU优化最佳实践
 
 ---

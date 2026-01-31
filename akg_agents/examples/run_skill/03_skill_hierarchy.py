@@ -1,3 +1,17 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Skill System 层级管理示例
 
@@ -8,15 +22,15 @@ Skill System 层级管理示例
 4. 层级验证（可选功能）
 
 运行方式：
-    cd /path/to/aikg
-    conda activate aikg
+    cd /path/to/akg_agents
+    conda activate akg_agents
     source env.sh
     python examples/run_skill/03_skill_hierarchy.py
 """
 
 from pathlib import Path
 
-from ai_kernel_generator.core_v2.skill import (
+from akg_agents.core_v2.skill import (
     SkillRegistry, SkillHierarchy, SkillLevel,
     validate_all, detect_cycles
 )

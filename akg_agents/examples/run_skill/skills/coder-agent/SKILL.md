@@ -17,7 +17,7 @@ structure:
 
 ## 角色定位
 
-Coder Agent是AIKG中的核心代码生成组件，负责：
+Coder Agent是 AKG Agents 中的核心代码生成组件，负责：
 - 将算法设计转换为高性能代码
 - 支持多种DSL（CUDA、Triton、OpenCL等）
 - 支持多种硬件后端（NVIDIA、AMD、Intel等）

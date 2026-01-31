@@ -13,7 +13,7 @@ metadata:
 
 # Triton Ascend NPU编程指南
 
-> 基于AIKG resources/docs/triton_ascend_docs
+> 基于 AKG Agents resources/docs/triton_ascend_docs
 
 ## 核心概念
 
@@ -79,7 +79,7 @@ def standard_kernel(output_ptr, input_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
 
 ## 完整示例
 
-参考: `python/ai_kernel_generator/resources/docs/triton_ascend_docs/examples/`
+参考: `python/akg_agents/op/resources/docs/triton_ascend_docs/examples/`
 - torch_matmul.py
 - torch_layer_norm.py
 - torch_softmax.py

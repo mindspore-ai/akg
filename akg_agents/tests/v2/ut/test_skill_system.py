@@ -21,7 +21,7 @@ Skill System 单元测试
 import pytest
 from pathlib import Path
 
-from ai_kernel_generator.core_v2.skill import (
+from akg_agents.core_v2.skill import (
     SkillMetadata,
     SkillLevel,
     SkillStructure,

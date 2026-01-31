@@ -16,7 +16,7 @@ Skill System is AIKG's knowledge management component for organizing, loading, a
 
 ### SkillRegistry - Skill Registry
 ```python
-from ai_kernel_generator.core_v2.skill import SkillRegistry
+from akg_agents.core_v2.skill import SkillRegistry
 
 registry = SkillRegistry()
 count = registry.load_from_directory(Path("~/.akg/skills"))
@@ -32,7 +32,7 @@ l2_skills = registry.get_by_level(SkillLevel.L2)
 
 ### OperatorSkillSelector - Operator Selector
 ```python
-from ai_kernel_generator.op.skill import (
+from akg_agents.op.skill import (
     OperatorSkillSelector,
     OperatorSelectionContext
 )
@@ -52,7 +52,7 @@ selected = selector.select(registry.get_all(), context, llm_func)
 
 ### SkillInstaller - Installation Manager
 ```python
-from ai_kernel_generator.core_v2.skill import SkillInstaller
+from akg_agents.core_v2.skill import SkillInstaller
 
 installer = SkillInstaller()  # Default to ~/.akg/skills
 
@@ -127,13 +127,13 @@ context = OperatorSelectionContext(
 selected = selector.select(registry.get_all(), context, llm_func)
 
 # 5. Build prompt
-from ai_kernel_generator.core_v2.skill import build_prompt_with_skills
+from akg_agents.core_v2.skill import build_prompt_with_skills
 final_prompt = build_prompt_with_skills(selected, task_description)
 ```
 
 ### Other Domains
 ```python
-from ai_kernel_generator.core_v2.skill import SkillSelector, SelectionContext
+from akg_agents.core_v2.skill import SkillSelector, SelectionContext
 
 selector = SkillSelector()
 context = SelectionContext(task_type="email_writing")
@@ -159,7 +159,7 @@ skill = registry.get("cuda-basics", version="2.0.0")
 
 ## Directory Structure
 
-**Code**: `python/ai_kernel_generator/core_v2/skill/`, `python/ai_kernel_generator/op/skill/`
+**Code**: `python/akg_agents/core_v2/skill/`, `python/akg_agents/op/skill/`
 
 **Skills**: `~/.akg/skills/` (unified installation location)
 
