@@ -1,3 +1,17 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Skill System 算子生成场景示例
 
@@ -10,8 +24,8 @@ Skill System 算子生成场景示例
 这是 Skill System 的核心应用场景，展示了完整的算子生成流程。
 
 运行方式：
-    cd /path/to/aikg
-    conda activate aikg
+    cd /path/to/akg_agents
+    conda activate akg_agents
     source env.sh
     python examples/run_skill/02_operator_generation.py
 
@@ -21,19 +35,19 @@ Skill System 算子生成场景示例
 from pathlib import Path
 import asyncio
 
-from ai_kernel_generator.core_v2.skill import (
+from akg_agents.core_v2.skill import (
     SkillRegistry, SkillLevel,
     build_prompt_with_skills
 )
-from ai_kernel_generator.op.skill import (
+from akg_agents.op.skill import (
     OperatorSkillSelector,
     OperatorSelectionContext
 )
 
 # 导入 LLM 相关
 try:
-    from ai_kernel_generator.core_v2.agents import AgentBase, Jinja2TemplateWrapper, register_agent
-    from ai_kernel_generator.core_v2.config import print_settings_info
+    from akg_agents.core_v2.agents import AgentBase, Jinja2TemplateWrapper, register_agent
+    from akg_agents.core_v2.config import print_settings_info
     HAS_LLM = True
 except ImportError:
     print("[警告] 无法导入 LLM 模块，将跳过需要 LLM 的示例")

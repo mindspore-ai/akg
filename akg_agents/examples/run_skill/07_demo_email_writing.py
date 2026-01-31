@@ -1,3 +1,17 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Skill System 泛化性演示：智能邮件编写助手
 
@@ -8,8 +22,8 @@ Skill System 泛化性演示：智能邮件编写助手
 4. 将专业知识注入 LLM prompt
 
 运行方式：
-    cd /path/to/aikg
-    conda activate aikg
+    cd /path/to/akg_agents
+    conda activate akg_agents
     source env.sh
     python examples/run_skill/07_demo_email_writing.py
 
@@ -19,7 +33,7 @@ Skill System 泛化性演示：智能邮件编写助手
 from pathlib import Path
 import asyncio
 
-from ai_kernel_generator.core_v2.skill import (
+from akg_agents.core_v2.skill import (
     SkillInstaller, 
     SkillRegistry, 
     SkillSelector,
@@ -28,7 +42,7 @@ from ai_kernel_generator.core_v2.skill import (
 
 # 导入 LLM 相关
 try:
-    from ai_kernel_generator.core_v2.agents import AgentBase, Jinja2TemplateWrapper, register_agent
+    from akg_agents.core_v2.agents import AgentBase, Jinja2TemplateWrapper, register_agent
     HAS_LLM = True
 except ImportError:
     print("[提示] 无法导入LLM模块\n")
