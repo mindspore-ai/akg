@@ -2291,9 +2291,8 @@ func.func @test_static_reduction(%arg0: memref<16xf32>, %arg1: memref<f32>) {
     // CHECK: hivm.hir.load ins(%[[SUBVIEW]] : memref<16xf32, strided<[1]>>) outs(%[[ALLOC]] : memref<16xf32>) init_out_buffer = false may_implicit_transpose_with_last_axis = false
     // CHECK: %[[UB_REDUCE:.*]] = memref.alloc() : memref<1xf32>
     // CHECK: hivm.hir.vreduce <sum> ins(%[[ALLOC]] : memref<16xf32>) outs(%[[UB_REDUCE]] : memref<1xf32>) reduce_dims = [0]
-    // CHECK: %[[C0_1:.*]] = arith.constant 0 : index
-    // CHECK: %[[SCALAR:.*]] = memref.load %[[UB_REDUCE]][%[[C0_1]]] : memref<1xf32>
-    // CHECK: memref.store %[[SCALAR]], %arg1[] : memref<f32>
+    // CHECK: %[[OUT_CAST:.*]] = memref.reinterpret_cast %arg1 to offset: [0], sizes: [1], strides: [1] : memref<f32> to memref<1xf32>
+    // CHECK: hivm.hir.store ins(%[[UB_REDUCE]] : memref<1xf32>) outs(%[[OUT_CAST]] : memref<1xf32>)
     %c0 = arith.constant 0 : index
     %f0 = arith.constant 0.0 : f32
     %0 = npuvector.transfer_read %arg0[%c0], %f0 : memref<16xf32>, !npuvector<16xf32>
@@ -2316,9 +2315,8 @@ func.func @test_dynamic_reduction(%input: memref<?xf32>, %output: memref<f32>) {
     // CHECK: hivm.hir.load ins(%[[SUBVIEW]] : memref<?xf32, strided<[1]>>) outs(%[[ALLOC]] : memref<?xf32>) init_out_buffer = false may_implicit_transpose_with_last_axis = false
     // CHECK: %[[UB_REDUCE:.*]] = memref.alloc() : memref<1xf32>
     // CHECK: hivm.hir.vreduce <sum> ins(%[[ALLOC]] : memref<?xf32>) outs(%[[UB_REDUCE]] : memref<1xf32>) reduce_dims = [0]
-    // CHECK: %[[C0_1:.*]] = arith.constant 0 : index
-    // CHECK: %[[SCALAR:.*]] = memref.load %[[UB_REDUCE]][%[[C0_1]]] : memref<1xf32>
-    // CHECK: memref.store %[[SCALAR]], %[[OUTPUT]][] : memref<f32>
+    // CHECK: %[[OUT_CAST:.*]] = memref.reinterpret_cast %[[OUTPUT]] to offset: [0], sizes: [1], strides: [1] : memref<f32> to memref<1xf32>
+    // CHECK: hivm.hir.store ins(%[[UB_REDUCE]] : memref<1xf32>) outs(%[[OUT_CAST]] : memref<1xf32>)
     %c0 = arith.constant 0 : index
     %c4096 = arith.constant 4096 : index
     %f0 = arith.constant 0.0 : f32
@@ -2520,9 +2518,8 @@ func.func @test_reduction_static(%arg0: memref<1024xf32>, %arg1: memref<f32>) {
   // CHECK: }
   // CHECK: %[[ALLOC_REDUCE:.*]] = memref.alloc() : memref<1xf32>
   // CHECK: hivm.hir.vreduce <sum> ins(%[[RES]] : memref<1024xf32>) outs(%[[ALLOC_REDUCE]] : memref<1xf32>) reduce_dims = [0]
-  // CHECK: %[[C0_1:.*]] = arith.constant 0 : index
-  // CHECK: %[[SCALAR:.*]] = memref.load %[[ALLOC_REDUCE]][%[[C0_1]]] : memref<1xf32>
-  // CHECK: memref.store %[[SCALAR]], %[[ARG1:.*]][] : memref<f32>
+  // CHECK: %[[OUT_CAST:.*]] = memref.reinterpret_cast %[[ARG1:.*]] to offset: [0], sizes: [1], strides: [1] : memref<f32> to memref<1xf32>
+  // CHECK: hivm.hir.store ins(%[[ALLOC_REDUCE]] : memref<1xf32>) outs(%[[OUT_CAST]] : memref<1xf32>)
   %c0 = arith.constant 0 : index
   %c1024 = arith.constant 1024 : index
   %c1 = arith.constant 1 : index
@@ -2559,9 +2556,8 @@ func.func @test_reduction_dynamic(%arg0: memref<?xf32>, %arg1: memref<f32>) {
   // CHECK: }
   // CHECK: %[[ALLOC_REDUCE:.*]] = memref.alloc() : memref<1xf32>
   // CHECK: hivm.hir.vreduce <sum> ins(%[[RES]] : memref<?xf32>) outs(%[[ALLOC_REDUCE]] : memref<1xf32>) reduce_dims = [0]
-  // CHECK: %[[C0_1:.*]] = arith.constant 0 : index
-  // CHECK: %[[SCALAR:.*]] = memref.load %[[ALLOC_REDUCE]][%[[C0_1]]] : memref<1xf32>
-  // CHECK: memref.store %[[SCALAR]], %[[ARG1:.*]][] : memref<f32>
+  // CHECK: %[[OUT_CAST:.*]] = memref.reinterpret_cast %[[ARG1:.*]] to offset: [0], sizes: [1], strides: [1] : memref<f32> to memref<1xf32>
+  // CHECK: hivm.hir.store ins(%[[ALLOC_REDUCE]] : memref<1xf32>) outs(%[[OUT_CAST]] : memref<1xf32>)
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %dim = memref.dim %arg0, %c0 : memref<?xf32>
@@ -3122,7 +3118,7 @@ func.func @test_npuvector_bitcast_dynamic_shape(%arg0: memref<128xbf16>, %arg1: 
 // -----
 
 // CHECK-LABEL: func.func @Fused_Mul_ReduceSum_split
-// CHECK-SAME: (%[[IN:.*]]: memref<64xbf16>, %[[OUT:.*]]: memref<1xbf16>)
+// CHECK-SAME: (%[[IN:.*]]: memref<64xbf16>, %[[OUT:.*]]: memref<1xbf16>) -> memref<1xbf16>
 // CHECK: scf.for %[[I:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {
 // CHECK:   %[[SUBLOOP:.*]] = scf.for %[[J:.*]] = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ACC:.*]] = %{{.*}}) -> (memref<64xf32>) {
 // CHECK:     %[[SUBVIEW0:.*]] = memref.subview %[[IN]][%[[J]]] [64] [1] : memref<64xbf16> to memref<64xbf16, {{.*}}>
@@ -3138,11 +3134,11 @@ func.func @test_npuvector_bitcast_dynamic_shape(%arg0: memref<128xbf16>, %arg1: 
 // CHECK:   }
 // CHECK:   %[[RED_BUF:.*]] = memref.alloc() : memref<1xf32>
 // CHECK:   hivm.hir.vreduce <sum> ins(%[[SUBLOOP]] : memref<64xf32>) outs(%[[RED_BUF]] : memref<1xf32>) reduce_dims = [0]
-// CHECK:   %[[C0_1:.*]] = arith.constant 0 : index
-// CHECK:   %[[SCALAR:.*]] = memref.load %[[RED_BUF]][%[[C0_1]]] : memref<1xf32>
-// CHECK:   %{{.*}} = arith.truncf %[[SCALAR]] : f32 to bf16
+// CHECK:   hivm.hir.vcast ins(%[[RED_BUF]] : memref<1xf32>) outs(%[[TRUNC:.*]] : memref<1xbf16>)
+// CHECK:   %[[OUT_CAST:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1], strides: [1] : memref<bf16> to memref<1xbf16>
+// CHECK:   hivm.hir.store ins(%[[TRUNC]] : memref<1xbf16>) outs(%[[OUT_CAST]] : memref<1xbf16>)
 // CHECK: }
-func.func @Fused_Mul_ReduceSum_split(%arg0: memref<64xbf16>, %arg1: memref<1xbf16>) {
+func.func @Fused_Mul_ReduceSum_split(%arg0: memref<64xbf16>, %arg1: memref<1xbf16>) -> memref<1xbf16> {
   %c1 = arith.constant 1 : index
   %c1_0 = arith.constant 1 : index
   %cst = arith.constant 0.000000e+00 : f32
@@ -3169,6 +3165,7 @@ func.func @Fused_Mul_ReduceSum_split(%arg0: memref<64xbf16>, %arg1: memref<1xbf1
     }
     %1 = npuvector.reduction <add>, %0 : !npuvector<64xf32> into f32
     %2 = arith.truncf %1 : f32 to bf16
+    memref.store %2, %collapse_shape[] : memref<bf16>
   }
-  return
+  return %arg1 : memref<1xbf16>
 }
