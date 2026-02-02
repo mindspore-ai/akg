@@ -295,8 +295,6 @@ class LangGraphTask:
         # 获取 session_id（非 TUI 场景可为空；仅在流式输出开启时必填）
         session_id = str(self.config.get("session_id") or "").strip()
         stream_enabled = os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
-        if stream_enabled and not session_id:
-            raise ValueError("[LangGraphTask] config 中必须包含 session_id（AIKG_STREAM_OUTPUT=on）！")
         task_label = str(self.config.get("task_label") or "").strip()
         if not task_label:
             raise ValueError("[LangGraphTask] config 中必须包含 task_label")
