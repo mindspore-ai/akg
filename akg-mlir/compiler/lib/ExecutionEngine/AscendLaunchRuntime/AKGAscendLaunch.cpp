@@ -207,9 +207,6 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
       DLOG(INFO) << "Tiling args - tiling_key: " << tiling_key
            << ", offset: " << offset
            << ", tiling_struct_size: " << tiling_struct_size;
-      for (int64_t i = 0; i < tiling_struct_size; i++) {
-        DLOG(INFO) << "arg_tiling_host[" << i << "]: " << arg_tiling_host[i];
-      }
       runtimeargs.push_back(reinterpret_cast<void*>(&tiling_key));
       runtimeargs.push_back(reinterpret_cast<void*>(arg_tiling_host));
       runtimeargs.push_back(reinterpret_cast<void*>(arg_tiling_host));
@@ -217,9 +214,16 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
       runtimeargs.push_back(reinterpret_cast<void*>(tiling_struct_size));
       runtimeargs.push_back(reinterpret_cast<void*>(1));
       tiling_function((void*)(runtimeargs.data()));
+      for (int64_t i = 0; i < tiling_struct_size; i++) {
+        DLOG(INFO) << "arg_tiling_host[" << i << "]: " << arg_tiling_host[i];
+      }
       input.push_back(std::make_shared<mlir::runtime::TensorDevice>(arg_tiling_host,
             nullptr, tiling_struct_size * sizeof(int64_t), false));
     }
+  }
+
+  for (auto iter = runtimeargs.begin(); iter != runtimeargs.end(); iter++) {
+    DLOG(INFO) << "runtimeargs[" << iter - runtimeargs.begin() << "]: " << *iter;
   }
 
   auto kernel_runtime = mlir::runtime::AscendKernelRuntime(device_id, use_mem_pool);
