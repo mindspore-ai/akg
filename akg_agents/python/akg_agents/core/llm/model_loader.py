@@ -102,12 +102,12 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
         # 使用环境变量创建模型
         logger.info("=" * 60)
         logger.info("使用环境变量覆盖模式创建模型")
-        logger.info(f"  BASE_URL: {env_base_url}")
-        logger.info(f"  MODEL_NAME: {env_model_name}")
+        logger.info(f"  AKG_AGENTS_BASE_URL: {env_base_url}")
+        logger.info(f"  AKG_AGENTS_MODEL_NAME: {env_model_name}")
         # 只显示前8位和后4位，保护API密钥安全
         masked_key = env_api_key[:8] + "*" * (len(env_api_key) - 12) + \
             env_api_key[-4:] if len(env_api_key) > 12 else "***"
-        logger.info(f"  API_KEY: {masked_key}")
+        logger.info(f"  AKG_AGENTS_API_KEY: {masked_key}")
         if env_enable_think:
             logger.info(f"  AKG_AGENTS_MODEL_ENABLE_THINK: {env_enable_think}")
         logger.info("=" * 60)
