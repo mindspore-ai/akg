@@ -1,0 +1,85 @@
+{# KernelGen Agent 的用户 Prompt 模板 #}
+
+## 执行历史和上下文
+
+{% if history_actions %}
+{% for action in history_actions %}
+{% if action.tool_name == "history_summary" %}
+### 历史总结
+{{ action.result.get("summary", "无总结") }}
+
+{% else %}
+### 步骤 {{ loop.index }}: {{ action.tool_name }}
+
+**输入参数**:
+{% for key, value in action.arguments.items() %}
+- `{{ key }}`: {{ value | truncate(100) }}
+{% endfor %}
+
+**输出结果**:
+{% if action.result.get("_is_summary") %}
+{{ action.result.get("summary", "无结果") }}
+{% else %}
+{% for key, value in action.result.items() %}
+- `{{ key }}`: {{ value | truncate(100) }}
+{% endfor %}
+{% endif %}
+
+{% endif %}
+{% endfor %}
+{% else %}
+暂无历史上下文。
+{% endif %}
+
+---
+
+## 相关技能和知识
+
+{% if skills %}
+{% for skill in skills %}
+### Skill: {{ skill.name }}
+
+**描述**: {{ skill.description }}
+
+{{ skill.content }}
+
+================================================================================
+
+{% endfor %}
+{% else %}
+暂无相关 Skill。
+{% endif %}
+
+---
+
+## 当前任务
+
+**算子名称**: `{{ op_name }}`  
+**函数名称**: `{{ func_name }}`  
+
+### 任务描述
+
+{{ task_desc }}
+
+---
+
+{% if user_requirements %}
+### 额外的用户需求
+
+{{ user_requirements }}
+
+{% endif %}
+
+---
+
+## 生成指令
+
+根据以上信息生成完整的内核代码。
+
+**代码要求**:
+- 语法正确
+- 针对目标硬件优化
+- 正确处理边界条件
+- 包含必要的导入和包装函数
+
+**输出要求**: 只返回代码，不要包含任何额外的解释。

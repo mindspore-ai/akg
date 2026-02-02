@@ -94,7 +94,18 @@ class AgentBase(ABC):
     - load_doc(): 加载资源文档
     - _stream_enabled(): 检查流式输出
     - split_think(): 分离 </think> 内容
+    - load_tool_config(): 加载 agent 工具配置为字典格式
+    
+    子类需要定义以下类属性以支持 load_tool_config():
+    - TOOL_NAME: 工具名称（如 "call_op_task_builder"）
+    - DESCRIPTION: 功能描述
+    - PARAMETERS_SCHEMA: 参数 schema（JSON Schema 格式的字典）
     """
+    
+    # 子类需要覆盖的元数据属性
+    TOOL_NAME: Optional[str] = None
+    DESCRIPTION: Optional[str] = None
+    PARAMETERS_SCHEMA: Optional[Dict[str, Any]] = None
     
     def __init__(self, context: dict = None, config: dict = None):
         """
@@ -329,7 +340,7 @@ class AgentBase(ABC):
         if not self.config:
             raise ValueError("No config provided. Cannot resolve document path.")
         
-        agent_type = self._get_agent_type()
+        agent_type = self.__class__.__name__.lower()
         docs_dir_config = self.config.get('docs_dir', {})
         
         if agent_type in docs_dir_config:
@@ -337,19 +348,6 @@ class AgentBase(ABC):
             return os.path.join(docs_dir, doc_path)
         
         raise ValueError(f"No doc directory configured for agent type '{agent_type}'.")
-    
-    def _get_agent_type(self) -> str:
-        """从 agent 名称中提取 agent 类型"""
-        class_name = self.__class__.__name__.lower()
-        
-        if "designer" in class_name:
-            return "designer"
-        elif "coder" in class_name:
-            return "coder"
-        elif "conductor" in class_name:
-            return "conductor"
-        else:
-            return class_name
     
     # ========================= 工具方法 =========================
     
@@ -457,3 +455,94 @@ class AgentBase(ABC):
             logger.debug(f"{status} {key}: {value_preview}")
         
         logger.debug("=" * 60)
+    
+    # ========================= 工具配置加载 =========================
+    
+    @classmethod
+    def load_tool_config(cls) -> Dict[str, Any]:
+        """
+        加载 Agent 的工具配置为字典格式
+        
+        子类必须定义以下类属性：
+        - TOOL_NAME: 工具名称
+        - DESCRIPTION: 功能描述
+        - PARAMETERS_SCHEMA: 参数 schema（JSON Schema 格式）
+        
+        agent_name 会自动从类名获取
+        
+        Returns:
+            dict: 工具配置字典
+        
+        Raises:
+            ValueError: 如果缺少必需的类属性
+        """
+        # 验证必需字段
+        cls._validate_tool_metadata()
+        
+        # 构建工具配置字典
+        tool_name = cls.TOOL_NAME or "unknown"
+        config = {
+            tool_name: {
+                "type": "call_agent",
+                "agent_name": cls.__name__,
+                "function": {
+                    "name": cls.TOOL_NAME,
+                    "description": cls._format_description(cls.DESCRIPTION),
+                    "parameters": cls.PARAMETERS_SCHEMA or {}
+                }
+            }
+        }
+        
+        return config
+
+    @classmethod
+    def _validate_tool_metadata(cls) -> None:
+        """
+        验证子类是否提供了必需的元数据
+        
+        Raises:
+            ValueError: 如果缺少必需的类属性
+        """
+        missing_fields = []
+        
+        if not cls.TOOL_NAME:
+            missing_fields.append("TOOL_NAME")
+        if not cls.DESCRIPTION:
+            missing_fields.append("DESCRIPTION")
+        if cls.PARAMETERS_SCHEMA is None:
+            missing_fields.append("PARAMETERS_SCHEMA")
+        
+        if missing_fields:
+            class_name = cls.__name__
+            fields_str = ", ".join(missing_fields)
+            raise ValueError(
+                f"{class_name} 必须定义以下类属性才能使用 load_tool_config(): {fields_str}\n"
+                f"示例：\n"
+                f"class {class_name}(AgentBase):\n"
+                f"    TOOL_NAME = 'call_your_agent'\n"
+                f"    DESCRIPTION = 'Agent description'\n"
+                f"    PARAMETERS_SCHEMA = {{\n"
+                f"        'type': 'object',\n"
+                f"        'properties': {{}},\n"
+                f"        'required': []\n"
+                f"    }}"
+            )
+    
+    @staticmethod
+    def _format_description(description: str) -> str:
+        """
+        格式化描述文本，处理多行字符串
+        
+        Args:
+            description: 原始描述文本
+        
+        Returns:
+            str: 格式化后的描述
+        """
+        if not description:
+            return ""
+        
+        # 去除首尾空白，但保留内部换行
+        lines = description.strip().split('\n')
+        formatted_lines = [line.rstrip() for line in lines]
+        return '\n'.join(formatted_lines)
