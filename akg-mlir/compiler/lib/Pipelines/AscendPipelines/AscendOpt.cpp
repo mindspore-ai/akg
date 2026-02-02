@@ -118,8 +118,8 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createConvertAffineToSCFPass());
 
     pm.addPass(mlir::createAddOutParameterPass());
-    pm.addPass(mlir::createLegalizeBoolPass());
     pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createLegalizeBoolPass());
     // tiling
     pm.addPass(mlir::createNPUAutoTilingPass());
     // vector
