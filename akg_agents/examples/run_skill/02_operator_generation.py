@@ -88,7 +88,6 @@ def example_1_basic_operator_selection():
     
     # 定义算子生成上下文
     context = OperatorSelectionContext(
-        task_type="operator_generation",
         operator_type="softmax",
         backend="cuda",
         dsl="triton"
@@ -133,11 +132,9 @@ async def example_2_llm_skill_selection():
     
     # 定义上下文
     context = OperatorSelectionContext(
-        task_type="operator_generation",
         operator_type="matmul",
         backend="cuda",
-        dsl="triton",
-        optimization_goal="performance"
+        dsl="triton"
     )
     
     print("\n任务上下文:")
@@ -149,8 +146,26 @@ async def example_2_llm_skill_selection():
     candidates = selector.coarse_filter(all_skills, context)
     print(f"\n粗筛: {len(all_skills)} -> {len(candidates)} Skills")
     
-    # LLM 精筛
-    prompt = selector.build_llm_prompt(candidates, context)
+    # LLM 精筛（用户自定义 prompt 模板）
+    prompt_template = """你是一个 Skill 选择专家。
+
+任务上下文：
+{context_str}
+
+候选 Skills（已粗筛）：
+{skills_str}
+
+请分析任务需求和候选 Skill，选择相关的Skill，保证不要有遗漏。
+
+返回 JSON 格式：
+```json
+{{
+  "selected": ["skill-name-1", "skill-name-2"],
+  "reason": "选择理由"
+}}
+```
+"""
+    prompt = selector.build_llm_prompt(candidates, context, prompt_template)
     llm_response = await agent.generate(prompt)
     selected = selector.parse_llm_response(llm_response, candidates)
     
@@ -338,11 +353,10 @@ async def example_4_with_history():
     
     # 定义上下文
     context = OperatorSelectionContext(
-        task_type="operator_generation",
         operator_type="matmul",
         backend="cuda",
         dsl="triton",
-        optimization_goal="performance"
+        custom_fields={"optimization_goal": "performance"}
     )
     
     print("\n任务上下文:")
@@ -359,8 +373,39 @@ async def example_4_with_history():
     # 获取 L2 Agent Skills
     l2_skills = registry.get_by_level(SkillLevel.L2)
     
-    # 构建带历史的 prompt
-    prompt = selector.build_llm_prompt(l2_skills, context, history)
+    # 构建带历史的 prompt（用户自定义模板，history 作为参数传递）
+    prompt_template_with_history = """你是一个 Skill 选择专家。
+
+任务上下文：
+{context_str}
+
+执行历史：
+{history_info}
+
+候选 Skills（L2层级）：
+{skills_str}
+
+基于执行历史，前面的尝试已经失败了。请选择更适合的 Skills 来解决问题。
+
+返回 JSON 格式：
+```json
+{{
+  "selected": ["skill-name-1", "skill-name-2"],
+  "reason": "选择理由"
+}}
+```
+"""
+    # 格式化 history
+    history_info = "\n".join([
+        f"{i}. {h['action']}\n   结果: {h['result']}" + 
+        (f"\n   错误: {h['error']}" if 'error' in h else "")
+        for i, h in enumerate(history, 1)
+    ])
+    
+    prompt = selector.build_llm_prompt(
+        l2_skills, context, prompt_template_with_history,
+        history_info=history_info
+    )
     
     print(f"\n生成的 LLM prompt（前 800 字符）:")
     print("-" * 70)
@@ -396,7 +441,6 @@ def example_5_filter_by_backend():
     
     for backend in backends:
         context = OperatorSelectionContext(
-            task_type="operator_generation",
             backend=backend
         )
         

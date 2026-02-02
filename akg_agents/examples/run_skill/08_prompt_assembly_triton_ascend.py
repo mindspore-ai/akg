@@ -37,11 +37,12 @@ from typing import List
 import json
 
 from akg_agents.core_v2.skill import SkillRegistry, SkillMetadata
+from akg_agents.op.skill import OperatorSkillSelector, OperatorSelectionContext
 from akg_agents.core_v2.agents import AgentBase, Jinja2TemplateWrapper, register_agent
 from akg_agents.core_v2.config import print_settings_info
 
 
-# Category 顺序（写死，不打分）
+# Category 顺序
 CATEGORY_ORDER = ["fundamental", "method", "implementation", "example"]
 
 
@@ -61,6 +62,7 @@ class PromptAssembler:
         self.registry = SkillRegistry()
         self.skills_base_dir = skills_base_dir
         self.agent = PromptAssemblerAgent()
+        self.selector = OperatorSkillSelector()  # 使用定义好的 selector
         
     def load_triton_ascend_skills(self):
         """加载 Triton-Ascend Skills"""
@@ -76,15 +78,14 @@ class PromptAssembler:
         print("=" * 70)
         print(f"筛选条件: backend={backend}, dsl={dsl}\n")
         
-        all_skills = self.registry.get_all()
-        filtered = []
+        # 使用 OperatorSelectionContext 和 selector 进行过滤
+        context = OperatorSelectionContext(
+            backend=backend,
+            dsl=dsl
+        )
         
-        for skill in all_skills:
-            skill_backend = skill.metadata.get("backend")
-            skill_dsl = skill.metadata.get("dsl")
-            
-            if skill_backend == backend and skill_dsl == dsl:
-                filtered.append(skill)
+        all_skills = self.registry.get_all()
+        filtered = self.selector.coarse_filter(all_skills, context)
         
         print(f"初筛结果: {len(filtered)} 个 Skills")
         for skill in filtered:
