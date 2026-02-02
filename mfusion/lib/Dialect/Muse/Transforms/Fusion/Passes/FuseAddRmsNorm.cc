@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Muse/Transforms/Fusion/FuseAddRmsNorm.h"
+#include "mfusion/Dialect/Muse/Transforms/Fusion/Passes/FuseAddRmsNorm.h"
 
 #include "mfusion/Dialect/Muse/Muse.h"
-#include "mfusion/Dialect/Muse/Transforms/Passes.h"
-#include "mfusion/Dialect/Muse/Utils/ArithUtils.h"
+#include "mfusion/Dialect/Muse/Utils/OpConstants.h"
+#include "mfusion/Dialect/Muse/Transforms/Fusion/FusionPassMacros.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -30,13 +30,11 @@ namespace mlir {
 #include "mfusion/Dialect/Muse/Transforms/Passes.h.inc"
 
 namespace muse {
-namespace {
-}  // namespace
 
 /**
  * @brief Fuse Add and RmsNorm into AddRmsNorm.
  * @example
- * %0 = Add(%x, %y, %alpha)  // %alpha is a constant with value 1.0
+ * %0 = Add(%x, %y)
  * %1 = RmsNorm(%0, %gamma, %epsilon)
  * return %1
  * --->
@@ -53,9 +51,9 @@ class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
     Value gamma = rmsNormOp.getGamma();
     FloatAttr epsilon = rmsNormOp.getEpsilonAttr();
 
-    // Match only muse.aclnn.add for now
-    auto addOp = x.getDefiningOp<AclnnAddOp>();
-    if (!addOp || !isConstOne(addOp.getAlpha())) {
+    // Match only muse.add
+    auto addOp = x.getDefiningOp<AddOp>();
+    if (!addOp) {
       return failure();
     }
 
@@ -75,9 +73,8 @@ class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
       return failure();
     }
 
-    // Create AddRmsNormOp
-    constexpr int kAddRmsNormResultCount = 3;  // Number of results: y_out, rstd_out, x_out
-    SmallVector<Type, kAddRmsNormResultCount> resultTypes;
+    // Create AddRmsNormOp with 3 results: y_out, rstd_out, x_out
+    SmallVector<Type, kOutputSize3> resultTypes;
     resultTypes.push_back(rmsNormOp.getYOut().getType());
     resultTypes.push_back(rmsNormOp.getRstdOut().getType());
     resultTypes.push_back(addOp.getResult().getType());
@@ -92,19 +89,8 @@ class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
   }
 };
 
-struct FuseAddRmsNormPass : public impl::FuseAddRmsNormBase<FuseAddRmsNormPass> {
-  void runOnOperation() override {
-    RewritePatternSet patterns(&getContext());
-    patterns.add<FuseAddRmsNormPattern>(&getContext());
-
-    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
-      signalPassFailure();
-    }
-  }
-};
+DEFINE_MUSE_FUSION_PASS(FuseAddRmsNorm, FuseAddRmsNormPattern)
 
 }  // namespace muse
-
-std::unique_ptr<Pass> createFuseAddRmsNormPass() { return std::make_unique<muse::FuseAddRmsNormPass>(); }
 
 }  // namespace mlir

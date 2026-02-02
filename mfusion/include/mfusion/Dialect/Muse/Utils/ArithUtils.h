@@ -17,8 +17,6 @@
 #ifndef MFUSION_DIALECT_MUSE_UTILS_ARITH_UTILS_H
 #define MFUSION_DIALECT_MUSE_UTILS_ARITH_UTILS_H
 
-#include <cmath>
-
 #include "mfusion/Dialect/Muse/Muse.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -28,180 +26,40 @@
 namespace mlir {
 namespace muse {
 
-// Check if tensor shape is empty (rank-0) or all dimensions are 1
-inline bool isScalarOrSingleElement(RankedTensorType tensorType) {
-  if (!tensorType) {
-    return false;
-  }
-  
-  // Check if rank is 0 (shape is empty)
-  if (tensorType.getRank() == 0) {
-    return true;
-  }
-  
-  // Check if all dimensions are 1
-  for (int64_t dim : tensorType.getShape()) {
-    if (dim != 1) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// Extract constant value from a scalar or single-element tensor
-// Returns true if the value is a constant scalar/single-element with the expected value
-// Only supports float types (F64/F32)
-inline bool extractConstF64(Value v, double &outVal) {
-  auto constOp = v.getDefiningOp<arith::ConstantOp>();
-  if (!constOp) {
-    return false;
-  }
-
-  auto attr = constOp.getValue();
-  auto denseAttr = dyn_cast<DenseElementsAttr>(attr);
-  if (!denseAttr) {
-    return false;
-  }
-
-  auto tensorType = dyn_cast<RankedTensorType>(v.getType());
-  if (!tensorType || !isScalarOrSingleElement(tensorType)) {
-    return false;
-  }
-
-  auto elementType = denseAttr.getElementType();
-  if (isa<FloatType>(elementType)) {
-    auto floatVal = denseAttr.getSplatValue<APFloat>();
-    outVal = floatVal.convertToDouble();
-    return true;
-  }
-  return false;
-}
-
 // Check if Value is a constant scalar or single-element integer tensor with value x
-inline bool IsSingleElementInt(Value v, int64_t x) {
-  auto constOp = v.getDefiningOp<arith::ConstantOp>();
-  if (!constOp) {
-    return false;
-  }
-
-  auto attr = constOp.getValue();
-  auto denseAttr = dyn_cast<DenseElementsAttr>(attr);
-  if (!denseAttr) {
-    return false;
-  }
-
-  // Check if it's a scalar (rank-0 tensor) or all dimensions are 1
-  auto tensorType = dyn_cast<RankedTensorType>(v.getType());
-  if (!tensorType || !isScalarOrSingleElement(tensorType)) {
-    return false;
-  }
-
-  // Check if it's a splat tensor (all elements are the same)
-  if (!denseAttr.isSplat()) {
-    return false;
-  }
-
-  auto elementType = denseAttr.getElementType();
-  if (isa<IntegerType>(elementType)) {
-    auto intVal = denseAttr.getSplatValue<APInt>();
-    return intVal.getSExtValue() == x;
-  }
-  return false;
-}
+bool IsSingleElementInt(Value v, int64_t x);
 
 // Check if Value is a constant scalar or single-element float tensor with value x
 // Uses tolerance check for floating point comparison
-inline bool isSingleElementFloat(Value v, double x, double tolerance = 1e-6) {
-  auto constOp = v.getDefiningOp<arith::ConstantOp>();
-  if (!constOp) {
-    return false;
-  }
-
-  auto attr = constOp.getValue();
-  auto denseAttr = dyn_cast<DenseElementsAttr>(attr);
-  if (!denseAttr) {
-    return false;
-  }
-
-  // Check if it's a scalar (rank-0 tensor) or all dimensions are 1
-  auto tensorType = dyn_cast<RankedTensorType>(v.getType());
-  if (!tensorType || !isScalarOrSingleElement(tensorType)) {
-    return false;
-  }
-
-  // Check if it's a splat tensor (all elements are the same)
-  if (!denseAttr.isSplat()) {
-    return false;
-  }
-
-  auto elementType = denseAttr.getElementType();
-  if (isa<FloatType>(elementType)) {
-    auto floatVal = denseAttr.getSplatValue<APFloat>();
-    return std::abs(floatVal.convertToDouble() - x) <= tolerance;
-  }
-  return false;
-}
+bool isSingleElementFloat(Value v, double x, double tolerance = 1e-6);
 
 // Check if Value is a constant scalar or single-element tensor with value 1.0
 // Supports both float and integer types
 // For float types, uses tolerance check (1e-6) for floating point comparison
-inline bool isConstOne(Value v, double tolerance = 1e-6) {
-  auto constOp = v.getDefiningOp<arith::ConstantOp>();
-  if (!constOp) {
-    return false;
-  }
-
-  auto attr = constOp.getValue();
-  auto denseAttr = dyn_cast<DenseElementsAttr>(attr);
-  if (!denseAttr) {
-    return false;
-  }
-
-  // Check if it's a scalar (rank-0 tensor) or all dimensions are 1
-  auto tensorType = dyn_cast<RankedTensorType>(v.getType());
-  if (!tensorType || !isScalarOrSingleElement(tensorType)) {
-    return false;
-  }
-
-  // Check if it's a splat tensor (all elements are the same)
-  if (!denseAttr.isSplat()) {
-    return false;
-  }
-
-  auto elementType = denseAttr.getElementType();
-  if (isa<FloatType>(elementType)) {
-    auto floatVal = denseAttr.getSplatValue<APFloat>();
-    return std::abs(floatVal.convertToDouble() - 1.0) <= tolerance;
-  }
-  if (isa<IntegerType>(elementType)) {
-    auto intVal = denseAttr.getSplatValue<APInt>();
-    return intVal.isOne();
-  }
-  return false;
-}
+bool isConstOne(Value v, double tolerance = 1e-6);
 
 // Check if MulOp is a scalar multiplication (one operand is scalar or single-element tensor)
 // Returns the scalar value and the tensor operand
 // This function checks both operands to identify which one is scalar
-inline bool isScalarMul(MulOp mulOp, double &scalarVal, Value &tensorOperand) {
-  Value lhs = mulOp.getLhs();
-  Value rhs = mulOp.getRhs();
+bool isScalarMul(MulOp mulOp, double &scalarVal, Value &tensorOperand);
 
-  auto lhsType = dyn_cast<RankedTensorType>(lhs.getType());
-  auto rhsType = dyn_cast<RankedTensorType>(rhs.getType());
-
-  // Check if lhs is scalar or single-element (shape is empty or all dimensions are 1)
-  if (lhsType && isScalarOrSingleElement(lhsType)) {
-    if (extractConstF64(lhs, scalarVal)) {
-      tensorOperand = rhs;
+// Match both operands of a binary operation with specific Op types, considering commutativity.
+template <typename TargetLhsOpType, typename TargetRhsOpType>
+inline bool matchCommutativeOperands(Value x, Value y, TargetLhsOpType &matchedLhsOp, TargetRhsOpType &matchedRhsOp) {
+  // Try pattern: lhs matches TargetLhsOpType, rhs matches TargetRhsOpType
+  if (auto xOp = x.getDefiningOp<TargetLhsOpType>()) {
+    if (auto yOp = y.getDefiningOp<TargetRhsOpType>()) {
+      matchedLhsOp = xOp;
+      matchedRhsOp = yOp;
       return true;
     }
   }
 
-  // Check if rhs is scalar or single-element, considering commutativity
-  if (rhsType && isScalarOrSingleElement(rhsType)) {
-    if (extractConstF64(rhs, scalarVal)) {
-      tensorOperand = lhs;
+  // Try pattern: lhs matches TargetRhsOpType, rhs matches TargetLhsOpType
+  if (auto xOp = x.getDefiningOp<TargetRhsOpType>()) {
+    if (auto yOp = y.getDefiningOp<TargetLhsOpType>()) {
+      matchedLhsOp = yOp;
+      matchedRhsOp = xOp;
       return true;
     }
   }

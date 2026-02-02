@@ -17,12 +17,11 @@
 #ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
 #define MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
 
+#include "mfusion/Dialect/Muse/MuseDialect.h"
 #include "mfusion/Dialect/Muse/Transforms/Decompose/Decompose.h"
 #include "mfusion/Dialect/Muse/Transforms/Cluster/DVMCluster.h"
 #include "mfusion/Dialect/Muse/Transforms/Recompose/Recompose.h"
-#include "mfusion/Dialect/Muse/Transforms/Fusion/FuseAddRmsNorm.h"
-#include "mfusion/Dialect/Muse/Transforms/Fusion/FuseMatMul.h"
-#include "mfusion/Dialect/Muse/Transforms/Fusion/GeluFusion.h"
+#include "mfusion/Dialect/Muse/Transforms/Fusion/FusionPasses.h"
 
 namespace mlir {
 

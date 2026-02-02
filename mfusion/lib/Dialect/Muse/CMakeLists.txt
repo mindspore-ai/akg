@@ -18,4 +18,5 @@ add_mlir_dialect_library(MLIRMuseDialect
   mfusion::symengine
 )
 
+add_subdirectory(Utils)
 add_subdirectory(Transforms)
