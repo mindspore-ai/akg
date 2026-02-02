@@ -14,22 +14,22 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
-#define MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
+#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_MUSE_FUSION_H
+#define MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_MUSE_FUSION_H
 
-#include "mfusion/Dialect/Muse/MuseDialect.h"
-#include "mfusion/Dialect/Muse/Transforms/Decompose/Decompose.h"
-#include "mfusion/Dialect/Muse/Transforms/Cluster/DVMCluster.h"
-#include "mfusion/Dialect/Muse/Transforms/Recompose/Recompose.h"
-#include "mfusion/Dialect/Muse/Transforms/Fusion/FusionPasses.h"
+#include <memory>
+
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
 
 namespace mlir {
+namespace muse {
 
-/// Generate the code for registering transforms passes.
-#ifndef GEN_PASS_REGISTRATION
-#define GEN_PASS_REGISTRATION
-#include "mfusion/Dialect/Muse/Transforms/Passes.h.inc"
-#endif
+// Create a unified fusion pass that contains all fusion patterns.
+std::unique_ptr<Pass> createMuseFusionPass();
+
+}  // namespace muse
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
+#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_MUSE_FUSION_H

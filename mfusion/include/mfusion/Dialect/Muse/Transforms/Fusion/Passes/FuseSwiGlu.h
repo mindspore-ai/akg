@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_ADD_RMS_NORM_H
-#define MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_ADD_RMS_NORM_H
+#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_PASSES_FUSE_SWI_GLU_H
+#define MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_PASSES_FUSE_SWI_GLU_H
 
 #include <memory>
 
@@ -24,10 +24,12 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+namespace muse {
 
-/// Create a pass to fuse Add and RmsNorm into AddRmsNorm.
-std::unique_ptr<Pass> createFuseAddRmsNormPass();
+/// Create a pass to fuse SplitWithSize, Silu and Mul into SwiGlu.
+std::unique_ptr<Pass> createFuseSwiGluPass();
 
+}  // namespace muse
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_ADD_RMS_NORM_H
+#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_PASSES_FUSE_SWI_GLU_H

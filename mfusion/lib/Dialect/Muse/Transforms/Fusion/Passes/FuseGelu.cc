@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Muse/Transforms/Fusion/GeluFusion.h"
+#include "mfusion/Dialect/Muse/Transforms/Fusion/Passes/FuseGelu.h"
 
 #include <cmath>
 #include <utility>
 
 #include "mfusion/Dialect/Muse/Muse.h"
-#include "mfusion/Dialect/Muse/Transforms/Passes.h"
 #include "mfusion/Dialect/Muse/Utils/ArithUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -40,8 +39,8 @@ namespace {
 
 constexpr double kSqrt2OverPi = 0.79788456080286535588;  // sqrt(2/pi)
 constexpr double kGeluCoeff = 0.044715;
-constexpr double kGeluHalfCoeff = 0.5;                  // 0.5 coefficient in GELU formula
-constexpr double kGeluPowExponent = 3.0;                 // Exponent for x^3 in GELU formula
+constexpr double kGeluHalfCoeff = 0.5;    // 0.5 coefficient in GELU formula
+constexpr double kGeluPowExponent = 3.0;  // Exponent for x^3 in GELU formula
 constexpr double kTolerance = 1e-6;
 
 /// If \p v is defined by muse.add or muse.aclnn.add (with alpha=1), set \p outX, \p outY and return true.
@@ -281,10 +280,8 @@ struct FuseGeluPass : public impl::FuseGeluBase<FuseGeluPass> {
   }
 };
 
-}  // namespace muse
+std::unique_ptr<Pass> createFuseGeluPass() { return std::make_unique<muse::FuseGeluPass>(); }
 
-std::unique_ptr<Pass> createFuseGeluPass() {
-  return std::make_unique<muse::FuseGeluPass>();
-}
+}  // namespace muse
 
 }  // namespace mlir

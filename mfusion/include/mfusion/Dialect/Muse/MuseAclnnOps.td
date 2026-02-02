@@ -195,6 +195,40 @@ def Muse_AclnnRmsNormOp : Muse_Op<"aclnn.rms_norm", [Pure]> {
   }];
 }
 
+def Muse_AclnnSiluOp : Muse_Op<"aclnn.silu", [Pure]> {
+  let summary = "The aclnnSilu operation";
+  let description = [{
+    Applies the Sigmoid Linear Unit (Silu) function, element-wise.
+    Computes: result = self * sigmoid(self)
+  }];
+
+  let arguments = (ins AnyRankedTensor:$self);
+  let results = (outs AnyRankedTensor:$out);
+
+  let assemblyFormat = [{
+    $self attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_AclnnSplitWithSizeOp : Muse_Op<"aclnn.split_with_size", [Pure]> {
+  let summary = "The aclnnSplitWithSize operation";
+  let description = [{
+    Splits a tensor into multiple tensors.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$self,
+    AnyRankedTensor:$splitSize,
+    AnyScalar:$dim
+  );
+
+  let results = (outs Variadic<AnyRankedTensor>:$out);
+
+  let assemblyFormat = [{
+    $self `,` $splitSize `,` $dim attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_AclnnSubOp : Muse_Op<"aclnn.sub", [Pure]> {
   let summary = "The aclnnSub operation";
   let description = [{
@@ -230,6 +264,25 @@ def Muse_AclnnSigmoidOp : Muse_Op<"aclnn.sigmoid", [Pure]> {
 
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_AclnnSwiGluOp : Muse_Op<"aclnn.swi_glu", [Pure]> {
+  let summary = "The aclnnSwiGlu operation";
+  let description = [{
+    Applies the SwiGlu activation.
+    Computes: SwiGlu(x, y) = x * Silu(y) where x and y are split from input.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$x,
+    AnyScalar:$dim
+  );
+
+  let results = (outs AnyRankedTensor:$out);
+
+  let assemblyFormat = [{
+    $x `,` $dim attr-dict `:` functional-type(operands, results)
   }];
 }
 
