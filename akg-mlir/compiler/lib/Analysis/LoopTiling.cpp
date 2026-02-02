@@ -30,6 +30,7 @@
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Utils/AnalysisForGpu.hpp"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -90,6 +91,7 @@ struct LoopBounds {
 struct DynamicAxisMapping {
   unsigned inputMemrefIndex;
   unsigned dimIndex;
+  Value upperBound;
 };
 
 // Loop tiling core helpers
@@ -142,11 +144,16 @@ static void buildTilingFunctionSignature(FunctionType origTy, MLIRContext *ctx, 
                                          SmallVector<Type> &argTypes, SmallVector<Type> &resTypes);
 static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRef<Type> argTypes,
                                             ArrayRef<Type> resTypes, OpBuilder &builder);
-static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
+static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncOp originalKernel,
+                                            ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
                                             ArrayRef<SmallVector<unsigned, 6>> allBandTileSizes,
                                             ArrayRef<SmallVector<int, 6>> allBandConstraintMaxs,
                                             ArrayRef<std::vector<DynamicAxisMapping>> allBandDynamicMappings,
                                             OpBuilder &builder);
+static void getOperandsTree(mlir::Operation *op, llvm::SmallVectorImpl<mlir::Operation *> &ops,
+                            llvm::SmallPtrSetImpl<mlir::Operation *> &visited);
+static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncOp originalKernel,
+                                             func::FuncOp tilingFunc, OpBuilder &builder);
 
 // Attribute marking helpers
 static bool isInnermostScfLoop(mlir::scf::ForOp forOp);
@@ -228,6 +235,97 @@ static mlir::Value remapOrSelf(mlir::Value v, mlir::IRMapping &mapping);
   if (srcOps.size() > 1) {
     destOps.splice(insertLoc, srcOps, srcOps.begin(), std::prev(srcOps.end()));
   }
+}
+
+// Helper: collect all defining ops in the operand tree (post-order)
+static void getOperandsTree(mlir::Operation *op, llvm::SmallVectorImpl<mlir::Operation *> &ops,
+                            llvm::SmallPtrSetImpl<mlir::Operation *> &visited) {
+  if (!op || !visited.insert(op).second) {
+    return;
+  }
+  for (Value operand : op->getOperands()) {
+    if (auto *def = operand.getDefiningOp()) {
+      getOperandsTree(def, ops, visited);
+    }
+  }
+  ops.push_back(op);
+}
+
+// Helper: clone the upper bound definition chain into tiling function
+static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncOp originalKernel,
+                                             func::FuncOp tilingFunc, OpBuilder &builder) {
+  if (!upperBound) {
+    return Value();
+  }
+
+  mlir::IRMapping mapping;
+
+  // Map original kernel arguments to tiling function arguments by index.
+  auto &origEntry = originalKernel.getBody().front();
+  for (auto [origArg, tilingArg] : llvm::zip(origEntry.getArguments(), tilingFunc.getArguments())) {
+    mapping.map(origArg, tilingArg);
+  }
+
+  // If upperBound is already an entry block argument, return mapped value.
+  if (auto blockArg = upperBound.dyn_cast<BlockArgument>()) {
+    if (blockArg.getOwner() == &origEntry) {
+      return mapping.lookupOrDefault(upperBound);
+    }
+    llvm::dbgs() << "cloneUpperBoundDefinition: non-entry block argument, fallback\n";
+    return Value();
+  }
+
+  auto *def = upperBound.getDefiningOp();
+  if (!def) {
+    llvm::dbgs() << "cloneUpperBoundDefinition: no defining op, fallback\n";
+    return Value();
+  }
+
+  llvm::SmallVector<mlir::Operation *, 16> ops;
+  llvm::SmallPtrSet<mlir::Operation *, 32> visited;
+  getOperandsTree(def, ops, visited);
+
+  auto isSupportedOp = [](mlir::Operation *op) -> bool {
+    if (!op || op->getNumRegions() != 0) {
+      return false;
+    }
+    return isa<arith::ConstantOp, arith::ConstantIndexOp, arith::ConstantIntOp, arith::IndexCastOp, arith::CmpIOp,
+               arith::SelectOp, arith::AddIOp, arith::SubIOp, arith::MulIOp, memref::DimOp, memref::ExpandShapeOp,
+               affine::AffineApplyOp, affine::AffineMinOp>(op);
+  };
+
+  for (auto *op : ops) {
+    if (!isSupportedOp(op)) {
+      llvm::dbgs() << "cloneUpperBoundDefinition: unsupported op " << op->getName() << ", fallback\n";
+      return Value();
+    }
+
+    // Ensure operands are mappable.
+    for (Value operand : op->getOperands()) {
+      if (mapping.contains(operand)) {
+        continue;
+      }
+      if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
+        if (blockArg.getOwner() == &origEntry) {
+          mapping.map(blockArg, tilingFunc.getArgument(blockArg.getArgNumber()));
+          continue;
+        }
+        llvm::dbgs() << "cloneUpperBoundDefinition: non-entry block argument in chain, fallback\n";
+        return Value();
+      }
+      llvm::dbgs() << "cloneUpperBoundDefinition: operand not mapped for op " << op->getName() << ", fallback\n";
+      return Value();
+    }
+
+    Operation *cloned = builder.clone(*op, mapping);
+    mapping.map(op, cloned);
+  }
+
+  if (auto mapped = mapping.lookupOrNull(upperBound)) {
+    return mapped;
+  }
+  llvm::dbgs() << "cloneUpperBoundDefinition: upper bound not mapped, fallback\n";
+  return Value();
 }
 
 // Helper function to get constant index value from Value
@@ -1475,7 +1573,8 @@ static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRe
 }
 
 // Helper: Store tile sizes to memref
-static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
+static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncOp originalKernel,
+                                            ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands,
                                             ArrayRef<SmallVector<unsigned, 6>> allBandTileSizes,
                                             ArrayRef<SmallVector<int, 6>> allBandConstraintMaxs,
                                             ArrayRef<std::vector<DynamicAxisMapping>> allBandDynamicMappings,
@@ -1513,25 +1612,34 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, ArrayRef<Sm
         // The constraintMax comes from TilingStrategy's constraint upper bound
         const auto &mapping = bandDynamicMapping[tileIdx];
         int constraintMax = (tileIdx < bandConstraintMaxs.size()) ? bandConstraintMaxs[tileIdx] : 0;
-
-        if (mapping.inputMemrefIndex == UINT_MAX || mapping.dimIndex == UINT_MAX) {
-          tilingFunc.emitError("dynamic axis mapping not found for tile index " + std::to_string(tileIdx));
-          return failure();
+        Value dim;
+        if (mapping.upperBound) {
+          dim = cloneUpperBoundDefinition(mapping.upperBound, originalKernel, tilingFunc, b);
+          if (!dim) {
+            llvm::dbgs() << "storeTileSizesToMemref: cloneUpperBoundDefinition failed, fallback to memref.dim\n";
+          }
         }
 
-        if (mapping.inputMemrefIndex >= tilingFunc.getNumArguments() - 2) {
-          tilingFunc.emitError("invalid memref argument index " + std::to_string(mapping.inputMemrefIndex));
-          return failure();
-        }
+        if (!dim) {
+          if (mapping.inputMemrefIndex == UINT_MAX || mapping.dimIndex == UINT_MAX) {
+            tilingFunc.emitError("dynamic axis mapping not found for tile index " + std::to_string(tileIdx));
+            return failure();
+          }
 
-        Value memrefArg = tilingFunc.getArgument(mapping.inputMemrefIndex);
-        if (!isa<MemRefType>(memrefArg.getType())) {
-          tilingFunc.emitError("argument at index " + std::to_string(mapping.inputMemrefIndex) + " is not a memref");
-          return failure();
-        }
+          if (mapping.inputMemrefIndex >= tilingFunc.getNumArguments() - 2) {
+            tilingFunc.emitError("invalid memref argument index " + std::to_string(mapping.inputMemrefIndex));
+            return failure();
+          }
 
-        Value dimIndexVal = b.create<arith::ConstantIndexOp>(loc, mapping.dimIndex);
-        Value dim = b.create<memref::DimOp>(loc, memrefArg, dimIndexVal);
+          Value memrefArg = tilingFunc.getArgument(mapping.inputMemrefIndex);
+          if (!isa<MemRefType>(memrefArg.getType())) {
+            tilingFunc.emitError("argument at index " + std::to_string(mapping.inputMemrefIndex) + " is not a memref");
+            return failure();
+          }
+
+          Value dimIndexVal = b.create<arith::ConstantIndexOp>(loc, mapping.dimIndex);
+          dim = b.create<memref::DimOp>(loc, memrefArg, dimIndexVal);
+        }
 
         Value step;
         if (constraintMax > 0) {
@@ -1624,7 +1732,8 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
   }
 
   // Step 6: Store tile sizes to memref (with constraint max for dynamic shapes)
-  if (failed(storeTileSizesToMemref(f, bands, allBandTileSizes, allBandConstraintMaxs, allBandDynamicMappings,
+  if (failed(storeTileSizesToMemref(f, originalKernel, bands, allBandTileSizes, allBandConstraintMaxs,
+                                    allBandDynamicMappings,
                                     builder))) {
     return failure();
   }
@@ -1667,20 +1776,21 @@ static std::vector<DynamicAxisMapping> buildDynamicAxisMappingForBand(ArrayRef<m
 
       auto [argIndex, dimIndex] = traceDynamicUpperBound(upperBound, originalKernel);
       if (argIndex >= 0 && dimIndex >= 0) {
-        bandDynamicMapping.push_back({static_cast<unsigned>(argIndex), static_cast<unsigned>(dimIndex)});
+        bandDynamicMapping.push_back(
+          {static_cast<unsigned>(argIndex), static_cast<unsigned>(dimIndex), upperBound});
       } else {
         // Fallback: use first memref argument
         for (unsigned i = 0; i < originalKernel.getNumArguments(); ++i) {
           Value arg = originalKernel.getArgument(i);
           if (isa<MemRefType>(arg.getType())) {
-            bandDynamicMapping.push_back({i, 0});
+            bandDynamicMapping.push_back({i, 0, upperBound});
             break;
           }
         }
       }
     } else {
       // Static tile size
-      bandDynamicMapping.push_back({UINT_MAX, UINT_MAX});
+      bandDynamicMapping.push_back({UINT_MAX, UINT_MAX, Value()});
     }
   }
 
