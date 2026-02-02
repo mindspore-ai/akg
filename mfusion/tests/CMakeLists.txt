@@ -16,7 +16,7 @@ set(MFUSION_TEST_DEPENDS
 
 add_lit_testsuite(check-mfusion
                   "Running the mfusion regression tests"
-                  ${CMAKE_CURRENT_BINARY_DIR}/ut
+                  ${CMAKE_CURRENT_BINARY_DIR}/ut/lit
                   DEPENDS
                   ${MFUSION_TEST_DEPENDS})
 set_target_properties(check-mfusion PROPERTIES FOLDER "Tests")
