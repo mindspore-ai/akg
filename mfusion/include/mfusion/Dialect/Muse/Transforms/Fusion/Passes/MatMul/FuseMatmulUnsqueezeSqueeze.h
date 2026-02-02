@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_GELU_FUSION_H
-#define MFUSION_DIALECT_MUSE_TRANSFORMS_GELU_FUSION_H
+#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_UNSQUEEZESQUEEZE_H
+#define MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_UNSQUEEZESQUEEZE_H
 
 #include <memory>
 
@@ -24,10 +24,12 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+namespace muse {
 
-/// Create a pass to fuse Pow, Mul, Add, Tanh into Gelu.
-std::unique_ptr<Pass> createFuseGeluPass();
+/// Fuse MatMul/Mm with 1D inputs by inserting reshape (unsqueeze/squeeze).
+std::unique_ptr<Pass> createFuseMatmulUnsqueezeSqueezePass();
 
+}  // namespace muse
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_GELU_FUSION_H
+#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_PASSES_MATMUL_FUSE_MATMUL_UNSQUEEZESQUEEZE_H
