@@ -78,8 +78,6 @@ def track_node(node_name: str):
         @functools.wraps(node_fn)
         async def wrapped(state: Dict[str, Any]):
             session_id = str(state.get("session_id") or "").strip()
-            if _stream_enabled() and not session_id:
-                raise ValueError(f"[{node_name}_node] state 中必须包含 session_id（AIKG_STREAM_OUTPUT=on）")
 
             task_id = str(state.get("task_id") or "")
             task_label = str(state.get("task_label") or "").strip()

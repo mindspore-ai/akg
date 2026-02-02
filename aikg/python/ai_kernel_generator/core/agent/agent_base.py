@@ -421,8 +421,6 @@ class AgentBase(ABC):
 
         # 检查流式输出和 session_id
         stream = self._stream_enabled()
-        if stream and not session_id:
-            raise ValueError(f"[Agent] agent={agent_name} 的 context 中必须包含 session_id（AIKG_STREAM_OUTPUT=on）")
 
         # 创建模型
         model = create_model(model_name)
