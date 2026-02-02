@@ -107,9 +107,11 @@ async def main(installer):
     agent = EmailWritingAgent()
     
     context = SelectionContext(
-        task_type="邮件编写",
-        framework="专业商务邮件",
-        optimization_goal="生成符合商务规范的专业邮件"
+        custom_fields={
+            "task_type": "邮件编写",
+            "framework": "专业商务邮件",
+            "optimization_goal": "生成符合商务规范的专业邮件"
+        }
     )
     
     print(f"从 {len(all_skills)} 个skills中检索...")
@@ -117,8 +119,26 @@ async def main(installer):
     for k, v in context.to_dict().items():
         print(f"  {k}: {v}")
     
-    # 构建prompt
-    prompt = selector.build_llm_prompt(all_skills, context)
+    # 构建prompt（用户自定义模板）
+    prompt_template = """你是一个专业的 Skill 选择专家，负责为邮件编写任务选择合适的 Skill。
+
+任务上下文：
+{context_str}
+
+可用的 Skills：
+{skills_str}
+
+请根据任务需求（专业商务邮件编写），选择最相关的Skill，不要有遗漏。
+
+返回 JSON 格式：
+```json
+{{
+  "selected": ["skill-name-1", "skill-name-2"],
+  "reason": "选择理由"
+}}
+```
+"""
+    prompt = selector.build_llm_prompt(all_skills, context, prompt_template)
     
     # 调用LLM
     print("\n调用LLM...")

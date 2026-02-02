@@ -15,36 +15,55 @@
 """
 算子生成领域的 Skill 选择器
 
-扩展通用的 SkillSelector，提供算子生成领域特定的：
+提供算子生成场景的专用 Skill 选择功能：
 - OperatorSelectionContext: 算子生成上下文
 - OperatorSkillSelector: 算子生成专用选择器
-- 算子相关的过滤器（backend, dsl, operator_type）
+- 自动过滤器：backend, dsl, operator_type（用户无需手动创建）
 
-示例：
-    from skill_system.operator_selector import (
+推荐用法（简单）：
+    from akg_agents.op.skill import (
         OperatorSkillSelector,
         OperatorSelectionContext
     )
+    from akg_agents.core_v2.skill import SkillRegistry
     
-    # 创建算子选择器
+    # 1. 加载 Skills
+    registry = SkillRegistry()
+    registry.load_from_directory(Path("~/.akg/skills"))
+    
+    # 2. 创建选择器（自动配置过滤器）
     selector = OperatorSkillSelector()
     
-    # 算子生成上下文
+    # 3. 定义上下文（只需设置参数，自动过滤）
     context = OperatorSelectionContext(
-        task_type="operator_generation",
         operator_type="softmax",
         dsl="triton",
         backend="cuda"
     )
     
-    # 选择 Skills
-    selected = selector.select(all_skills, context, llm_func)
+    # 4. 选择 Skills
+    # 方式 A：只进行粗筛（基于 metadata）
+    selected = selector.coarse_filter(registry.get_all(), context)
+    
+    # 方式 B：两阶段筛选（粗筛 + LLM 精筛）
+    selected = selector.select(registry.get_all(), context, llm_func)
+
+高级用法（添加自定义过滤器）：
+    # 如果需要额外的过滤条件
+    def perf_filter(skill, context):
+        return skill.metadata.get("performance") == "high"
+    
+    selector = OperatorSkillSelector(additional_filters=[perf_filter])
 """
 
 from typing import List, Callable, Optional, Dict, Any
 from dataclasses import dataclass
 
-from akg_agents.core_v2.skill.skill_selector import SelectionContext, SkillSelector
+from akg_agents.core_v2.skill.skill_selector import (
+    SelectionContext,
+    SkillSelector,
+    create_metadata_matcher  # 从通用框架导入
+)
 from akg_agents.core_v2.skill.metadata import SkillMetadata
 
 import logging
@@ -62,156 +81,97 @@ class OperatorSelectionContext(SelectionContext):
         operator_type: 算子类型（如："softmax", "layernorm", "reduce"）
         dsl: DSL 类型（如："triton", "cuda", "opencl"）
         backend: 后端（如："cuda", "ascend", "rocm"）
+        hardware: 硬件型号（如："ascend910b4", "a100"）
     
     示例：
         context = OperatorSelectionContext(
-            task_type="operator_generation",
             operator_type="softmax",
             dsl="triton",
             backend="cuda",
-            optimization_goal="speed"
+            hardware="a100"
+        )
+        
+        # 如果需要额外的字段，使用 custom_fields
+        context = OperatorSelectionContext(
+            operator_type="softmax",
+            dsl="triton",
+            backend="cuda",
+            custom_fields={
+                "optimization_goal": "speed",
+                "task_type": "operator_generation"
+            }
         )
     """
     # 算子生成特定字段
     operator_type: Optional[str] = None      # 算子类型
     dsl: Optional[str] = None                # DSL类型（triton, cuda等）
     backend: Optional[str] = None            # 后端（cuda, ascend等）
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        result = super().to_dict()
-        result.update({
-            "operator_type": self.operator_type,
-            "dsl": self.dsl,
-            "backend": self.backend
-        })
-        return {k: v for k, v in result.items() if v is not None}
+    hardware: Optional[str] = None           # 硬件型号（npu910b, a100等）
 
 
 # ==================== 算子生成过滤器 ====================
 
-
-def backend_filter(skill: SkillMetadata, context: SelectionContext) -> bool:
-    """检查 backend 匹配
-    
-    从 Skill 的 metadata 中提取 backend 字段，与 context 中的 backend 比较。
-    
-    Skill metadata 格式：
-        metadata:
-          backend: "cuda, ascend"  # 支持多个后端，逗号分隔
-    
-    Args:
-        skill: 待过滤的 Skill
-        context: 选择上下文
-    
-    Returns:
-        是否通过过滤
-    """
-    # 只对 OperatorSelectionContext 进行过滤
-    if not isinstance(context, OperatorSelectionContext):
-        return True
-    
-    # 如果 context 没有指定 backend，放行
-    if not context.backend:
-        return True
-    
-    # 检查 Skill 的 backend metadata
-    if skill.metadata:
-        skill_backends = skill.metadata.get("backend", "")
-        if skill_backends:
-            backends = [b.strip() for b in skill_backends.split(",")]
-            return context.backend in backends
-    
-    # 如果 Skill 没有 backend metadata，默认放行（可能是通用 Skill）
-    return True
-
-
-def operator_type_filter(skill: SkillMetadata, context: SelectionContext) -> bool:
-    """检查 operator_type 匹配
-    
-    从 Skill 的 metadata 中提取 operator_patterns 字段，与 context 中的 operator_type 比较。
-    
-    Skill metadata 格式：
-        metadata:
-          operator_patterns: "softmax, layernorm, normalization"  # 支持多个模式
-    
-    Args:
-        skill: 待过滤的 Skill
-        context: 选择上下文
-    
-    Returns:
-        是否通过过滤
-    """
-    if not isinstance(context, OperatorSelectionContext):
-        return True
-    
-    if not context.operator_type:
-        return True
-    
-    if skill.metadata:
-        patterns_str = skill.metadata.get("operator_patterns", "")
-        if patterns_str:
-            patterns = [p.strip() for p in patterns_str.split(",")]
-            return context.operator_type in patterns
-    
-    return True
-
-
-def dsl_filter(skill: SkillMetadata, context: SelectionContext) -> bool:
-    """检查 dsl 匹配
-    
-    从 Skill 的 metadata 中提取 dsl 字段，与 context 中的 dsl 比较。
-    
-    Skill metadata 格式：
-        metadata:
-          dsl: "triton"  # 或 "cuda", "opencl" 等
-    
-    Args:
-        skill: 待过滤的 Skill
-        context: 选择上下文
-    
-    Returns:
-        是否通过过滤
-    """
-    if not isinstance(context, OperatorSelectionContext):
-        return True
-    
-    if not context.dsl:
-        return True
-    
-    if skill.metadata:
-        skill_dsl = skill.metadata.get("dsl", "")
-        if skill_dsl:
-            dsls = [d.strip() for d in skill_dsl.split(",")]
-            return context.dsl in dsls
-    
-    return True
+# 使用通用的 create_metadata_matcher 工厂函数创建算子特定的过滤器
+backend_filter = create_metadata_matcher("backend")
+dsl_filter = create_metadata_matcher("dsl")
+hardware_filter = create_metadata_matcher("hardware")
+operator_type_filter = create_metadata_matcher("operator_type", "operator_patterns")
 
 
 def create_operator_filters() -> List[Callable]:
     """
     创建算子生成领域的过滤器集合
     
+    所有过滤器都是通过 create_metadata_matcher 工厂函数生成的，避免代码重复。
+    
     包含的过滤器：
     1. backend_filter: 后端匹配（cuda, ascend等）
-    2. operator_type_filter: 算子类型匹配（softmax, layernorm等）
-    3. dsl_filter: DSL 匹配（triton, cuda等）
+    2. dsl_filter: DSL 匹配（triton, cuda等）
+    3. hardware_filter: 硬件型号匹配（npu910b, a100等）
+    4. operator_type_filter: 算子类型匹配（softmax, layernorm等）
     
     Returns:
         过滤器函数列表
     
+    扩展说明：
+        如果需要添加新的过滤维度（如 framework、version 等），只需：
+        1. 在 OperatorSelectionContext 中添加字段
+        2. 在此函数中添加一行：xxx_filter = create_metadata_matcher("xxx")
+        3. 将 xxx_filter 添加到返回列表
+    
     示例：
-        filters = create_operator_filters()
-        selector = SkillSelector(custom_filters=filters)
-        
+        # 推荐用法：直接使用 OperatorSkillSelector（自动应用所有过滤器）
+        selector = OperatorSkillSelector()
         context = OperatorSelectionContext(
             operator_type="softmax",
             dsl="triton",
-            backend="cuda"
+            backend="cuda",
+            hardware="a100"
         )
-        candidates = selector.coarse_filter(skills, context)
+        candidates = selector.coarse_filter(all_skills, context)
+        
+        # 高级用法 1：只使用部分过滤器
+        from akg_agents.core_v2.skill import SkillSelector
+        
+        filters = [backend_filter, dsl_filter]
+        custom_selector = SkillSelector(custom_filters=filters)
+        
+        # 高级用法 2：组合 include 和 exclude
+        from akg_agents.core_v2.skill import create_metadata_matcher
+        
+        exclude_cpu = create_metadata_matcher("backend", "backend", "exclude")
+        context = OperatorSelectionContext(backend="cpu")  # 要排除的后端
+        filters = [dsl_filter, exclude_cpu]  # dsl 匹配 + 排除 cpu
+        
+        # 高级用法 3：使用逻辑组合器
+        from akg_agents.core_v2.skill import and_filters
+        
+        # backend 必须是 cuda，且 dsl 不能是 opencl
+        exclude_opencl = create_metadata_matcher("dsl", "dsl", "exclude")
+        complex_filter = and_filters(backend_filter, exclude_opencl)
+        custom_selector = SkillSelector(custom_filters=[complex_filter])
     """
-    return [backend_filter, operator_type_filter, dsl_filter]
+    return [backend_filter, dsl_filter, hardware_filter, operator_type_filter]
 
 
 # ==================== 算子生成选择器 ====================
@@ -272,23 +232,32 @@ def create_operator_selector(additional_filters: Optional[List[Callable]] = None
     """
     快速创建算子生成专用的 SkillSelector
     
+    注意：
+        此函数主要用于需要添加额外自定义过滤器的高级场景。
+        对于常规使用，直接实例化 OperatorSkillSelector() 即可。
+    
     Args:
-        additional_filters: 额外的自定义过滤器
+        additional_filters: 额外的自定义过滤器（可选）
     
     Returns:
         配置好的 OperatorSkillSelector
     
     示例：
-        # 方式 1: 使用类
+        # 推荐用法：直接使用类（99% 的场景）
         selector = OperatorSkillSelector()
+        context = OperatorSelectionContext(
+            operator_type="softmax",
+            dsl="triton",
+            backend="cuda"
+        )
+        selected = selector.coarse_filter(all_skills, context)
         
-        # 方式 2: 使用便捷函数（等价）
-        selector = create_operator_selector()
-        
-        # 方式 3: 添加自定义过滤器
+        # 高级用法：需要额外过滤器时（极少场景）
         def perf_filter(skill, context):
             return skill.metadata.get("performance") == "high"
         
         selector = create_operator_selector(additional_filters=[perf_filter])
+        # 或者直接：
+        # selector = OperatorSkillSelector(additional_filters=[perf_filter])
     """
     return OperatorSkillSelector(additional_filters=additional_filters)

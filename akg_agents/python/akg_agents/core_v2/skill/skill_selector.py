@@ -53,55 +53,178 @@ from .metadata import SkillMetadata, SkillLevel
 logger = logging.getLogger(__name__)
 
 
+# ==================== 通用过滤器工具 ====================
+
+
+def create_metadata_matcher(
+    context_field: str,
+    metadata_field: Optional[str] = None,
+    match_mode: str = "include"
+) -> Callable:
+    """
+    创建通用的 metadata 匹配器（工厂函数）
+    
+    这是一个高阶函数，用于生成过滤器函数。避免为每个字段重复编写相同的过滤逻辑。
+    
+    Args:
+        context_field: context 中的字段名（如 "backend", "dsl", "hardware"）
+        metadata_field: Skill metadata 中的字段名（如果为 None，则与 context_field 相同）
+        match_mode: 匹配模式
+            - "include": 必须包含（默认）- Skill 的 metadata 值必须包含 context 的值
+            - "exclude": 必须排除 - Skill 的 metadata 值不能包含 context 的值
+    
+    Returns:
+        过滤器函数 filter(skill, context) -> bool
+    
+    示例：
+        # 创建 backend 匹配器
+        backend_filter = create_metadata_matcher("backend")
+        
+        # 创建 operator_type 匹配器（metadata 字段名不同）
+        operator_filter = create_metadata_matcher("operator_type", "operator_patterns")
+        
+        # 创建排除型匹配器
+        exclude_cpu = create_metadata_matcher("backend", "backend", "exclude")
+        
+        # 组合使用：必须是 cuda 后端，但不能是 triton DSL
+        filters = [
+            create_metadata_matcher("backend"),  # 必须匹配 backend
+            create_metadata_matcher("dsl", "dsl", "exclude")  # 排除某些 dsl
+        ]
+        selector = SkillSelector(custom_filters=filters)
+    """
+    if metadata_field is None:
+        metadata_field = context_field
+    
+    def matcher(skill: SkillMetadata, context: SelectionContext) -> bool:
+        # 尝试从 context 获取字段值（支持直接字段或 custom_fields）
+        context_value = getattr(context, context_field, None)
+        if context_value is None:
+            context_value = context.custom_fields.get(context_field)
+        
+        if not context_value:
+            return True  # 如果 context 没有指定该字段，放行
+        
+        # 获取 Skill metadata 中的值
+        if not skill.metadata:
+            return True  # 如果 Skill 没有 metadata，默认放行（可能是通用 Skill）
+        
+        metadata_value = skill.metadata.get(metadata_field, "")
+        if not metadata_value:
+            return True  # 如果 Skill 没有该 metadata 字段，默认放行
+        
+        # 解析逗号分隔的值列表
+        values = [v.strip() for v in metadata_value.split(",")]
+        
+        # 根据匹配模式进行判断
+        if match_mode == "include":
+            return context_value in values
+        elif match_mode == "exclude":
+            return context_value not in values
+        else:
+            raise ValueError(f"Unknown match_mode: {match_mode}")
+    
+    return matcher
+
+
+def and_filters(*filters: Callable) -> Callable:
+    """
+    组合多个过滤器（AND 逻辑）
+    
+    所有过滤器都必须返回 True，最终结果才为 True。
+    
+    Args:
+        *filters: 多个过滤器函数
+    
+    Returns:
+        组合后的过滤器函数
+    
+    示例：
+        # backend 必须是 cuda，且 dsl 必须是 triton
+        combined = and_filters(
+            create_metadata_matcher("backend"),
+            create_metadata_matcher("dsl")
+        )
+        selector = SkillSelector(custom_filters=[combined])
+    """
+    def combined_filter(skill: SkillMetadata, context: SelectionContext) -> bool:
+        return all(f(skill, context) for f in filters)
+    return combined_filter
+
+
+def or_filters(*filters: Callable) -> Callable:
+    """
+    组合多个过滤器（OR 逻辑）
+    
+    任一过滤器返回 True，最终结果就为 True。
+    
+    Args:
+        *filters: 多个过滤器函数
+    
+    Returns:
+        组合后的过滤器函数
+    
+    示例：
+        # backend 是 cuda 或 ascend 都可以
+        combined = or_filters(
+            lambda s, c: s.metadata.get("backend") == "cuda",
+            lambda s, c: s.metadata.get("backend") == "ascend"
+        )
+        selector = SkillSelector(custom_filters=[combined])
+    """
+    def combined_filter(skill: SkillMetadata, context: SelectionContext) -> bool:
+        return any(f(skill, context) for f in filters)
+    return combined_filter
+
+
+# ==================== 选择上下文 ====================
+
+
 @dataclass
 class SelectionContext:
     """通用 Skill 选择上下文（领域无关）
     
-    适用于任何领域的 Skill 选择，通过 custom_fields 扩展领域特定信息。
+    这是一个完全通用的基类，不包含任何领域特定的字段。
+    所有领域特定的字段应该通过继承添加（如 OperatorSelectionContext）。
     
     字段说明：
-        task_type: 任务类型（如："document_generation", "test_generation"）
-        framework: 使用的框架（如："pytest", "sphinx"）
-        optimization_goal: 优化目标（如："speed", "quality"）
-        custom_fields: 自定义字段字典，用于传递领域特定信息
+        custom_fields: 自定义字段字典，用于传递任意信息
     
     示例：
-        # 文档生成
+        # 方式 1: 使用 custom_fields（适合简单场景）
         context = SelectionContext(
-            task_type="document_generation",
             custom_fields={
                 "doc_type": "api",
-                "language": "python",
-                "format": "markdown"
+                "language": "python"
             }
         )
         
-        # 测试生成
-        context = SelectionContext(
-            task_type="test_generation",
-            custom_fields={
-                "test_type": "unit",
-                "coverage_target": 80,
-                "framework": "pytest"
-            }
-        )
+        # 方式 2: 继承创建领域特定上下文（推荐）
+        @dataclass
+        class DocSelectionContext(SelectionContext):
+            doc_type: Optional[str] = None
+            language: Optional[str] = None
+        
+        context = DocSelectionContext(doc_type="api", language="python")
     """
-    # 通用任务字段
-    task_type: Optional[str] = None          # 任务类型
-    framework: Optional[str] = None          # 框架
-    optimization_goal: Optional[str] = None  # 优化目标
-    
-    # 自定义扩展字段（用于任意领域）
+    # 自定义扩展字段（用于任意信息）
     custom_fields: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        result = {
-            "task_type": self.task_type,
-            "framework": self.framework,
-            "optimization_goal": self.optimization_goal
-        }
+        """转换为字典（包含所有非私有字段）"""
+        result = {}
+        
+        # 收集所有 dataclass 字段（除了 custom_fields）
+        for field_name in dir(self):
+            if not field_name.startswith('_') and field_name != 'custom_fields':
+                value = getattr(self, field_name, None)
+                # 只包含非方法的字段
+                if not callable(value) and value is not None:
+                    result[field_name] = value
+        
+        # 添加 custom_fields 中的内容
         result.update(self.custom_fields)
+        
         return {k: v for k, v in result.items() if v is not None}
 
 
@@ -173,73 +296,93 @@ class SkillSelector:
         self,
         candidates: List[SkillMetadata],
         context: SelectionContext,
-        history: Optional[List[Dict]] = None
+        prompt_template: str,
+        **kwargs
     ) -> str:
         """
         构建 LLM 精筛的 prompt
         
+        用户必须提供 prompt 模板，框架负责准备通用的模板变量。
+        
         Args:
             candidates: 粗筛后的候选 Skill
             context: 选择上下文
-            history: 执行历史（可选）
+            prompt_template: prompt 模板（必需）
+                模板中可以使用以下预定义变量：
+                - {context_str}: 格式化的上下文信息
+                - {skills_str}: 格式化的候选 Skill 列表
+                - {candidates}: 候选 Skill 对象列表
+                - {context}: 上下文对象
+            **kwargs: 额外参数（用户自定义的任意参数），会传递给模板
+                例如：history、max_skills、system_prompt 等
         
         Returns:
             LLM prompt 字符串
+        
+        Raises:
+            ValueError: 如果未提供 prompt_template
+            KeyError: 如果模板中使用了未提供的变量
+        
+        示例：
+            # 简单模板
+            template = '''
+            上下文: {context_str}
+            候选 Skills: {skills_str}
+            请选择最相关的 Skills，返回 JSON 格式。
+            '''
+            prompt = selector.build_llm_prompt(candidates, context, template)
+            
+            # 使用额外参数
+            template = '''
+            上下文: {context_str}
+            候选: {skills_str}
+            历史: {history}
+            请选择最多 {max_skills} 个 Skill。
+            '''
+            prompt = selector.build_llm_prompt(
+                candidates, context, template,
+                history="上次尝试失败",
+                max_skills=3
+            )
         """
-        # 辅助函数：转义大括号，避免被 PromptTemplate 误解析
-        def escape_braces(text: str) -> str:
-            return text.replace('{', '{{').replace('}', '}}')
+        if not prompt_template:
+            raise ValueError(
+                "必须提供 prompt_template。"
+                "框架不再提供默认模板，请用户根据具体场景自定义 prompt。"
+            )
         
         # 格式化上下文
         context_str = "\n".join([
-            f"- {k}: {escape_braces(str(v))}" for k, v in context.to_dict().items()
+            f"- {k}: {str(v)}" for k, v in context.to_dict().items()
         ])
         
         # 格式化候选 Skill
         skills_str = ""
         for i, skill in enumerate(candidates, 1):
-            level_str = f"L{skill.level.value}" if skill.level else "?"
-            skills_str += f"\n{i}. **{escape_braces(skill.name)}** ({level_str})\n"
-            skills_str += f"   描述: {escape_braces(skill.description)}\n"
+            level_str = f"[{skill.level.value}]" if skill.level else "[?]"
+            skills_str += f"\n{i}. {skill.name} {level_str}\n"
+            skills_str += f"   描述: {skill.description}\n"
             if skill.metadata:
-                skills_str += f"   标签: {escape_braces(str(skill.metadata))}\n"
+                skills_str += f"   标签: {skill.metadata}\n"
         
-        # 格式化历史（如果有）
-        history_str = ""
-        if history:
-            history_str = "\n## 执行历史\n"
-            for i, h in enumerate(history, 1):
-                history_str += f"{i}. {escape_braces(h.get('action', '未知操作'))}\n"
-                history_str += f"   结果: {escape_braces(str(h.get('result', '未知')))}\n"
-                if 'error' in h:
-                    history_str += f"   错误: {escape_braces(str(h['error']))}\n"
+        # 准备模板变量
+        template_vars = {
+            'context_str': context_str,
+            'skills_str': skills_str,
+            'candidates': candidates,
+            'context': context,
+        }
+        # 将用户的额外参数合并进去
+        template_vars.update(kwargs)
         
-        # 构建完整 prompt
-        # 注意：JSON 示例中的大括号需要转义为 {{ 和 }}，避免被 PromptTemplate 当作格式化占位符
-        prompt = (
-            "你是一个 Skill 选择专家，负责根据任务需求选择最相关的 Skill。\n\n"
-            "## 任务上下文\n"
-            f"{context_str}\n"
-            f"{history_str}\n"
-            "## 候选 Skill（已粗筛）\n"
-            f"{skills_str}\n\n"
-            "## 任务\n"
-            "请分析任务需求和候选 Skill，选择最相关的 1-3 个 Skill。\n\n"
-            "## 输出格式\n"
-            "请返回 JSON 格式：\n"
-            '```json\n'
-            '{{\n'
-            '  "selected": ["skill-name-1", "skill-name-2"],\n'
-            '  "reason": "选择这些 Skill 的理由"\n'
-            '}}\n'
-            '```\n\n'
-            "注意：\n"
-            "- 只返回 JSON，不要其他内容\n"
-            "- selected 数组包含选中的 Skill 名称\n"
-            "- reason 简要说明选择理由\n"
-        )
-        
-        return prompt
+        try:
+            return prompt_template.format(**template_vars)
+        except KeyError as e:
+            raise KeyError(
+                f"模板变量 {e} 未提供。"
+                f"可用的预定义变量: context_str, skills_str, candidates, context。"
+                f"用户自定义变量通过 **kwargs 传入。"
+            )
     
     def parse_llm_response(
         self,
@@ -330,8 +473,10 @@ class SkillSelector:
         all_skills: List[SkillMetadata],
         context: SelectionContext,
         llm_generate_func: Optional[Any] = None,
-        history: Optional[List[Dict]] = None,
-        level: Optional[SkillLevel] = None
+        llm_prompt: Optional[str] = None,
+        prompt_template: Optional[str] = None,
+        level: Optional[SkillLevel] = None,
+        **kwargs
     ) -> List[SkillMetadata]:
         """
         完整的两阶段选择流程
@@ -340,11 +485,44 @@ class SkillSelector:
             all_skills: 所有可用的 Skill
             context: 选择上下文
             llm_generate_func: LLM 生成函数（接受 prompt 返回文本）
-            history: 执行历史
+            llm_prompt: 直接提供的 LLM prompt（可选）
+                如果提供，将跳过 build_llm_prompt，直接使用此 prompt
+            prompt_template: prompt 模板（可选）
+                如果提供了 llm_generate_func 但未提供 llm_prompt，则必须提供此参数
             level: 指定只从某个层级筛选（可选）
+            **kwargs: 额外参数，传递给 build_llm_prompt 或用户自定义
         
         Returns:
             最终选中的 Skill 列表
+        
+        Raises:
+            ValueError: 如果提供了 llm_generate_func 但既未提供 llm_prompt 也未提供 prompt_template
+        
+        示例：
+            # 方式 1: 只进行粗筛（不使用 LLM）
+            selected = selector.select(all_skills, context)
+            
+            # 方式 2: 使用自定义模板
+            template = "上下文: {context_str}\n候选: {skills_str}\n请选择..."
+            selected = selector.select(
+                all_skills, context, llm_func,
+                prompt_template=template
+            )
+            
+            # 方式 3: 直接提供完整 prompt
+            my_prompt = "请从以下 Skills 中选择..."
+            selected = selector.select(
+                all_skills, context, llm_func,
+                llm_prompt=my_prompt
+            )
+            
+            # 方式 4: 传递额外参数
+            template = "上下文: {context_str}\n历史: {history}\n候选: {skills_str}"
+            selected = selector.select(
+                all_skills, context, llm_func,
+                prompt_template=template,
+                history="上次失败"
+            )
         """
         # 阶段 1：粗筛
         candidates = self.coarse_filter(all_skills, context, level)
@@ -359,10 +537,22 @@ class SkillSelector:
             return candidates
         
         # 阶段 2：LLM 精筛
-        prompt = self.build_llm_prompt(candidates, context, history)
+        # 如果没有直接提供 prompt，则必须提供 template
+        if llm_prompt is None:
+            if prompt_template is None:
+                raise ValueError(
+                    "提供了 llm_generate_func 但未提供 llm_prompt 或 prompt_template。"
+                    "请提供其中之一以进行 LLM 精筛。"
+                )
+            llm_prompt = self.build_llm_prompt(
+                candidates, 
+                context, 
+                prompt_template,
+                **kwargs
+            )
         
         try:
-            llm_response = llm_generate_func(prompt)
+            llm_response = llm_generate_func(llm_prompt)
             selected = self.parse_llm_response(llm_response, candidates)
             
             if not selected:

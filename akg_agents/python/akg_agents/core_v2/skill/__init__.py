@@ -84,7 +84,11 @@ from .installer import SkillInstaller
 from .skill_selector import (
     SkillSelector,
     SelectionContext,
-    build_prompt_with_skills
+    build_prompt_with_skills,
+    # 过滤器工具
+    create_metadata_matcher,
+    and_filters,
+    or_filters
 )
 
 # 版本管理（简化版）
@@ -115,6 +119,10 @@ __all__ = [
     "SkillSelector",
     "SelectionContext",
     "build_prompt_with_skills",
+    # 过滤器工具
+    "create_metadata_matcher",
+    "and_filters",
+    "or_filters",
     # 版本管理
     "Version",
     "VersionManager",
