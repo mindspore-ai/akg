@@ -11,12 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""
-input
-planlist = planagent -> llm -> ask_user -> planlist
-planlist -》llm -》tool_call -> result (tool， planlist) -> planlist(status全部成功) -> finish
-"""
-
 import logging
 import time
 import json
@@ -247,8 +241,15 @@ class KernelAgent(AgentBase):
             
             result = await self._execute_tool(tool_name, arguments)
             
-            # 如果是 plan tool，提取 plan_list
+            # 如果是 plan tool，处理结果
             if tool_name == "plan":
+                # plan 失败（信息不完整）时，自动转为 ask_user
+                if result.get("status") == "fail":
+                    error_msg = result.get("error_information", "规划失败，请提供更多信息")
+                    logger.info(f"[Plan 失败] {error_msg}")
+                    return self._handle_ask_user({"message": error_msg})
+                
+                # plan 成功时，提取 plan_list
                 self._update_plan_from_result(result)
             
             logger.info(f"[Observation] history: {len(self.history)} 条")
@@ -292,17 +293,30 @@ class KernelAgent(AgentBase):
                 {"prompt": prompt},
                 self.model_level or "standard"
             )
-            llm_response = json.loads(response)
+            
+            # 使用 PlanAgent 的嵌套 JSON 解析器
+            from akg_agents.core_v2.agents.plan import PlanAgent
+            json_str = PlanAgent._extract_nested_json(response)
+            if not json_str:
+                logger.error(f"[LLM 解析失败] 无法提取 JSON")
+                logger.debug(f"响应内容: {response[:500]}")
+                return {
+                    "tool_name": "ask_user",
+                    "arguments": {"message": "系统错误，LLM 响应格式错误，请重试"},
+                    "reason": "LLM 响应解析失败"
+                }
+            
+            llm_response = json.loads(json_str)
             logger.info(f"[LLM] {llm_response.get('tool_name')} - {llm_response.get('reason', '')[:50]}...")
             
             return llm_response
         
         except json.JSONDecodeError as e:
             logger.error(f"[LLM 解析失败] {e}")
-            logger.debug(f"响应内容: {response[:200]}")
+            logger.debug(f"响应内容: {response[:500]}")
             return {
                 "tool_name": "ask_user",
-                "arguments": {"message": "系统错误，LLM 响应格式错误"},
+                "arguments": {"message": "系统错误，LLM 响应格式错误，请重试"},
                 "reason": "LLM 响应解析失败"
             }
         except Exception as e:

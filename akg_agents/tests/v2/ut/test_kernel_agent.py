@@ -128,6 +128,12 @@ async def test_kernel_agent():
                 choice = input(">>> ").strip().lower()
                 if choice != 'y':
                     break
+                # 重置 agent 以开始新任务
+                agent = KernelAgent(
+                    task_id=f"test_kernel_agent_{round_num}",
+                    model_level="standard"
+                )
+                print("\n[INFO] 已创建新的 Agent 实例")
         
         print("\n" + "="*80)
         print("测试结束")
@@ -155,7 +161,7 @@ async def test_simple_case():
         model_level="standard"
     )
     
-    # 第一轮：提出需求
+    # 第一轮：提出需求（信息不完整）
     print("[Round 1] 用户需求: 生成一个 ReLU 算子\n")
     result1 = await agent.run("生成一个 ReLU 算子")
     
@@ -165,17 +171,32 @@ async def test_simple_case():
     if result1.get('status') == 'waiting_for_user':
         print(f"Agent 询问: {result1.get('message')}\n")
         
-        # 第二轮：回答问题
-        print("[Round 2] 用户回答: 使用 triton_cuda，默认配置\n")
-        result2 = await agent.run("使用 triton_cuda，默认配置")
+        # 第二轮：提供完整信息
+        print("[Round 2] 用户回答: 使用 triton-cuda，framework 是 torch，backend 是 cuda\n")
+        result2 = await agent.run("使用 triton-cuda，framework 是 torch，backend 是 cuda")
         
         print(f"状态: {result2.get('status')}")
         print(f"输出: {result2.get('output')}\n")
         
+        # 如果还需要更多信息，继续交互
+        current_result = result2
+        round_num = 2
+        while current_result.get('status') == 'waiting_for_user':
+            round_num += 1
+            print(f"Agent 询问: {current_result.get('message')}\n")
+            print(f"[Round {round_num}] 请手动输入回答:")
+            user_response = input(">>> ").strip()
+            if not user_response:
+                print("输入为空，使用默认回答: 确认")
+                user_response = "确认"
+            current_result = await agent.run(user_response)
+            print(f"状态: {current_result.get('status')}")
+            print(f"输出: {current_result.get('output')}\n")
+        
         # 显示最终计划
-        if result2.get('plan_list'):
+        if current_result.get('plan_list'):
             print("最终执行计划:")
-            for step in result2['plan_list']:
+            for step in current_result['plan_list']:
                 step_desc = step.get('desc') or step.get('tool', 'Unknown')
                 print(f"  - {step_desc}: {step.get('status')}")
     
