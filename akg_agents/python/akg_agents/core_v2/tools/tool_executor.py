@@ -90,27 +90,77 @@ class ToolExecutor:
                         }
                 return {"status": "error", "output": "", "error_information": "plan 返回格式错误"}
             
-            # 其他 agent
-            agent = agent_class(config=self.agent_context.get("config", {}))
+            # 其他 agent - 根据 agent 类型初始化
+            agent_class_name = agent_class.__name__
             
-            run_params = {
-                "op_name": arguments.get("op_name", ""),
-                "task_desc": arguments.get("task_desc", ""),
-                "dsl": arguments.get("dsl", self.agent_context.get("dsl", "triton")),
-                "framework": arguments.get("framework", self.agent_context.get("framework", "torch")),
-                "backend": arguments.get("backend", self.agent_context.get("backend", "cuda")),
-                "arch": arguments.get("arch", self.agent_context.get("arch", "a100")),
-                "user_requirements": arguments.get("user_requirements", ""),
-                "task_id": arguments.get("task_id", self.agent_context.get("task_id", "")),
-                "history_compress": [
-                    {"tool_name": r.tool_name, "arguments": r.arguments, "result": r.result}
-                    for r in self.history[-10:]
-                ] if self.history else []
-            }
+            # OpTaskBuilder 特殊处理：不接受任何初始化参数
+            if agent_class_name == "OpTaskBuilder":
+                agent = agent_class()
+                
+                # OpTaskBuilder 使用 state 参数调用 run
+                state = {
+                    "user_input": arguments.get("user_input", self.agent_context.get("user_input", "")),
+                    "framework": arguments.get("framework", self.agent_context.get("framework", "torch")),
+                    "backend": arguments.get("backend", self.agent_context.get("backend", "cuda")),
+                    "arch": arguments.get("arch", self.agent_context.get("arch", "a100")),
+                    "dsl": arguments.get("dsl", self.agent_context.get("dsl", "triton")),
+                    "user_feedback": arguments.get("user_feedback", ""),
+                    "iteration": arguments.get("iteration", 0),
+                    "max_iterations": arguments.get("max_iterations", 5),
+                    "max_check_retries": arguments.get("max_check_retries", 3)
+                }
+                result = await agent.run(state)
             
-            result = await agent.run(**run_params)
+            # KernelGen 和 KernelDesigner：接受 parser_config_path 参数
+            elif agent_class_name in ["KernelGen", "KernelDesigner"]:
+                agent = agent_class(parser_config_path=None)
+                
+                run_params = {
+                    "op_name": arguments.get("op_name", ""),
+                    "task_desc": arguments.get("task_desc", ""),
+                    "dsl": arguments.get("dsl", self.agent_context.get("dsl", "triton")),
+                    "framework": arguments.get("framework", self.agent_context.get("framework", "torch")),
+                    "backend": arguments.get("backend", self.agent_context.get("backend", "cuda")),
+                    "arch": arguments.get("arch", self.agent_context.get("arch", "a100")),
+                    "user_requirements": arguments.get("user_requirements", ""),
+                    "task_id": arguments.get("task_id", self.agent_context.get("task_id", "")),
+                    "history_compress": [
+                        {"tool_name": r.tool_name, "arguments": r.arguments, "result": r.result}
+                        for r in self.history[-10:]
+                    ] if self.history else []
+                }
+                result = await agent.run(**run_params)
             
-            if isinstance(result, tuple) and len(result) == 3:
+            # 其他未知 agent：尝试通用初始化
+            else:
+                try:
+                    agent = agent_class()
+                except TypeError:
+                    # 如果无参初始化失败，尝试传递 config
+                    agent = agent_class(config=self.agent_context.get("config", {}))
+                
+                run_params = {
+                    "op_name": arguments.get("op_name", ""),
+                    "task_desc": arguments.get("task_desc", ""),
+                    "dsl": arguments.get("dsl", self.agent_context.get("dsl", "triton")),
+                    "framework": arguments.get("framework", self.agent_context.get("framework", "torch")),
+                    "backend": arguments.get("backend", self.agent_context.get("backend", "cuda")),
+                    "arch": arguments.get("arch", self.agent_context.get("arch", "a100")),
+                    "user_requirements": arguments.get("user_requirements", ""),
+                    "task_id": arguments.get("task_id", self.agent_context.get("task_id", "")),
+                    "history_compress": [
+                        {"tool_name": r.tool_name, "arguments": r.arguments, "result": r.result}
+                        for r in self.history[-10:]
+                    ] if self.history else []
+                }
+                result = await agent.run(**run_params)
+            
+            # 处理返回值（不同 agent 返回格式不同）
+            if isinstance(result, dict) and "status" in result:
+                # OpTaskBuilder 或已经是标准格式
+                return result
+            elif isinstance(result, tuple) and len(result) == 3:
+                # KernelGen、KernelDesigner 返回 (generated_code, full_prompt, reasoning)
                 generated_code, full_prompt, reasoning = result
                 return {
                     "status": "success",
@@ -120,8 +170,6 @@ class ToolExecutor:
                     "full_prompt": full_prompt,
                     "reasoning": reasoning
                 }
-            elif isinstance(result, dict) and "status" in result:
-                return result
             else:
                 return {"status": "success", "output": str(result), "error_information": ""}
         
