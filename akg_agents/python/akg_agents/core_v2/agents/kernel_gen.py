@@ -112,13 +112,17 @@ class KernelGen(AgentBase):
         "required": ["op_name", "task_desc", "dsl", "framework", "backend"]
     }
     
-    def __init__(self):
+    def __init__(self, parser_config_path: str = None):
         """
         初始化 KernelGen Agent
+        
+        Args:
+            parser_config_path: parser 配置文件路径（可选）
         """
         
         # 生成计数器（用于追踪生成步骤）
         self.codegen_step_count = 0
+        self.parser_config_path = parser_config_path
         
         # 构建基础上下文
         context = {
@@ -128,6 +132,15 @@ class KernelGen(AgentBase):
         
         # 初始化父类
         super().__init__(context=context)
+        
+        # ==================== Parser 初始化 ====================
+        # 使用新的 parser loader
+        from akg_agents.utils.parser_loader import create_agent_parser
+        self.code_parser = create_agent_parser("kernel_gen", self.parser_config_path)
+        if not self.code_parser:
+            raise ValueError(
+                "Failed to create kernel_gen parser. Please check your parser_config.yaml configuration.")
+        self.format_instructions = self.code_parser.get_format_instructions()
         
         # ==================== Skill 系统初始化 ====================
         # 初始化 Skill Registry 和 Selector
@@ -205,8 +218,7 @@ class KernelGen(AgentBase):
         except Exception as e:
             logger.warning(f"Skill selection failed: {e}, returning empty list")
             return []
-    
-    
+        
     
     async def run(
         self,
@@ -253,7 +265,8 @@ class KernelGen(AgentBase):
                 op_name=op_name,
                 func_name=func_name,
                 task_desc=task_desc,
-                user_requirements=user_requirements
+                user_requirements=user_requirements,
+                format_instructions=self.format_instructions
             )
             
             # 4. 组合完整 prompt

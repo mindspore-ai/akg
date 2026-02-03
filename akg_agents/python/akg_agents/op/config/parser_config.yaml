@@ -35,6 +35,19 @@ parsers:
           mandatory: true
           field_description: "Complete executable code implementation"
 
+  kernel_gen:
+    parser_name: kernel_gen_parser
+    parser_definition:
+      output_fields:
+        code:
+          field_type: str
+          mandatory: true
+          field_description: "Generated kernel code"
+        reasoning:
+          field_type: str
+          mandatory: false
+          field_description: "Reasoning or explanation for the generated code"
+
   # verifier does not need a parser (programmatic verification)
   # verifier returns structured data directly
 
