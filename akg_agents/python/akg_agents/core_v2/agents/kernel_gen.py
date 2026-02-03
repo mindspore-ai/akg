@@ -71,7 +71,7 @@ class KernelGen(AgentBase):
             },
             "dsl": {
                 "type": "string",
-                "description": "目标 DSL（例如：'triton-ascend', 'triton-cuda'）"
+                "description": "目标 DSL（例如：'triton_ascend', 'triton_cuda'）"
             },
             "framework": {
                 "type": "string",

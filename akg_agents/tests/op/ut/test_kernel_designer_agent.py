@@ -56,9 +56,9 @@ async def test_kernel_designer_basic():
   * 考虑 GPU 并行化
   * 标注并行化的机会
 """,
-            dsl="triton_cuda",
-            backend="cuda",
-            arch="a100",
+            dsl="triton_ascend",
+            backend="ascend",
+            arch="ascend910b4",
             task_id="test_vector_add_001"
         )
         
