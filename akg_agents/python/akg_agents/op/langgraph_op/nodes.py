@@ -374,13 +374,9 @@ class NodeFactory:
                     'format_instructions': format_instructions,
                 }
 
-                # 获取模型名称
+                # 获取模型级别
                 model_config = config.get("agent_model_config", {})
-                model_name = model_config.get("conductor")
-                if not model_name:
-                    task_id = state.get('task_id', '0')
-                    logger.warning(f"[Task {task_id}] No conductor model configured")
-                    return {"conductor_suggestion": ""}
+                model_level = model_config.get("conductor") or "standard"
 
                 # 创建临时的 AgentBase 实例用于调用 run_llm
                 # 构建 context（包含 session_id 等信息，支持流式输出）
@@ -407,7 +403,7 @@ class NodeFactory:
                 response_text, prompt, reasoning = await agent_base.run_llm(
                     prompt=conductor_prompt,
                     input=input_data,
-                    model_name=model_name
+                    model_level=model_level
                 )
 
                 # 解析结果

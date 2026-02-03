@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from akg_agents.config.config_validator import load_config
+from akg_agents.op.config.config_validator import load_config
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core.task import Task
 from akg_agents.core.worker.manager import register_local_worker

@@ -49,7 +49,7 @@ import os
 import argparse
 import asyncio
 from akg_agents.core.verifier.kernel_verifier import KernelVerifier
-from akg_agents.config.config_validator import load_config
+from akg_agents.op.config.config_validator import load_config
 from akg_agents.core.worker.manager import register_local_worker, get_worker_manager
 
 

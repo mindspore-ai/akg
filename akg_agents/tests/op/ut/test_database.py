@@ -29,7 +29,7 @@ from pathlib import Path
 from akg_agents import get_project_root
 from akg_agents.op.database.coder_database import CoderDatabase, DEFAULT_BENCHMARK_PATH
 from akg_agents.op.database.coder_vector_store import CoderVectorStore
-from akg_agents.config.config_validator import load_config
+from akg_agents.op.config.config_validator import load_config
 from akg_agents.op.config.config_validator import load_config
 from ..utils import get_kernelbench_op_name
 
