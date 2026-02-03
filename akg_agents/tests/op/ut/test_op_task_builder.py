@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 async def test_op_task_builder_basic():
     """测试基本的任务构建功能 - 清晰的需求应该返回 READY"""
     try:
-        from akg_agents.core_v2.agents.op_task_builder import OpTaskBuilder
+        from akg_agents.op.agents import OpTaskBuilder
         from akg_agents.op.langgraph_op.op_task_builder_state import OpTaskBuilderStatus
         
         # 创建 OpTaskBuilder 实例
@@ -107,7 +107,7 @@ async def test_op_task_builder_basic():
 async def test_op_task_builder_with_feedback():
     """测试带用户反馈的多轮交互"""
     try:
-        from akg_agents.core_v2.agents.op_task_builder import OpTaskBuilder
+        from akg_agents.op.agents import OpTaskBuilder
         from akg_agents.op.langgraph_op.op_task_builder_state import OpTaskBuilderStatus
         
         agent = OpTaskBuilder()
@@ -185,7 +185,7 @@ async def test_op_task_builder_with_feedback():
 async def test_op_task_builder_unsupported():
     """测试不支持的需求 - 应该返回 UNSUPPORTED"""
     try:
-        from akg_agents.core_v2.agents.op_task_builder import OpTaskBuilder
+        from akg_agents.op.agents import OpTaskBuilder
         from akg_agents.op.langgraph_op.op_task_builder_state import OpTaskBuilderStatus
         
         agent = OpTaskBuilder()
@@ -232,7 +232,7 @@ async def test_op_task_builder_unsupported():
 async def test_op_task_builder_softmax():
     """测试 Softmax 算子生成"""
     try:
-        from akg_agents.core_v2.agents.op_task_builder import OpTaskBuilder
+        from akg_agents.op.agents import OpTaskBuilder
         from akg_agents.op.langgraph_op.op_task_builder_state import OpTaskBuilderStatus
         
         agent = OpTaskBuilder()

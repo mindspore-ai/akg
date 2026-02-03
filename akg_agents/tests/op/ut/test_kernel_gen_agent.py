@@ -36,7 +36,7 @@ async def test_kernel_gen_basic():
     """测试基本的 kernel 生成功能"""
     try:
         # 导入 KernelGen 和 ActionRecord
-        from akg_agents.core_v2.agents.kernel_gen import KernelGen
+        from akg_agents.op.agents import KernelGen
         from akg_agents.core_v2.filesystem import ActionRecord
         
         # 创建 KernelGen 实例
@@ -98,7 +98,7 @@ async def test_kernel_gen_basic():
 async def test_kernel_gen_with_error():
     """测试带错误反馈的迭代生成"""
     try:
-        from akg_agents.core_v2.agents.kernel_gen import KernelGen
+        from akg_agents.op.agents import KernelGen
         from akg_agents.core_v2.filesystem import ActionRecord
         
         # 创建 KernelGen 实例

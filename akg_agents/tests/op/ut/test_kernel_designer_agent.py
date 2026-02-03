@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 async def test_kernel_designer_basic():
     """测试基本的 sketch 生成功能"""
     try:
-        from akg_agents.core_v2.agents.kernel_designer import KernelDesigner
+        from akg_agents.op.agents import KernelDesigner
         
         # 创建 KernelDesigner 实例（新 API：不需要业务参数）
         agent = KernelDesigner()
@@ -84,7 +84,7 @@ async def test_kernel_designer_basic():
 async def test_kernel_designer_with_inspirations():
     """测试带 inspirations 的 sketch 生成"""
     try:
-        from akg_agents.core_v2.agents.kernel_designer import KernelDesigner
+        from akg_agents.op.agents import KernelDesigner
         
         agent = KernelDesigner()
         
@@ -169,7 +169,7 @@ async def test_kernel_designer_with_inspirations():
 async def test_kernel_designer_hint_mode():
     """测试 Hint 模式（生成参数空间配置）"""
     try:
-        from akg_agents.core_v2.agents.kernel_designer import KernelDesigner
+        from akg_agents.op.agents import KernelDesigner
         
         agent = KernelDesigner()
         
@@ -226,7 +226,7 @@ async def test_kernel_designer_hint_mode():
 async def test_kernel_designer_triton_ascend():
     """测试 Triton Ascend 后端的 sketch 生成"""
     try:
-        from akg_agents.core_v2.agents.kernel_designer import KernelDesigner
+        from akg_agents.op.agents import KernelDesigner
         
         agent = KernelDesigner()
         
