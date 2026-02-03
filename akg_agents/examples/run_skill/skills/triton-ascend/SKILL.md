@@ -7,7 +7,7 @@ version: "1.0.0"
 license: MIT
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   framework: "torch, mindspore"
 ---
 
