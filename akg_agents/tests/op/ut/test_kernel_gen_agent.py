@@ -39,7 +39,7 @@ async def test_kernel_gen_basic():
         from akg_agents.core_v2.agents.kernel_gen import KernelGen
         from akg_agents.core_v2.filesystem import ActionRecord
         
-        # 创建 KernelGen 实例（新 API：不需要业务参数）
+        # 创建 KernelGen 实例
         agent = KernelGen()
         
         logger.info("✓ KernelGen agent created successfully")
@@ -62,7 +62,7 @@ async def test_kernel_gen_basic():
         
         logger.info("Running KernelGen agent...")
         
-        # 执行生成（新 API：直接传参数而不是 dict）
+        # 执行生成
         generated_code, formatted_prompt, reasoning = await agent.run(
             op_name="vector_add",
             task_desc="""
@@ -101,7 +101,7 @@ async def test_kernel_gen_with_error():
         from akg_agents.core_v2.agents.kernel_gen import KernelGen
         from akg_agents.core_v2.filesystem import ActionRecord
         
-        # 创建 KernelGen 实例（新 API：不需要业务参数）
+        # 创建 KernelGen 实例
         agent = KernelGen()
         
         logger.info("✓ KernelGen agent created for softmax")
@@ -133,7 +133,7 @@ async def test_kernel_gen_with_error():
         
         logger.info("Running KernelGen agent with error feedback...")
         
-        # 执行生成（新 API：直接传参数）
+        # 执行生成
         generated_code, _, _ = await agent.run(
             op_name="softmax",
             task_desc="""

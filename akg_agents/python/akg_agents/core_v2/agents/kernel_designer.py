@@ -39,7 +39,8 @@ from akg_agents.core_v2.skill import (
     SkillLoader, 
     SkillSelector, 
     SelectionContext, 
-    SkillLevel
+    SkillLevel,
+    create_metadata_matcher
 )
 
 # 设置 Skills 目录路径
@@ -277,8 +278,22 @@ class KernelDesigner(AgentBase):
             
             logger.info(f"Loaded {len(self.loaded_skills)} skills from {SKILLS_DIR}")
             
-            # 创建 selector
-            self.skill_selector = SkillSelector()
+            # 创建自定义过滤器
+            # 1. 排除无关 category
+            def category_filter(skill, context):
+                unrelated = ["writing", "web", "communication", "documentation", "workflow"]
+                return skill.category not in unrelated
+            
+            # 2. backend 匹配器（如果 Skill 指定了 backend，必须匹配）
+            backend_filter = create_metadata_matcher("backend")
+            
+            # 3. dsl 匹配器（如果 Skill 指定了 dsl，必须匹配）
+            dsl_filter = create_metadata_matcher("dsl")
+            
+            # 创建 selector（带自定义过滤器）
+            self.skill_selector = SkillSelector(
+                custom_filters=[category_filter, backend_filter, dsl_filter]
+            )
             
         except Exception as e:
             logger.error(f"Failed to initialize skill system: {e}")
@@ -290,9 +305,9 @@ class KernelDesigner(AgentBase):
         """
         选择相关的 Skills
         
-        1. 排除无关的 skill（基于 category）
-        2. 使用 metadata.get() 进行初筛
-        3. 使用 LLM 进行精筛
+        使用 SkillSelector 的自定义过滤器进行两阶段筛选：
+        1. 粗筛（coarse_filter）：使用 custom_filters 自动过滤
+        2. 精筛（LLM）：根据任务上下文智能选择
         
         Args:
             dsl: 目标 DSL
@@ -309,47 +324,50 @@ class KernelDesigner(AgentBase):
             logger.warning("No skills loaded, skipping skill selection")
             return []
         
-        # 阶段1：使用 metadata 和 category 进行初筛
-        filtered_skills = []
-        for skill in self.loaded_skills:
-            # 1. 排除无关的 skill（基于 category）
-            unrelated_categories = ["writing", "web", "communication", "documentation", "workflow"]
-            if skill.category in unrelated_categories:
-                logger.debug(f"Filtered out unrelated skill ({skill.category}): {skill.name}")
-                continue
-            
-            # 2. 如果 Skill 有 backend/dsl metadata，检查是否匹配
-            # 如果没有这些 metadata，则保留（通用 Skill）
-            skill_backend = skill.metadata.get("backend")
-            skill_dsl = skill.metadata.get("dsl")
-            
-            # 如果 Skill 指定了 backend，但不匹配，则排除
-            if skill_backend and backend and skill_backend != backend:
-                logger.debug(f"Filtered out skill {skill.name}: backend mismatch ({skill_backend} != {backend})")
-                continue
-            
-            # 如果 Skill 指定了 dsl，但不匹配，则排除
-            if skill_dsl and dsl and skill_dsl != dsl:
-                logger.debug(f"Filtered out skill {skill.name}: dsl mismatch ({skill_dsl} != {dsl})")
-                continue
-            
-            filtered_skills.append(skill)
-        
-        logger.info(f"Initial filter: {len(self.loaded_skills)} -> {len(filtered_skills)} skills (removed workflow and unrelated categories)")
-        
-        # 阶段2：使用 LLM 进行精筛
-        # 构建选择上下文
+        # 构建选择上下文（包含 backend 和 dsl 供过滤器使用）
         context = SelectionContext(
-            task_type="sketch_design",
-            framework=backend or "unknown",
-            optimization_goal=f"设计 {dsl or backend or 'kernel'} 算子草图，专注于算法层面的优化策略"
+            custom_fields={
+                "task_type": "sketch_design",
+                "framework": backend or "unknown",
+                "optimization_goal": f"设计 {dsl or backend or 'kernel'} 算子草图，专注于算法层面的优化策略",
+                "backend": backend,
+                "dsl": dsl
+            }
         )
         
         try:
-            # 1. 构建 LLM prompt
-            prompt = self.skill_selector.build_llm_prompt(filtered_skills, context)
+            # 阶段1：粗筛（使用 custom_filters 自动过滤）
+            candidates = self.skill_selector.coarse_filter(self.loaded_skills, context)
+            logger.info(f"Coarse filter: {len(self.loaded_skills)} -> {len(candidates)} skills")
             
-            # 2. 调用 LLM（异步）
+            # 阶段2：LLM 精筛
+            # 定义 prompt 模板
+            prompt_template = """你是一个 Skill 选择专家。现在需要为算子设计（sketch generation）任务选择相关的 Skills。
+
+**任务上下文**:
+{context_str}
+
+**候选 Skills（已粗筛）**:
+{skills_str}
+
+**任务要求**:
+请从候选 Skills 中选择与算子设计任务最相关的 Skills。注意：
+1. 优先选择与 DSL 和后端直接相关的 Skills
+2. 包含设计方法和优化策略相关的 Skills
+3. 确保不要遗漏重要的 Skills
+4. 重点是算子草图设计，无关的技能不要选择（如代码生成、测试等）
+
+**输出格式**（JSON）:
+```json
+{{
+  "selected": ["skill-name-1", "skill-name-2", ...],
+  "reason": "选择理由"
+}}
+```
+"""
+            
+            prompt = self.skill_selector.build_llm_prompt(candidates, context, prompt_template)
+            
             template = Jinja2TemplateWrapper("{{ prompt }}")
             llm_response, _, _ = await self.run_llm(
                 template, 
@@ -357,11 +375,10 @@ class KernelDesigner(AgentBase):
                 "standard"
             )
             
-            # 3. 解析 LLM 响应
-            selected_skills = self.skill_selector.parse_llm_response(llm_response, filtered_skills)
+            selected_skills = self.skill_selector.parse_llm_response(llm_response, candidates)
             
             logger.info(f"✓ Selected {len(selected_skills)} skills: {[s.name for s in selected_skills]}")
-            import pdb; pdb.set_trace()
+            
             return selected_skills
         
         except Exception as e:
