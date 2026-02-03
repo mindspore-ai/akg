@@ -37,9 +37,6 @@ logger = logging.getLogger(__name__)
 
 @register_agent(scopes=["op"])
 class KernelAgent(AgentBase):
-
-    MAX_ITERATIONS = 50  # 最大迭代次数（防止无限循环）
-    DEFAULT_MAX_RETRIES = 3  # 默认最大重试次数
     
     def __init__(
         self,
@@ -209,9 +206,9 @@ class KernelAgent(AgentBase):
         else:
             self._handle_user_response(user_input)
         
-        # ReAct 循环
+        # ReAct 循环：持续执行直到任务完成或需要用户响应
         iteration = 0
-        while iteration < self.MAX_ITERATIONS:
+        while True:
             iteration += 1
             logger.info(f"[ReAct {iteration}] ========")
             
@@ -254,7 +251,8 @@ class KernelAgent(AgentBase):
             
             logger.info(f"[Observation] history: {len(self.history)} 条")
         
-        return self._build_error_response("达到最大迭代次数")
+        # 理论上不应该到达这里（所有退出条件在循环内处理）
+        return self._build_error_response("ReAct 循环异常退出")
     
     async def _execute_tool(self, tool_name: str, arguments: Dict) -> Dict:
         """执行工具并记录"""
@@ -297,9 +295,11 @@ class KernelAgent(AgentBase):
             # 使用 PlanAgent 的嵌套 JSON 解析器
             from akg_agents.core_v2.agents.plan import PlanAgent
             json_str = PlanAgent._extract_nested_json(response)
-            if not json_str:
+            
+            # 检查是否成功提取 JSON（包括空白字符串）
+            if not json_str or not json_str.strip():
                 logger.error(f"[LLM 解析失败] 无法提取 JSON")
-                logger.debug(f"响应内容: {response[:500]}")
+                logger.error(f"LLM 原始响应: {response[:500]}")
                 return {
                     "tool_name": "ask_user",
                     "arguments": {"message": "系统错误，LLM 响应格式错误，请重试"},
@@ -313,7 +313,8 @@ class KernelAgent(AgentBase):
         
         except json.JSONDecodeError as e:
             logger.error(f"[LLM 解析失败] {e}")
-            logger.debug(f"响应内容: {response[:500]}")
+            logger.error(f"提取的 JSON 字符串: {json_str[:200] if json_str else 'None'}")
+            logger.error(f"LLM 原始响应: {response[:500]}")
             return {
                 "tool_name": "ask_user",
                 "arguments": {"message": "系统错误，LLM 响应格式错误，请重试"},
