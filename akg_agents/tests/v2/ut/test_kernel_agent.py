@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-KernelAgentV3 测试（迭代式执行）
+KernelAgent 测试（迭代式执行）
 
 运行方式：
-python tests/v2/ut/test_kernel_agent_v3.py
+python tests/v2/ut/test_kernel_agent.py
 """
 
 import asyncio
@@ -18,14 +18,17 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 
-from akg_agents.core_v2.agents.kernel_agent_v3 import KernelAgentV3
+# 延迟导入避免循环依赖问题
+# 先确保 akg_agents 完全初始化
+import akg_agents
+from akg_agents.core_v2.agents.kernel_agent import KernelAgent
 
 
-async def test_kernel_agent_v3():
-    """测试 KernelAgentV3（迭代式执行，支持多轮交互）"""
+async def test_kernel_agent():
+    """测试 KernelAgent（迭代式执行，支持多轮交互）"""
     
     print("\n" + "="*80)
-    print("KernelAgentV3 交互式测试")
+    print("KernelAgent 交互式测试")
     print("="*80 + "\n")
     
     # 检查 API Key
@@ -42,8 +45,8 @@ async def test_kernel_agent_v3():
     
     try:
         # 初始化 Agent
-        agent = KernelAgentV3(
-            task_id="test_v3",
+        agent = KernelAgent(
+            task_id="test_kernel_agent",
             model_level="standard"
         )
         
@@ -100,7 +103,9 @@ async def test_kernel_agent_v3():
                         "failed": "❌"
                     }.get(step.get("status", "pending"), "❓")
                     
-                    print(f"  {status_emoji} Step {step.get('step_id')}: {step.get('tool')} - {step.get('description', '')} [{step.get('status', 'pending')}]")
+                    # 兼容两种格式：desc（高层描述）和 tool（具体工具）
+                    step_desc = step.get('desc') or step.get('description') or step.get('tool', 'Unknown')
+                    print(f"  {status_emoji} Step {step.get('step_id')}: {step_desc} [{step.get('status', 'pending')}]")
                     if step.get("retry_count", 0) > 0:
                         print(f"     重试次数: {step.get('retry_count')}/{step.get('max_retries', 3)}")
             
@@ -142,10 +147,10 @@ async def test_simple_case():
     """简单测试案例：生成一个 ReLU 算子"""
     
     print("\n" + "="*80)
-    print("KernelAgentV3 简单测试案例")
+    print("KernelAgent 简单测试案例")
     print("="*80 + "\n")
     
-    agent = KernelAgentV3(
+    agent = KernelAgent(
         task_id="test_simple_relu",
         model_level="standard"
     )
@@ -171,14 +176,15 @@ async def test_simple_case():
         if result2.get('plan_list'):
             print("最终执行计划:")
             for step in result2['plan_list']:
-                print(f"  - {step.get('tool')}: {step.get('status')}")
+                step_desc = step.get('desc') or step.get('tool', 'Unknown')
+                print(f"  - {step_desc}: {step.get('status')}")
     
     print("\n测试完成！")
 
 
 if __name__ == "__main__":
     print("\n💡 提示：")
-    print("   - 本测试演示 KernelAgentV3 的迭代式执行流程")
+    print("   - 本测试演示 KernelAgent 的迭代式执行流程")
     print("   - Agent 会自动生成计划、执行工具、处理失败重试")
     print("   - 支持多轮用户交互\n")
     
@@ -190,7 +196,7 @@ if __name__ == "__main__":
     choice = input("\n请输入选项 (1/2/3): ").strip()
     
     if choice == "1":
-        success = asyncio.run(test_kernel_agent_v3())
+        success = asyncio.run(test_kernel_agent())
     elif choice == "2":
         success = asyncio.run(test_simple_case())
     else:

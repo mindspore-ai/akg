@@ -1,4 +1,132 @@
 tools:
+  read_file:
+    type: "basic_tool"
+    function:
+      name: "read_file"
+      description: "读取指定文件的内容。支持读取配置文件、代码文件等。但是需要确定路径"
+      parameters:
+        type: "object"
+        properties:
+          file_path:
+            type: "string"
+            description: "文件路径。支持: 相对于项目根目录、绝对路径"
+          encoding:
+            type: "string"
+            description: "文件编码，默认 utf-8"
+            default: "utf-8"
+        required: ["file_path"]
+  
+  write_file:
+    type: "basic_tool"
+    function:
+      name: "write_file"
+      description: "将内容写入指定文件。支持创建新文件或覆盖现有文件。"
+      parameters:
+        type: "object"
+        properties:
+          content:
+            type: "string"
+            description: "要写入的文件内容"
+          file_path:
+            type: "string"
+            description: "文件路径（可选，如果提供则使用此路径）"
+          op_name:
+            type: "string"
+            description: "算子名称（可选，用于自动生成文件名）"
+          file_type:
+            type: "string"
+            description: "文件类型，可选: kernel, test, spec, readme"
+            default: "kernel"
+          encoding:
+            type: "string"
+            description: "文件编码，默认 utf-8"
+            default: "utf-8"
+          overwrite:
+            type: "boolean"
+            description: "是否覆盖已存在的文件，默认 false"
+            default: false
+        required: ["content"]
+  
+  ask_user:
+    type: "basic_tool"
+    function:
+      name: "ask_user"
+      description: "向用户询问问题并等待回复。用于需要用户提供额外信息或确认的场景。"
+      parameters:
+        type: "object"
+        properties:
+          message:
+            type: "string"
+            description: "要询问用户的问题"
+        required: ["message"]
+  
+  check_python_code:
+    type: "basic_tool"
+    function:
+      name: "check_python_code"
+      description: |
+        检查并格式化 Python 代码文件。
+        功能包括：
+        1. 预编译检查语法错误（使用 python -m py_compile）
+        2. 使用 autopep8 自动格式化代码（符合 PEP 8 规范）
+        3. 返回检查结果和格式化后的代码
+      parameters:
+        type: "object"
+        properties:
+          file_path:
+            type: "string"
+            description: "要检查的 Python 文件路径"
+          auto_format:
+            type: "boolean"
+            description: "是否自动格式化代码（使用 autopep8），默认为 true"
+            default: true
+          fix_in_place:
+            type: "boolean"
+            description: "是否直接修改原文件（为 true 时会覆盖原文件），默认为 false"
+            default: false
+        required: ["file_path"]
+  
+  check_markdown:
+    type: "basic_tool"
+    function:
+      name: "check_markdown"
+      description: |
+        检查 Markdown 文档的格式和风格。
+        使用 markdownlint-cli 检查 Markdown 文件是否符合规范。
+        返回检查结果和具体的错误信息。
+      parameters:
+        type: "object"
+        properties:
+          file_path:
+            type: "string"
+            description: "要检查的 Markdown 文件路径"
+          auto_fix:
+            type: "boolean"
+            description: "是否自动修复可修复的问题，默认为 false"
+            default: false
+        required: ["file_path"]
+
+  execute_script:
+    type: "basic_tool"
+    function:
+      name: "execute_script"
+      description: "执行 Shell 脚本或 Python 脚本。用于编译代码、运行测试等。"
+      parameters:
+        type: "object"
+        properties:
+          script_path:
+            type: "string"
+            description: "脚本文件路径"
+          args:
+            type: "string"
+            description: "脚本参数"
+            default: ""
+          timeout:
+            type: "integer"
+            description: "超时时间（秒）"
+            default: 60
+        required: ["script_path"]
+
   verify_kernel:
     type: "domain_tool"
     function:

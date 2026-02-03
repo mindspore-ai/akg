@@ -11,18 +11,27 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""
+input
+planlist = planagent -> llm -> ask_user -> planlist
+planlist -》llm -》tool_call -> result (tool， planlist) -> planlist(status全部成功) -> finish
+"""
+
 import logging
 import time
 import json
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-from akg_agents.core_v2.agents.base import AgentBase, register_agent
+from akg_agents.core_v2.agents.base import AgentBase
+from akg_agents.core_v2.agents.registry import register_agent
 from akg_agents.core_v2.tools.tool_executor import ToolExecutor
 from akg_agents.core_v2.filesystem import (
     TraceSystem,
     ActionRecord,
     NodeState,
+)
+from akg_agents.core_v2.filesystem.models import (
     AgentInfo,
     TaskInfo,
     ExecutionInfo,
@@ -33,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 @register_agent(scopes=["op"])
-class KernelAgentV3(AgentBase):
+class KernelAgent(AgentBase):
 
     MAX_ITERATIONS = 50  # 最大迭代次数（防止无限循环）
     DEFAULT_MAX_RETRIES = 3  # 默认最大重试次数
@@ -50,7 +59,7 @@ class KernelAgentV3(AgentBase):
         base_dir: Optional[str] = None
     ):
         super().__init__(
-            context={"task_id": task_id, "agent_name": "KernelAgentV3"},
+            context={"task_id": task_id, "agent_name": "KernelAgent"},
             config=config
         )
         
@@ -83,19 +92,24 @@ class KernelAgentV3(AgentBase):
                 "framework": self.framework,
                 "backend": self.backend,
                 "arch": self.arch,
-                "config": self.config or {}
+                "config": self.config or {},
+                "model_level": self.model_level or "standard"
             },
             history=self.history
         )
 
-        self.system_prompt_template = self.load_template("../kernel_agent/prompts/kernel_agent_system.j2")
+        prompt_file = Path(__file__).parent.parent / "kernel_agent" / "prompts" / "kernel_agent_system.j2"
+        with open(prompt_file, "r", encoding="utf-8") as f:
+            from akg_agents.core_v2.agents import Jinja2TemplateWrapper
+            self.system_prompt_template = Jinja2TemplateWrapper(f.read())
     
     def _load_available_tools(self) -> List[Dict]:
         """加载可用工具列表"""
         import yaml
-        from akg_agents import get_project_root
         
-        tools_file = Path(get_project_root()) / "core_v2" / "config" / "tools.yaml"
+        # 延迟导入避免循环依赖
+        from akg_agents import get_project_root
+        tools_file = Path(get_project_root()) / "core_v2" / "config" / "domain_tools.yaml"
         with open(tools_file, "r", encoding="utf-8") as f:
             tools_config = yaml.safe_load(f)
         
@@ -114,11 +128,12 @@ class KernelAgentV3(AgentBase):
         from akg_agents.core_v2.agents.registry import AgentRegistry
         
         agent_registry = {}
-        agent_names = AgentRegistry.list_agents(scope="op")
         
-        logger.info(f"[KernelAgentV3] 发现 {len(agent_names)} 个 op scope agents")
+        # 加载 op scope agents
+        op_agent_names = AgentRegistry.list_agents(scope="op")
+        logger.info(f"[KernelAgent] 发现 {len(op_agent_names)} 个 op scope agents")
         
-        for agent_name in agent_names:
+        for agent_name in op_agent_names:
             try:
                 agent_class = AgentRegistry.get_agent_class(agent_name)
                 if not hasattr(agent_class, 'TOOL_NAME') or not agent_class.TOOL_NAME:
@@ -133,9 +148,26 @@ class KernelAgentV3(AgentBase):
                         "type": "function",
                         "function": tool_def.get("function", {})
                     })
-                    logger.info(f"[KernelAgentV3] 注册工具: {tool_name}")
+                    logger.info(f"[KernelAgent] 注册工具: {tool_name}")
             except Exception as e:
-                logger.warning(f"[KernelAgentV3] 加载 Agent '{agent_name}' 失败: {e}")
+                logger.warning(f"[KernelAgent] 加载 Agent '{agent_name}' 失败: {e}")
+        
+        # 加载 plan agent
+        try:
+            plan_class = AgentRegistry.get_agent_class("plan")
+            if hasattr(plan_class, 'TOOL_NAME') and plan_class.TOOL_NAME:
+                for tool_name, tool_def in plan_class.load_tool_config().items():
+                    agent_registry[tool_name] = {
+                        "agent_class": plan_class,
+                        "config": tool_def
+                    }
+                    self.available_tools.append({
+                        "type": "function",
+                        "function": tool_def.get("function", {})
+                    })
+                    logger.info(f"[KernelAgent] 注册工具: {tool_name}")
+        except Exception as e:
+            logger.warning(f"[KernelAgent] 加载 PlanAgent 失败: {e}")
         
         return agent_registry
     
@@ -148,7 +180,7 @@ class KernelAgentV3(AgentBase):
             turn=0,
             status="init",
             agent_info=AgentInfo(
-                agent_name="KernelAgentV3",
+                agent_name="KernelAgent",
                 agent_id="root"
             ).to_dict(),
             task_info=TaskInfo(
@@ -170,19 +202,15 @@ class KernelAgentV3(AgentBase):
     
     async def run(self, user_input: str) -> Dict[str, Any]:
         """
-        ReAct 主循环 - 流程由 LLM (prompt) 控制
-        
-        Agent 只负责：
-        1. Reasoning: 调用 LLM，LLM 根据 prompt 决定下一步
-        2. Acting: 执行 LLM 返回的 tool
-        3. Observation: 更新 history，回到步骤 1
-        
-        所有流程逻辑（plan → ask_user → 执行 steps）都在 prompt 中定义
+        流程：
+        1. input → planlist = planagent -> llm -> ask_user -> planlist
+        2. planlist → llm → tool_call -> result -> planlist(LLM更新状态) → finish
         """
         # 初始化
         if not self._initialized:
             self._initialize_task(user_input)
             self._original_user_input = user_input
+            self.tool_executor.agent_context["user_input"] = user_input
             self._initialized = True
         else:
             self._handle_user_response(user_input)
@@ -193,52 +221,60 @@ class KernelAgentV3(AgentBase):
             iteration += 1
             logger.info(f"[ReAct {iteration}] ========")
             
-            # 1. Reasoning: LLM 决定下一步
-            tool_call = await self._get_next_tool_call()
+            # 1. LLM 决定下一步：返回 tool_call 和更新后的 plan_list
+            llm_response = await self._get_next_action()
             
-            if not tool_call:
+            if not llm_response:
                 return self._build_error_response("LLM 调用失败")
             
-            if tool_call.get("tool_name") == "finish":
-                logger.info(f"[ReAct] LLM 判断任务完成")
+            # 更新 plan_list（LLM 负责更新状态）
+            if "plan_list" in llm_response:
+                self.plan_list = llm_response["plan_list"]
+            
+            tool_name = llm_response.get("tool_name")
+            arguments = llm_response.get("arguments", {})
+            reason = llm_response.get("reason", "")
+            
+            if tool_name == "finish":
+                logger.info(f"[ReAct] 任务完成")
                 return self._build_success_response()
             
-            tool_name = tool_call.get("tool_name")
-            arguments = tool_call.get("arguments", {})
-            reason = tool_call.get("reason", "")
+            logger.info(f"[Reasoning] {tool_name} - {reason}")
             
-            logger.info(f"[Reasoning] LLM 决定: {tool_name} - {reason}")
-            
-            # 2. Acting: 执行 tool
+            # 2. 执行 tool
             if tool_name == "ask_user":
                 return self._handle_ask_user(arguments)
             
-            start_time = time.time()
-            result = await self.tool_executor.execute(tool_name, arguments)
-            duration_ms = int((time.time() - start_time) * 1000)
+            result = await self._execute_tool(tool_name, arguments)
             
-            logger.info(f"[Acting] {tool_name}: {result.get('status')} ({duration_ms}ms)")
-            
-            # 3. Observation: 记录结果
-            self.history.append(ActionRecord(
-                action_id=f"action_{len(self.history) + 1}",
-                tool_name=tool_name,
-                arguments=arguments,
-                result=result,
-                duration_ms=duration_ms
-            ))
-            
-            if tool_name == "plan" and result.get("status") == "success":
+            # 如果是 plan tool，提取 plan_list
+            if tool_name == "plan":
                 self._update_plan_from_result(result)
-
-            self._update_plan_step_status(tool_name, result)
             
             logger.info(f"[Observation] history: {len(self.history)} 条")
         
         return self._build_error_response("达到最大迭代次数")
     
-    async def _get_next_tool_call(self) -> Optional[Dict]:
-        """调用 LLM，获取下一步要执行的工具"""
+    async def _execute_tool(self, tool_name: str, arguments: Dict) -> Dict:
+        """执行工具并记录"""
+        start_time = time.time()
+        result = await self.tool_executor.execute(tool_name, arguments)
+        duration_ms = int((time.time() - start_time) * 1000)
+        
+        logger.info(f"[Acting] {tool_name}: {result.get('status')} ({duration_ms}ms)")
+        
+        self.history.append(ActionRecord(
+            action_id=f"action_{len(self.history) + 1}",
+            tool_name=tool_name,
+            arguments=arguments,
+            result=result,
+            duration_ms=duration_ms
+        ))
+        
+        return result
+    
+    async def _get_next_action(self) -> Optional[Dict]:
+        """调用 LLM，获取下一步要执行的工具和更新后的 plan_list"""
         # 格式化 prompt（传递当前状态给 LLM）
         prompt = self.system_prompt_template.format(
             available_tools=json.dumps([t["function"] for t in self.available_tools], indent=2, ensure_ascii=False),
@@ -256,10 +292,10 @@ class KernelAgentV3(AgentBase):
                 {"prompt": prompt},
                 self.model_level or "standard"
             )
-            tool_call = json.loads(response)
-            logger.info(f"[LLM] {tool_call.get('tool_name')} - {tool_call.get('reason', '')[:50]}...")
+            llm_response = json.loads(response)
+            logger.info(f"[LLM] {llm_response.get('tool_name')} - {llm_response.get('reason', '')[:50]}...")
             
-            return tool_call
+            return llm_response
         
         except json.JSONDecodeError as e:
             logger.error(f"[LLM 解析失败] {e}")
@@ -307,41 +343,27 @@ class KernelAgentV3(AgentBase):
     def _update_plan_from_result(self, result: Dict):
         """从 plan 工具的结果中提取 plan_list"""
         try:
-            # plan 工具返回的 output 可能是 JSON 字符串
-            output = result.get("output", "{}")
-            if isinstance(output, str):
-                plan_data = json.loads(output)
-            else:
-                plan_data = output
-            
-            if "steps" in plan_data:
-                self.plan_list = plan_data["steps"]
+            output = result.get("output", {})
+            if isinstance(output, dict) and "steps" in output:
+                self.plan_list = output["steps"]
                 logger.info(f"[Plan 更新] {len(self.plan_list)} 个步骤")
+            elif isinstance(output, str) and output.strip():  # 检查非空字符串
+                plan_data = json.loads(output)
+                if "steps" in plan_data:
+                    self.plan_list = plan_data["steps"]
+                    logger.info(f"[Plan 更新] {len(self.plan_list)} 个步骤")
+            else:
+                logger.warning(f"[Plan 更新] output 为空或格式不正确")
         except (json.JSONDecodeError, TypeError) as e:
             logger.error(f"[Plan 更新失败] {e}")
     
-    def _update_plan_step_status(self, tool_name: str, result: Dict):
-        """更新 plan_list 中对应 step 的状态"""
-        if not self.plan_list:
-            return
-        
-        for step in self.plan_list:
-            # 找到当前执行的 step
-            if step.get("tool") == tool_name and step.get("status") in ["pending", "running"]:
-                if result.get("status") == "success":
-                    step["status"] = "success"
-                else:
-                    step["retry_count"] = step.get("retry_count", 0) + 1
-                    # LLM 会根据 retry_count 和 max_retries 决定是否继续重试
-                
-                logger.info(f"[Step {step.get('step_id')}] {step['status']} (retry: {step.get('retry_count', 0)})")
-                break
     
     def _build_success_response(self) -> Dict[str, Any]:
         """构建成功响应"""
         return {
             "status": "success",
             "output": "所有任务已完成",
+            "error_information": "",
             "plan_list": self.plan_list,
             "history": [self._format_action_record(r) for r in self.history],
             "total_actions": len(self.history)

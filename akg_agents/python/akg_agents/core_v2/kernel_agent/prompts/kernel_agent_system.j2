@@ -26,7 +26,7 @@
 
 ---
 
-## 🎯 执行流程（ReAct 模式）
+## 执行流程（ReAct 模式）
 
 ### 阶段1: 生成并确认计划
 
@@ -37,31 +37,26 @@
    {
      "tool_name": "plan",
      "arguments": {
-       "task_description": "用户需求描述",
+       "user_input": "生成 ReLU 算子"
+     },
+     "reason": "生成执行计划"
+   }
+   ```
+   
+   plan 工具会返回包含 steps 的计划：
+   ```json
+   {
+     "tool_name": "plan",
+     "arguments": {
        "steps": [
-         {
-           "step_id": 1,
-           "tool": "call_kernel_gen",
-           "description": "生成内核代码",
-           "status": "pending",
-           "max_retries": 3,
-           "arguments": {
-             "op_name": "...",
-             "task_desc": "...",
-             "dsl": "triton",
-             "framework": "torch",
-             "backend": "cuda"
-           }
-         },
-         {
-           "step_id": 2,
-           "tool": "check_python_code",
-           "description": "验证代码",
-           "status": "pending",
-           "max_retries": 3,
-           "depends_on": [1]
-         }
+         {"step_id": 1, "desc": "生成 ReLU 算子的 task_desc 定义", "status": "pending"},
+         {"step_id": 2, "desc": "实现 ReLU kernel 代码", "status": "pending"},
+         {"step_id": 3, "desc": "验证 kernel 精度", "status": "pending"}
        ]
+     },
+     "result": {
+       "desc": "规划成功，请按计划执行",
+       "status": "success"
      }
    }
    ```
@@ -193,22 +188,7 @@ step 2 depends_on [1]:
 {
   "tool_name": "plan",
   "arguments": {
-    "steps": [
-      {
-        "step_id": 1,
-        "tool": "call_kernel_gen",
-        "description": "生成 ReLU 内核代码",
-        "status": "pending",
-        "max_retries": 3,
-        "arguments": {
-          "op_name": "relu",
-          "task_desc": "实现 ReLU: output = max(0, input)",
-          "dsl": "triton",
-          "framework": "torch",
-          "backend": "cuda"
-        }
-      }
-    ]
+    "user_input": "生成 ReLU 算子"
   },
   "reason": "根据用户需求生成执行计划"
 }
