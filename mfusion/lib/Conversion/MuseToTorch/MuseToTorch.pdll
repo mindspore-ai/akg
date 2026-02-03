@@ -2,6 +2,9 @@
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.td"
 #include "mfusion/Dialect/Muse/MuseOps.td"
 
+#include "MuseMetaToTorch.pdll"
+#include "MuseAclnnToTorch.pdll"
+
 Pattern ConvertMuseAclnnMatmul {
    let root = op<muse.aclnn.matmul>(operands: ValueRange) -> (result: Type);
    replace root with op<torch.aten.matmul>(convertValues(operands)) -> (convertType(result));
@@ -15,11 +18,6 @@ Pattern ConvertMuseAclnnBatchMatmul {
 Pattern ConvertMuseAclnnMm {
   let root = op<muse.aclnn.mm>(operands: ValueRange) -> (result: Type);
   replace root with op<torch.aten.mm>(convertValues(operands)) -> (convertType(result));
-}
-
-Pattern ConvertMuseMul {
-  let root = op<muse.mul>(operands: ValueRange) -> (resType: Type);
-  replace root with op<torch.aten.mul.Tensor>(convertValues(operands)) -> (convertType(resType));
 }
 
 Pattern ConvertMusePow {

@@ -15,9 +15,12 @@
  */
 
 #include "mfusion/Conversion/MuseToTorch/MuseToTorch.h"
+#include "mfusion/Conversion/MuseToTorch/MuseMetaToTorch.h"
+#include "mfusion/Conversion/MuseToTorch/MuseAclnnToTorch.h"
 
 #include <algorithm>
 #include <iterator>
+#include <optional>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -29,6 +32,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mfusion/Dialect/Muse/Muse.h"
 #include "mfusion/Dialect/Muse/MuseDialect.h"
@@ -263,6 +267,8 @@ struct ConvertMuseToTorchPass : public mlir::PassWrapper<ConvertMuseToTorchPass,
     patternList.add<ConvertMuseReshapeToTorch>(converter_, ctx);
     populateGeneratedPDLLPatterns(patternList, mlir::PDLConversionConfig(&converter_));
     mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(patternList, converter_);
+    mlir::populateMuseMetaToTorchConversionPatterns(converter_, patternList);
+    mlir::populateMuseAclnnToTorchConversionPatterns(converter_, patternList);
 
     patterns_ = std::move(patternList);
     return mlir::success();
