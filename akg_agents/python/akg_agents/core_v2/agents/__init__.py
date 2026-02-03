@@ -15,6 +15,9 @@
 from .base import AgentBase, Jinja2TemplateWrapper
 from .registry import AgentRegistry, register_agent
 
+from . import kernel_gen
+from . import kernel_agent_v3
+
 __all__ = [
     "AgentBase",
     "Jinja2TemplateWrapper",
