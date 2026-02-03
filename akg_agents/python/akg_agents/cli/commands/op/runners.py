@@ -85,6 +85,7 @@ class InteractiveOpRunner:
         self.rag = rag
         self.output_path = output_path
         self.device_ids = device_ids
+        self.scene = "ops"
 
         # 🔥 命令调度器
         from akg_agents.cli.commands.slash_commands import create_dispatcher

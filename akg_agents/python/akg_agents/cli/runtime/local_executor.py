@@ -16,7 +16,6 @@
 
 import logging
 import os
-import sys
 import uuid
 from contextlib import redirect_stdout
 from io import StringIO
@@ -47,6 +46,7 @@ class LocalExecutor:
 
         # 兼容原 AIKGCLI 会话字段
         self.auto_yes: bool = False
+        self.common_auto_approve_tools: bool = False
         self.default_user_input: str = ""
         self.use_stream: bool = False
         self.workflow_name: str = ""
@@ -54,8 +54,10 @@ class LocalExecutor:
 
         # 会话状态管理
         self._main_agent_state: dict | None = None
+        self._common_agent_state: dict | None = None
         # ReAct：跨轮次复用 executor（保留 memory/checkpointer）
         self._react_executor = None
+        self._common_executor = None
 
     def _load_workflow_config(self, backend: str, dsl: str) -> Dict:
         """加载工作流配置"""
@@ -70,6 +72,19 @@ class LocalExecutor:
 
         base_default = mc.get("default") or "standard"
         mc.setdefault("default", base_default)
+        if "log_dir" not in config or config["log_dir"] is None:
+            config["log_dir"] = "~/akg_agents_logs"
+        return config
+
+    def _load_common_config(self) -> Dict:
+        """加载 common 场景配置（最小化配置）。"""
+        config: Dict[str, Any] = {
+            "agent_model_config": {
+                "default": "deepseek_r1_default",
+            }
+        }
+        config.setdefault("enable_auto_compact", True)
+        config.setdefault("auto_compact_ratio", 0.8)
         if "log_dir" not in config or config["log_dir"] is None:
             config["log_dir"] = "~/akg_agents_logs"
         return config
@@ -94,6 +109,36 @@ class LocalExecutor:
         payload.setdefault("hint_message", "")
         return payload
 
+    def _ensure_common_executor(self):
+        from akg_agents.cli.runtime.common_executor import CommonTurnExecutor
+
+        base_config = None
+        if self._common_agent_state and isinstance(self._common_agent_state, dict):
+            base_config = self._common_agent_state.get("config")
+        if base_config is not None:
+            config = dict(base_config)
+        else:
+            config = self._load_common_config()
+
+        config["session_id"] = self.session_id
+        config.setdefault("workflow_name", "common")
+        config["auto_approve_tools"] = bool(self.common_auto_approve_tools)
+
+        if self._common_executor is None:
+            self._common_executor = CommonTurnExecutor(
+                session_id=self.session_id,
+                config=config,
+                thread_id=self.session_id,
+            )
+
+        self._common_agent_state = {"config": config}
+        return self._common_executor
+
+    def enter_common_plan_mode(self) -> dict:
+        """Manually enter plan mode for common executor."""
+        executor = self._ensure_common_executor()
+        state = executor.enter_plan_mode()
+        return self._build_response_state(state)
 
     async def execute_main_agent(
         self,
@@ -198,13 +243,116 @@ class LocalExecutor:
         finally:
             unregister_message_sender(self.session_id)
 
+    async def execute_common_agent(
+        self,
+        *,
+        user_input: str = "",
+        use_stream: bool | None = None,
+    ) -> Dict[str, Any]:
+        """执行 CommonAgent 对话（start/continue），返回状态"""
+        if not (user_input or "").strip():
+            raise ValueError("user_input is required")
+
+        effective_use_stream = (
+            bool(use_stream) if use_stream is not None else bool(self.use_stream)
+        )
+
+        # 注册消息发送器（本地模式：直接调用 console）
+        def _local_message_sender(message):
+            """本地消息发送器：直接路由到 console"""
+            self._route_to_console(message)
+
+        register_message_sender(self.session_id, _local_message_sender)
+
+        try:
+            user_input = (user_input or "").strip()
+
+            from akg_agents.cli.runtime.common_executor import CommonTurnExecutor
+
+            base_config = None
+            if self._common_agent_state and isinstance(self._common_agent_state, dict):
+                base_config = self._common_agent_state.get("config")
+            if base_config is not None:
+                config = dict(base_config)
+            else:
+                config = self._load_common_config()
+
+            config["session_id"] = self.session_id
+            config.setdefault("workflow_name", "common")
+            config["auto_approve_tools"] = bool(self.common_auto_approve_tools)
+
+            if self._common_executor is None:
+                self._common_executor = CommonTurnExecutor(
+                    session_id=self.session_id,
+                    config=config,
+                    thread_id=self.session_id,
+                )
+
+            # 保存最小 state（用于后续轮次复用 config）
+            self._common_agent_state = {"config": config}
+
+            null_output = StringIO()
+            with stream_output_override(bool(effective_use_stream)):
+                # with redirect_stdout(null_output):
+                state = await self._common_executor.run_turn(
+                    user_input=user_input,
+                    use_stream=effective_use_stream,
+                )
+
+            # finish 后允许继续对话
+            if isinstance(state, dict):
+                cur = str(state.get("current_step") or "").strip().lower()
+                if cur == "completed" or state.get("should_continue") is False:
+                    state["should_continue"] = True
+                    if not state.get("auto_input"):
+                        state.setdefault(
+                            "hint_message",
+                            "💡 本轮任务已完成。你可以继续输入新的需求（Ctrl+C 退出）。",
+                        )
+            return self._build_response_state(state)
+
+        finally:
+            unregister_message_sender(self.session_id)
+
+    def get_common_tools(self):
+        """Return common tools list (without forcing model creation)."""
+        if self._common_executor is not None:
+            tools = getattr(self._common_executor, "tools", None)
+            if tools is not None:
+                return tools
+        try:
+            from akg_agents.cli.runtime.common_executor import (
+                CommonToolState,
+                build_common_tools,
+            )
+            return build_common_tools(CommonToolState(self.session_id))
+        except Exception:
+            return []
+
+    def get_last_raw_llm_input(self) -> dict | None:
+        """Return last raw LLM input snapshot for common executor."""
+        if self._common_executor is None:
+            return None
+        return getattr(self._common_executor, "last_raw_llm_input", None)
+
+    async def compact_common_history(self) -> dict:
+        """Compact common conversation history if available."""
+        if self._common_executor is None:
+            return {"ok": False, "reason": "not_started"}
+        return await self._common_executor.compact_history(
+            reason="manual",
+        )
+
     async def cancel_main_agent(self, reason: str = "cancelled by client") -> bool:
         """取消当前 main_agent"""
         try:
-            ex = self._react_executor
-            task = getattr(ex, "running_task", None) if ex is not None else None
-            if task is not None and hasattr(task, "cancel"):
-                task.cancel()
+            cancelled = False
+            for ex in (self._react_executor, self._common_executor):
+                task = getattr(ex, "running_task", None) if ex is not None else None
+                if task is not None and hasattr(task, "cancel"):
+                    task.cancel()
+                    cancelled = True
+            if cancelled:
                 logger.info(
                     f"[LocalExecutor] React cancellation requested for session {self.session_id}: {reason}"
                 )
@@ -264,6 +412,7 @@ class LocalExecutor:
         console,
         *,
         auto_yes: bool = False,
+        auto_approve_tools: bool = False,
         use_stream: bool = False,
         session_id: str | None = None,
     ) -> "LocalExecutor":
@@ -292,6 +441,7 @@ class LocalExecutor:
         except Exception:
             pass
         executor.auto_yes = bool(auto_yes)
+        executor.common_auto_approve_tools = bool(auto_approve_tools)
         executor.use_stream = bool(use_stream)
         executor.workflow_name = Defaults.WORKFLOW_NAME
         return executor

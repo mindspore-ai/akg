@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+import json
 from typing import Callable, Optional, List
 from enum import Enum
 
@@ -143,11 +144,15 @@ def get_registry() -> SlashCommandRegistry:
 )
 async def cmd_help(runner, args: List[str]):
     """显示命令帮助"""
+    runner_scene = getattr(runner, "scene", "all")
+    def _scene_allowed(cmd: SlashCommand) -> bool:
+        return cmd.scene == "all" or cmd.scene == runner_scene
+
     if args:
         # 显示特定命令的详细帮助
         cmd_name = args[0].lstrip('/')
         cmd = _registry.get(cmd_name)
-        if cmd:
+        if cmd and _scene_allowed(cmd):
             # 构建详细帮助内容
             aliases_text = f" ({', '.join(cmd.aliases)})" if cmd.aliases else ""
             content_lines = [
@@ -195,6 +200,7 @@ async def cmd_help(runner, args: List[str]):
         
         for cat in CommandCategory:
             cmds = _registry.list_by_category(cat)
+            cmds = [cmd for cmd in cmds if _scene_allowed(cmd)]
             if not cmds:
                 continue
             
@@ -298,6 +304,82 @@ async def cmd_history(runner, args: List[str]):
     console.print(f"[dim]将显示最近 {count} 条命令[/dim]")
 
 
+@slash_command(
+    'plan',
+    '进入 plan 模式（common 场景）',
+    category=CommandCategory.CONTROL,
+    aliases=['planning'],
+    usage='/plan',
+    examples=['/plan'],
+    is_blocking=True,
+    scene='common'
+)
+async def cmd_plan(runner, args: List[str]):
+    """Manually enter plan mode for common."""
+    if args:
+        console.print("[red]❌ /plan 不支持参数[/red]")
+        return
+    if not hasattr(runner, "cli") or not hasattr(runner.cli, "enter_common_plan_mode"):
+        console.print("[yellow]ℹ️  当前会话未启动 common，请先输入一次请求[/yellow]")
+        return
+
+    result = runner.cli.enter_common_plan_mode()
+    if isinstance(result, dict):
+        if hasattr(runner, "_render_agent_messages"):
+            runner._render_agent_messages(result)
+        else:
+            msg = str(result.get("display_message") or "").strip()
+            if msg:
+                console.print(msg)
+        auto_input = result.get("auto_input")
+        if auto_input and hasattr(runner, "_process_input"):
+            await runner._process_input(str(auto_input), print_input=False)
+        return
+
+    console.print("[red]❌ /plan 执行失败[/red]")
+
+
+@slash_command(
+    'compact',
+    '压缩上下文',
+    category=CommandCategory.SYSTEM,
+    aliases=['cmp'],
+    usage='/compact',
+    examples=['/compact'],
+    is_blocking=False,
+    scene='common'
+)
+async def cmd_compact(runner, args: List[str]):
+    """Compact common conversation context."""
+    if not hasattr(runner, "cli") or not hasattr(runner.cli, "compact_common_history"):
+        console.print("[yellow]ℹ️  当前会话未启动 common，请先输入一次请求[/yellow]")
+        return
+    if args:
+        console.print("[red]❌ /compact 不支持参数[/red]")
+        return
+    result = await runner.cli.compact_common_history()
+    if not result or not result.get("ok"):
+        reason = (result or {}).get("reason") or "unknown"
+        detail = (result or {}).get("error")
+        if reason == "not_started":
+            console.print("[yellow]ℹ️  当前会话未启动 common，请先输入一次请求[/yellow]")
+        elif reason == "no_messages":
+            console.print("[yellow]ℹ️  当前没有可压缩的上下文[/yellow]")
+        else:
+            if detail:
+                console.print(f"[red]❌ Compact 失败: {reason} ({detail})[/red]")
+            else:
+                console.print(f"[red]❌ Compact 失败: {reason}[/red]")
+        return
+
+    summary = str(result.get("summary") or "").strip()
+    console.print("[green]✅ Session compacted[/green]")
+    if summary:
+        console.print(Panel(summary, border_style="dim", padding=(1, 2)))
+    else:
+        console.print("[yellow]ℹ️  未生成摘要内容[/yellow]")
+
+
 # 已移除 /clear 命令（用户反馈没用）
 # @slash_command(
 #     'clear',
@@ -346,6 +428,62 @@ async def cmd_log(runner, args: List[str]):
     console.print(f"[yellow]ℹ️  日志查看功能开发中...[/yellow]")
     console.print(f"[dim]级别: {level}, 行数: {lines}[/dim]")
 
+
+@slash_command(
+    'list_tools',
+    '列出当前可用工具',
+    category=CommandCategory.INFO,
+    aliases=['tools'],
+    usage='/list_tools',
+    examples=['/list_tools'],
+    is_blocking=False,
+    scene='common'
+)
+async def cmd_list_tools(runner, args: List[str]):
+    """列出可用工具（common 场景）"""
+    tools = []
+    if hasattr(runner, "cli") and hasattr(runner.cli, "get_common_tools"):
+        tools = runner.cli.get_common_tools() or []
+
+    if not tools:
+        console.print("[yellow]ℹ️  暂无工具信息（请先运行一次任务）[/yellow]")
+        return
+
+    table = Table(title="Common Tools", show_header=True)
+    table.add_column("Name", style="cyan")
+    table.add_column("Description", style="green")
+
+    for tool in tools:
+        name = getattr(tool, "name", "") or ""
+        desc = getattr(tool, "description", "") or ""
+        table.add_row(str(name), str(desc))
+
+    console.print(table)
+
+
+@slash_command(
+    'display_last_raw_llm_input',
+    '显示上一次 LLM 原始输入',
+    category=CommandCategory.DEBUG,
+    aliases=['last_input', 'last_llm_input'],
+    usage='/display_last_raw_llm_input',
+    examples=['/display_last_raw_llm_input'],
+    is_blocking=False,
+    scene='common'
+)
+async def cmd_display_last_raw_llm_input(runner, args: List[str]):
+    """显示上一轮 LLM 输入（common 场景）"""
+    payload = None
+    if hasattr(runner, "cli") and hasattr(runner.cli, "get_last_raw_llm_input"):
+        payload = runner.cli.get_last_raw_llm_input()
+    if not payload:
+        console.print("[yellow]ℹ️  暂无 LLM 输入记录（请先运行一次任务）[/yellow]")
+        return
+    try:
+        content = json.dumps(payload, ensure_ascii=False, indent=2)
+    except Exception:
+        content = str(payload)
+    console.print(Panel(content, border_style="dim", padding=(1, 2)))
 
 @slash_command(
     'mock_wait_30',
@@ -407,6 +545,13 @@ class CommandDispatcher:
         if not cmd:
             self.console.print(f"[red]❌ 未知命令: /{cmd_name}[/red]")
             self.console.print("输入 [cyan]/help[/cyan] 查看可用命令")
+            return CommandResult(handled=True, is_blocking=False)
+
+        runner_scene = getattr(runner, "scene", "all")
+        if cmd.scene != "all" and cmd.scene != runner_scene:
+            self.console.print(
+                f"[yellow]ℹ️  命令 /{cmd.name} 仅在 {cmd.scene} 场景可用[/yellow]"
+            )
             return CommandResult(handled=True, is_blocking=False)
         
         # 执行命令

@@ -19,6 +19,7 @@ from contextlib import nullcontext
 from langchain.tools import tool
 
 from akg_agents.core.sub_agent_registry import SubAgentBase, SubAgentRegistry
+from akg_agents.core.tools.basic_tools import request_tool_approval
 from akg_agents.core.tools.tool_schemas import SubAgentInput, OpTaskBuilderInput
 from akg_agents.utils.stream_output import stream_output_override
 
@@ -101,6 +102,19 @@ def _create_tool(sub_agent: SubAgentBase):
             user_requirements: 用户的额外需求说明，如'高性能优化'、'使用向量化'等。
                               会传递给 Coder 作为优化指导。
         """
+        approval_args = {
+            "op_name": op_name,
+            "task_id": task_id,
+            "task_label": task_label,
+            "task_type": task_type,
+            "device_id": device_id,
+            "user_requirements": user_requirements,
+            "task_code_len": len(task_code or ""),
+            "generated_code_len": len(generated_code or ""),
+        }
+        if not request_tool_approval(tool_name, approval_args):
+            return {"success": False, "error": "[CANCELLED] tool execution denied by user"}
+
         logger.info(f"Calling {sub_agent.get_name()}, op={op_name}")
         if user_requirements:
             logger.info(f"  user_requirements: {user_requirements[:100]}...")
@@ -154,6 +168,16 @@ def _create_op_task_builder_tool(sub_agent: SubAgentBase, tool_name: str, tool_d
         将用户的自然语言需求转换为 KernelBench 格式的 task 代码。
         生成的 task 需要传给其他子 Agent 生成 Triton 代码。
         """
+        approval_args = {
+            "user_request": user_request,
+            "user_feedback": user_feedback,
+            "task_code_len": len(task_code or ""),
+            "op_name": op_name,
+            "task_id": task_id,
+        }
+        if not request_tool_approval(tool_name, approval_args):
+            return {"success": False, "error": "[CANCELLED] tool execution denied by user"}
+
         logger.info(f"Calling op_task_builder, user_request: {user_request[:50]}...")
         
         try:

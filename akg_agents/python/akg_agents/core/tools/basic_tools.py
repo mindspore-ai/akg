@@ -11,8 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import json
 import logging
 from pathlib import Path
+from typing import Any
+from contextvars import ContextVar
 
 from langchain.tools import tool
 from langgraph.types import interrupt
@@ -26,6 +29,8 @@ from akg_agents.core.tools.tool_schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TOOL_AUTO_APPROVE: ContextVar[bool] = ContextVar("tool_auto_approve", default=False)
 
 @tool("ask_user", args_schema=AskUserInput)
 def ask_user(message: str) -> str:
@@ -59,6 +64,141 @@ def ask_user(message: str) -> str:
     return f"用户回复: {user_input_str}"
 
 
+_APPROVAL_POSITIVE_TOKENS = {
+    "yes",
+    "y",
+    "ok",
+    "okay",
+    "confirm",
+    "approve",
+    "approved",
+    "true",
+    "1",
+    "sure",
+    "accept",
+    "是",
+    "好",
+    "好的",
+    "确认",
+    "同意",
+    "允许",
+    "继续",
+    "可以",
+}
+
+_APPROVAL_NEGATIVE_TOKENS = {
+    "no",
+    "n",
+    "cancel",
+    "deny",
+    "denied",
+    "false",
+    "0",
+    "reject",
+    "stop",
+    "不",
+    "否",
+    "取消",
+    "拒绝",
+}
+
+
+def _call_ask_user(message: str) -> str:
+    if hasattr(ask_user, "invoke"):
+        return ask_user.invoke({"message": message})
+    if hasattr(ask_user, "run"):
+        return ask_user.run(message=message)
+    return ask_user(message)
+
+
+def _extract_user_reply(response: Any) -> str:
+    if response is None:
+        return ""
+    text = str(response).strip()
+    for prefix in ("用户回复:", "User reply:", "user reply:", "User Reply:"):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+    return text
+
+
+def _sanitize_tool_args(tool_args: Any) -> Any:
+    if isinstance(tool_args, dict):
+        sanitized = {}
+        for key, value in tool_args.items():
+            if key in {"content", "stdin_input", "patch", "input", "code"}:
+                text = "" if value is None else str(value)
+                sanitized[key] = f"<{len(text)} chars>"
+            else:
+                sanitized[key] = value
+        return sanitized
+    return tool_args
+
+
+def _format_tool_args(tool_args: Any, max_len: int = 800) -> str:
+    if tool_args is None:
+        return ""
+    safe_args = _sanitize_tool_args(tool_args)
+    try:
+        if isinstance(safe_args, str):
+            text = safe_args
+        else:
+            text = json.dumps(safe_args, ensure_ascii=False)
+    except Exception:
+        text = str(safe_args)
+    text = text.strip()
+    if len(text) > max_len:
+        text = text[:max_len] + "...[truncated]"
+    return text
+
+
+def _is_approved_reply(reply: str) -> bool:
+    reply = (reply or "").strip().lower()
+    if not reply:
+        return False
+    for token in _APPROVAL_NEGATIVE_TOKENS:
+        if token in reply:
+            return False
+    for token in _APPROVAL_POSITIVE_TOKENS:
+        if token in reply:
+            return True
+    return False
+
+
+def set_tool_auto_approve(value: bool):
+    return _TOOL_AUTO_APPROVE.set(bool(value))
+
+
+def reset_tool_auto_approve(token) -> None:
+    try:
+        _TOOL_AUTO_APPROVE.reset(token)
+    except Exception:
+        _TOOL_AUTO_APPROVE.set(False)
+
+
+def _is_tool_auto_approve() -> bool:
+    try:
+        return bool(_TOOL_AUTO_APPROVE.get())
+    except Exception:
+        return False
+
+
+def request_tool_approval(tool_name: str, tool_args: Any = None) -> bool:
+    if _is_tool_auto_approve():
+        logger.info("Tool approval bypassed (auto approve): name=%s", tool_name)
+        return True
+    args_text = _format_tool_args(tool_args)
+    message = f"Approve tool execution?\nTool: {tool_name}"
+    if args_text:
+        message += f"\nArgs: {args_text}"
+    message += "\nReply 'yes' to approve, anything else to cancel."
+    response = _call_ask_user(message)
+    reply = _extract_user_reply(response)
+    approved = _is_approved_reply(reply)
+    logger.info("Tool approval: name=%s approved=%s reply=%s", tool_name, approved, reply)
+    return approved
+
+
 @tool("finish", args_schema=FinishInput)
 def finish(final_answer: str, success: bool = True) -> str:
     """标记任务完成并返回最终结果。
@@ -67,6 +207,14 @@ def finish(final_answer: str, success: bool = True) -> str:
     - 已经完成了用户的所有要求
     - 准备向用户展示最终结果
     """
+    if not request_tool_approval(
+        "finish",
+        {
+            "success": success,
+            "final_answer_len": len(final_answer or ""),
+        },
+    ):
+        return "[CANCELLED] finish: execution denied by user"
     logger.info(f"finish: success={success}")
     logger.info(f"Final answer: {final_answer[:100]}...")
     return final_answer
@@ -107,6 +255,15 @@ def read_file(file_path: str, encoding: str = "utf-8") -> str:
     返回：成功时返回文件内容，失败时返回 [ERROR] 开头的错误信息
     """
     logger.info(f"read_file: {file_path}")
+
+    if not request_tool_approval(
+        "read_file",
+        {
+            "file_path": file_path,
+            "encoding": encoding,
+        },
+    ):
+        return "[CANCELLED] read_file: execution denied by user"
     
     try:
         path = _resolve_resource_path(file_path)
@@ -200,6 +357,18 @@ def write_file(
     
     返回：成功时返回保存路径，失败时返回 [ERROR] 开头的错误信息
     """
+    if not request_tool_approval(
+        "write_file",
+        {
+            "file_path": file_path,
+            "op_name": op_name,
+            "file_type": file_type,
+            "encoding": encoding,
+            "overwrite": overwrite,
+            "content_len": len(content or ""),
+        },
+    ):
+        return "[CANCELLED] write_file: execution denied by user"
     path = _resolve_file_path(file_path, op_name, file_type)
     
     logger.info(f"write_file: {path}, op_name={op_name}, file_type={file_type}, overwrite={overwrite}")
@@ -262,6 +431,18 @@ def execute_script(
     import sys
     
     logger.info(f"execute_script: {script_path}, args={args}, timeout={timeout}")
+
+    if not request_tool_approval(
+        "execute_script",
+        {
+            "script_path": script_path,
+            "args": args,
+            "timeout": timeout,
+            "working_dir": working_dir,
+            "stdin_len": len(stdin_input or ""),
+        },
+    ):
+        return "[CANCELLED] execute_script: execution denied by user"
     
     try:
         path = _resolve_resource_path(script_path)
