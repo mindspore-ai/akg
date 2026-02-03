@@ -156,7 +156,8 @@ class PlanAgent(AgentBase):
             result.append(action_str)
         return "\n".join(result)
     
-    def _extract_nested_json(self, text: str) -> Optional[str]:
+    @staticmethod
+    def _extract_nested_json(text: str) -> Optional[str]:
         """提取多层嵌套的 JSON 字符串
         
         使用括号匹配算法，支持任意深度的嵌套。
@@ -248,7 +249,7 @@ class PlanAgent(AgentBase):
             结构化的规划结果
         """
         # 使用专用的嵌套 JSON 提取器
-        json_str = self._extract_nested_json(response)
+        json_str = PlanAgent._extract_nested_json(response)
         if json_str:
             try:
                 parsed = json.loads(json_str)
