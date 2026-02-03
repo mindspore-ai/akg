@@ -19,6 +19,7 @@ Tools for ReAct Agent
 - Tool Schemas: 所有 Tool 的 Pydantic 输入参数定义
 - SubAgent Tools: SubAgent → LangChain Tool 适配器（包括 call_op_task_builder）
 - Basic Tools: ask_user, finish, read_file
+- Domain Tools: verify_kernel, profile_kernel (领域专用工具)
 """
 
 from akg_agents.core.tools.tool_schemas import (
@@ -27,6 +28,9 @@ from akg_agents.core.tools.tool_schemas import (
     ReadFileInput,
     SubAgentInput,
     OpTaskBuilderInput,
+    # Domain Tools Schemas
+    VerifyToolInput,
+    ProfileToolInput,
 )
 from akg_agents.core.tools.sub_agent_tool import create_sub_agent_tools
 from akg_agents.core.tools.basic_tools import (
@@ -34,6 +38,10 @@ from akg_agents.core.tools.basic_tools import (
     finish,
     read_file,
     create_basic_tools,
+)
+from ai_kernel_generator.core.tools.domain_tools import (
+    create_domain_tools,
+    get_default_domain_tools,
 )
 
 __all__ = [
@@ -43,6 +51,8 @@ __all__ = [
     "ReadFileInput",
     "SubAgentInput",
     "OpTaskBuilderInput",
+    "VerifyToolInput",
+    "ProfileToolInput",
     # SubAgent Tools
     "create_sub_agent_tools",
     # Basic Tools
@@ -50,4 +60,7 @@ __all__ = [
     "finish",
     "read_file",
     "create_basic_tools",
+    # Domain Tools
+    "create_domain_tools",
+    "get_default_domain_tools",
 ]

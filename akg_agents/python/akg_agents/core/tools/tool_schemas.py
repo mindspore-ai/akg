@@ -123,3 +123,79 @@ class ExecuteScriptInput(BaseModel):
         description="脚本工作目录，默认为项目根目录"
     )
 
+
+# ============================================================================
+# Domain Tools Schemas (verifyTool, profileTool)
+# ============================================================================
+
+class VerifyToolInput(BaseModel):
+    """
+    用于验证生成的 Kernel 代码的正确性，对比框架实现和生成实现的输出结果。
+    """
+    task_code: str = Field(
+        description=(
+            "PyTorch/MindSpore 框架实现代码。"
+            "必须包含: class Model(nn.Module)、get_inputs()、get_init_inputs()。"
+            "如果之前调用过 call_op_task_builder，从其返回的 task_code 字段获取。"
+        )
+    )
+    generated_code: str = Field(
+        description=(
+            "待验证的 Triton/CUDA/AscendC 生成代码。"
+            "必须包含 class ModelNew 实现。"
+            "如果之前调用过代码生成类工具，从其返回结果中获取。"
+        )
+    )
+    op_name: str = Field(
+        description="算子名称，如 'relu', 'matmul', 'softmax', 'layernorm' 等"
+    )
+    task_id: str = Field(
+        default="default_task",
+        description="任务 ID，用于日志和目录命名"
+    )
+    device_id: int = Field(
+        default=0,
+        description="设备 ID，默认为 0"
+    )
+    timeout: int = Field(
+        default=300,
+        description="验证超时时间（秒），默认 300 秒"
+    )
+
+
+class ProfileToolInput(BaseModel):
+    """用于对 Kernel 进行性能分析，返回执行时间和加速比。"""
+    task_code: str = Field(
+        description=(
+            "PyTorch/MindSpore 框架实现代码。"
+            "必须包含: class Model(nn.Module)、get_inputs()、get_init_inputs()。"
+            "如果之前调用过 call_op_task_builder，从其返回的 task_code 字段获取。"
+        )
+    )
+    generated_code: str = Field(
+        description=(
+            "待分析的 Triton/CUDA/AscendC 生成代码。"
+            "必须包含 class ModelNew 实现。"
+            "如果之前调用过代码生成类工具，从其返回结果中获取。"
+        )
+    )
+    op_name: str = Field(
+        description="算子名称，如 'relu', 'matmul', 'softmax', 'layernorm' 等"
+    )
+    task_id: str = Field(
+        default="default_task",
+        description="任务 ID，用于日志和目录命名"
+    )
+    device_id: int = Field(
+        default=0,
+        description="设备 ID，默认为 0"
+    )
+    run_times: int = Field(
+        default=50,
+        description="性能测试运行次数，默认 50 次。精确测试可设为 100"
+    )
+    warmup_times: int = Field(
+        default=5,
+        description="预热次数，默认 5 次。精确测试可设为 10"
+    )
+

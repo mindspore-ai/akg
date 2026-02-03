@@ -1400,6 +1400,24 @@ if __name__ == "__main__":
             expanded_log_dir = os.path.expanduser(self.log_dir)
             unique_dir_name = f"I{self.task_id}_S{current_step:02d}_verify"
             verify_dir = os.path.join(expanded_log_dir, self.op_name, unique_dir_name)
+            
+            # 确保目录存在
+            os.makedirs(verify_dir, exist_ok=True)
+            
+            # 检查是否需要先生成代码文件（独立调用 profile 时需要）
+            # 代码文件包括：框架实现文件（{op_name}_{framework}.py）和 DSL 实现文件（{op_name}_{dsl}_impl.py）
+            framework_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
+            impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
+            
+            if not os.path.exists(framework_file) or not os.path.exists(impl_file):
+                # 代码文件不存在，需要先生成
+                impl_code = task_info.get("coder_code", "")
+                if not impl_code:
+                    raise ValueError(f"[{self.op_name}] task_info 中缺少 coder_code，无法生成性能测试代码文件")
+                
+                logger.info(f"[{self.op_name}] 代码文件不存在，先生成代码文件...")
+                self.gen_verify_project(impl_code, verify_dir, actual_device_id)
+                logger.info(f"[{self.op_name}] 代码文件生成完成")
 
             # 生成profile脚本
             # 对于 RemoteWorker，代码生成时使用 0 作为占位符（实际设备由远程服务器管理）
