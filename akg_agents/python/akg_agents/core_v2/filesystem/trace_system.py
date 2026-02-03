@@ -471,15 +471,24 @@ class TraceSystem:
         # 1. 尝试读取缓存
         if not force_refresh:
             cached = self.fs.load_action_history_compressed(node_id)
-            # 校验缓存有效性 (source_path 必须匹配当前路径)
-            if hasattr(cached, "is_valid") and cached.is_valid(path):
-                return cached.actions
-            # 兼容性检查：如果对象没有 is_valid 但有 source_path
-            if hasattr(cached, "source_path") and cached.source_path == path:
-                return cached.actions
+            # 校验缓存有效性 (source_path 必须匹配当前路径，且缓存有内容)
+            if cached.actions:
+                if hasattr(cached, "is_valid") and cached.is_valid(path):
+                    return cached.actions
+                # 兼容性检查：如果对象没有 is_valid 但有 source_path
+                if hasattr(cached, "source_path") and cached.source_path == path:
+                    return cached.actions
         
         # 2. 重建完整历史
         full_history = self.get_full_action_history(node_id)
+        
+        # 如果没有历史，直接返回空列表
+        if not full_history:
+            return []
+        
+        # 如果历史很短，跳过压缩，直接返回原始历史（节省 LLM 调用）
+        if len(full_history) <= 3:
+            return full_history
         
         # 3. 压缩
         compressor = ActionCompressor(llm_client)
@@ -506,9 +515,10 @@ class TraceSystem:
             node_id: 节点 ID
             
         Returns:
-            节点深度（root 为 0）
+            节点深度（root 为 0），路径无效时返回 0
         """
-        return len(self.get_path_to_node(node_id)) - 1
+        path = self.get_path_to_node(node_id)
+        return len(path) - 1 if path else 0
     
     # ==================== 节点对比 ====================
     
@@ -607,6 +617,9 @@ class TraceSystem:
             
         Returns:
             最优叶节点 ID，如果没有叶节点返回 None
+            
+        Note:
+            如果所有叶节点都没有指定的 metric 字段，则默认返回 leaves[0]（第一个叶节点）
         """
         leaves = self.get_all_leaf_nodes()
         if not leaves:
@@ -624,6 +637,7 @@ class TraceSystem:
                         best_value = value
                         best_node = leaf
         
+        # 如果没有找到带有 metric 的节点，返回第一个叶节点
         return best_node or leaves[0]
     
     # ==================== 并行分叉 ====================
@@ -738,11 +752,10 @@ class TraceSystem:
             result=result,
         )
         
-        history = ActionHistoryFact(
-            node_id=node_id,
-            parent_node_id=node.parent_id,
-            turn=node.state_snapshot.get("turn", 0),
-        )
+        # 加载现有历史（如果存在），避免覆盖
+        history = self.fs.load_action_history_fact(node_id)
+        history.parent_node_id = node.parent_id
+        history.turn = node.state_snapshot.get("turn", 0)
         history.add_action(action_record)
         self.fs.save_action_history_fact(node_id, history)
         
@@ -924,6 +937,11 @@ class TraceSystem:
             路径详情字符串
         """
         path = self.get_path_to_node(node_id)
+        
+        # 处理空路径情况
+        if not path:
+                    return f"❌ 无法找到节点 '{node_id}' 的路径（节点不存在或路径断裂）"
+        
         metrics = self._calculate_path_metrics(path)
         
         lines = [f"📍 路径: root → {node_id}\n"]
@@ -975,7 +993,13 @@ class TraceSystem:
         try:
             state = self.fs.load_node_state(current_node)
         except NodeNotFoundError:
-            state = None
+            # 节点状态不存在时，返回一个最小化的默认状态
+            state = NodeState(
+                node_id=current_node,
+                turn=0,
+                status="unknown",
+                task_info={"task_id": self.task_id},
+            )
         
         action_history = self.get_full_action_history(current_node)
         pending_tools = self.fs.load_pending_tools(current_node)
