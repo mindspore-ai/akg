@@ -16,7 +16,7 @@ import asyncio
 # 导入evolve函数和必要的模块
 from akg_agents.core.evolve import evolve
 from akg_agents.core.async_pool.task_pool import TaskPool
-from akg_agents.config.config_validator import load_config
+from akg_agents.op.config.config_validator import load_config
 from akg_agents.utils.environment_check import check_env_for_task
 from akg_agents.utils.evolve.runner_manager import RunnerConfig, print_evolve_config, print_evolution_result
 from akg_agents import get_project_root

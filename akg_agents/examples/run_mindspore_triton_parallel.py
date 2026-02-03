@@ -16,7 +16,7 @@ import asyncio
 from akg_agents.core.task import Task
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core.worker.manager import register_local_worker
-from akg_agents.config.config_validator import load_config
+from akg_agents.op.config.config_validator import load_config
 from akg_agents.utils.environment_check import check_env_for_task
 
 

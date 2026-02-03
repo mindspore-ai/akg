@@ -21,7 +21,7 @@ CUDA C → PyTorch 转换示例
     python examples/run_cudac_to_torch_single.py
 """
 
-from akg_agents.config.config_validator import load_config
+from akg_agents.op.config.config_validator import load_config
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core.task import Task
 from akg_agents.core.worker.manager import register_local_worker

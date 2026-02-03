@@ -222,7 +222,7 @@ async def run_direct_with_workers(num_concurrent: int = 4, task_desc_dir: str = 
         num_concurrent: 同一 task 的并发数量，默认为 4，用于更快找到正确解
         task_desc_dir: 任务描述目录，如果指定则读取目录下所有 Python 文件进行批量验证
     """
-    from akg_agents.config.config_validator import load_config
+    from akg_agents.op.config.config_validator import load_config
     from akg_agents.core.worker.manager import register_remote_worker, get_worker_manager
     from akg_agents.core.verifier.kernel_verifier import KernelVerifier
     from akg_agents.core.task import Task
@@ -402,7 +402,7 @@ async def run_quick_verify():
     2. 传输 .pt 到 Ascend Worker
     3. Ascend Worker 执行验证（使用 NPU 实现代码）并进行性能测试
     """
-    from akg_agents.config.config_validator import load_config
+    from akg_agents.op.config.config_validator import load_config
     from akg_agents.core.worker.manager import register_remote_worker, get_worker_manager
     from akg_agents.core.verifier.kernel_verifier import KernelVerifier
     from akg_agents.utils.cross_platform import generate_reference_with_profile
