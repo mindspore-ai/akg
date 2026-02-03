@@ -42,7 +42,7 @@ class PlanAgent(AgentBase):
     """
     
     # Agent 工具配置元数据
-    TOOL_NAME = "call_plan"
+    TOOL_NAME = "plan"
     DESCRIPTION = "分析用户需求并生成高层次任务规划。如果信息不完整，一次性返回所有需要补充的信息。"
     
     PARAMETERS_SCHEMA = {

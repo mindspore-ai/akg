@@ -15,8 +15,13 @@
 from .base import AgentBase, Jinja2TemplateWrapper
 from .registry import AgentRegistry, register_agent
 
-from . import kernel_gen
-from . import kernel_agent_v3
+# 导入 plan agent 以触发注册
+from . import plan
+
+# 延迟导入避免循环依赖
+# kernel_gen 和其他 agents 会通过 AgentRegistry 自动注册
+# from . import kernel_gen
+# from . import kernel_agent_v3
 
 __all__ = [
     "AgentBase",
