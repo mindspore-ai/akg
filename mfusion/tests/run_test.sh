@@ -3,20 +3,22 @@
 set -e
 
 TEST_TYPE="ut"
+UT_RUN_TYPE="all"
 BASEPATH=$(cd "$(dirname $0)"; pwd)
 MFUSION_BUILD_PATH=${BASEPATH}/../build
 
 usage()
 {
     echo "Usage:"
-    echo "bash run_test.sh [-t ut|st|all] [-h]"
+    echo "bash run_test.sh [-t ut|st|all] [-u lit|python|all] [-h]"
     echo ""
     echo "Options:"
     echo "    -h Print usage"
     echo "    -t test type: ut, st or all (Default: ut)"
+    echo "    -u ut run type: lit, python or all (Default: all)"
 }
 
-while getopts 'ht:' opt
+while getopts 'ht:u:' opt
 do
     case "${opt}" in
         h)
@@ -31,7 +33,20 @@ do
             elif [[ "${OPTARG}" == "all" ]]; then
                 TEST_TYPE="all"
             else
-                echo "Unknown parameter ${OPTARG}!"
+                echo "Unknown parameter for -t: ${OPTARG}!"
+                usage
+                exit 1
+            fi
+            ;;
+        u)
+            if [[ "${OPTARG}" == "lit" ]]; then
+                UT_RUN_TYPE="lit"
+            elif [[ "${OPTARG}" == "python" ]]; then
+                UT_RUN_TYPE="python"
+            elif [[ "${OPTARG}" == "all" ]]; then
+                UT_RUN_TYPE="all"
+            else
+                echo "Unknown parameter for -u: ${OPTARG}!"
                 usage
                 exit 1
             fi
@@ -43,16 +58,14 @@ do
     esac
 done
 
-# run ut test cases (lit)
+# run ut test cases (lit + python)
 if [[ "X${TEST_TYPE}" = "Xut" ]] || [[ "X${TEST_TYPE}" = "Xall" ]]; then
-    # check if tests directory exists
-    TEST_PATH=${MFUSION_BUILD_PATH}/tests
-    if [[ ! -d "${TEST_PATH}" ]]; then
-        echo "Error: Tests directory is not built."
-        echo "Please build with -t option (e.g., bash build.sh -t)"
-        exit 1
+    if [[ "X${UT_RUN_TYPE}" = "Xlit" ]] || [[ "X${UT_RUN_TYPE}" = "Xall" ]]; then
+        bash "${BASEPATH}/ut/lit/runtest.sh"
     fi
-    lit -sv ${TEST_PATH}
+    if [[ "X${UT_RUN_TYPE}" = "Xpython" ]] || [[ "X${UT_RUN_TYPE}" = "Xall" ]]; then
+        bash "${BASEPATH}/ut/python/runtest.sh"
+    fi
 fi
 
 # run st test cases (not supported yet)
