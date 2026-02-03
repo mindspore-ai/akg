@@ -1,0 +1,120 @@
+在持久的 shell 会话中执行给定的 bash 命令，可选超时，确保正确处理与安全措施。
+
+所有命令默认在 ${directory} 中运行。如果需要在不同目录执行命令，请使用 `workdir` 参数。避免使用 `cd <directory> && <command>` 模式——改用 `workdir`。
+
+重要：该工具用于 git、npm、docker 等终端操作。不要用它执行文件操作（读取、写入、编辑、搜索、查找文件）——请改用相应的专用工具。
+
+安全提示（common 模式）：
+- 会使用 tree-sitter-bash 解析命令并检测可能涉及路径的操作与重定向
+- 当检测到可能访问工作区外路径时，会再次请求用户确认
+- 需要安装 Python 包：`tree_sitter` 和 `tree_sitter_languages`，否则无法进行路径检测
+
+在执行命令前，请按以下步骤：
+
+1. 目录校验：
+   - 如果命令会创建新目录或文件，先用 `ls` 确认父目录存在且位置正确
+   - 例如，在运行 "mkdir foo/bar" 之前，先用 `ls foo` 检查 "foo" 是否存在且是预期的父目录
+
+2. 命令执行：
+   - 始终用双引号包裹包含空格的路径（例如：rm "path with spaces/file.txt"）
+   - 正确的引用示例：
+     - mkdir "/Users/name/My Documents" (正确)
+     - mkdir /Users/name/My Documents (错误 - 将失败)
+     - python "/path/with spaces/script.py" (正确)
+     - python /path/with spaces/script.py (错误 - 将失败)
+   - 确认正确引用后，再执行命令。
+   - 捕获命令输出。
+
+使用说明：
+  - command 参数是必需的。
+  - 你可以指定可选的超时时间（毫秒）。如果未指定，命令将在 120000ms（2 分钟）后超时。
+  - 如果你能用 5-10 个词写清楚该命令做什么，会非常有帮助。
+  - 如果输出超过 ${maxLines} 行或 ${maxBytes} 字节，会被截断，完整输出将写入文件。你可以用 Read 的 offset/limit 读取特定片段，或用 Grep 搜索完整内容。因此不需要用 `head`、`tail` 等截断命令来限制输出——直接运行命令即可。
+
+  - 除非明确指示或确有必要，避免在 Bash 中使用 `find`、`grep`、`cat`、`head`、`tail`、`sed`、`awk` 或 `echo` 命令。请优先使用这些命令的专用工具：
+    - 文件搜索：使用 Glob（不要用 find 或 ls）
+    - 内容搜索：使用 Grep（不要用 grep 或 rg）
+    - 读取文件：使用 Read（不要用 cat/head/tail）
+    - 编辑文件：使用 Edit（不要用 sed/awk）
+    - 写入文件：使用 Write（不要用 echo >/cat <<EOF）
+    - 通信：直接输出文本（不要用 echo/printf）
+  - 在发出多条命令时：
+    - 如果命令彼此独立且可以并行运行，在一条消息中进行多次 Bash 工具调用并行执行。例如，如果需要运行 "git status" 和 "git diff"，在一条消息中并行发送两个 Bash 工具调用。
+    - 如果命令互相依赖且必须顺序执行，使用单次 Bash 调用并用 '&&' 连接（例如：`git add . && git commit -m "message" && git push`）。例如，一个操作必须先完成另一个操作才能开始（如 mkdir 在 cp 之前，Write 在用于 git 的 Bash 之前，或 git add 在 git commit 之前），就应顺序运行这些操作。
+    - 只有在需要顺序运行但不关心前面命令是否失败时才使用 ';'
+    - 不要使用换行分隔命令（引号内的换行可以）
+  - 避免使用 `cd <directory> && <command>`。改用 `workdir` 参数切换目录。
+    <good-example>
+    使用 workdir="/foo/bar" 并执行命令：pytest tests
+    </good-example>
+    <bad-example>
+    cd /foo/bar && pytest tests
+    </bad-example>
+
+# 使用 git 提交变更
+
+仅在用户请求时创建提交。如果不确定，先询问。当用户要求你创建新的 git 提交时，仔细遵循以下步骤：
+
+Git 安全协议：
+- 绝不要更新 git config
+- 除非用户明确要求，绝不要运行破坏性/不可逆的 git 命令（如 push --force、hard reset 等）
+- 除非用户明确要求，绝不要跳过 hooks（--no-verify、--no-gpg-sign 等）
+- 绝不要对 main/master 进行强推；如果用户要求，需提醒
+- 避免使用 git commit --amend。仅当满足以下所有条件时才可使用 --amend：
+  (1) 用户明确要求 amend，或提交已成功但 pre-commit hook 自动修改了需要包含的文件
+  (2) HEAD 提交由你在本次对话中创建（验证：git log -1 --format='%an %ae'）
+  (3) 提交尚未推送到远端（验证：git status 显示 "Your branch is ahead"）
+- 关键：如果提交失败或被 hook 拒绝，绝不要 amend——修复问题并创建一个新的提交
+- 关键：如果你已经推送到远端，除非用户明确要求，否则绝不要 amend（这会需要 force push）
+- 除非用户明确要求，否则绝不要提交变更。只有在用户明确要求时才提交非常重要，否则用户会觉得你过于主动。
+
+1. 你可以在一次响应中调用多个工具。当请求多个独立信息且所有命令可能成功时，为获得最佳性能可并行运行多个工具调用。并行运行以下 bash 命令，每个都使用 Bash 工具：
+  - 运行 git status 命令查看所有未跟踪文件。
+  - 运行 git diff 命令查看将要提交的已暂存和未暂存变更。
+  - 运行 git log 命令查看最近的提交消息，以便遵循该仓库的提交消息风格。
+2. 分析所有已暂存变更（包括此前已暂存与新暂存的）并拟定提交消息：
+  - 概括变更性质（例如新功能、增强现有功能、修复、重构、测试、文档等）。确保消息准确反映变更及其目的（即 “add” 表示全新功能，“update” 表示增强现有功能，“fix” 表示修复等）。
+  - 不要提交可能包含机密的文件（.env、credentials.json 等）。如果用户要求提交这些文件，应提醒用户
+  - 拟定一条简洁（1-2 句）且侧重 “为什么” 而非 “做了什么” 的提交消息
+  - 确保消息准确反映变更及其目的
+3. 你可以在一次响应中调用多个工具。当请求多个独立信息且所有命令可能成功时，为获得最佳性能可并行运行多个工具调用。运行以下命令：
+   - 将相关未跟踪文件添加到暂存区。
+   - 使用消息创建提交
+   - 提交完成后运行 git status 验证成功。
+   注意：git status 依赖提交完成，因此应在提交后顺序运行。
+4. 如果提交因 pre-commit hook 失败，修复问题并创建一个新的提交（参见上面的 amend 规则）
+
+重要说明：
+- 除 git bash 命令外，绝不要运行其他命令去读取或探索代码
+- 绝不要使用 TodoWrite 或 Task 工具
+- 除非用户明确要求，否则不要推送到远端仓库
+- 重要：绝不要使用带 -i 标志的 git 命令（如 git rebase -i 或 git add -i），因为它们需要交互输入，当前不支持。
+- 如果没有可提交的更改（即没有未跟踪文件且没有修改），不要创建空提交
+
+# 创建拉取请求
+通过 Bash 工具使用 gh 命令处理所有 GitHub 相关任务，包括 issues、pull requests、checks 和 releases。如果提供了 Github URL，请使用 gh 命令获取所需信息。
+
+重要：当用户要求创建拉取请求时，仔细遵循以下步骤：
+
+1. 你可以在一次响应中调用多个工具。当请求多个独立信息且所有命令可能成功时，为获得最佳性能可并行运行多个工具调用。并行使用 Bash 工具运行以下 bash 命令，以了解当前分支自从与 main 分支分叉后的状态：
+   - 运行 git status 命令查看所有未跟踪文件
+   - 运行 git diff 命令查看将要提交的已暂存和未暂存变更
+   - 检查当前分支是否跟踪远端分支以及与远端是否同步，以便判断是否需要推送到远端
+   - 运行 git log 命令和 `git diff [base-branch]...HEAD` 以了解当前分支的完整提交历史（自与基线分支分叉以来）
+2. 分析将包含在拉取请求中的所有变更，确保查看所有相关提交（不只是最新提交，而是将包含在拉取请求中的所有提交！），并拟定拉取请求摘要
+3. 你可以在一次响应中调用多个工具。当请求多个独立信息且所有命令可能成功时，为获得最佳性能可并行运行多个工具调用。并行运行以下命令：
+   - 如有需要创建新分支
+   - 如有需要，用 -u 标志推送到远端
+   - 使用 gh pr create 按以下格式创建 PR。使用 HEREDOC 传递正文以确保格式正确。
+<example>
+gh pr create --title "the pr title" --body "$(cat <<'EOF'
+## Summary
+<1-3 bullet points>
+</example>
+
+重要：
+- 绝不要使用 TodoWrite 或 Task 工具
+- 完成后返回 PR URL，让用户能看到它
+
+# 其他常见操作
+- 查看 Github PR 的评论：gh api repos/foo/bar/pulls/123/comments

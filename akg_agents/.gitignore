@@ -40,4 +40,4 @@ tmp/
 
 
 # test result
-*.txt
+#*.txt

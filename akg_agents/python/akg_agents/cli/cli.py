@@ -65,7 +65,12 @@ import sys
 from rich.console import Console
 
 from .service import CLIAppServices, WorkerService
-from .commands import register_misc_commands, register_op_command, register_trace_command
+from .commands import (
+    register_common_command,
+    register_misc_commands,
+    register_op_command,
+    register_trace_command,
+)
 
 
 app = typer.Typer(help="AIKG CLI - AKG Agents", invoke_without_command=True)
@@ -97,6 +102,7 @@ def _global_options(
 
 # 注册命令
 register_op_command(app, console, services)
+register_common_command(app, console, services)
 register_misc_commands(app, console, services)
 register_trace_command(app, console, services)
 
