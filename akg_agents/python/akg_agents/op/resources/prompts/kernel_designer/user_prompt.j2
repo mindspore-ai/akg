@@ -1,0 +1,106 @@
+{# KernelDesigner Agent 的用户 Prompt 模板 #}
+
+{# ========== 核心：Sketch DSL 规范指南 ========== #}
+你是一个专业的算子草图生成专家，需要将算子任务转换为通用的算子草图。如下为算子草图生成规范指南：
+
+{{ sketch_guide }}
+
+---
+
+## 相关技能和知识
+
+{% if skills %}
+{% for skill in skills %}
+### Skill: {{ skill.name }}
+
+**描述**: {{ skill.description }}
+
+{{ skill.content }}
+
+================================================================================
+
+{% endfor %}
+{% else %}
+暂无相关 Skill。
+{% endif %}
+
+---
+
+## 当前任务
+
+**算子名称**: `{{ op_name }}`
+
+### 任务描述
+
+{{ task_desc }}
+
+---
+
+{% if inspirations %}
+## 进化优化参考方案
+
+以下是之前迭代的方案及其性能数据，请参考这些方案的优点和性能表现：
+
+{{ inspirations }}
+
+---
+
+{% endif %}
+
+{% if conductor_suggestion %}
+## Conductor 优化建议
+
+{{ conductor_suggestion }}
+
+---
+
+{% endif %}
+
+{% if user_requirements %}
+## 额外的用户需求
+
+{{ user_requirements }}
+
+---
+
+{% endif %}
+
+{% if hardware_docs %}
+## 目标硬件信息
+
+**架构**: {{ arch_name or '通用' }}
+
+{{ hardware_docs }}
+
+---
+
+{% endif %}
+
+## 设计指令
+
+请根据以上信息设计算法草图（sketch）。
+
+**设计要求**:
+- **必须使用上方 sketch_guide 定义的 sketch DSL 格式**（`sketch op_name { symbols; tensors; ... }`）
+- 标注关键的优化策略和并行化机会（使用 `@llm_hint` 注解）
+- 考虑目标硬件的特性和限制
+- 如果任务描述中包含特定的优化提示，优先采纳
+- 结合 Skill 中的知识和经验优化设计
+
+{% if enable_hint_mode and has_hint %}
+**Hint 模式已启用**: 请在草图中标注可调参数，并生成参数空间配置（space_config）用于自动调优。
+
+参数空间配置应该是 Python 字典格式，例如：
+```python
+{
+    "BLOCK_SIZE": [128, 256, 512, 1024],
+    "NUM_WARPS": [2, 4, 8]
+}
+```
+{% endif %}
+
+---
+
+## 输出格式要求
+
+{{ format_instructions }}
