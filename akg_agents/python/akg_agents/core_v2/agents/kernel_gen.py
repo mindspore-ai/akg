@@ -35,7 +35,8 @@ from akg_agents.core_v2.skill import (
     SkillLoader, 
     SkillSelector, 
     SelectionContext, 
-    SkillLevel
+    SkillLevel,
+    create_metadata_matcher
 )
 
 # 设置 Skills 目录路径
@@ -160,8 +161,25 @@ class KernelGen(AgentBase):
             
             logger.info(f"Loaded {len(self.loaded_skills)} skills from {SKILLS_DIR}")
             
-            # 创建 selector
-            self.skill_selector = SkillSelector()
+            # 创建自定义过滤器
+            # 1. 排除无关 category
+            def category_filter(skill, context):
+                unrelated = ["writing", "web", "communication", "documentation", "workflow"]
+                return skill.category not in unrelated
+            
+            # 2. backend 匹配器
+            backend_filter = create_metadata_matcher("backend")
+            
+            # 3. dsl 匹配器
+            dsl_filter = create_metadata_matcher("dsl")
+            
+            # 4. framework 匹配器
+            framework_filter = create_metadata_matcher("framework")
+            
+            # 创建 selector（带自定义过滤器）
+            self.skill_selector = SkillSelector(
+                custom_filters=[category_filter, backend_filter, dsl_filter, framework_filter]
+            )
             
         except Exception as e:
             logger.error(f"Failed to initialize skill system: {e}")
@@ -170,13 +188,18 @@ class KernelGen(AgentBase):
             self.skill_selector = None
     
     
-    async def _select_skills(self, dsl: str = "", framework: str = "") -> List[Any]:
+    async def _select_skills(self, dsl: str = "", framework: str = "", backend: str = "") -> List[Any]:
         """
         选择相关的 Skills
+        
+        使用 SkillSelector 的自定义过滤器进行两阶段筛选：
+        1. 粗筛（coarse_filter）：使用 custom_filters 自动过滤
+        2. 精筛（LLM）：根据任务上下文智能选择
         
         Args:
             dsl: 目标 DSL
             framework: 目标框架
+            backend: 目标后端
         
         Returns:
             选中的 Skill 列表
@@ -189,18 +212,51 @@ class KernelGen(AgentBase):
             logger.warning("No skills loaded, skipping skill selection")
             return []
         
-        # 构建选择上下文
+        # 构建选择上下文（包含 dsl, framework, backend 供过滤器使用）
         context = SelectionContext(
-            task_type="code_generation",
-            framework=framework or "unknown",
-            optimization_goal=f"生成 {dsl or 'kernel'} 内核代码"
+            custom_fields={
+                "task_type": "code_generation",
+                "framework": framework or "unknown",
+                "optimization_goal": f"生成 {dsl or 'kernel'} 内核代码",
+                "dsl": dsl,
+                "framework": framework,
+                "backend": backend
+            }
         )
         
         try:
-            # 1. 构建 LLM prompt
-            prompt = self.skill_selector.build_llm_prompt(self.loaded_skills, context)
+            # 阶段1：粗筛（使用 custom_filters 自动过滤）
+            candidates = self.skill_selector.coarse_filter(self.loaded_skills, context)
+            logger.info(f"Coarse filter: {len(self.loaded_skills)} -> {len(candidates)} skills")
             
-            # 2. 调用 LLM（异步）
+            # 阶段2：LLM 精筛
+            # 定义 prompt 模板
+            prompt_template = """你是一个 Skill 选择专家。现在需要为内核代码生成（kernel code generation）任务选择相关的 Skills。
+
+**任务上下文**:
+{context_str}
+
+**候选 Skills（已粗筛）**:
+{skills_str}
+
+**任务要求**:
+请从候选 Skills 中选择与内核代码生成任务最相关的 Skills。注意：
+1. 优先选择与 DSL 和框架直接相关的 Skills
+2. 包含代码生成方法和实现技巧相关的 Skills
+3. 确保不要遗漏重要的 Skills
+4. 重点是内核代码生成，无关的技能不要选择（如算子草图设计、测试等）
+
+**输出格式**（JSON）:
+```json
+{{
+  "selected": ["skill-name-1", "skill-name-2", ...],
+  "reason": "选择理由"
+}}
+```
+"""
+            
+            prompt = self.skill_selector.build_llm_prompt(candidates, context, prompt_template)
+            
             template = Jinja2TemplateWrapper("{{ prompt }}")
             llm_response, _, _ = await self.run_llm(
                 template, 
@@ -208,8 +264,7 @@ class KernelGen(AgentBase):
                 "standard"
             )
             
-            # 3. 解析 LLM 响应
-            selected_skills = self.skill_selector.parse_llm_response(llm_response, self.loaded_skills)
+            selected_skills = self.skill_selector.parse_llm_response(llm_response, candidates)
             
             logger.info(f"✓ Selected {len(selected_skills)} skills: {[s.name for s in selected_skills]}")
             
@@ -248,7 +303,7 @@ class KernelGen(AgentBase):
             func_name = f"{op_name}_{dsl}_{framework}"
             
             # 1. 选择相关 Skills（异步）
-            selected_skills = await self._select_skills(dsl=dsl, framework=framework)
+            selected_skills = await self._select_skills(dsl=dsl, framework=framework, backend=backend)
             
             # 2. 渲染 System Prompt
             system_prompt = self.system_prompt_template.format(
