@@ -41,16 +41,17 @@
    - **配置不完整** → 使用默认配置并询问用户确认
 
 3. 默认配置：
-   - DSL: triton
-   - Framework: torch  
-   - Backend: cuda
+   - DSL: {{ dsl }}
+   - Framework: {{ framework }}  
+   - Backend: {{ backend }}
+   - Arch: {{ arch }}
 
 **输出示例**（配置不完整时）：
 ```json
 {
   "tool_name": "ask_user",
   "arguments": {
-    "message": "您要生成 ReLU 算子。请确认以下配置：\n- DSL: triton\n- Framework: torch\n- Backend: cuda\n\n回复'确认'使用此配置，或告诉我您需要的配置。"
+    "message": "您要生成 ReLU 算子。请确认以下配置：\n- DSL: {{ dsl }}\n- Framework: {{ framework }}\n- Backend: {{ backend }}\n- Arch: {{ arch }}\n\n回复'确认'使用此配置，或告诉我您需要的配置。"
   },
   "reason": "收集配置信息"
 }
@@ -69,7 +70,7 @@
 {
   "tool_name": "plan",
   "arguments": {
-    "user_input": "生成 ReLU 算子（DSL: triton, Framework: torch, Backend: cuda）"
+    "user_input": "生成 ReLU 算子（DSL: {{ dsl }}, Framework: {{ framework }}, Backend: {{ backend }}, Arch: {{ arch }}）"
   },
   "reason": "生成执行计划"
 }
@@ -220,7 +221,7 @@ plan_list 是否为空？
 {
   "tool_name": "ask_user",
   "arguments": {
-    "message": "您要生成 ReLU 算子。请确认以下配置：\n- DSL: triton\n- Framework: torch\n- Backend: cuda\n\n回复'确认'使用此配置，或告诉我您需要的配置。"
+    "message": "您要生成 ReLU 算子。请确认以下配置：\n- DSL: {{ dsl }}\n- Framework: {{ framework }}\n- Backend: {{ backend }}\n- Arch: {{ arch }}\n\n回复'确认'使用此配置，或告诉我您需要的配置。"
   },
   "reason": "收集配置信息"
 }
@@ -232,13 +233,13 @@ plan_list 是否为空？
 
 **输出**:
 ```json
-{
-  "tool_name": "plan",
-  "arguments": {
-    "user_input": "使用 triton 为 torch 生成 ReLU 算子，backend 为 cuda"
-  },
-  "reason": "生成执行计划"
-}
+  {
+    "tool_name": "plan",
+    "arguments": {
+      "user_input": "使用 {{ dsl }} 为 {{ framework }} 生成 ReLU 算子，backend 为 {{ backend }}，arch 为 {{ arch }}"
+    },
+    "reason": "生成执行计划"
+  }
 ```
 
 ### 示例3: plan 返回后 → 询问确认计划
@@ -300,7 +301,7 @@ plan_list 是否为空？
   "arguments": {
     "op_name": "relu",
     "task_desc": "...",
-    "dsl": "triton"
+    "dsl": "{{ dsl }}"
   },
   "reason": "执行 step 2: 生成 kernel 代码"
 }
@@ -359,7 +360,7 @@ plan_list 是否为空？
 - plan_list 为空
 - history 包含: "已完成任务：ReLU算子生成...新任务开始：用户确认生成tanh算子"
 - user_input: "生成 tanh"
-- 用户已确认配置（DSL: triton, Framework: torch, Backend: cuda）
+- 用户已确认配置（DSL: {{ dsl }}, Framework: {{ framework }}, Backend: {{ backend }}, Arch: {{ arch }}）
 
 **分析**: 这是一个新任务周期。前一个任务（ReLU）已完成，现在用户要生成 tanh。配置已确认，应该直接调用 plan。
 
@@ -368,7 +369,7 @@ plan_list 是否为空？
 {
   "tool_name": "plan",
   "arguments": {
-    "user_input": "生成 tanh 算子（DSL: triton, Framework: torch, Backend: cuda）"
+    "user_input": "生成 tanh 算子（DSL: {{ dsl }}, Framework: {{ framework }}, Backend: {{ backend }}, Arch: {{ arch }}）"
   },
   "reason": "新任务开始，用户已确认配置，生成执行计划"
 }

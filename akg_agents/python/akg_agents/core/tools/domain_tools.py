@@ -351,7 +351,7 @@ def create_domain_tools(
     
     Args:
         config: 全局配置字典，包含以下可选字段：
-            - log_dir: 日志目录路径（默认: ~/.aikg/logs）
+            - log_dir: 日志目录路径（默认: ~/.akg/logs）
             - 其他 KernelVerifier 需要的配置
         framework: 框架类型 ('torch', 'mindspore', 'numpy')
         backend: 计算后端 ('cuda', 'ascend', 'cpu')
@@ -367,7 +367,7 @@ def create_domain_tools(
     # 确保有默认的 log_dir
     if "log_dir" not in config:
         import os
-        config["log_dir"] = os.path.expanduser("~/.aikg/logs")
+        config["log_dir"] = os.path.expanduser("~/.akg/logs")
     
     logger.info(f"Creating domain tools with: framework={framework}, backend={backend}, "
                f"arch={arch}, dsl={dsl}")

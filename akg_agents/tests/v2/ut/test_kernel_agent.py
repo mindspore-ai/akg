@@ -17,7 +17,7 @@ logging.basicConfig(
 )
 
 # 创建日志目录
-LOG_DIR = Path.home() / ".aikg" / "logs"
+LOG_DIR = Path.home() / ".akg" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # 创建会话日志文件

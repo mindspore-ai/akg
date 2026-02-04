@@ -620,7 +620,7 @@ class TraceSystem:
     
     def __init__(self, task_id: str):
         self.task_id = task_id
-        self.base_dir = Path.home() / ".aikg" / "conversations" / task_id
+        self.base_dir = Path.home() / ".akg" / "conversations" / task_id
         self.trace_file = self.base_dir / "trace.json"
         self.current_node_file = self.base_dir / "current_node.txt"
         self.nodes_dir = self.base_dir / "nodes"
