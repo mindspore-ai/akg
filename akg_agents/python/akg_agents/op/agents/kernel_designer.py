@@ -45,7 +45,8 @@ from akg_agents.core_v2.skill import (
 
 # 设置 Skills 目录路径
 project_root = Path(get_project_root())
-SKILLS_DIR = project_root.parent.parent / "examples" / "run_skill" / "skills"
+# 修改为指向真正的 skills 目录（包含 triton-ascend 和 cpu skills）
+SKILLS_DIR = project_root / "python" / "akg_agents" / "op" / "resources" / "skills"
 
 logger = logging.getLogger(__name__)
 
