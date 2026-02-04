@@ -3,37 +3,35 @@ SimpleReActAgent - 简单的 ReAct Agent 示例
 
 一个最小化的 ReActAgent 实现，演示如何：
 - 继承 ReActAgent 基类
-- 定义和调用工具
+- 使用 basic_tools 中的工具
 - 进行对话式交互
 
 不包含 plan 功能，适合简单的对话和工具调用场景。
 """
 
 import logging
-import json
+import yaml
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
 from akg_agents.core_v2.agents.react_agent import ReActAgent
 from akg_agents.core_v2.agents.base import Jinja2TemplateWrapper
-from akg_agents.core_v2.tools.tool_executor import ToolExecutor
-
-from tools import TOOL_DEFINITIONS, TOOL_FUNCTIONS
+from akg_agents.core_v2.tools import basic_tools
 
 logger = logging.getLogger(__name__)
 
 
 class SimpleToolExecutor:
-    """简单的工具执行器"""
+    """简单的工具执行器，使用 basic_tools"""
     
-    def __init__(self, tool_functions: Dict[str, callable]):
-        self.tool_functions = tool_functions
+    def __init__(self):
         self.history = []
         self.agent_context = {}
     
     async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """执行工具"""
-        if tool_name not in self.tool_functions:
+        # 从 basic_tools 模块获取工具函数
+        if not hasattr(basic_tools, tool_name):
             return {
                 "status": "error",
                 "output": "",
@@ -41,10 +39,11 @@ class SimpleToolExecutor:
             }
         
         try:
-            func = self.tool_functions[tool_name]
+            func = getattr(basic_tools, tool_name)
             result = func(**arguments)
             return result
         except Exception as e:
+            logger.error(f"工具执行失败 {tool_name}: {e}", exc_info=True)
             return {
                 "status": "error",
                 "output": "",
@@ -84,7 +83,7 @@ class SimpleReActAgent(ReActAgent):
         )
         
         # 使用简单的工具执行器替换默认的
-        self.tool_executor = SimpleToolExecutor(TOOL_FUNCTIONS)
+        self.tool_executor = SimpleToolExecutor()
     
     def _get_agent_name(self) -> str:
         """获取 Agent 名称"""
@@ -134,10 +133,11 @@ class SimpleReActAgent(ReActAgent):
 ```
 
 ### 可用的 tool_name:
-- `calculate`: 计算数学表达式
-- `get_current_time`: 获取当前时间
-- `search_knowledge`: 搜索知识库
-- `weather`: 获取天气信息
+- `read_file`: 读取文件内容
+- `write_file`: 写入文件
+- `check_python_code`: 检查 Python 代码
+- `check_markdown`: 检查 Markdown 文档
+- `execute_script`: 执行脚本
 - `ask_user`: 向用户提问（当信息不足时）
 - `finish`: 任务完成，直接回复用户
 
@@ -194,8 +194,27 @@ class SimpleReActAgent(ReActAgent):
         }
     
     def _load_available_tools(self) -> List[Dict]:
-        """加载可用工具列表"""
-        return TOOL_DEFINITIONS.copy()
+        """加载可用工具列表（从 tools.yaml）"""
+        try:
+            from akg_agents import get_project_root
+            tools_file = Path(get_project_root()) / "core_v2" / "config" / "tools.yaml"
+            
+            with open(tools_file, "r", encoding="utf-8") as f:
+                tools_config = yaml.safe_load(f)
+            
+            available_tools = []
+            for tool_name, tool_def in tools_config.get("tools", {}).items():
+                func = tool_def.get("function", {})
+                if func:
+                    available_tools.append({
+                        "type": "function",
+                        "function": func
+                    })
+            
+            return available_tools
+        except Exception as e:
+            logger.error(f"加载工具配置失败: {e}")
+            return []
     
     def _load_agent_registry(self) -> Dict[str, Any]:
         """不需要加载 agent registry"""
