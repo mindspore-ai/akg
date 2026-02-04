@@ -395,6 +395,9 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
   static LogicalResult rewriteTruncFScalarOr1D(CastOp op,
                                                OpAdaptor adaptor,
                                                ConversionPatternRewriter &rewriter) {
+    if(!isa<MemRefType>(adaptor.getIn().getType())) {
+      return success();
+    }
     Location loc = op.getLoc();
     Value srcMemRef = adaptor.getOperands()[0];
     auto srcMemRefType = dyn_cast<MemRefType>(srcMemRef.getType());
@@ -1851,6 +1854,10 @@ struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
   LogicalResult matchAndRewrite(memref::StoreOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
+    if(!isa<MemRefType>(adaptor.getValue().getType())) {
+      return success();
+    }
+
     Value valToStore = adaptor.getValue();
     Value memref = adaptor.getMemref();
 
@@ -2109,7 +2116,10 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
     Type elemType = npuVecType.getElementType();
     auto targetMemRefType = MemRefType::get(npuVecType.getShape(), elemType);
 
-    SmallVector<Value> allocOperands(dynamicSizes.begin(), dynamicSizes.end());
+    SmallVector<Value> allocOperands;
+    if (targetMemRefType.getNumDynamicDims() > 0) {
+      allocOperands.assign(dynamicSizes.begin(), dynamicSizes.end());
+    }
     Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType, allocOperands);
 
     if (failed(setTransferReadBufferSizeMarkIfNeeded(op, tempBuf, elemType, npuVecType, rewriter))) {
