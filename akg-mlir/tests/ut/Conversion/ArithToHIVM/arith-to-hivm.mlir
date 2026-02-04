@@ -3202,3 +3202,39 @@ func.func @Fused_Mul_ReduceSum_split(%arg0: memref<384x128xbf16>, %arg1: memref<
   }
   return %arg1 : memref<1xbf16>
 }
+
+// -----
+
+func.func @Fused_Mul_ReduceSum_split(%arg0: memref<64x3072xbf16>, %arg1: memref<1xbf16>) {
+  %c1 = arith.constant 1 : index
+  %c1_0 = arith.constant 1 : index
+  %cst = arith.constant 0.000000e+00 : f32
+  %0 = memref.get_global @__constant_1xindex : memref<1xindex>
+  %1 = memref.get_global @__constant_1xindex_0 : memref<1xindex>
+  %reshape = memref.reshape %arg0(%1) : (memref<64x3072xbf16>, memref<1xindex>) -> memref<196608xbf16>
+  %alloc = memref.alloc() : memref<0xindex>
+  %reshape_1 = memref.reshape %arg1(%alloc) : (memref<1xbf16>, memref<0xindex>) -> memref<bf16>
+  %c0 = arith.constant 0 : index
+  %c196608 = arith.constant 196608 : index
+  %c1_2 = arith.constant 1 : index
+  %c0_3 = arith.constant 0 : index
+  %c1_4 = arith.constant 1 : index
+  scf.for %arg2 = %c0_3 to %c1_4 step %c1_4 {
+    %c196608_5 = arith.constant 196608 : index
+    %c1_6 = arith.constant 1 : index
+    %c4096 = arith.constant 4096 : index
+    %c4096_7 = arith.constant 4096 : index
+    %cst_8 = arith.constant dense<0.000000e+00> : !npuvector<4096xf32>
+    %2 = scf.for %arg3 = %c0_3 to %c196608_5 step %c4096_7 iter_args(%arg4 = %cst_8) -> (!npuvector<4096xf32>) {
+      %c40 = arith.constant 40 : index
+      %c0_9 = arith.constant 0 : index
+      %cst_10 = arith.constant 0.000000e+00 : bf16
+      %5 = npuvector.transfer_read %reshape[%arg3] [%c4096], %cst_10 : memref<196608xbf16>, !npuvector<4096xbf16>
+      %6 = npuvector.extf %5 : !npuvector<4096xbf16> to !npuvector<4096xf32>
+      %7 = arith.mulf %6, %6 : !npuvector<4096xf32>
+      %8 = arith.addf %7, %arg4 {reduction_axes = [0 : index], reduction_type = "all"} : !npuvector<4096xf32>
+      scf.yield %8 : !npuvector<4096xf32>
+    }
+  }
+  return
+}

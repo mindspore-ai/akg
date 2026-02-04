@@ -2116,7 +2116,10 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
     Type elemType = npuVecType.getElementType();
     auto targetMemRefType = MemRefType::get(npuVecType.getShape(), elemType);
 
-    SmallVector<Value> allocOperands(dynamicSizes.begin(), dynamicSizes.end());
+    SmallVector<Value> allocOperands;
+    if (targetMemRefType.getNumDynamicDims() > 0) {
+      allocOperands.assign(dynamicSizes.begin(), dynamicSizes.end());
+    }
     Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType, allocOperands);
 
     if (failed(setTransferReadBufferSizeMarkIfNeeded(op, tempBuf, elemType, npuVecType, rewriter))) {
