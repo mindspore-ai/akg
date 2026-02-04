@@ -3118,54 +3118,87 @@ func.func @test_npuvector_bitcast_dynamic_shape(%arg0: memref<128xbf16>, %arg1: 
 // -----
 
 // CHECK-LABEL: func.func @Fused_Mul_ReduceSum_split
-// CHECK-SAME: (%[[IN:.*]]: memref<64xbf16>, %[[OUT:.*]]: memref<1xbf16>) -> memref<1xbf16>
-// CHECK: scf.for %[[I:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {
-// CHECK:   %[[SUBLOOP:.*]] = scf.for %[[J:.*]] = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ACC:.*]] = %{{.*}}) -> (memref<64xf32>) {
-// CHECK:     %[[SUBVIEW0:.*]] = memref.subview %[[IN]][%[[J]]] [64] [1] : memref<64xbf16> to memref<64xbf16, {{.*}}>
-// CHECK:     %[[UB0:.*]] = memref.alloc() : memref<64xbf16>
-// CHECK:     hivm.hir.load ins(%[[SUBVIEW0]] : memref<64xbf16, {{.*}}>) outs(%[[UB0]] : memref<64xbf16>) init_out_buffer = false may_implicit_transpose_with_last_axis = false
-// CHECK:     %[[UB1:.*]] = memref.alloc() : memref<64xf32>
-// CHECK:     hivm.hir.vcast ins(%[[UB0]] : memref<64xbf16>) outs(%[[UB1]] : memref<64xf32>)
-// CHECK:     %[[UB2:.*]] = memref.alloc() : memref<64xf32>
-// CHECK:     hivm.hir.vmul ins(%[[UB1]], %[[UB1]] : memref<64xf32>, memref<64xf32>) outs(%[[UB2]] : memref<64xf32>)
-// CHECK:     %[[UB3:.*]] = memref.alloc() : memref<64xf32>
-// CHECK:     hivm.hir.vadd ins(%[[UB2]], %[[ACC]] : memref<64xf32>, memref<64xf32>) outs(%[[UB3]] : memref<64xf32>)
-// CHECK:     scf.yield %[[UB3]] : memref<64xf32>
-// CHECK:   }
-// CHECK:   %[[RED_BUF:.*]] = memref.alloc() : memref<1xf32>
-// CHECK:   hivm.hir.vreduce <sum> ins(%[[SUBLOOP]] : memref<64xf32>) outs(%[[RED_BUF]] : memref<1xf32>) reduce_dims = [0]
-// CHECK:   hivm.hir.vcast ins(%[[RED_BUF]] : memref<1xf32>) outs(%[[TRUNC:.*]] : memref<1xbf16>)
-// CHECK:   %[[OUT_CAST:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1], strides: [1] : memref<bf16> to memref<1xbf16>
-// CHECK:   hivm.hir.store ins(%[[TRUNC]] : memref<1xbf16>) outs(%[[OUT_CAST]] : memref<1xbf16>)
+// CHECK-SAME: (%[[ARG0:.*]]: memref<384x128xbf16>, %[[ARG1:.*]]: memref<1xbf16>) -> memref<1xbf16>
+// CHECK: %{{.*}} = arith.constant 1 : index
+// CHECK: %{{.*}} = arith.constant 1 : index
+// CHECK: %{{.*}} = arith.constant 1 : index
+// CHECK: %{{.*}} = arith.constant 1 : index
+// CHECK: %{{.*}} = arith.constant 128 : index
+// CHECK: %{{.*}} = arith.constant 384 : index
+// CHECK: %{{.*}} = arith.constant 0 : index
+// CHECK: %{{.*}} = arith.constant 1 : index
+// CHECK: %[[CST:.*]] = arith.constant 0.000000e+00 : f32
+// CHECK: %[[COLLAPSE:.*]] = memref.collapse_shape %[[ARG1]] [] : memref<1xbf16> into memref<bf16>
+// CHECK: %{{.*}} = arith.constant 0 : index
+// CHECK: %{{.*}} = arith.constant 1 : index
+// CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} {
+// CHECK: {{ *}}scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} {
+// CHECK: {{ *}}%[[C384:.*]] = arith.constant 384 : index
+// CHECK: {{ *}}%[[C1_384:.*]] = arith.constant 1 : index
+// CHECK: {{ *}}%[[OUTER:.*]] = scf.for %[[I:.*]] = %{{.*}} to %[[C384]] step %[[C1_384]] iter_args(%[[ACC0:.*]] = %[[CST]]) -> (f32) {
+// CHECK: {{ *}}%[[C128:.*]] = arith.constant 128 : index
+// CHECK: {{ *}}%[[C1_128:.*]] = arith.constant 1 : index
+// CHECK: {{ *}}%[[INNER:.*]] = scf.for %[[J:.*]] = %{{.*}} to %[[C128]] step %[[C1_128]] iter_args(%[[ACC1:.*]] = %[[CST]]) -> (f32) {
+// CHECK: {{ *}}%[[C4096:.*]] = arith.constant 4096 : index
+// CHECK: {{ *}}%[[C1_4096:.*]] = arith.constant 1 : index
+// CHECK: {{ *}}%[[RED:.*]] = scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ACC2:.*]] = %[[ACC0]]) -> (f32) {
+// CHECK: {{ *}}%[[LOAD:.*]] = memref.load %[[ARG0]][%[[I]], %[[J]]] : memref<384x128xbf16>
+// CHECK: {{ *}}%[[EXT:.*]] = arith.extf %[[LOAD]] : bf16 to f32
+// CHECK: {{ *}}%[[MUL:.*]] = arith.mulf %[[EXT]], %[[EXT]] : f32
+// CHECK: {{ *}}%[[ADD0:.*]] = arith.addf %[[MUL]], %[[ACC1]] {reduction_axes = [0 : index, 1 : index], reduction_type = "all"} : f32
+// CHECK: {{ *}}%[[ADD1:.*]] = arith.addf %[[ADD0]], %[[ACC0]] : f32
+// CHECK: {{ *}}scf.yield %[[ADD1]] : f32
+// CHECK: {{ *}}} {reduction = 4096 : i64}
+// CHECK: {{ *}}scf.yield %[[RED]] : f32
+// CHECK: {{ *}}}
+// CHECK: {{ *}}scf.yield %[[INNER]] : f32
+// CHECK: {{ *}}}
+// CHECK: {{ *}}%[[TRUNC:.*]] = arith.truncf %[[OUTER]] : f32 to bf16
+// CHECK: {{ *}}memref.store %[[TRUNC]], %[[COLLAPSE]][] : memref<bf16>
+// CHECK: {{ *}}}
 // CHECK: }
-func.func @Fused_Mul_ReduceSum_split(%arg0: memref<64xbf16>, %arg1: memref<1xbf16>) -> memref<1xbf16> {
+// CHECK: return %[[ARG1]] : memref<1xbf16>
+// CHECK: }
+func.func @Fused_Mul_ReduceSum_split(%arg0: memref<384x128xbf16>, %arg1: memref<1xbf16>) -> memref<1xbf16> {
   %c1 = arith.constant 1 : index
   %c1_0 = arith.constant 1 : index
+  %c1_1 = arith.constant 1 : index
+  %c1_2 = arith.constant 1 : index
+  %c128 = arith.constant 128 : index
+  %c384 = arith.constant 384 : index
+  %c0 = arith.constant 0 : index
+  %c1_3 = arith.constant 1 : index
   %cst = arith.constant 0.000000e+00 : f32
   %collapse_shape = memref.collapse_shape %arg1 [] : memref<1xbf16> into memref<bf16>
-  %c0 = arith.constant 0 : index
-  %c64 = arith.constant 64 : index
-  %c1_1 = arith.constant 1 : index
-  %c0_2 = arith.constant 0 : index
-  %c1_3 = arith.constant 1 : index
-  scf.for %arg2 = %c0_2 to %c1_3 step %c1_3 {
-    %c64_4 = arith.constant 64 : index
-    %c1_5 = arith.constant 1 : index
-    %c64_6 = arith.constant 64 : index
-    %cst_7 = arith.constant dense<0.000000e+00> : !npuvector<64xf32>
-    %0 = scf.for %arg3 = %c0_2 to %c64_4 step %c64_6 iter_args(%arg4 = %cst_7) -> (!npuvector<64xf32>) {
-      %c40 = arith.constant 40 : index
-      %c0_8 = arith.constant 0 : index
-      %cst_9 = arith.constant 0.000000e+00 : bf16
-      %3 = npuvector.transfer_read %arg0[%arg3], %cst_9 : memref<64xbf16>, !npuvector<64xbf16>
-      %4 = npuvector.extf %3 : !npuvector<64xbf16> to !npuvector<64xf32>
-      %5 = arith.mulf %4, %4 : !npuvector<64xf32>
-      %6 = arith.addf %5, %arg4 {reduction_axes = [0 : index], reduction_type = "all"} : !npuvector<64xf32>
-      scf.yield %6 : !npuvector<64xf32>
+  %c0_4 = arith.constant 0 : index
+  %c1_5 = arith.constant 1 : index
+  scf.for %arg2 = %c0_4 to %c1_5 step %c1_5 {
+    scf.for %arg3 = %c0_4 to %c1_5 step %c1_5 {
+      %c384_6 = arith.constant 384 : index
+      %c1_7 = arith.constant 1 : index
+      %0 = scf.for %arg4 = %c0_4 to %c384_6 step %c1_7 iter_args(%arg5 = %cst) -> (f32) {
+        %c128_8 = arith.constant 128 : index
+        %c1_9 = arith.constant 1 : index
+        %2 = scf.for %arg6 = %c0_4 to %c128_8 step %c1_9 iter_args(%arg7 = %cst) -> (f32) {
+          %c4096 = arith.constant 4096 : index
+          %c1_10 = arith.constant 1 : index
+          %3 = scf.for %arg8 = %c0_4 to %c1_5 step %c1_5 iter_args(%arg9 = %arg5) -> (f32) {
+            %c40 = arith.constant 40 : index
+            %c0_11 = arith.constant 0 : index
+            %4 = memref.load %arg0[%arg4, %arg6] : memref<384x128xbf16>
+            %5 = arith.extf %4 : bf16 to f32
+            %6 = arith.mulf %5, %5 : f32
+            %7 = arith.addf %6, %arg7 {reduction_axes = [0 : index, 1 : index], reduction_type = "all"} : f32
+            %8 = arith.addf %7, %arg5 : f32
+            scf.yield %8 : f32
+          } {reduction = 4096 : i64}
+          scf.yield %3 : f32
+        }
+        scf.yield %2 : f32
+      }
+      %1 = arith.truncf %0 : f32 to bf16
+      memref.store %1, %collapse_shape[] : memref<bf16>
     }
-    %1 = npuvector.reduction <add>, %0 : !npuvector<64xf32> into f32
-    %2 = arith.truncf %1 : f32 to bf16
-    memref.store %2, %collapse_shape[] : memref<bf16>
   }
   return %arg1 : memref<1xbf16>
 }
