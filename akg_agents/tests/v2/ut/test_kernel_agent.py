@@ -238,12 +238,9 @@ async def test_kernel_agent():
         print("   ✅ 所有模块都正常\n")
     
     # 检查 API Key
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("AIKG_API_KEY")
-    if not api_key:
-        print("[ERROR] 未找到 API Key，请设置环境变量: OPENAI_API_KEY 或 AIKG_API_KEY")
-        return False
-    
-    print(f"[OK] API Key: {api_key[:10]}...\n")
+    from akg_agents.utils.environment_check import _check_llm_api
+    if not _check_llm_api():
+        raise ValueError("LLM API Key 配置或连接有问题，请检查。")
     
     try:
         # 使用唯一 task_id，避免加载旧历史

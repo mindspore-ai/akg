@@ -247,16 +247,9 @@ async def run_interactive_test():
     print_separator()
     
     # 检查 API Key
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("AIKG_API_KEY")
-    if not api_key:
-        print("\n[WARNING] 未找到 API Key")
-        print("请设置环境变量:")
-        print("  export OPENAI_API_KEY='your-api-key'")
-        print("  或")
-        print("  export AIKG_API_KEY='your-api-key'")
-        return
-    
-    print(f"[OK] 检测到 API Key: {api_key[:10]}...\n")
+    from akg_agents.utils.environment_check import _check_llm_api
+    if not _check_llm_api():
+        raise ValueError("LLM API Key 配置或连接有问题，请检查。")
     
     agent = PlanAgent()
     
