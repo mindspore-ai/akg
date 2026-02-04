@@ -150,7 +150,6 @@ class AgentBase(ABC):
         
         Raises:
             LLMAPIError: LLM API 调用失败
-            ValueError: 启用流式输出但未提供 session_id
         """
         try:
             # 格式化 prompt
@@ -163,8 +162,6 @@ class AgentBase(ABC):
             
             # 检查流式输出和 session_id
             stream = self._stream_enabled()
-            if stream and not session_id:
-                raise ValueError(f"Agent {agent_name} 启用流式输出但未提供 session_id")
             
             # 创建 LLMClient
             client = create_llm_client(model_level=model_level, session_id=session_id)
