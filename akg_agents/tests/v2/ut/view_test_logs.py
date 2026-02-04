@@ -111,7 +111,7 @@ def view_log(log_file, show_full=False, filter_type=None, filter_round=None):
 
 def find_latest_log():
     """查找最新的日志文件"""
-    log_dir = Path.home() / ".aikg" / "logs"
+    log_dir = Path.home() / ".akg" / "logs"
     if not log_dir.exists():
         return None
     
@@ -134,7 +134,7 @@ def main():
         log_file = find_latest_log()
         if not log_file:
             print("❌ 未找到日志文件")
-            print(f"日志目录: {Path.home() / '.aikg' / 'logs'}")
+            print(f"日志目录: {Path.home() / '.akg' / 'logs'}")
             return
         print(f"📝 使用最新日志文件")
     

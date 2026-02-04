@@ -205,7 +205,7 @@ class FileSystemState:
     
     def __init__(self, task_id: str, base_dir: Path = None):
         self.task_id = task_id
-        self.base_dir = base_dir or Path.home() / ".aikg" / "conversations"
+        self.base_dir = base_dir or Path.home() / ".akg" / "conversations"
         self.conversation_dir = self.base_dir / task_id
         
         # 创建目录结构

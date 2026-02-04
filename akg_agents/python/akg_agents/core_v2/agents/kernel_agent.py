@@ -59,7 +59,7 @@ class KernelAgent(AgentBase):
         self.backend = backend
         self.arch = arch
         self.dsl = dsl
-        self.base_dir = base_dir or str(Path.home() / ".aikg")
+        self.base_dir = base_dir or str(Path.home() / ".akg")
         self.trace = TraceSystem(task_id=task_id, base_dir=self.base_dir)
         
         # 提前初始化 trace（创建基本结构，支持恢复）
@@ -290,7 +290,11 @@ class KernelAgent(AgentBase):
             available_tools=json.dumps([t["function"] for t in self.available_tools], indent=2, ensure_ascii=False),
             user_input=self._original_user_input or "",
             plan_list=json.dumps(self.plan_list, indent=2, ensure_ascii=False) if self.plan_list else "",
-            action_history=action_history
+            action_history=action_history,
+            framework=self.framework,
+            backend=self.backend,
+            arch=self.arch,
+            dsl=self.dsl
         )
         
         from akg_agents.core_v2.agents import Jinja2TemplateWrapper

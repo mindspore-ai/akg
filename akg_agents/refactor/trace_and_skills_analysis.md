@@ -240,7 +240,7 @@ class TraceSystem:
     
     def __init__(self, task_id: str):
         self.task_id = task_id
-        self.root_dir = Path.home() / ".aikg" / "conversations" / task_id
+        self.root_dir = Path.home() / ".akg" / "conversations" / task_id
         self.root_dir.mkdir(parents=True, exist_ok=True)
         
         self.trace_file = self.root_dir / "trace.json"
