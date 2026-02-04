@@ -148,9 +148,11 @@
 开始
   ↓
 plan_list 是否为空？
-  ├─ 是 → 配置是否完整？
-  │        ├─ 是 → 调用 plan 生成计划
-  │        └─ 否 → ask_user 确认默认配置
+  ├─ 是 → history 中是否有"新任务开始"或"用户确认配置"？
+  │        ├─ 是 → 调用 plan 生成计划（新任务周期开始）
+  │        └─ 否 → 配置是否完整？
+  │                 ├─ 是 → 调用 plan 生成计划
+  │                 └─ 否 → ask_user 确认默认配置
   │
   └─ 否 → 计划是否已确认？
            ├─ 否 → ask_user 确认计划
@@ -158,6 +160,12 @@ plan_list 是否为空？
                     ├─ 是 call_op_task_builder 且未确认 → ask_user 确认 task_desc
                     └─ 否 → 执行下一个 pending 的 step
 ```
+
+**重要：识别新任务**
+- 如果 history 中有 "任务完成"、"新任务开始" 或类似的总结性内容
+- 同时 user_input 是新的算子请求（如 "生成 tanh"）
+- 且 history 中有 ask_user 确认配置的记录
+- **则应该调用 plan 开始新任务，不要返回 null 或空响应！**
 
 ---
 
@@ -192,6 +200,12 @@ plan_list 是否为空？
   "reason": "执行原因"
 }
 ```
+
+### 6. 禁止返回无效响应
+- **tool_name 必须是有效的工具名称或 "finish"**
+- **绝对不要返回 `"tool_name": null` 或空字符串！**
+- 如果不确定下一步，调用 `ask_user` 询问用户
+- 如果看到"任务完成"+"新任务确认配置"的情况，调用 `plan` 开始新任务
 
 ---
 
@@ -338,6 +352,32 @@ plan_list 是否为空？
   "reason": "所有任务已完成"
 }
 ```
+
+### 示例10: 新任务开始（前一个任务完成后）→ 生成计划
+
+**状态**:
+- plan_list 为空
+- history 包含: "已完成任务：ReLU算子生成...新任务开始：用户确认生成tanh算子"
+- user_input: "生成 tanh"
+- 用户已确认配置（DSL: triton, Framework: torch, Backend: cuda）
+
+**分析**: 这是一个新任务周期。前一个任务（ReLU）已完成，现在用户要生成 tanh。配置已确认，应该直接调用 plan。
+
+**输出**:
+```json
+{
+  "tool_name": "plan",
+  "arguments": {
+    "user_input": "生成 tanh 算子（DSL: triton, Framework: torch, Backend: cuda）"
+  },
+  "reason": "新任务开始，用户已确认配置，生成执行计划"
+}
+```
+
+**注意**: 
+- **绝对不要返回 `"tool_name": null`！**
+- 当 history 中有"任务完成"+"新任务"的信息，且配置已确认，必须调用 plan
+- 这是新的任务周期，与之前完成的任务无关
 
 ---
 
