@@ -18,6 +18,7 @@
 #define MUSE_DIALECT_MUSE_META_OPS_TD
 
 include "mfusion/Dialect/Muse/MuseTypes.td"
+include "mlir/IR/BuiltinAttributes.td"
 
 //===----------------------------------------------------------------------===//
 // MUSE Meta Operations
@@ -26,6 +27,23 @@ include "mfusion/Dialect/Muse/MuseTypes.td"
 //
 // NOTE: All operations in this file are sorted alphabetically by their class name.
 //===----------------------------------------------------------------------===//
+
+def Muse_AbsOp : Muse_Op<"abs", [Pure]> {
+  let summary = "Element-wise absolute value.";
+  let description = [{
+    Computes the absolute value of each element in the input tensor.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
 
 def Muse_AddOp : Muse_Op<"add", [Pure, Commutative]> {
   let summary = "Element-wise addition of two tensors.";
@@ -46,6 +64,54 @@ def Muse_AddOp : Muse_Op<"add", [Pure, Commutative]> {
   }];
 }
 
+def Muse_BatchMatmulOp : Muse_Op<"batch_matmul", [Pure]> {
+  let summary = "Batch matrix multiplication of two tensors with transpose options.";
+  let description = [{
+    Batch matrix multiplication with optional transpose on last two dimensions.
+    Supports tensors with rank >= 2 and same rank.
+
+    Default: (*B, N, C) @ (*B, C, M) -> (*B, N, M)
+    transpose_a=True: (*B, C, N) @ (*B, C, M) -> (*B, N, M)
+    transpose_b=True: (*B, N, C) @ (*B, M, C) -> (*B, N, M)
+
+    Where *B represents multidimensional batch dimensions.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$self,
+    AnyRankedTensor:$mat2,
+    DefaultValuedAttr<BoolAttr, "false">:$transpose_a,
+    DefaultValuedAttr<BoolAttr, "false">:$transpose_b
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $self `,` $mat2 attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_BroadcastToOp : Muse_Op<"broadcast_to", [Pure]> {
+  let summary = "Broadcast tensor to a given shape.";
+  let description = [{
+    Broadcasts a tensor to a specified shape following NumPy broadcasting rules.
+    Dimensions are added to the left (front) of the tensor shape as needed.
+    Takes input tensor and shape tensor (1D tensor of int64).
+    Supports dynamic shapes where shape is computed at runtime.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    AnyRankedTensor:$shape
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input `,` $shape attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_CastOp : Muse_Op<"cast", [Pure]> {
   let summary = "Cast tensor to a specified data type.";
   let description = [{
@@ -58,6 +124,24 @@ def Muse_CastOp : Muse_Op<"cast", [Pure]> {
   );
 
   let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_CeilOp : Muse_Op<"ceil", [Pure]> {
+  let summary = "Element-wise ceiling (round up) operation.";
+  let description = [{
+    Computes the ceiling of each element in the input tensor.
+    Returns the smallest integer value that is greater than or equal to each element.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
 
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
@@ -123,6 +207,24 @@ def Muse_ExpOp : Muse_Op<"exp", [Pure]> {
   }];
 }
 
+def Muse_FloorOp : Muse_Op<"floor", [Pure]> {
+  let summary = "Element-wise floor (round down) operation.";
+  let description = [{
+    Computes the floor of each element in the input tensor.
+    Returns the largest integer value that is less than or equal to each element.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_GeOp : Muse_Op<"ge", [Pure]> {
   let summary = "Element-wise greater-than-or-equal comparison of two tensors.";
   let description = [{
@@ -161,6 +263,24 @@ def Muse_GtOp : Muse_Op<"gt", [Pure]> {
   }];
 }
 
+def Muse_IsFiniteOp : Muse_Op<"is_finite", [Pure]> {
+  let summary = "Determines which elements are finite for each position.";
+  let description = [{
+    For each element in the input tensor, determines whether it is a finite value.
+    An element is considered finite if it is not NaN, -INF, or INF.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_LeOp : Muse_Op<"le", [Pure]> {
   let summary = "Element-wise less-than-or-equal comparison of two tensors.";
   let description = [{
@@ -174,6 +294,80 @@ def Muse_LeOp : Muse_Op<"le", [Pure]> {
   );
 
   let results = (outs AnyRankedTensor:$out);
+
+  let assemblyFormat = [{
+    $self `,` $other attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_LogOp : Muse_Op<"log", [Pure]> {
+  let summary = "Element-wise natural logarithm operation.";
+  let description = [{
+    Computes the natural logarithm (base-e) of each element in the input tensor.
+    For elements less than or equal to 0, returns NaN.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_LogicalAndOp : Muse_Op<"logical_and", [Pure, Commutative]> {
+  let summary = "Element-wise logical AND operation.";
+  let description = [{
+    Computes the element-wise logical AND of two tensors.
+    Non-zero values are treated as true, zero values are treated as false.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$self,
+    AnyRankedTensor:$other
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $self `,` $other attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_LogicalNotOp : Muse_Op<"logical_not", [Pure]> {
+  let summary = "Element-wise logical NOT operation.";
+  let description = [{
+    Computes the element-wise logical NOT of a tensor.
+    Non-zero values are treated as true, zero values are treated as false.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_LogicalOrOp : Muse_Op<"logical_or", [Pure, Commutative]> {
+  let summary = "Element-wise logical OR operation.";
+  let description = [{
+    Computes the element-wise logical OR of two tensors.
+    Non-zero values are treated as true, zero values are treated as false.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$self,
+    AnyRankedTensor:$other
+  );
+
+  let results = (outs AnyRankedTensor:$output);
 
   let assemblyFormat = [{
     $self `,` $other attr-dict `:` functional-type(operands, results)
@@ -217,6 +411,44 @@ def Muse_Matmul : Muse_Op<"matmul", [Pure]> {
   }];
 }
 
+def Muse_MaximumOp : Muse_Op<"maximum", [Pure, Commutative]> {
+  let summary = "Element-wise maximum of two tensors.";
+  let description = [{
+    Computes the element-wise maximum of two tensors.
+    For each element position, selects the maximum value from the corresponding elements.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$x1,
+    AnyRankedTensor:$x2
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $x1 `,` $x2 attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_MinimumOp : Muse_Op<"minimum", [Pure, Commutative]> {
+  let summary = "Element-wise minimum of two tensors.";
+  let description = [{
+    Computes the element-wise minimum of two tensors.
+    For each element position, selects the minimum value from the corresponding elements.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$x1,
+    AnyRankedTensor:$x2
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $x1 `,` $x2 attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_Mm : Muse_Op<"mm", [Pure]> {
   let summary = "Matrix multiplication of two 2D tensors.";
   let description = [{
@@ -254,23 +486,6 @@ def Muse_MulOp : Muse_Op<"mul", [Pure, Commutative]> {
   }];
 }
 
-def Muse_NegOp : Muse_Op<"neg", [Pure]> {
-  let summary = "The neg operation";
-  let description = [{
-    Get the element-wise negation of the input tensor.
-  }];
-
-  let arguments = (ins
-    AnyRankedTensor:$input
-  );
-
-  let results = (outs AnyRankedTensor:$out);
-
-  let assemblyFormat = [{
-    $input attr-dict `:` functional-type(operands, results)
-  }];
-}
-
 def Muse_NeOp : Muse_Op<"ne", [Pure]> {
   let summary = "Element-wise not-equal comparison of two tensors.";
   let description = [{
@@ -287,6 +502,23 @@ def Muse_NeOp : Muse_Op<"ne", [Pure]> {
 
   let assemblyFormat = [{
     $self `,` $other attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_NegOp : Muse_Op<"neg", [Pure]> {
+  let summary = "The neg operation";
+  let description = [{
+    Get the element-wise negation of the input tensor.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$out);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
   }];
 }
 
@@ -325,6 +557,26 @@ def Muse_PowOp : Muse_Op<"pow", [Pure]> {
 
   let assemblyFormat = [{
     $base `,` $exponent attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_RealDivOp : Muse_Op<"real_div", [Pure]> {
+  let summary = "Element-wise real division of two tensors.";
+  let description = [{
+    Computes element-wise real division of two tensors: result = x / y.
+    Performs floating-point division element-wise.
+    Unlike integer division which truncates, this operation always returns floating-point results.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$x,
+    AnyRankedTensor:$y
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $x `,` $y attr-dict `:` functional-type(operands, results)
   }];
 }
 
@@ -371,15 +623,105 @@ def Muse_ReshapeOp : Muse_Op<"reshape", [Pure]> {
   let summary = "Reshape operation";
   let description = [{
     Reshapes input tensor to the specified shape.
-    Takes input tensor and shape attribute.
+    Takes input tensor and shape tensor (1D tensor of int64).
+    Supports dynamic shapes where shape is computed at runtime.
   }];
 
   let arguments = (ins
     AnyRankedTensor:$input,
-    I64ArrayAttr:$shape
+    AnyRankedTensor:$shape
   );
 
   let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input `,` $shape attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_RsqrtOp : Muse_Op<"rsqrt", [Pure]> {
+  let summary = "Element-wise reciprocal square root operation.";
+  let description = [{
+    Computes the reciprocal of the square root of each element in the input tensor.
+    Returns 1 / sqrt(x) for each element. For elements less than 0, returns NaN.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_SelectOp : Muse_Op<"select", [Pure]> {
+  let summary = "Select elements from two tensors based on a condition.";
+  let description = [{
+    Selects elements from two tensors based on a condition tensor.
+    Returns a tensor with elements selected from 'on_true' or 'on_false'
+    based on the corresponding boolean value in the 'condition' tensor.
+    If condition[i] is true, output[i] = on_true[i].
+    If condition[i] is false, output[i] = on_false[i].
+    All three input tensors must be broadcastable to the same shape.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$condition,
+    AnyRankedTensor:$on_true,
+    AnyRankedTensor:$on_false
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $condition `,` $on_true `,` $on_false attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_SliceOp : Muse_Op<"slice", [Pure]> {
+  let summary = "Extract a slice along a single dimension.";
+  let description = [{
+    Extracts a slice from the input tensor along a single dimension with given start, end, and step.
+    Only the dimension 'dim' has different size between input and output.
+    Supports index normalization and automatic size calculation.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    I64Attr:$dim,
+    I64Attr:$start,
+    I64Attr:$end,
+    I64Attr:$step
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input 
+    `dim` $dim 
+    `start` $start 
+    `end` $end 
+    `step` $step
+    attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_SqrtOp : Muse_Op<"sqrt", [Pure]> {
+  let summary = "Element-wise square root operation.";
+  let description = [{
+    Computes the square root of each element in the input tensor.
+    Returns the non-negative square root of each element.
+    For elements less than 0, returns NaN.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
 
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
@@ -402,6 +744,24 @@ def Muse_SubOp : Muse_Op<"sub", [Pure]> {
 
   let assemblyFormat = [{
     $x `,` $y attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_TruncOp : Muse_Op<"trunc", [Pure]> {
+  let summary = "Element-wise truncation (round toward zero) operation.";
+  let description = [{
+    Computes the truncation of each element in the input tensor by rounding toward zero.
+    This is different from floor which always rounds down, or ceil which always rounds up.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
   }];
 }
 

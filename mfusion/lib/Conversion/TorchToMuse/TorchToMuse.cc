@@ -73,7 +73,14 @@ void populateTorchToMuseTypeConversions(mlir::TypeConverter &converter) {
   converter.addConversion(
     [](TorchD::NoneType type) -> mlir::Type { return mlir::muse::NoneType::get(type.getContext()); });
 
+  // Convert !torch.list<int> to tensor<?xi64> for shape-related operations
+  // This enables dynamic shape support for reshape, broadcast_to, etc.
   converter.addConversion([&](TorchD::ListType type) -> mlir::Type {
+    // For list<int> types (commonly used for shape parameters), convert to 1D tensor
+    if (mlir::isa<TorchD::IntType>(type.getContainedType())) {
+      return mlir::RankedTensorType::get({mlir::ShapedType::kDynamic}, mlir::IntegerType::get(type.getContext(), 64));
+    }
+    // For other list types, keep as Muse ListType
     return mlir::muse::ListType::get(type.getContext(), converter.convertType(type.getContainedType()));
   });
 }
