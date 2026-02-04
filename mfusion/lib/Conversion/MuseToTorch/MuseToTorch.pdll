@@ -5,36 +5,6 @@
 #include "MuseMetaToTorch.pdll"
 #include "MuseAclnnToTorch.pdll"
 
-Pattern ConvertMuseAclnnMatmul {
-   let root = op<muse.aclnn.matmul>(operands: ValueRange) -> (result: Type);
-   replace root with op<torch.aten.matmul>(convertValues(operands)) -> (convertType(result));
-}
-
-Pattern ConvertMuseAclnnBatchMatmul {
-  let root = op<muse.aclnn.batch_matmul>(operands: ValueRange) -> (result: Type);
-  replace root with op<torch.aten.bmm>(convertValues(operands)) -> (convertType(result));
-}
-
-Pattern ConvertMuseAclnnMm {
-  let root = op<muse.aclnn.mm>(operands: ValueRange) -> (result: Type);
-  replace root with op<torch.aten.mm>(convertValues(operands)) -> (convertType(result));
-}
-
-Pattern ConvertMusePow {
-  let root = op<muse.pow>(operands: ValueRange) -> (result: Type);
-  replace root with op<torch.aten.pow.Tensor_Tensor>(convertValues(operands)) -> (convertType(result));
-}
-
-Pattern ConvertMuseAclnnTanh {
-  let root = op<muse.aclnn.tanh>(operands: ValueRange) -> (result: Type);
-  replace root with op<torch.aten.tanh>(convertValues(operands)) -> (convertType(result));
-}
-
-Pattern ConvertMuseAclnnGelu {
-  let root = op<muse.aclnn.gelu>(operands: ValueRange) -> (result: Type);
-  replace root with op<torch.aten.gelu>(convertValues(operands)) -> (convertType(result));
-}
-
 Pattern ConvertReturnOp {
   let root = op<func.return>(operands: ValueRange);
   replace root with op<func.return>(convertValues(operands));
