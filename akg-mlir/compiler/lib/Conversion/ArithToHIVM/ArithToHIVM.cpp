@@ -395,6 +395,9 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
   static LogicalResult rewriteTruncFScalarOr1D(CastOp op,
                                                OpAdaptor adaptor,
                                                ConversionPatternRewriter &rewriter) {
+    if(!isa<MemRefType>(adaptor.getIn().getType())) {
+      return success();
+    }
     Location loc = op.getLoc();
     Value srcMemRef = adaptor.getOperands()[0];
     auto srcMemRefType = dyn_cast<MemRefType>(srcMemRef.getType());
@@ -1851,6 +1854,10 @@ struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
   LogicalResult matchAndRewrite(memref::StoreOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
+    if(!isa<MemRefType>(adaptor.getValue().getType())) {
+      return success();
+    }
+
     Value valToStore = adaptor.getValue();
     Value memref = adaptor.getMemref();
 
