@@ -94,7 +94,7 @@ class KernelAgent(AgentBase):
         import yaml
         
         from akg_agents import get_project_root
-        tools_file = Path(get_project_root()) / "core_v2" / "config" / "domain_tools.yaml"
+        tools_file = Path(get_project_root()) / "core_v2" / "config" / "tools.yaml"
         with open(tools_file, "r", encoding="utf-8") as f:
             tools_config = yaml.safe_load(f)
         
@@ -150,8 +150,6 @@ class KernelAgent(AgentBase):
         return agent_registry
     
     def _initialize_task(self, user_input: str):
-        """初始化任务状态（trace 已在 __init__ 中初始化）"""
-        # 只在新任务时创建 root state
         if self.current_node_id == "root" and not self.trace.fs.node_exists("root"):
             root_state = NodeState(
                 node_id="root",
@@ -181,19 +179,26 @@ class KernelAgent(AgentBase):
             logger.info(f"[KernelAgent] 恢复任务: {self.task_id}, 当前节点: {self.current_node_id}")
     
     async def run(self, user_input: str) -> Dict[str, Any]:
-        """
-        流程：
-        1. input → planlist = planagent -> llm -> ask_user -> planlist
-        2. planlist → llm → tool_call -> result -> planlist(LLM更新状态) → finish
-        """
-        # 初始化
         if not self._initialized:
             self._initialize_task(user_input)
             self._original_user_input = user_input
             self.tool_executor.agent_context["user_input"] = user_input
             self._initialized = True
         else:
-            self._handle_user_response(user_input)
+            # 判断是对 ask_user 的响应，还是新任务
+            current_node = self.trace.get_node(self.current_node_id)
+            is_ask_user_response = (current_node.action and 
+                                   current_node.action.get("type") == "ask_user")
+            
+            if is_ask_user_response:
+                # 用户在回答问题
+                self._handle_user_response(user_input)
+            else:
+                # 新任务：重置状态
+                logger.info(f"[新任务] 重置状态，开始新任务")
+                self._original_user_input = user_input
+                self.tool_executor.agent_context["user_input"] = user_input
+                self.plan_list = []
         
         iteration = 0
         while True:
@@ -202,8 +207,6 @@ class KernelAgent(AgentBase):
             
             if not llm_response:
                 return self._build_error_response("LLM 调用失败")
-            if "plan_list" in llm_response:
-                self.plan_list = llm_response["plan_list"]
             
             tool_name = llm_response.get("tool_name")
             arguments = llm_response.get("arguments", {})
@@ -226,8 +229,7 @@ class KernelAgent(AgentBase):
                     logger.info(f"[Plan 失败] {error_msg}")
                     return self._handle_ask_user({"message": error_msg})
                 self._update_plan_from_result(result)
-            
-            # 获取当前历史长度
+
             full_history = self.trace.get_full_action_history(self.current_node_id)
             logger.info(f"[Observation] history: {len(full_history)} 条, 当前节点: {self.current_node_id}")
     
@@ -252,9 +254,16 @@ class KernelAgent(AgentBase):
             result=result,
             metrics={"duration_ms": duration_ms}
         )
-        
-        # 更新当前节点
+
         self.current_node_id = new_node_id
+
+        action_record = ActionRecord(
+            action_id=new_node_id,
+            tool_name=tool_name,
+            arguments=arguments,
+            result=result
+        )
+        self.tool_executor.history.append(action_record)
         
         return result
     
@@ -288,12 +297,13 @@ class KernelAgent(AgentBase):
         template = Jinja2TemplateWrapper("{{ prompt }}")
         
         try:
+
             response, _, _ = await self.run_llm(
                 template,
                 {"prompt": prompt},
                 self.model_level or "standard"
             )
-            
+
             # 使用 PlanAgent 的嵌套 JSON 解析器
             from akg_agents.core_v2.agents.plan import PlanAgent
             json_str = PlanAgent._extract_nested_json(response)

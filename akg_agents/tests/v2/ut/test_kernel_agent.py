@@ -116,7 +116,7 @@ from akg_agents.core_v2.agents.kernel_agent import KernelAgent
 _current_round = 0
 
 def wrap_agent_with_logging(agent):
-    """包装 agent.run_llm 以记录 LLM 交互到日志文件"""
+    """包装 agent.run_llm 以记录 LLM 交互到日志文件（包含详细上下文）"""
     original_run_llm = agent.run_llm
     
     async def logged_run_llm(template, input_data, model_level="standard"):
@@ -125,33 +125,75 @@ def wrap_agent_with_logging(agent):
         # 生成 prompt
         prompt_text = template.format(**input_data) if hasattr(template, 'format') else str(template)
         
-        # 记录请求（包含 trace 状态和压缩历史）
+        # 获取 trace 摘要
+        trace_summary = agent.get_trace_summary() if hasattr(agent, 'get_trace_summary') else {}
+        
+        # 记录请求的基本信息
         log_data = {
             "model_level": model_level,
             "prompt_length": len(prompt_text),
             "prompt_full": prompt_text,
             "current_node": getattr(agent, 'current_node_id', 'unknown'),
-            "trace_summary": agent.get_trace_summary() if hasattr(agent, 'get_trace_summary') else {}
+            "trace_summary": trace_summary
         }
         
-        # 尝试获取压缩历史
+        # 尝试获取并记录详细的上下文信息
         try:
             if hasattr(agent, 'trace') and hasattr(agent, 'current_node_id'):
                 from akg_agents.core_v2.llm import create_llm_client
                 llm_client = create_llm_client(model_level=model_level)
+                
+                # 获取完整历史（未压缩）
+                full_history = agent.trace.get_full_action_history(agent.current_node_id)
+                
+                # 获取压缩历史
                 history_records = await agent.trace.get_compressed_history_for_llm(
                     llm_client, agent.current_node_id, max_tokens=2000
                 )
-                log_data["compressed_history"] = [
-                    {"action_id": r.action_id, "tool_name": r.tool_name, 
-                     "compressed": getattr(r, 'compressed', False)}
-                    for r in history_records
-                ]
+                
+                # 记录上下文详情
+                log_data["context_details"] = {
+                    "full_history_count": len(full_history),
+                    "compressed_history_count": len(history_records),
+                    "compression_ratio": f"{len(history_records)}/{len(full_history)}" if full_history else "0/0",
+                    "is_compressed": len(history_records) < len(full_history),
+                    "current_plan_steps": len(getattr(agent, 'plan_list', [])),
+                    "original_user_input": getattr(agent, '_original_user_input', 'N/A')[:100]
+                }
+                
+                # 记录压缩历史的详细信息
+                log_data["compressed_history"] = []
+                for r in history_records:
+                    entry = {
+                        "action_id": r.action_id,
+                        "tool_name": r.tool_name,
+                    }
+                    
+                    # 特殊处理 history_summary
+                    if r.tool_name == "history_summary":
+                        entry["summary"] = r.result.get("summary", "")[:200] + "..."
+                        entry["original_actions"] = r.arguments.get("original_actions", 0)
+                        entry["compressed"] = True
+                    else:
+                        entry["arguments"] = str(r.arguments)[:100]
+                        entry["result_status"] = r.result.get("status", "N/A")
+                        entry["compressed"] = False
+                    
+                    log_data["compressed_history"].append(entry)
+                
         except Exception as e:
-            log_data["compressed_history_error"] = str(e)
+            log_data["context_error"] = str(e)
         
         log_interaction(_current_round, "llm_request", log_data)
-        print(f"   📤 [LLM Request] prompt: {len(prompt_text)} chars, node: {log_data['current_node']}")
+        
+        # 打印上下文摘要
+        print(f"   📤 [LLM Request]")
+        print(f"      Prompt: {len(prompt_text)} chars")
+        print(f"      Node: {log_data['current_node']}")
+        if "context_details" in log_data:
+            ctx = log_data["context_details"]
+            print(f"      History: {ctx['compression_ratio']} ({'压缩' if ctx['is_compressed'] else '完整'})")
+            print(f"      Plan Steps: {ctx['current_plan_steps']}")
         
         # 调用 LLM
         result = await original_run_llm(template, input_data, model_level)
@@ -204,10 +246,15 @@ async def test_kernel_agent():
     print(f"[OK] API Key: {api_key[:10]}...\n")
     
     try:
-        print("🔧 [初始化] 创建 KernelAgent...\n")
+        # 使用唯一 task_id，避免加载旧历史
+        import time
+        task_id = f"test_{int(time.time())}"
+        
+        print("🔧 [初始化] 创建 KernelAgent...")
+        print(f"📁 任务ID: {task_id}")
         print(f"📝 日志文件: {SESSION_LOG_FILE}\n")
         
-        agent = KernelAgent(task_id="test_kernel_agent", model_level="standard")
+        agent = KernelAgent(task_id=task_id, model_level="standard")
         
         # 包装 agent 以记录 LLM 交互
         agent = wrap_agent_with_logging(agent)
@@ -362,6 +409,35 @@ async def test_kernel_agent():
             print(f"   当前节点: {summary.get('current_node', 'unknown')}")
             print(f"   总动作数: {summary.get('total_actions', 0)}")
             print(f"   路径长度: {summary.get('path_length', 0)}")
+            
+            # 打印历史压缩统计
+            try:
+                from akg_agents.core_v2.llm import create_llm_client
+                llm_client = create_llm_client(model_level=agent.model_level or "standard")
+                
+                full_history = agent.trace.get_full_action_history(agent.current_node_id)
+                compressed_history = await agent.trace.get_compressed_history_for_llm(
+                    llm_client, agent.current_node_id, max_tokens=2000
+                )
+                
+                print(f"\n   📊 历史压缩统计:")
+                print(f"      完整历史: {len(full_history)} 个动作")
+                print(f"      压缩后: {len(compressed_history)} 个记录")
+                
+                if len(compressed_history) < len(full_history):
+                    compression_ratio = (1 - len(compressed_history) / len(full_history)) * 100
+                    print(f"      压缩率: {compression_ratio:.1f}%")
+                    
+                    # 检查是否有 summary
+                    has_summary = any(r.tool_name == "history_summary" for r in compressed_history)
+                    if has_summary:
+                        summary_action = next(r for r in compressed_history if r.tool_name == "history_summary")
+                        original_count = summary_action.arguments.get("original_actions", 0)
+                        print(f"      摘要: {original_count} 个动作 → 1 个摘要")
+                else:
+                    print(f"      未压缩 (历史较短)")
+            except Exception as e:
+                print(f"   ⚠️  无法获取压缩统计: {e}")
         
         print("="*80)
         

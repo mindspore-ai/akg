@@ -143,12 +143,24 @@ class PlanAgent(AgentBase):
             # 支持多种格式的历史记录
             if isinstance(item, dict):
                 tool_name = item.get("tool_name", item.get("action", "unknown"))
-                status = item.get("status", item.get("result", {}).get("status", "unknown"))
-                summary = item.get("summary", item.get("output", ""))
+                
+                # 优先从 result 字典中获取 status 和 output
+                result_dict = item.get("result", {})
+                status = result_dict.get("status", item.get("status", "unknown"))
+                
+                # 尝试多个字段获取摘要信息
+                summary = (
+                    item.get("summary") or  # 压缩历史的 summary 字段
+                    result_dict.get("output") or  # 标准返回的 output 字段
+                    result_dict.get("message") or  # ask_user 的 message 字段
+                    result_dict.get("user_response") or  # ask_user 的用户响应
+                    item.get("output") or  # 兼容旧格式
+                    ""
+                )
                 
                 action_str = f"{i}. {tool_name} → {status}"
                 if summary:
-                    summary_preview = summary[:100] + "..." if len(str(summary)) > 100 else summary
+                    summary_preview = str(summary)[:100] + "..." if len(str(summary)) > 100 else str(summary)
                     action_str += f"\n   摘要: {summary_preview}"
             else:
                 action_str = f"{i}. {str(item)[:100]}"
