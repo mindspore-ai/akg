@@ -68,6 +68,34 @@ def FuseGelu : Pass<"fuse-gelu", "::mlir::ModuleOp"> {
     into a single muse.gelu operator.
   }];
   let constructor = "mlir::createFuseGeluPass()";
+    let dependentDialects = [
+      "::mlir::muse::MuseDialect",
+      "::mlir::func::FuncDialect"
+  ];
+}
+
+// GraphKernel Cluster Passes
+//===----------------------------------------------------------------------===//
+
+def DVMCluster : Pass<"muse-dvm-cluster", "::mlir::func::FuncOp"> {
+  let summary = "Cluster Muse operations checked by DVM backend into muse.fused";
+
+  let description = [{
+    This pass clusters operations checked by DVM backend into fused
+    subgraphs represented by muse.fused operations. It uses a Union-Find
+    algorithm to merge compatible operations while ensuring no cycles
+    are introduced in the dependency graph.
+
+    The pass performs the following steps:
+    1. Build a dependency graph from the function's operations
+    2. Find candidate operations that can be clustered together
+    3. Remove candidates that would introduce cycles
+    4. Merge remaining candidates into clusters
+    5. Create muse.fused operations for each cluster
+  }];
+
+  let constructor = "mlir::createDVMClusterPass()";
+
   let dependentDialects = [
     "::mlir::muse::MuseDialect",
     "::mlir::func::FuncDialect"

@@ -43,11 +43,6 @@ def Muse_ListType : Muse_TypeWithContainedType<"List", "list"> {
   }];
 }
 
-// List type constraint (accepts any list type)
-def MuseAnyList : Type<CPred<"::llvm::isa<::mlir::muse::ListType>($_self)">,
-                      "MUSE list type",
-                      "::mlir::muse::ListType">;
-
 // Helper to create list type constraints with specific element types
 class Muse_List<Type containedType> : Type<
     And<[
@@ -56,6 +51,10 @@ class Muse_List<Type containedType> : Type<
     ]>,
     "List of " # containedType.summary,
     "::mlir::muse::ListType">;
+
+// TensorList constraint - list containing RankedTensor elements
+// This is commonly used for operations that take multiple tensors (e.g., grouped_matmul)
+def MuseTensorList : Muse_List<AnyRankedTensor>;
 
 //===----------------------------------------------------------------------===//
 // Device Attribute
@@ -147,5 +146,8 @@ class MuseOptional<Type type>
     : AnyTypeOf<[type, Muse_NoneType]> {
   Type baseType = type;
 }
+
+// OptionalTensorList - TensorList or None
+def MuseOptionalTensorList : MuseOptional<MuseTensorList>;
 
 #endif // MUSE_DIALECT_MUSE_TYPES_TD

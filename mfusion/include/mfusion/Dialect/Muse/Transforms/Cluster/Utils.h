@@ -14,21 +14,24 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
-#define MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
+#ifndef MFUSION_INCLUDE_DIALECT_MUSE_TRANSFORMS_CLUSTER_UTILS_H_
+#define MFUSION_INCLUDE_DIALECT_MUSE_TRANSFORMS_CLUSTER_UTILS_H_
 
-#include "mfusion/Dialect/Muse/Transforms/Decompose/Decompose.h"
-#include "mfusion/Dialect/Muse/Transforms/Cluster/DVMCluster.h"
-#include "mfusion/Dialect/Muse/Transforms/Fusion/FuseAddRmsNorm.h"
-#include "mfusion/Dialect/Muse/Transforms/Fusion/GeluFusion.h"
+#include <unordered_set>
+#include "mlir/IR/BuiltinAttributes.h"
 
 namespace mlir {
+namespace muse {
 
-/// Generate the code for registering transforms passes.
-#ifndef GEN_PASS_REGISTRATION
-#define GEN_PASS_REGISTRATION
-#include "mfusion/Dialect/Muse/Transforms/Passes.h.inc"
-#endif
+/// Check if operation has zero-shaped tensors
+bool hasZeroShape(Operation *op);
+
+/// Check if operation has dynamic shape tensor
+bool isDynamicShapeNode(Operation *op);
+
+/// Get const input index info for value-dependent operations
+const std::unordered_map<std::string, std::unordered_set<size_t>> &getConstInputIndexInfo();
+}  // namespace muse
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_PASSES_H
+#endif  // MFUSION_INCLUDE_DIALECT_MUSE_TRANSFORMS_CLUSTER_UTILS_H_

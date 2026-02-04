@@ -18,6 +18,7 @@
 #define MFUSION_CONVERSION_PDLL_HELPER_H
 
 #include <cstddef>
+#include <optional>
 
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -33,6 +34,7 @@ static Value getIndex(PatternRewriter &rewriter, ValueRange values) {
   return values[N];
 }
 
+// PDL Rewrite helpers
 struct PDLRewriteHelpers {
   static Attribute getF64Attr(PatternRewriter &rewriter, Value val) {
     APFloat floatVal(0.0);
@@ -46,6 +48,39 @@ struct PDLRewriteHelpers {
     }
 
     return rewriter.getF64FloatAttr(0);
+  }
+
+  // Helper to extract int64 value from a constant operation's "value" attribute
+  static std::optional<int64_t> getConstantIntValue(Value val) {
+    auto *defOp = val.getDefiningOp();
+    if (!defOp) return std::nullopt;
+
+    // Try to get "value" attribute (common for constant operations like torch.constant.int)
+    if (auto valueAttr = defOp->getAttrOfType<IntegerAttr>("value")) {
+      return valueAttr.getInt();
+    }
+    return std::nullopt;
+  }
+
+  static Attribute getI64ArrayAttr(PatternRewriter &rewriter, Value val) {
+    SmallVector<int64_t, 8> values;
+
+    // Try to extract constant int values from the list operation
+    if (auto *op = val.getDefiningOp()) {
+      // Handle list construct operations (e.g., torch.prim.ListConstruct)
+      for (auto operand : op->getOperands()) {
+        if (auto intVal = getConstantIntValue(operand)) {
+          values.push_back(*intVal);
+        } else {
+          // If any element is not a constant, return failure
+          return Attribute();
+        }
+      }
+      return rewriter.getI64ArrayAttr(values);
+    }
+
+    // If not a list or failed to extract, return failure
+    return Attribute();
   }
 };
 
@@ -63,6 +98,7 @@ inline void registerPDLLHelperFunctions(RewritePatternSet &patterns) {
   patterns.getPDLPatterns().registerRewriteFunction("Get9", getIndex<9>);
   patterns.getPDLPatterns().registerRewriteFunction("Get10", getIndex<10>);
   patterns.getPDLPatterns().registerRewriteFunction("GetF64Attr", PDLRewriteHelpers::getF64Attr);
+  patterns.getPDLPatterns().registerRewriteFunction("GetI64ArrayAttr", PDLRewriteHelpers::getI64ArrayAttr);
 }
 
 }  // namespace mlir
