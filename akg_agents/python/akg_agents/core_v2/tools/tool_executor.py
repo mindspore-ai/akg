@@ -20,10 +20,12 @@ import yaml
 logger = logging.getLogger(__name__)
 
 class ToolExecutor:
-    def __init__(self, agent_registry: Dict[str, Any] = None, 
+    def __init__(self, agent_registry: Dict[str, Any] = None,
+                 workflow_registry: Dict[str, Any] = None,
                  agent_context: Dict[str, Any] = None,
                  history: List = None):
         self.agent_registry = agent_registry or {}
+        self.workflow_registry = workflow_registry or {}
         self.agent_context = agent_context or {}
         self.history = history or []
         self.tool_types = self._load_tool_types()
@@ -69,6 +71,10 @@ class ToolExecutor:
         # 优先检查是否是注册的 Agent
         if tool_name in self.agent_registry:
             return await self._execute_agent(tool_name, arguments)
+        
+        # 检查是否是注册的 Workflow
+        if tool_name in self.workflow_registry:
+            return await self._execute_workflow(tool_name, arguments)
         
         # 检查工具类型
         tool_type = self.tool_types.get(tool_name, "basic_tool")
@@ -187,6 +193,123 @@ class ToolExecutor:
         except Exception as e:
             logger.error(f"[ToolExecutor] Agent 执行失败: {tool_name}, {e}", exc_info=True)
             return {"status": "error", "output": "", "error_information": f"Agent 执行失败: {str(e)}"}
+    
+    async def _execute_workflow(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        执行 Workflow
+        
+        Args:
+            tool_name: 工具名称（如 "use_coder_only_workflow"）
+            arguments: 工具参数
+        
+        Returns:
+            执行结果字典
+        """
+        try:
+            workflow_info = self.workflow_registry[tool_name]
+            workflow_class = workflow_info["workflow_class"]
+            workflow_name = workflow_info["workflow_name"]
+            
+            logger.info(f"[ToolExecutor] 开始执行 workflow: {workflow_name}")
+            
+            # 获取 workflow 资源（通过回调）
+            get_resources = self.agent_context.get("get_workflow_resources")
+            if not get_resources:
+                raise ValueError("无法获取 workflow 资源，请检查 KernelAgent 配置")
+            
+            workflow_resources = get_resources()
+            
+            # 检查必需资源
+            if not workflow_resources.get("agents"):
+                raise ValueError("Workflow 需要 agents 资源，但未提供")
+            
+            logger.info(f"[ToolExecutor] Workflow 资源准备完成，agents: {list(workflow_resources['agents'].keys())}")
+            
+            # 创建 workflow 实例
+            workflow = workflow_class(**workflow_resources)
+            
+            # 编译 workflow
+            app = workflow.compile()
+            logger.info(f"[ToolExecutor] Workflow {workflow_name} 编译完成")
+            
+            # 构建初始状态
+            initial_state = self._build_workflow_state(arguments)
+            logger.info(f"[ToolExecutor] 开始执行 workflow，初始状态: op_name={initial_state.get('op_name')}, dsl={initial_state.get('dsl')}")
+            
+            # 执行 workflow
+            final_state = await app.ainvoke(initial_state)
+            
+            # 格式化结果
+            result = self._format_workflow_result(final_state)
+            
+            logger.info(f"[ToolExecutor] Workflow {workflow_name} 执行完成: {result.get('status')}")
+            
+            return result
+        
+        except Exception as e:
+            logger.error(f"[ToolExecutor] Workflow 执行失败: {tool_name}, {e}", exc_info=True)
+            return {
+                "status": "fail",
+                "error_information": f"Workflow 执行失败: {str(e)}",
+                "output": ""
+            }
+    
+    def _build_workflow_state(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        构建 workflow 初始状态
+        
+        Args:
+            arguments: 工具调用参数
+        
+        Returns:
+            workflow 初始状态字典
+        """
+        # 从 arguments 或 agent_context 获取参数
+        return {
+            "op_name": arguments.get("op_name", ""),
+            "task_desc": arguments.get("task_desc", ""),
+            "dsl": arguments.get("dsl", self.agent_context.get("dsl", "")),
+            "framework": arguments.get("framework", self.agent_context.get("framework", "")),
+            "backend": arguments.get("backend", self.agent_context.get("backend", "")),
+            "arch": arguments.get("arch", self.agent_context.get("arch", "")),
+            "task_id": arguments.get("task_id", self.agent_context.get("task_id", "")),
+            "user_requirements": arguments.get("user_requirements", ""),
+            "result": {},
+            "should_continue": True,
+            "current_step": "",
+            "iterations": 0,
+            "max_iterations": arguments.get("max_iterations", 10)
+        }
+    
+    def _format_workflow_result(self, final_state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        格式化 workflow 结果为标准格式
+        
+        Args:
+            final_state: workflow 最终状态
+        
+        Returns:
+            标准结果字典
+        """
+        # 根据 should_continue 判断状态
+        should_continue = final_state.get("should_continue", True)
+        status = "success" if not should_continue else "fail"
+        
+        # 提取结果
+        result = final_state.get("result", {})
+        output = result.get("code", "") if isinstance(result, dict) else str(result)
+        error = result.get("error", "") if isinstance(result, dict) else ""
+        
+        return {
+            "status": status,
+            "output": output,
+            "error_information": error,
+            "metadata": {
+                "iterations": final_state.get("iterations", 0),
+                "current_step": final_state.get("current_step", ""),
+                "workflow_completed": not should_continue
+            }
+        }
     
     async def _execute_domain_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """执行 domain_tool（如 verify_kernel, profile_kernel）"""
