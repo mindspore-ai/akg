@@ -75,6 +75,7 @@ struct AKGLoopFusion : public mlir::impl::AKGLoopFusionBase<AKGLoopFusion> {
 
   std::optional<llvm::SmallVector<std::string>> getSymShapeAttrFromValue(mlir::Value source);
   std::optional<int64_t> getConstantDimIndex(mlir::Value dimIndex);
+  llvm::SmallVector<int64_t> getDynamicDimIndicesOfValue(mlir::Value v);
   void collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
                                      llvm::StringMap<llvm::SmallVector<mlir::Value>> &axisToDimValues);
 
@@ -144,6 +145,20 @@ std::optional<int64_t> AKGLoopFusion::getConstantDimIndex(mlir::Value dimIndex) 
   return std::nullopt;
 }
 
+llvm::SmallVector<int64_t> AKGLoopFusion::getDynamicDimIndicesOfValue(mlir::Value v) {
+  llvm::SmallVector<int64_t> dynDims;
+  auto st = mlir::dyn_cast<mlir::ShapedType>(v.getType());
+  if (!st || !st.hasRank())
+    return dynDims;
+
+  auto shape = st.getShape();
+  for (int64_t i = 0; i < static_cast<int64_t>(shape.size()); ++i) {
+    if (shape[i] == mlir::ShapedType::kDynamic)
+      dynDims.push_back(i);
+  }
+  return dynDims;
+}
+
 // Collect dim operations from affine.for loop bounds and group them by axis.
 void AKGLoopFusion::collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
                                                   llvm::StringMap<llvm::SmallVector<mlir::Value>> &axisToDimValues) {
@@ -151,34 +166,57 @@ void AKGLoopFusion::collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
     // Process a single operand from loop bounds
     auto processBoundOperand = [&](mlir::Value operand) {
       auto *defOp = operand.getDefiningOp();
-      if (!defOp) {
-        return;
+
+      if (defOp && mlir::isa<mlir::memref::DimOp>(defOp)) {
+        // Extract source and dimension index from dim operation
+        mlir::Value source = defOp->getOperand(0);
+        mlir::Value dimIndexValue = defOp->getOperand(1);
+
+        auto constIndex = getConstantDimIndex(dimIndexValue);
+        if (!constIndex.has_value()) return;  // Skip non-constant dimension index
+
+        // Get symbolic shape and extract axis key (symbol name only)
+        auto symShape = getSymShapeAttrFromValue(source);
+        // Skip if no SymShapeAttr or index out of range
+        if (!symShape.has_value() || *constIndex >= static_cast<int64_t>(symShape->size())) {
+          return;
+        }
+
+        // Group by axis key: symbolic dimension symbol only
+        std::string axisKey = (*symShape)[*constIndex];
+        axisToDimValues[axisKey].push_back(operand);
+      } else {
+        mlir::Value useOp ;
+        int64_t userIndex ;
+        for (auto &use: defOp->getResult(0).getUses()) {
+          mlir::Operation *userOp = use.getOwner();
+          if (auto allocOp = mlir::dyn_cast<mlir::memref::AllocOp>(userOp)) {
+            useOp = allocOp.getResult();
+            userIndex = static_cast<int64_t>(use.getOperandNumber());
+            break;
+          }
+        }
+
+        if (!useOp) {
+          std::string axisKey = "si";
+          axisToDimValues[axisKey].push_back(operand);
+          return;
+        }
+
+        auto dynDims = getDynamicDimIndicesOfValue(useOp);
+        if (dynDims.empty()) {
+            llvm::errs()<<"This op has no dynamic shape\n";
+            return;
+        }
+        int64_t dynamicIndex = dynDims[userIndex];
+        auto symShape = getSymShapeAttrFromValue(useOp);
+        if (!symShape.has_value() || dynamicIndex >= static_cast<int64_t>(symShape->size())) {
+          return;
+        }
+
+        std::string axisKey = (*symShape)[dynamicIndex];
+        axisToDimValues[axisKey].push_back(operand);
       }
-
-      // Check if operand is defined by memref.dim or tensor.dim
-      bool isMemRefDim = mlir::isa<mlir::memref::DimOp>(defOp);
-      bool isTensorDim = mlir::isa<mlir::tensor::DimOp>(defOp);
-      if (!isMemRefDim && !isTensorDim) {
-        return;
-      }
-
-      // Extract source and dimension index from dim operation
-      mlir::Value source = defOp->getOperand(0);
-      mlir::Value dimIndexValue = defOp->getOperand(1);
-
-      auto constIndex = getConstantDimIndex(dimIndexValue);
-      if (!constIndex.has_value()) return;  // Skip non-constant dimension index
-
-      // Get symbolic shape and extract axis key (symbol name only)
-      auto symShape = getSymShapeAttrFromValue(source);
-      // Skip if no SymShapeAttr or index out of range
-      if (!symShape.has_value() || *constIndex >= static_cast<int64_t>(symShape->size())) {
-        return;
-      }
-
-      // Group by axis key: symbolic dimension symbol only
-      std::string axisKey = (*symShape)[*constIndex];
-      axisToDimValues[axisKey].push_back(operand);
     };
 
     // Process both upper and lower bound operands
@@ -216,7 +254,34 @@ void AKGLoopFusion::replaceDimWithPrimes(mlir::func::FuncOp funcOp) {
     auto &dimValues = entry.getValue();
 
     // Select first dim as representative (will be used when restoring)
-    mlir::Value representativeDim = dimValues.front();
+    mlir::Value earliestDim;
+    for (mlir::Value dimVal : dimValues) {
+      if (!earliestDim) {
+        earliestDim = dimVal;
+        continue;
+      }
+
+      // if dimVal is BlockArgument, getDefiningOp() is nullptr
+      auto *op1 = earliestDim.getDefiningOp();
+      if (!op1) break;
+
+      auto *op2 = dimVal.getDefiningOp();
+      if (!op2) {
+          earliestDim = dimVal;
+          break;
+      }
+
+      if (op1->getBlock() == op2->getBlock()) {
+        if (op2->isBeforeInBlock(op1)) {
+          earliestDim = dimVal;
+        }
+      } else {
+        llvm::errs() <<"Dim ops for the same axisKey are in different blocks\n";
+        return;
+      }
+    }
+
+    mlir::Value representativeDim = earliestDim ? earliestDim : dimValues.front();
     builder.setInsertionPointAfterValue(representativeDim);
     auto primeConst = builder.create<mlir::arith::ConstantIndexOp>(representativeDim.getLoc(), kPrimes[primeIndex]);
 
