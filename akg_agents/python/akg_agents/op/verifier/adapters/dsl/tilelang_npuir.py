@@ -59,11 +59,64 @@ except ImportError:
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,
-                      device_id: Optional[int] = None) -> str:
-        """Return code string to benchmark TileLang NPUIR implementation."""
-        # Similar to cuda_c, use traditional timing
-        sync_code = "torch.npu.synchronize()" if backend == "ascend" else ""
-        code = f"""        # dsl：tilelang_npuir
+                      device_id: Optional[int] = None,
+                      clear_l2_cache: bool = True) -> str:
+        """Return code string to benchmark TileLang NPUIR implementation.
+        
+        Args:
+            impl_func_name: 实现函数名
+            inputs: 输入变量名
+            warmup: warmup 次数
+            runs: 有效运行次数
+            backend: 后端类型
+            op_name: 算子名称
+            case_idx: case 索引
+            framework_model: 框架模型变量名（可选）
+            framework_adapter: 框架适配器（可选）
+            device_id: 设备ID（可选）
+            clear_l2_cache: 是否在每次迭代前清除 L2 cache（默认 True）
+        """
+        if backend == "ascend":
+            # 使用 profiler_npu 进行性能测试，支持 L2 cache 清除
+            code = f"""        # dsl：tilelang_npuir
+        try:
+            from akg_agents.op.verifier.profiler import profiler_npu
+            patch_imported = True
+        except ImportError:
+            patch_imported = False
+        
+        def tilelang_benchmark_fn():
+            return {framework_model}(*{inputs})
+        
+        if patch_imported:
+            # 使用 L2 cache 清除（fallback 方式，使用 zero_()）
+            # 注意：tilelang_npuir 没有专用的清除方式，可能有误判风险
+            execution_time_us = profiler_npu(
+                tilelang_benchmark_fn,
+                warmup={warmup},
+                active={runs},
+                prof_dir_name="prof_generation_output",
+                keep_res=False,
+                suppress_warnings=True,
+                clear_l2_cache={clear_l2_cache},
+                dsl="other"
+            )
+            execution_time_ms = execution_time_us / 1000
+            method = "profiler_npu"
+        else:
+            import time
+            start_time = time.time()
+            for _ in range({warmup + runs}):
+                _ = tilelang_benchmark_fn()
+                torch.npu.synchronize()
+            end_time = time.time()
+            execution_time_ms = (end_time - start_time) * 1000 / {warmup + runs}
+            method = "traditional_timing"
+"""
+        else:
+            # 非 ascend 后端，使用传统计时
+            sync_code = "torch.npu.synchronize()" if backend == "ascend" else ""
+            code = f"""        # dsl：tilelang_npuir
         import time
         start_time = time.time()
         for _ in range({warmup + runs}):
