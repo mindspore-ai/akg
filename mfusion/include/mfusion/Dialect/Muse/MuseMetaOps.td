@@ -393,21 +393,47 @@ def Muse_LtOp : Muse_Op<"lt", [Pure]> {
   }];
 }
 
-def Muse_Matmul : Muse_Op<"matmul", [Pure]> {
-  let summary = "Matrix multiplication of two tensors.";
+def Muse_MatmulOp : Muse_Op<"matmul", [Pure]> {
+  let summary = "Matrix multiplication of two tensors (no bias).";
   let description = [{
     Performs matrix multiplication of two tensors (supports 1D to 6D tensors).
+    Optional trans_x1/trans_x2 treat operand as transposed.
   }];
 
   let arguments = (ins
     AnyRankedTensor:$self,
-    AnyRankedTensor:$other
+    AnyRankedTensor:$other,
+    DefaultValuedAttr<BoolAttr, "false">:$trans_x1,
+    DefaultValuedAttr<BoolAttr, "false">:$trans_x2
   );
 
   let results = (outs AnyRankedTensor:$result);
 
   let assemblyFormat = [{
     $self `,` $other attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_MatmulWithBiasOp : Muse_Op<"matmul_with_bias", [Pure]> {
+  let summary = "Matrix multiplication of two tensors with bias.";
+  let description = [{
+    Performs matrix multiplication of two tensors (supports 1D to 6D) and adds
+    broadcast(bias): result = self * other + broadcast(bias).
+    Optional trans_x1/trans_x2 treat operand as transposed.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$self,
+    AnyRankedTensor:$other,
+    AnyRankedTensor:$bias,
+    DefaultValuedAttr<BoolAttr, "false">:$trans_x1,
+    DefaultValuedAttr<BoolAttr, "false">:$trans_x2
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $self `,` $other `,` $bias attr-dict `:` functional-type(operands, results)
   }];
 }
 
@@ -446,24 +472,6 @@ def Muse_MinimumOp : Muse_Op<"minimum", [Pure, Commutative]> {
 
   let assemblyFormat = [{
     $x1 `,` $x2 attr-dict `:` functional-type(operands, results)
-  }];
-}
-
-def Muse_Mm : Muse_Op<"mm", [Pure]> {
-  let summary = "Matrix multiplication of two 2D tensors.";
-  let description = [{
-    Performs matrix multiplication of two 2D tensors.
-  }];
-
-  let arguments = (ins
-    AnyRankedTensor:$self,
-    AnyRankedTensor:$other
-  );
-
-  let results = (outs AnyRankedTensor:$result);
-
-  let assemblyFormat = [{
-    $self `,` $other attr-dict `:` functional-type(operands, results)
   }];
 }
 
