@@ -53,10 +53,6 @@ def track_node(node_name: str, require_session: bool = False, require_task_label
             session_id = str(state.get("session_id") or "").strip()
             task_label = str(state.get("task_label") or "").strip()
             
-            # 可选的校验
-            if require_session and not session_id:
-                raise ValueError(f"[{node_name}] state 中必须包含 session_id")
-            
             if require_task_label and not task_label:
                 raise ValueError(f"[{node_name}] state 中必须包含 task_label")
             
