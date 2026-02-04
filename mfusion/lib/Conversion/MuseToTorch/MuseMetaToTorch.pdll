@@ -41,3 +41,8 @@ Pattern ConvertMuseNe {
   let root = op<muse.ne>(operands: ValueRange) -> (resType: Type);
   replace root with op<torch.aten.ne.Tensor>(convertValues(operands)) -> (convertType(resType));
 }
+
+Pattern ConvertMusePow {
+  let root = op<muse.pow>(operands: ValueRange) -> (result: Type);
+  replace root with op<torch.aten.pow.Tensor_Tensor>(convertValues(operands)) -> (convertType(result));
+}
