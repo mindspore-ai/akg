@@ -11,15 +11,35 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+"""
+ReActAgent - ReAct 模式 Agent 基类
+
+提供通用的 ReAct（Reasoning + Acting）循环实现：
+- ReAct 主循环
+- 工具执行
+- LLM 调用和响应解析
+- Trace 系统集成
+- 用户交互处理
+
+子类需要实现以下抽象方法：
+- _load_prompt_template(): 加载 prompt 模板
+- _build_prompt_context(): 构建 prompt 上下文变量
+- _get_agent_context(): 获取 agent 上下文（传递给 ToolExecutor）
+- _load_available_tools(): 加载可用工具列表
+- _get_agent_name(): 获取 agent 名称
+- _get_task_info_extra(): 获取任务信息的额外字段（可选）
+"""
+
 import logging
 import time
 import json
+from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 from datetime import datetime
 
-from akg_agents.core_v2.agents.base import AgentBase
-from akg_agents.core_v2.agents.registry import register_agent
+from akg_agents.core_v2.agents.base import AgentBase, Jinja2TemplateWrapper
 from akg_agents.core_v2.tools.tool_executor import ToolExecutor
 from akg_agents.core_v2.filesystem import (
     TraceSystem,
@@ -34,31 +54,45 @@ from akg_agents.core_v2.filesystem.models import (
 from akg_agents.core_v2.llm.factory import create_llm_client
 
 logger = logging.getLogger(__name__)
-@register_agent(scopes=["op"])
-class KernelAgent(AgentBase):
+
+
+class ReActAgent(AgentBase, ABC):
+    """
+    ReAct 模式 Agent 基类
+    
+    实现通用的 ReAct 循环，子类只需实现业务特定的方法。
+    
+    核心功能：
+    - ReAct 主循环 (run)
+    - 工具执行 (_execute_tool)
+    - LLM 调用和响应解析 (_get_next_action)
+    - Trace 系统集成
+    - 用户交互处理 (_handle_ask_user, _handle_user_response)
+    """
     
     def __init__(
         self,
         task_id: str,
         model_level: str = None,
         config: Dict = None,
-        framework: str = "torch",
-        backend: str = "cuda",
-        arch: str = "a100",
-        dsl: str = "triton",
         base_dir: Optional[str] = None
     ):
+        """
+        初始化 ReActAgent
+        
+        Args:
+            task_id: 任务 ID
+            model_level: 模型级别（如 "standard", "fast", "complex"）
+            config: 配置信息
+            base_dir: 基础目录（用于 trace 持久化）
+        """
         super().__init__(
-            context={"agent_name": "KernelAgent"},
+            context={"agent_name": self._get_agent_name()},
             config=config
         )
         
         self.task_id = task_id
         self.model_level = model_level
-        self.framework = framework
-        self.backend = backend
-        self.arch = arch
-        self.dsl = dsl
         self.base_dir = base_dir or str(Path.home() / ".akg")
         self.trace = TraceSystem(task_id=task_id, base_dir=self.base_dir)
         
@@ -69,78 +103,116 @@ class KernelAgent(AgentBase):
         self.plan_list: List[Dict] = []
         self._initialized = False
         self._original_user_input: Optional[str] = None
-
+        
+        # 加载可用工具
         self.available_tools = self._load_available_tools()
+        
+        # 加载 agent registry
         self.agent_registry = self._load_agent_registry()
         
-        # 加载 workflow registry（支持 workflow 工具化）
+        # 加载 workflow registry（子类可覆盖）
         self.workflow_registry = self._load_workflow_registry()
         
-        # Workflow 资源（延迟初始化）
-        self._workflow_resources = None
-        
+        # 初始化工具执行器
         self.tool_executor = ToolExecutor(
             agent_registry=self.agent_registry,
             workflow_registry=self.workflow_registry,
-            agent_context={
-                "task_id": self.task_id,
-                "dsl": self.dsl,
-                "framework": self.framework,
-                "backend": self.backend,
-                "arch": self.arch,
-                "model_level": self.model_level or "standard",
-                # 提供获取 workflow 资源的回调
-                "get_workflow_resources": lambda: self._get_workflow_resources()
-            },
+            agent_context=self._get_agent_context(),
             history=[]
         )
-
-        prompt_file = Path(__file__).parent / "prompts" / "kernel_agent_system.j2"
-        with open(prompt_file, "r", encoding="utf-8") as f:
-            from akg_agents.core_v2.agents import Jinja2TemplateWrapper
-            self.system_prompt_template = Jinja2TemplateWrapper(f.read())
+        
+        # 加载 prompt 模板
+        self.system_prompt_template = self._load_prompt_template()
     
+    # ==================== 抽象方法（子类必须实现） ====================
+    
+    @abstractmethod
+    def _get_agent_name(self) -> str:
+        """
+        获取 Agent 名称
+        
+        Returns:
+            Agent 名称字符串
+        """
+        pass
+    
+    @abstractmethod
+    def _load_prompt_template(self) -> Jinja2TemplateWrapper:
+        """
+        加载 prompt 模板
+        
+        子类需要返回特定的 Jinja2 模板。
+        
+        Returns:
+            Jinja2TemplateWrapper 实例
+        """
+        pass
+    
+    @abstractmethod
+    def _build_prompt_context(self) -> Dict[str, Any]:
+        """
+        构建 prompt 上下文变量
+        
+        子类需要返回用于填充 prompt 模板的变量字典。
+        
+        Returns:
+            包含模板变量的字典
+        """
+        pass
+    
+    @abstractmethod
+    def _get_agent_context(self) -> Dict[str, Any]:
+        """
+        获取 agent 上下文
+        
+        子类需要返回传递给 ToolExecutor 的上下文信息。
+        
+        Returns:
+            上下文字典
+        """
+        pass
+    
+    @abstractmethod
     def _load_available_tools(self) -> List[Dict]:
-        import yaml
+        """
+        加载可用工具列表
         
-        from akg_agents import get_project_root
-        tools_file = Path(get_project_root()) / "core_v2" / "config" / "tools.yaml"
-        with open(tools_file, "r", encoding="utf-8") as f:
-            tools_config = yaml.safe_load(f)
+        子类需要返回工具定义列表。
         
-        available_tools = []
-        for tool_name, tool_def in tools_config.get("tools", {}).items():
-            func = tool_def.get("function", {})
-            if func:
-                available_tools.append({
-                    "type": "function",
-                    "function": func
-                })
-        return available_tools
+        Returns:
+            工具定义列表
+        """
+        pass
+    
+    # ==================== 可覆盖方法（子类可选实现） ====================
     
     def _load_agent_registry(self) -> Dict[str, Any]:
-        """动态加载所有注册的 Agent"""
-        from akg_agents.core_v2.agents.registry import AgentRegistry
-
-        try:
-            from akg_agents.core_v2.agents import plan
-        except Exception as e:
-            logger.warning(f"[KernelAgent] 导入 plan 失败: {e}")
+        """
+        加载 Agent 注册表
         
+        子类可覆盖此方法以加载特定的 agents。
+        默认实现加载所有注册的 agents。
+        
+        Returns:
+            Agent 注册表字典
+        """
+        from akg_agents.core_v2.agents.registry import AgentRegistry
+        
+        # 尝试导入 plan agent
         try:
-            from akg_agents.op.agents import kernel_gen, kernel_designer, op_task_builder  # noqa: F401
+            from akg_agents.core_v2.agents import plan  # noqa: F401
         except Exception as e:
-            logger.warning(f"[KernelAgent] 导入 op.agents 失败: {e}")
+            logger.warning(f"[ReActAgent] 导入 plan 失败: {e}")
         
         agent_registry = {}
         all_agent_names = AgentRegistry.list_agents()
-        logger.info(f"[KernelAgent] 发现 {len(all_agent_names)} 个已注册 agents")
+        logger.info(f"[ReActAgent] 发现 {len(all_agent_names)} 个已注册 agents")
         
         for agent_name in all_agent_names:
             try:
                 agent_class = AgentRegistry.get_agent_class(agent_name)
                 if not hasattr(agent_class, 'TOOL_NAME') or not agent_class.TOOL_NAME:
-                    logger.debug(f"[KernelAgent] Agent '{agent_name}' 没有 TOOL_NAME，跳过")
+                    logger.debug(f"[ReActAgent] Agent '{agent_name}' 没有 TOOL_NAME，跳过")
                     continue
                 
                 # 加载 agent 的工具配置
@@ -153,139 +225,58 @@ class KernelAgent(AgentBase):
                         "type": "function",
                         "function": tool_def.get("function", {})
                     })
-                    logger.info(f"[KernelAgent] 注册工具: {tool_name} (来自 {agent_name})")
+                    logger.info(f"[ReActAgent] 注册工具: {tool_name} (来自 {agent_name})")
             except Exception as e:
-                logger.warning(f"[KernelAgent] 加载 Agent '{agent_name}' 失败: {e}", exc_info=True)
+                logger.warning(f"[ReActAgent] 加载 Agent '{agent_name}' 失败: {e}", exc_info=True)
         
         return agent_registry
     
     def _load_workflow_registry(self) -> Dict[str, Any]:
-        """动态加载所有注册的 Workflow"""
-        from akg_agents.core_v2.workflows.registry import WorkflowRegistry
-        
-        # 导入所有 workflow 模块（触发 @register_workflow 装饰器）
-        try:
-            from akg_agents.op.workflows import (
-                coder_only_workflow,      # noqa: F401
-                default_workflow,         # noqa: F401
-                verifier_only_workflow,   # noqa: F401
-                connect_all_workflow,     # noqa: F401
-            )
-        except Exception as e:
-            logger.warning(f"[KernelAgent] 导入 workflows 失败: {e}")
-        
-        workflow_registry = {}
-        all_workflow_names = WorkflowRegistry.list_workflows(scope="op")
-        logger.info(f"[KernelAgent] 发现 {len(all_workflow_names)} 个已注册 workflows")
-        
-        for workflow_name in all_workflow_names:
-            try:
-                workflow_class = WorkflowRegistry.get_workflow_class(workflow_name)
-                tool_config = WorkflowRegistry.get_tool_config(workflow_name)
-                
-                if not tool_config:
-                    logger.debug(f"[KernelAgent] Workflow '{workflow_name}' 没有工具配置，跳过")
-                    continue
-                
-                # 注册到 registry
-                for tool_name, tool_def in tool_config.items():
-                    workflow_registry[tool_name] = {
-                        "workflow_class": workflow_class,
-                        "workflow_name": workflow_name,
-                        "config": tool_def
-                    }
-                    
-                    # 添加到 available_tools
-                    self.available_tools.append({
-                        "type": "function",
-                        "function": tool_def.get("function", {})
-                    })
-                    
-                    logger.info(f"[KernelAgent] 注册工具: {tool_name} (来自 workflow {workflow_name})")
-            
-            except Exception as e:
-                logger.warning(f"[KernelAgent] 加载 Workflow '{workflow_name}' 失败: {e}", exc_info=True)
-        
-        return workflow_registry
-    
-    def _get_workflow_resources(self) -> Dict[str, Any]:
         """
-        获取 workflow 所需资源（延迟初始化）
+        加载 Workflow 注册表
+        
+        子类可覆盖此方法以加载特定的 workflows。
+        默认返回空字典。
         
         Returns:
-            包含 agents, trace, config 等的资源字典
+            Workflow 注册表字典
         """
-        if self._workflow_resources is None:
-            logger.info("[KernelAgent] 初始化 workflow 资源...")
-            
-            # 初始化 agents（延迟加载，避免循环依赖）
-            from akg_agents.core.agent.designer import Designer
-            from akg_agents.core.agent.coder import Coder
-            from akg_agents.op.verifier.kernel_verifier import KernelVerifier
-            
-            # 创建 agents 配置
-            agent_config = {
-                "dsl": self.dsl,
-                "backend": self.backend,
-                "arch": self.arch,
-                "framework": self.framework
-            }
-            
-            try:
-                agents = {
-                    "designer": Designer(**agent_config),
-                    "coder": Coder(**agent_config),
-                    "verifier": KernelVerifier(backend=self.backend, arch=self.arch)
-                }
-                logger.info(f"[KernelAgent] 成功初始化 {len(agents)} 个 agents")
-            except Exception as e:
-                logger.error(f"[KernelAgent] 初始化 agents 失败: {e}", exc_info=True)
-                # 提供空的 agents 作为降级
-                agents = {}
-            
-            self._workflow_resources = {
-                "agents": agents,
-                "device_pool": None,  # 向后兼容
-                "trace": self.trace,
-                "config": {},  # 可以从配置文件加载
-                "private_worker": None,
-                "worker_manager": None,
-                "backend": self.backend,
-                "arch": self.arch
-            }
-        
-        return self._workflow_resources
+        return {}
     
-    def _initialize_task(self, user_input: str):
-        if self.current_node_id == "root" and not self.trace.fs.node_exists("root"):
-            root_state = NodeState(
-                node_id="root",
-                turn=0,
-                status="init",
-                agent_info=AgentInfo(
-                    agent_name="KernelAgent",
-                    agent_id="root"
-                ).to_dict(),
-                task_info=TaskInfo(
-                    task_id=self.task_id,
-                    task_input=user_input,
-                    op_name="",
-                    dsl=self.dsl,
-                    backend=self.backend,
-                    arch=self.arch
-                ).to_dict(),
-                execution_info=ExecutionInfo(
-                    tool_call_counter=0,
-                    first_thinking_done=False,
-                    current_turn=0
-                ).to_dict()
-            )
-            self.trace.fs.save_node_state("root", root_state)
-            logger.info(f"[KernelAgent] 创建新任务: {self.task_id}")
-        else:
-            logger.info(f"[KernelAgent] 恢复任务: {self.task_id}, 当前节点: {self.current_node_id}")
+    def _get_task_info_extra(self) -> Dict[str, Any]:
+        """
+        获取任务信息的额外字段
+        
+        子类可覆盖此方法以添加特定的任务信息。
+        
+        Returns:
+            额外字段字典
+        """
+        return {}
+    
+    def _on_plan_updated(self, result: Dict):
+        """
+        Plan 更新回调
+        
+        当 plan 工具执行成功后调用。子类可覆盖此方法以处理 plan 结果。
+        
+        Args:
+            result: plan 工具的执行结果
+        """
+        pass
+    
+    # ==================== 核心 ReAct 循环 ====================
     
     async def run(self, user_input: str) -> Dict[str, Any]:
+        """
+        执行 ReAct 循环
+        
+        Args:
+            user_input: 用户输入
+        
+        Returns:
+            执行结果字典
+        """
         if not self._initialized:
             self._initialize_task(user_input)
             self._original_user_input = user_input
@@ -336,12 +327,24 @@ class KernelAgent(AgentBase):
                     logger.info(f"[Plan 失败] {error_msg}")
                     return self._handle_ask_user({"message": error_msg})
                 self._update_plan_from_result(result)
+                self._on_plan_updated(result)
 
             full_history = self.trace.get_full_action_history(self.current_node_id)
             logger.info(f"[Observation] history: {len(full_history)} 条, 当前节点: {self.current_node_id}")
     
+    # ==================== 工具执行 ====================
+    
     async def _execute_tool(self, tool_name: str, arguments: Dict) -> Dict:
-        """执行工具并记录到 trace"""
+        """
+        执行工具并记录到 trace
+        
+        Args:
+            tool_name: 工具名称
+            arguments: 工具参数
+        
+        Returns:
+            执行结果
+        """
         start_time = time.time()
         result = await self.tool_executor.execute(tool_name, arguments)
         duration_ms = int((time.time() - start_time) * 1000)
@@ -374,7 +377,15 @@ class KernelAgent(AgentBase):
         
         return result
     
+    # ==================== LLM 调用 ====================
+    
     async def _get_next_action(self) -> Optional[Dict]:
+        """
+        调用 LLM 获取下一个动作
+        
+        Returns:
+            LLM 响应字典，包含 tool_name, arguments, reason
+        """
         try:
             llm_client = create_llm_client(model_level=self.model_level or "standard")
             compressed_history = await self.trace.get_compressed_history_for_llm(
@@ -393,22 +404,24 @@ class KernelAgent(AgentBase):
             ensure_ascii=False
         ) if compressed_history else ""
         
-        prompt = self.system_prompt_template.format(
-            available_tools=json.dumps([t["function"] for t in self.available_tools], indent=2, ensure_ascii=False),
-            user_input=self._original_user_input or "",
-            plan_list=json.dumps(self.plan_list, indent=2, ensure_ascii=False) if self.plan_list else "",
-            action_history=action_history,
-            framework=self.framework,
-            backend=self.backend,
-            arch=self.arch,
-            dsl=self.dsl
-        )
+        # 构建 prompt 上下文
+        prompt_context = self._build_prompt_context()
+        prompt_context.update({
+            "available_tools": json.dumps(
+                [t["function"] for t in self.available_tools], 
+                indent=2, 
+                ensure_ascii=False
+            ),
+            "user_input": self._original_user_input or "",
+            "plan_list": json.dumps(self.plan_list, indent=2, ensure_ascii=False) if self.plan_list else "",
+            "action_history": action_history,
+        })
         
-        from akg_agents.core_v2.agents import Jinja2TemplateWrapper
+        prompt = self.system_prompt_template.format(**prompt_context)
+        
         template = Jinja2TemplateWrapper("{{ prompt }}")
         
         try:
-
             response, _, _ = await self.run_llm(
                 template,
                 {"prompt": prompt},
@@ -447,10 +460,16 @@ class KernelAgent(AgentBase):
             logger.error(f"[LLM 调用失败] {e}")
             return None
     
+    # ==================== 用户交互 ====================
+    
     def _handle_user_response(self, user_input: str):
-        """记录用户响应到最后一个 ask_user 节点
+        """
+        处理用户响应
         
-        由于 ask_user 创建时已保存为 current_node，直接更新当前节点即可
+        记录用户响应到最后一个 ask_user 节点。
+        
+        Args:
+            user_input: 用户输入
         """
         node = self.trace.get_node(self.current_node_id)
         
@@ -473,7 +492,17 @@ class KernelAgent(AgentBase):
             logger.warning(f"[用户响应] 当前节点不是 ask_user: {self.current_node_id}")
     
     def _handle_ask_user(self, arguments: Dict) -> Dict[str, Any]:
-        """暂停执行，等待用户响应"""
+        """
+        处理 ask_user 请求
+        
+        暂停执行，等待用户响应。
+        
+        Args:
+            arguments: ask_user 参数
+        
+        Returns:
+            等待用户响应的结果
+        """
         message = arguments.get("message", "请提供更多信息")
         
         # 添加 ask_user 节点到 trace
@@ -504,12 +533,60 @@ class KernelAgent(AgentBase):
             "history": [self._format_action_record(r) for r in full_history]
         }
     
+    # ==================== 任务初始化 ====================
+    
+    def _initialize_task(self, user_input: str):
+        """
+        初始化任务
+        
+        创建根节点或恢复现有任务。
+        
+        Args:
+            user_input: 用户输入
+        """
+        if self.current_node_id == "root" and not self.trace.fs.node_exists("root"):
+            # 获取额外的任务信息
+            extra_info = self._get_task_info_extra()
+            
+            root_state = NodeState(
+                node_id="root",
+                turn=0,
+                status="init",
+                agent_info=AgentInfo(
+                    agent_name=self._get_agent_name(),
+                    agent_id="root"
+                ).to_dict(),
+                task_info=TaskInfo(
+                    task_id=self.task_id,
+                    task_input=user_input,
+                    op_name=extra_info.get("op_name", ""),
+                    dsl=extra_info.get("dsl", ""),
+                    backend=extra_info.get("backend", ""),
+                    arch=extra_info.get("arch", "")
+                ).to_dict(),
+                execution_info=ExecutionInfo(
+                    tool_call_counter=0,
+                    first_thinking_done=False,
+                    current_turn=0
+                ).to_dict()
+            )
+            self.trace.fs.save_node_state("root", root_state)
+            logger.info(f"[{self._get_agent_name()}] 创建新任务: {self.task_id}")
+        else:
+            logger.info(f"[{self._get_agent_name()}] 恢复任务: {self.task_id}, 当前节点: {self.current_node_id}")
+    
+    # ==================== Plan 处理 ====================
+    
     def _update_plan_from_result(self, result: Dict):
-        """从 plan 工具结果中提取 plan_list
+        """
+        从 plan 工具结果中提取 plan_list
         
         处理两种格式:
         - dict: {"steps": [...]}
         - str: '{"steps": [...]}'
+        
+        Args:
+            result: plan 工具的执行结果
         """
         try:
             output = result.get("output", {})
@@ -527,14 +604,19 @@ class KernelAgent(AgentBase):
         except (json.JSONDecodeError, TypeError) as e:
             logger.error(f"[Plan 更新失败] {e}")
     
+    # ==================== 响应构建 ====================
     
     def _build_response(self, status: str, output: str = "", error_msg: str = "") -> Dict[str, Any]:
-        """构建统一的响应格式
+        """
+        构建统一的响应格式
         
         Args:
             status: 状态 (success/error)
             output: 输出信息（成功时使用）
             error_msg: 错误信息（失败时使用）
+        
+        Returns:
+            响应字典
         """
         full_history = self.trace.get_full_action_history(self.current_node_id)
         return {
@@ -555,8 +637,20 @@ class KernelAgent(AgentBase):
         """构建错误响应"""
         return self._build_response("error", error_msg=error_msg)
     
+    # ==================== 工具方法 ====================
+    
     def _format_action_record(self, record: ActionRecord) -> Dict:
-        """格式化 ActionRecord 为字典（特殊处理 summary）"""
+        """
+        格式化 ActionRecord 为字典
+        
+        特殊处理 summary 类型。
+        
+        Args:
+            record: ActionRecord 实例
+        
+        Returns:
+            格式化后的字典
+        """
         # 特殊处理 history_summary
         if record.tool_name == "history_summary":
             return {
@@ -576,7 +670,12 @@ class KernelAgent(AgentBase):
         }
     
     def get_trace_summary(self) -> Dict[str, Any]:
-        """获取 trace 摘要信息（用于调试）"""
+        """
+        获取 trace 摘要信息（用于调试）
+        
+        Returns:
+            trace 摘要字典
+        """
         try:
             full_history = self.trace.get_full_action_history(self.current_node_id)
             path = self.trace.get_path_to_node(self.current_node_id)

@@ -90,7 +90,7 @@ async def test_kernel_agent_loading():
     print("="*80)
     
     try:
-        from akg_agents.core_v2.agents.kernel_agent import KernelAgent
+        from akg_agents.op.agents.kernel_agent import KernelAgent
         
         # 创建 KernelAgent
         agent = KernelAgent(

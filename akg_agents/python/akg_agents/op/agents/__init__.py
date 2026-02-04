@@ -19,9 +19,11 @@ Op Agents - 算子相关的 Agent 实现
 from .kernel_gen import KernelGen
 from .kernel_designer import KernelDesigner
 from .op_task_builder import OpTaskBuilder
+from .kernel_agent import KernelAgent
 
 __all__ = [
     "KernelGen",
     "KernelDesigner",
     "OpTaskBuilder",
+    "KernelAgent",
 ]

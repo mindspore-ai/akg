@@ -33,7 +33,7 @@ python examples/test_coder_only_workflow_tool.py
 ### 2. 查看可用工具
 
 ```python
-from akg_agents.core_v2.agents.kernel_agent import KernelAgent
+from akg_agents.op.agents.kernel_agent import KernelAgent
 
 agent = KernelAgent(
     task_id="test",
@@ -64,7 +64,7 @@ for tool in agent.available_tools:
 
 ```python
 import asyncio
-from akg_agents.core_v2.agents.kernel_agent import KernelAgent
+from akg_agents.op.agents.kernel_agent import KernelAgent
 
 async def main():
     agent = KernelAgent(
