@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_DECOMPOSE_H
-#define MFUSION_DIALECT_MUSE_TRANSFORMS_DECOMPOSE_H
+#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_MAT_MUL_H
+#define MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_MAT_MUL_H
 
 #include <memory>
 
@@ -25,12 +25,18 @@
 
 namespace mlir {
 
-/// Create a pass to decompose operations in MUSE dialect.
-std::unique_ptr<Pass> createDecomposePass();
+/// Fuse MatMul/Mm (float16) followed by Cast (float32) into MatMul with float32 result.
+std::unique_ptr<Pass> createFuseMatMulCastPass();
 
-/// Convert aclnn.mm / aclnn.matmul / aclnn.batch_matmul to muse.matmul or muse.matmul_with_bias.
-std::unique_ptr<Pass> createConvertAclnnMatmulToMatmulPass();
+/// Fuse MatMul/Mm with 1D inputs by inserting reshape (unsqueeze/squeeze).
+std::unique_ptr<Pass> createFuseMatmulUnsqueezeSqueezePass();
+
+/// Insert permute for MatMul/Mm inputs when inner axis is not 512-byte aligned; set trans_x1/trans_x2.
+std::unique_ptr<Pass> createFuseMatmulTransposeWeightPass();
+
+/// Fuse MatMul -> Reshape -> Add(bias) into MatMul(with bias) -> Reshape.
+std::unique_ptr<Pass> createFuseMatmulReshapeBiasAddPass();
 
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_DECOMPOSE_H
+#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_MAT_MUL_H

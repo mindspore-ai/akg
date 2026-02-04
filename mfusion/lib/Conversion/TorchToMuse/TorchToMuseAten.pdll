@@ -13,6 +13,11 @@ Pattern ConvertAtenBroadcastTo {
   replace root with op<muse.broadcast_to>(convertValue(self), convertValue(size)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenBmm {
+  let root = op<torch.aten.bmm>(operands: ValueRange) -> (resType: Type);
+  replace root with op<muse.aclnn.batch_matmul>(convertValues(operands)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenCeil {
   let root = op<torch.aten.ceil>(input: Value) -> (resType: Type);
   replace root with op<muse.ceil>(convertValue(input)) -> (convertType(resType));
@@ -78,6 +83,11 @@ Pattern ConvertAtenLtTensor {
   replace root with op<muse.lt>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenMatmul {
+  let root = op<torch.aten.matmul>(operands: ValueRange) -> (resType: Type);
+  replace root with op<muse.aclnn.matmul>(convertValues(operands)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenMaximum {
   let root = op<torch.aten.maximum>(operands: ValueRange) -> (resType: Type);
   replace root with op<muse.maximum>(convertValues(operands)) -> (convertType(resType));
@@ -90,7 +100,7 @@ Pattern ConvertAtenMinimum {
 
 Pattern ConvertAtenMm {
   let root = op<torch.aten.mm>(operands: ValueRange) -> (resType: Type);
-  replace root with op<muse.mm>(convertValues(operands)) -> (convertType(resType));
+  replace root with op<muse.aclnn.mm>(convertValues(operands)) -> (convertType(resType));
 }
 
 Pattern ConvertAtenMulTensor {
@@ -118,6 +128,11 @@ Pattern ConvertAtenSqrt {
   replace root with op<muse.sqrt>(convertValue(input)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenPowTensorTensor {
+  let root = op<torch.aten.pow.Tensor_Tensor>(operands: ValueRange) -> (resType: Type);
+  replace root with op<muse.pow>(convertValues(operands)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenSubTensor {
   let root = op<torch.aten.sub.Tensor>(operands: ValueRange) -> (resType: Type);
   replace root with op<muse.aclnn.sub>(convertValues(operands)) -> (convertType(resType));
@@ -131,4 +146,9 @@ Pattern ConvertAtenTrunc {
 Pattern ConvertAtenWhereSelf {
   let root = op<torch.aten.where.self>(condition: Value, self: Value, other: Value) -> (resType: Type);
   replace root with op<muse.select>(convertValue(condition), convertValue(self), convertValue(other)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenTanh {
+  let root = op<torch.aten.tanh>(operands: ValueRange) -> (resType: Type);
+  replace root with op<muse.aclnn.tanh>(convertValues(operands)) -> (convertType(resType));
 }

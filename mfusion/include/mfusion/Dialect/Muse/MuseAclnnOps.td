@@ -72,6 +72,28 @@ def Muse_AclnnAddRmsNormOp : Muse_Op<"aclnn.add_rms_norm", [Pure]> {
   }];
 }
 
+def Muse_AclnnBatchMatmulOp : Muse_Op<"aclnn.batch_matmul", [Pure]> {
+  let summary = "CANN BatchMatMul operation.";
+  let description = [{
+    Performs batch matrix multiplication of two tensors (rank >= 3).
+    Semantics align with CANN BatchMatMul: for each batch index,
+    output[..., :, :] = matrix(self[..., :, :]) * matrix(mat2[..., :, :]).
+    Input x shape (*B, N, C) or (*B, C, N) if transpose_a; y shape (*B, C, M) or (*B, M, C) if transpose_b.
+    Output shape (*B, N, M). Trans is applied by upper Muse ops (Permute) before lowering.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$self,
+    AnyRankedTensor:$mat2
+  );
+
+  let results = (outs AnyRankedTensor:$out);
+
+  let assemblyFormat = [{
+    $self `,` $mat2 attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Muse_AclnnGeluBackwardOp : Muse_Op<"aclnn.gelu_backward", [Pure]> {
   let summary = "The aclnnGeluBackwardV2 operation";
   let description = [{
@@ -106,6 +128,45 @@ def Muse_AclnnGeluOp : Muse_Op<"aclnn.gelu", [Pure]> {
 
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_AclnnMatmulOp : Muse_Op<"aclnn.matmul", [Pure]> {
+  let summary = "CANN MatMul operation.";
+  let description = [{
+    Performs matrix multiplication of two tensors (supports 1D to 6D).
+    Semantics align with CANN MatMul: out = self * mat2; trans and bias
+    are applied by upper Muse ops before lowering to this aclnn op.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$self,
+    AnyRankedTensor:$mat2
+  );
+
+  let results = (outs AnyRankedTensor:$out);
+
+  let assemblyFormat = [{
+    $self `,` $mat2 attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Muse_AclnnMmOp : Muse_Op<"aclnn.mm", [Pure]> {
+  let summary = "CANN mm operation (2D matrix multiplication).";
+  let description = [{
+    Performs matrix multiplication of two 2D tensors. Corresponds to the 2D
+    case of CANN MatMul; trans is applied by upper Muse ops before lowering.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$self,
+    AnyRankedTensor:$mat2
+  );
+
+  let results = (outs AnyRankedTensor:$out);
+
+  let assemblyFormat = [{
+    $self `,` $mat2 attr-dict `:` functional-type(operands, results)
   }];
 }
 

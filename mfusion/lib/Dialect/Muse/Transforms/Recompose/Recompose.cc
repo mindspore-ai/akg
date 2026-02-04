@@ -14,32 +14,27 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Muse/Transforms/Decompose/Decompose.h"
+#include "mfusion/Dialect/Muse/Transforms/Recompose/Recompose.h"
 
-#include "mfusion/Dialect/Muse/Transforms/Decompose/DecomposePatterns.h"
+#include "mfusion/Dialect/Muse/Transforms/Recompose/RecomposePatterns.h"
 #include "mfusion/Dialect/Muse/Muse.h"
 #include "mfusion/Dialect/Muse/MuseDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringSet.h"
-#include "llvm/Support/Debug.h"
 
 namespace mlir {
 
-#define GEN_PASS_DEF_DECOMPOSE
+#define GEN_PASS_DEF_RECOMPOSE
 #include "mfusion/Dialect/Muse/Transforms/Passes.h.inc"
 
 namespace muse {
-struct DecomposePass : public impl::DecomposeBase<DecomposePass> {
-  using DecomposeBase::DecomposeBase;
+struct RecomposePass : public impl::RecomposeBase<RecomposePass> {
+  using RecomposeBase::RecomposeBase;
 
   void getDependentDialects(mlir::DialectRegistry &registry) const override {
     registry.insert<mlir::muse::MuseDialect>();
@@ -51,15 +46,13 @@ struct DecomposePass : public impl::DecomposeBase<DecomposePass> {
     ModuleOp module = getOperation();
     MLIRContext *ctx = module.getContext();
 
-    // Create patterns for this run - modern compilers optimize this well
-    // and in practice, decompose passes are rarely run multiple times
+    // Create patterns for this run
     RewritePatternSet patterns(ctx);
-    registerDecomposePatterns(patterns);
+    registerRecomposePatterns(patterns);
 
     // Apply the patterns using the greedy pattern rewrite driver
-    // OpRewritePattern will automatically match GELU and Tanh operations and decompose them
     if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns)))) {
-      llvm::errs() << "Failed to apply decompose patterns\n";
+      llvm::errs() << "Failed to apply recompose patterns\n";
       signalPassFailure();
     }
   }
@@ -67,6 +60,6 @@ struct DecomposePass : public impl::DecomposeBase<DecomposePass> {
 
 }  // namespace muse
 
-std::unique_ptr<Pass> createDecomposePass() { return std::make_unique<muse::DecomposePass>(); }
+std::unique_ptr<Pass> createRecomposePass() { return std::make_unique<muse::RecomposePass>(); }
 
 }  // namespace mlir
