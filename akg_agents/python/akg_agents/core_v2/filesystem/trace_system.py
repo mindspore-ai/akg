@@ -95,13 +95,14 @@ class TraceSystem:
     
     # ==================== 初始化 ====================
     
-    def initialize(self, force: bool = False) -> None:
+    def initialize(self, task_input: str = "", force: bool = False) -> None:
         """
         初始化 Trace 系统
         
         创建 trace.json 和 root 节点
         
         Args:
+            task_input: 任务输入（用户请求）
             force: 是否强制重新初始化
         """
         if self.fs.task_exists() and self.fs.trace_file.exists() and not force:
@@ -118,18 +119,42 @@ class TraceSystem:
         self._trace = TraceTree(task_id=self.task_id)
         
         # 创建 root 节点
+        # 注意：实际保存到 root 节点的 state.json 是在 _create_root_node 中做的（如果不在这里处理 task_input，那边就需要传参）
+        # 这里我们在 TraceTree 的内存结构中保存，并随后触发 _save_trace 持久化
+        state_snapshot = {"turn": 0, "status": "init"}
+        if task_input:
+            state_snapshot["task_info"] = {"task_input": task_input}
+            
         root_node = TraceNode(
             node_id="root",
             parent_id=None,
-            state_snapshot={"turn": 0, "status": "init"},
+            state_snapshot=state_snapshot,
             action=None,
             result=None,
         )
         self._trace.add_node(root_node)
         
+        
         # 保存
         self._save_trace()
         
+        # 将 User Request 持久化为 root 的 Action
+        if task_input:
+            action_record = ActionRecord(
+                action_id="task_init",
+                tool_name="user_request",
+                arguments={"content": task_input},
+                result={"status": "received"},
+                timestamp=root_node.timestamp
+            )
+            history = ActionHistoryFact(
+                node_id="root",
+                parent_node_id=None,
+                turn=0,
+            )
+            history.add_action(action_record)
+            self.fs.save_action_history_fact("root", history)
+            
         logger.info(f"Initialized trace system: {self.task_id}")
     
     def _load_trace(self) -> TraceTree:
@@ -433,8 +458,9 @@ class TraceSystem:
         
         full_history = []
         for node in path:
-            if node == "root":
-                continue
+            # 移除 root 跳过逻辑，因为 root 现在可能包含 user_request action
+            # if node == "root":
+            #     continue
             
             history = self.fs.load_action_history_fact(node)
             full_history.extend(history.actions)
@@ -474,9 +500,6 @@ class TraceSystem:
             # 校验缓存有效性 (source_path 必须匹配当前路径，且缓存有内容)
             if cached.actions:
                 if hasattr(cached, "is_valid") and cached.is_valid(path):
-                    return cached.actions
-                # 兼容性检查：如果对象没有 is_valid 但有 source_path
-                if hasattr(cached, "source_path") and cached.source_path == path:
                     return cached.actions
         
         # 2. 重建完整历史
@@ -940,7 +963,7 @@ class TraceSystem:
         
         # 处理空路径情况
         if not path:
-                    return f"❌ 无法找到节点 '{node_id}' 的路径（节点不存在或路径断裂）"
+            return f"❌ 无法找到节点 '{node_id}' 的路径（节点不存在或路径断裂）"
         
         metrics = self._calculate_path_metrics(path)
         
