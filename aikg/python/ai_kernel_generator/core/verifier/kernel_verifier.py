@@ -1226,8 +1226,16 @@ if __name__ == "__main__":
             logger.error(f"[{self.op_name}] 性能测试脚本写入失败: {profile_file}, 错误: {e}")
             raise
     
-    def _generate_base_benchmark_code(self, framework_adapter, dsl_adapter, warmup, runs):
-        """生成base benchmark代码（benchmark framework model）"""
+    def _generate_base_benchmark_code(self, framework_adapter, dsl_adapter, warmup, runs, clear_l2_cache: bool = True):
+        """生成base benchmark代码（benchmark framework model）
+        
+        Args:
+            framework_adapter: 框架适配器
+            dsl_adapter: DSL适配器
+            warmup: warmup次数
+            runs: 有效运行次数
+            clear_l2_cache: 是否在每次迭代前清除 L2 cache（默认 True）
+        """
         if self.dsl == "torch":
             # Kernel → PyTorch 转换场景（支持 Triton/CUDA C 等）：使用传统计时方法
             sync_code = "torch.cuda.synchronize()" if self.backend == "cuda" else (
@@ -1257,6 +1265,8 @@ if __name__ == "__main__":
             return code
         elif "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
             if self.backend == "ascend":
+                # 确定 DSL 类型用于 L2 cache 清除
+                dsl_type = "triton_ascend" if "triton_ascend" in self.dsl else "other"
                 code = f"""        # 导入profiler以支持性能测试
         try:
             from ai_kernel_generator.core.verifier.profiler import profiler_npu
@@ -1270,13 +1280,17 @@ if __name__ == "__main__":
             return result
         
         if backend == "ascend" and patch_imported:
+            # 使用 L2 cache 清除确保测量精度
+            # DSL 类型: {dsl_type}
             execution_time_us = profiler_npu(
                 base_benchmark_fn,
                 warmup={warmup},
                 active={runs},
                 prof_dir_name="prof_base_output",
                 keep_res=False,
-                suppress_warnings=True
+                suppress_warnings=True,
+                clear_l2_cache={clear_l2_cache},
+                dsl="{dsl_type}"
             )
             execution_time_ms = execution_time_us / 1000
             method = "profiler_npu"
@@ -1324,7 +1338,44 @@ if __name__ == "__main__":
             sync_code = "torch.cuda.synchronize()" if self.backend == "cuda" else (
                 "torch.npu.synchronize()" if self.backend == "ascend" else ""
             )
-            code = f"""        # 非triton实现，使用传统循环计时
+            # 对于其他 DSL（非 triton），如果是 ascend 后端也支持 L2 cache 清除
+            if self.backend == "ascend":
+                code = f"""        # 非triton实现，使用 profiler_npu 计时
+        try:
+            from ai_kernel_generator.core.verifier.profiler import profiler_npu
+            patch_imported = True
+        except ImportError:
+            patch_imported = False
+        
+        def base_benchmark_fn():
+            return framework_model(*inputs)
+        
+        if patch_imported:
+            # 使用 L2 cache 清除（fallback 方式，使用 zero_()）
+            execution_time_us = profiler_npu(
+                base_benchmark_fn,
+                warmup={warmup},
+                active={runs},
+                prof_dir_name="prof_base_output",
+                keep_res=False,
+                suppress_warnings=True,
+                clear_l2_cache={clear_l2_cache},
+                dsl="other"
+            )
+            execution_time_ms = execution_time_us / 1000
+            method = "profiler_npu"
+        else:
+            import time
+            start_time = time.time()
+            for _ in range({warmup + runs}):
+                framework_output = framework_model(*inputs)
+                {sync_code}
+            end_time = time.time()
+            execution_time_ms = (end_time - start_time) * 1000 / {warmup + runs}
+            method = "traditional_timing"
+"""
+            else:
+                code = f"""        # 非triton实现，使用传统循环计时
         import time
         start_time = time.time()
         for _ in range({warmup + runs}):

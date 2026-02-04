@@ -93,10 +93,24 @@ except ImportError:
                       warmup: int, runs: int, backend: str, op_name: str,
                       case_idx: int = 0, framework_model: Optional[str] = None,
                       framework_adapter: Optional[Any] = None,
-                      device_id: Optional[int] = None) -> str:
+                      device_id: Optional[int] = None,
+                      clear_l2_cache: bool = True) -> str:
         """Return code string to benchmark Triton Ascend implementation.
         
         使用已经实例化好的 impl_model 进行性能测试。
+        
+        Args:
+            impl_func_name: 实现函数名
+            inputs: 输入变量名
+            warmup: warmup 次数
+            runs: 有效运行次数
+            backend: 后端类型
+            op_name: 算子名称
+            case_idx: case 索引
+            framework_model: 框架模型变量名（可选）
+            framework_adapter: 框架适配器（可选）
+            device_id: 设备ID（可选）
+            clear_l2_cache: 是否在每次迭代前清除 L2 cache（默认 True）
         """
         code = f"""        try:
             from ai_kernel_generator.core.verifier.profiler import profiler_npu
@@ -135,13 +149,17 @@ except ImportError:
             return result
         
         if backend == "ascend" and patch_imported:
+            # 使用 triton_ascend 专用的 L2 cache 清除方式
+            # 通过 AKG_l2cache_clear kernel 清除，可在 profiler 中精确过滤
             execution_time_us = profiler_npu(
                 triton_benchmark_fn,
                 warmup={warmup},
                 active={runs},
                 prof_dir_name="prof_generation_output",
                 keep_res=False,
-                suppress_warnings=True
+                suppress_warnings=True,
+                clear_l2_cache={clear_l2_cache},
+                dsl="triton_ascend"
             )
             execution_time_ms = execution_time_us / 1000
             method = "profiler_npu"
