@@ -72,15 +72,25 @@ class KernelAgent(AgentBase):
 
         self.available_tools = self._load_available_tools()
         self.agent_registry = self._load_agent_registry()
+        
+        # 加载 workflow registry（支持 workflow 工具化）
+        self.workflow_registry = self._load_workflow_registry()
+        
+        # Workflow 资源（延迟初始化）
+        self._workflow_resources = None
+        
         self.tool_executor = ToolExecutor(
             agent_registry=self.agent_registry,
+            workflow_registry=self.workflow_registry,
             agent_context={
                 "task_id": self.task_id,
                 "dsl": self.dsl,
                 "framework": self.framework,
                 "backend": self.backend,
                 "arch": self.arch,
-                "model_level": self.model_level or "standard"
+                "model_level": self.model_level or "standard",
+                # 提供获取 workflow 资源的回调
+                "get_workflow_resources": lambda: self._get_workflow_resources()
             },
             history=[]
         )
@@ -148,6 +158,103 @@ class KernelAgent(AgentBase):
                 logger.warning(f"[KernelAgent] 加载 Agent '{agent_name}' 失败: {e}", exc_info=True)
         
         return agent_registry
+    
+    def _load_workflow_registry(self) -> Dict[str, Any]:
+        """动态加载所有注册的 Workflow"""
+        from akg_agents.core_v2.workflows.registry import WorkflowRegistry
+        
+        # 导入所有 workflow 模块（触发 @register_workflow 装饰器）
+        try:
+            from akg_agents.op.workflows import (
+                coder_only_workflow,      # noqa: F401
+                default_workflow,         # noqa: F401
+                verifier_only_workflow,   # noqa: F401
+                connect_all_workflow,     # noqa: F401
+            )
+        except Exception as e:
+            logger.warning(f"[KernelAgent] 导入 workflows 失败: {e}")
+        
+        workflow_registry = {}
+        all_workflow_names = WorkflowRegistry.list_workflows(scope="op")
+        logger.info(f"[KernelAgent] 发现 {len(all_workflow_names)} 个已注册 workflows")
+        
+        for workflow_name in all_workflow_names:
+            try:
+                workflow_class = WorkflowRegistry.get_workflow_class(workflow_name)
+                tool_config = WorkflowRegistry.get_tool_config(workflow_name)
+                
+                if not tool_config:
+                    logger.debug(f"[KernelAgent] Workflow '{workflow_name}' 没有工具配置，跳过")
+                    continue
+                
+                # 注册到 registry
+                for tool_name, tool_def in tool_config.items():
+                    workflow_registry[tool_name] = {
+                        "workflow_class": workflow_class,
+                        "workflow_name": workflow_name,
+                        "config": tool_def
+                    }
+                    
+                    # 添加到 available_tools
+                    self.available_tools.append({
+                        "type": "function",
+                        "function": tool_def.get("function", {})
+                    })
+                    
+                    logger.info(f"[KernelAgent] 注册工具: {tool_name} (来自 workflow {workflow_name})")
+            
+            except Exception as e:
+                logger.warning(f"[KernelAgent] 加载 Workflow '{workflow_name}' 失败: {e}", exc_info=True)
+        
+        return workflow_registry
+    
+    def _get_workflow_resources(self) -> Dict[str, Any]:
+        """
+        获取 workflow 所需资源（延迟初始化）
+        
+        Returns:
+            包含 agents, trace, config 等的资源字典
+        """
+        if self._workflow_resources is None:
+            logger.info("[KernelAgent] 初始化 workflow 资源...")
+            
+            # 初始化 agents（延迟加载，避免循环依赖）
+            from akg_agents.core.agent.designer import Designer
+            from akg_agents.core.agent.coder import Coder
+            from akg_agents.op.verifier.kernel_verifier import KernelVerifier
+            
+            # 创建 agents 配置
+            agent_config = {
+                "dsl": self.dsl,
+                "backend": self.backend,
+                "arch": self.arch,
+                "framework": self.framework
+            }
+            
+            try:
+                agents = {
+                    "designer": Designer(**agent_config),
+                    "coder": Coder(**agent_config),
+                    "verifier": KernelVerifier(backend=self.backend, arch=self.arch)
+                }
+                logger.info(f"[KernelAgent] 成功初始化 {len(agents)} 个 agents")
+            except Exception as e:
+                logger.error(f"[KernelAgent] 初始化 agents 失败: {e}", exc_info=True)
+                # 提供空的 agents 作为降级
+                agents = {}
+            
+            self._workflow_resources = {
+                "agents": agents,
+                "device_pool": None,  # 向后兼容
+                "trace": self.trace,
+                "config": {},  # 可以从配置文件加载
+                "private_worker": None,
+                "worker_manager": None,
+                "backend": self.backend,
+                "arch": self.arch
+            }
+        
+        return self._workflow_resources
     
     def _initialize_task(self, user_input: str):
         if self.current_node_id == "root" and not self.trace.fs.node_exists("root"):

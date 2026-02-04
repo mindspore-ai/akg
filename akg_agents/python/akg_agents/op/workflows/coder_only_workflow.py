@@ -21,10 +21,12 @@ from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.op.langgraph_op.nodes import NodeFactory
 from akg_agents.op.langgraph_op.routers import RouterFactory
 from akg_agents.core.checker import CodeChecker
+from akg_agents.core_v2.workflows.registry import register_workflow
 
 logger = logging.getLogger(__name__)
 
 
+@register_workflow(scopes=["op"])
 class CoderOnlyWorkflow(OpBaseWorkflow):
     """Coder Only Workflow：跳过设计阶段，直接生成代码
     
@@ -40,6 +42,80 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
     - 检测常见的语法错误（如 break、continue、while 等禁止语法）
     - 避免将明显错误的代码送入 Verifier 浪费时间（Verifier 每次执行约 1 分钟）
     """
+    
+    # ========== 工具配置元数据（用于 KernelAgent 调用）==========
+    TOOL_NAME = "use_coder_only_workflow"
+    
+    DESCRIPTION = """
+使用 CoderOnly workflow 生成 kernel 代码（跳过设计阶段）。
+
+完整流程：
+1. Coder: 根据任务描述生成代码
+2. CodeChecker: 静态代码检查（可选，默认禁用）
+3. Verifier: 验证正确性和性能
+4. Conductor: 分析失败原因并指导修复（如果验证失败）
+5. 循环迭代直到成功或达到最大次数
+
+适用场景：
+- 需求明确，无需额外设计阶段
+- 需要完整的代码生成、验证、迭代流程
+- 需要自动处理编译错误和性能验证
+- 对代码质量要求较高，需要多轮迭代优化
+
+注意事项：
+- 此 workflow 会执行完整流程，包括验证和迭代优化
+- 执行时间较长（通常 1-5 分钟，取决于验证次数）
+- 需要可用的验证环境（GPU/CPU 等设备）
+- 如果只需要快速生成代码草稿，建议使用 call_kernel_gen
+
+何时使用：
+- 用户明确要求"完整开发"、"验证"、"测试"时
+- 用户要求"生成并验证正确性"时
+- 任务需要生产级别的代码质量时
+"""
+    
+    PARAMETERS_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "op_name": {
+                "type": "string",
+                "description": "算子名称，如 'relu', 'matmul', 'softmax', 'layernorm'"
+            },
+            "task_desc": {
+                "type": "string",
+                "description": "任务描述（框架代码），必须包含框架实现的完整代码，包括 class Model(nn.Module) 定义"
+            },
+            "dsl": {
+                "type": "string",
+                "description": "目标 DSL，如 'triton'（Triton GPU）, 'cpp'（C++）, 'cuda_c'（CUDA C）"
+            },
+            "framework": {
+                "type": "string",
+                "description": "框架，如 'torch'（PyTorch）, 'mindspore'（MindSpore）, 'numpy'"
+            },
+            "backend": {
+                "type": "string",
+                "description": "后端，如 'cuda'（NVIDIA GPU）, 'cpu'（CPU）, 'npu'（Ascend NPU）"
+            },
+            "arch": {
+                "type": "string",
+                "description": "架构，如 'a100'（NVIDIA A100）, 'x86_64'（Intel/AMD CPU）, 'ascend910b4'（Ascend 910B）"
+            },
+            "task_id": {
+                "type": "string",
+                "description": "任务 ID（可选，用于日志和目录命名）",
+                "default": ""
+            },
+            "user_requirements": {
+                "type": "string",
+                "description": "用户额外需求（可选），如性能目标、特殊约束等",
+                "default": ""
+            }
+        },
+        "required": ["op_name", "task_desc", "dsl", "framework", "backend", "arch"]
+    }
+    
+    # ========== Workflow 实现 ==========
     
     def build_graph(self) -> StateGraph:
         """构建 Coder-only 工作流图（带 CodeChecker）"""
