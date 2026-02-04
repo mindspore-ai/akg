@@ -1,6 +1,10 @@
 add_mlir_pdll_library(MuseToTorchPDLLIncGen
   MuseToTorch.pdll
   MuseToTorch.pdll.h.inc
+
+  DEPENDS
+  MuseMetaToTorch.pdll
+  MuseAclnnToTorch.pdll
 )
 
 file(GLOB MUSE_TO_TORCH_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.cc")
