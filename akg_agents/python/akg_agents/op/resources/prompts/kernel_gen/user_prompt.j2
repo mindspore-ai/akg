@@ -13,7 +13,7 @@
 
 **输入参数**:
 {% for key, value in action.arguments.items() %}
-- `{{ key }}`: {{ value | truncate(100) }}
+- `{{ key }}`: {{ value | string | truncate(100) }}
 {% endfor %}
 
 **输出结果**:
@@ -21,7 +21,7 @@
 {{ action.result.get("summary", "无结果") }}
 {% else %}
 {% for key, value in action.result.items() %}
-- `{{ key }}`: {{ value | truncate(100) }}
+- `{{ key }}`: {{ value | string | truncate(100) }}
 {% endfor %}
 {% endif %}
 
