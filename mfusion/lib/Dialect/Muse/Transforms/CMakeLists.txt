@@ -10,6 +10,7 @@ add_mlir_dialect_library(MLIRMuseTransforms
   MLIRMuseTransformsPassIncGen
 
   LINK_LIBS PUBLIC
+  MFusionAnalysis
   MLIRFuncDialect
   MLIRLinalgDialect
   MLIRAsmParser

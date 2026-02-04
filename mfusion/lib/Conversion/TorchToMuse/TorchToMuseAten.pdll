@@ -1,6 +1,21 @@
+Pattern ConvertAtenAbs {
+  let root = op<torch.aten.abs>(input: Value) -> (resType: Type);
+  replace root with op<muse.abs>(convertValue(input)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenAddTensor {
   let root = op<torch.aten.add.Tensor>(operands: ValueRange) -> (resType: Type);
   replace root with op<muse.aclnn.add>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenBroadcastTo {
+  let root = op<torch.aten.broadcast_to>(self: Value, size: Value) -> (resType: Type);
+  replace root with op<muse.broadcast_to>(convertValue(self), convertValue(size)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenCeil {
+  let root = op<torch.aten.ceil>(input: Value) -> (resType: Type);
+  replace root with op<muse.ceil>(convertValue(input)) -> (convertType(resType));
 }
 
 Pattern ConvertAtenDivTensor {
@@ -13,6 +28,11 @@ Pattern ConvertAtenEqTensor {
   replace root with op<muse.eq>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenFloor {
+  let root = op<torch.aten.floor>(input: Value) -> (resType: Type);
+  replace root with op<muse.floor>(convertValue(input)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenGeTensor {
   let root = op<torch.aten.ge.Tensor>(operands: ValueRange) -> (resType: Type);
   replace root with op<muse.ge>(convertValues(operands)) -> (convertType(resType));
@@ -23,14 +43,49 @@ Pattern ConvertAtenGtTensor {
   replace root with op<muse.gt>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenIsfinite {
+  let root = op<torch.aten.isfinite>(input: Value) -> (resType: Type);
+  replace root with op<muse.isfinite>(convertValue(input)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenLeTensor {
   let root = op<torch.aten.le.Tensor>(operands: ValueRange) -> (resType: Type);
   replace root with op<muse.le>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenLog {
+  let root = op<torch.aten.log>(input: Value) -> (resType: Type);
+  replace root with op<muse.log>(convertValue(input)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenLogicalAnd {
+  let root = op<torch.aten.logical_and>(operands: ValueRange) -> (resType: Type);
+  replace root with op<muse.logical_and>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenLogicalNot {
+  let root = op<torch.aten.logical_not>(input: Value) -> (resType: Type);
+  replace root with op<muse.logical_not>(convertValue(input)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenLogicalOr {
+  let root = op<torch.aten.logical_or>(operands: ValueRange) -> (resType: Type);
+  replace root with op<muse.logical_or>(convertValues(operands)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenLtTensor {
   let root = op<torch.aten.lt.Tensor>(operands: ValueRange) -> (resType: Type);
   replace root with op<muse.lt>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenMaximum {
+  let root = op<torch.aten.maximum>(operands: ValueRange) -> (resType: Type);
+  replace root with op<muse.maximum>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenMinimum {
+  let root = op<torch.aten.minimum>(operands: ValueRange) -> (resType: Type);
+  replace root with op<muse.minimum>(convertValues(operands)) -> (convertType(resType));
 }
 
 Pattern ConvertAtenMm {
@@ -48,7 +103,32 @@ Pattern ConvertAtenNeTensor {
   replace root with op<muse.ne>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenReshape {
+  let root = op<torch.aten.reshape>(self: Value, shape: Value) -> (resType: Type);
+  replace root with op<muse.reshape>(convertValue(self), convertValue(shape)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenRsqrt {
+  let root = op<torch.aten.rsqrt>(input: Value) -> (resType: Type);
+  replace root with op<muse.rsqrt>(convertValue(input)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenSqrt {
+  let root = op<torch.aten.sqrt>(input: Value) -> (resType: Type);
+  replace root with op<muse.sqrt>(convertValue(input)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenSubTensor {
   let root = op<torch.aten.sub.Tensor>(operands: ValueRange) -> (resType: Type);
   replace root with op<muse.aclnn.sub>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenTrunc {
+  let root = op<torch.aten.trunc>(input: Value) -> (resType: Type);
+  replace root with op<muse.trunc>(convertValue(input)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenWhereSelf {
+  let root = op<torch.aten.where.self>(condition: Value, self: Value, other: Value) -> (resType: Type);
+  replace root with op<muse.select>(convertValue(condition), convertValue(self), convertValue(other)) -> (convertType(resType));
 }
