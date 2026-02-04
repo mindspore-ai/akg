@@ -87,7 +87,7 @@
      - `DESCRIPTION`: 强调灵活性和智能决策
      - `PARAMETERS_SCHEMA`: 参数定义
 
-5. **`python/akg_agents/core_v2/agents/kernel_agent.py`**
+5. **`python/akg_agents/op/agents/kernel_agent.py`**
    
    **修改内容**:
    - 在 `__init__` 中添加:
@@ -199,7 +199,7 @@ python examples/test_coder_only_workflow_tool.py
 ## 使用示例
 
 ```python
-from akg_agents.core_v2.agents.kernel_agent import KernelAgent
+from akg_agents.op.agents.kernel_agent import KernelAgent
 
 agent = KernelAgent(
     task_id="demo",

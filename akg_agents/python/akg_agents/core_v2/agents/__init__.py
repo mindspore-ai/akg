@@ -14,10 +14,12 @@
 
 from .base import AgentBase, Jinja2TemplateWrapper
 from .registry import AgentRegistry, register_agent
+from .react_agent import ReActAgent
 
 __all__ = [
     "AgentBase",
     "Jinja2TemplateWrapper",
     "AgentRegistry",
     "register_agent",
+    "ReActAgent",
 ]

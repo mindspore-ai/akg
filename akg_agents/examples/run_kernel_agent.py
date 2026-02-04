@@ -154,7 +154,7 @@ class KernelAgentExample:
         if self.log_file:
             print(f"   日志文件: {self.log_file}")
         
-        from akg_agents.core_v2.agents.kernel_agent import KernelAgent
+        from akg_agents.op.agents.kernel_agent import KernelAgent
         self.agent = KernelAgent(
             task_id=self.task_id, 
             model_level=self.model_level,

@@ -82,7 +82,7 @@ def diagnose_imports():
     
     # 检查 KernelAgent (必需)
     try:
-        from akg_agents.core_v2.agents.kernel_agent import KernelAgent
+        from akg_agents.op.agents.kernel_agent import KernelAgent
         available.append("✅ KernelAgent")
     except ImportError as e:
         issues.append(f"❌ KernelAgent 导入失败: {e}")
@@ -110,7 +110,7 @@ def diagnose_imports():
     
     return issues, available
 
-from akg_agents.core_v2.agents.kernel_agent import KernelAgent
+from akg_agents.op.agents.kernel_agent import KernelAgent
 
 
 _current_round = 0

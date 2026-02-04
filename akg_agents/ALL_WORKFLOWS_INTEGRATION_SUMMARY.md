@@ -56,7 +56,7 @@
 ### 2. 核心系统文件 (3个)
 
 #### ✅ KernelAgent
-**文件**: `python/akg_agents/core_v2/agents/kernel_agent.py`
+**文件**: `python/akg_agents/op/agents/kernel_agent.py`
 
 **修改**:
 - `_load_workflow_registry()` 方法中添加所有 workflow 的导入:
@@ -179,7 +179,7 @@ LLM 会根据任务描述自动选择合适的 workflow：
 ## 使用示例
 
 ```python
-from akg_agents.core_v2.agents.kernel_agent import KernelAgent
+from akg_agents.op.agents.kernel_agent import KernelAgent
 
 agent = KernelAgent(
     task_id="demo",
