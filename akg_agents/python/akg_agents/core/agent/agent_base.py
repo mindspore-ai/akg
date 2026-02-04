@@ -368,6 +368,9 @@ class AgentBase(ABC):
     def _safe_send(self, session_id: str, message) -> None:
         """安全发送消息，失败不影响主流程"""
         if not session_id:
+            # 如果没有 session_id，降级为控制台打印
+            if hasattr(message, 'chunk'):
+                print(message.chunk, end="", flush=True)
             return
         try:
             send_message(session_id, message)
