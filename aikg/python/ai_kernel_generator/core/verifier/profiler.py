@@ -12,22 +12,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+NPU Profiler 模块。
+
+提供 NPU 性能分析功能，支持：
+- 精确的执行时间测量
+- L2 cache 清除（可选）
+- 自动过滤无关的 warning 输出
+"""
+
 import os
 import sys
 import contextlib
 import re
 import shutil
 import time
-from typing import Callable, Tuple, Optional
+from typing import Callable, Tuple, Optional, Literal
 import torch
 import torch_npu
 import pandas as pd
 
+# 导入 L2 cache 清除相关功能
+from .l2_cache_clear import (
+    DslType,
+    L2_CACHE_CLEAR_KERNEL_NAME,
+    clear_l2_cache,
+    get_l2_cache_warnings,
+    clear_l2_cache_warnings,
+)
 
 # 预编译正则表达式，提高性能
-_FILTER_PATTERNS = re.compile(r'(Please DO NOT tune args|Invalid parameter export_type|'
-                              r'Start parsing profiling data|CANN profiling data parsed|'
-                              r'All profiling data parsed|\[WARNING\]|\[INFO\]|profiler\.py:)')
+# 过滤 profiler 相关的噪声输出
+_FILTER_PATTERNS = re.compile(
+    r'('
+    r'Please DO NOT tune args|'
+    r'Invalid parameter export_type|'
+    r'Start parsing profiling data|'
+    r'CANN profiling data parsed|'
+    r'All profiling data parsed|'
+    r'\[WARNING\]|'
+    r'\[INFO\]|'
+    r'profiler\.py:|'
+    # 过滤 triton 编译相关的 warning
+    r'WARNING:\s*Grid.*physical limit|'
+    r'WARNING:\s*Grid.*performance'
+    r')'
+)
 
 _SYMBOL_PATTERN = re.compile(r'^[\\\|/\-_=+*#~`!@$%^&()\[\]{}.,;:\'"<>?\s]+$')
 _DECORATION_PATTERN = re.compile(r'[\\\|\-=/]{3,}')
@@ -35,7 +65,10 @@ _DECORATION_PATTERN = re.compile(r'[\\\|\-=/]{3,}')
 
 def suppress_output():
     """
-    创建输出抑制上下文管理器，过滤特定的WARNING/INFO输出
+    创建输出抑制上下文管理器，过滤特定的 WARNING/INFO 输出。
+    
+    注意：此过滤器不会过滤 L2 cache 相关的警告消息，
+    这些消息通过 l2_cache_clear 模块收集并在 profiler 结束后输出。
     """
     class OutputFilter:
         def __init__(self, original_stream):
@@ -96,7 +129,26 @@ def suppress_output():
     return output_suppressor()
 
 
-def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_name: Optional[str] = None) -> Tuple[float, str]:
+def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100, 
+                      prof_dir_name: Optional[str] = None,
+                      clear_l2_cache_flag: bool = False,
+                      dsl: DslType = "other") -> Tuple[float, str]:
+    """
+    NPU profiler 核心函数。
+    
+    Args:
+        fn: 要 profile 的函数
+        warmup: warmup 次数
+        active: 有效测量次数
+        prof_dir_name: profile 结果目录名
+        clear_l2_cache_flag: 是否在每次迭代前清除 L2 cache
+        dsl: DSL 类型，决定 L2 cache 清除方式
+             - "triton_ascend": 使用专用 triton kernel（推荐，可精确过滤）
+             - 其他: 使用 tensor.zero_()（fallback，有误判风险）
+    
+    Returns:
+        Tuple[float, str]: (执行时间(微秒), profile结果目录路径)
+    """
     fn()
     torch.npu.synchronize()
 
@@ -110,9 +162,9 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100, prof_di
     # fn() 依然会在所有 skip_first 步骤中执行，确保充分预热
     skip_first = 1 + warmup
     wait = 0
-    warmup = 0
+    warmup_prof = 0
     repeat = 1
-    total = skip_first + (wait + warmup + active) * repeat
+    total = skip_first + (wait + warmup_prof + active) * repeat
 
     timestamp = int(time.time() * 1000)
 
@@ -121,11 +173,16 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100, prof_di
     else:
         profile_path = os.path.join(os.getcwd(), f"profile_results_{timestamp}")
 
+    # 预初始化 L2 cache buffer（如果需要清除）
+    if clear_l2_cache_flag:
+        # 预热 L2 cache 清除操作
+        clear_l2_cache(dsl)
+
     with torch_npu.profiler.profile(
         activities=[
             torch_npu.profiler.ProfilerActivity.NPU
         ],
-        schedule=torch_npu.profiler.schedule(wait=wait, warmup=warmup, active=active,
+        schedule=torch_npu.profiler.schedule(wait=wait, warmup=warmup_prof, active=active,
                                              repeat=repeat, skip_first=skip_first),
         on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(profile_path),
         record_shapes=False,
@@ -136,32 +193,58 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100, prof_di
         experimental_config=experimental_config,
     ) as prof:
         for _ in range(total):
+            if clear_l2_cache_flag:
+                clear_l2_cache(dsl)
             fn()
             prof.step()
             torch.npu.synchronize()
 
-    exec_time = collect_time(profile_path, active)
+    exec_time = collect_time(profile_path, active, clear_l2_cache_flag=clear_l2_cache_flag, dsl=dsl)
     return exec_time, profile_path
 
 
 def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_name: Optional[str] = None,
-                 keep_res: bool = False, suppress_warnings: bool = True) -> float:
+                 keep_res: bool = False, suppress_warnings: bool = True,
+                 clear_l2_cache: bool = False, dsl: DslType = "other") -> float:
     """
-    NPU profiler主函数
+    NPU profiler 主函数。
 
     Args:
-        fn: 要profile的函数
-        warmup: warmup次数
+        fn: 要 profile 的函数
+        warmup: warmup 次数
         active: 有效测量次数
-        prof_dir_name: profile结果目录名
+        prof_dir_name: profile 结果目录名
         keep_res: 是否保留结果文件
-        suppress_warnings: 是否抑制WARNING/INFO输出
+        suppress_warnings: 是否抑制 WARNING/INFO 输出
+        clear_l2_cache: 是否在每次迭代前清除 L2 cache
+        dsl: DSL 类型，决定 L2 cache 清除方式
+             - "triton_ascend": 使用专用 triton kernel（推荐，可精确过滤）
+             - 其他: 使用 tensor.zero_()（fallback，有误判风险）
+    
+    Returns:
+        float: 平均执行时间（微秒）
     """
+    # 清空之前的警告消息
+    clear_l2_cache_warnings()
+    
     if suppress_warnings:
         with suppress_output():
-            exec_time, profile_path = profiler_npu_core(fn, warmup, active, prof_dir_name)
+            exec_time, profile_path = profiler_npu_core(
+                fn, warmup, active, prof_dir_name, 
+                clear_l2_cache_flag=clear_l2_cache, dsl=dsl
+            )
     else:
-        exec_time, profile_path = profiler_npu_core(fn, warmup, active, prof_dir_name)
+        exec_time, profile_path = profiler_npu_core(
+            fn, warmup, active, prof_dir_name,
+            clear_l2_cache_flag=clear_l2_cache, dsl=dsl
+        )
+    
+    # profiler 结束后输出收集的 L2 cache 警告消息（绕过 suppress_output）
+    warnings_list = get_l2_cache_warnings()
+    if warnings_list:
+        for warning_msg in warnings_list:
+            # 使用 sys.__stderr__ 绕过任何 stderr 重定向
+            print(f"[WARN] {warning_msg}", file=sys.__stderr__)
 
     # 清理结果文件
     if not keep_res and os.path.exists(profile_path):
@@ -170,16 +253,21 @@ def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_nam
     return exec_time
 
 
-def collect_time(base_dir: str, active: int) -> float:
+def collect_time(base_dir: str, active: int, clear_l2_cache_flag: bool = False,
+                 dsl: DslType = "other") -> float:
     """
-    从profiling结果中收集时间信息
+    从 profiling 结果中收集时间信息。
 
     Args:
-        base_dir: profiling结果目录
+        base_dir: profiling 结果目录
         active: 有效测量次数
+        clear_l2_cache_flag: 是否启用了 L2 cache 清除
+        dsl: DSL 类型，决定如何过滤 L2 cache 清除操作
+             - "triton_ascend": 过滤名为 "AKG_l2cache_clear" 的 kernel
+             - 其他: 过滤 "ZerosLike" 类型的操作
 
     Returns:
-        float: 平均执行时间(微秒)，失败时返回float('inf')
+        float: 平均执行时间(微秒)，失败时返回 float('inf')
     """
     if not os.path.exists(base_dir):
         print(f"Base directory not found: {base_dir}")
@@ -205,6 +293,10 @@ def collect_time(base_dir: str, active: int) -> float:
 
             # 过滤有效操作
             try:
+                # 首先过滤 L2 cache 清除操作（如果启用了清除功能）
+                if clear_l2_cache_flag:
+                    df = _filter_l2_cache_clear_ops(df, dsl)
+                
                 valid_ops = df[df['Count'] % active == 0].copy()
 
                 if valid_ops.empty:
@@ -225,3 +317,55 @@ def collect_time(base_dir: str, active: int) -> float:
 
     print(f"No valid timing data found in {base_dir}")
     return float('inf')
+
+
+def _filter_l2_cache_clear_ops(df: pd.DataFrame, dsl: DslType) -> pd.DataFrame:
+    """
+    从 profiling 结果中过滤掉 L2 cache 清除操作。
+    
+    Args:
+        df: profiling 数据 DataFrame
+        dsl: DSL 类型，决定过滤方式
+             - "triton_ascend": 过滤名为 "AKG_l2cache_clear" 的 kernel（精确匹配）
+             - 其他: 过滤 "ZerosLike" 类型的操作（可能有误判）
+    
+    Returns:
+        pd.DataFrame: 过滤后的 DataFrame
+    """
+    if dsl == "triton_ascend":
+        # Triton-Ascend：使用专用 kernel 名称精确过滤
+        # 检查 "OP Type" 或 "Name" 列
+        if 'OP Type' in df.columns:
+            # 精确匹配 kernel 名称
+            filter_cond = ~df['OP Type'].str.contains(
+                L2_CACHE_CLEAR_KERNEL_NAME, case=False, na=False, regex=False
+            )
+            filtered_df = df[filter_cond]
+        elif 'Name' in df.columns:
+            filter_cond = ~df['Name'].str.contains(
+                L2_CACHE_CLEAR_KERNEL_NAME, case=False, na=False, regex=False
+            )
+            filtered_df = df[filter_cond]
+        else:
+            # 没有可过滤的列，返回原始数据
+            filtered_df = df
+    else:
+        # 其他 DSL：过滤 "ZerosLike" 类型（参考 testing.py 的实现）
+        # 注意：这种方式可能误过滤用户代码中的 zeros_like/zero_() 操作
+        if 'OP Type' in df.columns:
+            # 精确匹配 "ZerosLike"（使用正则表达式 ^ZerosLike$）
+            filter_cond = ~df['OP Type'].str.contains(
+                r'^ZerosLike$', case=False, na=False, regex=True
+            )
+            filtered_df = df[filter_cond]
+        elif 'Type' in df.columns:
+            # kernel_details.csv 使用 "Type" 列
+            filter_cond = ~df['Type'].str.contains(
+                r'^ZerosLike$', case=False, na=False, regex=True
+            )
+            filtered_df = df[filter_cond]
+        else:
+            # 没有可过滤的列，返回原始数据
+            filtered_df = df
+    
+    return filtered_df
