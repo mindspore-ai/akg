@@ -187,7 +187,12 @@ class LLMClient:
             chunk: 消息片段
             is_reasoning: 是否是推理内容
         """
-        if not self.session_id or not chunk:
+        if not chunk:
+            return
+        
+        if not self.session_id:
+            # 如果没有 session_id，降级为控制台打印
+            print(chunk, end="", flush=True)
             return
         
         try:
