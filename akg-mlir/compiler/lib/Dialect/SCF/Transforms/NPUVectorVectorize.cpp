@@ -107,7 +107,7 @@ static LogicalResult vectorizeLoop(scf::ForOp scalarLoop, int64_t actualStep, Va
                                    OpBuilder &builder, Value vecAxis, Value outerIVMapping = Value());
 
 static bool hasVectorizationAttr(Operation *op) {
-  return op->hasAttr(kVectorAttr) || 
+  return op->hasAttr(kVectorAttr) ||
          op->hasAttr("reduction_x") ||
          op->hasAttr("reduction_y") ||
          op->hasAttr("reduction_all");
@@ -309,33 +309,33 @@ static vector::CombiningKind convertToCombiningKind(arith::AtomicRMWKind kind) {
 
 static scf::ForOp createEmptyVectorizedLoop(VectorizationContext &ctx) {
   Location loc = ctx.scalarLoop.getLoc();
-  
+
   Value newStepValue;
   if (ctx.mode == VectorizationMode::ReductionY) {
     newStepValue = ctx.scalarLoop.getStep();
   } else {
-    newStepValue = ctx.isDynamic() 
-        ? ctx.vectorSizeValue 
+    newStepValue = ctx.isDynamic()
+        ? ctx.vectorSizeValue
         : ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.actualStep);
   }
-  
+
   Value neutralVec;
-  if (ctx.mode == VectorizationMode::ReductionX || 
+  if (ctx.mode == VectorizationMode::ReductionX ||
       ctx.mode == VectorizationMode::ReductionY) {
     auto kind = detectReductionKind(ctx.scalarLoop);
     if (!kind) return nullptr;
-    
+
     Type elemType = ctx.scalarLoop.getRegionIterArgs()[0].getType();
     neutralVec = createNeutralValue(*kind, elemType, ctx, loc);
     if (!neutralVec) return nullptr;
-    
+
     ctx.reductionKind = kind;
     ctx.origInit = ctx.scalarLoop.getInitArgs()[0];
   }
-  
+
   Value upperBound = ctx.scalarLoop.getUpperBound();
   Value lowerBound = ctx.scalarLoop.getLowerBound();
-  
+
   if (ctx.mode == VectorizationMode::ReductionX) {
     if (!ctx.isDynamic()) {
       auto ubConst = upperBound.getDefiningOp<arith::ConstantIndexOp>();
@@ -357,20 +357,20 @@ static scf::ForOp createEmptyVectorizedLoop(VectorizationContext &ctx) {
       upperBound = ctx.builder.create<arith::AddIOp>(loc, alignedTripCount, lowerBound);
     }
   }
-  
+
   scf::ForOp vecLoop;
   if (neutralVec) {
     vecLoop = ctx.builder.create<scf::ForOp>(
-        loc, lowerBound, upperBound, newStepValue, 
+        loc, lowerBound, upperBound, newStepValue,
         ValueRange{neutralVec},
         [](OpBuilder &, Location, Value, ValueRange) {});
   } else {
     vecLoop = ctx.builder.create<scf::ForOp>(
-        loc, lowerBound, upperBound, newStepValue, 
+        loc, lowerBound, upperBound, newStepValue,
         std::nullopt,
         [](OpBuilder &, Location, Value, ValueRange) {});
   }
-  
+
   return vecLoop;
 }
 
@@ -449,7 +449,7 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
 
   Value storeValue = storeOp.getValue();
   Value vectorValue = ctx.valueMapping.lookupOrNull(storeValue);
-  
+
   if (!vectorValue) {
     vectorValue = vectorizeBroadcastScalar(storeValue, ctx);
     if (!vectorValue) {
@@ -548,7 +548,7 @@ static Value vectorizeBroadcastScalar(Value scalarVal, VectorizationContext &ctx
   if (mlir::isa<npuvector::NPUVectorType>(scalarVal.getType())) {
     return scalarVal;
   }
-  
+
   Type scalarType = scalarVal.getType();
   Location loc = scalarVal.getLoc();
 
@@ -672,6 +672,110 @@ static LogicalResult handleIfOp(scf::IfOp ifOp, VectorizationContext &ctx) {
   return success();
 }
 
+static void updateNestedLoopOperands(scf::ForOp nestedForOp, VectorizationContext &ctx) {
+  Value mappedLB = ctx.valueMapping.lookupOrDefault(nestedForOp.getLowerBound());
+  Value mappedUB = ctx.valueMapping.lookupOrDefault(nestedForOp.getUpperBound());
+  Value mappedStep = ctx.valueMapping.lookupOrDefault(nestedForOp.getStep());
+
+  if (mappedLB != nestedForOp.getLowerBound()) {
+    nestedForOp.getLowerBoundMutable().assign(mappedLB);
+  }
+  if (mappedUB != nestedForOp.getUpperBound()) {
+    nestedForOp.getUpperBoundMutable().assign(mappedUB);
+  }
+  if (mappedStep != nestedForOp.getStep()) {
+    nestedForOp.getStepMutable().assign(mappedStep);
+  }
+
+  for (unsigned i = 0; i < nestedForOp.getNumRegionIterArgs(); ++i) {
+    Value initArg = nestedForOp.getInitArgs()[i];
+    Value mappedInit = ctx.valueMapping.lookupOrDefault(initArg);
+    if (mappedInit != initArg) {
+      nestedForOp.getInitArgsMutable()[i].set(mappedInit);
+    }
+  }
+}
+
+static void registerNestedLoopResults(scf::ForOp nestedForOp, VectorizationContext &ctx) {
+  Block *insertBlock = ctx.builder.getInsertionBlock();
+  if (insertBlock && !insertBlock->empty()) {
+    for (auto it = insertBlock->rbegin(); it != insertBlock->rend(); ++it) {
+      if (auto vecForOp = dyn_cast<scf::ForOp>(&*it)) {
+        for (auto [scalarResult, vecResult] :
+             llvm::zip(nestedForOp.getResults(), vecForOp.getResults())) {
+          ctx.valueMapping.map(scalarResult, vecResult);
+        }
+        break;
+      }
+    }
+  }
+}
+
+static LogicalResult handleNestedForOp(scf::ForOp nestedForOp, VectorizationContext &ctx) {
+  int64_t nestedMaxStep = -1;
+  VectorizationMode nestedMode = getVectorizationMode(nestedForOp, nestedMaxStep);
+
+  if (nestedMode == VectorizationMode::None) {
+    cloneScalarOp(*nestedForOp.getOperation(), ctx);
+    return success();
+  }
+
+  int64_t nestedActualStep;
+  Value nestedVectorSizeValue;
+  Value nestedMaxStepValue;
+  Value nestedVecAxis;
+
+  if (nestedMode == VectorizationMode::ReductionY) {
+    nestedActualStep = ctx.actualStep;
+    nestedVectorSizeValue = ctx.vectorSizeValue;
+    nestedMaxStepValue = ctx.maxStepValue;
+    nestedVecAxis = ctx.getVectorizationAxis();
+  } else {
+    nestedActualStep = computeStaticVectorSize(nestedForOp, nestedMaxStep);
+
+    OpBuilder attrBuilder(ctx.builder.getContext());
+    attrBuilder.setInsertionPoint(nestedForOp);
+    nestedMaxStepValue = attrBuilder.create<arith::ConstantIndexOp>(
+        nestedForOp.getLoc(), nestedMaxStep);
+
+    if (ctx.isDynamic()) {
+      nestedVectorSizeValue = computeDynamicVectorSize(
+          nestedForOp, nestedMaxStepValue, attrBuilder, nestedForOp.getLoc());
+    } else {
+      nestedVectorSizeValue = nullptr;
+    }
+
+    nestedVecAxis = nestedForOp.getInductionVar();
+  }
+
+  Value outerIVMapping = Value();
+  if (nestedMode == VectorizationMode::ReductionY && nestedVecAxis) {
+    outerIVMapping = ctx.valueMapping.lookupOrDefault(nestedVecAxis);
+
+    if (!outerIVMapping || outerIVMapping == nestedVecAxis) {
+      cloneScalarOp(*nestedForOp.getOperation(), ctx);
+      return success();
+    }
+  }
+
+  if (!ctx.builder.getInsertionBlock()) {
+    cloneScalarOp(*nestedForOp.getOperation(), ctx);
+    return success();
+  }
+
+  updateNestedLoopOperands(nestedForOp, ctx);
+
+  if (failed(vectorizeLoop(nestedForOp, nestedActualStep, nestedVectorSizeValue,
+                          nestedMaxStepValue, nestedMode, ctx.builder,
+                          nestedVecAxis, outerIVMapping))) {
+    cloneScalarOp(*nestedForOp.getOperation(), ctx);
+    return success();
+  }
+
+  registerNestedLoopResults(nestedForOp, ctx);
+  return success();
+}
+
 static LogicalResult vectorizeOneOp(Operation &op, VectorizationContext &ctx) {
   if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
     Value vecValue = vectorizeLoad(loadOp, ctx);
@@ -696,100 +800,7 @@ static LogicalResult vectorizeOneOp(Operation &op, VectorizationContext &ctx) {
   }
 
   if (auto nestedForOp = dyn_cast<scf::ForOp>(&op)) {
-    int64_t nestedMaxStep = -1;
-    VectorizationMode nestedMode = getVectorizationMode(nestedForOp, nestedMaxStep);
-
-    if (nestedMode == VectorizationMode::None) {
-      cloneScalarOp(op, ctx);
-      return success();
-    }
-
-    int64_t nestedActualStep;
-    Value nestedVectorSizeValue;
-    Value nestedMaxStepValue;
-    Value nestedVecAxis;
-
-    if (nestedMode == VectorizationMode::ReductionY) {
-      nestedActualStep = ctx.actualStep;
-      nestedVectorSizeValue = ctx.vectorSizeValue;
-      nestedMaxStepValue = ctx.maxStepValue;
-      nestedVecAxis = ctx.getVectorizationAxis();
-    } else {
-      nestedActualStep = computeStaticVectorSize(nestedForOp, nestedMaxStep);
-
-      OpBuilder attrBuilder(ctx.builder.getContext());
-      attrBuilder.setInsertionPoint(nestedForOp);
-      nestedMaxStepValue = attrBuilder.create<arith::ConstantIndexOp>(
-          nestedForOp.getLoc(), nestedMaxStep);
-
-      if (ctx.isDynamic()) {
-        nestedVectorSizeValue = computeDynamicVectorSize(
-            nestedForOp, nestedMaxStepValue, attrBuilder, nestedForOp.getLoc());
-      } else {
-        nestedVectorSizeValue = nullptr;
-      }
-
-      nestedVecAxis = nestedForOp.getInductionVar();
-    }
-
-    Value outerIVMapping = Value();
-    if (nestedMode == VectorizationMode::ReductionY && nestedVecAxis) {
-      outerIVMapping = ctx.valueMapping.lookupOrDefault(nestedVecAxis);
-      
-      if (!outerIVMapping || outerIVMapping == nestedVecAxis) {
-        cloneScalarOp(op, ctx);
-        return success();
-      }
-    }
-
-    if (!ctx.builder.getInsertionBlock()) {
-      cloneScalarOp(op, ctx);
-      return success();
-    }
-
-    Value mappedLB = ctx.valueMapping.lookupOrDefault(nestedForOp.getLowerBound());
-    Value mappedUB = ctx.valueMapping.lookupOrDefault(nestedForOp.getUpperBound());
-    Value mappedStep = ctx.valueMapping.lookupOrDefault(nestedForOp.getStep());
-    
-    if (mappedLB != nestedForOp.getLowerBound()) {
-      nestedForOp.getLowerBoundMutable().assign(mappedLB);
-    }
-    if (mappedUB != nestedForOp.getUpperBound()) {
-      nestedForOp.getUpperBoundMutable().assign(mappedUB);
-    }
-    if (mappedStep != nestedForOp.getStep()) {
-      nestedForOp.getStepMutable().assign(mappedStep);
-    }
-    
-    for (unsigned i = 0; i < nestedForOp.getNumRegionIterArgs(); ++i) {
-      Value initArg = nestedForOp.getInitArgs()[i];
-      Value mappedInit = ctx.valueMapping.lookupOrDefault(initArg);
-      if (mappedInit != initArg) {
-        nestedForOp.getInitArgsMutable()[i].set(mappedInit);
-      }
-    }
-
-    if (failed(vectorizeLoop(nestedForOp, nestedActualStep, nestedVectorSizeValue,
-                            nestedMaxStepValue, nestedMode, ctx.builder,
-                            nestedVecAxis, outerIVMapping))) {
-      cloneScalarOp(op, ctx);
-      return success();
-    }
-
-    Block *insertBlock = ctx.builder.getInsertionBlock();
-    if (insertBlock && !insertBlock->empty()) {
-      for (auto it = insertBlock->rbegin(); it != insertBlock->rend(); ++it) {
-        if (auto vecForOp = dyn_cast<scf::ForOp>(&*it)) {
-          for (auto [scalarResult, vecResult] : 
-               llvm::zip(nestedForOp.getResults(), vecForOp.getResults())) {
-            ctx.valueMapping.map(scalarResult, vecResult);
-          }
-          break;
-        }
-      }
-    }
-
-    return success();
+    return handleNestedForOp(nestedForOp, ctx);
   }
 
   if (shouldCloneScalarOp(op, ctx)) {
@@ -860,7 +871,7 @@ static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
                          ctx.vecLoop.getInductionVar());
   }
 
-  if (ctx.mode == VectorizationMode::ReductionX || 
+  if (ctx.mode == VectorizationMode::ReductionX ||
       ctx.mode == VectorizationMode::ReductionY) {
     for (auto [scalarArg, vecArg] : llvm::zip(
             ctx.scalarLoop.getRegionIterArgs(),
@@ -875,12 +886,12 @@ static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
   }
 
   SmallVector<scf::ForOp> nestedLoopsToErase;
-  
+
   for (Operation *op : opsToVectorize) {
     if (!op || op->getBlock() == nullptr) {
       continue;
     }
-    
+
     if (auto nestedFor = dyn_cast<scf::ForOp>(op)) {
       int64_t nestedMaxStep = -1;
       VectorizationMode nestedMode = getVectorizationMode(nestedFor, nestedMaxStep);
@@ -888,7 +899,7 @@ static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
         nestedLoopsToErase.push_back(nestedFor);
       }
     }
-    
+
     if (failed(vectorizeOneOp(*op, ctx))) {
       return failure();
     }
@@ -908,7 +919,7 @@ static LogicalResult vectorizeElementwiseInline(VectorizationContext &ctx) {
 
   Value iv = ctx.scalarLoop.getInductionVar();
   Value lb = ctx.scalarLoop.getLowerBound();
-  
+
   ctx.valueMapping.map(iv, lb);
 
   if (failed(vectorizeLoopBody(ctx))) {
@@ -926,7 +937,7 @@ static LogicalResult vectorizeElementwiseInline(VectorizationContext &ctx) {
     }
     parent = parent->getParentOp();
   }
-  
+
   if (!isNested) {
     ctx.scalarLoop.erase();
   }
@@ -949,7 +960,7 @@ static void finalizeElementwise(VectorizationContext &ctx) {
     }
     parent = parent->getParentOp();
   }
-  
+
   if (!isNested) {
     ctx.scalarLoop.erase();
   }
@@ -1167,7 +1178,7 @@ static void finalizeReductionY(VectorizationContext &ctx) {
     }
     parent = parent->getParentOp();
   }
-  
+
   if (!isNested) {
     ctx.scalarLoop.erase();
   }
@@ -1285,7 +1296,7 @@ static void finalizeReduction(VectorizationContext &ctx) {
     }
     parent = parent->getParentOp();
   }
-  
+
   if (!isNested) {
     ctx.scalarLoop.erase();
   }
@@ -1324,7 +1335,7 @@ static LogicalResult vectorizeLoop(
 
     if (needLoop) {
       ctx.builder.setInsertionPoint(scalarLoop);
-      
+
       if (failed(createVectorizedLoop(ctx))) {
         return failure();
       }
@@ -1336,7 +1347,7 @@ static LogicalResult vectorizeLoop(
 
   } else if (ctx.mode == VectorizationMode::ReductionX) {
     ctx.builder.setInsertionPoint(scalarLoop);
-    
+
     if (failed(createVectorizedLoop(ctx))) {
       return failure();
     }
@@ -1347,7 +1358,7 @@ static LogicalResult vectorizeLoop(
     if (!ctx.builder.getInsertionBlock()) {
       ctx.builder.setInsertionPoint(scalarLoop);
     }
-    
+
     ctx.vecLoop = createEmptyVectorizedLoop(ctx);
     if (!ctx.vecLoop) {
       return failure();
@@ -1402,7 +1413,7 @@ class NPUVectorVectorizePass
     for (scf::ForOp loop : allCandidateLoops) {
       bool isNested = false;
       Operation *parent = loop->getParentOp();
-      
+
       while (parent && !isa<func::FuncOp>(parent)) {
         if (auto parentFor = dyn_cast<scf::ForOp>(parent)) {
           if (hasVectorizationAttr(parentFor)) {
@@ -1412,7 +1423,7 @@ class NPUVectorVectorizePass
         }
         parent = parent->getParentOp();
       }
-      
+
       if (!isNested) {
         topLevelLoops.push_back(loop);
       }
