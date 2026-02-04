@@ -118,7 +118,7 @@ class SkillLoader:
     
     def find_skill_files(self, skill_dir: Path) -> List[Path]:
         """
-        在指定目录中查找所有SKILL.md文件
+        在指定目录中递归查找所有SKILL.md文件
         
         Args:
             skill_dir: Skill目录路径
@@ -131,13 +131,10 @@ class SkillLoader:
         if not skill_dir.exists():
             return skill_files
         
-        # 遍历子目录，查找SKILL.md
-        for subdir in skill_dir.iterdir():
-            if not subdir.is_dir():
-                continue
-            
-            skill_md = subdir / "SKILL.md"
-            if skill_md.exists() and skill_md.is_file():
+        # 递归遍历所有子目录，查找SKILL.md
+        # 使用 rglob 递归搜索所有层级的 SKILL.md 文件
+        for skill_md in skill_dir.rglob("SKILL.md"):
+            if skill_md.is_file():
                 skill_files.append(skill_md)
         
         return skill_files
