@@ -304,39 +304,39 @@ async def cmd_history(runner, args: List[str]):
     console.print(f"[dim]将显示最近 {count} 条命令[/dim]")
 
 
-@slash_command(
-    'plan',
-    '进入 plan 模式（common 场景）',
-    category=CommandCategory.CONTROL,
-    aliases=['planning'],
-    usage='/plan',
-    examples=['/plan'],
-    is_blocking=True,
-    scene='common'
-)
-async def cmd_plan(runner, args: List[str]):
-    """Manually enter plan mode for common."""
-    if args:
-        console.print("[red]❌ /plan 不支持参数[/red]")
-        return
-    if not hasattr(runner, "cli") or not hasattr(runner.cli, "enter_common_plan_mode"):
-        console.print("[yellow]ℹ️  当前会话未启动 common，请先输入一次请求[/yellow]")
-        return
-
-    result = runner.cli.enter_common_plan_mode()
-    if isinstance(result, dict):
-        if hasattr(runner, "_render_agent_messages"):
-            runner._render_agent_messages(result)
-        else:
-            msg = str(result.get("display_message") or "").strip()
-            if msg:
-                console.print(msg)
-        auto_input = result.get("auto_input")
-        if auto_input and hasattr(runner, "_process_input"):
-            await runner._process_input(str(auto_input), print_input=False)
-        return
-
-    console.print("[red]❌ /plan 执行失败[/red]")
+# @slash_command(
+#     'plan',
+#     '进入 plan 模式（common 场景）',
+#     category=CommandCategory.CONTROL,
+#     aliases=['planning'],
+#     usage='/plan',
+#     examples=['/plan'],
+#     is_blocking=True,
+#     scene='common'
+# )
+# async def cmd_plan(runner, args: List[str]):
+#     """Manually enter plan mode for common."""
+#     if args:
+#         console.print("[red]❌ /plan 不支持参数[/red]")
+#         return
+#     if not hasattr(runner, "cli") or not hasattr(runner.cli, "enter_common_plan_mode"):
+#         console.print("[yellow]ℹ️  当前会话未启动 common，请先输入一次请求[/yellow]")
+#         return
+#
+#     result = runner.cli.enter_common_plan_mode()
+#     if isinstance(result, dict):
+#         if hasattr(runner, "_render_agent_messages"):
+#             runner._render_agent_messages(result)
+#         else:
+#             msg = str(result.get("display_message") or "").strip()
+#             if msg:
+#                 console.print(msg)
+#         auto_input = result.get("auto_input")
+#         if auto_input and hasattr(runner, "_process_input"):
+#             await runner._process_input(str(auto_input), print_input=False)
+#         return
+#
+#     console.print("[red]❌ /plan 执行失败[/red]")
 
 
 @slash_command(
