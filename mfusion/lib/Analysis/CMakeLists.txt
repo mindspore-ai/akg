@@ -1,11 +1,12 @@
-add_mlir_library(MFusionAnalysis
-  Graph.cc
+file(GLOB_RECURSE MFUSION_ANALYSIS_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.cc")
 
-  ADDITIONAL_HEADER_DIRS
-  ${PROJECT_SOURCE_DIR}/include/mfusion
+add_mlir_library(MFusionAnalysis
+  ${MFUSION_ANALYSIS_SRC}
+
 
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRSupport
   MLIRFuncDialect
+  mfusion::symengine
 )
