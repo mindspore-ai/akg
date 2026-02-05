@@ -32,3 +32,27 @@ def test_mul():
     result = fuse_and_optimize(MLIR_MUL)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_has_op("torch.aten.mul.Tensor", count=1), checker.error
+    assert checker.check_no_op("builtin.unrealized_conversion_cast"), checker.error
+
+
+MLIR_SYMBOLIC_MUL = r"""
+module {
+  func.func @main(%arg0: !torch.int, %arg1: !torch.vtensor<[2,?],f32>, %arg2: !torch.vtensor<[2,?],f32>) -> !torch.vtensor<[2,?],f32> attributes {torch.assume_strict_symbolic_shapes} {
+    %0 = torch.symbolic_int "s10" {min_val = 2, max_val = 9223372036854775807} : !torch.int
+    torch.bind_symbolic_shape %arg1, [%0], affine_map<()[s10] -> (2, s10)> : !torch.vtensor<[2,?],f32>
+    torch.bind_symbolic_shape %arg2, [%0], affine_map<()[s10] -> (2, s10)> : !torch.vtensor<[2,?],f32>
+    %1 = torch.aten.mul.Tensor %arg2, %arg1 : !torch.vtensor<[2,?],f32>, !torch.vtensor<[2,?],f32> -> !torch.vtensor<[2,?],f32>
+    torch.bind_symbolic_shape %1, [%0], affine_map<()[s10] -> (2, s10)> : !torch.vtensor<[2,?],f32>
+    return %1 : !torch.vtensor<[2,?],f32>
+  }
+}
+"""
+
+def test_mul_dynamic_shape():
+    """Verify symbolic mul lowers to muse and roundtrips."""
+    result = fuse_and_optimize(MLIR_SYMBOLIC_MUL)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_has_op("torch.aten.mul.Tensor", count=1), checker.error
+    assert checker.check_no_op("torch.bind_symbolic_shape"), checker.error
+    assert checker.check_no_op("muse.mul"), checker.error
+    assert checker.check_no_op("builtin.unrealized_conversion_cast"), checker.error

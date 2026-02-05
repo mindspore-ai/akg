@@ -28,6 +28,7 @@ add_mlir_conversion_library(MFusionConversionTorchToMuse
   MLIRSupport
   MLIRTransformUtils
   MLIRMuseDialect
+  MFusionAnalysis
   TorchMLIRTorchDialect
   TorchMLIRTorchConversionDialect
   MLIRPDLDialect

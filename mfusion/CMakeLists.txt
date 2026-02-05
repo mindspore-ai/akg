@@ -14,6 +14,7 @@ endif()
 set(TOP_DIR "${PROJECT_SOURCE_DIR}")
 
 include(${TOP_DIR}/cmake/llvm.cmake)
+include(${TOP_DIR}/cmake/symengine.cmake)
 
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
@@ -72,6 +73,10 @@ include(AddLLVM)
 include(AddMLIR)
 include(AddMLIRPython)
 include(HandleLLVMOptions)
+
+# Tell LLVM/MLIR to enable exceptions in their flags.
+set(LLVM_REQUIRES_EH ON)
+set(LLVM_REQUIRES_RTTI ON)
 
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
