@@ -380,8 +380,10 @@ static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
   Location loc = loadOp.getLoc();
 
   Value vecAxis = ctx.getVectorizationAxis();
-
   Value mappedVecAxis = ctx.valueMapping.lookupOrDefault(vecAxis);
+
+  Value memRef = loadOp.getMemRef();
+  Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
 
   bool allIndicesLoopInvariant = true;
   for (Value idx : loadOp.getIndices()) {
@@ -404,7 +406,7 @@ static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
     }
 
     Value scalarLoad = ctx.builder.create<memref::LoadOp>(
-        loc, loadOp.getMemRef(), indices);
+        loc, mappedMemRef, indices);
 
     return vectorizeBroadcastScalar(scalarLoad, ctx);
   }
@@ -434,7 +436,7 @@ static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
   auto transferRead = ctx.builder.create<npuvector::TransferReadOp>(
       loc,
       vecType,
-      loadOp.getMemRef(),
+      mappedMemRef,
       ValueRange(indices),
       padding,
       Value(),
@@ -469,11 +471,14 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
     llvm_unreachable("vectorizeStore: vector value must be NPUVectorType");
   }
 
+  Value memRef = storeOp.getMemRef();
+  Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
+
   ctx.builder.create<npuvector::TransferWriteOp>(
       loc,
       Type(),
       vectorValue,
-      storeOp.getMemRef(),
+      mappedMemRef,
       ValueRange(indices),
       Value());
 }
