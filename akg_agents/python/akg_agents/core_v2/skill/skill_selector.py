@@ -177,6 +177,80 @@ def or_filters(*filters: Callable) -> Callable:
     return combined_filter
 
 
+def create_level_filter(match_mode: str = "include") -> Callable:
+    """
+    创建 Level 过滤器（工厂函数）
+    
+    支持两种模式：
+    - include: 只包含指定的 levels（白名单）
+    - exclude: 排除指定的 levels（黑名单）
+    
+    Args:
+        match_mode: 匹配模式
+            - "include": 只包含 context.include_levels 中的 levels
+            - "exclude": 排除 context.exclude_levels 中的 levels
+    
+    Returns:
+        过滤器函数 filter(skill, context) -> bool
+    
+    示例：
+        # 创建 include 过滤器（只要 L3, L5 的 Skill）
+        include_filter = create_level_filter("include")
+        context = SelectionContext(include_levels=[SkillLevel.L3, SkillLevel.L5])
+        
+        # 创建 exclude 过滤器（不要 L1, L2 的 Skill）
+        exclude_filter = create_level_filter("exclude")
+        context = SelectionContext(exclude_levels=[SkillLevel.L1, SkillLevel.L2])
+        
+        # 同时使用 include 和 exclude
+        selector = SkillSelector(custom_filters=[
+            create_level_filter("include"),
+            create_level_filter("exclude")
+        ])
+        context = SelectionContext(
+            include_levels=[SkillLevel.L3, SkillLevel.L4, SkillLevel.L5],
+            exclude_levels=[SkillLevel.L4]  # 最终只保留 L3, L5
+        )
+    """
+    def level_filter(skill: SkillMetadata, context: 'SelectionContext') -> bool:
+        if match_mode == "include":
+            # 获取 include_levels
+            include_levels = getattr(context, 'include_levels', None)
+            if include_levels is None:
+                include_levels = context.custom_fields.get('include_levels')
+            
+            # 如果没有指定 include_levels，放行
+            if not include_levels:
+                return True
+            
+            # Skill 的 level 必须在 include_levels 中
+            if not skill.level:
+                return False  # 没有 level 的 Skill 不通过 include 筛选
+            
+            return skill.level in include_levels
+        
+        elif match_mode == "exclude":
+            # 获取 exclude_levels
+            exclude_levels = getattr(context, 'exclude_levels', None)
+            if exclude_levels is None:
+                exclude_levels = context.custom_fields.get('exclude_levels')
+            
+            # 如果没有指定 exclude_levels，放行
+            if not exclude_levels:
+                return True
+            
+            # Skill 的 level 不能在 exclude_levels 中
+            if not skill.level:
+                return True  # 没有 level 的 Skill 默认通过 exclude 筛选
+            
+            return skill.level not in exclude_levels
+        
+        else:
+            raise ValueError(f"Unknown match_mode: {match_mode}")
+    
+    return level_filter
+
+
 # ==================== 选择上下文 ====================
 
 
@@ -188,6 +262,8 @@ class SelectionContext:
     所有领域特定的字段应该通过继承添加（如 OperatorSelectionContext）。
     
     字段说明：
+        include_levels: Level 白名单，只包含这些 levels 的 Skill
+        exclude_levels: Level 黑名单，排除这些 levels 的 Skill
         custom_fields: 自定义字段字典，用于传递任意信息
     
     示例：
@@ -199,7 +275,13 @@ class SelectionContext:
             }
         )
         
-        # 方式 2: 继承创建领域特定上下文（推荐）
+        # 方式 2: 使用 Level 筛选
+        context = SelectionContext(
+            include_levels=[SkillLevel.L3, SkillLevel.L5],  # 只要 L3, L5
+            exclude_levels=[SkillLevel.L1]                   # 不要 L1
+        )
+        
+        # 方式 3: 继承创建领域特定上下文
         @dataclass
         class DocSelectionContext(SelectionContext):
             doc_type: Optional[str] = None
@@ -207,6 +289,10 @@ class SelectionContext:
         
         context = DocSelectionContext(doc_type="api", language="python")
     """
+    # Level 筛选字段
+    include_levels: Optional[List[SkillLevel]] = None  # 白名单：只包含这些 levels
+    exclude_levels: Optional[List[SkillLevel]] = None  # 黑名单：排除这些 levels
+    
     # 自定义扩展字段（用于任意信息）
     custom_fields: Dict[str, Any] = field(default_factory=dict)
     
