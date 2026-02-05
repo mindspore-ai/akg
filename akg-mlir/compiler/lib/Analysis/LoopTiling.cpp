@@ -874,20 +874,19 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
     sumIvs = builder.create<mlir::affine::AffineApplyOp>(loc, sumMap, ivs);
   }
 
-  // lb = sum(ivs) * lastTilesize
+  auto minMap = AffineMap::getMultiDimIdentityMap(2, builder.getContext());
+  Value origUb = origLoop.getUpperBound();
+  Value clampedOrigUb = recreateConstantOrSelf(origUb, builder);
+  // lb = min(sum(ivs) * lastTilesize, origUb)
   auto mulMap =
     AffineMap::get(1, 1, builder.getAffineDimExpr(0) * builder.getAffineSymbolExpr(0), builder.getContext());
-  bounds.lb = builder.create<mlir::affine::AffineApplyOp>(loc, mulMap, ValueRange{sumIvs, lastTilesize});
+  Value lbCandidate = builder.create<mlir::affine::AffineApplyOp>(loc, mulMap, ValueRange{sumIvs, lastTilesize});
+  bounds.lb = builder.create<mlir::affine::AffineMinOp>(loc, minMap, ValueRange{lbCandidate, clampedOrigUb});
 
   // ub = min((sum(ivs) + 1) * lastTilesize, origUb)
   Value sumIvsPlus1 = builder.create<arith::AddIOp>(loc, sumIvs, builder.create<arith::ConstantIndexOp>(loc, 1));
   Value ubCandidate = builder.create<mlir::affine::AffineApplyOp>(loc, mulMap, ValueRange{sumIvsPlus1, lastTilesize});
 
-  Value origUb = origLoop.getUpperBound();
-  Value clampedOrigUb = recreateConstantOrSelf(origUb, builder);
-
-  // ub = min(ubCandidate, origUb)
-  auto minMap = AffineMap::getMultiDimIdentityMap(2, builder.getContext());
   bounds.ub = builder.create<mlir::affine::AffineMinOp>(loc, minMap, ValueRange{ubCandidate, clampedOrigUb});
 
   // step = 1
