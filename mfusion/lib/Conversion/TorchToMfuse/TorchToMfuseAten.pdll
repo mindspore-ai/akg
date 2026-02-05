@@ -33,6 +33,11 @@ Pattern ConvertAtenEqTensor {
   replace root with op<mfuse.eq>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenExp {
+  let root = op<torch.aten.exp>(input: Value) -> (resType: Type);
+  replace root with op<mfuse.exp>(convertValue(input)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenFloor {
   let root = op<torch.aten.floor>(input: Value) -> (resType: Type);
   replace root with op<mfuse.floor>(convertValue(input)) -> (convertType(resType));
@@ -50,7 +55,7 @@ Pattern ConvertAtenGtTensor {
 
 Pattern ConvertAtenIsfinite {
   let root = op<torch.aten.isfinite>(input: Value) -> (resType: Type);
-  replace root with op<mfuse.isfinite>(convertValue(input)) -> (convertType(resType));
+  replace root with op<mfuse.is_finite>(convertValue(input)) -> (convertType(resType));
 }
 
 Pattern ConvertAtenLeTensor {
@@ -113,9 +118,19 @@ Pattern ConvertAtenMulTensor {
   replace root with op<mfuse.mul>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenNeg {
+  let root = op<torch.aten.neg>(input: Value) -> (resType: Type);
+  replace root with op<mfuse.neg>(convertValue(input)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenNeTensor {
   let root = op<torch.aten.ne.Tensor>(operands: ValueRange) -> (resType: Type);
   replace root with op<mfuse.ne>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenPowTensorTensor {
+  let root = op<torch.aten.pow.Tensor_Tensor>(operands: ValueRange) -> (resType: Type);
+  replace root with op<mfuse.pow>(convertValues(operands)) -> (convertType(resType));
 }
 
 Pattern ConvertAtenReshape {
@@ -131,11 +146,6 @@ Pattern ConvertAtenRsqrt {
 Pattern ConvertAtenSqrt {
   let root = op<torch.aten.sqrt>(input: Value) -> (resType: Type);
   replace root with op<mfuse.sqrt>(convertValue(input)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenPowTensorTensor {
-  let root = op<torch.aten.pow.Tensor_Tensor>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.pow>(convertValues(operands)) -> (convertType(resType));
 }
 
 Pattern ConvertAtenSubTensor {
