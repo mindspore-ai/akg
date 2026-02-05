@@ -20,6 +20,7 @@
 // Main entry point for MUSE dialect definitions.
 // This file includes all dialect components organized into separate files.
 include "mfusion/Dialect/Muse/MuseDialect.td"
+include "mfusion/Dialect/Muse/MuseAttributes.td"
 include "mfusion/Dialect/Muse/MuseTypes.td"
 include "mfusion/Dialect/Muse/MuseOps.td"
 
