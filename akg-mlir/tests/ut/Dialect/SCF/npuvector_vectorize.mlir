@@ -97,7 +97,7 @@ func.func @test_reduction_static(%input: memref<1024xf32>, %output: memref<f32>)
     %v = memref.load %input[%i] : memref<1024xf32>
     %new_acc = arith.addf %acc, %v {reduction_type = "all"} : f32
     scf.yield %new_acc : f32
-  } {reduction=128}
+  } {reduction_all=128}
   
   memref.store %sum, %output[] : memref<f32>
   return
@@ -151,7 +151,7 @@ func.func @test_reduction_dynamic(%input: memref<?xf32>, %output: memref<f32>) {
     %v = memref.load %input[%i] : memref<?xf32>
     %new_acc = arith.addf %acc, %v {reduction_type = "all"} : f32
     scf.yield %new_acc : f32
-  } {reduction=128}
+  } {reduction_all=128}
   
   memref.store %sum, %output[] : memref<f32>
   return
@@ -189,7 +189,7 @@ func.func @test_reduction_static_with_tail(%input: memref<300xf32>, %output: mem
     %v = memref.load %input[%i] : memref<300xf32>
     %new_acc = arith.addf %acc, %v {reduction_type = "all"} : f32
     scf.yield %new_acc : f32
-  } {reduction=128}
+  } {reduction_all=128}
   
   memref.store %sum, %output[] : memref<f32>
   return
