@@ -244,6 +244,38 @@ def Mfuse_GeOp : Mfuse_Op<"ge", [Pure]> {
   }];
 }
 
+def Mfuse_GroupedMatmulOp : Mfuse_Op<"grouped_matmul", [Pure]> {
+  let summary = "Grouped matrix multiplication operation.";
+  let description = [{
+    Performs multiple matmul operations in a single kernel with optional bias
+    and quantization/dequantization parameters.
+
+    split_item: 0=multiple tensors, 3=single tensor
+    group_type: -1=no grouping, 0=group on m-axis
+  }];
+
+  let arguments = (ins
+    MfuseTensorList:$x,
+    MfuseTensorList:$weight,
+    MfuseOptionalTensorList:$bias,
+    MfuseOptionalTensorList:$scale,
+    MfuseOptionalTensorList:$offset,
+    MfuseOptionalTensorList:$antiquant_scale,
+    MfuseOptionalTensorList:$antiquant_offset,
+    AnyRankedTensor:$group_list,
+    DefaultValuedAttr<I32Attr, "0">:$split_item,
+    DefaultValuedAttr<I32Attr, "-1">:$group_type,
+    DefaultValuedAttr<BoolAttr, "false">:$transpose_a,
+    DefaultValuedAttr<BoolAttr, "false">:$transpose_b
+  );
+
+  let results = (outs MfuseTensorList:$y);
+
+  let assemblyFormat = [{
+    $x `,` $weight `,` $bias `,` $scale `,` $offset `,` $antiquant_scale `,` $antiquant_offset `,` $group_list attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_GtOp : Mfuse_Op<"gt", [Pure]> {
   let summary = "Element-wise greater-than comparison of two tensors.";
   let description = [{

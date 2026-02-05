@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "mfusion/Analysis/Graph.h"
+#include "mfusion/Analysis/Cluster/Graph.h"
 
 #include <algorithm>
 #include <queue>
@@ -230,8 +230,8 @@ void CircleChecker::RemoveCircle(std::vector<size_t> *candidates) {
   }
 
   candidates->erase(std::remove_if(candidates->begin(), candidates->end(),
-                                 [this](size_t c) { return this->candidates_.count(c) == 0; }),
-                  candidates->end());
+                                   [this](size_t c) { return this->candidates_.count(c) == 0; }),
+                    candidates->end());
 }
 
 bool CircleChecker::CheckCircle(size_t basenode) {
