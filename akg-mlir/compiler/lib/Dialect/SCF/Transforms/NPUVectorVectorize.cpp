@@ -880,10 +880,9 @@ static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
     }
   }
 
-  SmallVector<Operation *> opsToVectorize;
-  for (Operation &op : ctx.scalarLoop.getBody()->without_terminator()) {
-    opsToVectorize.push_back(&op);
-  }
+  auto bodyOps = ctx.scalarLoop.getBody()->without_terminator();
+  SmallVector<Operation *> opsToVectorize = llvm::map_to_vector(
+      bodyOps, [](Operation &op) { return &op; });
 
   SmallVector<scf::ForOp> nestedLoopsToErase;
 
