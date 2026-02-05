@@ -83,12 +83,17 @@ struct AKGLoopFusion : public mlir::impl::AKGLoopFusionBase<AKGLoopFusion> {
   llvm::DenseMap<mlir::Value, mlir::Value> primeToDimMap;
   // Whether to print fusion information
   bool printFusionInfo{false};
+  // Create new symbol
+  static int64_t newSymbolCount;
+  static constexpr auto NEW_SYMBOL = "si";
   // Large primes for replacing dim values
   static constexpr int64_t kPrimes[] = {1000003, 1000033, 1000037, 1000039, 1000081,
                                         1000099, 1000117, 1000121, 1000133, 1000139};
   static constexpr size_t kNumPrimes = sizeof(kPrimes) / sizeof(kPrimes[0]);
 };
 }  // namespace
+
+int64_t AKGLoopFusion::newSymbolCount = 0;
 
 // Trace back through operations to find the SymShapeAttr for a Value.
 // Handles block arguments, bufferization.to_memref, etc.
@@ -148,13 +153,11 @@ std::optional<int64_t> AKGLoopFusion::getConstantDimIndex(mlir::Value dimIndex) 
 llvm::SmallVector<int64_t> AKGLoopFusion::getDynamicDimIndicesOfValue(mlir::Value v) {
   llvm::SmallVector<int64_t> dynDims;
   auto st = mlir::dyn_cast<mlir::ShapedType>(v.getType());
-  if (!st || !st.hasRank())
-    return dynDims;
+  if (!st || !st.hasRank()) return dynDims;
 
   auto shape = st.getShape();
   for (int64_t i = 0; i < static_cast<int64_t>(shape.size()); ++i) {
-    if (shape[i] == mlir::ShapedType::kDynamic)
-      dynDims.push_back(i);
+    if (shape[i] == mlir::ShapedType::kDynamic) dynDims.push_back(i);
   }
   return dynDims;
 }
@@ -186,9 +189,9 @@ void AKGLoopFusion::collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
         std::string axisKey = (*symShape)[*constIndex];
         axisToDimValues[axisKey].push_back(operand);
       } else {
-        mlir::Value useOp ;
-        int64_t userIndex ;
-        for (auto &use: defOp->getResult(0).getUses()) {
+        mlir::Value useOp;
+        int64_t userIndex;
+        for (auto &use : defOp->getResult(0).getUses()) {
           mlir::Operation *userOp = use.getOwner();
           if (auto allocOp = mlir::dyn_cast<mlir::memref::AllocOp>(userOp)) {
             useOp = allocOp.getResult();
@@ -198,15 +201,16 @@ void AKGLoopFusion::collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
         }
 
         if (!useOp) {
-          std::string axisKey = "si";
+          std::string axisKey = std::string(NEW_SYMBOL) + std::to_string(newSymbolCount);
+          ++newSymbolCount;
           axisToDimValues[axisKey].push_back(operand);
           return;
         }
 
         auto dynDims = getDynamicDimIndicesOfValue(useOp);
         if (dynDims.empty()) {
-            llvm::errs()<<"This op has no dynamic shape\n";
-            return;
+          llvm::errs() << "This op has no dynamic shape\n";
+          return;
         }
         int64_t dynamicIndex = dynDims[userIndex];
         auto symShape = getSymShapeAttrFromValue(useOp);
@@ -267,8 +271,8 @@ void AKGLoopFusion::replaceDimWithPrimes(mlir::func::FuncOp funcOp) {
 
       auto *op2 = dimVal.getDefiningOp();
       if (!op2) {
-          earliestDim = dimVal;
-          break;
+        earliestDim = dimVal;
+        break;
       }
 
       if (op1->getBlock() == op2->getBlock()) {
@@ -276,7 +280,7 @@ void AKGLoopFusion::replaceDimWithPrimes(mlir::func::FuncOp funcOp) {
           earliestDim = dimVal;
         }
       } else {
-        llvm::errs() <<"Dim ops for the same axisKey are in different blocks\n";
+        llvm::errs() << "Dim ops for the same axisKey are in different blocks\n";
         return;
       }
     }
