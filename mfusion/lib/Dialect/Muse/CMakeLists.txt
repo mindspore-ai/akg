@@ -15,6 +15,7 @@ add_mlir_dialect_library(MLIRMuseDialect
   MLIRSupport
   MLIRInferTypeOpInterface
   MLIRSideEffectInterfaces
+  mfusion::symengine
 )
 
 add_subdirectory(Transforms)

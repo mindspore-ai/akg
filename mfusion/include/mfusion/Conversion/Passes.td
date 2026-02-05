@@ -34,6 +34,22 @@ def ConvertTorchToMuse : Pass<"convert-torch-to-muse", "::mlir::ModuleOp"> {
   ];
 }
 
+def ConvertTorchSymbolToMuse : Pass<"convert-torch-symbol-to-muse", "::mlir::ModuleOp"> {
+  let summary = "Attach symbolic shape attributes after Torch-to-Muse conversion";
+
+  let description = [{
+    This pass consumes torch.bind_symbolic_shape ops and attaches symbolic shape
+    attributes to ranked tensor types produced by Torch-to-Muse conversion.
+  }];
+
+  let constructor = "mlir::createConvertTorchSymbolToMusePass()";
+
+  let dependentDialects = [
+    "::mlir::torch::TorchDialect",
+    "::mlir::muse::MuseDialect"
+  ];
+}
+
 def ConvertMuseToTorch : Pass<"convert-muse-to-torch", "::mlir::ModuleOp"> {
   let summary = "Convert Muse operations to Torch dialect operations";
 
