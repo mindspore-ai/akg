@@ -395,7 +395,7 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
   static LogicalResult rewriteTruncFScalarOr1D(CastOp op,
                                                OpAdaptor adaptor,
                                                ConversionPatternRewriter &rewriter) {
-    if(!isa<MemRefType>(adaptor.getIn().getType())) {
+    if (!isa<MemRefType>(adaptor.getIn().getType())) {
       return success();
     }
     Location loc = op.getLoc();
@@ -1854,7 +1854,7 @@ struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
   LogicalResult matchAndRewrite(memref::StoreOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    if(!isa<MemRefType>(adaptor.getValue().getType())) {
+    if (!isa<MemRefType>(adaptor.getValue().getType())) {
       return success();
     }
 
@@ -2216,6 +2216,10 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
     }
 
     Type elemType = npuVecType.getElementType();
+    if (elemType.isIndex()) {
+      elemType = rewriter.getI64Type();
+      source = rewriter.create<arith::IndexCastOp>(loc, elemType, source);
+    }
     auto memRefType = MemRefType::get(npuVecType.getShape(), elemType);
 
     TypedAttr scalarAttr;
@@ -2263,6 +2267,18 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
     rewriter.create<hivm::VBrcOp>(loc, TypeRange{}, source, resultBuf, rewriter.getDenseI64ArrayAttr({}));
 
     rewriter.replaceOp(op, resultBuf);
+    return success();
+  }
+};
+
+struct NPUVectorIndexCastToHIVM : public OpConversionPattern<npuvector::IndexCastOp> {
+  using OpConversionPattern<npuvector::IndexCastOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(npuvector::IndexCastOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value input = adaptor.getOperands()[0];
+    rewriter.replaceOp(op, input);
     return success();
   }
 };
@@ -2345,7 +2361,8 @@ void hivm::populateArithToHIVMConversionPatterns(
   patterns.add<
       NPUVectorTransferReadToHIVM,
       NPUVectorTransferWriteToHIVM,
-      NPUVectorBroadcastToHIVM>(patterns.getContext());
+      NPUVectorBroadcastToHIVM,
+      NPUVectorIndexCastToHIVM>(patterns.getContext());
   patterns.add<
       UnaryNPUVectorToHIVMCast<npuvector::ExtFOp>,
       UnaryNPUVectorToHIVMCast<npuvector::TruncFOp>,

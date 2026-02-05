@@ -3202,3 +3202,25 @@ func.func @Fused_Mul_ReduceSum_split(%arg0: memref<384x128xbf16>, %arg1: memref<
   }
   return %arg1 : memref<1xbf16>
 }
+
+// -----
+
+func.func @test_npuvector_broadcast_index_cast_index(%arg0 : memref<?xi64>) {
+  // CHECK-LABEL: func.func @test_npuvector_broadcast_index_cast_index
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: %[[C16:.*]] = arith.constant 16 : index
+  // CHECK: %[[C4096:.*]] = arith.constant 4096 : index
+  // CHECK: %[[C0_I64:.*]] = arith.index_cast %[[C0]] : index to i64
+  // CHECK: %[[ALLOC:.*]] = memref.alloc(%[[C16]]) : memref<?xi64>
+  // CHECK: hivm.hir.vbrc ins(%[[C0_I64]] : i64) outs(%[[ALLOC]] : memref<?xi64>)
+  // CHECK: %[[SUBVIEW:.*]] = memref.subview %arg0[0] [%[[C16]]] [1] : memref<?xi64> to memref<?xi64, strided<[1]>>
+  // CHECK: hivm.hir.store ins(%[[ALLOC]] : memref<?xi64>) outs(%[[SUBVIEW]] : memref<?xi64, {{.*}}>)
+  %1 = arith.constant 0 : index
+  %5 = arith.constant 0 : index
+  %2 = arith.constant 16 : index
+  %c4096 = arith.constant 4096 : index
+  %3 = npuvector.broadcast %1[%2] [%c4096] : index to !npuvector<?xindex>
+  %4 = npuvector.index_cast %3 : !npuvector<?xindex> to !npuvector<?xi64>
+  npuvector.transfer_write %4, %arg0[%5] : !npuvector<?xi64>, memref<?xi64>
+  return
+}
