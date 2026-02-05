@@ -28,7 +28,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 
-#include "mfusion/Analysis/Graph.h"
+#include "mfusion/Analysis/Cluster/Graph.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
 
@@ -43,15 +43,15 @@ namespace mfuse {
 
 namespace {
 /// Check if constant value is finite based on its type
-bool isFiniteValue(DenseElementsAttr dense_attr) {
+bool isFiniteValue(DenseElementsAttr denseAttr) {
   // Handle dense attributes (tensor constants)
   // Get element type and check accordingly
-  Type element_type = dense_attr.getElementType();
-  if (auto float_type = dyn_cast<FloatType>(element_type)) {
+  Type elementType = denseAttr.getElementType();
+  if (isa<FloatType>(elementType)) {
     // For all floating point types, use APFloat to check if finite
-    auto apfloat_values = dense_attr.getValues<APFloat>();
-    if (!apfloat_values.empty()) {
-      APFloat value = *apfloat_values.begin();
+    auto apfloatValues = denseAttr.getValues<APFloat>();
+    if (!apfloatValues.empty()) {
+      APFloat value = *apfloatValues.begin();
       return !value.isNaN() && !value.isInfinity();
     }
   }
@@ -59,86 +59,126 @@ bool isFiniteValue(DenseElementsAttr dense_attr) {
   return true;
 }
 
+bool CheckForGroupedMatmul(const std::string &opName, DenseElementsAttr denseAttr, size_t idx) {
+  // Special case: bool type or grouped_matmul's int64 group_list parameter
+  Type elementType = denseAttr.getElementType();
+  if (auto intType = dyn_cast<IntegerType>(elementType)) {
+    const size_t kGroupListIndex = 7;
+    if (intType.getWidth() == 1 ||
+        (opName == "mfuse.grouped_matmul" && idx == kGroupListIndex && intType.getWidth() == 64)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// Collect constant operations that should be included in the cluster.
 /// This function analyzes operands of cluster operations and determines which
 /// constant operations should be fused into the cluster (vs extracted as inputs).
-llvm::DenseSet<Operation *> CollectConstantsToCluster(llvm::ArrayRef<Operation *> cluster_ops) {
+llvm::DenseSet<Operation *> collectConstantsToCluster(llvm::ArrayRef<Operation *> clusterOps) {
   // Build a set of cluster operations for fast lookup
-  llvm::DenseSet<Operation *> cluster_op_set(cluster_ops.begin(), cluster_ops.end());
+  llvm::DenseSet<Operation *> clusterOpSet(clusterOps.begin(), clusterOps.end());
 
-  llvm::DenseSet<Operation *> constants_to_cluster;
-  const auto &op_index_info = getConstInputIndexInfo();
+  llvm::DenseSet<Operation *> constantsToCluster;
+  const auto &opIndexInfo = getConstInputIndexInfo();
 
-  for (Operation *op : cluster_ops) {
-    std::string op_name = op->getName().getStringRef().str();
+  for (Operation *op : clusterOps) {
+    std::string opName = op->getName().getStringRef().str();
 
     // Get the const input indices for this operation type
-    const std::unordered_set<size_t> *const_indices = nullptr;
-    auto iter = op_index_info.find(op_name);
-    if (iter != op_index_info.end()) {
-      const_indices = &iter->second;
+    const std::unordered_set<size_t> *constIndices = nullptr;
+    auto iter = opIndexInfo.find(opName);
+    if (iter != opIndexInfo.end()) {
+      constIndices = &iter->second;
     }
 
     for (size_t idx = 0; idx < op->getNumOperands(); ++idx) {
       Value operand = op->getOperand(idx);
-      Operation *def_op = operand.getDefiningOp();
-      if (def_op == nullptr || cluster_op_set.contains(def_op) || constants_to_cluster.contains(def_op)) {
+      Operation *defOp = operand.getDefiningOp();
+      if (defOp == nullptr || clusterOpSet.contains(defOp) || constantsToCluster.contains(defOp)) {
         continue;
       }
 
       // Check if this is a constant operation
-      auto arith_const_op = dyn_cast<arith::ConstantOp>(def_op);
-      if (!arith_const_op) {
+      auto arithConstOp = dyn_cast<arith::ConstantOp>(defOp);
+      if (!arithConstOp) {
         continue;
       }
-      Type result_type = arith_const_op.getResult().getType();
+      Type resultType = arithConstOp.getResult().getType();
 
       // If constant is not a tensor type (e.g., scalar), include it in cluster
-      if (!isa<TensorType>(result_type)) {
-        LLVM_DEBUG(llvm::dbgs() << "Constant at index " << idx << " for " << op_name
+      if (!isa<TensorType>(resultType)) {
+        LLVM_DEBUG(llvm::dbgs() << "Constant at index " << idx << " for " << opName
                                 << " is not a tensor type, keeping in cluster\n");
-        constants_to_cluster.insert(def_op);
+        constantsToCluster.insert(defOp);
         continue;
       }
 
       // Check if this constant is used at a value-dependent index
-      if (const_indices != nullptr && const_indices->count(idx) != 0) {
-        LLVM_DEBUG(llvm::dbgs() << "Constant at index " << idx << " for " << op_name
+      if (constIndices != nullptr && constIndices->count(idx) != 0) {
+        LLVM_DEBUG(llvm::dbgs() << "Constant at index " << idx << " for " << opName
                                 << " is value-dependent, keeping in cluster\n");
-        constants_to_cluster.insert(def_op);
+        constantsToCluster.insert(defOp);
         continue;
       }
 
       // Get the constant attribute
-      Attribute value_attr = arith_const_op.getValueAttr();
-      if (!value_attr || !result_type) {
+      Attribute valueAttr = arithConstOp.getValueAttr();
+      if (!valueAttr) {
         continue;
       }
 
       // Check if it's a single-element finite tensor constant
-      auto dense_attr = dyn_cast<DenseElementsAttr>(value_attr);
-      if (!dense_attr || dense_attr.getNumElements() != 1 || !isFiniteValue(dense_attr)) {
+      auto denseAttr = dyn_cast<DenseElementsAttr>(valueAttr);
+      if (!denseAttr || denseAttr.getNumElements() != 1 || !isFiniteValue(denseAttr)) {
         continue;
       }
 
-      // Special case: bool type or grouped_matmul's int64 group_list parameter
-      Type element_type = dense_attr.getElementType();
-      if (auto int_type = dyn_cast<IntegerType>(element_type)) {
-        const size_t group_list_index = 7;
-        if (int_type.getWidth() == 1 ||
-            (op_name == "mfuse.grouped_matmul" && idx == group_list_index && int_type.getWidth() == 64)) {
-          continue;
-        }
+      if (!CheckForGroupedMatmul(opName, denseAttr, idx)) {
+        continue;
       }
 
       // Include it in the cluster
-      LLVM_DEBUG(llvm::dbgs() << "Constant at index " << idx << " for " << op_name
+      LLVM_DEBUG(llvm::dbgs() << "Constant at index " << idx << " for " << opName
                               << " is single-element finite value, keeping in cluster\n");
-      constants_to_cluster.insert(def_op);
+      constantsToCluster.insert(defOp);
     }
   }
 
-  return constants_to_cluster;
+  return constantsToCluster;
+}
+
+/// Find external inputs (values defined outside the cluster).
+llvm::SetVector<Value> findExternalInputs(llvm::ArrayRef<Operation *> clusterOps,
+                                          const llvm::DenseSet<Operation *> &clusterOpSet) {
+  llvm::SetVector<Value> externalInputs;
+  for (Operation *op : clusterOps) {
+    for (Value operand : op->getOperands()) {
+      Operation *defOp = operand.getDefiningOp();
+      // External if defined by block argument or by an op outside the cluster
+      if (defOp == nullptr || !clusterOpSet.contains(defOp)) {
+        externalInputs.insert(operand);
+      }
+    }
+  }
+  return externalInputs;
+}
+
+/// Find external outputs (values used outside the cluster).
+llvm::SetVector<Value> findExternalOutputs(llvm::ArrayRef<Operation *> clusterOps,
+                                           const llvm::DenseSet<Operation *> &clusterOpSet) {
+  llvm::SetVector<Value> externalOutputs;
+  for (Operation *op : clusterOps) {
+    for (Value result : op->getResults()) {
+      for (Operation *user : result.getUsers()) {
+        if (!clusterOpSet.contains(user)) {
+          externalOutputs.insert(result);
+          break;
+        }
+      }
+    }
+  }
+  return externalOutputs;
 }
 }  // namespace
 
@@ -146,22 +186,22 @@ llvm::DenseSet<Operation *> CollectConstantsToCluster(llvm::ArrayRef<Operation *
 // BaseCluster Implementation
 //===----------------------------------------------------------------------===//
 
-void BaseCluster::Init() { op_list_ = GetClusterableOpList(); }
+void BaseCluster::init() { opList_ = getClusterableOpList(); }
 
-bool BaseCluster::Run(func::FuncOp func_op) {
-  Init();
-  bool changed = Process(func_op);
-  Clean();
+bool BaseCluster::run(func::FuncOp funcOp) {
+  init();
+  bool changed = process(funcOp);
+  clean();
   return changed;
 }
 
-bool BaseCluster::Process(func::FuncOp func_op) {
-  Block &block = func_op.getBody().front();
-  GraphMerge(&block, true);
+bool BaseCluster::process(func::FuncOp funcOp) {
+  Block &block = funcOp.getBody().front();
+  graphMerge(&block, true);
 
   if (graph_->HasCircle()) {
     LLVM_DEBUG(llvm::dbgs() << "Graph has circle, trying again with conservative strategy\n");
-    GraphMerge(&block, false);
+    graphMerge(&block, false);
     if (graph_->HasCircle()) {
       LLVM_DEBUG(llvm::dbgs() << "Graph still has circle!\n");
     }
@@ -172,20 +212,20 @@ bool BaseCluster::Process(func::FuncOp func_op) {
   auto clusters = graph_->CollectClusters();
 
   for (size_t i = 0; i < clusters.size(); ++i) {
-    size_t node_count = clusters[i].size();
-    if (node_count == 0 || node_count == 1) {
+    size_t nodeCount = clusters[i].size();
+    if (nodeCount == 0 || nodeCount == 1) {
       continue;
     }
-    CreateFusedOp(func_op, clusters[i]);
+    createFusedOp(funcOp, clusters[i]);
     changed = true;
   }
 
   return changed;
 }
 
-void BaseCluster::GraphMerge(Block *block, bool aggressive_cut) {
-  llvm::DenseMap<Operation *, size_t> op_idx_map;
-  graph_ = Graph::Build(block, &ops_, &op_idx_map, aggressive_cut);
+void BaseCluster::graphMerge(Block *block, bool aggressiveCut) {
+  llvm::DenseMap<Operation *, size_t> opIdxMap;
+  graph_ = Graph::Build(block, &ops_, &opIdxMap, aggressiveCut);
 
   // Process nodes in reverse order (from outputs to inputs)
   for (int i = static_cast<int>(ops_.size()) - 1; i >= 0; --i) {
@@ -194,9 +234,9 @@ void BaseCluster::GraphMerge(Block *block, bool aggressive_cut) {
       continue;
     }
 
-    auto candidates = FindCandidates(static_cast<size_t>(i));
-    CircleChecker circle_checker(graph_.get());
-    circle_checker.RemoveCircle(&candidates);
+    auto candidates = findCandidates(static_cast<size_t>(i));
+    CircleChecker circleChecker(graph_.get());
+    circleChecker.RemoveCircle(&candidates);
 
     if (candidates.size() <= 1) {
       continue;
@@ -207,140 +247,125 @@ void BaseCluster::GraphMerge(Block *block, bool aggressive_cut) {
   }
 }
 
-std::vector<size_t> BaseCluster::FindCandidates(size_t basenode_id) {
+std::vector<size_t> BaseCluster::findCandidates(size_t baseNodeId) {
   std::vector<size_t> candidates;
-  Operation *base_op = ops_[basenode_id];
-  Block *block = base_op->getBlock();
+  Operation *baseOp = ops_[baseNodeId];
+  Block *block = baseOp->getBlock();
 
-  auto include = [this, &candidates, block](size_t cluster_id) {
-    Operation *op = this->ops_[cluster_id];
+  auto include = [this, &candidates, block](size_t clusterId) {
+    Operation *op = this->ops_[clusterId];
     // Must be in the same block
     if (op->getBlock() != block) {
       return VisitResult::kExclude;
     }
     // Must be clusterable
-    if (!IsClusterableOp(op)) {
+    if (!isClusterableOp(op)) {
       return VisitResult::kExclude;
     }
-    candidates.push_back(cluster_id);
+    candidates.push_back(clusterId);
     // Do not search from already clustered node
-    if (this->graph_->GetSize(cluster_id) > 1) {
+    if (this->graph_->GetSize(clusterId) > 1) {
       return VisitResult::kNoFollow;
     }
     return VisitResult::kFollow;
   };
 
-  graph_->Dfs(basenode_id, include);
+  graph_->Dfs(baseNodeId, include);
   std::reverse(candidates.begin(), candidates.end());
   return candidates;
 }
 
-void BaseCluster::CreateFusedOp(func::FuncOp func_op, const std::vector<size_t> &nodes_id) {
-  if (nodes_id.empty()) {
+void BaseCluster::createFusedOp(func::FuncOp funcOp, const std::vector<size_t> &nodeIds) {
+  if (nodeIds.empty()) {
     return;
   }
 
-  // Collect operations in the cluster
-  llvm::SmallVector<Operation *> cluster_ops;
-  for (size_t id : nodes_id) {
-    cluster_ops.push_back(ops_[id]);
-  }
+  // Collect operations in cluster
+  llvm::SmallVector<Operation *> clusterOps(nodeIds.size());
+  std::transform(nodeIds.begin(), nodeIds.end(), clusterOps.begin(), [this](size_t id) { return ops_[id]; });
 
   // Collect constant operations that should be included in the cluster
-  llvm::DenseSet<Operation *> constants_to_cluster = CollectConstantsToCluster(cluster_ops);
+  llvm::DenseSet<Operation *> constantsToCluster = collectConstantsToCluster(clusterOps);
 
-  // Add constant operations to cluster_ops
-  for (Operation *const_op : constants_to_cluster) {
-    cluster_ops.push_back(const_op);
-  }
+  // Add constant operations to clusterOps
+  std::copy(constantsToCluster.begin(), constantsToCluster.end(), std::back_inserter(clusterOps));
 
   // Sort operations after adding constants
-  std::sort(cluster_ops.begin(), cluster_ops.end(), [](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
+  std::sort(clusterOps.begin(), clusterOps.end(), [](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
 
-  // Find external inputs (values defined outside the cluster)
-  llvm::SetVector<Value> external_inputs;
-  llvm::DenseSet<Operation *> cluster_op_set(cluster_ops.begin(), cluster_ops.end());
+  llvm::DenseSet<Operation *> clusterOpSet(clusterOps.begin(), clusterOps.end());
+  llvm::SetVector<Value> externalInputs = findExternalInputs(clusterOps, clusterOpSet);
+  llvm::SetVector<Value> externalOutputs = findExternalOutputs(clusterOps, clusterOpSet);
 
-  for (Operation *op : cluster_ops) {
-    for (Value operand : op->getOperands()) {
-      Operation *def_op = operand.getDefiningOp();
-      // External if defined by block argument or by an op outside the cluster
-      if (def_op == nullptr || !cluster_op_set.contains(def_op)) {
-        external_inputs.insert(operand);
-      }
-    }
-  }
-
-  // Find external outputs (values used outside the cluster)
-  llvm::SetVector<Value> external_outputs;
-  for (Operation *op : cluster_ops) {
-    for (Value result : op->getResults()) {
-      for (Operation *user : result.getUsers()) {
-        if (!cluster_op_set.contains(user)) {
-          external_outputs.insert(result);
-          break;
-        }
-      }
-    }
-  }
-
-  if (external_outputs.empty()) {
+  if (externalOutputs.empty()) {
     // No external outputs means this cluster's results are not used
     // This shouldn't normally happen, but handle it gracefully
     return;
   }
 
-  // Create the fused operation
-  OpBuilder builder(func_op.getContext());
-  builder.setInsertionPointAfter(cluster_ops.front());
+  // Create the fused operation.
+  // The insertion point must satisfy two SSA dominance constraints:
+  //   1. After all external input definitions (so they dominate the fused op's uses).
+  //   2. Before all non-cluster users of external outputs (so fused results dominate users).
+  // We start from the first cluster op and move forward to cover any external input
+  // that is defined between cluster ops (e.g., a non-clusterable op whose result is
+  // consumed by a later cluster op). This keeps the fused op as early as possible,
+  // which avoids breaking dominance for external output users located between cluster ops.
+  OpBuilder builder(funcOp.getContext());
+  Operation *insertPoint = clusterOps.front();
+  for (Value input : externalInputs) {
+    Operation *defOp = input.getDefiningOp();
+    if (defOp && defOp->getBlock() == insertPoint->getBlock() && insertPoint->isBeforeInBlock(defOp)) {
+      insertPoint = defOp;
+    }
+  }
+  builder.setInsertionPointAfter(insertPoint);
 
   // Collect result types
-  llvm::SmallVector<Type> result_types;
-  for (Value output : external_outputs) {
-    result_types.push_back(output.getType());
-  }
+  llvm::SmallVector<Type> resultTypes(externalOutputs.size());
+  std::transform(externalOutputs.begin(), externalOutputs.end(), resultTypes.begin(),
+                 [](Value output) { return output.getType(); });
 
   // Create FusedOp
-  auto fused_op = builder.create<FusedOp>(cluster_ops.front()->getLoc(), result_types, external_inputs.getArrayRef(),
-                                          builder.getStringAttr(GetFusionType()), /*kernel_name=*/nullptr);
+  auto fusedOp = builder.create<FusedOp>(clusterOps.front()->getLoc(), resultTypes, externalInputs.getArrayRef(),
+                                         builder.getStringAttr(getFusionType()), /*kernel_name=*/nullptr);
 
   // Create the body block with arguments for each external input
   Block *body = new Block();
-  fused_op.getBody().push_back(body);
+  fusedOp.getBody().push_back(body);
 
-  llvm::SmallVector<Location> arg_locs;
-  for (Value input : external_inputs) {
-    arg_locs.push_back(input.getLoc());
-  }
-  body->addArguments(TypeRange(external_inputs.getArrayRef()), arg_locs);
+  llvm::SmallVector<Location> argLocs;
+  argLocs.reserve(externalInputs.size());
+  std::transform(externalInputs.begin(), externalInputs.end(), std::back_inserter(argLocs),
+                 [](Value input) { return input.getLoc(); });
+  body->addArguments(TypeRange(externalInputs.getArrayRef()), argLocs);
 
   // Create mapping from external inputs to block arguments
   IRMapping mapping;
-  for (auto [input, arg] : llvm::zip(external_inputs, body->getArguments())) {
+  for (auto [input, arg] : llvm::zip(externalInputs, body->getArguments())) {
     mapping.map(input, arg);
   }
 
   // Clone operations into the fused body
   builder.setInsertionPointToStart(body);
-  for (Operation *op : cluster_ops) {
+  for (Operation *op : clusterOps) {
     builder.clone(*op, mapping);
   }
 
-  // Create yield operation with the outputs
-  llvm::SmallVector<Value> yield_values;
-  for (Value output : external_outputs) {
-    yield_values.push_back(mapping.lookup(output));
-  }
-  builder.create<YieldOp>(fused_op.getLoc(), yield_values);
+  // Create yield operation with outputs
+  llvm::SmallVector<Value> yieldValues(externalOutputs.size());
+  std::transform(externalOutputs.begin(), externalOutputs.end(), yieldValues.begin(),
+                 [&mapping](Value output) { return mapping.lookup(output); });
+  builder.create<YieldOp>(fusedOp.getLoc(), yieldValues);
 
   // Replace uses of cluster outputs with fused op results
-  for (auto [old_output, new_result] : llvm::zip(external_outputs, fused_op.getResults())) {
-    Value output = old_output;  // Create non-const copy for replaceAllUsesWith
-    output.replaceAllUsesWith(new_result);
+  for (auto [oldOutput, newResult] : llvm::zip(externalOutputs, fusedOp.getResults())) {
+    Value output = oldOutput;  // Create non-const copy for replaceAllUsesWith
+    output.replaceAllUsesWith(newResult);
   }
 
   // Erase original operations in reverse order
-  for (auto it = cluster_ops.rbegin(); it != cluster_ops.rend(); ++it) {
+  for (auto it = clusterOps.rbegin(); it != clusterOps.rend(); ++it) {
     (*it)->erase();
   }
 }
