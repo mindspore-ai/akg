@@ -62,9 +62,10 @@ from dataclasses import dataclass
 from akg_agents.core_v2.skill.skill_selector import (
     SelectionContext,
     SkillSelector,
-    create_metadata_matcher  # 从通用框架导入
+    create_metadata_matcher,  # 从通用框架导入
+    create_level_filter       # Level 筛选器
 )
-from akg_agents.core_v2.skill.metadata import SkillMetadata
+from akg_agents.core_v2.skill.metadata import SkillMetadata, SkillLevel
 
 import logging
 
@@ -82,13 +83,33 @@ class OperatorSelectionContext(SelectionContext):
         dsl: DSL 类型（如："triton", "cuda", "opencl"）
         backend: 后端（如："cuda", "ascend", "rocm"）
         hardware: 硬件型号（如："ascend910b4", "a100"）
+        
+        继承自 SelectionContext 的 Level 筛选字段：
+        include_levels: Level 白名单，只包含这些 levels 的 Skill
+        exclude_levels: Level 黑名单，排除这些 levels 的 Skill
     
     示例：
+        # 基本用法
         context = OperatorSelectionContext(
             operator_type="softmax",
             dsl="triton",
             backend="cuda",
             hardware="a100"
+        )
+        
+        # 使用 Level 筛选：只要 L3 和 L5 的 Skill
+        context = OperatorSelectionContext(
+            operator_type="softmax",
+            dsl="triton-ascend",
+            backend="ascend",
+            include_levels=[SkillLevel.L3, SkillLevel.L5]
+        )
+        
+        # 使用 Level 筛选：排除 L1 和 L2 的 Skill
+        context = OperatorSelectionContext(
+            dsl="triton-ascend",
+            backend="ascend",
+            exclude_levels=[SkillLevel.L1, SkillLevel.L2]
         )
         
         # 如果需要额外的字段，使用 custom_fields
@@ -117,18 +138,24 @@ dsl_filter = create_metadata_matcher("dsl")
 hardware_filter = create_metadata_matcher("hardware")
 operator_type_filter = create_metadata_matcher("operator_type", "operator_patterns")
 
+# Level 过滤器（支持 include 和 exclude 模式）
+level_include_filter = create_level_filter("include")
+level_exclude_filter = create_level_filter("exclude")
+
 
 def create_operator_filters() -> List[Callable]:
     """
     创建算子生成领域的过滤器集合
     
-    所有过滤器都是通过 create_metadata_matcher 工厂函数生成的，避免代码重复。
+    所有过滤器都是通过工厂函数生成的，避免代码重复。
     
     包含的过滤器：
     1. backend_filter: 后端匹配（cuda, ascend等）
     2. dsl_filter: DSL 匹配（triton, cuda等）
     3. hardware_filter: 硬件型号匹配（npu910b, a100等）
     4. operator_type_filter: 算子类型匹配（softmax, layernorm等）
+    5. level_include_filter: Level 白名单（只包含指定 levels）
+    6. level_exclude_filter: Level 黑名单（排除指定 levels）
     
     Returns:
         过滤器函数列表
@@ -147,6 +174,22 @@ def create_operator_filters() -> List[Callable]:
             dsl="triton",
             backend="cuda",
             hardware="a100"
+        )
+        candidates = selector.coarse_filter(all_skills, context)
+        
+        # 使用 Level 筛选：只要 L3, L5 级别的 Skill
+        context = OperatorSelectionContext(
+            dsl="triton-ascend",
+            backend="ascend",
+            include_levels=[SkillLevel.L3, SkillLevel.L5]
+        )
+        candidates = selector.coarse_filter(all_skills, context)
+        
+        # 使用 Level 筛选：排除 L1, L2 级别的 Skill
+        context = OperatorSelectionContext(
+            dsl="triton-ascend",
+            backend="ascend",
+            exclude_levels=[SkillLevel.L1, SkillLevel.L2]
         )
         candidates = selector.coarse_filter(all_skills, context)
         
@@ -171,7 +214,14 @@ def create_operator_filters() -> List[Callable]:
         complex_filter = and_filters(backend_filter, exclude_opencl)
         custom_selector = SkillSelector(custom_filters=[complex_filter])
     """
-    return [backend_filter, dsl_filter, hardware_filter, operator_type_filter]
+    return [
+        backend_filter, 
+        dsl_filter, 
+        hardware_filter, 
+        operator_type_filter,
+        level_include_filter,
+        level_exclude_filter
+    ]
 
 
 # ==================== 算子生成选择器 ====================
