@@ -186,9 +186,9 @@ void AKGLoopFusion::collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
         std::string axisKey = (*symShape)[*constIndex];
         axisToDimValues[axisKey].push_back(operand);
       } else {
-        mlir::Value useOp ;
-        int64_t userIndex ;
-        for (auto &use: defOp->getResult(0).getUses()) {
+        mlir::Value useOp;
+        int64_t userIndex;
+        for (auto &use : defOp->getResult(0).getUses()) {
           mlir::Operation *userOp = use.getOwner();
           if (auto allocOp = mlir::dyn_cast<mlir::memref::AllocOp>(userOp)) {
             useOp = allocOp.getResult();
@@ -205,7 +205,7 @@ void AKGLoopFusion::collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
 
         auto dynDims = getDynamicDimIndicesOfValue(useOp);
         if (dynDims.empty()) {
-            llvm::errs()<<"This op has no dynamic shape\n";
+            llvm::errs() << "This op has no dynamic shape\n";
             return;
         }
         int64_t dynamicIndex = dynDims[userIndex];
