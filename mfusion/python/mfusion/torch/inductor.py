@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""Muse fusion pipelines for Torch inductor."""
 
 import os
 from mfusion import ir
@@ -56,7 +57,7 @@ def fuse_and_optimize(torch_dialect_str: str) -> str:
     _print_verbose("Original MLIR Module", module)
 
     _run_pipeline(module,
-        pipeline="builtin.module(convert-torch-to-muse,canonicalize)",
+        pipeline="builtin.module(convert-torch-to-muse,convert-torch-symbol-to-muse,canonicalize)",
         stage="Convert Torch to Muse Dialect Module")
 
     _run_pipeline(module,
