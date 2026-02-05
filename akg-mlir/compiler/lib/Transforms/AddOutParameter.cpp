@@ -393,6 +393,28 @@ static LogicalResult handleReshapeReturn(Value oldResVal, Value outArg, SmallVec
   return rewriteTempReshapeSourceToOutView(reshapeOp, outArg);
 }
 
+static bool isReshapeSpecialCase(memref::ReshapeOp reshapeOp, MemRefType srcTy, MemRefType resTy) {
+  if (srcTy && resTy && srcTy.hasStaticShape() && resTy.hasStaticShape()) {
+    ArrayRef<int64_t> sShape = srcTy.getShape();
+    ArrayRef<int64_t> rShape = resTy.getShape();
+
+    auto getNumElems = [](ArrayRef<int64_t> shp) -> int64_t {
+      if (shp.empty()) return 1;
+      int64_t prod = 1;
+      for (int64_t d : shp) {
+        if (ShapedType::isDynamic(d)) return ShapedType::kDynamic;
+        prod *= d;
+      }
+      return prod;
+    };
+
+    int64_t sElems = getNumElems(sShape);
+    int64_t rElems = getNumElems(rShape);
+    return sElems == 1 && rElems == 1;
+  }
+  return false;
+}
+
 static LogicalResult processReturnValue(unsigned resultIdx, Value oldResVal, Value maybeOutArg, func::ReturnOp ret,
                                         SmallVector<Value> &origReturnValues, SmallVector<Value> &newReturnValues) {
   if (mlir::isa<BlockArgument>(oldResVal)) {
@@ -420,6 +442,33 @@ static LogicalResult processReturnValue(unsigned resultIdx, Value oldResVal, Val
     return success();
   }
 
+  if (isa<memref::ReshapeOp>(oldResVal.getDefiningOp())) {
+    // special case to memref.expandshape or memref.collapseshape
+    auto reshapeOp = cast<memref::ReshapeOp>(oldResVal.getDefiningOp());
+    auto srcTy = mlir::dyn_cast<MemRefType>(reshapeOp.getSource().getType());
+    auto resTy = mlir::dyn_cast<MemRefType>(reshapeOp.getResult().getType());
+    OpBuilder b(reshapeOp);
+    if (isReshapeSpecialCase(reshapeOp, srcTy, resTy) && srcTy.getRank() == 0 && resTy.getRank() == 1) {
+      // 0D -> 1D
+      SmallVector<ReassociationIndices, 1> reassoc;
+      auto expand = b.create<memref::ExpandShapeOp>(reshapeOp.getLoc(), resTy, reshapeOp.getSource(), reassoc);
+      reshapeOp.replaceAllUsesWith(expand.getResult());
+      reshapeOp.erase();
+      oldResVal = expand.getResult();
+    } else if (isReshapeSpecialCase(reshapeOp, srcTy, resTy) && srcTy.getRank() == 1 && resTy.getRank() == 0) {
+      // 1D -> 0D
+      SmallVector<ReassociationIndices, 1> reassoc;
+      auto collapse = b.create<memref::CollapseShapeOp>(reshapeOp.getLoc(), resTy, reshapeOp.getSource(), reassoc);
+      reshapeOp.replaceAllUsesWith(collapse.getResult());
+      reshapeOp.erase();
+      oldResVal = collapse.getResult();
+    } else {
+      if (failed(handleReshapeReturn(oldResVal, outArg, origReturnValues, newReturnValues))) return failure();
+      newReturnValues[resultIdx] = outArg;
+      return success();
+    }
+  }
+
   if (isa<memref::CollapseShapeOp>(oldResVal.getDefiningOp())) {
     if (failed(handleCollapseReturn(oldResVal, outArg, origReturnValues, newReturnValues))) return failure();
     newReturnValues[resultIdx] = outArg;
@@ -428,12 +477,6 @@ static LogicalResult processReturnValue(unsigned resultIdx, Value oldResVal, Val
 
   if (isa<memref::ExpandShapeOp>(oldResVal.getDefiningOp())) {
     if (failed(handleExpandReturn(oldResVal, outArg, origReturnValues, newReturnValues))) return failure();
-    newReturnValues[resultIdx] = outArg;
-    return success();
-  }
-
-  if (isa<memref::ReshapeOp>(oldResVal.getDefiningOp())) {
-    if (failed(handleReshapeReturn(oldResVal, outArg, origReturnValues, newReturnValues))) return failure();
     newReturnValues[resultIdx] = outArg;
     return success();
   }
