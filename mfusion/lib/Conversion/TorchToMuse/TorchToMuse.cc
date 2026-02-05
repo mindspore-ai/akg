@@ -173,6 +173,8 @@ struct ConvertTorchToMusePass : public mlir::PassWrapper<ConvertTorchToMusePass,
     target.addLegalDialect<mlir::arith::ArithDialect>();
     target.addLegalDialect<mlir::muse::MuseDialect>();
     target.addLegalOp<mlir::UnrealizedConversionCastOp>();
+    target.addLegalOp<TorchD::BindSymbolicShapeOp>();
+    target.addLegalOp<TorchD::SymbolicIntOp>();
     if (mlir::failed(mlir::applyPartialConversion(module, target, patterns_))) {
       signalPassFailure();
     }

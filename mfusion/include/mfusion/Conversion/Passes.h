@@ -35,11 +35,11 @@ class Pass;
 // Pass creators
 //===----------------------------------------------------------------------===//
 
-/// Create a pass to convert Arith constant operations to Muse constant operations.
-std::unique_ptr<Pass> createConvertArithToMusePass();
-
 /// Create a pass to convert Torch operations to Muse dialect operations.
 std::unique_ptr<Pass> createConvertTorchToMusePass();
+
+/// Attach symbolic shape attributes after Torch-to-Muse conversion.
+std::unique_ptr<Pass> createConvertTorchSymbolToMusePass();
 
 /// Create a pass to convert Muse operations to Torch dialect operations.
 std::unique_ptr<Pass> createConvertMuseToTorchPass();
