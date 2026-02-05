@@ -142,6 +142,28 @@ def custom_op_triton_torch(x):
     )
 
     return output
+
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.contiguous()
+        n_elements = x.numel()
+        output = torch.empty_like(x, device=x.device)
+
+        BLOCK_SIZE = 1024
+        grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+
+        # 启动kernel
+        relu_kernel[grid](
+            x, output, n_elements,
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
+
+        return output
+
 '''
 
 
