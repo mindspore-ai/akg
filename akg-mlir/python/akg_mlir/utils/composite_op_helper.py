@@ -487,7 +487,7 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
     for input_desc in desc["input_desc"] if desc.get("input_desc") is not None else []:
         tensor_name = input_desc[0]["tensor_name"]
         infos["input_order"][tensor_name] = idx
-        commands.append(f"{tensor_name} = np.array(input_dict.get({tensor_name}))")
+        commands.append(f"{tensor_name} = np.array(input_dict.get('{tensor_name}'))")
 
         if not infos["gen_data"] and idx < len(input_for_mod):
             infos["input_dict"][tensor_name] = input_for_mod[idx]
@@ -533,7 +533,7 @@ def _gen_output_data(desc, infos, input_for_mod, output_indexes, commands):
         if tensor_name not in fake_output_tensors:
             real_idx = idx - out_nums
             output_indexes.append(real_idx)
-            commands.append("fexpect.append({tensor_name})")
+            commands.append(f"expect.append({tensor_name})")
         idx += 1
 
 
