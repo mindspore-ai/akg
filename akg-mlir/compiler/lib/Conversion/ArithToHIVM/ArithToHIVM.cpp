@@ -54,8 +54,6 @@ namespace mlir {
 namespace mlir {
 namespace {
 
-static bool isVectorOrNPUVectorType(Type type);
-
 static void propagateBufferSizeMark(ConversionPatternRewriter &rewriter, Location loc, Value src, Value dest) {
   for (Operation *user : src.getUsers()) {
     if (auto markOp = dyn_cast<annotation::MarkOp>(user)) {
@@ -382,67 +380,9 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     llvm_unreachable("unsupported arith op to hivm");
   }
 
-  static bool canRewriteTruncFScalarOr1D(CastOp op) {
-    if (!isa<arith::TruncFOp>(op)) {
-      return false;
-    }
-    if (std::any_of(op->getResultTypes().begin(), op->getResultTypes().end(), isVectorOrNPUVectorType)) {
-      return false;
-    }
-    return op.getOperand().getType().isIntOrFloat();
-  }
-
-  static LogicalResult rewriteTruncFScalarOr1D(CastOp op,
-                                               OpAdaptor adaptor,
-                                               ConversionPatternRewriter &rewriter) {
-    if (!isa<MemRefType>(adaptor.getIn().getType())) {
-      return success();
-    }
-    Location loc = op.getLoc();
-    Value srcMemRef = adaptor.getOperands()[0];
-    auto srcMemRefType = dyn_cast<MemRefType>(srcMemRef.getType());
-    hivm::RoundMode rounding = selectRoundMode(op);
-    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(rounding);
-
-    if (srcMemRefType && srcMemRefType.getRank() == 1) {
-      auto memRefType = MemRefType::get(srcMemRefType.getShape(), op.getResult().getType());
-      auto resBufOr = allocMemRef(rewriter, loc, memRefType, srcMemRef);
-      if (failed(resBufOr)) {
-        return failure();
-      }
-      Value resBuf = *resBufOr;
-      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr);
-      rewriter.replaceOp(op, resBuf);
-      return success();
-    }
-
-    if (srcMemRefType && srcMemRefType.getRank() != 0) {
-      return failure();
-    }
-
-    if (!srcMemRefType) {
-      auto srcScalarMemRefType = MemRefType::get({}, op.getOperand().getType());
-      srcMemRef = rewriter.create<memref::AllocOp>(loc, srcScalarMemRefType);
-      rewriter.create<memref::StoreOp>(loc, op.getOperand(), srcMemRef, ValueRange{});
-    }
-
-    auto memRefType = MemRefType::get({}, op.getResult().getType());
-    auto resBufOr = allocMemRef(rewriter, loc, memRefType, srcMemRef);
-    if (failed(resBufOr)) {
-      return failure();
-    }
-    Value resBuf = *resBufOr;
-    propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr);
-    Value resScalar = rewriter.create<memref::LoadOp>(loc, resBuf, ValueRange{});
-    rewriter.replaceOp(op, resScalar);
-    return success();
-  }
-
-  static LogicalResult rewriteGeneralCast(CastOp op,
-                                          OpAdaptor adaptor,
-                                          ConversionPatternRewriter &rewriter) {
+  LogicalResult matchAndRewrite(CastOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
     Location loc = op.getLoc();
     Type resType = op.getResult().getType();
 
@@ -454,9 +394,6 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     } else if (auto npuVectorType = dyn_cast<npuvector::NPUVectorType>(resType)) {
       shape = npuVectorType.getShape();
       elemType = npuVectorType.getElementType();
-    } else if (resType.isIntOrFloat()) {
-      shape = {};
-      elemType = resType;
     } else {
       return failure();
     }
@@ -498,15 +435,6 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
 
     rewriter.replaceOp(op, resBuf);
     return success();
-  }
-
-  LogicalResult matchAndRewrite(CastOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const final {
-    if (canRewriteTruncFScalarOr1D(op)) {
-      return rewriteTruncFScalarOr1D(op, adaptor, rewriter);
-    }
-    return rewriteGeneralCast(op, adaptor, rewriter);
   }
 };
 
@@ -1959,7 +1887,19 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
         loc, TypeRange{}, sourceMemRef, resultBuf, Value(),
         reduceOpAttr, rewriter.getDenseI64ArrayAttr(reduceDims), Value());
 
-    rewriter.replaceOp(op, resultBuf);
+    Type resultType = op.getResult().getType();
+    if (isa<MemRefType>(resultType)) {
+      rewriter.replaceOp(op, resultBuf);
+      return success();
+    }
+
+    SmallVector<Value> indices;
+    indices.reserve(rank);
+    for (int64_t i = 0; i < rank; ++i) {
+      indices.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
+    }
+    Value scalar = rewriter.create<memref::LoadOp>(loc, resultBuf, indices);
+    rewriter.replaceOp(op, scalar);
     return success();
   }
 };
@@ -2055,7 +1995,10 @@ static LogicalResult rewriteRank0MemRefToVectorTransferRead(npuvector::TransferR
 
   Value scalar = rewriter.create<memref::LoadOp>(loc, source, ValueRange{});
 
-  SmallVector<Value> allocOperands(dynamicSizes.begin(), dynamicSizes.end());
+  SmallVector<Value> allocOperands;
+  if (targetMemRefType.getNumDynamicDims() > 0) {
+    allocOperands.assign(dynamicSizes.begin(), dynamicSizes.end());
+  }
   Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType, allocOperands);
 
   if (failed(setTransferReadBufferSizeMarkIfNeeded(op, tempBuf, elemType, npuVecType, rewriter))) {
@@ -2306,8 +2249,7 @@ void hivm::populateArithToHIVMConversionPatterns(
 
   patterns.add<
       VectorTransferReadToHIVM,
-      VectorTransferWriteToHIVM,
-      MemRefStoreToHIVM>(patterns.getContext());
+      VectorTransferWriteToHIVM>(patterns.getContext());
 
   patterns.add<
       UnaryArithToHIVMCast<arith::ExtFOp>,
@@ -2387,9 +2329,6 @@ static bool isVectorOrNPUVectorType(Type type) {
 }
 
 static bool isLegalArithOp(Operation *op) {
-  if (isa<arith::TruncFOp>(op)) {
-    return false;
-  }
   return !std::any_of(op->getResultTypes().begin(), op->getResultTypes().end(), isVectorOrNPUVectorType);
 }
 
@@ -2417,17 +2356,6 @@ static bool isLegalSCFYieldOp(scf::YieldOp op) {
     }
   }
   return true;
-}
-
-static bool isLegalMemRefStoreOp(memref::StoreOp op) {
-  if (auto defOp = op.getValue().getDefiningOp()) {
-    if (isa<vector::ReductionOp, vector::TransferReadOp, vector::BroadcastOp,
-            npuvector::ReductionOp, npuvector::TransferReadOp, npuvector::BroadcastOp,
-            arith::MulSIExtendedOp, arith::MulUIExtendedOp, arith::TruncFOp>(defOp)) {
-      return false;
-    }
-  }
-  return !isa<MemRefType>(op.getValue().getType());
 }
 
 struct ArithToHIVMConversionPass
@@ -2462,7 +2390,6 @@ void ArithToHIVMConversionPass::runOnOperation() {
                           npuvector::FPToUIOp, npuvector::BitcastOp,
                           npuvector::CmpIOp, npuvector::CmpFOp,
                           npuvector::SelectOp>();
-  target.addDynamicallyLegalOp<memref::StoreOp>(isLegalMemRefStoreOp);
 
   RewritePatternSet patterns(&getContext());
   hivm::populateArithToHIVMConversionPatterns(patterns);
