@@ -39,7 +39,7 @@ from akg_agents.core.tools.basic_tools import (
     read_file,
     create_basic_tools,
 )
-from ai_kernel_generator.core.tools.domain_tools import (
+from akg_agents.core.tools.domain_tools import (
     create_domain_tools,
     get_default_domain_tools,
 )
