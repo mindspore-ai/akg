@@ -381,7 +381,20 @@ class AgentBase(ABC):
 
     def _safe_send(self, session_id: str, message) -> None:
         """安全发送消息，失败不影响主流程"""
+        session_id = (session_id or "").strip()
         if not session_id:
+            # 无 session_id 时回退到 stdout（便于脚本直接查看 stream）
+            try:
+                chunk = getattr(message, "chunk", None)
+                if isinstance(chunk, str) and chunk:
+                    print(chunk, end="", flush=True)
+                    return
+                text = getattr(message, "text", None)
+                if isinstance(text, str) and text:
+                    print(text, end="", flush=True)
+                    return
+            except Exception:
+                pass
             return
         try:
             send_message(session_id, message)
