@@ -215,7 +215,9 @@ def patch_driver_benchmarker():
                         kernel_call,
                         warmup=5,
                         active=30,
-                        suppress_warnings=True
+                        suppress_warnings=True,
+                        clear_l2_cache=True,
+                        dsl="triton_ascend"
                     )
                     return [time_us] * 3
 
