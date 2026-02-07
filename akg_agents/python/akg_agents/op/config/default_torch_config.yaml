@@ -2,7 +2,6 @@
 log_dir: "~/akg_agents_logs"
 
 # Workflow configuration
-workflow_config_path: "op/config/coder_only_workflow.yaml"
 default_workflow: "coder_only_workflow"
 max_step: 10
 

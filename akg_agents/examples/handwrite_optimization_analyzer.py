@@ -25,7 +25,7 @@ import os
 import sys
 import asyncio
 from akg_agents.op.config.config_validator import load_config
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.core.worker.manager import register_local_worker
 from akg_agents.core.verifier.kernel_verifier import KernelVerifier
 
@@ -237,7 +237,7 @@ async def run_analysis(
     print("🚀 步骤1: 不带优化建议的代码生成")
     print("-" * 80)
     
-    task_no_hint = Task(
+    task_no_hint = LangGraphTask(
         op_name=op_name,
         task_desc=task_desc,
         task_id="no_hint_001",
@@ -275,7 +275,7 @@ async def run_analysis(
         'improvement_doc': improvement_doc
     }]
     
-    task_with_hint = Task(
+    task_with_hint = LangGraphTask(
         op_name=op_name,
         task_desc=task_desc,
         task_id="with_hint_001",

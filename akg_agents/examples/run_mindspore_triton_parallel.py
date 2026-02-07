@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import asyncio
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core.worker.manager import register_local_worker
 from akg_agents.op.config.config_validator import load_config
@@ -96,7 +96,7 @@ async def run_mindspore_triton_parallel():
     check_env_for_task("mindspore", "ascend", "triton_ascend", config)
 
     for i, (op_name, task_desc) in enumerate(op_name_and_task_desc):
-        task = Task(
+        task = LangGraphTask(
             op_name=op_name,
             task_desc=task_desc,
             task_id=str(i),

@@ -15,7 +15,7 @@
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core.worker.manager import register_local_worker
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.utils.environment_check import check_env_for_task
 import asyncio
 import os
@@ -104,7 +104,7 @@ async def run_single_task(op_name: str, task_desc: str):
     # 新写法：注册 LocalWorker
     await register_local_worker([device_id], backend=backend, arch=arch)
 
-    task = Task(
+    task = LangGraphTask(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",

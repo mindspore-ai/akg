@@ -29,20 +29,10 @@ from akg_agents.utils.task_label import resolve_task_label
 from akg_agents.cli.runtime.message_sender import send_message
 from akg_agents.cli.messages import PanelDataMessage
 
-# 自动选择 Task 实现：优先使用 LangGraphTask，否则使用原 Task
-try:
-    from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
-    _USE_LANGGRAPH = True
-except ImportError:
-    from akg_agents.core.task import Task as AIKGTask
-    _USE_LANGGRAPH = False
+from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
 
 import logging
 _logger = logging.getLogger(__name__)
-if _USE_LANGGRAPH:
-    _logger.info("Using LangGraphTask for evolve")
-else:
-    _logger.info("LangGraph not available, using original Task for evolve")
 from akg_agents.core.sketch import Sketch
 from akg_agents.op.utils.handwrite_loader import HandwriteLoader, HandwriteSampler
 

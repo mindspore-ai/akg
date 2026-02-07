@@ -225,7 +225,7 @@ async def run_direct_with_workers(num_concurrent: int = 4, task_desc_dir: str = 
     from akg_agents.op.config.config_validator import load_config
     from akg_agents.core.worker.manager import register_remote_worker, get_worker_manager
     from akg_agents.core.verifier.kernel_verifier import KernelVerifier
-    from akg_agents.core.task import Task
+    from akg_agents.op.langgraph_op.task import LangGraphTask
     from akg_agents.core.async_pool.task_pool import TaskPool
     from tests.utils import process_task_results, generate_beautiful_test_report
     
@@ -340,7 +340,7 @@ async def run_direct_with_workers(num_concurrent: int = 4, task_desc_dir: str = 
         
         # 创建多个相同的 Task 并发运行，更快找到正确解
         for i in range(num_concurrent):
-            task = Task(
+            task = LangGraphTask(
                 op_name=op_name,
                 task_desc=task_desc,
                 task_id=f"convert_{task_idx:03d}_{i:03d}",

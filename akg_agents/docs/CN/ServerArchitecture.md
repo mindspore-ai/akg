@@ -252,7 +252,7 @@ source env.sh
 **方式 A: 使用便捷函数（推荐）**
 ```python
 from akg_agents.core.worker.manager import register_remote_worker
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 
 # 方式 1: 从环境变量读取 worker_url，自动查询 capacity
 export AKG_AGENTS_WORKER_URL=http://localhost:9001  # 通过 SSH 隧道
@@ -288,7 +288,7 @@ await worker_manager.register(
 )
 
 # 创建 Task（不传 device_pool）
-task = Task(
+task = LangGraphTask(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -335,14 +335,14 @@ python examples/run_torch_evolve_triton.py --worker remote --worker-url http://l
 **方式 A: 使用便捷函数（推荐）**
 ```python
 from akg_agents.core.worker.manager import register_local_worker
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 
 # 注册 LocalWorker
 await register_local_worker([0], backend="ascend", arch="ascend910b4")  # 单卡
 # 或 await register_local_worker([0, 1, 2, 3], backend="ascend", arch="ascend910b4")  # 多卡
 
 # 创建 Task（不传 device_pool，从 WorkerManager 获取）
-task = Task(
+task = LangGraphTask(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -365,14 +365,14 @@ await task.run()
 
 ```python
 from akg_agents.core.async_pool.device_pool import DevicePool
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 
 # 创建 device_pool
 device_pool = DevicePool([0])
 
 # 创建 Task（传 device_pool，自动注册为 LocalWorker）
 # ⚠️ 此方式已弃用，会触发 DeprecationWarning
-task = Task(
+task = LangGraphTask(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -395,7 +395,7 @@ from akg_agents.core.worker.manager import register_local_worker
 await register_local_worker([0], backend="ascend", arch="ascend910b4")
 
 # 2. 创建 Task 时不传 device_pool
-task = Task(
+task = LangGraphTask(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -451,14 +451,14 @@ status = client.wait_for_completion(job_id)
 ```python
 # 注册 RemoteWorker（使用便捷函数）
 from akg_agents.core.worker.manager import register_remote_worker
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 
 # 从环境变量读取 worker_url，自动查询 capacity
 export AKG_AGENTS_WORKER_URL=http://localhost:9001
 await register_remote_worker(backend="ascend", arch="ascend910b4")
 
-# 使用 Task（不传 device_pool）
-task = Task(op_name="relu", ..., workflow="coder_only_workflow")
+# 使用 LangGraphTask（不传 device_pool）
+task = LangGraphTask(op_name="relu", ..., workflow="coder_only_workflow")
 await task.run()
 ```
 

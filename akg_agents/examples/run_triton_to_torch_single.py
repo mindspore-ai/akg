@@ -23,7 +23,7 @@ Triton → PyTorch 转换示例
 
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.core.async_pool.task_pool import TaskPool
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.core.worker.manager import register_local_worker
 from akg_agents.utils.environment_check import check_env_for_task
 import asyncio
@@ -98,7 +98,7 @@ async def run_triton_to_torch_single():
     check_env_for_task("torch", "cuda", "torch", config)
 
     # 创建任务
-    task = Task(
+    task = LangGraphTask(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",

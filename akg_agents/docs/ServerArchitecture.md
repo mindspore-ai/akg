@@ -252,7 +252,7 @@ source env.sh
 **Method A: Use Convenience Function (Recommended)**
 ```python
 from akg_agents.core.worker.manager import register_remote_worker
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 
 # Method 1: Read worker_url from environment variable, auto-query capacity
 export AKG_AGENTS_WORKER_URL=http://localhost:9001  # Via SSH tunnel
@@ -288,7 +288,7 @@ await worker_manager.register(
 )
 
 # Create Task (without device_pool)
-task = Task(
+task = LangGraphTask(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -335,14 +335,14 @@ Local Code Generation → LocalWorker → Local NPU/GPU
 **Method A: Use Convenience Function (Recommended)**
 ```python
 from akg_agents.core.worker.manager import register_local_worker
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 
 # Register LocalWorker
 await register_local_worker([0], backend="ascend", arch="ascend910b4")  # Single device
 # or await register_local_worker([0, 1, 2, 3], backend="ascend", arch="ascend910b4")  # Multi-device
 
 # Create Task (without device_pool, get from WorkerManager)
-task = Task(
+task = LangGraphTask(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -365,14 +365,14 @@ await task.run()
 
 ```python
 from akg_agents.core.async_pool.device_pool import DevicePool
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 
 # Create device_pool
 device_pool = DevicePool([0])
 
 # Create Task (with device_pool, auto-register as LocalWorker)
 # ⚠️ This method is deprecated and will trigger DeprecationWarning
-task = Task(
+task = LangGraphTask(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -395,7 +395,7 @@ from akg_agents.core.worker.manager import register_local_worker
 await register_local_worker([0], backend="ascend", arch="ascend910b4")
 
 # 2. Create Task without device_pool
-task = Task(
+task = LangGraphTask(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -451,14 +451,14 @@ status = client.wait_for_completion(job_id)
 ```python
 # Register RemoteWorker (using convenience function)
 from akg_agents.core.worker.manager import register_remote_worker
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 
 # Read worker_url from environment variable, auto-query capacity
 export AKG_AGENTS_WORKER_URL=http://localhost:9001
 await register_remote_worker(backend="ascend", arch="ascend910b4")
 
-# Use Task (without device_pool)
-task = Task(op_name="relu", ..., workflow="coder_only_workflow")
+# Use LangGraphTask (without device_pool)
+task = LangGraphTask(op_name="relu", ..., workflow="coder_only_workflow")
 await task.run()
 ```
 

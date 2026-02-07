@@ -2,14 +2,7 @@ import os
 import pytest
 from akg_agents.core.async_pool.task_pool import TaskPool
 
-# 自动选择 Task 实现：优先使用 LangGraphTask，否则使用原 Task
-try:
-    import langgraph
-    from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
-    _USE_LANGGRAPH = True
-except ImportError:
-    from akg_agents.core.task import Task as AIKGTask
-    _USE_LANGGRAPH = False
+from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
 from akg_agents.core.worker.manager import register_local_worker, register_remote_worker
 from ..utils import (
     get_kernelbench_op_name, get_kernelbench_task_desc, add_op_prefix,

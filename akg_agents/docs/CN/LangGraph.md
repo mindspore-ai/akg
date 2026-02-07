@@ -13,7 +13,7 @@ LangGraph Task 是新的智能任务调度器，用于替代原有的 `Conductor
 
 ### 基本用法
 ```python
-from akg_agents.core.langgraph_task import LangGraphTask
+from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.core.worker.manager import register_local_worker
 
 # 注册 Worker
@@ -126,7 +126,7 @@ coder → verifier → [成功] → finish
 from akg_agents.core.task import Task
 
 # 修改后
-from akg_agents.core.langgraph_task import LangGraphTask
+from akg_agents.op.langgraph_op.task import LangGraphTask
 ```
 
 ### 步骤 2：替换实例化
@@ -154,7 +154,7 @@ task = LangGraphTask(..., device_pool=None)
 ### 新增文件
 | 文件 | 描述 |
 |------|------|
-| `core/langgraph_task.py` | 新的 Task 类，替代 `task.py` |
+| `op/langgraph_op/task.py` | LangGraphTask 类（主要的 Task 实现） |
 | `utils/langgraph/state.py` | 状态定义（`KernelGenState`） |
 | `utils/langgraph/nodes.py` | 节点工厂（将 Agent 包装为节点，包含 Conductor 节点） |
 | `utils/langgraph/routers.py` | 路由函数（条件边逻辑） |
@@ -175,14 +175,13 @@ task = LangGraphTask(..., device_pool=None)
 | `core/agent/coder.py` | 支持 `parser_config_path` |
 | `config/*.yaml` | 移除 `workflow_config_path`，添加 `default_workflow` 和 `max_step` |
 
-### 保留文件（向后兼容）
+### 已删除文件（旧 Task 系统）
 | 文件 | 状态 | 说明 |
 |------|------|------|
-| `core/task.py` | 保留 | 原 Task 类，部分测试仍在使用 |
-| `core/agent/conductor.py` | 保留 | 原 Conductor 类，旧 Task 使用 |
-| `config/*_workflow.yaml` | 保留 | 旧 Task 使用，LangGraphTask 忽略 |
-| `utils/workflow_manager.py` | 保留 | 旧 Task 使用 |
-| `utils/workflow_controller.py` | 保留 | 仅旧 Conductor 使用 |
+| `core/task.py` | 已删除 | 原 Task 类，已由 LangGraphTask 替代 |
+| `core/agent/conductor.py` | 已删除 | 原 Conductor 类，已由 conductor 节点替代 |
+| `config/*_workflow.yaml` | 已删除 | 旧 YAML 工作流，已由 Python 工作流类替代 |
+| `utils/workflow_manager.py` | 已删除 | 旧 YAML 工作流加载器 |
 
 ## Conductor 分析
 
