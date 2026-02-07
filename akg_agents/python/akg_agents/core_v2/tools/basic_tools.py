@@ -101,7 +101,7 @@ def write_file(
         if file_path:
             path = Path(file_path).resolve()
         else:
-            base_dir = Path("./aikg_outputs")
+            base_dir = Path("~/.akg_tmp")
             if op_name:
                 base_dir = base_dir / op_name
             else:
