@@ -9,14 +9,7 @@ from ..utils import (
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.utils.environment_check import check_env_for_task
 
-# 自动选择 Task 实现：优先使用 LangGraphTask，否则使用原 Task
-try:
-    import langgraph
-    from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
-    _USE_LANGGRAPH = True
-except ImportError:
-    from akg_agents.core.task import Task as AIKGTask
-    _USE_LANGGRAPH = False
+from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
 
 
 device_id = get_device_id()

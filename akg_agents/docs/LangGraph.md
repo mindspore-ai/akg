@@ -13,7 +13,7 @@ LangGraph Task is the new intelligent task scheduler that replaces the original 
 
 ### Basic Usage
 ```python
-from akg_agents.core.langgraph_task import LangGraphTask
+from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.core.worker.manager import register_local_worker
 
 # Register worker
@@ -126,7 +126,7 @@ coder → verifier → [success] → finish
 from akg_agents.core.task import Task
 
 # After
-from akg_agents.core.langgraph_task import LangGraphTask
+from akg_agents.op.langgraph_op.task import LangGraphTask
 ```
 
 ### Step 2: Replace Instantiation
@@ -154,7 +154,7 @@ task = LangGraphTask(..., device_pool=None)
 ### New Files
 | File | Description |
 |------|-------------|
-| `core/langgraph_task.py` | New Task class replacing `task.py` |
+| `op/langgraph_op/task.py` | LangGraphTask class (the primary Task implementation) |
 | `utils/langgraph/state.py` | State definition (`KernelGenState`) |
 | `utils/langgraph/nodes.py` | Node factory (wraps Agents as nodes, includes Conductor node) |
 | `utils/langgraph/routers.py` | Router functions (conditional edge logic) |
@@ -175,14 +175,13 @@ task = LangGraphTask(..., device_pool=None)
 | `core/agent/coder.py` | Support `parser_config_path` |
 | `config/*.yaml` | Remove `workflow_config_path`, add `default_workflow` and `max_step` |
 
-### Preserved Files (Backward Compatibility)
+### Removed Files (Old Task System)
 | File | Status | Note |
 |------|--------|------|
-| `core/task.py` | Preserved | Original Task class, some tests still use it |
-| `core/agent/conductor.py` | Preserved | Original Conductor class, used by old Task |
-| `config/*_workflow.yaml` | Preserved | Used by old Task, LangGraphTask ignores them |
-| `utils/workflow_manager.py` | Preserved | Used by old Task |
-| `utils/workflow_controller.py` | Preserved | Used by old Conductor only |
+| `core/task.py` | Removed | Original Task class, replaced by LangGraphTask |
+| `core/agent/conductor.py` | Removed | Original Conductor class, replaced by conductor node |
+| `config/*_workflow.yaml` | Removed | Old YAML workflows, replaced by Python workflow classes |
+| `utils/workflow_manager.py` | Removed | Old workflow YAML loader |
 
 ## Conductor Analysis
 

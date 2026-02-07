@@ -2,7 +2,7 @@ import asyncio
 import uuid
 import logging
 from typing import Dict, Any, Optional
-from akg_agents.core.task import Task
+from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.op.evolve import evolve
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.op.config.config_validator import load_config
@@ -294,8 +294,8 @@ class ServerJobManager:
             # 执行运行时检查
             await self._check_task_desc_runtime_wrapper(job_id, data, config)
 
-            # 创建 Core Task
-            task = Task(
+            # 创建 LangGraph Task
+            task = LangGraphTask(
                 op_name=data.get("op_name"),
                 task_desc=data.get("task_desc"),
                 task_id=job_id, # 复用 job_id 作为 task_id
