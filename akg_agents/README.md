@@ -13,10 +13,14 @@
 <details>
 <summary><b>📋 Table of Contents</b></summary>
 
-- [AKG Agents](#ai-driven-kernel-generator-aikg)
+- [AKG Agents (AKG Agents)](#akg-agents-akg-agents)
   - [📘 1. Project Overview](#-1-project-overview)
   - [🗓️ 2. Changelog](#️-2-changelog)
-  - [🛠️ 3. AKG_CLI Quick Start](#️-3-akg_cli-quick-start)
+  - [🛠️ 3. AKG\_CLI Quick Start](#️-3-akg_cli-quick-start)
+    - [Basic Installation](#basic-installation)
+    - [API Configuration Example](#api-configuration-example)
+    - [Launch AKG\_CLI](#launch-akg_cli)
+    - [Usage](#usage)
   - [⚙️ 4. Configuration](#️-4-configuration)
     - [Configuration Quick Guide](#configuration-quick-guide)
       - [Step 1: Basic Environment Configuration](#step-1-basic-environment-configuration)
@@ -24,7 +28,7 @@
         - [Third-party Dependencies](#third-party-dependencies)
       - [Step 2: Backend Dependencies Configuration](#step-2-backend-dependencies-configuration)
       - [Step 3: Optional Tools Configuration](#step-3-optional-tools-configuration)
-        - [Similarity Detection Dependencies](#similarity-detection-dependencies)
+        - [Similarity Detection Dependencies (RAG-related)](#similarity-detection-dependencies-rag-related)
   - [▶️ 5. Tutorial Examples](#️-5-tutorial-examples)
   - [📐 6. Design Documentation](#-6-design-documentation)
     - [Core Framework](#core-framework)

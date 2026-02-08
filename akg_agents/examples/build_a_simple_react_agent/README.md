@@ -21,7 +21,7 @@ build_a_simple_react_agent/
 
 ```bash
 # 1. 进入项目目录并设置环境
-cd akg/aikg && source env.sh
+cd akg/akg_agents && source env.sh
 
 # 2. 运行示例
 python examples/build_a_simple_react_agent/run.py

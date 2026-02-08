@@ -49,7 +49,7 @@ def get_kernelbench_task_desc(op_name, framework="torch", level="level1"):
 
     if framework == "torch":
         # Path for torch benchmarks from the KernelBench submodule.
-        # The submodule is at `aikg/thirdparty/KernelBench`, and benchmark files are inside `KernelBench/{level}/` subdirectory.
+        # The submodule is at `akg_agents/thirdparty/KernelBench`, and benchmark files are inside `KernelBench/{level}/` subdirectory.
         base_dir = os.path.join(
             akg_agents_path, 'thirdparty', 'KernelBench', 'KernelBench', level)
         # Files are directly in level directory with naming pattern: {number}_{name}.py
