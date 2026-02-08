@@ -3,7 +3,7 @@
 SimpleReActAgent 运行示例
 
 使用方法:
-    cd akg/aikg && source env.sh
+    cd akg/akg_agents && source env.sh
     python examples/build_a_simple_react_agent/run.py
 
 功能:
