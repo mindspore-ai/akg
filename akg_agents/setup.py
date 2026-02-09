@@ -1,4 +1,4 @@
-# Copyright 2025 Huawei Technologies Co., Ltd
+# Copyright 2025-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,40 +15,26 @@
 from setuptools import setup, find_packages
 import os
 
+# setup.py 所在目录，用于定位同级文件
+_HERE = os.path.abspath(os.path.dirname(__file__))
+
+
 # 读取版本号
-
-
 def _read_version():
     try:
-        with open("version.txt", "r", encoding="utf-8") as f:
+        with open(os.path.join(_HERE, "version.txt"), "r", encoding="utf-8") as f:
             return f.read().strip()
     except FileNotFoundError:
         return "0.2.0"
 
 
 # 读取 README.md 作为长描述
-with open("README.md", "r", encoding="utf-8") as fh:
+with open(os.path.join(_HERE, "README.md"), "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 # 读取 requirements.txt
-with open("requirements.txt", "r", encoding="utf-8") as fh:
+with open(os.path.join(_HERE, "requirements.txt"), "r", encoding="utf-8") as fh:
     requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
-
-# 确保包含所有数据文件
-
-
-def package_files(directory):
-    paths = []
-    for (path, directories, filenames) in os.walk(directory):
-        for filename in filenames:
-            if filename.endswith(('.j2', '.md', '.txt', '.json', '.yaml')):
-                paths.append(os.path.join('..', path, filename))
-    return paths
-
-
-# 获取所有需要包含的数据文件
-extra_files = []
-extra_files.extend(package_files('python/akg_agents'))
 
 setup(
     name="akg_agents",
@@ -59,10 +45,10 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://www.mindspore.cn/",
-    download_url="https://gitee.com/mindspore/akg_agents/tags",
+    download_url="https://gitcode.com/mindspore/akg/tags",
     project_urls={
-        'Sources': 'https://gitee.com/mindspore/akg_agents',
-        'Issue Tracker': 'https://gitee.com/mindspore/akg_agents/issues',
+        'Sources': 'https://gitcode.com/mindspore/akg/tree/br_akg_agents/akg_agents',
+        'Issue Tracker': 'https://gitcode.com/mindspore/akg/issues',
     },
     license="Apache 2.0",
     package_dir={"": "python"},
