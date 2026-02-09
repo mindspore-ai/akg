@@ -20,4 +20,5 @@ add_mlir_dialect_library(MLIRMuseTransforms
   MLIRSupport
   MLIRRewrite
   MLIRMuseDialect
+  MLIRMuseUtils
 )
