@@ -2097,12 +2097,41 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
     auto dataMemRefType = cast<MemRefType>(dataToWrite.getType());
     auto destMemRefType = cast<MemRefType>(dest.getType());
 
+    int64_t memRefRank = destMemRefType.getRank();
+    int64_t dataRank = dataMemRefType.getRank();
+
+    if (memRefRank == 0) {
+      if (!adaptor.getIndices().empty()) {
+        return rewriter.notifyMatchFailure(op, "rank-0 destination expects empty indices");
+      }
+      if (dataRank == 0) {
+        rewriter.create<hivm::StoreOp>(loc, TypeRange{}, dataToWrite, dest);
+        rewriter.eraseOp(op);
+        return success();
+      }
+      if (dataRank == 1) {
+        OpFoldResult offset = rewriter.getIndexAttr(0);
+        SmallVector<OpFoldResult> sizes = {rewriter.getIndexAttr(1)};
+        SmallVector<OpFoldResult> strides = {rewriter.getIndexAttr(1)};
+        auto dataType = MemRefType::get({1}, dataMemRefType.getElementType());
+        Value castedData = dataToWrite;
+        if (dataMemRefType != dataType) {
+          castedData = rewriter.create<memref::ReinterpretCastOp>(
+              loc, dataType, dataToWrite, offset, sizes, strides);
+        }
+        auto destType = MemRefType::get({1}, destMemRefType.getElementType());
+        Value castedDest = rewriter.create<memref::ReinterpretCastOp>(
+            loc, destType, dest, offset, sizes, strides);
+        rewriter.create<hivm::StoreOp>(loc, TypeRange{}, castedData, castedDest);
+        rewriter.eraseOp(op);
+        return success();
+      }
+      return rewriter.notifyMatchFailure(op, "unsupported rank-0 destination");
+    }
+
     SmallVector<OpFoldResult> offsets = getAsOpFoldResult(adaptor.getIndices());
     SmallVector<OpFoldResult> sizes;
     SmallVector<OpFoldResult> strides;
-
-    int64_t memRefRank = destMemRefType.getRank();
-    int64_t dataRank = dataMemRefType.getRank();
 
     // Handle leading dimensions for rank reduction.
     for (int64_t i = 0; i < memRefRank - dataRank; ++i) {
