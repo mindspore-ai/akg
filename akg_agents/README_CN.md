@@ -71,7 +71,7 @@ pip install -r akg_agents/requirements.txt
 # pip install -r akg_agents/rag_requirements.txt  # 如果需要 RAG 功能（可选）
 
 # 4. 安装 AIKG
-pip install -e ./akg_agents
+pip install -e ./akg_agents --no-build-isolation
 
 # 5. 设置环境变量
 cd ./akg_agents
