@@ -49,17 +49,17 @@ class TestAgent(AgentBase):
 
 async def test_simple_run_llm():
     """简单的 LLM 测试"""
-    # 打印配置信息
-    print_settings_info()
-    
-    # 创建测试 Agent
-    agent = TestAgent()
-
     # 自定义 prompt
     prompt = "你好，请用一句话介绍一下自己"
 
     # 指定 model level（从 settings.json 中选择）
     model_level = "standard"
+
+    # 打印指定级别的配置信息
+    print_settings_info(model_level)
+    
+    # 创建测试 Agent
+    agent = TestAgent()
 
     print(f"\n🚀 开始测试 run_llm")
     print(f"   Prompt: {prompt}")

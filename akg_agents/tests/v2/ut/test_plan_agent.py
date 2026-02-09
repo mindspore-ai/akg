@@ -246,10 +246,11 @@ async def run_interactive_test():
     print(f"\n可用预设: {', '.join(PRESETS.keys())}")
     print_separator()
     
-    # 检查 API Key
-    from akg_agents.utils.environment_check import _check_llm_api
-    if not _check_llm_api():
-        raise ValueError("LLM API Key 配置或连接有问题，请检查。")
+    # 检查模型配置
+    from akg_agents.core_v2.config import check_model_config
+    print("🔍 [诊断] 检查模型配置...")
+    if not check_model_config():
+        raise ValueError(f"模型配置不完整，请检查环境变量或配置文件。")
     
     agent = PlanAgent()
     

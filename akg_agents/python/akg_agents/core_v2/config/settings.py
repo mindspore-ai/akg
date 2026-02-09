@@ -29,7 +29,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,24 @@ def get_akg_env_var(var_name: str, default: Optional[str] = None) -> Optional[st
     
     return default
 
+
+def _detect_env_prefix(*var_names: str) -> str:
+    """
+    检测环境变量实际使用的前缀（AKG_AGENTS 优先于 AIKG）
+    
+    Args:
+        *var_names: 要检测的变量名（不含前缀），如 "BASE_URL", "API_KEY"
+    
+    Returns:
+        "AKG_AGENTS" 或 "AIKG"
+    """
+    for var_name in var_names:
+        if os.getenv(f"AKG_AGENTS_{var_name}") is not None:
+            return "AKG_AGENTS"
+    return "AIKG"
+
+
+# ========================= 数据类 =========================
 
 @dataclass
 class EmbeddingConfig:
@@ -167,6 +185,29 @@ class ModelConfig:
                 extra=data.get("extra", {})
             )
     
+    @classmethod
+    def from_env(cls, prefix: str = "", thinking_enabled: bool = False) -> "ModelConfig":
+        """
+        从环境变量构建 ModelConfig
+        
+        Args:
+            prefix: 环境变量前缀，如 "" (单模型) 或 "COMPLEX_" (多模型)
+            thinking_enabled: 是否启用 thinking 模式
+        """
+        env_temp = get_akg_env_var(f"{prefix}TEMPERATURE")
+        env_max_tokens = get_akg_env_var(f"{prefix}MAX_TOKENS")
+        env_timeout = get_akg_env_var(f"{prefix}TIMEOUT")
+        
+        return cls(
+            base_url=get_akg_env_var(f"{prefix}BASE_URL", "https://api.openai.com/v1"),
+            api_key=get_akg_env_var(f"{prefix}API_KEY", ""),
+            model_name=get_akg_env_var(f"{prefix}MODEL_NAME", "gpt-4"),
+            temperature=float(env_temp) if env_temp else 0.2,
+            max_tokens=int(env_max_tokens) if env_max_tokens else 8192,
+            timeout=int(env_timeout) if env_timeout else 300,
+            thinking_enabled=thinking_enabled,
+        )
+    
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         result = {
@@ -232,8 +273,20 @@ class AKGSettings:
     # 扩展字段
     extra: Dict[str, Any] = field(default_factory=dict)
     
+    # 来源追踪（不参与序列化和反序列化）
+    _model_sources: Dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _embedding_source: str = field(default="default", init=False, repr=False)
+    
+    def get_model_source(self, level: str) -> str:
+        """获取指定模型级别的配置来源"""
+        return self._model_sources.get(level, "default")
+    
+    def get_embedding_source(self) -> str:
+        """获取 embedding 配置的来源"""
+        return self._embedding_source
+    
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典（用于保存）"""
+        """转换为字典（用于保存，不含来源追踪字段）"""
         result = {
             "models": {k: v.to_dict() for k, v in self.models.items()},
             "default_model": self.default_model,
@@ -288,7 +341,7 @@ class AKGSettings:
         # 合并 embedding 配置
         merged_embedding = self.embedding.merge_with(other.embedding)
         
-        return AKGSettings(
+        result = AKGSettings(
             models=merged_models,
             embedding=merged_embedding,
             # 只有显式设置了才覆盖（空字符串表示未设置）
@@ -298,6 +351,15 @@ class AKGSettings:
             data_collect=other.data_collect or self.data_collect,
             extra={**self.extra, **other.extra},
         )
+        
+        # 继承并更新来源追踪
+        result._model_sources = dict(self._model_sources)
+        result._model_sources.update(other._model_sources)
+        result._embedding_source = (
+            other._embedding_source if other._embedding_source != "default" else self._embedding_source
+        )
+        
+        return result
 
 
 # ========================= 路径解析 =========================
@@ -355,14 +417,39 @@ def load_json_file(path: Path) -> Optional[Dict[str, Any]]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        logger.info(f"Loaded settings from {path}")
+        logger.debug(f"Loaded settings from {path}")
         return data
     except Exception as e:
         logger.warning(f"Failed to load settings from {path}: {e}")
         return None
 
 
-def load_from_env(settings: AKGSettings) -> AKGSettings:
+def _get_config_layers() -> List[Tuple[str, Optional[Path], bool]]:
+    """
+    返回配置文件层列表，按优先级从低到高排列
+    
+    Returns:
+        [(source_label, path, use_defaults), ...]
+    """
+    user_path = get_settings_path()
+    project_path = get_project_settings_path()
+    local_path = get_local_settings_path()
+    
+    return [
+        (f"user: {user_path}", user_path, True),
+        (f"project: {project_path}", project_path, False),
+        (f"local: {local_path}", local_path, False),
+    ]
+
+
+def _parse_thinking_enabled(env_value: Optional[str]) -> bool:
+    """解析 thinking 环境变量"""
+    if not env_value:
+        return False
+    return env_value.lower() in ("enabled", "true", "1", "yes", "on")
+
+
+def _load_env_config(settings: AKGSettings) -> AKGSettings:
     """
     从环境变量加载配置（最高优先级）
     
@@ -373,44 +460,25 @@ def load_from_env(settings: AKGSettings) -> AKGSettings:
     2. 多模型配置：AKG_AGENTS_COMPLEX_BASE_URL/AIKG_COMPLEX_BASE_URL, AKG_AGENTS_STANDARD_API_KEY/AIKG_STANDARD_API_KEY 等
        -> 分别设置 complex/standard/fast
     """
-    
-    def _parse_thinking_enabled(env_value: Optional[str]) -> bool:
-        """解析 thinking 环境变量"""
-        if not env_value:
-            return False
-        return env_value.lower() in ("enabled", "true", "1", "yes", "on")
-    
     thinking_enabled = _parse_thinking_enabled(get_akg_env_var("MODEL_ENABLE_THINK"))
     
     # 方式 1：单模型配置（兼容旧版，自动覆盖所有级别：complex/standard/fast）
     if get_akg_env_var("BASE_URL") or get_akg_env_var("API_KEY") or get_akg_env_var("MODEL_NAME"):
-        single_config = ModelConfig(
-            base_url=get_akg_env_var("BASE_URL", "https://api.openai.com/v1"),
-            api_key=get_akg_env_var("API_KEY", ""),
-            model_name=get_akg_env_var("MODEL_NAME", "gpt-4"),
-            temperature=float(get_akg_env_var("TEMPERATURE", "0.0")),
-            max_tokens=int(get_akg_env_var("MAX_TOKENS")) if get_akg_env_var("MAX_TOKENS") else None,
-            timeout=int(get_akg_env_var("TIMEOUT", "300")),
-            thinking_enabled=thinking_enabled,
-        )
+        single_config = ModelConfig.from_env("", thinking_enabled)
+        prefix = _detect_env_prefix("BASE_URL", "API_KEY", "MODEL_NAME")
+        source = f"env: {prefix}_*"
         for level in ["complex", "standard", "fast"]:
             settings.models[level] = single_config
-        logger.debug(f"Loaded single model config from env, applied to all levels (thinking={thinking_enabled})")
+            settings._model_sources[level] = source
+        logger.debug(f"Loaded single model config from env ({source}), applied to all levels")
     
-    # 方式 2：多模型配置
+    # 方式 2：多模型配置（优先级高于单模型，会覆盖方式 1 的设置）
     for level in ["complex", "standard", "fast"]:
         level_upper = level.upper()
-        
         if get_akg_env_var(f"{level_upper}_BASE_URL") or get_akg_env_var(f"{level_upper}_API_KEY"):
-            model_config = ModelConfig(
-                base_url=get_akg_env_var(f"{level_upper}_BASE_URL", "https://api.openai.com/v1"),
-                api_key=get_akg_env_var(f"{level_upper}_API_KEY", ""),
-                model_name=get_akg_env_var(f"{level_upper}_MODEL_NAME", "gpt-4"),
-                temperature=float(get_akg_env_var(f"{level_upper}_TEMPERATURE", "0.0")),
-                max_tokens=int(get_akg_env_var(f"{level_upper}_MAX_TOKENS")) if get_akg_env_var(f"{level_upper}_MAX_TOKENS") else None,
-                timeout=int(get_akg_env_var(f"{level_upper}_TIMEOUT", "300"))
-            )
-            settings.models[level] = model_config
+            settings.models[level] = ModelConfig.from_env(f"{level_upper}_")
+            prefix = _detect_env_prefix(f"{level_upper}_BASE_URL", f"{level_upper}_API_KEY")
+            settings._model_sources[level] = f"env: {prefix}_{level_upper}_*"
             logger.debug(f"Loaded '{level}' model config from env")
     
     # AKG_AGENTS_DEFAULT_MODEL / AIKG_DEFAULT_MODEL
@@ -440,6 +508,8 @@ def load_from_env(settings: AKGSettings) -> AKGSettings:
             model_name=env_emb_model_name or "",
             timeout=int(get_akg_env_var("EMBEDDING_TIMEOUT", "60")),
         )
+        prefix = _detect_env_prefix("EMBEDDING_BASE_URL", "EMBEDDING_API_KEY")
+        settings._embedding_source = f"env: {prefix}_EMBEDDING_*"
         logger.debug(f"Loaded embedding config from env: model={env_emb_model_name}")
     
     return settings
@@ -461,32 +531,24 @@ def get_settings() -> AKGSettings:
     Returns:
         AKGSettings 配置对象
     """
-    # 1. 从默认值开始
     settings = AKGSettings()
     
-    # 2. User: ~/.akg/settings.json（完整配置，使用默认值）
-    user_path = get_settings_path()
-    if user_data := load_json_file(user_path):
-        user_settings = AKGSettings.from_dict(user_data, use_defaults=True)
-        settings = settings.merge_with(user_settings)
-        logger.debug(f"Merged user settings from {user_path}")
+    # 遍历配置文件层（从低到高优先级）
+    for source_label, path, use_defaults in _get_config_layers():
+        data = load_json_file(path) if path else None
+        if data is None:
+            continue
+        layer = AKGSettings.from_dict(data, use_defaults=use_defaults)
+        # 标记此层中各配置项的来源
+        for level in layer.models:
+            layer._model_sources[level] = source_label
+        if "embedding" in data:
+            layer._embedding_source = source_label
+        settings = settings.merge_with(layer)
+        logger.debug(f"Merged settings from {source_label}")
     
-    # 3. Project: .akg/settings.json（部分配置，不使用默认值）
-    project_path = get_project_settings_path()
-    if project_path and (project_data := load_json_file(project_path)):
-        project_settings = AKGSettings.from_dict(project_data, use_defaults=False)
-        settings = settings.merge_with(project_settings)
-        logger.debug(f"Merged project settings from {project_path}")
-    
-    # 4. Local: .akg/settings.local.json（部分配置，不使用默认值）
-    local_path = get_local_settings_path()
-    if local_path and (local_data := load_json_file(local_path)):
-        local_settings = AKGSettings.from_dict(local_data, use_defaults=False)
-        settings = settings.merge_with(local_settings)
-        logger.debug(f"Merged local settings from {local_path}")
-    
-    # 5. 环境变量（最高优先级）
-    settings = load_from_env(settings)
+    # 环境变量（最高优先级）
+    settings = _load_env_config(settings)
     
     return settings
 
@@ -525,64 +587,116 @@ def get_all_settings_paths() -> Dict[str, Optional[Path]]:
     }
 
 
-def print_settings_info() -> None:
-    """打印配置信息（用于调试）"""
-    import os
-    # 检查环境变量（同时检查新旧两种前缀）
-    env_vars = {}
-    for key in ["BASE_URL", "API_KEY", "MODEL_NAME", "MODEL_ENABLE_THINK"]:
-        value = get_akg_env_var(key)
-        if value:
-            # 显示实际使用的环境变量名
-            new_key = f"AKG_AGENTS_{key}"
-            old_key = f"AIKG_{key}"
-            actual_key = new_key if os.getenv(new_key) else old_key
-            env_vars[actual_key] = value
-    
-    has_env = bool(env_vars)
-    
-    if has_env:
-        print("=" * 60)
-        print("🌍 环境变量 (最高优先级):")
-        for key, value in env_vars.items():
-            if value:
-                masked = value[:8] + "***" + value[-4:] if "KEY" in key and len(value) > 12 else value
-                print(f"   ✓ {key}={masked}")
-    else:
-        paths = get_all_settings_paths()
-        settings = get_settings()
-        
-        print("=" * 60)
-        print("📁 配置文件位置:")
-        for scope, path in paths.items():
-            if path and path.exists():
-                print(f"   ✓ {scope}: {path}")
-            elif path:
-                print(f"   ○ {scope}: {path} (不存在)")
-            else:
-                print(f"   ○ {scope}: (未找到项目根目录)")
+def _mask_key(value: str) -> str:
+    """遮蔽 API Key"""
+    if len(value) > 12:
+        return value[:8] + "***" + value[-4:]
+    return "***"
 
-        print(f"\n⚙️  当前配置:")
-        print(f"   default_model: {settings.default_model}")
-        print(f"   stream_output: {settings.stream_output}")
-        print(f"   models: {list(settings.models.keys())}")
+
+def _print_model_info(level: str, model: "ModelConfig", source: str, indent: str = "   "):
+    """打印单个模型级别的配置信息（含来源）"""
+    print(f"{indent}[{level}] (from {source})")
+    print(f"{indent}  model_name: {model.model_name}")
+    print(f"{indent}  base_url: {model.base_url}")
+    print(f"{indent}  api_key: {_mask_key(model.api_key)}")
+    print(f"{indent}  temperature: {model.temperature}")
+    print(f"{indent}  thinking_enabled: {model.thinking_enabled}")
+
+
+def print_settings_info(model_level: Optional[str] = None) -> None:
+    """
+    打印配置信息（用于调试），包含配置来源
+    
+    Args:
+        model_level: 可选，只显示指定级别的模型配置。
+                     如 "complex"/"standard"/"fast"，不指定则显示全部。
+    """
+    settings = get_settings()
+    
+    print("=" * 60)
+    
+    if model_level:
+        # 只显示指定级别
+        if model_level in settings.models:
+            _print_model_info(
+                model_level, settings.models[model_level],
+                settings.get_model_source(model_level),
+            )
+        else:
+            print(f"⚠️  模型级别 '{model_level}' 未配置")
+            print(f"   可用级别: {list(settings.models.keys())}")
+    else:
+        # 显示全部配置
+        print(f"⚙️  生效配置 (models: {list(settings.models.keys())})")
         
         for level, model in settings.models.items():
-            masked_key = model.api_key[:8] + "*" * (len(model.api_key) - 12) + \
-                model.api_key[-4:] if len(model.api_key) > 12 else "***"
-            
-            # 判断配置来源
-            source = "env" if has_env and level == "standard" else "file"
-            
-            print(f"\n   [{level}] (from {source})")
-            print(f"     model_name: {model.model_name}")
-            print(f"     base_url: {model.base_url}")
-            print(f"     api_key: {masked_key}")
-            print(f"     thinking_enabled: {model.thinking_enabled}")
+            print()
+            _print_model_info(level, model, settings.get_model_source(level))
+        
+        if settings.embedding.is_configured():
+            print(f"\n   [embedding] (from {settings.get_embedding_source()})")
+            print(f"     model_name: {settings.embedding.model_name}")
+            print(f"     base_url: {settings.embedding.base_url}")
     
     print("\n💡 优先级: 环境变量 > Local > Project > User > 默认值")
     print("💡 环境变量支持: AKG_AGENTS_* (推荐) 和 AIKG_* (兼容)")
     print("=" * 60)
+
+
+def check_model_config(model_level: Optional[str] = None) -> bool:
+    """
+    检查模型配置是否完整（base_url, api_key, model_name 必须非空）
+    
+    Args:
+        model_level: 要检查的模型级别，如 "complex"/"standard"/"fast"。
+                     不指定则检查所有已配置的级别。
+    
+    Returns:
+        bool: 配置是否完整
+    
+    Examples:
+        check_model_config("complex")   # 只检查 complex
+        check_model_config()            # 检查所有已配置的级别
+    """
+    settings = get_settings()
+    
+    levels_to_check = [model_level] if model_level else list(settings.models.keys())
+    
+    if not levels_to_check:
+        print("❌ 未找到任何模型配置")
+        print("   请通过环境变量或配置文件设置模型信息")
+        return False
+    
+    all_ok = True
+    for level in levels_to_check:
+        if level not in settings.models:
+            print(f"❌ 模型级别 '{level}' 未配置")
+            print(f"   可用级别: {list(settings.models.keys())}")
+            all_ok = False
+            continue
+        
+        model = settings.models[level]
+        missing = []
+        if not model.base_url:
+            missing.append("base_url")
+        if not model.api_key:
+            missing.append("api_key")
+        if not model.model_name:
+            missing.append("model_name")
+        
+        if missing:
+            print(f"❌ [{level}] 缺少必要配置: {', '.join(missing)}")
+            all_ok = False
+        else:
+            print(f"✅ [{level}] {model.model_name} @ {model.base_url}")
+    
+    if not all_ok:
+        print("\n💡 配置方式:")
+        print("   环境变量: export AKG_AGENTS_BASE_URL=... AKG_AGENTS_API_KEY=... AKG_AGENTS_MODEL_NAME=...")
+        print("   配置文件: ~/.akg/settings.json 或 .akg/settings.json")
+    
+    return all_ok
 
 
 def create_default_settings_file() -> None:

@@ -98,18 +98,28 @@ def create_llm_client(
     model_config = settings.models.get(model_level)
     
     if model_config is None:
-        # 如果配置中没有指定级别的模型，使用参数或默认值
-        logger.warning(f"Model level '{model_level}' not found in config, using provided parameters or defaults")
-        final_base_url = base_url or "https://api.openai.com/v1"
-        final_api_key = api_key or ""
-        final_model_name = model_name or "gpt-4"
-        final_temperature = temperature if temperature is not None else 0.2
-        final_max_tokens = max_tokens if max_tokens is not None else 8192
-        final_top_p = top_p if top_p is not None else 0.9
-        final_frequency_penalty = frequency_penalty  # 可选，无默认值
-        final_presence_penalty = presence_penalty    # 可选，无默认值
-        final_timeout = kwargs.get("timeout", 300)
-        final_thinking_enabled = kwargs.pop("thinking_enabled", False)
+        # 如果调用方显式传了连接参数，允许无配置使用
+        if base_url and api_key and model_name:
+            logger.info(f"Model level '{model_level}' not in config, using provided parameters")
+            final_base_url = base_url
+            final_api_key = api_key
+            final_model_name = model_name
+            final_temperature = temperature if temperature is not None else 0.2
+            final_max_tokens = max_tokens if max_tokens is not None else 8192
+            final_top_p = top_p if top_p is not None else 0.9
+            final_frequency_penalty = frequency_penalty
+            final_presence_penalty = presence_penalty
+            final_timeout = kwargs.get("timeout", 300)
+            final_thinking_enabled = kwargs.pop("thinking_enabled", False)
+        else:
+            available = list(settings.models.keys()) if settings.models else []
+            raise ValueError(
+                f"模型级别 '{model_level}' 未配置，无法创建 LLM 客户端。\n"
+                f"  可用级别: {available}\n"
+                f"  请通过环境变量或配置文件设置该级别的模型信息:\n"
+                f"    环境变量: export AKG_AGENTS_{model_level.upper()}_*=...\n"
+                f"    配置文件: ~/.akg/settings.json 或 .akg/settings.json 或 .akg/settings.local.json"
+            )
     else:
         # 使用配置中的模型，但参数可以覆盖
         final_base_url = base_url or model_config.base_url

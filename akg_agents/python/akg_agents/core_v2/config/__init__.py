@@ -22,6 +22,7 @@ from .settings import (
     load_settings_file,
     create_default_settings_file,
     print_settings_info,
+    check_model_config,
     get_all_settings_paths,
 )
 
@@ -35,5 +36,6 @@ __all__ = [
     "load_settings_file",
     "create_default_settings_file",
     "print_settings_info",
+    "check_model_config",
     "get_all_settings_paths",
 ]
