@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_MAT_MUL_H
-#define MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_MAT_MUL_H
+#ifndef MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_PASSES_FUSE_ADD_RMS_NORM_H
+#define MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_PASSES_FUSE_ADD_RMS_NORM_H
 
 #include <memory>
 
@@ -24,19 +24,12 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+namespace muse {
 
-/// Fuse MatMul/Mm (float16) followed by Cast (float32) into MatMul with float32 result.
-std::unique_ptr<Pass> createFuseMatMulCastPass();
+/// Create a pass to fuse Add and RmsNorm into AddRmsNorm.
+std::unique_ptr<Pass> createFuseAddRmsNormPass();
 
-/// Fuse MatMul/Mm with 1D inputs by inserting reshape (unsqueeze/squeeze).
-std::unique_ptr<Pass> createFuseMatmulUnsqueezeSqueezePass();
-
-/// Insert permute for MatMul/Mm inputs when inner axis is not 512-byte aligned; set trans_x1/trans_x2.
-std::unique_ptr<Pass> createFuseMatmulTransposeWeightPass();
-
-/// Fuse MatMul -> Reshape -> Add(bias) into MatMul(with bias) -> Reshape.
-std::unique_ptr<Pass> createFuseMatmulReshapeBiasAddPass();
-
+}  // namespace muse
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_FUSE_MAT_MUL_H
+#endif  // MFUSION_DIALECT_MUSE_TRANSFORMS_FUSION_PASSES_FUSE_ADD_RMS_NORM_H
