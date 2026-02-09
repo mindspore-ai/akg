@@ -56,14 +56,24 @@ class ConvertMfuseAclnnAdd : public mlir::OpConversionPattern<mlir::mfuse::Aclnn
       }
     }
 
+    // Materialize alpha as a Torch scalar for torch.aten.add.Tensor (alpha is scalar, not tensor).
     mlir::Value alphaScalar;
     if (auto cst = alphaForConst.getDefiningOp<mlir::arith::ConstantOp>()) {
       auto attr = mlir::dyn_cast<mlir::DenseElementsAttr>(cst.getValue());
-      if (attr && attr.getType().hasRank() && attr.getType().getRank() == 0 &&
-          mlir::isa<mlir::FloatType>(attr.getType().getElementType())) {
-        double val = mlir::cast<mlir::FloatAttr>(attr.getValues<mlir::Attribute>()[0]).getValueAsDouble();
-        mlir::FloatAttr valueAttr = rewriter.getFloatAttr(rewriter.getF64Type(), val);
-        alphaScalar = rewriter.create<TorchD::ConstantFloatOp>(op.getLoc(), valueAttr);
+      if (attr && attr.getType().hasRank() && attr.getType().getRank() == 0) {
+        auto elementType = attr.getType().getElementType();
+        // Rank-0 float constant: use value as-is and build ConstantFloatOp for Torch.
+        if (mlir::isa<mlir::FloatType>(elementType)) {
+          double val = mlir::cast<mlir::FloatAttr>(attr.getValues<mlir::Attribute>()[0]).getValueAsDouble();
+          mlir::FloatAttr valueAttr = rewriter.getFloatAttr(rewriter.getF64Type(), val);
+          alphaScalar = rewriter.create<TorchD::ConstantFloatOp>(op.getLoc(), valueAttr);
+        } else if (mlir::isa<mlir::IntegerType>(elementType)) {
+          // Rank-0 int constant: torch.aten.add.Tensor expects alpha as float; convert e.g. 1 -> 1.0.
+          auto intAttr = mlir::cast<mlir::IntegerAttr>(attr.getValues<mlir::Attribute>()[0]);
+          double val = static_cast<double>(intAttr.getInt());
+          mlir::FloatAttr valueAttr = rewriter.getFloatAttr(rewriter.getF64Type(), val);
+          alphaScalar = rewriter.create<TorchD::ConstantFloatOp>(op.getLoc(), valueAttr);
+        }
       }
     } else {
       alphaScalar = alphaForConst;

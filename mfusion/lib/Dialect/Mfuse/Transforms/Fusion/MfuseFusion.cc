@@ -29,13 +29,18 @@ namespace mfuse {
 
 struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
   void runOnOperation() override {
-    // Create a pass manager to run all fusion passes in order
     PassManager pm(&getContext());
 
+    // MatMul-related fusion passes (order by dependency):
+    // 1. FuseMatMulCast: matmul+cast -> matmul (output type); no deps.
+    // 2. FuseMatmulUnsqueezeSqueeze: normalize 1D inputs (reshape); after Cast for stable type.
+    // 3. FuseMatmulTransposeWeight: alignment (permute/trans); after shape normalization.
+    // 4. FuseMatmulReshapeBiasAdd: matmul->reshape->add -> matmul_with_bias; last so it sees final matmul form.
     pm.addPass(createFuseMatMulCastPass());
     pm.addPass(createFuseMatmulUnsqueezeSqueezePass());
     pm.addPass(createFuseMatmulTransposeWeightPass());
     pm.addPass(createFuseMatmulReshapeBiasAddPass());
+
     pm.addPass(createFuseGeluPass());
     pm.addPass(createFuseAddRmsNormPass());
     pm.addPass(createFuseSwiGluPass());
