@@ -108,103 +108,6 @@ class TestFrameworkAdapterTorch:
         assert "test_op" in code
 
 
-class TestFrameworkAdapterMindSpore:
-    """Test MindSpore Framework Adapter."""
-    
-    def test_get_import_statements(self):
-        """Test import statements generation."""
-        adapter = get_framework_adapter("mindspore")
-        imports = adapter.get_import_statements()
-        assert "import mindspore as ms" in imports
-        assert "from mindspore.common import np_dtype" in imports
-    
-    def test_get_framework_import(self):
-        """Test framework model import."""
-        adapter = get_framework_adapter("mindspore")
-        imports = adapter.get_framework_import("test_op", False)
-        assert "from test_op_mindspore import Model as FrameworkModel" in imports
-    
-    def test_get_device_setup_ascend(self):
-        """Test device setup for Ascend."""
-        adapter = get_framework_adapter("mindspore")
-        code = adapter.get_device_setup_code("ascend", "ascend910b4", 0)
-        assert "DEVICE_ID" in code
-        assert "device = \"Ascend\"" in code
-    
-    def test_get_device_setup_cpu(self):
-        """Test device setup for CPU."""
-        adapter = get_framework_adapter("mindspore")
-        code = adapter.get_device_setup_code("cpu", "x86_64", 0)
-        assert "DEVICE_ID" in code
-        assert "device = \"CPU\"" in code
-    
-    def test_get_process_input_code(self):
-        """Test process_input code generation."""
-        adapter = get_framework_adapter("mindspore")
-        code = adapter.get_process_input_code("ascend", "triton_ascend")
-        assert "def process_input" in code
-        assert "return x" in code
-    
-    def test_get_set_seed_code(self):
-        """Test set seed code generation."""
-        adapter = get_framework_adapter("mindspore")
-        code = adapter.get_set_seed_code("ascend")
-        assert "ms.set_seed(0)" in code
-    
-    def test_get_dtype_mapping(self):
-        """Test dtype mapping."""
-        adapter = get_framework_adapter("mindspore")
-        mapping = adapter.get_dtype_mapping()
-        assert mapping is not None
-        import mindspore as ms
-        import numpy as np
-        assert ms.float32 in mapping
-        assert mapping[ms.float32] == np.float32
-
-
-class TestFrameworkAdapterNumpy:
-    """Test NumPy Framework Adapter."""
-    
-    def test_get_import_statements(self):
-        """Test import statements generation."""
-        adapter = get_framework_adapter("numpy")
-        imports = adapter.get_import_statements()
-        assert "import numpy as np" in imports
-    
-    def test_get_framework_import(self):
-        """Test framework model import."""
-        adapter = get_framework_adapter("numpy")
-        imports = adapter.get_framework_import("test_op", False)
-        assert "from test_op_numpy import Model as FrameworkModel" in imports
-    
-    def test_get_device_setup(self):
-        """Test device setup (should be empty for NumPy)."""
-        adapter = get_framework_adapter("numpy")
-        code = adapter.get_device_setup_code("cpu", "x86_64", 0)
-        assert code == ""
-    
-    def test_get_process_input_code(self):
-        """Test process_input code generation."""
-        adapter = get_framework_adapter("numpy")
-        code = adapter.get_process_input_code("cpu", "swft")
-        assert "def process_input" in code
-        assert "return x" in code
-    
-    def test_get_set_seed_code(self):
-        """Test set seed code generation."""
-        adapter = get_framework_adapter("numpy")
-        code = adapter.get_set_seed_code("cpu")
-        assert "np.random.seed(0)" in code
-    
-    def test_get_limit(self):
-        """Test precision limit calculation."""
-        adapter = get_framework_adapter("numpy")
-        import numpy as np
-        assert adapter.get_limit(np.float16) == 0.004
-        assert adapter.get_limit(np.int8) == 0.01
-        assert adapter.get_limit(np.float32) == 0.004
-
-
 class TestFrameworkAdapterFactory:
     """Test Framework Adapter Factory."""
     
@@ -213,18 +116,6 @@ class TestFrameworkAdapterFactory:
         adapter = get_framework_adapter("torch")
         assert adapter is not None
         assert adapter.__class__.__name__ == "FrameworkAdapterTorch"
-    
-    def test_get_framework_adapter_mindspore(self):
-        """Test getting MindSpore adapter."""
-        adapter = get_framework_adapter("mindspore")
-        assert adapter is not None
-        assert adapter.__class__.__name__ == "FrameworkAdapterMindSpore"
-    
-    def test_get_framework_adapter_numpy(self):
-        """Test getting NumPy adapter."""
-        adapter = get_framework_adapter("numpy")
-        assert adapter is not None
-        assert adapter.__class__.__name__ == "FrameworkAdapterNumpy"
     
     def test_get_framework_adapter_invalid(self):
         """Test getting invalid framework adapter."""

@@ -27,7 +27,7 @@ import asyncio
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.core.worker.manager import register_local_worker
-from akg_agents.core.verifier.kernel_verifier import KernelVerifier
+from akg_agents.op.verifier.kernel_verifier import KernelVerifier
 
 
 def get_task_desc():
@@ -228,7 +228,7 @@ async def run_analysis(
     print(f"🎯 目标: 对比有无优化建议的性能差异\n")
     
     # 1. 加载配置
-    config = load_config(config_path="./python/akg_agents/config/vllm_triton_ascend_evolve_config.yaml")
+    config = load_config(config_path="./python/akg_agents/op/config/vllm_triton_ascend_evolve_config.yaml")
     
     # 新写法：一行代码注册 LocalWorker
     await register_local_worker([device_id], backend="ascend", arch="ascend910b4")

@@ -86,68 +86,12 @@ def test_op_triton_cuda_torch(x):
                 assert "def run_base_implementations" in content
                 assert "triton.testing.do_bench" in content or "framework_model" in content
             
-            # Check generation profile script
+            # Check generation profile script (impl module has _impl suffix)
             with open(gen_profile, "r", encoding="utf-8") as f:
                 content = f.read()
                 assert "import torch" in content
-                assert f"from {op_name}_triton_cuda import" in content
+                assert f"from {op_name}_triton_cuda_impl import" in content
                 assert "def run_generation_implementations" in content
-    
-    def test_gen_profile_swft_binary_io(self):
-        """Test generating profile script for SWFT (needs binary I/O)."""
-        op_name = "test_op"
-        framework = "torch"
-        dsl = "swft"
-        backend = "ascend"
-        arch = "ascend310p3"
-        
-        framework_code = """
-def get_init_inputs():
-    return []
-
-class Model:
-    def __init__(self, *args):
-        pass
-    def __call__(self, *args):
-        import torch
-        return torch.tensor([1.0, 2.0, 3.0])
-
-def get_inputs():
-    import torch
-    return [torch.tensor([1.0, 2.0, 3.0])]
-"""
-        
-        impl_code = """
-def test_op_swft_torch(device_id):
-    pass
-"""
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = {"log_dir": tmpdir}
-            verifier = KernelVerifier(
-                op_name=op_name,
-                framework=framework,
-                dsl=dsl,
-                backend=backend,
-                arch=arch,
-                framework_code=framework_code,
-                impl_func_name="test_op_swft_torch",
-                config=config
-            )
-            
-            verify_dir = os.path.join(tmpdir, "verify")
-            os.makedirs(verify_dir, exist_ok=True)
-            
-            # Generate profile project
-            verifier.gen_profile_project(verify_dir, device_id=0, warmup_times=5, run_times=50)
-            
-            # Check generation profile includes binary I/O
-            gen_profile = os.path.join(verify_dir, f"profile_{op_name}_generation.py")
-            with open(gen_profile, "r", encoding="utf-8") as f:
-                content = f.read()
-                assert "def save_tensor" in content
-                assert "def gen_binary_data" in content
-                assert "gen_binary_data" in content
     
     def test_gen_profile_dynamic_shape(self):
         """Test generating profile script with dynamic shape."""

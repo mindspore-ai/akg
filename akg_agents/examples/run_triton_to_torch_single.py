@@ -92,7 +92,7 @@ async def run_triton_to_torch_single():
     await register_local_worker([0], backend="cuda", arch="a100")
     
     # 加载 torch DSL 配置
-    config = load_config(config_path="./python/akg_agents/config/default_torch_config.yaml")
+    config = load_config(config_path="./python/akg_agents/op/config/default_torch_config.yaml")
 
     # 环境检查
     check_env_for_task("torch", "cuda", "torch", config)

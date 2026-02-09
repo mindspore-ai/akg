@@ -224,7 +224,7 @@ async def run_direct_with_workers(num_concurrent: int = 4, task_desc_dir: str = 
     """
     from akg_agents.op.config.config_validator import load_config
     from akg_agents.core.worker.manager import register_remote_worker, get_worker_manager
-    from akg_agents.core.verifier.kernel_verifier import KernelVerifier
+    from akg_agents.op.verifier.kernel_verifier import KernelVerifier
     from akg_agents.op.langgraph_op.task import LangGraphTask
     from akg_agents.core.async_pool.task_pool import TaskPool
     from tests.utils import process_task_results, generate_beautiful_test_report
@@ -404,7 +404,7 @@ async def run_quick_verify():
     """
     from akg_agents.op.config.config_validator import load_config
     from akg_agents.core.worker.manager import register_remote_worker, get_worker_manager
-    from akg_agents.core.verifier.kernel_verifier import KernelVerifier
+    from akg_agents.op.verifier.kernel_verifier import KernelVerifier
     from akg_agents.utils.cross_platform import generate_reference_with_profile
     
     op_name = get_op_name()

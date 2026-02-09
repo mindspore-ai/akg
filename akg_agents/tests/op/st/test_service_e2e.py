@@ -111,4 +111,4 @@ def get_init_inputs():
         logger.error(f"Job failed details: {final_status}")
         
     assert final_status["status"] == "completed", f"Job failed: {final_status.get('error')}"
-    assert final_status["result"] is True
+    assert final_status["result"]["success"] is True

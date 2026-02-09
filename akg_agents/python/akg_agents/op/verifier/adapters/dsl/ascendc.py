@@ -40,12 +40,12 @@ class DSLAdapterAscendC(DSLAdapter):
         """Return code string to call AscendC implementation function.
         
         AscendC requires compilation before calling.
-        Note: arch should be passed as a template variable, not from framework_adapter.
+        Note: The generated code references the ``arch`` Python variable
+        which is set by the verify template (kernel_verify_template_refactored.j2).
         """
-        # arch will be provided as a template variable
-        code = """        # 处理器
+        code = f"""        # 处理器
         # 映射架构到 SOC_VERSION
-        arch_str = "{{ arch }}"
+        # arch 变量由验证模板在外层设置
         ARCH_TO_SOC_VERSION = {{
             "ascend910b1": "Ascend910B1",
             "ascend910b2": "Ascend910B2",
@@ -55,9 +55,9 @@ class DSLAdapterAscendC(DSLAdapter):
             "ascend310p3": "Ascend310P3"
         }}
 
-        SOC_VERSION = ARCH_TO_SOC_VERSION.get(arch_str)
+        SOC_VERSION = ARCH_TO_SOC_VERSION.get(arch)
         if SOC_VERSION is None:
-            raise ValueError(f"不支持的ascend架构: {{arch_str}}，AscendC DSL仅支持ascend910b1/b2/b2c/b3/b4和ascend310p3")
+            raise ValueError(f"不支持的ascend架构: {{arch}}，AscendC DSL仅支持ascend910b1/b2/b2c/b3/b4和ascend310p3")
         try:
             result = subprocess.run(["bash", "run.sh", "-v", SOC_VERSION], check=True, capture_output=True, text=True)
             if result.returncode != 0:
