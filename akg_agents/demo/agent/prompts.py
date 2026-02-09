@@ -76,8 +76,14 @@ def get_init_inputs():
 
 ** 不要逐个 read_function 提取每个依赖函数！** 如果需要大部分函数，直接嵌入整个文件。
 
-### 第三步：选择策略并构建
-根据依赖分析结果选择：
+### 第三步：依赖追踪 + 选择策略
+
+**★ 重要：使用 `trace_dependencies` 自动追踪函数依赖 ★**
+- 在 `assemble_task` 之前，先用 `trace_dependencies` 找出入口函数的所有依赖
+- 例如：`trace_dependencies(file_path="workspace/src.py", entry_functions=["target_func"])`
+- 工具会自动发现同文件内的所有被调用函数，避免遗漏
+
+根据依赖分析结果选择构建策略：
 
 **策略A: 排除式嵌入（★首选★ 依赖大部分函数时）**
 - `assemble_task` 的 source_files 用 dict + exclude_functions:
@@ -88,7 +94,8 @@ def get_init_inputs():
 **策略A': 选择性提取（依赖少数函数时）**
 - `assemble_task` 的 source_files 用 dict + functions:
   `[{{"path": "workspace/src.py", "functions": ["f1","f2",...]}}]`
-- 工具自动清除非标准库的本地 import（如 from xxx_module import ...）
+- 函数列表应来自 `trace_dependencies` 的结果，不要自己手动列
+- 工具自动清除非标准库 import + 精简未使用的 import + 移除装饰器
 
 **策略A'': 完整嵌入（不需要剔除任何函数时）**
 - `assemble_task` 的 source_files 用字符串: `["workspace/src.py"]`
@@ -102,10 +109,11 @@ def get_init_inputs():
 ### 第四步：验证和完成
 7. `validate_task` 验证（实例化+forward+NaN/Inf+一致性）
 8. 如果失败，检查错误信息，用 `apply_patch` 修复
-9. **（可选但推荐）** `test_with_reference` 对比 reference 函数验证正确性
-   - 当原始函数存在于 torch 中时（如 `torch._chunk_cat`），用它作为 reference
+9. **（推荐）** `test_with_reference` 对比 reference 函数验证正确性
+   - 当原始函数存在于 torch 中时，直接调用它作为 reference
    - 当有 benchmark/test 文件中有调用示例时，基于示例构造 reference
    - 构造多组输入覆盖边界情况（不同形状、不同 dim、不同 dtype 等）
+   - 不同 test case 可以使用不同的 init_inputs（通过 per-case `"init_inputs"` 字段）
 10. `finish`
 
 ## 其他规则
@@ -114,6 +122,7 @@ def get_init_inputs():
 2. 路径支持 `workspace/` 前缀。
 3. finish 时 task_code 填文件路径（如 `task_output.py`）。
 4. get_inputs() 返回列表，可以包含张量和标量。
-5. 选择性提取时，装饰器（如 `@register_decomposition`）自动移除。
-6. 如果原始函数有内部 API 依赖（如 `utils.canonicalize_dim`），用简单的等价实现替代。
+5. 选择性提取时，装饰器（如 `@register_decomposition`）自动移除，未使用的 import 自动精简。
+6. **内联外部函数时，必须先 `read_function` 查看原始签名！** `trace_dependencies` 会自动检测外部调用并标注来源模块路径，按来源路径查找原始实现。参数签名必须与原始完全一致，错误会导致运行时 bug。
+7. `imports_code` 和 `helper_code` 会被放在源文件之前，确保类型（如 Optional）已定义。
 """

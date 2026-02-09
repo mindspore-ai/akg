@@ -179,6 +179,298 @@ def _extract_functions(
     return "\n\n\n".join(extracted), not_found
 
 
+def _resolve_attribute_chain(node) -> Optional[str]:
+    """
+    解析 AST 属性链为点分字符串。
+    例: torch._ops.ops.aten → "torch._ops.ops.aten"
+    返回 None 如果不是简单的属性链。
+    """
+    parts = []
+    current = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if isinstance(current, ast.Name):
+        parts.append(current.id)
+        parts.reverse()
+        return ".".join(parts)
+    return None
+
+
+def _parse_import_aliases(tree: ast.Module) -> Dict[str, str]:
+    """
+    从文件 import 语句和顶层赋值中解析模块/名字别名映射。
+
+    Returns:
+        {alias_name: source_module_path}
+        例: {"utils": "torch._prims_common", "aten": "torch._ops.ops.aten",
+             "torch": "torch", "Tensor": "torch.Tensor"}
+    """
+    aliases: Dict[str, str] = {}
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                name = alias.asname or alias.name
+                aliases[name] = alias.name
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            for alias in node.names:
+                name = alias.asname or alias.name
+                source = f"{module}.{alias.name}" if module else alias.name
+                aliases[name] = source
+        elif isinstance(node, ast.Assign):
+            # 顶层赋值如: aten = torch._ops.ops.aten
+            if (len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)):
+                source = _resolve_attribute_chain(node.value)
+                if source:
+                    aliases[node.targets[0].id] = source
+    return aliases
+
+
+def _has_private_segments(module_path: str) -> bool:
+    """
+    检查模块路径是否包含私有段（根包之后的以 _ 开头的部分）。
+    内部/私有模块中的函数通常需要内联到独立文件中。
+
+    例: "torch._prims_common" → True  (_prims_common 以 _ 开头)
+        "torch.nn.functional" → False
+        "torch" → False
+    """
+    segments = module_path.split(".")
+    for seg in segments[1:]:  # 跳过根包名
+        if seg.startswith("_"):
+            return True
+    return False
+
+
+def _collect_local_names(func_node: ast.AST) -> set:
+    """
+    收集函数直接作用域内的局部变量名（参数、赋值、循环变量等）。
+    不进入嵌套函数/类，避免内层作用域污染。
+    """
+    locals_set = set()
+
+    # 函数参数
+    if isinstance(func_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for arg in (func_node.args.args + func_node.args.posonlyargs
+                    + func_node.args.kwonlyargs):
+            locals_set.add(arg.arg)
+        if func_node.args.vararg:
+            locals_set.add(func_node.args.vararg.arg)
+        if func_node.args.kwarg:
+            locals_set.add(func_node.args.kwarg.arg)
+
+    def _walk_shallow(node):
+        """遍历 AST 但不进入嵌套函数/类定义"""
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            yield child
+            yield from _walk_shallow(child)
+
+    def _add_target_names(target):
+        """从赋值目标中提取变量名"""
+        if isinstance(target, ast.Name):
+            locals_set.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                if isinstance(elt, ast.Name):
+                    locals_set.add(elt.id)
+
+    for child in _walk_shallow(func_node):
+        if isinstance(child, ast.Assign):
+            for t in child.targets:
+                _add_target_names(t)
+        elif isinstance(child, (ast.AugAssign, ast.AnnAssign)):
+            if isinstance(child.target, ast.Name):
+                locals_set.add(child.target.id)
+        elif isinstance(child, ast.For):
+            _add_target_names(child.target)
+        elif isinstance(child, ast.comprehension):
+            _add_target_names(child.target)
+        elif isinstance(child, ast.With):
+            for item in child.items:
+                if item.optional_vars and isinstance(item.optional_vars, ast.Name):
+                    locals_set.add(item.optional_vars.id)
+
+    return locals_set
+
+
+def _trace_function_deps(
+    content: str, tree: ast.Module, entry_names: List[str]
+) -> Tuple[List[str], List[Tuple[str, str]]]:
+    """
+    AST 依赖追踪：给定入口函数名，递归找出同文件内所有被调用的函数/类。
+    通过分析文件 import 自动检测需要内联的外部模块调用（无硬编码列表）。
+
+    外部调用判定规则（完全基于 import 分析）：
+    - 属性调用 X.method(): 若 X 是 import 别名且来源模块含私有段 → 报告
+    - 直接调用 func(): 若 func 是从内部模块 import 的名字 → 报告
+    - X 是函数局部变量 → 跳过（如 tensor.size()）
+    - X 是公共 API 模块别名（如 torch, numpy, F）→ 跳过
+
+    Returns:
+        (有序的完整依赖列表, 外部调用列表)
+        - 依赖列表按源文件出现顺序排列
+        - 外部调用列表: [(调用表达式, 来源模块路径), ...]
+    """
+    # 1. 收集文件内所有顶层函数/类名
+    toplevel_names = set()
+    toplevel_nodes = {}
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            toplevel_names.add(node.name)
+            toplevel_nodes[node.name] = node
+
+    # 2. 解析文件 import 得到别名映射
+    import_aliases = _parse_import_aliases(tree)
+
+    # 3. 提取每个函数/类体内调用的函数名（只扫描 body，跳过装饰器）
+    def _get_called_names(node: ast.AST) -> Tuple[set, set]:
+        """返回 (同文件调用集合, 外部调用集合)"""
+        internal = set()
+        external = set()  # {(call_str, source_module)}
+        local_names = _collect_local_names(node)
+
+        # 只遍历 body，跳过装饰器（装饰器在提取时会被自动移除）
+        body = getattr(node, 'body', [])
+        for stmt in body:
+            for child in ast.walk(stmt):
+                if not isinstance(child, ast.Call):
+                    continue
+                func = child.func
+
+                # 直接调用: func_name(...)
+                if isinstance(func, ast.Name):
+                    if func.id in toplevel_names:
+                        internal.add(func.id)
+                    elif func.id in import_aliases:
+                        source = import_aliases[func.id]
+                        if _has_private_segments(source):
+                            external.add((func.id, source))
+
+                # 属性调用: obj.method(...)
+                elif isinstance(func, ast.Attribute):
+                    if isinstance(func.value, ast.Name):
+                        obj_name = func.value.id
+                        method_name = func.attr
+                        if obj_name in toplevel_names:
+                            internal.add(obj_name)
+                        elif obj_name == "self":
+                            pass
+                        elif obj_name in local_names:
+                            pass  # 局部变量的方法调用（如 tensor.size()）
+                        elif obj_name in import_aliases:
+                            source = import_aliases[obj_name]
+                            if _has_private_segments(source):
+                                external.add((f"{obj_name}.{method_name}", source))
+
+        return internal, external
+
+    # 4. BFS 追踪依赖
+    visited = set()
+    all_external = set()
+    queue = list(entry_names)
+    for name in queue:
+        if name in visited:
+            continue
+        visited.add(name)
+        if name in toplevel_nodes:
+            internal, external = _get_called_names(toplevel_nodes[name])
+            all_external.update(external)
+            for callee in internal:
+                if callee not in visited:
+                    queue.append(callee)
+
+    # 5. 按源文件出现顺序排列
+    ordered = []
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name in visited:
+                ordered.append(node.name)
+
+    return ordered, sorted(all_external, key=lambda x: x[0])
+
+
+def _clean_unused_imports(header: str, funcs_code: str) -> str:
+    """
+    精简 header 中未被 funcs_code 使用的 import。
+
+    使用 AST 级别处理，通过 word-boundary 正则检查引用。
+    无硬编码白名单，完全基于实际引用分析。
+
+    保留策略：
+    - import 引入的名字在 funcs_code 中被引用 → 保留
+    - 非 import 行（注释、常量、空行）→ 总是保留
+    """
+    try:
+        header_tree = ast.parse(header)
+    except SyntaxError:
+        return header  # 解析失败不做清理
+
+    header_lines = header.splitlines()
+    remove_ranges = []
+
+    def _name_used(name: str) -> bool:
+        """检查名字是否作为独立标识符出现在 funcs_code 中"""
+        return bool(re.search(r'\b' + re.escape(name) + r'\b', funcs_code))
+
+    for node in ast.iter_child_nodes(header_tree):
+        if isinstance(node, ast.Import):
+            # import X, import X.Y → 检查引入的名字是否被使用
+            any_used = False
+            for alias in node.names:
+                name = alias.asname or alias.name.split('.')[0]
+                if _name_used(name):
+                    any_used = True
+                    break
+            if not any_used:
+                remove_ranges.append((node.lineno - 1, node.end_lineno))
+
+        elif isinstance(node, ast.ImportFrom):
+            # from X import a, b → 检查 a, b 是否被使用
+            any_used = False
+            for alias in node.names:
+                name = alias.asname or alias.name
+                if _name_used(name):
+                    any_used = True
+                    break
+            if not any_used:
+                remove_ranges.append((node.lineno - 1, node.end_lineno))
+
+    if not remove_ranges:
+        return header
+
+    # 按行移除
+    remove_ranges.sort()
+    keep_lines = []
+    skip_until = 0
+    for i, line in enumerate(header_lines):
+        if i < skip_until:
+            continue
+        removed = False
+        for rstart, rend in remove_ranges:
+            if rstart <= i < rend:
+                skip_until = rend
+                removed = True
+                break
+        if not removed:
+            keep_lines.append(line)
+
+    # 去除连续空行
+    result = []
+    prev_empty = False
+    for line in keep_lines:
+        is_empty = line.strip() == ""
+        if is_empty and prev_empty:
+            continue
+        result.append(line)
+        prev_empty = is_empty
+
+    return "\n".join(result).rstrip()
+
+
 def _extract_functions_from_file(file_path: Path, function_names: List[str]) -> Tuple[str, str, List[str]]:
     """
     从文件中提取文件头 + 指定函数。
@@ -195,6 +487,11 @@ def _extract_functions_from_file(file_path: Path, function_names: List[str]) -> 
     # 选择性提取时清除非标准库的本地import，避免残留的外部模块引用
     header = _extract_file_header(content, tree, clean_local_imports=True)
     funcs_code, not_found = _extract_functions(content, tree, function_names)
+
+    # 精简 header 中未被 funcs_code 使用的 import
+    if funcs_code:
+        header = _clean_unused_imports(header, funcs_code)
+
     return header, funcs_code, not_found
 
 
@@ -311,6 +608,14 @@ def assemble_task(args: Dict[str, Any]) -> Dict[str, Any]:
     headers_seen = set()
     warnings = []
 
+    # 0. 额外 import 放在最前面（确保源文件中使用的类型如 Optional 已定义）
+    if imports_code.strip():
+        parts.append(f"# ===== Imports =====\n{imports_code.strip()}")
+
+    # 0.5 辅助代码（内联的外部函数等 helper）放在源文件之前
+    if helper_code.strip():
+        parts.append(f"# ===== Helper =====\n{helper_code.strip()}")
+
     # 1. 处理源文件
     for sf in source_files:
         # 支持三种格式:
@@ -415,44 +720,17 @@ def assemble_task(args: Dict[str, Any]) -> Dict[str, Any]:
         else:
             return {"status": "error", "output": "", "error": f"source_files 元素格式错误: {type(sf)}"}
 
-    # 2. 额外 import（去重：如果源文件已包含则跳过）
-    if imports_code.strip():
-        # 检查源文件中是否已有这些 import
-        source_content = "\n".join(parts)
-        dedup_lines = []
-        for line in imports_code.strip().splitlines():
-            stripped = line.strip()
-            if stripped and (stripped.startswith("import ") or stripped.startswith("from ")):
-                if stripped in source_content:
-                    continue  # 跳过已存在的 import
-            dedup_lines.append(line)
-        dedup_imports = "\n".join(dedup_lines).strip()
-        if dedup_imports:
-            parts.append(f"\n# ===== Additional imports =====\n{dedup_imports}")
+    # 2. (imports_code 和 helper_code 已在步骤 0/0.5 放置到源文件之前)
 
-    # 3. 辅助代码（去重 import 行）
-    if helper_code.strip():
-        source_content = "\n".join(parts)
-        dedup_lines = []
-        for line in helper_code.strip().splitlines():
-            stripped = line.strip()
-            if stripped and (stripped.startswith("import ") or stripped.startswith("from ")):
-                if stripped in source_content:
-                    continue  # 跳过已存在的 import
-            dedup_lines.append(line)
-        dedup_helper = "\n".join(dedup_lines).strip()
-        if dedup_helper:
-            parts.append(f"\n# ===== Helper =====\n{dedup_helper}")
-
-    # 4. Model 类
+    # 3. Model 类
     if model_code.strip():
         parts.append(f"\n# ===== Model =====\n{model_code}")
 
-    # 5. get_inputs
+    # 4. get_inputs
     if get_inputs_code.strip():
         parts.append(f"\n# ===== Test inputs =====\n{get_inputs_code}")
 
-    # 6. get_init_inputs
+    # 5. get_init_inputs
     if get_init_inputs_code.strip():
         parts.append(f"\n{get_init_inputs_code}")
 
@@ -521,8 +799,60 @@ def test_with_reference(args: Dict[str, Any]) -> Dict[str, Any]:
     from ..task.test_constructor import TestConstructor  # noqa: F811
     return TestConstructor.run_reference_test(
         task_code, reference_code, multi_inputs_code,
-        timeout=args.get("timeout", 120),
+        timeout=args.get("timeout", 120),  # noqa: E501
     )
+
+
+def trace_dependencies(args: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    AST 依赖追踪：给定文件路径 + 入口函数名，自动找出所有被调用的同文件函数。
+    用于 assemble_task 之前，确保不遗漏依赖。
+    """
+    file_path = args.get("file_path", "")
+    entry_functions = args.get("entry_functions", [])
+
+    if not file_path:
+        return {"status": "error", "output": "", "error": "需要 file_path"}
+    if not entry_functions:
+        return {"status": "error", "output": "", "error": "需要 entry_functions 列表"}
+
+    path = _resolve_path(file_path)
+    if not path.exists():
+        return {"status": "error", "output": "", "error": f"文件不存在: {path}"}
+
+    try:
+        content = path.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+    except Exception as e:
+        return {"status": "error", "output": "", "error": f"解析失败: {e}"}
+
+    full_deps, external_calls = _trace_function_deps(content, tree, entry_functions)
+    added = [n for n in full_deps if n not in entry_functions]
+
+    output = f"入口函数: {entry_functions}\n"
+    output += f"完整依赖链 ({len(full_deps)} 个函数):\n"
+    for name in full_deps:
+        marker = " <- 入口" if name in entry_functions else " <- 自动发现"
+        output += f"  - {name}{marker}\n"
+
+    if added:
+        output += f"\n自动发现的额外依赖: {added}\n"
+        output += "建议在 assemble_task 的 functions 中包含这些函数。\n"
+    else:
+        output += "\n无额外同文件依赖。\n"
+
+    if external_calls:
+        output += f"\n[!] 需要内联的外部调用 ({len(external_calls)} 个, 来自内部模块):\n"
+        for call_str, source_module in external_calls:
+            output += f"  - {call_str}  (来源: {source_module})\n"
+        output += (
+            "\n处理方式:\n"
+            "  1. 用 read_function 在来源模块中查看原始函数签名和实现\n"
+            "  2. 在 helper_code 中内联等价实现，参数签名必须与原始完全一致\n"
+            "  3. 对于模块别名（如 aten = torch._ops.ops.aten），在 helper_code 中定义"
+        )
+
+    return {"status": "success", "output": output, "error": ""}
 
 
 # ========== 注册 ==========
@@ -624,12 +954,8 @@ ToolRegistry.register(
     "test_with_reference",
     "【正确性验证】将 Model 输出与 reference 函数对比，支持多组输入。\n"
     "用法：提供 reference_code（定义 reference_forward(inputs, init_inputs)）和可选的 multi_inputs_code。\n"
-    "示例 reference_code:\n"
-    '  def reference_forward(inputs, init_inputs):\\n'
-    '      return torch._chunk_cat(list(inputs), init_inputs[0], init_inputs[1])\\n'
-    "示例 multi_inputs_code:\n"
-    '  def get_multi_test_inputs():\\n'
-    '      return [{"name": "case1", "inputs": [torch.randn(4,5), torch.randn(6,5)]}, ...]',
+    "reference_forward 应调用原始 torch 函数作为 ground truth。\n"
+    "multi_inputs_code 中的 get_multi_test_inputs() 返回多组测试用例，每组可指定 per-case init_inputs。",
     {
         "type": "object",
         "properties": {
@@ -648,4 +974,24 @@ ToolRegistry.register(
         "required": ["reference_code"],
     },
     test_with_reference,
+)
+
+ToolRegistry.register(
+    "trace_dependencies",
+    "【依赖追踪】给定入口函数名，自动找出同文件内所有被调用的函数。\n"
+    "通过分析文件 import 自动识别需要内联的外部模块调用，附带来源模块路径。\n"
+    "返回完整的依赖链、建议的 functions 列表、以及需要处理的外部依赖。",
+    {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string", "description": "workspace 中的文件路径"},
+            "entry_functions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "入口函数名列表"
+            },
+        },
+        "required": ["file_path", "entry_functions"],
+    },
+    trace_dependencies,
 )

@@ -602,27 +602,32 @@ class ReactAgent:
         parts.append(
             "\n**工作区路径**: workspace/\n"
             "\n**推荐流程**:\n"
-            "1. scan_dir 浏览目录\n"
+            "1. grep_search 搜索目标函数（优先于 scan_dir，更高效）\n"
             "2. copy_to_workspace 复制源文件和 benchmark/test 文件\n"
-            "3. **依赖分析**（关键！）: read_function 提取目标函数，列出它调用的所有函数，递归分析完整依赖链\n"
-            "4. read_function 提取 benchmark 的 create_config/create_inputs（了解输入形状）\n"
-            "5. 检查 NPU/Triton 代码是否有 fallback（如 except ImportError: return torch_impl(...)）\n"
+            "3. read_function 提取目标函数查看实现\n"
+            "4. **trace_dependencies 自动追踪依赖**（关键！避免遗漏）\n"
+            "   例: trace_dependencies(file_path=\"workspace/src.py\", entry_functions=[\"target_func\"])\n"
+            "   工具自动分析 import，报告同文件依赖 + 需要内联的外部调用（附带来源模块路径）\n"
+            "   对于外部调用：按工具提示的来源路径用 read_function 查看原始签名后再内联\n"
+            "5. read_function 提取 benchmark 的 create_config/create_inputs（了解输入形状）\n"
             "6. 选择策略构建任务文件:\n"
             "   - 依赖大部分函数但有少量不需要的 → assemble_task 排除模式: "
             '{\"path\": \"workspace/src.py\", \"exclude_functions\": [\"unused1\"]}\n'
             "   - 依赖部分函数 → assemble_task 选择性提取: "
-            '{\"path\": \"workspace/src.py\", \"functions\": [\"f1\",\"f2\"]}\n'
+            '{\"path\": \"workspace/src.py\", \"functions\": [trace_dependencies 返回的列表]}\n'
             "   - 需修改源函数 → write_file + append_to_file（从workspace复制原始代码，不要重写！）\n"
             "   - 从其他文件提取辅助函数 → helper_code 参数内联，不要用 source_files 提取（避免引入外部 import）\n"
             "7. validate_task task_file=\"task_output.py\"\n"
             "8. （推荐）test_with_reference 对比原始函数验证正确性\n"
             "   - reference_code 定义 reference_forward(inputs, init_inputs)，调用原始 torch 函数\n"
             "   - multi_inputs_code 定义 get_multi_test_inputs() 返回多组不同形状的输入\n"
+            "   - 不同 case 可指定 per-case init_inputs: {\"name\":..., \"inputs\":..., \"init_inputs\": [dim, nc]}\n"
             "9. finish task_code=\"task_output.py\"\n"
             "\n【禁止重写复杂函数！】原始代码的索引计算很精确，自己写的'简化版'几乎必定有bug。\n"
             "【每次代码不超过150行】长文件用分段生成。\n"
             "【从其他文件提取函数】建议用 helper_code 内联而非 source_files，避免引入外部模块的 import。\n"
-            "【选择性提取自动去装饰器】如 @register_decomposition 等装饰器会被自动移除。\n"
+            "【内联外部函数前先查签名】trace_dependencies 会标注来源模块路径，用 read_function 查看原始签名。\n"
+            "【imports_code/helper_code 在源文件之前】确保 Optional 等类型已定义。\n"
             "\n请开始工作。"
         )
 

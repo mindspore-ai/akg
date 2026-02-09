@@ -186,14 +186,8 @@ def compare_tensors(our, ref, name, atol=1e-5, rtol=1e-5):
 def run_tests():
     all_errors = []
     
-    # 实例化 Model
-    try:
-        init_inputs = get_init_inputs()
-        model = Model(*init_inputs)
-        model.eval()
-    except Exception as e:
-        print(f"[FAIL] Model 实例化失败: {e}")
-        sys.exit(1)
+    # 默认 init_inputs
+    default_init_inputs = get_init_inputs()
     
     # 获取多组输入
     try:
@@ -210,15 +204,27 @@ def run_tests():
     for tc in test_cases:
         tc_name = tc.get("name", "unnamed")
         inputs = tc["inputs"]
+        # 支持 per-case init_inputs 覆盖（解决不同 test case 需要不同参数的问题）
+        tc_init_inputs = tc.get("init_inputs", default_init_inputs)
+        
+        try:
+            # 每次用 tc_init_inputs 重新实例化 Model
+            model = Model(*tc_init_inputs)
+            model.eval()
+        except Exception as e:
+            failed += 1
+            all_errors.append(f"{tc_name}: Model init failed: {e}")
+            print(f"[FAIL] {tc_name}: Model init failed: {e}")
+            continue
         
         try:
             # 运行我们的实现
             with torch.no_grad():
                 our_output = model(*inputs)
             
-            # 运行 reference
+            # 运行 reference（传入 tc_init_inputs）
             with torch.no_grad():
-                ref_output = reference_forward(inputs, init_inputs)
+                ref_output = reference_forward(inputs, tc_init_inputs)
             
             # 对比
             errors = compare_tensors(our_output, ref_output, tc_name)
