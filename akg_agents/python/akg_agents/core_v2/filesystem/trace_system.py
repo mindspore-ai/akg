@@ -322,10 +322,15 @@ class TraceSystem:
         self.fs.update_node_state(node_id, turn=turn, status="running")
         
         # 创建增量动作历史
+        # 如果 action 中没有显式的 arguments 或 params，则将除 type 外的所有字段作为 arguments
+        action_args = action.get("arguments", action.get("params"))
+        if action_args is None:
+            action_args = {k: v for k, v in action.items() if k != "type"}
+
         action_record = ActionRecord(
             action_id=self._generate_action_id(),
             tool_name=action.get("type", "unknown"),
-            arguments=action.get("arguments", action.get("params", {})),
+            arguments=action_args,
             result=result,
         )
         
@@ -782,10 +787,18 @@ class TraceSystem:
         node.timestamp = _get_timestamp()
         
         # 创建动作记录
+        # 处理 action 字段，映射到 tool_name 和 arguments
+        action_dict = node.action or {}
+        tool_name = action_dict.get("type", "unknown")
+        
+        action_args = action_dict.get("arguments", action_dict.get("params"))
+        if action_args is None:
+            action_args = {k: v for k, v in action_dict.items() if k != "type"}
+
         action_record = ActionRecord(
             action_id=self._generate_action_id(),
-            tool_name=node.action.get("type", "unknown") if node.action else "unknown",
-            arguments=node.action or {},
+            tool_name=tool_name,
+            arguments=action_args,
             result=result,
         )
         
