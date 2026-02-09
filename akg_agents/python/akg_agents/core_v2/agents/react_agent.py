@@ -426,9 +426,12 @@ class ReActAgent(AgentBase, ABC):
         保存工具结果到节点目录
         
         保存内容:
-        - result.json: 完整结果字典
+        - result.json: 完整结果字典（包含 captured_stdout/captured_stderr/captured_logs）
         - code/code.py: 如果结果包含 generated_code 或 code
         - output.txt: 如果 output 较长（可能是代码等）
+        - logs/captured_stdout.txt: 捕获的 stdout（如有）
+        - logs/captured_stderr.txt: 捕获的 stderr（如有）
+        - logs/captured_logs.txt: 捕获的 logging 日志（如有）
         
         Args:
             cur_path: 节点目录路径
@@ -465,6 +468,24 @@ class ReActAgent(AgentBase, ABC):
                 (node_dir / "output.txt").write_text(output, encoding="utf-8")
             except Exception as e:
                 logger.warning(f"[Result] 保存 output.txt 失败: {e}")
+        
+        # 保存捕获的日志文件（独立文件，便于排查问题）
+        captured_fields = {
+            "captured_stdout": "captured_stdout.txt",
+            "captured_stderr": "captured_stderr.txt",
+            "captured_logs": "captured_logs.txt",
+        }
+        has_captured = any(result.get(k) for k in captured_fields)
+        if has_captured:
+            log_dir = node_dir / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            for field, filename in captured_fields.items():
+                content = result.get(field, "")
+                if content and isinstance(content, str):
+                    try:
+                        (log_dir / filename).write_text(content, encoding="utf-8")
+                    except Exception as e:
+                        logger.warning(f"[Result] 保存 {filename} 失败: {e}")
     
     def _save_node_prompt(self, cur_path: str):
         """
