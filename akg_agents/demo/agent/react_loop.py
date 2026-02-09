@@ -615,10 +615,14 @@ class ReactAgent:
             "   - 需修改源函数 → write_file + append_to_file（从workspace复制原始代码，不要重写！）\n"
             "   - 从其他文件提取辅助函数 → helper_code 参数内联，不要用 source_files 提取（避免引入外部 import）\n"
             "7. validate_task task_file=\"task_output.py\"\n"
-            "8. finish task_code=\"task_output.py\"\n"
+            "8. （推荐）test_with_reference 对比原始函数验证正确性\n"
+            "   - reference_code 定义 reference_forward(inputs, init_inputs)，调用原始 torch 函数\n"
+            "   - multi_inputs_code 定义 get_multi_test_inputs() 返回多组不同形状的输入\n"
+            "9. finish task_code=\"task_output.py\"\n"
             "\n【禁止重写复杂函数！】原始代码的索引计算很精确，自己写的'简化版'几乎必定有bug。\n"
             "【每次代码不超过150行】长文件用分段生成。\n"
             "【从其他文件提取函数】建议用 helper_code 内联而非 source_files，避免引入外部模块的 import。\n"
+            "【选择性提取自动去装饰器】如 @register_decomposition 等装饰器会被自动移除。\n"
             "\n请开始工作。"
         )
 
