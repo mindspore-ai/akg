@@ -65,16 +65,12 @@ def fuse_and_optimize(torch_dialect_str: str) -> str:
         stage="Decompose aclnn ops to meta ops")
 
     _run_pipeline(module,
-        pipeline="builtin.module(fuse-addrmsnorm, canonicalize)",
-        stage="Manual fusion pass: fuse AddRmsNorm ops")
+        pipeline="builtin.module(mfuse-fusion,canonicalize)",
+        stage="Mfuse Fusion")
 
     _run_pipeline(module,
-        pipeline="builtin.module(fuse-gelu, canonicalize)",
-        stage="Manual fusion pass: fuse Gelu ops")
-
-    _run_pipeline(module,
-        pipeline="builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION}, canonicalize)",
-        stage="Decompose complex ops to meta ops")
+                  pipeline="builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION}, canonicalize)",
+                  stage="Decompose complex ops to meta ops")
 
     _run_pipeline(module,
         pipeline="builtin.module(recompose, canonicalize)",
