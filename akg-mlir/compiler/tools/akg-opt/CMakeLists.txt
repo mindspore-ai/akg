@@ -38,6 +38,7 @@ set(LIBS
   BiShengIRMemRefDialect
   BiShengIRHIVMDialect
   BiShengIRHIVMUtils
+  BiShengIRMemRefExtDialect
   MLIRAnalysis
   MLIRDialect
   MLIROptLib
