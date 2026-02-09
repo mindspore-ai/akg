@@ -1,9 +1,7 @@
 {# KernelDesigner Agent 的用户 Prompt 模板 #}
 
 {# ========== 核心：Sketch DSL 规范指南 ========== #}
-你是一个专业的算子草图生成专家，需要将算子任务转换为通用的算子草图。如下为算子草图生成规范指南：
-
-{{ sketch_guide }}
+你是一个专业的算子草图生成专家，需要将算子任务转换为通用的算子草图。
 
 ---
 
@@ -36,26 +34,6 @@
 
 ---
 
-{% if inspirations %}
-## 进化优化参考方案
-
-以下是之前迭代的方案及其性能数据，请参考这些方案的优点和性能表现：
-
-{{ inspirations }}
-
----
-
-{% endif %}
-
-{% if conductor_suggestion %}
-## Conductor 优化建议
-
-{{ conductor_suggestion }}
-
----
-
-{% endif %}
-
 {% if user_requirements %}
 ## 额外的用户需求
 
@@ -76,6 +54,39 @@
 
 {% endif %}
 
+## 执行历史和上下文
+
+{% if history_actions %}
+{% for action in history_actions %}
+{% if action.tool_name == "history_summary" %}
+### 历史总结
+{{ action.result.get("summary", "无总结") }}
+
+{% else %}
+### 步骤 {{ loop.index }}: {{ action.tool_name }}
+
+**输入参数**:
+{% for key, value in action.arguments.items() %}
+- `{{ key }}`: {{ value | string | truncate(100) }}
+{% endfor %}
+
+**输出结果**:
+{% if action.result.get("_is_summary") %}
+{{ action.result.get("summary", "无结果") }}
+{% else %}
+{% for key, value in action.result.items() %}
+- `{{ key }}`: {{ value | string | truncate(100) }}
+{% endfor %}
+{% endif %}
+
+{% endif %}
+{% endfor %}
+{% else %}
+暂无历史上下文。
+{% endif %}
+
+---
+
 ## 设计指令
 
 请根据以上信息设计算法草图（sketch）。
@@ -87,20 +98,35 @@
 - 如果任务描述中包含特定的优化提示，优先采纳
 - 结合 Skill 中的知识和经验优化设计
 
-{% if enable_hint_mode and has_hint %}
-**Hint 模式已启用**: 请在草图中标注可调参数，并生成参数空间配置（space_config）用于自动调优。
-
-参数空间配置应该是 Python 字典格式，例如：
-```python
-{
-    "BLOCK_SIZE": [128, 256, 512, 1024],
-    "NUM_WARPS": [2, 4, 8]
-}
-```
-{% endif %}
-
 ---
 
 ## 输出格式要求
 
+{% if enable_hint_mode and has_hint %}
+**Hint 模式已启用**
+
+任务描述中包含 hint 标记（如 `@hint:`, `@range_hint` 等），指定了算子需要支持的参数范围。
+
+### 任务要求
+
+1. **提取 hint 信息**：从 task_desc 中识别所有 hint 标记，生成参数空间配置
+2. **设计支持参数范围的草图**：草图必须支持 hint 指定的所有参数值
+
+### 输出格式（JSON）
+
+请按照以下 JSON 格式输出：
+
+```json
+{
+    "code": "草图代码（必须包含'设计适用范围'注释，说明支持的参数范围，BLOCK_SIZE等配置考虑了hint范围）",
+    "space_config": "参数空间配置（完整的Python代码，按上述模板，用于后续生成多case测试）",
+    "reasoning": "设计思路（说明如何根据hint范围选择BLOCK_SIZE和边界处理策略）"
+}
+```
+
+仅返回JSON，不要包含任何解释或额外内容。
+{% else %}
+**请按照以下格式输出你的结果，仅返回json格式，不要包含任何解释或额外内容：**
+
 {{ format_instructions }}
+{% endif %}

@@ -16,8 +16,9 @@
 ReActAgent - ReAct 模式 Agent 基类
 
 提供通用的 ReAct（Reasoning + Acting）循环实现：
-- ReAct 主循环
-- 工具执行
+- ReAct 主循环（节点优先流程：先创建节点获取 cur_path，再执行工具）
+- 工具执行 + 参数表达式解析（read_json_file 等）
+- 结果持久化（result.json + 特殊文件）
 - LLM 调用和响应解析
 - Trace 系统集成
 - 用户交互处理
@@ -62,12 +63,12 @@ class ReActAgent(AgentBase, ABC):
     
     实现通用的 ReAct 循环，子类只需实现业务特定的方法。
     
-    核心功能：
-    - ReAct 主循环 (run)
-    - 工具执行 (_execute_tool)
-    - LLM 调用和响应解析 (_get_next_action)
-    - Trace 系统集成
-    - 用户交互处理 (_handle_ask_user, _handle_user_response)
+    核心流程（节点优先）：
+    1. 每次迭代前，创建新节点 → 获取 cur_path
+    2. 将 cur_path 注入 system prompt，调用 LLM 获取下一步动作
+    3. 将 cur_path 注入 arguments，执行工具
+    4. 将结果写入 cur_path/result.json + 特殊文件
+    5. 更新 trace 节点
     """
     
     def __init__(
@@ -269,7 +270,14 @@ class ReActAgent(AgentBase, ABC):
     
     async def run(self, user_input: str) -> Dict[str, Any]:
         """
-        执行 ReAct 循环
+        执行 ReAct 循环（节点优先流程）
+        
+        每次迭代:
+        1. 创建新节点 → 获取 cur_path
+        2. 将 cur_path 注入 prompt → 调用 LLM
+        3. 解析 LLM 响应 → 获取 tool_name + arguments
+        4. 注入 cur_path 到 arguments → 执行工具
+        5. 保存 result.json → 更新节点
         
         Args:
             user_input: 用户输入
@@ -301,7 +309,12 @@ class ReActAgent(AgentBase, ABC):
         iteration = 0
         while True:
             iteration += 1
-            llm_response = await self._get_next_action()
+            
+            # ====== STEP 1: 获取当前节点的 cur_path（用于 prompt） ======
+            cur_path = str(self.trace.fs.get_node_dir(self.current_node_id))
+            
+            # ====== STEP 2: LLM 调用（cur_path 注入 prompt） ======
+            llm_response = await self._get_next_action(cur_path=cur_path)
             
             if not llm_response:
                 return self._build_error_response("LLM 调用失败")
@@ -319,6 +332,7 @@ class ReActAgent(AgentBase, ABC):
             if tool_name == "ask_user":
                 return self._handle_ask_user(arguments)
             
+            # ====== STEP 3-5: 创建节点 → 执行工具 → 保存结果 ======
             result = await self._execute_tool(tool_name, arguments)
 
             if tool_name == "plan":
@@ -332,41 +346,67 @@ class ReActAgent(AgentBase, ABC):
             full_history = self.trace.get_full_action_history(self.current_node_id)
             logger.info(f"[Observation] history: {len(full_history)} 条, 当前节点: {self.current_node_id}")
     
-    # ==================== 工具执行 ====================
+    # ==================== 工具执行（节点优先流程） ====================
     
     async def _execute_tool(self, tool_name: str, arguments: Dict) -> Dict:
         """
-        执行工具并记录到 trace
+        执行工具（节点优先流程）
+        
+        流程:
+        1. 创建新节点（状态=pending）→ 获取 cur_path
+        2. 注入 cur_path 到 arguments
+        3. 调用 tool_executor 执行（内部解析 read_json_file 表达式）
+        4. 保存 result.json 到 cur_path
+        5. 更新 trace 节点的 result
         
         Args:
             tool_name: 工具名称
-            arguments: 工具参数
+            arguments: 工具参数（可能包含 read_json_file 表达式）
         
         Returns:
             执行结果
         """
+        # ====== 1. 创建节点 BEFORE 执行 ======
+        action = {
+            "type": tool_name,
+            "arguments": arguments,
+            "timestamp": datetime.now().isoformat()
+        }
+        # 使用 placeholder result 创建节点
+        new_node_id = self.trace.add_node(
+            action=action,
+            result={"status": "pending"},
+            metrics={}
+        )
+        self.current_node_id = new_node_id
+        
+        # ====== 2. 获取 cur_path 并注入 ======
+        cur_path = str(self.trace.fs.get_node_dir(new_node_id))
+        arguments["cur_path"] = cur_path
+        
+        logger.info(f"[Execute] 节点 {new_node_id}, cur_path: {cur_path}")
+        
+        # ====== 3. 同步硬件配置 ======
+        # 如果 LLM 在 arguments 中指定了硬件参数，更新 agent_context
+        # 以确保后续工具调用使用最新配置
+        self._sync_hardware_config(arguments)
+        
+        # ====== 4. 执行工具 ======
         start_time = time.time()
         result = await self.tool_executor.execute(tool_name, arguments)
         duration_ms = int((time.time() - start_time) * 1000)
         
         logger.info(f"[Acting] {tool_name}: {result.get('status')} ({duration_ms}ms)")
         
-        # 构造动作信息
-        action = {
-            "type": tool_name,
-            "arguments": arguments,
-            "timestamp": datetime.now().isoformat()
-        }
+        # ====== 5. 保存 result.json 到 cur_path ======
+        self._save_node_result(cur_path, result)
         
-        # 添加节点到 trace（自动持久化到文件系统）
-        new_node_id = self.trace.add_node(
-            action=action,
-            result=result,
-            metrics={"duration_ms": duration_ms}
+        # ====== 6. 更新 trace 节点 ======
+        self.trace.update_node_result(
+            new_node_id, result, {"duration_ms": duration_ms}
         )
-
-        self.current_node_id = new_node_id
-
+        
+        # 记录到 tool executor history
         action_record = ActionRecord(
             action_id=new_node_id,
             tool_name=tool_name,
@@ -377,11 +417,59 @@ class ReActAgent(AgentBase, ABC):
         
         return result
     
+    def _save_node_result(self, cur_path: str, result: Dict[str, Any]):
+        """
+        保存工具结果到节点目录
+        
+        保存内容:
+        - result.json: 完整结果字典
+        - code/code.py: 如果结果包含 generated_code 或 code
+        - output.txt: 如果 output 较长（可能是代码等）
+        
+        Args:
+            cur_path: 节点目录路径
+            result: 工具执行结果
+        """
+        node_dir = Path(cur_path)
+        
+        # 保存 result.json
+        result_file = node_dir / "result.json"
+        try:
+            result_file.write_text(
+                json.dumps(result, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8"
+            )
+            logger.info(f"[Result] 已保存: {result_file}")
+        except Exception as e:
+            logger.warning(f"[Result] 保存 result.json 失败: {e}")
+        
+        # 保存代码文件
+        code_content = result.get("generated_code") or result.get("code") or ""
+        if code_content and isinstance(code_content, str) and len(code_content) > 10:
+            code_dir = node_dir / "code"
+            code_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                (code_dir / "code.py").write_text(code_content, encoding="utf-8")
+                logger.info(f"[Result] 代码已保存: {code_dir / 'code.py'}")
+            except Exception as e:
+                logger.warning(f"[Result] 保存代码文件失败: {e}")
+        
+        # 保存较长的 output
+        output = result.get("output", "")
+        if isinstance(output, str) and len(output) > 200:
+            try:
+                (node_dir / "output.txt").write_text(output, encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"[Result] 保存 output.txt 失败: {e}")
+    
     # ==================== LLM 调用 ====================
     
-    async def _get_next_action(self) -> Optional[Dict]:
+    async def _get_next_action(self, cur_path: str = "") -> Optional[Dict]:
         """
         调用 LLM 获取下一个动作
+        
+        Args:
+            cur_path: 当前节点路径（注入到 prompt 中）
         
         Returns:
             LLM 响应字典，包含 tool_name, arguments, reason
@@ -397,7 +485,7 @@ class ReActAgent(AgentBase, ABC):
             logger.warning(f"[压缩历史失败] {e}，使用完整历史")
             compressed_history = self.trace.get_full_action_history(self.current_node_id)
         
-        # 格式化历史
+        # 格式化历史（包含 result_path 用于数据引用）
         action_history = json.dumps(
             [self._format_action_record(r) for r in compressed_history], 
             indent=2, 
@@ -415,6 +503,9 @@ class ReActAgent(AgentBase, ABC):
             "user_input": self._original_user_input or "",
             "plan_list": json.dumps(self.plan_list, indent=2, ensure_ascii=False) if self.plan_list else "",
             "action_history": action_history,
+            # 节点路径信息（供 LLM 引用数据）
+            "cur_path": cur_path,
+            "task_base_path": str(self.trace.fs.task_dir),
         })
         
         prompt = self.system_prompt_template.format(**prompt_context)
@@ -637,13 +728,57 @@ class ReActAgent(AgentBase, ABC):
         """构建错误响应"""
         return self._build_response("error", error_msg=error_msg)
     
+    # ==================== 配置同步 ====================
+    
+    # 需要同步到 agent_context 的硬件参数 key
+    _HARDWARE_CONFIG_KEYS = {"framework", "backend", "arch", "dsl"}
+    
+    def _sync_hardware_config(self, arguments: Dict[str, Any]):
+        """
+        将 LLM arguments 中的硬件参数同步到 agent_context
+        
+        当 LLM 在调用工具时指定了 backend/dsl/arch/framework，
+        说明这是用户期望的配置。同步到 agent_context 确保后续调用使用最新值。
+        
+        子类可覆盖 _on_hardware_config_updated() 来同步到自身属性。
+        
+        Args:
+            arguments: LLM 生成的工具参数
+        """
+        updated = {}
+        for key in self._HARDWARE_CONFIG_KEYS:
+            value = arguments.get(key)
+            if value and isinstance(value, str):
+                old_value = self.tool_executor.agent_context.get(key)
+                if value != old_value:
+                    self.tool_executor.agent_context[key] = value
+                    updated[key] = value
+        
+        if updated:
+            logger.info(f"[ConfigSync] 硬件配置已更新: {updated}")
+            self._on_hardware_config_updated(updated)
+    
+    def _on_hardware_config_updated(self, updated: Dict[str, str]):
+        """
+        硬件配置更新回调（子类可覆盖）
+        
+        当 agent_context 中的硬件参数被更新时调用。
+        子类应在此方法中同步到自身属性和 prompt 上下文。
+        
+        Args:
+            updated: 已更新的参数字典 {"backend": "ascend", ...}
+        """
+        pass
+    
     # ==================== 工具方法 ====================
     
     def _format_action_record(self, record: ActionRecord) -> Dict:
         """
         格式化 ActionRecord 为字典
         
-        特殊处理 summary 类型。
+        包含 result_path 和 result_keys 用于 LLM 数据引用:
+        - result_path: 结果文件路径（供 read_json_file 使用）
+        - result_keys: 结果中的可用 key 列表
         
         Args:
             record: ActionRecord 实例
@@ -661,13 +796,26 @@ class ReActAgent(AgentBase, ABC):
                 "compressed": True
             }
         
-        return {
+        formatted = {
             "action_id": record.action_id,
             "tool_name": record.tool_name,
             "arguments": record.arguments,
             "result": record.result,
             "duration_ms": record.duration_ms
         }
+        
+        # 添加 result_path（供 LLM 构建 read_json_file 表达式）
+        if record.action_id and record.action_id.startswith("node_"):
+            result_path = str(
+                self.trace.fs.get_node_dir(record.action_id) / "result.json"
+            )
+            formatted["result_path"] = result_path
+            
+            # 添加 result 中的可用 key 列表
+            if isinstance(record.result, dict):
+                formatted["result_keys"] = list(record.result.keys())
+        
+        return formatted
     
     def get_trace_summary(self) -> Dict[str, Any]:
         """

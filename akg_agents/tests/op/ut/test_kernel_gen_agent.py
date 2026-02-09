@@ -21,24 +21,51 @@
 
 import asyncio
 import logging
+import json
 from pathlib import Path
+
+from akg_agents.op.agents import KernelGen
+from akg_agents.core_v2.filesystem import ActionRecord
+from akg_agents.utils.common_utils import ParserFactory
 
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s'
 )
 
 logger = logging.getLogger(__name__)
 
 
+def print_code(raw_output: str, keys: list = None):
+    """打印代码结果（参考 designer 测试格式）"""
+    if keys is None:
+        keys = ["code"]
+    try:
+        extracted_json = ParserFactory._extract_json_comprehensive(raw_output)
+        if extracted_json:
+            parsed = json.loads(extracted_json)
+            if isinstance(parsed, dict):
+                parsed = {key: parsed.get(key, "N/A") for key in keys if key in parsed}
+    except (json.JSONDecodeError, Exception):
+        # 如果解析失败，直接显示原始输出
+        print(f"{'=' * 50}")
+        print(f"📋 [RAW OUTPUT]")
+        print(raw_output[:1000] + "..." if len(raw_output) > 1000 else raw_output)
+        print("=" * 50)
+        return
+
+    print(f"{'=' * 50}")
+    for key, value in parsed.items():
+        print(f"📋 [{key.upper()}]")
+        print(value)
+        print("-" * 50)
+    print("=" * 50)
+
+
 async def test_kernel_gen_basic():
     """测试基本的 kernel 生成功能"""
     try:
-        # 导入 KernelGen 和 ActionRecord
-        from akg_agents.op.agents import KernelGen
-        from akg_agents.core_v2.filesystem import ActionRecord
-        
         # 创建 KernelGen 实例
         agent = KernelGen()
         
@@ -83,10 +110,7 @@ async def test_kernel_gen_basic():
         )
         
         logger.info("✓ Code generation completed")
-        logger.info(f"{'='*60}\nGenerated Code:\n{'='*60}\n{generated_code[:500]}...\n{'='*60}")
-        
-        if reasoning:
-            logger.info(f"\nReasoning:\n{reasoning[:300]}...")
+        print_code(generated_code, ["code"])
         
         return True
     
@@ -98,9 +122,6 @@ async def test_kernel_gen_basic():
 async def test_kernel_gen_with_error():
     """测试带错误反馈的迭代生成"""
     try:
-        from akg_agents.op.agents import KernelGen
-        from akg_agents.core_v2.filesystem import ActionRecord
-        
         # 创建 KernelGen 实例
         agent = KernelGen()
         
@@ -142,17 +163,17 @@ async def test_kernel_gen_with_error():
 - 输出：在最后一个维度上应用 softmax
 - 使用数值稳定的实现
 """,
-            dsl="triton_cuda",
+            dsl="triton_ascend",
             framework="torch",
-            backend="cuda",
-            arch="a100",
+            backend="ascend",
+            arch="ascend910b4",
             user_requirements="修复之前的编译错误：需要先计算 max_val",
             task_id="test_softmax_001",
             history_compress=history_compress
         )
         
         logger.info("✓ Code generation with error feedback completed")
-        logger.info(f"{'='*60}\nGenerated Code (v2):\n{'='*60}\n{generated_code[:500]}...\n{'='*60}")
+        print_code(generated_code, ["code"])
         
         return True
     

@@ -334,7 +334,7 @@ class TraceSystem:
         action_record = ActionRecord(
             action_id=self._generate_action_id(),
             tool_name=action.get("type", "unknown"),
-            arguments=action.get("params", {}),
+            arguments=action.get("arguments", action.get("params", {})),
             result=result,
         )
         
@@ -378,6 +378,12 @@ class TraceSystem:
         """
         更新节点的执行结果
         
+        同时更新：
+        1. trace.json 中的 TraceNode.result
+        2. trace.json 中的 TraceNode.state_snapshot["status"]
+        3. 文件系统中的 state.json（NodeState.status）
+        4. action_history_fact.json 中最后一条 action 的 result
+        
         Args:
             node_id: 节点 ID
             result: 新的执行结果
@@ -389,7 +395,33 @@ class TraceSystem:
             node.metrics.update(metrics)
         node.timestamp = _get_timestamp()
         
+        # 根据 result 中的 status 推断节点状态
+        result_status = result.get("status", "") if isinstance(result, dict) else ""
+        if result_status in ("fail", "error", "failed"):
+            node_status = "failed"
+        else:
+            node_status = "completed"
+        
+        # 1. 更新 TraceNode 的 state_snapshot
+        node.state_snapshot["status"] = node_status
+        
+        # 2. 保存 trace.json
         self._save_trace()
+        
+        # 3. 更新文件系统中的 state.json
+        self.fs.update_node_state(node_id, status=node_status, metrics=metrics)
+        
+        # 4. 更新 action_history_fact.json 中的 result（替换掉占位的 pending）
+        try:
+            history_fact = self.fs.load_action_history_fact(node_id)
+            if history_fact.actions:
+                last_action = history_fact.actions[-1]
+                last_action.result = result
+                if metrics and "duration_ms" in metrics:
+                    last_action.duration_ms = metrics["duration_ms"]
+                self.fs.save_action_history_fact(node_id, history_fact)
+        except Exception as e:
+            logger.warning(f"Failed to update action history fact for {node_id}: {e}")
     
     def mark_node_completed(self, node_id: str, metrics: Dict = None) -> None:
         """

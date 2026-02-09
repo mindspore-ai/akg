@@ -26,23 +26,23 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional
 from akg_agents import get_project_root
-
 from akg_agents.core_v2.agents import AgentBase, register_agent, Jinja2TemplateWrapper
 from akg_agents.core_v2.filesystem import ActionRecord
 
 # 导入 skill 系统模块
 from akg_agents.core_v2.skill import (
     SkillLoader, 
-    SkillSelector, 
-    SelectionContext, 
     SkillLevel,
-    create_metadata_matcher
+)
+# 使用算子专用的 SkillSelector
+from akg_agents.op.skill.operator_selector import (
+    OperatorSkillSelector,
+    OperatorSelectionContext,
 )
 
 # 设置 Skills 目录路径
 project_root = Path(get_project_root())
-# 修改为指向真正的 skills 目录（包含 triton-ascend 和 cpu skills）
-SKILLS_DIR = project_root / "python" / "akg_agents" / "op" / "resources" / "skills"
+SKILLS_DIR = project_root / "op" / "resources" / "skills"
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,25 @@ class KernelGen(AgentBase):
     
     # Agent 工具配置元数据
     TOOL_NAME = "call_kernel_gen"
-    DESCRIPTION = "根据任务需求生成高性能内核代码。"
+    DESCRIPTION = """
+仅生成 kernel 代码（不包含验证）。
+
+功能：
+- 根据任务描述生成高性能内核代码
+- 基于 Skill 系统自动选择最佳优化策略
+- 支持多种 DSL（Triton, CUDA, AscendC 等）
+
+适用场景：
+- 用户明确说"不用验证"、"只给我代码"、"快速生成草稿"
+- 只需要快速查看代码实现思路
+- 用户想自己进行验证和调试
+
+⚠️ 注意：此工具仅生成代码，不验证正确性和性能！
+- 如果需要验证代码正确性，请使用 verify_kernel
+- 如果需要完整的生成+验证流程，请使用 workflow（如 use_coder_only_workflow）
+
+输出：生成的 kernel 代码（包含 class ModelNew 和 kernel 函数）
+"""
     
     PARAMETERS_SCHEMA = {
         "type": "object",
@@ -104,6 +122,16 @@ class KernelGen(AgentBase):
                     "type": "object"
                 },
                 "default": []
+            },
+            "verifier_error": { 
+                "type": "string",
+                "description": "Verifier 错误信息（可选）",
+                "default": ""
+            },
+            "conductor_suggestion": {
+                "type": "string",
+                "description": "Conductor 修复建议（可选）",
+                "default": ""
             },
             "model_level": {
                 "type": "string",
@@ -162,25 +190,8 @@ class KernelGen(AgentBase):
             
             logger.info(f"Loaded {len(self.loaded_skills)} skills from {SKILLS_DIR}")
             
-            # 创建自定义过滤器
-            # 1. 排除无关 category
-            def category_filter(skill, context):
-                unrelated = ["writing", "web", "communication", "documentation", "workflow"]
-                return skill.category not in unrelated
-            
-            # 2. backend 匹配器
-            backend_filter = create_metadata_matcher("backend")
-            
-            # 3. dsl 匹配器
-            dsl_filter = create_metadata_matcher("dsl")
-            
-            # 4. framework 匹配器
-            framework_filter = create_metadata_matcher("framework")
-            
-            # 创建 selector（带自定义过滤器）
-            self.skill_selector = SkillSelector(
-                custom_filters=[category_filter, backend_filter, dsl_filter, framework_filter]
-            )
+            # 使用算子专用的 OperatorSkillSelector
+            self.skill_selector = OperatorSkillSelector()
             
         except Exception as e:
             logger.error(f"Failed to initialize skill system: {e}")
@@ -188,92 +199,98 @@ class KernelGen(AgentBase):
             self.loaded_skills = []
             self.skill_selector = None
     
-    
-    async def _select_skills(self, dsl: str = "", framework: str = "", backend: str = "") -> List[Any]:
+    async def _select_skills(
+        self, 
+        op_name: str = "",
+        task_desc: str = "",
+        dsl: str = "", 
+        framework: str = "", 
+        backend: str = "",
+    ) -> List[Any]:
         """
-        选择相关的 Skills
-        
-        使用 SkillSelector 的自定义过滤器进行两阶段筛选：
-        1. 粗筛（coarse_filter）：使用 custom_filters 自动过滤
-        2. 精筛（LLM）：根据任务上下文智能选择
-        
-        Args:
-            dsl: 目标 DSL
-            framework: 目标框架
-            backend: 目标后端
-        
-        Returns:
-            选中的 Skill 列表
+        两阶段 Skill 选择：
+        1. 粗筛：基于 OperatorSkillSelector（backend/dsl metadata 过滤）
+        2. 精筛：LLM 根据任务描述选择
         """
-        if not self.skill_selector:
-            logger.warning("Skill system not initialized, skipping skill selection")
+        if not self.skill_selector or not self.loaded_skills:
             return []
-        
-        if not self.loaded_skills:
-            logger.warning("No skills loaded, skipping skill selection")
-            return []
-        
-        # 构建选择上下文（包含 dsl, framework, backend 供过滤器使用）
-        context = SelectionContext(
-            custom_fields={
-                "task_type": "code_generation",
-                "framework": framework or "unknown",
-                "optimization_goal": f"生成 {dsl or 'kernel'} 内核代码",
-                "dsl": dsl,
-                "framework": framework,
-                "backend": backend
-            }
-        )
         
         try:
-            # 阶段1：粗筛（使用 custom_filters 自动过滤）
-            candidates = self.skill_selector.coarse_filter(self.loaded_skills, context)
-            logger.info(f"Coarse filter: {len(self.loaded_skills)} -> {len(candidates)} skills")
+            # 阶段1：粗筛（使用 OperatorSkillSelector）
+            context = OperatorSelectionContext(
+                dsl=dsl.replace("_", "-"),  # triton_ascend -> triton-ascend
+                backend=backend
+            )
+            filtered = self.skill_selector.coarse_filter(self.loaded_skills, context)
+            
+            logger.info(f"Coarse filter: {len(self.loaded_skills)} -> {len(filtered)} skills")
+            
+            if len(filtered) <= 3:
+                return filtered
             
             # 阶段2：LLM 精筛
-            # 定义 prompt 模板
-            prompt_template = """你是一个 Skill 选择专家。现在需要为内核代码生成（kernel code generation）任务选择相关的 Skills。
+            skills_info = [{"name": s.name, "description": s.description} for s in filtered]
+            
+            import json
+            llm_prompt = f"""你是一个 Skill 选择专家。请为以下内核代码生成任务选择相关的 Skills。
 
-**任务上下文**:
-{context_str}
+**任务信息**:
+- 算子名称: {op_name}
+- 目标 DSL: {dsl}
+- 目标后端: {backend}
+- 目标框架: {framework}
+- 任务描述: {task_desc}
 
-**候选 Skills（已粗筛）**:
-{skills_str}
+**可用 Skills**:
+{json.dumps(skills_info, indent=2, ensure_ascii=False)}
 
-**任务要求**:
-请从候选 Skills 中选择与内核代码生成任务最相关的 Skills。注意：
-1. 优先选择与 DSL 和框架直接相关的 Skills
-2. 包含代码生成方法和实现技巧相关的 Skills
-3. 确保不要遗漏重要的 Skills
-4. 重点是内核代码生成，无关的技能不要选择（如算子草图设计、测试等）
+**特别注意**：
+1. 重点是内核代码生成，无关的技能不要选择（如算子草图设计、测试、工作流等）
+2. 选取最相关的 Skills，不要选择太多，尽量保证覆盖关键知识即可
+3. 没有抢相关的可以不选
 
 **输出格式**（JSON）:
-```json
+ ```json
 {{
-  "selected": ["skill-name-1", "skill-name-2", ...],
-  "reason": "选择理由"
+"selected": ["skill-name-1", "skill-name-2", ...],
+"reason": "简要选择理由"
 }}
 ```
 """
-            
-            prompt = self.skill_selector.build_llm_prompt(candidates, context, prompt_template)
-            
             template = Jinja2TemplateWrapper("{{ prompt }}")
-            llm_response, _, _ = await self.run_llm(
-                template, 
-                {"prompt": prompt}, 
-                "standard"
-            )
+            response, _, _ = await self.run_llm(template, {"prompt": llm_prompt}, "standard")
             
-            selected_skills = self.skill_selector.parse_llm_response(llm_response, candidates)
+            # 解析响应
+            selected_names, reason = self._parse_llm_selection(response)
+            name_to_skill = {s.name: s for s in filtered}
+            selected = [name_to_skill[n] for n in selected_names if n in name_to_skill]
             
-            logger.info(f"✓ Selected {len(selected_skills)} skills: {[s.name for s in selected_skills]}")
+            logger.info(f"LLM selected {len(selected)} skills: {[s.name for s in selected]}")
+            if reason:
+                logger.info(f"Selection reason: {reason}")
+            return selected if selected else filtered
             
-            return selected_skills
-        
         except Exception as e:
-            logger.warning(f"Skill selection failed: {e}, returning empty list")
+            logger.warning(f"Skill selection failed: {e}")
             return []
+    
+    def _parse_llm_selection(self, response: str) -> Tuple[List[str], str]:
+        """解析 LLM 返回的 skill 选择结果，返回 (名称列表, 理由)"""
+        import json
+        import re
+        try:
+            # 尝试解析 JSON 对象格式 {"selected": [...], "reason": "..."}
+            json_match = re.search(r'\{[^{}]*"selected"[^{}]*\}', response, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+                return result.get("selected", []), result.get("reason", "")
+            # 回退：尝试解析纯数组格式
+            arr_match = re.search(r'\[.*?\]', response, re.DOTALL)
+            if arr_match:
+                return json.loads(arr_match.group()), ""
+        except json.JSONDecodeError:
+            pass
+        return [], ""
         
     
     async def run(
@@ -287,10 +304,26 @@ class KernelGen(AgentBase):
         user_requirements: str = "",
         task_id: str = "",
         history_compress: Optional[List[dict]] = None,
+        verifier_error: str = "",
+        conductor_suggestion: str = "",
         model_level: str = "standard"
     ) -> Tuple[str, str, str]:
         """
         执行代码生成
+        
+        Args:
+            op_name: 算子名称
+            task_desc: 任务描述
+            dsl: 目标 DSL
+            framework: 目标框架
+            backend: 目标后端
+            arch: 目标架构
+            user_requirements: 用户额外需求
+            task_id: 任务 ID
+            history_compress: 历史记录（已废弃，保留向后兼容）
+            verifier_error: Verifier 错误信息
+            conductor_suggestion: Conductor 修复建议
+            model_level: 模型级别
         
         Returns:
             Tuple[str, str, str]: (生成的代码, 完整 prompt, 推理过程)
@@ -303,8 +336,14 @@ class KernelGen(AgentBase):
             # 生成函数名
             func_name = f"{op_name}_{dsl}_{framework}"
             
-            # 1. 选择相关 Skills（异步）
-            selected_skills = await self._select_skills(dsl=dsl, framework=framework, backend=backend)
+            # 1. 选择相关 Skills
+            selected_skills = await self._select_skills(
+                op_name=op_name,
+                task_desc=task_desc,
+                dsl=dsl, 
+                framework=framework, 
+                backend=backend
+            )
             
             # 2. 渲染 System Prompt
             system_prompt = self.system_prompt_template.format(
@@ -317,6 +356,8 @@ class KernelGen(AgentBase):
             # 3. 渲染 User Prompt
             user_prompt = self.user_prompt_template.format(
                 history_actions=history_compress,
+                verifier_error=verifier_error,
+                conductor_suggestion=conductor_suggestion,
                 skills=selected_skills,
                 op_name=op_name,
                 func_name=func_name,

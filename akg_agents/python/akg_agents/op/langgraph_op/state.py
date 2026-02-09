@@ -83,4 +83,7 @@ class KernelGenState(BaseState, total=False):
     framework_api_doc: Optional[str]
     backend_api_doc: Optional[str]
     workflow_name: Optional[str]
+    
+    # === 路径配置 ===
+    cur_path: Optional[str]  # 自定义工作路径，用于控制中间文件和代码输出的存放位置
 
