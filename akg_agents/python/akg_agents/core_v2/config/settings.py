@@ -219,6 +219,10 @@ class AKGSettings:
     # 默认使用的模型级别
     default_model: str = "standard"
     
+    # 模型上下文窗口大小（用于智能历史压缩判断）
+    # 默认 128k tokens；仅当 prompt 总 token 数超过 80% 时才触发历史压缩
+    context_window: int = 128000
+    
     # 流式输出
     stream_output: bool = False
     
@@ -233,6 +237,7 @@ class AKGSettings:
         result = {
             "models": {k: v.to_dict() for k, v in self.models.items()},
             "default_model": self.default_model,
+            "context_window": self.context_window,
             "stream_output": self.stream_output,
             "data_collect": self.data_collect,
             "extra": self.extra,
@@ -264,6 +269,7 @@ class AKGSettings:
             models=models,
             embedding=embedding,
             default_model=data.get("default_model", "standard" if use_defaults else ""),
+            context_window=data.get("context_window", 128000 if use_defaults else 128000),
             stream_output=data.get("stream_output", False),
             data_collect=data.get("data_collect", False),
             extra=data.get("extra", {}),
@@ -287,6 +293,7 @@ class AKGSettings:
             embedding=merged_embedding,
             # 只有显式设置了才覆盖（空字符串表示未设置）
             default_model=other.default_model if other.default_model else self.default_model,
+            context_window=other.context_window if other.context_window != 128000 else self.context_window,
             stream_output=other.stream_output or self.stream_output,
             data_collect=other.data_collect or self.data_collect,
             extra={**self.extra, **other.extra},

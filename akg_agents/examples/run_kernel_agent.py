@@ -1,32 +1,13 @@
 #!/usr/bin/env python3
-"""
-KernelAgent 示例 - 展示如何使用 KernelAgent 进行 kernel 开发
-
-运行方式：
-  1. 交互模式: python examples/run_kernel_agent.py --interactive
-  2. 单次执行: python examples/run_kernel_agent.py --query "你的需求描述"
-  3. 自定义配置: python examples/run_kernel_agent.py --query "需求" --framework torch --backend cpu
-
-示例：
-  # 基础使用
-  python examples/run_kernel_agent.py --query "实现一个 ReLU kernel"
-  
-  # 指定框架和后端
-  python examples/run_kernel_agent.py --query "优化矩阵乘法" --framework torch --backend cpu --arch x86_64 --dsl cpp
-  
-  # 交互模式
-  python examples/run_kernel_agent.py --interactive --backend cuda --arch a100
-"""
+"""KernelAgent 测试 - 运行: python examples/run_kernel_agent.py"""
 
 import asyncio
-import argparse
+import os
 import sys
 import logging
 import json
-import time
 from datetime import datetime
 from pathlib import Path
-
 
 # 配置日志
 logging.basicConfig(
@@ -35,199 +16,285 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 
+# 创建日志目录（按日期组织）
+_session_ts = datetime.now()
+LOG_DIR = Path.home() / ".akg" / "logs"
+SESSION_DIR = LOG_DIR / "sessions" / _session_ts.strftime("%Y-%m-%d")
+SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
-class KernelAgentExample:
-    """KernelAgent 示例封装类"""
+# 会话日志文件：清晰的时间戳格式
+SESSION_LOG_FILE = SESSION_DIR / f"{_session_ts.strftime('%H-%M-%S')}.jsonl"
+
+# 写入 latest 指针文件（方便快速找到最新日志）
+try:
+    (LOG_DIR / "latest_session.txt").write_text(str(SESSION_LOG_FILE), encoding="utf-8")
+except Exception:
+    pass
+
+def log_interaction(round_num: int, interaction_type: str, data: dict):
+    """
+    记录交互日志到文件
     
-    def __init__(self, task_id: str = None, model_level: str = "standard", 
-                 framework: str = "torch", backend: str = "cuda", 
-                 arch: str = "a100", dsl: str = "triton",
-                 devices: str = "0", enable_logging: bool = True):
-        """
-        初始化示例
-        
-        Args:
-            task_id: 任务ID，默认自动生成
-            model_level: 模型级别 (fast/standard/advanced)
-            framework: 框架类型 (torch/mindspore/numpy等)
-            backend: 后端类型 (cuda/cpu/npu等)
-            arch: 架构类型 (a100/x86_64/ascend910等)
-            dsl: DSL 语言类型 (triton/cpp/python等)
-            devices: 设备ID列表，逗号分隔 (如 "0" 或 "0,1,2")
-            enable_logging: 是否启用详细日志
-        """
-        self.task_id = task_id or f"kernel_task_{int(time.time())}"
-        self.model_level = model_level
-        self.framework = framework
-        self.backend = backend
-        self.arch = arch
-        self.dsl = dsl
-        self.devices = devices
-        self.enable_logging = enable_logging
-        self.agent = None
-        self.round_num = 0
-        
-        # 创建日志目录
-        if enable_logging:
-            self.log_dir = Path.home() / ".akg" / "logs"
-            self.log_dir.mkdir(parents=True, exist_ok=True)
-            self.log_file = self.log_dir / f"kernel_agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
-        else:
-            self.log_file = None
+    Args:
+        round_num: 轮次编号
+        interaction_type: 交互类型 (user_input, llm_request, llm_response, tool_call, result)
+        data: 数据字典
+    """
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "round": round_num,
+        "type": interaction_type,
+        "data": data
+    }
     
-    def _log_interaction(self, interaction_type: str, data: dict):
-        """记录交互日志"""
-        if not self.enable_logging or not self.log_file:
-            return
+    try:
+        with open(SESSION_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"⚠️  日志写入失败: {e}")
+
+
+def print_log_summary():
+    """打印日志摘要"""
+    try:
+        with open(SESSION_LOG_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
         
-        log_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "round": self.round_num,
-            "type": interaction_type,
-            "data": data
+        print(f"\n📊 [日志摘要]")
+        print(f"   总记录数: {len(lines)}")
+        
+        # 统计各类型数量
+        types = {}
+        for line in lines:
+            try:
+                entry = json.loads(line)
+                entry_type = entry.get("type", "unknown")
+                types[entry_type] = types.get(entry_type, 0) + 1
+            except:
+                pass
+        
+        print(f"   记录类型分布:")
+        for t, count in sorted(types.items()):
+            print(f"      {t}: {count}")
+        
+    except Exception as e:
+        print(f"⚠️  无法读取日志: {e}")
+
+import akg_agents
+
+# 诊断导入问题
+def diagnose_imports():
+    """诊断可能的导入问题"""
+    issues = []
+    available = []
+    
+    # 检查 KernelAgent (必需)
+    try:
+        from akg_agents.op.agents.kernel_agent import KernelAgent
+        available.append("✅ KernelAgent")
+    except ImportError as e:
+        issues.append(f"❌ KernelAgent 导入失败: {e}")
+        return issues, []
+    
+    # 检查 PlanAgent (core_v2/agents)
+    try:
+        from akg_agents.core_v2.agents.plan import PlanAgent
+        available.append("✅ PlanAgent")
+    except ImportError as e:
+        issues.append(f"⚠️  PlanAgent 导入失败: {e}")
+    
+    op_agents = {
+        "kernel_gen": "KernelGen",
+        "kernel_designer": "KernelDesigner",
+        "op_task_builder": "OpTaskBuilder"
+    }
+    
+    for module_name, class_name in op_agents.items():
+        try:
+            __import__(f"akg_agents.op.agents.{module_name}")
+            available.append(f"✅ {class_name}")
+        except ImportError as e:
+            issues.append(f"⚠️  {class_name} 导入失败: {e}")
+    
+    return issues, available
+
+from akg_agents.op.agents.kernel_agent import KernelAgent
+
+
+_current_round = 0
+
+def wrap_agent_with_logging(agent):
+    """包装 agent.run_llm 以记录 LLM 交互到日志文件（包含详细上下文）"""
+    original_run_llm = agent.run_llm
+    
+    async def logged_run_llm(template, input_data, model_level="standard"):
+        global _current_round
+        
+        # 生成 prompt
+        prompt_text = template.format(**input_data) if hasattr(template, 'format') else str(template)
+        
+        # 获取 trace 摘要
+        trace_summary = agent.get_trace_summary() if hasattr(agent, 'get_trace_summary') else {}
+        
+        # 记录请求的基本信息
+        log_data = {
+            "model_level": model_level,
+            "prompt_length": len(prompt_text),
+            "prompt_full": prompt_text,
+            "current_node": getattr(agent, 'current_node_id', 'unknown'),
+            "trace_summary": trace_summary
         }
         
+        # 尝试获取并记录详细的上下文信息
         try:
-            with open(self.log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            if hasattr(agent, 'trace') and hasattr(agent, 'current_node_id'):
+                from akg_agents.core_v2.llm import create_llm_client
+                llm_client = create_llm_client(model_level=model_level)
+                
+                # 获取完整历史（未压缩）
+                full_history = agent.trace.get_full_action_history(agent.current_node_id)
+                
+                # 获取压缩历史
+                history_records = await agent.trace.get_compressed_history_for_llm(
+                    llm_client, agent.current_node_id, max_tokens=2000
+                )
+                
+                # 记录上下文详情
+                log_data["context_details"] = {
+                    "full_history_count": len(full_history),
+                    "compressed_history_count": len(history_records),
+                    "compression_ratio": f"{len(history_records)}/{len(full_history)}" if full_history else "0/0",
+                    "is_compressed": len(history_records) < len(full_history),
+                    "current_plan_steps": len(getattr(agent, 'plan_list', [])),
+                    "original_user_input": getattr(agent, '_original_user_input', 'N/A')[:100]
+                }
+                
+                # 记录压缩历史的详细信息
+                log_data["compressed_history"] = []
+                for r in history_records:
+                    entry = {
+                        "action_id": r.action_id,
+                        "tool_name": r.tool_name,
+                    }
+                    
+                    # 特殊处理 history_summary
+                    if r.tool_name == "history_summary":
+                        entry["summary"] = r.result.get("summary", "")[:200] + "..."
+                        entry["original_actions"] = r.arguments.get("original_actions", 0)
+                        entry["compressed"] = True
+                    else:
+                        entry["arguments"] = str(r.arguments)[:100]
+                        entry["result_status"] = r.result.get("status", "N/A")
+                        entry["compressed"] = False
+                    
+                    log_data["compressed_history"].append(entry)
+                
         except Exception as e:
-            print(f"⚠️  日志写入失败: {e}")
+            log_data["context_error"] = str(e)
+        
+        log_interaction(_current_round, "llm_request", log_data)
+        
+        # 打印上下文摘要
+        print(f"   📤 [LLM Request]")
+        print(f"      Prompt: {len(prompt_text)} chars")
+        print(f"      Node: {log_data['current_node']}")
+        if "context_details" in log_data:
+            ctx = log_data["context_details"]
+            print(f"      History: {ctx['compression_ratio']} ({'压缩' if ctx['is_compressed'] else '完整'})")
+            print(f"      Plan Steps: {ctx['current_plan_steps']}")
+        
+        # 调用 LLM
+        result = await original_run_llm(template, input_data, model_level)
+        
+        # 记录响应
+        if isinstance(result, tuple) and result:
+            response = result[0] if len(result) > 0 else ""
+            log_interaction(_current_round, "llm_response", {
+                "response_length": len(response) if isinstance(response, str) else 0,
+                "response_full": response
+            })
+            print(f"   📥 [LLM Response] {len(response) if isinstance(response, str) else 0} chars")
+        
+        return result
     
-    def _wrap_agent_with_logging(self, agent):
-        """包装 agent 以记录 LLM 交互"""
-        if not self.enable_logging:
-            return agent
-        
-        original_run_llm = agent.run_llm
-        
-        async def logged_run_llm(template, input_data, model_level="standard"):
-            # 生成 prompt
-            prompt_text = template.format(**input_data) if hasattr(template, 'format') else str(template)
-            
-            # 记录请求
-            log_data = {
-                "model_level": model_level,
-                "prompt_length": len(prompt_text),
-                "current_node": getattr(agent, 'current_node_id', 'unknown'),
-            }
-            self._log_interaction("llm_request", log_data)
-            
-            print(f"   📤 [LLM Request] Prompt: {len(prompt_text)} chars")
-            
-            # 调用 LLM
-            result = await original_run_llm(template, input_data, model_level)
-            
-            # 记录响应
-            if isinstance(result, tuple) and result:
-                response = result[0] if len(result) > 0 else ""
-                self._log_interaction("llm_response", {
-                    "response_length": len(response) if isinstance(response, str) else 0
-                })
-                print(f"   📥 [LLM Response] {len(response) if isinstance(response, str) else 0} chars")
-            
-            return result
-        
-        agent.run_llm = logged_run_llm
-        return agent
+    agent.run_llm = logged_run_llm
+    return agent
+
+
+async def test_kernel_agent():
+    """KernelAgent 交互式测试"""
     
-    async def initialize(self):
-        """初始化 KernelAgent"""
-        print("\n" + "="*80)
-        print("KernelAgent 示例")
-        print("="*80 + "\n")
+    print("\n" + "="*80)
+    print("KernelAgent 测试")
+    print("="*80 + "\n")
+    
+    # 诊断导入问题
+    print("🔍 [诊断] 检查模块导入...")
+    import_issues, available_agents = diagnose_imports()
+    
+    if available_agents:
+        print("\n✅ [可用模块]")
+        for agent in available_agents:
+            print(f"   {agent}")
+    
+    if import_issues:
+        print("\n📝 [注意事项]")
+        for issue in import_issues:
+            print(f"   {issue}")
+        print()
+    else:
+        print("   ✅ 所有模块都正常\n")
+    
+    # 检查 API Key
+    from akg_agents.utils.environment_check import _check_llm_api
+    if not _check_llm_api():
+        raise ValueError("LLM API Key 配置或连接有问题，请检查。")
+    
+    try:
+        # 使用唯一 task_id，避免加载旧历史
+        import time
+        task_id = f"test_{int(time.time())}"
         
-        # 检查环境
-        print("🔍 [检查] 验证环境配置...")
-        from akg_agents.utils.environment_check import _check_llm_api
-        if not _check_llm_api():
-            raise ValueError("LLM API Key 配置或连接有问题，请检查。")
+        print("🔧 [初始化] 创建 KernelAgent...")
+        print(f"📁 任务ID: {task_id}")
+        print(f"📝 日志文件: {SESSION_LOG_FILE}\n")
         
-        # 创建 agent
-        print(f"🔧 [初始化] 创建 KernelAgent...")
-        print(f"   任务ID: {self.task_id}")
-        print(f"   模型级别: {self.model_level}")
-        print(f"   框架: {self.framework}")
-        print(f"   后端: {self.backend}")
-        print(f"   架构: {self.arch}")
-        print(f"   DSL: {self.dsl}")
-        print(f"   设备: {self.devices}")
-        if self.log_file:
-            print(f"   日志文件: {self.log_file}")
+        agent = KernelAgent(task_id=task_id, model_level="standard")
         
-        from akg_agents.op.agents.kernel_agent import KernelAgent
-        self.agent = KernelAgent(
-            task_id=self.task_id, 
-            model_level=self.model_level,
-            framework=self.framework,
-            backend=self.backend,
-            arch=self.arch,
-            dsl=self.dsl
-        )
+        # 包装 agent 以记录 LLM 交互
+        agent = wrap_agent_with_logging(agent)
         
-        # 包装 agent
-        self.agent = self._wrap_agent_with_logging(self.agent)
-        
-        # 显示可用工具
-        all_tool_names = [t.get("function", {}).get("name", "Unknown") for t in self.agent.available_tools]
-        agent_tool_names = list(self.agent.agent_registry.keys())
+        # 打印注册的工具（更详细）
+        all_tool_names = [t.get("function", {}).get("name", "Unknown") for t in agent.available_tools]
+        agent_tool_names = list(agent.agent_registry.keys())
         basic_tool_names = [t for t in all_tool_names if t not in agent_tool_names]
         
         print(f"\n📦 [已注册工具]")
         print(f"   Total: {len(all_tool_names)} tools")
-        print(f"   ├─ Basic Tools ({len(basic_tool_names)}): {basic_tool_names[:5]}")
-        if len(basic_tool_names) > 5:
-            print(f"      └─ ...and {len(basic_tool_names) - 5} more")
+        print(f"   ├─ Basic Tools ({len(basic_tool_names)}): {basic_tool_names}")
         print(f"   └─ Agent Tools ({len(agent_tool_names)}): {agent_tool_names}")
         
-        self._log_interaction("initialization", {
+        if len(agent_tool_names) == 0:
+            print(f"\n   ⚠️  警告：没有加载任何 Agent Tools！")
+            print(f"   这可能是因为 agents 模块没有被导入，请检查 _load_agent_registry()")
+        
+        # 记录初始化信息
+        log_interaction(0, "initialization", {
             "total_tools": len(all_tool_names),
             "basic_tools": basic_tool_names,
             "agent_tools": agent_tool_names
         })
+        print()
         
-        print("\n✅ 初始化完成\n")
-    
-    async def run_single(self, query: str):
-        """
-        单次运行模式
-        
-        Args:
-            query: 用户需求描述
-        """
-        if not self.agent:
-            await self.initialize()
-        
-        self.round_num = 1
-        
-        print("="*80)
-        print(f"第 {self.round_num} 轮")
-        print("="*80)
-        print(f"\n🚀 [处理中] 用户输入: {query}\n")
-        
-        # 记录用户输入
-        self._log_interaction("user_input", {
-            "input": query,
-            "current_node": getattr(self.agent, 'current_node_id', 'unknown')
-        })
-        
-        # 执行
-        result = await self.agent.run(query)
-        
-        # 显示结果
-        self._display_result(result)
-        
-        return result
-    
-    async def run_interactive(self):
-        """交互式运行模式"""
-        if not self.agent:
-            await self.initialize()
+        round_num = 0
         
         while True:
-            self.round_num += 1
+            round_num += 1
+            global _current_round
+            _current_round = round_num
             
             print("\n" + "="*80)
-            print(f"第 {self.round_num} 轮")
+            print(f"第 {round_num} 轮")
             print("="*80)
             
             # 获取用户输入
@@ -241,7 +308,7 @@ class KernelAgentExample:
                 break
             
             if not user_input:
-                self.round_num -= 1
+                round_num -= 1
                 continue
             
             print("\n" + "-"*80)
@@ -249,18 +316,78 @@ class KernelAgentExample:
             print("-"*80 + "\n")
             
             # 记录用户输入
-            self._log_interaction("user_input", {
+            trace_before = agent.get_trace_summary() if hasattr(agent, 'get_trace_summary') else {}
+            log_interaction(round_num, "user_input", {
                 "input": user_input,
-                "current_node": getattr(self.agent, 'current_node_id', 'unknown')
+                "current_node": getattr(agent, 'current_node_id', 'unknown'),
+                "total_actions_before": trace_before.get('total_actions', 0)
             })
             
             # 执行
-            result = await self.agent.run(user_input)
+            result = await agent.run(user_input)
             
-            # 显示结果
-            self._display_result(result)
+            # 记录新增的工具调用
+            trace_after = agent.get_trace_summary() if hasattr(agent, 'get_trace_summary') else {}
+            try:
+                full_history = agent.trace.get_full_action_history(agent.current_node_id)
+                new_actions = full_history[trace_before.get('total_actions', 0):]
+                for action in new_actions:
+                    log_interaction(round_num, "tool_call", {
+                        "tool_name": action.tool_name,
+                        "arguments": action.arguments,
+                        "result": action.result
+                    })
+            except:
+                pass  # 忽略记录失败
             
-            # 处理等待用户响应的情况
+            # 记录执行结果
+            log_interaction(round_num, "result", {
+                "status": result.get('status'),
+                "output": result.get('output', ''),
+                "error": result.get('error_information', ''),
+                "current_node": result.get('current_node', 'unknown'),
+                "total_actions_after": trace_after.get('total_actions', 0)
+            })
+            
+            # 显示结果（更详细）
+            print("\n" + "="*80)
+            print(f"📊 [执行结果]")
+            print("-"*80)
+            print(f"   状态: {result.get('status')}")
+            print(f"   输出: {result.get('output')[:500] if result.get('output') else 'N/A'}")
+            if len(result.get('output', '')) > 500:
+                print(f"        (输出过长，已截断，共 {len(result.get('output'))} 字符)")
+            
+            if result.get('error_information'):
+                print(f"   ❌ 错误: {result.get('error_information')}")
+            
+            # 显示计划（更详细）
+            if result.get('plan_list'):
+                print(f"\n📋 [执行计划] {len(result['plan_list'])} 个步骤:")
+                for step in result['plan_list']:
+                    emoji = {"pending": "⏳", "success": "✅", "failed": "❌"}.get(step.get("status"), "❓")
+                    desc = step.get('desc') or step.get('description') or step.get('tool', 'Unknown')
+                    step_id = step.get('step_id', '?')
+                    print(f"   {emoji} Step {step_id}: {desc[:80]}")
+                    if step.get('retry_count', 0) > 0:
+                        print(f"       └─ 重试次数: {step.get('retry_count')}/{step.get('max_retries', 3)}")
+            
+            # 显示历史（最近5个）
+            if result.get('history'):
+                print(f"\n📜 [执行历史] 共 {len(result['history'])} 个动作:")
+                recent = result['history'][-5:]
+                for i, r in enumerate(recent, len(result['history'])-len(recent)+1):
+                    tool = r.get('tool_name', 'Unknown')
+                    # 特殊处理 compressed summary
+                    if r.get('compressed'):
+                        print(f"   [{i}] {tool} [压缩: {r.get('original_actions', 0)} → 1]")
+                    else:
+                        status = r.get('result', {}).get('status', 'N/A')
+                        print(f"   [{i}] {tool} → {status}")
+            
+            print("="*80)
+            
+            # 如果需要用户响应
             if result.get('status') == 'waiting_for_user':
                 print(f"\n💬 [Agent 询问]")
                 print("-"*80)
@@ -274,214 +401,66 @@ class KernelAgentExample:
                 print(f"\n{status_emoji} 任务 {result.get('status').upper()}!")
                 if result.get('status') == 'success':
                     print(f"   总共执行了 {result.get('total_actions', 0)} 个动作")
+                continue
         
-        # 显示统计信息
-        self._display_summary()
-    
-    def _display_result(self, result: dict):
-        """显示执行结果"""
+        # 打印统计信息
         print("\n" + "="*80)
-        print(f"📊 [执行结果]")
+        print(f"🎉 测试结束")
         print("-"*80)
-        print(f"   状态: {result.get('status')}")
+        print(f"   总轮次: {round_num}")
         
-        output = result.get('output', '')
-        if output:
-            print(f"   输出: {output[:200]}")
-            if len(output) > 200:
-                print(f"        (输出过长，已截断，共 {len(output)} 字符)")
-        else:
-            print(f"   输出: N/A")
-        
-        if result.get('error_information'):
-            print(f"   ❌ 错误: {result.get('error_information')}")
-        
-        # 显示计划
-        if result.get('plan_list'):
-            print(f"\n📋 [执行计划] {len(result['plan_list'])} 个步骤:")
-            for step in result['plan_list']:
-                emoji = {"pending": "⏳", "success": "✅", "failed": "❌"}.get(step.get("status"), "❓")
-                desc = step.get('desc') or step.get('description') or step.get('tool', 'Unknown')
-                step_id = step.get('step_id', '?')
-                print(f"   {emoji} Step {step_id}: {desc[:80]}")
-                if step.get('retry_count', 0) > 0:
-                    print(f"       └─ 重试次数: {step.get('retry_count')}/{step.get('max_retries', 3)}")
-        
-        # 显示历史（最近5个）
-        if result.get('history'):
-            print(f"\n📜 [执行历史] 共 {len(result['history'])} 个动作:")
-            recent = result['history'][-5:]
-            for i, r in enumerate(recent, len(result['history'])-len(recent)+1):
-                tool = r.get('tool_name', 'Unknown')
-                if r.get('compressed'):
-                    print(f"   [{i}] {tool} [压缩: {r.get('original_actions', 0)} → 1]")
-                else:
-                    status = r.get('result', {}).get('status', 'N/A')
-                    print(f"   [{i}] {tool} → {status}")
-        
-        print("="*80)
-        
-        # 记录结果
-        self._log_interaction("result", {
-            "status": result.get('status'),
-            "output": output,
-            "error": result.get('error_information', ''),
-            "current_node": result.get('current_node', 'unknown')
-        })
-    
-    def _display_summary(self):
-        """显示统计摘要"""
-        print("\n" + "="*80)
-        print(f"🎉 运行结束")
-        print("-"*80)
-        print(f"   总轮次: {self.round_num}")
-        
-        if hasattr(self.agent, 'get_trace_summary'):
-            summary = self.agent.get_trace_summary()
+        if hasattr(agent, 'get_trace_summary'):
+            summary = agent.get_trace_summary()
             print(f"   当前节点: {summary.get('current_node', 'unknown')}")
             print(f"   总动作数: {summary.get('total_actions', 0)}")
             print(f"   路径长度: {summary.get('path_length', 0)}")
-        
-        if self.log_file:
-            print(f"\n📝 日志文件: {self.log_file}")
+            
+            # 打印历史压缩统计
+            try:
+                from akg_agents.core_v2.llm import create_llm_client
+                llm_client = create_llm_client(model_level=agent.model_level or "complex")
+                
+                full_history = agent.trace.get_full_action_history(agent.current_node_id)
+                compressed_history = await agent.trace.get_compressed_history_for_llm(
+                    llm_client, agent.current_node_id, max_tokens=2000
+                )
+                
+                print(f"\n   📊 历史压缩统计:")
+                print(f"      完整历史: {len(full_history)} 个动作")
+                print(f"      压缩后: {len(compressed_history)} 个记录")
+                
+                if len(compressed_history) < len(full_history):
+                    compression_ratio = (1 - len(compressed_history) / len(full_history)) * 100
+                    print(f"      压缩率: {compression_ratio:.1f}%")
+                    
+                    # 检查是否有 summary
+                    has_summary = any(r.tool_name == "history_summary" for r in compressed_history)
+                    if has_summary:
+                        summary_action = next(r for r in compressed_history if r.tool_name == "history_summary")
+                        original_count = summary_action.arguments.get("original_actions", 0)
+                        print(f"      摘要: {original_count} 个动作 → 1 个摘要")
+                else:
+                    print(f"      未压缩 (历史较短)")
+            except Exception as e:
+                print(f"   ⚠️  无法获取压缩统计: {e}")
         
         print("="*80)
-
-
-def parse_args():
-    """解析命令行参数"""
-    parser = argparse.ArgumentParser(
-        description="KernelAgent 示例 - 展示如何使用 KernelAgent 进行 kernel 开发",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例：
-  # 交互模式
-  python examples/run_kernel_agent.py --interactive
-  
-  # 单次执行
-  python examples/run_kernel_agent.py --query "实现一个 ReLU kernel"
-  
-  # 指定框架和后端
-  python examples/run_kernel_agent.py --query "优化矩阵乘法" --framework torch --backend cpu --arch x86_64 --dsl cpp
-  
-  # 完整配置示例
-  python examples/run_kernel_agent.py --query "实现 softmax" --framework torch --backend cpu --arch x86_64 --dsl cpp --devices 0 --model-level fast
-  
-  # 禁用日志
-  python examples/run_kernel_agent.py --query "实现卷积" --no-logging
-        """
-    )
-    
-    # 运行模式
-    mode_group = parser.add_mutually_exclusive_group(required=True)
-    mode_group.add_argument(
-        '--interactive', '-i',
-        action='store_true',
-        help='交互式模式，可以连续输入多个需求'
-    )
-    mode_group.add_argument(
-        '--query', '-q',
-        type=str,
-        help='用户需求描述（单次执行模式）'
-    )
-    
-    # Kernel 配置参数
-    parser.add_argument(
-        '--framework',
-        type=str,
-        default='torch',
-        help='框架类型：torch, mindspore, numpy 等 (默认: torch)'
-    )
-    parser.add_argument(
-        '--backend',
-        type=str,
-        default='cuda',
-        help='后端类型：cuda, cpu, npu 等 (默认: cuda)'
-    )
-    parser.add_argument(
-        '--arch',
-        type=str,
-        default='a100',
-        help='架构类型：a100, x86_64, ascend910 等 (默认: a100)'
-    )
-    parser.add_argument(
-        '--dsl',
-        type=str,
-        default='triton',
-        help='DSL 语言类型：triton, cpp, python 等 (默认: triton)'
-    )
-    parser.add_argument(
-        '--devices',
-        type=str,
-        default='0',
-        help='设备 ID 列表，逗号分隔，如 0 或 0,1,2 (默认: 0)'
-    )
-    
-    # Agent 配置参数
-    parser.add_argument(
-        '--task-id',
-        type=str,
-        default=None,
-        help='任务 ID，默认自动生成时间戳 ID'
-    )
-    parser.add_argument(
-        '--model-level',
-        type=str,
-        default='standard',
-        choices=['fast', 'standard', 'advanced'],
-        help='LLM 模型级别 (默认: standard)'
-    )
-    parser.add_argument(
-        '--no-logging',
-        action='store_true',
-        help='禁用详细日志记录'
-    )
-    
-    return parser.parse_args()
-
-
-async def main():
-    """主函数"""
-    args = parse_args()
-    
-    try:
-        # 创建示例实例
-        example = KernelAgentExample(
-            task_id=args.task_id,
-            model_level=args.model_level,
-            framework=args.framework,
-            backend=args.backend,
-            arch=args.arch,
-            dsl=args.dsl,
-            devices=args.devices,
-            enable_logging=not args.no_logging
-        )
         
-        # 根据模式运行
-        if args.interactive:
-            await example.run_interactive()
-        else:
-            result = await example.run_single(args.query)
-            
-            # 返回退出码
-            if result.get('status') == 'success':
-                return 0
-            elif result.get('status') == 'error':
-                return 1
-            else:
-                return 2
+        # 打印日志信息
+        print_log_summary()
+        print(f"\n📝 日志文件: {SESSION_LOG_FILE}")
+        print(f"   最新日志指针: {LOG_DIR / 'latest_session.txt'}")
+        print(f"   查看命令: python tests/v2/ut/view_test_logs.py --latest")
+        print("="*80)
+        return True
         
-        return 0
-        
-    except KeyboardInterrupt:
-        print("\n\n⚠️  用户中断")
-        return 130
     except Exception as e:
-        print(f"\n❌ [错误] {e}")
+        print(f"\n[ERROR] {e}")
         import traceback
         traceback.print_exc()
-        return 1
+        return False
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    success = asyncio.run(test_kernel_agent())
+    sys.exit(0 if success else 1)

@@ -29,5 +29,6 @@
     "model_name": "BAAI/bge-large-zh-v1.5"
   },
   "default_model": "standard",
+  "context_window": 128000,
   "stream_output": false
 }
