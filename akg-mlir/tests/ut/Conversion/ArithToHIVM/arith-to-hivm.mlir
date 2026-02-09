@@ -3014,3 +3014,39 @@ func.func @test_npuvector_broadcast_index_cast_index(%arg0 : memref<?xi64>) {
   npuvector.transfer_write %4, %arg0[%5] : !npuvector<?xi64>, memref<?xi64>
   return
 }
+
+// -----
+
+func.func @test_npuvector_transfer_write_zero_output(%arg0: memref<1xi32>, %arg1: memref<1xi32>){
+  %c1 = arith.constant 1 : index
+  %c1_0 = arith.constant 1 : index
+  %c0 = arith.constant 0 : index
+  %c1_1 = arith.constant 1 : index
+  %c1_2 = arith.constant 1 : index
+  %c0_3 = arith.constant 0 : index
+  %c1_4 = arith.constant 1 : index
+  scf.for %arg2 = %c0_3 to %c1_4 step %c1_4 {
+    scf.for %arg3 = %c0_3 to %c1_4 step %c1_4 {
+      %c40 = arith.constant 40 : index
+      %0 = affine.apply affine_map<(d0, d1) -> (d0 + d1)>(%arg2, %arg3)
+      %1 = affine.apply affine_map<(d0)[s0] -> (d0 * s0)>(%0)[%c1_0]
+      %c1_5 = arith.constant 1 : index
+      %2 = arith.addi %0, %c1_5 : index
+      %3 = affine.apply affine_map<(d0)[s0] -> (d0 * s0)>(%2)[%c1_0]
+      %c1_6 = arith.constant 1 : index
+      %4 = affine.min affine_map<(d0, d1) -> (d0, d1)>(%3, %c1_6)
+      %c4096 = arith.constant 4096 : index
+      %5 = arith.subi %4, %1 : index
+      %6 = arith.minsi %5, %c4096 : index
+      %c1000_i32 = arith.constant 1000 : i32
+      %collapse_shape = memref.collapse_shape %arg0 [] : memref<1xi32> into memref<i32>
+      %collapse_shape_7 = memref.collapse_shape %arg1 [] : memref<1xi32> into memref<i32>
+      %7 = memref.load %collapse_shape[] : memref<i32>
+      %8 = npuvector.broadcast %7[%6] [%c4096] : i32 to !npuvector<?xi32>
+      %9 = npuvector.broadcast %c1000_i32[%6] [%c4096] : i32 to !npuvector<?xi32>
+      %10 = arith.addi %8, %9 : !npuvector<?xi32>
+      npuvector.transfer_write %10, %collapse_shape_7[] : !npuvector<?xi32>, memref<i32>
+    }
+  }
+  return
+}
