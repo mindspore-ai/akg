@@ -137,6 +137,11 @@ class KernelGen(AgentBase):
                 "type": "string",
                 "description": "模型级别（例如：'standard', 'fast', 'complex'）",
                 "default": "standard"
+            },
+            "previous_code": {
+                "type": "string",
+                "description": "之前生成的 kernel 代码（用于修改优化场景），包含 class ModelNew 等。如果提供，会基于此代码进行修改而非从零生成",
+                "default": ""
             }
         },
         "required": ["op_name", "task_desc", "dsl", "framework", "backend"]
@@ -306,7 +311,8 @@ class KernelGen(AgentBase):
         history_compress: Optional[List[dict]] = None,
         verifier_error: str = "",
         conductor_suggestion: str = "",
-        model_level: str = "standard"
+        model_level: str = "standard",
+        previous_code: str = ""
     ) -> Tuple[str, str, str]:
         """
         执行代码生成
@@ -324,6 +330,7 @@ class KernelGen(AgentBase):
             verifier_error: Verifier 错误信息
             conductor_suggestion: Conductor 修复建议
             model_level: 模型级别
+            previous_code: 之前生成的代码（修改场景使用）
         
         Returns:
             Tuple[str, str, str]: (生成的代码, 完整 prompt, 推理过程)
@@ -336,14 +343,22 @@ class KernelGen(AgentBase):
             # 生成函数名
             func_name = f"{op_name}_{dsl}_{framework}"
             
+            # 判断是否为修改模式
+            is_modification_mode = bool(previous_code and user_requirements)
+            
             # 1. 选择相关 Skills
-            selected_skills = await self._select_skills(
-                op_name=op_name,
-                task_desc=task_desc,
-                dsl=dsl, 
-                framework=framework, 
-                backend=backend
-            )
+            if is_modification_mode:
+                # 修改模式：跳过 skill 选择，减少 prompt 长度，让用户需求占主导
+                selected_skills = []
+                logger.info(f"[KernelGen] 修改模式：跳过 skill 选择，优先用户需求")
+            else:
+                selected_skills = await self._select_skills(
+                    op_name=op_name,
+                    task_desc=task_desc,
+                    dsl=dsl, 
+                    framework=framework, 
+                    backend=backend
+                )
             
             # 2. 渲染 System Prompt
             system_prompt = self.system_prompt_template.format(
@@ -363,6 +378,7 @@ class KernelGen(AgentBase):
                 func_name=func_name,
                 task_desc=task_desc,
                 user_requirements=user_requirements,
+                previous_code=previous_code,
                 format_instructions=self.format_instructions
             )
             

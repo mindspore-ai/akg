@@ -1,5 +1,35 @@
 {# KernelGen Agent 的用户 Prompt 模板 #}
 
+{% if previous_code and user_requirements %}
+{# ==================== 修改模式 ==================== #}
+
+## ⚠️ 任务模式：代码修改
+
+**你正在修改已有的 kernel 代码，而不是从零生成。**
+
+### 🎯 用户修改需求（最高优先级）
+
+{{ user_requirements }}
+
+### 需要修改的代码
+
+以下是之前生成的 kernel 代码，请根据上述修改需求进行修改：
+
+```python
+{{ previous_code }}
+```
+
+### 修改原则
+
+1. **仅修改用户要求的部分**，不要重构无关代码
+2. **保持代码结构和接口不变**（除非用户要求修改）
+3. **确保修改后的代码仍然是完整可运行的**
+4. 输出完整的修改后代码（包含所有 import 和 class 定义）
+
+---
+
+{% endif %}
+
 {% if verifier_error or conductor_suggestion %}
 ## 执行历史和反馈
 
@@ -82,24 +112,43 @@
 **算子名称**: `{{ op_name }}`  
 **函数名称**: `{{ func_name }}`  
 
-### 任务描述
+### 任务描述（框架参考代码）
 
 {{ task_desc }}
 
 ---
 
-{% if user_requirements %}
-### 额外的用户需求
+{% if user_requirements and not previous_code %}
+{# 首次生成但有额外需求 #}
+### ⚠️ 用户额外需求（请务必遵守）
 
 {{ user_requirements }}
 
+---
+
 {% endif %}
+
+{% if previous_code and not user_requirements %}
+{# 有之前的代码但没有新需求（例如 verifier 迭代修复）#}
+### 上一版代码（参考）
+
+以下是之前生成的代码，可作为参考进行改进：
+
+```python
+{{ previous_code }}
+```
 
 ---
 
+{% endif %}
+
 ## 生成指令
 
+{% if previous_code and user_requirements %}
+根据用户的修改需求，修改上述已有代码。输出**完整的修改后代码**。
+{% else %}
 根据以上信息生成完整的内核代码。
+{% endif %}
 
 **代码要求**:
 - 语法正确

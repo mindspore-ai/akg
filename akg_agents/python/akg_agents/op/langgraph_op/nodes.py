@@ -240,7 +240,8 @@ class NodeFactory:
                     task_id=task_id,
                     verifier_error=verifier_error,
                     conductor_suggestion=conductor_suggestion,
-                    model_level=state.get('model_level', 'standard')
+                    model_level=state.get('model_level', 'standard'),
+                    previous_code=state.get('previous_code', '')
                 )
             except Exception as e:
                 logger.error(f"[Task {task_id}] KernelGen.run() 失败: {e}")
