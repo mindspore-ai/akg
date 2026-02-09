@@ -794,6 +794,19 @@ class FileSystemState:
                     dst_file.parent.mkdir(parents=True, exist_ok=True)
                     self._hardlink_or_copy(src_file, dst_file)
         
+        # 复制 Thinking 状态 (继承)
+        source_thinking = self.load_thinking(from_node_id)
+        if source_thinking:
+            # 创建新 ThinkingState，继承内容但更新元数据
+            new_thinking = ThinkingState(
+                node_id=to_node_id,
+                turn=new_state.turn,
+                current_plan=source_thinking.current_plan.copy(),
+                latest_thinking=source_thinking.latest_thinking,
+                decision_history=source_thinking.decision_history.copy(),
+            )
+            self.save_thinking(to_node_id, new_thinking)
+        
         self.save_node_state(to_node_id, new_state)
         logger.debug(f"Copied node state from {from_node_id} to {to_node_id} (hardlink)")
         return new_state
