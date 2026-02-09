@@ -142,20 +142,14 @@ class Sketch(AgentBase):
         }
         self.context.update(to_update_context)
 
-        # 获取模型配置，优先使用sketch配置，否则使用默认配置
-        model_config = self.model_config.get("sketch") or self.model_config.get("default")
-        if not model_config:
-            logger.warning("No model config found for sketch, using first available config")
-            model_config = next(iter(self.model_config.values())) if self.model_config else None
-
-        if not model_config:
-            raise ValueError("No valid model configuration found for sketch generation")
+        # 获取模型级别，优先使用sketch配置，否则使用默认配置，最终兜底 "standard"
+        model_level = self.model_config.get("sketch") or self.model_config.get("default") or "standard"
 
         # 执行LLM生成
         try:
             # 获取大模型输出的完整信息（content, prompt, reasoning）
             content, formatted_prompt, reasoning_content = await self.run_llm(
-                self.sketch_prompt, input_data, model_config
+                self.sketch_prompt, input_data, model_level
             )
 
             # 使用解析器解析content

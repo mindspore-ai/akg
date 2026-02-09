@@ -48,7 +48,7 @@ Kernel性能对比工具
 import os
 import argparse
 import asyncio
-from akg_agents.core.verifier.kernel_verifier import KernelVerifier
+from akg_agents.op.verifier.kernel_verifier import KernelVerifier
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.core.worker.manager import register_local_worker, get_worker_manager
 
@@ -142,6 +142,13 @@ def custom_op_triton_torch(x):
     )
 
     return output
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super(ModelNew, self).__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return custom_op_triton_torch(x)
 '''
 
 

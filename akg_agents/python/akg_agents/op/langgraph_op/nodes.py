@@ -45,15 +45,16 @@ class NodeFactory:
             result, prompt, reasoning = await designer_instance.run(task_info=state)
             elapsed = time.time() - t0
             
-            # 记录到 Trace
-            trace_instance.insert_agent_record(
-                agent_name="designer",
-                result=result,
-                prompt=prompt,
-                reasoning=reasoning,
-                session_id=state.get("session_id"),
-                elapsed_s=elapsed,
-            )
+            # 记录到 Trace（兼容新旧 Trace 接口）
+            if hasattr(trace_instance, 'insert_agent_record'):
+                trace_instance.insert_agent_record(
+                    agent_name="designer",
+                    result=result,
+                    prompt=prompt,
+                    reasoning=reasoning,
+                    session_id=state.get("session_id"),
+                    elapsed_s=elapsed,
+                )
             
             # 解析结果（如果有 space_config）
             code = result
@@ -180,14 +181,16 @@ class NodeFactory:
                 task_id = state.get('task_id', '0')
                 logger.warning(f"[Task {task_id}] Coder JSON 解析失败: {e}，使用原始输出")
             
-            trace_instance.insert_agent_record(
-                agent_name="coder",
-                result=result,  # 原始结果记录到 trace
-                prompt=prompt,
-                reasoning=reasoning,
-                session_id=state.get("session_id"),
-                elapsed_s=elapsed,
-            )
+            # 记录到 Trace（兼容新旧 Trace 接口）
+            if hasattr(trace_instance, 'insert_agent_record'):
+                trace_instance.insert_agent_record(
+                    agent_name="coder",
+                    result=result,  # 原始结果记录到 trace
+                    prompt=prompt,
+                    reasoning=reasoning,
+                    session_id=state.get("session_id"),
+                    elapsed_s=elapsed,
+                )
             
             return {
                 "coder_code": code,  # 解析后的纯代码
@@ -404,6 +407,17 @@ class NodeFactory:
                         config
                     )
                 
+                # 记录到 Trace（兼容新旧 Trace 接口）
+                if hasattr(trace_instance, 'insert_agent_record'):
+                    trace_instance.insert_agent_record(
+                        agent_name="verifier",
+                        result=str(verify_res),
+                        error_log=verify_log,
+                        profile_res=profile_res,
+                        session_id=state.get("session_id"),
+                        elapsed_s=(time.time() - t0),
+                    )
+                
                 # 记录验证结果
                 if not verify_res:
                     task_id = state.get('task_id', '0')
@@ -521,6 +535,15 @@ class NodeFactory:
                 agent_decision, suggestion = ResultProcessor.parse_conductor_decision(
                     response_text, conductor_parser, valid_options_set
                 )
+
+                # 保存到 trace（兼容新旧 Trace 接口）
+                if hasattr(trace_instance, 'insert_conductor_agent_record'):
+                    trace_instance.insert_conductor_agent_record(
+                        res=response_text,
+                        prompt=prompt,
+                        reasoning=reasoning,
+                        agent_name="decision"
+                    )
                 
                 # 更新历史记录
                 if state.get('coder_code') and state.get('verifier_error'):
@@ -809,15 +832,16 @@ class NodeFactory:
             task_id = state.get('task_id', '0')
             logger.info(f"[Task {task_id}] 多 case task_desc 生成完成")
             
-            # 2.1 记录 TestCaseGenerator 的执行结果
-            trace.insert_agent_record(
-                agent_name="test_case_generator",
-                result=new_task_desc,
-                prompt=prompt,
-                reasoning=reasoning,
-                session_id=state.get("session_id"),
-                elapsed_s=elapsed,
-            )
+            # 2.1 记录 TestCaseGenerator 的执行结果（兼容新旧 Trace 接口）
+            if hasattr(trace, 'insert_agent_record'):
+                trace.insert_agent_record(
+                    agent_name="test_case_generator",
+                    result=new_task_desc,
+                    prompt=prompt,
+                    reasoning=reasoning,
+                    session_id=state.get("session_id"),
+                    elapsed_s=elapsed,
+                )
             
             # 3. 使用新 task_desc 创建临时 verifier 进行验证
             multi_case_verifier = KernelVerifier(
@@ -901,12 +925,14 @@ class NodeFactory:
                 "error_count": len(errors),
                 "errors": errors[:5]  # 只记录前5个错误
             }
-            trace_instance.insert_agent_record(
-                agent_name="code_checker",
-                result=json.dumps(check_result, ensure_ascii=False),
-                prompt="",  # 静态检查无 prompt
-                reasoning=""
-            )
+            # 记录到 Trace（兼容新旧 Trace 接口）
+            if hasattr(trace_instance, 'insert_agent_record'):
+                trace_instance.insert_agent_record(
+                    agent_name="code_checker",
+                    result=json.dumps(check_result, ensure_ascii=False),
+                    prompt="",  # 静态检查无 prompt
+                    reasoning=""
+                )
             
             # 向 CLI 发送检查结果消息
             session_id = state.get('session_id', '')
@@ -1013,8 +1039,8 @@ class NodeFactory:
             # 调用 OpTaskBuilder
             result = await op_task_builder.run(state)
             
-            # 记录到 Trace（如果提供）
-            if trace_instance:
+            # 记录到 Trace（兼容新旧 Trace 接口）
+            if trace_instance and hasattr(trace_instance, 'insert_agent_record'):
                 trace_instance.insert_agent_record(
                     agent_name="OpTaskBuilder",
                     result=result.get("generated_task_desc", ""),

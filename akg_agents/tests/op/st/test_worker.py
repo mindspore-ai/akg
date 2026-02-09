@@ -46,7 +46,7 @@ sys.exit(0)
     
     # 4. Run verification
     task_id = "test_task_001"
-    success, log = await worker.verify(package_data, task_id, op_name, timeout=10)
+    success, log, artifacts = await worker.verify(package_data, task_id, op_name, timeout=10)
     
     # 5. Assertions
     assert success is True
@@ -74,7 +74,7 @@ sys.exit(1)
     device_pool = DevicePool([0])
     worker = LocalWorker(device_pool, backend="cuda")
     
-    success, log = await worker.verify(package_data, "test_task_002", op_name, timeout=10)
+    success, log, artifacts = await worker.verify(package_data, "test_task_002", op_name, timeout=10)
     
     assert success is False
     assert "Verification failed intentionally" in log
@@ -103,7 +103,7 @@ sys.exit(0)
     worker = LocalWorker(device_pool, backend="cuda")
     
     # Set short timeout
-    success, log = await worker.verify(package_data, "test_task_003", op_name, timeout=1)
+    success, log, artifacts = await worker.verify(package_data, "test_task_003", op_name, timeout=1)
     
     assert success is False
     assert "timed out" in log

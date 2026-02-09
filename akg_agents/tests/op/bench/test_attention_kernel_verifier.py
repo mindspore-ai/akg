@@ -80,7 +80,7 @@ async def test_attention_kernel_verifier_a100(op_name):
         print("  ✗ 无法获取 CUDA Worker")
         return False
 
-    op_task_file = f"./benchmark/akg_kernels_bench/thirdparty/attention_kernel/{op_name}.py"
+    op_task_file = f"./benchmark/akg_kernels_bench/thirdparty/attention_kernels/{op_name}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
         framework_code = f.read()
 
