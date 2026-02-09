@@ -28,6 +28,11 @@
 暂无历史
 {% endif %}
 
+{% if path_registry %}
+**数据路径索引**（所有可引用的 result.json，即使历史已压缩这些路径仍然有效）:
+{{ path_registry }}
+{% endif %}
+
 ## 当前配置
 
 - **DSL**: {{ dsl }}

@@ -542,7 +542,7 @@ class TraceSystem:
             return []
         
         # 如果历史很短，跳过压缩，直接返回原始历史（节省 LLM 调用）
-        if len(full_history) <= 3:
+        if len(full_history) <= 5:
             return full_history
         
         # 3. 压缩

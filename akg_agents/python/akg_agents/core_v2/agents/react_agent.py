@@ -104,6 +104,7 @@ class ReActAgent(AgentBase, ABC):
         self.plan_list: List[Dict] = []
         self._initialized = False
         self._original_user_input: Optional[str] = None
+        self._last_prompt: str = ""  # 最近一次 LLM 调用的完整 prompt（用于保存到节点目录）
         
         # 加载可用工具
         self.available_tools = self._load_available_tools()
@@ -386,6 +387,9 @@ class ReActAgent(AgentBase, ABC):
         
         logger.info(f"[Execute] 节点 {new_node_id}, cur_path: {cur_path}")
         
+        # ====== 2.5 保存 LLM prompt 到节点目录（用于调试和审计） ======
+        self._save_node_prompt(cur_path)
+        
         # ====== 3. 同步硬件配置 ======
         # 如果 LLM 在 arguments 中指定了硬件参数，更新 agent_context
         # 以确保后续工具调用使用最新配置
@@ -462,11 +466,104 @@ class ReActAgent(AgentBase, ABC):
             except Exception as e:
                 logger.warning(f"[Result] 保存 output.txt 失败: {e}")
     
+    def _save_node_prompt(self, cur_path: str):
+        """
+        保存 LLM 的完整 prompt 到节点目录
+        
+        便于调试和审计每一步 LLM 的输入。
+        
+        Args:
+            cur_path: 节点目录路径
+        """
+        if not self._last_prompt:
+            return
+        
+        try:
+            prompt_file = Path(cur_path) / "prompt.txt"
+            prompt_file.write_text(self._last_prompt, encoding="utf-8")
+            logger.debug(f"[Prompt] 已保存: {prompt_file}")
+        except Exception as e:
+            logger.warning(f"[Prompt] 保存 prompt.txt 失败: {e}")
+    
     # ==================== LLM 调用 ====================
+    
+    def _get_context_window(self) -> int:
+        """获取当前模型的上下文窗口大小（从 settings 读取）"""
+        try:
+            from akg_agents.core_v2.config import get_settings
+            settings = get_settings()
+            return settings.context_window
+        except Exception:
+            return 128000  # 默认 128k
+    
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """
+        估算文本的 token 数量
+        
+        使用 tiktoken 精确计算，降级为字符数 / 4 估算。
+        """
+        if not text:
+            return 0
+        try:
+            import tiktoken
+            encoding = tiktoken.get_encoding("cl100k_base")
+            return len(encoding.encode(text))
+        except ImportError:
+            return len(text) // 4
+        except Exception:
+            return len(text) // 4
+    
+    def _build_path_registry(self) -> str:
+        """
+        构建路径注册表 —— 列出所有历史节点的 result_path 和 result_keys
+        
+        即使历史被压缩，路径注册表始终完整保留，确保 LLM 能正确构建 read_json_file 表达式。
+        
+        Returns:
+            格式化的路径注册表字符串（Markdown 表格）
+        """
+        full_history = self.trace.get_full_action_history(self.current_node_id)
+        if not full_history:
+            return ""
+        
+        lines = []
+        for record in full_history:
+            if not record.action_id or not record.action_id.startswith("node_"):
+                continue
+            if record.tool_name == "history_summary":
+                continue
+            
+            result_path = str(
+                self.trace.fs.get_node_dir(record.action_id) / "result.json"
+            )
+            result_keys = list(record.result.keys()) if isinstance(record.result, dict) else []
+            status = record.result.get("status", "unknown") if isinstance(record.result, dict) else "unknown"
+            
+            keys_str = ", ".join(result_keys[:8])  # 最多显示 8 个 key
+            if len(result_keys) > 8:
+                keys_str += ", ..."
+            
+            lines.append(
+                f"- **{record.action_id}** (`{record.tool_name}`, {status}): "
+                f"`{result_path}` → [{keys_str}]"
+            )
+        
+        if not lines:
+            return ""
+        
+        return "\n".join(lines)
     
     async def _get_next_action(self, cur_path: str = "") -> Optional[Dict]:
         """
-        调用 LLM 获取下一个动作
+        调用 LLM 获取下一个动作（智能压缩 + 路径注册表）
+        
+        策略:
+        1. 先用完整历史构建 prompt，估算 token 数
+        2. 如果 < 80% 上下文窗口，直接使用完整历史
+        3. 如果 >= 80%，使用压缩历史
+        4. 始终附加路径注册表（path_registry），确保压缩后路径不丢失
+        5. 保存完整 prompt 到 self._last_prompt 以便持久化
         
         Args:
             cur_path: 当前节点路径（注入到 prompt 中）
@@ -474,41 +571,80 @@ class ReActAgent(AgentBase, ABC):
         Returns:
             LLM 响应字典，包含 tool_name, arguments, reason
         """
-        try:
-            llm_client = create_llm_client(model_level=self.model_level or "standard")
-            compressed_history = await self.trace.get_compressed_history_for_llm(
-                llm_client=llm_client,
-                node_id=self.current_node_id,
-                max_tokens=2000
-            )
-        except Exception as e:
-            logger.warning(f"[压缩历史失败] {e}，使用完整历史")
-            compressed_history = self.trace.get_full_action_history(self.current_node_id)
+        context_window = self._get_context_window()
+        compress_threshold = int(context_window * 0.8)  # 80% 阈值
         
-        # 格式化历史（包含 result_path 用于数据引用）
-        action_history = json.dumps(
-            [self._format_action_record(r) for r in compressed_history], 
-            indent=2, 
+        # 获取完整历史
+        full_history = self.trace.get_full_action_history(self.current_node_id)
+        
+        # 构建路径注册表（始终完整，不受压缩影响）
+        path_registry = self._build_path_registry()
+        
+        # 格式化完整历史
+        full_action_history = json.dumps(
+            [self._format_action_record(r) for r in full_history],
+            indent=2,
             ensure_ascii=False
-        ) if compressed_history else ""
+        ) if full_history else ""
         
-        # 构建 prompt 上下文
+        # 构建 prompt 上下文（先用完整历史估算）
         prompt_context = self._build_prompt_context()
         prompt_context.update({
             "available_tools": json.dumps(
-                [t["function"] for t in self.available_tools], 
-                indent=2, 
+                [t["function"] for t in self.available_tools],
+                indent=2,
                 ensure_ascii=False
             ),
             "user_input": self._original_user_input or "",
             "plan_list": json.dumps(self.plan_list, indent=2, ensure_ascii=False) if self.plan_list else "",
-            "action_history": action_history,
-            # 节点路径信息（供 LLM 引用数据）
+            "action_history": full_action_history,
+            "path_registry": path_registry,
             "cur_path": cur_path,
             "task_base_path": str(self.trace.fs.task_dir),
         })
         
         prompt = self.system_prompt_template.format(**prompt_context)
+        estimated_tokens = self._estimate_tokens(prompt)
+        
+        logger.info(
+            f"[Prompt] 完整历史: {len(full_history)} 条, "
+            f"预估 tokens: {estimated_tokens}, "
+            f"阈值: {compress_threshold} (80% of {context_window})"
+        )
+        
+        # 判断是否需要压缩
+        if estimated_tokens >= compress_threshold and len(full_history) > 5:
+            logger.info(f"[Prompt] 超过 80% 上下文窗口，启动历史压缩")
+            try:
+                llm_client = create_llm_client(model_level=self.model_level or "standard")
+                compressed_history = await self.trace.get_compressed_history_for_llm(
+                    llm_client=llm_client,
+                    node_id=self.current_node_id,
+                    max_tokens=2000
+                )
+                
+                # 用压缩历史重建 prompt
+                compressed_action_history = json.dumps(
+                    [self._format_action_record(r) for r in compressed_history],
+                    indent=2,
+                    ensure_ascii=False
+                ) if compressed_history else ""
+                
+                prompt_context["action_history"] = compressed_action_history
+                prompt = self.system_prompt_template.format(**prompt_context)
+                
+                new_tokens = self._estimate_tokens(prompt)
+                logger.info(
+                    f"[Prompt] 压缩后: {len(compressed_history)} 条, "
+                    f"tokens: {estimated_tokens} → {new_tokens}"
+                )
+            except Exception as e:
+                logger.warning(f"[压缩历史失败] {e}，使用完整历史")
+        else:
+            logger.info(f"[Prompt] 未超过阈值，使用完整历史（无压缩）")
+        
+        # 保存完整 prompt（用于后续持久化到节点目录）
+        self._last_prompt = prompt
         
         template = Jinja2TemplateWrapper("{{ prompt }}")
         
