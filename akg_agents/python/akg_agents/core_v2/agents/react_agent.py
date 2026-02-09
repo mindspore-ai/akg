@@ -514,40 +514,72 @@ class ReActAgent(AgentBase, ABC):
         except Exception:
             return len(text) // 4
     
+    def _build_action_node_map(self) -> Dict[str, str]:
+        """
+        构建 action_id → node_id 的映射
+        
+        因为 action_id ("action_001") 和 node_id ("node_001") 是不同的序列，
+        需要遍历路径上的节点来建立映射关系。
+        
+        Returns:
+            {action_id: node_id} 映射字典
+        """
+        mapping = {}
+        try:
+            path = self.trace.get_path_to_node(self.current_node_id)
+            for node_id in path:
+                history = self.trace.fs.load_action_history_fact(node_id)
+                for action in history.actions:
+                    mapping[action.action_id] = node_id
+        except Exception as e:
+            logger.warning(f"[PathRegistry] 构建 action→node 映射失败: {e}")
+        return mapping
+    
     def _build_path_registry(self) -> str:
         """
         构建路径注册表 —— 列出所有历史节点的 result_path 和 result_keys
         
-        即使历史被压缩，路径注册表始终完整保留，确保 LLM 能正确构建 read_json_file 表达式。
+        直接遍历路径上的节点（而非依赖 action_id），确保即使历史被压缩，
+        路径注册表始终完整保留，LLM 能正确构建 read_json_file 表达式。
         
         Returns:
-            格式化的路径注册表字符串（Markdown 表格）
+            格式化的路径注册表字符串
         """
-        full_history = self.trace.get_full_action_history(self.current_node_id)
-        if not full_history:
+        try:
+            path = self.trace.get_path_to_node(self.current_node_id)
+        except Exception as e:
+            logger.warning(f"[PathRegistry] 获取路径失败: {e}")
             return ""
         
         lines = []
-        for record in full_history:
-            if not record.action_id or not record.action_id.startswith("node_"):
-                continue
-            if record.tool_name == "history_summary":
+        for node_id in path:
+            if node_id == "root":
                 continue
             
-            result_path = str(
-                self.trace.fs.get_node_dir(record.action_id) / "result.json"
-            )
-            result_keys = list(record.result.keys()) if isinstance(record.result, dict) else []
-            status = record.result.get("status", "unknown") if isinstance(record.result, dict) else "unknown"
+            # 加载该节点的动作历史
+            try:
+                history = self.trace.fs.load_action_history_fact(node_id)
+            except Exception:
+                continue
             
-            keys_str = ", ".join(result_keys[:8])  # 最多显示 8 个 key
-            if len(result_keys) > 8:
-                keys_str += ", ..."
-            
-            lines.append(
-                f"- **{record.action_id}** (`{record.tool_name}`, {status}): "
-                f"`{result_path}` → [{keys_str}]"
-            )
+            for record in history.actions:
+                if record.tool_name in ("history_summary", "user_request"):
+                    continue
+                
+                result_path = str(
+                    self.trace.fs.get_node_dir(node_id) / "result.json"
+                )
+                result_keys = list(record.result.keys()) if isinstance(record.result, dict) else []
+                status = record.result.get("status", "unknown") if isinstance(record.result, dict) else "unknown"
+                
+                keys_str = ", ".join(result_keys[:8])
+                if len(result_keys) > 8:
+                    keys_str += ", ..."
+                
+                lines.append(
+                    f"- **{node_id}** (`{record.tool_name}`, {status}): "
+                    f"`{result_path}` → [{keys_str}]"
+                )
         
         if not lines:
             return ""
@@ -577,12 +609,15 @@ class ReActAgent(AgentBase, ABC):
         # 获取完整历史
         full_history = self.trace.get_full_action_history(self.current_node_id)
         
+        # 构建 action_id → node_id 映射（让 _format_action_record 能正确解析路径）
+        action_node_map = self._build_action_node_map()
+        
         # 构建路径注册表（始终完整，不受压缩影响）
         path_registry = self._build_path_registry()
         
         # 格式化完整历史
         full_action_history = json.dumps(
-            [self._format_action_record(r) for r in full_history],
+            [self._format_action_record(r, action_node_map) for r in full_history],
             indent=2,
             ensure_ascii=False
         ) if full_history else ""
@@ -625,7 +660,7 @@ class ReActAgent(AgentBase, ABC):
                 
                 # 用压缩历史重建 prompt
                 compressed_action_history = json.dumps(
-                    [self._format_action_record(r) for r in compressed_history],
+                    [self._format_action_record(r, action_node_map) for r in compressed_history],
                     indent=2,
                     ensure_ascii=False
                 ) if compressed_history else ""
@@ -751,13 +786,14 @@ class ReActAgent(AgentBase, ABC):
         
         # 获取完整历史用于返回
         full_history = self.trace.get_full_action_history(self.current_node_id)
+        anm = self._build_action_node_map()
         
         return {
             "status": "waiting_for_user",
             "message": message,
             "output": f"等待用户响应: {message}",
             "plan_list": self.plan_list,
-            "history": [self._format_action_record(r) for r in full_history]
+            "history": [self._format_action_record(r, anm) for r in full_history]
         }
     
     # ==================== 任务初始化 ====================
@@ -846,12 +882,13 @@ class ReActAgent(AgentBase, ABC):
             响应字典
         """
         full_history = self.trace.get_full_action_history(self.current_node_id)
+        anm = self._build_action_node_map()
         return {
             "status": status,
             "output": output,
             "error_information": error_msg,
             "plan_list": self.plan_list,
-            "history": [self._format_action_record(r) for r in full_history],
+            "history": [self._format_action_record(r, anm) for r in full_history],
             "total_actions": len(full_history),
             "current_node": self.current_node_id
         }
@@ -908,7 +945,7 @@ class ReActAgent(AgentBase, ABC):
     
     # ==================== 工具方法 ====================
     
-    def _format_action_record(self, record: ActionRecord) -> Dict:
+    def _format_action_record(self, record: ActionRecord, action_node_map: Dict[str, str] = None) -> Dict:
         """
         格式化 ActionRecord 为字典
         
@@ -918,6 +955,7 @@ class ReActAgent(AgentBase, ABC):
         
         Args:
             record: ActionRecord 实例
+            action_node_map: action_id → node_id 映射（用于解析文件路径）
         
         Returns:
             格式化后的字典
@@ -940,16 +978,28 @@ class ReActAgent(AgentBase, ABC):
             "duration_ms": record.duration_ms
         }
         
+        # 解析 node_id：优先从映射获取，其次检查 action_id 本身
+        node_id = None
+        if action_node_map and record.action_id in action_node_map:
+            node_id = action_node_map[record.action_id]
+        elif record.action_id and record.action_id.startswith("node_"):
+            # 兼容 tool_executor.history 中 action_id == node_id 的情况
+            node_id = record.action_id
+        
         # 添加 result_path（供 LLM 构建 read_json_file 表达式）
-        if record.action_id and record.action_id.startswith("node_"):
-            result_path = str(
-                self.trace.fs.get_node_dir(record.action_id) / "result.json"
-            )
-            formatted["result_path"] = result_path
-            
-            # 添加 result 中的可用 key 列表
-            if isinstance(record.result, dict):
-                formatted["result_keys"] = list(record.result.keys())
+        if node_id:
+            try:
+                result_path = str(
+                    self.trace.fs.get_node_dir(node_id) / "result.json"
+                )
+                formatted["result_path"] = result_path
+                formatted["node_id"] = node_id
+                
+                # 添加 result 中的可用 key 列表
+                if isinstance(record.result, dict):
+                    formatted["result_keys"] = list(record.result.keys())
+            except Exception:
+                pass
         
         return formatted
     
