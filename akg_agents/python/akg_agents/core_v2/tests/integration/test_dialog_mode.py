@@ -169,7 +169,7 @@ class TestDialogSwitchAndFork:
         path2 = trace_system.get_path_to_node(verify2)
         
         # 公共部分
-        assert path1[:3] == path2[:2]  # root -> design -> coder
+        assert path1[:3] == path2[:3]  # root -> design -> coder
     
     def test_multiple_user_explorations(self, trace_system):
         """测试多次用户探索"""

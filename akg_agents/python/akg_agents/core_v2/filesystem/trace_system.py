@@ -91,7 +91,7 @@ class TraceSystem:
     def trace(self) -> TraceTree:
         """获取 Trace 树（自动加载）"""
         if self._trace is None:
-            self._trace = self._load_trace()
+            self.initialize()
         return self._trace
     
     # ==================== 初始化 ====================
@@ -642,6 +642,7 @@ class TraceSystem:
                     performance = node.metrics["performance"]
         
         return {
+            "node_count": len(path),
             "steps": len(path) - 1,
             "total_token": total_token,
             "total_duration_ms": total_duration,

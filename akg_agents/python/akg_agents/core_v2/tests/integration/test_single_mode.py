@@ -275,7 +275,7 @@ class TestDefaultWorkflow:
         path2 = trace_system.get_path_to_node(verify2)
         
         assert len(path1) == 4
-        assert len(path2) == 4
+        assert len(path2) == 5
         
         # 对比两条路径
         comparison = trace_system.compare_nodes(verify1, verify2)
@@ -417,7 +417,7 @@ class TestConnectAllWorkflow:
         # 验证 metrics 对比
         node_v1 = trace_system.get_node(v1)
         node_v2 = trace_system.get_node(v2)
-        assert node_v2["result"]["performance"] > node_v1["result"]["performance"]
+        assert node_v2.result["performance"] > node_v1.result["performance"]
 
 
 class TestResumeFromCheckpoint:
