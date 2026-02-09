@@ -77,6 +77,7 @@ class KernelGenState(BaseState, total=False):
     meta_prompts: Optional[str]
     handwrite_suggestions: Optional[List[Dict[str, str]]]
     user_requirements: Optional[str]  # 用户额外需求（来自 ReAct 多轮对话）
+    previous_code: Optional[str]      # 之前生成的代码（用于修改场景，来自 ReAct 多轮对话）
     
     # === Base Doc 字段 ===
     dsl_api_doc: Optional[str]

@@ -550,6 +550,7 @@ class ToolExecutor:
             "arch": arguments.get("arch", self.agent_context.get("arch", "")),
             "task_id": arguments.get("task_id", self.agent_context.get("task_id", "")),
             "user_requirements": arguments.get("user_requirements", ""),
+            "previous_code": arguments.get("previous_code", ""),
             "cur_path": arguments.get("cur_path", ""),
             "result": {},
             "should_continue": True,

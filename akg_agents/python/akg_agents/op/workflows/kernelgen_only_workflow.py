@@ -109,6 +109,11 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
                 "description": "用户额外需求（可选），如性能目标、特殊约束等",
                 "default": ""
             },
+            "previous_code": {
+                "type": "string",
+                "description": "之前生成的 kernel 代码（可选），用于代码修改/优化场景。提供后 KernelGen 会基于此代码进行修改而非从零生成",
+                "default": ""
+            },
             "cur_path": {
                 "type": "string",
                 "description": "自定义工作路径（可选），指定后中间文件存放在 cur_path/logs/，生成的代码存放在 cur_path/code.txt",

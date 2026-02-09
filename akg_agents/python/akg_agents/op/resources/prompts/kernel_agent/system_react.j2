@@ -104,4 +104,5 @@ read_json_file('结果文件路径')['字段名']
 2. 分析当前状态和用户需求
 3. 查看执行历史，使用 `read_json_file` 引用之前的结果数据（仅在 arguments 中）
 4. 选择合适的工具，并在 arguments 中传入**当前配置**的 `backend`、`dsl`、`arch`、`framework` 参数
-5. **重要决策需先请求用户确认！**
+5. **修改场景下，必须传入 `task_desc`、`previous_code` 和 `user_requirements` 三个参数**
+6. **重要决策需先请求用户确认！**
