@@ -23,12 +23,14 @@ AIKG FileSystem 状态管理
 5. 支持断点续跑：保存足够信息以恢复执行
 """
 
+import difflib
+import hashlib
 import json
 import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple, Iterator
 
 from .models import (
     NodeState,
@@ -44,6 +46,7 @@ from .exceptions import (
     NodeNotFoundError,
     InvalidNodeStateError,
 )
+# Git imports removed - using Snapshot Filesystem instead
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +93,39 @@ class FileSystemState:
             base_dir: 基础目录，默认 ~/.akg_agents
         """
         self.task_id = task_id
-        self.base_dir = Path(os.path.expanduser(base_dir or self.DEFAULT_BASE_DIR))
+        
+        if base_dir:
+            self.base_dir = Path(base_dir)
+        else:
+            self.base_dir = Path.home() / ".akg_agents"
+            
         self.task_dir = self.base_dir / "conversations" / task_id
         self.nodes_dir = self.task_dir / "nodes"
+        self.workspace_dir = self.task_dir / "workspace"  # Git 代码工作区
         self.logs_dir = self.task_dir / "logs"
         
         # 文件路径
         self.trace_file = self.task_dir / "trace.json"
         self.current_node_file = self.task_dir / "current_node.txt"
     
+    def get_code_snapshot_dir(self, node_id: str) -> Path:
+        """获取节点代码快照目录"""
+        return self.get_node_dir(node_id) / "code"
+    
+    def _hardlink_or_copy(self, src: Path, dst: Path) -> None:
+        """
+        尝试硬链接，失败则复制
+        
+        Args:
+            src: 源文件路径
+            dst: 目标文件路径
+        """
+        try:
+            os.link(src, dst)
+        except (OSError, NotImplementedError):
+            # 硬链接失败（跨设备、FS不支持等），回退到复制
+            shutil.copy2(src, dst)
+
     # ==================== 目录管理 ====================
     
     def ensure_dir(self, path: Path) -> Path:
@@ -107,16 +134,12 @@ class FileSystemState:
         return path
     
     def get_node_dir(self, node_id: str) -> Path:
-        """获取节点目录路径"""
+        """获取节点目录路径 (元数据)"""
         return self.nodes_dir / node_id
     
     def get_actions_dir(self, node_id: str) -> Path:
         """获取节点动作目录路径"""
         return self.get_node_dir(node_id) / "actions"
-    
-    def get_code_dir(self, node_id: str) -> Path:
-        """获取节点代码目录路径"""
-        return self.get_node_dir(node_id) / "code"
     
     def get_system_prompts_dir(self, node_id: str) -> Path:
         """获取节点系统提示词目录路径"""
@@ -143,18 +166,13 @@ class FileSystemState:
         Args:
             force: 是否强制重新初始化（删除现有目录）
         """
-        if self.task_exists():
-            if force:
-                shutil.rmtree(self.task_dir)
-                logger.info(f"Removed existing task directory: {self.task_dir}")
-            else:
-                logger.info(f"Task already exists: {self.task_id}")
-                return
+        if force and self.task_dir.exists():
+            shutil.rmtree(self.task_dir)
         
-        # 创建目录结构
         self.ensure_dir(self.task_dir)
         self.ensure_dir(self.nodes_dir)
         self.ensure_dir(self.logs_dir)
+        self.ensure_dir(self.workspace_dir)
         
         # 创建 root 节点
         self._create_root_node()
@@ -169,6 +187,10 @@ class FileSystemState:
         root_dir = self.get_node_dir("root")
         self.ensure_dir(root_dir)
         
+        # 创建空的代码快照目录
+        code_dir = self.get_code_snapshot_dir("root")
+        self.ensure_dir(code_dir)
+
         # 创建 root 节点状态
         root_state = NodeState(
             node_id="root",
@@ -194,8 +216,43 @@ class FileSystemState:
         return node_id if node_id else "root"
     
     def set_current_node(self, node_id: str) -> None:
-        """设置当前节点 ID"""
-        self.current_node_file.write_text(node_id, encoding="utf-8")
+        """
+        设置当前节点 ID，并恢复工作区到该节点的快照状态
+        """
+        current_node_file = self.task_dir / "current_node.txt"
+        current_node_file.write_text(node_id, encoding="utf-8")
+        
+        # 恢复工作区到节点快照
+        self._restore_workspace(node_id)
+    
+    def _restore_workspace(self, node_id: str) -> None:
+        """
+        从节点快照恢复工作区
+        
+        Args:
+            node_id: 节点 ID
+        """
+        snapshot_dir = self.get_code_snapshot_dir(node_id)
+        if not snapshot_dir.exists():
+            logger.debug(f"Node {node_id} has no code snapshot, workspace unchanged")
+            return
+        
+        # 清空工作区 (保留目录本身)
+        for item in self.workspace_dir.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+        
+        # 从快照复制文件到工作区 (使用复制而非硬链接，防止意外修改快照)
+        for src_file in snapshot_dir.rglob("*"):
+            if src_file.is_file():
+                rel_path = src_file.relative_to(snapshot_dir)
+                dst_file = self.workspace_dir / rel_path
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_file, dst_file)
+        
+        logger.debug(f"Restored workspace to node {node_id}")
     
     # ==================== 节点状态管理 ====================
     
@@ -631,89 +688,75 @@ class FileSystemState:
         prompt_files = sorted(prompts_dir.glob("turn_*.txt"))
         if not prompt_files:
             return None
-        
         return prompt_files[-1].read_text(encoding="utf-8")
     
     # ==================== 代码文件管理 ====================
     
-    def save_code_file(
-        self,
-        node_id: str,
-        filename: str,
-        content: str,
-    ) -> Path:
+    def save_code_file(self, node_id: str, filename: str, content: str) -> None:
         """
-        保存代码文件
+        保存代码文件 (Snapshot)
         
         Args:
             node_id: 节点 ID
             filename: 文件名
-            content: 文件内容
-            
-        Returns:
-            保存的文件路径
+            content: 代码内容
         """
-        code_dir = self.get_code_dir(node_id)
-        self.ensure_dir(code_dir)
+        # 1. 写入文件到 Workspace
+        file_path = self.workspace_dir / filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
         
-        code_file = code_dir / filename
-        code_file.write_text(content, encoding="utf-8")
+        # 2. 创建/更新节点快照
+        snapshot_dir = self.get_code_snapshot_dir(node_id)
+        self.ensure_dir(snapshot_dir)
         
-        # 更新文件状态
+        # 复制到快照目录 (注意: 要先删除旧文件以打破硬链接, 防止污染其他节点的快照)
+        snapshot_file = snapshot_dir / filename
+        snapshot_file.parent.mkdir(parents=True, exist_ok=True)
+        if snapshot_file.exists():
+            snapshot_file.unlink()  # 打破硬链接
+        shutil.copy2(file_path, snapshot_file)
+        
+        # 3. 更新 Node 元数据
+        state = self.load_node_state(node_id)
+        
+        # 更新 file_state (保持 API 兼容: code/{filename} with size)
         import hashlib
-        from .models import _get_timestamp
-        
-        checksum = hashlib.md5(content.encode()).hexdigest()
-        file_info = {
-            "size": len(content),
-            "last_modified": _get_timestamp(),
-            "checksum": checksum,
+        md5 = hashlib.md5(content.encode('utf-8')).hexdigest()
+        file_key = f"code/{filename}"
+        state.file_state[file_key] = {
+            "path": str(snapshot_file.relative_to(self.task_dir)),
+            "checksum": md5,
+            "size": len(content)
         }
         
-        self.update_node_state(
-            node_id,
-            file_state={f"code/{filename}": file_info}
-        )
-        
-        logger.debug(f"Saved code file: {node_id}/{filename}")
-        return code_file
+        self.save_node_state(node_id, state)
+        logger.debug(f"Saved code file {filename} to snapshot (node {node_id})")
     
-    def load_code_file(self, node_id: str, filename: str) -> Optional[str]:
+    def load_code_file(self, node_id: str, filename: str) -> str:
         """
-        加载代码文件
+        加载代码文件 (Snapshot)
         
         Args:
             node_id: 节点 ID
             filename: 文件名
             
         Returns:
-            文件内容，不存在返回 None
+            代码内容
         """
-        code_file = self.get_code_dir(node_id) / filename
-        if not code_file.exists():
-            return None
-        return code_file.read_text(encoding="utf-8")
-    
-    def list_code_files(self, node_id: str) -> List[str]:
-        """
-        列出节点的所有代码文件
+        snapshot_dir = self.get_code_snapshot_dir(node_id)
+        file_path = snapshot_dir / filename
         
-        Args:
-            node_id: 节点 ID
-            
-        Returns:
-            文件名列表
-        """
-        code_dir = self.get_code_dir(node_id)
-        if not code_dir.exists():
-            return []
-        return [f.name for f in code_dir.iterdir() if f.is_file()]
+        if not file_path.exists():
+            raise FileNotFoundError(f"File {filename} not found in node {node_id}")
+        
+        return file_path.read_text(encoding="utf-8")
     
     # ==================== 节点复制 ====================
     
     def copy_node_state(self, from_node_id: str, to_node_id: str) -> NodeState:
         """
-        复制节点状态到新节点
+        复制节点状态到新节点 (使用硬链接)
         
         Args:
             from_node_id: 源节点 ID
@@ -738,31 +781,58 @@ class FileSystemState:
             timestamp=_get_timestamp(),
         )
         
+        # 复制代码快照 (使用硬链接节省空间)
+        source_code_dir = self.get_code_snapshot_dir(from_node_id)
+        target_code_dir = self.get_code_snapshot_dir(to_node_id)
+        
+        if source_code_dir.exists():
+            self.ensure_dir(target_code_dir)
+            for src_file in source_code_dir.rglob("*"):
+                if src_file.is_file():
+                    rel_path = src_file.relative_to(source_code_dir)
+                    dst_file = target_code_dir / rel_path
+                    dst_file.parent.mkdir(parents=True, exist_ok=True)
+                    self._hardlink_or_copy(src_file, dst_file)
+        
         self.save_node_state(to_node_id, new_state)
+        logger.debug(f"Copied node state from {from_node_id} to {to_node_id} (hardlink)")
         return new_state
     
-    def copy_code_files(self, from_node_id: str, to_node_id: str) -> None:
-        """
-        复制代码文件到新节点
-        
-        Args:
-            from_node_id: 源节点 ID
-            to_node_id: 目标节点 ID
-        """
-        source_code_dir = self.get_code_dir(from_node_id)
-        if not source_code_dir.exists():
-            return
-        
-        target_code_dir = self.get_code_dir(to_node_id)
-        self.ensure_dir(target_code_dir)
-        
-        for code_file in source_code_dir.iterdir():
-            if code_file.is_file():
-                shutil.copy2(code_file, target_code_dir / code_file.name)
-        
-        logger.debug(f"Copied code files from {from_node_id} to {to_node_id}")
     
-    # ==================== 清理 ====================
+    # ==================== 代码访问便捷方法 ====================
+    
+    def list_code_files(self, node_id: str) -> List[str]:
+        """
+        列出节点的所有代码文件
+        
+        Snapshot 实现: 遍历 nodes/{node_id}/code/ 目录
+        """
+        snapshot_dir = self.get_code_snapshot_dir(node_id)
+        if not snapshot_dir.exists():
+            return []
+        
+        files = []
+        for file_path in snapshot_dir.rglob("*"):
+            if file_path.is_file():
+                files.append(str(file_path.relative_to(snapshot_dir)))
+        return files
+
+    def export_node_code(self, node_id: str, target_dir: str) -> None:
+        """
+        导出节点代码到指定目录 (便利用于查看)
+        
+        Snapshot 实现: 直接复制 nodes/{node_id}/code/ 目录
+        """
+        snapshot_dir = self.get_code_snapshot_dir(node_id)
+        if not snapshot_dir.exists():
+            raise FileSystemStateError(f"Node {node_id} has no code snapshot")
+            
+        target_path = Path(target_dir).absolute()
+        if target_path.exists():
+             raise FileExistsError(f"Target directory {target_path} already exists")
+        
+        shutil.copytree(snapshot_dir, target_path)
+        logger.info(f"Exported node {node_id} code to {target_path}")
     
     def delete_node(self, node_id: str) -> None:
         """
@@ -784,3 +854,83 @@ class FileSystemState:
         if self.task_dir.exists():
             shutil.rmtree(self.task_dir)
             logger.info(f"Deleted task: {self.task_id}")
+
+    # ==================== Diff 功能 ====================
+
+    def diff_file(self, node_a: str, node_b: str, filename: str) -> str:
+        """
+        比较两个节点之间指定文件的差异
+        
+        Args:
+            node_a: 节点 A ID
+            node_b: 节点 B ID
+            filename: 文件名
+            
+        Returns:
+            Unified Diff 格式的差异内容，如果没有差异则返回空字符串
+        """
+        content_a = self.load_code_file(node_a, filename).splitlines(keepends=True)
+        content_b = self.load_code_file(node_b, filename).splitlines(keepends=True)
+        
+        diff = difflib.unified_diff(
+            content_a, content_b,
+            fromfile=f"a/{filename} (node {node_a})",
+            tofile=f"b/{filename} (node {node_b})"
+        )
+        return "".join(diff)
+
+    def diff_nodes(self, node_a: str, node_b: str, output_path: Optional[Path] = None) -> Path:
+        """
+        比较两个节点之间的所有代码差异，并写入补丁文件
+        
+        默认存放在 workspace/.akg/diffs/{node_a}_to_{node_b}.patch
+        
+        Args:
+            node_a: 节点 A ID
+            node_b: 节点 B ID
+            output_path: 输出路径（可选）
+            
+        Returns:
+            生成的补丁文件路径
+        """
+        if output_path is None:
+            diff_dir = self.workspace_dir / ".akg" / "diffs"
+            self.ensure_dir(diff_dir)
+            output_path = diff_dir / f"{node_a}_to_{node_b}.patch"
+        
+        state_a = self.load_node_state(node_a)
+        state_b = self.load_node_state(node_b)
+        
+        all_files = set(state_a.file_state.keys()) | set(state_b.file_state.keys())
+        processed_files = set()
+        
+        with open(output_path, "w", encoding="utf-8") as f:
+            for file_key in sorted(all_files):
+                filename = file_key.replace("code/", "")
+                
+                # 利用 Checksum 快速过滤未修改文件
+                if file_key in state_a.file_state and file_key in state_b.file_state:
+                    if state_a.file_state[file_key]["checksum"] == state_b.file_state[file_key]["checksum"]:
+                        continue
+                
+                # 获取内容
+                content_a = []
+                if file_key in state_a.file_state:
+                    content_a = self.load_code_file(node_a, filename).splitlines(keepends=True)
+                
+                content_b = []
+                if file_key in state_b.file_state:
+                    content_b = self.load_code_file(node_b, filename).splitlines(keepends=True)
+                
+                # 生成 Diff
+                diff = difflib.unified_diff(
+                    content_a, content_b,
+                    fromfile=f"a/{filename}",
+                    tofile=f"b/{filename}"
+                )
+                f.write("".join(diff))
+                f.write("\n")
+                processed_files.add(filename)
+                
+        logger.info(f"Generated diff between {node_a} and {node_b} to {output_path} ({len(processed_files)} files modified)")
+        return output_path

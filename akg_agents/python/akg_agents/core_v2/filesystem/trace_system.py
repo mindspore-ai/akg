@@ -22,12 +22,13 @@ AIKG Trace 系统（Tree 版本）
 - 断点续跑
 """
 
+import difflib
 import json
 import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Set
 
 from .models import (
     TraceTree,
@@ -314,18 +315,8 @@ class TraceSystem:
     ) -> None:
         """创建节点的文件系统结构"""
         # 复制父节点状态
-        if parent_id != "root":
-            self.fs.copy_node_state(parent_id, node_id)
-            self.fs.copy_code_files(parent_id, node_id)
-        else:
-            # 从 root 创建新状态
-            state = NodeState(
-                node_id=node_id,
-                turn=turn,
-                status="running",
-                task_info={"task_id": self.task_id},
-            )
-            self.fs.save_node_state(node_id, state)
+        self.fs.copy_node_state(parent_id, node_id)
+        # Snapshot Filesystem: copy_node_state 使用硬链接处理代码快照的继承
         
         # 更新节点状态
         self.fs.update_node_state(node_id, turn=turn, status="running")
@@ -763,17 +754,7 @@ class TraceSystem:
     ) -> None:
         """为分叉节点创建文件"""
         # 复制父节点状态
-        if parent_id != "root":
-            self.fs.copy_node_state(parent_id, node_id)
-            self.fs.copy_code_files(parent_id, node_id)
-        else:
-            state = NodeState(
-                node_id=node_id,
-                turn=turn,
-                status="pending",
-                task_info={"task_id": self.task_id},
-            )
-            self.fs.save_node_state(node_id, state)
+        self.fs.copy_node_state(parent_id, node_id)
         
         # 更新节点状态
         self.fs.update_node_state(node_id, turn=turn, status="pending")
@@ -1069,3 +1050,157 @@ class TraceSystem:
             "thinking": thinking,
             "path": self.get_path_to_node(current_node),
         }
+
+    # ==================== 合并功能 ====================
+
+    def find_lca(self, node_id1: str, node_id2: str) -> str:
+        """
+        寻找两个节点的最近公共祖先 (Lowest Common Ancestor)
+        
+        Args:
+            node_id1: 节点 1 ID
+            node_id2: 节点 2 ID
+            
+        Returns:
+            LCA 节点的 ID
+        """
+        path1 = self.get_path_to_node(node_id1)
+        path2 = self.get_path_to_node(node_id2)
+        
+        lca = "root"
+        for n1, n2 in zip(path1, path2):
+            if n1 == n2:
+                lca = n1
+            else:
+                break
+        return lca
+
+    def merge_nodes(self, target_node_id: str, source_node_id: str) -> str:
+        """
+        将 source_node 的变更合并到 target_node
+        
+        算法: 三路合并 (3-way Merge)，基准为两者的 LCA。
+        
+        Args:
+            target_node_id: 目标节点 (Yours/HEAD)
+            source_node_id: 源节点 (Theirs/Merging)
+            
+        Returns:
+            新生成的合并节点 ID
+        """
+        # 1. 寻找 LCA
+        lca_id = self.find_lca(target_node_id, source_node_id)
+        logger.info(f"Merging {source_node_id} into {target_node_id} (LCA: {lca_id})")
+        
+        # 2. 如果 source 是 target 的祖先，无需合并
+        if lca_id == source_node_id:
+            logger.info("Source is an ancestor of target. No-op merge.")
+            return target_node_id
+            
+        # 3. 如果 target 是 source 的祖先，执行 Fast-Forward (逻辑上即切换到 source 的新分支)
+        # 这里为了 Trace 树的严谨性，我们还是创建一个新节点，但代码完全等于 source
+        
+        # 4. 创建合并节点
+        action = {
+            "type": "merge",
+            "params": {
+                "source_node": source_node_id,
+                "target_node": target_node_id,
+                "lca_node": lca_id
+            }
+        }
+        
+        # 临时切换到 target 节点以准备合并环境
+        self.switch_node(target_node_id)
+        
+        # 添加合并节点
+        merge_node_id = self.add_node(
+            action=action,
+            result={"status": "merging"}
+        )
+        
+        # 5. 执行文件级 3-way 合并
+        state_lca = self.fs.load_node_state(lca_id)
+        state_yours = self.fs.load_node_state(target_node_id)
+        state_theirs = self.fs.load_node_state(source_node_id)
+        
+        all_file_keys = (
+            set(state_lca.file_state.keys()) | 
+            set(state_yours.file_state.keys()) | 
+            set(state_theirs.file_state.keys())
+        )
+        
+        conflicts = []
+        for file_key in all_file_keys:
+            filename = file_key.replace("code/", "")
+            
+            # 读取三个版本的内容
+            base_content = self._get_file_content_safe(lca_id, filename)
+            yours_content = self._get_file_content_safe(target_node_id, filename)
+            theirs_content = self._get_file_content_safe(source_node_id, filename)
+            
+            # 三路合并逻辑
+            merged_content, has_conflict = self._three_way_merge(base_content, yours_content, theirs_content)
+            
+            if has_conflict:
+                conflicts.append(filename)
+                logger.warning(f"Merge conflict in {filename}")
+            
+            # 保存到合并节点
+            self.fs.save_code_file(merge_node_id, filename, merged_content)
+            
+        # 6. 更新结果
+        status = "completed" if not conflicts else "conflict"
+        self.update_node_result(merge_node_id, {
+            "status": status,
+            "conflicts": conflicts,
+            "merged_from": source_node_id,
+            "base_lca": lca_id
+        })
+        
+        # 同步状态到文件系统
+        self.fs.update_node_state(merge_node_id, status=status)
+        
+        return merge_node_id
+
+    def _get_file_content_safe(self, node_id: str, filename: str) -> Optional[str]:
+        """安全读取文件内容，不存在则返回 None"""
+        try:
+            return self.fs.load_code_file(node_id, filename)
+        except Exception:
+            return None
+
+    def _three_way_merge(self, base: Optional[str], yours: Optional[str], theirs: Optional[str]) -> Tuple[str, bool]:
+        """
+        核心三路合并算法
+        
+        Returns: (合并后内容, 是否有冲突)
+        """
+        # 情况 1: 两人修改一致，或都没改
+        if yours == theirs:
+            return yours or "", False
+            
+        # 情况 2: 只有一方改了（或者一方删了，另一方没动）
+        if yours == base:
+            return theirs or "", False
+        if theirs == base:
+            return yours or "", False
+            
+        # 情况 3: 双方都改了，且不一致 -> 冲突 (或尝试行级合并)
+        # 这里使用 difflib 尝试更细粒度的合并
+        if yours is not None and theirs is not None and base is not None:
+            # 简单的行级三路合并逻辑
+            return self._line_level_merge(base, yours, theirs)
+            
+        # 其他复杂冲突 (如：一方删了文件，另一方修改了文件)
+        conflict_marker = f"<<<<<<< YOURS\n{yours or ''}\n=======\n{theirs or ''}\n>>>>>>> THEIRS\n"
+        return conflict_marker, True
+
+    def _line_level_merge(self, base: str, yours: str, theirs: str) -> Tuple[str, bool]:
+        """行级三路合并 (简化实现)"""
+        # 暂时使用冲突标记标记冲突，后期可以引入 merge3 类似算法
+        # 为了演示，我们先简单标记差异
+        if yours != theirs:
+             conflict_marker = f"<<<<<<< YOURS\n{yours}\n=======\n{theirs}\n>>>>>>> THEIRS\n"
+             return conflict_marker, True
+        return yours, False

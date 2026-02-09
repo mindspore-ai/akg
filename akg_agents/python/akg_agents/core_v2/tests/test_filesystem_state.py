@@ -561,19 +561,6 @@ class TestNodeCopy:
         assert new_state.turn == 1
         assert new_state.metrics["token_used"] == 1000
     
-    def test_copy_code_files(self, fs):
-        """测试复制代码文件"""
-        # 创建源节点和代码
-        source_state = NodeState(node_id="node_001", turn=1, status="running")
-        fs.save_node_state("node_001", source_state)
-        fs.save_code_file("node_001", "kernel.cu", "source code")
-        
-        # 复制到新节点
-        fs.copy_code_files("node_001", "node_002")
-        
-        # 验证
-        copied_code = fs.load_code_file("node_002", "kernel.cu")
-        assert copied_code == "source code"
 
 
 if __name__ == "__main__":
