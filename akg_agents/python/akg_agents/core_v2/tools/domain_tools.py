@@ -35,6 +35,7 @@ async def verify_kernel(
     task_id: str = "default_task",
     device_id: int = 0,
     timeout: int = 300,
+    cur_path: str = "",
     # 从 agent_context 获取的参数
     framework: str = "torch",
     backend: str = "cuda",
@@ -51,6 +52,7 @@ async def verify_kernel(
         task_id: 任务 ID
         device_id: 设备 ID
         timeout: 验证超时时间（秒）
+        cur_path: 当前节点路径（可选），指定后验证日志存放在 cur_path/logs/
         framework: 框架类型（从 agent_context 获取）
         backend: 计算后端（从 agent_context 获取）
         arch: 硬件架构（从 agent_context 获取）
@@ -86,8 +88,12 @@ async def verify_kernel(
         import asyncio
         from akg_agents.op.verifier.kernel_verifier import KernelVerifier
         
-        # 创建临时日志目录
-        log_dir = Path(tempfile.mkdtemp(prefix=f"verify_{op_name}_"))
+        # 确定日志目录：优先使用 cur_path/logs，否则使用临时目录
+        if cur_path:
+            log_dir = Path(cur_path) / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            log_dir = Path(tempfile.mkdtemp(prefix=f"verify_{op_name}_"))
         logger.info(f"[verify_kernel] 日志目录: {log_dir}")
         
         # 规范化 DSL
@@ -170,6 +176,7 @@ async def profile_kernel(
     device_id: int = 0,
     run_times: int = 50,
     warmup_times: int = 5,
+    cur_path: str = "",
     # 从 agent_context 获取的参数
     framework: str = "torch",
     backend: str = "cuda",
@@ -187,6 +194,7 @@ async def profile_kernel(
         device_id: 设备 ID
         run_times: 性能测试运行次数
         warmup_times: 预热次数
+        cur_path: 当前节点路径（可选），指定后日志存放在 cur_path/logs/
         framework: 框架类型（从 agent_context 获取）
         backend: 计算后端（从 agent_context 获取）
         arch: 硬件架构（从 agent_context 获取）
@@ -223,8 +231,12 @@ async def profile_kernel(
         import asyncio
         from akg_agents.op.verifier.kernel_verifier import KernelVerifier
         
-        # 创建临时日志目录
-        log_dir = Path(tempfile.mkdtemp(prefix=f"profile_{op_name}_"))
+        # 确定日志目录：优先使用 cur_path/logs，否则使用临时目录
+        if cur_path:
+            log_dir = Path(cur_path) / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            log_dir = Path(tempfile.mkdtemp(prefix=f"profile_{op_name}_"))
         logger.info(f"[profile_kernel] 日志目录: {log_dir}")
         
         # 规范化 DSL

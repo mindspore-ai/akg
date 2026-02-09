@@ -20,7 +20,6 @@ KernelDesigner Agent - 基于 Skill 系统的算法草图设计 Agent
 - 使用 Skill 系统动态选择相关知识和策略
 - 支持多种 DSL (Triton CUDA, Triton Ascend 等)
 - 支持 Hint 模式（参数空间配置）
-- 支持进化优化（inspirations）
 """
 
 import logging
@@ -40,97 +39,16 @@ from akg_agents.core_v2.skill import (
     SkillSelector, 
     SelectionContext, 
     SkillLevel,
-    create_metadata_matcher
 )
 
 # 设置 Skills 目录路径
 project_root = Path(get_project_root())
-# 修改为指向真正的 skills 目录（包含 triton-ascend 和 cpu skills）
-SKILLS_DIR = project_root / "python" / "akg_agents" / "op" / "resources" / "skills"
+SKILLS_DIR = project_root / "op" / "resources" / "skills"
 
 logger = logging.getLogger(__name__)
 
 
-def format_inspirations(inspirations: List[dict]) -> str:
-    """
-    将 inspirations 列表转换为格式化字符串
-    
-    Args:
-        inspirations: 包含字典的列表，每个字典格式为:
-            {
-                'strategy_mode': str,
-                'impl_code': str,
-                'sketch': str,
-                'profile': {
-                    'gen_time': float,
-                    'base_time': float,
-                    'speedup': float,
-                    'autotune_summary': str (可选)
-                },
-                'is_parent': bool
-            }
-    
-    Returns:
-        str: 拼接后的字符串，包含所有 sketch/impl_code 和 profile 信息
-    """
-    if not inspirations:
-        return ""
-    
-    result_parts = []
-    has_parent = False
-    
-    for i, inspiration in enumerate(inspirations):
-        if not isinstance(inspiration, dict):
-            logger.warning(f"跳过非字典类型的 inspiration: {type(inspiration)}")
-            continue
-        
-        sketch = inspiration.get('sketch', '')
-        impl_code = inspiration.get('impl_code', '')
-        profile = inspiration.get('profile', {})
-        is_parent = inspiration.get('is_parent', False)
-        
-        # 检测是否有父代
-        if is_parent:
-            has_parent = True
-        
-        if sketch or impl_code:  # 只有当 sketch 或 impl_code 不为空时才添加
-            # 处理 profile 信息（dict 格式）
-            gen_time = profile.get('gen_time', float('inf'))
-            base_time = profile.get('base_time', 0.0)
-            speedup = profile.get('speedup', 0.0)
-            autotune_summary = profile.get('autotune_summary', '')
-            
-            if gen_time != float('inf'):
-                profile_text = f"根据此方案草图生成的代码计算耗时: {gen_time:.4f}us, 基准代码耗时: {base_time:.4f}us, 加速比: {speedup:.2f}x"
-                # 如果有 autotune 信息，添加到 profile_text
-                if autotune_summary:
-                    profile_text += f"\n\nAutotune配置详情:\n{autotune_summary}"
-            else:
-                profile_text = "代码执行耗时: N/A"
-            
-            # 如果是父代，添加标记
-            parent_mark = " 【父代方案】" if is_parent else ""
-            inspiration_text = f"## Inspiration {i+1}{parent_mark} {profile_text}\n"
-            if sketch:
-                inspiration_text += f"算法草图：\n```\n{sketch}\n```\n"
-            if impl_code:
-                inspiration_text += f"代码：\n```\n{impl_code}\n```\n"
-            result_parts.append(inspiration_text)
-    
-    # 如果有父代，在开头添加进化优化策略说明
-    if has_parent and result_parts:
-        strategy_note = (
-            "**进化优化策略**：\n"
-            "- 标记为【父代方案】的是本次进化的基础，请以它为主要参考进行改进和优化\n"
-            "- 其他 Inspiration 可作为补充参考，用于交叉变异和借鉴优化思路\n"
-            "- 请在父代方案的基础上，结合其他方案的优点，生成优化后的草图\n\n"
-        )
-        result_parts.insert(0, strategy_note)
-    
-    return "\n".join(result_parts)
-
-
-@register_agent(scopes=["op"])
+register_agent(scopes=["op"])
 class KernelDesigner(AgentBase):
     """
     Kernel 算法草图设计 Agent
@@ -140,7 +58,27 @@ class KernelDesigner(AgentBase):
     
     # Agent 工具配置元数据
     TOOL_NAME = "call_kernel_designer"
-    DESCRIPTION = "根据任务需求生成算法草图（sketch）。"
+    DESCRIPTION = """
+仅生成算法设计方案/草图（sketch），不生成完整代码。
+
+功能：
+- 分析任务需求，设计算法实现方案
+- 提供伪代码形式的算法草图
+- 给出优化建议和实现策略
+- 支持 Hint 模式（参数空间配置）
+
+适用场景：
+- 用户说只要"设计方案"、"算法草图"、"sketch"、"怎么实现"
+- 只需要了解实现思路，不需要完整代码
+- 想先讨论设计方案再决定是否生成代码
+- 复杂算子需要先进行设计分析
+
+⚠️ 注意：此工具仅生成设计方案，不生成可执行代码！
+- 如果需要设计+代码生成，请使用 use_default_workflow 工具
+- 设计方案用于指导后续代码生成
+
+输出：算法草图（伪代码 + 优化策略 + 实现建议）
+"""
     
     PARAMETERS_SCHEMA = {
         "type": "object",
@@ -155,7 +93,7 @@ class KernelDesigner(AgentBase):
             },
             "dsl": {
                 "type": "string",
-                "description": "目标 DSL（例如：'triton-ascend', 'triton-cuda'）"
+                "description": "目标 DSL（例如：'triton_ascend', 'triton_cuda'）"
             },
             "backend": {
                 "type": "string",
@@ -171,19 +109,6 @@ class KernelDesigner(AgentBase):
                 "description": "任务 ID（可选）",
                 "default": ""
             },
-            "inspirations": {
-                "type": "array",
-                "description": "进化优化的参考方案列表（可选）",
-                "items": {
-                    "type": "object"
-                },
-                "default": []
-            },
-            "conductor_suggestion": {
-                "type": "string",
-                "description": "Conductor 的建议（可选）",
-                "default": ""
-            },
             "user_requirements": {
                 "type": "string",
                 "description": "用户额外需求（可选）",
@@ -193,6 +118,14 @@ class KernelDesigner(AgentBase):
                 "type": "boolean",
                 "description": "是否启用 Hint 模式（参数空间配置）",
                 "default": False
+            },
+            "history_compress": {
+                "type": "array",
+                "description": "压缩后的历史记录列表（可选）",
+                "items": {
+                    "type": "object"
+                },
+                "default": []
             },
             "model_level": {
                 "type": "string",
@@ -241,59 +174,33 @@ class KernelDesigner(AgentBase):
         # 加载 jinja2 模板
         self.system_prompt_template = self.load_template("kernel_designer/system_prompt.j2")
         self.user_prompt_template = self.load_template("kernel_designer/user_prompt.j2")
-        
-        # ==================== 加载 Sketch 设计指南 ====================
-        # 这是保证输出 sketch DSL 格式的关键文档（348行的详细规范）
-        self.sketch_guide = self._load_sketch_guide()
-    
-    def _load_sketch_guide(self) -> str:
-        """
-        加载 sketch 设计指南文档（SKETCH_DESIGN_v2.md）
-        
-        这是原版 Designer 的核心文档，定义了 sketch DSL 的语法规范。
-        不加载此文档会导致 LLM 生成 Markdown 文档而不是 sketch 代码。
-        
-        Returns:
-            str: 文档内容，如果加载失败则返回空字符串
-        """
-        try:
-            sketch_guide_path = Path(get_project_root()) / "op" / "resources" / "docs" / "sketch_docs" / "SKETCH_DESIGN_v2.md"
-            
-            if sketch_guide_path.exists():
-                with open(sketch_guide_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    logger.info(f"✓ Loaded sketch guide ({len(content)} chars)")
-                    return content
-        except Exception as e:
-            logger.warning(f"Failed to load sketch guide: {e}")
-        
-        logger.warning("⚠️  Sketch design guide not found, output format may be incorrect")
-        return ""
     
     def _init_skills(self):
         """初始化 Skill 系统"""
         try:
-            # 加载 skills
+            # 加载 skills（包含 designer 子目录）
             loader = SkillLoader()
             self.loaded_skills = loader.load_from_directory(SKILLS_DIR)
             
             logger.info(f"Loaded {len(self.loaded_skills)} skills from {SKILLS_DIR}")
             
             # 创建自定义过滤器
-            # 1. 排除无关 category
-            def category_filter(skill, context):
-                unrelated = ["writing", "web", "communication", "documentation", "workflow"]
-                return skill.category not in unrelated
-            
-            # 2. backend 匹配器（如果 Skill 指定了 backend，必须匹配）
-            backend_filter = create_metadata_matcher("backend")
-            
-            # 3. dsl 匹配器（如果 Skill 指定了 dsl，必须匹配）
-            dsl_filter = create_metadata_matcher("dsl")
+            # 1. Designer 专用过滤器：优先选择 designer 相关的 skills
+            def designer_filter(skill, context):
+                # 设计类 category 优先
+                design_categories = ["design", "fundamental"]
+                # 或者 metadata 中有 role: designer
+                is_designer_skill = (
+                    skill.category in design_categories or 
+                    (skill.metadata and skill.metadata.get("role") == "designer")
+                )
+                # 排除纯实现类的 skills（由 coder 使用）
+                implementation_only = skill.category == "implementation" and not is_designer_skill
+                return not implementation_only
             
             # 创建 selector（带自定义过滤器）
             self.skill_selector = SkillSelector(
-                custom_filters=[category_filter, backend_filter, dsl_filter]
+                custom_filters=[designer_filter]
             )
             
         except Exception as e:
@@ -302,89 +209,105 @@ class KernelDesigner(AgentBase):
             self.loaded_skills = []
             self.skill_selector = None
     
-    async def _select_skills(self, dsl: str = "", backend: str = "") -> List[Any]:
+    async def _select_skills(self, op_name: str = "", task_desc: str = "",
+                             dsl: str = "", backend: str = "", 
+                             enable_hint_mode: bool = False, has_hint: bool = False) -> List[Any]:
         """
-        选择相关的 Skills
-        
-        使用 SkillSelector 的自定义过滤器进行两阶段筛选：
-        1. 粗筛（coarse_filter）：使用 custom_filters 自动过滤
-        2. 精筛（LLM）：根据任务上下文智能选择
-        
-        Args:
-            dsl: 目标 DSL
-            backend: 目标后端
-        
-        Returns:
-            选中的 Skill 列表
+        Designer 的 Skill 选择：
+        1. 必选：sketch-design
+        2. 可选：hint-mode（当 enable_hint_mode 且 has_hint）
+        3. LLM 选择其他参考 Skills
         """
-        if not self.skill_selector:
-            logger.warning("Skill system not initialized, skipping skill selection")
+        if not self.skill_selector or not self.loaded_skills:
             return []
-        
-        if not self.loaded_skills:
-            logger.warning("No skills loaded, skipping skill selection")
-            return []
-        
-        # 构建选择上下文（包含 backend 和 dsl 供过滤器使用）
-        context = SelectionContext(
-            custom_fields={
-                "task_type": "sketch_design",
-                "framework": backend or "unknown",
-                "optimization_goal": f"设计 {dsl or backend or 'kernel'} 算子草图，专注于算法层面的优化策略",
-                "backend": backend,
-                "dsl": dsl
-            }
-        )
         
         try:
-            # 阶段1：粗筛（使用 custom_filters 自动过滤）
-            candidates = self.skill_selector.coarse_filter(self.loaded_skills, context)
-            logger.info(f"Coarse filter: {len(self.loaded_skills)} -> {len(candidates)} skills")
+            skill_dict = {s.name: s for s in self.loaded_skills}
+            selected_skills = []
             
-            # 阶段2：LLM 精筛
-            # 定义 prompt 模板
-            prompt_template = """你是一个 Skill 选择专家。现在需要为算子设计（sketch generation）任务选择相关的 Skills。
+            # 1. 必选：sketch-design
+            if "sketch-design" in skill_dict:
+                selected_skills.append(skill_dict["sketch-design"])
+                logger.info("Selected skill: sketch-design (required)")
+            
+            # 2. hint-mode（可选）
+            if enable_hint_mode and has_hint and "hint-mode" in skill_dict:
+                selected_skills.append(skill_dict["hint-mode"])
+                logger.info("Selected skill: hint-mode (hint mode enabled)")
+            
+            # 3. 粗筛可用的参考 Skills
+            context = SelectionContext()
+            filtered = self.skill_selector.coarse_filter(self.loaded_skills, context)
+            
+            # 排除已选
+            already_selected = {s.name for s in selected_skills}
+            candidates = [s for s in filtered if s.name not in already_selected and s.name != "hint-mode"]
+            
+            logger.info(f"Coarse filter: {len(self.loaded_skills)} -> {len(candidates)} candidates")
+            
+            if not candidates:
+                return selected_skills
+            
+            # 4. LLM 选择参考 Skills
+            skills_info = [{"name": s.name, "description": s.description} for s in candidates]
+            
+            llm_prompt = f"""你是一个 Skill 选择专家。请为以下算法草图设计任务选择相关的参考 Skills。
 
-**任务上下文**:
-{context_str}
+**任务信息**:
+- 算子名称: {op_name}
+- 目标 DSL: {dsl}
+- 目标后端: {backend}
+- 任务描述: {task_desc}
 
-**候选 Skills（已粗筛）**:
-{skills_str}
+**可用参考 Skills**:
+{json.dumps(skills_info, indent=2, ensure_ascii=False)}
 
-**任务要求**:
-请从候选 Skills 中选择与算子设计任务最相关的 Skills。注意：
-1. 优先选择与 DSL 和后端直接相关的 Skills
-2. 包含设计方法和优化策略相关的 Skills
-3. 确保不要遗漏重要的 Skills
-4. 重点是算子草图设计，无关的技能不要选择（如代码生成、测试等）
+**注意**：
+1. 基于 Sketch 生成算子草图，无关的技能不要选择（如代码生成、测试、工作流等）
+2. 选取最相关的2-3个 Skills 即可，不要选择太多
 
 **输出格式**（JSON）:
-```json
+ ```json
 {{
-  "selected": ["skill-name-1", "skill-name-2", ...],
-  "reason": "选择理由"
+"selected": ["skill-name-1", "skill-name-2", ...],
+"reason": "简要选择理由"
 }}
 ```
 """
-            
-            prompt = self.skill_selector.build_llm_prompt(candidates, context, prompt_template)
-            
             template = Jinja2TemplateWrapper("{{ prompt }}")
-            llm_response, _, _ = await self.run_llm(
-                template, 
-                {"prompt": prompt}, 
-                "standard"
-            )
+            response, _, _ = await self.run_llm(template, {"prompt": llm_prompt}, "standard")
             
-            selected_skills = self.skill_selector.parse_llm_response(llm_response, candidates)
+            # 解析响应
+            selected_names, reason = self._parse_llm_selection(response)
+            for name in selected_names:
+                if name in skill_dict and name not in already_selected:
+                    selected_skills.append(skill_dict[name])
             
-            logger.info(f"✓ Selected {len(selected_skills)} skills: {[s.name for s in selected_skills]}")
-            
+            logger.info(f"Designer selected {len(selected_skills)} skills: {[s.name for s in selected_skills]}")
+            if reason:
+                logger.info(f"Selection reason: {reason}")
             return selected_skills
-        
+            
         except Exception as e:
-            logger.warning(f"Skill selection failed: {e}, returning empty list")
-            return []
+            logger.warning(f"Skill selection failed: {e}")
+            return selected_skills if 'selected_skills' in locals() else []
+    
+    def _parse_llm_selection(self, response: str) -> Tuple[List[str], str]:
+        """解析 LLM 返回的 skill 选择结果，返回 (名称列表, 理由)"""
+        import re
+        try:
+            # 尝试解析 JSON 对象格式 {"selected": [...], "reason": "..."}
+            json_match = re.search(r'\{[^{}]*"selected"[^{}]*\}', response, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+                return result.get("selected", []), result.get("reason", "")
+            # 回退：尝试解析纯数组格式
+            arr_match = re.search(r'\[.*?\]', response, re.DOTALL)
+            if arr_match:
+                return json.loads(arr_match.group()), ""
+        except json.JSONDecodeError:
+            pass
+        return [], ""
     
     async def run(
         self,
@@ -394,10 +317,9 @@ class KernelDesigner(AgentBase):
         backend: str,
         arch: str = "",
         task_id: str = "",
-        inspirations: Optional[List[dict]] = None,
-        conductor_suggestion: str = "",
         user_requirements: str = "",
         enable_hint_mode: bool = False,
+        history_compress: Optional[List[dict]] = None,
         model_level: str = "standard"
     ) -> Tuple[str, str, str]:
         """
@@ -410,8 +332,6 @@ class KernelDesigner(AgentBase):
             backend: 目标后端
             arch: 目标架构
             task_id: 任务 ID
-            inspirations: 进化优化的参考方案列表
-            conductor_suggestion: Conductor 建议
             user_requirements: 用户额外需求
             enable_hint_mode: 是否启用 Hint 模式
             model_level: 模型级别
@@ -420,17 +340,24 @@ class KernelDesigner(AgentBase):
             Tuple[str, str, str]: (生成的草图, 完整 prompt, 推理过程)
         """
         try:
-            # 确保参数不为 None
-            if inspirations is None:
-                inspirations = []
+            # 确保 history_compress 不为 None
+            if history_compress is None:
+                history_compress = []
             
             # 检测是否有 hint（在 task_desc 中）
             has_hint = enable_hint_mode and ('hint' in task_desc.lower())
             if has_hint:
                 logger.info(f"[Task {task_id}] 检测到 hint，启用 Hint 模式")
             
-            # 1. 选择相关 Skills（异步）
-            selected_skills = await self._select_skills(dsl=dsl, backend=backend)
+            # 1. 选择相关 Skills（异步），传递算子信息和 hint 模式
+            selected_skills = await self._select_skills(
+                op_name=op_name,
+                task_desc=task_desc,
+                dsl=dsl, 
+                backend=backend, 
+                enable_hint_mode=enable_hint_mode, 
+                has_hint=has_hint
+            )
             
             # 2. 渲染 System Prompt
             system_prompt = self.system_prompt_template.format(
@@ -439,20 +366,15 @@ class KernelDesigner(AgentBase):
                 arch=arch
             )
             
-            # 3. 格式化 inspirations
-            formatted_inspirations = format_inspirations(inspirations)
-            
-            # 4. 获取硬件文档
+            # 3. 获取硬件文档
             hardware_docs = get_hardware_doc(backend, arch)
             
-            # 5. 渲染 User Prompt
+            # 4. 渲染 User Prompt
             user_prompt = self.user_prompt_template.format(
-                sketch_guide=self.sketch_guide,  # 关键！确保 LLM 输出 sketch DSL 格式
+                history_actions=history_compress,
                 skills=selected_skills,
                 op_name=op_name,
                 task_desc=remove_copyright_from_text(task_desc),
-                inspirations=formatted_inspirations,
-                conductor_suggestion=conductor_suggestion,
                 user_requirements=user_requirements,
                 hardware_docs=hardware_docs,
                 arch_name=arch,
@@ -461,13 +383,13 @@ class KernelDesigner(AgentBase):
                 format_instructions=self.format_instructions
             )
             
-            # 6. 组合完整 prompt
+            # 5. 组合完整 prompt
             full_prompt = f"{system_prompt}\n\n{user_prompt}"
             
-            # 7. 创建 Jinja2 模板包装（用于 run_llm）
+            # 6. 创建 Jinja2 模板包装（用于 run_llm）
             template = Jinja2TemplateWrapper("{{ prompt }}")
             
-            # 8. 更新上下文
+            # 7. 更新上下文
             self.design_step_count += 1
             to_update_details = {
                 "agent_name": "kernel_designer",
@@ -481,47 +403,13 @@ class KernelDesigner(AgentBase):
             }
             self.context.update(to_update_details)
             
-            # 9. 调用 LLM
+            # 8. 调用 LLM
             llm_result, formatted_prompt, reasoning = await self.run_llm(
                 template,
                 {"prompt": full_prompt},
                 model_level or "standard"
             )
             
-            # 10. 处理 LLM 返回结果
-            # ============ 处理 Hint 模式的输出 ============
-            if enable_hint_mode and has_hint:
-                try:
-                    # 使用 robust 方法解析 JSON 格式的生成内容（支持 markdown 代码块包裹等多种格式）
-                    extracted_json = ParserFactory._extract_json_comprehensive(llm_result)
-                    if extracted_json:
-                        result_dict = json.loads(extracted_json)
-                    else:
-                        # 尝试直接解析
-                        result_dict = json.loads(llm_result)
-                    
-                    sketch = result_dict.get("sketch", "")
-                    reasoning = result_dict.get("reasoning", reasoning)
-                    
-                    # 转换为标准格式（支持 parser_config.yaml 定义：code + 可选的 space_config_code）
-                    # 将{"sketch": "...", "space_config": "...", "reasoning": "..."} 转换为 {"code": "...", "space_config_code": "..."}
-                    result_for_return = {"code": sketch}
-                    if "space_config" in result_dict:
-                        space_config_code = result_dict["space_config"]
-                        result_for_return["space_config_code"] = space_config_code
-                        logger.info(f"[Task {task_id}] KernelDesigner 生成了参数空间配置")
-                    
-                    standard_result = json.dumps(result_for_return, ensure_ascii=False)
-                    
-                    # 返回: (标准格式的JSON字符串, 格式化提示词, 推理内容)
-                    return standard_result, formatted_prompt, reasoning
-                
-                except json.JSONDecodeError as e:
-                    # 如果解析失败，按原有流程返回
-                    logger.warning(f"[{op_name}] Hint 模式下 JSON 解析失败: {e}，使用原始输出")
-                    return llm_result, formatted_prompt, reasoning
-            
-            # ============ 非 Hint 模式：直接返回 LLM 结果（与原版 Designer 一致）============
             return llm_result, formatted_prompt, reasoning
         
         except Exception as e:

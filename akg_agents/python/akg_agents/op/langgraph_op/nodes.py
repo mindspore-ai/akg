@@ -205,6 +205,86 @@ class NodeFactory:
         return track_node("coder")(coder_node)
 
     @staticmethod
+    def create_kernel_gen_node(kernel_gen_instance, trace_instance):
+        """创建 KernelGen 节点函数（基于 Skill 系统）"""
+        async def kernel_gen_node(state: KernelGenState) -> dict:
+            """KernelGen 节点：基于 Skill 系统生成内核代码"""
+            # 记录任务信息
+            task_id = state.get('task_id', '0')
+            op_name = state.get('op_name', 'unknown')
+            logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: kernel_gen")
+            
+            # 记录是否有错误信息传递给 KernelGen
+            verifier_error = state.get('verifier_error', '')
+            conductor_suggestion = state.get('conductor_suggestion', '')
+            
+            if verifier_error:
+                logger.info(f"[Task {task_id}] KernelGen 收到验证错误信息 (长度: {len(verifier_error)})")
+                logger.debug(f"[Task {task_id}] 错误详情: {verifier_error[:200]}...")
+            
+            if conductor_suggestion:
+                logger.info(f"[Task {task_id}] KernelGen 收到 Conductor 建议 (长度: {len(conductor_suggestion)})")
+                logger.debug(f"[Task {task_id}] 建议内容: {conductor_suggestion[:200]}...")
+            
+            # 调用 KernelGen.run()
+            t0 = time.time()
+            try:
+                result, prompt, reasoning = await kernel_gen_instance.run(
+                    op_name=state.get('op_name', ''),
+                    task_desc=state.get('task_desc', ''),
+                    dsl=state.get('dsl', ''),
+                    framework=state.get('framework', ''),
+                    backend=state.get('backend', ''),
+                    arch=state.get('arch', ''),
+                    user_requirements=state.get('user_requirements', ''),
+                    task_id=task_id,
+                    verifier_error=verifier_error,
+                    conductor_suggestion=conductor_suggestion,
+                    model_level=state.get('model_level', 'standard')
+                )
+            except Exception as e:
+                logger.error(f"[Task {task_id}] KernelGen.run() 失败: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                raise
+            
+            elapsed = time.time() - t0
+            
+            # 使用与 Coder 相同的解析逻辑（ParserFactory.robust_parse）
+            code = result
+            try:
+                from akg_agents.utils.common_utils import ParserFactory
+                
+                # 获取 KernelGen 的 parser
+                agent_parser = getattr(kernel_gen_instance, 'code_parser', None)
+                if agent_parser:
+                    # 使用 robust_parse 进行解析（与 Coder 保持一致）
+                    parsed_result = ParserFactory.robust_parse(result, agent_parser)
+                    if parsed_result:
+                        # 从解析结果中提取 code
+                        code = getattr(parsed_result, 'code', result)
+                        logger.info(f"[Task {task_id}] KernelGen 使用 robust_parse 解析成功 (原始长度: {len(result)}, 提取后长度: {len(code)})")
+                    else:
+                        logger.warning(f"[Task {task_id}] KernelGen robust_parse 返回空，使用原始输出")
+                else:
+                    logger.warning(f"[Task {task_id}] KernelGen 没有 parser，使用原始输出")
+            except Exception as e:
+                # 解析失败，使用原始结果
+                logger.warning(f"[Task {task_id}] KernelGen 解析失败: {e}，使用原始输出")
+            
+            return {
+                "coder_code": code,  # 使用 coder_code 字段以保持与现有流程的兼容性
+                "coder_prompt": prompt,
+                "coder_reasoning": reasoning,
+                "iteration": state.get("iteration", 0) + 1,
+                "step_count": state.get("step_count", 0) + 1,
+                "agent_history": ["kernel_gen"],
+                "conductor_suggestion": None,  # 清除旧建议
+            }
+
+        return track_node("kernel_gen")(kernel_gen_node)
+
+    @staticmethod
     def create_verifier_node(verifier_instance, device_pool, trace_instance, config,
                            private_worker=None, worker_manager=None, backend=None, arch=None):
         """创建 Verifier 节点函数（Worker 模式）"""
@@ -240,6 +320,27 @@ class NodeFactory:
             
             # 设置 verifier 的 worker
             verifier_instance.worker = worker
+            
+            # 从 state 更新 verifier 实例的属性（支持延迟初始化模式）
+            # 这允许 verifier 在创建时使用占位符，运行时从 state 获取实际值
+            verifier_instance.op_name = state.get('op_name', verifier_instance.op_name)
+            verifier_instance.framework_code = state.get('task_desc', getattr(verifier_instance, 'framework_code', ''))
+            verifier_instance.framework = state.get('framework', getattr(verifier_instance, 'framework', 'torch'))
+            verifier_instance.task_id = state.get('task_id', getattr(verifier_instance, 'task_id', '0'))
+            # dsl 需要规范化处理
+            from akg_agents.core.utils import normalize_dsl
+            new_dsl = state.get('dsl', getattr(verifier_instance, 'dsl', ''))
+            new_backend = state.get('backend', verifier_instance.backend)
+            verifier_instance.dsl = normalize_dsl(new_dsl, new_backend)
+            
+            # 同步 config 中的 log_dir 到 verifier 实例
+            # prepare_config 可能已将 log_dir 重定向到 cur_path/logs，
+            # 需要同步到 verifier_instance，否则验证日志仍写入默认目录
+            config_log_dir = config.get('log_dir', '')
+            if config_log_dir:
+                verifier_instance.log_dir = config_log_dir
+                if hasattr(verifier_instance, 'config') and isinstance(verifier_instance.config, dict):
+                    verifier_instance.config['log_dir'] = config_log_dir
             
             try:
                 current_step = state.get("step_count", 0)
@@ -296,15 +397,6 @@ class NodeFactory:
                         config
                     )
                 
-                trace_instance.insert_agent_record(
-                    agent_name="verifier",
-                    result=str(verify_res),
-                    error_log=verify_log,
-                    profile_res=profile_res,
-                    session_id=state.get("session_id"),
-                    elapsed_s=(time.time() - t0),
-                )
-                
                 # 记录验证结果
                 if not verify_res:
                     task_id = state.get('task_id', '0')
@@ -327,8 +419,15 @@ class NodeFactory:
         return track_node("verifier")(verifier_node)
 
     @staticmethod
-    def create_conductor_node(trace_instance, config, conductor_template):
-        """创建 Conductor 分析节点"""
+    def create_conductor_node(trace_instance, config, conductor_template, code_gen_agent="coder"):
+        """创建 Conductor 分析节点
+        
+        Args:
+            trace_instance: Trace 实例
+            config: 配置字典
+            conductor_template: Conductor 模板
+            code_gen_agent: 代码生成 agent 名称（"coder" 或 "kernel_gen"）
+        """
         async def conductor_node(state: KernelGenState) -> dict:
             """Conductor 节点：分析错误并生成建议
             
@@ -358,6 +457,10 @@ class NodeFactory:
                         'suggestion': attempt.get('suggestion', '')[:500]
                     })
                 
+                # 使用工作流指定的代码生成 agent（通过参数传入，而非字符串匹配）
+                valid_next_agents = f'{code_gen_agent}, finish'
+                valid_options_set = {code_gen_agent, "finish"}
+                
                 # 构建输入数据（与原 Conductor 一致）
                 # 注意：coder_code 和 error_log 不再截断，由模板或 LLM 处理上下文长度
                 input_data = {
@@ -370,7 +473,7 @@ class NodeFactory:
                     'agent_result': state.get('coder_code', ''),  # 完整代码，不截断
                     'error_log': state.get('verifier_error', ''),  # 完整错误日志，不截断
                     'history_attempts': history_for_analysis,
-                    'valid_next_agents': 'coder, finish',  # 固定选项
+                    'valid_next_agents': valid_next_agents,
                     'format_instructions': format_instructions,
                 }
 
@@ -406,17 +509,9 @@ class NodeFactory:
                     model_level=model_level
                 )
 
-                # 解析结果
+                # 解析结果（使用上面确定的 valid_options_set）
                 agent_decision, suggestion = ResultProcessor.parse_conductor_decision(
-                    response_text, conductor_parser, {"coder", "finish"}
-                )
-                
-                # 保存到 trace（会自动保存到 txt 文件）
-                trace_instance.insert_conductor_agent_record(
-                    res=response_text,
-                    prompt=prompt,
-                    reasoning=reasoning,
-                    agent_name="decision"
+                    response_text, conductor_parser, valid_options_set
                 )
                 
                 # 更新历史记录
@@ -430,7 +525,7 @@ class NodeFactory:
                     # history_attempts 会自动累积（因为定义为 Annotated[List, add]）
                     return {
                         "conductor_suggestion": suggestion or "",
-                        "conductor_decision": agent_decision or "coder",
+                        "conductor_decision": agent_decision or code_gen_agent,
                         "history_attempts": [history_entry],
                         "agent_history": ["conductor"]
                     }
@@ -440,7 +535,7 @@ class NodeFactory:
                 
                 return {
                     "conductor_suggestion": suggestion or "",
-                    "conductor_decision": agent_decision or "coder",
+                    "conductor_decision": agent_decision or code_gen_agent,
                     "agent_history": ["conductor"]
                 }
                 

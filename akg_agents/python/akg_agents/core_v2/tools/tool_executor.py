@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import logging
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import yaml
 
+from akg_agents.core_v2.tools.arg_resolver import resolve_arguments
+
 logger = logging.getLogger(__name__)
+
 
 class ToolExecutor:
     def __init__(self, agent_registry: Dict[str, Any] = None,
@@ -67,132 +71,247 @@ class ToolExecutor:
             logger.warning(f"[ToolExecutor] 加载工具类型失败: {e}")
             return {}
     
+    # ==================== 主入口 ====================
+    
     async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        执行工具（统一入口）
+        
+        流程:
+        1. 解析参数中的动态表达式 (read_json_file 等)
+        2. 根据工具类型分派执行
+        
+        Args:
+            tool_name: 工具名称
+            arguments: 工具参数（可能包含 read_json_file 表达式）
+        
+        Returns:
+            标准结果字典 {"status", "output", "error_information", ...}
+        """
+        # 解析参数中的动态表达式
+        resolved_args = resolve_arguments(arguments)
+        
         # 优先检查是否是注册的 Agent
         if tool_name in self.agent_registry:
-            return await self._execute_agent(tool_name, arguments)
+            return await self._execute_agent(tool_name, resolved_args)
         
         # 检查是否是注册的 Workflow
         if tool_name in self.workflow_registry:
-            return await self._execute_workflow(tool_name, arguments)
+            return await self._execute_workflow(tool_name, resolved_args)
         
         # 检查工具类型
         tool_type = self.tool_types.get(tool_name, "basic_tool")
         
         if tool_type == "domain_tool":
-            return await self._execute_domain_tool(tool_name, arguments)
+            return await self._execute_domain_tool(tool_name, resolved_args)
         else:
-            return await self._execute_basic_tool(tool_name, arguments)
+            return await self._execute_basic_tool(tool_name, resolved_args)
+    
+    # ==================== Agent 执行（通用） ====================
     
     async def _execute_agent(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        通用 Agent 执行
+        
+        通过 introspection 自动匹配 agent.run() 的参数签名，
+        不再需要为每个 agent 写 if/else 分支。
+        
+        流程:
+        1. 合并默认参数（硬件参数、task_id、history_compress 等）
+        2. 创建 agent 实例
+        3. 通过 introspection 调用 agent.run()
+        4. 归一化返回结果
+        """
         try:
             agent_info = self.agent_registry[tool_name]
             agent_class = agent_info["agent_class"]
             
-            # 统一获取硬件参数和历史记录
+            # 合并默认参数（arguments 中已有的优先）
             hw_params = self._get_hardware_params(arguments)
-            history_compress = self._build_history_compress()
+            for k, v in hw_params.items():
+                arguments.setdefault(k, v)
             
-            # plan agent 特殊处理
-            if tool_name == "plan":
-                agent = agent_class()
+            arguments.setdefault('task_id', self.agent_context.get('task_id', ''))
+            arguments.setdefault('history_compress', self._build_history_compress())
+            arguments.setdefault('user_input', self.agent_context.get('user_input', ''))
+            arguments.setdefault('model_level', self.agent_context.get('model_level', 'standard'))
+            
+            # 创建 agent 实例
+            agent = self._create_agent_instance(agent_class)
+            
+            # 调用 agent.run()（自动匹配参数签名）
+            logger.info(f"[ToolExecutor] 执行 Agent: {tool_name} ({agent_class.__name__})")
+            result = await self._call_agent_run(agent, arguments)
+            
+            # 归一化返回结果
+            return self._normalize_agent_result(result)
+        
+        except Exception as e:
+            logger.error(f"[ToolExecutor] Agent 执行失败: {tool_name}, {e}", exc_info=True)
+            return {"status": "error", "output": "", "error_information": f"Agent 执行失败: {str(e)}"}
+    
+    def _create_agent_instance(self, agent_class):
+        """
+        通用 Agent 实例创建
+        
+        尝试多种实例化模式:
+        1. 无参构造 agent_class()
+        2. parser_config_path=None
+        3. config=dict
+        """
+        # 尝试无参构造
+        try:
+            return agent_class()
+        except TypeError:
+            pass
+        
+        # 尝试 parser_config_path=None（KernelGen, KernelDesigner 等）
+        try:
+            return agent_class(parser_config_path=None)
+        except TypeError:
+            pass
+        
+        # 尝试 config 参数
+        try:
+            return agent_class(config=self.agent_context.get("config", {}))
+        except TypeError as e:
+            raise RuntimeError(
+                f"无法创建 Agent 实例 ({agent_class.__name__}): {e}。"
+                f"请确认 agent 支持以下构造方式之一: "
+                f"无参 / parser_config_path=None / config=dict"
+            )
+    
+    async def _call_agent_run(self, agent, arguments: Dict[str, Any]):
+        """
+        通过 introspection 调用 agent.run()，自动匹配参数签名
+        
+        支持三种模式:
+        1. run(state): 单个 state/dict 参数 → 将 arguments 整体作为 state 传入
+        2. run(**kwargs): 接受任意关键字参数 → 传入所有 arguments
+        3. run(param1, param2, ...): 具名参数 → 过滤出匹配的参数
+        
+        注意: 对于模式 1，如果 LLM 生成了嵌套的 state 结构（如 {"state": {"user_input": ...}}），
+        会自动解包并合并到顶层，确保 agent.run() 收到扁平化的参数。
+        """
+        sig = inspect.signature(agent.run)
+        params = {name: p for name, p in sig.parameters.items() if name != 'self'}
+        
+        # 模式 1: 单个 state/dict 参数（如 OpTaskBuilder.run(state)）
+        param_names = list(params.keys())
+        if len(param_names) == 1:
+            first_param = params[param_names[0]]
+            # 如果是位置参数且名称暗示是 dict/state
+            if first_param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD
+            ):
+                param_name = param_names[0]
+                logger.debug(f"[ToolExecutor] 使用 state 模式调用: {param_name}")
                 
-                result, full_prompt, reasoning = await agent.run(
-                    user_input=arguments.get("user_input", self.agent_context.get("user_input", "")),
-                    available_tools=arguments.get("available_tools", []),
-                    history_compress=history_compress,
-                    task_id=self.agent_context.get("task_id", ""),
-                    model_level=self.agent_context.get("model_level", "standard")
-                )
+                # 兼容处理: 如果 LLM 生成了嵌套结构 {"state": {...}, ...}
+                # 将 arguments["state"] 的内容解包到顶层，再合并其他顶层参数
+                state_arg = arguments
+                if param_name in arguments and isinstance(arguments[param_name], dict):
+                    nested = arguments[param_name]
+                    # 将嵌套内容提升到顶层，其他顶层参数作为补充（不覆盖嵌套中的值）
+                    state_arg = dict(nested)
+                    for k, v in arguments.items():
+                        if k != param_name:
+                            state_arg.setdefault(k, v)
+                    logger.debug(f"[ToolExecutor] 解包嵌套 '{param_name}' 参数，keys: {list(state_arg.keys())}")
                 
-                # 转换 plan 格式
-                if isinstance(result, dict) and "result" in result:
-                    plan_result = result["result"]
+                if inspect.iscoroutinefunction(agent.run):
+                    return await agent.run(state_arg)
+                return agent.run(state_arg)
+        
+        # 模式 2: 接受 **kwargs
+        has_var_keyword = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+        
+        if has_var_keyword:
+            filtered_args = arguments
+        else:
+            # 模式 3: 过滤到方法接受的参数
+            accepted = set(params.keys())
+            filtered_args = {k: v for k, v in arguments.items() if k in accepted}
+            
+            # 记录被过滤掉的参数（调试用）
+            dropped = set(arguments.keys()) - accepted
+            if dropped:
+                logger.debug(f"[ToolExecutor] 过滤掉未接受的参数: {dropped}")
+        
+        if inspect.iscoroutinefunction(agent.run):
+            return await agent.run(**filtered_args)
+        return agent.run(**filtered_args)
+    
+    def _normalize_agent_result(self, result) -> Dict[str, Any]:
+        """
+        归一化不同 Agent 的返回格式为标准字典
+        
+        支持:
+        - dict with "status" → 直接返回（已经是标准格式）
+        - dict with "result" → Plan Agent 格式: {"result": {"status": ...}, "arguments": {...}}
+        - tuple of 3 → (output, full_prompt, reasoning) 格式（KernelGen 等）
+        - 其他 → 转为字符串
+        """
+        # 已经是标准 dict 格式
+        if isinstance(result, dict):
+            if "status" in result:
+                return result
+            
+            # Plan Agent 格式: {"result": {"status": ...}, "arguments": {...}}
+            if "result" in result:
+                plan_result = result["result"]
+                if isinstance(plan_result, dict):
                     if plan_result.get("status") == "success":
                         return {
                             "status": "success",
                             "output": result.get("arguments", {}),
                             "error_information": ""
                         }
-                    else:
-                        return {
-                            "status": "fail",
-                            "output": "",
-                            "error_information": plan_result.get("desc", "规划失败")
-                        }
-                return {"status": "error", "output": "", "error_information": "plan 返回格式错误"}
+                    return {
+                        "status": "fail",
+                        "output": "",
+                        "error_information": plan_result.get("desc", "规划失败")
+                    }
+                return {"status": "error", "output": "", "error_information": "返回格式错误"}
             
-            # 其他 agent - 根据 agent 类型初始化
-            agent_class_name = agent_class.__name__
-            
-            # OpTaskBuilder 特殊处理：不接受任何初始化参数
-            if agent_class_name == "OpTaskBuilder":
-                agent = agent_class()
-                
-                # OpTaskBuilder 使用 state 参数调用 run
-                state = {
-                    "user_input": arguments.get("user_input", self.agent_context.get("user_input", "")),
-                    **hw_params,  # 展开硬件参数
-                    "user_feedback": arguments.get("user_feedback", ""),
-                    "iteration": arguments.get("iteration", 0),
-                    "max_iterations": arguments.get("max_iterations", 5),
-                    "max_check_retries": arguments.get("max_check_retries", 3)
-                }
-                result = await agent.run(state)
-            
-            # KernelGen 和 KernelDesigner：接受 parser_config_path 参数
-            elif agent_class_name in ["KernelGen", "KernelDesigner"]:
-                agent = agent_class(parser_config_path=None)
-                
-                run_params = {
-                    "op_name": arguments.get("op_name", ""),
-                    "task_desc": arguments.get("task_desc", ""),
-                    **hw_params,  # 展开硬件参数
-                    "user_requirements": arguments.get("user_requirements", ""),
-                    "task_id": arguments.get("task_id", self.agent_context.get("task_id", "")),
-                    "history_compress": history_compress
-                }
-                result = await agent.run(**run_params)
-            
-            # 其他未知 agent：尝试通用初始化
-            else:
-                try:
-                    agent = agent_class()
-                except TypeError:
-                    # 如果无参初始化失败，尝试传递 config
-                    agent = agent_class(config=self.agent_context.get("config", {}))
-                
-                run_params = {
-                    "op_name": arguments.get("op_name", ""),
-                    "task_desc": arguments.get("task_desc", ""),
-                    **hw_params,  # 展开硬件参数
-                    "user_requirements": arguments.get("user_requirements", ""),
-                    "task_id": arguments.get("task_id", self.agent_context.get("task_id", "")),
-                    "history_compress": history_compress
-                }
-                result = await agent.run(**run_params)
-            
-            # 处理返回值（不同 agent 返回格式不同）
-            if isinstance(result, dict) and "status" in result:
-                # OpTaskBuilder 或已经是标准格式
-                return result
-            elif isinstance(result, tuple) and len(result) == 3:
-                # KernelGen、KernelDesigner 返回 (generated_code, full_prompt, reasoning)
-                generated_code, full_prompt, reasoning = result
+            # 普通 dict（没有 status 也没有 result）
+            return {"status": "success", "output": result, "error_information": ""}
+        
+        # Tuple 格式: (output, full_prompt, reasoning)
+        if isinstance(result, tuple):
+            if len(result) == 3:
+                first, full_prompt, reasoning = result
+                # 第一个元素是 dict → 递归归一化
+                if isinstance(first, dict):
+                    normalized = self._normalize_agent_result(first)
+                    normalized["full_prompt"] = full_prompt
+                    normalized["reasoning"] = reasoning
+                    return normalized
+                # 第一个元素是 string → 生成代码格式
                 return {
                     "status": "success",
-                    "output": generated_code,
+                    "output": str(first),
                     "error_information": "",
-                    "generated_code": generated_code,
+                    "generated_code": str(first),
                     "full_prompt": full_prompt,
                     "reasoning": reasoning
                 }
-            else:
-                return {"status": "success", "output": str(result), "error_information": ""}
+            if len(result) == 2:
+                first, second = result
+                return {
+                    "status": "success",
+                    "output": str(first),
+                    "error_information": "",
+                    "extra": second
+                }
         
-        except Exception as e:
-            logger.error(f"[ToolExecutor] Agent 执行失败: {tool_name}, {e}", exc_info=True)
-            return {"status": "error", "output": "", "error_information": f"Agent 执行失败: {str(e)}"}
+        # 兜底: 转字符串
+        return {"status": "success", "output": str(result), "error_information": ""}
+    
+    # ==================== Workflow 执行 ====================
     
     async def _execute_workflow(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -200,7 +319,7 @@ class ToolExecutor:
         
         Args:
             tool_name: 工具名称（如 "use_coder_only_workflow"）
-            arguments: 工具参数
+            arguments: 工具参数（已解析表达式）
         
         Returns:
             执行结果字典
@@ -225,6 +344,14 @@ class ToolExecutor:
             
             logger.info(f"[ToolExecutor] Workflow 资源准备完成，agents: {list(workflow_resources['agents'].keys())}")
             
+            # 让 workflow 类确保所需资源就位（如注册 worker 等）
+            if hasattr(workflow_class, 'ensure_resources'):
+                await workflow_class.ensure_resources(workflow_resources, arguments)
+            
+            # 让 workflow 类预处理配置（如 cur_path 重定向 log_dir）
+            if hasattr(workflow_class, 'prepare_config'):
+                workflow_class.prepare_config(workflow_resources, arguments)
+            
             # 创建 workflow 实例
             workflow = workflow_class(**workflow_resources)
             
@@ -232,15 +359,15 @@ class ToolExecutor:
             app = workflow.compile()
             logger.info(f"[ToolExecutor] Workflow {workflow_name} 编译完成")
             
-            # 构建初始状态
+            # 构建初始状态（包含 cur_path）
             initial_state = self._build_workflow_state(arguments)
             logger.info(f"[ToolExecutor] 开始执行 workflow，初始状态: op_name={initial_state.get('op_name')}, dsl={initial_state.get('dsl')}")
             
             # 执行 workflow
             final_state = await app.ainvoke(initial_state)
             
-            # 格式化结果
-            result = self._format_workflow_result(final_state)
+            # 格式化结果：使用 workflow 自身的 format_result
+            result = workflow.format_result(final_state)
             
             logger.info(f"[ToolExecutor] Workflow {workflow_name} 执行完成: {result.get('status')}")
             
@@ -259,7 +386,7 @@ class ToolExecutor:
         构建 workflow 初始状态
         
         Args:
-            arguments: 工具调用参数
+            arguments: 工具调用参数（已解析）
         
         Returns:
             workflow 初始状态字典
@@ -274,47 +401,19 @@ class ToolExecutor:
             "arch": arguments.get("arch", self.agent_context.get("arch", "")),
             "task_id": arguments.get("task_id", self.agent_context.get("task_id", "")),
             "user_requirements": arguments.get("user_requirements", ""),
+            "cur_path": arguments.get("cur_path", ""),
             "result": {},
             "should_continue": True,
             "current_step": "",
             "iterations": 0,
-            "max_iterations": arguments.get("max_iterations", 10)
+            "max_iterations": arguments.get("max_iterations", 10),
         }
     
-    def _format_workflow_result(self, final_state: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        格式化 workflow 结果为标准格式
-        
-        Args:
-            final_state: workflow 最终状态
-        
-        Returns:
-            标准结果字典
-        """
-        # 根据 should_continue 判断状态
-        should_continue = final_state.get("should_continue", True)
-        status = "success" if not should_continue else "fail"
-        
-        # 提取结果
-        result = final_state.get("result", {})
-        output = result.get("code", "") if isinstance(result, dict) else str(result)
-        error = result.get("error", "") if isinstance(result, dict) else ""
-        
-        return {
-            "status": status,
-            "output": output,
-            "error_information": error,
-            "metadata": {
-                "iterations": final_state.get("iterations", 0),
-                "current_step": final_state.get("current_step", ""),
-                "workflow_completed": not should_continue
-            }
-        }
+    # ==================== Domain Tool / Basic Tool 执行 ====================
     
     async def _execute_domain_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """执行 domain_tool（如 verify_kernel, profile_kernel）"""
         try:
-            import inspect
             from akg_agents.core_v2.tools import domain_tools
             
             tool_func = getattr(domain_tools, tool_name, None)
@@ -325,17 +424,21 @@ class ToolExecutor:
                     "error_information": f"未知领域工具: {tool_name}"
                 }
             
-            # 直接使用传入的 arguments，不额外添加硬件参数
-            # domain_tool 如果需要硬件参数，应该在调用时显式传递
-            logger.info(f"[ToolExecutor] 执行 domain_tool: {tool_name}")
+            # 合并硬件默认参数（LLM 可能未显式传递 backend/arch 等）
+            hw_params = self._get_hardware_params(arguments)
+            for k, v in hw_params.items():
+                arguments.setdefault(k, v)
+            
+            # 通过 introspection 过滤参数
+            filtered_args = self._filter_func_args(tool_func, arguments)
+            
+            logger.info(f"[ToolExecutor] 执行 domain_tool: {tool_name}, hw_params: {hw_params}")
             
             # 执行工具函数（支持异步和同步）
             if inspect.iscoroutinefunction(tool_func):
-                # 异步函数，使用 await
-                result = await tool_func(**arguments)
+                result = await tool_func(**filtered_args)
             else:
-                # 同步函数，直接调用
-                result = tool_func(**arguments)
+                result = tool_func(**filtered_args)
             
             if isinstance(result, dict) and "status" in result:
                 return result
@@ -355,7 +458,10 @@ class ToolExecutor:
             if not tool_func:
                 return {"status": "error", "output": "", "error_information": f"未知工具: {tool_name}"}
             
-            result = tool_func(**arguments)
+            # 通过 introspection 过滤参数
+            filtered_args = self._filter_func_args(tool_func, arguments)
+            
+            result = tool_func(**filtered_args)
             
             if isinstance(result, dict) and "status" in result:
                 return result
@@ -365,3 +471,33 @@ class ToolExecutor:
         except Exception as e:
             logger.error(f"[ToolExecutor] 工具执行失败: {tool_name}, {e}")
             return {"status": "error", "output": "", "error_information": str(e)}
+    
+    # ==================== 工具方法 ====================
+    
+    @staticmethod
+    def _filter_func_args(func, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        根据函数签名过滤参数
+        
+        避免传入函数不接受的参数（如 cur_path 传给 read_file）
+        
+        Args:
+            func: 目标函数
+            arguments: 原始参数字典
+        
+        Returns:
+            过滤后的参数字典
+        """
+        sig = inspect.signature(func)
+        params = sig.parameters
+        
+        # 如果函数接受 **kwargs，传入所有参数
+        has_var_keyword = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+        if has_var_keyword:
+            return arguments
+        
+        # 否则只传入函数接受的参数
+        accepted = {name for name in params.keys() if name != 'self'}
+        return {k: v for k, v in arguments.items() if k in accepted}

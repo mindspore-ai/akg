@@ -38,17 +38,20 @@ from akg_agents.op.workflows.default_workflow import DefaultWorkflow
 from akg_agents.op.workflows.coder_only_workflow import CoderOnlyWorkflow
 from akg_agents.op.workflows.verifier_only_workflow import VerifierOnlyWorkflow
 from akg_agents.op.workflows.connect_all_workflow import ConnectAllWorkflow
+from akg_agents.op.workflows.kernelgen_only_workflow import KernelGenOnlyWorkflow
 
 # 算子工作流注册表（同时支持短名称和完整名称）
 WORKFLOW_REGISTRY = {
     # 短名称
     "default": DefaultWorkflow,
     "coder_only": CoderOnlyWorkflow,
+    "kernelgen_only": KernelGenOnlyWorkflow,
     "verifier_only": VerifierOnlyWorkflow,
     "connect_all": ConnectAllWorkflow,
     # 完整名称（与 Task 的 workflow 参数兼容）
     "default_workflow": DefaultWorkflow,
     "coder_only_workflow": CoderOnlyWorkflow,
+    "kernelgen_only_workflow": KernelGenOnlyWorkflow,
     "verifier_only_workflow": VerifierOnlyWorkflow,
     "conductor_connect_all_workflow": ConnectAllWorkflow,
 }
@@ -214,6 +217,17 @@ class LangGraphTask(BaseLangGraphTask):
             )
         except Exception as e:
             logger.warning(f"Failed to initialize Coder: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+        
+        # KernelGen (基于 Skill 系统的代码生成)
+        try:
+            from akg_agents.op.agents.kernel_gen import KernelGen
+            agents['kernel_gen'] = KernelGen(
+                parser_config_path=parser_config_path
+            )
+        except Exception as e:
+            logger.warning(f"Failed to initialize KernelGen: {e}")
             import traceback
             logger.debug(traceback.format_exc())
         

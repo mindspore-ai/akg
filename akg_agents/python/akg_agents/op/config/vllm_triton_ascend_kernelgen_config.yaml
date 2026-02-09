@@ -1,0 +1,24 @@
+# Log configuration
+log_dir: "~/akg_agents_logs"
+
+# Workflow configuration
+workflow_config_path: "op/config/kernelgen_only_workflow.yaml"  # 原 Task 使用
+default_workflow: "kernelgen_only_workflow"  # LangGraphTask 使用
+max_step: 20  # 最大迭代步数
+
+# Parser configuration (for LangGraphTask)
+# parser_config_path: "op/config/parser_config.yaml"  # 可选，默认使用 op/config/parser_config.yaml
+
+# Documentation directory configuration
+docs_dir:
+  designer: "op/resources/docs/sketch_docs"
+  coder: "op/resources/docs/triton_ascend_docs"
+  kernel_gen: ""
+
+# Performance analysis configuration
+profile_settings:
+  run_times: 50
+  warmup_times: 5
+
+# Verification configuration
+verify_timeout: 600  # Timeout for verification in seconds (default 10 minutes)

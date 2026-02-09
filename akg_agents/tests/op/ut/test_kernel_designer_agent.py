@@ -23,6 +23,8 @@ import asyncio
 import logging
 import json
 
+from akg_agents.utils.common_utils import ParserFactory
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +32,22 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def print_code(raw_output: str, keys: list[str] = ["code"]):
+    """打印 code 结果"""
+    try:
+        extracted_json = ParserFactory._extract_json_comprehensive(raw_output)
+        if extracted_json:
+            parsed = json.loads(extracted_json)
+            if isinstance(parsed, dict) and all(key in parsed for key in keys):
+                parsed = {key: parsed[key] for key in keys}
+    except (json.JSONDecodeError, Exception):
+        raise ValueError(f"Failed to extract code from raw output: {raw_output}")
+
+    print(f"{'=' * 50}")
+    print(f"\n{'-' * 50}\n".join([f"📋 [{k.upper()}]\n{v}" for k, v in parsed.items()]))
+    print("=" * 50)
 
 
 async def test_kernel_designer_basic():
@@ -63,7 +81,7 @@ async def test_kernel_designer_basic():
         )
         
         logger.info("✓ Sketch generation completed")
-        logger.info(f"{'='*60}\nGenerated Sketch:\n{'='*60}\n{sketch[:500]}...\n{'='*60}")
+        print_code(sketch, ["code"])
         
         # 验证输出是否为 sketch DSL 格式
         if 'sketch ' in sketch and '{' in sketch:
@@ -72,92 +90,7 @@ async def test_kernel_designer_basic():
             logger.warning("⚠ Output may not be in correct sketch DSL format")
         
         if reasoning:
-            logger.info(f"\nReasoning:\n{reasoning[:300]}...")
-        
-        return True
-    
-    except Exception as e:
-        logger.error(f"✗ Test failed: {e}", exc_info=True)
-        return False
-
-
-async def test_kernel_designer_with_inspirations():
-    """测试带 inspirations 的 sketch 生成"""
-    try:
-        from akg_agents.op.agents import KernelDesigner
-        
-        agent = KernelDesigner()
-        
-        logger.info("✓ KernelDesigner agent created for softmax with inspirations")
-        
-        # 准备 inspirations（进化优化的参考方案）
-        inspirations = [
-            {
-                'strategy_mode': 'baseline',
-                'sketch': """sketch softmax {
-  symbols: B, N;
-  tensors: X[B, N]: f32; Y[B, N]: f32;
-  
-  N_tile = 512
-  
-  @llm_hint("parallel", "blockidx")
-  for b in range(B):
-    for n_outer in range(0, ceil(N, N_tile)):
-      max_val = max(X[b, n_outer*N_tile:(n_outer+1)*N_tile])
-      exp_sum = sum(exp(X[b, n_outer*N_tile:(n_outer+1)*N_tile] - max_val))
-      Y[b, n_outer*N_tile:(n_outer+1)*N_tile] = exp(X[b, n_outer*N_tile:(n_outer+1)*N_tile] - max_val) / exp_sum
-}""",
-                'profile': {
-                    'gen_time': 125.5,
-                    'base_time': 200.0,
-                    'speedup': 1.59
-                },
-                'is_parent': True  # 标记为父代方案
-            },
-            {
-                'strategy_mode': 'optimized',
-                'sketch': """sketch softmax {
-  symbols: B, N;
-  tensors: X[B, N]: f32; Y[B, N]: f32;
-  
-  N_tile = 1024
-  
-  @llm_hint("parallel", "blockidx")
-  for b in range(B):
-    for n_outer in range(0, ceil(N, N_tile)):
-      max_val = max(X[b, n_outer*N_tile:(n_outer+1)*N_tile])
-      exp_sum = sum(exp(X[b, n_outer*N_tile:(n_outer+1)*N_tile] - max_val))
-      Y[b, n_outer*N_tile:(n_outer+1)*N_tile] = exp(X[b, n_outer*N_tile:(n_outer+1)*N_tile] - max_val) / exp_sum
-}""",
-                'profile': {
-                    'gen_time': 98.3,
-                    'base_time': 200.0,
-                    'speedup': 2.03
-                },
-                'is_parent': False
-            }
-        ]
-        
-        logger.info("Running KernelDesigner agent with inspirations...")
-        
-        # 执行生成
-        sketch, _, _ = await agent.run(
-            op_name="softmax",
-            task_desc="""
-实现一个 softmax 算子：
-- 输入：二维张量 (batch_size, seq_len)
-- 输出：在最后一个维度上应用 softmax
-- 使用数值稳定的实现（减去 max）
-""",
-            dsl="triton_cuda",
-            backend="cuda",
-            arch="a100",
-            task_id="test_softmax_001",
-            inspirations=inspirations
-        )
-        
-        logger.info("✓ Sketch generation with inspirations completed")
-        logger.info(f"{'='*60}\nGenerated Sketch (optimized):\n{'='*60}\n{sketch[:500]}...\n{'='*60}")
+            logger.info(f"\n💡 Reasoning (前300字符):\n{reasoning[:300]}...")
         
         return True
     
@@ -197,26 +130,9 @@ async def test_kernel_designer_hint_mode():
         )
         
         logger.info("✓ Sketch generation in Hint mode completed")
+        print_code(result, ["code", "space_config"])
         
-        # 检查是否返回 JSON 格式（Hint 模式）
-        try:
-            result_dict = json.loads(result)
-            
-            if "code" in result_dict:
-                logger.info(f"✓ Found 'code' field (sketch)")
-                logger.info(f"Sketch preview:\n{result_dict['code'][:300]}...")
-            
-            if "space_config_code" in result_dict:
-                logger.info(f"✓ Found 'space_config_code' field")
-                logger.info(f"Space config preview:\n{result_dict['space_config_code'][:300]}...")
-            else:
-                logger.warning("⚠ No 'space_config_code' field found (expected in Hint mode)")
-            
-            return True
-        
-        except json.JSONDecodeError:
-            logger.error(f"✗ Result is not JSON format: {result[:200]}...")
-            return False
+        return True
     
     except Exception as e:
         logger.error(f"✗ Test failed: {e}", exc_info=True)
@@ -253,11 +169,13 @@ async def test_kernel_designer_triton_ascend():
         )
         
         logger.info("✓ Sketch generation for Triton Ascend completed")
-        logger.info(f"{'='*60}\nGenerated Sketch:\n{'='*60}\n{sketch[:500]}...\n{'='*60}")
+        print_code(sketch, ["code"])
         
         # 验证是否包含 Ascend 相关的优化提示
-        if 'CUBE' in sketch or 'L0' in sketch or 'aicoreidx' in sketch:
-            logger.info("✓ Sketch contains Ascend-specific optimizations")
+        ascend_keywords = ['CUBE', 'L0', 'aicoreidx', 'coreidx', 'l1_buffer', 'l0c']
+        found_keywords = [kw for kw in ascend_keywords if kw.lower() in sketch.lower()]
+        if found_keywords:
+            logger.info(f"✓ Sketch contains Ascend-specific optimizations: {found_keywords}")
         else:
             logger.info("ℹ Sketch may benefit from more Ascend-specific optimizations")
         
@@ -270,22 +188,21 @@ async def test_kernel_designer_triton_ascend():
 
 async def main():
     """运行所有测试"""
-    logger.info("="*60)
+    logger.info("="*50)
     logger.info("Testing KernelDesigner Agent")
-    logger.info("="*60)
+    logger.info("="*50)
     
     tests = [
         ("Basic sketch generation", test_kernel_designer_basic),
-        ("Sketch generation with inspirations", test_kernel_designer_with_inspirations),
         ("Hint mode (parameter space config)", test_kernel_designer_hint_mode),
         ("Triton Ascend backend", test_kernel_designer_triton_ascend)
     ]
     
     results = []
     for test_name, test_func in tests:
-        logger.info(f"{'='*60}")
+        logger.info(f"{'='*50}")
         logger.info(f"Test: {test_name}")
-        logger.info(f"{'='*60}")
+        logger.info(f"{'='*50}")
         
         try:
             result = await test_func()
@@ -295,9 +212,9 @@ async def main():
             results.append((test_name, False))
     
     # 打印总结
-    logger.info(f"{'='*60}")
+    logger.info(f"{'='*50}")
     logger.info("Test Summary")
-    logger.info(f"{'='*60}")
+    logger.info(f"{'='*50}")
     
     for test_name, result in results:
         status = "✓ PASSED" if result else "✗ FAILED"

@@ -47,8 +47,13 @@ class RouterFactory:
         return route_after_verifier
     
     @staticmethod
-    def create_conductor_router(config: dict):
-        """Conductor 分析后的路由决策（使用 Conductor 节点的决策）"""
+    def create_conductor_router(config: dict, code_gen_agent: str = "coder"):
+        """Conductor 分析后的路由决策（使用 Conductor 节点的决策）
+        
+        Args:
+            config: 配置字典
+            code_gen_agent: 代码生成 agent 名称（"coder" 或 "kernel_gen"）
+        """
         
         async def route_after_conductor(state: KernelGenState) -> str:
             # 1. 验证通过 → 结束
@@ -67,35 +72,37 @@ class RouterFactory:
             agent_history = list(state.get("agent_history", []))
             repeat_limits = config.get("repeat_limits", {})
             
-            possible_next = {"coder", "finish"}
+            possible_next = {code_gen_agent, "finish"}
             illegal_agents = RouterFactory._check_agent_limits(
                 step_count=step_count,
                 max_step=max_step,
                 agent_history=agent_history,
-                repeat_limits=repeat_limits
+                repeat_limits=repeat_limits,
+                code_gen_agent=code_gen_agent
             )
             
             valid_next = possible_next - illegal_agents
             
-            if not valid_next or "coder" not in valid_next:
+            if not valid_next or code_gen_agent not in valid_next:
                 logger.info("No valid next agents, finishing task")
                 return "finish"
             
             # 4. 使用 Conductor 节点的决策结果
-            conductor_decision = state.get("conductor_decision", "coder")
+            conductor_decision = state.get("conductor_decision", code_gen_agent)
             if conductor_decision in valid_next:
                 logger.info(f"Using conductor decision: {conductor_decision}")
                 return conductor_decision
             
             # 默认策略
-            logger.warning(f"Conductor decision '{conductor_decision}' not in valid options, using coder")
-            return "coder"
+            logger.warning(f"Conductor decision '{conductor_decision}' not in valid options, using {code_gen_agent}")
+            return code_gen_agent
         
         return route_after_conductor
     
     @staticmethod
     def _check_agent_limits(step_count: int, max_step: int, 
-                           agent_history: list, repeat_limits: dict) -> set:
+                           agent_history: list, repeat_limits: dict,
+                           code_gen_agent: str = "coder") -> set:
         """检查 agent 执行限制，返回被禁止的 agent 集合
         
         Args:
@@ -103,6 +110,7 @@ class RouterFactory:
             max_step: 最大步数
             agent_history: agent 执行历史
             repeat_limits: 重复次数限制配置
+            code_gen_agent: 代码生成 agent 名称
             
         Returns:
             被禁止的 agent 集合
@@ -112,17 +120,17 @@ class RouterFactory:
         # 检查总步数上限
         if check_step_limit(step_count, max_step):
             logger.info(f"Step count {step_count} exceeds max_step {max_step}, finishing task")
-            return {"coder", "verifier", "conductor"}  # 全部禁止
+            return {code_gen_agent, "verifier", "conductor"}  # 全部禁止
         
-        # 检查 coder 的连续重复次数（默认最多 3 次）
+        # 检查代码生成 agent 的连续重复次数（默认最多 3 次）
         if agent_history:
             max_repeats = 3
             if repeat_limits and 'single_agent' in repeat_limits:
-                max_repeats = repeat_limits['single_agent'].get('coder', 3)
+                max_repeats = repeat_limits['single_agent'].get(code_gen_agent, 3)
             
-            if check_agent_repeat_limit(agent_history, "coder", max_repeats):
-                logger.info(f"Coder exceeds repeat limit {max_repeats}")
-                illegal_agents.add("coder")
+            if check_agent_repeat_limit(agent_history, code_gen_agent, max_repeats):
+                logger.info(f"{code_gen_agent} exceeds repeat limit {max_repeats}")
+                illegal_agents.add(code_gen_agent)
         
         return illegal_agents
     

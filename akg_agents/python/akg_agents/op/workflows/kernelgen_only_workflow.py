@@ -1,0 +1,267 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""KernelGen-only workflow: KernelGen → Verifier"""
+
+import logging
+from pathlib import Path
+from typing import Dict, Any
+from langgraph.graph import StateGraph, END
+from akg_agents.op.workflows.base_workflow import OpBaseWorkflow
+from akg_agents.op.langgraph_op.state import KernelGenState
+from akg_agents.op.langgraph_op.nodes import NodeFactory
+from akg_agents.op.langgraph_op.routers import RouterFactory
+from akg_agents.core_v2.workflows.registry import register_workflow
+
+logger = logging.getLogger(__name__)
+
+
+@register_workflow(scopes=["op"])
+class KernelGenOnlyWorkflow(OpBaseWorkflow):
+    """KernelGen Only Workflow：基于 Skill 系统的内核代码生成工作流
+    
+    流程：
+        kernel_gen -> verifier -> (失败) -> conductor -> kernel_gen
+                                    |
+                                (成功) -> END
+    
+    特点：
+    - 使用 KernelGen agent（基于 Skill 系统）直接生成代码
+    - 跳过 Designer 阶段，直接生成内核代码
+    - 支持动态 Skill 选择和知识注入
+    """
+    
+    # ========== 工具配置元数据（用于 KernelAgent 调用）==========
+    TOOL_NAME = "use_kernelgen_only_workflow"
+    
+    DESCRIPTION = """
+使用 KernelGenOnly workflow 生成 kernel 代码（基于 Skill 系统）。
+
+完整流程：
+1. KernelGen: 基于 Skill 系统动态选择知识，生成代码
+2. Verifier: 验证正确性和性能
+3. Conductor: 分析失败原因并指导修复（如果验证失败）
+4. 循环迭代直到成功或达到最大次数
+
+与 CoderOnlyWorkflow 的区别：
+- KernelGenOnly 使用新的 Skill 系统，支持动态知识注入
+- KernelGenOnly 根据算子类型自动选择相关 Skills
+- 适用于需要利用特定 DSL/硬件知识的场景
+
+适用场景：
+- 需求明确，无需额外设计阶段
+- 需要基于特定 DSL 知识（如 Triton Ascend、CPU C++）生成代码
+- 需要完整的代码生成、验证、迭代流程
+- 对代码质量要求较高，需要多轮迭代优化
+
+注意事项：
+- 此 workflow 会执行完整流程，包括验证和迭代优化
+- 执行时间较长（通常 1-5 分钟，取决于验证次数）
+- 需要可用的验证环境（GPU/CPU 等设备）
+- 如果只需要快速生成代码草稿，建议使用 call_kernel_gen
+"""
+    
+    PARAMETERS_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "op_name": {
+                "type": "string",
+                "description": "算子名称，如 'relu', 'matmul', 'softmax', 'layernorm'"
+            },
+            "task_desc": {
+                "type": "string",
+                "description": "任务描述（框架代码），必须包含框架实现的完整代码，包括 class Model(nn.Module) 定义"
+            },
+            "dsl": {
+                "type": "string",
+                "description": "目标 DSL，如 'triton'（Triton GPU）, 'triton-ascend'（Triton Ascend）, 'cpp'（C++）"
+            },
+            "framework": {
+                "type": "string",
+                "description": "框架，如 'torch'（PyTorch）, 'mindspore'（MindSpore）, 'numpy'"
+            },
+            "backend": {
+                "type": "string",
+                "description": "后端，如 'cuda'（NVIDIA GPU）, 'cpu'（CPU）, 'ascend'（Ascend NPU）"
+            },
+            "arch": {
+                "type": "string",
+                "description": "架构，如 'a100'（NVIDIA A100）, 'x86_64'（Intel/AMD CPU）, 'ascend910b4'（Ascend 910B）"
+            },
+            "task_id": {
+                "type": "string",
+                "description": "任务 ID（可选，用于日志和目录命名）",
+                "default": ""
+            },
+            "user_requirements": {
+                "type": "string",
+                "description": "用户额外需求（可选），如性能目标、特殊约束等",
+                "default": ""
+            },
+            "cur_path": {
+                "type": "string",
+                "description": "自定义工作路径（可选），指定后中间文件存放在 cur_path/logs/，生成的代码存放在 cur_path/code.txt",
+                "default": ""
+            }
+        },
+        "required": ["op_name", "task_desc", "dsl", "framework", "backend", "arch"]
+    }
+    
+    # ========== Workflow 实现 ==========
+    
+    def build_graph(self) -> StateGraph:
+        """构建 KernelGen-only 工作流图"""
+        workflow = StateGraph(KernelGenState)
+        
+        # 创建节点
+        kernel_gen_node = NodeFactory.create_kernel_gen_node(
+            self.agents['kernel_gen'],
+            self.trace
+        )
+        verifier_node = NodeFactory.create_verifier_node(
+            self.agents['verifier'], 
+            self.device_pool, 
+            self.trace,
+            self.config,
+            self.private_worker,
+            self.worker_manager,
+            self.backend,
+            self.arch
+        )
+        conductor_node = NodeFactory.create_conductor_node(
+            self.trace,
+            self.config,
+            self.conductor_template,
+            code_gen_agent="kernel_gen"  # 显式指定使用 kernel_gen
+        )
+        
+        # 添加节点
+        workflow.add_node("kernel_gen", kernel_gen_node)
+        workflow.add_node("verifier", verifier_node)
+        workflow.add_node("conductor", conductor_node)
+        
+        # 添加边：kernel_gen -> verifier
+        workflow.add_edge("kernel_gen", "verifier")
+        
+        # 条件边：verifier 后的路由（验证通过跳过 conductor）
+        verifier_router = RouterFactory.create_verifier_router_with_conductor(
+            self.config
+        )
+        
+        workflow.add_conditional_edges(
+            "verifier",
+            verifier_router,
+            {
+                "conductor": "conductor",  # 验证失败 → Conductor 分析
+                "finish": END              # 验证通过 → 直接结束
+            }
+        )
+        
+        # Conductor 后的路由（指定使用 kernel_gen）
+        conductor_router = RouterFactory.create_conductor_router(self.config, code_gen_agent="kernel_gen")
+        
+        workflow.add_conditional_edges(
+            "conductor",
+            conductor_router,
+            {
+                "kernel_gen": "kernel_gen",
+                "finish": END
+            }
+        )
+        
+        # 设置入口
+        workflow.set_entry_point("kernel_gen")
+        
+        return workflow
+    
+    # ========== 资源准备与配置 ==========
+    
+    @classmethod
+    async def ensure_resources(cls, workflow_resources: Dict[str, Any], arguments: Dict[str, Any]):
+        """确保 workflow 所需的运行时资源已就位
+        
+        如果没有 private_worker，则通过全局 WorkerManager 确保有可用的 worker。
+        
+        Args:
+            workflow_resources: workflow 资源字典
+            arguments: 工具调用参数
+        """
+        if not workflow_resources.get("private_worker"):
+            try:
+                from akg_agents.core.worker.manager import get_worker_manager, register_local_worker
+                wm = get_worker_manager()
+                backend = workflow_resources.get("backend", "cpu")
+                arch = workflow_resources.get("arch", "x86_64")
+                if not await wm.has_worker(backend=backend, arch=arch):
+                    await register_local_worker([0], backend=backend, arch=arch)
+                    logger.info(f"[KernelGenOnlyWorkflow] 已注册本地 worker: backend={backend}, arch={arch}")
+                if not workflow_resources.get("worker_manager"):
+                    workflow_resources["worker_manager"] = wm
+            except Exception as e:
+                logger.warning(f"[KernelGenOnlyWorkflow] 确保 worker 资源失败: {e}")
+    
+    @classmethod
+    def prepare_config(cls, workflow_resources: Dict[str, Any], arguments: Dict[str, Any]):
+        """根据 arguments 调整 workflow 配置
+        
+        当指定了 cur_path 时，将中间文件目录 log_dir 重定向到 cur_path/logs。
+        
+        Args:
+            workflow_resources: workflow 资源字典（会被就地修改的副本）
+            arguments: 工具调用参数
+        """
+        cur_path = arguments.get("cur_path")
+        if cur_path:
+            # 拷贝 config 避免影响缓存的原始资源
+            workflow_resources["config"] = dict(workflow_resources.get("config") or {})
+            workflow_resources["config"]["log_dir"] = str(Path(cur_path) / "logs")
+            logger.info(f"[KernelGenOnlyWorkflow] cur_path 已设置，log_dir 重定向到: {workflow_resources['config']['log_dir']}")
+    
+    def format_result(self, final_state: Dict[str, Any]) -> Dict[str, Any]:
+        """格式化 workflow 结果
+        
+        返回标准结果字典：
+            - code: 生成的代码
+            - profile: 性能分析结果
+            - status: success / fail
+            - code_path: 代码文件路径（仅在指定 cur_path 且成功时存在）
+        
+        Args:
+            final_state: workflow 最终状态
+            
+        Returns:
+            格式化的结果字典
+        """
+        code = final_state.get("coder_code", "")
+        profile_res = final_state.get("profile_res", {})
+        verifier_result = final_state.get("verifier_result", False)
+        
+        status = "success" if verifier_result else "fail"
+        
+        res = {
+            "code": code,
+            "profile": str(profile_res) if profile_res else "",
+            "status": status,
+        }
+        
+        # 如果指定了 cur_path 且验证通过，将代码保存到 cur_path/code.txt
+        cur_path = final_state.get("cur_path", "")
+        if cur_path and code and verifier_result:
+            code_path = Path(cur_path) / "code.txt"
+            code_path.parent.mkdir(parents=True, exist_ok=True)
+            code_path.write_text(code, encoding="utf-8")
+            logger.info(f"[KernelGenOnlyWorkflow] 代码已保存到: {code_path}")
+            res["code_path"] = str(code_path)
+        
+        return res

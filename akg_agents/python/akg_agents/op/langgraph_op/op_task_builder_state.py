@@ -71,7 +71,7 @@ class OpTaskBuilderState(TypedDict, total=False):
 # Status常量定义
 class OpTaskBuilderStatus:
     """OpTaskBuilder状态枚举"""
-    READY = "ready"                     # 格式检查通过，可以启动原workflow
+    READY = "success"                     # 格式检查通过，可以启动原workflow
     NEED_CLARIFICATION = "need_clarification"  # 需要用户澄清
     NEED_MODIFICATION = "need_modification"    # 需要用户确认修改
     UNSUPPORTED = "unsupported"         # 不支持的需求

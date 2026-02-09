@@ -17,9 +17,8 @@
 测试所有 Workflow 作为工具被 KernelAgent 调用
 
 测试的 Workflows：
-- CoderOnlyWorkflow: 跳过设计，直接生成+验证
+- KernelGenOnlyWorkflow: 跳过设计，直接生成+验证
 - DefaultWorkflow: 完整流程（设计→生成→验证）
-- VerifierOnlyWorkflow: 仅验证已有代码
 - ConnectAllWorkflow: 灵活流程，AI 智能决策
 
 运行方式：
@@ -46,16 +45,15 @@ async def test_workflow_registration():
     print("="*80)
     
     from akg_agents.core_v2.workflows.registry import WorkflowRegistry
-    from akg_agents.op.workflows.coder_only_workflow import CoderOnlyWorkflow
     from akg_agents.op.workflows.default_workflow import DefaultWorkflow
-    from akg_agents.op.workflows.verifier_only_workflow import VerifierOnlyWorkflow
     from akg_agents.op.workflows.connect_all_workflow import ConnectAllWorkflow
+    from akg_agents.op.workflows.kernelgen_only_workflow import KernelGenOnlyWorkflow
     
     # 检查是否注册
     workflows = WorkflowRegistry.list_workflows(scope="op")
     print(f"✓ 已注册的 workflows ({len(workflows)}): {workflows}")
     
-    expected_workflows = ["CoderOnlyWorkflow", "DefaultWorkflow", "VerifierOnlyWorkflow", "ConnectAllWorkflow"]
+    expected_workflows = ["DefaultWorkflow", "ConnectAllWorkflow", "KernelGenOnlyWorkflow"]
     missing = [w for w in expected_workflows if w not in workflows]
     
     if missing:
@@ -64,10 +62,9 @@ async def test_workflow_registration():
     
     # 检查工具配置
     expected_tools = {
-        "CoderOnlyWorkflow": "use_coder_only_workflow",
         "DefaultWorkflow": "use_default_workflow",
-        "VerifierOnlyWorkflow": "use_verifier_only_workflow",
-        "ConnectAllWorkflow": "use_connect_all_workflow"
+        "ConnectAllWorkflow": "use_connect_all_workflow",
+        "KernelGenOnlyWorkflow": "use_kernelgen_only_workflow"
     }
     
     for workflow_name, tool_name in expected_tools.items():
@@ -109,11 +106,11 @@ async def test_kernel_agent_loading():
         # 检查 available_tools 中是否包含 workflow
         workflow_tools = [
             t for t in agent.available_tools 
-            if t.get("function", {}).get("name") == "use_coder_only_workflow"
+            if t.get("function", {}).get("name") == "use_kernelgen_only_workflow"
         ]
         
         if not workflow_tools:
-            print("✗ available_tools 中没有找到 use_coder_only_workflow！")
+            print("✗ available_tools 中没有找到 use_kernelgen_only_workflow！")
             return False
         
         print(f"✓ 在 available_tools 中找到 workflow 工具")
@@ -136,7 +133,7 @@ async def test_workflow_tool_info():
     
     from akg_agents.core_v2.workflows.registry import WorkflowRegistry
     
-    workflows = ["CoderOnlyWorkflow", "DefaultWorkflow", "VerifierOnlyWorkflow", "ConnectAllWorkflow"]
+    workflows = ["DefaultWorkflow", "ConnectAllWorkflow", "KernelGenOnlyWorkflow"]
     
     for workflow_name in workflows:
         config = WorkflowRegistry.get_tool_config(workflow_name)
@@ -195,10 +192,9 @@ async def main():
     
     if passed == total:
         print("\n🎉 所有测试通过！所有 Workflow 已成功集成为工具。")
-        print("   - CoderOnlyWorkflow")
         print("   - DefaultWorkflow")
-        print("   - VerifierOnlyWorkflow")
         print("   - ConnectAllWorkflow")
+        print("   - KernelGenOnlyWorkflow")
     else:
         print("\n⚠️  部分测试失败，请检查上面的错误信息。")
     

@@ -39,76 +39,62 @@ class OpTaskBuilder(AgentBase):
     # Agent 工具配置元数据
     TOOL_NAME = "call_op_task_builder"
     DESCRIPTION = """
-    将用户的文字需求转换为 KernelBench 格式的任务描述代码。
-    
-    功能：
-    - 理解用户需求并提取关键信息
-    - 生成符合 KernelBench 规范的 Python 代码（包含 Model 类、forward 方法、get_inputs 和 get_init_inputs 函数）
-    - 自动进行静态和运行时验证
-    - 支持多轮交互和需求澄清
-    """
+将用户的文字需求转换为 KernelBench 格式的任务描述代码（task_desc）。
+
+功能：
+- 理解用户需求并提取关键信息
+- 生成符合 KernelBench 规范的 Python 代码
+- 包含 class Model(nn.Module)、forward()、get_inputs()、get_init_inputs()
+- 自动进行静态和运行时验证
+- 支持多轮交互和需求澄清
+
+适用场景：
+- 用户只提供了文字需求描述，没有提供 task_desc 代码
+- 需要将"生成 relu 算子"这样的描述转换为 KernelBench 格式代码
+- 需要多轮对话澄清需求细节（如 shape、dtype 等）
+
+⚠️ 注意：
+- 如果用户已经提供了 KernelBench 格式的 task_desc 代码，无需调用此工具
+- task_desc 是后续代码生成和验证的必要输入
+- 生成的 task_desc 需要请用户确认后再进行下一步
+
+输出：KernelBench 格式的 task_desc 代码
+"""
     
     PARAMETERS_SCHEMA = {
         "type": "object",
         "properties": {
-            "state": {
-                "type": "object",
-                "description": "OpTaskBuilderState 状态对象",
-                "properties": {
-                    "user_input": {
-                        "type": "string",
-                        "description": "用户的需求描述"
-                    },
-                    "framework": {
-                        "type": "string",
-                        "description": "目标框架（例如：'torch', 'mindspore'）",
-                        "default": "torch"
-                    },
-                    "backend": {
-                        "type": "string",
-                        "description": "目标硬件后端（例如：'cuda', 'ascend'）",
-                        "default": "cuda"
-                    },
-                    "arch": {
-                        "type": "string",
-                        "description": "目标硬件架构（例如：'a100', 'ascend910b4'）",
-                        "default": "a100"
-                    },
-                    "dsl": {
-                        "type": "string",
-                        "description": "目标 DSL（例如：'triton', 'triton-cuda', 'triton-ascend'）",
-                        "default": "triton"
-                    },
-                    "user_feedback": {
-                        "type": "string",
-                        "description": "用户反馈（可选，用于多轮交互）",
-                        "default": ""
-                    },
-                    "iteration": {
-                        "type": "integer",
-                        "description": "当前迭代次数",
-                        "default": 0
-                    },
-                    "max_iterations": {
-                        "type": "integer",
-                        "description": "最大迭代次数",
-                        "default": 5
-                    },
-                    "max_check_retries": {
-                        "type": "integer",
-                        "description": "最大检查重试次数",
-                        "default": 3
-                    }
-                },
-                "required": ["user_input"]
-            },
-            "model_level": {
+            "user_input": {
                 "type": "string",
-                "description": "模型级别（例如：'standard', 'fast', 'complex'）",
-                "default": "standard"
+                "description": "用户的需求描述（必须包含完整的用户原始需求，不要省略任何细节）"
+            },
+            "framework": {
+                "type": "string",
+                "description": "目标框架（例如：'torch', 'mindspore'）",
+                "default": "torch"
+            },
+            "backend": {
+                "type": "string",
+                "description": "目标硬件后端（例如：'cuda', 'ascend'）",
+                "default": "cuda"
+            },
+            "arch": {
+                "type": "string",
+                "description": "目标硬件架构（例如：'a100', 'ascend910b4'）",
+                "default": "a100"
+            },
+            "dsl": {
+                "type": "string",
+                "description": "目标 DSL（例如：'triton', 'triton-cuda', 'triton-ascend'）",
+                "default": "triton"
+            },
+            "user_feedback": {
+                "type": "string",
+                "description": "用户反馈（可选，用于多轮交互）",
+                "default": ""
             }
         },
-        "required": ["state"]
+        "required": ["user_input"]
     }
     
     def __init__(self):
@@ -797,6 +783,11 @@ class OpTaskBuilder(AgentBase):
                 * MainOpAgent应展示 agent_message 给用户，说明不支持的原因
                 * 流程结束
         """
+        # 兼容 dict 输入：确保 state 是 OpTaskBuilderState
+        # 注意：TypedDict 不支持 isinstance 检查，所以直接对 dict 做转换
+        if isinstance(state, dict):
+            state = OpTaskBuilderState(**state)
+        
         try:
             self.step_count += 1
             
@@ -890,11 +881,26 @@ class OpTaskBuilder(AgentBase):
                 
                 # 提取解析结果
                 op_name = parse_result["op_name"]
-                status = parse_result["status"]
+                raw_status = parse_result["status"]
                 task_desc = parse_result["task_desc"]
                 message = parse_result["message"]
                 llm_reasoning = parse_result["llm_reasoning"]
                 prompt = parse_result["prompt"]
+                
+                # 规范化状态值
+                # parser 要求 LLM 输出 "ready"，但 OpTaskBuilderStatus.READY = "success"
+                _STATUS_NORMALIZE = {
+                    "ready": OpTaskBuilderStatus.READY,
+                    "success": OpTaskBuilderStatus.READY,
+                    "need_clarification": OpTaskBuilderStatus.NEED_CLARIFICATION,
+                    "need_modification": OpTaskBuilderStatus.NEED_MODIFICATION,
+                    "unsupported": OpTaskBuilderStatus.UNSUPPORTED,
+                }
+                status = _STATUS_NORMALIZE.get(
+                    (raw_status or "").lower().strip(),
+                    raw_status
+                )
+                logger.debug(f"OpTaskBuilder: raw_status='{raw_status}' -> normalized='{status}'")
                 
                 # 根据状态处理
                 if status == OpTaskBuilderStatus.READY and task_desc:
