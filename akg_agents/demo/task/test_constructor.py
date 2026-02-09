@@ -148,6 +148,115 @@ else:
 '''
 
 
+# ====== Reference 对比测试模板 ======
+REFERENCE_TEST_TEMPLATE = '''\
+import sys
+import torch
+import traceback
+
+# ====== 加载任务代码 ======
+$TASK_CODE
+
+# ====== Reference 对比代码 ======
+$REFERENCE_CODE
+
+# ====== 多组输入生成 ======
+$MULTI_INPUTS_CODE
+
+# ====== 对比测试 ======
+def compare_tensors(our, ref, name, atol=1e-5, rtol=1e-5):
+    """对比两个输出（支持单 tensor 和 tuple）"""
+    errors = []
+    if isinstance(our, torch.Tensor) and isinstance(ref, torch.Tensor):
+        if our.shape != ref.shape:
+            errors.append(f"{name}: shape mismatch: {our.shape} vs {ref.shape}")
+        elif not torch.allclose(our.float(), ref.float(), atol=atol, rtol=rtol):
+            diff = (our.float() - ref.float()).abs()
+            errors.append(f"{name}: max_diff={diff.max().item():.2e}, mean_diff={diff.mean().item():.2e}")
+    elif isinstance(our, (tuple, list)) and isinstance(ref, (tuple, list)):
+        if len(our) != len(ref):
+            errors.append(f"{name}: output count mismatch: {len(our)} vs {len(ref)}")
+        else:
+            for i, (o, r) in enumerate(zip(our, ref)):
+                errors.extend(compare_tensors(o, r, f"{name}[{i}]", atol, rtol))
+    else:
+        errors.append(f"{name}: type mismatch: {type(our).__name__} vs {type(ref).__name__}")
+    return errors
+
+def run_tests():
+    all_errors = []
+    
+    # 实例化 Model
+    try:
+        init_inputs = get_init_inputs()
+        model = Model(*init_inputs)
+        model.eval()
+    except Exception as e:
+        print(f"[FAIL] Model 实例化失败: {e}")
+        sys.exit(1)
+    
+    # 获取多组输入
+    try:
+        test_cases = get_multi_test_inputs()
+        print(f"[INFO] 共 {len(test_cases)} 组测试用例")
+    except NameError:
+        # 如果没定义 get_multi_test_inputs，用默认的 get_inputs
+        test_cases = [{"name": "default", "inputs": get_inputs()}]
+        print(f"[INFO] 使用默认输入（1组）")
+    
+    passed = 0
+    failed = 0
+    
+    for tc in test_cases:
+        tc_name = tc.get("name", "unnamed")
+        inputs = tc["inputs"]
+        
+        try:
+            # 运行我们的实现
+            with torch.no_grad():
+                our_output = model(*inputs)
+            
+            # 运行 reference
+            with torch.no_grad():
+                ref_output = reference_forward(inputs, init_inputs)
+            
+            # 对比
+            errors = compare_tensors(our_output, ref_output, tc_name)
+            
+            if errors:
+                failed += 1
+                for e in errors:
+                    print(f"[FAIL] {e}")
+                    all_errors.append(e)
+            else:
+                passed += 1
+                # 打印简要信息
+                if isinstance(our_output, torch.Tensor):
+                    print(f"[PASS] {tc_name}: shape={our_output.shape}")
+                elif isinstance(our_output, (tuple, list)):
+                    shapes = [o.shape if isinstance(o, torch.Tensor) else type(o).__name__ for o in our_output]
+                    print(f"[PASS] {tc_name}: {len(shapes)} outputs")
+                else:
+                    print(f"[PASS] {tc_name}")
+        
+        except Exception as e:
+            failed += 1
+            all_errors.append(f"{tc_name}: {e}")
+            print(f"[FAIL] {tc_name}: {e}")
+            traceback.print_exc()
+    
+    print(f"\\n===== Reference 对比结果: {passed} passed, {failed} failed =====")
+    if all_errors:
+        for e in all_errors:
+            print(f"  - {e}")
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+run_tests()
+'''
+
+
 class TestConstructor:
     """测试构造与预运行验证"""
 
@@ -209,6 +318,69 @@ class TestConstructor:
 
         except subprocess.TimeoutExpired:
             return {"status": "error", "output": "", "error": f"验证超时 ({timeout}s)"}
+        except Exception as e:
+            return {"status": "error", "output": "", "error": str(e)}
+        finally:
+            try:
+                Path(tmp.name).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    @staticmethod
+    def run_reference_test(
+        task_code: str,
+        reference_code: str,
+        multi_inputs_code: str = "",
+        timeout: int = None,
+    ) -> Dict[str, Any]:
+        """
+        对比测试：将 Model 的输出与 reference 函数对比。
+
+        Args:
+            task_code: KernelBench 格式的任务代码
+            reference_code: reference 代码，需定义 reference_forward(inputs, init_inputs) 函数
+            multi_inputs_code: 可选，定义 get_multi_test_inputs() 函数返回多组输入
+            timeout: 超时秒数
+
+        Returns:
+            {"status": "success"|"error", "output": str, "error": str}
+        """
+        timeout = timeout or CODE_EXEC_TIMEOUT
+        script = REFERENCE_TEST_TEMPLATE
+        script = script.replace("$TASK_CODE", task_code)
+        script = script.replace("$REFERENCE_CODE", reference_code)
+        script = script.replace("$MULTI_INPUTS_CODE", multi_inputs_code or "# (no multi_inputs_code)")
+
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                suffix=".py", mode="w", delete=False, encoding="utf-8"
+            )
+            tmp.write(script)
+            tmp.close()
+
+            result = subprocess.run(
+                [PYTHON_EXECUTABLE, tmp.name],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+
+            stdout = result.stdout.strip()
+            stderr = result.stderr.strip()
+            combined = ""
+            if stdout:
+                combined += stdout + "\n"
+            if stderr:
+                combined += f"[stderr]\n{stderr}\n"
+
+            if result.returncode == 0:
+                return {"status": "success", "output": combined, "error": ""}
+            else:
+                return {"status": "error", "output": combined,
+                        "error": f"Reference 对比失败 (exit {result.returncode})"}
+
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "output": "", "error": f"对比测试超时 ({timeout}s)"}
         except Exception as e:
             return {"status": "error", "output": "", "error": str(e)}
         finally:

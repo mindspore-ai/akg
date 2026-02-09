@@ -100,9 +100,13 @@ def get_init_inputs():
 - **追加的函数必须从 workspace 中复制原始代码，禁止自己重写！**
 
 ### 第四步：验证和完成
-7. `validate_task` 验证
+7. `validate_task` 验证（实例化+forward+NaN/Inf+一致性）
 8. 如果失败，检查错误信息，用 `apply_patch` 修复
-9. `finish`
+9. **（可选但推荐）** `test_with_reference` 对比 reference 函数验证正确性
+   - 当原始函数存在于 torch 中时（如 `torch._chunk_cat`），用它作为 reference
+   - 当有 benchmark/test 文件中有调用示例时，基于示例构造 reference
+   - 构造多组输入覆盖边界情况（不同形状、不同 dim、不同 dtype 等）
+10. `finish`
 
 ## 其他规则
 
@@ -110,4 +114,6 @@ def get_init_inputs():
 2. 路径支持 `workspace/` 前缀。
 3. finish 时 task_code 填文件路径（如 `task_output.py`）。
 4. get_inputs() 返回列表，可以包含张量和标量。
+5. 选择性提取时，装饰器（如 `@register_decomposition`）自动移除。
+6. 如果原始函数有内部 API 依赖（如 `utils.canonicalize_dim`），用简单的等价实现替代。
 """

@@ -138,10 +138,16 @@ def _extract_file_header(content: str, tree: ast.Module, clean_local_imports: bo
     return header
 
 
-def _extract_functions(content: str, tree: ast.Module, names: List[str]) -> Tuple[str, List[str]]:
+def _extract_functions(
+    content: str, tree: ast.Module, names: List[str],
+    strip_decorators: bool = True,
+) -> Tuple[str, List[str]]:
     """
     从 AST 中提取指定名称的函数/类。
 
+    Args:
+        strip_decorators: 是否移除装饰器（如 @register_decomposition 等），
+                         避免在独立文件中执行时引发副作用
     Returns:
         (extracted_code, not_found_names)
     """
@@ -159,10 +165,13 @@ def _extract_functions(content: str, tree: ast.Module, names: List[str]) -> Tupl
     for name in names:
         if name in nodes_map:
             node = nodes_map[name]
-            start = node.lineno - 1
             end = node.end_lineno
-            if node.decorator_list:
-                start = min(start, min(d.lineno - 1 for d in node.decorator_list))
+            if strip_decorators or not node.decorator_list:
+                # 不包含装饰器，直接从 def/class 行开始
+                start = node.lineno - 1
+            else:
+                # 包含装饰器
+                start = min(node.lineno - 1, min(d.lineno - 1 for d in node.decorator_list))
             extracted.append("\n".join(lines[start:end]))
             found.add(name)
 
@@ -485,6 +494,37 @@ def validate_task(args: Dict[str, Any]) -> Dict[str, Any]:
     return TestConstructor.run_validation(task_code, timeout=args.get("timeout", 60))
 
 
+def test_with_reference(args: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    对比测试：将生成的 Model 与 reference 函数对比，支持多组输入。
+
+    reference_code 必须定义 reference_forward(inputs, init_inputs) 函数。
+    multi_inputs_code 可选，定义 get_multi_test_inputs() 返回 [{name, inputs}] 列表。
+    """
+    task_file = args.get("task_file", "")
+    task_code = args.get("task_code", "")
+    reference_code = args.get("reference_code", "")
+    multi_inputs_code = args.get("multi_inputs_code", "")
+
+    if task_file and not task_code:
+        path = _resolve_path(task_file)
+        if path.exists():
+            task_code = path.read_text(encoding="utf-8")
+        else:
+            return {"status": "error", "output": "", "error": f"任务文件不存在: {path}"}
+
+    if not task_code.strip():
+        return {"status": "error", "output": "", "error": "task_code 不能为空"}
+    if not reference_code.strip():
+        return {"status": "error", "output": "", "error": "reference_code 不能为空"}
+
+    from ..task.test_constructor import TestConstructor  # noqa: F811
+    return TestConstructor.run_reference_test(
+        task_code, reference_code, multi_inputs_code,
+        timeout=args.get("timeout", 120),
+    )
+
+
 # ========== 注册 ==========
 
 ToolRegistry.register(
@@ -566,7 +606,8 @@ ToolRegistry.register(
 
 ToolRegistry.register(
     "validate_task",
-    "预运行验证任务代码。传 task_file（文件路径）或 task_code（代码字符串）。",
+    "预运行验证任务代码。传 task_file（文件路径）或 task_code（代码字符串）。\n"
+    "检查: 实例化→forward→NaN/Inf→一致性→输出统计",
     {
         "type": "object",
         "properties": {
@@ -577,4 +618,34 @@ ToolRegistry.register(
         "required": [],
     },
     validate_task,
+)
+
+ToolRegistry.register(
+    "test_with_reference",
+    "【正确性验证】将 Model 输出与 reference 函数对比，支持多组输入。\n"
+    "用法：提供 reference_code（定义 reference_forward(inputs, init_inputs)）和可选的 multi_inputs_code。\n"
+    "示例 reference_code:\n"
+    '  def reference_forward(inputs, init_inputs):\\n'
+    '      return torch._chunk_cat(list(inputs), init_inputs[0], init_inputs[1])\\n'
+    "示例 multi_inputs_code:\n"
+    '  def get_multi_test_inputs():\\n'
+    '      return [{"name": "case1", "inputs": [torch.randn(4,5), torch.randn(6,5)]}, ...]',
+    {
+        "type": "object",
+        "properties": {
+            "task_file": {"type": "string", "description": "任务文件路径"},
+            "task_code": {"type": "string", "description": "任务代码（与 task_file 二选一）"},
+            "reference_code": {
+                "type": "string",
+                "description": "Reference 代码，必须定义 reference_forward(inputs, init_inputs) 函数"
+            },
+            "multi_inputs_code": {
+                "type": "string",
+                "description": "可选：定义 get_multi_test_inputs() 返回 [{name, inputs}] 列表"
+            },
+            "timeout": {"type": "integer", "description": "超时秒数（默认120）"},
+        },
+        "required": ["reference_code"],
+    },
+    test_with_reference,
 )
