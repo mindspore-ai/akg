@@ -88,7 +88,7 @@ Configuration is loaded with the following priority (high to low):
 
 ### 3.1 Single Model Configuration (Recommended)
 
-Setting environment variables will automatically override the `standard` level configuration:
+Setting environment variables will automatically override all levels (`complex` / `standard` / `fast`) configuration:
 
 ```bash
 # Basic configuration

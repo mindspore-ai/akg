@@ -361,7 +361,7 @@ def load_from_env(settings: AKGSettings) -> AKGSettings:
     
     支持两种方式：
     1. 单模型配置（兼容旧版）：AKG_AGENTS_BASE_URL/AIKG_BASE_URL, AKG_AGENTS_API_KEY/AIKG_API_KEY 等
-       -> 自动设置为 'standard' 级别
+       -> 自动覆盖所有级别（complex/standard/fast）
     
     2. 多模型配置：AKG_AGENTS_COMPLEX_BASE_URL/AIKG_COMPLEX_BASE_URL, AKG_AGENTS_STANDARD_API_KEY/AIKG_STANDARD_API_KEY 等
        -> 分别设置 complex/standard/fast
@@ -375,9 +375,9 @@ def load_from_env(settings: AKGSettings) -> AKGSettings:
     
     thinking_enabled = _parse_thinking_enabled(get_akg_env_var("MODEL_ENABLE_THINK"))
     
-    # 方式 1：单模型配置（兼容旧版，自动设置为 standard）
+    # 方式 1：单模型配置（兼容旧版，自动覆盖所有级别：complex/standard/fast）
     if get_akg_env_var("BASE_URL") or get_akg_env_var("API_KEY") or get_akg_env_var("MODEL_NAME"):
-        standard_config = ModelConfig(
+        single_config = ModelConfig(
             base_url=get_akg_env_var("BASE_URL", "https://api.openai.com/v1"),
             api_key=get_akg_env_var("API_KEY", ""),
             model_name=get_akg_env_var("MODEL_NAME", "gpt-4"),
@@ -386,8 +386,9 @@ def load_from_env(settings: AKGSettings) -> AKGSettings:
             timeout=int(get_akg_env_var("TIMEOUT", "300")),
             thinking_enabled=thinking_enabled,
         )
-        settings.models["standard"] = standard_config
-        logger.debug(f"Loaded single model config from env as 'standard' (thinking={thinking_enabled})")
+        for level in ["complex", "standard", "fast"]:
+            settings.models[level] = single_config
+        logger.debug(f"Loaded single model config from env, applied to all levels (thinking={thinking_enabled})")
     
     # 方式 2：多模型配置
     for level in ["complex", "standard", "fast"]:
