@@ -110,7 +110,7 @@ class TestCLITraceCommands:
         ])
         
         # 验证输出
-        assert result.exit_code == 0 or "不存在" not in result.output
+        assert result.exit_code == 0
         # 应该包含树结构或统计信息
     
     def test_trace_switch_command(self, runner, trace_system):
@@ -129,7 +129,7 @@ class TestCLITraceCommands:
         ])
         
         # 验证切换成功
-        assert result.exit_code == 0 or "错误" not in result.output
+        assert result.exit_code == 0
     
     def test_trace_path_command(self, runner, trace_system):
         """测试 trace path 命令"""
@@ -146,7 +146,7 @@ class TestCLITraceCommands:
         ])
         
         # 验证输出包含路径信息
-        assert result.exit_code == 0 or "错误" not in result.output
+        assert result.exit_code == 0
     
     def test_trace_history_command(self, runner, trace_system):
         """测试 trace history 命令"""
@@ -161,7 +161,7 @@ class TestCLITraceCommands:
         ])
         
         # 验证输出
-        assert result.exit_code == 0 or "错误" not in result.output
+        assert result.exit_code == 0
     
     def test_trace_leaves_command(self, runner, trace_system):
         """测试 trace leaves 命令"""
@@ -175,7 +175,7 @@ class TestCLITraceCommands:
         ])
         
         # 验证输出包含叶节点列表
-        assert result.exit_code == 0 or "错误" not in result.output
+        assert result.exit_code == 0
     
     def test_trace_compare_command(self, runner, trace_system):
         """测试 trace compare 命令"""
@@ -193,7 +193,7 @@ class TestCLITraceCommands:
             ])
             
             # 验证输出包含对比信息
-            assert result.exit_code == 0 or "错误" not in result.output
+            assert result.exit_code == 0
     
     def test_trace_best_command(self, runner, trace_system):
         """测试 trace best 命令"""
@@ -208,7 +208,7 @@ class TestCLITraceCommands:
         ])
         
         # 验证输出
-        assert result.exit_code == 0 or "错误" not in result.output
+        assert result.exit_code == 0
     
     def test_trace_nonexistent_task(self, runner, temp_dir):
         """测试访问不存在的任务"""

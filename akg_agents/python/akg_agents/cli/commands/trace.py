@@ -110,8 +110,8 @@ def create_trace_app(console: Console, services: CLIAppServices) -> typer.Typer:
             # 显示节点信息
             node_info = ts.get_node(new_node)
             if node_info:
-                console.print(f"  父节点: {node_info.get('parent_id', 'None')}")
-                console.print(f"  子节点数: {len(node_info.get('children', []))}")
+                console.print(f"  父节点: {node_info.parent_id or 'None'}")
+                console.print(f"  子节点数: {len(node_info.children or [])}")
                 
         except Exception as e:
             console.print(f"[red]错误: {e}[/red]")
@@ -306,8 +306,8 @@ def create_trace_app(console: Console, services: CLIAppServices) -> typer.Typer:
             ))
             
             console.print(f"路径长度: {len(path)} 个节点")
-            if node_info.get("metrics"):
-                console.print(f"Metrics: {node_info['metrics']}")
+            if node_info.metrics:
+                console.print(f"Metrics: {node_info.metrics}")
                 
         except Exception as e:
             console.print(f"[red]错误: {e}[/red]")
@@ -343,7 +343,7 @@ def create_trace_app(console: Console, services: CLIAppServices) -> typer.Typer:
             for i, leaf in enumerate(leaves, 1):
                 path = ts.get_path_to_node(leaf)
                 node_info = ts.get_node(leaf)
-                metrics = node_info.get("metrics", {})
+                metrics = node_info.metrics
                 metrics_str = ", ".join(f"{k}={v}" for k, v in metrics.items()) if metrics else "-"
                 table.add_row(
                     str(i),
