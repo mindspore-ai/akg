@@ -39,16 +39,12 @@ static Value getMatmulResult(Op op) {
 template <typename AclnnMatmulOp>
 static Operation *findAclnnMatmulFromAddOperands(Value x, Value y, Value &bias) {
   if (auto mm = x.getDefiningOp<AclnnMatmulOp>()) {
-    if (getMatmulResult(mm).hasOneUse()) {
-      bias = y;
-      return mm.getOperation();
-    }
+    bias = y;
+    return mm.getOperation();
   }
   if (auto mm = y.getDefiningOp<AclnnMatmulOp>()) {
-    if (getMatmulResult(mm).hasOneUse()) {
-      bias = x;
-      return mm.getOperation();
-    }
+    bias = x;
+    return mm.getOperation();
   }
   return nullptr;
 }
@@ -119,7 +115,6 @@ class ConvertAclnnMatmulAddToMatMulWithBiasPattern : public OpRewritePattern<Acl
     auto newOp = rewriter.create<MatmulWithBiasOp>(
         loc, resultType, self, other, bias, rewriter.getBoolAttr(false), rewriter.getBoolAttr(false));
     rewriter.replaceOp(addOp, newOp.getResult());
-    rewriter.eraseOp(matmulOp);
     return success();
   }
 };

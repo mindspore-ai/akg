@@ -36,6 +36,7 @@
 #include "mfusion/Conversion/PdllHelper.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/MfuseDialect.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 
@@ -166,6 +167,7 @@ struct ConvertTorchToMfusePass : public mlir::PassWrapper<ConvertTorchToMfusePas
   }
 
   void runOnOperation() override {
+    MLOG(DEBUG) << "convert-torch-to-mfuse pass start";
     mlir::ModuleOp module = getOperation();
     mlir::MLIRContext *ctx = &getContext();
 
@@ -178,6 +180,7 @@ struct ConvertTorchToMfusePass : public mlir::PassWrapper<ConvertTorchToMfusePas
     if (mlir::failed(mlir::applyPartialConversion(module, target, patterns_))) {
       signalPassFailure();
     }
+    MLOG(DEBUG) << "convert-torch-to-mfuse pass end";
   }
 
   mlir::FrozenRewritePatternSet patterns_;
