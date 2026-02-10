@@ -1,2 +1,2 @@
-add_subdirectory(Muse)
+add_subdirectory(Mfuse)
 add_subdirectory(Dvm)

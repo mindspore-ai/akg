@@ -36,10 +36,10 @@
 #include "torch-mlir/InitAll.h"
 
 // MFusion project specific includes
-#include "mfusion/Dialect/Muse/Muse.h"
+#include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Dvm/DvmDialect.h"
 #include "mfusion/Conversion/Passes.h"
-#include "mfusion/Dialect/Muse/Transforms/Passes.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
 
 namespace {
 // Version information for mfusion-opt tool
@@ -51,7 +51,7 @@ void initializeDialectRegistry(mlir::DialectRegistry &registry) {
   mlir::registerAllDialects(registry);
   mlir::torch::registerAllDialects(registry);
   mlir::torch::registerAllExtensions(registry);
-  registry.insert<mlir::muse::MuseDialect>();
+  registry.insert<mlir::mfuse::MfuseDialect>();
   registry.insert<mlir::dvm::DvmDialect>();
 }
 }  // namespace
@@ -66,8 +66,8 @@ int main(int argc, char **argv) {
   // Register custom conversion passes for MFusion
   mlir::registerMFusionConversionPasses();
 
-  // Register MUSE transforms passes
-  mlir::registerMuseTransformsPasses();
+  // Register MFUSE transforms passes
+  mlir::registerMfuseTransformsPasses();
 
   // Setup dialect registry with all required dialects
   mlir::DialectRegistry registry;
