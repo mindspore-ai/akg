@@ -1,0 +1,11 @@
+#include "mfusion/Conversion/DialectConversion.pdll"
+#include "torch-mlir/Dialect/Torch/IR/TorchOps.td"
+#include "mfusion/Dialect/Mfuse/MfuseOps.td"
+
+#include "MfuseMetaToTorch.pdll"
+#include "MfuseAclnnToTorch.pdll"
+
+Pattern ConvertReturnOp {
+  let root = op<func.return>(operands: ValueRange);
+  replace root with op<func.return>(convertValues(operands));
+}

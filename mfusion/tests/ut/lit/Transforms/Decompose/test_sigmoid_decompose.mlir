@@ -2,8 +2,8 @@
 
 func.func @sigmoid_test(%arg0: tensor<4x4xf32>) -> tensor<4x4xf32> {
   // sigmoidOp
-  %0 = "muse.aclnn.sigmoid"(%arg0) : (tensor<4x4xf32>) -> tensor<4x4xf32>
+  %0 = "mfuse.aclnn.sigmoid"(%arg0) : (tensor<4x4xf32>) -> tensor<4x4xf32>
   return %0 : tensor<4x4xf32>
-  // CHECK-NOT: muse.aclnn.sigmoid
-  // CHECK: muse.exp
+  // CHECK-NOT: mfuse.aclnn.sigmoid
+  // CHECK: mfuse.exp
 }

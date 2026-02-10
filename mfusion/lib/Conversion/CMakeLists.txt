@@ -1,2 +1,2 @@
-add_subdirectory(TorchToMuse)
-add_subdirectory(MuseToTorch)
+add_subdirectory(TorchToMfuse)
+add_subdirectory(MfuseToTorch)
