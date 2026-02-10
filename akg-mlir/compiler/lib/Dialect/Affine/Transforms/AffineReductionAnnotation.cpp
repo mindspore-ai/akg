@@ -45,41 +45,83 @@ namespace affine {
 }  // namespace affine
 }  // namespace mlir
 
+using akgglobal::GpuScheduleTool;
 using mlir::ArrayAttr;
 using mlir::Attribute;
+using mlir::cast;
+using mlir::CommonUtils;
+using mlir::dyn_cast;
+using mlir::isa;
+using mlir::kOperatorTypeStr;
+using mlir::kReduceStr;
+using mlir::kReductionAxesStr;
+using mlir::kReductionInitAttr;
+using mlir::kReductionTypeStr;
 using mlir::MemRefType;
 using mlir::OpBuilder;
 using mlir::Operation;
+using mlir::ReduceDirection;
+using mlir::reduceDirectionMap;
 using mlir::SmallVector;
 using mlir::StringAttr;
 using mlir::Value;
 using mlir::affine::AffineForOp;
 using mlir::affine::AffineLoadOp;
 using mlir::affine::AffineStoreOp;
-using mlir::cast;
-using mlir::dyn_cast;
 using mlir::func::FuncOp;
-using mlir::isa;
-using mlir::kOperatorTypeStr;
-using mlir::kReduceStr;
-using mlir::kReductionAxesStr;
-using mlir::kReductionTypeStr;
 using mlir::memref::LoadOp;
 using mlir::memref::StoreOp;
-using mlir::CommonUtils;
-using mlir::ReduceDirection;
-using mlir::reduceDirectionMap;
-using akgglobal::GpuScheduleTool;
 
 namespace {
+
+static std::optional<int64_t> getLoadRankFromValue(Value v) {
+  if (auto load = v.getDefiningOp<affine::AffineLoadOp>()) {
+    if (auto mt = dyn_cast<MemRefType>(load.getMemref().getType())) {
+      return mt.getRank();
+    }
+  }
+  if (auto mload = v.getDefiningOp<memref::LoadOp>()) {
+    if (auto mt = dyn_cast<MemRefType>(mload.getMemref().getType())) {
+      return mt.getRank();
+    }
+  }
+  return std::nullopt;
+}
+
+static Operation *getParentAffineLoop(Operation *op) {
+  Operation *current = op->getParentOp();
+  while (current) {
+    if (isa<affine::AffineForOp>(current)) {
+      return current;
+    }
+    current = current->getParentOp();
+  }
+  return nullptr;
+}
+
+static affine::AffineStoreOp getStoreOpFromResult(Operation *op) {
+  for (auto *user : op->getResult(0).getUsers()) {
+    if (auto s = dyn_cast<affine::AffineStoreOp>(user)) {
+      return s;
+    }
+  }
+  return nullptr;
+}
+
+static bool checkReductionRankCondition(int64_t aRank, int64_t bRank, int32_t outRank) {
+  bool higherThenOutA = (aRank > outRank);
+  bool higherThenOutB = (bRank > outRank);
+  bool equalOutA = (aRank == outRank);
+  bool equalOutB = (bRank == outRank);
+  return (higherThenOutA && equalOutB) || (higherThenOutB && equalOutA);
+}
 
 struct AffineReductionAnnotation : public affine::impl::AffineReductionAnnotationBase<AffineReductionAnnotation> {
   AffineReductionAnnotation() {}
   void runOnOperation() override {
     Operation *funcOp = getOperation();
 
-    if (!(funcOp->hasAttr(kOperatorTypeStr) &&
-          dyn_cast<StringAttr>(funcOp->getAttr(kOperatorTypeStr)) == kReduceStr)) {
+    if (!(funcOp->hasAttr(kOperatorTypeStr) && dyn_cast<StringAttr>(funcOp->getAttr(kOperatorTypeStr)) == kReduceStr)) {
       return;
     }
     annotateReductionOps(funcOp);
@@ -90,82 +132,106 @@ struct AffineReductionAnnotation : public affine::impl::AffineReductionAnnotatio
 }  // namespace
 
 bool AffineReductionAnnotation::isReductionPattern(Operation *op) {
-  if (op->getNumOperands() != 2 || op->getNumResults() != 1)
+  if (op->getNumOperands() != 2 || op->getNumResults() != 1) {
     return false;
-
-  // detect loop
-  Operation *parentLoop = nullptr;
-  Operation *current = op->getParentOp();
-  while (current) {
-    if (isa<affine::AffineForOp>(current)) {
-      parentLoop = current;
-      break;
-    }
-    current = current->getParentOp();
   }
-  if (!parentLoop) return false;
-
-  // detect store
-  affine::AffineStoreOp storeOp = nullptr;
-  for (auto *user : op->getResult(0).getUsers()) {
-    if (auto s = dyn_cast<affine::AffineStoreOp>(user)) {
-      storeOp = s;
-      break;
-    }
+  if (!getParentAffineLoop(op)) {
+    return false;
   }
+  affine::AffineStoreOp storeOp = getStoreOpFromResult(op);
   if (!storeOp) {
     return false;
   }
-
   auto outMemrefType = dyn_cast<MemRefType>(storeOp.getMemref().getType());
-  if (!outMemrefType) return false;
+  if (!outMemrefType) {
+    return false;
+  }
   int32_t outRank = outMemrefType.getRank();
-
-  auto getLoadRank = [](Value v) -> std::optional<int64_t> {
-    if (auto load = v.getDefiningOp<affine::AffineLoadOp>()) {
-      if (auto mt = dyn_cast<MemRefType>(load.getMemref().getType()))
-        return mt.getRank();
-    }
-    if (auto mload = v.getDefiningOp<memref::LoadOp>()) {
-      if (auto mt = dyn_cast<MemRefType>(mload.getMemref().getType()))
-        return mt.getRank();
-    }
-    return std::nullopt;
-  };
-
-  Value a = op->getOperand(0);
-  Value b = op->getOperand(1);
-  auto aRank = getLoadRank(a);
-  auto bRank = getLoadRank(b);
-
+  auto aRank = getLoadRankFromValue(op->getOperand(0));
+  auto bRank = getLoadRankFromValue(op->getOperand(1));
   if (!aRank.has_value() || !bRank.has_value()) {
     return false;
   }
+  return checkReductionRankCondition(*aRank, *bRank, outRank);
+}
 
-  bool higherThenOutA = (*aRank > outRank);
-  bool higherThenOutB = (*bRank > outRank);
-  bool equalOutA = (*aRank == outRank);
-  bool equalOutB = (*bRank == outRank);
-
-  if ((higherThenOutA && equalOutB) || (higherThenOutB && equalOutA)) {
-    return true;
+static void collectLoopReductionFlags(Operation *redOp, SmallVector<bool, 8> &redFlags,
+                                      SmallVector<bool, 8> &sizeOneFlags) {
+  Operation *curOp = redOp;
+  while (curOp) {
+    if (isa<affine::AffineForOp>(curOp)) {
+      bool isSizeOne = false;
+      if (auto forOp = dyn_cast<affine::AffineForOp>(curOp)) {
+        if (forOp.hasConstantBounds()) {
+          int64_t lb = forOp.getConstantLowerBound();
+          int64_t ub = forOp.getConstantUpperBound();
+          if (ub - lb == 1) {
+            isSizeOne = true;
+          }
+        }
+      }
+      redFlags.push_back(curOp->hasAttr(kReductionLoopAttr));
+      sizeOneFlags.push_back(isSizeOne);
+    }
+    curOp = curOp->getParentOp();
   }
-  return false;
+  std::reverse(redFlags.begin(), redFlags.end());
+  std::reverse(sizeOneFlags.begin(), sizeOneFlags.end());
+}
+
+static ReduceDirection computeReduceDirection(ArrayRef<bool> redFlags, ArrayRef<bool> sizeOneFlags) {
+  bool allEffectiveReduce = !redFlags.empty();
+  for (size_t i = 0; i < redFlags.size(); ++i) {
+    if (!(redFlags[i] || sizeOneFlags[i])) {
+      allEffectiveReduce = false;
+      break;
+    }
+  }
+  if (allEffectiveReduce) {
+    return ReduceDirection::ALL;
+  }
+  if (!redFlags.empty() && redFlags.back()) {
+    return ReduceDirection::X;
+  }
+  if (llvm::any_of(redFlags, [](bool v) { return v; })) {
+    return ReduceDirection::Y;
+  }
+  return ReduceDirection::UNKNOWN;
+}
+
+static void updateSingleReductionOpAttrs(Operation *redOp, OpBuilder &builder) {
+  SmallVector<bool, 8> redFlags;
+  SmallVector<bool, 8> sizeOneFlags;
+  collectLoopReductionFlags(redOp, redFlags, sizeOneFlags);
+
+  SmallVector<mlir::Attribute> intAttrs;
+  for (size_t i = 0; i < redFlags.size(); i++) {
+    if (redFlags[i]) {
+      intAttrs.push_back(builder.getIntegerAttr(builder.getIndexType(), i));
+    }
+  }
+  redOp->setAttr(kReductionAxesStr, builder.getArrayAttr(intAttrs));
+
+  ReduceDirection reduceDirection = computeReduceDirection(redFlags, sizeOneFlags);
+  redOp->setAttr(kReductionTypeStr, builder.getStringAttr(reduceDirectionMap.at(reduceDirection)));
+  GpuScheduleTool::getInstance().setReduceDirection(static_cast<size_t>(reduceDirection));
 }
 
 // Update reduction_axes in affine dialect
 void AffineReductionAnnotation::annotateReductionOps(Operation *funcOp) {
   OpBuilder builder(funcOp);
+  Block *funcBlock = &dyn_cast<FuncOp>(funcOp).getBody().front();
 
-  // identify reduction operations and mark them
   (void)funcOp->walk([&](Operation *op) {
     if (isReductionPattern(op)) {
-      // Mark this operation as a reduction
       op->setAttr(kReductionAxesStr, builder.getArrayAttr({}));
+      affine::AffineStoreOp initStoreOp = CommonUtils::getReduceInitOp(op, funcBlock);
+      if (initStoreOp) {
+        initStoreOp->setAttr(kReductionInitAttr, builder.getUnitAttr());
+      }
     }
   });
 
-  // collect reduction axes and update attributes
   SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(funcOp);
   for (auto reduceLoop : reduceLoops) {
     reduceLoop->setAttr(kReductionLoopAttr, builder.getUnitAttr());
@@ -173,72 +239,10 @@ void AffineReductionAnnotation::annotateReductionOps(Operation *funcOp) {
 
   (void)funcOp->walk([&](Operation *redOp) {
     if (!isa<mlir::func::FuncOp>(redOp) && redOp->hasAttr(kReductionAxesStr)) {
-      SmallVector<bool, 8> redFlags;
-      SmallVector<bool, 8> sizeOneFlags;
-      auto curOp = redOp;
-      while (curOp) {
-        if (isa<affine::AffineForOp>(curOp)) {
-          bool isSizeOne = false;
-          if (auto forOp = dyn_cast<affine::AffineForOp>(curOp)) {
-            if (forOp.hasConstantBounds()) {
-              int64_t lb = forOp.getConstantLowerBound();
-              int64_t ub = forOp.getConstantUpperBound();
-              if (ub - lb == 1) {
-                isSizeOne = true;
-              }
-            }
-          }
-          if (curOp->hasAttr(kReductionLoopAttr)) {
-            redFlags.push_back(true);
-          } else {
-            redFlags.push_back(false);
-          }
-          sizeOneFlags.push_back(isSizeOne);
-        }
-        curOp = curOp->getParentOp();
-      }
-      std::reverse(redFlags.begin(), redFlags.end());
-      std::reverse(sizeOneFlags.begin(), sizeOneFlags.end());
-
-      // re-set reduction_axes properly
-      SmallVector<mlir::Attribute> intAttrs;
-      for (size_t i = 0; i < redFlags.size(); i++) {
-        if (redFlags[i]) {
-          auto intAttr = builder.getIntegerAttr(builder.getIndexType(), i);
-          intAttrs.push_back(intAttr);
-        }
-      }
-      ArrayAttr axesAttr = builder.getArrayAttr(intAttrs);
-      redOp->setAttr(kReductionAxesStr, axesAttr);
-
-      // Determine reduction direction
-      ReduceDirection reduceDirection = ReduceDirection::UNKNOWN;
-
-      bool allEffectiveReduce = !redFlags.empty();
-      for (size_t i = 0; i < redFlags.size(); ++i) {
-        if (!(redFlags[i] || sizeOneFlags[i])) {
-          allEffectiveReduce = false;
-          break;
-        }
-      }
-      if (allEffectiveReduce) {
-        reduceDirection = ReduceDirection::ALL;
-      } else if (!redFlags.empty() && redFlags.back()) {
-        reduceDirection = ReduceDirection::X;
-      } else {
-        bool anyReduce = llvm::any_of(redFlags, [](bool v) { return v; });
-        if (anyReduce) {
-          reduceDirection = ReduceDirection::Y;
-        }
-      }
-
-      auto strAttr = builder.getStringAttr(reduceDirectionMap.at(reduceDirection));
-      redOp->setAttr(kReductionTypeStr, strAttr);
-      GpuScheduleTool::getInstance().setReduceDirection((size_t)reduceDirection);
+      updateSingleReductionOpAttrs(redOp, builder);
     }
   });
 }
-
 
 std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::affine::createAffineReductionAnnotationPass() {
   return std::make_unique<AffineReductionAnnotation>();
