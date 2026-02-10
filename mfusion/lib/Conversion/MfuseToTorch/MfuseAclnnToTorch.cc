@@ -70,7 +70,9 @@ class ConvertMfuseAclnnAdd : public mlir::OpConversionPattern<mlir::mfuse::Aclnn
     }
 
     mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
-    if (!resultType) return mlir::failure();
+    if (!resultType) {
+      return mlir::failure();
+    }
     rewriter.replaceOpWithNewOp<TorchD::AtenAddTensorOp>(op, resultType, x, y, alphaScalar);
     return mlir::success();
   }

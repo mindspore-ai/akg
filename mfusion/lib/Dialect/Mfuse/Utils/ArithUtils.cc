@@ -24,9 +24,8 @@
 namespace mlir {
 namespace mfuse {
 
-namespace {
-// Check if tensor shape is empty (rank-0) or all dimensions are 1
-bool isScalarOrSingleElement(RankedTensorType tensorType) {
+// Check if tensor shape is empty (rank-0) or all dimensions are 1 (internal to this TU).
+static bool isScalarOrSingleElement(RankedTensorType tensorType) {
   if (!tensorType) {
     return false;
   }
@@ -45,6 +44,7 @@ bool isScalarOrSingleElement(RankedTensorType tensorType) {
   return true;
 }
 
+namespace {
 bool extractConstF64(Value v, double &outVal) {
   auto constOp = v.getDefiningOp<arith::ConstantOp>();
   if (!constOp) {
@@ -70,20 +70,19 @@ bool extractConstF64(Value v, double &outVal) {
   }
   return false;
 }
+}  // namespace
 
-bool IsSingleElementInt(Value v, int64_t x) {
+bool isSingleElementInt(Value v, int64_t x) {
   auto constOp = v.getDefiningOp<arith::ConstantOp>();
   if (!constOp) {
     return false;
   }
 
-  auto attr = constOp.getValue();
-  auto denseAttr = dyn_cast<DenseElementsAttr>(attr);
+  // Check if it's a scalar (rank-0 tensor) or all dimensions are 1
+  auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue());
   if (!denseAttr) {
     return false;
   }
-
-  // Check if it's a scalar (rank-0 tensor) or all dimensions are 1
   auto tensorType = dyn_cast<RankedTensorType>(v.getType());
   if (!tensorType || !isScalarOrSingleElement(tensorType)) {
     return false;
@@ -93,15 +92,11 @@ bool IsSingleElementInt(Value v, int64_t x) {
   if (!denseAttr.isSplat()) {
     return false;
   }
-
-  auto elementType = denseAttr.getElementType();
-  if (isa<IntegerType>(elementType)) {
-    auto intVal = denseAttr.getSplatValue<APInt>();
-    return intVal.getSExtValue() == x;
+  if (!isa<IntegerType>(denseAttr.getElementType())) {
+    return false;
   }
-  return false;
+  return denseAttr.getSplatValue<APInt>().getSExtValue() == x;
 }
-}  // namespace
 
 bool isSingleElementFloat(Value v, double x, double tolerance) {
   auto constOp = v.getDefiningOp<arith::ConstantOp>();
