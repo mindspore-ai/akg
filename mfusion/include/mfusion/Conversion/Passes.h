@@ -35,14 +35,14 @@ class Pass;
 // Pass creators
 //===----------------------------------------------------------------------===//
 
-/// Create a pass to convert Torch operations to Muse dialect operations.
-std::unique_ptr<Pass> createConvertTorchToMusePass();
+/// Create a pass to convert Torch operations to Mfuse dialect operations.
+std::unique_ptr<Pass> createConvertTorchToMfusePass();
 
-/// Attach symbolic shape attributes after Torch-to-Muse conversion.
-std::unique_ptr<Pass> createConvertTorchSymbolToMusePass();
+/// Attach symbolic shape attributes after Torch-to-Mfuse conversion.
+std::unique_ptr<Pass> createConvertTorchSymbolToMfusePass();
 
-/// Create a pass to convert Muse operations to Torch dialect operations.
-std::unique_ptr<Pass> createConvertMuseToTorchPass();
+/// Create a pass to convert Mfuse operations to Torch dialect operations.
+std::unique_ptr<Pass> createConvertMfuseToTorchPass();
 
 //===----------------------------------------------------------------------===//
 // Registration

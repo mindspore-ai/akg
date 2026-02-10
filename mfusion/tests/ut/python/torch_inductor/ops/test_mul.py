@@ -49,10 +49,10 @@ module {
 """
 
 def test_mul_dynamic_shape():
-    """Verify symbolic mul lowers to muse and roundtrips."""
+    """Verify symbolic mul lowers to mfuse and roundtrips."""
     result = fuse_and_optimize(MLIR_SYMBOLIC_MUL)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_has_op("torch.aten.mul.Tensor", count=1), checker.error
     assert checker.check_no_op("torch.bind_symbolic_shape"), checker.error
-    assert checker.check_no_op("muse.mul"), checker.error
+    assert checker.check_no_op("mfuse.mul"), checker.error
     assert checker.check_no_op("builtin.unrealized_conversion_cast"), checker.error

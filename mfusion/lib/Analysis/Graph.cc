@@ -62,7 +62,7 @@ std::unique_ptr<Graph> Graph::Build(Block *block, std::vector<Operation *> *ops,
 
   // Collect operations in order (already in topological order in MLIR block)
   for (Operation &op : block->getOperations()) {
-    // Skip terminator and non-Muse operations for clustering
+    // Skip terminator and non-Mfuse operations for clustering
     if (op.hasTrait<OpTrait::IsTerminator>()) {
       continue;
     }
