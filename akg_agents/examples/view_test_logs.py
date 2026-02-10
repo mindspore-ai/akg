@@ -65,7 +65,7 @@ def view_events(session_dir: Path, filter_round: int = None, filter_type: str = 
             ts = event.get("ts", "")
             etype = event.get("type", "?")
             rnd = event.get("round", "")
-            rnd_str = f"R{rnd:02d}" if isinstance(rnd, int) else ""
+            rnd_str = f"Round{rnd:02d}" if isinstance(rnd, int) else ""
             
             if etype == "init":
                 tools = event.get("tools", {})
@@ -101,7 +101,7 @@ def view_prompts(session_dir: Path, filter_round: int = None):
     
     files = sorted(prompts_dir.glob("*.txt"))
     if filter_round is not None:
-        prefix = f"R{filter_round:02d}_"
+        prefix = f"Round{filter_round:02d}_"
         files = [f for f in files if f.name.startswith(prefix)]
     
     for f in files:
@@ -116,21 +116,26 @@ def view_prompts(session_dir: Path, filter_round: int = None):
 
 
 def view_responses(session_dir: Path, filter_round: int = None):
-    """查看 response 文件"""
+    """查看 response 文件（支持 .json 和 .txt）"""
     resp_dir = session_dir / "responses"
     if not resp_dir.exists():
         print("未找到 responses 目录")
         return
     
-    files = sorted(resp_dir.glob("*.txt"))
+    # 同时搜索 .json 和 .txt
+    files = sorted(
+        list(resp_dir.glob("*.txt")) + list(resp_dir.glob("*.json")),
+        key=lambda f: f.stem
+    )
     if filter_round is not None:
-        prefix = f"R{filter_round:02d}_"
+        prefix = f"Round{filter_round:02d}_"
         files = [f for f in files if f.name.startswith(prefix)]
     
     for f in files:
         content = f.read_text(encoding="utf-8")
+        fmt_tag = "JSON" if f.suffix == ".json" else "TEXT"
         print(f"\n{'=' * 60}")
-        print(f"  Response: {f.name} ({len(content)} chars)")
+        print(f"  Response [{fmt_tag}]: {f.name} ({len(content)} chars)")
         print(f"{'=' * 60}")
         print(content[:5000])
         if len(content) > 5000:
@@ -147,7 +152,7 @@ def view_tool_calls(session_dir: Path, filter_round: int = None):
     
     files = sorted(tools_dir.glob("*.json"))
     if filter_round is not None:
-        prefix = f"R{filter_round:02d}_"
+        prefix = f"Round{filter_round:02d}_"
         files = [f for f in files if f.name.startswith(prefix)]
     
     for f in files:
@@ -211,7 +216,8 @@ def view_legacy_jsonl(log_file: Path, show_full: bool = False,
 
 def find_latest_session() -> Path:
     """查找最新的会话目录"""
-    log_dir = Path.home() / ".akg" / "logs"
+    base_dir = Path.home() / ".akg"
+    log_dir = base_dir / "logs"
     
     # 先尝试 latest 指针
     latest_file = log_dir / "latest_session.txt"
@@ -220,10 +226,20 @@ def find_latest_session() -> Path:
         if target.exists():
             return target
     
-    # 搜索最新的会话目录
+    # 搜索 conversations/{task_id}/logs/ 下的会话
+    conversations_dir = base_dir / "conversations"
+    if conversations_dir.exists():
+        session_logs = sorted(
+            [d for d in conversations_dir.rglob("logs/session.log")],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True
+        )
+        if session_logs:
+            return session_logs[0].parent
+    
+    # 兼容旧格式：搜索 logs/sessions/ 下的会话
     sessions_dir = log_dir / "sessions"
     if sessions_dir.exists():
-        # 按修改时间倒序查找
         session_dirs = sorted(
             [d for d in sessions_dir.rglob("session.log")],
             key=lambda p: p.stat().st_mtime,

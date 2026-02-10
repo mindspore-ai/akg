@@ -23,29 +23,41 @@ class SessionLogger:
     """
     结构化会话日志
     
-    目录结构:
-        ~/.akg/logs/sessions/YYYY-MM-DD/HH-MM-SS/
-        ├── session.log           ← 人类可读时间线
-        ├── events.jsonl          ← 紧凑元数据索引（大文本用文件引用）
-        ├── prompts/              ← LLM 完整 prompt
-        │   ├── R01_001.txt
-        │   └── R02_001.txt
-        ├── responses/            ← LLM 完整响应
-        │   ├── R01_001.txt
-        │   └── R02_001.txt
-        └── tool_calls/           ← 工具调用详情（pretty-printed JSON）
-            ├── R01_001.json
-            └── R01_002.json
+    目录结构（位于 conversation 目录下）:
+        ~/.akg/conversations/{task_id}/logs/
+        ├── session.log                          ← 人类可读时间线
+        ├── events.jsonl                         ← 紧凑元数据索引（大文本用文件引用）
+        ├── prompts/                             ← LLM 完整 prompt
+        │   ├── Round01_LLMCall001.txt
+        │   └── Round02_LLMCall001.txt
+        ├── responses/                           ← LLM 完整响应
+        │   ├── Round01_LLMCall001.txt
+        │   └── Round02_LLMCall001.txt
+        └── tool_calls/                          ← 工具调用详情（pretty-printed JSON）
+            ├── Round01_ToolCall001.json
+            └── Round01_ToolCall002.json
+    
+    命名规则:
+        Round{NN}       - 第 NN 轮用户交互
+        LLMCall{NNN}    - 该轮内第 NNN 次 LLM 调用
+        ToolCall{NNN}   - 该轮内第 NNN 次工具调用
     """
     
-    def __init__(self):
+    def __init__(self, task_id: str = "", base_dir: str = ""):
         self._ts = datetime.now()
-        self._log_dir = Path.home() / ".akg" / "logs"
-        self._session_dir = (
-            self._log_dir / "sessions"
-            / self._ts.strftime("%Y-%m-%d")
-            / self._ts.strftime("%H-%M-%S")
-        )
+        self._task_id = task_id
+        self._base_dir = Path(base_dir) if base_dir else Path.home() / ".akg"
+        
+        # 日志放在 conversation 目录下: {base_dir}/conversations/{task_id}/logs/
+        if task_id:
+            self._session_dir = self._base_dir / "conversations" / task_id / "logs"
+        else:
+            # 尚未获知 task_id 时，使用临时目录（init 后会迁移）
+            self._session_dir = (
+                self._base_dir / "logs" / "sessions"
+                / self._ts.strftime("%Y-%m-%d")
+                / self._ts.strftime("%H-%M-%S")
+            )
         
         # 创建子目录
         for sub in ("prompts", "responses", "tool_calls"):
@@ -61,9 +73,61 @@ class SessionLogger:
         
         # 写入 latest 指针
         try:
-            (self._log_dir / "latest_session.txt").write_text(
-                str(self._session_dir), encoding="utf-8"
-            )
+            latest_file = self._base_dir / "logs" / "latest_session.txt"
+            latest_file.parent.mkdir(parents=True, exist_ok=True)
+            latest_file.write_text(str(self._session_dir), encoding="utf-8")
+        except Exception:
+            pass
+    
+    def bind_task(self, task_id: str, base_dir: str = ""):
+        """
+        绑定 task_id（在 agent 创建后调用，将日志迁移到 conversation 目录）
+        
+        如果初始化时未传 task_id，调用此方法后日志目录会切换到:
+            {base_dir}/conversations/{task_id}/logs/
+        """
+        if self._task_id == task_id:
+            return  # 已经绑定
+        
+        old_dir = self._session_dir
+        self._task_id = task_id
+        if base_dir:
+            self._base_dir = Path(base_dir)
+        
+        self._session_dir = self._base_dir / "conversations" / task_id / "logs"
+        
+        # 创建新目录
+        for sub in ("prompts", "responses", "tool_calls"):
+            (self._session_dir / sub).mkdir(parents=True, exist_ok=True)
+        
+        # 迁移旧文件（如果有）
+        if old_dir.exists() and old_dir != self._session_dir:
+            import shutil
+            for item in old_dir.iterdir():
+                dest = self._session_dir / item.name
+                if item.is_dir():
+                    if dest.exists():
+                        for f in item.iterdir():
+                            shutil.move(str(f), str(dest / f.name))
+                    else:
+                        shutil.move(str(item), str(dest))
+                else:
+                    shutil.move(str(item), str(dest))
+            # 清理旧空目录
+            try:
+                old_dir.rmdir()
+            except Exception:
+                pass
+        
+        # 更新文件句柄
+        self._session_log = self._session_dir / "session.log"
+        self._events_jsonl = self._session_dir / "events.jsonl"
+        
+        # 更新 latest 指针
+        try:
+            latest_file = self._base_dir / "logs" / "latest_session.txt"
+            latest_file.parent.mkdir(parents=True, exist_ok=True)
+            latest_file.write_text(str(self._session_dir), encoding="utf-8")
         except Exception:
             pass
     
@@ -74,14 +138,16 @@ class SessionLogger:
     # ---------- 内部方法 ----------
     
     def _next_llm_id(self, round_num: int) -> str:
+        """生成 LLM 调用 ID，如 Round01_LLMCall001"""
         cnt = self._llm_call_counter.get(round_num, 0) + 1
         self._llm_call_counter[round_num] = cnt
-        return f"R{round_num:02d}_{cnt:03d}"
+        return f"Round{round_num:02d}_LLMCall{cnt:03d}"
     
     def _next_tool_id(self, round_num: int) -> str:
+        """生成工具调用 ID，如 Round01_ToolCall001"""
         cnt = self._tool_call_counter.get(round_num, 0) + 1
         self._tool_call_counter[round_num] = cnt
-        return f"R{round_num:02d}_{cnt:03d}"
+        return f"Round{round_num:02d}_ToolCall{cnt:03d}"
     
     def _append_log(self, line: str):
         """追加一行到 session.log"""
@@ -172,22 +238,35 @@ class SessionLogger:
         return call_id
     
     def log_llm_response(self, round_num: int, call_id: str, response: str):
-        """记录 LLM 响应（响应保存到独立文件）"""
-        resp_file = self._save_text("responses", call_id, ".txt", response)
+        """记录 LLM 响应
         
-        # 提取摘要：尝试解析 JSON 获取 tool_name
+        如果响应内容是 JSON（可能包裹在 ```json ... ``` 中），
+        则提取并格式化为 .json 文件；否则保存为 .txt。
+        """
+        # 尝试提取 JSON 内容并格式化保存
         tool_hint = ""
+        parsed_json = None
+        
         try:
-            # 尝试从响应中提取 tool_name
             from akg_agents.core_v2.agents.plan import PlanAgent
             json_str = PlanAgent._extract_nested_json(response)
             if json_str:
-                parsed = json.loads(json_str)
-                tn = parsed.get("tool_name", "")
+                parsed_json = json.loads(json_str)
+                tn = parsed_json.get("tool_name", "")
                 if tn:
                     tool_hint = f"\n           决策: {tn}"
         except Exception:
             pass
+        
+        if parsed_json is not None:
+            # 内容是 JSON → 保存为格式化的 .json
+            resp_file = self._save_text(
+                "responses", call_id, ".json",
+                json.dumps(parsed_json, indent=2, ensure_ascii=False)
+            )
+        else:
+            # 非 JSON → 保存为 .txt
+            resp_file = self._save_text("responses", call_id, ".txt", response)
         
         self._append_log(
             f"[{self._ts_str()}] <- LLM 响应 ({len(response)} chars)"
@@ -287,6 +366,7 @@ class SessionLogger:
 
 
 # ==================== 全局日志实例 ====================
+# task_id 在 agent 创建后通过 bind_task() 绑定
 session_logger = SessionLogger()
 
 _current_round = 0
@@ -414,6 +494,9 @@ async def test_kernel_agent():
     try:
         import time
         task_id = f"test_{int(time.time())}"
+        
+        # 将日志绑定到 conversation 目录
+        session_logger.bind_task(task_id)
         
         print(f"[初始化] 创建 KernelAgent...")
         print(f"  任务ID:   {task_id}")

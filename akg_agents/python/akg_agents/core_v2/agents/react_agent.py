@@ -104,7 +104,7 @@ class ReActAgent(AgentBase, ABC):
         self.plan_list: List[Dict] = []
         self._initialized = False
         self._original_user_input: Optional[str] = None
-        self._last_prompt: str = ""  # 最近一次 LLM 调用的完整 prompt（用于保存到节点目录）
+        self._last_prompt: str = ""  # 最近一次 LLM 完整 prompt（供外部 logging wrapper 使用）
         
         # 加载可用工具
         self.available_tools = self._load_available_tools()
@@ -387,9 +387,6 @@ class ReActAgent(AgentBase, ABC):
         
         logger.info(f"[Execute] 节点 {new_node_id}, cur_path: {cur_path}")
         
-        # ====== 2.5 保存 LLM prompt 到节点目录（用于调试和审计） ======
-        self._save_node_prompt(cur_path)
-        
         # ====== 3. 同步硬件配置 ======
         # 如果 LLM 在 arguments 中指定了硬件参数，更新 agent_context
         # 以确保后续工具调用使用最新配置
@@ -486,25 +483,6 @@ class ReActAgent(AgentBase, ABC):
                         (log_dir / filename).write_text(content, encoding="utf-8")
                     except Exception as e:
                         logger.warning(f"[Result] 保存 {filename} 失败: {e}")
-    
-    def _save_node_prompt(self, cur_path: str):
-        """
-        保存 LLM 的完整 prompt 到节点目录
-        
-        便于调试和审计每一步 LLM 的输入。
-        
-        Args:
-            cur_path: 节点目录路径
-        """
-        if not self._last_prompt:
-            return
-        
-        try:
-            prompt_file = Path(cur_path) / "prompt.txt"
-            prompt_file.write_text(self._last_prompt, encoding="utf-8")
-            logger.debug(f"[Prompt] 已保存: {prompt_file}")
-        except Exception as e:
-            logger.warning(f"[Prompt] 保存 prompt.txt 失败: {e}")
     
     # ==================== LLM 调用 ====================
     

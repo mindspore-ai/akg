@@ -16,7 +16,6 @@ import inspect
 import io
 import logging
 import sys
-from contextlib import contextmanager
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import yaml
@@ -26,82 +25,89 @@ from akg_agents.core_v2.tools.arg_resolver import resolve_arguments
 logger = logging.getLogger(__name__)
 
 
-class _OutputCapture:
-    """工具执行期间捕获 stdout/stderr 和 logging 输出
+class _ErrorCapture:
+    """工具执行期间只捕获关键报错信息（WARNING+ 级别日志 + stderr）
     
-    使用方式:
-        with _OutputCapture() as cap:
-            do_something()
-        print(cap.stdout)   # 捕获的 stdout
-        print(cap.stderr)   # 捕获的 stderr
-        print(cap.logs)     # 捕获的 logging 记录
+    设计原则:
+    - 只捕获 WARNING/ERROR/CRITICAL 级别的日志，不捕获 DEBUG/INFO
+    - 只捕获 stderr（不捕获 stdout，stdout 通常是正常输出，太多噪音）
+    - 截断到 max_chars 防止污染上下文
+    - 完整日志保存到 cur_path 供事后调试，result 中只注入精简摘要
     """
     
-    def __init__(self, capture_log_level: int = logging.DEBUG):
-        self.capture_log_level = capture_log_level
-        self._stdout_buf = io.StringIO()
+    MAX_CHARS = 800  # 注入到 result 的最大字符数
+    
+    def __init__(self):
         self._stderr_buf = io.StringIO()
-        self._log_records: List[logging.LogRecord] = []
+        self._error_records: List[logging.LogRecord] = []
         self._log_handler: Optional[logging.Handler] = None
-        self._old_stdout = None
         self._old_stderr = None
     
     def __enter__(self):
-        # 捕获 stdout/stderr（使用 tee 模式，同时写入原始流和缓冲区）
-        self._old_stdout = sys.stdout
+        # 只捕获 stderr（tee 模式，不影响原始输出）
         self._old_stderr = sys.stderr
-        sys.stdout = _TeeStream(self._old_stdout, self._stdout_buf)
         sys.stderr = _TeeStream(self._old_stderr, self._stderr_buf)
         
-        # 捕获 logging（挂到 root logger 上）
-        self._log_handler = _ListHandler(self._log_records, self.capture_log_level)
+        # 只捕获 WARNING+ 级别的日志
+        self._log_handler = _ListHandler(self._error_records, logging.WARNING)
         logging.getLogger().addHandler(self._log_handler)
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # 恢复 stdout/stderr
-        sys.stdout = self._old_stdout
         sys.stderr = self._old_stderr
-        
-        # 移除 logging handler
         if self._log_handler:
             logging.getLogger().removeHandler(self._log_handler)
         return False
-    
-    @property
-    def stdout(self) -> str:
-        return self._stdout_buf.getvalue()
     
     @property
     def stderr(self) -> str:
         return self._stderr_buf.getvalue()
     
     @property
-    def logs(self) -> str:
-        """格式化的 logging 输出"""
-        formatter = logging.Formatter('%(levelname)s %(name)s: %(message)s')
+    def error_summary(self) -> str:
+        """只包含 WARNING+ 的精简日志摘要"""
+        formatter = logging.Formatter('%(levelname)s: %(message)s')
         lines = []
-        for record in self._log_records:
+        for record in self._error_records:
             lines.append(formatter.format(record))
         return "\n".join(lines)
     
     @property
-    def log_records(self) -> List[logging.LogRecord]:
-        return list(self._log_records)
+    def has_errors(self) -> bool:
+        return bool(self._error_records) or bool(self.stderr.strip())
     
-    def to_dict(self) -> Dict[str, str]:
-        """返回捕获结果字典"""
-        result = {}
-        stdout = self.stdout.strip()
+    def get_concise_errors(self) -> str:
+        """获取精简的错误信息（用于注入 result，有截断）"""
+        parts = []
         stderr = self.stderr.strip()
-        logs = self.logs.strip()
-        if stdout:
-            result["captured_stdout"] = stdout
+        errors = self.error_summary.strip()
+        if errors:
+            parts.append(errors)
         if stderr:
-            result["captured_stderr"] = stderr
-        if logs:
-            result["captured_logs"] = logs
-        return result
+            parts.append(f"[stderr] {stderr}")
+        
+        combined = "\n".join(parts)
+        if len(combined) > self.MAX_CHARS:
+            combined = combined[:self.MAX_CHARS] + f"\n... (truncated, total {len(combined)} chars)"
+        return combined
+    
+    def save_full_log(self, cur_path: str):
+        """保存完整捕获内容到 cur_path/captured_errors.log（供事后调试）"""
+        if not cur_path or not self.has_errors:
+            return
+        try:
+            log_file = Path(cur_path) / "captured_errors.log"
+            with open(log_file, "w", encoding="utf-8") as f:
+                stderr = self.stderr.strip()
+                errors = self.error_summary.strip()
+                if errors:
+                    f.write("=== WARNING/ERROR Logs ===\n")
+                    f.write(errors + "\n\n")
+                if stderr:
+                    f.write("=== Stderr ===\n")
+                    f.write(stderr + "\n")
+        except Exception:
+            pass
 
 
 class _TeeStream:
@@ -126,7 +132,7 @@ class _TeeStream:
 class _ListHandler(logging.Handler):
     """将 LogRecord 收集到列表中的 Handler"""
     
-    def __init__(self, record_list: list, level: int = logging.DEBUG):
+    def __init__(self, record_list: list, level: int = logging.WARNING):
         super().__init__(level)
         self._records = record_list
     
@@ -191,15 +197,14 @@ class ToolExecutor:
         流程:
         1. 解析参数中的动态表达式 (read_json_file 等)
         2. 根据工具类型分派执行
-        3. 捕获执行期间的 stdout/stderr/logging 输出，附加到结果中
+        3. 只捕获关键报错（WARNING+ 日志 + stderr），避免污染上下文
         
         Args:
             tool_name: 工具名称
             arguments: 工具参数（可能包含 read_json_file 表达式）
         
         Returns:
-            标准结果字典 {"status", "output", "error_information",
-                          "captured_stdout", "captured_stderr", "captured_logs", ...}
+            标准结果字典 {"status", "output", "error_information", ...}
         """
         # 解析参数中的动态表达式
         try:
@@ -208,33 +213,38 @@ class ToolExecutor:
             logger.warning(f"[ToolExecutor] 参数表达式解析失败: {e}，使用原始参数")
             resolved_args = arguments
         
-        # 带输出捕获执行
-        with _OutputCapture() as capture:
-            # 优先检查是否是注册的 Agent
+        # 带错误捕获执行（只捕获 WARNING+ 和 stderr）
+        with _ErrorCapture() as capture:
+        # 优先检查是否是注册的 Agent
             if tool_name in self.agent_registry:
                 result = await self._execute_agent(tool_name, resolved_args)
-            # 检查是否是注册的 Workflow
+        # 检查是否是注册的 Workflow
             elif tool_name in self.workflow_registry:
                 result = await self._execute_workflow(tool_name, resolved_args)
             else:
-                # 检查工具类型
+        # 检查工具类型
                 tool_type = self.tool_types.get(tool_name, "basic_tool")
                 if tool_type == "domain_tool":
                     result = await self._execute_domain_tool(tool_name, resolved_args)
                 else:
                     result = await self._execute_basic_tool(tool_name, resolved_args)
         
-        # 将捕获的输出注入到结果中
-        if isinstance(result, dict):
-            captured = capture.to_dict()
-            for key, value in captured.items():
-                # 不覆盖工具自身已有的字段
-                result.setdefault(key, value)
-            
-            # 如果工具失败且 error_information 为空，尝试从 captured_stderr 补充
-            if result.get("status") in ("error", "fail"):
-                if not result.get("error_information") and captured.get("captured_stderr"):
-                    result["error_information"] = captured["captured_stderr"]
+        # 保存完整错误日志到 cur_path（供事后调试，不注入 result）
+        cur_path = resolved_args.get("cur_path", "")
+        capture.save_full_log(cur_path)
+        
+        # 只在工具失败时，注入精简的错误信息到 result
+        if isinstance(result, dict) and result.get("status") in ("error", "fail"):
+            if capture.has_errors:
+                concise = capture.get_concise_errors()
+                # 如果工具自身没有提供 error_information，用捕获的错误补充
+                if not result.get("error_information"):
+                    result["error_information"] = concise
+                else:
+                    # 追加到已有的错误信息后面（但有长度限制）
+                    existing = result["error_information"]
+                    if len(existing) < 500:
+                        result["error_information"] = f"{existing}\n---\n{concise}"
         
         return result
     
@@ -408,11 +418,11 @@ class ToolExecutor:
                             "output": result.get("arguments", {}),
                             "error_information": ""
                         }
-                    return {
-                        "status": "fail",
-                        "output": "",
-                        "error_information": plan_result.get("desc", "规划失败")
-                    }
+                        return {
+                            "status": "fail",
+                            "output": "",
+                            "error_information": plan_result.get("desc", "规划失败")
+                        }
                 return {"status": "error", "output": "", "error_information": "返回格式错误"}
             
             # 普通 dict（没有 status 也没有 result）
