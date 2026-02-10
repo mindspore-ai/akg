@@ -215,14 +215,14 @@ class ToolExecutor:
         
         # 带错误捕获执行（只捕获 WARNING+ 和 stderr）
         with _ErrorCapture() as capture:
-        # 优先检查是否是注册的 Agent
+            # 优先检查是否是注册的 Agent
             if tool_name in self.agent_registry:
                 result = await self._execute_agent(tool_name, resolved_args)
-        # 检查是否是注册的 Workflow
+            # 检查是否是注册的 Workflow
             elif tool_name in self.workflow_registry:
                 result = await self._execute_workflow(tool_name, resolved_args)
             else:
-        # 检查工具类型
+                # 检查工具类型
                 tool_type = self.tool_types.get(tool_name, "basic_tool")
                 if tool_type == "domain_tool":
                     result = await self._execute_domain_tool(tool_name, resolved_args)
@@ -418,6 +418,7 @@ class ToolExecutor:
                             "output": result.get("arguments", {}),
                             "error_information": ""
                         }
+                    else:
                         return {
                             "status": "fail",
                             "output": "",
