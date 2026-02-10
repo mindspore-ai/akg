@@ -947,3 +947,4 @@ class FileSystemState:
                 
         logger.info(f"Generated diff between {node_a} and {node_b} to {output_path} ({len(processed_files)} files modified)")
         return output_path
+

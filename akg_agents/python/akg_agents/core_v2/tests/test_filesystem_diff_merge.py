@@ -130,3 +130,120 @@ def test_merge_with_conflict(temp_dir):
     result = trace.get_node(merge_node).result
     assert result["status"] == "conflict"
     assert "main.py" in result["conflicts"]
+
+
+def test_merge_auto_merge_different_regions(temp_dir):
+    """
+    核心新能力: 双方修改不同区域时，merge3 能自动合并，无冲突
+
+    base:
+        line 1
+        line 2
+        line 3
+        line 4
+
+    branch A: 修改 line 1
+    branch B: 修改 line 4
+
+    结果: 自动合并两个修改，无冲突
+    """
+    trace = TraceSystem("test_auto_merge", base_dir=str(temp_dir))
+    trace.initialize()
+
+    base_content = "line 1\nline 2\nline 3\nline 4\n"
+    trace.fs.save_code_file("root", "main.py", base_content)
+
+    # branch A: 修改 line 1
+    n1 = trace.add_node({"type": "modify_top"}, {"res": "ok"})
+    trace.fs.save_code_file(n1, "main.py", "line 1 MODIFIED BY A\nline 2\nline 3\nline 4\n")
+
+    # branch B: 修改 line 4 (fork from root)
+    trace.switch_node("root")
+    n2 = trace.add_node({"type": "modify_bottom"}, {"res": "ok"})
+    trace.fs.save_code_file(n2, "main.py", "line 1\nline 2\nline 3\nline 4 MODIFIED BY B\n")
+
+    # Merge
+    merge_node = trace.merge_nodes(n2, n1)
+    content = trace.fs.load_code_file(merge_node, "main.py")
+
+    # 两个修改都应该保留，无冲突标记
+    assert "line 1 MODIFIED BY A" in content
+    assert "line 4 MODIFIED BY B" in content
+    assert "<<<<<<< YOURS" not in content
+
+    # 状态应该是 completed，不是 conflict
+    result = trace.get_node(merge_node).result
+    assert result["status"] == "completed"
+
+
+def test_merge_partial_conflict(temp_dir):
+    """
+    双方修改同一行导致冲突，但其他区域的修改应自动合并
+
+    base:
+        header
+        shared line
+        footer
+
+    branch A: 修改 header, 修改 shared line
+    branch B: 修改 shared line (不同), 修改 footer
+
+    结果: header/footer 自动合并, shared line 冲突
+    """
+    trace = TraceSystem("test_partial_conflict", base_dir=str(temp_dir))
+    trace.initialize()
+
+    base_content = "header\nshared line\nfooter\n"
+    trace.fs.save_code_file("root", "main.py", base_content)
+
+    # branch A
+    n1 = trace.add_node({"type": "a"}, {"res": "a"})
+    trace.fs.save_code_file(n1, "main.py", "header A\nshared A\nfooter\n")
+
+    # branch B
+    trace.switch_node("root")
+    n2 = trace.add_node({"type": "b"}, {"res": "b"})
+    trace.fs.save_code_file(n2, "main.py", "header\nshared B\nfooter B\n")
+
+    merge_node = trace.merge_nodes(n2, n1)
+    content = trace.fs.load_code_file(merge_node, "main.py")
+
+    # shared line 应该有冲突标记
+    assert "<<<<<<< YOURS" in content
+    assert "=======" in content
+    assert ">>>>>>> THEIRS" in content
+
+    result = trace.get_node(merge_node).result
+    assert result["status"] == "conflict"
+
+
+def test_merge_add_lines_no_conflict(temp_dir):
+    """
+    双方各自在不同位置新增行
+
+    base:  line 1 / line 2
+    A:     NEW A / line 1 / line 2
+    B:     line 1 / line 2 / NEW B
+
+    结果: 自动合并
+    """
+    trace = TraceSystem("test_add_lines", base_dir=str(temp_dir))
+    trace.initialize()
+
+    trace.fs.save_code_file("root", "main.py", "line 1\nline 2\n")
+
+    n1 = trace.add_node({"type": "add_top"}, {"res": "ok"})
+    trace.fs.save_code_file(n1, "main.py", "NEW A\nline 1\nline 2\n")
+
+    trace.switch_node("root")
+    n2 = trace.add_node({"type": "add_bottom"}, {"res": "ok"})
+    trace.fs.save_code_file(n2, "main.py", "line 1\nline 2\nNEW B\n")
+
+    merge_node = trace.merge_nodes(n2, n1)
+    content = trace.fs.load_code_file(merge_node, "main.py")
+
+    assert "NEW A" in content
+    assert "NEW B" in content
+    assert "line 1" in content
+    assert "line 2" in content
+    assert "<<<<<<< YOURS" not in content

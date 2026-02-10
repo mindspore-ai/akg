@@ -1186,35 +1186,243 @@ class TraceSystem:
 
     def _three_way_merge(self, base: Optional[str], yours: Optional[str], theirs: Optional[str]) -> Tuple[str, bool]:
         """
-        核心三路合并算法
-        
+        核心三路合并算法 (无外部依赖版)
+
+        能力:
+        - 基于 difflib 实现，无需 merge3 库
+        - 双方修改不同区域 → 自动合并，无冲突
+        - 双方修改相同行 → 精确标记冲突区域
+        - 一方删除/另一方修改 → 标记冲突
+
         Returns: (合并后内容, 是否有冲突)
         """
         # 情况 1: 两人修改一致，或都没改
         if yours == theirs:
             return yours or "", False
-            
+
         # 情况 2: 只有一方改了（或者一方删了，另一方没动）
         if yours == base:
             return theirs or "", False
         if theirs == base:
             return yours or "", False
-            
-        # 情况 3: 双方都改了，且不一致 -> 冲突 (或尝试行级合并)
-        # 这里使用 difflib 尝试更细粒度的合并
-        if yours is not None and theirs is not None and base is not None:
-            # 简单的行级三路合并逻辑
+
+        # 情况 3: 双方都改了 — 使用行级合并
+        if base is not None and yours is not None and theirs is not None:
             return self._line_level_merge(base, yours, theirs)
-            
-        # 其他复杂冲突 (如：一方删了文件，另一方修改了文件)
+
+        # 情况 4: 一方删了文件，另一方修改了 → 冲突
         conflict_marker = f"<<<<<<< YOURS\n{yours or ''}\n=======\n{theirs or ''}\n>>>>>>> THEIRS\n"
         return conflict_marker, True
 
     def _line_level_merge(self, base: str, yours: str, theirs: str) -> Tuple[str, bool]:
-        """行级三路合并 (简化实现)"""
-        # 暂时使用冲突标记标记冲突，后期可以引入 merge3 类似算法
-        # 为了演示，我们先简单标记差异
-        if yours != theirs:
-             conflict_marker = f"<<<<<<< YOURS\n{yours}\n=======\n{theirs}\n>>>>>>> THEIRS\n"
-             return conflict_marker, True
-        return yours, False
+        """
+        行级三路合并 (基于 difflib 原生实现，无外部依赖)
+        
+        策略:
+        1. 计算 Base -> Yours 的差异 (hunks_a)
+        2. 计算 Base -> Theirs 的差异 (hunks_b)
+        3. 归并两组 hunks，按照在 Base 中的起始行排序
+        4. 检测重叠区域 -> 冲突；无重叠 -> 应用修改
+        """
+        lines_base = base.splitlines(True)
+        lines_a = yours.splitlines(True)
+        lines_b = theirs.splitlines(True)
+
+        matcher_a = difflib.SequenceMatcher(None, lines_base, lines_a)
+        matcher_b = difflib.SequenceMatcher(None, lines_base, lines_b)
+
+        # 获取差异块 (tag, i1, i2, j1, j2)
+        # i: base 索引, j: 修改后索引
+        # 我们只关心非 'equal' 的块
+        hunks_a = [op for op in matcher_a.get_opcodes() if op[0] != 'equal']
+        hunks_b = [op for op in matcher_b.get_opcodes() if op[0] != 'equal']
+
+        # 合并两组 chunks 并按 base 索引排序
+        # 结构: (i1, i2, 'A'/'B', op, lines_branch)
+        events = []
+        for op in hunks_a:
+            events.append({
+                'start': op[1], 'end': op[2], 
+                'source': 'A', 'op': op, 'lines': lines_a[op[3]:op[4]]
+            })
+        for op in hunks_b:
+            events.append({
+                'start': op[1], 'end': op[2], 
+                'source': 'B', 'op': op, 'lines': lines_b[op[3]:op[4]]
+            })
+        
+        # 按 base 的 start 排序
+        events.sort(key=lambda x: x['start'])
+
+        output_lines = []
+        base_idx = 0
+        has_conflict = False
+        
+        i = 0
+        while i < len(events):
+            evt = events[i]
+            
+            # 1. 先把 base 中未修改的部分补上 (从当前 base_idx 到 evt['start'])
+            # 注意：如果有重叠冲突，base_idx 可能已经超过了 evt['start']，这时不补
+            if base_idx < evt['start']:
+                output_lines.extend(lines_base[base_idx : evt['start']])
+                base_idx = evt['start']
+            
+            # 2. 检查 Op 是否与下一个 Op 冲突 (重叠)
+            # 冲突条件: 下一个事件的 start < 当前事件的 end
+            conflict_group = [evt]
+            max_end = evt['end']
+            
+            j = i + 1
+            while j < len(events):
+                next_evt = events[j]
+                if next_evt['start'] < max_end:
+                    # 发现重叠！加入冲突组
+                    conflict_group.append(next_evt)
+                    max_end = max(max_end, next_evt['end'])
+                    j += 1
+                else:
+                    break
+            
+            # 处理这一组
+            if len(conflict_group) == 1:
+                # 无冲突，直接应用修改
+                output_lines.extend(evt['lines'])
+                base_idx = max(base_idx, evt['end'])
+            else:
+                # 有冲突
+                has_conflict = True
+                # 注意：这里简化处理，直接把冲突组涉及的 base 区域标记为冲突
+                # 实际上 A 和 B 可能动了同一个 base 区域，但也可能只是部分重叠
+                
+                # 区分 A 和 B 的修改内容
+                # 简单粗暴：把冲突区域内的 A 的改动和 B 的改动分别提取
+                # 这里的逻辑比较复杂，为了简化，我们将所有涉及的 base 区域视为冲突区
+                # 并把 A 和 B 对应的 target 内容全部放进去（可能包含重复，但能保证不丢代码）
+                
+                # 更精细的做法是 merge3 的算法，这里我们做一个简化版：
+                # 既然冲突了，我们把 A 的修改作为 YOURS，B 的修改作为 THEIRS
+                # 但 A 和 B 可能对应 base 的不同子区域，直接拼接可能会乱
+                
+                # 妥协方案: 
+                # 对于冲突组，我们取出 A 所有的 hunk 内容拼在一起，B 所有 hunk 拼在一起
+                
+                content_a = []
+                content_b = []
+                for c in conflict_group:
+                    if c['source'] == 'A': content_a.extend(c['lines'])
+                    if c['source'] == 'B': content_b.extend(c['lines'])
+                
+                output_lines.append("<<<<<<< YOURS\n")
+                output_lines.extend(content_a)
+                output_lines.append("=======\n")
+                output_lines.extend(content_b)
+                output_lines.append(">>>>>>> THEIRS\n")
+                
+                base_idx = max(base_idx, max_end)
+            
+            i = j
+            
+        # 补上最后的 base
+        if base_idx < len(lines_base):
+            output_lines.extend(lines_base[base_idx:])
+            
+        return "".join(output_lines), has_conflict
+
+    def blame_file(self, node_id: str, filename: str) -> List[Dict[str, Any]]:
+        """
+        追踪单个文件在从 root 到指定节点路径上的演化历史
+
+        沿 parent 链遍历，比对相邻节点中同一文件的 checksum，
+        记录文件被创建、修改或删除的节点。
+
+        Args:
+            node_id: 目标节点 ID
+            filename: 文件名（相对于 code/ 目录，如 "main.py"）
+
+        Returns:
+            变更记录列表，每条包含:
+            - node_id: 发生变更的节点 ID
+            - action: 该节点执行的动作类型（如 "generate", "modify" 等）
+            - change_type: "created" | "modified" | "deleted"
+            - checksum: 变更后的文件 checksum（deleted 时为 None）
+
+        Raises:
+            NodeNotFoundError: node_id 不存在
+        """
+        path = self.get_path_to_node(node_id)
+        file_key = f"code/{filename}"
+        changes: List[Dict[str, Any]] = []
+        prev_checksum = None
+
+        for nid in path:
+            try:
+                state = self.fs.load_node_state(nid)
+            except Exception:
+                # 如果节点状态加载失败（损坏等），跳过
+                logger.warning(f"blame_file: 无法加载节点 {nid} 的状态，跳过")
+                continue
+
+            file_info = state.file_state.get(file_key)
+            cur_checksum = file_info.get("checksum") if file_info else None
+
+            if cur_checksum == prev_checksum:
+                # 文件未变化，跳过
+                continue
+
+            # 确定变更类型
+            if prev_checksum is None and cur_checksum is not None:
+                change_type = "created"
+            elif prev_checksum is not None and cur_checksum is None:
+                change_type = "deleted"
+            else:
+                change_type = "modified"
+
+            # 获取动作类型
+            try:
+                node = self.get_node(nid)
+                action_type = (
+                    node.action.get("type", "unknown") if node.action else "init"
+                )
+            except Exception:
+                action_type = "unknown"
+
+            changes.append({
+                "node_id": nid,
+                "action": action_type,
+                "change_type": change_type,
+                "checksum": cur_checksum,
+            })
+
+            prev_checksum = cur_checksum
+
+        return changes
+
+    def blame_all_files(self, node_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        追踪指定节点上所有文件的演化历史
+
+        Args:
+            node_id: 目标节点 ID
+
+        Returns:
+            {filename: [blame_records]} 的字典
+        """
+        # 收集路径上所有节点出现过的文件名
+        path = self.get_path_to_node(node_id)
+        all_filenames: set = set()
+        for nid in path:
+            try:
+                state = self.fs.load_node_state(nid)
+            except Exception:
+                continue
+            for key in state.file_state:
+                if key.startswith("code/"):
+                    all_filenames.add(key[len("code/"):])
+
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for filename in sorted(all_filenames):
+            records = self.blame_file(node_id, filename)
+            if records:
+                result[filename] = records
+        return result
