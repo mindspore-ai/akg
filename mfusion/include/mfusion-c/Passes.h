@@ -24,7 +24,7 @@
 extern "C" {
 #endif
 
-/// Register all MUSE passes.
+/// Register all MFUSE passes.
 MLIR_CAPI_EXPORTED void mlirRegisterMFusionPasses();
 
 #ifdef __cplusplus

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Setup script for MUSE MLIR Python package."""
+"""Setup script for MFUSE MLIR Python package."""
 
 import os
 import shutil

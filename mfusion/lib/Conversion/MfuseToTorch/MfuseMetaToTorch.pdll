@@ -1,0 +1,48 @@
+// ============================================================================
+// =   Please keep the patterns in alphabetical order by operator name   =
+// ============================================================================
+
+Pattern ConvertMfuseDiv {
+  let root = op<mfuse.div>(operands: ValueRange) -> (resType: Type);
+  replace root with op<torch.aten.div.Tensor>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertMfuseEq {
+  let root = op<mfuse.eq>(operands: ValueRange) -> (resType: Type);
+  replace root with op<torch.aten.eq.Tensor>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertMfuseGe {
+  let root = op<mfuse.ge>(operands: ValueRange) -> (resType: Type);
+  replace root with op<torch.aten.ge.Tensor>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertMfuseGt {
+  let root = op<mfuse.gt>(operands: ValueRange) -> (resType: Type);
+  replace root with op<torch.aten.gt.Tensor>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertMfuseLe {
+  let root = op<mfuse.le>(operands: ValueRange) -> (resType: Type);
+  replace root with op<torch.aten.le.Tensor>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertMfuseLt {
+  let root = op<mfuse.lt>(operands: ValueRange) -> (resType: Type);
+  replace root with op<torch.aten.lt.Tensor>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertMfuseMul {
+  let root = op<mfuse.mul>(operands: ValueRange) -> (resType: Type);
+  replace root with op<torch.aten.mul.Tensor>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertMfuseNe {
+  let root = op<mfuse.ne>(operands: ValueRange) -> (resType: Type);
+  replace root with op<torch.aten.ne.Tensor>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertMfusePow {
+  let root = op<mfuse.pow>(operands: ValueRange) -> (result: Type);
+  replace root with op<torch.aten.pow.Tensor_Tensor>(convertValues(operands)) -> (convertType(result));
+}

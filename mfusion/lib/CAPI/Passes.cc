@@ -16,11 +16,11 @@
 
 #include "mfusion-c/Passes.h"
 #include "mfusion/Conversion/Passes.h"
-#include "mfusion/Dialect/Muse/Transforms/Passes.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
 
 void mlirRegisterMFusionPasses() {
   // Register all conversion passes
   mlir::registerMFusionConversionPasses();
-  // Register all MUSE transforms passes
-  mlir::registerMuseTransformsPasses();
+  // Register all MFUSE transforms passes
+  mlir::registerMfuseTransformsPasses();
 }

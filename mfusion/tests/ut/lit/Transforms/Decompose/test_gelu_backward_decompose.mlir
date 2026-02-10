@@ -2,18 +2,18 @@
 
 func.func @gelu_backward_test(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>) -> tensor<4x4xf32> {
   // geluBackwardOp
-  %mode = muse.constant.string "tanh" : !muse.string
-  %0 = "muse.aclnn.gelu_backward"(%arg0, %arg1, %mode) : (tensor<4x4xf32>, tensor<4x4xf32>, !muse.string) -> tensor<4x4xf32>
+  %mode = mfuse.constant.string "tanh" : !mfuse.string
+  %0 = "mfuse.aclnn.gelu_backward"(%arg0, %arg1, %mode) : (tensor<4x4xf32>, tensor<4x4xf32>, !mfuse.string) -> tensor<4x4xf32>
   return %0 : tensor<4x4xf32>
-  // CHECK-NOT: muse.aclnn.gelu_backward
-  // CHECK: muse.mul
+  // CHECK-NOT: mfuse.aclnn.gelu_backward
+  // CHECK: mfuse.mul
 }
 
 
 func.func @gelu_backward_no_decompose_test(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>) -> tensor<4x4xf32> {
   // geluBackwardOp
-  %mode = muse.constant.string "none" : !muse.string
-  %0 = "muse.aclnn.gelu_backward"(%arg0, %arg1, %mode) : (tensor<4x4xf32>, tensor<4x4xf32>, !muse.string) -> tensor<4x4xf32>
+  %mode = mfuse.constant.string "none" : !mfuse.string
+  %0 = "mfuse.aclnn.gelu_backward"(%arg0, %arg1, %mode) : (tensor<4x4xf32>, tensor<4x4xf32>, !mfuse.string) -> tensor<4x4xf32>
   return %0 : tensor<4x4xf32>
-  // CHECK: muse.aclnn.gelu_backward
+  // CHECK: mfuse.aclnn.gelu_backward
 }
