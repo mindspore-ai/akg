@@ -89,7 +89,11 @@ class ToolExecutor:
             标准结果字典 {"status", "output", "error_information", ...}
         """
         # 解析参数中的动态表达式
-        resolved_args = resolve_arguments(arguments)
+        try:
+            resolved_args = resolve_arguments(arguments)
+        except Exception as e:
+            logger.warning(f"[ToolExecutor] 参数表达式解析失败: {e}，使用原始参数")
+            resolved_args = arguments
         
         # 优先检查是否是注册的 Agent
         if tool_name in self.agent_registry:
@@ -138,6 +142,13 @@ class ToolExecutor:
             
             # 创建 agent 实例
             agent = self._create_agent_instance(agent_class)
+            
+            # 验证 agent 有 run 方法
+            if not hasattr(agent, 'run') or not callable(getattr(agent, 'run', None)):
+                return {
+                    "status": "error", "output": "",
+                    "error_information": f"Agent {agent_class.__name__} 没有可调用的 run() 方法"
+                }
             
             # 调用 agent.run()（自动匹配参数签名）
             logger.info(f"[ToolExecutor] 执行 Agent: {tool_name} ({agent_class.__name__})")

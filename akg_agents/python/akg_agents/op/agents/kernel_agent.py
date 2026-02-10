@@ -170,6 +170,12 @@ class KernelAgent(ReActAgent):
         except Exception as e:
             logger.warning(f"[KernelAgent] 导入 op.agents 失败: {e}")
         
+        # 导入 task constructor agent
+        try:
+            from akg_agents.op.agents import task_constructor  # noqa: F401
+        except Exception as e:
+            logger.warning(f"[KernelAgent] 导入 task_constructor 失败: {e}")
+        
         agent_registry = {}
         all_agent_names = AgentRegistry.list_agents()
         logger.info(f"[KernelAgent] 发现 {len(all_agent_names)} 个已注册 agents")
