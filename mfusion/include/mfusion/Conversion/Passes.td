@@ -19,49 +19,49 @@
 
 include "mlir/Pass/PassBase.td"
 
-def ConvertTorchToMuse : Pass<"convert-torch-to-muse", "::mlir::ModuleOp"> {
-  let summary = "Convert Torch operations to Muse dialect operations";
+def ConvertTorchToMfuse : Pass<"convert-torch-to-mfuse", "::mlir::ModuleOp"> {
+  let summary = "Convert Torch operations to Mfuse dialect operations";
 
   let description = [{
-    This pass converts Torch dialect operations to the Muse dialect.
+    This pass converts Torch dialect operations to the Mfuse dialect.
   }];
 
-  let constructor = "mlir::createConvertTorchToMusePass()";
+  let constructor = "mlir::createConvertTorchToMfusePass()";
 
   let dependentDialects = [
     "::mlir::torch::TorchDialect",
-    "::mlir::muse::MuseDialect"
+    "::mlir::mfuse::MfuseDialect"
   ];
 }
 
-def ConvertTorchSymbolToMuse : Pass<"convert-torch-symbol-to-muse", "::mlir::ModuleOp"> {
-  let summary = "Attach symbolic shape attributes after Torch-to-Muse conversion";
+def ConvertTorchSymbolToMfuse : Pass<"convert-torch-symbol-to-mfuse", "::mlir::ModuleOp"> {
+  let summary = "Attach symbolic shape attributes after Torch-to-Mfuse conversion";
 
   let description = [{
     This pass consumes torch.bind_symbolic_shape ops and attaches symbolic shape
-    attributes to ranked tensor types produced by Torch-to-Muse conversion.
+    attributes to ranked tensor types produced by Torch-to-Mfuse conversion.
   }];
 
-  let constructor = "mlir::createConvertTorchSymbolToMusePass()";
+  let constructor = "mlir::createConvertTorchSymbolToMfusePass()";
 
   let dependentDialects = [
     "::mlir::torch::TorchDialect",
-    "::mlir::muse::MuseDialect"
+    "::mlir::mfuse::MfuseDialect"
   ];
 }
 
-def ConvertMuseToTorch : Pass<"convert-muse-to-torch", "::mlir::ModuleOp"> {
-  let summary = "Convert Muse operations to Torch dialect operations";
+def ConvertMfuseToTorch : Pass<"convert-mfuse-to-torch", "::mlir::ModuleOp"> {
+  let summary = "Convert Mfuse operations to Torch dialect operations";
 
   let description = [{
-    This pass converts Muse dialect operations to the Torch dialect.
+    This pass converts Mfuse dialect operations to the Torch dialect.
   }];
 
-  let constructor = "mlir::createConvertMuseToTorchPass()";
+  let constructor = "mlir::createConvertMfuseToTorchPass()";
 
   let dependentDialects = [
     "::mlir::torch::TorchDialect",
-    "::mlir::muse::MuseDialect"
+    "::mlir::mfuse::MfuseDialect"
   ];
 }
 

@@ -2,8 +2,8 @@
 
 func.func @gelu_test(%arg0: tensor<4x4xf32>) -> tensor<4x4xf32> {
   // geluOp
-  %0 = "muse.aclnn.gelu"(%arg0) : (tensor<4x4xf32>) -> tensor<4x4xf32>
+  %0 = "mfuse.aclnn.gelu"(%arg0) : (tensor<4x4xf32>) -> tensor<4x4xf32>
   return %0 : tensor<4x4xf32>
-  // CHECK-NOT: muse.aclnn.gelu
-  // CHECK: muse.exp
+  // CHECK-NOT: mfuse.aclnn.gelu
+  // CHECK: mfuse.exp
 }

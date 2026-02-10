@@ -8,15 +8,15 @@ add_mlir_public_c_api_library(MFusionCAPI
 
   DEPENDS
   MFusionConversionPassIncGen
-  MLIRMuseTransformsPassIncGen
+  MLIRMfuseTransformsPassIncGen
 
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRSupport
-  MLIRMuseDialect
-  MFusionConversionTorchToMuse
-  MFusionConversionMuseToTorch
-  MLIRMuseTransforms
+  MLIRMfuseDialect
+  MFusionConversionTorchToMfuse
+  MFusionConversionMfuseToTorch
+  MLIRMfuseTransforms
 )
 
 # Add include directories

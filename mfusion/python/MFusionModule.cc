@@ -31,23 +31,23 @@ PYBIND11_MODULE(_mfusion, m) {
   m.doc() = "mfusion python bindings";
 
   m.def(
-    "register_muse_dialect",
+    "register_mfuse_dialect",
     [](MlirContext context, bool load) {
-      MlirDialectHandle handle = mlirGetDialectHandle__muse__();
+      MlirDialectHandle handle = mlirGetDialectHandle__mfuse__();
       mlirDialectHandleRegisterDialect(handle, context);
       if (load) {
         mlirDialectHandleLoadDialect(handle, context);
       }
     },
-    py::arg("context"), py::arg("load") = true, "Register MUSE dialect");
+    py::arg("context"), py::arg("load") = true, "Register MFUSE dialect");
 
-  // Bind Muse::DeviceAttr through CAPI
+  // Bind Mfuse::DeviceAttr through CAPI
   auto deviceAttrClass =
-    mlir_attribute_subclass(m, "DeviceAttr", mlirAttributeIsAMuseDeviceAttr, mlirMuseDeviceAttrGetTypeID)
+    mlir_attribute_subclass(m, "DeviceAttr", mlirAttributeIsAMfuseDeviceAttr, mlirMfuseDeviceAttrGetTypeID)
       .def_property_readonly(
         "device_type",
         [](MlirAttribute self) -> std::string {
-          MlirAttribute typeAttr = mlirMuseDeviceAttrGetDeviceType(self);
+          MlirAttribute typeAttr = mlirMfuseDeviceAttrGetDeviceType(self);
           MlirStringRef typeStr = mlirStringAttrGetValue(typeAttr);
           return std::string(typeStr.data, typeStr.length);
         },
@@ -55,7 +55,7 @@ PYBIND11_MODULE(_mfusion, m) {
       .def_property_readonly(
         "index",
         [](MlirAttribute self) -> int64_t {
-          MlirAttribute indexAttr = mlirMuseDeviceAttrGetIndex(self);
+          MlirAttribute indexAttr = mlirMfuseDeviceAttrGetIndex(self);
           return mlirIntegerAttrGetValueInt(indexAttr);
         },
         "Get the device index");
