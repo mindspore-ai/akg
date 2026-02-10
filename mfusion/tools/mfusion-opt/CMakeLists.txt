@@ -10,7 +10,7 @@ set(LIBS
   MLIRTransforms
   MLIRSupport
   MLIRIR
-  MLIRMuseDialect
+  MLIRMfuseDialect
   MLIRDvmDialect
 )
 
@@ -18,7 +18,7 @@ add_llvm_executable(mfusion-opt
   mfusion-opt.cc
 
   DEPENDS
-  MLIRMuseDialect
+  MLIRMfuseDialect
   MLIRDvmDialect
   MFusionConversionPassIncGen
 )

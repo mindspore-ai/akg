@@ -23,13 +23,13 @@
 extern "C" {
 #endif
 
-MLIR_DECLARE_CAPI_DIALECT_REGISTRATION(Muse, muse);
+MLIR_DECLARE_CAPI_DIALECT_REGISTRATION(Mfuse, mfuse);
 
-// Muse DeviceAttr CAPI
-MLIR_CAPI_EXPORTED bool mlirAttributeIsAMuseDeviceAttr(MlirAttribute attr);
-MLIR_CAPI_EXPORTED MlirTypeID mlirMuseDeviceAttrGetTypeID(void);
-MLIR_CAPI_EXPORTED MlirAttribute mlirMuseDeviceAttrGetDeviceType(MlirAttribute attr);
-MLIR_CAPI_EXPORTED MlirAttribute mlirMuseDeviceAttrGetIndex(MlirAttribute attr);
+// Mfuse DeviceAttr CAPI
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAMfuseDeviceAttr(MlirAttribute attr);
+MLIR_CAPI_EXPORTED MlirTypeID mlirMfuseDeviceAttrGetTypeID(void);
+MLIR_CAPI_EXPORTED MlirAttribute mlirMfuseDeviceAttrGetDeviceType(MlirAttribute attr);
+MLIR_CAPI_EXPORTED MlirAttribute mlirMfuseDeviceAttrGetIndex(MlirAttribute attr);
 
 #ifdef __cplusplus
 }

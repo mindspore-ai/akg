@@ -22,9 +22,9 @@ declare_mlir_python_sources(MFusionPythonSources.TopLevel
 declare_mlir_dialect_python_bindings(
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mfusion"
   ADD_TO_PARENT MFusionPythonSources
-  TD_FILE dialects/MuseBinding.td
-  SOURCES dialects/muse/__init__.py
-  DIALECT_NAME muse
+  TD_FILE dialects/MfuseBinding.td
+  SOURCES dialects/mfuse/__init__.py
+  DIALECT_NAME mfuse
 )
 
 # Define Python extension module
