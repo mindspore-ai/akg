@@ -27,7 +27,7 @@ namespace mlir {
 namespace mfuse {
 
 // Check if Value is a constant scalar or single-element integer tensor with value x
-bool IsSingleElementInt(Value v, int64_t x);
+bool isSingleElementInt(Value v, int64_t x);
 
 // Check if Value is a constant scalar or single-element float tensor with value x
 // Uses tolerance check for floating point comparison
