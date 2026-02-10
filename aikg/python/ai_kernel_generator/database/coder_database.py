@@ -71,7 +71,8 @@ class CoderDatabase(Database):
         self._auto_update_completed = set() # 用于追踪已完成的auto_update配置（基于参数hash）
         self._initialized = True
     
-    async def update_single_ref_file(self, file_path, dsl, framework, backend, arch, ref_type, update_mode):
+    async def update_single_ref_file(self, file_path, dsl, framework, backend, arch, ref_type, update_mode, 
+                                      impl_code: str = None, md5_hash: str = None):
         """处理单个参考文件
         
         Args:
@@ -82,24 +83,21 @@ class CoderDatabase(Database):
             arch: 架构类型
             ref_type: 参考类型（'docs' 或 'impl'）
             update_mode: 更新模式（'skip' 或 'overwrite'）
+            impl_code: 预读取的实现代码（可选，避免重复读取）
+            md5_hash: 预计算的 md5_hash（可选，避免重复计算）
         """
-        # 跳过隐藏目录中的文件
-        if any(part.startswith('.') for part in file_path.parts):
-            return None
-        
         benchmark_path = Path(self.benchmark_path)
         relative_path = file_path.relative_to(benchmark_path)
         parts = relative_path.parts
-        if len(parts) < 5:
-            return None
         shape_type = parts[2]
         manual_op_type = parts[3]
         manual_op_name = file_path.stem
 
         try:
-            impl_path = benchmark_path / dsl / "impl" / shape_type / manual_op_type / f"{manual_op_name}.py"
-            with open(impl_path, 'r', encoding='utf-8') as f:
-                impl_code = f.read()
+            if impl_code is None:
+                impl_path = benchmark_path / dsl / "impl" / shape_type / manual_op_type / f"{manual_op_name}.py"
+                with open(impl_path, 'r', encoding='utf-8') as f:
+                    impl_code = f.read()
             
             framework_path = benchmark_path / shape_type / manual_op_type / f"{manual_op_name}.py"
             with open(framework_path, 'r', encoding='utf-8') as f:
@@ -123,16 +121,17 @@ class CoderDatabase(Database):
 
             # 插入数据库
             await self.insert(impl_code, framework_code, backend, arch, dsl, framework, 
-                            improvement_doc=improvement_doc, custom=custom, mode=update_mode)
+                            improvement_doc=improvement_doc, custom=custom, mode=update_mode, md5_hash=md5_hash)
             logger.debug(f"Successfully processed: {shape_type}/{manual_op_type}/{manual_op_name}")
         except Exception as e:
             logger.error(f"Error processing file {file_path}: {str(e)}")
             return None
     
-    async def process_ref_file(self, file_path, dsl, framework, backend, arch, ref_type, semaphore, update_mode):
+    async def process_ref_file(self, file_path, dsl, framework, backend, arch, ref_type, semaphore, update_mode,
+                               impl_code: str = None, md5_hash: str = None):
         """通过信号量控制并发处理文件"""
         async with semaphore:
-            await self.update_single_ref_file(file_path, dsl, framework, backend, arch, ref_type, update_mode)
+            await self.update_single_ref_file(file_path, dsl, framework, backend, arch, ref_type, update_mode, impl_code, md5_hash)
 
     async def auto_update(self, dsl: str, framework: str, backend: str, arch: str, 
                           ref_type: str = "docs", max_concurrency: int = 4, update_mode: str = "skip"):
@@ -174,14 +173,45 @@ class CoderDatabase(Database):
             raise ValueError("ref_type must be either 'docs' or 'impl'")
         
         # 检查目录是否存在
-        ref_dir = Path(self.benchmark_path / dsl / ref_type)
+        benchmark_path = Path(self.benchmark_path)
+        ref_dir = benchmark_path / dsl / ref_type
         ref_files = list(ref_dir.rglob("*.md")) if ref_type == "docs" else list(ref_dir.rglob("*.py"))
+        
+        # 收集 benchmark 中所有有效文件的 impl_code 和 md5_hash（避免重复计算）
+        benchmark_hashes = set()
+        valid_files = []  # (file_path, impl_code, md5_hash)
+        for file_path in ref_files:
+            if any(part.startswith('.') for part in file_path.parts):
+                continue
+            relative_path = file_path.relative_to(benchmark_path)
+            parts = relative_path.parts
+            if len(parts) < 5:
+                continue
+            shape_type, manual_op_type, manual_op_name = parts[2], parts[3], file_path.stem
+            impl_path = benchmark_path / dsl / "impl" / shape_type / manual_op_type / f"{manual_op_name}.py"
+            try:
+                with open(impl_path, 'r', encoding='utf-8') as f:
+                    impl_code = f.read()
+                md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, dsl=dsl)
+                benchmark_hashes.add(md5_hash)
+                valid_files.append((file_path, impl_code, md5_hash))
+            except Exception:
+                continue
+        
+        # 删除过期 case
+        db_dir = Path(self.database_path) / arch / dsl
+        if db_dir.exists():
+            db_hashes = {d.name for d in db_dir.iterdir() if d.is_dir()}
+            for stale_hash in db_hashes - benchmark_hashes:
+                self.delete_by_hash(stale_hash, arch, dsl)
+        
+        # 处理 benchmark 文件（复用预读取的 impl_code 和预计算的 md5_hash）
         tasks = []
         semaphore = asyncio.Semaphore(max_concurrency)
-        for file_path in ref_files:
-            tasks.append(self.process_ref_file(file_path, dsl, framework, backend, arch, ref_type, semaphore, update_mode))
+        for file_path, impl_code, md5_hash in valid_files:
+            tasks.append(self.process_ref_file(file_path, dsl, framework, backend, arch, ref_type, semaphore, update_mode, impl_code, md5_hash))
         
-        results = await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks)
         
         # 标记为已完成
         self._auto_update_completed.add(config_key)

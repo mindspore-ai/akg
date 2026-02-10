@@ -4,8 +4,7 @@ LangGraph 节点埋点（给 CLI 的 WS 流式输出）。
 本模块的职责：
 - 将 LangGraph 的 node 函数包装为"带开始/结束事件"的版本；
 - 通过 `send_message(session_id, Message)` 向当前 WebSocket session 推送：
-  - `NodeStartMessage`
-  - `NodeEndMessage`
+  - `DisplayMessage`
 
 触发策略：
 - 当 `AIKG_STREAM_OUTPUT=on` 时，要求 `state` 中必须包含非空 `session_id`；
@@ -25,19 +24,27 @@ async def designer_node(state):
 """
 
 import functools
+import logging
 import time
 from typing import Any, Callable, Dict
 
-from textual import log as textual_log
+from ai_kernel_generator.cli.messages import DisplayMessage
 
-from ai_kernel_generator.cli.messages import NodeEndMessage, NodeStartMessage
-from ai_kernel_generator.cli.server.message_sender import send_message
+logger = logging.getLogger(__name__)
+from ai_kernel_generator.cli.runtime.message_sender import send_message
 from ai_kernel_generator.utils.task_label import resolve_task_label
 
 
 def _stream_enabled() -> bool:
     import os
+    try:
+        from ai_kernel_generator.utils.stream_output import get_stream_output_override
 
+        override = get_stream_output_override()
+        if override is not None:
+            return bool(override)
+    except Exception:
+        pass
     return os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
 
 
@@ -48,7 +55,7 @@ def _safe_send(session_id: str, message) -> None:
     try:
         send_message(session_id, message)
     except Exception as e:
-        textual_log.warning("[Node] send_message failed; ignored", exc_info=e)
+        logger.warning("[Node] send_message failed; ignored", exc_info=e)
 
 
 def track_node(node_name: str):
@@ -71,8 +78,6 @@ def track_node(node_name: str):
         @functools.wraps(node_fn)
         async def wrapped(state: Dict[str, Any]):
             session_id = str(state.get("session_id") or "").strip()
-            if _stream_enabled() and not session_id:
-                raise ValueError(f"[{node_name}_node] state 中必须包含 session_id（AIKG_STREAM_OUTPUT=on）")
 
             task_id = str(state.get("task_id") or "")
             task_label = str(state.get("task_label") or "").strip()
@@ -81,38 +86,15 @@ def track_node(node_name: str):
             start = time.time()
             _safe_send(
                 session_id,
-                NodeStartMessage(
-                    node=node_name,
-                    task_id=task_id,
-                    task_label=task_label,
-                    state=state,
+                DisplayMessage(
+                    text=f"▶ {node_name}",
                 ),
             )
 
             try:
                 result = await node_fn(state)
-                _safe_send(
-                    session_id,
-                    NodeEndMessage(
-                        node=node_name,
-                        duration=time.time() - start,
-                        task_id=task_id,
-                        task_label=task_label,
-                        result=result,
-                    ),
-                )
                 return result
             except Exception as e:
-                _safe_send(
-                    session_id,
-                    NodeEndMessage(
-                        node=node_name,
-                        duration=time.time() - start,
-                        task_id=task_id,
-                        task_label=task_label,
-                        result={"error": str(e)},
-                    ),
-                )
                 raise
 
         return wrapped

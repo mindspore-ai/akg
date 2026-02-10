@@ -83,10 +83,10 @@ setup(
     classifiers=[
         "License :: OSI Approved :: Apache Software License",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     entry_points={
         "console_scripts": [
-            "akg_cli=ai_kernel_generator.cli.cli.cli:app",
+            "akg_cli=ai_kernel_generator.cli.cli:app",
         ],
     },
 )

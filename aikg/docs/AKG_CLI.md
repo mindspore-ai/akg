@@ -5,6 +5,14 @@ AKG CLI (`akg_cli`) is the command-line interface for AI Kernel Generator. This 
 - Start a Worker Service: `akg_cli worker --start`
 - Generate an operator: `akg_cli op ...`
 
+How to get help:
+
+```bash
+akg_cli --help
+akg_cli op --help
+akg_cli worker --help
+```
+
 ## 0. Installation
 
 First, install `akg_cli` by running the following command in the `aikg` directory:
@@ -53,12 +61,17 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_as
 Optional parameters:
 
 - `--intent "..."` to provide requirements directly (skip interactive prompt).
-- `--worker-url` accepts multiple worker addresses separated by commas.
-- `--devices` registers local devices to the local server (no worker URL needed). It is mutually exclusive with `--worker-url` and only works with the local server.
+- `--worker-url` accepts multiple worker addresses separated by commas. The CLI also accepts both `--worker-url` and `--worker_url`.
+- Choose exactly one of the following:
+  - Use `--worker-url/--worker_url` when you want to run with remote Worker Service(s).
+  - Use `--devices` when you want to run on local devices.
+  - `--devices` and `--worker-url/--worker_url` are mutually exclusive.
 - `--output-path` sets the base directory for `saved_verifications` (default: current working directory where `akg_cli` is started).
-- `--stream/--no-stream` to enable/disable streaming output.
-- `--yes` to auto-confirm all prompts.
-- `--ipv6` to force the local auto-started server to use IPv6.
+- `--stream/--no-stream` to enable/disable streaming output (default: `--stream`).
+- `--rag/--no-rag` to enable/disable RAG (default: `--no-rag`).
+- `--yes/-y` to auto-confirm all prompts.
+
+Tip: for a mostly non-interactive run, use `--intent "..." --yes` (best-effort; the CLI may still ask for input in some cases).
 
 Examples:
 
@@ -94,29 +107,26 @@ akg_cli worker --start --host :: --port 9001
 akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_ascend --worker-url [::1]:9001
 ```
 
-## 3. TUI Basics
+## 3. Interactive CLI Basics
 
-The TUI is the default interactive interface for `akg_cli op`. It is split into several panels:
+`akg_cli op` runs an interactive prompt loop. You can iterate with multiple rounds of input and generation in the same session.
 
-- Top: task tabs.
-  - The `main` tab is the primary dialogue.
-  - Each sub-agent runs in its own tab; switch tabs to view their outputs.
-- Left: chat log (main output stream).
-- Right: task info panel, workflow panel, and trace list.
-- Bottom: input box.
+Input:
 
-Focus & navigation:
+- `Enter`: submit the current input.
+- `Ctrl+J`: insert a newline (multi-line input is supported).
 
-- `Tab` cycles focus between panels.
-- In the trace list, select an item to jump the chat log to the corresponding position.
-- `F8` switches to the next concurrent task (when task tabs are available).
+Exit / cancel:
 
-Common shortcuts:
+- When idle, press `Ctrl+C` to exit.
+- While generating, press `Ctrl+C` to cancel the current round. You can then continue with the next round, or press `Ctrl+C` again to exit.
 
-- `Ctrl+C`: quit.
-- `Ctrl+E`: scroll to bottom.
-- `Enter`: submit input (in the input box).
-- `Ctrl+J`: insert newline (in the input box).
+Panel:
 
-Notes:
-- When input is disabled during generation, the input placeholder will show that `Ctrl+C` cancels the current run.
+- `F2`: show/hide the information panel.
+- The panel is used to show the current task status, output/save path, and recent top implementation summaries.
+
+History:
+
+- Use the Up/Down arrows to browse input history.
+- History is saved to `~/.akg_cli_history`.

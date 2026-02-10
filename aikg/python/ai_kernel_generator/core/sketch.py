@@ -15,9 +15,10 @@
 import logging
 import time
 
-from ai_kernel_generator.cli.messages import NodeEndMessage, NodeStartMessage
-from ai_kernel_generator.cli.server.message_sender import send_message
+from ai_kernel_generator.cli.messages import DisplayMessage
+from ai_kernel_generator.cli.runtime.message_sender import send_message
 from ai_kernel_generator.core.agent.agent_base import AgentBase
+from ai_kernel_generator.core.trace import Trace
 from ai_kernel_generator.utils.common_utils import remove_copyright_from_text, ParserFactory
 from ai_kernel_generator.utils.hardware_utils import get_hardware_doc
 from ai_kernel_generator.utils.task_label import resolve_task_label
@@ -106,11 +107,8 @@ class Sketch(AgentBase):
         if session_id:
             send_message(
                 session_id,
-                NodeStartMessage(
-                    node="sketch",
-                    task_id=task_id,
-                    task_label=task_label,
-                    state=task_info,
+                DisplayMessage(
+                    text="▶ sketch",
                 ),
             )
 
@@ -154,38 +152,35 @@ class Sketch(AgentBase):
 
         # 执行LLM生成
         try:
-            # 获取大模型输出的完整信息
-            content, _, _ = await self.run_llm(
+            # 获取大模型输出的完整信息（content, prompt, reasoning）
+            content, formatted_prompt, reasoning_content = await self.run_llm(
                 self.sketch_prompt, input_data, model_config
             )
 
             # 使用解析器解析content
             parsed_result = ParserFactory.robust_parse(content, self.code_parser)
             sketch_content = parsed_result.sketch
-            if session_id:
-                send_message(
-                    session_id,
-                    NodeEndMessage(
-                        node="sketch",
-                        duration=time.time() - start_time,
-                        task_id=task_id,
-                        task_label=task_label,
-                        result={"sketch": sketch_content},
-                    ),
-                )
+            
+            # 记录到 Trace（如果有 log_dir 和 task_id）
+            elapsed = time.time() - start_time
+            log_dir = self.config.get("log_dir", "") if self.config else ""
+            if log_dir and task_id:
+                try:
+                    trace = Trace(self.op_name, task_id, log_dir)
+                    trace.insert_agent_record(
+                        agent_name="sketch",
+                        result=content,  # 保存原始 LLM 输出
+                        prompt=formatted_prompt,
+                        reasoning=reasoning_content,
+                        session_id=session_id,
+                        elapsed_s=elapsed,
+                    )
+                except Exception as e:
+                    # trace 记录失败不应影响主流程
+                    logger.warning(f"Failed to insert agent record for sketch: {e}")
+            
             return sketch_content
 
         except Exception as e:
             logger.error(f"Failed to generate sketch for {self.op_name}: {e}", exc_info=True)
-            if session_id:
-                send_message(
-                    session_id,
-                    NodeEndMessage(
-                        node="sketch",
-                        duration=time.time() - start_time,
-                        task_id=task_id,
-                        task_label=task_label,
-                        result={"error": str(e)},
-                    ),
-                )
             raise

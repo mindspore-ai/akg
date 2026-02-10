@@ -42,22 +42,22 @@ namespace mlir {
 namespace runtime {
 class AscendKernelRuntime {
  public:
-  explicit AscendKernelRuntime(uint32_t device_id);
+  explicit AscendKernelRuntime(uint32_t device_id, bool use_mem_pool);
   ~AscendKernelRuntime();
   bool Init();
   void SetContext();
   void CreateContext();
   void ReleaseDeviceRes();
   bool Run(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
-           const std::vector<TensorDevicePtr> &input_tensors, const std::vector<std::vector<int64_t>> &input_shape_args,
+           const std::vector<BaseDevicePtr> &input_tensors, const std::vector<std::vector<int64_t>> &input_shape_args,
            int64_t tiling_key, int64_t tiling_struct_size);
   bool SyncStream();
   bool MemcpyAsync(void *dst, const void *src, uint64_t size, int32_t kind);
-  void InitDeviceMemory(const std::vector<TensorDevicePtr> &tensors);
+  void InitDeviceMemory(const std::vector<BaseDevicePtr> &tensors);
   bool SyncDeviceToHost(size_t size, void *device_ptr, void *host_ptr);
   bool SyncHostToDevice(size_t size, const void *host_ptr, void *device_ptr);
   void RunOpImpl(const std::string &path, const std::string &kernel_name, const bool is_dynamic,
-                 const std::vector<TensorDevicePtr> &input_tensors,
+                 const std::vector<BaseDevicePtr> &input_tensors,
                  const std::vector<std::vector<int64_t>> &input_shape_args, int64_t tiling_key,
                  int64_t tiling_struct_size);
 
@@ -79,6 +79,7 @@ class AscendKernelRuntime {
   void *stream_{nullptr};
   std::shared_ptr<AscendMemoryManager> mem_manager_{nullptr};
   void *cce_handle_{nullptr};
+  bool use_mem_pool_{true};
 };
 
 }  // namespace runtime

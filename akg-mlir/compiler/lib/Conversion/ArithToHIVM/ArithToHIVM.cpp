@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Huawei Technologies Co., Ltd
+ * Copyright 2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -327,17 +327,14 @@ struct BinaryArithToHIVM : public OpConversionPattern<ArithOp> {
 };
 
 inline bool isOverFlowMode(Type inType, Type outType) {
-  const bool isF32ToI16 = inType.isF32() && outType.isInteger(16);
-  const bool isF32ToI8 = inType.isF32() && outType.isInteger(8);
-  const bool isF16ToI8 = inType.isF16() && outType.isInteger(8);
   const bool isI16ToI8 = inType.isInteger(16) && outType.isInteger(8);
   const bool isI32ToI8 = inType.isInteger(32) && outType.isInteger(8);
   const bool isI32ToI16 = inType.isInteger(32) && outType.isInteger(16);
   const bool isI64ToI8 = inType.isInteger(64) && outType.isInteger(8);
   const bool isI64ToI16 = inType.isInteger(64) && outType.isInteger(16);
   const bool isI64ToI32 = inType.isInteger(64) && outType.isInteger(32);
-  return (isI16ToI8 || isI32ToI16 || isI32ToI8 || isF32ToI16 || isF32ToI8 ||
-          isF16ToI8 || isI64ToI8 || isI64ToI16 || isI64ToI32);
+  return (isI16ToI8 || isI32ToI16 || isI32ToI8 ||
+          isI64ToI8 || isI64ToI16 || isI64ToI32);
 }
 
 template <typename CastOp>
@@ -402,6 +399,7 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
     }
 
     Value srcMemRef = adaptor.getOperands()[0];
+    Type srcElemType = getElementTypeOrSelf(srcMemRef.getType());
 
     auto memRefType = MemRefType::get(shape, elemType);
     SmallVector<Value> allocOperands;
@@ -416,18 +414,24 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
         }
       }
     }
-    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-    propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-
     hivm::RoundMode rounding = selectRoundMode(op);
     auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(rounding);
 
-    rewriter.create<hivm::VCastOp>(
-        loc,
-        TypeRange{},
-        srcMemRef,
-        resBuf,
-        roundingAttr);
+    Value resBuf;
+    if ((isa<arith::SIToFPOp>(op) || isa<arith::UIToFPOp>(op)) &&
+        srcElemType.isInteger(8) && elemType.isF32()) {
+      auto midMemRefType = MemRefType::get(shape, rewriter.getF16Type());
+      Value midBuf = rewriter.create<memref::AllocOp>(loc, midMemRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, midBuf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midBuf, roundingAttr);
+      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundingAttr);
+    } else {
+      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr);
+    }
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -491,6 +495,7 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
     Type elemType = npuVectorType.getElementType();
 
     Value srcMemRef = adaptor.getOperands()[0];
+    Type srcElemType = getElementTypeOrSelf(srcMemRef.getType());
 
     auto memRefType = MemRefType::get(shape, elemType);
     SmallVector<Value> allocOperands;
@@ -503,18 +508,25 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
         allocOperands.push_back(*dimVal);
       }
     }
-    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-    propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
-
     hivm::RoundMode rounding = selectRoundMode(op);
     auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(rounding);
 
-    rewriter.create<hivm::VCastOp>(
-        loc,
-        TypeRange{},
-        srcMemRef,
-        resBuf,
-        roundingAttr);
+    Value resBuf;
+    // i8 -> f32 is not supported directly, so we convert i8 -> f16 -> f32.
+    if ((isa<npuvector::SIToFPOp>(op) || isa<npuvector::UIToFPOp>(op)) &&
+        srcElemType.isInteger(8) && elemType.isF32()) {
+      auto midMemRefType = MemRefType::get(shape, rewriter.getF16Type());
+      Value midBuf = rewriter.create<memref::AllocOp>(loc, midMemRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, midBuf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midBuf, roundingAttr);
+      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundingAttr);
+    } else {
+      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, resBuf, roundingAttr);
+    }
 
     rewriter.replaceOp(op, resBuf);
     return success();
@@ -1042,30 +1054,26 @@ struct ArithNegfToHIVM : public OpConversionPattern<arith::NegFOp> {
     Value inputMemRef = adaptor.getOperand();
 
     auto memRefType = MemRefType::get(shape, elemType);
-    SmallVector<Value> allocOperands;
-    for (int i = 0; i < memRefType.getRank(); ++i) {
-      if (memRefType.isDynamicDim(i)) {
-        auto dimVal = getMemRefDimValue(inputMemRef, i);
-        if (failed(dimVal)) {
-          return failure();
-        }
-        allocOperands.push_back(*dimVal);
-      }
-    }
 
     Value zeroScalar = rewriter.create<arith::ConstantOp>(
         loc, rewriter.getFloatAttr(elemType, 0.0));
-    Value zeroBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+    auto zeroBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(zeroBuf)) {
+      return failure();
+    }
     rewriter.create<hivm::VBrcOp>(
-        loc, TypeRange{}, zeroScalar, zeroBuf,
+        loc, TypeRange{}, zeroScalar, *zeroBuf,
         rewriter.getDenseI64ArrayAttr({}));
 
-    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, resBuf);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
     rewriter.create<hivm::VSubOp>(
-        loc, TypeRange{}, ValueRange{zeroBuf, inputMemRef}, ValueRange{resBuf});
+        loc, TypeRange{}, ValueRange{*zeroBuf, inputMemRef}, ValueRange{*resBuf});
 
-    rewriter.replaceOp(op, resBuf);
+    rewriter.replaceOp(op, *resBuf);
     return success();
   }
 };
@@ -1093,24 +1101,85 @@ struct MathExpToHIVM : public OpConversionPattern<math::ExpOp> {
 
     Value inputMemRef = adaptor.getOperand();
     auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VExpOp>(
+        loc, TypeRange{}, inputMemRef, *resBuf);
 
-    SmallVector<Value> allocOperands;
-    for (int i = 0; i < memRefType.getRank(); ++i) {
-      if (memRefType.isDynamicDim(i)) {
-        auto dimVal = getMemRefDimValue(inputMemRef, i);
-        if (failed(dimVal)) {
-          return failure();
-        }
-        allocOperands.push_back(*dimVal);
-      }
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
+struct MathLogToHIVM : public OpConversionPattern<math::LogOp> {
+  using OpConversionPattern<math::LogOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::LogOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::LogOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
     }
 
-    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, resBuf);
-    rewriter.create<hivm::VExpOp>(
-        loc, TypeRange{}, inputMemRef, resBuf);
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VLnOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
-    rewriter.replaceOp(op, resBuf);
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
+struct MathAbsFToHIVM : public OpConversionPattern<math::AbsFOp> {
+  using OpConversionPattern<math::AbsFOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::AbsFOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::AbsFOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
+    }
+
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VAbsOp>(loc, TypeRange{}, inputMemRef, *resBuf);
+
+    rewriter.replaceOp(op, *resBuf);
     return success();
   }
 };
@@ -1138,23 +1207,272 @@ struct MathSqrtToHIVM : public OpConversionPattern<math::SqrtOp> {
 
     Value inputMemRef = adaptor.getOperand();
     auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VSqrtOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
-    SmallVector<Value> allocOperands;
-    for (int i = 0; i < memRefType.getRank(); ++i) {
-      if (memRefType.isDynamicDim(i)) {
-        auto dimVal = getMemRefDimValue(inputMemRef, i);
-        if (failed(dimVal)) {
-          return failure();
-        }
-        allocOperands.push_back(*dimVal);
-      }
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
+struct MathRsqrtToHIVM : public OpConversionPattern<math::RsqrtOp> {
+  using OpConversionPattern<math::RsqrtOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::RsqrtOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::RsqrtOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
     }
 
-    Value resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
-    propagateBufferSizeMark(rewriter, loc, inputMemRef, resBuf);
-    rewriter.create<hivm::VSqrtOp>(loc, TypeRange{}, inputMemRef, resBuf);
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VRsqrtOp>(loc, TypeRange{}, inputMemRef, *resBuf);
 
-    rewriter.replaceOp(op, resBuf);
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
+struct MathTanhToHIVM : public OpConversionPattern<math::TanhOp> {
+  using OpConversionPattern<math::TanhOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::TanhOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::TanhOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
+    }
+
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VTanhOp>(loc, TypeRange{}, inputMemRef, *resBuf);
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
+struct MathSinToHIVM : public OpConversionPattern<math::SinOp> {
+  using OpConversionPattern<math::SinOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::SinOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::SinOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
+    }
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VSinOp>(loc, TypeRange{}, inputMemRef, *resBuf);
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
+struct MathCosToHIVM : public OpConversionPattern<math::CosOp> {
+  using OpConversionPattern<math::CosOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::CosOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::CosOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
+    }
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VCosOp>(loc, TypeRange{}, inputMemRef, *resBuf);
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
+struct MathErfToHIVM : public OpConversionPattern<math::ErfOp> {
+  using OpConversionPattern<math::ErfOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::ErfOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::ErfOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
+    }
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VErfOp>(loc, TypeRange{}, inputMemRef, *resBuf);
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
+struct MathCeilToHIVM : public OpConversionPattern<math::CeilOp> {
+  using OpConversionPattern<math::CeilOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::CeilOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::CeilOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
+    }
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::CEIL);
+    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr);
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
+struct MathFloorToHIVM : public OpConversionPattern<math::FloorOp> {
+  using OpConversionPattern<math::FloorOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::FloorOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::FloorOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+    if (!elemType.isF16() && !elemType.isF32()) {
+      return failure();
+    }
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(hivm::RoundMode::FLOOR);
+    rewriter.create<hivm::VCastOp>(loc, TypeRange{}, inputMemRef, *resBuf, roundingAttr);
+    rewriter.replaceOp(op, *resBuf);
+    return success();
+  }
+};
+
+struct MathAbsIToHIVM : public OpConversionPattern<math::AbsIOp> {
+  using OpConversionPattern<math::AbsIOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<math::AbsIOp>::OpAdaptor;
+
+  LogicalResult matchAndRewrite(math::AbsIOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    Type resType = op.getResult().getType();
+
+    auto shapeAndElem = getShapeAndElemType(resType);
+    if (!shapeAndElem) {
+      return failure();
+    }
+    ArrayRef<int64_t> shape = shapeAndElem->first;
+    Type elemType = shapeAndElem->second;
+    if (!isa<IntegerType>(elemType)) {
+      return failure();
+    }
+
+    Value inputMemRef = adaptor.getOperand();
+    auto memRefType = MemRefType::get(shape, elemType);
+    auto resBuf = allocMemRef(rewriter, loc, memRefType, inputMemRef);
+    if (failed(resBuf)) {
+      return failure();
+    }
+    propagateBufferSizeMark(rewriter, loc, inputMemRef, *resBuf);
+    rewriter.create<hivm::VAbsOp>(loc, TypeRange{}, inputMemRef, *resBuf);
+    rewriter.replaceOp(op, *resBuf);
     return success();
   }
 };
@@ -1322,44 +1640,6 @@ struct ScfYieldToHIVM : public OpConversionPattern<scf::YieldOp> {
 };
 
 
-struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
-  using OpConversionPattern<memref::StoreOp>::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(memref::StoreOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    Value valToStore = adaptor.getValue();
-    Value memref = adaptor.getMemref();
-
-    auto valType = dyn_cast<MemRefType>(valToStore.getType());
-    auto memRefType = dyn_cast<MemRefType>(memref.getType());
-
-    if (!valType || !memRefType) {
-      return failure();
-    }
-
-    if (valType.getRank() == 1 && valType.getDimSize(0) == 1 && memRefType.getRank() == 0) {
-      auto newType = MemRefType::get({1}, memRefType.getElementType());
-      OpFoldResult offset = rewriter.getIndexAttr(0);
-      SmallVector<OpFoldResult> sizes = {rewriter.getIndexAttr(1)};
-      SmallVector<OpFoldResult> strides = {rewriter.getIndexAttr(1)};
-      Value casted = rewriter.create<memref::ReinterpretCastOp>(
-          op.getLoc(), newType, memref, offset, sizes, strides);
-      rewriter.create<hivm::StoreOp>(op.getLoc(), TypeRange{}, valToStore, casted);
-      rewriter.eraseOp(op);
-      return success();
-    }
-
-    if (valType) {
-       rewriter.create<hivm::StoreOp>(op.getLoc(), TypeRange{}, valToStore, memref);
-       rewriter.eraseOp(op);
-       return success();
-    }
-
-    return failure();
-  }
-};
-
 struct VectorTransferReadToHIVM : public OpConversionPattern<vector::TransferReadOp> {
   using OpConversionPattern<vector::TransferReadOp>::OpConversionPattern;
 
@@ -1496,6 +1776,48 @@ struct VectorTransferWriteToHIVM : public OpConversionPattern<vector::TransferWr
   }
 };
 
+struct MemRefStoreToHIVM : public OpConversionPattern<memref::StoreOp> {
+  using OpConversionPattern<memref::StoreOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(memref::StoreOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (!isa<MemRefType>(adaptor.getValue().getType())) {
+      return success();
+    }
+
+    Value valToStore = adaptor.getValue();
+    Value memref = adaptor.getMemref();
+
+    auto valType = dyn_cast<MemRefType>(valToStore.getType());
+    auto memRefType = dyn_cast<MemRefType>(memref.getType());
+
+    if (!valType || !memRefType) {
+      return failure();
+    }
+
+    if (valType.getRank() == 1 && valType.getDimSize(0) == 1 && memRefType.getRank() == 0) {
+      auto newType = MemRefType::get({1}, memRefType.getElementType());
+      OpFoldResult offset = rewriter.getIndexAttr(0);
+      SmallVector<OpFoldResult> sizes = {rewriter.getIndexAttr(1)};
+      SmallVector<OpFoldResult> strides = {rewriter.getIndexAttr(1)};
+      Value casted = rewriter.create<memref::ReinterpretCastOp>(
+          op.getLoc(), newType, memref, offset, sizes, strides);
+      rewriter.create<hivm::StoreOp>(op.getLoc(), TypeRange{}, valToStore, casted);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    if (valType) {
+       rewriter.create<hivm::StoreOp>(op.getLoc(), TypeRange{}, valToStore, memref);
+       rewriter.eraseOp(op);
+       return success();
+    }
+
+    return failure();
+  }
+};
+
 struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::ReductionOp> {
   using OpConversionPattern<npuvector::ReductionOp>::OpConversionPattern;
 
@@ -1565,8 +1887,19 @@ struct NPUVectorReductionToHIVM : public OpConversionPattern<npuvector::Reductio
         loc, TypeRange{}, sourceMemRef, resultBuf, Value(),
         reduceOpAttr, rewriter.getDenseI64ArrayAttr(reduceDims), Value());
 
-    rewriter.replaceOp(op, resultBuf);
+    Type resultType = op.getResult().getType();
+    if (isa<MemRefType>(resultType)) {
+      rewriter.replaceOp(op, resultBuf);
+      return success();
+    }
 
+    SmallVector<Value> indices;
+    indices.reserve(rank);
+    for (int64_t i = 0; i < rank; ++i) {
+      indices.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
+    }
+    Value scalar = rewriter.create<memref::LoadOp>(loc, resultBuf, indices);
+    rewriter.replaceOp(op, scalar);
     return success();
   }
 };
@@ -1662,7 +1995,10 @@ static LogicalResult rewriteRank0MemRefToVectorTransferRead(npuvector::TransferR
 
   Value scalar = rewriter.create<memref::LoadOp>(loc, source, ValueRange{});
 
-  SmallVector<Value> allocOperands(dynamicSizes.begin(), dynamicSizes.end());
+  SmallVector<Value> allocOperands;
+  if (targetMemRefType.getNumDynamicDims() > 0) {
+    allocOperands.assign(dynamicSizes.begin(), dynamicSizes.end());
+  }
   Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType, allocOperands);
 
   if (failed(setTransferReadBufferSizeMarkIfNeeded(op, tempBuf, elemType, npuVecType, rewriter))) {
@@ -1723,7 +2059,10 @@ struct NPUVectorTransferReadToHIVM : public OpConversionPattern<npuvector::Trans
     Type elemType = npuVecType.getElementType();
     auto targetMemRefType = MemRefType::get(npuVecType.getShape(), elemType);
 
-    SmallVector<Value> allocOperands(dynamicSizes.begin(), dynamicSizes.end());
+    SmallVector<Value> allocOperands;
+    if (targetMemRefType.getNumDynamicDims() > 0) {
+      allocOperands.assign(dynamicSizes.begin(), dynamicSizes.end());
+    }
     Value tempBuf = rewriter.create<memref::AllocOp>(loc, targetMemRefType, allocOperands);
 
     if (failed(setTransferReadBufferSizeMarkIfNeeded(op, tempBuf, elemType, npuVecType, rewriter))) {
@@ -1758,12 +2097,41 @@ struct NPUVectorTransferWriteToHIVM : public OpConversionPattern<npuvector::Tran
     auto dataMemRefType = cast<MemRefType>(dataToWrite.getType());
     auto destMemRefType = cast<MemRefType>(dest.getType());
 
+    int64_t memRefRank = destMemRefType.getRank();
+    int64_t dataRank = dataMemRefType.getRank();
+
+    if (memRefRank == 0) {
+      if (!adaptor.getIndices().empty()) {
+        return rewriter.notifyMatchFailure(op, "rank-0 destination expects empty indices");
+      }
+      if (dataRank == 0) {
+        rewriter.create<hivm::StoreOp>(loc, TypeRange{}, dataToWrite, dest);
+        rewriter.eraseOp(op);
+        return success();
+      }
+      if (dataRank == 1) {
+        OpFoldResult offset = rewriter.getIndexAttr(0);
+        SmallVector<OpFoldResult> sizes = {rewriter.getIndexAttr(1)};
+        SmallVector<OpFoldResult> strides = {rewriter.getIndexAttr(1)};
+        auto dataType = MemRefType::get({1}, dataMemRefType.getElementType());
+        Value castedData = dataToWrite;
+        if (dataMemRefType != dataType) {
+          castedData = rewriter.create<memref::ReinterpretCastOp>(
+              loc, dataType, dataToWrite, offset, sizes, strides);
+        }
+        auto destType = MemRefType::get({1}, destMemRefType.getElementType());
+        Value castedDest = rewriter.create<memref::ReinterpretCastOp>(
+            loc, destType, dest, offset, sizes, strides);
+        rewriter.create<hivm::StoreOp>(loc, TypeRange{}, castedData, castedDest);
+        rewriter.eraseOp(op);
+        return success();
+      }
+      return rewriter.notifyMatchFailure(op, "unsupported rank-0 destination");
+    }
+
     SmallVector<OpFoldResult> offsets = getAsOpFoldResult(adaptor.getIndices());
     SmallVector<OpFoldResult> sizes;
     SmallVector<OpFoldResult> strides;
-
-    int64_t memRefRank = destMemRefType.getRank();
-    int64_t dataRank = dataMemRefType.getRank();
 
     // Handle leading dimensions for rank reduction.
     for (int64_t i = 0; i < memRefRank - dataRank; ++i) {
@@ -1820,6 +2188,10 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
     }
 
     Type elemType = npuVecType.getElementType();
+    if (elemType.isIndex()) {
+      elemType = rewriter.getI64Type();
+      source = rewriter.create<arith::IndexCastOp>(loc, elemType, source);
+    }
     auto memRefType = MemRefType::get(npuVecType.getShape(), elemType);
 
     TypedAttr scalarAttr;
@@ -1867,6 +2239,18 @@ struct NPUVectorBroadcastToHIVM : public OpConversionPattern<npuvector::Broadcas
     rewriter.create<hivm::VBrcOp>(loc, TypeRange{}, source, resultBuf, rewriter.getDenseI64ArrayAttr({}));
 
     rewriter.replaceOp(op, resultBuf);
+    return success();
+  }
+};
+
+struct NPUVectorIndexCastToHIVM : public OpConversionPattern<npuvector::IndexCastOp> {
+  using OpConversionPattern<npuvector::IndexCastOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(npuvector::IndexCastOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value input = adaptor.getOperands()[0];
+    rewriter.replaceOp(op, input);
     return success();
   }
 };
@@ -1932,13 +2316,24 @@ void hivm::populateArithToHIVMConversionPatterns(
   patterns.add<ArithConstantToHIVM>(patterns.getContext());
   patterns.add<ArithNegfToHIVM>(patterns.getContext());
   patterns.add<MathExpToHIVM>(patterns.getContext());
+  patterns.add<MathLogToHIVM>(patterns.getContext());
+  patterns.add<MathAbsFToHIVM>(patterns.getContext());
   patterns.add<MathSqrtToHIVM>(patterns.getContext());
+  patterns.add<MathRsqrtToHIVM>(patterns.getContext());
+  patterns.add<MathTanhToHIVM>(patterns.getContext());
+  patterns.add<MathSinToHIVM>(patterns.getContext());
+  patterns.add<MathCosToHIVM>(patterns.getContext());
+  patterns.add<MathErfToHIVM>(patterns.getContext());
+  patterns.add<MathCeilToHIVM>(patterns.getContext());
+  patterns.add<MathFloorToHIVM>(patterns.getContext());
+  patterns.add<MathAbsIToHIVM>(patterns.getContext());
   patterns.add<VectorReductionToHIVM>(patterns.getContext());
   patterns.add<NPUVectorReductionToHIVM>(patterns.getContext());
   patterns.add<
       NPUVectorTransferReadToHIVM,
       NPUVectorTransferWriteToHIVM,
-      NPUVectorBroadcastToHIVM>(patterns.getContext());
+      NPUVectorBroadcastToHIVM,
+      NPUVectorIndexCastToHIVM>(patterns.getContext());
   patterns.add<
       UnaryNPUVectorToHIVMCast<npuvector::ExtFOp>,
       UnaryNPUVectorToHIVMCast<npuvector::TruncFOp>,
@@ -1953,7 +2348,6 @@ void hivm::populateArithToHIVMConversionPatterns(
       NPUVectorCmpToHIVM<npuvector::CmpFOp>,
       NPUVectorCmpToHIVM<npuvector::CmpIOp>>(patterns.getContext());
   patterns.add<VectorBroadcastToHIVM>(patterns.getContext());
-  patterns.add<MemRefStoreToHIVM>(patterns.getContext());
   patterns.add<ScfForToHIVM>(patterns.getContext());
   patterns.add<ScfYieldToHIVM>(patterns.getContext());
 }
@@ -1993,17 +2387,6 @@ static bool isLegalSCFYieldOp(scf::YieldOp op) {
   return true;
 }
 
-static bool isLegalMemRefStoreOp(memref::StoreOp op) {
-  if (auto defOp = op.getValue().getDefiningOp()) {
-    if (isa<vector::ReductionOp, vector::TransferReadOp, vector::BroadcastOp,
-            npuvector::ReductionOp, npuvector::TransferReadOp, npuvector::BroadcastOp,
-            arith::MulSIExtendedOp, arith::MulUIExtendedOp>(defOp)) {
-      return false;
-    }
-  }
-  return !isa<MemRefType>(op.getValue().getType());
-}
-
 struct ArithToHIVMConversionPass
     : public impl::ConvertArithToHIVMBase<ArithToHIVMConversionPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -2025,7 +2408,6 @@ void ArithToHIVMConversionPass::runOnOperation() {
   target.addDynamicallyLegalDialect<math::MathDialect>(isLegalMathOp);
   target.addDynamicallyLegalOp<scf::ForOp>(isLegalSCFForOp);
   target.addDynamicallyLegalOp<scf::YieldOp>(isLegalSCFYieldOp);
-  target.addDynamicallyLegalOp<memref::StoreOp>(isLegalMemRefStoreOp);
   target.addIllegalOp<vector::ReductionOp, vector::TransferReadOp,
                           vector::TransferWriteOp, vector::BroadcastOp>();
   target.addIllegalOp<npuvector::ReductionOp, npuvector::TransferReadOp,

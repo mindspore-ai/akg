@@ -14,7 +14,6 @@
 """ akg launch and compile utils """
 import os
 import sys
-import ctypes
 import logging
 import subprocess
 import numpy as np
@@ -42,6 +41,7 @@ def run_akg_opt(
     enable_loop_fusion=False,
     arch=None,
     dump_ir=False,
+    mlir_timing=False,
     dump_log_path=None
 ):
     """
@@ -55,6 +55,7 @@ def run_akg_opt(
         enable_loop_fusion: Whether to enable loop fusion
         arch: Architecture specification (optional)
         dump_ir: Whether to dump IR after all passes
+        mlir_timing: Whether to print every pass time
         dump_log_path: Path to dump log file (optional)
 
     Returns:
@@ -83,6 +84,8 @@ def run_akg_opt(
 
     if dump_ir:
         cmd.append("--mlir-print-ir-after-all")
+    if mlir_timing:
+        cmd.append("--mlir-timing")
 
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -104,6 +107,7 @@ def run_mlir_ascend_pipeline(
     enable_loop_fusion=True,
     arch=None,
     dump_ir=False,
+    mlir_timing=False,
     dump_log_path=None,
 ):
     """
@@ -117,6 +121,7 @@ def run_mlir_ascend_pipeline(
         enable_loop_fusion: Whether to enable loop fusion
         arch: Architecture specification (optional)
         dump_ir: Whether to dump IR after all passes
+        mlir_timing: Whether to print every pass time
         dump_log_path: Path to dump log file (optional)
     Returns:
         Path to final output file
@@ -129,6 +134,7 @@ def run_mlir_ascend_pipeline(
         enable_loop_fusion=enable_loop_fusion,
         arch=arch,
         dump_ir=dump_ir,
+        mlir_timing=mlir_timing,
         dump_log_path=dump_log_path
     )
     return output_file
@@ -186,13 +192,14 @@ def transform_data_to_ascend(
             output_idx_set.append(output_idx + len(data))
     output_idx_set = set(output_idx_set)
     for data_idx, d in enumerate(data):
+        if isinstance(d, (int, float, bool, complex)):
+            data_ctypes.append(d)
+            continue
         data_shape = np.array(device_shape[data_idx])
         data_bytes = d.nbytes
         is_numpy_bf16 = False
         is_numpy_output = False
-        if isinstance(d, int):
-            data_ctypes.append(ctypes.c_int(d))
-        elif isinstance(d, np.ndarray):
+        if isinstance(d, np.ndarray):
             if data_idx in output_idx_set:
                 is_numpy_output = True
             if d.dtype.name == "bfloat16":
@@ -216,7 +223,8 @@ def launch(
     kernel_name,
     device_id,
     is_dyn_shape,
-    *input_for_mod_ctypes
+    *input_for_mod_ctypes,
+    use_mem_pool = False
 ):
     """ launch .so file by akg_ascend_backend """
     akgAscendLaunch.akg_ascend_run(
@@ -224,5 +232,6 @@ def launch(
         kernel_name,
         device_id,
         is_dyn_shape,
+        use_mem_pool,
         *input_for_mod_ctypes
     )

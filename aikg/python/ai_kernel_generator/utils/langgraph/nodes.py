@@ -19,6 +19,7 @@ from ai_kernel_generator.utils.langgraph.node_tracker import track_node
 import logging
 import asyncio
 import json
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +38,18 @@ class NodeFactory:
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: designer")
             
             # 直接使用 state（KernelGenState 本质上是 dict）
+            t0 = time.time()
             result, prompt, reasoning = await designer_instance.run(task_info=state)
+            elapsed = time.time() - t0
             
             # 记录到 Trace
             trace_instance.insert_agent_record(
                 agent_name="designer",
                 result=result,
                 prompt=prompt,
-                reasoning=reasoning
+                reasoning=reasoning,
+                session_id=state.get("session_id"),
+                elapsed_s=elapsed,
             )
             
             # 解析结果（如果有 space_config）
@@ -140,7 +145,9 @@ class NodeFactory:
                 logger.debug(f"[Task {task_id}] 检查错误: {code_check_errors[:300]}...")
             
             # 直接使用 state（KernelGenState 本质上是 dict）
+            t0 = time.time()
             result, prompt, reasoning = await coder_instance.run(task_info=state)
+            elapsed = time.time() - t0
             
             # 使用与原 Task 相同的解析逻辑（ParserFactory.robust_parse）
             # 这样可以处理 LangChain 1.0 后的各种输出格式
@@ -174,7 +181,9 @@ class NodeFactory:
                 agent_name="coder",
                 result=result,  # 原始结果记录到 trace
                 prompt=prompt,
-                reasoning=reasoning
+                reasoning=reasoning,
+                session_id=state.get("session_id"),
+                elapsed_s=elapsed,
             )
             
             return {
@@ -208,6 +217,7 @@ class NodeFactory:
             task_id = state.get('task_id', '0')
             op_name = state.get('op_name', 'unknown')
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: verifier")
+            t0 = time.time()
             
             # 获取 Worker (兼容私有Worker和全局WorkerManager)
             worker = None
@@ -287,7 +297,9 @@ class NodeFactory:
                     agent_name="verifier",
                     result=str(verify_res),
                     error_log=verify_log,
-                    profile_res=profile_res
+                    profile_res=profile_res,
+                    session_id=state.get("session_id"),
+                    elapsed_s=(time.time() - t0),
                 )
                 
                 # 记录验证结果
@@ -344,6 +356,7 @@ class NodeFactory:
                     })
                 
                 # 构建输入数据（与原 Conductor 一致）
+                # 注意：coder_code 和 error_log 不再截断，由模板或 LLM 处理上下文长度
                 input_data = {
                     'dsl': state.get('dsl', ''),
                     'expert_suggestion': state.get('expert_suggestion', ''),
@@ -351,8 +364,8 @@ class NodeFactory:
                     'framework': state.get('framework', ''),
                     'task_desc': state.get('task_desc', ''),
                     'agent_name': 'verifier',
-                    'agent_result': state.get('coder_code', '')[:2000],
-                    'error_log': state.get('verifier_error', '')[:5000],
+                    'agent_result': state.get('coder_code', ''),  # 完整代码，不截断
+                    'error_log': state.get('verifier_error', ''),  # 完整错误日志，不截断
                     'history_attempts': history_for_analysis,
                     'valid_next_agents': 'coder, finish',  # 固定选项
                     'format_instructions': format_instructions,
@@ -688,7 +701,9 @@ class NodeFactory:
             state_with_error["previous_error"] = state.get("multi_case_error", "")
             
             # 2. 生成多 case task_desc
+            t0 = time.time()
             new_task_desc, prompt, reasoning = await test_gen.run(state_with_error)
+            elapsed = time.time() - t0
             
             task_id = state.get('task_id', '0')
             logger.info(f"[Task {task_id}] 多 case task_desc 生成完成")
@@ -698,7 +713,9 @@ class NodeFactory:
                 agent_name="test_case_generator",
                 result=new_task_desc,
                 prompt=prompt,
-                reasoning=reasoning
+                reasoning=reasoning,
+                session_id=state.get("session_id"),
+                elapsed_s=elapsed,
             )
             
             # 3. 使用新 task_desc 创建临时 verifier 进行验证
@@ -790,13 +807,35 @@ class NodeFactory:
                 reasoning=""
             )
             
-            # 记录检查结果
-            if passed:
-                logger.info(f"[Task {task_id}] CodeChecker: ✅ Code check passed")
+            # 向 CLI 发送检查结果消息
+            session_id = state.get('session_id', '')
+            if session_id:
+                try:
+                    from ai_kernel_generator.cli.runtime.message_sender import send_message
+                    from ai_kernel_generator.cli.messages import DisplayMessage
+                    if passed:
+                        logger.info(f"[Task {task_id}] CodeChecker: ✅ Code check passed")
+                        send_message(session_id, DisplayMessage(
+                            text="✅ 代码静态检查通过"
+                        ))
+                    else:
+                        logger.warning(f"[Task {task_id}] CodeChecker: ❌ Found {len(errors)} issues")
+                        for err in errors[:3]:
+                            logger.warning(f"[Task {task_id}]   Line {err.get('line', '?')}: {err.get('detail', '')[:80]}")
+                        send_message(session_id, DisplayMessage(
+                            text=f"⚠️ 代码静态检查发现 {len(errors)} 个问题"
+                        ))
+                except Exception:
+                    # 发送失败不影响主流程
+                    pass
             else:
-                logger.warning(f"[Task {task_id}] CodeChecker: ❌ Found {len(errors)} issues")
-                for err in errors[:3]:
-                    logger.warning(f"[Task {task_id}]   Line {err.get('line', '?')}: {err.get('detail', '')[:80]}")
+                # 没有 session_id 时只记录日志
+                if passed:
+                    logger.info(f"[Task {task_id}] CodeChecker: ✅ Code check passed")
+                else:
+                    logger.warning(f"[Task {task_id}] CodeChecker: ❌ Found {len(errors)} issues")
+                    for err in errors[:3]:
+                        logger.warning(f"[Task {task_id}]   Line {err.get('line', '?')}: {err.get('detail', '')[:80]}")
             
             return {
                 "code_check_passed": passed,
@@ -806,7 +845,7 @@ class NodeFactory:
                 "agent_history": ["code_checker"]
             }
         
-        return code_checker_node
+        return track_node("code_checker")(code_checker_node)
     
     @staticmethod
     def _save_to_passed_cases(state, verifier_instance, current_step: int, config: dict):

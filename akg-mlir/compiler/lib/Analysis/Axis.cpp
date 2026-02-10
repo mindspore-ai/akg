@@ -151,15 +151,14 @@ void Axis::initRange() {
   if (this->loop == nullptr) {
     return;
   }
-  int fakeConst = 1;
   if (!hasConstantLowerBound()) {
-    this->range.first = fakeConst;
+    this->range.first = 1;
     (void)this->axisType.insert(AxisLabel::kDynamic);
   } else {
     this->range.first = getConstantLowerBound();
   }
   if (!hasConstantUpperBound()) {
-    this->range.second = fakeConst;
+    this->range.second = INT_MAX;
     (void)this->axisType.insert(AxisLabel::kDynamic);
   } else {
     this->range.second = getConstantUpperBound();

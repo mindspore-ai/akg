@@ -20,18 +20,16 @@
 // SCF loop vectorization pass using NPUVector Dialect with dynamic shape support
 //
 // Architecture:
-//   1. Read attributes (getVectorizationMode)
-//   2. Decide vector factor (decideVectorFactor)
-//   3. Create vectorized loop (createVectorizedLoop)
-//   4. Vectorize loop body
+//   1. Analyze loop attributes and eligibility
+//   2. Determine vectorization strategy (static/dynamic, elementwise/reduction)
+//   3. Create and populate vectorized loop
 //      ├── vectorizeLoad → npuvector.transfer_read
 //      ├── vectorizeStore → npuvector.transfer_write
-//      ├── vectorizeArithOp → type promotion (generic)
-//      ├── vectorizeConstant → arith.constant dense
-//      └── vectorizeUniform → npuvector.broadcast
-//   5. Post-processing
-//      ├── Elementwise: create scf.yield + delete scalar loop
-//      └── Reduction: create scf.yield + npuvector.reduction + delete scalar loop
+//      ├── vectorizeArithOp → type conversion and arithmetic operations
+//      └── vectorizeBroadcastScalar → npuvector.broadcast
+//   4. Finalization
+//      ├── Elementwise: inline or loop-based transformation
+//      └── Reduction: vector reduction + tail processing + init value merging
 //===----------------------------------------------------------------------===//
 
 #include "akg/Dialect/SCF/Passes.h"
@@ -67,17 +65,17 @@ namespace {
 enum class VectorizationMode {
   None,
   Elementwise,
-  Reduction,
+  ReductionX,
+  ReductionY,
 };
 
 struct VectorizationContext {
   OpBuilder &builder;
   IRMapping valueMapping;
-  int64_t vectorFactor;
+  int64_t actualStep;
   Value vectorSizeValue;
   Value maxStepValue;
   VectorizationMode mode;
-  bool isDynamic;
 
   scf::ForOp scalarLoop;
   scf::ForOp vecLoop;
@@ -85,19 +83,81 @@ struct VectorizationContext {
   std::optional<arith::AtomicRMWKind> reductionKind;
   Value origInit;
 
-  VectorizationContext(OpBuilder &b, int64_t vf, Value vfVal, Value maxVal,
-                      VectorizationMode m, scf::ForOp loop, bool dynamic)
-      : builder(b), vectorFactor(vf), vectorSizeValue(vfVal), maxStepValue(maxVal),
-        mode(m), isDynamic(dynamic), scalarLoop(loop), vecLoop(nullptr),
-        reductionKind(std::nullopt), origInit(nullptr) {}
+  Value vectorizationAxis;
+
+  VectorizationContext(OpBuilder &b, int64_t actualStepVal, Value vfVal, Value maxVal,
+                      VectorizationMode m, scf::ForOp loop, Value vecAxis = nullptr)
+      : builder(b), actualStep(actualStepVal), vectorSizeValue(vfVal), maxStepValue(maxVal),
+        mode(m), scalarLoop(loop), vecLoop(nullptr),
+        reductionKind(std::nullopt), origInit(nullptr), vectorizationAxis(vecAxis) {}
+
+  bool isDynamic() const { return vectorSizeValue != nullptr; }
+
+  Value getVectorizationAxis() {
+    if (mode == VectorizationMode::ReductionY && vectorizationAxis) {
+      return vectorizationAxis;
+    }
+    return scalarLoop.getInductionVar();
+  }
 };
 
-static Value vectorizeUniform(Value uniformVal, VectorizationContext &ctx);
+static Value vectorizeBroadcastScalar(Value scalarVal, VectorizationContext &ctx);
+static LogicalResult vectorizeLoop(scf::ForOp scalarLoop, int64_t actualStep, Value vfValue,
+                                   Value maxStepValue, VectorizationMode mode,
+                                   OpBuilder &builder, Value vecAxis, Value outerIVMapping = Value());
+
+static bool hasVectorizationAttr(Operation *op) {
+  return op->hasAttr(kVectorAttr) ||
+         op->hasAttr("reduction_x") ||
+         op->hasAttr("reduction_y") ||
+         op->hasAttr("reduction_all");
+}
+
+static bool shouldCloneScalarOp(Operation &op, VectorizationContext &ctx) {
+  if (isa<affine::AffineApplyOp, affine::AffineMaxOp, affine::AffineMinOp>(&op)) {
+    return true;
+  }
+  return op.hasAttr(kSkipVectorizeAttr);
+}
+
+static int64_t computeStaticVectorSize(scf::ForOp loop, int64_t maxStep) {
+  auto ubConst = loop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
+  auto lbConst = loop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
+
+  if (ubConst && lbConst) {
+    int64_t tripCount = ubConst.value() - lbConst.value();
+    return std::min(tripCount, maxStep);
+  }
+
+  return maxStep;
+}
+
+static Value computeDynamicVectorSize(scf::ForOp loop, Value maxStepValue,
+                                     OpBuilder &builder, Location loc) {
+  Value upperBound = loop.getUpperBound();
+  Value lowerBound = loop.getLowerBound();
+
+  Value tripCount = builder.create<arith::SubIOp>(loc, upperBound, lowerBound);
+
+  Value vectorSize = builder.create<arith::MinSIOp>(loc, tripCount, maxStepValue);
+
+  return vectorSize;
+}
 
 static VectorizationMode getVectorizationMode(scf::ForOp loop, int64_t &maxStepFromAttr) {
-  if (auto reductionAttr = loop->getAttrOfType<IntegerAttr>(kReductionLoopAttr)) {
-    maxStepFromAttr = reductionAttr.getInt();
-    return VectorizationMode::Reduction;
+  if (auto attr = loop->getAttrOfType<IntegerAttr>("reduction_x")) {
+    maxStepFromAttr = attr.getInt();
+    return VectorizationMode::ReductionX;
+  }
+
+  if (auto attr = loop->getAttrOfType<IntegerAttr>("reduction_y")) {
+    maxStepFromAttr = attr.getInt();
+    return VectorizationMode::ReductionY;
+  }
+
+  if (auto attr = loop->getAttrOfType<IntegerAttr>("reduction_all")) {
+    maxStepFromAttr = attr.getInt();
+    return VectorizationMode::ReductionX;
   }
 
   if (auto vectorAttr = loop->getAttrOfType<IntegerAttr>(kVectorAttr)) {
@@ -108,25 +168,18 @@ static VectorizationMode getVectorizationMode(scf::ForOp loop, int64_t &maxStepF
   return VectorizationMode::None;
 }
 
-// Returns: {VF, vectorSizeValue, skip, isDynamic}
-static std::tuple<int64_t, Value, bool, bool> decideVectorFactor(
-    scf::ForOp loop,
-    int64_t defaultVF) {
-
+static std::pair<bool, bool> checkLoopEligibility(scf::ForOp loop) {
   auto stepConst = loop.getStep().getDefiningOp<arith::ConstantIndexOp>();
   if (!stepConst || stepConst.value() != 1) {
-    return {0, Value(), true, false};
+    return {true, false};
   }
 
   auto ubConst = loop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
   auto lbConst = loop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
 
-  if (ubConst && lbConst) {
-    int64_t tripCount = ubConst.value() - lbConst.value();
-    return {tripCount, Value(), false, false};
-  } else {
-    return {defaultVF, loop.getUpperBound(), false, true};
-  }
+  bool isDynamic = !(ubConst && lbConst);
+
+  return {false, isDynamic};
 }
 
 static std::optional<arith::AtomicRMWKind> detectReductionKind(scf::ForOp loop) {
@@ -183,26 +236,21 @@ static Value createNeutralValue(
 
   Attribute neutralAttr = arith::getIdentityValueAttr(kind, elemType, ctx.builder, loc);
 
-  if (ctx.isDynamic) {
+  if (ctx.isDynamic()) {
     Value neutralScalar = ctx.builder.create<arith::ConstantOp>(
         loc, mlir::cast<TypedAttr>(neutralAttr));
 
     npuvector::NPUVectorType vecType =
         npuvector::NPUVectorType::get({ShapedType::kDynamic}, elemType);
 
-    SmallVector<Value> dynamicSizes;
-    if (ctx.vectorSizeValue) {
-      dynamicSizes.push_back(ctx.vectorSizeValue);
-    }
-
     Value neutralVec = ctx.builder.create<npuvector::BroadcastOp>(
-        loc, vecType, neutralScalar, ValueRange(dynamicSizes), ctx.maxStepValue);
+        loc, vecType, neutralScalar, ValueRange{ctx.vectorSizeValue}, ctx.maxStepValue);
 
     return neutralVec;
 
   } else {
     npuvector::NPUVectorType vecType =
-        npuvector::NPUVectorType::get({ctx.vectorFactor}, elemType);
+        npuvector::NPUVectorType::get({ctx.actualStep}, elemType);
 
     auto vecAttr = DenseElementsAttr::get(vecType, neutralAttr);
     Value neutralVec = ctx.builder.create<arith::ConstantOp>(loc, vecAttr);
@@ -259,60 +307,71 @@ static vector::CombiningKind convertToCombiningKind(arith::AtomicRMWKind kind) {
   }
 }
 
-static scf::ForOp createVectorizedLoop(VectorizationContext &ctx) {
+static scf::ForOp createEmptyVectorizedLoop(VectorizationContext &ctx) {
   Location loc = ctx.scalarLoop.getLoc();
 
-  ctx.builder.setInsertionPoint(ctx.scalarLoop);
-
   Value newStepValue;
-
-  if (ctx.isDynamic) {
-    newStepValue = ctx.vectorSizeValue;
+  if (ctx.mode == VectorizationMode::ReductionY) {
+    newStepValue = ctx.scalarLoop.getStep();
   } else {
-    newStepValue = ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.vectorFactor);
+    newStepValue = ctx.isDynamic()
+        ? ctx.vectorSizeValue
+        : ctx.builder.create<arith::ConstantIndexOp>(loc, ctx.actualStep);
   }
 
-  if (ctx.mode == VectorizationMode::Elementwise) {
-    auto vecLoop = ctx.builder.create<scf::ForOp>(
-        loc,
-        ctx.scalarLoop.getLowerBound(),
-        ctx.scalarLoop.getUpperBound(),
-        newStepValue,
-        std::nullopt,
-        [](OpBuilder &builder, Location loc, Value iv, ValueRange iterArgs) {
-          // Empty body builder
-        });
-
-    return vecLoop;
-
-  } else {
+  Value neutralVec;
+  if (ctx.mode == VectorizationMode::ReductionX ||
+      ctx.mode == VectorizationMode::ReductionY) {
     auto kind = detectReductionKind(ctx.scalarLoop);
-    if (!kind) {
-      return nullptr;
-    }
+    if (!kind) return nullptr;
 
     Type elemType = ctx.scalarLoop.getRegionIterArgs()[0].getType();
-
-    Value neutralVec = createNeutralValue(*kind, elemType, ctx, loc);
-    if (!neutralVec) {
-      return nullptr;
-    }
+    neutralVec = createNeutralValue(*kind, elemType, ctx, loc);
+    if (!neutralVec) return nullptr;
 
     ctx.reductionKind = kind;
     ctx.origInit = ctx.scalarLoop.getInitArgs()[0];
-
-    auto vecLoop = ctx.builder.create<scf::ForOp>(
-        loc,
-        ctx.scalarLoop.getLowerBound(),
-        ctx.scalarLoop.getUpperBound(),
-        newStepValue,
-        ValueRange{neutralVec},
-        [](OpBuilder &builder, Location loc, Value iv, ValueRange iterArgs) {
-          // Empty body builder
-        });
-
-    return vecLoop;
   }
+
+  Value upperBound = ctx.scalarLoop.getUpperBound();
+  Value lowerBound = ctx.scalarLoop.getLowerBound();
+
+  if (ctx.mode == VectorizationMode::ReductionX) {
+    if (!ctx.isDynamic()) {
+      auto ubConst = upperBound.getDefiningOp<arith::ConstantIndexOp>();
+      auto lbConst = lowerBound.getDefiningOp<arith::ConstantIndexOp>();
+      if (ubConst && lbConst) {
+        int64_t lbVal = lbConst.value();
+        int64_t ubVal = ubConst.value();
+        int64_t tripCount = ubVal - lbVal;
+        int64_t alignedTripCount = (tripCount / ctx.actualStep) * ctx.actualStep;
+        int64_t alignedUb = lbVal + alignedTripCount;
+        if (alignedUb < ubVal) {
+          upperBound = ctx.builder.create<arith::ConstantIndexOp>(loc, alignedUb);
+        }
+      }
+    } else {
+      Value tripCount = ctx.builder.create<arith::SubIOp>(loc, upperBound, lowerBound);
+      Value numIterations = ctx.builder.create<arith::DivSIOp>(loc, tripCount, ctx.vectorSizeValue);
+      Value alignedTripCount = ctx.builder.create<arith::MulIOp>(loc, numIterations, ctx.vectorSizeValue);
+      upperBound = ctx.builder.create<arith::AddIOp>(loc, alignedTripCount, lowerBound);
+    }
+  }
+
+  scf::ForOp vecLoop;
+  if (neutralVec) {
+    vecLoop = ctx.builder.create<scf::ForOp>(
+        loc, lowerBound, upperBound, newStepValue,
+        ValueRange{neutralVec},
+        [](OpBuilder &, Location, Value, ValueRange) {});
+  } else {
+    vecLoop = ctx.builder.create<scf::ForOp>(
+        loc, lowerBound, upperBound, newStepValue,
+        std::nullopt,
+        [](OpBuilder &, Location, Value, ValueRange) {});
+  }
+
+  return vecLoop;
 }
 
 static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
@@ -320,11 +379,43 @@ static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
   Type elemType = memRefType.getElementType();
   Location loc = loadOp.getLoc();
 
+  Value vecAxis = ctx.getVectorizationAxis();
+  Value mappedVecAxis = ctx.valueMapping.lookupOrDefault(vecAxis);
+
+  Value memRef = loadOp.getMemRef();
+  Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
+
+  bool allIndicesLoopInvariant = true;
+  for (Value idx : loadOp.getIndices()) {
+    if (idx == vecAxis || idx == mappedVecAxis) {
+      allIndicesLoopInvariant = false;
+      break;
+    }
+
+    if (idx.getParentBlock() == ctx.scalarLoop.getBody()) {
+      allIndicesLoopInvariant = false;
+      break;
+    }
+  }
+
+  if (allIndicesLoopInvariant) {
+    SmallVector<Value> indices;
+    for (Value idx : loadOp.getIndices()) {
+      Value newIdx = ctx.valueMapping.lookupOrDefault(idx);
+      indices.push_back(newIdx);
+    }
+
+    Value scalarLoad = ctx.builder.create<memref::LoadOp>(
+        loc, mappedMemRef, indices);
+
+    return vectorizeBroadcastScalar(scalarLoad, ctx);
+  }
+
   mlir::npuvector::NPUVectorType vecType;
-  if (ctx.isDynamic) {
+  if (ctx.isDynamic()) {
     vecType = mlir::npuvector::NPUVectorType::get({ShapedType::kDynamic}, elemType);
   } else {
-    vecType = mlir::npuvector::NPUVectorType::get({ctx.vectorFactor}, elemType);
+    vecType = mlir::npuvector::NPUVectorType::get({ctx.actualStep}, elemType);
   }
 
   SmallVector<Value> indices;
@@ -338,14 +429,14 @@ static Value vectorizeLoad(memref::LoadOp loadOp, VectorizationContext &ctx) {
       ctx.builder.getZeroAttr(elemType));
 
   SmallVector<Value> dynamicSizes;
-  if (ctx.isDynamic && ctx.vectorSizeValue) {
+  if (ctx.isDynamic()) {
     dynamicSizes.push_back(ctx.vectorSizeValue);
   }
 
   auto transferRead = ctx.builder.create<npuvector::TransferReadOp>(
       loc,
       vecType,
-      loadOp.getMemRef(),
+      mappedMemRef,
       ValueRange(indices),
       padding,
       Value(),
@@ -360,13 +451,9 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
 
   Value storeValue = storeOp.getValue();
   Value vectorValue = ctx.valueMapping.lookupOrNull(storeValue);
-  if (!vectorValue) {
-    OpBuilder::InsertionGuard guard(ctx.builder);
-    if (ctx.vecLoop) {
-      ctx.builder.setInsertionPoint(ctx.vecLoop);
-    }
 
-    vectorValue = vectorizeUniform(storeValue, ctx);
+  if (!vectorValue) {
+    vectorValue = vectorizeBroadcastScalar(storeValue, ctx);
     if (!vectorValue) {
       return;
     }
@@ -382,39 +469,36 @@ static void vectorizeStore(memref::StoreOp storeOp, VectorizationContext &ctx) {
   auto npuVecType = mlir::dyn_cast<npuvector::NPUVectorType>(vectorValue.getType());
   if (!npuVecType) {
     llvm_unreachable("vectorizeStore: vector value must be NPUVectorType");
-    return;
   }
+
+  Value memRef = storeOp.getMemRef();
+  Value mappedMemRef = ctx.valueMapping.lookupOrDefault(memRef);
 
   ctx.builder.create<npuvector::TransferWriteOp>(
       loc,
       Type(),
       vectorValue,
-      storeOp.getMemRef(),
+      mappedMemRef,
       ValueRange(indices),
       Value());
 }
 
-static Value vectorizeTypeConversion(Operation *op, VectorizationContext &ctx) {
+static Value vectorizeArithOp(Operation *op, VectorizationContext &ctx) {
   Location loc = op->getLoc();
 
   SmallVector<Value, 4> vecOperands;
   for (Value operand : op->getOperands()) {
     Value vecOperand = ctx.valueMapping.lookupOrNull(operand);
-    if (!vecOperand) {
-      if (operand.getParentBlock() != ctx.scalarLoop.getBody()) {
-        OpBuilder::InsertionGuard guard(ctx.builder);
-        if (ctx.vecLoop) {
-          ctx.builder.setInsertionPoint(ctx.vecLoop);
-        }
-        vecOperand = vectorizeUniform(operand, ctx);
-        if (!vecOperand) {
-          return nullptr;
-        }
-        ctx.valueMapping.map(operand, vecOperand);
-      } else {
+
+    if (!vecOperand || !mlir::isa<npuvector::NPUVectorType>(vecOperand.getType())) {
+      Value valueToBroadcast = vecOperand ? vecOperand : operand;
+
+      vecOperand = vectorizeBroadcastScalar(valueToBroadcast, ctx);
+      if (!vecOperand) {
         return nullptr;
       }
     }
+
     vecOperands.push_back(vecOperand);
   }
 
@@ -422,155 +506,73 @@ static Value vectorizeTypeConversion(Operation *op, VectorizationContext &ctx) {
   for (Value result : op->getResults()) {
     Type scalarType = result.getType();
     npuvector::NPUVectorType vecType;
-    if (ctx.isDynamic) {
+    if (ctx.isDynamic()) {
       vecType = npuvector::NPUVectorType::get({ShapedType::kDynamic}, scalarType);
     } else {
-      vecType = npuvector::NPUVectorType::get({ctx.vectorFactor}, scalarType);
+      vecType = npuvector::NPUVectorType::get({ctx.actualStep}, scalarType);
     }
     vecResultTypes.push_back(vecType);
   }
 
-  StringRef arithOpName = op->getName().getStringRef();
-  std::string npuvectorOpName = "npuvector." + arithOpName.split('.').second.str();
-  OperationName npuvectorName(npuvectorOpName, ctx.builder.getContext());
+  bool needsRename = isa<arith::ExtFOp, arith::TruncFOp,
+                         arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
+                         arith::SIToFPOp, arith::UIToFPOp,
+                         arith::FPToSIOp, arith::FPToUIOp,
+                         arith::BitcastOp, arith::IndexCastOp, arith::IndexCastUIOp,
+                         arith::CmpIOp, arith::CmpFOp, arith::SelectOp>(op);
 
-  OperationState state(loc, npuvectorName);
-  state.addOperands(vecOperands);
-  state.addTypes(vecResultTypes);
-  state.addAttributes(op->getAttrs());
+  Operation *vecOp;
+  if (needsRename) {
+    StringRef arithOpName = op->getName().getStringRef();
+    std::string npuvectorOpName = "npuvector." + arithOpName.split('.').second.str();
+    OperationName npuvectorName(npuvectorOpName, ctx.builder.getContext());
 
-  Operation *npuvectorOp = ctx.builder.create(state);
+    OperationState state(loc, npuvectorName);
+    state.addOperands(vecOperands);
+    state.addTypes(vecResultTypes);
+    state.addAttributes(op->getAttrs());
 
-  if (!npuvectorOp || npuvectorOp->getNumResults() == 0) {
-    LLVM_DEBUG(llvm::dbgs() << "Failed to create npuvector operation: "
-                            << npuvectorOpName << "\n");
+    vecOp = ctx.builder.create(state);
+  } else {
+    vecOp = ctx.builder.create(
+        loc,
+        op->getName().getIdentifier(),
+        vecOperands,
+        vecResultTypes,
+        op->getAttrs());
+  }
+
+  if (!vecOp || vecOp->getNumResults() == 0) {
     return nullptr;
   }
-
-  return npuvectorOp->getResult(0);
-}
-
-static Value vectorizeArithOp(Operation *op, VectorizationContext &ctx) {
-  if (isa<arith::ExtFOp, arith::TruncFOp,
-          arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
-          arith::SIToFPOp, arith::UIToFPOp,
-          arith::FPToSIOp, arith::FPToUIOp,
-          arith::BitcastOp, arith::IndexCastOp, arith::IndexCastUIOp,
-          arith::CmpIOp, arith::CmpFOp, arith::SelectOp>(op)) {
-    return vectorizeTypeConversion(op, ctx);
-  }
-
-  SmallVector<Value, 4> vectorOperands;
-  for (Value operand : op->getOperands()) {
-    Value vecOperand = ctx.valueMapping.lookupOrNull(operand);
-
-    if (!vecOperand || !mlir::isa<npuvector::NPUVectorType>(vecOperand.getType())) {
-      Value scalarOperand = vecOperand ? vecOperand : operand;
-
-      if (scalarOperand.getParentBlock() != ctx.scalarLoop.getBody()) {
-        OpBuilder::InsertionGuard guard(ctx.builder);
-
-        if (ctx.vecLoop) {
-          ctx.builder.setInsertionPoint(ctx.vecLoop);
-        }
-
-        vecOperand = vectorizeUniform(scalarOperand, ctx);
-        if (!vecOperand) {
-          return nullptr;
-        }
-        ctx.valueMapping.map(operand, vecOperand);
-
-      } else {
-        return nullptr;
-      }
-    }
-
-    if (!mlir::isa<npuvector::NPUVectorType>(vecOperand.getType())) {
-      llvm_unreachable("vectorizeArithOp: all operands must be NPUVectorType");
-    }
-
-    vectorOperands.push_back(vecOperand);
-  }
-
-  SmallVector<Type, 4> vectorTypes;
-  for (Value result : op->getResults()) {
-    Type scalarType = result.getType();
-    npuvector::NPUVectorType vecType;
-    if (ctx.isDynamic) {
-      vecType = npuvector::NPUVectorType::get({ShapedType::kDynamic}, scalarType);
-    } else {
-      vecType = npuvector::NPUVectorType::get({ctx.vectorFactor}, scalarType);
-    }
-    vectorTypes.push_back(vecType);
-  }
-
-  Operation *vecOp = ctx.builder.create(
-      op->getLoc(),
-      op->getName().getIdentifier(),
-      vectorOperands,
-      vectorTypes,
-      op->getAttrs());
 
   return vecOp->getResult(0);
 }
 
-static Value vectorizeConstant(arith::ConstantOp constOp, VectorizationContext &ctx) {
-  Type scalarType = constOp.getType();
-  Location loc = constOp.getLoc();
-
-  npuvector::NPUVectorType vecType;
-
-  if (ctx.isDynamic) {
-    if (!ctx.vectorSizeValue) {
-      return nullptr;
-    }
-
-    vecType = npuvector::NPUVectorType::get({ShapedType::kDynamic}, scalarType);
-
-    SmallVector<Value> dynamicSizes;
-    dynamicSizes.push_back(ctx.vectorSizeValue);
-
-    Value scalarValue = ctx.builder.create<arith::ConstantOp>(
-        loc, constOp.getValue());
-
-    auto broadcast = ctx.builder.create<npuvector::BroadcastOp>(
-        loc, vecType,
-        scalarValue,
-        ValueRange(dynamicSizes),
-        ctx.maxStepValue);
-
-    return broadcast.getResult();
-
-  } else {
-    vecType = npuvector::NPUVectorType::get({ctx.vectorFactor}, scalarType);
-
-    auto vecAttr = DenseElementsAttr::get(vecType, constOp.getValue());
-    auto vecConst = ctx.builder.create<arith::ConstantOp>(loc, vecAttr);
-
-    return vecConst.getResult();
+static Value vectorizeBroadcastScalar(Value scalarVal, VectorizationContext &ctx) {
+  if (mlir::isa<npuvector::NPUVectorType>(scalarVal.getType())) {
+    return scalarVal;
   }
-}
 
-static Value vectorizeUniform(Value uniformVal, VectorizationContext &ctx) {
-  Type scalarType = uniformVal.getType();
-  Location loc = uniformVal.getLoc();
+  Type scalarType = scalarVal.getType();
+  Location loc = scalarVal.getLoc();
 
   npuvector::NPUVectorType vecType;
-  if (ctx.isDynamic) {
+  if (ctx.isDynamic()) {
     vecType = npuvector::NPUVectorType::get({ShapedType::kDynamic}, scalarType);
   } else {
-    vecType = npuvector::NPUVectorType::get({ctx.vectorFactor}, scalarType);
+    vecType = npuvector::NPUVectorType::get({ctx.actualStep}, scalarType);
   }
 
   SmallVector<Value> dynamicSizes;
-  if (ctx.isDynamic && ctx.vectorSizeValue) {
+  if (ctx.isDynamic()) {
     dynamicSizes.push_back(ctx.vectorSizeValue);
   }
 
   auto broadcast = ctx.builder.create<npuvector::BroadcastOp>(
       loc,
       vecType,
-      uniformVal,
+      scalarVal,
       ValueRange(dynamicSizes),
       ctx.maxStepValue);
 
@@ -580,13 +582,9 @@ static Value vectorizeUniform(Value uniformVal, VectorizationContext &ctx) {
 static void cloneScalarOp(Operation &op, VectorizationContext &ctx) {
   OpBuilder::InsertionGuard guard(ctx.builder);
 
-  if (ctx.vecLoop) {
-    ctx.builder.setInsertionPoint(ctx.vecLoop);
-  } else {
-    ctx.builder.setInsertionPoint(ctx.scalarLoop);
-  }
-
   Operation *clonedOp = ctx.builder.clone(op);
+
+  clonedOp->removeAttr(kSkipVectorizeAttr);
 
   for (auto [idx, operand] : llvm::enumerate(op.getOperands())) {
     Value mappedValue = ctx.valueMapping.lookupOrDefault(operand);
@@ -598,17 +596,288 @@ static void cloneScalarOp(Operation &op, VectorizationContext &ctx) {
   }
 }
 
+static LogicalResult vectorizeRegion(Region &region, VectorizationContext &ctx);
+
+// Vectorize scf.if operation.
+// Current limitations:
+//   - Only supports scf.if without else branch
+//   - Only supports scf.if without return values
+static Value vectorizeIf(scf::IfOp ifOp, VectorizationContext &ctx) {
+  Location loc = ifOp.getLoc();
+  Value condition = ifOp.getCondition();
+  Value vecCondition = ctx.valueMapping.lookupOrNull(condition);
+  if (!vecCondition) {
+    vecCondition = condition;
+  }
+
+  bool hasElse = !ifOp.getElseRegion().empty();
+  if (hasElse) {
+    return nullptr;
+  }
+
+  if (ifOp.getNumResults() > 0) {
+    return nullptr;
+  }
+
+  auto vecIfOp = ctx.builder.create<scf::IfOp>(loc, TypeRange{}, vecCondition, false);
+
+  {
+    OpBuilder::InsertionGuard guard(ctx.builder);
+    ctx.builder.setInsertionPointToStart(vecIfOp.thenBlock());
+
+    if (failed(vectorizeRegion(ifOp.getThenRegion(), ctx))) {
+      vecIfOp.erase();
+      return nullptr;
+    }
+  }
+
+  return Value();
+}
+
+static LogicalResult handleConstantOp(arith::ConstantOp constOp, VectorizationContext &ctx) {
+  cloneScalarOp(*constOp.getOperation(), ctx);
+  return success();
+}
+
+static LogicalResult handleArithOrMathOp(Operation &op, VectorizationContext &ctx) {
+  StringRef dialectName = op.getDialect()->getNamespace();
+  if (dialectName != "arith" && dialectName != "math") {
+    return success();
+  }
+
+  if (op.getNumRegions() != 0) {
+    return failure();
+  }
+
+  if (op.getNumResults() == 0) {
+    return success();
+  }
+
+  Value vecValue = vectorizeArithOp(&op, ctx);
+  if (!vecValue) {
+    return failure();
+  }
+
+  ctx.valueMapping.map(op.getResult(0), vecValue);
+
+  return success();
+}
+
+static LogicalResult handleIfOp(scf::IfOp ifOp, VectorizationContext &ctx) {
+  Value vecIfResult = vectorizeIf(ifOp, ctx);
+
+  if (!vecIfResult && ifOp.getNumResults() > 0) {
+    return failure();
+  }
+
+  if (vecIfResult) {
+    ctx.valueMapping.map(ifOp.getResult(0), vecIfResult);
+  }
+
+  return success();
+}
+
+static void updateNestedLoopOperands(scf::ForOp nestedForOp, VectorizationContext &ctx) {
+  Value mappedLB = ctx.valueMapping.lookupOrDefault(nestedForOp.getLowerBound());
+  Value mappedUB = ctx.valueMapping.lookupOrDefault(nestedForOp.getUpperBound());
+  Value mappedStep = ctx.valueMapping.lookupOrDefault(nestedForOp.getStep());
+
+  if (mappedLB != nestedForOp.getLowerBound()) {
+    nestedForOp.getLowerBoundMutable().assign(mappedLB);
+  }
+  if (mappedUB != nestedForOp.getUpperBound()) {
+    nestedForOp.getUpperBoundMutable().assign(mappedUB);
+  }
+  if (mappedStep != nestedForOp.getStep()) {
+    nestedForOp.getStepMutable().assign(mappedStep);
+  }
+
+  for (unsigned i = 0; i < nestedForOp.getNumRegionIterArgs(); ++i) {
+    Value initArg = nestedForOp.getInitArgs()[i];
+    Value mappedInit = ctx.valueMapping.lookupOrDefault(initArg);
+    if (mappedInit != initArg) {
+      nestedForOp.getInitArgsMutable()[i].set(mappedInit);
+    }
+  }
+}
+
+static void registerNestedLoopResults(scf::ForOp nestedForOp, VectorizationContext &ctx) {
+  Block *insertBlock = ctx.builder.getInsertionBlock();
+  if (insertBlock && !insertBlock->empty()) {
+    for (auto it = insertBlock->rbegin(); it != insertBlock->rend(); ++it) {
+      if (auto vecForOp = dyn_cast<scf::ForOp>(&*it)) {
+        for (auto [scalarResult, vecResult] :
+             llvm::zip(nestedForOp.getResults(), vecForOp.getResults())) {
+          ctx.valueMapping.map(scalarResult, vecResult);
+        }
+        break;
+      }
+    }
+  }
+}
+
+static LogicalResult handleNestedForOp(scf::ForOp nestedForOp, VectorizationContext &ctx) {
+  int64_t nestedMaxStep = -1;
+  VectorizationMode nestedMode = getVectorizationMode(nestedForOp, nestedMaxStep);
+
+  if (nestedMode == VectorizationMode::None) {
+    cloneScalarOp(*nestedForOp.getOperation(), ctx);
+    return success();
+  }
+
+  int64_t nestedActualStep;
+  Value nestedVectorSizeValue;
+  Value nestedMaxStepValue;
+  Value nestedVecAxis;
+
+  if (nestedMode == VectorizationMode::ReductionY) {
+    nestedActualStep = ctx.actualStep;
+    nestedVectorSizeValue = ctx.vectorSizeValue;
+    nestedMaxStepValue = ctx.maxStepValue;
+    nestedVecAxis = ctx.getVectorizationAxis();
+  } else {
+    nestedActualStep = computeStaticVectorSize(nestedForOp, nestedMaxStep);
+
+    OpBuilder attrBuilder(ctx.builder.getContext());
+    attrBuilder.setInsertionPoint(nestedForOp);
+    nestedMaxStepValue = attrBuilder.create<arith::ConstantIndexOp>(
+        nestedForOp.getLoc(), nestedMaxStep);
+
+    if (ctx.isDynamic()) {
+      nestedVectorSizeValue = computeDynamicVectorSize(
+          nestedForOp, nestedMaxStepValue, attrBuilder, nestedForOp.getLoc());
+    } else {
+      nestedVectorSizeValue = nullptr;
+    }
+
+    nestedVecAxis = nestedForOp.getInductionVar();
+  }
+
+  Value outerIVMapping = Value();
+  if (nestedMode == VectorizationMode::ReductionY && nestedVecAxis) {
+    outerIVMapping = ctx.valueMapping.lookupOrDefault(nestedVecAxis);
+
+    if (!outerIVMapping || outerIVMapping == nestedVecAxis) {
+      cloneScalarOp(*nestedForOp.getOperation(), ctx);
+      return success();
+    }
+  }
+
+  if (!ctx.builder.getInsertionBlock()) {
+    cloneScalarOp(*nestedForOp.getOperation(), ctx);
+    return success();
+  }
+
+  updateNestedLoopOperands(nestedForOp, ctx);
+
+  if (failed(vectorizeLoop(nestedForOp, nestedActualStep, nestedVectorSizeValue,
+                          nestedMaxStepValue, nestedMode, ctx.builder,
+                          nestedVecAxis, outerIVMapping))) {
+    cloneScalarOp(*nestedForOp.getOperation(), ctx);
+    return success();
+  }
+
+  registerNestedLoopResults(nestedForOp, ctx);
+  return success();
+}
+
+static LogicalResult vectorizeOneOp(Operation &op, VectorizationContext &ctx) {
+  if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
+    Value vecValue = vectorizeLoad(loadOp, ctx);
+    if (!vecValue) {
+      return failure();
+    }
+    ctx.valueMapping.map(loadOp.getResult(), vecValue);
+    return success();
+  }
+
+  if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
+    vectorizeStore(storeOp, ctx);
+    return success();
+  }
+
+  if (auto constOp = dyn_cast<arith::ConstantOp>(&op)) {
+    return handleConstantOp(constOp, ctx);
+  }
+
+  if (auto ifOp = dyn_cast<scf::IfOp>(&op)) {
+    return handleIfOp(ifOp, ctx);
+  }
+
+  if (auto nestedForOp = dyn_cast<scf::ForOp>(&op)) {
+    return handleNestedForOp(nestedForOp, ctx);
+  }
+
+  if (shouldCloneScalarOp(op, ctx)) {
+    cloneScalarOp(op, ctx);
+    return success();
+  }
+
+  StringRef dialectName = op.getDialect()->getNamespace();
+  if (dialectName == "arith" || dialectName == "math") {
+    return handleArithOrMathOp(op, ctx);
+  }
+
+  cloneScalarOp(op, ctx);
+  return success();
+}
+
+static LogicalResult vectorizeRegion(Region &region, VectorizationContext &ctx) {
+  Block *block = &region.front();
+
+  for (Operation &op : block->without_terminator()) {
+    if (failed(vectorizeOneOp(op, ctx))) {
+      return failure();
+    }
+  }
+
+  Operation *originalTerminator = block->getTerminator();
+  if (auto originalYieldOp = dyn_cast<scf::YieldOp>(originalTerminator)) {
+    SmallVector<Value> vecYieldOperands;
+
+    for (Value operand : originalYieldOp.getOperands()) {
+      Value vecOperand = ctx.valueMapping.lookupOrNull(operand);
+
+      if (!vecOperand || !mlir::isa<npuvector::NPUVectorType>(vecOperand.getType())) {
+        Value valueToBroadcast = vecOperand ? vecOperand : operand;
+
+        vecOperand = vectorizeBroadcastScalar(valueToBroadcast, ctx);
+        if (!vecOperand) {
+          return failure();
+        }
+        ctx.valueMapping.map(operand, vecOperand);
+      }
+      vecYieldOperands.push_back(vecOperand);
+    }
+
+    Block *currentBlock = ctx.builder.getInsertionBlock();
+    if (!currentBlock) {
+      return failure();
+    }
+
+    Operation *autoTerminator = currentBlock->getTerminator();
+    if (auto autoYieldOp = dyn_cast<scf::YieldOp>(autoTerminator)) {
+      ctx.builder.setInsertionPoint(autoYieldOp);
+      ctx.builder.create<scf::YieldOp>(originalYieldOp.getLoc(), vecYieldOperands);
+      autoYieldOp.erase();
+    } else {
+      ctx.builder.setInsertionPointToEnd(currentBlock);
+      ctx.builder.create<scf::YieldOp>(originalYieldOp.getLoc(), vecYieldOperands);
+    }
+  }
+
+  return success();
+}
+
 static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
   if (ctx.vecLoop) {
     ctx.builder.setInsertionPointToStart(ctx.vecLoop.getBody());
-  }
-
-  if (ctx.vecLoop) {
     ctx.valueMapping.map(ctx.scalarLoop.getInductionVar(),
                          ctx.vecLoop.getInductionVar());
   }
 
-  if (ctx.mode == VectorizationMode::Reduction) {
+  if (ctx.mode == VectorizationMode::ReductionX ||
+      ctx.mode == VectorizationMode::ReductionY) {
     for (auto [scalarArg, vecArg] : llvm::zip(
             ctx.scalarLoop.getRegionIterArgs(),
             ctx.vecLoop.getRegionIterArgs())) {
@@ -616,53 +885,33 @@ static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
     }
   }
 
-  for (Operation &op : ctx.scalarLoop.getBody()->without_terminator()) {
-    if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
-      Value vecValue = vectorizeLoad(loadOp, ctx);
-      if (!vecValue) {
-        return failure();
+  auto bodyOps = ctx.scalarLoop.getBody()->without_terminator();
+  SmallVector<Operation *> opsToVectorize = llvm::map_to_vector(
+      bodyOps, [](Operation &op) { return &op; });
+
+  SmallVector<scf::ForOp> nestedLoopsToErase;
+
+  for (Operation *op : opsToVectorize) {
+    if (!op || op->getBlock() == nullptr) {
+      continue;
+    }
+
+    if (auto nestedFor = dyn_cast<scf::ForOp>(op)) {
+      int64_t nestedMaxStep = -1;
+      VectorizationMode nestedMode = getVectorizationMode(nestedFor, nestedMaxStep);
+      if (nestedMode != VectorizationMode::None) {
+        nestedLoopsToErase.push_back(nestedFor);
       }
-      ctx.valueMapping.map(loadOp.getResult(), vecValue);
+    }
 
-    } else if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
-      vectorizeStore(storeOp, ctx);
+    if (failed(vectorizeOneOp(*op, ctx))) {
+      return failure();
+    }
+  }
 
-    } else if (auto constOp = dyn_cast<arith::ConstantOp>(&op)) {
-      Type constType = constOp.getType();
-      if (constType == ctx.builder.getIndexType()) {
-        Value scalarConst = ctx.builder.create<arith::ConstantOp>(
-            constOp.getLoc(), constOp.getValue());
-        ctx.valueMapping.map(constOp.getResult(), scalarConst);
-        continue;
-      }
-      Value vecValue = vectorizeConstant(constOp, ctx);
-      if (!vecValue) {
-        return failure();
-      }
-      ctx.valueMapping.map(constOp.getResult(), vecValue);
-
-    } else if (isa<affine::AffineApplyOp, affine::AffineMaxOp, affine::AffineMinOp>(&op)) {
-      cloneScalarOp(op, ctx);
-
-    } else if (op.getNumResults() == 1 &&
-               op.getResult(0).getType() == ctx.builder.getIndexType()) {
-      cloneScalarOp(op, ctx);
-
-    } else {
-      if (op.getNumRegions() != 0) {
-        return failure();
-      }
-
-      Value vecValue = vectorizeArithOp(&op, ctx);
-      if (!vecValue) {
-        return failure();
-      }
-
-      if (op.getNumResults() == 1) {
-        ctx.valueMapping.map(op.getResult(0), vecValue);
-      } else {
-        ctx.valueMapping.map(op.getResult(0), vecValue);
-      }
+  for (auto nestedLoop : nestedLoopsToErase) {
+    if (nestedLoop && nestedLoop->getBlock()) {
+      nestedLoop.erase();
     }
   }
 
@@ -672,14 +921,30 @@ static LogicalResult vectorizeLoopBody(VectorizationContext &ctx) {
 static LogicalResult vectorizeElementwiseInline(VectorizationContext &ctx) {
   ctx.builder.setInsertionPoint(ctx.scalarLoop);
 
-  ctx.valueMapping.map(ctx.scalarLoop.getInductionVar(),
-                       ctx.scalarLoop.getLowerBound());
+  Value iv = ctx.scalarLoop.getInductionVar();
+  Value lb = ctx.scalarLoop.getLowerBound();
+
+  ctx.valueMapping.map(iv, lb);
 
   if (failed(vectorizeLoopBody(ctx))) {
     return failure();
   }
 
-  ctx.scalarLoop.erase();
+  Operation *parent = ctx.scalarLoop->getParentOp();
+  bool isNested = false;
+  while (parent) {
+    if (auto parentFor = dyn_cast<scf::ForOp>(parent)) {
+      if (hasVectorizationAttr(parentFor)) {
+        isNested = true;
+        break;
+      }
+    }
+    parent = parent->getParentOp();
+  }
+
+  if (!isNested) {
+    ctx.scalarLoop.erase();
+  }
 
   return success();
 }
@@ -688,7 +953,239 @@ static void finalizeElementwise(VectorizationContext &ctx) {
   ctx.builder.setInsertionPointToEnd(ctx.vecLoop.getBody());
   ctx.builder.create<scf::YieldOp>(ctx.vecLoop.getLoc());
 
-  ctx.scalarLoop.erase();
+  Operation *parent = ctx.scalarLoop->getParentOp();
+  bool isNested = false;
+  while (parent) {
+    if (auto parentFor = dyn_cast<scf::ForOp>(parent)) {
+      if (hasVectorizationAttr(parentFor)) {
+        isNested = true;
+        break;
+      }
+    }
+    parent = parent->getParentOp();
+  }
+
+  if (!isNested) {
+    ctx.scalarLoop.erase();
+  }
+}
+
+static Value combineReductionResults(OpBuilder &builder, Location loc,
+                                     Value lhs, Value rhs, arith::AtomicRMWKind kind) {
+  switch (kind) {
+    case arith::AtomicRMWKind::addf:
+      return builder.create<arith::AddFOp>(loc, lhs, rhs);
+    case arith::AtomicRMWKind::mulf:
+      return builder.create<arith::MulFOp>(loc, lhs, rhs);
+    case arith::AtomicRMWKind::maximumf:
+      return builder.create<arith::MaximumFOp>(loc, lhs, rhs);
+    case arith::AtomicRMWKind::minimumf:
+      return builder.create<arith::MinimumFOp>(loc, lhs, rhs);
+    default:
+      return lhs;
+  }
+}
+
+static SmallVector<Value> buildTailIndices(memref::LoadOp loadOp, Value inductionVar,
+                                           Value tailStart, OpBuilder &builder) {
+  SmallVector<Value> indices;
+  for (Value idx : loadOp.getIndices()) {
+    if (idx == inductionVar) {
+      indices.push_back(tailStart);
+    } else if (auto constOp = idx.getDefiningOp<arith::ConstantOp>()) {
+      indices.push_back(builder.create<arith::ConstantOp>(
+          constOp.getLoc(), constOp.getValue()));
+    } else {
+      indices.push_back(idx);
+    }
+  }
+  return indices;
+}
+
+static bool isReductionOp(Operation &op) {
+  if (op.hasAttr("reduction_type")) {
+    return true;
+  }
+
+  if (op.hasAttr("reduction_axes")) {
+    return true;
+  }
+
+  return false;
+}
+
+struct TailVectorTypeInfo {
+  npuvector::NPUVectorType vecType;
+  SmallVector<Value> dynamicSizes;
+};
+
+static TailVectorTypeInfo createTailVectorType(Value tailSize, Type elemType) {
+  TailVectorTypeInfo info;
+  if (auto tailSizeConst = tailSize.getDefiningOp<arith::ConstantIndexOp>()) {
+    info.vecType = npuvector::NPUVectorType::get({tailSizeConst.value()}, elemType);
+  } else {
+    info.vecType = npuvector::NPUVectorType::get({ShapedType::kDynamic}, elemType);
+    info.dynamicSizes.push_back(tailSize);
+  }
+  return info;
+}
+
+static void vectorizeTailOps(VectorizationContext &tailCtx, VectorizationContext &ctx,
+                             Value vecLoopUb, Value tailSize) {
+  Location loc = ctx.scalarLoop.getLoc();
+
+  memref::LoadOp tailLoadOp = nullptr;
+
+  for (Operation &op : ctx.scalarLoop.getBody()->without_terminator()) {
+    if (isReductionOp(op)) {
+      continue;
+    }
+
+    if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
+      tailLoadOp = loadOp;
+
+      SmallVector<Value> tailIndices = buildTailIndices(
+          loadOp, ctx.scalarLoop.getInductionVar(), vecLoopUb, tailCtx.builder);
+
+      Type memrefElemType = loadOp.getMemRefType().getElementType();
+      auto typeInfo = createTailVectorType(tailSize, memrefElemType);
+
+      Value padding = tailCtx.builder.create<arith::ConstantOp>(
+          loc, tailCtx.builder.getZeroAttr(memrefElemType));
+
+      auto tailRead = tailCtx.builder.create<npuvector::TransferReadOp>(
+          loc, typeInfo.vecType, loadOp.getMemRef(),
+          ValueRange(tailIndices), padding, Value(),
+          ValueRange(typeInfo.dynamicSizes), tailSize);
+
+      tailCtx.valueMapping.map(loadOp.getResult(), tailRead.getResult());
+      continue;
+    }
+
+    bool isIndexConst = tailLoadOp && llvm::any_of(tailLoadOp.getIndices(), [&](Value idx) {
+      return op.getNumResults() > 0 && op.getResult(0) == idx;
+    });
+    if (isIndexConst) continue;
+
+    if (auto constOp = dyn_cast<arith::ConstantOp>(&op)) {
+      Value scalarConst = tailCtx.builder.create<arith::ConstantOp>(
+          constOp.getLoc(), constOp.getValue());
+      tailCtx.valueMapping.map(constOp.getResult(), scalarConst);
+    } else if (op.getDialect()->getNamespace() == "arith" ||
+               op.getDialect()->getNamespace() == "math") {
+      Value vecValue = vectorizeArithOp(&op, tailCtx);
+      if (vecValue && op.getNumResults() > 0) {
+        tailCtx.valueMapping.map(op.getResult(0), vecValue);
+      }
+    }
+  }
+}
+
+static Value findValueToReduce(VectorizationContext &tailCtx, VectorizationContext &ctx) {
+  auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
+  Value scalarYieldValue = scalarYield.getOperand(0);
+
+  if (auto defOp = scalarYieldValue.getDefiningOp()) {
+    if (isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MinimumFOp>(defOp)) {
+      for (Value operand : defOp->getOperands()) {
+        if (operand != ctx.scalarLoop.getRegionIterArgs()[0]) {
+          Value mappedValue = tailCtx.valueMapping.lookupOrNull(operand);
+          if (mappedValue && mlir::isa<npuvector::NPUVectorType>(mappedValue.getType())) {
+            return mappedValue;
+          }
+        }
+      }
+    }
+  }
+
+  return Value();
+}
+
+static Value processTailBlock(VectorizationContext &ctx, Value reduced,
+                              Value vecLoopUb, Value tailSize, Type elemType,
+                              vector::CombiningKind combiningKind) {
+  Location loc = ctx.vecLoop.getLoc();
+
+  int64_t tailActualStep;
+  Value tailVectorSizeValue;
+  if (auto tailSizeConst = tailSize.getDefiningOp<arith::ConstantIndexOp>()) {
+    tailActualStep = tailSizeConst.value();
+    tailVectorSizeValue = nullptr;
+  } else {
+    tailActualStep = ctx.actualStep;
+    tailVectorSizeValue = tailSize;
+  }
+
+  VectorizationContext tailCtx(ctx.builder, tailActualStep, tailVectorSizeValue,
+                               ctx.maxStepValue, ctx.mode, ctx.scalarLoop);
+  vectorizeTailOps(tailCtx, ctx, vecLoopUb, tailSize);
+
+  Value valueToReduce = findValueToReduce(tailCtx, ctx);
+  if (!valueToReduce) {
+    llvm_unreachable("Failed to find value to reduce in tail block");
+  }
+
+  auto tailReductionOp = tailCtx.builder.create<npuvector::ReductionOp>(
+      loc, elemType, combiningKind, valueToReduce,
+      Value(), arith::FastMathFlags::none);
+  Value tailReduced = tailReductionOp.getDest();
+
+  return combineReductionResults(tailCtx.builder, loc, reduced, tailReduced, *ctx.reductionKind);
+}
+
+static LogicalResult createVectorizedLoop(VectorizationContext &ctx) {
+  ctx.vecLoop = createEmptyVectorizedLoop(ctx);
+  if (!ctx.vecLoop) {
+    return failure();
+  }
+
+  if (failed(vectorizeLoopBody(ctx))) {
+    ctx.vecLoop.erase();
+    return failure();
+  }
+
+  return success();
+}
+
+static void finalizeReductionY(VectorizationContext &ctx) {
+  Location loc = ctx.vecLoop.getLoc();
+
+  ctx.builder.setInsertionPointToEnd(ctx.vecLoop.getBody());
+
+  auto scalarYield = cast<scf::YieldOp>(ctx.scalarLoop.getBody()->getTerminator());
+  Value scalarYieldValue = scalarYield.getOperand(0);
+  Value vecYieldValue = ctx.valueMapping.lookupOrNull(scalarYieldValue);
+
+  if (!vecYieldValue) {
+    return;
+  }
+
+  ctx.builder.create<scf::YieldOp>(loc, vecYieldValue);
+
+  ctx.builder.setInsertionPointAfter(ctx.vecLoop);
+
+  Value vectorResult = ctx.vecLoop.getResult(0);
+  Value scalarResult = ctx.scalarLoop.getResult(0);
+
+  if (!scalarResult.use_empty()) {
+    scalarResult.replaceAllUsesWith(vectorResult);
+  }
+
+  Operation *parent = ctx.scalarLoop->getParentOp();
+  bool isNested = false;
+  while (parent) {
+    if (auto parentFor = dyn_cast<scf::ForOp>(parent)) {
+      if (hasVectorizationAttr(parentFor)) {
+        isNested = true;
+        break;
+      }
+    }
+    parent = parent->getParentOp();
+  }
+
+  if (!isNested) {
+    ctx.scalarLoop.erase();
+  }
 }
 
 static void finalizeReduction(VectorizationContext &ctx) {
@@ -725,25 +1222,65 @@ static void finalizeReduction(VectorizationContext &ctx) {
 
   Value reduced = reductionOp.getDest();
 
+  Value originalUb = ctx.scalarLoop.getUpperBound();
+  Value vecLoopUb = ctx.vecLoop.getUpperBound();
   Value finalResult = reduced;
 
-  if (!isNeutralElement(*ctx.reductionKind, ctx.origInit, ctx.builder)) {
-    switch (*ctx.reductionKind) {
-      case arith::AtomicRMWKind::addf:
-        finalResult = ctx.builder.create<arith::AddFOp>(loc, reduced, ctx.origInit);
-        break;
-      case arith::AtomicRMWKind::mulf:
-        finalResult = ctx.builder.create<arith::MulFOp>(loc, reduced, ctx.origInit);
-        break;
-      case arith::AtomicRMWKind::maximumf:
-        finalResult = ctx.builder.create<arith::MaximumFOp>(loc, reduced, ctx.origInit);
-        break;
-      case arith::AtomicRMWKind::minimumf:
-        finalResult = ctx.builder.create<arith::MinimumFOp>(loc, reduced, ctx.origInit);
-        break;
-      default:
-        break;
+  if (!ctx.isDynamic()) {
+    auto originalUbConst = originalUb.getDefiningOp<arith::ConstantIndexOp>();
+    auto lbConst = ctx.scalarLoop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
+    bool needTail = false;
+    Value tailSize = Value();
+
+    if (originalUbConst && lbConst) {
+      int64_t tripCount = originalUbConst.value() - lbConst.value();
+
+      int64_t remainder = tripCount % ctx.actualStep;
+      needTail = (remainder != 0);
+
+      if (needTail) {
+        tailSize = ctx.builder.create<arith::ConstantIndexOp>(loc, remainder);
+      }
     }
+
+    if (needTail) {
+      finalResult = processTailBlock(ctx, reduced, vecLoopUb, tailSize, elemType, combiningKind);
+    }
+  } else {
+    Value lowerBound = ctx.scalarLoop.getLowerBound();
+
+    Value tripCount = ctx.builder.create<arith::SubIOp>(loc, originalUb, lowerBound);
+
+    Value remainder = ctx.builder.create<arith::RemSIOp>(loc, tripCount, ctx.vectorSizeValue);
+
+    Value c0 = ctx.builder.create<arith::ConstantIndexOp>(loc, 0);
+
+    Value needTail = ctx.builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ne, remainder, c0);
+
+    auto ifOp = ctx.builder.create<scf::IfOp>(
+        loc, TypeRange{elemType}, needTail, /*hasElse=*/true);
+    {
+      OpBuilder::InsertionGuard guard(ctx.builder);
+      ctx.builder.setInsertionPointToStart(ifOp.thenBlock());
+
+      Value mergedResult = processTailBlock(ctx, reduced, vecLoopUb, remainder, elemType, combiningKind);
+
+      ctx.builder.create<scf::YieldOp>(loc, mergedResult);
+    }
+
+    {
+      OpBuilder::InsertionGuard guard(ctx.builder);
+      ctx.builder.setInsertionPointToStart(ifOp.elseBlock());
+
+      ctx.builder.create<scf::YieldOp>(loc, reduced);
+    }
+
+    finalResult = ifOp.getResult(0);
+  }
+
+  if (!isNeutralElement(*ctx.reductionKind, ctx.origInit, ctx.builder)) {
+    finalResult = combineReductionResults(ctx.builder, loc, finalResult, ctx.origInit, *ctx.reductionKind);
   }
 
   Value scalarResult = ctx.scalarLoop.getResult(0);
@@ -752,25 +1289,81 @@ static void finalizeReduction(VectorizationContext &ctx) {
     scalarResult.replaceAllUsesWith(finalResult);
   }
 
-  ctx.scalarLoop.erase();
+  Operation *parent = ctx.scalarLoop->getParentOp();
+  bool isNested = false;
+  while (parent) {
+    if (auto parentFor = dyn_cast<scf::ForOp>(parent)) {
+      if (hasVectorizationAttr(parentFor)) {
+        isNested = true;
+        break;
+      }
+    }
+    parent = parent->getParentOp();
+  }
+
+  if (!isNested) {
+    ctx.scalarLoop.erase();
+  }
 }
 
 static LogicalResult vectorizeLoop(
     scf::ForOp scalarLoop,
-    int64_t vf,
+    int64_t actualStep,
     Value vfValue,
     Value maxStepValue,
-    bool isDynamic,
     VectorizationMode mode,
-    OpBuilder &builder) {
+    OpBuilder &builder,
+    Value vecAxis,
+    Value outerIVMapping) {
 
-  VectorizationContext ctx(builder, vf, vfValue, maxStepValue, mode, scalarLoop, isDynamic);
+  VectorizationContext ctx(builder, actualStep, vfValue, maxStepValue, mode, scalarLoop, vecAxis);
+
+  if (mode == VectorizationMode::ReductionY && vecAxis && outerIVMapping) {
+    if (outerIVMapping != vecAxis) {
+      ctx.valueMapping.map(vecAxis, outerIVMapping);
+    } else {
+      return failure();
+    }
+  }
 
   if (ctx.mode == VectorizationMode::Elementwise) {
-    return vectorizeElementwiseInline(ctx);
+    bool needLoop = false;
+    if (!ctx.isDynamic()) {
+      auto ubConst = scalarLoop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
+      auto lbConst = scalarLoop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
+      if (ubConst && lbConst) {
+        int64_t tripCount = ubConst.value() - lbConst.value();
+        needLoop = (actualStep < tripCount);
+      }
+    }
 
-  } else {
-    ctx.vecLoop = createVectorizedLoop(ctx);
+    if (needLoop) {
+      ctx.builder.setInsertionPoint(scalarLoop);
+
+      if (failed(createVectorizedLoop(ctx))) {
+        return failure();
+      }
+      finalizeElementwise(ctx);
+      return success();
+    } else {
+      return vectorizeElementwiseInline(ctx);
+    }
+
+  } else if (ctx.mode == VectorizationMode::ReductionX) {
+    ctx.builder.setInsertionPoint(scalarLoop);
+
+    if (failed(createVectorizedLoop(ctx))) {
+      return failure();
+    }
+    finalizeReduction(ctx);
+    return success();
+
+  } else if (ctx.mode == VectorizationMode::ReductionY) {
+    if (!ctx.builder.getInsertionBlock()) {
+      ctx.builder.setInsertionPoint(scalarLoop);
+    }
+
+    ctx.vecLoop = createEmptyVectorizedLoop(ctx);
     if (!ctx.vecLoop) {
       return failure();
     }
@@ -780,8 +1373,11 @@ static LogicalResult vectorizeLoop(
       return failure();
     }
 
-    finalizeReduction(ctx);
+    finalizeReductionY(ctx);
     return success();
+
+  } else {
+    return failure();
   }
 }
 
@@ -810,14 +1406,34 @@ class NPUVectorVectorizePass
 
     OpBuilder builder(&getContext());
 
-    SmallVector<scf::ForOp> candidateLoops;
+    SmallVector<scf::ForOp> allCandidateLoops;
     funcOp.walk([&](scf::ForOp forOp) {
-      if (forOp->hasAttr(kVectorAttr) || forOp->hasAttr(kReductionLoopAttr)) {
-        candidateLoops.push_back(forOp);
+      if (hasVectorizationAttr(forOp)) {
+        allCandidateLoops.push_back(forOp);
       }
     });
 
-    for (scf::ForOp loop : candidateLoops) {
+    SmallVector<scf::ForOp> topLevelLoops;
+    for (scf::ForOp loop : allCandidateLoops) {
+      bool isNested = false;
+      Operation *parent = loop->getParentOp();
+
+      while (parent && !isa<func::FuncOp>(parent)) {
+        if (auto parentFor = dyn_cast<scf::ForOp>(parent)) {
+          if (hasVectorizationAttr(parentFor)) {
+            isNested = true;
+            break;
+          }
+        }
+        parent = parent->getParentOp();
+      }
+
+      if (!isNested) {
+        topLevelLoops.push_back(loop);
+      }
+    }
+
+    for (scf::ForOp loop : topLevelLoops) {
       int64_t maxStepFromAttr = -1;
       VectorizationMode mode = getVectorizationMode(loop, maxStepFromAttr);
 
@@ -825,27 +1441,29 @@ class NPUVectorVectorizePass
         continue;
       }
 
-      auto [vf, vfValue, skip, isDynamic] = decideVectorFactor(loop, defaultVF);
-      if (skip || vf <= 0) {
+      auto [skip, isDynamic] = checkLoopEligibility(loop);
+      if (skip) {
         continue;
       }
 
+      if (maxStepFromAttr <= 0) {
+        continue;
+      }
+
+      int64_t actualStep = computeStaticVectorSize(loop, maxStepFromAttr);
+
+      OpBuilder attrBuilder(&getContext());
+      attrBuilder.setInsertionPoint(loop);
+      Value maxStepValue = attrBuilder.create<arith::ConstantIndexOp>(loop.getLoc(), maxStepFromAttr);
+
+      Value vectorSizeValue;
       if (isDynamic) {
-        OpBuilder sizeBuilder(&getContext());
-        sizeBuilder.setInsertionPoint(loop);
-        vfValue = sizeBuilder.create<arith::SubIOp>(
-            loop.getLoc(), loop.getUpperBound(), loop.getLowerBound());
+        vectorSizeValue = computeDynamicVectorSize(loop, maxStepValue, attrBuilder, loop.getLoc());
       }
 
-      Value maxStepValue;
-      if (maxStepFromAttr > 0 && isDynamic) {
-        OpBuilder attrBuilder(&getContext());
-        attrBuilder.setInsertionPoint(loop);
-        maxStepValue = attrBuilder.create<arith::ConstantIndexOp>(
-            loop.getLoc(), maxStepFromAttr);
-      }
+      Value vecAxis = loop.getInductionVar();
 
-      (void)vectorizeLoop(loop, vf, vfValue, maxStepValue, isDynamic, mode, builder);
+      (void)vectorizeLoop(loop, actualStep, vectorSizeValue, maxStepValue, mode, builder, vecAxis);
     }
   }
 };

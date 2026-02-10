@@ -10,14 +10,12 @@ from ai_kernel_generator.core.worker.manager import (
     register_local_worker,
 )
 from ai_kernel_generator.core.worker.remote_worker import RemoteWorker
-from ai_kernel_generator.cli.server.cli_workflow_routes import router as cli_workflow_router
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AIKG Server")
-app.include_router(cli_workflow_router)
 
 class JobSubmitRequest(BaseModel):
     op_name: str

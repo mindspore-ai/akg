@@ -45,12 +45,15 @@
 #include "mlir/Support/ToolUtilities.h"
 #include "nlohmann/json.hpp"
 
-using namespace llvm;
-using namespace mlir;
-
 namespace mlir {
+using llvm::count;
+using llvm::is_contained;
+using llvm::SmallVector;
+using llvm::StringRef;
+
 namespace {
 constexpr auto kProcess = "process";
+constexpr auto kArch = "arch";
 constexpr auto kComputeCapability = "compute_capability";
 constexpr auto kTargetInfo = "target_info";
 constexpr auto kSymbolCalcExpr = "symbol_calc_expr";
@@ -86,7 +89,7 @@ class ValueNode {
 
 class OpNode {
  public:
-  OpNode(std::string, nlohmann::json, nlohmann::json, nlohmann::json, std::string);
+  OpNode(const std::string &, nlohmann::json, nlohmann::json, nlohmann::json, const std::string &);
   OpNode(const OpNode &d);
   std::string opName;
   nlohmann::json inputDesc;
@@ -98,7 +101,7 @@ class OpNode {
 class MindBuilder {
  public:
   std::string moduleName;
-  Operation *mlirModule;
+  mlir::Operation *mlirModule;
   SmallVector<ValueNode> inputNodes;
   SmallVector<OpNode> opNodes;
   SmallVector<ValueNode> outputNodes;
@@ -125,8 +128,8 @@ class MindBuilder {
   bool isStridedSliceWithAttr(OpNode &opNode) const;
 
   // helper functions
-  mlir::FloatType getFloatType(std::string, OpBuilder) const;
-  mlir::IntegerType getIntType(std::string, OpBuilder) const;
+  mlir::FloatType getFloatType(const std::string &, OpBuilder) const;
+  mlir::IntegerType getIntType(const std::string &, OpBuilder) const;
   SmallVector<int64_t> enableDynamicShape(
     SmallVector<int64_t>) const;  // replace dymShape -1 with minimum value of int64_t
   SmallVector<SmallVector<int64_t>> enableDynamicShape(SmallVector<SmallVector<int64_t>>);
@@ -148,14 +151,15 @@ class MindBuilder {
   AttrType getAttrFromJson(const nlohmann::json &jsonAttr, const std::string &attrName, AttrType defaultValue) const;
   SmallVector<int64_t> getValueFromJson(nlohmann::json json) const;
   bool isConstInput(const nlohmann::json node) const;
-  SmallVector<double> getConstInputValue(const nlohmann::json inputDesc, const std::string opName);
+  SmallVector<double> getConstInputValue(const nlohmann::json inputDesc, const std::string &opName);
 
-  void handleStridedSliceOpInput(OpBuilder &builder, OpNode &opNode, SmallVector<Type> &inputTys);
-  void handleStridedSliceOperands(OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
+  void handleStridedSliceOpInput(const OpBuilder &builder, OpNode &opNode, SmallVector<Type> &inputTys);
+  void handleStridedSliceOperands(const OpBuilder &builder, const OpNode &opNode, SmallVector<Value> &operands,
                                   SmallVector<std::string> &operandNames);
 
   // functions for conversion
-  void convertConstOperand(std::string, SmallVector<int64_t>, SmallVector<double>, std::string, OpBuilder);
+  void convertConstOperand(const std::string &, SmallVector<int64_t>, SmallVector<double>, const std::string &,
+                           OpBuilder);
   void convertStridedSliceOp(OpBuilder builder, OpNode opNode, SmallVector<Type> inputTys, SmallVector<Type> outputTys,
                              SmallVector<Value> operands, SmallVector<NamedAttribute> attrs);
   void convertUnsortedSegmentSumOp(OpBuilder builder, OpNode opNode, SmallVector<Type> inputTys,
@@ -216,10 +220,10 @@ class MindBuilder {
   void reduceOpHelper(OpBuilder builder, OpNode opNode, SmallVector<Type> inputTys, SmallVector<Type> outputTys,
                       SmallVector<Value> operands, SmallVector<NamedAttribute> attrs, std::string opName);
 
-  void handleOperands(OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
+  void handleOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
                       SmallVector<std::string> &operandNames);
 
-  void handleOpInput(OpBuilder &builder, OpNode &opNode, SmallVector<Type> &inputTys);
+  void handleOpInput(const OpBuilder &builder, OpNode &opNode, SmallVector<Type> &inputTys);
 };
 
 class MindConverter {
@@ -249,7 +253,8 @@ class MindConverter {
 
 MindBuilder::MindBuilder(const std::string &moduleName, const SmallVector<ValueNode> &inputNodes,
                          const SmallVector<OpNode> &opNodes, const SmallVector<ValueNode> &outputNodes,
-                         const std::map<std::string, nlohmann::json> &funcAttributes) {
+                         const std::map<std::string, nlohmann::json> &funcAttributes)
+    : mlirModule(nullptr) {
   if (moduleName == "") {
     this->moduleName = "main";
   } else {
@@ -280,8 +285,8 @@ ValueNode::ValueNode(const std::string &tensorName, const std::string &dtype, bo
   this->symShape = symShape;
 }
 
-OpNode::OpNode(std::string name, nlohmann::json inputDesc, nlohmann::json outputDesc, nlohmann::json attrs,
-               std::string ptrAddress) {
+OpNode::OpNode(const std::string &name, nlohmann::json inputDesc, nlohmann::json outputDesc, nlohmann::json attrs,
+               const std::string &ptrAddress) {
   this->opName = name;
   this->inputDesc = inputDesc;
   this->outputDesc = outputDesc;
@@ -311,10 +316,14 @@ void MindConverter::parseJson() {
   this->moduleName = this->rawJson.at("op");
   this->funcAttributes[kProcess] = this->rawJson.at(kProcess);
   this->funcAttributes[kComputeCapability] = "";
+  this->funcAttributes[kArch] = "";
   if (this->rawJson.contains(kTargetInfo)) {
     auto targetInfo = this->rawJson.at(kTargetInfo);
     if (targetInfo.contains(kComputeCapability)) {
       this->funcAttributes[kComputeCapability] = targetInfo.at(kComputeCapability);
+    }
+    if (targetInfo.contains(kArch)) {
+      this->funcAttributes[kArch] = targetInfo.at(kArch);
     }
   }
   if (this->rawJson.contains(kSymbolCalcExpr)) {
@@ -335,8 +344,9 @@ void MindConverter::parseInput() {
       symShape = inputDesc.at(kSymbolicShape).get<SmallVector<std::string>>();
     }
     std::string dtype = inputDesc.at(kDataType);
-    if (dtype == "uint8")
+    if (dtype == "uint8") {
       dtype = "int8";
+    }
     ValueNode node(tensorName, dtype, true, shape, symShape);
     inputNodes.push_back(node);
   }
@@ -389,9 +399,10 @@ void MindConverter::parseOutput() {
     std::string tensorName = outputDesc.at(kTensorName);
 
     std::string dtype = outputDesc.at(kDataType);
-    if (dtype == "uint8")
+    if (dtype == "uint8") {
       dtype = "int8";
-    SmallVector<int64_t> shape = {};
+    }
+    SmallVector<int64_t> shape;
     if (this->fakeOutputShapes.count(tensorName) != 0) {
       shape = this->fakeOutputShapes[tensorName];
     } else {
@@ -605,6 +616,8 @@ void MindBuilder::convertToMLIR() {
   (void)funcAttrs.emplace_back(
     NamedAttribute(StringAttr::get(context, kComputeCapability),
                    StringAttr::get(context, this->funcAttributes[kComputeCapability].get<std::string>())));
+  (void)funcAttrs.emplace_back(NamedAttribute(
+    StringAttr::get(context, kArch), StringAttr::get(context, this->funcAttributes[kArch].get<std::string>())));
 
   func::FuncOp function = builder.create<func::FuncOp>(UnknownLoc::get(context), this->moduleName, funcTy, funcAttrs);
   Block *entryBody = function.addEntryBlock();
@@ -664,7 +677,7 @@ bool MindBuilder::isConstInput(const nlohmann::json node) const {
   return false;
 }
 
-SmallVector<double> MindBuilder::getConstInputValue(const nlohmann::json node, const std::string opName) {
+SmallVector<double> MindBuilder::getConstInputValue(const nlohmann::json node, const std::string &opName) {
   SmallVector<double> value;
   if (node.at(kValue).is_number()) {
     value.push_back(node.at(kValue));
@@ -711,7 +724,8 @@ std::optional<DictionaryAttr> MindBuilder::addOpSymShapeAttr(nlohmann::json inpu
 
 bool MindBuilder::isStridedSliceWithAttr(OpNode &opNode) const { return opNode.inputDesc.size() == 1; }
 
-void MindBuilder::handleStridedSliceOpInput(OpBuilder &builder, OpNode &opNode, SmallVector<Type> &opInputTesnors) {
+void MindBuilder::handleStridedSliceOpInput(const OpBuilder &builder, OpNode &opNode,
+                                            SmallVector<Type> &opInputTesnors) {
   constexpr auto kStridedSliceInputNum4 = 4;
   assert(opNode.inputDesc.size() == kStridedSliceInputNum4);
   // we only take the first input as the StrideSlice operands, the remain inpus we treat as attrs;
@@ -721,7 +735,7 @@ void MindBuilder::handleStridedSliceOpInput(OpBuilder &builder, OpNode &opNode, 
   (void)opInputTesnors.emplace_back(temp);
 }
 
-void MindBuilder::handleOpInput(OpBuilder &builder, OpNode &opNode, SmallVector<Type> &inputTys) {
+void MindBuilder::handleOpInput(const OpBuilder &builder, OpNode &opNode, SmallVector<Type> &inputTys) {
   // special handle
   if (opNode.opName == "Concat") {
     assert(opNode.inputDesc.size() == 1);
@@ -738,8 +752,9 @@ void MindBuilder::handleOpInput(OpBuilder &builder, OpNode &opNode, SmallVector<
   } else {
     for (size_t i = 0; i < opNode.inputDesc.size(); i++) {
       std::string inputType = opNode.inputDesc[i][0].at(kDataType);
-      if (inputType == "uint8")
+      if (inputType == "uint8") {
         inputType = "int8";
+      }
       SmallVector<int64_t> inputShape = opNode.inputDesc[i][0].at(kShape);
       Type temp = buildRankedTensorType(enableDynamicShape(inputShape), inputType, builder);
       (void)inputTys.emplace_back(temp);
@@ -747,8 +762,8 @@ void MindBuilder::handleOpInput(OpBuilder &builder, OpNode &opNode, SmallVector<
   }
 }
 
-void MindBuilder::handleStridedSliceOperands(OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
-                                             SmallVector<std::string> &operandNames) {
+void MindBuilder::handleStridedSliceOperands(const OpBuilder &builder, const OpNode &opNode,
+                                             SmallVector<Value> &operands, SmallVector<std::string> &operandNames) {
   // only try to get the first input as operand;
   for (size_t i = 0; i < 1; i++) {
     if (isIndex1DAttrAsInput(opNode.opName, i)) {
@@ -774,7 +789,7 @@ void MindBuilder::handleStridedSliceOperands(OpBuilder &builder, OpNode &opNode,
   }
 }
 
-void MindBuilder::handleOperands(OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
+void MindBuilder::handleOperands(const OpBuilder &builder, OpNode &opNode, SmallVector<Value> &operands,
                                  SmallVector<std::string> &operandNames) {
   if (opNode.opName == "Concat") {
     assert(opNode.inputDesc.size() == 1);
@@ -808,8 +823,9 @@ void MindBuilder::handleOperands(OpBuilder &builder, OpNode &opNode, SmallVector
         assert(shape.size() != 0);
         SmallVector<double> value = getConstInputValue(currInput, opNode.opName);
         std::string dataType = currInput.at(kDataType);
-        if (dataType == "uint8")
+        if (dataType == "uint8") {
           dataType = "int8";
+        }
         convertConstOperand(operandNames[i], shape, value, dataType, builder);
       }
       (void)operands.emplace_back(this->operandList[operandNames[i]]);
@@ -826,8 +842,9 @@ void MindBuilder::convertOpNode(OpBuilder builder, OpNode opNode) {
 
   for (size_t i = 0; i < opNode.outputDesc.size(); i++) {
     std::string dtype = opNode.outputDesc[i].at(kDataType);
-    if (dtype == "uint8")
+    if (dtype == "uint8") {
       dtype = "int8";
+    }
     llvm::SmallVector<int64_t> shape = opNode.outputDesc[i].at(kShape);
     Type temp = buildRankedTensorType(enableDynamicShape(shape), dtype, builder);
     (void)outputTys.emplace_back(temp);
@@ -1006,7 +1023,6 @@ SmallVector<int64_t> MindBuilder::getValueFromJson(nlohmann::json operand) const
 void MindBuilder::convertStridedSliceOp(OpBuilder builder, OpNode opNode, SmallVector<Type>,
                                         SmallVector<Type> outputTys, SmallVector<Value> operands,
                                         SmallVector<NamedAttribute> attrs) {
-  constexpr auto kBegin = "begin";
   constexpr auto kEnd = "end";
   constexpr auto kStrides = "strides";
   constexpr auto kBeginMask = "beginMask";
@@ -1020,6 +1036,7 @@ void MindBuilder::convertStridedSliceOp(OpBuilder builder, OpNode opNode, SmallV
   MLIRContext *context = builder.getContext();
   SmallVector<int64_t> start, end, strides;
   if (isStridedSliceWithAttr(opNode)) {
+    constexpr auto kBegin = "begin";
     start = getAttrFromJson<SmallVector<int64_t>>(opNode.attrs, kBegin);
     end = getAttrFromJson<SmallVector<int64_t>>(opNode.attrs, kEnd);
     strides = getAttrFromJson<SmallVector<int64_t>>(opNode.attrs, kStrides);
@@ -1110,15 +1127,18 @@ void MindBuilder::convertBroadcastToOp(OpBuilder builder, OpNode opNode, SmallVe
   MLIRContext *context = builder.getContext();
 
   bool existAttr = false;
-  for (auto attr : opNode.attrs)
-    if (attr.at(kName) == kShape)
+  for (auto attr : opNode.attrs) {
+    if (attr.at(kName) == kShape) {
       existAttr = true;
+    }
+  }
 
   ArrayRef<int64_t> newShape;
-  if (existAttr)
+  if (existAttr) {
     newShape = ArrayRef<int64_t>(getAttrFromJson<SmallVector<int64_t>>(opNode.attrs, kShape, {1}));
-  else
+  } else {
     newShape = cast<ShapedType>(outputTys[0]).getShape();
+  }
 
   if (newShape.size() == 0) {
     newShape = {1};
@@ -1280,8 +1300,9 @@ void MindBuilder::convertReduceOp(OpBuilder builder, OpNode opNode, SmallVector<
   }
 }
 
-void MindBuilder::convertConstOperand(std::string operand_name, SmallVector<int64_t> tensorShape,
-                                      SmallVector<double> tensor_value, std::string dataType, OpBuilder builder) {
+void MindBuilder::convertConstOperand(const std::string &operand_name, SmallVector<int64_t> tensorShape,
+                                      SmallVector<double> tensor_value, const std::string &dataType,
+                                      OpBuilder builder) {
   tensorShape = enableDynamicShape(tensorShape);
   MLIRContext *context = builder.getContext();
   RankedTensorType AttrType = buildRankedTensorType(tensorShape, dataType, builder);
@@ -1371,7 +1392,7 @@ DenseElementsAttr MindBuilder::buildDenseElementsAttr(OpBuilder builder, SmallVe
   }
 }  // namespace
 
-mlir::FloatType MindBuilder::getFloatType(std::string dtype, OpBuilder builder) const {
+mlir::FloatType MindBuilder::getFloatType(const std::string &dtype, OpBuilder builder) const {
   if (dtype == "float16") {
     return builder.getF16Type();
   } else if (dtype == "float32") {
@@ -1386,7 +1407,7 @@ mlir::FloatType MindBuilder::getFloatType(std::string dtype, OpBuilder builder) 
   }
 }
 
-mlir::IntegerType MindBuilder::getIntType(std::string dtype, OpBuilder builder) const {
+mlir::IntegerType MindBuilder::getIntType(const std::string &dtype, OpBuilder builder) const {
   constexpr auto kIntegerSize8 = 8;
   if (dtype == "bool") {
     return builder.getI1Type();
@@ -1412,7 +1433,8 @@ mlir::IntegerType MindBuilder::getIntType(std::string dtype, OpBuilder builder) 
 }  // namespace
 }  // namespace mlir
 
-Operation *mlir::translateToMindsporeDialect(llvm::SourceMgr &sourceMgr, MLIRContext *context, std::string outputName) {
+mlir::Operation *mlir::translateToMindsporeDialect(llvm::SourceMgr &sourceMgr, MLIRContext *context,
+                                                   std::string outputName) {
   llvm::MemoryBufferRef buffer = *sourceMgr.getMemoryBuffer(sourceMgr.getMainFileID());
   std::string jsonName = buffer.getBufferIdentifier().str();
   (void)context->getOrLoadDialect<func::FuncDialect>();

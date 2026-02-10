@@ -14,10 +14,9 @@ pytest
 pytest-asyncio
 tiktoken
 einops
-fastapi
+fastapi<1.0
 uvicorn
 python-multipart
 importlib-metadata
 typer
-textual
-websockets
+prompt_toolkit>=3.0.0

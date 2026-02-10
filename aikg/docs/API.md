@@ -129,4 +129,40 @@ The `AIKG_MODEL_ENABLE_THINK` is an optional parameter to enable the model's thi
 - **DeepSeek style**: Set to `"enabled"` or `"disabled"`
 - **GLM style**: Set to `"true"` or `"false"`
 
-If this environment variable is not set, thinking mode will not be enabled. 
+If this environment variable is not set, thinking mode will not be enabled.
+
+## 5. Embedding Model Environment Variable Settings
+
+You can directly specify the Embedding API using high-priority environment variables for RAG retrieval and other features.
+
+```bash
+export AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
+export AIKG_EMBEDDING_MODEL_NAME="Qwen/Qwen3-Embedding-8B"
+export AIKG_EMBEDDING_API_KEY="your-api-key"
+```
+
+**Parameter Description**:
+- `AIKG_EMBEDDING_BASE_URL`: Base URL for the Embedding API
+- `AIKG_EMBEDDING_MODEL_NAME`: Model name, supports two formats:
+  - **Preset name**: e.g., `sflow_qwen3_embedding_8b` (automatically reads actual model name from `llm_config.yaml`)
+  - **Actual model name**: e.g., `Qwen/Qwen3-Embedding-8B` (used directly)
+- `AIKG_EMBEDDING_API_KEY`: API key
+
+**Priority**:
+1. Environment variables (takes effect when all three are set)
+2. Local HuggingFace model (`~/.aikg/text2vec-large-chinese`)
+
+**Usage Example**:
+
+```bash
+# Use SiliconFlow's Embedding model
+AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1" \
+AIKG_EMBEDDING_MODEL_NAME="Qwen/Qwen3-Embedding-8B" \
+AIKG_EMBEDDING_API_KEY="sk-xxx" \
+python tools/run_single_adaptive_search.py config.yaml
+```
+
+**Available Presets** (defined in `llm_config.yaml`):
+- `sflow_qwen3_embedding_8b`: Qwen3-Embedding-8B (1024 dimensions)
+- `sflow_qwen3_embedding_4b`: Qwen3-Embedding-4B (768 dimensions)
+- `sflow_qwen3_embedding_0.6b`: Qwen3-Embedding-0.6B (512 dimensions)

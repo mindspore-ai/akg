@@ -162,7 +162,6 @@ NpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategy
   npuGraph->AnalyzeBufferInfo();
   npuGraph->InitResource();
 
-  // Use unified NpuDefaultTileStrategy (works for both Affine and SCF)
   tilingMgr->addStrategy(std::make_shared<NpuDefaultTileStrategy>());
   // tilingMgr->addStrategy(std::make_shared<VectorizationStrategy>());
   // tilingMgr->addStrategy(std::make_shared<ParallelStrategy>());
@@ -280,11 +279,13 @@ InitGraphPtr parseIr(const std::vector<SmallVector<scf::ForOp, 6>> &bands) {
   return initGraph;
 }
 
+// SCF version with constraint max output for dynamic shape support
 void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<scf::ForOp, 6> band,
-                           SmallVectorImpl<unsigned> *tileSizes, const TilingTaskDesc &taskDesc) {
+                           SmallVectorImpl<unsigned> *tileSizes, SmallVectorImpl<int> *constraintMaxs,
+                           const TilingTaskDesc &taskDesc) {
   size_t level = taskDesc.level;
   size_t bandIdx = taskDesc.bandIdx;
-  std::map<unsigned, unsigned> resMap;
+  std::map<unsigned, std::pair<unsigned, int>> resMap;  // {axisIdx -> {tileSize, constraintMax}}
   if (solver->modelGraph == nullptr || solver->modelGraph->rootAxis == nullptr) {
     llvm::errs() << "Create model graph before solve.";
     return;
@@ -294,7 +295,6 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<scf::ForOp
       return -1;
     }
     for (size_t i = 0; i < band.size(); ++i) {
-      // For scf.for, compare induction variables
       if (band[i].getInductionVar() == a->getInductionVar()) {
         return static_cast<int>(i);
       }
@@ -312,17 +312,23 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<scf::ForOp
     if (solver->solved.find(a) == solver->solved.end()) {
       solver->solve(a);
     }
+    // if (level < a->configs[kTileCfg].size()) {
+    //   auto config = a->configs[kTileCfg][level];
+    //   int tileValue = config->value;
+    //   if (tileValue == -1) {
+    //     // Dynamic case: get constraint upper bound from finalConstraint.max
+    //     const int constraintMax = config->finalConstraint.max;
+    //     resMap[axisIdx] = {static_cast<unsigned>(-1), constraintMax};
+    //   } else {
+    //     resMap[axisIdx] = {static_cast<unsigned>(tileValue), 0};
+    //   }
+    // } else {
+    //   resMap[axisIdx] = {1, 0};
+    // }
     if (level < a->configs[kTileCfg].size()) {
-      int tileValue = a->configs[kTileCfg][level]->value;
-      // Convert -1 (dynamic axis marker) to UINT_MAX for storage in unsigned vector
-      // This will be detected and handled specially in constructTiledIndex
-      if (tileValue == -1) {
-        resMap[axisIdx] = static_cast<unsigned>(-1);  // UINT_MAX
-      } else {
-        resMap[axisIdx] = static_cast<unsigned>(tileValue);
-      }
+      resMap[axisIdx] = {a->configs[kTileCfg][level]->value, 0};
     } else {
-      resMap[axisIdx] = 1;
+      resMap[axisIdx] = {1, 0};
     }
   };
   auto sortedAxes = solver->sortAxis(bandIdx);
@@ -331,8 +337,11 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<scf::ForOp
   }
 
   tileSizes->reserve(tileSizes->size() + resMap.size());
-  std::transform(resMap.begin(), resMap.end(), std::back_inserter(*tileSizes),
-                 [](const auto &entry) { return entry.second; });
+  constraintMaxs->reserve(constraintMaxs->size() + resMap.size());
+  for (const auto &entry : resMap) {
+    tileSizes->push_back(entry.second.first);
+    constraintMaxs->push_back(entry.second.second);
+  }
 }
 
 }  // namespace autotiling

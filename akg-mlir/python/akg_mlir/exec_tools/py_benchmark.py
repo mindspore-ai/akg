@@ -359,7 +359,7 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
     device_id = int(os.environ.get("DEVICE_ID", 0))
     dso_path = _get_kernel_meta_dir()
     if profiling_trails == 0:
-        launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
+        launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes, use_mem_pool = True)
         for idx, d in enumerate(expect):
             expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
         compare_results(kernel_name, desc, input_for_mod,
@@ -367,7 +367,7 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
     else:
         akgProfileMgr.ascend_start_profiling(device_id)
         for _ in range(5):
-            launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
+            launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes, use_mem_pool = True)
         akgProfileMgr.ascend_stop_profiling()
         # analysis
         cycle = profiling_analyse(None)
@@ -390,6 +390,7 @@ def run_a_kernel(desc,
                  static_desc=None,
                  clear_tmp=False,
                  dump_ir=False,
+                 mlir_timing=False,
                  replace_dso=False,
                  repo_path="",
                  enable_loop_fusion=True):
@@ -408,6 +409,7 @@ def run_a_kernel(desc,
                                     llvm_tools_dir=os.getenv("LLVM_HOME", ""),
                                     dynamic_shape=is_dyn_shape,
                                     dump_ir=dump_ir,
+                                    mlir_timing=mlir_timing,
                                     repo_path=repo_path,
                                     profiling_trails=profiling_trails,
                                     runtime_provider="MLIR",
@@ -495,6 +497,7 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
                          static_desc=static_desc,
                          clear_tmp=compile_args.clear_tmp,
                          dump_ir=compile_args.dump_ir,
+                         mlir_timing=compile_args.mlir_timing,
                          replace_dso=compile_args.replace_dso,
                          repo_path=compile_args.repo_path,
                          enable_loop_fusion=compile_args.akg_fusion)
@@ -555,6 +558,7 @@ def main(args=None):
     parser.add_argument("-ci", "--ci_test", type=bool, default=False)
     parser.add_argument("-t", "--threads", type=int, default=1)
     parser.add_argument("-dump", "--dump_ir", type=bool, default=False)
+    parser.add_argument("-time", "--mlir_timing", type=bool, default=False)
     parser.add_argument("-r", "--replace_dso", type=bool, default=False)
     parser.add_argument("-repo", "--repo_path", type=str, default="")
     parser.add_argument("-af", "--akg_fusion", type=distutils.util.strtobool, default=True)

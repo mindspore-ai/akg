@@ -32,60 +32,33 @@ namespace mlir {
 #include "akg/Dialect/Linalg/Passes.h.inc"
 }  // namespace mlir
 
-using namespace mlir;
-
 namespace mlir {
 namespace linalg {
 namespace {
 
 struct MemrefCopyToLoops : public impl::MemrefCopyToLoopsBase<MemrefCopyToLoops> {
-  public:
-    MemrefCopyToLoops() = default;
+ public:
+  MemrefCopyToLoops() = default;
 
-    void runOnOperation() override{
-        func::FuncOp funcOp = getOperation();
+  void runOnOperation() override {
+    func::FuncOp funcOp = getOperation();
 
-        SmallVector<memref::CopyOp> needConvert;
-        (void)funcOp->walk([&](memref::CopyOp copyOp) {
-          auto srcOp = copyOp.getSource().getDefiningOp();
-          if (!srcOp){
-            return;
-          }
+    SmallVector<memref::CopyOp> needConvert;
+    (void)funcOp->walk([&](memref::CopyOp copyOp) { needConvert.emplace_back(copyOp); });
+    OpBuilder builder(funcOp);
 
-          if (auto tomem = dyn_cast<bufferization::ToMemrefOp>(srcOp)){
-            auto mem = tomem.getMemref();
-            auto totensor = tomem.getTensor().getDefiningOp();
-            if (!totensor){
-                return;
-            }
-            if (auto tt = dyn_cast<bufferization::ToTensorOp>(totensor)) {
-              auto tensormem = tt.getMemref().getDefiningOp();
-              if (!tensormem){
-                return;
-              }
-              if (isa<memref::ExpandShapeOp, memref::CollapseShapeOp>(tensormem)) {
-                needConvert.emplace_back(copyOp);
-              }
-            }
-          }
-
-        });
-        OpBuilder builder(funcOp);
-
-        for (auto copyOp : needConvert) {
-          builder.setInsertionPoint(copyOp);
-          auto newCopyOp = makeMemRefCopyOp(builder, copyOp->getLoc(), copyOp.getSource(), copyOp.getTarget());
-          copyOp.getOperation()->replaceAllUsesWith(newCopyOp.getOperation());
-          copyOp.erase();
-        }
+    for (auto copyOp : needConvert) {
+      builder.setInsertionPoint(copyOp);
+      auto newCopyOp = makeMemRefCopyOp(builder, copyOp->getLoc(), copyOp.getSource(), copyOp.getTarget());
+      copyOp.getOperation()->replaceAllUsesWith(newCopyOp.getOperation());
+      copyOp.erase();
     }
+  }
 };
-}      // namespace
-}      // namespace linalg
-}      // namespace mlir
+}  // namespace
+}  // namespace linalg
+}  // namespace mlir
 
 std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createMemrefCopyToLoopsPass() {
-    return std::make_unique<linalg::MemrefCopyToLoops>();
+  return std::make_unique<linalg::MemrefCopyToLoops>();
 }
-
-

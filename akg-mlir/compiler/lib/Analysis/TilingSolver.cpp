@@ -72,6 +72,11 @@ void TilingSolver::solve(const AxisPtr a) {
   }
   auto tasks = sortSolveTask(a);
   for (auto t : tasks) {
+    if (t->value == -1) {
+      // Dynamic case: value=-1 indicates dynamic tiling.
+      t->mergeConstraints();
+      continue;
+    }
     if (t->value != 0) {
       // If a task value is set to a positive number, then it is assumed to be solved.
       continue;

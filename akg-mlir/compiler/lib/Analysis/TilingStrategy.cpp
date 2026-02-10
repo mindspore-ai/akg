@@ -17,6 +17,7 @@
 #include "akg/Analysis/TilingStrategy.h"
 
 #include <algorithm>
+#include <climits>
 #include <numeric>
 #include "akg/Dialect/Affine/Analysis/GpuTemplateTilingSolver.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
@@ -830,16 +831,6 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
     return;
   }
 
-  // Skip tiling for reduce axes
-  if (isReduceAxis) {
-    auto tileConfig = axis->tryGetConfig(0, kTileCfg);
-    if (tileConfig != nullptr) {
-      tileConfig->value = 1;
-      axis->tryAddConstraint(0, Constraint({1}));
-    }
-    return;
-  }
-
   // Check if axis has constant bounds (specifically check upper bound for dynamic detection)
   bool hasStaticBounds = axis->hasConstantBounds();
   // Check upper bound specifically to detect dynamic axis
@@ -882,6 +873,10 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
 
   // Get default tile sizes if not specified by user
   SmallVector<unsigned, 4> currentTileSizes = tileSizes;
+  // Skip tiling for reduce axes
+  if (isReduceAxis) {
+    currentTileSizes = {1, 1};
+  }
   if (currentTileSizes.empty()) {
     currentTileSizes = {std::max(getOuterTileSize(axis, blockNumber), innerTileSize), innerTileSize};
   }
@@ -1063,33 +1058,94 @@ SmallVector<int64_t> VectorizationStrategy::getDimSizes(const SmallVector<AxisPt
   return dims;
 }
 
-int64_t VectorizationStrategy::computeVectorizationTilingKey(int64_t ubAvailableNum, const SmallVector<int64_t> &dims) {
-  // The tiling key determines from which dimension we start partial loading.
-  // If ubAvailableNum <= accumulatedDims[N-1], tilingKey = N-1
-  // If ubAvailableNum <= accumulatedDims[N-2], tilingKey = N-2
-  // ...
-  // Otherwise, tilingKey = 0 (we can load all data)
-  int64_t acc = 1;
-  int64_t tilingKey = 0;
-  // Accumulate from inner to outer (reverse order)
-  for (int64_t i = static_cast<int64_t>(dims.size()) - 1; i >= 0; --i) {
-    acc *= dims[static_cast<size_t>(i)];
-    if (ubAvailableNum <= acc) {
-      tilingKey = static_cast<int64_t>(i);
-    } else {
-      break;
+// Helper function to find the first non-static axis index from innermost
+int64_t VectorizationStrategy::findConsecutiveStaticEnd(const SmallVector<AxisPtr> &axes) {
+  int64_t numAxes = static_cast<int64_t>(axes.size());
+  for (int64_t dimIdx = numAxes - 1; dimIdx >= 0; --dimIdx) {
+    auto axis = axes[static_cast<size_t>(dimIdx)];
+    if (!axis) {
+      return dimIdx;
+    }
+    if (axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != axis->axisType.end()) {
+      return dimIdx;
     }
   }
-  return tilingKey;
+  return -1;  // All axes are static
+}
+
+// Helper function to handle dynamic axis for vectorization
+void VectorizationStrategy::handleDynamicAxisForVectorization(const AxisPtr &axis, int pos, int64_t &ubRemainingNum) {
+  if (ubRemainingNum > 1) {
+    axis->tryAddConstraint(pos, Constraint(1, static_cast<int>(ubRemainingNum), 1));
+    auto tileConfig = axis->tryGetConfig(pos, kTileCfg);
+    if (tileConfig != nullptr) {
+      tileConfig->value = -1;  // Mark as dynamic
+    }
+  } else {
+    auto tileConfig = axis->tryGetConfig(pos, kTileCfg);
+    if (tileConfig != nullptr) {
+      tileConfig->value = 1;
+    }
+  }
+}
+
+// Helper function to handle consecutive static axis for vectorization
+void VectorizationStrategy::handleConsecutiveStaticAxis(const AxisPtr &axis, int pos, int64_t dimSize,
+                                                        int64_t &ubRemainingNum) {
+  int64_t tileSize = 1;
+  if (ubRemainingNum > 1) {
+    if (dimSize <= ubRemainingNum) {
+      tileSize = dimSize;
+    } else {
+      tileSize = ubRemainingNum;
+    }
+  }
+
+  tileSize = std::max<int64_t>(tileSize, 1);
+  auto vectorizationConfig = axis->tryGetConfig(pos, kTileCfg);
+  if (vectorizationConfig != nullptr) {
+    vectorizationConfig->value = static_cast<int>(tileSize);
+  }
+
+  if (axis->isInnerMost) {
+    (void)axis->axisType.insert(mlir::autotiling::Axis::AxisLabel::kVectorization);
+  }
+
+  if (tileSize > 0) {
+    ubRemainingNum = ubRemainingNum / tileSize;
+    ubRemainingNum = std::max<int64_t>(ubRemainingNum, 1);
+  }
+}
+
+// Helper function to handle non-consecutive static axis for vectorization
+void VectorizationStrategy::handleNonConsecutiveStaticAxis(const AxisPtr &axis, int pos, int64_t dimSize,
+                                                           int64_t &ubRemainingNum) {
+  if (ubRemainingNum > 1 && dimSize > 1) {
+    int64_t maxTileSize = std::min(ubRemainingNum, dimSize);
+    axis->tryAddConstraint(pos, Constraint(1, static_cast<int>(maxTileSize), 1));
+    auto tileConfig = axis->tryGetConfig(pos, kTileCfg);
+    if (tileConfig != nullptr) {
+      tileConfig->value = -1;  // Mark as dynamic
+    }
+    ubRemainingNum = ubRemainingNum / maxTileSize;
+    ubRemainingNum = std::max<int64_t>(ubRemainingNum, 1);
+  } else {
+    auto tileConfig = axis->tryGetConfig(pos, kTileCfg);
+    if (tileConfig != nullptr) {
+      tileConfig->value = 1;
+    }
+  }
 }
 
 void VectorizationStrategy::applyVectorizationTiling(const SmallVector<AxisPtr> &axes, int64_t ubAvailableNum,
-                                                     int64_t tilingKey, int pos) {
+                                                     int pos) {
   int64_t numAxes = static_cast<int64_t>(axes.size());
   int64_t ubRemainingNum = std::max<int64_t>(ubAvailableNum, 1);
 
-  // Compute tile sizes from outer to inner
-  for (int64_t dimIdx = 0; dimIdx < numAxes; ++dimIdx) {
+  int64_t consecutiveStaticEnd = findConsecutiveStaticEnd(axes);
+
+  // Process axes from inner to outer (reverse order)
+  for (int64_t dimIdx = numAxes - 1; dimIdx >= 0; --dimIdx) {
     auto axis = axes[static_cast<size_t>(dimIdx)];
     if (!axis) {
       continue;
@@ -1099,60 +1155,18 @@ void VectorizationStrategy::applyVectorizationTiling(const SmallVector<AxisPtr> 
       axis->doExtraTile();
     }
 
-    // Skip reduction axes - they should not be tiled for vectorization
-    // if (axis->axisType.find(Axis::AxisLabel::kReduction) != axis->axisType.end()) {
-    //   auto tileConfig = axis->tryGetConfig(0, kTileCfg);
-    //   if (tileConfig != nullptr) {
-    //     tileConfig->value = 1;
-    //     axis->tryAddConstraint(pos, Constraint({1}));
-    //   }
-    //   continue;
-    // }
-
-    // Skip dynamic axes
-    if (axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != axis->axisType.end()) {
-      auto tileConfig = axis->tryGetConfig(0, kTileCfg);
-      if (tileConfig != nullptr) {
-        tileConfig->value = 1;
-        axis->tryAddConstraint(pos, Constraint({1}));
-      }
+    bool isDynamic = axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != axis->axisType.end();
+    if (isDynamic) {
+      handleDynamicAxisForVectorization(axis, pos, ubRemainingNum);
       continue;
     }
 
     int64_t dimSize = axis->range.second > 0 ? axis->range.second : 1;
-    int64_t tileSize = 1;
-
-    // Tiling logic based on the reference algorithm:
-    // - If tilingKey > dimIdx: tileSize = 1 (cannot load more than one line)
-    // - If tilingKey == dimIdx: tileSize = min(ubRemainingNum, dimSize) (partial load)
-    // - If tilingKey < dimIdx: tileSize = dimSize (full load)
-    if (tilingKey > dimIdx) {
-      tileSize = 1;
-    } else if (tilingKey == dimIdx) {
-      tileSize = std::min(ubRemainingNum, dimSize);
+    bool isInConsecutiveStatic = (consecutiveStaticEnd == -1) || (dimIdx >= consecutiveStaticEnd);
+    if (isInConsecutiveStatic) {
+      handleConsecutiveStaticAxis(axis, pos, dimSize, ubRemainingNum);
     } else {
-      tileSize = dimSize;
-    }
-
-    // Ensure tile size is at least 1
-    tileSize = std::max<int64_t>(tileSize, 1);
-
-    // Add constraint for tiling
-    axis->tryAddConstraint(pos, Constraint({static_cast<int>(tileSize)}));
-    auto vectorizationConfig = axis->tryGetConfig(pos);
-    if (vectorizationConfig != nullptr) {
-      vectorizationConfig->value = static_cast<int>(tileSize);
-    }
-
-    // Mark innermost axis for vectorization
-    if (axis->isInnerMost) {
-      (void)axis->axisType.insert(mlir::autotiling::Axis::AxisLabel::kVectorization);
-    }
-
-    // Update remaining UB capacity for next dimension
-    if (tileSize > 0) {
-      ubRemainingNum = ubRemainingNum / tileSize;
-      ubRemainingNum = std::max<int64_t>(ubRemainingNum, 1);
+      handleNonConsecutiveStaticAxis(axis, pos, dimSize, ubRemainingNum);
     }
   }
 }
@@ -1161,9 +1175,7 @@ void VectorizationStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
   SmallVector<AxisPtr> axes;
   npuGraph->rootAxis->forEachAxisTopDown([this, &axes](const AxisPtr a) { axes.push_back(a); });
 
-  // Get dimension sizes
-  SmallVector<int64_t> dims = getDimSizes(axes);
-  if (dims.empty()) {
+  if (axes.empty()) {
     return;
   }
 
@@ -1182,12 +1194,8 @@ void VectorizationStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
                                     (kUBAlignSizeInBytes * kNumBitsInByte) * (kUBAlignSizeInBytes * kNumBitsInByte);
   ubAvailableNumInSmallestType = alignedBufferSizeInBits / smallestTypeBits;
 
-  // Compute tiling key
-  int64_t tilingKey = computeVectorizationTilingKey(ubAvailableNumInSmallestType, dims);
-
-  // Compute and apply tile sizes
-  int pos = npuGraph->tileNum;
-  applyVectorizationTiling(axes, ubAvailableNumInSmallestType, tilingKey, pos);
+  // Vectorization is the second tile level, parallel is the first
+  applyVectorizationTiling(axes, ubAvailableNumInSmallestType, 1);
   ++npuGraph->tileNum;
 }
 
@@ -1209,7 +1217,8 @@ void ParallelStrategy::collectAxesInfo(const SmallVector<AxisPtr> &axes, int pos
     isParallelAxis.push_back(!isReduction);
 
     // Consider existing tile configuration
-    auto tileConfig = axis->tryGetConfig(pos - 1);
+    // Vectorization is at pos=1, so we read from pos directly
+    auto tileConfig = axis->tryGetConfig(pos);
     int64_t effectiveSize = axisSize;
     if (tileConfig && tileConfig->value > 0) {
       effectiveSize = (axisSize + tileConfig->value - 1) / tileConfig->value;
@@ -1227,12 +1236,15 @@ std::pair<int64_t, int64_t> ParallelStrategy::allocateCoresForAxes(int64_t total
   int64_t coresForParallel = 1;
   int64_t coresForReduce = 1;
 
+  // Case 1: If total parallel size >= total cores, allocate all cores to parallel axes
   if (totalParallelSize >= totalCores) {
     coresForParallel = totalCores;
     coresForReduce = 1;
-  } else if (totalParallelSize > 0) {
+  } else {
+    // Case 2: If total parallel size < total cores, satisfy parallel axes first, then allocate remaining to reduce axes
     coresForParallel = totalParallelSize;
     int64_t remainingCores = totalCores / coresForParallel;
+    // Reduce axis cores should not exceed its total size, and at least 1
     coresForReduce = std::min(remainingCores, totalReduceSize);
     coresForReduce = std::max<int64_t>(coresForReduce, 1);
   }
@@ -1240,8 +1252,144 @@ std::pair<int64_t, int64_t> ParallelStrategy::allocateCoresForAxes(int64_t total
   return {coresForParallel, coresForReduce};
 }
 
-void ParallelStrategy::applyParallelTiling(const SmallVector<AxisPtr> &axes, int64_t coresForParallel,
-                                           int64_t coresForReduce, int64_t coreNum, int pos) {
+// Check if any axis is dynamic
+bool ParallelStrategy::hasDynamicAxis(const SmallVector<AxisPtr> &axes) {
+  for (const auto &axis : axes) {
+    if (axis && axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != axis->axisType.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Dynamic shape parallel tiling: simplified strategy
+// Parallel constraint = vectorization upper bound * coreNum
+void ParallelStrategy::applyDynamicParallelTiling(const SmallVector<AxisPtr> &axes, int64_t coreNum, int pos) {
+  for (const auto &axis : axes) {
+    if (!axis) {
+      continue;
+    }
+
+    if (pos) {
+      axis->doExtraTile();
+    }
+
+    // Skip reduction axes - they don't participate in parallel tiling for dynamic shape
+    bool isReduction = axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kReduction) != axis->axisType.end();
+    if (isReduction) {
+      auto parallelTileConfig = axis->tryGetConfig(pos, kTileCfg);
+      if (parallelTileConfig != nullptr) {
+        parallelTileConfig->value = 1;
+      }
+      continue;
+    }
+
+    // Get vectorization constraint upper bound from pos+1 (vectorization level)
+    auto vectorizationTileConfig = axis->tryGetConfig(pos + 1);
+    int64_t vectorizationUpperBound = 1;
+
+    if (vectorizationTileConfig) {
+      if (vectorizationTileConfig->value > 0) {
+        // Static axis within dynamic shape scenario: use value directly
+        vectorizationUpperBound = vectorizationTileConfig->value;
+      } else {
+        // Dynamic axis: get upper bound from constraint
+        if (!vectorizationTileConfig->constraints.empty()) {
+          // Find the minimum max value from all constraints
+          int64_t minMax = INT_MAX;
+          for (const auto &cons : vectorizationTileConfig->constraints) {
+            if (cons.max > 0 && cons.max < minMax) {
+              minMax = cons.max;
+            }
+          }
+          if (minMax != INT_MAX) {
+            vectorizationUpperBound = minMax;
+          }
+        }
+      }
+    }
+
+    // Check if vectorizationUpperBound equals dim size
+    int64_t dimSize = axis->range.second > 0 ? axis->range.second : 1;
+    bool shouldSetParallelValue = (vectorizationUpperBound == dimSize);
+
+    // Parallel upper bound = vectorization upper bound * coreNum
+    int64_t parallelUpperBound = vectorizationUpperBound * coreNum;
+    parallelUpperBound = std::max<int64_t>(parallelUpperBound, 1);
+
+    // Add constraint for parallel tiling
+    auto tileConfig = axis->tryGetConfig(pos, kTileCfg);
+    if (tileConfig != nullptr) {
+      if (shouldSetParallelValue) {
+        // If vectorizationUpperBound equals dim size, set parallel tile value to vectorizationUpperBound
+        tileConfig->value = vectorizationUpperBound;
+      } else {
+        axis->tryAddConstraint(pos, Constraint(1, static_cast<int>(parallelUpperBound), 1));
+        tileConfig->value = -1;  // Mark as dynamic, constraint.max contains upper bound
+      }
+    }
+  }
+}
+
+// Helper function to calculate parallel tile size
+int64_t ParallelStrategy::calculateParallelTileSize(int64_t outerSize, int64_t &remainingParallelCores) {
+  if (remainingParallelCores <= 1 || outerSize <= 1) {
+    return outerSize;
+  }
+
+  int64_t parallelTileSize = (outerSize + remainingParallelCores - 1) / remainingParallelCores;
+  parallelTileSize = std::max<int64_t>(parallelTileSize, 1);
+
+  if (parallelTileSize == 1 && outerSize > 1) {
+    int64_t adjustedCores = std::max<int64_t>((outerSize + 1) / 2, 1);
+    if (adjustedCores < remainingParallelCores) {
+      remainingParallelCores = adjustedCores;
+      parallelTileSize = (outerSize + remainingParallelCores - 1) / remainingParallelCores;
+      parallelTileSize = std::max<int64_t>(parallelTileSize, 1);
+    }
+  }
+
+  if (parallelTileSize < outerSize) {
+    remainingParallelCores = (remainingParallelCores + parallelTileSize - 1) / parallelTileSize;
+  } else {
+    remainingParallelCores = 1;
+  }
+
+  return parallelTileSize;
+}
+
+// Helper function to calculate reduce tile size
+int64_t ParallelStrategy::calculateReduceTileSize(int64_t outerSize, int64_t &remainingReduceCores) {
+  if (remainingReduceCores <= 1 || outerSize <= 1) {
+    return outerSize;
+  }
+
+  int64_t reduceTileSize = (outerSize + remainingReduceCores - 1) / remainingReduceCores;
+  reduceTileSize = std::max<int64_t>(reduceTileSize, 1);
+
+  if (reduceTileSize < outerSize) {
+    remainingReduceCores = (remainingReduceCores + reduceTileSize - 1) / reduceTileSize;
+  } else {
+    remainingReduceCores = 1;
+  }
+
+  return reduceTileSize;
+}
+
+// Helper function to adjust tile size to ensure it doesn't exceed core limit
+int64_t ParallelStrategy::adjustTileSizeForCoreLimit(int64_t axisSize, int64_t tileSize, int64_t coreNum) {
+  int64_t finalTileSize = tileSize;
+  int64_t numBlocks = (axisSize + finalTileSize - 1) / finalTileSize;
+  if (numBlocks > coreNum) {
+    finalTileSize = (axisSize + coreNum - 1) / coreNum;
+    finalTileSize = std::max<int64_t>(finalTileSize, 1);
+  }
+  return finalTileSize;
+}
+
+// Apply static parallel tiling strategy: prioritize parallel axes, then process reduce axes
+void ParallelStrategy::applyStaticParallelTiling(const SmallVector<AxisPtr> &axes, int64_t coresForParallel,
+                                                 int64_t coresForReduce, int64_t coreNum, int pos) {
   int64_t remainingParallelCores = coresForParallel;
   int64_t remainingReduceCores = coresForReduce;
 
@@ -1255,86 +1403,31 @@ void ParallelStrategy::applyParallelTiling(const SmallVector<AxisPtr> &axes, int
       axis->doExtraTile();
     }
 
-    // Get axis size directly from axis
-    int64_t axisSize = axis->range.second > 0 ? axis->range.second : 1;
-
-    // Check for dynamic axes - skip by setting tile size to 1
-    if (axis->axisType.find(mlir::autotiling::Axis::AxisLabel::kDynamic) != axis->axisType.end()) {
-      axis->tryAddConstraint(pos, Constraint({1}));
-      continue;
-    }
-
-    // Get existing tile configuration (inner/vectorized tile size)
-    auto existingTileConfig = axis->tryGetConfig(pos - 1);
+    auto vectorizationTileConfig = axis->tryGetConfig(pos + 1);
     int64_t innerTileSize = 1;
-    if (existingTileConfig && existingTileConfig->value > 0) {
-      innerTileSize = existingTileConfig->value;
+    if (vectorizationTileConfig && vectorizationTileConfig->value > 0) {
+      innerTileSize = vectorizationTileConfig->value;
     }
 
-    // Calculate outer size after inner tiling
+    int64_t axisSize = axis->range.second > 0 ? axis->range.second : 1;
     int64_t outerSize = (axisSize + innerTileSize - 1) / innerTileSize;
     int64_t tileSize = outerSize;
 
-    // Apply parallel tiling for parallel axes
     if (isParallelAxis[i] && remainingParallelCores > 1 && outerSize > 1) {
-      int64_t parallelTileSize = (outerSize + remainingParallelCores - 1) / remainingParallelCores;
-      parallelTileSize = std::max<int64_t>(parallelTileSize, 1);
-
-      // Ensure parallel tile size is at least the inner tile size
-      // i.e., each parallel thread should process at least the vectorized iterations
-      if (parallelTileSize == 1 && outerSize > 1) {
-        // If computed parallel tile size is 1 but cores remain, try adjustment
-        // Reduce core usage to make each thread handle more work
-        int64_t adjustedCores = std::max<int64_t>((outerSize + 1) / 2, 1);
-        if (adjustedCores < remainingParallelCores) {
-          remainingParallelCores = adjustedCores;
-          parallelTileSize = (outerSize + remainingParallelCores - 1) / remainingParallelCores;
-          parallelTileSize = std::max<int64_t>(parallelTileSize, 1);
-        }
-      }
-
-      tileSize = std::min(tileSize, parallelTileSize);
-
-      if (parallelTileSize < outerSize) {
-        remainingParallelCores = (remainingParallelCores + tileSize - 1) / tileSize;
-      } else {
-        remainingParallelCores = 1;
-      }
+      tileSize = std::min(tileSize, calculateParallelTileSize(outerSize, remainingParallelCores));
     } else if (!isParallelAxis[i] && remainingReduceCores > 1 && outerSize > 1) {
-      // Apply parallel tiling for reduction axes
-      int64_t reduceTileSize = (outerSize + remainingReduceCores - 1) / remainingReduceCores;
-      reduceTileSize = std::max<int64_t>(reduceTileSize, 1);
-
-      tileSize = std::min(tileSize, reduceTileSize);
-
-      if (reduceTileSize < outerSize) {
-        remainingReduceCores = (remainingReduceCores + tileSize - 1) / tileSize;
-      } else {
-        remainingReduceCores = 1;
-      }
-    } else {
-      // Skip this axis - set tile size to outerSize (not 1)
-      tileSize = outerSize;
+      tileSize = std::min(tileSize, calculateReduceTileSize(outerSize, remainingReduceCores));
     }
 
-    // Calculate final tile size
     int64_t finalTileSize = tileSize * innerTileSize;
     finalTileSize = std::min(finalTileSize, axisSize);
     finalTileSize = std::max<int64_t>(finalTileSize, 1);
+    finalTileSize = adjustTileSizeForCoreLimit(axisSize, finalTileSize, coreNum);
 
-    // Ensure the number of blocks after tiling does not exceed coreNum
-    int64_t numBlocks = (axisSize + finalTileSize - 1) / finalTileSize;
-    if (numBlocks > coreNum) {
-      // Adjust tile size to ensure numBlocks <= coreNum (ceiling division)
-      finalTileSize = (axisSize + coreNum - 1) / coreNum;
-      finalTileSize = std::max<int64_t>(finalTileSize, 1);
+    auto parallelTileConfig = axis->tryGetConfig(pos, kTileCfg);
+    if (parallelTileConfig != nullptr) {
+      parallelTileConfig->value = static_cast<int>(finalTileSize);
     }
-
-    // Add constraint
-    // First Tile: Parallel
-    existingTileConfig->value = static_cast<int>(finalTileSize);
-    // First Tile: Vectorization
-    axis->tryAddConstraint(pos, Constraint({static_cast<int>(innerTileSize)}));
   }
 }
 
@@ -1354,15 +1447,20 @@ void ParallelStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
     return;
   }
 
-  // Collect axes information
-  int pos = npuGraph->tileNum;
-  collectAxesInfo(axes, pos);
+  // Check if this is a dynamic shape scenario
+  bool isDynamicShape = hasDynamicAxis(axes);
 
-  // Allocate cores for parallel and reduce axes
-  auto [coresForParallel, coresForReduce] = allocateCoresForAxes(totalCores);
-
-  // Compute and apply tile sizes for all axes
-  applyParallelTiling(axes, coresForParallel, coresForReduce, totalCores, pos);
+  if (isDynamicShape) {
+    // Dynamic shape: simplified parallel tiling
+    // Parallel constraint = vectorization upper bound * coreNum
+    // Only non-reduction axes participate in parallel tiling
+    applyDynamicParallelTiling(axes, totalCores, 0);
+  } else {
+    // Static shape: detailed parallel tiling with core allocation
+    collectAxesInfo(axes, 1);
+    auto [coresForParallel, coresForReduce] = allocateCoresForAxes(totalCores);
+    applyStaticParallelTiling(axes, coresForParallel, coresForReduce, totalCores, 0);
+  }
 
   // Mark the outermost parallel axis for multi-core execution
   for (const auto &axis : axes) {
