@@ -9,6 +9,9 @@
 - LLM 历史压缩与缓存
 - 断点续跑
 - **快照版本控制**：利用文件系统硬链接实现 $O(1)$ 空间分叉和高效版本管理，**无需 Git 依赖**。
+- **文件演化追踪**：内置 `blame` 机制，追踪文件修改历史。
+- **智能合并**：支持三路合并与自动冲突解决。
+- **可配置追踪**：支持 `.traceconfig` 配置，灵活控制追踪文件范围。
 
 ### 核心特性
 *   **高效快照**: 节点分叉通过硬链接复制文件，实现写时复制，无物理数据复制开销（但在跨文件系统时会自动回退到物理复制）。
@@ -153,6 +156,36 @@ Snapshot Filesystem 的核心在于利用**硬链接**实现类似 Git 的高效
     *   `nodes/node_001/code/main.py` 也是指向数据块 A 的一个入口。
 *   **删除机制**: 只有当指向数据块 A 的**所有**入口（硬链接）都被删除时，操作系统才会回收数据块 A 的空间。
 *   **结论**: 代码分散存储在各个节点的 `code/` 目录下。每个文件都是"真实"的文件，它们只是共享了底层数据而已。删除父节点不会影响子节点的代码，因为子节点持有的链接依然有效。
+
+---
+
+## 高级特性：Trace 配置系统 (.traceconfig)
+
+FileSystem 支持通过 `.traceconfig` 文件灵活控制哪些文件应该被纳入版本追踪（随节点分叉自动复制）。
+
+### 配置文件格式
+
+在 `base_dir` 根目录下创建 `.traceconfig` 文件：
+
+```gitignore
+# 默认包含规则
+code/               # 追踪 code 目录下的所有文件
+
+# 自定义包含规则
+logs/               # 同时也追踪 logs 目录（保留中间产物）
+artifacts/*.json    # 追踪 artifacts 目录下的 json 文件
+
+# 排除规则
+!**/*.tmp           # 忽略所有 tmp 文件
+!**/__pycache__/    # 忽略 pycache
+```
+
+### 工作原理
+1.  **加载**: 系统初始化时读取 `.traceconfig`。
+2.  **应用**: 在 `add_node` (创建分叉) 时，仅对匹配规则的文件建立硬链接。
+3.  **优势**: 
+    - 灵活管理中间产物（如编译产物、日志），无需修改代码。
+    - 保持文件系统整洁，避免垃圾文件污染版本历史。
 
 ---
 
@@ -439,6 +472,7 @@ def get_full_action_history(self, node_id: str) -> List[ActionRecord]
 
 ##### 历史压缩
 
+
 ```python
 async def get_compressed_history_for_llm(
     self,
@@ -495,9 +529,27 @@ def find_lca(self, node_id1: str, node_id2: str) -> str
 ```python
 def merge_nodes(self, target_node_id: str, source_node_id: str) -> str
 ```
-*   **功能**: 将源节点的更改合并到目标节点（三路合并）。如果有冲突，将在文件中插入冲突标记并标记节点状态。
+*   **功能**: 将源节点的更改合并到目标节点（三路合并）。
+*   **智能合并**: 
+    - 自动合并非重叠修改（基于 `difflib` 实现的自定义算法，无需外部依赖）。
+    - 仅在双方修改同一行时标记冲突。
+    - 冲突格式采用标准 Git 风格 (`<<<<<<< YOURS` ... `>>>>>>> THEIRS`)。
+
+##### 文件演化追踪 (Blame)
+
+```python
+def blame_file(self, node_id: str, filename: str) -> List[Dict]
+```
+*   **功能**: 追踪指定文件从 root 到当前节点的演化历史。
+*   **返回**: 包含每次修改的节点 ID、Action 类型、Timestamp、Checksum 等信息的列表。
+
+```python
+def blame_all_files(self, node_id: str) -> Dict[str, List[Dict]]
+```
+*   **功能**: 获取节点所有文件的演化历史。
 
 ##### Trace 属性
+
 
 ```python
 @property
@@ -812,6 +864,53 @@ trace.add_node(
 )
 ```
 
+### 场景 8：文件历史与配置管理 (Blame & .traceconfig)
+
+#### 使用 Blame 追踪文件演化
+
+```python
+# 获取文件的演化历史
+history = trace.blame_file(node_id="node_010", filename="kernel.py")
+
+for record in history:
+    print(f"[{record['timestamp']}] Node: {record['node_id']}")
+    print(f"  Action: {record['action_type']}")
+    print(f"  Checksum: {record['checksum']}")
+    # 输出示例:
+    # [2023-10-27 10:00:01] Node: node_005 (coder)
+    #   Checksum: a1b2c3d4...
+```
+
+```python
+# 获取节点所有文件的演化历史 (返回 Dict[filename, List[BlameRecord]])
+all_history = trace.blame_all_files(node_id="node_010")
+```
+
+#### 配置 .traceconfig 管理中间产物
+
+在项目根目录（`base_dir`）创建 `.traceconfig` 文件，控制哪些文件随节点分叉自动复制：
+
+```gitignore
+# .traceconfig 示例
+
+# 1. 必须包含代码目录
+code/
+
+# 2. 追踪日志目录 (保留中间产物)
+logs/
+
+# 3. 追踪特定的构建产物
+artifacts/*.json
+build/outputs/
+
+# 4. 排除临时文件 (即使它们在上述目录中)
+!**/*.tmp
+!**/__pycache__/
+!**/.DS_Store
+```
+
+系统初始化时会自动加载该配置。当调用 `trace.add_node()` 创建新节点时，系统会根据这些规则决定哪些文件需要被硬链接到新节点目录。
+
 ---
 
 ## 测试与稳定性
@@ -819,7 +918,7 @@ trace.add_node(
 本项目拥有完善的自动化测试体系，确保底层文件系统的极致稳定与高性能。
 
 ### 1. 验证概要
-所有核心功能均经过 **93 个自动化测试用例** 的覆盖，包括：
+所有核心功能均经过 **自动化测试用例** 的覆盖，包括：
 - **Snapshot 核心**: 初始化、Save/Load、工作区重置。
 - **硬链接效率**: 验证未修改文件实现 $O(1)$ 分叉，节省磁盘空间。
 - **Diff & Merge**: 统一补丁生成、LCA 寻踪、三路合并与冲突检测。
