@@ -7,7 +7,7 @@ The Task Orchestration Plan Configuration (Plan for short) declares the complete
 The plan mainly includes:
 - `agent_model_config`: assign LLM presets to each agent (presets from `core/llm/llm_config.yaml`).
 - `workflow_config_path`: points to the workflow YAML that defines execution flow (see [Workflow System Design Document](./Workflow.md)).
-- `docs_dir`: reference documentation directories for agents (see [Doc-Driven Integration Guide](./DocDrivenIntegration.md)).
+- `docs_dir`: reference documentation directories for agents (now replaced by the [Skill System](./SkillSystem.md)).
 - `log_dir`: root directory for task logs.
 - `profile_settings`: performance testing parameters (e.g., `run_times`, `warmup_times`).
 - `verify_timeout`: verification timeout in seconds.
@@ -73,7 +73,7 @@ Specifies the storage directory for task execution logs:
 
 ### 4. Documentation Directory Configuration (docs_dir)
 
-See the [Doc-Driven Integration Guide](./DocDrivenIntegration.md).
+See the [Skill System Documentation](./SkillSystem.md) (replaces the old Doc-Driven Integration approach).
 
 ```yaml
 # Example docs configuration
