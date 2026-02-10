@@ -139,6 +139,9 @@ class TraceSystem:
         # 保存
         self._save_trace()
         
+        # 加载 .traceconfig 配置
+        self._load_trace_config()
+        
         # 将 User Request 持久化为 root 的 Action
         if task_input:
             action_record = ActionRecord(
@@ -157,6 +160,31 @@ class TraceSystem:
             self.fs.save_action_history_fact("root", history)
             
         logger.info(f"Initialized trace system: {self.task_id}")
+
+    def _load_trace_config(self):
+        """加载 .traceconfig 文件"""
+        config_path = self.fs.base_dir / ".traceconfig"
+        self.include_patterns = ["code/"]  # 默认值
+        self.exclude_patterns = []
+        
+        if config_path.exists():
+            try:
+                content = config_path.read_text(encoding="utf-8")
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                        
+                    if line.startswith("!"):
+                        self.exclude_patterns.append(line[1:])
+                    else:
+                        self.include_patterns.append(line)
+                logger.info(f"Loaded trace config: include={self.include_patterns}, exclude={self.exclude_patterns}")
+            except Exception as e:
+                logger.warning(f"Failed to load .traceconfig: {e}")
+
+
+
     
     def _load_trace(self) -> TraceTree:
         """加载 Trace 树"""
@@ -314,12 +342,18 @@ class TraceSystem:
         result: Dict,
     ) -> None:
         """创建节点的文件系统结构"""
-        # 复制父节点状态
-        self.fs.copy_node_state(parent_id, node_id)
+        # 复制父节点状态 (应用 .traceconfig 配置)
+        self.fs.copy_node_state(
+            parent_id, 
+            node_id,
+            include_patterns=getattr(self, "include_patterns", None),
+            exclude_patterns=getattr(self, "exclude_patterns", None)
+        )
         # Snapshot Filesystem: copy_node_state 使用硬链接处理代码快照的继承
         
         # 更新节点状态
         self.fs.update_node_state(node_id, turn=turn, status="running")
+
         
         # 创建增量动作历史
         # 如果 action 中没有显式的 arguments 或 params，则将除 type 外的所有字段作为 arguments

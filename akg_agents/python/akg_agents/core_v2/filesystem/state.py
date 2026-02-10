@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import shutil
+import fnmatch
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple, Iterator
 
@@ -754,19 +755,52 @@ class FileSystemState:
     
     # ==================== 节点复制 ====================
     
-    def copy_node_state(self, from_node_id: str, to_node_id: str) -> NodeState:
+    
+    def _path_matches_patterns(self, path: Path, include_patterns: List[str], exclude_patterns: List[str], base_dir: Path) -> bool:
         """
-        复制节点状态到新节点 (使用硬链接)
+        检查路径是否匹配包含规则且不匹配排除规则
+        """
+        rel_path = path.relative_to(base_dir).as_posix()
+        
+        # 1. 检查排除规则 (优先级最高)
+        for pattern in exclude_patterns:
+            if fnmatch.fnmatch(rel_path, pattern):
+                return False
+                
+        # 2. 检查包含规则
+        for pattern in include_patterns:
+            # 支持目录匹配 (如 code/ 匹配 code/main.py)
+            if pattern.endswith("/"):
+                if rel_path.startswith(pattern) or rel_path == pattern.rstrip("/"):
+                    return True
+            elif fnmatch.fnmatch(rel_path, pattern):
+                return True
+                
+        return False
+
+    def copy_node_state(self, from_node_id: str, to_node_id: str, 
+                       include_patterns: List[str] = None, 
+                       exclude_patterns: List[str] = None) -> NodeState:
+        """
+        复制节点状态到新节点 (使用硬链接，支持配置化文件追踪)
         
         Args:
             from_node_id: 源节点 ID
             to_node_id: 目标节点 ID
+            include_patterns: 需要包含的文件/目录模式列表 (Glob). 默认 ["code/**"]
+            exclude_patterns: 需要排除的文件/目录模式列表 (Glob). 默认 []
             
         Returns:
             新节点的状态
         """
         source_state = self.load_node_state(from_node_id)
         
+        # 默认规则: 只包含 code 目录
+        if include_patterns is None:
+            include_patterns = ["code/"]
+        if exclude_patterns is None:
+            exclude_patterns = []
+            
         # 创建新状态（更新 node_id 和 timestamp）
         from .models import _get_timestamp
         new_state = NodeState(
@@ -781,18 +815,24 @@ class FileSystemState:
             timestamp=_get_timestamp(),
         )
         
-        # 复制代码快照 (使用硬链接节省空间)
-        source_code_dir = self.get_code_snapshot_dir(from_node_id)
-        target_code_dir = self.get_code_snapshot_dir(to_node_id)
+        # 复制文件快照 (根据配置规则)
+        source_dir = self.get_node_dir(from_node_id)
+        target_dir = self.get_node_dir(to_node_id)
         
-        if source_code_dir.exists():
-            self.ensure_dir(target_code_dir)
-            for src_file in source_code_dir.rglob("*"):
+        if source_dir.exists():
+            self.ensure_dir(target_dir)
+            # 遍历源节点下所有文件
+            for src_file in source_dir.rglob("*"):
                 if src_file.is_file():
-                    rel_path = src_file.relative_to(source_code_dir)
-                    dst_file = target_code_dir / rel_path
-                    dst_file.parent.mkdir(parents=True, exist_ok=True)
-                    self._hardlink_or_copy(src_file, dst_file)
+                    # 跳过元数据文件
+                    if src_file.name in ["state.json", "thinking.json"]:
+                        continue
+                        
+                    if self._path_matches_patterns(src_file, include_patterns, exclude_patterns, source_dir):
+                        rel_path = src_file.relative_to(source_dir)
+                        dst_file = target_dir / rel_path
+                        dst_file.parent.mkdir(parents=True, exist_ok=True)
+                        self._hardlink_or_copy(src_file, dst_file)
         
         # 复制 Thinking 状态 (继承)
         source_thinking = self.load_thinking(from_node_id)
