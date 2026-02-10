@@ -64,37 +64,37 @@ class OpTaskBuilder(AgentBase):
     PARAMETERS_SCHEMA = {
         "type": "object",
         "properties": {
-            "user_input": {
-                "type": "string",
+                    "user_input": {
+                        "type": "string",
                 "description": "用户的需求描述（必须包含完整的用户原始需求，不要省略任何细节）"
-            },
-            "framework": {
-                "type": "string",
-                "description": "目标框架（例如：'torch', 'mindspore'）",
-                "default": "torch"
-            },
-            "backend": {
-                "type": "string",
-                "description": "目标硬件后端（例如：'cuda', 'ascend'）",
-                "default": "cuda"
-            },
-            "arch": {
-                "type": "string",
-                "description": "目标硬件架构（例如：'a100', 'ascend910b4'）",
-                "default": "a100"
-            },
-            "dsl": {
-                "type": "string",
-                "description": "目标 DSL（例如：'triton', 'triton-cuda', 'triton-ascend'）",
-                "default": "triton"
-            },
-            "user_feedback": {
-                "type": "string",
-                "description": "用户反馈（可选，用于多轮交互）",
-                "default": ""
-            }
-        },
-        "required": ["user_input"]
+                    },
+                    "framework": {
+                        "type": "string",
+                        "description": "目标框架（例如：'torch', 'mindspore'）",
+                        "default": "torch"
+                    },
+                    "backend": {
+                        "type": "string",
+                        "description": "目标硬件后端（例如：'cuda', 'ascend'）",
+                        "default": "cuda"
+                    },
+                    "arch": {
+                        "type": "string",
+                        "description": "目标硬件架构（例如：'a100', 'ascend910b4'）",
+                        "default": "a100"
+                    },
+                    "dsl": {
+                        "type": "string",
+                        "description": "目标 DSL（例如：'triton', 'triton-cuda', 'triton-ascend'）",
+                        "default": "triton"
+                    },
+                    "user_feedback": {
+                        "type": "string",
+                        "description": "用户反馈（可选，用于多轮交互）",
+                        "default": ""
+                    }
+                },
+                "required": ["user_input"]
     }
     
     def __init__(self):

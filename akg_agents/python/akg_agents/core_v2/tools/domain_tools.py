@@ -93,7 +93,7 @@ async def verify_kernel(
             log_dir = Path(cur_path) / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
         else:
-            log_dir = Path(tempfile.mkdtemp(prefix=f"verify_{op_name}_"))
+        log_dir = Path(tempfile.mkdtemp(prefix=f"verify_{op_name}_"))
         logger.info(f"[verify_kernel] 日志目录: {log_dir}")
         
         # 规范化 DSL
@@ -236,7 +236,7 @@ async def profile_kernel(
             log_dir = Path(cur_path) / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
         else:
-            log_dir = Path(tempfile.mkdtemp(prefix=f"profile_{op_name}_"))
+        log_dir = Path(tempfile.mkdtemp(prefix=f"profile_{op_name}_"))
         logger.info(f"[profile_kernel] 日志目录: {log_dir}")
         
         # 规范化 DSL
