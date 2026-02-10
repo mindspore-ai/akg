@@ -1,7 +1,7 @@
 # Database 模块设计文档
 
 ## 概述
-Database 模块是理数据库框架：
+Database 模块是数据库框架：
 
 - **通用基类**（`database/`）：提供 `Database` 抽象基类和 `VectorStore` 抽象基类，定义了文档存储、检索、向量索引的通用框架
 - **算子专用实现**（`op/database/`）：`CoderDatabase` 和 `CoderVectorStore`，继承通用基类，实现算子方案的特定逻辑
@@ -50,7 +50,7 @@ op/database/                        # 算子专用实现
 **嵌入模型加载：**
 VectorStore 现在通过 `core_v2.llm.create_embedding_model()` 加载嵌入模型，支持 OpenAI 兼容的 Embedding API（详见 [RAG 文档](./RAG.md)）。加载优先级：
 1. 配置中的 OpenAI 兼容 Embedding 模型
-2. 环境变量 `EMBEDDING_MODEL_PATH` 指定的本地 HuggingFace 模型
+2. 指定本地 HuggingFace 模型
 3. 自动降级禁用向量存储功能
 
 **检索接口：**
@@ -160,7 +160,7 @@ database/
 ```python
 config = {
     "agent_model_config": {
-        "feature_extraction": "deepseek_r1_default"  # 特征提取模型
+        "feature_extraction": "standard"  # 特征提取模型
     },
     "database_config": {
         "enable_rag": True,          # 是否启用 RAG 功能
