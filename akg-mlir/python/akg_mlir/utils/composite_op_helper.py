@@ -26,10 +26,10 @@ import string
 import importlib.util
 from logging.handlers import TimedRotatingFileHandler
 from collections import namedtuple
+from bfloat16 import bfloat16
 import numpy as np
 from .gen_random import random_gaussian, gen_indices, gen_csr_indices
 from .op_dsl import get_attr, get_op_dsl
-from bfloat16 import bfloat16
 
 
 def get_cpptype_from_pytype(pytype):
@@ -60,16 +60,15 @@ class Log(logging.Logger):
     """Log class for print"""
 
     def __init__(self, case_name, case_path):
-        super(Log, self).__init__(case_name)
+        super().__init__(case_name)
         self.log = logging.getLogger(
             case_name + ''.join([random.choice(string.digits + string.ascii_letters) for _ in range(8)]))
         self.log.setLevel(logging.DEBUG)
         fmt = '%(levelname)s %(asctime)s - %(filename)s:%(funcName)s:%(lineno)s - %(message)s'
         datefmt = '%Y-%m-%d %H:%M:%S'
         formatter = logging.Formatter(fmt, datefmt)
-        logfile = os.path.join(case_path, '{0}.log'.format(case_name))
-        file_handler = TimedRotatingFileHandler(
-            logfile, when='D', interval=1, backupCount=10)
+        logfile = os.path.join(case_path, f'{case_name}.log')
+        file_handler = TimedRotatingFileHandler(logfile, when='D', interval=1, backupCount=10)
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         self.log.removeHandler(file_handler)
@@ -105,8 +104,10 @@ def compare_tensor(acu_output, exp_output, rtol=1.e-5, atol=1.e-8, equal_nan=Fal
         absolute_err = np.abs(acu_output - exp_output)
         max_err = np.max(absolute_err)
         index = np.argmax(absolute_err)
-        relative_err = max_err / acu_output.reshape(-1)[index]
-        logging.error("This shape precision is not up to standard, compare failed.")
+        eps = 1e-8
+        relative_err = max_err / (abs(exp_output.reshape(-1)[index]) or eps)
+        logging.error("This shape precision is not up to standard, compare failed. expect %s but got %s",
+                      exp_output.reshape(-1)[index], acu_output.reshape(-1)[index])
         logging.error("Max absolute error is %s", max_err)
         logging.error("Max absolute error's relative error is %s", relative_err)
     return res
@@ -144,7 +145,7 @@ def precheck(desc):
     }
 
     stop_forward = set()
-    variable = dict()
+    variable = {}
 
     def update_stop_forward(out_desc):
         for out_tensor in out_desc:
@@ -277,15 +278,14 @@ def random_data_to_disk(size, miu=None, sigma=None, seed=None, random_data_disk_
         if random_data_disk_path is None:
             random_data_disk_path = os.environ.get("RANDOM_DATA_DISK_PATH")
             if random_data_disk_path is None:
-                raise ValueError("Environment variable is missing from the current environment RANDOM_DATA_DISK_PATH "
-                                 ": {0}".format(random_data_disk_path))
-        data_path = random_data_disk_path + \
-            "/random_data_%s_%s.bin" % (str(miu_sigma[0]), str(miu_sigma[1]))
+                raise ValueError(f"Environment variable is missing from the current environment RANDOM_DATA_DISK_PATH "
+                                 f": {random_data_disk_path}")
+        data_path = random_data_disk_path + f"/random_data_{str(miu_sigma[0])}_{str(miu_sigma[1])}.bin"
         with os.fdopen(os.open(data_path, os.O_WRONLY | os.O_CREAT, 0o644), 'w') as file:
             random_data.tofile(file)
 
 
-class CodePrinter(object):
+class CodePrinter():
     """print numpy file"""
 
     def __init__(self, out_file):
@@ -423,6 +423,7 @@ def _collect_infos(desc, infos):
 
 
 def _pack_matrix(data, feature):
+    """Pack matrix."""
     def _get_size(shape):
         res = 1
         for i in shape:
@@ -448,6 +449,7 @@ def _pack_matrix(data, feature):
 
 
 def _gen_input_item(tensor_name, infos, shape, dtype, csr_idx_pair, input_mean_value):
+    """Gen input item."""
     item = None
     if tensor_name in infos["clean_input"]:
         item = np.zeros(shape).astype(dtype)
@@ -485,8 +487,7 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
     for input_desc in desc["input_desc"] if desc.get("input_desc") is not None else []:
         tensor_name = input_desc[0]["tensor_name"]
         infos["input_order"][tensor_name] = idx
-        commands.append("%s = np.array(input_dict.get('%s'))" %
-                        (tensor_name, tensor_name))
+        commands.append(f"{tensor_name} = np.array(input_dict.get('{tensor_name}'))")
 
         if not infos["gen_data"] and idx < len(input_for_mod):
             infos["input_dict"][tensor_name] = input_for_mod[idx]
@@ -495,7 +496,7 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
 
         shape = [1] if not input_desc[0]["shape"] else input_desc[0]["shape"]
         dtype = input_desc[0]["data_type"]
-        if (dtype == "bfloat16"):
+        if dtype == "bfloat16":
             dtype = bfloat16
         item = _gen_input_item(tensor_name, infos, shape,
                                dtype, csr_idx_pair, input_mean_value)
@@ -525,14 +526,14 @@ def _gen_output_data(desc, infos, input_for_mod, output_indexes, commands):
         if infos["gen_data"]:
             shape = [1] if not output_desc["shape"] else output_desc["shape"]
             dtype = output_desc["data_type"]
-            if (dtype == "bfloat16"):
+            if dtype == "bfloat16":
                 dtype = bfloat16
             item = np.full(shape, np.nan, dtype)
             input_for_mod.append(item)
         if tensor_name not in fake_output_tensors:
             real_idx = idx - out_nums
             output_indexes.append(real_idx)
-            commands.append("expect.append(%s)" % tensor_name)
+            commands.append(f"expect.append({tensor_name})")
         idx += 1
 
 
@@ -545,7 +546,7 @@ def _check_need_reshape(input_desc):
         fractal_tensor = input_desc[1][0]
         default_tensor = input_desc[0][0]
         return True, fractal_tensor, default_tensor
-    elif inputs_format == ["FRACTAL_NZ", "DefaultFormat"]:
+    if inputs_format == ["FRACTAL_NZ", "DefaultFormat"]:
         fractal_tensor = input_desc[0][0]
         default_tensor = input_desc[1][0]
         return True, fractal_tensor, default_tensor
@@ -573,26 +574,23 @@ def _emit_reshape(fractal_tensor, default_tensor):
         shape_new.extend(
             [1, shape_fractal[-3], shape_fractal[-2], 1])
     if "value" in default_tensor:
-        sent_reshape_tensor = "%s = np.full(%s, %s, np.%s)" \
-                              % (default_tensor["tensor_name"], shape_new, default_tensor["value"],
-                                 default_tensor["data_type"])
+        sent_reshape_tensor = (f'{default_tensor["tensor_name"]} = '
+                               f'np.full({shape_new}, {default_tensor["value"]}, np.{default_tensor["data_type"]})')
     else:
         if np.zeros(shape_default).size != np.zeros(shape_new).size:
-            raise ValueError("It is error to reshape %s to %s!" %
-                             (shape_default, shape_new))
-        sent_reshape_tensor = "%s = np.reshape(%s, %s)" \
-                              % (default_tensor["tensor_name"], default_tensor["tensor_name"], tuple(shape_new))
+            raise ValueError(f"It is error to reshape {shape_default} to {shape_new}!")
+        sent_reshape_tensor = (f'{default_tensor["tensor_name"]} = '
+                               f'np.reshape({default_tensor["tensor_name"]}, {tuple(shape_new)})')
     return sent_reshape_tensor
 
 
 def _gen_op_compute(desc, commands):
     """Generate op compute."""
-    elemwise_op_list = ["TensorAdd", "Add",
-                        "RealDiv", "Mul", "Minimum", "Maximum", "Sub"]
+    elemwise_op_list = ["TensorAdd", "Add", "RealDiv", "Mul", "Minimum", "Maximum", "Sub"]
     for operation in desc["op_desc"]:
         dsl_fun = get_op_dsl().get(operation["name"], None)
         if dsl_fun is None:
-            raise ValueError("op [%s] is not supported!" % operation["name"])
+            raise ValueError(f'op [{operation["name"]}] is not supported!')
         if operation["name"] in elemwise_op_list and operation["output_desc"][0].get("format") == "FRACTAL_NZ":
             need_reshape, fractal_tensor, default_tensor = _check_need_reshape(
                 operation["input_desc"])
@@ -616,7 +614,7 @@ def _update_inplace_tensors(infos, output_indexes, commands):
 
         for tensor_name in inplace_assign_write:
             inplace_tensors_index.append(input_order[tensor_name])
-            inplace_tensors += "{}, ".format(tensor_name)
+            inplace_tensors += f"{tensor_name}, "
         inplace_tensors += "]"
         commands.append("inplace_tensors = " + inplace_tensors)
         commands.append("expect.extend(inplace_tensors)")
@@ -626,10 +624,9 @@ def _update_inplace_tensors(infos, output_indexes, commands):
 def _update_workspace_data(kernel_name, input_for_mod, output_indexes):
     """Update workspace tensors."""
     workspace_tensors = []
-    json_file = os.path.join(os.path.realpath('./'), 'akg_kernel_meta',
-                             kernel_name + "_split.json")
+    json_file = os.path.join(os.path.realpath('./'), 'akg_kernel_meta', kernel_name + "_split.json")
     if os.path.isfile(json_file):
-        with open(json_file, 'r') as f:
+        with open(json_file, 'r', encoding='utf-8') as f:
             kernel_json = f.read()
             kernel_desc = json.loads(kernel_json)
             if "workspace" in kernel_desc:
@@ -712,5 +709,4 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
         tmp_mod.get_expect(infos["input_dict"], expect)
         os.remove(uni_file_name)
         return input_for_mod, expect, output_indexes
-    else:
-        return input_for_mod, -1, output_indexes
+    return input_for_mod, -1, output_indexes

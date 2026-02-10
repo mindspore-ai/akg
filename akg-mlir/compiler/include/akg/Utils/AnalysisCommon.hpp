@@ -58,6 +58,10 @@ constexpr auto kReduceStr = "Reduce";
 constexpr auto kReductionAxesStr = "reduction_axes";
 constexpr auto kReductionTypeStr = "reduction_type";
 constexpr auto kReductionLoopAttr = "reduction";
+constexpr auto kReductionXLoopAttr = "reduction_x";
+constexpr auto kReductionYLoopAttr = "reduction_y";
+constexpr auto kReductionAllLoopAttr = "reduction_all";
+constexpr auto kReductionInitAttr = "reduction_init";
 constexpr auto kVectorSize = 4096;
 constexpr auto kVectorize128Bit = 128;
 constexpr auto kVectorize256Bit = 256;
@@ -70,19 +74,20 @@ constexpr auto kNEONInstructionSet = "neon";
 constexpr auto kTileForOneAttr = "__tiled_for___1";
 constexpr auto kMapForToForallAttr = "map_for_to_forall";
 constexpr auto kVectorAttr = "vector";
+constexpr auto kSkipVectorizeAttr = "skip_vectorize";
 constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
 constexpr auto kBlockDimAttr = "hacc.block_dim";
 constexpr auto kBlockDimSize = 40;
+constexpr auto kDeleteLoopAttr = "delete";
 
-
-const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 100000037, 100000039, 100000049,
-                                         100000073, 100000079, 100000081, 100000091};
-const std::vector<unsigned> primeTailSteps = {100000153, 100000157, 100000163, 100000169, 100000171, 100000177,
-                                             100000181, 100000183, 100000187, 100000189};
-enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduce, Matmul, Conv };
-const std::unordered_map<int, std::string> operatorTemplateMap = {{0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"},
-                                                                  {3, "Reshape"}, {4, "Transpose"},   {5, "Reduce"},
-                                                                  {6, "Matmul"},  {7, "Conv"}};
+const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 100000037, 100000039,
+                                          100000049, 100000073, 100000079, 100000081, 100000091};
+const std::vector<unsigned> primeTailSteps = {100000153, 100000157, 100000163, 100000169, 100000171,
+                                              100000177, 100000181, 100000183, 100000187, 100000189};
+enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduce, ReduceInit, Matmul, Conv };
+const std::unordered_map<int, std::string> operatorTemplateMap = {
+  {0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"}, {3, "Reshape"}, {4, "Transpose"},
+  {5, "Reduce"},  {6, "ReduceInit"},  {7, "Matmul"},    {8, "Conv"}};
 
 enum ReduceDirection { UNKNOWN = 0, X, Y, ALL };
 const std::unordered_map<int, std::string> reduceDirectionMap = {{0, "unknown"}, {1, "x"}, {2, "y"}, {3, "all"}};
@@ -98,13 +103,13 @@ class TosaOperatorType {
   TosaOperatorType() = default;
 
   static bool isTosaElementwiseOp(Operation *op) {
-    return (isa<tosa::AddOp, tosa::SubOp, tosa::MulOp, tosa::NegateOp, tosa::PowOp, tosa::ReciprocalOp,
-                tosa::RsqrtOp, tosa::LogOp, tosa::ExpOp, tosa::AbsOp, tosa::TanhOp, tosa::BitwiseAndOp,
-                tosa::BitwiseOrOp, tosa::BitwiseNotOp, tosa::BitwiseXorOp, tosa::LogicalAndOp, tosa::LogicalNotOp,
-                tosa::LogicalOrOp, tosa::LogicalXorOp, tosa::CastOp, tosa::LogicalLeftShiftOp,
-                tosa::LogicalRightShiftOp, tosa::ArithmeticRightShiftOp, tosa::ClzOp, tosa::SelectOp, tosa::GreaterOp,
-                tosa::GreaterEqualOp, tosa::EqualOp, tosa::MaximumOp, tosa::MinimumOp, tosa::CeilOp, tosa::FloorOp,
-                tosa::ClampOp, tosa::SigmoidOp, tosa::IdentityOp, tosa::ConstOp, tosa::ReciprocalOp>(op));
+    return (isa<tosa::AddOp, tosa::SubOp, tosa::MulOp, tosa::NegateOp, tosa::PowOp, tosa::ReciprocalOp, tosa::RsqrtOp,
+                tosa::LogOp, tosa::ExpOp, tosa::AbsOp, tosa::TanhOp, tosa::BitwiseAndOp, tosa::BitwiseOrOp,
+                tosa::BitwiseNotOp, tosa::BitwiseXorOp, tosa::LogicalAndOp, tosa::LogicalNotOp, tosa::LogicalOrOp,
+                tosa::LogicalXorOp, tosa::CastOp, tosa::LogicalLeftShiftOp, tosa::LogicalRightShiftOp,
+                tosa::ArithmeticRightShiftOp, tosa::ClzOp, tosa::SelectOp, tosa::GreaterOp, tosa::GreaterEqualOp,
+                tosa::EqualOp, tosa::MaximumOp, tosa::MinimumOp, tosa::CeilOp, tosa::FloorOp, tosa::ClampOp,
+                tosa::SigmoidOp, tosa::IdentityOp, tosa::ConstOp, tosa::ReciprocalOp>(op));
   }
 
   static bool isTosaReduceOp(Operation *op) {
@@ -118,11 +123,10 @@ class MindOperatorType {
   MindOperatorType() = default;
 
   static bool isMindElementwiseOp(Operation *op) {
-    return (
-      isa<mindspore::AddOp, mindspore::AddNOp, mindspore::DivOp, mindspore::SqrtOp, mindspore::CosOp, mindspore::SinOp,
-          mindspore::AsinOp, mindspore::AcosOp, mindspore::AcoshOp, mindspore::AtanOp, mindspore::IsnanOp,
-          mindspore::IsinfOp, mindspore::InplaceAssignOp, mindspore::AssignOp, mindspore::LessOp,
-          mindspore::LessEqualOp>(op));
+    return (isa<mindspore::AddOp, mindspore::AddNOp, mindspore::DivOp, mindspore::SqrtOp, mindspore::CosOp,
+                mindspore::SinOp, mindspore::AsinOp, mindspore::AcosOp, mindspore::AcoshOp, mindspore::AtanOp,
+                mindspore::IsnanOp, mindspore::IsinfOp, mindspore::InplaceAssignOp, mindspore::AssignOp,
+                mindspore::LessOp, mindspore::LessEqualOp>(op));
   }
 
   static bool isMindReduceOp(Operation *op) {
@@ -569,7 +573,11 @@ class CommonUtils {
       }
     }
     if (indexRoot.empty()) {
-      indexRoot = getStoreLoadIndices(operandRoot.getDefiningOp());
+      // Check if operandRoot has a defining op before calling getStoreLoadIndices
+      // BlockArguments (e.g., iter_args in scf.for) don't have defining ops
+      if (operandRoot.getDefiningOp()) {
+        indexRoot = getStoreLoadIndices(operandRoot.getDefiningOp());
+      }
     }
     if (indexRoot.empty()) {
       indexRoot.push_back(operandRoot);
@@ -587,6 +595,37 @@ class CommonUtils {
     return redOps;
   }
 
+  static void collectDestEachDim(SmallVector<Value> &dest, SmallVector<SmallVector<Operation *, 8>> &axesDestEachDim) {
+    for (auto idx : dest) {
+      SmallVector<Operation *, 8> axesDesc;
+      collectRelatedAxes(idx, axesDesc);
+      (void)std::unique(axesDesc.begin(), axesDesc.end());
+      axesDestEachDim.push_back(axesDesc);
+    }
+  }
+
+  static void collectSrcEachDim(SmallVector<Value> &src, SmallVector<SmallVector<Operation *, 8>> &axesSrcEachDim) {
+    for (auto idx : src) {
+      SmallVector<Operation *, 8> axesSrc;
+      collectRelatedAxes(idx, axesSrc);
+      (void)std::unique(axesSrc.begin(), axesSrc.end());
+      // Skip empty arrays (e.g., from constant indices)
+      if (axesSrc.empty()) {
+        continue;
+      }
+      bool isDuplicated = false;
+      for (auto arr : axesSrcEachDim) {
+        if (!arr.empty() && arr[0] == axesSrc[0]) {
+          isDuplicated = true;
+          break;
+        }
+      }
+      if (!isDuplicated) {
+        axesSrcEachDim.push_back(axesSrc);
+      }
+    }
+  }
+
   static void collectReductionAxesEachDimImpl(Operation *funcOp, SmallVector<SmallVector<Operation *, 8>> &res,
                                               SmallVector<Operation *> &redOps) {
     for (auto redOp : redOps) {
@@ -600,31 +639,8 @@ class CommonUtils {
 
       SmallVector<SmallVector<Operation *, 8>> axesDestEachDim;
       SmallVector<SmallVector<Operation *, 8>> axesSrcEachDim;
-      for (auto idx : indexDest) {
-        SmallVector<Operation *, 8> axesDesc;
-        collectRelatedAxes(idx, axesDesc);
-        (void)std::unique(axesDesc.begin(), axesDesc.end());
-        axesDestEachDim.push_back(axesDesc);
-      }
-      for (auto idx : indexSrc) {
-        SmallVector<Operation *, 8> axesSrc;
-        collectRelatedAxes(idx, axesSrc);
-        (void)std::unique(axesSrc.begin(), axesSrc.end());
-        // Skip empty arrays (e.g., from constant indices)
-        if (axesSrc.empty()) {
-          continue;
-        }
-        bool isDuplicated = false;
-        for (auto arr : axesSrcEachDim) {
-          if (!arr.empty() && arr[0] == axesSrc[0]) {
-            isDuplicated = true;
-            break;
-          }
-        }
-        if (!isDuplicated) {
-          axesSrcEachDim.push_back(axesSrc);
-        }
-      }
+      collectDestEachDim(indexDest, axesDestEachDim);
+      collectSrcEachDim(indexSrc, axesSrcEachDim);
       SmallVector<Operation *, 8> axesDestFlatten;
       for (auto axesDesc : axesDestEachDim) {
         for (auto axisDest : axesDesc) {

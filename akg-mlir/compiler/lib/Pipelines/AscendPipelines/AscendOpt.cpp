@@ -1,5 +1,5 @@
 /**
- * Copyright 2024-2025 Huawei Technologies Co., Ltd
+ * Copyright 2024-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,6 +61,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::createLinalgGeneralizeNamedOpsPass());
     pm.addPass(mlir::createMindSporeToTosaPass());
     pm.addPass(mlir::createMindSporeToLinalgPass());
+    pm.addPass(mlir::createCloneTensorEmptyPass());
   } else {
     pm.addPass(mlir::createMindSporeToLinalgNamedPass());
     pm.addPass(mlir::createMindSporeToTosaPass());
@@ -80,6 +81,10 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     bufferizationOpts.setFunctionBoundaryTypeConversion(mlir::bufferization::LayoutMapOption::IdentityLayoutMap);
     pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufferizationOpts));
 
+    if (options.dynamicShape) {
+      pm.addPass(mlir::createInferSymbolicShapesPass());
+    }
+
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createMemrefCopyToLoopsPass());
 
@@ -88,7 +93,6 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
 
     // pre-process
     nestedFusionPM.addPass(mlir::createCSEPass());
-    nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
     bool promoteSingleIter = true;
     nestedFusionPM.addPass(mlir::affine::createAffineLoopNormalizePass(promoteSingleIter));
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
@@ -99,30 +103,31 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
 
     // fusion
-    nestedFusionPM.addPass(mlir::createAKGLoopFusionPass());
+    nestedFusionPM.addPass(mlir::createRemoveRedundantLoopsPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
-
-    nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
+    nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
+    nestedFusionPM.addPass(mlir::createAKGLoopFusionPass());
+    if (options.dynamicShape) {
+      nestedFusionPM.addPass(mlir::createSymbolicRemovalPass());
+    }
     nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
+    nestedFusionPM.addPass(mlir::createNormalizePass());
+    nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
 
-    nestedFusionPM.addPass(mlir::createExtractIfOpPass(options.target));
     nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
     nestedFusionPM.addPass(mlir::createBF16ToF32Pass());
     nestedFusionPM.addPass(mlir::createConvertAffineToSCFPass());
-    nestedFusionPM.addPass(mlir::createLowerAffinePass());
-
-    // parallel
-    // nestedFusionPM.addPass(mlir::createRemoveRedundantLoopsPass());
-    // nestedFusionPM.addPass(mlir::createAKGLoopParallelizePass(options.enableParallel));
 
     pm.addPass(mlir::createAddOutParameterPass());
-
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createLegalizeBoolPass());
     // tiling
     pm.addPass(mlir::createNPUAutoTilingPass());
     // vector
     pm.addPass(mlir::scf::createNPUVectorVectorizePass());
     pm.addPass(mlir::createArithToHIVMConversionPass());
+    pm.addPass(mlir::createCanonicalizerPass());
   }
 }
 }  // namespace

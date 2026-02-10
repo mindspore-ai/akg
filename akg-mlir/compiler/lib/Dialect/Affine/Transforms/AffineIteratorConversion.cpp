@@ -43,9 +43,6 @@ namespace mlir {
 
 #define DEBUG_TYPE "affine-load-removal"
 
-using namespace mlir;
-using namespace llvm;
-
 namespace mlir {
 
 struct AffineIteratorConversion : public impl::AffineIteratorConversionBase<AffineIteratorConversion> {
@@ -55,7 +52,6 @@ struct AffineIteratorConversion : public impl::AffineIteratorConversionBase<Affi
   void loadRemoveEachBand(Operation *curOp);
   void removeInitMemoryCopy(func::FuncOp func);
 };
-}  // namespace mlir
 
 class CreateArithOp {
  private:
@@ -202,6 +198,7 @@ void AffineIteratorConversion::loadRemoveEachBand(Operation *curOp) {
       /*replaceInitOperandUsesInLoop=*/false, [&](OpBuilder &b, Location loc, ArrayRef<BlockArgument> newBbArgs) {
         return SmallVector<Value>{storeOp.getValue()};
       }));
+    newLoop->setAttr(kReductionLoopAttr, b.getUnitAttr());
     loadOp.getResult().replaceUsesWithIf(newLoop.getBody()->getArguments().back(), [&](OpOperand &use) {
       Operation *user = use.getOwner();
       return newLoop->isProperAncestor(user);
@@ -232,8 +229,7 @@ void AffineIteratorConversion::runOnOperation() {
   func::FuncOp func = getOperation();
   OpBuilder b(func);
   OperatorTemplate opType = CommonUtils::getOperatorType(func);
-  ReduceDirection reduceDirection = CommonUtils::getReduceDirection(func);
-  if (opType != OperatorTemplate::Reduce || reduceDirection == ReduceDirection::Y) {
+  if (opType != OperatorTemplate::Reduce) {
     return;
   }
 
@@ -259,6 +255,8 @@ void AffineIteratorConversion::runOnOperation() {
   });
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAffineIteratorConversionPass() {
+std::unique_ptr<OperationPass<func::FuncOp>> createAffineIteratorConversionPass() {
   return std::make_unique<AffineIteratorConversion>();
 }
+
+}  // namespace mlir

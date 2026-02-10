@@ -45,8 +45,8 @@ class CoderOnlyWorkflow(BaseWorkflow):
         """构建 Coder-only 工作流图（带 CodeChecker）"""
         workflow = StateGraph(KernelGenState)
         
-        # 检查是否启用 CodeChecker（默认启用）
-        enable_code_checker = self.config.get("enable_code_checker", True)
+        # 检查是否启用 CodeChecker（默认禁用，因为 LLM 检查容易产生假阳性）
+        enable_code_checker = self.config.get("enable_code_checker", False)
         
         # 创建 CodeChecker 实例
         code_checker = None
@@ -99,7 +99,7 @@ class CoderOnlyWorkflow(BaseWorkflow):
             # 条件边：code_checker 后的路由
             code_checker_router = RouterFactory.create_code_checker_router(
                 self.config,
-                max_check_retries=self.config.get("max_code_check_retries", 2)
+                max_check_retries=self.config.get("max_code_check_retries", 5)
             )
             
             workflow.add_conditional_edges(

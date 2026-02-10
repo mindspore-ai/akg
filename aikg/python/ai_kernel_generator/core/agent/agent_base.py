@@ -33,12 +33,25 @@ except ImportError:
 # LangChain 1.0 的 PromptTemplate 使用 SandboxedEnvironment，限制了属性访问
 from jinja2 import Environment, BaseLoader
 
-from textual import log as textual_log
-
 from ai_kernel_generator import get_project_root
-from ai_kernel_generator.cli.messages import LLMEndMessage, LLMStartMessage, LLMStreamMessage
-from ai_kernel_generator.cli.server.message_sender import send_message
+from ai_kernel_generator.cli.messages import DisplayMessage, LLMStreamMessage
+from ai_kernel_generator.cli.runtime.message_sender import send_message
 from ai_kernel_generator.utils.task_label import resolve_task_label
+
+
+class LLMAPIError(Exception):
+    """LLM API 调用失败的自定义异常
+    
+    这个异常包含用户友好的错误消息，会被 agent 的异常处理机制捕获并显示给用户
+    """
+    def __init__(self, message: str, original_error: Exception = None):
+        super().__init__(message)
+        self.original_error = original_error
+        self.user_message = message
+    
+    def __str__(self):
+        """返回友好的错误消息"""
+        return self.user_message
 
 
 class Jinja2TemplateWrapper:
@@ -331,6 +344,15 @@ class AgentBase(ABC):
     @staticmethod
     def _stream_enabled() -> bool:
         """检查是否启用流式输出"""
+        try:
+            from ai_kernel_generator.utils.stream_output import get_stream_output_override
+
+            override = get_stream_output_override()
+            if override is not None:
+                return bool(override)
+        except Exception:
+            # 任何异常都不影响主流程：回退到环境变量
+            pass
         return os.getenv("AIKG_STREAM_OUTPUT", "off").lower() == "on"
 
     @staticmethod
@@ -359,12 +381,25 @@ class AgentBase(ABC):
 
     def _safe_send(self, session_id: str, message) -> None:
         """安全发送消息，失败不影响主流程"""
+        session_id = (session_id or "").strip()
         if not session_id:
+            # 无 session_id 时回退到 stdout（便于脚本直接查看 stream）
+            try:
+                chunk = getattr(message, "chunk", None)
+                if isinstance(chunk, str) and chunk:
+                    print(chunk, end="", flush=True)
+                    return
+                text = getattr(message, "text", None)
+                if isinstance(text, str) and text:
+                    print(text, end="", flush=True)
+                    return
+            except Exception:
+                pass
             return
         try:
             send_message(session_id, message)
         except Exception as e:
-            textual_log.warning("[Agent] send_message failed; ignored", exc_info=e)
+            logger.warning("[Agent] send_message failed; ignored", exc_info=e)
 
     async def run_llm(self, prompt: PromptTemplate, input: Dict[str, Any], model_name: str) -> tuple[str, str, str]:
         """运行LLM（整合了消息发送和 token 统计功能）
@@ -399,23 +434,10 @@ class AgentBase(ABC):
 
         # 检查流式输出和 session_id
         stream = self._stream_enabled()
-        if stream and not session_id:
-            raise ValueError(f"[Agent] agent={agent_name} 的 context 中必须包含 session_id（AIKG_STREAM_OUTPUT=on）")
 
         # 创建模型
         model = create_model(model_name)
         effective_model_name = getattr(model, "model_name", model_name)
-
-        # 发送开始消息
-        self._safe_send(
-            session_id,
-            LLMStartMessage(
-                agent=agent_name,
-                model=effective_model_name,
-                task_id=task_id,
-                task_label=task_label,
-            )
-        )
 
         content = ""
         reasoning_content = ""
@@ -432,7 +454,7 @@ class AgentBase(ABC):
 
             # VLLM 或 OpenAI AsyncClient 模型
             if effective_model_name.startswith("vllm_") or is_openai_async:
-                messages = [{"role": "system", "content": ""}, {"role": "user", "content": formatted_prompt}]
+                messages = [{"role": "system", "content": " "}, {"role": "user", "content": formatted_prompt}]
                 create_kwargs = {
                     "model": getattr(model, "model_name", model_name),
                     "messages": messages,
@@ -454,34 +476,30 @@ class AgentBase(ABC):
                         delta = chunk.choices[0].delta
                         delta_text = getattr(delta, "content", None)
                         if isinstance(delta_text, str) and delta_text:
-                            print(delta_text, end="", flush=True)
+                            #print(delta_text, end="", flush=True)
                             content += delta_text
                             self._safe_send(
                                 session_id,
                                 LLMStreamMessage(
                                     agent=agent_name,
                                     chunk=delta_text,
-                                    task_id=task_id,
                                     is_reasoning=False,
-                                    task_label=task_label,
                                 ),
                             )
                             continue
                         delta_reasoning = getattr(delta, "reasoning_content", None)
                         if isinstance(delta_reasoning, str) and delta_reasoning:
-                            print(delta_reasoning, end="", flush=True)
+                            #print(delta_reasoning, end="", flush=True)
                             reasoning_content += delta_reasoning
                             self._safe_send(
                                 session_id,
                                 LLMStreamMessage(
                                     agent=agent_name,
                                     chunk=delta_reasoning,
-                                    task_id=task_id,
                                     is_reasoning=True,
-                                    task_label=task_label,
                                 ),
                             )
-                    print()
+                    #print()
             else:
                 # 其他模型使用 LangChain chain
                 chain = prompt | model
@@ -494,16 +512,14 @@ class AgentBase(ABC):
                     async for raw_result in chain.astream(input):
                         chunk_text = getattr(raw_result, "content", "")
                         if chunk_text:
-                            print(chunk_text, end="", flush=True)
+                            #print(chunk_text, end="", flush=True)
                             content += chunk_text
                             self._safe_send(
                                 session_id,
                                 LLMStreamMessage(
                                     agent=agent_name,
                                     chunk=chunk_text,
-                                    task_id=task_id,
                                     is_reasoning=False,
-                                    task_label=task_label,
                                 ),
                             )
                             continue
@@ -511,19 +527,17 @@ class AgentBase(ABC):
                         if isinstance(additional_kwargs, dict) and "reasoning_content" in additional_kwargs:
                             chunk_reasoning = additional_kwargs.get("reasoning_content") or ""
                             if chunk_reasoning:
-                                print(chunk_reasoning, end="", flush=True)
+                                #print(chunk_reasoning, end="", flush=True)
                                 reasoning_content += chunk_reasoning
                                 self._safe_send(
                                     session_id,
                                     LLMStreamMessage(
                                         agent=agent_name,
                                         chunk=chunk_reasoning,
-                                        task_id=task_id,
                                         is_reasoning=True,
-                                        task_label=task_label,
                                     ),
                                 )
-                    print()
+                    #print()
                     usage_metadata = getattr(raw_result, "usage_metadata", None)
 
             # 后处理：从 content 中剥离可能包含的 reasoning 片段
@@ -531,6 +545,8 @@ class AgentBase(ABC):
                 content, extracted = self.split_think(content)
                 if extracted:
                     reasoning_content = extracted
+            if not content:
+                content = reasoning_content
 
             # 提取 token 统计信息
             prompt_tokens = None
@@ -555,23 +571,6 @@ class AgentBase(ABC):
                     output_tokens = completion_tokens
                 else:
                     output_tokens = max(completion_tokens - reasoning_tokens, 0)
-
-            # 发送结束消息
-            self._safe_send(
-                session_id,
-                LLMEndMessage(
-                    agent=agent_name,
-                    model=effective_model_name,
-                    response=content,
-                    duration=time.time() - start_time,
-                    task_id=task_id,
-                    task_label=task_label,
-                    prompt_tokens=prompt_tokens,
-                    output_tokens=output_tokens,
-                    reasoning_tokens=reasoning_tokens,
-                    total_tokens=total_tokens,
-                )
-            )
 
             # 数据收集
             if os.getenv("AIKG_DATA_COLLECT", "off").lower() == "on":
@@ -599,20 +598,46 @@ class AgentBase(ABC):
                     }
                     await collector.collect(collected_data)
                 except Exception as e:
-                    textual_log.warning("[Agent] data collect failed; ignored", exc_info=e)
+                    logger.warning("[Agent] data collect failed; ignored", exc_info=e)
+
+            if stream:
+                self._safe_send(
+                    session_id,
+                    DisplayMessage(
+                        text="",
+                    ),
+                )
 
             return content, formatted_prompt, reasoning_content
-        except Exception:
-            # 发送失败消息
-            self._safe_send(
-                session_id,
-                LLMEndMessage(
-                    agent=agent_name,
-                    model=effective_model_name,
-                    response=content or "",
-                    duration=time.time() - start_time,
-                    task_id=task_id,
-                    task_label=task_label,
-                )
+        except Exception as e:
+            # 提取上下文信息用于错误报告
+            context = self.context if isinstance(self.context, dict) else {}
+            agent_name = str(context.get("agent_name") or "unknown")
+            
+            # 构建详细的错误信息
+            error_type = type(e).__name__
+            error_message = str(e)
+            
+            # 记录详细错误到日志
+            logger.error(f"[Agent] agent={agent_name} 调用模型 API 失败: {error_type}: {error_message}", exc_info=e)
+            
+            # 构建用户友好的错误消息
+            user_friendly_error = (
+                f"❌ 模型 API 调用失败\n\n"
+                f"错误类型: {error_type}\n"
+                f"错误信息: {error_message}\n\n"
+                f"请检查：\n"
+                f"1. 模型服务是否正常运行（如 vLLM 服务）\n"
+                f"2. 网络连接是否正常\n"
+                f"3. 环境变量配置是否正确：\n"
+                f"   - AIKG_MODEL_NAME: 模型名称\n"
+                f"   - AIKG_BASE_URL: API 服务地址\n"
+                f"   - AIKG_API_KEY: API 密钥\n"
+                f"4. 如果使用预设配置（如 vllm_deepseek_r1_default），请确保对应的环境变量已设置\n\n"
+                f"使用的模型: {model_name}\n"
+                f"Agent: {agent_name}"
             )
-            raise
+            
+            # 抛出自定义异常，包含友好的错误消息
+            # 这个异常会被 agent 的现有异常处理机制捕获
+            raise LLMAPIError(user_friendly_error, original_error=e) from e

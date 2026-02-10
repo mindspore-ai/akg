@@ -165,7 +165,8 @@ class Conductor(AgentBase):
                 prompt=prompt,
                 reasoning=reasoning,
                 error_log=error_log,
-                profile_res=profile_res
+                profile_res=profile_res,
+                session_id=(self.config.get("session_id") if isinstance(self.config, dict) else None),
             )
 
             # 2. 进行解析并更新任务信息

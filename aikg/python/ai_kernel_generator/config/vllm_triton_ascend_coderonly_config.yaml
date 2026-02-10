@@ -29,4 +29,3 @@ profile_settings:
 
 # Verification configuration
 verify_timeout: 600  # Timeout for verification in seconds (default 10 minutes)
-

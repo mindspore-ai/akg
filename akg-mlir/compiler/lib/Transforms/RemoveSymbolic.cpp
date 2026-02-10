@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
-#include "akg/Analysis/SymbolicShapeAnalysis.h"
-
 #include <algorithm>
 #include <iterator>
+
+#include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/OperationSupport.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DECL_REMOVESYMBOLIC
@@ -29,16 +31,41 @@ namespace mlir {
 #include "akg/Transforms/Passes.h.inc"
 #endif
 #endif
-}  // namespace mlir
-
-using namespace mlir;
 
 static Type RemoveTypeSymbolic(Type type) {
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
   if (!analysis.hasSymbolicShape(type)) {
     return type;
   }
-  return RankedTensorType::get(cast<ShapedType>(type).getShape(), cast<ShapedType>(type).getElementType());
+  auto shapedType = cast<ShapedType>(type);
+  auto shape = shapedType.getShape();
+  auto elementType = shapedType.getElementType();
+
+  // Get the current DictionaryAttr and remove SymShapeAttr
+  mlir::DictionaryAttr dict;
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
+  } else if (auto memRefType = dyn_cast<MemRefType>(type)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  }
+
+  // Remove SymShapeAttr from the dictionary
+  mlir::Attribute newAttr = nullptr;
+  if (dict) {
+    NamedAttrList attrList(dict);
+    (void)attrList.erase(StringAttr::get(type.getContext(), getSymbolShapeAttrName()));
+    if (!attrList.empty()) {
+      newAttr = attrList.getDictionary(type.getContext());
+    }
+  }
+
+  // Return the corresponding type based on the original type, preserving memref or tensor
+  if (auto memRefType = dyn_cast<MemRefType>(type)) {
+    return MemRefType::get(shape, elementType, memRefType.getLayout(), newAttr);
+  } else if (isa<RankedTensorType>(type)) {
+    return RankedTensorType::get(shape, elementType, newAttr);
+  }
+  return type;
 }
 
 static void RemoveFuncSymbolic(func::FuncOp &func) {
@@ -61,6 +88,14 @@ namespace {
 struct RemoveSymbolic : public impl::RemoveSymbolicBase<RemoveSymbolic> {
   void runOnOperation() override {
     (void)getOperation()->walk([&](Operation *op) {
+      if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(op)) {
+        Value src = castOp.getSource();
+        src.setType(RemoveTypeSymbolic(src.getType()));
+        castOp.getResult().replaceAllUsesWith(src);
+        castOp.erase();
+        return WalkResult::advance();
+      }
+
       if (isa<func::FuncOp>(op)) {
         func::FuncOp func = dyn_cast<func::FuncOp>(op);
         RemoveFuncSymbolic(func);
@@ -76,5 +111,6 @@ struct RemoveSymbolic : public impl::RemoveSymbolicBase<RemoveSymbolic> {
   }
 };
 }  // namespace
+}  // namespace mlir
 
 std::unique_ptr<mlir::Pass> mlir::createSymbolicRemovalPass() { return std::make_unique<RemoveSymbolic>(); }

@@ -283,4 +283,23 @@ def BF16ToF32 : Pass<"bf16-to-f32", "func::FuncOp"> {
   ];
 }
 
+def LegalizeBool : Pass<"legalize-bool", "func::FuncOp"> {
+  let summary = "Legalize i1 element types to i8";
+  let constructor = "mlir::createLegalizeBoolPass()";
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "func::FuncDialect",
+    "linalg::LinalgDialect",
+    "memref::MemRefDialect"
+  ];
+}
+
+def Normalize : Pass<"normalize", "func::FuncOp"> {
+    let summary = "Normalize Math ops";
+    let description = [{
+      This pass normalizes complex math ops.
+    }];
+    let constructor = "mlir::createNormalizePass()";
+  }
+
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES

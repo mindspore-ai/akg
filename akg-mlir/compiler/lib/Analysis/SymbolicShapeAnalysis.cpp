@@ -39,6 +39,8 @@ bool SymbolicShapeAnalysis::hasSymbolicShape(Type type) const {
     dict = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
   } else if (auto memRefType = dyn_cast<MemRefType>(type)) {
     dict = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  } else if (auto unrankedMemRefType = dyn_cast<UnrankedMemRefType>(type)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(unrankedMemRefType.getMemorySpace());
   }
   return dict && dict.contains(getSymbolShapeAttrName());
 }
@@ -52,6 +54,8 @@ std::optional<llvm::SmallVector<std::string>> SymbolicShapeAnalysis::getSymbolic
     dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
   } else if (auto memRefType = dyn_cast<MemRefType>(type)) {
     dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  } else if (auto unrankedMemRefType = dyn_cast<UnrankedMemRefType>(type)) {
+    dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(unrankedMemRefType.getMemorySpace());
   }
   ArrayAttr aAttrs = dAttrs.getAs<ArrayAttr>(getSymbolShapeAttrName());
   llvm::SmallVector<std::string> symbolicShape;
@@ -69,6 +73,8 @@ std::optional<NamedAttribute> SymbolicShapeAnalysis::getSymbolShapeNamedAttr(Typ
     dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
   } else if (auto memRefType = dyn_cast<MemRefType>(type)) {
     dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  } else if (auto unrankedMemRefType = dyn_cast<UnrankedMemRefType>(type)) {
+    dAttrs = dyn_cast_or_null<mlir::DictionaryAttr>(unrankedMemRefType.getMemorySpace());
   }
   return dAttrs.getNamed(getSymbolShapeAttrName());
 }
@@ -135,14 +141,14 @@ Type SymbolicShapeAnalysis::createNewSymbolicShape(Type type) {
 }
 
 Type SymbolicShapeAnalysis::updateSymbolicShape(Type type, NamedAttribute &namedAttr) const {
-  if (!isa<RankedTensorType, MemRefType>(type)) {
+  if (!isa<RankedTensorType, MemRefType, UnrankedMemRefType>(type)) {
     return type;
   }
   return updateTypeSymbolAttr(type, namedAttr);
 }
 
 Type SymbolicShapeAnalysis::updateSymbolicShape(Type type, const llvm::SmallVector<std::string> &symbolicShape) const {
-  if (!isa<RankedTensorType, MemRefType>(type)) {
+  if (!isa<RankedTensorType, MemRefType, UnrankedMemRefType>(type)) {
     return type;
   }
   llvm::SmallVector<Attribute> symShapeAttr;

@@ -59,6 +59,9 @@ struct Edge {
   // (e.g. a constant or load operation defining a value which is used inside
   // a loop nest).
   Value value;
+  // The loop depth at which the dependence occurs.
+  // This represents the depth of the common loop nest where the dependence exists.
+  unsigned loopDepth = 0;
 };
 
 // MemRefDependenceGraph is a graph data structure where graph nodes are
@@ -95,9 +98,9 @@ struct MemRefDependenceGraph {
 
   bool hasEdge(unsigned srcId, unsigned dstId, Value value);
   // Adds an edge from node 'srcId' to node 'dstId' for 'value'.
-  void addEdge(unsigned srcId, unsigned dstId, Value value);
+  void addEdge(unsigned srcId, unsigned dstId, Value value, unsigned loopDepth = 0);
   bool hasDependencePath(unsigned srcId, unsigned dstId);
-  bool hasMemrefAccessDependence(unsigned srcId, unsigned dstId);
+  bool hasMemrefAccessDependence(unsigned srcId, unsigned dstId, unsigned &loopDepth);
 
   void getPredecessorNodes(unsigned id, DenseSet<unsigned> &dependentNodes);
   void getPredecessorNodes(unsigned id, std::vector<unsigned> &dependentNodes);
