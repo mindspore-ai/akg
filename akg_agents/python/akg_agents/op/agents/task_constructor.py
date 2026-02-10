@@ -176,6 +176,7 @@ class SessionLogger:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = self.log_dir / "session.log"
         self.messages_file = self.log_dir / "messages.jsonl"
+        self._last_messages = None
         self._write_log(f"=== Session {datetime.now().isoformat()} ===\n")
 
     def log_step(self, step: int, thought: str, action: str,
@@ -195,16 +196,9 @@ class SessionLogger:
             f"\n--- LLM Call (step={step}, msgs={msg_count}) ---\n"
             f"Response ({len(response)} chars):\n{response[:2000]}\n"
         )
-        # 将完整的 messages 存入单独文件，方便排查 prompt 问题
+        # 缓存最新的 messages，仅在 log_final 时写入 prompt_final.json
         if messages:
-            prompt_file = self.log_dir / f"prompt_step_{step:03d}.json"
-            try:
-                prompt_file.write_text(
-                    json.dumps(messages, ensure_ascii=False, indent=2),
-                    encoding="utf-8"
-                )
-            except Exception:
-                pass  # 非关键路径，忽略写入失败
+            self._last_messages = messages
 
     def log_system_prompt(self, prompt: str):
         (self.log_dir / "system_prompt.txt").write_text(prompt, encoding="utf-8")
@@ -212,13 +206,23 @@ class SessionLogger:
     def log_initial_message(self, msg: str):
         (self.log_dir / "initial_message.txt").write_text(msg, encoding="utf-8")
 
-    def log_final(self, result: Dict):
+    def log_final(self, result: Dict, messages: List[Dict[str, str]] = None):
         result_copy = {k: v for k, v in result.items() if k != "messages"}
         (self.log_dir / "result.json").write_text(
             json.dumps(result_copy, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         if result.get("task_code"):
             (self.log_dir / "task_output.py").write_text(result["task_code"], encoding="utf-8")
+        # 保存最终一步的完整 messages（供排查 prompt 问题）
+        final_msgs = messages or getattr(self, '_last_messages', None)
+        if final_msgs:
+            try:
+                (self.log_dir / "prompt_final.json").write_text(
+                    json.dumps(final_msgs, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+            except Exception:
+                pass
 
     def _write_log(self, text: str):
         with open(self.log_file, "a", encoding="utf-8") as f:
@@ -585,7 +589,7 @@ class TaskConstructor(AgentBase):
                 result = self._build_result("error",
                                             error="LLM 多次返回无效格式，终止")
                 if self.session_log:
-                    self.session_log.log_final(result)
+                    self.session_log.log_final(result, messages=self.messages)
                 return result
 
             thought = action.get("thought", "")
@@ -606,7 +610,7 @@ class TaskConstructor(AgentBase):
                 if error:
                     result = self._build_result("error", error=error, op_name=final_op_name)
                     if self.session_log:
-                        self.session_log.log_final(result)
+                        self.session_log.log_final(result, messages=self.messages)
                     return result
 
                 task_code = self._resolve_task_code(task_code)
@@ -616,7 +620,7 @@ class TaskConstructor(AgentBase):
                     summary=summary, op_name=final_op_name,
                 )
                 if self.session_log:
-                    self.session_log.log_final(result)
+                    self.session_log.log_final(result, messages=self.messages)
                 return result
 
             # 3.3 检查 ask_user → 根据 non_interactive 模式决定行为
@@ -708,7 +712,7 @@ class TaskConstructor(AgentBase):
         # 超过最大步数
         result = self._build_result("error", error=f"超过最大步数 {self.MAX_STEPS}", op_name=op_name)
         if self.session_log:
-            self.session_log.log_final(result)
+            self.session_log.log_final(result, messages=self.messages)
         return result
 
     def _build_result(
