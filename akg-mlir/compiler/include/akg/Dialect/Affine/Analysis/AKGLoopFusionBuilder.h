@@ -17,50 +17,15 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_AKGLOOPFUSIONBUILDER_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_AKGLOOPFUSIONBUILDER_H_
 
-#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
-#include "akg/Utils/AnalysisCommon.hpp"
+#include "akg/Dialect/Affine/Analysis/LoopFusionUtils.h"
+#include "mlir/Dialect/Affine/LoopFusionUtils.h"
 
 namespace mlir {
 namespace akg {
-
-enum LoopTransform { Replicate, Permute, StripMine, Collapse, BackTracking };
-
-struct Group {
- public:
-  Group(unsigned groupId, unsigned rootId, affine::AffineForOp root) : groupId(groupId), rootId(rootId), root(root) {}
-
-  // Group management
-  affine::AffineForOp getLeadingFor() const { return root; }
-  void addNode(unsigned nodeId) { nodesId.push_back(nodeId); }
-  void setIsGlobalOut(bool isOut) { isGlobalOut = isOut; }
-
-  // Debug and print
-  void dump() const { print(llvm::errs()); }
-  void print(llvm::raw_ostream &os) const;
-  std::string getGroupTemplateString() const;
-
-  unsigned groupId;
-  unsigned rootId;
-  affine::AffineForOp root;
-  std::vector<unsigned> nodesId;
-  OperatorTemplate groupTemplate{OperatorTemplate::Default};
-  bool isGlobalOut{false};
-  std::vector<unsigned> fusedGroupId;
-  std::unordered_map<unsigned, std::vector<LoopTransform>> nodeTransformRecords;
-
- private:
-  std::unordered_map<int, std::string> loopTransformToStr{
-    {static_cast<int>(LoopTransform::Replicate), "Replicate"},
-    {static_cast<int>(LoopTransform::Permute), "Permute"},
-    {static_cast<int>(LoopTransform::StripMine), "StripMine"},
-    {static_cast<int>(LoopTransform::Collapse), "Collapse"},
-    {static_cast<int>(LoopTransform::BackTracking), "BackTracking"}};
-};
-using GroupPtr = std::shared_ptr<Group>;
 
 struct LoopNestStateCollector {
   void collect(Operation *opToWalk);
@@ -87,12 +52,14 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
 
   // Group type analysis
   OperatorTemplate getGroupType(const std::vector<unsigned> &nodes);
-  bool elementwiseMatch(Operation *op);
   int getMemrefSourceOfNode(unsigned id);
 
   // Dependency analysis
   bool isDependencyInGraph(unsigned fromGroupId, unsigned toGroupId);
   std::vector<unsigned> getDependentGroups(unsigned groupId);
+
+  // Precomputation for dependency analysis
+  void precomputeDependentGroups();
 
   // Debug and print
   void print(llvm::raw_ostream &os) const override;
@@ -101,6 +68,17 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
   std::unordered_map<unsigned, GroupPtr> groups;
   std::unordered_map<unsigned, GroupPtr> nodeToGroup;
   unsigned nextGroupId = 0;
+
+  // Cache for dependent groups (precomputed once, used many times)
+  std::unordered_map<unsigned, std::vector<unsigned>> dependentGroupsCache;
+
+ private:
+  void collectLoadNodeIdsAndNonForNodes(
+      Value memref, const llvm::SetVector<unsigned> &nodeIds, llvm::SmallVector<unsigned> &loadNodeIds,
+      llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore);
+  void addAliasedStoreEdges(Value memref,
+                            const llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore);
+  void addMultipleLoadEdges(Value memref, llvm::SmallVector<unsigned> &loadNodeIds);
 };
 
 struct FusionCodeGenHelper {
@@ -111,11 +89,40 @@ struct FusionCodeGenHelper {
   unsigned getAliasId(unsigned srcId);
 
   // Fusion operation: perform different types of loop fusion
-  void doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp);
-  void doHFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp);
-  void doIFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp);
+  void doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
+               const FusionPlan &plan);
+  void doHFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
+               const FusionPlan &plan);
+  void doIFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
+               llvm::SmallVector<affine::AffineForOp, 4> &srcLoops,
+               llvm::SmallVector<affine::AffineForOp, 4> &dstLoops);
 
  private:
+  // Finds the maximum legal fusion depth for fusing src loop nest into dst loop nest.
+  unsigned findMaxLegalFusionDepth(affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
+                                   unsigned dstLoopDepthTest, const affine::FusionStrategy &strategy,
+                                   llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions,
+                                   const FusionPlan &plan, const llvm::SmallVector<affine::AffineForOp, 4> &dstLoops);
+
+  void buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> loadAndStoreOpsA,
+                         llvm::SmallVector<Operation *, 4> &strategyOpsA);
+  unsigned tryFusionDepths(llvm::ArrayRef<Operation *> strategyOpsA, llvm::ArrayRef<Operation *> loadAndStoreOpsB,
+                           unsigned dstLoopDepth, unsigned numCommonLoops, bool isSrcForOpBeforeDstForOp,
+                           llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions,
+                           const FusionPlan &plan, const llvm::SmallVector<affine::AffineForOp, 4> &dstLoops);
+
+  // Adjusts slice bounds for fixed index accesses.
+  // When operations access fixed constant indices (e.g., memref[i, j, 0]),
+  // the original computeSliceUnion may return full loop bounds instead of
+  // the correct single-iteration bounds. This function detects such cases
+  // and adjusts the bounds accordingly.
+  void adjustSliceBounds(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB, unsigned loopDepth,
+                         unsigned numCommonLoops, bool isBackwardSlice, affine::ComputationSliceState *sliceUnion);
+
+  // Erases the loop and cleans up the node in the dependence graph.
+  // Sets node alias and clears loads/stores/op of the erased node.
+  void eraseLoopAndCleanupNode(unsigned erasedNodeId, unsigned aliasTargetId, affine::AffineForOp loopToErase);
+
   MemRefDependenceGraphForFusion &mdg;
   std::unordered_map<unsigned, unsigned> nodeAlias;
 };

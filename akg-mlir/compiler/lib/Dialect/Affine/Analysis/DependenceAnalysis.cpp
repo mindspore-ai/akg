@@ -15,8 +15,11 @@
  */
 
 #include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
-#include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 
+#include <algorithm>
+#include <iterator>
+
+#include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
@@ -65,12 +68,8 @@ Node *MemRefDependenceGraph::getNode(unsigned id) {
 
 // Returns the graph id for 'op'.
 int MemRefDependenceGraph::getNodeId(const Operation *op) {
-  for (auto &idAndNode : nodes) {
-    if (idAndNode.second.op == op) {
-      return idAndNode.first;
-    }
-  }
-  return -1;
+  auto it = std::find_if(nodes.begin(), nodes.end(), [op](const auto &idAndNode) { return idAndNode.second.op == op; });
+  return it != nodes.end() ? static_cast<int>(it->first) : -1;
 }
 
 // Update the op in the graph node.
@@ -100,10 +99,15 @@ bool MemRefDependenceGraph::hasEdge(unsigned srcId, unsigned dstId, Value value)
 }
 
 // Adds an edge from node 'srcId' to node 'dstId' for 'value'.
-void MemRefDependenceGraph::addEdge(unsigned srcId, unsigned dstId, Value value) {
+void MemRefDependenceGraph::addEdge(unsigned srcId, unsigned dstId, Value value, unsigned loopDepth) {
   if (!hasEdge(srcId, dstId, value)) {
-    outEdges[srcId].push_back({dstId, value});
-    inEdges[dstId].push_back({srcId, value});
+    Edge edge;
+    edge.id = dstId;
+    edge.value = value;
+    edge.loopDepth = loopDepth;
+    outEdges[srcId].push_back(edge);
+    edge.id = srcId;
+    inEdges[dstId].push_back(edge);
     if (isa<MemRefType>(value.getType())) {
       memrefEdgeCount[value]++;
     }
@@ -114,9 +118,8 @@ void MemRefDependenceGraph::print(raw_ostream &os) const {
   os << "\nMemRefDependenceGraph\n";
   os << "\nNodes:\n";
   std::vector<unsigned> sortedNodeId;
-  for (const auto &node : nodes) {
-    sortedNodeId.emplace_back(node.first);
-  }
+  std::transform(nodes.begin(), nodes.end(), std::back_inserter(sortedNodeId),
+                 [](const auto &node) { return node.first; });
   std::sort(sortedNodeId.begin(), sortedNodeId.end());
   for (auto nodeId : sortedNodeId) {
     auto idAndNode = nodes.find(nodeId);
@@ -188,10 +191,13 @@ bool MemRefDependenceGraph::hasDependencePath(unsigned srcId, unsigned dstId) {
 //   }
 // }
 // ```
-bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned dstId) {
+bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned dstId, unsigned &loopDepth) {
   Operation *srcOp = getNode(srcId)->op;
   Operation *dstOp = getNode(dstId)->op;
   unsigned numCommonLoops = affine::getNumCommonSurroundingLoops(*srcOp, *dstOp);
+  SmallVector<affine::AffineForOp, 4> dstLoopIVs;
+  getAffineForIVs(*dstOp, &dstLoopIVs);
+  loopDepth = dstLoopIVs.size();
 
   if (useAKGAnalysis) {
     affine::AKGMemRefAccess srcAccess(srcOp);
@@ -202,9 +208,10 @@ bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned d
       affine::DependenceResult result =
         affine::checkMemrefAccessDependenceAKG(srcAccess, dstAccess, d, &dependenceConstraints, nullptr);
       if (result.value == affine::DependenceResult::HasDependence) {
+        loopDepth = std::min(loopDepth, d - 1);
         return true;
-        }
       }
+    }
   } else {
     affine::MemRefAccess srcAccess(srcOp);
     affine::MemRefAccess dstAccess(dstOp);
@@ -213,6 +220,7 @@ bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned d
       affine::DependenceResult result =
         affine::checkMemrefAccessDependence(srcAccess, dstAccess, d, &dependenceConstraints, nullptr);
       if (result.value == affine::DependenceResult::HasDependence) {
+        loopDepth = std::min(loopDepth, d - 1);
         return true;
       }
     }
@@ -228,9 +236,8 @@ void MemRefDependenceGraph::getPredecessorNodes(unsigned id, DenseSet<unsigned> 
 }
 
 void MemRefDependenceGraph::getPredecessorNodes(unsigned id, std::vector<unsigned> &dependentNodes) {
-  for (Edge edge : inEdges[id]) {
-    dependentNodes.emplace_back(edge.id);
-  }
+  std::transform(inEdges[id].begin(), inEdges[id].end(), std::back_inserter(dependentNodes),
+                 [](const Edge &edge) { return edge.id; });
 }
 
 /// Return all nodes which use SSA values defined in node 'id'.
@@ -241,9 +248,8 @@ void MemRefDependenceGraph::getSuccessorNodes(unsigned id, DenseSet<unsigned> &d
 }
 
 void MemRefDependenceGraph::getSuccessorNodes(unsigned id, std::vector<unsigned> &dependentNodes) {
-  for (Edge edge : outEdges[id]) {
-    dependentNodes.emplace_back(edge.id);
-  }
+  std::transform(outEdges[id].begin(), outEdges[id].end(), std::back_inserter(dependentNodes),
+                 [](const Edge &edge) { return edge.id; });
 }
 
 void MemRefDependenceGraph::createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
@@ -321,15 +327,15 @@ bool MemRefDependenceGraph::createEdges(const DenseMap<Value, SetVector<unsigned
         if (dstIsFor) {
           continue;
         }
-        if ((srcHasStore || dstHasStore) && hasMemrefAccessDependence(srcId, dstId)) {
-          addEdge(srcId, dstId, memrefAndList.first);
+        unsigned loopDepth = 0;
+        if ((srcHasStore || dstHasStore) && hasMemrefAccessDependence(srcId, dstId, loopDepth)) {
+          addEdge(srcId, dstId, memrefAndList.first, loopDepth);
         }
       }
     }
   }
   return true;
 }
-
 
 // Initializes the dependence graph based on operations in 'f'.
 // Returns true on success, false otherwise.
