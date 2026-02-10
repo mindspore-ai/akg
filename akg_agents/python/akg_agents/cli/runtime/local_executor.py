@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""本地执行器 - 直接调用 MainOpAgent，无需 server"""
+"""本地执行器 - 直接调用 KernelAgent，无需 server"""
 
 import logging
 import os
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 class LocalExecutor:
-    """本地执行器：CLI 侧仅保留 ReAct 主代理执行路径"""
+    """本地执行器：CLI 侧基于 KernelAgent (V2) 的执行路径"""
 
     def __init__(
         self,
@@ -153,7 +153,7 @@ class LocalExecutor:
         output_path: str | None = None,
         task_file_content: str | None = None,
     ) -> Dict[str, Any]:
-        """执行 MainOpAgent 对话（start/continue），返回状态"""
+        """执行 KernelAgent 对话（start/continue），返回状态"""
         if not (user_input or "").strip():
             raise ValueError("user_input is required")
 
@@ -173,15 +173,13 @@ class LocalExecutor:
         try:
             user_input = (user_input or "").strip()
             
-            # 多轮对话决策完全由 react_agent 控制，不用硬编码控制了
-
-            # 复用/重建 ReactTurnExecutor（当 target 变化时重置）
-            from akg_agents.cli.runtime.react_executor import (
-                ReactTurnExecutor,
-                ReactTarget,
+            # 使用 V2 执行器（基于 KernelAgent）
+            from akg_agents.cli.runtime.react_executor_v2 import (
+                ReactTurnExecutorV2,
+                ReactTargetV2,
             )
 
-            target = ReactTarget(
+            target = ReactTargetV2(
                 framework=framework,
                 backend=backend,
                 arch=arch,
@@ -200,19 +198,15 @@ class LocalExecutor:
             if output_path and "output_path" not in config:
                 config["output_path"] = output_path
             config["rag"] = bool(rag)
-            # 传递 task_file_content（跳过 OpTaskBuilder 转换）
-            if task_file_content:
-                config["task_file_content"] = task_file_content
 
             if (
                 self._react_executor is None
                 or getattr(self._react_executor, "target", None) != target
             ):
-                self._react_executor = ReactTurnExecutor(
+                self._react_executor = ReactTurnExecutorV2(
                     session_id=self.session_id,
                     config=config,
                     target=target,
-                    thread_id=self.session_id,
                 )
 
             # 保存最小 state（用于后续轮次复用 config）
@@ -233,7 +227,6 @@ class LocalExecutor:
                 cur = str(state.get("current_step") or "").strip().lower()
                 if cur == "completed" or state.get("should_continue") is False:
                     state["should_continue"] = True
-                    # 给一点提示（dim 区域）
                     state.setdefault(
                         "hint_message",
                         "💡 本轮任务已完成。你可以继续输入新的需求（Ctrl+C 退出）。",
