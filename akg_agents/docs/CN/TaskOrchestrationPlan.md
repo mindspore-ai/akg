@@ -7,7 +7,7 @@
 编排配置主要包含：
 - `agent_model_config`：为各 Agent 指定大模型预设（取值来自 `core/llm/llm_config.yaml`）。
 - `workflow_config_path`：指向工作流 YAML，用于定义执行流程（详见《[工作流系统设计文档](./Workflow.md)》）。
-- `docs_dir`：为各 Agent 提供参考文档目录（详见《[文档驱动式接入指南](./DocDrivenIntegration.md)》）。
+- `docs_dir`：为各 Agent 提供参考文档目录（已被 [Skill 系统](./SkillSystem.md) 替代）。
 - `log_dir`：任务日志根目录。
 - `profile_settings`：性能测试参数（如 `run_times`、`warmup_times`）。
 - `verify_timeout`：验证超时时间（单位：秒）。
@@ -74,7 +74,7 @@ agent_model_config:
 
 ### 4. 文档目录配置 (docs_dir)
 
-详见《[文档驱动式接入指南](./DocDrivenIntegration.md)》。
+详见 [Skill 系统文档](./SkillSystem.md)（已替代旧的文档驱动式接入方案）。
 
 ```yaml
 # 示例文档配置
