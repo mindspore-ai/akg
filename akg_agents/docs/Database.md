@@ -50,7 +50,7 @@ Provides a generic framework for vector storage and retrieval. Subclasses must i
 **Embedding Model Loading:**
 VectorStore now loads embedding models via `core_v2.llm.create_embedding_model()`, supporting OpenAI-compatible Embedding APIs (see [RAG Documentation](./RAG.md)). Loading priority:
 1. OpenAI-compatible Embedding model from configuration
-2. Local HuggingFace model specified by `EMBEDDING_MODEL_PATH` environment variable
+2. Local HuggingFace model specified
 3. Graceful degradation to disable vector store functionality
 
 **Retrieval Interfaces:**
@@ -160,7 +160,7 @@ database/
 ```python
 config = {
     "agent_model_config": {
-        "feature_extraction": "deepseek_r1_default"  # Feature extraction model
+        "feature_extraction": "standard"  # Feature extraction model
     },
     "database_config": {
         "enable_rag": True,          # Whether to enable RAG
