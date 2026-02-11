@@ -408,7 +408,7 @@ class ReActAgent(AgentBase, ABC):
                 self._notify_tool_error(tool_name, error_info)
         
         # ====== 5. 保存 result.json 到 cur_path ======
-        self._save_node_result(cur_path, result)
+        self._save_node_result(new_node_id, cur_path, result)
         
         # ====== 6. 更新 trace 节点 ======
         self.trace.update_node_result(
@@ -426,19 +426,21 @@ class ReActAgent(AgentBase, ABC):
         
         return result
     
-    def _save_node_result(self, cur_path: str, result: Dict[str, Any]):
+    def _save_node_result(self, node_id: str, cur_path: str, result: Dict[str, Any]):
         """
         保存工具结果到节点目录
         
         保存内容:
         - result.json: 完整结果字典（包含 captured_stdout/captured_stderr/captured_logs）
-        - code/code.py: 如果结果包含 generated_code 或 code
+        - code/code.py: 如果结果包含 generated_code 或 code（通过 trace.fs.save_code_file 保存，
+          确保正确执行 CoW 以保护其他节点的快照不被污染）
         - output.txt: 如果 output 较长（可能是代码等）
         - logs/captured_stdout.txt: 捕获的 stdout（如有）
         - logs/captured_stderr.txt: 捕获的 stderr（如有）
         - logs/captured_logs.txt: 捕获的 logging 日志（如有）
         
         Args:
+            node_id: 节点 ID（用于通过 trace.fs 安全写入代码快照）
             cur_path: 节点目录路径
             result: 工具执行结果
         """
@@ -455,14 +457,14 @@ class ReActAgent(AgentBase, ABC):
         except Exception as e:
             logger.warning(f"[Result] 保存 result.json 失败: {e}")
         
-        # 保存代码文件
+        # 保存代码文件（必须通过 trace.fs.save_code_file 写入，以正确执行 CoW）
+        # 注意：不要直接用 Path.write_text() 写入 code/ 目录下的文件，
+        # 否则会原地修改硬链接共享的 inode，污染其他节点的代码快照。
         code_content = result.get("generated_code") or result.get("code") or ""
         if code_content and isinstance(code_content, str) and len(code_content) > 10:
-            code_dir = node_dir / "code"
-            code_dir.mkdir(parents=True, exist_ok=True)
             try:
-                (code_dir / "code.py").write_text(code_content, encoding="utf-8")
-                logger.info(f"[Result] 代码已保存: {code_dir / 'code.py'}")
+                self.trace.fs.save_code_file(node_id, "code.py", code_content)
+                logger.info(f"[Result] 代码已保存(CoW): node={node_id}, code.py")
             except Exception as e:
                 logger.warning(f"[Result] 保存代码文件失败: {e}")
         

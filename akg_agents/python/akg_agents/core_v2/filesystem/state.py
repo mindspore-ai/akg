@@ -692,10 +692,72 @@ class FileSystemState:
         return prompt_files[-1].read_text(encoding="utf-8")
     
     # ==================== 代码文件管理 ====================
+    #
+    # ⚠️ 重要：所有对 code/ 目录下文件的写入操作，必须通过 save_code_file() 方法进行。
+    # 不要直接使用 Path.write_text() 或 open().write() 写入 code/ 目录下的文件！
+    # 原因：code/ 目录下的文件可能通过硬链接与其他节点共享同一个 inode，
+    # 直接写入会原地修改共享 inode 的内容，污染所有共享该快照的节点。
+    # save_code_file() 会先 unlink() 打破硬链接，再写入新内容（Copy-on-Write）。
+    #
+    
+    def verify_snapshot_integrity(self, node_id: str) -> List[str]:
+        """
+        验证节点代码快照的完整性（检测硬链接污染）
+        
+        检查 code/ 目录下的文件是否与 file_state 中记录的 checksum 一致。
+        如果不一致，说明文件可能被外部直接写入（绕过了 save_code_file 的 CoW 机制）。
+        
+        Args:
+            node_id: 节点 ID
+            
+        Returns:
+            不一致的文件列表（空列表表示完整性正常）
+        """
+        import hashlib
+        
+        corrupted = []
+        try:
+            state = self.load_node_state(node_id)
+        except Exception:
+            return corrupted
+        
+        snapshot_dir = self.get_code_snapshot_dir(node_id)
+        
+        for file_key, file_info in state.file_state.items():
+            if not file_key.startswith("code/"):
+                continue
+            filename = file_key[len("code/"):]
+            file_path = snapshot_dir / filename
+            
+            if not file_path.exists():
+                corrupted.append(f"{file_key}: file missing")
+                continue
+            
+            expected_checksum = file_info.get("checksum")
+            if expected_checksum:
+                actual_content = file_path.read_text(encoding="utf-8")
+                actual_checksum = hashlib.md5(actual_content.encode("utf-8")).hexdigest()
+                if actual_checksum != expected_checksum:
+                    corrupted.append(
+                        f"{file_key}: checksum mismatch "
+                        f"(expected={expected_checksum[:8]}..., actual={actual_checksum[:8]}..., "
+                        f"inode={file_path.stat().st_ino}, nlink={file_path.stat().st_nlink})"
+                    )
+        
+        if corrupted:
+            logger.warning(
+                f"[Integrity] Node {node_id} snapshot corrupted! "
+                f"Files may have been written directly (bypassing CoW): {corrupted}"
+            )
+        
+        return corrupted
     
     def save_code_file(self, node_id: str, filename: str, content: str) -> None:
         """
-        保存代码文件 (Snapshot)
+        保存代码文件 (Snapshot, Copy-on-Write)
+        
+        ⚠️ 这是写入 code/ 目录的唯一正确入口。不要直接用 Path.write_text() 写入
+        code/ 目录下的文件，否则会污染硬链接共享的其他节点快照。
         
         Args:
             node_id: 节点 ID
