@@ -226,6 +226,12 @@ class NodeFactory:
                 logger.info(f"[Task {task_id}] KernelGen 收到 Conductor 建议 (长度: {len(conductor_suggestion)})")
                 logger.debug(f"[Task {task_id}] 建议内容: {conductor_suggestion[:200]}...")
             
+            # 将 state 中的 session_id 注入到 kernel_gen_instance.context
+            # 使 KernelGen 的 run_llm 能正确创建带 session_id 的 LLMClient，支持流式输出到 CLI
+            session_id = state.get('session_id', '')
+            if session_id:
+                kernel_gen_instance.context["session_id"] = session_id
+            
             # 调用 KernelGen.run()
             t0 = time.time()
             try:

@@ -99,6 +99,10 @@ class ReactTurnExecutorV2:
         # 注入 session_id 到 agent context，使得 run_llm() 创建的 LLMClient
         # 能通过 send_message 把流式 chunk 推送到 CLI
         agent.context["session_id"] = self.session_id
+        # 同步更新 ToolExecutor 的 agent_context（因为 _get_agent_context() 在
+        # __init__ 时已被调用，此时 session_id 尚未注入，需要手动补充）
+        if hasattr(agent, "tool_executor") and agent.tool_executor:
+            agent.tool_executor.agent_context["session_id"] = self.session_id
 
         logger.info(
             f"[ReactTurnExecutorV2] KernelAgent 已创建: task_id={task_id}, "
@@ -275,6 +279,19 @@ class ReactTurnExecutorV2:
                 "current_step": "cancelled_by_user",
                 "should_continue": True,
                 "display_message": "⚠️ 操作已被用户取消",
+                "hint_message": "",
+                "workflow_name": "kernel_agent",
+            }
+        except Exception as e:
+            logger.error(
+                f"[ReactTurnExecutorV2] run_turn 未捕获异常: {e}",
+                exc_info=True,
+            )
+            self._panel_update_current(phase="error")
+            return {
+                "current_step": "error",
+                "should_continue": True,
+                "display_message": f"执行出错: {e}",
                 "hint_message": "",
                 "workflow_name": "kernel_agent",
             }

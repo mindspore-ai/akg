@@ -541,7 +541,7 @@ class ToolExecutor:
             workflow 初始状态字典
         """
         # 从 arguments 或 agent_context 获取参数
-        return {
+        state = {
             "op_name": arguments.get("op_name", ""),
             "task_desc": arguments.get("task_desc", ""),
             "dsl": arguments.get("dsl", self.agent_context.get("dsl", "")),
@@ -558,6 +558,11 @@ class ToolExecutor:
             "iterations": 0,
             "max_iterations": arguments.get("max_iterations", 10),
         }
+        # 透传 session_id，使 workflow 内的 agent 能通过流式输出推送到 CLI
+        session_id = self.agent_context.get("session_id", "")
+        if session_id:
+            state["session_id"] = session_id
+        return state
     
     # ==================== Domain Tool / Basic Tool 执行 ====================
     

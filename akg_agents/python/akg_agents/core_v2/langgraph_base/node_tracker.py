@@ -64,6 +64,9 @@ def track_node(node_name: str, require_session: bool = False, require_task_label
             
             try:
                 result = await node_fn(state)
+                # 发送节点完成摘要（如果有 session）
+                if session_id and isinstance(result, dict):
+                    _safe_send_result(session_id, node_name, result)
                 return result
             finally:
                 elapsed = time.time() - start
@@ -86,4 +89,62 @@ def _safe_send_start(session_id: str, node_name: str):
         send_message(session_id, DisplayMessage(text=f"▶ {node_name}"))
     except Exception as e:
         logger.warning(f"[{node_name}] send_message failed: {e}")
+
+
+def _safe_send_result(session_id: str, node_name: str, result: Dict[str, Any]):
+    """安全发送节点执行结果摘要
+    
+    根据节点类型提取关键结果信息并发送到 CLI。
+    发送失败不影响主流程，仅记录警告日志。
+    """
+    if not session_id:
+        return
+    
+    summary = _build_result_summary(node_name, result)
+    if not summary:
+        return
+    
+    try:
+        from akg_agents.cli.runtime.message_sender import send_message
+        from akg_agents.cli.messages import DisplayMessage
+        send_message(session_id, DisplayMessage(text=summary))
+    except Exception as e:
+        logger.warning(f"[{node_name}] send result message failed: {e}")
+
+
+def _build_result_summary(node_name: str, result: Dict[str, Any]) -> str:
+    """根据节点类型构建结果摘要"""
+    
+    if node_name == "verifier":
+        passed = result.get("verifier_result", False)
+        if passed:
+            return "  ✅ 验证通过"
+        else:
+            error = result.get("verifier_error", "")
+            # 截取错误信息的关键部分（避免过长）
+            if error:
+                # 取前 500 字符，确保错误信息可读
+                error_preview = error[:500]
+                if len(error) > 500:
+                    error_preview += "\n  ... (完整日志见 captured_errors.log)"
+                return f"  ❌ 验证失败:\n{error_preview}"
+            return "  ❌ 验证失败（无详细错误信息）"
+    
+    if node_name == "conductor":
+        decision = result.get("conductor_decision", "")
+        suggestion = result.get("conductor_suggestion", "")
+        if decision or suggestion:
+            parts = []
+            if decision:
+                parts.append(f"  决策: {decision}")
+            if suggestion:
+                # 截取建议的前 300 字符
+                preview = suggestion[:300]
+                if len(suggestion) > 300:
+                    preview += "..."
+                parts.append(f"  建议: {preview}")
+            return "\n".join(parts)
+    
+    # 其他节点不发送摘要
+    return ""
 

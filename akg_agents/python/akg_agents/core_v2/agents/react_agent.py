@@ -399,6 +399,14 @@ class ReActAgent(AgentBase, ABC):
         
         logger.info(f"[Acting] {tool_name}: {result.get('status')} ({duration_ms}ms)")
         
+        # ====== 4.1. 工具执行失败时，推送错误信息到 CLI ======
+        # ReAct 循环会继续（LLM 可以分析错误并重试），但用户能实时看到原始错误
+        result_status = str(result.get("status", "")).lower()
+        if result_status in ("fail", "error"):
+            error_info = result.get("error_information") or result.get("output") or ""
+            if error_info:
+                self._notify_tool_error(tool_name, error_info)
+        
         # ====== 5. 保存 result.json 到 cur_path ======
         self._save_node_result(cur_path, result)
         
@@ -941,6 +949,40 @@ class ReActAgent(AgentBase, ABC):
             updated: 已更新的参数字典 {"backend": "ascend", ...}
         """
         pass
+    
+    # ==================== 错误通知 ====================
+    
+    def _notify_tool_error(self, tool_name: str, error_info: str):
+        """
+        将工具执行失败的原始错误信息推送到 CLI
+        
+        通过 send_message 发送 DisplayMessage，让用户能实时看到错误详情。
+        这不影响 ReAct 循环（LLM 仍会继续分析并可能重试），
+        但确保用户不必依赖 LLM 的二手分析来了解错误原因。
+        
+        Args:
+            tool_name: 失败的工具名称
+            error_info: 原始错误信息
+        """
+        session_id = self.context.get("session_id")
+        if not session_id:
+            # 没有 session_id（非 CLI 模式），仅记录日志
+            logger.warning(
+                f"[ReActAgent] 工具 {tool_name} 执行失败: {error_info}"
+            )
+            return
+        
+        try:
+            from akg_agents.cli.runtime.message_sender import send_message
+            from akg_agents.cli.messages import DisplayMessage
+            
+            # 构建用户可读的错误消息
+            error_text = f"\n⚠️  工具 [{tool_name}] 执行失败:\n{error_info}\n"
+            send_message(session_id, DisplayMessage(text=error_text))
+        except Exception as e:
+            logger.warning(
+                f"[ReActAgent] 推送工具错误信息失败: {e}"
+            )
     
     # ==================== 工具方法 ====================
     
