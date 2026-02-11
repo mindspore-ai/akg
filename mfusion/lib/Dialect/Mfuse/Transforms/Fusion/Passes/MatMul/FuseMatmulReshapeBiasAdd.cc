@@ -20,6 +20,7 @@
 #include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
 #include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -81,6 +82,8 @@ static LogicalResult fuseMatmulReshapeBiasAdd(Value addLhs, Value addRhs, Operat
       return failure();
     }
 
+    MLOG(DEBUG) << "FuseMatmulReshapeBiasAddPattern matched AddOp, fusing with Matmul and Reshape";
+
     Location loc = addOp->getLoc();
     Type newMatmulResultType = matmulType;
     Value fusedBias = addBias;
@@ -88,29 +91,34 @@ static LogicalResult fuseMatmulReshapeBiasAdd(Value addLhs, Value addRhs, Operat
 
     if (auto matmulOp = dyn_cast<MatmulOp>(matmulDef)) {
       // MatmulOp -> Reshape -> Add => MatmulWithBiasOp -> Reshape
+      MLOG(DEBUG) << "Found MatmulOp, creating MatmulWithBiasOp with bias";
       Value newMatmul =
         rewriter.create<MatmulWithBiasOp>(loc, newMatmulResultType, matmulOp.getSelf(), matmulOp.getOther(), fusedBias,
                                           matmulOp.getTransX1Attr(), matmulOp.getTransX2Attr());
+      MLOG(DEBUG) << "Created new MatmulWithBiasOp";
       Value newReshape = rewriter.create<ReshapeOp>(reshapeOp.getLoc(), reshapeOp.getResult().getType(), newMatmul,
                                                     reshapeOp.getShape());
+      MLOG(DEBUG) << "Created new ReshapeOp";
       rewriter.replaceOp(addOp, newReshape);
-      rewriter.eraseOp(reshapeOp);
-      rewriter.eraseOp(matmulOp);
+      MLOG(DEBUG) << "Replaced original AddOp, ReshapeOp and MatmulOp with new MatmulWithBiasOp and ReshapeOp";
       return success();
     }
 
     if (auto matmulWithBiasOp = dyn_cast<MatmulWithBiasOp>(matmulDef)) {
       // MatmulWithBiasOp -> Reshape -> Add => MatmulWithBiasOp(..., old_bias + add_bias) -> Reshape
+      MLOG(DEBUG) << "Found MatmulWithBiasOp, combining biases";
       Value oldBias = matmulWithBiasOp.getBias();
       fusedBias = rewriter.create<AddOp>(loc, oldBias.getType(), oldBias, addBias);
+      MLOG(DEBUG) << "Created AddOp to combine biases";
       Value newMatmul = rewriter.create<MatmulWithBiasOp>(
         loc, newMatmulResultType, matmulWithBiasOp.getSelf(), matmulWithBiasOp.getOther(), fusedBias,
         matmulWithBiasOp.getTransX1Attr(), matmulWithBiasOp.getTransX2Attr());
+      MLOG(DEBUG) << "Created new MatmulWithBiasOp with combined bias";
       Value newReshape = rewriter.create<ReshapeOp>(reshapeOp.getLoc(), reshapeOp.getResult().getType(), newMatmul,
                                                     reshapeOp.getShape());
+      MLOG(DEBUG) << "Created new ReshapeOp";
       rewriter.replaceOp(addOp, newReshape);
-      rewriter.eraseOp(reshapeOp);
-      rewriter.eraseOp(matmulWithBiasOp);
+      MLOG(DEBUG) << "Replaced original AddOp, ReshapeOp and MatmulWithBiasOp with new MatmulWithBiasOp and ReshapeOp";
       return success();
     }
 

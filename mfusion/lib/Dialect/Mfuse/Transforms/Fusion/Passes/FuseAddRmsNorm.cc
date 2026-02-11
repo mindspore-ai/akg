@@ -19,6 +19,7 @@
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -72,6 +73,8 @@ class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
       return failure();
     }
 
+    MLOG(DEBUG) << "FuseAddRmsNormPattern matched AclnnRmsNormOp, fusing with AddOp";
+
     // Create AddRmsNormOp with 3 results: y_out, rstd_out, x_out
     SmallVector<Type, kOutputSize3> resultTypes;
     resultTypes.push_back(rmsNormOp.getYOut().getType());
@@ -80,10 +83,12 @@ class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
 
     // Must pass epsilon attribute
     auto addRmsNormOp = rewriter.create<AclnnAddRmsNormOp>(rmsNormOp.getLoc(), resultTypes, x1, x2, gamma, epsilon);
+    MLOG(DEBUG) << "Created new AclnnAddRmsNormOp";
 
     // Replace results
     rewriter.replaceOp(rmsNormOp, {addRmsNormOp.getYOut(), addRmsNormOp.getRstdOut()});
     rewriter.replaceOp(addOp, addRmsNormOp.getXOut());
+    MLOG(DEBUG) << "Replaced original AclnnRmsNormOp and AddOp with new AclnnAddRmsNormOp";
     return success();
   }
 };
