@@ -108,6 +108,41 @@ def FuseMatmulReshapeBiasAdd : Pass<"fuse-matmul-reshape-bias-add", "::mlir::Mod
     ];
 }
 
+//===----------------------------------------------------------------------===
+// FuseBatchMatMulToMul pass
+//===----------------------------------------------------------------------===
+
+def FuseBatchMatMulToMul : Pass<"fuse-batchmatmul-to-mul", "::mlir::ModuleOp"> {
+  let summary = "Fuse BatchMatMul/MatMul with k=1 to Mul";
+  let description = [{
+    Fuses BatchMatMul/MatMul/MatMulv2 operators with k=1 dimension to Mul operators
+    to improve performance. Inserts reshape operators when adj/transpose is true.
+    Only applies to static shapes without bias.
+    Supports Float32, Float16, and BFloat16 data types.
+  }];
+  let constructor = "mlir::mfuse::createFuseBatchMatMulToMulPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def FuseMatMulReshape : Pass<"fuse-matmul-reshape", "::mlir::ModuleOp"> {
+  let summary = "Fuse MatMul/MatMulv2 with N=1 to add Reshape to second input";
+  let description = [{
+    Fuses MatMul/MatMulv2 operators with N=1 dimension to add Reshape node to the second input.
+    Only applies to static shapes.
+    Supports BFLOAT16, FLOAT16, and FLOAT32 data types.
+    x1 input shape: [M, K], x2 input shape (without transpose): [K, 1].
+    For BFLOAT16 or FLOAT16 data types, K < 27392 for the fusion to apply.
+  }];
+  let constructor = "mlir::mfuse::createFuseMatMulReshapePass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
 //===----------------------------------------------------------------------===//
 // FuseSwiGlu fusion passes
 //===----------------------------------------------------------------------===//
