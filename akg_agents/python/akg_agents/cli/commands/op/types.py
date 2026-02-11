@@ -33,6 +33,7 @@ class OpCommandArgs:
     stream: bool
     rag: bool
     output_path: Optional[str]
+    resume_session_id: Optional[str] = None
 
 
 @dataclass(frozen=True)

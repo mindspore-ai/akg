@@ -83,7 +83,7 @@ class FileSystemState:
     └─ logs/
     """
     
-    DEFAULT_BASE_DIR = "~/.akg_agents"
+    DEFAULT_BASE_DIR = "~/.akg"
     
     def __init__(self, task_id: str, base_dir: str = None):
         """
@@ -91,14 +91,14 @@ class FileSystemState:
         
         Args:
             task_id: 任务 ID
-            base_dir: 基础目录，默认 ~/.akg_agents
+            base_dir: 基础目录，默认 ~/.akg
         """
         self.task_id = task_id
         
         if base_dir:
             self.base_dir = Path(base_dir)
         else:
-            self.base_dir = Path.home() / ".akg_agents"
+            self.base_dir = Path.home() / ".akg"
             
         self.task_dir = self.base_dir / "conversations" / task_id
         self.nodes_dir = self.task_dir / "nodes"

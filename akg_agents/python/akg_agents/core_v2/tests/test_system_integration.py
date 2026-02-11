@@ -214,5 +214,131 @@ class TestSystemIntegration:
             "Root should also be corrupted (shared inode was modified in-place)"
 
 
+class TestAgentStateRestore:
+    """测试 ReActAgent 的状态恢复功能"""
+    
+    @pytest.fixture
+    def setup_trace(self):
+        """创建一个带有历史记录的 trace 环境"""
+        self.test_dir = Path(tempfile.mkdtemp(prefix="akg_restore_test_"))
+        self.task_id = "restore_test_task"
+        self.fs = FileSystemState(self.task_id, base_dir=str(self.test_dir))
+        self.trace = TraceSystem(self.task_id, base_dir=str(self.test_dir))
+        
+        self.fs.initialize_task()
+        self.trace.initialize()
+        
+        # 创建 root 节点并保存 task_input
+        from akg_agents.core_v2.filesystem.models import ActionRecord, ActionHistoryFact
+        
+        root_state = NodeState(
+            node_id="root",
+            turn=0,
+            status="init",
+            task_info={
+                "task_id": self.task_id,
+                "task_input": "生成 relu 算子",
+            },
+        )
+        self.fs.save_node_state("root", root_state)
+        
+        # 添加几个节点并保存 action history
+        node1 = self.trace.add_node(
+            action={"type": "ask_user", "arguments": {"message": "确认参数"}},
+            result={"status": "responded", "user_response": "默认"},
+        )
+        
+        # 保存 node1 的 action_history_fact
+        action1 = ActionRecord(
+            action_id=node1,
+            tool_name="ask_user",
+            arguments={"message": "确认参数"},
+            result={"status": "responded"},
+        )
+        history1 = ActionHistoryFact(
+            node_id=node1,
+            parent_node_id="root",
+            turn=1,
+            actions=[action1],
+        )
+        self.fs.save_action_history_fact(node1, history1)
+        
+        node2 = self.trace.add_node(
+            action={"type": "call_op_task_builder", "arguments": {"user_input": "生成 relu 算子"}},
+            result={"status": "success"},
+        )
+        
+        action2 = ActionRecord(
+            action_id=node2,
+            tool_name="call_op_task_builder",
+            arguments={"user_input": "生成 relu 算子"},
+            result={"status": "success", "op_name": "relu"},
+        )
+        history2 = ActionHistoryFact(
+            node_id=node2,
+            parent_node_id=node1,
+            turn=2,
+            actions=[action2],
+        )
+        self.fs.save_action_history_fact(node2, history2)
+        
+        self.node1 = node1
+        self.node2 = node2
+        
+        yield
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+    
+    def test_restore_history_from_trace(self, setup_trace):
+        """验证 tool_executor.history 可以从 trace 恢复"""
+        resume_info = self.trace.get_resume_info()
+        
+        action_history = resume_info.get("action_history", [])
+        assert len(action_history) == 2, f"应有 2 条历史记录，实际 {len(action_history)}"
+        assert action_history[0].tool_name == "ask_user"
+        assert action_history[1].tool_name == "call_op_task_builder"
+    
+    def test_restore_original_user_input_from_root(self, setup_trace):
+        """验证 _original_user_input 可以从 root 节点的 task_info 恢复"""
+        root_state = self.fs.load_node_state("root")
+        task_input = root_state.task_info.get("task_input", "")
+        assert task_input == "生成 relu 算子", f"task_input 应为 '生成 relu 算子'，实际 '{task_input}'"
+    
+    def test_restore_original_user_input_fallback(self, setup_trace):
+        """验证当 root 没有 task_input 时，可以从 action_history 回退恢复"""
+        # 清除 root 的 task_input
+        root_state = self.fs.load_node_state("root")
+        root_state.task_info["task_input"] = ""
+        self.fs.save_node_state("root", root_state)
+        
+        # 从 action_history 中找到 user_input
+        resume_info = self.trace.get_resume_info()
+        action_history = resume_info.get("action_history", [])
+        
+        found_user_input = None
+        for action in action_history:
+            args = action.arguments if hasattr(action, 'arguments') else {}
+            if args.get("user_input"):
+                found_user_input = args["user_input"]
+                break
+        
+        assert found_user_input == "生成 relu 算子", \
+            f"应从 action_history 回退恢复 user_input，实际 '{found_user_input}'"
+    
+    def test_resume_info_completeness(self, setup_trace):
+        """验证 get_resume_info 返回的信息完整性"""
+        resume_info = self.trace.get_resume_info()
+        
+        assert "task_id" in resume_info
+        assert "current_node" in resume_info
+        assert "state" in resume_info
+        assert "action_history" in resume_info
+        assert "pending_tools" in resume_info
+        assert "thinking" in resume_info
+        assert "path" in resume_info
+        
+        assert resume_info["task_id"] == self.task_id
+        assert resume_info["current_node"] == self.node2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
