@@ -172,6 +172,8 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
       group->nodesId = currNodeId;
       group->groupTemplate = getGroupType(currNodeId);
       groups[groupId] = group;
+
+      funcOperatorType = group->groupTemplate > funcOperatorType ? group->groupTemplate : funcOperatorType;
     } else if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
       // Create graph node for top-level load op.
       Node node(nextNodeId++, op);
@@ -330,7 +332,7 @@ void MemRefDependenceGraphForFusion::print(raw_ostream &os) const {
 }
 
 static llvm::ArrayRef<int64_t> getStaticShape(Value memrefVal, llvm::SmallVector<int64_t, 4> &shapeBuf) {
-  auto memrefType = memrefVal.getType().dyn_cast<mlir::MemRefType>();
+  auto memrefType = mlir::dyn_cast<mlir::MemRefType>(memrefVal.getType());
   if (!memrefType || !memrefType.hasStaticShape()) {
     return {};
   }
@@ -382,34 +384,37 @@ static bool isBroadcastLike(llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int6
   return diffFound;
 }
 
-static void classifyIOShape(llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int64_t> outShape, bool &hasElementwise,
-                            bool &hasBroadcast, bool &hasReshape, bool &hasTranspose) {
-  if (inShape.empty() || outShape.empty()) return;
-
-  if (isSameShape(inShape, outShape)) {
-    hasElementwise = true;
-    return;
-  }
-
-  if (inShape.size() == outShape.size()) {
-    if (isPermutationShape(inShape, outShape)) {
-      hasTranspose = true;
-      return;
-    }
-    if (isBroadcastLike(inShape, outShape)) {
-      hasBroadcast = true;
-      return;
-    }
-
-    hasBroadcast = true;
-    return;
-  }
+static bool isReshape(llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int64_t> outShape) {
+  if (inShape.size() == outShape.size()) return false;
 
   auto inProd = getShapeProduct(inShape);
   auto outProd = getShapeProduct(outShape);
   if (inProd > 0 && outProd > 0 && inProd == outProd) {
-    hasReshape = true;
+    return true;
   }
+  return false;
+}
+
+static bool isSubsequence(llvm::ArrayRef<int64_t> big, llvm::ArrayRef<int64_t> small) {
+  if (small.empty())
+    return false;
+
+  size_t i = 0;
+  size_t j = 0;
+
+  while (i < big.size() && j < small.size()) {
+    if (big[i] == small[j])
+      ++j;
+    ++i;
+  }
+
+  return j == small.size();
+}
+
+static bool isSubsequencePart(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
+  if (a.size() == b.size()) return false;
+
+  return isSubsequence(a, b) || isSubsequence(b, a);
 }
 
 OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<unsigned> &nodes) {
@@ -456,9 +461,6 @@ OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<
   }
 
   bool hasElementwise = false;
-  bool hasBroadcast = false;
-  bool hasReshape = false;
-  bool hasTranspose = false;
 
   for (auto load : loads) {
     Value inMemref = load.getMemRef();
@@ -468,18 +470,30 @@ OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<
       continue;
     }
 
-    classifyIOShape(inShape, outShape, hasElementwise, hasBroadcast, hasReshape, hasTranspose);
+    if (isSameShape(inShape, outShape)) {
+        hasElementwise = true;
+        continue;
+    } else {
+        hasElementwise = false;
+    }
+
+    if (isReshape(inShape, outShape)) {
+        return OperatorTemplate::Reshape;
+    }
+
+    if (isPermutationShape(inShape, outShape)) {
+        return OperatorTemplate::Transpose;
+    }
+
+    if (isBroadcastLike(inShape, outShape)) {
+        return OperatorTemplate::Broadcast;
+    }
+
+    if (isSubsequencePart(inShape, outShape)) {
+        return OperatorTemplate::Broadcast;
+    }
   }
 
-  if (hasTranspose) {
-    return OperatorTemplate::Transpose;
-  }
-  if (hasReshape) {
-    return OperatorTemplate::Reshape;
-  }
-  if (hasBroadcast) {
-    return OperatorTemplate::Broadcast;
-  }
   if (hasElementwise) {
     return OperatorTemplate::Elementwise;
   }
