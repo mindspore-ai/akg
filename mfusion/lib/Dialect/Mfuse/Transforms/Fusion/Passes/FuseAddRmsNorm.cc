@@ -51,7 +51,6 @@ class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
     Value gamma = rmsNormOp.getGamma();
     FloatAttr epsilon = rmsNormOp.getEpsilonAttr();
 
-    // Match only mfuse.add
     auto addOp = x.getDefiningOp<AddOp>();
     if (!addOp) {
       return failure();

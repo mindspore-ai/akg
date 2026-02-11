@@ -28,9 +28,6 @@ namespace mlir {
 /// Create a pass to decompose operations in MFUSE dialect.
 std::unique_ptr<Pass> createDecomposePass();
 
-/// Convert aclnn.mm / aclnn.matmul / aclnn.batch_matmul to mfuse.matmul or mfuse.matmul_with_bias.
-std::unique_ptr<Pass> createConvertAclnnMatmulToMatmulPass();
-
 }  // namespace mlir
 
 #endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_DECOMPOSE_H

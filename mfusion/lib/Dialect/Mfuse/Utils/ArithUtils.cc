@@ -24,26 +24,6 @@
 namespace mlir {
 namespace mfuse {
 
-// Check if tensor shape is empty (rank-0) or all dimensions are 1 (internal to this TU).
-static bool isScalarOrSingleElement(RankedTensorType tensorType) {
-  if (!tensorType) {
-    return false;
-  }
-
-  // Check if rank is 0 (shape is empty)
-  if (tensorType.getRank() == 0) {
-    return true;
-  }
-
-  // Check if all dimensions are 1
-  for (int64_t dim : tensorType.getShape()) {
-    if (dim != 1) {
-      return false;
-    }
-  }
-  return true;
-}
-
 namespace {
 bool extractConstF64(Value v, double &outVal) {
   auto constOp = v.getDefiningOp<arith::ConstantOp>();
@@ -96,6 +76,26 @@ bool isSingleElementInt(Value v, int64_t x) {
     return false;
   }
   return denseAttr.getSplatValue<APInt>().getSExtValue() == x;
+}
+
+// Check if tensor shape is empty (rank-0) or all dimensions are 1
+bool isScalarOrSingleElement(RankedTensorType tensorType) {
+  if (!tensorType) {
+    return false;
+  }
+
+  // Check if rank is 0 (shape is empty)
+  if (tensorType.getRank() == 0) {
+    return true;
+  }
+
+  // Check if all dimensions are 1
+  for (int64_t dim : tensorType.getShape()) {
+    if (dim != 1) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool isSingleElementFloat(Value v, double x, double tolerance) {

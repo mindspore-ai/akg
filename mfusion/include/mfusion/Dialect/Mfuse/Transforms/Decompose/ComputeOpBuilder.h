@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSE_OP_BUILDER_H
-#define MFUSE_OP_BUILDER_H
+#ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_COMPUTE_OP_BUILDER_H
+#define MFUSION_DIALECT_MFUSE_TRANSFORMS_COMPUTE_OP_BUILDER_H
 
 #include <type_traits>
 
@@ -36,12 +36,12 @@ constexpr float kThree = 3.0f;    // 3
 
 class Expr;
 
-class OpBuilder {
+class ComputeOpBuilder {
  public:
-  // OpBuilder constructor
-  OpBuilder(PatternRewriter &rewriter, Location loc) : rewriter(rewriter), loc(loc) {}
+  // ComputeOpBuilder constructor
+  ComputeOpBuilder(PatternRewriter &rewriter, Location loc) : rewriter(rewriter), loc(loc) {}
 
-  // OpBuilder methods
+  // ComputeOpBuilder methods
   Value add(Value a, Value b, Type resultType, Value alpha = nullptr) {
     if (alpha == nullptr) {
       return rewriter.create<AddOp>(loc, resultType, a, b);
@@ -129,7 +129,8 @@ class OpBuilder {
 // Expr wrapper class to support operator overloading
 class Expr {
  public:
-  Expr(OpBuilder &builder, Value value, Type resultType) : builder(builder), value(value), resultType(resultType) {}
+  Expr(ComputeOpBuilder &builder, Value value, Type resultType)
+      : builder(builder), value(value), resultType(resultType) {}
 
   // Implementations of Expr operators
   Expr operator*(const Expr &other) const {
@@ -156,14 +157,14 @@ class Expr {
 
   Type getResultType() const { return resultType; }
 
-  OpBuilder &getBuilder() const { return builder; }
+  ComputeOpBuilder &getBuilder() const { return builder; }
 
  private:
-  OpBuilder &builder;
+  ComputeOpBuilder &builder;
   Value value;
   Type resultType;
 
-  friend class OpBuilder;
+  friend class ComputeOpBuilder;
   template <typename T>
   friend Expr operator+(T scalar, const Expr &expr);
   template <typename T>
@@ -183,7 +184,7 @@ class Expr {
 };
 
 // Create Expr from Value
-Expr OpBuilder::buildExpr(Value value, Type resultType) { return Expr(*this, value, resultType); }
+inline Expr ComputeOpBuilder::buildExpr(Value value, Type resultType) { return Expr(*this, value, resultType); }
 
 // Global operator overloads for scalar operations
 template <typename T>
@@ -239,4 +240,4 @@ Expr operator/(const Expr &expr, T scalar) {
 }  // namespace mfuse
 }  // namespace mlir
 
-#endif  // MFUSE_OP_BUILDER_H
+#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_COMPUTE_OP_BUILDER_H
