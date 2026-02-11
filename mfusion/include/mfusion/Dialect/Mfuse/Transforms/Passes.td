@@ -38,6 +38,13 @@ def Decompose : Pass<"decompose", "::mlir::ModuleOp"> {
     matches and decomposes some operations.
   }];
 
+  let options = [
+    Option<"patternType", "pattern-type", "std::string", "\"ALL\"",
+           "Type of decompose patterns to use (NONE, ALL, BEFORE_MANUAL_FUSION, AFTER_MANUAL_FUSION)" >,
+    ListOption<"opList", "op-list", "std::string", 
+               "List of specific operations to decompose (empty means all)" >
+  ];
+
   let constructor = "mlir::createDecomposePass()";
 
   let dependentDialects = [
@@ -69,25 +76,6 @@ def DVMCluster : Pass<"mfuse-dvm-cluster", "::mlir::func::FuncOp"> {
 
   let constructor = "mlir::createDVMClusterPass()";
 
-  let dependentDialects = [
-    "::mlir::mfuse::MfuseDialect",
-    "::mlir::func::FuncDialect"
-  ];
-}
-
-//===----------------------------------------------------------------------===//
-// MatMul conversion passes
-//===----------------------------------------------------------------------===//
-
-def ConvertAclnnMatmulToMatmul : Pass<"convert-aclnn-matmul-to-matmul", "::mlir::ModuleOp"> {
-  let summary = "Convert aclnn.mm / aclnn.matmul / aclnn.batch_matmul to mfuse.matmul or mfuse.matmul_with_bias";
-  let description = [{
-    Converts mfuse.aclnn.mm, mfuse.aclnn.matmul, and mfuse.aclnn.batch_matmul to mfuse.matmul
-    (trans_x1=false, trans_x2=false). Fuses aclnn matmul-like + aclnn.add(result, bias, alpha=1)
-    into mfuse.matmul_with_bias, so that downstream MatMul fusion passes can operate on a
-    unified matmul representation.
-  }];
-  let constructor = "mlir::createConvertAclnnMatmulToMatmulPass()";
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",
     "::mlir::func::FuncDialect"
