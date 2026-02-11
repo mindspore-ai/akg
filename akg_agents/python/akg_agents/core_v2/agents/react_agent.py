@@ -288,8 +288,11 @@ class ReActAgent(AgentBase, ABC):
         """
         if not self._initialized:
             self._initialize_task(user_input)
-            self._original_user_input = user_input
-            self.tool_executor.agent_context["user_input"] = user_input
+            # 如果 _restore_agent_state 已经恢复了 _original_user_input，保留它；
+            # 否则使用当前 user_input 作为原始输入
+            if not self._original_user_input:
+                self._original_user_input = user_input
+                self.tool_executor.agent_context["user_input"] = user_input
             self._initialized = True
         else:
             # 判断是对 ask_user 的响应，还是新任务
@@ -845,7 +848,83 @@ class ReActAgent(AgentBase, ABC):
             self.trace.fs.save_node_state("root", root_state)
             logger.info(f"[{self._get_agent_name()}] 创建新任务: {self.task_id}")
         else:
+            # ====== 恢复已有任务 ======
             logger.info(f"[{self._get_agent_name()}] 恢复任务: {self.task_id}, 当前节点: {self.current_node_id}")
+            self._restore_agent_state()
+    
+    def _restore_agent_state(self):
+        """
+        从 TraceSystem 恢复 agent 内部状态
+        
+        恢复内容:
+        1. tool_executor.history — 从 trace 的 action_history 重建
+        2. _original_user_input — 从 root 节点的 task_info.task_input 恢复
+        3. plan_list — 当前未持久化，打 warning 提醒
+        4. pending_tools — 当前未使用，打 warning 提醒
+        """
+        try:
+            resume_info = self.trace.get_resume_info()
+        except Exception as e:
+            logger.warning(f"[恢复] 获取 resume_info 失败: {e}")
+            return
+        
+        # 1. 恢复 tool_executor.history
+        action_history = resume_info.get("action_history", [])
+        if action_history:
+            self.tool_executor.history = list(action_history)
+            logger.info(f"[恢复] tool_executor.history 已恢复: {len(action_history)} 条记录")
+        else:
+            logger.info("[恢复] 无历史动作记录可恢复")
+        
+        # 2. 恢复 _original_user_input
+        #    优先从 root 节点的 task_info.task_input 获取
+        try:
+            root_state = self.trace.fs.load_node_state("root")
+            task_input = root_state.task_info.get("task_input", "") if isinstance(root_state.task_info, dict) else ""
+            if task_input:
+                self._original_user_input = task_input
+                self.tool_executor.agent_context["user_input"] = task_input
+                logger.info(f"[恢复] _original_user_input 已从 root.task_info.task_input 恢复")
+            else:
+                # 回退：从 action_history 中找第一个包含 user_input 的 action
+                for action in action_history:
+                    args = action.arguments if hasattr(action, 'arguments') else {}
+                    if args.get("user_input"):
+                        self._original_user_input = args["user_input"]
+                        self.tool_executor.agent_context["user_input"] = args["user_input"]
+                        logger.info(f"[恢复] _original_user_input 已从 action_history 回退恢复")
+                        break
+                if not self._original_user_input:
+                    logger.warning("[恢复] 无法恢复 _original_user_input，root.task_info 中无 task_input")
+        except Exception as e:
+            logger.warning(f"[恢复] 恢复 _original_user_input 失败: {e}")
+        
+        # 3. plan_list — 当前未持久化到 trace，恢复时无法重建
+        #    TODO: 实现 plan_list 持久化后，在此处恢复
+        if self.plan_list:
+            logger.info(f"[恢复] plan_list 已有 {len(self.plan_list)} 条（可能来自上一轮）")
+        else:
+            logger.warning(
+                "[恢复] plan_list 未持久化，恢复后为空。"
+                "如果后续实现了 plan 功能，请确保 plan_list 也被持久化到 trace 中，"
+                "并在此处添加恢复逻辑。"
+            )
+        
+        # 4. pending_tools — 检查是否有未完成的工具调用
+        pending_tools = resume_info.get("pending_tools")
+        if pending_tools:
+            logger.warning(
+                f"[恢复] 发现 {len(pending_tools) if isinstance(pending_tools, list) else 1} 个 pending_tools，"
+                "当前恢复逻辑不会重新执行它们。"
+                "如果后续需要支持断点续跑，请在此处添加 pending_tools 恢复逻辑。"
+            )
+        
+        logger.info(
+            f"[恢复] Agent 状态恢复完成: "
+            f"history={len(self.tool_executor.history)}, "
+            f"original_input={'有' if self._original_user_input else '无'}, "
+            f"current_node={self.current_node_id}"
+        )
     
     # ==================== Plan 处理 ====================
     

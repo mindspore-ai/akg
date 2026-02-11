@@ -79,7 +79,7 @@ class TraceSystem:
         
         Args:
             task_id: 任务 ID
-            base_dir: 基础目录，默认 ~/.akg_agents
+            base_dir: 基础目录，默认 ~/.akg
         """
         self.task_id = task_id
         self.fs = FileSystemState(task_id, base_dir)

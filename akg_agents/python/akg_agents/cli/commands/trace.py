@@ -362,11 +362,140 @@ def create_trace_app(console: Console, services: CLIAppServices) -> typer.Typer:
     return trace_app
 
 
+def create_sessions_app(console: Console, services: CLIAppServices) -> typer.Typer:
+    """创建 sessions 子命令应用"""
+    
+    sessions_app = typer.Typer(help="会话管理命令")
+    
+    @sessions_app.command("list")
+    def list_sessions(
+        limit: int = typer.Option(20, "--limit", "-n", help="最多显示的会话数"),
+    ):
+        """列出所有已保存的会话"""
+        from pathlib import Path
+        import json
+        from datetime import datetime
+        
+        conversations_dir = Path.home() / ".akg" / "conversations"
+        
+        if not conversations_dir.exists():
+            console.print("[yellow]暂无会话记录[/yellow]")
+            console.print(f"[dim]会话目录: {conversations_dir}[/dim]")
+            return
+        
+        # 收集所有会话信息
+        sessions = []
+        for session_dir in conversations_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            
+            task_id = session_dir.name
+            trace_file = session_dir / "trace.json"
+            current_node_file = session_dir / "current_node.txt"
+            
+            info = {
+                "task_id": task_id,
+                "session_id": task_id[4:] if task_id.startswith("cli_") else task_id,
+                "current_node": "",
+                "node_count": 0,
+                "created_at": "",
+                "modified_at": "",
+                "target": "",
+            }
+            
+            # 读取 current_node
+            if current_node_file.exists():
+                try:
+                    info["current_node"] = current_node_file.read_text().strip()
+                except Exception:
+                    pass
+            
+            # 读取 trace.json 获取节点数、创建时间和 target 配置
+            if trace_file.exists():
+                try:
+                    with open(trace_file, "r") as f:
+                        trace_data = json.load(f)
+                    info["node_count"] = len(trace_data.get("tree", {}))
+                    info["created_at"] = trace_data.get("created_at", "")[:19]
+                    
+                    # 提取 target 配置 (framework/backend/arch/dsl)
+                    tree = trace_data.get("tree", {})
+                    # 先从 root state.json 的 task_info 找
+                    root_state_file = session_dir / "nodes" / "root" / "state.json"
+                    target_found = False
+                    if root_state_file.exists():
+                        try:
+                            rs = json.loads(root_state_file.read_text())
+                            ti = rs.get("task_info", {})
+                            if ti.get("dsl"):
+                                parts = [p for p in [ti.get("framework"), ti.get("backend"), ti.get("arch"), ti.get("dsl")] if p]
+                                info["target"] = "/".join(parts)
+                                target_found = True
+                        except Exception:
+                            pass
+                    # 回退：从 action arguments 找
+                    if not target_found:
+                        for nid in sorted(tree.keys()):
+                            node = tree[nid]
+                            args = (node.get("action") or {}).get("arguments") or {}
+                            if args.get("dsl") and args.get("framework"):
+                                parts = [p for p in [args.get("framework"), args.get("backend"), args.get("arch"), args.get("dsl")] if p]
+                                info["target"] = "/".join(parts)
+                                break
+                except Exception:
+                    pass
+            
+            # 获取目录修改时间
+            try:
+                mtime = session_dir.stat().st_mtime
+                info["modified_at"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+            
+            sessions.append(info)
+        
+        if not sessions:
+            console.print("[yellow]暂无会话记录[/yellow]")
+            return
+        
+        # 按修改时间倒序排列
+        sessions.sort(key=lambda s: s["modified_at"], reverse=True)
+        sessions = sessions[:limit]
+        
+        table = Table(title="会话列表")
+        table.add_column("#", style="dim", width=4)
+        table.add_column("Session ID", style="cyan")
+        table.add_column("Target", style="magenta")
+        table.add_column("当前节点", style="green")
+        table.add_column("节点数", style="blue", justify="right")
+        table.add_column("创建时间", style="dim")
+        table.add_column("最后修改", style="dim")
+        
+        for i, s in enumerate(sessions, 1):
+            table.add_row(
+                str(i),
+                s["session_id"],
+                s["target"] or "-",
+                s["current_node"],
+                str(s["node_count"]),
+                s["created_at"],
+                s["modified_at"],
+            )
+        
+        console.print(table)
+        console.print(f"[dim]共 {len(sessions)} 个会话 | 恢复命令: akg_cli op --resume <session_id> ...[/dim]")
+    
+    return sessions_app
+
+
 def register_trace_command(
     app: typer.Typer,
     console: Console,
     services: CLIAppServices,
 ) -> None:
-    """注册 trace 子命令到主应用"""
+    """注册 trace 和 sessions 子命令到主应用"""
     trace_app = create_trace_app(console, services)
     app.add_typer(trace_app, name="trace")
+    
+    sessions_app = create_sessions_app(console, services)
+    app.add_typer(sessions_app, name="sessions")

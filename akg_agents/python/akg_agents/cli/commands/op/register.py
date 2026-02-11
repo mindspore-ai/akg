@@ -84,6 +84,11 @@ def register_op_command(
             "--output-path",
             help="保存目录根路径（用于 saved_verifications，默认使用启动 akg_cli 的当前目录）",
         ),
+        resume: Optional[str] = typer.Option(
+            None,
+            "--resume",
+            help="恢复已有会话。传入 session_id（如 50b111f7-d898-43a3-8945-eed5fd17fdf1）或完整 task_id（如 cli_50b111f7-...）",
+        ),
     ) -> None:
         """算子生成入口。"""
 
@@ -102,5 +107,6 @@ def register_op_command(
                 stream=stream,
                 rag=rag,
                 output_path=output_path,
+                resume_session_id=resume,
             ),
         )

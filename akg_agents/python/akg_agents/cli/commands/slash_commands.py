@@ -228,18 +228,110 @@ async def cmd_help(runner, args: List[str]):
 
 @slash_command(
     'trace',
-    '查看执行轨迹',
-    category=CommandCategory.CONTROL,
+    '查看当前会话的 trace 树',
+    category=CommandCategory.INFO,
     aliases=['t'],
-    usage='/trace [trace_id|all]',
-    examples=['/trace', '/trace all', '/trace abc123'],
+    usage='/trace [show|node <id>|history]',
+    examples=['/trace', '/trace show', '/trace node node_003', '/trace history'],
     is_blocking=False
 )
 async def cmd_trace(runner, args: List[str]):
-    """显示 trace 信息（功能开发中）"""
-    console.print("[yellow]ℹ️  Trace 功能开发中...[/yellow]")
-    if args:
-        console.print(f"[dim]参数: {' '.join(args)}[/dim]")
+    """显示当前会话的 trace 树信息"""
+    # 获取当前 agent 的 trace system
+    trace = None
+    try:
+        executor = getattr(runner, "cli", None)
+        react_executor = getattr(executor, "_react_executor", None) if executor else None
+        agent = getattr(react_executor, "_agent", None) if react_executor else None
+        trace = getattr(agent, "trace", None) if agent else None
+    except Exception:
+        pass
+    
+    if trace is None:
+        console.print("[yellow]当前会话尚未启动 agent，无 trace 信息可显示[/yellow]")
+        console.print("[dim]请先输入一次请求以初始化 agent[/dim]")
+        return
+    
+    subcmd = args[0] if args else "show"
+    
+    if subcmd == "show":
+        # 显示 trace 树
+        try:
+            tree_str = trace.visualize_tree()
+            current = trace.get_current_node()
+            
+            console.print(Panel(
+                tree_str,
+                title=f"[bold]Trace Tree: {trace.task_id}[/bold]",
+                subtitle=f"当前节点: [cyan]{current}[/cyan]",
+            ))
+            
+            leaf_nodes = trace.get_all_leaf_nodes()
+            total_nodes = len(trace.trace.tree)
+            console.print(f"[dim]总节点: {total_nodes} | 叶节点: {len(leaf_nodes)} | 当前: {current}[/dim]")
+        except Exception as e:
+            console.print(f"[red]显示 trace 失败: {e}[/red]")
+    
+    elif subcmd == "node" and len(args) >= 2:
+        # 显示指定节点信息
+        node_id = args[1]
+        try:
+            node_info = trace.get_node(node_id)
+            if not node_info:
+                console.print(f"[red]节点 '{node_id}' 不存在[/red]")
+                return
+            
+            lines = [
+                f"节点 ID: [cyan]{node_info.node_id}[/cyan]",
+                f"父节点: {node_info.parent_id or 'None'}",
+                f"子节点: {', '.join(node_info.children) if node_info.children else 'None'}",
+            ]
+            if node_info.action:
+                lines.append(f"Action: [green]{node_info.action.get('type', 'unknown')}[/green]")
+            if node_info.metrics:
+                lines.append(f"Metrics: {node_info.metrics}")
+            
+            console.print(Panel(
+                "\n".join(lines),
+                title=f"[bold]节点: {node_id}[/bold]",
+            ))
+        except Exception as e:
+            console.print(f"[red]查看节点失败: {e}[/red]")
+    
+    elif subcmd == "history":
+        # 显示当前节点的动作历史
+        try:
+            from rich.table import Table as RichTable
+            current = trace.get_current_node()
+            history = trace.get_full_action_history(current)
+            
+            if not history:
+                console.print(f"[yellow]节点 '{current}' 没有动作历史[/yellow]")
+                return
+            
+            table = RichTable(title=f"动作历史: {current}")
+            table.add_column("#", style="dim", width=4)
+            table.add_column("Tool", style="green")
+            table.add_column("Timestamp", style="dim")
+            
+            for i, action in enumerate(history[-20:], max(1, len(history) - 19)):
+                table.add_row(
+                    str(i),
+                    action.tool_name,
+                    action.timestamp[:19] if action.timestamp else "-",
+                )
+            
+            console.print(table)
+            if len(history) > 20:
+                console.print(f"[dim]显示最近 20 条，共 {len(history)} 条[/dim]")
+        except Exception as e:
+            console.print(f"[red]查看历史失败: {e}[/red]")
+    
+    else:
+        console.print("[yellow]用法: /trace [show|node <id>|history][/yellow]")
+        console.print("[dim]  /trace show    - 显示 trace 树[/dim]")
+        console.print("[dim]  /trace node <id> - 查看指定节点[/dim]")
+        console.print("[dim]  /trace history  - 查看动作历史[/dim]")
 
 
 @slash_command(

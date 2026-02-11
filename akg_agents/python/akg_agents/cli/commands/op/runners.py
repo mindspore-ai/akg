@@ -90,8 +90,23 @@ class InteractiveOpRunner:
         # 🔥 命令调度器
         from akg_agents.cli.commands.slash_commands import create_dispatcher
         self._command_dispatcher = create_dispatcher()
+        self._exit_printed = False
         self._should_exit = False
 
+
+    def _print_session_id_on_exit(self):
+        """退出时打印 session_id，方便用户后续 --resume"""
+        if self._exit_printed:
+            return
+        self._exit_printed = True
+        try:
+            sid = self.cli.session_id
+            self.console.print(
+                f"\n[dim]Session ID: {sid}[/dim]"
+                f"\n[dim]恢复命令: akg_cli op --resume {sid}[/dim]"
+            )
+        except Exception:
+            pass
 
     def _build_resolved(self) -> dict:
         return {
@@ -347,6 +362,7 @@ class InteractiveOpRunner:
                 return
             
             # 第二次按 Ctrl+C，退出 CLI
+            self._print_session_id_on_exit()
             should_exit.set()
             event.app.exit()
 
@@ -710,6 +726,7 @@ class InteractiveOpRunner:
             try:
                 asyncio.run(_workflow())
             except KeyboardInterrupt:
+                self._print_session_id_on_exit()
                 self.console.print(
                     f"\n[{DisplayStyle.YELLOW}]已退出[/{DisplayStyle.YELLOW}]"
                 )
