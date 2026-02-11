@@ -61,7 +61,27 @@ def fuse_and_optimize(torch_dialect_str: str) -> str:
         stage="Convert Torch to Mfuse Dialect Module")
 
     _run_pipeline(module,
-        pipeline="builtin.module(convert-mfuse-to-torch,reconcile-unrealized-casts,canonicalize)",
+        pipeline="builtin.module(decompose{pattern-type=BEFORE_MANUAL_FUSION}, canonicalize)",
+        stage="Decompose aclnn ops to meta ops")
+
+    _run_pipeline(module,
+        pipeline="builtin.module(fuse-addrmsnorm, canonicalize)",
+        stage="Manual fusion pass: fuse AddRmsNorm ops")
+
+    _run_pipeline(module,
+        pipeline="builtin.module(fuse-gelu, canonicalize)",
+        stage="Manual fusion pass: fuse Gelu ops")
+
+    _run_pipeline(module,
+        pipeline="builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION}, canonicalize)",
+        stage="Decompose complex ops to meta ops")
+
+    _run_pipeline(module,
+        pipeline="builtin.module(recompose, canonicalize)",
+        stage="Recompose meta ops to aclnn ops")
+
+    _run_pipeline(module,
+        pipeline="builtin.module(convert-mfuse-to-torch, reconcile-unrealized-casts,canonicalize)",
         stage="Convert Mfuse to Torch Dialect Module")
 
     return str(module)

@@ -34,6 +34,7 @@
 
 namespace mlir {
 
+#define GEN_PASS_DECL_DECOMPOSE
 #define GEN_PASS_DEF_DECOMPOSE
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h.inc"
 
@@ -54,10 +55,22 @@ struct DecomposePass : public impl::DecomposeBase<DecomposePass> {
     // Create patterns for this run - modern compilers optimize this well
     // and in practice, decompose passes are rarely run multiple times
     RewritePatternSet patterns(ctx);
-    registerDecomposePatterns(patterns);
+
+    // Determine pattern type from string option
+    DecomposePatternType patternType = DecomposePatternType::ALL;
+    if (this->patternType == "NONE") {
+      patternType = DecomposePatternType::NONE;
+    } else if (this->patternType == "BEFORE_MANUAL_FUSION") {
+      patternType = DecomposePatternType::BEFORE_MANUAL_FUSION;
+    } else if (this->patternType == "AFTER_MANUAL_FUSION") {
+      patternType = DecomposePatternType::AFTER_MANUAL_FUSION;
+    }
+
+    // Register decompose patterns with the specified op list
+    registerDecomposePatterns(patterns, patternType, this->opList);
 
     // Apply the patterns using the greedy pattern rewrite driver
-    // OpRewritePattern will automatically match GELU and Tanh operations and decompose them
+    // OpRewritePattern will automatically match operations and decompose them
     if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns)))) {
       llvm::errs() << "Failed to apply decompose patterns\n";
       signalPassFailure();

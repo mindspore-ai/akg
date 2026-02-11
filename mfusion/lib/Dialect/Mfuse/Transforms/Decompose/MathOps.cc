@@ -15,7 +15,7 @@
  */
 
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
-#include "mfusion/Dialect/Mfuse/Transforms/Decompose/OpBuilder.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Decompose/ComputeOpBuilder.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/DecomposePatterns.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -37,7 +37,7 @@ class GeluDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluOp> {
     Type float32Ty = mlir::RankedTensorType::get(tensorType.getShape(), rewriter.getF32Type());
 
     // Create OpBuilder instance
-    mlir::mfuse::OpBuilder builder(rewriter, loc);
+    mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
 
     // Convert to float32 if not already
     if (!tensorType.getElementType().isF32()) {
@@ -81,7 +81,7 @@ class TanhDecomposePattern : public OpRewritePattern<mfuse::AclnnTanhOp> {
     }
 
     // Create OpBuilder instance
-    mlir::mfuse::OpBuilder builder(rewriter, loc);
+    mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
 
     // Tanh(x) = 1 - 2/(e^(2x) + 1)
     auto two_x = builder.mul(input, kTwo, resultType);
@@ -126,7 +126,7 @@ class GeluBackwardDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluBac
     auto float32Ty = mlir::RankedTensorType::get(selfTensorType.getShape(), rewriter.getF32Type());
 
     // Create OpBuilder instance
-    mlir::mfuse::OpBuilder builder(rewriter, loc);
+    mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
 
     // Convert to float32 if not already
     Value processedGrad = grad;
@@ -198,7 +198,7 @@ class SigmoidDecomposePattern : public OpRewritePattern<mfuse::AclnnSigmoidOp> {
     auto float32Ty = mlir::RankedTensorType::get(tensorType.getShape(), rewriter.getF32Type());
 
     // Create OpBuilder instance
-    mlir::mfuse::OpBuilder builder(rewriter, loc);
+    mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
 
     // Convert to float32 if not already
     Value processedInput = input;
@@ -225,15 +225,19 @@ class SigmoidDecomposePattern : public OpRewritePattern<mfuse::AclnnSigmoidOp> {
 };
 
 /// Populate the given pattern set with decompose patterns.
-/// This function registers all available decompose patterns with a RewritePatternSet.
-void registerDecomposeMathOpPatterns(RewritePatternSet &patterns) {
+/// This function registers decompose patterns based on the provided op list.
+void registerDecomposeMathOpPatterns(RewritePatternSet &patterns, const std::vector<std::string> &opList) {
   MLIRContext *ctx = patterns.getContext();
 
-  // Register decompose patterns using OpRewritePattern
-  patterns.add<GeluDecomposePattern>(ctx);
-  patterns.add<GeluBackwardDecomposePattern>(ctx);
-  patterns.add<TanhDecomposePattern>(ctx);
-  patterns.add<SigmoidDecomposePattern>(ctx);
+  // Map of operation names to their pattern registration functions
+  std::map<std::string, PatternFunc> patternMap = {
+    {"gelu", [](RewritePatternSet &p, MLIRContext *c) { p.add<GeluDecomposePattern>(c); }},
+    {"gelubackward", [](RewritePatternSet &p, MLIRContext *c) { p.add<GeluBackwardDecomposePattern>(c); }},
+    {"tanh", [](RewritePatternSet &p, MLIRContext *c) { p.add<TanhDecomposePattern>(c); }},
+    {"sigmoid", [](RewritePatternSet &p, MLIRContext *c) { p.add<SigmoidDecomposePattern>(c); }}};
+
+  // Register patterns using the common function
+  registerPatternsByOpList(patterns, ctx, patternMap, opList);
 }
 
 }  // namespace mfuse
