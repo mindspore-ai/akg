@@ -85,16 +85,33 @@ read_json_file('结果文件路径')['字段名']
 }
 ```
 
-**ask_user 示例（展示代码给用户确认）：**
+**ask_user 示例（流程中确认，task_completed=false）：**
 ```json
 {
   "reasoning": "op_task_builder 已生成代码，需要用户确认",
   "tool_name": "ask_user",
   "arguments": {
-    "message": "已为您生成 ReLU 算子的任务描述代码，请确认是否正确：\n\n（代码内容直接从 history 中的 result 获取并写入此处）\n\n请回复「确认」继续，或说明需要修改的地方。"
+    "message": "已为您生成 ReLU 算子的任务描述代码，请确认是否正确：\n\n（代码内容直接从 history 中的 result 获取并写入此处）\n\n请回复「确认」继续，或说明需要修改的地方。",
+    "task_completed": false
   }
 }
 ```
+
+**ask_user 示例（初始任务完成，汇报结果，task_completed=true）：**
+```json
+{
+  "reasoning": "用户要求的 ReLU 算子已生成、验证通过、性能分析完成，初始任务全部完成",
+  "tool_name": "ask_user",
+  "arguments": {
+    "message": "✅ ReLU 算子已完成！\n\n**结果摘要：**\n- 代码生成：完成\n- 正确性验证：通过\n- 性能：加速 1.5x\n\n如需进一步操作请告知。",
+    "task_completed": true
+  }
+}
+```
+
+**task_completed 字段说明：**
+- `task_completed: false`（默认）：流程进行中，需要用户确认或补充信息才能继续
+- `task_completed: true`：用户最初的需求已全部完成，你在汇报最终结果或询问是否有后续需求
 
 ---
 
