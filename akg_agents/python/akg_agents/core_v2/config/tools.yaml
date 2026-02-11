@@ -58,6 +58,10 @@ tools:
           message:
             type: "string"
             description: "要询问用户的问题"
+          task_completed:
+            type: "boolean"
+            description: "初始任务是否已完成。当用户最初的需求已经全部执行完毕（如代码已生成、验证已通过、性能已分析等），你正在汇报结果或询问后续操作时，设为 true。在流程中间需要用户确认或补充信息时，设为 false 或不设。"
+            default: false
         required: ["message"]
   
   check_python_code:
