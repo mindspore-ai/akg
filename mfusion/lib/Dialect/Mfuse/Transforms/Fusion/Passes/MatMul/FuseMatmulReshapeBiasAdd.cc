@@ -34,15 +34,11 @@ namespace {
 // Constants for dimension and alignment checks
 constexpr int kBiasSizeInit = 1;  // Initial value for bias size calculation
 
-/// Pattern to fuse MatMul -> Reshape -> Add into MatMulWithBias -> Reshape.
+/// Helper function to fuse MatMul -> Reshape -> Add into MatMulWithBias -> Reshape.
 /// This eliminates the intermediate Add operation by incorporating bias into matmul.
-class FuseMatmulReshapeBiasAddPattern : public OpRewritePattern<AddOp> {
- public:
-  using OpRewritePattern<AddOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(AddOp addOp, PatternRewriter &rewriter) const override {
-    Value addLhs = addOp.getX();
-    Value addRhs = addOp.getY();
+static LogicalResult fuseMatmulReshapeBiasAdd(Value addLhs, Value addRhs, Operation *addOp,
+                                              PatternRewriter &rewriter) {
+    
     Value reshapeOut = nullptr;
     Value addBias = nullptr;
 
@@ -85,7 +81,7 @@ class FuseMatmulReshapeBiasAddPattern : public OpRewritePattern<AddOp> {
       return failure();
     }
 
-    Location loc = addOp.getLoc();
+    Location loc = addOp->getLoc();
     Type newMatmulResultType = matmulType;
     Value fusedBias = addBias;
     Operation *matmulDef = matmulOut.getDefiningOp();
@@ -119,13 +115,24 @@ class FuseMatmulReshapeBiasAddPattern : public OpRewritePattern<AddOp> {
     }
 
     return failure();
+}
+
+/// Pattern to fuse MatMul -> Reshape -> Add into MatMulWithBias -> Reshape.
+/// This eliminates the intermediate Add operation by incorporating bias into matmul.
+class FuseMatmulReshapeBiasAddPattern : public OpRewritePattern<AddOp> {
+ public:
+  using OpRewritePattern<AddOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(AddOp addOp, PatternRewriter &rewriter) const override {
+    Value addLhs = addOp.getX();
+    Value addRhs = addOp.getY();
+    return fuseMatmulReshapeBiasAdd(addLhs, addRhs, addOp.getOperation(), rewriter);
   }
 };
 
 }  // namespace
 
 DEFINE_MFUSE_FUSION_PASS(FuseMatmulReshapeBiasAdd, FuseMatmulReshapeBiasAddPattern)
-
 }  // namespace mfuse
 
 }  // namespace mlir
