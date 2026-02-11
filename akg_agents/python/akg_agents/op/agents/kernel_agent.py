@@ -123,7 +123,7 @@ class KernelAgent(ReActAgent):
     
     def _get_agent_context(self) -> Dict[str, Any]:
         """获取 agent 上下文（传递给 ToolExecutor）"""
-        return {
+        ctx = {
             "task_id": self.task_id,
             "dsl": self.dsl,
             "framework": self.framework,
@@ -133,6 +133,11 @@ class KernelAgent(ReActAgent):
             # 提供获取 workflow 资源的回调
             "get_workflow_resources": lambda: self._get_workflow_resources()
         }
+        # 透传 session_id，使 workflow 内的 agent 能通过流式输出推送到 CLI
+        session_id = self.context.get("session_id", "")
+        if session_id:
+            ctx["session_id"] = session_id
+        return ctx
     
     def _load_available_tools(self) -> List[Dict]:
         """加载可用工具列表"""
@@ -409,8 +414,8 @@ class KernelAgent(ReActAgent):
                     op_name="placeholder",  # 会被 verifier node 从 state 更新
                     framework_code="",      # 会被 verifier node 从 state 更新
                     task_id="0",
-                    framework="torch",
-                    dsl="triton",
+                    framework=self.framework,
+                    dsl=self.dsl,           # 使用 agent 实际的 dsl，而非硬编码 "triton"
                     backend=self.backend,
                     arch=self.arch,
                     config=verifier_config  # 必需参数
