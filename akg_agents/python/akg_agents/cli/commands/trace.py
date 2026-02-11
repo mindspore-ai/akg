@@ -15,9 +15,9 @@
 """
 Trace 命令模块
 
-提供 trace 树的查看、切换和对比功能：
+提供 trace 树的查看、分叉和对比功能：
 - /trace show [task_id] - 显示 trace 树
-- /trace switch <task_id> <node_id> - 切换到指定节点
+- /trace fork <task_id> <node_id> - 在 ask_user 节点创建分叉
 - /trace compare <task_id> <node1> <node2> - 对比两个节点
 - /trace path <task_id> <node_id> - 显示到节点的路径
 - /trace history <task_id> [node_id] - 显示动作历史
@@ -43,9 +43,11 @@ def create_trace_app(console: Console, services: CLIAppServices) -> typer.Typer:
     @trace_app.command("show")
     def show_trace(
         task_id: str = typer.Argument(..., help="任务 ID"),
+        focus: Optional[str] = typer.Argument(None, help="焦点节点 ID（如 root、005、node_005），默认为当前节点"),
         base_dir: Optional[str] = typer.Option(None, "--base-dir", "-d", help="基础目录"),
+        depth: int = typer.Option(4, "--depth", "-n", help="向上/向下展示的层数"),
     ):
-        """显示 trace 树结构"""
+        """显示 trace 树结构（单路径视图 + 分叉标注）"""
         try:
             from akg_agents.core_v2.filesystem import TraceSystem
             
@@ -56,42 +58,57 @@ def create_trace_app(console: Console, services: CLIAppServices) -> typer.Typer:
                 console.print(f"[red]任务 '{task_id}' 不存在[/red]")
                 raise typer.Exit(code=1)
             
-            # 获取树可视化
-            tree_str = ts.visualize_tree()
+            # 规范化 focus_node
+            focus_node = None
+            if focus:
+                if focus == "root":
+                    focus_node = "root"
+                elif focus.isdigit():
+                    focus_node = f"node_{focus.zfill(3)}"
+                elif focus.startswith("node_"):
+                    focus_node = focus
+                else:
+                    focus_node = focus
             
-            # 获取当前节点
             current = ts.get_current_node()
+            rich_tree = ts.visualize_tree_rich(focus_node=focus_node, depth=depth)
+            
+            # 先打印当前节点的完整信息（仅 ask_user），再打印 trace Panel
+            from akg_agents.core_v2.filesystem.trace_visualizer import (
+                collect_current_node_detail,
+                print_current_node_detail_rich,
+            )
+            detail = collect_current_node_detail(ts)
+            print_current_node_detail_rich(detail, console)
+            
+            if focus_node and focus_node != current:
+                subtitle_text = f"焦点: [cyan]{focus_node}[/cyan] | 当前: [cyan]{current}[/cyan]"
+            else:
+                subtitle_text = f"当前节点: [cyan]{current}[/cyan]"
             
             console.print(Panel(
-                tree_str,
-                title=f"[bold]Trace Tree: {task_id}[/bold]",
-                subtitle=f"当前节点: [cyan]{current}[/cyan]",
+                rich_tree,
+                title=f"[bold]Trace: {task_id}[/bold]",
+                subtitle=subtitle_text,
+                padding=(1, 2),
             ))
             
-            # 显示统计信息
-            leaf_nodes = ts.get_all_leaf_nodes()
             total_nodes = len(ts.trace.tree)
-            
-            table = Table(title="统计信息", show_header=False)
-            table.add_column("指标", style="cyan")
-            table.add_column("值", style="green")
-            table.add_row("总节点数", str(total_nodes))
-            table.add_row("叶节点数", str(len(leaf_nodes)))
-            table.add_row("当前节点", current)
-            
-            console.print(table)
+            console.print(
+                f"[dim]总节点: {total_nodes} | 当前: {current} | 范围: ±{depth} 层[/dim]"
+            )
             
         except Exception as e:
             console.print(f"[red]错误: {e}[/red]")
             raise typer.Exit(code=1)
     
-    @trace_app.command("switch")
-    def switch_node(
+    @trace_app.command("fork")
+    def fork_node(
         task_id: str = typer.Argument(..., help="任务 ID"),
-        node_id: str = typer.Argument(..., help="目标节点 ID"),
+        node_id: str = typer.Argument(..., help="目标 ask_user 节点 ID"),
         base_dir: Optional[str] = typer.Option(None, "--base-dir", "-d", help="基础目录"),
     ):
-        """切换到指定节点"""
+        """在 ask_user 节点创建分叉（重新回答）"""
         try:
             from akg_agents.core_v2.filesystem import TraceSystem
             
@@ -101,17 +118,28 @@ def create_trace_app(console: Console, services: CLIAppServices) -> typer.Typer:
                 console.print(f"[red]任务 '{task_id}' 不存在[/red]")
                 raise typer.Exit(code=1)
             
-            old_node = ts.get_current_node()
-            ts.switch_node(node_id)
-            new_node = ts.get_current_node()
+            ts.initialize(force=False)
             
-            console.print(f"[green]✓[/green] 已从 [cyan]{old_node}[/cyan] 切换到 [cyan]{new_node}[/cyan]")
+            # 规范化 node_id
+            if node_id.isdigit():
+                node_id = f"node_{node_id.zfill(3)}"
             
-            # 显示节点信息
-            node_info = ts.get_node(new_node)
+            new_node_id = ts.fork_ask_user(node_id)
+            
+            # 显示结果
+            console.print(f"[green]✓[/green] 已创建分叉: [cyan]{node_id}[/cyan] → 新节点 [cyan]{new_node_id}[/cyan]")
+            console.print(f"[dim]原节点和历史完全保留，新节点等待用户回答[/dim]")
+            
+            # 显示 agent 的原始提问
+            node_info = ts.get_node(node_id)
             if node_info:
-                console.print(f"  父节点: {node_info.parent_id or 'None'}")
-                console.print(f"  子节点数: {len(node_info.children or [])}")
+                action = node_info.action or {}
+                message = (action.get("arguments") or {}).get("message", "")
+                if message:
+                    console.print()
+                    console.print("[bold cyan]Agent 的提问:[/bold cyan]")
+                    for line in message.split("\n"):
+                        console.print(f"  {line}")
                 
         except Exception as e:
             console.print(f"[red]错误: {e}[/red]")

@@ -17,7 +17,7 @@ CLI Trace 命令测试
 
 测试 trace 命令的各项功能：
 - trace show
-- trace switch
+- trace fork
 - trace compare
 - trace path
 - trace history
@@ -113,22 +113,25 @@ class TestCLITraceCommands:
         assert result.exit_code == 0
         # 应该包含树结构或统计信息
     
-    def test_trace_switch_command(self, runner, trace_system):
-        """测试 trace switch 命令"""
+    def test_trace_fork_command(self, runner, trace_system):
+        """测试 trace fork 命令"""
         ts, temp_dir = trace_system
         
         from akg_agents.cli.cli import app
         
-        # 获取一个节点 ID
-        leaves = ts.get_all_leaf_nodes()
-        target_node = leaves[0] if leaves else "root"
+        # 先创建一个 ask_user 节点
+        ts.add_node(
+            action={"type": "ask_user", "arguments": {"message": "测试问题"}},
+            result={"status": "responded", "user_response": "测试回答", "message": "测试问题"},
+        )
+        ask_node = ts.get_current_node()
         
         result = runner.invoke(app, [
-            "trace", "switch", "test_cli_task", target_node,
+            "trace", "fork", "test_cli_task", ask_node,
             "--base-dir", temp_dir
         ])
         
-        # 验证切换成功
+        # 验证 fork 成功
         assert result.exit_code == 0
     
     def test_trace_path_command(self, runner, trace_system):

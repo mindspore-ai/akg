@@ -294,6 +294,15 @@ class ReActAgent(AgentBase, ABC):
                 self._original_user_input = user_input
                 self.tool_executor.agent_context["user_input"] = user_input
             self._initialized = True
+            
+            # 恢复后检查：如果当前节点是 ask_user（status=waiting），
+            # 说明是 resume 场景下用户在回复 ask_user，需要记录用户响应
+            current_node = self.trace.get_node(self.current_node_id)
+            if (current_node.action and 
+                current_node.action.get("type") == "ask_user" and
+                (current_node.result or {}).get("status") == "waiting"):
+                self._handle_user_response(user_input)
+                logger.info(f"[Resume] 恢复后处理 ask_user 响应: {user_input[:50]}...")
         else:
             # 判断是对 ask_user 的响应，还是新任务
             current_node = self.trace.get_node(self.current_node_id)
@@ -301,6 +310,12 @@ class ReActAgent(AgentBase, ABC):
                                    current_node.action.get("type") == "ask_user")
             
             if is_ask_user_response:
+                # 如果该 ask_user 节点已有子节点，说明之前被跳过了
+                # 先标记为 skipped，再正常处理用户回答
+                if current_node.children and (current_node.result or {}).get("status") == "waiting":
+                    current_node.result["status"] = "skipped"
+                    self.trace._save_trace()
+                    logger.info(f"[跳过] ask_user 节点 {self.current_node_id} 已被跳过（有子节点但未回答）")
                 # 用户在回答问题
                 self._handle_user_response(user_input)
             else:

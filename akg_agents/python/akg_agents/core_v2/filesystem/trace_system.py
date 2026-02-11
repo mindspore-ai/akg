@@ -399,6 +399,69 @@ class TraceSystem:
         
         logger.info(f"Switched to node: {node_id}")
     
+    def fork_ask_user(self, node_id: str) -> str:
+        """
+        在 ask_user 节点上创建分叉
+        
+        语义：复制 agent 的提问（action），清空用户回答，
+        新节点成为原节点父节点的新子节点。原有历史完全不动。
+        
+        Args:
+            node_id: 目标 ask_user 节点 ID
+            
+        Returns:
+            新创建的节点 ID
+            
+        Raises:
+            NodeNotFoundError: 节点不存在
+            TraceSystemError: 节点不是 ask_user 类型
+        """
+        # 验证节点存在
+        node = self.get_node(node_id)
+        if node is None:
+            raise NodeNotFoundError(node_id)
+        
+        # 验证是 ask_user 类型
+        action_type = (node.action or {}).get("type", "")
+        if action_type != "ask_user":
+            raise TraceSystemError(
+                f"只能对 ask_user 节点执行 fork，"
+                f"节点 {node_id} 的类型是 '{action_type}'"
+            )
+        
+        # 获取父节点
+        parent_id = node.parent_id
+        if not parent_id:
+            raise TraceSystemError(f"节点 {node_id} 没有父节点，无法 fork")
+        
+        # 复制 action（agent 的提问不变）
+        import copy
+        from datetime import datetime
+        new_action = copy.deepcopy(node.action)
+        new_action["timestamp"] = datetime.now().isoformat()
+        
+        # 清空用户回答
+        message = (node.action.get("arguments") or {}).get("message", "")
+        new_result = {"status": "waiting", "message": message}
+        
+        # 临时切换到父节点，让 add_node 在父节点下创建子节点
+        old_current = self.get_current_node()
+        self.switch_node(parent_id)
+        
+        # 创建新节点
+        new_node_id = self.add_node(
+            action=new_action,
+            result=new_result,
+            metrics={"duration_ms": 0},
+        )
+        
+        logger.info(
+            f"Forked ask_user: {node_id} -> {new_node_id} "
+            f"(parent: {parent_id}, siblings: {len(self.get_node(parent_id).children)})"
+        )
+        
+        return new_node_id
+    
     def update_node_result(
         self,
         node_id: str,
@@ -850,116 +913,37 @@ class TraceSystem:
     
     # ==================== 树可视化 ====================
     
-    def visualize_tree(self, show_full: bool = False) -> str:
+    def visualize_tree(self, focus_node: str = None, depth: int = 4) -> str:
         """
-        可视化 Trace 树
+        可视化 Trace 树（纯文本版本，用于非 Rich 环境）
         
         Args:
-            show_full: 是否显示完整树（不折叠）
+            focus_node: 焦点节点 ID，默认为当前节点
+            depth: 向上/向下展示的层数，默认 4
+        """
+        from .trace_visualizer import visualize_text
+        return visualize_text(self, focus_node=focus_node, depth=depth)
+    
+    def visualize_tree_rich(self, focus_node: str = None, depth: int = 4):
+        """
+        可视化 Trace 树（Rich Text 版本，用于 CLI 终端）
+        
+        Args:
+            focus_node: 焦点节点 ID，默认为当前节点
+            depth: 向上/向下展示的层数，默认 4
             
         Returns:
-            树的字符串表示
+            rich.text.Text 对象，可直接传给 console.print() / Panel()
         """
-        current_node = self.trace.current_node
-        lines = [f"🌳 Trace Tree (当前: {current_node}):\n"]
-        
-        # 从 root 开始递归构建
-        tree_str = self._build_tree_str("root", current_node, indent=0, show_full=show_full)
-        lines.append(tree_str)
-        
-        lines.append("\n💡 使用 /trace show <node> 查看节点详情")
-        lines.append("💡 使用 /trace switch <node> 切换节点")
-        
-        return "\n".join(lines)
-    
-    def _build_tree_str(
-        self,
-        node_id: str,
-        current_node: str,
-        indent: int,
-        show_full: bool,
-    ) -> str:
-        """递归构建树的字符串表示"""
-        node = self.trace.get_node(node_id)
-        if node is None:
-            return ""
-        
-        prefix = "  " * indent
-        is_current = " ⭐ 当前" if node_id == current_node else ""
-        
-        if node_id == "root":
-            node_str = f"{prefix}root{is_current}\n"
-        else:
-            # 获取节点简短编号
-            short_id = node_id.split("_")[1] if "_" in node_id else node_id
-            action_type = node.action.get("type", "unknown") if node.action else "init"
-            result_summary = self._summarize_result(node.result)
-            
-            node_str = f"{prefix}[{short_id}] {action_type}{is_current}\n"
-            if result_summary:
-                node_str += f"{prefix}    → {result_summary}\n"
-        
-        # 递归处理子节点
-        children = node.children
-        if not children:
-            return node_str
-        
-        if len(children) == 1:
-            node_str += f"{prefix}  ↓\n"
-            node_str += self._build_tree_str(children[0], current_node, indent, show_full)
-        else:
-            # 多个子节点，显示分叉
-            for i, child in enumerate(children):
-                if i == 0:
-                    node_str += f"{prefix}  ↓\n"
-                    node_str += f"{prefix}  ├─ "
-                elif i == len(children) - 1:
-                    node_str += f"{prefix}  │\n"
-                    node_str += f"{prefix}  └─ "
-                else:
-                    node_str += f"{prefix}  │\n"
-                    node_str += f"{prefix}  ├─ "
-                
-                # 移除子节点的前缀缩进，因为已经在上面处理了
-                child_str = self._build_tree_str(child, current_node, indent + 2, show_full)
-                # 去掉第一行的缩进
-                child_lines = child_str.split("\n")
-                if child_lines:
-                    child_lines[0] = child_lines[0].strip()
-                    node_str += "\n".join(child_lines)
-        
-        return node_str
-    
-    def _summarize_result(self, result: Optional[Dict]) -> str:
-        """总结执行结果"""
-        if result is None:
-            return ""
-        
-        summaries = []
-        
-        if "success" in result:
-            status = "✅" if result["success"] else "❌"
-            summaries.append(status)
-        
-        if "performance" in result:
-            perf = result["performance"]
-            if isinstance(perf, (int, float)):
-                summaries.append(f"性能: {perf:.1%}" if perf <= 1 else f"性能: {perf}")
-        
-        if "output" in result:
-            output = str(result["output"])
-            if len(output) > 30:
-                output = output[:30] + "..."
-            summaries.append(output)
-        
-        if "lines" in result:
-            summaries.append(f"{result['lines']} 行")
-        
-        return " | ".join(summaries) if summaries else ""
+        from .trace_visualizer import visualize_rich
+        return visualize_rich(self, focus_node=focus_node, depth=depth)
     
     def get_node_detail(self, node_id: str) -> str:
         """
         获取节点详情
+        
+        ask_user 节点：分区展示 "Agent 提问" 和 "用户回答"
+        工具节点：展示输入参数 + 执行结果 + 性能数据
         
         Args:
             node_id: 节点 ID
@@ -968,6 +952,11 @@ class TraceSystem:
             节点详情字符串
         """
         node = self.get_node(node_id)
+        
+        action = node.action or {}
+        result = node.result or {}
+        action_type = action.get("type", "")
+        args = action.get("arguments", {}) or {}
         
         lines = [f"📋 节点详情: {node_id}\n"]
         
@@ -982,22 +971,57 @@ class TraceSystem:
         lines.append(f"  • 时间: {node.timestamp}")
         lines.append("")
         
-        # 执行动作
-        if node.action:
+        if action_type == "ask_user":
+            # ask_user 节点：分区展示
+            message = args.get("message", result.get("message", ""))
+            user_resp = result.get("user_response", "")
+            status = result.get("status", "?")
+            
+            lines.append("🗣️ Agent 提问:")
+            if message:
+                for line in message.split("\n"):
+                    lines.append(f"  {line}")
+            else:
+                lines.append("  (无消息)")
+            lines.append("")
+            
+            if status == "responded" and user_resp:
+                lines.append("💬 用户回答:")
+                for line in user_resp.split("\n"):
+                    lines.append(f"  {line}")
+            elif status == "waiting":
+                lines.append("⏳ 状态: 等待用户回答")
+            elif status == "skipped":
+                lines.append("⏭️ 状态: 已跳过（用户未回答）")
+            else:
+                lines.append(f"  状态: {status}")
+            lines.append("")
+            
+            short_id = node_id.replace("node_", "")
+            lines.append(f"💡 /trace fork {short_id} — 在此决策点创建新分支，重新回答")
+        else:
+            # 工具节点
             lines.append("📝 执行动作:")
-            lines.append(f"  • 类型: {node.action.get('type', 'unknown')}")
-            if node.action.get("params"):
-                lines.append(f"  • 参数: {json.dumps(node.action['params'], ensure_ascii=False)}")
+            lines.append(f"  • 类型: {action_type or 'unknown'}")
+            if args:
+                lines.append("  • 参数:")
+                for k, v in args.items():
+                    v_str = str(v) if v is not None else "None"
+                    if len(v_str) > 100:
+                        v_str = v_str[:100] + "..."
+                    lines.append(f"    - {k}: {v_str}")
+            elif action.get("params"):
+                lines.append(f"  • 参数: {json.dumps(action['params'], ensure_ascii=False)}")
             lines.append("")
-        
-        # 执行结果
-        if node.result:
-            lines.append("📊 执行结果:")
-            for key, value in node.result.items():
-                if isinstance(value, str) and len(value) > 50:
-                    value = value[:50] + "..."
-                lines.append(f"  • {key}: {value}")
-            lines.append("")
+            
+            # 执行结果
+            if result:
+                lines.append("📊 执行结果:")
+                for key, value in result.items():
+                    if isinstance(value, str) and len(value) > 100:
+                        value = value[:100] + "..."
+                    lines.append(f"  • {key}: {value}")
+                lines.append("")
         
         # 指标
         if node.metrics:
@@ -1005,8 +1029,6 @@ class TraceSystem:
             for key, value in node.metrics.items():
                 lines.append(f"  • {key}: {value}")
             lines.append("")
-        
-        lines.append(f"💡 /trace switch {node_id} 切换到此节点")
         
         return "\n".join(lines)
     
@@ -1040,7 +1062,8 @@ class TraceSystem:
             else:
                 short_id = nid.split("_")[1] if "_" in nid else nid
                 action_type = node.action.get("type", "unknown") if node.action else "init"
-                result_summary = self._summarize_result(node.result)
+                from .trace_visualizer import _summarize_result
+                result_summary = _summarize_result(node.result)
                 
                 # 检查是否是分叉点
                 parent = self.trace.get_node(node.parent_id) if node.parent_id else None
