@@ -134,9 +134,10 @@ static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mappi
                                                  func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
                                                  Value &result);
 static LogicalResult prepareTileSizesForStaticShape(func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
-                                                    std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-                                                    std::vector<SmallVector<Value, 6>> &allTileSizeValues,
-                                                    std::vector<SmallVector<unsigned, 6>> &allBandTileSizesOut);
+                                                    const std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
+                                                    const std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
+                                                    const std::vector<SmallVector<int, 6>> &allBandConstraintMaxs,
+                                                    std::vector<SmallVector<Value, 6>> &allTileSizeValues);
 static LogicalResult prepareTileSizesFromMemref(func::FuncOp originalKernel,
                                                 ArrayRef<SmallVector<mlir::scf::ForOp, 6>> bands, mlir::Location loc,
                                                 OpBuilder &builder,
@@ -1779,38 +1780,45 @@ static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncO
 // Create default tiling function
 static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder, func::FuncOp &tilingFunc,
                                              bool isStaticShape = false) {
-  auto *ctx = builder.getContext();
+  auto *mlirCtx = builder.getContext();
   auto loc = originalKernel.getLoc();
   auto origTy = originalKernel.getFunctionType();
 
-  // Step 1: Calculate tile sizes (with constraint max for dynamic shapes)
-  std::vector<SmallVector<mlir::scf::ForOp, 6>> bands;
-  std::vector<SmallVector<unsigned, 6>> allBandTileSizes;
-  std::vector<SmallVector<int, 6>> allBandConstraintMaxs;
-  size_t levelToTile = 0;
-
-  if (failed(
-        calculateAllBandTileSizes(originalKernel, true, bands, allBandTileSizes, allBandConstraintMaxs, levelToTile))) {
-    return failure();
-  }
-
-  // Step 2: Build function signature
-  ctx->getOrLoadDialect<LLVM::LLVMDialect>();
+  // Step 1: Build function signature
   SmallVector<Type> argTypes, resTypes;
-  buildTilingFunctionSignature(origTy, ctx, builder, argTypes, resTypes);
+  mlirCtx->getOrLoadDialect<LLVM::LLVMDialect>();
+  buildTilingFunctionSignature(origTy, mlirCtx, builder, argTypes, resTypes);
 
-  // Step 3: Create and initialize tiling function
-  auto f = createAndInitTilingFunc(originalKernel, argTypes, resTypes, builder);
+  // Step 2: Create and initialize tiling function
+  func::FuncOp f = createAndInitTilingFunc(originalKernel, argTypes, resTypes, builder);
 
-  // Step 4: For simple case (no bands or static shape), just return
-  if (bands.empty() || isStaticShape) {
+  // Step 3: Static-shape path doesn't need auto-tiling solve in create stage.
+  if (isStaticShape) {
     OpBuilder b(&f.getBody().front(), f.getBody().front().end());
     b.create<func::ReturnOp>(loc);
     tilingFunc = f;
     return success();
   }
 
-  // Step 5: Build dynamic axis mappings (reuse existing function)
+  // Step 4: Calculate tile sizes (with constraint max for dynamic shapes)
+  std::vector<SmallVector<mlir::scf::ForOp, 6>> bands;
+  std::vector<SmallVector<unsigned, 6>> allBandTileSizes;
+  std::vector<SmallVector<int, 6>> allBandConstraintMaxs;
+  size_t levelToTile = 0;
+  if (failed(
+        calculateAllBandTileSizes(originalKernel, true, bands, allBandTileSizes, allBandConstraintMaxs, levelToTile))) {
+    return failure();
+  }
+
+  // Step 5: For simple case (no bands), just return
+  if (bands.empty()) {
+    OpBuilder b(&f.getBody().front(), f.getBody().front().end());
+    b.create<func::ReturnOp>(loc);
+    tilingFunc = f;
+    return success();
+  }
+
+  // Step 6: Build dynamic axis mappings (reuse existing function)
   std::vector<std::vector<DynamicAxisMapping>> allBandDynamicMappings;
   for (size_t bandIdx = 0; bandIdx < bands.size(); ++bandIdx) {
     const auto &bandTileSizes = allBandTileSizes[bandIdx];
@@ -1818,7 +1826,7 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
     allBandDynamicMappings.push_back(buildDynamicAxisMappingForBand(curBand, bandTileSizes, originalKernel));
   }
 
-  // Step 6: Store tile sizes to memref (with constraint max for dynamic shapes)
+  // Step 7: Store tile sizes to memref (with constraint max for dynamic shapes)
   if (failed(storeTileSizesToMemref(f, originalKernel, bands, allBandTileSizes, allBandConstraintMaxs,
                                     allBandDynamicMappings, builder))) {
     return failure();
@@ -1919,19 +1927,16 @@ static LogicalResult computeDynamicTileSizeValue(const DynamicAxisMapping &mappi
 
 // Helper: Prepare tile sizes for static shape
 static LogicalResult prepareTileSizesForStaticShape(func::FuncOp originalKernel, mlir::Location loc, OpBuilder &builder,
-                                                    std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
-                                                    std::vector<SmallVector<Value, 6>> &allTileSizeValues,
-                                                    std::vector<SmallVector<unsigned, 6>> &allBandTileSizesOut) {
-  std::vector<SmallVector<unsigned, 6>> allBandTileSizes;
-  std::vector<SmallVector<int, 6>> allBandConstraintMaxs;  // Constraint upper bounds for dynamic axes
-  size_t levelToTile = 0;
-
-  if (failed(calculateAllBandTileSizes(originalKernel, true, bandsToUse, allBandTileSizes, allBandConstraintMaxs,
-                                       levelToTile))) {
+                                                    const std::vector<SmallVector<mlir::scf::ForOp, 6>> &bandsToUse,
+                                                    const std::vector<SmallVector<unsigned, 6>> &allBandTileSizes,
+                                                    const std::vector<SmallVector<int, 6>> &allBandConstraintMaxs,
+                                                    std::vector<SmallVector<Value, 6>> &allTileSizeValues) {
+  if (bandsToUse.size() != allBandTileSizes.size() || bandsToUse.size() != allBandConstraintMaxs.size()) {
+    originalKernel.emitError("inconsistent band metadata when preparing static tile values");
     return failure();
   }
 
-  // Build dynamic axis mappings for all bands
+  // Build dynamic axis mappings for all bands.
   std::vector<std::vector<DynamicAxisMapping>> allBandDynamicMappings;
   for (size_t bandIdx = 0; bandIdx < bandsToUse.size(); ++bandIdx) {
     const auto &bandTileSizes = allBandTileSizes[bandIdx];
@@ -1969,9 +1974,6 @@ static LogicalResult prepareTileSizesForStaticShape(func::FuncOp originalKernel,
 
     allTileSizeValues.push_back(tileSizeValues);
   }
-
-  // Output the original unsigned tile sizes
-  allBandTileSizesOut = allBandTileSizes;
 
   return success();
 }
@@ -2108,10 +2110,9 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
   allTileSizeValues.reserve(bands.size());
 
   if (isStaticShape) {
-    // Static shape: create Value constants from unsigned values
-    std::vector<SmallVector<unsigned, 6>> tempTileSizes;  // Will be overwritten
-    if (failed(
-          prepareTileSizesForStaticShape(originalKernel, loc, builder, bandsToUse, allTileSizeValues, tempTileSizes))) {
+    // Static shape: materialize Value tile sizes from the already solved tile metadata.
+    if (failed(prepareTileSizesForStaticShape(originalKernel, loc, builder, bandsToUse, allBandTileSizesInt,
+                                              allBandConstraintMaxs, allTileSizeValues))) {
       return failure();
     }
   } else {

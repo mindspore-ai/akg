@@ -362,8 +362,13 @@ class TilingBase {
   }
 
   LogicalResult runTilingProcedure(OpBuilder &builder) {
+    tilingInfo_.isStaticShape = tilingInfo_.analyzeInputShapeStatic(originalKernel_);
+
     llvm::DenseMap<int64_t, mlir::func::FuncOp> tilingFuncMap;
-    if (failed(mlir::autotiling::createTilingFunctions(originalKernel_, builder, tilingFuncMap))) return failure();
+    if (failed(mlir::autotiling::createTilingFunctions(originalKernel_, builder, tilingFuncMap,
+                                                       tilingInfo_.isStaticShape))) {
+      return failure();
+    }
     for (const auto &it : tilingFuncMap) {
       int64_t key = it.getFirst();
       mlir::func::FuncOp f = it.getSecond();
