@@ -19,6 +19,7 @@
 
 #include <cerrno>
 #include <cstdlib>
+#include <utility>
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -37,11 +38,16 @@
 // Helper class to automatically add newline at the end
 struct MLogStream {
   llvm::raw_ostream &os;
-  MLogStream(llvm::raw_ostream &stream) : os(stream) {}
-  ~MLogStream() { os << "\n"; }
+  bool shouldLog;
+  MLogStream(llvm::raw_ostream &stream, bool log = true) : os(stream), shouldLog(log) {}
+  ~MLogStream() { if (shouldLog) os << "\n"; }
+  MLogStream(const MLogStream &) = delete;
+  MLogStream &operator=(const MLogStream &) = delete;
+  MLogStream(MLogStream &&other) : os(other.os), shouldLog(other.shouldLog) { other.shouldLog = false; }
+  MLogStream &operator=(MLogStream &&) = delete;
   template<typename T>
   MLogStream &operator<<(const T &value) {
-    os << value;
+    if (shouldLog) os << value;
     return *this;
   }
 };
@@ -118,9 +124,14 @@ namespace {
 //        MLOG(ERROR) << "error message";
 // Note: Newline is automatically added at the end, no need to add "\n" manually
 #define MLOG(LEVEL) \
-  (MLog::shouldLog(LEVEL) ? \
-    (MLogStream(MLog::getStream(LEVEL)) << "[" << MLOG_LEVEL_TO_STRING(LEVEL) << "][" << __FILE__ << ":" << __LINE__ << ":" << __func__ << "] ") : \
-    MLogStream(llvm::nulls()))
+  []() -> MLogStream { \
+    if (MLog::shouldLog(LEVEL)) { \
+      MLogStream stream(MLog::getStream(LEVEL), true); \
+      stream << "[" << MLOG_LEVEL_TO_STRING(LEVEL) << "]" << "[" << __FILE__ << ":" << __LINE__ << ":" << __func__ << "] "; \
+      return std::move(stream); \
+    } \
+    return MLogStream(llvm::nulls(), false); \
+  }()
 
 // Alternative DEBUG macro using LLVM_DEBUG (per-pass switch via DEBUG_TYPE and LLVM_DEBUG).
 // Use MLOG(DEBUG) with MLOG_LEVEL=0 for simple global debug; use MLOG_DEBUG for pass-specific debug.

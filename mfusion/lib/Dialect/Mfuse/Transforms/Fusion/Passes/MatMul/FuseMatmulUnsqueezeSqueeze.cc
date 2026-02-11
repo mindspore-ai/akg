@@ -22,6 +22,7 @@
 #include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
 #include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -92,6 +93,9 @@ class FuseMatmulUnsqueezeSqueezeMatmulPattern : public OpRewritePattern<MatmulOp
       return failure();
     }
 
+    // Log pattern match
+    MLOG(DEBUG) << "FuseMatmulUnsqueezeSqueezeMatmulPattern matched MatmulOp with 1D input(s), self rank=" << rSelf << ", other rank=" << rOther;
+
     Value self = matmulOp.getSelf();
     Value other = matmulOp.getOther();
     Location loc = matmulOp.getLoc();
@@ -99,11 +103,23 @@ class FuseMatmulUnsqueezeSqueezeMatmulPattern : public OpRewritePattern<MatmulOp
     SmallVector<int64_t, kSmallVectorDefaultSize> newShapeSelf, newShapeOther;
     computeReshapeShapesFor1D(selfType, otherType, newShapeSelf, newShapeOther);
 
+    // Log reshape shapes
+    std::string selfShapeStr, otherShapeStr;
+    for (int64_t dim : newShapeSelf) {
+      selfShapeStr += std::to_string(dim) + " ";
+    }
+    for (int64_t dim : newShapeOther) {
+      otherShapeStr += std::to_string(dim) + " ";
+    }
+    MLOG(DEBUG) << "Computed reshape shapes: self=" << selfShapeStr << ", other=" << otherShapeStr;
+
     auto newSelfType = RankedTensorType::get(newShapeSelf, selfType.getElementType());
     auto newOtherType = RankedTensorType::get(newShapeOther, otherType.getElementType());
     Value newSelf = rewriter.create<ReshapeOp>(loc, newSelfType, self, createShapeValue(rewriter, loc, newShapeSelf));
-    Value newOther =
-      rewriter.create<ReshapeOp>(loc, newOtherType, other, createShapeValue(rewriter, loc, newShapeOther));
+    Value newOther = rewriter.create<ReshapeOp>(loc, newOtherType, other, createShapeValue(rewriter, loc, newShapeOther));
+
+    // Log reshape operation creation
+    MLOG(DEBUG) << "Created reshape operations for 1D inputs";
 
     Type resultType = matmulOp.getResult().getType();
     auto resultTensorType = dyn_cast<RankedTensorType>(resultType);
@@ -114,7 +130,15 @@ class FuseMatmulUnsqueezeSqueezeMatmulPattern : public OpRewritePattern<MatmulOp
                                                    matmulOp.getTransX2Attr());
     Value outReshape = rewriter.create<ReshapeOp>(loc, resultType, matmulResult,
                                                   createShapeValue(rewriter, loc, resultTensorType.getShape()));
+
+    // Log output reshape creation
+    MLOG(DEBUG) << "Created output reshape operation";
+
     rewriter.replaceOp(matmulOp, outReshape);
+
+    // Log operation replacement
+    MLOG(DEBUG) << "Replaced original MatmulOp with reshaped version";
+
     return success();
   }
 };
@@ -167,7 +191,7 @@ class FuseMatmulUnsqueezeSqueezeMatmulWithBiasPattern : public OpRewritePattern<
 }  // namespace
 
 DEFINE_MFUSE_FUSION_PASS(FuseMatmulUnsqueezeSqueeze, FuseMatmulUnsqueezeSqueezeMatmulPattern,
-                        FuseMatmulUnsqueezeSqueezeMatmulWithBiasPattern)
+                         FuseMatmulUnsqueezeSqueezeMatmulWithBiasPattern)
 
 }  // namespace mfuse
 
