@@ -138,5 +138,81 @@ class TestSystemIntegration:
         assert "=======" in content
         assert ">>>>>>>" in content
 
+    def test_direct_write_pollutes_hardlinks(self, setup_system):
+        """
+        回归测试：验证直接用 Path.write_text() 写入 code/ 目录会污染硬链接。
+        
+        这个测试模拟了之前 react_agent._save_node_result 中的 bug：
+        直接用 write_text() 写入 code/code.py，导致所有共享硬链接的节点
+        都被修改为最后一次写入的内容。
+        
+        修复方案：所有对 code/ 目录的写入必须通过 fs.save_code_file()。
+        """
+        # 1. root 写入初始代码
+        self.fs.save_code_file("root", "code.py", "version_root")
+        root_path = self.fs.get_code_snapshot_dir("root") / "code.py"
+        
+        # 2. 创建 3 代节点（不修改代码，通过硬链接继承）
+        nodes = []
+        for i in range(3):
+            nid = self.trace.add_node(action={"idx": i}, result={})
+            nodes.append(nid)
+        
+        # 3. 验证所有节点共享同一 inode
+        root_inode = root_path.stat().st_ino
+        for nid in nodes:
+            p = self.fs.get_code_snapshot_dir(nid) / "code.py"
+            assert p.stat().st_ino == root_inode, f"{nid} should share inode with root"
+        
+        # 4. 用 save_code_file（正确方式）修改最后一个节点
+        last_node = nodes[-1]
+        self.fs.save_code_file(last_node, "code.py", "version_modified")
+        
+        last_path = self.fs.get_code_snapshot_dir(last_node) / "code.py"
+        
+        # 5. 验证 CoW 正确工作：最后节点的 inode 应该不同
+        assert last_path.stat().st_ino != root_inode, \
+            "save_code_file should break hardlink (new inode)"
+        
+        # 6. 验证其他节点没被污染
+        assert root_path.read_text() == "version_root", \
+            "root snapshot should not be polluted"
+        for nid in nodes[:-1]:
+            p = self.fs.get_code_snapshot_dir(nid) / "code.py"
+            assert p.read_text() == "version_root", \
+                f"{nid} snapshot should not be polluted"
+            assert p.stat().st_ino == root_inode, \
+                f"{nid} should still share original inode"
+        
+        # 7. 验证修改后的节点内容正确
+        assert last_path.read_text() == "version_modified"
+
+    def test_verify_snapshot_integrity(self, setup_system):
+        """
+        测试 verify_snapshot_integrity 能检测到硬链接污染。
+        """
+        # 1. 正常流程：save_code_file 写入
+        self.fs.save_code_file("root", "code.py", "correct_content")
+        n1 = self.trace.add_node(action={"type": "test"}, result={})
+        
+        # 2. 正常情况下完整性应该是 OK 的
+        corrupted = self.fs.verify_snapshot_integrity("root")
+        assert corrupted == [], f"Should be clean, got: {corrupted}"
+        
+        # 3. 模拟外部直接写入（绕过 CoW）—— 这是错误的做法
+        snapshot_file = self.fs.get_code_snapshot_dir(n1) / "code.py"
+        snapshot_file.write_text("POLLUTED_CONTENT")
+        
+        # 4. 完整性检查应该检测到 n1 被污染
+        corrupted = self.fs.verify_snapshot_integrity(n1)
+        assert len(corrupted) > 0, "Should detect corruption"
+        assert "checksum mismatch" in corrupted[0]
+        
+        # 5. 同时 root 也被污染了（因为共享 inode）
+        corrupted_root = self.fs.verify_snapshot_integrity("root")
+        assert len(corrupted_root) > 0, \
+            "Root should also be corrupted (shared inode was modified in-place)"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

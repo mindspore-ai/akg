@@ -112,6 +112,88 @@ def _safe_send_result(session_id: str, node_name: str, result: Dict[str, Any]):
         logger.warning(f"[{node_name}] send result message failed: {e}")
 
 
+def _extract_compile_errors(error_log: str) -> str:
+    """从编译/验证日志中提取真正有用的错误信息
+    
+    ninja 构建失败时，原始日志通常包含大量 traceback 和 ninja 调用信息，
+    但真正的根因（如编译错误、语法错误、未定义符号等）往往被淹没。
+    本函数尝试提取最有诊断价值的部分。
+    
+    Returns:
+        提取后的错误摘要字符串
+    """
+    import re
+    
+    lines = error_log.splitlines()
+    
+    # 策略1: 提取 C/C++ 编译错误（gcc/g++/clang 格式: file:line:col: error: ...）
+    compile_errors = []
+    for line in lines:
+        if re.search(r':\d+:\d+:\s*(error|fatal error):', line):
+            compile_errors.append(line.strip())
+    
+    # 策略2: 提取 Python 错误（最后一个 Exception/Error 行）
+    python_errors = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # 匹配 Python 异常行，如 "SyntaxError: ...", "NameError: ...", "TypeError: ..."
+        if re.match(r'^(\w+Error|\w+Exception|RuntimeError|CalledProcessError):', stripped):
+            python_errors.append(stripped)
+        # 匹配 "raise XxxError" 后面跟的实际错误消息
+        elif re.match(r'^(subprocess\.CalledProcessError|torch\.utils\.cpp_extension\.)', stripped):
+            python_errors.append(stripped)
+    
+    # 策略3: 提取 "error:" 或 "Error:" 关键行（通用匹配）
+    generic_errors = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and re.search(r'\berror\b', stripped, re.IGNORECASE):
+            # 排除 traceback 中的 "File ..." 行和纯路径行
+            if not stripped.startswith('File ') and not stripped.startswith('Traceback'):
+                generic_errors.append(stripped)
+    
+    # 策略4: 提取验证结果不匹配信息（精度问题）
+    precision_errors = []
+    for line in lines:
+        stripped = line.strip()
+        if any(kw in stripped.lower() for kw in ['mismatch', 'tolerance', 'allclose', 'assert', 'not equal', 'max diff']):
+            precision_errors.append(stripped)
+    
+    # 组装结果：优先展示编译错误 > 精度错误 > Python 错误
+    parts = []
+    
+    if compile_errors:
+        parts.append("  [编译错误]")
+        # 最多展示 5 条编译错误
+        for err in compile_errors[:5]:
+            parts.append(f"    {err}")
+        if len(compile_errors) > 5:
+            parts.append(f"    ... 共 {len(compile_errors)} 条编译错误")
+    
+    if precision_errors:
+        parts.append("  [精度错误]")
+        for err in precision_errors[:3]:
+            parts.append(f"    {err}")
+    
+    if python_errors and not compile_errors:
+        # 如果有编译错误，Python 异常通常只是 CalledProcessError 的包装，不需要重复展示
+        parts.append("  [Python 异常]")
+        for err in python_errors[:3]:
+            parts.append(f"    {err}")
+    
+    if parts:
+        return "\n".join(parts)
+    
+    # 兜底：如果上述策略都没提取到有用信息，取最后 N 行非空内容
+    # （错误信息通常在日志末尾）
+    non_empty_lines = [l.strip() for l in lines if l.strip()]
+    if non_empty_lines:
+        tail = non_empty_lines[-8:]  # 取最后 8 行
+        return "  [日志末尾]\n" + "\n".join(f"    {l}" for l in tail)
+    
+    return ""
+
+
 def _build_result_summary(node_name: str, result: Dict[str, Any]) -> str:
     """根据节点类型构建结果摘要"""
     
@@ -121,13 +203,24 @@ def _build_result_summary(node_name: str, result: Dict[str, Any]) -> str:
             return "  ✅ 验证通过"
         else:
             error = result.get("verifier_error", "")
-            # 截取错误信息的关键部分（避免过长）
             if error:
-                # 取前 500 字符，确保错误信息可读
-                error_preview = error[:500]
-                if len(error) > 500:
-                    error_preview += "\n  ... (完整日志见 captured_errors.log)"
-                return f"  ❌ 验证失败:\n{error_preview}"
+                # 智能提取错误关键信息，而非粗暴截取前 N 字符
+                extracted = _extract_compile_errors(error)
+                if extracted:
+                    summary = f"  ❌ 验证失败:\n{extracted}"
+                else:
+                    # 提取失败时回退到截取末尾
+                    tail_lines = [l for l in error.splitlines() if l.strip()][-8:]
+                    error_tail = "\n".join(f"    {l.strip()}" for l in tail_lines)
+                    summary = f"  ❌ 验证失败:\n  [日志末尾]\n{error_tail}"
+                
+                # 提示用户查看完整日志的正确位置
+                cur_path = result.get("cur_path", "")
+                if cur_path:
+                    summary += f"\n\n  💡 完整验证日志见工作目录: {cur_path}"
+                else:
+                    summary += "\n\n  💡 完整日志可在 agent 工作目录中查看"
+                return summary
             return "  ❌ 验证失败（无详细错误信息）"
     
     if node_name == "conductor":

@@ -416,7 +416,8 @@ class NodeFactory:
                     "profile_res": profile_res,  # 保留空字典，不转成 None
                     "multi_case_error": multi_case_error,  # 更新 multi_case_error
                     "step_count": state.get("step_count", 0) + 1,
-                    "agent_history": ["verifier"]
+                    "agent_history": ["verifier"],
+                    "cur_path": state.get("cur_path", ""),  # 传递工作路径，供错误展示使用
                 }
             finally:
                 # 只有从 Manager 借来的才需要还
