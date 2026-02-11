@@ -165,6 +165,18 @@ async def cmd_help(runner, args: List[str]):
             if cmd.usage:
                 content_lines.append(f"  [yellow]用法:[/yellow] {cmd.usage}")
             
+            # 显示 handler docstring 中的详细说明（子命令等）
+            docstring = (cmd.handler.__doc__ or "").strip()
+            if docstring:
+                # 跳过第一行（通常和 description 重复），取后续行作为详细说明
+                doc_lines = docstring.split("\n")
+                detail_lines = [l.strip() for l in doc_lines[1:] if l.strip()]
+                if detail_lines:
+                    content_lines.append("")
+                    content_lines.append("  [yellow]子命令:[/yellow]")
+                    for dl in detail_lines:
+                        content_lines.append(f"    {dl}")
+            
             if cmd.examples:
                 content_lines.append("")
                 content_lines.append("  [yellow]示例:[/yellow]")
@@ -228,16 +240,27 @@ async def cmd_help(runner, args: List[str]):
 
 @slash_command(
     'trace',
-    '查看当前会话的 trace 树',
+    '查看 trace 树节点、详情、创建分叉',
     category=CommandCategory.INFO,
     aliases=['t'],
-    usage='/trace [show|node <id>|history]',
-    examples=['/trace', '/trace show', '/trace node node_003', '/trace history'],
+    usage='/trace [<id>|root|show <id>|node <id>|history|fork <id>] [-n depth]',
+    examples=['/trace', '/trace root', '/trace 005', '/trace -n 8', '/trace show 003', '/trace fork 005'],
     is_blocking=False
 )
 async def cmd_trace(runner, args: List[str]):
-    """显示当前会话的 trace 树信息"""
-    # 获取当前 agent 的 trace system
+    """查看 trace 树节点、查看详情、创建分叉
+    
+    子命令:
+      /trace                   — 以当前节点为中心，上下各 4 层（路径视图）
+      /trace root              — 以 root 为起点向下展示
+      /trace <id>              — 以指定节点为中心展示其所在路径
+      /trace -n <N>            — 调整展示范围为上下各 N 层
+      /trace show <id>         — 查看指定节点详情（action、result、参数）
+      /trace node <id>         — 同 show（兼容旧命令）
+      /trace history           — 查看当前节点的完整动作历史
+      /trace fork <id>         — 在 ask_user 节点创建分叉（重新回答）
+    """
+    # 获取 trace：优先从已创建的 agent 获取，否则用 session_id 直接构建
     trace = None
     try:
         executor = getattr(runner, "cli", None)
@@ -247,53 +270,131 @@ async def cmd_trace(runner, args: List[str]):
     except Exception:
         pass
     
+    # 回退：agent 尚未创建时，直接用 session_id 构建 TraceSystem
     if trace is None:
-        console.print("[yellow]当前会话尚未启动 agent，无 trace 信息可显示[/yellow]")
-        console.print("[dim]请先输入一次请求以初始化 agent[/dim]")
+        try:
+            executor = getattr(runner, "cli", None)
+            session_id = getattr(executor, "session_id", None) if executor else None
+            if session_id:
+                from akg_agents.core_v2.filesystem import TraceSystem
+                task_id = f"cli_{session_id}"
+                ts = TraceSystem(task_id=task_id)
+                if ts.fs.task_exists():
+                    ts.initialize(force=False)
+                    trace = ts
+        except Exception:
+            pass
+    
+    if trace is None:
+        console.print("[yellow]当前会话无 trace 信息可显示[/yellow]")
+        console.print("[dim]可能原因: 尚未发送过请求，或 session 目录不存在[/dim]")
         return
     
-    subcmd = args[0] if args else "show"
+    # 解析参数：提取 subcmd, focus_node, depth
+    subcmd = "show"
+    focus_node = None
+    depth = 4
     
-    if subcmd == "show":
-        # 显示 trace 树
+    remaining = list(args)
+    
+    # 解析 -n <depth>
+    if "-n" in remaining:
+        n_idx = remaining.index("-n")
+        if n_idx + 1 < len(remaining):
+            try:
+                depth = int(remaining[n_idx + 1])
+            except ValueError:
+                pass
+            remaining = remaining[:n_idx] + remaining[n_idx + 2:]
+        else:
+            remaining = remaining[:n_idx]
+    
+    if remaining:
+        first = remaining[0]
+        if first in ("node", "history", "fork"):
+            subcmd = first
+        elif first == "show":
+            # /trace show <id> → 节点详情
+            if len(remaining) >= 2:
+                subcmd = "node"
+                focus_node = remaining[1]
+            else:
+                subcmd = "tree"
+        elif first == "root":
+            subcmd = "tree"
+            focus_node = "root"
+        elif first.isdigit():
+            # /trace 005 → 以 node_005 为焦点的路径视图
+            subcmd = "tree"
+            focus_node = f"node_{first.zfill(3)}"
+        elif first.startswith("node_"):
+            subcmd = "tree"
+            focus_node = first
+    
+    # 规范化 focus_node
+    if focus_node and focus_node != "root" and not focus_node.startswith("node_"):
+        if focus_node.isdigit():
+            focus_node = f"node_{focus_node.zfill(3)}"
+    
+    if subcmd in ("show", "tree"):
+        # 显示 trace 树（单路径 + 分叉标注）
         try:
-            tree_str = trace.visualize_tree()
             current = trace.get_current_node()
+            rich_tree = trace.visualize_tree_rich(focus_node=focus_node, depth=depth)
+            
+            # 先打印当前节点的完整信息（仅 ask_user），再打印 trace Panel
+            from akg_agents.core_v2.filesystem.trace_visualizer import (
+                collect_current_node_detail,
+                print_current_node_detail_rich,
+            )
+            detail = collect_current_node_detail(trace)
+            print_current_node_detail_rich(detail, console)
+            
+            # 构建标题
+            if focus_node and focus_node != current:
+                subtitle_text = f"焦点: [cyan]{focus_node}[/cyan] | 当前: [cyan]{current}[/cyan]"
+            else:
+                subtitle_text = f"当前节点: [cyan]{current}[/cyan]"
             
             console.print(Panel(
-                tree_str,
-                title=f"[bold]Trace Tree: {trace.task_id}[/bold]",
-                subtitle=f"当前节点: [cyan]{current}[/cyan]",
+                rich_tree,
+                title=f"[bold]Trace: {trace.task_id}[/bold]",
+                subtitle=subtitle_text,
+                padding=(1, 2),
             ))
             
-            leaf_nodes = trace.get_all_leaf_nodes()
             total_nodes = len(trace.trace.tree)
-            console.print(f"[dim]总节点: {total_nodes} | 叶节点: {len(leaf_nodes)} | 当前: {current}[/dim]")
+            console.print(
+                f"[dim]总节点: {total_nodes} | 当前: {current} | 范围: ±{depth} 层[/dim]"
+            )
+            console.print(
+                f"[dim]操作: /trace <id> 查看分支 | /trace show <id> 详情 | /trace fork <id> 分叉[/dim]"
+            )
+            
         except Exception as e:
             console.print(f"[red]显示 trace 失败: {e}[/red]")
     
-    elif subcmd == "node" and len(args) >= 2:
-        # 显示指定节点信息
-        node_id = args[1]
+    elif subcmd == "node":
+        # 显示指定节点详情
+        # 支持 /trace show <id> 和 /trace node <id>
+        raw_id = focus_node or (args[1] if len(args) >= 2 else None)
+        if not raw_id:
+            console.print("[yellow]用法: /trace show <id> 或 /trace node <id>[/yellow]")
+            return
+        
+        # 规范化 node_id
+        if raw_id != "root" and not raw_id.startswith("node_"):
+            if raw_id.isdigit():
+                raw_id = f"node_{raw_id.zfill(3)}"
+        node_id = raw_id
+        
         try:
-            node_info = trace.get_node(node_id)
-            if not node_info:
-                console.print(f"[red]节点 '{node_id}' 不存在[/red]")
-                return
-            
-            lines = [
-                f"节点 ID: [cyan]{node_info.node_id}[/cyan]",
-                f"父节点: {node_info.parent_id or 'None'}",
-                f"子节点: {', '.join(node_info.children) if node_info.children else 'None'}",
-            ]
-            if node_info.action:
-                lines.append(f"Action: [green]{node_info.action.get('type', 'unknown')}[/green]")
-            if node_info.metrics:
-                lines.append(f"Metrics: {node_info.metrics}")
-            
+            from akg_agents.core_v2.filesystem.trace_visualizer import format_node_detail_rich
+            detail_text = format_node_detail_rich(trace, node_id)
             console.print(Panel(
-                "\n".join(lines),
-                title=f"[bold]节点: {node_id}[/bold]",
+                detail_text,
+                title=f"[bold]节点详情: {node_id}[/bold]",
+                padding=(1, 2),
             ))
         except Exception as e:
             console.print(f"[red]查看节点失败: {e}[/red]")
@@ -327,11 +428,68 @@ async def cmd_trace(runner, args: List[str]):
         except Exception as e:
             console.print(f"[red]查看历史失败: {e}[/red]")
     
+    elif subcmd == "fork" and len(args) >= 2:
+        # 在 ask_user 节点创建分叉
+        raw_node_id = args[1]
+        # 支持简写：005 -> node_005
+        if raw_node_id.isdigit():
+            node_id = f"node_{raw_node_id.zfill(3)}"
+        elif raw_node_id.startswith("node_"):
+            node_id = raw_node_id
+        else:
+            node_id = raw_node_id
+        
+        try:
+            # 验证目标节点存在
+            node_info = trace.get_node(node_id)
+            if not node_info:
+                console.print(f"[red]节点 '{node_id}' 不存在[/red]")
+                return
+            
+            # 执行 fork
+            new_node_id = trace.fork_ask_user(node_id)
+            
+            # 同步更新 agent 内存状态（如果 agent 已创建）
+            agent = None
+            try:
+                executor = getattr(runner, "cli", None)
+                react_executor = getattr(executor, "_react_executor", None) if executor else None
+                agent = getattr(react_executor, "_agent", None) if react_executor else None
+            except Exception:
+                pass
+            
+            if agent is not None:
+                # 更新 agent 的 current_node_id 到新节点
+                agent.current_node_id = new_node_id
+                
+                # 重建 tool_executor.history（从 root 到新节点的路径）
+                new_history = trace.get_full_action_history(new_node_id)
+                agent.tool_executor.history = list(new_history)
+            
+            # 显示 agent 的原始提问
+            action = node_info.action or {}
+            message = (action.get("arguments") or {}).get("message", "")
+            
+            console.print(f"[green]已创建分叉:[/green] [cyan]{node_id}[/cyan] → 新节点 [cyan]{new_node_id}[/cyan]")
+            console.print(f"[dim]原节点和历史完全保留，新节点等待用户回答[/dim]")
+            if message:
+                console.print()
+                console.print("[bold cyan]Agent 的提问:[/bold cyan]")
+                for line in message.split("\n"):
+                    console.print(f"  {line}")
+                console.print()
+                console.print("[yellow]请直接输入您的回答（作为新分支的起点）[/yellow]")
+            
+        except Exception as e:
+            console.print(f"[red]Fork 失败: {e}[/red]")
+    
     else:
-        console.print("[yellow]用法: /trace [show|node <id>|history][/yellow]")
-        console.print("[dim]  /trace show    - 显示 trace 树[/dim]")
-        console.print("[dim]  /trace node <id> - 查看指定节点[/dim]")
-        console.print("[dim]  /trace history  - 查看动作历史[/dim]")
+        console.print("[yellow]用法: /trace [show <id>|node <id>|history|fork <id>][/yellow]")
+        console.print("[dim]  /trace             - 显示 trace 树（路径视图）[/dim]")
+        console.print("[dim]  /trace <id>        - 以指定节点为焦点展示路径[/dim]")
+        console.print("[dim]  /trace show <id>   - 查看节点详情（action、result、参数）[/dim]")
+        console.print("[dim]  /trace history     - 查看动作历史[/dim]")
+        console.print("[dim]  /trace fork <id>   - 在 ask_user 节点创建分叉（支持简写: 005 → node_005）[/dim]")
 
 
 @slash_command(
