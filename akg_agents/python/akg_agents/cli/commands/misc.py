@@ -47,8 +47,8 @@ def register_misc_commands(
         table.add_row(
             "op", "算子生成入口（search/default 交互；或从 KernelBench 文件/目录导入）"
         )
-        table.add_row("common", "通用场景入口（ReAct 交互）")
-        table.add_row("graph", "图优化入口（占位，后续实现）")
+        table.add_row("common", "Common Agent(Demo)")
+        table.add_row("graph", "Graph Optimization Agent(TODO)")
         table.add_row(
             "worker", "启动/停止 Worker Service（akg_cli worker --start/--stop）"
         )
@@ -56,7 +56,7 @@ def register_misc_commands(
 
     @app.command("graph")
     def graph_cmd() -> None:
-        """图优化入口（占位）"""
+        """Graph Optimization Agent(TODO)"""
         akg_console = AKGConsole(console)
         print_logo_once(akg_console)
         akg_console.print(

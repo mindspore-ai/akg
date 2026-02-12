@@ -581,9 +581,7 @@ class InteractiveOpRunner:
             if current_step in ["cancelled_by_user", "cancelled"]:
                 current_step = ""
                 state_result["should_continue"] = True
-            if not state_result.get("should_continue", True) or current_step in [
-                "error"
-            ]:
+            if not state_result.get("should_continue", True):
                 return False
             return True
 

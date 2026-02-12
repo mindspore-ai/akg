@@ -758,8 +758,14 @@ class ReActAgent(AgentBase, ABC):
                 "reason": "LLM 响应解析失败"
             }
         except Exception as e:
-            logger.error(f"[LLM 调用失败] {e}")
-            return None
+            error_msg = str(e)
+            logger.error(f"[LLM 调用失败] {error_msg}")
+            # 返回 ask_user 而非 None，将真实错误信息传递给用户，避免 CLI 退出
+            return {
+                "tool_name": "ask_user",
+                "arguments": {"message": f"⚠️ LLM 调用失败:\n\n{error_msg}\n\n请检查后重试，或输入新的指令。"},
+                "reason": "LLM API 调用异常，等待用户处理"
+            }
     
     # ==================== 用户交互 ====================
     
