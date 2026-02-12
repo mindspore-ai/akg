@@ -144,7 +144,7 @@ Triton 不支持 Python 风格的直接切片语法（如 `b[0]` 或 `b[i:j]`）
 
 - **单元素提取**: `tl.get_element(tensor, (index,))`
 - **切片提取**: `tl.extract_slice(tensor, offsets, sizes, strides)`
-- **切片插入**: `tl.insert_slice(full, sub, offsets, sizes, strides)`
+- **切片插入**: `tl.insert_slice(full, sub, offsets, sizes, strides)` - 将sub张量插入到ful张量的指定位置
 
 ```python
 # 一维切片插入
@@ -183,35 +183,3 @@ tmp_buf = tl.insert_slice(tmp_buf, val[None,:], offsets=(i, 0), sizes=(1, cols),
 
 - **维度限制**: grid 必须是 tuple 类型，最多 3 维
 - **大小限制**: 各维度乘积不超过 65535
-
-## 4. 性能检查清单
-
-### 内存访问
-- [ ] 是否使用了 2D block_ptr 优化多维数据访问？
-- [ ] 是否保证了内存访问的连续性？
-- [ ] 是否考虑了 256Bytes 对齐（NPU）？
-
-### 并行度配置
-- [ ] BLOCK_SIZE 是否合理（1024-2048）？
-- [ ] 是否使用了合适的核心数配置（VEC/CUBE）？
-- [ ] Grid 大小是否在限制内（< 65535）？
-
-### 算子设计
-- [ ] 复杂算子是否需要拆分？
-- [ ] 是否避免了不必要的融合？
-- [ ] 是否使用了核内循环优化？
-
-### 数值稳定性
-- [ ] Reduce 操作是否有防溢出处理？
-- [ ] 是否使用 float32 进行中间累加？
-- [ ] 是否处理了除零、负数开方等边界情况？
-
-## 最佳实践总结
-
-1. **Grid 优化**: 优先使用 1D grid + 核内循环
-2. **核心数配置**: 在 `__init__` 中获取，避免 forward 中重复调用
-3. **内存访问**: 考虑 256Bytes 对齐，优先使用 block_ptr
-4. **算子拆分**: 复杂算子拆分往往比强行融合效果更好
-5. **数值稳定**: 使用 float32 累加，减去最大值防溢出
-6. **循环替代**: 使用 `for + if` 替代 `while` 循环
-7. **Autotune**: 提供多组配置，让编译器自动选择最优

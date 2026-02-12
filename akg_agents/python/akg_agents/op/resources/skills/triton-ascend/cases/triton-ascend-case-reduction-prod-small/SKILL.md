@@ -17,7 +17,7 @@ metadata:
 ## 优化：自定义reduce函数
 
 ```python
-# ❌ 简单
+# 简单
 accumulator = tl.full((BLOCK_SIZE,), 1.0, dtype=tl.float32)
 for m in range(M):
   错误：accumulator = tl.where(mask, accumulator * data, accumulator)
@@ -46,7 +46,7 @@ triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 52})
 # 3. grid=32<40 -> 2.61 us
 triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64})
 
-# 4. grid=16<40 -> 2.15 us ⭐ 最优
+# 4. grid=16<40 -> 2.15 us 最优
 triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 128})
 
 # 5. grid=2<40，UB占满 -> 2.63 us

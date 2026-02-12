@@ -48,7 +48,7 @@ triton.Config({'BLOCK_SIZE_BM': 32, 'SUB_BLOCK_SIZE_BM': 32, 'BLOCK_SIZE_N': 128
 # 2. grid=1024>40，reduce轴切分增至256 -> 1110.47 us
 triton.Config({'BLOCK_SIZE_BM': 16, 'SUB_BLOCK_SIZE_BM': 16, 'BLOCK_SIZE_N': 256})
 
-# 3. grid=2048>40，reduce轴切分增至512 -> 1091.26 us ⭐ 最优
+# 3. grid=2048>40，reduce轴切分增至512 -> 1091.26 us 最优
 triton.Config({'BLOCK_SIZE_BM': 8, 'SUB_BLOCK_SIZE_BM': 8, 'BLOCK_SIZE_N': 512})
 
 # 4. grid=32<40，reduce轴切分较大，UB占满 -> 1098.53 us

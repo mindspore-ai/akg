@@ -18,7 +18,7 @@ metadata:
 ## 优化：单核/少核处理
 
 ```python
-# 1. 单核处理 -> 性能：2.16 us ⭐ 最优
+# 1. 单核处理 -> 性能：2.16 us 最优
 triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 16})
 
 # 2. 多核并行 -> 性能：3.51 us

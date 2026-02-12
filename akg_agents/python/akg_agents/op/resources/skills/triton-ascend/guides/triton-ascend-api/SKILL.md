@@ -146,7 +146,7 @@ float_data = tl.cast(int_data, tl.float32)
 
 ## 5. 数学运算 API
 
-### tl.cdiv(a, b) [kernel内]
+### tl.cdiv(a, b)
 ```python
 result = tl.cdiv(offset, BLOCK_SIZE)
 ```
@@ -259,11 +259,3 @@ task_i, task_j = tl.swizzle2d(block_i, block_j, NUM_BLOCKS_I, NUM_BLOCKS_J, GROU
 - **用途**: 2D块重排,提升缓存局部性
 - **适用场景**: 矩阵乘法等多维块计算,改善数据复用
 - **注意**: 仅支持行优先(i方向)分组,列优先需手动实现
-
-## 使用建议
-
-1. **内存操作**: 优先使用 `tl.make_block_ptr` 处理 2D 数据
-2. **边界检查**: 始终使用 `mask` 或 `boundary_check` 防止越界
-3. **原子操作**: 仅在必要时使用，有性能开销
-4. **数据类型**: 注意类型转换，使用 `tl.cast` 显式转换
-5. **编译优化**: 使用 `tl.constexpr` 标记常量参数

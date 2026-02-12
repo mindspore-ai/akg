@@ -17,7 +17,7 @@ metadata:
 ## 优化：reduce轴大切分 + 计算重组
 
 ```python
-# ❌ 简单
+# 简单
 total_sum = 0.0
 for n_offset in range(0, N, BLOCK_SIZE):
     row_sum += tl.sum(block_vals)
@@ -38,7 +38,7 @@ triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256})
 # 2. reduce轴切分增至512 -> 695.08 us
 triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 512})
 
-# 3. reduce轴切分增至1024 -> 685.65 us ⭐ 最优
+# 3. reduce轴切分增至1024 -> 685.65 us 最优
 triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 1024})
 
 # 4. reduce轴切分增至2048 -> 686.89 us

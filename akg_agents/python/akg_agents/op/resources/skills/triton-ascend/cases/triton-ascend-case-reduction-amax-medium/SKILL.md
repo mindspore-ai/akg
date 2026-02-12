@@ -40,7 +40,7 @@ triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256})
 # 2. grid>40, UB用满 -> 29.09 us
 triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 512})
 
-# 3. grid=40, UB不超出 -> 25.73 us ⭐ 最优
+# 3. grid=40, UB不超出 -> 25.73 us 最优
 triton.Config({'BLOCK_SIZE_M': 52, 'BLOCK_SIZE_N': 256})
 ```
 
