@@ -83,7 +83,7 @@ def Mfuse_FusedOp : Mfuse_Op<"fused", [
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    $inputs `,` attr-dict `:` functional-type($inputs, $results) $body
+    $inputs attr-dict `:` functional-type($inputs, $results) $body
   }];
 
   let extraClassDeclaration = [{

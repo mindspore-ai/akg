@@ -33,7 +33,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
 
-#include "mfusion/Analysis/Graph.h"
+#include "mfusion/Analysis/Cluster/Graph.h"
 
 namespace mlir {
 namespace mfuse {
@@ -50,42 +50,42 @@ class BaseCluster {
   virtual ~BaseCluster() = default;
 
   /// Run the clustering algorithm on a function.
-  virtual bool Run(func::FuncOp func_op);
+  virtual bool run(func::FuncOp funcOp);
 
  protected:
   /// Get the list of operation names that can be clustered.
-  virtual llvm::DenseSet<llvm::StringRef> GetClusterableOpList() = 0;
+  virtual llvm::DenseSet<llvm::StringRef> getClusterableOpList() = 0;
 
   /// Check if an operation can be clustered.
-  virtual bool IsClusterableOp(Operation *op) = 0;
+  virtual bool isClusterableOp(Operation *op) = 0;
 
   /// Get the fusion type string for this cluster ("dvm" or "akg").
-  virtual std::string GetFusionType() = 0;
+  virtual std::string getFusionType() = 0;
 
   /// Initialize the pass with the clusterable operation list.
-  void Init();
+  void init();
 
   /// Main clustering process.
-  bool Process(func::FuncOp func_op);
+  bool process(func::FuncOp funcOp);
 
   /// Build graph and merge clusters.
-  void GraphMerge(Block *block, bool aggressive_cut);
+  void graphMerge(Block *block, bool aggressiveCut);
 
-  /// Find candidate operations that can be merged with basenode.
-  std::vector<size_t> FindCandidates(size_t basenode_id);
+  /// Find candidate operations that can be merged with base node.
+  std::vector<size_t> findCandidates(size_t baseNodeId);
 
   /// Create a mfuse.fused operation for a cluster.
-  void CreateFusedOp(func::FuncOp func_op, const std::vector<size_t> &nodes_id);
+  void createFusedOp(func::FuncOp funcOp, const std::vector<size_t> &nodeIds);
 
   /// Clean up internal state.
-  void Clean() {
+  void clean() {
     ops_.clear();
     graph_.reset();
   }
 
   std::unique_ptr<Graph> graph_;
   std::vector<Operation *> ops_;
-  llvm::DenseSet<llvm::StringRef> op_list_;
+  llvm::DenseSet<llvm::StringRef> opList_;
 };
 
 /// DVMCluster - Clusters operations checked by DVM backend.
@@ -94,16 +94,16 @@ class DVMCluster : public BaseCluster {
   DVMCluster() = default;
   ~DVMCluster() override = default;
 
-  static llvm::DenseSet<llvm::StringRef> GetClusterableOps();
+  static llvm::DenseSet<llvm::StringRef> getClusterableOps();
 
-  static bool CanClusterableOp(const llvm::DenseSet<llvm::StringRef> &op_list, Operation *op);
+  static bool canClusterableOp(const llvm::DenseSet<llvm::StringRef> &opList, Operation *op);
 
  protected:
-  llvm::DenseSet<llvm::StringRef> GetClusterableOpList() override;
+  llvm::DenseSet<llvm::StringRef> getClusterableOpList() override;
 
-  bool IsClusterableOp(Operation *op) override;
+  bool isClusterableOp(Operation *op) override;
 
-  std::string GetFusionType() override;
+  std::string getFusionType() override;
 };
 
 }  // namespace mfuse
