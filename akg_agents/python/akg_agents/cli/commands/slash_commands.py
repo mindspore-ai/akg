@@ -538,21 +538,6 @@ async def cmd_save(runner, args: List[str]):
         console.print(f"[dim]目标路径: {output_path}[/dim]")
 
 
-@slash_command(
-    'history',
-    '查看命令历史',
-    category=CommandCategory.INFO,
-    aliases=['hist'],
-    usage='/history [n]',
-    examples=['/history', '/history 10'],
-    is_blocking=False
-)
-async def cmd_history(runner, args: List[str]):
-    """显示命令历史（功能开发中）"""
-    count = int(args[0]) if args and args[0].isdigit() else 10
-    console.print(f"[yellow]ℹ️  命令历史功能开发中...[/yellow]")
-    console.print(f"[dim]将显示最近 {count} 条命令[/dim]")
-
 
 # @slash_command(
 #     'plan',
