@@ -85,7 +85,7 @@ class OpTaskBuilder(AgentBase):
                     },
                     "dsl": {
                         "type": "string",
-                        "description": "目标 DSL（例如：'triton', 'triton-cuda', 'triton-ascend'）",
+                        "description": "目标 DSL（例如：'triton_cuda', 'triton_ascend'）",
                         "default": "triton"
                     },
                     "user_feedback": {

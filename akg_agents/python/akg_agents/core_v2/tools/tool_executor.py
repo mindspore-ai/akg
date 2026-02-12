@@ -467,7 +467,7 @@ class ToolExecutor:
         执行 Workflow
         
         Args:
-            tool_name: 工具名称（如 "use_coder_only_workflow"）
+            tool_name: 工具名称
             arguments: 工具参数（已解析表达式）
         
         Returns:
@@ -508,9 +508,11 @@ class ToolExecutor:
             app = workflow.compile()
             logger.info(f"[ToolExecutor] Workflow {workflow_name} 编译完成")
             
-            # 构建初始状态（包含 cur_path）
-            initial_state = self._build_workflow_state(arguments)
-            logger.info(f"[ToolExecutor] 开始执行 workflow，初始状态: op_name={initial_state.get('op_name')}, dsl={initial_state.get('dsl')}")
+            # 构建初始状态：优先由 workflow 类自行定义，否则使用通用构建
+            if hasattr(workflow_class, 'build_initial_state'):
+                initial_state = workflow_class.build_initial_state(arguments, self.agent_context)
+            else:
+                initial_state = self._build_workflow_state(arguments)
             
             # 执行 workflow
             final_state = await app.ainvoke(initial_state)
@@ -532,7 +534,11 @@ class ToolExecutor:
     
     def _build_workflow_state(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """
-        构建 workflow 初始状态
+        构建 workflow 初始状态（通用 fallback）
+        
+        仅包含 BaseState 中定义的通用字段。
+        领域专用 workflow 应实现 build_initial_state() 类方法，
+        ToolExecutor 会优先调用它。
         
         Args:
             arguments: 工具调用参数（已解析）
@@ -540,28 +546,14 @@ class ToolExecutor:
         Returns:
             workflow 初始状态字典
         """
-        # 从 arguments 或 agent_context 获取参数
-        state = {
-            "op_name": arguments.get("op_name", ""),
-            "task_desc": arguments.get("task_desc", ""),
-            "dsl": arguments.get("dsl", self.agent_context.get("dsl", "")),
-            "framework": arguments.get("framework", self.agent_context.get("framework", "")),
-            "backend": arguments.get("backend", self.agent_context.get("backend", "")),
-            "arch": arguments.get("arch", self.agent_context.get("arch", "")),
-            "task_id": arguments.get("task_id", self.agent_context.get("task_id", "")),
-            "user_requirements": arguments.get("user_requirements", ""),
-            "previous_code": arguments.get("previous_code", ""),
-            "cur_path": arguments.get("cur_path", ""),
-            "result": {},
-            "should_continue": True,
-            "current_step": "",
-            "iterations": 0,
-            "max_iterations": arguments.get("max_iterations", 10),
-        }
-        # 透传 session_id，使 workflow 内的 agent 能通过流式输出推送到 CLI
-        session_id = self.agent_context.get("session_id", "")
-        if session_id:
-            state["session_id"] = session_id
+        state = dict(arguments)  # 透传所有 LLM 提供的参数
+        # 补充 BaseState 通用字段的默认值
+        state.setdefault("task_id", "0")
+        state.setdefault("session_id", self.agent_context.get("session_id", ""))
+        state.setdefault("iteration", 0)
+        state.setdefault("step_count", 0)
+        state.setdefault("max_iterations", 10)
+        state.setdefault("agent_history", [])
         return state
     
     # ==================== Domain Tool / Basic Tool 执行 ====================

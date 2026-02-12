@@ -170,7 +170,7 @@ KernelBench 格式的 Python 代码，包含：
 
 | 参数 | 说明 | 示例 |
 |------|------|------|
-| `dsl` | 目标 DSL | triton, triton-ascend, cuda_c |
+| `dsl` | 目标 DSL | triton_cuda, triton_ascend, cpp |
 | `framework` | 框架 | torch, mindspore, numpy |
 | `backend` | 硬件后端 | cuda, npu, cpu |
 | `arch` | 架构 | a100, ascend910b4, x86_64 |

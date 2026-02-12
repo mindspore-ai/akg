@@ -46,13 +46,10 @@ class AgentInfo:
 
 @dataclass
 class TaskInfo:
-    """任务信息"""
+    """任务信息（通用，不含领域特定字段）"""
     task_id: str
     task_input: str = ""
-    op_name: str = ""
-    dsl: str = ""
-    backend: str = ""
-    arch: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
     domain: str = ""  # 会话所属领域，如 "op", "common", "graph" 等
     
     def to_dict(self) -> Dict:
@@ -60,7 +57,16 @@ class TaskInfo:
     
     @classmethod
     def from_dict(cls, data: Dict) -> "TaskInfo":
-        return cls(**data)
+        # 兼容旧数据：把旧的 op_name/dsl/backend/arch 字段迁移到 metadata
+        known_fields = {"task_id", "task_input", "metadata"}
+        extra = {k: v for k, v in data.items() if k not in known_fields}
+        filtered = {k: v for k, v in data.items() if k in known_fields}
+        if extra:
+            metadata = filtered.get("metadata", {})
+            if isinstance(metadata, dict):
+                metadata.update(extra)
+            filtered["metadata"] = metadata
+        return cls(**filtered)
 
 
 @dataclass
