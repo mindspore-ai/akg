@@ -16,12 +16,12 @@ import asyncio
 import os
 import argparse
 # 导入evolve函数和必要的模块
-from akg_agents.core.evolve import evolve
+from akg_agents.op.evolve import evolve
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core.worker.manager import register_worker
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.utils.environment_check import check_env_for_task
-from akg_agents.utils.evolve.runner_manager import RunnerConfig, print_evolve_config, print_evolution_result
+from akg_agents.op.utils.evolve.runner_manager import RunnerConfig, print_evolve_config, print_evolution_result
 from akg_agents import get_project_root
 from pathlib import Path
 
@@ -97,7 +97,7 @@ async def run_torch_evolve_triton(worker_mode="local", worker_url=None):
     config.device_list = [0]
 
     # 配置文件路径
-    config.config_path = str(Path(get_project_root()) / "config" / "vllm_triton_cuda_evolve_config.yaml")
+    config.config_path = str(Path(get_project_root()) / "op" / "config" / "vllm_triton_cuda_evolve_config.yaml")
 
     # 选择要运行的任务
     config.op_name = get_op_name()

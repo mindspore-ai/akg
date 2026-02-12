@@ -26,6 +26,8 @@ from typing import Tuple, List
 # 添加 python 目录到 sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "python"))
 
+from akg_agents.core_v2.llm.factory import create_llm_client
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,17 +87,12 @@ class Beautifier:
             config: 配置字典，可包含模型配置等
         """
         self.config = config or {}
-        self.model_name = self._get_model_name()
+        self.model_level = self._get_model_level()
     
-    def _get_model_name(self) -> str:
-        """获取模型名称"""
-        import os
-        # 优先使用环境变量
-        if os.environ.get("AKG_AGENTS_MODEL_NAME"):
-            return os.environ["AKG_AGENTS_MODEL_NAME"]
-        # 其次使用配置
+    def _get_model_level(self) -> str:
+        """获取模型级别（对应 settings.json 中 models 的 key）"""
         agent_config = self.config.get("agent_model_config", {})
-        return agent_config.get("beautifier") or agent_config.get("default") or "deepseek_r1_default"
+        return agent_config.get("beautifier") or agent_config.get("default") or "standard"
     
     async def run(
         self, 
@@ -113,8 +110,6 @@ class Beautifier:
         Returns:
             Tuple[str, List[str], str]: (美化后的内容, 修改说明列表, 推理过程)
         """
-        from akg_agents.core.llm.model_loader import create_model
-        
         # 构建 prompt
         prompt = BEAUTIFIER_PROMPT.format(
             content=content,
@@ -125,9 +120,14 @@ class Beautifier:
         logger.info(f"[Beautifier] Starting document beautification, content length: {len(content)}")
         
         try:
-            # 调用 LLM
-            model = create_model(self.model_name)
-            result_text = await self._call_llm(model, prompt)
+            # 使用 core_v2 的 create_llm_client 调用 LLM
+            client = create_llm_client(model_level=self.model_level)
+            messages = [
+                {"role": "system", "content": "你是一个专业的文档排版专家。"},
+                {"role": "user", "content": prompt}
+            ]
+            result = await client.generate(messages, stream=False, agent_name="beautifier")
+            result_text = result.get("content", "")
             
             # 解析结果
             return self._parse_result(result_text, content)
@@ -138,49 +138,6 @@ class Beautifier:
             traceback.print_exc()
             # 失败时返回原始内容
             return content, [], f"Error: {str(e)}"
-    
-    async def _call_llm(self, model, prompt: str) -> str:
-        """调用 LLM 获取结果
-        
-        参考 agent_base.py 的实现方式
-        """
-        # 检查模型类型
-        effective_model_name = getattr(model, "model_name", self.model_name)
-        
-        # 检查是否是 OpenAI AsyncClient
-        is_openai_async = False
-        try:
-            from openai import AsyncOpenAI as OpenAIAsyncClient
-            is_openai_async = isinstance(model, OpenAIAsyncClient)
-        except ImportError:
-            pass
-        
-        # VLLM 或 OpenAI AsyncClient 模型
-        if effective_model_name.startswith("vllm_") or is_openai_async:
-            messages = [
-                {"role": "system", "content": "你是一个专业的文档排版专家。"},
-                {"role": "user", "content": prompt}
-            ]
-            create_kwargs = {
-                "model": effective_model_name,
-                "messages": messages,
-                "temperature": getattr(model, "temperature", 0.2),
-                "top_p": getattr(model, "top_p", 0.9),
-            }
-            extra_body = getattr(model, "extra_body", None)
-            if extra_body:
-                create_kwargs["extra_body"] = extra_body
-            
-            response = await model.chat.completions.create(**create_kwargs)
-            return response.choices[0].message.content
-        
-        # LangChain 模型 (ChatDeepSeek, ChatOllama 等)
-        elif hasattr(model, 'ainvoke'):
-            response = await model.ainvoke(prompt)
-            return response.content if hasattr(response, 'content') else str(response)
-        
-        else:
-            raise ValueError(f"Unsupported model type: {type(model)}")
     
     def _parse_result(
         self, 

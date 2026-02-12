@@ -139,14 +139,15 @@ async def run_doc_fixer(
         "agent_model_config": {}
     }
     
-    # 从环境变量获取模型配置
-    model_name = os.environ.get("AKG_AGENTS_MODEL_NAME", "deepseek_r1_default")
-    config["agent_model_config"]["default"] = model_name
-    config["agent_model_config"]["typo_fixer"] = model_name
-    config["agent_model_config"]["beautifier"] = model_name
+    # 模型级别配置（对应 settings.json 中 models 的 key）
+    # 实际模型名/API 地址/密钥等由 settings.json 或环境变量统一管理
+    model_level = "standard"
+    config["agent_model_config"]["default"] = model_level
+    config["agent_model_config"]["typo_fixer"] = model_level
+    config["agent_model_config"]["beautifier"] = model_level
     
     print_section("配置信息")
-    print(f"  模型: {model_name}")
+    print(f"  模型级别: {model_level}")
     print(f"  文档类型: {document_type}")
     print(f"  语言: {language}")
     print(f"  输入长度: {len(input_content)} 字符")

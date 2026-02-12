@@ -265,7 +265,7 @@ async def run_cross_platform_evolve(
     """在 Ascend 上运行 Evolve 优化"""
     from akg_agents.op.config.config_validator import load_config
     from akg_agents.core.worker.manager import register_remote_worker
-    from akg_agents.core.evolve import evolve
+    from akg_agents.op.evolve import evolve
     from akg_agents.core.async_pool.task_pool import TaskPool
     from akg_agents.utils.cross_platform import (
         create_cross_platform_config,

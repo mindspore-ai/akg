@@ -33,7 +33,7 @@
 import asyncio
 import argparse
 
-from akg_agents.core.adaptive_search import adaptive_search
+from akg_agents.op.adaptive_search import adaptive_search
 from akg_agents.core.worker.manager import register_worker
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.utils.environment_check import check_env_for_task

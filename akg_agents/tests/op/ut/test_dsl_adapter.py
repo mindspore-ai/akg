@@ -32,8 +32,8 @@ class TestDSLAdapterTritonCuda:
         """Test implementation import."""
         adapter = get_dsl_adapter("triton_cuda")
         imports = adapter.get_impl_import("test_op", "test_func")
-        # 现在统一使用 ModelNew 类格式
-        assert "from test_op_triton_cuda import ModelNew" in imports
+        # 现在统一使用 ModelNew 类格式，模块名带 _impl 后缀
+        assert "from test_op_triton_cuda_impl import ModelNew" in imports
     
     def test_call_impl(self):
         """Test call implementation code generation."""
@@ -76,8 +76,8 @@ class TestDSLAdapterTritonAscend:
         """Test implementation import."""
         adapter = get_dsl_adapter("triton_ascend")
         imports = adapter.get_impl_import("test_op", "test_func")
-        # 现在统一使用 ModelNew 类格式
-        assert "from test_op_triton_ascend import ModelNew" in imports
+        # 现在统一使用 ModelNew 类格式，模块名带 _impl 后缀
+        assert "from test_op_triton_ascend_impl import ModelNew" in imports
     
     def test_call_impl(self):
         """Test call implementation code generation."""
@@ -100,46 +100,6 @@ class TestDSLAdapterTritonAscend:
         adapter = get_dsl_adapter("triton_ascend")
         code = adapter.get_special_setup_code()
         assert "apply_triton_patches" in code
-
-
-class TestDSLAdapterSwft:
-    """Test SWFT DSL Adapter."""
-    
-    def test_get_import_statements(self):
-        """Test import statements generation."""
-        adapter = get_dsl_adapter("swft")
-        imports = adapter.get_import_statements("torch")
-        assert "from swft.core import *" in imports
-        assert "from swft.api import *" in imports
-    
-    def test_get_impl_import(self):
-        """Test implementation import."""
-        adapter = get_dsl_adapter("swft")
-        imports = adapter.get_impl_import("test_op", "test_func")
-        assert "from test_op_swft import test_func" in imports
-    
-    def test_call_impl(self):
-        """Test call implementation code generation."""
-        adapter = get_dsl_adapter("swft")
-        framework_adapter = get_framework_adapter("torch")
-        code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
-        assert "gen_binary_data" in code
-        assert "load_binary_data" in code
-        assert "test_func(device_id=int(0))" in code
-    
-    def test_needs_binary_io(self):
-        """Test binary I/O requirement."""
-        adapter = get_dsl_adapter("swft")
-        assert adapter.needs_binary_io() is True
-    
-    def test_benchmark_impl(self):
-        """Test benchmark code generation."""
-        adapter = get_dsl_adapter("swft")
-        framework_adapter = get_framework_adapter("torch")
-        code = adapter.benchmark_impl("test_func", "inputs", 10, 100, "ascend", "test_op",
-                                      framework_model="framework_model", framework_adapter=framework_adapter, device_id=0)
-        assert "gen_binary_data" in code
-        assert "test_func(device_id=int(0))" in code
 
 
 class TestDSLAdapterAscendC:
@@ -165,8 +125,10 @@ class TestDSLAdapterAscendC:
         code = adapter.call_impl("test_func", "inputs", 0, framework_adapter, "test_op")
         assert "subprocess.run" in code
         assert "run.sh" in code
-        assert "{impl_func_name}" in code  # AscendC uses template variable
-        assert "run_{impl_func_name}" in code
+        # impl_func_name 和 inputs 现在由 f-string 直接替换
+        assert "import test_func" in code
+        assert "run_test_func" in code
+        assert "test_func.run_test_func(*inputs)" in code
     
     def test_needs_compilation(self):
         """Test compilation requirement."""
@@ -187,8 +149,8 @@ class TestDSLAdapterCpp:
         """Test implementation import."""
         adapter = get_dsl_adapter("cpp")
         imports = adapter.get_impl_import("test_op", "test_func")
-        # 现在统一使用 ModelNew 类格式
-        assert "from test_op_cpp import ModelNew" in imports
+        # 现在统一使用 ModelNew 类格式，模块名带 _impl 后缀
+        assert "from test_op_cpp_impl import ModelNew" in imports
     
     def test_call_impl(self):
         """Test call implementation code generation."""
@@ -219,7 +181,8 @@ class TestDSLAdapterCudaC:
         """CUDA C adapter now imports ModelNew."""
         adapter = get_dsl_adapter("cuda_c")
         imports = adapter.get_impl_import("test_op", "test_func")
-        assert "from test_op_cuda_c import ModelNew" in imports
+        # 模块名带 _impl 后缀
+        assert "from test_op_cuda_c_impl import ModelNew" in imports
     
     def test_create_impl_module(self):
         """Impl model should be instantiated once and moved to device."""
@@ -256,7 +219,8 @@ class TestDSLAdapterTilelangCuda:
     def test_get_impl_import(self):
         adapter = get_dsl_adapter("tilelang_cuda")
         imports = adapter.get_impl_import("test_op", "test_func")
-        assert "from test_op_tilelang_cuda import ModelNew" in imports
+        # 模块名带 _impl 后缀
+        assert "from test_op_tilelang_cuda_impl import ModelNew" in imports
     
     def test_create_impl_module(self):
         adapter = get_dsl_adapter("tilelang_cuda")
@@ -293,12 +257,6 @@ class TestDSLAdapterFactory:
         adapter = get_dsl_adapter("triton_ascend")
         assert adapter is not None
         assert adapter.__class__.__name__ == "DSLAdapterTritonAscend"
-    
-    def test_get_dsl_adapter_swft(self):
-        """Test getting SWFT adapter."""
-        adapter = get_dsl_adapter("swft")
-        assert adapter is not None
-        assert adapter.__class__.__name__ == "DSLAdapterSwft"
     
     def test_get_dsl_adapter_ascendc(self):
         """Test getting AscendC adapter."""

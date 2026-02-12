@@ -9,11 +9,18 @@ class MockWorker(WorkerInterface):
     def __init__(self, name):
         self.name = name
 
-    async def verify(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str]:
-        return True, "Success"
+    async def verify(self, package_data, task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str, Dict[str, Any]]:
+        return True, "Success", {}
 
     async def profile(self, package_data: bytes, task_id: str, op_name: str, profile_settings: Dict[str, Any]) -> Dict[str, Any]:
         return {}
+
+    async def generate_reference(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
+        return True, "Reference generated", b''
+
+    async def profile_single_task(self, package_data: bytes, task_id: str, op_name: str,
+                                   profile_settings: Dict[str, Any]) -> Dict[str, Any]:
+        return {'time_us': None, 'success': False, 'log': 'mock'}
 
 @pytest.mark.asyncio
 async def test_worker_manager_basic_flow():

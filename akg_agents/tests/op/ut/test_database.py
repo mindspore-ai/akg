@@ -31,13 +31,12 @@ from akg_agents.op.database.coder_database import CoderDatabase, DEFAULT_BENCHMA
 from akg_agents.op.database.coder_vector_store import CoderVectorStore
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.op.config.config_validator import load_config
-from ..utils import get_kernelbench_op_name
 
 # 测试配置
 TEST_DSL = "triton_ascend"
 TEST_FRAMEWORK = "torch"
 TEST_BACKEND = "ascend"
-TEST_ARCH = "910b4"
+TEST_ARCH = "ascend910b4"
 MAX_TEST_FILES = 3  # 限制测试文件数量，避免测试时间过长
 
 # 测试临时目录（在当前项目目录下）
