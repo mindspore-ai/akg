@@ -128,6 +128,52 @@ class ReactTurnExecutorV2:
             ),
         )
 
+    def _finalize_cancelled_node(self) -> None:
+        """
+        确保 agent 当前的 pending 节点被标记为 cancelled。
+        
+        当 CancelledError 从 running_task 传播出来时，_execute_tool 内部的
+        善后逻辑可能因 task 取消而未完整执行。此方法作为兜底，在 executor 层
+        同步地检查并修复 pending 节点状态。
+        """
+        try:
+            agent = self._agent
+            trace = agent.trace
+            current_node_id = agent.current_node_id
+            
+            if not current_node_id or current_node_id == "root":
+                return
+            
+            node = trace.get_node(current_node_id)
+            # 只处理 result 仍为 pending 的节点（说明 _execute_tool 的善后没执行到）
+            if (isinstance(node.result, dict) and 
+                node.result.get("status") == "pending"):
+                cancelled_result = {
+                    "status": "cancelled",
+                    "error_information": "用户强制中断（Ctrl+C）",
+                    "output": "",
+                }
+                trace.update_node_result(
+                    current_node_id, cancelled_result, {}
+                )
+                # 同时保存 result.json 到节点目录
+                from pathlib import Path
+                import json
+                node_dir = trace.fs.get_node_dir(current_node_id)
+                result_file = Path(node_dir) / "result.json"
+                result_file.write_text(
+                    json.dumps(cancelled_result, indent=2, ensure_ascii=False),
+                    encoding="utf-8"
+                )
+                logger.info(
+                    f"[ReactTurnExecutorV2] 兜底: 节点 {current_node_id} "
+                    f"已从 pending 标记为 cancelled"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[ReactTurnExecutorV2] _finalize_cancelled_node 失败: {e}"
+            )
+
     async def run_turn(self, user_input: str, use_stream: bool) -> dict:
         """
         执行一轮用户输入。
@@ -275,6 +321,9 @@ class ReactTurnExecutorV2:
             state = await self.running_task
             return state
         except asyncio.CancelledError:
+            # 确保 agent 内部的 pending 节点被标记为 cancelled
+            # （_execute_tool 内的 CancelledError 善后可能因 task 取消而未完整执行）
+            self._finalize_cancelled_node()
             return {
                 "current_step": "cancelled_by_user",
                 "should_continue": True,
