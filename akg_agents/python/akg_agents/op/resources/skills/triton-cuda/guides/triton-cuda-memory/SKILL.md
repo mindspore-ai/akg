@@ -1,6 +1,6 @@
 ---
 name: triton-cuda-memory
-description: "内存访问优化策略和数据布局技巧"
+description: "CUDA GPU 内存访问优化策略，包括共享内存利用、合并访存、Bank Conflict 避免和数据布局优化技巧。适用于内存带宽受限、需要优化全局内存访问效率、或处理大规模数据的 CUDA 内核性能优化场景"
 level: L4
 category: implementation
 version: "1.0.0"
