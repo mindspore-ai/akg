@@ -21,6 +21,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <unordered_set>
 
 #include "akg/Analysis/BufferAnalysis.h"
@@ -146,7 +147,8 @@ static LogicalResult prepareTileSizesFromMemref(func::FuncOp originalKernel,
 
 // Tiling function creation helpers
 static void buildTilingFunctionSignature(FunctionType origTy, MLIRContext *ctx, OpBuilder &builder,
-                                         SmallVector<Type> &argTypes, SmallVector<Type> &resTypes);
+                                         SmallVector<Type> &argTypes, SmallVector<Type> &resTypes,
+                                         int64_t tilingStructMemrefSize);
 static func::FuncOp createAndInitTilingFunc(func::FuncOp originalKernel, ArrayRef<Type> argTypes,
                                             ArrayRef<Type> resTypes, OpBuilder &builder);
 static LogicalResult storeTileSizesToMemref(func::FuncOp tilingFunc, func::FuncOp originalKernel,
@@ -1020,6 +1022,76 @@ static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const
   }
 }
 
+static bool buildLoopBoundsForTileLevel(int i, int j, int bandSize, int tileNum, int curTile, int lastTile,
+                                        MutableArrayRef<mlir::scf::ForOp> newLoops, ArrayRef<mlir::scf::ForOp> band,
+                                        ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
+                                        const SmallVectorImpl<SmallVector<std::pair<Value, Value>, 4>> &tileLevelInfo,
+                                        mlir::Location loc, mlir::OpBuilder &loopBuilder,
+                                        std::map<int64_t, Value> &constantCache, bool escapeReduceIterArgs,
+                                        LoopBounds &bounds) {
+  mlir::scf::ForOp origLoop = band[j];
+
+  if (i == 0) {
+    unsigned tilesizeInt =
+      (curTile < static_cast<int>(tileSizesInt.size())) ? tileSizesInt[curTile] : static_cast<unsigned>(-1);
+    bounds = createFirstLevelTileLoopBounds(loc, origLoop, tileSizeValues[curTile], tilesizeInt, loopBuilder,
+                                            constantCache, escapeReduceIterArgs);
+    return true;
+  }
+
+  if (lastTile < 0 || lastTile >= static_cast<int>(newLoops.size())) {
+    return false;
+  }
+  mlir::scf::ForOp prevLoop = newLoops[lastTile];
+
+  if (i == tileNum) {
+    bounds = createPointLoopBounds(loc, origLoop, tileSizeValues[lastTile], tileLevelInfo[j], prevLoop, loopBuilder,
+                                   constantCache);
+    return true;
+  }
+
+  int upperTile = (i - 1) * bandSize + j;
+  mlir::scf::ForOp upperLoop =
+    (upperTile >= 0 && upperTile < static_cast<int>(newLoops.size())) ? newLoops[upperTile] : mlir::scf::ForOp();
+  bounds = createMiddleLevelTileLoopBounds(loc, origLoop, tileSizeValues[curTile], prevLoop, upperLoop, loopBuilder,
+                                           constantCache, escapeReduceIterArgs);
+  return true;
+}
+
+static void updateReductionAttrsForTileLoop(int i, int j, int bandSize, int tileNum, mlir::scf::ForOp origLoop,
+                                            mlir::scf::ForOp newLoop, mlir::OpBuilder &builder) {
+  if (!origLoop || !origLoop->hasAttr(kReductionLoopAttr)) {
+    return;
+  }
+
+  // For reduction loops: delete only middle-level trivial wrappers (no iter_args/results).
+  // Keep first-level loops (i==0) even if trivial so the outermost loop stays no-iter_args
+  // as required by later parallel passes.
+  if (i > 0 && i < tileNum && newLoop.getNumResults() == 0 && newLoop.getNumRegionIterArgs() == 0) {
+    newLoop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
+  }
+
+  // For inner point loop: preserve reduction attribute from original loop.
+  if (i == tileNum && j == (bandSize - 1)) {
+    newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(kVectorSize));
+  }
+}
+
+static void recordTileLevelInfoForLoop(int i, int j, int tileNum, int curTile, ArrayRef<Value> tileSizeValues,
+                                       Value kernelsizeConstant, mlir::scf::ForOp newLoop,
+                                       SmallVectorImpl<SmallVector<std::pair<Value, Value>, 4>> &tileLevelInfo) {
+  if (i >= tileNum || curTile >= static_cast<int>(tileSizeValues.size())) {
+    return;
+  }
+
+  Value tilesizeToRecord = tileSizeValues[curTile];
+  // For dynamic first level: use kernelsize instead of ceildiv result.
+  if (i == 0 && !getConstantIndexValue(tilesizeToRecord)) {
+    tilesizeToRecord = kernelsizeConstant;
+  }
+  tileLevelInfo[j].push_back({newLoop.getInductionVar(), tilesizeToRecord});
+}
+
 // Helper: Process a single tile loop (extracted to reduce cyclomatic complexity)
 static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, MutableArrayRef<mlir::scf::ForOp> newLoops,
                                   ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
@@ -1029,78 +1101,31 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, Mutab
                                   const llvm::DenseSet<mlir::Operation *> &escapeReduceLoops) {
   int curTile = i * bandSize + j;
   int lastTile = curTile - bandSize;
-
   if (curTile >= static_cast<int>(newLoops.size())) {
     return;
   }
+
   mlir::scf::ForOp loop = newLoops[curTile];
   if (!loop) {
     return;
   }
 
-  mlir::OpBuilder loopBuilder(loop);
   mlir::scf::ForOp origLoop = band[j];
-  LoopBounds bounds;
+  mlir::OpBuilder loopBuilder(loop);
   bool escapeReduceIterArgs = origLoop && escapeReduceLoops.contains(origLoop.getOperation());
 
-  // Determine loop bounds based on level
-  if (i == 0) {
-    // First level tile loop
-    unsigned tilesizeInt =
-      (curTile < static_cast<int>(tileSizesInt.size())) ? tileSizesInt[curTile] : static_cast<unsigned>(-1);
-
-    bounds = createFirstLevelTileLoopBounds(loc, origLoop, tileSizeValues[curTile], tilesizeInt, loopBuilder,
-                                            constantCache, escapeReduceIterArgs);
-  } else if (i == tileNum) {
-    // Point loop
-    if (lastTile < 0 || lastTile >= static_cast<int>(newLoops.size())) return;
-    mlir::scf::ForOp prevLoop = newLoops[lastTile];
-
-    bounds = createPointLoopBounds(loc, origLoop, tileSizeValues[lastTile], tileLevelInfo[j], prevLoop, loopBuilder,
-                                   constantCache);
-  } else {
-    // Middle level tile loop
-    if (lastTile < 0 || lastTile >= static_cast<int>(newLoops.size())) return;
-    mlir::scf::ForOp prevLoop = newLoops[lastTile];
-
-    int upperTile = (i - 1) * bandSize + j;
-    mlir::scf::ForOp upperLoop =
-      (upperTile >= 0 && upperTile < static_cast<int>(newLoops.size())) ? newLoops[upperTile] : mlir::scf::ForOp();
-
-    bounds = createMiddleLevelTileLoopBounds(loc, origLoop, tileSizeValues[curTile], prevLoop, upperLoop, loopBuilder,
-                                             constantCache, escapeReduceIterArgs);
+  LoopBounds bounds;
+  if (!buildLoopBoundsForTileLevel(i, j, bandSize, tileNum, curTile, lastTile, newLoops, band, tileSizeValues,
+                                   tileSizesInt, tileLevelInfo, loc, loopBuilder, constantCache, escapeReduceIterArgs,
+                                   bounds)) {
+    return;
   }
 
-  // Replace old loop with new one
   mlir::scf::ForOp newLoop = replaceLoopWithNewBounds(loop, bounds, loc, loopBuilder);
-
   newLoops[curTile] = newLoop;
 
-  // For reduction loops: delete only middle-level trivial wrappers (no iter_args/results).
-  // Keep first-level loops (i==0) even if trivial so the outermost loop stays no-iter_args
-  // as required by later parallel passes.
-  if (origLoop->hasAttr(kReductionLoopAttr) && i > 0 && i < tileNum) {
-    if (newLoop.getNumResults() == 0 && newLoop.getNumRegionIterArgs() == 0) {
-      newLoop->setAttr(kDeleteLoopAttr, loopBuilder.getUnitAttr());
-    }
-  }
-
-  // For inner point loop: preserve reduction attribute from original loop
-  if (i == tileNum && origLoop->hasAttr(kReductionLoopAttr) && j == (bandSize - 1)) {
-    newLoop->setAttr(kReductionLoopAttr, loopBuilder.getI64IntegerAttr(kVectorSize));
-  }
-
-  // Record tile level info for future offset calculations
-  if (i < tileNum && curTile < static_cast<int>(tileSizeValues.size())) {
-    Value tilesizeToRecord = tileSizeValues[curTile];
-
-    // For dynamic first level: use kernelsize instead of ceildiv result
-    if (i == 0 && !getConstantIndexValue(tilesizeToRecord)) {
-      tilesizeToRecord = kernelsizeConstant;
-    }
-
-    tileLevelInfo[j].push_back({newLoop.getInductionVar(), tilesizeToRecord});
-  }
+  updateReductionAttrsForTileLoop(i, j, bandSize, tileNum, origLoop, newLoop, loopBuilder);
+  recordTileLevelInfoForLoop(i, j, tileNum, curTile, tileSizeValues, kernelsizeConstant, newLoop, tileLevelInfo);
 }
 
 // Helper function to construct tiled index (bounds and steps) using tileSizeValues from memref
@@ -1330,6 +1355,63 @@ static LogicalResult createTailBlockDynamicImpl(mlir::scf::ForOp forOp, mlir::Va
   return success();
 }
 
+static bool hasCompatibleTileLayout(unsigned tileSizesNum, unsigned forNum) {
+  return tileSizesNum != 0 && forNum != 0 && tileSizesNum >= forNum && tileSizesNum % forNum == 0;
+}
+
+static llvm::DenseSet<mlir::Operation *> collectEscapingReductionLoops(ArrayRef<mlir::scf::ForOp> band) {
+  llvm::DenseSet<mlir::Operation *> escapeReduceLoops;
+  if (band.empty()) {
+    return escapeReduceLoops;
+  }
+
+  mlir::scf::ForOp bandRoot = band.front();
+  for (mlir::scf::ForOp loop : band) {
+    if (isLoopResultEscapingBand(loop, bandRoot)) {
+      escapeReduceLoops.insert(loop.getOperation());
+    }
+  }
+  return escapeReduceLoops;
+}
+
+static LogicalResult cloneAndWireTiledLoops(ArrayRef<mlir::scf::ForOp> band,
+                                            MutableArrayRef<mlir::scf::ForOp> tiledLoops, unsigned tileSizesNum,
+                                            mlir::scf::ForOp rootScfForOp, OpBuilder &builder) {
+  mlir::IRMapping mapping;
+  if (failed(cloneNonPerfectChainIntoPointLoops(band, tiledLoops, tileSizesNum, builder, mapping))) {
+    return failure();
+  }
+  if (failed(cloneComputeIntoInnermostPointLoop(band, tiledLoops, tileSizesNum, rootScfForOp, builder, mapping))) {
+    return failure();
+  }
+  updatePointLoopYieldsFromOriginalLoops(band, tiledLoops, tileSizesNum, mapping, builder);
+  forwardIterArgsThroughWrapperLoops(tiledLoops, builder);
+  return success();
+}
+
+static LogicalResult finalizeRootLoopAfterTiling(mlir::scf::ForOp rootScfForOp,
+                                                 MutableArrayRef<mlir::scf::ForOp> tiledLoops, unsigned tileSizesNum,
+                                                 unsigned forNum,
+                                                 const llvm::DenseSet<mlir::Operation *> &escapeReduceLoops,
+                                                 OpBuilder &builder) {
+  bool rootEscape = escapeReduceLoops.contains(rootScfForOp.getOperation());
+  if (isReductionLoopWithIterArgs(rootScfForOp) && rootEscape) {
+    if (failed(sinkReduceLoopResultsToMiddleLevel(rootScfForOp, tiledLoops, tileSizesNum, forNum, builder))) {
+      return failure();
+    }
+  } else if (rootScfForOp.getNumResults() > 0 && tiledLoops[0]) {
+    // Replace original loop's results with outermost tiled loop's results before erasing.
+    if (tiledLoops[0].getNumResults() == rootScfForOp.getNumResults()) {
+      rootScfForOp.replaceAllUsesWith(tiledLoops[0].getResults());
+    } else if (!rootScfForOp.use_empty()) {
+      return failure();
+    }
+  }
+
+  rootScfForOp.erase();
+  return success();
+}
+
 // Helper function to apply tiling to a single band using tileSizeValues from memref
 static LogicalResult applyTilingToBand(ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
                                        ArrayRef<unsigned> tileSizesInt, OpBuilder &builder,
@@ -1344,69 +1426,28 @@ static LogicalResult applyTilingToBand(ArrayRef<mlir::scf::ForOp> band, ArrayRef
 
   unsigned forNum = band.size();
   unsigned tileSizesNum = tileSizeValues.size();
-  if (tileSizesNum == 0 || forNum == 0) {
-    return success();
-  }
-
-  if (tileSizesNum >= forNum && tileSizesNum % forNum == 0) {
-    mlir::scf::ForOp rootScfForOp = band[0];
-    unsigned width = tileSizesNum + forNum;
-    SmallVector<mlir::scf::ForOp, 6> tiledLoops(width);
-
-    constructTiledLoopStatic(rootScfForOp, width, tiledLoops, builder, constantCache);
-
-    // Determine which reduction loops have results escaping the band.
-    llvm::DenseSet<mlir::Operation *> escapeReduceLoops;
-    if (!band.empty()) {
-      mlir::scf::ForOp bandRoot = band.front();
-      for (mlir::scf::ForOp loop : band) {
-        if (isLoopResultEscapingBand(loop, bandRoot)) {
-          escapeReduceLoops.insert(loop.getOperation());
-        }
-      }
-    }
-
-    // CRITICAL: Replace all dummy loops first, BEFORE cloning any operations!
-    // This ensures that when we clone ops and establish IV mapping,
-    // we map to the FINAL loop IVs, not the dummy ones.
-    mlir::IRMapping dummyMapping;  // Unused, but required by constructTiledIndexStatic
-    constructTiledIndexStatic(tiledLoops, band, tileSizeValues, tileSizesInt, builder, constantCache, dummyMapping,
-                              escapeReduceLoops);
-
-    // NOW clone operations with correct IV mapping to final loops
-    mlir::IRMapping mapping;
-    if (failed(cloneNonPerfectChainIntoPointLoops(band, tiledLoops, tileSizesNum, builder, mapping))) {
-      return failure();
-    }
-
-    if (failed(cloneComputeIntoInnermostPointLoop(band, tiledLoops, tileSizesNum, rootScfForOp, builder, mapping))) {
-      return failure();
-    }
-
-    updatePointLoopYieldsFromOriginalLoops(band, tiledLoops, tileSizesNum, mapping, builder);
-    forwardIterArgsThroughWrapperLoops(tiledLoops, builder);
-
-    bool rootEscape = escapeReduceLoops.contains(rootScfForOp.getOperation());
-    if (isReductionLoopWithIterArgs(rootScfForOp) && rootEscape) {
-      if (failed(sinkReduceLoopResultsToMiddleLevel(rootScfForOp, tiledLoops, tileSizesNum, forNum, builder))) {
-        return failure();
-      }
-    } else {
-      // Replace original loop's results with outermost tiled loop's results before erasing.
-      if (rootScfForOp.getNumResults() > 0 && tiledLoops[0]) {
-        if (tiledLoops[0].getNumResults() == rootScfForOp.getNumResults()) {
-          rootScfForOp.replaceAllUsesWith(tiledLoops[0].getResults());
-        } else if (!rootScfForOp.use_empty()) {
-          return failure();
-        }
-      }
-    }
-    rootScfForOp.erase();
-  } else {
+  if (!hasCompatibleTileLayout(tileSizesNum, forNum)) {
     return failure();
   }
 
-  return success();
+  mlir::scf::ForOp rootScfForOp = band[0];
+  unsigned width = tileSizesNum + forNum;
+  SmallVector<mlir::scf::ForOp, 6> tiledLoops(width);
+
+  constructTiledLoopStatic(rootScfForOp, width, tiledLoops, builder, constantCache);
+
+  llvm::DenseSet<mlir::Operation *> escapeReduceLoops = collectEscapingReductionLoops(band);
+
+  // Replace all dummy loops first, before cloning operations, so IV mapping points to final loops.
+  mlir::IRMapping dummyMapping;  // Unused, but required by constructTiledIndexStatic.
+  constructTiledIndexStatic(tiledLoops, band, tileSizeValues, tileSizesInt, builder, constantCache, dummyMapping,
+                            escapeReduceLoops);
+
+  if (failed(cloneAndWireTiledLoops(band, tiledLoops, tileSizesNum, rootScfForOp, builder))) {
+    return failure();
+  }
+
+  return finalizeRootLoopAfterTiling(rootScfForOp, tiledLoops, tileSizesNum, forNum, escapeReduceLoops, builder);
 }
 
 // Helper function to collect bands from a function
@@ -1612,14 +1653,13 @@ static void inlineReducePointLoops(func::FuncOp funcOp, OpBuilder &builder) {
 
 // Helper: Build tiling function signature (add tiling key and data memref args)
 static void buildTilingFunctionSignature(FunctionType origTy, MLIRContext *ctx, OpBuilder &builder,
-                                         SmallVector<Type> &argTypes, SmallVector<Type> &resTypes) {
-  static constexpr int64_t kTilingStructMemrefSize = 64;
-
+                                         SmallVector<Type> &argTypes, SmallVector<Type> &resTypes,
+                                         int64_t tilingStructMemrefSize) {
   argTypes.assign(origTy.getInputs().begin(), origTy.getInputs().end());
 
   auto i64Ty = builder.getI64Type();
   auto llvmPtrTy = LLVM::LLVMPointerType::get(ctx);
-  auto memrefTy = MemRefType::get({kTilingStructMemrefSize}, i64Ty);
+  auto memrefTy = MemRefType::get({tilingStructMemrefSize}, i64Ty);
 
   argTypes.push_back(llvmPtrTy);
   argTypes.push_back(memrefTy);
@@ -1783,42 +1823,43 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
   auto *mlirCtx = builder.getContext();
   auto loc = originalKernel.getLoc();
   auto origTy = originalKernel.getFunctionType();
+  int64_t tilingStructMemrefSize = 1;
 
-  // Step 1: Build function signature
-  SmallVector<Type> argTypes, resTypes;
-  mlirCtx->getOrLoadDialect<LLVM::LLVMDialect>();
-  buildTilingFunctionSignature(origTy, mlirCtx, builder, argTypes, resTypes);
-
-  // Step 2: Create and initialize tiling function
-  func::FuncOp f = createAndInitTilingFunc(originalKernel, argTypes, resTypes, builder);
-
-  // Step 3: Static-shape path doesn't need auto-tiling solve in create stage.
-  if (isStaticShape) {
-    OpBuilder b(&f.getBody().front(), f.getBody().front().end());
-    b.create<func::ReturnOp>(loc);
-    tilingFunc = f;
-    return success();
-  }
-
-  // Step 4: Calculate tile sizes (with constraint max for dynamic shapes)
+  // Step 1: Dynamic-shape path computes tile metadata to derive tiling struct size.
   std::vector<SmallVector<mlir::scf::ForOp, 6>> bands;
   std::vector<SmallVector<unsigned, 6>> allBandTileSizes;
   std::vector<SmallVector<int, 6>> allBandConstraintMaxs;
-  size_t levelToTile = 0;
-  if (failed(
-        calculateAllBandTileSizes(originalKernel, true, bands, allBandTileSizes, allBandConstraintMaxs, levelToTile))) {
-    return failure();
+  if (!isStaticShape) {
+    size_t levelToTile = 0;
+    if (failed(calculateAllBandTileSizes(originalKernel, true, bands, allBandTileSizes, allBandConstraintMaxs,
+                                         levelToTile))) {
+      return failure();
+    }
+
+    tilingStructMemrefSize = std::accumulate(allBandTileSizes.begin(), allBandTileSizes.end(), int64_t{0},
+                                             [](int64_t acc, const SmallVector<unsigned, 6> &bandTileSizes) {
+                                               return acc + static_cast<int64_t>(bandTileSizes.size());
+                                             });
+    if (tilingStructMemrefSize <= 0) tilingStructMemrefSize = 1;
   }
 
-  // Step 5: For simple case (no bands), just return
-  if (bands.empty()) {
+  // Step 2: Build function signature
+  SmallVector<Type> argTypes, resTypes;
+  mlirCtx->getOrLoadDialect<LLVM::LLVMDialect>();
+  buildTilingFunctionSignature(origTy, mlirCtx, builder, argTypes, resTypes, tilingStructMemrefSize);
+
+  // Step 3: Create and initialize tiling function.
+  func::FuncOp f = createAndInitTilingFunc(originalKernel, argTypes, resTypes, builder);
+
+  // Step 4: Static-shape or no-band path doesn't need memref store in create stage.
+  if (isStaticShape || bands.empty()) {
     OpBuilder b(&f.getBody().front(), f.getBody().front().end());
     b.create<func::ReturnOp>(loc);
     tilingFunc = f;
     return success();
   }
 
-  // Step 6: Build dynamic axis mappings (reuse existing function)
+  // Step 5: Build dynamic axis mappings (reuse existing function)
   std::vector<std::vector<DynamicAxisMapping>> allBandDynamicMappings;
   for (size_t bandIdx = 0; bandIdx < bands.size(); ++bandIdx) {
     const auto &bandTileSizes = allBandTileSizes[bandIdx];
@@ -1826,7 +1867,7 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
     allBandDynamicMappings.push_back(buildDynamicAxisMappingForBand(curBand, bandTileSizes, originalKernel));
   }
 
-  // Step 7: Store tile sizes to memref (with constraint max for dynamic shapes)
+  // Step 6: Store tile sizes to memref (with constraint max for dynamic shapes)
   if (failed(storeTileSizesToMemref(f, originalKernel, bands, allBandTileSizes, allBandConstraintMaxs,
                                     allBandDynamicMappings, builder))) {
     return failure();
