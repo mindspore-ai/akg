@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_INCLUDE_ANALYSIS_GRAPH_H_
-#define MFUSION_INCLUDE_ANALYSIS_GRAPH_H_
+#ifndef MFUSION_INCLUDE_ANALYSIS_CLUSTER_GRAPH_H_
+#define MFUSION_INCLUDE_ANALYSIS_CLUSTER_GRAPH_H_
 
 #include <functional>
 #include <memory>
@@ -175,4 +175,4 @@ class CircleChecker {
 
 }  // namespace mlir
 
-#endif  // MFUSION_INCLUDE_ANALYSIS_GRAPH_H_
+#endif  // MFUSION_INCLUDE_ANALYSIS_CLUSTER_GRAPH_H_
