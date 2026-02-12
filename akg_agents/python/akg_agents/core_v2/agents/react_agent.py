@@ -865,10 +865,7 @@ class ReActAgent(AgentBase, ABC):
                 task_info=TaskInfo(
                     task_id=self.task_id,
                     task_input=user_input,
-                    op_name=extra_info.get("op_name", ""),
-                    dsl=extra_info.get("dsl", ""),
-                    backend=extra_info.get("backend", ""),
-                    arch=extra_info.get("arch", ""),
+                    metadata=extra_info,
                     domain=self._get_domain(),
                 ).to_dict(),
                 execution_info=ExecutionInfo(

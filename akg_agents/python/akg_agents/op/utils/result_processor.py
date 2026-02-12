@@ -99,9 +99,9 @@ class ResultProcessor:
                         # 也添加到保存列表
                         params_to_save.append((field_name, field_value))
 
-            # 保存解析后的代码到文件
+            # 保存解析后的代码到文件（通用接口，兼容 Trace 和 TraceSystem）
             if params_to_save:
-                trace.save_parsed_code(agent_name, params_to_save)
+                trace.log_merged_record(agent_name, params_to_save)
 
             logger.debug(f"Parsed and updated {agent_name} fields: {len(params_to_save)} fields")
             return True

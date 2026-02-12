@@ -192,14 +192,11 @@ class RouterFactory:
             result = await client.generate(messages, stream=False)
             response_text = result.get("content", "")
             
-            # 记录 LLM 调用到 trace（兼容新旧 Trace 接口）
-            if hasattr(trace, 'insert_conductor_agent_record'):
-                trace.insert_conductor_agent_record(
-                    res=response_text,
-                    prompt=prompt,
-                    reasoning="",  # AsyncOpenAI 没有 reasoning
-                    agent_name="decision"
-                )
+            # 记录 LLM 调用到 trace（通用接口，兼容 Trace 和 TraceSystem）
+            trace.log_record("decision", [
+                ('result', response_text),
+                ('prompt', prompt),
+            ], subdirectory="conductor")
             
             # 解析结果（使用 ResultProcessor，与 Conductor 一致）
             agent_decision, suggestion = ResultProcessor.parse_conductor_decision(
@@ -255,12 +252,13 @@ class RouterFactory:
         ]
     
     @staticmethod
-    def create_code_checker_router(config: dict, max_check_retries: int = 2):
+    def create_code_checker_router(config: dict, max_check_retries: int = 2, code_gen_agent: str = "coder"):
         """创建 CodeChecker 后的路由决策
         
         Args:
             config: 配置字典
-            max_check_retries: 最大重试次数（检查失败后回到 Coder 的次数）
+            max_check_retries: 最大重试次数（检查失败后回到代码生成 agent 的次数）
+            code_gen_agent: 代码生成 agent 名称（默认 "coder"，KernelGen 流程使用 "kernel_gen"）
         
         Returns:
             路由函数
@@ -269,7 +267,7 @@ class RouterFactory:
             """CodeChecker 后的路由决策
             
             - 检查通过 → 进入 verifier
-            - 检查失败 → 回到 coder 修复（带上错误信息）
+            - 检查失败 → 回到代码生成 agent 修复（带上错误信息）
             - 多次失败 → 强制进入 verifier（避免死循环）
             """
             task_id = state.get('task_id', '0')
@@ -282,13 +280,13 @@ class RouterFactory:
             # 检查失败，统计重试次数
             agent_history = list(state.get("agent_history", []))
             
-            # 统计连续的 code_checker -> coder 循环次数
+            # 统计连续的 code_checker -> code_gen_agent 循环次数
             check_retry_count = 0
             for i in range(len(agent_history) - 1, -1, -1):
                 if agent_history[i] == "code_checker":
                     check_retry_count += 1
-                elif agent_history[i] == "coder":
-                    continue  # 跳过 coder，继续统计
+                elif agent_history[i] == code_gen_agent:
+                    continue  # 跳过代码生成 agent，继续统计
                 else:
                     break  # 遇到其他 agent，停止统计
             
@@ -301,9 +299,9 @@ class RouterFactory:
             
             logger.info(
                 f"[Task {task_id}] CodeChecker failed (retry {check_retry_count}/{max_check_retries}), "
-                f"routing back to coder for fix"
+                f"routing back to {code_gen_agent} for fix"
             )
-            return "coder"
+            return code_gen_agent
         
         return route_after_code_checker
     

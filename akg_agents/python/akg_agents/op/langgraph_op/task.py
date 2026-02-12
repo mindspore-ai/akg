@@ -221,15 +221,21 @@ class LangGraphTask(BaseLangGraphTask):
             logger.debug(traceback.format_exc())
         
         # KernelGen (基于 Skill 系统的代码生成)
-        try:
-            from akg_agents.op.agents.kernel_gen import KernelGen
-            agents['kernel_gen'] = KernelGen(
-                parser_config_path=parser_config_path
-            )
-        except Exception as e:
-            logger.warning(f"Failed to initialize KernelGen: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
+        # adaptive_search / evolve 流程使用 default_workflow（Designer+Coder+Verifier），
+        # 不需要 KernelGen 和 Skill 系统。通过 config["skip_kernel_gen"]=True 跳过，
+        # 避免不必要的 Skill 加载开销。
+        if not self.config.get("skip_kernel_gen", False):
+            try:
+                from akg_agents.op.agents.kernel_gen import KernelGen
+                agents['kernel_gen'] = KernelGen(
+                    parser_config_path=parser_config_path
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize KernelGen: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+        else:
+            logger.info("[LangGraphTask] skip_kernel_gen=True, 跳过 KernelGen 初始化（不加载 Skill）")
         
         # Verifier
         try:

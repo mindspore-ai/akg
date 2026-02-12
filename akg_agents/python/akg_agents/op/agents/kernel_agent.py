@@ -212,10 +212,12 @@ class KernelAgent(ReActAgent):
         """动态加载所有注册的 Workflow"""
         from akg_agents.core_v2.workflows.registry import WorkflowRegistry
         
-        # 只导入 kernelgen_only_workflow（触发 @register_workflow 装饰器）
+        # 导入 workflows（触发 @register_workflow 装饰器）
         try:
             from akg_agents.op.workflows import (
                 kernelgen_only_workflow,  # noqa: F401  基于 Skill 系统的代码生成
+                evolve_workflow,          # noqa: F401  进化式算子生成
+                adaptive_search_workflow, # noqa: F401  自适应搜索算子生成
             )
         except Exception as e:
             logger.warning(f"[KernelAgent] 导入 workflows 失败: {e}")
@@ -396,8 +398,14 @@ class KernelAgent(ReActAgent):
         if self._workflow_resources is None:
             logger.info("[KernelAgent] 初始化 workflow 资源...")
             
+            from akg_agents.op.workflows.base_workflow import OpBaseWorkflow
+            
+            workflow_config = OpBaseWorkflow.build_langgraph_task_config(
+                dsl=self.dsl,
+                backend=self.backend,
+            )
+            
             # 初始化 agents（延迟加载，避免循环依赖）
-            # KernelGenOnlyWorkflow 需要 kernel_gen 和 verifier
             from akg_agents.op.agents.kernel_gen import KernelGen
             from akg_agents.op.verifier.kernel_verifier import KernelVerifier
             
@@ -405,15 +413,7 @@ class KernelAgent(ReActAgent):
                 # 创建 KernelGen（不需要 op 特定参数）
                 kernel_gen = KernelGen()
                 
-                # 创建 verifier config（必需参数）
-                # log_dir 用于存放验证过程的临时文件和日志
-                import os
-                verifier_config = {
-                    "log_dir": os.path.expanduser("~/.akg/verify_logs"),
-                }
-                
                 # 创建 KernelVerifier（使用占位符，实际值会在 verifier node 运行时从 state 更新）
-                # 这种延迟初始化模式允许在不知道具体 op 信息时创建 verifier
                 verifier = KernelVerifier(
                     op_name="placeholder",  # 会被 verifier node 从 state 更新
                     framework_code="",      # 会被 verifier node 从 state 更新
@@ -422,7 +422,7 @@ class KernelAgent(ReActAgent):
                     dsl=self.dsl,
                     backend=self.backend,
                     arch=self.arch,
-                    config=verifier_config  # 必需参数
+                    config=workflow_config   # 使用完整 config
                 )
                 
                 agents = {
@@ -432,7 +432,6 @@ class KernelAgent(ReActAgent):
                 logger.info(f"[KernelAgent] 成功初始化 {len(agents)} 个 agents: {list(agents.keys())}")
             except Exception as e:
                 logger.error(f"[KernelAgent] 初始化 agents 失败: {e}", exc_info=True)
-                # 提供空的 agents 作为降级
                 agents = {}
             
             # 使用全局 WorkerManager 管理 worker
@@ -442,7 +441,7 @@ class KernelAgent(ReActAgent):
                 "agents": agents,
                 "device_pool": None,
                 "trace": self.trace,
-                "config": verifier_config,  # 传递 verifier config
+                "config": workflow_config,   # 使用完整 config
                 "private_worker": None,
                 "worker_manager": get_worker_manager(),
                 "backend": self.backend,

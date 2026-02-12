@@ -221,7 +221,7 @@ class SingleKernelTester:
             
             # 复制结果JSON到输出目录
             expanded_log_dir = os.path.expanduser(self.config.get('log_dir', '~/akg_agents_logs'))
-            verify_dir_actual = os.path.join(expanded_log_dir, verifier_op_name, f"Itest_{self.kernel_name}_S00_verify")
+            verify_dir_actual = os.path.join(expanded_log_dir, verifier_op_name, f"Itest_{self.kernel_name}_Step00_verify")
             results_json = os.path.join(verify_dir_actual, "verification_results.json")
             if os.path.exists(results_json):
                 shutil.copy(

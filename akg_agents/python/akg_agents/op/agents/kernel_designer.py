@@ -48,7 +48,7 @@ SKILLS_DIR = project_root / "op" / "resources" / "skills"
 logger = logging.getLogger(__name__)
 
 
-register_agent(scopes=["op"])
+@register_agent(scopes=["op"])
 class KernelDesigner(AgentBase):
     """
     Kernel 算法草图设计 Agent
@@ -57,7 +57,7 @@ class KernelDesigner(AgentBase):
     """
     
     # Agent 工具配置元数据
-    TOOL_NAME = "call_kernel_designer"
+    TOOL_NAME = "call_kernel_design"
     DESCRIPTION = """
 仅生成算法设计方案/草图（sketch），不生成完整代码。
 

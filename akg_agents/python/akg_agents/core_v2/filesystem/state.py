@@ -142,6 +142,10 @@ class FileSystemState:
         """获取节点动作目录路径"""
         return self.get_node_dir(node_id) / "actions"
     
+    def get_node_logs_dir(self, node_id: str) -> Path:
+        """获取节点日志目录路径"""
+        return self.get_node_dir(node_id) / "logs"
+    
     def get_system_prompts_dir(self, node_id: str) -> Path:
         """获取节点系统提示词目录路径"""
         return self.get_node_dir(node_id) / "system_prompts"

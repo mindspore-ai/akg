@@ -146,7 +146,7 @@ def print_result(result):
             speedup = impl.get('speedup', 0)
             generation = impl.get('generation', 0)
             parent_id = impl.get('parent_id', None)
-            # verify_dir 现在是目录名（如 Iinit_1_S02_verify）而不是完整路径
+            # verify_dir 现在是目录名（如 Iteration_Init_Task1_Step02_verify）而不是完整路径
             verify_dir = impl.get('verify_dir', '')
             
             # 父代描述
