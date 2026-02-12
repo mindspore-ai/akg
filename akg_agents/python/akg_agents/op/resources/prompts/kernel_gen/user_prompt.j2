@@ -90,17 +90,8 @@
 
 ## 相关技能和知识
 
-{% if skills %}
-{% for skill in skills %}
-### Skill: {{ skill.name }}
-
-**描述**: {{ skill.description }}
-
-{{ skill.content }}
-
-================================================================================
-
-{% endfor %}
+{% if skill_contents %}
+{{ skill_contents }}
 {% else %}
 暂无相关 Skill。
 {% endif %}
