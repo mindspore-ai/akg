@@ -32,6 +32,7 @@ ReActAgent - ReAct 模式 Agent 基类
 - _get_task_info_extra(): 获取任务信息的额外字段（可选）
 """
 
+import asyncio
 import logging
 import time
 import json
@@ -316,10 +317,16 @@ class ReActAgent(AgentBase, ABC):
                 self._handle_user_response(user_input)
                 logger.info(f"[Resume] 恢复后处理 ask_user 响应: {user_input[:50]}...")
         else:
-            # 判断是对 ask_user 的响应，还是新任务
+            # 判断是对 ask_user 的响应、取消后的续接、还是新任务
             current_node = self.trace.get_node(self.current_node_id)
             is_ask_user_response = (current_node.action and 
                                    current_node.action.get("type") == "ask_user")
+            
+            # 检查当前节点是否是被取消的节点
+            is_cancelled_node = (
+                isinstance(current_node.result, dict) and
+                current_node.result.get("status") == "cancelled"
+            )
             
             if is_ask_user_response:
                 # 如果该 ask_user 节点已有子节点，说明之前被跳过了
@@ -330,6 +337,11 @@ class ReActAgent(AgentBase, ABC):
                     logger.info(f"[跳过] ask_user 节点 {self.current_node_id} 已被跳过（有子节点但未回答）")
                 # 用户在回答问题
                 self._handle_user_response(user_input)
+            elif is_cancelled_node:
+                # 用户在取消后继续输入：作为对当前任务的补充/修正
+                # 保留 original_user_input 和 plan_list，不重置状态
+                self._handle_user_continuation(user_input)
+                logger.info(f"[续接] 取消后用户补充输入: {user_input[:50]}...")
             else:
                 # 新任务：重置状态
                 logger.info(f"[新任务] 重置状态，开始新任务")
@@ -345,7 +357,13 @@ class ReActAgent(AgentBase, ABC):
             cur_path = str(self.trace.fs.get_node_dir(self.current_node_id))
             
             # ====== STEP 2: LLM 调用（cur_path 注入 prompt） ======
-            llm_response = await self._get_next_action(cur_path=cur_path)
+            try:
+                llm_response = await self._get_next_action(cur_path=cur_path)
+            except asyncio.CancelledError:
+                # 取消发生在等待 LLM 响应时，没有 pending 节点需要更新
+                # 直接向上抛出，让 ReactTurnExecutorV2 处理
+                logger.info("[ReAct] 用户取消（等待 LLM 响应时）")
+                raise
             
             if not llm_response:
                 return self._build_error_response("LLM 调用失败")
@@ -424,7 +442,35 @@ class ReActAgent(AgentBase, ABC):
         
         # ====== 4. 执行工具 ======
         start_time = time.time()
-        result = await self.tool_executor.execute(tool_name, arguments)
+        try:
+            result = await self.tool_executor.execute(tool_name, arguments)
+        except asyncio.CancelledError:
+            # 用户 Ctrl+C 取消：记录 cancelled 状态到节点后 re-raise
+            duration_ms = int((time.time() - start_time) * 1000)
+            cancelled_result = {
+                "status": "cancelled",
+                "error_information": "用户强制中断（Ctrl+C）",
+                "output": "",
+            }
+            # 保存 cancelled result 到节点
+            self._save_node_result(new_node_id, cur_path, cancelled_result)
+            self.trace.update_node_result(
+                new_node_id, cancelled_result, {"duration_ms": duration_ms}
+            )
+            # 记录到 history，使下一轮 LLM 能看到被中断的工具调用
+            action_record = ActionRecord(
+                action_id=new_node_id,
+                tool_name=tool_name,
+                arguments=arguments,
+                result=cancelled_result
+            )
+            self.tool_executor.history.append(action_record)
+            logger.info(
+                f"[ReAct] 工具 {tool_name} 被用户取消，节点 {new_node_id} "
+                f"已标记为 cancelled ({duration_ms}ms)"
+            )
+            # 重新抛出，让上层（ReactTurnExecutorV2）处理
+            raise
         duration_ms = int((time.time() - start_time) * 1000)
         
         logger.info(f"[Acting] {tool_name}: {result.get('status')} ({duration_ms}ms)")
@@ -797,6 +843,42 @@ class ReActAgent(AgentBase, ABC):
             logger.info(f"[用户响应] {user_input[:50]}...")
         else:
             logger.warning(f"[用户响应] 当前节点不是 ask_user: {self.current_node_id}")
+    
+    def _handle_user_continuation(self, user_input: str):
+        """
+        处理用户在取消后的补充输入
+        
+        在当前（cancelled）节点上创建一个 user_input 记录节点，
+        使 LLM 能在 action_history 中看到用户的补充指令。
+        不重置 original_user_input 和 plan_list，保持当前任务上下文。
+        
+        Args:
+            user_input: 用户的补充输入
+        """
+        action = {
+            "type": "user_input",
+            "arguments": {"message": user_input},
+            "timestamp": datetime.now().isoformat()
+        }
+        result = {"status": "received", "user_input": user_input}
+        
+        new_node_id = self.trace.add_node(
+            action=action,
+            result=result,
+            metrics={"duration_ms": 0}
+        )
+        self.current_node_id = new_node_id
+        
+        # 同时记录到 tool_executor.history，让 LLM prompt 中能看到
+        action_record = ActionRecord(
+            action_id=new_node_id,
+            tool_name="user_input",
+            arguments={"message": user_input},
+            result=result
+        )
+        self.tool_executor.history.append(action_record)
+        
+        logger.info(f"[续接] 已记录用户补充输入: {user_input[:50]}...")
     
     def _handle_ask_user(self, arguments: Dict) -> Dict[str, Any]:
         """

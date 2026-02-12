@@ -492,6 +492,8 @@ class TraceSystem:
         result_status = result.get("status", "") if isinstance(result, dict) else ""
         if result_status in ("fail", "error", "failed"):
             node_status = "failed"
+        elif result_status == "cancelled":
+            node_status = "cancelled"
         else:
             node_status = "completed"
         
