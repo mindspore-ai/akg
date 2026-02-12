@@ -27,8 +27,8 @@ async def test_feature_extract():
 
     op_name = "relu"
 
-    framework_code_path = f"tests/resources/{op_name}_op/{op_name}_{framework}.py"
-    impl_code_path = f"tests/resources/{op_name}_op/{op_name}_{dsl}_{framework}.py"
+    framework_code_path = f"tests/op/resources/{op_name}_op/{op_name}_{framework}.py"
+    impl_code_path = f"tests/op/resources/{op_name}_op/{op_name}_{dsl}_{framework}.py"
     with open(framework_code_path, "r", encoding="utf-8") as f:
         framework_code = f.read()
     with open(impl_code_path, "r", encoding="utf-8") as f:

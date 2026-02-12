@@ -22,7 +22,7 @@ import tempfile
 import shutil
 from pathlib import Path
 from unittest.mock import Mock, patch, AsyncMock
-from akg_agents.utils.handwrite_loader import HandwriteLoader, HandwriteSampler
+from akg_agents.op.utils.handwrite_loader import HandwriteLoader, HandwriteSampler
 
 
 @pytest.fixture
@@ -57,22 +57,26 @@ def mock_loader():
 @pytest.fixture
 def temp_handwrite_dir():
     """创建临时的手写文件目录结构"""
-    temp_dir = tempfile.mkdtemp()
+    # 创建一个顶层临时目录，并在其中模拟完整的项目层级
+    # HandwriteLoader._init_filesystem_mode 会对 project_root 执行 .parent.parent
+    # 因此 project_root 需要嵌套至少 2 层，确保 .parent.parent 仍在临时目录内
+    top_dir = tempfile.mkdtemp()
     
     # 模拟实际项目结构:
-    # temp_dir 模拟 akg_agents/python/akg_agents (project_root)
-    # 需要创建 akg_agents/benchmark/akg_kernels_bench/
-    # 
-    # temp_dir/          <- akg_agents/python/akg_agents (project_root)
-    # ../../benchmark/   <- akg_agents/benchmark/
-    #   └── akg_kernels_bench/
+    # top_dir/                              <- 顶层临时目录 (相当于 akg_agents/)
+    #   ├── python/akg_agents/              <- project_root (get_project_root 返回值)
+    #   └── benchmark/akg_kernels_bench/    <- 手写数据目录
     #       ├── triton_ascend/
     #       │   ├── impl/
     #       │   └── docs/
     #       ├── dynamic_shape/
     #       └── static_shape/
     
-    # 从 temp_dir 往上2级，然后创建 benchmark
+    temp_dir = Path(top_dir) / "python" / "akg_agents"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir = str(temp_dir)
+    
+    # 从 temp_dir 往上2级回到 top_dir，然后创建 benchmark
     akg_agents_root = Path(temp_dir).parent.parent
     benchmark_root = akg_agents_root / "benchmark"
     akg_kernels_bench_root = benchmark_root / "akg_kernels_bench"
@@ -115,10 +119,8 @@ def temp_handwrite_dir():
         'test_files': test_files
     }
     
-    # 清理
-    shutil.rmtree(temp_dir)
-    if benchmark_root.exists():
-        shutil.rmtree(benchmark_root, ignore_errors=True)
+    # 清理顶层临时目录（包含 python/ 和 benchmark/ 子目录）
+    shutil.rmtree(top_dir, ignore_errors=True)
 
 
 class TestHandwriteLoaderCore:
@@ -126,10 +128,13 @@ class TestHandwriteLoaderCore:
     
     def test_load_and_read(self, temp_handwrite_dir):
         """测试1: 加载所有文件并读取内容"""
-        with patch('akg_agents.utils.handwrite_loader.get_project_root') as mock_root:
+        with patch('akg_agents.op.utils.handwrite_loader.get_project_root') as mock_root:
             mock_root.return_value = str(temp_handwrite_dir['temp_dir'])
             
             loader = HandwriteLoader(dsl="triton_ascend")
+            # 显式初始化文件系统模式并加载数据
+            loader._init_filesystem_mode()
+            loader._load_data_pairs()
             
             # 验证加载
             assert len(loader._all_data_pairs) == 5
@@ -138,11 +143,8 @@ class TestHandwriteLoaderCore:
             # 验证数据对结构
             first_pair = loader._all_data_pairs[0]
             assert 'name' in first_pair
-            assert 'file_stem' in first_pair
-            assert 'shape_type' in first_pair
-            assert 'category' in first_pair
-            assert first_pair['shape_type'] in ['dynamic_shape', 'static_shape']
-            assert first_pair['category'] in ['reduction', 'sorting']
+            assert 'framework_path' in first_pair
+            assert first_pair['name'].count('/') == 2  # shape_type/category/file_stem
             
             # 验证读取
             content = loader.read_pair_content(first_pair)
@@ -156,7 +158,7 @@ class TestHandwriteLoaderCore:
     @pytest.mark.asyncio
     async def test_select_with_mock_llm(self, temp_handwrite_dir):
         """测试2: LLM筛选功能（Mock）"""
-        with patch('akg_agents.utils.handwrite_loader.get_project_root') as mock_root:
+        with patch('akg_agents.op.utils.handwrite_loader.get_project_root') as mock_root:
             mock_root.return_value = str(temp_handwrite_dir['temp_dir'])
             
             loader = HandwriteLoader(
@@ -166,7 +168,7 @@ class TestHandwriteLoaderCore:
                 config={'agent_model_config': {'default': {}}}
             )
             
-            with patch('akg_agents.utils.handwrite_loader.Selector') as MockSelector:
+            with patch('akg_agents.op.utils.handwrite_loader.Selector') as MockSelector:
                 mock_selector = MockSelector.return_value
                 # LLM返回完整路径名称
                 mock_selector.run = AsyncMock(return_value=[

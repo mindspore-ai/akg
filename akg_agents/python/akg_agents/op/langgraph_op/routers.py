@@ -192,13 +192,14 @@ class RouterFactory:
             result = await client.generate(messages, stream=False)
             response_text = result.get("content", "")
             
-            # 记录 LLM 调用到 trace
-            trace.insert_conductor_agent_record(
-                res=response_text,
-                prompt=prompt,
-                reasoning="",  # AsyncOpenAI 没有 reasoning
-                agent_name="decision"
-            )
+            # 记录 LLM 调用到 trace（兼容新旧 Trace 接口）
+            if hasattr(trace, 'insert_conductor_agent_record'):
+                trace.insert_conductor_agent_record(
+                    res=response_text,
+                    prompt=prompt,
+                    reasoning="",  # AsyncOpenAI 没有 reasoning
+                    agent_name="decision"
+                )
             
             # 解析结果（使用 ResultProcessor，与 Conductor 一致）
             agent_decision, suggestion = ResultProcessor.parse_conductor_decision(
