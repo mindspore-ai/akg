@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-reduce
-description: "归约算子(reduce)优化策略，包含 softmax、layernorm"
+description: "归约算子(reduce)优化策略，包含 sum/mean/max/min、softmax、layernorm、logsoftmax 等实现技巧。适用于需要在 Ascend NPU 上实现任意维度归约、规范化层或注意力分数计算的内核代码生成场景"
 level: L4
 category: implementation
 version: "1.0.0"

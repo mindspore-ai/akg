@@ -224,43 +224,86 @@ class KernelGen(AgentBase):
             # 阶段1：粗筛（使用 OperatorSkillSelector）
             context = OperatorSelectionContext(
                 dsl=dsl.replace("_", "-"),  # triton_ascend -> triton-ascend
-                backend=backend
+                backend=backend,
+                include_levels=[SkillLevel.L3, SkillLevel.L4, SkillLevel.L5]
             )
             filtered = self.skill_selector.coarse_filter(self.loaded_skills, context)
             
             logger.info(f"Coarse filter: {len(self.loaded_skills)} -> {len(filtered)} skills")
             
-            if len(filtered) <= 3:
+            if len(filtered) <= 5:
                 return filtered
             
             # 阶段2：LLM 精筛
             skills_info = [{"name": s.name, "description": s.description} for s in filtered]
             
             import json
-            llm_prompt = f"""你是一个 Skill 选择专家。请为以下内核代码生成任务选择相关的 Skills。
+            llm_prompt = f"""# Skill 智能筛选
 
-**任务信息**:
-- 算子名称: {op_name}
-- 目标 DSL: {dsl}
-- 目标后端: {backend}
-- 目标框架: {framework}
-- 任务描述: {task_desc}
+你是一个专业的内核代码生成专家，需要根据当前任务特征，从候选的 Skills 中筛选出**所有相关**的知识文档。
 
-**可用 Skills**:
+## 当前任务
+
+**算子名称**: {op_name}
+
+**目标环境**:
+- DSL: {dsl}
+- 后端: {backend}
+- 框架: {framework}
+
+**任务描述**:
+```
+{task_desc}
+```
+
+## 候选 Skills
+
+以下是所有可用的 Skills（共 {len(skills_info)} 个），包含名称和描述：
+
 {json.dumps(skills_info, indent=2, ensure_ascii=False)}
 
-**特别注意**：
-1. 重点是内核代码生成，无关的技能不要选择（如算子草图设计、测试、工作流等）
-2. 选取最相关的 Skills，不要选择太多，尽量保证覆盖关键知识即可
-3. 没有抢相关的可以不选
+## 筛选任务
 
-**输出格式**（JSON）:
- ```json
+请分析当前任务和所有候选 Skills，筛选出**所有对当前内核代码生成任务有参考价值**的 Skills。
+
+### 筛选标准
+
+**直接相关（必选）**：
+- 算子模式匹配（如 elementwise、reduce、matmul、attention 等）
+- DSL/后端相关的 API 参考或编程基础
+- 优化策略直接适用于当前算子类型
+
+**间接相关（可选）**：
+- 包含部分相似的操作模式
+- 优化技巧具有通用性，可迁移到当前任务
+- 实现思路或代码结构有参考价值
+
+**不相关（排除）**：
+- 算子类型完全不同且无参考价值
+- 与当前 DSL/后端不匹配
+- 属于工作流、测试、草图设计等非代码生成类
+
+### 筛选原则
+
+1. **宁可多选，不要漏选**：如果某个 Skill 有任何参考价值，就应该被选中
+2. **只排除明显不相关的**：只排除完全不相关的 Skills
+3. **按相关性排序**：将最相关的 Skills 排在前面
+
+## 输出要求
+
+请输出 JSON 格式的筛选结果：
+
+```json
 {{
-"selected": ["skill-name-1", "skill-name-2", ...],
-"reason": "简要选择理由"
+  "selected": ["skill-name-1", "skill-name-2", ...],
+  "reason": "简要说明选择理由"
 }}
 ```
+
+**注意**：
+- 返回完整的 Skill 名称，确保与上述候选 Skills 中的 name 完全一致
+- 如果所有 Skills 都不相关，返回空列表
+- selected 列表按相关性从高到低排序
 """
             template = Jinja2TemplateWrapper("{{ prompt }}")
             response, _, _ = await self.run_llm(template, {"prompt": llm_prompt}, "standard")

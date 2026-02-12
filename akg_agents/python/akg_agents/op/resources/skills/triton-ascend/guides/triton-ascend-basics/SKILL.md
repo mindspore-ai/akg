@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-basics
-description: "Triton Ascend 核心概念、内核结构和标准模式"
+description: "Triton Ascend 编程基础，包括核心概念（program_id、block、grid）、内核函数结构、装饰器用法和标准代码模式。适用于初次使用 Triton Ascend、需要了解基本语法结构的任意内核代码生成场景"
 level: L3
 category: fundamental
 version: "1.0.0"
@@ -74,126 +74,7 @@ class ModelNew(torch.nn.Module):
         return output_tensor
 ```
 
-## 3. 三大编程模式
-
-### 3.1 向量操作模式
-适用于元素级运算：加法、乘法、激活函数等。
-
-```python
-@triton.jit
-def vector_add_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
-    
-    a = tl.load(a_ptr + offsets, mask=mask)
-    b = tl.load(b_ptr + offsets, mask=mask)
-    c = a + b
-    
-    tl.store(c_ptr + offsets, c, mask=mask)
-```
-
-### 3.2 归约模式
-适用于求和、最大值、最小值等聚合操作。
-
-```python
-@triton.jit
-def reduction_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
-    
-    # 加载数据
-    data = tl.load(input_ptr + offsets, mask=mask, other=0.0)
-    
-    # 块内归约
-    block_sum = tl.sum(data, axis=0)
-    
-    # 原子操作写回全局内存
-    if pid == 0:  # 只有第一个块写入结果
-        tl.atomic_add(output_ptr, block_sum)
-```
-
-### 3.3 矩阵乘法模式
-适用于矩阵乘法等多维块计算,使用固定核心数启动。
-
-```python
-@triton.jit
-def matmul_kernel(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    num_cores: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    BLOCK_K: tl.constexpr,
-):
-    # 关键:使用固定核心数启动,每个核心处理多个块
-    pid = tl.program_id(0)  # 核心ID: 0~num_cores-1
-    NUM_BLOCKS_M = triton.cdiv(M, BLOCK_M)
-    NUM_BLOCKS_N = triton.cdiv(N, BLOCK_N)
-    NUM_BLOCKS = NUM_BLOCKS_M * NUM_BLOCKS_N
-
-    # 每个核心循环处理多个块
-    for block_idx in range(pid, NUM_BLOCKS, num_cores):
-        # 计算当前块的2D索引
-        block_m = block_idx // NUM_BLOCKS_N
-        block_n = block_idx % NUM_BLOCKS_N
-
-        # 初始化累加器
-        accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-
-        # K维度循环
-        for k in range(0, K, BLOCK_K):
-            # 加载A块
-            a_offset = (block_m * BLOCK_M + tl.arange(0, BLOCK_M))[:, None] * K + \
-                       (k + tl.arange(0, BLOCK_K))[None, :]
-            a_mask = (block_m * BLOCK_M + tl.arange(0, BLOCK_M))[:, None] < M
-            a = tl.load(a_ptr + a_offset, mask=a_mask, other=0.0)
-
-            # 加载B块
-            b_offset = (k + tl.arange(0, BLOCK_K))[:, None] * N + \
-                       (block_n * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
-            b_mask = (block_n * BLOCK_N + tl.arange(0, BLOCK_N))[None, :] < N
-            b = tl.load(b_ptr + b_offset, mask=b_mask, other=0.0)
-
-            # 矩阵乘累加
-            accumulator += tl.dot(a, b)
-
-        # 存储结果
-        c_offset = (block_m * BLOCK_M + tl.arange(0, BLOCK_M))[:, None] * N + \
-                   (block_n * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
-        c_mask = ((block_m * BLOCK_M + tl.arange(0, BLOCK_M))[:, None] < M) & \
-                 ((block_n * BLOCK_N + tl.arange(0, BLOCK_N))[None, :] < N)
-        tl.store(c_ptr + c_offset, accumulator, mask=c_mask)
-
-class ModelNew(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, a, b):
-        M, K = a.shape
-        K2, N = b.shape
-        assert K == K2
-        c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-
-        num_cores = 20  # Ascend 910B4有20个AI Core
-        BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 256
-
-        # 关键:固定核心数启动,grid=(num_cores,)不是(NUM_BLOCKS,)
-        matmul_kernel[(num_cores,)](
-            a, b, c, M, N, K, num_cores,
-            BLOCK_M, BLOCK_N, BLOCK_K
-        )
-
-        return c
-```
-
-**关键点**:
-- 使用 `grid=(num_cores,)` 固定启动核心数(如20个)
-- 每个核心通过 `for block_idx in range(pid, NUM_BLOCKS, num_cores)` 循环处理多个块
-- 不要使用 `grid=(NUM_BLOCKS_M * NUM_BLOCKS_N,)` 为每个块启动一个程序
-
-## 4. 边界处理
+## 3. 边界处理
 
 ### 使用 mask 处理边界
 ```python
@@ -213,7 +94,7 @@ valid_mask = (offsets < n_elements) & (offsets >= 0)
 data = tl.load(ptr + offsets, mask=valid_mask, other=0.0)
 ```
 
-## 5. Autotune 使用教程
+## 4. Autotune 使用教程
 
 Autotune 是 Triton 的自动性能优化机制，通过尝试不同的配置参数组合，自动找到最优的内核执行配置。
 

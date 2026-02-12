@@ -1,6 +1,6 @@
 ---
 name: tilelang-cuda-patterns
-description: "TileLang CUDA 三大编程模式：逐元素、归约、矩阵乘法"
+description: "TileLang CUDA 核心编程模式（逐元素、归约、矩阵乘法、GEMV）的标准实现范式和代码模板。适用于需要快速确定算子属于哪种编程模式、或需要了解 TileLang 各模式基本代码结构的内核代码生成场景"
 level: L4
 category: method
 version: "1.0.0"

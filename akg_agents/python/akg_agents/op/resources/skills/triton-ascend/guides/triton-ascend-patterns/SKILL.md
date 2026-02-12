@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-patterns
-description: "Triton Ascend 三大编程模式：向量、归约、矩阵"
+description: "Triton Ascend 三大核心编程模式（向量/逐元素、归约、矩阵乘法）的标准实现范式和代码模板。适用于需要快速确定算子属于哪种编程模式、或需要了解各模式基本代码结构的内核代码生成场景"
 level: L3
 category: method
 version: "1.0.0"
