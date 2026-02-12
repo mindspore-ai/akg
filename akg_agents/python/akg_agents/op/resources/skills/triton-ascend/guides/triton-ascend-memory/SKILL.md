@@ -175,10 +175,10 @@ def elementwise_kernel_stride(
 **建议**：非连续张量先调用 `.contiguous()` 转换，再用一维访问，整体性能更优。
 
 ### 要点总结
-- 正确：优先使用 `.contiguous()` 转换 + 一维访问
-- 正确：连续内存访问效率远高于 stride 计算开销
-- 正确：`torch.empty_like()` 创建的输出默认连续
-- 正确：输入输出同形状的 element-wise 算子无需 reshape
+- 优先使用`.contiguous()`转换 + 一维访问
+- 连续内存访问效率远高于stride计算开销
+- `torch.empty_like()`创建的输出默认连续
+- 输入输出同形状的element-wise算子无需reshape
 
 ---
 
@@ -195,37 +195,3 @@ def elementwise_kernel_stride(
 ### 缓存友好
 - **连续访问**：按内存顺序访问数据
 - **局部性**：访问相邻的数据块
-
----
-
-## 5. 最佳实践
-
-### Element-wise 算子
-1. 转连续：`input.contiguous()`
-2. 一维访问：`ptr + offsets`
-3. BLOCK_SIZE = 1024
-
-### 2D 算子（MatMul、Attention）
-1. 使用 `tl.make_block_ptr`
-2. 配合 `boundary_check`
-3. 注意 stride 设计
-
-### 避免的陷阱
-- 错误：非连续张量直接用 stride 访问
-- 错误：BLOCK_SIZE 设置过大或过小
-- 错误：忘记边界检查导致越界访问
-- 错误：未对齐导致性能下降
-
----
-
-## 6. 调试建议
-
-### 性能问题排查
-1. 检查张量是否连续：`tensor.is_contiguous()`
-2. 检查 BLOCK_SIZE 是否合理
-3. 使用 Profiler 分析内存访问模式
-
-### 常见错误
-- **内存访问越界**：检查 mask 和 boundary_check
-- **性能不佳**：检查内存连续性和对齐
-- **结果错误**：检查 stride 计算是否正确

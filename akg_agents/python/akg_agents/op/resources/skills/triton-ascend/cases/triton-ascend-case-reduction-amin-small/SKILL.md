@@ -21,7 +21,7 @@ metadata:
 # 1. grid=4<40 -> 2.47 us
 triton.Config({'BLOCK_SIZE': 16384})
 
-# 2. grid=8<40 -> 2.21 us ⭐ 最优
+# 2. grid=8<40 -> 2.21 us 最优
 triton.Config({'BLOCK_SIZE': 8192})
 
 # 3. grid=32<40 -> 2.92 us

@@ -171,15 +171,11 @@ class ModelNew(torch.nn.Module):
         return output_tensor
 ```
 
-### 负载均衡示例
-
-假设 `M = 1000`, `CORE_NUM = 48`:
-- pid=0 处理行: 0, 48, 96, 144, ... (约 21 行)
-- pid=1 处理行: 1, 49, 97, 145, ... (约 21 行)
-- ...
-- pid=47 处理行: 47, 95, 143, ... (约 21 行)
-
-所有核心处理的行数差异不超过 1，负载完美均衡。
+### 优点
+- 代码极其简洁，一行for循环解决问题
+- 负载天然均衡（每个核心处理的任务数差最多为1）
+- 无需计算ELEMENTS_PER_GRID等复杂参数
+- 适用于任意大小的输入shape
 
 ---
 
@@ -187,7 +183,7 @@ class ModelNew(torch.nn.Module):
 
 ### 核心数选择原则
 
-根据算子类型选择对应的核心数：
+根据算子类型选择对应的核心数，**必须在`__init__`中获取**（避免forward中重复调用导致同步开销）：
 
 | 算子类型 | 核心类型 | 默认核心数 (910B2) | 默认核心数 (910B4) |
 |---------|---------|-------------------|-------------------|
@@ -233,7 +229,7 @@ class ModelNew(torch.nn.Module):
         return output
 ```
 
-### ⚠️ 重要注意事项
+### 重要注意事项
 
 **禁止在 forward 中调用 `get_device_limit`**
 
@@ -260,105 +256,68 @@ class ModelNew(torch.nn.Module):
 
 ---
 
-## 6. 方案 2：2D Grid 切分（适用于 2D 算子）
+## 6. 方案 2：连续分块处理
 
 ### 适用场景
-- 2D 矩阵计算（MatMul, Attention）
-- 需要行列双向并行
+- 连续内存访问优化
 
 ### 示例
 
 ```python
+```python
+import torch_npu
+
+# 示例：处理大shape的向量操作
 @triton.jit
-def matmul_kernel(
-    A_ptr, B_ptr, C_ptr,
-    M, N, K,
-    BLOCK_M: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    BLOCK_K: tl.constexpr,
+def large_vector_kernel(
+    input_ptr, output_ptr, n_elements,
+    BLOCK_SIZE: tl.constexpr,
+    ELEMENTS_PER_GRID: tl.constexpr,  # 每个grid负责的元素总数
 ):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    pid = tl.program_id(0)
     
-    # 每个 block 处理一个 (BLOCK_M, BLOCK_N) 的输出块
-    # ...
+    # 计算当前grid负责的数据范围
+    grid_start = pid * ELEMENTS_PER_GRID
+    grid_end = min(grid_start + ELEMENTS_PER_GRID, n_elements)
+    
+    # 分块处理当前grid负责的数据
+    for block_start in range(grid_start, grid_end, BLOCK_SIZE):
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < grid_end
+        
+        # 加载、计算、存储
+        data = tl.load(input_ptr + offsets, mask=mask)
+        result = compute_function(data)
+        tl.store(output_ptr + offsets, result, mask=mask)
 
-# Grid 设置
-grid_m = triton.cdiv(M, BLOCK_M)
-grid_n = triton.cdiv(N, BLOCK_N)
+# 启动方式
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # 在__init__中获取核心数
+        try:
+            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
+        except:
+            self.VEC_CORE_NUM = 40
 
-# 检查是否超限
-if grid_m * grid_n > 65535:
-    # 使用固定核心数 + 交错循环
-    grid = (CUBE_CORE_NUM,)
-else:
-    # 使用 2D Grid
-    grid = (grid_m, grid_n)
+    def forward(self, input_tensor):
+        n_elements = input_tensor.numel()
+        BLOCK_SIZE = *  # 设置为尽可能大的合适的每次处理的值，充分利用ub
+        MAX_GRID_SIZE = self.VEC_CORE_NUM  # 使用初始化时获取的核心数
+        
+        # 计算每个grid需要处理的元素数
+        ELEMENTS_PER_GRID = triton.cdiv(n_elements, MAX_GRID_SIZE)
+        # 向上取整到BLOCK_SIZE的倍数，确保循环能完整处理
+        ELEMENTS_PER_GRID = triton.cdiv(ELEMENTS_PER_GRID, BLOCK_SIZE) * BLOCK_SIZE
+        
+        # 计算实际需要的grid数量
+        grid_size = triton.cdiv(n_elements, ELEMENTS_PER_GRID)
+        
+        output_tensor = torch.empty_like(input_tensor)
+        large_vector_kernel[grid_size,](
+            input_tensor, output_tensor, n_elements,
+            BLOCK_SIZE=BLOCK_SIZE,
+            ELEMENTS_PER_GRID=ELEMENTS_PER_GRID,
+        )
+        return output_tensor
 ```
-
----
-
-## 7. 最佳实践总结
-
-### Element-wise / Reduce 算子
-1. 使用固定 VEC 核心数
-2. 交错循环处理所有行
-3. BLOCK_SIZE = 1024 或 512
-
-### MatMul 算子
-1. 优先使用固定 CUBE 核心数
-2. 交错循环或 2D Grid（根据 shape 决定）
-3. 注意 512B 对齐
-
-### Attention 算子
-1. 使用固定 CUBE 核心数
-2. Flash Attention 分块策略
-3. 在线 Softmax 累加
-
----
-
-## 8. 常见错误和解决方案
-
-### 错误 1: Grid 超限
-```
-RuntimeError: Grid size exceeds 65535
-```
-
-**解决**：使用固定核心数 + 交错循环
-
-### 错误 2: 性能不佳
-```
-Kernel 运行缓慢
-```
-
-**排查**：
-1. 检查核心数是否正确（VEC vs CUBE）
-2. 检查是否在 forward 中调用 `get_device_limit`
-3. 检查负载是否均衡
-
-### 错误 3: 结果错误
-```
-输出与预期不符
-```
-
-**排查**：
-1. 检查交错循环的步长是否正确
-2. 检查边界条件和 mask
-3. 检查是否所有数据都被处理
-
----
-
-## 9. 性能调优建议
-
-### Grid 大小调优
-1. 小 shape：使用计算出的 grid（如 `triton.cdiv(M, BLOCK_SIZE)`）
-2. 大 shape：使用固定核心数
-
-### 负载均衡
-1. 交错循环自动均衡
-2. 2D Grid 需要注意 M, N 的对齐
-
-### 内存访问
-1. 连续访问优先
-2. 避免 bank conflict
-3. 合理使用 shared memory
