@@ -1,7 +1,7 @@
 ---
 name: triton-ascend-examples-mindspore
 description: "MindSpore 框架下 Triton Ascend 内核的完整集成示例，包括 vector_add、matmul、layer_norm、softmax 等标准算子实现。适用于需要参考 MindSpore 自定义算子注册、Primitive 定义方式的内核代码生成场景"
-level: L5
+level: L4
 category: example
 version: "1.0.0"
 metadata:
