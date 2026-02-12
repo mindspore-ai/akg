@@ -77,49 +77,62 @@ p = tl.math.exp2(scores)
 
 ### 2.2 防负值开方
 
-```python
-# 方差计算前确保非负
-variance = tl.maximum(variance, 0.0)
-std = tl.sqrt(variance + eps)
-```
+- 在任何平方根操作前，确保被开方数是非负的（例如，使用 max(input, 0.)或 max(input, eps)）
 
 ### 2.3 精度提升
 
 - **使用 float32 进行累加**: 即使输入是 float16/bfloat16
 - **最后再转换**: 计算完成后再转回目标精度
 
-```python
-accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-# ... 累加计算 ...
-result = tl.cast(accumulator, output_dtype)
-```
-
 ## 3. API 使用限制
 
 ### 3.1 禁止使用的语法
 
-**禁止使用**: `return`, `break`, `continue`, `lambda`
+- 禁止 `return`, `break`, `continue` → 使用mask控制
+- 禁止 lambda表达式 → 使用内联函数或tl.where
+- 禁止 链式布尔运算 → 分步计算mask
+- 禁止 张量直接索引 → 使用tl.load/tl.store
+- 禁止 if-else分支中产生负偏移 → 使用mask分离加载，用`tl.maximum(offset, 0)`确保偏移非负
+**Ascend后端**
+- 复杂场景 `tl.where` → 使用if-else
+- 禁止 `while` 循环 → 使用 for 替代（见下文）
 
-Triton 内核是一次性执行完整逻辑，不支持提前返回或跳转语句。
+### 3.2 While 循环替代方案（Ascend后端）
 
-### 3.2 While 循环替代方案
+Ascend后端不支持`while`循环，需根据循环上限是否为编译时常量选择替代方案。
 
-**问题**: Ascend 后端不支持 `while` 循环（运行时动态条件）
+**情况1：循环上限是静态值（编译时常量）**
 
-**解决方案**: 使用 `for + if` 替代
+直接用`for range`替代，无需额外处理：
 
 ```python
-# 错误：错误：while 循环（Ascend不支持）
+# 错误：while 循环
+i = 0
+while i < N_ITERS:  # N_ITERS 是编译时常量
+    # 处理逻辑
+    i += 1
+
+# 正确：直接用 for range
+for i in range(N_ITERS):  # N_ITERS: tl.constexpr
+    # 处理逻辑
+```
+
+**情况2：循环上限是动态值（运行时参数）**
+
+设置足够大的编译时常量作为循环上界，用`if`判断控制实际执行：
+
+```python
+# 错误：while 循环（n_iters 是运行时动态值）
 @triton.jit
 def kernel_while(ptr, n_iters, TILE: tl.constexpr):
     i = 0
-    while i < n_iters:  # 运行时动态条件，Ascend不支持
+    while i < n_iters:
         offset = i * TILE + tl.arange(0, TILE)
         data = tl.load(ptr + offset)
         tl.store(ptr + offset, data * 2)
         i += 1
 
-# 正确：正确：for + if 替代方案
+# 正确：for + if 替代方案
 @triton.jit
 def kernel_for_if(
     ptr,
@@ -134,9 +147,10 @@ def kernel_for_if(
             tl.store(ptr + offset, data * 2)
 ```
 
-**注意事项**:
+**注意事项**：
 - `MAX_ITERS` 需设置得足够大，覆盖所有可能的运行时值
 - 当实际迭代次数远小于上界时，会有空循环迭代开销
+- 上界设置过大会增加编译时间
 
 ### 3.3 切片操作规范
 
@@ -161,6 +175,10 @@ tmp_buf = tl.insert_slice(tmp_buf, val[None,:], offsets=(i, 0), sizes=(1, cols),
 ```python
 # 错误：错误：offsets = base + tl.arange(0, BLOCK_SIZE); value = tl.get_element(offsets, [i])
 # 正确：正确：value = base + i
+
+# 正确用法
+element = tl.get_element(tensor, (i, j))  # 实际张量
+sub_tensor = tl.extract_slice(tensor, [0], [32], [1])  # 提取切片
 ```
 
 ### 3.4 tl.constexpr 正确用法
@@ -170,16 +188,11 @@ tmp_buf = tl.insert_slice(tmp_buf, val[None,:], offsets=(i, 0), sizes=(1, cols),
 
 ### 3.5 输出张量创建规范
 
-- 正确：使用 `torch.empty` 或 `torch.empty_like`
-- 错误：避免 `torch.zeros` 或 `torch.ones`（避免不必要的初始化开销）
+- host 侧使用 `torch.empty` 或 `torch.empty_like` 创建输出张量
+- 不要使用 `torch.zeros` 或 `torch.ones`，避免不必要的初始化开销
 
 ### 3.6 Ascend 后端特殊限制
 
 - **避免使用 tl.where 计算内存偏移**: Ascend 后端对 `tl.where` 生成的复杂指针运算支持不完全
 - **标量类型转换**: 仅支持 `scalar.to(type)`，禁止使用 `tl.float16(scalar)`
 - **BLOCK_SIZE 限制**: 必须小于 65536
-
-### 3.7 Grid 设置规范
-
-- **维度限制**: grid 必须是 tuple 类型，最多 3 维
-- **大小限制**: 各维度乘积不超过 65535

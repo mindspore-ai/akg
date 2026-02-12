@@ -83,38 +83,7 @@ class ModelNew(torch.nn.Module):
             self.VEC_CORE_NUM = 40  # Ascend 910B4 默认
 ```
 
-### 3. 大 Shape 处理（交错循环）
-
-当输入 shape 很大时，使用交错循环处理，避免 Grid 超限：
-
-```python
-@triton.jit
-def large_elementwise_kernel(
-    input_ptr, output_ptr, n_elements,
-    BLOCK_SIZE: tl.constexpr,
-    CORE_NUM: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    
-    # 交错处理：每个核心处理 pid, pid+CORE_NUM, pid+2*CORE_NUM, ...
-    for block_idx in range(pid, triton.cdiv(n_elements, BLOCK_SIZE), CORE_NUM):
-        offsets = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        
-        data = tl.load(input_ptr + offsets, mask=mask)
-        result = compute(data)
-        tl.store(output_ptr + offsets, result, mask=mask)
-
-# 启动
-grid = (self.VEC_CORE_NUM,)
-large_elementwise_kernel[grid](
-    input_tensor, output_tensor, n_elements,
-    BLOCK_SIZE=1024,
-    CORE_NUM=self.VEC_CORE_NUM,
-)
-```
-
-### 4. BLOCK_SIZE 选择
+### 3. BLOCK_SIZE 选择
 
 - **推荐值**: 1024-2048
 - **原则**: 平衡并行度和资源占用
@@ -122,7 +91,7 @@ large_elementwise_kernel[grid](
   - 更大的 BLOCK_SIZE → 更少的 Grid 启动开销
   - 更小的 BLOCK_SIZE → 更细粒度的并行
 
-### 5. 核内循环优化
+### 4. 核内循环优化
 
 对于简单的 element-wise 算子，可以通过切分并添加核内循环来隐藏搬运计算开销：
 

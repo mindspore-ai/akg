@@ -238,7 +238,7 @@ class KernelGen(AgentBase):
             context = OperatorSelectionContext(
                 dsl=dsl.replace("_", "-"),  # triton_ascend -> triton-ascend
                 backend=backend,
-                include_levels=[SkillLevel.L3, SkillLevel.L4, SkillLevel.L5]
+                include_levels=[SkillLevel.L3, SkillLevel.L4]
             )
             filtered = self.skill_selector.coarse_filter(loaded_skills, context)
             
@@ -283,7 +283,7 @@ class KernelGen(AgentBase):
 
 **直接相关（必选）**：
 - 算子模式匹配（如 elementwise、reduce、matmul、attention 等）
-- DSL/后端相关的 API 参考或编程基础
+- DSL/后端相关的 API 参考或编程基础以及调试指南
 - 优化策略直接适用于当前算子类型
 
 **间接相关（可选）**：

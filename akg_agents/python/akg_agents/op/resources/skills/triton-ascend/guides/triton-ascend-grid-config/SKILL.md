@@ -21,31 +21,9 @@ Grid 配置是 Triton Kernel 启动的关键。本文档提供 Triton Ascend 的
 - **Grid 必须是 tuple 类型**，最多 3 维
 - 支持的格式：`(x,)`, `(x, y)`, `(x, y, z)`
 
-```python
-# 正确：正确
-grid = (100,)
-grid = (100, 200)
-grid = (100, 200, 50)
-
-# 错误：错误
-grid = 100  # 必须是 tuple
-grid = [100, 200]  # 必须是 tuple，不能是 list
-```
-
 ### 大小限制
 - **各维度乘积不超过 65535**
 - 即 `x * y * z <= 65535`
-
-```python
-# 正确：正确
-grid = (65535,)  # 65535 <= 65535
-grid = (255, 255)  # 255 * 255 = 65025 <= 65535
-grid = (40, 40, 40)  # 40 * 40 * 40 = 64000 <= 65535
-
-# 错误：错误
-grid = (70000,)  # 70000 > 65535
-grid = (300, 300)  # 300 * 300 = 90000 > 65535
-```
 
 ---
 
@@ -93,18 +71,18 @@ def large_kernel(
 
 ---
 
-## 4. 方案 1：交错循环处理（强烈推荐）
+### 方案 1：交错循环处理（强烈推荐）
 
-### 适用场景
+#### 适用场景
 - 按行/按块独立处理的算子
 - Element-wise、Reduce、Normalization 等
 
-### 核心思想
+#### 核心思想
 - **固定 Grid 为核心数**
 - **每个核心以步长方式交错处理数据**
 - 负载均衡最好，代码最简洁
 
-### 完整示例
+#### 完整示例
 
 ```python
 import torch
@@ -171,7 +149,7 @@ class ModelNew(torch.nn.Module):
         return output_tensor
 ```
 
-### 优点
+#### 优点
 - 代码极其简洁，一行for循环解决问题
 - 负载天然均衡（每个核心处理的任务数差最多为1）
 - 无需计算ELEMENTS_PER_GRID等复杂参数
@@ -179,27 +157,13 @@ class ModelNew(torch.nn.Module):
 
 ---
 
-## 5. 动态获取核心数
-
-### 核心数选择原则
+#### 动态获取核心数
 
 根据算子类型选择对应的核心数，**必须在`__init__`中获取**（避免forward中重复调用导致同步开销）：
+- **向量计算类算子**（element-wise、softmax、归一化等）：使用VEC核心数
+- **矩阵计算类算子**（matmul、attention等）：使用CUBE核心数
 
-| 算子类型 | 核心类型 | 默认核心数 (910B2) | 默认核心数 (910B4) |
-|---------|---------|-------------------|-------------------|
-| **向量计算类** | VEC | 48 (24×2) | 40 (20×2) |
-| **矩阵计算类** | CUBE | 24 (24×1) | 20 (20×1) |
-
-**向量计算类算子**：
-- Element-wise（add, mul, relu, sigmoid, etc.）
-- Reduce（sum, mean, max, min）
-- Normalization（softmax, layernorm）
-
-**矩阵计算类算子**：
-- MatMul（matmul, bmm, linear）
-- Attention（self-attention, cross-attention）
-
-### 完整代码
+#### 完整代码
 
 ```python
 import torch_npu
@@ -229,7 +193,7 @@ class ModelNew(torch.nn.Module):
         return output
 ```
 
-### 重要注意事项
+#### 重要注意事项
 
 **禁止在 forward 中调用 `get_device_limit`**
 
@@ -256,12 +220,12 @@ class ModelNew(torch.nn.Module):
 
 ---
 
-## 6. 方案 2：连续分块处理
+### 方案 2：连续分块处理
 
-### 适用场景
+#### 适用场景
 - 连续内存访问优化
 
-### 示例
+#### 示例
 
 ```python
 ```python
