@@ -70,6 +70,7 @@ from .commands import (
     register_misc_commands,
     register_op_command,
     register_trace_command,
+    register_resume_command,
 )
 
 
@@ -105,6 +106,7 @@ register_op_command(app, console, services)
 register_common_command(app, console, services)
 register_misc_commands(app, console, services)
 register_trace_command(app, console, services)
+register_resume_command(app, console, services)
 
 
 if __name__ == "__main__":

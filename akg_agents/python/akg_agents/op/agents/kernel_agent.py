@@ -263,6 +263,10 @@ class KernelAgent(ReActAgent):
             "arch": self.arch
         }
     
+    def _get_domain(self) -> str:
+        """返回 op 领域标识"""
+        return "op"
+    
     # ==================== 配置同步 ====================
     
     def _on_hardware_config_updated(self, updated: Dict[str, str]):

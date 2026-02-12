@@ -103,7 +103,7 @@ class InteractiveOpRunner:
             sid = self.cli.session_id
             self.console.print(
                 f"\n[dim]Session ID: {sid}[/dim]"
-                f"\n[dim]恢复命令: akg_cli op --resume {sid}[/dim]"
+                f"\n[dim]恢复命令: akg_cli resume {sid}[/dim]"
             )
         except Exception:
             pass
