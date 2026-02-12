@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""KernelAgent 测试 - 运行: python examples/run_kernel_agent.py"""
+"""KernelAgent 测试
+
+交互模式（默认）:
+  python examples/run_kernel_agent.py
+
+自动模式（无需人工确认，跑完即退出）:
+  python examples/run_kernel_agent.py --auto --requirement "实现一个向量加法算子"
+  python examples/run_kernel_agent.py --auto -r "实现一个ReLU算子" --max-rounds 30
+"""
 
 import asyncio
 import os
 import sys
 import logging
 import json
+import argparse
 from datetime import datetime
 from pathlib import Path
 
@@ -48,88 +57,41 @@ class SessionLogger:
         self._task_id = task_id
         self._base_dir = Path(base_dir) if base_dir else Path.home() / ".akg"
         
-        # 日志放在 conversation 目录下: {base_dir}/conversations/{task_id}/logs/
-        if task_id:
-            self._session_dir = self._base_dir / "conversations" / task_id / "logs"
-        else:
-            # 尚未获知 task_id 时，使用临时目录（init 后会迁移）
-            self._session_dir = (
-                self._base_dir / "logs" / "sessions"
-                / self._ts.strftime("%Y-%m-%d")
-                / self._ts.strftime("%H-%M-%S")
-            )
-        
-        # 创建子目录
-        for sub in ("prompts", "responses", "tool_calls"):
-            (self._session_dir / sub).mkdir(parents=True, exist_ok=True)
-        
-        # 文件句柄
-        self._session_log = self._session_dir / "session.log"
-        self._events_jsonl = self._session_dir / "events.jsonl"
-        
         # 计数器
         self._llm_call_counter = {}  # round -> count
         self._tool_call_counter = {}  # round -> count
         
-        # 写入 latest 指针
-        try:
-            latest_file = self._base_dir / "logs" / "latest_session.txt"
-            latest_file.parent.mkdir(parents=True, exist_ok=True)
-            latest_file.write_text(str(self._session_dir), encoding="utf-8")
-        except Exception:
-            pass
+        # 目录和文件句柄（延迟到 bind_task 时创建）
+        self._session_dir = None
+        self._session_log = None
+        self._events_jsonl = None
+        
+        # 如果初始化时就有 task_id，直接创建目录
+        if task_id:
+            self._init_dirs(task_id)
+    
+    def _init_dirs(self, task_id: str):
+        """创建日志目录结构: {base_dir}/conversations/{task_id}/logs/"""
+        self._session_dir = self._base_dir / "conversations" / task_id / "logs"
+        for sub in ("prompts", "responses", "tool_calls"):
+            (self._session_dir / sub).mkdir(parents=True, exist_ok=True)
+        self._session_log = self._session_dir / "session.log"
+        self._events_jsonl = self._session_dir / "events.jsonl"
     
     def bind_task(self, task_id: str, base_dir: str = ""):
         """
-        绑定 task_id（在 agent 创建后调用，将日志迁移到 conversation 目录）
+        绑定 task_id，创建日志目录
         
-        如果初始化时未传 task_id，调用此方法后日志目录会切换到:
-            {base_dir}/conversations/{task_id}/logs/
+        日志目录: {base_dir}/conversations/{task_id}/logs/
         """
-        if self._task_id == task_id:
+        if self._task_id == task_id and self._session_dir is not None:
             return  # 已经绑定
         
-        old_dir = self._session_dir
         self._task_id = task_id
         if base_dir:
             self._base_dir = Path(base_dir)
         
-        self._session_dir = self._base_dir / "conversations" / task_id / "logs"
-        
-        # 创建新目录
-        for sub in ("prompts", "responses", "tool_calls"):
-            (self._session_dir / sub).mkdir(parents=True, exist_ok=True)
-        
-        # 迁移旧文件（如果有）
-        if old_dir.exists() and old_dir != self._session_dir:
-            import shutil
-            for item in old_dir.iterdir():
-                dest = self._session_dir / item.name
-                if item.is_dir():
-                    if dest.exists():
-                        for f in item.iterdir():
-                            shutil.move(str(f), str(dest / f.name))
-                    else:
-                        shutil.move(str(item), str(dest))
-                else:
-                    shutil.move(str(item), str(dest))
-            # 清理旧空目录
-            try:
-                old_dir.rmdir()
-            except Exception:
-                pass
-        
-        # 更新文件句柄
-        self._session_log = self._session_dir / "session.log"
-        self._events_jsonl = self._session_dir / "events.jsonl"
-        
-        # 更新 latest 指针
-        try:
-            latest_file = self._base_dir / "logs" / "latest_session.txt"
-            latest_file.parent.mkdir(parents=True, exist_ok=True)
-            latest_file.write_text(str(self._session_dir), encoding="utf-8")
-        except Exception:
-            pass
+        self._init_dirs(task_id)
     
     @property
     def session_dir(self) -> Path:
@@ -151,16 +113,22 @@ class SessionLogger:
     
     def _append_log(self, line: str):
         """追加一行到 session.log"""
+        if not self._session_log:
+            return
         with open(self._session_log, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     
     def _append_event(self, event: dict):
         """追加一条紧凑事件到 events.jsonl"""
+        if not self._events_jsonl:
+            return
         with open(self._events_jsonl, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
     
     def _save_text(self, subdir: str, file_id: str, ext: str, content: str) -> Path:
         """保存大文本到独立文件，返回路径"""
+        if not self._session_dir:
+            return Path("/dev/null")
         filepath = self._session_dir / subdir / f"{file_id}{ext}"
         filepath.write_text(content, encoding="utf-8")
         return filepath
@@ -350,12 +318,16 @@ class SessionLogger:
     
     def print_summary(self):
         """打印日志摘要"""
+        if not self._session_dir:
+            print("\n[日志摘要] 未绑定 task_id，无日志")
+            return
+        
         print(f"\n[日志摘要]")
         print(f"   目录: {self._session_dir}")
         
         # 统计文件数量
         prompt_count = len(list((self._session_dir / "prompts").glob("*.txt")))
-        resp_count = len(list((self._session_dir / "responses").glob("*.txt")))
+        resp_count = len(list((self._session_dir / "responses").glob("*.json")))
         tool_count = len(list((self._session_dir / "tool_calls").glob("*.json")))
         
         print(f"   Prompts:   {prompt_count} 个文件")
@@ -465,14 +437,41 @@ def wrap_agent_with_logging(agent):
     return agent
 
 
+# ==================== 自动模式配置 ====================
+
+# 自动模式下，当 Agent 流程中需要用户确认时，使用的默认回复
+AUTO_REPLY_MESSAGE = "同意你的方案，请直接继续执行，不需要再确认。初始需求完成后直接结束任务，不需要进一步优化。"
+
+# 自动模式下的最大轮次（防止无限循环）
+AUTO_MAX_ROUNDS = 50
+
+
 # ==================== 主测试函数 ====================
 
-async def test_kernel_agent():
-    """KernelAgent 交互式测试"""
+async def test_kernel_agent(auto_mode: bool = False, requirement: str = "",
+                            max_rounds: int = AUTO_MAX_ROUNDS,
+                            auto_reply: str = AUTO_REPLY_MESSAGE):
+    """KernelAgent 测试
+    
+    Args:
+        auto_mode: 是否自动模式（无需人工确认，跑完即退出）
+        requirement: 自动模式下的初始需求（交互模式下可为空）
+        max_rounds: 自动模式下的最大轮次
+        auto_reply: 自动模式下对 Agent 流程中确认的默认回复
+    """
+    
+    mode_label = "自动模式" if auto_mode else "交互模式"
     
     print("\n" + "=" * 80)
-    print("KernelAgent 测试")
+    print(f"KernelAgent 测试 ({mode_label})")
     print("=" * 80 + "\n")
+    
+    if auto_mode:
+        print(f"[自动模式] 自动回复: \"{auto_reply}\"")
+        print(f"[自动模式] 最大轮次: {max_rounds}")
+        if requirement:
+            print(f"[自动模式] 初始需求: {requirement[:100]}")
+        print()
     
     # 诊断导入
     print("[诊断] 检查模块导入...")
@@ -526,25 +525,50 @@ async def test_kernel_agent():
         print()
         
         round_num = 0
+        first_input = True  # 标记是否为第一次输入
         
         while True:
             round_num += 1
             global _current_round
             _current_round = round_num
             
+            # 自动模式下检查最大轮次
+            if auto_mode and round_num > max_rounds:
+                print(f"\n[自动模式] 已达到最大轮次 {max_rounds}，自动退出")
+                break
+            
             print("\n" + "=" * 80)
             print(f"Round {round_num}")
             print("=" * 80)
             
             # 获取用户输入
-            try:
-                user_input = input("\n请输入需求（quit 退出）: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\n\n用户中断")
-                break
-            
-            if user_input.lower() in ['quit', 'exit', 'q']:
-                break
+            if auto_mode:
+                if first_input:
+                    # 自动模式第一轮：使用命令行传入的 requirement
+                    if requirement:
+                        user_input = requirement
+                    else:
+                        # 没有通过命令行传 requirement，交互式获取一次
+                        try:
+                            user_input = input("\n请输入需求: ").strip()
+                        except (EOFError, KeyboardInterrupt):
+                            print("\n\n用户中断")
+                            break
+                    first_input = False
+                else:
+                    # 自动模式后续轮：自动回复
+                    user_input = auto_reply
+                    print(f"\n[自动回复] {user_input}")
+            else:
+                # 交互模式：每次都等待用户输入
+                try:
+                    user_input = input("\n请输入需求（quit 退出）: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\n\n用户中断")
+                    break
+                
+                if user_input.lower() in ['quit', 'exit', 'q']:
+                    break
             
             if not user_input:
                 round_num -= 1
@@ -629,10 +653,21 @@ async def test_kernel_agent():
             
             # 需要用户响应
             if result.get('status') == 'waiting_for_user':
-                print(f"\n[Agent 询问]")
+                task_completed = result.get('task_completed', False)
+                
+                print(f"\n[Agent 询问] (task_completed={task_completed})")
                 print("-" * 80)
                 print(result.get('message'))
                 print("-" * 80)
+                
+                if auto_mode and task_completed:
+                    # LLM 标记任务已完成 → 直接退出循环
+                    print(f"\n[自动模式] LLM 标记 task_completed=true，任务已完成，自动退出")
+                    break
+                elif auto_mode:
+                    # 流程中的确认 → 自动回复
+                    print(f"[自动模式] 流程中确认，将自动回复: \"{auto_reply}\"")
+                
                 continue
             
             # 完成或出错
@@ -641,7 +676,13 @@ async def test_kernel_agent():
                 print(f"\n[{status_tag}] 任务 {result.get('status').upper()}!")
                 if result.get('status') == 'success':
                     print(f"  总共执行了 {result.get('total_actions', 0)} 个动作")
-                continue
+                
+                if auto_mode:
+                    # 自动模式下 finish/error 也直接退出
+                    print(f"\n[自动模式] 任务已{result.get('status')}，自动退出")
+                    break
+                else:
+                    continue
         
         # 会话结束
         summary = agent.get_trace_summary() if hasattr(agent, 'get_trace_summary') else {}
@@ -670,6 +711,56 @@ async def test_kernel_agent():
         return False
 
 
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(
+        description="KernelAgent 测试工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  # 交互模式（默认）
+  python examples/run_kernel_agent.py
+
+  # 自动模式 + 命令行指定需求
+  python examples/run_kernel_agent.py --auto --requirement "实现一个向量加法算子"
+
+  # 自动模式 + 自定义回复 + 限制轮次
+  python examples/run_kernel_agent.py --auto -r "实现矩阵乘法算子" --max-rounds 30
+
+  # 自动模式，不指定需求（会交互式输入一次需求，之后全自动）
+  python examples/run_kernel_agent.py --auto
+        """
+    )
+    
+    parser.add_argument(
+        "--auto", action="store_true",
+        help="启用自动模式：Agent 需要确认时自动回复，task_completed=true 时自动退出"
+    )
+    parser.add_argument(
+        "-r", "--requirement",
+        type=str, default="",
+        help="初始需求（自动模式下可选，若不指定则交互式输入一次）"
+    )
+    parser.add_argument(
+        "--max-rounds",
+        type=int, default=AUTO_MAX_ROUNDS,
+        help=f"自动模式下的最大轮次（默认: {AUTO_MAX_ROUNDS}）"
+    )
+    parser.add_argument(
+        "--auto-reply",
+        type=str, default=AUTO_REPLY_MESSAGE,
+        help=f"自动模式下对 Agent 流程中确认的默认回复"
+    )
+    
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    success = asyncio.run(test_kernel_agent())
+    args = parse_args()
+    success = asyncio.run(test_kernel_agent(
+        auto_mode=args.auto,
+        requirement=args.requirement,
+        max_rounds=args.max_rounds,
+        auto_reply=args.auto_reply,
+    ))
     sys.exit(0 if success else 1)

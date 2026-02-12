@@ -787,12 +787,15 @@ class ReActAgent(AgentBase, ABC):
         暂停执行，等待用户响应。
         
         Args:
-            arguments: ask_user 参数
+            arguments: ask_user 参数，包含:
+                - message: 询问消息
+                - task_completed: 初始任务是否已完成（可选，默认 False）
         
         Returns:
-            等待用户响应的结果
+            等待用户响应的结果，包含 task_completed 标记
         """
         message = arguments.get("message", "请提供更多信息")
+        task_completed = arguments.get("task_completed", False)
         
         # 添加 ask_user 节点到 trace
         action = {
@@ -800,7 +803,7 @@ class ReActAgent(AgentBase, ABC):
             "arguments": arguments,
             "timestamp": datetime.now().isoformat()
         }
-        result = {"status": "waiting", "message": message}
+        result = {"status": "waiting", "message": message, "task_completed": task_completed}
         
         new_node_id = self.trace.add_node(
             action=action,
@@ -809,7 +812,7 @@ class ReActAgent(AgentBase, ABC):
         )
         self.current_node_id = new_node_id
         
-        logger.info(f"[等待用户] {message[:100]}...")
+        logger.info(f"[等待用户] {message[:100]}... (task_completed={task_completed})")
         
         # 获取完整历史用于返回
         full_history = self.trace.get_full_action_history(self.current_node_id)
@@ -818,6 +821,7 @@ class ReActAgent(AgentBase, ABC):
         return {
             "status": "waiting_for_user",
             "message": message,
+            "task_completed": task_completed,
             "output": f"等待用户响应: {message}",
             "plan_list": self.plan_list,
             "history": [self._format_action_record(r, anm) for r in full_history]

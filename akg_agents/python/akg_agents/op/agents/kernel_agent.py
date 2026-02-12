@@ -415,7 +415,7 @@ class KernelAgent(ReActAgent):
                     framework_code="",      # 会被 verifier node 从 state 更新
                     task_id="0",
                     framework=self.framework,
-                    dsl=self.dsl,           # 使用 agent 实际的 dsl，而非硬编码 "triton"
+                    dsl=self.dsl,
                     backend=self.backend,
                     arch=self.arch,
                     config=verifier_config  # 必需参数
