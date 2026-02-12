@@ -213,7 +213,7 @@ def register_common_command(
             help="Exit after processing --intent (non-interactive mode)",
         ),
     ) -> None:
-        """Common entry (ReAct mode)."""
+        """Common Agent(Demo)"""
         akg_console = AKGConsole(console, use_stream=stream)
         print_logo_once(akg_console)
 

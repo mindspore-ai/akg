@@ -69,7 +69,7 @@ from .commands import (
     register_common_command,
     register_misc_commands,
     register_op_command,
-    register_trace_command,
+    register_sessions_command,
     register_resume_command,
 )
 
@@ -105,7 +105,7 @@ def _global_options(
 register_op_command(app, console, services)
 register_common_command(app, console, services)
 register_misc_commands(app, console, services)
-register_trace_command(app, console, services)
+register_sessions_command(app, console, services)
 register_resume_command(app, console, services)
 
 
