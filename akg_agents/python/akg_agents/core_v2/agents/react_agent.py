@@ -256,6 +256,18 @@ class ReActAgent(AgentBase, ABC):
         """
         return {}
     
+    def _get_domain(self) -> str:
+        """
+        获取当前 agent 所属的领域标识
+        
+        子类应覆盖此方法以返回对应的领域名称（如 "op", "graph" 等）。
+        该值会保存到 TaskInfo.domain 中，用于 sessions list 展示和 resume 路由。
+        
+        Returns:
+            领域标识字符串，默认为 "common"
+        """
+        return "common"
+    
     def _on_plan_updated(self, result: Dict):
         """
         Plan 更新回调
@@ -856,7 +868,8 @@ class ReActAgent(AgentBase, ABC):
                     op_name=extra_info.get("op_name", ""),
                     dsl=extra_info.get("dsl", ""),
                     backend=extra_info.get("backend", ""),
-                    arch=extra_info.get("arch", "")
+                    arch=extra_info.get("arch", ""),
+                    domain=self._get_domain(),
                 ).to_dict(),
                 execution_info=ExecutionInfo(
                     tool_call_counter=0,

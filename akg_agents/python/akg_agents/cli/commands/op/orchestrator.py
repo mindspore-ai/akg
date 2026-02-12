@@ -226,10 +226,10 @@ class OpCommandOrchestrator:
                 session_id=resume_sid,
             )
 
-            # 显示 session_id，方便用户后续 --resume
+            # 显示 session_id，方便用户后续恢复
             akg_console.print(
                 f"[{DisplayStyle.DIM}]Session ID: {executor.session_id} "
-                f"(恢复命令: akg_cli op --resume {executor.session_id} ...)[/{DisplayStyle.DIM}]"
+                f"(恢复命令: akg_cli resume {executor.session_id})[/{DisplayStyle.DIM}]"
             )
 
             # interactive
@@ -264,7 +264,7 @@ class OpCommandOrchestrator:
                     f"[{DisplayStyle.DIM}]Session ID: {executor.session_id}[/{DisplayStyle.DIM}]"
                 )
                 akg_console.print(
-                    f"[{DisplayStyle.DIM}]恢复命令: akg_cli op --resume {executor.session_id}[/{DisplayStyle.DIM}]"
+                    f"[{DisplayStyle.DIM}]恢复命令: akg_cli resume {executor.session_id}[/{DisplayStyle.DIM}]"
                 )
             akg_console.print(
                 f"[{DisplayStyle.DIM}]已发送 cancel 请求。日志请查看 log_dir。[/{DisplayStyle.DIM}]"

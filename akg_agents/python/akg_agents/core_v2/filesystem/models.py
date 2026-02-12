@@ -53,6 +53,7 @@ class TaskInfo:
     dsl: str = ""
     backend: str = ""
     arch: str = ""
+    domain: str = ""  # 会话所属领域，如 "op", "common", "graph" 等
     
     def to_dict(self) -> Dict:
         return asdict(self)

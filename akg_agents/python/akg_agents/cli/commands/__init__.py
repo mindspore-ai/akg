@@ -17,4 +17,4 @@
 from .common import register_common_command
 from .misc import register_misc_commands
 from .op import register_op_command
-from .trace import register_trace_command
+from .trace import register_trace_command, register_resume_command

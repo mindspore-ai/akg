@@ -87,7 +87,7 @@ def register_op_command(
         resume: Optional[str] = typer.Option(
             None,
             "--resume",
-            help="恢复已有会话。传入 session_id（如 50b111f7-d898-43a3-8945-eed5fd17fdf1）或完整 task_id（如 cli_50b111f7-...）",
+            help="[兼容] 恢复已有会话。推荐使用顶层命令: akg_cli resume <session_id>",
         ),
     ) -> None:
         """算子生成入口。"""
