@@ -21,16 +21,14 @@
 #include <vector>
 
 #include "llvm/Support/Debug.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/BaseCluster.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
+#include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
 
 #define DEBUG_TYPE "dvm-cluster"
 
@@ -44,19 +42,19 @@ constexpr int64_t kMinDimSize = 512;
 
 /// Get element type from a value or type
 Type getElementType(Type type) {
-  if (auto tensor_type = dyn_cast<TensorType>(type)) {
-    return tensor_type.getElementType();
+  if (auto tensorType = dyn_cast<TensorType>(type)) {
+    return tensorType.getElementType();
   }
-  if (auto ranked_tensor = dyn_cast<RankedTensorType>(type)) {
-    return ranked_tensor.getElementType();
+  if (auto rankedTensor = dyn_cast<RankedTensorType>(type)) {
+    return rankedTensor.getElementType();
   }
   return Type();
 }
 
 bool isComplexDataType(Operation *op) {
   if (op->getNumResults() > 0) {
-    Type output_type = op->getResult(0).getType();
-    if (mlir::isa<ComplexType>(output_type)) {
+    Type outputType = op->getResult(0).getType();
+    if (mlir::isa<ComplexType>(outputType)) {
       return true;
     }
   }
@@ -68,14 +66,14 @@ bool isComplexDataType(Operation *op) {
   // Get the output type of op's first input's defining op
   // This assumes the first operand is produced by another op
   Value input0 = op->getOperand(0);
-  Operation *def_op = input0.getDefiningOp();
-  if (!def_op) {
+  Operation *defOp = input0.getDefiningOp();
+  if (!defOp) {
     return false;
   }
 
   // Get the output type of the defining op
-  if (auto output_type = getElementType(def_op->getResult(0).getType())) {
-    if (mlir::isa<ComplexType>(output_type)) {
+  if (auto outputType = getElementType(defOp->getResult(0).getType())) {
+    if (mlir::isa<ComplexType>(outputType)) {
       return true;
     }
   }
@@ -85,22 +83,22 @@ bool isComplexDataType(Operation *op) {
 /// DvmSupportChecker - Singleton class for checking DVM operator support.
 class DvmSupportChecker {
  public:
-  static DvmSupportChecker &Instance() {
+  static DvmSupportChecker &instance() {
     static DvmSupportChecker instance;
     return instance;
   }
 
   /// Check if operation is supported by DVM
-  bool Check(Operation *op) const {
+  bool check(Operation *op) const {
     // Check if operation format is supported by DVM, currently not implemented.
-    if (!CheckFormat(op)) {
+    if (!checkFormat(op)) {
       return false;
     }
-    std::string op_name = op->getName().getStringRef().str();
+    std::string opName = op->getName().getStringRef().str();
 
     // Find check function for this operation
-    auto it = check_func_.find(op_name);
-    if (it != check_func_.end()) {
+    auto it = checkFunc_.find(opName);
+    if (it != checkFunc_.end()) {
       // Execute all check functions for this operation
       const auto &funcs = it->second;
       for (const auto &func : funcs) {
@@ -112,130 +110,127 @@ class DvmSupportChecker {
     }
 
     // Default check: output must be float/int type
-    Type output_type = getElementType(op->getResult(0).getType());
-    if (!output_type) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    if (!outputType) {
       return false;  // Can't check without element type
     }
-    return IsFloatType(output_type) && InputCheck(op, {});
+    return isFloatType(outputType) && inputCheck(op, {});
   }
 
  private:
-  DvmSupportChecker() { InitializeCheckFunc(); }
+  DvmSupportChecker() { initializeCheckFunc(); }
 
   // Check if operation format is supported by DVM, currently not implemented.
-  bool CheckFormat(Operation *op) const { return true; }
+  bool checkFormat(Operation *op) const { return true; }
 
-  void InitializeCheckFunc() {
-    auto input_same_type = [](Operation *op) { return IsElementTypesConsistent(op); };
-    auto input_check_all = [](Operation *op) { return InputCheck(op, {}); };
-    auto input_check_first = [](Operation *op) { return InputCheck(op, {0}); };
-    auto cast_check = [](Operation *op) { return CastCheck(op); };
-    auto int_op_check = [](Operation *op) { return IntOpCheck(op); };
-    auto compare_check = [](Operation *op) { return CompareCheck(op); };
-    auto transpose_op_check = [](Operation *op) { return TransposeOpCheck(op); };
-    // TODO: Add collective_comm_op_check when support AllReduce.
+  void initializeCheckFunc() {
+    auto inputSameType = [](Operation *op) { return isElementTypesConsistent(op); };
+    auto inputCheckAll = [](Operation *op) { return inputCheck(op, {}); };
+    auto inputCheckFirst = [](Operation *op) { return inputCheck(op, {0}); };
+    auto castCheck = [](Operation *op) { return castCheckFunc(op); };
+    auto intOpCheck = [](Operation *op) { return intOpCheckFunc(op); };
+    auto compareCheck = [](Operation *op) { return compareCheckFunc(op); };
+    auto transposeOpCheck = [](Operation *op) { return transposeOpCheckFunc(op); };
+    // Should add collective_comm_op_check when support AllReduce.
 
     // cast op
-    check_func_["mfuse.cast"] = {cast_check};
+    checkFunc_["mfuse.cast"] = {castCheck};
     // reduce sum op
-    check_func_["mfuse.reduce_sum"] = {ReduceSumCheck, input_check_first};
+    checkFunc_["mfuse.reduce_sum"] = {reduceSumCheck, inputCheckFirst};
     // cmp op
-    check_func_["mfuse.eq"] = {compare_check, input_same_type};
-    check_func_["mfuse.ne"] = {compare_check, input_same_type};
-    check_func_["mfuse.gt"] = {compare_check, input_same_type};
-    check_func_["mfuse.ge"] = {compare_check, input_same_type};
-    check_func_["mfuse.lt"] = {compare_check, input_same_type};
-    check_func_["mfuse.le"] = {compare_check, input_same_type};
-    check_func_["mfuse.is_finite"] = {compare_check, IsFiniteOpCheck};
+    checkFunc_["mfuse.eq"] = {compareCheck, inputSameType};
+    checkFunc_["mfuse.ne"] = {compareCheck, inputSameType};
+    checkFunc_["mfuse.gt"] = {compareCheck, inputSameType};
+    checkFunc_["mfuse.ge"] = {compareCheck, inputSameType};
+    checkFunc_["mfuse.lt"] = {compareCheck, inputSameType};
+    checkFunc_["mfuse.le"] = {compareCheck, inputSameType};
+    checkFunc_["mfuse.is_finite"] = {compareCheck, isFiniteOpCheckFunc};
     // select op
-    check_func_["mfuse.select"] = {SelectOpCheck, [](Operation *op) { return InputCheck(op, {1, 2}); }};
+    checkFunc_["mfuse.select"] = {selectOpCheck, [](Operation *op) { return inputCheck(op, {kIndex1, kIndex2}); }};
     // int op
-    check_func_["mfuse.add"] = {int_op_check, input_check_all};
-    check_func_["mfuse.sub"] = {int_op_check, input_check_all};
-    check_func_["mfuse.mul"] = {MulOpCheck};
-    check_func_["mfuse.maximum"] = {int_op_check, input_check_all};
-    check_func_["mfuse.minimum"] = {int_op_check, input_check_all};
-    check_func_["mfuse.neg"] = {int_op_check, input_check_all};
-    check_func_["mfuse.abs"] = {int_op_check, input_check_all};
-    // TODO: Add Assign check. There is no corresponding op in aten.
-    check_func_["mfuse.broadcast_to"] = {int_op_check, input_check_first};
+    checkFunc_["mfuse.add"] = {intOpCheck, inputCheckAll};
+    checkFunc_["mfuse.sub"] = {intOpCheck, inputCheckAll};
+    checkFunc_["mfuse.mul"] = {mulOpCheck};
+    checkFunc_["mfuse.maximum"] = {intOpCheck, inputCheckAll};
+    checkFunc_["mfuse.minimum"] = {intOpCheck, inputCheckAll};
+    checkFunc_["mfuse.neg"] = {intOpCheck, inputCheckAll};
+    checkFunc_["mfuse.abs"] = {intOpCheck, inputCheckAll};
+    // Should add Assign check. There is no corresponding op in aten.
+    checkFunc_["mfuse.broadcast_to"] = {intOpCheck, inputCheckFirst};
     // slice op
-    check_func_["mfuse.slice"] = {SliceSupported, input_check_first};
-    // TODO: Add StridedSlice check. There is no corresponding op in aten.
+    checkFunc_["mfuse.slice"] = {sliceSupported, inputCheckFirst};
+    // Should add StridedSlice check. There is no corresponding op in aten.
     //  matmul op
-    check_func_["mfuse.matmul"] = {MatMulOpCheck, input_check_all};
-    check_func_["mfuse.batch_matmul"] = {MatMulOpCheck, input_check_all};
-    // TODO: Add GroupedMatmul check. There is no corresponding op in aten.
+    checkFunc_["mfuse.matmul"] = {matmulOpCheck, inputCheckAll};
+    checkFunc_["mfuse.batch_matmul"] = {matmulOpCheck, inputCheckAll};
+    checkFunc_["mfuse.grouped_matmul"] = {groupedMatmulOpCheck, inputCheckAll};
     // transpose op
-    check_func_["mfuse.permute"] = {transpose_op_check, input_check_all};
-    // collective comm op
-    // TODO: Add AllReduce
-    check_func_["mfuse.reshape"] = {ReshapeOpCheck};
+    checkFunc_["mfuse.permute"] = {transposeOpCheck, inputCheckAll};
+    checkFunc_["mfuse.reshape"] = {reshapeOpCheck};
   }
 
-  static bool IsCastTypeSupported(Type type) {
+  static bool isCastTypeSupported(Type type) {
     return type.isF16() || type.isF32() || type.isInteger(1) || type.isInteger(32) || type.isBF16();
   }
 
-  static bool CastCheck(Operation *op) {
-    Type output_type = getElementType(op->getResult(0).getType());
-    Type input_type = getElementType(op->getOperand(0).getType());
+  static bool castCheckFunc(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    Type inputType = getElementType(op->getOperand(0).getType());
 
     // Check input type
-    if (!input_type || !output_type) {
+    if (!inputType || !outputType) {
       return false;
     }
 
     // Check if both input and output types are supported
-    return IsCastTypeSupported(input_type) && IsCastTypeSupported(output_type);
+    return isCastTypeSupported(inputType) && isCastTypeSupported(outputType);
   }
 
-  static bool ReduceSumCheck(Operation *op) {
-    // TODO: Check ReduceSum skip_mode attr for mindspore.
-    Type output_type = getElementType(op->getResult(0).getType());
-    return output_type && IsFloatType(output_type);
+  static bool reduceSumCheck(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    return outputType && isFloatType(outputType);
   }
 
-  static bool CompareCheck(Operation *op) {
-    Type input_type = getElementType(op->getOperand(0).getType());
-    return input_type && IsFloatIntType(input_type);
+  static bool compareCheckFunc(Operation *op) {
+    Type inputType = getElementType(op->getOperand(0).getType());
+    return inputType && isFloatIntType(inputType);
   }
 
-  static bool IsFiniteOpCheck(Operation *op) {
-    Type input_type = getElementType(op->getOperand(0).getType());
-    return input_type && !input_type.isInteger(32);
+  static bool isFiniteOpCheckFunc(Operation *op) {
+    Type inputType = getElementType(op->getOperand(0).getType());
+    return inputType && !inputType.isInteger(32);
   }
 
-  static bool SelectOpCheck(Operation *op) {
+  static bool selectOpCheck(Operation *op) {
     // Check first operand is bool type
-    Type cond_type = getElementType(op->getOperand(0).getType());
-    if (!cond_type || (!cond_type.isInteger(1) && !cond_type.isSignlessInteger(1))) {
+    Type condType = getElementType(op->getOperand(0).getType());
+    if (!condType || (!condType.isInteger(1) && !condType.isSignlessInteger(1))) {
       LLVM_DEBUG(llvm::dbgs() << "Select op condition not bool\n");
       return false;
     }
-    Type output_type = getElementType(op->getResult(0).getType());
+    Type outputType = getElementType(op->getResult(0).getType());
     // Only support float type
-    return output_type && IsFloatType(output_type);
+    return outputType && isFloatType(outputType);
   }
 
-  static bool IntOpCheck(Operation *op) {
-    Type output_type = getElementType(op->getResult(0).getType());
-    return output_type && IsFloatIntType(output_type);
+  static bool intOpCheckFunc(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    return outputType && isFloatIntType(outputType);
   }
 
-  static bool MulOpCheck(Operation *op) {
-    return MixTypeCheck(op, [](Type type) { return IsFloatIntType(type); }, {});
+  static bool mulOpCheck(Operation *op) {
+    return mixTypeCheck(op, [](Type type) { return isFloatIntType(type); }, {});
   }
 
-  static bool TransposeOpCheck(Operation *op) {
-    Type output_type = getElementType(op->getResult(0).getType());
-    return output_type && (output_type.isF32() || output_type.isF16());
+  static bool transposeOpCheckFunc(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    return outputType && (outputType.isF32() || outputType.isF16());
   }
 
-  static bool MatMulOpCheck(Operation *op) {
-    Type output_type = getElementType(op->getResult(0).getType());
+  static bool matmulOpCheck(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
     // Only support float16 and bfloat16
-    if (!output_type.isF16() && !output_type.isBF16()) {
+    if (!outputType.isF16() && !outputType.isBF16()) {
       LLVM_DEBUG(llvm::dbgs() << "MatMul op not float16/bfloat16\n");
       return false;
     }
@@ -246,93 +241,200 @@ class DvmSupportChecker {
     }
 
     // Check shape constraints
-    return MatMulShapeCheck(op);
+    return matMulShapeCheck(op);
   }
 
-  static bool ReshapeOpCheck(Operation *op) {
-    auto node = op->getOperand(0);
-    Operation *cube_op = nullptr;
-    if (op->getName().getStringRef() == "mfuse.matmul" || op->getName().getStringRef() == "mfuse.batch_matmul" ||
-        op->getName().getStringRef() == "mfuse.grouped_matmul") {
-      cube_op = node.getDefiningOp();
-    }
-    return cube_op && DVMCluster::CanClusterableOp(DVMCluster::GetClusterableOps(), cube_op);
-  }
-
-  /// MatMul shape check helper
-  static bool MatMulShapeCheck(Operation *op) {
-    auto output_type_tensor = dyn_cast<TensorType>(op->getResult(0).getType());
-    auto input1_type_tensor = dyn_cast<TensorType>(op->getOperand(0).getType());
-    auto input2_type_tensor = dyn_cast<TensorType>(op->getOperand(1).getType());
-
-    // Check tensor types
-    if (!output_type_tensor || !input1_type_tensor || !input2_type_tensor) {
+  static bool checkSplitItemAttr(Operation *op) {
+    constexpr int64_t kSplitNumType3 = 3;
+    auto splitItemAttr = op->getAttr("split_item");
+    if (!splitItemAttr) {
+      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: missing split_item attr\n");
       return false;
     }
-    auto a_shape = input1_type_tensor.getShape();
-    auto b_shape = input2_type_tensor.getShape();
-    auto c_shape = output_type_tensor.getShape();
-    if (a_shape.back() > kMaxDimSize || b_shape.back() > kMaxDimSize) {
-      return false;
-    }
-    if (op->getName().getStringRef() == "mfuse.matmul" && c_shape.back() <= kMinDimSize && c_shape.size() >= 2 &&
-        c_shape[c_shape.size() - 2] <= kMinDimSize) {
-      return false;
-    }
-    if (op->getName().getStringRef() == "mfuse.batch_matmul" && c_shape.size() > 4) {
+    auto splitItem = dyn_cast<IntegerAttr>(splitItemAttr);
+    if (!splitItem || splitItem.getInt() != kSplitNumType3) {
+      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: split_item must be " << kSplitNumType3 << "\n");
       return false;
     }
     return true;
   }
 
-  static bool SliceSupported(Operation *op) {
-    constexpr size_t max_rank = 4;
+  static bool checkGroupTypeAttr(Operation *op) {
+    constexpr int64_t kGroupTypeK = 2;
+    constexpr int64_t kGroupTypeM = 0;
+    auto groupTypeAttr = op->getAttr("group_type");
+    if (!groupTypeAttr) {
+      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: missing group_type attr\n");
+      return false;
+    }
+    auto groupType = dyn_cast<IntegerAttr>(groupTypeAttr);
+    if (!groupType || (groupType.getInt() != kGroupTypeM && groupType.getInt() != kGroupTypeK)) {
+      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: group_type must be " << kGroupTypeM << " or " << kGroupTypeK << "\n");
+      return false;
+    }
+    return true;
+  }
+
+  static bool checkOutputType(Operation *op) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    if (!outputType.isF16() && !outputType.isBF16()) {
+      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: output type must be float16 or bfloat16\n");
+      return false;
+    }
+    return true;
+  }
+
+  static bool checkOptionalInput(Operation *op, size_t index) {
+    if (index >= op->getNumOperands()) {
+      return true;
+    }
+    Value operand = op->getOperand(index);
+    Type operandType = operand.getType();
+    if (isa<TensorType>(operandType)) {
+      auto tensorType = dyn_cast<TensorType>(operandType);
+      if (!tensorType || !tensorType.hasStaticShape()) {
+        LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: optional input at index " << index << " must have static shape\n");
+        return false;
+      }
+      auto shape = tensorType.getShape();
+      if (shape.size() != 1 || shape[0] != 0) {
+        LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: optional input at index " << index << " must be empty tensor {0}\n");
+        return false;
+      }
+    } else if (!isa<NoneType>(operandType)) {
+      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: optional input at index " << index << " must be Tensor or None\n");
+      return false;
+    }
+    return true;
+  }
+
+  static bool checkOptionalInputs(Operation *op) {
+    for (size_t i = kIndex3; i <= kIndex6; ++i) {
+      if (!checkOptionalInput(op, i)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static bool checkDimensionConstraints(Operation *op) {
+    auto input1TypeTensor = dyn_cast<TensorType>(op->getOperand(0).getType());
+    auto input2TypeTensor = dyn_cast<TensorType>(op->getOperand(1).getType());
+    if (!input1TypeTensor || !input2TypeTensor) {
+      return false;
+    }
+    auto aShape = input1TypeTensor.getShape();
+    auto bShape = input2TypeTensor.getShape();
+    if (aShape.empty() || bShape.empty()) {
+      return false;
+    }
+    if (aShape.back() > kMaxDimSize || bShape.back() > kMaxDimSize) {
+      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: dimension size exceeds max " << kMaxDimSize << "\n");
+      return false;
+    }
+    return true;
+  }
+
+  static bool groupedMatmulOpCheck(Operation *op) {
+    if (!checkSplitItemAttr(op)) {
+      return false;
+    }
+    if (!checkGroupTypeAttr(op)) {
+      return false;
+    }
+    if (!checkOutputType(op)) {
+      return false;
+    }
+    if (!checkOptionalInputs(op)) {
+      return false;
+    }
+    return checkDimensionConstraints(op);
+  }
+
+  static bool reshapeOpCheck(Operation *op) {
+    auto tensorNode = op->getOperand(0);
+    Operation *cubeOp = nullptr;
+    if (op->getName().getStringRef() == "mfuse.matmul" || op->getName().getStringRef() == "mfuse.batch_matmul" ||
+        op->getName().getStringRef() == "mfuse.grouped_matmul") {
+      cubeOp = tensorNode.getDefiningOp();
+    }
+    return cubeOp && DVMCluster::canClusterableOp(DVMCluster::getClusterableOps(), cubeOp);
+  }
+
+  /// MatMul shape check helper
+  static bool matMulShapeCheck(Operation *op) {
+    auto outputTypeTensor = dyn_cast<TensorType>(op->getResult(0).getType());
+    auto input1TypeTensor = dyn_cast<TensorType>(op->getOperand(0).getType());
+    auto input2TypeTensor = dyn_cast<TensorType>(op->getOperand(1).getType());
+
+    // Check tensor types
+    if (!outputTypeTensor || !input1TypeTensor || !input2TypeTensor) {
+      return false;
+    }
+    auto aShape = input1TypeTensor.getShape();
+    auto bShape = input2TypeTensor.getShape();
+    auto cShape = outputTypeTensor.getShape();
+    if (aShape.back() > kMaxDimSize || bShape.back() > kMaxDimSize) {
+      return false;
+    }
+    if (op->getName().getStringRef() == "mfuse.matmul" && cShape.back() <= kMinDimSize && cShape.size() >= 2 &&
+        cShape[cShape.size() - 2] <= kMinDimSize) {
+      return false;
+    }
+    if (op->getName().getStringRef() == "mfuse.batch_matmul" && cShape.size() > 4) {
+      return false;
+    }
+    return true;
+  }
+
+  static bool sliceSupported(Operation *op) {
+    constexpr size_t kMaxRank = 4;
     if (op->getNumOperands() < 1) {
       return false;
     }
 
-    Type output_type = getElementType(op->getResult(0).getType());
+    Type outputType = getElementType(op->getResult(0).getType());
     // Check output type is float/int
-    if (!IsFloatIntType(output_type)) {
+    if (!isFloatIntType(outputType)) {
       return false;
     }
 
-    auto output_type_tensor = dyn_cast<TensorType>(op->getResult(0).getType());
-    auto input_type_tensor = dyn_cast<TensorType>(op->getOperand(0).getType());
+    auto outputTypeTensor = dyn_cast<TensorType>(op->getResult(0).getType());
+    auto inputTypeTensor = dyn_cast<TensorType>(op->getOperand(0).getType());
 
     // Check tensor types
-    if (!output_type_tensor || !input_type_tensor) {
+    if (!outputTypeTensor || !inputTypeTensor) {
       return false;
     }
 
-    auto input_shape = input_type_tensor.getShape();
-    if (input_shape.size() > max_rank) {
+    auto inputShape = inputTypeTensor.getShape();
+    if (inputShape.size() > kMaxRank) {
       return false;
     }
-    auto output_shape = output_type_tensor.getShape();
-    auto rank = output_shape.size();
+    auto outputShape = outputTypeTensor.getShape();
+    auto rank = outputShape.size();
     for (size_t i = 3; i < rank && rank >= i + 1; i++) {
-      if (input_shape[rank - 1 - i] != output_shape[rank - 1 - i]) {
+      if (inputShape[rank - 1 - i] != outputShape[rank - 1 - i]) {
         return false;
       }
     }
 
-    // TODO: Check StridedSlice specific: step_vector must be all 1.
+    // To check StridedSlice specific: step_vector must be all 1.
     return true;
   }
 
   /// Check input types
-  static bool InputCheck(Operation *op, const std::vector<size_t> &inputs_to_check) {
-    Type output_type = getElementType(op->getResult(0).getType());
-    size_t input_num = op->getNumOperands();
+  static bool inputCheck(Operation *op, const std::vector<size_t> &inputsToCheck) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    size_t inputNum = op->getNumOperands();
 
     std::vector<size_t> inputs;
-    if (inputs_to_check.empty()) {
-      for (size_t i = 0; i < input_num; ++i) {
+    if (inputsToCheck.empty()) {
+      for (size_t i = 0; i < inputNum; ++i) {
         inputs.push_back(i);
       }
     } else {
-      inputs = inputs_to_check;
+      inputs = inputsToCheck;
     }
 
     for (size_t idx : inputs) {
@@ -340,13 +442,13 @@ class DvmSupportChecker {
         continue;
       }
       Value operand = op->getOperand(idx);
-      Type operand_type = operand.getType();
+      Type operandType = operand.getType();
       // Skip tensor type check for non-tensor inputs
-      if (!isa<TensorType>(operand_type)) {
+      if (!isa<TensorType>(operandType)) {
         continue;
       }
-      Type input_type = getElementType(operand_type);
-      if (input_type != output_type) {
+      Type inputType = getElementType(operandType);
+      if (inputType != outputType) {
         return false;
       }
     }
@@ -354,29 +456,29 @@ class DvmSupportChecker {
   }
 
   /// Check element type mix
-  static bool MixTypeCheck(Operation *op, const std::function<bool(Type)> &type_check,
-                           const std::vector<size_t> &inputs_to_check) {
-    Type output_type = getElementType(op->getResult(0).getType());
-    if (!type_check(output_type)) {
+  static bool mixTypeCheck(Operation *op, const std::function<bool(Type)> &typeCheck,
+                           const std::vector<size_t> &inputsToCheck) {
+    Type outputType = getElementType(op->getResult(0).getType());
+    if (!typeCheck(outputType)) {
       return false;
     }
 
-    size_t input_num = op->getNumOperands();
+    size_t inputNum = op->getNumOperands();
     std::vector<size_t> inputs;
-    if (inputs_to_check.empty()) {
-      for (size_t i = 0; i < input_num; ++i) {
+    if (inputsToCheck.empty()) {
+      for (size_t i = 0; i < inputNum; ++i) {
         inputs.push_back(i);
       }
     } else {
-      inputs = inputs_to_check;
+      inputs = inputsToCheck;
     }
 
     for (size_t idx : inputs) {
       if (idx >= op->getNumOperands()) {
         continue;
       }
-      Type input_type = getElementType(op->getOperand(idx).getType());
-      if (!type_check(input_type)) {
+      Type inputType = getElementType(op->getOperand(idx).getType());
+      if (!typeCheck(inputType)) {
         return false;
       }
     }
@@ -384,35 +486,35 @@ class DvmSupportChecker {
   }
 
   /// Check if element types are consistent
-  static bool IsElementTypesConsistent(Operation *op) {
+  static bool isElementTypesConsistent(Operation *op) {
     if (op->getNumOperands() <= 1) {
       return true;
     }
 
-    Type first_elem_type = getElementType(op->getOperand(0).getType());
-    if (!first_elem_type) {
+    Type firstElemType = getElementType(op->getOperand(0).getType());
+    if (!firstElemType) {
       return false;  // Can't check without element type
     }
 
     for (size_t i = 1; i < op->getNumOperands(); ++i) {
-      Type elem_type = getElementType(op->getOperand(i).getType());
-      if (!elem_type || elem_type != first_elem_type) {
+      Type elemType = getElementType(op->getOperand(i).getType());
+      if (!elemType || elemType != firstElemType) {
         return false;
       }
     }
     return true;
   }
 
-  static bool IsFloatType(Type type) { return type.isF32() || type.isF16() || type.isBF16(); }
+  static bool isFloatType(Type type) { return type.isF32() || type.isF16() || type.isBF16(); }
 
   /// Check if output type is float/int type
-  static bool IsFloatIntType(Type type) { return IsFloatType(type) || type.isInteger(32); }
+  static bool isFloatIntType(Type type) { return isFloatType(type) || type.isInteger(32); }
 
-  std::unordered_map<std::string, std::vector<std::function<bool(Operation *)>>> check_func_;
+  std::unordered_map<std::string, std::vector<std::function<bool(Operation *)>>> checkFunc_;
 };
 }  // namespace
 
-llvm::DenseSet<llvm::StringRef> DVMCluster::GetClusterableOps() {
+llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOps() {
   // Clusterable operations for DVM backend.
   // Currently, we only support dvm supported operations.
   return llvm::DenseSet<llvm::StringRef>({
@@ -439,45 +541,42 @@ llvm::DenseSet<llvm::StringRef> DVMCluster::GetClusterableOps() {
 }
 
 // Currently, we only support dvm supported operations.
-bool DVMCluster::CanClusterableOp(const llvm::DenseSet<llvm::StringRef> &op_list, Operation *op) {
+bool DVMCluster::canClusterableOp(const llvm::DenseSet<llvm::StringRef> &opList, Operation *op) {
   if (op == nullptr) {
     return false;
   }
   // Check if operation is in clusterable list
-  // TODO: Filter the ops with the opt level.
-  std::string op_name = op->getName().getStringRef().str();
-  if (op_list.find(op_name) == op_list.end()) {
-    LLVM_DEBUG(llvm::dbgs() << "Op not in cluster list: " << op_name << "\n");
+  std::string opName = op->getName().getStringRef().str();
+  if (opList.find(opName) == opList.end()) {
+    LLVM_DEBUG(llvm::dbgs() << "Op not in cluster list: " << opName << "\n");
     return false;
   }
 
   // Check if output type is complex type
   if (isComplexDataType(op)) {
-    LLVM_DEBUG(llvm::dbgs() << "Op has complex output type: " << op_name << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "Op has complex output type: " << opName << "\n");
     return false;
   }
 
   // Check DVM-specific constraints
-  if (!DvmSupportChecker::Instance().Check(op)) {
-    LLVM_DEBUG(llvm::dbgs() << "Op is not DVM supported: " << op_name << "\n");
+  if (!DvmSupportChecker::instance().check(op)) {
+    LLVM_DEBUG(llvm::dbgs() << "Op is not DVM supported: " << opName << "\n");
     return false;
   }
 
   if (hasZeroShape(op)) {
-    LLVM_DEBUG(llvm::dbgs() << "Op has zero shape: " << op_name << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "Op has zero shape: " << opName << "\n");
     return false;
   }
-
-  // TODO: Check if inplace op has view inputs (may cause precision error)
 
   return true;
 }
 
-llvm::DenseSet<llvm::StringRef> DVMCluster::GetClusterableOpList() { return GetClusterableOps(); }
+llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOpList() { return getClusterableOps(); }
 
-bool DVMCluster::IsClusterableOp(Operation *op) { return CanClusterableOp(op_list_, op); }
+bool DVMCluster::isClusterableOp(Operation *op) { return canClusterableOp(opList_, op); }
 
-std::string DVMCluster::GetFusionType() { return "dvm"; }
+std::string DVMCluster::getFusionType() { return "dvm"; }
 
 //===----------------------------------------------------------------------===//
 // Pass Implementation
@@ -487,10 +586,10 @@ std::string DVMCluster::GetFusionType() { return "dvm"; }
 
 struct DVMClusterPass : public impl::DVMClusterBase<DVMClusterPass> {
   void runOnOperation() override {
-    func::FuncOp func_op = getOperation();
+    func::FuncOp funcOp = getOperation();
     DVMCluster cluster;
-    if (cluster.Run(func_op)) {
-      LLVM_DEBUG(llvm::dbgs() << "DVMCluster modified function: " << func_op.getName() << "\n");
+    if (cluster.run(funcOp)) {
+      LLVM_DEBUG(llvm::dbgs() << "DVMCluster modified function: " << funcOp.getName() << "\n");
     }
   }
 };
