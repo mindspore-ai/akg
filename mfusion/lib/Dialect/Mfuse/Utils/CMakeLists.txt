@@ -6,9 +6,12 @@ add_mlir_dialect_library(MLIRMfuseUtils
   ADDITIONAL_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}/include/mfusion
 
+  DEPENDS
+  MLIRMfuseIncGen
+  MLIRMfuseExtraIncGen
+
   LINK_LIBS PUBLIC
   MLIRArithDialect
   MLIRIR
   MLIRSupport
 )
-

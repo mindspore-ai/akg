@@ -38,4 +38,20 @@ def Mfuse_SymbolicShapeAttr : AttrDef<Mfuse_Dialect, "SymbolicShape"> {
   }];
 }
 
+// Symbol info attribute for recording per-symbol metadata.
+def Mfuse_SymbolInfoAttr : AttrDef<Mfuse_Dialect, "SymbolInfo"> {
+  let mnemonic = "syminfo";
+  let summary = "Symbol information attribute";
+  let description = [{
+    Stores min/max range metadata for a symbolic dimension.
+    Prints "inf/ninf" for an unbounded upper range.
+  }];
+
+  let parameters = (ins
+    "int64_t":$min_val,
+    "int64_t":$max_val
+  );
+  let hasCustomAssemblyFormat = 1;
+}
+
 #endif // MFUSE_DIALECT_MFUSE_ATTRIBUTES_TD

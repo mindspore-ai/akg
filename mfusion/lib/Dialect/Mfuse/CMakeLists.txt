@@ -15,6 +15,7 @@ add_mlir_dialect_library(MLIRMfuseDialect
   MLIRSupport
   MLIRInferTypeOpInterface
   MLIRSideEffectInterfaces
+  MLIRMfuseUtils
   mfusion::symengine
 )
 
