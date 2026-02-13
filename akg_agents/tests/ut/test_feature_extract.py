@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# DEPRECATED: 此测试对应的 FeatureExtractor (core/agent/utils/feature_extractor.py) 已标记废弃，
+# 后续将迁移到 op/agents，届时此测试也需要更新。
+
 import pytest
 import gc
 from akg_agents.core.agent.utils.feature_extractor import FeatureExtractor

@@ -113,7 +113,6 @@ class ParserFactory:
     _sketch_parser = None
     _conductor_parser = None
     _selector_parser = None
-    _main_op_parser = None
     _op_task_builder_parser = None  # OpTaskBuilder 解析器
     _intent_classifier_parser = None  # IntentClassifier 解析器
     _sub_agent_selector_parser = None  # SubAgentSelector 解析器
@@ -271,21 +270,6 @@ class ParserFactory:
                 }
             )
         return cls._conductor_parser
-
-    @classmethod
-    def get_main_op_parser(cls):
-        """获取MainOpAgent解析器"""
-        if cls._main_op_parser is None:
-            cls._main_op_parser = cls.create_output_parser(
-                "MainOpAgentOutput",
-                {
-                    'task_code': (str, ...),  # 生成的task代码（KernelBench格式）
-                    'op_name': (str, ...),  # 算子名称
-                    'recommended_workflow': (str, ...),  # 推荐的workflow (codeonly/taskopcreate/evolve)
-                    'reasoning': (str, "")  # 推理说明
-                }
-            )
-        return cls._main_op_parser
 
     @classmethod
     def get_op_task_builder_parser(cls):

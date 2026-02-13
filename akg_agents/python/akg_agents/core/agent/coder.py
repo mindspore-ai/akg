@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# DEPRECATED: 此模块已废弃，新版请使用 akg_agents.op.agents.kernel_gen.KernelGen
+# 当所有引用方（langgraph_task.py 等）迁移完成后将删除此文件
+import warnings
+warnings.warn(
+    "akg_agents.core.agent.coder is deprecated, use akg_agents.op.agents.kernel_gen instead",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import logging
 from typing import Tuple, List
 from pathlib import Path
