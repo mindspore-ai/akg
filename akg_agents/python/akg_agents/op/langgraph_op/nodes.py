@@ -45,7 +45,7 @@ class NodeFactory:
             result, prompt, reasoning = await designer_instance.run(task_info=state)
             elapsed = time.time() - t0
             
-            # 记录到 Trace（通用接口，兼容 Trace 和 TraceSystem）
+            # 记录到 Trace（通用接口）
             trace_instance.log_record("designer", [
                 ('result', result),
                 ('prompt', prompt),

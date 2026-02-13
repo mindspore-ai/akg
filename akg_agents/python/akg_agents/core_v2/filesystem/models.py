@@ -57,7 +57,7 @@ class TaskInfo:
     
     @classmethod
     def from_dict(cls, data: Dict) -> "TaskInfo":
-        # 兼容旧数据：把旧的 op_name/dsl/backend/arch 字段迁移到 metadata
+        # 把领域特定字段迁移到 metadata
         known_fields = {"task_id", "task_input", "metadata"}
         extra = {k: v for k, v in data.items() if k not in known_fields}
         filtered = {k: v for k, v in data.items() if k in known_fields}

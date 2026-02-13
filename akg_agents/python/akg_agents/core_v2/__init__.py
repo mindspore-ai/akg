@@ -72,6 +72,9 @@ from .agents import (
     register_agent,
 )
 
+# Workflow Logger
+from .workflow_logger import WorkflowLogger
+
 __all__ = [
     # 版本
     "__version__",
@@ -95,4 +98,6 @@ __all__ = [
     "Jinja2TemplateWrapper",
     "AgentRegistry",
     "register_agent",
+    # Workflow Logger
+    "WorkflowLogger",
 ]
