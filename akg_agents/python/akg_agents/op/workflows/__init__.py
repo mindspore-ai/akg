@@ -17,8 +17,12 @@ op/workflows - 算子专用工作流
 """
 
 from akg_agents.op.workflows.kernelgen_only_workflow import KernelGenOnlyWorkflow
+from akg_agents.op.workflows.evolve_workflow import EvolveWorkflow
+from akg_agents.op.workflows.adaptive_search_workflow import AdaptiveSearchWorkflow
 
 __all__ = [
     "KernelGenOnlyWorkflow",
+    "EvolveWorkflow",
+    "AdaptiveSearchWorkflow",
 ]
 

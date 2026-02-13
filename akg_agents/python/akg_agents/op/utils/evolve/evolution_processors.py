@@ -427,7 +427,7 @@ class TaskCreationProcessor:
                 island_meta_prompts[island_idx].append("")
             
             for pid in range(self.config.tasks_per_island):
-                task_id = f"{round_idx}_{island_idx}_{pid}"
+                task_id = f"{round_idx}_Island{island_idx}_Task{pid}"
                 parallel_index = island_idx * self.config.tasks_per_island + pid + 1
 
                 task_config = dict(self.config.config or {})
@@ -477,7 +477,7 @@ class TaskCreationProcessor:
         handwrite_suggestions_list = inspirations_data['handwrite_suggestions']
         
         for pid in range(self.config.parallel_num):
-            task_id = f"{round_idx}_{pid}"
+            task_id = f"{round_idx}_Task{pid}"
             
             task_config = dict(self.config.config or {})
             task_label = resolve_task_label(

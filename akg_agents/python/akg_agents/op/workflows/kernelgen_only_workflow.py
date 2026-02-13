@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""KernelGen-only workflow: KernelGen → Verifier"""
+"""KernelGen-only workflow: KernelGen → CodeChecker → Verifier"""
 
 import logging
 from pathlib import Path
@@ -22,6 +22,7 @@ from akg_agents.op.workflows.base_workflow import OpBaseWorkflow
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.op.langgraph_op.nodes import NodeFactory
 from akg_agents.op.langgraph_op.routers import RouterFactory
+from akg_agents.core.checker import CodeChecker
 from akg_agents.core_v2.workflows.registry import register_workflow
 
 logger = logging.getLogger(__name__)
@@ -31,10 +32,12 @@ logger = logging.getLogger(__name__)
 class KernelGenOnlyWorkflow(OpBaseWorkflow):
     """KernelGen Only Workflow：基于 Skill 系统的内核代码生成工作流
     
-    流程：
-        kernel_gen -> verifier -> (失败) -> conductor -> kernel_gen
-                                    |
-                                (成功) -> END
+    优化后的流程（带 CodeChecker）：
+    
+        kernel_gen -> code_checker -> (通过) -> verifier -> (失败) -> conductor -> kernel_gen
+                          |                                                        ^
+                          +----------------> (未通过) -----------------------------+
+                                         (携带错误信息回到 kernel_gen)
     
     特点：
     - 使用 KernelGen agent（基于 Skill 系统）直接生成代码
@@ -43,7 +46,7 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
     """
     
     # ========== 工具配置元数据（用于 KernelAgent 调用）==========
-    TOOL_NAME = "use_kernelgen_only_workflow"
+    TOOL_NAME = "call_kernelgen_workflow"
     
     DESCRIPTION = """
 使用 KernelGenOnly workflow 生成 kernel 代码（基于 Skill 系统）。
@@ -80,11 +83,11 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
             },
             "dsl": {
                 "type": "string",
-                "description": "目标 DSL，如 'triton'（Triton GPU）, 'triton-ascend'（Triton Ascend）, 'cpp'（C++）"
+                "description": "目标 DSL，如 'triton_cuda'（Triton GPU）, 'triton_ascend'（Triton Ascend）, 'cpp'（C++）"
             },
             "framework": {
                 "type": "string",
-                "description": "框架，如 'torch'（PyTorch）, 'mindspore'（MindSpore）, 'numpy'"
+                "description": "框架，如 'torch'（PyTorch）"
             },
             "backend": {
                 "type": "string",
@@ -121,8 +124,26 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
     # ========== Workflow 实现 ==========
     
     def build_graph(self) -> StateGraph:
-        """构建 KernelGen-only 工作流图"""
+        """构建 KernelGen-only 工作流图（带 CodeChecker）"""
         workflow = StateGraph(KernelGenState)
+        
+        # 检查是否启用 CodeChecker（默认禁用，因为 LLM 检查容易产生假阳性）
+        enable_code_checker = self.config.get("enable_code_checker", False)
+        
+        # 创建 CodeChecker 实例
+        code_checker = None
+        if enable_code_checker:
+            # KernelGen 没有 dsl 属性，从 verifier 获取
+            dsl = ""
+            verifier = self.agents.get('verifier')
+            if verifier and hasattr(verifier, 'dsl'):
+                dsl = verifier.dsl
+            code_checker = CodeChecker(
+                backend=self.backend or "",
+                dsl=dsl,
+                config=self.config
+            )
+            logger.info(f"CodeChecker enabled: backend={self.backend}, dsl={code_checker.dsl}")
         
         # 创建节点
         kernel_gen_node = NodeFactory.create_kernel_gen_node(
@@ -151,8 +172,37 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
         workflow.add_node("verifier", verifier_node)
         workflow.add_node("conductor", conductor_node)
         
-        # 添加边：kernel_gen -> verifier
-        workflow.add_edge("kernel_gen", "verifier")
+        if enable_code_checker and code_checker:
+            # 创建 CodeChecker 节点
+            code_checker_node = NodeFactory.create_code_checker_node(
+                code_checker,
+                self.trace,
+                self.config
+            )
+            workflow.add_node("code_checker", code_checker_node)
+            
+            # 添加边：kernel_gen -> code_checker
+            workflow.add_edge("kernel_gen", "code_checker")
+            
+            # 条件边：code_checker 后的路由（指定使用 kernel_gen）
+            code_checker_router = RouterFactory.create_code_checker_router(
+                self.config,
+                max_check_retries=self.config.get("max_code_check_retries", 5),
+                code_gen_agent="kernel_gen"
+            )
+            
+            workflow.add_conditional_edges(
+                "code_checker",
+                code_checker_router,
+                {
+                    "verifier": "verifier",       # 检查通过 → Verifier
+                    "kernel_gen": "kernel_gen"     # 检查失败 → 回到 KernelGen 修复
+                }
+            )
+        else:
+            # 不启用 CodeChecker，直接 kernel_gen -> verifier
+            workflow.add_edge("kernel_gen", "verifier")
+            logger.info("CodeChecker disabled, using direct kernel_gen -> verifier flow")
         
         # 条件边：verifier 后的路由（验证通过跳过 conductor）
         verifier_router = RouterFactory.create_verifier_router_with_conductor(
@@ -215,18 +265,15 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
     def prepare_config(cls, workflow_resources: Dict[str, Any], arguments: Dict[str, Any]):
         """根据 arguments 调整 workflow 配置
         
-        当指定了 cur_path 时，将中间文件目录 log_dir 重定向到 cur_path/logs。
+        调用父类 OpBaseWorkflow.prepare_config 完成：
+        - log_dir 重定向到 cur_path/logs
+        - 创建 WorkflowLogger 并注入 workflow_resources["trace"]
         
         Args:
-            workflow_resources: workflow 资源字典（会被就地修改的副本）
+            workflow_resources: workflow 资源字典（会被就地修改）
             arguments: 工具调用参数
         """
-        cur_path = arguments.get("cur_path")
-        if cur_path:
-            # 拷贝 config 避免影响缓存的原始资源
-            workflow_resources["config"] = dict(workflow_resources.get("config") or {})
-            workflow_resources["config"]["log_dir"] = str(Path(cur_path) / "logs")
-            logger.info(f"[KernelGenOnlyWorkflow] cur_path 已设置，log_dir 重定向到: {workflow_resources['config']['log_dir']}")
+        super().prepare_config(workflow_resources, arguments)
     
     def format_result(self, final_state: Dict[str, Any]) -> Dict[str, Any]:
         """格式化 workflow 结果

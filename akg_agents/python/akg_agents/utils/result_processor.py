@@ -16,7 +16,7 @@ import logging
 from typing import List, Dict, Any, Optional, Set, Tuple
 from akg_agents.utils.common_utils import ParserFactory
 from akg_agents.utils.parser_registry import create_step_parser
-from akg_agents.core.trace import Trace
+from akg_agents.core_v2.workflow_logger import WorkflowLogger
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class ResultProcessor:
 
     @staticmethod
     def parse_and_update_code(agent_name: str, result: str, task_info: Dict[str, Any],
-                              agent_parser, trace: Trace, agent_info: Optional[Dict[str, Any]] = None) -> bool:
+                              agent_parser, trace: WorkflowLogger, agent_info: Optional[Dict[str, Any]] = None) -> bool:
         """
         解析agent结果并更新任务信息和保存解析后的代码
 

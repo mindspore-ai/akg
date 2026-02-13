@@ -44,13 +44,21 @@ class Trace:
         self.log_dir = log_dir
         self.trace_list = []  # 存储AgentRecord记录
 
+    def get_step_count(self) -> int:
+        """获取当前步骤计数（已记录的 trace_list 条数）"""
+        return len(self.trace_list)
+    
+    def get_log_task_id(self) -> str:
+        """获取日志文件名中使用的 task_id"""
+        return self.task_id
+
     def save_parameters_to_files(self, agent_name: str, params: list):
         """保存参数到文件"""
         expanded_log_dir = os.path.expanduser(self.log_dir)
         target_dir = os.path.join(expanded_log_dir, self.op_name)
         os.makedirs(target_dir, exist_ok=True)
 
-        base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_{agent_name}_"
+        base_name = f"Iteration{self.task_id}_Step{len(self.trace_list):02d}_{self.op_name}_{agent_name}_"
 
         for param_name, content in params:
             file_path = os.path.join(target_dir, f"{base_name}{param_name}.txt")
@@ -88,7 +96,7 @@ class Trace:
 
         # 对于所有agent，保存原始json数据
         wrote_files = False
-        if agent_name in ["designer", "coder", "sketch", "test_case_generator"]:
+        if agent_name in ["designer", "coder", "kernel_gen", "sketch", "test_case_generator"]:
             self.save_parameters_to_files(agent_name, [
                 ('result', result),  # 保存原始json
                 ('prompt', prompt),
@@ -160,7 +168,7 @@ class Trace:
                 expanded_log_dir = os.path.expanduser(str(self.log_dir))
                 target_dir = os.path.join(expanded_log_dir, self.op_name)
                 step_index = len(self.trace_list)
-                prefix = f"I{self.task_id}_S{step_index:02d}_{self.op_name}_verifier_"
+                prefix = f"Iteration{self.task_id}_Step{step_index:02d}_{self.op_name}_verifier_"
                 glob_path = os.path.abspath(os.path.join(target_dir, prefix + "*"))
                 lines.append(f"  realated_files: {glob_path}")
 
@@ -189,7 +197,7 @@ class Trace:
             expanded_log_dir = os.path.expanduser(str(self.log_dir))
             target_dir = os.path.join(expanded_log_dir, self.op_name)
             step_index = len(self.trace_list)  # append 后，需与 save_parameters_to_files 的 Sxx 一致
-            prefix = f"I{self.task_id}_S{step_index:02d}_{self.op_name}_{agent_name}_"
+            prefix = f"Iteration{self.task_id}_Step{step_index:02d}_{self.op_name}_{agent_name}_"
             glob_path = os.path.abspath(os.path.join(target_dir, prefix + "*"))
 
             # 延迟导入，避免 core 层引入过重的 CLI 依赖
@@ -225,7 +233,7 @@ class Trace:
         os.makedirs(target_dir, exist_ok=True)
 
         # 生成单个文件
-        base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_{agent_name}_parsed.txt"
+        base_name = f"Iteration{self.task_id}_Step{len(self.trace_list):02d}_{self.op_name}_{agent_name}_parsed.txt"
         file_path = os.path.join(target_dir, base_name)
 
         # 将所有内容合并到一个文件，每个部分用几个回车隔开
@@ -233,6 +241,80 @@ class Trace:
         for param_name, content in params:
             if content:
                 content_parts.append(f"=== {param_name} ===\n{content}")
+
+        if content_parts:
+            combined_content = "\n\n\n".join(content_parts)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(combined_content)
+
+    def log_record(self, record_name: str, params: list,
+                   subdirectory: str = None) -> int:
+        """
+        记录一个工作流步骤，并将参数保存为独立文件。
+        
+        与 TraceSystem.log_record 接口一致，用于 nodes.py 等调用方
+        在不区分 Trace / TraceSystem 的情况下统一调用。
+        
+        文件命名:
+            Iteration{task_id}_Step{NN:02d}_{op_name}_{record_name}_{param_name}.txt
+        
+        Args:
+            record_name: 记录名称
+            params: 参数列表，格式为 [('param_name', 'content'), ...]
+            subdirectory: 可选的子目录名（在 {log_dir}/{op_name}/ 之下）
+        
+        Returns:
+            当前步骤号（自增后）
+        """
+        self.trace_list.append(AgentRecord(agent_name=record_name))
+        step = len(self.trace_list)
+        
+        expanded_log_dir = os.path.expanduser(self.log_dir)
+        target_dir = os.path.join(expanded_log_dir, self.op_name)
+        if subdirectory:
+            target_dir = os.path.join(target_dir, subdirectory)
+        os.makedirs(target_dir, exist_ok=True)
+        
+        base_name = f"Iteration{self.task_id}_Step{step:02d}_{self.op_name}_{record_name}_"
+        
+        for param_name, content in params:
+            if content is None:
+                continue
+            file_path = os.path.join(target_dir, f"{base_name}{param_name}.txt")
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(str(content))
+        
+        return step
+
+    def log_merged_record(self, record_name: str, params: list,
+                          filename_suffix: str = "_parsed.txt",
+                          subdirectory: str = "recorder") -> None:
+        """
+        将多个参数合并保存到单个文件（不自增步骤计数器）。
+        
+        与 TraceSystem.log_merged_record 接口一致。
+        
+        Args:
+            record_name: 记录名称
+            params: 参数列表，格式为 [('section_name', 'content'), ...]
+            filename_suffix: 文件名后缀（默认 "_parsed.txt"）
+            subdirectory: 子目录名（默认 "recorder"）
+        """
+        if not params:
+            return
+        
+        expanded_log_dir = os.path.expanduser(self.log_dir)
+        target_dir = os.path.join(expanded_log_dir, self.op_name, subdirectory)
+        os.makedirs(target_dir, exist_ok=True)
+        
+        step = len(self.trace_list)
+        base_name = f"Iteration{self.task_id}_Step{step:02d}_{self.op_name}_{record_name}{filename_suffix}"
+        file_path = os.path.join(target_dir, base_name)
+        
+        content_parts = []
+        for section_name, content in params:
+            if content:
+                content_parts.append(f"=== {section_name} ===\n{content}")
 
         if content_parts:
             combined_content = "\n\n\n".join(content_parts)
@@ -254,7 +336,7 @@ class Trace:
         os.makedirs(target_dir, exist_ok=True)
 
         # 直接使用agent_name，不进行转换
-        base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_{agent_name}_decision_"
+        base_name = f"Iteration{self.task_id}_Step{len(self.trace_list):02d}_{self.op_name}_{agent_name}_decision_"
 
         params = [
             ('result', res),
@@ -262,7 +344,7 @@ class Trace:
             ('reasoning', reasoning)
         ]
         for param_name, content in params:
-            if not content:
+            if content is None:
                 continue
             file_path = os.path.join(target_dir, f"{base_name}{param_name}.txt")
             with open(file_path, 'w', encoding='utf-8') as f:

@@ -629,7 +629,7 @@ if __name__ == "__main__":
     def _create_verify_dir(self, step_counter) -> str:
         """创建验证目录并返回目录路径"""
         expanded_log_dir = os.path.expanduser(self.log_dir)
-        unique_dir = f"I{self.task_id}_S{step_counter:02d}_verify"
+        unique_dir = f"Iteration{self.task_id}_Step{step_counter:02d}_verify"
 
         target_dir = os.path.join(expanded_log_dir, self.op_name, unique_dir)
         os.makedirs(target_dir, exist_ok=True)
@@ -1449,7 +1449,7 @@ if __name__ == "__main__":
 
             # 获取验证目录
             expanded_log_dir = os.path.expanduser(self.log_dir)
-            unique_dir_name = f"I{self.task_id}_S{current_step:02d}_verify"
+            unique_dir_name = f"Iteration{self.task_id}_Step{current_step:02d}_verify"
             verify_dir = os.path.join(expanded_log_dir, self.op_name, unique_dir_name)
             
             # 确保目录存在
