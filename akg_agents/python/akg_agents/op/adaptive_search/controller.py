@@ -573,7 +573,7 @@ class AdaptiveSearchController:
         log_dir = self.config.get('log_dir', '')
         
         for record in self.db.get_all_sorted_by_performance()[:10]:
-            # 从 profile 中获取 unique_dir（格式如 Iinit_1_S02_verify）
+            # 从 profile 中获取 unique_dir（格式如 Iteration_Init_Task1_Step02_verify）
             unique_dir = record.profile.get('unique_dir', '')
             
             best_implementations.append({
@@ -586,7 +586,7 @@ class AdaptiveSearchController:
                 'generation': record.generation,  # 进化代数：0=初始，1=第一代进化...
                 'parent_id': record.parent_id,  # 父代任务 ID
                 'selection_count': record.selection_count,  # 被选为父代的次数
-                'verify_dir': unique_dir,  # 验证文件夹名（如 Iinit_1_S02_verify）
+                'verify_dir': unique_dir,  # 验证文件夹名（如 Iteration_Init_Task1_Step02_verify）
             })
         
         # 从 config 中获取 log_dir 和 task_folder

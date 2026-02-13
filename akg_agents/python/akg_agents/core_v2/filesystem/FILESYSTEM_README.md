@@ -575,10 +575,7 @@ class AgentInfo:
 class TaskInfo:
     task_id: str
     task_input: str = ""
-    op_name: str = ""
-    dsl: str = ""
-    backend: str = ""
-    arch: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)  # 通用元数据字典
 
 @dataclass
 class ExecutionInfo:

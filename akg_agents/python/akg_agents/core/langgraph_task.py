@@ -19,7 +19,7 @@ import os
 from typing import Optional, Dict, Any, Tuple
 
 from akg_agents.core_v2.langgraph_base.base_task import BaseLangGraphTask
-from akg_agents.core.trace import Trace
+from akg_agents.core_v2.workflow_logger import WorkflowLogger
 from akg_agents.core.agent.designer import Designer
 from akg_agents.core.agent.coder import Coder
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
@@ -156,9 +156,13 @@ class LangGraphTask:
         # 保存 workflow 名称（用于 Agent 初始化）
         self._workflow_name = workflow
         
-        # 初始化 Trace
-        log_dir = config.get("log_dir")
-        self.trace = Trace(op_name, task_id, log_dir)
+        # 初始化 WorkflowLogger
+        log_dir = config.get("log_dir", "")
+        self.trace = WorkflowLogger(
+            log_dir=log_dir,
+            category=op_name,
+            task_id=task_id,
+        )
         
         # 初始化 Agents
         self.agents = self._init_agents()

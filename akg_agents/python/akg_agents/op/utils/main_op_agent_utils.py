@@ -474,7 +474,7 @@ def save_verification_directory(state: dict, config: dict) -> dict:
         try:
             for item in os.listdir(op_log_dir):
                 item_path = os.path.join(op_log_dir, item)
-                if os.path.isdir(item_path) and "_verify" in item and item.startswith(f"I{task_id}"):
+                if os.path.isdir(item_path) and "_verify" in item and item.startswith(f"Iteration{task_id}"):
                     verify_dirs.append(item_path)
         except Exception as e:
             logger.warning(f"扫描验证目录时出错: {e}")

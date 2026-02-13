@@ -18,7 +18,7 @@ import time
 from akg_agents.cli.messages import DisplayMessage
 from akg_agents.cli.runtime.message_sender import send_message
 from akg_agents.core_v2.agents import AgentBase, register_agent
-from akg_agents.core.trace import Trace
+from akg_agents.core_v2.workflow_logger import WorkflowLogger
 from akg_agents.utils.common_utils import remove_copyright_from_text, ParserFactory
 from akg_agents.utils.hardware_utils import get_hardware_doc
 from akg_agents.utils.task_label import resolve_task_label
@@ -161,7 +161,7 @@ class Sketch(AgentBase):
             log_dir = self.config.get("log_dir", "") if self.config else ""
             if log_dir and task_id:
                 try:
-                    trace = Trace(self.op_name, task_id, log_dir)
+                    trace = WorkflowLogger(log_dir=log_dir, category=self.op_name, task_id=task_id)
                     trace.insert_agent_record(
                         agent_name="sketch",
                         result=content,  # 保存原始 LLM 输出

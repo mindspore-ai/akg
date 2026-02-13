@@ -119,10 +119,10 @@ class TaskGenerator:
             logger.warning(f"Failed to initialize handwrite components: {e}")
             self._handwrite_initialized = True  # 标记为已初始化，避免重复尝试
     
-    def _generate_task_id(self, prefix: str = "task") -> str:
-        """生成唯一任务 ID"""
+    def _generate_task_id(self, prefix: str = "Task") -> str:
+        """生成唯一任务 ID，并包含前缀"""
         self._task_counter += 1
-        return f"{prefix}_{self._task_counter}"
+        return f"{prefix}{self._task_counter}"
     
     def _get_meta_prompts(self) -> str:
         """获取 meta_prompts"""
@@ -207,7 +207,7 @@ class TaskGenerator:
         """
         await self._ensure_handwrite_initialized()
         
-        task_id = self._generate_task_id("init")
+        task_id = self._generate_task_id("_Init_Task")
         meta_prompts = self._get_meta_prompts()
         handwrite_suggestions = self._get_handwrite_suggestions()
         
@@ -248,7 +248,7 @@ class TaskGenerator:
         """
         await self._ensure_handwrite_initialized()
         
-        task_id = self._generate_task_id(f"gen{generation}")
+        task_id = self._generate_task_id(f"_Gen{generation}_Task")
         meta_prompts = self._get_meta_prompts()
         handwrite_suggestions = self._get_handwrite_suggestions()
         inspirations = self._prepare_inspirations(parent=parent)

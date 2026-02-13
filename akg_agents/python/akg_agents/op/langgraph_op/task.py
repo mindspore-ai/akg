@@ -22,7 +22,7 @@ import os
 from typing import Optional, Dict, Any, Tuple
 
 from akg_agents.core_v2.langgraph_base.base_task import BaseLangGraphTask
-from akg_agents.core.trace import Trace
+from akg_agents.core_v2.workflow_logger import WorkflowLogger
 from akg_agents.core.agent.designer import Designer
 from akg_agents.core.agent.coder import Coder
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
@@ -164,9 +164,13 @@ class LangGraphTask(BaseLangGraphTask):
             self.workflow_name = config.get("default_workflow", "default_workflow")
             logger.info(f"[{op_name}] Using workflow from config: {self.workflow_name}")
         
-        # 初始化 Trace
-        log_dir = config.get("log_dir")
-        self.trace = Trace(op_name, task_id, log_dir)
+        # 初始化 WorkflowLogger
+        log_dir = config.get("log_dir", "")
+        self.trace = WorkflowLogger(
+            log_dir=log_dir,
+            category=op_name,
+            task_id=task_id,
+        )
         
         # 初始化 Agents
         self.agents = self._init_agents()
@@ -221,15 +225,21 @@ class LangGraphTask(BaseLangGraphTask):
             logger.debug(traceback.format_exc())
         
         # KernelGen (基于 Skill 系统的代码生成)
-        try:
-            from akg_agents.op.agents.kernel_gen import KernelGen
-            agents['kernel_gen'] = KernelGen(
-                parser_config_path=parser_config_path
-            )
-        except Exception as e:
-            logger.warning(f"Failed to initialize KernelGen: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
+        # adaptive_search / evolve 流程使用 default_workflow（Designer+Coder+Verifier），
+        # 不需要 KernelGen 和 Skill 系统。通过 config["skip_kernel_gen"]=True 跳过，
+        # 避免不必要的 Skill 加载开销。
+        if not self.config.get("skip_kernel_gen", False):
+            try:
+                from akg_agents.op.agents.kernel_gen import KernelGen
+                agents['kernel_gen'] = KernelGen(
+                    parser_config_path=parser_config_path
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize KernelGen: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+        else:
+            logger.info("[LangGraphTask] skip_kernel_gen=True, 跳过 KernelGen 初始化（不加载 Skill）")
         
         # Verifier
         try:

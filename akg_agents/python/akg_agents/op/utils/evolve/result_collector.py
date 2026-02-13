@@ -216,8 +216,8 @@ class RealtimeResultCollector:
                     continue
                 
                 if in_best_section:
-                    # 匹配格式: "1. akg_agents_1_xxx (轮次 4, 来源岛屿 1, 个体路径: I1_4_0_S02_verify, 生成代码: 323.6864us, ..."
-                    # 或者: "1. akg_agents_1_xxx (轮次 4, 个体路径: I0_4_0_S02_verify, 生成代码: 323.6864us, ..."
+                    # 匹配格式: "1. akg_agents_1_xxx (轮次 4, 来源岛屿 1, 个体路径: Iteraton1_Island1_Task0_Step02_verify, 生成代码: 323.6864us, ..."
+                    # 或者: "1. akg_agents_1_xxx (轮次 4, 个体路径: Iteraton1_Island0_Task0_Step02_verify, 生成代码: 323.6864us, ..."
                     pattern = r'(\d+)\.\s+([^\(]+)\s+\(轮次\s+(\d+)(?:,\s+来源岛屿\s+(\d+))?,\s+个体路径:\s+([^,]+),\s+生成代码:\s+([\d.]+)us,\s+基准代码:\s+([\d.]+)us,\s+加速比:\s+([\d.]+)x'
                     match = re.search(pattern, line)
                     
