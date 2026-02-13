@@ -33,12 +33,16 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
 
     // MatMul-related fusion passes (order by dependency):
     // 1. FuseMatMulCast: matmul+cast -> matmul (output type); no deps.
-    // 2. FuseMatmulUnsqueezeSqueeze: normalize 1D inputs (reshape); after Cast for stable type.
-    // 3. FuseMatmulTransposeWeight: alignment (permute/trans); after shape normalization.
-    // 4. FuseMatmulReshapeBiasAdd: matmul->reshape->add -> matmul_with_bias; last so it sees final matmul form.
+    // 2. FuseMatMulReshape: matmul/batch_matmul (N=1) -> add reshape to second input; before any other matmul transformations.
+    // 3. FuseMatmulUnsqueezeSqueeze: normalize 1D inputs (reshape); after Cast for stable type.
+    // 4. FuseMatmulTransposeWeight: alignment (permute/trans); after shape normalization.
+    // 5. FuseBatchMatMulToMul: matmul/batch_matmul (k=1) -> mul; after shape normalization.
+    // 6. FuseMatmulReshapeBiasAdd: matmul->reshape->add -> matmul_with_bias; last so it sees final matmul form.
     pm.addPass(createFuseMatMulCastPass());
+    pm.addPass(createFuseMatMulReshapePass());
     pm.addPass(createFuseMatmulUnsqueezeSqueezePass());
     pm.addPass(createFuseMatmulTransposeWeightPass());
+    pm.addPass(createFuseBatchMatMulToMulPass());
     pm.addPass(createFuseMatmulReshapeBiasAddPass());
 
     pm.addPass(createFuseGeluPass());

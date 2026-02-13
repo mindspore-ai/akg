@@ -21,6 +21,8 @@
 
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -252,36 +254,18 @@ class FuseGeluPattern : public OpRewritePattern<MulOp> {
       return failure();
     }
 
+    MLOG(DEBUG) << "FuseGeluPattern matched GELU approximation pattern";
+
     // Create AclnnGeluOp
     auto gelu = rewriter.create<AclnnGeluOp>(rootMul.getLoc(), x.getType(), x);
+    MLOG(DEBUG) << "Created new AclnnGeluOp";
     rewriter.replaceOp(rootMul, gelu.getResult());
+    MLOG(DEBUG) << "Replaced original GELU approximation pattern with new AclnnGeluOp";
     return success();
   }
 };
 
-struct FuseGeluPass : public impl::FuseGeluBase<FuseGeluPass> {
-  void runOnOperation() override {
-    // Run canonicalization pass first to normalize operand order
-    // This ensures constants appear on the right side of operators
-    PassManager pm(&getContext());
-    OpPassManager &opm = pm.nest<ModuleOp>();
-    opm.addPass(createCanonicalizerPass());
-    if (failed(pm.run(getOperation()))) {
-      signalPassFailure();
-      return;
-    }
-
-    // Then run the GELU fusion pattern
-    RewritePatternSet patterns(&getContext());
-    patterns.add<FuseGeluPattern>(&getContext());
-    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
-      signalPassFailure();
-    }
-  }
-};
-
-std::unique_ptr<Pass> createFuseGeluPass() { return std::make_unique<mfuse::FuseGeluPass>(); }
-
+DEFINE_MFUSE_FUSION_PASS(FuseGelu, FuseGeluPattern)
 }  // namespace mfuse
 
 }  // namespace mlir

@@ -20,6 +20,7 @@
 #include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
 #include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -72,11 +73,15 @@ class FuseSwiGluPattern : public OpRewritePattern<MulOp> {
       return failure();
     }
 
+    MLOG(DEBUG) << "FuseSwiGluPattern matched MulOp, fusing with SplitWithSize and Silu";
+
     // Create SwiGlu op
     auto swiGluOp =
       rewriter.create<AclnnSwiGluOp>(mulOp.getLoc(), mulOp.getResult().getType(), splitOp.getSelf(), splitOp.getDim());
+    MLOG(DEBUG) << "Created new AclnnSwiGluOp";
 
     rewriter.replaceOp(mulOp, swiGluOp.getResult());
+    MLOG(DEBUG) << "Replaced original MulOp, SiluOp and SplitWithSizeOp with new AclnnSwiGluOp";
     return success();
   }
 };
@@ -108,11 +113,15 @@ class FuseSwiGluWithReshapePattern : public OpRewritePattern<MulOp> {
     }
     auto [originalInput, splitDim] = *matchResult;
 
+    MLOG(DEBUG) << "FuseSwiGluWithReshapePattern matched MulOp, fusing with Reshape, SplitWithSize and Silu";
+
     // Create SwiGlu op
     auto swiGluOp =
       rewriter.create<AclnnSwiGluOp>(mulOp.getLoc(), mulOp.getResult().getType(), originalInput, splitDim);
+    MLOG(DEBUG) << "Created new AclnnSwiGluOp";
 
     rewriter.replaceOp(mulOp, swiGluOp.getResult());
+    MLOG(DEBUG) << "Replaced original MulOp, SiluOp, ReshapeOps and SplitWithSizeOp with new AclnnSwiGluOp";
     return success();
   }
 
