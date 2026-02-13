@@ -1475,6 +1475,31 @@ func.func @test_remsi(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg
 
 // -----
 
+func.func @test_remf(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %arg2 : memref<32x32xf32>) {
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
+  // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
+  // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
+  // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xf32>
+  // CHECK: hivm.hir.vmod ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xf32>)
+  // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}})
+
+  %c0 = arith.constant 0 : index
+  %cst = arith.constant 0.0 : f32
+  %v0 = vector.transfer_read %arg0[%c0, %c0], %cst : memref<32x32xf32>, vector<32x32xf32>
+  %v1 = vector.transfer_read %arg1[%c0, %c0], %cst : memref<32x32xf32>, vector<32x32xf32>
+  %res0 = arith.remf %v0, %v1 : vector<32x32xf32>
+  vector.transfer_write %res0, %arg2[%c0, %c0] : vector<32x32xf32>, memref<32x32xf32>
+  return
+}
+
+// -----
+
 func.func @test_remui(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg2 : memref<32x32xi32>) {
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
   // CHECK: %{{.*}} = arith.constant 0 : i32

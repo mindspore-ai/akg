@@ -2299,6 +2299,7 @@ void hivm::populateArithToHIVMConversionPatterns(
       ElementwiseOpToHIVMBinary<arith::AndIOp, hivm::VAndOp>,
       ElementwiseOpToHIVMBinary<arith::OrIOp, hivm::VOrOp>,
       ElementwiseOpToHIVMBinary<arith::XOrIOp, hivm::VXorOp>,
+      ElementwiseOpToHIVMBinary<arith::RemFOp, hivm::VModOp>,
       ElementwiseOpToHIVMBinary<arith::RemSIOp, hivm::VModOp>,
       ElementwiseOpToHIVMBinary<arith::RemUIOp, hivm::VModOp>,
       ElementwiseOpToHIVMBinary<arith::MinNumFOp, hivm::VMinOp>,
