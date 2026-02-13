@@ -62,14 +62,21 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
   void runOnOperation() override {
     using PassCreator = std::function<std::unique_ptr<Pass>()>;
     std::vector<std::pair<const char*, PassCreator>> passes = {
+        // Conv-related fusion passes:
+        {"fuse-biasadd-conv", []() { return createFuseBiasaddConvPass(); }},
+        {"fuse-conv2d-cast", []() { return createFuseConv2DCastPass(); }},
+
         // MatMul-related fusion passes (order by dependency):
         // FuseMatMulCast: matmul+cast -> matmul (output type); no deps.
+        // FuseMatMulBiasAdd: matmul/batch_matmul+add(bias) -> matmul_with_bias;
+        // before reshape so direct matmul+add is fused.
         // FuseMatmulUnsqueezeSqueeze: normalize 1D inputs (reshape); after Cast for stable type.
         // FuseMatmulTransposeWeight: alignment (permute/trans); after shape normalization.
         // FuseBatchMatMul: transpose elimination (permute into trans); BatchMatMul 2D -> MatMul.
         // FuseBatchMatMulToMul: matmul/batch_matmul (k=1) -> mul; after shape normalization.
         // FuseMatmulReshapeBiasAdd: matmul->reshape->add -> matmul_with_bias; last so it sees final matmul form.
         {"fuse-matmul-cast", []() { return createFuseMatMulCastPass(); }},
+        {"fuse-matmul-bias-add", []() { return createFuseMatMulBiasAddPass(); }},
         {"fuse-matmul-unsqueeze-squeeze",
          []() { return createFuseMatmulUnsqueezeSqueezePass(); }},
         {"fuse-matmul-transpose-weight",
