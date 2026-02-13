@@ -132,6 +132,7 @@ class TestLLMFactory:
         assert client.provider.model_name == "claude-3-5-sonnet-20241022"
 
 
+@pytest.mark.use_model
 class TestLLMIntegration:
     """集成测试（需要真实 API）"""
     
