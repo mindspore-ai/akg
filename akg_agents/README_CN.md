@@ -95,15 +95,13 @@ cp akg_agents/examples/settings.example.json ~/.akg/settings.json
 
 ### 后端依赖
 
-根据硬件平台安装对应的后端：
+当前 `br_agents` 分支支持以下三种 DSL，其他后端待适配：
 
-| 平台 | 后端 | 参考链接 |
-|------|------|----------|
+| 平台 | 后端 (DSL) | 参考链接 |
+|------|------------|----------|
 | 华为 Atlas A2 训练系列产品 | Triton | https://gitee.com/ascend/triton-ascend |
-| 华为 Atlas A2 训练系列产品 | TileLang | https://github.com/tile-ai/tilelang |
 | NVIDIA GPU | Triton | https://github.com/triton-lang/triton |
-| NVIDIA GPU | TileLang | https://github.com/tile-ai/tilelang |
-| NVIDIA GPU | CUDA C/C++ | https://docs.nvidia.com/cuda/ |
+| CPU (x86_64) | C++ | GCC / Clang |
 
 ### 启动与使用
 

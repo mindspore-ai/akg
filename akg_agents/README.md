@@ -95,15 +95,13 @@ A minimal configuration only requires one model (auto-applies to all levels):
 
 ### Backend Dependencies
 
-Install the appropriate backend for your hardware platform:
+The `br_agents` branch currently supports the following three DSLs. Other backends are pending adaptation:
 
-| Platform | Backend | Reference Link |
-|----------|---------|----------------|
+| Platform | Backend (DSL) | Reference Link |
+|----------|---------------|----------------|
 | Huawei Atlas A2 Training Series | Triton | https://gitee.com/ascend/triton-ascend |
-| Huawei Atlas A2 Training Series | TileLang | https://github.com/tile-ai/tilelang |
 | NVIDIA GPU | Triton | https://github.com/triton-lang/triton |
-| NVIDIA GPU | TileLang | https://github.com/tile-ai/tilelang |
-| NVIDIA GPU | CUDA C/C++ | https://docs.nvidia.com/cuda/ |
+| CPU (x86_64) | C++ | GCC / Clang |
 
 ### Launch & Usage
 
