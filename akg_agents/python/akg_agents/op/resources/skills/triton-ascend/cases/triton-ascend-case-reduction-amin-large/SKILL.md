@@ -45,7 +45,7 @@ min_val = tl.min(curr_min)
 # 1. grid=16<40, UB用满 -> 15.12 us
 triton.Config({'BLOCK_SIZE': 262144, 'SUB_BLOCK_SIZE': 16384})
 
-# 2. grid=32<40, UB用满 -> 9.61 us ⭐ 最优
+# 2. grid=32<40, UB用满 -> 9.61 us 最优
 triton.Config({'BLOCK_SIZE': 131072, 'SUB_BLOCK_SIZE': 16384})
 
 # 3. grid=32, UB未用满 -> 10.29 us

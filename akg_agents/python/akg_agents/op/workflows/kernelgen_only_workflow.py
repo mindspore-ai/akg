@@ -54,11 +54,6 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
 3. Conductor: 分析失败原因并指导修复（如果验证失败）
 4. 循环迭代直到成功或达到最大次数
 
-与 CoderOnlyWorkflow 的区别：
-- KernelGenOnly 使用新的 Skill 系统，支持动态知识注入
-- KernelGenOnly 根据算子类型自动选择相关 Skills
-- 适用于需要利用特定 DSL/硬件知识的场景
-
 适用场景：
 - 需求明确，无需额外设计阶段
 - 需要基于特定 DSL 知识（如 Triton Ascend、CPU C++）生成代码

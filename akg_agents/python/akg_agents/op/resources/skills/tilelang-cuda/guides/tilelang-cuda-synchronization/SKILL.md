@@ -1,6 +1,6 @@
 ---
 name: tilelang-cuda-synchronization
-description: "TileLang CUDA 同步规范、线程安全和死锁预防"
+description: "TileLang CUDA 同步规范，包括 T.sync_threads() 使用规则、线程安全最佳实践和死锁预防策略。适用于编写涉及共享内存访问、多线程协作、或需要避免同步死锁的 TileLang 内核代码生成场景"
 level: L4
 category: implementation
 version: "1.0.0"

@@ -1,6 +1,6 @@
 ---
 name: triton-cuda-grid-config
-description: "Grid 配置策略和大 shape 算子处理方案"
+description: "Grid/Block 配置策略，包括线程块大小选择、SM 占用率优化和大 shape 算子处理方案。适用于需要确定 CUDA kernel 启动参数、优化 GPU 并行效率、或处理超大规模数据的内核代码生成场景"
 level: L4
 category: implementation
 version: "1.0.0"

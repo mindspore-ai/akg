@@ -17,7 +17,7 @@ metadata:
 ## 优化：计算重组
 
 ```python
-# ❌ 简单
+# 简单
 total_sum = 0.0
 for n_offset in range(0, N, BLOCK_SIZE):
   错误：row_sum += tl.sum(block_vals)
@@ -39,7 +39,7 @@ triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256})
 # 2. grid=40，有尾块 -> 35.12 us
 triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 103})
 
-# 3. grid=32<40，UB占满 -> 9.98 us ⭐ 最优
+# 3. grid=32<40，UB占满 -> 9.98 us 最优
 triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128})
 
 # 4. grid=64>40，UB占满 -> 13.33 us

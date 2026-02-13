@@ -1,6 +1,6 @@
 ---
 name: triton-cuda-optimization
-description: "Triton CUDA 性能优化、API限制和调试技巧"
+description: "Triton CUDA 性能优化通用策略、API 限制说明和调试技巧汇总。适用于需要提升 GPU 内核性能、遇到编译/运行错误需要排查、或需要了解 CUDA 平台限制的内核代码生成和优化场景"
 level: L4
 category: method
 version: "1.0.0"
