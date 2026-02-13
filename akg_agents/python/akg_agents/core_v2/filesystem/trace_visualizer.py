@@ -526,6 +526,7 @@ def format_node_detail_rich(ts: "TraceSystem", node_id: str):
     """
     生成节点详情的 Rich Text 视图
 
+    root 节点：展示 task_input（用户输入）+ 任务元信息
     ask_user 节点：展示 agent 提问 + 用户回答 + fork 提示
     工具节点：展示输入参数摘要 + 执行结果 + 性能数据
 
@@ -552,7 +553,10 @@ def format_node_detail_rich(ts: "TraceSystem", node_id: str):
                  f"时间: {node.timestamp or '?'}[/dim]")
     lines.append("")
 
-    if action_type == "ask_user":
+    # Root 节点：展示 task_input 和任务元信息
+    if node_id == "root":
+        _detail_root(lines, ts)
+    elif action_type == "ask_user":
         _detail_ask_user(lines, node_id, action, args, result)
     else:
         _detail_tool(lines, node_id, action_type, args, result)
@@ -565,6 +569,45 @@ def format_node_detail_rich(ts: "TraceSystem", node_id: str):
             lines.append(f"  {k}: {v}")
 
     return Text.from_markup("\n".join(lines))
+
+
+
+def _detail_root(lines: List[str], ts: "TraceSystem") -> None:
+    """root 节点详情：展示 task_input 和任务元信息"""
+    task_info = {}
+    try:
+        state = ts.fs.load_node_state("root")
+        task_info = state.task_info if isinstance(state.task_info, dict) else {}
+    except Exception:
+        pass
+
+    task_input = task_info.get("task_input", "")
+
+    # 用户输入
+    lines.append("[bold cyan]用户输入 (task_input):[/bold cyan]")
+    if task_input:
+        input_display = task_input[:500] + "..." if len(task_input) > 500 else task_input
+        for line in input_display.split("\n"):
+            lines.append(f"  {_escape_rich(line)}")
+    else:
+        lines.append("  [dim](未记录)[/dim]")
+
+    lines.append("")
+
+    # 任务元信息
+    meta_keys = [
+        ("task_id", "任务 ID"),
+        ("op_name", "算子名称"),
+        ("backend", "后端"),
+        ("arch", "架构"),
+        ("domain", "领域"),
+        ("dsl", "DSL"),
+    ]
+    meta_items = [(label, task_info.get(key, "")) for key, label in meta_keys if task_info.get(key)]
+    if meta_items:
+        lines.append("[bold]任务信息:[/bold]")
+        for label, value in meta_items:
+            lines.append(f"  {label}: {_escape_rich(str(value))}")
 
 
 def _detail_ask_user(lines: List[str], node_id: str, action: Dict, args: Dict, result: Dict) -> None:
