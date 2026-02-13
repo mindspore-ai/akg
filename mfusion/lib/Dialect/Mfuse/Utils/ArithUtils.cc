@@ -16,6 +16,7 @@
 
 #include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
 
+#include <algorithm>
 #include <cmath>
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -90,12 +91,16 @@ bool isScalarOrSingleElement(RankedTensorType tensorType) {
   }
 
   // Check if all dimensions are 1
-  for (int64_t dim : tensorType.getShape()) {
-    if (dim != 1) {
-      return false;
-    }
+  return !std::any_of(tensorType.getShape().begin(), tensorType.getShape().end(),
+                      [](int64_t dim) { return dim != 1; });
+}
+
+bool hasDynamicShape(Type type) {
+  auto ranked = dyn_cast<RankedTensorType>(type);
+  if (!ranked) {
+    return true;
   }
-  return true;
+  return !ranked.hasStaticShape();
 }
 
 bool isSingleElementFloat(Value v, double x, double tolerance) {
