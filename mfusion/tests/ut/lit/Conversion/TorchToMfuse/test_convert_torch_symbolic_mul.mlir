@@ -5,6 +5,7 @@ module {
   // CHECK-SAME: %arg0: !torch.int
   // CHECK-SAME: %arg1: !torch.vtensor<[2,?],f32>
   // CHECK-SAME: %arg2: !torch.vtensor<[2,?],f32>
+  // CHECK: mfuse.syminfo = {s10 = #mfuse.syminfo<range=[2, inf]>}
   // CHECK-NOT: torch.bind_symbolic_shape
   // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %arg1 : !torch.vtensor<[2,?],f32> to tensor<2x?xf32, #mfuse.symshape<["2", "s10"]>>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %arg2 : !torch.vtensor<[2,?],f32> to tensor<2x?xf32, #mfuse.symshape<["2", "s10"]>>
