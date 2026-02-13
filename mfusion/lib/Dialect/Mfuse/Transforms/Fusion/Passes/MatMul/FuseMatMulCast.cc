@@ -19,6 +19,7 @@
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -68,8 +69,11 @@ class FuseMatMulCastMatmulPattern : public OpRewritePattern<MatmulOp> {
     Type outType = castOp.getResult().getType();
     Value newMatmul = rewriter.create<MatmulOp>(matmulOp.getLoc(), outType, matmulOp.getSelf(), matmulOp.getOther(),
                                                 matmulOp.getTransX1Attr(), matmulOp.getTransX2Attr());
+
     rewriter.replaceOp(castOp, newMatmul);
-    rewriter.eraseOp(matmulOp);
+    MLOG(DEBUG) << "FuseMatMulCast: fused MatmulOp@" << matmulOp.getLoc()
+                << " + CastOp@" << castOp.getLoc() << " (f16->f32) -> MatmulOp with f32 output";
+
     return success();
   }
 };
@@ -88,8 +92,11 @@ class FuseMatMulCastMatmulWithBiasPattern : public OpRewritePattern<MatmulWithBi
     Type outType = castOp.getResult().getType();
     Value newMatmul = rewriter.create<MatmulWithBiasOp>(op.getLoc(), outType, op.getSelf(), op.getOther(), op.getBias(),
                                                         op.getTransX1Attr(), op.getTransX2Attr());
+
     rewriter.replaceOp(castOp, newMatmul);
-    rewriter.eraseOp(op);
+    MLOG(DEBUG) << "FuseMatMulCast: fused MatmulWithBiasOp@" << op.getLoc()
+                << " + CastOp@" << castOp.getLoc() << " (f16->f32) -> MatmulWithBiasOp with f32 output";
+
     return success();
   }
 };
