@@ -14,6 +14,9 @@
 
 """OpTaskBuilderAgent ST测试用例
 
+DEPRECATED: 此测试对应的 OpTaskBuilder (core/agent/op_task_builder.py) 已标记废弃，
+新版请使用 akg_agents.op.agents.op_task_builder，届时此测试也需要更新。
+
 测试多轮交互将用户文字需求转换为KernelBench格式的完整流程。
 
 运行方式：

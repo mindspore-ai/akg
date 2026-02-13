@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# DEPRECATED: 此模块已废弃，新版请使用 akg_agents.op.agents.op_task_builder.OpTaskBuilder
+# 当所有引用方（workflows, sub_agent_registry 等）迁移完成后将删除此文件
+import warnings
+warnings.warn(
+    "akg_agents.core.agent.op_task_builder is deprecated, use akg_agents.op.agents.op_task_builder instead",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 """OpTaskBuilder: 将用户文字需求转换为KernelBench格式的Agent"""
 
 import logging
@@ -591,7 +600,7 @@ class OpTaskBuilder(AgentBase):
         
         return {
             "status": OpTaskBuilderStatus.NEED_CLARIFICATION,
-            "clarification_question": message,  # 用于 MainOpAgent 展示给用户
+            "clarification_question": message,  # 用于调用方 Agent 展示给用户
             "agent_message": message or "请提供更多信息以便生成算子代码。",  # 给用户的消息
             "agent_reasoning": llm_reasoning,
             "op_name": op_name,
@@ -683,11 +692,11 @@ class OpTaskBuilder(AgentBase):
         Returns:
             更新后的状态字典，包含以下字段：
                 - status: 状态（READY/NEED_CLARIFICATION/NEED_MODIFICATION/UNSUPPORTED）
-                - generated_task_desc: 生成的KernelBench格式代码（status=READY时存在，MainOpAgent应展示给用户确认）
+                - generated_task_desc: 生成的KernelBench格式代码（status=READY时存在，调用方应展示给用户确认）
                 - op_name: 算子名称（如：relu, matmul, layernorm等）
-                - agent_message: 给用户的消息（所有状态都存在，MainOpAgent应展示给用户）
+                - agent_message: 给用户的消息（所有状态都存在，调用方应展示给用户）
                 - agent_reasoning: Agent的推理过程（用于调试和日志）
-                - clarification_question: 澄清问题（status=NEED_CLARIFICATION时存在，与agent_message相同，便于MainOpAgent使用）
+                - clarification_question: 澄清问题（status=NEED_CLARIFICATION时存在，与agent_message相同，便于调用方使用）
                 - modification_suggestion: 修改建议（status=NEED_MODIFICATION时存在）
                 - static_check_passed: 静态检查是否通过（status=READY或NEED_MODIFICATION时存在）
                 - static_check_error: 静态检查错误信息（status=NEED_MODIFICATION时存在）
@@ -695,24 +704,24 @@ class OpTaskBuilder(AgentBase):
                 - iteration: 当前轮次
                 - op_task_builder_prompt: 使用的prompt（用于调试）
                 
-        状态说明（MainOpAgent使用指南）：
+        状态说明（调用方使用指南）：
             - READY: 成功生成任务
-                * MainOpAgent应展示 generated_task_desc 给用户确认
-                * 用户确认通过：将 generated_task_desc 作为新输入，重新送入 MainOpAgent 进行合法性校验与执行
+                * 调用方应展示 generated_task_desc 给用户确认
+                * 用户确认通过：将 generated_task_desc 作为新输入，重新送入调用方进行合法性校验与执行
                 * 用户拒绝：提示用户补充说明，将用户反馈作为 user_feedback，previous_state 传入下一轮
                 
             - NEED_CLARIFICATION: 信息不足，需要用户补充
-                * MainOpAgent应展示 agent_message（或 clarification_question）给用户，提示用户补充信息
+                * 调用方应展示 agent_message（或 clarification_question）给用户，提示用户补充信息
                 * agent_message 中应包含准确、完整的所有缺失信息列表，避免反复沟通
-                * 用户提供新输入后，MainOpAgent应重新调用 OpTaskBuilder
+                * 用户提供新输入后，调用方应重新调用 OpTaskBuilder
                 
             - NEED_MODIFICATION: 生成的代码有问题或用户拒绝，需要重新生成
-                * MainOpAgent应展示 agent_message 和 modification_suggestion 给用户
+                * 调用方应展示 agent_message 和 modification_suggestion 给用户
                 * 通常由静态检查失败或用户拒绝READY任务触发
-                * 用户提供反馈后，MainOpAgent应重新调用 OpTaskBuilder，传入 user_feedback 和 previous_state
+                * 用户提供反馈后，调用方应重新调用 OpTaskBuilder，传入 user_feedback 和 previous_state
                 
             - UNSUPPORTED: 不支持的需求
-                * MainOpAgent应展示 agent_message 给用户，说明不支持的原因
+                * 调用方应展示 agent_message 给用户，说明不支持的原因
                 * 流程结束
         """
         try:

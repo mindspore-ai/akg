@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from akg_agents.cli.messages import DisplayMessage, LLMStreamMessage
 from akg_agents.cli.runtime.message_sender import send_message
-from akg_agents.core.agent.react_agent import (
+from akg_agents.cli.runtime.react_utils import (
     DEFAULT_MAX_MESSAGES,
     create_checkpointer,
     trim_messages,

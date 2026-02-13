@@ -15,8 +15,8 @@
 """
 ReactTurnExecutorV2 - 基于 KernelAgent (core_v2) 的 CLI 执行器
 
-与 V1 的核心区别：
-- V1 使用 LangGraph 的 MainOpAgent，通过 astream(stream_mode="updates") 流式获取事件
+与旧版 ReactTurnExecutor 的核心区别：
+- 旧版使用 LangGraph 的 MainOpAgent（已删除），通过 astream(stream_mode="updates") 流式获取事件
 - V2 使用 KernelAgent (ReActAgent)，直接调用 agent.run(user_input)，
   返回结构化 dict（status, output, plan_list, history 等）
 - KernelAgent 内部自带 TraceSystem 管理历史，不依赖 LangGraph checkpointer

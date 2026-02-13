@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AIKG Agents module."""
+"""
+AIKG Agents module.
+
+DEPRECATED: 此包已废弃，新版 Agent 请使用 akg_agents.op.agents。
+保留的模块仅供尚未迁移的引用方使用，后续将逐步删除。
+"""
 
 from akg_agents.core.agent.op_task_builder import OpTaskBuilder
-from akg_agents.core.agent.main_op_agent import MainOpAgent
 
 __all__ = [
     "OpTaskBuilder",
-    "MainOpAgent",
 ]
