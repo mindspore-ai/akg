@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ai_kernel_generator.config.config_validator import load_config
-from ai_kernel_generator.core.async_pool.task_pool import TaskPool
-from ai_kernel_generator.core.task import Task
-from ai_kernel_generator.core.worker.manager import register_local_worker
-from ai_kernel_generator.utils.environment_check import check_env_for_task
+from akg_agents.op.config.config_validator import load_config
+from akg_agents.core.async_pool.task_pool import TaskPool
+from akg_agents.op.langgraph_op.task import LangGraphTask
+from akg_agents.core.worker.manager import register_local_worker
+from akg_agents.utils.environment_check import check_env_for_task
 import asyncio
 import os
 os.environ['AIKG_STREAM_OUTPUT'] = 'on'
@@ -74,11 +74,11 @@ async def run_torch_cpu_cpp_x64_single():
     await register_local_worker([0], backend="cpu", arch="x86_64")
     
     # C++ CPU 配置
-    config = load_config(config_path="./python/ai_kernel_generator/config/default_cpp_config.yaml")
+    config = load_config(config_path="./python/akg_agents/op/config/default_cpp_config.yaml")
 
     check_env_for_task("torch", "cpu", "cpp", config)
 
-    task = Task(
+    task = LangGraphTask(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",

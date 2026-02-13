@@ -14,11 +14,11 @@
 
 """LangGraph utilities for workflow management."""
 
-from ai_kernel_generator.utils.langgraph.state import KernelGenState
-from ai_kernel_generator.utils.langgraph.op_task_builder_state import OpTaskBuilderState, OpTaskBuilderStatus
-from ai_kernel_generator.utils.langgraph.nodes import NodeFactory
-from ai_kernel_generator.utils.langgraph.routers import RouterFactory
-from ai_kernel_generator.utils.langgraph.visualizer import WorkflowVisualizer
+from akg_agents.op.langgraph_op.state import KernelGenState
+from akg_agents.op.langgraph_op.op_task_builder_state import OpTaskBuilderState, OpTaskBuilderStatus
+from akg_agents.op.langgraph_op.nodes import NodeFactory
+from akg_agents.op.langgraph_op.routers import RouterFactory
+from akg_agents.core_v2.langgraph_base.visualizer import WorkflowVisualizer
 
 __all__ = [
     "KernelGenState",

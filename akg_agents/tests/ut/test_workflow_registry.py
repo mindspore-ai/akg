@@ -119,6 +119,9 @@ class TestCoderOnlyWorkflowIntegration:
         """测试可以获取 workflow 类"""
         from akg_agents.op.workflows.coder_only_workflow import CoderOnlyWorkflow
         
+        # clear() 后需要重新注册（Python import 缓存不会重新触发装饰器）
+        WorkflowRegistry.register(CoderOnlyWorkflow, scopes=["op"])
+        
         workflow_class = WorkflowRegistry.get_workflow_class("CoderOnlyWorkflow")
         assert workflow_class is not None
         assert workflow_class == CoderOnlyWorkflow

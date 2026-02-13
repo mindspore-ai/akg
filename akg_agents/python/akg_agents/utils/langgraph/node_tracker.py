@@ -28,17 +28,17 @@ import logging
 import time
 from typing import Any, Callable, Dict
 
-from ai_kernel_generator.cli.messages import DisplayMessage
+from akg_agents.cli.messages import DisplayMessage
 
 logger = logging.getLogger(__name__)
-from ai_kernel_generator.cli.runtime.message_sender import send_message
-from ai_kernel_generator.utils.task_label import resolve_task_label
+from akg_agents.cli.runtime.message_sender import send_message
+from akg_agents.utils.task_label import resolve_task_label
 
 
 def _stream_enabled() -> bool:
     import os
     try:
-        from ai_kernel_generator.utils.stream_output import get_stream_output_override
+        from akg_agents.utils.stream_output import get_stream_output_override
 
         override = get_stream_output_override()
         if override is not None:
