@@ -22,6 +22,7 @@
 #include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
 #include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -107,6 +108,8 @@ class FuseMatmulTransposeWeightMatmulPattern : public OpRewritePattern<MatmulOp>
       return failure();
     }
 
+    MLOG(DEBUG) << "FuseMatmulTransposeWeightMatmulPattern matched MatmulOp, needTrans1=" << needTrans1 << ", needTrans2=" << needTrans2;
+
     Location loc = op.getLoc();
     Value newSelf = self;
     Value newOther = other;
@@ -116,15 +119,19 @@ class FuseMatmulTransposeWeightMatmulPattern : public OpRewritePattern<MatmulOp>
     if (needTrans1 && selfType.getRank() >= kDim2) {
       newSelf = createLastTwoDimsSwapPermute(rewriter, loc, selfType, self);
       newTransX1 = true;
+      MLOG(DEBUG) << "Created permute for self input to align inner axis";
     }
     if (needTrans2 && otherType.getRank() >= kDim2) {
       newOther = createLastTwoDimsSwapPermute(rewriter, loc, otherType, other);
       newTransX2 = true;
+      MLOG(DEBUG) << "Created permute for other input to align inner axis";
     }
 
     Value newOp = rewriter.create<MatmulOp>(loc, op.getResult().getType(), newSelf, newOther,
                                             rewriter.getBoolAttr(newTransX1), rewriter.getBoolAttr(newTransX2));
+    MLOG(DEBUG) << "Created new MatmulOp with transX1=" << newTransX1 << ", transX2=" << newTransX2;
     rewriter.replaceOp(op, newOp);
+    MLOG(DEBUG) << "Replaced original MatmulOp with new MatmulOp and permute operations";
     return success();
   }
 };
@@ -155,6 +162,8 @@ class FuseMatmulTransposeWeightMatmulWithBiasPattern : public OpRewritePattern<M
       return failure();
     }
 
+    MLOG(DEBUG) << "FuseMatmulTransposeWeightMatmulWithBiasPattern matched MatmulWithBiasOp, needTrans1=" << needTrans1 << ", needTrans2=" << needTrans2;
+
     Location loc = op.getLoc();
     Value newSelf = self;
     Value newOther = other;
@@ -164,15 +173,19 @@ class FuseMatmulTransposeWeightMatmulWithBiasPattern : public OpRewritePattern<M
     if (needTrans1 && selfType.getRank() >= kDim2) {
       newSelf = createLastTwoDimsSwapPermute(rewriter, loc, selfType, self);
       newTransX1 = true;
+      MLOG(DEBUG) << "Created permute for self input to align inner axis";
     }
     if (needTrans2 && otherType.getRank() >= kDim2) {
       newOther = createLastTwoDimsSwapPermute(rewriter, loc, otherType, other);
       newTransX2 = true;
+      MLOG(DEBUG) << "Created permute for other input to align inner axis";
     }
 
     Value newOp = rewriter.create<MatmulWithBiasOp>(loc, op.getResult().getType(), newSelf, newOther, op.getBias(),
                                                     rewriter.getBoolAttr(newTransX1), rewriter.getBoolAttr(newTransX2));
+    MLOG(DEBUG) << "Created new MatmulWithBiasOp with transX1=" << newTransX1 << ", transX2=" << newTransX2;
     rewriter.replaceOp(op, newOp);
+    MLOG(DEBUG) << "Replaced original MatmulWithBiasOp with new MatmulWithBiasOp and permute operations";
     return success();
   }
 };
@@ -180,7 +193,7 @@ class FuseMatmulTransposeWeightMatmulWithBiasPattern : public OpRewritePattern<M
 }  // namespace
 
 DEFINE_MFUSE_FUSION_PASS(FuseMatmulTransposeWeight, FuseMatmulTransposeWeightMatmulPattern,
-                        FuseMatmulTransposeWeightMatmulWithBiasPattern)
+                         FuseMatmulTransposeWeightMatmulWithBiasPattern)
 
 }  // namespace mfuse
 
