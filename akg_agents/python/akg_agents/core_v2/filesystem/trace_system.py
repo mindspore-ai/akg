@@ -86,12 +86,6 @@ class TraceSystem:
         self._node_counter = 0
         self._action_counter = 0
         self._trace: Optional[TraceTree] = None
-        
-        # ---- 工作流日志上下文（通过 configure_logging 设置）----
-        self._log_dir: Optional[str] = None       # 日志根目录
-        self._log_category: str = ""               # 日志分类子目录（调用方自行指定）
-        self._log_task_id: str = ""                # 日志中使用的 task_id
-        self._step_records: List[Any] = []         # 步骤记录列表（用于步骤计数）
     
     @property
     def trace(self) -> TraceTree:
@@ -1091,118 +1085,6 @@ class TraceSystem:
             lines.append(f"  • 性能: {metrics['performance']}")
         
         return "\n".join(lines)
-    
-    # ==================== 工作流日志记录 ====================
-    
-    def configure_logging(self, log_dir: str, category: str = "", task_id: str = "") -> None:
-        """
-        配置工作流日志上下文
-        
-        在 workflow 被调用时，由 prepare_config 调用此方法，
-        使得后续的 log_record / log_merged_record 能正确写出日志文件。
-        
-        Args:
-            log_dir: 日志文件根目录（如 node_00X/logs/）
-            category: 分类子目录名（调用方自行指定），文件保存在 {log_dir}/{category}/ 下
-            task_id: 日志文件名中使用的任务标识
-        """
-        self._log_dir = log_dir
-        self._log_category = category
-        self._log_task_id = task_id or self.task_id
-        self._step_records = []
-        logger.info(f"[TraceSystem] 日志上下文已配置: log_dir={log_dir}, category={category}, task_id={self._log_task_id}")
-    
-    def get_step_count(self) -> int:
-        """获取当前日志步骤计数（已记录的 log_record 次数）"""
-        return len(self._step_records)
-    
-    def get_log_task_id(self) -> str:
-        """获取日志文件名中使用的 task_id（由 configure_logging 设置）"""
-        return self._log_task_id or self.task_id
-    
-    def log_record(self, record_name: str, params: list,
-                   subdirectory: str = None) -> int:
-        """
-        记录一个工作流步骤，并将参数保存为独立文件。
-        
-        每调用一次，内部步骤计数器自增。每个 (param_name, content) 对
-        保存为一个独立的 .txt 文件，仅 None 会被跳过（空字符串也会保存）。
-        
-        Args:
-            record_name: 记录名称，用于文件名中标识来源
-            params: 参数列表，格式为 [('param_name', 'content'), ...]
-            subdirectory: 可选的子目录名（在 {log_dir}/{category}/ 之下）
-        
-        Returns:
-            当前步骤号（自增后）
-        """
-        # 即使未配置日志目录，也自增步骤计数器以保持编号一致
-        self._step_records.append({"name": record_name})
-        step = len(self._step_records)
-        
-        if not self._log_dir:
-            logger.debug(f"[TraceSystem] log_record({record_name}): 日志上下文未配置，跳过文件保存")
-            return step
-        
-        import os
-        expanded_log_dir = os.path.expanduser(self._log_dir)
-        target_dir = os.path.join(expanded_log_dir, self._log_category)
-        if subdirectory:
-            target_dir = os.path.join(target_dir, subdirectory)
-        os.makedirs(target_dir, exist_ok=True)
-        
-        base_name = f"Iteration{self._log_task_id}_Step{step:02d}_{self._log_category}_{record_name}_"
-        
-        for param_name, content in params:
-            if content is None:
-                continue
-            file_path = os.path.join(target_dir, f"{base_name}{param_name}.txt")
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(str(content))
-        
-        return step
-    
-    def log_merged_record(self, record_name: str, params: list,
-                          filename_suffix: str = "_parsed.txt",
-                          subdirectory: str = "recorder") -> None:
-        """
-        将多个参数合并保存到单个文件（不自增步骤计数器）。
-        
-        适用于将解析后的结构化内容集中存储。
-        
-        文件命名:
-            Iteration{task_id}_Step{NN:02d}_{category}_{record_name}{filename_suffix}
-        
-        文件目录:
-            {log_dir}/{category}/{subdirectory}/
-        
-        Args:
-            record_name: 记录名称
-            params: 参数列表，格式为 [('section_name', 'content'), ...]
-            filename_suffix: 文件名后缀（默认 "_parsed.txt"）
-            subdirectory: 子目录名（默认 "recorder"）
-        """
-        if not self._log_dir or not params:
-            return
-        
-        import os
-        expanded_log_dir = os.path.expanduser(self._log_dir)
-        target_dir = os.path.join(expanded_log_dir, self._log_category, subdirectory)
-        os.makedirs(target_dir, exist_ok=True)
-        
-        step = len(self._step_records)
-        base_name = f"Iteration{self._log_task_id}_Step{step:02d}_{self._log_category}_{record_name}{filename_suffix}"
-        file_path = os.path.join(target_dir, base_name)
-        
-        content_parts = []
-        for section_name, content in params:
-            if content:
-                content_parts.append(f"=== {section_name} ===\n{content}")
-        
-        if content_parts:
-            combined_content = "\n\n\n".join(content_parts)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(combined_content)
     
     # ==================== 任务恢复 ====================
     

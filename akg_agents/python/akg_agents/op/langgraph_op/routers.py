@@ -192,7 +192,7 @@ class RouterFactory:
             result = await client.generate(messages, stream=False)
             response_text = result.get("content", "")
             
-            # 记录 LLM 调用到 trace（通用接口，兼容 Trace 和 TraceSystem）
+            # 记录 LLM 调用到 trace（通用接口）
             trace.log_record("decision", [
                 ('result', response_text),
                 ('prompt', prompt),

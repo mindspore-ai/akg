@@ -203,7 +203,7 @@ class EvolveWorkflow(OpBaseWorkflow):
         
         1. 使用 build_langgraph_task_config() 补齐 docs_dir、agent_model_config 等
         2. 标记 skip_kernel_gen=True，避免 LangGraphTask 初始化不需要的 KernelGen/Skill
-        3. 调用父类 prepare_config 完成 log_dir 重定向 + TraceSystem 日志配置
+        3. 调用父类 prepare_config 完成 log_dir 重定向 + 创建 WorkflowLogger
         4. 用 _EVOLVE_DEFAULTS 补齐进化参数的默认值
         """
         # 补齐 LangGraphTask 所需的完整配置
@@ -225,7 +225,7 @@ class EvolveWorkflow(OpBaseWorkflow):
         
         workflow_resources["config"] = full_config
         
-        # 调用父类：log_dir 重定向 + TraceSystem 日志配置
+        # 调用父类：log_dir 重定向 + 创建 WorkflowLogger
         super().prepare_config(workflow_resources, arguments)
         
         # 用 _EVOLVE_DEFAULTS 补齐进化参数的默认值

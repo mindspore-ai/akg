@@ -121,11 +121,6 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
                 "type": "string",
                 "description": "自定义工作路径（可选），指定后中间文件存放在 cur_path/logs/，生成的代码存放在 cur_path/code.txt",
                 "default": ""
-            },
-            "max_step": {
-                "type": "integer",
-                "description": "最大迭代步数（可选），控制 kernel_gen → verifier → conductor 的最大循环次数。默认 20。通常不需要修改。",
-                "default": 20
             }
         },
         "required": ["op_name", "task_desc", "dsl", "framework", "backend", "arch"]
@@ -277,7 +272,7 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
         
         调用父类 OpBaseWorkflow.prepare_config 完成：
         - log_dir 重定向到 cur_path/logs
-        - 调用 trace_system.configure_logging() 配置日志上下文
+        - 创建 WorkflowLogger 并注入 workflow_resources["trace"]
         
         Args:
             workflow_resources: workflow 资源字典（会被就地修改）

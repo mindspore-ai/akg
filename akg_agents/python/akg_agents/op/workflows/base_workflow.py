@@ -191,36 +191,33 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             except Exception as e:
                 logger.warning(f"[OpBaseWorkflow] 无法生成 task_label: {e}")
         
-        # 5. profile_settings（默认值）
-        config.setdefault("profile_settings", {
+        # 5. profile_settings（硬编码，不允许用户或 LLM 修改）
+        config["profile_settings"] = {
             "run_times": 50,
             "warmup_times": 5,
-        })
+        }
         
-        # 6. verify_timeout（默认 5 分钟）
-        config.setdefault("verify_timeout", 300)
+        # 6. verify_timeout（硬编码，5 分钟）
+        config["verify_timeout"] = 300
         
-        # 7. default_workflow
-        config.setdefault("default_workflow", "default_workflow")
+        # 7. default_workflow（硬编码）
+        config["default_workflow"] = "default_workflow"
         
-        # 8. max_step
-        config.setdefault("max_step", 20)
+        # 8. max_step（硬编码）
+        config["max_step"] = 20
         
         return config
-    
-    # 允许从 LLM 工具调用参数覆盖到 workflow config 中的配置项
-    _ARGUMENT_CONFIG_KEYS = ("max_step", "verify_timeout")
     
     @classmethod
     def prepare_config(cls, workflow_resources: Dict[str, Any], arguments: Dict[str, Any]):
         """根据 arguments 调整 workflow 配置（Op 基础实现）
         
         功能：
-        1. 当指定了 cur_path 时（即被 KernelAgent 通过 ToolExecutor 调用）：
-           - 将 log_dir 重定向到 cur_path/logs
-           - 调用 trace_system.configure_logging() 设置日志上下文
-        2. 将 arguments 中的可配置参数（max_step, verify_timeout 等）合并到 config 中，
-           使 LLM 或用户可以通过工具调用参数覆盖默认值
+        当指定了 cur_path 时（即被 KernelAgent 通过 ToolExecutor 调用）：
+        1. 将 log_dir 重定向到 cur_path/logs
+        2. 创建 WorkflowLogger 实例并注入到 workflow_resources["trace"]，
+           替换掉原始的 TraceSystem 实例，使 workflow 内部的 nodes 统一使用
+           WorkflowLogger 记录日志
         
         子类可以覆盖此方法添加额外逻辑，但应先调用 super().prepare_config()。
         
@@ -232,27 +229,21 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         workflow_resources["config"] = dict(workflow_resources.get("config") or {})
         config = workflow_resources["config"]
         
-        # 将 arguments 中的可配置参数合并到 config（优先级高于 config 的默认值）
-        for key in cls._ARGUMENT_CONFIG_KEYS:
-            if key in arguments:
-                config[key] = arguments[key]
-                logger.info(f"[{cls.__name__}] 从 arguments 覆盖 config[{key}]={arguments[key]}")
-        
         cur_path = arguments.get("cur_path")
         if cur_path:
             log_dir = str(Path(cur_path) / "logs")
             config["log_dir"] = log_dir
             
-            # 配置 TraceSystem 的日志上下文
-            trace = workflow_resources.get("trace")
-            if trace and hasattr(trace, 'configure_logging'):
-                category = arguments.get("op_name", "unknown")
-                task_id = arguments.get("task_id", "0")
-                trace.configure_logging(
-                    log_dir=log_dir,
-                    category=category,
-                    task_id=task_id,
-                )
+            # 创建 WorkflowLogger
+            # 使 workflow 内部的 nodes 统一使用 WorkflowLogger 记录日志
+            from akg_agents.core_v2.workflow_logger import WorkflowLogger
+            category = arguments.get("op_name", "unknown")
+            task_id = arguments.get("task_id", "0")
+            workflow_resources["trace"] = WorkflowLogger(
+                log_dir=log_dir,
+                category=category,
+                task_id=task_id,
+            )
             
             logger.info(f"[{cls.__name__}] cur_path 已设置，log_dir 重定向到: {log_dir}")
     
