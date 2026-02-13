@@ -938,7 +938,24 @@ class ReActAgent(AgentBase, ABC):
         Args:
             user_input: 用户输入
         """
-        if self.current_node_id == "root" and not self.trace.fs.node_exists("root"):
+        # 1. 调用 trace.initialize 确保基础结构已创建并注入 task_input
+        # 如果 root 已在 __init__ 中作为 stub 创建，此处会更新其 task_input
+        self.trace.initialize(task_input=user_input, force=False)
+        self.current_node_id = self.trace.get_current_node()
+        
+        # 2. 判断是否需要进行 ReActAgent 特有的“富初始化”（注入 agent_info, execution_info 等）
+        # 如果当前是 root 节点且状态信息不完整，则进行初始化
+        needs_rich_init = False
+        if self.current_node_id == "root":
+            try:
+                root_state = self.trace.fs.load_node_state("root")
+                # 如果 agent_info 为空或 task_input 刚被填入（之前是 stub），则重新保存完整状态
+                if not root_state.agent_info or root_state.task_info.get("task_input") == user_input:
+                    needs_rich_init = True
+            except Exception:
+                needs_rich_init = True
+
+        if needs_rich_init:
             # 获取额外的任务信息
             extra_info = self._get_task_info_extra()
             
@@ -963,7 +980,7 @@ class ReActAgent(AgentBase, ABC):
                 ).to_dict()
             )
             self.trace.fs.save_node_state("root", root_state)
-            logger.info(f"[{self._get_agent_name()}] 创建新任务: {self.task_id}")
+            logger.info(f"[{self._get_agent_name()}] 已完成 root 节点富初始化: {self.task_id}")
         else:
             # ====== 恢复已有任务 ======
             logger.info(f"[{self._get_agent_name()}] 恢复任务: {self.task_id}, 当前节点: {self.current_node_id}")
