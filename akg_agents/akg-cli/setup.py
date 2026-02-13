@@ -33,7 +33,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://www.mindspore.cn/",
     project_urls={
-        "Sources": "https://gitcode.com/mindspore/akg/tree/br_akg_agents/akg_agents/akg-cli",
+        "Sources": "https://gitcode.com/mindspore/akg/tree/br_agents/akg_agents/akg-cli",
         "Issue Tracker": "https://gitcode.com/mindspore/akg/issues",
     },
     license="Apache-2.0",
