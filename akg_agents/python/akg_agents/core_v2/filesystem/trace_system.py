@@ -110,11 +110,21 @@ class TraceSystem:
             # 加载现有 trace
             self._trace = self._load_trace()
             self._update_counters()
+            
+            # 加载 .traceconfig 配置（不能省略，否则 resume 后所有配置丢失）
+            self._load_trace_config()
+            
             logger.info(f"Loaded existing trace: {self.task_id}")
+            
+            # 如果提供了 task_input 且 root 节点尚未保存，追加写入
+            # （支持 ReActAgent 在 __init__ 中提前创建 stub root，
+            #   随后 _initialize_task 补充 task_input 的场景）
+            if task_input:
+                self.fs.initialize_task(force=False, task_input=task_input)
             return
         
         # 初始化文件系统
-        self.fs.initialize_task(force=force)
+        self.fs.initialize_task(force=force, task_input=task_input)
         
         # 创建 Trace 树
         self._trace = TraceTree(task_id=self.task_id)
@@ -161,27 +171,50 @@ class TraceSystem:
             
         logger.info(f"Initialized trace system: {self.task_id}")
 
+    _DEFAULT_TRACECONFIG = """\
+# .traceconfig — 控制节点快照中追踪哪些文件
+# 格式类似 .gitignore：每行一个 glob 模式
+# 以 ! 开头的行表示排除
+
+# 默认包含 code 目录下所有文件
+code/
+
+# 排除编译缓存和临时文件
+!__pycache__/
+!*.pyc
+!*.pyo
+"""
+
     def _load_trace_config(self):
-        """加载 .traceconfig 文件"""
-        config_path = self.fs.base_dir / ".traceconfig"
+        """加载 .traceconfig 文件（per-task，位于 task_dir 下）"""
+        config_path = self.fs.task_dir / ".traceconfig"
         self.include_patterns = ["code/"]  # 默认值
         self.exclude_patterns = []
-        
-        if config_path.exists():
+
+        # 如果不存在，创建默认配置
+        if not config_path.exists():
             try:
-                content = config_path.read_text(encoding="utf-8")
-                for line in content.splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                        
-                    if line.startswith("!"):
-                        self.exclude_patterns.append(line[1:])
-                    else:
-                        self.include_patterns.append(line)
-                logger.info(f"Loaded trace config: include={self.include_patterns}, exclude={self.exclude_patterns}")
+                config_path.write_text(self._DEFAULT_TRACECONFIG, encoding="utf-8")
+                logger.info(f"Created default .traceconfig at {config_path}")
             except Exception as e:
-                logger.warning(f"Failed to load .traceconfig: {e}")
+                logger.warning(f"Failed to create default .traceconfig: {e}")
+                return
+        
+        # 读取配置
+        try:
+            content = config_path.read_text(encoding="utf-8")
+            for line in content.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                    
+                if line.startswith("!"):
+                    self.exclude_patterns.append(line[1:])
+                else:
+                    self.include_patterns.append(line)
+            logger.info(f"Loaded trace config: include={self.include_patterns}, exclude={self.exclude_patterns}")
+        except Exception as e:
+            logger.warning(f"Failed to load .traceconfig: {e}")
 
 
 

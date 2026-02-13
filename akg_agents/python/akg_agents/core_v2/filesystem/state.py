@@ -160,30 +160,45 @@ class FileSystemState:
     
     # ==================== 初始化 ====================
     
-    def initialize_task(self, force: bool = False) -> None:
+    def initialize_task(self, force: bool = False, task_input: str = "") -> None:
         """
         初始化任务目录结构
         
         Args:
-            force: 是否强制重新初始化（删除现有目录）
+            force: 是否强制重新初始化（会删除现有任务目录）
+            task_input: 任务输入信息（保存到 root 节点）
         """
         if force and self.task_dir.exists():
             shutil.rmtree(self.task_dir)
-        
+            logger.info(f"Forced re-initialization: removed {self.task_dir}")
+            
         self.ensure_dir(self.task_dir)
         self.ensure_dir(self.nodes_dir)
         self.ensure_dir(self.logs_dir)
         self.ensure_dir(self.workspace_dir)
         
         # 创建 root 节点
-        self._create_root_node()
+        if not self.node_exists("root") or force:
+            self._create_root_node(task_input)
+        elif task_input:
+            # 如果 root 已存在但当前 task_input 为空，更新它
+            # （支持 ReActAgent 在 __init__ 中提前初始化 trace 的场景）
+            try:
+                state = self.load_node_state("root")
+                if isinstance(state.task_info, dict) and not state.task_info.get("task_input"):
+                    state.task_info["task_input"] = task_input
+                    self.save_node_state("root", state)
+                    logger.info(f"Updated existing root node with task_input for task {self.task_id}")
+            except Exception as e:
+                logger.debug(f"Optional root task_input update skipped: {e}")
         
         # 设置当前节点为 root
         self.set_current_node("root")
         
         logger.info(f"Initialized task: {self.task_id} at {self.task_dir}")
+
     
-    def _create_root_node(self) -> None:
+    def _create_root_node(self, task_input: str = "") -> None:
         """创建 root 节点"""
         root_dir = self.get_node_dir("root")
         self.ensure_dir(root_dir)
@@ -197,7 +212,7 @@ class FileSystemState:
             node_id="root",
             turn=0,
             status="init",
-            task_info={"task_id": self.task_id},
+            task_info={"task_id": self.task_id, "task_input": task_input},
         )
         self.save_node_state("root", root_state)
     
