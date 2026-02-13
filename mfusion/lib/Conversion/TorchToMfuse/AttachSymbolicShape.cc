@@ -16,6 +16,7 @@
 
 #include <algorithm>
 
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -29,73 +30,10 @@
 #include "mfusion/Conversion/Passes.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/MfuseDialect.h"
+#include "mfusion/Dialect/Mfuse/Utils/SymbolicShapeUtils.h"
 
 namespace {
 namespace TorchD = mlir::torch::Torch;
-
-mlir::Attribute mergeEncoding(mlir::RankedTensorType type, mlir::mfuse::SymbolicShapeAttr attr) {
-  auto encoding = type.getEncoding();
-  if (!encoding || encoding.isa<mlir::mfuse::SymbolicShapeAttr>()) {
-    return attr;
-  }
-
-  mlir::MLIRContext *ctx = type.getContext();
-  auto symKey = mlir::StringAttr::get(ctx, "mfuse.symshape");
-  if (auto dict = encoding.dyn_cast<mlir::DictionaryAttr>()) {
-    auto existing = dict.get(symKey);
-    if (existing == attr) {
-      return dict;
-    }
-
-    llvm::SmallVector<mlir::NamedAttribute> entries;
-    entries.reserve(dict.getValue().size() + 1);
-    bool replaced = false;
-    for (const auto &entry : dict.getValue()) {
-      if (entry.getName() == symKey) {
-        entries.emplace_back(symKey, attr);
-        replaced = true;
-        continue;
-      }
-      entries.push_back(entry);
-    }
-    if (!replaced) {
-      entries.emplace_back(symKey, attr);
-    }
-    return mlir::DictionaryAttr::get(ctx, entries);
-  }
-
-  auto baseKey = mlir::StringAttr::get(ctx, "mfuse.encoding");
-  return mlir::DictionaryAttr::get(ctx, {mlir::NamedAttribute(symKey, attr), mlir::NamedAttribute(baseKey, encoding)});
-}
-
-mlir::RankedTensorType withSymbolicAttr(mlir::RankedTensorType type, mlir::mfuse::SymbolicShapeAttr attr) {
-  auto merged = mergeEncoding(type, attr);
-  if (merged == type.getEncoding()) {
-    return type;
-  }
-  return mlir::RankedTensorType::get(type.getShape(), type.getElementType(), merged);
-}
-
-bool attachToValue(mlir::Value value, mlir::mfuse::SymbolicShapeAttr attr) {
-  auto ranked = value.getType().dyn_cast<mlir::RankedTensorType>();
-  if (!ranked) {
-    return false;
-  }
-  auto newType = withSymbolicAttr(ranked, attr);
-  if (newType == ranked) {
-    return true;
-  }
-
-  if (auto result = value.dyn_cast<mlir::OpResult>()) {
-    result.setType(newType);
-    return true;
-  }
-  if (auto arg = value.dyn_cast<mlir::BlockArgument>()) {
-    arg.setType(newType);
-    return true;
-  }
-  return false;
-}
 
 bool attachToCastResults(mlir::Operation *castOp, mlir::mfuse::SymbolicShapeAttr attr, unsigned exprCount) {
   bool updated = false;
@@ -107,7 +45,7 @@ bool attachToCastResults(mlir::Operation *castOp, mlir::mfuse::SymbolicShapeAttr
     if (ranked.getRank() != static_cast<int64_t>(exprCount)) {
       continue;
     }
-    result.setType(withSymbolicAttr(ranked, attr));
+    result.setType(mlir::mfuse::SymbolicShapeUtils::withSymbolicAttr(ranked, attr));
     updated = true;
   }
   return updated;
@@ -136,6 +74,52 @@ struct ConvertTorchSymbolToMfusePass
     mlir::MLIRContext *ctx = &getContext();
 
     mfusion::SymEngineAnalysis analysis;
+    handleSymbolicIntOps(module, ctx);
+    if (mlir::failed(handleBindSymbolicShapeOps(module, ctx, analysis))) {
+      signalPassFailure();
+    }
+  }
+
+ private:
+  void handleSymbolicIntOps(mlir::ModuleOp module, mlir::MLIRContext *ctx) {
+    llvm::SmallVector<TorchD::SymbolicIntOp> symIntOps;
+    module.walk([&](TorchD::SymbolicIntOp op) { symIntOps.push_back(op); });
+
+    llvm::DenseMap<mlir::func::FuncOp, llvm::SmallVector<mlir::NamedAttribute>> funcSymInfo;
+    for (auto symOp : symIntOps) {
+      auto func = symOp->getParentOfType<mlir::func::FuncOp>();
+      if (!func) {
+        continue;
+      }
+      auto nameAttr = mlir::StringAttr::get(ctx, symOp.getSymbolName());
+      auto infoAttr = mlir::mfuse::SymbolInfoAttr::get(ctx, symOp.getMinVal(), symOp.getMaxVal());
+      funcSymInfo[func].emplace_back(nameAttr, infoAttr);
+    }
+
+    for (auto &entry : funcSymInfo) {
+      auto func = entry.first;
+      auto existing = func->getAttrOfType<mlir::DictionaryAttr>("mfuse.syminfo");
+      llvm::SmallVector<mlir::NamedAttribute> merged;
+      if (existing) {
+        merged.assign(existing.getValue().begin(), existing.getValue().end());
+      }
+
+      for (const auto &attr : entry.second) {
+        auto it = std::find_if(merged.begin(), merged.end(),
+                               [&](const mlir::NamedAttribute &item) { return item.getName() == attr.getName(); });
+        if (it == merged.end()) {
+          merged.push_back(attr);
+        } else if (it->getValue() != attr.getValue()) {
+          *it = attr;
+        }
+      }
+
+      func->setAttr("mfuse.syminfo", mlir::DictionaryAttr::get(ctx, merged));
+    }
+  }
+
+  mlir::LogicalResult handleBindSymbolicShapeOps(mlir::ModuleOp module, mlir::MLIRContext *ctx,
+                                                 mfusion::SymEngineAnalysis &analysis) {
     llvm::SmallVector<TorchD::BindSymbolicShapeOp> bindOps;
     module.walk([&](TorchD::BindSymbolicShapeOp op) { bindOps.push_back(op); });
 
@@ -145,8 +129,7 @@ struct ConvertTorchSymbolToMfusePass
       auto exprs = analysis.applyAffineMap(affineMap, bindOp.getShapeSymbols());
       if (mlir::failed(exprs)) {
         bindOp.emitError("unsupported symbolic dim source; expected torch.symbolic_int values");
-        signalPassFailure();
-        return;
+        return mlir::failure();
       }
 
       llvm::SmallVector<mlir::Attribute> exprAttrs(exprs->size());
@@ -174,7 +157,7 @@ struct ConvertTorchSymbolToMfusePass
           if (!ranked || ranked.getRank() != static_cast<int64_t>(exprCount)) {
             continue;
           }
-          if (attachToValue(input, shapeAttr)) {
+          if (mlir::mfuse::SymbolicShapeUtils::attachToValue(input, shapeAttr)) {
             remove_op = true;
           }
         }
@@ -188,10 +171,13 @@ struct ConvertTorchSymbolToMfusePass
     for (mlir::Operation *op : eraseOps) {
       op->erase();
     }
+    return mlir::success();
   }
 };
 }  // namespace
 
 namespace mlir {
-std::unique_ptr<Pass> createConvertTorchSymbolToMfusePass() { return std::make_unique<ConvertTorchSymbolToMfusePass>(); }
+std::unique_ptr<Pass> createConvertTorchSymbolToMfusePass() {
+  return std::make_unique<ConvertTorchSymbolToMfusePass>();
+}
 }  // namespace mlir
