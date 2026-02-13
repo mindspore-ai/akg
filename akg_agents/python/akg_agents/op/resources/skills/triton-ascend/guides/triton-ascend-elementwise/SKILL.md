@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-elementwise
-description: "逐元素算子(element-wise)优化策略"
+description: "逐元素算子(element-wise)优化策略，包括 add/mul/relu/sigmoid/tanh/gelu/exp/log 等操作的向量化实现和融合技巧。适用于实现激活函数、逐元素运算、广播操作等向量模式算子的内核代码生成场景"
 level: L4
 category: implementation
 version: "1.0.0"
@@ -83,38 +83,7 @@ class ModelNew(torch.nn.Module):
             self.VEC_CORE_NUM = 40  # Ascend 910B4 默认
 ```
 
-### 3. 大 Shape 处理（交错循环）
-
-当输入 shape 很大时，使用交错循环处理，避免 Grid 超限：
-
-```python
-@triton.jit
-def large_elementwise_kernel(
-    input_ptr, output_ptr, n_elements,
-    BLOCK_SIZE: tl.constexpr,
-    CORE_NUM: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    
-    # 交错处理：每个核心处理 pid, pid+CORE_NUM, pid+2*CORE_NUM, ...
-    for block_idx in range(pid, triton.cdiv(n_elements, BLOCK_SIZE), CORE_NUM):
-        offsets = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        
-        data = tl.load(input_ptr + offsets, mask=mask)
-        result = compute(data)
-        tl.store(output_ptr + offsets, result, mask=mask)
-
-# 启动
-grid = (self.VEC_CORE_NUM,)
-large_elementwise_kernel[grid](
-    input_tensor, output_tensor, n_elements,
-    BLOCK_SIZE=1024,
-    CORE_NUM=self.VEC_CORE_NUM,
-)
-```
-
-### 4. BLOCK_SIZE 选择
+### 3. BLOCK_SIZE 选择
 
 - **推荐值**: 1024-2048
 - **原则**: 平衡并行度和资源占用
@@ -122,7 +91,7 @@ large_elementwise_kernel[grid](
   - 更大的 BLOCK_SIZE → 更少的 Grid 启动开销
   - 更小的 BLOCK_SIZE → 更细粒度的并行
 
-### 5. 核内循环优化
+### 4. 核内循环优化
 
 对于简单的 element-wise 算子，可以通过切分并添加核内循环来隐藏搬运计算开销：
 
@@ -142,58 +111,3 @@ def optimized_elementwise(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.cons
 ```
 
 编译器会自动将核内 for 循环进行多级流水处理。
-
-## 完整示例：ReLU
-
-```python
-import torch
-import triton
-import triton.language as tl
-import torch_npu
-
-@triton.jit
-def relu_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
-    
-    data = tl.load(input_ptr + offsets, mask=mask)
-    result = tl.maximum(data, 0.0)
-    tl.store(output_ptr + offsets, result, mask=mask)
-
-class ModelNew(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        try:
-            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
-        except:
-            self.VEC_CORE_NUM = 40
-
-    def forward(self, x):
-        if not x.is_contiguous():
-            x = x.contiguous()
-        
-        output = torch.empty_like(x)
-        n_elements = x.numel()
-        
-        BLOCK_SIZE = 1024
-        grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
-        
-        relu_kernel[grid](x, output, n_elements, BLOCK_SIZE)
-        return output
-```
-
-## 性能检查清单
-
-- [ ] 是否将输入转为连续内存？
-- [ ] 是否使用了 VEC 核心数？
-- [ ] BLOCK_SIZE 是否在 1024-2048 范围？
-- [ ] 对于大 shape，是否使用了交错循环？
-- [ ] Grid 大小是否在限制内（< 65535）？
-
-## 常见错误
-
-1. **忘记转连续**: 导致 stride 访问开销
-2. **Grid 超限**: 大 shape 时未使用交错循环
-3. **错误的核心数**: 使用了 CUBE 而非 VEC 核心
-4. **BLOCK_SIZE 过小**: 启动开销过大

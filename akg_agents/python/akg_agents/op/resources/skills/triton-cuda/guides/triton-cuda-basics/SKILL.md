@@ -1,6 +1,6 @@
 ---
 name: triton-cuda-basics
-description: "Triton CUDA 核心概念、内核结构和标准模式"
+description: "Triton CUDA 编程基础，包括核心概念（program_id、block、grid）、内核函数结构、装饰器用法和标准代码模式。适用于使用 Triton CUDA、需要了解基本语法结构的任意 CUDA 内核代码生成场景"
 level: L4
 category: fundamental
 version: "1.0.0"

@@ -36,7 +36,7 @@ triton.Config({'BLOCK_SIZE_M': 50, 'SUB_BLOCK_SIZE_M': 25, 'BLOCK_SIZE_N': 512})
 # 2. grid=40，SUB切分含尾块 -> 16.54 us
 triton.Config({'BLOCK_SIZE_M': 25, 'SUB_BLOCK_SIZE_M': 4, 'BLOCK_SIZE_N': 4096})
 
-# 3. grid=40，SUB切分不含尾块 -> 16.00 us ⭐ 最优
+# 3. grid=40，SUB切分不含尾块 -> 16.00 us 最优
 triton.Config({'BLOCK_SIZE_M': 25, 'SUB_BLOCK_SIZE_M': 25, 'BLOCK_SIZE_N': 512})
 
 # 4. grid>40，且非核数整数倍 -> 25.86 us

@@ -187,22 +187,33 @@ class KernelGen(AgentBase):
         self.user_prompt_template = self.load_template("kernel_gen/user_prompt.j2")
     
     def _init_skills(self):
-        """初始化 Skill 系统"""
+        """初始化 Skill 系统（延迟加载，按 DSL 加载）"""
+        self._loader = SkillLoader()
+        self._skills_cache: Dict[str, list] = {}  # dsl -> skills
+        # 使用算子专用的 OperatorSkillSelector
+        self.skill_selector = OperatorSkillSelector()
+    
+    def _load_skills_by_dsl(self, dsl: str) -> list:
+        """按 DSL 加载对应子目录的 skills，带缓存"""
+        dsl_key = dsl.replace("_", "-")  # triton_ascend -> triton-ascend
+        if dsl_key in self._skills_cache:
+            return self._skills_cache[dsl_key]
+        
+        dsl_dir = SKILLS_DIR / dsl_key
+        if not dsl_dir.exists():
+            logger.warning(f"Skills directory not found for DSL '{dsl_key}': {dsl_dir}")
+            self._skills_cache[dsl_key] = []
+            return []
+        
         try:
-            # 加载 skills
-            loader = SkillLoader()
-            self.loaded_skills = loader.load_from_directory(SKILLS_DIR)
-            
-            logger.info(f"Loaded {len(self.loaded_skills)} skills from {SKILLS_DIR}")
-            
-            # 使用算子专用的 OperatorSkillSelector
-            self.skill_selector = OperatorSkillSelector()
-            
+            skills = self._loader.load_from_directory(dsl_dir)
+            self._skills_cache[dsl_key] = skills
+            logger.info(f"Loaded {len(skills)} skills from {dsl_dir}")
+            return skills
         except Exception as e:
-            logger.error(f"Failed to initialize skill system: {e}")
-            # 设置为空以便降级处理
-            self.loaded_skills = []
-            self.skill_selector = None
+            logger.error(f"Failed to load skills for DSL '{dsl_key}': {e}")
+            self._skills_cache[dsl_key] = []
+            return []
     
     async def _select_skills(
         self, 
@@ -214,53 +225,98 @@ class KernelGen(AgentBase):
     ) -> List[Any]:
         """
         两阶段 Skill 选择：
-        1. 粗筛：基于 OperatorSkillSelector（backend/dsl metadata 过滤）
-        2. 精筛：LLM 根据任务描述选择
+        1. 按 DSL 加载对应子目录的 skills
+        2. 粗筛：基于 OperatorSkillSelector（backend/dsl metadata 过滤）
+        3. 精筛：LLM 根据任务描述选择
         """
-        if not self.skill_selector or not self.loaded_skills:
+        loaded_skills = self._load_skills_by_dsl(dsl)
+        if not self.skill_selector or not loaded_skills:
             return []
         
         try:
             # 阶段1：粗筛（使用 OperatorSkillSelector）
             context = OperatorSelectionContext(
                 dsl=dsl.replace("_", "-"),  # triton_ascend -> triton-ascend
-                backend=backend
+                backend=backend,
+                include_levels=[SkillLevel.L3, SkillLevel.L4]
             )
-            filtered = self.skill_selector.coarse_filter(self.loaded_skills, context)
+            filtered = self.skill_selector.coarse_filter(loaded_skills, context)
             
-            logger.info(f"Coarse filter: {len(self.loaded_skills)} -> {len(filtered)} skills")
+            logger.info(f"Coarse filter: {len(loaded_skills)} -> {len(filtered)} skills")
             
-            if len(filtered) <= 3:
+            if len(filtered) <= 5:
                 return filtered
             
             # 阶段2：LLM 精筛
             skills_info = [{"name": s.name, "description": s.description} for s in filtered]
             
             import json
-            llm_prompt = f"""你是一个 Skill 选择专家。请为以下内核代码生成任务选择相关的 Skills。
+            llm_prompt = f"""# Skill 智能筛选
 
-**任务信息**:
-- 算子名称: {op_name}
-- 目标 DSL: {dsl}
-- 目标后端: {backend}
-- 目标框架: {framework}
-- 任务描述: {task_desc}
+你是一个专业的内核代码生成专家，需要根据当前任务特征，从候选的 Skills 中筛选出**所有相关**的知识文档。
 
-**可用 Skills**:
+## 当前任务
+
+**算子名称**: {op_name}
+
+**目标环境**:
+- DSL: {dsl}
+- 后端: {backend}
+- 框架: {framework}
+
+**任务描述**:
+```
+{task_desc}
+```
+
+## 候选 Skills
+
+以下是所有可用的 Skills（共 {len(skills_info)} 个），包含名称和描述：
+
 {json.dumps(skills_info, indent=2, ensure_ascii=False)}
 
-**特别注意**：
-1. 重点是内核代码生成，无关的技能不要选择（如算子草图设计、测试、工作流等）
-2. 选取最相关的 Skills，不要选择太多，尽量保证覆盖关键知识即可
-3. 没有抢相关的可以不选
+## 筛选任务
 
-**输出格式**（JSON）:
- ```json
+请分析当前任务和所有候选 Skills，筛选出**所有对当前内核代码生成任务有参考价值**的 Skills。
+
+### 筛选标准
+
+**直接相关（必选）**：
+- 算子模式匹配（如 elementwise、reduce、matmul、attention 等）
+- DSL/后端相关的 API 参考或编程基础以及调试指南
+- 优化策略直接适用于当前算子类型
+
+**间接相关（可选）**：
+- 包含部分相似的操作模式
+- 优化技巧具有通用性，可迁移到当前任务
+- 实现思路或代码结构有参考价值
+
+**不相关（排除）**：
+- 算子类型完全不同且无参考价值
+- 与当前 DSL/后端不匹配
+- 属于工作流、测试、草图设计等非代码生成类
+
+### 筛选原则
+
+1. **宁可多选，不要漏选**：如果某个 Skill 有任何参考价值，就应该被选中
+2. **只排除明显不相关的**：只排除完全不相关的 Skills
+3. **按相关性排序**：将最相关的 Skills 排在前面
+
+## 输出要求
+
+请输出 JSON 格式的筛选结果：
+
+```json
 {{
-"selected": ["skill-name-1", "skill-name-2", ...],
-"reason": "简要选择理由"
+  "selected": ["skill-name-1", "skill-name-2", ...],
+  "reason": "简要说明选择理由"
 }}
 ```
+
+**注意**：
+- 返回完整的 Skill 名称，确保与上述候选 Skills 中的 name 完全一致
+- 如果所有 Skills 都不相关，返回空列表
+- selected 列表按相关性从高到低排序
 """
             template = Jinja2TemplateWrapper("{{ prompt }}")
             response, _, _ = await self.run_llm(template, {"prompt": llm_prompt}, "standard")
@@ -296,7 +352,37 @@ class KernelGen(AgentBase):
         except json.JSONDecodeError:
             pass
         return [], ""
+    
+    # Category 排序顺序
+    CATEGORY_ORDER = ["fundamental", "method", "implementation", "example"]
+    
+    def _assemble_skill_contents(self, selected_skills: List[Any]) -> str:
+        """
+        按 level → category → name 排序 skills，拼接其内容为字符串。
+        """
+        if not selected_skills:
+            return ""
         
+        def sort_key(skill):
+            level_map = {"L3": 1, "L4": 2, "L5": 3}
+            level_value = level_map.get(
+                skill.level.value if skill.level else "L5", 99
+            )
+            try:
+                category_idx = self.CATEGORY_ORDER.index(skill.category or "")
+            except ValueError:
+                category_idx = 999
+            return (level_value, category_idx, skill.name)
+        
+        sorted_skills = sorted(selected_skills, key=sort_key)
+        
+        order_desc = [
+            f"{s.name}[{s.level.value if s.level else '?'}/{s.category or '?'}]"
+            for s in sorted_skills
+        ]
+        logger.info(f"Skill assembly order: {order_desc}")
+        
+        return "\n\n---\n\n".join(skill.content for skill in sorted_skills)
     
     async def run(
         self,
@@ -360,7 +446,10 @@ class KernelGen(AgentBase):
                     backend=backend
                 )
             
-            # 2. 渲染 System Prompt
+            # 2. 按 level → category → name 排序并拼接 skill 内容
+            skill_contents = self._assemble_skill_contents(selected_skills)
+            
+            # 3. 渲染 System Prompt
             system_prompt = self.system_prompt_template.format(
                 dsl=dsl,
                 framework=framework,
@@ -368,12 +457,12 @@ class KernelGen(AgentBase):
                 arch=arch
             )
             
-            # 3. 渲染 User Prompt
+            # 4. 渲染 User Prompt
             user_prompt = self.user_prompt_template.format(
                 history_actions=history_compress,
                 verifier_error=verifier_error,
                 conductor_suggestion=conductor_suggestion,
-                skills=selected_skills,
+                skill_contents=skill_contents,
                 op_name=op_name,
                 func_name=func_name,
                 task_desc=task_desc,
@@ -382,13 +471,13 @@ class KernelGen(AgentBase):
                 format_instructions=self.format_instructions
             )
             
-            # 4. 组合完整 prompt
+            # 5. 组合完整 prompt
             full_prompt = f"{system_prompt}\n\n{user_prompt}"
             
-            # 5. 创建 Jinja2 模板包装（用于 run_llm）
+            # 6. 创建 Jinja2 模板包装（用于 run_llm）
             template = Jinja2TemplateWrapper("{{ prompt }}")
             
-            # 6. 更新上下文
+            # 7. 更新上下文
             self.codegen_step_count += 1
             to_update_details = {
                 "agent_name": "kernel_gen",
@@ -403,7 +492,7 @@ class KernelGen(AgentBase):
             }
             self.context.update(to_update_details)
             
-            # 7. 调用 LLM
+            # 8. 调用 LLM
             generated_code, formatted_prompt, reasoning = await self.run_llm(
                 template,
                 {"prompt": full_prompt},

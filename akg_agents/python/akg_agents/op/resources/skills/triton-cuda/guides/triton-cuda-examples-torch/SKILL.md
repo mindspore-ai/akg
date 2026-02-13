@@ -1,6 +1,6 @@
 ---
 name: triton-cuda-examples-torch
-description: "PyTorch + Triton CUDA 完整示例代码"
+description: "PyTorch 框架下 Triton CUDA 内核的完整集成示例，包括 vector_add、matmul、layer_norm、softmax 等标准算子实现。适用于需要参考 PyTorch 算子包装方式、torch.autograd.Function 实现模式的 CUDA 内核代码生成场景"
 level: L3
 category: example
 version: "1.0.0"

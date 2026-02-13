@@ -176,53 +176,76 @@ class KernelDesigner(AgentBase):
         self.user_prompt_template = self.load_template("kernel_designer/user_prompt.j2")
     
     def _init_skills(self):
-        """初始化 Skill 系统"""
-        try:
-            # 加载 skills（包含 designer 子目录）
-            loader = SkillLoader()
-            self.loaded_skills = loader.load_from_directory(SKILLS_DIR)
-            
-            logger.info(f"Loaded {len(self.loaded_skills)} skills from {SKILLS_DIR}")
-            
-            # 创建自定义过滤器
-            # 1. Designer 专用过滤器：优先选择 designer 相关的 skills
-            def designer_filter(skill, context):
-                # 设计类 category 优先
-                design_categories = ["design", "fundamental"]
-                # 或者 metadata 中有 role: designer
-                is_designer_skill = (
-                    skill.category in design_categories or 
-                    (skill.metadata and skill.metadata.get("role") == "designer")
-                )
-                # 排除纯实现类的 skills（由 coder 使用）
-                implementation_only = skill.category == "implementation" and not is_designer_skill
-                return not implementation_only
-            
-            # 创建 selector（带自定义过滤器）
-            self.skill_selector = SkillSelector(
-                custom_filters=[designer_filter]
+        """初始化 Skill 系统（延迟加载，按 DSL 加载）"""
+        self._loader = SkillLoader()
+        self._skills_cache: Dict[str, list] = {}  # dsl -> skills
+        
+        # 创建自定义过滤器
+        # Designer 专用过滤器：优先选择 designer 相关的 skills
+        def designer_filter(skill, context):
+            # 设计类 category 优先
+            design_categories = ["design", "fundamental"]
+            # 或者 metadata 中有 role: designer
+            is_designer_skill = (
+                skill.category in design_categories or 
+                (skill.metadata and skill.metadata.get("role") == "designer")
             )
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize skill system: {e}")
-            # 设置为空以便降级处理
-            self.loaded_skills = []
-            self.skill_selector = None
+            # 排除纯实现类的 skills（由 coder 使用）
+            implementation_only = skill.category == "implementation" and not is_designer_skill
+            return not implementation_only
+        
+        # 创建 selector（带自定义过滤器）
+        self.skill_selector = SkillSelector(
+            custom_filters=[designer_filter]
+        )
+    
+    def _load_skills_by_dsl(self, dsl: str) -> list:
+        """按 DSL 加载对应子目录的 skills，带缓存"""
+        dsl_key = dsl.replace("_", "-")  # triton_ascend -> triton-ascend
+        if dsl_key in self._skills_cache:
+            return self._skills_cache[dsl_key]
+        
+        # 加载 DSL 特定目录的 skills
+        dsl_dir = SKILLS_DIR / dsl_key
+        skills = []
+        if dsl_dir.exists():
+            try:
+                skills = self._loader.load_from_directory(dsl_dir)
+                logger.info(f"Loaded {len(skills)} skills from {dsl_dir}")
+            except Exception as e:
+                logger.error(f"Failed to load skills for DSL '{dsl_key}': {e}")
+        else:
+            logger.warning(f"Skills directory not found for DSL '{dsl_key}': {dsl_dir}")
+        
+        # 也加载 designer 目录的 skills
+        designer_dir = SKILLS_DIR / "designer"
+        if designer_dir.exists():
+            try:
+                designer_skills = self._loader.load_from_directory(designer_dir)
+                skills.extend(designer_skills)
+                logger.info(f"Loaded {len(designer_skills)} designer skills from {designer_dir}")
+            except Exception as e:
+                logger.error(f"Failed to load designer skills: {e}")
+        
+        self._skills_cache[dsl_key] = skills
+        return skills
     
     async def _select_skills(self, op_name: str = "", task_desc: str = "",
                              dsl: str = "", backend: str = "", 
                              enable_hint_mode: bool = False, has_hint: bool = False) -> List[Any]:
         """
         Designer 的 Skill 选择：
-        1. 必选：sketch-design
-        2. 可选：hint-mode（当 enable_hint_mode 且 has_hint）
-        3. LLM 选择其他参考 Skills
+        1. 按 DSL 加载对应子目录的 skills
+        2. 必选：sketch-design
+        3. 可选：hint-mode（当 enable_hint_mode 且 has_hint）
+        4. LLM 选择其他参考 Skills
         """
-        if not self.skill_selector or not self.loaded_skills:
+        loaded_skills = self._load_skills_by_dsl(dsl)
+        if not self.skill_selector or not loaded_skills:
             return []
         
         try:
-            skill_dict = {s.name: s for s in self.loaded_skills}
+            skill_dict = {s.name: s for s in loaded_skills}
             selected_skills = []
             
             # 1. 必选：sketch-design
@@ -237,13 +260,13 @@ class KernelDesigner(AgentBase):
             
             # 3. 粗筛可用的参考 Skills
             context = SelectionContext()
-            filtered = self.skill_selector.coarse_filter(self.loaded_skills, context)
+            filtered = self.skill_selector.coarse_filter(loaded_skills, context)
             
             # 排除已选
             already_selected = {s.name for s in selected_skills}
             candidates = [s for s in filtered if s.name not in already_selected and s.name != "hint-mode"]
             
-            logger.info(f"Coarse filter: {len(self.loaded_skills)} -> {len(candidates)} candidates")
+            logger.info(f"Coarse filter: {len(loaded_skills)} -> {len(candidates)} candidates")
             
             if not candidates:
                 return selected_skills
@@ -309,6 +332,37 @@ class KernelDesigner(AgentBase):
             pass
         return [], ""
     
+    # Category 排序顺序
+    CATEGORY_ORDER = ["fundamental", "method", "implementation", "example"]
+    
+    def _assemble_skill_contents(self, selected_skills: List[Any]) -> str:
+        """
+        按 level → category → name 排序 skills，拼接其内容为字符串。
+        """
+        if not selected_skills:
+            return ""
+        
+        def sort_key(skill):
+            level_map = {"L3": 1, "L4": 2, "L5": 3}
+            level_value = level_map.get(
+                skill.level.value if skill.level else "L5", 99
+            )
+            try:
+                category_idx = self.CATEGORY_ORDER.index(skill.category or "")
+            except ValueError:
+                category_idx = 999
+            return (level_value, category_idx, skill.name)
+        
+        sorted_skills = sorted(selected_skills, key=sort_key)
+        
+        order_desc = [
+            f"{s.name}[{s.level.value if s.level else '?'}/{s.category or '?'}]"
+            for s in sorted_skills
+        ]
+        logger.info(f"Skill assembly order: {order_desc}")
+        
+        return "\n\n---\n\n".join(skill.content for skill in sorted_skills)
+    
     async def run(
         self,
         op_name: str,
@@ -359,20 +413,23 @@ class KernelDesigner(AgentBase):
                 has_hint=has_hint
             )
             
-            # 2. 渲染 System Prompt
+            # 2. 按 level → category → name 排序并拼接 skill 内容
+            skill_contents = self._assemble_skill_contents(selected_skills)
+            
+            # 3. 渲染 System Prompt
             system_prompt = self.system_prompt_template.format(
                 dsl=dsl,
                 backend=backend,
                 arch=arch
             )
             
-            # 3. 获取硬件文档
+            # 4. 获取硬件文档
             hardware_docs = get_hardware_doc(backend, arch)
             
-            # 4. 渲染 User Prompt
+            # 5. 渲染 User Prompt
             user_prompt = self.user_prompt_template.format(
                 history_actions=history_compress,
-                skills=selected_skills,
+                skill_contents=skill_contents,
                 op_name=op_name,
                 task_desc=remove_copyright_from_text(task_desc),
                 user_requirements=user_requirements,
@@ -383,13 +440,13 @@ class KernelDesigner(AgentBase):
                 format_instructions=self.format_instructions
             )
             
-            # 5. 组合完整 prompt
+            # 6. 组合完整 prompt
             full_prompt = f"{system_prompt}\n\n{user_prompt}"
             
-            # 6. 创建 Jinja2 模板包装（用于 run_llm）
+            # 7. 创建 Jinja2 模板包装（用于 run_llm）
             template = Jinja2TemplateWrapper("{{ prompt }}")
             
-            # 7. 更新上下文
+            # 8. 更新上下文
             self.design_step_count += 1
             to_update_details = {
                 "agent_name": "kernel_designer",
@@ -403,7 +460,7 @@ class KernelDesigner(AgentBase):
             }
             self.context.update(to_update_details)
             
-            # 8. 调用 LLM
+            # 9. 调用 LLM
             llm_result, formatted_prompt, reasoning = await self.run_llm(
                 template,
                 {"prompt": full_prompt},

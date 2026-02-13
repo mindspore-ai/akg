@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-basics
-description: "Triton Ascend 核心概念、内核结构和标准模式"
+description: "Triton Ascend 编程基础，包括核心概念（program_id、block、grid）、内核函数结构、装饰器用法和标准代码模式。适用于初次使用 Triton Ascend、需要了解基本语法结构的任意内核代码生成场景"
 level: L3
 category: fundamental
 version: "1.0.0"
@@ -28,7 +28,7 @@ metadata:
 - **共享内存**: 块内共享，延迟低，容量有限
 - **寄存器**: 每个线程私有，最快访问
 
-## 2. 标准内核结构（五步模式）
+## 2. 标准内核结构
 
 所有 Triton 内核都遵循相同的五步结构模式：
 
@@ -55,7 +55,7 @@ def standard_kernel(
     tl.store(output_ptr + offsets, result, mask=mask)
 ```
 
-## 3. 内核启动方式（ModelNew 类格式）
+### 内核启动方式
 
 ```python
 class ModelNew(torch.nn.Module):
@@ -74,7 +74,7 @@ class ModelNew(torch.nn.Module):
         return output_tensor
 ```
 
-## 4. 边界处理
+## 3. 边界处理
 
 ### 使用 mask 处理边界
 ```python
@@ -94,7 +94,7 @@ valid_mask = (offsets < n_elements) & (offsets >= 0)
 data = tl.load(ptr + offsets, mask=valid_mask, other=0.0)
 ```
 
-## 5. Autotune 使用教程
+## 4. Autotune 使用教程
 
 Autotune 是 Triton 的自动性能优化机制，通过尝试不同的配置参数组合，自动找到最优的内核执行配置。
 
@@ -112,8 +112,8 @@ def matmul_kernel(
     M, N, K,
     stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
     BLOCK_SIZE_M: tl.constexpr, # configs中的参数必须声明为constexpr
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr, # configs中的参数必须声明为constexpr
+    BLOCK_SIZE_K: tl.constexpr, # configs中的参数必须声明为constexpr
 ):
     # kernel实现
     pass
@@ -149,11 +149,3 @@ class ModelNew(torch.nn.Module):
 4. **key参数**：指定哪些输入维度变化时重新autotune
 
 **注意**：不要对 'num_warps', 'num_ctas', 'num_stages', 'num_buffers_warp_spec', 'num_consumer_groups', 'reg_dec_producer', 'reg_inc_consumer', 'maxnreg' 进行修改调优，当前 Ascend 后端不支持。
-
-## 最佳实践
-
-1. **始终使用 mask**：处理边界情况，防止越界访问
-2. **合理选择 BLOCK_SIZE**：平衡并行度和资源占用
-3. **使用 constexpr**：编译时常量，提高性能
-4. **注意数据类型**：显式类型转换，避免精度损失
-5. **使用 autotune**：自动找到最优配置

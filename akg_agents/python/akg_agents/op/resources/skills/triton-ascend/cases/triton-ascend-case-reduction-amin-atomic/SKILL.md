@@ -18,7 +18,7 @@ metadata:
 ## 优化 1：切分策略调整
 
 ```python
-# ❌ 简单方式：非reduce轴映射多核
+# 简单方式：非reduce轴映射多核
 grid = lambda meta: (triton.cdiv(M, meta['BLOCK_SIZE_M']),)
 
 # 错误：优化方式：reduce轴映射多核
@@ -36,7 +36,7 @@ for n_start in range(0, BLOCK_SIZE_N, SUB_BLOCK_SIZE_N):
 ## 优化 2：计算重组
 
 ```python
-# ❌ 简单方式：循环内多次归约
+# 简单方式：循环内多次归约
 row_min = float('inf')
 for n_start in range(0, BLOCK_SIZE_N, SUB_BLOCK_SIZE_N):
   错误：curr_min = tl.min(data_block, 1)

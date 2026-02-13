@@ -39,7 +39,7 @@ triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 2048})
 # 2-4. reduce轴切分逐渐增大，M切分相应减小 -> 性能逐渐提升
 triton.Config({'BLOCK_SIZE_M': 4, 'BLOCK_SIZE_N': 4096})   # 2840.48 us
 triton.Config({'BLOCK_SIZE_M': 2, 'BLOCK_SIZE_N': 8192})   # 2801.20 us
-triton.Config({'BLOCK_SIZE_M': 1, 'BLOCK_SIZE_N': 16384})  # 2779.78 us ⭐ 最优
+triton.Config({'BLOCK_SIZE_M': 1, 'BLOCK_SIZE_N': 16384})  # 2779.78 us 最优
 ```
 
 ### 总结
