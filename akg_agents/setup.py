@@ -47,7 +47,7 @@ setup(
     url="https://www.mindspore.cn/",
     download_url="https://gitcode.com/mindspore/akg/tags",
     project_urls={
-        'Sources': 'https://gitcode.com/mindspore/akg/tree/br_akg_agents/akg_agents',
+        'Sources': 'https://gitcode.com/mindspore/akg/tree/br_agents/akg_agents',
         'Issue Tracker': 'https://gitcode.com/mindspore/akg/issues',
     },
     license="Apache 2.0",

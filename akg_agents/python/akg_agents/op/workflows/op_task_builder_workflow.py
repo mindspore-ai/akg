@@ -167,10 +167,10 @@ class OpTaskBuilderWorkflow:
                 - iteration: 当前轮次
                 - 其他状态字段...
                 
-        MainOpAgent 使用指南：
+        调用方使用指南：
             1. READY 状态：
                - 展示 generated_task_desc 给用户确认
-               - 用户确认通过：将 generated_task_desc 作为新输入，重新送入 MainOpAgent 进行合法性校验与执行
+               - 用户确认通过：将 generated_task_desc 作为新输入，重新送入调用方进行合法性校验与执行
                - 用户拒绝：调用 workflow.run(user_input=result["user_input"], user_feedback="用户拒绝理由", previous_state=result)
                
             2. NEED_CLARIFICATION 状态：
@@ -190,7 +190,7 @@ class OpTaskBuilderWorkflow:
             # 第一轮：用户提供初始需求
             result1 = await workflow.run(user_input="实现ReLU算子")
             
-            # 如果返回READY，MainOpAgent展示给用户确认
+            # 如果返回READY，调用方展示给用户确认
             if result1["status"] == "ready":
                 # 用户拒绝，提供反馈
                 result2 = await workflow.run(

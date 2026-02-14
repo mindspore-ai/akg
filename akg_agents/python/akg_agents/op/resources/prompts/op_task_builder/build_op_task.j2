@@ -93,7 +93,7 @@ import torch.nn as nn
 ```
 
 ### 状态说明：
-- **ready**: 需求清晰，已生成有效的KernelBench格式代码。MainOpAgent会将此代码展示给用户确认。
+- **ready**: 需求清晰，已生成有效的KernelBench格式代码。调用方会将此代码展示给用户确认。
 - **need_clarification**: 需求不够清晰，需要用户提供更多信息。**重要**：必须准确、完整地列出所有缺失的必要信息，避免反复沟通。缺失信息可能包括：
   - 输入tensor的具体shape（如：(batch_size, seq_len, hidden_dim)）
   - 输入tensor的dtype（如：float32、float16等）

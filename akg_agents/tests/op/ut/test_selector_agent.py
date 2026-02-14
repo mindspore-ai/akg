@@ -13,6 +13,9 @@
 # limitations under the License.
 
 """
+DEPRECATED: 此测试对应的 Selector Agent (core/agent/selector.py) 已标记废弃，
+后续将迁移到 op/agents，届时此测试也需要更新。
+
 Selector Agent的单元测试 - 精简版
 只测试核心流程
 

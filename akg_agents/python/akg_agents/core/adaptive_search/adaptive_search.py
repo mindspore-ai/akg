@@ -45,6 +45,7 @@ def load_adaptive_search_config(config_path: Optional[str] = None) -> Dict[str, 
     if config_path is None:
         config_path = os.path.join(
             get_project_root(), 
+            "op",
             "config", 
             "adaptive_search_config.yaml"
         )
