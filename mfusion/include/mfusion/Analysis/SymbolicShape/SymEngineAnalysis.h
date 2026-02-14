@@ -45,6 +45,9 @@ class SymEngineAnalysis {
   // Apply an affine map to symbolic operands and return SymEngine results.
   mlir::FailureOr<llvm::SmallVector<SymExpr>> applyAffineMap(mlir::AffineMap map, mlir::ValueRange symbols);
 
+  // Try to extract an integer value from a SymEngine expression.
+  mlir::FailureOr<int64_t> tryExtractInt64(const SymExpr &expr) const;
+
   // SymEngine structural equality helpers (exact structural match).
   bool isStructurallyEqual(const SymExpr &lhs, const SymExpr &rhs) const;
   bool isStructurallyNotEqual(const SymExpr &lhs, const SymExpr &rhs) const;

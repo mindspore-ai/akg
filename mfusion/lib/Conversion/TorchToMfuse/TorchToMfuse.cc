@@ -74,8 +74,8 @@ void populateTorchToMfuseTypeConversions(mlir::TypeConverter &converter) {
   converter.addConversion(
     [](TorchD::NoneType type) -> mlir::Type { return mlir::mfuse::NoneType::get(type.getContext()); });
 
-  // Convert !torch.list<int> to tensor<?xi64> for shape-related operations
-  // This enables dynamic shape support for reshape, broadcast_to, etc.
+  // Convert !torch.list<int> to tensor<?xi64> for shape-related operations.
+  // This enables dynamic shape support for operators such as broadcast_to.
   converter.addConversion([&](TorchD::ListType type) -> mlir::Type {
     // For list<int> types (commonly used for shape parameters), convert to 1D tensor
     if (mlir::isa<TorchD::IntType>(type.getContainedType())) {
@@ -137,7 +137,8 @@ class TorchToMfuseTypeConverter : public mlir::TypeConverter {
 // Pass definition
 //===----------------------------------------------------------------------===//
 
-struct ConvertTorchToMfusePass : public mlir::PassWrapper<ConvertTorchToMfusePass, mlir::OperationPass<mlir::ModuleOp>> {
+struct ConvertTorchToMfusePass
+    : public mlir::PassWrapper<ConvertTorchToMfusePass, mlir::OperationPass<mlir::ModuleOp>> {
   mlir::StringRef getArgument() const final { return "convert-torch-to-mfuse"; }
 
   mlir::StringRef getDescription() const final { return "Convert Torch operations to Mfuse dialect operations"; }

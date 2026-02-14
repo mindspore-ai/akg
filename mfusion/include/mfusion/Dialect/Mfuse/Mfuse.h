@@ -37,6 +37,10 @@
 #define GET_TYPEDEF_CLASSES
 #include "mfusion/Dialect/Mfuse/MfuseTypes.h.inc"
 
+#include "mfusion/Dialect/Mfuse/MfuseInterfaces.h.inc"
+
+#include "mfusion/Dialect/Mfuse/MfuseOps.h"
+
 #define GET_OP_CLASSES
 #include "mfusion/Dialect/Mfuse/Mfuse.h.inc"
 

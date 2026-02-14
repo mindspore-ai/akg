@@ -17,15 +17,49 @@
 #ifndef MFUSION_DIALECT_MFUSE_MFUSEOPS_H
 #define MFUSION_DIALECT_MFUSE_MFUSEOPS_H
 
+#include <string>
+#include <type_traits>
+
+#include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/ValueRange.h"
+#include "mlir/Support/LogicalResult.h"
 
 namespace mlir::mfuse {
 
 // Forward declarations for operations
 class FusedOp;
 class YieldOp;
+
+bool shouldInferSymbolicShape(mlir::ValueRange operands, mlir::RankedTensorType resultType);
+
+template <typename ConcreteOp>
+struct SymbolicBuilderHelper {
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state, mlir::Type resultType,
+                    mlir::ValueRange operands, llvm::ArrayRef<mlir::NamedAttribute> attributes) {
+    // Populate state first so inferSymbolicShapes can inspect it (e.g. attrs).
+    state.addOperands(operands);
+    state.addAttributes(attributes);
+
+    auto finalType = resultType;
+
+    // In Torch->Mfuse conversion, Mfuse ops are first built without symshape; a
+    // later pass attaches symbolic encodings uniformly. Only attempt inference
+    // when inputs already carry symbolic shape.
+    auto rankedResult = resultType.dyn_cast<mlir::RankedTensorType>();
+    if (rankedResult && shouldInferSymbolicShape(operands, rankedResult)) {
+      auto typeOrError = ConcreteOp::inferSymbolicShapes(builder, state, resultType);
+      if (mlir::succeeded(typeOrError)) {
+        finalType = *typeOrError;
+      }
+    }
+
+    state.addTypes(finalType);
+  }
+};
 
 }  // namespace mlir::mfuse
 
