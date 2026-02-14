@@ -109,6 +109,25 @@ def FuseMatmulReshapeBiasAdd : Pass<"fuse-matmul-reshape-bias-add", "::mlir::Mod
 }
 
 //===----------------------------------------------------------------------===
+// FuseBatchMatMul pass (transpose elimination + BatchMatMul 2D -> MatMul)
+//===----------------------------------------------------------------------===
+
+def FuseBatchMatMul : Pass<"fuse-batch-matmul", "::mlir::ModuleOp"> {
+  let summary = "Fuse BatchMatMul: eliminate Permute into trans flag; BatchMatMul 2D -> MatMul";
+  let description = [{
+    Mode 1: When MatMul/BatchMatMul has one or both inputs from Permute that only
+    swaps the last two dimensions, use permute input and flip trans flag to eliminate
+    the permute. Matmul input dtypes: float16, float32, bfloat16 only.
+    Mode 2: When BatchMatMul both inputs are 2D, convert BatchMatMul to MatMul.
+  }];
+  let constructor = "mlir::mfuse::createFuseBatchMatMulPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===
 // FuseBatchMatMulToMul pass
 //===----------------------------------------------------------------------===
 
