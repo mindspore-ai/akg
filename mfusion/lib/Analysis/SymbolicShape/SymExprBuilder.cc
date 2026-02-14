@@ -16,6 +16,8 @@
 
 #include "mfusion/Analysis/SymbolicShape/SymExprBuilder.h"
 
+#include "llvm/Support/ErrorHandling.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "symengine/add.h"
 #include "symengine/functions.h"
 #include "symengine/integer.h"
@@ -36,12 +38,23 @@ SymExprBuilder::SymExpr SymExprBuilder::makeMul(const SymExpr &lhs, const SymExp
   return SymEngine::mul(lhs, rhs);
 }
 
-SymExprBuilder::SymExpr SymExprBuilder::makeFloorDiv(const SymExpr &lhs, const SymExpr &rhs) const {
-  return SymEngine::floor(SymEngine::div(lhs, rhs));
+SymExprBuilder::SymExpr SymExprBuilder::makeDiv(const SymExpr &lhs, const SymExpr &rhs) const {
+  return SymEngine::div(lhs, rhs);
 }
 
-SymExprBuilder::SymExpr SymExprBuilder::makeCeilDiv(const SymExpr &lhs, const SymExpr &rhs) const {
-  return SymEngine::ceiling(SymEngine::div(lhs, rhs));
+SymExprBuilder::SymExpr SymExprBuilder::makeCeil(const SymExpr &expr) const { return SymEngine::ceiling(expr); }
+
+llvm::SmallVector<SymExprBuilder::SymExpr> SymExprBuilder::buildSymExprsFromStaticShape(
+  llvm::ArrayRef<int64_t> shape) const {
+  llvm::SmallVector<SymExpr> exprs;
+  exprs.reserve(shape.size());
+  for (int64_t dim : shape) {
+    if (dim == mlir::ShapedType::kDynamic) {
+      llvm::report_fatal_error("buildSymExprsFromStaticShape expects static shape");
+    }
+    exprs.push_back(makeInteger(dim));
+  }
+  return exprs;
 }
 
 }  // namespace mfusion

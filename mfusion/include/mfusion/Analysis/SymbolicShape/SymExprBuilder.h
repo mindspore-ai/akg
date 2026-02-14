@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <string>
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "symengine/basic.h"
 
 namespace mfusion {
@@ -36,8 +38,9 @@ class SymExprBuilder {
   // SymEngine arithmetic construction helpers.
   SymExpr makeAdd(const SymExpr &lhs, const SymExpr &rhs) const;
   SymExpr makeMul(const SymExpr &lhs, const SymExpr &rhs) const;
-  SymExpr makeFloorDiv(const SymExpr &lhs, const SymExpr &rhs) const;
-  SymExpr makeCeilDiv(const SymExpr &lhs, const SymExpr &rhs) const;
+  SymExpr makeDiv(const SymExpr &lhs, const SymExpr &rhs) const;
+  SymExpr makeCeil(const SymExpr &expr) const;
+  llvm::SmallVector<SymExpr> buildSymExprsFromStaticShape(llvm::ArrayRef<int64_t> shape) const;
 };
 
 }  // namespace mfusion

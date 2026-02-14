@@ -16,16 +16,17 @@
 
 #include "mfusion/Analysis/SymbolicShape/SymEngineAnalysis.h"
 
+#include "symengine/integer.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 
 namespace mfusion {
-
 mlir::FailureOr<SymEngineAnalysis::SymExpr> SymEngineAnalysis::getOrAssignSymbol(mlir::Value value) {
   auto it = valueToSymMap_.find(value);
   if (it != valueToSymMap_.end()) {
     return it->second;
   }
 
+  // todo, remove torch dialect dependency
   auto symbolicIntOp = value.getDefiningOp<mlir::torch::Torch::SymbolicIntOp>();
   if (!symbolicIntOp) {
     return mlir::failure();
@@ -72,9 +73,11 @@ mlir::FailureOr<SymEngineAnalysis::SymExpr> SymEngineAnalysis::convertAffineExpr
       case mlir::AffineExprKind::Mul:
         return builder_.makeMul(*lhs, *rhs);
       case mlir::AffineExprKind::FloorDiv:
-        return builder_.makeFloorDiv(*lhs, *rhs);
-      case mlir::AffineExprKind::CeilDiv:
-        return builder_.makeCeilDiv(*lhs, *rhs);
+        return builder_.makeDiv(*lhs, *rhs);
+      case mlir::AffineExprKind::CeilDiv: {
+        auto divExpr = builder_.makeDiv(*lhs, *rhs);
+        return builder_.makeCeil(divExpr);
+      }
       default:
         return mlir::failure();
     }
@@ -113,6 +116,17 @@ mlir::FailureOr<llvm::SmallVector<SymEngineAnalysis::SymExpr>> SymEngineAnalysis
     results.push_back(*converted);
   }
   return results;
+}
+
+mlir::FailureOr<int64_t> SymEngineAnalysis::tryExtractInt64(const SymExpr &expr) const {
+  if (!SymEngine::is_a<SymEngine::Integer>(*expr)) {
+    return mlir::failure();
+  }
+  try {
+    return static_cast<int64_t>(SymEngine::down_cast<const SymEngine::Integer &>(*expr).as_int());
+  } catch (...) {
+    return mlir::failure();
+  }
 }
 
 bool SymEngineAnalysis::isStructurallyEqual(const SymExpr &lhs, const SymExpr &rhs) const {

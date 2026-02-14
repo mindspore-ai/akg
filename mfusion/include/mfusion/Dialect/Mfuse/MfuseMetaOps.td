@@ -659,23 +659,38 @@ def Mfuse_ReduceSumOp : Mfuse_Op<"reduce_sum", [Pure]> {
   }];
 }
 
-def Mfuse_ReshapeOp : Mfuse_Op<"reshape", [Pure]> {
+def Mfuse_ReshapeOp : Mfuse_Op<"reshape", [
+    Pure,
+    SameOperandsAndResultElementType,
+    DeclareOpInterfaceMethods<Mfuse_InferSymbolicShapeInterface>
+  ]> {
   let summary = "Reshape operation";
   let description = [{
-    Reshapes input tensor to the specified shape.
-    Takes input tensor and shape tensor (1D tensor of int64).
-    Supports dynamic shapes where shape is computed at runtime.
+    Reshapes input tensor to the output shape encoded by result type.
+    Only semi-static output is supported: at most one dynamic dimension.
   }];
 
   let arguments = (ins
-    AnyRankedTensor:$input,
-    AnyRankedTensor:$shape
+    AnyRankedTensor:$input
   );
 
   let results = (outs AnyRankedTensor:$result);
 
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins
+        "mlir::Type":$resultType,
+        "mlir::Value":$input,
+        CArg<"llvm::ArrayRef<mlir::NamedAttribute>", "{}">:$attributes
+      ), [{
+        ::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::ReshapeOp>::build(
+            $_builder, $_state, resultType, mlir::ValueRange(input), attributes);
+      }]>
+  ];
+  let hasVerifier = 1;
+
   let assemblyFormat = [{
-    $input `,` $shape attr-dict `:` functional-type(operands, results)
+    $input attr-dict `:` functional-type(operands, results)
   }];
 }
 

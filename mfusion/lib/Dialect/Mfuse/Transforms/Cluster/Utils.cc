@@ -61,7 +61,6 @@ bool isDynamicShapeNode(Operation *op) {
 /// Get const input index info for value-dependent operations
 const std::unordered_map<std::string, std::unordered_set<size_t>> &getConstInputIndexInfo() {
   static const std::unordered_map<std::string, std::unordered_set<size_t>> op_idx_info = {
-    {"mfuse.reshape", {1}},
     {"mfuse.reduce_max", {1}},
     {"mfuse.expand_dims", {1}},
     {"mfuse.reduce_min", {1}},
