@@ -19,10 +19,15 @@
   - [🛠️ 3. 快速上手](#️-3-快速上手)
     - [安装](#安装)
     - [配置 LLM](#配置-llm)
-    - [启动 AKG\_CLI](#启动-akg_cli)
-    - [使用方法](#使用方法)
+    - [后端依赖](#后端依赖)
+    - [启动与使用](#启动与使用)
   - [▶️ 4. 教程示例](#️-4-教程示例)
   - [📐 5. 设计文档](#-5-设计文档)
+    - [核心框架](#核心框架)
+    - [场景](#场景)
+    - [CLI](#cli)
+    - [贡献](#贡献)
+    - [其他模块（v1 文档）](#其他模块v1-文档)
 
 </details>
 
@@ -34,6 +39,7 @@
 当前已落地场景为 **AI 算子代码生成**：通过 LLM 规划与多 Agent 协同，实现多后端、多 DSL 的高性能算子自动生成与优化。后续将持续拓展至算子迁移、性能调优、代码重构等更多 AI Infra 相关场景。
 
 ## 🗓️ 2. 更新日志
+- 2026-02-15：AKG Agents 文档整改。老文档归档至 `docs/v1/`，重构后的新文档统一至 `docs/v2/`。
 - 2026-02-10：核心框架重构（v2）。将通用 Agent 能力与算子场景解耦，构建可复用的多 Agent 协作框架。详见 [框架架构](./docs/v2/CN/Architecture.md)、[Agent 体系](./docs/v2/CN/AgentSystem.md)、[Skill 系统](./docs/v2/CN/SkillSystem.md)、[工作流](./docs/v2/CN/Workflow.md)、[Trace 系统](./docs/v2/CN/Trace.md)、[配置系统](./docs/v2/CN/Configuration.md)。
 - 2025-12-01：引入 LangGraph 重构任务调度系统，新增 `LangGraphTask` 替代原 `Task 任务编排` 方案。详见《[Workflow 文档](./docs/v2/CN/Workflow.md)》。
 - 2025-11-25：支持服务化架构，支持`client-server-worker`分离架构，详见《[服务化架构文档](./docs/v1/CN/ServerArchitecture.md)》。
