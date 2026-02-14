@@ -193,8 +193,9 @@ struct ConvertMfuseCast : public mlir::OpConversionPattern<mlir::mfuse::CastOp> 
   }
 };
 
-/// Converts mfuse.permute -> torch.aten.transpose.Int.
-/// Handles permute operations that swap two dimensions (typically the last two).
+/// Converts mfuse.permute -> torch.aten.permute.
+/// Performs minimal structural validation and relies on upstream passes for
+/// semantic validity of perm values.
 class ConvertMfusePermute : public mlir::OpConversionPattern<mlir::mfuse::PermuteOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
@@ -217,52 +218,24 @@ class ConvertMfusePermute : public mlir::OpConversionPattern<mlir::mfuse::Permut
       return rewriter.notifyMatchFailure(op, "perm size must match input rank");
     }
 
-    // Extract permutation values
-    llvm::SmallVector<int64_t> perm;
+    // Minimal structural validation: all elements must be integer attributes.
+    llvm::SmallVector<mlir::Value> permDims;
+    permDims.reserve(permValues.size());
     for (auto attr : permValues) {
-      if (auto intAttr = mlir::dyn_cast<mlir::IntegerAttr>(attr)) {
-        perm.push_back(intAttr.getInt());
-      } else {
+      auto dimAttr = mlir::dyn_cast<mlir::IntegerAttr>(attr);
+      if (!dimAttr) {
         return rewriter.notifyMatchFailure(op, "perm values must be integers");
       }
-    }
-
-    // Check if this is a simple two-dimension swap (identity except for swapping two dims).
-    // Find the two dimensions that are swapped.
-    int64_t dim0 = -1, dim1 = -1;
-    for (int64_t i = 0; i < rank; ++i) {
-      if (perm[i] != i) {
-        if (dim0 == -1) {
-          dim0 = i;
-        } else if (dim1 == -1) {
-          dim1 = i;
-        } else {
-          // More than two dimensions are swapped, cannot use transpose.Int
-          return rewriter.notifyMatchFailure(op, "permute swaps more than two dimensions");
-        }
-      }
-    }
-
-    if (dim0 == -1 || dim1 == -1) {
-      // Identity permutation, no conversion needed (should be eliminated by canonicalize)
-      return rewriter.notifyMatchFailure(op, "identity permutation");
-    }
-
-    // Verify that perm[dim0] == dim1 and perm[dim1] == dim0 (swapped)
-    if (perm[dim0] != dim1 || perm[dim1] != dim0) {
-      return rewriter.notifyMatchFailure(op, "permute is not a simple two-dimension swap");
+      permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), dimAttr));
     }
 
     mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) return mlir::failure();
 
     mlir::Value input = adaptor.getInput();
-    auto dim0Attr = rewriter.getI64IntegerAttr(dim0);
-    auto dim1Attr = rewriter.getI64IntegerAttr(dim1);
-    auto dim0Const = rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), dim0Attr);
-    auto dim1Const = rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), dim1Attr);
-
-    rewriter.replaceOpWithNewOp<TorchD::AtenTransposeIntOp>(op, resultType, input, dim0Const, dim1Const);
+    auto listType = TorchD::ListType::get(op.getContext(), TorchD::IntType::get(op.getContext()));
+    mlir::Value permList = rewriter.create<TorchD::PrimListConstructOp>(op.getLoc(), listType, permDims);
+    rewriter.replaceOpWithNewOp<TorchD::AtenPermuteOp>(op, resultType, input, permList);
     return mlir::success();
   }
 };
