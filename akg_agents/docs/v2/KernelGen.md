@@ -1,3 +1,5 @@
+[中文版](./CN/KernelGen.md)
+
 # KernelGen Agent Design Document
 
 ## Overview
