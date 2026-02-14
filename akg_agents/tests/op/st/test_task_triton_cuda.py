@@ -28,7 +28,7 @@ async def test_parallel_task_triton_cuda():
     arch = "a100"
     task_pool = TaskPool(1)
     # device_pool = DevicePool([device_id])  # 旧写法
-    config = load_config(config_path="./python/akg_agents/op/config/vllm_triton_cuda_coderonly_config.yaml")
+    config = load_config(config_path="./python/akg_agents/op/config/triton_cuda_coderonly_config.yaml")
 
     check_env_for_task(framework, backend, dsl, config)
 

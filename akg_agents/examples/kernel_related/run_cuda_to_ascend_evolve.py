@@ -303,7 +303,7 @@ async def run_cross_platform_evolve(
     print()
     print("[Step 2.2] 加载配置...")
     try:
-        config_path = str(Path(get_project_root()) / "config" / "vllm_triton_ascend_evolve_config.yaml")
+        config_path = str(Path(get_project_root()) / "config" / "triton_ascend_evolve_config.yaml")
         base_config = load_config(config_path=config_path)
     except Exception:
         base_config = load_config(dsl=config.target_dsl, backend=config.target_backend)

@@ -22,17 +22,19 @@ AKG Agents 使用多层级配置系统管理 LLM 服务、Embedding 模型和框
 {
   "models": {
     "complex": {
-      "base_url": "https://api.openai.com/v1",
-      "api_key": "your-api-key",
-      "model_name": "gpt-4",
-      "temperature": 0.2,
-      "max_tokens": 8192
+      "base_url": "https://api.deepseek.com/beta/",
+      "api_key": "your-deepseek-api-key",
+      "model_name": "deepseek-reasoner",
+      "temperature": 0.0,
+      "max_tokens": 8192,
+      "extra_body": {
+        "thinking": {"type": "enabled"}
+      }
     },
     "standard": {
       "base_url": "https://api.deepseek.com/beta/",
       "api_key": "your-deepseek-api-key",
-      "model_name": "deepseek-chat",
-      "thinking_enabled": true
+      "model_name": "deepseek-chat"
     },
     "fast": {
       "base_url": "https://api.deepseek.com/beta/",
@@ -51,6 +53,8 @@ AKG Agents 使用多层级配置系统管理 LLM 服务、Embedding 模型和框
 }
 ```
 
+> 各 provider 的 `extra_body` 配置示例（OpenAI、Claude、通义千问、智谱、Kimi、豆包等），请参考 [`settings.example.more.json`](../../examples/settings.example.more.json)。
+
 ## 3. ModelConfig
 
 单个 LLM 模型的配置。
@@ -66,7 +70,7 @@ AKG Agents 使用多层级配置系统管理 LLM 服务、Embedding 模型和框
 | `frequency_penalty` | float | `None` | 频率惩罚（可选） |
 | `presence_penalty` | float | `None` | 存在惩罚（可选） |
 | `timeout` | int | `300` | 请求超时时间（秒） |
-| `thinking_enabled` | bool | `None` | 启用 thinking 模式（支持的模型） |
+| `extra_body` | object | `{}` | 透传到 API 请求体的额外参数（如 thinking/reasoning 配置） |
 
 ### 模型级别
 

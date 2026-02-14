@@ -133,7 +133,7 @@ class AdaptiveSearchRunnerConfig:
         # 基础配置文件路径（必填）
         instance.config_path = config_dict.get("config_path")
         if not instance.config_path:
-            raise ValueError("config_path 是必填项，请在配置文件中指定 LLM 配置文件路径，如: config_path: 'config/vllm_triton_ascend_evolve_config.yaml'")
+            raise ValueError("config_path 是必填项，请在配置文件中指定 LLM 配置文件路径，如: config_path: 'config/triton_ascend_evolve_config.yaml'")
         
         return instance
 

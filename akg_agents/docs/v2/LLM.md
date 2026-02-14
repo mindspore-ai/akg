@@ -19,13 +19,18 @@ All providers are accessed through the same OpenAI-compatible interface:
 
 | Provider | Examples |
 |----------|----------|
-| OpenAI | GPT-4, o1 |
+| OpenAI | GPT-4o, o3, o4-mini |
 | DeepSeek | deepseek-chat, deepseek-reasoner |
 | Claude | Via Anthropic's OpenAI-compatible layer |
 | GLM (Zhipu) | GLM-4 series |
-| Moonshot | Moonshot models |
+| Moonshot / Kimi | kimi-k2, kimi-k2.5 |
+| Qwen / DashScope | qwen-plus, qwq |
+| Doubao / Volcengine | doubao-seed |
+| SiliconFlow | Various models via SiliconFlow |
 | vLLM | Local deployment |
 | Ollama | Local models |
+
+> See [`settings.example.more.json`](../../examples/settings.example.more.json) for provider-specific configuration examples including thinking/reasoning parameters.
 
 ## 3. LLMProvider
 
@@ -33,19 +38,21 @@ All providers are accessed through the same OpenAI-compatible interface:
 
 ```python
 provider = LLMProvider(
-    model_name="deepseek-chat",
+    model_name="deepseek-reasoner",
     base_url="https://api.deepseek.com/beta/",
     api_key="your-api-key",
-    thinking_enabled=True
+    extra_body={"thinking": {"type": "enabled"}}  # Provider-specific params, passed through to API
 )
 
 # Non-streaming
 result = await provider.generate(messages, temperature=0.2)
 
 # Streaming
-async for chunk in provider.stream(messages, temperature=0.2):
+async for chunk in provider.generate_stream(messages, temperature=0.2):
     print(chunk)
 ```
+
+The `extra_body` parameter is passed directly to the API request body, allowing you to configure provider-specific features like thinking/reasoning. Different providers use different parameter formats — see [`settings.example.more.json`](../../examples/settings.example.more.json) for examples.
 
 ## 4. LLMClient
 

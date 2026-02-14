@@ -1,0 +1,131 @@
+{
+  "_说明": [
+    "本文件展示各常用 provider 的 extra_body 配置示例。",
+    "extra_body 中的内容会原样透传到 OpenAI 兼容 API 的请求体中，",
+    "不同 provider 的 thinking/reasoning 参数格式各不相同，请按需选用。",
+    "实际使用时只需保留你用到的 provider 配置即可。"
+  ],
+
+  "models": {
+
+    "_DeepSeek（deepseek-reasoner）": {
+      "base_url": "https://api.deepseek.com/beta/",
+      "api_key": "your-deepseek-api-key",
+      "model_name": "deepseek-reasoner",
+      "temperature": 0.0,
+      "max_tokens": 65536,
+      "extra_body": {
+        "thinking": {"type": "enabled"}
+      }
+    },
+
+    "_OpenAI（o3 / o4-mini 等 reasoning 模型）": {
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "your-openai-api-key",
+      "model_name": "o3",
+      "temperature": 0.0,
+      "max_tokens": 8192,
+      "extra_body": {
+        "reasoning_effort": "high"
+      }
+    },
+
+    "_OpenAI（GPT-4o 等普通模型，无需 extra_body）": {
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "your-openai-api-key",
+      "model_name": "gpt-4o",
+      "temperature": 0.0,
+      "max_tokens": 8192
+    },
+
+    "_Anthropic Claude（通过 OpenAI 兼容层）": {
+      "base_url": "https://api.anthropic.com/v1",
+      "api_key": "your-anthropic-api-key",
+      "model_name": "claude-sonnet-4-20250514",
+      "temperature": 0.0,
+      "max_tokens": 8192,
+      "extra_body": {
+        "thinking": {"type": "enabled", "budget_tokens": 16000}
+      }
+    },
+
+    "_通义千问 / DashScope": {
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "your-dashscope-api-key",
+      "model_name": "qwen-plus",
+      "temperature": 0.0,
+      "max_tokens": 8192,
+      "extra_body": {
+        "enable_thinking": true
+      }
+    },
+
+    "_智谱 GLM（glm-4.7/glm-5 等默认强制思考，不传 extra_body 也会 thinking）": {
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "api_key": "your-zhipu-api-key",
+      "model_name": "glm-4.7",
+      "temperature": 0.0,
+      "max_tokens": 131072,
+      "extra_body": {
+        "thinking": {"type": "disabled", "clear_thinking": "false"}
+      }
+    },
+
+    "_Moonshot / Kimi": {
+      "base_url": "https://api.moonshot.cn/v1",
+      "api_key": "your-moonshot-api-key",
+      "model_name": "kimi-k2.5",
+      "top_p": 0.95,
+      "temperature": 1,
+      "max_tokens": 131072
+    },
+
+    "_豆包 / 火山引擎 Ark": {
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "your-ark-api-key",
+      "model_name": "doubao-seed-2-0-code-preview-260215",
+      "temperature": 0.0,
+      "max_tokens": 131072,
+      "extra_body": {
+        "thinking": {"type": "enabled"}
+      }
+    },
+
+    "_SiliconFlow（硅基流动）": {
+      "base_url": "https://api.siliconflow.cn/v1",
+      "api_key": "your-siliconflow-api-key",
+      "model_name": "deepseek-ai/DeepSeek-R1",
+      "temperature": 0.0,
+      "max_tokens": 8192,
+      "extra_body": {
+        "thinking": {"type": "enabled"}
+      }
+    },
+
+    "_Ollama（本地部署）": {
+      "base_url": "http://localhost:11434/v1",
+      "api_key": "ollama",
+      "model_name": "qwen3:8b",
+      "temperature": 0.0,
+      "max_tokens": 8192
+    },
+
+    "_vLLM（本地部署）": {
+      "base_url": "http://localhost:8000/v1",
+      "api_key": "not-needed",
+      "model_name": "your-model-name",
+      "temperature": 0.0,
+      "max_tokens": 8192
+    }
+  },
+
+  "embedding": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "api_key": "your-siliconflow-api-key",
+    "model_name": "BAAI/bge-large-zh-v1.5"
+  },
+
+  "default_model": "standard",
+  "context_window": 128000,
+  "stream_output": false
+}

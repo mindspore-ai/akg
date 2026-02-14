@@ -91,7 +91,7 @@ async def run_torch_evolve_triton_ascend():
     config.device_list = [0, 1, 2, 3]
 
     # 配置文件路径
-    config.config_path = str(Path(get_project_root()) / "config" / "vllm_triton_ascend_evolve_config.yaml")
+    config.config_path = str(Path(get_project_root()) / "config" / "triton_ascend_evolve_config.yaml")
 
     # 选择要运行的任务
     config.op_name = get_op_name()
@@ -107,7 +107,7 @@ async def run_torch_evolve_triton_ascend():
     await register_local_worker(config.device_list, backend=config.backend, arch=config.arch)
 
     # 加载配置并检查环境
-    # 注意：如果是 triton_ascend，需要确保 config/vllm_triton_ascend_evolve_config.yaml 存在
+    # 注意：如果是 triton_ascend，需要确保 config/triton_ascend_evolve_config.yaml 存在
     # 如果不存在，可以使用默认加载方式
     try:
         loaded_config = load_config(config_path=config.config_path)

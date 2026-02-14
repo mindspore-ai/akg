@@ -76,7 +76,7 @@ async def run_torch_cpu_cpp_single():
 
     config = load_config("cpp")  # 使用默认 cpp 配置
     # 也可以指定配置文件路径:
-    # config = load_config(config_path="./python/akg_agents/op/config/vllm_cpp_coderonly_config.yaml")
+    # config = load_config(config_path="./python/akg_agents/op/config/cpp_coderonly_config.yaml")
 
     check_env_for_task("torch", "cpu", "cpp", config)
 

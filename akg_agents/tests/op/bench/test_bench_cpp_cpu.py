@@ -36,7 +36,7 @@ async def test_kernelbench_torch_cpu_x86_64():
     task_pool = TaskPool()
     # device_pool = DevicePool([device_id])  # 旧写法
     # or load_config("/your-path-to-config/xxx_config.yaml")
-    config = load_config(config_path="./python/akg_agents/op/config/vllm_cpp_coderonly_config.yaml")
+    config = load_config(config_path="./python/akg_agents/op/config/cpp_coderonly_config.yaml")
 
     check_env_for_task(framework, backend, dsl, config)
 
@@ -93,7 +93,7 @@ async def test_kernelbench_torch_cpu_aarch64():
     task_pool = TaskPool()
     # device_pool = DevicePool([device_id])  # 旧写法
     # or load_config("/your-path-to-config/xxx_config.yaml")
-    config = load_config(config_path="./python/akg_agents/op/config/vllm_cpp_coderonly_config.yaml")
+    config = load_config(config_path="./python/akg_agents/op/config/cpp_coderonly_config.yaml")
 
     check_env_for_task(framework, backend, dsl, config)
 

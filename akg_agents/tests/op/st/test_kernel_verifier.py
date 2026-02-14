@@ -394,7 +394,7 @@ async def test_kernel_verifier_profiling_cpp(op_name):
     dsl = "cpp"
     backend = "cpu"
     arch = "x86_64"
-    config = load_config(config_path="./python/akg_agents/op/config/vllm_cpp_coderonly_config.yaml")  # unused
+    config = load_config(config_path="./python/akg_agents/op/config/cpp_coderonly_config.yaml")  # unused
     # 读取框架实现代码
     op_task_file = f"./tests/op/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:
@@ -458,7 +458,7 @@ async def test_kernel_verifier_linear_cpp(op_name):
     dsl = "cpp"
     backend = "cpu"
     arch = "x86_64"
-    config = load_config(config_path="./python/akg_agents/op/config/vllm_cpp_coderonly_config.yaml")
+    config = load_config(config_path="./python/akg_agents/op/config/cpp_coderonly_config.yaml")
     # 读取框架实现代码
     op_task_file = f"./tests/op/resources/{op_name}_op/{op_name}_{framework}.py"
     with open(op_task_file, "r", encoding="utf-8") as f:

@@ -37,7 +37,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
     task_pool = TaskPool()
     # device_pool = DevicePool([device_id])  # 旧写法
     # or load_config("/your-path-to-config/xxx_config.yaml")
-    config = load_config(config_path="./python/akg_agents/op/config/vllm_triton_ascend_coderonly_config.yaml")
+    config = load_config(dsl=dsl, backend=backend)
 
     check_env_for_task(framework, backend, dsl, config)
 
@@ -96,7 +96,7 @@ async def test_akg_kernels_bench_torch_triton_ascend910b4():
     task_pool = TaskPool()
     # device_pool = DevicePool([device_id])  # 旧写法
     # or load_config("/your-path-to-config/xxx_config.yaml")
-    config = load_config(config_path="./python/akg_agents/op/config/vllm_triton_ascend_coderonly_config.yaml")
+    config = load_config(dsl=dsl, backend=backend)
 
     check_env_for_task(framework, backend, dsl, config)
 

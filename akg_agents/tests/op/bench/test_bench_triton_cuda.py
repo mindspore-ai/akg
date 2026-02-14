@@ -30,7 +30,7 @@ async def test_bench_triton_cuda():
     level = "level1"  # 可以设置为 "level1", "level2", "level3" 等
     task_pool = TaskPool(1)
     # device_pool = DevicePool([device_id])  # 旧写法
-    config = load_config(config_path="./python/akg_agents/op/config/vllm_triton_cuda_coderonly_config.yaml")
+    config = load_config(config_path="./python/akg_agents/op/config/triton_cuda_coderonly_config.yaml")
 
     # 根据环境变量判断使用哪种 worker
     worker_url = os.getenv("AKG_AGENTS_WORKER_URL")
@@ -90,7 +90,7 @@ async def test_bench_triton_cuda_level_2():
     level = "level2"  # 可以设置为 "level1", "level2", "level3" 等
     task_pool = TaskPool(1)
     # device_pool = DevicePool([device_id])  # 旧写法
-    config = load_config(config_path="./python/akg_agents/op/config/vllm_triton_cuda_coderonly_config.yaml")
+    config = load_config(config_path="./python/akg_agents/op/config/triton_cuda_coderonly_config.yaml")
 
     # 根据环境变量判断使用哪种 worker
     worker_url = os.getenv("AKG_AGENTS_WORKER_URL")
