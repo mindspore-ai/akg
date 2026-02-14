@@ -22,11 +22,14 @@ def get_device_id(default=0):
 
 def _raise_submodule_error(path_name, path_value):
     """通用的子模块错误提示函数"""
-    error_msg = f"找不到 {path_name}: {path_value}\n"
-    error_msg += "请确保已正确下载相关子模块。\n"
-    error_msg += "解决方案：\n"
-    error_msg += "1. 如果已克隆仓库，请执行：git submodule update --init --recursive\n"
-    error_msg += "2. 或者在aikg目录下执行：git submodule update --init --remote 'thirdparty/*'"
+    error_msg = f"\n{'=' * 60}\n"
+    error_msg += f"❌ 找不到 {path_name}\n"
+    error_msg += f"   路径: {path_value}\n"
+    error_msg += f"{'=' * 60}\n"
+    error_msg += "这通常是因为第三方子模块（如 KernelBench）尚未下载。\n\n"
+    error_msg += "解决方案（在项目根目录执行以下命令）：\n"
+    error_msg += '  git submodule update --init "akg_agents/thirdparty/*"\n'
+    error_msg += f"{'=' * 60}"
     raise FileNotFoundError(error_msg)
 
 
@@ -165,28 +168,39 @@ def get_kernelbench_op_name(task_index_list, framework="torch", level="level1"):
     if framework == "torch":
         task_path = os.path.join(
             akg_agents_path, 'thirdparty', 'KernelBench', 'KernelBench', level)
+
+        # 检查 KernelBench 子模块目录是否存在
+        kernelbench_root = os.path.join(akg_agents_path, 'thirdparty', 'KernelBench')
+        if not os.path.exists(kernelbench_root) or not os.listdir(kernelbench_root):
+            _raise_submodule_error("KernelBench 子模块目录", kernelbench_root)
+        if not os.path.exists(task_path):
+            _raise_submodule_error(f"KernelBench {level} 目录", task_path)
+
         # PyTorch: 直接查找文件
         task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
         matched_files = []
 
-        if os.path.exists(task_path):
-            for file in os.listdir(task_path):
-                if file.endswith('.py') and any(file.startswith(task_prefix) for task_prefix in task_prefix_list):
-                    benchmark_name = file[:-3]
-                    matched_files.append(benchmark_name)
+        for file in os.listdir(task_path):
+            if file.endswith('.py') and any(file.startswith(task_prefix) for task_prefix in task_prefix_list):
+                benchmark_name = file[:-3]
+                matched_files.append(benchmark_name)
     else:
         # MindSpore/NumPy: 查找子目录
         task_path = os.path.join(
             akg_agents_path, 'benchmark', 'kernelbench', framework)
+
+        # 检查 benchmark 目录是否存在
+        if not os.path.exists(task_path):
+            _raise_submodule_error(f"KernelBench {framework} benchmark 目录", task_path)
+
         task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
         matched_files = []
 
-        if os.path.exists(task_path):
-            for dir_name in os.listdir(task_path):
-                dir_path = os.path.join(task_path, dir_name)
-                if os.path.isdir(dir_path) and any(dir_name.startswith(task_prefix) for task_prefix in task_prefix_list):
-                    # 对于MindSpore，返回目录名作为benchmark_name
-                    matched_files.append(dir_name)
+        for dir_name in os.listdir(task_path):
+            dir_path = os.path.join(task_path, dir_name)
+            if os.path.isdir(dir_path) and any(dir_name.startswith(task_prefix) for task_prefix in task_prefix_list):
+                # 对于MindSpore，返回目录名作为benchmark_name
+                matched_files.append(dir_name)
 
     return matched_files if matched_files else None
 
