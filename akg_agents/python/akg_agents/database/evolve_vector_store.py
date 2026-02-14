@@ -15,7 +15,7 @@
 import logging
 from typing import List, Any
 from langchain_core.documents import Document
-from ai_kernel_generator.database.vector_store import VectorStore
+from akg_agents.database.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 

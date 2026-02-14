@@ -178,7 +178,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
         task_index_list=[19], framework=framework)
 
     if benchmark_name is None:
-        raise RuntimeError(f"benchmark '{benchmark}' 不支持")
+        raise RuntimeError("在 KernelBench 中未找到指定序号的任务文件，请检查 task_index_list 参数是否正确")
 
     for i, name in enumerate(benchmark_name):
         task_desc = get_kernelbench_task_desc(name, framework=framework)
@@ -229,7 +229,7 @@ async def test_kernelbench_torch_triton_cuda():
         task_index_list=[19], framework=framework)
 
     if benchmark_name is None:
-        raise RuntimeError(f"benchmark '{benchmark}' 不支持")
+        raise RuntimeError("在 KernelBench 中未找到指定序号的任务文件，请检查 task_index_list 参数是否正确")
 
     for i, name in enumerate(benchmark_name):
         task_desc = get_kernelbench_task_desc(name, framework=framework)
@@ -280,7 +280,7 @@ async def test_kernelbench_torch_cpp_cpu():
         task_index_list=[19], framework=framework)
 
     if benchmark_name is None:
-        raise RuntimeError(f"benchmark '{benchmark}' 不支持")
+        raise RuntimeError("在 KernelBench 中未找到指定序号的任务文件，请检查 task_index_list 参数是否正确")
 
     for i, name in enumerate(benchmark_name):
         task_desc = get_kernelbench_task_desc(name, framework=framework)

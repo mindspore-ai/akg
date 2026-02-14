@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# DEPRECATED: 此模块已废弃，后续将迁移到 akg_agents.op.agents
+# 当所有引用方（langgraph nodes 等）迁移完成后将删除此文件
+import warnings
+warnings.warn(
+    "akg_agents.core.agent.test_case_generator is deprecated, will be moved to akg_agents.op.agents",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 """
 TestCaseGenerator Agent: 生成多测试用例的 task_desc
 """

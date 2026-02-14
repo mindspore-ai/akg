@@ -461,7 +461,7 @@ class EvolveSubAgent(SubAgentBase):
                 generated_code = best.get("code", "")
                 profile_result = best.get("profile", {})
             
-            # 直接返回 evolve 提供的原始 log_dir（配置路径），由 main_op_agent 负责拼接 op_name
+            # 直接返回 evolve 提供的原始 log_dir（配置路径），由调用方负责拼接 op_name
             result = {
                 "generated_code": generated_code,
                 "verification_result": success,
@@ -981,7 +981,7 @@ class AdaptiveSearchSubAgent(SubAgentBase):
                 generated_code = best.get("code", "")
                 profile_result = best.get("profile", {})
             
-            # 直接返回 adaptive_search 提供的原始 log_dir（配置路径），由 main_op_agent 负责拼接 op_name
+            # 直接返回 adaptive_search 提供的原始 log_dir（配置路径），由调用方负责拼接 op_name
             result = {
                 "generated_code": generated_code,
                 "verification_result": success,

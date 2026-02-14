@@ -14,12 +14,12 @@
 
 """LangGraph-based workflow implementations."""
 
-from ai_kernel_generator.workflows.base_workflow import BaseWorkflow
-from ai_kernel_generator.workflows.default_workflow import DefaultWorkflow
-from ai_kernel_generator.workflows.coder_only_workflow import CoderOnlyWorkflow
-from ai_kernel_generator.workflows.verifier_only_workflow import VerifierOnlyWorkflow
-from ai_kernel_generator.workflows.connect_all_workflow import ConnectAllWorkflow
-from ai_kernel_generator.workflows.op_task_builder_workflow import OpTaskBuilderWorkflow, run_op_task_builder
+from akg_agents.op.workflows.base_workflow import OpBaseWorkflow as BaseWorkflow
+from akg_agents.op.workflows.default_workflow import DefaultWorkflow
+from akg_agents.op.workflows.coder_only_workflow import CoderOnlyWorkflow
+from akg_agents.op.workflows.verifier_only_workflow import VerifierOnlyWorkflow
+from akg_agents.op.workflows.connect_all_workflow import ConnectAllWorkflow
+from akg_agents.op.workflows.op_task_builder_workflow import OpTaskBuilderWorkflow, run_op_task_builder
 
 __all__ = [
     "BaseWorkflow",

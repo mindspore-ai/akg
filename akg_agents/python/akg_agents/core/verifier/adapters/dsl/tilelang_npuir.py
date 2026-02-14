@@ -80,7 +80,7 @@ except ImportError:
             # 使用 profiler_npu 进行性能测试，支持 L2 cache 清除
             code = f"""        # dsl：tilelang_npuir
         try:
-            from ai_kernel_generator.core.verifier.profiler import profiler_npu
+            from akg_agents.core.verifier.profiler import profiler_npu
             patch_imported = True
         except ImportError:
             patch_imported = False

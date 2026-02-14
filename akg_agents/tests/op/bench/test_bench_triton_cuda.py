@@ -48,7 +48,7 @@ async def test_bench_triton_cuda():
     benchmark_name = get_kernelbench_op_name([19], framework=framework, level=level)
 
     if benchmark_name is None:
-        raise RuntimeError(f"benchmark '{framework}' 不支持")
+        raise RuntimeError("在 KernelBench 中未找到指定序号的任务文件，请检查 task_index_list 参数是否正确")
 
     for i in range(len(benchmark_name)):
         task_desc = get_kernelbench_task_desc(benchmark_name[i], framework=framework, level=level)
@@ -108,7 +108,7 @@ async def test_bench_triton_cuda_level_2():
     benchmark_name = get_kernelbench_op_name([63], framework=framework, level=level)
 
     if benchmark_name is None:
-        raise RuntimeError(f"benchmark '{framework}' 不支持")
+        raise RuntimeError("在 KernelBench 中未找到指定序号的任务文件，请检查 task_index_list 参数是否正确")
 
     for i in range(len(benchmark_name)):
         task_desc = get_kernelbench_task_desc(benchmark_name[i], framework=framework, level=level)

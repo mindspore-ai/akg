@@ -18,9 +18,9 @@ from typing import List
 from pathlib import Path
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
-from ai_kernel_generator.database.evolve_vector_store import EvolveVectorStore
-from ai_kernel_generator.database.database import Database, RetrievalStrategy
-from ai_kernel_generator import get_project_root
+from akg_agents.database.evolve_vector_store import EvolveVectorStore
+from akg_agents.database.database import Database, RetrievalStrategy
+from akg_agents import get_project_root
 
 logger = logging.getLogger(__name__)
 

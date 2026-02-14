@@ -71,7 +71,7 @@ class RunnerConfig:
         self.device_list = [0]
 
         # 配置文件路径
-        self.config_path = "config/default_evolve_config.yaml"
+        self.config_path = "op/config/evolve_config.yaml"
 
         # 任务配置
         self.op_name = "relu_op"
