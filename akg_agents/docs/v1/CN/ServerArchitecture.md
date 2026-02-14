@@ -18,7 +18,7 @@ AIKG 服务化架构将代码生成与执行验证分离，支持分布式部署
 ```mermaid
 graph TB
     subgraph "Client 层"
-        Client[AKGAgentsClient<br/>Python SDK]
+        Client[AIKGClient<br/>Python SDK]
     end
     
     subgraph "Server 层"
@@ -140,14 +140,14 @@ Client → Server (NPU/GPU服务器:8000) → Worker Service (NPU/GPU服务器:9
 
 **1. 启动 Worker Service（NPU/GPU 服务器）**
 ```bash
-cd /path/to/akg_agent./akg_agents
+cd /path/to/aikg/aikg
 source env.sh
 ./scripts/server_related/start_worker_service.sh
 ```
 
 **2. 启动 AIKG Server（NPU/GPU 服务器）**
 ```bash
-cd /path/to/akg_agent./akg_agents
+cd /path/to/aikg/aikg
 source env.sh
 ./scripts/server_related/start_server.sh
 ```
@@ -169,9 +169,9 @@ source env.sh
 
 **4. Client 提交任务**
 ```python
-from akg_agents.client.akg_agents_client import AKGAgentsClient
+from ai_kernel_generator.client.aikg_client import AIKGClient
 
-client = AKGAgentsClient("http://localhost:8000")  # 通过 SSH 隧道
+client = AIKGClient("http://localhost:8000")  # 通过 SSH 隧道
 
 # 提交 single job (Ascend)
 job_id = client.submit_job(
@@ -242,7 +242,7 @@ status = client.wait_for_completion(job_id, timeout=3600)
 
 **1. 启动 Worker Service（NPU/GPU 服务器）**
 ```bash
-cd /path/to/akg_agent./akg_agents
+cd /path/to/aikg/aikg
 source env.sh
 ./scripts/server_related/start_worker_service.sh
 ```
@@ -251,11 +251,11 @@ source env.sh
 
 **方式 A: 使用便捷函数（推荐）**
 ```python
-from akg_agents.core.worker.manager import register_remote_worker
-from akg_agents.op.langgraph_op.task import LangGraphTask
+from ai_kernel_generator.core.worker.manager import register_remote_worker
+from ai_kernel_generator.core.task import Task
 
 # 方式 1: 从环境变量读取 worker_url，自动查询 capacity
-export AKG_AGENTS_WORKER_URL=http://localhost:9001  # 通过 SSH 隧道
+export AIKG_WORKER_URL=http://localhost:9001  # 通过 SSH 隧道
 await register_remote_worker(backend="ascend", arch="ascend910b4")
 
 # 方式 2: 显式指定 worker_url
@@ -275,8 +275,8 @@ await register_remote_worker(
 
 **方式 B: 手动注册（高级用法）**
 ```python
-from akg_agents.core.worker.remote_worker import RemoteWorker
-from akg_agents.core.worker.manager import get_worker_manager
+from ai_kernel_generator.core.worker.remote_worker import RemoteWorker
+from ai_kernel_generator.core.worker.manager import get_worker_manager
 
 worker_manager = get_worker_manager()
 remote_worker = RemoteWorker("http://localhost:9001")
@@ -288,7 +288,7 @@ await worker_manager.register(
 )
 
 # 创建 Task（不传 device_pool）
-task = LangGraphTask(
+task = Task(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -308,7 +308,7 @@ await task.run()
 **3. Evolve 流程使用 RemoteWorker**
 ```bash
 # 方式 1: 使用环境变量（推荐）
-export AKG_AGENTS_WORKER_URL=http://localhost:9001
+export AIKG_WORKER_URL=http://localhost:9001
 python examples/run_torch_evolve_triton.py --worker remote
 
 # 方式 2: 使用命令行参数
@@ -334,15 +334,15 @@ python examples/run_torch_evolve_triton.py --worker remote --worker-url http://l
 
 **方式 A: 使用便捷函数（推荐）**
 ```python
-from akg_agents.core.worker.manager import register_local_worker
-from akg_agents.op.langgraph_op.task import LangGraphTask
+from ai_kernel_generator.core.worker.manager import register_local_worker
+from ai_kernel_generator.core.task import Task
 
 # 注册 LocalWorker
 await register_local_worker([0], backend="ascend", arch="ascend910b4")  # 单卡
 # 或 await register_local_worker([0, 1, 2, 3], backend="ascend", arch="ascend910b4")  # 多卡
 
 # 创建 Task（不传 device_pool，从 WorkerManager 获取）
-task = LangGraphTask(
+task = Task(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -364,15 +364,15 @@ await task.run()
 ⚠️ **注意**: 直接传递 `device_pool` 给 `Task()` 是旧写法，将在未来版本移除。请使用方式 A（便捷函数）。
 
 ```python
-from akg_agents.core.async_pool.device_pool import DevicePool
-from akg_agents.op.langgraph_op.task import LangGraphTask
+from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+from ai_kernel_generator.core.task import Task
 
 # 创建 device_pool
 device_pool = DevicePool([0])
 
 # 创建 Task（传 device_pool，自动注册为 LocalWorker）
 # ⚠️ 此方式已弃用，会触发 DeprecationWarning
-task = LangGraphTask(
+task = Task(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -391,11 +391,11 @@ await task.run()
 **推荐迁移到方式 A**:
 ```python
 # 1. 注册 LocalWorker 到 WorkerManager（一行代码）
-from akg_agents.core.worker.manager import register_local_worker
+from ai_kernel_generator.core.worker.manager import register_local_worker
 await register_local_worker([0], backend="ascend", arch="ascend910b4")
 
 # 2. 创建 Task 时不传 device_pool
-task = LangGraphTask(
+task = Task(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -421,13 +421,13 @@ task = LangGraphTask(
 **部署步骤**:
 1. 在 NPU/GPU 服务器上启动 Worker Service 和 AIKG Server
 2. 注册 Worker 到 Server
-3. 在 Client 端通过 AKGAgentsClient 提交任务
+3. 在 Client 端通过 AIKGClient 提交任务
 
 **示例**:
 ```python
-from akg_agents.client.akg_agents_client import AKGAgentsClient
+from ai_kernel_generator.client.aikg_client import AIKGClient
 
-client = AKGAgentsClient("http://localhost:8000")
+client = AIKGClient("http://localhost:8000")
 job_id = client.submit_job(
     op_name="relu",
     task_desc="...",
@@ -450,15 +450,15 @@ status = client.wait_for_completion(job_id)
 **示例**:
 ```python
 # 注册 RemoteWorker（使用便捷函数）
-from akg_agents.core.worker.manager import register_remote_worker
-from akg_agents.op.langgraph_op.task import LangGraphTask
+from ai_kernel_generator.core.worker.manager import register_remote_worker
+from ai_kernel_generator.core.task import Task
 
 # 从环境变量读取 worker_url，自动查询 capacity
-export AKG_AGENTS_WORKER_URL=http://localhost:9001
+export AIKG_WORKER_URL=http://localhost:9001
 await register_remote_worker(backend="ascend", arch="ascend910b4")
 
-# 使用 LangGraphTask（不传 device_pool）
-task = LangGraphTask(op_name="relu", ..., workflow="coder_only_workflow")
+# 使用 Task（不传 device_pool）
+task = Task(op_name="relu", ..., workflow="coder_only_workflow")
 await task.run()
 ```
 
@@ -469,7 +469,7 @@ await task.run()
 python examples/run_torch_evolve_triton.py --worker local
 
 # Remote 模式
-export AKG_AGENTS_WORKER_URL=http://localhost:9001
+export AIKG_WORKER_URL=http://localhost:9001
 python examples/run_torch_evolve_triton.py --worker remote
 ```
 
@@ -519,9 +519,9 @@ export WORKER_PORT=9001
 
 ```bash
 # Remote Worker URL（用于 register_remote_worker 便捷函数）
-export AKG_AGENTS_WORKER_URL=http://localhost:9001
+export AIKG_WORKER_URL=http://localhost:9001
 # 或通过 SSH 隧道
-export AKG_AGENTS_WORKER_URL=http://localhost:9001  # 本地端口映射到远程 9001
+export AIKG_WORKER_URL=http://localhost:9001  # 本地端口映射到远程 9001
 ```
 
 ### Server 配置
@@ -541,5 +541,5 @@ Server 默认运行在 `0.0.0.0:8000`，可通过 `uvicorn` 参数调整。
 4. **环境检查**: Remote 模式自动跳过硬件检查（triton、nvidia-smi、npu-smi）
 5. **后端支持**: 支持 Ascend (triton_ascend) 和 CUDA (triton_cuda) 两种后端
 6. **Capacity 自动查询**: `register_remote_worker` 会自动从 remote worker 的 `/api/v1/status` 接口查询实际设备数量，无需手动指定。如果查询失败，会使用默认值 1
-7. **环境变量**: 使用 `AKG_AGENTS_WORKER_URL` 环境变量指定 remote worker 的 URL，简化配置
+7. **环境变量**: 使用 `AIKG_WORKER_URL` 环境变量指定 remote worker 的 URL，简化配置
 

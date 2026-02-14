@@ -1,8 +1,8 @@
-# AKG Agents 进化脚本使用说明
+# AI Kernel Generator 进化脚本使用说明
 
 ## 概述
 
-AKG Agents 提供了四个文件，用于自动生成和优化算子：
+AI Kernel Generator 提供了四个文件，用于自动生成和优化算子：
 
 1. **`evolve.py`** - 核心进化算法实现
 2. **`single_evolve_runner.py`** - 单任务进化执行器

@@ -7,7 +7,7 @@ The Task Orchestration Plan Configuration (Plan for short) declares the complete
 The plan mainly includes:
 - `agent_model_config`: assign LLM presets to each agent (presets from `core/llm/llm_config.yaml`).
 - `workflow_config_path`: points to the workflow YAML that defines execution flow (see [Workflow System Design Document](./Workflow.md)).
-- `docs_dir`: reference documentation directories for agents (now replaced by the [Skill System](./SkillSystem.md)).
+- `docs_dir`: reference documentation directories for agents (see [Doc-Driven Integration Guide](./DocDrivenIntegration.md)).
 - `log_dir`: root directory for task logs.
 - `profile_settings`: performance testing parameters (e.g., `run_times`, `warmup_times`).
 - `verify_timeout`: verification timeout in seconds.
@@ -25,7 +25,7 @@ agent_model_config:
   api_generator: model_name
 
 # Log configuration
-log_dir: "~/akg_agents_logs"
+log_dir: "~/aikg_logs"
 
 # Workflow configuration
 workflow_config_path: "config/workflow_file.yaml"
@@ -63,7 +63,7 @@ Specifies the storage directory for task execution logs:
 
 - **Format**: String path
 - **Support**: Absolute and relative paths (supports `~` for user home directory)
-- **Default**: `"~/akg_agents_logs"`
+- **Default**: `"~/aikg_logs"`
 - **Final path shape**: A subdirectory like `Task_{random_id}` will be created under this directory at runtime.
 
 ### 3. Workflow Configuration (workflow_config_path)
@@ -73,7 +73,7 @@ Specifies the storage directory for task execution logs:
 
 ### 4. Documentation Directory Configuration (docs_dir)
 
-See the [Skill System Documentation](./SkillSystem.md) (replaces the old Doc-Driven Integration approach).
+See the [Doc-Driven Integration Guide](./DocDrivenIntegration.md).
 
 ```yaml
 # Example docs configuration
@@ -112,8 +112,8 @@ Sets the timeout for code verification:
 - Supports Ascend NPU / CUDA GPU backend
 
 **Configuration Examples**: 
-- [`config/default_triton_cuda_config.yaml`](../python/akg_agents/config/default_triton_cuda_config.yaml) (for CUDA backend)
-- [`config/default_triton_ascend_config.yaml`](../python/akg_agents/config/default_triton_ascend_config.yaml) (for Ascend backend)
+- [`config/default_triton_cuda_config.yaml`](../python/ai_kernel_generator/config/default_triton_cuda_config.yaml) (for CUDA backend)
+- [`config/default_triton_ascend_config.yaml`](../python/ai_kernel_generator/config/default_triton_ascend_config.yaml) (for Ascend backend)
 
 ### SWFT Configuration (default_swft_config.yaml)
 
@@ -127,14 +127,14 @@ Sets the timeout for code verification:
 ## Usage
 
 ```python
-from akg_agents.config.config_validator import load_config
+from ai_kernel_generator.config.config_validator import load_config
 
 # Option 1: Load preset by DSL (e.g., triton)
 config = load_config(dsl="triton_ascend", backend="ascend")  # or "triton_cuda" for CUDA backend
 
 # Option 2: Load by explicit plan path (local vLLM coder-only)
-config = load_config(config_path="python/akg_agents/config/vllm_triton_ascend_coderonly_config.yaml")  # Ascend
-# config = load_config(config_path="python/akg_agents/config/vllm_triton_cuda_coderonly_config.yaml")    # CUDA
+config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")  # Ascend
+# config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")    # CUDA
 
 task = Task(op_name="relu", task_desc="...", dsl="triton_ascend", config=config)  # or "triton_cuda" for CUDA
 ```

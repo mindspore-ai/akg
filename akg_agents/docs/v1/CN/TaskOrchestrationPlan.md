@@ -7,7 +7,7 @@
 编排配置主要包含：
 - `agent_model_config`：为各 Agent 指定大模型预设（取值来自 `core/llm/llm_config.yaml`）。
 - `workflow_config_path`：指向工作流 YAML，用于定义执行流程（详见《[工作流系统设计文档](./Workflow.md)》）。
-- `docs_dir`：为各 Agent 提供参考文档目录（已被 [Skill 系统](./SkillSystem.md) 替代）。
+- `docs_dir`：为各 Agent 提供参考文档目录（详见《[文档驱动式接入指南](./DocDrivenIntegration.md)》）。
 - `log_dir`：任务日志根目录。
 - `profile_settings`：性能测试参数（如 `run_times`、`warmup_times`）。
 - `verify_timeout`：验证超时时间（单位：秒）。
@@ -25,7 +25,7 @@ agent_model_config:
   api_generator: model_name
 
 # 日志配置
-log_dir: "~/akg_agents_logs"
+log_dir: "~/aikg_logs"
 
 # 工作流配置
 workflow_config_path: "config/workflow_file.yaml"
@@ -64,7 +64,7 @@ agent_model_config:
 
 - **格式**: 字符串路径
 - **支持**: 绝对路径和相对路径（支持`~`表示用户主目录）
-- **默认值**: `"~/akg_agents_logs"`
+- **默认值**: `"~/aikg_logs"`
 - **最终路径形态**: 实际写入时会在该目录下自动创建形如 `Task_{随机ID}` 的子目录。
 
 ### 3. 工作流配置 (workflow_config_path)
@@ -74,7 +74,7 @@ agent_model_config:
 
 ### 4. 文档目录配置 (docs_dir)
 
-详见 [Skill 系统文档](./SkillSystem.md)（已替代旧的文档驱动式接入方案）。
+详见《[文档驱动式接入指南](./DocDrivenIntegration.md)》。
 
 ```yaml
 # 示例文档配置
@@ -114,8 +114,8 @@ profile_settings:
 - 在 coder-only 工作流下，Designer 不启用
 
 **配置示例**: 
-- [`config/default_triton_cuda_config.yaml`](../../python/akg_agents/config/default_triton_cuda_config.yaml) (CUDA后端)
-- [`config/default_triton_ascend_config.yaml`](../../python/akg_agents/config/default_triton_ascend_config.yaml) (Ascend后端)
+- [`config/default_triton_cuda_config.yaml`](../../python/ai_kernel_generator/config/default_triton_cuda_config.yaml) (CUDA后端)
+- [`config/default_triton_ascend_config.yaml`](../../python/ai_kernel_generator/config/default_triton_ascend_config.yaml) (Ascend后端)
 
 ### SWFT配置 (default_swft_config.yaml)
 
@@ -126,19 +126,19 @@ profile_settings:
 - 支持昇腾 NPU 后端
 - 在 coder-only 工作流下，Designer 不启用
 
-**配置示例**: [`config/default_swft_config.yaml`](../../python/akg_agents/config/default_swft_config.yaml)
+**配置示例**: [`config/default_swft_config.yaml`](../../python/ai_kernel_generator/config/default_swft_config.yaml)
 
 ## 配置使用方法
 
 ```python
-from akg_agents.config.config_validator import load_config
+from ai_kernel_generator.config.config_validator import load_config
 
 # 方式1：按 DSL 加载默认方案
 config = load_config(dsl="triton_ascend", backend="ascend")  # 或使用 "triton_cuda" 用于 CUDA 后端
 
 # 方式2：显式指定方案文件路径（本地 vLLM coder-only）
-config = load_config(config_path="python/akg_agents/config/vllm_triton_ascend_coderonly_config.yaml")  # Ascend
-# config = load_config(config_path="python/akg_agents/config/vllm_triton_cuda_coderonly_config.yaml")    # CUDA
+config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")  # Ascend
+# config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")    # CUDA
 
 # 创建任务
 task = Task(op_name="relu", task_desc="...", dsl="triton_ascend", config=config)  # 或使用 "triton_cuda" 用于 CUDA

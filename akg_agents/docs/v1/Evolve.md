@@ -1,8 +1,8 @@
-# AKG Agents Evolution Script Usage Guide
+# AI Kernel Generator Evolution Script Usage Guide
 
 ## Overview
 
-AKG Agents provides four files for automatic kernel generation and optimization:
+AI Kernel Generator provides four files for automatic kernel generation and optimization:
 
 1. **`evolve.py`** - Core evolution algorithm implementation
 2. **`single_evolve_runner.py`** - Single task evolution executor

@@ -1,95 +1,26 @@
 # RAG (检索增强生成) 模块设计文档
 
 ## 概述
-AKG Agents 中的 RAG 模块通过 `VectorStore` 抽象基类和 `OpenAICompatibleEmbeddings` 实现向量检索增强生成能力。模块已重构为支持多种嵌入模型后端，包括 OpenAI 兼容的远程 API（如 OpenAI、DeepSeek、硅流平台、vLLM 本地部署）和本地 HuggingFace 模型，并集成统一的配置管理系统。
+AIKG中的RAG模块目前通过VectorStore类实现，提供基于向量的文档检索能力。通过向量检索，可以快速找到相似的相关文档内容。
 
-## 核心特性
-- **向量存储**：基于 FAISS 的高效向量索引
-- **多嵌入模型支持**：支持 OpenAI 兼容 API（远程）和 HuggingFace（本地）双模式
-- **统一配置管理**：通过 `settings.json` 或环境变量统一管理 Embedding 配置
+## 核心功能
+- **向量存储**：基于FAISS的高效向量索引
+- **嵌入模型**：支持HuggingFace嵌入模型
 - **自动文档生成**：从算子元数据自动生成检索文档
-- **多种检索方式**：相似度搜索（Similarity Search）、最大边际相关性搜索（MMR）
+- **多种检索方式**：相似度搜索、最大边际相关性搜索
 - **索引管理**：支持插入、删除、清空等操作
-
-## 架构概览
-
-```
-core_v2/llm/
-├── factory.py                          # create_embedding_model() 工厂函数
-├── providers/
-│   └── embedding_provider.py           # OpenAICompatibleEmbeddings 实现
-└── ...
-
-database/
-├── vector_store.py                     # VectorStore 抽象基类
-└── ...
-
-op/database/
-├── coder_vector_store.py               # CoderVectorStore 算子代码专用
-└── ...
-```
 
 ## 核心组件
 
-### OpenAICompatibleEmbeddings
-位于 `core_v2/llm/providers/embedding_provider.py`，实现 LangChain `Embeddings` 接口，支持任何 OpenAI 兼容格式的 Embedding API。
-
-**支持的后端：**
-- OpenAI Embeddings
-- DeepSeek Embeddings
-- 硅流平台（SiliconFlow）
-- vLLM 本地部署
-- 其他 OpenAI 兼容 API
-
-**初始化参数：**
-| 参数名 | 类型 | 说明 |
-|--------|------|------|
-| api_url | str | Embedding API 的完整 URL（如 `http://localhost:8001/v1/embeddings`）|
-| model_name | str | 模型名称 |
-| api_key | str | API 密钥（可选，远程 API 需要）|
-| verify_ssl | bool | 是否验证 SSL 证书（默认 False）|
-| timeout | int | 超时时间（秒，默认 60）|
-
-**核心方法：**
-- `embed_documents(texts)` → `List[List[float]]`：为文档列表生成嵌入向量
-- `embed_query(text)` → `List[float]`：为单条查询生成嵌入向量
-
-### create_embedding_model() 工厂函数
-位于 `core_v2/llm/factory.py`，根据配置自动创建 Embedding 模型实例。
-
-**配置优先级（从高到低）：**
-1. 函数参数（直接指定）
-2. 环境变量 `AKG_AGENTS_EMBEDDING_*`
-3. `settings.json` 中的 `embedding` 配置
-
-**使用示例：**
-```python
-from akg_agents.core_v2.llm import create_embedding_model
-
-# 方式 1：使用配置（环境变量或 settings.json）
-embedding = create_embedding_model()
-
-# 方式 2：直接指定参数
-embedding = create_embedding_model(
-    base_url="https://api.siliconflow.cn/v1",
-    api_key="sk-xxx",
-    model_name="BAAI/bge-large-zh-v1.5"
-)
-```
-
 ### VectorStore (抽象基类)
-位于 `database/vector_store.py`，RAG 系统的基础，提供向量存储和检索能力。
-
-**嵌入模型加载策略（按优先级）：**
-1. **远程 API**：优先尝试通过 `create_embedding_model()` 使用 OpenAI 兼容 API（自动检查环境变量和配置）
-2. **本地 HuggingFace 模型**：如远程 API 不可用，加载本地 `~/.akg_agents/text2vec-large-chinese` 模型
-3. **错误提示**：如所有加载方式都失败，抛出异常并提示配置方法
+RAG系统的基础，提供向量存储和检索能力。
 
 **关键特性：**
 - 所有向量存储实现的抽象基类
-- 基于 FAISS 的向量索引
-- 从算子元数据自动生成文档（子类实现 `gen_document`）
-- 支持递归目录遍历构建索引
+- 单例模式提高资源效率
+- HuggingFace嵌入模型支持（默认：GanymedeNil/text2vec-large-chinese）
+- 基于FAISS的向量索引
+- 从算子元数据自动生成文档
 
 ### 专用向量存储
 
@@ -97,107 +28,123 @@ embedding = create_embedding_model(
 专门用于代码生成场景的向量存储。
 
 **核心特性：**
-- 专注于计算相关特征：`["op_name", "op_type", "input_specs", "output_specs", "computation"]`
+- 专注于计算相关特征：["op_name", "op_type", "input_specs", "output_specs", "computation"]
 - 实现层次搜索能力
 - 支持代码相似性匹配
 
-## 嵌入模型配置
+#### EvolveVectorStore
+专门用于进化优化场景的向量存储。
 
-### 方式 1：环境变量（推荐快速配置）
-```bash
-# 新版前缀（推荐）
-export AKG_AGENTS_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
-export AKG_AGENTS_EMBEDDING_MODEL_NAME="BAAI/bge-large-zh-v1.5"
-export AKG_AGENTS_EMBEDDING_API_KEY="sk-xxx"
-export AKG_AGENTS_EMBEDDING_TIMEOUT="60"
+**核心特性：**
+- 处理调度相关特征：["base", "pass", "text"]
+- 支持多种调度方面以实现多样化优化
+- 专门处理schedule块字段
 
-# 旧版前缀（兼容）
-export AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
-```
+## 嵌入模型支持
 
-### 方式 2：settings.json 配置文件
-```json
-{
-  "embedding": {
-    "base_url": "https://api.siliconflow.cn/v1",
-    "api_key": "sk-xxx",
-    "model_name": "BAAI/bge-large-zh-v1.5",
-    "timeout": 60
-  }
-}
-```
+### 模型加载机制
+VectorStore支持灵活的嵌入模型加载策略：
 
-配置文件位置优先级（从高到低）：
-1. `.akg/settings.local.json`（仅本人，gitignored）
-2. `.akg/settings.json`（项目级，团队共享）
-3. `~/.akg/settings.json`（用户级，跨项目）
+**加载优先级：**
+1. **指定模型**：优先加载配置中指定的HuggingFace模型
+2. **环境变量**：如果指定模型失败，尝试从EMBEDDING_MODEL_PATH环境变量加载本地模型
+3. **优雅降级**：如果所有加载方式都失败，自动禁用向量存储功能
 
-### 方式 3：本地 HuggingFace 模型（离线环境）
-```bash
-# 下载本地模型
-bash download.sh --with_local_model
-```
-模型会下载到 `~/.akg_agents/text2vec-large-chinese`，在远程 API 不可用时自动作为降级方案使用。
+### 设备配置
+- **CPU模式**：默认配置，适合开发和测试
+- **CUDA模式**：通过配置文件中的`embedding_device: "cuda"`启用GPU加速
+
+## 文档生成
+
+### 自动文档创建
+VectorStore从算子元数据自动生成检索文档，子类需要实现`gen_document`方法来定义具体的文档生成逻辑。
+
+### 专用文档生成
+
+#### CoderVectorStore文档生成
+- 从元数据中提取计算相关特征
+- 构建包含算子类型、文件路径等信息的文档
+- 支持特征不变量的过滤
+
+#### EvolveVectorStore文档生成
+- 专门处理schedule块字段
+- 将调度信息展开为键值对格式
+- 支持多种调度方面的特征提取
 
 ## 索引管理
 
 ### 自动索引构建
-- 索引从 `metadata.json` 文件自动构建
+- 索引从metadata.json文件自动构建
 - 支持递归目录遍历
 - 优雅处理空数据库
-- 使用 FAISS 持久化存储
+- 使用FAISS持久化存储
+
+## 使用指南
 
 ### 文档存储结构
+每个文档及其元数据文件存储在一个独立的文件夹中：
 ```
-{database_path}/
-├── {doc_path_1}/
-│   ├── metadata.json        # 元数据文件
-│   └── {document_file}      # 文档内容文件
-├── {doc_path_2}/
-│   └── ...
-└── {index_name}/
-    └── index.faiss          # FAISS 索引文件
+{doc_path}/
+├── metadata.json    # 元数据文件
+└── {document_file}       # 文档内容文件
 ```
 
-## 检索接口
+`doc_path`参数指向包含文档的文件夹路径，相对于database_path。
 
-### similarity_search
+### 索引操作接口
+
+#### insert
+**功能**：向向量存储添加新的文档  
+**参数**：
+- `doc_path`: 要插入的文档路径
+
+#### delete
+**功能**：从向量存储中删除指定文档  
+**参数**：
+- `doc_path`: 要删除的文档路径
+
+#### clear
+**功能**：清空向量存储中的所有文档  
+
+### 检索接口
+
+#### similarity_search
 **功能**：执行语义搜索并返回匹配的文档  
 **参数**：
 - `query`: 查询字符串
 - `k`: 返回的文档数量（默认：5）
-- `fetch_k`: 候选文档数量（默认：20）
+- `fetch_k`: 候选文档数量（默认：20，用于提高召回率）
 
-**返回**：匹配的 Document 对象列表
+**返回**：匹配的Document对象列表
 
-### max_marginal_relevance_search
+#### max_marginal_relevance_search
 **功能**：执行最大边际相关搜索，平衡相似度和多样性  
 **参数**：
 - `query`: 查询字符串
 - `k`: 返回的文档数量（默认：5）
 
-**返回**：经过 MMR 重排序的 Document 对象列表
+**返回**：经过MMR重排序的Document对象列表
 
 **特点**：
 - `lambda_mult=0.2`：极致多样性设置
 - `fetch_k=max(20, 5 * k)`：动态候选数量
 
-### similarity_search_with_score
+#### similarity_search_with_score
 **功能**：执行语义搜索并返回匹配的文档及其相似度得分  
 **参数**：
 - `query`: 查询字符串
 - `k`: 返回的文档数量（默认：5）
 - `fetch_k`: 候选文档数量（默认：20）
 
-**返回**：`(Document, score)` 元组列表
+**返回**：(Document, score)元组列表
 
 ## 使用示例
 
 ### 基础向量搜索
 ```python
-from akg_agents.op.database.coder_vector_store import CoderVectorStore
+from ai_kernel_generator.database.coder_vector_store import CoderVectorStore
 
-# 初始化向量存储（自动选择可用的 Embedding 模型）
+# 初始化向量存储
 vector_store = CoderVectorStore(
     database_path="/path/to/database",
     config=config
@@ -206,7 +153,7 @@ vector_store = CoderVectorStore(
 # 执行相似度搜索
 docs = vector_store.similarity_search(query, k=5)
 
-# 执行 MMR 搜索以获得多样性
+# 执行MMR搜索以获得多样性
 docs = vector_store.max_marginal_relevance_search(query, k=5)
 ```
 
@@ -221,3 +168,12 @@ vector_store.delete("path/to/your/document")
 # 清空所有文档
 vector_store.clear()
 ```
+
+## 未来扩展
+
+### 潜在扩展
+- **API文档集成**: 支持AscendC API手册
+- **多源RAG**: 与外部知识源集成
+- **自定义文档适配器**: 支持PDF、markdown和其他格式
+- **高级融合策略**: 更复杂的结果组合方法
+- **查询扩展**: 自动查询增强以提高检索效果

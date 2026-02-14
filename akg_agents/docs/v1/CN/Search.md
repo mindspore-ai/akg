@@ -56,7 +56,7 @@
 ### 2.2 文件结构
 
 ```
-akg_agents/core/adaptive_search/
+ai_kernel_generator/core/adaptive_search/
 ├── __init__.py           # 模块导出
 ├── success_db.py         # SuccessDB, SuccessRecord - 成功任务数据库
 ├── task_pool.py          # AsyncTaskPool, PendingTask, TaskResult - 异步任务池
@@ -203,8 +203,8 @@ DB 中的记录（n=4）：
 ### 7.1 基本用法
 
 ```python
-from akg_agents.core.worker.manager import register_worker
-from akg_agents.core.adaptive_search import adaptive_search
+from ai_kernel_generator.core.worker.manager import register_worker
+from ai_kernel_generator.core.adaptive_search import adaptive_search
 
 # 1. 注册 Worker
 await register_worker(backend='cuda', arch='a100', device_ids=[0, 1])
@@ -242,10 +242,10 @@ for impl in result['best_implementations']:
 
 ```bash
 # 使用默认配置
-python akg_agents/tools/run_single_adaptive_search.py
+python aikg/tools/run_single_adaptive_search.py
 
 # 使用指定配置文件
-python akg_agents/tools/run_single_adaptive_search.py config/adaptive_search_config.yaml
+python aikg/tools/run_single_adaptive_search.py config/adaptive_search_config.yaml
 ```
 
 配置文件示例（`adaptive_search_config.yaml`）：
@@ -253,7 +253,7 @@ python akg_agents/tools/run_single_adaptive_search.py config/adaptive_search_con
 ```yaml
 # 任务配置
 task:
-  op_name: "akg_relu"
+  op_name: "aikg_relu"
   task_desc: "path/to/task.py"  # 任务描述文件路径
 
 # 环境配置
@@ -280,7 +280,7 @@ ucb_selection:
   random_factor: 0.1
 
 # LLM 配置文件路径（必填）
-config_path: "python/akg_agents/config/vllm_triton_ascend_evolve_config.yaml"
+config_path: "python/ai_kernel_generator/config/vllm_triton_ascend_evolve_config.yaml"
 ```
 
 ---

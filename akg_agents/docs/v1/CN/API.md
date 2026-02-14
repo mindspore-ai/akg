@@ -2,228 +2,169 @@
 
 此文档用于详细说明 AIKG 项目中涉及的 LLM API 配置。
 
----
 
-## 1. 配置文件位置与优先级
+## 1. 环境变量配置 (API Key)
 
-配置按以下优先级加载（从高到低）：
+我们通过环境变量来设置不同大语言模型（LLM）服务的 API Key 和服务地址（Endpoint）。这样可以保持敏感信息（如 API Key）的私密性，并方便在不同环境中切换。
 
-| 优先级 | 作用域 | 位置 | 影响范围 | 与团队共享？ |
-|-------|--------|------|----------|-------------|
-| 1 | **环境变量** | `AKG_AGENTS_*` | 运行时 | 否 |
-| 2 | **Local** | `.akg/settings.local.json` | 仅本人此项目 | 否（gitignored） |
-| 3 | **Project** | `.akg/settings.json` | 此项目所有协作者 | 是（提交到 git） |
-| 4 | **User** | `~/.akg/settings.json` | 跨所有项目 | 否 |
-| 5 | **默认值** | 代码内置 | - | - |
-
----
-
-## 2. 配置文件格式 (`settings.json`)
-
-```json
-{
-  "models": {
-    "complex": {
-      "base_url": "https://api.deepseek.com/beta/",
-      "api_key": "sk-xxx",
-      "model_name": "deepseek-reasoner",
-      "temperature": 0.0,
-      "max_tokens": 8192,
-      "thinking_enabled": true
-    },
-    "standard": {
-      "base_url": "https://api.deepseek.com/beta/",
-      "api_key": "sk-xxx",
-      "model_name": "deepseek-chat",
-      "temperature": 0.1
-    },
-    "fast": {
-      "base_url": "https://api.openai.com/v1",
-      "api_key": "sk-xxx",
-      "model_name": "gpt-4o-mini"
-    }
-  },
-  "embedding": {
-    "base_url": "https://api.siliconflow.cn/v1",
-    "api_key": "sk-xxx",
-    "model_name": "BAAI/bge-large-zh-v1.5"
-  },
-  "default_model": "standard",
-  "stream_output": false
-}
-```
-
-**模型级别说明：**
-- `complex`：复杂任务模型（如 deepseek-reasoner、o1）
-- `standard`：标准任务模型（默认）
-- `fast`：快速响应模型
-
-**LLM 模型参数说明：**
-
-| 参数 | 类型 | 默认值 | 说明 |
-|-----|------|-------|------|
-| `base_url` | string | `https://api.openai.com/v1` | API 基础 URL |
-| `api_key` | string | - | API 密钥 |
-| `model_name` | string | `gpt-4` | 模型名称 |
-| `temperature` | float | `0.2` | 温度参数 |
-| `max_tokens` | int | `8192` | 最大生成 token 数 |
-| `top_p` | float | `0.9` | 核采样参数 |
-| `frequency_penalty` | float | - | 频率惩罚（可选） |
-| `presence_penalty` | float | - | 存在惩罚（可选） |
-| `timeout` | int | `300` | 超时时间（秒） |
-| `thinking_enabled` | bool | `false` | 是否启用思考模式 |
-
-**Embedding 模型参数说明：**
-
-| 参数 | 类型 | 默认值 | 说明 |
-|-----|------|-------|------|
-| `base_url` | string | - | Embedding API 基础 URL |
-| `api_key` | string | - | API 密钥 |
-| `model_name` | string | - | Embedding 模型名称 |
-| `timeout` | int | `60` | 超时时间（秒） |
-
----
-
-## 3. 环境变量配置
-
-### 3.1 单模型配置（推荐）
-
-设置环境变量会自动覆盖所有级别（`complex` / `standard` / `fast`）的配置：
+支持的服务及对应的环境变量如下：
 
 ```bash
-# 基础配置
-export AKG_AGENTS_BASE_URL="https://api.deepseek.com/beta/"
-export AKG_AGENTS_API_KEY="sk-xxx"
-export AKG_AGENTS_MODEL_NAME="deepseek-chat"
+# VLLM (https://github.com/vllm-project/vllm)
+export AIKG_VLLM_API_BASE=http://localhost:8000/v1
 
-# 可选参数
-export AKG_AGENTS_TEMPERATURE="0.0"
-export AKG_AGENTS_MAX_TOKENS="8192"
-export AKG_AGENTS_TIMEOUT="300"
-export AKG_AGENTS_MODEL_ENABLE_THINK="enabled"  # 启用 thinking 模式
+# Ollama (https://ollama.com/)
+export AIKG_OLLAMA_API_BASE=http://localhost:11434
 
-# 其他设置
-export AKG_AGENTS_DEFAULT_MODEL="standard"
-export AKG_AGENTS_STREAM_OUTPUT="on"
+# 硅基流动 (https://www.siliconflow.cn/)
+export AIKG_SILICONFLOW_API_KEY=sk-xxx
+
+# DeepSeek (https://www.deepseek.com/)
+export AIKG_DEEPSEEK_API_KEY=sk-xxx
+
+# 火山引擎 (https://www.volcengine.com/)
+export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx
+
+# Moonshot (https://www.moonshot.cn/)
+export AIKG_MOONSHOT_API_KEY=sk-xxx
+
+# 智谱大模型 (https://www.bigmodel.cn/)
+export AIKG_ZHIPU_API_KEY=sk-xxx
 ```
 
-**thinking 模式值：**
-- DeepSeek 风格：`enabled` / `disabled`
-- GLM 风格：`true` / `false`
-- 其他有效值：`1` / `yes` / `on`
+## 2. LLM 模型配置 (`llm_config.yaml`)
 
-### 3.2 多模型配置
+此文件定义了所有可供 AIKG 使用的底层 LLM 模型。每个模型都有一个唯一的名称，并包含调用该模型所需的参数。
 
-为不同级别分别设置：
+**文件路径**: `aikg/python/ai_kernel_generator/core/llm/llm_config.yaml`
 
-```bash
-# Complex 级别
-export AKG_AGENTS_COMPLEX_BASE_URL="https://api.deepseek.com/beta/"
-export AKG_AGENTS_COMPLEX_API_KEY="sk-xxx"
-export AKG_AGENTS_COMPLEX_MODEL_NAME="deepseek-reasoner"
+**功能**:
+-   **注册模型**: 将新的 LLM 模型接入 AIKG 框架。
+-   **参数预设**: 为每个模型预设必要的调用参数。
 
-# Standard 级别
-export AKG_AGENTS_STANDARD_BASE_URL="https://api.deepseek.com/beta/"
-export AKG_AGENTS_STANDARD_API_KEY="sk-xxx"
-export AKG_AGENTS_STANDARD_MODEL_NAME="deepseek-chat"
+**通用参数**:
+- `api_base`: API 基础 URL
+- `model`: 模型名称
+- `max_tokens`: 最大生成 token 数
+- `temperature`: 温度参数，控制随机性
+- `top_p`: 核采样参数，控制多样性
+- `frequency_penalty`: 频率惩罚，控制重复
+- `presence_penalty`: 存在惩罚，控制主题重复
 
-# Fast 级别
-export AKG_AGENTS_FAST_BASE_URL="https://api.openai.com/v1"
-export AKG_AGENTS_FAST_API_KEY="sk-xxx"
-export AKG_AGENTS_FAST_MODEL_NAME="gpt-4o-mini"
+**使用方式**:
+
+在 `llm_config.yaml` 中添加一个新模型配置后，可以通过 `create_model("my_model_name")` 来直接调用该模型。
+
+## 3. 任务编排方案配置 (`xxx_custom_plan.yaml`)
+
+任务编排方案配置文件用于编排和组织一个完整的算子生成任务中，每个子任务（Agent）具体使用哪个在 `llm_config.yaml` 中定义的模型。
+
+**默认配置文件目录**: `aikg/python/ai_kernel_generator/config/`
+
+**功能**:
+-   **任务编排**: 为 `designer`、`coder`、`conductor` 等 Agent 指派不同的 LLM 模型。
+-   **灵活组合**: 可以创建多个配置文件，以应对不同场景（如本地 vLLM 与云端 API 混合）。
+-   **默认方案**: 按 DSL 提供默认方案，例如 `default_triton_cuda_config.yaml` 或 `default_triton_ascend_config.yaml`。
+
+**示例（coder-only，本地 vLLM）**：`vllm_triton_ascend_coderonly_config.yaml`（Ascend）或 `vllm_triton_cuda_coderonly_config.yaml`（CUDA），用于为 coder-only 流程配置统一的本地 vLLM 模型。
+
+```yaml
+# 模型预设配置
+agent_model_config:
+  designer: vllm_deepseek_v31_default
+  coder: vllm_deepseek_v31_default
+  conductor: vllm_deepseek_v31_default
+  api_generator: vllm_deepseek_v31_default
+  feature_extractor: vllm_deepseek_v31_default
+
+# 日志配置
+log_dir: "~/aikg_logs"
+
+# Workflow 配置
+workflow_config_path: "config/coder_only_workflow.yaml"
+
+# 文档目录
+docs_dir:
+  designer: "resources/docs/triton_ascend_docs"  # Ascend 版本；CUDA 版本对应 triton_cuda_docs
+  coder: "resources/docs/triton_ascend_docs"
+
+# 性能分析
+profile_settings:
+  run_times: 50
+  warmup_times: 5
+
+# 验证配置
+verify_timeout: 600
 ```
 
-### 3.3 Embedding 模型配置
+**使用方式**:
 
-```bash
-# Embedding 配置
-export AKG_AGENTS_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
-export AKG_AGENTS_EMBEDDING_API_KEY="sk-xxx"
-export AKG_AGENTS_EMBEDDING_MODEL_NAME="BAAI/bge-large-zh-v1.5"
-export AKG_AGENTS_EMBEDDING_TIMEOUT="60"  # 可选
-```
-
----
-
-## 4. 使用示例
-
-### 4.1 LLM 客户端
-
+在代码中，通过 `load_config()` 加载配置。
 ```python
-from akg_agents.core_v2 import create_llm_client, get_settings
+# 按 DSL 加载默认方案
+config = load_config(dsl="triton_ascend", backend="ascend")  # 或使用 "triton_cuda" 用于 CUDA 后端
 
-# 方式 1：使用配置中的模型级别
-client = create_llm_client(model_level="standard")
-result = await client.generate([{"role": "user", "content": "Hello"}])
+# 或加载指定的配置文件
+config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
+# config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")
 
-# 方式 2：直接指定参数（覆盖配置）
-client = create_llm_client(
-    model_name="gpt-4",
-    base_url="https://api.openai.com/v1",
-    api_key="sk-xxx",
-    temperature=0.7
-)
-
-# 方式 3：使用默认配置
-client = create_llm_client()  # 使用 default_model
-```
-
-### 4.2 Embedding 模型
-
-```python
-from akg_agents.core_v2.llm import create_embedding_model
-
-# 方式 1：使用配置（环境变量或 settings.json）
-embedding = create_embedding_model()
-
-# 为文档生成向量
-vectors = embedding.embed_documents(["文本1", "文本2", "文本3"])
-
-# 为单个查询生成向量
-query_vec = embedding.embed_query("搜索查询")
-
-# 方式 2：直接指定参数（覆盖配置）
-embedding = create_embedding_model(
-    base_url="https://api.siliconflow.cn/v1",
-    api_key="sk-xxx",
-    model_name="BAAI/bge-large-zh-v1.5"
+# 在任务中使用该配置
+task = Task(
+    # ...
+    config=config,
 )
 ```
+通过这种方式，您可以灵活地为不同的任务流程配置和切换底层的大语言模型。
 
----
+## 4. 全局环境变量设置
 
-## 5. 支持的 LLM 服务
+您可以通过高优先级环境变量直接指定 LLM API。
 
-统一使用 OpenAI 兼容接口，支持以下服务：
-
-| 服务 | base_url | 说明 |
-|-----|----------|------|
-| OpenAI | `https://api.openai.com/v1` | GPT-4, GPT-4o, o1 等 |
-| DeepSeek | `https://api.deepseek.com/beta/` | deepseek-chat, deepseek-reasoner |
-| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4/` | glm-4, glm-4-plus |
-| Moonshot | `https://api.moonshot.cn/v1` | moonshot-v1-8k 等 |
-| 硅基流动 | `https://api.siliconflow.cn/v1` | 多种模型 |
-| vLLM | `http://localhost:8000/v1` | 本地部署 |
-| Ollama | `http://localhost:11434/v1` | 本地运行 |
-
----
-
-## 6. 查看当前配置
-
-```python
-from akg_agents.core_v2.config import print_settings_info
-
-# 打印当前配置信息
-print_settings_info()
+```bash
+export AIKG_BASE_URL="https://api.example.com/v1"
+export AIKG_MODEL_NAME="your-model-name"
+export AIKG_API_KEY="your-api-key"
+export AIKG_MODEL_ENABLE_THINK="enabled"  # 可选，启用thinking模式
 ```
 
-输出示例：
+其中 `AIKG_MODEL_ENABLE_THINK` 是可选参数，用于启用模型的 thinking 模式：
+- **DeepSeek 风格**：设置为 `"enabled"` 或 `"disabled"`
+- **GLM 风格**：设置为 `"true"` 或 `"false"`
+
+如果不设置此环境变量，则不启用 thinking 模式。
+
+## 5. Embedding 模型环境变量设置
+
+您可以通过高优先级环境变量直接指定 Embedding API，用于 RAG 检索等功能。
+
+```bash
+export AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
+export AIKG_EMBEDDING_MODEL_NAME="Qwen/Qwen3-Embedding-8B"
+export AIKG_EMBEDDING_API_KEY="your-api-key"
 ```
-============================================================
-🌍 环境变量 (最高优先级):
-   ✓ AKG_AGENTS_BASE_URL=https://api.deepseek.com/beta/
-   ✓ AKG_AGENTS_API_KEY=sk-235e0***dc3f
-   ✓ AKG_AGENTS_MODEL_NAME=deepseek-chat
-💡 优先级: 环境变量 > Local > Project > User > 默认值
-============================================================
+
+**参数说明**：
+- `AIKG_EMBEDDING_BASE_URL`：Embedding API 的基础 URL
+- `AIKG_EMBEDDING_MODEL_NAME`：模型名称，支持两种格式：
+  - **预设名**：如 `sflow_qwen3_embedding_8b`（会自动从 `llm_config.yaml` 读取实际模型名）
+  - **实际模型名**：如 `Qwen/Qwen3-Embedding-8B`（直接使用）
+- `AIKG_EMBEDDING_API_KEY`：API 密钥
+
+**优先级**：
+1. 环境变量（三者都设置时生效）
+2. 本地 HuggingFace 模型（`~/.aikg/text2vec-large-chinese`）
+
+**使用示例**：
+
+```bash
+# 使用硅流平台的 Embedding 模型
+AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1" \
+AIKG_EMBEDDING_MODEL_NAME="Qwen/Qwen3-Embedding-8B" \
+AIKG_EMBEDDING_API_KEY="sk-xxx" \
+python tools/run_single_adaptive_search.py config.yaml
 ```
+
+**可用的预设名**（在 `llm_config.yaml` 中定义）：
+- `sflow_qwen3_embedding_8b`：Qwen3-Embedding-8B（1024 维）
+- `sflow_qwen3_embedding_4b`：Qwen3-Embedding-4B（768 维）
+- `sflow_qwen3_embedding_0.6b`：Qwen3-Embedding-0.6B（512 维）

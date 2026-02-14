@@ -1,6 +1,6 @@
 # AKG CLI
 
-AKG CLI (`akg_cli`) is the command-line interface for AKG Agents. This document focuses on the two most common flows:
+AKG CLI (`akg_cli`) is the command-line interface for AI Kernel Generator. This document focuses on the two most common flows:
 
 - Start a Worker Service: `akg_cli worker --start`
 - Generate an operator: `akg_cli op ...`
@@ -15,7 +15,7 @@ akg_cli worker --help
 
 ## 0. Installation
 
-First, install `akg_cli` by running the following command in the `akg_agents` directory:
+First, install `akg_cli` by running the following command in the `aikg` directory:
 
 ```bash
 pip install -e .

@@ -18,7 +18,7 @@ AIKG service architecture separates code generation from execution verification,
 ```mermaid
 graph TB
     subgraph "Client Layer"
-        Client[AKGAgentsClient<br/>Python SDK]
+        Client[AIKGClient<br/>Python SDK]
     end
     
     subgraph "Server Layer"
@@ -140,14 +140,14 @@ Client → Server (NPU/GPU Server:8000) → Worker Service (NPU/GPU Server:9001)
 
 **1. Start Worker Service (NPU/GPU Server)**
 ```bash
-cd /path/to/akg_agent./akg_agents
+cd /path/to/aikg/aikg
 source env.sh
 ./scripts/server_related/start_worker_service.sh
 ```
 
 **2. Start AIKG Server (NPU/GPU Server)**
 ```bash
-cd /path/to/akg_agent./akg_agents
+cd /path/to/aikg/aikg
 source env.sh
 ./scripts/server_related/start_server.sh
 ```
@@ -169,9 +169,9 @@ source env.sh
 
 **4. Client Submit Tasks**
 ```python
-from akg_agents.client.akg_agents_client import AKGAgentsClient
+from ai_kernel_generator.client.aikg_client import AIKGClient
 
-client = AKGAgentsClient("http://localhost:8000")  # Via SSH tunnel
+client = AIKGClient("http://localhost:8000")  # Via SSH tunnel
 
 # Submit single job (Ascend)
 job_id = client.submit_job(
@@ -242,7 +242,7 @@ Local Code Generation
 
 **1. Start Worker Service (NPU/GPU Server)**
 ```bash
-cd /path/to/akg_agent./akg_agents
+cd /path/to/aikg/aikg
 source env.sh
 ./scripts/server_related/start_worker_service.sh
 ```
@@ -251,11 +251,11 @@ source env.sh
 
 **Method A: Use Convenience Function (Recommended)**
 ```python
-from akg_agents.core.worker.manager import register_remote_worker
-from akg_agents.op.langgraph_op.task import LangGraphTask
+from ai_kernel_generator.core.worker.manager import register_remote_worker
+from ai_kernel_generator.core.task import Task
 
 # Method 1: Read worker_url from environment variable, auto-query capacity
-export AKG_AGENTS_WORKER_URL=http://localhost:9001  # Via SSH tunnel
+export AIKG_WORKER_URL=http://localhost:9001  # Via SSH tunnel
 await register_remote_worker(backend="ascend", arch="ascend910b4")
 
 # Method 2: Explicitly specify worker_url
@@ -275,8 +275,8 @@ await register_remote_worker(
 
 **Method B: Manual Registration (Advanced)**
 ```python
-from akg_agents.core.worker.remote_worker import RemoteWorker
-from akg_agents.core.worker.manager import get_worker_manager
+from ai_kernel_generator.core.worker.remote_worker import RemoteWorker
+from ai_kernel_generator.core.worker.manager import get_worker_manager
 
 worker_manager = get_worker_manager()
 remote_worker = RemoteWorker("http://localhost:9001")
@@ -288,7 +288,7 @@ await worker_manager.register(
 )
 
 # Create Task (without device_pool)
-task = LangGraphTask(
+task = Task(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -308,7 +308,7 @@ await task.run()
 **3. Use RemoteWorker in Evolve Flow**
 ```bash
 # Method 1: Use environment variable (recommended)
-export AKG_AGENTS_WORKER_URL=http://localhost:9001
+export AIKG_WORKER_URL=http://localhost:9001
 python examples/run_torch_evolve_triton.py --worker remote
 
 # Method 2: Use command line argument
@@ -334,15 +334,15 @@ Local Code Generation → LocalWorker → Local NPU/GPU
 
 **Method A: Use Convenience Function (Recommended)**
 ```python
-from akg_agents.core.worker.manager import register_local_worker
-from akg_agents.op.langgraph_op.task import LangGraphTask
+from ai_kernel_generator.core.worker.manager import register_local_worker
+from ai_kernel_generator.core.task import Task
 
 # Register LocalWorker
 await register_local_worker([0], backend="ascend", arch="ascend910b4")  # Single device
 # or await register_local_worker([0, 1, 2, 3], backend="ascend", arch="ascend910b4")  # Multi-device
 
 # Create Task (without device_pool, get from WorkerManager)
-task = LangGraphTask(
+task = Task(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -364,15 +364,15 @@ await task.run()
 ⚠️ **Note**: Passing `device_pool` directly to `Task()` is the old approach and will be removed in future versions. Please use Method A (convenience function).
 
 ```python
-from akg_agents.core.async_pool.device_pool import DevicePool
-from akg_agents.op.langgraph_op.task import LangGraphTask
+from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+from ai_kernel_generator.core.task import Task
 
 # Create device_pool
 device_pool = DevicePool([0])
 
 # Create Task (with device_pool, auto-register as LocalWorker)
 # ⚠️ This method is deprecated and will trigger DeprecationWarning
-task = LangGraphTask(
+task = Task(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -391,11 +391,11 @@ await task.run()
 **Recommended Migration to Method A**:
 ```python
 # 1. Register LocalWorker to WorkerManager (one line)
-from akg_agents.core.worker.manager import register_local_worker
+from ai_kernel_generator.core.worker.manager import register_local_worker
 await register_local_worker([0], backend="ascend", arch="ascend910b4")
 
 # 2. Create Task without device_pool
-task = LangGraphTask(
+task = Task(
     op_name="relu",
     task_desc="...",
     task_id="test_task_001",
@@ -421,13 +421,13 @@ task = LangGraphTask(
 **Deployment Steps**:
 1. Start Worker Service and AIKG Server on NPU/GPU server
 2. Register Worker to Server
-3. Submit tasks via AKGAgentsClient on Client side
+3. Submit tasks via AIKGClient on Client side
 
 **Example**:
 ```python
-from akg_agents.client.akg_agents_client import AKGAgentsClient
+from ai_kernel_generator.client.aikg_client import AIKGClient
 
-client = AKGAgentsClient("http://localhost:8000")
+client = AIKGClient("http://localhost:8000")
 job_id = client.submit_job(
     op_name="relu",
     task_desc="...",
@@ -450,15 +450,15 @@ status = client.wait_for_completion(job_id)
 **Example**:
 ```python
 # Register RemoteWorker (using convenience function)
-from akg_agents.core.worker.manager import register_remote_worker
-from akg_agents.op.langgraph_op.task import LangGraphTask
+from ai_kernel_generator.core.worker.manager import register_remote_worker
+from ai_kernel_generator.core.task import Task
 
 # Read worker_url from environment variable, auto-query capacity
-export AKG_AGENTS_WORKER_URL=http://localhost:9001
+export AIKG_WORKER_URL=http://localhost:9001
 await register_remote_worker(backend="ascend", arch="ascend910b4")
 
-# Use LangGraphTask (without device_pool)
-task = LangGraphTask(op_name="relu", ..., workflow="coder_only_workflow")
+# Use Task (without device_pool)
+task = Task(op_name="relu", ..., workflow="coder_only_workflow")
 await task.run()
 ```
 
@@ -469,7 +469,7 @@ await task.run()
 python examples/run_torch_evolve_triton.py --worker local
 
 # Remote mode
-export AKG_AGENTS_WORKER_URL=http://localhost:9001
+export AIKG_WORKER_URL=http://localhost:9001
 python examples/run_torch_evolve_triton.py --worker remote
 ```
 
@@ -519,9 +519,9 @@ export WORKER_PORT=9001
 
 ```bash
 # Remote Worker URL (for register_remote_worker convenience function)
-export AKG_AGENTS_WORKER_URL=http://localhost:9001
+export AIKG_WORKER_URL=http://localhost:9001
 # Or via SSH tunnel
-export AKG_AGENTS_WORKER_URL=http://localhost:9001  # Local port mapped to remote 9001
+export AIKG_WORKER_URL=http://localhost:9001  # Local port mapped to remote 9001
 ```
 
 ### Server Configuration
@@ -541,5 +541,5 @@ Server runs on `0.0.0.0:8000` by default, can be adjusted via `uvicorn` paramete
 4. **Environment Check**: Remote mode automatically skips hardware checks (triton, nvidia-smi, npu-smi)
 5. **Backend Support**: Supports Ascend (triton_ascend) and CUDA (triton_cuda) backends
 6. **Automatic Capacity Query**: `register_remote_worker` automatically queries actual device count from remote worker's `/api/v1/status` interface, no manual specification needed. If query fails, defaults to 1
-7. **Environment Variable**: Use `AKG_AGENTS_WORKER_URL` environment variable to specify remote worker URL, simplifying configuration
+7. **Environment Variable**: Use `AIKG_WORKER_URL` environment variable to specify remote worker URL, simplifying configuration
 
