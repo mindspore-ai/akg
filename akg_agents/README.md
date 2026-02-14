@@ -132,18 +132,23 @@ Once launched, you can interact in the following ways:
 
 | Example | Category | Description |
 |---------|----------|-------------|
+| **NPU** | | |
 | `kernel_related/run_torch_npu_triton_single.py` | Kernel | Single kernel generation (Torch + Triton Ascend) |
 | `kernel_related/run_torch_adaptive_search_triton_ascend.py` | Kernel | UCB adaptive search (Torch + Triton Ascend) |
 | `kernel_related/run_torch_evolve_triton_ascend.py` | Kernel | Evolutionary kernel optimization (Torch + Triton Ascend) |
-| `kernel_related/run_triton_to_torch_single.py` | Kernel | Single kernel generation (Torch + Triton CUDA) |
-| `kernel_related/run_cudac_to_torch_single.py` | Kernel | Single kernel generation (Torch + CUDA C) |
-| `kernel_related/run_torch_cpu_cpp_single.py` | Kernel | Single kernel generation (Torch + CPP) |
-| `kernel_related/run_torch_evolve_triton.py` | Kernel | Evolutionary kernel optimization (Torch + Triton CUDA) |
 | `kernel_related/run_cuda_to_ascend_conversion.py` | Kernel | CUDA to Ascend kernel conversion |
 | `kernel_related/run_cuda_to_ascend_evolve.py` | Kernel | CUDA to Ascend evolutionary optimization |
+| **GPU** | | |
+| `kernel_related/gpu/run_triton_to_torch_single.py` | Kernel | Single kernel generation (Torch + Triton CUDA) |
+| `kernel_related/gpu/run_torch_evolve_triton.py` | Kernel | Evolutionary kernel optimization (Torch + Triton CUDA) |
+| `kernel_related/gpu/run_cudac_to_torch_single.py` | Kernel | Single kernel generation (Torch + CUDA C) |
+| **CPU** | | |
+| `kernel_related/cpu/run_torch_cpu_cpp_single.py` | Kernel | Single kernel generation (Torch + CPP) |
+| `kernel_related/cpu/run_torch_evolve_cpu_cpp.py` | Kernel | Evolutionary kernel optimization (Torch + CPP) |
+| `kernel_related/cpu/run_torch_adaptive_search_cpu_cpp.py` | Kernel | UCB adaptive search (Torch + CPP) |
+| **Utilities** | | |
 | `kernel_related/run_kernel_agent.py` | Kernel | KernelAgent (ReAct Agent) interactive invocation |
-| `kernel_related/run_client_server_worker.py` | Kernel | Client-Server distributed execution |
-| `kernel_related/kernel_profile.py` | Kernel | Kernel performance profiling |
+| `kernel_related/run_kernel_profile.py` | Kernel | Kernel performance profiling |
 | `run_skill/` | Skill | Skill loading, registry, hierarchy, versioning, installation, LLM selection examples |
 | `build_a_simple_react_agent/` | Framework | Build a custom ReAct Agent using the framework |
 | `build_a_simple_workflow/` | Framework | Build a custom LangGraph-based Workflow |

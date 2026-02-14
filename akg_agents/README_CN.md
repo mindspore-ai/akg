@@ -132,18 +132,23 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 \
 
 | 示例 | 类别 | 说明 |
 |------|------|------|
+| **NPU** | | |
 | `kernel_related/run_torch_npu_triton_single.py` | Kernel | 单算子生成（Torch + Triton Ascend） |
 | `kernel_related/run_torch_adaptive_search_triton_ascend.py` | Kernel | UCB 自适应搜索（Torch + Triton Ascend） |
 | `kernel_related/run_torch_evolve_triton_ascend.py` | Kernel | 进化算法算子优化（Torch + Triton Ascend） |
-| `kernel_related/run_triton_to_torch_single.py` | Kernel | 单算子生成（Torch + Triton CUDA） |
-| `kernel_related/run_cudac_to_torch_single.py` | Kernel | 单算子生成（Torch + CUDA C） |
-| `kernel_related/run_torch_cpu_cpp_single.py` | Kernel | 单算子生成（Torch + CPP） |
-| `kernel_related/run_torch_evolve_triton.py` | Kernel | 进化算法算子优化（Torch + Triton CUDA） |
 | `kernel_related/run_cuda_to_ascend_conversion.py` | Kernel | CUDA 到 Ascend 算子转换 |
 | `kernel_related/run_cuda_to_ascend_evolve.py` | Kernel | CUDA 到 Ascend 进化优化 |
+| **GPU** | | |
+| `kernel_related/gpu/run_triton_to_torch_single.py` | Kernel | 单算子生成（Torch + Triton CUDA） |
+| `kernel_related/gpu/run_torch_evolve_triton.py` | Kernel | 进化算法算子优化（Torch + Triton CUDA） |
+| `kernel_related/gpu/run_cudac_to_torch_single.py` | Kernel | 单算子生成（Torch + CUDA C） |
+| **CPU** | | |
+| `kernel_related/cpu/run_torch_cpu_cpp_single.py` | Kernel | 单算子生成（Torch + CPP） |
+| `kernel_related/cpu/run_torch_evolve_cpu_cpp.py` | Kernel | 进化算法算子优化（Torch + CPP） |
+| `kernel_related/cpu/run_torch_adaptive_search_cpu_cpp.py` | Kernel | UCB 自适应搜索（Torch + CPP） |
+| **通用工具** | | |
 | `kernel_related/run_kernel_agent.py` | Kernel | KernelAgent（ReAct Agent）交互式调用 |
-| `kernel_related/run_client_server_worker.py` | Kernel | Client-Server 分布式运行 |
-| `kernel_related/kernel_profile.py` | Kernel | 算子性能 Profiling |
+| `kernel_related/run_kernel_profile.py` | Kernel | 算子性能 Profiling |
 | `run_skill/` | Skill | Skill 加载、注册、层级、版本、安装、LLM 选择等示例 |
 | `build_a_simple_react_agent/` | 框架 | 基于框架构建自定义 ReAct Agent |
 | `build_a_simple_workflow/` | 框架 | 基于 LangGraph 构建自定义 Workflow |

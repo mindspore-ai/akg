@@ -104,7 +104,7 @@ class NodeFactory:
                 updates["space_config_code"] = space_config
                 logger.info(f"[Task {state.get('task_id', '0')}] Designer 从 state 中提取了 space_config_code (长度: {len(space_config)})")
             else:
-                logger.info(f"[Task {state.get('task_id', '0')}] Designer 未生成 space_config_code")
+                logger.debug(f"[Task {state.get('task_id', '0')}] Designer 未生成 space_config_code（enable_hint_mode={enable_hint_mode}）")
             
             # 如果生成了 space_config，立即保存到文件（不依赖多 case 验证）
             if space_config:
