@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MFUSE_UTILS_SYMBOLIC_SHAPE_UTILS_H
-#define MFUSION_DIALECT_MFUSE_UTILS_SYMBOLIC_SHAPE_UTILS_H
+#ifndef MFUSION_DIALECT_MFUSE_UTILS_SYMBOL_ATTR_UTILS_H
+#define MFUSION_DIALECT_MFUSE_UTILS_SYMBOL_ATTR_UTILS_H
 
 #include "llvm/ADT/StringRef.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -26,17 +26,26 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
+#include "mlir/Support/LogicalResult.h"
+#include "symengine/basic.h"
 
 namespace mlir {
 namespace mfuse {
-/// Utilities for mfuse symbolic shape (SymbolicShapeAttr) and per-symbol metadata (SymbolInfoAttr).
-struct SymbolicShapeUtils {
+/// Utilities for mfuse IR symbolic attributes: symbolic shape (SymbolicShapeAttr)
+/// on tensor types and per-symbol metadata (SymbolInfoAttr) on func.func.
+///
+/// Note: this helper is purely about attaching/reading symbolic attributes on
+/// IR (encodings and func attributes). Any real symbolic analysis or symbolic
+/// expression manipulation lives in SymEngineAnalysis.
+struct SymbolAttrUtils {
   /// Attribute key for symbolic-shape encoding on tensor types (mfuse.symshape).
   static inline constexpr const char *kSymShapeKey = "mfuse.symshape";
   /// Attribute key for preserving a base encoding when merging with symshape (mfuse.encoding).
   static inline constexpr const char *kBaseEncodingKey = "mfuse.encoding";
   /// FuncOp attribute key for per-symbol metadata dict (mfuse.syminfo).
   static inline constexpr const char *kFuncSymInfoKey = "mfuse.syminfo";
+
+  using SymExpr = SymEngine::RCP<const SymEngine::Basic>;
 
   // ---------------------------------------------------------------------------
   // SymbolicShapeAttr: tensor encoding (mfuse.symshape), shape expressions
@@ -61,13 +70,35 @@ struct SymbolicShapeUtils {
   /// if none. Result is generic Attribute; callers can dyn_cast to SymbolicShapeAttr.
   static mlir::Attribute getSymbolicShapeAttrFromEncoding(mlir::Type type);
 
+  /// Gets symbolic shape expressions from a ranked tensor type.
+  /// - For static shape, builds expressions directly from static dimensions.
+  /// - For dynamic shape, reads expressions from SymbolicShapeAttr in encoding.
+  /// Returns failure when type is not ranked tensor or lacks symbolic info.
+  static mlir::FailureOr<llvm::SmallVector<SymExpr>> getSymbolicShapeExprs(mlir::Type type);
+
   /// Merges symshapeAttr into type's encoding. Preserves any existing
   /// encoding under kBaseEncodingKey when the result would otherwise have multiple entries.
   static mlir::Attribute mergeEncoding(mlir::RankedTensorType type, mlir::Attribute symshapeAttr);
 
+  /// Creates a SymbolicShapeAttr from a list of symbolic expression strings.
+  static mlir::Attribute createSymbolicShapeAttr(mlir::OpBuilder &builder, llvm::ArrayRef<std::string> symbols);
+  /// Creates a SymbolicShapeAttr from a list of SymEngine expressions.
+  static mlir::Attribute createSymbolicShapeAttr(mlir::OpBuilder &builder, llvm::ArrayRef<SymExpr> exprs);
+
   /// Returns a RankedTensorType with the same shape and element type as type
   /// but encoding set to include symshapeAttr (via mergeEncoding).
   static mlir::RankedTensorType withSymbolicAttr(mlir::RankedTensorType type, mlir::Attribute symshapeAttr);
+
+  /// Overload of withSymbolicAttr that accepts a list of symbolic expression strings.
+  static mlir::RankedTensorType withSymbolicAttr(mlir::RankedTensorType type, mlir::OpBuilder &builder,
+                                                 llvm::ArrayRef<std::string> symbols) {
+    return withSymbolicAttr(type, createSymbolicShapeAttr(builder, symbols));
+  }
+  /// Overload of withSymbolicAttr that accepts a list of SymEngine expressions.
+  static mlir::RankedTensorType withSymbolicAttr(mlir::RankedTensorType type, mlir::OpBuilder &builder,
+                                                 llvm::ArrayRef<SymExpr> exprs) {
+    return withSymbolicAttr(type, createSymbolicShapeAttr(builder, exprs));
+  }
 
   /// Attaches symshapeAttr to value by updating its type. Succeeds only for
   /// OpResult or BlockArgument; returns false if type unchanged or value kind unsupported.
@@ -115,4 +146,4 @@ struct SymbolicShapeUtils {
 }  // namespace mfuse
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MFUSE_UTILS_SYMBOLIC_SHAPE_UTILS_H
+#endif  // MFUSION_DIALECT_MFUSE_UTILS_SYMBOL_ATTR_UTILS_H

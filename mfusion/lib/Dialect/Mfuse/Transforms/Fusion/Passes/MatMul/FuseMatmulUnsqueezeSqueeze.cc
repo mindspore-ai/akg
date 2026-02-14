@@ -23,7 +23,6 @@
 #include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
 #include "mfusion/Support/Logging.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -42,13 +41,6 @@ constexpr int kPermSecondLast = 2;          // Offset for second-to-last dimensi
 constexpr int kPermLast = 1;                // Offset for last dimension
 constexpr int kUnsqueezeDim = 1;            // Dimension value for unsqueeze operation
 constexpr int kSmallVectorDefaultSize = 4;  // Default size for SmallVector
-
-/// Create a 1D tensor Value (shape) from ArrayRef<int64_t> for mfuse.reshape.
-static Value createShapeValue(PatternRewriter &rewriter, Location loc, ArrayRef<int64_t> shape) {
-  auto tensorType = RankedTensorType::get({static_cast<int64_t>(shape.size())}, rewriter.getIntegerType(64));
-  auto attr = mlir::DenseElementsAttr::get(tensorType, llvm::ArrayRef<int64_t>(shape));
-  return rewriter.create<arith::ConstantOp>(loc, attr);
-}
 
 /// Compute reshape shapes for 1D inputs: self (1D) -> [1, N], other (1D) -> [N, 1].
 static void computeReshapeShapesFor1D(RankedTensorType selfType, RankedTensorType otherType,
@@ -94,7 +86,8 @@ class FuseMatmulUnsqueezeSqueezeMatmulPattern : public OpRewritePattern<MatmulOp
     }
 
     // Log pattern match
-    MLOG(DEBUG) << "FuseMatmulUnsqueezeSqueezeMatmulPattern matched MatmulOp with 1D input(s), self rank=" << rSelf << ", other rank=" << rOther;
+    MLOG(DEBUG) << "FuseMatmulUnsqueezeSqueezeMatmulPattern matched MatmulOp with 1D input(s), self rank=" << rSelf
+                << ", other rank=" << rOther;
 
     Value self = matmulOp.getSelf();
     Value other = matmulOp.getOther();
@@ -115,8 +108,8 @@ class FuseMatmulUnsqueezeSqueezeMatmulPattern : public OpRewritePattern<MatmulOp
 
     auto newSelfType = RankedTensorType::get(newShapeSelf, selfType.getElementType());
     auto newOtherType = RankedTensorType::get(newShapeOther, otherType.getElementType());
-    Value newSelf = rewriter.create<ReshapeOp>(loc, newSelfType, self, createShapeValue(rewriter, loc, newShapeSelf));
-    Value newOther = rewriter.create<ReshapeOp>(loc, newOtherType, other, createShapeValue(rewriter, loc, newShapeOther));
+    Value newSelf = rewriter.create<ReshapeOp>(loc, newSelfType, self);
+    Value newOther = rewriter.create<ReshapeOp>(loc, newOtherType, other);
 
     // Log reshape operation creation
     MLOG(DEBUG) << "Created reshape operations for 1D inputs";
@@ -128,12 +121,10 @@ class FuseMatmulUnsqueezeSqueezeMatmulPattern : public OpRewritePattern<MatmulOp
     }
     Value matmulResult = rewriter.create<MatmulOp>(loc, resultTensorType, newSelf, newOther, matmulOp.getTransX1Attr(),
                                                    matmulOp.getTransX2Attr());
-    Value outReshape = rewriter.create<ReshapeOp>(loc, resultType, matmulResult,
-                                                  createShapeValue(rewriter, loc, resultTensorType.getShape()));
+    Value outReshape = rewriter.create<ReshapeOp>(loc, resultType, matmulResult);
 
     // Log output reshape creation
     MLOG(DEBUG) << "Created output reshape operation";
-
     rewriter.replaceOp(matmulOp, outReshape);
 
     // Log operation replacement
@@ -170,9 +161,8 @@ class FuseMatmulUnsqueezeSqueezeMatmulWithBiasPattern : public OpRewritePattern<
 
     auto newSelfType = RankedTensorType::get(newShapeSelf, selfType.getElementType());
     auto newOtherType = RankedTensorType::get(newShapeOther, otherType.getElementType());
-    Value newSelf = rewriter.create<ReshapeOp>(loc, newSelfType, self, createShapeValue(rewriter, loc, newShapeSelf));
-    Value newOther =
-      rewriter.create<ReshapeOp>(loc, newOtherType, other, createShapeValue(rewriter, loc, newShapeOther));
+    Value newSelf = rewriter.create<ReshapeOp>(loc, newSelfType, self);
+    Value newOther = rewriter.create<ReshapeOp>(loc, newOtherType, other);
 
     Type resultType = matmulOp.getResult().getType();
     auto resultTensorType = dyn_cast<RankedTensorType>(resultType);
@@ -181,8 +171,7 @@ class FuseMatmulUnsqueezeSqueezeMatmulWithBiasPattern : public OpRewritePattern<
     }
     Value matmulResult = rewriter.create<MatmulWithBiasOp>(loc, resultTensorType, newSelf, newOther, matmulOp.getBias(),
                                                            matmulOp.getTransX1Attr(), matmulOp.getTransX2Attr());
-    Value outReshape = rewriter.create<ReshapeOp>(loc, resultType, matmulResult,
-                                                  createShapeValue(rewriter, loc, resultTensorType.getShape()));
+    Value outReshape = rewriter.create<ReshapeOp>(loc, resultType, matmulResult);
     rewriter.replaceOp(matmulOp, outReshape);
     return success();
   }

@@ -17,6 +17,8 @@
 #ifndef MFUSE_DIALECT_MFUSE_OPS_TD
 #define MFUSE_DIALECT_MFUSE_OPS_TD
 
+include "mfusion/Dialect/Mfuse/MfuseInterfaces.td"
+
 include "mfusion/Dialect/Mfuse/MfuseConstantOps.td"
 include "mfusion/Dialect/Mfuse/MfuseMetaOps.td"
 include "mfusion/Dialect/Mfuse/MfuseAclnnOps.td"
