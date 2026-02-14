@@ -9,6 +9,8 @@ The Agent System provides the foundational infrastructure for building intellige
 - **AgentBase** — Abstract base class with LLM invocation, template loading, and utility methods
 - **ReActAgent** — ReAct (Reasoning + Acting) loop implementation for tool-using agents
 - **PlanAgent** — Task planning agent (TODO: final design pending)
+- **KernelGen** — Skill-driven kernel code generation agent (multi-DSL, multi-framework)
+- **KernelDesigner** — Skill-driven algorithm sketch design agent (hardware-aware, hint mode)
 - **AgentRegistry / register_agent** — Agent registration and discovery mechanism with scope support
 
 ### Import Paths
@@ -138,7 +140,54 @@ The `run()` method executes the full ReAct loop and returns a result dict.
 
 `PlanAgent` is a registered agent that analyzes user requirements and generates high-level task plans. It is called as a tool by the main ReActAgent, not directly by users.
 
-## 5. AgentRegistry
+## 5. KernelGen
+
+`KernelGen` is a Skill System-based kernel code generation agent. It inherits from `AgentBase` and generates high-performance kernel code by dynamically selecting relevant knowledge and strategies through the Skill System.
+
+### Key Capabilities
+
+- **Skill-Driven Code Generation**: Two-stage Skill selection (coarse filter + LLM fine filter) for dynamic knowledge loading
+- **Multi-DSL Support**: Triton CUDA, Triton Ascend, AscendC, CUDA C, TileLang CUDA, C++
+- **Multi-Framework Adaptation**: PyTorch, MindSpore, NumPy
+- **Tool Mode**: Registered as `call_kernel_gen` tool, callable by KernelAgent in the ReAct loop
+
+### Architecture
+
+```
+AgentBase (core_v2)
+    ↑
+KernelGen (op/agents/kernel_gen.py)
+    ↑
+KernelAgent (ReAct Agent, calls KernelGen as tool)
+```
+
+For full details (parameters, Skill integration, execution flow, usage examples), see [KernelGen Design Document](./KernelGen.md).
+
+## 6. KernelDesigner
+
+`KernelDesigner` is a Skill System-based algorithm sketch design agent. It inherits from `AgentBase` and generates algorithm sketches (pseudocode + optimization strategies + implementation suggestions) based on user input and historical context.
+
+### Key Capabilities
+
+- **Intelligent Algorithm Sketch Design**: Generates high-quality algorithm sketches with optimization strategies
+- **Skill-Driven Knowledge Selection**: Mandatory `sketch-design` Skill + LLM fine-filtered reference Skills
+- **Hint Mode**: Supports parameter space configuration for guided optimization
+- **Hardware-Aware Design**: Automatically loads hardware documentation for target architecture
+- **Tool Mode**: Registered as `call_kernel_designer` tool, callable by KernelAgent in the ReAct loop
+
+### Architecture
+
+```
+AgentBase (core_v2)
+    ↑
+KernelDesigner (op/agents/kernel_designer.py)
+    ↑
+KernelAgent (ReAct Agent, calls KernelDesigner as tool)
+```
+
+For full details (parameters, Skill integration, execution flow, usage examples), see [KernelDesigner Design Document](./KernelDesigner.md).
+
+## 7. AgentRegistry
 
 `AgentRegistry` is a singleton registry for managing agent classes. It supports:
 
@@ -184,7 +233,7 @@ class Coder(AgentBase):
 | `AgentRegistry.is_registered(name, scope)` | Check if an agent is registered (in a given scope). |
 | `AgentRegistry.unregister(name)` | Remove an agent from the registry. |
 
-## 6. Creating a Custom Agent
+## 8. Creating a Custom Agent
 
 ### Example: Simple Agent
 

@@ -1,3 +1,5 @@
+[English Version](../KernelGen.md)
+
 # KernelGen Agent 设计文档
 
 ## 概述

@@ -1,3 +1,5 @@
+[中文版](./CN/KernelDesigner.md)
+
 # KernelDesigner Agent Design Document
 
 ## Overview

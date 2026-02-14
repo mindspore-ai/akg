@@ -1,3 +1,5 @@
+[English Version](../KernelDesigner.md)
+
 # KernelDesigner Agent 设计文档
 
 ## 概述
