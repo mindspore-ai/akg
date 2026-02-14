@@ -485,11 +485,6 @@ async def test_kernel_agent(auto_mode: bool = False, requirement: str = "",
     else:
         print("  所有模块正常\n")
     
-    # 检查 API Key
-    from akg_agents.utils.environment_check import _check_llm_api
-    if not _check_llm_api():
-        raise ValueError("LLM API Key 配置或连接有问题，请检查。")
-    
     try:
         import time
         task_id = f"test_{int(time.time())}"
