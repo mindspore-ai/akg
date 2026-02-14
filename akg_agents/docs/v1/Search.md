@@ -56,7 +56,7 @@ The Adaptive Search module is an asynchronous pipeline search framework based on
 ### 2.2 File Structure
 
 ```
-akg_agents/core/adaptive_search/
+ai_kernel_generator/core/adaptive_search/
 ├── __init__.py           # Module exports
 ├── success_db.py         # SuccessDB, SuccessRecord - Success task database
 ├── task_pool.py          # AsyncTaskPool, PendingTask, TaskResult - Async task pool
@@ -233,8 +233,8 @@ For evolved tasks, select **parent + tiered sampling inspirations**:
 ### 7.1 Basic Usage
 
 ```python
-from akg_agents.core.worker.manager import register_worker
-from akg_agents.core.adaptive_search import adaptive_search
+from ai_kernel_generator.core.worker.manager import register_worker
+from ai_kernel_generator.core.adaptive_search import adaptive_search
 
 # 1. Register Worker
 await register_worker(backend='cuda', arch='a100', device_ids=[0, 1])
@@ -272,10 +272,10 @@ Run via `run_single_adaptive_search.py` script:
 
 ```bash
 # Use default config
-python akg_agents/tools/run_single_adaptive_search.py
+python aikg/tools/run_single_adaptive_search.py
 
 # Use specified config file
-python akg_agents/tools/run_single_adaptive_search.py config/adaptive_search_config.yaml
+python aikg/tools/run_single_adaptive_search.py config/adaptive_search_config.yaml
 ```
 
 Config file example (`adaptive_search_config.yaml`):
@@ -283,7 +283,7 @@ Config file example (`adaptive_search_config.yaml`):
 ```yaml
 # Task config
 task:
-  op_name: "akg_relu"
+  op_name: "aikg_relu"
   task_desc: "path/to/task.py"  # Task description file path
 
 # Environment config
@@ -310,7 +310,7 @@ ucb_selection:
   random_factor: 0.1
 
 # LLM config file path (required)
-config_path: "python/akg_agents/config/vllm_triton_ascend_evolve_config.yaml"
+config_path: "python/ai_kernel_generator/config/vllm_triton_ascend_evolve_config.yaml"
 ```
 
 ---

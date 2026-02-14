@@ -9,7 +9,7 @@ The DevicePool module is responsible for the asynchronous allocation and release
 | device_list | List[int] (Optional) | A list of device IDs (e.g., [0, 1]), defaults to [0] |
 
 ## Environment Variable Configuration
-Supports setting the device list through the environment variable `AKG_AGENTS_DEVICES_LIST`, formatted as comma-separated device IDs, e.g., `0,1,2`
+Supports setting the device list through the environment variable `AIKG_DEVICES_LIST`, formatted as comma-separated device IDs, e.g., `0,1,2`
 
 ## Class Method Descriptions
 ### `acquire_device()`

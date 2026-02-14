@@ -2,228 +2,167 @@
 
 This document provides a detailed explanation of the API configurations used in the AIKG project.
 
----
 
-## 1. Configuration File Locations and Priority
+## 1. Environment Variable Configuration (API Key)
 
-Configuration is loaded with the following priority (high to low):
+We use environment variables to set the API keys and service endpoints for various Large Language Model (LLM) services. This approach helps maintain the privacy of sensitive information (like API keys) and allows for easy switching between different environments.
 
-| Priority | Scope | Location | Affects | Shared with Team? |
-|----------|-------|----------|---------|-------------------|
-| 1 | **Environment Variables** | `AKG_AGENTS_*` | Runtime | No |
-| 2 | **Local** | `.akg/settings.local.json` | This project, this user only | No (gitignored) |
-| 3 | **Project** | `.akg/settings.json` | All collaborators of this project | Yes (committed to git) |
-| 4 | **User** | `~/.akg/settings.json` | All projects | No |
-| 5 | **Defaults** | Built-in code | - | - |
-
----
-
-## 2. Configuration File Format (`settings.json`)
-
-```json
-{
-  "models": {
-    "complex": {
-      "base_url": "https://api.deepseek.com/beta/",
-      "api_key": "sk-xxx",
-      "model_name": "deepseek-reasoner",
-      "temperature": 0.0,
-      "max_tokens": 8192,
-      "thinking_enabled": true
-    },
-    "standard": {
-      "base_url": "https://api.deepseek.com/beta/",
-      "api_key": "sk-xxx",
-      "model_name": "deepseek-chat",
-      "temperature": 0.1
-    },
-    "fast": {
-      "base_url": "https://api.openai.com/v1",
-      "api_key": "sk-xxx",
-      "model_name": "gpt-4o-mini"
-    }
-  },
-  "embedding": {
-    "base_url": "https://api.siliconflow.cn/v1",
-    "api_key": "sk-xxx",
-    "model_name": "BAAI/bge-large-zh-v1.5"
-  },
-  "default_model": "standard",
-  "stream_output": false
-}
-```
-
-**Model Level Description:**
-- `complex`: For complex tasks (e.g., deepseek-reasoner, o1)
-- `standard`: For standard tasks (default)
-- `fast`: For quick responses
-
-**LLM Model Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `base_url` | string | `https://api.openai.com/v1` | API base URL |
-| `api_key` | string | - | API key |
-| `model_name` | string | `gpt-4` | Model name |
-| `temperature` | float | `0.2` | Temperature parameter |
-| `max_tokens` | int | `8192` | Maximum generated tokens |
-| `top_p` | float | `0.9` | Nucleus sampling parameter |
-| `frequency_penalty` | float | - | Frequency penalty (optional) |
-| `presence_penalty` | float | - | Presence penalty (optional) |
-| `timeout` | int | `300` | Timeout in seconds |
-| `thinking_enabled` | bool | `false` | Enable thinking mode |
-
-**Embedding Model Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `base_url` | string | - | Embedding API base URL |
-| `api_key` | string | - | API key |
-| `model_name` | string | - | Embedding model name |
-| `timeout` | int | `60` | Timeout in seconds |
-
----
-
-## 3. Environment Variable Configuration
-
-### 3.1 Single Model Configuration (Recommended)
-
-Setting environment variables will automatically override all levels (`complex` / `standard` / `fast`) configuration:
+Supported services and their corresponding environment variables are as follows:
 
 ```bash
-# Basic configuration
-export AKG_AGENTS_BASE_URL="https://api.deepseek.com/beta/"
-export AKG_AGENTS_API_KEY="sk-xxx"
-export AKG_AGENTS_MODEL_NAME="deepseek-chat"
+# VLLM (https://github.com/vllm-project/vllm)
+export AIKG_VLLM_API_BASE=http://localhost:8000/v1
 
-# Optional parameters
-export AKG_AGENTS_TEMPERATURE="0.0"
-export AKG_AGENTS_MAX_TOKENS="8192"
-export AKG_AGENTS_TIMEOUT="300"
-export AKG_AGENTS_MODEL_ENABLE_THINK="enabled"  # Enable thinking mode
+# Ollama (https://ollama.com/)
+export AIKG_OLLAMA_API_BASE=http://localhost:11434
 
-# Other settings
-export AKG_AGENTS_DEFAULT_MODEL="standard"
-export AKG_AGENTS_STREAM_OUTPUT="on"
+# SiliconFlow (https://www.siliconflow.cn/)
+export AIKG_SILICONFLOW_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
+
+# DeepSeek (https://www.deepseek.com/)
+export AIKG_DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
+
+# Volcengine (https://www.volcengine.com/)
+export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx
+
+# Moonshot (https://www.moonshot.cn/)
+export AIKG_MOONSHOT_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
+
+# BigModel (https://bigmodel.cn/)
+export AIKG_ZHIPU_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
 ```
 
-**Thinking mode values:**
-- DeepSeek style: `enabled` / `disabled`
-- GLM style: `true` / `false`
-- Other valid values: `1` / `yes` / `on`
+## 2. LLM Model Configuration (`llm_config.yaml`)
 
-### 3.2 Multi-Model Configuration
+This file defines all the underlying LLM models available for use by AIKG. Each model has a unique name and includes the parameters required to call it.
 
-Set different configurations for each level:
+**File Path**: `aikg/python/ai_kernel_generator/core/llm/llm_config.yaml`
 
-```bash
-# Complex level
-export AKG_AGENTS_COMPLEX_BASE_URL="https://api.deepseek.com/beta/"
-export AKG_AGENTS_COMPLEX_API_KEY="sk-xxx"
-export AKG_AGENTS_COMPLEX_MODEL_NAME="deepseek-reasoner"
+**Functionality**:
+-   **Register Models**: Integrate new LLM models into the AIKG framework.
+-   **Preset Parameters**: Pre-configure the necessary calling parameters for each model.
 
-# Standard level
-export AKG_AGENTS_STANDARD_BASE_URL="https://api.deepseek.com/beta/"
-export AKG_AGENTS_STANDARD_API_KEY="sk-xxx"
-export AKG_AGENTS_STANDARD_MODEL_NAME="deepseek-chat"
+**Common Parameters**:
+- `api_base`: The base URL for the API.
+- `model`: The model name.
+- `max_tokens`: The maximum number of tokens to generate.
+- `temperature`: A parameter to control randomness.
+- `top_p`: A nucleus sampling parameter to control diversity.
+- `frequency_penalty`: A penalty to discourage repetition.
+- `presence_penalty`: A penalty to discourage topic repetition.
 
-# Fast level
-export AKG_AGENTS_FAST_BASE_URL="https://api.openai.com/v1"
-export AKG_AGENTS_FAST_API_KEY="sk-xxx"
-export AKG_AGENTS_FAST_MODEL_NAME="gpt-4o-mini"
+**How to Use**:
+After adding a new model configuration to `llm_config.yaml`, you can directly call the model using `create_model("my_model_name")`.
+
+## 3. Task Flow Configuration (`xxx_config.yaml`)
+
+Task flow configuration files are used to orchestrate and organize which model defined in `llm_config.yaml` is used by each sub-task (Agent) in a complete kernel generation task.
+
+**Default Configuration Directory**: `aikg/python/ai_kernel_generator/config/`
+
+**Functionality**:
+-   **Task Orchestration**: Assign LLM models to agents such as `designer`, `coder`, and `conductor`.
+-   **Flexible Combinations**: Create multiple configuration files for different scenarios (e.g., local vLLM + cloud API).
+-   **Default Plan**: Presets are provided by DSL, e.g., `default_triton_cuda_config.yaml` or `default_triton_ascend_config.yaml`.
+
+**Example (coder-only, local vLLM)**: `vllm_triton_ascend_coderonly_config.yaml` (Ascend) or `vllm_triton_cuda_coderonly_config.yaml` (CUDA). Both provide unified local vLLM presets for coder-only workflows.
+
+```yaml
+# Model preset configuration
+agent_model_config:
+  designer: vllm_deepseek_v31_default
+  coder: vllm_deepseek_v31_default
+  conductor: vllm_deepseek_v31_default
+  api_generator: vllm_deepseek_v31_default
+  feature_extractor: vllm_deepseek_v31_default
+
+# Log configuration
+log_dir: "~/aikg_logs"
+
+# Workflow configuration
+workflow_config_path: "config/coder_only_workflow.yaml"
+
+# Documentation directory configuration
+docs_dir:
+  designer: "resources/docs/triton_ascend_docs"  # Use triton_cuda_docs for the CUDA variant
+  coder: "resources/docs/triton_ascend_docs"
+
+# Performance analysis configuration
+profile_settings:
+  run_times: 50
+  warmup_times: 5
+
+# Verification configuration
+verify_timeout: 600
 ```
 
-### 3.3 Embedding Model Configuration
-
-```bash
-# Embedding configuration
-export AKG_AGENTS_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
-export AKG_AGENTS_EMBEDDING_API_KEY="sk-xxx"
-export AKG_AGENTS_EMBEDDING_MODEL_NAME="BAAI/bge-large-zh-v1.5"
-export AKG_AGENTS_EMBEDDING_TIMEOUT="60"  # Optional
-```
-
----
-
-## 4. Usage Examples
-
-### 4.1 LLM Client
-
+**How to Use**:
+Load a plan configuration using `load_config()`.
 ```python
-from akg_agents.core_v2 import create_llm_client, get_settings
+# Load preset by DSL: default_triton_ascend_config.yaml (for Ascend) or default_triton_cuda_config.yaml (for CUDA)
+config = load_config(dsl="triton_ascend", backend="ascend")  # or "triton_cuda" for CUDA backend
 
-# Method 1: Use model level from configuration
-client = create_llm_client(model_level="standard")
-result = await client.generate([{"role": "user", "content": "Hello"}])
+# Load a specific configuration file
+config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_ascend_coderonly_config.yaml")
+# config = load_config(config_path="python/ai_kernel_generator/config/vllm_triton_cuda_coderonly_config.yaml")
 
-# Method 2: Directly specify parameters (override config)
-client = create_llm_client(
-    model_name="gpt-4",
-    base_url="https://api.openai.com/v1",
-    api_key="sk-xxx",
-    temperature=0.7
-)
-
-# Method 3: Use default configuration
-client = create_llm_client()  # Uses default_model
-```
-
-### 4.2 Embedding Model
-
-```python
-from akg_agents.core_v2.llm import create_embedding_model
-
-# Method 1: Use configuration (environment variables or settings.json)
-embedding = create_embedding_model()
-
-# Generate embeddings for documents
-vectors = embedding.embed_documents(["text 1", "text 2", "text 3"])
-
-# Generate embedding for a single query
-query_vec = embedding.embed_query("search query")
-
-# Method 2: Directly specify parameters (override config)
-embedding = create_embedding_model(
-    base_url="https://api.siliconflow.cn/v1",
-    api_key="sk-xxx",
-    model_name="BAAI/bge-large-zh-v1.5"
+# Use the configuration in a task
+task = Task(
+    # ...
+    config=config,
 )
 ```
+This approach allows you to flexibly configure and switch the underlying large language models for different task flows.
 
----
+## 4. Global Environment Variable Settings
 
-## 5. Supported LLM Services
+You can directly specify the LLM API using high-priority environment variables.
 
-Uses a unified OpenAI-compatible interface, supporting the following services:
-
-| Service | base_url | Description |
-|---------|----------|-------------|
-| OpenAI | `https://api.openai.com/v1` | GPT-4, GPT-4o, o1, etc. |
-| DeepSeek | `https://api.deepseek.com/beta/` | deepseek-chat, deepseek-reasoner |
-| GLM (Zhipu) | `https://open.bigmodel.cn/api/paas/v4/` | glm-4, glm-4-plus |
-| Moonshot | `https://api.moonshot.cn/v1` | moonshot-v1-8k, etc. |
-| SiliconFlow | `https://api.siliconflow.cn/v1` | Various models |
-| vLLM | `http://localhost:8000/v1` | Local deployment |
-| Ollama | `http://localhost:11434/v1` | Local running |
-
----
-
-## 6. View Current Configuration
-
-```python
-from akg_agents.core_v2.config import print_settings_info
-
-# Print current configuration info
-print_settings_info()
+```bash
+export AIKG_BASE_URL="https://api.example.com/v1"
+export AIKG_MODEL_NAME="your-model-name"
+export AIKG_API_KEY="your-api-key"
+export AIKG_MODEL_ENABLE_THINK="enabled"  # Optional, enable thinking mode
 ```
 
-Example output:
+The `AIKG_MODEL_ENABLE_THINK` is an optional parameter to enable the model's thinking mode:
+- **DeepSeek style**: Set to `"enabled"` or `"disabled"`
+- **GLM style**: Set to `"true"` or `"false"`
+
+If this environment variable is not set, thinking mode will not be enabled.
+
+## 5. Embedding Model Environment Variable Settings
+
+You can directly specify the Embedding API using high-priority environment variables for RAG retrieval and other features.
+
+```bash
+export AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
+export AIKG_EMBEDDING_MODEL_NAME="Qwen/Qwen3-Embedding-8B"
+export AIKG_EMBEDDING_API_KEY="your-api-key"
 ```
-============================================================
-🌍 Environment Variables (highest priority):
-   ✓ AKG_AGENTS_BASE_URL=https://api.deepseek.com/beta/
-   ✓ AKG_AGENTS_API_KEY=sk-235e0***dc3f
-   ✓ AKG_AGENTS_MODEL_NAME=deepseek-chat
-💡 Priority: Environment Variables > Local > Project > User > Defaults
-============================================================
+
+**Parameter Description**:
+- `AIKG_EMBEDDING_BASE_URL`: Base URL for the Embedding API
+- `AIKG_EMBEDDING_MODEL_NAME`: Model name, supports two formats:
+  - **Preset name**: e.g., `sflow_qwen3_embedding_8b` (automatically reads actual model name from `llm_config.yaml`)
+  - **Actual model name**: e.g., `Qwen/Qwen3-Embedding-8B` (used directly)
+- `AIKG_EMBEDDING_API_KEY`: API key
+
+**Priority**:
+1. Environment variables (takes effect when all three are set)
+2. Local HuggingFace model (`~/.aikg/text2vec-large-chinese`)
+
+**Usage Example**:
+
+```bash
+# Use SiliconFlow's Embedding model
+AIKG_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1" \
+AIKG_EMBEDDING_MODEL_NAME="Qwen/Qwen3-Embedding-8B" \
+AIKG_EMBEDDING_API_KEY="sk-xxx" \
+python tools/run_single_adaptive_search.py config.yaml
 ```
+
+**Available Presets** (defined in `llm_config.yaml`):
+- `sflow_qwen3_embedding_8b`: Qwen3-Embedding-8B (1024 dimensions)
+- `sflow_qwen3_embedding_4b`: Qwen3-Embedding-4B (768 dimensions)
+- `sflow_qwen3_embedding_0.6b`: Qwen3-Embedding-0.6B (512 dimensions)

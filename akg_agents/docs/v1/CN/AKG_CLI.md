@@ -1,6 +1,6 @@
 # AKG CLI
 
-AKG CLI（`akg_cli`）是 AKG Agents 的命令行入口。本文聚焦两个最常用流程：
+AKG CLI（`akg_cli`）是 AI Kernel Generator 的命令行入口。本文聚焦两个最常用流程：
 
 - 启动 Worker Service：`akg_cli worker --start`
 - 生成算子：`akg_cli op ...`
@@ -17,7 +17,7 @@ akg_cli worker --help
 
 ## 0. 安装
 
-首先，在 `akg_agents` 目录下执行以下命令安装 `akg_cli`：
+首先，在 `aikg` 目录下执行以下命令安装 `akg_cli`：
 
 ```bash
 pip install -e .
@@ -81,7 +81,7 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_as
 - `ask_user` **不会再使用 `input()` 抢占 stdin**：已改为基于 LangGraph `interrupt` 的可恢复暂停机制。
   - 当 Agent 需要你确认/补充信息时，会触发一次中断并展示问题；
   - 你在下一轮输入的内容会作为 `Command(resume=...)` 回填给 `ask_user`，Agent 随后继续执行。
-- 如果你依赖 openai-compatible endpoint（例如 vLLM，或通过 `AKG_AGENTS_BASE_URL/AKG_AGENTS_MODEL_NAME/AKG_AGENTS_API_KEY` 指定模型），react 模式需要安装 `langchain-openai`：
+- 如果你依赖 openai-compatible endpoint（例如 vLLM，或通过 `AIKG_BASE_URL/AIKG_MODEL_NAME/AIKG_API_KEY` 指定模型），react 模式需要安装 `langchain-openai`：
 
 ```bash
 pip install -U langchain-openai
@@ -156,3 +156,7 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 --dsl triton_as
 
 - 使用上下方向键浏览历史输入。
 - 历史记录保存于 `~/.akg_cli_history`。
+
+## 4. 详细的使用说明
+
+请参考《[AKG_CLI使用说明](./AKG_CLI_usage.md)》

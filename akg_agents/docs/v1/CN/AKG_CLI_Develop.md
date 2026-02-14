@@ -38,46 +38,46 @@
 ### 2.1 关键组件列表
 
 - **Client / TUI**
-  - `akg_agents/python/akg_agents/cli/commands/op/runners.py`
+  - `aikg/python/ai_kernel_generator/cli/commands/op/runners.py`
     - `InteractiveOpRunner`：Prompt-toolkit TUI 主循环、输入处理、`F2` 切换面板显示
-  - `akg_agents/python/akg_agents/cli/console.py`
+  - `aikg/python/ai_kernel_generator/cli/console.py`
     - `AKGConsole`：统一输出入口（文本 Panel、LLM 流式渲染、面板数据转交 runner）
 
 - **Runtime**
-  - `akg_agents/python/akg_agents/cli/runtime/local_executor.py`
+  - `aikg/python/ai_kernel_generator/cli/runtime/local_executor.py`
     - `LocalExecutor`：会话级状态管理；注入 `session_id`；注册/注销 session sender；把消息路由给 Console；驱动 ReAct 每轮执行
-  - `akg_agents/python/akg_agents/cli/runtime/react_executor.py`
+  - `aikg/python/ai_kernel_generator/cli/runtime/react_executor.py`
     - `ReactTurnExecutor`：调用 `agent.astream(..., stream_mode="updates")` 并把事件映射为 CLI 消息（`LLMStreamMessage/PanelDataMessage/DisplayMessage`）
 
 - **Message Bus（会话路由层）**
-  - `akg_agents/python/akg_agents/cli/runtime/message_sender.py`
+  - `aikg/python/ai_kernel_generator/cli/runtime/message_sender.py`
     - `_session_senders`：`session_id -> sender(message)` 的线程安全映射
     - `register_message_sender()/unregister_message_sender()/send_message()`
 
 - **统一消息协议（事件类型）**
-  - `akg_agents/python/akg_agents/cli/messages.py`
+  - `aikg/python/ai_kernel_generator/cli/messages.py`
     - `Message` 抽象基类 + `to_dict()`（为网络传输/落盘回放保留）
     - 内置：`DisplayMessage`、`LLMStreamMessage`、`FinalResultMessage`、`ErrorMessage`、`PanelDataMessage`
     - `MESSAGE_REGISTRY` + `pack_message()/unpack_message()`（扩展入口）
 
 - **Agent**
-  - `akg_agents/python/akg_agents/core/agent/agent_base_v2.py`
+  - `aikg/python/ai_kernel_generator/core/agent/agent_base_v2.py`
     - `AgentBaseV2`：通过 `langchain.agents.create_agent(...)` 构建 ReAct agent（LangGraph runtime）
-  - `akg_agents/python/akg_agents/core/agent/react_agent.py`
+  - `aikg/python/ai_kernel_generator/core/agent/react_agent.py`
     - `MainOpAgent`（ReAct）：提供 system prompt、tools 列表、middleware（如 trim messages）
-  - `akg_agents/python/akg_agents/core/agent/agent_base.py`
+  - `aikg/python/ai_kernel_generator/core/agent/agent_base.py`
     - 子 Agent（如 codeonly）内部仍可能通过 `AgentBase.run_llm()` 发送 `LLMStreamMessage`（见下文“流式与并发策略”）
 
 - **子 Agent 注册中心**
-  - `akg_agents/python/akg_agents/core/sub_agent_registry.py`
+  - `aikg/python/ai_kernel_generator/core/sub_agent_registry.py`
     - `get_registry()` 返回全局 `SubAgentRegistry`
     - `SubAgentRegistry.get_agent(...)` 创建子 Agent 实例（MainOpAgent 内部调用）
 
 - **Panel 插件**
-  - `akg_agents/python/akg_agents/cli/ui/panel_plugin.py`：`PanelPlugin` 接口
-  - `akg_agents/python/akg_agents/cli/ui/plugin_registry.py`：`register_plugin()/get_default_plugin()`
+  - `aikg/python/ai_kernel_generator/cli/ui/panel_plugin.py`：`PanelPlugin` 接口
+  - `aikg/python/ai_kernel_generator/cli/ui/plugin_registry.py`：`register_plugin()/get_default_plugin()`
     - 默认插件名固定为 `"kernel_impl_list"`
-  - `akg_agents/python/akg_agents/cli/ui/plugins/kernel_impl_list.py`
+  - `aikg/python/ai_kernel_generator/cli/ui/plugins/kernel_impl_list.py`
     - `KernelImplListPlugin`：默认实现，支持 `update_current/move_to_history/reset`
 
 ---
@@ -106,7 +106,7 @@ ReAct 通过 tools 调用子 Agent：
 
 tools 的封装位于：
 
-- `akg_agents/python/akg_agents/core/tools/sub_agent_tool.py`
+- `aikg/python/ai_kernel_generator/core/tools/sub_agent_tool.py`
 
 ### 3.3 子 Agent 返回结构（典型字段）
 
@@ -178,8 +178,8 @@ sequenceDiagram
 
 对应实现：
 
-- `akg_agents/python/akg_agents/utils/stream_output.py`：ContextVar 级别的 stream 开关覆盖
-- `akg_agents/python/akg_agents/core/tools/sub_agent_tool.py`：除 `codeonly` 外的子 Agent 强制关闭内部流式
+- `aikg/python/ai_kernel_generator/utils/stream_output.py`：ContextVar 级别的 stream 开关覆盖
+- `aikg/python/ai_kernel_generator/core/tools/sub_agent_tool.py`：除 `codeonly` 外的子 Agent 强制关闭内部流式
 
 ### 4.3 ask_user：interrupt/resume（不抢 stdin）
 
@@ -198,18 +198,18 @@ sequenceDiagram
 
 ## 5. 开发者手册：如何给客户端发送消息
 
-本节按三类最常见消息说明“怎么用”和“注意点”。消息定义均在 `akg_agents/python/akg_agents/cli/messages.py`。
+本节按三类最常见消息说明“怎么用”和“注意点”。消息定义均在 `aikg/python/ai_kernel_generator/cli/messages.py`。
 
 ### 5.1 文本消息：DisplayMessage
 
 - **用途**：非流式提示/结果/说明文本（最终会以 Rich 的 Panel 样式显示）
-- **发送入口**：`akg_agents/python/akg_agents/cli/runtime/message_sender.py: send_message()`
+- **发送入口**：`aikg/python/ai_kernel_generator/cli/runtime/message_sender.py: send_message()`
 
 示例（业务代码任意位置）：
 
 ```python
-from akg_agents.cli.messages import DisplayMessage
-from akg_agents.cli.runtime.message_sender import send_message
+from ai_kernel_generator.cli.messages import DisplayMessage
+from ai_kernel_generator.cli.runtime.message_sender import send_message
 
 send_message(session_id, DisplayMessage(text="这里是一段提示/结果文本"))
 ```
@@ -218,11 +218,11 @@ send_message(session_id, DisplayMessage(text="这里是一段提示/结果文本
 
 - **用途**：LLM 流式输出的 chunk（包含 `is_reasoning` 标记）
 - **是否需要手写发送**：通常**不需要**。由 `AgentBase.run_llm()` 自动发送：
-  - `akg_agents/python/akg_agents/core/agent/agent_base.py`
+  - `aikg/python/ai_kernel_generator/core/agent/agent_base.py`
 
 关键前提与约束：
 
-- 只有当环境变量 `AKG_AGENTS_STREAM_OUTPUT=on` 时才会走流式；
+- 只有当环境变量 `AIKG_STREAM_OUTPUT=on` 时才会走流式；
 - **强约束**：流式开启时，`AgentBase.run_llm()` 会强校验 `context["session_id"]`，缺失将抛错。
   - `LocalExecutor` 会在创建 MainOpAgent 时把 `config["session_id"]` 注入；
   - `MainOpAgent.__init__` 会把 `session_id` 写入 `context`，从而满足 `AgentBase` 约束。
@@ -245,8 +245,8 @@ UI 消费路径（本地）：
 发送示例（源码可参考 `MainOpAgent._send_panel_current()`）：
 
 ```python
-from akg_agents.cli.messages import PanelDataMessage
-from akg_agents.cli.runtime.message_sender import send_message
+from ai_kernel_generator.cli.messages import PanelDataMessage
+from ai_kernel_generator.cli.runtime.message_sender import send_message
 
 send_message(
     session_id,
@@ -267,7 +267,7 @@ send_message(
 
 ### 6.1 步骤 A：定义消息类
 
-修改 `akg_agents/python/akg_agents/cli/messages.py`：
+修改 `aikg/python/ai_kernel_generator/cli/messages.py`：
 
 - 新增 `@dataclass`，继承 `Message`
 - 实现 `get_type()`（唯一字符串）与 `_get_payload()`（JSON 友好）
@@ -289,7 +289,7 @@ class ProgressMessage(Message):
 
 ### 6.2 步骤 B：注册消息类型
 
-仍在 `akg_agents/python/akg_agents/cli/messages.py` 的 `MESSAGE_REGISTRY` 中加入：
+仍在 `aikg/python/ai_kernel_generator/cli/messages.py` 的 `MESSAGE_REGISTRY` 中加入：
 
 ```python
 MESSAGE_REGISTRY["progress"] = ProgressMessage
@@ -314,9 +314,9 @@ send_message(session_id, ProgressMessage(step="verify", percent=0.6))
 
 你需要让本地路由与 Console“认识”新消息：
 
-- 修改 `akg_agents/python/akg_agents/cli/runtime/local_executor.py`
+- 修改 `aikg/python/ai_kernel_generator/cli/runtime/local_executor.py`
   - 在 `_route_to_console()` 里加 `isinstance(message, ProgressMessage)` 分支
-- 修改 `akg_agents/python/akg_agents/cli/console.py`
+- 修改 `aikg/python/ai_kernel_generator/cli/console.py`
   - 增加 `on_progress_message()`（或直接复用现有展示路径）
 
 ### 6.5 步骤 E（可选）：未来做网络传输/落盘/回放
@@ -332,9 +332,9 @@ send_message(session_id, ProgressMessage(step="verify", percent=0.6))
 
 新建文件：
 
-- `akg_agents/python/akg_agents/cli/ui/plugins/<your_plugin>.py`
+- `aikg/python/ai_kernel_generator/cli/ui/plugins/<your_plugin>.py`
 
-继承 `PanelPlugin`（接口在 `akg_agents/python/akg_agents/cli/ui/panel_plugin.py`），实现：
+继承 `PanelPlugin`（接口在 `aikg/python/ai_kernel_generator/cli/ui/panel_plugin.py`），实现：
 
 - `get_name()`：插件唯一名字
 - `render_fragments(width)`：返回 `List[Tuple[str, str]]`，用于 prompt_toolkit 的 `FormattedTextControl`
@@ -345,7 +345,7 @@ send_message(session_id, ProgressMessage(step="verify", percent=0.6))
 
 在 runner 初始化时注册（参考 `InteractiveOpRunner.__init__` 当前注册默认插件的方式）：
 
-- `akg_agents/python/akg_agents/cli/commands/op/runners.py`
+- `aikg/python/ai_kernel_generator/cli/commands/op/runners.py`
   - `register_plugin(plugin)`
 
 ### 7.3 步骤 C：选择“正在渲染的插件”与“正在接收数据的插件”（重要）
@@ -417,7 +417,7 @@ send_message(
 
 ### 8.1 开了流式但没有 session_id
 
-- 现象：`AKG_AGENTS_STREAM_OUTPUT=on` 时，`AgentBase.run_llm()` 会强校验 `context["session_id"]`，缺失会直接抛 `ValueError`。
+- 现象：`AIKG_STREAM_OUTPUT=on` 时，`AgentBase.run_llm()` 会强校验 `context["session_id"]`，缺失会直接抛 `ValueError`。
 - 正确做法：确保由 `LocalExecutor` 注入 `config["session_id"]`，并由你的 Agent 把它传入 `context`（参考 `MainOpAgent.__init__`）。
 
 ### 8.2 未注册 sender 时 send_message 会丢消息
