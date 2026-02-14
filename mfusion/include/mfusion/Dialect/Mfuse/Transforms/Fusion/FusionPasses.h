@@ -25,6 +25,7 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulReshapeBiasAdd.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulTransposeWeight.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulUnsqueezeSqueeze.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseBatchMatMul.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseBatchMatMulToMul.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatMulReshape.h"
 
