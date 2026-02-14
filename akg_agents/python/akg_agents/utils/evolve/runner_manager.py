@@ -70,7 +70,7 @@ class RunnerConfig:
         self.device_list = [0]
 
         # 配置文件路径
-        self.config_path = "config/default_evolve_config.yaml"
+        self.config_path = "op/config/evolve_config.yaml"
 
         # 任务配置
         self.op_name = "relu_op"
@@ -820,7 +820,7 @@ def load_batch_config(config_path: str = None) -> Tuple[Dict[str, Any], str]:
     """
     if config_path is None:
         project_root = get_project_root()
-        config_path = os.path.join(project_root, "config", "evolve_config.yaml")
+        config_path = os.path.join(project_root, "op", "config", "evolve_config.yaml")
 
     if os.path.exists(config_path):
         try:
