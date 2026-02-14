@@ -83,15 +83,14 @@ A minimal configuration only requires one model (auto-applies to all levels):
     "standard": {
       "base_url": "https://api.deepseek.com/beta/",
       "api_key": "YOUR_API_KEY",
-      "model_name": "deepseek-chat",
-      "thinking_enabled": true
+      "model_name": "deepseek-chat"
     }
   },
   "default_model": "standard"
 }
 ```
 
-> For per-level model configuration (`complex` / `standard` / `fast`), Embedding/RAG setup, or environment variable usage, see [Configuration Documentation](./docs/v2/Configuration.md) and the full example [`settings.example.json`](./examples/settings.example.json).
+> For per-level model configuration (`complex` / `standard` / `fast`), thinking/reasoning parameters for different providers, Embedding/RAG setup, or environment variable usage, see [Configuration Documentation](./docs/v2/Configuration.md), the basic example [`settings.example.json`](./examples/settings.example.json), and the multi-provider example [`settings.example.more.json`](./examples/settings.example.more.json).
 
 ### Backend Dependencies
 
@@ -152,7 +151,8 @@ Once launched, you can interact in the following ways:
 | `run_skill/` | Skill | Skill loading, registry, hierarchy, versioning, installation, LLM selection examples |
 | `build_a_simple_react_agent/` | Framework | Build a custom ReAct Agent using the framework |
 | `build_a_simple_workflow/` | Framework | Build a custom LangGraph-based Workflow |
-| `settings.example.json` | Config | Full `settings.json` configuration template |
+| `settings.example.json` | Config | Basic `settings.json` configuration template |
+| `settings.example.more.json` | Config | Multi-provider examples (OpenAI, DeepSeek, Claude, Qwen, Kimi, Doubao, etc.) |
 
 </details>
 

@@ -109,8 +109,11 @@ def create_llm_client(
             final_top_p = top_p if top_p is not None else 0.9
             final_frequency_penalty = frequency_penalty
             final_presence_penalty = presence_penalty
-            final_timeout = kwargs.get("timeout", 300)
-            final_thinking_enabled = kwargs.pop("thinking_enabled", False)
+            final_timeout = kwargs.pop("timeout", 300)
+            final_extra_body = kwargs.pop("extra_body", {})
+            # 向后兼容：thinking_enabled=True → 默认 extra_body
+            if not final_extra_body and kwargs.pop("thinking_enabled", False):
+                final_extra_body = {"thinking": {"type": "enabled"}}
         else:
             available = list(settings.models.keys()) if settings.models else []
             raise ValueError(
@@ -130,10 +133,16 @@ def create_llm_client(
         final_top_p = top_p if top_p is not None else model_config.top_p
         final_frequency_penalty = frequency_penalty if frequency_penalty is not None else model_config.frequency_penalty
         final_presence_penalty = presence_penalty if presence_penalty is not None else model_config.presence_penalty
-        final_timeout = kwargs.get("timeout", model_config.timeout)
-        final_thinking_enabled = kwargs.pop("thinking_enabled", model_config.thinking_enabled)
+        final_timeout = kwargs.pop("timeout", model_config.timeout)
+        final_extra_body = kwargs.pop("extra_body", model_config.extra_body)
+        # 向后兼容：thinking_enabled=True → 默认 extra_body
+        if not final_extra_body and kwargs.pop("thinking_enabled", False):
+            final_extra_body = {"thinking": {"type": "enabled"}}
     
-    logger.info(f"Creating LLMClient: level={model_level}, model={final_model_name}, base_url={final_base_url}, thinking={final_thinking_enabled}")
+    logger.info(
+        f"Creating LLMClient: level={model_level}, model={final_model_name}, "
+        f"base_url={final_base_url}, extra_body={bool(final_extra_body)}"
+    )
     
     # 创建 Provider
     provider = LLMProvider(
@@ -141,7 +150,7 @@ def create_llm_client(
         api_key=final_api_key,
         base_url=final_base_url,
         timeout=final_timeout,
-        thinking_enabled=final_thinking_enabled,
+        extra_body=final_extra_body,
         **kwargs
     )
     

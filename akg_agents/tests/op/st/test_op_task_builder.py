@@ -46,11 +46,11 @@ async def ensure_worker_registered():
 def get_test_config() -> dict:
     """获取测试配置
     
-    优先使用vllm_triton_cuda_coderonly_config.yaml，
+    优先使用triton_cuda_coderonly_config.yaml，
     如果加载失败则使用最小化测试配置
     """
     try:
-        config = load_config(config_path="./python/akg_agents/op/config/vllm_triton_cuda_coderonly_config.yaml")
+        config = load_config(config_path="./python/akg_agents/op/config/triton_cuda_coderonly_config.yaml")
         # 确保op_task_builder模型配置存在（使用coder模型作为fallback）
         if "agent_model_config" in config and "op_task_builder" not in config["agent_model_config"]:
             config["agent_model_config"]["op_task_builder"] = config["agent_model_config"].get("coder", "default")

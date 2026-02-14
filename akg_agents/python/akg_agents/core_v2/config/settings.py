@@ -143,8 +143,29 @@ class ModelConfig:
     frequency_penalty: Optional[float] = None  # 可选，来自配置文件
     presence_penalty: Optional[float] = None   # 可选，来自配置文件
     timeout: int = 300
-    thinking_enabled: Optional[bool] = None  # 是否启用 thinking 模式（None 表示未设置）
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra_body: Dict[str, Any] = field(default_factory=dict)  # 透传到 API 请求的额外参数（如 thinking/reasoning）
+    extra: Dict[str, Any] = field(default_factory=dict)       # 其他扩展字段（不透传到 API）
+    
+    @property
+    def thinking_enabled(self) -> bool:
+        """向后兼容属性：检查 extra_body 中是否包含 thinking 相关配置"""
+        return bool(self.extra_body)
+    
+    @classmethod
+    def _parse_extra_body(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        解析 extra_body 配置，支持新旧格式（向后兼容）
+        
+        新格式（推荐）: "extra_body": {"thinking": {"type": "enabled"}}
+        旧格式（兼容）: "thinking_enabled": true  → 转为 {"thinking": {"type": "enabled"}}
+        """
+        # 新格式优先：直接使用 extra_body
+        if "extra_body" in data:
+            return data["extra_body"]
+        # 旧格式向后兼容：thinking_enabled: true
+        if data.get("thinking_enabled"):
+            return {"thinking": {"type": "enabled"}}
+        return {}
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any], use_defaults: bool = True) -> "ModelConfig":
@@ -155,6 +176,8 @@ class ModelConfig:
             data: 配置字典
             use_defaults: 是否使用默认值，False 时缺失字段为空/None（用于合并）
         """
+        extra_body = cls._parse_extra_body(data)
+        
         if use_defaults:
             return cls(
                 base_url=data.get("base_url", "https://api.openai.com/v1"),
@@ -163,14 +186,13 @@ class ModelConfig:
                 temperature=data.get("temperature", 0.2),
                 max_tokens=data.get("max_tokens", 8192),
                 top_p=data.get("top_p", 0.9),
-                frequency_penalty=data.get("frequency_penalty"),  # 可选，无默认值
-                presence_penalty=data.get("presence_penalty"),    # 可选，无默认值
+                frequency_penalty=data.get("frequency_penalty"),
+                presence_penalty=data.get("presence_penalty"),
                 timeout=data.get("timeout", 300),
-                thinking_enabled=data.get("thinking_enabled", False),
+                extra_body=extra_body,
                 extra=data.get("extra", {})
             )
         else:
-            # 用于合并时，只保留显式设置的值（None 表示未设置）
             return cls(
                 base_url=data.get("base_url", ""),
                 api_key=data.get("api_key", ""),
@@ -178,10 +200,10 @@ class ModelConfig:
                 temperature=data.get("temperature", 0.2),
                 max_tokens=data.get("max_tokens", 8192),
                 top_p=data.get("top_p", 0.9),
-                frequency_penalty=data.get("frequency_penalty"),  # 可选
-                presence_penalty=data.get("presence_penalty"),    # 可选
+                frequency_penalty=data.get("frequency_penalty"),
+                presence_penalty=data.get("presence_penalty"),
                 timeout=data.get("timeout", 300),
-                thinking_enabled=data.get("thinking_enabled"),  # None 如果未设置
+                extra_body=extra_body,
                 extra=data.get("extra", {})
             )
     
@@ -192,11 +214,16 @@ class ModelConfig:
         
         Args:
             prefix: 环境变量前缀，如 "" (单模型) 或 "COMPLEX_" (多模型)
-            thinking_enabled: 是否启用 thinking 模式
+            thinking_enabled: 是否启用 thinking 模式（环境变量兼容，生成默认 extra_body）
         """
         env_temp = get_akg_env_var(f"{prefix}TEMPERATURE")
         env_max_tokens = get_akg_env_var(f"{prefix}MAX_TOKENS")
         env_timeout = get_akg_env_var(f"{prefix}TIMEOUT")
+        
+        # 环境变量模式下，thinking_enabled 生成默认的 extra_body
+        extra_body: Dict[str, Any] = {}
+        if thinking_enabled:
+            extra_body = {"thinking": {"type": "enabled"}}
         
         return cls(
             base_url=get_akg_env_var(f"{prefix}BASE_URL", "https://api.openai.com/v1"),
@@ -205,7 +232,7 @@ class ModelConfig:
             temperature=float(env_temp) if env_temp else 0.2,
             max_tokens=int(env_max_tokens) if env_max_tokens else 8192,
             timeout=int(env_timeout) if env_timeout else 300,
-            thinking_enabled=thinking_enabled,
+            extra_body=extra_body,
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -218,10 +245,10 @@ class ModelConfig:
             "max_tokens": self.max_tokens,
             "top_p": self.top_p,
             "timeout": self.timeout,
-            "thinking_enabled": self.thinking_enabled if self.thinking_enabled is not None else False,
             "extra": self.extra
         }
-        # 可选参数仅在设置时包含
+        if self.extra_body:
+            result["extra_body"] = self.extra_body
         if self.frequency_penalty is not None:
             result["frequency_penalty"] = self.frequency_penalty
         if self.presence_penalty is not None:
@@ -237,12 +264,10 @@ class ModelConfig:
             temperature=other.temperature if other.temperature != 0.2 else self.temperature,
             max_tokens=other.max_tokens if other.max_tokens != 8192 else self.max_tokens,
             top_p=other.top_p if other.top_p != 0.9 else self.top_p,
-            # 可选参数：other 设置了则用 other，否则保留 self
             frequency_penalty=other.frequency_penalty if other.frequency_penalty is not None else self.frequency_penalty,
             presence_penalty=other.presence_penalty if other.presence_penalty is not None else self.presence_penalty,
             timeout=other.timeout if other.timeout != 300 else self.timeout,
-            # thinking_enabled: None 表示未设置，保留原值；显式设置则覆盖
-            thinking_enabled=other.thinking_enabled if other.thinking_enabled is not None else self.thinking_enabled,
+            extra_body={**self.extra_body, **other.extra_body},
             extra={**self.extra, **other.extra}
         )
 
@@ -476,7 +501,8 @@ def _load_env_config(settings: AKGSettings) -> AKGSettings:
     for level in ["complex", "standard", "fast"]:
         level_upper = level.upper()
         if get_akg_env_var(f"{level_upper}_BASE_URL") or get_akg_env_var(f"{level_upper}_API_KEY"):
-            settings.models[level] = ModelConfig.from_env(f"{level_upper}_")
+            # 多模型模式也继承全局 thinking_enabled 设置
+            settings.models[level] = ModelConfig.from_env(f"{level_upper}_", thinking_enabled)
             prefix = _detect_env_prefix(f"{level_upper}_BASE_URL", f"{level_upper}_API_KEY")
             settings._model_sources[level] = f"env: {prefix}_{level_upper}_*"
             logger.debug(f"Loaded '{level}' model config from env")
@@ -601,7 +627,10 @@ def _print_model_info(level: str, model: "ModelConfig", source: str, indent: str
     print(f"{indent}  base_url: {model.base_url}")
     print(f"{indent}  api_key: {_mask_key(model.api_key)}")
     print(f"{indent}  temperature: {model.temperature}")
-    print(f"{indent}  thinking_enabled: {model.thinking_enabled}")
+    if model.extra_body:
+        print(f"{indent}  extra_body: {model.extra_body}")
+    else:
+        print(f"{indent}  extra_body: (none)")
 
 
 def print_settings_info(model_level: Optional[str] = None) -> None:

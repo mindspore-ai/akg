@@ -68,14 +68,15 @@ class ConfigValidator:
             raise ValueError(f"配置校验失败：{str(e)}")
 
 
-def load_config(dsl="", config_path: Optional[str] = None, backend: Optional[str] = None):
+def load_config(dsl="", config_path: Optional[str] = None, backend: Optional[str] = None, workflow: Optional[str] = "coder_only"):
     """
     加载并验证配置文件
 
     Args:
         dsl: 领域特定语言类型，用于选择默认配置文件。如果为"triton"，需要提供backend参数进行自动转换
-        config_path: 配置文件路径，如果不提供则根据dsl选择默认配置
+        config_path: 配置文件路径，如果不提供则根据dsl和(可选)workflow选择默认配置
         backend: 硬件后端名称(ascend/cuda)，用于自动转换dsl="triton"为triton_cuda或triton_ascend
+        workflow: 工作流类型(coder_only/default/kernelgen_only/evolve)，用于选择特定配置，默认为coder_only
 
     Returns:
         dict: 验证后的配置
@@ -85,23 +86,32 @@ def load_config(dsl="", config_path: Optional[str] = None, backend: Optional[str
     """
     # 1. 规范化DSL（自动转换triton）
     if dsl:
-        normalized_dsl = normalize_dsl(dsl, backend)
+        normalized_dsl = normalize_dsl(dsl, backend or "")
         dsl = normalized_dsl  # 使用规范化后的DSL
     
     # 2. 有config_path时直接使用config_path
     if config_path:
         final_config_path = Path(config_path)
     else:
-        # 3. 没有config_path时，根据dsl选择默认配置
-        final_config_path = Path(__file__).parent / f"default_{dsl}_config.yaml"
+        # 3. 没有config_path时，根据dsl和workflow选择配置
+        # 优先级：{dsl}_{workflow}_config.yaml > default_{dsl}_config.yaml
+        if workflow and dsl:
+            workflow_suffix = workflow.replace("_workflow", "")
+            final_config_path = Path(__file__).parent / f"{dsl}_{workflow_suffix}_config.yaml"
+            if not final_config_path.exists():
+                final_config_path = Path(__file__).parent / f"default_{dsl}_config.yaml"
+        elif dsl:
+            final_config_path = Path(__file__).parent / f"default_{dsl}_config.yaml"
+        else:
+            raise ValueError("必须提供 dsl 或 config_path")
 
-    # 4. 检查默认配置文件是否存在，不存在就抛出错误
+    # 4. 检查配置文件是否存在，不存在就抛出错误
     if not final_config_path.exists():
-        raise ValueError(f"No default config found for dsl '{dsl}'. "
+        raise ValueError(f"No config found for dsl '{dsl}' and workflow '{workflow}'. "
                          f"Please provide config_path like load_config('/path-to-config/xxx_config.yaml') "
-                         f"or ensure default config exists at: {final_config_path}")
+                         f"or ensure config exists at: {final_config_path}")
 
-    validator = ConfigValidator(final_config_path)
+    validator = ConfigValidator(str(final_config_path))
     validator.validate_all()
     return validator.config
 

@@ -83,15 +83,14 @@ cp akg_agents/examples/settings.example.json ~/.akg/settings.json
     "standard": {
       "base_url": "https://api.deepseek.com/beta/",
       "api_key": "YOUR_API_KEY",
-      "model_name": "deepseek-chat",
-      "thinking_enabled": true
+      "model_name": "deepseek-chat"
     }
   },
   "default_model": "standard"
 }
 ```
 
-> 如需按等级（`complex` / `standard` / `fast`）分别配置不同模型、配置 Embedding/RAG、或使用环境变量，请参考 [配置系统文档](./docs/v2/CN/Configuration.md) 和完整示例 [`settings.example.json`](./examples/settings.example.json)。
+> 如需按等级（`complex` / `standard` / `fast`）分别配置不同模型、配置不同 provider 的 thinking/reasoning 参数、配置 Embedding/RAG、或使用环境变量，请参考 [配置系统文档](./docs/v2/CN/Configuration.md)、基础示例 [`settings.example.json`](./examples/settings.example.json) 和多 provider 示例 [`settings.example.more.json`](./examples/settings.example.more.json)。
 
 ### 后端依赖
 
@@ -152,7 +151,8 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 \
 | `run_skill/` | Skill | Skill 加载、注册、层级、版本、安装、LLM 选择等示例 |
 | `build_a_simple_react_agent/` | 框架 | 基于框架构建自定义 ReAct Agent |
 | `build_a_simple_workflow/` | 框架 | 基于 LangGraph 构建自定义 Workflow |
-| `settings.example.json` | 配置 | `settings.json` 完整配置模板 |
+| `settings.example.json` | 配置 | `settings.json` 基础配置模板 |
+| `settings.example.more.json` | 配置 | 多 provider 配置示例（OpenAI、DeepSeek、Claude、通义千问、Kimi、豆包等） |
 
 </details>
 

@@ -168,7 +168,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
 
     task_pool = TaskPool()
     config = load_config(
-        config_path="./python/akg_agents/op/config/vllm_triton_ascend_coderonly_config.yaml"
+        config_path="./python/akg_agents/op/config/triton_ascend_coderonly_config.yaml"
     )
     check_env_for_task(framework, backend, dsl, config)
     await register_local_worker([device_id], backend=backend, arch=arch)
@@ -219,7 +219,7 @@ async def test_kernelbench_torch_triton_cuda():
 
     task_pool = TaskPool()
     config = load_config(
-        config_path="./python/akg_agents/op/config/vllm_triton_cuda_coderonly_config.yaml"
+        config_path="./python/akg_agents/op/config/triton_cuda_coderonly_config.yaml"
     )
     check_env_for_task(framework, backend, dsl, config)
     await register_local_worker([device_id], backend=backend, arch=arch)
@@ -270,7 +270,7 @@ async def test_kernelbench_torch_cpp_cpu():
 
     task_pool = TaskPool()
     config = load_config(
-        config_path="./python/akg_agents/op/config/vllm_cpp_coderonly_config.yaml"
+        config_path="./python/akg_agents/op/config/cpp_coderonly_config.yaml"
     )
     check_env_for_task(framework, backend, dsl, config)
     await register_local_worker([device_id], backend=backend, arch=arch)
@@ -332,7 +332,7 @@ async def test_custom_requirements_kernel_agent():
 
     task_pool = TaskPool()
     config = load_config(
-        config_path="./python/akg_agents/op/config/vllm_triton_ascend_coderonly_config.yaml"
+        config_path="./python/akg_agents/op/config/triton_ascend_coderonly_config.yaml"
     )
     check_env_for_task(framework, backend, dsl, config)
     await register_local_worker([device_id], backend=backend, arch=arch)

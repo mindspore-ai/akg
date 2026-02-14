@@ -22,17 +22,19 @@ AKG Agents uses a multi-level configuration system for managing LLM services, em
 {
   "models": {
     "complex": {
-      "base_url": "https://api.openai.com/v1",
-      "api_key": "your-api-key",
-      "model_name": "gpt-4",
-      "temperature": 0.2,
-      "max_tokens": 8192
+      "base_url": "https://api.deepseek.com/beta/",
+      "api_key": "your-deepseek-api-key",
+      "model_name": "deepseek-reasoner",
+      "temperature": 0.0,
+      "max_tokens": 8192,
+      "extra_body": {
+        "thinking": {"type": "enabled"}
+      }
     },
     "standard": {
       "base_url": "https://api.deepseek.com/beta/",
       "api_key": "your-deepseek-api-key",
-      "model_name": "deepseek-chat",
-      "thinking_enabled": true
+      "model_name": "deepseek-chat"
     },
     "fast": {
       "base_url": "https://api.deepseek.com/beta/",
@@ -51,6 +53,8 @@ AKG Agents uses a multi-level configuration system for managing LLM services, em
 }
 ```
 
+> For provider-specific `extra_body` examples (OpenAI, Claude, Qwen, Zhipu, Kimi, Doubao, etc.), see [`settings.example.more.json`](../../examples/settings.example.more.json).
+
 ## 3. ModelConfig
 
 Configuration for a single LLM model.
@@ -66,7 +70,7 @@ Configuration for a single LLM model.
 | `frequency_penalty` | float | `None` | Frequency penalty (optional) |
 | `presence_penalty` | float | `None` | Presence penalty (optional) |
 | `timeout` | int | `300` | Request timeout in seconds |
-| `thinking_enabled` | bool | `None` | Enable thinking mode (for models that support it) |
+| `extra_body` | object | `{}` | Extra parameters passed through to the API request body (e.g., thinking/reasoning config) |
 
 ### Model Levels
 

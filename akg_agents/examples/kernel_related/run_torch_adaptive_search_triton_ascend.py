@@ -176,7 +176,7 @@ async def run_adaptive_search(args):
     arch = "ascend910b4"
     
     # 配置文件路径
-    config_path = str(Path(get_project_root()) / "config" / "vllm_triton_ascend_evolve_config.yaml")
+    config_path = str(Path(get_project_root()) / "config" / "triton_ascend_evolve_config.yaml")
     
     # 注册 Worker
     print(f"\n{'='*60}")

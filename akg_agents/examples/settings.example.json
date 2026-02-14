@@ -1,24 +1,26 @@
 {
   "models": {
     "complex": {
-      "base_url": "https://api.openai.com/v1",
-      "api_key": "your-api-key-here",
-      "model_name": "gpt-4",
-      "temperature": 0.0,
-      "max_tokens": 8192
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "api_key": "your-zhipu-api-key",
+      "model_name": "glm-4.7",
+      "temperature": 0.2,
+      "max_tokens": 131072
     },
     "standard": {
       "base_url": "https://api.deepseek.com/beta/",
       "api_key": "your-deepseek-api-key",
-      "model_name": "deepseek-chat",
-      "temperature": 0.0,
-      "max_tokens": 8192,
-      "thinking_enabled": true
+      "model_name": "deepseek-reasoner",
+      "temperature": 0.2,
+      "max_tokens": 65536,
+      "extra_body": {
+        "thinking": {"type": "enabled"}
+      }
     },
     "fast": {
-      "base_url": "https://api.openai.com/v1",
-      "api_key": "your-api-key-here",
-      "model_name": "gpt-3.5-turbo",
+      "base_url": "https://api.deepseek.com/beta/",
+      "api_key": "your-deepseek-api-key",
+      "model_name": "deepseek-chat",
       "temperature": 0.3,
       "max_tokens": 8192
     }

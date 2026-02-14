@@ -168,7 +168,7 @@ class AgentBase(ABC):
             
             # 调用 LLM
             messages = [
-                {"role": "system", "content": ""},
+                {"role": "system", "content": "你是AKG Agent，你是一个AI助手，你可以帮助用户完成任务。"},
                 {"role": "user", "content": formatted_prompt}
             ]
             result = await client.generate(

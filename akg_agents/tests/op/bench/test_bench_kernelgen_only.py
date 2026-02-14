@@ -57,7 +57,7 @@ async def test_kernelbench_torch_triton_ascend910b4():
     task_pool = TaskPool()
     
     # 加载 KernelGen-only 配置
-    config = load_config(config_path="./python/akg_agents/op/config/vllm_triton_ascend_kernelgen_config.yaml")
+    config = load_config(config_path="./python/akg_agents/op/config/triton_ascend_kernelgen_config.yaml")
 
     check_env_for_task(framework, backend, dsl, config)
 

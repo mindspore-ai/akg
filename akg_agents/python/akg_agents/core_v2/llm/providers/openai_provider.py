@@ -16,18 +16,23 @@
 LLMProvider - 统一 LLM 提供者
 
 支持所有 OpenAI 兼容的 API：
-- OpenAI (GPT-4, o1)
+- OpenAI (GPT-4, o1/o3)
 - DeepSeek
 - Claude (通过 OpenAI 兼容层)
 - 智谱 GLM
-- Moonshot
+- Moonshot / Kimi
+- 通义千问 / DashScope
+- 豆包 / 火山引擎
 - vLLM (本地部署)
 - Ollama (本地)
+
+不同 provider 的 thinking/reasoning 参数通过 settings.json 中的 extra_body 字段
+直接配置并透传到 API 请求，无需框架做 provider 检测。
+详见 settings.example.more.json 中各 provider 的配置示例。
 """
 
 import logging
 from typing import AsyncIterator, Dict, Any, List, Optional
-from abc import ABC, abstractmethod
 
 import httpx
 
@@ -43,16 +48,8 @@ class LLMProvider:
     """
     统一 LLM 提供者（基于 OpenAI 兼容接口）
     
-    支持所有 OpenAI 兼容的 API：
-    - OpenAI (GPT-4, o1)
-    - DeepSeek
-    - Claude (通过 Anthropic 的 OpenAI 兼容层)
-    - 智谱 GLM
-    - Moonshot
-    - vLLM (本地部署)
-    - Ollama (本地)
-    
-    注：Claude 虽然有原生 API，但也支持 OpenAI 格式，足够覆盖 90%+ 使用场景
+    通过 extra_body 机制支持各 provider 的差异化参数（如 thinking/reasoning），
+    用户在 settings.json 中直接配置 extra_body，框架原样透传到 API 请求。
     """
     
     def __init__(
@@ -61,22 +58,25 @@ class LLMProvider:
         api_key: str,
         base_url: str = "https://api.openai.com/v1",
         timeout: int = 300,
-        thinking_enabled: bool = False,
+        extra_body: Optional[Dict[str, Any]] = None,
         **kwargs
     ):
         """
         初始化 LLM Provider
         
         Args:
-            model_name: 模型名称（如 gpt-4, deepseek-chat, claude-3-5-sonnet-20241022）
+            model_name: 模型名称
             api_key: API 密钥
-            base_url: API 地址（默认 OpenAI，可改为 DeepSeek、Claude 等）
+            base_url: API 地址
             timeout: 超时时间（秒）
-            thinking_enabled: 是否启用 thinking 模式（DeepSeek-R1 等思考模型）
+            extra_body: 额外请求体参数，直接透传到 API 请求。
+                        用于配置各 provider 的 thinking/reasoning 等特殊参数。
+                        例如 DeepSeek: {"thinking": {"type": "enabled"}}
+                        例如 OpenAI o3: {"reasoning_effort": "high"}
             **kwargs: 其他配置
         """
         self.model_name = model_name
-        self.thinking_enabled = thinking_enabled
+        self.extra_body = extra_body or {}
         self.config = kwargs
         
         if AsyncOpenAI is None:
@@ -89,7 +89,10 @@ class LLMProvider:
             http_client=httpx.AsyncClient(verify=False, timeout=timeout)
         )
         
-        logger.info(f"Initialized LLMProvider: model={model_name}, base_url={base_url}, thinking={thinking_enabled}")
+        logger.info(
+            f"Initialized LLMProvider: model={model_name}, base_url={base_url}, "
+            f"extra_body={bool(self.extra_body)}"
+        )
 
     async def generate(
         self,
@@ -98,22 +101,20 @@ class LLMProvider:
         **kwargs
     ) -> Dict[str, Any]:
         """生成文本（非流式）"""
-        # 构建请求参数
         request_kwargs = {
             "model": self.model_name,
             "messages": messages,
             **kwargs
         }
         
-        # 添加 tools（如果有）
         if tools:
             request_kwargs["tools"] = tools
         
-        # 添加 thinking 模式
-        if self.thinking_enabled:
-            request_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+        # 透传 extra_body（合并调用方可能传入的 extra_body）
+        if self.extra_body:
+            existing = request_kwargs.get("extra_body", {})
+            request_kwargs["extra_body"] = {**self.extra_body, **existing}
         
-        # 调用 OpenAI API
         response = await self.client.chat.completions.create(**request_kwargs)
         
         # 转换为统一格式
@@ -125,7 +126,6 @@ class LLMProvider:
             "usage": {}
         }
         
-        # 处理 tool_calls
         if choice.message.tool_calls:
             result["tool_calls"] = [
                 {
@@ -139,7 +139,6 @@ class LLMProvider:
                 for tc in choice.message.tool_calls
             ]
         
-        # 处理 usage
         if response.usage:
             result["usage"] = {
                 "prompt_tokens": response.usage.prompt_tokens,
@@ -166,11 +165,11 @@ class LLMProvider:
         if tools:
             request_kwargs["tools"] = tools
         
-        # 添加 thinking 模式
-        if self.thinking_enabled:
-            request_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+        # 透传 extra_body
+        if self.extra_body:
+            existing = request_kwargs.get("extra_body", {})
+            request_kwargs["extra_body"] = {**self.extra_body, **existing}
         
-        # 累积结果
         content = ""
         reasoning = ""
         tool_calls = []
@@ -180,29 +179,25 @@ class LLMProvider:
         async for chunk in stream_response:
             delta = chunk.choices[0].delta
             
-            # 处理内容
             if delta.content:
                 content += delta.content
                 yield {"type": "content", "chunk": delta.content}
             
-            # 处理推理（o1 等模型）
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
                 reasoning += delta.reasoning_content
                 yield {"type": "reasoning", "chunk": delta.reasoning_content}
             
-            # 处理工具调用
             if delta.tool_calls:
                 for tc in delta.tool_calls:
                     yield {"type": "tool_call", "tool_call": tc}
                     tool_calls.append(tc)
         
-        # 最终结果
         yield {
             "type": "final",
             "content": content,
             "reasoning_content": reasoning,
             "tool_calls": tool_calls,
-            "usage": {}  # 流式模式下 OpenAI 不返回 usage
+            "usage": {}
         }
     
     def count_tokens(self, text: str) -> int:
@@ -212,7 +207,6 @@ class LLMProvider:
             encoding = tiktoken.get_encoding("cl100k_base")
             return len(encoding.encode(text))
         except ImportError:
-            # 简单估算：1 token ≈ 4 字符
             logger.warning("tiktoken not installed, using simple estimation")
             return len(text) // 4
         except Exception as e:
