@@ -41,17 +41,6 @@ async def main():
     print("  SimpleReActAgent - 简单对话 Agent 演示")
     print("=" * 60)
     
-    # 检查环境
-    try:
-        from akg_agents.utils.environment_check import _check_llm_api
-        print("\n🔍 检查 LLM API 配置...")
-        if not _check_llm_api():
-            print("❌ LLM API 配置有问题，请检查 settings.json")
-            return 1
-        print("✅ LLM API 配置正常\n")
-    except Exception as e:
-        print(f"⚠️ 无法检查 LLM API: {e}")
-    
     # 导入 Agent
     from simple_react_agent import SimpleReActAgent
     
