@@ -138,3 +138,36 @@ func.func @test_cast_i32_to_f64(%arg0: tensor<2x2xi32>) -> tensor<2x2xf64> {
   %0 = mfuse.cast %arg0 {dtype = f64} : (tensor<2x2xi32>) -> tensor<2x2xf64>
   return %0 : tensor<2x2xf64>
 }
+
+// CHECK-LABEL: func.func @test_permute_general
+func.func @test_permute_general(%arg0: tensor<2x3x4xf32>) -> tensor<4x2x3xf32> {
+  // CHECK-DAG: %[[D0:.*]] = torch.constant.int 2
+  // CHECK-DAG: %[[D1:.*]] = torch.constant.int 0
+  // CHECK-DAG: %[[D2:.*]] = torch.constant.int 1
+  // CHECK-DAG: %[[DIMS:.*]] = torch.prim.ListConstruct %[[D0]], %[[D1]], %[[D2]]
+  // CHECK: torch.aten.permute %{{.*}}, %[[DIMS]]
+  %0 = mfuse.permute %arg0, [2, 0, 1] : (tensor<2x3x4xf32>) -> tensor<4x2x3xf32>
+  return %0 : tensor<4x2x3xf32>
+}
+
+// CHECK-LABEL: func.func @test_permute_identity
+func.func @test_permute_identity(%arg0: tensor<2x3x4xf32>) -> tensor<2x3x4xf32> {
+  // CHECK-DAG: %[[D0:.*]] = torch.constant.int 0
+  // CHECK-DAG: %[[D1:.*]] = torch.constant.int 1
+  // CHECK-DAG: %[[D2:.*]] = torch.constant.int 2
+  // CHECK-DAG: %[[DIMS:.*]] = torch.prim.ListConstruct %[[D0]], %[[D1]], %[[D2]]
+  // CHECK: torch.aten.permute %{{.*}}, %[[DIMS]]
+  %0 = mfuse.permute %arg0, [0, 1, 2] : (tensor<2x3x4xf32>) -> tensor<2x3x4xf32>
+  return %0 : tensor<2x3x4xf32>
+}
+
+// CHECK-LABEL: func.func @test_permute_negative_dims
+func.func @test_permute_negative_dims(%arg0: tensor<2x3x4xf32>) -> tensor<4x2x3xf32> {
+  // CHECK-DAG: %[[D0:.*]] = torch.constant.int -1
+  // CHECK-DAG: %[[D1:.*]] = torch.constant.int 0
+  // CHECK-DAG: %[[D2:.*]] = torch.constant.int 1
+  // CHECK-DAG: %[[DIMS:.*]] = torch.prim.ListConstruct %[[D0]], %[[D1]], %[[D2]]
+  // CHECK: torch.aten.permute %{{.*}}, %[[DIMS]]
+  %0 = mfuse.permute %arg0, [-1, 0, 1] : (tensor<2x3x4xf32>) -> tensor<4x2x3xf32>
+  return %0 : tensor<4x2x3xf32>
+}
