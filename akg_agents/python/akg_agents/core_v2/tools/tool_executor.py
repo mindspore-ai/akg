@@ -18,9 +18,9 @@ import logging
 import sys
 from typing import Dict, Any, List, Optional
 from pathlib import Path
-import yaml
 
 from akg_agents.core_v2.tools.arg_resolver import resolve_arguments
+from akg_agents.core_v2.tools.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -149,19 +149,6 @@ class ToolExecutor:
         self.workflow_registry = workflow_registry or {}
         self.agent_context = agent_context or {}
         self.history = history or []
-        self.tool_types = self._load_tool_types()
-    
-    def _get_hardware_params(self, arguments: Dict[str, Any]) -> Dict[str, str]:
-        """统一获取硬件参数（从 arguments 或 agent_context）
-        
-        优先级: arguments > agent_context > 默认值
-        """
-        return {
-            "framework": arguments.get("framework", self.agent_context.get("framework", "torch")),
-            "backend": arguments.get("backend", self.agent_context.get("backend", "cuda")),
-            "arch": arguments.get("arch", self.agent_context.get("arch", "a100")),
-            "dsl": arguments.get("dsl", self.agent_context.get("dsl", "triton"))
-        }
     
     def _build_history_compress(self, max_items: int = 10) -> List[Dict]:
         """构建压缩的历史记录"""
@@ -172,22 +159,6 @@ class ToolExecutor:
             for r in self.history[-max_items:]
         ]
     
-    def _load_tool_types(self) -> Dict[str, str]:
-        """加载工具类型映射（从统一的 tools.yaml）"""
-        try:
-            from akg_agents import get_project_root
-            tools_file = Path(get_project_root()) / "core_v2" / "config" / "tools.yaml"
-            with open(tools_file, "r", encoding="utf-8") as f:
-                tools_config = yaml.safe_load(f)
-            
-            tool_types = {}
-            for tool_name, tool_def in tools_config.get("tools", {}).items():
-                tool_types[tool_name] = tool_def.get("type", "basic_tool")
-            return tool_types
-        except Exception as e:
-            logger.warning(f"[ToolExecutor] 加载工具类型失败: {e}")
-            return {}
-    
     # ==================== 主入口 ====================
     
     async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -196,7 +167,10 @@ class ToolExecutor:
         
         流程:
         1. 解析参数中的动态表达式 (read_json_file 等)
-        2. 根据工具类型分派执行
+        2. 根据注册表分派执行:
+           - Agent 工具 → _execute_agent()
+           - Workflow 工具 → _execute_workflow()
+           - 其他工具 → ToolRegistry.aexecute()
         3. 只捕获关键报错（WARNING+ 日志 + stderr），避免污染上下文
         
         Args:
@@ -222,12 +196,8 @@ class ToolExecutor:
             elif tool_name in self.workflow_registry:
                 result = await self._execute_workflow(tool_name, resolved_args)
             else:
-                # 检查工具类型
-                tool_type = self.tool_types.get(tool_name, "basic_tool")
-                if tool_type == "domain_tool":
-                    result = await self._execute_domain_tool(tool_name, resolved_args)
-                else:
-                    result = await self._execute_basic_tool(tool_name, resolved_args)
+                # 使用 ToolRegistry 执行
+                result = await self._execute_via_registry(tool_name, resolved_args)
         
         # 保存完整错误日志到 cur_path（供事后调试，不注入 result）
         cur_path = resolved_args.get("cur_path", "")
@@ -248,6 +218,17 @@ class ToolExecutor:
         
         return result
     
+    async def _execute_via_registry(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """通过 ToolRegistry 执行工具（通用分发，不含领域逻辑）"""
+        tool_info = ToolRegistry.get_tool(tool_name)
+        if tool_info is None:
+            return {
+                "status": "error",
+                "output": "",
+                "error_information": f"未知工具: {tool_name}，可用: {ToolRegistry.list_names()}"
+            }
+        return await ToolRegistry.aexecute(tool_name, arguments)
+    
     # ==================== Agent 执行（通用） ====================
     
     async def _execute_agent(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -266,11 +247,6 @@ class ToolExecutor:
         try:
             agent_info = self.agent_registry[tool_name]
             agent_class = agent_info["agent_class"]
-            
-            # 合并默认参数（arguments 中已有的优先）
-            hw_params = self._get_hardware_params(arguments)
-            for k, v in hw_params.items():
-                arguments.setdefault(k, v)
             
             arguments.setdefault('task_id', self.agent_context.get('task_id', ''))
             arguments.setdefault('history_compress', self._build_history_compress())
@@ -463,16 +439,7 @@ class ToolExecutor:
     # ==================== Workflow 执行 ====================
     
     async def _execute_workflow(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        执行 Workflow
-        
-        Args:
-            tool_name: 工具名称
-            arguments: 工具参数（已解析表达式）
-        
-        Returns:
-            执行结果字典
-        """
+        """执行 Workflow（通用基类实现，子类可覆写以添加领域逻辑）"""
         try:
             workflow_info = self.workflow_registry[tool_name]
             workflow_class = workflow_info["workflow_class"]
@@ -480,74 +447,45 @@ class ToolExecutor:
             
             logger.info(f"[ToolExecutor] 开始执行 workflow: {workflow_name}")
             
-            # 获取 workflow 资源（通过回调）
             get_resources = self.agent_context.get("get_workflow_resources")
             if not get_resources:
-                raise ValueError("无法获取 workflow 资源，请检查 KernelAgent 配置")
+                raise ValueError("无法获取 workflow 资源，请检查配置")
             
             workflow_resources = get_resources()
-            
-            # 检查必需资源
             if not workflow_resources.get("agents"):
                 raise ValueError("Workflow 需要 agents 资源，但未提供")
             
-            logger.info(f"[ToolExecutor] Workflow 资源准备完成，agents: {list(workflow_resources['agents'].keys())}")
-            
-            # 让 workflow 类确保所需资源就位（如注册 worker 等）
             if hasattr(workflow_class, 'ensure_resources'):
                 await workflow_class.ensure_resources(workflow_resources, arguments)
-            
-            # 让 workflow 类预处理配置（如 cur_path 重定向 log_dir）
             if hasattr(workflow_class, 'prepare_config'):
                 workflow_class.prepare_config(workflow_resources, arguments)
             
-            # 创建 workflow 实例
             workflow = workflow_class(**workflow_resources)
-            
-            # 编译 workflow
             app = workflow.compile()
-            logger.info(f"[ToolExecutor] Workflow {workflow_name} 编译完成")
             
-            # 构建初始状态：优先由 workflow 类自行定义，否则使用通用构建
             if hasattr(workflow_class, 'build_initial_state'):
                 initial_state = workflow_class.build_initial_state(arguments, self.agent_context)
             else:
                 initial_state = self._build_workflow_state(arguments)
             
-            # 执行 workflow
             final_state = await app.ainvoke(initial_state)
-            
-            # 格式化结果：使用 workflow 自身的 format_result
             result = workflow.format_result(final_state)
             
-            logger.info(f"[ToolExecutor] Workflow {workflow_name} 执行完成: {result.get('status')}")
-            
+            logger.info(f"[ToolExecutor] Workflow {workflow_name} 完成: {result.get('status')}")
             return result
         
         except Exception as e:
             logger.error(f"[ToolExecutor] Workflow 执行失败: {tool_name}, {e}", exc_info=True)
-            return {
-                "status": "fail",
-                "error_information": f"Workflow 执行失败: {str(e)}",
-                "output": ""
-            }
+            return {"status": "fail", "error_information": f"Workflow 执行失败: {str(e)}", "output": ""}
     
     def _build_workflow_state(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        构建 workflow 初始状态（通用 fallback）
+        """构建 workflow 初始状态（通用 fallback）
         
         仅包含 BaseState 中定义的通用字段。
         领域专用 workflow 应实现 build_initial_state() 类方法，
         ToolExecutor 会优先调用它。
-        
-        Args:
-            arguments: 工具调用参数（已解析）
-        
-        Returns:
-            workflow 初始状态字典
         """
-        state = dict(arguments)  # 透传所有 LLM 提供的参数
-        # 补充 BaseState 通用字段的默认值
+        state = dict(arguments)
         state.setdefault("task_id", "0")
         state.setdefault("session_id", self.agent_context.get("session_id", ""))
         state.setdefault("iteration", 0)
@@ -555,69 +493,6 @@ class ToolExecutor:
         state.setdefault("max_iterations", 10)
         state.setdefault("agent_history", [])
         return state
-    
-    # ==================== Domain Tool / Basic Tool 执行 ====================
-    
-    async def _execute_domain_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """执行 domain_tool（如 verify_kernel, profile_kernel）"""
-        try:
-            from akg_agents.core_v2.tools import domain_tools
-            
-            tool_func = getattr(domain_tools, tool_name, None)
-            if not tool_func:
-                return {
-                    "status": "error",
-                    "output": "",
-                    "error_information": f"未知领域工具: {tool_name}"
-                }
-            
-            # 合并硬件默认参数（LLM 可能未显式传递 backend/arch 等）
-            hw_params = self._get_hardware_params(arguments)
-            for k, v in hw_params.items():
-                arguments.setdefault(k, v)
-            
-            # 通过 introspection 过滤参数
-            filtered_args = self._filter_func_args(tool_func, arguments)
-            
-            logger.info(f"[ToolExecutor] 执行 domain_tool: {tool_name}, hw_params: {hw_params}")
-            
-            # 执行工具函数（支持异步和同步）
-            if inspect.iscoroutinefunction(tool_func):
-                result = await tool_func(**filtered_args)
-            else:
-                result = tool_func(**filtered_args)
-            
-            if isinstance(result, dict) and "status" in result:
-                return result
-            
-            return {"status": "success", "output": str(result), "error_information": ""}
-        
-        except Exception as e:
-            logger.error(f"[ToolExecutor] Domain 工具执行失败: {tool_name}, {e}", exc_info=True)
-            return {"status": "error", "output": "", "error_information": str(e)}
-    
-    async def _execute_basic_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """执行 basic_tool"""
-        try:
-            from akg_agents.core_v2.tools import basic_tools
-            
-            tool_func = getattr(basic_tools, tool_name, None)
-            if not tool_func:
-                return {"status": "error", "output": "", "error_information": f"未知工具: {tool_name}"}
-            
-            # 通过 introspection 过滤参数
-            filtered_args = self._filter_func_args(tool_func, arguments)
-            
-            result = tool_func(**filtered_args)
-            
-            if isinstance(result, dict) and "status" in result:
-                return result
-            
-            return {"status": "success", "output": str(result), "error_information": ""}
-        
-        except Exception as e:
-            logger.error(f"[ToolExecutor] 工具执行失败: {tool_name}, {e}")
-            return {"status": "error", "output": "", "error_information": str(e)}
     
     # ==================== 工具方法 ====================
     

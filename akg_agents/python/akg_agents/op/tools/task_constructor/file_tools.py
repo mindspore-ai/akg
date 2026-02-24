@@ -13,10 +13,10 @@
 # limitations under the License.
 
 """
-任务构造器文件操作工具
+TaskConstructor 专用文件操作工具
 
-核心功能：文件读写、workspace 管理、目录浏览、函数提取、搜索。
-遵循 akg_agents v2 工具规范。
+这些工具的语义绑定在 TaskConstructor 的 workspace 概念上，
+不适合作为通用工具（通用文件操作在 core_v2/tools/basic_tools.py 中）。
 """
 
 import re
@@ -25,103 +25,22 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, List
 
-from akg_agents.op.tools.task_constructor.tool_registry import TaskToolRegistry
+from akg_agents.core_v2.tools.tool_registry import ToolRegistry
 from akg_agents.op.tools.task_constructor.path_utils import resolve_path
 
 logger = logging.getLogger(__name__)
-
-# 文件读取配置
-READ_FILE_MAX_LINES = 300
 
 
 # ==================== workspace 辅助 ====================
 
 def _save_to_workspace(workspace_dir: Path, filename: str, content: str) -> Path:
-    """保存内容到 workspace 目录"""
     path = workspace_dir / filename
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
 
 
-# ==================== 工具函数 ====================
-
-def read_file(
-    file_path: str,
-    offset: int = None,
-    limit: int = None,
-    workspace_dir: str = "",
-    output_dir: str = "",
-) -> Dict[str, Any]:
-    """读取文件内容（带行号）。超长文件自动截断。"""
-    ws = Path(workspace_dir) if workspace_dir else None
-    od = Path(output_dir) if output_dir else None
-    path = resolve_path(file_path, workspace_dir=ws, output_dir=od)
-
-    if not path.exists():
-        return {"status": "error", "output": "",
-                "error_information": f"文件不存在: {path}"}
-    if not path.is_file():
-        if path.is_dir():
-            return {"status": "error", "output": "",
-                    "error_information": f"这是目录: {path}\n请使用 scan_dir 查看。"}
-        return {"status": "error", "output": "", "error_information": f"不是文件: {path}"}
-
-    try:
-        all_lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-        total = len(all_lines)
-
-        if offset is not None:
-            start = max(int(offset) - 1, 0)
-            end = start + int(limit) if limit else min(start + READ_FILE_MAX_LINES, total)
-            lines = all_lines[start:end]
-            line_offset = start + 1
-        else:
-            if total > READ_FILE_MAX_LINES and limit is None:
-                lines = all_lines[:READ_FILE_MAX_LINES]
-                line_offset = 1
-            else:
-                lines = all_lines
-                line_offset = 1
-
-        numbered = [f"{line_offset + i:>5}| {line.rstrip()}" for i, line in enumerate(lines)]
-        content = "\n".join(numbered)
-
-        meta = f"[文件: {path.name}, 总行数: {total}]"
-        if offset is not None:
-            end_line = line_offset + len(lines) - 1
-            meta += f" [显示: 第{line_offset}-{end_line}行]"
-        elif total > READ_FILE_MAX_LINES and limit is None:
-            meta += (f" [已截断: 仅显示前{READ_FILE_MAX_LINES}行]"
-                     f" 提示: 用 assemble_task 的 source_files 参数直接引用此文件即可")
-
-        return {"status": "success", "output": f"{meta}\n{content}", "error_information": ""}
-    except Exception as e:
-        return {"status": "error", "output": "", "error_information": str(e)}
-
-
-def write_file(
-    file_path: str,
-    content: str,
-    overwrite: bool = True,
-    output_dir: str = "",
-) -> Dict[str, Any]:
-    """写入文件。相对路径写到 output 目录。"""
-    path = Path(file_path).expanduser()
-    if not path.is_absolute() and output_dir:
-        path = Path(output_dir) / path
-    path = path.resolve()
-
-    if path.exists() and not overwrite:
-        return {"status": "error", "output": "",
-                "error_information": f"文件已存在: {path}"}
-
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        return {"status": "success", "output": f"已写入: {path}", "error_information": ""}
-    except Exception as e:
-        return {"status": "error", "output": "", "error_information": str(e)}
+# ==================== TC 专用工具函数 ====================
 
 
 def append_to_file(
@@ -151,63 +70,6 @@ def append_to_file(
         return {"status": "success",
                 "output": f"已追加 {appended_lines} 行 -> {path.name} (现共 {total_lines} 行)",
                 "error_information": ""}
-    except Exception as e:
-        return {"status": "error", "output": "", "error_information": str(e)}
-
-
-def scan_dir(
-    path: str = ".",
-    max_depth: int = 3,
-    workspace_dir: str = "",
-    output_dir: str = "",
-) -> Dict[str, Any]:
-    """一步浏览目录: 列出文件 + Python 文件摘要"""
-    ws = Path(workspace_dir) if workspace_dir else None
-    od = Path(output_dir) if output_dir else None
-    dir_path = resolve_path(path, workspace_dir=ws, output_dir=od)
-    if not dir_path.exists():
-        return {"status": "error", "output": "", "error_information": f"路径不存在: {dir_path}"}
-    if dir_path.is_file():
-        return {"status": "error", "output": "",
-                "error_information": f"这是文件: {dir_path}\n请使用 read_file 读取。"}
-
-    try:
-        results = [f"[DIR] {dir_path}"]
-        py_files = []
-        other_files = []
-        for item in sorted(dir_path.rglob("*")):
-            rel = item.relative_to(dir_path)
-            if any(part.startswith('.') for part in rel.parts):
-                continue
-            if "__pycache__" in str(rel):
-                continue
-            if len(rel.parts) > max_depth:
-                continue
-            if item.is_file():
-                (py_files if item.suffix == ".py" else other_files).append(item)
-
-        if other_files:
-            results.append(f"\n Other files ({len(other_files)}):")
-            for f in other_files[:30]:
-                results.append(f"  {f.relative_to(dir_path)}")
-
-        results.append(f"\n Python files ({len(py_files)}):")
-        for f in py_files:
-            rel = f.relative_to(dir_path)
-            try:
-                content = f.read_text(encoding="utf-8")
-                lines = content.count("\n") + 1
-                defs = []
-                for m in re.finditer(r'^(class |def |async def )(\w+)', content, re.MULTILINE):
-                    defs.append(f"{m.group(1).strip()} {m.group(2)}")
-                defs_str = ", ".join(defs[:15])
-                if len(defs) > 15:
-                    defs_str += f" ... (+{len(defs)-15})"
-                results.append(f"  {rel} ({lines} lines) -> {defs_str}")
-            except (UnicodeDecodeError, PermissionError):
-                results.append(f"  {rel} (unreadable)")
-
-        return {"status": "success", "output": "\n".join(results), "error_information": ""}
     except Exception as e:
         return {"status": "error", "output": "", "error_information": str(e)}
 
@@ -340,44 +202,21 @@ def read_function(
         return {"status": "error", "output": "", "error_information": str(e)}
 
 
-def grep_search(
-    pattern: str,
-    path: str = ".",
-    glob: str = "*.py",
-    max_results: int = 50,
-    context_lines: int = 0,
+def save_to_workspace(
+    filename: str,
+    content: str,
     workspace_dir: str = "",
-    output_dir: str = "",
 ) -> Dict[str, Any]:
-    """在文件/目录中搜索正则"""
-    ws = Path(workspace_dir) if workspace_dir else None
-    od = Path(output_dir) if output_dir else None
-    search_path = resolve_path(path, workspace_dir=ws, output_dir=od)
-    results = []
+    """手动保存内容到工作区文件"""
+    if not workspace_dir:
+        return {"status": "error", "output": "",
+                "error_information": "workspace_dir 未配置"}
     try:
-        files = [search_path] if search_path.is_file() else sorted(search_path.rglob(glob))
-        regex = re.compile(pattern, re.IGNORECASE)
-        for f in files:
-            try:
-                file_lines = f.read_text(encoding="utf-8").splitlines()
-                for i, line in enumerate(file_lines):
-                    if regex.search(line):
-                        full_path = str(f.resolve()).replace('\\', '/')
-                        results.append(f"{full_path}:{i+1}: {line.rstrip()}")
-                        if context_lines > 0:
-                            start = max(0, i - context_lines)
-                            end = min(len(file_lines), i + context_lines + 1)
-                            for j in range(start, end):
-                                if j != i:
-                                    results.append(f"  {j+1}| {file_lines[j].rstrip()}")
-                        if len(results) >= max_results * (1 + context_lines * 2):
-                            break
-            except (UnicodeDecodeError, PermissionError):
-                continue
-            if len(results) >= max_results * (1 + context_lines * 2):
-                break
-        output = "\n".join(results) if results else "no matches"
-        return {"status": "success", "output": output, "error_information": ""}
+        ws_path = _save_to_workspace(Path(workspace_dir), filename, content)
+        file_lines = content.count("\n") + 1
+        return {"status": "success",
+                "output": f"[已保存到工作区] {ws_path} ({file_lines}行)",
+                "error_information": ""}
     except Exception as e:
         return {"status": "error", "output": "", "error_information": str(e)}
 
@@ -405,25 +244,6 @@ def list_workspace(
                 except Exception:
                     results.append(f"  {rel}")
         return {"status": "success", "output": "\n".join(results), "error_information": ""}
-    except Exception as e:
-        return {"status": "error", "output": "", "error_information": str(e)}
-
-
-def save_to_workspace(
-    filename: str,
-    content: str,
-    workspace_dir: str = "",
-) -> Dict[str, Any]:
-    """手动保存内容到工作区文件"""
-    if not workspace_dir:
-        return {"status": "error", "output": "",
-                "error_information": "workspace_dir 未配置"}
-    try:
-        ws_path = _save_to_workspace(Path(workspace_dir), filename, content)
-        file_lines = content.count("\n") + 1
-        return {"status": "success",
-                "output": f"[已保存到工作区] {ws_path} ({file_lines}行)",
-                "error_information": ""}
     except Exception as e:
         return {"status": "error", "output": "", "error_information": str(e)}
 
@@ -467,101 +287,77 @@ def multi_file_search(
 # ==================== 工具注册 ====================
 
 def _register_all():
-    """注册所有文件操作工具"""
+    """注册 TaskConstructor 专用工具到统一 ToolRegistry"""
 
-    TaskToolRegistry.register(
-        "read_file", "读取文件（带行号）。超过300行截断。支持 workspace/xxx.py 短路径。",
-        {"type": "object", "properties": {
-            "file_path": {"type": "string", "description": "文件路径"},
-            "offset": {"type": "integer", "description": "起始行号(1-based)"},
-            "limit": {"type": "integer", "description": "读取行数"},
-        }, "required": ["file_path"]},
-        read_file,
-    )
-
-    TaskToolRegistry.register(
-        "write_file", "创建/覆盖写入文件。",
-        {"type": "object", "properties": {
-            "file_path": {"type": "string", "description": "目标路径"},
-            "content": {"type": "string", "description": "要写入的内容"},
-            "overwrite": {"type": "boolean", "description": "覆盖已有文件"},
-        }, "required": ["file_path", "content"]},
-        write_file,
-    )
-
-    TaskToolRegistry.register(
-        "append_to_file", "【分段生成】追加内容到已有文件末尾。",
-        {"type": "object", "properties": {
+    ToolRegistry.register(
+        name="append_to_file",
+        description="【分段生成】追加内容到已有文件末尾。文件必须已存在。",
+        parameters={"type": "object", "properties": {
             "file_path": {"type": "string", "description": "目标文件路径"},
             "content": {"type": "string", "description": "要追加的内容"},
         }, "required": ["file_path", "content"]},
-        append_to_file,
+        func=append_to_file,
+        category="basic",
+        scopes=["task_constructor"],
     )
 
-    TaskToolRegistry.register(
-        "scan_dir", "一步浏览目录: 文件列表 + Python文件摘要。",
-        {"type": "object", "properties": {
-            "path": {"type": "string", "description": "目录路径"},
-            "max_depth": {"type": "integer", "description": "最大深度"},
-        }, "required": ["path"]},
-        scan_dir,
-    )
-
-    TaskToolRegistry.register(
-        "copy_to_workspace", "【推荐】复制源文件到工作区。",
-        {"type": "object", "properties": {
+    ToolRegistry.register(
+        name="copy_to_workspace",
+        description="【推荐】复制整个源文件到工作区，便于后续操作。",
+        parameters={"type": "object", "properties": {
             "file_path": {"type": "string", "description": "要复制的源文件路径"},
-            "workspace_name": {"type": "string", "description": "工作区文件名"},
+            "workspace_name": {"type": "string", "description": "工作区中的文件名（可选）"},
         }, "required": ["file_path"]},
-        copy_to_workspace,
+        func=copy_to_workspace,
+        category="basic",
+        scopes=["task_constructor"],
     )
 
-    TaskToolRegistry.register(
-        "read_function", "精确提取函数/类定义（AST解析）。自动保存到工作区。",
-        {"type": "object", "properties": {
-            "file_path": {"type": "string", "description": "文件路径"},
-            "function_name": {"type": "string", "description": "函数名或类名"},
+    ToolRegistry.register(
+        name="read_function",
+        description="精确提取函数/类定义（AST 解析）。自动保存到工作区。",
+        parameters={"type": "object", "properties": {
+            "file_path": {"type": "string", "description": "Python 文件路径"},
+            "function_name": {"type": "string", "description": "要提取的函数名或类名"},
         }, "required": ["file_path", "function_name"]},
-        read_function,
+        func=read_function,
+        category="code_analysis",
+        scopes=["task_constructor"],
     )
 
-    TaskToolRegistry.register(
-        "grep_search", "在文件/目录中搜索正则。",
-        {"type": "object", "properties": {
-            "pattern": {"type": "string", "description": "正则表达式"},
-            "path": {"type": "string", "description": "搜索路径"},
-            "glob": {"type": "string", "description": "文件过滤 glob"},
-            "max_results": {"type": "integer", "description": "最大结果数"},
-            "context_lines": {"type": "integer", "description": "上下文行数"},
-        }, "required": ["pattern"]},
-        grep_search,
-    )
-
-    TaskToolRegistry.register(
-        "save_to_workspace", "手动保存内容到工作区文件。",
-        {"type": "object", "properties": {
-            "filename": {"type": "string", "description": "工作区文件名"},
+    ToolRegistry.register(
+        name="save_to_workspace",
+        description="手动保存内容到工作区文件。",
+        parameters={"type": "object", "properties": {
+            "filename": {"type": "string", "description": "工作区中的文件名"},
             "content": {"type": "string", "description": "要保存的内容"},
         }, "required": ["filename", "content"]},
-        save_to_workspace,
+        func=save_to_workspace,
+        category="basic",
+        scopes=["task_constructor"],
     )
 
-    TaskToolRegistry.register(
-        "list_workspace", "查看工作区中已保存的所有文件。",
-        {"type": "object", "properties": {}, "required": []},
-        list_workspace,
+    ToolRegistry.register(
+        name="list_workspace",
+        description="查看工作区中已保存的所有文件及行数。",
+        parameters={"type": "object", "properties": {}, "required": []},
+        func=list_workspace,
+        category="basic",
+        scopes=["task_constructor"],
     )
 
-    TaskToolRegistry.register(
-        "multi_file_search", "搜索多个关键词，返回跨文件匹配。",
-        {"type": "object", "properties": {
+    ToolRegistry.register(
+        name="multi_file_search",
+        description="同时搜索多个关键词，返回跨文件的匹配结果。",
+        parameters={"type": "object", "properties": {
             "keywords": {"type": "array", "items": {"type": "string"}, "description": "关键词列表"},
             "path": {"type": "string", "description": "搜索根目录"},
-            "glob": {"type": "string", "description": "文件过滤"},
+            "glob": {"type": "string", "description": "文件过滤 glob 模式"},
         }, "required": ["keywords"]},
-        multi_file_search,
+        func=multi_file_search,
+        category="basic",
+        scopes=["task_constructor"],
     )
 
 
-# 模块加载时自动注册
 _register_all()

@@ -28,7 +28,6 @@ KernelAgent - 算子生成 ReAct Agent
 import logging
 from typing import Dict, Any, List, Optional
 from pathlib import Path
-import yaml
 
 from akg_agents.core_v2.agents.react_agent import ReActAgent
 from akg_agents.core_v2.agents.base import Jinja2TemplateWrapper
@@ -83,12 +82,21 @@ class KernelAgent(ReActAgent):
         self._skill_registry: Optional[SkillRegistry] = None
         self._skills_content: Optional[str] = None  # 缓存的 Skills 内容
         
-        # 调用父类初始化
+        # 调用父类初始化（创建通用 ToolExecutor）
         super().__init__(
             task_id=task_id,
             model_level=model_level,
             config=config,
             base_dir=base_dir
+        )
+        
+        # 替换为 OpToolExecutor（支持硬件参数注入和 op 领域 workflow）
+        from akg_agents.op.tools.op_tool_executor import OpToolExecutor
+        self.tool_executor = OpToolExecutor(
+            agent_registry=self.agent_registry,
+            workflow_registry=self.workflow_registry,
+            agent_context=self._get_agent_context(),
+            history=[],
         )
         
         # 初始化后加载 Skills
@@ -123,6 +131,7 @@ class KernelAgent(ReActAgent):
     
     def _get_agent_context(self) -> Dict[str, Any]:
         """获取 agent 上下文（传递给 ToolExecutor）"""
+        from akg_agents import get_project_root
         ctx = {
             "task_id": self.task_id,
             "dsl": self.dsl,
@@ -130,7 +139,7 @@ class KernelAgent(ReActAgent):
             "backend": self.backend,
             "arch": self.arch,
             "model_level": self.model_level or "standard",
-            # 提供获取 workflow 资源的回调
+            "skills_dir": str(Path(get_project_root()) / "op" / "resources" / "skills" / "kernel-agent"),
             "get_workflow_resources": lambda: self._get_workflow_resources()
         }
         # 透传 session_id，使 workflow 内的 agent 能通过流式输出推送到 CLI
@@ -140,28 +149,28 @@ class KernelAgent(ReActAgent):
         return ctx
     
     def _load_available_tools(self) -> List[Dict]:
-        """加载可用工具列表"""
-        from akg_agents import get_project_root
-        tools_file = Path(get_project_root()) / "core_v2" / "config" / "tools.yaml"
-        
-        with open(tools_file, "r", encoding="utf-8") as f:
-            tools_config = yaml.safe_load(f)
-        
-        available_tools = []
-        for tool_name, tool_def in tools_config.get("tools", {}).items():
-            func = tool_def.get("function", {})
-            if func:
-                available_tools.append({
-                    "type": "function",
-                    "function": func
-                })
-        return available_tools
+        """加载可用工具列表（从统一 ToolRegistry）"""
+        from akg_agents.core_v2.tools.tool_registry import ToolRegistry
+
+        # 触发工具注册（模块加载时自动注册）
+        import akg_agents.core_v2.tools.basic_tools   # noqa: F401
+        import akg_agents.op.tools.domain_tools        # noqa: F401
+
+        # 从 ToolRegistry 获取 kernel_agent scope 的工具（OpenAI function calling 格式）
+        return ToolRegistry.get_tools_for_prompt(
+            scope="kernel_agent", format="openai_json"
+        )
     
     # ==================== 覆盖可选方法 ====================
     
     def _load_agent_registry(self) -> Dict[str, Any]:
-        """加载 Agent 注册表（包含 op agents）"""
+        """加载 Agent 注册表（包含 op agents）
+
+        同时将 agent 工具注册到 ToolRegistry (category="agent", scopes=["kernel_agent"])，
+        使 scope 过滤能正确排除子 agent 对 agent 工具的访问，防止嵌套调用。
+        """
         from akg_agents.core_v2.agents.registry import AgentRegistry
+        from akg_agents.core_v2.tools.tool_registry import ToolRegistry
         
         # 导入 plan agent
         try:
@@ -198,10 +207,21 @@ class KernelAgent(ReActAgent):
                         "agent_class": agent_class,
                         "config": tool_def
                     }
+                    func_def = tool_def.get("function", {})
                     self.available_tools.append({
                         "type": "function",
-                        "function": tool_def.get("function", {})
+                        "function": func_def
                     })
+                    # 同步注册到 ToolRegistry（category="agent", scope 仅 kernel_agent）
+                    ToolRegistry.register(
+                        name=tool_name,
+                        description=func_def.get("description", ""),
+                        parameters=func_def.get("parameters", {}),
+                        func=lambda **kw: {"status": "error", "output": "",
+                                           "error_information": "Agent 工具需通过 ToolExecutor 执行"},
+                        category="agent",
+                        scopes=["kernel_agent"],
+                    )
                     logger.info(f"[KernelAgent] 注册工具: {tool_name} (来自 {agent_name})")
             except Exception as e:
                 logger.warning(f"[KernelAgent] 加载 Agent '{agent_name}' 失败: {e}", exc_info=True)
@@ -209,8 +229,13 @@ class KernelAgent(ReActAgent):
         return agent_registry
     
     def _load_workflow_registry(self) -> Dict[str, Any]:
-        """动态加载所有注册的 Workflow"""
+        """动态加载所有注册的 Workflow
+
+        同时将 workflow 工具注册到 ToolRegistry (category="workflow", scopes=["kernel_agent"])，
+        使 scope 过滤能正确排除子 agent 对 workflow 工具的访问，防止嵌套调用。
+        """
         from akg_agents.core_v2.workflows.registry import WorkflowRegistry
+        from akg_agents.core_v2.tools.tool_registry import ToolRegistry
         
         # 导入 workflows（触发 @register_workflow 装饰器）
         try:
@@ -243,11 +268,23 @@ class KernelAgent(ReActAgent):
                         "config": tool_def
                     }
                     
+                    func_def = tool_def.get("function", {})
                     # 添加到 available_tools
                     self.available_tools.append({
                         "type": "function",
-                        "function": tool_def.get("function", {})
+                        "function": func_def
                     })
+                    
+                    # 同步注册到 ToolRegistry（category="workflow", scope 仅 kernel_agent）
+                    ToolRegistry.register(
+                        name=tool_name,
+                        description=func_def.get("description", ""),
+                        parameters=func_def.get("parameters", {}),
+                        func=lambda **kw: {"status": "error", "output": "",
+                                           "error_information": "Workflow 工具需通过 ToolExecutor 执行"},
+                        category="workflow",
+                        scopes=["kernel_agent"],
+                    )
                     
                     logger.info(f"[KernelAgent] 注册工具: {tool_name} (来自 workflow {workflow_name})")
             
