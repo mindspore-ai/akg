@@ -72,6 +72,8 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
   // Cache for dependent groups (precomputed once, used many times)
   std::unordered_map<unsigned, std::vector<unsigned>> dependentGroupsCache;
 
+  OperatorTemplate funcOperatorType = OperatorTemplate::Default;
+
  private:
   void collectLoadNodeIdsAndNonForNodes(
       Value memref, const llvm::SetVector<unsigned> &nodeIds, llvm::SmallVector<unsigned> &loadNodeIds,

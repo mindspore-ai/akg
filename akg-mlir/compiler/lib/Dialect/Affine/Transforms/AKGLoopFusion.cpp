@@ -67,11 +67,12 @@ struct AKGLoopFusion : public mlir::impl::AKGLoopFusionBase<AKGLoopFusion> {
   void runOnOperation() override;
 
  private:
-  void runOnBlock(mlir::Block *block);
+  void runOnBlock(mlir::Block *block, mlir::OperatorTemplate &curOpTemplate);
   void runPreProcess();
 
   void replaceDimWithPrimes(mlir::func::FuncOp funcOp);
   void restoreDimFromPrimes(mlir::func::FuncOp funcOp);
+  void runOnLoopFusion(mlir::func::FuncOp funcOp);
 
   std::optional<llvm::SmallVector<std::string>> getSymShapeAttrFromValue(mlir::Value source);
   std::optional<int64_t> getConstantDimIndex(mlir::Value dimIndex);
@@ -320,12 +321,14 @@ void AKGLoopFusion::restoreDimFromPrimes(mlir::func::FuncOp funcOp) {
   primeToDimMap.clear();
 }
 
-void AKGLoopFusion::runOnBlock(mlir::Block *block) {
+void AKGLoopFusion::runOnBlock(mlir::Block *block, mlir::OperatorTemplate &curOpTemplate) {
   // build dependence graph
   auto dependenceGraph = mlir::akg::MemRefDependenceGraphForFusion(block);
   if (!dependenceGraph.init()) {
     return;
   }
+
+  curOpTemplate = dependenceGraph.funcOperatorType;
 
   if (printFusionInfo) {
     dependenceGraph.dump();
@@ -422,14 +425,32 @@ void AKGLoopFusion::runOnOperation() {
 
   runPreProcess();
 
-  for (mlir::Region &region : funcOp->getRegions()) {
-    for (mlir::Block &block : region.getBlocks()) {
-      runOnBlock(&block);
-    }
-  }
+  runOnLoopFusion(funcOp);
 
   // Restore original dim values after fusion
   restoreDimFromPrimes(funcOp);
+}
+
+void AKGLoopFusion::runOnLoopFusion(mlir::func::FuncOp funcOp) {
+  mlir::OperatorTemplate curOpTemplate = mlir::OperatorTemplate::Default;
+  for (mlir::Region &region : funcOp->getRegions()) {
+    for (mlir::Block &block : region.getBlocks()) {
+      mlir::OperatorTemplate opTemplate;
+      runOnBlock(&block, opTemplate);
+      if (opTemplate > curOpTemplate) {
+        curOpTemplate = opTemplate;
+      }
+    }
+  }
+
+  // modify func operatorType
+  auto iter = mlir::operatorTemplateMap.find((int)curOpTemplate);
+  if (iter == mlir::operatorTemplateMap.end()) {
+    return;
+  }
+  mlir::OpBuilder builder(funcOp.getContext());
+  mlir::Attribute opType = builder.getStringAttr(iter->second);
+  funcOp->setAttr(mlir::kOperatorTypeStr, opType);
 }
 
 std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopFusionPass() {
