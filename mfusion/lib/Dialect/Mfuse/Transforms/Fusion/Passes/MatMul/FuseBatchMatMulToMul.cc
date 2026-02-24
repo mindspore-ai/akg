@@ -18,8 +18,11 @@
 
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseBatchMatMulToMul.h"
 
+#include <optional>
+
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
+#include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
 #include "mfusion/Support/Logging.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -36,9 +39,8 @@ namespace mlir {
 namespace mfuse {
 namespace {
 
-// Constants for matmul-to-mul fusion
-constexpr int64_t kMinRankForMatmul = 2;  // Matmul requires at least rank 2
-constexpr int64_t kKDimensionSize = 1;    // K dimension must be 1 for matmul->mul fusion
+/// K dimension must be 1 for matmul->mul fusion (use OpConstants kDim1 for value 1).
+constexpr int64_t kKDimensionSize = static_cast<int64_t>(kDim1);
 
 /// Check if the k dimension is 1 for matmul operations.
 /// For matmul A @ B: k is the contracting dimension (last-two-dims semantics).
@@ -47,7 +49,7 @@ constexpr int64_t kKDimensionSize = 1;    // K dimension must be 1 for matmul->m
 /// Returns true if k=1 for both input and weight.
 static bool isKDimensionOne(RankedTensorType inputType, RankedTensorType weightType, bool transposeA, bool transposeB) {
   // Ensure both types have at least rank 2
-  if (inputType.getRank() < kMinRankForMatmul || weightType.getRank() < kMinRankForMatmul) {
+  if (inputType.getRank() < kDim2 || weightType.getRank() < kDim2) {
     return false;
   }
   // K is always one of the last two dimensions (batch matmul semantics)
@@ -90,33 +92,53 @@ static bool areDataTypesSupported(Type inputType, Type weightType, Type outputTy
   return allF16OrBF16;
 }
 
+/// Compute product of shape dimensions; returns -1 if any dim is non-static or negative.
+static int64_t getShapeElementCount(ArrayRef<int64_t> shape) {
+  int64_t count = 1;
+  for (int64_t d : shape) {
+    if (d < 0) return -1;
+    count *= d;
+  }
+  return count;
+}
+
 /// Helper to create reshape for transposed input/weight in BatchMatMul.
-/// For transposeA: swaps last two dims, sets k=1.
-/// For transposeB: swaps last two dims, sets k=1.
-static Value createReshapeForBatchMatMulTranspose(
+/// With transpose, the contracting dimension K=1 is one of the last two dims.
+/// We need [..., M, 1] for left (transposeA) and [..., 1, N] for right (transposeB)
+/// so that mul broadcasts to [..., M, N]. M/N are inferred from the non-K dimension.
+/// Returns std::nullopt if input/output element count would differ (invalid reshape).
+static std::optional<Value> createReshapeForBatchMatMulTranspose(
     Value input, RankedTensorType inputType, bool isTransposeA,
     Location loc, PatternRewriter &rewriter) {
   auto shape = inputType.getShape();
-  if (shape.size() < kMinRankForMatmul) {
-    return input;  // Cannot transpose if rank < kMinRankForMatmul
+  if (shape.size() < kDim2) {
+    return std::make_optional(input);
   }
-  
+  const size_t rank = shape.size();
+  const int64_t lastDim = shape[rank - 1];
+  const int64_t secondLastDim = shape[rank - 2];
+  const int64_t nonKDim = (lastDim == kKDimensionSize) ? secondLastDim : lastDim;
+
   SmallVector<int64_t> newShape;
-  // Keep batch dimensions (all except last 2)
-  for (size_t i = 0; i < shape.size() - kMinRankForMatmul; ++i) {
+  for (size_t i = 0; i < rank - kDim2; ++i) {
     newShape.push_back(shape[i]);
   }
-  
   if (isTransposeA) {
-    // Swap: [..., M, K] -> [..., K, M] where K=1
-    newShape.push_back(shape[shape.size() - 1]);  // K -> last
-    newShape.push_back(kKDimensionSize);           // k dimension = 1
+    newShape.push_back(nonKDim);
+    newShape.push_back(kKDimensionSize);
   } else {
-    // transposeB: [..., K, N] -> [..., 1, N] where K=1
-    newShape.push_back(kKDimensionSize);           // k dimension = 1
-    newShape.push_back(shape[shape.size() - 1]);  // N -> last
+    newShape.push_back(kKDimensionSize);
+    newShape.push_back(nonKDim);
   }
-  
+
+  const int64_t inCount = getShapeElementCount(shape);
+  const int64_t outCount = getShapeElementCount(newShape);
+  if (inCount < 0 || outCount < 0 || inCount != outCount) {
+    MLOG(DEBUG) << "FuseBatchMatMulToMul: skip reshape (element count mismatch) in=" << inCount
+                << " out=" << outCount;
+    return std::nullopt;
+  }
+
   auto newInputType = RankedTensorType::get(newShape, inputType.getElementType());
   auto shapeType = RankedTensorType::get(
       {static_cast<int64_t>(newShape.size())}, rewriter.getIntegerType(64));
@@ -126,9 +148,17 @@ static Value createReshapeForBatchMatMulTranspose(
 }
 
 /// Helper to create a 2D reshape (e.g. for MatmulOp transpose case).
-static Value createReshape2D(Value input, RankedTensorType inputType,
-                             int64_t dim0, int64_t dim1, Location loc,
-                             PatternRewriter &rewriter) {
+/// Returns std::nullopt if input/output element count would differ.
+static std::optional<Value> createReshape2D(Value input, RankedTensorType inputType,
+                                            int64_t dim0, int64_t dim1, Location loc,
+                                            PatternRewriter &rewriter) {
+  const int64_t inCount = getShapeElementCount(inputType.getShape());
+  const int64_t outCount = (dim0 < 0 || dim1 < 0) ? -1 : (dim0 * dim1);
+  if (inCount < 0 || outCount < 0 || inCount != outCount) {
+    MLOG(DEBUG) << "FuseBatchMatMulToMul: skip 2D reshape (element count mismatch) in=" << inCount
+                << " out=" << outCount;
+    return std::nullopt;
+  }
   SmallVector<int64_t> newShape = {dim0, dim1};
   auto newResultType = RankedTensorType::get(newShape, inputType.getElementType());
   auto shapeType = RankedTensorType::get(
@@ -172,21 +202,24 @@ public:
     Value input = op.getSelf();
     Value weight = op.getMat2();
     
-    // Handle transpose by inserting reshape if needed
     if (op.getTransposeA()) {
-      input = createReshapeForBatchMatMulTranspose(
+      auto reshaped = createReshapeForBatchMatMulTranspose(
           input, inputType, true, op.getLoc(), rewriter);
+      if (!reshaped.has_value()) {
+        return failure();
+      }
+      input = *reshaped;
     }
-    
     if (op.getTransposeB()) {
-      weight = createReshapeForBatchMatMulTranspose(
+      auto reshaped = createReshapeForBatchMatMulTranspose(
           weight, weightType, false, op.getLoc(), rewriter);
+      if (!reshaped.has_value()) {
+        return failure();
+      }
+      weight = *reshaped;
     }
-    
-    // Create Mul operation
+
     Value mulResult = rewriter.create<MulOp>(op.getLoc(), outputType, input, weight);
-    
-    // Replace the original BatchMatmulOp
     rewriter.replaceOp(op, mulResult);
     MLOG(DEBUG) << "FuseBatchMatMulToMul: replaced BatchMatmulOp@" << op.getLoc()
                 << " with MulOp (k=1)";
@@ -228,25 +261,32 @@ public:
     Value input = op.getSelf();
     Value weight = op.getOther();
 
-    // Handle transpose by inserting reshape if needed
+    // Handle transpose by inserting reshape if needed.
+    // With K=1, the contracting dim is 1; the other last-two dim is M (self) or N (other).
+    // Works for both: permuted (1,3)/(4,1) from FuseMatmulTransposeWeight and unpermuted (3,1)/(1,4).
     if (op.getTransX1()) {
-      // Insert reshape for transposed input: [M, K] -> [M, 1] where K=1
       auto inputShape = inputType.getShape();
-      if (inputShape.size() < kMinRankForMatmul) {
-        return failure();  // Safety check
+      if (inputShape.size() < kDim2) {
+        return failure();
       }
-      input = createReshape2D(input, inputType, inputShape[0], kKDimensionSize,
-                             op.getLoc(), rewriter);
+      int64_t m = (inputShape[0] == kKDimensionSize) ? inputShape[1] : inputShape[0];
+      auto reshaped = createReshape2D(input, inputType, m, kKDimensionSize, op.getLoc(), rewriter);
+      if (!reshaped.has_value()) {
+        return failure();
+      }
+      input = *reshaped;
     }
-
     if (op.getTransX2()) {
-      // Insert reshape for transposed weight: [K, N] -> [1, N] where K=1
       auto weightShape = weightType.getShape();
-      if (weightShape.size() < kMinRankForMatmul) {
-        return failure();  // Safety check
+      if (weightShape.size() < kDim2) {
+        return failure();
       }
-      weight = createReshape2D(weight, weightType, kKDimensionSize, weightShape[1],
-                              op.getLoc(), rewriter);
+      int64_t n = (weightShape[1] == kKDimensionSize) ? weightShape[0] : weightShape[1];
+      auto reshaped = createReshape2D(weight, weightType, kKDimensionSize, n, op.getLoc(), rewriter);
+      if (!reshaped.has_value()) {
+        return failure();
+      }
+      weight = *reshaped;
     }
 
     // Create Mul operation
