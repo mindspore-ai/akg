@@ -12,17 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-任务构造器工具集
+from akg_agents.core_v2.tools.tool_registry import ToolRegistry, ToolInfo
 
-包含代码操作工具和文件操作工具，供 TaskConstructor agent 内部 ReAct 循环使用。
-所有工具通过统一的 ToolRegistry 注册和管理。
-"""
-
-from akg_agents.core_v2.tools.tool_registry import ToolRegistry
-
-# 导入以触发工具注册（模块加载时自动注册到 ToolRegistry）
-import akg_agents.op.tools.task_constructor.code_tools  # noqa: F401
-import akg_agents.op.tools.task_constructor.file_tools  # noqa: F401
-
-__all__ = ["ToolRegistry"]
+__all__ = ["ToolRegistry", "ToolInfo"]

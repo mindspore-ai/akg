@@ -21,10 +21,13 @@
   - ast_utils: AST 解析（函数提取、依赖追踪）
   - code_cleanup: 代码清理（import 去重、私有模块移除）
   - assembly: 任务装配、优化、验证
-  - execution: 代码执行、对比测试、补丁应用
+  - execution: 代码执行、对比测试（函数保留，不再注册为工具）
+
+注意: apply_patch 已由 core_v2 的 edit_file 替代，
+      run_code 已由 core_v2 的 execute_script（code 参数）替代。
 """
 
-from akg_agents.op.tools.task_constructor.tool_registry import TaskToolRegistry
+from akg_agents.core_v2.tools.tool_registry import ToolRegistry
 from akg_agents.op.tools.task_constructor.assembly import (
     trace_dependencies,
     assemble_task,
@@ -33,20 +36,20 @@ from akg_agents.op.tools.task_constructor.assembly import (
 )
 from akg_agents.op.tools.task_constructor.execution import (
     test_with_reference,
-    run_code,
-    apply_patch,
 )
 
 
 def _register_all():
-    """注册所有代码操作工具到 TaskToolRegistry"""
+    """注册 TaskConstructor 代码操作工具到统一 ToolRegistry"""
 
-    TaskToolRegistry.register(
-        "trace_dependencies",
-        "【依赖追踪】给定入口函数名，自动找出同文件内所有被调用的函数。\n"
-        "通过分析文件 import 自动识别需要内联的外部模块调用，附带来源模块路径。\n"
-        "返回完整的依赖链、建议的 functions 列表、以及需要处理的外部依赖。",
-        {
+    ToolRegistry.register(
+        name="trace_dependencies",
+        description=(
+            "【依赖追踪】给定入口函数名，自动找出同文件内所有被调用的函数。\n"
+            "通过分析文件 import 自动识别需要内联的外部模块调用，附带来源模块路径。\n"
+            "返回完整的依赖链、建议的 functions 列表、以及需要处理的外部依赖。"
+        ),
+        parameters={
             "type": "object",
             "properties": {
                 "file_path": {"type": "string", "description": "workspace 中的文件路径"},
@@ -57,18 +60,22 @@ def _register_all():
             },
             "required": ["file_path", "entry_functions"],
         },
-        trace_dependencies,
+        func=trace_dependencies,
+        category="code_analysis",
+        scopes=["task_constructor"],
     )
 
-    TaskToolRegistry.register(
-        "assemble_task",
-        "【选择性拼装】从 workspace 源文件中提取指定函数 + Model/get_inputs → 自包含任务文件。\n"
-        "三种用法:\n"
-        '  完整嵌入: source_files=["workspace/file.py"]\n'
-        '  选择函数: source_files=[{"path": "workspace/file.py", "functions": ["func1"]}]\n'
-        '  排除函数: source_files=[{"path": "workspace/file.py", "exclude_functions": ["unused1"]}]\n'
-        "工具用 AST 解析精确提取/排除函数，自动包含 import。",
-        {
+    ToolRegistry.register(
+        name="assemble_task",
+        description=(
+            "【选择性拼装】从 workspace 源文件中提取指定函数 + Model/get_inputs → 自包含任务文件。\n"
+            "三种用法:\n"
+            '  完整嵌入: source_files=["workspace/file.py"]\n'
+            '  选择函数: source_files=[{"path": "workspace/file.py", "functions": ["func1"]}]\n'
+            '  排除函数: source_files=[{"path": "workspace/file.py", "exclude_functions": ["unused1"]}]\n'
+            "工具用 AST 解析精确提取/排除函数，自动包含 import。"
+        ),
+        parameters={
             "type": "object",
             "properties": {
                 "source_files": {"type": "array", "description": "源文件列表"},
@@ -81,13 +88,15 @@ def _register_all():
             },
             "required": ["source_files", "model_code", "get_inputs_code", "get_init_inputs_code"],
         },
-        assemble_task,
+        func=assemble_task,
+        category="code_analysis",
+        scopes=["task_constructor"],
     )
 
-    TaskToolRegistry.register(
-        "validate_task",
-        "预运行验证任务代码。检查: 实例化→forward→NaN/Inf→一致性",
-        {
+    ToolRegistry.register(
+        name="validate_task",
+        description="预运行验证任务代码。检查: 实例化 -> forward -> NaN/Inf -> 一致性。",
+        parameters={
             "type": "object",
             "properties": {
                 "task_code": {"type": "string", "description": "任务代码"},
@@ -96,13 +105,15 @@ def _register_all():
             },
             "required": [],
         },
-        validate_task,
+        func=validate_task,
+        category="code_analysis",
+        scopes=["task_constructor"],
     )
 
-    TaskToolRegistry.register(
-        "test_with_reference",
-        "【正确性验证】将 Model 输出与 reference 函数对比，支持多组输入。",
-        {
+    ToolRegistry.register(
+        name="test_with_reference",
+        description="【正确性验证】将 Model 输出与 reference 函数对比，支持多组输入。",
+        parameters={
             "type": "object",
             "properties": {
                 "task_file": {"type": "string", "description": "任务文件路径"},
@@ -113,13 +124,15 @@ def _register_all():
             },
             "required": ["reference_code"],
         },
-        test_with_reference,
+        func=test_with_reference,
+        category="code_analysis",
+        scopes=["task_constructor"],
     )
 
-    TaskToolRegistry.register(
-        "optimize_task",
-        "优化清理任务代码：去重 import、移除无用代码、格式化。在 validate 通过后、finish 前调用。",
-        {
+    ToolRegistry.register(
+        name="optimize_task",
+        description="优化清理任务代码：去重 import、移除无用代码、格式化。在 validate 通过后、finish 前调用。",
+        parameters={
             "type": "object",
             "properties": {
                 "task_file": {"type": "string", "description": "任务文件路径"},
@@ -127,39 +140,10 @@ def _register_all():
             },
             "required": [],
         },
-        optimize_task,
-    )
-
-    TaskToolRegistry.register(
-        "run_code",
-        "运行 Python 代码。传入 code 或 file_path。",
-        {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string", "description": "Python 代码"},
-                "file_path": {"type": "string", "description": "Python 文件路径"},
-                "timeout": {"type": "integer", "description": "超时秒数"},
-            },
-            "required": [],
-        },
-        run_code,
-    )
-
-    TaskToolRegistry.register(
-        "apply_patch",
-        "修改文件: 查找 old_string 替换为 new_string。",
-        {
-            "type": "object",
-            "properties": {
-                "file_path": {"type": "string", "description": "文件路径"},
-                "old_string": {"type": "string", "description": "要替换的文本（空=创建文件）"},
-                "new_string": {"type": "string", "description": "替换后文本"},
-            },
-            "required": ["file_path", "old_string", "new_string"],
-        },
-        apply_patch,
+        func=optimize_task,
+        category="code_analysis",
+        scopes=["task_constructor"],
     )
 
 
-# 模块加载时自动注册
 _register_all()
