@@ -24,7 +24,7 @@ import subprocess
 import shutil
 
 from .utils.cpu_profiling_wrapper import wrap_timer_func
-from .backends.ascend import run_akg_opt
+from .backends.ascend import run_akg_opt, write_code, get_block_dim_from_arch, ascend_compile
 
 HOST_SHAPES = "hostShapes"
 DEVICE_SHAPES = "deviceShapes"
@@ -35,35 +35,6 @@ DYNAMIC = "is_dynamic"
 SHA256 = "sha256"
 KERNEL_NAME = "kernelName"
 STATIC_TILE_IMPL = "StaticTileImpl"
-
-def set_ascend_info(core_type, title_dict):
-    """Set ascend info."""
-    if len(core_type) == 0:
-        return
-    if core_type == "MIX":
-        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF"
-        title_dict["coreType"] = "MIX"
-        title_dict["intercoreSync"] = 1
-        title_dict["taskRation"] = "1:2"
-    elif core_type == "AiCore":
-        title_dict["coreType"] = "AiCore"
-        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AICUBE"
-    elif core_type == "VectorCore":
-        title_dict["coreType"] = "VectorCore"
-        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AIVEC"
-
-def write_code(js_dict, fname):
-    """
-    Export kernel config files.
-
-    Args:
-        js_dict: dict of kernel information.
-        fname: the name of json file to be generated.
-    """
-    if os.path.exists(fname):
-        os.remove(fname)
-    with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o400), "w") as f:
-        json.dump(js_dict, f, sort_keys=True, indent=4, separators=(",", ":"))
 
 def get_kernel_meta_path():
     """Return the PATH of kernel meta files."""
@@ -153,6 +124,7 @@ class AkgMlirDriver:
                 compute_capability = target_info.get("compute_capability", "7.0")
                 self.target_info = "v100" if compute_capability == "7.0" else "a100"
                 self.arch = target_info.get("arch", "")
+            self.block_dim = get_block_dim_from_arch(self.arch)
         self.dynamic_shape = dynamic_shape
 
     def compile(self):
@@ -285,10 +257,6 @@ class AkgMlirDriver:
         input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
         out_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
 
-        dump_log_path = None
-        if self.dump_ir:
-            dump_log_path = os.path.join(self.output_dir, kernel_name + "_dump_ascend_state1.log")
-
         run_akg_opt(
             input_file=input_file,
             output_file=out_file,
@@ -296,74 +264,23 @@ class AkgMlirDriver:
             dyn_shape=dyn_shape,
             enable_loop_fusion=self.enable_loop_fusion,
             arch=self.arch,
-            dump_ir=self.dump_ir,
             mlir_timing=self.mlir_timing,
-            dump_log_path=dump_log_path
         )
-
-    def _dump_ascend_meta_data(self, block_dim, kernel_name):
-        """dump ascend meta data."""
-        logging.info("dump ascend meta data:")
-        title_dict = {}
-        # ascend info
-        set_ascend_info("VectorCore", title_dict)
-        title_dict["kernelName"] = kernel_name
-        # thread info
-        title_dict["blockDim"] = block_dim
-        # bin file info
-        bin_file_suffix = ".so"
-        title_dict["binFileSuffix"] = bin_file_suffix
-        bin_file_name = "lib" + kernel_name
-        title_dict["binFileName"] = bin_file_name
-        # sha256
-        buf_size = 64 * 1024  # once read 64kb
-        sha256 = hashlib.sha256()
-        kernel_file_name = os.path.join(self.output_dir, bin_file_name + bin_file_suffix)
-        with open(kernel_file_name, "rb") as kf:
-            while True:
-                data = kf.read(buf_size)
-                if not data:
-                    break
-                sha256.update(data)
-        title_dict["sha256"] = sha256.hexdigest()  # sha256
-
-        json_file = os.path.join(self.output_dir, kernel_name + ".json")
-        write_code(title_dict, json_file)
 
     def _run_ascend_generate_binary(self, kernel_name):
         """compile mlir to binary for ascend."""
         logging.info("bishengir-compile code generator:")
-        npu_compiler_path = get_npucompiler_path()
         input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
         so_file = os.path.join(self.output_dir, kernel_name + ".so")
-        cmd = [
-            npu_compiler_path,
-            input_file,
-            "-enable-hivm-compile=true",
-            "-enable-bin-relocation=false",
-            "-block-dim=40",
-            "-enable-auto-multi-buffer=true",
-            "-o",
-            so_file,
-        ]
-
-        if self.enable_loop_fusion:
-            cmd.append("-enable-hfusion-compile=false")
-        else:
-            cmd.append("-enable-hfusion-compile=true")
-
         dump_log = os.path.join(self.output_dir, kernel_name + "_dump_bishengir.log")
-        with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
-            try:
-                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-                f.write(result.stderr)
-            except subprocess.CalledProcessError as e:
-                logging.error("run bishengir-compile failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
-                f.write(str(e))
-                raise RuntimeError("generate ascend binary: " + input_file + "!\n") from e
-        logging.info("generate ascend binary success")
 
-        self._dump_ascend_meta_data(block_dim=20, kernel_name=self.kernel_name)
+        ascend_compile(
+            input_file=input_file,
+            output_so_path=so_file,
+            block_dim=self.block_dim,
+            enable_loop_fusion=self.enable_loop_fusion,
+            dump_log_path=dump_log,
+        )
 
     def _run_mlir_to_llvm(self, kernel_name):
         """compile mlir to llvm."""
