@@ -164,6 +164,8 @@ static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncO
 
 // Attribute marking helpers
 static bool isInnermostScfLoop(mlir::scf::ForOp forOp);
+static Value stripIndexLikeCasts(Value value);
+static bool isTransposeLikeInnermostLoop(mlir::scf::ForOp forOp);
 static ReduceDirection getReduceType(mlir::scf::ForOp loop);
 static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &builder, int64_t vectorSize);
 static void setBlockDimAttribute(func::FuncOp funcOp, OpBuilder &builder);
@@ -1476,6 +1478,85 @@ static bool isInnermostScfLoop(mlir::scf::ForOp forOp) {
   return true;
 }
 
+// Strip index cast chains so index comparison is stable across trivial cast rewrites.
+static Value stripIndexLikeCasts(Value value) {
+  Value cur = value;
+  while (true) {
+    if (auto castOp = cur.getDefiningOp<arith::IndexCastOp>()) {
+      cur = castOp.getIn();
+      continue;
+    }
+    if (auto castUIOp = cur.getDefiningOp<arith::IndexCastUIOp>()) {
+      cur = castUIOp.getIn();
+      continue;
+    }
+    return cur;
+  }
+}
+
+// Detect transpose-like loops in lowered form:
+// exactly one load and one store, same index multiset, different index order.
+static bool isTransposeLikeInnermostLoop(mlir::scf::ForOp forOp) {
+  memref::LoadOp loadOp;
+  memref::StoreOp storeOp;
+
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (auto curLoad = dyn_cast<memref::LoadOp>(&op)) {
+      if (loadOp) {
+        return false;
+      }
+      loadOp = curLoad;
+      continue;
+    }
+    if (auto curStore = dyn_cast<memref::StoreOp>(&op)) {
+      if (storeOp) {
+        return false;
+      }
+      storeOp = curStore;
+    }
+  }
+
+  if (!loadOp || !storeOp) {
+    return false;
+  }
+
+  if (storeOp.getValue() != loadOp.getResult()) {
+    return false;
+  }
+
+  ValueRange loadIndices = loadOp.getIndices();
+  ValueRange storeIndices = storeOp.getIndices();
+  if (loadIndices.size() != storeIndices.size() || loadIndices.empty()) {
+    return false;
+  }
+
+  bool hasDifferentOrder = false;
+  llvm::DenseMap<Value, int64_t> loadIndexCount;
+  llvm::DenseMap<Value, int64_t> storeIndexCount;
+
+  for (size_t i = 0; i < loadIndices.size(); ++i) {
+    Value loadIdx = stripIndexLikeCasts(loadIndices[i]);
+    Value storeIdx = stripIndexLikeCasts(storeIndices[i]);
+    ++loadIndexCount[loadIdx];
+    ++storeIndexCount[storeIdx];
+    if (loadIdx != storeIdx) {
+      hasDifferentOrder = true;
+    }
+  }
+
+  if (!hasDifferentOrder || loadIndexCount.size() != storeIndexCount.size()) {
+    return false;
+  }
+
+  for (const auto &it : loadIndexCount) {
+    if (storeIndexCount.lookup(it.first) != it.second) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // Detect reduction type by scanning all ops inside the loop.
 static ReduceDirection getReduceType(mlir::scf::ForOp loop) {
   if (!loop) {
@@ -1513,6 +1594,10 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
   auto reduceType = ReduceDirection::UNKNOWN;
   funcOp->walk([&](mlir::scf::ForOp forOp) {
     if (isInnermostScfLoop(forOp)) {
+      if (isTransposeLikeInnermostLoop(forOp)) {
+        return;
+      }
+
       // set vector attribute to innermost loops
       if (!forOp->hasAttr(kReductionLoopAttr)) {
         forOp->setAttr(kVectorAttr, builder.getI64IntegerAttr(vectorSize));
