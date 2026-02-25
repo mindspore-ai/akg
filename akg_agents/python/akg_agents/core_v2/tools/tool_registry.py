@@ -70,7 +70,7 @@ class ToolInfo:
             - "basic": 基础文件/IO 操作
             - "domain": 领域专用工具（verify_kernel, profile_kernel 等）
             - "code_analysis": 代码分析工具（trace_dependencies, assemble_task 等）
-            - "execution": 代码执行工具（run_code, execute_script 等）
+            - "execution": 代码执行工具（execute_script 等）
             - "interaction": 交互工具（ask_user, finish 等）
             - "agent": Agent 调用工具（call_kernel_gen 等）
             - "workflow": Workflow 调用工具（use_xxx_workflow 等）

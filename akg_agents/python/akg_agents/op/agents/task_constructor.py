@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 # 导入统一工具注册表 + 触发工具注册（模块加载时自动注册所有工具）
 from akg_agents.core_v2.tools.tool_registry import ToolRegistry
+import akg_agents.core_v2.tools.basic_tools                    # noqa: F401 - 触发注册
 from akg_agents.op.tools.task_constructor import code_tools   # noqa: F401 - 触发注册
 from akg_agents.op.tools.task_constructor import file_tools    # noqa: F401 - 触发注册
 
@@ -384,8 +385,8 @@ class TaskConstructor(AgentBase):
             f"4. `trace_dependencies` 自动追踪全部依赖 [关键]\n"
             f"5. 处理外部依赖（`read_function` 从来源提取 → 内联到 helper_code）\n"
             f"6. `assemble_task` 构建任务文件\n"
-            f"7. `validate_task` 验证 → `optimize_task` 清理 → `validate_task` 再验证\n"
-            f"8. `test_with_reference` 对比验证（先 run_code 验证原始函数环境可用）\n"
+            f"7. `optimize_task` 清理代码\n"
+            f"8. `test_with_reference` 验证+对比测试（先 execute_script 验证原始函数环境可用）\n"
             f"9. `finish`\n"
             f"\n**注意**:\n"
             f"- 不要用 grep_search 搜 workspace 文件内容（直接 read_function 提取更高效）\n"
@@ -451,17 +452,16 @@ class TaskConstructor(AgentBase):
 
         return None, ""
 
-    TC_ONLY_TOOLS = {"append_to_file", "copy_to_workspace", "read_function",
-                     "save_to_workspace", "multi_file_search", "list_workspace"}
     WRITE_TOOLS = {"write_file", "edit_file"}
 
     def _execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """执行内部工具（路径预解析 + TC 专用工具注入 workspace/output）"""
+        """执行内部工具（路径预解析 + 注入 workspace/output 路径）"""
         exec_args = dict(arguments)
         exec_args = self._resolve_tool_paths(tool_name, exec_args)
-        if tool_name in self.TC_ONLY_TOOLS:
-            exec_args.setdefault("workspace_dir", str(self.workspace_dir))
-            exec_args.setdefault("output_dir", str(self.output_dir))
+        # 始终注入 workspace/output 路径；ToolRegistry._filter_func_args
+        # 会自动过滤不接受这些参数的函数（如 basic_tools）
+        exec_args.setdefault("workspace_dir", str(self.workspace_dir))
+        exec_args.setdefault("output_dir", str(self.output_dir))
         return ToolRegistry.execute(tool_name, exec_args)
 
     def _resolve_tool_paths(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
