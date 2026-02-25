@@ -20,8 +20,10 @@
 #include <iostream>
 #include <cstdlib>
 #include <string>
+#include <fstream>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendMemoryManager.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/RuntimeErrorCodes.h"
+#include <nlohmann/json.hpp>
 
 using std::vector;
 
@@ -192,7 +194,12 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
                               const std::vector<BaseDevicePtr> &input_tensors,
                               const std::vector<std::vector<int64_t>> &input_shape_args, int64_t tiling_key,
                               int64_t tiling_struct_size) {
-  uint32_t blockdim = 40;  // default blockdim equal to 1.
+  // Read blockDim from JSON file
+  std::string json_file = path + "/" + kernel_name + ".json";
+  std::ifstream json_stream(json_file);
+  nlohmann::json json_data;
+  json_stream >> json_data;
+  uint32_t blockdim = json_data["blockDim"].get<uint32_t>();
   std::string func_name = kernel_name;
   std::vector<void *> runtimeargs;
 

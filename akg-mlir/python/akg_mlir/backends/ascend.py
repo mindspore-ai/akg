@@ -14,6 +14,8 @@
 """ akg launch and compile utils """
 import os
 import sys
+import hashlib
+import json
 import logging
 import subprocess
 import numpy as np
@@ -25,6 +27,53 @@ sys.setdlopenflags(flags | os.RTLD_GLOBAL)
 from akg import akgAscendLaunch
 sys.setdlopenflags(flags)
 from akg.utils.dynamic_utils import get_device_shape
+
+
+def write_code(js_dict, fname):
+    """
+    Export kernel config files.
+
+    Args:
+        js_dict: dict of kernel information.
+        fname: the name of json file to be generated.
+    """
+    if os.path.exists(fname):
+        os.remove(fname)
+    with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o400), "w") as f:
+        json.dump(js_dict, f, sort_keys=True, indent=4, separators=(",", ":"))
+
+
+def get_block_dim_from_arch(arch):
+    """ Get block_dim from architecture name.
+    When arch is None or empty, returns 40 (default for 910B4, same as original hardcoded value).
+    """
+    if not arch:
+        return 40
+    arch_str = str(arch).upper()
+    if "910B4" in arch_str:
+        return 40
+    if "910B2" in arch_str:
+        return 48
+    error_msg = (f"Unsupported architecture: {arch}. "
+                 f"Supported architectures: 910B4 (block_dim=40), 910B2 (block_dim=48)")
+    raise ValueError(error_msg)
+
+def set_ascend_info(core_type, title_dict):
+    """Set ascend info."""
+    if len(core_type) == 0:
+        return
+    if core_type == "MIX":
+        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF"
+        title_dict["coreType"] = "MIX"
+        title_dict["intercoreSync"] = 1
+        title_dict["taskRation"] = "1:2"
+    elif core_type == "AiCore":
+        title_dict["coreType"] = "AiCore"
+        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AICUBE"
+    elif core_type == "VectorCore":
+        title_dict["coreType"] = "VectorCore"
+        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AIVEC"
+
 
 def get_akg_opt_path(akg_tools_dir=None):
     """Get the path of akg-opt executable."""
@@ -40,9 +89,7 @@ def run_akg_opt(
     dyn_shape=False,
     enable_loop_fusion=False,
     arch=None,
-    dump_ir=False,
     mlir_timing=False,
-    dump_log_path=None
 ):
     """
     Run akg-opt to optimize MLIR for Ascend backend.
@@ -54,9 +101,7 @@ def run_akg_opt(
         dyn_shape: Whether to enable dynamic shape optimization
         enable_loop_fusion: Whether to enable loop fusion
         arch: Architecture specification (optional)
-        dump_ir: Whether to dump IR after all passes
         mlir_timing: Whether to print every pass time
-        dump_log_path: Path to dump log file (optional)
 
     Returns:
         subprocess.CompletedProcess result
@@ -64,6 +109,8 @@ def run_akg_opt(
     Raises:
         RuntimeError: If akg-opt execution fails
     """
+    dump_ir = os.environ.get("AKG_DUMP_IR", "0") == "1"
+
     akg_opt_path = get_akg_opt_path(akg_tools_dir)
 
     # Build ascend-opt option
@@ -89,7 +136,13 @@ def run_akg_opt(
 
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        if dump_ir and dump_log_path:
+        if dump_ir:
+            output_dir = os.path.dirname(output_file)
+            base_name = os.path.basename(output_file)
+            kernel_name, _ = os.path.splitext(base_name)
+            if kernel_name.endswith("_out"):
+                kernel_name = kernel_name[: -len("_out")]
+            dump_log_path = os.path.join(output_dir, kernel_name + "_dump_ascend_state1.log")
             with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                 f.write(result.stderr)
         logging.info("akg-opt pipeline success")
@@ -98,72 +151,59 @@ def run_akg_opt(
         logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
         raise RuntimeError("mlir pipeline failed in case: " + os.path.basename(input_file) + "!\n") from e
 
-
-def run_mlir_ascend_pipeline(
-    input_file,
-    output_file,
-    akg_tools_dir=None,
-    dyn_shape=False,
-    enable_loop_fusion=True,
-    arch=None,
-    dump_ir=False,
-    mlir_timing=False,
-    dump_log_path=None,
-):
-    """
-    Run complete MLIR pipeline for Ascend: akg-opt.
+def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=True, dump_log_path=None):
+    """Using bishengir-compile to generate Ascend binary.
 
     Args:
         input_file: Input MLIR file path
-        output_file: Final output MLIR file path
-        akg_tools_dir: Directory containing akg tools (default: auto-detect)
-        dyn_shape: Whether to enable dynamic shape optimization
-        enable_loop_fusion: Whether to enable loop fusion
-        arch: Architecture specification (optional)
-        dump_ir: Whether to dump IR after all passes
-        mlir_timing: Whether to print every pass time
-        dump_log_path: Path to dump log file (optional)
-    Returns:
-        Path to final output file
+        output_so_path: Output .so file path
+        block_dim: Block dimension
+        enable_loop_fusion: Whether loop fusion is enabled in pipeline
+        dump_log_path: Optional path to dump bishengir-compile stderr log.
     """
-    run_akg_opt(
-        input_file=input_file,
-        output_file=output_file,
-        akg_tools_dir=akg_tools_dir,
-        dyn_shape=dyn_shape,
-        enable_loop_fusion=enable_loop_fusion,
-        arch=arch,
-        dump_ir=dump_ir,
-        mlir_timing=mlir_timing,
-        dump_log_path=dump_log_path
-    )
-    return output_file
+    dump_ir = os.environ.get("AKG_DUMP_IR", "0") == "1"
 
-def ascend_compile(input_file, output_so_path):
-    """ using bisheng-compile """
     compile_cmd = [
         "bishengir-compile",
         input_file,
-        "-enable-hfusion-compile=false",
         "-enable-hivm-compile=true",
         "-enable-bin-relocation=false",
-        "-block-dim=40",
+        f"-block-dim={block_dim}",
         "-enable-auto-multi-buffer=true",
         "-o",
         output_so_path
     ]
+
+    if enable_loop_fusion:
+        compile_cmd.append("-enable-hfusion-compile=false")
+    else:
+        compile_cmd.append("-enable-hfusion-compile=true")
+
     logging.info("exec command: %s", compile_cmd)
     try:
-        subprocess.run(
+        result = subprocess.run(
             compile_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            check=True
+            check=True,
         )
+        if dump_ir and dump_log_path:
+            with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+                f.write(result.stderr)
     except subprocess.CalledProcessError as e:
         logging.error("run bishengir-compile failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
-        raise RuntimeError("bishengir-compile failed in case: " + os.path.basename(input_file) + "!\n") from e
+        if dump_ir and dump_log_path:
+            with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
+                f.write(str(e))
+        raise RuntimeError("generate ascend binary: " + input_file + "!\n") from e
+    logging.info("generate ascend binary success")
+
+    output_dir = os.path.dirname(output_so_path)
+    kernel_name = os.path.splitext(os.path.basename(output_so_path))[0]
+    if kernel_name.startswith("lib"):
+        kernel_name = kernel_name[3:]
+    dump_ascend_meta_data(output_dir, kernel_name, block_dim=block_dim)
 
 
 def transform_data_to_ascend(
@@ -235,3 +275,40 @@ def launch(
         use_mem_pool,
         *input_for_mod_ctypes
     )
+
+
+def dump_ascend_meta_data(output_dir, kernel_name, block_dim):
+    """
+    Dump ascend meta data to JSON file.
+    
+    Args:
+        output_dir: Directory where the binary file and JSON file will be saved
+        kernel_name: Name of the kernel
+        block_dim: Block dimension
+    """
+    logging.info("dump ascend meta data:")
+    title_dict = {}
+    # ascend info
+    set_ascend_info("VectorCore", title_dict)
+    title_dict["kernelName"] = kernel_name
+    # thread info
+    title_dict["blockDim"] = block_dim
+    # bin file info
+    bin_file_suffix = ".so"
+    title_dict["binFileSuffix"] = bin_file_suffix
+    bin_file_name = "lib" + kernel_name
+    title_dict["binFileName"] = bin_file_name
+    # sha256
+    buf_size = 64 * 1024  # once read 64kb
+    sha256 = hashlib.sha256()
+    kernel_file_name = os.path.join(output_dir, bin_file_name + bin_file_suffix)
+    with open(kernel_file_name, "rb") as kf:
+        while True:
+            data = kf.read(buf_size)
+            if not data:
+                break
+            sha256.update(data)
+    title_dict["sha256"] = sha256.hexdigest()
+
+    json_file = os.path.join(output_dir, kernel_name + ".json")
+    write_code(title_dict, json_file)
