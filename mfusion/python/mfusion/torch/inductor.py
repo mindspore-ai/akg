@@ -19,6 +19,7 @@ from mfusion.passmanager import PassManager
 from mfusion.dialects import torch as torch_d
 from mfusion import register_mfuse_dialect
 
+
 def _print_verbose(stage_title: str, content):
     """Print verbose information with formatting.
 
@@ -35,6 +36,7 @@ def _print_verbose(stage_title: str, content):
     print(content)
     print()
 
+
 def _parse_mlir_module_from_text(text: str):
     """Parse MLIR module from text IR."""
     ctx = ir.Context()
@@ -42,12 +44,14 @@ def _parse_mlir_module_from_text(text: str):
     register_mfuse_dialect(ctx)
     return ir.Module.parse(text, ctx)
 
+
 def _run_pipeline(module: ir.Module, pipeline: str, stage: str) -> ir.Module:
     """Run an MLIR pass pipeline and optionally dump the IR."""
     with module.context:
         pm = PassManager.parse(pipeline)
         pm.run(module.operation)
     _print_verbose(stage, module)
+
 
 def fuse_and_optimize(torch_dialect_str: str) -> str:
     """
@@ -73,8 +77,20 @@ def fuse_and_optimize(torch_dialect_str: str) -> str:
                   stage="Decompose complex ops to meta ops")
 
     _run_pipeline(module,
+        pipeline="builtin.module(func.func(mfuse-dvm-cluster),canonicalize)",
+        stage="Mfuse DVM Clustering")
+
+    _run_pipeline(module,
         pipeline="builtin.module(recompose, canonicalize)",
         stage="Recompose meta ops to aclnn ops")
+
+    _run_pipeline(module,
+        pipeline="builtin.module(outline-mfuse-fused-subgraphs,copy-fused-subgraphs,canonicalize)",
+        stage="Outline Fused Subgraphs")
+
+    _run_pipeline(module,
+        pipeline="builtin.module(convert-mfuse-to-dvm,convert-dvm-subgraph-to-mfuse-dvm-call,canonicalize)",
+        stage="Lower Fused Subgraphs to DVM Calls")
 
     _run_pipeline(module,
         pipeline="builtin.module(convert-mfuse-to-torch, reconcile-unrealized-casts,canonicalize)",

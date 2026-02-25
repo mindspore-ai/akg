@@ -104,4 +104,50 @@ def Recompose : Pass<"recompose", "::mlir::ModuleOp"> {
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// Outlining Passes
+//===----------------------------------------------------------------------===//
+
+def OutlineMfuseFusedSubgraphs : Pass<"outline-mfuse-fused-subgraphs", "::mlir::ModuleOp"> {
+  let summary = "Outline Mfuse fused subgraphs into functions";
+  let description = [{
+    Identifies mfuse.fused operations, outlines them into new functions, and replaces
+    the original ops with func.call. The outlined functions are tagged with the
+    attribute 'mfusion.outlined'.
+  }];
+  let constructor = "mlir::createOutlineMfuseFusedSubgraphsPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect",
+    "::mlir::arith::ArithDialect"
+  ];
+}
+
+def CopyFusedSubgraphs : Pass<"copy-fused-subgraphs", "::mlir::ModuleOp"> {
+  let summary = "Clone outlined fusion functions";
+  let description = [{
+    Clones each outlined fusion function and stores the clone's name in the
+    original function's `mfusion.copied_subgraph` attribute. The cloned function
+    serves as the shape inference function for the DVM kernel.
+  }];
+  let constructor = "mlir::createCopyFusedSubgraphsPass()";
+  let dependentDialects = [
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def ConvertDvmSubgraphToMfuseDvmCall : Pass<"convert-dvm-subgraph-to-mfuse-dvm-call", "::mlir::ModuleOp"> {
+  let summary = "Replace DVM subgraph calls with mfuse.dvm_call";
+  let description = [{
+    Replaces func.call sites that target outlined DVM subgraphs with mfuse.dvm_call,
+    embeds a self-contained DVM MLIR string, and removes the DVM subgraph function.
+  }];
+  let constructor = "mlir::createConvertDvmSubgraphToMfuseDvmCallPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect",
+    "::mlir::dvm::DvmDialect"
+  ];
+}
+
 #endif // MFUSION_DIALECT_MFUSE_TRANSFORMS_PASSES
