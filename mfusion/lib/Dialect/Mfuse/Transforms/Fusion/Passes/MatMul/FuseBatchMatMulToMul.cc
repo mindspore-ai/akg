@@ -16,6 +16,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+// Relationship with decompose (AclnnOps.cc):
+// Decompose converts aclnn.batch_matmul -> mfuse.matmul (trans_x1=false, trans_x2=false).
+// - If decompose runs before this pass: the IR contains mfuse.matmul only, so the pattern
+//   that matches mfuse.batch_matmul (FuseBatchMatMulToMulPattern) will NOT be triggered;
+//   only FuseMatmulToMulPattern (matches mfuse.matmul, k=1 -> Mul) can trigger.
+// - If decompose does not run (e.g. no aclnn.batch_matmul in the pipeline): mfuse.batch_matmul
+//   may exist, and FuseBatchMatMulToMulPattern will be triggered when k=1 and other conditions hold.
+
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseBatchMatMulToMul.h"
 
 #include <optional>
@@ -159,6 +167,8 @@ static std::optional<Value> createReshape2D(Value input, RankedTensorType inputT
 }
 
 /// Pattern to fuse BatchMatMul with k=1 to Mul operation
+/// Fuse BatchMatmulOp with k=1 to Mul (batch element-wise mul).
+/// Note: If decompose (aclnn.batch_matmul -> mfuse.matmul) has run, this pattern is not triggered.
 class FuseBatchMatMulToMulPattern : public OpRewritePattern<BatchMatmulOp> {
  public:
   using OpRewritePattern<BatchMatmulOp>::OpRewritePattern;
