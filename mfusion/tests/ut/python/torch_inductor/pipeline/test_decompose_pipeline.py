@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Test decompose pipeline with different operations."""
+
 import textwrap
 from ut_utils.mlir_checker import MlirChecker
 from mfusion.torch.inductor import fuse_and_optimize
@@ -34,12 +36,30 @@ def test_decompose_pipeline_with_tanh():
     assert checker.check_no_op("torch.aten.tanh"), checker.error
 
 
+def test_decompose_pipeline_with_tanh_dynamic_shape():
+    """Test symbolic shape inference through tanh decompose arithmetic chain."""
+    torch_mlir = textwrap.dedent("""
+        module {
+          func.func @test_tanh_dynamic(%arg0: !torch.int, %arg1: !torch.vtensor<[2,?],f32>) -> !torch.vtensor<[2,?],f32> attributes {torch.assume_strict_symbolic_shapes} {
+            %0 = torch.symbolic_int "s0" {min_val = 2, max_val = 9223372036854775807} : !torch.int
+            torch.bind_symbolic_shape %arg1, [%0], affine_map<()[s0] -> (2, s0)> : !torch.vtensor<[2,?],f32>
+            %1 = torch.aten.tanh %arg1 : !torch.vtensor<[2,?],f32> -> !torch.vtensor<[2,?],f32>
+            torch.bind_symbolic_shape %1, [%0], affine_map<()[s0] -> (2, s0)> : !torch.vtensor<[2,?],f32>
+            return %1 : !torch.vtensor<[2,?],f32>
+          }
+        }
+    """)
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.aten.tanh"), checker.error
+
+
 def test_decompose_pipeline_with_add():
     """Test decompose pipeline with add"""
     # Torch dialect MLIR string with add and rmsnorm operations
     torch_mlir = textwrap.dedent("""
       module {
-        func.func @test_add_rms_norm(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.vtensor<[1],f32>, %alpha: !torch.float) -> !torch.vtensor<[4,4],f32> {
+        func.func @test_add(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.vtensor<[1],f32>, %alpha: !torch.float) -> !torch.vtensor<[4,4],f32> {
           %0 = torch.aten.add.Tensor %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.vtensor<[1],f32>, !torch.float -> !torch.vtensor<[4,4],f32>
           return %0 : !torch.vtensor<[4,4],f32>
         }
@@ -57,7 +77,7 @@ def test_decompose_pipeline_with_add_2():
     # Torch dialect MLIR string with add and rmsnorm operations
     torch_mlir = textwrap.dedent("""
       module {
-        func.func @test_add_rms_norm(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.vtensor<[1],f32>) -> !torch.vtensor<[4,4],f32> {
+        func.func @test_add(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.vtensor<[1],f32>) -> !torch.vtensor<[4,4],f32> {
           %alpha = torch.constant.float 1.0
           %0 = torch.aten.add.Tensor %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.vtensor<[1],f32>, !torch.float -> !torch.vtensor<[4,4],f32>
           return %0 : !torch.vtensor<[4,4],f32>
