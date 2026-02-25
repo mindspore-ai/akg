@@ -46,15 +46,15 @@ namespace mlir {
 #define GEN_PASS_DEF_AKGGPUMAPPING
 #define GEN_PASS_DECL_AKGGPUMAPPING
 #include "akg/Dialect/GPU/Passes.h.inc"
-}  // namespace mlir
 
-using namespace akgglobal;
-
-namespace mlir {
-
+// using namespace akgglobal;
 using scf::ForOp;
 using scf::ParallelOp;
 using json = nlohmann::json;
+using ShapeAlignTool = akgglobal::ShapeAlignTool;
+using GpuScheduleTool = akgglobal::GpuScheduleTool;
+using AxisInfo = akgglobal::AxisInfo;
+using GpuInfo = mlir::akg::utils::GpuInfo;
 
 namespace gpu {
 namespace akg {
@@ -62,8 +62,12 @@ constexpr auto kInferredConfig = "inferredConfig";
 constexpr auto kKernelNameAttrKey = "sym_name";
 constexpr auto kDynamicShapeSize = -1;
 }  // namespace akg
-using namespace akg;
-using namespace mlir::akg::utils;
+// using namespace akg;
+// using namespace mlir::akg::utils;
+using MappingLevel = mlir::akg::utils::MappingLevel;
+using GpuCommonUtils = mlir::akg::utils::GpuCommonUtils;
+using StrategyHelper = mlir::akg::utils::StrategyHelper;
+
 namespace {
 struct ParallelOpCmp {
   bool operator()(mlir::scf::ParallelOp lhs, mlir::scf::ParallelOp rhs) const {
@@ -114,11 +118,11 @@ static constexpr int kNumHardwareIds = 3;
 /// distributed to map to x, the next innermost to y and the next innermost to
 /// z.
 static Processor getHardwareIdForMapping(MappingLevel level, int dimension) {
-  if (dimension >= kNumHardwareIds || level == Sequential) {
+  if (dimension >= kNumHardwareIds || level == mlir::akg::utils::Sequential) {
     return Processor::Sequential;
   }
   switch (level) {
-    case MapGrid:
+    case mlir::akg::utils::MapGrid:
       switch (dimension) {
         case 0:
           return Processor::BlockX;
@@ -130,7 +134,7 @@ static Processor getHardwareIdForMapping(MappingLevel level, int dimension) {
           return Processor::Sequential;
       }
       break;
-    case MapBlock:
+    case mlir::akg::utils::MapBlock:
       switch (dimension) {
         case 0:
           return Processor::ThreadX;
@@ -187,10 +191,15 @@ struct AKGGPUMappingLoops : public impl::AKGGPUMappingBase<AKGGPUMappingLoops> {
   void mapParallelOp(ParallelOp parallelOp, const std::vector<MappingTask> &result);
   bool saveMappingResultToJson();
   std::string getInferredConfigJson();
+  void collectDynamicTensorsAndIndices(func::FuncOp funcOp,
+    std::map<size_t, Operation *> &tensors);
+  void updateJsonWithTensorMapping(func::FuncOp funcOp,
+    const std::map<size_t, Operation *> &tensors,
+    json &jsonResults);
   std::pair<std::string, int> genAxisMappingId(Operation *axis);
   std::string getAkgKernelName();
 
-  std::string device_target{kV100Device};
+  std::string device_target{mlir::akg::utils::kV100Device};
   std::deque<MappingTask> waitingList;
   std::map<ParallelOp, std::vector<MappingTask>, ParallelOpCmp> mapResults;
   std::vector<AxisInfo> axes;
@@ -221,7 +230,7 @@ struct SCFForToParallelPattern : public RewritePattern {
       rewriter.replaceOp(op, parallelOp.getResults());
 
       Operation *terminator = parallelOp.getRegion().getBlocks().front().getTerminator();
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(terminator)){
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(terminator)) {
           rewriter.setInsertionPoint(yieldOp);
           rewriter.replaceOpWithNewOp<scf::ReduceOp>(yieldOp);
       }
@@ -359,6 +368,75 @@ static Operation *getOutermostParallelOp(Operation *op) {
   return targetOp;
 }
 
+static void handleOutermostIfOp(Region &region, scf::IfOp ifOp, Operation *funcOp,
+                                bool postFusionMode) {
+  OpBuilder opBuilder(region);
+
+  // this scf.if is the outer most scf.if. we should move out of
+  // the scf.if.then block to outer most threadIdx.x
+
+  // get the outermost thread parallelOp
+  Operation *outermostSequentialOp = nullptr;
+  Operation *curOp = ifOp.getOperation();
+  Operation *outermostParallelOp = getOutermostParallelOp(curOp);
+  while (curOp) {
+    if (auto parallelOp = dyn_cast<scf::ParallelOp>(curOp)) {
+      // we can not move ops out of scf.parallel
+      if (parallelOp.getOperation() == outermostParallelOp) {
+        break;
+      }
+      if (gpu::GpuAttrUtils::getProcessorFromParallelOp(curOp) != gpu::Processor::Sequential) {
+        break;
+      }
+      bool canMove = true;
+      for (auto &op : llvm::make_early_inc_range(ifOp.getThenRegion().front())) {
+        if (!isa<scf::YieldOp>(op)) {
+          if (!canMoveOpOutOfTarget(&op, curOp)) {
+            canMove = false;
+            break;
+          }
+        }
+      }
+      if (canMove) {
+        outermostSequentialOp = curOp;
+      } else {
+        break;
+      }
+    }
+    curOp = curOp->getParentOp();
+  }
+
+  // does not exist sequential-for
+  if (!outermostSequentialOp) {
+    if (funcOp->hasAttr(mlir::akg::utils::kEnableParallelReduce) &&
+        funcOp->getAttrOfType<BoolAttr>(mlir::akg::utils::kEnableParallelReduce)
+            .getValue() == false) {
+      return;
+    } else {
+      outermostSequentialOp = ifOp.getOperation();
+    }
+  }
+
+  if (!postFusionMode) {
+    opBuilder.setInsertionPoint(outermostSequentialOp);
+  } else {
+    opBuilder.setInsertionPointAfter(outermostSequentialOp);
+  }
+  for (auto &op : llvm::make_early_inc_range(ifOp.getThenRegion().front())) {
+    if (!isa<scf::YieldOp>(op)) {
+      mlir::Operation *clonedOp = opBuilder.clone(op);
+      op.replaceAllUsesWith(clonedOp);
+    }
+  }
+  SmallVector<Operation *, 8> previousOps;
+  CommonUtils::getAllPreviousRelatedOps(ifOp, previousOps);
+
+  ifOp.erase();
+  for (auto op : previousOps) {
+    op->erase();
+  }
+}
+
 static void FixForLogicToGpuParallel(Region &region) {
   SmallVector<Operation *, 8> ifOpsToHoist;
   OpBuilder opBuilder(region);
@@ -393,7 +471,6 @@ static void FixForLogicToGpuParallel(Region &region) {
             op.replaceAllUsesWith(clonedOp);
           }
         }
-
         SmallVector<Operation *, 8> previousOps;
         CommonUtils::getAllPreviousRelatedOps(ifOp, previousOps);
 
@@ -404,66 +481,7 @@ static void FixForLogicToGpuParallel(Region &region) {
       } else {
         // this scf.if is the outer most scf.if. we should move out of
         // the scf.if.then block to outer most threadIdx.x
-
-        // get the outermost thread parallelOp
-        Operation *outermostSequentialOp = nullptr;
-        Operation *curOp = ifOp.getOperation();
-        Operation *outermostParallelOp = getOutermostParallelOp(curOp);
-        while (curOp) {
-          if (auto parallelOp = dyn_cast<scf::ParallelOp>(curOp)) {
-            // we can not move ops out of scf.parallel
-            if (parallelOp.getOperation() == outermostParallelOp) {
-              break;
-            }
-            if (gpu::GpuAttrUtils::getProcessorFromParallelOp(curOp) != gpu::Processor::Sequential) {
-              break;
-            }
-            bool canMove = true;
-            for (auto &op : llvm::make_early_inc_range(ifOp.getThenRegion().front())) {
-              if (!isa<scf::YieldOp>(op)) {
-                if (!canMoveOpOutOfTarget(&op, curOp)) {
-                  canMove = false;
-                  break;
-                }
-              }
-            }
-            if (canMove) {
-              outermostSequentialOp = curOp;
-            } else {
-              break;
-            }
-          }
-          curOp = curOp->getParentOp();
-        }
-
-        // does not exist sequential-for
-        if (!outermostSequentialOp) {
-          if (funcOp->hasAttr(kEnableParallelReduce) &&
-              funcOp->getAttrOfType<BoolAttr>(mlir::akg::utils::kEnableParallelReduce).getValue() == false) {
-            continue;
-          } else {
-            outermostSequentialOp = ifOp.getOperation();
-          }
-        }
-
-        if (!postFusionMode) {
-          opBuilder.setInsertionPoint(outermostSequentialOp);
-        } else {
-          opBuilder.setInsertionPointAfter(outermostSequentialOp);
-        }
-        for (auto &op : llvm::make_early_inc_range(ifOp.getThenRegion().front())) {
-          if (!isa<scf::YieldOp>(op)) {
-            mlir::Operation *clonedOp = opBuilder.clone(op);
-            op.replaceAllUsesWith(clonedOp);
-          }
-        }
-        SmallVector<Operation *, 8> previousOps;
-        CommonUtils::getAllPreviousRelatedOps(ifOp, previousOps);
-
-        ifOp.erase();
-        for (auto op : previousOps) {
-          op->erase();
-        }
+        handleOutermostIfOp(region, ifOp, funcOp, postFusionMode);
       }
     }
   }
@@ -484,7 +502,7 @@ std::pair<std::string, int> AKGGPUMappingLoops::genAxisMappingId(Operation *op) 
     auto it = mapResults.find(axis);
     if (it == mapResults.end()) {
       llvm::errs() << "No mapping for axis, error.\n";
-      return std::make_pair("", kDynamicShapeSize);
+      return std::make_pair("", mlir::gpu::akg::kDynamicShapeSize);
     }
     for (auto res : it->second) {
       if (levelMap.find(res.level) == levelMap.end()) {
@@ -499,10 +517,10 @@ std::pair<std::string, int> AKGGPUMappingLoops::genAxisMappingId(Operation *op) 
       if (!res.isDynamicAxis || res.problemSize > 1) {
         return std::make_pair(mapId, res.problemSize);
       }
-      return std::make_pair(mapId, kDynamicShapeSize);
+      return std::make_pair(mapId, mlir::gpu::akg::kDynamicShapeSize);
     }
   }
-  return std::make_pair("", kDynamicShapeSize);
+  return std::make_pair("", mlir::gpu::akg::kDynamicShapeSize);
 }
 
 static std::string updateSeqConfigId(const json &jsonResults, const std::string &symbolPart, const int64_t &constPart) {
@@ -525,32 +543,9 @@ static std::string updateSeqConfigId(const json &jsonResults, const std::string 
   return "Seq." + std::to_string(maxSeq + 1);
 }
 
-// Infer the mapping config for each dimension of each input tensor.
-// The result will be organize in a `[Tensor[Dim[MapConfigs,],],]` form, e.g.:
-// {"inferredConfig":[[["Block.y.32","Grid.x"],["Block.x.32","Grid.y.24"]],[["Block.x.32","Grid.y.24"]]]}
-// in which there are two tensors and the first tensor has two dimensions; in the first dimension we have
-// a dynamic-mapped config Grid.x that satisfied the expr `Grid.x * Block.y (which is 32) == Tensor0.Dim0.Shape`.
-std::string AKGGPUMappingLoops::getInferredConfigJson() {
-  json jsonResults;
-  jsonResults["blockIdx.x"] = 1;
-  jsonResults["blockIdx.y"] = 1;
-  jsonResults["blockIdx.z"] = 1;
-  jsonResults["threadIdx.x"] = 1;
-  jsonResults["threadIdx.y"] = 1;
-  jsonResults["threadIdx.z"] = 1;
-  func::FuncOp funcOp = getOperation();
-  if (!isDynamicShape()) {
-    funcOp.walk([&](Operation *op) {
-      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
-        auto [configId, configSize] = genAxisMappingId(op);
-        if (configId.empty() || configSize == kDynamicShapeSize) {
-          return;
-        }
-        jsonResults[configId] = configSize;
-      }
-    });
-    return jsonResults.dump();
-  }
+void AKGGPUMappingLoops::collectDynamicTensorsAndIndices(
+    func::FuncOp funcOp,
+    std::map<size_t, Operation *> &tensors) {
 
   auto getArgIndex = [&](Value memref) -> int {
     size_t i = 0;
@@ -568,8 +563,7 @@ std::string AKGGPUMappingLoops::getInferredConfigJson() {
     }
     return -1;
   };
-  ShapeAlignTool &tool = ShapeAlignTool::getInstance();
-  std::map<size_t, Operation *> tensors;
+
   funcOp.walk([&](Operation *op) {
     int tensorId = -1;
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
@@ -587,20 +581,30 @@ std::string AKGGPUMappingLoops::getInferredConfigJson() {
     auto tid = static_cast<size_t>(tensorId);
     tensors[tid] = op;
   });
+}
 
-  // We can only use outputs' dim to calculate mapping result because inputs' dim may be incorrect due to implicit
-  // broadcast. We sort tensor by the tid so that we can ensure the output's mapping result will replace the inputs'.
+void AKGGPUMappingLoops::updateJsonWithTensorMapping(
+    func::FuncOp funcOp,
+    const std::map<size_t, Operation *> &tensors,
+    json &jsonResults) {
+
+  ShapeAlignTool &tool = ShapeAlignTool::getInstance();
+
   for (auto it : tensors) {
     auto tid = it.first;
+    Operation *tensorOp = it.second;
+
     mlir::ValueRange indices;
-    if (auto load = dyn_cast<memref::LoadOp>(it.second)) {
+    if (auto load = dyn_cast<memref::LoadOp>(tensorOp)) {
       indices = load.getIndices();
-    } else if (auto store = dyn_cast<memref::StoreOp>(it.second)) {
+    } else if (auto store = dyn_cast<memref::StoreOp>(tensorOp)) {
       indices = store.getIndices();
-    } else if (auto vload = dyn_cast<vector::LoadOp>(it.second)) {
+    } else if (auto vload = dyn_cast<vector::LoadOp>(tensorOp)) {
       indices = vload.getIndices();
-    } else if (auto vstore = dyn_cast<vector::StoreOp>(it.second)) {
+    } else if (auto vstore = dyn_cast<vector::StoreOp>(tensorOp)) {
       indices = vstore.getIndices();
+    } else {
+      continue;
     }
     for (size_t dimId = 0; dimId < indices.size(); ++dimId) {
       SmallVector<Operation *, 8> relatedAxes;
@@ -614,7 +618,7 @@ std::string AKGGPUMappingLoops::getInferredConfigJson() {
         if (configId.empty()) {
           continue;
         }
-        if (configSize != kDynamicShapeSize) {
+        if (configSize != akg::kDynamicShapeSize) {
           constPart *= configSize;
           if (jsonResults.find(configId) != jsonResults.end()) {
             jsonResults[configId] = configSize;
@@ -635,6 +639,39 @@ std::string AKGGPUMappingLoops::getInferredConfigJson() {
       }
     }
   }
+}
+
+// Infer the mapping config for each dimension of each input tensor.
+// The result will be organize in a `[Tensor[Dim[MapConfigs,],],]` form, e.g.:
+// {"inferredConfig":[[["Block.y.32","Grid.x"],["Block.x.32","Grid.y.24"]],[["Block.x.32","Grid.y.24"]]]}
+// in which there are two tensors and the first tensor has two dimensions; in the first dimension we have
+// a dynamic-mapped config Grid.x that satisfied the expr `Grid.x * Block.y (which is 32) == Tensor0.Dim0.Shape`.
+std::string AKGGPUMappingLoops::getInferredConfigJson() {
+  json jsonResults;
+  jsonResults["blockIdx.x"] = 1;
+  jsonResults["blockIdx.y"] = 1;
+  jsonResults["blockIdx.z"] = 1;
+  jsonResults["threadIdx.x"] = 1;
+  jsonResults["threadIdx.y"] = 1;
+  jsonResults["threadIdx.z"] = 1;
+  func::FuncOp funcOp = getOperation();
+
+  if (!isDynamicShape()) {
+    funcOp.walk([&](Operation *op) {
+      if (auto parallelOp = dyn_cast<scf::ParallelOp>(op)) {
+        auto [configId, configSize] = genAxisMappingId(op);
+        if (configId.empty() || configSize == akg::kDynamicShapeSize) {
+          return;
+        }
+        jsonResults[configId] = configSize;
+      }
+    });
+    return jsonResults.dump();
+  }
+
+  std::map<size_t, Operation *> tensors;
+  collectDynamicTensorsAndIndices(funcOp, tensors);
+  updateJsonWithTensorMapping(funcOp, tensors, jsonResults);
   return jsonResults.dump();
 }
 
@@ -642,7 +679,7 @@ std::string AKGGPUMappingLoops::getAkgKernelName() {
   std::string defaultName = "akg_kernel";
   for (auto attr : getOperation()->getAttrs()) {
     auto keyStr = dyn_cast<StringAttr>(attr.getName()).getValue().str();
-    if (keyStr != kKernelNameAttrKey) {
+    if (keyStr != mlir::gpu::akg::kKernelNameAttrKey) {
       continue;
     }
     return dyn_cast<StringAttr>(attr.getValue()).getValue().str();
@@ -687,11 +724,12 @@ static void SetRedutionMarkToParallelOp(Operation *funcOp) {
         auto idx = dyn_cast<IntegerAttr>(attr).getInt();
         parallelOps[idx]->setAttr(kReductionLoopAttr, builder.getUnitAttr());
       }
-      if (!redOp->hasAttr(kEnableParallelReduce)) {
+      if (!redOp->hasAttr(mlir::akg::utils::kEnableParallelReduce)) {
         (void)redOp->emitWarning("This reduction op does not have a \"gpu_parallel_reduce\" mark, set to false.");
-        funcOp->setAttr(kEnableParallelReduce, builder.getBoolAttr(false));
+        funcOp->setAttr(mlir::akg::utils::kEnableParallelReduce, builder.getBoolAttr(false));
       } else {
-        funcOp->setAttr(kEnableParallelReduce, redOp->getAttr(kEnableParallelReduce));
+        funcOp->setAttr(mlir::akg::utils::kEnableParallelReduce,
+           redOp->getAttr(mlir::akg::utils::kEnableParallelReduce));
       }
     }
   });
@@ -704,8 +742,8 @@ void AKGGPUMappingLoops::loadGlobalMapping() {
   int64_t totalProblemSize = 1;
   auto &gpuTool = GpuScheduleTool::getInstance();
   for (auto task : waitingList) {
-    if (task.op->hasAttr(kLoopTag)) {
-      auto name = cast<StringAttr>(task.op->getAttr(kLoopTag)).getValue().str();
+    if (task.op->hasAttr(akgglobal::kLoopTag)) {
+      auto name = cast<StringAttr>(task.op->getAttr(akgglobal::kLoopTag)).getValue().str();
       auto mapRes = GpuScheduleTool::getInstance().getMappingResult(name);
       totalProblemSize *= task.problemSize;
       if (mapRes.first == "GpuGrid") {
@@ -730,7 +768,7 @@ void AKGGPUMappingLoops::loadGlobalMapping() {
   }
   const int64_t factor = 16;
   if (totalMapSize * factor < totalProblemSize &&
-      CommonUtils::getOperatorType(getOperation()) != OperatorTemplate::Reduce) {
+      CommonUtils::getOperatorType(getOperation()) != OperatorTemplate::Reduction) {
     llvm::outs() << "WARNING " << getAkgKernelName() << " totalMapSize " << totalMapSize << " totalProblemSize "
                  << totalProblemSize << ", may have performance issue.\n";
   }
