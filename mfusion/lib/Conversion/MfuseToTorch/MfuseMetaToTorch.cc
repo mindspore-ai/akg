@@ -16,6 +16,8 @@
 
 #include "mfusion/Conversion/MfuseToTorch/MfuseMetaToTorch.h"
 
+#include <algorithm>
+#include <iterator>
 #include <optional>
 
 #include "llvm/ADT/SmallVector.h"
@@ -94,7 +96,7 @@ class ConvertMfuseMatmul : public mlir::OpConversionPattern<mlir::mfuse::MatmulO
     mlir::Value other = adaptor.getOther();
     bool transX1 = op.getTransX1();
     bool transX2 = op.getTransX2();
-    
+
     auto resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
       return mlir::failure();
@@ -103,14 +105,13 @@ class ConvertMfuseMatmul : public mlir::OpConversionPattern<mlir::mfuse::MatmulO
     // Check if inputs are 2D and no transpose is needed
     auto selfType = mlir::dyn_cast<mlir::RankedTensorType>(self.getType());
     auto otherType = mlir::dyn_cast<mlir::RankedTensorType>(other.getType());
-    
+
     // For simple 2D case without transpose, use torch.aten.mm
-    if (!transX1 && !transX2 && selfType && otherType && 
-        selfType.getRank() == 2 && otherType.getRank() == 2) {
+    if (!transX1 && !transX2 && selfType && otherType && selfType.getRank() == 2 && otherType.getRank() == 2) {
       rewriter.replaceOpWithNewOp<TorchD::AtenMmOp>(op, resultType, self, other);
       return mlir::success();
     }
-    
+
     // For other cases (ND or transposed), use torch.aten.matmul
     // Note: torch.aten.matmul doesn't support transpose attributes directly,
     // so we would need to insert transpose ops if transX1 or transX2 is true.
@@ -134,7 +135,7 @@ class ConvertMfuseMatmulWithBias : public mlir::OpConversionPattern<mlir::mfuse:
     mlir::Value bias = adaptor.getBias();
     bool transX1 = op.getTransX1();
     bool transX2 = op.getTransX2();
-    
+
     auto resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
       return mlir::failure();
@@ -143,23 +144,23 @@ class ConvertMfuseMatmulWithBias : public mlir::OpConversionPattern<mlir::mfuse:
     // Check if inputs are 2D and no transpose is needed
     auto selfType = mlir::dyn_cast<mlir::RankedTensorType>(self.getType());
     auto otherType = mlir::dyn_cast<mlir::RankedTensorType>(other.getType());
-    
+
     mlir::Value matmulResult;
     // For simple 2D case without transpose, use torch.aten.mm
-    if (!transX1 && !transX2 && selfType && otherType && 
-        selfType.getRank() == 2 && otherType.getRank() == 2) {
+    if (!transX1 && !transX2 && selfType && otherType && selfType.getRank() == 2 && otherType.getRank() == 2) {
       matmulResult = rewriter.create<TorchD::AtenMmOp>(op.getLoc(), resultType, self, other);
     } else {
       // For other cases (ND or transposed), use torch.aten.matmul
       matmulResult = rewriter.create<TorchD::AtenMatmulOp>(op.getLoc(), resultType, self, other);
     }
-    
+
     // Add bias: torch.aten.add.Tensor(matmul_result, bias, alpha=1)
     constexpr double kAlphaOne = 1.0;
     mlir::FloatAttr alphaAttr = rewriter.getFloatAttr(rewriter.getF64Type(), kAlphaOne);
     mlir::Value alphaOne = rewriter.create<TorchD::ConstantFloatOp>(op.getLoc(), alphaAttr);
-    mlir::Value addResult = rewriter.create<TorchD::AtenAddTensorOp>(op.getLoc(), resultType, matmulResult, bias, alphaOne);
-    
+    mlir::Value addResult =
+      rewriter.create<TorchD::AtenAddTensorOp>(op.getLoc(), resultType, matmulResult, bias, alphaOne);
+
     rewriter.replaceOp(op, addResult);
     return mlir::success();
   }
@@ -271,53 +272,23 @@ struct ConvertMfuseReduceSum : public mlir::OpConversionPattern<mlir::mfuse::Red
 };
 
 /// Converts mfuse.reshape -> torch.aten.view.
-/// Shape is a Value (1D tensor of i64); if constant, extract dims and build list for view.
+/// Shape is derived from reshape result type. A dynamic dim is mapped to -1.
 class ConvertMfuseReshape : public mlir::OpConversionPattern<mlir::mfuse::ReshapeOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
 
   mlir::LogicalResult matchAndRewrite(mlir::mfuse::ReshapeOp op, OpAdaptor adaptor,
                                       mlir::ConversionPatternRewriter &rewriter) const override {
-    mlir::Value shapeVal = adaptor.getShape();
     llvm::SmallVector<mlir::Value> shapeValues;
-    
-    // Look through UnrealizedConversionCastOp to find the source constant
-    mlir::Value shapeForConst = shapeVal;
-    if (auto cast = shapeVal.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
-      if (cast.getOperands().size() == 1) {
-        shapeForConst = cast.getOperand(0);
-      }
-    }
-
-    auto constOp = shapeForConst.getDefiningOp<mlir::arith::ConstantOp>();
-    if (constOp) {
-      auto denseAttr = mlir::dyn_cast<mlir::DenseElementsAttr>(constOp.getValue());
-      if (denseAttr && denseAttr.getElementType().isInteger(64)) {
-        for (auto apInt : denseAttr.getValues<mlir::APInt>()) {
-          shapeValues.push_back(rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), apInt.getSExtValue()));
-        }
-      }
-    }
-    
-    // If shape is not constant, try to infer from result type
-    if (shapeValues.empty()) {
-      auto resultType = mlir::dyn_cast<mlir::RankedTensorType>(op.getResult().getType());
-      if (resultType && resultType.hasStaticShape()) {
-        // Extract shape from result type
-        for (int64_t dim : resultType.getShape()) {
-          shapeValues.push_back(rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), dim));
-        }
-      }
-    }
-    
-    if (shapeValues.empty()) {
-      return rewriter.notifyMatchFailure(op, "shape must be a constant 1D i64 tensor or result must have static shape");
-    }
-
     auto resultType = mlir::dyn_cast<mlir::RankedTensorType>(op.getResult().getType());
     if (!resultType) {
       return rewriter.notifyMatchFailure(op, "result must be ranked tensor");
     }
+    shapeValues.reserve(resultType.getShape().size());
+    std::transform(
+      resultType.getShape().begin(), resultType.getShape().end(), std::back_inserter(shapeValues), [&](int64_t d) {
+        return rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), d == mlir::ShapedType::kDynamic ? -1 : d);
+      });
 
     mlir::Type torchResultType = getTypeConverter()->convertType(resultType);
     if (!torchResultType) return mlir::failure();

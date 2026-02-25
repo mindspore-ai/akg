@@ -1,5 +1,7 @@
 add_mlir_dialect(Mfuse mfuse)
 add_mlir_doc(Mfuse Mfuse Dialect/ -gen-op-doc)
+add_mlir_interface(MfuseInterfaces)
+add_dependencies(MLIRMfuseIncGen MLIRMfuseInterfacesIncGen)
 
 # Additional TableGen targets for attributes and types
 set(LLVM_TARGET_DEFINITIONS Mfuse.td)

@@ -77,7 +77,7 @@ module {
     // CHECK-NOT: mfuse.matmul_with_bias
     // CHECK: mfuse.aclnn.mm
     // CHECK: mfuse.reshape
-    // CHECK-SAME: (tensor<16xf32>, tensor<2xi64>) -> tensor<1x16xf32>
+    // CHECK-SAME: (tensor<16xf32>) -> tensor<1x16xf32>
     // CHECK: mfuse.aclnn.add
   }
 
@@ -89,7 +89,7 @@ module {
     // CHECK-NOT: mfuse.matmul_with_bias
     // CHECK: mfuse.aclnn.batch_matmul
     // CHECK: mfuse.reshape
-    // CHECK-SAME: (tensor<16xf32>, tensor<3xi64>) -> tensor<1x1x16xf32>
+    // CHECK-SAME: (tensor<16xf32>) -> tensor<1x1x16xf32>
     // CHECK: mfuse.aclnn.add
   }
 }

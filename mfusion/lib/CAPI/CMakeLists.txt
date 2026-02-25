@@ -1,5 +1,10 @@
 file(GLOB MFUSION_CAPI_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.cc")
 
+if("$ENV{BUILD_TESTS}" STREQUAL "ON")
+  include(${PROJECT_SOURCE_DIR}/tests/ut/python/ut_utils/TestCAPI/CMakeLists.txt)
+  list(APPEND MFUSION_CAPI_SRC ${MFUSION_TEST_CAPI_SRC})
+endif()
+
 add_mlir_public_c_api_library(MFusionCAPI
   ${MFUSION_CAPI_SRC}
 

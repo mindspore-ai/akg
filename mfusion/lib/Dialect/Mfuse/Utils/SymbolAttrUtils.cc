@@ -14,7 +14,12 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Mfuse/Utils/SymbolicShapeUtils.h"
+#include "mfusion/Dialect/Mfuse/Utils/SymbolAttrUtils.h"
+
+#include <algorithm>
+#include <iterator>
+
+#include "mfusion/Analysis/SymbolicShape/SymExprBuilder.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 
 namespace mlir {
@@ -24,11 +29,11 @@ namespace mfuse {
 // SymbolicShapeAttr: tensor encoding (mfuse.symshape), shape expressions
 // ---------------------------------------------------------------------------
 
-bool SymbolicShapeUtils::isSymbolicShapeEncoding(mlir::Attribute encoding) {
+bool SymbolAttrUtils::isSymbolicShapeEncoding(mlir::Attribute encoding) {
   return encoding && encoding.isa<mlir::mfuse::SymbolicShapeAttr>();
 }
 
-mlir::Attribute SymbolicShapeUtils::getSymbolicShapeAttrFromEncoding(mlir::Type type) {
+mlir::Attribute SymbolAttrUtils::getSymbolicShapeAttrFromEncoding(mlir::Type type) {
   auto ranked = type.dyn_cast<mlir::RankedTensorType>();
   if (!ranked) {
     return {};
@@ -46,7 +51,24 @@ mlir::Attribute SymbolicShapeUtils::getSymbolicShapeAttrFromEncoding(mlir::Type 
   return {};
 }
 
-mlir::Attribute SymbolicShapeUtils::mergeEncoding(mlir::RankedTensorType type, mlir::Attribute symshapeAttr) {
+mlir::FailureOr<llvm::SmallVector<SymbolAttrUtils::SymExpr>> SymbolAttrUtils::getSymbolicShapeExprs(mlir::Type type) {
+  auto ranked = type.dyn_cast<mlir::RankedTensorType>();
+  if (!ranked) {
+    return mlir::failure();
+  }
+  mfusion::SymExprBuilder symBuilder;
+  if (ranked.hasStaticShape()) {
+    return symBuilder.buildSymExprsFromStaticShape(ranked.getShape());
+  }
+  auto symAttr = getSymbolicShapeAttrFromEncoding(type).dyn_cast<mlir::mfuse::SymbolicShapeAttr>();
+  if (!symAttr) {
+    return mlir::failure();
+  }
+  auto maybeExprs = symAttr.getSymEngineExprs();
+  return llvm::SmallVector<SymbolAttrUtils::SymExpr>(maybeExprs.begin(), maybeExprs.end());
+}
+
+mlir::Attribute SymbolAttrUtils::mergeEncoding(mlir::RankedTensorType type, mlir::Attribute symshapeAttr) {
   auto encoding = type.getEncoding();
   mlir::MLIRContext *ctx = type.getContext();
   auto symKey = mlir::StringAttr::get(ctx, kSymShapeKey);
@@ -108,7 +130,7 @@ mlir::Attribute SymbolicShapeUtils::mergeEncoding(mlir::RankedTensorType type, m
   return mlir::DictionaryAttr::get(ctx, entries);
 }
 
-mlir::RankedTensorType SymbolicShapeUtils::withSymbolicAttr(mlir::RankedTensorType type, mlir::Attribute symshapeAttr) {
+mlir::RankedTensorType SymbolAttrUtils::withSymbolicAttr(mlir::RankedTensorType type, mlir::Attribute symshapeAttr) {
   auto merged = mergeEncoding(type, symshapeAttr);
   if (merged == type.getEncoding()) {
     return type;
@@ -116,7 +138,27 @@ mlir::RankedTensorType SymbolicShapeUtils::withSymbolicAttr(mlir::RankedTensorTy
   return mlir::RankedTensorType::get(type.getShape(), type.getElementType(), merged);
 }
 
-bool SymbolicShapeUtils::attachToValue(mlir::Value value, mlir::Attribute symshapeAttr) {
+mlir::Attribute SymbolAttrUtils::createSymbolicShapeAttr(mlir::OpBuilder &builder,
+                                                         llvm::ArrayRef<std::string> symbols) {
+  llvm::SmallVector<mlir::Attribute> exprAttrs;
+  exprAttrs.reserve(symbols.size());
+  std::transform(symbols.begin(), symbols.end(), std::back_inserter(exprAttrs),
+                 [&builder](const std::string &s) { return builder.getStringAttr(s); });
+  return mlir::mfuse::SymbolicShapeAttr::get(builder.getContext(),
+                                             mlir::ArrayAttr::get(builder.getContext(), exprAttrs));
+}
+
+mlir::Attribute SymbolAttrUtils::createSymbolicShapeAttr(mlir::OpBuilder &builder,
+                                                         llvm::ArrayRef<SymbolAttrUtils::SymExpr> exprs) {
+  llvm::SmallVector<mlir::Attribute> exprAttrs;
+  exprAttrs.reserve(exprs.size());
+  std::transform(exprs.begin(), exprs.end(), std::back_inserter(exprAttrs),
+                 [&builder](const SymbolAttrUtils::SymExpr &expr) { return builder.getStringAttr(expr->__str__()); });
+  return mlir::mfuse::SymbolicShapeAttr::get(builder.getContext(),
+                                             mlir::ArrayAttr::get(builder.getContext(), exprAttrs));
+}
+
+bool SymbolAttrUtils::attachToValue(mlir::Value value, mlir::Attribute symshapeAttr) {
   auto ranked = value.getType().dyn_cast<mlir::RankedTensorType>();
   if (!ranked) {
     return false;
@@ -141,7 +183,7 @@ bool SymbolicShapeUtils::attachToValue(mlir::Value value, mlir::Attribute symsha
 // SymbolInfoAttr: func attribute mfuse.syminfo, per-symbol metadata (e.g. range)
 // ---------------------------------------------------------------------------
 
-mlir::Attribute SymbolicShapeUtils::getSymbolInfoAttr(mlir::func::FuncOp func, llvm::StringRef symbolName) {
+mlir::Attribute SymbolAttrUtils::getSymbolInfoAttr(mlir::func::FuncOp func, llvm::StringRef symbolName) {
   auto dict = getFuncSymInfo(func);
   if (!dict) {
     return {};
