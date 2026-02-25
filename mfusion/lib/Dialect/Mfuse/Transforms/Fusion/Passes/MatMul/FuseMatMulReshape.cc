@@ -15,6 +15,21 @@
 // limitations under the License.
 //
 //===----------------------------------------------------------------------===//
+//
+// DEPRECATED: This pass is no longer enabled in the fusion pipeline.
+//
+// This pass implements functionality equivalent to CANN's MatmulReshapeFusionPass,
+// adding a reshape operation to the second input of MatMul when N=1.
+//
+// However, the reshape operator added by this pass has identical input and output
+// shapes. This triggers the aten.reshape operator's canonicalization fold rule,
+// causing the reshape to be eliminated by MLIR's canonicalize pass. Consequently,
+// the reshape is always removed, rendering this pass ineffective.
+//
+// After evaluation, this pass is no longer enabled. The implementation is kept
+// for reference and potential future use.
+//
+//===----------------------------------------------------------------------===//
 
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatMulReshape.h"
 
