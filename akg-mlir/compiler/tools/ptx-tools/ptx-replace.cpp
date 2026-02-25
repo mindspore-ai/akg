@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 namespace {
 constexpr auto kShouldRemove = -9999999;
@@ -62,20 +63,20 @@ struct VectorizeEmitter {
    * This Function will try to replace a pack of 4 ld/st instructions into one vectorized instruction
    * e.g.
    *  ------------ Original ---------------
-   * 	// ld.global.nc.f32 	%f1, [%rd15+12];
-   * 	// ld.global.nc.f32 	%f2, [%rd15+8];
-   * 	// ld.global.nc.f32 	%f3, [%rd15+4];
-   * 	// ld.global.nc.f32 	%f4, [%rd15];
+   * // ld.global.nc.f32 %f1, [%rd15+12];
+   * // ld.global.nc.f32 %f2, [%rd15+8];
+   * // ld.global.nc.f32 %f3, [%rd15+4];
+   * // ld.global.nc.f32 %f4, [%rd15];
    *  --------------- New -----------------
-   * 	ld.global.nc.v4.f32     {%f4, %f3, %f2, %f1}, [%rd15];
+   * ld.global.nc.v4.f32 {%f4, %f3, %f2, %f1}, [%rd15];
    *
    *  ------------ Original ---------------
-   * // st.global.f32 	[%rd18+12], %f12;
-   * // st.global.f32 	[%rd18+8], %f11;
-   * // st.global.f32 	[%rd18+4], %f10;
-   * // st.global.f32 	[%rd18], %f9;
+   * // st.global.f32 [%rd18+12], %f12;
+   * // st.global.f32 [%rd18+8], %f11;
+   * // st.global.f32 [%rd18+4], %f10;
+   * // st.global.f32 [%rd18], %f9;
    *  --------------- New -----------------
-   * st.global.v4.f32        [%rd18], {%f9, %f10, %f11, %f12};
+   * st.global.v4.f32 [%rd18], {%f9, %f10, %f11, %f12};
    *
    * @param LdStGlobalCache pack of original load/store instructions
    * @return std::string new instruction that use vector load/store
@@ -95,7 +96,7 @@ struct VectorizeEmitter {
     auto instPos = 0;
     auto destPos = isLoad ? 2 : 1;
     auto srcPos = isLoad ? 1 : -1;
-    for (auto ld : LdStGlobalCache) {
+    for (const auto &ld : LdStGlobalCache) {
       std::vector<std::string> result = splitEachLoadStore(ld);
       if (result.size() != maxSplitLen - 1 && result.size() != maxSplitLen) {
         return "";
@@ -123,6 +124,7 @@ struct VectorizeEmitter {
           offset = std::stoi(result[destPos + 1]);
         } catch (const std::exception &e) {
           // offset is not a number
+          std::cerr << "convert to int error, numStr is " << result[destPos + 1] << std::endl;
           return "";
         }
       }
@@ -169,9 +171,7 @@ struct VectorizeEmitter {
         token = replaceString(token, "[", "");
         token = replaceString(token, "]", "");
         std::vector<std::string> subResult = splitString(token, '+');
-        for (auto subToken : subResult) {
-          finalResult.push_back(subToken);
-        }
+        std::copy(subResult.begin(), subResult.end(), std::back_inserter(finalResult));
       } else {
         finalResult.push_back(token);
       }
@@ -184,13 +184,13 @@ struct VectorizeEmitter {
     std::string packDataStr = "{";
     int currSize = -1;
     int firstOffset = -1;
-    for (auto it : srcIndex) {
+    for (const auto &it : srcIndex) {
       if (firstOffset == -1) {
         firstOffset = it.first;
       }
       if (currSize != -1 && currSize + static_cast<int>(vectorizeSize) != it.first) {
         std::cout << "Error, vectorize offset should be 4, get " << currSize << " vs " << it.first << "\n";
-        (void)std::make_pair("", -1);
+        return std::make_pair("", -1);
       }
       currSize = it.first;
       packDataStr += (it.second + delimiter);
@@ -210,7 +210,7 @@ struct VectorizeEmitter {
     return destStr;
   }
 
-  std::string emitInstruction(const std::string instruction, bool isLoad) const {
+  std::string emitInstruction(const std::string &instruction, bool isLoad) const {
     std::string newInstruction;
     if (ncFlag && isLoad) {
       newInstruction = replaceString(instruction, "global", "global.nc.v4");
@@ -243,13 +243,20 @@ std::vector<std::vector<int>> parse2DArrayFromFile(const std::string &filename) 
 
       while (std::getline(issRow, num, ',')) {
         // Remove any leading '['
-        if (num.front() == '[') {
+        if (!num.empty() && num.front() == '[') {
           (void)num.erase(num.begin());
         }
-        row.push_back(std::stoi(num));
+        try {
+          row.push_back(std::stoi(num));
+        } catch (...) {
+          // Skip invalid numbers
+          std::cerr << "convert to int error, numStr is " << num << std::endl;
+        }
       }
 
-      result.push_back(row);
+      if (!row.empty()) {
+        result.push_back(row);
+      }
     }
   }
 
@@ -296,7 +303,7 @@ bool containsInstruction(const std::string &line, const std::string &instruction
   return line.find(instruction) != std::string::npos;
 }
 
-void paramsToValues(std::vector<std::vector<int>> shapeArgs, std::vector<int> &values) {
+void paramsToValues(const std::vector<std::vector<int>> &shapeArgs, std::vector<int> &values) {
   values.clear();
   for (size_t i = 0; i < shapeArgs.size(); i++) {
     values.push_back(kShouldRemove);
@@ -326,19 +333,21 @@ void strSplitAndMark(const std::string &input, std::vector<std::string> &splited
   std::sregex_token_iterator end;
 
   std::regex patternNum("REPLACEMARK(\\d+)");
-  int pos = 0;
   for (; iter != end; ++iter) {
     auto s = iter->str();
     std::smatch match;
     if (std::regex_search(s, match, patternNum) && match.size() > 1) {
       std::string matchStr = match.str(1);
-      auto num = std::stoi(matchStr);
-      posFlags.push_back(num);
+      try {
+        auto num = std::stoi(matchStr);
+        posFlags.push_back(num);
+      } catch (...) {
+        posFlags.push_back(-1);
+      }
     } else {
       posFlags.push_back(-1);
     }
     splitedStrs.push_back(s);
-    pos++;
   }
 }
 
@@ -346,7 +355,15 @@ void concatPtx(std::string &result, const std::vector<std::string> &vec, const s
                const std::vector<std::string> &valueStrList) {
   for (size_t idx = 0; idx < vec.size(); idx++) {
     if (posFlags[idx] != -1) {
-      (void)result.append(valueStrList[(size_t)posFlags[idx]]);
+      size_t pos = static_cast<size_t>(posFlags[idx]);
+      if (pos < valueStrList.size()) {
+        (void)result.append(valueStrList[pos]);
+      } else {
+        // If index is out of bounds, keep the original REPLACEMARK string for debugging
+        (void)result.append(vec[idx]);
+        std::cerr << "Warning: posFlags[" << idx << "] = " << pos
+                  << " exceeds valueStrList.size() = " << valueStrList.size() << "\n";
+      }
     } else {
       (void)result.append(vec[idx]);
     }
@@ -361,6 +378,158 @@ void copyFile(const std::string &inputFilename, const std::string &outputFilenam
   outFile.close();
 }
 
+// Struct to hold processing state
+struct ProcessingState {
+  std::string kernelName;
+  std::vector<int> valueList;
+  std::vector<std::string> valueStrList;
+  size_t totalTensorNums;
+  size_t currentTensor;
+  int step;
+  bool ncFlag;
+  bool dynFlag;
+  std::ostringstream oss;
+  std::deque<std::string> ldStCache;
+
+  ProcessingState(std::vector<std::vector<int>> &shapeArgs, bool nc, bool dyn)
+      : totalTensorNums(shapeArgs.size()), currentTensor(0), step(0), ncFlag(nc), dynFlag(dyn) {
+    paramsToValues(shapeArgs, valueList);
+    std::transform(valueList.begin(), valueList.end(), std::back_inserter(valueStrList),
+                   [](int value) { return std::to_string(value); });
+  }
+};
+
+// Process ld/st cache for vectorization
+bool processLdStCache(ProcessingState &state, const std::string &line) {
+  if (!state.dynFlag && (containsInstruction(line, "ld.global") || containsInstruction(line, "st.global"))) {
+    bool addToCache = true;
+    if (!state.ldStCache.empty()) {
+      const std::string &lastLine = state.ldStCache.back();
+      bool isMixed = (containsInstruction(lastLine, "ld.global") && containsInstruction(line, "st.global")) ||
+                     (containsInstruction(lastLine, "st.global") && containsInstruction(line, "ld.global"));
+      if (isMixed) {
+        // Different type, flush cache first
+        addToCache = false;
+      }
+    }
+
+    if (addToCache) {
+      state.ldStCache.push_back(line);
+      return true;
+    }
+  }
+
+  // Flush the cache
+  std::string vecInst = VectorizeEmitter(state.ncFlag).tryEmitVectorize(state.ldStCache);
+  if (!vecInst.empty()) {
+    state.oss << vecInst;
+  } else {
+    for (const auto &cachedLine : state.ldStCache) {
+      state.oss << cachedLine << "\n";
+    }
+  }
+  state.ldStCache.clear();
+  return false;
+}
+
+// Handle step 0: find kernel name
+void processStep0(ProcessingState &state, const std::string &line) {
+  if (containsInstruction(line, ".entry")) {
+    state.kernelName = getKernelName(line);
+    state.step = 1;
+  }
+}
+
+// Handle step 1: process .param lines
+bool processStep1(ProcessingState &state, const std::string &line) {
+  if (containsInstruction(line, ".param")) {
+    std::string numStr = getParam(line, state.kernelName);
+    if (!numStr.empty()) {
+      try {
+        int num = std::stoi(numStr);
+        if (num >= 0 && num < static_cast<int>(state.valueList.size()) && state.valueList[num] == kShouldKeep) {
+          state.currentTensor++;
+          std::string processedLine = line;
+          if (state.currentTensor == state.totalTensorNums) {
+            size_t pos = processedLine.find(",");
+            if (pos != std::string::npos) {
+              processedLine.erase(pos, 1);
+            }
+          }
+          state.oss << processedLine << "\n";
+        }
+      } catch (const std::exception &) {
+        state.oss << line << "\n";
+      }
+    } else {
+      state.oss << line << "\n";
+    }
+    return true;
+  } else {
+    state.step = 2;
+    return false;
+  }
+}
+
+// Handle step 2: process param loads and nc flag
+bool processStep2(ProcessingState &state, const std::string &line) {
+  if (containsInstruction(line, state.kernelName)) {
+    std::string reg, numStr;
+    std::tie(reg, numStr) = getRegFromLoadParamGlobal(line, state.kernelName);
+    if (!reg.empty() && !numStr.empty()) {
+      try {
+        int num = std::stoi(numStr);
+        if (num >= 0 && num < static_cast<int>(state.valueList.size()) && state.valueList[num] != kShouldKeep) {
+          state.oss << "\tmov.u64 " << reg << ", REPLACEMARK" << num << ";\n";
+          return true;
+        }
+      } catch (const std::exception &) {
+        // Fall through to default handling
+        std::cerr << "convert to int error, numStr is " << numStr << std::endl;
+      }
+    }
+  }
+
+  if (state.ncFlag && line.find("ld.global") != std::string::npos) {
+    state.oss << addNcMarkForLdg(line) << "\n";
+    return true;
+  }
+  return false;
+}
+
+// Process a single line of PTX
+void processLine(ProcessingState &state, const std::string &line) {
+  // First handle ld/st cache
+  if (processLdStCache(state, line)) {
+    return;
+  }
+
+  // If dynamic flag, just output the line
+  if (state.dynFlag) {
+    state.oss << line << "\n";
+    return;
+  }
+
+  // Handle step processing
+  bool handled = false;
+  switch (state.step) {
+    case 0:
+      processStep0(state, line);
+      break;
+    case 1:
+      handled = processStep1(state, line);
+      break;
+    case 2:
+      handled = processStep2(state, line);
+      break;
+  }
+
+  // If not handled, output as is
+  if (!handled) {
+    state.oss << line << "\n";
+  }
+}
+
 void ptxReplacement(const std::string &inputFilename, const std::string &shapeArgFilename,
                     const std::string &outputFilename, const bool &ncFlag, const bool &dynFlag) {
   auto shapeArgs = parse2DArrayFromFile(shapeArgFilename);
@@ -372,119 +541,39 @@ void ptxReplacement(const std::string &inputFilename, const std::string &shapeAr
   }
 
   std::ofstream outFile(outputFilename);
-  std::ostringstream oss;
   if (!outFile) {
     std::cerr << "Failed to open " << outputFilename << " for writing.\n";
     return;
   }
 
-  std::string kernelName;
-
-  std::vector<int> valueList;
-  std::vector<std::string> valueStrList;
-  size_t totalTensorNums = shapeArgs.size();
-  paramsToValues(shapeArgs, valueList);
-  for (auto item : valueList) {
-    valueStrList.push_back(std::to_string(item));
-  }
-
-  size_t currentTensor = 0;
-
-  std::string line;
-  int step = 0;
-  std::deque<std::string> LdStGlobalCache;
+  ProcessingState state(shapeArgs, ncFlag, dynFlag);
 
 #ifdef ENABLE_PROFILE
   auto start = std::chrono::high_resolution_clock::now();
 #endif
 
+  // Process all lines
+  std::string line;
   while (std::getline(inFile, line)) {
-    bool diffInstruction = false;
-    if (containsInstruction(line, "ld.global") || containsInstruction(line, "st.global")) {
-      // We put all sequential ld/st instructions into cache
-      if (!LdStGlobalCache.empty()) {
-        auto lastLine = LdStGlobalCache.back();
-        auto conflict = (containsInstruction(lastLine, "ld.global") && containsInstruction(line, "st.global")) ||
-                        (containsInstruction(lastLine, "st.global") && containsInstruction(line, "ld.global"));
-        if (!conflict) {
-          LdStGlobalCache.push_back(line);
-          continue;
-        } else {
-          diffInstruction = true;
-        }
-      } else {
-        LdStGlobalCache.push_back(line);
-        continue;
-      }
-    } else {
-      diffInstruction = true;
-    }
-
-    // And we start to process the cache when we met different instruction
-    if (diffInstruction) {
-      auto vecInst = VectorizeEmitter(ncFlag).tryEmitVectorize(LdStGlobalCache);
-      if (!vecInst.empty()) {
-        // We successfully replace the instructions in cache with one vectorized instruction
-        // so we clean the cache to avoid generate them.
-        oss << vecInst << '\n';
-        LdStGlobalCache.clear();
-      }
-    }
-
-    // The instructions in cache cannot be replaced by one vectorized instruction, so we restore them.
-    while (!LdStGlobalCache.empty()) {
-      auto ld = LdStGlobalCache.front();
-      oss << ld << '\n';
-      LdStGlobalCache.pop_front();
-    }
-    if (dynFlag) {
-      oss << line << '\n';
-      continue;
-    }
-    if (step == 0 && containsInstruction(line, ".entry")) {
-      kernelName = getKernelName(line);
-      step = 1;
-    } else if (step == 1) {
-      if (containsInstruction(line, ".param")) {
-        auto numStr = getParam(line, kernelName);
-        auto num = std::stoi(numStr);
-        if (valueList[num] == kShouldKeep) {
-          currentTensor++;
-          if (currentTensor == totalTensorNums) {
-            size_t pos = line.find(",");
-            if (pos != std::string::npos) {
-              (void)line.erase(pos, 1);
-            }
-          }
-          oss << line << '\n';
-        }
-        continue;
-      } else {
-        step = 2;
-      }
-    } else if (step == 2) {
-      if (containsInstruction(line, kernelName)) {
-        std::string reg, numStr;
-        std::tie(reg, numStr) = getRegFromLoadParamGlobal(line, kernelName);
-        if (reg != "" && numStr != "") {
-          int num = std::stoi(numStr);
-          if (valueList[num] != kShouldKeep) {
-            oss << "\tmov.u64 " << reg << ", "
-                << "REPLACEMARK" << num << ";\n";
-            continue;
-          }
-        }
-      }
-      if (ncFlag && line.find("ld.global") != std::string::npos) {
-        oss << addNcMarkForLdg(line) << "\n";
-        continue;
-      }
-    }
-    oss << line << '\n';
+    processLine(state, line);
   }
+
+  // Flush any remaining cache content
+  if (!state.ldStCache.empty()) {
+    std::string vecInst = VectorizeEmitter(state.ncFlag).tryEmitVectorize(state.ldStCache);
+    if (!vecInst.empty()) {
+      state.oss << vecInst;
+    } else {
+      for (const auto &cachedLine : state.ldStCache) {
+        state.oss << cachedLine << "\n";
+      }
+    }
+  }
+
+  // Split and replace
   std::vector<int> posFlags;
   std::vector<std::string> splitedStrs;
-  std::string originalPtx = oss.str();
+  std::string originalPtx = state.oss.str();
   strSplitAndMark(originalPtx, splitedStrs, posFlags);
 
 #ifdef ENABLE_PROFILE
@@ -494,23 +583,27 @@ void ptxReplacement(const std::string &inputFilename, const std::string &shapeAr
   start = std::chrono::high_resolution_clock::now();
 #endif
 
+  // Concat and write
   std::string updatedPtx;
   const size_t remSize = 100;
   updatedPtx.reserve(originalPtx.length() + remSize);
-  concatPtx(updatedPtx, splitedStrs, posFlags, valueStrList);
+  concatPtx(updatedPtx, splitedStrs, posFlags, state.valueStrList);
+
 #ifdef ENABLE_PROFILE
   stop = std::chrono::high_resolution_clock::now();
   duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
   std::cout << "Time taken by ptx-replace in runtime: " << duration.count() << " microseconds" << std::endl;
 #endif
+
   outFile << updatedPtx;
   inFile.close();
   outFile.close();
 }
 }  // namespace
+
 int main(int argc, char *argv[]) {
   if (argc < 4) {
-    std::cerr << "Usage: " << argv[0] << " <input file> <output file>\n";
+    std::cerr << "Usage: " << argv[0] << " <input file> <shape_arg file> <output file>\n";
     return 1;
   }
 

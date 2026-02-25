@@ -107,10 +107,9 @@ def compare_tensor(acu_output, exp_output, rtol=1.e-5, atol=1.e-8, equal_nan=Fal
         index = np.argmax(absolute_err)
         eps = 1e-8
         relative_err = max_err / (abs(exp_output.reshape(-1)[index]) or eps)
-        logging.error("This shape precision is not up to standard, compare failed. expect %s but got %s",
-                      exp_output.reshape(-1)[index], acu_output.reshape(-1)[index])
-        logging.error("Max absolute error is %s", max_err)
-        logging.error("Max absolute error's relative error is %s", relative_err)
+        logging.error("This shape precision is not up to standard, compare failed. at %s expect %s but got %s",
+                      index, exp_output.reshape(-1)[index], acu_output.reshape(-1)[index])
+        logging.error("Max absolute error is %s and Max absolute error's relative error is %s", max_err, relative_err)
     return res
 
 
