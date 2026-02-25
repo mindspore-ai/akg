@@ -14,7 +14,7 @@ add_library(akg_ascend_launch_runtime
   RuntimeErrorCodes.cpp
 )
 set_property(TARGET akg_ascend_launch_runtime PROPERTY CXX_STANDARD 17)
-target_link_libraries(akg_ascend_launch_runtime glog dl)
+target_link_libraries(akg_ascend_launch_runtime glog dl nlohmann_json::nlohmann_json)
 
 check_cxx_compiler_flag(-Wweak-vtables
   COMPILER_SUPPORTS_WARNING_WEAK_VTABLES)
