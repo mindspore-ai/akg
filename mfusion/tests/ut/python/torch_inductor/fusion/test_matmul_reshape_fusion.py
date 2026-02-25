@@ -14,12 +14,17 @@
 
 """UT for MatMul Reshape fusion in fuse_and_optimize pipeline."""
 
+import os
+import pytest
+
+os.environ['LLVM_DEBUG'] = 'fuse-matmul-reshape'
+
+# pylint: disable=wrong-import-position
 from mfusion.torch.inductor import fuse_and_optimize
 
+# pylint: disable=wrong-import-position
 from ut_utils.mlir_checker import MlirChecker
 
-import os
-os.environ['LLVM_DEBUG'] = 'fuse-matmul-reshape'
 
 # K size threshold for FP16/BF16: fusion only when K < 27392 (must match C++ kMaxKForFp16 + 1).
 K_MAX_FP16_RESHAPE_FUSION = 27392
@@ -76,45 +81,60 @@ module {
 }
 """
 
+
+# All the test cases are skipped because the fuse-matmul-reshape pass is disabled.
+# Refer to FuseMatmulReshape.cc for more details.
+@pytest.mark.skip(reason="fuse-matmul-reshape pass is disabled")
 def test_matmul_reshape_fusion_f32():
     """Test MatMul Reshape fusion with F32 data type."""
     result = fuse_and_optimize(MLIR_MATMUL_RESHAPE_F32)
     checker = MlirChecker.parse_torch_module(result)
     # After fusion, the second input should have a reshape operation
-    # Check that torch.aten.view exists (mfuse.reshape is converted to torch.aten.view)
-    assert checker.check_has_op("torch.aten.view"), checker.error or "torch.aten.view should exist after fusion"
+    # Check that torch.aten.reshape exists (mfuse.reshape is converted to torch.aten.reshape)
+    assert checker.check_has_op("torch.aten.reshape"), checker.error or "torch.aten.reshape should exist after fusion"
 
 
+@pytest.mark.skip(reason="fuse-matmul-reshape pass is disabled")
 def test_matmul_reshape_fusion_f16():
     """Test MatMul Reshape fusion with F16 data type and K < 27392."""
     result = fuse_and_optimize(MLIR_MATMUL_RESHAPE_F16)
     checker = MlirChecker.parse_torch_module(result)
     # After fusion, the second input should have a reshape operation
-    # Check that torch.aten.view exists (mfuse.reshape is converted to torch.aten.view)
-    assert checker.check_has_op("torch.aten.view"), checker.error or "torch.aten.view should exist after fusion"
+    # Check that torch.aten.reshape exists (mfuse.reshape is converted to torch.aten.reshape)
+    assert checker.check_has_op("torch.aten.reshape"), checker.error or "torch.aten.reshape should exist after fusion"
 
 
+@pytest.mark.skip(reason="fuse-matmul-reshape pass is disabled")
 def test_matmul_reshape_fusion_f16_large_k():
     """Test MatMul Reshape fusion with F16 data type and K >= 27392."""
     result = fuse_and_optimize(MLIR_MATMUL_RESHAPE_F16_LARGE_K)
     checker = MlirChecker.parse_torch_module(result)
     # After fusion, the second input should NOT have a reshape operation
-    # Check that torch.aten.view does not exist (mfuse.reshape is converted to torch.aten.view)
-    assert checker.check_no_op("torch.aten.view"), checker.error or "torch.aten.view should not exist after fusion for large K"
+    # Check that torch.aten.reshape does not exist (mfuse.reshape is converted to torch.aten.reshape)
+    assert checker.check_no_op("torch.aten.reshape"), (
+        checker.error or "torch.aten.reshape should not exist after fusion for large K"
+    )
+    assert checker.check_no_op("torch.aten.view"), checker.error or "torch.aten.view should not exist after fusion"
 
 
+@pytest.mark.skip(reason="fuse-matmul-reshape pass is disabled")
 def test_matmul_no_reshape_n_not_1():
     """Test MatMul Reshape fusion with N != 1."""
     result = fuse_and_optimize(MLIR_MATMUL_NO_RESHAPE_N_NOT_1)
     checker = MlirChecker.parse_torch_module(result)
     # After fusion, the second input should NOT have a reshape operation
-    # Check that torch.aten.view does not exist (mfuse.reshape is converted to torch.aten.view)
-    assert checker.check_no_op("torch.aten.view"), checker.error or "torch.aten.view should not exist after fusion for N != 1"
+    # Check that torch.aten.reshape does not exist (mfuse.reshape is converted to torch.aten.reshape)
+    assert checker.check_no_op("torch.aten.reshape"), (
+        checker.error or "torch.aten.reshape should not exist after fusion for N != 1"
+    )
+    assert checker.check_no_op("torch.aten.view"), checker.error or "torch.aten.view should not exist after fusion"
 
+
+@pytest.mark.skip(reason="fuse-matmul-reshape pass is disabled")
 def test_matmul_with_bias_reshape_fusion_f32():
     """Test MatMulWithBias Reshape fusion with F32 data type."""
     result = fuse_and_optimize(MLIR_MATMUL_WITH_BIAS_RESHAPE_F32)
     checker = MlirChecker.parse_torch_module(result)
     # After fusion, the second input should have a reshape operation
-    # Check that torch.aten.view exists (mfuse.reshape is converted to torch.aten.view)
-    assert checker.check_has_op("torch.aten.view"), checker.error or "torch.aten.view should exist after fusion"
+    # Check that torch.aten.reshape exists (mfuse.reshape is converted to torch.aten.reshape)
+    assert checker.check_has_op("torch.aten.reshape"), checker.error or "torch.aten.reshape should exist after fusion"

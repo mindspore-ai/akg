@@ -63,15 +63,13 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
     using PassCreator = std::function<std::unique_ptr<Pass>()>;
     std::vector<std::pair<const char*, PassCreator>> passes = {
         // MatMul-related fusion passes (order by dependency):
-        // 1. FuseMatMulCast: matmul+cast -> matmul (output type); no deps.
-        // 2. FuseMatMulReshape: matmul/batch_matmul (N=1) -> add reshape to second input; before any other matmul transformations.
-        // 3. FuseMatmulUnsqueezeSqueeze: normalize 1D inputs (reshape); after Cast for stable type.
-        // 4. FuseMatmulTransposeWeight: alignment (permute/trans); after shape normalization.
-        // 5. FuseBatchMatMul: transpose elimination (permute into trans); BatchMatMul 2D -> MatMul.
-        // 6. FuseBatchMatMulToMul: matmul/batch_matmul (k=1) -> mul; after shape normalization.
-        // 7. FuseMatmulReshapeBiasAdd: matmul->reshape->add -> matmul_with_bias; last so it sees final matmul form.
+        // FuseMatMulCast: matmul+cast -> matmul (output type); no deps.
+        // FuseMatmulUnsqueezeSqueeze: normalize 1D inputs (reshape); after Cast for stable type.
+        // FuseMatmulTransposeWeight: alignment (permute/trans); after shape normalization.
+        // FuseBatchMatMul: transpose elimination (permute into trans); BatchMatMul 2D -> MatMul.
+        // FuseBatchMatMulToMul: matmul/batch_matmul (k=1) -> mul; after shape normalization.
+        // FuseMatmulReshapeBiasAdd: matmul->reshape->add -> matmul_with_bias; last so it sees final matmul form.
         {"fuse-matmul-cast", []() { return createFuseMatMulCastPass(); }},
-        {"fuse-matmul-reshape", []() { return createFuseMatMulReshapePass(); }},
         {"fuse-matmul-unsqueeze-squeeze",
          []() { return createFuseMatmulUnsqueezeSqueezePass(); }},
         {"fuse-matmul-transpose-weight",
