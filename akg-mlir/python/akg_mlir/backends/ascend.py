@@ -89,7 +89,9 @@ def run_akg_opt(
     dyn_shape=False,
     enable_loop_fusion=False,
     arch=None,
+    dump_ir=False,
     mlir_timing=False,
+    dump_log_path=None,
 ):
     """
     Run akg-opt to optimize MLIR for Ascend backend.
@@ -101,7 +103,9 @@ def run_akg_opt(
         dyn_shape: Whether to enable dynamic shape optimization
         enable_loop_fusion: Whether to enable loop fusion
         arch: Architecture specification (optional)
+        dump_ir: Whether to dump IR after all passes
         mlir_timing: Whether to print every pass time
+        dump_log_path: Path to dump log file (optional)
 
     Returns:
         subprocess.CompletedProcess result
@@ -109,7 +113,7 @@ def run_akg_opt(
     Raises:
         RuntimeError: If akg-opt execution fails
     """
-    dump_ir = os.environ.get("AKG_DUMP_IR", "0") == "1"
+    dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
 
     akg_opt_path = get_akg_opt_path(akg_tools_dir)
 
@@ -137,12 +141,13 @@ def run_akg_opt(
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         if dump_ir:
-            output_dir = os.path.dirname(output_file)
-            base_name = os.path.basename(output_file)
-            kernel_name, _ = os.path.splitext(base_name)
-            if kernel_name.endswith("_out"):
-                kernel_name = kernel_name[: -len("_out")]
-            dump_log_path = os.path.join(output_dir, kernel_name + "_dump_ascend_state1.log")
+            if not dump_log_path:
+                output_dir = os.path.dirname(output_file)
+                base_name = os.path.basename(output_file)
+                kernel_name, _ = os.path.splitext(base_name)
+                if kernel_name.endswith("_out"):
+                    kernel_name = kernel_name[: -len("_out")]
+                dump_log_path = os.path.join(output_dir, kernel_name + "_dump_ascend_state1.log")
             with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                 f.write(result.stderr)
         logging.info("akg-opt pipeline success")
@@ -151,7 +156,7 @@ def run_akg_opt(
         logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
         raise RuntimeError("mlir pipeline failed in case: " + os.path.basename(input_file) + "!\n") from e
 
-def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=True, dump_log_path=None):
+def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=True, dump_ir=False, dump_log_path=None):
     """Using bishengir-compile to generate Ascend binary.
 
     Args:
@@ -159,9 +164,10 @@ def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=Tru
         output_so_path: Output .so file path
         block_dim: Block dimension
         enable_loop_fusion: Whether loop fusion is enabled in pipeline
+        dump_ir: Whether to dump bishengir-compile stderr log
         dump_log_path: Optional path to dump bishengir-compile stderr log.
     """
-    dump_ir = os.environ.get("AKG_DUMP_IR", "0") == "1"
+    dump_ir = dump_ir or (os.environ.get("AKG_DUMP_IR", "0") == "1")
 
     compile_cmd = [
         "bishengir-compile",
