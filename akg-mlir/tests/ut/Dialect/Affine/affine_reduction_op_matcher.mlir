@@ -1,6 +1,6 @@
 // RUN: akg-opt %s -affine-reduction-annotation -allow-unregistered-dialect | FileCheck %s
 
-// CHECK-LABEL: func.func @Fused_Cast_ReduceSum_split_1645489274500693274(%arg0: memref<1x5100x3072xbf16>) -> memref<1x1x3072xf32> attributes {OperatorType = "Reduce", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
+// CHECK-LABEL: func.func @Fused_Cast_ReduceSum_split_1645489274500693274(%arg0: memref<1x5100x3072xbf16>) -> memref<1x1x3072xf32> attributes {OperatorType = "Reduction", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
 // CHECK-NEXT:   %c0 = arith.constant 0 : index
 // CHECK-NEXT:   %cst = arith.constant 0.000000e+00 : f32
 // CHECK-NEXT:   %alloc = memref.alloc() {alignment = 64 : i64} : memref<1x5100x3072xf32>
@@ -33,7 +33,7 @@
 // CHECK-NEXT:   return %expand_shape : memref<1x1x3072xf32>
 // CHECK-NEXT: }
 
-func.func @Fused_Cast_ReduceSum_split_1645489274500693274(%arg0: memref<1x5100x3072xbf16>) -> memref<1x1x3072xf32> attributes {OperatorType = "Reduce", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
+func.func @Fused_Cast_ReduceSum_split_1645489274500693274(%arg0: memref<1x5100x3072xbf16>) -> memref<1x1x3072xf32> attributes {OperatorType = "Reduction", compute_capability = "", hacc.function_kind = #hacc.function_kind<HOST>, mindspore_kernel, process = "aicore"} {
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.000000e+00 : f32
   %alloc = memref.alloc() {alignment = 64 : i64} : memref<1x5100x3072xf32>

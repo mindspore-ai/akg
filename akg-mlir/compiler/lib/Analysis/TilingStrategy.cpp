@@ -1003,7 +1003,7 @@ void NpuDefaultTileStrategy::AddNpuConstraint(NpuModelGraphPtr npuGraph) {
   bool isReduceOp = false;
   if (npuGraph->funcOp) {
     auto opType = CommonUtils::getOperatorType(npuGraph->funcOp);
-    isReduceOp = (opType == OperatorTemplate::Reduce);
+    isReduceOp = (opType == OperatorTemplate::Reduction);
   }
 
   SmallVector<AxisPtr> axes = collectAxes(npuGraph);

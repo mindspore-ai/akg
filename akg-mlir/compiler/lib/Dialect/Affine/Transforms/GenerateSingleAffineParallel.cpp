@@ -36,10 +36,6 @@ namespace mlir {
 #define GEN_PASS_DEF_GENERATESINGLEAFFINEPARALLEL
 #define GEN_PASS_DECL_GENERATESINGLEAFFINEPARALLEL
 #include "akg/Dialect/Affine/Passes.h.inc"
-}  // namespace mlir
-
-using namespace mlir;
-using namespace llvm;
 
 namespace {
 
@@ -152,7 +148,7 @@ void GenerateSingleAffineParallelPass::updateReductionLoop() {
   (void)funcOp->walk([&](Operation *redOp) {
     if (!isa<mlir::func::FuncOp>(redOp) && redOp->hasAttr(kReductionAxesStr)) {
       ArrayAttr axesArrayAttr = cast<ArrayAttr>(redOp->getAttr(kReductionAxesStr));
-      ;
+
       SmallVector<mlir::Attribute> intAttrs;
       SmallVector<int, 8> flags;
       for (auto axisAttr : axesArrayAttr) {
@@ -185,18 +181,19 @@ void GenerateSingleAffineParallelPass::runOnOperation() {
   OperatorTemplate opType = CommonUtils::getOperatorType(getOperation());
   if (!hasLoop) {
     generateWithoutLoop();
-  } else if ((forceGen == 1 || opType == OperatorTemplate::Reduce) && outerLoop) {
+  } else if ((forceGen == 1 || opType == OperatorTemplate::Reduction) && outerLoop) {
     generateWithLoop(outerLoop);
   }
-  if (opType == OperatorTemplate::Reduce) {
+  if (opType == OperatorTemplate::Reduction) {
     updateReductionLoop();
   }
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createGenerateSingleAffineParallelPass() {
+std::unique_ptr<OperationPass<func::FuncOp>> createGenerateSingleAffineParallelPass() {
   return std::make_unique<GenerateSingleAffineParallelPass>();
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createGenerateSingleAffineParallelPass(bool isDynamicShape) {
+std::unique_ptr<OperationPass<func::FuncOp>> createGenerateSingleAffineParallelPass(bool isDynamicShape) {
   return std::make_unique<GenerateSingleAffineParallelPass>(isDynamicShape);
 }
+}  // namespace mlir

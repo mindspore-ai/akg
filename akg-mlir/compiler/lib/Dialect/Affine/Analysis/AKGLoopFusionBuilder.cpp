@@ -423,9 +423,9 @@ OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<
   for (auto nid : nodes) {
     auto op = getNode(nid)->op;
     if (op->hasAttr(kReductionTypeStr)) {
-      return OperatorTemplate::Reduce;
+      return OperatorTemplate::Reduction;
     } else if (op->hasAttr(kReductionInitAttr)) {
-      return OperatorTemplate::ReduceInit;
+      return OperatorTemplate::ReductionInit;
     }
 
     if (isa<memref::ExpandShapeOp, memref::CollapseShapeOp>(op)) {
@@ -1008,249 +1008,318 @@ void FusionCodeGenHelper::adjustSliceBounds(ArrayRef<Operation *> opsA, ArrayRef
   }
 }
 
-static bool isDependentLoadOrStoreOp(Operation *op, DenseMap<Value, bool> &values) {
-  if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
-    return values.count(loadOp.getMemRef()) > 0 && values[loadOp.getMemRef()];
+static bool isDependentLoadOrStoreOp(Operation *candidate,
+                                     DenseMap<Value, bool> &memFlags) {
+  auto asLoad = dyn_cast<affine::AffineReadOpInterface>(candidate);
+  if (asLoad) {
+    Value memref = asLoad.getMemRef();
+    auto it = memFlags.find(memref);
+    return it != memFlags.end() && it->second;
   }
-  if (auto storeOp = dyn_cast<affine::AffineWriteOpInterface>(op)) {
-    return values.count(storeOp.getMemRef()) > 0;
+
+  auto asStore = dyn_cast<affine::AffineWriteOpInterface>(candidate);
+  if (asStore) {
+    Value memref = asStore.getMemRef();
+    return memFlags.count(memref) != 0;
   }
+
   return false;
 }
 
-// Returns the first operation in range (opA, opB) which has a data dependence on opA.
-static Operation *getFirstDependentOpInRange(affine::AffineForOp opA, affine::AffineForOp opB,
-                                             DenseMap<Value, bool> &values) {
-  // For each opX in block in range (opA, opB), check if there is a data dependence from opA to opX (opA and opX access
-  // the same memref and at least one of the accesses is a store).
-  Operation *firstDepOp = nullptr;
-  for (Block::iterator it = std::next(Block::iterator(opA)); it != Block::iterator(opB); ++it) {
-    Operation *opX = &(*it);
-    opX->walk([&](Operation *op) {
-      if (!firstDepOp && isDependentLoadOrStoreOp(op, values)) {
-        firstDepOp = opX;
+// Returns the earliest operation strictly between opA and opB that is
+// data-dependent on opA.
+static Operation *getFirstDependentOpInRange(affine::AffineForOp opA,
+                                             affine::AffineForOp opB,
+                                             DenseMap<Value, bool> &memFlags) {
+  // Walk over each opX in the block in the open interval (opA, opB) and look
+  // for a dependence from opA to opX, i.e. both touch the same memref and
+  // at least one of them performs a write.
+  Operation *firstDependent = nullptr;
+
+  for (auto it = std::next(Block::iterator(opA)), e = Block::iterator(opB);
+       it != e && !firstDependent; ++it) {
+    Operation *opX = &*it;
+
+    opX->walk([&](Operation *nested) {
+      if (firstDependent) {
+        return WalkResult::interrupt();
+      }
+      if (isDependentLoadOrStoreOp(nested, memFlags)) {
+        firstDependent = opX;
         return WalkResult::interrupt();
       }
       return WalkResult::advance();
     });
-    if (firstDepOp) {
-      break;
-    }
   }
-  return firstDepOp;
+
+  return firstDependent;
 }
 
-// Returns the last operation opX in range (opA, opB), for which there exists a data dependence from opX to opB.
-static Operation *getLastDependentOpInRange(affine::AffineForOp opA, affine::AffineForOp opB,
-                                            DenseMap<Value, bool> &values) {
-  // For each opX in block in range (opA, opB) in reverse order, check if there is a data dependence from opX to opB:
-  // *) opX and opB access the same memref and at least one of the accesses is a store.
-  // *) opX produces an SSA Value which is used by opB.
-  Operation *lastDepOp = nullptr;
-  for (Block::reverse_iterator it = std::next(Block::reverse_iterator(opB)); it != Block::reverse_iterator(opA); ++it) {
-    Operation *opX = &(*it);
-    opX->walk([&](Operation *op) {
-      if (isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(op)) {
-        if (isDependentLoadOrStoreOp(op, values)) {
-          lastDepOp = opX;
+// Returns the last operation opX strictly between opA and opB such that there
+// exists a data dependence from opX to opB.
+static Operation *getLastDependentOpInRange(affine::AffineForOp opA,
+                                            affine::AffineForOp opB,
+                                            DenseMap<Value, bool> &memFlags) {
+  // Traverse operations in (opA, opB) in reverse order and determine the last
+  // opX that has a dependence to opB via:
+  //  * conflicting memory access on the same memref with at least one store, or
+  //  * SSA value produced by opX and eventually used in the loop nest of opB.
+  Operation *lastDependent = nullptr;
+
+  for (auto it = std::next(Block::reverse_iterator(opB)),
+            e  = Block::reverse_iterator(opA);
+       it != e && !lastDependent; ++it) {
+    Operation *opX = &*it;
+
+    opX->walk([&](Operation *nested) {
+      if (lastDependent) {
+        return WalkResult::interrupt();
+      }
+
+      if (isa<affine::AffineReadOpInterface,
+              affine::AffineWriteOpInterface>(nested)) {
+        if (isDependentLoadOrStoreOp(nested, memFlags)) {
+          lastDependent = opX;
           return WalkResult::interrupt();
         }
         return WalkResult::advance();
       }
-      for (Value value : op->getResults()) {
-        for (Operation *user : value.getUsers()) {
-          SmallVector<affine::AffineForOp, 4> loops;
-          // Check if any loop in loop nest surrounding 'user' is opB.
-          getAffineForIVs(*user, &loops);
-          if (llvm::is_contained(loops, opB)) {
-            lastDepOp = opX;
+
+      for (Value produced : nested->getResults()) {
+        for (Operation *user : produced.getUsers()) {
+          SmallVector<affine::AffineForOp, 4> surroundingLoops;
+          // Check whether any loop in the loop nest enclosing 'user' is opB.
+          getAffineForIVs(*user, &surroundingLoops);
+          if (llvm::is_contained(surroundingLoops, opB)) {
+            lastDependent = opX;
             return WalkResult::interrupt();
           }
         }
       }
+
       return WalkResult::advance();
     });
-    if (lastDepOp) {
-      break;
-    }
   }
-  return lastDepOp;
+
+  return lastDependent;
 }
 
-// Attempts to find a location where, when inserting the fused loop, the original data dependencies of the program
-// remain intact.
-static Operation *getFusedLoopNestInsertionPoint(affine::AffineForOp forOpA, affine::AffineForOp forOpB,
-                                                 DenseMap<Value, bool> &valuesOpA, DenseMap<Value, bool> &valuesOpB) {
-  Operation *firstDepOpA = getFirstDependentOpInRange(forOpA, forOpB, valuesOpA);
-  Operation *lastDepOpB = getLastDependentOpInRange(forOpA, forOpB, valuesOpB);
-  // Block:
-  //   ...
-  //    opA
-  //    ...
-  //    lastDepOpB  (lastDepOpB → opB)
-  //    ...
-  //    firstDepOpA (opA → firstDepOpA)
-  //    ...
-  //    opB
+// Attempts to compute an insertion position for the fused loop nest such that
+// the original data dependences of the surrounding program are preserved.
+static Operation *getFusedLoopNestInsertionPoint(
+    affine::AffineForOp srcLoop, affine::AffineForOp dstLoop,
+    DenseMap<Value, bool> &srcMemFlags, DenseMap<Value, bool> &dstMemFlags) {
+
+  Operation *firstFromSrc =
+      getFirstDependentOpInRange(srcLoop, dstLoop, srcMemFlags);
+  Operation *lastToDst =
+      getLastDependentOpInRange(srcLoop, dstLoop, dstMemFlags);
+
+  // Block layout abstraction:
   //
-  // Valid insertion point range: (lastDepOpB, firstDepOpA)
-  if (firstDepOpA) {
-    if (lastDepOpB) {
-      if (firstDepOpA->isBeforeInBlock(lastDepOpB) || firstDepOpA == lastDepOpB) {
-        // No valid insertion point exists which preserves dependences.
-        return nullptr;
-      }
+  //   ...
+  //   srcLoop
+  //   ...
+  //   lastToDst   (lastToDst → dstLoop)
+  //   ...
+  //   firstFromSrc (srcLoop → firstFromSrc)
+  //   ...
+  //   dstLoop
+  //
+  // Legal insertion range lies strictly inside: (lastToDst, firstFromSrc).
+  if (firstFromSrc) {
+    if (lastToDst &&
+        (firstFromSrc == lastToDst ||
+         firstFromSrc->isBeforeInBlock(lastToDst))) {
+      // There is no position that simultaneously respects both dependence
+      // directions.
+      return nullptr;
     }
-    // Return insertion point in valid range closest to opB.
-    return firstDepOpA;
+    // Choose the valid insertion point that appears closest to dstLoop.
+    return firstFromSrc;
   }
-  // No dependences from opA to operation in range (opA, opB), return opB insertion point.
-  return forOpB;
+
+  // If there is no dependence from srcLoop to any operation in (srcLoop, dstLoop),
+  // inserting at dstLoop is always safe.
+  return dstLoop;
 }
 
-// Helper function to check if an operation is still valid (not erased or corrupted).
-// An operation is considered invalid if:
-// - It has no parent operation (detached from IR)
-// - It has no operands (AffineLoad/Store requires at least a memref operand)
-static bool isOperationValid(Operation *op) {
-  if (!op) {
+// Helper function to check if an operation is still valid (not removed or
+// structurally broken).
+// An operation is treated as invalid when:
+// - It lacks a parent operation (detached from the IR), or
+// - It has zero operands (AffineLoad/Store always expect at least a memref).
+static bool isOperationValid(Operation *candidate) {
+  if (!candidate) {
     return false;
   }
-  // Check if operation is still attached to the IR (has a valid parent)
-  if (!op->getParentOp()) {
+
+  if (!candidate->getParentOp()) {
     return false;
   }
-  // AffineLoad/Store operations must have at least one operand (the memref)
-  if (op->getNumOperands() == 0) {
+
+  if (candidate->getNumOperands() == 0) {
     return false;
   }
+
   return true;
 }
 
-// Collects load and store operations from a single node.
-// Populates values map and loadAndStoreOps vector with the collected operations.
-static void collectLoadAndStoreOpsFromNode(Node *node, DenseMap<Value, bool> &values,
-                                           SmallVector<Operation *, 4> &loadAndStoreOps) {
-  if (!node) {
+// Collects all load and store operations reachable from a single dependency
+// graph node. The 'values' map and 'loadAndStoreOps' vector are populated with
+// the encountered accesses.
+static void collectLoadAndStoreOpsFromNode(
+    Node *n, DenseMap<Value, bool> &values,
+    SmallVector<Operation *, 4> &loadAndStoreOps) {
+
+  if (!n || !n->op) {
+    // Node is null or its root operation has already been removed by fusion.
     return;
   }
-  // Skip nodes that have been erased during fusion (op is nullptr)
-  if (!node->op) {
-    return;
-  }
-  // Add all loads from this node
-  for (Operation *loadOp : node->loads) {
-    // Skip invalid operations (may have been erased during previous fusion)
+
+  // Record load operations attached to this node.
+  for (Operation *loadOp : n->loads) {
     if (!isOperationValid(loadOp)) {
       continue;
     }
-    if (auto readOp = dyn_cast<affine::AffineReadOpInterface>(loadOp)) {
-      Value memref = readOp.getMemRef();
-      values.insert({memref, false});
+    if (auto read = dyn_cast<affine::AffineReadOpInterface>(loadOp)) {
+      Value memref = read.getMemRef();
+      values.insert({memref, /*isStore*/false});
       loadAndStoreOps.push_back(loadOp);
     }
   }
-  // Add all stores from this node
-  for (Operation *storeOp : node->stores) {
-    // Skip invalid operations (may have been erased during previous fusion)
+
+  // Record store operations attached to this node.
+  for (Operation *storeOp : n->stores) {
     if (!isOperationValid(storeOp)) {
       continue;
     }
-    if (auto writeOp = dyn_cast<affine::AffineWriteOpInterface>(storeOp)) {
-      Value memref = writeOp.getMemRef();
-      values.insert({memref, true});
+    if (auto write = dyn_cast<affine::AffineWriteOpInterface>(storeOp)) {
+      Value memref = write.getMemRef();
+      values.insert({memref, /*isStore*/true});
       loadAndStoreOps.push_back(storeOp);
     }
   }
 }
 
-void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strategy,
-                                            llvm::ArrayRef<Operation *> loadAndStoreOpsA,
-                                            llvm::SmallVector<Operation *, 4> &strategyOpsA) {
+void FusionCodeGenHelper::buildStrategyOpsA(
+    const affine::FusionStrategy &strategy,
+    llvm::ArrayRef<Operation *> allOpsA,
+    llvm::SmallVector<Operation *, 4> &strategyOpsA) {
+
+  strategyOpsA.clear();
+
   switch (strategy.getStrategy()) {
-    case affine::FusionStrategy::Generic:
-      strategyOpsA.append(loadAndStoreOpsA.begin(), loadAndStoreOpsA.end());
-      break;
-    case affine::FusionStrategy::ProducerConsumer:
-      for (Operation *op : loadAndStoreOpsA) {
-        if (isa<affine::AffineWriteOpInterface>(op)) {
-          strategyOpsA.push_back(op);
-        }
+  case affine::FusionStrategy::Generic: {
+    strategyOpsA.append(allOpsA.begin(), allOpsA.end());
+    break;
+  }
+  case affine::FusionStrategy::ProducerConsumer: {
+    for (Operation *op : allOpsA) {
+      if (isa<affine::AffineWriteOpInterface>(op)) {
+        strategyOpsA.push_back(op);
       }
-      break;
-    case affine::FusionStrategy::Sibling:
-      for (Operation *op : loadAndStoreOpsA) {
-        auto load = dyn_cast<affine::AffineReadOpInterface>(op);
-        if (load && load.getMemRef() == strategy.getSiblingFusionMemRef()) {
-          strategyOpsA.push_back(op);
-        }
+    }
+    break;
+  }
+  case affine::FusionStrategy::Sibling: {
+    Value siblingMem = strategy.getSiblingFusionMemRef();
+    for (Operation *op : allOpsA) {
+      auto load = dyn_cast<affine::AffineReadOpInterface>(op);
+      if (load && load.getMemRef() == siblingMem) {
+        strategyOpsA.push_back(op);
       }
-      break;
+    }
+    break;
+  }
   }
 }
 
-unsigned FusionCodeGenHelper::tryFusionDepths(llvm::ArrayRef<Operation *> strategyOpsA,
-                                              llvm::ArrayRef<Operation *> loadAndStoreOpsB, unsigned dstLoopDepth,
-                                              unsigned numCommonLoops, bool isSrcForOpBeforeDstForOp,
-                                              llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions,
-                                              const FusionPlan &plan,
-                                              const llvm::SmallVector<affine::AffineForOp, 4> &dstLoops) {
+unsigned FusionCodeGenHelper::tryFusionDepths(
+    llvm::ArrayRef<Operation *> strategyOpsA,
+    llvm::ArrayRef<Operation *> loadAndStoreOpsB,
+    unsigned dstLoopDepth, unsigned numCommonLoops,
+    bool isSrcForOpBeforeDstForOp,
+    llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions,
+    const FusionPlan &plan,
+    const llvm::SmallVector<affine::AffineForOp, 4> &dstLoops) {
+
   depthSliceUnions.clear();
   depthSliceUnions.resize(dstLoopDepth);
-  for (unsigned i = dstLoopDepth; i >= 1; --i) {
-    if (plan.loopTransform == LoopTransform::ReplicateIf && dstLoops[i - 1]->hasAttr(kReductionLoopAttr)) {
+
+  for (unsigned depth = dstLoopDepth; depth >= 1; --depth) {
+    if (plan.loopTransform == LoopTransform::ReplicateIf &&
+        dstLoops[depth - 1]->hasAttr(kReductionLoopAttr)) {
       continue;
     }
-    affine::SliceComputationResult result = affine::computeSliceUnion(
-      strategyOpsA, loadAndStoreOpsB, i, numCommonLoops, isSrcForOpBeforeDstForOp, &depthSliceUnions[i - 1]);
-    if (result.value == affine::SliceComputationResult::Success) {
-      return i;
+
+    auto &sliceState = depthSliceUnions[depth - 1];
+    affine::SliceComputationResult res = affine::computeSliceUnion(
+        strategyOpsA, loadAndStoreOpsB, depth, numCommonLoops,
+        isSrcForOpBeforeDstForOp, &sliceState);
+
+    if (res.value == affine::SliceComputationResult::Success) {
+      return depth;
     }
   }
+
   return 0;
 }
 
 unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
-  affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp, unsigned dstLoopDepth,
-  const affine::FusionStrategy &strategy, llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions,
-  const FusionPlan &plan, const llvm::SmallVector<affine::AffineForOp, 4> &dstLoops) {
-  bool isSrcForOpBeforeDstForOp = srcAffineForOp->isBeforeInBlock(dstAffineForOp);
-  auto forOpA = isSrcForOpBeforeDstForOp ? srcAffineForOp : dstAffineForOp;
-  auto forOpB = isSrcForOpBeforeDstForOp ? dstAffineForOp : srcAffineForOp;
-  const auto &sourceNodeIds = isSrcForOpBeforeDstForOp ? plan.depInfo.sourceOps : plan.depInfo.targetOps;
-  const auto &targetNodeIds = isSrcForOpBeforeDstForOp ? plan.depInfo.targetOps : plan.depInfo.sourceOps;
+    affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
+    unsigned dstLoopDepth, const affine::FusionStrategy &strategy,
+    llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions,
+    const FusionPlan &plan,
+    const llvm::SmallVector<affine::AffineForOp, 4> &dstLoops) {
 
-  DenseMap<Value, bool> valuesOpA;
-  SmallVector<Operation *, 4> loadAndStoreOpsA;
+  bool srcBeforeDst = srcAffineForOp->isBeforeInBlock(dstAffineForOp);
+  affine::AffineForOp loopA =
+      srcBeforeDst ? srcAffineForOp : dstAffineForOp;
+  affine::AffineForOp loopB =
+      srcBeforeDst ? dstAffineForOp : srcAffineForOp;
+
+  const auto &sourceNodeIds =
+      srcBeforeDst ? plan.depInfo.sourceOps : plan.depInfo.targetOps;
+  const auto &targetNodeIds =
+      srcBeforeDst ? plan.depInfo.targetOps : plan.depInfo.sourceOps;
+
+  DenseMap<Value, bool> srcMemFlags;
+  SmallVector<Operation *, 4> srcAccesses;
   for (unsigned nodeId : sourceNodeIds) {
-    Node *node = mdg.getNode(nodeId);
-    collectLoadAndStoreOpsFromNode(node, valuesOpA, loadAndStoreOpsA);
+    Node *n = mdg.getNode(nodeId);
+    collectLoadAndStoreOpsFromNode(n, srcMemFlags, srcAccesses);
   }
 
-  DenseMap<Value, bool> valuesOpB;
-  SmallVector<Operation *, 4> loadAndStoreOpsB;
+  DenseMap<Value, bool> dstMemFlags;
+  SmallVector<Operation *, 4> dstAccesses;
   for (unsigned nodeId : targetNodeIds) {
-    Node *node = mdg.getNode(nodeId);
-    collectLoadAndStoreOpsFromNode(node, valuesOpB, loadAndStoreOpsB);
+    Node *n = mdg.getNode(nodeId);
+    collectLoadAndStoreOpsFromNode(n, dstMemFlags, dstAccesses);
   }
 
-  if (!getFusedLoopNestInsertionPoint(forOpA, forOpB, valuesOpA, valuesOpB)) {
+  if (!getFusedLoopNestInsertionPoint(loopA, loopB, srcMemFlags, dstMemFlags)) {
     llvm::dbgs() << "Fusion would violate dependences in block\n";
     return 0;
   }
 
   SmallVector<Operation *, 4> strategyOpsA;
-  buildStrategyOpsA(strategy, loadAndStoreOpsA, strategyOpsA);
+  buildStrategyOpsA(strategy, srcAccesses, strategyOpsA);
 
-  unsigned numCommonLoops = affine::getNumCommonSurroundingLoops(*srcAffineForOp, *dstAffineForOp);
-  unsigned maxLegalFusionDepth = tryFusionDepths(strategyOpsA, loadAndStoreOpsB, dstLoopDepth, numCommonLoops,
-                                                 isSrcForOpBeforeDstForOp, depthSliceUnions, plan, dstLoops);
+  unsigned commonLoops =
+      affine::getNumCommonSurroundingLoops(*srcAffineForOp, *dstAffineForOp);
 
-  if (maxLegalFusionDepth > 0) {
-    adjustSliceBounds(strategyOpsA, loadAndStoreOpsB, maxLegalFusionDepth, numCommonLoops, isSrcForOpBeforeDstForOp,
-                      &depthSliceUnions[maxLegalFusionDepth - 1]);
+  unsigned maxDepth = tryFusionDepths(
+      strategyOpsA, dstAccesses, dstLoopDepth, commonLoops, srcBeforeDst,
+      depthSliceUnions, plan, dstLoops);
+
+  if (maxDepth > 0) {
+    adjustSliceBounds(strategyOpsA, dstAccesses, maxDepth, commonLoops,
+                      srcBeforeDst,
+                      &depthSliceUnions[maxDepth - 1]);
   }
-  return maxLegalFusionDepth;
+
+  return maxDepth;
 }
 
 // Helper function to fuse loops into a perfect nest when src has deeper nesting than dst.
