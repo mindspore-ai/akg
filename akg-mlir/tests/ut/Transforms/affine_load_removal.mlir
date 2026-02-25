@@ -1,6 +1,6 @@
 // RUN: akg-opt %s --affine-load-removal | FileCheck %s
 
-// CHECK-LABEL:  func.func @reduction(%arg0: memref<256x512x1024xf32>, %arg1: memref<256x512xf32>) attributes {OperatorType = "Reduce"} {
+// CHECK-LABEL:  func.func @reduction(%arg0: memref<256x512x1024xf32>, %arg1: memref<256x512xf32>) attributes {OperatorType = "Reduction"} {
 // CHECK-NEXT:     %cst = arith.constant 0.000000e+00 : f32
 // CHECK-NEXT:     affine.for %arg2 = 0 to 256 {
 // CHECK-NEXT:       affine.for %arg3 = 0 to 512 {
@@ -16,7 +16,7 @@
 // CHECK-NEXT:   }
 
 
-func.func @reduction(%in: memref<256x512x1024xf32>, %out: memref<256x512xf32>) attributes {OperatorType = "Reduce"} {
+func.func @reduction(%in: memref<256x512x1024xf32>, %out: memref<256x512xf32>) attributes {OperatorType = "Reduction"} {
  %cst = arith.constant 0.000000e+00 : f32
  affine.for %i = 0 to 256 {
    affine.for %j = 0 to 512 {

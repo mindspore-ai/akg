@@ -54,7 +54,7 @@ constexpr auto kTargetCuda = "cuda";
 constexpr auto kTargetGpu = "gpu";
 constexpr auto kTargetNpu = "aicore";
 constexpr auto kOperatorTypeStr = "OperatorType";
-constexpr auto kReduceStr = "Reduce";
+constexpr auto kReduceStr = "Reduction";
 constexpr auto kReductionAxesStr = "reduction_axes";
 constexpr auto kReductionTypeStr = "reduction_type";
 constexpr auto kReductionLoopAttr = "reduction";
@@ -84,10 +84,13 @@ const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 10000
                                           100000049, 100000073, 100000079, 100000081, 100000091};
 const std::vector<unsigned> primeTailSteps = {100000153, 100000157, 100000163, 100000169, 100000171,
                                               100000177, 100000181, 100000183, 100000187, 100000189};
-enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduce, ReduceInit, Matmul, Conv };
+enum OperatorTemplate {
+  Default = 0, Elementwise, Broadcast, Reshape, Transpose,
+  ReductionInit, Reduction, Matmul, Conv
+};
 const std::unordered_map<int, std::string> operatorTemplateMap = {
   {0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"}, {3, "Reshape"}, {4, "Transpose"},
-  {5, "Reduce"},  {6, "ReduceInit"},  {7, "Matmul"},    {8, "Conv"}};
+  {5, "ReductionInit"},  {6, "Reduction"},  {7, "Matmul"},    {8, "Conv"}};
 
 enum ReduceDirection { UNKNOWN = 0, X, Y, ALL };
 const std::unordered_map<int, std::string> reduceDirectionMap = {{0, "unknown"}, {1, "x"}, {2, "y"}, {3, "all"}};
