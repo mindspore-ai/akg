@@ -257,6 +257,10 @@ class AkgMlirDriver:
         input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
         out_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
 
+        dump_log_path = None
+        if self.dump_ir:
+            dump_log_path = os.path.join(self.output_dir, kernel_name + "_dump_ascend_state1.log")
+
         run_akg_opt(
             input_file=input_file,
             output_file=out_file,
@@ -264,7 +268,9 @@ class AkgMlirDriver:
             dyn_shape=dyn_shape,
             enable_loop_fusion=self.enable_loop_fusion,
             arch=self.arch,
+            dump_ir=self.dump_ir,
             mlir_timing=self.mlir_timing,
+            dump_log_path=dump_log_path,
         )
 
     def _run_ascend_generate_binary(self, kernel_name):
@@ -279,6 +285,7 @@ class AkgMlirDriver:
             output_so_path=so_file,
             block_dim=self.block_dim,
             enable_loop_fusion=self.enable_loop_fusion,
+            dump_ir=self.dump_ir,
             dump_log_path=dump_log,
         )
 
