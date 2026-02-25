@@ -71,6 +71,280 @@ static std::optional<llvm::APFloat> getConstantFloat(Value v) {
   return std::nullopt;
 }
 
+/// sign(x) ∈ {+1, -1} using only arith ops:
+/// sign(x) = (x >= 0 ? 1.0 : -1.0)
+static Value buildSign01(PatternRewriter &rewriter, Location loc, Value x) {
+  auto fTy = dyn_cast<FloatType>(getElementTypeOrSelf(x.getType()));
+  assert(fTy && "expected float type");
+
+  Value zero = buildFloatConst(rewriter, loc, fTy, 0.0);
+  Value one = buildFloatConst(rewriter, loc, fTy, 1.0);
+  Value negOne = buildFloatConst(rewriter, loc, fTy, -1.0);
+
+  // cmp: x >= 0
+  Value cond = rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OGE, x, zero);
+  // select: cond ? 1 : -1
+  return rewriter.create<arith::SelectOp>(loc, cond, one, negOne);
+}
+
+/// round(x) ≈ floor(x + 0.5 * sign(x))
+static Value buildRoundWithArith(PatternRewriter &rewriter, Location loc, Value x) {
+  auto fTy = dyn_cast<FloatType>(getElementTypeOrSelf(x.getType()));
+  assert(fTy && "expected float type");
+
+  Value s = buildSign01(rewriter, loc, x);
+  Value half = buildFloatConst(rewriter, loc, fTy, 0.5);
+  Value t = rewriter.create<arith::MulFOp>(loc, s, half);
+  Value y = rewriter.create<arith::AddFOp>(loc, x, t);
+
+  return rewriter.create<math::FloorOp>(loc, y);
+}
+
+/// x - xRound * (pi1 + pi2 + ... + piN) + offset
+static Value buildNorm(PatternRewriter &rewriter, Location loc, Value x, Value xRound, Type elemTy,
+                       ArrayRef<double> piApproParams, std::optional<double> offset = std::nullopt) {
+  Value resValue = x;
+  for (double p : piApproParams) {
+    Value piCst = buildFloatConst(rewriter, loc, elemTy, p);
+    Value kp = rewriter.create<arith::MulFOp>(loc, xRound, piCst);
+    resValue = rewriter.create<arith::SubFOp>(loc, resValue, kp);
+  }
+  if (offset.has_value()) {
+    Value off = buildFloatConst(rewriter, loc, elemTy, offset.value());
+    resValue = rewriter.create<arith::AddFOp>(loc, resValue, off);
+  }
+  return resValue;
+}
+
+enum class TaylerMode { SIN, ATAN };
+
+static SmallVector<double> getTaylerParams(TaylerMode taylerMode, int taylerExpansionNum) {
+  SmallVector<double> taylerParams;
+  switch (taylerMode) {
+    case TaylerMode::SIN: {
+      taylerParams.push_back(1.0);
+      double acc = 1.0;
+      for (int i = 1; i < taylerExpansionNum; ++i) {
+        acc = acc * (2 * i) * (2 * i + 1) * (-1);
+        const double value = 1.0 / acc;
+        taylerParams.push_back(value);
+      }
+      return taylerParams;
+    }
+    case TaylerMode::ATAN: {
+      taylerParams.push_back(1.0);
+      for (int i = 1; i < taylerExpansionNum; ++i) {
+        const double acc = (i % 2 == 0) ? (2 * i + 1) : (2 * i + 1) * (-1);
+        const double value = 1.0 / acc;
+        taylerParams.push_back(value);
+      }
+      return taylerParams;
+    }
+  }
+  llvm_unreachable("Unsupported TaylerMode");
+}
+
+static Value createTaylerSeries(PatternRewriter &rewriter, Location loc, Value lastTaylerTerm, Value xPow,
+                                int taylerExpansionNum, ArrayRef<double> taylerParams) {
+  Value partialRes = lastTaylerTerm;
+  auto elemTy = getElementTypeOrSelf(xPow.getType());
+  for (int i = 0; i < taylerExpansionNum - 2; ++i) {
+    double coef = taylerParams[taylerExpansionNum - i - 2];
+    Value coefCst = buildFloatConst(rewriter, loc, elemTy, coef);
+    Value curTerm = rewriter.create<arith::AddFOp>(loc, partialRes, coefCst);
+    partialRes = rewriter.create<arith::MulFOp>(loc, curTerm, xPow);
+  }
+  return partialRes;
+}
+
+/// tayler(x) = x * (1 + \sum_{i>=1} a_i x^{2i})
+static Value buildTayler(PatternRewriter &rewriter, Location loc, Value x, int taylerExpansionNum, TaylerMode mode) {
+  SmallVector<double> taylerParams = getTaylerParams(mode, taylerExpansionNum);
+
+  auto elemTy = getElementTypeOrSelf(x.getType());
+  Value xPow = rewriter.create<arith::MulFOp>(loc, x, x);  // x^2
+
+  // lastTerm = a_(n-1) * x^2
+  double lastCoef = taylerParams[taylerExpansionNum - 1];
+  Value lastCoefCst = buildFloatConst(rewriter, loc, elemTy, lastCoef);
+  Value lastTerm = rewriter.create<arith::MulFOp>(loc, xPow, lastCoefCst);
+
+  Value partialRes = createTaylerSeries(rewriter, loc, lastTerm, xPow, taylerExpansionNum, taylerParams);
+
+  Value one = buildFloatConst(rewriter, loc, elemTy, 1.0);
+  Value poly1 = rewriter.create<arith::AddFOp>(loc, partialRes, one);
+
+  // tayler(x) = poly1 * x
+  Value res = rewriter.create<arith::MulFOp>(loc, poly1, x);
+  return res;
+}
+
+/// sign for sin: sign(x)=floor(x/2)*4- x*(2)+1
+static Value buildSinSign(PatternRewriter &rewriter, Location loc, Value x) {
+  auto elemTy = getElementTypeOrSelf(x.getType());
+
+  Value half = buildFloatConst(rewriter, loc, elemTy, 0.5);
+  Value kHalf = rewriter.create<arith::MulFOp>(loc, x, half);
+  Value kHalfFloor = rewriter.create<math::FloorOp>(loc, kHalf);
+
+  Value four = buildFloatConst(rewriter, loc, elemTy, 4.0);
+  Value kHalfFloor4 = rewriter.create<arith::MulFOp>(loc, kHalfFloor, four);
+
+  Value minusTwo = buildFloatConst(rewriter, loc, elemTy, -2.0);
+  Value k2 = rewriter.create<arith::MulFOp>(loc, x, minusTwo);
+
+  Value sign = rewriter.create<arith::AddFOp>(loc, kHalfFloor4, k2);
+  Value one = buildFloatConst(rewriter, loc, elemTy, 1.0);
+  Value res = rewriter.create<arith::AddFOp>(loc, sign, one);
+  return res;
+}
+
+static double getFPMAX(FloatType fType) {
+  if (fType.isF32()) {
+    return std::pow(2.0, fType.getWidth() + 30);
+  }
+  return std::pow(2.0, fType.getWidth() - 1);
+}
+
+static double getFPMIN(FloatType fType) {
+  if (fType.isF32()) {
+    return std::pow(2.0, -static_cast<int>(fType.getWidth() + 30));
+  }
+  return std::pow(2.0, -static_cast<int>(fType.getWidth() - 1));
+}
+
+/// sign(x) = FP_MAX * x /(FP_MIN + FP_MAX *|x|)
+static Value buildAtanSign(PatternRewriter &rewriter, Location loc, Value x) {
+  auto elemTy = dyn_cast<FloatType>(getElementTypeOrSelf(x.getType()));
+  assert(elemTy && "Only support floatType");
+
+  double fpMax = getFPMAX(elemTy);
+  double fpMin = getFPMIN(elemTy);
+
+  Value fpMaxCst = buildFloatConst(rewriter, loc, elemTy, fpMax);
+  Value fpMinCst = buildFloatConst(rewriter, loc, elemTy, fpMin);
+
+  Value mul = rewriter.create<arith::MulFOp>(loc, x, fpMaxCst);
+  Value absVal = rewriter.create<math::AbsFOp>(loc, mul);
+  Value denom = rewriter.create<arith::AddFOp>(loc, absVal, fpMinCst);
+  Value res = rewriter.create<arith::DivFOp>(loc, mul, denom);
+  return res;
+}
+
+static Value buildSign(PatternRewriter &rewriter, Location loc, Value x, TaylerMode mode) {
+  switch (mode) {
+    case TaylerMode::SIN:
+      return buildSinSign(rewriter, loc, x);
+    case TaylerMode::ATAN:
+      return buildAtanSign(rewriter, loc, x);
+  }
+  llvm_unreachable("unsupported TaylerMode");
+}
+
+struct NormalizeSinOp : public OpRewritePattern<math::SinOp> {
+  using OpRewritePattern<math::SinOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(math::SinOp op, PatternRewriter &rewriter) const override {
+    Value input = op.getOperand();
+    auto inTy = getElementTypeOrSelf(input.getType());
+    auto fTy = dyn_cast<FloatType>(inTy);
+    if (!fTy || (!fTy.isF16() && !fTy.isF32())) return failure();
+
+    Location loc = op.getLoc();
+
+    bool needCastBack = fTy.isF16();
+    if (needCastBack) {
+      auto f32Ty = rewriter.getF32Type();
+      input = rewriter.create<arith::ExtFOp>(loc, f32Ty, input);
+      fTy = f32Ty;
+    }
+
+    // round_x = round(input * (1 / pi))
+    Value piRec = buildFloatConst(rewriter, loc, fTy, 1.0 / static_cast<double>(M_PI));
+    Value inputDivPi = rewriter.create<arith::MulFOp>(loc, input, piRec);
+
+    Value xRound = buildRoundWithArith(rewriter, loc, inputDivPi);
+
+    // norm_x = x - round(x/pi) * (pi1+...+pi5) + 0.0
+    const double piApproParamsArr[] = {3.140625, 0.0009670257568359375, 6.2771141529083251953125e-7,
+                                       1.21644916362129151821136474609375e-10, -1.0290623200529979163359041220560e-13};
+    ArrayRef<double> piApproParams(piApproParamsArr, sizeof(piApproParamsArr) / sizeof(double));
+
+    Value normInput = buildNorm(rewriter, loc, input, xRound, fTy, piApproParams, 0.0);
+
+    // sinTayler(norm_x) with 5 terms
+    Value sinTaylerNorm = buildTayler(rewriter, loc, normInput, /*taylerExpansionNum=*/5, TaylerMode::SIN);
+
+    // sign(round_x) = floor(x_round/2)*4 - x_round*2 + 1
+    Value signX = buildSign(rewriter, loc, xRound, TaylerMode::SIN);
+
+    Value res = rewriter.create<arith::MulFOp>(loc, sinTaylerNorm, signX);
+
+    if (needCastBack) {
+      auto f16Ty = rewriter.getF16Type();
+      res = rewriter.create<arith::TruncFOp>(loc, f16Ty, res);
+    }
+
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
+struct NormalizeCosOp : public OpRewritePattern<math::CosOp> {
+  using OpRewritePattern<math::CosOp>::OpRewritePattern;
+
+  Value computeRoundX(PatternRewriter &rewriter, Location loc, Value input, Type elemTy) const {
+    Value piRec = buildFloatConst(rewriter, loc, elemTy, 1.0 / static_cast<double>(M_PI));
+    Value inputDivPi = rewriter.create<arith::MulFOp>(loc, input, piRec);
+    Value half = buildFloatConst(rewriter, loc, elemTy, 0.5);
+    Value xPlusHalf = rewriter.create<arith::AddFOp>(loc, inputDivPi, half);
+    return buildRoundWithArith(rewriter, loc, xPlusHalf);
+  }
+
+  LogicalResult matchAndRewrite(math::CosOp op, PatternRewriter &rewriter) const override {
+    Value input = op.getOperand();
+    auto inTy = getElementTypeOrSelf(input.getType());
+    auto fTy = dyn_cast<FloatType>(inTy);
+    if (!fTy || (!fTy.isF16() && !fTy.isF32())) return failure();
+
+    Location loc = op.getLoc();
+
+    bool needCastBack = fTy.isF16();
+    if (needCastBack) {
+      auto f32Ty = rewriter.getF32Type();
+      input = rewriter.create<arith::ExtFOp>(loc, f32Ty, input);
+      fTy = f32Ty;
+    }
+
+    // step 1: round_x = round(input * (1/pi) + 0.5)
+    Value xRound = computeRoundX(rewriter, loc, input, fTy);
+
+    // step 2: norm(x, xRound, pi/2)
+    const double piApproParamsArr[] = {3.140625, 0.0009670257568359375, 6.2771141529083251953125e-7,
+                                       1.21644916362129151821136474609375e-10, -1.0290623200529979163359041220560e-13};
+    ArrayRef<double> piApproParams(piApproParamsArr, sizeof(piApproParamsArr) / sizeof(double));
+    double piOver2 = static_cast<double>(M_PI) / 2.0;
+    Value normInput = buildNorm(rewriter, loc, input, xRound, fTy, piApproParams, piOver2);
+
+    // step 3: sinTayler(normInput)
+    Value cosTayler = buildTayler(rewriter, loc, normInput, /*taylerExpansionNum=*/5, TaylerMode::SIN);
+
+    // step 4: sign(xRound)
+    Value signX = buildSign(rewriter, loc, xRound, TaylerMode::SIN);
+
+    // step 5: cos(x) ≈ sinTayler(norm(x, xRound, pi/2)) * sign(xRound)
+    Value res = rewriter.create<arith::MulFOp>(loc, cosTayler, signX);
+
+    if (needCastBack) {
+      auto f16Ty = rewriter.getF16Type();
+      res = rewriter.create<arith::TruncFOp>(loc, f16Ty, res);
+    }
+
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
 struct NormalizePowfOp : public OpRewritePattern<math::PowFOp> {
   using OpRewritePattern<math::PowFOp>::OpRewritePattern;
 
@@ -291,6 +565,8 @@ struct NormalizePowfOp : public OpRewritePattern<math::PowFOp> {
 
 void populateNormalizeMathPatterns(RewritePatternSet &patterns) {
   patterns.add<NormalizePowfOp>(patterns.getContext());
+  patterns.add<NormalizeSinOp>(patterns.getContext());
+  patterns.add<NormalizeCosOp>(patterns.getContext());
 }
 
 namespace {
