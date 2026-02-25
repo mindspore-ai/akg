@@ -31,7 +31,6 @@ from akg_agents.core_v2.tools.tool_registry import ToolRegistry
 from akg_agents.op.tools.task_constructor.assembly import (
     trace_dependencies,
     assemble_task,
-    validate_task,
     optimize_task,
 )
 from akg_agents.op.tools.task_constructor.execution import (
@@ -94,35 +93,23 @@ def _register_all():
     )
 
     ToolRegistry.register(
-        name="validate_task",
-        description="预运行验证任务代码。检查: 实例化 -> forward -> NaN/Inf -> 一致性。",
+        name="test_with_reference",
+        description=(
+            "【验证+正确性对比】\n"
+            "始终执行: AST 格式检查 + 运行时验证 (实例化, forward, NaN/Inf)。\n"
+            "当提供 reference_code 时，额外进行 Model 与 reference_forward 的对比测试，支持多组输入。\n"
+            "仅验证时: 不传 reference_code 即可。"
+        ),
         parameters={
             "type": "object",
             "properties": {
-                "task_code": {"type": "string", "description": "任务代码"},
                 "task_file": {"type": "string", "description": "任务文件路径"},
+                "task_code": {"type": "string", "description": "任务代码"},
+                "reference_code": {"type": "string", "description": "Reference 代码（可选，提供时执行对比测试）"},
+                "multi_inputs_code": {"type": "string", "description": "多组输入代码（可选）"},
                 "timeout": {"type": "integer", "description": "超时秒数"},
             },
             "required": [],
-        },
-        func=validate_task,
-        category="code_analysis",
-        scopes=["task_constructor"],
-    )
-
-    ToolRegistry.register(
-        name="test_with_reference",
-        description="【正确性验证】将 Model 输出与 reference 函数对比，支持多组输入。",
-        parameters={
-            "type": "object",
-            "properties": {
-                "task_file": {"type": "string", "description": "任务文件路径"},
-                "task_code": {"type": "string", "description": "任务代码"},
-                "reference_code": {"type": "string", "description": "Reference 代码"},
-                "multi_inputs_code": {"type": "string", "description": "多组输入代码"},
-                "timeout": {"type": "integer", "description": "超时秒数"},
-            },
-            "required": ["reference_code"],
         },
         func=test_with_reference,
         category="code_analysis",
@@ -131,7 +118,7 @@ def _register_all():
 
     ToolRegistry.register(
         name="optimize_task",
-        description="优化清理任务代码：去重 import、移除无用代码、格式化。在 validate 通过后、finish 前调用。",
+        description="优化清理任务代码：去重 import、移除无用代码、格式化。在 assemble_task 后、test_with_reference 前调用。",
         parameters={
             "type": "object",
             "properties": {

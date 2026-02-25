@@ -494,32 +494,3 @@ class ToolExecutor:
         state.setdefault("agent_history", [])
         return state
     
-    # ==================== 工具方法 ====================
-    
-    @staticmethod
-    def _filter_func_args(func, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        根据函数签名过滤参数
-        
-        避免传入函数不接受的参数（如 cur_path 传给 read_file）
-        
-        Args:
-            func: 目标函数
-            arguments: 原始参数字典
-        
-        Returns:
-            过滤后的参数字典
-        """
-        sig = inspect.signature(func)
-        params = sig.parameters
-        
-        # 如果函数接受 **kwargs，传入所有参数
-        has_var_keyword = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-        )
-        if has_var_keyword:
-            return arguments
-        
-        # 否则只传入函数接受的参数
-        accepted = {name for name in params.keys() if name != 'self'}
-        return {k: v for k, v in arguments.items() if k in accepted}
