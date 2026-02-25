@@ -22,6 +22,9 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/DVMCluster.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Recompose/Recompose.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPasses.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Outlining/OutlineMfuseFusedSubgraphs.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Outlining/CopyFusedSubgraphs.h"
+#include "mfusion/Dialect/Mfuse/Transforms/ConvertDvmSubgraphToMfuseDvmCall.h"
 
 namespace mlir {
 

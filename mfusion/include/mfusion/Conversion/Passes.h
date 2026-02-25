@@ -44,6 +44,9 @@ std::unique_ptr<Pass> createConvertTorchSymbolToMfusePass();
 /// Create a pass to convert Mfuse operations to Torch dialect operations.
 std::unique_ptr<Pass> createConvertMfuseToTorchPass();
 
+/// Create a pass to convert outlined Mfuse subgraphs to DVM dialect operations.
+std::unique_ptr<Pass> createConvertMfuseToDvmPass();
+
 //===----------------------------------------------------------------------===//
 // Registration
 //===----------------------------------------------------------------------===//
