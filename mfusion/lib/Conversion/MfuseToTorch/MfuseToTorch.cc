@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <iterator>
 
+#include "llvm/Support/FormatVariadic.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
@@ -28,6 +29,7 @@
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
@@ -87,6 +89,41 @@ class MfuseToTorchTypeConverter : public mlir::TypeConverter {
   }
 };
 
+class ConvertDvmCallOp : public mlir::OpConversionPattern<mlir::mfuse::DvmCallOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::DvmCallOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    llvm::SmallVector<mlir::Type, 4> resultTypes;
+    if (failed(getTypeConverter()->convertTypes(op.getResultTypes(), resultTypes))) {
+      return rewriter.notifyMatchFailure(op, "failed to convert result types");
+    }
+
+    auto numInputs = adaptor.getOperands().size();
+    auto numOutputs = op->getNumResults();
+    std::string opName = llvm::formatv("torch.mfusion.dvm_call__i{0}_o{1}", numInputs, numOutputs).str();
+
+    mlir::OperationState subgraphState(op.getLoc(), "torch.constant.str");
+    subgraphState.addAttribute("value", op.getSubgraphAttr());
+    subgraphState.addTypes(TorchD::StringType::get(op.getContext()));
+    mlir::Operation *subgraphConst = rewriter.create(subgraphState);
+    mlir::Value subgraphValue = subgraphConst->getResult(0);
+
+    mlir::OperationState state(op.getLoc(), "torch.operator");
+    state.addOperands(adaptor.getOperands());
+    state.addOperands(subgraphValue);
+    state.addTypes(resultTypes);
+    state.addAttribute("name", rewriter.getStringAttr(opName));
+    state.addAttribute("mfusion.subgraph_mlir", op.getSubgraphMlirAttr());
+    state.addAttribute("mfusion.is_dynamic", op.getIsDynamicAttr());
+
+    mlir::Operation *newOp = rewriter.create(state);
+    rewriter.replaceOp(op, newOp->getResults());
+    return mlir::success();
+  }
+};
+
 struct ConvertMfuseToTorchPass : public mlir::PassWrapper<ConvertMfuseToTorchPass, mlir::OperationPass<mlir::ModuleOp>> {
   mlir::StringRef getArgument() const final { return "convert-mfuse-to-torch"; }
 
@@ -108,6 +145,7 @@ struct ConvertMfuseToTorchPass : public mlir::PassWrapper<ConvertMfuseToTorchPas
     mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(patternList, converter_);
     mlir::populateMfuseMetaToTorchConversionPatterns(converter_, patternList);
     mlir::populateMfuseAclnnToTorchConversionPatterns(converter_, patternList);
+    patternList.add<ConvertDvmCallOp>(converter_, ctx);
 
     patterns_ = std::move(patternList);
     return mlir::success();
