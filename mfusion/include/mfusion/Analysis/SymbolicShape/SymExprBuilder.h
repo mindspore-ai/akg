@@ -39,6 +39,7 @@ class SymExprBuilder {
   SymExpr makeAdd(const SymExpr &lhs, const SymExpr &rhs) const;
   SymExpr makeMul(const SymExpr &lhs, const SymExpr &rhs) const;
   SymExpr makeDiv(const SymExpr &lhs, const SymExpr &rhs) const;
+  SymExpr makeMax(const SymExpr &lhs, const SymExpr &rhs) const;
   SymExpr makeCeil(const SymExpr &expr) const;
   llvm::SmallVector<SymExpr> buildSymExprsFromStaticShape(llvm::ArrayRef<int64_t> shape) const;
 };
