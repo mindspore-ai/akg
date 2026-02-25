@@ -17,7 +17,7 @@ import logging
 
 from akg.backends.ascend import (
     transform_data_to_ascend, launch, ascend_compile,
-    run_mlir_ascend_pipeline
+    run_akg_opt, dump_ascend_meta_data, get_block_dim_from_arch
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -36,12 +36,13 @@ class Kernel:
         self.backend = backend if backend is not None else "ascend"
         num_outputs = kernel_meta.get('num_outputs')
         self.output_indexes = self._get_output_index(num_outputs)
+        self.block_dim = get_block_dim_from_arch(self.arch)
 
     def _get_output_index(self, num_outputs: int):
         return [-i for i in range(1, num_outputs + 1)]
 
     def _write_mlir(self, input_mlir):
-        mlir_path = os.path.join(self.output_so_dir, f"{self.kernel_name}_out.mlir")
+        mlir_path = os.path.join(self.output_so_dir, f"{self.kernel_name}.mlir")
         with open(mlir_path, "w", encoding="utf-8") as f:
             f.write(input_mlir)
         return mlir_path
@@ -50,27 +51,29 @@ class Kernel:
         """ Compile .mlir file to .so file. """
         self._write_mlir(input_mlir)
 
-        input_file = os.path.join(self.output_so_dir, self.kernel_name + "_out.mlir")
-        out_file = os.path.join(self.output_so_dir, self.kernel_name + "_opt.mlir")
+        input_file = os.path.join(self.output_so_dir, self.kernel_name + ".mlir")
+        out_file = os.path.join(self.output_so_dir, self.kernel_name + "_out.mlir")
 
         # get akg_tools_dir
         akg_tools_dir = os.path.dirname(os.path.abspath(__file__))
 
         # run akg-opt
-        out_mlir_file_path = run_mlir_ascend_pipeline(
+        run_akg_opt(
             input_file=input_file,
             output_file=out_file,
             akg_tools_dir=akg_tools_dir,
             dyn_shape=self.dynamic,
-            arch = self.arch,
-            dump_ir=True,
+            enable_loop_fusion=True,
+            arch=self.arch,
             mlir_timing=True
         )
 
         output_so_path = os.path.join(self.output_so_dir, f"{self.kernel_name}.so")
+        dump_log = os.path.join(self.output_so_dir, self.kernel_name + "_dump_bishengir.log")
         try:
-            ascend_compile(out_mlir_file_path, output_so_path)
+            ascend_compile(out_file, output_so_path, block_dim=self.block_dim, dump_log_path=dump_log)
             logging.info("compile finish, lib.so save to %s", os.path.abspath(output_so_path))
+            dump_ascend_meta_data(self.output_so_dir, self.kernel_name, block_dim=self.block_dim)
         except Exception as compile_err:
             raise Exception(
                 f"compile MLIR failed, error message: {str(compile_err)}"
