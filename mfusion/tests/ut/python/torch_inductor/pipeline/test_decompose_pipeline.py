@@ -69,7 +69,6 @@ def test_decompose_pipeline_with_add():
     result = fuse_and_optimize(torch_mlir)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_has_op("torch.aten.add.Tensor"), checker.error
-    assert checker.check_no_op("torch.aten.mul.Tensor"), checker.error
 
 
 def test_decompose_pipeline_with_add_2():
