@@ -16,6 +16,7 @@
 
 #include "mfusion/Conversion/TorchToMfuse/TorchAtenToMfuse.h"
 
+#include <algorithm>
 #include <numeric>
 #include <string>
 
@@ -31,10 +32,37 @@ namespace mlir {
 
 namespace TorchD = mlir::torch::Torch;
 
+namespace {
+// Check if the shape has at most one dynamic dimension.
+bool isSemiStaticShape(RankedTensorType type) {
+  int64_t dynamicDims = std::count_if(type.getShape().begin(), type.getShape().end(),
+                                      [](int64_t dim) { return dim == ShapedType::kDynamic; });
+  return dynamicDims <= 1;
+}
+}  // namespace
+
 //===----------------------------------------------------------------------===//
 // Aten ops to Mfuse conversion patterns
 // (the pattern list should be alphabetically sorted)
 //===----------------------------------------------------------------------===//
+
+struct ConvertAtenReshape : public OpConversionPattern<TorchD::AtenReshapeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenReshapeOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto outType = dyn_cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
+    if (!outType) {
+      return rewriter.notifyMatchFailure(op, "result must be ranked tensor");
+    }
+    if (!isSemiStaticShape(outType)) {
+      return rewriter.notifyMatchFailure(op, "result has more than one dynamic dimension");
+    }
+
+    rewriter.replaceOpWithNewOp<mlir::mfuse::ReshapeOp>(op, outType, adaptor.getSelf());
+    return success();
+  }
+};
 
 struct ConvertAtenSumDimIntList : public OpConversionPattern<TorchD::AtenSumDimIntListOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -177,9 +205,27 @@ struct ConvertAtenSliceTensor : public OpConversionPattern<TorchD::AtenSliceTens
     if (end < start) end = start;
     if (end > dimSize) end = dimSize;
 
-    rewriter.replaceOpWithNewOp<mlir::mfuse::SliceOp>(op, outType, self, rewriter.getI64IntegerAttr(dim),
-                                                     rewriter.getI64IntegerAttr(start), rewriter.getI64IntegerAttr(end),
-                                                     rewriter.getI64IntegerAttr(step));
+    rewriter.replaceOpWithNewOp<mlir::mfuse::SliceOp>(
+      op, outType, self, rewriter.getI64IntegerAttr(dim), rewriter.getI64IntegerAttr(start),
+      rewriter.getI64IntegerAttr(end), rewriter.getI64IntegerAttr(step));
+    return success();
+  }
+};
+
+struct ConvertAtenView : public OpConversionPattern<TorchD::AtenViewOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenViewOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto outType = dyn_cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
+    if (!outType) {
+      return rewriter.notifyMatchFailure(op, "result must be ranked tensor");
+    }
+    if (!isSemiStaticShape(outType)) {
+      return rewriter.notifyMatchFailure(op, "result has more than one dynamic dimension");
+    }
+
+    rewriter.replaceOpWithNewOp<mlir::mfuse::ReshapeOp>(op, outType, adaptor.getSelf());
     return success();
   }
 };
@@ -191,10 +237,12 @@ struct ConvertAtenSliceTensor : public OpConversionPattern<TorchD::AtenSliceTens
 // Populate custom (hand-written) Aten ops to Mfuse conversion patterns
 static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
+  patterns.add<ConvertAtenReshape>(converter, context);
+  patterns.add<ConvertAtenSliceTensor>(converter, context);
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
   patterns.add<ConvertAtenToDtype>(converter, context);
   patterns.add<ConvertAtenTransposeInt>(converter, context);
-  patterns.add<ConvertAtenSliceTensor>(converter, context);
+  patterns.add<ConvertAtenView>(converter, context);
 }
 
 // Populate all Aten ops to Mfuse conversion patterns

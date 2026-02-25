@@ -15,12 +15,26 @@
  */
 
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Utils/SymbolAttrUtils.h"
 
 //===----------------------------------------------------------------------===//
 // FusedOp Verifier
 //===----------------------------------------------------------------------===//
 
 namespace mlir::mfuse {
+
+bool shouldInferSymbolicShape(mlir::ValueRange operands, mlir::RankedTensorType resultType) {
+  // static shape result type or already has symbolic-shape encoding does not need to infer symbolic shape.
+  if (SymbolAttrUtils::isStaticShape(resultType) || SymbolAttrUtils::hasSymbolicShapeEncoding(resultType)) {
+    return false;
+  }
+
+  // All inputs must be either static-shape tensors or tensors that already have symbolic-shape encoding.
+  return llvm::all_of(operands, [](mlir::Value v) {
+    mlir::Type ty = v.getType();
+    return SymbolAttrUtils::isStaticShape(ty) || SymbolAttrUtils::hasSymbolicShapeEncoding(ty);
+  });
+}
 
 llvm::LogicalResult FusedOp::verify() {
   // Verify that the body has exactly one block
