@@ -427,6 +427,14 @@ struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
       rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midBuf, resBuf, roundingAttr);
+    } else if (isa<arith::ExtUIOp>(op) && srcElemType.isInteger(1) && elemType.isInteger(64)) {
+      auto f32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
+      Value f32Buf = rewriter.create<memref::AllocOp>(loc, f32MemRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, f32Buf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, f32Buf, roundingAttr);
+      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f32Buf, resBuf, roundingAttr);
     } else {
       resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
       propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
@@ -513,7 +521,21 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
 
     Value resBuf;
     // i8 -> f32 is not supported directly, so we convert i8 -> f16 -> f32.
-    if ((isa<npuvector::SIToFPOp>(op) || isa<npuvector::UIToFPOp>(op)) &&
+    // i8 -> i64 is not supported directly, so we convert i8 -> f16 -> f32 -> i64.
+    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(8) &&
+        elemType.isInteger(64)) {
+      auto midF16MemRefType = MemRefType::get(shape, rewriter.getF16Type());
+      Value midF16Buf = rewriter.create<memref::AllocOp>(loc, midF16MemRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, midF16Buf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, midF16Buf, roundingAttr);
+      auto midF32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
+      Value midF32Buf = rewriter.create<memref::AllocOp>(loc, midF32MemRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, midF32Buf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midF16Buf, midF32Buf, roundingAttr);
+      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, midF32Buf, resBuf, roundingAttr);
+    } else if ((isa<npuvector::SIToFPOp>(op) || isa<npuvector::UIToFPOp>(op)) &&
         srcElemType.isInteger(8) && elemType.isF32()) {
       auto midMemRefType = MemRefType::get(shape, rewriter.getF16Type());
       Value midBuf = rewriter.create<memref::AllocOp>(loc, midMemRefType, allocOperands);
