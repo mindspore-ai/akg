@@ -397,10 +397,10 @@ void FusionAnalyzer::setFusionType(FusionPlan &plan) {
 }
 
 std::pair<GroupPtr, GroupPtr> FusionAnalyzer::determineFusionOrder(const GroupPtr oldGroup, const GroupPtr newGroup) {
-  if (oldGroup->groupTemplate == OperatorTemplate::Reduce) {
+  if (oldGroup->groupTemplate == OperatorTemplate::Reduction) {
     return std::make_pair(newGroup, oldGroup);
   }
-  if (newGroup->groupTemplate == OperatorTemplate::Reduce) {
+  if (newGroup->groupTemplate == OperatorTemplate::Reduction) {
     return std::make_pair(oldGroup, newGroup);
   }
 
@@ -640,8 +640,8 @@ void FusionAnalyzer::inferLoopTransforms(FusionPlan &plan) {
     if (sourceGroup->groupTemplate == OperatorTemplate::Reshape) {
       plan.loopTransform = LoopTransform::StripMine;
     }
-  } else if (targetGroup->groupTemplate == OperatorTemplate::Reduce) {
-    if (sourceGroup->groupTemplate == OperatorTemplate::ReduceInit) {
+  } else if (targetGroup->groupTemplate == OperatorTemplate::Reduction) {
+    if (sourceGroup->groupTemplate == OperatorTemplate::ReductionInit) {
       plan.loopTransform = LoopTransform::ReplicateIf;
     }
   }
