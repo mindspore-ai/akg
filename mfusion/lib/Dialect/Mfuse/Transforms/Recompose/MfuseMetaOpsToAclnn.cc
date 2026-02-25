@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <numeric>
 
 #include "mfusion/Dialect/Mfuse/Transforms/Recompose/RecomposePatterns.h"
-
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
 #include "llvm/ADT/SmallVector.h"
@@ -23,7 +23,6 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
-#include <numeric>
 
 namespace mlir::mfuse {
 namespace {
@@ -111,11 +110,7 @@ class MfuseMetaOpsToAclnnPattern {
     }
 
     auto broadcastType = RankedTensorType::get(broadcastShape, biasType.getElementType());
-    auto shapeTensorType =
-      RankedTensorType::get({static_cast<int64_t>(broadcastShape.size())}, rewriter.getIntegerType(64));
-    auto shapeAttr = DenseElementsAttr::get(shapeTensorType, llvm::ArrayRef<int64_t>(broadcastShape));
-    Value shapeVal = rewriter.create<arith::ConstantOp>(loc, shapeAttr);
-    return rewriter.create<ReshapeOp>(loc, broadcastType, bias, shapeVal);
+    return rewriter.create<ReshapeOp>(loc, broadcastType, bias);
   }
 };
 

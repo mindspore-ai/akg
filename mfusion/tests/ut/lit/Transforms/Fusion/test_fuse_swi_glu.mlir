@@ -70,17 +70,15 @@ module {
   // CHECK-SAME: (%[[INPUT:.*]]: tensor<8xf16>, %[[DIM:.*]]: tensor<i64>)
   func.func @test_swiglu_with_reshape_fusion(%input: tensor<8xf16>, %dim: tensor<i64>) -> tensor<1x1x2x2xf16> {
     // Reshape input: 1D tensor -> 2D tensor
-    %reshape_in_shape = arith.constant dense<[2, 4]> : tensor<2xi64>
-    %reshape_in = mfuse.reshape %input, %reshape_in_shape : (tensor<8xf16>, tensor<2xi64>) -> tensor<2x4xf16>
+    %reshape_in = mfuse.reshape %input : (tensor<8xf16>) -> tensor<2x4xf16>
 
     // SplitWithSize: split along dim=1 into [2, 2]
     %split_size = arith.constant dense<[2, 2]> : tensor<2xi64>
     %split:2 = mfuse.aclnn.split_with_size %reshape_in, %split_size, %dim : (tensor<2x4xf16>, tensor<2xi64>, tensor<i64>) -> (tensor<2x2xf16>, tensor<2x2xf16>)
 
     // Reshape split outputs: 2D -> 4D
-    %reshape_shape_4d = arith.constant dense<[1, 1, 2, 2]> : tensor<4xi64>
-    %reshape_split1 = mfuse.reshape %split#1, %reshape_shape_4d : (tensor<2x2xf16>, tensor<4xi64>) -> tensor<1x1x2x2xf16>
-    %reshape_split0 = mfuse.reshape %split#0, %reshape_shape_4d : (tensor<2x2xf16>, tensor<4xi64>) -> tensor<1x1x2x2xf16>
+    %reshape_split1 = mfuse.reshape %split#1 : (tensor<2x2xf16>) -> tensor<1x1x2x2xf16>
+    %reshape_split0 = mfuse.reshape %split#0 : (tensor<2x2xf16>) -> tensor<1x1x2x2xf16>
 
     // Silu on Reshape(Split[0])
     %silu_res = mfuse.aclnn.silu %reshape_split0 : (tensor<1x1x2x2xf16>) -> tensor<1x1x2x2xf16>
@@ -102,15 +100,13 @@ module {
   // CHECK-SAME: (%[[INPUT:.*]]: tensor<8xf16>, %[[DIM:.*]]: tensor<i64>)
   func.func @test_swiglu_with_reshape_fusion_commutative(%input: tensor<8xf16>, %dim: tensor<i64>) -> tensor<1x1x2x2xf16> {
     // Test Mul commutativity with reshape pattern
-    %reshape_in_shape = arith.constant dense<[2, 4]> : tensor<2xi64>
-    %reshape_in = mfuse.reshape %input, %reshape_in_shape : (tensor<8xf16>, tensor<2xi64>) -> tensor<2x4xf16>
+    %reshape_in = mfuse.reshape %input : (tensor<8xf16>) -> tensor<2x4xf16>
 
     %split_size = arith.constant dense<[2, 2]> : tensor<2xi64>
     %split:2 = mfuse.aclnn.split_with_size %reshape_in, %split_size, %dim : (tensor<2x4xf16>, tensor<2xi64>, tensor<i64>) -> (tensor<2x2xf16>, tensor<2x2xf16>)
 
-    %reshape_shape_4d = arith.constant dense<[1, 1, 2, 2]> : tensor<4xi64>
-    %reshape_split1 = mfuse.reshape %split#1, %reshape_shape_4d : (tensor<2x2xf16>, tensor<4xi64>) -> tensor<1x1x2x2xf16>
-    %reshape_split0 = mfuse.reshape %split#0, %reshape_shape_4d : (tensor<2x2xf16>, tensor<4xi64>) -> tensor<1x1x2x2xf16>
+    %reshape_split1 = mfuse.reshape %split#1 : (tensor<2x2xf16>) -> tensor<1x1x2x2xf16>
+    %reshape_split0 = mfuse.reshape %split#0 : (tensor<2x2xf16>) -> tensor<1x1x2x2xf16>
 
     %silu_res = mfuse.aclnn.silu %reshape_split0 : (tensor<1x1x2x2xf16>) -> tensor<1x1x2x2xf16>
 
@@ -130,15 +126,13 @@ module {
   // CHECK-LABEL: func @test_no_fusion_with_reshape_dtype_mismatch
   func.func @test_no_fusion_with_reshape_dtype_mismatch(%input: tensor<8xf32>, %dim: tensor<i64>) -> tensor<1x1x2x2xf32> {
     // Input is f32, but pass requires f16 or bf16
-    %reshape_in_shape = arith.constant dense<[2, 4]> : tensor<2xi64>
-    %reshape_in = mfuse.reshape %input, %reshape_in_shape : (tensor<8xf32>, tensor<2xi64>) -> tensor<2x4xf32>
+    %reshape_in = mfuse.reshape %input : (tensor<8xf32>) -> tensor<2x4xf32>
 
     %split_size = arith.constant dense<[2, 2]> : tensor<2xi64>
     %split:2 = mfuse.aclnn.split_with_size %reshape_in, %split_size, %dim : (tensor<2x4xf32>, tensor<2xi64>, tensor<i64>) -> (tensor<2x2xf32>, tensor<2x2xf32>)
 
-    %reshape_shape_4d = arith.constant dense<[1, 1, 2, 2]> : tensor<4xi64>
-    %reshape_split1 = mfuse.reshape %split#1, %reshape_shape_4d : (tensor<2x2xf32>, tensor<4xi64>) -> tensor<1x1x2x2xf32>
-    %reshape_split0 = mfuse.reshape %split#0, %reshape_shape_4d : (tensor<2x2xf32>, tensor<4xi64>) -> tensor<1x1x2x2xf32>
+    %reshape_split1 = mfuse.reshape %split#1 : (tensor<2x2xf32>) -> tensor<1x1x2x2xf32>
+    %reshape_split0 = mfuse.reshape %split#0 : (tensor<2x2xf32>) -> tensor<1x1x2x2xf32>
 
     %silu_res = mfuse.aclnn.silu %reshape_split0 : (tensor<1x1x2x2xf32>) -> tensor<1x1x2x2xf32>
     %res = mfuse.mul %reshape_split1, %silu_res : (tensor<1x1x2x2xf32>, tensor<1x1x2x2xf32>) -> tensor<1x1x2x2xf32>
@@ -153,24 +147,22 @@ module {
   }
 
   // CHECK-LABEL: func @test_no_fusion_with_reshape_reshape_dim_too_large
-  func.func @test_no_fusion_with_reshape_reshape_dim_too_large(%input: tensor<16xf16>, %dim: tensor<i64>) -> tensor<1x1x1x2x1xf16> {
+  func.func @test_no_fusion_with_reshape_reshape_dim_too_large(%input: tensor<16xf16>, %dim: tensor<i64>) -> tensor<1x1x1x8x1xf16> {
     // Input Reshape has 4 dims, but pass requires <= 3
-    %reshape_in_shape = arith.constant dense<[2, 2, 2, 2]> : tensor<4xi64>
-    %reshape_in = mfuse.reshape %input, %reshape_in_shape : (tensor<16xf16>, tensor<4xi64>) -> tensor<2x2x2x2xf16>
+    %reshape_in = mfuse.reshape %input : (tensor<16xf16>) -> tensor<2x2x2x2xf16>
 
     %split_size = arith.constant dense<[1, 1]> : tensor<2xi64>
     %split:2 = mfuse.aclnn.split_with_size %reshape_in, %split_size, %dim : (tensor<2x2x2x2xf16>, tensor<2xi64>, tensor<i64>) -> (tensor<2x2x2x1xf16>, tensor<2x2x2x1xf16>)
 
-    %reshape_shape_5d = arith.constant dense<[1, 1, 1, 2, 1]> : tensor<5xi64>
-    %reshape_split1 = mfuse.reshape %split#1, %reshape_shape_5d : (tensor<2x2x2x1xf16>, tensor<5xi64>) -> tensor<1x1x1x2x1xf16>
-    %reshape_split0 = mfuse.reshape %split#0, %reshape_shape_5d : (tensor<2x2x2x1xf16>, tensor<5xi64>) -> tensor<1x1x1x2x1xf16>
+    %reshape_split1 = mfuse.reshape %split#1 : (tensor<2x2x2x1xf16>) -> tensor<1x1x1x8x1xf16>
+    %reshape_split0 = mfuse.reshape %split#0 : (tensor<2x2x2x1xf16>) -> tensor<1x1x1x8x1xf16>
 
-    %silu_res = mfuse.aclnn.silu %reshape_split0 : (tensor<1x1x1x2x1xf16>) -> tensor<1x1x1x2x1xf16>
-    %res = mfuse.mul %reshape_split1, %silu_res : (tensor<1x1x1x2x1xf16>, tensor<1x1x1x2x1xf16>) -> tensor<1x1x1x2x1xf16>
+    %silu_res = mfuse.aclnn.silu %reshape_split0 : (tensor<1x1x1x8x1xf16>) -> tensor<1x1x1x8x1xf16>
+    %res = mfuse.mul %reshape_split1, %silu_res : (tensor<1x1x1x8x1xf16>, tensor<1x1x1x8x1xf16>) -> tensor<1x1x1x8x1xf16>
 
     // Should not fuse due to reshape dim check
     // CHECK-NOT: mfuse.aclnn.swi_glu
 
-    return %res : tensor<1x1x1x2x1xf16>
+    return %res : tensor<1x1x1x8x1xf16>
   }
 }

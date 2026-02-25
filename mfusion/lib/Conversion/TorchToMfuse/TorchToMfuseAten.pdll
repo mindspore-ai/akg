@@ -133,16 +133,6 @@ Pattern ConvertAtenPowTensorTensor {
   replace root with op<mfuse.pow>(convertValues(operands)) -> (convertType(resType));
 }
 
-Pattern ConvertAtenReshape {
-  let root = op<torch.aten.reshape>(self: Value, shape: Value) -> (resType: Type);
-  replace root with op<mfuse.reshape>(convertValue(self), convertValue(shape)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenView {
-  let root = op<torch.aten.view>(self: Value, shape: Value) -> (resType: Type);
-  replace root with op<mfuse.reshape>(convertValue(self), convertValue(shape)) -> (convertType(resType));
-}
-
 Pattern ConvertAtenRsqrt {
   let root = op<torch.aten.rsqrt>(input: Value) -> (resType: Type);
   replace root with op<mfuse.rsqrt>(convertValue(input)) -> (convertType(resType));

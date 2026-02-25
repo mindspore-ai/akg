@@ -30,7 +30,7 @@
 #include "mfusion/Conversion/Passes.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/MfuseDialect.h"
-#include "mfusion/Dialect/Mfuse/Utils/SymbolicShapeUtils.h"
+#include "mfusion/Dialect/Mfuse/Utils/SymbolAttrUtils.h"
 
 namespace {
 namespace TorchD = mlir::torch::Torch;
@@ -45,7 +45,7 @@ bool attachToCastResults(mlir::Operation *castOp, mlir::mfuse::SymbolicShapeAttr
     if (ranked.getRank() != static_cast<int64_t>(exprCount)) {
       continue;
     }
-    result.setType(mlir::mfuse::SymbolicShapeUtils::withSymbolicAttr(ranked, attr));
+    result.setType(mlir::mfuse::SymbolAttrUtils::withSymbolicAttr(ranked, attr));
     updated = true;
   }
   return updated;
@@ -157,7 +157,7 @@ struct ConvertTorchSymbolToMfusePass
           if (!ranked || ranked.getRank() != static_cast<int64_t>(exprCount)) {
             continue;
           }
-          if (mlir::mfuse::SymbolicShapeUtils::attachToValue(input, shapeAttr)) {
+          if (mlir::mfuse::SymbolAttrUtils::attachToValue(input, shapeAttr)) {
             remove_op = true;
           }
         }
