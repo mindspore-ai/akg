@@ -14,13 +14,11 @@
 """Module for kernel test and profiling"""
 import os
 import argparse
-import ctypes
 import json
 import logging
 import multiprocessing
 import pathlib
 import shutil
-import subprocess
 import time
 import distutils
 import numpy as np
@@ -28,20 +26,20 @@ from bfloat16 import bfloat16
 
 from akg import MlirDriver
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
-from ..utils.dynamic_utils import get_device_shape
 from ..utils.result_analysis import get_compare_tolerance
 from ..utils.torch_mlir_utils import find_first_func_name, run_torch_mlir_to_json, run_torch_mlir_to_linalg_on_tensors
 from ..ascend_profilier.cann_file_parser import CANNFileParser
 from ..ascend_profilier.op_summary_parser import OpSummaryParser
 
+logging.basicConfig(level=logging.WARN,
+                    format='[%(levelname)s] %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
 
 PROF_ERROR_CODE = 9999999999
 
 def validate_and_normalize_path(
-        path,
-        check_absolute_path=False,
-        allow_parent_dir=True,
-):
+    path,
+    check_absolute_path=False,
+    allow_parent_dir=True):
     """
     Validates path and returns its normalized form.
 
@@ -83,88 +81,12 @@ def validate_and_normalize_path(
 def _get_json_dict(desc):
     return json.loads(desc) if isinstance(desc, str) else desc
 
-
 def _get_kernel_name(desc):
     json_obj = _get_json_dict(desc)
     return json_obj["op"]
 
-
-def _transform_data_to_ctypes(data,
-                              kernel_name,
-                              is_dyn_shape=False,
-                              backend="gpu",
-                              is_profile_params=False,
-                              ):
-    """ transform input data to ctypes """
-    def get_max_shape_length(shapes):
-        max_len = 0
-        for shape in shapes:
-            max_len = max(max_len, len(shape))
-        return max_len
-
-    data_ctypes = []
-    if len(data) == 0:
-        # dynamic shape info cannot generate inputs while compilation
-        return data_ctypes
-    shape_arg_list = []
-    int_p = ctypes.POINTER(ctypes.c_int)
-    device_shape, _, _ = get_device_shape(data, kernel_name, is_dyn_shape and not is_profile_params)
-
-    for data_idx, d in enumerate(data):
-        shape_list = [0]
-        data_shape = device_shape[data_idx]
-        if isinstance(d, int):
-            data_ctypes.append(ctypes.c_int(d))
-        elif isinstance(d, np.ndarray):
-            data_ctypes.append(d.ctypes.data_as(int_p))
-            shape_list += list(data_shape)
-            # for tensor (m, n, k), strides is [n*k, k, 1]
-            stride_list = [1] * len(data_shape)
-            for idx, _ in enumerate(data_shape[1:]):
-                stride_list[-idx - 2] = stride_list[-idx - 1] * \
-                    data_shape[-idx - 1]
-            shape_list += stride_list
-        else:
-            raise TypeError("wrong data to cytpes, current type is '", type(d), "'")
-        shape_list += [0] * (1 + 2 * 0 if is_profile_params else get_max_shape_length(device_shape) - len(shape_list))
-        shape_arg_list.append(shape_list)
-    if is_profile_params or backend == "gpu":
-        return data_ctypes
-    # pack parameters into an array of pointers
-    # static shape: array of pointers of data
-    packed_tensors = (int_p * len(data))()
-    packed_tensors[:] = [
-        ctypes.cast(data_ctype, int_p) for data_ctype in data_ctypes
-    ]
-
-    if backend == "cpu" and not is_dyn_shape:
-        return [packed_tensors]
-
-    # dynamic shape: array of pointers of data, array of [0, shape, stride] of data
-    # tensor_num * [0, shape_list 1,2,...,n, strides 0,1,2,...,n]
-    packed_shape_lists = (int_p * len(data))()
-    for idx, shape_list in enumerate(shape_arg_list):
-        packed_shapes = (int_p * len(shape_list))()
-        packed_shapes[:] = [
-            ctypes.cast(shape, int_p) for shape in shape_list
-        ]
-        packed_shape_lists[idx] = ctypes.cast(packed_shapes, int_p)
-    return [packed_tensors, packed_shape_lists]
-
-
-def _compile_lib(kernel_name, file_path="./tmp_files/"):
-    so_file = os.path.join(file_path, "gen_func_" + kernel_name + ".so")
-    gen_lib_file = os.path.join(file_path, "gen_func_" + kernel_name + ".cu")
-
-    cmd = ["nvcc", "-o", so_file, gen_lib_file, "--shared",
-           "-Xcompiler", "-fPIC", "-lcudart", "-lcuda", "-O3"]
-
-    subprocess.call(cmd)
-
-
 def _compare_func(output, expect, compare_tolerance=None):
     return compare_tensor(output, expect, rtol=compare_tolerance, atol=compare_tolerance)
-
 
 def compare_results(kernel_name, desc, input_for_mod, output_indexes, expect):
     """Helper function to compare result"""
@@ -259,6 +181,7 @@ def run_a_kernel(desc,
     mlir_driver = MlirDriver(kernel_name=kernel_name,
                              input_file=file_path,
                              output_dir=_get_kernel_meta_dir(),
+                             backend=backend,
                              llvm_tools_dir=os.getenv("LLVM_HOME", ""),
                              dynamic_shape=is_dyn_shape,
                              dump_ir=dump_ir,

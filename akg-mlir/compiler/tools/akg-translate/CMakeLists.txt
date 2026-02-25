@@ -14,10 +14,18 @@ set(LIBS
   MLIRIR
   MLIRParser
   MLIRPass
+  MLIRPtrDialect
+  MLIRMPIDialect
   MLIRSPIRVDialect
   # MLIRTranslation
   MLIRSupport
   MLIRExecutionEngine
+  MLIRTensorTransformOps
+  MLIRMLProgramTransforms
+  MLIRControlFlowTransforms
+  MLIRSparseTensorTransforms
+  MLIRBufferizationTransforms
+  MLIRArithValueBoundsOpInterfaceImpl
   )
 
 link_directories(${AKG_BIN_LIB_DIR})
@@ -34,10 +42,11 @@ llvm_expand_pseudo_components(TARGET_LIBS AllTargetsCodeGens)
 # Prepend LLVM in front of every target, this is how the library
 # are named with CMake
 SET(targets_to_link)
-FOREACH(t ${TARGET_LIBS})
-  LIST(APPEND targets_to_link "LLVM${t}")
-ENDFOREACH(t)
-
+if(NOT LLVM_LINK_LLVM_DYLIB)
+  FOREACH(t ${TARGET_LIBS})
+    LIST(APPEND targets_to_link "LLVM${t}")
+  ENDFOREACH(t)
+endif()
 llvm_update_compile_flags(akg-translate)
 target_link_libraries(akg-translate PRIVATE ${LIBS} ${targets_to_link})
 

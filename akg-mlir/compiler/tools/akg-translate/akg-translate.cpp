@@ -19,12 +19,8 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Tools/mlir-translate/MlirTranslateMain.h"
 
-using namespace mlir;
-
 int main(int argc, char **argv) {
-#ifdef USE_CUDA_BACKEND
-  registerToPTXTranslation();
-#endif
+  mlir::registerToPTXTranslation();
 
-  return failed(mlirTranslateMain(argc, argv, "Akg Translation Testing Tool"));
+  return failed(mlir::mlirTranslateMain(argc, argv, "Akg Translation Testing Tool"));
 }
