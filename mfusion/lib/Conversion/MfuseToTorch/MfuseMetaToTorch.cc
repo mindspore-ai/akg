@@ -271,7 +271,7 @@ struct ConvertMfuseReduceSum : public mlir::OpConversionPattern<mlir::mfuse::Red
   }
 };
 
-/// Converts mfuse.reshape -> torch.aten.view.
+/// Converts mfuse.reshape -> torch.aten.reshape.
 /// Shape is derived from reshape result type. A dynamic dim is mapped to -1.
 class ConvertMfuseReshape : public mlir::OpConversionPattern<mlir::mfuse::ReshapeOp> {
  public:
@@ -296,7 +296,7 @@ class ConvertMfuseReshape : public mlir::OpConversionPattern<mlir::mfuse::Reshap
     mlir::Value input = adaptor.getInput();
     auto listType = TorchD::ListType::get(op.getContext(), TorchD::IntType::get(op.getContext()));
     auto shapeList = rewriter.create<TorchD::PrimListConstructOp>(op.getLoc(), listType, shapeValues);
-    rewriter.replaceOpWithNewOp<TorchD::AtenViewOp>(op, torchResultType, input, shapeList);
+    rewriter.replaceOpWithNewOp<TorchD::AtenReshapeOp>(op, torchResultType, input, shapeList);
     return mlir::success();
   }
 };
