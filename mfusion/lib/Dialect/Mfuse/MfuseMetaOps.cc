@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <vector>
+#include <type_traits>
 
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 
@@ -28,6 +29,7 @@
 
 #include "mfusion/Analysis/SymbolicShape/SymEngineAnalysis.h"
 #include "mfusion/Dialect/Mfuse/Analysis/BinaryOpCommonInfer.h"
+#include "mfusion/Dialect/Mfuse/Analysis/ReduceOpCommonInfer.h"
 #include "mfusion/Dialect/Mfuse/Utils/SymbolAttrUtils.h"
 #include "mfusion/Analysis/SymbolicShape/SymExprBuilder.h"
 
@@ -63,6 +65,102 @@ mlir::Type getHigherPrecisionType(mlir::Type typeA, mlir::Type typeB) {
 
   // Return the type with higher bit width
   return bitWidthA >= bitWidthB ? typeA : typeB;
+}
+
+mlir::LogicalResult BroadcastToOp::verify() {
+  auto inType = mlir::dyn_cast<mlir::RankedTensorType>(getInput().getType());
+  auto outType = mlir::dyn_cast<mlir::RankedTensorType>(getOutput().getType());
+  if (!inType || !outType) {
+    return emitOpError("both input and output must be ranked tensors");
+  }
+  auto inShape = inType.getShape();
+  auto outShape = outType.getShape();
+  int64_t inRank = inType.getRank();
+  int64_t outRank = outType.getRank();
+  if (outRank < inRank) {
+    return emitOpError("output rank must be >= input rank for broadcast, got ") << outRank << " vs " << inRank;
+  }
+
+  // Check newly added leading dimensions.
+  int64_t leading = outRank - inRank;
+  for (int64_t i = 0; i < leading; ++i) {
+    int64_t dim = outShape[i];
+    if (dim == mlir::ShapedType::kDynamic) {
+      return emitOpError("newly added leading dimension at index ") << i << " must be static";
+    }
+    if (dim <= 0) {
+      return emitOpError("newly added leading dimension at index ") << i << " must be positive, got " << dim;
+    }
+  }
+
+  // Check aligned dimensions from the right.
+  for (int64_t i = 0; i < inRank; ++i) {
+    int64_t inIdx = inRank - 1 - i;
+    int64_t outIdx = outRank - 1 - i;
+    int64_t inDim = inShape[inIdx];
+    int64_t outDim = outShape[outIdx];
+    if (inDim == mlir::ShapedType::kDynamic) {
+      continue;
+    }
+    // If input dimension is static, require output dimension to be static and
+    // satisfy standard broadcasting constraints.
+    if (outDim == mlir::ShapedType::kDynamic) {
+      return emitOpError("output dimension at index ") << outIdx << " must be static when input dimension is static";
+    }
+    if (!(outDim == inDim || inDim == 1)) {
+      return emitOpError("invalid broadcast from input dimension ")
+             << inDim << " to output dimension " << outDim << " at index " << outIdx
+             << " (expected equal or broadcasting from 1)";
+    }
+    if (outDim <= 0) {
+      return emitOpError("output dimension at index ") << outIdx << " must be positive, got " << outDim;
+    }
+  }
+
+  return mlir::success();
+}
+
+mlir::FailureOr<mlir::Type> BroadcastToOp::inferSymbolicShapes(mlir::OpBuilder &builder,
+                                                               const mlir::OperationState &state,
+                                                               mlir::Type resultType) {
+  if (state.operands.empty()) {
+    return mlir::failure();
+  }
+
+  auto inType = state.operands[0].getType().dyn_cast<mlir::RankedTensorType>();
+  auto outType = resultType.dyn_cast<mlir::RankedTensorType>();
+  if (!outType || !inType) {
+    return mlir::failure();
+  }
+
+  auto maybeInExprs = SymbolAttrUtils::getSymbolicShapeExprs(inType);
+  if (mlir::failed(maybeInExprs)) {
+    return mlir::failure();
+  }
+  auto inExprs = std::move(*maybeInExprs);
+
+  mfusion::SymExprBuilder symBuilder;
+  auto outShape = outType.getShape();
+  int64_t outRank = outType.getRank();
+  int64_t inRank = inType.getRank();
+  int64_t leading = outRank - inRank;
+
+  llvm::SmallVector<SymbolAttrUtils::SymExpr> outExprs;
+  outExprs.resize(outRank);
+
+  for (int64_t outIdx = 0; outIdx < leading; ++outIdx) {
+    outExprs[outIdx] = symBuilder.makeInteger(outShape[outIdx]);
+  }
+  for (int64_t outIdx = leading; outIdx < outRank; ++outIdx) {
+    int64_t inIdx = outIdx - leading;
+    if (outShape[outIdx] == mlir::ShapedType::kDynamic) {
+      outExprs[outIdx] = inExprs[inIdx];
+    } else {
+      outExprs[outIdx] = symBuilder.makeInteger(outShape[outIdx]);
+    }
+  }
+
+  return SymbolAttrUtils::withSymbolicAttr(outType, builder, outExprs);
 }
 
 mlir::Type CastOp::inferResultType(mlir::Value input, mlir::Type elementType) {
@@ -121,69 +219,13 @@ mlir::LogicalResult ReshapeOp::verify() {
   return mlir::success();
 }
 
-mlir::LogicalResult BroadcastToOp::verify() {
-  auto inType = mlir::dyn_cast<mlir::RankedTensorType>(getInput().getType());
-  auto outType = mlir::dyn_cast<mlir::RankedTensorType>(getOutput().getType());
-  if (!inType || !outType) {
-    return emitOpError("both input and output must be ranked tensors");
-  }
-
-  auto inShape = inType.getShape();
-  auto outShape = outType.getShape();
-  int64_t inRank = inType.getRank();
-  int64_t outRank = outType.getRank();
-
-  if (outRank < inRank) {
-    return emitOpError("output rank must be >= input rank for broadcast, got ") << outRank << " vs " << inRank;
-  }
-
-  // Check newly added leading dimensions.
-  int64_t leading = outRank - inRank;
-  for (int64_t i = 0; i < leading; ++i) {
-    int64_t dim = outShape[i];
-    if (dim == mlir::ShapedType::kDynamic) {
-      return emitOpError("newly added leading dimension at index ") << i << " must be static";
-    }
-    if (dim <= 0) {
-      return emitOpError("newly added leading dimension at index ") << i << " must be positive, got " << dim;
-    }
-  }
-
-  // Check aligned dimensions from the right.
-  for (int64_t i = 0; i < inRank; ++i) {
-    int64_t inIdx = inRank - 1 - i;
-    int64_t outIdx = outRank - 1 - i;
-    int64_t inDim = inShape[inIdx];
-    int64_t outDim = outShape[outIdx];
-
-    if (inDim == mlir::ShapedType::kDynamic) {
-      continue;
-    }
-    // If input dimension is static, require output dimension to be static and
-    // satisfy standard broadcasting constraints.
-    if (outDim == mlir::ShapedType::kDynamic) {
-      return emitOpError("output dimension at index ") << outIdx << " must be static when input dimension is static";
-    }
-    if (!(outDim == inDim || inDim == 1)) {
-      return emitOpError("invalid broadcast from input dimension ")
-             << inDim << " to output dimension " << outDim << " at index " << outIdx
-             << " (expected equal or broadcasting from 1)";
-    }
-    if (outDim <= 0) {
-      return emitOpError("output dimension at index ") << outIdx << " must be positive, got " << outDim;
-    }
-  }
-
-  return mlir::success();
-}
-
 mlir::FailureOr<mlir::Type> ReshapeOp::inferSymbolicShapes(mlir::OpBuilder &builder, const mlir::OperationState &state,
                                                            mlir::Type resultType) {
   if (state.operands.empty()) {
     return mlir::failure();
   }
 
-  auto inType = mlir::ValueRange(state.operands).front().getType().dyn_cast<mlir::RankedTensorType>();
+  auto inType = state.operands[0].getType().dyn_cast<mlir::RankedTensorType>();
   auto outType = resultType.dyn_cast<mlir::RankedTensorType>();
   if (!outType || !inType) {
     return mlir::failure();
@@ -307,4 +349,24 @@ IMPL_BINARY_OP_FUNCTION(PowOp, false)
 IMPL_BINARY_OP_FUNCTION(RealDivOp, false)
 IMPL_BINARY_OP_FUNCTION(SubOp, false)
 
+mlir::Type ReduceSumOp::inferResultType(mlir::Value input, mlir::ArrayAttr dimensions, mlir::BoolAttr keepdim,
+                                        mlir::Type elementType) {
+  return ReduceOpCommonInfer::inferResultType(input, dimensions, keepdim, elementType);
+}
+
+mlir::FailureOr<mlir::Type> ReduceSumOp::inferSymbolicShapes(mlir::OpBuilder &builder,
+                                                             const mlir::OperationState &state, mlir::Type resultType) {
+  return ReduceOpCommonInfer::inferSymbolicShapes(builder, state, resultType);
+}
+
+mlir::LogicalResult ReduceSumOp::verify() {
+  auto dimensions = getDimensions();
+  for (auto dimAttr : dimensions.getValue()) {
+    auto dim = mlir::cast<mlir::IntegerAttr>(dimAttr).getValue().getSExtValue();
+    if (dim < 0) {
+      return emitOpError("dimensions must be non-negative, got ") << dim;
+    }
+  }
+  return mlir::success();
+}
 }  // namespace mlir::mfuse
