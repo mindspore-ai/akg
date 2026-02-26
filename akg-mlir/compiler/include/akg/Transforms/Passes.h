@@ -40,7 +40,7 @@ std::unique_ptr<Pass> createPromoteTempBufferPass();
 std::unique_ptr<Pass> createStoreLoadElimPass();
 std::unique_ptr<Pass> createSymbolRemovalPass();
 std::unique_ptr<Pass> createInferSymbolicShapesPass();
-std::unique_ptr<Pass> createSymbolicRemovalPass();
+std::unique_ptr<OperationPass<ModuleOp>> createSymbolicRemovalPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAKGFuncOutliningPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAKGFuncOutliningPass(bool isMindSpore, bool isOutlining);
 std::unique_ptr<OperationPass<ModuleOp>> createAKGParallelLaunchPass();
