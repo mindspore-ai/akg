@@ -103,13 +103,13 @@ def Mfuse_AclnnGeluBackwardOp : Mfuse_Op<"aclnn.gelu_backward", [Pure]> {
   let arguments = (ins
     AnyRankedTensor:$grad_output,
     AnyRankedTensor:$self,
-    Mfuse_StringType:$approximate
+    StrAttr:$approximate
   );
 
   let results = (outs AnyRankedTensor:$output);
 
   let assemblyFormat = [{
-    $grad_output `,` $self `,` $approximate attr-dict `:` functional-type(operands, results)
+    $grad_output `,` $self attr-dict `:` functional-type(operands, results)
   }];
 }
 
@@ -121,7 +121,8 @@ def Mfuse_AclnnGeluOp : Mfuse_Op<"aclnn.gelu", [Pure]> {
   }];
 
   let arguments = (ins
-    AnyRankedTensor:$input
+    AnyRankedTensor:$input,
+    StrAttr:$approximate
   );
 
   let results = (outs AnyRankedTensor:$output);

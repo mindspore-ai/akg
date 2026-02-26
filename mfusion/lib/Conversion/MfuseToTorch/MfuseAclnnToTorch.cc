@@ -121,6 +121,59 @@ class ConvertMfuseAclnnAddRmsNorm : public mlir::OpConversionPattern<mlir::mfuse
   }
 };
 
+/// Converts mfuse.aclnn.gelu -> torch.aten.gelu, materializing attributes as inputs.
+class ConvertMfuseAclnnGelu : public mlir::OpConversionPattern<mlir::mfuse::AclnnGeluOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnGeluOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value input = adaptor.getInput();
+
+    // Convert result type
+    mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return mlir::failure();
+    }
+
+    // For torch.aten.gelu, the 'approximate' parameter is a string input
+    // Create a string constant for 'approximate' parameter
+    mlir::Value approximate =
+      rewriter.create<TorchD::ConstantStrOp>(op.getLoc(), rewriter.getStringAttr(op.getApproximateAttr().str()));
+
+    // Create torch.aten.gelu op with input and approximate parameter
+    rewriter.replaceOpWithNewOp<TorchD::AtenGeluOp>(op, resultType, input, approximate);
+    return mlir::success();
+  }
+};
+
+/// Converts mfuse.aclnn.gelu_backward -> torch.aten.gelu_backward, materializing attributes as inputs.
+class ConvertMfuseAclnnGeluBackward : public mlir::OpConversionPattern<mlir::mfuse::AclnnGeluBackwardOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnGeluBackwardOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value gradOutput = adaptor.getGradOutput();
+    mlir::Value self = adaptor.getSelf();
+
+    // Convert result type
+    mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return mlir::failure();
+    }
+
+    // For torch.aten.gelu_backward, the 'approximate' parameter is a string input
+    // Create a string constant for 'approximate' parameter
+    mlir::Value approximate =
+      rewriter.create<TorchD::ConstantStrOp>(op.getLoc(), rewriter.getStringAttr(op.getApproximateAttr().str()));
+
+    // Create torch.aten.gelu_backward op with all inputs
+    rewriter.replaceOpWithNewOp<TorchD::AtenGeluBackwardOp>(op, resultType, gradOutput, self, approximate);
+    return mlir::success();
+  }
+};
+
 }  // namespace
 
 // ============================================================================
@@ -131,6 +184,8 @@ void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, Rewri
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseAclnnAdd>(converter, context);
   patterns.add<ConvertMfuseAclnnAddRmsNorm>(converter, context);
+  patterns.add<ConvertMfuseAclnnGelu>(converter, context);
+  patterns.add<ConvertMfuseAclnnGeluBackward>(converter, context);
 }
 
 }  // namespace mlir

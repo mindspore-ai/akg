@@ -73,6 +73,16 @@ Pattern ConvertAtenExpTensor {
   replace root with op<mfuse.exp>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenGelu {
+  let root = op<torch.aten.gelu>(inputs: ValueRange) -> (resType: Type);
+  replace root with op<mfuse.aclnn.gelu>(convertValue(Get0(inputs))) { approximate = GetStrAttr(Get1(inputs)) } -> (convertType(resType));
+}
+
+Pattern ConvertAtenGeluBackward {
+  let root = op<torch.aten.gelu_backward>(inputs: ValueRange) -> (resType: Type);
+  replace root with op<mfuse.aclnn.gelu_backward>(convertValue(Get0(inputs)), convertValue(Get1(inputs))) { approximate = GetStrAttr(Get2(inputs)) } -> (convertType(resType));
+}
+
 Pattern ConvertAtenLogicalAnd {
   let root = op<torch.aten.logical_and>(operands: ValueRange) -> (resType: Type);
   replace root with op<mfuse.logical_and>(convertValues(operands)) -> (convertType(resType));
