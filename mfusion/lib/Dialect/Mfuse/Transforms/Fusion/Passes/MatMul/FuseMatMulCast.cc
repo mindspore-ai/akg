@@ -33,25 +33,25 @@ namespace mlir {
 namespace mfuse {
 namespace {
 
-/// Check if a value has a single CastOp user that casts f16 to f32.
-/// Returns the CastOp if found, nullptr otherwise.
+/// Find any CastOp user of value that casts f16 to f32. Pattern does not require
+/// single use; returns the first matching CastOp if found, nullptr otherwise.
 static CastOp getF16ToF32Cast(Value value) {
-  if (!value.hasOneUse()) {
-    return nullptr;
-  }
-  auto castOp = dyn_cast<CastOp>(*value.user_begin());
-  if (!castOp) {
-    return nullptr;
-  }
-  auto castDtype = dyn_cast_or_null<FloatType>(castOp.getDtype());
-  if (!castDtype || !castDtype.isF32()) {
-    return nullptr;
-  }
   auto inType = dyn_cast<RankedTensorType>(value.getType());
   if (!inType || !isa<Float16Type>(inType.getElementType())) {
     return nullptr;
   }
-  return castOp;
+  for (Operation *user : value.getUsers()) {
+    auto castOp = dyn_cast<CastOp>(user);
+    if (!castOp) {
+      continue;
+    }
+    auto castDtype = dyn_cast_or_null<FloatType>(castOp.getDtype());
+    if (!castDtype || !castDtype.isF32()) {
+      continue;
+    }
+    return castOp;
+  }
+  return CastOp();
 }
 
 /// Pattern to fuse MatMul followed by f16->f32 cast into MatMul with f32 output.

@@ -148,6 +148,45 @@ def Mfuse_CeilOp : Mfuse_Op<"ceil", [Pure]> {
   }];
 }
 
+def Mfuse_Conv2DOp : Mfuse_Op<"conv2d", [Pure]> {
+  let summary = "2D convolution of input with weight.";
+  let description = [{
+    Performs 2D convolution: input (NCHW) and weight (KCHW) produce output (NKHW').
+    Used for Conv2D+Cast fusion when Conv2D output is f16 and Cast target is f32.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    AnyRankedTensor:$weight
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input `,` $weight attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Mfuse_Conv2DWithBiasOp : Mfuse_Op<"conv2d_with_bias", [Pure]> {
+  let summary = "2D convolution of input with weight and bias.";
+  let description = [{
+    Performs 2D convolution and adds bias: result = conv2d(input, weight) + broadcast(bias).
+    Bias is 1D (output channels) and broadcasts to NCHW output.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    AnyRankedTensor:$weight,
+    AnyRankedTensor:$bias
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $input `,` $weight `,` $bias attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_DivOp : Mfuse_Op<"div", [Pure]> {
   let summary = "Element-wise division of two tensors.";
   let description = [{
