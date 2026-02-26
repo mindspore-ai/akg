@@ -15,6 +15,7 @@
 """PyTorch framework adapter."""
 
 import os
+import re
 from typing import Any, Optional
 import torch
 import numpy as np
@@ -31,10 +32,22 @@ class FrameworkAdapterTorch(FrameworkAdapter):
     
     def get_framework_import(self, op_name: str, is_dynamic_shape: bool) -> str:
         """Return framework model and input function imports."""
-        if is_dynamic_shape:
-            return f"from {op_name}_torch import Model as FrameworkModel, get_init_inputs, get_inputs_dyn_list\n"
-        else:
-            return f"from {op_name}_torch import Model as FrameworkModel, get_init_inputs, get_inputs\n"
+        module_name = re.sub(r"\W", "_", op_name)
+        if not module_name or module_name[0].isdigit():
+            module_name = f"op_{module_name}"
+        inputs_func = "get_inputs_dyn_list" if is_dynamic_shape else "get_inputs"
+        return (
+            "import importlib.util\n"
+            "import os\n"
+            f"_framework_module_name = '{module_name}_framework'\n"
+            f"_framework_module_path = os.path.join(os.path.dirname(__file__), '{op_name}_torch.py')\n"
+            "_framework_spec = importlib.util.spec_from_file_location(_framework_module_name, _framework_module_path)\n"
+            "_framework_module = importlib.util.module_from_spec(_framework_spec)\n"
+            "_framework_spec.loader.exec_module(_framework_module)\n"
+            "FrameworkModel = _framework_module.Model\n"
+            "get_init_inputs = _framework_module.get_init_inputs\n"
+            f"{inputs_func} = _framework_module.{inputs_func}\n"
+        )
     
     def setup_device(self, backend: str, arch: str, device_id: int) -> Any:
         """Setup PyTorch device."""
