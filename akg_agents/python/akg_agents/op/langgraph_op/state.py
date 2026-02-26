@@ -71,6 +71,7 @@ class KernelGenState(BaseState, total=False):
     # === Conductor 建议 ===
     conductor_suggestion: Optional[str]
     conductor_decision: Optional[str]  # Conductor 的决策结果
+    expert_suggestion: Optional[str]   # 专家建议文档（suggestion_docs.md 内容）
     
     # === 额外配置 ===
     inspirations: Optional[List[str]]

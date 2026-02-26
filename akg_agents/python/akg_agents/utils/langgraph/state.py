@@ -77,6 +77,7 @@ class KernelGenState(TypedDict, total=False):
     user_requirements: Optional[str]  # 用户额外需求（来自 ReAct 多轮对话）
     
     # === Base Doc 字段 ===
+    expert_suggestion: Optional[str]
     dsl_api_doc: Optional[str]
     framework_api_doc: Optional[str]
     backend_api_doc: Optional[str]

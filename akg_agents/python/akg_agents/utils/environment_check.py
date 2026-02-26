@@ -87,6 +87,11 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
             importlib.import_module('swft')
         except ImportError:
             issues.append("❌ 缺少 swft")
+    elif dsl == 'pypto':
+        try:
+            importlib.import_module('pypto')
+        except ImportError:
+            issues.append("❌ 缺少 pypto")
 
     # 4. 检查硬件
     if backend == 'cuda':

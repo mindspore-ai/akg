@@ -39,6 +39,8 @@ from akg_agents.op.workflows.coder_only_workflow import CoderOnlyWorkflow
 from akg_agents.op.workflows.verifier_only_workflow import VerifierOnlyWorkflow
 from akg_agents.op.workflows.connect_all_workflow import ConnectAllWorkflow
 from akg_agents.op.workflows.kernelgen_only_workflow import KernelGenOnlyWorkflow
+from akg_agents.op.workflows.evolve_workflow import EvolveWorkflow
+from akg_agents.op.workflows.adaptive_search_workflow import AdaptiveSearchWorkflow
 
 # 算子工作流注册表（同时支持短名称和完整名称）
 WORKFLOW_REGISTRY = {
@@ -48,12 +50,16 @@ WORKFLOW_REGISTRY = {
     "kernelgen_only": KernelGenOnlyWorkflow,
     "verifier_only": VerifierOnlyWorkflow,
     "connect_all": ConnectAllWorkflow,
+    "evolve": EvolveWorkflow,
     # 完整名称（与 Task 的 workflow 参数兼容）
     "default_workflow": DefaultWorkflow,
     "coder_only_workflow": CoderOnlyWorkflow,
     "kernelgen_only_workflow": KernelGenOnlyWorkflow,
     "verifier_only_workflow": VerifierOnlyWorkflow,
     "conductor_connect_all_workflow": ConnectAllWorkflow,
+    "evolve_workflow": EvolveWorkflow,
+    "adaptive_search": AdaptiveSearchWorkflow,
+    "adaptive_search_workflow": AdaptiveSearchWorkflow,
 }
 
 
@@ -321,6 +327,17 @@ class LangGraphTask(BaseLangGraphTask):
             "user_requirements": self.user_requirements,
         }
 
+        # 加载 expert_suggestion（suggestion_docs.md）供 conductor/router 使用
+        expert_suggestion = ""
+        for agent_key in ("coder", "kernel_gen", "designer"):
+            agent = self.agents.get(agent_key)
+            if agent and hasattr(agent, "load_doc"):
+                expert_suggestion = agent.load_doc("suggestion_docs.md")
+                if expert_suggestion:
+                    break
+        if expert_suggestion:
+            state["expert_suggestion"] = expert_suggestion
+
         if session_id:
             state["session_id"] = session_id
         
@@ -362,7 +379,7 @@ class LangGraphTask(BaseLangGraphTask):
         except Exception as e:
             logger.error(f"LangGraphTask {self.task_id} failed: {e}")
             return self.op_name, False, {"error": str(e)}
-    
+
     def visualize(self, output_path: str = None) -> str:
         """生成流程图
         
