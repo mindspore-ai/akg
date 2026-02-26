@@ -5,6 +5,9 @@
 // Native helper to extract float attribute from value.
 Rewrite GetF64Attr(val: Value) -> Attr;
 
+// Native helper to extract string attribute from value.
+Rewrite GetStrAttr(val: Value) -> Attr;
+
 // Native helper to extract int64 array attribute from Torch list value.
 Rewrite GetI64ArrayAttr(val: Value) -> Attr;
 

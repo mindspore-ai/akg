@@ -31,8 +31,14 @@ class GeluDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluOp> {
     // Get the input tensor
     Value input = geluOp.getInput();
     Location loc = geluOp.getLoc();
-    Type resultType = geluOp.getOutput().getType();
+    auto approximate = geluOp.getApproximateAttr().str();
+    constexpr auto tanh_appro_str = "tanh";
+    constexpr auto default_appro_str = "none";
+    if (approximate != tanh_appro_str && approximate != default_appro_str) {
+      return failure();
+    }
 
+    Type resultType = geluOp.getOutput().getType();
     auto tensorType = dyn_cast<mlir::RankedTensorType>(input.getType());
     Type float32Ty = mlir::RankedTensorType::get(tensorType.getShape(), rewriter.getF32Type());
 
@@ -104,14 +110,10 @@ class GeluBackwardDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluBac
     // Get the input tensors
     Value grad = geluBackwardOp.getGradOutput();
     Value self = geluBackwardOp.getSelf();
-    auto approximate = geluBackwardOp.getApproximate();
-    Operation *approOp = approximate.getDefiningOp();
-    if (!approOp) {
-      return failure();
-    }
+    auto approximate = geluBackwardOp.getApproximateAttr().str();
     constexpr auto tanh_appro_str = "tanh";
-    auto str_op = dyn_cast<CreateStringOp>(approOp);
-    if (!str_op || str_op.getValue() != tanh_appro_str) {
+    constexpr auto default_appro_str = "none";
+    if (approximate != tanh_appro_str && approximate != default_appro_str) {
       return failure();
     }
 
