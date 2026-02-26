@@ -109,12 +109,16 @@ class KernelAgent(ReActAgent):
         return "KernelAgent"
     
     def _load_prompt_template(self) -> Jinja2TemplateWrapper:
-        """加载 prompt 模板（使用包含 Skills 的 ReAct 版本）"""
-        # 从 op/resources/prompts/kernel_agent/ 加载模板
+        """加载 system prompt 模板（身份、规则、工具说明等静态指令）"""
         from akg_agents import get_project_root
-        # 使用 system_react.j2，支持 Skills 注入
         prompt_file = Path(get_project_root()) / "op" / "resources" / "prompts" / "kernel_agent" / "system_react.j2"
-        
+        with open(prompt_file, "r", encoding="utf-8") as f:
+            return Jinja2TemplateWrapper(f.read())
+
+    def _load_user_prompt_template(self) -> Jinja2TemplateWrapper:
+        """加载 user prompt 模板（用户需求、执行历史等动态上下文）"""
+        from akg_agents import get_project_root
+        prompt_file = Path(get_project_root()) / "op" / "resources" / "prompts" / "kernel_agent" / "user_react.j2"
         with open(prompt_file, "r", encoding="utf-8") as f:
             return Jinja2TemplateWrapper(f.read())
     

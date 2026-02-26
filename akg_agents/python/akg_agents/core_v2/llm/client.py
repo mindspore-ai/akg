@@ -76,6 +76,13 @@ class LLMClient:
         if presence_penalty is not None:
             self.default_config["presence_penalty"] = presence_penalty
         
+        # 流式显示控制
+        self.display_reasoning: bool = True
+        self.display_content: bool = False
+        
+        # <think> 标签状态机
+        self._in_think_tag = False
+        
         # Token 统计
         self._total_tokens = 0
         self._prompt_tokens = 0
@@ -133,20 +140,17 @@ class LLMClient:
         """
         流式生成 + 发送到 UI
         
-        Args:
-            messages: 消息列表
-            agent_name: Agent 名称
-            tools: 工具定义
-            **kwargs: 额外参数
-        
-        Returns:
-            完整的生成结果
+        通过 display_reasoning / display_content 控制哪些 chunk 发送到 UI：
+        - reasoning（原生 reasoning_content 字段）：受 display_reasoning 控制
+        - content 中的 <think>...</think> 区域：受 display_reasoning 控制
+        - content 中 <think> 之外的区域：受 display_content 控制
         """
         config = {**self.default_config, **kwargs}
         
         content = ""
         reasoning_content = ""
         tool_calls = []
+        self._in_think_tag = False
         
         async for chunk in self.provider.generate_stream(messages, tools=tools, **config):
             chunk_type = chunk.get("type")
@@ -154,29 +158,62 @@ class LLMClient:
             if chunk_type == "content":
                 chunk_text = chunk.get("chunk", "")
                 content += chunk_text
-                self._safe_send_stream(agent_name, chunk_text, is_reasoning=False)
+                self._route_content_chunk(agent_name, chunk_text)
             
             elif chunk_type == "reasoning":
                 chunk_text = chunk.get("chunk", "")
                 reasoning_content += chunk_text
-                self._safe_send_stream(agent_name, chunk_text, is_reasoning=True)
-            
-            elif chunk_type == "tool_call":
-                tool_calls.append(chunk.get("tool_call"))
+                if self.display_reasoning:
+                    self._safe_send_stream(agent_name, chunk_text, is_reasoning=True)
             
             elif chunk_type == "final":
-                # 最终结果，更新 Token 统计
                 self._update_token_stats(chunk.get("usage", {}))
+                tool_calls = chunk.get("tool_calls", [])
         
-        # 发送流式结束标记
         self._safe_send_display("")
         
         return {
             "content": content,
             "reasoning_content": reasoning_content,
             "tool_calls": tool_calls,
-            "usage": {}  # 流式模式下 OpenAI 不返回 usage
+            "usage": {}
         }
+    
+    def _route_content_chunk(self, agent_name: str, chunk: str) -> None:
+        """
+        解析 content chunk 中的 <think> 标签，分流到 reasoning 或 content 通道。
+        
+        对于不提供原生 reasoning_content 字段的模型，通过 <think>...</think> 区分。
+        """
+        if not chunk:
+            return
+        
+        i = 0
+        while i < len(chunk):
+            if not self._in_think_tag:
+                start = chunk.find("<think>", i)
+                if start == -1:
+                    segment = chunk[i:]
+                    if self.display_content and segment:
+                        self._safe_send_stream(agent_name, segment, is_reasoning=False)
+                    break
+                segment = chunk[i:start]
+                if self.display_content and segment:
+                    self._safe_send_stream(agent_name, segment, is_reasoning=False)
+                self._in_think_tag = True
+                i = start + len("<think>")
+            else:
+                end = chunk.find("</think>", i)
+                if end == -1:
+                    segment = chunk[i:]
+                    if self.display_reasoning and segment:
+                        self._safe_send_stream(agent_name, segment, is_reasoning=True)
+                    break
+                segment = chunk[i:end]
+                if self.display_reasoning and segment:
+                    self._safe_send_stream(agent_name, segment, is_reasoning=True)
+                self._in_think_tag = False
+                i = end + len("</think>")
     
     def _safe_send_stream(self, agent_name: str, chunk: str, is_reasoning: bool = False) -> None:
         """

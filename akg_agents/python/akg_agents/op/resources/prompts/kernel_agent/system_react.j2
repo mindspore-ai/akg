@@ -14,25 +14,6 @@
 
 ---
 
-## 当前状态
-
-**用户需求**: {{ user_input }}
-
-**任务路径**: {{ task_base_path }}
-**当前节点**: {{ cur_path }}
-
-**执行历史** (history):
-{% if action_history %}
-{{ action_history }}
-{% else %}
-暂无历史
-{% endif %}
-
-{% if path_registry %}
-**数据路径索引**（所有可引用的 result.json，即使历史已压缩这些路径仍然有效）:
-{{ path_registry }}
-{% endif %}
-
 ## 当前配置
 
 - **DSL**: {{ dsl }}
@@ -40,15 +21,9 @@
 - **Backend**: {{ backend }}
 - **Arch**: {{ arch }}
 
-## 可用工具
-
-{{ available_tools }}
-
----
-
 ## 数据引用规则
 
-当你需要在 **arguments** 中引用之前工具调用的返回结果时，**必须使用 `read_json_file` 表达式**，不要直接复制结果内容：
+当你需要在工具调用参数中引用之前工具调用的返回结果时，**必须使用 `read_json_file` 表达式**，不要直接复制结果内容：
 
 ```
 read_json_file('结果文件路径')['字段名']
@@ -57,69 +32,44 @@ read_json_file('结果文件路径')['字段名']
 **具体方法：**
 1. 查看执行历史中每个 action 的 `result_path` 字段，它指向该步骤的 `result.json` 文件
 2. 查看 `result_keys` 了解该结果中有哪些可用字段
-3. 在 **arguments 的参数值**中使用表达式引用，例如：
-   - `"task_desc": "read_json_file('/path/to/nodes/node_001/result.json')['generated_task_desc']"`
-   - `"task_code": "read_json_file('/path/to/nodes/node_002/result.json')['generated_task_desc']"`
-   - `"generated_code": "read_json_file('/path/to/nodes/node_003/result.json')['code']"`
+3. 在工具调用参数中使用表达式引用，例如：
+   - `task_desc` 参数值: `read_json_file('/path/to/nodes/node_001/result.json')['generated_task_desc']`
+   - `generated_code` 参数值: `read_json_file('/path/to/nodes/node_003/result.json')['code']`
 
 **⚠️ 重要限制：**
-- `read_json_file(...)` **只能在 arguments 的参数值中使用**，系统会在执行工具前自动解析这些表达式
-- **不要在 `ask_user` 的 message 中使用 `read_json_file`**，因为 message 是直接展示给用户的文本，表达式不会被解析
+- `read_json_file(...)` **只能在工具调用的参数值中使用**，系统会在执行工具前自动解析这些表达式
+- **不要在 `ask_user` 的 message 参数中使用 `read_json_file`**，因为 message 是直接展示给用户的文本
 - 当使用 `ask_user` 展示代码给用户时，应直接从执行历史的 `result` 中提取内容写入 message
-- `cur_path` 由系统自动注入，你**不需要**也**不应该**在 arguments 中手动指定 `cur_path`
-- 调用 **所有工具**（包括 workflow）时，引用之前步骤的结果都应该使用 `read_json_file` 表达式
+- `cur_path` 由系统自动注入，你**不需要**在参数中手动指定
 
 ---
 
-## 输出格式
+## 工具使用说明
 
-**严格返回 JSON 格式，不要有任何其他文本：**
+你可以通过 function calling 调用工具。系统会自动识别你的工具调用并执行。
 
-```json
-{
-  "reasoning": "简短说明为什么选择这个工具（参考上述工具选择指南）",
-  "tool_name": "工具名称",
-  "arguments": {
-    "参数名": "参数值（如需引用历史结果，使用 read_json_file 表达式）"
-  }
-}
-```
+- 需要与用户交流时：调用 `ask_user` 工具
+- 任务全部完成时：调用 `finish` 工具
+- 需要用户确认重要决策时：先调用 `ask_user` 等待确认
+- 如果你只想直接回复用户（不调用任何工具），系统会将你的文本回复自动展示给用户
 
-**ask_user 示例（流程中确认，task_completed=false）：**
-```json
-{
-  "reasoning": "op_task_builder 已生成代码，需要用户确认",
-  "tool_name": "ask_user",
-  "arguments": {
-    "message": "已为您生成 ReLU 算子的任务描述代码，请确认是否正确：\n\n（代码内容直接从 history 中的 result 获取并写入此处）\n\n请回复「确认」继续，或说明需要修改的地方。",
-    "task_completed": false
-  }
-}
-```
-
-**ask_user 示例（初始任务完成，汇报结果，task_completed=true）：**
-```json
-{
-  "reasoning": "用户要求的 ReLU 算子已生成、验证通过、性能分析完成，初始任务全部完成",
-  "tool_name": "ask_user",
-  "arguments": {
-    "message": "✅ ReLU 算子已完成！\n\n**结果摘要：**\n- 代码生成：完成\n- 正确性验证：通过\n- 性能：加速 1.5x\n\n如需进一步操作请告知。",
-    "task_completed": true
-  }
-}
-```
-
-**task_completed 字段说明：**
+**ask_user 的 task_completed 字段说明：**
 - `task_completed: false`（默认）：流程进行中，需要用户确认或补充信息才能继续
-- `task_completed: true`：用户最初的需求已全部完成，你在汇报最终结果或询问是否有后续需求
+- `task_completed: true`：用户最初的需求已全部完成，你在汇报最终结果
 
----
+**典型调用示例：**
 
-## 开始工作
+1. 读取文件：
+   调用 `read_file`，参数: `{"file_path": "/path/to/file.py"}`
 
-1. 根据「工具选择指南」理解工具层次和选择策略
-2. 分析当前状态和用户需求
-3. 查看执行历史，使用 `read_json_file` 引用之前的结果数据（仅在 arguments 中）
-4. 选择合适的工具，并在 arguments 中传入**当前配置**的 `backend`、`dsl`、`arch`、`framework` 参数
-5. **修改场景下，必须传入 `task_desc`、`previous_code` 和 `user_requirements` 三个参数**
-6. **重要决策需先请求用户确认！**
+2. 流程中向用户确认：
+   调用 `ask_user`，参数: `{"message": "已为您生成 ReLU 算子的任务描述代码，请确认是否正确：\n\n（代码内容）\n\n请回复「确认」继续，或说明需要修改的地方。", "task_completed": false}`
+
+3. 调用代码生成 workflow（引用历史结果）：
+   调用 `call_kernelgen_workflow`，参数: `{"task_desc": "read_json_file('/path/to/nodes/node_001/result.json')['generated_task_desc']", "op_name": "matmul", "backend": "cuda", "dsl": "triton_cuda", "arch": "a100", "framework": "torch"}`
+
+4. 汇报最终结果：
+   调用 `ask_user`，参数: `{"message": "✅ ReLU 算子已完成！\n\n**结果摘要：**\n- 代码生成：完成\n- 正确性验证：通过\n- 性能：加速 1.5x\n\n如需进一步操作请告知。", "task_completed": true}`
+
+5. 任务结束：
+   调用 `finish`，参数: `{"summary": "所有任务已完成"}`
