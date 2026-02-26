@@ -378,9 +378,18 @@ class LocalExecutor:
                 DisplayMessage,
                 LLMStreamMessage,
                 PanelDataMessage,
+                AgentHeaderMessage,
+                ToolStartMessage,
+                ToolResultMessage,
             )
 
-            if isinstance(message, DisplayMessage):
+            if isinstance(message, AgentHeaderMessage):
+                self.console.on_agent_header(message)
+            elif isinstance(message, ToolStartMessage):
+                self.console.on_tool_start(message)
+            elif isinstance(message, ToolResultMessage):
+                self.console.on_tool_result(message)
+            elif isinstance(message, DisplayMessage):
                 self.console.on_display_message(message)
             elif isinstance(message, LLMStreamMessage):
                 self.console.on_llm_stream(message)

@@ -45,8 +45,6 @@ from prompt_toolkit.patch_stdout import patch_stdout
 import logging
 
 from rich.text import Text
-from rich.panel import Panel
-from rich.box import ROUNDED
 
 log = logging.getLogger(__name__)
 
@@ -649,47 +647,30 @@ class InteractiveOpRunner:
         )
 
     def _render_agent_messages(self, state: dict) -> None:
-        """渲染代理消息"""
+        """渲染代理消息（opencode 风格：简洁缩进文本，无 Panel 边框）"""
         if not isinstance(state, dict):
             return
 
+        # flush 可能还没关闭的 thinking/content 流
+        if hasattr(self.cli, "console") and hasattr(self.cli.console, "_flush_all_streams"):
+            try:
+                self.cli.console._flush_all_streams()
+            except Exception:
+                pass
+
         display_message = str(state.get("display_message") or "").rstrip()
         if display_message:
-            # 使用 Text.from_ansi() 正确处理包含 ANSI 转义序列的字符串
-            try:
-                ansi_text = Text.from_ansi(display_message)
-                # 使用 Panel 添加精美边框
-                panel = Panel(
-                    ansi_text,
-                    box=ROUNDED,
-                    border_style="dim",
-                    padding=(0, 1),
-                )
-                self.console.print(panel)
-            except Exception:
-                # 如果解析失败，回退到直接打印
+            for line in display_message.split("\n"):
                 try:
-                    panel = Panel(
-                        display_message,
-                        box=ROUNDED,
-                        border_style="dim",
-                        padding=(0, 1),
-                    )
-                    self.console.print(panel, markup=False)
+                    self.console.print(Text(f"  {line}"))
                 except Exception:
-                    # 最后的回退方案
-                    self.console.print(" " + display_message, markup=False)
+                    self.console.print(f"  {line}", markup=False)
 
         hint_message = str(state.get("hint_message") or "").rstrip()
         if hint_message:
-            # 使用 Text.from_ansi() 正确处理包含 ANSI 转义序列的字符串
             try:
-                ansi_text = Text.from_ansi(hint_message)
-                # 对整个文本应用 dim 样式
-                ansi_text.stylize(DisplayStyle.DIM, 0, len(ansi_text))
-                self.console.print(ansi_text)
+                self.console.print(Text(f"  {hint_message}", style="dim"))
             except Exception:
-                # 如果解析失败，回退到 Rich markup
                 self.console.print(
                     f"[{DisplayStyle.DIM}]{hint_message}[/{DisplayStyle.DIM}]"
                 )
