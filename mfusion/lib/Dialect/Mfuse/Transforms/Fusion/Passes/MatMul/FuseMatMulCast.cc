@@ -45,7 +45,11 @@ static CastOp getF16ToF32Cast(Value value) {
     if (!castOp) {
       continue;
     }
-    auto castDtype = dyn_cast_or_null<FloatType>(castOp.getDtype());
+    auto castResultType = dyn_cast<RankedTensorType>(castOp.getResult().getType());
+    if (!castResultType) {
+      continue;
+    }
+    auto castDtype = dyn_cast_or_null<FloatType>(castResultType.getElementType());
     if (!castDtype || !castDtype.isF32()) {
       continue;
     }
@@ -71,8 +75,8 @@ class FuseMatMulCastMatmulPattern : public OpRewritePattern<MatmulOp> {
                                                 matmulOp.getTransX1Attr(), matmulOp.getTransX2Attr());
 
     rewriter.replaceOp(castOp, newMatmul);
-    MLOG(DEBUG) << "FuseMatMulCast: fused MatmulOp@" << matmulOp.getLoc()
-                << " + CastOp@" << castOp.getLoc() << " (f16->f32) -> MatmulOp with f32 output";
+    MLOG(DEBUG) << "FuseMatMulCast: fused MatmulOp@" << matmulOp.getLoc() << " + CastOp@" << castOp.getLoc()
+                << " (f16->f32) -> MatmulOp with f32 output";
 
     return success();
   }
@@ -94,8 +98,8 @@ class FuseMatMulCastMatmulWithBiasPattern : public OpRewritePattern<MatmulWithBi
                                                         op.getTransX1Attr(), op.getTransX2Attr());
 
     rewriter.replaceOp(castOp, newMatmul);
-    MLOG(DEBUG) << "FuseMatMulCast: fused MatmulWithBiasOp@" << op.getLoc()
-                << " + CastOp@" << castOp.getLoc() << " (f16->f32) -> MatmulWithBiasOp with f32 output";
+    MLOG(DEBUG) << "FuseMatMulCast: fused MatmulWithBiasOp@" << op.getLoc() << " + CastOp@" << castOp.getLoc()
+                << " (f16->f32) -> MatmulWithBiasOp with f32 output";
 
     return success();
   }

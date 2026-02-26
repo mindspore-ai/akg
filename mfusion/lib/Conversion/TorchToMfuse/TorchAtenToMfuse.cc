@@ -40,12 +40,54 @@ bool isSemiStaticShape(RankedTensorType type) {
                                       [](int64_t dim) { return dim == ShapedType::kDynamic; });
   return dynamicDims <= 1;
 }
+
+// Check that `listVal` is a list construct of constant ints and
+// collect the integer values into `out`.
+bool isConstantListInt(Value listVal, llvm::SmallVectorImpl<int64_t> &out) {
+  llvm::SmallVector<Value, 4> elems;
+  if (!TorchD::getListConstructElements(listVal, elems)) {
+    return false;
+  }
+
+  out.clear();
+  out.reserve(elems.size());
+  for (Value v : elems) {
+    int64_t dim = 0;
+    if (!matchPattern(v, TorchD::m_TorchConstantInt(&dim))) {
+      return false;
+    }
+    out.push_back(dim);
+  }
+  return true;
+}
 }  // namespace
 
 //===----------------------------------------------------------------------===//
 // Aten ops to Mfuse conversion patterns
 // (the pattern list should be alphabetically sorted)
 //===----------------------------------------------------------------------===//
+
+/// Convert torch.aten.broadcast_to -> mfuse.broadcast_to.
+/// The size must be a constant list (all elements are constant ints),
+/// and not computed by other operators.
+struct ConvertAtenBroadcastTo : public OpConversionPattern<TorchD::AtenBroadcastToOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenBroadcastToOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value self = adaptor.getSelf();
+
+    // Check size is a constant int list.
+    Value sizeVal = op.getSize();
+    llvm::SmallVector<int64_t, 4> sizeInts;
+    if (!isConstantListInt(sizeVal, sizeInts)) {
+      return rewriter.notifyMatchFailure(op, "size must be a list construct of constant ints for mfuse.broadcast_to");
+    }
+
+    rewriter.replaceOpWithNewOp<mlir::mfuse::BroadcastToOp>(op, getTypeConverter()->convertType(op.getType()), self);
+    return success();
+  }
+};
 
 struct ConvertAtenReshape : public OpConversionPattern<TorchD::AtenReshapeOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -74,7 +116,7 @@ constexpr int64_t kConvOutputPaddingDefault = 0;
 
 /// Returns failure and notifies if listVal is not a 2-element list of constant ints [e0, e1].
 static LogicalResult checkConvParamList2(TorchD::AtenConvolutionOp op, ConversionPatternRewriter &rewriter,
-                                        Value listVal, int64_t e0, int64_t e1, StringRef failureMsg) {
+                                         Value listVal, int64_t e0, int64_t e1, StringRef failureMsg) {
   llvm::SmallVector<Value, 2> elts;
   if (!TorchD::getListConstructElements(listVal, elts) || elts.size() != mfuse::kDim2) {
     return rewriter.notifyMatchFailure(op, failureMsg);
@@ -86,7 +128,6 @@ static LogicalResult checkConvParamList2(TorchD::AtenConvolutionOp op, Conversio
   }
   return success();
 }
-
 
 /// Convert torch.aten.convolution (no bias, default stride/padding/dilation)
 /// to mfuse.conv2d. Only matches when bias is None and stride=[1,1],
@@ -108,19 +149,19 @@ struct ConvertAtenConvolution : public OpConversionPattern<TorchD::AtenConvoluti
       return rewriter.notifyMatchFailure(op, "transposed must be false");
     }
     if (failed(checkConvParamList2(op, rewriter, op.getStride(), kConvStrideDefault, kConvStrideDefault,
-                                  "stride must be [1, 1]"))) {
+                                   "stride must be [1, 1]"))) {
       return failure();
     }
     if (failed(checkConvParamList2(op, rewriter, op.getPadding(), kConvPaddingDefault, kConvPaddingDefault,
-                                  "padding must be [0, 0]"))) {
+                                   "padding must be [0, 0]"))) {
       return failure();
     }
     if (failed(checkConvParamList2(op, rewriter, op.getDilation(), kConvDilationDefault, kConvDilationDefault,
-                                  "dilation must be [1, 1]"))) {
+                                   "dilation must be [1, 1]"))) {
       return failure();
     }
     if (failed(checkConvParamList2(op, rewriter, op.getOutputPadding(), kConvOutputPaddingDefault,
-                                  kConvOutputPaddingDefault, "output_padding must be [0, 0]"))) {
+                                   kConvOutputPaddingDefault, "output_padding must be [0, 0]"))) {
       return failure();
     }
 
@@ -183,23 +224,7 @@ struct ConvertAtenSumDimIntList : public OpConversionPattern<TorchD::AtenSumDimI
     auto outType = cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
     auto dimsAttr = rewriter.getI64ArrayAttr(dims);
     auto keepdimAttr = rewriter.getBoolAttr(keepdimValue);
-    auto dtypeAttr = mlir::TypeAttr::get(outType.getElementType());
-
-    rewriter.replaceOpWithNewOp<mlir::mfuse::ReduceSumOp>(op, outType, self, dimsAttr, keepdimAttr, dtypeAttr);
-    return success();
-  }
-};
-
-struct ConvertAtenToDtype : public OpConversionPattern<TorchD::AtenToDtypeOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(TorchD::AtenToDtypeOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    Value self = adaptor.getSelf();
-    auto outType = cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
-
-    auto dtypeAttr = mlir::TypeAttr::get(outType.getElementType());
-    rewriter.replaceOpWithNewOp<mlir::mfuse::CastOp>(op, outType, self, dtypeAttr);
+    rewriter.replaceOpWithNewOp<mlir::mfuse::ReduceSumOp>(op, outType, self, dimsAttr, keepdimAttr);
     return success();
   }
 };
@@ -308,11 +333,11 @@ struct ConvertAtenView : public OpConversionPattern<TorchD::AtenViewOp> {
 // Populate custom (hand-written) Aten ops to Mfuse conversion patterns
 static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
+  patterns.add<ConvertAtenBroadcastTo>(converter, context);
   patterns.add<ConvertAtenReshape>(converter, context);
   patterns.add<ConvertAtenSliceTensor>(converter, context);
   patterns.add<ConvertAtenConvolution>(converter, context);
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
-  patterns.add<ConvertAtenToDtype>(converter, context);
   patterns.add<ConvertAtenTransposeInt>(converter, context);
   patterns.add<ConvertAtenView>(converter, context);
 }

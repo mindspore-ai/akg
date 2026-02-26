@@ -57,11 +57,7 @@ class ComputeOpBuilder {
     return add(a, b, resultType, alpha);
   }
 
-  Value cast(Value input, Type targetType) {
-    auto tensorType = targetType.cast<RankedTensorType>();
-    auto dtypeAttr = TypeAttr::get(tensorType.getElementType());
-    return rewriter.create<CastOp>(loc, targetType, input, dtypeAttr);
-  }
+  Value cast(Value input, Type targetType) { return rewriter.create<CastOp>(loc, targetType, input); }
 
   Value exp(Value x, Type resultType) { return rewriter.create<ExpOp>(loc, resultType, x); }
 

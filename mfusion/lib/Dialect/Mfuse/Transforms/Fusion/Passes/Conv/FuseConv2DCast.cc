@@ -47,7 +47,11 @@ static CastOp getF16ToF32Cast(Value value) {
     if (!castOp) {
       continue;
     }
-    auto castDtype = dyn_cast_or_null<FloatType>(castOp.getDtype());
+    auto castResultType = dyn_cast<RankedTensorType>(castOp.getResult().getType());
+    if (!castResultType) {
+      continue;
+    }
+    auto castDtype = dyn_cast_or_null<FloatType>(castResultType.getElementType());
     if (!castDtype || !castDtype.isF32()) {
       continue;
     }
@@ -85,22 +89,19 @@ class FuseConv2DCastPattern : public OpRewritePattern<Conv2DOp> {
       return rewriter.notifyMatchFailure(convOp, "conv must have exactly one user (the Cast) to fuse");
     }
 
-    if (hasDynamicShape(convOp.getResult().getType()) ||
-        hasDynamicShape(castOp.getResult().getType())) {
+    if (hasDynamicShape(convOp.getResult().getType()) || hasDynamicShape(castOp.getResult().getType())) {
       return rewriter.notifyMatchFailure(convOp, "conv or cast has dynamic shape");
     }
-    if (hasDynamicShape(convOp.getInput().getType()) ||
-        hasDynamicShape(convOp.getWeight().getType())) {
+    if (hasDynamicShape(convOp.getInput().getType()) || hasDynamicShape(convOp.getWeight().getType())) {
       return rewriter.notifyMatchFailure(convOp, "conv input has dynamic shape");
     }
 
-    if (isDefinedByStridedRead(convOp.getInput()) ||
-        isDefinedByStridedRead(convOp.getWeight())) {
+    if (isDefinedByStridedRead(convOp.getInput()) || isDefinedByStridedRead(convOp.getWeight())) {
       return rewriter.notifyMatchFailure(convOp, "conv input from StridedRead");
     }
 
-    MLOG(DEBUG) << "FuseConv2DCastPattern matched Conv2DOp@" << convOp.getLoc()
-                << " + Cast(f16->f32)@" << castOp.getLoc() << " -> single Conv2D(f32)";
+    MLOG(DEBUG) << "FuseConv2DCastPattern matched Conv2DOp@" << convOp.getLoc() << " + Cast(f16->f32)@"
+                << castOp.getLoc() << " -> single Conv2D(f32)";
 
     Type outType = castOp.getResult().getType();
     Value newConv = rewriter.create<Conv2DOp>(convOp.getLoc(), outType, convOp.getInput(), convOp.getWeight());
