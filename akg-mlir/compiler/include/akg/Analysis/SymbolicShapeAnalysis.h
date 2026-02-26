@@ -26,9 +26,11 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "symengine/basic.h"
 #include "symengine/expression.h"
@@ -88,6 +90,10 @@ class SymbolicShapeAnalysis {
   llvm::SmallVector<SymEngine::Expression> getSymbolicExprsFromStrs(Container symbols);
   bool hasSymbolicShape(Type type) const;
   std::optional<llvm::SmallVector<std::string>> getSymbolicShape(Type type) const;
+  llvm::SmallVector<std::string> getSymbolicShapeAutoComplete(Type type) const {
+    if (auto opt = getSymbolicShape(type)) return std::move(*opt);
+    return {};
+  }
   std::optional<NamedAttribute> getSymbolShapeNamedAttr(Type type) const;
   std::optional<llvm::SmallVector<SymEngine::Expression>> getSymbolicShapeExpr(Type type);
   std::optional<std::string> getSymbolicDim(Type type, uint64_t idx) const;
@@ -99,13 +105,35 @@ class SymbolicShapeAnalysis {
   bool isSameSymbolicDim(Type lhs, uint64_t lhsIdx, Type rhs, uint64_t rhsIdx);
   bool isSameSymbolicShape(Type lhs, Type rhs);
 
+  int64_t assignLabel(llvm::StringRef axis) {
+    int64_t newLabel = nextLabelId++;
+    axisLabelOf[axis] = newLabel;
+    return newLabel;
+  }
+  int64_t assignLabel(llvm::StringRef axis, int64_t labelId) {
+    axisLabelOf[axis] = labelId;
+    return labelId;
+  }
+  int64_t getLabel(llvm::StringRef axis) const {
+    auto it = axisLabelOf.find(axis);
+    if (it != axisLabelOf.end()) return it->second;
+    return -1;
+  }
+  void clearLabels() {
+    axisLabelOf.clear();
+    nextLabelId = 1;
+  }
+
  private:
-  SymbolicShapeAnalysis() : uniqueNum(0), useCache(false) { symbolicStrExprMap.clear(); }
+  SymbolicShapeAnalysis() : symbolicStrExprMap(), uniqueNum(0), useCache(false), axisLabelOf(), nextLabelId(1) {}
   // for compile time reasons, SymEngine::Expression can be cached. This option
   // is disabled by default.
   std::map<const std::string, const SymEngine::Expression> symbolicStrExprMap;
   uint64_t uniqueNum;
   bool useCache;
+
+  llvm::StringMap<int64_t> axisLabelOf;
+  int64_t nextLabelId = 1;
 };
 
 template <typename Container>
