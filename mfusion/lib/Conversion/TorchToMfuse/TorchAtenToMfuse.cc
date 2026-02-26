@@ -335,7 +335,6 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertAtenBroadcastTo>(converter, context);
   patterns.add<ConvertAtenReshape>(converter, context);
-  patterns.add<ConvertAtenSliceTensor>(converter, context);
   patterns.add<ConvertAtenConvolution>(converter, context);
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
   patterns.add<ConvertAtenTransposeInt>(converter, context);

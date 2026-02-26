@@ -79,6 +79,10 @@ static LogicalResult fuseMatmulReshapeBiasAdd(Value addLhs, Value addRhs, Operat
   if (biasSize != lastMatmul) {
     return failure();
   }
+  // Avoid increasing matmul count: fuse only when reshape has exactly one user (this Add).
+  if (!reshapeOut.hasOneUse()) {
+    return failure();
+  }
 
   MLOG(DEBUG) << "FuseMatmulReshapeBiasAddPattern matched AddOp, fusing with Matmul and Reshape";
 
