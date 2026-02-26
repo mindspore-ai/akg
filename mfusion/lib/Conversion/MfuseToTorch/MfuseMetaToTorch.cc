@@ -83,6 +83,77 @@ mlir::Value buildTorchIntListFromI64ArrayAttr(mlir::ArrayAttr attr, mlir::Locati
 // =   Please keep the patterns in alphabetical order by operator name   =
 // ============================================================================
 
+/// Default 2D convolution parameter values for torch.aten.convolution.
+constexpr int64_t kConv2DStrideVal = 1;
+constexpr int64_t kConv2DPaddingVal = 0;
+constexpr int64_t kConv2DDilationVal = 1;
+constexpr int64_t kConv2DOutputPaddingVal = 0;
+constexpr int64_t kConv2DGroupsVal = 1;
+
+/// Builds a torch list of two constant ints [a, b] for convolution spatial params.
+static mlir::Value buildConvIntList2(mlir::ConversionPatternRewriter &rewriter, mlir::Location loc,
+                                     int64_t a, int64_t b) {
+  return buildTorchIntListFromI64ArrayAttr(rewriter.getI64ArrayAttr({a, b}), loc, rewriter);
+}
+
+/// Helper to build torch.aten.convolution with default stride/padding/dilation/groups.
+/// stride=[1,1], padding=[0,0], dilation=[1,1], output_padding=[0,0], transposed=false, groups=1.
+static mlir::Value buildAtenConvolution(mlir::ConversionPatternRewriter &rewriter, mlir::Location loc,
+                                        mlir::Type resultType, mlir::Value input, mlir::Value weight,
+                                        mlir::Value bias) {
+  mlir::Value strideList = buildConvIntList2(rewriter, loc, kConv2DStrideVal, kConv2DStrideVal);
+  mlir::Value paddingList = buildConvIntList2(rewriter, loc, kConv2DPaddingVal, kConv2DPaddingVal);
+  mlir::Value dilationList = buildConvIntList2(rewriter, loc, kConv2DDilationVal, kConv2DDilationVal);
+  mlir::Value outputPaddingList = buildConvIntList2(rewriter, loc, kConv2DOutputPaddingVal, kConv2DOutputPaddingVal);
+  mlir::Value falseVal = rewriter.create<TorchD::ConstantBoolOp>(loc, false);
+  mlir::Value groupsVal = rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(kConv2DGroupsVal));
+  return rewriter
+      .create<TorchD::AtenConvolutionOp>(loc, resultType, input, weight, bias, strideList, paddingList,
+                                        dilationList, falseVal, outputPaddingList, groupsVal)
+      .getResult();
+}
+
+/// Converts mfuse.conv2d -> torch.aten.convolution (with bias=None).
+class ConvertMfuseConv2D : public mlir::OpConversionPattern<mlir::mfuse::Conv2DOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::Conv2DOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value input = adaptor.getInput();
+    mlir::Value weight = adaptor.getWeight();
+    auto resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+    mlir::Value noneBias = rewriter.create<TorchD::ConstantNoneOp>(op.getLoc());
+    mlir::Value conv = buildAtenConvolution(rewriter, op.getLoc(), resultType, input, weight, noneBias);
+    rewriter.replaceOp(op, conv);
+    return mlir::success();
+  }
+};
+
+/// Converts mfuse.conv2d_with_bias -> torch.aten.convolution (with bias operand).
+/// This avoids emitting a separate torch.aten.add.Tensor after conv.
+class ConvertMfuseConv2DWithBias : public mlir::OpConversionPattern<mlir::mfuse::Conv2DWithBiasOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::Conv2DWithBiasOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value input = adaptor.getInput();
+    mlir::Value weight = adaptor.getWeight();
+    mlir::Value bias = adaptor.getBias();
+    auto resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+    mlir::Value conv = buildAtenConvolution(rewriter, op.getLoc(), resultType, input, weight, bias);
+    rewriter.replaceOp(op, conv);
+    return mlir::success();
+  }
+};
+
 /// Converts mfuse.matmul -> torch.aten.mm (for 2D matrices) or torch.aten.matmul (for ND or transposed).
 /// For simple 2D case (trans_x1=false, trans_x2=false), uses torch.aten.mm.
 /// For other cases (ND or transposed), uses torch.aten.matmul.
@@ -308,6 +379,8 @@ class ConvertMfuseReshape : public mlir::OpConversionPattern<mlir::mfuse::Reshap
 static void populateMfuseMetaToTorchCustomPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseCast>(converter, context);
+  patterns.add<ConvertMfuseConv2D>(converter, context);
+  patterns.add<ConvertMfuseConv2DWithBias>(converter, context);
   patterns.add<ConvertMfuseMatmul>(converter, context);
   patterns.add<ConvertMfuseMatmulWithBias>(converter, context);
   patterns.add<ConvertMfusePermute>(converter, context);

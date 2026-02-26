@@ -46,6 +46,9 @@ bool isScalarMul(MulOp mulOp, double &scalarVal, Value &tensorOperand);
 // Check if tensor shape is empty (rank-0) or all dimensions are 1
 bool isScalarOrSingleElement(RankedTensorType tensorType);
 
+// Return true if the type has dynamic dimensions (non-ranked or has dynamic dims).
+bool hasDynamicShape(Type type);
+
 // Match both operands of a binary operation with specific Op types, considering commutativity.
 template <typename TargetLhsOpType, typename TargetRhsOpType>
 inline bool matchCommutativeOperands(Value x, Value y, TargetLhsOpType &matchedLhsOp, TargetRhsOpType &matchedRhsOp) {

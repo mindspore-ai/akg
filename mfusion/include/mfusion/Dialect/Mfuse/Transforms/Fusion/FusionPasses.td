@@ -54,6 +54,50 @@ def FuseGelu : Pass<"fuse-gelu", "::mlir::ModuleOp"> {
 // MatMul fusion passes
 //===----------------------------------------------------------------------===//
 
+def FuseBiasaddConv : Pass<"fuse-biasadd-conv", "::mlir::ModuleOp"> {
+  let summary = "Fuse Conv2D (no bias) and Add (bias) into Conv2DWithBias";
+  let description = [{
+    Fuses Conv2D without bias followed by BiasAdd/Add into a single
+    Conv2DWithBias. Does not fuse when Conv2D already has bias or shapes are dynamic.
+  }];
+  let constructor = "mlir::mfuse::createFuseBiasaddConvPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def FuseConv2DCast : Pass<"fuse-conv2d-cast", "::mlir::ModuleOp"> {
+  let summary = "Fuse Conv2D (f16) and Cast (f32) into Conv2D with f32 result";
+  let description = [{
+    Fuses Conv2D with float16 output followed by Cast to float32 into a single
+    Conv2D with float32 result. Does not fuse when Conv2D/Cast is dynamic or
+    any Conv2D input is from StridedRead. Conv must have exactly one user (the Cast)
+    to fuse; only the Cast op is replaced (Conv is not erased).
+  }];
+  let constructor = "mlir::mfuse::createFuseConv2DCastPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+def FuseMatMulBiasAdd : Pass<"fuse-matmul-bias-add", "::mlir::ModuleOp"> {
+  let summary = "Fuse MatMul/BatchMatmul and Add(bias) into MatmulWithBias";
+  let description = [{
+    Fuses MatMul or BatchMatmul (no bias) followed by Add(bias) into a single
+    MatmulWithBias. Constraints: one of add's inputs has rank 1 (bias); bias
+    size equals matmul output last dimension; for 2D MatMul output rank is 2;
+    no broadcast. Note: if BiasAdd/Add was fp16, fused bias is added in fp32
+    inside matmul (precision may improve); disable pass to avoid this change.
+  }];
+  let constructor = "mlir::mfuse::createFuseMatMulBiasAddPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
 def FuseMatMulCast : Pass<"fuse-matmul-cast", "::mlir::ModuleOp"> {
   let summary = "Fuse MatMul/Mm (f16) and Cast (f32) into MatMul with f32 result";
   let description = [{
