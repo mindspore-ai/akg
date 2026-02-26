@@ -17,6 +17,9 @@
 #ifndef MFUSION_ANALYSIS_SYMBOLIC_SHAPE_SYMENGINE_ANALYSIS_H
 #define MFUSION_ANALYSIS_SYMBOLIC_SHAPE_SYMENGINE_ANALYSIS_H
 
+#include <functional>
+#include <string>
+
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Value.h"
@@ -34,16 +37,15 @@ namespace mfusion {
 class SymEngineAnalysis {
  public:
   using SymExpr = SymExprBuilder::SymExpr;
-
-  // Map a torch.symbolic_int SSA value to a SymEngine symbol.
-  mlir::FailureOr<SymExpr> getOrAssignSymbol(mlir::Value value);
+  using SymbolNameResolver = std::function<mlir::FailureOr<std::string>(mlir::Value)>;
 
   // Convert an MLIR affine expression into a SymEngine expression.
   mlir::FailureOr<SymExpr> convertAffineExpr(mlir::AffineExpr expr, llvm::ArrayRef<SymExpr> dimSymbols,
                                              llvm::ArrayRef<SymExpr> symbolSymbols) const;
 
   // Apply an affine map to symbolic operands and return SymEngine results.
-  mlir::FailureOr<llvm::SmallVector<SymExpr>> applyAffineMap(mlir::AffineMap map, mlir::ValueRange symbols);
+  mlir::FailureOr<llvm::SmallVector<SymExpr>> applyAffineMap(mlir::AffineMap map, mlir::ValueRange symbols,
+                                                             const SymbolNameResolver &resolver);
 
   // Try to extract an integer value from a SymEngine expression.
   mlir::FailureOr<int64_t> tryExtractInt64(const SymExpr &expr) const;
@@ -55,6 +57,9 @@ class SymEngineAnalysis {
   void reset();
 
  private:
+  // Map an SSA value to a SymEngine symbol using the provided name resolver.
+  mlir::FailureOr<SymExpr> getOrAssignSymbol(mlir::Value value, const SymbolNameResolver &resolver);
+
   SymExprBuilder builder_;
   llvm::DenseMap<mlir::Value, SymExpr> valueToSymMap_;
 };
