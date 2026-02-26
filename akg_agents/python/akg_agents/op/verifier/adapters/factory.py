@@ -77,6 +77,9 @@ def get_dsl_adapter(dsl: str):
     elif dsl_lower == "torch":
         from .dsl.torch import DSLAdapterTorch
         return DSLAdapterTorch()
+    elif dsl_lower == "pypto":
+        from .dsl.pypto import DSLAdapterPypto
+        return DSLAdapterPypto()
     else:
         raise ValueError(f"Unsupported DSL: {dsl}")
 
