@@ -17,6 +17,7 @@ add_mlir_dialect_library(AKGTransformsPasses
 
   LINK_LIBS PUBLIC
   MLIRIR
+  MLIRAffineAnalysis
   MLIRAffineDialect
   MLIRMemRefDialect
   MLIRSideEffectInterfaces
