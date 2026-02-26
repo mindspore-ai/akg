@@ -14,6 +14,15 @@
  * limitations under the License.
  */
 
+// Relationship with decompose (AclnnOps.cc):
+// Decompose converts aclnn.batch_matmul -> mfuse.matmul (trans_x1=false, trans_x2=false).
+// - If decompose runs before this pass: the IR contains mfuse.matmul only, so patterns that
+//   match mfuse.batch_matmul (FuseBatchMatMulTransposeBatchMatmulPattern,
+//   FuseBatchMatMulToMatmulPattern) will NOT be triggered; only the pattern that matches
+//   mfuse.matmul (FuseBatchMatMulTransposeMatmulPattern) can trigger.
+// - If decompose does not run (e.g. no aclnn.batch_matmul in the pipeline): mfuse.batch_matmul
+//   may exist, and the BatchMatmulOp patterns above will be triggered when applicable.
+
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseBatchMatMul.h"
 
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
@@ -134,6 +143,7 @@ class FuseBatchMatMulTransposeMatmulPattern : public OpRewritePattern<MatmulOp> 
 };
 
 /// Mode 1: Eliminate Permute into BatchMatmulOp by flipping transpose_a/transpose_b.
+/// Note: If decompose (aclnn.batch_matmul -> mfuse.matmul) has run, this pattern is not triggered.
 class FuseBatchMatMulTransposeBatchMatmulPattern : public OpRewritePattern<BatchMatmulOp> {
  public:
   using OpRewritePattern<BatchMatmulOp>::OpRewritePattern;
@@ -179,6 +189,8 @@ class FuseBatchMatMulTransposeBatchMatmulPattern : public OpRewritePattern<Batch
 };
 
 /// Mode 2: When BatchMatMul both inputs are 2D, convert to MatMul.
+/// When both BatchMatMul inputs are 2D, convert to MatMul (rank 2).
+/// Note: If decompose (aclnn.batch_matmul -> mfuse.matmul) has run, this pattern is not triggered.
 class FuseBatchMatMulToMatmulPattern : public OpRewritePattern<BatchMatmulOp> {
  public:
   using OpRewritePattern<BatchMatmulOp>::OpRewritePattern;
