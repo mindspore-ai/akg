@@ -21,6 +21,8 @@
 #include "akg/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/OperationSupport.h"
 
 namespace mlir {
@@ -84,10 +86,46 @@ static void RemoveFuncSymbolic(func::FuncOp &func) {
   func.setType(newFuncTy);
 }
 
+static void RemoveGlobalSymbolic(memref::GlobalOp globalOp, OpBuilder &builder) {
+  MemRefType oldType = cast<MemRefType>(globalOp.getType());
+  Type newType = RemoveTypeSymbolic(oldType);
+  if (oldType == newType) return;
+
+  MemRefType newMemRefType = cast<MemRefType>(newType);
+  Attribute initValue = globalOp.getConstantInitValue();
+  ModuleOp module = globalOp->getParentOfType<ModuleOp>();
+  SymbolTable symbolTable(module);
+
+  Location loc = globalOp.getLoc();
+  builder.setInsertionPoint(globalOp);
+  StringAttr visibility = globalOp.getSymVisibilityAttr();
+  if (!visibility) visibility = builder.getStringAttr("private");
+  bool isConstant = static_cast<bool>(globalOp.getConstant());
+  memref::GlobalOp newOp = builder.create<memref::GlobalOp>(loc, globalOp.getSymName(), visibility, newMemRefType,
+                                                            initValue, isConstant, globalOp.getAlignmentAttr());
+  symbolTable.erase(globalOp);
+  (void)symbolTable.insert(newOp);
+  newOp->moveBefore(&module.front());
+}
+
 namespace {
 struct RemoveSymbolic : public impl::RemoveSymbolicBase<RemoveSymbolic> {
   void runOnOperation() override {
-    (void)getOperation()->walk([&](Operation *op) {
+    ModuleOp module = cast<ModuleOp>(getOperation());
+    OpBuilder builder(&getContext());
+
+    // gather memref.global to avoid modification during walk
+    llvm::SmallVector<memref::GlobalOp> globalsToUpdate;
+    module.walk([&](memref::GlobalOp globalOp) {
+      if (SymbolicShapeAnalysis::getInstance().hasSymbolicShape(globalOp.getType())) {
+        globalsToUpdate.push_back(globalOp);
+      }
+    });
+    for (memref::GlobalOp globalOp : globalsToUpdate) {
+      RemoveGlobalSymbolic(globalOp, builder);
+    }
+
+    (void)module.walk([&](Operation *op) {
       if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(op)) {
         Value src = castOp.getSource();
         src.setType(RemoveTypeSymbolic(src.getType()));
@@ -113,4 +151,6 @@ struct RemoveSymbolic : public impl::RemoveSymbolicBase<RemoveSymbolic> {
 }  // namespace
 }  // namespace mlir
 
-std::unique_ptr<mlir::Pass> mlir::createSymbolicRemovalPass() { return std::make_unique<RemoveSymbolic>(); }
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::createSymbolicRemovalPass() {
+  return std::make_unique<RemoveSymbolic>();
+}

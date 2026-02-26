@@ -107,9 +107,6 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
     nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
     nestedFusionPM.addPass(mlir::createAKGLoopFusionPass());
-    if (options.dynamicShape) {
-      nestedFusionPM.addPass(mlir::createSymbolicRemovalPass());
-    }
     nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
     nestedFusionPM.addPass(mlir::createMergeFusionOpPass(options.target));
@@ -119,6 +116,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createNormalizePass());
     nestedFusionPM.addPass(mlir::createConvertAffineToSCFPass());
 
+    if (options.dynamicShape) {
+      pm.addPass(mlir::createSymbolicRemovalPass());
+    }
     pm.addPass(mlir::createAddOutParameterPass());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createLegalizeBoolPass());
