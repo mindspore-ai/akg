@@ -88,6 +88,10 @@ class SkillMetadata:
     version: str = "1.0.0"              # 版本号
     structure: Optional[SkillStructure] = None  # 结构配置（层级关系）
     
+    # ===== 工具联动字段 =====
+    recommended_tools: List[str] = field(default_factory=list)  # 建议使用的工具列表
+    tool_guidance: str = ""             # 工具使用指导（注入 prompt）
+    
     # ===== 运行时字段 =====
     skill_path: Optional[Path] = None   # SKILL.md文件路径
     content: str = ""                   # Markdown内容
@@ -166,6 +170,10 @@ class SkillMetadata:
                 exclusive_groups=struct_data.get("exclusive_groups", []),
             )
         
+        # 解析工具联动字段
+        recommended_tools = yaml_data.get("recommended_tools", [])
+        tool_guidance = yaml_data.get("tool_guidance", "")
+        
         return cls(
             name=name,
             description=description,
@@ -176,6 +184,8 @@ class SkillMetadata:
             category=category,
             version=version,
             structure=structure,
+            recommended_tools=recommended_tools,
+            tool_guidance=tool_guidance,
             skill_path=skill_path
         )
     
@@ -207,6 +217,12 @@ class SkillMetadata:
                 "default_children": self.structure.default_children,
                 "exclusive_groups": self.structure.exclusive_groups,
             }
+        
+        # 工具联动字段
+        if self.recommended_tools:
+            result["recommended_tools"] = self.recommended_tools
+        if self.tool_guidance:
+            result["tool_guidance"] = self.tool_guidance
         
         if self.skill_path:
             result["skill_path"] = str(self.skill_path)

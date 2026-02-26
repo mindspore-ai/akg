@@ -16,13 +16,13 @@
 任务构造器工具集
 
 包含代码操作工具和文件操作工具，供 TaskConstructor agent 内部 ReAct 循环使用。
-工具函数遵循 akg_agents v2 规范（关键字参数、标准返回格式）。
+所有工具通过统一的 ToolRegistry 注册和管理。
 """
 
-from akg_agents.op.tools.task_constructor.tool_registry import TaskToolRegistry
+from akg_agents.core_v2.tools.tool_registry import ToolRegistry
 
-# 导入以触发工具注册（模块加载时自动注册）
+# 导入以触发工具注册（模块加载时自动注册到 ToolRegistry）
 import akg_agents.op.tools.task_constructor.code_tools  # noqa: F401
 import akg_agents.op.tools.task_constructor.file_tools  # noqa: F401
 
-__all__ = ["TaskToolRegistry"]
+__all__ = ["ToolRegistry"]

@@ -41,8 +41,9 @@ from akg_agents.core_v2.agents import AgentBase, register_agent
 
 logger = logging.getLogger(__name__)
 
-# 导入内部工具注册表（模块加载时自动注册所有工具）
-from akg_agents.op.tools.task_constructor.tool_registry import TaskToolRegistry
+# 导入统一工具注册表 + 触发工具注册（模块加载时自动注册所有工具）
+from akg_agents.core_v2.tools.tool_registry import ToolRegistry
+import akg_agents.core_v2.tools.basic_tools                    # noqa: F401 - 触发注册
 from akg_agents.op.tools.task_constructor import code_tools   # noqa: F401 - 触发注册
 from akg_agents.op.tools.task_constructor import file_tools    # noqa: F401 - 触发注册
 
@@ -342,17 +343,16 @@ class TaskConstructor(AgentBase):
 
     def _build_system_prompt(self) -> str:
         """构建 system prompt（注入工具描述）"""
-        tools_desc = TaskToolRegistry.get_tools_for_prompt()
-        # 添加 finish 和 ask_user 伪工具
+        tools_desc = ToolRegistry.get_tools_for_prompt(
+            scope="task_constructor", format="markdown"
+        )
+        # 添加 finish 伪工具（特殊处理，不在 ToolRegistry 中注册）
         tools_desc += (
             "\n\n### finish\n"
             "任务完成时调用。\n参数:\n"
             "    - task_code: 任务文件路径或代码 (必填)\n"
             "    - summary: 任务摘要 (可选)\n"
-            "    - error: 错误信息（失败时） (可选)\n"
-            "\n### ask_user\n"
-            "向用户提问。\n参数:\n"
-            "    - message: 问题内容 (必填)"
+            "    - error: 错误信息（失败时） (可选)"
         )
         return self.system_prompt_template.format(tools_description=tools_desc)
 
@@ -385,12 +385,12 @@ class TaskConstructor(AgentBase):
             f"4. `trace_dependencies` 自动追踪全部依赖 [关键]\n"
             f"5. 处理外部依赖（`read_function` 从来源提取 → 内联到 helper_code）\n"
             f"6. `assemble_task` 构建任务文件\n"
-            f"7. `validate_task` 验证 → `optimize_task` 清理 → `validate_task` 再验证\n"
-            f"8. `test_with_reference` 对比验证（先 run_code 验证原始函数环境可用）\n"
+            f"7. `optimize_task` 清理代码\n"
+            f"8. `test_with_reference` 验证+对比测试（先 execute_script 验证原始函数环境可用）\n"
             f"9. `finish`\n"
             f"\n**注意**:\n"
             f"- 不要用 grep_search 搜 workspace 文件内容（直接 read_function 提取更高效）\n"
-            f"- 不需要给每个工具调用都附带 workspace_dir/output_dir 参数，系统会自动注入\n"
+            f"- 路径会自动解析: workspace/xxx → 工作区, 相对路径 → 输出目录或工作区\n"
             f"\n请开始工作。"
         )
 
@@ -452,14 +452,45 @@ class TaskConstructor(AgentBase):
 
         return None, ""
 
+    WRITE_TOOLS = {"write_file", "edit_file"}
+
     def _execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """执行内部工具（注入 workspace/output 路径）"""
-        # 拷贝一份再注入，避免污染原始 act_args（否则路径会出现在消息历史中，浪费 token）
+        """执行内部工具（路径预解析 + 注入 workspace/output 路径）"""
         exec_args = dict(arguments)
+        exec_args = self._resolve_tool_paths(tool_name, exec_args)
+        # 始终注入 workspace/output 路径；ToolRegistry._filter_func_args
+        # 会自动过滤不接受这些参数的函数（如 basic_tools）
         exec_args.setdefault("workspace_dir", str(self.workspace_dir))
         exec_args.setdefault("output_dir", str(self.output_dir))
+        return ToolRegistry.execute(tool_name, exec_args)
 
-        return TaskToolRegistry.execute(tool_name, exec_args)
+    def _resolve_tool_paths(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """将 workspace/xxx、相对路径解析为绝对路径（区分读写操作）"""
+        from akg_agents.op.tools.task_constructor.path_utils import resolve_path as _tc_resolve
+        PATH_KEYS = ("file_path", "path", "script_path")
+        for key in PATH_KEYS:
+            val = arguments.get(key)
+            if not val or not isinstance(val, str):
+                continue
+            p = Path(val)
+            if p.is_absolute():
+                continue
+            fwd = val.replace('\\', '/')
+            if fwd.startswith("workspace/"):
+                arguments[key] = str((self.workspace_dir / fwd[len("workspace/"):]).resolve())
+                continue
+            if tool_name in self.WRITE_TOOLS:
+                arguments[key] = str((self.output_dir / p).resolve())
+                continue
+            for base in [self.workspace_dir, self.output_dir]:
+                candidate = base / p
+                if candidate.exists():
+                    arguments[key] = str(candidate.resolve())
+                    break
+            else:
+                resolved = _tc_resolve(val, workspace_dir=self.workspace_dir, output_dir=self.output_dir)
+                arguments[key] = str(resolved)
+        return arguments
 
     def _manage_history(self):
         """管理消息历史长度"""
@@ -663,7 +694,7 @@ class TaskConstructor(AgentBase):
                 continue  # 继续 ReAct 循环
 
             # 3.4 执行工具
-            tool_names = TaskToolRegistry.list_names()
+            tool_names = ToolRegistry.list_names(scope="task_constructor")
             if act_name not in tool_names:
                 tool_result = {
                     "status": "error", "output": "",
