@@ -123,10 +123,18 @@ struct ConvertTorchSymbolToMfusePass
     llvm::SmallVector<TorchD::BindSymbolicShapeOp> bindOps;
     module.walk([&](TorchD::BindSymbolicShapeOp op) { bindOps.push_back(op); });
 
+    // Resolver for Torch dialect symbolic integers.
+    mfusion::SymEngineAnalysis::SymbolNameResolver torchResolver = [](mlir::Value v) -> mlir::FailureOr<std::string> {
+      if (auto symIntOp = v.getDefiningOp<TorchD::SymbolicIntOp>()) {
+        return symIntOp.getSymbolName().str();
+      }
+      return mlir::failure();
+    };
+
     llvm::SmallVector<mlir::Operation *> eraseOps;
     for (auto bindOp : bindOps) {
       auto affineMap = bindOp.getShapeExpressions().getValue();
-      auto exprs = analysis.applyAffineMap(affineMap, bindOp.getShapeSymbols());
+      auto exprs = analysis.applyAffineMap(affineMap, bindOp.getShapeSymbols(), torchResolver);
       if (mlir::failed(exprs)) {
         bindOp.emitError("unsupported symbolic dim source; expected torch.symbolic_int values");
         return mlir::failure();

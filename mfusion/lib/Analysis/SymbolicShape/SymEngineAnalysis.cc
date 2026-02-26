@@ -17,23 +17,21 @@
 #include "mfusion/Analysis/SymbolicShape/SymEngineAnalysis.h"
 
 #include "symengine/integer.h"
-#include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 
 namespace mfusion {
-mlir::FailureOr<SymEngineAnalysis::SymExpr> SymEngineAnalysis::getOrAssignSymbol(mlir::Value value) {
+mlir::FailureOr<SymEngineAnalysis::SymExpr> SymEngineAnalysis::getOrAssignSymbol(mlir::Value value,
+                                                                                 const SymbolNameResolver &resolver) {
   auto it = valueToSymMap_.find(value);
   if (it != valueToSymMap_.end()) {
     return it->second;
   }
 
-  // todo, remove torch dialect dependency
-  auto symbolicIntOp = value.getDefiningOp<mlir::torch::Torch::SymbolicIntOp>();
-  if (!symbolicIntOp) {
+  auto nameOrFailure = resolver(value);
+  if (mlir::failed(nameOrFailure)) {
     return mlir::failure();
   }
 
-  std::string name = symbolicIntOp.getSymbolName().str();
-  auto sym = builder_.makeSymbol(name);
+  auto sym = builder_.makeSymbol(*nameOrFailure);
   valueToSymMap_.try_emplace(value, sym);
   return sym;
 }
@@ -87,7 +85,7 @@ mlir::FailureOr<SymEngineAnalysis::SymExpr> SymEngineAnalysis::convertAffineExpr
 }
 
 mlir::FailureOr<llvm::SmallVector<SymEngineAnalysis::SymExpr>> SymEngineAnalysis::applyAffineMap(
-  mlir::AffineMap map, mlir::ValueRange symbols) {
+  mlir::AffineMap map, mlir::ValueRange symbols, const SymbolNameResolver &resolver) {
   if (map.getNumDims() != 0) {
     return mlir::failure();
   }
@@ -99,7 +97,7 @@ mlir::FailureOr<llvm::SmallVector<SymEngineAnalysis::SymExpr>> SymEngineAnalysis
   llvm::SmallVector<SymExpr> symbolSyms;
   symbolSyms.reserve(symbols.size());
   for (mlir::Value symbolValue : symbols) {
-    auto sym = getOrAssignSymbol(symbolValue);
+    auto sym = getOrAssignSymbol(symbolValue, resolver);
     if (mlir::failed(sym)) {
       return mlir::failure();
     }
