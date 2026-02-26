@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""代码执行与测试工具：run_code、test_with_reference、apply_patch"""
+"""代码执行与测试工具
 
+已注册工具: test_with_reference
+遗留函数: run_code, apply_patch（仅供 CLI 系统内部调用，v2 不注册）
+v2 中 run_code 已由 core_v2 的 execute_script 替代，apply_patch 已由 edit_file 替代。
+"""
+
+import ast
 import subprocess
 import sys
 import tempfile
@@ -23,8 +29,41 @@ from typing import Dict, Any
 from akg_agents.op.tools.task_constructor.path_utils import resolve_path
 
 
+def _ast_validate(task_code: str) -> str:
+    """AST 结构检查，返回空字符串表示通过，否则返回错误描述"""
+    try:
+        tree = ast.parse(task_code)
+    except SyntaxError as e:
+        return f"语法错误: {e}"
+
+    has_model = has_forward = has_get_inputs = has_get_init_inputs = False
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "Model":
+            has_model = True
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if item.name == "forward":
+                        has_forward = True
+        elif isinstance(node, ast.FunctionDef):
+            if node.name == "get_inputs":
+                has_get_inputs = True
+            elif node.name == "get_init_inputs":
+                has_get_init_inputs = True
+
+    issues = []
+    if not has_model:
+        issues.append("缺少 class Model(nn.Module)")
+    if not has_forward:
+        issues.append("缺少 Model.forward() 方法")
+    if not has_get_inputs:
+        issues.append("缺少 get_inputs() 函数")
+    if not has_get_init_inputs:
+        issues.append("缺少 get_init_inputs() 函数")
+    return "; ".join(issues)
+
+
 def test_with_reference(
-    reference_code: str,
+    reference_code: str = "",
     task_file: str = "",
     task_code: str = "",
     multi_inputs_code: str = "",
@@ -33,8 +72,13 @@ def test_with_reference(
     output_dir: str = "",
 ) -> Dict[str, Any]:
     """
-    对比测试：将生成的 Model 与 reference 函数对比，支持多组输入。
-    reference_code 必须定义 reference_forward(inputs, init_inputs) 函数。
+    统一验证+对比测试工具。
+
+    始终执行:
+      1) AST 结构检查 (Model, forward, get_inputs, get_init_inputs)
+      2) 运行时验证 (实例化, forward, NaN/Inf 检查)
+    当 reference_code 非空时额外执行:
+      3) 与 reference_forward 对比，支持 multi_inputs_code 多组输入
     """
     ws = Path(workspace_dir) if workspace_dir else None
     od = Path(output_dir) if output_dir else None
@@ -49,88 +93,117 @@ def test_with_reference(
 
     if not task_code.strip():
         return {"status": "error", "output": "", "error_information": "task_code 不能为空"}
-    if not reference_code.strip():
-        return {"status": "error", "output": "", "error_information": "reference_code 不能为空"}
 
-    # 保存测试文件到输出目录，方便复现
-    if od and od.is_dir():
+    # ---- Phase 1: AST 结构检查 ----
+    ast_err = _ast_validate(task_code)
+    if ast_err:
+        return {"status": "error", "output": "",
+                "error_information": f"格式问题: {ast_err}"}
+
+    has_reference = bool(reference_code and reference_code.strip())
+
+    # 保存测试文件到输出目录
+    if has_reference and od and od.is_dir():
         try:
             (od / "reference_code.py").write_text(reference_code, encoding="utf-8")
             if multi_inputs_code.strip():
                 (od / "multi_inputs_code.py").write_text(multi_inputs_code, encoding="utf-8")
         except Exception:
             pass
-    elif ws and ws.is_dir():
-        try:
-            (ws / "reference_code.py").write_text(reference_code, encoding="utf-8")
-            if multi_inputs_code.strip():
-                (ws / "multi_inputs_code.py").write_text(multi_inputs_code, encoding="utf-8")
-        except Exception:
-            pass
 
-    # 构建对比测试脚本
-    test_script = (
-        task_code + "\n\n"
-        "# === Reference ===\n"
-        + reference_code + "\n\n"
-    )
+    # ---- Phase 2 & 3: 运行时验证 + 可选对比测试 ----
+    test_script = task_code + "\n\n"
 
+    if has_reference:
+        test_script += "# === Reference ===\n" + reference_code + "\n\n"
     if multi_inputs_code.strip():
         test_script += multi_inputs_code + "\n\n"
 
+    # 运行时验证 + 对比测试的统一脚本
     test_script += (
         "import torch\n"
         "import traceback\n\n"
-        "def _compare(name, model_out, ref_out, rtol=1e-3, atol=1e-3):\n"
-        "    if isinstance(model_out, torch.Tensor) and isinstance(ref_out, torch.Tensor):\n"
-        "        try:\n"
-        "            match = torch.allclose(model_out.float(), ref_out.float(), rtol=rtol, atol=atol)\n"
-        "        except Exception:\n"
-        "            match = False\n"
-        "        status = 'PASS' if match else 'FAIL'\n"
-        "        max_diff = (model_out.float() - ref_out.float()).abs().max().item() if model_out.shape == ref_out.shape else float('inf')\n"
-        "        print(f'  [{status}] {name}: shape={model_out.shape}, max_diff={max_diff:.6e}')\n"
-        "        return match\n"
-        "    elif isinstance(model_out, (tuple, list)) and isinstance(ref_out, (tuple, list)):\n"
-        "        all_match = True\n"
-        "        for i, (m, r) in enumerate(zip(model_out, ref_out)):\n"
-        "            if not _compare(f'{name}[{i}]', m, r, rtol, atol):\n"
-        "                all_match = False\n"
-        "        return all_match\n"
-        "    else:\n"
-        "        match = str(model_out) == str(ref_out)\n"
-        "        print(f'  [{\"PASS\" if match else \"FAIL\"}] {name}: type mismatch')\n"
-        "        return match\n\n"
+    )
+
+    if has_reference:
+        test_script += (
+            "def _compare(name, model_out, ref_out, rtol=1e-3, atol=1e-3):\n"
+            "    if isinstance(model_out, torch.Tensor) and isinstance(ref_out, torch.Tensor):\n"
+            "        try:\n"
+            "            match = torch.allclose(model_out.float(), ref_out.float(), rtol=rtol, atol=atol)\n"
+            "        except Exception:\n"
+            "            match = False\n"
+            "        status = 'PASS' if match else 'FAIL'\n"
+            "        max_diff = (model_out.float() - ref_out.float()).abs().max().item() if model_out.shape == ref_out.shape else float('inf')\n"
+            "        print(f'  [{status}] {name}: shape={model_out.shape}, max_diff={max_diff:.6e}')\n"
+            "        return match\n"
+            "    elif isinstance(model_out, (tuple, list)) and isinstance(ref_out, (tuple, list)):\n"
+            "        all_match = True\n"
+            "        for i, (m, r) in enumerate(zip(model_out, ref_out)):\n"
+            "            if not _compare(f'{name}[{i}]', m, r, rtol, atol):\n"
+            "                all_match = False\n"
+            "        return all_match\n"
+            "    else:\n"
+            "        match = str(model_out) == str(ref_out)\n"
+            "        print(f'  [{\"PASS\" if match else \"FAIL\"}] {name}: type mismatch')\n"
+            "        return match\n\n"
+        )
+
+    test_script += (
         "try:\n"
         "    init_inputs = get_init_inputs()\n"
         "    model = Model(*init_inputs)\n"
-        "    all_pass = True\n"
-        "    test_cases = []\n\n"
-        "    if 'get_multi_test_inputs' in dir():\n"
-        "        test_cases = get_multi_test_inputs()\n"
-        "    else:\n"
-        "        test_cases = [{'name': 'default', 'inputs': get_inputs()}]\n\n"
-        "    for case in test_cases:\n"
-        "        name = case.get('name', 'unnamed')\n"
-        "        inputs = case['inputs']\n"
-        "        case_init = case.get('init_inputs', init_inputs)\n"
-        "        if case_init is not init_inputs:\n"
-        "            model = Model(*case_init)\n"
-        "        print(f'--- Case: {name} ---')\n"
-        "        try:\n"
-        "            model_out = model.forward(*inputs)\n"
-        "            ref_out = reference_forward(inputs, case_init)\n"
-        "            if not _compare(name, model_out, ref_out):\n"
-        "                all_pass = False\n"
-        "        except Exception as e:\n"
-        "            print(f'  [ERROR] {name}: {e}')\n"
-        "            all_pass = False\n\n"
-        "    if all_pass:\n"
-        "        print('\\nALL_TESTS_PASSED')\n"
-        "    else:\n"
-        "        print('\\nSOME_TESTS_FAILED')\n"
+        "    inputs = get_inputs()\n"
+        "    output = model.forward(*inputs)\n"
+        "    # --- 运行时验证 ---\n"
+        "    def _check_tensor(t, prefix=''):\n"
+        "        if isinstance(t, torch.Tensor):\n"
+        "            has_nan = torch.isnan(t).any().item()\n"
+        "            has_inf = torch.isinf(t).any().item()\n"
+        "            print(f'{prefix}shape={t.shape}, dtype={t.dtype}, nan={has_nan}, inf={has_inf}')\n"
+        "            if has_nan: print(f'WARNING: {prefix}output contains NaN')\n"
+        "            if has_inf: print(f'WARNING: {prefix}output contains Inf')\n"
+        "    if isinstance(output, torch.Tensor):\n"
+        "        _check_tensor(output)\n"
+        "    elif isinstance(output, (tuple, list)):\n"
+        "        for i, t in enumerate(output):\n"
+        "            _check_tensor(t, f'output[{i}]: ')\n"
+        "    print('VALIDATION_OK')\n"
+    )
+
+    if has_reference:
+        test_script += (
+            "    # --- 对比测试 ---\n"
+            "    all_pass = True\n"
+            "    test_cases = []\n"
+            "    if 'get_multi_test_inputs' in dir():\n"
+            "        test_cases = get_multi_test_inputs()\n"
+            "    else:\n"
+            "        test_cases = [{'name': 'default', 'inputs': get_inputs()}]\n"
+            "    for case in test_cases:\n"
+            "        name = case.get('name', 'unnamed')\n"
+            "        c_inputs = case['inputs']\n"
+            "        case_init = case.get('init_inputs', init_inputs)\n"
+            "        if case_init is not init_inputs:\n"
+            "            model = Model(*case_init)\n"
+            "        print(f'--- Case: {name} ---')\n"
+            "        try:\n"
+            "            model_out = model.forward(*c_inputs)\n"
+            "            ref_out = reference_forward(c_inputs, case_init)\n"
+            "            if not _compare(name, model_out, ref_out):\n"
+            "                all_pass = False\n"
+            "        except Exception as e:\n"
+            "            print(f'  [ERROR] {name}: {e}')\n"
+            "            all_pass = False\n"
+            "    if all_pass:\n"
+            "        print('\\nALL_TESTS_PASSED')\n"
+            "    else:\n"
+            "        print('\\nSOME_TESTS_FAILED')\n"
+        )
+
+    test_script += (
         "except Exception as e:\n"
-        "    print(f'TEST_ERROR: {e}')\n"
+        "    print(f'VALIDATION_ERROR: {type(e).__name__}: {e}')\n"
         "    traceback.print_exc()\n"
     )
 
@@ -147,21 +220,36 @@ def test_with_reference(
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
 
-        if "ALL_TESTS_PASSED" in stdout:
+        # 解析结果：优先检查对比测试结果，其次检查验证结果
+        if has_reference and "ALL_TESTS_PASSED" in stdout:
             return {"status": "success",
-                    "output": f"所有测试通过\n{stdout}",
+                    "output": f"验证通过 + 所有对比测试通过\n{stdout}",
                     "error_information": ""}
-        elif "SOME_TESTS_FAILED" in stdout:
+        elif has_reference and "SOME_TESTS_FAILED" in stdout:
             return {"status": "error",
                     "output": stdout,
-                    "error_information": "部分测试失败，请检查输出"}
+                    "error_information": "部分对比测试失败，请检查输出"}
+        elif "VALIDATION_OK" in stdout and not has_reference:
+            warn_parts = []
+            if "WARNING:" in stdout and "NaN" in stdout:
+                warn_parts.append("输出包含 NaN")
+            if "WARNING:" in stdout and "Inf" in stdout:
+                warn_parts.append("输出包含 Inf")
+            output_msg = f"验证通过\n{stdout}"
+            if warn_parts:
+                output_msg += f"\n警告: {'; '.join(warn_parts)}"
+            return {"status": "success", "output": output_msg, "error_information": ""}
+        elif "VALIDATION_ERROR" in stdout:
+            error_line = [l for l in stdout.splitlines() if "VALIDATION_ERROR" in l]
+            return {"status": "error", "output": stdout,
+                    "error_information": error_line[0] if error_line else "运行时验证失败"}
         else:
             combined = stdout + ("\n" + stderr if stderr else "")
             return {"status": "error", "output": combined,
-                    "error_information": f"测试执行错误 (exit code {result.returncode})"}
+                    "error_information": f"执行错误 (exit code {result.returncode})"}
     except subprocess.TimeoutExpired:
         return {"status": "error", "output": "",
-                "error_information": f"测试超时 ({timeout}s)"}
+                "error_information": f"超时 ({timeout}s)"}
     except Exception as e:
         return {"status": "error", "output": "", "error_information": str(e)}
     finally:

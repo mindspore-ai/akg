@@ -88,32 +88,35 @@ def get_init_inputs():
 **策略B: 分段追加（需要修改源函数时）**
 - `write_file` 创建 + `append_to_file` 追加（每次<150行）
 
-### 第四步：验证 → 优化 → 再验证 → 完成
-6. `validate_task` 验证
-7. `optimize_task` 清理代码（去重 import、移除无用代码、格式化）
-8. `validate_task` 再次验证（确认优化未破坏代码）
-9. `test_with_reference` 对比验证（[推荐]，见下方详细说明）
-10. 如果 validate 或 test 发现问题，用 `apply_patch` 修复后重新验证
-11. `finish`
+### 第四步：优化 → 验证+测试 → 完成
+6. `optimize_task` 清理代码（去重 import、移除无用代码、格式化）
+7. `test_with_reference` 统一验证+对比测试（见下方详细说明）
+   - 不传 `reference_code` → 仅做 AST 格式检查 + 运行时验证
+   - 传 `reference_code` → 额外做 reference 对比（推荐）
+8. 如果 test 发现问题，用 `edit_file` 修复后重新 `test_with_reference`
+9. `finish`
 
 ### [重要] test_with_reference 使用说明
 
+`test_with_reference` 是唯一的验证工具，同时完成格式检查、运行时验证和（可选的）reference 对比。
+
 **前提：验证环境可用性**
-- 在使用原始 torch 函数作为 reference 之前，先用 `run_code` 验证该函数在当前环境是否可用
-- 例: `run_code(code="import torch; print(hasattr(torch, '_chunk_cat')); print(torch.ops.aten._chunk_cat.default)")`
-- 如果不可用，跳过 reference 对比（仅依赖 validate_task）或使用其他等价实现
+- 在使用原始 torch 函数作为 reference 之前，先用 `execute_script` 验证该函数在当前环境是否可用
+- 例: `execute_script(code="import torch; print(hasattr(torch, 'target_func_name'))")`
+- 如果不可用，不传 `reference_code` 即可（工具自动只做验证）
 
 `reference_code` **必须定义** `reference_forward(inputs, init_inputs)` 函数：
 - `inputs`: get_inputs() 的返回值（列表），与 Model.forward(*inputs) 的参数相同
 - `init_inputs`: get_init_inputs() 的返回值（列表），与 Model(*init_inputs) 的参数相同
 
-示例（假设 Model.__init__(dim, num_chunks), forward(*tensors)）：
+示例（假设 Model.__init__(param_a, param_b), forward(x, y)）：
 ```
 reference_code = """
 import torch
 def reference_forward(inputs, init_inputs):
-    dim, num_chunks = init_inputs
-    return torch.ops.aten._chunk_cat.default(inputs, dim, num_chunks)
+    param_a, param_b = init_inputs
+    x, y = inputs
+    return torch.original_function(x, y, param_a, param_b)
 """
 ```
 
@@ -146,7 +149,7 @@ def get_multi_test_inputs():
 4. finish 时 task_code 填文件路径（如 `task_output.py`），同时在 op_name 中填写算子名。
 5. **get_inputs() 返回列表，可以包含张量和标量。** 非张量参数（如 dim, num_chunks）放在 get_init_inputs 或 get_inputs 中均可。
 6. 选择性提取时，装饰器（如 `@register_decomposition`）自动移除，未使用的 import 自动精简。
-7. **代码质量保证**：`assemble_task` 自动清理基础问题；validate 通过后，调用 `optimize_task` 进一步清理（去重 import、合并 from-import、移除私有模块引用、格式化）。
+7. **代码质量保证**：`assemble_task` 自动清理基础问题；调用 `optimize_task` 进一步清理（去重 import、合并 from-import、移除私有模块引用、格式化），然后用 `test_with_reference` 一次性验证。
 8. **内联外部函数时，必须先 `read_function` 查看原始签名！** `trace_dependencies` 会自动检测外部调用并标注来源模块路径。
 9. `imports_code` 和 `helper_code` 会被放在源文件之前，确保类型（如 Optional）已定义。
 10. **路径使用**：`grep_search` 和 `copy_to_workspace` 返回的路径是精确路径，直接复制使用，不要自行修改或猜测路径。
