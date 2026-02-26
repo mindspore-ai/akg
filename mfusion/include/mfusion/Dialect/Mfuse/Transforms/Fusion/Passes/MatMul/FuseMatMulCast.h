@@ -27,6 +27,7 @@ namespace mlir {
 namespace mfuse {
 
 /// Fuse MatMul/Mm (float16) followed by Cast (float32) into MatMul with float32 result.
+/// MatMul/MatMulWithBias must have exactly one user (the Cast) to fuse.
 std::unique_ptr<Pass> createFuseMatMulCastPass();
 
 }  // namespace mfuse

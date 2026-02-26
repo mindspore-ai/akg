@@ -89,6 +89,11 @@ static LogicalResult tryFuseBiasaddConv(Operation *opToReplace, Value lhs, Value
       return rewriter.notifyMatchFailure(opToReplace, "bias must be 1D [C]");
     }
 
+    // Avoid increasing conv count: fuse only when conv has exactly one user (this Add).
+    if (!convOut.hasOneUse()) {
+      return rewriter.notifyMatchFailure(opToReplace, "conv must have exactly one user (the Add) to fuse");
+    }
+
     Location loc = opToReplace->getLoc();
     Type resultType = opToReplace->getResult(0).getType();
     Value newConv = rewriter.create<Conv2DWithBiasOp>(loc, resultType, convInput, convWeight, actualBias);
