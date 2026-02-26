@@ -61,6 +61,200 @@ static bool getAddLikeOperands(Value v, Value &outX, Value &outY) {
   return false;
 }
 
+/// Match GELU patterns and return the matched components
+struct GeluPatternMatch {
+  MulOp halfMul;
+  Value addOneTanhOpX;
+  Value addOneTanhOpY;
+  Value x;
+  bool matched;
+};
+
+/// Helper function to set GeluPatternMatch result
+static void setGeluPatternMatch(GeluPatternMatch &result, Value ax, Value ay, Value tx, MulOp hm) {
+  result.addOneTanhOpX = ax;
+  result.addOneTanhOpY = ay;
+  result.x = tx;
+  result.halfMul = hm;
+  result.matched = true;
+}
+
+/// Match Pattern 1: Mul(Mul(x, 0.5), Add(tanh(...), 1))
+static bool matchPattern1(Value lhs, Value rhs, GeluPatternMatch &result) {
+  if (auto m = lhs.getDefiningOp<MulOp>()) {
+    double scalar;
+    Value tensorOp;
+    if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
+      Value addX, addY;
+      if (getAddLikeOperands(rhs, addX, addY)) {
+        Value ones = addY;
+        if (!isConstOne(ones, kTolerance)) {
+          ones = addX;
+        }
+        if (isConstOne(ones, kTolerance)) {
+          setGeluPatternMatch(result, addX, addY, tensorOp, m);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/// Match Pattern 1 commutative: Mul(Add(...), Mul(x, 0.5))
+static bool matchPattern1Commutative(Value lhs, Value rhs, GeluPatternMatch &result) {
+  if (auto m = rhs.getDefiningOp<MulOp>()) {
+    double scalar;
+    Value tensorOp;
+    if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
+      Value addX, addY;
+      if (getAddLikeOperands(lhs, addX, addY)) {
+        Value ones = addY;
+        if (!isConstOne(ones, kTolerance)) {
+          ones = addX;
+        }
+        if (isConstOne(ones, kTolerance)) {
+          setGeluPatternMatch(result, addX, addY, tensorOp, m);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/// Match Pattern 2: Mul(x, Mul(Add(...), 0.5))
+static bool matchPattern2(Value lhs, Value rhs, GeluPatternMatch &result) {
+  if (auto m = rhs.getDefiningOp<MulOp>()) {
+    double scalar;
+    Value tensorOp;
+    if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
+      Value addX, addY;
+      if (getAddLikeOperands(tensorOp, addX, addY) && isConstOne(addY, kTolerance)) {
+        setGeluPatternMatch(result, addX, addY, lhs, m);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/// Match Pattern 2 commutative: Mul(Mul(Add(...), 0.5), x)
+static bool matchPattern2Commutative(Value lhs, Value rhs, GeluPatternMatch &result) {
+  if (auto m = lhs.getDefiningOp<MulOp>()) {
+    double scalar;
+    Value tensorOp;
+    if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
+      Value addX, addY;
+      if (getAddLikeOperands(tensorOp, addX, addY) && isConstOne(addY, kTolerance)) {
+        setGeluPatternMatch(result, addX, addY, rhs, m);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/// Match GELU patterns: Mul(Mul(x, 0.5), Add(tanh(...), 1)) or Mul(x, Mul(Add(tanh(...), 1), 0.5))
+static GeluPatternMatch matchGeluPattern(Value lhs, Value rhs) {
+  GeluPatternMatch result{nullptr, nullptr, nullptr, nullptr, false};
+
+  // Try Pattern 1: Mul(Mul(x, 0.5), Add(...))
+  if (matchPattern1(lhs, rhs, result)) {
+    return result;
+  }
+
+  // Try Pattern 1 commutative: Mul(Add(...), Mul(x, 0.5))
+  if (matchPattern1Commutative(lhs, rhs, result)) {
+    return result;
+  }
+
+  // Try Pattern 2: Mul(x, Mul(Add(...), 0.5))
+  if (matchPattern2(lhs, rhs, result)) {
+    return result;
+  }
+
+  // Try Pattern 2 commutative: Mul(Mul(Add(...), 0.5), x)
+  matchPattern2Commutative(lhs, rhs, result);
+
+  return result;
+}
+
+/// Extract tanh operation from Add(1, tanh(...))
+static AclnnTanhOp extractTanhOp(Value addOneTanhOpX, Value addOneTanhOpY) {
+  Value ones = addOneTanhOpX;
+  Value tanhVal = addOneTanhOpY;
+  if (!isConstOne(ones, kTolerance)) {
+    ones = addOneTanhOpY;
+    tanhVal = addOneTanhOpX;
+  }
+  return tanhVal.getDefiningOp<AclnnTanhOp>();
+}
+
+/// Match the inner Mul(sqrt(2/pi), Add(...)) pattern
+static Value matchInnerSqrtPattern(Value inner) {
+  if (auto m = inner.getDefiningOp<MulOp>()) {
+    double sqrtScalar;
+    Value sqrtOperand;
+    if (isScalarMul(m, sqrtScalar, sqrtOperand)) {
+      if (std::abs(sqrtScalar - kSqrt2OverPi) <= kTolerance) {
+        return sqrtOperand;  // Add is on left
+      }
+    }
+  }
+  return nullptr;
+}
+
+/// Match the Add(x, Mul(x^3, 0.044715)) pattern
+static Value matchAddPattern(Value addInner, Value x) {
+  Value xAdd, mulC;
+  if (!getAddLikeOperands(addInner, xAdd, mulC)) {
+    return nullptr;
+  }
+  // Handle commutativity for non-constant operands
+  if (xAdd != x) {
+    std::swap(xAdd, mulC);
+    if (xAdd != x) {
+      return nullptr;
+    }
+  }
+  return mulC;
+}
+
+/// Match the Mul(x^3, 0.044715) pattern
+static Value matchMulCozPattern(Value mulC) {
+  if (auto m = mulC.getDefiningOp<MulOp>()) {
+    double coeffScalar;
+    Value powOperand;
+    if (isScalarMul(m, coeffScalar, powOperand)) {
+      if (std::abs(coeffScalar - kGeluCoeff) <= kTolerance) {
+        return powOperand;  // Pow(x,3) is on left
+      }
+    }
+  }
+  return nullptr;
+}
+
+/// Verify the pow operation is x^3
+static bool verifyPowOperation(Value pow3, Value x) {
+  auto powOp = pow3.getDefiningOp<PowOp>();
+  if (!powOp) {
+    return false;
+  }
+  Value xPow = powOp.getBase();
+  Value exponent = powOp.getExponent();
+  if (!isSingleElementFloat(exponent, kGeluPowExponent)) {
+    return false;
+  }
+  return xPow == x;
+}
+
+/// Check if tensor type has static shape
+static bool hasStaticShape(Value x) {
+  auto tensorType = dyn_cast<TensorType>(x.getType());
+  return tensorType && tensorType.hasStaticShape();
+}
+
 }  // namespace
 
 /**
@@ -85,179 +279,56 @@ class FuseGeluPattern : public OpRewritePattern<MulOp> {
     Value lhs = rootMul.getLhs();
     Value rhs = rootMul.getRhs();
 
-    // Pattern 1: Mul(Mul(x, 0.5), Add(tanh(...), 1)) - original form
-    // Pattern 2: Mul(x, Mul(Add(tanh(...), 1), 0.5)) - canonicalized form
-    // Add can be mfuse.add or mfuse.aclnn.add (alpha=1) from Torch convert.
-    MulOp halfMul = nullptr;
-    Value addOneTanhOpX, addOneTanhOpY;
-    Value x;
-
-    auto setAddOneTanh = [&](Value ax, Value ay, Value tx, MulOp hm) {
-      addOneTanhOpX = ax;
-      addOneTanhOpY = ay;
-      x = tx;
-      halfMul = hm;
-    };
-
-    // Try Pattern 1: Mul(Mul(x, 0.5), Add(...))
-    if (auto m = lhs.getDefiningOp<MulOp>()) {
-      double scalar;
-      Value tensorOp;
-      if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
-        Value addX, addY;
-        if (getAddLikeOperands(rhs, addX, addY)) {
-          Value tanhVal = addX;
-          Value ones = addY;
-          if (!isConstOne(ones, kTolerance)) {
-            tanhVal = addY;
-            ones = addX;
-          }
-          if (isConstOne(ones, kTolerance)) setAddOneTanh(addX, addY, tensorOp, m);
-        }
-      }
-    }
-    // Try Pattern 1 commutative: Mul(Add(...), Mul(x, 0.5))
-    if (!halfMul) {
-      if (auto m = rhs.getDefiningOp<MulOp>()) {
-        double scalar;
-        Value tensorOp;
-        if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
-          Value addX, addY;
-          if (getAddLikeOperands(lhs, addX, addY)) {
-            Value tanhVal = addX;
-            Value ones = addY;
-            if (!isConstOne(ones, kTolerance)) {
-              tanhVal = addY;
-              ones = addX;
-            }
-            if (isConstOne(ones, kTolerance)) setAddOneTanh(addX, addY, tensorOp, m);
-          }
-        }
-      }
-    }
-
-    // Try Pattern 2: Mul(x, Mul(Add(...), 0.5))
-    if (!halfMul) {
-      if (auto m = rhs.getDefiningOp<MulOp>()) {
-        double scalar;
-        Value tensorOp;
-        if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
-          Value addX, addY;
-          if (getAddLikeOperands(tensorOp, addX, addY) && isConstOne(addY, kTolerance)) {
-            x = lhs;
-            halfMul = m;
-            addOneTanhOpX = addX;
-            addOneTanhOpY = addY;
-          }
-        }
-      }
-    }
-    // Try Pattern 2 commutative: Mul(Mul(Add(...), 0.5), x)
-    if (!halfMul) {
-      if (auto m = lhs.getDefiningOp<MulOp>()) {
-        double scalar;
-        Value tensorOp;
-        if (isScalarMul(m, scalar, tensorOp) && std::abs(scalar - kGeluHalfCoeff) <= kTolerance) {
-          Value addX, addY;
-          if (getAddLikeOperands(tensorOp, addX, addY) && isConstOne(addY, kTolerance)) {
-            x = rhs;
-            halfMul = m;
-            addOneTanhOpX = addX;
-            addOneTanhOpY = addY;
-          }
-        }
-      }
-    }
-
-    if (!halfMul) {
+    // Match GELU patterns
+    auto matchResult = matchGeluPattern(lhs, rhs);
+    if (!matchResult.matched) {
       return failure();
     }
 
-    // Extract ones and tanhVal, handling commutativity for Add
-    Value ones = addOneTanhOpX;
-    Value tanhVal = addOneTanhOpY;
-    if (!isConstOne(ones, kTolerance)) {
-      ones = addOneTanhOpY;
-      tanhVal = addOneTanhOpX;
-    }
+    // Extract matched components
+    Value addOneTanhOpX = matchResult.addOneTanhOpX;
+    Value addOneTanhOpY = matchResult.addOneTanhOpY;
+    Value x = matchResult.x;
 
-    auto tanhOp = tanhVal.getDefiningOp<AclnnTanhOp>();
+    // Extract tanh operation
+    auto tanhOp = extractTanhOp(addOneTanhOpX, addOneTanhOpY);
     if (!tanhOp) {
       return failure();
     }
     Value inner = tanhOp.getInput();
 
-    // After canonicalization: Mul(Add(...), sqrt(2/pi)) - Add on left, sqrt on right
-    MulOp mulSqrt = nullptr;
-    Value addInner;
-    if (auto m = inner.getDefiningOp<MulOp>()) {
-      double sqrtScalar;
-      Value sqrtOperand;
-      if (isScalarMul(m, sqrtScalar, sqrtOperand)) {
-        if (std::abs(sqrtScalar - kSqrt2OverPi) <= kTolerance) {
-          mulSqrt = m;
-          addInner = sqrtOperand;  // Add is on left
-        }
-      }
-    }
-    if (!mulSqrt) {
+    // Match inner sqrt pattern
+    Value addInner = matchInnerSqrtPattern(inner);
+    if (!addInner) {
       return failure();
     }
 
-    Value xAdd, mulC;
-    if (!getAddLikeOperands(addInner, xAdd, mulC)) {
-      return failure();
-    }
-    // Add(x, Mul(x^3, 0.044715)) - handle commutativity for non-constant operands
-    if (xAdd != x) {
-      std::swap(xAdd, mulC);
-      if (xAdd != x) {
-        return failure();
-      }
-    }
-
-    // After canonicalization: Mul(x^3, 0.044715) - x^3 on left, 0.044715 on right
-    MulOp mulCoz = nullptr;
-    Value pow3;
-    if (auto m = mulC.getDefiningOp<MulOp>()) {
-      double coeffScalar;
-      Value powOperand;
-      if (isScalarMul(m, coeffScalar, powOperand)) {
-        if (std::abs(coeffScalar - kGeluCoeff) <= kTolerance) {
-          mulCoz = m;
-          pow3 = powOperand;  // Pow(x,3) is on left
-        }
-      }
-    }
-    if (!mulCoz) {
+    // Match add pattern
+    Value mulC = matchAddPattern(addInner, x);
+    if (!mulC) {
       return failure();
     }
 
-    auto powOp = pow3.getDefiningOp<PowOp>();
-    if (!powOp) {
-      return failure();
-    }
-    Value xPow = powOp.getBase();
-    Value exponent = powOp.getExponent();
-    if (!isSingleElementFloat(exponent, kGeluPowExponent)) {
+    // Match mul coz pattern
+    Value pow3 = matchMulCozPattern(mulC);
+    if (!pow3) {
       return failure();
     }
 
-    // Verify all x references point to the same value
-    if (xPow != x) {
+    // Verify pow operation
+    if (!verifyPowOperation(pow3, x)) {
       return failure();
     }
 
     // Check if tensor type has static shape
-    auto tensorType = dyn_cast<TensorType>(x.getType());
-    if (!tensorType || !tensorType.hasStaticShape()) {
+    if (!hasStaticShape(x)) {
       return failure();
     }
 
     MLOG(DEBUG) << "FuseGeluPattern matched GELU approximation pattern";
 
-    // Create AclnnGeluOp
-    auto gelu = rewriter.create<AclnnGeluOp>(rootMul.getLoc(), x.getType(), x);
+    // Create AclnnGeluOp with "tanh" approximation since we're fusing the tanh-based implementation
+    auto gelu = rewriter.create<AclnnGeluOp>(rootMul.getLoc(), x.getType(), x, rewriter.getStringAttr("tanh"));
     MLOG(DEBUG) << "Created new AclnnGeluOp";
     rewriter.replaceOp(rootMul, gelu.getResult());
     MLOG(DEBUG) << "Replaced original GELU approximation pattern with new AclnnGeluOp";
