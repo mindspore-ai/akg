@@ -374,15 +374,13 @@ static bool isReshape(llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int64_t> o
 }
 
 static bool isSubsequence(llvm::ArrayRef<int64_t> big, llvm::ArrayRef<int64_t> small) {
-  if (small.empty())
-    return false;
+  if (small.empty()) return false;
 
   size_t i = 0;
   size_t j = 0;
 
   while (i < big.size() && j < small.size()) {
-    if (big[i] == small[j])
-      ++j;
+    if (big[i] == small[j]) ++j;
     ++i;
   }
 
@@ -449,26 +447,26 @@ OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<
     }
 
     if (isSameShape(inShape, outShape)) {
-        hasElementwise = true;
-        continue;
+      hasElementwise = true;
+      continue;
     } else {
-        hasElementwise = false;
+      hasElementwise = false;
     }
 
     if (isReshape(inShape, outShape)) {
-        return OperatorTemplate::Reshape;
+      return OperatorTemplate::Reshape;
     }
 
     if (isPermutationShape(inShape, outShape)) {
-        return OperatorTemplate::Transpose;
+      return OperatorTemplate::Transpose;
     }
 
     if (isBroadcastLike(inShape, outShape)) {
-        return OperatorTemplate::Broadcast;
+      return OperatorTemplate::Broadcast;
     }
 
     if (isSubsequencePart(inShape, outShape)) {
-        return OperatorTemplate::Broadcast;
+      return OperatorTemplate::Broadcast;
     }
   }
 
@@ -732,83 +730,6 @@ static affine::AffineIfOp createLastIterationIf(OpBuilder &builder, Location loc
   return builder.create<affine::AffineIfOp>(loc, ifCondSet, dimOperands, false);
 }
 
-// Sink all operations outside maxLegalFusionDepth loop into the innermost loop.
-// This transforms imperfect loop nests into perfect ones by moving operations directly.
-// Operations before inner loops are moved to the beginning of the innermost loop body.
-// Operations after inner loops are moved to the end of the innermost loop body.
-// If wrapWithIf is true, operations are wrapped with AffineIfOp to ensure they execute
-// only on the first/last iteration of intermediate loops.
-static void sinkOpsOutsideFusionDepth(SmallVector<affine::AffineForOp, 4> &loops, unsigned maxLegalFusionDepth,
-                                      bool wrapWithIf = false) {
-  if (maxLegalFusionDepth == 0 || maxLegalFusionDepth > loops.size()) {
-    return;
-  }
-
-  affine::AffineForOp targetLoop = loops[maxLegalFusionDepth - 1];
-  auto *targetBody = targetLoop.getBody();
-  OpBuilder builder(targetLoop.getContext());
-
-  // Process each level from maxLegalFusionDepth-2 down to 0
-  // Level i contains operations between loops[i] and loops[i+1]
-  for (int i = static_cast<int>(maxLegalFusionDepth) - 2; i >= 0; --i) {
-    SmallVector<Operation *, 8> opsBefore;
-    SmallVector<Operation *, 8> opsAfter;
-    collectOpsOutsideTargetLoop(loops[i], loops[i + 1], opsBefore, opsAfter);
-
-    if (opsBefore.empty() && opsAfter.empty()) {
-      continue;
-    }
-
-    if (wrapWithIf) {
-      Location loc = loops[i].getLoc();
-
-      // Wrap opsBefore with if: execute only on first iteration of intermediate loops
-      if (!opsBefore.empty()) {
-        builder.setInsertionPointToStart(targetBody);
-        auto ifOp = createFirstIterationIf(builder, loc, loops, i + 1, maxLegalFusionDepth);
-        if (ifOp) {
-          Block *thenBlock = ifOp.getThenBlock();
-          for (auto *op : opsBefore) {
-            op->moveBefore(thenBlock->getTerminator());
-          }
-        } else {
-          // Fallback: move without if
-          for (auto *op : opsBefore) {
-            op->moveBefore(&targetBody->front());
-          }
-        }
-      }
-
-      // Wrap opsAfter with if: execute only on last iteration of intermediate loops
-      if (!opsAfter.empty()) {
-        builder.setInsertionPoint(targetBody->getTerminator());
-        auto ifOp = createLastIterationIf(builder, loc, loops, i + 1, maxLegalFusionDepth);
-        if (ifOp) {
-          Block *thenBlock = ifOp.getThenBlock();
-          for (auto *op : opsAfter) {
-            op->moveBefore(thenBlock->getTerminator());
-          }
-        } else {
-          // Fallback: move without if
-          for (auto *op : opsAfter) {
-            op->moveBefore(targetBody->getTerminator());
-          }
-        }
-      }
-    } else {
-      // Move operations before inner loop to the beginning of target loop body
-      for (auto *op : opsBefore) {
-        op->moveBefore(&targetBody->front());
-      }
-
-      // Move operations after inner loop to the end of target loop body (before terminator)
-      for (auto *op : opsAfter) {
-        op->moveBefore(targetBody->getTerminator());
-      }
-    }
-  }
-}
-
 // Check if two loops have the same structure (same nesting depth and same bounds)
 static bool hasSameLoopStructure(SmallVector<affine::AffineForOp, 4> srcLoops,
                                  SmallVector<affine::AffineForOp, 4> dstLoops) {
@@ -948,6 +869,18 @@ static void applySingleIterationBounds(unsigned sliceDim, Value dstIV, MLIRConte
   sliceUnion->ubs[sliceDim] = AffineMap::get(numMapDims, numMapSymbols, dimExpr + 1);
 }
 
+void FusionLoopNestInfo::collect(affine::AffineForOp rootOp) {
+  root = rootOp;
+  loops.clear();
+  collectLoopNest(rootOp, loops);
+  loopDepth = static_cast<unsigned>(loops.size());
+
+  SmallVector<affine::AffineForOp, 4> perfectBand;
+  affine::getPerfectlyNestedLoops(perfectBand, rootOp);
+  perfectDepth = static_cast<unsigned>(perfectBand.size());
+  isPerfect = (perfectDepth == loopDepth);
+}
+
 // Adjusts slice bounds when they are constant (e.g. 0 to 10).
 // Two cases are adjusted so the fused loop runs one iteration per outer
 // (e.g. last dimension 0..10 becomes d3..d3+1):
@@ -986,8 +919,7 @@ void FusionCodeGenHelper::adjustSliceBounds(ArrayRef<Operation *> opsA, ArrayRef
   }
 }
 
-static bool isDependentLoadOrStoreOp(Operation *candidate,
-                                     DenseMap<Value, bool> &memFlags) {
+static bool isDependentLoadOrStoreOp(Operation *candidate, DenseMap<Value, bool> &memFlags) {
   auto asLoad = dyn_cast<affine::AffineReadOpInterface>(candidate);
   if (asLoad) {
     Value memref = asLoad.getMemRef();
@@ -1006,16 +938,14 @@ static bool isDependentLoadOrStoreOp(Operation *candidate,
 
 // Returns the earliest operation strictly between opA and opB that is
 // data-dependent on opA.
-static Operation *getFirstDependentOpInRange(affine::AffineForOp opA,
-                                             affine::AffineForOp opB,
+static Operation *getFirstDependentOpInRange(affine::AffineForOp opA, affine::AffineForOp opB,
                                              DenseMap<Value, bool> &memFlags) {
   // Walk over each opX in the block in the open interval (opA, opB) and look
   // for a dependence from opA to opX, i.e. both touch the same memref and
   // at least one of them performs a write.
   Operation *firstDependent = nullptr;
 
-  for (auto it = std::next(Block::iterator(opA)), e = Block::iterator(opB);
-       it != e && !firstDependent; ++it) {
+  for (auto it = std::next(Block::iterator(opA)), e = Block::iterator(opB); it != e && !firstDependent; ++it) {
     Operation *opX = &*it;
 
     opX->walk([&](Operation *nested) {
@@ -1035,8 +965,7 @@ static Operation *getFirstDependentOpInRange(affine::AffineForOp opA,
 
 // Returns the last operation opX strictly between opA and opB such that there
 // exists a data dependence from opX to opB.
-static Operation *getLastDependentOpInRange(affine::AffineForOp opA,
-                                            affine::AffineForOp opB,
+static Operation *getLastDependentOpInRange(affine::AffineForOp opA, affine::AffineForOp opB,
                                             DenseMap<Value, bool> &memFlags) {
   // Traverse operations in (opA, opB) in reverse order and determine the last
   // opX that has a dependence to opB via:
@@ -1044,9 +973,8 @@ static Operation *getLastDependentOpInRange(affine::AffineForOp opA,
   //  * SSA value produced by opX and eventually used in the loop nest of opB.
   Operation *lastDependent = nullptr;
 
-  for (auto it = std::next(Block::reverse_iterator(opB)),
-            e  = Block::reverse_iterator(opA);
-       it != e && !lastDependent; ++it) {
+  for (auto it = std::next(Block::reverse_iterator(opB)), e = Block::reverse_iterator(opA); it != e && !lastDependent;
+       ++it) {
     Operation *opX = &*it;
 
     opX->walk([&](Operation *nested) {
@@ -1054,8 +982,7 @@ static Operation *getLastDependentOpInRange(affine::AffineForOp opA,
         return WalkResult::interrupt();
       }
 
-      if (isa<affine::AffineReadOpInterface,
-              affine::AffineWriteOpInterface>(nested)) {
+      if (isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(nested)) {
         if (isDependentLoadOrStoreOp(nested, memFlags)) {
           lastDependent = opX;
           return WalkResult::interrupt();
@@ -1067,7 +994,7 @@ static Operation *getLastDependentOpInRange(affine::AffineForOp opA,
         for (Operation *user : produced.getUsers()) {
           SmallVector<affine::AffineForOp, 4> surroundingLoops;
           // Check whether any loop in the loop nest enclosing 'user' is opB.
-          getAffineForIVs(*user, &surroundingLoops);
+          affine::getAffineForIVs(*user, &surroundingLoops);
           if (llvm::is_contained(surroundingLoops, opB)) {
             lastDependent = opX;
             return WalkResult::interrupt();
@@ -1084,14 +1011,14 @@ static Operation *getLastDependentOpInRange(affine::AffineForOp opA,
 
 // Attempts to compute an insertion position for the fused loop nest such that
 // the original data dependences of the surrounding program are preserved.
-static Operation *getFusedLoopNestInsertionPoint(
-    affine::AffineForOp srcLoop, affine::AffineForOp dstLoop,
-    DenseMap<Value, bool> &srcMemFlags, DenseMap<Value, bool> &dstMemFlags) {
-
-  Operation *firstFromSrc =
-      getFirstDependentOpInRange(srcLoop, dstLoop, srcMemFlags);
-  Operation *lastToDst =
-      getLastDependentOpInRange(srcLoop, dstLoop, dstMemFlags);
+// Returns true if a valid insertion position exists (including when firstFromSrc
+// and lastToDst are both null, meaning no dependence conflict and inserting at
+// dstLoop is safe); returns false when dependence directions conflict and no
+// valid position exists.
+static bool hasValidFusionPoint(affine::AffineForOp srcLoop, affine::AffineForOp dstLoop,
+                                DenseMap<Value, bool> &srcMemFlags, DenseMap<Value, bool> &dstMemFlags) {
+  Operation *firstFromSrc = getFirstDependentOpInRange(srcLoop, dstLoop, srcMemFlags);
+  Operation *lastToDst = getLastDependentOpInRange(srcLoop, dstLoop, dstMemFlags);
 
   // Block layout abstraction:
   //
@@ -1105,21 +1032,15 @@ static Operation *getFusedLoopNestInsertionPoint(
   //   dstLoop
   //
   // Legal insertion range lies strictly inside: (lastToDst, firstFromSrc).
-  if (firstFromSrc) {
-    if (lastToDst &&
-        (firstFromSrc == lastToDst ||
-         firstFromSrc->isBeforeInBlock(lastToDst))) {
-      // There is no position that simultaneously respects both dependence
-      // directions.
-      return nullptr;
-    }
-    // Choose the valid insertion point that appears closest to dstLoop.
-    return firstFromSrc;
+  if (firstFromSrc && lastToDst && firstFromSrc->isBeforeInBlock(lastToDst)) {
+    // There is no position that simultaneously respects both dependence
+    // directions.
+    return false;
   }
 
   // If there is no dependence from srcLoop to any operation in (srcLoop, dstLoop),
   // inserting at dstLoop is always safe.
-  return dstLoop;
+  return true;
 }
 
 // Helper function to check if an operation is still valid (not removed or
@@ -1143,140 +1064,98 @@ static bool isOperationValid(Operation *candidate) {
   return true;
 }
 
-// Collects all load and store operations reachable from a single dependency
-// graph node. The 'values' map and 'loadAndStoreOps' vector are populated with
-// the encountered accesses.
-static void collectLoadAndStoreOpsFromNode(
-    Node *n, DenseMap<Value, bool> &values,
-    SmallVector<Operation *, 4> &loadAndStoreOps) {
-
-  if (!n || !n->op) {
-    // Node is null or its root operation has already been removed by fusion.
-    return;
-  }
-
-  // Record load operations attached to this node.
-  for (Operation *loadOp : n->loads) {
-    if (!isOperationValid(loadOp)) {
-      continue;
-    }
-    if (auto read = dyn_cast<affine::AffineReadOpInterface>(loadOp)) {
-      Value memref = read.getMemRef();
-      values.insert({memref, /*isStore*/false});
-      loadAndStoreOps.push_back(loadOp);
-    }
-  }
-
-  // Record store operations attached to this node.
-  for (Operation *storeOp : n->stores) {
-    if (!isOperationValid(storeOp)) {
-      continue;
-    }
-    if (auto write = dyn_cast<affine::AffineWriteOpInterface>(storeOp)) {
-      Value memref = write.getMemRef();
-      values.insert({memref, /*isStore*/true});
-      loadAndStoreOps.push_back(storeOp);
+// Collects affine load/store operations from a list of ops into 'memFlags' and
+// 'loadAndStoreOps'. Skips invalid ops and non-affine accesses.
+static void collectLoadAndStoreOpsFromOps(llvm::ArrayRef<Operation *> ops, DenseMap<Value, bool> &memFlags,
+                                          SmallVector<Operation *, 4> &loadAndStoreOps) {
+  for (Operation *op : ops) {
+    if (!isOperationValid(op)) continue;
+    if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
+      memFlags.insert({read.getMemRef(), false});
+      loadAndStoreOps.push_back(op);
+    } else if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+      memFlags.insert({write.getMemRef(), true});
+      loadAndStoreOps.push_back(op);
     }
   }
 }
 
-void FusionCodeGenHelper::buildStrategyOpsA(
-    const affine::FusionStrategy &strategy,
-    llvm::ArrayRef<Operation *> allOpsA,
-    llvm::SmallVector<Operation *, 4> &strategyOpsA) {
+// Collects affine load/store operations from a loop that access any of 'memrefs'
+// into 'memFlags' and 'loadAndStoreOps'. Skips invalid ops and non-affine accesses.
+static void collectLoadAndStoreOpsFromOps(llvm::ArrayRef<Value> memrefs, affine::AffineForOp loopOp,
+                                          DenseMap<Value, bool> &memFlags,
+                                          SmallVector<Operation *, 4> &loadAndStoreOps) {
+  llvm::DenseSet<Value> memrefSet(memrefs.begin(), memrefs.end());
+  if (!loopOp) return;
+  loopOp->walk([&](Operation *op) {
+    if (!isOperationValid(op)) return;
+    if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
+      if (memrefSet.contains(read.getMemRef())) {
+        memFlags.insert({read.getMemRef(), false});
+        loadAndStoreOps.push_back(op);
+      }
+    } else if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+      if (memrefSet.contains(write.getMemRef())) {
+        memFlags.insert({write.getMemRef(), true});
+        loadAndStoreOps.push_back(op);
+      }
+    }
+  });
+}
 
+void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> allOpsA,
+                                            llvm::SmallVector<Operation *, 4> &strategyOpsA) {
   strategyOpsA.clear();
 
   switch (strategy.getStrategy()) {
-  case affine::FusionStrategy::Generic: {
-    strategyOpsA.append(allOpsA.begin(), allOpsA.end());
-    break;
-  }
-  case affine::FusionStrategy::ProducerConsumer: {
-    for (Operation *op : allOpsA) {
-      if (isa<affine::AffineWriteOpInterface>(op)) {
-        strategyOpsA.push_back(op);
+    case affine::FusionStrategy::Generic: {
+      strategyOpsA.append(allOpsA.begin(), allOpsA.end());
+      break;
+    }
+    case affine::FusionStrategy::ProducerConsumer: {
+      for (Operation *op : allOpsA) {
+        if (isa<affine::AffineWriteOpInterface>(op)) {
+          strategyOpsA.push_back(op);
+        }
       }
+      break;
     }
-    break;
-  }
-  case affine::FusionStrategy::Sibling: {
-    Value siblingMem = strategy.getSiblingFusionMemRef();
-    for (Operation *op : allOpsA) {
-      auto load = dyn_cast<affine::AffineReadOpInterface>(op);
-      if (load && load.getMemRef() == siblingMem) {
-        strategyOpsA.push_back(op);
+    case affine::FusionStrategy::Sibling: {
+      Value siblingMem = strategy.getSiblingFusionMemRef();
+      for (Operation *op : allOpsA) {
+        auto load = dyn_cast<affine::AffineReadOpInterface>(op);
+        if (load && load.getMemRef() == siblingMem) {
+          strategyOpsA.push_back(op);
+        }
       }
-    }
-    break;
-  }
-  }
-}
-
-unsigned FusionCodeGenHelper::tryFusionDepths(
-    llvm::ArrayRef<Operation *> strategyOpsA,
-    llvm::ArrayRef<Operation *> loadAndStoreOpsB,
-    unsigned dstLoopDepth, unsigned numCommonLoops,
-    bool isSrcForOpBeforeDstForOp,
-    llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions,
-    const FusionPlan &plan,
-    const llvm::SmallVector<affine::AffineForOp, 4> &dstLoops) {
-
-  depthSliceUnions.clear();
-  depthSliceUnions.resize(dstLoopDepth);
-
-  for (unsigned depth = dstLoopDepth; depth >= 1; --depth) {
-    if (plan.loopTransform == LoopTransform::ReplicateIf &&
-        dstLoops[depth - 1]->hasAttr(kReductionLoopAttr)) {
-      continue;
-    }
-
-    auto &sliceState = depthSliceUnions[depth - 1];
-    affine::SliceComputationResult res = computeSliceUnionAKG(
-        strategyOpsA, loadAndStoreOpsB, depth, numCommonLoops,
-        isSrcForOpBeforeDstForOp, &sliceState);
-
-    if (res.value == affine::SliceComputationResult::Success) {
-      return depth;
+      break;
     }
   }
-
-  return 0;
 }
 
 unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
-    affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
-    unsigned dstLoopDepth, const affine::FusionStrategy &strategy,
-    llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions,
-    const FusionPlan &plan,
-    const llvm::SmallVector<affine::AffineForOp, 4> &dstLoops) {
-
-  bool srcBeforeDst = srcAffineForOp->isBeforeInBlock(dstAffineForOp);
-  affine::AffineForOp loopA =
-      srcBeforeDst ? srcAffineForOp : dstAffineForOp;
-  affine::AffineForOp loopB =
-      srcBeforeDst ? dstAffineForOp : srcAffineForOp;
-
-  const auto &sourceNodeIds =
-      srcBeforeDst ? plan.depInfo.sourceOps : plan.depInfo.targetOps;
-  const auto &targetNodeIds =
-      srcBeforeDst ? plan.depInfo.targetOps : plan.depInfo.sourceOps;
+  const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo, const affine::FusionStrategy &strategy,
+  llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions, const FusionPlan &plan, bool srcDstReversed) {
+  affine::AffineForOp srcAffineForOp = srcInfo.root;
+  affine::AffineForOp dstAffineForOp = dstInfo.root;
 
   DenseMap<Value, bool> srcMemFlags;
   SmallVector<Operation *, 4> srcAccesses;
-  for (unsigned nodeId : sourceNodeIds) {
-    Node *n = mdg.getNode(nodeId);
-    collectLoadAndStoreOpsFromNode(n, srcMemFlags, srcAccesses);
-  }
-
   DenseMap<Value, bool> dstMemFlags;
   SmallVector<Operation *, 4> dstAccesses;
-  for (unsigned nodeId : targetNodeIds) {
-    Node *n = mdg.getNode(nodeId);
-    collectLoadAndStoreOpsFromNode(n, dstMemFlags, dstAccesses);
+
+  if (!srcDstReversed) {
+    collectLoadAndStoreOpsFromOps(plan.depInfo.memrefs, srcAffineForOp, srcMemFlags, srcAccesses);
+    collectLoadAndStoreOpsFromOps(plan.depInfo.memrefs, dstAffineForOp, dstMemFlags, dstAccesses);
+  } else {
+    collectLoadAndStoreOpsFromOps(plan.depInfo.memrefs, dstAffineForOp, srcMemFlags, srcAccesses);
+    collectLoadAndStoreOpsFromOps(plan.depInfo.memrefs, srcAffineForOp, dstMemFlags, dstAccesses);
   }
 
-  if (!getFusedLoopNestInsertionPoint(loopA, loopB, srcMemFlags, dstMemFlags)) {
+  bool isSrcBeforeDst = srcAffineForOp->isBeforeInBlock(dstAffineForOp);
+  affine::AffineForOp loopA = isSrcBeforeDst ? srcAffineForOp : dstAffineForOp;
+  affine::AffineForOp loopB = isSrcBeforeDst ? dstAffineForOp : srcAffineForOp;
+  if (!hasValidFusionPoint(loopA, loopB, srcMemFlags, dstMemFlags)) {
     llvm::dbgs() << "Fusion would violate dependences in block\n";
     return 0;
   }
@@ -1284,18 +1163,32 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   SmallVector<Operation *, 4> strategyOpsA;
   buildStrategyOpsA(strategy, srcAccesses, strategyOpsA);
 
-  unsigned commonLoops =
-      affine::getNumCommonSurroundingLoops(*srcAffineForOp, *dstAffineForOp);
+  // Use depth of insertion target (second param = dstAffineForOp).
+  unsigned loopDepth = dstInfo.loopDepth;
+  depthSliceUnions.clear();
+  depthSliceUnions.resize(loopDepth);
+  unsigned maxDepth = 0;
+  for (unsigned depth = loopDepth; depth >= 1; --depth) {
+    if (strategy.getStrategy() == affine::FusionStrategy::ProducerConsumer) {
+      if (plan.depInfo.loopDepth < depth) {
+        continue;
+      }
+    }
 
-  unsigned maxDepth = tryFusionDepths(
-      strategyOpsA, dstAccesses, dstLoopDepth, commonLoops, srcBeforeDst,
-      depthSliceUnions, plan, dstLoops);
+    auto &sliceState = depthSliceUnions[depth - 1];
+    affine::SliceComputationResult res =
+      computeSliceUnionAKG(strategyOpsA, dstAccesses, depth, 0, isSrcBeforeDst, &sliceState);
 
-  if (maxDepth > 0) {
-    adjustSliceBounds(strategyOpsA, dstAccesses, maxDepth, commonLoops,
-                      srcBeforeDst,
-                      &depthSliceUnions[maxDepth - 1]);
+    if (res.value == affine::SliceComputationResult::Success) {
+      maxDepth = depth;
+      break;
+    }
   }
+
+  // if (maxDepth > 0) {
+  //   adjustSliceBounds(strategyOpsA, dstAccesses, maxDepth, numCommonLoops, isSrcBeforeDst,
+  //                     &depthSliceUnions[maxDepth - 1]);
+  // }
 
   return maxDepth;
 }
@@ -1422,12 +1315,16 @@ static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcLoops,
   cloneLoopBody(sourceLoop, targetLoop);
 }
 
-void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
-                                  affine::AffineForOp dstAffineForOp, SmallVector<affine::AffineForOp, 4> &srcLoops,
-                                  SmallVector<affine::AffineForOp, 4> &dstLoops) {
+void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, FusionLoopNestInfo &srcInfo,
+                                  FusionLoopNestInfo &dstInfo) {
+  auto &srcLoops = srcInfo.loops;
+  auto &dstLoops = dstInfo.loops;
+  affine::AffineForOp srcAffineForOp = srcInfo.root;
+  affine::AffineForOp dstAffineForOp = dstInfo.root;
+
   // Helper lambda to check if the outermost loops (up to depth) have matching bounds
-  auto checkLoopBoundsMatch = [](SmallVector<affine::AffineForOp, 4> &loops1,
-                                 SmallVector<affine::AffineForOp, 4> &loops2, unsigned depth) -> bool {
+  auto checkLoopBoundsMatch = [](const SmallVector<affine::AffineForOp, 4> &loops1,
+                                 const SmallVector<affine::AffineForOp, 4> &loops2, unsigned depth) -> bool {
     if (depth > loops1.size() || depth > loops2.size()) {
       return false;
     }
@@ -1486,45 +1383,65 @@ void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, affine::Affine
   }
 }
 
+// Returns indices into srcLoops for all loops that enclose the loop at
+// srcLoops[insertionLoopIndex] (from outermost to innermost).
+static SmallVector<unsigned, 4> getEnclosingLoopIndices(const SmallVector<affine::AffineForOp, 4> &srcLoops,
+                                                        unsigned insertionLoopIndex) {
+  SmallVector<unsigned, 4> indices;
+  Operation *op = srcLoops[insertionLoopIndex];
+  while (op) {
+    if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
+      for (unsigned i = 0; i < srcLoops.size(); ++i) {
+        if (srcLoops[i] == forOp) {
+          indices.push_back(i);
+          break;
+        }
+      }
+    }
+    op = op->getParentOp();
+  }
+  std::reverse(indices.begin(), indices.end());
+  return indices;
+}
+
 void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
                                   affine::AffineForOp dstAffineForOp, const FusionPlan &plan) {
-  // Collect loop nests upfront to avoid repeated calculations
-  SmallVector<affine::AffineForOp, 4> srcLoops;
-  collectLoopNest(srcAffineForOp, srcLoops);
-  SmallVector<affine::AffineForOp, 4> dstLoops;
-  collectLoopNest(dstAffineForOp, dstLoops);
+  FusionLoopNestInfo srcInfo, dstInfo;
+  srcInfo.collect(srcAffineForOp);
+  dstInfo.collect(dstAffineForOp);
 
-  if (plan.loopTransform == LoopTransform::Replicate) {
-    sinkOpsOutsideFusionDepth(srcLoops, srcLoops.size(), true);
-    srcLoops.clear();
-    collectLoopNest(srcAffineForOp, srcLoops);
-  }
-
-  unsigned dstLoopDepth = dstLoops.size();
-  // Check the feasibility of fusing src loop nest into dst loop nest
-  // at loop depths in range [1, dstLoopDepth].
   SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
   affine::FusionStrategy strategy(affine::FusionStrategy::ProducerConsumer);
-  unsigned maxLegalFusionDepth =
-    findMaxLegalFusionDepth(srcAffineForOp, dstAffineForOp, dstLoopDepth, strategy, depthSliceUnions, plan, dstLoops);
+
+  unsigned maxLegalFusionDepth = 0;
+  // If src is perfectly nested or both are non-perfectly neste, fuse src into dst.
+  if (srcInfo.isPerfect || !dstInfo.isPerfect) {
+    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
+  } else {
+    maxLegalFusionDepth = findMaxLegalFusionDepth(dstInfo, srcInfo, strategy, depthSliceUnions, plan, true);
+  }
 
   if (maxLegalFusionDepth == 0) {
-    // Pass precomputed loop nests to avoid recalculation in doIFuse
-    doIFuse(srcId, dstId, srcAffineForOp, dstAffineForOp, srcLoops, dstLoops);
+    // When fusing dst into src, try manual slice (e.g. insert at innermost
+    // loop that has enough enclosing depth) before falling back to doIFuse.
+    doIFuse(srcId, dstId, srcInfo, dstInfo);
     return;
   }
 
-  unsigned bestDstLoopDepth = maxLegalFusionDepth;
-  assert(bestDstLoopDepth > 0 && "Unexpected loop fusion depth");
-
-  affine::ComputationSliceState &bestSlice = depthSliceUnions[bestDstLoopDepth - 1];
+  unsigned bestDepth = maxLegalFusionDepth;
+  assert(bestDepth > 0 && "Unexpected loop fusion depth");
+  affine::ComputationSliceState &bestSlice = depthSliceUnions[bestDepth - 1];
   assert(!bestSlice.isEmpty() && "Missing slice union for depth");
 
-  // Normal fusion - src and dst have compatible depths
-  // fuseLoops merges src into dst, so we erase src
-  fuseLoops(srcAffineForOp, dstAffineForOp, bestSlice);
-
-  eraseLoopAndCleanupNode(srcId, dstId, srcAffineForOp);
+  if (srcInfo.isPerfect || !dstInfo.isPerfect) {
+    // Fuse src into dst: merge src into dst, then erase src.
+    fuseLoops(srcAffineForOp, dstAffineForOp, bestSlice);
+    eraseLoopAndCleanupNode(srcId, dstId, srcAffineForOp);
+  } else {
+    // Fuse dst into src: merge dst into src, then erase dst.
+    fuseLoops(dstAffineForOp, srcAffineForOp, bestSlice);
+    eraseLoopAndCleanupNode(dstId, srcId, dstAffineForOp);
+  }
 }
 
 void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
@@ -1548,30 +1465,24 @@ void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId, affine::Affine
     }
   }
 
-  // Collect loop nests upfront to avoid repeated calculations
-  SmallVector<affine::AffineForOp, 4> srcLoops;
-  collectLoopNest(srcAffineForOp, srcLoops);
-  SmallVector<affine::AffineForOp, 4> dstLoops;
-  collectLoopNest(dstAffineForOp, dstLoops);
+  FusionLoopNestInfo srcInfo, dstInfo;
+  srcInfo.collect(srcAffineForOp);
+  dstInfo.collect(dstAffineForOp);
 
-  unsigned dstLoopDepth = dstLoops.size();
   SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
   unsigned maxLegalFusionDepth = 0;
   if (memref) {
     affine::FusionStrategy strategy(memref);
-    maxLegalFusionDepth =
-      findMaxLegalFusionDepth(srcAffineForOp, dstAffineForOp, dstLoopDepth, strategy, depthSliceUnions, plan, dstLoops);
+    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
   } else {
     // No memref found, try generic strategy for structure-based fusion
     affine::FusionStrategy strategy(affine::FusionStrategy::Generic);
-    maxLegalFusionDepth =
-      findMaxLegalFusionDepth(srcAffineForOp, dstAffineForOp, dstLoopDepth, strategy, depthSliceUnions, plan, dstLoops);
+    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
   }
 
   // Skip if fusion is not feasible at any loop depths.
   if (maxLegalFusionDepth == 0) {
-    // Pass precomputed loop nests to avoid recalculation in doIFuse
-    doIFuse(srcId, dstId, srcAffineForOp, dstAffineForOp, srcLoops, dstLoops);
+    doIFuse(srcId, dstId, srcInfo, dstInfo);
     return;
   }
 
