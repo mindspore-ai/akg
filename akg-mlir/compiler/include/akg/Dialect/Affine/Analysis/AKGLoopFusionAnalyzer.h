@@ -47,6 +47,15 @@ struct PairHash {
   }
 };
 
+// Intersection Point Handling
+struct BackwardIntersectionResult {
+  unsigned closestIntersectionId;
+  unsigned minOldPathLen;
+  unsigned minNewPathLen;
+  std::unordered_map<unsigned, unsigned> oldReachable;
+  std::unordered_map<unsigned, unsigned> newReachable;
+};
+
 // Structure to store direct predecessor node ID and corresponding memref
 struct DirectPredecessor {
   DirectPredecessor(unsigned id, Value ref, unsigned depth = 0) : nodeId(id), memref(ref), loopDepth(depth) {}
@@ -60,7 +69,8 @@ struct FusionAnalyzer {
   FusionAnalyzer(MemRefDependenceGraphForFusion &depGraph, func::FuncOp funcOp) : depGraph(depGraph), funcOp(funcOp) {}
 
   void plan();
-  void applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup);
+  void applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup, unsigned targetNodeId,
+                    unsigned sourceNodeId);
   bool checkAndFixMultiOut(FusionPlan &fusePlan);
 
   // Debug and print
@@ -96,14 +106,14 @@ struct FusionAnalyzer {
   std::vector<unsigned> findLastNodesInPath(unsigned srcGroupId);
   bool connectLastNodesToTarget(unsigned srcGroupId, unsigned dstGroupId);
 
-  // Fusion Type and Order Determination
-  void setFusionType(FusionPlan &plan);
-  void inferLoopTransforms(FusionPlan &plan);
+  // Fusion Type and Order Determination (sets fusionType, depInfo, and loopTransform)
+  void setFusionPlanOptions(FusionPlan &plan);
   bool hasEdgeInFusionPlans(unsigned depGroupId, unsigned fromGroupId);
   std::pair<GroupPtr, GroupPtr> determineFusionOrder(const GroupPtr oldGroup, const GroupPtr newGroup);
 
-  // Intersection Point Handling
-  GroupPtr handleBackwardIntersectionPoints(const GroupPtr oldGroup, const GroupPtr newGroup);
+  bool findBackwardIntersection(const GroupPtr oldGroup, const GroupPtr newGroup, BackwardIntersectionResult &result);
+  GroupPtr handleBackwardIntersectionPoints(const GroupPtr oldGroup, const GroupPtr newGroup,
+                                            const BackwardIntersectionResult &intersection);
   void redirectFusionPlanToTarget(unsigned intersectionId, const std::unordered_map<unsigned, unsigned> &reachable,
                                   unsigned pathLen, GroupPtr targetGroup);
   void setupDirectFusionPlan(FusionPlan &fusePlan, FusionPlan &oldPlan, const GroupPtr srcGroup,
