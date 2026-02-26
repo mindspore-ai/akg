@@ -15,6 +15,7 @@
  */
 
 #include <algorithm>
+#include <cstdint>
 
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 
@@ -120,5 +121,83 @@ mlir::FailureOr<mlir::Type> ReshapeOp::inferSymbolicShapes(mlir::OpBuilder &buil
     return SymbolAttrUtils::withSymbolicAttr(outType, builder, outExprs);
   }
 }
+
+mlir::Type inferElementwiseSymbolicType(mlir::OpBuilder &builder, mlir::Type baseType, mlir::Value lhs,
+                                        mlir::Value rhs) {
+  auto rankedResult = baseType.dyn_cast<mlir::RankedTensorType>();
+  if (!rankedResult) return baseType;
+
+  auto maybeLhsExprs = SymbolAttrUtils::getSymbolicShapeExprs(lhs.getType());
+  auto maybeRhsExprs = SymbolAttrUtils::getSymbolicShapeExprs(rhs.getType());
+  if (mlir::failed(maybeLhsExprs) || mlir::failed(maybeRhsExprs)) {
+    return baseType;
+  }
+
+  auto lhsExprs = *maybeLhsExprs;
+  auto rhsExprs = *maybeRhsExprs;
+  size_t lhsRank = lhsExprs.size();
+  size_t rhsRank = rhsExprs.size();
+  size_t maxRank = std::max(lhsRank, rhsRank);
+
+  llvm::SmallVector<SymbolAttrUtils::SymExpr> resultExprs;
+  resultExprs.reserve(maxRank);
+  mfusion::SymExprBuilder symBuilder;
+  for (size_t i = 0; i < maxRank; ++i) {
+    int64_t lhsIdx = static_cast<int64_t>(lhsRank) - 1 - static_cast<int64_t>(i);
+    int64_t rhsIdx = static_cast<int64_t>(rhsRank) - 1 - static_cast<int64_t>(i);
+
+    if (lhsIdx >= 0 && rhsIdx < 0) {
+      resultExprs.push_back(lhsExprs[lhsIdx]);
+      continue;
+    }
+    if (lhsIdx < 0 && rhsIdx >= 0) {
+      resultExprs.push_back(rhsExprs[rhsIdx]);
+      continue;
+    }
+
+    SymbolAttrUtils::SymExpr lhsDim = lhsExprs[lhsIdx];
+    SymbolAttrUtils::SymExpr rhsDim = rhsExprs[rhsIdx];
+    bool lhsIsOne = (lhsDim->__str__() == "1");
+    bool rhsIsOne = (rhsDim->__str__() == "1");
+    if (lhsIsOne) {
+      resultExprs.push_back(rhsDim);
+    } else if (rhsIsOne) {
+      resultExprs.push_back(lhsDim);
+    } else {
+      resultExprs.push_back(symBuilder.makeMax(lhsDim, rhsDim));
+    }
+  }
+  std::reverse(resultExprs.begin(), resultExprs.end());
+  auto combinedAttr = SymbolAttrUtils::createSymbolicShapeAttr(builder, resultExprs);
+  if (!combinedAttr) return baseType;
+
+  // Return new type with inferred symbolic shape
+  return SymbolAttrUtils::withSymbolicAttr(rankedResult, combinedAttr);
+}
+
+// Macro to implement inferSymbolicShapes for broadcastable binary ops.
+#define IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(OpName)                                                         \
+  mlir::FailureOr<mlir::Type> OpName::inferSymbolicShapes(mlir::OpBuilder &builder, const mlir::OperationState &state, \
+                                                          mlir::Type resultType) {                                     \
+    if (state.operands.size() != 2) return mlir::failure();                                                            \
+    return inferElementwiseSymbolicType(builder, resultType, state.operands[0], state.operands[1]);                    \
+  }
+
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(AddOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(DivOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(EqOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(GeOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(GtOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(LeOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(LogicalAndOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(LogicalOrOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(LtOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(MaximumOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(MinimumOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(MulOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(NeOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(PowOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(RealDivOp)
+IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(SubOp)
 
 }  // namespace mlir::mfuse

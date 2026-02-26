@@ -42,6 +42,11 @@ SymExprBuilder::SymExpr SymExprBuilder::makeDiv(const SymExpr &lhs, const SymExp
   return SymEngine::div(lhs, rhs);
 }
 
+SymExprBuilder::SymExpr SymExprBuilder::makeMax(const SymExpr &lhs, const SymExpr &rhs) const {
+  SymEngine::vec_basic args = {lhs, rhs};
+  return SymEngine::max(args);
+}
+
 SymExprBuilder::SymExpr SymExprBuilder::makeCeil(const SymExpr &expr) const { return SymEngine::ceiling(expr); }
 
 llvm::SmallVector<SymExprBuilder::SymExpr> SymExprBuilder::buildSymExprsFromStaticShape(

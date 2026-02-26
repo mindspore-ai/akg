@@ -18,7 +18,22 @@
 #define MFUSE_DIALECT_MFUSE_META_OPS_TD
 
 include "mfusion/Dialect/Mfuse/MfuseTypes.td"
+include "mfusion/Dialect/Mfuse/MfuseInterfaces.td"
 include "mlir/IR/BuiltinAttributes.td"
+
+// This is the base class for binary element-wise ops that support automatic broadcasting.
+// It provides a custom builder that automatically infers the symbolic shape during op construction,
+// ensuring that each tensor operand is associated with a symbolic shape.
+class Mfuse_BroadcastableBinaryOp<string mnemonic, list<Trait> traits = []>
+    : Mfuse_Op<mnemonic, !listconcat([DeclareOpInterfaceMethods<Mfuse_InferSymbolicShapeInterface>], traits)> {
+  string autoClassName = !subst("Mfuse_", "", NAME);
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType, "::mlir::Value":$lhs, "::mlir::Value":$rhs),
+      "::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build($_builder, $_state, resultType, {lhs, rhs}, {});"
+    >
+  ];
+}
 
 //===----------------------------------------------------------------------===//
 // MFUSE Meta Operations
@@ -28,7 +43,11 @@ include "mlir/IR/BuiltinAttributes.td"
 // NOTE: All operations in this file are sorted alphabetically by their class name.
 //===----------------------------------------------------------------------===//
 
-def Mfuse_AbsOp : Mfuse_Op<"abs", [Pure]> {
+def Mfuse_AbsOp : Mfuse_Op<"abs", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "Element-wise absolute value.";
   let description = [{
     Computes the absolute value of each element in the input tensor.
@@ -45,7 +64,7 @@ def Mfuse_AbsOp : Mfuse_Op<"abs", [Pure]> {
   }];
 }
 
-def Mfuse_AddOp : Mfuse_Op<"add", [Pure, Commutative]> {
+def Mfuse_AddOp : Mfuse_BroadcastableBinaryOp<"add", [Pure, Commutative, SameOperandsAndResultElementType]> {
   let summary = "Element-wise addition of two tensors.";
   let description = [{
     Computes element-wise sum of two tensors: result = x + y.
@@ -112,7 +131,7 @@ def Mfuse_BroadcastToOp : Mfuse_Op<"broadcast_to", [Pure]> {
   }];
 }
 
-def Mfuse_CastOp : Mfuse_Op<"cast", [Pure]> {
+def Mfuse_CastOp : Mfuse_Op<"cast", [Pure, SameOperandsAndResultShape]> {
   let summary = "Cast tensor to a specified data type.";
   let description = [{
     Casts the input tensor to the specified data type.
@@ -130,7 +149,11 @@ def Mfuse_CastOp : Mfuse_Op<"cast", [Pure]> {
   }];
 }
 
-def Mfuse_CeilOp : Mfuse_Op<"ceil", [Pure]> {
+def Mfuse_CeilOp : Mfuse_Op<"ceil", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "Element-wise ceiling (round up) operation.";
   let description = [{
     Computes the ceiling of each element in the input tensor.
@@ -187,7 +210,7 @@ def Mfuse_Conv2DWithBiasOp : Mfuse_Op<"conv2d_with_bias", [Pure]> {
   }];
 }
 
-def Mfuse_DivOp : Mfuse_Op<"div", [Pure]> {
+def Mfuse_DivOp : Mfuse_BroadcastableBinaryOp<"div", [Pure, SameOperandsAndResultElementType]> {
   let summary = "Element-wise division of two tensors.";
   let description = [{
     Computes element-wise division of two tensors: result = self / other.
@@ -209,7 +232,7 @@ def Mfuse_DivOp : Mfuse_Op<"div", [Pure]> {
   }];
 }
 
-def Mfuse_EqOp : Mfuse_Op<"eq", [Pure]> {
+def Mfuse_EqOp : Mfuse_BroadcastableBinaryOp<"eq", [Pure, SameOperandsElementType]> {
   let summary = "Element-wise equality comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is equal to the element in other.
@@ -228,7 +251,11 @@ def Mfuse_EqOp : Mfuse_Op<"eq", [Pure]> {
   }];
 }
 
-def Mfuse_ExpOp : Mfuse_Op<"exp", [Pure]> {
+def Mfuse_ExpOp : Mfuse_Op<"exp", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "The exp operation";
   let description = [{
     Operation for exponential computation.
@@ -246,7 +273,11 @@ def Mfuse_ExpOp : Mfuse_Op<"exp", [Pure]> {
   }];
 }
 
-def Mfuse_FloorOp : Mfuse_Op<"floor", [Pure]> {
+def Mfuse_FloorOp : Mfuse_Op<"floor", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "Element-wise floor (round down) operation.";
   let description = [{
     Computes the floor of each element in the input tensor.
@@ -264,7 +295,7 @@ def Mfuse_FloorOp : Mfuse_Op<"floor", [Pure]> {
   }];
 }
 
-def Mfuse_GeOp : Mfuse_Op<"ge", [Pure]> {
+def Mfuse_GeOp : Mfuse_BroadcastableBinaryOp<"ge", [Pure, SameOperandsElementType]> {
   let summary = "Element-wise greater-than-or-equal comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is greater than or equal to the element in other.
@@ -315,7 +346,7 @@ def Mfuse_GroupedMatmulOp : Mfuse_Op<"grouped_matmul", [Pure]> {
   }];
 }
 
-def Mfuse_GtOp : Mfuse_Op<"gt", [Pure]> {
+def Mfuse_GtOp : Mfuse_BroadcastableBinaryOp<"gt", [Pure, SameOperandsElementType]> {
   let summary = "Element-wise greater-than comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is greater than the element in other.
@@ -352,7 +383,7 @@ def Mfuse_IsFiniteOp : Mfuse_Op<"is_finite", [Pure]> {
   }];
 }
 
-def Mfuse_LeOp : Mfuse_Op<"le", [Pure]> {
+def Mfuse_LeOp : Mfuse_BroadcastableBinaryOp<"le", [Pure, SameOperandsElementType]> {
   let summary = "Element-wise less-than-or-equal comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is less than or equal to the element in other.
@@ -371,7 +402,11 @@ def Mfuse_LeOp : Mfuse_Op<"le", [Pure]> {
   }];
 }
 
-def Mfuse_LogOp : Mfuse_Op<"log", [Pure]> {
+def Mfuse_LogOp : Mfuse_Op<"log", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "Element-wise natural logarithm operation.";
   let description = [{
     Computes the natural logarithm (base-e) of each element in the input tensor.
@@ -389,7 +424,7 @@ def Mfuse_LogOp : Mfuse_Op<"log", [Pure]> {
   }];
 }
 
-def Mfuse_LogicalAndOp : Mfuse_Op<"logical_and", [Pure, Commutative]> {
+def Mfuse_LogicalAndOp : Mfuse_BroadcastableBinaryOp<"logical_and", [Pure, Commutative, SameOperandsElementType]> {
   let summary = "Element-wise logical AND operation.";
   let description = [{
     Computes the element-wise logical AND of two tensors.
@@ -408,7 +443,11 @@ def Mfuse_LogicalAndOp : Mfuse_Op<"logical_and", [Pure, Commutative]> {
   }];
 }
 
-def Mfuse_LogicalNotOp : Mfuse_Op<"logical_not", [Pure]> {
+def Mfuse_LogicalNotOp : Mfuse_Op<"logical_not", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "Element-wise logical NOT operation.";
   let description = [{
     Computes the element-wise logical NOT of a tensor.
@@ -426,7 +465,7 @@ def Mfuse_LogicalNotOp : Mfuse_Op<"logical_not", [Pure]> {
   }];
 }
 
-def Mfuse_LogicalOrOp : Mfuse_Op<"logical_or", [Pure, Commutative]> {
+def Mfuse_LogicalOrOp : Mfuse_BroadcastableBinaryOp<"logical_or", [Pure, Commutative, SameOperandsElementType]> {
   let summary = "Element-wise logical OR operation.";
   let description = [{
     Computes the element-wise logical OR of two tensors.
@@ -445,7 +484,7 @@ def Mfuse_LogicalOrOp : Mfuse_Op<"logical_or", [Pure, Commutative]> {
   }];
 }
 
-def Mfuse_LtOp : Mfuse_Op<"lt", [Pure]> {
+def Mfuse_LtOp : Mfuse_BroadcastableBinaryOp<"lt", [Pure, SameOperandsElementType]> {
   let summary = "Element-wise less-than comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is less than the element in other.
@@ -508,7 +547,7 @@ def Mfuse_MatmulWithBiasOp : Mfuse_Op<"matmul_with_bias", [Pure]> {
   }];
 }
 
-def Mfuse_MaximumOp : Mfuse_Op<"maximum", [Pure, Commutative]> {
+def Mfuse_MaximumOp : Mfuse_BroadcastableBinaryOp<"maximum", [Pure, Commutative, SameOperandsAndResultElementType]> {
   let summary = "Element-wise maximum of two tensors.";
   let description = [{
     Computes the element-wise maximum of two tensors.
@@ -527,7 +566,7 @@ def Mfuse_MaximumOp : Mfuse_Op<"maximum", [Pure, Commutative]> {
   }];
 }
 
-def Mfuse_MinimumOp : Mfuse_Op<"minimum", [Pure, Commutative]> {
+def Mfuse_MinimumOp : Mfuse_BroadcastableBinaryOp<"minimum", [Pure, Commutative, SameOperandsAndResultElementType]> {
   let summary = "Element-wise minimum of two tensors.";
   let description = [{
     Computes the element-wise minimum of two tensors.
@@ -546,7 +585,7 @@ def Mfuse_MinimumOp : Mfuse_Op<"minimum", [Pure, Commutative]> {
   }];
 }
 
-def Mfuse_MulOp : Mfuse_Op<"mul", [Pure, Commutative]> {
+def Mfuse_MulOp : Mfuse_BroadcastableBinaryOp<"mul", [Pure, Commutative]> {
   let summary = "Element-wise multiplication of two tensors.";
   let description = [{
     Computes element-wise product of two tensors: result = lhs * rhs.
@@ -565,7 +604,7 @@ def Mfuse_MulOp : Mfuse_Op<"mul", [Pure, Commutative]> {
   }];
 }
 
-def Mfuse_NeOp : Mfuse_Op<"ne", [Pure]> {
+def Mfuse_NeOp : Mfuse_BroadcastableBinaryOp<"ne", [Pure, SameOperandsElementType]> {
   let summary = "Element-wise not-equal comparison of two tensors.";
   let description = [{
     Returns a boolean tensor where each element is true if the corresponding element in self is not equal to the element in other.
@@ -584,7 +623,11 @@ def Mfuse_NeOp : Mfuse_Op<"ne", [Pure]> {
   }];
 }
 
-def Mfuse_NegOp : Mfuse_Op<"neg", [Pure]> {
+def Mfuse_NegOp : Mfuse_Op<"neg", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "The neg operation";
   let description = [{
     Get the element-wise negation of the input tensor.
@@ -601,7 +644,7 @@ def Mfuse_NegOp : Mfuse_Op<"neg", [Pure]> {
   }];
 }
 
-def Mfuse_PermuteOp : Mfuse_Op<"permute", [Pure]> {
+def Mfuse_PermuteOp : Mfuse_Op<"permute", [Pure, SameOperandsAndResultElementType]> {
   let summary = "Tensor dimension permutation operation.";
   let description = [{
     Permutes the dimensions of a tensor according to the specified order.
@@ -620,7 +663,7 @@ def Mfuse_PermuteOp : Mfuse_Op<"permute", [Pure]> {
   }];
 }
 
-def Mfuse_PowOp : Mfuse_Op<"pow", [Pure]> {
+def Mfuse_PowOp : Mfuse_BroadcastableBinaryOp<"pow", [Pure, SameOperandsAndResultElementType]> {
   let summary = "Element-wise power operation.";
   let description = [{
     Raises each element of the base tensor to the power of the exponent.
@@ -639,7 +682,7 @@ def Mfuse_PowOp : Mfuse_Op<"pow", [Pure]> {
   }];
 }
 
-def Mfuse_RealDivOp : Mfuse_Op<"real_div", [Pure]> {
+def Mfuse_RealDivOp : Mfuse_BroadcastableBinaryOp<"real_div", [Pure, SameOperandsAndResultElementType]> {
   let summary = "Element-wise real division of two tensors.";
   let description = [{
     Computes element-wise real division of two tensors: result = x / y.
@@ -659,7 +702,11 @@ def Mfuse_RealDivOp : Mfuse_Op<"real_div", [Pure]> {
   }];
 }
 
-def Mfuse_ReciprocalOp : Mfuse_Op<"reciprocal", [Pure]> {
+def Mfuse_ReciprocalOp : Mfuse_Op<"reciprocal", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "The reciprocal operation";
   let description = [{
     Get the the reciprocal of input tensor.
@@ -733,7 +780,11 @@ def Mfuse_ReshapeOp : Mfuse_Op<"reshape", [
   }];
 }
 
-def Mfuse_RsqrtOp : Mfuse_Op<"rsqrt", [Pure]> {
+def Mfuse_RsqrtOp : Mfuse_Op<"rsqrt", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "Element-wise reciprocal square root operation.";
   let description = [{
     Computes the reciprocal of the square root of each element in the input tensor.
@@ -803,7 +854,11 @@ def Mfuse_SliceOp : Mfuse_Op<"slice", [Pure]> {
   }];
 }
 
-def Mfuse_SqrtOp : Mfuse_Op<"sqrt", [Pure]> {
+def Mfuse_SqrtOp : Mfuse_Op<"sqrt", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "Element-wise square root operation.";
   let description = [{
     Computes the square root of each element in the input tensor.
@@ -822,7 +877,7 @@ def Mfuse_SqrtOp : Mfuse_Op<"sqrt", [Pure]> {
   }];
 }
 
-def Mfuse_SubOp : Mfuse_Op<"sub", [Pure]> {
+def Mfuse_SubOp : Mfuse_BroadcastableBinaryOp<"sub", [Pure, SameOperandsAndResultElementType]> {
   let summary = "Element-wise subtraction of two tensors.";
   let description = [{
     Computes element-wise difference of two tensors: result = x - y.
@@ -841,7 +896,11 @@ def Mfuse_SubOp : Mfuse_Op<"sub", [Pure]> {
   }];
 }
 
-def Mfuse_TruncOp : Mfuse_Op<"trunc", [Pure]> {
+def Mfuse_TruncOp : Mfuse_Op<"trunc", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "Element-wise truncation (round toward zero) operation.";
   let description = [{
     Computes the truncation of each element in the input tensor by rounding toward zero.
