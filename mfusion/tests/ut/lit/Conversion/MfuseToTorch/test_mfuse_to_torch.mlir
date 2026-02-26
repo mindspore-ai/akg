@@ -63,7 +63,7 @@ func.func @test_reduce_sum(%arg0: tensor<2x2xf32>) -> tensor<2xf32> {
   // CHECK-DAG: %[[KEEP:.*]] = torch.constant.bool false
   // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 6
   // CHECK: torch.aten.sum.dim_IntList %{{.*}}, %[[DIMS]], %[[KEEP]], %[[DTYPE]]
-  %0 = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = false, dtype = f32} : (tensor<2x2xf32>) -> tensor<2xf32>
+  %0 = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = false} : (tensor<2x2xf32>) -> tensor<2xf32>
   return %0 : tensor<2xf32>
 }
 
@@ -74,7 +74,7 @@ func.func @test_reduce_sum_f32_to_f64(%arg0: tensor<2x2xf32>) -> tensor<2xf64> {
   // CHECK-DAG: %[[KEEP:.*]] = torch.constant.bool false
   // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 7
   // CHECK: torch.aten.sum.dim_IntList %{{.*}}, %[[DIMS]], %[[KEEP]], %[[DTYPE]]
-  %0 = mfuse.reduce_sum %arg0 {dimensions = [0], keepdim = false, dtype = f64} : (tensor<2x2xf32>) -> tensor<2xf64>
+  %0 = mfuse.reduce_sum %arg0 {dimensions = [0], keepdim = false} : (tensor<2x2xf32>) -> tensor<2xf64>
   return %0 : tensor<2xf64>
 }
 
@@ -85,7 +85,7 @@ func.func @test_reduce_sum_i32(%arg0: tensor<2x3xi32>) -> tensor<2xi32> {
   // CHECK-DAG: %[[KEEP:.*]] = torch.constant.bool false
   // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 3
   // CHECK: torch.aten.sum.dim_IntList %{{.*}}, %[[DIMS]], %[[KEEP]], %[[DTYPE]]
-  %0 = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = false, dtype = i32} : (tensor<2x3xi32>) -> tensor<2xi32>
+  %0 = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = false} : (tensor<2x3xi32>) -> tensor<2xi32>
   return %0 : tensor<2xi32>
 }
 
@@ -96,7 +96,7 @@ func.func @test_reduce_sum_keepdim(%arg0: tensor<2x2xf32>) -> tensor<2x1xf32> {
   // CHECK-DAG: %[[KEEP:.*]] = torch.constant.bool true
   // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 6
   // CHECK: torch.aten.sum.dim_IntList %{{.*}}, %[[DIMS]], %[[KEEP]], %[[DTYPE]]
-  %0 = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = true, dtype = f32} : (tensor<2x2xf32>) -> tensor<2x1xf32>
+  %0 = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = true} : (tensor<2x2xf32>) -> tensor<2x1xf32>
   return %0 : tensor<2x1xf32>
 }
 
@@ -108,7 +108,7 @@ func.func @test_reduce_sum_all_dims(%arg0: tensor<2x3xf32>) -> tensor<f32> {
   // CHECK-DAG: %[[KEEP:.*]] = torch.constant.bool false
   // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 6
   // CHECK: torch.aten.sum.dim_IntList %{{.*}}, %[[DIMS]], %[[KEEP]], %[[DTYPE]]
-  %0 = mfuse.reduce_sum %arg0 {dimensions = [0, 1], keepdim = false, dtype = f32} : (tensor<2x3xf32>) -> tensor<f32>
+  %0 = mfuse.reduce_sum %arg0 {dimensions = [0, 1], keepdim = false} : (tensor<2x3xf32>) -> tensor<f32>
   return %0 : tensor<f32>
 }
 
@@ -117,9 +117,9 @@ func.func @test_reduce_sum_dtype_none(%arg0: tensor<2x2xf32>) -> tensor<2xf32> {
   // CHECK-DAG: %[[DIM1:.*]] = torch.constant.int 1
   // CHECK-DAG: %[[DIMS:.*]] = torch.prim.ListConstruct %[[DIM1]]
   // CHECK-DAG: %[[KEEP:.*]] = torch.constant.bool false
-  // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.none
+  // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 6
   // CHECK: torch.aten.sum.dim_IntList %{{.*}}, %[[DIMS]], %[[KEEP]], %[[DTYPE]]
-  %0 = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = false, dtype = none} : (tensor<2x2xf32>) -> tensor<2xf32>
+  %0 = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = false} : (tensor<2x2xf32>) -> tensor<2xf32>
   return %0 : tensor<2xf32>
 }
 
@@ -127,7 +127,7 @@ func.func @test_reduce_sum_dtype_none(%arg0: tensor<2x2xf32>) -> tensor<2xf32> {
 func.func @test_cast(%arg0: tensor<2x2xf32>) -> tensor<2x2xf16> {
   // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 5
   // CHECK: torch.aten.to.dtype %{{.*}}, %[[DTYPE]]
-  %0 = mfuse.cast %arg0 {dtype = f16} : (tensor<2x2xf32>) -> tensor<2x2xf16>
+  %0 = mfuse.cast %arg0 : (tensor<2x2xf32>) -> tensor<2x2xf16>
   return %0 : tensor<2x2xf16>
 }
 
@@ -135,7 +135,7 @@ func.func @test_cast(%arg0: tensor<2x2xf32>) -> tensor<2x2xf16> {
 func.func @test_cast_i32_to_f64(%arg0: tensor<2x2xi32>) -> tensor<2x2xf64> {
   // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 7
   // CHECK: torch.aten.to.dtype %{{.*}}, %[[DTYPE]]
-  %0 = mfuse.cast %arg0 {dtype = f64} : (tensor<2x2xi32>) -> tensor<2x2xf64>
+  %0 = mfuse.cast %arg0 : (tensor<2x2xi32>) -> tensor<2x2xf64>
   return %0 : tensor<2x2xf64>
 }
 

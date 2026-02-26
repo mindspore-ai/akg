@@ -54,6 +54,62 @@ mlir::LogicalResult ReshapeOp::verify() {
   return mlir::success();
 }
 
+mlir::LogicalResult BroadcastToOp::verify() {
+  auto inType = mlir::dyn_cast<mlir::RankedTensorType>(getInput().getType());
+  auto outType = mlir::dyn_cast<mlir::RankedTensorType>(getOutput().getType());
+  if (!inType || !outType) {
+    return emitOpError("both input and output must be ranked tensors");
+  }
+
+  auto inShape = inType.getShape();
+  auto outShape = outType.getShape();
+  int64_t inRank = inType.getRank();
+  int64_t outRank = outType.getRank();
+
+  if (outRank < inRank) {
+    return emitOpError("output rank must be >= input rank for broadcast, got ") << outRank << " vs " << inRank;
+  }
+
+  // Check newly added leading dimensions.
+  int64_t leading = outRank - inRank;
+  for (int64_t i = 0; i < leading; ++i) {
+    int64_t dim = outShape[i];
+    if (dim == mlir::ShapedType::kDynamic) {
+      return emitOpError("newly added leading dimension at index ") << i << " must be static";
+    }
+    if (dim <= 0) {
+      return emitOpError("newly added leading dimension at index ") << i << " must be positive, got " << dim;
+    }
+  }
+
+  // Check aligned dimensions from the right.
+  for (int64_t i = 0; i < inRank; ++i) {
+    int64_t inIdx = inRank - 1 - i;
+    int64_t outIdx = outRank - 1 - i;
+    int64_t inDim = inShape[inIdx];
+    int64_t outDim = outShape[outIdx];
+
+    if (inDim == mlir::ShapedType::kDynamic) {
+      continue;
+    }
+    // If input dimension is static, require output dimension to be static and
+    // satisfy standard broadcasting constraints.
+    if (outDim == mlir::ShapedType::kDynamic) {
+      return emitOpError("output dimension at index ") << outIdx << " must be static when input dimension is static";
+    }
+    if (!(outDim == inDim || inDim == 1)) {
+      return emitOpError("invalid broadcast from input dimension ")
+             << inDim << " to output dimension " << outDim << " at index " << outIdx
+             << " (expected equal or broadcasting from 1)";
+    }
+    if (outDim <= 0) {
+      return emitOpError("output dimension at index ") << outIdx << " must be positive, got " << outDim;
+    }
+  }
+
+  return mlir::success();
+}
+
 mlir::FailureOr<mlir::Type> ReshapeOp::inferSymbolicShapes(mlir::OpBuilder &builder, const mlir::OperationState &state,
                                                            mlir::Type resultType) {
   if (state.operands.empty()) {

@@ -22,20 +22,19 @@ func.func @test_cluster_with_scalar_constant(%arg0: tensor<4x4xf32>) -> tensor<4
 // The constant is also included in the cluster as input
 // CHECK-LABEL: func @test_no_cluster_with_tensor_constant
 // CHECK-SAME: %arg0: tensor<4x4xf32>
-// CHECK: %[[CONST:.*]] = arith.constant dense<{{.*}}> : tensor<2x2xf32>
+// CHECK: %[[CONST:.*]] = arith.constant dense<{{.*}}> : tensor<1x4xf32>
 // CHECK: %[[FUSED:.*]] = mfuse.fused %[[CONST]], %arg0
 // CHECK-SAME: {fusion_type = "dvm"}
-// CHECK-SAME: : (tensor<2x2xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
-// CHECK: ^bb0(%[[ARG1:.*]]: tensor<2x2xf32>, %[[ARG2:.*]]: tensor<4x4xf32>):
+// CHECK-SAME: : (tensor<1x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: ^bb0(%[[ARG1:.*]]: tensor<1x4xf32>, %[[ARG2:.*]]: tensor<4x4xf32>):
 // CHECK: %[[BROADCAST:.*]] = mfuse.broadcast_to %[[ARG1]]
-// CHECK-SAME: : (tensor<2x2xf32>, tensor<2xi64>) -> tensor<4x4xf32>
+// CHECK-SAME: : (tensor<1x4xf32>) -> tensor<4x4xf32>
 // CHECK: %[[MUL:.*]] = mfuse.mul %[[ARG2]], %[[BROADCAST]]
 // CHECK: mfuse.yield %[[MUL]]
 // CHECK: return %[[FUSED]]
 func.func @test_no_cluster_with_tensor_constant(%arg0: tensor<4x4xf32>) -> tensor<4x4xf32> {
-  %0 = arith.constant dense<[[1.0, 2.0], [3.0, 4.0]]> : tensor<2x2xf32>
-  %shape = arith.constant dense<[4, 4]> : tensor<2xi64>
-  %1 = mfuse.broadcast_to %0, %shape : (tensor<2x2xf32>, tensor<2xi64>) -> tensor<4x4xf32>
+  %0 = arith.constant dense<[[1.0, 2.0, 3.0, 4.0]]> : tensor<1x4xf32>
+  %1 = mfuse.broadcast_to %0 : (tensor<1x4xf32>) -> tensor<4x4xf32>
   %2 = mfuse.mul %arg0, %1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
   return %2 : tensor<4x4xf32>
 }
