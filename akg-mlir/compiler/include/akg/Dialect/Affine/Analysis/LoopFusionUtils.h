@@ -17,10 +17,13 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_LOOPFUSIONUTILS_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_LOOPFUSIONUTILS_H_
 
+#include <climits>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "llvm/ADT/SmallVector.h"
+#include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 
@@ -30,10 +33,10 @@ namespace akg {
 enum LoopTransform { Merge, Replicate, ReplicateIf, Permute, StripMine, Collapse, BackTracking };
 
 struct DependenceInfo {
-  std::vector<unsigned> sourceOps;
-  std::vector<unsigned> targetOps;
+  llvm::SmallVector<Operation *, 4> sourceOps;
+  llvm::SmallVector<Operation *, 4> targetOps;
   std::vector<Value> memrefs;
-  unsigned loopDepth;
+  unsigned loopDepth = UINT_MAX;
 };
 
 struct Group {
@@ -69,6 +72,7 @@ struct FuseEdge {
 struct FusionPlan {
   FuseEdge fusedGroup{FuseEdge(0, 0)};
   FuseEdge fusedBand{FuseEdge(0, 0)};
+  FuseEdge fusedNode{FuseEdge(0, 0)};
   std::string fusionType{"H"};
   DependenceInfo depInfo;
   LoopTransform loopTransform{LoopTransform::Merge};

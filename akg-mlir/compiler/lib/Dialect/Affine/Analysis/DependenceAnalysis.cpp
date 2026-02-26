@@ -191,13 +191,10 @@ bool MemRefDependenceGraph::hasDependencePath(unsigned srcId, unsigned dstId) {
 //   }
 // }
 // ```
-bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned dstId, unsigned &loopDepth) {
+bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned dstId) {
   Operation *srcOp = getNode(srcId)->op;
   Operation *dstOp = getNode(dstId)->op;
   unsigned numCommonLoops = affine::getNumCommonSurroundingLoops(*srcOp, *dstOp);
-  SmallVector<affine::AffineForOp, 4> dstLoopIVs;
-  getAffineForIVs(*dstOp, &dstLoopIVs);
-  loopDepth = dstLoopIVs.size();
 
   if (useAKGAnalysis) {
     affine::AKGMemRefAccess srcAccess(srcOp);
@@ -208,7 +205,6 @@ bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned d
       affine::DependenceResult result =
         affine::checkMemrefAccessDependenceAKG(srcAccess, dstAccess, d, &dependenceConstraints, nullptr);
       if (result.value == affine::DependenceResult::HasDependence) {
-        loopDepth = std::min(loopDepth, d - 1);
         return true;
       }
     }
@@ -220,12 +216,78 @@ bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned d
       affine::DependenceResult result =
         affine::checkMemrefAccessDependence(srcAccess, dstAccess, d, &dependenceConstraints, nullptr);
       if (result.value == affine::DependenceResult::HasDependence) {
-        loopDepth = std::min(loopDepth, d - 1);
         return true;
       }
     }
   }
   return false;
+}
+
+unsigned MemRefDependenceGraph::computeMemrefLoopDepth(int dstId, Value memref) {
+  if (dstId < 0) {
+    return 0;
+  }
+  // Collect all load/store ops in dstId's for loop that access the given memref.
+  SmallVector<Operation *, 4> targetOps;
+  Node *node = getNode(static_cast<unsigned>(dstId));
+  for (Operation *loadOp : node->loads) {
+    if (cast<affine::AffineReadOpInterface>(loadOp).getMemRef() == memref) {
+      targetOps.push_back(loadOp);
+    }
+  }
+  for (Operation *storeOp : node->stores) {
+    if (cast<affine::AffineWriteOpInterface>(storeOp).getMemRef() == memref) {
+      targetOps.push_back(storeOp);
+    }
+  }
+
+  if (targetOps.empty()) {
+    return 0;
+  }
+
+  SmallVector<affine::AffineForOp, 4> surroundingLoops;
+  unsigned loopDepth = affine::getInnermostCommonLoopDepth(targetOps, &surroundingLoops);
+  unsigned effectiveDepth = UINT_MAX;
+  for (unsigned d = 0; d < loopDepth; ++d) {
+    Value iv = surroundingLoops[d].getInductionVar();
+    for (Operation *op : targetOps) {
+      bool referenced = false;
+      if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
+        referenced = llvm::is_contained(loadOp.getMapOperands(), iv);
+      } else if (auto storeOp = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+        referenced = llvm::is_contained(storeOp.getMapOperands(), iv);
+      }
+      if (referenced) {
+        effectiveDepth = d + 1;
+        break;
+      }
+    }
+  }
+
+  if (llvm::all_of(targetOps, llvm::IsaPred<affine::AffineReadOpInterface>)) {
+    return effectiveDepth;
+  }
+
+  // Check dependences on all pairs of ops in 'targetOps' and store the
+  // minimum loop depth at which a dependence is satisfied.
+  for (unsigned i = 0, e = targetOps.size(); i < e; ++i) {
+    Operation *srcOpInst = targetOps[i];
+    for (unsigned j = 0; j < e; ++j) {
+      Operation *dstOpInst = targetOps[j];
+      unsigned numCommonLoops = affine::getNumCommonSurroundingLoops(*srcOpInst, *dstOpInst);
+      for (unsigned d = 1; d <= numCommonLoops + 1; ++d) {
+        affine::MemRefAccess srcAcc(srcOpInst);
+        affine::MemRefAccess dstAcc(dstOpInst);
+        affine::DependenceResult result = affine::checkMemrefAccessDependence(srcAcc, dstAcc, d);
+        if (affine::hasDependence(result)) {
+          effectiveDepth = std::min(effectiveDepth, d - 1);
+          break;
+        }
+      }
+    }
+  }
+
+  return effectiveDepth;
 }
 
 /// Return all nodes which define SSA values used in node 'id'.
@@ -313,23 +375,45 @@ bool MemRefDependenceGraph::createEdges(const DenseMap<Value, SetVector<unsigned
   // Walk memref access lists and add graph edges between dependent nodes.
   for (auto &memrefAndList : memrefAccesses) {
     unsigned n = memrefAndList.second.size();
+
+    // Pre-collect for loop nodes from the access list. These nodes are skipped
+    // during edge creation but needed to resolve forLoopNodeId for
+    // computeMemrefLoopDepth.
+    SmallVector<std::pair<unsigned, Operation *>, 2> forLoopEntries;
+    for (unsigned k = 0; k < n; ++k) {
+      unsigned nodeId = memrefAndList.second[k];
+      Operation *op = getNode(nodeId)->op;
+      if (isa<affine::AffineForOp>(op)) {
+        forLoopEntries.emplace_back(nodeId, op);
+      }
+    }
+
     for (unsigned i = 0; i < n; ++i) {
       unsigned srcId = memrefAndList.second[i];
-      bool srcHasStore = getNode(srcId)->getStoreOpCount(memrefAndList.first) > 0;
-      bool srcIsFor = isa<affine::AffineForOp>(getNode(srcId)->op);
-      if (srcIsFor) {
+      if (isa<affine::AffineForOp>(getNode(srcId)->op)) {
         continue;
       }
+
+      bool srcHasStore = getNode(srcId)->getStoreOpCount(memrefAndList.first) > 0;
+
       for (unsigned j = i + 1; j < n; ++j) {
         unsigned dstId = memrefAndList.second[j];
-        bool dstHasStore = getNode(dstId)->getStoreOpCount(memrefAndList.first) > 0;
-        bool dstIsFor = isa<affine::AffineForOp>(getNode(dstId)->op);
-        if (dstIsFor) {
+        if (isa<affine::AffineForOp>(getNode(dstId)->op)) {
           continue;
         }
-        unsigned loopDepth = 0;
-        if ((srcHasStore || dstHasStore) && hasMemrefAccessDependence(srcId, dstId, loopDepth)) {
-          addEdge(srcId, dstId, memrefAndList.first, loopDepth);
+
+        bool dstHasStore = getNode(dstId)->getStoreOpCount(memrefAndList.first) > 0;
+        if ((srcHasStore || dstHasStore) && hasMemrefAccessDependence(srcId, dstId)) {
+          int forLoopNodeId = -1;
+          Operation *dstOp = getNode(dstId)->op;
+          for (auto &[fNodeId, fOp] : forLoopEntries) {
+            if (fOp->isAncestor(dstOp)) {
+              forLoopNodeId = static_cast<int>(fNodeId);
+              break;
+            }
+          }
+          unsigned edgeLoopDepth = computeMemrefLoopDepth(forLoopNodeId, memrefAndList.first);
+          addEdge(srcId, dstId, memrefAndList.first, edgeLoopDepth);
         }
       }
     }
