@@ -67,7 +67,6 @@ const std::unordered_map<std::string, std::unordered_set<size_t>> &getConstInput
     {"mfuse.reduce_sum", {1}},
     {"mfuse.permute", {1}},
     {"mfuse.tile", {1}},
-    {"mfuse.broadcast_to", {1}},
     {"mfuse.reduce_mean", {1}},
     {"mfuse.slice", {1, 2}},
     {"mfuse.strided_slice", {1, 2, 3}},
