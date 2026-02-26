@@ -183,8 +183,8 @@ class LocalWorker(WorkerInterface):
                 
                 # 4. Execute profiling based on backend/dsl
                 try:
-                    if "triton_cuda" in dsl or "triton_ascend" in dsl or backend == "cpu":
-                        # Triton/CPU: run profile scripts directly (in sync context)
+                    if "pypto" in dsl or "triton_cuda" in dsl or "triton_ascend" in dsl or backend == "cpu":
+                        # PyPTO/Triton/CPU: run profile scripts directly (in sync context)
                         loop = asyncio.get_running_loop()
                         base_time, gen_time = await loop.run_in_executor(
                             None,

@@ -883,6 +883,11 @@ if __name__ == "__main__":
             
             dsl_imports = dsl_adapter.get_import_statements(self.framework)
             logger.debug(f"[{self.op_name}] DSL imports生成成功 (长度: {len(dsl_imports)})")
+            if self.dsl == "pypto" and hasattr(dsl_adapter, "get_runtime_env_override_code"):
+                dsl_imports += dsl_adapter.get_runtime_env_override_code(
+                    pypto_run_mode=self.config.get("pypto_run_mode"),
+                    pypto_runtime_debug_mode=0,
+                )
             
             dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
             logger.debug(f"[{self.op_name}] DSL impl import生成成功 (长度: {len(dsl_impl_import)})")
@@ -1131,6 +1136,11 @@ if __name__ == "__main__":
             framework_imports = framework_adapter.get_import_statements()
             framework_model_import = framework_adapter.get_framework_import(self.op_name, is_dynamic_shape)
             dsl_imports = dsl_adapter.get_import_statements(self.framework)
+            if self.dsl == "pypto" and hasattr(dsl_adapter, "get_runtime_env_override_code"):
+                dsl_imports += dsl_adapter.get_runtime_env_override_code(
+                    pypto_run_mode=self.config.get("pypto_run_mode"),
+                    pypto_runtime_debug_mode=1,
+                )
             dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
             special_setup_code = dsl_adapter.get_special_setup_code()
             

@@ -39,6 +39,7 @@ The framework provides a complete agent infrastructure: ReAct Agent base classes
 The current production scenario is **AI kernel code generation**: leveraging LLM planning and multi-agent collaboration to automate multi-backend, multi-DSL high-performance kernel generation and optimization. Future extensions will cover kernel migration, performance tuning, code refactoring, and more AI Infra related scenarios.
 
 ## 🗓️ 2. Changelog
+- 2026-02-26: Supported PyPTO backend code generation.
 - 2026-02-15: Documentation reorganized. Legacy docs archived to `docs/v1/`, new docs consolidated under `docs/v2/`. 
 - 2026-02-10: Core framework refactored (v2). Decoupled general-purpose Agent capabilities from kernel-specific logic to build a reusable multi-agent collaboration framework. See [Architecture](./docs/v2/Architecture.md), [Agent System](./docs/v2/AgentSystem.md), [Skill System](./docs/v2/SkillSystem.md), [Workflow](./docs/v2/Workflow.md), [Trace System](./docs/v2/Trace.md), [Configuration](./docs/v2/Configuration.md).
 - 2025-12-01: Introduced LangGraph for task orchestration. New `LangGraphTask` replaces original `Task Orchestration` scheme. See [Workflow Documentation](./docs/v2/Workflow.md).
