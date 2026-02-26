@@ -52,7 +52,7 @@ def InferSymbolicShapes : Pass<"infer-symbolic-shapes", "func::FuncOp"> {
   let constructor = "mlir::createInferSymbolicShapesPass()";
 }
 
-def RemoveSymbolic : Pass<"remove-symbolic"> {
+def RemoveSymbolic : Pass<"remove-symbolic", "mlir::ModuleOp"> {
   let summary = "Remove symbolic attribute from Tensor Type";
   let constructor = "mlir::createSymbolicRemovalPass()";
 }
