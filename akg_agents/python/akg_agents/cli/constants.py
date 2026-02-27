@@ -33,7 +33,7 @@ def make_gradient_logo():
         return Text.from_ansi(logo_path.read_text(encoding="utf-8"))
     except Exception as e:
         logger.error(f"Failed to load logo: {e}", exc_info=True)
-        return Text("AKG CLI (Logo Missing)", style="bold red")
+        return Text("[M]ˢ CLI (Logo Missing)", style="bold red")
 
 
 # ===== 节点名称 =====
