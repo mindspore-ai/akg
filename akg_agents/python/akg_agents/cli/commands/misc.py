@@ -40,7 +40,7 @@ def register_misc_commands(
         akg_console = AKGConsole(console)
         print_logo_once(akg_console)
 
-        table = Table(title="AKG CLI 功能列表", show_header=True)
+        table = Table(title="MindSpore AKG CLI 功能列表", show_header=True)
         table.add_column("子命令", style=DisplayStyle.CYAN)
         table.add_column("说明", style=DisplayStyle.YELLOW)
 

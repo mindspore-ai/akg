@@ -97,10 +97,10 @@ const rawS = generate("S");
 const sRows = parseAnsi(rawS);
 console.log(`  S: ${sRows.length} rows, ${sRows[0]?.length} cols`);
 
-console.log("Generating CLI...");
-const rawCLI = generate("CLI");
+console.log("Generating AKG...");
+const rawCLI = generate("AKG");
 const cliRows = parseAnsi(rawCLI);
-console.log(`  CLI: ${cliRows.length} rows, ${cliRows[0]?.length} cols`);
+console.log(`  AKG: ${cliRows.length} rows, ${cliRows[0]?.length} cols`);
 
 const NUM_ROWS = 6;
 
