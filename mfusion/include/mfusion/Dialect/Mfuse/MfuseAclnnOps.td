@@ -287,7 +287,11 @@ def Mfuse_AclnnSwiGluOp : Mfuse_Op<"aclnn.swi_glu", [Pure]> {
   }];
 }
 
-def Mfuse_AclnnTanhOp : Mfuse_Op<"aclnn.tanh", [Pure]> {
+def Mfuse_AclnnTanhOp : Mfuse_Op<"aclnn.tanh", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
   let summary = "The aclnnTanh operation";
   let description = [{
     Compute hyperbolic tangent of input element-wise.
