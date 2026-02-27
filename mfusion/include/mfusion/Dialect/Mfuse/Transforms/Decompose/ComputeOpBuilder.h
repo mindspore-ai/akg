@@ -42,82 +42,60 @@ class ComputeOpBuilder {
   ComputeOpBuilder(PatternRewriter &rewriter, Location loc) : rewriter(rewriter), loc(loc) {}
 
   // ComputeOpBuilder methods
-  Value add(Value a, Value b, Type resultType, Value alpha = nullptr) {
-    if (alpha == nullptr) {
-      return rewriter.create<AddOp>(loc, resultType, a, b);
-    } else {
-      auto mul_op = rewriter.create<MulOp>(loc, resultType, b, alpha);
-      return rewriter.create<AddOp>(loc, resultType, a, mul_op);
-    }
-  }
+  Value add(Value a, Value b) { return rewriter.create<AddOp>(loc, a, b); }
 
   template <typename T>
-  Value add(Value a, T scalar, Type resultType, Value alpha = nullptr) {
-    auto b = createScalarRankTensor(scalar);
-    return add(a, b, resultType, alpha);
+  Value add(Value a, T scalar) {
+    auto tensorType = mlir::cast<RankedTensorType>(a.getType());
+    auto b = createScalarRankTensor(scalar, tensorType.getElementType());
+    return add(a, b);
   }
 
-  Value cast(Value input, Type targetType) { return rewriter.create<CastOp>(loc, targetType, input); }
+  Value cast(Value input, Type dtype) { return rewriter.create<CastOp>(loc, input, dtype); }
 
-  Value exp(Value x, Type resultType) { return rewriter.create<ExpOp>(loc, resultType, x); }
+  Value exp(Value x) { return rewriter.create<ExpOp>(loc, x); }
 
-  Value div(Value a, Value b, Type resultType) { return rewriter.create<DivOp>(loc, resultType, a, b); }
+  Value div(Value a, Value b) { return rewriter.create<DivOp>(loc, a, b); }
 
   template <typename T>
-  Value div(Value a, T scalar, Type resultType) {
-    auto b = createScalarRankTensor(scalar);
-    return rewriter.create<DivOp>(loc, resultType, a, b);
+  Value div(Value a, T scalar) {
+    auto tensorType = mlir::cast<RankedTensorType>(a.getType());
+    auto b = createScalarRankTensor(scalar, tensorType.getElementType());
+    return rewriter.create<DivOp>(loc, a, b);
   }
 
-  Value mul(Value a, Value b, Type resultType) { return rewriter.create<MulOp>(loc, resultType, a, b); }
+  Value mul(Value a, Value b) { return rewriter.create<MulOp>(loc, a, b); }
 
   template <typename T>
-  Value mul(Value a, T scalar, Type resultType) {
-    auto b = createScalarRankTensor(scalar);
-    return rewriter.create<MulOp>(loc, resultType, a, b);
+  Value mul(Value a, T scalar) {
+    auto tensorType = mlir::cast<RankedTensorType>(a.getType());
+    auto b = createScalarRankTensor(scalar, tensorType.getElementType());
+    return rewriter.create<MulOp>(loc, a, b);
   }
 
-  Value reciprocal(Value x, Type resultType) { return rewriter.create<ReciprocalOp>(loc, resultType, x); }
+  Value reciprocal(Value x) { return rewriter.create<ReciprocalOp>(loc, x); }
 
-  Value sub(Value a, Value b, Type resultType, Value alpha = nullptr) {
-    if (alpha == nullptr) {
-      return rewriter.create<SubOp>(loc, resultType, a, b);
-    } else {
-      auto mul_op = rewriter.create<MulOp>(loc, resultType, b, alpha);
-      return rewriter.create<SubOp>(loc, resultType, a, mul_op);
-    }
-  }
+  Value sub(Value a, Value b) { return rewriter.create<SubOp>(loc, a, b); }
 
   template <typename T>
-  Value sub(Value a, T scalar, Type resultType, Value alpha = nullptr) {
-    auto b = createScalarRankTensor(scalar);
-    return sub(a, b, resultType, alpha);
+  Value sub(Value a, T scalar) {
+    auto tensorType = mlir::cast<RankedTensorType>(a.getType());
+    auto b = createScalarRankTensor(scalar, tensorType.getElementType());
+    return sub(a, b);
   }
 
-  Value tanh(Value x, Type resultType) { return rewriter.create<AclnnTanhOp>(loc, resultType, x); }
+  Value tanh(Value x) { return rewriter.create<AclnnTanhOp>(loc, x); }
 
   template <typename T>
-  Value createScalarRankTensor(T value) {
+  Value createScalarRankTensor(T value, Type elementType) {
     static_assert(std::is_arithmetic_v<T>, "Value must be arithmetic type");
-    Type elementType;
-    if constexpr (std::is_same_v<T, float>) {
-      elementType = rewriter.getF32Type();
-    } else if constexpr (std::is_same_v<T, double>) {
-      elementType = rewriter.getF64Type();
-    } else if constexpr (std::is_same_v<T, int32_t>) {
-      elementType = rewriter.getI32Type();
-    } else if constexpr (std::is_same_v<T, int64_t>) {
-      elementType = rewriter.getI64Type();
-    } else {
-      return nullptr;
-    }
     auto tensorType = RankedTensorType::get({}, elementType);
     auto denseAttr = DenseElementsAttr::get(tensorType, value);
     return rewriter.create<mlir::arith::ConstantOp>(loc, tensorType, denseAttr).getResult();
   }
 
   // Create Expr from Value
-  Expr buildExpr(Value value, Type resultType);
+  Expr buildExpr(Value value);
 
  private:
   PatternRewriter &rewriter;
@@ -129,40 +107,36 @@ class ComputeOpBuilder {
 // Expr wrapper class to support operator overloading
 class Expr {
  public:
-  Expr(ComputeOpBuilder &builder, Value value, Type resultType)
-      : builder(builder), value(value), resultType(resultType) {}
+  Expr(ComputeOpBuilder &builder, Value value) : builder(builder), value(value) {}
 
   // Implementations of Expr operators
   Expr operator*(const Expr &other) const {
-    auto result = builder.mul(value, other.value, resultType);
-    return Expr(builder, result, resultType);
+    auto result = builder.mul(value, other.value);
+    return Expr(builder, result);
   }
 
   Expr operator+(const Expr &other) const {
-    auto result = builder.add(value, other.value, resultType);
-    return Expr(builder, result, resultType);
+    auto result = builder.add(value, other.value);
+    return Expr(builder, result);
   }
 
   Expr operator-(const Expr &other) const {
-    auto result = builder.sub(value, other.value, resultType);
-    return Expr(builder, result, resultType);
+    auto result = builder.sub(value, other.value);
+    return Expr(builder, result);
   }
 
   Expr operator/(const Expr &other) const {
-    auto result = builder.div(value, other.value, resultType);
-    return Expr(builder, result, resultType);
+    auto result = builder.div(value, other.value);
+    return Expr(builder, result);
   }
 
   Value getValue() const { return value; }
-
-  Type getResultType() const { return resultType; }
 
   ComputeOpBuilder &getBuilder() const { return builder; }
 
  private:
   ComputeOpBuilder &builder;
   Value value;
-  Type resultType;
 
   friend class ComputeOpBuilder;
   template <typename T>
@@ -184,57 +158,57 @@ class Expr {
 };
 
 // Create Expr from Value
-inline Expr ComputeOpBuilder::buildExpr(Value value, Type resultType) { return Expr(*this, value, resultType); }
+inline Expr ComputeOpBuilder::buildExpr(Value value) { return Expr(*this, value); }
 
 // Global operator overloads for scalar operations
 template <typename T>
 Expr operator+(T scalar, const Expr &expr) {
-  Value result = expr.builder.add(expr.value, scalar, expr.resultType);
-  return Expr(expr.builder, result, expr.resultType);
+  Value result = expr.builder.add(expr.value, scalar);
+  return Expr(expr.builder, result);
 }
 
 template <typename T>
 Expr operator+(const Expr &expr, T scalar) {
-  Value result = expr.builder.add(expr.value, scalar, expr.resultType);
-  return Expr(expr.builder, result, expr.resultType);
+  Value result = expr.builder.add(expr.value, scalar);
+  return Expr(expr.builder, result);
 }
 
 template <typename T>
 Expr operator*(T scalar, const Expr &expr) {
-  Value result = expr.builder.mul(expr.value, scalar, expr.resultType);
-  return Expr(expr.builder, result, expr.resultType);
+  Value result = expr.builder.mul(expr.value, scalar);
+  return Expr(expr.builder, result);
 }
 
 template <typename T>
 Expr operator*(const Expr &expr, T scalar) {
-  Value result = expr.builder.mul(expr.value, scalar, expr.resultType);
-  return Expr(expr.builder, result, expr.resultType);
+  Value result = expr.builder.mul(expr.value, scalar);
+  return Expr(expr.builder, result);
 }
 
 template <typename T>
 Expr operator-(T scalar, const Expr &expr) {
-  Value neg_tensor = expr.builder.mul(expr.value, kNegOne, expr.resultType);
-  Value result = expr.builder.add(neg_tensor, scalar, expr.resultType);
-  return Expr(expr.builder, result, expr.resultType);
+  Value neg_tensor = expr.builder.mul(expr.value, kNegOne);
+  Value result = expr.builder.add(neg_tensor, scalar);
+  return Expr(expr.builder, result);
 }
 
 template <typename T>
 Expr operator-(const Expr &expr, T scalar) {
-  Value result = expr.builder.sub(expr.value, scalar, expr.resultType);
-  return Expr(expr.builder, result, expr.resultType);
+  Value result = expr.builder.sub(expr.value, scalar);
+  return Expr(expr.builder, result);
 }
 
 template <typename T>
 Expr operator/(T scalar, const Expr &expr) {
-  Value reciprocal_tensor = expr.builder.reciprocal(expr.value, expr.resultType);
-  Value result = expr.builder.mul(reciprocal_tensor, scalar, expr.resultType);
-  return Expr(expr.builder, result, expr.resultType);
+  Value reciprocal_tensor = expr.builder.reciprocal(expr.value);
+  Value result = expr.builder.mul(reciprocal_tensor, scalar);
+  return Expr(expr.builder, result);
 }
 
 template <typename T>
 Expr operator/(const Expr &expr, T scalar) {
-  Value result = expr.builder.div(expr.value, scalar, expr.resultType);
-  return Expr(expr.builder, result, expr.resultType);
+  Value result = expr.builder.div(expr.value, scalar);
+  return Expr(expr.builder, result);
 }
 
 }  // namespace mfuse

@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <vector>
 
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 
@@ -26,6 +27,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 
 #include "mfusion/Analysis/SymbolicShape/SymEngineAnalysis.h"
+#include "mfusion/Dialect/Mfuse/Analysis/BinaryOpCommonInfer.h"
 #include "mfusion/Dialect/Mfuse/Utils/SymbolAttrUtils.h"
 #include "mfusion/Analysis/SymbolicShape/SymExprBuilder.h"
 
@@ -61,6 +63,39 @@ mlir::Type getHigherPrecisionType(mlir::Type typeA, mlir::Type typeB) {
 
   // Return the type with higher bit width
   return bitWidthA >= bitWidthB ? typeA : typeB;
+}
+
+mlir::Type CastOp::inferResultType(mlir::Value input, mlir::Type elementType) {
+  auto inType = llvm::dyn_cast<mlir::RankedTensorType>(input.getType());
+  if (!inType) {
+    return {};
+  }
+  return mlir::RankedTensorType::get(inType.getShape(), elementType, inType.getEncoding());
+}
+
+mlir::OpFoldResult CastOp::fold(FoldAdaptor adaptor) {
+  if (getInput().getType() == getResult().getType()) {
+    return getInput();
+  }
+  return {};
+}
+
+mlir::LogicalResult CastOp::verify() {
+  auto inType = mlir::dyn_cast<mlir::RankedTensorType>(getInput().getType());
+  auto outType = mlir::dyn_cast<mlir::RankedTensorType>(getResult().getType());
+  if (!inType || !outType) {
+    return emitOpError("both input and result must be ranked tensors");
+  }
+
+  if (inType.getShape() != outType.getShape()) {
+    return emitOpError("input and result must have the same shape");
+  }
+
+  if (inType.getEncoding() != outType.getEncoding()) {
+    return emitOpError("input and result must have the same encoding");
+  }
+
+  return mlir::success();
 }
 
 mlir::LogicalResult ReshapeOp::verify() {
@@ -210,59 +245,6 @@ mlir::FailureOr<mlir::Type> ReshapeOp::inferSymbolicShapes(mlir::OpBuilder &buil
   }
 }
 
-mlir::Type inferElementwiseSymbolicType(mlir::OpBuilder &builder, mlir::Type baseType, mlir::Value lhs,
-                                        mlir::Value rhs) {
-  auto rankedResult = baseType.dyn_cast<mlir::RankedTensorType>();
-  if (!rankedResult) return baseType;
-
-  auto maybeLhsExprs = SymbolAttrUtils::getSymbolicShapeExprs(lhs.getType());
-  auto maybeRhsExprs = SymbolAttrUtils::getSymbolicShapeExprs(rhs.getType());
-  if (mlir::failed(maybeLhsExprs) || mlir::failed(maybeRhsExprs)) {
-    return baseType;
-  }
-
-  auto lhsExprs = *maybeLhsExprs;
-  auto rhsExprs = *maybeRhsExprs;
-  size_t lhsRank = lhsExprs.size();
-  size_t rhsRank = rhsExprs.size();
-  size_t maxRank = std::max(lhsRank, rhsRank);
-
-  llvm::SmallVector<SymbolAttrUtils::SymExpr> resultExprs;
-  resultExprs.reserve(maxRank);
-  mfusion::SymExprBuilder symBuilder;
-  for (size_t i = 0; i < maxRank; ++i) {
-    int64_t lhsIdx = static_cast<int64_t>(lhsRank) - 1 - static_cast<int64_t>(i);
-    int64_t rhsIdx = static_cast<int64_t>(rhsRank) - 1 - static_cast<int64_t>(i);
-
-    if (lhsIdx >= 0 && rhsIdx < 0) {
-      resultExprs.push_back(lhsExprs[lhsIdx]);
-      continue;
-    }
-    if (lhsIdx < 0 && rhsIdx >= 0) {
-      resultExprs.push_back(rhsExprs[rhsIdx]);
-      continue;
-    }
-
-    SymbolAttrUtils::SymExpr lhsDim = lhsExprs[lhsIdx];
-    SymbolAttrUtils::SymExpr rhsDim = rhsExprs[rhsIdx];
-    bool lhsIsOne = (lhsDim->__str__() == "1");
-    bool rhsIsOne = (rhsDim->__str__() == "1");
-    if (lhsIsOne) {
-      resultExprs.push_back(rhsDim);
-    } else if (rhsIsOne) {
-      resultExprs.push_back(lhsDim);
-    } else {
-      resultExprs.push_back(symBuilder.makeMax(lhsDim, rhsDim));
-    }
-  }
-  std::reverse(resultExprs.begin(), resultExprs.end());
-  auto combinedAttr = SymbolAttrUtils::createSymbolicShapeAttr(builder, resultExprs);
-  if (!combinedAttr) return baseType;
-
-  // Return new type with inferred symbolic shape
-  return SymbolAttrUtils::withSymbolicAttr(rankedResult, combinedAttr);
-}
-
 // Implementation of promoteBinaryOperands template function
 template <typename ConcreteOp>
 std::pair<mlir::Value, mlir::Value> promoteBinaryOperands(mlir::OpBuilder &builder, mlir::Location loc, mlir::Value lhs,
@@ -284,44 +266,45 @@ std::pair<mlir::Value, mlir::Value> promoteBinaryOperands(mlir::OpBuilder &build
 
   // Insert CastOp for LHS if needed
   if (elemType0 != higherElemType) {
-    auto newType0 = type0.cast<mlir::TensorType>().clone(higherElemType);
-    newLhs = builder.create<mfuse::CastOp>(loc, newType0, lhs);
+    newLhs = builder.create<mfuse::CastOp>(loc, lhs, higherElemType);
   }
 
   // Insert CastOp for RHS if needed
   if (elemType1 != higherElemType) {
-    auto newType1 = type1.cast<mlir::TensorType>().clone(higherElemType);
-    newRhs = builder.create<mfuse::CastOp>(loc, newType1, rhs);
+    newRhs = builder.create<mfuse::CastOp>(loc, rhs, higherElemType);
   }
 
   return {newLhs, newRhs};
 }
 
-// Macro to implement inferSymbolicShapes for broadcastable binary ops and instantiate promoteBinaryOperands.
-#define IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(OpName)                                                         \
+// Macro to implement functions for Mfuse_BroadcastableBinaryOp
+#define IMPL_BINARY_OP_FUNCTION(OpName, IsComparisonOp)                                                                \
   mlir::FailureOr<mlir::Type> OpName::inferSymbolicShapes(mlir::OpBuilder &builder, const mlir::OperationState &state, \
                                                           mlir::Type resultType) {                                     \
     if (state.operands.size() != 2) return mlir::failure();                                                            \
-    return inferElementwiseSymbolicType(builder, resultType, state.operands[0], state.operands[1]);                    \
+    return BinaryOpCommonInfer::inferSymbolicShape(builder, resultType, state.operands[0], state.operands[1]);         \
   }                                                                                                                    \
-  template std::pair<mlir::Value, mlir::Value> promoteBinaryOperands<OpName>(mlir::OpBuilder &, mlir::Location,        \
-                                                                             mlir::Value, mlir::Value);
+  mlir::Type OpName::inferResultType(mlir::Value lhs, mlir::Value rhs) {                                               \
+    return BinaryOpCommonInfer::inferResultType(lhs, rhs, IsComparisonOp);                                             \
+  }                                                                                                                    \
+  template std::pair<mlir::Value, mlir::Value> mlir::mfuse::promoteBinaryOperands<OpName>(                             \
+    mlir::OpBuilder &, mlir::Location, mlir::Value, mlir::Value);
 
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(AddOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(DivOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(EqOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(GeOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(GtOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(LeOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(LogicalAndOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(LogicalOrOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(LtOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(MaximumOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(MinimumOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(MulOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(NeOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(PowOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(RealDivOp)
-IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(SubOp)
+IMPL_BINARY_OP_FUNCTION(AddOp, false)
+IMPL_BINARY_OP_FUNCTION(DivOp, false)
+IMPL_BINARY_OP_FUNCTION(EqOp, true)
+IMPL_BINARY_OP_FUNCTION(GeOp, true)
+IMPL_BINARY_OP_FUNCTION(GtOp, true)
+IMPL_BINARY_OP_FUNCTION(LeOp, true)
+IMPL_BINARY_OP_FUNCTION(LogicalAndOp, true)
+IMPL_BINARY_OP_FUNCTION(LogicalOrOp, true)
+IMPL_BINARY_OP_FUNCTION(LtOp, true)
+IMPL_BINARY_OP_FUNCTION(MaximumOp, false)
+IMPL_BINARY_OP_FUNCTION(MinimumOp, false)
+IMPL_BINARY_OP_FUNCTION(MulOp, false)
+IMPL_BINARY_OP_FUNCTION(NeOp, false)
+IMPL_BINARY_OP_FUNCTION(PowOp, false)
+IMPL_BINARY_OP_FUNCTION(RealDivOp, false)
+IMPL_BINARY_OP_FUNCTION(SubOp, false)
 
 }  // namespace mlir::mfuse
