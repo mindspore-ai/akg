@@ -39,7 +39,7 @@ static Value convertAnyScalarToRankedTensor(PatternRewriter &rewriter, Location 
   Type elementType = scalarType;
   auto tensorType = RankedTensorType::get({}, elementType);
   // Create a CastOp to convert the scalar to 0D tensor
-  return rewriter.create<CastOp>(loc, tensorType, scalar, mlir::TypeAttr::get(tensorType));
+  return rewriter.create<CastOp>(loc, tensorType, scalar);
 }
 
 /// Helper function to create alphaValue from DenseElementsAttr
@@ -48,12 +48,12 @@ static Value createAlphaValueFromConstant(PatternRewriter &rewriter, Location lo
   auto elementType = denseAttr.getElementType();
   if (isa<FloatType>(elementType)) {
     auto floatVal = denseAttr.getSplatValue<APFloat>();
-    return rewriter.create<arith::ConstantOp>(loc, targetType,
-                                              DenseElementsAttr::get(targetType, floatVal.convertToDouble()));
+    auto floatAttr = rewriter.getFloatAttr(targetType.getElementType(), floatVal.convertToDouble());
+    return rewriter.create<arith::ConstantOp>(loc, targetType, DenseElementsAttr::get(targetType, floatAttr));
   } else {
     auto intVal = denseAttr.getSplatValue<APInt>();
-    return rewriter.create<arith::ConstantOp>(loc, targetType,
-                                              DenseElementsAttr::get(targetType, intVal.getSExtValue()));
+    auto intAttr = rewriter.getIntegerAttr(targetType.getElementType(), intVal.getSExtValue());
+    return rewriter.create<arith::ConstantOp>(loc, targetType, DenseElementsAttr::get(targetType, intAttr));
   }
 }
 
