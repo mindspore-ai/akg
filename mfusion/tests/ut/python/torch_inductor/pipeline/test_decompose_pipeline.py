@@ -110,3 +110,22 @@ def test_decompose_pipeline_with_add_rmsnorm():
     result = fuse_and_optimize(torch_mlir)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_text_contains("torch.operator \"torch.npu.npu_add_rms_norm\""), checker.error
+
+
+def test_decompose_pipeline_with_gelu():
+    """Test decompose pipeline with gelu operation."""
+    # Torch dialect MLIR string with gelu operation
+    torch_mlir = textwrap.dedent("""
+        module {
+          func.func @test_gelu(%arg0: !torch.vtensor<[4,4],f32>) -> !torch.vtensor<[4,4],f32> {
+            %approx = torch.constant.str "none"
+            %0 = torch.aten.gelu %arg0, %approx : !torch.vtensor<[4,4],f32>, !torch.str -> !torch.vtensor<[4,4],f32>
+            return %0 : !torch.vtensor<[4,4],f32>
+          }
+        }
+    """)
+
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.aten.gelu"), checker.error

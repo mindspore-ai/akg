@@ -24,7 +24,7 @@ module {
     // CHECK-NOT: mfuse.add
     // CHECK-NOT: mfuse.aclnn.tanh
     // CHECK-NOT: mfuse.constant_tensor
-    // CHECK: %[[GELU:.*]] = mfuse.aclnn.gelu %[[X]]
+    // CHECK: %[[GELU:.*]] = mfuse.aclnn.gelu %[[X]] {approximate = "tanh"}
     // CHECK: return %[[GELU]]
 
     return %result : tensor<2x4xf32>
@@ -98,7 +98,7 @@ module {
     // Should fuse: commutativity handled correctly
     // CHECK-NOT: mfuse.pow
     // CHECK-NOT: mfuse.aclnn.tanh
-    // CHECK: %[[GELU:.*]] = mfuse.aclnn.gelu %[[X]]
+    // CHECK: %[[GELU:.*]] = mfuse.aclnn.gelu %[[X]] {approximate = "tanh"}
     // CHECK: return %[[GELU]]
 
     return %result : tensor<2x4xf32>
@@ -126,7 +126,7 @@ module {
     // Should fuse: Add commutativity handled correctly
     // CHECK-NOT: mfuse.pow
     // CHECK-NOT: mfuse.aclnn.tanh
-    // CHECK: %[[GELU:.*]] = mfuse.aclnn.gelu %[[X]]
+    // CHECK: %[[GELU:.*]] = mfuse.aclnn.gelu %[[X]] {approximate = "tanh"}
     // CHECK: return %[[GELU]]
 
     return %result : tensor<2x4xf32>
