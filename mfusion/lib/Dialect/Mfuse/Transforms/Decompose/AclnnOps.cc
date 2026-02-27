@@ -37,9 +37,7 @@ static Value convertAnyScalarToRankedTensor(PatternRewriter &rewriter, Location 
   }
   // For other scalar types (FloatType, IntegerType, IndexType), create a 0D tensor
   Type elementType = scalarType;
-  auto tensorType = RankedTensorType::get({}, elementType);
-  // Create a CastOp to convert the scalar to 0D tensor
-  return rewriter.create<CastOp>(loc, tensorType, scalar);
+  return rewriter.create<mlir::mfuse::CastOp>(loc, scalar, elementType);
 }
 
 /// Helper function to create alphaValue from DenseElementsAttr
@@ -75,7 +73,6 @@ static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &b
   Value y = op.getY();
   Value alpha = op.getAlpha();
   Location loc = op.getLoc();
-  Type resultType = op.getResult().getType();
 
   // Determine if the operation is an add or sub
   bool isAdd = isa<mfuse::AclnnAddOp>(op);
@@ -87,7 +84,7 @@ static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &b
   // Check if alpha is 1.0, if so, skip the mul operation
   if (isConstOne(alpha)) {
     // If alpha is 1.0, just add or subtract x and y
-    return isAdd ? builder.add(x, y, resultType) : builder.sub(x, y, resultType);
+    return isAdd ? builder.add(x, y) : builder.sub(x, y);
   }
 
   if (!isSupportType(xElementType) || !isSupportType(yElementType)) {
@@ -108,7 +105,7 @@ static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &b
     }
     auto supposedAlphaType = RankedTensorType::get({}, yElementType);
     Value alphaValue = createAlphaValueFromConstant(rewriter, loc, denseTensor, supposedAlphaType);
-    mulResult = builder.mul(y, alphaValue, y.getType());
+    mulResult = builder.mul(y, alphaValue);
   } else {
     // If alpha is dynamic, convert it to RankedTensorType (0D tensor)
     Value alphaTensor = convertAnyScalarToRankedTensor(rewriter, loc, alpha);
@@ -117,15 +114,13 @@ static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &b
       return nullptr;
     }
     if (alphaElementType != yElementType) {
-      // If alpha type is different from y type, cast it to y type
-      Type targetType = RankedTensorType::get({}, yElementType);
-      alphaTensor = builder.cast(alphaTensor, targetType);
+      alphaTensor = builder.cast(alphaTensor, yElementType);
     }
-    mulResult = builder.mul(y, alphaTensor, y.getType());
+    mulResult = builder.mul(y, alphaTensor);
   }
 
   // Perform the final add or sub operation
-  return isAdd ? builder.add(x, mulResult, resultType) : builder.sub(x, mulResult, resultType);
+  return isAdd ? builder.add(x, mulResult) : builder.sub(x, mulResult);
 }
 
 }  // namespace

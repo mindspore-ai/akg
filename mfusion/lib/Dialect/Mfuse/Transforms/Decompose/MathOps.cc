@@ -40,29 +40,29 @@ class GeluDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluOp> {
 
     Type resultType = geluOp.getOutput().getType();
     auto tensorType = dyn_cast<mlir::RankedTensorType>(input.getType());
-    Type float32Ty = mlir::RankedTensorType::get(tensorType.getShape(), rewriter.getF32Type());
 
     // Create OpBuilder instance
     mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
 
     // Convert to float32 if not already
     if (!tensorType.getElementType().isF32()) {
-      input = builder.cast(input, float32Ty);
+      input = builder.cast(input, rewriter.getF32Type());
     }
     float kSqrtTwo = 1.41421356237309504880;
     float kTwoSqrtPI = 1.12837916709551257390;
     float kBeta = kSqrtTwo * kTwoSqrtPI;
     float kKappa = 0.044715f;
-    auto x = builder.buildExpr(input, float32Ty);
+    auto x = builder.buildExpr(input);
 
     // y = -sqrt(8/pi) * (x + 0.044715 * x^3) sqrt(2/π) * 0.5
     auto y = kNegOne * kBeta * (x + kKappa * x * x * x);
     // Gelu(x) = x / (1 + exp(y))
-    auto exp_y = builder.buildExpr(builder.exp(y.getValue(), float32Ty), float32Ty);
+    auto exp_y = builder.buildExpr(builder.exp(y.getValue()));
     auto result = x / (kOne + exp_y);
     Value output = result.getValue();
-    if (resultType != float32Ty) {
-      output = builder.cast(output, resultType);
+    auto resultTensorType = dyn_cast<mlir::RankedTensorType>(resultType);
+    if (resultTensorType && !resultTensorType.getElementType().isF32()) {
+      output = builder.cast(output, resultTensorType.getElementType());
     }
     rewriter.replaceOp(geluOp, output);
 
@@ -90,8 +90,8 @@ class TanhDecomposePattern : public OpRewritePattern<mfuse::AclnnTanhOp> {
     mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
 
     // Tanh(x) = 1 - 2/(e^(2x) + 1)
-    auto two_x = builder.mul(input, kTwo, resultType);
-    auto exp_2x = builder.buildExpr(builder.exp(two_x, resultType), resultType);
+    auto two_x = builder.mul(input, kTwo);
+    auto exp_2x = builder.buildExpr(builder.exp(two_x));
     auto result = (kOne - exp_2x) / (kOne + exp_2x);
 
     // Replace the original Tanh operation with the decomposed computation
@@ -125,7 +125,6 @@ class GeluBackwardDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluBac
     if (!gradTensorType || !selfTensorType) {
       return failure();
     }
-    auto float32Ty = mlir::RankedTensorType::get(selfTensorType.getShape(), rewriter.getF32Type());
 
     // Create OpBuilder instance
     mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
@@ -134,10 +133,10 @@ class GeluBackwardDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluBac
     Value processedGrad = grad;
     Value processedSelf = self;
     if (!gradTensorType.getElementType().isF32()) {
-      processedGrad = builder.cast(grad, float32Ty);
+      processedGrad = builder.cast(grad, rewriter.getF32Type());
     }
     if (!selfTensorType.getElementType().isF32()) {
-      processedSelf = builder.cast(self, float32Ty);
+      processedSelf = builder.cast(self, rewriter.getF32Type());
     }
 
     // sqrt(2.0 / pi)
@@ -145,8 +144,8 @@ class GeluBackwardDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluBac
     float kKappa = 0.044715;
 
     // Create Expr objects for easier operations
-    auto x = builder.buildExpr(processedSelf, float32Ty);
-    auto grad_expr = builder.buildExpr(processedGrad, float32Ty);
+    auto x = builder.buildExpr(processedSelf);
+    auto grad_expr = builder.buildExpr(processedGrad);
 
     // gelu_grad of dy and x is dy * y'
     // y' = 0.5 * (1.0 + tanh(tanh_para)) + 0.5 * x * (1.0 - tanh(tanh_para) * tanh(para)) * mul_right
@@ -154,15 +153,15 @@ class GeluBackwardDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluBac
     // mul_right is 'sqrt(2.0 / pi) * (1 + 3 * 0.044715 * x * x)'
     auto x_sq = x * x;
     auto tanh_para = kBeta * (x + kKappa * x_sq * x);
-    auto tanh_para_val = builder.tanh(tanh_para.getValue(), float32Ty);
-    auto tanh_para_expr = builder.buildExpr(tanh_para_val, float32Ty);
+    auto tanh_para_val = builder.tanh(tanh_para.getValue());
+    auto tanh_para_expr = builder.buildExpr(tanh_para_val);
 
     // 0.5 * (1.0 + tanh(tanh_para))
     auto left_derivative = kHalf * (tanh_para_expr + kOne);
 
     // 0.5 * x * (1.0 - tanh(tanh_para) * tanh(para)) * mul_right
-    auto tanh_x = builder.tanh(x.getValue(), float32Ty);
-    auto tanh_x_expr = builder.buildExpr(tanh_x, float32Ty);
+    auto tanh_x = builder.tanh(x.getValue());
+    auto tanh_x_expr = builder.buildExpr(tanh_x);
     auto mul_right = kBeta * (kOne + kThree * kKappa * x_sq);
     auto right_derivative = kHalf * x * (kOne - tanh_para_expr * tanh_x_expr) * mul_right;
     auto out = grad_expr * (left_derivative + right_derivative);
@@ -171,7 +170,7 @@ class GeluBackwardDecomposePattern : public OpRewritePattern<mfuse::AclnnGeluBac
     Value finalResult = out.getValue();
     auto resultTensorType = dyn_cast<mlir::RankedTensorType>(resultType);
     if (resultTensorType && !resultTensorType.getElementType().isF32()) {
-      finalResult = builder.cast(finalResult, resultType);
+      finalResult = builder.cast(finalResult, resultTensorType.getElementType());
     }
 
     rewriter.replaceOp(geluBackwardOp, finalResult);
@@ -197,27 +196,26 @@ class SigmoidDecomposePattern : public OpRewritePattern<mfuse::AclnnSigmoidOp> {
       return failure();
     }
 
-    auto float32Ty = mlir::RankedTensorType::get(tensorType.getShape(), rewriter.getF32Type());
-
     // Create OpBuilder instance
     mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
 
     // Convert to float32 if not already
     Value processedInput = input;
     if (!tensorType.getElementType().isF32()) {
-      processedInput = builder.cast(input, float32Ty);
+      processedInput = builder.cast(input, rewriter.getF32Type());
     }
 
     // out = 1 / (1.0 + exp(-x))
-    auto neg_x = builder.mul(processedInput, kNegOne, float32Ty);
-    auto exp_neg_x = builder.exp(neg_x, float32Ty);
-    auto denominator = builder.add(exp_neg_x, kOne, float32Ty);
-    Value sigmoid_result = builder.reciprocal(denominator, float32Ty);
+    auto neg_x = builder.mul(processedInput, kNegOne);
+    auto exp_neg_x = builder.exp(neg_x);
+    auto denominator = builder.add(exp_neg_x, kOne);
+    Value sigmoid_result = builder.reciprocal(denominator);
 
     // Convert back to original type if needed
     Value finalResult = sigmoid_result;
-    if (resultType != float32Ty) {
-      finalResult = builder.cast(sigmoid_result, resultType);
+    auto resultTensorType = dyn_cast<mlir::RankedTensorType>(resultType);
+    if (resultTensorType && !resultTensorType.getElementType().isF32()) {
+      finalResult = builder.cast(sigmoid_result, resultTensorType.getElementType());
     }
 
     rewriter.replaceOp(sigmoidOp, finalResult);
