@@ -1068,7 +1068,7 @@ void AKGLoopTiling::runCpuOperation() {
   mlir::func::FuncOp funcOp = getOperation();
   auto opType = mlir::CommonUtils::getOperatorType(funcOp);
   mlir::OpBuilder b(funcOp);
-  if (opType == mlir::OperatorTemplate::Reduce) {
+  if (opType == mlir::OperatorTemplate::Reduction) {
     SmallVector<mlir::Operation *, 8> reduceLoops = mlir::CommonUtils::collectReductionAxes(funcOp);
     for (auto reduceLoop : reduceLoops) {
       reduceLoop->setAttr(kReductionLoopAttr, b.getUnitAttr());
@@ -1553,7 +1553,7 @@ void AKGLoopTiling::runNpuOperation() {
 void AKGLoopTiling::runCudaOperation() {
   mlir::func::FuncOp funcOp = getOperation();
   auto opType = mlir::CommonUtils::getOperatorType(funcOp);
-  if (!isDynamicShape() || opType == mlir::OperatorTemplate::Reduce) {
+  if (!isDynamicShape() || opType == mlir::OperatorTemplate::Reduction) {
     inequalityConvertToIf = true;
   }
   tileEachBand();

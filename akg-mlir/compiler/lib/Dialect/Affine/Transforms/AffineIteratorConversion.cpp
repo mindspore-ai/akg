@@ -229,7 +229,7 @@ void AffineIteratorConversion::runOnOperation() {
   func::FuncOp func = getOperation();
   OpBuilder b(func);
   OperatorTemplate opType = CommonUtils::getOperatorType(func);
-  if (opType != OperatorTemplate::Reduce) {
+  if (opType != OperatorTemplate::Reduction) {
     return;
   }
 

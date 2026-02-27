@@ -6,7 +6,7 @@
 // CHECK-NEXT:   #set = affine_set<(d0) : (d0 == 0)>
 // CHECK-NEXT:   #set1 = affine_set<(d0) : (-d0 + 1 == 0)>
 // CHECK-NEXT:   module {
-// CHECK-NEXT:     func.func @Fused_Sub_Exp_ReduceSum_Log_split_11941850547297653662(%arg0: memref<233008xf32>, %arg1: memref<233008x2xf32>, %arg2: memref<233008x2xf32>, %arg3: memref<233008xf32>) attributes {OperatorType = "Reduce", enable_atomic_add = false, gpu_parallel_reduce = false, mindspore_kernel, process = "cuda", scop.ignored} {
+// CHECK-NEXT:     func.func @Fused_Sub_Exp_ReduceSum_Log_split_11941850547297653662(%arg0: memref<233008xf32>, %arg1: memref<233008x2xf32>, %arg2: memref<233008x2xf32>, %arg3: memref<233008xf32>) attributes {OperatorType = "Reduction", enable_atomic_add = false, gpu_parallel_reduce = false, mindspore_kernel, process = "cuda", scop.ignored} {
 // CHECK-NEXT:       %cst = arith.constant 0.000000e+00 : f32
 // CHECK-NEXT:       %alloc = memref.alloc() {alignment = 64 : i64} : memref<233008xf32>
 // CHECK-NEXT:       affine.for %arg4 = 0 to 233008 {
@@ -45,7 +45,7 @@
 #set = affine_set<(d0) : (d0 == 0)>
 #set1 = affine_set<(d0) : (-d0 + 1 == 0)>
 module {
-  func.func @Fused_Sub_Exp_ReduceSum_Log_split_11941850547297653662(%arg0: memref<233008xf32>, %arg1: memref<233008x2xf32>, %arg2: memref<233008x2xf32>, %arg3: memref<233008xf32>) attributes {OperatorType = "Reduce", enable_atomic_add = false, gpu_parallel_reduce = false, mindspore_kernel, process = "cuda", scop.ignored} {
+  func.func @Fused_Sub_Exp_ReduceSum_Log_split_11941850547297653662(%arg0: memref<233008xf32>, %arg1: memref<233008x2xf32>, %arg2: memref<233008x2xf32>, %arg3: memref<233008xf32>) attributes {OperatorType = "Reduction", enable_atomic_add = false, gpu_parallel_reduce = false, mindspore_kernel, process = "cuda", scop.ignored} {
     %cst = arith.constant 0.000000e+00 : f32
     %alloc = memref.alloc() {alignment = 64 : i64} : memref<233008xf32>
     affine.for %arg4 = 0 to 233008 {
