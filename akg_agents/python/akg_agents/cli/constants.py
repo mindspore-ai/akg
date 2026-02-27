@@ -28,7 +28,7 @@ def make_gradient_logo():
     try:
         current_dir = Path(__file__).parent.resolve()
         # constants.py 在 cli/ 目录下，需要回到 akg_agents 目录
-        logo_path = current_dir.parent / "op" / "resources" / "logo.ans"
+        logo_path = current_dir.parent / "op" / "resources" / "mindspore_akg_logo.ans"
 
         return Text.from_ansi(logo_path.read_text(encoding="utf-8"))
     except Exception as e:
