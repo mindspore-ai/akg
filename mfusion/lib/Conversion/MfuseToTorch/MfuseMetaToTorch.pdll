@@ -7,11 +7,6 @@ Pattern ConvertMfuseAbs {
   replace root with op<torch.aten.abs>(convertValue(input)) -> (convertType(result));
 }
 
-Pattern ConvertMfuseBroadcastTo {
-  let root = op<mfuse.broadcast_to>(input: Value, shape: Value) -> (result: Type);
-  replace root with op<torch.aten.broadcast_to>(convertValue(input), convertValue(shape)) -> (convertType(result));
-}
-
 Pattern ConvertMfuseCeil {
   let root = op<mfuse.ceil>(input: Value) -> (result: Type);
   replace root with op<torch.aten.ceil>(convertValue(input)) -> (convertType(result));

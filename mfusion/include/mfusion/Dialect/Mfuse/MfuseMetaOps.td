@@ -113,21 +113,23 @@ def Mfuse_BatchMatmulOp : Mfuse_Op<"batch_matmul", [Pure]> {
 def Mfuse_BroadcastToOp : Mfuse_Op<"broadcast_to", [Pure]> {
   let summary = "Broadcast tensor to a given shape.";
   let description = [{
-    Broadcasts a tensor to a specified shape following NumPy broadcasting rules.
-    Dimensions are added to the left (front) of the tensor shape as needed.
-    Takes input tensor and shape tensor (1D tensor of int64).
-    Supports dynamic shapes where shape is computed at runtime.
+    Broadcasts a tensor to the shape encoded by the result type,
+    following NumPy broadcasting rules. Dimensions are added to the
+    left (front) of the tensor shape as needed.
+
+    Only semi-static output is supported:
+    if both the input and output dimensions at a given axis are dynamic,
+    the output dimension is interpreted as equal to the corresponding input dimension.
   }];
 
-  let arguments = (ins
-    AnyRankedTensor:$input,
-    AnyRankedTensor:$shape
-  );
+  let arguments = (ins AnyRankedTensor:$input);
 
   let results = (outs AnyRankedTensor:$output);
 
+  let hasVerifier = 1;
+
   let assemblyFormat = [{
-    $input `,` $shape attr-dict `:` functional-type(operands, results)
+    $input attr-dict `:` functional-type(operands, results)
   }];
 }
 
@@ -137,10 +139,7 @@ def Mfuse_CastOp : Mfuse_Op<"cast", [Pure, SameOperandsAndResultShape]> {
     Casts the input tensor to the specified data type.
   }];
 
-  let arguments = (ins
-    AnyRankedTensor:$input,
-    TypeAttr:$dtype
-  );
+  let arguments = (ins AnyRankedTensor:$input);
 
   let results = (outs AnyRankedTensor:$result);
 
@@ -728,14 +727,13 @@ def Mfuse_ReduceSumOp : Mfuse_Op<"reduce_sum", [Pure]> {
   let description = [{
     Computes the sum of tensor elements along specified dimensions.
     The boolean parameter controls whether to keep dimensions,
-    and the optional dtype parameter specifies the output data type.
+    and the result tensor type specifies the output data type.
   }];
 
   let arguments = (ins
     AnyRankedTensor:$input,
     I64ArrayAttr:$dimensions,
-    BoolAttr:$keepdim,
-    TypeAttr:$dtype
+    BoolAttr:$keepdim
   );
 
   let results = (outs AnyRankedTensor:$result);
