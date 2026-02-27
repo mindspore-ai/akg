@@ -106,6 +106,7 @@ class ReActAgent(AgentBase, ABC):
         self._initialized = False
         self._original_user_input: Optional[str] = None
         self._last_prompt: str = ""  # 最近一次 LLM 完整 prompt（供外部 logging wrapper 使用）
+        self._header_emitted = False
         
         # 加载可用工具
         self.available_tools = self._load_available_tools()
@@ -124,8 +125,9 @@ class ReActAgent(AgentBase, ABC):
             history=[]
         )
         
-        # 加载 prompt 模板
+        # 加载 prompt 模板（system / user 分离）
         self.system_prompt_template = self._load_prompt_template()
+        self.user_prompt_template = self._load_user_prompt_template()
     
     # ==================== 抽象方法（子类必须实现） ====================
     
@@ -142,9 +144,17 @@ class ReActAgent(AgentBase, ABC):
     @abstractmethod
     def _load_prompt_template(self) -> Jinja2TemplateWrapper:
         """
-        加载 prompt 模板
+        加载 system prompt 模板（身份、规则、工具说明等静态指令）
         
-        子类需要返回特定的 Jinja2 模板。
+        Returns:
+            Jinja2TemplateWrapper 实例
+        """
+        pass
+
+    @abstractmethod
+    def _load_user_prompt_template(self) -> Jinja2TemplateWrapper:
+        """
+        加载 user prompt 模板（用户需求、执行历史等动态上下文）
         
         Returns:
             Jinja2TemplateWrapper 实例
@@ -348,10 +358,14 @@ class ReActAgent(AgentBase, ABC):
                 self._original_user_input = user_input
                 self.tool_executor.agent_context["user_input"] = user_input
                 self.plan_list = []
+                self._header_emitted = False
         
         iteration = 0
         while True:
             iteration += 1
+            
+            # ====== Agent Header（仅首次） ======
+            self._emit_agent_header()
             
             # ====== STEP 1: 获取当前节点的 cur_path（用于 prompt） ======
             cur_path = str(self.trace.fs.get_node_dir(self.current_node_id))
@@ -360,8 +374,6 @@ class ReActAgent(AgentBase, ABC):
             try:
                 llm_response = await self._get_next_action(cur_path=cur_path)
             except asyncio.CancelledError:
-                # 取消发生在等待 LLM 响应时，没有 pending 节点需要更新
-                # 直接向上抛出，让 ReactTurnExecutorV2 处理
                 logger.info("[ReAct] 用户取消（等待 LLM 响应时）")
                 raise
             
@@ -371,9 +383,25 @@ class ReActAgent(AgentBase, ABC):
             tool_name = llm_response.get("tool_name")
             arguments = llm_response.get("arguments", {})
             reason = llm_response.get("reason", "")
+            reasoning = llm_response.get("reasoning", "")
+            content = llm_response.get("content", "")
+            
+            # 显示 LLM 的思考过程
+            # 优先显示 reasoning_content（原生推理字段），
+            # 如果为空则显示 content（部分模型将思考放在 content 中）
+            thinking_text = reasoning or (content if tool_name not in ("ask_user",) else "")
+            if thinking_text:
+                if not self._stream_enabled():
+                    # 非流式模式：LLM 调用期间没有发送任何 stream chunk，需要补充显示
+                    self._display_reasoning(thinking_text)
+                elif not reasoning and content and tool_name not in ("ask_user",):
+                    # 流式模式但 reasoning 为空：content 中的思考文本被 display_content=False
+                    # 过滤了，需要补充显示
+                    self._display_reasoning(content)
             
             if tool_name == "finish":
                 logger.info(f"[ReAct] 任务完成")
+                self._display_tool_done("finish", 0, {"status": "success"})
                 return self._build_success_response()
             
             logger.info(f"[Reasoning] {tool_name} - {reason}")
@@ -382,7 +410,9 @@ class ReActAgent(AgentBase, ABC):
                 return self._handle_ask_user(arguments)
             
             # ====== STEP 3-5: 创建节点 → 执行工具 → 保存结果 ======
+            self._display_tool_start(tool_name, arguments)
             result = await self._execute_tool(tool_name, arguments)
+            self._display_tool_done(tool_name, result.get("_duration_ms", 0), result)
 
             if tool_name == "plan":
                 if result.get("status") == "fail":
@@ -475,14 +505,6 @@ class ReActAgent(AgentBase, ABC):
         
         logger.info(f"[Acting] {tool_name}: {result.get('status')} ({duration_ms}ms)")
         
-        # ====== 4.1. 工具执行失败时，推送错误信息到 CLI ======
-        # ReAct 循环会继续（LLM 可以分析错误并重试），但用户能实时看到原始错误
-        result_status = str(result.get("status", "")).lower()
-        if result_status in ("fail", "error"):
-            error_info = result.get("error_information") or result.get("output") or ""
-            if error_info:
-                self._notify_tool_error(tool_name, error_info)
-        
         # ====== 5. 保存 result.json 到 cur_path ======
         self._save_node_result(new_node_id, cur_path, result)
         
@@ -499,6 +521,9 @@ class ReActAgent(AgentBase, ABC):
             result=result
         )
         self.tool_executor.history.append(action_record)
+        
+        # 注入 duration_ms 供 run() 中的 _display_tool_done 使用
+        result["_duration_ms"] = duration_ms
         
         return result
     
@@ -671,60 +696,68 @@ class ReActAgent(AgentBase, ABC):
         
         return "\n".join(lines)
     
+    # finish 工具定义（不在 tools.yaml 中，由框架内部处理）
+    _FINISH_TOOL = {
+        "type": "function",
+        "function": {
+            "name": "finish",
+            "description": "任务已全部完成，结束当前 agent 执行。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "任务完成摘要"
+                    }
+                },
+                "required": [],
+            },
+        },
+    }
+
+    def _build_tools_for_api(self) -> List[Dict]:
+        """构建传给 OpenAI tools 参数的工具列表"""
+        return self.available_tools + [self._FINISH_TOOL]
+
     async def _get_next_action(self, cur_path: str = "") -> Optional[Dict]:
         """
-        调用 LLM 获取下一个动作（智能压缩 + 路径注册表）
+        使用 OpenAI native function calling 获取下一个动作
         
-        策略:
-        1. 先用完整历史构建 prompt，估算 token 数
-        2. 如果 < 80% 上下文窗口，直接使用完整历史
-        3. 如果 >= 80%，使用压缩历史
-        4. 始终附加路径注册表（path_registry），确保压缩后路径不丢失
-        5. 保存完整 prompt 到 self._last_prompt 以便持久化
+        LLM 通过 API 的 tools 参数了解可用工具，返回 tool_calls 或纯文本。
+        - tool_calls → 提取 tool_name + arguments
+        - 纯文本（无 tool_calls） → 隐式 ask_user
         
-        Args:
-            cur_path: 当前节点路径（注入到 prompt 中）
-        
-        Returns:
-            LLM 响应字典，包含 tool_name, arguments, reason
+        返回值保持原有接口: {tool_name, arguments, reason}
         """
         context_window = self._get_context_window()
-        compress_threshold = int(context_window * 0.8)  # 80% 阈值
+        compress_threshold = int(context_window * 0.8)
         
-        # 获取完整历史
         full_history = self.trace.get_full_action_history(self.current_node_id)
-        
-        # 构建 action_id → node_id 映射（让 _format_action_record 能正确解析路径）
         action_node_map = self._build_action_node_map()
-        
-        # 构建路径注册表（始终完整，不受压缩影响）
         path_registry = self._build_path_registry()
         
-        # 格式化完整历史
         full_action_history = json.dumps(
             [self._format_action_record(r, action_node_map) for r in full_history],
-            indent=2,
-            ensure_ascii=False
+            indent=2, ensure_ascii=False
         ) if full_history else ""
         
-        # 构建 prompt 上下文（先用完整历史估算）
-        prompt_context = self._build_prompt_context()
-        prompt_context.update({
-            "available_tools": json.dumps(
-                [t["function"] for t in self.available_tools],
-                indent=2,
-                ensure_ascii=False
-            ),
+        # ---- 分别渲染 system / user 模板 ----
+        # system: 身份、规则、工具说明（半静态）
+        system_context = self._build_prompt_context()
+        system_prompt = self.system_prompt_template.format(**system_context)
+
+        # user: 用户需求、执行历史、路径索引（每轮变化）
+        user_context = {
             "user_input": self._original_user_input or "",
             "plan_list": json.dumps(self.plan_list, indent=2, ensure_ascii=False) if self.plan_list else "",
             "action_history": full_action_history,
             "path_registry": path_registry,
             "cur_path": cur_path,
             "task_base_path": str(self.trace.fs.task_dir),
-        })
-        
-        prompt = self.system_prompt_template.format(**prompt_context)
-        estimated_tokens = self._estimate_tokens(prompt)
+        }
+        user_prompt = self.user_prompt_template.format(**user_context)
+
+        estimated_tokens = self._estimate_tokens(system_prompt + user_prompt)
         
         logger.info(
             f"[Prompt] 完整历史: {len(full_history)} 条, "
@@ -732,7 +765,6 @@ class ReActAgent(AgentBase, ABC):
             f"阈值: {compress_threshold} (80% of {context_window})"
         )
         
-        # 判断是否需要压缩
         if estimated_tokens >= compress_threshold and len(full_history) > 5:
             logger.info(f"[Prompt] 超过 80% 上下文窗口，启动历史压缩")
             try:
@@ -742,18 +774,15 @@ class ReActAgent(AgentBase, ABC):
                     node_id=self.current_node_id,
                     max_tokens=2000
                 )
-                
-                # 用压缩历史重建 prompt
                 compressed_action_history = json.dumps(
                     [self._format_action_record(r, action_node_map) for r in compressed_history],
-                    indent=2,
-                    ensure_ascii=False
+                    indent=2, ensure_ascii=False
                 ) if compressed_history else ""
                 
-                prompt_context["action_history"] = compressed_action_history
-                prompt = self.system_prompt_template.format(**prompt_context)
+                user_context["action_history"] = compressed_action_history
+                user_prompt = self.user_prompt_template.format(**user_context)
                 
-                new_tokens = self._estimate_tokens(prompt)
+                new_tokens = self._estimate_tokens(system_prompt + user_prompt)
                 logger.info(
                     f"[Prompt] 压缩后: {len(compressed_history)} 条, "
                     f"tokens: {estimated_tokens} → {new_tokens}"
@@ -763,54 +792,94 @@ class ReActAgent(AgentBase, ABC):
         else:
             logger.info(f"[Prompt] 未超过阈值，使用完整历史（无压缩）")
         
-        # 保存完整 prompt（用于后续持久化到节点目录）
-        self._last_prompt = prompt
+        self._last_prompt = system_prompt + "\n\n" + user_prompt
+
+        # ---- 持久化 prompt 到 node 目录 ----
+        try:
+            node_dir = self.trace.fs.get_node_dir(self.current_node_id)
+            node_dir.mkdir(parents=True, exist_ok=True)
+            (node_dir / "prompt.txt").write_text(
+                f"[system]\n{system_prompt}\n\n[user]\n{user_prompt}",
+                encoding="utf-8"
+            )
+        except Exception as e:
+            logger.warning(f"[Prompt] 保存失败: {e}")
         
-        template = Jinja2TemplateWrapper("{{ prompt }}")
+        # ---- 构建 messages + tools，调用 native function calling ----
+        # system 角色：静态指令；user 角色：动态上下文（含 user_input + action_history）
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        tools_for_api = self._build_tools_for_api()
         
         try:
-            response, _, _ = await self.run_llm(
-                template,
-                {"prompt": prompt},
-                self.model_level or "standard"
+            result = await self.run_llm_with_tools(
+                messages, tools_for_api, self.model_level or "standard"
             )
-
-            # 使用 PlanAgent 的嵌套 JSON 解析器
-            from akg_agents.core_v2.agents.plan import PlanAgent
-            json_str = PlanAgent._extract_nested_json(response)
             
-            # 检查是否成功提取 JSON（包括空白字符串）
-            if not json_str or not json_str.strip():
-                logger.error(f"[LLM 解析失败] 无法提取 JSON")
-                logger.error(f"LLM 原始响应: {response[:500]}")
+            content = result.get("content", "")
+            reasoning = result.get("reasoning_content", "")
+            tool_calls = result.get("tool_calls", [])
+
+            # ---- 持久化 LLM 响应到 node 目录 ----
+            try:
+                node_dir = self.trace.fs.get_node_dir(self.current_node_id)
+                node_dir.mkdir(parents=True, exist_ok=True)
+                (node_dir / "llm_response.json").write_text(
+                    json.dumps(result, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+            except Exception:
+                pass
+            
+            # --- 有 tool_calls → 提取第一个工具调用 ---
+            if tool_calls:
+                tc = tool_calls[0]
+                func = tc.get("function", {})
+                tool_name = func.get("name", "")
+                args_str = func.get("arguments", "{}")
+                
+                try:
+                    arguments = json.loads(args_str) if args_str else {}
+                except json.JSONDecodeError:
+                    logger.warning(f"[Function Calling] arguments JSON 解析失败: {args_str[:200]}")
+                    arguments = {}
+                
+                logger.info(f"[Function Calling] {tool_name}({list(arguments.keys())})")
+                
                 return {
-                    "tool_name": "ask_user",
-                    "arguments": {"message": "系统错误，LLM 响应格式错误，请重试"},
-                    "reason": "LLM 响应解析失败"
+                    "tool_name": tool_name,
+                    "arguments": arguments,
+                    "reason": reasoning or content,
+                    "reasoning": reasoning,
+                    "content": content,
                 }
             
-            llm_response = json.loads(json_str)
-            logger.info(f"[LLM] {llm_response.get('tool_name')} - {llm_response.get('reason', '')[:50]}...")
+            # --- 无 tool_calls，仅有文本 → 隐式 ask_user ---
+            if content:
+                logger.info(f"[Function Calling] 模型返回纯文本（无 tool_calls），作为 ask_user 处理")
+                return {
+                    "tool_name": "ask_user",
+                    "arguments": {"message": content},
+                    "reason": reasoning,
+                    "reasoning": reasoning,
+                }
             
-            return llm_response
-        
-        except json.JSONDecodeError as e:
-            logger.error(f"[LLM 解析失败] {e}")
-            logger.error(f"提取的 JSON 字符串: {json_str[:200] if json_str else 'None'}")
-            logger.error(f"LLM 原始响应: {response[:500]}")
+            logger.error("[Function Calling] 模型既无 tool_calls 也无 content")
             return {
                 "tool_name": "ask_user",
-                "arguments": {"message": "系统错误，LLM 响应格式错误，请重试"},
-                "reason": "LLM 响应解析失败"
+                "arguments": {"message": "模型未返回有效响应，请重试。"},
+                "reason": "empty response",
             }
+        
         except Exception as e:
             error_msg = str(e)
             logger.error(f"[LLM 调用失败] {error_msg}")
-            # 返回 ask_user 而非 None，将真实错误信息传递给用户，避免 CLI 退出
             return {
                 "tool_name": "ask_user",
                 "arguments": {"message": f"⚠️ LLM 调用失败:\n\n{error_msg}\n\n请检查后重试，或输入新的指令。"},
-                "reason": "LLM API 调用异常，等待用户处理"
+                "reason": "LLM API 调用异常，等待用户处理",
             }
     
     # ==================== 用户交互 ====================
@@ -1199,6 +1268,96 @@ class ReActAgent(AgentBase, ABC):
                 f"[ReActAgent] 推送工具错误信息失败: {e}"
             )
     
+    # ==================== 结构化消息发射（opencode 风格） ====================
+
+    def _emit_structured(self, message):
+        """通过 send_message 发送结构化消息到 CLI"""
+        session_id = self.context.get("session_id")
+        if not session_id:
+            return
+        try:
+            from akg_agents.cli.runtime.message_sender import send_message
+            send_message(session_id, message)
+        except Exception as e:
+            logger.warning(f"[ReActAgent] _emit_structured failed: {e}")
+
+    def _emit_agent_header(self):
+        """发送 Agent 头部（仅首次）"""
+        if self._header_emitted:
+            return
+        self._header_emitted = True
+        try:
+            from akg_agents.cli.messages import AgentHeaderMessage
+            self._emit_structured(AgentHeaderMessage(
+                agent_name=self._get_agent_name(),
+                model_name=self.model_level or "standard",
+            ))
+        except Exception as e:
+            logger.warning(f"[ReActAgent] _emit_agent_header failed: {e}")
+
+    def _display_reasoning(self, reasoning: str):
+        """将 reasoning 文本作为 LLMStreamMessage 发送到 CLI thinking block"""
+        if not reasoning:
+            return
+        session_id = self.context.get("session_id")
+        if not session_id:
+            return
+        try:
+            from akg_agents.cli.messages import LLMStreamMessage, DisplayMessage
+            from akg_agents.cli.runtime.message_sender import send_message
+
+            send_message(session_id, LLMStreamMessage(
+                agent=self._get_agent_name(),
+                chunk=reasoning,
+                is_reasoning=True,
+            ))
+            send_message(session_id, DisplayMessage(text=""))
+        except Exception as e:
+            logger.warning(f"[ReActAgent] _display_reasoning failed: {e}")
+
+    def _display_tool_start(self, tool_name: str, arguments: dict):
+        """发送 ToolStartMessage"""
+        try:
+            from akg_agents.cli.messages import ToolStartMessage
+
+            params_summary = ""
+            for key in ("message", "user_input", "code", "cur_path"):
+                if key in arguments:
+                    val = str(arguments[key])
+                    if len(val) > 60:
+                        val = val[:57] + "..."
+                    params_summary = val
+                    break
+
+            self._emit_structured(ToolStartMessage(
+                tool_name=tool_name,
+                input_params=params_summary,
+            ))
+        except Exception as e:
+            logger.warning(f"[ReActAgent] _display_tool_start failed: {e}")
+
+    def _display_tool_done(self, tool_name: str, duration_ms: int, result: dict):
+        """发送 ToolResultMessage"""
+        try:
+            from akg_agents.cli.messages import ToolResultMessage
+
+            status = str(result.get("status", "")).lower()
+            success = status not in ("fail", "error")
+            output = ""
+            if not success:
+                output = result.get("error_information") or result.get("output") or ""
+                if len(output) > 200:
+                    output = output[:197] + "..."
+
+            self._emit_structured(ToolResultMessage(
+                tool_name=tool_name,
+                success=success,
+                duration_s=round(duration_ms / 1000, 1),
+                output=output,
+            ))
+        except Exception as e:
+            logger.warning(f"[ReActAgent] _display_tool_done failed: {e}")
+
     # ==================== 工具方法 ====================
     
     def _format_action_record(self, record: ActionRecord, action_node_map: Dict[str, str] = None) -> Dict:

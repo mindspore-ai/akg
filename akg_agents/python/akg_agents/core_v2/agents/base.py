@@ -26,7 +26,7 @@ AgentBase - Agent 基类
 import os
 import logging
 from abc import ABC
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional
 
 # Jinja2 模板支持
 from jinja2 import Environment, BaseLoader
@@ -218,6 +218,50 @@ class AgentBase(ABC):
             )
             
             raise LLMAPIError(user_message, original_error=e)
+    
+    async def run_llm_with_tools(
+        self,
+        messages: List[Dict[str, str]],
+        tools: List[Dict[str, Any]],
+        model_level: str,
+    ) -> Dict[str, Any]:
+        """
+        使用 OpenAI native function calling 调用 LLM
+        
+        Args:
+            messages: 完整的 messages 列表（system + user）
+            tools: OpenAI tools 格式 [{"type":"function","function":{...}}]
+            model_level: 模型级别
+        
+        Returns:
+            {"content": str, "reasoning_content": str, "tool_calls": list}
+        """
+        agent_name = str(self.context.get("agent_name") or "unknown")
+        session_id = str(self.context.get("session_id") or "").strip()
+        stream = self._stream_enabled()
+        
+        client = create_llm_client(model_level=model_level, session_id=session_id)
+        
+        result = await client.generate(
+            messages,
+            stream=stream,
+            agent_name=agent_name,
+            tools=tools,
+        )
+        
+        content = result.get("content", "")
+        reasoning_content = result.get("reasoning_content", "")
+        
+        if "</think>" in content:
+            content, extracted = self.split_think(content)
+            if extracted:
+                reasoning_content = extracted
+        
+        return {
+            "content": content,
+            "reasoning_content": reasoning_content,
+            "tool_calls": result.get("tool_calls", []),
+        }
     
     # ========================= 流式输出控制 =========================
     

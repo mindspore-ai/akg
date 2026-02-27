@@ -388,21 +388,13 @@ from akg_agents.op.agents.kernel_agent import KernelAgent
 # ==================== Agent Logging Wrapper ====================
 
 def wrap_agent_with_logging(agent):
-    """包装 agent.run_llm 以记录 LLM 交互到结构化日志"""
-    original_run_llm = agent.run_llm
-    
-    async def logged_run_llm(template, input_data, model_level="standard"):
-        global _current_round
-        
-        # 生成 prompt
-        prompt_text = template.format(**input_data) if hasattr(template, 'format') else str(template)
-        
-        # 获取上下文详情
-        context_details = None
+    """包装 agent.run_llm 和 agent.run_llm_with_tools 以记录 LLM 交互到结构化日志"""
+
+    def _get_context_details():
         try:
             if hasattr(agent, 'trace') and hasattr(agent, 'current_node_id'):
                 full_history = agent.trace.get_full_action_history(agent.current_node_id)
-                context_details = {
+                return {
                     "full_history_count": len(full_history),
                     "current_plan_steps": len(getattr(agent, 'plan_list', [])),
                     "original_user_input": getattr(agent, '_original_user_input', 'N/A')[:100],
@@ -410,30 +402,66 @@ def wrap_agent_with_logging(agent):
                     "is_compressed": False,
                 }
         except Exception as e:
-            context_details = {"error": str(e)}
-        
-        # 记录请求
+            return {"error": str(e)}
+        return None
+
+    # ---- hook run_llm（子 agent 仍然使用） ----
+    original_run_llm = agent.run_llm
+
+    async def logged_run_llm(template, input_data, model_level="standard"):
+        global _current_round
+        prompt_text = template.format(**input_data) if hasattr(template, 'format') else str(template)
+
         call_id = session_logger.log_llm_request(
             _current_round, model_level, prompt_text,
             getattr(agent, 'current_node_id', 'unknown'),
-            context_details
+            _get_context_details()
         )
-        
-        # 控制台摘要
         print(f"   [LLM Request] {len(prompt_text)} chars, node={getattr(agent, 'current_node_id', '?')}")
-        
-        # 调用 LLM
+
         result = await original_run_llm(template, input_data, model_level)
-        
-        # 记录响应
+
         if isinstance(result, tuple) and result:
             response = result[0] if len(result) > 0 else ""
             session_logger.log_llm_response(_current_round, call_id, response)
             print(f"   [LLM Response] {len(response) if isinstance(response, str) else 0} chars")
-        
+
         return result
-    
+
     agent.run_llm = logged_run_llm
+
+    # ---- hook run_llm_with_tools（ReAct agent 的 function calling 路径） ----
+    original_run_llm_with_tools = agent.run_llm_with_tools
+
+    async def logged_run_llm_with_tools(messages, tools, model_level="standard"):
+        global _current_round
+        import json as _json
+
+        prompt_text = "\n\n".join(
+            f"[{m.get('role', '?')}]\n{m.get('content', '')}" for m in messages
+        )
+        tools_summary = f"\n\n[tools] {len(tools)} 个工具定义"
+        full_text = prompt_text + tools_summary
+
+        call_id = session_logger.log_llm_request(
+            _current_round, model_level, full_text,
+            getattr(agent, 'current_node_id', 'unknown'),
+            _get_context_details()
+        )
+        print(f"   [LLM Request(tools)] {len(full_text)} chars, {len(tools)} tools, node={getattr(agent, 'current_node_id', '?')}")
+
+        result = await original_run_llm_with_tools(messages, tools, model_level)
+
+        response_text = result.get("content", "")
+        tool_calls = result.get("tool_calls", [])
+        if tool_calls:
+            response_text += f"\n\n[tool_calls] {_json.dumps(tool_calls, ensure_ascii=False, indent=2)}"
+        session_logger.log_llm_response(_current_round, call_id, response_text)
+        print(f"   [LLM Response(tools)] content={len(result.get('content', ''))} chars, tool_calls={len(tool_calls)}")
+
+        return result
+
+    agent.run_llm_with_tools = logged_run_llm_with_tools
     return agent
 
 

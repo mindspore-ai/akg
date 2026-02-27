@@ -141,6 +141,58 @@ class PanelDataMessage(Message):
         }
 
 
+# ==================== opencode 风格结构化消息 ====================
+
+
+@dataclass
+class AgentHeaderMessage(Message):
+    """Agent 头部消息（模型名 + Agent 名）"""
+
+    agent_name: str
+    model_name: str = ""
+
+    def get_type(self) -> str:
+        return "agent_header"
+
+    def _get_payload(self) -> Dict[str, Any]:
+        return {"agent_name": self.agent_name, "model_name": self.model_name}
+
+
+@dataclass
+class ToolStartMessage(Message):
+    """工具开始执行消息"""
+
+    tool_name: str
+    input_params: str = ""
+
+    def get_type(self) -> str:
+        return "tool_start"
+
+    def _get_payload(self) -> Dict[str, Any]:
+        return {"tool_name": self.tool_name, "input_params": self.input_params}
+
+
+@dataclass
+class ToolResultMessage(Message):
+    """工具执行结果消息"""
+
+    tool_name: str
+    success: bool = True
+    duration_s: float = 0.0
+    output: str = ""
+
+    def get_type(self) -> str:
+        return "tool_result"
+
+    def _get_payload(self) -> Dict[str, Any]:
+        return {
+            "tool_name": self.tool_name,
+            "success": self.success,
+            "duration_s": self.duration_s,
+            "output": self.output,
+        }
+
+
 # ==================== 消息注册表和工具函数 ====================
 
 # 消息类型注册表：type -> Message 类
@@ -150,6 +202,9 @@ MESSAGE_REGISTRY: Dict[str, type] = {
     "final_result": FinalResultMessage,
     "error": ErrorMessage,
     "panel_data": PanelDataMessage,
+    "agent_header": AgentHeaderMessage,
+    "tool_start": ToolStartMessage,
+    "tool_result": ToolResultMessage,
 }
 
 

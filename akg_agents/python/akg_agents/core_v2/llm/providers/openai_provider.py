@@ -172,7 +172,8 @@ class LLMProvider:
         
         content = ""
         reasoning = ""
-        tool_calls = []
+        # tool_call deltas 按 index 累积，流结束后合并为完整 tool_calls
+        pending_tool_calls: Dict[int, Dict[str, Any]] = {}
         
         stream_response = await self.client.chat.completions.create(**request_kwargs)
         
@@ -183,14 +184,35 @@ class LLMProvider:
                 content += delta.content
                 yield {"type": "content", "chunk": delta.content}
             
-            if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                reasoning += delta.reasoning_content
-                yield {"type": "reasoning", "chunk": delta.reasoning_content}
+            # 统一抽象：兼容 reasoning_content / reasoning 字段
+            reasoning_chunk = (
+                getattr(delta, "reasoning_content", None)
+                or getattr(delta, "reasoning", None)
+            )
+            if reasoning_chunk:
+                reasoning += reasoning_chunk
+                yield {"type": "reasoning", "chunk": reasoning_chunk}
             
+            # 累积 tool_call deltas（OpenAI 流式分多次发送 name 和 arguments 片段）
             if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    yield {"type": "tool_call", "tool_call": tc}
-                    tool_calls.append(tc)
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    if idx not in pending_tool_calls:
+                        pending_tool_calls[idx] = {
+                            "id": "",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                    tc = pending_tool_calls[idx]
+                    if tc_delta.id:
+                        tc["id"] = tc_delta.id
+                    if tc_delta.function:
+                        if tc_delta.function.name:
+                            tc["function"]["name"] += tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            tc["function"]["arguments"] += tc_delta.function.arguments
+        
+        tool_calls = [pending_tool_calls[i] for i in sorted(pending_tool_calls)]
         
         yield {
             "type": "final",
