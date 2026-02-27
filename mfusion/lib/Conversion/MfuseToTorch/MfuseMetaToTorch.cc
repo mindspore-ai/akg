@@ -83,6 +83,35 @@ mlir::Value buildTorchIntListFromI64ArrayAttr(mlir::ArrayAttr attr, mlir::Locati
 // =   Please keep the patterns in alphabetical order by operator name   =
 // ============================================================================
 
+/// Converts mfuse.broadcast_to -> torch.aten.broadcast_to.
+class ConvertMfuseBroadcastTo : public mlir::OpConversionPattern<mlir::mfuse::BroadcastToOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::BroadcastToOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    auto outType = mlir::cast<mlir::RankedTensorType>(op.getOutput().getType());
+    llvm::SmallVector<mlir::Value> sizeValues;
+    sizeValues.reserve(outType.getRank());
+    std::transform(outType.getShape().begin(), outType.getShape().end(), std::back_inserter(sizeValues),
+                   [&](int64_t dim) {
+                     return rewriter.create<TorchD::ConstantIntOp>(
+                       // for dynamic shape, use -1 to represent the original dimension
+                       op.getLoc(), rewriter.getI64IntegerAttr(dim == mlir::ShapedType::kDynamic ? -1 : dim));
+                   });
+
+    auto listType = TorchD::ListType::get(op.getContext(), TorchD::IntType::get(op.getContext()));
+    mlir::Value sizeList = rewriter.create<TorchD::PrimListConstructOp>(op.getLoc(), listType, sizeValues);
+
+    mlir::Type torchResultType = getTypeConverter()->convertType(outType);
+    if (!torchResultType) return mlir::failure();
+
+    mlir::Value input = adaptor.getInput();
+    rewriter.replaceOpWithNewOp<TorchD::AtenBroadcastToOp>(op, torchResultType, input, sizeList);
+    return mlir::success();
+  }
+};
+
 /// Default 2D convolution parameter values for torch.aten.convolution.
 constexpr int64_t kConv2DStrideVal = 1;
 constexpr int64_t kConv2DPaddingVal = 0;
@@ -91,8 +120,8 @@ constexpr int64_t kConv2DOutputPaddingVal = 0;
 constexpr int64_t kConv2DGroupsVal = 1;
 
 /// Builds a torch list of two constant ints [a, b] for convolution spatial params.
-static mlir::Value buildConvIntList2(mlir::ConversionPatternRewriter &rewriter, mlir::Location loc,
-                                     int64_t a, int64_t b) {
+static mlir::Value buildConvIntList2(mlir::ConversionPatternRewriter &rewriter, mlir::Location loc, int64_t a,
+                                     int64_t b) {
   return buildTorchIntListFromI64ArrayAttr(rewriter.getI64ArrayAttr({a, b}), loc, rewriter);
 }
 
@@ -108,9 +137,9 @@ static mlir::Value buildAtenConvolution(mlir::ConversionPatternRewriter &rewrite
   mlir::Value falseVal = rewriter.create<TorchD::ConstantBoolOp>(loc, false);
   mlir::Value groupsVal = rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(kConv2DGroupsVal));
   return rewriter
-      .create<TorchD::AtenConvolutionOp>(loc, resultType, input, weight, bias, strideList, paddingList,
-                                        dilationList, falseVal, outputPaddingList, groupsVal)
-      .getResult();
+    .create<TorchD::AtenConvolutionOp>(loc, resultType, input, weight, bias, strideList, paddingList, dilationList,
+                                       falseVal, outputPaddingList, groupsVal)
+    .getResult();
 }
 
 /// Converts mfuse.conv2d -> torch.aten.convolution (with bias=None).
@@ -245,10 +274,7 @@ struct ConvertMfuseCast : public mlir::OpConversionPattern<mlir::mfuse::CastOp> 
     mlir::Value input = adaptor.getInput();
     auto resultType = getTypeConverter()->convertType(op.getResult().getType());
 
-    mlir::Type dtypeType = op.getDtypeAttr().getValue();
-    if (mlir::isa<mlir::NoneType, mlir::mfuse::NoneType, TorchD::NoneType>(dtypeType)) {
-      return rewriter.notifyMatchFailure(op, "cast op requires a concrete dtype, but got NoneType");
-    }
+    mlir::Type dtypeType = mlir::cast<mlir::RankedTensorType>(op.getResult().getType()).getElementType();
     auto dtypeValOrFailure = buildTorchDtypeValue(dtypeType, op.getLoc(), rewriter);
     if (mlir::failed(dtypeValOrFailure)) {
       return rewriter.notifyMatchFailure(op, "unsupported dtype for torch scalar type");
@@ -325,7 +351,7 @@ struct ConvertMfuseReduceSum : public mlir::OpConversionPattern<mlir::mfuse::Red
     bool keepdim = op.getKeepdim();
     mlir::Value keepdimVal = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), keepdim);
 
-    mlir::Type dtypeType = op.getDtypeAttr().getValue();
+    mlir::Type dtypeType = op.getResult().getType().cast<mlir::RankedTensorType>().getElementType();
     mlir::Value dtypeVal;
     if (mlir::isa<mlir::NoneType, mlir::mfuse::NoneType, TorchD::NoneType>(dtypeType)) {
       dtypeVal = rewriter.create<TorchD::ConstantNoneOp>(op.getLoc());
@@ -378,6 +404,7 @@ class ConvertMfuseReshape : public mlir::OpConversionPattern<mlir::mfuse::Reshap
 
 static void populateMfuseMetaToTorchCustomPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
+  patterns.add<ConvertMfuseBroadcastTo>(converter, context);
   patterns.add<ConvertMfuseCast>(converter, context);
   patterns.add<ConvertMfuseConv2D>(converter, context);
   patterns.add<ConvertMfuseConv2DWithBias>(converter, context);
