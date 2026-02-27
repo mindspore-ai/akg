@@ -82,6 +82,34 @@ struct PDLRewriteHelpers {
     // If not a list or failed to extract, return failure
     return Attribute();
   }
+
+  // Helper to extract string value from a constant operation's "value" attribute
+  static std::optional<std::string> getConstantStrValue(Value val) {
+    auto *defOp = val.getDefiningOp();
+    if (!defOp) return std::nullopt;
+
+    // Try to get "value" attribute (common for constant operations like torch.constant.str)
+    if (auto valueAttr = defOp->getAttrOfType<StringAttr>("value")) {
+      return valueAttr.getValue().str();
+    }
+    return std::nullopt;
+  }
+
+  static Attribute getStrAttr(PatternRewriter &rewriter, Value val) {
+    // Try to get string value from constant operation
+    if (auto strVal = getConstantStrValue(val)) {
+      return rewriter.getStringAttr(*strVal);
+    }
+
+    // Try to match other constant patterns
+    StringAttr stringAttr;
+    if (matchPattern(val, m_Constant(&stringAttr))) {
+      return stringAttr;
+    }
+
+    // Return empty string attribute if no constant found
+    return rewriter.getStringAttr("");
+  }
 };
 
 // Register PDL native rewrite functions shared by conversion patterns.
@@ -98,6 +126,7 @@ inline void registerPDLLHelperFunctions(RewritePatternSet &patterns) {
   patterns.getPDLPatterns().registerRewriteFunction("Get9", getIndex<9>);
   patterns.getPDLPatterns().registerRewriteFunction("Get10", getIndex<10>);
   patterns.getPDLPatterns().registerRewriteFunction("GetF64Attr", PDLRewriteHelpers::getF64Attr);
+  patterns.getPDLPatterns().registerRewriteFunction("GetStrAttr", PDLRewriteHelpers::getStrAttr);
   patterns.getPDLPatterns().registerRewriteFunction("GetI64ArrayAttr", PDLRewriteHelpers::getI64ArrayAttr);
 }
 

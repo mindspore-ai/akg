@@ -7,11 +7,6 @@ Pattern ConvertMfuseAclnnBatchMatmul {
   replace root with op<torch.aten.bmm>(convertValues(operands)) -> (convertType(result));
 }
 
-Pattern ConvertMfuseAclnnGelu {
-  let root = op<mfuse.aclnn.gelu>(operands: ValueRange) -> (result: Type);
-  replace root with op<torch.aten.gelu>(convertValues(operands)) -> (convertType(result));
-}
-
 Pattern ConvertMfuseAclnnMatmul {
    let root = op<mfuse.aclnn.matmul>(operands: ValueRange) -> (result: Type);
    replace root with op<torch.aten.matmul>(convertValues(operands)) -> (convertType(result));

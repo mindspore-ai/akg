@@ -15,12 +15,9 @@
  */
 
 #include "mfusion/Conversion/MfuseToTorch/MfuseToTorch.h"
-#include "mfusion/Conversion/MfuseToTorch/MfuseMetaToTorch.h"
-#include "mfusion/Conversion/MfuseToTorch/MfuseAclnnToTorch.h"
 
 #include <algorithm>
 #include <iterator>
-
 #include "llvm/Support/FormatVariadic.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -34,9 +31,12 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mfusion/Conversion/MfuseToTorch/MfuseMetaToTorch.h"
+#include "mfusion/Conversion/MfuseToTorch/MfuseAclnnToTorch.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/MfuseDialect.h"
 #include "mfusion/Support/Logging.h"
+#include "mfusion/Conversion/PdllHelper.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchDialect.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchTypes.h"
@@ -124,7 +124,8 @@ class ConvertDvmCallOp : public mlir::OpConversionPattern<mlir::mfuse::DvmCallOp
   }
 };
 
-struct ConvertMfuseToTorchPass : public mlir::PassWrapper<ConvertMfuseToTorchPass, mlir::OperationPass<mlir::ModuleOp>> {
+struct ConvertMfuseToTorchPass
+    : public mlir::PassWrapper<ConvertMfuseToTorchPass, mlir::OperationPass<mlir::ModuleOp>> {
   mlir::StringRef getArgument() const final { return "convert-mfuse-to-torch"; }
 
   mlir::StringRef getDescription() const final { return "Convert Mfuse operations to Torch dialect operations"; }
@@ -141,6 +142,7 @@ struct ConvertMfuseToTorchPass : public mlir::PassWrapper<ConvertMfuseToTorchPas
   mlir::LogicalResult initialize(mlir::MLIRContext *ctx) override {
     mlir::RewritePatternSet patternList(ctx);
     mlir::registerConversionPDLFunctions(patternList);
+    mlir::registerPDLLHelperFunctions(patternList);
     populateGeneratedPDLLPatterns(patternList, mlir::PDLConversionConfig(&converter_));
     mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(patternList, converter_);
     mlir::populateMfuseMetaToTorchConversionPatterns(converter_, patternList);
