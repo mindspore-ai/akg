@@ -793,6 +793,17 @@ class ReActAgent(AgentBase, ABC):
             logger.info(f"[Prompt] 未超过阈值，使用完整历史（无压缩）")
         
         self._last_prompt = system_prompt + "\n\n" + user_prompt
+
+        # ---- 持久化 prompt 到 node 目录 ----
+        try:
+            node_dir = self.trace.fs.get_node_dir(self.current_node_id)
+            node_dir.mkdir(parents=True, exist_ok=True)
+            (node_dir / "prompt.txt").write_text(
+                f"[system]\n{system_prompt}\n\n[user]\n{user_prompt}",
+                encoding="utf-8"
+            )
+        except Exception as e:
+            logger.warning(f"[Prompt] 保存失败: {e}")
         
         # ---- 构建 messages + tools，调用 native function calling ----
         # system 角色：静态指令；user 角色：动态上下文（含 user_input + action_history）
@@ -810,6 +821,17 @@ class ReActAgent(AgentBase, ABC):
             content = result.get("content", "")
             reasoning = result.get("reasoning_content", "")
             tool_calls = result.get("tool_calls", [])
+
+            # ---- 持久化 LLM 响应到 node 目录 ----
+            try:
+                node_dir = self.trace.fs.get_node_dir(self.current_node_id)
+                node_dir.mkdir(parents=True, exist_ok=True)
+                (node_dir / "llm_response.json").write_text(
+                    json.dumps(result, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+            except Exception:
+                pass
             
             # --- 有 tool_calls → 提取第一个工具调用 ---
             if tool_calls:

@@ -120,18 +120,34 @@ class AKGConsole:
             return
         if not self._in_think_block:
             self._open_think_block()
-        cleaned = chunk.replace("\n", " ")
-        self._thinking_buffer += cleaned
+
+        self._thinking_buffer += chunk
+
+        while "\n" in self._thinking_buffer:
+            line, self._thinking_buffer = self._thinking_buffer.split("\n", 1)
+            line = line.strip()
+            if line:
+                self._print_thinking_line(line)
+
         if len(self._thinking_buffer) >= _THINKING_FLUSH_THRESHOLD:
             self._flush_thinking()
+
+    def _print_thinking_line(self, text: str) -> None:
+        """打印一行 thinking，自动按终端宽度折行并保持 ┃ 前缀"""
+        prefix = "  ┃  "
+        max_width = max((self._console.width or 80) - len(prefix), 20)
+        while len(text) > max_width:
+            self._console.print(Text(f"{prefix}{text[:max_width]}", style="dim"))
+            text = text[max_width:]
+        if text:
+            self._console.print(Text(f"{prefix}{text}", style="dim"))
 
     def _flush_thinking(self) -> None:
         text = self._thinking_buffer.strip()
         if not text:
             return
         self._thinking_buffer = ""
-        line = Text(f"  ┃  {text}", style="dim")
-        self._console.print(line)
+        self._print_thinking_line(text)
 
     def _close_think_block(self) -> None:
         if not self._in_think_block:
@@ -141,13 +157,19 @@ class AKGConsole:
         self._console.print()
 
     def _flush_content(self) -> None:
-        text = self._content_buffer.strip()
+        text = self._content_buffer.rstrip()
         if not text:
+            self._content_buffer = ""
+            self._in_content_block = False
             return
         self._content_buffer = ""
         self._in_content_block = False
-        line = Text(f"  {text}")
-        self._console.print(line)
+        for line in text.split("\n"):
+            line = line.rstrip()
+            if line:
+                self._console.print(Text(f"  {line}"))
+            else:
+                self._console.print()
 
     def _flush_all_streams(self) -> None:
         if self._in_think_block:
@@ -229,4 +251,8 @@ class AKGConsole:
         if not text:
             return
         for line in text.split("\n"):
-            self._console.print(Text(f"  {line}"))
+            line = line.rstrip()
+            if line:
+                self._console.print(Text(f"  {line}"))
+            else:
+                self._console.print()
