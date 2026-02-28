@@ -31,7 +31,7 @@ Skill System 版本管理示例
 from pathlib import Path
 
 from akg_agents.core_v2.skill import (
-    SkillMetadata, SkillLevel, SkillRegistry,
+    SkillMetadata, SkillRegistry,
     Version, compare_versions
 )
 
@@ -49,7 +49,7 @@ def example_1_version_basics():
     v1 = SkillMetadata(
         name="cuda-basics",
         description="CUDA 基础知识 v1.0.0",
-        level=SkillLevel.L3,
+        category="guide",
         version="1.0.0",
         content="# CUDA 基础 v1.0.0\n\n初始版本..."
     )
@@ -57,7 +57,7 @@ def example_1_version_basics():
     v2 = SkillMetadata(
         name="cuda-basics",
         description="CUDA 基础知识 v2.0.0",
-        level=SkillLevel.L3,
+        category="guide",
         version="2.0.0",
         content="# CUDA 基础 v2.0.0\n\n增加新特性..."
     )
@@ -65,7 +65,7 @@ def example_1_version_basics():
     v3 = SkillMetadata(
         name="cuda-basics",
         description="CUDA 基础知识 v2.1.0",
-        level=SkillLevel.L3,
+        category="guide",
         version="2.1.0",
         content="# CUDA 基础 v2.1.0\n\n修复bug..."
     )
@@ -98,7 +98,7 @@ def example_2_version_strategies():
         skill = SkillMetadata(
             name="triton-syntax",
             description=f"Triton 语法 v{ver}",
-            level=SkillLevel.L3,
+            category="guide",
             version=ver,
             content=f"# Triton v{ver}"
         )
@@ -183,7 +183,7 @@ def example_4_multi_repo_scenario():
         skill = SkillMetadata(
             name=name,
             description=f"{name} v{ver} (stable)",
-            level=SkillLevel.L3,
+            category="guide",
             version=ver
         )
         registry.register(skill)
@@ -200,7 +200,7 @@ def example_4_multi_repo_scenario():
         skill = SkillMetadata(
             name=name,
             description=f"{name} v{ver} (latest)",
-            level=SkillLevel.L3,
+            category="guide",
             version=ver
         )
         registry.register(skill)
@@ -238,7 +238,7 @@ def example_5_version_statistics():
         skill = SkillMetadata(
             name="test-skill",
             description=f"Test v{ver}",
-            level=SkillLevel.L3,
+            category="guide",
             version=ver
         )
         registry.register(skill)
@@ -280,7 +280,7 @@ def example_6_version_queries():
         skill = SkillMetadata(
             name="advanced-skill",
             description=f"Advanced v{ver}",
-            level=SkillLevel.L3,
+            category="guide",
             version=ver
         )
         registry.register(skill)

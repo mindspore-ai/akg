@@ -1,7 +1,6 @@
 ---
 name: kernel-agent-overview
 description: "KernelAgent 工作流程与用户交互指南"
-level: L1
 category: overview
 version: "1.0.0"
 metadata:

@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-debugging
 description: "Triton Ascend 调试排查清单和常见错误速查表，包括编译错误、运行时错误、精度问题和性能问题的诊断方法。适用于内核代码生成、出现错误需要定位原因、或需要验证代码正确性的调试场景"
-level: L4
 category: implementation
 version: "1.0.0"
 metadata:

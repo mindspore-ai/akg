@@ -1,7 +1,6 @@
 ---
 name: cuda-c-basics
 description: "CUDA C 核心概念、内核结构和标准编程模式"
-level: L4
 category: fundamental
 version: "1.0.0"
 metadata:

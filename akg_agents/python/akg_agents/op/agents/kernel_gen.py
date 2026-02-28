@@ -30,10 +30,7 @@ from akg_agents.core_v2.agents import AgentBase, register_agent, Jinja2TemplateW
 from akg_agents.core_v2.filesystem import ActionRecord
 
 # 导入 skill 系统模块
-from akg_agents.core_v2.skill import (
-    SkillLoader, 
-    SkillLevel,
-)
+from akg_agents.core_v2.skill import SkillLoader
 # 使用算子专用的 SkillSelector
 from akg_agents.op.skill.operator_selector import (
     OperatorSkillSelector,
@@ -238,7 +235,7 @@ class KernelGen(AgentBase):
             context = OperatorSelectionContext(
                 dsl=dsl.replace("_", "-"),  # triton_ascend -> triton-ascend
                 backend=backend,
-                include_levels=[SkillLevel.L3, SkillLevel.L4]
+                include_category_groups=["knowledge"]  # guide, fundamental, dsl, method, implementation, reference
             )
             filtered = self.skill_selector.coarse_filter(loaded_skills, context)
             
@@ -353,31 +350,24 @@ class KernelGen(AgentBase):
             pass
         return [], ""
     
-    # Category 排序顺序
     CATEGORY_ORDER = ["fundamental", "method", "implementation", "example"]
     
     def _assemble_skill_contents(self, selected_skills: List[Any]) -> str:
-        """
-        按 level → category → name 排序 skills，拼接其内容为字符串。
-        """
+        """按 category -> name 排序 skills，拼接其内容为字符串。"""
         if not selected_skills:
             return ""
         
         def sort_key(skill):
-            level_map = {"L3": 1, "L4": 2, "L5": 3}
-            level_value = level_map.get(
-                skill.level.value if skill.level else "L5", 99
-            )
             try:
                 category_idx = self.CATEGORY_ORDER.index(skill.category or "")
             except ValueError:
                 category_idx = 999
-            return (level_value, category_idx, skill.name)
+            return (category_idx, skill.name)
         
         sorted_skills = sorted(selected_skills, key=sort_key)
         
         order_desc = [
-            f"{s.name}[{s.level.value if s.level else '?'}/{s.category or '?'}]"
+            f"{s.name}[{s.category or '?'}]"
             for s in sorted_skills
         ]
         logger.info(f"Skill assembly order: {order_desc}")
@@ -446,7 +436,7 @@ class KernelGen(AgentBase):
                     backend=backend
                 )
             
-            # 2. 按 level → category → name 排序并拼接 skill 内容
+            # 2. 按 category → name 排序并拼接 skill 内容
             skill_contents = self._assemble_skill_contents(selected_skills)
             
             # 3. 渲染 System Prompt

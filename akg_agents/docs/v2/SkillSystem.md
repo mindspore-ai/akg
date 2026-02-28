@@ -10,7 +10,7 @@ Key capabilities:
 
 - **Standard format**: SKILL.md with YAML frontmatter metadata
 - **Multi-path loading**: project-level and global-level skill directories
-- **Hierarchical management**: L1-L5 levels with parent-child relationships
+- **Category-based management**: category (e.g. workflow, agent, guide) with optional parent-child structure
 - **LLM-driven selection**: two-phase filtering (metadata filter + LLM selection)
 - **Version management**: SemVer-based multi-version support
 - **Unified installation**: all skills installed to `~/.akg/skills/`
@@ -23,7 +23,7 @@ Each Skill is defined by a `SKILL.md` file with YAML frontmatter:
 ---
 name: cuda-basics
 description: "CUDA programming fundamentals and optimization patterns"
-level: L3
+category: guide
 version: "1.0.0"
 metadata:
   backend: cuda
@@ -46,24 +46,29 @@ Markdown content with domain knowledge...
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `level` | SkillLevel | Hierarchy level: L1-L5 |
+| `category` | string | Semantic type (e.g., `workflow`, `agent`, `guide`, `example`) |
 | `version` | string | SemVer version (default: `"1.0.0"`) |
-| `category` | string | Semantic type (e.g., `workflow`, `agent`, `strategy`) |
 | `license` | string | License (MIT, Apache-2.0, etc.) |
 | `metadata` | dict | Custom key-value metadata for filtering |
 | `structure` | dict | Hierarchy config (child_skills, default_children, exclusive_groups) |
 
-## 3. Skill Levels (L1-L5)
+## 3. Skill Categories
 
-> **Note**: The Level hierarchy is currently designed for the **kernel generation scenario**. Level definitions for other scenarios are pending.
+Skills are classified by `category` for filtering and selection. Standard categories (see `STANDARD_CATEGORIES` in code) include:
 
-| Level | Semantic | Description |
-|-------|----------|-------------|
-| L1 | Process / Orchestration | High-level workflow and orchestration knowledge |
-| L2 | Component / Actor | Component-level execution knowledge |
-| L3 | Method / Strategy | Method and strategy patterns |
-| L4 | Implementation / Detail | Implementation details and techniques |
-| L5 | Atomic / Example | Atomic examples and code snippets |
+| Category | Semantic | Description |
+|----------|----------|-------------|
+| workflow | Process / Orchestration | High-level workflow and orchestration knowledge |
+| overview | Overview | System or component overview |
+| agent | Component / Actor | Component-level execution knowledge |
+| guide | Design & Programming Guide | Design methodology, programming guides |
+| fundamental | Fundamental | Core concepts and principles |
+| dsl | DSL Reference | Language or API reference |
+| method | Method / Strategy | Optimization methods and strategy patterns |
+| implementation | Implementation / Detail | Implementation details and techniques |
+| reference | Reference | Reference documentation |
+| example | Atomic / Example | Code examples |
+| case | Case Study | Concrete case patterns |
 
 ## 4. SkillLoader
 
@@ -92,7 +97,7 @@ skills = loader.load_all()  # Load from all discovered directories
 
 ## 5. SkillRegistry
 
-`SkillRegistry` manages loaded skills with indexing by name, level, and version.
+`SkillRegistry` manages loaded skills with indexing by name, category, and version.
 
 ```python
 from akg_agents.core_v2.skill import SkillRegistry
@@ -107,8 +112,8 @@ skill = registry.get("cuda-basics")                    # Latest version
 skill = registry.get("cuda-basics", version="1.0.0")   # Specific version
 skill = registry.get("cuda-basics", strategy="stable")  # Oldest (stable) version
 
-# Filter by level
-l3_skills = registry.get_by_level(SkillLevel.L3)
+# Filter by category
+guide_skills = registry.get_by_category("guide")
 ```
 
 ### Version Selection Strategies
@@ -146,7 +151,7 @@ hierarchy.rebuild()
 ```python
 from akg_agents.core_v2.skill.hierarchy import validate_all, detect_cycles
 
-# Validate all hierarchy constraints (level order, progressive disclosure)
+# Validate all hierarchy constraints (category order, progressive disclosure)
 is_valid, errors = validate_all(hierarchy)
 
 # Detect circular dependencies
@@ -181,14 +186,17 @@ from akg_agents.core_v2.skill import SkillSelector, SelectionContext
 # Create selection context
 context = SelectionContext(
     custom_fields={"backend": "cuda", "dsl": "triton_cuda"},
-    include_levels=[SkillLevel.L3, SkillLevel.L4],  # optional
-    exclude_levels=[SkillLevel.L1],                   # optional
+    include_categories=["guide", "implementation"],  # optional
+    exclude_categories=["workflow"],                  # optional
+    include_category_groups=["knowledge"],           # optional: e.g. orchestration, actor, knowledge, example
 )
 
 # Create selector with custom filters
 selector = SkillSelector(custom_filters=[
     create_metadata_matcher("backend"),
     create_metadata_matcher("dsl"),
+    create_category_filter("include"),
+    create_category_filter("exclude"),
 ])
 
 # Coarse filter only (no LLM)
@@ -199,7 +207,7 @@ selected = await selector.select(
     all_skills, context,
     llm_generate_func=llm_func,       # optional: LLM function for fine selection
     prompt_template=None,              # optional: custom LLM prompt template
-    level=SkillLevel.L3,              # optional: filter by level
+    category="guide",                  # optional: filter by category
 )
 
 # Get children skills of a parent
@@ -212,8 +220,10 @@ children = selector.get_children_skills(parent_skill, all_skills)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `include_levels` | `Optional[List[SkillLevel]]` | Only include skills at these levels |
-| `exclude_levels` | `Optional[List[SkillLevel]]` | Exclude skills at these levels |
+| `include_categories` | `Optional[List[str]]` | Only include skills with these categories |
+| `exclude_categories` | `Optional[List[str]]` | Exclude skills with these categories |
+| `include_category_groups` | `Optional[List[str]]` | Only include skills in these groups (orchestration, actor, knowledge, example) |
+| `exclude_category_groups` | `Optional[List[str]]` | Exclude skills in these groups |
 | `custom_fields` | `Dict[str, Any]` | Custom key-value pairs for metadata matching |
 
 ### Prompt Assembly
@@ -234,7 +244,7 @@ prompt = build_prompt_with_skills(
 | Function | Description |
 |----------|-------------|
 | `create_metadata_matcher(context_field, metadata_field, match_mode)` | Factory for metadata matching filters. Supports `"include"` and `"exclude"` modes. |
-| `create_level_filter(match_mode)` | Factory for level-based filters. |
+| `create_category_filter(match_mode)` | Factory for category-based filters. |
 | `and_filters(*filters)` | Combine filters with AND logic. |
 | `or_filters(*filters)` | Combine filters with OR logic. |
 

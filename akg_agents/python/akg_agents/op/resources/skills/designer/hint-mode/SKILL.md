@@ -1,8 +1,7 @@
 ---
 name: hint-mode
 description: "Sketch 设计中 Hint 模式参数空间配置指南，用于从任务描述中提取参数范围并生成可调优的参数空间配置"
-level: L2
-category: design
+category: guide
 version: "1.0.0"
 metadata:
   role: designer

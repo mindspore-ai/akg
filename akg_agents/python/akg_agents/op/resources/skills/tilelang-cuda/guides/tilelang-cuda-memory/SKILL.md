@@ -1,7 +1,6 @@
 ---
 name: tilelang-cuda-memory
 description: "TileLang CUDA 内存访问优化策略，包括 T.alloc_shared/fragment 使用、数据布局优化、合并访存和 Bank Conflict 避免技巧。适用于内存带宽受限、需要优化数据搬运效率的 TileLang 内核性能优化场景"
-level: L4
 category: implementation
 version: "1.0.0"
 metadata:

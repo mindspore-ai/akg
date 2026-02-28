@@ -1,7 +1,6 @@
 ---
 name: cuda-c-examples-torch
 description: "PyTorch + CUDA C 完整集成示例代码"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

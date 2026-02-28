@@ -27,7 +27,7 @@ my-skill/
 name: my-skill-name
 description: "清晰简洁地描述此 Skill 提供的知识"
 level: L3
-category: dsl
+category: guide
 version: "1.0.0"
 license: MIT
 metadata:
@@ -72,7 +72,7 @@ Markdown 格式的详细知识内容...
 |------|------|------|------|
 | `level` | string | Skill 层级（L1-L5） | `"L3"` |
 | `version` | string | SemVer 版本号 | `"1.0.0"` |
-| `category` | string | 语义类别 | `"dsl"`、`"workflow"`、`"strategy"` |
+| `category` | string | 语义类别 | `"guide"`、`"workflow"`、`"method"` |
 | `license` | string | 许可证标识 | `"MIT"`、`"Apache-2.0"` |
 
 ### 可选字段

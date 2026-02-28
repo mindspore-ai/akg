@@ -1,7 +1,6 @@
 ---
 name: coder-agent
 description: "代码生成Agent，负责将设计方案转换为可执行代码"
-level: L2
 category: agent
 version: "2.0.0"
 license: MIT

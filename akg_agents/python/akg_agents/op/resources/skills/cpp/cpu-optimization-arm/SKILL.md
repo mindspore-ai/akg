@@ -1,7 +1,6 @@
 ---
 name: cpu-optimization-arm
 description: "ARM CPU 架构性能优化技巧、NEON SIMD 向量化、数值稳定性和调试策略"
-level: L3
 category: method
 version: "1.0.0"
 metadata:

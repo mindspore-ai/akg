@@ -1,7 +1,6 @@
 ---
 name: pypto-case-norm-batchnorm
 description: "模式 C 示例：3D Norm — BatchNorm，展示 3D 降维、连续单轴 sum 多维归约、expand_clone 广播"
-level: L4
 category: example
 version: "1.0.0"
 metadata:

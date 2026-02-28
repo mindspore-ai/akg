@@ -1,7 +1,6 @@
 ---
 name: pypto-loop-view
 description: "pypto.loop + pypto.view 的正确写法：view shape 必须是编译期常量，适用于 matmul、norm、elementwise 等所有 loop 场景"
-level: L4
 category: implementation
 version: "1.0.0"
 metadata:

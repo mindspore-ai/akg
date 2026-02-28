@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-reduction-amin-small
 description: "中等规模1D归约（amin）优化：适中并行度（grid=8时最优2.21us），存在最优平衡点（过小导致单块负载过重、过大引入调度开销），适用于中等规模1D数据（6万级元素）的全量归约场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

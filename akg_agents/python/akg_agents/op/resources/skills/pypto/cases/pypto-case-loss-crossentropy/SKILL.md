@@ -1,7 +1,6 @@
 ---
 name: pypto-case-loss-crossentropy
 description: "模式 D 示例：Loss — CrossEntropyLoss，展示多输入 kernel、两段 tile、softmax+gather+sum、标量输出"
-level: L4
 category: example
 version: "1.0.0"
 metadata:
