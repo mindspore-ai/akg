@@ -223,7 +223,7 @@ class TaskGenerator:
             config=self.config,
             framework=self.framework,
             task_type="profile",
-            workflow="default_workflow",
+            workflow=None,  # 从 config 读取 default_workflow，不硬编码
             inspirations=[],  # 初始任务无灵感
             meta_prompts=meta_prompts,
             handwrite_suggestions=handwrite_suggestions,
@@ -265,7 +265,7 @@ class TaskGenerator:
             config=self.config,
             framework=self.framework,
             task_type="profile",
-            workflow="default_workflow",
+            workflow=None,  # 从 config 读取 default_workflow，不硬编码
             inspirations=inspirations,
             meta_prompts=meta_prompts,
             handwrite_suggestions=handwrite_suggestions,

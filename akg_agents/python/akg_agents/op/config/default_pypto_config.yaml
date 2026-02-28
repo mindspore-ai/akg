@@ -16,7 +16,7 @@ log_dir: "~/aikg_logs"
 
 # Workflow configuration
 workflow_config_path: "config/default_workflow.yaml"  # 原 Task 使用
-default_workflow: "default_workflow"  # LangGraphTask 使用
+default_workflow: "kernelgen_only_workflow"  # LangGraphTask 使用（PyPTO 需要 Skill 系统）
 max_step: 9  # 一次 generate+verify，失败直接结束
 
 # PyPTO runtime mode
