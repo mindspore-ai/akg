@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-attention
 description: "Attention 算子优化策略和 Flash Attention 实现技巧，包括 self-attention、cross-attention、scaled-dot-product-attention 的高效实现。适用于实现 Transformer 注意力机制、多头注意力或需要内存高效注意力计算的内核代码生成场景"
-level: L4
 category: implementation
 version: "1.0.0"
 metadata:

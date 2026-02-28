@@ -1,7 +1,6 @@
 ---
 name: triton-ascend
 description: "Triton Ascend NPU编程指南，包含核心概念、标准模式和完整示例"
-level: L3
 category: dsl
 version: "1.0.0"
 license: MIT

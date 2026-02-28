@@ -19,38 +19,50 @@ Skill元数据定义与解析
 ---
 name: skill-name
 description: "技能描述"
-level: L1
+category: workflow
 version: "1.0.0"
 ---
 # Markdown内容
 """
 
 import re
-from enum import Enum
+import logging
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
 
-class SkillLevel(str, Enum):
-    """技能层级（通用定义，提供语义提示）"""
-    L1 = "L1"  # 流程/编排层（Process/Orchestration）
-    L2 = "L2"  # 组件/执行层（Component/Actor）
-    L3 = "L3"  # 方法/策略层（Method/Strategy）
-    L4 = "L4"  # 实现/细节层（Implementation/Detail）
-    L5 = "L5"  # 原子/样例层（Atomic/Example）
-    
-    @classmethod
-    def get_semantic_hint(cls, level: "SkillLevel") -> str:
-        """获取语义提示"""
-        hints = {
-            cls.L1: "流程/编排层（Process/Orchestration）",
-            cls.L2: "组件/执行层（Component/Actor）",
-            cls.L3: "方法/策略层（Method/Strategy）",
-            cls.L4: "实现/细节层（Implementation/Detail）",
-            cls.L5: "原子/样例层（Atomic/Example）",
-        }
-        return hints.get(level, "未知层级")
+# 标准 category 值（非枚举，仅作参考约束）
+STANDARD_CATEGORIES = {
+    "workflow": "工作流/编排（Process/Orchestration）",
+    "overview": "系统概览（Overview）",
+    "agent": "智能体/执行组件（Agent/Actor）",
+    "guide": "设计方法与编程指南（Design & Programming Guide）",
+    "fundamental": "基础知识（Fundamental）",
+    "method": "优化方法/策略（Method/Strategy）",
+    "implementation": "实现细节（Implementation）",
+    "reference": "参考文档（Reference）",
+    "example": "代码示例（Example）",
+    "case": "具体案例（Case Study）",
+}
+
+# 粗粒度分组，用于 include_category_groups / exclude_category_groups 过滤
+CATEGORY_GROUPS = {
+    "orchestration": ["workflow", "overview"],
+    "actor": ["agent"],
+    "knowledge": ["guide", "fundamental", "method", "implementation", "reference"],
+    "example": ["example", "case"],
+}
+
+# 旧 level 字段到默认 category 的映射（兼容未更新的 SKILL.md）
+LEVEL_TO_DEFAULT_CATEGORY = {
+    "L1": "workflow",
+    "L2": "agent",
+    "L3": "guide",
+    "L4": "implementation",
+    "L5": "example",
+}
 
 
 @dataclass
@@ -71,7 +83,7 @@ class SkillMetadata:
     """
     Skill元数据
     
-    符合Agent Skills开放标准，并扩展支持AIKG分级管理
+    符合Agent Skills开放标准，并扩展支持AIKG分类管理（category）
     """
     # ===== 必需字段（Agent Skills标准） =====
     name: str                          # 技能名称（小写字母数字+连字符）
@@ -83,8 +95,7 @@ class SkillMetadata:
     metadata: Dict[str, str] = field(default_factory=dict)  # 自定义元数据
     
     # ===== AIKG扩展字段 =====
-    level: Optional[SkillLevel] = None  # 技能层级（L1-L5）
-    category: Optional[str] = None      # 语义类型（如：workflow, agent, strategy等）
+    category: Optional[str] = None      # 语义类型（如：workflow, agent, guide, example等）
     version: str = "1.0.0"              # 版本号
     structure: Optional[SkillStructure] = None  # 结构配置（层级关系）
     
@@ -126,10 +137,9 @@ class SkillMetadata:
         if desc_len < self._MIN_DESC_LENGTH:
             return False, f"description长度必须至少{self._MIN_DESC_LENGTH}字符"
         
-        # 3. 验证level（如果指定）
-        if self.level and self.level not in SkillLevel:
-            return False, f"level必须是{[l.value for l in SkillLevel]}之一"
-        
+        # 3. 验证 category（如果指定，可选检查是否在标准列表中）
+        if self.category and self.category not in STANDARD_CATEGORIES:
+            logger.debug(f"category '{self.category}' 不在 STANDARD_CATEGORIES 中，将作为自定义 category 使用")
         
         return True, None
     
@@ -154,10 +164,15 @@ class SkillMetadata:
         compatibility = yaml_data.get("compatibility")
         custom_metadata = yaml_data.get("metadata", {})
         
-        # 提取AIKG扩展字段
-        level_str = yaml_data.get("level")
-        level = SkillLevel(level_str) if level_str else None
+        # 提取AIKG扩展字段（兼容旧 level 字段：无 category 时有 level 则自动转换）
         category = yaml_data.get("category")
+        level_str = yaml_data.get("level")
+        if not category and level_str and level_str in LEVEL_TO_DEFAULT_CATEGORY:
+            category = LEVEL_TO_DEFAULT_CATEGORY[level_str]
+            logger.warning(
+                f"SKILL.md 中使用了已废弃的 'level: {level_str}'，已自动转换为 category: {category}。"
+                "请更新 frontmatter 为 category。"
+            )
         version = yaml_data.get("version", "1.0.0")
         
         # 解析结构配置
@@ -180,7 +195,6 @@ class SkillMetadata:
             license=license_val,
             compatibility=compatibility,
             metadata=custom_metadata,
-            level=level,
             category=category,
             version=version,
             structure=structure,
@@ -205,8 +219,6 @@ class SkillMetadata:
             result["metadata"] = self.metadata
         
         # 添加AIKG扩展字段
-        if self.level:
-            result["level"] = self.level.value
         if self.category:
             result["category"] = self.category
         result["version"] = self.version
@@ -230,6 +242,6 @@ class SkillMetadata:
         return result
     
     def __repr__(self) -> str:
-        level_str = f"[{self.level.value}]" if self.level else ""
-        return f"<SkillMetadata {level_str} {self.name} v{self.version}>"
+        cat_str = f"[{self.category}]" if self.category else ""
+        return f"<SkillMetadata {cat_str} {self.name} v{self.version}>"
 

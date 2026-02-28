@@ -1,7 +1,6 @@
 ---
 name: tilelang-cuda-basics
 description: "TileLang CUDA 核心概念、内核结构和标准编程模式"
-level: L4
 category: fundamental
 version: "1.0.0"
 metadata:

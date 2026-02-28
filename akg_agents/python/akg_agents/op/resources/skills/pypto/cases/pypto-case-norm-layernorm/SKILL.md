@@ -1,7 +1,6 @@
 ---
 name: pypto-case-norm-layernorm
 description: "模式 C 示例：2D Norm + Loop — LayerNorm，展示 forward 降维为 2D、kernel 内 sum 归约 + 归一化"
-level: L4
 category: example
 version: "1.0.0"
 metadata:

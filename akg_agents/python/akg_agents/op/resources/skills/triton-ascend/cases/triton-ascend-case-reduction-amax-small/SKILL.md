@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-reduction-amax-small
 description: "极小规模归约（amax）优化：单核处理（grid=1）优于多核并行（2.16us vs 3.51us），避免并行化带来的调度开销，适用于数据规模很小（<1000元素）的归约场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

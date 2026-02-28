@@ -32,7 +32,7 @@ from pathlib import Path
 from akg_agents.core_v2.agents.react_agent import ReActAgent
 from akg_agents.core_v2.agents.base import Jinja2TemplateWrapper
 from akg_agents.core_v2.agents.registry import register_agent
-from akg_agents.core_v2.skill import SkillRegistry, SkillLevel
+from akg_agents.core_v2.skill import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -344,7 +344,7 @@ class KernelAgent(ReActAgent):
         加载 KernelAgent 相关的 Skills
         
         Skills 目录结构：
-        - kernel-agent-overview (L1): 工具体系概述和选择策略
+        - kernel-agent-overview (overview): 工具体系概述和选择策略
         """
         from akg_agents import get_project_root
         
@@ -383,7 +383,7 @@ class KernelAgent(ReActAgent):
             return self._skills_content
         
         try:
-            # 获取 L1 overview skill
+            # 获取 overview skill
             overview_skill = self._skill_registry.get("kernel-agent-overview")
             
             if overview_skill:
@@ -413,18 +413,18 @@ class KernelAgent(ReActAgent):
             return self._skill_registry.get(name)
         return None
     
-    def get_skills_by_level(self, level: SkillLevel) -> List[Any]:
+    def get_skills_by_category(self, category: str) -> List[Any]:
         """
-        根据层级获取 Skills（供外部调用）
+        根据分类获取 Skills（供外部调用）
         
         Args:
-            level: Skill 层级（L1, L2, L3 等）
+            category: Skill 分类（如 workflow, agent, guide, example）
         
         Returns:
-            该层级的 Skill 列表
+            该分类的 Skill 列表
         """
         if self._skill_registry:
-            return self._skill_registry.get_by_level(level)
+            return self._skill_registry.get_by_category(category)
         return []
     
     # ==================== 算子特定方法 ====================

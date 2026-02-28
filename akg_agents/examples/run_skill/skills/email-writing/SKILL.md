@@ -1,7 +1,6 @@
 ---
 name: email-writing
 description: "专业邮件编写技能，提供各类场景的邮件模板和写作指导"
-level: L3
 category: writing
 version: "1.0.0"
 ---

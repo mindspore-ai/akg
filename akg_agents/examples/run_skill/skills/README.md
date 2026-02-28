@@ -6,44 +6,44 @@
 
 ## 📊 Skills概览
 
-本目录包含 **8个测试Skills**，覆盖L1-L4所有层级：
+本目录包含 **8个测试Skills**，覆盖多种 category：
 
-| 层级 | 语义 | 数量 | Skills |
-|------|------|------|---------|
-| **L1** | 流程/编排层 | 2 | standard-workflow, adaptive-evolve |
-| **L2** | 组件/执行层 | 4 | coder-agent, designer-agent, verifier-agent, operator-knowledge-dispatcher |
-| **L3** | 方法/策略层 | 3 | cuda-basics, triton-syntax, triton-ascend |
-| **L4** | 实现/细节层 | 1 | error-handling |
-| **-** | 其他 | 1 | web-scraping |
+| Category | 语义 | 数量 | Skills |
+|----------|------|------|---------|
+| **workflow** | 流程/编排 | 2 | standard-workflow, adaptive-evolve |
+| **agent** | 组件/执行 | 4 | coder-agent, designer-agent, verifier-agent, operator-knowledge-dispatcher |
+| **dsl** | DSL 参考 | 3 | cuda-basics, triton-syntax, triton-ascend |
+| **implementation** | 实现/细节 | 1 | error-handling |
+| **其他** | 自定义 | 1 | web-scraping (utility) |
 
 ---
 
 ## 🏗️ Skills结构
 
-### L1: Workflow Skills
+### Workflow Skills
 
 #### 1. standard-workflow
 - **Category**: workflow
 - **描述**: 标准的算子生成工作流
-- **子 Skills**: coder-agent, verifier-agent（L2）
+- **子 Skills**: coder-agent, verifier-agent（agent）
 - **适用场景**: 常规算子开发
 - **内容**: 完整的三阶段工作流程说明
 
 #### 2. adaptive-evolve
 - **Category**: workflow
 - **描述**: 自适应进化工作流
-- **子 Skills**: designer-agent, coder-agent, verifier-agent（L2）
+- **子 Skills**: designer-agent, coder-agent, verifier-agent（agent）
 - **适用场景**: 复杂算子优化
 - **内容**: 进化算法原理、配置参数、成功案例
 
 ---
 
-### L2: Agent Skills
+### Agent Skills
 
 #### 3. coder-agent
 - **Category**: agent
 - **描述**: 代码生成 Agent
-- **子 Skills**: cuda-basics, triton-syntax（L3）
+- **子 Skills**: cuda-basics, triton-syntax（dsl）
 - **能力**: 
   - 多 DSL 支持（CUDA, Triton, OpenCL）
   - 多后端支持（NVIDIA, AMD, Intel）
@@ -78,7 +78,7 @@
 
 ---
 
-### L3: 方法/策略层 Skills
+### DSL Skills
 
 #### 7. cuda-basics
 - **Category**: dsl
@@ -109,7 +109,7 @@
 
 ---
 
-### L4: 实现/细节层 Skills
+### Implementation Skills
 
 #### 10. error-handling
 - **Category**: implementation
@@ -127,27 +127,27 @@
 #### 11. web-scraping
 - **Category**: utility
 - **描述**: Web scraping 最佳实践
-- **说明**: 示例性 Skill，无层级
+- **说明**: 示例性 Skill，自定义 category
 
 ---
 
 ## 🔗 层级关系图
 
 ```
-adaptive-evolve (L1)
-├── designer-agent (L2)
-├── coder-agent (L2)
-│   ├── cuda-basics (L3)
-│   └── triton-syntax (L3)
-└── verifier-agent (L2)
+adaptive-evolve (workflow)
+├── designer-agent (agent)
+├── coder-agent (agent)
+│   ├── cuda-basics (dsl)
+│   └── triton-syntax (dsl)
+└── verifier-agent (agent)
 
-standard-workflow (L1)
-├── coder-agent (L2)
-│   ├── cuda-basics (L3)
-│   └── triton-syntax (L3)
-└── verifier-agent (L2)
+standard-workflow (workflow)
+├── coder-agent (agent)
+│   ├── cuda-basics (dsl)
+│   └── triton-syntax (dsl)
+└── verifier-agent (agent)
 
-error-handling (L4) - 独立使用
+error-handling (implementation) - 独立使用
 ```
 
 ---
@@ -177,9 +177,8 @@ print(f"加载了 {len(skills)} 个Skills")
 # 按名称查询
 cuda_skill = registry.get("cuda-basics")
 
-# 按层级查询
-from skill_system import SkillLevel
-l2_skills = registry.get_by_level(SkillLevel.L2_AGENT)
+# 按分类查询
+agent_skills = registry.get_by_category("agent")
 
 # 按模式查询
 agent_skills = registry.filter(name_pattern="*-agent")
@@ -192,7 +191,7 @@ skill = registry.get("cuda-basics")
 if skill:
     print(f"名称: {skill.name}")
     print(f"描述: {skill.description}")
-    print(f"层级: {skill.level.value}")
+    print(f"分类: {skill.category or 'N/A'}")
     print(f"内容长度: {len(skill.content)}")
     print(f"\n内容:\n{skill.content}")
 ```
@@ -225,10 +224,10 @@ python test_skills_simple.py
 成功加载 8 个Skill
 成功注册 8 个Skill
 总计:
-  L1: 2个
-  L2: 3个
-  L3: 2个
-  L4: 1个
+  workflow: 2个
+  agent: 3个
+  dsl: 2个
+  implementation: 1个
 [SUCCESS] 测试完成！
 ```
 
@@ -250,10 +249,12 @@ python example_llm_driven.py    # LLM 驱动选择示例（需要 LLM 环境）
 ---
 name: skill-name
 description: "Skill 描述"
-level: L1/L2/L3/L4/L5
-category: workflow/agent/dsl/implementation/utility  # 用户自定义
+category: workflow/agent/guide/dsl/implementation/example
 version: "x.y.z"
 license: MIT
+metadata:
+  backend: cuda
+  dsl: triton_cuda
 structure:  # 可选，用于声明层级关系
   child_skills:
     - child1
@@ -292,7 +293,7 @@ structure:  # 可选，用于声明层级关系
 ## ✨ 特色功能
 
 ### 1. 完整性
-- ✅ 覆盖所有4个层级
+- ✅ 覆盖多种 category
 - ✅ 包含真实的技术内容
 - ✅ 提供具体的代码示例
 
@@ -316,15 +317,15 @@ structure:  # 可选，用于声明层级关系
 ## 🎓 学习路径
 
 ### 初学者
-1. 先阅读 **L3 Skills** (cuda-basics, triton-syntax)
+1. 先阅读 **dsl Skills** (cuda-basics, triton-syntax)
    - 理解基础知识
-2. 然后阅读 **L2 Skills** (coder-agent, verifier-agent)
+2. 然后阅读 **agent Skills** (coder-agent, verifier-agent)
    - 理解如何使用基础知识
-3. 最后阅读 **L1 Skills** (standard-workflow)
+3. 最后阅读 **workflow Skills** (standard-workflow)
    - 理解完整工作流
 
 ### 进阶用户
-1. 从 **L1 Skills** 开始
+1. 从 **workflow Skills** 开始
 2. 按照依赖关系向下阅读
 3. 重点关注进化算法和优化策略
 
@@ -334,20 +335,20 @@ structure:  # 可选，用于声明层级关系
 
 可以继续添加的Skills：
 
-### L1层级
+### workflow
 - multi-stage-workflow (多阶段优化)
 - distributed-workflow (分布式执行)
 
-### L2层级
+### agent
 - optimizer-agent (参数优化)
 - profiler-agent (性能分析)
 
-### L3层级
+### dsl / fundamental
 - opencl-basics (OpenCL编程)
 - optimization-techniques (通用优化技巧)
 - memory-patterns (内存访问模式)
 
-### L4层级
+### implementation
 - debugging-tools (调试工具)
 - testing-framework (测试框架)
 - performance-patterns (性能模式)

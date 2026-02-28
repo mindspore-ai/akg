@@ -89,7 +89,7 @@ class PromptAssembler:
         
         print(f"初筛结果: {len(filtered)} 个 Skills")
         for skill in filtered:
-            print(f"  - {skill.name} (Level: {skill.level.value}, Category: {skill.category})")
+            print(f"  - {skill.name} (Category: {skill.category or 'N/A'})")
         print()
         
         return filtered
@@ -115,7 +115,6 @@ class PromptAssembler:
             info = {
                 "name": skill.name,
                 "description": skill.description,
-                "level": skill.level.value if skill.level else "N/A",
                 "category": skill.category or "N/A",
                 "operator_patterns": skill.metadata.get("operator_patterns", ""),
                 "algorithms": skill.metadata.get("algorithms", ""),
@@ -162,16 +161,15 @@ class PromptAssembler:
                 selected_names = json.loads(match.group())
             else:
                 print("⚠️ 无法解析 LLM 响应，使用所有基础 Skills")
-                selected_names = [s.name for s in filtered_skills if s.level.value == "L3"]
+                selected_names = [s.name for s in filtered_skills if (s.category or "") in ("guide", "fundamental", "dsl")]
         
         print("LLM 选择结果:")
         for name in selected_names:
             skill = self.registry.get(name)
             if skill:
-                level = skill.level.value if skill.level else "N/A"
                 category = skill.category or "N/A"
                 print(f"  ✓ {name}")
-                print(f"    Level: {level}, Category: {category}")
+                print(f"    Category: {category}")
             else:
                 print(f"  ⚠️ {name} (未找到)")
         print()
@@ -184,9 +182,9 @@ class PromptAssembler:
         operator_name: str,
         task_description: str
     ) -> str:
-        """阶段3: 按照 level → category → name 顺序拼接 prompt"""
+        """阶段3: 按照 category → name 顺序拼接 prompt"""
         print("=" * 70)
-        print("阶段3: Prompt 拼接 - 按 level → category → name 排序")
+        print("阶段3: Prompt 拼接 - 按 category → name 排序")
         print("=" * 70)
         
         # 获取 Skills
@@ -196,27 +194,21 @@ class PromptAssembler:
             if skill:
                 skills_to_sort.append(skill)
         
-        # 排序：level → category（按 CATEGORY_ORDER） → name
+        # 排序：category（按 CATEGORY_ORDER） → name
         def sort_key(skill: SkillMetadata):
-            level_map = {"L3": 1, "L4": 2, "L5": 3}
-            level_value = level_map.get(skill.level.value if skill.level else "L5", 99)
-            
-            # category 按 CATEGORY_ORDER 的索引排序
             try:
                 category_idx = CATEGORY_ORDER.index(skill.category or "")
             except ValueError:
                 category_idx = 999
-            
-            return (level_value, category_idx, skill.name)
+            return (category_idx, skill.name)
         
         sorted_skills = sorted(skills_to_sort, key=sort_key)
         
         print("拼接顺序:")
         for idx, skill in enumerate(sorted_skills, 1):
-            level = skill.level.value if skill.level else "N/A"
             category = skill.category or "N/A"
             print(f"  {idx}. {skill.name}")
-            print(f"     [{level} / {category}]")
+            print(f"     [{category}]")
         print()
         
         # 拼接 Prompt（只有一段 System Prompt + 所有 Skill 内容）

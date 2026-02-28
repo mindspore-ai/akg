@@ -1,7 +1,6 @@
 ---
 name: cpu-optimization-x64
 description: "x64 CPU 架构性能优化技巧、SIMD/AVX 向量化、数值稳定性和调试策略"
-level: L3
 category: method
 version: "1.0.0"
 metadata:

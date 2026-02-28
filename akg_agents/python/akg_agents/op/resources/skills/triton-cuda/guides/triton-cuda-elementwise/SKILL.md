@@ -1,7 +1,6 @@
 ---
 name: triton-cuda-elementwise
 description: "逐元素算子(element-wise)优化策略，包括 add/mul/relu/sigmoid/tanh/gelu/exp/log 等操作的向量化实现和融合技巧。适用于实现激活函数、逐元素运算、广播操作等向量模式算子的 CUDA 内核代码生成场景"
-level: L4
 category: implementation
 version: "1.0.0"
 metadata:

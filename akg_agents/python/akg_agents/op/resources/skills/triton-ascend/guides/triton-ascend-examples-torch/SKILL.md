@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-examples-torch
 description: "PyTorch 框架下 Triton Ascend 内核的完整集成示例，包括 vector_add、matmul、layer_norm、softmax 等标准算子实现。适用于需要参考 PyTorch 算子包装方式、forward/backward 实现模式的内核代码生成场景"
-level: L4
 category: example
 version: "1.0.0"
 metadata:

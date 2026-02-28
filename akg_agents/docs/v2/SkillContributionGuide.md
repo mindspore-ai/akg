@@ -27,7 +27,7 @@ my-skill/
 name: my-skill-name
 description: "A clear, concise description of what this skill provides"
 level: L3
-category: dsl
+category: guide
 version: "1.0.0"
 license: MIT
 metadata:
@@ -72,7 +72,7 @@ Detailed knowledge content in Markdown format...
 |-------|------|-------------|---------|
 | `level` | string | Skill hierarchy level (L1-L5) | `"L3"` |
 | `version` | string | SemVer version | `"1.0.0"` |
-| `category` | string | Semantic category | `"dsl"`, `"workflow"`, `"strategy"` |
+| `category` | string | Semantic category | `"guide"`, `"workflow"`, `"method"` |
 | `license` | string | License identifier | `"MIT"`, `"Apache-2.0"` |
 
 ### Optional Fields

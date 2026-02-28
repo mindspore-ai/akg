@@ -1,7 +1,6 @@
 ---
 name: designer-agent
 description: "算法设计Agent，负责生成算子设计方案和优化策略"
-level: L2
 category: agent
 version: "1.0.0"
 license: MIT

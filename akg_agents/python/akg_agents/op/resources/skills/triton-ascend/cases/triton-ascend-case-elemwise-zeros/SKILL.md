@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-elemwise-zeros
 description: "小shape张量创建（zeros/arange/full）优化：通过减少核数避免多核启动和调度开销，单核处理性能优于多核并行，适用于shape较小（千级元素）的elementwise创建张量场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

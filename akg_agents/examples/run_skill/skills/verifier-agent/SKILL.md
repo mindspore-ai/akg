@@ -1,7 +1,6 @@
 ---
 name: verifier-agent
 description: "验证Agent，负责测试代码正确性和性能profiling"
-level: L2
 category: agent
 version: "1.5.0"
 license: MIT

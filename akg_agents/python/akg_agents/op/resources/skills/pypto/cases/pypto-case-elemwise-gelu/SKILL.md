@@ -1,7 +1,6 @@
 ---
 name: pypto-case-elemwise-gelu
 description: "模式 A 示例：1D elementwise — GELU 激活，展示展平、无 tanh 时的手写公式、运算符使用"
-level: L4
 category: example
 version: "1.0.0"
 metadata:

@@ -1,7 +1,6 @@
 ---
 name: tilelang-cuda-api
 description: "TileLang CUDA API 完整参考手册，适用于需要查阅具体 API 用法、了解函数参数含义的任意 TileLang CUDA 内核代码生成场景"
-level: L4
 category: fundamental
 version: "1.0.0"
 metadata:

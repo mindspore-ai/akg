@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-api
 description: "Triton Ascend API 完整参考手册，包括 tl.load/store、tl.reduce、tl.dot、tl.atomic 等核心函数的签名、参数和使用示例。适用于需要查阅具体 API 用法、了解函数参数含义的任意 Triton Ascend 内核代码生成场景"
-level: L3
 category: fundamental
 version: "1.0.0"
 metadata:
