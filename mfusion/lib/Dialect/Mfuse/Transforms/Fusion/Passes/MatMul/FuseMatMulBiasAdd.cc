@@ -93,6 +93,10 @@ static LogicalResult tryFuseMatMulBiasAdd(Operation *addOp, Value lhs, Value rhs
   if (matmulOp && matmulRank != static_cast<int64_t>(kDim2)) {
     return rewriter.notifyMatchFailure(addOp, "2D MatMul output rank must be 2");
   }
+  // Avoid increasing matmul count: fuse only when matmul/batch_matmul has exactly one user (this Add).
+  if (!matmulOut.hasOneUse()) {
+    return rewriter.notifyMatchFailure(addOp, "matmul/batch_matmul must have exactly one user (the Add) to fuse");
+  }
 
   MLOG(DEBUG) << "FuseMatMulBiasAdd matched @" << addOp->getLoc() << " (MatMul/BatchMatmul + bias)";
 
