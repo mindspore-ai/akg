@@ -15,10 +15,10 @@
  */
 #include <numeric>
 
+#include "llvm/ADT/SmallVector.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Recompose/RecomposePatterns.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
-#include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -32,7 +32,7 @@ constexpr int64_t kRankBatchMatmul = 3;  // rank >= 3 -> aclnn.batch_matmul
 constexpr int64_t kPermStartIndex = 0;
 constexpr int64_t kPermDimSecondLast = 2;  // index offset: rank - 2
 constexpr int64_t kPermDimLast = 1;        // index offset: rank - 1
-constexpr float kAlphaOne = 1.0f;
+constexpr int64_t kAlphaOne = 1;
 
 /// Base class for Mfuse meta op to aclnn patterns; provides shared trans/permute helpers.
 class MfuseMetaOpsToAclnnPattern {
@@ -192,7 +192,7 @@ class MfuseMetaOpsMatMulWithBiasToAclnnPattern : public OpRewritePattern<MatmulW
       biasForAdd = reshapeBiasForBroadcast(bias, biasType, matmulResultType, rewriter);
     }
 
-    auto scalarType = RankedTensorType::get({}, rewriter.getF32Type());
+    auto scalarType = RankedTensorType::get({}, rewriter.getI64Type());
     Value alphaOne = rewriter.create<arith::ConstantOp>(loc, scalarType, DenseElementsAttr::get(scalarType, kAlphaOne));
     Value addResult = rewriter.create<AclnnAddOp>(loc, resultType, matmulResult, biasForAdd, alphaOne);
     rewriter.replaceOp(op, addResult);
@@ -221,40 +221,9 @@ class AddToAclnnAddPattern : public OpRewritePattern<AddOp> {
     Value addY = y;
 
     // Check if either operand is a mul operation with a scalar
-    double alphaScalar = kAlphaOne;
-    auto scalarType = RankedTensorType::get({}, rewriter.getF32Type());
-    Value alphaValue = nullptr;
-    // Helper function to process MulOp and extract tensor operand and alpha
-    auto processMulOp = [&](MulOp m, Value otherOperand, bool isXOperand) {
-      Value tensorOp;
-      if (isScalarMul(m, alphaScalar, tensorOp)) {
-        // mul(tensorOp, alphaScalar) ==> use tensorOp directly
-        addY = tensorOp;
-      } else if (isScalarOrSingleElement(m.getRhs().getType())) {
-        // mul(tensorOp, alphaScalar) ==> use tensorOp as addY, rhs as alpha
-        addY = m.getLhs();
-        alphaValue = m.getRhs();
-      } else if (isScalarOrSingleElement(m.getLhs().getType())) {
-        // mul(alphaScalar, tensorOp) ==> use tensorOp as addY, lhs as alpha
-        addY = m.getRhs();
-        alphaValue = m.getLhs();
-      } else {
-        return;
-      }
-      if (isXOperand) {
-        addX = otherOperand;
-      }
-    };
-
-    // Process MulOp for x first
-    if (auto m = x.getDefiningOp<MulOp>()) {
-      processMulOp(m, y, true);
-    } else if (auto m = y.getDefiningOp<MulOp>()) {
-      processMulOp(m, x, false);
-    }
-    if (!alphaValue) {
-      alphaValue = rewriter.create<arith::ConstantOp>(loc, scalarType, DenseElementsAttr::get(scalarType, alphaScalar));
-    }
+    auto scalarType = RankedTensorType::get({}, rewriter.getI64Type());
+    Value alphaValue =
+      rewriter.create<arith::ConstantOp>(loc, scalarType, DenseElementsAttr::get(scalarType, kAlphaOne));
     // Replace with aclnn.add
     Value addResult = rewriter.create<AclnnAddOp>(loc, resultType, addX, addY, alphaValue);
     rewriter.replaceOp(op, addResult);
