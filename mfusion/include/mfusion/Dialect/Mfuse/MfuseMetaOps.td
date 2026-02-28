@@ -30,7 +30,8 @@ class Mfuse_BroadcastableBinaryOp<string mnemonic, list<Trait> traits = []>
   let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<(ins "::mlir::Type":$resultType, "::mlir::Value":$lhs, "::mlir::Value":$rhs),
-      "::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build($_builder, $_state, resultType, {lhs, rhs}, {});"
+      "auto promoted = ::mlir::mfuse::promoteBinaryOperands<::mlir::mfuse::" # autoClassName # ">($_builder, $_state.location, lhs, rhs);\n" #
+      "  ::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build($_builder, $_state, resultType, {std::get<0>(promoted), std::get<1>(promoted)}, {});"
     >
   ];
 }
@@ -584,7 +585,7 @@ def Mfuse_MinimumOp : Mfuse_BroadcastableBinaryOp<"minimum", [Pure, Commutative,
   }];
 }
 
-def Mfuse_MulOp : Mfuse_BroadcastableBinaryOp<"mul", [Pure, Commutative]> {
+def Mfuse_MulOp : Mfuse_BroadcastableBinaryOp<"mul", [Pure, Commutative, SameOperandsAndResultElementType]> {
   let summary = "Element-wise multiplication of two tensors.";
   let description = [{
     Computes element-wise product of two tensors: result = lhs * rhs.

@@ -41,6 +41,93 @@ static Value convertAnyScalarToRankedTensor(PatternRewriter &rewriter, Location 
   // Create a CastOp to convert the scalar to 0D tensor
   return rewriter.create<CastOp>(loc, tensorType, scalar);
 }
+
+/// Helper function to create alphaValue from DenseElementsAttr
+static Value createAlphaValueFromConstant(PatternRewriter &rewriter, Location loc, DenseElementsAttr denseAttr,
+                                          RankedTensorType targetType) {
+  auto elementType = denseAttr.getElementType();
+  if (isa<FloatType>(elementType)) {
+    auto floatVal = denseAttr.getSplatValue<APFloat>();
+    auto floatAttr = rewriter.getFloatAttr(targetType.getElementType(), floatVal.convertToDouble());
+    return rewriter.create<arith::ConstantOp>(loc, targetType, DenseElementsAttr::get(targetType, floatAttr));
+  } else {
+    auto intVal = denseAttr.getSplatValue<APInt>();
+    auto intAttr = rewriter.getIntegerAttr(targetType.getElementType(), intVal.getSExtValue());
+    return rewriter.create<arith::ConstantOp>(loc, targetType, DenseElementsAttr::get(targetType, intAttr));
+  }
+}
+
+static bool isSupportFloatType(Type type) { return type.isF32() || type.isF16() || type.isBF16(); }
+
+/// Check if output type is float/int type
+static bool isSupportType(Type type) { return isSupportFloatType(type) || type.isInteger(32); }
+
+/// Helper function to decompose Aclnn operations with alpha parameter
+/// This handles the common logic for both AclnnAdd and AclnnSub
+/// op The Aclnn operation (AclnnAddOp or AclnnSubOp)
+/// builder ComputeOpBuilder instance
+/// rewriter PatternRewriter instance
+/// return The decomposed operation result
+template <typename OpType>
+static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &builder, PatternRewriter &rewriter) {
+  // Get the inputs from the op
+  Value x = op.getX();
+  Value y = op.getY();
+  Value alpha = op.getAlpha();
+  Location loc = op.getLoc();
+  Type resultType = op.getResult().getType();
+
+  // Determine if the operation is an add or sub
+  bool isAdd = isa<mfuse::AclnnAddOp>(op);
+
+  // Get element types for type checking
+  Type xElementType = x.getType().cast<TensorType>().getElementType();
+  Type yElementType = y.getType().cast<TensorType>().getElementType();
+
+  // Check if alpha is 1.0, if so, skip the mul operation
+  if (isConstOne(alpha)) {
+    // If alpha is 1.0, just add or subtract x and y
+    return isAdd ? builder.add(x, y, resultType) : builder.sub(x, y, resultType);
+  }
+
+  if (!isSupportType(xElementType) || !isSupportType(yElementType)) {
+    return nullptr;
+  }
+
+  // Check if alpha is a constant
+  auto constantOp = alpha.getDefiningOp<mlir::arith::ConstantOp>();
+  Value mulResult;
+
+  if (constantOp) {
+    // If alpha is a constant, extract its value
+    auto denseTensor = mlir::dyn_cast<DenseElementsAttr>(constantOp.getValue());
+    auto elementType = denseTensor.getElementType();
+    // Alpha must be supported float32/float16/bfloat16/int32 type
+    if (!isSupportType(elementType)) {
+      return nullptr;
+    }
+    auto supposedAlphaType = RankedTensorType::get({}, yElementType);
+    Value alphaValue = createAlphaValueFromConstant(rewriter, loc, denseTensor, supposedAlphaType);
+    mulResult = builder.mul(y, alphaValue, y.getType());
+  } else {
+    // If alpha is dynamic, convert it to RankedTensorType (0D tensor)
+    Value alphaTensor = convertAnyScalarToRankedTensor(rewriter, loc, alpha);
+    auto alphaElementType = alphaTensor.getType().cast<TensorType>().getElementType();
+    if (!isSupportType(alphaElementType)) {
+      return nullptr;
+    }
+    if (alphaElementType != yElementType) {
+      // If alpha type is different from y type, cast it to y type
+      Type targetType = RankedTensorType::get({}, yElementType);
+      alphaTensor = builder.cast(alphaTensor, targetType);
+    }
+    mulResult = builder.mul(y, alphaTensor, y.getType());
+  }
+
+  // Perform the final add or sub operation
+  return isAdd ? builder.add(x, mulResult, resultType) : builder.sub(x, mulResult, resultType);
+}
+
 }  // namespace
 
 /// OpRewritePattern for decomposing AclnnAdd operations (x + y * alpha) into mul and add
@@ -49,39 +136,13 @@ class AclnnAddDecomposePattern : public OpRewritePattern<mfuse::AclnnAddOp> {
   using OpRewritePattern<mfuse::AclnnAddOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mfuse::AclnnAddOp addOp, PatternRewriter &rewriter) const override {
-    // Get the inputs
-    Value x = addOp.getX();
-    Value y = addOp.getY();
-    Value alpha = addOp.getAlpha();
-    Location loc = addOp.getLoc();
-    Type resultType = addOp.getResult().getType();
-
     // Create ComputeOpBuilder instance
-    mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
+    mlir::mfuse::ComputeOpBuilder builder(rewriter, addOp.getLoc());
 
-    // Check if alpha is 1.0, if so, skip the mul operation
-    Value addResult;
-    if (isConstOne(alpha)) {
-      // If alpha is 1.0, just add x and y
-      addResult = builder.add(x, y, resultType);
-    } else {
-      // Check if alpha is a constant
-      auto constantOp = alpha.getDefiningOp<mlir::arith::ConstantOp>();
-      if (constantOp) {
-        // If alpha is a constant, extract its value
-        auto denseAttr = mlir::dyn_cast<DenseElementsAttr>(constantOp.getValue());
-        auto floatValue = denseAttr.getSplatValue<float>();
-        // Decompose AclnnAdd (x + y * alpha) into mul and add
-        // Ensure alpha is float32
-        Value mulResult = builder.mul(y, floatValue, y.getType());
-        addResult = builder.add(x, mulResult, resultType);
-      } else {
-        // If alpha is not a constant, convert it to RankedTensorType and use directly
-        Value alphaTensor = convertAnyScalarToRankedTensor(rewriter, loc, alpha);
-        // Decompose AclnnAdd (x + y * alpha) into mul and add
-        Value mulResult = builder.mul(y, alphaTensor, y.getType());
-        addResult = builder.add(x, mulResult, resultType);
-      }
+    // Decompose using the helper function
+    Value addResult = decomposeAclnnWithAlpha(addOp, builder, rewriter);
+    if (!addResult) {
+      return failure();
     }
 
     // Replace the original AclnnAdd operation with the decomposed computation
@@ -154,9 +215,7 @@ class ConvertAclnnMatmulAddToMatMulWithBiasPattern : public OpRewritePattern<Add
     Value bias;
     Operation *matmulOp = nullptr;
 
-    if (!matmulOp) {
-      matmulOp = findAclnnMatmulFromAddOperands<AclnnMmOp>(x, y, bias);
-    }
+    matmulOp = findAclnnMatmulFromAddOperands<AclnnMmOp>(x, y, bias);
     if (!matmulOp) {
       matmulOp = findAclnnMatmulFromAddOperands<AclnnMatmulOp>(x, y, bias);
     }
@@ -184,39 +243,13 @@ class AclnnSubDecomposePattern : public OpRewritePattern<mfuse::AclnnSubOp> {
   using OpRewritePattern<mfuse::AclnnSubOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mfuse::AclnnSubOp subOp, PatternRewriter &rewriter) const override {
-    // Get the inputs
-    Value x = subOp.getX();
-    Value y = subOp.getY();
-    Value alpha = subOp.getAlpha();
-    Location loc = subOp.getLoc();
-    Type resultType = subOp.getResult().getType();
-
     // Create ComputeOpBuilder instance
-    mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
+    mlir::mfuse::ComputeOpBuilder builder(rewriter, subOp.getLoc());
 
-    // Check if alpha is 1.0, if so, skip the mul operation
-    Value subResult;
-    if (isConstOne(alpha)) {
-      // If alpha is 1.0, just subtract x and y
-      subResult = builder.sub(x, y, resultType);
-    } else {
-      // Check if alpha is a constant
-      auto constantOp = alpha.getDefiningOp<mlir::arith::ConstantOp>();
-      if (constantOp) {
-        // If alpha is a constant, extract its value
-        auto denseAttr = mlir::dyn_cast<DenseElementsAttr>(constantOp.getValue());
-        auto floatValue = denseAttr.getSplatValue<float>();
-        // Decompose AclnnSub (x - y * alpha) into mul and sub
-        // Ensure alpha is float32
-        Value mulResult = builder.mul(y, floatValue, y.getType());
-        subResult = builder.sub(x, mulResult, resultType);
-      } else {
-        // If alpha is not a constant, convert it to RankedTensorType and use directly
-        Value alphaTensor = convertAnyScalarToRankedTensor(rewriter, loc, alpha);
-        // Decompose AclnnSub (x - y * alpha) into mul and sub
-        Value mulResult = builder.mul(y, alphaTensor, y.getType());
-        subResult = builder.sub(x, mulResult, resultType);
-      }
+    // Decompose using the helper function
+    Value subResult = decomposeAclnnWithAlpha(subOp, builder, rewriter);
+    if (!subResult) {
+      return failure();
     }
 
     // Replace the original AclnnSub operation with the decomposed computation
