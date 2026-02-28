@@ -33,8 +33,11 @@ namespace mlir {
 namespace mfuse {
 namespace {
 
-/// Find any CastOp user of value that casts f16 to f32. Pattern does not require
-/// single use; returns the first matching CastOp if found, nullptr otherwise.
+// Aligns with bak/matmul_cast_fusion_pass.cc: matmul must have exactly one output (GetOutDataNodes().size() == 1).
+// We enforce this via hasOneUse() on the matmul/matmul_with_bias result before fusing with the Cast.
+
+/// Find any CastOp user of value that casts f16 to f32.
+/// When single-use check is required, only that one user is the Cast; otherwise returns first match.
 static CastOp getF16ToF32Cast(Value value) {
   auto inType = dyn_cast<RankedTensorType>(value.getType());
   if (!inType || !isa<Float16Type>(inType.getElementType())) {
@@ -59,6 +62,7 @@ static CastOp getF16ToF32Cast(Value value) {
 }
 
 /// Pattern to fuse MatMul followed by f16->f32 cast into MatMul with f32 output.
+/// MatMul result must have exactly one user (the Cast); otherwise we do not fuse to avoid increasing matmul count.
 /// This eliminates redundant cast operations by computing matmul directly in f32.
 class FuseMatMulCastMatmulPattern : public OpRewritePattern<MatmulOp> {
  public:
@@ -68,6 +72,9 @@ class FuseMatMulCastMatmulPattern : public OpRewritePattern<MatmulOp> {
     auto castOp = getF16ToF32Cast(matmulOp.getResult());
     if (!castOp) {
       return failure();
+    }
+    if (!matmulOp.getResult().hasOneUse()) {
+      return rewriter.notifyMatchFailure(matmulOp, "matmul must have exactly one user (the Cast) to fuse");
     }
 
     Type outType = castOp.getResult().getType();
@@ -91,6 +98,9 @@ class FuseMatMulCastMatmulWithBiasPattern : public OpRewritePattern<MatmulWithBi
     auto castOp = getF16ToF32Cast(op.getResult());
     if (!castOp) {
       return failure();
+    }
+    if (!op.getResult().hasOneUse()) {
+      return rewriter.notifyMatchFailure(op, "matmul_with_bias must have exactly one user (the Cast) to fuse");
     }
 
     Type outType = castOp.getResult().getType();
