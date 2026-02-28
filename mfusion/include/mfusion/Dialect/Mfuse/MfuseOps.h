@@ -24,6 +24,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LogicalResult.h"
@@ -33,6 +34,15 @@ namespace mlir::mfuse {
 // Forward declarations for operations
 class FusedOp;
 class YieldOp;
+
+// Forward declaration of your higher precision logic
+mlir::Type getHigherPrecisionType(mlir::Type typeA, mlir::Type typeB);
+
+// A template helper to promote operands before they reach the main builder.
+// It returns the updated lhs and rhs.
+template <typename ConcreteOp>
+std::pair<mlir::Value, mlir::Value> promoteBinaryOperands(mlir::OpBuilder &builder, mlir::Location loc, mlir::Value lhs,
+                                                          mlir::Value rhs);
 
 bool shouldInferSymbolicShape(mlir::ValueRange operands, mlir::RankedTensorType resultType);
 

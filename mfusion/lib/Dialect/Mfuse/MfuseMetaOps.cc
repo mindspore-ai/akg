@@ -31,6 +31,38 @@
 
 namespace mlir::mfuse {
 
+// Implementation of getHigherPrecisionType
+mlir::Type getHigherPrecisionType(mlir::Type typeA, mlir::Type typeB) {
+  // Helper function to get bit width of a type
+  auto getBitWidth = [](mlir::Type type) -> int {
+    if (auto floatType = type.dyn_cast<mlir::FloatType>()) {
+      return floatType.getWidth();
+    }
+    if (auto integerType = type.dyn_cast<mlir::IntegerType>()) {
+      return integerType.getWidth();
+    }
+    return 0;
+  };
+
+  bool isFloatA = typeA.isa<mlir::FloatType>();
+  bool isFloatB = typeB.isa<mlir::FloatType>();
+
+  // If one is float and the other is integer, prefer float
+  if (isFloatA && !isFloatB) {
+    return typeA;
+  }
+  if (!isFloatA && isFloatB) {
+    return typeB;
+  }
+
+  // If both are same type, compare bit widths
+  int bitWidthA = getBitWidth(typeA);
+  int bitWidthB = getBitWidth(typeB);
+
+  // Return the type with higher bit width
+  return bitWidthA >= bitWidthB ? typeA : typeB;
+}
+
 mlir::LogicalResult ReshapeOp::verify() {
   auto inType = mlir::dyn_cast<mlir::RankedTensorType>(getInput().getType());
   auto outType = mlir::dyn_cast<mlir::RankedTensorType>(getResult().getType());
@@ -231,13 +263,49 @@ mlir::Type inferElementwiseSymbolicType(mlir::OpBuilder &builder, mlir::Type bas
   return SymbolAttrUtils::withSymbolicAttr(rankedResult, combinedAttr);
 }
 
-// Macro to implement inferSymbolicShapes for broadcastable binary ops.
+// Implementation of promoteBinaryOperands template function
+template <typename ConcreteOp>
+std::pair<mlir::Value, mlir::Value> promoteBinaryOperands(mlir::OpBuilder &builder, mlir::Location loc, mlir::Value lhs,
+                                                          mlir::Value rhs) {
+  auto type0 = lhs.getType();
+  auto type1 = rhs.getType();
+  auto elemType0 = mlir::getElementTypeOrSelf(type0);
+  auto elemType1 = mlir::getElementTypeOrSelf(type1);
+
+  // If element types already match, return original inputs
+  if (elemType0 == elemType1) {
+    return {lhs, rhs};
+  }
+
+  // Determine the target high-precision element type
+  mlir::Type higherElemType = getHigherPrecisionType(elemType0, elemType1);
+  mlir::Value newLhs = lhs;
+  mlir::Value newRhs = rhs;
+
+  // Insert CastOp for LHS if needed
+  if (elemType0 != higherElemType) {
+    auto newType0 = type0.cast<mlir::TensorType>().clone(higherElemType);
+    newLhs = builder.create<mfuse::CastOp>(loc, newType0, lhs);
+  }
+
+  // Insert CastOp for RHS if needed
+  if (elemType1 != higherElemType) {
+    auto newType1 = type1.cast<mlir::TensorType>().clone(higherElemType);
+    newRhs = builder.create<mfuse::CastOp>(loc, newType1, rhs);
+  }
+
+  return {newLhs, newRhs};
+}
+
+// Macro to implement inferSymbolicShapes for broadcastable binary ops and instantiate promoteBinaryOperands.
 #define IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(OpName)                                                         \
   mlir::FailureOr<mlir::Type> OpName::inferSymbolicShapes(mlir::OpBuilder &builder, const mlir::OperationState &state, \
                                                           mlir::Type resultType) {                                     \
     if (state.operands.size() != 2) return mlir::failure();                                                            \
     return inferElementwiseSymbolicType(builder, resultType, state.operands[0], state.operands[1]);                    \
-  }
+  }                                                                                                                    \
+  template std::pair<mlir::Value, mlir::Value> promoteBinaryOperands<OpName>(mlir::OpBuilder &, mlir::Location,        \
+                                                                             mlir::Value, mlir::Value);
 
 IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(AddOp)
 IMPL_BROADCAST_BINARY_OP_INFER_SYMBOLIC_SHAPES(DivOp)
