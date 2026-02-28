@@ -29,11 +29,23 @@ class Mfuse_BroadcastableBinaryOp<string mnemonic, list<Trait> traits = []>
   string autoClassName = !subst("Mfuse_", "", NAME);
   let skipDefaultBuilders = 1;
   let builders = [
+    // Explicit type builder (kept for callers that already compute resultType)
     OpBuilder<(ins "::mlir::Type":$resultType, "::mlir::Value":$lhs, "::mlir::Value":$rhs),
       "auto promoted = ::mlir::mfuse::promoteBinaryOperands<::mlir::mfuse::" # autoClassName # ">($_builder, $_state.location, lhs, rhs);\n" #
-      "  ::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build($_builder, $_state, resultType, {std::get<0>(promoted), std::get<1>(promoted)}, {});"
+      "::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build($_builder, $_state, resultType, {std::get<0>(promoted), std::get<1>(promoted)}, {});"
+    >,
+
+    // New Builder: infer base RankedTensorType first, then delegate to SymbolicBuilderHelper.
+    OpBuilder<(ins "::mlir::Value":$lhs, "::mlir::Value":$rhs),
+      "auto promoted = ::mlir::mfuse::promoteBinaryOperands<::mlir::mfuse::" # autoClassName # ">($_builder, $_state.location, lhs, rhs);\n"
+      "::mlir::Type resultType = " # autoClassName # "::inferResultType(std::get<0>(promoted), std::get<1>(promoted));\n"
+      "::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build($_builder, $_state, resultType, {std::get<0>(promoted), std::get<1>(promoted)}, {});"
     >
   ];
+
+  let extraClassDeclaration = [{
+    static ::mlir::Type inferResultType(::mlir::Value lhs, ::mlir::Value rhs);
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -147,6 +159,20 @@ def Mfuse_CastOp : Mfuse_Op<"cast", [Pure, SameOperandsAndResultShape]> {
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
   }];
+
+  let hasVerifier = 1;
+  let hasFolder = 1;
+
+  let extraClassDeclaration = [{
+    static ::mlir::Type inferResultType(::mlir::Value input, ::mlir::Type elementType);
+  }];
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Value":$input, "::mlir::Type":$elementType), [{
+      ::mlir::Type resultType = inferResultType(input, elementType);
+      build($_builder, $_state, resultType, input);
+    }]>
+  ];
 }
 
 def Mfuse_CeilOp : Mfuse_Op<"ceil", [
