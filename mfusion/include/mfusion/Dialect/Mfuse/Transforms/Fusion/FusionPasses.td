@@ -103,6 +103,7 @@ def FuseMatMulCast : Pass<"fuse-matmul-cast", "::mlir::ModuleOp"> {
   let description = [{
     Fuses MatMul or Mm with float16 inputs followed by Cast to float32
     into a single MatMul/Mm with float32 result type.
+    MatMul/MatMulWithBias must have exactly one user (the Cast) to fuse.
   }];
   let constructor = "mlir::mfuse::createFuseMatMulCastPass()";
   let dependentDialects = [
