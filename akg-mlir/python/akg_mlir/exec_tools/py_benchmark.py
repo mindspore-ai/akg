@@ -28,11 +28,12 @@ from bfloat16 import bfloat16
 
 from akg import AkgMlirDriver
 from akg import akgProfileMgr
-from akg.backends.ascend import transform_data_to_ascend, launch
+from akg.backends.ascend import transform_data_to_ascend, launch, ascend_compile
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
 from ..utils.dynamic_utils import dump_shape_arg_list, get_device_shape
 from ..utils.gen_runtime_code import (ProfilingParams, gen_cuda_runtime_code)
 from ..utils.result_analysis import get_compare_tolerance
+from ..utils.torch_mlir_utils import find_first_func_name, get_named_op_str, ascend_compile_with_hfusion, run_mlir_ascend_pipeline, run_torch_mlir_to_json, run_torch_mlir_to_linalg_on_tensors
 from ..ascend_profilier.cann_file_parser import CANNFileParser
 from ..ascend_profilier.op_summary_parser import OpSummaryParser
 
@@ -383,6 +384,71 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
             output_indexes, expect)
         print(kernel_name + " Task Duration(us) : " + str(cycle))
 
+def _run_ascend_kernel_for_torch_mlir(
+    *,
+    mode: str,
+    file_path=None,
+    linalg_file_path=None,
+    mlir_text=None,
+    json_text=None,
+    kernel_name=None,
+    backend=None,
+    static_desc=None,
+    dump_dir=None,
+):
+    """run kernel for npu"""
+    if mode not in ("bisheng", "akg"):
+        raise ValueError(f"mode must be 'bisheng' or 'akg', got: {mode}")
+    if dump_dir is None:
+        raise ValueError("dump_dir is required")
+    if json_text is None or kernel_name is None:
+        raise ValueError("json_text and kernel_name are required")
+    is_dyn_shape = static_desc is not None
+    input_for_mod, expect, output_indexes = gen_json_data(
+        static_desc if is_dyn_shape else json_text,
+        with_compute=True,
+    )
+    so_path = dump_dir / f"{kernel_name}.so"
+    if mode == "bisheng":
+        if file_path is None:
+            raise ValueError("file_path is required for bisheng mode")
+        get_named_op_str(file_path, f"{kernel_name}", False, str(dump_dir))
+        named_op_mlir = dump_dir / f"{kernel_name}_named_op.mlir"
+        ascend_compile_with_hfusion(named_op_mlir, so_path)
+    elif mode == "akg":
+        if linalg_file_path is None:
+            raise ValueError("linalg_file_path is required for akg mode")
+        output_path = dump_dir / "out_akg.mlir"
+        dump_log_path = dump_dir / f"{kernel_name}.log"
+        run_mlir_ascend_pipeline(
+            linalg_file_path,
+            output_path,
+            None,
+            is_dyn_shape,
+            True,
+            None,
+            True,
+            str(dump_log_path),
+        )
+        ascend_compile(output_path, so_path, 16)
+        print("[INFO] bishengir-compile success")
+    input_for_mod_ctypes = transform_data_to_ascend(
+        input_for_mod, kernel_name, output_indexes, is_dyn_shape, "ascend"
+    )
+    device_id = int(os.environ.get("DEVICE_ID", 0))
+    launch(
+        str(dump_dir),
+        kernel_name,
+        device_id,
+        is_dyn_shape,
+        *input_for_mod_ctypes,
+        use_mem_pool=True,
+    )
+    print("[INFO] kernel launch success")
+    for idx, d in enumerate(expect):
+        expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
+    compare_results(kernel_name, json_text, input_for_mod, output_indexes, expect)
+
 def run_a_kernel(desc,
                  file_path,
                  backend=None,
@@ -511,6 +577,49 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
             run_res[run_idx] = True
         return True
 
+def _run_torch_ir_single_file(file_path, compile_args, mode: str):
+    """
+    Unified runner for torch-ir single file.
+    """
+    if mode not in ("bisheng", "akg"):
+        raise ValueError(f"mode must be 'bisheng' or 'akg', got: {mode}")
+    run_torch_mlir_to_json(compile_args.torch_mlir_opt, file_path)
+    desc = file_path.read_text(encoding="utf-8")
+    kernel_name = find_first_func_name(desc)
+    if not kernel_name:
+        raise RuntimeError(f"Cannot find `func.func @NAME(` in: {file_path}")
+    json_file_path = pathlib.Path.cwd() / f"{kernel_name}_.json"
+    if not json_file_path.exists():
+        raise RuntimeError(f"Cannot find torch-to-json output: {json_file_path}")
+    json_text = json_file_path.read_text(encoding="utf-8")
+    _, is_dyn_shape = _get_input_shape(json_text)
+    static_desc = None
+    if is_dyn_shape:
+        static_shape_path = file_path.with_name(file_path.stem + "_static.json")
+        if not static_shape_path.exists():
+            raise ValueError("Dynamic shape info must come with static shape info.")
+        static_desc = static_shape_path.read_text(encoding="utf-8")
+    dump_dir = file_path.parent / "torch_dump"
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    linalg_file_path = None
+    if mode == "akg":
+        linalg_file_path = run_torch_mlir_to_linalg_on_tensors(
+            compile_args.torch_mlir_opt,
+            file_path,
+            dump_dir / "out_linalg.mlir",
+        )
+    _run_ascend_kernel_for_torch_mlir(
+        mode=mode,
+        file_path=file_path,
+        linalg_file_path=linalg_file_path,
+        mlir_text=desc,
+        json_text=json_text,
+        kernel_name=kernel_name,
+        backend=compile_args.backend,
+        static_desc=static_desc,
+        dump_dir=dump_dir,
+    )
+
 class TestUtils:
     """Class for getting cycle and core num."""
 
@@ -562,8 +671,21 @@ def main(args=None):
     parser.add_argument("-r", "--replace_dso", type=bool, default=False)
     parser.add_argument("-repo", "--repo_path", type=str, default="")
     parser.add_argument("-af", "--akg_fusion", type=distutils.util.strtobool, default=True)
-
+    parser.add_argument("--bisheng",
+                        action="store_true",
+                        help="Use torch mlir ir precision verification pipeline")
+    parser.add_argument("--akg",
+                        action="store_true",
+                        help="Use torch mlir ir precision verification pipeline")
+    parser.add_argument("--torch-mlir-opt",
+                        type=str,
+                        default="torch-mlir-opt",
+                        help="Path to torch-mlir-opt binary")
     args = parser.parse_args()
+    if args.akg:
+        return _run_torch_ir_single_file(pathlib.Path(args.file), args, mode="akg")
+    if args.bisheng:
+        return _run_torch_ir_single_file(pathlib.Path(args.file), args, mode="bisheng")
     _create_dirs()
     if args.dir:
         files = [
@@ -615,6 +737,7 @@ def main(args=None):
             print("precision correct")
         else:
             _run_single_file(args.file, args)
+    return 0
 
 if __name__ == "__main__":
     main()
