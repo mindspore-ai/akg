@@ -42,7 +42,7 @@ namespace mlir {
 namespace runtime {
 class AscendKernelRuntime {
  public:
-  explicit AscendKernelRuntime(uint32_t device_id, bool use_mem_pool);
+  explicit AscendKernelRuntime(uint32_t device_id, bool use_mem_pool, void *external_stream = nullptr);
   ~AscendKernelRuntime();
   bool Init();
   void SetContext();
@@ -77,6 +77,7 @@ class AscendKernelRuntime {
   bool initialized_{false};
   uint32_t device_id_{0};
   void *stream_{nullptr};
+  bool owns_stream_{true};  // false when using external_stream from PTA
   std::shared_ptr<AscendMemoryManager> mem_manager_{nullptr};
   void *cce_handle_{nullptr};
   bool use_mem_pool_{true};

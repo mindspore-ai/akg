@@ -75,7 +75,7 @@ class Kernel:
             logging.info("compile finish, lib.so save to %s", os.path.abspath(output_so_path))
             dump_ascend_meta_data(self.output_so_dir, self.kernel_name, block_dim=self.block_dim)
         except Exception as compile_err:
-            raise Exception(
+            raise RuntimeError(
                 f"compile MLIR failed, error message: {str(compile_err)}"
             ) from compile_err
 
@@ -83,6 +83,8 @@ class Kernel:
         """ launch .so file by akg_ascend_backend """
         # When the PTA side inherits from MLIR, all attributes of data_args here are data;
         # when it inherits from Triton, the last dimension represents the number of elements.
+        # stream: current_stream passed from PTA; used to keep same stream with other ops
+        stream = kwargs.pop('stream', None)
         data_args = args
         # data_args = args[:n-1]
         try:
@@ -98,10 +100,11 @@ class Kernel:
                 self.kernel_name,
                 self.device_id,
                 self.dynamic,
-                *input_for_mod_ctypes
+                *input_for_mod_ctypes,
+                stream=stream
             )
             logging.info("success launch kernel: %s", {self.kernel_name})
         except Exception as running_err:
-            raise Exception(
+            raise RuntimeError(
                 f"exec {self.kernel_name}.so error, error msg: {str(running_err)}"
             ) from running_err
