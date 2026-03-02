@@ -112,6 +112,16 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
                 "description": "之前生成的 kernel 代码（可选），用于代码修改/优化场景。提供后 KernelGen 会基于此代码进行修改而非从零生成",
                 "default": ""
             },
+            "verifier_error": {
+                "type": "string",
+                "description": "之前 workflow 失败时的 Verifier 错误信息（可选）。传入后 KernelGen 能看到历史报错并针对性修复",
+                "default": ""
+            },
+            "conductor_suggestion": {
+                "type": "string",
+                "description": "之前 workflow 失败时的 Conductor 修复建议（可选）。传入后 KernelGen 会参考该建议进行修改",
+                "default": ""
+            },
             "cur_path": {
                 "type": "string",
                 "description": "自定义工作路径（可选），指定后中间文件存放在 cur_path/logs/，生成的代码存放在 cur_path/code.txt",
@@ -283,6 +293,8 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
             - profile: 性能分析结果
             - status: success / fail
             - code_path: 代码文件路径（仅在指定 cur_path 且成功时存在）
+            - error_information: 失败时的最后一次 verifier 报错
+            - conductor_suggestion: 失败时的 conductor 修复建议
         
         Args:
             final_state: workflow 最终状态
@@ -301,6 +313,15 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
             "profile": str(profile_res) if profile_res else "",
             "status": status,
         }
+        
+        # 失败时附带报错信息和 conductor 建议，供上层（KernelAgent）决策
+        if not verifier_result:
+            verifier_error = final_state.get("verifier_error", "")
+            conductor_suggestion = final_state.get("conductor_suggestion", "")
+            if verifier_error:
+                res["error_information"] = verifier_error
+            if conductor_suggestion:
+                res["conductor_suggestion"] = conductor_suggestion
         
         # 如果指定了 cur_path 且验证通过，将代码保存到 cur_path/code.txt
         cur_path = final_state.get("cur_path", "")

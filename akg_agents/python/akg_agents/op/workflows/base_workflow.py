@@ -278,15 +278,15 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             "iteration": 0,
             "step_count": 0,
             "max_iterations": arguments.get("max_iterations", 10),
-            # Agent 输出（初始为空）
+            # Agent 输出（默认为空，但允许从 arguments 传入历史报错信息）
             "verifier_result": None,
-            "verifier_error": None,
+            "verifier_error": arguments.get("verifier_error") or None,
             "profile_res": {},
             "multi_case_error": None,
             "code_check_passed": None,
             "code_check_errors": None,
             "code_check_details": None,
-            "conductor_suggestion": None,
+            "conductor_suggestion": arguments.get("conductor_suggestion") or None,
             "conductor_decision": None,
             # 历史记录
             "agent_history": [],
