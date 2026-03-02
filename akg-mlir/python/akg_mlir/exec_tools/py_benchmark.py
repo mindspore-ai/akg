@@ -501,8 +501,8 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
                          replace_dso=compile_args.replace_dso,
                          repo_path=compile_args.repo_path,
                          enable_loop_fusion=compile_args.akg_fusion)
-        except ValueError:
-            print(kernel_name + " precision error = 9999999997ms")
+        except ValueError as e:
+            print(kernel_name + " error :", e)
             if run_res is not None and run_idx is not None:
                 run_res[run_idx] = False
             return False
