@@ -4,7 +4,6 @@ description: >
   从 PyTorch/Triton 代码仓中提取算子实现，构建为 KernelBench 格式的标准化单文件自包含任务。
   支持代码提取、AST 依赖追踪、函数内联、import 清理、格式验证和参考对比测试。
   当用户需要从现有代码构建 task_code 时使用此 Skill。
-level: L2
 category: workflow
 version: "1.0.0"
 metadata:

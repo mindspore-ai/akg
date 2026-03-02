@@ -1,7 +1,6 @@
 ---
 name: standard-workflow
 description: "标准的算子生成工作流，包含设计、编码和验证三个阶段"
-level: L1
 category: workflow
 version: "1.0.0"
 license: MIT

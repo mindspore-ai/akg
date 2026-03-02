@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-memory
 description: "Ascend NPU 内存访问优化策略，包括 UB（统一缓冲区）利用、数据布局优化、合并访存和预取技巧。适用于内存带宽受限、需要优化数据搬运效率、或处理大规模数据的内核代码性能优化场景"
-level: L4
 category: implementation
 version: "1.0.0"
 metadata:

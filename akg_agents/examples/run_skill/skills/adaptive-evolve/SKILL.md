@@ -1,7 +1,6 @@
 ---
 name: adaptive-evolve
 description: "自适应进化工作流，使用进化算法进行多轮迭代优化"
-level: L1
 category: workflow
 version: "1.2.0"
 license: MIT

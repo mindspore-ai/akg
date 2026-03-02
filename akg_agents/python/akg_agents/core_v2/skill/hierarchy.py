@@ -24,8 +24,15 @@ Skill 层级管理
 from typing import Dict, List, Set, Optional, Tuple
 import logging
 
-from .metadata import SkillMetadata, SkillLevel
+from .metadata import SkillMetadata, CATEGORY_GROUPS
 from .registry import SkillRegistry
+
+# category 到层级序号的映射（用于可选验证：父 category 顺序 < 子 category 顺序）
+_CATEGORY_ORDER = {
+    cat: idx
+    for idx, cats in enumerate(CATEGORY_GROUPS.values())
+    for cat in cats
+}
 
 logger = logging.getLogger(__name__)
 
@@ -177,16 +184,11 @@ class SkillHierarchy:
 # ============================================================================
 
 
-def _get_level_value(level: SkillLevel) -> int:
-    """获取层级数值（L1=1, L2=2, ...）"""
-    level_map = {
-        SkillLevel.L1: 1,
-        SkillLevel.L2: 2,
-        SkillLevel.L3: 3,
-        SkillLevel.L4: 4,
-        SkillLevel.L5: 5,
-    }
-    return level_map.get(level, 999)
+def _get_category_order_value(category: Optional[str]) -> int:
+    """获取 category 对应的层级序号（用于父子顺序校验，越小越“上层”）"""
+    if not category:
+        return 999
+    return _CATEGORY_ORDER.get(category, 999)
 
 
 def validate_all(hierarchy: "SkillHierarchy") -> Tuple[bool, List[str]]:
@@ -214,13 +216,13 @@ def validate_all(hierarchy: "SkillHierarchy") -> Tuple[bool, List[str]]:
     if cycles:
         errors.append(f"检测到循环依赖: {cycles}")
     
-    # 2. 检查层级合法性（父层级 < 子层级）
+    # 2. 检查分类顺序合法性（父 category 顺序 < 子 category 顺序）
     for skill in hierarchy.registry.get_all():
         if skill.structure and skill.structure.child_skills:
-            level_errors = _validate_level_order(hierarchy, skill)
+            level_errors = _validate_category_order(hierarchy, skill)
             errors.extend(level_errors)
     
-    # 3. 检查渐进式披露（父层级 + 1 = 子层级）
+    # 3. 检查渐进式披露（父 category 顺序 + 1 = 子 category 顺序）
     for skill in hierarchy.registry.get_all():
         if skill.structure and skill.structure.child_skills:
             progressive_errors = _validate_progressive_disclosure(hierarchy, skill)
@@ -284,9 +286,9 @@ def detect_cycles(hierarchy: "SkillHierarchy") -> List[List[str]]:
     return cycles
 
 
-def _validate_level_order(hierarchy: "SkillHierarchy", parent: SkillMetadata) -> List[str]:
+def _validate_category_order(hierarchy: "SkillHierarchy", parent: SkillMetadata) -> List[str]:
     """
-    验证父子层级顺序（父层级必须 < 子层级）（可选功能）
+    验证父子分类顺序（父 category 顺序必须 < 子 category 顺序）（可选功能）
     
     Args:
         hierarchy: SkillHierarchy 实例
@@ -297,23 +299,23 @@ def _validate_level_order(hierarchy: "SkillHierarchy", parent: SkillMetadata) ->
     """
     errors = []
     
-    if not parent.level or not parent.structure:
+    if not parent.category or not parent.structure:
         return errors
     
-    parent_level_value = _get_level_value(parent.level)
+    parent_order = _get_category_order_value(parent.category)
     
     for child_name in parent.structure.child_skills:
         child = hierarchy.registry.get(child_name)
-        if not child or not child.level:
+        if not child or not child.category:
             continue
         
-        child_level_value = _get_level_value(child.level)
+        child_order = _get_category_order_value(child.category)
         
-        # 父层级必须 < 子层级
-        if parent_level_value >= child_level_value:
+        # 父顺序必须 < 子顺序
+        if parent_order >= child_order:
             errors.append(
-                f"层级顺序错误: '{parent.name}' ({parent.level.value}) "
-                f"不能指向更高或相同层级的 '{child_name}' ({child.level.value})"
+                f"分类顺序错误: '{parent.name}' (category={parent.category}) "
+                f"不能指向更高或相同层级的 '{child_name}' (category={child.category})"
             )
     
     return errors
@@ -321,7 +323,7 @@ def _validate_level_order(hierarchy: "SkillHierarchy", parent: SkillMetadata) ->
 
 def _validate_progressive_disclosure(hierarchy: "SkillHierarchy", parent: SkillMetadata) -> List[str]:
     """
-    验证渐进式披露（父层级 + 1 = 子层级）（可选功能）
+    验证渐进式披露（父 category 顺序 + 1 = 子 category 顺序）（可选功能）
     
     Args:
         hierarchy: SkillHierarchy 实例
@@ -332,23 +334,23 @@ def _validate_progressive_disclosure(hierarchy: "SkillHierarchy", parent: SkillM
     """
     errors = []
     
-    if not parent.level or not parent.structure:
+    if not parent.category or not parent.structure:
         return errors
     
-    parent_level_value = _get_level_value(parent.level)
+    parent_order = _get_category_order_value(parent.category)
     
     for child_name in parent.structure.child_skills:
         child = hierarchy.registry.get(child_name)
-        if not child or not child.level:
+        if not child or not child.category:
             continue
         
-        child_level_value = _get_level_value(child.level)
+        child_order = _get_category_order_value(child.category)
         
-        # 父层级 + 1 必须等于子层级（渐进式）
-        if child_level_value != parent_level_value + 1:
+        # 父顺序 + 1 必须等于子顺序（渐进式）
+        if child_order != parent_order + 1:
             errors.append(
-                f"渐进式披露错误: '{parent.name}' ({parent.level.value}) "
-                f"只能引用下一层级，但引用了 '{child_name}' ({child.level.value})"
+                f"渐进式披露错误: '{parent.name}' (category={parent.category}) "
+                f"只能引用下一层级，但引用了 '{child_name}' (category={child.category})"
             )
     
     return errors

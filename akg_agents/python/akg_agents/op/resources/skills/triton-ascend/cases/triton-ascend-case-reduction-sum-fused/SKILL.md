@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-reduction-sum-fused
 description: "Reduction+Elementwise融合算子优化：先逐元素操作再归约，行二次切分+计算重组，grid=40且SUB切分不含尾块时性能最优（47.58us），融合优化逻辑以reduce为主，适用于需要先逐元素计算再reduce的融合场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

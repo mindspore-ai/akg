@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-elemwise-concat
 description: "Slice+Concat融合算子优化：通过精确切片加载（只load需要部分）和索引计算拼接（避免cat指令）避免中间结果存储和多次内存访问，适用于多输入需要切片后拼接的融合算子场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

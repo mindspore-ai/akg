@@ -1,7 +1,6 @@
 ---
 name: cuda-c-api
 description: "CUDA C 编程接口完整参考手册"
-level: L4
 category: fundamental
 version: "1.0.0"
 metadata:

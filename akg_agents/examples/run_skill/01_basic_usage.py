@@ -31,7 +31,7 @@ Skill System 基础使用示例
 from pathlib import Path
 
 from akg_agents.core_v2.skill import (
-    SkillMetadata, SkillLevel, SkillRegistry
+    SkillMetadata, SkillRegistry
 )
 
 
@@ -54,9 +54,9 @@ def example_1_load_and_register():
     stats = registry.get_statistics()
     print("Registry 统计:")
     print(f"  总数: {stats['total']}")
-    print(f"  按层级:")
-    for level, cnt in stats['by_level'].items():
-        print(f"    {level}: {cnt} 个")
+    print(f"  按分类:")
+    for cat, cnt in stats['by_category'].items():
+        print(f"    {cat}: {cnt} 个")
     print(f"  包含层级结构: {stats['with_structure']} 个")
     print()
 
@@ -77,7 +77,7 @@ def example_2_query_skills():
     if skill:
         print(f"  名称: {skill.name}")
         print(f"  描述: {skill.description}")
-        print(f"  层级: {skill.level.value if skill.level else 'N/A'}")
+        print(f"  分类: {skill.category or 'N/A'}")
         print(f"  版本: {skill.version}")
         print(f"  内容长度: {len(skill.content)} 字符")
     print()
@@ -87,8 +87,8 @@ def example_2_query_skills():
     all_skills = registry.get_all()
     print(f"  总共: {len(all_skills)} 个")
     for skill in sorted(all_skills, key=lambda s: s.name)[:5]:
-        level_str = f"[{skill.level.value}]" if skill.level else "[--]"
-        print(f"    {level_str} {skill.name}")
+        cat_str = f"[{skill.category}]" if skill.category else "[--]"
+        print(f"    {cat_str} {skill.name}")
     print()
     
     # 检查是否存在
@@ -98,22 +98,23 @@ def example_2_query_skills():
     print()
 
 
-def example_3_filter_by_level():
-    """示例3：按层级过滤"""
+def example_3_filter_by_category():
+    """示例3：按分类过滤"""
     print("=" * 70)
-    print("示例3：按层级过滤")
+    print("示例3：按分类过滤")
     print("=" * 70)
     
     registry = SkillRegistry()
     skills_dir = Path(__file__).parent / "skills"
     registry.load_from_directory(skills_dir)
     
-    # 查询不同层级
-    for level in [SkillLevel.L1, SkillLevel.L2, SkillLevel.L3]:
-        skills = registry.get_by_level(level)
-        print(f"\n[{level.value}] {len(skills)} 个 Skills:")
-        for skill in skills:
-            print(f"  - {skill.name}: {skill.description[:50]}...")
+    # 查询不同分类
+    for category in ["workflow", "agent", "guide", "dsl"]:
+        skills = registry.get_by_category(category)
+        if skills:
+            print(f"\n[{category}] {len(skills)} 个 Skills:")
+            for skill in skills:
+                print(f"  - {skill.name}: {skill.description[:50]}...")
 
 
 def example_4_filter_by_pattern():
@@ -130,15 +131,15 @@ def example_4_filter_by_pattern():
     print("\n[1] 名称包含 'agent' 的 Skills:")
     agent_skills = registry.filter(name_pattern="*agent*")
     for skill in agent_skills:
-        level_str = f"[{skill.level.value}]" if skill.level else "[--]"
-        print(f"  {level_str} {skill.name}")
+        cat_str = f"[{skill.category}]" if skill.category else "[--]"
+        print(f"  {cat_str} {skill.name}")
     
     # 查找所有 triton 相关
     print("\n[2] 名称包含 'triton' 的 Skills:")
     triton_skills = registry.filter(name_pattern="*triton*")
     for skill in triton_skills:
-        level_str = f"[{skill.level.value}]" if skill.level else "[--]"
-        print(f"  {level_str} {skill.name}")
+        cat_str = f"[{skill.category}]" if skill.category else "[--]"
+        print(f"  {cat_str} {skill.name}")
     
     # 查找有层级结构的 Skills
     print("\n[3] 包含层级结构的 Skills:")
@@ -166,8 +167,7 @@ def example_5_view_content():
     if skill:
         print(f"\nSkill: {skill.name}")
         print(f"描述: {skill.description}")
-        print(f"层级: {skill.level.value if skill.level else 'N/A'}")
-        print(f"类别: {skill.category if hasattr(skill, 'category') else 'N/A'}")
+        print(f"分类: {skill.category or 'N/A'}")
         print(f"版本: {skill.version}")
         print(f"文件路径: {skill.skill_path}")
         
@@ -194,16 +194,16 @@ def example_6_combined_filters():
     skills_dir = Path(__file__).parent / "skills"
     registry.load_from_directory(skills_dir)
     
-    # L2 层级 + agent 模式
-    print("\n[1] L2 层级且名称包含 'agent':")
-    l2_agents = registry.filter(level=SkillLevel.L2, name_pattern="*agent*")
-    for skill in l2_agents:
+    # agent 分类 + 名称包含 'agent'
+    print("\n[1] agent 分类且名称包含 'agent':")
+    agent_skills = registry.filter(category="agent", name_pattern="*agent*")
+    for skill in agent_skills:
         print(f"  - {skill.name}: {skill.description[:40]}...")
     
-    # L3 层级 + 有层级结构
-    print("\n[2] L3 层级且包含层级结构:")
-    l3_structured = registry.filter(level=SkillLevel.L3, has_structure=True)
-    for skill in l3_structured:
+    # guide/dsl 分类 + 有层级结构
+    print("\n[2] guide 分类且包含层级结构:")
+    guide_structured = registry.filter(category="guide", has_structure=True)
+    for skill in guide_structured:
         print(f"  - {skill.name}")
         if skill.structure:
             print(f"    子 Skills: {skill.structure.child_skills}")
@@ -229,7 +229,7 @@ def example_7_metadata_inspection():
         if skill:
             print(f"\n[{skill.name}]")
             print(f"  描述: {skill.description}")
-            print(f"  层级: {skill.level.value if skill.level else 'N/A'}")
+            print(f"  分类: {skill.category or 'N/A'}")
             print(f"  版本: {skill.version}")
             print(f"  许可证: {skill.license if skill.license else 'N/A'}")
             
@@ -255,7 +255,7 @@ def run_all_examples():
     examples = [
         example_1_load_and_register,
         example_2_query_skills,
-        example_3_filter_by_level,
+        example_3_filter_by_category,
         example_4_filter_by_pattern,
         example_5_view_content,
         example_6_combined_filters,

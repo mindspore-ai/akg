@@ -1,7 +1,6 @@
 ---
 name: pypto-case-matvec
 description: "矩阵-向量乘法：K > 65535 时用 elementwise mul + sum 替代 matmul"
-level: L4
 category: case
 version: "1.0.0"
 metadata:

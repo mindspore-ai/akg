@@ -1,7 +1,6 @@
 ---
 name: pypto-optimization
 description: "PyPTO 性能优化规则与调参顺序。适用于需要优化 tile/loop/归约性能、比较不同 tile 方案、解释同一算子不同 tile 性能差异（尤其 softmax/logsoftmax/reduction/norm/loss）的场景"
-level: L4
 category: method
 version: "1.0.0"
 metadata:

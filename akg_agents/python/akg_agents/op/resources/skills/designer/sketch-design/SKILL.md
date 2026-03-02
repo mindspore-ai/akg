@@ -1,8 +1,7 @@
 ---
 name: sketch-design
 description: "算子草图设计语言规范和生成指导，包含 UnifiedSketch DSL 语法和算子草图设计方法论"
-level: L1
-category: design
+category: guide
 version: "1.0.0"
 metadata:
   role: designer

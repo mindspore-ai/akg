@@ -1,7 +1,6 @@
 ---
 name: triton-syntax
 description: "Triton语言语法和编程模式，简化GPU kernel开发"
-level: L3
 category: dsl
 version: "1.0.0"
 license: MIT

@@ -1,7 +1,6 @@
 ---
 name: cpu-basics
 description: "CPU C++ 算子核心概念、标准结构模式、KernelBench 代码规范和内嵌扩展方法"
-level: L3
 category: fundamental
 version: "1.0.0"
 metadata:

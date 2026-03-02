@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-optimization
 description: "Triton Ascend 性能优化通用策略、API 限制说明和调试技巧汇总。适用于需要提升内核性能、遇到编译/运行错误需要排查、或需要了解 Ascend 平台特有限制的内核代码生成和优化场景"
-level: L3
 category: method
 version: "1.0.0"
 metadata:

@@ -1,7 +1,6 @@
 ---
 name: pypto-case-matmul-2d
 description: "模式 B 示例：2D 矩阵乘法 + M 维 loop 分块 + 尾部处理"
-level: L4
 category: example
 version: "1.0.0"
 metadata:

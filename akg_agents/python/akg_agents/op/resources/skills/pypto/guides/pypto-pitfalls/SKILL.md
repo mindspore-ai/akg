@@ -1,7 +1,6 @@
 ---
 name: pypto-pitfalls
 description: "PyPTO 常见首次生成错误及正确写法"
-level: L4
 category: implementation
 version: "1.0.0"
 metadata:

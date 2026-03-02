@@ -48,9 +48,39 @@ from typing import List, Dict, Optional, Any, Callable
 from dataclasses import dataclass, field
 import logging
 
-from .metadata import SkillMetadata, SkillLevel
+from .metadata import SkillMetadata, CATEGORY_GROUPS
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_include_categories(context: "SelectionContext") -> set:
+    """解析 context 中的 include_categories 与 include_category_groups，返回允许的 category 集合"""
+    raw = getattr(context, "include_categories", None)
+    if raw is None:
+        raw = context.custom_fields.get("include_categories")
+    include = set(raw or [])
+
+    groups = getattr(context, "include_category_groups", None)
+    if groups is None:
+        groups = context.custom_fields.get("include_category_groups")
+    for g in (groups or []):
+        include.update(CATEGORY_GROUPS.get(g, []))
+    return include
+
+
+def _resolve_exclude_categories(context: "SelectionContext") -> set:
+    """解析 context 中的 exclude_categories 与 exclude_category_groups，返回排除的 category 集合"""
+    raw = getattr(context, "exclude_categories", None)
+    if raw is None:
+        raw = context.custom_fields.get("exclude_categories")
+    exclude = set(raw or [])
+
+    groups = getattr(context, "exclude_category_groups", None)
+    if groups is None:
+        groups = context.custom_fields.get("exclude_category_groups")
+    for g in (groups or []):
+        exclude.update(CATEGORY_GROUPS.get(g, []))
+    return exclude
 
 
 # ==================== 通用过滤器工具 ====================
@@ -177,78 +207,55 @@ def or_filters(*filters: Callable) -> Callable:
     return combined_filter
 
 
-def create_level_filter(match_mode: str = "include") -> Callable:
+def create_category_filter(match_mode: str = "include") -> Callable:
     """
-    创建 Level 过滤器（工厂函数）
+    创建 Category 过滤器（工厂函数）
     
     支持两种模式：
-    - include: 只包含指定的 levels（白名单）
-    - exclude: 排除指定的 levels（黑名单）
+    - include: 只包含指定的 categories 或 category_groups（白名单）
+    - exclude: 排除指定的 categories 或 category_groups（黑名单）
     
     Args:
         match_mode: 匹配模式
-            - "include": 只包含 context.include_levels 中的 levels
-            - "exclude": 排除 context.exclude_levels 中的 levels
+            - "include": 只包含 context.include_categories / include_category_groups 中的分类
+            - "exclude": 排除 context.exclude_categories / exclude_category_groups 中的分类
     
     Returns:
         过滤器函数 filter(skill, context) -> bool
     
     示例：
-        # 创建 include 过滤器（只要 L3, L5 的 Skill）
-        include_filter = create_level_filter("include")
-        context = SelectionContext(include_levels=[SkillLevel.L3, SkillLevel.L5])
+        # 创建 include 过滤器（只要 guide, example 的 Skill）
+        include_filter = create_category_filter("include")
+        context = SelectionContext(include_categories=["guide", "example"])
         
-        # 创建 exclude 过滤器（不要 L1, L2 的 Skill）
-        exclude_filter = create_level_filter("exclude")
-        context = SelectionContext(exclude_levels=[SkillLevel.L1, SkillLevel.L2])
+        # 使用分组：只要 knowledge 组
+        context = SelectionContext(include_category_groups=["knowledge"])
         
-        # 同时使用 include 和 exclude
-        selector = SkillSelector(custom_filters=[
-            create_level_filter("include"),
-            create_level_filter("exclude")
-        ])
-        context = SelectionContext(
-            include_levels=[SkillLevel.L3, SkillLevel.L4, SkillLevel.L5],
-            exclude_levels=[SkillLevel.L4]  # 最终只保留 L3, L5
-        )
+        # 创建 exclude 过滤器（不要 workflow, agent）
+        exclude_filter = create_category_filter("exclude")
+        context = SelectionContext(exclude_categories=["workflow", "agent"])
     """
-    def level_filter(skill: SkillMetadata, context: 'SelectionContext') -> bool:
+    def category_filter(skill: SkillMetadata, context: "SelectionContext") -> bool:
         if match_mode == "include":
-            # 获取 include_levels
-            include_levels = getattr(context, 'include_levels', None)
-            if include_levels is None:
-                include_levels = context.custom_fields.get('include_levels')
-            
-            # 如果没有指定 include_levels，放行
-            if not include_levels:
+            allowed = _resolve_include_categories(context)
+            if not allowed:
                 return True
-            
-            # Skill 的 level 必须在 include_levels 中
-            if not skill.level:
-                return False  # 没有 level 的 Skill 不通过 include 筛选
-            
-            return skill.level in include_levels
+            if not skill.category:
+                return False  # 没有 category 的 Skill 不通过 include 筛选
+            return skill.category in allowed
         
         elif match_mode == "exclude":
-            # 获取 exclude_levels
-            exclude_levels = getattr(context, 'exclude_levels', None)
-            if exclude_levels is None:
-                exclude_levels = context.custom_fields.get('exclude_levels')
-            
-            # 如果没有指定 exclude_levels，放行
-            if not exclude_levels:
+            excluded = _resolve_exclude_categories(context)
+            if not excluded:
                 return True
-            
-            # Skill 的 level 不能在 exclude_levels 中
-            if not skill.level:
-                return True  # 没有 level 的 Skill 默认通过 exclude 筛选
-            
-            return skill.level not in exclude_levels
+            if not skill.category:
+                return True  # 没有 category 的 Skill 默认通过 exclude 筛选
+            return skill.category not in excluded
         
         else:
             raise ValueError(f"Unknown match_mode: {match_mode}")
     
-    return level_filter
+    return category_filter
 
 
 # ==================== 选择上下文 ====================
@@ -262,8 +269,10 @@ class SelectionContext:
     所有领域特定的字段应该通过继承添加（如 OperatorSelectionContext）。
     
     字段说明：
-        include_levels: Level 白名单，只包含这些 levels 的 Skill
-        exclude_levels: Level 黑名单，排除这些 levels 的 Skill
+        include_categories: Category 白名单，只包含这些 category 的 Skill
+        exclude_categories: Category 黑名单，排除这些 category 的 Skill
+        include_category_groups: 按分组白名单（如 ["knowledge"] 对应 guide/fundamental/dsl 等）
+        exclude_category_groups: 按分组黑名单
         custom_fields: 自定义字段字典，用于传递任意信息
     
     示例：
@@ -275,13 +284,16 @@ class SelectionContext:
             }
         )
         
-        # 方式 2: 使用 Level 筛选
+        # 方式 2: 使用 Category 筛选
         context = SelectionContext(
-            include_levels=[SkillLevel.L3, SkillLevel.L5],  # 只要 L3, L5
-            exclude_levels=[SkillLevel.L1]                   # 不要 L1
+            include_categories=["guide", "example"],
+            exclude_categories=["workflow"]
         )
         
-        # 方式 3: 继承创建领域特定上下文
+        # 方式 3: 使用分组
+        context = SelectionContext(include_category_groups=["knowledge"])
+        
+        # 方式 4: 继承创建领域特定上下文
         @dataclass
         class DocSelectionContext(SelectionContext):
             doc_type: Optional[str] = None
@@ -289,9 +301,11 @@ class SelectionContext:
         
         context = DocSelectionContext(doc_type="api", language="python")
     """
-    # Level 筛选字段
-    include_levels: Optional[List[SkillLevel]] = None  # 白名单：只包含这些 levels
-    exclude_levels: Optional[List[SkillLevel]] = None  # 黑名单：排除这些 levels
+    # Category 筛选字段
+    include_categories: Optional[List[str]] = None       # 白名单：只包含这些 category
+    exclude_categories: Optional[List[str]] = None      # 黑名单：排除这些 category
+    include_category_groups: Optional[List[str]] = None # 白名单分组（orchestration, actor, knowledge, example）
+    exclude_category_groups: Optional[List[str]] = None # 黑名单分组
     
     # 自定义扩展字段（用于任意信息）
     custom_fields: Dict[str, Any] = field(default_factory=dict)
@@ -341,7 +355,7 @@ class SkillSelector:
         self,
         skills: List[SkillMetadata],
         context: SelectionContext,
-        level: Optional[SkillLevel] = None
+        category: Optional[str] = None
     ) -> List[SkillMetadata]:
         """
         阶段 1：粗筛（基于 metadata 标签）
@@ -351,7 +365,7 @@ class SkillSelector:
         Args:
             skills: 所有候选 Skill
             context: 选择上下文
-            level: 指定只从某个层级筛选（可选）
+            category: 指定只从某个分类筛选（可选）
         
         Returns:
             过滤后的候选 Skill 列表
@@ -359,8 +373,8 @@ class SkillSelector:
         candidates = []
         
         for skill in skills:
-            # 通用过滤：层级匹配
-            if level and skill.level != level:
+            # 通用过滤：分类匹配
+            if category and skill.category != category:
                 continue
             
             # 应用自定义过滤器
@@ -445,8 +459,8 @@ class SkillSelector:
         # 格式化候选 Skill
         skills_str = ""
         for i, skill in enumerate(candidates, 1):
-            level_str = f"[{skill.level.value}]" if skill.level else "[?]"
-            skills_str += f"\n{i}. {skill.name} {level_str}\n"
+            cat_str = f"[{skill.category}]" if skill.category else "[?]"
+            skills_str += f"\n{i}. {skill.name} {cat_str}\n"
             skills_str += f"   描述: {skill.description}\n"
             if skill.metadata:
                 skills_str += f"   标签: {skill.metadata}\n"
@@ -561,7 +575,7 @@ class SkillSelector:
         llm_generate_func: Optional[Any] = None,
         llm_prompt: Optional[str] = None,
         prompt_template: Optional[str] = None,
-        level: Optional[SkillLevel] = None,
+        category: Optional[str] = None,
         **kwargs
     ) -> List[SkillMetadata]:
         """
@@ -575,7 +589,7 @@ class SkillSelector:
                 如果提供，将跳过 build_llm_prompt，直接使用此 prompt
             prompt_template: prompt 模板（可选）
                 如果提供了 llm_generate_func 但未提供 llm_prompt，则必须提供此参数
-            level: 指定只从某个层级筛选（可选）
+            category: 指定只从某个分类筛选（可选）
             **kwargs: 额外参数，传递给 build_llm_prompt 或用户自定义
         
         Returns:
@@ -611,7 +625,7 @@ class SkillSelector:
             )
         """
         # 阶段 1：粗筛
-        candidates = self.coarse_filter(all_skills, context, level)
+        candidates = self.coarse_filter(all_skills, context, category)
         
         if not candidates:
             logger.warning("粗筛后无候选 Skill")

@@ -23,7 +23,6 @@ from pathlib import Path
 
 from akg_agents.core_v2.skill import (
     SkillMetadata,
-    SkillLevel,
     SkillStructure,
     SkillRegistry,
     Version,
@@ -45,16 +44,15 @@ class TestSkillMetadata:
         assert skill.name == "test-skill"
         assert skill.description == "测试 Skill"
         assert skill.version == "1.0.0"
-        assert skill.level is None
+        assert skill.category is None
     
     def test_create_full_skill(self):
         """创建完整 Skill（所有字段）"""
         skill = SkillMetadata(
             name="full-skill",
             description="完整的测试 Skill",
-            level=SkillLevel.L3,
+            category="guide",
             version="2.1.0",
-            category="dsl",
             license="MIT",
             metadata={"backend": "cuda"},
             skill_path=Path("./test.md"),
@@ -62,9 +60,9 @@ class TestSkillMetadata:
         )
         
         assert skill.name == "full-skill"
-        assert skill.level == SkillLevel.L3
+        assert skill.category == "guide"
         assert skill.version == "2.1.0"
-        assert skill.category == "dsl"
+        assert skill.category == "guide"
         assert skill.metadata["backend"] == "cuda"
     
     def test_validate_valid_skill(self):
@@ -109,7 +107,6 @@ class TestSkillMetadata:
         yaml_data = {
             "name": "yaml-skill",
             "description": "从 YAML 创建",
-            "level": "L2",
             "version": "1.5.0",
             "category": "agent"
         }
@@ -117,7 +114,6 @@ class TestSkillMetadata:
         skill = SkillMetadata.from_yaml_dict(yaml_data)
         
         assert skill.name == "yaml-skill"
-        assert skill.level == SkillLevel.L2
         assert skill.version == "1.5.0"
         assert skill.category == "agent"
     
@@ -126,7 +122,7 @@ class TestSkillMetadata:
         yaml_data = {
             "name": "workflow-skill",
             "description": "工作流",
-            "level": "L1",
+            "category": "workflow",
             "structure": {
                 "child_skills": ["skill1", "skill2"],
                 "default_children": ["skill1"]
@@ -150,7 +146,7 @@ class TestSkillRegistry:
         skill = SkillMetadata(
             name="test-skill",
             description="测试",
-            level=SkillLevel.L3
+            category="guide"
         )
         registry.register(skill)
         
@@ -158,17 +154,17 @@ class TestSkillRegistry:
         assert retrieved is not None
         assert retrieved.name == "test-skill"
     
-    def test_get_by_level(self):
-        """按层级查询"""
+    def test_get_by_category(self):
+        """按分类查询"""
         registry = SkillRegistry()
         
-        registry.register(SkillMetadata(name="l1-skill", description="L1", level=SkillLevel.L1))
-        registry.register(SkillMetadata(name="l2-skill", description="L2", level=SkillLevel.L2))
-        registry.register(SkillMetadata(name="l3-skill", description="L3", level=SkillLevel.L3))
+        registry.register(SkillMetadata(name="workflow-skill", description="Workflow", category="workflow"))
+        registry.register(SkillMetadata(name="agent-skill", description="Agent", category="agent"))
+        registry.register(SkillMetadata(name="guide-skill", description="Guide", category="guide"))
         
-        l2_skills = registry.get_by_level(SkillLevel.L2)
-        assert len(l2_skills) == 1
-        assert l2_skills[0].name == "l2-skill"
+        agent_skills = registry.get_by_category("agent")
+        assert len(agent_skills) == 1
+        assert agent_skills[0].name == "agent-skill"
     
     def test_filter_by_name_pattern(self):
         """按名称模式过滤"""
@@ -177,17 +173,17 @@ class TestSkillRegistry:
         registry.register(SkillMetadata(
             name="cuda-skill", 
             description="CUDA",
-            level=SkillLevel.L3
+            category="guide"
         ))
         registry.register(SkillMetadata(
             name="cuda-basics",
             description="CUDA Basics",
-            level=SkillLevel.L3
+            category="guide"
         ))
         registry.register(SkillMetadata(
             name="ascend-skill",
             description="Ascend",
-            level=SkillLevel.L3
+            category="guide"
         ))
         
         cuda_skills = registry.filter(name_pattern="cuda-*")
@@ -198,8 +194,8 @@ class TestSkillRegistry:
         """多版本支持"""
         registry = SkillRegistry()
         
-        registry.register(SkillMetadata(name="test", description="v1", version="1.0.0", level=SkillLevel.L3))
-        registry.register(SkillMetadata(name="test", description="v2", version="2.0.0", level=SkillLevel.L3))
+        registry.register(SkillMetadata(name="test", description="v1", version="1.0.0", category="guide"))
+        registry.register(SkillMetadata(name="test", description="v2", version="2.0.0", category="guide"))
         
         # 默认获取最新版本
         latest = registry.get("test")
@@ -217,8 +213,8 @@ class TestSkillRegistry:
         """版本选择策略"""
         registry = SkillRegistry()
         
-        registry.register(SkillMetadata(name="test", description="v1", version="1.0.0", level=SkillLevel.L3))
-        registry.register(SkillMetadata(name="test", description="v2", version="2.0.0", level=SkillLevel.L3))
+        registry.register(SkillMetadata(name="test", description="v1", version="1.0.0", category="guide"))
+        registry.register(SkillMetadata(name="test", description="v2", version="2.0.0", category="guide"))
         
         # 策略：latest
         latest = registry.get("test", strategy="latest")
@@ -275,7 +271,7 @@ class TestVersionManager:
     
     def test_register_and_get(self, manager):
         """注册和获取"""
-        skill = SkillMetadata(name="test", description="Test", version="1.0.0", level=SkillLevel.L3)
+        skill = SkillMetadata(name="test", description="Test", version="1.0.0", category="guide")
         manager.register_skill(skill)
         
         retrieved = manager.get_skill("test")
@@ -284,9 +280,9 @@ class TestVersionManager:
     
     def test_multiple_versions(self, manager):
         """多版本管理"""
-        manager.register_skill(SkillMetadata(name="cuda", description="v1", version="1.0.0", level=SkillLevel.L3))
-        manager.register_skill(SkillMetadata(name="cuda", description="v2", version="1.5.0", level=SkillLevel.L3))
-        manager.register_skill(SkillMetadata(name="cuda", description="v3", version="2.0.0", level=SkillLevel.L3))
+        manager.register_skill(SkillMetadata(name="cuda", description="v1", version="1.0.0", category="guide"))
+        manager.register_skill(SkillMetadata(name="cuda", description="v2", version="1.5.0", category="guide"))
+        manager.register_skill(SkillMetadata(name="cuda", description="v3", version="2.0.0", category="guide"))
         
         versions = manager.get_versions("cuda")
         assert len(versions) == 3
@@ -300,8 +296,8 @@ class TestVersionManager:
     
     def test_version_strategies(self, manager):
         """版本选择策略"""
-        manager.register_skill(SkillMetadata(name="test", description="v1", version="1.0.0", level=SkillLevel.L3))
-        manager.register_skill(SkillMetadata(name="test", description="v2", version="2.0.0", level=SkillLevel.L3))
+        manager.register_skill(SkillMetadata(name="test", description="v1", version="1.0.0", category="guide"))
+        manager.register_skill(SkillMetadata(name="test", description="v2", version="2.0.0", category="guide"))
         
         latest = manager.get_skill("test", strategy="latest")
         assert latest.version == "2.0.0"

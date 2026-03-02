@@ -63,9 +63,9 @@ from akg_agents.core_v2.skill.skill_selector import (
     SelectionContext,
     SkillSelector,
     create_metadata_matcher,  # 从通用框架导入
-    create_level_filter       # Level 筛选器
+    create_category_filter   # Category 筛选器
 )
-from akg_agents.core_v2.skill.metadata import SkillMetadata, SkillLevel
+from akg_agents.core_v2.skill.metadata import SkillMetadata
 
 import logging
 
@@ -84,9 +84,11 @@ class OperatorSelectionContext(SelectionContext):
         backend: 后端（如："cuda", "ascend", "rocm"）
         hardware: 硬件型号（如："ascend910b4", "a100"）
         
-        继承自 SelectionContext 的 Level 筛选字段：
-        include_levels: Level 白名单，只包含这些 levels 的 Skill
-        exclude_levels: Level 黑名单，排除这些 levels 的 Skill
+        继承自 SelectionContext 的 Category 筛选字段：
+        include_categories: Category 白名单
+        exclude_categories: Category 黑名单
+        include_category_groups: 分组白名单（如 ["knowledge"]）
+        exclude_category_groups: 分组黑名单
     
     示例：
         # 基本用法
@@ -97,19 +99,26 @@ class OperatorSelectionContext(SelectionContext):
             hardware="a100"
         )
         
-        # 使用 Level 筛选：只要 L3 和 L5 的 Skill
+        # 使用 Category 筛选：只要 guide 和 example 的 Skill
         context = OperatorSelectionContext(
             operator_type="softmax",
             dsl="triton-ascend",
             backend="ascend",
-            include_levels=[SkillLevel.L3, SkillLevel.L5]
+            include_categories=["guide", "example"]
         )
         
-        # 使用 Level 筛选：排除 L1 和 L2 的 Skill
+        # 使用分组筛选：只要 knowledge 组
         context = OperatorSelectionContext(
             dsl="triton-ascend",
             backend="ascend",
-            exclude_levels=[SkillLevel.L1, SkillLevel.L2]
+            include_category_groups=["knowledge"]
+        )
+        
+        # 排除 workflow 和 agent
+        context = OperatorSelectionContext(
+            dsl="triton-ascend",
+            backend="ascend",
+            exclude_categories=["workflow", "agent"]
         )
         
         # 如果需要额外的字段，使用 custom_fields
@@ -138,9 +147,9 @@ dsl_filter = create_metadata_matcher("dsl")
 hardware_filter = create_metadata_matcher("hardware")
 operator_type_filter = create_metadata_matcher("operator_type", "operator_patterns")
 
-# Level 过滤器（支持 include 和 exclude 模式）
-level_include_filter = create_level_filter("include")
-level_exclude_filter = create_level_filter("exclude")
+# Category 过滤器（支持 include 和 exclude 模式）
+category_include_filter = create_category_filter("include")
+category_exclude_filter = create_category_filter("exclude")
 
 
 def create_operator_filters() -> List[Callable]:
@@ -154,8 +163,8 @@ def create_operator_filters() -> List[Callable]:
     2. dsl_filter: DSL 匹配（triton, cuda等）
     3. hardware_filter: 硬件型号匹配（npu910b, a100等）
     4. operator_type_filter: 算子类型匹配（softmax, layernorm等）
-    5. level_include_filter: Level 白名单（只包含指定 levels）
-    6. level_exclude_filter: Level 黑名单（排除指定 levels）
+    5. category_include_filter: Category 白名单（只包含指定 category）
+    6. category_exclude_filter: Category 黑名单（排除指定 category）
     
     Returns:
         过滤器函数列表
@@ -177,19 +186,19 @@ def create_operator_filters() -> List[Callable]:
         )
         candidates = selector.coarse_filter(all_skills, context)
         
-        # 使用 Level 筛选：只要 L3, L5 级别的 Skill
+        # 使用 Category 筛选：只要 guide, example 级别的 Skill
         context = OperatorSelectionContext(
             dsl="triton-ascend",
             backend="ascend",
-            include_levels=[SkillLevel.L3, SkillLevel.L5]
+            include_categories=["guide", "example"]
         )
         candidates = selector.coarse_filter(all_skills, context)
         
-        # 使用 Level 筛选：排除 L1, L2 级别的 Skill
+        # 使用分组筛选：排除 workflow 和 agent
         context = OperatorSelectionContext(
             dsl="triton-ascend",
             backend="ascend",
-            exclude_levels=[SkillLevel.L1, SkillLevel.L2]
+            exclude_category_groups=["orchestration", "actor"]
         )
         candidates = selector.coarse_filter(all_skills, context)
         
@@ -219,8 +228,8 @@ def create_operator_filters() -> List[Callable]:
         dsl_filter, 
         hardware_filter, 
         operator_type_filter,
-        level_include_filter,
-        level_exclude_filter
+        category_include_filter,
+        category_exclude_filter
     ]
 
 

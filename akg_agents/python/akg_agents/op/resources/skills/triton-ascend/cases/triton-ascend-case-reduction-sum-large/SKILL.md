@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-reduction-sum-large
 description: "大规模归约（sum）非reduce轴很大优化：计算重组减少归约次数，在优先占满UB前提下为reduce轴分配较大切分尺寸（BLOCK_SIZE_N=1024最优685.65us），适用于非reduce轴非常大（6万+）、reduce轴中等（千级）的2D归约场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:
