@@ -244,11 +244,21 @@ class EvolveWorkflow(OpBaseWorkflow):
         code = final_state.get("coder_code", "")
         profile_res = final_state.get("profile_res", {})
         verifier_result = final_state.get("verifier_result", False)
-        
+
         status = "success" if verifier_result else "fail"
-        
-        return {
+
+        res = {
             "code": code,
             "profile": str(profile_res) if profile_res else "",
             "status": status,
         }
+
+        if not verifier_result:
+            verifier_error = final_state.get("verifier_error", "")
+            conductor_suggestion = final_state.get("conductor_suggestion", "")
+            if verifier_error:
+                res["error_information"] = verifier_error
+            if conductor_suggestion:
+                res["conductor_suggestion"] = conductor_suggestion
+
+        return res
