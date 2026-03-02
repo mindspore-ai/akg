@@ -52,8 +52,6 @@ using mlir::cast;
 using mlir::CommonUtils;
 using mlir::dyn_cast;
 using mlir::isa;
-using mlir::kOperatorTypeStr;
-using mlir::kReduceStr;
 using mlir::kReductionAxesStr;
 using mlir::kReductionInitAttr;
 using mlir::kReductionTypeStr;
@@ -120,10 +118,6 @@ struct AffineReductionAnnotation : public affine::impl::AffineReductionAnnotatio
   AffineReductionAnnotation() {}
   void runOnOperation() override {
     Operation *funcOp = getOperation();
-
-    if (!(funcOp->hasAttr(kOperatorTypeStr) && dyn_cast<StringAttr>(funcOp->getAttr(kOperatorTypeStr)) == kReduceStr)) {
-      return;
-    }
     annotateReductionOps(funcOp);
   }
   void annotateReductionOps(Operation *funcOp);
