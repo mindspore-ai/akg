@@ -429,15 +429,17 @@ class KernelGen(AgentBase):
             # 生成函数名
             func_name = f"{op_name}_{dsl}_{framework}"
             
-            # 判断是否为修改模式
-            is_modification_mode = bool(previous_code and user_requirements)
+            # 判断是否为纯修改模式（有前序代码 + 用户需求，且没有报错）
+            is_pure_modification = bool(previous_code and user_requirements and not verifier_error)
             
             # 1. 选择相关 Skills
-            if is_modification_mode:
-                # 修改模式：跳过 skill 选择，减少 prompt 长度，让用户需求占主导
+            if is_pure_modification:
+                # 纯修改模式：用户需求明确，跳过 skill 选择，减少 prompt 长度
                 selected_skills = []
-                logger.info(f"[KernelGen] 修改模式：跳过 skill 选择，优先用户需求")
+                logger.info(f"[KernelGen] 纯修改模式：跳过 skill 选择，优先用户需求")
             else:
+                # 首次生成 或 有报错需要修复：加载 skills 提供知识参考
+                # 有 verifier_error 时尤其需要 skill 知识来修正代码
                 selected_skills = await self._select_skills(
                     op_name=op_name,
                     task_desc=task_desc,
