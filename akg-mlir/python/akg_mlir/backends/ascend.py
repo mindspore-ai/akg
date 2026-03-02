@@ -59,7 +59,12 @@ def get_block_dim_from_arch(arch):
     raise ValueError(error_msg)
 
 def set_ascend_info(core_type, title_dict):
-    """Set ascend info."""
+    """Set ascend binary metadata (magic, coreType, etc.) in title_dict by core type.
+
+    Args:
+        core_type: Core type ("MIX", "AiCore", or "VectorCore")
+        title_dict: Dict to update in-place with magic, coreType, etc.
+    """
     if len(core_type) == 0:
         return
     if core_type == "MIX":
@@ -220,7 +225,16 @@ def transform_data_to_ascend(
     backend="ascend",
     is_profile_params=False
 ):
-    """ transform tensor input data to ctypes for ascend """
+    """ Transform tensor input data to ctypes for ascend.
+
+    Args:
+        data: List of input tensors or scalars
+        kernel_name: Name of the kernel
+        output_indexes: Indices of output tensors
+        is_dyn_shape: Whether dynamic shape is used
+        backend: Backend name
+        is_profile_params: Whether profile params mode
+    """
     data_ctypes = []
     if len(data) == 0:
         # dynamic shape info cannot generate inputs while compilation
@@ -270,16 +284,28 @@ def launch(
     device_id,
     is_dyn_shape,
     *input_for_mod_ctypes,
-    use_mem_pool = False
+    use_mem_pool=False,
+    stream=None
 ):
-    """ launch .so file by akg_ascend_backend """
+    """ launch .so file by akg_ascend_backend
+
+    Args:
+        output_so_dir: Directory containing the .so and .json files
+        kernel_name: Name of the kernel
+        device_id: Device index
+        is_dyn_shape: Whether dynamic shape is used
+        *input_for_mod_ctypes: Tensor/ctypes inputs for the kernel
+        use_mem_pool: Whether to use memory pool
+        stream: Current stream from PTA; None for py_benchmark (AKG uses own stream)
+    """
     akgAscendLaunch.akg_ascend_run(
         output_so_dir,
         kernel_name,
         device_id,
         is_dyn_shape,
         use_mem_pool,
-        *input_for_mod_ctypes
+        *input_for_mod_ctypes,
+        stream=stream
     )
 
 

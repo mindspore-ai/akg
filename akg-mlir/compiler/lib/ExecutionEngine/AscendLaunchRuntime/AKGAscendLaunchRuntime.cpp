@@ -36,9 +36,13 @@ constexpr auto kMIXStr = "MIX";
 
 static thread_local aclrtContext thread_local_rt_context{nullptr};
 
-AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id, bool use_mem_pool) {
+AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id, bool use_mem_pool, void *external_stream) {
   set_device_id(device_id);
   use_mem_pool_ = use_mem_pool;
+  if (external_stream != nullptr) {
+    stream_ = external_stream;
+    owns_stream_ = false;
+  }
 }
 
 void AscendKernelRuntime::SetContext() {
@@ -128,9 +132,12 @@ bool AscendKernelRuntime::InitDevice() {
     return false;
   }
 
-  ret = aclrtCreateStreamWithConfig(&stream_, 0, RT_STREAM_DEFAULT);
-  if (ret != ACL_SUCCESS) {
-    LOG(FATAL) << "Call aclrtCreateStreamWithConfig, ret[" << GetErrorMsg(ret) << "]";
+  if (stream_ == nullptr) {
+    ret = aclrtCreateStreamWithConfig(&stream_, 0, RT_STREAM_DEFAULT);
+    if (ret != ACL_SUCCESS) {
+      LOG(FATAL) << "Call aclrtCreateStreamWithConfig, ret[" << GetErrorMsg(ret) << "]";
+    }
+    owns_stream_ = true;
   }
   return true;
 }
@@ -143,7 +150,7 @@ AscendKernelRuntime::~AscendKernelRuntime() {
 bool AscendKernelRuntime::ResetDevice(uint32_t device_id) {
   SetCurrentContext();
   int32_t ret;
-  if (stream_ != nullptr) {
+  if (stream_ != nullptr && owns_stream_) {
     ret = aclrtDestroyStream(stream_);
     if (ret != ACL_SUCCESS) {
       LOG(FATAL) << "Call aclrtDestroyStream, ret[" << GetErrorMsg(ret) << "]";
@@ -252,7 +259,9 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
   // kernel_name is for .so, func_name is for host func name.
   auto func_ptr = reinterpret_cast<CallFunc>(GetKernelFunc(path, kernel_name, func_name));
   func_ptr(blockdim, nullptr, stream(), runtimeargs.data());
-  SyncStream();
+  if (owns_stream_) {
+    SyncStream();
+  }
   return true;
 }
 
