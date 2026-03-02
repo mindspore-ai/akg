@@ -185,6 +185,7 @@ class KernelAgent(ReActAgent):
         # 导入 op agents
         try:
             from akg_agents.op.agents import kernel_gen, kernel_designer, op_task_builder  # noqa: F401
+            from akg_agents.op.agents import skill_evolution_agent  # noqa: F401
         except Exception as e:
             logger.warning(f"[KernelAgent] 导入 op.agents 失败: {e}")
         

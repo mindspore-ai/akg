@@ -308,20 +308,29 @@ class Coder(AgentBase):
             return self._load_user_examples()
 
     def _reuse_designer_rag_results(self, handwrite_suggestions: list) -> str:
-        """复用Designer阶段的RAG结果，提取impl_code"""
+        """复用Designer阶段的RAG结果，提取impl_code；无impl_code时降级使用improvement_doc"""
         all_code = []
+        all_docs = []
         
         for suggestion in handwrite_suggestions:
             name = suggestion.get("name", "")
             impl_code = suggestion.get("impl_code", "")
+            improvement_doc = suggestion.get("improvement_doc", "")
             
             if impl_code:
                 all_code.append(f"# Reference Implementation: {name}\n{impl_code}\n")
+            elif improvement_doc:
+                all_docs.append(f"# Reference Document: {name}\n{improvement_doc}\n")
         
         if all_code:
             logger.info(f"Successfully loaded {len(all_code)} reference implementations")
+            return "\n".join(all_code)
         
-        return "\n".join(all_code)
+        if all_docs:
+            logger.info(f"No impl_code found, using {len(all_docs)} improvement docs as reference")
+            return "\n".join(all_docs)
+        
+        return ""
 
     async def _independent_rag_for_impl_code(self) -> str:
         """优先尝试RAG检索impl_code，失败后自动降级到本地示例
