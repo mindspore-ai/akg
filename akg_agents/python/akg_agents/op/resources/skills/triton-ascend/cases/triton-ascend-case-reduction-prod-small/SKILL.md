@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-reduction-prod-small
 description: "小规模reduce第一根轴（prod）优化：使用自定义mul函数配合tl.reduce实现连乘（triton无prod接口），最优网格数明显小于AI Core数量（grid=16最优2.15us），过高并行度反而因调度开销降低性能，适用于shape较小（10万级元素）的reduce第一根轴场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

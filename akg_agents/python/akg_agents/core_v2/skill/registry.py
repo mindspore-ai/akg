@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Set, Literal
 from pathlib import Path
 import logging
 
-from .metadata import SkillMetadata, SkillLevel
+from .metadata import SkillMetadata
 from .loader import SkillLoader
 
 logger = logging.getLogger(__name__)
@@ -72,10 +72,8 @@ class SkillRegistry:
         # 按name索引的Skill字典
         self._skills_by_name: Dict[str, SkillMetadata] = {}
         
-        # 按level索引的Skill集合
-        self._skills_by_level: Dict[SkillLevel, List[SkillMetadata]] = {
-            level: [] for level in SkillLevel
-        }
+        # 按 category 索引的 Skill 集合
+        self._skills_by_category: Dict[str, List[SkillMetadata]] = {}
         
         # 按版本索引（支持同名不同版本）
         self._skills_by_version: Dict[str, Dict[str, SkillMetadata]] = {}
@@ -107,33 +105,38 @@ class SkillRegistry:
         
         self._skills_by_version[skill.name][skill.version] = skill
         
-        # 2. 更新主索引和level索引（只保留最新版本）
+        # 2. 更新主索引和 category 索引（只保留最新版本）
         current_latest = self._skills_by_name.get(skill.name)
         
         if update_latest:
             # 比较版本号，更新为最新
             if not current_latest or self._is_newer_version(skill.version, current_latest.version):
-                # 移除旧的最新版本的level索引
-                if current_latest and current_latest.level:
+                # 移除旧的最新版本的 category 索引
+                if current_latest and current_latest.category:
+                    cat_list = self._skills_by_category.get(current_latest.category, [])
                     try:
-                        self._skills_by_level[current_latest.level].remove(current_latest)
+                        cat_list.remove(current_latest)
                     except ValueError:
                         pass
                 
                 # 设置新的最新版本
                 self._skills_by_name[skill.name] = skill
                 
-                # 添加到level索引
-                if skill.level:
-                    self._skills_by_level[skill.level].append(skill)
+                # 添加到 category 索引
+                if skill.category:
+                    if skill.category not in self._skills_by_category:
+                        self._skills_by_category[skill.category] = []
+                    self._skills_by_category[skill.category].append(skill)
                 
                 logger.info(f"成功注册Skill并更新为最新版本: {skill}")
         else:
             # 不更新latest，但如果是第一个版本，还是要设置
             if not current_latest:
                 self._skills_by_name[skill.name] = skill
-                if skill.level:
-                    self._skills_by_level[skill.level].append(skill)
+                if skill.category:
+                    if skill.category not in self._skills_by_category:
+                        self._skills_by_category[skill.category] = []
+                    self._skills_by_category[skill.category].append(skill)
                 logger.info(f"成功注册首个Skill版本: {skill}")
             else:
                 logger.info(f"成功注册Skill版本（不更新latest）: {skill}")
@@ -306,17 +309,17 @@ class SkillRegistry:
         
         return [versions_dict[v] for v in sorted_versions]
     
-    def get_by_level(self, level: SkillLevel) -> List[SkillMetadata]:
+    def get_by_category(self, category: str) -> List[SkillMetadata]:
         """
-        获取指定层级的所有Skill
+        获取指定 category 的所有 Skill
         
         Args:
-            level: 技能层级
+            category: 技能分类（如 workflow, agent, guide, example）
         
         Returns:
-            该层级的SkillMetadata列表
+            该分类的 SkillMetadata 列表
         """
-        return self._skills_by_level.get(level, []).copy()
+        return self._skills_by_category.get(category, []).copy()
     
     def get_all(self, strategy: VersionStrategy = "latest") -> List[SkillMetadata]:
         """
@@ -418,14 +421,13 @@ class SkillRegistry:
     def clear(self):
         """清空注册表"""
         self._skills_by_name.clear()
-        for level_list in self._skills_by_level.values():
-            level_list.clear()
+        self._skills_by_category.clear()
         self._skills_by_version.clear()
         logger.info("注册表已清空")
     
     def filter(
         self,
-        level: Optional[SkillLevel] = None,
+        category: Optional[str] = None,
         name_pattern: Optional[str] = None,
         has_structure: Optional[bool] = None
     ) -> List[SkillMetadata]:
@@ -433,7 +435,7 @@ class SkillRegistry:
         过滤Skill
         
         Args:
-            level: 按层级过滤
+            category: 按分类过滤（如 workflow, agent, guide）
             name_pattern: 按名称模式过滤（支持通配符*）
             has_structure: 是否包含结构配置
         
@@ -441,8 +443,8 @@ class SkillRegistry:
             符合条件的SkillMetadata列表
         """
         # 起始集合
-        if level:
-            skills = self.get_by_level(level)
+        if category:
+            skills = self.get_by_category(category)
         else:
             skills = self.get_all()
         
@@ -480,10 +482,10 @@ class SkillRegistry:
             "total": len(self._skills_by_name),
             "total_versions": total_versions,
             "multi_version_skills": multi_version_count,
-            "by_level": {
-                level.value: len(skills)
-                for level, skills in self._skills_by_level.items()
-                if len(skills) > 0  # 只显示有 Skill 的层级
+            "by_category": {
+                cat: len(skills)
+                for cat, skills in self._skills_by_category.items()
+                if len(skills) > 0  # 只显示有 Skill 的分类
             },
             "with_structure": len([
                 s for s in self._skills_by_name.values()
@@ -494,10 +496,10 @@ class SkillRegistry:
     
     def _remove_from_indices(self, skill: SkillMetadata):
         """从所有索引中移除Skill"""
-        # 1. 从level索引移除
-        if skill.level:
+        # 1. 从 category 索引移除
+        if skill.category and skill.category in self._skills_by_category:
             try:
-                self._skills_by_level[skill.level].remove(skill)
+                self._skills_by_category[skill.category].remove(skill)
             except ValueError:
                 pass
         
@@ -568,11 +570,10 @@ class SkillRegistry:
     
     def __repr__(self) -> str:
         stats = self.get_statistics()
-        # 动态生成层级统计（支持L1-L5及未来扩展）
-        level_stats = " ".join([
-            f"{level}={count}"
-            for level, count in sorted(stats['by_level'].items())
-            if count > 0  # 只显示有Skill的层级
+        cat_stats = " ".join([
+            f"{cat}={count}"
+            for cat, count in sorted(stats['by_category'].items())
+            if count > 0  # 只显示有Skill的分类
         ])
-        return f"<SkillRegistry total={stats['total']} {level_stats}>"
+        return f"<SkillRegistry total={stats['total']} {cat_stats}>"
 

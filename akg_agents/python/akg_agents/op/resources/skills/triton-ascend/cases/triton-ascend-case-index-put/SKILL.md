@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-index-put
 description: "索引赋值（index_put）优化：批量加载索引数据到UB后循环内通过get_element复用（避免重复访问全局内存），显著降低内存访问延迟，适用于需要在循环中多次访问同一片数据的不规则内存访问场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

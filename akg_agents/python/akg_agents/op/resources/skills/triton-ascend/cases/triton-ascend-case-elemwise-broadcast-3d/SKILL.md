@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-elemwise-broadcast-3d
 description: "跨轴3D广播优化（最后一维很小）：采用两阶段kernel策略（先broadcast展开+reshape为2D，再标准多核处理）提升向量化效率，适用于跨轴broadcast且最后一维特别小（<20）导致向量化效果差的场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

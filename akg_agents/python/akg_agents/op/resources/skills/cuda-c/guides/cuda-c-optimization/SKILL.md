@@ -1,7 +1,6 @@
 ---
 name: cuda-c-optimization
 description: "CUDA C 性能优化、数值稳定性和调试排查"
-level: L4
 category: method
 version: "1.0.0"
 metadata:

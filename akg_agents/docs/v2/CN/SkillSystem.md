@@ -10,7 +10,7 @@ Skill 系统提供了向 Agent 动态注入领域知识的机制。一个 **Skil
 
 - **标准格式**：SKILL.md，YAML frontmatter 元数据
 - **多路径加载**：项目级和全局级 Skill 目录
-- **分级管理**：L1-L5 层级，支持父子关系
+- **分类管理**：category（如 workflow、agent、guide），可选父子结构
 - **LLM 驱动选择**：两阶段筛选（元数据过滤 + LLM 选择）
 - **版本管理**：基于 SemVer 的多版本支持
 - **统一安装**：所有 Skill 安装到 `~/.akg/skills/`
@@ -23,7 +23,7 @@ Skill 系统提供了向 Agent 动态注入领域知识的机制。一个 **Skil
 ---
 name: cuda-basics
 description: "CUDA 编程基础与优化模式"
-level: L3
+category: guide
 version: "1.0.0"
 metadata:
   backend: cuda
@@ -46,24 +46,29 @@ Markdown 格式的领域知识内容...
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `level` | SkillLevel | 层级：L1-L5 |
+| `category` | string | 语义类型（如 `workflow`、`agent`、`guide`、`example`） |
 | `version` | string | SemVer 版本号（默认 `"1.0.0"`） |
-| `category` | string | 语义类型（如 `workflow`、`agent`、`strategy`） |
 | `license` | string | 许可证（MIT、Apache-2.0 等） |
 | `metadata` | dict | 自定义键值对元数据，用于过滤 |
 | `structure` | dict | 层级配置（child_skills、default_children、exclusive_groups） |
 
-## 3. Skill 层级（L1-L5）
+## 3. Skill 分类（category）
 
-> **注意**：Level 层级体系当前仅针对**算子生成场景**设计，其他场景的 Level 定义待设计。
+Skill 通过 `category` 进行分类，用于筛选与选择。标准分类（见代码中 `STANDARD_CATEGORIES`）包括：
 
-| 层级 | 语义 | 说明 |
+| 分类 | 语义 | 说明 |
 |------|------|------|
-| L1 | 流程/编排层 | 高层工作流和编排知识 |
-| L2 | 组件/执行层 | 组件级执行知识 |
-| L3 | 方法/策略层 | 方法和策略模式 |
-| L4 | 实现/细节层 | 实现细节和技巧 |
-| L5 | 原子/样例层 | 原子级示例和代码片段 |
+| workflow | 流程/编排 | 高层工作流和编排知识 |
+| overview | 概览 | 系统或组件概览 |
+| agent | 组件/执行 | 组件级执行知识 |
+| guide | 设计与编程指南 | 设计方法论、编程指南 |
+| fundamental | 基础 | 核心概念与原则 |
+| dsl | DSL 参考 | 语言或 API 参考 |
+| method | 方法/策略 | 优化方法与策略模式 |
+| implementation | 实现/细节 | 实现细节与技巧 |
+| reference | 参考 | 参考文档 |
+| example | 原子/示例 | 代码示例 |
+| case | 案例 | 具体案例模式 |
 
 ## 4. SkillLoader
 
@@ -92,7 +97,7 @@ skills = loader.load_all()  # 从所有发现的目录加载
 
 ## 5. SkillRegistry
 
-`SkillRegistry` 管理已加载的 Skill，支持按名称、层级和版本索引。
+`SkillRegistry` 管理已加载的 Skill，支持按名称、分类和版本索引。
 
 ```python
 from akg_agents.core_v2.skill import SkillRegistry
@@ -107,8 +112,8 @@ skill = registry.get("cuda-basics")                    # 最新版本
 skill = registry.get("cuda-basics", version="1.0.0")   # 指定版本
 skill = registry.get("cuda-basics", strategy="stable")  # 最旧（稳定）版本
 
-# 按层级过滤
-l3_skills = registry.get_by_level(SkillLevel.L3)
+# 按分类过滤
+guide_skills = registry.get_by_category("guide")
 ```
 
 ### 版本选择策略
@@ -146,7 +151,7 @@ hierarchy.rebuild()
 ```python
 from akg_agents.core_v2.skill.hierarchy import validate_all, detect_cycles
 
-# 验证所有层级约束（级别顺序、渐进式展示）
+# 验证所有层级约束（分类顺序、渐进式展示）
 is_valid, errors = validate_all(hierarchy)
 
 # 检测循环依赖
@@ -181,14 +186,17 @@ from akg_agents.core_v2.skill import SkillSelector, SelectionContext
 # 创建选择上下文
 context = SelectionContext(
     custom_fields={"backend": "cuda", "dsl": "triton_cuda"},
-    include_levels=[SkillLevel.L3, SkillLevel.L4],  # 可选
-    exclude_levels=[SkillLevel.L1],                   # 可选
+    include_categories=["guide", "implementation"],  # 可选
+    exclude_categories=["workflow"],                  # 可选
+    include_category_groups=["knowledge"],           # 可选：如 orchestration, actor, knowledge, example
 )
 
 # 创建带自定义过滤器的选择器
 selector = SkillSelector(custom_filters=[
     create_metadata_matcher("backend"),
     create_metadata_matcher("dsl"),
+    create_category_filter("include"),
+    create_category_filter("exclude"),
 ])
 
 # 仅粗筛（不使用 LLM）
@@ -199,7 +207,7 @@ selected = await selector.select(
     all_skills, context,
     llm_generate_func=llm_func,       # 可选：用于精筛的 LLM 函数
     prompt_template=None,              # 可选：自定义 LLM prompt 模板
-    level=SkillLevel.L3,              # 可选：按层级过滤
+    category="guide",                  # 可选：按分类过滤
 )
 
 # 获取父 Skill 的子 Skill
@@ -212,8 +220,10 @@ children = selector.get_children_skills(parent_skill, all_skills)
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `include_levels` | `Optional[List[SkillLevel]]` | 仅包含这些层级的 Skill |
-| `exclude_levels` | `Optional[List[SkillLevel]]` | 排除这些层级的 Skill |
+| `include_categories` | `Optional[List[str]]` | 仅包含这些分类的 Skill |
+| `exclude_categories` | `Optional[List[str]]` | 排除这些分类的 Skill |
+| `include_category_groups` | `Optional[List[str]]` | 仅包含这些分组的 Skill（orchestration, actor, knowledge, example） |
+| `exclude_category_groups` | `Optional[List[str]]` | 排除这些分组的 Skill |
 | `custom_fields` | `Dict[str, Any]` | 自定义键值对，用于元数据匹配 |
 
 ### Prompt 组装
@@ -234,7 +244,7 @@ prompt = build_prompt_with_skills(
 | 函数 | 说明 |
 |------|------|
 | `create_metadata_matcher(context_field, metadata_field, match_mode)` | 元数据匹配器工厂函数。支持 `"include"` 和 `"exclude"` 模式。 |
-| `create_level_filter(match_mode)` | 层级过滤器工厂函数。 |
+| `create_category_filter(match_mode)` | 分类过滤器工厂函数。 |
 | `and_filters(*filters)` | 以 AND 逻辑组合过滤器。 |
 | `or_filters(*filters)` | 以 OR 逻辑组合过滤器。 |
 

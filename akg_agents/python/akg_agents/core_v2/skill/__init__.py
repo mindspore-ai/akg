@@ -19,7 +19,7 @@ AIKG Skill Management System
 - 标准 SKILL.md 格式（YAML Frontmatter + Markdown）
 - 多路径加载（项目级 + 全局级）
 - 统一安装位置（~/.akg/skills）
-- 分级管理（L1-L5）+ 层级验证
+- 分类管理（category）+ 层级验证
 - LLM 驱动的 Skill 智能选择
 - 多版本管理（SemVer）
 - URL安装（GitHub等）
@@ -69,7 +69,7 @@ AIKG Skill Management System
 """
 
 # 核心模块
-from .metadata import SkillMetadata, SkillLevel, SkillStructure
+from .metadata import SkillMetadata, SkillStructure, STANDARD_CATEGORIES, CATEGORY_GROUPS
 from .loader import SkillLoader, SkillLoadError
 from .registry import SkillRegistry
 from .hierarchy import (
@@ -87,6 +87,7 @@ from .skill_selector import (
     build_prompt_with_skills,
     # 过滤器工具
     create_metadata_matcher,
+    create_category_filter,
     and_filters,
     or_filters
 )
@@ -101,8 +102,9 @@ from .version import (
 __all__ = [
     # 核心元数据
     "SkillMetadata",
-    "SkillLevel",
     "SkillStructure",
+    "STANDARD_CATEGORIES",
+    "CATEGORY_GROUPS",
     # 加载器
     "SkillLoader",
     "SkillLoadError",
@@ -121,6 +123,7 @@ __all__ = [
     "build_prompt_with_skills",
     # 过滤器工具
     "create_metadata_matcher",
+    "create_category_filter",
     "and_filters",
     "or_filters",
     # 版本管理

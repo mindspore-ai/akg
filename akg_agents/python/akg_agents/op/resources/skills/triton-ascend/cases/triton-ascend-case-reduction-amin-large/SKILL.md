@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-reduction-amin-large
 description: "极大规模1D归约（amin）优化：二次切分避免超UB+计算重组减少归约次数，网格数接近AI Core数量（grid=32）、UB用满、无尾块时性能最优（9.61us），适用于极大规模1D数据（400万级元素）的全量归约场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

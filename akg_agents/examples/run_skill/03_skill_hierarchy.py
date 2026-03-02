@@ -31,7 +31,7 @@ Skill System 层级管理示例
 from pathlib import Path
 
 from akg_agents.core_v2.skill import (
-    SkillRegistry, SkillHierarchy, SkillLevel,
+    SkillRegistry, SkillHierarchy,
     validate_all, detect_cycles
 )
 
@@ -97,8 +97,8 @@ def example_2_descendants():
     for desc in descendants:
         skill = registry.get(desc)
         if skill:
-            level_str = f"[{skill.level.value}]" if skill.level else "[--]"
-            print(f"  {level_str} {desc}")
+            cat_str = f"[{skill.category}]" if skill.category else "[--]"
+            print(f"  {cat_str} {desc}")
     
     # 获取 adaptive-evolve 的所有后代
     print("\n[2] adaptive-evolve 的所有后代:")
@@ -106,8 +106,8 @@ def example_2_descendants():
     for desc in descendants:
         skill = registry.get(desc)
         if skill:
-            level_str = f"[{skill.level.value}]" if skill.level else "[--]"
-            print(f"  {level_str} {desc}")
+            cat_str = f"[{skill.category}]" if skill.category else "[--]"
+            print(f"  {cat_str} {desc}")
     
     print()
 
@@ -166,31 +166,31 @@ def example_4_traverse_hierarchy():
     
     hierarchy = SkillHierarchy(registry)
     
-    # 找到所有 L1 Skills（根节点）
-    l1_skills = registry.get_by_level(SkillLevel.L1)
+    # 找到所有 workflow Skills（根节点）
+    workflow_skills = registry.get_by_category("workflow")
     
     print("\n层级树结构:")
-    for l1_skill in l1_skills:
-        print(f"\n[L1] {l1_skill.name}")
-        print(f"     {l1_skill.description}")
+    for workflow_skill in workflow_skills:
+        print(f"\n[workflow] {workflow_skill.name}")
+        print(f"     {workflow_skill.description}")
         
         # 获取子 Skills
-        children = hierarchy.get_children(l1_skill.name)
+        children = hierarchy.get_children(workflow_skill.name)
         for child_name in children:
             child = registry.get(child_name)
             if child:
-                level_str = f"[{child.level.value}]" if child.level else "[--]"
-                print(f"  ├── {level_str} {child.name}")
+                cat_str = f"[{child.category}]" if child.category else "[--]"
+                print(f"  ├── {cat_str} {child.name}")
                 
                 # 获取孙子 Skills
                 grandchildren = hierarchy.get_children(child_name)
                 for i, gc_name in enumerate(grandchildren):
                     gc = registry.get(gc_name)
                     if gc:
-                        gc_level_str = f"[{gc.level.value}]" if gc.level else "[--]"
+                        gc_cat_str = f"[{gc.category}]" if gc.category else "[--]"
                         is_last = i == len(grandchildren) - 1
                         prefix = "      └──" if is_last else "      ├──"
-                        print(f"{prefix} {gc_level_str} {gc.name}")
+                        print(f"{prefix} {gc_cat_str} {gc.name}")
     
     print()
 
@@ -235,10 +235,10 @@ def example_5_get_skill_path():
         for i, node in enumerate(path):
             skill = registry.get(node)
             if skill:
-                level_str = f"[{skill.level.value}]" if skill.level else "[--]"
+                cat_str = f"[{skill.category}]" if skill.category else "[--]"
                 indent = "  " * i
                 arrow = " → " if i < len(path) - 1 else ""
-                print(f"{indent}{level_str} {node}{arrow}")
+                print(f"{indent}{cat_str} {node}{arrow}")
     
     print()
 

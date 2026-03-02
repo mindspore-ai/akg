@@ -17,8 +17,8 @@ Skill 筛选示例（无需 LLM）
 
 演示如何使用 OperatorSkillSelector 进行纯规则筛选，无需 LLM：
 1. 基于 metadata（backend, dsl, hardware, operator_type）筛选
-2. 基于 level（include_levels, exclude_levels）筛选
-3. 组合使用：metadata + level 双重筛选
+2. 基于 category（include_categories, exclude_categories）筛选
+3. 组合使用：metadata + category 双重筛选
 
 所有筛选都在 coarse_filter 阶段完成，不依赖 LLM。
 
@@ -32,7 +32,7 @@ Skill 筛选示例（无需 LLM）
 from pathlib import Path
 from typing import List
 
-from akg_agents.core_v2.skill import SkillRegistry, SkillLevel, SkillMetadata
+from akg_agents.core_v2.skill import SkillRegistry, SkillMetadata
 from akg_agents.op.skill import OperatorSkillSelector, OperatorSelectionContext
 
 
@@ -44,9 +44,8 @@ def print_skills(skills: List[SkillMetadata], title: str = "Skills"):
         return
     
     for skill in skills:
-        level_str = f"[{skill.level.value}]" if skill.level else "[--]"
-        category_str = f"({skill.category})" if skill.category else ""
-        print(f"  {level_str} {skill.name} {category_str}")
+        cat_str = f"[{skill.category}]" if skill.category else "[--]"
+        print(f"  {cat_str} {skill.name}")
         if skill.metadata:
             # 只显示关键 metadata
             meta_items = []
@@ -96,10 +95,10 @@ def example_1_metadata_only():
     print()
 
 
-def example_2_level_only():
-    """示例2：仅使用 level 筛选"""
+def example_2_category_only():
+    """示例2：仅使用 category 筛选"""
     print("=" * 70)
-    print("示例2：仅使用 level 筛选（include_levels）")
+    print("示例2：仅使用 category 筛选（include_categories）")
     print("=" * 70)
     
     # 加载 Skills
@@ -116,13 +115,13 @@ def example_2_level_only():
     selector = OperatorSkillSelector()
     all_skills = registry.get_all()
     
-    # 筛选条件：只要 L3 和 L5 级别
+    # 筛选条件：只要 guide 和 example 分类
     context = OperatorSelectionContext(
-        include_levels=[SkillLevel.L3, SkillLevel.L5]
+        include_categories=["guide", "example"]
     )
     
     print(f"\n筛选条件:")
-    print(f"  include_levels = [L3, L5]")
+    print(f"  include_categories = [guide, example]")
     
     # 执行筛选
     filtered = selector.coarse_filter(all_skills, context)
@@ -131,10 +130,10 @@ def example_2_level_only():
     print()
 
 
-def example_3_level_exclude():
-    """示例3：使用 level 排除筛选"""
+def example_3_category_exclude():
+    """示例3：使用 category 排除筛选"""
     print("=" * 70)
-    print("示例3：使用 level 排除筛选（exclude_levels）")
+    print("示例3：使用 category 排除筛选（exclude_categories）")
     print("=" * 70)
     
     # 加载 Skills
@@ -151,13 +150,13 @@ def example_3_level_exclude():
     selector = OperatorSkillSelector()
     all_skills = registry.get_all()
     
-    # 筛选条件：排除 L1, L2, L4 级别（即只保留 L3, L5）
+    # 筛选条件：排除 workflow, agent, implementation（即只保留 guide, example 等）
     context = OperatorSelectionContext(
-        exclude_levels=[SkillLevel.L1, SkillLevel.L2, SkillLevel.L4]
+        exclude_categories=["workflow", "agent", "implementation"]
     )
     
     print(f"\n筛选条件:")
-    print(f"  exclude_levels = [L1, L2, L4]")
+    print(f"  exclude_categories = [workflow, agent, implementation]")
     
     # 执行筛选
     filtered = selector.coarse_filter(all_skills, context)
@@ -167,9 +166,9 @@ def example_3_level_exclude():
 
 
 def example_4_combined_filtering():
-    """示例4：组合筛选（metadata + level 双重筛选）"""
+    """示例4：组合筛选（metadata + category 双重筛选）"""
     print("=" * 70)
-    print("示例4：组合筛选（metadata + level 双重筛选）")
+    print("示例4：组合筛选（metadata + category 双重筛选）")
     print("=" * 70)
     
     # 加载 Skills
@@ -188,45 +187,45 @@ def example_4_combined_filtering():
     
     # 组合筛选条件：
     # - metadata: backend=ascend, dsl=triton-ascend
-    # - level: 只要 L3（基础文档）
+    # - category: 只要 guide（基础文档）
     context = OperatorSelectionContext(
         backend="ascend",
         dsl="triton-ascend",
-        include_levels=[SkillLevel.L3]
+        include_categories=["guide"]
     )
     
     print(f"\n筛选条件:")
     print(f"  backend = {context.backend}")
     print(f"  dsl = {context.dsl}")
-    print(f"  include_levels = [L3]")
+    print(f"  include_categories = [guide]")
     
     # 执行筛选
     filtered = selector.coarse_filter(all_skills, context)
     
-    print_skills(filtered, "筛选结果（L3 基础文档）")
+    print_skills(filtered, "筛选结果（guide 基础文档）")
     
-    # 再筛选：只要 L5（具体案例）
+    # 再筛选：只要 example（具体案例）
     context2 = OperatorSelectionContext(
         backend="ascend",
         dsl="triton-ascend",
-        include_levels=[SkillLevel.L5]
+        include_categories=["example"]
     )
     
     print(f"\n筛选条件 2:")
     print(f"  backend = {context2.backend}")
     print(f"  dsl = {context2.dsl}")
-    print(f"  include_levels = [L5]")
+    print(f"  include_categories = [example]")
     
     filtered2 = selector.coarse_filter(all_skills, context2)
     
-    print_skills(filtered2, "筛选结果（L5 具体案例）")
+    print_skills(filtered2, "筛选结果（example 具体案例）")
     print()
 
 
 def example_5_include_and_exclude():
     """示例5：同时使用 include 和 exclude"""
     print("=" * 70)
-    print("示例5：同时使用 include_levels 和 exclude_levels")
+    print("示例5：同时使用 include_categories 和 exclude_categories")
     print("=" * 70)
     
     # 加载 Skills
@@ -244,22 +243,22 @@ def example_5_include_and_exclude():
     all_skills = registry.get_all()
     
     # 复杂筛选条件：
-    # - include_levels: 只在 L3, L4, L5 中选（排除 L1, L2）
-    # - exclude_levels: 再排除 L4
-    # - 最终效果：只保留 L3, L5
+    # - include_categories: 只在 guide, implementation, example 中选
+    # - exclude_categories: 再排除 implementation
+    # - 最终效果：只保留 guide, example
     context = OperatorSelectionContext(
         backend="ascend",
         dsl="triton-ascend",
-        include_levels=[SkillLevel.L3, SkillLevel.L4, SkillLevel.L5],
-        exclude_levels=[SkillLevel.L4]
+        include_categories=["guide", "implementation", "example"],
+        exclude_categories=["implementation"]
     )
     
     print(f"\n筛选条件:")
     print(f"  backend = {context.backend}")
     print(f"  dsl = {context.dsl}")
-    print(f"  include_levels = [L3, L4, L5]")
-    print(f"  exclude_levels = [L4]")
-    print(f"  → 最终效果：只保留 L3, L5")
+    print(f"  include_categories = [guide, implementation, example]")
+    print(f"  exclude_categories = [implementation]")
+    print(f"  → 最终效果：只保留 guide, example")
     
     # 执行筛选
     filtered = selector.coarse_filter(all_skills, context)
@@ -290,17 +289,17 @@ def example_6_build_prompt_without_llm():
     selector = OperatorSkillSelector()
     all_skills = registry.get_all()
     
-    # 筛选：只要 L3 基础文档
+    # 筛选：只要 guide 基础文档
     context = OperatorSelectionContext(
         backend="ascend",
         dsl="triton-ascend",
-        include_levels=[SkillLevel.L3]
+        include_categories=["guide"]
     )
     
     print(f"\n筛选条件:")
     print(f"  backend = {context.backend}")
     print(f"  dsl = {context.dsl}")
-    print(f"  include_levels = [L3]")
+    print(f"  include_categories = [guide]")
     
     # 执行筛选
     filtered = selector.coarse_filter(all_skills, context)
@@ -348,8 +347,8 @@ def run_all_examples():
     
     examples = [
         ("示例1: 仅 metadata 筛选", example_1_metadata_only),
-        ("示例2: 仅 level include 筛选", example_2_level_only),
-        ("示例3: level exclude 筛选", example_3_level_exclude),
+        ("示例2: 仅 category include 筛选", example_2_category_only),
+        ("示例3: category exclude 筛选", example_3_category_exclude),
         ("示例4: 组合筛选", example_4_combined_filtering),
         ("示例5: include + exclude", example_5_include_and_exclude),
         ("示例6: 无 LLM 构建 prompt", example_6_build_prompt_without_llm),

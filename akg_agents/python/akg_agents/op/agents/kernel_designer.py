@@ -37,8 +37,7 @@ from akg_agents.utils.hardware_utils import get_hardware_doc
 from akg_agents.core_v2.skill import (
     SkillLoader, 
     SkillSelector, 
-    SelectionContext, 
-    SkillLevel,
+    SelectionContext,
 )
 
 # 设置 Skills 目录路径
@@ -183,14 +182,11 @@ class KernelDesigner(AgentBase):
         # 创建自定义过滤器
         # Designer 专用过滤器：优先选择 designer 相关的 skills
         def designer_filter(skill, context):
-            # 设计类 category 优先
-            design_categories = ["design", "fundamental"]
-            # 或者 metadata 中有 role: designer
+            designer_categories = ["guide", "fundamental"]
             is_designer_skill = (
-                skill.category in design_categories or 
+                skill.category in designer_categories or
                 (skill.metadata and skill.metadata.get("role") == "designer")
             )
-            # 排除纯实现类的 skills（由 coder 使用）
             implementation_only = skill.category == "implementation" and not is_designer_skill
             return not implementation_only
         
@@ -332,31 +328,24 @@ class KernelDesigner(AgentBase):
             pass
         return [], ""
     
-    # Category 排序顺序
-    CATEGORY_ORDER = ["fundamental", "method", "implementation", "example"]
+    CATEGORY_ORDER = ["fundamental", "guide", "method", "implementation", "example"]
     
     def _assemble_skill_contents(self, selected_skills: List[Any]) -> str:
-        """
-        按 level → category → name 排序 skills，拼接其内容为字符串。
-        """
+        """按 category -> name 排序 skills，拼接其内容为字符串。"""
         if not selected_skills:
             return ""
         
         def sort_key(skill):
-            level_map = {"L3": 1, "L4": 2, "L5": 3}
-            level_value = level_map.get(
-                skill.level.value if skill.level else "L5", 99
-            )
             try:
                 category_idx = self.CATEGORY_ORDER.index(skill.category or "")
             except ValueError:
                 category_idx = 999
-            return (level_value, category_idx, skill.name)
+            return (category_idx, skill.name)
         
         sorted_skills = sorted(selected_skills, key=sort_key)
         
         order_desc = [
-            f"{s.name}[{s.level.value if s.level else '?'}/{s.category or '?'}]"
+            f"{s.name}[{s.category or '?'}]"
             for s in sorted_skills
         ]
         logger.info(f"Skill assembly order: {order_desc}")
@@ -413,7 +402,7 @@ class KernelDesigner(AgentBase):
                 has_hint=has_hint
             )
             
-            # 2. 按 level → category → name 排序并拼接 skill 内容
+            # 2. 按 category → name 排序并拼接 skill 内容
             skill_contents = self._assemble_skill_contents(selected_skills)
             
             # 3. 渲染 System Prompt

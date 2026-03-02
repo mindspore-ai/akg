@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-matmul
 description: "矩阵乘法算子(matmul/bmm/linear)优化策略，包括分块切分、Swizzle 优化、Cube Core 利用和大矩阵处理技巧。适用于实现 GEMM、批量矩阵乘、全连接层等矩阵运算的内核代码生成场景"
-level: L4
 category: implementation
 version: "1.0.0"
 metadata:

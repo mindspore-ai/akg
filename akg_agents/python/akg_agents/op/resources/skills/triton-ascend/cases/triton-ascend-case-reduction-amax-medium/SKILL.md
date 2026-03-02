@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-reduction-amax-medium
 description: "中等规模归约（amax）优化：计算重组（循环内累加、循环外归约）减少归约次数，grid=40等于核数时性能最优（25.73us），适用于非reduce轴中等、reduce轴较大（千万级元素）的2D归约场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

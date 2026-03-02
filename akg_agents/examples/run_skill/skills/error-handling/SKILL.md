@@ -1,7 +1,6 @@
 ---
 name: error-handling
 description: "GPU代码错误处理和边界检查最佳实践"
-level: L4
 category: implementation
 version: "1.0.0"
 license: MIT

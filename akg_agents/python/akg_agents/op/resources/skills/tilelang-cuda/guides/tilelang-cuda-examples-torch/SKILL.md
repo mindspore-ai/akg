@@ -1,7 +1,6 @@
 ---
 name: tilelang-cuda-examples-torch
 description: "PyTorch + TileLang CUDA 完整示例代码"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

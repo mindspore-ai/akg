@@ -1,7 +1,6 @@
 ---
 name: triton-ascend-case-reduction-amax-large
 description: "非reduce轴很小、reduce轴很大的归约优化：将reduce轴映射到多核（而非常规的非reduce轴），使用原子操作跨线程块归约，通过二次切分避免超UB，适用于极端shape比例（M<<N如16×262144）的归约场景"
-level: L5
 category: example
 version: "1.0.0"
 metadata:

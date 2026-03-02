@@ -1,7 +1,6 @@
 ---
 name: pypto-api
 description: "PyPTO 全部 API 签名与约束速查"
-level: L3
 category: fundamental
 version: "1.0.0"
 metadata:

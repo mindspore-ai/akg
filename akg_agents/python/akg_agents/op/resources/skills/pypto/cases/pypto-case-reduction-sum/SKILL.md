@@ -1,7 +1,6 @@
 ---
 name: pypto-case-reduction-sum
 description: "单轴归约示例：3D Sum reduction — 保持原始维度，最简 kernel"
-level: L4
 category: example
 version: "1.0.0"
 metadata:

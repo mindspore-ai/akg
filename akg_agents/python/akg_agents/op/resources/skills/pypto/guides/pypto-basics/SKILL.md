@@ -1,7 +1,6 @@
 ---
 name: pypto-basics
 description: "PyPTO 编程原则与核心模式"
-level: L3
 category: fundamental
 version: "1.0.0"
 metadata:

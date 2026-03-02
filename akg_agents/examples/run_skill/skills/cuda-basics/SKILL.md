@@ -1,7 +1,6 @@
 ---
 name: cuda-basics
 description: "CUDA编程基础知识，包括内存模型、线程层次和常用优化技巧"
-level: L3
 category: dsl
 version: "1.0.0"
 license: MIT

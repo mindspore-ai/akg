@@ -17,7 +17,7 @@ Skill System 算子生成场景示例
 
 演示如何使用 Skill System 完成算子生成任务：
 1. 使用 OperatorSkillSelector 进行领域专用选择
-2. L1 Workflow -> L2 Agent -> L3 DSL 的层级选择
+2. category: workflow -> category: agent -> category: dsl 的分类选择
 3. LLM 驱动的智能选择
 4. 拼接 prompt 生成代码
 
@@ -36,7 +36,7 @@ from pathlib import Path
 import asyncio
 
 from akg_agents.core_v2.skill import (
-    SkillRegistry, SkillLevel,
+    SkillRegistry,
     build_prompt_with_skills
 )
 from akg_agents.op.skill import (
@@ -103,8 +103,8 @@ def example_1_basic_operator_selection():
     
     print(f"\n粗筛结果: {len(candidates)}/{len(all_skills)} 个 Skills")
     for skill in candidates:
-        level_str = f"[{skill.level.value}]" if skill.level else "[--]"
-        print(f"  {level_str} {skill.name}")
+        cat_str = f"[{skill.category}]" if skill.category else "[--]"
+        print(f"  {cat_str} {skill.name}")
         if skill.metadata:
             print(f"      标签: {skill.metadata}")
     
@@ -175,8 +175,8 @@ async def example_2_llm_skill_selection():
     
     print(f"\n精筛: {len(candidates)} -> {len(selected)} Skills")
     for skill in selected:
-        level_str = f"[{skill.level.value}]" if skill.level else "[--]"
-        print(f"  {level_str} {skill.name}: {skill.description[:50]}...")
+        cat_str = f"[{skill.category}]" if skill.category else "[--]"
+        print(f"  {cat_str} {skill.name}: {skill.description[:50]}...")
     
     print()
 
@@ -204,34 +204,34 @@ async def example_3_complete_workflow():
     print(f"后端: {backend}")
     print(f"DSL: {dsl}")
     
-    # ========== 步骤1: 选择 L1 Workflow Skill ==========
+    # ========== 步骤1: 选择 Workflow Skill ==========
     print("\n" + "-" * 70)
-    print("步骤1: 选择 L1 Workflow Skill")
+    print("步骤1: 选择 Workflow Skill")
     print("-" * 70)
     
-    l1_skills = registry.get_by_level(SkillLevel.L1)
-    print(f"\n可选的 L1 Skills ({len(l1_skills)} 个):")
-    for skill in l1_skills:
+    workflow_skills = registry.get_by_category("workflow")
+    print(f"\n可选的 Workflow Skills ({len(workflow_skills)} 个):")
+    for skill in workflow_skills:
         print(f"  - {skill.name}: {skill.description}")
     
     # 选择标准工作流
-    l1_skill = registry.get("standard-workflow")
-    if not l1_skill:
+    workflow_skill = registry.get("standard-workflow")
+    if not workflow_skill:
         print("错误: 未找到 standard-workflow")
         return
     
-    print(f"\n✓ 选择: {l1_skill.name}")
+    print(f"\n✓ 选择: {workflow_skill.name}")
     
-    # ========== 步骤2: 选择 L2 Agent Skills ==========
+    # ========== 步骤2: 选择 Agent Skills ==========
     print("\n" + "-" * 70)
-    print("步骤2: 选择 L2 Agent Skills")
+    print("步骤2: 选择 Agent Skills")
     print("-" * 70)
     
-    # 从 L1 的子 Skills 中选择
+    # 从 Workflow 的子 Skills 中选择
     selector = OperatorSkillSelector()
-    l2_skills = selector.get_children_skills(l1_skill, all_skills)
+    l2_skills = selector.get_children_skills(workflow_skill, all_skills)
     
-    print(f"\n{l1_skill.name} 的子 Skills ({len(l2_skills)} 个):")
+    print(f"\n{workflow_skill.name} 的子 Skills ({len(l2_skills)} 个):")
     for skill in l2_skills:
         print(f"  - {skill.name}: {skill.description[:50]}...")
     
@@ -284,12 +284,12 @@ async def example_3_complete_workflow():
     print("-" * 70)
     
     # 组合所有选中的 Skills
-    selected_skills = [l1_skill] + selected_l2 + l3_filtered
+    selected_skills = [workflow_skill] + selected_l2 + l3_filtered
     
     print(f"\n最终选中的 Skills ({len(selected_skills)} 个):")
     for skill in selected_skills:
-        level_str = f"[{skill.level.value}]" if skill.level else "[--]"
-        print(f"  {level_str} {skill.name}")
+        cat_str = f"[{skill.category}]" if skill.category else "[--]"
+        print(f"  {cat_str} {skill.name}")
     
     # 构建 prompt
     task_description = f"""
@@ -371,7 +371,7 @@ async def example_4_with_history():
             print(f"     错误: {h['error']}")
     
     # 获取 L2 Agent Skills
-    l2_skills = registry.get_by_level(SkillLevel.L2)
+    l2_skills = registry.get_by_category("agent")
     
     # 构建带历史的 prompt（用户自定义模板，history 作为参数传递）
     prompt_template_with_history = """你是一个 Skill 选择专家。
@@ -449,8 +449,8 @@ def example_5_filter_by_backend():
         
         print(f"\n[Backend={backend}] 匹配的 Skills ({len(filtered)} 个):")
         for skill in filtered[:5]:  # 只显示前5个
-            level_str = f"[{skill.level.value}]" if skill.level else "[--]"
-            print(f"  {level_str} {skill.name}")
+            cat_str = f"[{skill.category}]" if skill.category else "[--]"
+            print(f"  {cat_str} {skill.name}")
             if skill.metadata and 'backend' in skill.metadata:
                 print(f"      支持: {skill.metadata['backend']}")
     

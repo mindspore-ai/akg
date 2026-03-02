@@ -1,7 +1,6 @@
 ---
 name: cuda-c-patterns
 description: "CUDA C 三大编程模式：向量操作、归约、矩阵乘法"
-level: L4
 category: method
 version: "1.0.0"
 metadata:
