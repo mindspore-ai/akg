@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <queue>
 
+#include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
 
@@ -56,29 +57,6 @@ using llvm::SetVector;
 using llvm::SmallVector;
 using mlir::kReductionInitAttr;
 using mlir::kReductionTypeStr;
-
-// Helper function to get the source memref from a value that might be a subview
-// or other aliasing operation. This traces back through subview operations
-// to find the underlying memref.
-static Value getSourceMemRef(Value memrefVal) {
-  Value current = memrefVal;
-  while (true) {
-    if (auto subview = current.getDefiningOp<memref::SubViewOp>()) {
-      current = subview.getSource();
-    } else if (auto reshape = current.getDefiningOp<memref::ReshapeOp>()) {
-      current = reshape.getSource();
-    } else if (auto expand = current.getDefiningOp<memref::ExpandShapeOp>()) {
-      current = expand.getSrc();
-    } else if (auto collapse = current.getDefiningOp<memref::CollapseShapeOp>()) {
-      current = collapse.getSrc();
-    } else if (auto cast = current.getDefiningOp<memref::ReinterpretCastOp>()) {
-      current = cast.getSource();
-    } else {
-      break;
-    }
-  }
-  return current;
-}
 
 // Get group by group ID, returns nullptr if group doesn't exist
 GroupPtr MemRefDependenceGraphForFusion::getGroup(unsigned groupId) {
@@ -143,7 +121,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
         auto memref = cast<affine::AffineReadOpInterface>(opInst).getMemRef();
         memrefAccesses[memref].insert(node.id);
         // Also track the source memref if this is a subview or other aliasing operation
-        Value sourceMemref = getSourceMemRef(memref);
+        Value sourceMemref = mlir::affine::getSourceMemRef(memref);
         if (sourceMemref != memref) {
           memrefAccesses[sourceMemref].insert(node.id);
         }
@@ -153,7 +131,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
         auto memref = cast<affine::AffineWriteOpInterface>(opInst).getMemRef();
         memrefAccesses[memref].insert(node.id);
         // Also track the source memref if this is a subview or other aliasing operation
-        Value sourceMemref = getSourceMemRef(memref);
+        Value sourceMemref = mlir::affine::getSourceMemRef(memref);
         if (sourceMemref != memref) {
           memrefAccesses[sourceMemref].insert(node.id);
         }
@@ -181,7 +159,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
       auto memref = cast<affine::AffineReadOpInterface>(op).getMemRef();
       memrefAccesses[memref].insert(node.id);
       // Also track the source memref if this is a subview or other aliasing operation
-      Value sourceMemref = getSourceMemRef(memref);
+      Value sourceMemref = mlir::affine::getSourceMemRef(memref);
       if (sourceMemref != memref) {
         memrefAccesses[sourceMemref].insert(node.id);
       }
@@ -193,7 +171,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
       auto memref = cast<affine::AffineWriteOpInterface>(op).getMemRef();
       memrefAccesses[memref].insert(node.id);
       // Also track the source memref if this is a subview or other aliasing operation
-      Value sourceMemref = getSourceMemRef(memref);
+      Value sourceMemref = mlir::affine::getSourceMemRef(memref);
       if (sourceMemref != memref) {
         memrefAccesses[sourceMemref].insert(node.id);
       }
@@ -224,7 +202,7 @@ static bool hasAliasedStoreToMemref(Node *node, Value baseMemref) {
       if (storeMemref == baseMemref) {
         return true;
       }
-      if (getSourceMemRef(storeMemref) == baseMemref) {
+      if (mlir::affine::getSourceMemRef(storeMemref) == baseMemref) {
         return true;
       }
     }
@@ -1254,7 +1232,7 @@ unsigned FusionCodeGenHelper::tryFusionDepths(
     }
 
     auto &sliceState = depthSliceUnions[depth - 1];
-    affine::SliceComputationResult res = affine::computeSliceUnion(
+    affine::SliceComputationResult res = computeSliceUnionAKG(
         strategyOpsA, loadAndStoreOpsB, depth, numCommonLoops,
         isSrcForOpBeforeDstForOp, &sliceState);
 
