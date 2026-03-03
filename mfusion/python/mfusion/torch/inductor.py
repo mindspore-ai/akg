@@ -13,87 +13,57 @@
 # limitations under the License.
 """Mfuse fusion pipelines for Torch inductor."""
 
-import os
-from mfusion import ir
-from mfusion.passmanager import PassManager
-from mfusion.dialects import torch as torch_d
-from mfusion import register_mfuse_dialect
-
-
-def _print_verbose(stage_title: str, content):
-    """Print verbose information with formatting.
-
-    Args:
-        stage_title: Title of the stage
-        content: Content to print
-    """
-    enabled = os.environ.get("MFUSION_PRINT_IR") == "1"
-    if not enabled:
-        return
-    print("=" * 80)
-    print(stage_title)
-    print("=" * 80)
-    print(content)
-    print()
-
-
-def _parse_mlir_module_from_text(text: str):
-    """Parse MLIR module from text IR."""
-    ctx = ir.Context()
-    torch_d.register_dialect(ctx)
-    register_mfuse_dialect(ctx)
-    return ir.Module.parse(text, ctx)
-
-
-def _run_pipeline(module: ir.Module, pipeline: str, stage: str) -> ir.Module:
-    """Run an MLIR pass pipeline and optionally dump the IR."""
-    with module.context:
-        pm = PassManager.parse(pipeline)
-        pm.run(module.operation)
-    _print_verbose(stage, module)
-
+from ._pipeline import PipelineRunner
 
 def fuse_and_optimize(torch_dialect_str: str) -> str:
     """
     Fuse and optimize the given Torch dialect MLIR string.
     """
-    module =_parse_mlir_module_from_text(torch_dialect_str)
-    _print_verbose("Original MLIR Module", module)
+    runner = PipelineRunner.from_torch_dialect_str(torch_dialect_str)
 
-    _run_pipeline(module,
+    runner.run(
         pipeline="builtin.module(convert-torch-to-mfuse,convert-torch-symbol-to-mfuse,canonicalize)",
-        stage="Convert Torch to Mfuse Dialect Module")
+        stage="Convert Torch to Mfuse Dialect Module",
+    )
 
-    _run_pipeline(module,
+    runner.run(
         pipeline="builtin.module(decompose{pattern-type=BEFORE_MANUAL_FUSION}, canonicalize)",
-        stage="Decompose aclnn ops to meta ops")
+        stage="Decompose aclnn ops to meta ops",
+    )
 
-    _run_pipeline(module,
+    runner.run(
         pipeline="builtin.module(mfuse-fusion,canonicalize)",
-        stage="Mfuse Fusion")
+        stage="Mfuse Fusion",
+    )
 
-    _run_pipeline(module,
-                  pipeline="builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION}, canonicalize)",
-                  stage="Decompose complex ops to meta ops")
+    runner.run(
+        pipeline="builtin.module(decompose{pattern-type=AFTER_MANUAL_FUSION}, canonicalize)",
+        stage="Decompose complex ops to meta ops",
+    )
 
-    _run_pipeline(module,
+    runner.run(
         pipeline="builtin.module(func.func(mfuse-dvm-cluster),canonicalize)",
-        stage="Mfuse DVM Clustering")
+        stage="Mfuse DVM Clustering",
+    )
 
-    _run_pipeline(module,
+    runner.run(
         pipeline="builtin.module(recompose, canonicalize)",
-        stage="Recompose meta ops to aclnn ops")
+        stage="Recompose meta ops to aclnn ops",
+    )
 
-    _run_pipeline(module,
+    runner.run(
         pipeline="builtin.module(outline-mfuse-fused-subgraphs,copy-fused-subgraphs,canonicalize)",
-        stage="Outline Fused Subgraphs")
+        stage="Outline Fused Subgraphs",
+    )
 
-    _run_pipeline(module,
+    runner.run(
         pipeline="builtin.module(convert-mfuse-to-dvm,convert-dvm-subgraph-to-mfuse-dvm-call,canonicalize)",
-        stage="Lower Fused Subgraphs to DVM Calls")
+        stage="Lower Fused Subgraphs to DVM Calls",
+    )
 
-    _run_pipeline(module,
+    runner.run(
         pipeline="builtin.module(convert-mfuse-to-torch, reconcile-unrealized-casts,canonicalize)",
-        stage="Convert Mfuse to Torch Dialect Module")
+        stage="Convert Mfuse to Torch Dialect Module",
+    )
 
-    return str(module)
+    return str(runner.module)
