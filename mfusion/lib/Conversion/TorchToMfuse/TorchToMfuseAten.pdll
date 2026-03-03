@@ -18,16 +18,6 @@ Pattern ConvertAtenCeil {
   replace root with op<mfuse.ceil>(convertValue(input)) -> (convertType(resType));
 }
 
-Pattern ConvertAtenDivTensor {
-  let root = op<torch.aten.div.Tensor>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.div>(convertValues(operands)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenEqTensor {
-  let root = op<torch.aten.eq.Tensor>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.eq>(convertValues(operands)) -> (convertType(resType));
-}
-
 Pattern ConvertAtenExp {
   let root = op<torch.aten.exp>(input: Value) -> (resType: Type);
   replace root with op<mfuse.exp>(convertValue(input)) -> (convertType(resType));
@@ -38,24 +28,9 @@ Pattern ConvertAtenFloor {
   replace root with op<mfuse.floor>(convertValue(input)) -> (convertType(resType));
 }
 
-Pattern ConvertAtenGeTensor {
-  let root = op<torch.aten.ge.Tensor>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.ge>(convertValues(operands)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenGtTensor {
-  let root = op<torch.aten.gt.Tensor>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.gt>(convertValues(operands)) -> (convertType(resType));
-}
-
 Pattern ConvertAtenIsfinite {
   let root = op<torch.aten.isfinite>(input: Value) -> (resType: Type);
   replace root with op<mfuse.is_finite>(convertValue(input)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenLeTensor {
-  let root = op<torch.aten.le.Tensor>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.le>(convertValues(operands)) -> (convertType(resType));
 }
 
 Pattern ConvertAtenLog {
@@ -78,24 +53,9 @@ Pattern ConvertAtenGeluBackward {
   replace root with op<mfuse.aclnn.gelu_backward>(convertValue(Get0(inputs)), convertValue(Get1(inputs))) { approximate = GetStrAttr(Get2(inputs)) } -> (convertType(resType));
 }
 
-Pattern ConvertAtenLogicalAnd {
-  let root = op<torch.aten.logical_and>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.logical_and>(convertValues(operands)) -> (convertType(resType));
-}
-
 Pattern ConvertAtenLogicalNot {
   let root = op<torch.aten.logical_not>(input: Value) -> (resType: Type);
   replace root with op<mfuse.logical_not>(convertValue(input)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenLogicalOr {
-  let root = op<torch.aten.logical_or>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.logical_or>(convertValues(operands)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenLtTensor {
-  let root = op<torch.aten.lt.Tensor>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.lt>(convertValues(operands)) -> (convertType(resType));
 }
 
 Pattern ConvertAtenMatmul {
@@ -103,39 +63,14 @@ Pattern ConvertAtenMatmul {
   replace root with op<mfuse.aclnn.matmul>(convertValues(operands)) -> (convertType(resType));
 }
 
-Pattern ConvertAtenMaximum {
-  let root = op<torch.aten.maximum>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.maximum>(convertValues(operands)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenMinimum {
-  let root = op<torch.aten.minimum>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.minimum>(convertValues(operands)) -> (convertType(resType));
-}
-
 Pattern ConvertAtenMm {
   let root = op<torch.aten.mm>(operands: ValueRange) -> (resType: Type);
   replace root with op<mfuse.aclnn.mm>(convertValues(operands)) -> (convertType(resType));
 }
 
-Pattern ConvertAtenMulTensor {
-  let root = op<torch.aten.mul.Tensor>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.mul>(convertValues(operands)) -> (convertType(resType));
-}
-
 Pattern ConvertAtenNeg {
   let root = op<torch.aten.neg>(input: Value) -> (resType: Type);
   replace root with op<mfuse.neg>(convertValue(input)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenNeTensor {
-  let root = op<torch.aten.ne.Tensor>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.ne>(convertValues(operands)) -> (convertType(resType));
-}
-
-Pattern ConvertAtenPowTensorTensor {
-  let root = op<torch.aten.pow.Tensor_Tensor>(operands: ValueRange) -> (resType: Type);
-  replace root with op<mfuse.pow>(convertValues(operands)) -> (convertType(resType));
 }
 
 Pattern ConvertAtenRsqrt {
