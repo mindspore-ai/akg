@@ -63,7 +63,34 @@ bool isConstantListInt(Value listVal, llvm::SmallVectorImpl<int64_t> &out) {
 }  // namespace
 
 //===----------------------------------------------------------------------===//
-// Aten ops to Mfuse conversion patterns
+// Generic binary op conversion with type promotion
+//===----------------------------------------------------------------------===//
+// Converts Torch Aten binary tensor ops to Mfuse meta ops using the target's
+// custom builder, which calls promoteBinaryOperands to unify operand element
+// types (e.g. f16, f32 -> f32) and satisfy SameOperandsAndResultElementType.
+template <typename SourceOp, typename TargetOp>
+struct ConvertBinaryOpPattern : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto operands = adaptor.getOperands();
+    if (operands.size() < 2) {
+      return rewriter.notifyMatchFailure(op, "binary op requires at least 2 operands");
+    }
+    Value lhs = operands[0];
+    Value rhs = operands[1];
+    Type resType = this->getTypeConverter()->convertType(op.getType());
+    if (!resType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+    auto targetOp = rewriter.create<TargetOp>(op.getLoc(), resType, lhs, rhs);
+    rewriter.replaceOp(op, targetOp.getResult());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // (the pattern list should be alphabetically sorted)
 //===----------------------------------------------------------------------===//
 
@@ -341,9 +368,31 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
   patterns.add<ConvertAtenView>(converter, context);
 }
 
+// Populate binary Aten ops using the generic pattern so conversion goes through
+// the Mfuse op's builder (promoteBinaryOperands), ensuring consistent operand types.
+// Add and sub are converted via PDLL to mfuse.aclnn.add / mfuse.aclnn.sub.
+static void populateAtenToMfuseBinaryOpPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
+  MLIRContext *ctx = patterns.getContext();
+  patterns.add<
+      ConvertBinaryOpPattern<TorchD::AtenDivTensorOp, mfuse::DivOp>,
+      ConvertBinaryOpPattern<TorchD::AtenEqTensorOp, mfuse::EqOp>,
+      ConvertBinaryOpPattern<TorchD::AtenGeTensorOp, mfuse::GeOp>,
+      ConvertBinaryOpPattern<TorchD::AtenGtTensorOp, mfuse::GtOp>,
+      ConvertBinaryOpPattern<TorchD::AtenLeTensorOp, mfuse::LeOp>,
+      ConvertBinaryOpPattern<TorchD::AtenLogicalAndOp, mfuse::LogicalAndOp>,
+      ConvertBinaryOpPattern<TorchD::AtenLogicalOrOp, mfuse::LogicalOrOp>,
+      ConvertBinaryOpPattern<TorchD::AtenLtTensorOp, mfuse::LtOp>,
+      ConvertBinaryOpPattern<TorchD::AtenMaximumOp, mfuse::MaximumOp>,
+      ConvertBinaryOpPattern<TorchD::AtenMinimumOp, mfuse::MinimumOp>,
+      ConvertBinaryOpPattern<TorchD::AtenMulTensorOp, mfuse::MulOp>,
+      ConvertBinaryOpPattern<TorchD::AtenNeTensorOp, mfuse::NeOp>,
+      ConvertBinaryOpPattern<TorchD::AtenPowTensorTensorOp, mfuse::PowOp>>(converter, ctx);
+}
+
 // Populate all Aten ops to Mfuse conversion patterns
 void populateAtenToMfuseConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   populateAtenToMfuseCustomPatterns(converter, patterns);
+  populateAtenToMfuseBinaryOpPatterns(converter, patterns);
 }
 
 }  // namespace mlir

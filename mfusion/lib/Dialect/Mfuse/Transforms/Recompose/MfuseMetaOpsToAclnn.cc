@@ -231,10 +231,35 @@ class AddToAclnnAddPattern : public OpRewritePattern<AddOp> {
   }
 };
 
+/// Lower mfuse.sub to mfuse.aclnn.sub with alpha=1 (result = x - y).
+class SubToAclnnSubPattern : public OpRewritePattern<SubOp> {
+ public:
+  using OpRewritePattern<SubOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(SubOp op, PatternRewriter &rewriter) const override {
+    Value x = op.getX();
+    Value y = op.getY();
+    auto xType = dyn_cast<RankedTensorType>(x.getType());
+    auto yType = dyn_cast<RankedTensorType>(y.getType());
+    if (!xType || !yType) {
+      return failure();
+    }
+
+    Location loc = op.getLoc();
+    Type resultType = op.getResult().getType();
+    auto scalarType = RankedTensorType::get({}, rewriter.getI64Type());
+    Value alphaOne = rewriter.create<arith::ConstantOp>(loc, scalarType, DenseElementsAttr::get(scalarType, kAlphaOne));
+    Value subResult = rewriter.create<AclnnSubOp>(loc, resultType, x, y, alphaOne);
+    rewriter.replaceOp(op, subResult);
+    return success();
+  }
+};
+
 }  // namespace
 
 void registerMfuseMetaOpsToAclnnPatterns(RewritePatternSet &patterns) {
   patterns.add<AddToAclnnAddPattern>(patterns.getContext());
+  patterns.add<SubToAclnnSubPattern>(patterns.getContext());
   patterns.add<MatmulToAclnnPattern, MfuseMetaOpsMatMulWithBiasToAclnnPattern>(patterns.getContext());
 }
 
