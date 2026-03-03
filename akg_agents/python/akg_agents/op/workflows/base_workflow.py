@@ -71,6 +71,11 @@ _DSL_DOCS_DIR_MAP: Dict[str, Dict[str, str]] = {
         "designer": "op/resources/docs/sketch_docs",
         "coder": "op/resources/docs/tilelang_npuir_docs",
     },
+    "pypto": {
+        "designer": "op/resources/docs/sketch_docs",
+        "coder": "op/resources/docs/pypto_docs",
+        "sketch": "op/resources/docs/sketch_docs",
+    },
 }
 
 
@@ -147,6 +152,7 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             完整的配置字典
         """
         config = dict(base_config or {})
+        dsl_lower = (dsl or "").lower()
         
         # 1. log_dir（若尚未设置）
         if "log_dir" not in config:
@@ -157,7 +163,6 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         
         # 2. docs_dir —— 根据 DSL 硬编码映射
         if "docs_dir" not in config:
-            dsl_lower = dsl.lower()
             docs_dir = _DSL_DOCS_DIR_MAP.get(dsl_lower)
             if docs_dir:
                 config["docs_dir"] = dict(docs_dir)  # 拷贝
@@ -205,6 +210,11 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         
         # 8. max_step（硬编码）
         config["max_step"] = 20
+
+        # 9. PyPTO 运行模式兜底（0: NPU, 1: SIM）
+        # 说明：远端 worker 不能依赖本地 shell 环境变量，必须在任务级配置中显式下发。
+        if dsl_lower == "pypto":
+            config.setdefault("pypto_run_mode", 0)
         
         return config
     
@@ -294,4 +304,3 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             # 会话信息
             "session_id": agent_context.get("session_id", ""),
         }
-
