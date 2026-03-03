@@ -286,23 +286,37 @@ def register_resume_command(
             from .op.types import OpCommandArgs
 
             orchestrator = OpCommandOrchestrator(console=console, services=services)
-            orchestrator.run(
-                OpCommandArgs(
-                    intent=None,
-                    task_file=None,
-                    framework="",
-                    backend="",
-                    arch="",
-                    dsl="",
-                    auto_yes=auto_yes,
-                    worker_url=worker_url,
-                    devices=devices,
-                    stream=stream,
-                    rag=rag,
-                    output_path=output_path,
-                    resume_session_id=sid,
+            try:
+                orchestrator.run(
+                    OpCommandArgs(
+                        intent=None,
+                        task_file=None,
+                        framework="",
+                        backend="",
+                        arch="",
+                        dsl="",
+                        auto_yes=auto_yes,
+                        worker_url=worker_url,
+                        devices=devices,
+                        stream=stream,
+                        rag=rag,
+                        output_path=output_path,
+                        resume_session_id=sid,
+                    )
                 )
-            )
+            except Exception as e:
+                from akg_agents.core_v2.filesystem.exceptions import SessionResumeError
+                if isinstance(e, SessionResumeError):
+                    console.print(f"\n[red]恢复会话失败:[/red] {e.detail}")
+                    console.print(f"[dim]Session ID: {e.session_id}[/dim]")
+                    if e.cause:
+                        console.print(f"[dim]原始错误: {e.cause}[/dim]")
+                    console.print(
+                        "\n[yellow]提示:[/yellow] 代码修改可能导致旧 session 数据不兼容。"
+                        "\n请使用 [cyan]akg_cli sessions list[/cyan] 查看会话，并开始新会话。"
+                    )
+                    raise typer.Exit(code=3)
+                raise
         else:
             # 未知 domain 或未来扩展
             if domain:
