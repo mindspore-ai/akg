@@ -17,6 +17,7 @@
 import logging
 import os
 import uuid
+from datetime import datetime
 from contextlib import redirect_stdout
 from io import StringIO
 from typing import Dict, Any, Optional
@@ -40,7 +41,7 @@ class LocalExecutor:
         *,
         session_id: str | None = None,
     ):
-        self.session_id = str(session_id or uuid.uuid4())
+        self.session_id = str(session_id or self._generate_session_id())
         self.console = console
         self.current_job_id: Optional[str] = None
 
@@ -408,6 +409,13 @@ class LocalExecutor:
                 exc_info=True,
             )
 
+    @staticmethod
+    def _generate_session_id() -> str:
+        """生成基于时间戳的会话 ID：YYYYMMDD-HHMMSS-xxxx"""
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        short = uuid.uuid4().hex[:4]
+        return f"{ts}-{short}"
+
     @classmethod
     def create_for_cli(
         cls,
@@ -431,7 +439,7 @@ class LocalExecutor:
             )
 
         # 会话 id：用于 TUI resume + 录制目录
-        sid = str(session_id or uuid.uuid4())
+        sid = str(session_id or cls._generate_session_id())
         os.environ["AKG_AGENTS_SESSION_ID"] = sid
 
         executor = cls(
