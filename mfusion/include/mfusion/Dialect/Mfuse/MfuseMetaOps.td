@@ -48,6 +48,52 @@ class Mfuse_BroadcastableBinaryOp<string mnemonic, list<Trait> traits = []>
   }];
 }
 
+// This is the base class for reduce ops that support symbolic shape inference.
+// It provides custom builders that handle the reduction attributes and delegate
+// to SymbolicBuilderHelper, while requiring each concrete op to implement
+// a static inferResultType.
+class Mfuse_ReduceOp<string mnemonic, list<Trait> traits = []>
+    : Mfuse_Op<mnemonic, !listconcat([DeclareOpInterfaceMethods<Mfuse_InferSymbolicShapeInterface>], traits)> {
+  string autoClassName = !subst("Mfuse_", "", NAME);
+  let skipDefaultBuilders = 1;
+
+  let builders = [
+    // Explicit type builder (kept for callers that already compute resultType)
+    OpBuilder<(ins
+        "::mlir::Type":$resultType,
+        "::mlir::Value":$input,
+        "::mlir::ArrayAttr":$dimensions,
+        "::mlir::BoolAttr":$keepdim,
+        CArg<"llvm::ArrayRef<mlir::NamedAttribute>", "{}">:$attributes
+      ),
+      "llvm::SmallVector<mlir::NamedAttribute, 4> attrs(attributes.begin(), attributes.end());\n" #
+      "attrs.push_back($_builder.getNamedAttr(\"dimensions\", dimensions));\n" #
+      "attrs.push_back($_builder.getNamedAttr(\"keepdim\", keepdim));\n" #
+      "::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::" # autoClassName # ">::build(" #
+      "$_builder, $_state, resultType, ::mlir::ValueRange{input}, attrs);"
+    >,
+
+    // Builder that infers the result type from input, dimensions, keepdim and element type.
+    OpBuilder<(ins
+        "::mlir::Value":$input,
+        "::mlir::ArrayAttr":$dimensions,
+        "::mlir::BoolAttr":$keepdim,
+        CArg<"mlir::Type", "nullptr">:$dtype
+      ),
+      "::mlir::Type elemType = dtype ? dtype : llvm::cast<::mlir::RankedTensorType>(input.getType()).getElementType();\n" #
+      "::mlir::Type resultType = ::mlir::mfuse::" # autoClassName # "::inferResultType(input, dimensions, keepdim, elemType);\n" #
+      "build($_builder, $_state, resultType, input, dimensions, keepdim);"
+    >
+  ];
+
+  let extraClassDeclaration = [{
+    static ::mlir::Type inferResultType(::mlir::Value input,
+                                        ::mlir::ArrayAttr dimensions,
+                                        ::mlir::BoolAttr keepdim,
+                                        ::mlir::Type elementType);
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // MFUSE Meta Operations
 //
@@ -123,7 +169,11 @@ def Mfuse_BatchMatmulOp : Mfuse_Op<"batch_matmul", [Pure]> {
   }];
 }
 
-def Mfuse_BroadcastToOp : Mfuse_Op<"broadcast_to", [Pure]> {
+def Mfuse_BroadcastToOp : Mfuse_Op<"broadcast_to", [
+    Pure,
+    SameOperandsAndResultElementType,
+    DeclareOpInterfaceMethods<Mfuse_InferSymbolicShapeInterface>
+  ]> {
   let summary = "Broadcast tensor to a given shape.";
   let description = [{
     Broadcasts a tensor to the shape encoded by the result type,
@@ -139,6 +189,17 @@ def Mfuse_BroadcastToOp : Mfuse_Op<"broadcast_to", [Pure]> {
 
   let results = (outs AnyRankedTensor:$output);
 
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins
+        "mlir::Type":$resultType,
+        "mlir::Value":$input,
+        CArg<"llvm::ArrayRef<mlir::NamedAttribute>", "{}">:$attributes
+      ), [{
+        ::mlir::mfuse::SymbolicBuilderHelper<::mlir::mfuse::BroadcastToOp>::build(
+            $_builder, $_state, resultType, mlir::ValueRange(input), attributes);
+      }]>
+  ];
   let hasVerifier = 1;
 
   let assemblyFormat = [{
@@ -749,7 +810,7 @@ def Mfuse_ReciprocalOp : Mfuse_Op<"reciprocal", [
   }];
 }
 
-def Mfuse_ReduceSumOp : Mfuse_Op<"reduce_sum", [Pure]> {
+def Mfuse_ReduceSumOp : Mfuse_ReduceOp<"reduce_sum", [Pure]> {
   let summary = "Sum operation";
   let description = [{
     Computes the sum of tensor elements along specified dimensions.
@@ -764,6 +825,8 @@ def Mfuse_ReduceSumOp : Mfuse_Op<"reduce_sum", [Pure]> {
   );
 
   let results = (outs AnyRankedTensor:$result);
+
+  let hasVerifier = 1;
 
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
