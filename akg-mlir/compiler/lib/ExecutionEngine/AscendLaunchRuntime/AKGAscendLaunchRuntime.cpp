@@ -21,6 +21,8 @@
 #include <cstdlib>
 #include <string>
 #include <fstream>
+#include <mutex>
+#include <unordered_map>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendMemoryManager.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/RuntimeErrorCodes.h"
 #include <nlohmann/json.hpp>
@@ -29,6 +31,69 @@ using std::vector;
 
 namespace mlir {
 namespace runtime {
+
+namespace {
+// key: so_path::symbol_name, value: (handle, func_ptr)
+struct KernelFuncCache {
+  std::mutex mutex;
+  std::unordered_map<std::string, std::pair<void *, void *>> cache;
+
+  void *Get(const std::string &path, const std::string &kernel_name, const std::string &func_name,
+            const std::string &bin_suffix, const std::string &do_suffix) {
+    std::string file_str = path + "/lib" + kernel_name + bin_suffix;
+    std::string func_str = func_name + do_suffix;
+    std::string key = file_str + "::" + func_str;
+
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+      return it->second.second;
+    }
+
+    void *handle = dlopen(file_str.c_str(), RTLD_LAZY | RTLD_LOCAL);
+    CHECK(handle != nullptr) << "dlopen failed, file: " << file_str << ", Error:" << dlerror();
+
+    void *func = dlsym(handle, func_str.c_str());
+    CHECK(func != nullptr) << "dlsym failed, symbol: " << func_str;
+
+    cache[key] = {handle, func};
+    return func;
+  }
+};
+
+KernelFuncCache &GetKernelFuncCache() {
+  static KernelFuncCache cache;
+  return cache;
+}
+
+struct BlockDimCache {
+  std::mutex mutex;
+  std::unordered_map<std::string, uint32_t> cache;
+
+  uint32_t Get(const std::string &path, const std::string &kernel_name) {
+    std::string key = path + "/" + kernel_name + ".json";
+
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+      return it->second;
+    }
+
+    std::ifstream json_stream(key);
+    nlohmann::json json_data;
+    json_stream >> json_data;
+    uint32_t blockdim = json_data["blockDim"].get<uint32_t>();
+    cache[key] = blockdim;
+    return blockdim;
+  }
+};
+
+BlockDimCache &GetBlockDimCache() {
+  static BlockDimCache cache;
+  return cache;
+}
+}  // namespace
+
 constexpr auto kBinFileSuffix = ".so";
 constexpr auto kDoBinFileSuffix = "";
 constexpr auto kAiCoreStr = "AiCore";
@@ -176,14 +241,7 @@ inline unsigned int UlongToUint(uint64_t u) {
 
 void *AscendKernelRuntime::GetKernelFunc(const std::string &path, const std::string &kernel_name,
                                          const std::string &func_name) {
-  std::string file_str = path + "/lib" + kernel_name + kBinFileSuffix;
-  void *handle = dlopen(file_str.c_str(), RTLD_LAZY | RTLD_LOCAL);
-  CHECK(handle != nullptr) << "dlopen failed, file: " << file_str << ", Error:" << dlerror();
-
-  std::string func_str = func_name + kDoBinFileSuffix;
-  void *func = dlsym(handle, func_str.c_str());
-  CHECK(func != nullptr) << "dlsym failed, symbol: " << func_str;
-  cce_handle_ = handle;
+  void *func = GetKernelFuncCache().Get(path, kernel_name, func_name, kBinFileSuffix, kDoBinFileSuffix);
   return func;
 }
 
@@ -201,12 +259,7 @@ bool AscendKernelRuntime::Run(const std::string &path, const std::string &kernel
                               const std::vector<BaseDevicePtr> &input_tensors,
                               const std::vector<std::vector<int64_t>> &input_shape_args, int64_t tiling_key,
                               int64_t tiling_struct_size) {
-  // Read blockDim from JSON file
-  std::string json_file = path + "/" + kernel_name + ".json";
-  std::ifstream json_stream(json_file);
-  nlohmann::json json_data;
-  json_stream >> json_data;
-  uint32_t blockdim = json_data["blockDim"].get<uint32_t>();
+  uint32_t blockdim = GetBlockDimCache().Get(path, kernel_name);
   std::string func_name = kernel_name;
   std::vector<void *> runtimeargs;
 
