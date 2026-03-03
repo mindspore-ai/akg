@@ -133,7 +133,11 @@ void ParseInputArgs(bool is_dynamic,
 }
 
 void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bool is_dynamic,
-                    bool use_mem_pool, const py::args &args) {
+                    bool use_mem_pool, const py::args &args, py::kwargs kwargs) {
+  void *external_stream = nullptr;
+  if (kwargs.contains("stream") && !kwargs["stream"].is_none()) {
+    external_stream = reinterpret_cast<void *>(kwargs["stream"].cast<intptr_t>());
+  }
   akg_log_init();
   auto input = std::vector<mlir::runtime::BaseDevicePtr>();
   auto input_shapes = std::vector<std::vector<int64_t>>();
@@ -226,7 +230,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
     DLOG(INFO) << "runtimeargs[" << iter - runtimeargs.begin() << "]: " << *iter;
   }
 
-  auto kernel_runtime = mlir::runtime::AscendKernelRuntime(device_id, use_mem_pool);
+  auto kernel_runtime = mlir::runtime::AscendKernelRuntime(device_id, use_mem_pool, external_stream);
   kernel_runtime.RunOpImpl(path, kernel_name, is_dynamic, input, input_shapes, tiling_key, tiling_struct_size);
 
   for (auto iter = bf16_buf_map.begin(); iter != bf16_buf_map.end(); iter++) {
