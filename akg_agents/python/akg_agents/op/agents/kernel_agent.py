@@ -444,6 +444,7 @@ class KernelAgent(ReActAgent):
             workflow_config = OpBaseWorkflow.build_langgraph_task_config(
                 dsl=self.dsl,
                 backend=self.backend,
+                base_config=self.config,
             )
             
             # 初始化 agents（延迟加载，避免循环依赖）
