@@ -1064,23 +1064,37 @@ class ReActAgent(AgentBase, ABC):
         2. _original_user_input — 从 root 节点的 task_info.task_input 恢复
         3. plan_list — 当前未持久化，打 warning 提醒
         4. pending_tools — 当前未使用，打 warning 提醒
+        
+        Raises:
+            SessionResumeError: 恢复过程中遇到任何数据不兼容/反序列化错误
         """
+        from akg_agents.core_v2.filesystem.exceptions import SessionResumeError
+        
         try:
             resume_info = self.trace.get_resume_info()
         except Exception as e:
-            logger.warning(f"[恢复] 获取 resume_info 失败: {e}")
-            return
+            raise SessionResumeError(
+                self.task_id,
+                f"获取 resume_info 失败: {e}",
+                cause=e,
+            ) from e
         
         # 1. 恢复 tool_executor.history
-        action_history = resume_info.get("action_history", [])
-        if action_history:
-            self.tool_executor.history = list(action_history)
-            logger.info(f"[恢复] tool_executor.history 已恢复: {len(action_history)} 条记录")
-        else:
-            logger.info("[恢复] 无历史动作记录可恢复")
+        try:
+            action_history = resume_info.get("action_history", [])
+            if action_history:
+                self.tool_executor.history = list(action_history)
+                logger.info(f"[恢复] tool_executor.history 已恢复: {len(action_history)} 条记录")
+            else:
+                logger.info("[恢复] 无历史动作记录可恢复")
+        except Exception as e:
+            raise SessionResumeError(
+                self.task_id,
+                f"恢复 action_history 失败: {e}",
+                cause=e,
+            ) from e
         
         # 2. 恢复 _original_user_input
-        #    优先从 root 节点的 task_info.task_input 获取
         try:
             root_state = self.trace.fs.load_node_state("root")
             task_input = root_state.task_info.get("task_input", "") if isinstance(root_state.task_info, dict) else ""
@@ -1098,9 +1112,19 @@ class ReActAgent(AgentBase, ABC):
                         logger.info(f"[恢复] _original_user_input 已从 action_history 回退恢复")
                         break
                 if not self._original_user_input:
-                    logger.warning("[恢复] 无法恢复 _original_user_input，root.task_info 中无 task_input")
+                    raise SessionResumeError(
+                        self.task_id,
+                        "无法恢复 _original_user_input: root.task_info 中无 task_input，"
+                        "action_history 中也未找到 user_input",
+                    )
+        except SessionResumeError:
+            raise
         except Exception as e:
-            logger.warning(f"[恢复] 恢复 _original_user_input 失败: {e}")
+            raise SessionResumeError(
+                self.task_id,
+                f"恢复 _original_user_input 失败: {e}",
+                cause=e,
+            ) from e
         
         # 3. plan_list — 当前未持久化到 trace，恢复时无法重建
         #    TODO: 实现 plan_list 持久化后，在此处恢复

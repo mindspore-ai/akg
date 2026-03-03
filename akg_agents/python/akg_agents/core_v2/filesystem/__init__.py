@@ -40,6 +40,7 @@ from .exceptions import (
     InvalidNodeStateError,
     TraceNotInitializedError,
     TraceAlreadyExistsError,
+    SessionResumeError,
 )
 from .state import FileSystemState
 from .trace_system import TraceSystem
@@ -63,6 +64,7 @@ __all__ = [
     "InvalidNodeStateError",
     "TraceNotInitializedError",
     "TraceAlreadyExistsError",
+    "SessionResumeError",
     # Core classes
     "FileSystemState",
     "TraceSystem",
