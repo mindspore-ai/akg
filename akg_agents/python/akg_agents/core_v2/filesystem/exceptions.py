@@ -60,3 +60,22 @@ class TraceAlreadyExistsError(TraceSystemError):
     def __init__(self, task_id: str):
         self.task_id = task_id
         super().__init__(f"Trace for task '{task_id}' already exists")
+
+
+class SessionResumeError(TraceSystemError):
+    """会话恢复失败异常
+    
+    当从持久化数据恢复 agent 状态时，遇到数据不兼容、字段缺失、
+    反序列化失败等错误时抛出。通常意味着代码修改导致旧 session 不兼容。
+    """
+    
+    def __init__(self, session_id: str, detail: str, cause: Exception = None):
+        self.session_id = session_id
+        self.detail = detail
+        self.cause = cause
+        msg = (
+            f"无法恢复会话 '{session_id}': {detail}\n"
+            "提示: 代码修改可能导致旧 session 数据不兼容。"
+            "请使用 akg_cli sessions list 查看会话，并开始新会话。"
+        )
+        super().__init__(msg)

@@ -332,6 +332,24 @@ class ReactTurnExecutorV2:
                 "workflow_name": "kernel_agent",
             }
         except Exception as e:
+            from akg_agents.core_v2.filesystem.exceptions import SessionResumeError
+            if isinstance(e, SessionResumeError):
+                logger.error(
+                    f"[ReactTurnExecutorV2] 会话恢复失败: {e.detail}",
+                    exc_info=True,
+                )
+                self._panel_update_current(phase="error")
+                return {
+                    "current_step": "resume_failed",
+                    "should_continue": False,
+                    "display_message": (
+                        f"⚠️ 恢复会话失败: {e.detail}\n\n"
+                        "代码修改可能导致旧 session 数据不兼容。\n"
+                        "请开始新会话。"
+                    ),
+                    "hint_message": "",
+                    "workflow_name": "kernel_agent",
+                }
             logger.error(
                 f"[ReactTurnExecutorV2] run_turn 未捕获异常: {e}",
                 exc_info=True,
