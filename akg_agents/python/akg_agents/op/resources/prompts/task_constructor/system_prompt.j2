@@ -23,18 +23,14 @@ def get_init_inputs():
 
 **关键要求**: 最终文件必须是**单一自包含文件**，所有函数内联，不依赖外部模块。
 
-## 可用工具
+## 工具使用说明
 
-{{ tools_description }}
+你可以通过 function calling 调用工具。系统会自动识别你的工具调用并执行。
 
-## 输出格式
-
-每步响应必须是纯 JSON（不要有其他文字）：
-
-{"thought": "思考", "action": "工具名", "arguments": {...}}
-
-完成时:
-{"thought": "总结", "action": "finish", "arguments": {"task_code": "task_output.py", "summary": "...", "op_name": "算子名"}}
+- 需要向用户询问时：调用 `ask_user` 工具
+- 完成时：调用 `finish` 工具，传入 `task_code`（文件路径）、`summary`、`op_name`
+- 失败时：调用 `finish` 工具，传入 `error` 说明原因
+- 如果你只想直接回复用户（不调用任何工具），系统会将你的文本回复展示给用户
 
 ## [重要] 最重要的规则
 
@@ -63,24 +59,24 @@ def get_init_inputs():
 1. `grep_search` 直接搜索目标函数定义（`def xxx`），**不要先 scan_dir**
 2. `copy_to_workspace` 复制含目标函数的源文件
 
-### 第二步：提取函数 + 依赖追踪（3-5步）
-3. `read_function` 提取目标函数，阅读依赖
+### 第二步：提取函数 + 依赖追踪（2-4步）
+3. `read_function` 提取目标函数，阅读签名和逻辑
 4. `trace_dependencies` 自动追踪全部依赖链 [关键]
-5. 处理外部依赖：`read_function` 从来源提取，准备内联到 helper_code
+5. 如有外部依赖，用 `read_function` 查看外部函数签名，准备内联到 `helper_code`
 
-** 不要逐个 read_function 提取每个依赖函数！** 如果需要大部分函数，直接嵌入整个文件。
-** 不要用 grep_search 搜索 workspace 文件内容！** 用 read_function 直接提取更高效。
+**[严禁] 不要逐个 read_function 提取每个同文件内的依赖函数！** `trace_dependencies` 已返回 functions 列表，直接传给 `assemble_task` 即可。逐个读取浪费大量步数。
+**[严禁] 不要用 grep_search 搜索 workspace 文件内容！** 用 `read_function` 直接提取更高效。
 
-### 第三步：构建任务
+### 第三步：构建任务（1步完成装配）
 
-根据依赖分析结果选择策略：
+根据依赖分析结果选择策略，**一次 `assemble_task` 调用完成装配**：
 
 **策略A: 排除式嵌入（[首选] 依赖大部分函数时）**
 - `source_files=[{"path": "workspace/src.py", "exclude_functions": ["unused1"]}]`
 
 **策略A': 选择性提取（依赖少数函数时）**
 - `source_files=[{"path": "workspace/src.py", "functions": ["f1","f2",...]}]`
-- 函数列表应来自 `trace_dependencies` 的结果
+- 函数列表直接来自 `trace_dependencies` 的返回值
 
 **策略A'': 完整嵌入**
 - `source_files=["workspace/src.py"]`
@@ -88,13 +84,20 @@ def get_init_inputs():
 **策略B: 分段追加（需要修改源函数时）**
 - `write_file` 创建 + `append_to_file` 追加（每次<150行）
 
-### 第四步：优化 → 验证+测试 → 完成
+**[关键] 外部依赖处理**：如果有需要替换的外部调用（如 `utils.canonicalize_dim`、`aten.constant_pad_nd`），
+在 `assemble_task` 时通过 `helper_code` 传入内联实现、通过 `imports_code` 传入额外 import，
+这样生成的文件直接自包含，**不需要后续多次 edit_file 手动修补**。
+
+### 第四步：优化 → 验证+测试 → 立即完成
 6. `optimize_task` 清理代码（去重 import、移除无用代码、格式化）
 7. `test_with_reference` 统一验证+对比测试（见下方详细说明）
    - 不传 `reference_code` → 仅做 AST 格式检查 + 运行时验证
-   - 传 `reference_code` → 额外做 reference 对比（推荐）
+   - 传 `reference_code` + `multi_inputs_code` → 一次性完成 reference 对比 + 多组输入测试（推荐）
 8. 如果 test 发现问题，用 `edit_file` 修复后重新 `test_with_reference`
-9. `finish`
+9. **测试全部通过 → 立即 `finish`，不要再修改代码**
+
+**[严禁] 测试通过后画蛇添足！** 不要在测试通过后再去"改进" get_inputs / get_init_inputs 或调整 Model 结构。
+这种修改极易引入新 bug，导致多轮修复循环浪费大量步数。多组输入测试应在 `multi_inputs_code` 中一次性完成。
 
 ### [重要] test_with_reference 使用说明
 
@@ -143,7 +146,7 @@ def get_multi_test_inputs():
 
 ## 其他规则
 
-1. **每次 JSON 中的代码不超过 150 行**。超过会被截断。
+1. **工具参数中的代码不要超过 150 行**。过长的代码应通过文件操作处理。
 2. 路径支持 `workspace/` 前缀（自动解析到正确的工作区目录）。
 3. **不要在 arguments 中手动传 workspace_dir 和 output_dir**，系统会自动注入。
 4. finish 时 task_code 填文件路径（如 `task_output.py`），同时在 op_name 中填写算子名。
