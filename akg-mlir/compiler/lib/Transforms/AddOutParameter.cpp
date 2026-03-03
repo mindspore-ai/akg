@@ -66,13 +66,36 @@ static void setHaccIOArgAttrs(func::FuncOp f, unsigned nInputs, unsigned nOutput
 }
 
 static bool isAliasOfOriginalInput(Value v, func::FuncOp func, unsigned origNumInputs) {
-  if (auto ba = mlir::dyn_cast<BlockArgument>(v)) {
-    Block *owner = ba.getOwner();
-    if (&func.front() != owner) return false;
-    unsigned idx = ba.getArgNumber();
-    return idx < origNumInputs;
+  while (true) {
+    if (auto ba = mlir::dyn_cast<BlockArgument>(v)) {
+      Block *owner = ba.getOwner();
+      if (&func.front() != owner)
+        return false;
+      unsigned idx = ba.getArgNumber();
+      return idx < origNumInputs;
+    }
+
+    Operation *def = v.getDefiningOp();
+    if (!def)
+      return false;
+
+    if (auto collapse = mlir::dyn_cast<memref::CollapseShapeOp>(def)) {
+      v = collapse.getSrc();
+      continue;
+    }
+
+    if (auto expand = mlir::dyn_cast<memref::ExpandShapeOp>(def)) {
+      v = expand.getSrc();
+      continue;
+    }
+
+    if (auto reshape = mlir::dyn_cast<memref::ReshapeOp>(def)) {
+      v = reshape.getSource();
+      continue;
+    }
+
+    return false;
   }
-  return false;
 }
 
 static LogicalResult collectOriginalReturnValues(func::FuncOp func, unsigned origNumResults,
@@ -422,6 +445,11 @@ static LogicalResult processReturnValue(unsigned resultIdx, Value oldResVal, Val
   }
 
   if (!maybeOutArg) {
+    func::FuncOp func = ret->getParentOfType<func::FuncOp>();
+    unsigned origNumInputs = func.getFunctionType().getNumInputs();
+    if (isAliasOfOriginalInput(oldResVal, func, origNumInputs)) {
+      return success();
+    }
     ret.emitError() << "no out-argument is assigned for this return value, "
                        "but it is not a block argument: "
                     << oldResVal;
