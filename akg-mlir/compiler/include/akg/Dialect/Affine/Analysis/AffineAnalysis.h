@@ -32,7 +32,9 @@
 
 #include <optional>
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Analysis/Presburger/IntegerRelation.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
+#include "mlir/Dialect/Affine/Analysis/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Value.h"
 
@@ -58,6 +60,11 @@ bool isLoopParallelAKG(AffineForOp forOp, SmallVectorImpl<LoopReduction> *parall
 /// for complete parallelism-checking functions.
 bool isLoopMemoryParallelAKG(AffineForOp forOp);
 
+// Helper function to get the source memref from a value that might be a subview
+// or other aliasing operation. This traces back through subview operations
+// to find the underlying memref.
+Value getSourceMemRef(Value memrefVal);
+
 /// Encapsulates a memref load or store access information.
 struct AKGMemRefAccess {
   Value memref;
@@ -65,7 +72,6 @@ struct AKGMemRefAccess {
   SmallVector<Value, 4> indices;
 
   /// Constructs a MemRefAccess from a load or store operation.
-  // TODO: add accessors to standard op's load, store, DMA op's to return
   // MemRefAccess, i.e., loadOp->getAccess(), dmaOp->getRead/WriteAccess.
   explicit AKGMemRefAccess(Operation *opInst);
 
@@ -96,7 +102,8 @@ struct AKGMemRefAccess {
   ///
   /// Returns failure for yet unimplemented/unsupported cases (see docs of
   /// mlir::getIndexSet and mlir::getRelationFromMap for these cases).
-  LogicalResult getAccessRelation(FlatAffineRelation &accessRel) const;
+  // LogicalResult getAccessRelation(FlatAffineRelation &accessRel) const;
+  LogicalResult getAccessRelation(mlir::presburger::IntegerRelation &rel) const;
 
   /// Populates 'accessMap' with composition of AffineApplyOps reachable from
   /// 'indices'.
@@ -117,6 +124,11 @@ DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess
                                                 FlatAffineValueConstraints *dependenceConstraints = nullptr,
                                                 SmallVector<DependenceComponent, 2> *dependenceComponents = nullptr,
                                                 bool allowRAR = false);
+
+SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA,
+                                ArrayRef<Operation *> opsB, unsigned loopDepth,
+                                unsigned numCommonLoops, bool isBackwardSlice,
+                                ComputationSliceState *sliceUnion);
 
 }  // namespace affine
 }  // namespace mlir
