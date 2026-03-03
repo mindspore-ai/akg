@@ -38,6 +38,36 @@ namespace {
 // =   Please keep the patterns in alphabetical order by operator name   =
 // ============================================================================
 
+/// Materializes aclnn add/sub alpha (rank-0 tensor) as a Torch scalar for torch.aten.add.Tensor / sub.Tensor.
+/// Looks through UnrealizedConversionCastOp; if the value is a rank-0 float/int constant, creates
+/// ConstantFloatOp/ConstantIntOp; otherwise returns the value as-is for the Torch op.
+static mlir::Value materializeAclnnAlphaToTorchScalar(mlir::Operation *op, mlir::Value alpha,
+                                                       mlir::ConversionPatternRewriter &rewriter) {
+  mlir::Value alphaForConst = alpha;
+  if (auto cast = alpha.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+    if (cast.getOperands().size() == 1) {
+      alphaForConst = cast.getOperand(0);
+    }
+  }
+
+  if (auto cst = alphaForConst.getDefiningOp<mlir::arith::ConstantOp>()) {
+    auto attr = mlir::dyn_cast<mlir::DenseElementsAttr>(cst.getValue());
+    if (attr && attr.getType().hasRank() && attr.getType().getRank() == 0) {
+      auto elementType = attr.getType().getElementType();
+      if (mlir::isa<mlir::FloatType>(elementType)) {
+        auto floatValue = attr.getSplatValue<mlir::APFloat>().convertToDouble();
+        return rewriter.create<TorchD::ConstantFloatOp>(
+            op->getLoc(), rewriter.getFloatAttr(rewriter.getF64Type(), floatValue));
+      }
+      if (mlir::isa<mlir::IntegerType>(elementType)) {
+        auto intValue = attr.getSplatValue<mlir::APInt>().getSExtValue();
+        return rewriter.create<TorchD::ConstantIntOp>(op->getLoc(), rewriter.getI64IntegerAttr(intValue));
+      }
+    }
+  }
+  return alphaForConst;
+}
+
 /// Converts mfuse.aclnn.add -> torch.aten.add.Tensor, materializing alpha (rank-0 tensor) as Torch scalar.
 class ConvertMfuseAclnnAdd : public mlir::OpConversionPattern<mlir::mfuse::AclnnAddOp> {
  public:
@@ -47,37 +77,7 @@ class ConvertMfuseAclnnAdd : public mlir::OpConversionPattern<mlir::mfuse::Aclnn
                                       mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Value x = adaptor.getX();
     mlir::Value y = adaptor.getY();
-    mlir::Value alpha = op.getAlpha();
-    // Adaptor may give type-converted operands; look through UnrealizedConversionCastOp to find the source constant.
-    mlir::Value alphaForConst = alpha;
-    if (auto cast = alpha.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
-      if (cast.getOperands().size() == 1) {
-        alphaForConst = cast.getOperand(0);
-      }
-    }
-
-    // Materialize alpha as a Torch scalar for torch.aten.add.Tensor (alpha is scalar, not tensor).
-    mlir::Value alphaScalar;
-    if (auto cst = alphaForConst.getDefiningOp<mlir::arith::ConstantOp>()) {
-      auto attr = mlir::dyn_cast<mlir::DenseElementsAttr>(cst.getValue());
-      if (attr && attr.getType().hasRank() && attr.getType().getRank() == 0) {
-        auto elementType = attr.getType().getElementType();
-        // Rank-0 float constant: use value as-is and build ConstantFloatOp for Torch.
-        if (mlir::isa<mlir::FloatType>(elementType)) {
-          // Rank-0 float constant
-          auto floatValue = attr.getSplatValue<mlir::APFloat>().convertToDouble();
-          auto floatAttr = rewriter.getFloatAttr(rewriter.getF64Type(), floatValue);
-          alphaScalar = rewriter.create<TorchD::ConstantFloatOp>(op.getLoc(), floatAttr);
-        } else if (mlir::isa<mlir::IntegerType>(elementType)) {
-          // Rank-0 int constant
-          auto intValue = attr.getSplatValue<mlir::APInt>().getSExtValue();
-          auto intAttr = rewriter.getI64IntegerAttr(intValue);
-          alphaScalar = rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), intAttr);
-        }
-      }
-    } else {
-      alphaScalar = alphaForConst;
-    }
+    mlir::Value alphaScalar = materializeAclnnAlphaToTorchScalar(op.getOperation(), op.getAlpha(), rewriter);
 
     mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
@@ -174,6 +174,26 @@ class ConvertMfuseAclnnGeluBackward : public mlir::OpConversionPattern<mlir::mfu
   }
 };
 
+/// Converts mfuse.aclnn.sub -> torch.aten.sub.Tensor, materializing alpha (rank-0 tensor) as Torch scalar.
+class ConvertMfuseAclnnSub : public mlir::OpConversionPattern<mlir::mfuse::AclnnSubOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnSubOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value x = adaptor.getX();
+    mlir::Value y = adaptor.getY();
+    mlir::Value alphaScalar = materializeAclnnAlphaToTorchScalar(op.getOperation(), op.getAlpha(), rewriter);
+
+    mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return mlir::failure();
+    }
+    rewriter.replaceOpWithNewOp<TorchD::AtenSubTensorOp>(op, resultType, x, y, alphaScalar);
+    return mlir::success();
+  }
+};
+
 }  // namespace
 
 // ============================================================================
@@ -186,6 +206,7 @@ void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, Rewri
   patterns.add<ConvertMfuseAclnnAddRmsNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnGelu>(converter, context);
   patterns.add<ConvertMfuseAclnnGeluBackward>(converter, context);
+  patterns.add<ConvertMfuseAclnnSub>(converter, context);
 }
 
 }  // namespace mlir
