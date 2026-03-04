@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/dev/assets/oh-my-opencode.schema.json",
+  "agents": {
+    "sisyphus": {
+      // 路由规则：告诉 Sisyphus 何时委派给自定义 subagent
+      "prompt_append": "file://./.opencode/sisyphus-delegation.md"
+    }
+  }
+}
