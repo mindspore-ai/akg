@@ -26,7 +26,6 @@ my-skill/
 ---
 name: my-skill-name
 description: "A clear, concise description of what this skill provides"
-level: L3
 category: guide
 version: "1.0.0"
 license: MIT
@@ -70,9 +69,8 @@ Detailed knowledge content in Markdown format...
 
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
-| `level` | string | Skill hierarchy level (L1-L5) | `"L3"` |
-| `version` | string | SemVer version | `"1.0.0"` |
 | `category` | string | Semantic category | `"guide"`, `"workflow"`, `"method"` |
+| `version` | string | SemVer version | `"1.0.0"` |
 | `license` | string | License identifier | `"MIT"`, `"Apache-2.0"` |
 
 ### Optional Fields
@@ -89,17 +87,22 @@ Detailed knowledge content in Markdown format...
 - Be descriptive but concise
 - Examples: `ascend-memory-model`, `cuda-basics`, `triton-optimization`
 
-## 5. Level Guidelines
+## 5. Category Guidelines
 
-> Note: The Level hierarchy is currently designed for the kernel generation scenario. Other scenarios' level definitions are pending.
+Skills are classified by `category` for filtering and selection. Standard categories include:
 
-| Level | When to Use | Example |
-|-------|-------------|---------|
-| L1 | High-level workflow / orchestration knowledge | `kernel-generation-workflow` |
-| L2 | Component-level execution patterns | `kernel-designer-patterns` |
-| L3 | Method / strategy knowledge | `cuda-basics`, `triton-optimization` |
-| L4 | Implementation details | `tiling-strategies`, `memory-coalescing` |
-| L5 | Atomic examples / code snippets | `relu-triton-example` |
+| Category | Semantic | Description | Example |
+|----------|----------|-------------|---------|
+| `workflow` | Process / Orchestration | High-level workflow and orchestration knowledge | `kernel-generation-workflow` |
+| `overview` | Overview | System or component overview | `system-overview` |
+| `agent` | Component / Actor | Component-level execution knowledge | `kernel-designer-patterns` |
+| `guide` | Design & Programming Guide | Design methodology, programming guides | `cuda-basics`, `triton-optimization` |
+| `fundamental` | Fundamental | Core concepts and principles | `npu-architecture` |
+| `method` | Method / Strategy | Optimization methods and strategy patterns | `tiling-strategies` |
+| `implementation` | Implementation / Detail | Implementation details and techniques | `memory-coalescing` |
+| `reference` | Reference | Reference documentation | `triton-api-reference` |
+| `example` | Atomic / Example | Code examples | `relu-triton-example` |
+| `case` | Case Study | Concrete case patterns | `softmax-optimization-case` |
 
 ## 6. Content Guidelines
 
