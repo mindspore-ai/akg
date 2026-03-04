@@ -90,6 +90,24 @@ def test_decompose_pipeline_with_add_2():
     assert checker.check_no_op("torch.aten.mul.Tensor"), checker.error
 
 
+def test_decompose_pipeline_with_add_scalar():
+    """Test decompose pipeline with add"""
+    # Torch dialect MLIR string with add and rmsnorm operations
+    torch_mlir = textwrap.dedent("""
+      module {
+        func.func @test_add(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.float) -> !torch.vtensor<[4,4],f32> {
+          %alpha = torch.constant.float 1.0
+          %0 = torch.aten.add.Scalar %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.float, !torch.float -> !torch.vtensor<[4,4],f32>
+          return %0 : !torch.vtensor<[4,4],f32>
+        }
+      }
+    """)
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_has_op("torch.aten.add.Scalar"), checker.error
+
+
 def test_decompose_pipeline_with_add_rmsnorm():
     """Test decompose pipeline with add and rmsnorm operations for fusion."""
     # Torch dialect MLIR string with add and rmsnorm operations
@@ -128,3 +146,23 @@ def test_decompose_pipeline_with_gelu():
     result = fuse_and_optimize(torch_mlir)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_no_op("torch.aten.gelu"), checker.error
+    assert checker.check_no_op("arith.constant"), checker.error
+
+
+def test_decompose_pipeline_with_sigmoid():
+    """Test decompose pipeline with sigmoid operation."""
+    # Torch dialect MLIR string with sigmoid operation
+    torch_mlir = textwrap.dedent("""
+        module {
+          func.func @test_sigmoid(%arg0: !torch.vtensor<[4,4],f32>) -> !torch.vtensor<[4,4],f32> {
+            %0 = torch.aten.sigmoid %arg0 : !torch.vtensor<[4,4],f32> -> !torch.vtensor<[4,4],f32>
+            return %0 : !torch.vtensor<[4,4],f32>
+          }
+        }
+    """)
+
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.aten.sigmoid"), checker.error
+    assert checker.check_no_op("arith.constant"), checker.error
