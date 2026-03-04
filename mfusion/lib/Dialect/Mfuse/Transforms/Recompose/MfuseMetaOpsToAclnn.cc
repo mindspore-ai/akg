@@ -200,66 +200,9 @@ class MfuseMetaOpsMatMulWithBiasToAclnnPattern : public OpRewritePattern<MatmulW
   }
 };
 
-/// Lower mfuse.add to aclnn.add with alpha=1.0.
-class AddToAclnnAddPattern : public OpRewritePattern<AddOp> {
- public:
-  using OpRewritePattern<AddOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(AddOp op, PatternRewriter &rewriter) const override {
-    Value x = op.getX();
-    Value y = op.getY();
-    auto xType = dyn_cast<RankedTensorType>(x.getType());
-    auto yType = dyn_cast<RankedTensorType>(y.getType());
-    // Only one operand allowed to be scalar (rank 0)
-    if (!xType || !yType) {
-      return failure();
-    }
-
-    Location loc = op.getLoc();
-    Type resultType = op.getResult().getType();
-    Value addX = x;
-    Value addY = y;
-
-    // Check if either operand is a mul operation with a scalar
-    auto scalarType = RankedTensorType::get({}, rewriter.getI64Type());
-    Value alphaValue =
-      rewriter.create<arith::ConstantOp>(loc, scalarType, DenseElementsAttr::get(scalarType, kAlphaOne));
-    // Replace with aclnn.add
-    Value addResult = rewriter.create<AclnnAddOp>(loc, resultType, addX, addY, alphaValue);
-    rewriter.replaceOp(op, addResult);
-    return success();
-  }
-};
-
-/// Lower mfuse.sub to mfuse.aclnn.sub with alpha=1 (result = x - y).
-class SubToAclnnSubPattern : public OpRewritePattern<SubOp> {
- public:
-  using OpRewritePattern<SubOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(SubOp op, PatternRewriter &rewriter) const override {
-    Value x = op.getX();
-    Value y = op.getY();
-    auto xType = dyn_cast<RankedTensorType>(x.getType());
-    auto yType = dyn_cast<RankedTensorType>(y.getType());
-    if (!xType || !yType) {
-      return failure();
-    }
-
-    Location loc = op.getLoc();
-    Type resultType = op.getResult().getType();
-    auto scalarType = RankedTensorType::get({}, rewriter.getI64Type());
-    Value alphaOne = rewriter.create<arith::ConstantOp>(loc, scalarType, DenseElementsAttr::get(scalarType, kAlphaOne));
-    Value subResult = rewriter.create<AclnnSubOp>(loc, resultType, x, y, alphaOne);
-    rewriter.replaceOp(op, subResult);
-    return success();
-  }
-};
-
 }  // namespace
 
 void registerMfuseMetaOpsToAclnnPatterns(RewritePatternSet &patterns) {
-  patterns.add<AddToAclnnAddPattern>(patterns.getContext());
-  patterns.add<SubToAclnnSubPattern>(patterns.getContext());
   patterns.add<MatmulToAclnnPattern, MfuseMetaOpsMatMulWithBiasToAclnnPattern>(patterns.getContext());
 }
 
