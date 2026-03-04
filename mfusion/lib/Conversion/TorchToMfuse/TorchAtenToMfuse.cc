@@ -220,6 +220,7 @@ struct ConvertAtenSumDimIntList : public OpConversionPattern<TorchD::AtenSumDimI
     }
 
     llvm::SmallVector<int64_t, 4> dims;
+    int64_t inputRank = inType.getRank();
     if (!reduceAll) {
       llvm::SmallVector<Value, 4> dimValues;
       if (!TorchD::getListConstructElements(dimsValue, dimValues)) {
@@ -233,12 +234,11 @@ struct ConvertAtenSumDimIntList : public OpConversionPattern<TorchD::AtenSumDimI
           if (!matchPattern(dimValue, TorchD::m_TorchConstantInt(&dim))) {
             return rewriter.notifyMatchFailure(op, "dim list must be constant ints");
           }
-          dims.push_back(dim);
+          dims.push_back(dim < 0 ? dim + inputRank : dim);
         }
       }
     }
     if (reduceAll) {
-      int64_t inputRank = inType.getRank();
       dims.resize(inputRank);
       std::iota(dims.begin(), dims.end(), 0);
     }
@@ -373,20 +373,19 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
 // Add and sub are converted via PDLL to mfuse.aclnn.add / mfuse.aclnn.sub.
 static void populateAtenToMfuseBinaryOpPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
-  patterns.add<
-      ConvertBinaryOpPattern<TorchD::AtenDivTensorOp, mfuse::DivOp>,
-      ConvertBinaryOpPattern<TorchD::AtenEqTensorOp, mfuse::EqOp>,
-      ConvertBinaryOpPattern<TorchD::AtenGeTensorOp, mfuse::GeOp>,
-      ConvertBinaryOpPattern<TorchD::AtenGtTensorOp, mfuse::GtOp>,
-      ConvertBinaryOpPattern<TorchD::AtenLeTensorOp, mfuse::LeOp>,
-      ConvertBinaryOpPattern<TorchD::AtenLogicalAndOp, mfuse::LogicalAndOp>,
-      ConvertBinaryOpPattern<TorchD::AtenLogicalOrOp, mfuse::LogicalOrOp>,
-      ConvertBinaryOpPattern<TorchD::AtenLtTensorOp, mfuse::LtOp>,
-      ConvertBinaryOpPattern<TorchD::AtenMaximumOp, mfuse::MaximumOp>,
-      ConvertBinaryOpPattern<TorchD::AtenMinimumOp, mfuse::MinimumOp>,
-      ConvertBinaryOpPattern<TorchD::AtenMulTensorOp, mfuse::MulOp>,
-      ConvertBinaryOpPattern<TorchD::AtenNeTensorOp, mfuse::NeOp>,
-      ConvertBinaryOpPattern<TorchD::AtenPowTensorTensorOp, mfuse::PowOp>>(converter, ctx);
+  patterns.add<ConvertBinaryOpPattern<TorchD::AtenDivTensorOp, mfuse::DivOp>,
+               ConvertBinaryOpPattern<TorchD::AtenEqTensorOp, mfuse::EqOp>,
+               ConvertBinaryOpPattern<TorchD::AtenGeTensorOp, mfuse::GeOp>,
+               ConvertBinaryOpPattern<TorchD::AtenGtTensorOp, mfuse::GtOp>,
+               ConvertBinaryOpPattern<TorchD::AtenLeTensorOp, mfuse::LeOp>,
+               ConvertBinaryOpPattern<TorchD::AtenLogicalAndOp, mfuse::LogicalAndOp>,
+               ConvertBinaryOpPattern<TorchD::AtenLogicalOrOp, mfuse::LogicalOrOp>,
+               ConvertBinaryOpPattern<TorchD::AtenLtTensorOp, mfuse::LtOp>,
+               ConvertBinaryOpPattern<TorchD::AtenMaximumOp, mfuse::MaximumOp>,
+               ConvertBinaryOpPattern<TorchD::AtenMinimumOp, mfuse::MinimumOp>,
+               ConvertBinaryOpPattern<TorchD::AtenMulTensorOp, mfuse::MulOp>,
+               ConvertBinaryOpPattern<TorchD::AtenNeTensorOp, mfuse::NeOp>,
+               ConvertBinaryOpPattern<TorchD::AtenPowTensorTensorOp, mfuse::PowOp>>(converter, ctx);
 }
 
 // Populate all Aten ops to Mfuse conversion patterns
