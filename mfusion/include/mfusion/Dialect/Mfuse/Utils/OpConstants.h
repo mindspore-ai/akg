@@ -86,7 +86,7 @@ constexpr size_t kInputNum5 = 5;
 
 // Split processor string
 constexpr char kProcessorDVM[] = "DVM";
-constexpr char kProcessorAKG[] = "AKGAscend";
+constexpr char kProcessorAKG[] = "AKG";
 constexpr char kProcessorASCENDNPUIR[] = "AscendNPUIR";
 
 }  // namespace mfuse

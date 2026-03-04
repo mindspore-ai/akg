@@ -20,7 +20,6 @@
 #include <functional>
 #include <vector>
 
-#include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -29,8 +28,7 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
 #include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
-
-#define DEBUG_TYPE "dvm-cluster"
+#include "mfusion/Support/Logging.h"
 
 namespace mlir {
 
@@ -205,7 +203,7 @@ class DvmSupportChecker {
     // Check first operand is bool type
     Type condType = getElementType(op->getOperand(0).getType());
     if (!condType || (!condType.isInteger(1) && !condType.isSignlessInteger(1))) {
-      LLVM_DEBUG(llvm::dbgs() << "Select op condition not bool\n");
+      MLOG(DEBUG) << "Select op condition not bool";
       return false;
     }
     Type outputType = getElementType(op->getResult(0).getType());
@@ -231,7 +229,7 @@ class DvmSupportChecker {
     Type outputType = getElementType(op->getResult(0).getType());
     // Only support float16 and bfloat16
     if (!outputType.isF16() && !outputType.isBF16()) {
-      LLVM_DEBUG(llvm::dbgs() << "MatMul op not float16/bfloat16\n");
+      MLOG(DEBUG) << "MatMul op not float16/bfloat16";
       return false;
     }
 
@@ -248,12 +246,12 @@ class DvmSupportChecker {
     constexpr int64_t kSplitNumType3 = 3;
     auto splitItemAttr = op->getAttr("split_item");
     if (!splitItemAttr) {
-      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: missing split_item attr\n");
+      MLOG(DEBUG) << "GroupedMatmul: missing split_item attr";
       return false;
     }
     auto splitItem = dyn_cast<IntegerAttr>(splitItemAttr);
     if (!splitItem || splitItem.getInt() != kSplitNumType3) {
-      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: split_item must be " << kSplitNumType3 << "\n");
+      MLOG(DEBUG) << "GroupedMatmul: split_item must be " << kSplitNumType3;
       return false;
     }
     return true;
@@ -264,12 +262,12 @@ class DvmSupportChecker {
     constexpr int64_t kGroupTypeM = 0;
     auto groupTypeAttr = op->getAttr("group_type");
     if (!groupTypeAttr) {
-      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: missing group_type attr\n");
+      MLOG(DEBUG) << "GroupedMatmul: missing group_type attr";
       return false;
     }
     auto groupType = dyn_cast<IntegerAttr>(groupTypeAttr);
     if (!groupType || (groupType.getInt() != kGroupTypeM && groupType.getInt() != kGroupTypeK)) {
-      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: group_type must be " << kGroupTypeM << " or " << kGroupTypeK << "\n");
+      MLOG(DEBUG) << "GroupedMatmul: group_type must be " << kGroupTypeM << " or " << kGroupTypeK;
       return false;
     }
     return true;
@@ -278,7 +276,7 @@ class DvmSupportChecker {
   static bool checkOutputType(Operation *op) {
     Type outputType = getElementType(op->getResult(0).getType());
     if (!outputType.isF16() && !outputType.isBF16()) {
-      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: output type must be float16 or bfloat16\n");
+      MLOG(DEBUG) << "GroupedMatmul: output type must be float16 or bfloat16";
       return false;
     }
     return true;
@@ -293,16 +291,16 @@ class DvmSupportChecker {
     if (isa<TensorType>(operandType)) {
       auto tensorType = dyn_cast<TensorType>(operandType);
       if (!tensorType || !tensorType.hasStaticShape()) {
-        LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: optional input at index " << index << " must have static shape\n");
+        MLOG(DEBUG) << "GroupedMatmul: optional input at index " << index << " must have static shape";
         return false;
       }
       auto shape = tensorType.getShape();
       if (shape.size() != 1 || shape[0] != 0) {
-        LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: optional input at index " << index << " must be empty tensor {0}\n");
+        MLOG(DEBUG) << "GroupedMatmul: optional input at index " << index << " must be empty tensor {0}";
         return false;
       }
     } else if (!isa<NoneType>(operandType)) {
-      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: optional input at index " << index << " must be Tensor or None\n");
+      MLOG(DEBUG) << "GroupedMatmul: optional input at index " << index << " must be Tensor or None";
       return false;
     }
     return true;
@@ -329,7 +327,7 @@ class DvmSupportChecker {
       return false;
     }
     if (aShape.back() > kMaxDimSize || bShape.back() > kMaxDimSize) {
-      LLVM_DEBUG(llvm::dbgs() << "GroupedMatmul: dimension size exceeds max " << kMaxDimSize << "\n");
+      MLOG(DEBUG) << "GroupedMatmul: dimension size exceeds max " << kMaxDimSize;
       return false;
     }
     return true;
@@ -546,26 +544,26 @@ bool DVMCluster::canClusterableOp(const llvm::DenseSet<llvm::StringRef> &opList,
     return false;
   }
   // Check if operation is in clusterable list
-  std::string opName = op->getName().getStringRef().str();
+  StringRef opName = op->getName().getStringRef();
   if (opList.find(opName) == opList.end()) {
-    LLVM_DEBUG(llvm::dbgs() << "Op not in cluster list: " << opName << "\n");
+    MLOG(DEBUG) << "Op not in cluster list: " << opName;
     return false;
   }
 
   // Check if output type is complex type
   if (isComplexDataType(op)) {
-    LLVM_DEBUG(llvm::dbgs() << "Op has complex output type: " << opName << "\n");
+    MLOG(DEBUG) << "Op has complex output type: " << opName;
     return false;
   }
 
   // Check DVM-specific constraints
   if (!DvmSupportChecker::instance().check(op)) {
-    LLVM_DEBUG(llvm::dbgs() << "Op is not DVM supported: " << opName << "\n");
+    MLOG(DEBUG) << "Op is not DVM supported: " << opName;
     return false;
   }
 
   if (hasZeroShape(op)) {
-    LLVM_DEBUG(llvm::dbgs() << "Op has zero shape: " << opName << "\n");
+    MLOG(DEBUG) << "Op has zero shape: " << opName;
     return false;
   }
 
@@ -589,7 +587,7 @@ struct DVMClusterPass : public impl::DVMClusterBase<DVMClusterPass> {
     func::FuncOp funcOp = getOperation();
     DVMCluster cluster;
     if (cluster.run(funcOp)) {
-      LLVM_DEBUG(llvm::dbgs() << "DVMCluster modified function: " << funcOp.getName() << "\n");
+      MLOG(DEBUG) << "DVMCluster modified function: " << funcOp.getName();
     }
   }
 };
