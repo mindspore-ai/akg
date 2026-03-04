@@ -306,8 +306,12 @@ void DVMSplitModel::initFusePatterns() {
 }
 
 void AKGSplitModel::initFusePatterns() {
-  // TODO: Add AKG-specific fuse patterns
-  LLVM_DEBUG(llvm::dbgs() << "Akg not supported now\n");
+  addPattern(std::make_shared<dvm::FuseVirtualNode>(), true);
+  addPattern(std::make_shared<FuseReshape>(), true);
+  addPattern(FuseElemwiseBroadcastFwd::createDepthMatcher(), true);
+  addPattern(FuseElemwiseBroadcastFwd::createWidthMatcher(), true);
+  addPattern(FuseElemwiseBroadcastBwd::createDepthMatcher(ascend::kBroadcastFusionDepth), true);
+  addPattern(FuseElemwiseBroadcastBwd::createWidthMatcher(ascend::kBroadcastFusionDepth), true);
 }
 
 void AscendNPUIRSplitModel::initFusePatterns() {

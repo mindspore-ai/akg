@@ -140,4 +140,39 @@ func.func @test_cluster_with_external_output(%arg0: tensor<4x4xf32>, %arg1: tens
   // Return both results
   return %1, %2 : tensor<4x4xf32>, tensor<4x4xf32>
 }
+
+// Test scenario: Insert point breaks dominance for non-cluster users
+// When the insert point is moved forward due to external inputs,
+// it may end up after a non-cluster user of an external output.
+// In this case, the cluster cannot be created because the fused op
+// would not dominate the non-cluster user.
+// CHECK-LABEL: func @test_insert_point_breaks_dominance
+// CHECK-SAME: %arg0: tensor<4x4xf32>
+// CHECK-SAME: %arg1: tensor<4x4xf32>
+// CHECK-SAME: %arg2: tensor<4x4xf32>
+// CHECK: %[[CST:.*]] = arith.constant dense<1>
+// CHECK: %[[ADD1:.*]] = mfuse.add %arg0, %arg1
+// CHECK: %[[TANH:.*]] = mfuse.aclnn.tanh %[[ADD1]]
+// CHECK: %[[SUB:.*]] = mfuse.aclnn.sub {{%arg2}}, {{%arg2}}, %[[CST]]
+// CHECK: %[[MUL:.*]] = mfuse.mul %[[SUB]], %[[ADD1]]
+// CHECK: %[[ADD2:.*]] = mfuse.add %[[MUL]], %arg0
+// CHECK: return %[[TANH]], %[[ADD2]]
+func.func @test_insert_point_breaks_dominance(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>, %arg2: tensor<4x4xf32>) -> (tensor<4x4xf32>, tensor<4x4xf32>) {
+  %cst = arith.constant dense<1> : tensor<i64>
+  // op1: add (clusterable), insert point starts here
+  %0 = mfuse.add %arg0, %arg1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  // non-cluster user of %0, appears before the external input provider
+  %1 = mfuse.aclnn.tanh %0 : (tensor<4x4xf32>) -> tensor<4x4xf32>
+  // non-cluster op that provides external input to later cluster op
+  %2 = mfuse.aclnn.sub %arg2, %arg2, %cst : (tensor<4x4xf32>, tensor<4x4xf32>, tensor<i64>) -> tensor<4x4xf32>
+  // op2: mul (clusterable), uses %2 as external input
+  // This moves insert point to after aclnn.sub
+  %3 = mfuse.mul %2, %0 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  // op3: add (clusterable)
+  %4 = mfuse.add %3, %arg0 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  // %0 is external output, %1 (aclnn.tanh) is its non-cluster user
+  // insert point is after aclnn.sub, but aclnn.tanh is before aclnn.sub
+  // So insert point is NOT before the non-cluster user, cluster cannot be created
+  return %1, %4 : tensor<4x4xf32>, tensor<4x4xf32>
+}
 }
