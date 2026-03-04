@@ -38,10 +38,10 @@ class FuseOpSplitter {
   virtual ~FuseOpSplitter() = default;
 
   /// Try to split a specific operation
-  bool trySplit(mlir::mfuse::FusedOp op);
+  bool trySplit(mlir::mfuse::FusedOp op, const std::string &kernelGenerator = "DVM");
 
   /// Get the split scheme
-  virtual mlir::mfuse::split::SplitSchemerPtr getSplitSchema(const std::string &processor);
+  virtual mlir::mfuse::split::SplitSchemerPtr getSplitSchema(const std::string &kernelGenerator);
 };
 
 #endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_SPLIT_FUSEOPSPLITTER_H
