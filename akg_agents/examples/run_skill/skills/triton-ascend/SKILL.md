@@ -7,6 +7,7 @@ license: MIT
 metadata:
   backend: ascend
   dsl: triton_ascend
+  hardware: "Atlas A2, Atlas A3"
   framework: "torch, mindspore"
 ---
 

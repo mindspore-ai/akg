@@ -6,6 +6,7 @@ version: "1.0.0"
 metadata:
   backend: ascend
   dsl: triton-ascend
+  hardware: "Atlas A2, Atlas A3"
 ---
 
 # Zeros 创建张量优化案例
