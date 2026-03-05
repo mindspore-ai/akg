@@ -6,6 +6,7 @@ version: "1.0.0"
 metadata:
   backend: ascend
   dsl: triton-ascend
+  hardware: "Atlas A2, Atlas A3"
 ---
 
 # 大规模 Sum 归约优化
