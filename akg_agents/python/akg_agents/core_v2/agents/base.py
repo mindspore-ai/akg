@@ -179,6 +179,7 @@ class AgentBase(ABC):
             
             content = result.get("content", "")
             reasoning_content = result.get("reasoning_content", "")
+            finish_reason = result.get("finish_reason", "")
             
             # 分离 </think> 内容
             if "</think>" in content:
@@ -186,8 +187,32 @@ class AgentBase(ABC):
                 if extracted:
                     reasoning_content = extracted
             
-            # 如果 content 为空，使用 reasoning_content
-            if not content:
+            # 诊断：检测 max_tokens 截断和 content 为空的异常情况
+            if finish_reason == "length":
+                if not content and reasoning_content:
+                    logger.warning(
+                        f"[AgentBase][{agent_name}] LLM content 为空，finish_reason='length'，"
+                        f"推理 token 耗尽了 max_tokens 配额，未能生成正式回答。"
+                        f"reasoning 长度={len(reasoning_content)}。"
+                        f"建议：增大 max_tokens 或在 extra_body 中限制推理预算"
+                    )
+                else:
+                    logger.warning(
+                        f"[AgentBase][{agent_name}] LLM 输出被截断，finish_reason='length'，"
+                        f"content 可能不完整（content 长度={len(content)}，"
+                        f"reasoning 长度={len(reasoning_content)}）。"
+                        f"建议：增大 max_tokens"
+                    )
+            elif not content and reasoning_content:
+                # finish_reason 不是 length，但 content 为空（如 GLM 默认强制 thinking）
+                logger.warning(
+                    f"[AgentBase][{agent_name}] LLM content 为空但 reasoning_content 非空"
+                    f"（finish_reason='{finish_reason}'，reasoning 长度={len(reasoning_content)}），"
+                    f"将 reasoning_content 作为 content 使用。"
+                    f"可能原因：模型将全部输出放入了 reasoning_content 字段"
+                )
+            
+            if not content and reasoning_content:
                 content = reasoning_content
             
             return content, formatted_prompt, reasoning_content
@@ -251,11 +276,38 @@ class AgentBase(ABC):
         
         content = result.get("content", "")
         reasoning_content = result.get("reasoning_content", "")
+        finish_reason = result.get("finish_reason", "")
         
         if "</think>" in content:
             content, extracted = self.split_think(content)
             if extracted:
                 reasoning_content = extracted
+        
+        if finish_reason == "length":
+            if not content and reasoning_content:
+                logger.warning(
+                    f"[AgentBase][{agent_name}] LLM content 为空，finish_reason='length'，"
+                    f"推理 token 耗尽了 max_tokens 配额，未能生成正式回答。"
+                    f"reasoning 长度={len(reasoning_content)}。"
+                    f"建议：增大 max_tokens 或在 extra_body 中限制推理预算"
+                )
+            else:
+                logger.warning(
+                    f"[AgentBase][{agent_name}] LLM 输出被截断，finish_reason='length'，"
+                    f"content 可能不完整（content 长度={len(content)}，"
+                    f"reasoning 长度={len(reasoning_content)}）。"
+                    f"建议：增大 max_tokens"
+                )
+        elif not content and reasoning_content:
+            logger.warning(
+                f"[AgentBase][{agent_name}] LLM content 为空但 reasoning_content 非空"
+                f"（finish_reason='{finish_reason}'，reasoning 长度={len(reasoning_content)}），"
+                f"将 reasoning_content 作为 content 使用。"
+                f"可能原因：模型将全部输出放入了 reasoning_content 字段"
+            )
+        
+        if not content and reasoning_content:
+            content = reasoning_content
         
         return {
             "content": content,
