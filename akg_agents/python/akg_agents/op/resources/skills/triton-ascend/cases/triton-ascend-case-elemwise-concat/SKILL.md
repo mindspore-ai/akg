@@ -6,6 +6,7 @@ version: "1.0.0"
 metadata:
   backend: ascend
   dsl: triton-ascend
+  hardware: "Atlas A2, Atlas A3"
 ---
 
 # Slice + Concat 融合算子优化案例

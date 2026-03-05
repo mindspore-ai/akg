@@ -6,6 +6,7 @@ version: "1.0.0"
 metadata:
   backend: ascend
   dsl: triton-ascend
+  hardware: "Atlas A2, Atlas A3"
 ---
 
 # Index Put 索引赋值优化案例

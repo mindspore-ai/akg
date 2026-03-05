@@ -6,6 +6,7 @@ version: "1.0.0"
 metadata:
   backend: ascend
   dsl: triton-ascend
+  hardware: "Atlas A2, Atlas A3"
 ---
 
 # Int8 到 FP16 类型转换优化案例

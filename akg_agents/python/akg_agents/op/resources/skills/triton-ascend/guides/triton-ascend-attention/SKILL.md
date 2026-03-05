@@ -6,6 +6,7 @@ version: "1.0.0"
 metadata:
   backend: ascend
   dsl: triton-ascend
+  hardware: "Atlas A2, Atlas A3"
   operator_patterns: "attention"
   algorithms: "self-attention, cross-attention, flash-attention, scaled-dot-product-attention"
 ---

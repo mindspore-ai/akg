@@ -26,7 +26,6 @@ my-skill/
 ---
 name: my-skill-name
 description: "清晰简洁地描述此 Skill 提供的知识"
-level: L3
 category: guide
 version: "1.0.0"
 license: MIT
@@ -70,9 +69,8 @@ Markdown 格式的详细知识内容...
 
 | 字段 | 类型 | 说明 | 示例 |
 |------|------|------|------|
-| `level` | string | Skill 层级（L1-L5） | `"L3"` |
-| `version` | string | SemVer 版本号 | `"1.0.0"` |
 | `category` | string | 语义类别 | `"guide"`、`"workflow"`、`"method"` |
+| `version` | string | SemVer 版本号 | `"1.0.0"` |
 | `license` | string | 许可证标识 | `"MIT"`、`"Apache-2.0"` |
 
 ### 可选字段
@@ -89,17 +87,22 @@ Markdown 格式的详细知识内容...
 - 描述性但简洁
 - 示例：`ascend-memory-model`、`cuda-basics`、`triton-optimization`
 
-## 5. 层级指南
+## 5. 分类（category）指南
 
-> 注意：Level 层级体系当前仅针对算子生成场景设计，其他场景的 Level 定义待设计。
+Skill 通过 `category` 字段进行语义分类，用于筛选与选择。标准分类包括：
 
-| 层级 | 适用场景 | 示例 |
-|------|----------|------|
-| L1 | 高层工作流 / 编排知识 | `kernel-generation-workflow` |
-| L2 | 组件级执行模式 | `kernel-designer-patterns` |
-| L3 | 方法 / 策略知识 | `cuda-basics`、`triton-optimization` |
-| L4 | 实现细节 | `tiling-strategies`、`memory-coalescing` |
-| L5 | 原子级示例 / 代码片段 | `relu-triton-example` |
+| 分类 | 语义 | 说明 | 示例 |
+|------|------|------|------|
+| `workflow` | 流程/编排 | 高层工作流和编排知识 | `kernel-generation-workflow` |
+| `overview` | 概览 | 系统或组件概览 | `system-overview` |
+| `agent` | 组件/执行 | 组件级执行知识 | `kernel-designer-patterns` |
+| `guide` | 设计与编程指南 | 设计方法论、编程指南 | `cuda-basics`、`triton-optimization` |
+| `fundamental` | 基础 | 核心概念与原则 | `npu-architecture` |
+| `method` | 方法/策略 | 优化方法与策略模式 | `tiling-strategies` |
+| `implementation` | 实现/细节 | 实现细节与技巧 | `memory-coalescing` |
+| `reference` | 参考 | 参考文档 | `triton-api-reference` |
+| `example` | 示例 | 代码示例 | `relu-triton-example` |
+| `case` | 案例 | 具体案例模式 | `softmax-optimization-case` |
 
 ## 6. 内容指南
 
