@@ -119,10 +119,17 @@ class LLMProvider:
         
         # 转换为统一格式
         choice = response.choices[0]
+        # 兼容 reasoning_content / reasoning 两种字段名（与流式路径保持一致）
+        reasoning_content = (
+            getattr(choice.message, "reasoning_content", None)
+            or getattr(choice.message, "reasoning", None)
+            or ""
+        )
         result = {
             "content": choice.message.content or "",
             "tool_calls": [],
-            "reasoning_content": getattr(choice.message, "reasoning_content", "") or "",
+            "reasoning_content": reasoning_content,
+            "finish_reason": choice.finish_reason or "",
             "usage": {}
         }
         
@@ -172,6 +179,7 @@ class LLMProvider:
         
         content = ""
         reasoning = ""
+        finish_reason = ""
         # tool_call deltas 按 index 累积，流结束后合并为完整 tool_calls
         pending_tool_calls: Dict[int, Dict[str, Any]] = {}
         
@@ -179,6 +187,9 @@ class LLMProvider:
         
         async for chunk in stream_response:
             delta = chunk.choices[0].delta
+            
+            if chunk.choices[0].finish_reason:
+                finish_reason = chunk.choices[0].finish_reason
             
             if delta.content:
                 content += delta.content
@@ -218,6 +229,7 @@ class LLMProvider:
             "type": "final",
             "content": content,
             "reasoning_content": reasoning,
+            "finish_reason": finish_reason,
             "tool_calls": tool_calls,
             "usage": {}
         }
