@@ -1,10 +1,6 @@
 [中文版](./README_CN.md)
 
 <div align="center">
-  <img src="./akg_agents_logo.jpg" alt="AIKG Logo" width="400">
-</div>
-
-<div align="center">
 
 # AKG Agents
 
@@ -97,7 +93,9 @@ A minimal configuration only requires one model (auto-applies to all levels):
 }
 ```
 
-> For per-level model configuration (`complex` / `standard` / `fast`), thinking/reasoning parameters for different providers, Embedding/RAG setup, or environment variable usage, see [Configuration Documentation](./docs/v2/Configuration.md), the basic example [`settings.example.json`](./examples/settings.example.json), and the multi-provider example [`settings.example.more.json`](./examples/settings.example.more.json).
+**Advanced Configuration**:
+> - For integrating locally deployed models, see [Local Model Deployment Guide](./docs/v2/LocalModelDeployment.md)
+> - For per-level model configuration (`complex` / `standard` / `fast`), thinking/reasoning parameters for different providers, Embedding/RAG setup, or environment variable usage, see [Configuration Documentation](./docs/v2/Configuration.md), the basic example [`settings.example.json`](./examples/settings.example.json), and the multi-provider example [`settings.example.more.json`](./examples/settings.example.more.json)
 
 ### Backend Dependencies
 
@@ -121,6 +119,10 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 \
 # CUDA A100
 # akg_cli op --framework torch --backend cuda --arch a100 \
 #   --dsl triton_cuda --devices 0,1,2,3,4,5,6,7
+
+# CPU x86_64
+# akg_cli op --framework torch --backend cpu --arch x86_64 \
+#   --dsl cpp --devices 0
 ```
 
 Once launched, you can interact in the following ways:
