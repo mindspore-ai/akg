@@ -703,12 +703,111 @@ class InteractiveOpRunner:
         if console_obj:
             if hasattr(console_obj, '_progress_callback'):
                 console_obj._progress_callback = None
+    # --yes 模式下 agent 请求用户输入时的自动回复
+    _AUTO_REPLY = (
+        "[自动回复]：同意你的方案，请直接继续执行，不需要再确认。注意：当前为自动模式，不与用户真实交互，尽量避免 ask_user"
+        "初始需求完成后直接结束任务，不需要进一步优化。"
+    )
+    _HEADLESS_MAX_ROUNDS = 50
+
+    async def _run_headless(self, *, resolved: dict, initial_input: str) -> None:
+        """Headless 执行路径：--yes 模式，无 TUI / 终端。
+
+        参考 tests/op/bench/test_bench_kernel_agent.py 的自动循环逻辑：
+        - 第 1 轮发送 initial_input（task_desc 或 intent）
+        - KernelAgent 返回 waiting_for_user 且 task_completed=False → 自动回复
+        - KernelAgent 返回 waiting_for_user 且 task_completed=True → 任务完成
+        - KernelAgent 返回 completed / error → 退出
+        - 超过 max_rounds → 退出
+        """
+        if not initial_input:
+            self.console.print(
+                f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] "
+                f"--yes 模式需要通过 --task-file 或 --intent 提供输入"
+            )
+            return
+
+        self.console.print_user_input(initial_input)
+        next_input = initial_input
+        round_num = 0
+
+        while round_num < self._HEADLESS_MAX_ROUNDS:
+            round_num += 1
+            log.info(f"[OpRunner headless] Round {round_num}/{self._HEADLESS_MAX_ROUNDS}")
+
+            state_result = await self._execute_main_agent(
+                resolved=resolved, user_input=next_input,
+            )
+            self._render_agent_messages(state_result)
+
+            if not isinstance(state_result, dict):
+                break
+
+            current_step = state_result.get("current_step", "")
+
+            # ---- completed（success）→ 退出 ----
+            if current_step == "completed" or not state_result.get("should_continue", True):
+                log.info(f"[OpRunner headless] 任务完成, 共 {round_num} 轮")
+                break
+
+            # ---- waiting_for_user_input → 检查 task_completed ----
+            if current_step == "waiting_for_user_input":
+                if state_result.get("task_completed", False):
+                    log.info(f"[OpRunner headless] task_completed=True, 共 {round_num} 轮")
+                    break
+                # 自动回复并继续下一轮
+                log.info("[OpRunner headless] 自动回复 (waiting_for_user)")
+                next_input = self._AUTO_REPLY
+                continue
+
+            # ---- error → 退出 ----
+            if current_step == "error":
+                log.warning(f"[OpRunner headless] 任务出错, 共 {round_num} 轮")
+                break
+
+            # ---- auto_input（plan mode 跳转）----
+            auto_input = state_result.get("auto_input")
+            if auto_input:
+                next_input = str(auto_input).strip()
+                if not next_input:
+                    break
+                continue
+
+            # ---- 未知状态 → 自动回复 ----
+            log.info(f"[OpRunner headless] 未知状态 '{current_step}', 自动回复")
+            next_input = self._AUTO_REPLY
+
+        else:
+            log.warning(
+                f"[OpRunner headless] 超出最大轮次 {self._HEADLESS_MAX_ROUNDS}"
+            )
+            self.console.print(
+                f"[{DisplayStyle.YELLOW}]警告: 超出最大轮次 "
+                f"({self._HEADLESS_MAX_ROUNDS}), 自动退出[/{DisplayStyle.YELLOW}]"
+            )
+
+    def _build_initial_input(self) -> str:
+        """构建初始输入。
+
+        - 同时提供 --intent 和 --task-file → 合并（intent 在前，task 代码在后）
+        - 仅 --intent → 使用 intent
+        - 仅 --task-file → 使用 task_file_content
+        """
+        intent = (self.intent or "").strip()
+        task = (self.task_file_content or "").strip()
+        if intent and task:
+            return f"{intent}\n\n任务代码:\n{task}"
+        if intent:
+            return intent
+        if task:
+            return task
+        return ""
+
     async def _run_workflow(self) -> None:
         """CLI 模式下的工作流"""
         resolved = self._build_resolved()
 
         self._validate_config_or_exit(resolved)
-        # 确保 worker 已注册到本地 WorkerManager（用于运行时检查）
         try:
             await self._ensure_worker_or_exit(resolved)
         except Exception as e:
@@ -716,14 +815,17 @@ class InteractiveOpRunner:
                 "[OpRunner] _ensure_worker_or_exit failed; continue", exc_info=e
             )
 
-        history_file = os.path.expanduser("~/.akg_cli_history")
-        initial_input = (self.intent or "").strip()
+        initial_input = self._build_initial_input()
 
-        await self._run_tui_app(
-            resolved=resolved,
-            history_file=history_file,
-            initial_input=initial_input,
-        )
+        if self.auto_yes:
+            await self._run_headless(resolved=resolved, initial_input=initial_input)
+        else:
+            history_file = os.path.expanduser("~/.akg_cli_history")
+            await self._run_tui_app(
+                resolved=resolved,
+                history_file=history_file,
+                initial_input=initial_input,
+            )
 
     def _render_agent_messages(self, state: dict) -> None:
         """渲染代理消息（opencode 风格：简洁缩进文本，无 Panel 边框）"""
@@ -773,14 +875,8 @@ class InteractiveOpRunner:
         async def _workflow() -> None:
             await self._run_workflow()
 
-        with patch_stdout(raw=True):
-            try:
-                if hasattr(self.console, "_console"):
-                    self.console._console.file = sys.stdout
-                if hasattr(self.cli, "console") and hasattr(self.cli.console, "_console"):
-                    self.cli.console._console.file = sys.stdout
-            except Exception:
-                pass
+        if self.auto_yes:
+            # --yes 模式：headless 执行，不使用 patch_stdout（无 TTY 时会崩溃）
             try:
                 asyncio.run(_workflow())
             except KeyboardInterrupt:
@@ -793,3 +889,24 @@ class InteractiveOpRunner:
                     f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] {e}"
                 )
                 raise typer.Exit(code=1)
+        else:
+            with patch_stdout(raw=True):
+                try:
+                    if hasattr(self.console, "_console"):
+                        self.console._console.file = sys.stdout
+                    if hasattr(self.cli, "console") and hasattr(self.cli.console, "_console"):
+                        self.cli.console._console.file = sys.stdout
+                except Exception:
+                    pass
+                try:
+                    asyncio.run(_workflow())
+                except KeyboardInterrupt:
+                    self._print_session_id_on_exit()
+                    self.console.print(
+                        f"\n[{DisplayStyle.YELLOW}]已退出[/{DisplayStyle.YELLOW}]"
+                    )
+                except Exception as e:
+                    self.console.print(
+                        f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] {e}"
+                    )
+                    raise typer.Exit(code=1)

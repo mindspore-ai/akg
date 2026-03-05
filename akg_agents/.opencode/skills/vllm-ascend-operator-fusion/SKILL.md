@@ -1,5 +1,5 @@
 ---
-name: vllm-ascend-model-analysis
+name: vllm-ascend-operator-fusion
 description: 通用模型算子融合分析 - 分析任意vllm-ascend支持模型的算子路径及融合优化策略，支持生成新的融合算子
 triggers:
   - 'vllm-ascend算子融合分析'

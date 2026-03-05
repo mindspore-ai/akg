@@ -278,10 +278,12 @@ class ReactTurnExecutorV2:
             elif status == "waiting_for_user":
                 # ask_user：Agent 需要用户回答问题
                 display = message or output
+                task_completed = result.get("task_completed", False)
 
                 return {
                     "current_step": "waiting_for_user_input",
                     "should_continue": True,
+                    "task_completed": task_completed,
                     "display_message": display,
                     "hint_message": "",
                     "workflow_name": "kernel_agent",
