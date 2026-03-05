@@ -315,7 +315,12 @@ def _register_all():
 
     ToolRegistry.register(
         name="read_function",
-        description="精确提取函数/类定义（AST 解析）。自动保存到工作区。",
+        description=(
+            "精确提取函数/类定义（AST 解析）。自动保存到工作区。\n"
+            "适用于: 查看目标函数签名、阅读外部依赖函数的实现。\n"
+            "注意: trace_dependencies 返回的同文件内依赖函数不需要逐个 read_function，"
+            "直接将 functions 列表传给 assemble_task 即可。"
+        ),
         parameters={"type": "object", "properties": {
             "file_path": {"type": "string", "description": "Python 文件路径"},
             "function_name": {"type": "string", "description": "要提取的函数名或类名"},
