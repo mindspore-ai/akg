@@ -1,10 +1,6 @@
 [English Version](./README.md)
 
 <div align="center">
-  <img src="./akg_agents_logo.jpg" alt="AIKG Logo" width="400">
-</div>
-
-<div align="center">
 
 # AKG Agents
 
@@ -97,7 +93,9 @@ cp akg_agents/examples/settings.example.json ~/.akg/settings.json
 }
 ```
 
-> 如需按等级（`complex` / `standard` / `fast`）分别配置不同模型、配置不同 provider 的 thinking/reasoning 参数、配置 Embedding/RAG、或使用环境变量，请参考 [配置系统文档](./docs/v2/CN/Configuration.md)、基础示例 [`settings.example.json`](./examples/settings.example.json) 和多 provider 示例 [`settings.example.more.json`](./examples/settings.example.more.json)。
+**进阶配置**：
+> - 如需接入本地部署的大模型，请参考 [本地模型部署指南](./docs/v2/CN/LocalModelDeployment.md)
+> - 如需按等级（`complex` / `standard` / `fast`）分别配置不同模型、配置不同 provider 的 thinking/reasoning 参数、配置 Embedding/RAG、或使用环境变量，请参考 [配置系统文档](./docs/v2/CN/Configuration.md)、基础示例 [`settings.example.json`](./examples/settings.example.json) 和多 provider 示例 [`settings.example.more.json`](./examples/settings.example.more.json)
 
 ### 后端依赖
 
@@ -121,6 +119,10 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 \
 # CUDA A100
 # akg_cli op --framework torch --backend cuda --arch a100 \
 #   --dsl triton_cuda --devices 0,1,2,3,4,5,6,7
+
+# CPU x86_64
+# akg_cli op --framework torch --backend cpu --arch x86_64 \
+#   --dsl cpp --devices 0
 ```
 
 启动后，可以通过以下方式交互：
