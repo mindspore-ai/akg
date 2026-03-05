@@ -16,7 +16,7 @@
 
 import re
 from dataclasses import asdict
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, List, Tuple
 
 from .models import CompressedData
 
@@ -36,6 +36,19 @@ def compressed_to_prompt_vars(compressed: CompressedData) -> Dict[str, Any]:
         "best_code": compressed.best_code,
         "evolution_chains": [asdict(s) for s in compressed.evolution_chains],
         "performance_summary": compressed.performance_summary,
+    }
+
+
+def feedback_to_prompt_vars(
+    timeline: str, metadata: Dict[str, str],
+) -> Dict[str, Any]:
+    """将 action 时间线文本和元数据转换为 analyze_feedback.j2 的模板变量"""
+    return {
+        "op_name": metadata.get("op_name", ""),
+        "dsl": metadata.get("dsl", ""),
+        "backend": metadata.get("backend", ""),
+        "arch": metadata.get("arch", ""),
+        "timeline": timeline,
     }
 
 
