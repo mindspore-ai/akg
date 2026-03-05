@@ -149,6 +149,7 @@ class LLMClient:
         
         content = ""
         reasoning_content = ""
+        finish_reason = ""
         tool_calls = []
         self._in_think_tag = False
         
@@ -169,12 +170,14 @@ class LLMClient:
             elif chunk_type == "final":
                 self._update_token_stats(chunk.get("usage", {}))
                 tool_calls = chunk.get("tool_calls", [])
+                finish_reason = chunk.get("finish_reason", "")
         
         self._safe_send_display("")
         
         return {
             "content": content,
             "reasoning_content": reasoning_content,
+            "finish_reason": finish_reason,
             "tool_calls": tool_calls,
             "usage": {}
         }
