@@ -235,6 +235,83 @@ class AdaptiveSearchController:
                 except Exception as e:
                     logger.warning(f"Failed to send profile result to history: {e}")
     
+    def _send_progress_update(self) -> None:
+        """
+        发送进度更新到 CLI
+        
+        发送当前任务进度信息，包括已提交、已完成、成功/失败数量。
+        """
+        session_id = str(self.config.get("session_id") or "").strip()
+        if not session_id:
+            return
+        
+        try:
+            send_message(
+                session_id,
+                PanelDataMessage(
+                    action="adaptive_search_progress",
+                    data={
+                        "op_name": self.op_name,
+                        "total_submitted": self._total_submitted,
+                        "total_completed": self._total_completed,
+                        "total_success": self._total_success,
+                        "total_failed": self._total_failed,
+                        "max_total_tasks": self.search_config.max_total_tasks,
+                        "running_count": self.task_pool.get_running_count(),
+                        "waiting_count": self.task_pool.get_waiting_count(),
+                    },
+                ),
+            )
+            logger.debug(
+                f"Sent progress update: submitted={self._total_submitted}, "
+                f"completed={self._total_completed}, success={self._total_success}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send progress update: {e}")
+    
+    def _send_search_start(self) -> None:
+        """发送自适应搜索开始消息，进入静默模式"""
+        session_id = str(self.config.get("session_id") or "").strip()
+        if not session_id:
+            return
+        
+        try:
+            send_message(
+                session_id,
+                PanelDataMessage(
+                    action="adaptive_search_start",
+                    data={
+                        "op_name": self.op_name,
+                        "max_total_tasks": self.search_config.max_total_tasks,
+                    },
+                ),
+            )
+            logger.debug(f"Sent adaptive_search_start message for {self.op_name}")
+        except Exception as e:
+            logger.warning(f"Failed to send search start: {e}")
+    
+    def _send_search_end(self) -> None:
+        """发送自适应搜索结束消息，退出静默模式"""
+        session_id = str(self.config.get("session_id") or "").strip()
+        if not session_id:
+            return
+        
+        try:
+            send_message(
+                session_id,
+                PanelDataMessage(
+                    action="adaptive_search_end",
+                    data={
+                        "op_name": self.op_name,
+                        "total_success": self._total_success,
+                        "total_failed": self._total_failed,
+                    },
+                ),
+            )
+            logger.debug(f"Sent adaptive_search_end message for {self.op_name}")
+        except Exception as e:
+            logger.warning(f"Failed to send search end: {e}")
+    
     async def _submit_initial_task(self) -> str:
         """提交一个初始任务"""
         task = await self.generator.generate_initial_task()
@@ -493,6 +570,9 @@ class AdaptiveSearchController:
         logger.info(f"Config: max_concurrent={self.search_config.max_concurrent}, "
                    f"max_total_tasks={self.search_config.max_total_tasks}, ")
         
+        # 发送搜索开始消息（进入静默模式）
+        self._send_search_start()
+        
         # 使用上下文管理器，自动清理所有子任务（正常退出或异常都会清理）
         async with self.task_pool:
             try:
@@ -502,7 +582,6 @@ class AdaptiveSearchController:
                     if self._total_submitted >= self.search_config.max_total_tasks:
                         break
                     await self._submit_initial_task()
-                
                 # 2. 主搜索循环
                 while True:
                     # 等待任务完成
@@ -512,6 +591,8 @@ class AdaptiveSearchController:
                     # 处理完成的结果（更新 _total_success 等计数器）
                     await self._process_results()
                     
+                    # 发送进度更新到 CLI
+                    self._send_progress_update()
                     # 检查停止条件：达到最大任务数
                     if self._check_stop_conditions():
                         logger.info(f"Stop condition met: {self._stop_reason}")
@@ -539,6 +620,8 @@ class AdaptiveSearchController:
                     while self.task_pool.get_running_count() > 0:
                         await self.task_pool.wait_for_any(timeout=1.0)
                         await self._process_results()
+                        # 发送进度更新到 CLI
+                        self._send_progress_update()
             
             except asyncio.CancelledError:
                 # 用户取消操作，记录日志并向上传播
@@ -554,6 +637,9 @@ class AdaptiveSearchController:
                 self._stop_reason = f"Exception: {e}"
         
         # 退出 async with 时，上下文管理器已自动清理所有子任务
+        
+        # 发送搜索结束消息（退出静默模式）
+        self._send_search_end()
         
         # 4. 收集结果
         elapsed_time = (datetime.now() - self._start_time).total_seconds()

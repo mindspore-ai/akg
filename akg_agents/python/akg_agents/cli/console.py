@@ -74,12 +74,33 @@ class AKGConsole:
         self._in_content_block = False
         self._content_buffer = ""
         self._current_tool: Optional[str] = None
-
+        
+        # 进度更新回调（用于更新 TUI loading_text）
+        self._progress_callback: Optional[Callable[[dict], None]] = None
+        
+        # 静默模式（用于 adaptive search / evolve 等场景，抑制 designer/coder 的重复输出）
+        self._silent_mode: bool = False
+        
+        # 当前工作流类型 ("search" / "evolve" / "")
+        self._workflow_type: str = ""
+        
+        # 静默模式下记录最佳性能（用于进度显示）
+        self._best_performance: Optional[dict] = None
     def set_cancel_handler(self, handler: Callable[[str], None]) -> None:
         self._cancel_handler = handler
 
     def set_runner_ref(self, runner) -> None:
         self._runner_ref = runner
+    
+    def set_silent_mode(self, silent: bool) -> None:
+        """设置静默模式（用于 adaptive search 等场景）"""
+        self._silent_mode = silent
+        if not silent:
+            self._best_performance = None
+    
+    def is_silent_mode(self) -> bool:
+        """检查是否处于静默模式"""
+        return self._silent_mode
 
     def print(self, *args: Any, **kwargs: Any) -> None:
         try:
@@ -180,6 +201,10 @@ class AKGConsole:
     # ==================== 消息处理 ====================
 
     def on_agent_header(self, message: "AgentHeaderMessage") -> None:
+        # 静默模式下跳过输出
+        if self._silent_mode:
+            return
+            
         agent_name = getattr(message, "agent_name", "") or ""
         model_name = getattr(message, "model_name", "") or ""
         self._flush_all_streams()
@@ -190,6 +215,10 @@ class AKGConsole:
         self._console.print()
 
     def on_tool_start(self, message: "ToolStartMessage") -> None:
+        # 静默模式下跳过输出
+        if self._silent_mode:
+            return
+            
         self._flush_all_streams()
         tool_name = getattr(message, "tool_name", "") or ""
         input_params = getattr(message, "input_params", "") or ""
@@ -204,6 +233,10 @@ class AKGConsole:
         self._console.print(line)
 
     def on_tool_result(self, message: "ToolResultMessage") -> None:
+        # 静默模式下跳过输出
+        if self._silent_mode:
+            return
+            
         tool_name = getattr(message, "tool_name", "") or ""
         success = getattr(message, "success", True)
         duration_s = getattr(message, "duration_s", 0.0)
@@ -229,6 +262,10 @@ class AKGConsole:
         self._console.print()
 
     def on_llm_stream(self, message: "LLMStreamMessage") -> None:
+        # 静默模式下跳过输出
+        if self._silent_mode:
+            return
+            
         chunk = str(getattr(message, "chunk", "") or "")
         if not chunk:
             return
@@ -243,9 +280,46 @@ class AKGConsole:
             self._content_buffer += chunk
 
     def on_panel_data(self, message: "PanelDataMessage") -> None:
-        pass
+        """处理面板数据消息，包括进度更新"""
+        action = getattr(message, "action", "")
+        data = getattr(message, "data", {}) or {}
+        
+        if action == "adaptive_search_progress":
+            if self._progress_callback and data:
+                data["_workflow_type"] = "search"
+                self._progress_callback(data)
+        elif action == "adaptive_search_start":
+            self._silent_mode = True
+            self._workflow_type = "search"
+        elif action == "adaptive_search_end":
+            self._silent_mode = False
+            self._workflow_type = ""
+            if self._progress_callback:
+                self._progress_callback({"_workflow_type": "", "_reset": True})
+        elif action == "evolve_start":
+            self._silent_mode = True
+            self._workflow_type = "evolve"
+        elif action == "evolve_progress":
+            if self._progress_callback and data:
+                data["_workflow_type"] = "evolve"
+                self._progress_callback(data)
+        elif action == "evolve_end":
+            self._silent_mode = False
+            self._workflow_type = ""
+            if self._progress_callback:
+                self._progress_callback({"_workflow_type": "", "_reset": True})
+        elif action == "task_node_update":
+            node_name = data.get("node_name", "")
+            status = data.get("status", "")
+            if not self._silent_mode and status == "running":
+                self._flush_all_streams()
+                self._console.print(Text(f"  ▶ {node_name}"))
 
     def on_display_message(self, message: "DisplayMessage") -> None:
+        # 静默模式下跳过输出
+        if self._silent_mode:
+            return
+            
         text = str(getattr(message, "text", "") or "")
         self._flush_all_streams()
         if not text:

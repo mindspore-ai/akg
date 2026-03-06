@@ -35,6 +35,18 @@ os.environ['AKG_AGENTS_DATA_COLLECT'] = 'on'
 logger = logging.getLogger(__name__)
 
 
+def _send_evolve_message(session_id: str, action: str, data: dict) -> None:
+    """发送 evolve 进度消息到 CLI"""
+    if not session_id:
+        return
+    try:
+        from akg_agents.cli.runtime.message_sender import send_message
+        from akg_agents.cli.messages import PanelDataMessage
+        send_message(session_id, PanelDataMessage(action=action, data=data))
+    except Exception as e:
+        logger.warning(f"Failed to send evolve message ({action}): {e}")
+
+
 async def evolve(
     op_name: str,
     task_desc: str,
@@ -133,29 +145,100 @@ async def evolve(
     # 用于跟踪当前轮次的实现
     round_implementations = []
 
+    # 获取 session_id 用于进度消息
+    session_id = str(config.get("session_id") or "").strip()
+    # 计算实际的总任务数（考虑岛屿模式）
+    if num_islands > 1 and elite_size > 0:
+        tasks_per_island = max(1, parallel_num // num_islands)
+        actual_tasks_per_round = num_islands * tasks_per_island
+    else:
+        actual_tasks_per_round = parallel_num
+    total_tasks_all_rounds = max_rounds * actual_tasks_per_round
+    # 发送 evolve 开始消息（进入静默模式）
+    _send_evolve_message(session_id, "evolve_start", {
+        "op_name": op_name,
+        "max_rounds": max_rounds,
+        "parallel_num": parallel_num,
+        "total_tasks": total_tasks_all_rounds,
+    })
+
+    # 实时进度计数器（用 dict 使闭包可修改）
+    counters = {
+        "total_completed": 0,
+        "total_success": 0,
+        "total_failed": 0,
+        "round_running": 0,
+        "current_round": 0,
+    }
+
+    def _send_current_progress(phase: str = "running"):
+        _send_evolve_message(session_id, "evolve_progress", {
+            "op_name": op_name,
+            "current_round": counters["current_round"],
+            "max_rounds": max_rounds,
+            "parallel_num": parallel_num,
+            "total_tasks": total_tasks_all_rounds,
+            "total_completed": counters["total_completed"],
+            "total_success": counters["total_success"],
+            "total_failed": counters["total_failed"],
+            "running_count": counters["round_running"],
+            "phase": phase,
+        })
+
+    # 包装 task_pool.create_task，在每个 task 完成时实时更新计数
+    _original_create_task = task_pool.create_task
+
+    def _tracked_create_task(coro_func, *args, task_name=None, **kwargs):
+        async def _wrapped(*a, **kw):
+            result = await coro_func(*a, **kw)
+            # LangGraphTask.run() 返回 (op_name, success, final_state)
+            success = isinstance(result, tuple) and len(result) >= 2 and result[1]
+            counters["round_running"] -= 1
+            counters["total_completed"] += 1
+            if success:
+                counters["total_success"] += 1
+            else:
+                counters["total_failed"] += 1
+            _send_current_progress()
+            return result
+        counters["round_running"] += 1
+        return _original_create_task(_wrapped, *args, task_name=task_name, **kwargs)
+
+    task_pool.create_task = _tracked_create_task
+
     # ========== 4. 进化主循环 ==========
     for round_idx in range(1, max_rounds + 1):
-        
-        # 4.1 创建任务
+        counters["current_round"] = round_idx
+        counters["round_running"] = 0
+
+        # 4.1 创建任务（_tracked_create_task 会自动增加 round_running）
         tasks, task_mapping = task_processor.create_tasks_for_round(
             round_idx,
             device_pool,
             task_pool,
             round_implementations
         )
-        
-        # 4.2 执行任务
+
+        # 发送轮次开始消息（在 create 之后，此时 round_running 已正确）
+        _send_current_progress()
+
+        # 4.2 执行任务（每个 task 完成时 _wrapped 会实时发送进度更新）
         results = await task_pool.wait_all()
         task_pool.tasks.clear()
 
-        # 4.3 处理结果
+        # 4.3 处理结果（临时恢复原始 create_task，避免 sketch 任务被计数）
+        task_pool.create_task = _original_create_task
         round_data = await result_processor.process_results(
             results,
             round_idx,
             task_pool,
             task_mapping
         )
+        task_pool.create_task = _tracked_create_task  # 恢复包装版本
         round_implementations = round_data['round_implementations']
+
+        # 发送轮次完成的进度更新
+        _send_current_progress(phase="round_done")
         
         # 4.4 数据收集（支持 AKG_AGENTS_* 和 AIKG_*）
         if get_akg_env_var("DATA_COLLECT", "off").lower() == "on":
@@ -174,6 +257,16 @@ async def evolve(
             (f"failed_task_{i}", False) 
             for i in range(round_result['total_tasks'] - round_result['successful_tasks'])
         ])
+
+    # 恢复原始 create_task
+    task_pool.create_task = _original_create_task
+
+    # 发送 evolve 结束消息（退出静默模式）
+    _send_evolve_message(session_id, "evolve_end", {
+        "op_name": op_name,
+        "total_success": counters["total_success"],
+        "total_failed": counters["total_failed"],
+    })
 
     # ========== 5. 构建最终结果 ==========
     # 按性能排序最佳实现（gen_time越小越好）
