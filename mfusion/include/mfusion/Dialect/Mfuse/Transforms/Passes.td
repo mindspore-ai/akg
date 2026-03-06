@@ -150,4 +150,21 @@ def ConvertDvmSubgraphToMfuseDvmCall : Pass<"convert-dvm-subgraph-to-mfuse-dvm-c
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// Split pass
+//===----------------------------------------------------------------------===//
+
+def Split : Pass<"split", "::mlir::func::FuncOp"> {
+  let summary = "Split fuse operations";
+  let description = [{
+    This pass splits fuse ops.
+    It groups operations into areas and applies split patterns to optimize the execution.
+  }];
+  let constructor = "mlir::createSplitPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
 #endif // MFUSION_DIALECT_MFUSE_TRANSFORMS_PASSES
