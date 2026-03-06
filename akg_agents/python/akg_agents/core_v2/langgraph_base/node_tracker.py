@@ -58,9 +58,11 @@ def track_node(node_name: str, require_session: bool = False, require_task_label
             
             start = time.time()
             
+            task_id = str(state.get("task_id") or "").strip()
+            
             # 发送开始消息（如果有 session）
             if session_id:
-                _safe_send_start(session_id, node_name)
+                _safe_send_start(session_id, node_name, task_id)
             
             try:
                 result = await node_fn(state)
@@ -76,17 +78,22 @@ def track_node(node_name: str, require_session: bool = False, require_task_label
     return decorator
 
 
-def _safe_send_start(session_id: str, node_name: str):
-    """安全发送开始消息
+def _safe_send_start(session_id: str, node_name: str, task_id: str = ""):
+    """安全发送节点开始消息
     
+    如果有 task_id，发送结构化的 PanelDataMessage 以支持进度追踪；
+    否则回退到 DisplayMessage。
     发送失败不影响主流程，仅记录警告日志。
     """
     if not session_id:
         return
     try:
         from akg_agents.cli.runtime.message_sender import send_message
-        from akg_agents.cli.messages import DisplayMessage
-        send_message(session_id, DisplayMessage(text=f"▶ {node_name}"))
+        from akg_agents.cli.messages import PanelDataMessage
+        send_message(session_id, PanelDataMessage(
+            action="task_node_update",
+            data={"task_id": task_id, "node_name": node_name, "status": "running"},
+        ))
     except Exception as e:
         logger.warning(f"[{node_name}] send_message failed: {e}")
 

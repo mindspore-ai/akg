@@ -55,6 +55,10 @@ from akg_agents.cli.service import (
 from akg_agents.cli.constants import DisplayStyle
 from akg_agents.cli.runtime import LocalExecutor
 from akg_agents.cli.utils.i18n import t
+from akg_agents.cli.ui.progress_display import (
+    AdaptiveSearchProgressDisplay,
+    EvolveProgressState,
+)
 from .types import ResolvedTargetConfig
 
 
@@ -249,7 +253,11 @@ class InteractiveOpRunner:
         def __init__(self) -> None:
             self.is_generating = False
             self.loading_text = "运行中..."
-
+            self.progress_info: dict = {}
+            self.progress_display: Optional["AdaptiveSearchProgressDisplay"] = None
+            self.workflow_type: str = ""  # "search" / "evolve" / ""
+            self.evolve_state: Optional[Any] = None  # EvolveProgressState
+            self.reset_timer: bool = False  # spinner 收到此标记后重置计时
     async def _run_tui_app(
         self,
         *,
@@ -509,33 +517,69 @@ class InteractiveOpRunner:
         async def _global_spinner() -> None:
             """全局 spinner 任务，根据 state.is_generating 动态显示"""
             import time
-            # 🎨 使用 dots2 样式：更粗更明显的点式动画
-            # 其他可选样式：
-            # - dots:  ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-            # - line:  ["-", "\\", "|", "/"]
-            # - arrow: ["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸"]
             spinner_frames = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
             frame_idx = 0
             start_time = None
             
             while not should_exit.is_set():
                 if state.is_generating:
-                    # 开始计时（如果还没开始）
-                    if start_time is None:
+                    if start_time is None or state.reset_timer:
                         start_time = time.time()
+                        state.reset_timer = False
                     
-                    # 更新 spinner
                     elapsed = int(time.time() - start_time)
-                    state.loading_text = f"{spinner_frames[frame_idx]} 正在思考... ({elapsed}s)"
+                    wf_type = state.workflow_type
+                    
+                    if wf_type == "evolve" and state.evolve_state:
+                        compact = state.evolve_state.render_compact()
+                        state.loading_text = f"{spinner_frames[frame_idx]} Evolve {compact}"
+                    elif wf_type == "search" and state.progress_info:
+                        p = state.progress_info
+                        op_name = p.get("op_name", "")
+                        max_total = p.get("max_total_tasks", 0)
+                        
+                        if state.progress_display is None:
+                            state.progress_display = AdaptiveSearchProgressDisplay(
+                                op_name=op_name,
+                                max_tasks=max_total,
+                            )
+                        
+                        state.progress_display.update(p)
+                        
+                        if max_total > 0:
+                            progress_bar = state.progress_display.render_compact()
+                            state.loading_text = f"{spinner_frames[frame_idx]} {progress_bar}"
+                        else:
+                            state.loading_text = f"{spinner_frames[frame_idx]} 正在思考... ({elapsed}s)"
+                    elif state.progress_info:
+                        p = state.progress_info
+                        max_total = p.get("max_total_tasks", 0)
+                        if state.progress_display is None and max_total > 0:
+                            state.progress_display = AdaptiveSearchProgressDisplay(
+                                op_name=p.get("op_name", ""),
+                                max_tasks=max_total,
+                            )
+                        if state.progress_display:
+                            state.progress_display.update(p)
+                            progress_bar = state.progress_display.render_compact()
+                            state.loading_text = f"{spinner_frames[frame_idx]} {progress_bar}"
+                        else:
+                            state.loading_text = f"{spinner_frames[frame_idx]} 正在思考... ({elapsed}s)"
+                    else:
+                        state.progress_display = None
+                        state.loading_text = f"{spinner_frames[frame_idx]} 正在思考... ({elapsed}s)"
+                    
                     app.invalidate()
                     frame_idx = (frame_idx + 1) % len(spinner_frames)
                 else:
-                    # 重置计时
                     start_time = None
+                    state.progress_display = None
+                    state.progress_info = {}
+                    state.evolve_state = None
+                    state.workflow_type = ""
                     state.loading_text = ""
                     app.invalidate()
                 
-                # 每 0.1 秒更新一次
                 await asyncio.sleep(0.1)
 
         async def _process_input(user_input: str, print_input: bool = False) -> bool:
@@ -600,7 +644,37 @@ class InteractiveOpRunner:
                     should_exit.set()
                     _safe_app_exit()
                     return
-
+        
+        def _update_progress(progress_data: dict) -> None:
+            """更新进度信息到 TUI state"""
+            wf_type = progress_data.pop("_workflow_type", "")
+            is_reset = progress_data.pop("_reset", False)
+            
+            if is_reset:
+                state.workflow_type = ""
+                state.progress_info = {}
+                state.progress_display = None
+                state.evolve_state = None
+                state.reset_timer = True
+                app.invalidate()
+                return
+            
+            if wf_type:
+                state.workflow_type = wf_type
+            
+            if wf_type == "evolve":
+                if state.evolve_state is None:
+                    state.evolve_state = EvolveProgressState()
+                state.evolve_state.update(progress_data)
+            else:
+                state.progress_info = progress_data
+            app.invalidate()
+        
+        # 设置回调
+        console_obj = getattr(self.cli, 'console', None)
+        if console_obj:
+            if hasattr(console_obj, '_progress_callback'):
+                console_obj._progress_callback = _update_progress
         app_task = asyncio.create_task(app.run_async())
         workflow_task = asyncio.create_task(_workflow_loop())
         spinner_task = asyncio.create_task(_global_spinner())  # 🔥 启动全局 spinner
@@ -623,7 +697,12 @@ class InteractiveOpRunner:
             spinner_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await spinner_task
-
+        
+        # 清理回调
+        console_obj = getattr(self.cli, 'console', None)
+        if console_obj:
+            if hasattr(console_obj, '_progress_callback'):
+                console_obj._progress_callback = None
     async def _run_workflow(self) -> None:
         """CLI 模式下的工作流"""
         resolved = self._build_resolved()
