@@ -12,18 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Skill 自进化系统：从 adaptive_search 日志中提取优化经验，生成 SKILL.md"""
+"""
+Skill 自进化系统
 
-from .models import TaskRecord, EvolutionStep, CompressedData
-from .collector import collect
-from .compressor import compress
-from .writer import SkillWriter
+模块结构：
+  common.py               - 公共类型、工具函数、LLM 输出解析、SKILL.md 写入
+  search_log_utils.py     - search_log 模式：从搜索日志收集 + 压缩进化链
+  expert_tuning_utils.py  - expert_tuning 模式：从对话目录提取专家调优经验
+"""
+
+from .common import TaskRecord, EvolutionStep, CompressedData, SkillWriter
+from .search_log_utils import collect as search_log_collect, compress as search_log_compress
 
 __all__ = [
     "TaskRecord",
     "EvolutionStep",
     "CompressedData",
-    "collect",
-    "compress",
+    "search_log_collect",
+    "search_log_compress",
     "SkillWriter",
 ]
