@@ -7,12 +7,14 @@
 The Skill Evolution system automatically extracts optimization experience and generates reusable `SKILL.md` documents. It runs as a SubAgent registered as the `call_skill_evolution` tool, callable by `KernelAgent`.
 
 **Two modes**:
-- **Mode A (adaptive_search)**: Extract evolution chain diffs from search logs — automated optimization patterns
-- **Mode B (feedback)**: Extract human tuning experience from conversation history — "user advice → code change → performance delta" causal chains
+- **search_log**: Extract evolution chain diffs from search logs — automated optimization patterns
+- **expert_tuning**: Extract human tuning experience from conversation history — "user advice → code change → performance delta" causal chains
 
 **Goal**: Close the loop of "optimize → summarize → reuse" — turn both automated search logs and human expertise into structured knowledge for future kernel generation.
 
-## 2. Mode A: Adaptive Search
+**Architecture**: `SkillEvolutionBase` (`core_v2/agents/`) provides shared capabilities (workspace management, logging utilities). `SkillEvolutionAgent` (`op/agents/`) inherits from the base class and implements the two operator-specific modes.
+
+## 2. search_log Mode
 
 ### 2.1 Data Sources
 
@@ -29,10 +31,10 @@ For each passed task, the actual implementation code is read from `verify_dir/*_
 ### 2.2 Pipeline
 
 ```
-1. Collector  — Parse 3 files + read impl code → List[TaskRecord]
-2. Compressor — Build evolution tree → monotonic stack per path → strip comments → diff
-3. LLM        — Best code + evolution diffs → generate SKILL.md body
-4. Writer     — YAML frontmatter + body → write SKILL.md
+1. collect   — Parse 3 files + read impl code → List[TaskRecord]
+2. compress  — Build evolution tree → monotonic stack per path → strip comments → diff
+3. LLM      — Best code + evolution diffs → generate SKILL.md body
+4. Writer   — YAML frontmatter + body → write SKILL.md
 ```
 
 ### 2.3 Collector
@@ -59,11 +61,11 @@ For each passed task, the actual implementation code is read from `verify_dir/*_
 4. For adjacent nodes in the filtered stack, strip comments then generate unified diff
 5. Skip pairs where `MIN_GEN_TIME_IMPROVE_PCT < 0.01` (too small to be meaningful)
 
-The comment stripping (`_strip_comments`) removes docstrings, pure comment lines, and inline comments before diffing, eliminating noise from comment rewording.
+The comment stripping (`strip_comments`) removes docstrings, pure comment lines, and inline comments before diffing, eliminating noise from comment rewording.
 
 ### 2.5 LLM Analysis
 
-The Jinja2 template (`analyze.j2`) injects:
+The Jinja2 template (`analyze_search_log.j2`) injects:
 - Operator info (name, DSL, backend, architecture)
 - Best implementation (full code with gen_time and speedup)
 - Evolution chain diffs (comment-stripped, monotonic-filtered)
@@ -75,9 +77,9 @@ The LLM generates the SKILL.md body directly in Markdown, with `skill_name` and 
 
 ### 2.6 Writer
 
-Assembles YAML frontmatter (name, description, category, backend, dsl) + LLM body → writes to `op/resources/skills/{dsl}/cases/{skill_name}/SKILL.md`.
+Assembles YAML frontmatter (name, description, category, backend, dsl, source) + LLM body → writes to `op/resources/skills/{dsl}/cases/{skill_name}/SKILL.md`.
 
-**Naming convention**: `skill_name` follows the `{dsl}-case-{op-category}-{optimization-detail}` format, e.g. `triton-ascend-case-reduction-amin-large`, `triton-ascend-case-elemwise-broadcast-3d`, consistent with hand-written cases. `category` is set to `example`.
+**Naming convention**: `skill_name` follows the `{dsl}-case-{op-category}-{optimization-detail}` format, e.g. `triton-ascend-case-reduction-amin-large`, `triton-ascend-case-elemwise-broadcast-3d`. `category` is `example`, `source` is `search_log`.
 
 ### 2.7 Core Algorithm: Monotonic Stack
 
@@ -91,7 +93,7 @@ Diff pairs: (A→B) — only pair where performance strictly improved
 - `seen_pairs` set prevents duplicate diffs when paths share common prefixes
 - `MIN_GEN_TIME_IMPROVE_PCT = 0.01` filters out negligible improvements
 
-## 3. Mode B: Human Experience Feedback
+## 3. expert_tuning Mode
 
 Extracts human tuning experience from conversation history to generate SKILL.md.
 
@@ -99,9 +101,24 @@ Extracts human tuning experience from conversation history to generate SKILL.md.
 
 ### 3.1 Data Source
 
-The collector reads `{conversation_dir}/nodes/*/actions/action_history_fact.json`, sorted by node number (node_001, node_002, ...), collecting actions from all branches.
+The collector reads `{conversation_dir}/trace.json` to obtain the conversation tree structure, then uses DFS to find all root-to-leaf paths. Each path becomes an independent branch. For each branch, actions are read from the corresponding `actions/action_history_fact.json` files in path order.
 
-A conversation may contain multiple branches (e.g., root→node_001...019 and root→node_020...029). All branches are included to fully cover the optimization history.
+Falls back to node-number sorting (node_001, node_002, ...) when `trace.json` is not available.
+
+**Multi-branch handling**: The conversation tree may contain multiple branches (e.g., root→node_001...019 and root→node_020...029). Each branch is output as an independent timeline segment, separated by branch headers. Branches include full shared prefix nodes to ensure complete causal chains. For single-branch scenarios (linear chains), no extra labels are added and behavior is identical to the previous implementation.
+
+```
+root → node_001 → ... → node_019   (Branch 1)
+     → node_020 → ... → node_029   (Branch 2)
+
+Output:
+  ## Branch 1 (19 nodes)
+  ### node_001 Turn 1 — ask_user ...
+  ...
+  ## Branch 2 (10 nodes)
+  ### node_020 Turn 1 — ask_user ...
+  ...
+```
 
 ### 3.2 Incremental LLM Compression
 
@@ -132,62 +149,50 @@ Before adding each new section, the total length is checked. When it exceeds the
 ### 3.3 Pipeline
 
 ```
-1. FeedbackCollector  — Read all nodes' actions → sort by node number → format as section list
-2. build_timeline     — Incrementally append sections, LLM-compress accumulated portion when threshold exceeded
-3. LLM Analysis       — Timeline → self-analyze causal chains → generate SKILL.md body
-4. Writer             — YAML frontmatter + body → write SKILL.md
+1. collect          — DFS trace.json for branch paths → read actions in path order → format as section list
+2. build_timeline   — Incrementally append sections, LLM-compress accumulated portion when threshold exceeded
+3. LLM Analysis     — Timeline → self-analyze causal chains → generate SKILL.md body
+4. Writer           — YAML frontmatter + body → write SKILL.md
 ```
 
-### 3.4 Collector
+### 3.4 Collector and Timeline Builder
 
-`collect_feedback(conversation_dir, op_name) -> (sections, metadata)`
+`collect(conversation_dir, op_name) -> (sections, metadata)`
 
-**Responsibility**: Read and format only. Returns a list of sections (one per action), no analysis or compression.
+**Responsibility**: Read conversation tree structure and format. Reads the tree from `trace.json` and DFS to find all root-to-leaf paths; falls back to node-number sorting when unavailable. Returns a list of sections (including branch headers for multi-branch scenarios), no analysis or compression.
 
 `build_timeline(sections, llm_fn, max_chars=60000, work_dir="") -> str`
 
 **Responsibility**: Incrementally append sections and compress as needed. Returns the final timeline text. Optional `work_dir` outputs intermediate files for debugging.
 
-For each action, generates a summary based on `tool_name`:
-
-| tool_name | Formatted Content |
-|-----------|------------------|
-| `ask_user` | Agent message summary + full user response |
-| `profile_kernel` | Performance data (gen_time_us, base_time_us, speedup) |
-| `call_kernelgen_workflow` etc. | Parameters, user requirements, full generated code |
-| `history_summary` | Compressed history summary text |
-| Others | Status + output summary |
-
-Returns:
-- `timeline_text`: Markdown-formatted timeline, injected directly into LLM prompt
-- `metadata`: Environment info dict (op_name, dsl, backend, arch)
-
 ### 3.5 LLM Prompt
 
-Template `analyze_feedback.j2` injects the timeline and instructs the LLM to:
+Template `analyze_expert_tuning.j2` injects the timeline and instructs the LLM to:
 
 1. Identify which turns contain substantive optimization advice (ignoring "confirm" messages)
 2. Match code versions to performance data (profile_kernel corresponds to the most recent code generation before it)
 3. Extract "user advice → code change → performance delta" causal chains
 4. Generate SKILL.md body
 
+**Naming convention**: `skill_name` follows the `{dsl}-exp-{op-category}-{tuning-detail}` format. `source` is `expert_tuning`.
+
 ## 4. File Structure
 
 ```
+core_v2/agents/
+└── skill_evolution_base.py     — SkillEvolutionBase (workspace management, logging utilities)
+
 op/tools/skill_evolution/
-├── models.py                — TaskRecord, EvolutionStep, CompressedData (Mode A data models)
-├── collector.py             — Mode A: collect(log_dir, op_name) → (records, metadata)
-├── compressor.py            — Mode A: compress(records, metadata) → CompressedData
-├── feedback_collector.py    — Mode B: collect_feedback(conversation_dir, op_name) → (timeline, metadata)
-├── analyzer.py              — Prompt variable conversion + LLM output parsing
-├── writer.py                — YAML frontmatter + body → SKILL.md (supports dict metadata)
+├── common.py                   — Shared types, utilities, LLM output parsing, SKILL.md writer
+├── search_log_utils.py         — search_log mode: collect + compress + to_prompt_vars
+├── expert_tuning_utils.py      — expert_tuning mode: collect + build_timeline + to_prompt_vars
 └── __init__.py
 
-op/agents/skill_evolution_agent.py — Agent orchestration (Mode A / Mode B dispatch)
+op/agents/skill_evolution_agent.py — SkillEvolutionAgent (inherits base, search_log / expert_tuning dispatch)
 
 op/resources/prompts/skill_evolution/
-├── analyze.j2               — Mode A: structured evolution diffs → LLM
-└── analyze_feedback.j2      — Mode B: action timeline → LLM
+├── analyze_search_log.j2       — search_log: structured evolution diffs → LLM
+└── analyze_expert_tuning.j2    — expert_tuning: action timeline → LLM
 
 tests/op/st/test_skill_evolution.py — Standalone CLI script (no Agent framework dependency)
 ```
@@ -197,20 +202,20 @@ tests/op/st/test_skill_evolution.py — Standalone CLI script (no Agent framewor
 `tests/op/st/test_skill_evolution.py` provides an Agent-framework-free entry point.
 
 ```bash
-# Mode A
-python akg_agents/tests/op/st/test_skill_evolution.py adaptive_search /path/to/logs relu
+# search_log mode
+python akg_agents/tests/op/st/test_skill_evolution.py search_log /path/to/logs relu
 
-# Mode B
-python akg_agents/tests/op/st/test_skill_evolution.py feedback ~/.akg/conversations/cli_xxx relu
+# expert_tuning mode
+python akg_agents/tests/op/st/test_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx relu
 
 # With output directory and model level
-python akg_agents/tests/op/st/test_skill_evolution.py feedback /path/to/conv relu -o ./output -m complex
+python akg_agents/tests/op/st/test_skill_evolution.py expert_tuning /path/to/conv relu -o ./output -m complex
 ```
 
 | Argument | Description |
 |----------|-------------|
-| `mode` | `adaptive_search` or `feedback` |
-| `log_dir` / `conversation_dir` | Log directory (Mode A) or conversation directory (Mode B) |
+| `mode` | `search_log` or `expert_tuning` |
+| `log_dir` / `conversation_dir` | Log directory (search_log) or conversation directory (expert_tuning) |
 | `op_name` | Operator name (e.g. relu, l1norm) |
 | `-o / --output-dir` | SKILL.md output directory (defaults to project skills dir) |
 | `-m / --model-level` | LLM model level (default: standard) |
@@ -219,7 +224,7 @@ python akg_agents/tests/op/st/test_skill_evolution.py feedback /path/to/conv rel
 
 Intermediate files are saved to `{cur_path}/logs/skill_evolution/`:
 
-**Mode A (adaptive_search):**
+**search_log mode:**
 
 | File | Content |
 |------|---------|
@@ -230,7 +235,7 @@ Intermediate files are saved to `{cur_path}/logs/skill_evolution/`:
 | `session.log` | Execution log |
 | `result.json` | Final result summary |
 
-**Mode B (feedback):**
+**expert_tuning mode:**
 
 | File | Content |
 |------|---------|
