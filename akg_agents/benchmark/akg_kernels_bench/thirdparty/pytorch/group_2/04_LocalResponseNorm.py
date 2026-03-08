@@ -32,10 +32,10 @@ class Model(nn.Module):
         """
         return self.lrn(x)
 
-batch_size = 16
-channels = 64
-height = 256
-width = 256
+batch_size = 32
+channels = 128
+height = 64
+width = 64
 size = 5
 
 def get_inputs():

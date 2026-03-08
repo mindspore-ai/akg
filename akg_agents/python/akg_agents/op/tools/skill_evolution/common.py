@@ -270,7 +270,7 @@ class SkillWriter:
         dsl_key = dsl.replace("_", "-").lower()
         return str(
             project_root / "op" / "resources" / "skills"
-            / dsl_key / "cases" / skill_name
+            / dsl_key / "evolved" / skill_name
         )
 
     def _build_frontmatter(
@@ -300,7 +300,7 @@ class SkillWriter:
         if backend:
             meta["backend"] = backend
         if dsl:
-            meta["dsl"] = dsl
+            meta["dsl"] = dsl.replace("_", "-").lower()
 
         frontmatter = {
             "name": skill_name,

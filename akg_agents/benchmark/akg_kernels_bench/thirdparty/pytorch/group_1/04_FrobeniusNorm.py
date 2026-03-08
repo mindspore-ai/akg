@@ -25,10 +25,10 @@ class Model(nn.Module):
         norm = torch.norm(x, p='fro')
         return x / norm
 
-batch_size = 16
-features = 64
-dim1 = 256
-dim2 = 256
+batch_size = 32
+features = 128
+dim1 = 64
+dim2 = 64
 
 def get_inputs():
     x = torch.randn(batch_size, features, dim1, dim2)
