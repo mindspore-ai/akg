@@ -56,36 +56,46 @@ class SkillEvolutionBase(AgentBase):
         elif fallback_dir:
             base = Path(fallback_dir) / "skill_evolution"
         else:
-            base = Path(".") / "skill_evolution" / name
+            try:
+                from akg_agents import get_project_root
+                base = Path(get_project_root()) / ".akg" / "skill_evolution" / name
+            except (ImportError, Exception):
+                base = Path(".") / "skill_evolution" / name
         base.mkdir(parents=True, exist_ok=True)
         return str(base)
 
     @staticmethod
-    def _save_text(work_dir: str, filename: str, content: str) -> None:
+    def _save_text(work_dir: str, filename: str, content: str) -> bool:
         try:
             with open(os.path.join(work_dir, filename), "w", encoding="utf-8") as f:
                 f.write(content)
+            return True
         except Exception as e:
             logger.warning(f"[SkillEvolution] 保存 {filename} 失败: {e}")
+            return False
 
     @staticmethod
-    def _save_json(work_dir: str, filename: str, data: Any) -> None:
+    def _save_json(work_dir: str, filename: str, data: Any) -> bool:
         try:
             with open(os.path.join(work_dir, filename), "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+            return True
         except Exception as e:
             logger.warning(f"[SkillEvolution] 保存 {filename} 失败: {e}")
+            return False
 
     @staticmethod
-    def _save_session_log(work_dir: str, lines: List[str]) -> None:
+    def _save_session_log(work_dir: str, lines: List[str]) -> bool:
         try:
             path = os.path.join(work_dir, "session.log")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(f"=== Skill Evolution ({datetime.now().isoformat()}) ===\n\n")
                 for line in lines:
                     f.write(line + "\n")
+            return True
         except Exception as e:
             logger.warning(f"[SkillEvolution] 保存日志失败: {e}")
+            return False
 
     # ==================== LLM 调用 ====================
 
@@ -114,7 +124,7 @@ class SkillEvolutionBase(AgentBase):
         if reasoning:
             self._save_text(work_dir, "llm_reasoning.txt", reasoning)
 
-        return content
+        return content or ""
 
     # ==================== 统一返回 ====================
 

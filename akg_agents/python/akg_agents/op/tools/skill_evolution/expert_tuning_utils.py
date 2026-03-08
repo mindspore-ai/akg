@@ -31,11 +31,14 @@ import os
 import re
 from typing import Any, Awaitable, Callable, Dict, List, Tuple
 
+from jinja2 import Template
+
 logger = logging.getLogger(__name__)
 
 MAX_TIMELINE_CHARS = 60000
 
-_COMPRESS_PROMPT = """你是一个对话历史压缩助手。请压缩以下 action 时间线，为后续新增内容腾出空间。
+_COMPRESS_TEMPLATE = Template(
+    """你是一个对话历史压缩助手。请压缩以下 action 时间线，为后续新增内容腾出空间。
 
 ## 必须完整保留
 
@@ -54,12 +57,13 @@ _COMPRESS_PROMPT = """你是一个对话历史压缩助手。请压缩以下 act
 ## 输出要求
 
 - 保持 Turn 编号和 Markdown 格式
-- 压缩后总长度控制在 **{target_chars}** 字符以内
+- 压缩后总长度控制在 **{{ target_chars }}** 字符以内
 - 直接输出压缩后的时间线，不要添加任何解释或前言
 
 ## 待压缩的时间线
 
-{timeline}"""
+{{ timeline }}"""
+)
 
 
 # ==================== 公开接口 ====================
@@ -104,10 +108,9 @@ def collect(
                 continue
             turn = fact.get("turn", 0)
             for action in fact.get("actions", []):
-                action["_turn"] = turn
-                action["_node"] = node_id
-                _try_fill_metadata(metadata, action.get("arguments", {}))
-                section = _format_action(action)
+                enriched = {**action, "_turn": turn, "_node": node_id}
+                _try_fill_metadata(metadata, enriched.get("arguments", {}))
+                section = _format_action(enriched)
                 if section:
                     sections.append(section)
                     total_actions += 1
@@ -157,7 +160,7 @@ async def build_timeline(
         if work_dir:
             _save_debug(work_dir, f"pre_compress_{compress_count}.md", accumulated)
 
-        prompt = _COMPRESS_PROMPT.format(
+        prompt = _COMPRESS_TEMPLATE.render(
             target_chars=target,
             timeline=accumulated,
         )
@@ -180,6 +183,13 @@ async def build_timeline(
             _save_debug(work_dir, f"post_compress_{compress_count}.md", accumulated)
 
         accumulated = accumulated + "\n" + section
+
+        if len(accumulated) > max_chars * 3:
+            logger.warning(
+                f"[ExpertTuning:Timeline] 时间线超过 {max_chars * 3} 字符上限，"
+                f"截断剩余 {len(sections) - i - 1} 个 section"
+            )
+            break
 
     if compress_count > 0:
         logger.info(

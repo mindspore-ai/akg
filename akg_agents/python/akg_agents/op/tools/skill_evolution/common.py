@@ -22,6 +22,7 @@ Skill 自进化系统 - 公共类型与工具
 """
 
 import difflib
+import yaml
 import re
 from dataclasses import dataclass, field
 import logging
@@ -67,6 +68,7 @@ class CompressedData:
     dsl: str = ""
     backend: str = ""
     arch: str = ""
+    task_desc: str = ""
     best_task_id: str = ""
     best_speedup: float = 0.0
     best_gen_time: float = float("inf")
@@ -293,19 +295,22 @@ class SkillWriter:
             else f"{op_name} 搜索日志优化经验"
         )
         desc = description or default_desc
-        desc = desc.replace('"', '\\"')
-        lines = [
-            "---",
-            f"name: {skill_name}",
-            f'description: "{desc}"',
-            "category: example",
-            'version: "1.0.0"',
-            "metadata:",
-        ]
+
+        meta: Dict[str, str] = {"source": source}
         if backend:
-            lines.append(f"  backend: {backend}")
+            meta["backend"] = backend
         if dsl:
-            lines.append(f"  dsl: {dsl}")
-        lines.append(f"  source: {source}")
-        lines.append("---")
-        return "\n".join(lines) + "\n"
+            meta["dsl"] = dsl
+
+        frontmatter = {
+            "name": skill_name,
+            "description": desc,
+            "category": "example",
+            "version": "1.0.0",
+            "metadata": meta,
+        }
+        yaml_str = yaml.dump(
+            frontmatter, default_flow_style=False,
+            allow_unicode=True, sort_keys=False,
+        )
+        return f"---\n{yaml_str}---\n"

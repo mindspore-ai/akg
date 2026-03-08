@@ -1,19 +1,40 @@
 #!/usr/bin/env python3
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """
-test_skill_evolution.py - Skill Evolution 测试入口（支持双模式）
+run_skill_evolution.py - Skill Evolution 独立 CLI 工具（支持双模式）
+
+此工具用于从 adaptive_search 搜索日志或 akg_cli 对话历史中提取优化经验，
+生成可复用的 SKILL.md 文档。
+
+前置条件：
+  - search_log 模式需要先运行 `akg_cli op` 执行 adaptive_search，产生搜索日志
+  - expert_tuning 模式需要先运行 `akg_cli op` 进行交互式调优，产生对话记录
+  日志默认保存在 ~/.akg/conversations/cli_<session_id>/nodes/<node_id>/logs/
 
 search_log 模式:
-    python akg_agents/tests/op/st/test_skill_evolution.py search_log <log_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
+    python run_skill_evolution.py search_log <log_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
 
 expert_tuning 模式:
-    python akg_agents/tests/op/st/test_skill_evolution.py expert_tuning <conversation_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
+    python run_skill_evolution.py expert_tuning <conversation_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
 
 兼容旧用法（默认 search_log）:
-    python akg_agents/tests/op/st/test_skill_evolution.py <log_dir> <op_name>
+    python run_skill_evolution.py <log_dir> <op_name>
 
 示例:
-    python akg_agents/tests/op/st/test_skill_evolution.py search_log /path/to/node_004/logs relu
-    python akg_agents/tests/op/st/test_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx rope -o ./output
+    python run_skill_evolution.py search_log /path/to/node_004/logs relu
+    python run_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx rope -o ./output
 """
 
 import argparse
@@ -30,6 +51,20 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+_USAGE_HINT = """
+╔══════════════════════════════════════════════════════════════════════╗
+║  Skill Evolution 需要 akg_cli 产生的日志数据作为输入               ║
+║                                                                      ║
+║  search_log 模式:                                                    ║
+║    请先执行 `akg_cli op` 并使用 adaptive_search workflow，           ║
+║    搜索日志保存在 nodes/<node_id>/logs/ 目录下                       ║
+║                                                                      ║
+║  expert_tuning 模式:                                                 ║
+║    请先执行 `akg_cli op` 进行交互式调优，                            ║
+║    对话记录保存在 ~/.akg/conversations/cli_<session_id>/ 目录下      ║
+╚══════════════════════════════════════════════════════════════════════╝
+"""
 
 
 def _load_template(name: str):
@@ -61,7 +96,7 @@ async def _call_llm(prompt: str, model_level: str) -> str:
     return content or reasoning
 
 
-async def run_search_log(log_dir: str, op_name: str, output_dir: str, model_level: str):
+async def run_search_log(log_dir: str, op_name: str, output_dir: str, model_level: str, task_desc: str = ""):
     """search_log 模式: 从搜索日志生成 SKILL.md"""
     from akg_agents.op.tools.skill_evolution.search_log_utils import (
         collect, compress, to_prompt_vars,
@@ -80,11 +115,15 @@ async def run_search_log(log_dir: str, op_name: str, output_dir: str, model_leve
     metadata["op_name"] = op_name
     if not records:
         logger.error("未找到任何任务记录，请检查 log_dir 是否正确")
+        logger.error("提示: log_dir 应指向 adaptive_search 产生的节点 logs 目录")
+        logger.error("      例如: ~/.akg/conversations/cli_xxx/nodes/node_004/logs")
         sys.exit(1)
     logger.info(f"  → {len(records)} 条记录")
 
     logger.info("[2/4] 压缩进化链")
     compressed = compress(records, metadata)
+    if task_desc:
+        compressed.task_desc = task_desc
     logger.info(
         f"  → best={compressed.best_task_id} "
         f"({compressed.best_gen_time}us / {compressed.best_speedup:.2f}x), "
@@ -149,9 +188,13 @@ async def run_expert_tuning(conversation_dir: str, op_name: str, output_dir: str
     logger.info(f"[1/4] 读取所有 action: {conversation_dir}")
     sections, metadata = collect(conversation_dir, op_name)
     metadata["op_name"] = op_name
+    metadata["source"] = "expert_tuning"
 
     if not sections:
         logger.error("未读取到任何 action 记录")
+        logger.error("提示: conversation_dir 应指向 akg_cli 的会话目录")
+        logger.error("      例如: ~/.akg/conversations/cli_<session_id>")
+        logger.error("      该目录应包含 nodes/ 子目录")
         sys.exit(1)
 
     full_text = "\n".join(sections)
@@ -195,7 +238,7 @@ async def run_expert_tuning(conversation_dir: str, op_name: str, output_dir: str
     writer = SkillWriter()
     skill_path = writer.write(
         skill_name, description, body, metadata,
-        work_dir or None,
+        output_dir or None,
     )
 
     elapsed = time.time() - t0
@@ -220,7 +263,7 @@ def _save_file(directory: str, filename: str, content: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Skill Evolution 测试入口（支持双模式）",
+        description="Skill Evolution CLI — 从搜索日志或对话历史生成 SKILL.md",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -229,6 +272,7 @@ def main():
     sp_a = subparsers.add_parser("search_log", help="从搜索日志生成 SKILL.md")
     sp_a.add_argument("log_dir", help="搜索日志目录（节点 logs 路径）")
     sp_a.add_argument("op_name", help="算子名称（如 relu、l1norm）")
+    sp_a.add_argument("--task-desc", "-t", default="", help="算子任务描述（可选，注入到 LLM prompt）")
     sp_a.add_argument("--output-dir", "-o", default="", help="SKILL.md 输出目录")
     sp_a.add_argument("--model-level", "-m", default="standard", help="LLM 模型级别")
 
@@ -250,17 +294,20 @@ def main():
             args = legacy.parse_args()
             args.mode = "search_log"
         else:
+            print(_USAGE_HINT)
             parser.print_help()
             sys.exit(1)
 
     if args.mode == "search_log":
         if not os.path.isdir(args.log_dir):
             logger.error(f"log_dir 不存在: {args.log_dir}")
+            print(_USAGE_HINT)
             sys.exit(1)
-        asyncio.run(run_search_log(args.log_dir, args.op_name, args.output_dir, args.model_level))
+        asyncio.run(run_search_log(args.log_dir, args.op_name, args.output_dir, args.model_level, getattr(args, "task_desc", "")))
     elif args.mode == "expert_tuning":
         if not os.path.isdir(args.conversation_dir):
             logger.error(f"conversation_dir 不存在: {args.conversation_dir}")
+            print(_USAGE_HINT)
             sys.exit(1)
         asyncio.run(run_expert_tuning(args.conversation_dir, args.op_name, args.output_dir, args.model_level))
 
