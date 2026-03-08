@@ -23,6 +23,7 @@ SkillEvolutionAgent - 算子 Skill 自进化 Agent
 """
 
 import logging
+import os
 import time
 from dataclasses import asdict
 from typing import Dict, Any, List, Union
@@ -156,10 +157,13 @@ class SkillEvolutionAgent(SkillEvolutionBase):
             return self._fail_result(mode, "LLM 未生成有效正文", work_dir, log_lines)
 
         writer = SkillWriter()
-        skill_path = writer.write(
-            skill_name, description, body, compressed_data,
-            output_dir or None,
-        )
+        try:
+            skill_path = writer.write(
+                skill_name, description, body, compressed_data,
+                output_dir or None,
+            )
+        except OSError as e:
+            return self._fail_result(mode, f"SKILL.md 写入失败: {e}", work_dir, log_lines)
 
         elapsed = time.time() - t0
         self._print(mode, f"完成: {skill_path} ({elapsed:.1f}s)", log_lines)
@@ -202,6 +206,17 @@ class SkillEvolutionAgent(SkillEvolutionBase):
         log_lines: List[str] = []
 
         try:
+            if not log_dir:
+                return self._fail_result(
+                    "search_log", "未提供搜索日志目录 (log_dir)",
+                    work_dir, log_lines,
+                )
+            if not os.path.isdir(log_dir):
+                return self._fail_result(
+                    "search_log", f"搜索日志目录不存在: {log_dir}",
+                    work_dir, log_lines,
+                )
+
             self._print("search_log", f"开始: op_name={op_name}, log_dir={log_dir}", log_lines)
             t0 = time.time()
 

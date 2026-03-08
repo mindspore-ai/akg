@@ -21,14 +21,28 @@ Skill 自进化系统
   expert_tuning_utils.py  - expert_tuning 模式：从对话目录提取专家调优经验
 """
 
-from .common import TaskRecord, EvolutionStep, CompressedData, SkillWriter
-from .search_log_utils import collect as search_log_collect, compress as search_log_compress
+from .common import TaskRecord, EvolutionStep, CompressedData, SkillWriter, parse_skill_output
+from .search_log_utils import (
+    collect as search_log_collect,
+    compress as search_log_compress,
+    to_prompt_vars as search_log_to_prompt_vars,
+)
+from .expert_tuning_utils import (
+    collect as expert_tuning_collect,
+    build_timeline,
+    to_prompt_vars as expert_tuning_to_prompt_vars,
+)
 
 __all__ = [
     "TaskRecord",
     "EvolutionStep",
     "CompressedData",
+    "SkillWriter",
+    "parse_skill_output",
     "search_log_collect",
     "search_log_compress",
-    "SkillWriter",
+    "search_log_to_prompt_vars",
+    "expert_tuning_collect",
+    "build_timeline",
+    "expert_tuning_to_prompt_vars",
 ]

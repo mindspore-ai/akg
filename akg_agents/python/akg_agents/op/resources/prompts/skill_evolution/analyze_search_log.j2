@@ -9,6 +9,13 @@
 - DSL: {{ dsl }} | 后端: {{ backend }} | 架构: {{ arch }}
 - 搜索结果: {{ success_count }}/{{ total_tasks }} 成功{% if best_speedup > 0 %}, 最佳加速比 {{ "%.2f"|format(best_speedup) }}x{% endif %}
 
+{% if task_desc %}
+## 算子任务描述
+```{{ dsl or "python" }}
+{{ task_desc }}
+```
+{% endif %}
+
 {% if best_code %}
 ## 最佳实现方案（{{ best_task_id }}，{{ "%.2f"|format(best_gen_time) }}us / {{ "%.2f"|format(best_speedup) }}x）
 

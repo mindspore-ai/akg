@@ -60,14 +60,20 @@ def collect(log_dir: str, op_name: str) -> Tuple[List[TaskRecord], Dict]:
     vr_path = os.path.join(log_dir, "verification_results.jsonl")
     vr_map, metadata = _parse_verification_results(vr_path)
     logger.info(f"[SearchLog:Collect] verification_results: {len(vr_map)} 个 passed 任务")
+    if not vr_map and os.path.isfile(vr_path):
+        logger.warning("[SearchLog:Collect] verification_results 文件存在但未解析到 passed 任务")
 
     sr_path = os.path.join(log_dir, op_name, "profiling", "speed_up_record.txt")
     perf_map = _parse_speedup_record(sr_path)
     logger.info(f"[SearchLog:Collect] speed_up_record: {len(perf_map)} 条记录")
+    if not perf_map and os.path.isfile(sr_path):
+        logger.warning("[SearchLog:Collect] speed_up_record 文件存在但未解析到性能数据")
 
     lg_path = os.path.join(log_dir, f"{op_name}_lineage_graph.md")
     lineage_map = _parse_lineage_table(lg_path)
     logger.info(f"[SearchLog:Collect] lineage_graph: {len(lineage_map)} 条记录")
+    if not lineage_map and os.path.isfile(lg_path):
+        logger.warning("[SearchLog:Collect] lineage_graph 文件存在但未解析到谱系数据")
 
     all_task_ids = set(lineage_map.keys()) | set(vr_map.keys()) | set(perf_map.keys())
     records: List[TaskRecord] = []
@@ -439,6 +445,7 @@ def to_prompt_vars(compressed: CompressedData) -> Dict[str, Any]:
         "dsl": compressed.dsl,
         "backend": compressed.backend,
         "arch": compressed.arch,
+        "task_desc": compressed.task_desc,
         "total_tasks": compressed.total_tasks,
         "success_count": compressed.success_count,
         "best_speedup": compressed.best_speedup,
