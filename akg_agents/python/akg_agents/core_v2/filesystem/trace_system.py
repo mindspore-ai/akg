@@ -626,7 +626,63 @@ code/
             full_history.extend(history.actions)
         
         return full_history
-    
+
+    def get_conversation_history(
+        self,
+        node_id: str = None,
+        max_turns: int = 10,
+        max_content_length: int = 200,
+    ) -> List[Dict[str, str]]:
+        """
+        获取用户可见的对话历史（用于 resume 时显示）
+
+        只提取 ask_user 和 finish 节点中的对话内容。
+
+        Args:
+            node_id: 节点 ID，默认使用当前节点
+            max_turns: 最多返回的对话轮数
+            max_content_length: 单条内容的最大字符数
+
+        Returns:
+            [{"role": "user/assistant", "content": "..."}] 列表
+        """
+        node_id = node_id or self.get_current_node()
+        history = self.get_full_action_history(node_id)
+
+        turns = []
+
+        for record in history:
+            tool_name = record.tool_name
+
+            # ask_user: 用户输入 + AI 提问
+            if tool_name == "ask_user":
+                # 用户输入
+                user_input = record.arguments.get("user_input", "")
+                if user_input:
+                    turns.append({
+                        "role": "user",
+                        "content": user_input[:max_content_length],
+                    })
+                # AI 提问
+                ai_msg = record.result.get("message", "") if record.result else ""
+                if ai_msg:
+                    turns.append({
+                        "role": "assistant",
+                        "content": ai_msg[:max_content_length],
+                    })
+
+            # finish: AI 最终回复
+            elif tool_name == "finish":
+                ai_msg = record.result.get("message", "") if record.result else ""
+                if ai_msg:
+                    turns.append({
+                        "role": "assistant",
+                        "content": ai_msg[:max_content_length],
+                    })
+
+        # 返回最近 N 条
+        return turns[-max_turns:] if len(turns) > max_turns else turns
+
     async def get_compressed_history_for_llm(
         self,
         llm_client,

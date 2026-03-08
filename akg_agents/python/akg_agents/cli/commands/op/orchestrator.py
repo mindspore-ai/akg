@@ -32,6 +32,7 @@ from akg_agents.cli.utils.ui_helpers import print_logo_once
 from akg_agents.cli.service import validate_target_config
 from akg_agents.cli.utils.device_parser import parse_devices
 from akg_agents.cli.console import AKGConsole
+from ..trace import resolve_session_dir, SessionResolveError
 
 
 class OpCommandOrchestrator:
@@ -108,6 +109,36 @@ class OpCommandOrchestrator:
         
         return None
 
+    @staticmethod
+    def _show_conversation_history(session_dir, console, max_turns: int = 10):
+        """Resume 时显示历史对话
+
+        从 action_history 中提取 ask_user 和 finish 节点的对话内容
+        """
+        from akg_agents.core_v2.filesystem import TraceSystem
+
+        try:
+            task_id = session_dir.name
+            ts = TraceSystem(task_id=task_id, base_dir=str(session_dir.parent.parent))
+            ts.initialize(force=False)
+
+            history = ts.get_conversation_history(max_turns=max_turns)
+            if not history:
+                return
+
+            console.print(f"\n[{DisplayStyle.DIM}]── 历史对话 ──[/{DisplayStyle.DIM}]")
+            for turn in history:
+                role = turn["role"]
+                content = turn["content"]
+                if role == "user":
+                    console.print(f"[{DisplayStyle.CYAN}][user][/{DisplayStyle.CYAN}] {content}")
+                else:
+                    console.print(f"[{DisplayStyle.GREEN}][assistant][/{DisplayStyle.GREEN}] {content}")
+            console.print(f"[{DisplayStyle.DIM}]─────────────[/{DisplayStyle.DIM}]\n")
+        except Exception:
+            # 静默失败，不影响 resume 流程
+            pass
+
     def run(self, args: OpCommandArgs) -> None:
         # 创建 AKGConsole 用于所有输出
         akg_console = AKGConsole(self._raw_console, use_stream=args.stream)
@@ -172,18 +203,23 @@ class OpCommandOrchestrator:
             resume_sid = args.resume_session_id
             resumed_target: ResolvedTargetConfig | None = None
             if resume_sid:
-                # 如果传入的是 cli_xxx 格式，提取 session_id 部分
-                if resume_sid.startswith("cli_"):
-                    resume_sid = resume_sid[4:]
-                # 验证 session 目录是否存在
-                from pathlib import Path
-                session_dir = Path.home() / ".akg" / "conversations" / f"cli_{resume_sid}"
-                if not session_dir.exists():
-                    akg_console.print(
-                        f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 会话不存在: cli_{resume_sid}\n"
-                        f"[{DisplayStyle.DIM}]路径: {session_dir}[/{DisplayStyle.DIM}]"
-                    )
-                    raise typer.Exit(code=2)
+                try:
+                    resume_sid, session_dir = resolve_session_dir(resume_sid)
+                except SessionResolveError as e:
+                    if e.reason == "ambiguous":
+                        candidates = "\n".join(
+                            f"- {candidate}" for candidate in e.candidates
+                        )
+                        akg_console.print(
+                            f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 会话 ID 前缀歧义: {args.resume_session_id}\n"
+                            f"[{DisplayStyle.DIM}]请使用更长的前缀或完整 session_id。候选如下：\n{candidates}[/{DisplayStyle.DIM}]"
+                        )
+                    else:
+                        akg_console.print(
+                            f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 会话不存在: cli_{e.normalized_session_id}\n"
+                            f"[{DisplayStyle.DIM}]路径: {e.expected_path}[/{DisplayStyle.DIM}]"
+                        )
+                    raise typer.Exit(code=2) from None
                 
                 # 从 trace 中恢复 target 配置（framework/backend/arch/dsl）
                 resumed_target = self._load_target_from_trace(session_dir, akg_console)
@@ -197,6 +233,9 @@ class OpCommandOrchestrator:
                     akg_console.print(
                         f"[{DisplayStyle.DIM}]恢复会话: cli_{resume_sid} (未找到 target 配置，使用命令行参数)[/{DisplayStyle.DIM}]"
                     )
+
+                # 显示历史对话
+                self._show_conversation_history(session_dir, akg_console)
 
             # 确定 target：resume 恢复的优先，命令行参数可覆盖
             if resumed_target and not (args.framework or args.backend or args.arch or args.dsl):

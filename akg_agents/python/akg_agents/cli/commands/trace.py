@@ -24,26 +24,86 @@ from __future__ import annotations
 import typer
 from rich.console import Console
 from rich.table import Table
+from pathlib import Path
 from typing import Optional
 
 from ..service import CLIAppServices
 
 
-def resolve_session_dir(session_id: str):
-    """根据 session_id 解析会话目录路径
-    
+class SessionResolveError(ValueError):
+    """Session ID 解析失败（不存在或前缀歧义）"""
+
+    def __init__(
+        self,
+        *,
+        reason: str,
+        session_id: str,
+        normalized_session_id: str,
+        expected_path: "Path",
+        candidates: Optional[list[str]] = None,
+    ):
+        self.reason = reason
+        self.session_id = session_id
+        self.normalized_session_id = normalized_session_id
+        self.expected_path = expected_path
+        self.candidates = candidates or []
+        super().__init__(f"Session resolve failed: {reason}")
+
+
+def resolve_session_dir(session_id: str, conversations_dir: Optional["Path"] = None):
+    """根据 session_id 解析会话目录路径（支持前缀匹配）
+
     Args:
         session_id: session_id 或完整 task_id（如 cli_xxx）
-        
+        conversations_dir: 可选的会话根目录
+
     Returns:
         (normalized_session_id, session_dir_path) 元组
+
+    Raises:
+        SessionResolveError: 不存在或前缀歧义
     """
-    from pathlib import Path
-    sid = session_id
+    sid = (session_id or "").strip()
     if sid.startswith("cli_"):
         sid = sid[4:]
-    session_dir = Path.home() / ".akg" / "conversations" / f"cli_{sid}"
-    return sid, session_dir
+    base_dir = conversations_dir or (Path.home() / ".akg" / "conversations")
+    exact_dir = base_dir / f"cli_{sid}"
+
+    # 1) 精确匹配优先
+    if exact_dir.exists() and exact_dir.is_dir():
+        return sid, exact_dir
+
+    # 2) 精确失败后，进行前缀匹配
+    matched: list[tuple[str, Path]] = []
+    if base_dir.exists():
+        for session_dir in base_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            if not session_dir.name.startswith("cli_"):
+                continue
+            candidate_sid = session_dir.name[4:]
+            if candidate_sid.startswith(sid):
+                matched.append((candidate_sid, session_dir))
+
+    matched.sort(key=lambda item: item[0])
+    if len(matched) == 1:
+        return matched[0]
+    if len(matched) > 1:
+        raise SessionResolveError(
+            reason="ambiguous",
+            session_id=session_id,
+            normalized_session_id=sid,
+            expected_path=exact_dir,
+            candidates=[candidate_sid for candidate_sid, _ in matched],
+        )
+
+    # 3) 0 匹配：不存在
+    raise SessionResolveError(
+        reason="not_found",
+        session_id=session_id,
+        normalized_session_id=sid,
+        expected_path=exact_dir,
+    )
 
 
 def load_session_domain(session_dir) -> str:
@@ -270,13 +330,19 @@ def register_resume_command(
         ),
     ) -> None:
         """恢复已有会话"""
-        sid, session_dir = resolve_session_dir(session_id)
-
-        if not session_dir.exists():
-            console.print(f"[red]错误:[/red] 会话不存在: cli_{sid}")
-            console.print(f"[dim]路径: {session_dir}[/dim]")
-            console.print("[dim]使用 akg_cli sessions list 查看可用会话[/dim]")
-            raise typer.Exit(code=2)
+        try:
+            sid, session_dir = resolve_session_dir(session_id)
+        except SessionResolveError as e:
+            if e.reason == "ambiguous":
+                console.print(f"[red]错误:[/red] 会话 ID 前缀歧义: {session_id}")
+                console.print("[dim]请使用更长的前缀或完整 session_id。候选如下：[/dim]")
+                for candidate in e.candidates:
+                    console.print(f"[dim]- {candidate}[/dim]")
+            else:
+                console.print(f"[red]错误:[/red] 会话不存在: cli_{e.normalized_session_id}")
+                console.print(f"[dim]路径: {e.expected_path}[/dim]")
+                console.print("[dim]使用 akg_cli sessions list 查看可用会话[/dim]")
+            raise typer.Exit(code=2) from None
 
         domain = load_session_domain(session_dir)
 
