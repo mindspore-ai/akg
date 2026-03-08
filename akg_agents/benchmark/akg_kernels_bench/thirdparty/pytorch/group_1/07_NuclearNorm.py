@@ -25,9 +25,9 @@ class Model(nn.Module):
         """
         return torch.linalg.matrix_norm(x, ord='nuc')
 
-batch_size = 16
-rows = 512
-cols = 512
+batch_size = 32
+rows = 256
+cols = 256
 
 def get_inputs():
     x = torch.randn(batch_size, rows, cols)

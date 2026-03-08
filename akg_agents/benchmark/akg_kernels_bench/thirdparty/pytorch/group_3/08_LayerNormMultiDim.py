@@ -30,10 +30,10 @@ class Model(nn.Module):
         """
         return self.ln(x)
 
-batch_size = 16
-channels = 64
-height = 128
-width = 128
+batch_size = 32
+channels = 128
+height = 64
+width = 64
 
 def get_inputs():
     x = torch.randn(batch_size, channels, height, width)
