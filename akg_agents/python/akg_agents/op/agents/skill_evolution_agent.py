@@ -15,9 +15,10 @@
 """
 SkillEvolutionAgent - 算子 Skill 自进化 Agent
 
-支持两种模式：
+支持三种模式：
   search_log:     从搜索日志中收集进化链 diff → LLM 生成 SKILL.md
   expert_tuning:  从对话历史中提取人工调优经验 → LLM 生成 SKILL.md
+  error_fix:      从错误修复记录中提取调试经验 → LLM 生成 SKILL.md
 
 注册为 Agent 工具，由 KernelAgent 通过 ToolExecutor 调用。
 """
@@ -40,31 +41,44 @@ class SkillEvolutionAgent(SkillEvolutionBase):
 
     TOOL_NAME = "call_skill_evolution"
 
-    DESCRIPTION = """从搜索日志或对话历史中总结优化技术，生成可复用的 SKILL.md 文档。
+    DESCRIPTION = """
+将算子优化经验、调试经验、人工调优经验沉淀为可复用的 SKILL.md 文档。
 
-支持两种模式：
-- search_log（默认）：从`adaptive_search`的搜索日志中提取进化链 diff，总结代码层面的优化模式
-- expert_tuning：从对话历史中提取人工调优经验，总结"用户建议 → 性能提升"的因果链
+功能：
+- 从搜索日志中提取进化链diff，总结能带来性能提升的优化经验（search_log 模式）
+- 从对话历史中提取人工调优经验，“用户建议 → 代码变更 → 性能变化”因果链（expert_tuning 模式）
+- 从错误修复记录中提取调试经验，“错误类型 → 修复策略”（error_fix 模式）
 
-输出：生成的 SKILL.md 文件路径"""
+适用场景：
+- 使用过adaptive_search，想要收集能带来性能提升的优化经验
+- 用户手动指导优化后，想要固化专家经验
+- 使用过adaptive_search、evolve、kernelgen等代码生成工具，想要收集代码生成过程中出现多次失败后成功修复的调试经验
+
+输出：生成或更新的 SKILL.md 文件路径
+"""
 
     PARAMETERS_SCHEMA = {
         "type": "object",
         "properties": {
             "mode": {
                 "type": "string",
-                "enum": ["search_log", "expert_tuning"],
-                "description": "skill 进化模式: search_log(搜索日志分析) 或 expert_tuning(专家调优经验)",
+                "enum": ["search_log", "expert_tuning", "error_fix"],
+                "description": "模式选择：search_log=搜索日志优化经验，expert_tuning=人工调优经验，error_fix=错误修复经验",
                 "default": "search_log",
-            },
-            "log_dir": {
-                "type": "string",
-                "description": "搜索日志目录（mode=search_log 时必填）",
-                "default": "",
             },
             "op_name": {
                 "type": "string",
                 "description": "算子名称（如 relu、l1norm）",
+            },
+            "log_dir": {
+                "type": "string",
+                "description": "日志目录路径。只有 search_log/error_fix 模式需要，通常为 ~/.akg/conversations/cli_xxx/nodes/xxx/logs/，需要保证当前节点的result.json里面'status'字段为'success'",
+                "default": "",
+            },
+            "conversation_dir": {
+                "type": "string",
+                "description": "对话目录路径。只有 expert_tuning 模式需要，通常为 ~/.akg/conversations/cli_xxx",
+                "default": "",
             },
             "task_desc": {
                 "type": "string",
@@ -73,12 +87,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
             },
             "output_dir": {
                 "type": "string",
-                "description": "SKILL.md 输出目录（可选）",
-                "default": "",
-            },
-            "conversation_dir": {
-                "type": "string",
-                "description": "对话目录路径，如 .akg/conversations/cli_xxx（mode=expert_tuning 时必填）",
+                "description": "SKILL.md 输出目录（可选，默认写入 op/resources/skills/{dsl}/evolved/{skill_name}/），非特殊需求不需要指定",
                 "default": "",
             },
         },
@@ -93,6 +102,12 @@ class SkillEvolutionAgent(SkillEvolutionBase):
         )
         self.expert_tuning_template = self.load_template(
             "skill_evolution/analyze_expert_tuning.j2"
+        )
+        self.error_fix_template = self.load_template(
+            "skill_evolution/analyze_error_fix.j2"
+        )
+        self.dedup_error_fix_template = self.load_template(
+            "skill_evolution/dedup_error_fix.j2"
         )
 
     async def run(
@@ -121,11 +136,18 @@ class SkillEvolutionAgent(SkillEvolutionBase):
                 output_dir=output_dir,
                 cur_path=cur_path,
             )
+        elif mode == "error_fix":
+            return await self._run_error_fix(
+                log_dir=log_dir,
+                op_name=op_name,
+                output_dir=output_dir,
+                cur_path=cur_path,
+            )
         else:
             return {
                 "status": "error",
                 "output": "",
-                "error_information": f"不支持的模式: {mode}，可选: search_log, expert_tuning",
+                "error_information": f"不支持的模式: {mode}，可选: search_log, expert_tuning, error_fix",
             }
 
     # ==================== 公共：解析 + 写入 SKILL.md ====================
@@ -346,3 +368,143 @@ class SkillEvolutionAgent(SkillEvolutionBase):
 
         except Exception as e:
             return self._error_result("expert_tuning", e, work_dir, log_lines)
+
+    # ==================== error_fix 模式 ====================
+
+    async def _run_error_fix(
+        self,
+        log_dir: str,
+        op_name: str,
+        output_dir: str = "",
+        cur_path: str = "",
+    ) -> Dict[str, Any]:
+        from akg_agents.op.tools.skill_evolution.error_fix_utils import (
+            collect, to_prompt_vars,
+        )
+        from akg_agents.op.tools.skill_evolution.common import SkillWriter
+
+        work_dir = self._init_workspace(cur_path, log_dir, op_name)
+        log_lines: List[str] = []
+
+        try:
+            if not log_dir:
+                return self._fail_result(
+                    "error_fix", "未提供搜索日志目录 (log_dir)",
+                    work_dir, log_lines,
+                )
+            if not os.path.isdir(log_dir):
+                return self._fail_result(
+                    "error_fix", f"搜索日志目录不存在: {log_dir}",
+                    work_dir, log_lines,
+                )
+
+            self._print("error_fix", f"开始: op_name={op_name}, log_dir={log_dir}", log_lines)
+            t0 = time.time()
+
+            records, metadata = collect(log_dir, op_name)
+            metadata["op_name"] = op_name
+            metadata["source"] = "error_fix"
+
+            if not records:
+                return self._fail_result(
+                    "error_fix", "未找到任何成功修复记录", work_dir, log_lines,
+                )
+
+            self._print("error_fix", f"收集到 {len(records)} 个成功修复记录", log_lines)
+            self._save_json(work_dir, "collected_fix_records.json", {
+                "metadata": metadata,
+                "records": [
+                    {"task_id": r.task_id, "error_step": r.error_step,
+                     "diff_lines": r.diff.count("\n")}
+                    for r in records
+                ],
+            })
+
+            prompt_vars = to_prompt_vars(records, metadata)
+
+            body = await self._call_llm_and_save(
+                "error_fix", self.error_fix_template, prompt_vars,
+                work_dir, log_lines,
+            )
+
+            if not body.strip():
+                return self._fail_result(
+                    "error_fix", "LLM 未生成有效内容", work_dir, log_lines,
+                )
+
+            writer = SkillWriter()
+            skill_path = writer.get_error_fix_skill_path(
+                metadata, output_dir or None,
+            )
+            existing_body = writer.read_error_fix_body(skill_path)
+
+            if existing_body:
+                self._print(
+                    "error_fix",
+                    f"已有 SKILL.md ({len(existing_body)} 字符)，LLM 去重",
+                    log_lines,
+                )
+                self._save_text(work_dir, "existing_skill_body.md", existing_body)
+                dedup_vars = {
+                    "existing_body": existing_body,
+                    "new_body": body,
+                }
+                increment = await self._call_llm_and_save(
+                    "error_fix_dedup", self.dedup_error_fix_template,
+                    dedup_vars, work_dir, log_lines,
+                )
+                no_new = not increment.strip() or "无新增内容" in increment
+                if no_new:
+                    elapsed = time.time() - t0
+                    self._print("error_fix", f"无新增内容，跳过写入 ({elapsed:.1f}s)", log_lines)
+                    result_meta: Dict[str, Any] = {
+                        "status": "success", "skill_path": skill_path,
+                        "skill_name": SkillWriter.ERROR_FIX_SKILL_NAME,
+                        "elapsed_seconds": round(elapsed, 1),
+                        "mode": "error_fix",
+                    }
+                    self._save_json(work_dir, "result.json", result_meta)
+                    self._save_session_log(work_dir, log_lines)
+                    return {
+                        "status": "success",
+                        "output": f"无新增内容，已有 SKILL.md 未变更: {skill_path}",
+                        "error_information": "",
+                        "skill_path": skill_path,
+                    }
+                body = increment
+
+            try:
+                skill_path = writer.write_error_fix(
+                    body, metadata, output_dir or None,
+                )
+            except OSError as e:
+                return self._fail_result(
+                    "error_fix", f"SKILL.md 写入失败: {e}", work_dir, log_lines,
+                )
+
+            elapsed = time.time() - t0
+            action = "追加" if existing_body else "新建"
+            self._print("error_fix", f"完成({action}): {skill_path} ({elapsed:.1f}s)", log_lines)
+
+            result_meta_final: Dict[str, Any] = {
+                "status": "success", "skill_path": skill_path,
+                "skill_name": SkillWriter.ERROR_FIX_SKILL_NAME,
+                "elapsed_seconds": round(elapsed, 1),
+                "mode": "error_fix",
+            }
+            self._save_json(work_dir, "result.json", result_meta_final)
+            self._save_session_log(work_dir, log_lines)
+
+            return {
+                "status": "success",
+                "output": "\n".join([
+                    f"Skill 已{action}: {skill_path}",
+                    f"- 数据: {len(records)} 个成功修复案例",
+                    f"- 工作区: {work_dir}",
+                ]),
+                "error_information": "",
+                "skill_path": skill_path,
+            }
+
+        except Exception as e:
+            return self._error_result("error_fix", e, work_dir, log_lines)
