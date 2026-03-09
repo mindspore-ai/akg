@@ -35,6 +35,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -638,8 +639,17 @@ struct ShapeNormalState {
       ReassociationIndices group;
       int64_t coarseSize = axisSizes[coarseShape[coarseInd]];
       if (coarseSize == ShapedType::kDynamic) {
-        group.push_back(static_cast<int64_t>(fineInd));
-        fineInd++;
+        SmallVector<std::string> targetGroupFinestShape = expandAxisRecursively(coarseShape[coarseInd]);
+        SmallVector<std::string> tmpGroupFinestShape;
+        while (tmpGroupFinestShape != targetGroupFinestShape) {
+          if (axisSizes[fineShape[fineInd]] == 1) {
+            group.push_back(static_cast<int64_t>(fineInd++));
+            continue;
+          }
+          tmpGroupFinestShape.append(expandAxisRecursively(fineShape[fineInd]));
+          group.push_back(static_cast<int64_t>(fineInd));
+          fineInd++;
+        }
       }
       while (tmpTargetSize < coarseSize) {
         group.push_back(static_cast<int64_t>(fineInd));
@@ -917,6 +927,31 @@ struct ArithOpAdapter final : OpAdapter {
   }
 };
 
+struct AffineApplyAdapter final : OpAdapter {
+  bool match(Operation *op) const override { return isa<affine::AffineApplyOp>(op); }
+  void unifyToFinestAxes(Operation *op, ShapeNormalState &state) const override {}
+  void assignLabels(Operation *op, ShapeNormalState &state) const override {}
+  void rewrite(Operation *op, ShapeNormalState &state, PatternRewriter &rewriter) const override {
+    IRMapping mapping;
+    bool hasMappedOperand = false;
+    for (Value operand : op->getOperands()) {
+      if (Value newVal = state.ssaMap.lookup(operand)) {
+        mapping.map(operand, newVal);
+        hasMappedOperand = true;
+      }
+    }
+    if (!hasMappedOperand) return;
+    rewriter.setInsertionPoint(op);
+    Operation *newOp = rewriter.clone(*op, mapping);
+    for (OpResult oldResult : op->getResults()) {
+      Value newResult = newOp->getResult(oldResult.getResultNumber());
+      state.ssaMap[oldResult] = newResult;
+      oldResult.replaceAllUsesWith(newResult);
+    }
+    state.toDeleteOps.insert(op);
+  }
+};
+
 struct DimOpAdapter final : OpAdapter {
   bool match(Operation *op) const override { return isa<memref::DimOp>(op); }
   void unifyToFinestAxes(Operation *op, ShapeNormalState &state) const override {}
@@ -1032,12 +1067,17 @@ struct ExpandShapeAdapter final : OpAdapter {
       } else {
         SmallVector<std::string> childAxes;
         for (int64_t outDim : indices) {
-          if (outDim < outputRank) {
-            int64_t dimSize = expandOp.getResultType().getDimSize(outDim);
-            std::string newAxis = (dimSize == state.axisSizes[srcAxis]) ? srcAxis : state.createNewSymbolicDim(dimSize);
-            resultAxes[outDim] = newAxis;
-            childAxes.push_back(newAxis);
-          }
+          int64_t dimSize = expandOp.getResultType().getDimSize(outDim);
+          std::string newAxis = state.createNewSymbolicDim(dimSize);
+          resultAxes[outDim] = newAxis;
+          childAxes.push_back(newAxis);
+        }
+        SmallVector<std::string> childAxesWithoutOne;
+        std::copy_if(childAxes.begin(), childAxes.end(), std::back_inserter(childAxesWithoutOne),
+                     [](const std::string &axis) { return axis != "1"; });
+        if (childAxesWithoutOne.size() == 1) {
+          auto it = std::find(childAxes.begin(), childAxes.end(), childAxesWithoutOne[0]);
+          if (it != childAxes.end()) resultAxes[indices[std::distance(childAxes.begin(), it)]] = srcAxis;
         }
         state.updateDecomposition(srcAxis, childAxes);
       }
@@ -1090,13 +1130,11 @@ struct CollapseShapeAdapter final : OpAdapter {
     SmallVector<ArrayRef<int64_t>> reassociation;
     llvm::copy(reassociationVec, std::back_inserter(reassociation));
     SmallVector<std::string> resultSymShape;
-    int64_t inputRank = cast<MemRefType>(src.getType()).getRank();
     for (size_t reassocIdx = 0; reassocIdx < reassociation.size(); ++reassocIdx) {
       const auto &indices = reassociation[reassocIdx];
       SmallVector<std::string> groupAxes;
-      for (int64_t inputDim : indices) {
-        if (inputDim < inputRank) groupAxes.push_back(srcSymShape[inputDim]);
-      }
+      std::transform(indices.begin(), indices.end(), std::back_inserter(groupAxes),
+                     [&srcSymShape](int64_t inputDim) { return srcSymShape[inputDim]; });
       if (groupAxes.size() == 1) {
         resultSymShape.push_back(groupAxes[0]);
       } else {
@@ -1517,6 +1555,7 @@ static const OpAdapterRegistry &getOpAdapterRegistry() {
     R.registerAdapter(std::make_unique<AllocAdapter>());
     R.registerAdapter(std::make_unique<ConstantAdapter>());
     R.registerAdapter(std::make_unique<ArithOpAdapter>());
+    R.registerAdapter(std::make_unique<AffineApplyAdapter>());
     R.registerAdapter(std::make_unique<DimOpAdapter>());
     R.registerAdapter(std::make_unique<GlobalAdapter>());
     R.registerAdapter(std::make_unique<ExpandShapeAdapter>());
@@ -1628,7 +1667,6 @@ void materializeReturnReshapes(ModuleOp module, ShapeNormalState &state, Pattern
     Location loc = returnOp.getLoc();
     SmallVector<Value> newOperands;
     func::FuncOp func = returnOp->getParentOfType<func::FuncOp>();
-    auto funcType = func.getFunctionType();
 
     auto it = state.returnOpShapes.find(returnOp);
     if (it == state.returnOpShapes.end()) return;
