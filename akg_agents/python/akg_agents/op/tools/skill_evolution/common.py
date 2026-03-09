@@ -127,8 +127,14 @@ def strip_comments(code: str) -> str:
 
 def code_diff(
     base: str, target: str, base_label: str, target_label: str,
+    truncate: bool = True,
 ) -> str:
-    """注释剥离后生成 unified diff"""
+    """注释剥离后生成 unified diff
+
+    Args:
+        truncate: 是否截断超长 diff（默认 True，上限 DIFF_MAX_LINES 行）。
+                  error_fix 模式传 False 以保留完整 diff。
+    """
     base = strip_comments(base)
     target = strip_comments(target)
 
@@ -142,7 +148,7 @@ def code_diff(
     if not diff_lines:
         return "(代码相同)"
 
-    if len(diff_lines) > DIFF_MAX_LINES:
+    if truncate and len(diff_lines) > DIFF_MAX_LINES:
         total = len(diff_lines)
         diff_lines = diff_lines[:DIFF_MAX_LINES]
         diff_lines.append(f"... (截断，共 {total} 行)\n")
@@ -200,8 +206,13 @@ class SkillWriter:
     """SKILL.md 文件写入器
 
     将 LLM 生成的 Markdown 正文附上 YAML frontmatter 后保存为标准 SKILL.md。
-    支持 search_log 模式（CompressedData）和 expert_tuning 模式（metadata dict）。
+    支持 search_log（CompressedData）、expert_tuning（dict）和 error_fix（dict）三种模式。
     """
+
+    _SOURCE_PREFIX_MAP = {
+        "expert_tuning": "exp",
+        "error_fix": "fix",
+    }
 
     def write(
         self,
@@ -212,15 +223,15 @@ class SkillWriter:
         output_dir: Optional[str] = None,
     ) -> str:
         if isinstance(compressed, dict):
-            is_expert_tuning = compressed.get("source") == "expert_tuning"
+            source = compressed.get("source", "search_log")
             op_name = compressed.get("op_name", "")
             dsl = compressed.get("dsl", "")
         else:
-            is_expert_tuning = False
+            source = "search_log"
             op_name = compressed.op_name
             dsl = compressed.dsl
 
-        fallback_prefix = "exp" if is_expert_tuning else "case"
+        fallback_prefix = self._SOURCE_PREFIX_MAP.get(source, "case")
 
         skill_name = self._sanitize_skill_name(
             skill_name, op_name, dsl,
@@ -235,7 +246,6 @@ class SkillWriter:
         os.makedirs(skill_dir, exist_ok=True)
         skill_path = os.path.join(skill_dir, "SKILL.md")
 
-        source = "expert_tuning" if is_expert_tuning else "search_log"
         frontmatter = self._build_frontmatter(
             skill_name, description, compressed, source=source,
         )
@@ -273,6 +283,86 @@ class SkillWriter:
             / dsl_key / "evolved" / skill_name
         )
 
+    ERROR_FIX_SKILL_NAME = "error-fix"
+    ERROR_FIX_DESCRIPTION = "常见错误及修复方法，用于代码生成时避免同类问题"
+
+    def get_error_fix_skill_path(
+        self,
+        metadata: Dict[str, str],
+        output_dir: Optional[str] = None,
+    ) -> str:
+        """返回 error_fix SKILL.md 的目标路径（不创建文件）"""
+        dsl = metadata.get("dsl", "")
+        if output_dir:
+            skill_dir = os.path.join(output_dir, self.ERROR_FIX_SKILL_NAME)
+        else:
+            skill_dir = self._default_skill_dir(dsl, self.ERROR_FIX_SKILL_NAME)
+        return os.path.join(skill_dir, "SKILL.md")
+
+    @staticmethod
+    def read_error_fix_body(skill_path: str) -> str:
+        """读取已有 error_fix SKILL.md 的正文（去除 YAML frontmatter）"""
+        if not os.path.isfile(skill_path):
+            return ""
+        try:
+            with open(skill_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError:
+            return ""
+        if content.startswith("---"):
+            end = content.find("---", 3)
+            if end != -1:
+                return content[end + 3:].strip()
+        return content.strip()
+
+    def write_error_fix(
+        self,
+        markdown_body: str,
+        metadata: Dict[str, str],
+        output_dir: Optional[str] = None,
+    ) -> str:
+        """error_fix 专用写入：文件不存在时新建，已存在时追加
+
+        调用方负责在追加前通过 LLM 去重，确保 markdown_body 只包含新增内容。
+        """
+        dsl = metadata.get("dsl", "")
+        backend = metadata.get("backend", "")
+        skill_path = self.get_error_fix_skill_path(metadata, output_dir)
+
+        os.makedirs(os.path.dirname(skill_path), exist_ok=True)
+
+        if os.path.isfile(skill_path):
+            with open(skill_path, "a", encoding="utf-8") as f:
+                f.write("\n\n" + markdown_body.strip() + "\n")
+            logger.info(f"[SkillEvolution:Writer] error_fix SKILL.md 已追加: {skill_path}")
+        else:
+            frontmatter_text = self._make_error_fix_frontmatter(dsl, backend)
+            with open(skill_path, "w", encoding="utf-8") as f:
+                f.write(frontmatter_text + "\n\n" + markdown_body.strip() + "\n")
+            logger.info(f"[SkillEvolution:Writer] error_fix SKILL.md 已新建: {skill_path}")
+
+        return skill_path
+
+    def _make_error_fix_frontmatter(self, dsl: str, backend: str) -> str:
+        meta: Dict[str, str] = {"source": "error_fix"}
+        if backend:
+            meta["backend"] = backend
+        if dsl:
+            meta["dsl"] = dsl
+
+        frontmatter = {
+            "name": self.ERROR_FIX_SKILL_NAME,
+            "description": self.ERROR_FIX_DESCRIPTION,
+            "category": "example",
+            "version": "1.0.0",
+            "metadata": meta,
+        }
+        yaml_str = yaml.dump(
+            frontmatter, default_flow_style=False,
+            allow_unicode=True, sort_keys=False,
+        )
+        return f"---\n{yaml_str}---"
+
     def _build_frontmatter(
         self,
         skill_name: str,
@@ -289,11 +379,11 @@ class SkillWriter:
             backend = compressed.backend
             dsl = compressed.dsl
 
-        default_desc = (
-            f"{op_name} 专家调优经验"
-            if source == "expert_tuning"
-            else f"{op_name} 搜索日志优化经验"
-        )
+        _desc_map = {
+            "expert_tuning": f"{op_name} 专家调优经验",
+            "error_fix": f"{op_name} 错误修复经验",
+        }
+        default_desc = _desc_map.get(source, f"{op_name} 搜索日志优化经验")
         desc = description or default_desc
 
         meta: Dict[str, str] = {"source": source}
