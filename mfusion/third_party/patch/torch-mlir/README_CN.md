@@ -150,6 +150,23 @@ Torch-MLIR 跟踪的是 LLVM 主干的较新版本，而本项目使用的是 LL
 - `lib/Dialect/TorchConversion/Transforms/UnpackQuantTensor.cpp`
 - `lib/RefBackend/RefBackend.cpp`
 
+### 006-disable-aten-fold-constant.patch
+
+**描述：**  
+禁用 `aten.ones`、`aten.zeros`、`aten.full` 的常量折叠，使这三类 Op 在 canonicalization 时不再被折叠为 `torch.vtensor.literal`。
+
+**问题：**  
+在 mfusion 的 `fuse_and_optimize` 流程中会执行 `canonicalize`。Torch-MLIR 中若上述 Op 启用了 `hasFolder` 并实现了 `fold()`，当输入为编译期常量时会被折叠为 `torch.vtensor.literal`，导致后续 pipeline 中出现 literal，与当前处理方式不符。
+
+**解决方案：**
+
+1. **TableGen（.td）**：在 `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td` 中移除 `AtenOnesOp`、`AtenZerosOp`、`AtenFullOp` 的 `let hasFolder = 1;`，使 TableGen 不再为这三类 Op 声明 fold。
+2. **C++ 实现（.cpp）**：在 `lib/Dialect/Torch/IR/TorchOps.cpp` 中删除 `AtenOnesOp::fold`、`AtenZerosOp::fold`、`AtenFullOp::fold` 的完整实现块（约 130 行），与 .td 中取消 hasFolder 保持一致，避免链接未定义符号。
+
+**修改的文件：**
+- `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td`
+- `lib/Dialect/Torch/IR/TorchOps.cpp`
+
 ## 应用顺序
 
 这些补丁应按数字顺序应用（001 → 002 → ...）。
