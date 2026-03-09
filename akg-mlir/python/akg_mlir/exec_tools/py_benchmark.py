@@ -28,7 +28,7 @@ from bfloat16 import bfloat16
 
 from akg import AkgMlirDriver
 from akg import akgProfileMgr
-from akg.backends.ascend import transform_data_to_ascend, launch, ascend_compile
+from akg.backends.ascend import launch, ascend_compile
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
 from ..utils.dynamic_utils import dump_shape_arg_list, get_device_shape
 from ..utils.gen_runtime_code import (ProfilingParams, gen_cuda_runtime_code)
@@ -354,13 +354,12 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
     else:
         dso_path = os.path.join(_get_kernel_meta_dir(), "lib" + kernel_name + ".so")
 
-    input_for_mod_ctypes = transform_data_to_ascend(
-        input_for_mod, kernel_name, output_indexes, is_dyn_shape, "ascend")
-    # Run executable and compare results
+    # All preprocessing (bf16, output_indexes, device_shape) done inside launch()
     device_id = int(os.environ.get("DEVICE_ID", 0))
     dso_path = _get_kernel_meta_dir()
     if profiling_trails == 0:
-        launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes, use_mem_pool = True)
+        launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod,
+               use_mem_pool=True, output_indexes=output_indexes)
         for idx, d in enumerate(expect):
             expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
         compare_results(kernel_name, desc, input_for_mod,
@@ -368,7 +367,8 @@ def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name
     else:
         akgProfileMgr.ascend_start_profiling(device_id)
         for _ in range(5):
-            launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes, use_mem_pool = True)
+            launch(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod,
+                   use_mem_pool=True, output_indexes=output_indexes)
         akgProfileMgr.ascend_stop_profiling()
         # analysis
         cycle = profiling_analyse(None)
