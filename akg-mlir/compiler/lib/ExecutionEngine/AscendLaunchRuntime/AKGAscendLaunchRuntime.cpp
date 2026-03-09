@@ -15,12 +15,14 @@
  */
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AKGAscendLaunchRuntime.h"
 #include <climits>
+#include <cstdint>
 #include <limits>
 #include <algorithm>
 #include <iostream>
 #include <cstdlib>
 #include <string>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendMemoryManager.h"
@@ -92,6 +94,30 @@ BlockDimCache &GetBlockDimCache() {
   static BlockDimCache cache;
   return cache;
 }
+
+struct RuntimeCache {
+  std::mutex mutex;
+  std::unordered_map<std::string, std::unique_ptr<AscendKernelRuntime>> cache;
+
+  AscendKernelRuntime *GetOrCreate(uint32_t device_id, bool use_mem_pool, void *external_stream) {
+    std::string key = std::to_string(device_id) + "_" + std::to_string(use_mem_pool) + "_" +
+                      std::to_string(reinterpret_cast<uintptr_t>(external_stream));
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+      return it->second.get();
+    }
+    auto rt = std::make_unique<AscendKernelRuntime>(device_id, use_mem_pool, external_stream);
+    AscendKernelRuntime *ptr = rt.get();
+    cache[key] = std::move(rt);
+    return ptr;
+  }
+};
+
+RuntimeCache &GetRuntimeCache() {
+  static RuntimeCache cache;
+  return cache;
+}
 }  // namespace
 
 constexpr auto kBinFileSuffix = ".so";
@@ -100,6 +126,11 @@ constexpr auto kAiCoreStr = "AiCore";
 constexpr auto kMIXStr = "MIX";
 
 static thread_local aclrtContext thread_local_rt_context{nullptr};
+
+AscendKernelRuntime *AscendKernelRuntime::GetOrCreateRuntime(uint32_t device_id, bool use_mem_pool,
+                                                             void *external_stream) {
+  return GetRuntimeCache().GetOrCreate(device_id, use_mem_pool, external_stream);
+}
 
 AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id, bool use_mem_pool, void *external_stream) {
   set_device_id(device_id);
@@ -139,7 +170,14 @@ void AscendKernelRuntime::ReleaseDeviceRes() {
   if (!initialized_) {
     return;
   }
-  SetCurrentContext();
+  if (rt_context_ != nullptr) {
+    auto ret = aclrtSetCurrentContext(rt_context_);
+    if (ret != ACL_SUCCESS) {
+      DLOG(WARNING) << "aclrtSetCurrentContext failed at shutdown, ret[" << GetErrorMsg(ret)
+                    << "], skip ReleaseDeviceRes";
+      return;
+    }
+  }
   if (mem_manager_ != nullptr) {
     mem_manager_->FreeDeviceMemory();
   }
