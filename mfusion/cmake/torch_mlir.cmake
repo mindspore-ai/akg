@@ -24,6 +24,7 @@ akg_add_pkg(torch_mlir
     PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/003-build-remove-tests.patch
     PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/004-disable-torch-to-linalg.patch
     PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/005-fix-compilation-errors.patch
+    PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/006-disable-aten-fold-constant.patch
 )
 
 set(TORCHMLIR_SOURCE_DIR ${torch_mlir_DIRPATH})
