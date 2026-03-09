@@ -65,6 +65,8 @@ class AscendKernelRuntime {
   uint32_t device_id() { return device_id_; }
   void *stream() { return stream_; }
 
+  static AscendKernelRuntime *GetOrCreateRuntime(uint32_t device_id, bool use_mem_pool, void *external_stream);
+
  private:
   bool InitDevice();
   bool ResetDevice(uint32_t device_id);
