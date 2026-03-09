@@ -73,6 +73,7 @@ struct AKGLoopFusion : public mlir::impl::AKGLoopFusionBase<AKGLoopFusion> {
   void replaceDimWithPrimes(mlir::func::FuncOp funcOp);
   void restoreDimFromPrimes(mlir::func::FuncOp funcOp);
   void runOnLoopFusion(mlir::func::FuncOp funcOp);
+  void moveAllocBeforeAffineFor(mlir::func::FuncOp funcOp);
 
   std::optional<llvm::SmallVector<std::string>> getSymShapeAttrFromValue(mlir::Value source);
   std::optional<int64_t> getConstantDimIndex(mlir::Value dimIndex);
@@ -402,10 +403,53 @@ void AKGLoopFusion::runOnBlock(mlir::Block *block, mlir::OperatorTemplate &curOp
   }
 }
 
+void AKGLoopFusion::moveAllocBeforeAffineFor(mlir::func::FuncOp funcOp) {
+  mlir::Block &block = funcOp.getBody().front();
+
+  mlir::Operation *firstAffineFor = nullptr;
+  for (mlir::Operation &op : block) {
+    if (llvm::isa<mlir::affine::AffineForOp>(&op)) {
+      firstAffineFor = &op;
+      break;
+    }
+  }
+
+  if (!firstAffineFor) {
+    llvm::errs() << "[AKG] moveAllocBeforeAffineFor: no top-level affine.for found in func "
+                 << funcOp.getName() << "\n";
+    return;
+  }
+
+
+  llvm::SmallVector<mlir::Operation *, 8> toMove;
+
+  for (auto it = std::next(firstAffineFor->getIterator()), e = block.end();
+       it != e; ++it) {
+    mlir::Operation *op = &*it;
+    if (llvm::isa<mlir::memref::AllocOp, mlir::memref::SubViewOp,
+      mlir::memref::ReshapeOp, mlir::memref::ExpandShapeOp,
+      mlir::memref::CollapseShapeOp, mlir::memref::ReinterpretCastOp,
+      mlir::memref::MemorySpaceCastOp>(op)) {
+      toMove.push_back(op);
+    }
+  }
+
+  if (toMove.empty()) {
+    llvm::errs() << "[AKG] no allocs to move after first top-level affine.for\n";
+    return;
+  }
+
+  for (mlir::Operation *op : toMove) {
+    op->moveBefore(firstAffineFor);
+  }
+}
+
 /// Preprocessing step that performs loop interchange optimization for reduction operations.
 /// Identifies nested loops with reduction axes and interchanges them to improve cache performance.
 void AKGLoopFusion::runPreProcess() {
   mlir::func::FuncOp funcOp = getOperation();
+
+  moveAllocBeforeAffineFor(funcOp);
 
   // The reduce axis sinks to the innermost layer.
   funcOp.walk([&](mlir::affine::AffineForOp inner) {
