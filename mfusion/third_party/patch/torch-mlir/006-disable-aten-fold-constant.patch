@@ -1,0 +1,168 @@
+diff --git a/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td b/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
+index 47bd30d6..3255a8f0 100644
+--- a/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
++++ b/include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td
+@@ -10680,7 +10680,6 @@ def Torch_AtenOnesOp : Torch_Op<"aten.ones", [
+       printDefaultTorchOp(printer, *this, 5, 1);
+     }
+   }];
+-  let hasFolder = 1;
+ }
+
+ def Torch_AtenNewOnesOp : Torch_Op<"aten.new_ones", [
+@@ -10736,7 +10735,6 @@ def Torch_AtenZerosOp : Torch_Op<"aten.zeros", [
+       printDefaultTorchOp(printer, *this, 5, 1);
+     }
+   }];
+-  let hasFolder = 1;
+ }
+
+ def Torch_AtenNewZerosOp : Torch_Op<"aten.new_zeros", [
+@@ -13775,7 +13773,6 @@ def Torch_AtenFullOp : Torch_Op<"aten.full", [
+       printDefaultTorchOp(printer, *this, 6, 1);
+     }
+   }];
+-  let hasFolder = 1;
+ }
+
+ def Torch_AtenFullLikeOp : Torch_Op<"aten.full_like", [
+@@ -19111,4 +19108,3 @@ def Torch_TorchvisionNmsOp : Torch_Op<"torchvision.nms", [
+     }
+   }];
+ }
+-
+diff --git a/lib/Dialect/Torch/IR/TorchOps.cpp b/lib/Dialect/Torch/IR/TorchOps.cpp
+index 8c1e8915..8fe7abdf 100644
+--- a/lib/Dialect/Torch/IR/TorchOps.cpp
++++ b/lib/Dialect/Torch/IR/TorchOps.cpp
+@@ -4835,130 +4835,6 @@ OpFoldResult AtenItemOp::fold(FoldAdaptor adaptor) {
+   return nullptr;
+ }
+
+-//===----------------------------------------------------------------------===//
+-// AtenOnesOp, AtenZerosOp, AtenFullOp
+-//===----------------------------------------------------------------------===//
+-OpFoldResult AtenOnesOp::fold(FoldAdaptor adaptor) {
+-  SmallVector<int64_t> sizes;
+-  if (!matchPattern(getSize(), m_TorchListOfConstantInts(sizes))) {
+-    return nullptr;
+-  }
+-
+-  Type resultType = getResult().getType();
+-  BaseTensorType resultTensorType = dyn_cast<BaseTensorType>(resultType);
+-  if (!resultTensorType || !resultTensorType.hasDtype() ||
+-      !resultTensorType.hasSizes()) {
+-    return nullptr;
+-  }
+-
+-  for (auto sz : sizes)
+-    if (sz == Torch::kUnknownSize || sz < 0)
+-      return nullptr;
+-
+-  for (auto sz : resultTensorType.getSizes())
+-    if (sz == Torch::kUnknownSize || sz < 0)
+-      return nullptr;
+-
+-  ShapedType shapedty =
+-      mlir::RankedTensorType::get( // convert Torch type to builtin ShapedType
+-          sizes, resultTensorType.getDtype());
+-  if (!shapedty) {
+-    return nullptr;
+-  }
+-  auto elementType = shapedty.getElementType();
+-  if (isa<IntegerType>(elementType)) {
+-    Attribute attribute = IntegerAttr::get(elementType, 1);
+-    return DenseElementsAttr::get(shapedty, attribute);
+-  }
+-  if (isa<FloatType>(elementType)) {
+-    Attribute attribute = FloatAttr::get(elementType, 1.0);
+-    return DenseElementsAttr::get(shapedty, attribute);
+-  }
+-  return nullptr;
+-}
+-
+-OpFoldResult AtenZerosOp::fold(FoldAdaptor adaptor) {
+-  SmallVector<int64_t> sizes;
+-  if (!matchPattern(getSize(), m_TorchListOfConstantInts(sizes))) {
+-    return nullptr;
+-  }
+-
+-  Type resultType = getResult().getType();
+-  BaseTensorType resultTensorType = dyn_cast<BaseTensorType>(resultType);
+-  if (!resultTensorType || !resultTensorType.hasDtype() ||
+-      !resultTensorType.hasSizes()) {
+-    return nullptr;
+-  }
+-
+-  for (auto sz : sizes)
+-    if (sz == Torch::kUnknownSize || sz < 0)
+-      return nullptr;
+-
+-  for (auto sz : resultTensorType.getSizes())
+-    if (sz == Torch::kUnknownSize || sz < 0)
+-      return nullptr;
+-
+-  ShapedType shapedty =
+-      mlir::RankedTensorType::get( // convert Torch type to builtin ShapedType
+-          sizes, resultTensorType.getDtype());
+-  if (!shapedty) {
+-    return nullptr;
+-  }
+-
+-  auto elementType = shapedty.getElementType();
+-  if (isa<IntegerType>(elementType)) {
+-    Attribute attribute = IntegerAttr::get(elementType, 0);
+-    return DenseElementsAttr::get(shapedty, attribute);
+-  }
+-  if (isa<FloatType>(elementType)) {
+-    Attribute attribute = FloatAttr::get(elementType, 0.0);
+-    return DenseElementsAttr::get(shapedty, attribute);
+-  }
+-
+-  return nullptr;
+-}
+-
+-OpFoldResult AtenFullOp::fold(FoldAdaptor adaptor) {
+-  SmallVector<int64_t> sizes;
+-  if (!matchPattern(getSize(), m_TorchListOfConstantInts(sizes))) {
+-    return nullptr;
+-  }
+-
+-  Type resultType = getResult().getType();
+-  BaseTensorType resultTensorType = dyn_cast<BaseTensorType>(resultType);
+-  if (!resultTensorType || !resultTensorType.hasDtype() ||
+-      !resultTensorType.hasSizes()) {
+-    return nullptr;
+-  }
+-
+-  for (auto sz : sizes)
+-    if (sz == Torch::kUnknownSize || sz < 0)
+-      return nullptr;
+-
+-  for (auto sz : resultTensorType.getSizes())
+-    if (sz == Torch::kUnknownSize || sz < 0)
+-      return nullptr;
+-
+-  ShapedType shapedty = mlir::RankedTensorType::get(
+-      resultTensorType.getSizes(), resultTensorType.getDtype());
+-
+-  auto elementType = shapedty.getElementType();
+-  if (isa<IntegerType>(elementType)) {
+-    int64_t value = 0;
+-    if (matchPattern(getFillValue(), m_TorchConstantInt(&value))) {
+-      Attribute attribute = IntegerAttr::get(elementType, value);
+-      return DenseElementsAttr::get(shapedty, attribute);
+-    }
+-  }
+-  if (isa<FloatType>(elementType)) {
+-    double value = 0.0;
+-    if (matchPattern(getFillValue(), m_TorchConstantFloat(&value))) {
+-      Attribute attribute = FloatAttr::get(elementType, value);
+-      return DenseElementsAttr::get(shapedty, attribute);
+-    }
+-  }
+-  return nullptr;
+-}
+ //===----------------------------------------------------------------------===//
+ // AtenCeilFloatOp
+ //===----------------------------------------------------------------------===//
