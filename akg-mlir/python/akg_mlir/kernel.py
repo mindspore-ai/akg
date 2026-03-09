@@ -16,8 +16,8 @@ import os
 import logging
 
 from akg.backends.ascend import (
-    transform_data_to_ascend, launch, ascend_compile,
-    run_akg_opt, dump_ascend_meta_data, get_block_dim_from_arch
+    ascend_compile, run_akg_opt, dump_ascend_meta_data, get_block_dim_from_arch,
+    launch
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -80,28 +80,18 @@ class Kernel:
             ) from compile_err
 
     def run(self, *args, **kwargs):
-        """ launch .so file by akg_ascend_backend """
-        # When the PTA side inherits from MLIR, all attributes of data_args here are data;
-        # when it inherits from Triton, the last dimension represents the number of elements.
-        # stream: current_stream passed from PTA; used to keep same stream with other ops
+        """ launch .so file by akg_ascend_backend. """
         stream = kwargs.pop('stream', None)
-        data_args = args
-        # data_args = args[:n-1]
         try:
-            input_for_mod_ctypes = transform_data_to_ascend(
-                data_args,
-                self.kernel_name,
-                self.output_indexes,
-                self.dynamic,
-                "ascend"
-            )
             launch(
                 self.output_so_dir,
                 self.kernel_name,
                 self.device_id,
                 self.dynamic,
-                *input_for_mod_ctypes,
-                stream=stream
+                *args,
+                use_mem_pool=False,
+                stream=stream,
+                output_indexes=self.output_indexes
             )
             logging.info("success launch kernel: %s", {self.kernel_name})
         except Exception as running_err:
