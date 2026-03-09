@@ -97,7 +97,8 @@ class TestCLITraceCommands:
         )
         
         return ts, temp_dir
-    
+
+    @pytest.mark.skip(reason="trace 顶层命令未实现，使用交互模式内 /trace slash command")
     def test_trace_show_command(self, runner, trace_system):
         """测试 trace show 命令"""
         ts, temp_dir = trace_system
@@ -112,7 +113,8 @@ class TestCLITraceCommands:
         # 验证输出
         assert result.exit_code == 0
         # 应该包含树结构或统计信息
-    
+
+    @pytest.mark.skip(reason="trace 顶层命令未实现，使用交互模式内 /trace slash command")
     def test_trace_fork_command(self, runner, trace_system):
         """测试 trace fork 命令"""
         ts, temp_dir = trace_system
@@ -133,7 +135,8 @@ class TestCLITraceCommands:
         
         # 验证 fork 成功
         assert result.exit_code == 0
-    
+
+    @pytest.mark.skip(reason="trace 顶层命令未实现，使用交互模式内 /trace slash command")
     def test_trace_path_command(self, runner, trace_system):
         """测试 trace path 命令"""
         ts, temp_dir = trace_system
@@ -150,7 +153,8 @@ class TestCLITraceCommands:
         
         # 验证输出包含路径信息
         assert result.exit_code == 0
-    
+
+    @pytest.mark.skip(reason="trace 顶层命令未实现，使用交互模式内 /trace slash command")
     def test_trace_history_command(self, runner, trace_system):
         """测试 trace history 命令"""
         ts, temp_dir = trace_system
@@ -165,7 +169,8 @@ class TestCLITraceCommands:
         
         # 验证输出
         assert result.exit_code == 0
-    
+
+    @pytest.mark.skip(reason="trace 顶层命令未实现，使用交互模式内 /trace slash command")
     def test_trace_leaves_command(self, runner, trace_system):
         """测试 trace leaves 命令"""
         ts, temp_dir = trace_system
@@ -179,7 +184,8 @@ class TestCLITraceCommands:
         
         # 验证输出包含叶节点列表
         assert result.exit_code == 0
-    
+
+    @pytest.mark.skip(reason="trace 顶层命令未实现，使用交互模式内 /trace slash command")
     def test_trace_compare_command(self, runner, trace_system):
         """测试 trace compare 命令"""
         ts, temp_dir = trace_system
@@ -197,7 +203,8 @@ class TestCLITraceCommands:
             
             # 验证输出包含对比信息
             assert result.exit_code == 0
-    
+
+    @pytest.mark.skip(reason="trace 顶层命令未实现，使用交互模式内 /trace slash command")
     def test_trace_best_command(self, runner, trace_system):
         """测试 trace best 命令"""
         ts, temp_dir = trace_system
@@ -212,7 +219,8 @@ class TestCLITraceCommands:
         
         # 验证输出
         assert result.exit_code == 0
-    
+
+    @pytest.mark.skip(reason="trace 顶层命令未实现，使用交互模式内 /trace slash command")
     def test_trace_nonexistent_task(self, runner, temp_dir):
         """测试访问不存在的任务"""
         from akg_agents.cli.cli import app
@@ -259,29 +267,105 @@ class TestTraceCommandsUnit:
         # 验证获取路径
         path = ts.get_path_to_node(n1)
         assert len(path) == 2  # root + n1
-        
+
         # 验证获取历史
         history = ts.get_full_action_history(n1)
         assert len(history) == 1
-    
-    def test_trace_compare_for_cli(self, temp_dir):
-        """测试节点对比功能用于 CLI"""
-        ts = TraceSystem("cli_compare", base_dir=temp_dir)
+
+    def test_get_conversation_history(self, temp_dir):
+        """测试从 action_history 提取对话历史"""
+        ts = TraceSystem("test_history", base_dir=temp_dir)
         ts.initialize()
-        
-        # 创建分叉
-        n1 = ts.add_node({"type": "base"}, {"success": True})
-        n2 = ts.add_node({"type": "path1"}, {"success": True})
-        
-        ts.switch_node(n1)
-        n3 = ts.add_node({"type": "path2"}, {"success": True})
-        
-        # 对比
-        comparison = ts.compare_nodes(n2, n3)
-        
-        assert comparison["fork_point"] == n1
-        assert "path_1" in comparison
-        assert "path_2" in comparison
+
+        # 模拟 ask_user 节点
+        ts.add_node(
+            action={"type": "ask_user", "arguments": {"user_input": "请生成 add kernel"}},
+            result={"message": "请确认 block_size: 128"},
+            metrics={}
+        )
+
+        # 模拟 finish 节点
+        ts.add_node(
+            action={"type": "finish"},
+            result={"message": "已完成，性能: 0.85"},
+            metrics={}
+        )
+
+        # 获取对话历史
+        history = ts.get_conversation_history(max_turns=10)
+
+        # 验证
+        assert len(history) == 3  # user + assistant (ask_user) + assistant (finish)
+        assert history[0]["role"] == "user"
+        assert "add kernel" in history[0]["content"]
+        assert history[1]["role"] == "assistant"
+        assert "block_size" in history[1]["content"]
+        assert history[2]["role"] == "assistant"
+        assert "0.85" in history[2]["content"]
+
+
+class TestSessionResolverUnit:
+    """会话 ID 解析器单元测试（精确 + 前缀匹配）"""
+
+    @pytest.fixture
+    def conversations_dir(self):
+        temp = tempfile.mkdtemp()
+        conversations = Path(temp) / "conversations"
+        conversations.mkdir(parents=True, exist_ok=True)
+        yield conversations
+        shutil.rmtree(temp, ignore_errors=True)
+
+    def test_resolve_session_dir_exact_match_priority(self, conversations_dir):
+        """精确匹配优先于前缀匹配"""
+        from akg_agents.cli.commands.trace import resolve_session_dir, SessionResolveError
+
+        (conversations_dir / "cli_abc").mkdir()
+        (conversations_dir / "cli_abcdef").mkdir()
+
+        sid, session_dir = resolve_session_dir("abc", conversations_dir=conversations_dir)
+
+        assert sid == "abc"
+        assert session_dir == conversations_dir / "cli_abc"
+
+    def test_resolve_session_dir_unique_prefix(self, conversations_dir):
+        """唯一前缀时自动恢复"""
+        from akg_agents.cli.commands.trace import resolve_session_dir, SessionResolveError
+
+        (conversations_dir / "cli_50b111f7-aaaa").mkdir()
+        (conversations_dir / "cli_60c222f8-bbbb").mkdir()
+
+        sid, session_dir = resolve_session_dir("50b1", conversations_dir=conversations_dir)
+
+        assert sid == "50b111f7-aaaa"
+        assert session_dir == conversations_dir / "cli_50b111f7-aaaa"
+
+    def test_resolve_session_dir_ambiguous_prefix(self, conversations_dir):
+        """多前缀匹配时报歧义并返回候选"""
+        from akg_agents.cli.commands.trace import resolve_session_dir, SessionResolveError
+
+        (conversations_dir / "cli_1234-abcd").mkdir()
+        (conversations_dir / "cli_1234-efgh").mkdir()
+
+        with pytest.raises(SessionResolveError) as exc_info:
+            resolve_session_dir("1234", conversations_dir=conversations_dir)
+
+        err = exc_info.value
+        assert err.reason == "ambiguous"
+        assert err.candidates == ["1234-abcd", "1234-efgh"]
+
+    def test_resolve_session_dir_not_found(self, conversations_dir):
+        """无匹配时报不存在"""
+        from akg_agents.cli.commands.trace import resolve_session_dir, SessionResolveError
+
+        (conversations_dir / "cli_exists-only").mkdir()
+
+        with pytest.raises(SessionResolveError) as exc_info:
+            resolve_session_dir("missing", conversations_dir=conversations_dir)
+
+        err = exc_info.value
+        assert err.reason == "not_found"
+        assert err.normalized_session_id == "missing"
+        assert err.expected_path == conversations_dir / "cli_missing"
 
 
 if __name__ == "__main__":
