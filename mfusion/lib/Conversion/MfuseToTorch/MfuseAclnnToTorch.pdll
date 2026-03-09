@@ -17,6 +17,11 @@ Pattern ConvertMfuseAclnnMm {
   replace root with op<torch.aten.mm>(convertValues(operands)) -> (convertType(result));
 }
 
+Pattern ConvertMfuseAclnnSigmoid {
+  let root = op<mfuse.aclnn.sigmoid>(operands: ValueRange) -> (result: Type);
+  replace root with op<torch.aten.sigmoid>(convertValues(operands)) -> (convertType(result));
+}
+
 Pattern ConvertMfuseAclnnTanh {
   let root = op<mfuse.aclnn.tanh>(operands: ValueRange) -> (result: Type);
   replace root with op<torch.aten.tanh>(convertValues(operands)) -> (convertType(result));

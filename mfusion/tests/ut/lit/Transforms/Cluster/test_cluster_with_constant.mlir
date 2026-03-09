@@ -92,4 +92,34 @@ func.func @test_cluster_with_multiple_constants(%arg0: tensor<4x4xf32>, %arg1: t
   %3 = mfuse.add %2, %1 : (tensor<4x4xf32>, tensor<f32>) -> tensor<4x4xf32>
   return %3 : tensor<4x4xf32>
 }
+
+// Test clustering with multiple scalar constants and users
+// NOTE: Multiple single-element finite float constants ARE fused into the cluster
+// CHECK-LABEL: func @test_cluster_with_multiple_constants_and_users
+// CHECK-SAME: %arg0: tensor<4x4xf32>
+// CHECK-SAME: %arg1: tensor<4x4xf32>
+// CHECK: %[[FUSED1:.*]] = mfuse.fused %arg1 {fusion_type = "dvm"}
+// CHECK: ^bb0(%arg2: tensor<4x4xf32>):
+// CHECK: %cst = arith.constant dense<2.000000e+00> : tensor<f32>
+// CHECK: %cst_0 = arith.constant dense<3.000000e+00> : tensor<f32>
+// CHECK: %[[MUL1:.*]] = mfuse.mul %arg2, %cst
+// CHECK: %[[ADD1:.*]] = mfuse.add %[[MUL1]], %cst_0
+// CHECK: mfuse.yield %[[ADD1]]
+// CHECK: %[[FUSED2:.*]] = mfuse.fused %arg0 {fusion_type = "dvm"}
+// CHECK: ^bb0(%arg2: tensor<4x4xf32>):
+// CHECK: %cst = arith.constant dense<2.000000e+00> : tensor<f32>
+// CHECK: %cst_0 = arith.constant dense<3.000000e+00> : tensor<f32>
+// CHECK: %[[MUL2:.*]] = mfuse.mul %arg2, %cst
+// CHECK: %[[ADD2:.*]] = mfuse.add %[[MUL2]], %cst_0
+// CHECK: mfuse.yield %[[ADD2]]
+// CHECK: return %[[FUSED2]], %[[FUSED1]]
+func.func @test_cluster_with_multiple_constants_and_users(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>) -> (tensor<4x4xf32>, tensor<4x4xf32>) {
+  %0 = arith.constant dense<2.0> : tensor<f32>
+  %1 = arith.constant dense<3.0> : tensor<f32>
+  %2 = mfuse.mul %arg0, %0 : (tensor<4x4xf32>, tensor<f32>) -> tensor<4x4xf32>
+  %3 = mfuse.add %2, %1 : (tensor<4x4xf32>, tensor<f32>) -> tensor<4x4xf32>
+  %4 = mfuse.mul %arg1, %0 : (tensor<4x4xf32>, tensor<f32>) -> tensor<4x4xf32>
+  %5 = mfuse.add %4, %1 : (tensor<4x4xf32>, tensor<f32>) -> tensor<4x4xf32>
+  return %3, %5 : tensor<4x4xf32>, tensor<4x4xf32>
+}
 }

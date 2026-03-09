@@ -12,16 +12,6 @@ Pattern ConvertMfuseCeil {
   replace root with op<torch.aten.ceil>(convertValue(input)) -> (convertType(result));
 }
 
-Pattern ConvertMfuseDiv {
-  let root = op<mfuse.div>(operands: ValueRange) -> (resType: Type);
-  replace root with op<torch.aten.div.Tensor>(convertValues(operands)) -> (convertType(resType));
-}
-
-Pattern ConvertMfuseEq {
-  let root = op<mfuse.eq>(operands: ValueRange) -> (resType: Type);
-  replace root with op<torch.aten.eq.Tensor>(convertValues(operands)) -> (convertType(resType));
-}
-
 Pattern ConvertMfuseExp {
   let root = op<mfuse.exp>(operand: Value) -> (resType: Type);
   replace root with op<torch.aten.exp>(convertValue(operand)) -> (convertType(resType));
@@ -32,24 +22,9 @@ Pattern ConvertMfuseFloor {
   replace root with op<torch.aten.floor>(convertValue(input)) -> (convertType(result));
 }
 
-Pattern ConvertMfuseGe {
-  let root = op<mfuse.ge>(operands: ValueRange) -> (resType: Type);
-  replace root with op<torch.aten.ge.Tensor>(convertValues(operands)) -> (convertType(resType));
-}
-
-Pattern ConvertMfuseGt {
-  let root = op<mfuse.gt>(operands: ValueRange) -> (resType: Type);
-  replace root with op<torch.aten.gt.Tensor>(convertValues(operands)) -> (convertType(resType));
-}
-
 Pattern ConvertMfuseIsFinite {
   let root = op<mfuse.is_finite>(input: Value) -> (result: Type);
   replace root with op<torch.aten.isfinite>(convertValue(input)) -> (convertType(result));
-}
-
-Pattern ConvertMfuseLe {
-  let root = op<mfuse.le>(operands: ValueRange) -> (resType: Type);
-  replace root with op<torch.aten.le.Tensor>(convertValues(operands)) -> (convertType(resType));
 }
 
 Pattern ConvertMfuseLog {
@@ -72,11 +47,6 @@ Pattern ConvertMfuseLogicalOr {
   replace root with op<torch.aten.logical_or>(convertValues(operands)) -> (convertType(result));
 }
 
-Pattern ConvertMfuseLt {
-  let root = op<mfuse.lt>(operands: ValueRange) -> (resType: Type);
-  replace root with op<torch.aten.lt.Tensor>(convertValues(operands)) -> (convertType(resType));
-}
-
 Pattern ConvertMfuseMaximum {
   let root = op<mfuse.maximum>(operands: ValueRange) -> (result: Type);
   replace root with op<torch.aten.maximum>(convertValues(operands)) -> (convertType(result));
@@ -87,19 +57,9 @@ Pattern ConvertMfuseMinimum {
   replace root with op<torch.aten.minimum>(convertValues(operands)) -> (convertType(result));
 }
 
-Pattern ConvertMfuseMul {
-  let root = op<mfuse.mul>(operands: ValueRange) -> (resType: Type);
-  replace root with op<torch.aten.mul.Tensor>(convertValues(operands)) -> (convertType(resType));
-}
-
 Pattern ConvertMfuseNeg {
   let root = op<mfuse.neg>(input: Value) -> (result: Type);
   replace root with op<torch.aten.neg>(convertValue(input)) -> (convertType(result));
-}
-
-Pattern ConvertMfuseNe {
-  let root = op<mfuse.ne>(operands: ValueRange) -> (resType: Type);
-  replace root with op<torch.aten.ne.Tensor>(convertValues(operands)) -> (convertType(resType));
 }
 
 Pattern ConvertMfusePow {
@@ -110,6 +70,11 @@ Pattern ConvertMfusePow {
 Pattern ConvertMfuseRsqrt {
   let root = op<mfuse.rsqrt>(input: Value) -> (result: Type);
   replace root with op<torch.aten.rsqrt>(convertValue(input)) -> (convertType(result));
+}
+
+Pattern ConvertMfuseReciprocal {
+  let root = op<mfuse.reciprocal>(input: Value) -> (result: Type);
+  replace root with op<torch.aten.reciprocal>(convertValue(input)) -> (convertType(result));
 }
 
 Pattern ConvertMfuseSelect {

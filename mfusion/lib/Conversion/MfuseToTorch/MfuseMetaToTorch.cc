@@ -27,6 +27,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mfusion/Conversion/MfuseToTorch/Utils.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchTypes.h"
 #include "torch-mlir/Dialect/Torch/Utils/TorchUpstream.h"
@@ -398,6 +399,97 @@ class ConvertMfuseReshape : public mlir::OpConversionPattern<mlir::mfuse::Reshap
   }
 };
 
+// Helper function to check if an operand is a scalar
+static bool isOperandScalar(mlir::Value operand) {
+  auto type = mlir::dyn_cast<mlir::RankedTensorType>(operand.getType());
+  return type && type.getRank() == 0;
+}
+
+// Common logic for binary op conversion
+// Returns a tuple of (lhs, processedRhs, isRhsScalar, torchResultType) if successful
+// Returns failure otherwise
+template <typename SourceOp>
+static mlir::FailureOr<std::tuple<mlir::Value, mlir::Value, bool, mlir::Type>> convertBinaryOpCommon(
+  SourceOp op, typename SourceOp::Adaptor adaptor, ConversionPatternRewriter &rewriter,
+  const OpConversionPattern<SourceOp> *pattern) {
+  auto operands = adaptor.getOperands();
+  constexpr size_t kBinaryOpNumOperands = 2;
+  if (operands.size() != kBinaryOpNumOperands) {
+    return rewriter.notifyMatchFailure(op, "binary op must have 2 operands");
+  }
+  constexpr size_t kLhsIndex = 0;
+  constexpr size_t kRhsIndex = 1;
+  mlir::Value lhs = operands[kLhsIndex];
+  mlir::Value rhs = operands[kRhsIndex];
+
+  auto torchResultType = pattern->getTypeConverter()->convertType(op.getResult().getType());
+  if (!torchResultType) {
+    return mlir::failure();
+  }
+
+  // Check if lhs is tensor and rhs is scalar
+  bool isRhsScalar = isOperandScalar(op.getOperand(kRhsIndex));
+
+  // Process rhs if it's a scalar
+  mlir::Value processedRhs = rhs;
+  if (isRhsScalar) {
+    processedRhs = materializeConstValueToTorchScalar(op.getOperation(), op.getOperand(kRhsIndex), rewriter);
+  }
+
+  return std::make_tuple(lhs, processedRhs, isRhsScalar, torchResultType);
+}
+
+// Convert binary ops with tensor and scalar operands to corresponding torch ops (without alpha parameter)
+template <typename SourceOp, typename TargetTensorOp, typename TargetScalarOp>
+class ConvertBinaryOpPattern : public OpConversionPattern<SourceOp> {
+ public:
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto commonResult = convertBinaryOpCommon(op, adaptor, rewriter, this);
+    if (failed(commonResult)) {
+      return failure();
+    }
+
+    auto [lhs, processedRhs, isRhsScalar, torchResultType] = commonResult.value();
+
+    if (!isRhsScalar) {
+      rewriter.replaceOpWithNewOp<TargetTensorOp>(op, torchResultType, lhs, processedRhs);
+    } else {
+      rewriter.replaceOpWithNewOp<TargetScalarOp>(op, torchResultType, lhs, processedRhs);
+    }
+    return mlir::success();
+  }
+};
+
+// Convert binary ops with tensor and scalar operands to corresponding torch ops (with alpha parameter)
+template <typename SourceOp, typename TargetTensorOp, typename TargetScalarOp>
+class ConvertBinaryOpWithAlphaPattern : public OpConversionPattern<SourceOp> {
+ public:
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto commonResult = convertBinaryOpCommon(op, adaptor, rewriter, this);
+    if (failed(commonResult)) {
+      return failure();
+    }
+
+    auto [lhs, processedRhs, isRhsScalar, torchResultType] = commonResult.value();
+
+    // Add and sub have alpha input
+    constexpr int64_t kAlphaOne = 1;
+    auto alpha = rewriter.create<TorchD::ConstantIntOp>(op->getLoc(), rewriter.getI64IntegerAttr(kAlphaOne));
+    if (!isRhsScalar) {
+      rewriter.replaceOpWithNewOp<TargetTensorOp>(op, torchResultType, lhs, processedRhs, alpha);
+    } else {
+      rewriter.replaceOpWithNewOp<TargetScalarOp>(op, torchResultType, lhs, processedRhs, alpha);
+    }
+    return mlir::success();
+  }
+};
+
 // ============================================================================
 // =   Please keep the patterns in alphabetical order by operator name   =
 // ============================================================================
@@ -415,10 +507,29 @@ static void populateMfuseMetaToTorchCustomPatterns(TypeConverter &converter, Rew
   patterns.add<ConvertMfuseReshape>(converter, context);
 }
 
+// Convert part of mfuse binary ops support both tensor and scalar operands to corresponding torch tensor scalar ops.
+static void populateMfusePartBinaryOpToTorchTensorScalarPatterns(TypeConverter &converter,
+                                                                 RewritePatternSet &patterns) {
+  MLIRContext *ctx = patterns.getContext();
+  // Use ConvertBinaryOpWithAlphaPattern for add and sub operations that require alpha parameter
+  patterns.add<ConvertBinaryOpWithAlphaPattern<mfuse::AddOp, TorchD::AtenAddTensorOp, TorchD::AtenAddScalarOp>,
+               ConvertBinaryOpWithAlphaPattern<mfuse::SubOp, TorchD::AtenSubTensorOp, TorchD::AtenSubScalarOp>>(
+    converter, ctx);
+  // Use ConvertBinaryOpPattern for other operations that don't require alpha parameter
+  patterns.add<ConvertBinaryOpPattern<mfuse::DivOp, TorchD::AtenDivTensorOp, TorchD::AtenDivScalarOp>,
+               ConvertBinaryOpPattern<mfuse::EqOp, TorchD::AtenEqTensorOp, TorchD::AtenEqScalarOp>,
+               ConvertBinaryOpPattern<mfuse::GeOp, TorchD::AtenGeTensorOp, TorchD::AtenGeScalarOp>,
+               ConvertBinaryOpPattern<mfuse::GtOp, TorchD::AtenGtTensorOp, TorchD::AtenGtScalarOp>,
+               ConvertBinaryOpPattern<mfuse::LeOp, TorchD::AtenLeTensorOp, TorchD::AtenLeScalarOp>,
+               ConvertBinaryOpPattern<mfuse::LtOp, TorchD::AtenLtTensorOp, TorchD::AtenLtScalarOp>,
+               ConvertBinaryOpPattern<mfuse::MulOp, TorchD::AtenMulTensorOp, TorchD::AtenMulScalarOp>,
+               ConvertBinaryOpPattern<mfuse::NeOp, TorchD::AtenNeTensorOp, TorchD::AtenNeScalarOp>>(converter, ctx);
+}
 }  // namespace
 
 void populateMfuseMetaToTorchConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   populateMfuseMetaToTorchCustomPatterns(converter, patterns);
+  populateMfusePartBinaryOpToTorchTensorScalarPatterns(converter, patterns);
 }
 
 }  // namespace mlir
