@@ -15,6 +15,7 @@
  */
 
 #include <algorithm>
+#include <iterator>
 #include <iostream>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AKGAscendRun.h"
 
@@ -88,46 +89,68 @@ void ParseInputArgs(bool is_dynamic,
                     std::vector<mlir::runtime::BaseDevicePtr> &input,
                     std::vector<std::vector<int64_t>> &input_shapes,
                     std::map<uint64_t, py::buffer_info> &bf16_buf_map,
-                    const py::args &args) {
+                    const py::list &processed_args) {
+  /* Tensor also implements buffer protocol; check tensor first for device ptr. */
   auto is_tensor_arg = [](const py::handle &h) {
-    return py::isinstance<AscendTensorObjStructPyTorch>(h);
+    return py::hasattr(h, "data_ptr") && py::hasattr(h, "nbytes");
+  };
+  auto is_numpy_arg = [](const py::handle &h) {
+    return py::isinstance<py::buffer>(h) && !py::hasattr(h, "data_ptr");
   };
 
-  for (uint16_t i = 0; i < args.size(); i++) {
-    if (!is_tensor_arg(args[i])) {
-      input.push_back(CreateScalarDevice(args[i]));
+  for (uint16_t i = 0; i < processed_args.size(); i++) {
+    py::tuple tup = processed_args[i].cast<py::tuple>();
+    py::object data = tup[0].cast<py::object>();
+    bool is_output = tup[1].cast<bool>();
+    bool is_bf16 = tup[2].cast<bool>();
+    py::object shape_obj = tup[3];
+
+    if (py::isinstance<py::int_>(data) || py::isinstance<py::float_>(data) ||
+        py::isinstance<py::bool_>(data)) {
+      input.push_back(CreateScalarDevice(data));
       if (is_dynamic) input_shapes.emplace_back();
       continue;
     }
-    auto tensor_obj_ptr = args[i].cast<AscendTensorObjStructPyTorchPtr>();
-    auto tensor = tensor_obj_ptr->tensor_info;
-    auto is_bf16 = (bool)(tensor_obj_ptr->is_bf16);
 
-    void* data_addr = tensor_obj_ptr->data_ptr();
-    if (is_bf16 && py::isinstance<py::buffer>(tensor)) {
-      py::buffer_info buffer_info = py::cast<py::buffer>(tensor).request();
-      buffer_info = ConvertToBF16(buffer_info);
-      data_addr = buffer_info.ptr;
-      bf16_buf_map[i] = std::move(buffer_info);
-    }
-    auto bytes = (uint64_t)(tensor_obj_ptr->nbytes);
-    auto is_output = (bool)(tensor_obj_ptr->is_output);
-    auto is_host = (bool)(tensor_obj_ptr->is_host());
-    if (is_host) {
-      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(data_addr, nullptr, bytes, is_output));
+    void *data_addr = nullptr;
+    uint64_t bytes = 0;
+    bool use_host = true;
+
+    if (is_tensor_arg(data)) {
+      data_addr = reinterpret_cast<void *>(data.attr("data_ptr")().cast<intptr_t>());
+      bytes = data.attr("nbytes").cast<uint64_t>();
+      use_host = false;
+    } else if (is_numpy_arg(data)) {
+      py::buffer_info buffer_info = py::cast<py::buffer>(data).request();
+      bytes = static_cast<uint64_t>(buffer_info.size * buffer_info.itemsize);
+      if (is_bf16 && buffer_info.itemsize == 4) {
+        py::buffer_info bf16_buffer = ConvertToBF16(buffer_info);
+        data_addr = bf16_buffer.ptr;
+        bf16_buf_map[i] = std::move(bf16_buffer);
+        bytes /= 2;
+      } else {
+        data_addr = buffer_info.ptr;
+      }
+      use_host = true;
     } else {
-      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(nullptr, data_addr, bytes, is_output));
+      throw std::runtime_error("processed_args element must be numpy, tensor, or scalar");
     }
 
     if (is_dynamic) {
-      auto input_shape = std::vector<int64_t>();
-      py::buffer_info shape_info = tensor_obj_ptr->shape_info.request();
-      int64_t *shape = reinterpret_cast<int64_t *>(shape_info.ptr);
-      for (int64_t idx = 0; idx < shape_info.size; idx++) {
-        int64_t dim_value = reinterpret_cast<int64_t>(shape[idx]);
-        input_shape.push_back(dim_value);
-      }
-      input_shapes.push_back(input_shape);
+      py::list shape_list = shape_obj.cast<py::list>();
+      std::vector<int64_t> input_shape;
+      input_shape.reserve(shape_list.size());
+      std::transform(shape_list.begin(), shape_list.end(), std::back_inserter(input_shape),
+          [](const py::handle &dim_h) { return dim_h.cast<int64_t>(); });
+      input_shapes.push_back(std::move(input_shape));
+    }
+
+    if (use_host) {
+      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(
+          data_addr, nullptr, bytes, is_output));
+    } else {
+      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(
+          nullptr, data_addr, bytes, is_output));
     }
   }
 }
@@ -138,12 +161,14 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   if (kwargs.contains("stream") && !kwargs["stream"].is_none()) {
     external_stream = reinterpret_cast<void *>(kwargs["stream"].cast<intptr_t>());
   }
+  py::list processed_args = kwargs["processed_args"].cast<py::list>();
+
   akg_log_init();
   auto input = std::vector<mlir::runtime::BaseDevicePtr>();
   auto input_shapes = std::vector<std::vector<int64_t>>();
   std::map<uint64_t, py::buffer_info> bf16_buf_map;
 
-  ParseInputArgs(is_dynamic, input, input_shapes, bf16_buf_map, args);
+  ParseInputArgs(is_dynamic, input, input_shapes, bf16_buf_map, processed_args);
 
   int64_t tiling_key;
   int64_t tiling_struct_size;
@@ -234,8 +259,9 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   kernel_runtime.RunOpImpl(path, kernel_name, is_dynamic, input, input_shapes, tiling_key, tiling_struct_size);
 
   for (auto iter = bf16_buf_map.begin(); iter != bf16_buf_map.end(); iter++) {
-    auto tensor_obj_ptr = args[iter->first].cast<AscendTensorObjStructPyTorchPtr>();
-    py::buffer_info res_buf = py::cast<py::buffer>(tensor_obj_ptr->tensor_info).request();
+    py::tuple tup = processed_args[iter->first].cast<py::tuple>();
+    py::object data_src = tup[0].cast<py::object>();
+    py::buffer_info res_buf = py::cast<py::buffer>(data_src).request();
     ConvertToFP32(bf16_buf_map[iter->first], res_buf);
   }
   return;

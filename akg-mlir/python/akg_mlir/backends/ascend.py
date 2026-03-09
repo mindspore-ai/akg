@@ -217,65 +217,78 @@ def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=Tru
     dump_ascend_meta_data(output_dir, kernel_name, block_dim=block_dim)
 
 
-def transform_data_to_ascend(
-    data,
-    kernel_name,
-    output_indexes,
-    is_dyn_shape=False,
-    backend="ascend",
-    is_profile_params=False
-):
-    """ Transform tensor input data to ctypes for ascend.
+def _get_device_shape_for_dyn(data, kernel_name, output_so_dir):
+    """Get device shape for dynamic shape. Returns None if not dynamic."""
+    cur_dir = os.path.dirname(output_so_dir) if output_so_dir else ""
+    try:
+        device_shape, _, _ = get_device_shape(data, kernel_name, True, cur_dir=cur_dir)
+        return device_shape
+    except (ValueError, RuntimeError):
+        return [
+            d.shape if hasattr(d, 'shape') and not isinstance(d, (int, float, bool)) else ()
+            for d in data
+        ]
 
-    Args:
-        data: List of input tensors or scalars
-        kernel_name: Name of the kernel
-        output_indexes: Indices of output tensors
-        is_dyn_shape: Whether dynamic shape is used
-        backend: Backend name
-        is_profile_params: Whether profile params mode
+
+def _build_output_idx_set(output_indexes, data_len):
+    """Build set of output indices from output_indexes list."""
+    output_idx_set = set()
+    for idx in output_indexes or []:
+        output_idx_set.add(idx if idx >= 0 else idx + data_len)
+    return output_idx_set
+
+
+def _process_numpy_arg(d, data_idx, data, is_output, device_shape):
+    """Process numpy array: bf16, float16, contiguous, shape.
+    Returns (processed_d, is_bf16, shape). May modify data[data_idx] in place.
     """
-    data_ctypes = []
+    is_bf16 = d.dtype.name == "bfloat16"
+    if is_bf16 and not is_output:
+        d = d.astype(np.float32)
+        data[data_idx] = d
+    if d.dtype == np.float16 or (hasattr(d.dtype, 'char') and d.dtype.char in ('e', 'E')):
+        d = d.view(np.uint16)
+    if not is_output and not d.flags.c_contiguous:
+        d = np.ascontiguousarray(d)
+        data[data_idx] = d
+    if device_shape is not None and data_idx < len(device_shape):
+        s = device_shape[data_idx]
+        shape = list(s) if isinstance(s, (tuple, list)) else []
+    else:
+        shape = list(d.shape)
+    return (d, is_bf16, shape)
+
+
+def _process_tensor_arg(d):
+    """Process tensor (non-numpy): is_bf16, shape. Returns (is_bf16, shape)."""
+    is_bf16 = hasattr(d, 'dtype') and str(d.dtype) == 'torch.bfloat16'
+    shape = list(d.shape) if hasattr(d, 'shape') else []
+    return (is_bf16, shape)
+
+
+def _prepare_ascend_args(data, kernel_name, output_indexes, is_dyn_shape, output_so_dir=""):
+    """Preprocess in Python: bf16, output_indexes, device_shape.
+    Returns list of (numpy_or_tensor, is_output, is_bf16, shape) - still passing numpy/tensor.
+    """
     if len(data) == 0:
-        # dynamic shape info cannot generate inputs while compilation
-        return data_ctypes
+        return []
 
-    device_shape, _, _ = get_device_shape(
-        data, kernel_name, is_dyn_shape and not is_profile_params
-    )
+    device_shape = _get_device_shape_for_dyn(data, kernel_name, output_so_dir) if is_dyn_shape else None
+    output_idx_set = _build_output_idx_set(output_indexes, len(data))
 
-    output_idx_set = []
-    for output_idx in output_indexes:
-        if output_idx >= 0:
-            output_idx_set.append(output_idx)
-        else:
-            output_idx_set.append(output_idx + len(data))
-    output_idx_set = set(output_idx_set)
+    result = []
     for data_idx, d in enumerate(data):
         if isinstance(d, (int, float, bool, complex)):
-            data_ctypes.append(d)
+            result.append((d, False, False, None))
             continue
-        data_shape = np.array(device_shape[data_idx])
-        data_bytes = d.nbytes
-        is_numpy_bf16 = False
-        is_numpy_output = False
+
+        is_output = data_idx in output_idx_set
         if isinstance(d, np.ndarray):
-            if data_idx in output_idx_set:
-                is_numpy_output = True
-            if d.dtype.name == "bfloat16":
-                d = d.astype(np.float32)
-                data[data_idx] = d
-                is_numpy_bf16 = True
-
-        ascend_tensor_obj = akgAscendLaunch.AscendTensorObjStructPyTorch()
-        ascend_tensor_obj.tensor_info = d
-        ascend_tensor_obj.shape_info = data_shape
-        ascend_tensor_obj.nbytes = data_bytes
-        ascend_tensor_obj.is_output = is_numpy_output
-        ascend_tensor_obj.is_bf16 = is_numpy_bf16
-        data_ctypes.append(ascend_tensor_obj)
-
-    return data_ctypes
+            d, is_bf16, shape = _process_numpy_arg(d, data_idx, data, is_output, device_shape)
+        else:
+            is_bf16, shape = _process_tensor_arg(d)
+        result.append((d, is_output, is_bf16, shape))
+    return result
 
 
 def launch(
@@ -283,28 +296,28 @@ def launch(
     kernel_name,
     device_id,
     is_dyn_shape,
-    *input_for_mod_ctypes,
+    *input_for_mod,
     use_mem_pool=False,
-    stream=None
+    stream=None,
+    output_indexes=None
 ):
-    """ launch .so file by akg_ascend_backend
+    """Launch .so file by akg_ascend_backend.
 
-    Args:
-        output_so_dir: Directory containing the .so and .json files
-        kernel_name: Name of the kernel
-        device_id: Device index
-        is_dyn_shape: Whether dynamic shape is used
-        *input_for_mod_ctypes: Tensor/ctypes inputs for the kernel
-        use_mem_pool: Whether to use memory pool
-        stream: Current stream from PTA; None for py_benchmark (AKG uses own stream)
+    All preprocessing (bf16, output_indexes, device_shape) done in Python.
+    Interface: *input_for_mod (numpy/tensor), stream. No kwargs.
     """
+    data_list = list(input_for_mod)
+    processed = _prepare_ascend_args(
+        data_list, kernel_name, output_indexes or [], is_dyn_shape, output_so_dir
+    )
+
     akgAscendLaunch.akg_ascend_run(
         output_so_dir,
         kernel_name,
         device_id,
         is_dyn_shape,
         use_mem_pool,
-        *input_for_mod_ctypes,
+        processed_args=processed,
         stream=stream
     )
 
