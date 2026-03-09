@@ -80,13 +80,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     bufferizationOpts.bufferizeFunctionBoundaries = true;
     bufferizationOpts.setFunctionBoundaryTypeConversion(mlir::bufferization::LayoutMapOption::IdentityLayoutMap);
     pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufferizationOpts));
-
-    if (options.dynamicShape) {
-      pm.addPass(mlir::createInferSymbolicShapesPass());
-    }
-
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createMemrefCopyToLoopsPass());
+    pm.addPass(mlir::createShapeNormalizationPass());
 
     OpPassManager &nestedFusionPM = pm.nest<mlir::func::FuncOp>();
     nestedFusionPM.addPass(mlir::createConvertLinalgToAffineLoopsPass());
@@ -116,9 +112,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createNormalizePass());
     nestedFusionPM.addPass(mlir::createConvertAffineToSCFPass());
 
-    if (options.dynamicShape) {
-      pm.addPass(mlir::createSymbolicRemovalPass());
-    }
+    pm.addPass(mlir::createSymbolicRemovalPass());
     pm.addPass(mlir::createAddOutParameterPass());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createLegalizeBoolPass());

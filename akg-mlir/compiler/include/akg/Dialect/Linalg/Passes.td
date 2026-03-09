@@ -60,6 +60,17 @@ def LinalgTemplated: Pass<"linalg-template-named-ops", "ModuleOp"> {
   ];
 }
 
+def ShapeNormalization : Pass<"shape-normalization", "ModuleOp"> {
+  let summary = "Normalize shapes on memref IR (alloc/get_global/global/expand/collapse)";
+  let constructor = "mlir::createShapeNormalizationPass()";
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "memref::MemRefDialect",
+    "linalg::LinalgDialect",
+    "func::FuncDialect"
+  ];
+}
+
 def LinalgLowerTemplateOp : Pass<"linalg-lower-template-ops", "func::FuncOp"> {
   let summary = "Convert templated ops to function call";
   let constructor = "mlir::createLinalgLowerTemplateOpPass()";
