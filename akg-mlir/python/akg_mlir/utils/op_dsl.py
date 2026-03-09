@@ -19,6 +19,7 @@ import inspect
 import itertools
 from copy import deepcopy
 import numpy as np
+from .torch_mlir_utils import TORCH_DTYPE_TO_NUMPY
 
 
 def get_attr(attr_desc, attr_type):
@@ -100,18 +101,18 @@ def one_hot_np(data, axis, on_value, off_value, depth, dtype):
     shape = data.shape
     if axis < 0:
         axis += len(shape) + 1
-    out_shape = [i for i in shape]
+    out_shape = list(shape)
     out_shape.insert(axis, depth)
     expect = np.full(out_shape, off_value)
     dims = []
     for dim in shape:
         dims.append(list(range(dim)))
-    indexs = [x for x in itertools.product(*tuple(dims))]
-    indexs = [list(x) for x in indexs]
+    indexes = list(itertools.product(*tuple(dims)))
+    indexes = [list(x) for x in indexes]
     for i, value in enumerate(data.flatten()):
-        indexs[i].insert(axis, value)
-    indexs = [tuple(x) for x in indexs]
-    for loc in indexs:
+        indexes[i].insert(axis, value)
+    indexes = [tuple(x) for x in indexes]
+    for loc in indexes:
         if loc[axis] >= 0:
             expect[loc] = on_value
     expect = expect.astype(dtype)
@@ -132,23 +133,25 @@ def reduce_str(inputs, output, attr, op_type):
     keepdims = keepdims_value if keepdims_value else keepdims
 
     if not axis:
-        s = "%s = np.%s(%s.astype(np.float32) if %s.dtype == np.float16 or %s.dtype == bfloat16 else %s, keepdims=%s).astype(%s.dtype)" % (
-            output[0]['tensor_name'], op_type, get_input(
-                inputs[0][0]), get_input(inputs[0][0]), get_input(inputs[0][0]),
-            get_input(inputs[0][0]), keepdims, get_input(inputs[0][0]))
+        s = ( "%s = np.%s(%s.astype(np.float32) if %s.dtype == np.float16 or %s.dtype == bfloat16 else %s, "
+              "keepdims=%s).astype(%s.dtype)" 
+            ) % (output[0]['tensor_name'], op_type, get_input(
+              inputs[0][0]), get_input(inputs[0][0]), get_input(inputs[0][0]),
+              get_input(inputs[0][0]), keepdims, get_input(inputs[0][0]))
     else:
-        s = "%s = np.%s(%s.astype(np.float32) if %s.dtype == np.float16 or %s.dtype == bfloat16 else %s, axis=tuple(%s), keepdims=%s)" \
-            ".astype(%s.dtype); %s = np.reshape(%s, %s) " % \
-            (output[0]['tensor_name'], op_type, get_input(inputs[0][0]), get_input(inputs[0][0]), 
-             get_input(inputs[0][0]), get_input(inputs[0][0]), axis, keepdims, get_input(inputs[0][0]),
-             output[0]['tensor_name'], output[0]['tensor_name'], output[0]['shape'])
+        s = ( "%s = np.%s(%s.astype(np.float32) if %s.dtype == np.float16 or %s.dtype == bfloat16 else %s, "
+              "axis=tuple(%s), keepdims=%s)" 
+              ".astype(%s.dtype); %s = np.reshape(%s, %s) " 
+            ) % (output[0]['tensor_name'], op_type, get_input(inputs[0][0]), get_input(inputs[0][0]),
+              get_input(inputs[0][0]), get_input(inputs[0][0]), axis, keepdims, get_input(inputs[0][0]),
+              output[0]['tensor_name'], output[0]['tensor_name'], output[0]['shape'])
     return s
 
 
 def cast_str(inputs, output, attr):
     """gen cast string"""
     dst_type = output[0]["data_type"]
-    if (dst_type == "bfloat16"):
+    if dst_type == "bfloat16":
         if inputs[0][0].get('value', None) is not None:
             s = "%s = np.array(%s).astype(bfloat16)" % (
                 output[0]['tensor_name'], get_input(inputs[0][0]))
@@ -168,7 +171,7 @@ def cast_str(inputs, output, attr):
 def broadcast_str(inputs, output, attr):
     """gen broadcast string"""
     dst_shape = None
-    if (attr == None):
+    if attr is None:
         dst_shape = output[0]["shape"]
     else:
         dst_shape = get_attr(attr, "shape")
@@ -232,7 +235,7 @@ def trans_data_fractal2two(input_, shape_origin):
     new_shape = shape[:-4] + [m1 * m0, n1 * n0]
     transpose_axis = [1, 2, 0, 3]
     transpose_axis = [x + len(shape) - 4 for x in transpose_axis]
-    transpose_axis = [i for i in range(len(shape) - 4)] + transpose_axis
+    transpose_axis = list(range(len(shape) - 4)) + transpose_axis
     bench_mark = input_.transpose(transpose_axis).reshape(new_shape)
     if new_shape != shape_origin:
         if len(shape_origin) == 2:
@@ -255,11 +258,11 @@ def get_trans_data_str(input_name, output_name, ori_shape, src_format, dst_forma
         raise ValueError("src_format %s and dst_format %s is not supported!" %
                          (src_format, dst_format))
 
-    if (src_format == 'DefaultFormat' or src_format == "NCHW") and dst_format == 'FRACTAL_NZ':
+    if src_format in ('DefaultFormat', "NCHW") and dst_format == 'FRACTAL_NZ':
         res = "%s \n%s = %s(%s, '%s', '%s')" % (inspect.getsource(trans_data_two2fractal),
                                                 output_name, trans_data_two2fractal.__name__, input_name,
                                                 src_format, dst_format)
-    elif src_format == 'FRACTAL_NZ' and (dst_format == 'DefaultFormat' or dst_format == "NCHW"):
+    elif src_format == 'FRACTAL_NZ' and dst_format in ('DefaultFormat', "NCHW"):
         res = "%s \n%s = %s(%s, %s)" % (inspect.getsource(trans_data_fractal2two),
                                         output_name, trans_data_fractal2two.__name__, input_name, ori_shape)
     else:
@@ -326,6 +329,7 @@ def convert_fracal_shape(ori_shape, fractal):
         return ori_shape[:-4] + (ori_shape[-2] * ori_shape[-3], ori_shape[-1] * ori_shape[-4])
     if fractal == "zZ":
         return ori_shape[:-4] + (ori_shape[-4] * ori_shape[-2], ori_shape[-3] * ori_shape[-1])
+    return None
 
 
 def strided_slice_str(inputs, output, attr):
@@ -333,11 +337,10 @@ def strided_slice_str(inputs, output, attr):
     def get_value(attr_name, input_idx):
         if get_attr(attr, attr_name):
             return get_attr(attr, attr_name)
-        else:
-            value = inputs[input_idx][0]['value']
-            if not isinstance(value, (tuple, list)):
-                value = [value]
-            return value
+        value = inputs[input_idx][0]['value']
+        if not isinstance(value, (tuple, list)):
+            value = [value]
+        return value
     # get begin/end/strides from attr or input
     begin = get_value("begin", 1)
     end = get_value("end", 2)
@@ -573,7 +576,7 @@ def conv_2d_str(inputs, output, attr):
     """gen conv_2d string"""
     indent = "  "
     if get_attr(attr, "data_format") == "NC1HWC0":
-        is_depthwise = (get_attr(attr, "is_depth_wise") is True)
+        is_depthwise = get_attr(attr, "is_depth_wise") is True
         return conv_2d_nchwc_str(inputs, output, attr, is_depthwise)
 
     support_list = {"float16": 'np.float16', "float32": 'np.float32'}
@@ -647,7 +650,7 @@ def unpad_str(inputs, output, attr):
 
 
 def cummulative_str(inputs, outputs, attr, op_type):
-    """gen cummulative sum str and product str"""
+    """gen cumulative sum str and product str"""
     exclusive = get_attr(attr, "exclusive")
     reverse = get_attr(attr, "reverse")
     axis = get_attr(attr, "axis")
@@ -693,17 +696,18 @@ def global_pool2d_str(inputs, output, attr):
 
 
 def get_op_dsl():
+    # #lizard forgives
     """Get DSL for operators"""
     op_dsl = {
-        "Custom": lambda inputs, output, attr: custom_str(inputs, output, attr),
+        "Custom": custom_str,
         "ReduceSum": lambda inputs, output, attr: reduce_str(inputs, output, attr, "sum"),
         "ReduceMax": lambda inputs, output, attr: reduce_str(inputs, output, attr, "max"),
         "ReduceMin": lambda inputs, output, attr: reduce_str(inputs, output, attr, "min"),
         "ReduceAll": lambda inputs, output, attr: reduce_str(inputs, output, attr, "all"),
         "ReduceProd": lambda inputs, output, attr: reduce_str(inputs, output, attr, "prod"),
-        "StridedSlice": lambda inputs, output, attr: strided_slice_str(inputs, output, attr),
-        "Slice": lambda inputs, output, attr: slice_str(inputs, output, attr),
-        "Split": lambda inputs, output, attr: split_str(inputs, output, attr),
+        "StridedSlice": strided_slice_str,
+        "Slice": slice_str,
+        "Split": split_str,
         "CumSum": lambda inputs, output, attr: cummulative_str(inputs, output, attr, "cumsum"),
         "CumProd": lambda inputs, output, attr: cummulative_str(inputs, output, attr, "cumprod"),
         "Sin": lambda inputs, output, attr: "%s = np.sin(%s)" %
@@ -787,7 +791,7 @@ def get_op_dsl():
         "Sqrt": lambda inputs, output, attr: "%s = np.sqrt(%s)" %
                                             (output[0]['tensor_name'],
                                              get_input(inputs[0][0])),
-        "Cast": lambda inputs, output, attr: cast_str(inputs, output, attr),
+        "Cast": cast_str,
         "Reshape": lambda inputs, output, attr: "%s = np.reshape(%s, %s)" %
                                                 (output[0]['tensor_name'], get_input(
                                                     inputs[0][0]), output[0]['shape']),
@@ -856,17 +860,17 @@ def get_op_dsl():
         "ElemAny": lambda inputs, output, attr: "%s = (%s.all() > 0).astype(np.%s).reshape(1)" %
                                                 (output[0]['tensor_name'], get_input(inputs[0][0]),
                                                     output[0]['data_type']),
-        "Transpose": lambda inputs, output, attr: transpose_str(inputs, output, attr),
+        "Transpose": transpose_str,
         "TransData": trans_data_dsl,
-        "BroadcastTo": lambda inputs, output, attr: broadcast_str(inputs, output, attr),
-        "BatchMatMul": lambda inputs, output, attr: matmul_str(inputs, output, attr),
+        "BroadcastTo": broadcast_str,
+        "BatchMatMul": matmul_str,
         "Assign": lambda inputs, output, attr: "%s = %s; %s = %s" %
         (get_input(inputs[0][0]), get_input(inputs[1][0]), output[0]['tensor_name'],
                                                 get_input(inputs[1][0])),
-        "MatMul": lambda inputs, output, attr: matmul_str(inputs, output, attr),
-        "Conv2D": lambda inputs, output, attr: conv_2d_str(inputs, output, attr),
-        "PadAkg": lambda inputs, output, attr: pad_str(inputs, output, attr),
-        "UnPadAkg": lambda inputs, output, attr: unpad_str(inputs, output, attr),
+        "MatMul": matmul_str,
+        "Conv2D": conv_2d_str,
+        "PadAkg": pad_str,
+        "UnPadAkg": unpad_str,
         "Asinh": lambda inputs, output, attr: "%s = np.arcsinh(%s)" %
         (output[0]['tensor_name'],
          get_input(inputs[0][0])),
@@ -920,6 +924,204 @@ def get_op_dsl():
         "Complex": lambda inputs, output, attr: "%s = np.vectorize(complex)(%s, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0]),
                                                 get_input(inputs[1][0])),
-        "Concat": lambda inputs, output, attr: concat_str(inputs, output, attr)
+        "Concat": concat_str
+    }
+    return op_dsl
+
+
+def get_op_dsl_torch_mlir():
+    # #lizard forgives
+    """Get DSL for torch-mlir operators."""
+    op_dsl = {
+        "Torch.constant.float": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.array("
+            f"{get_input(output[0])}, dtype=np.float32)"
+        ),
+
+        "Torch.constant.int": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = int({get_input(output[0])})"
+        ),
+
+        "Torch.aten.mul.tensor": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.multiply("
+            f"{get_input(inputs[0][0])}, "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.mul.scalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = ("
+            f"{get_input(inputs[0][0])} * "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.add.tensor": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = ("
+            f"{get_input(inputs[0][0])} + "
+            f"({get_input(inputs[2][0])}) * "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.add.scalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = ("
+            f"{get_input(inputs[0][0])} + "
+            f"({get_input(inputs[2][0])}) * "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.sub.tensor": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = ("
+            f"{get_input(inputs[0][0])} - "
+            f"({get_input(inputs[2][0])}) * "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.sub.scalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = ("
+            f"{get_input(inputs[0][0])} + "
+            f"({get_input(inputs[2][0])}) * "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.div.tensor": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.divide("
+            f"{get_input(inputs[0][0])}, "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.div.scalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.divide("
+            f"{get_input(inputs[0][0])}, "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.sqrt": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.sqrt("
+            f"{get_input(inputs[0][0])})"
+        ),
+
+        "Torch.aten.relu": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.maximum("
+            f"{get_input(inputs[0][0])}, 0)"
+        ),
+
+        "Torch.prim.listconstruct": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = ["
+            f"{', '.join(str(get_input(group[0])) for group in inputs)}]"
+        ),
+
+        "Torch.aten.view": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.reshape("
+            f"{get_input(inputs[0][0])}, "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.cat": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.concatenate("
+            f"{get_input(inputs[0][0])}, "
+            f"axis={get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.broadcastTo": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.broadcast_to("
+            f"{get_input(inputs[0][0])}, "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.slice.tensor": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.take("
+            f"{get_input(inputs[0][0])}, "
+            f"indices=range("
+            f"{get_input(inputs[2][0])}, "
+            f"{get_input(inputs[3][0])}, "
+            f"{get_input(inputs[4][0])}"
+            f"), axis={get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.permute": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.transpose("
+            f"{get_input(inputs[0][0])}, "
+            f"axes={get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.sigmoid": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = 1 / (1 + np.exp("
+            f"-{get_input(inputs[0][0])}))"
+        ),
+
+        "Torch.constant.none": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = None"
+        ),
+
+        "Torch.constant.bool": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = {get_input(output[0])}"
+        ),
+
+        "Torch.aten.sum.dimIntlist": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.sum("
+            f"{get_input(inputs[0][0])}, "
+            f"axis=tuple({get_input(inputs[1][0])}), "
+            f"keepdims={get_input(inputs[2][0])})"
+        ),
+
+        "Torch.aten.pow.tensorScalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.power("
+            f"{get_input(inputs[0][0])}, "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.rsqrt": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = 1.0 / np.sqrt("
+            f"{get_input(inputs[0][0])})"
+        ),
+
+        "Torch.aten.clamp": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.clip("
+            f"{get_input(inputs[0][0])}, "
+            f"{'None' if inputs[1][0].get('data_type') == 'none' else get_input(inputs[1][0])}, "
+            f"{'None' if inputs[2][0].get('data_type') == 'none' else get_input(inputs[2][0])})"
+        ),
+
+        "Torch.aten.to.dtype": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = "
+            f"{get_input(inputs[0][0])}.astype("
+            f"{TORCH_DTYPE_TO_NUMPY[get_input(inputs[1][0])]})"
+        ),
+
+        "Torch.aten.lt.scalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = "
+            f"{get_input(inputs[0][0])} < "
+            f"{get_input(inputs[1][0])}"
+        ),
+
+        "Torch.aten.ge.scalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = "
+            f"{get_input(inputs[0][0])} >= "
+            f"{get_input(inputs[1][0])}"
+        ),
+
+        "Torch.aten.exp": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.exp("
+            f"{get_input(inputs[0][0])})"
+        ),
+
+        "Torch.aten.bitwiseNot": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.logical_not("
+            f"{get_input(inputs[0][0])})"
+        ),
+
+        "Torch.aten.sin": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.sin("
+            f"{get_input(inputs[0][0])})"
+        ),
+
+        "Torch.aten.cos": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.cos("
+            f"{get_input(inputs[0][0])})"
+        ),
+
+        "Torch.vtensor.literal": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.array("
+            f"1.0, dtype=np.{output[0]['data_type']})"
+        ),
     }
     return op_dsl
