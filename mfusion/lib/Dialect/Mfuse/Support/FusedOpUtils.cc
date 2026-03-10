@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Mfuse/Utils/FusedOpUtils.h"
+#include "mfusion/Dialect/Mfuse/Support/FusedOpUtils.h"
 
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Support/Logging.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"

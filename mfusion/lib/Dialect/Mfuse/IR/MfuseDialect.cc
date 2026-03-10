@@ -23,33 +23,33 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/SMLoc.h"
 
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
-#include "mfusion/Dialect/Mfuse/MfuseDialect.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
 
-#include "mfusion/Dialect/Mfuse/MfuseDialect.cpp.inc"
+#include "mfusion/Dialect/Mfuse/IR/MfuseDialect.cpp.inc"
 
 #define GET_OP_CLASSES
-#include "mfusion/Dialect/Mfuse/Mfuse.cpp.inc"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.cpp.inc"
 
 #define GET_TYPEDEF_CLASSES
-#include "mfusion/Dialect/Mfuse/MfuseTypes.cpp.inc"
+#include "mfusion/Dialect/Mfuse/IR/MfuseTypes.cpp.inc"
 
 #define GET_ATTRDEF_CLASSES
-#include "mfusion/Dialect/Mfuse/MfuseAttributes.cpp.inc"
+#include "mfusion/Dialect/Mfuse/IR/MfuseAttributes.cpp.inc"
 
 void mlir::mfuse::MfuseDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
-#include "mfusion/Dialect/Mfuse/Mfuse.cpp.inc"  // NOLINT(build/include)
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.cpp.inc"  // NOLINT(build/include)
     >();
 
   addTypes<
 #define GET_TYPEDEF_LIST
-#include "mfusion/Dialect/Mfuse/MfuseTypes.cpp.inc"  // NOLINT(build/include)
+#include "mfusion/Dialect/Mfuse/IR/MfuseTypes.cpp.inc"  // NOLINT(build/include)
     >();
 
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "mfusion/Dialect/Mfuse/MfuseAttributes.cpp.inc"  // NOLINT(build/include)
+#include "mfusion/Dialect/Mfuse/IR/MfuseAttributes.cpp.inc"  // NOLINT(build/include)
     >();
 }

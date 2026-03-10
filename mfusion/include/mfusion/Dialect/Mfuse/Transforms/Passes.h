@@ -17,7 +17,7 @@
 #ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_PASSES_H
 #define MFUSION_DIALECT_MFUSE_TRANSFORMS_PASSES_H
 
-#include "mfusion/Dialect/Mfuse/MfuseDialect.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/Decompose.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/DVMCluster.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/AKGCluster.h"
