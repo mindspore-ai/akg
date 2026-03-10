@@ -19,6 +19,7 @@ Skill 自进化系统
   common.py               - 公共类型、工具函数、LLM 输出解析、SKILL.md 写入
   search_log_utils.py     - search_log 模式：从搜索日志收集 + 压缩进化链
   expert_tuning_utils.py  - expert_tuning 模式：从对话目录提取专家调优经验
+  error_fix_utils.py      - error_fix 模式：从错误修复记录提取调试经验
 """
 
 from .common import TaskRecord, EvolutionStep, CompressedData, SkillWriter, parse_skill_output
@@ -31,6 +32,11 @@ from .expert_tuning_utils import (
     collect as expert_tuning_collect,
     build_timeline,
     to_prompt_vars as expert_tuning_to_prompt_vars,
+)
+from .error_fix_utils import (
+    SuccessfulFixRecord,
+    collect as error_fix_collect,
+    to_prompt_vars as error_fix_to_prompt_vars,
 )
 
 __all__ = [
@@ -45,4 +51,7 @@ __all__ = [
     "expert_tuning_collect",
     "build_timeline",
     "expert_tuning_to_prompt_vars",
+    "SuccessfulFixRecord",
+    "error_fix_collect",
+    "error_fix_to_prompt_vars",
 ]

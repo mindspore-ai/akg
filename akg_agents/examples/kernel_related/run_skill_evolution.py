@@ -13,14 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-run_skill_evolution.py - Skill Evolution 独立 CLI 工具（支持双模式）
+run_skill_evolution.py - Skill Evolution 独立 CLI 工具（支持三模式）
 
-此工具用于从 adaptive_search 搜索日志或 akg_cli 对话历史中提取优化经验，
+此工具用于从 adaptive_search 搜索日志、akg_cli 对话历史或错误修复记录中提取优化/调试经验，
 生成可复用的 SKILL.md 文档。
 
 前置条件：
   - search_log 模式需要先运行 `akg_cli op` 执行 adaptive_search，产生搜索日志
   - expert_tuning 模式需要先运行 `akg_cli op` 进行交互式调优，产生对话记录
+  - error_fix 模式需要搜索日志中包含失败→成功的修复记录
   日志默认保存在 ~/.akg/conversations/cli_<session_id>/nodes/<node_id>/logs/
 
 search_log 模式:
@@ -29,12 +30,16 @@ search_log 模式:
 expert_tuning 模式:
     python run_skill_evolution.py expert_tuning <conversation_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
 
+error_fix 模式:
+    python run_skill_evolution.py error_fix <log_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
+
 兼容旧用法（默认 search_log）:
     python run_skill_evolution.py <log_dir> <op_name>
 
 示例:
     python run_skill_evolution.py search_log /path/to/node_004/logs relu
     python run_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx rope -o ./output
+    python run_skill_evolution.py error_fix /path/to/node_005/logs matmul -o ./output
 """
 
 import argparse
@@ -63,6 +68,9 @@ _USAGE_HINT = """
 ║  expert_tuning 模式:                                                 ║
 ║    请先执行 `akg_cli op` 进行交互式调优，                            ║
 ║    对话记录保存在 ~/.akg/conversations/cli_<session_id>/ 目录下      ║
+║                                                                      ║
+║  error_fix 模式:                                                     ║
+║    与 search_log 共用日志目录，提取失败→成功的错误修复经验           ║
 ╚══════════════════════════════════════════════════════════════════════╝
 """
 
@@ -107,7 +115,7 @@ async def run_search_log(log_dir: str, op_name: str, output_dir: str, model_leve
 
     t0 = time.time()
 
-    work_dir = output_dir or os.path.join(log_dir, "_skill_evolution_debug")
+    work_dir = output_dir or _default_work_dir("search_log", op_name)
     os.makedirs(work_dir, exist_ok=True)
 
     logger.info(f"[1/4] 收集数据: log_dir={log_dir}, op_name={op_name}")
@@ -182,7 +190,7 @@ async def run_expert_tuning(conversation_dir: str, op_name: str, output_dir: str
 
     t0 = time.time()
 
-    work_dir = output_dir or os.path.join(conversation_dir, "_skill_evolution_debug")
+    work_dir = output_dir or _default_work_dir("expert_tuning", op_name)
     os.makedirs(work_dir, exist_ok=True)
 
     logger.info(f"[1/4] 读取所有 action: {conversation_dir}")
@@ -253,6 +261,110 @@ async def run_expert_tuning(conversation_dir: str, op_name: str, output_dir: str
     print(f"{'='*60}")
 
 
+async def run_error_fix(log_dir: str, op_name: str, output_dir: str, model_level: str):
+    """error_fix 模式: 从错误修复记录生成 SKILL.md（已有时 LLM 去重合并）"""
+    from akg_agents.op.tools.skill_evolution.error_fix_utils import (
+        collect, to_prompt_vars,
+    )
+    from akg_agents.op.tools.skill_evolution.common import SkillWriter
+    import json
+
+    t0 = time.time()
+
+    work_dir = output_dir or _default_work_dir("error_fix", op_name)
+    os.makedirs(work_dir, exist_ok=True)
+
+    logger.info(f"[1/4] 收集成功修复记录: log_dir={log_dir}, op_name={op_name}")
+    records, metadata = collect(log_dir, op_name)
+    metadata["op_name"] = op_name
+    metadata["source"] = "error_fix"
+    if not records:
+        logger.error("未找到任何成功修复记录")
+        sys.exit(1)
+    logger.info(f"  -> {len(records)} 个成功修复记录")
+    for r in records:
+        logger.info(f"     {r.task_id}: error_step={r.error_step}")
+
+    _save_file(work_dir, "collected_fix_records.json", json.dumps({
+        "metadata": metadata,
+        "records": [
+            {"task_id": r.task_id, "error_step": r.error_step,
+             "diff_lines": r.diff.count("\n"),
+             "error_log_preview": r.error_log[:200] if r.error_log else ""}
+            for r in records
+        ],
+    }, ensure_ascii=False, indent=2))
+    logger.info(f"  -> saved: {work_dir}/collected_fix_records.json")
+
+    logger.info(f"[2/4] 调用 LLM 提取修复经验 (model_level={model_level})")
+    template = _load_template("analyze_error_fix.j2")
+    prompt_vars = to_prompt_vars(records, metadata)
+    rendered = template.format(**prompt_vars)
+    _save_file(work_dir, "llm_prompt.txt", rendered)
+    logger.info(f"  -> prompt: {len(rendered)} chars")
+    logger.info(f"  -> saved: {work_dir}/llm_prompt.txt")
+
+    body = await _call_llm(rendered, model_level)
+    if not body:
+        logger.error("LLM 返回为空")
+        sys.exit(1)
+    _save_file(work_dir, "llm_response.txt", body)
+    logger.info(f"  -> response: {len(body)} chars")
+    logger.info(f"  -> saved: {work_dir}/llm_response.txt")
+
+    writer = SkillWriter()
+    skill_path = writer.get_error_fix_skill_path(metadata, output_dir or None)
+    existing_body = writer.read_error_fix_body(skill_path)
+
+    if existing_body:
+        logger.info(f"[3/4] 已有 SKILL.md ({len(existing_body)} 字符)，LLM 去重")
+        _save_file(work_dir, "existing_skill_body.md", existing_body)
+        dedup_template = _load_template("dedup_error_fix.j2")
+        dedup_rendered = dedup_template.format(
+            existing_body=existing_body,
+            new_body=body,
+        )
+        _save_file(work_dir, "llm_dedup_prompt.txt", dedup_rendered)
+        logger.info(f"  -> dedup prompt: {len(dedup_rendered)} chars")
+
+        increment = await _call_llm(dedup_rendered, model_level)
+        _save_file(work_dir, "llm_dedup_response.txt", increment or "")
+        logger.info(f"  -> dedup response: {len(increment or '')} chars")
+
+        no_new = not increment or not increment.strip() or "无新增内容" in increment
+        if no_new:
+            elapsed = time.time() - t0
+            logger.info(f"无新增内容，已有 SKILL.md 未变更 ({elapsed:.1f}s)")
+            print(f"\n{'='*60}")
+            print(f"无新增内容，已有 SKILL.md 未变更: {skill_path}")
+            print(f"  fix records: {len(records)}")
+            print(f"  elapsed    : {elapsed:.1f}s")
+            print(f"{'='*60}")
+            return
+        body = increment
+    else:
+        logger.info("[3/4] 无已有 SKILL.md，跳过去重")
+
+    logger.info("[4/4] 写入 SKILL.md")
+    skill_path = writer.write_error_fix(body, metadata, output_dir or None)
+
+    action = "追加" if existing_body else "新建"
+    elapsed = time.time() - t0
+    logger.info(f"完成 ({elapsed:.1f}s): {skill_path}")
+    print(f"\n{'='*60}")
+    print(f"SKILL.md 已{action}（错误修复经验）: {skill_path}")
+    print(f"  fix records: {len(records)}")
+    print(f"  elapsed    : {elapsed:.1f}s")
+    print(f"  work_dir   : {work_dir}/")
+    print(f"{'='*60}")
+
+
+def _default_work_dir(mode: str, op_name: str) -> str:
+    """统一的默认工作目录：~/.akg/skill_evolution/{mode}_{op_name}"""
+    base = os.path.join(os.path.expanduser("~"), ".akg", "skill_evolution")
+    return os.path.join(base, f"{mode}_{op_name}")
+
+
 def _save_file(directory: str, filename: str, content: str) -> None:
     try:
         with open(os.path.join(directory, filename), "w", encoding="utf-8") as f:
@@ -263,7 +375,7 @@ def _save_file(directory: str, filename: str, content: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Skill Evolution CLI — 从搜索日志或对话历史生成 SKILL.md",
+        description="Skill Evolution CLI — 从搜索日志、对话历史或错误修复记录生成 SKILL.md",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -281,6 +393,12 @@ def main():
     sp_b.add_argument("op_name", help="算子名称")
     sp_b.add_argument("--output-dir", "-o", default="", help="SKILL.md 输出目录")
     sp_b.add_argument("--model-level", "-m", default="standard", help="LLM 模型级别")
+
+    sp_c = subparsers.add_parser("error_fix", help="从错误修复记录生成/合并 SKILL.md")
+    sp_c.add_argument("log_dir", help="搜索日志目录（节点 logs 路径）")
+    sp_c.add_argument("op_name", help="算子名称")
+    sp_c.add_argument("--output-dir", "-o", default="", help="SKILL.md 输出目录")
+    sp_c.add_argument("--model-level", "-m", default="standard", help="LLM 模型级别")
 
     args = parser.parse_args()
 
@@ -310,6 +428,12 @@ def main():
             print(_USAGE_HINT)
             sys.exit(1)
         asyncio.run(run_expert_tuning(args.conversation_dir, args.op_name, args.output_dir, args.model_level))
+    elif args.mode == "error_fix":
+        if not os.path.isdir(args.log_dir):
+            logger.error(f"log_dir 不存在: {args.log_dir}")
+            print(_USAGE_HINT)
+            sys.exit(1)
+        asyncio.run(run_error_fix(args.log_dir, args.op_name, args.output_dir, args.model_level))
 
 
 if __name__ == "__main__":
