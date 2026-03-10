@@ -82,6 +82,15 @@ class CMakeBuild(build_ext):
                     shutil.rmtree(dst_tests)
                 shutil.copytree(tests_dir, dst_tests)
 
+        # Copy mfusion-opt executable to _mlir_libs
+        mfusion_opt_src = Path(self.build_temp) / "bin" / "mfusion-opt"
+        mfusion_opt_dst = target_dir / "_mlir_libs" / "mfusion-opt"
+        if mfusion_opt_src.exists():
+            shutil.copy2(mfusion_opt_src, mfusion_opt_dst, follow_symlinks=False)
+            print(f"Copied mfusion-opt to {mfusion_opt_dst}")
+        else:
+            print(f"Warning: mfusion-opt not found at {mfusion_opt_src}")
+
 
 class BuildPyWithExt(build_py):
     def run(self):
