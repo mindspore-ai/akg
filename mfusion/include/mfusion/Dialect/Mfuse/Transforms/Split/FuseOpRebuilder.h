@@ -44,7 +44,7 @@ class Rebuilder {
   void createFusedOps();
   void connectToMainGraph();
   void createFusedOpForGroup(const SmallVector<Operation *> &groupOps, const llvm::SetVector<Value> &groupInputs,
-                             const llvm::SetVector<Value> &groupOutputs);
+                             const llvm::SetVector<Value> &groupOutputs, const llvm::DenseSet<Operation *> &groupOpSet);
 
  private:
   func::FuncOp mainFuncOp_;
