@@ -28,9 +28,9 @@
 
 #include "mfusion/Analysis/SymbolicShape/SymEngineAnalysis.h"
 #include "mfusion/Conversion/Passes.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
-#include "mfusion/Dialect/Mfuse/MfuseDialect.h"
-#include "mfusion/Dialect/Mfuse/Utils/SymbolAttrUtils.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
+#include "mfusion/Dialect/Mfuse/Support/SymbolAttrUtils.h"
 
 namespace {
 namespace TorchD = mlir::torch::Torch;

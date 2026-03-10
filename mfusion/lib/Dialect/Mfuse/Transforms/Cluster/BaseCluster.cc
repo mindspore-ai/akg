@@ -25,8 +25,8 @@
 #include "mlir/IR/IRMapping.h"
 
 #include "mfusion/Analysis/Cluster/Graph.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
-#include "mfusion/Dialect/Mfuse/Utils/FusedOpUtils.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Support/FusedOpUtils.h"
 #include "mfusion/Support/Logging.h"
 
 #define DEBUG_TYPE "graph-kernel-cluster"

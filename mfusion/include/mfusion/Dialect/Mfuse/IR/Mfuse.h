@@ -29,19 +29,19 @@
 
 #include "symengine/basic.h"
 
-#include "mfusion/Dialect/Mfuse/MfuseDialect.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
 
 #define GET_ATTRDEF_CLASSES
-#include "mfusion/Dialect/Mfuse/MfuseAttributes.h.inc"
+#include "mfusion/Dialect/Mfuse/IR/MfuseAttributes.h.inc"
 
 #define GET_TYPEDEF_CLASSES
-#include "mfusion/Dialect/Mfuse/MfuseTypes.h.inc"
+#include "mfusion/Dialect/Mfuse/IR/MfuseTypes.h.inc"
 
-#include "mfusion/Dialect/Mfuse/MfuseInterfaces.h.inc"
+#include "mfusion/Dialect/Mfuse/IR/MfuseInterfaces.h.inc"
 
-#include "mfusion/Dialect/Mfuse/MfuseOps.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseOps.h"
 
 #define GET_OP_CLASSES
-#include "mfusion/Dialect/Mfuse/Mfuse.h.inc"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h.inc"
 
 #endif  // MFUSE_DIALECT_MFUSE_MFUSE_H

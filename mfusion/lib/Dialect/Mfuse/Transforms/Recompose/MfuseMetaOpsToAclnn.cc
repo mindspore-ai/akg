@@ -17,8 +17,8 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Recompose/RecomposePatterns.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
-#include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Support/ArithUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"

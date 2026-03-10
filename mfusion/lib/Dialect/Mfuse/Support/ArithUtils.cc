@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
+#include "mfusion/Dialect/Mfuse/Support/ArithUtils.h"
 
 #include <algorithm>
 #include <cmath>

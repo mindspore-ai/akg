@@ -13,8 +13,6 @@
 # limitations under the License.
 """UT for disable aten full/ones/zeros fold: verify they are not folded to torch.vtensor.literal."""
 
-import pytest
-
 from mfusion.torch.inductor import fuse_and_optimize
 from ut_utils.mlir_checker import MlirChecker
 
@@ -62,18 +60,25 @@ module {
 """
 
 
-@pytest.mark.parametrize(
-    "mlir_module,expected_op",
-    [
-        (MLIR_ATEN_FULL, "torch.aten.full"),
-        (MLIR_ATEN_ONES, "torch.aten.ones"),
-        (MLIR_ATEN_ZEROS, "torch.aten.zeros"),
-    ],
-)
-def test_aten_fill_ops_not_folded(mlir_module, expected_op):
-    """Verify aten full/ones/zeros are preserved after fuse_and_optimize (not folded to vtensor.literal)."""
-    result = fuse_and_optimize(mlir_module)
+def test_aten_full_not_folded():
+    """Verify aten full is preserved after fuse_and_optimize (not folded to vtensor.literal)."""
+    result = fuse_and_optimize(MLIR_ATEN_FULL)
     checker = MlirChecker.parse_torch_module(result)
-    assert checker.check_has_op(expected_op, count=1), checker.error
+    assert checker.check_has_op("torch.aten.full", count=1), checker.error
     assert checker.check_no_op("torch.vtensor.literal"), checker.error
 
+
+def test_aten_ones_not_folded():
+    """Verify aten ones is preserved after fuse_and_optimize (not folded to vtensor.literal)."""
+    result = fuse_and_optimize(MLIR_ATEN_ONES)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_has_op("torch.aten.ones", count=1), checker.error
+    assert checker.check_no_op("torch.vtensor.literal"), checker.error
+
+
+def test_aten_zeros_not_folded():
+    """Verify aten zeros is preserved after fuse_and_optimize (not folded to vtensor.literal)."""
+    result = fuse_and_optimize(MLIR_ATEN_ZEROS)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_has_op("torch.aten.zeros", count=1), checker.error
+    assert checker.check_no_op("torch.vtensor.literal"), checker.error

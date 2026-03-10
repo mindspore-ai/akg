@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Mfuse/Utils/SymbolAttrUtils.h"
+#include "mfusion/Dialect/Mfuse/Support/SymbolAttrUtils.h"
 
 #include <algorithm>
 #include <iterator>
 
 #include "mfusion/Analysis/SymbolicShape/SymExprBuilder.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 
 namespace mlir {
 namespace mfuse {
