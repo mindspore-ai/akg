@@ -17,7 +17,7 @@
 #ifndef MFUSION_DIALECT_DVM_DVMOPS_TD
 #define MFUSION_DIALECT_DVM_DVMOPS_TD
 
-include "mfusion/Dialect/Dvm/DvmDialect.td"
+include "mfusion/Dialect/Dvm/IR/DvmDialect.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"

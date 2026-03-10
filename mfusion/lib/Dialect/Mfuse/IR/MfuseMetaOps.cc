@@ -19,7 +19,7 @@
 #include <vector>
 #include <type_traits>
 
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -30,7 +30,7 @@
 #include "mfusion/Analysis/SymbolicShape/SymEngineAnalysis.h"
 #include "mfusion/Dialect/Mfuse/Analysis/BinaryOpCommonInfer.h"
 #include "mfusion/Dialect/Mfuse/Analysis/ReduceOpCommonInfer.h"
-#include "mfusion/Dialect/Mfuse/Utils/SymbolAttrUtils.h"
+#include "mfusion/Dialect/Mfuse/Support/SymbolAttrUtils.h"
 #include "mfusion/Analysis/SymbolicShape/SymExprBuilder.h"
 
 namespace mlir::mfuse {

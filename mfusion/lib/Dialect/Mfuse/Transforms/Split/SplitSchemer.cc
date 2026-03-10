@@ -17,7 +17,7 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Split/SplitSchemer.h"
 
 #include "mfusion/Analysis/Split/Area.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/Support/raw_ostream.h"
