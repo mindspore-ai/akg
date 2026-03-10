@@ -281,13 +281,10 @@ struct ConvertMfuseCast : public mlir::OpConversionPattern<mlir::mfuse::CastOp> 
       return rewriter.notifyMatchFailure(op, "unsupported dtype for torch scalar type");
     }
     mlir::Value dtypeVal = *dtypeValOrFailure;
-
-    mlir::Value nonBlockingVal = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), false);
-    mlir::Value copyVal = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), false);
-    mlir::Value memoryFormatVal = rewriter.create<TorchD::ConstantNoneOp>(op.getLoc());
-
-    rewriter.replaceOpWithNewOp<TorchD::AtenToDtypeOp>(op, resultType, input, dtypeVal, nonBlockingVal, copyVal,
-                                                       memoryFormatVal);
+    mlir::SmallVector<mlir::Value> operands = {input, dtypeVal};
+    unsigned numRegions = 0;
+    rewriter.replaceOpWithNewOp<TorchD::OperatorOp>(op, resultType, rewriter.getStringAttr("torch.npu._npu_dtype_cast"),
+                                                    operands, numRegions);
     return mlir::success();
   }
 };
@@ -399,12 +396,6 @@ class ConvertMfuseReshape : public mlir::OpConversionPattern<mlir::mfuse::Reshap
   }
 };
 
-// Helper function to check if an operand is a scalar
-static bool isOperandScalar(mlir::Value operand) {
-  auto type = mlir::dyn_cast<mlir::RankedTensorType>(operand.getType());
-  return type && type.getRank() == 0;
-}
-
 // Common logic for binary op conversion
 // Returns a tuple of (lhs, processedRhs, isRhsScalar, torchResultType) if successful
 // Returns failure otherwise
@@ -427,16 +418,16 @@ static mlir::FailureOr<std::tuple<mlir::Value, mlir::Value, bool, mlir::Type>> c
     return mlir::failure();
   }
 
-  // Check if lhs is tensor and rhs is scalar
-  bool isRhsScalar = isOperandScalar(op.getOperand(kRhsIndex));
-
-  // Process rhs if it's a scalar
-  mlir::Value processedRhs = rhs;
-  if (isRhsScalar) {
-    processedRhs = materializeConstValueToTorchScalar(op.getOperation(), op.getOperand(kRhsIndex), rewriter);
+  bool isRhsScalar = false;
+  mlir::Value getRhs = rhs;
+  mlir::Value originRhs = op.getOperand(kRhsIndex);
+  mlir::Value processedRhs = materializeConstValueToTorchScalar(op.getOperation(), originRhs, rewriter);
+  // Check if processedRhs is a Torch scalar constant
+  if (processedRhs.getType().isa<TorchD::FloatType>() || processedRhs.getType().isa<TorchD::IntType>()) {
+    getRhs = processedRhs;
+    isRhsScalar = true;
   }
-
-  return std::make_tuple(lhs, processedRhs, isRhsScalar, torchResultType);
+  return std::make_tuple(lhs, getRhs, isRhsScalar, torchResultType);
 }
 
 // Convert binary ops with tensor and scalar operands to corresponding torch ops (without alpha parameter)
