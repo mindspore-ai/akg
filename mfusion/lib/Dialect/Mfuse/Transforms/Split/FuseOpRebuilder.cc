@@ -67,7 +67,8 @@ void Rebuilder::createFusedOps() {
     }
     SmallVector<Operation *> groupOpsWithConstant(groupOps.begin(), groupOps.end());
     auto constantsToCluster = collectConstantsToCluster(groupOps);
-    LLVM_DEBUG(llvm::dbgs() << "groupOps size: " << groupOps.size() << " constantsToCluster size: " << constantsToCluster.size() << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "groupOps size: " << groupOps.size()
+                            << " constantsToCluster size: " << constantsToCluster.size() << "\n");
     std::copy(constantsToCluster.begin(), constantsToCluster.end(), std::back_inserter(groupOpsWithConstant));
     std::sort(groupOpsWithConstant.begin(), groupOpsWithConstant.end(),
               [](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
@@ -86,19 +87,24 @@ void Rebuilder::createFusedOps() {
     if (groupOutputs.empty()) {
       continue;
     }
-    createFusedOpForGroup(groupOpsWithConstant, groupInputs, groupOutputs);
+    createFusedOpForGroup(groupOpsWithConstant, groupInputs, groupOutputs, groupOpSet);
   }
 }
 
 void Rebuilder::createFusedOpForGroup(const SmallVector<Operation *> &groupOps,
                                       const llvm::SetVector<Value> &groupInputs,
-                                      const llvm::SetVector<Value> &groupOutputs) {
+                                      const llvm::SetVector<Value> &groupOutputs,
+                                      const llvm::DenseSet<Operation *> &groupOpSet) {
   llvm::SmallVector<Type> resultTypes;
   std::transform(groupOutputs.begin(), groupOutputs.end(), std::back_inserter(resultTypes),
                  [](Value output) { return output.getType(); });
 
   OpBuilder mainBuilder(fuseOp_.getContext());
-  mainBuilder.setInsertionPoint(groupOps.front());
+  Operation *insertPoint = findValidInsertPoint(groupOps, groupInputs, groupOutputs, groupOpSet);
+  if (!insertPoint) {
+    return;
+  }
+  mainBuilder.setInsertionPointAfter(insertPoint);
 
   auto fusedOp = mainBuilder.create<mfuse::FusedOp>(fuseOp_.getLoc(), resultTypes, groupInputs.getArrayRef(),
                                                     fuseOp_.getFusionTypeAttr(), nullptr);
@@ -148,8 +154,7 @@ void Rebuilder::connectToMainGraph() {
     }
     mainBuilder.clone(op, mapping_);
   }
-  Block *body = &fuseOp_.getBodyBlock();
-  auto yieldOp = dyn_cast<mfuse::YieldOp>(body->getTerminator());
+  auto yieldOp = dyn_cast<mfuse::YieldOp>(fusedBody->getTerminator());
   if (!yieldOp) {
     return;
   }
