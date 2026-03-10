@@ -36,8 +36,8 @@
 #include "torch-mlir/InitAll.h"
 
 // MFusion project specific includes
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
-#include "mfusion/Dialect/Dvm/DvmDialect.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Dvm/IR/DvmDialect.h"
 #include "mfusion/Conversion/Passes.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
 

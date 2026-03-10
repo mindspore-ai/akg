@@ -17,8 +17,8 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Recompose/Recompose.h"
 
 #include "mfusion/Dialect/Mfuse/Transforms/Recompose/RecomposePatterns.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
-#include "mfusion/Dialect/Mfuse/MfuseDialect.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"

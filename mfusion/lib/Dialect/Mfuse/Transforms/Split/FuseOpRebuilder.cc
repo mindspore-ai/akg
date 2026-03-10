@@ -16,7 +16,7 @@
 
 #include "mfusion/Dialect/Mfuse/Transforms/Split/FuseOpRebuilder.h"
 
-#include "mfusion/Dialect/Mfuse/Utils/FusedOpUtils.h"
+#include "mfusion/Dialect/Mfuse/Support/FusedOpUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinTypes.h"

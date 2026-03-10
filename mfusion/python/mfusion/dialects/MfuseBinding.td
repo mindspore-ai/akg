@@ -17,6 +17,6 @@
 #ifndef PYTHON_BINDINGS_MFUSE
 #define PYTHON_BINDINGS_MFUSE
 
-include "mfusion/Dialect/Mfuse/Mfuse.td"
+include "mfusion/Dialect/Mfuse/IR/Mfuse.td"
 
 #endif  // PYTHON_BINDINGS_MFUSE

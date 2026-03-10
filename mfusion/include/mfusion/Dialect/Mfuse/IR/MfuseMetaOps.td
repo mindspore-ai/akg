@@ -17,8 +17,8 @@
 #ifndef MFUSE_DIALECT_MFUSE_META_OPS_TD
 #define MFUSE_DIALECT_MFUSE_META_OPS_TD
 
-include "mfusion/Dialect/Mfuse/MfuseTypes.td"
-include "mfusion/Dialect/Mfuse/MfuseInterfaces.td"
+include "mfusion/Dialect/Mfuse/IR/MfuseTypes.td"
+include "mfusion/Dialect/Mfuse/IR/MfuseInterfaces.td"
 include "mlir/IR/BuiltinAttributes.td"
 
 // This is the base class for binary element-wise ops that support automatic broadcasting.

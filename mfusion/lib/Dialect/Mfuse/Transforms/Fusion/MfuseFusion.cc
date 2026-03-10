@@ -22,7 +22,7 @@
 #include <vector>
 
 #include "llvm/Support/raw_ostream.h"
-#include "mfusion/Dialect/Mfuse/MfuseDialect.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPasses.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OperationSupport.h"

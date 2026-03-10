@@ -17,7 +17,7 @@
 #include "mfusion/Analysis/Split/SplitModelFactory.h"
 
 #include "mfusion/Analysis/Split/SplitModelInitPattern.h"
-#include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
+#include "mfusion/Dialect/Mfuse/Support/OpConstants.h"
 
 namespace mlir {
 namespace mfuse {

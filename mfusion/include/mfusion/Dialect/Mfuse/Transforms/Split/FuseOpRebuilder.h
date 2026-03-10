@@ -26,7 +26,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Split/SplitSchemer.h"
 
 namespace mlir {

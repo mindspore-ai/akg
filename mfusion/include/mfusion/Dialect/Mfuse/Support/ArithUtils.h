@@ -17,7 +17,7 @@
 #ifndef MFUSION_DIALECT_MFUSE_UTILS_ARITH_UTILS_H
 #define MFUSION_DIALECT_MFUSE_UTILS_ARITH_UTILS_H
 
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"

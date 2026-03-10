@@ -17,7 +17,7 @@
 #ifndef MFUSE_DIALECT_MFUSE_TYPES_TD
 #define MFUSE_DIALECT_MFUSE_TYPES_TD
 
-include "mfusion/Dialect/Mfuse/MfuseDialect.td"
+include "mfusion/Dialect/Mfuse/IR/MfuseDialect.td"
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinDialect.td"
 include "mlir/IR/BuiltinTypeInterfaces.td"

@@ -27,7 +27,7 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/BaseCluster.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
-#include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
+#include "mfusion/Dialect/Mfuse/Support/OpConstants.h"
 #include "mfusion/Support/Logging.h"
 
 namespace mlir {
