@@ -57,6 +57,30 @@ def Decompose : Pass<"decompose", "::mlir::ModuleOp"> {
 // GraphKernel Cluster Passes
 //===----------------------------------------------------------------------===//
 
+def AKGCluster : Pass<"mfuse-akg-cluster", "::mlir::func::FuncOp"> {
+  let summary = "Cluster Mfuse operations checked by AKG backend into mfuse.fused";
+
+  let description = [{
+    This pass clusters operations checked by AKG backend into fused
+    subgraphs represented by mfuse.fused operations. It uses a Union-Find
+    algorithm to merge compatible operations while ensuring no cycles
+    are introduced in the dependency graph.
+
+    The pass performs the following steps:
+    1. Build a dependency graph from the function's operations
+    2. Find candidate operations that can be clustered together
+    3. Remove candidates that would introduce cycles
+    4. Merge remaining candidates into clusters
+    5. Create mfuse.fused operations for each cluster
+  }];
+
+  let constructor = "mlir::createAKGClusterPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
 def DVMCluster : Pass<"mfuse-dvm-cluster", "::mlir::func::FuncOp"> {
   let summary = "Cluster Mfuse operations checked by DVM backend into mfuse.fused";
 
@@ -160,6 +184,10 @@ def Split : Pass<"split", "::mlir::func::FuncOp"> {
     This pass splits fuse ops.
     It groups operations into areas and applies split patterns to optimize the execution.
   }];
+  let options = [
+    Option<"kernelGenerator", "kernel-generator", "std::string", "\"DVM\"",
+           "Kernel generator type for split (DVM or AKG)">
+  ];
   let constructor = "mlir::createSplitPass()";
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",

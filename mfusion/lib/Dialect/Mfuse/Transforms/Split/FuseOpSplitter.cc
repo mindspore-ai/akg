@@ -16,6 +16,8 @@
 
 #include "mfusion/Dialect/Mfuse/Transforms/Split/FuseOpSplitter.h"
 
+#include <algorithm>
+#include <cstdlib>
 #include "mfusion/Analysis/Split/Area.h"
 #include "mfusion/Analysis/Split/SplitModel.h"
 #include "mfusion/Analysis/Split/SplitModelFactory.h"
@@ -25,6 +27,7 @@
 #include "mfusion/Dialect/Mfuse/MfuseDialect.h"
 #include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
 #include "mfusion/Dialect/Dvm/Dvm.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
@@ -38,7 +41,6 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
@@ -48,7 +50,7 @@ namespace split {
 // CppCostModelSplitSchemer uses cost model to split operations
 class CppCostModelSplitSchemer : public SplitSchemer {
  public:
-  explicit CppCostModelSplitSchemer(const std::string &processor) : processor_(processor) {}
+  explicit CppCostModelSplitSchemer(const std::string &kernelGenerator) : kernelGenerator_(kernelGenerator) {}
   ~CppCostModelSplitSchemer() = default;
 
   bool split(Block *block) override {
@@ -70,19 +72,18 @@ class CppCostModelSplitSchemer : public SplitSchemer {
     }
 
     // Create split model
-    auto model = SplitModelFactory::Instance().createSplitModel(processor_);
+    auto model = SplitModelFactory::Instance().createSplitModel(kernelGenerator_);
     // Run the model on the operations
     model->run(block);
     // Get areas from the model
     auto &areas = model->areas();
-    LLVM_DEBUG(llvm::dbgs() << "Total areas size: " << areas.size() << "\n");
-    // Process each area to build the split plan
+    MLOG(DEBUG) << "Total areas size: " << areas.size();
     for (auto &area : areas) {
       mlir::SmallVector<mlir::Operation *> area_ops;
-      LLVM_DEBUG(llvm::dbgs() << "Current area ops size: " << area->ops().size() << "\n");
+      MLOG(DEBUG) << "Current area ops size: " << area->ops().size();
       for (auto &op : area->ops()) {
         area_ops.push_back(op);
-        LLVM_DEBUG(llvm::dbgs() << "Current op: " << *op << "\n");
+        MLOG(DEBUG) << "Current op: " << *op;
       }
       // Sort operations by their original index in the block
       std::sort(area_ops.begin(), area_ops.end(),
@@ -97,7 +98,7 @@ class CppCostModelSplitSchemer : public SplitSchemer {
     return split_plan_.size() > 1 || (split_plan_.size() == 1 && needInline(0));
   }
 
-  std::string processor_;
+  std::string kernelGenerator_;
 };
 
 // Splitter splits graph kernel operations for Ascend processor
@@ -163,14 +164,13 @@ class Splitter {
 }  // namespace mfuse
 }  // namespace mlir
 
-mlir::mfuse::split::SplitSchemerPtr FuseOpSplitter::getSplitSchema(const std::string &processor) {
+mlir::mfuse::split::SplitSchemerPtr FuseOpSplitter::getSplitSchema(const std::string &kernelGenerator) {
   // Default split schemer using CppCostModel
-  return std::make_shared<mlir::mfuse::split::CppCostModelSplitSchemer>(processor);
+  return std::make_shared<mlir::mfuse::split::CppCostModelSplitSchemer>(kernelGenerator);
 }
 
-bool FuseOpSplitter::trySplit(mlir::mfuse::FusedOp op) {
-  // Only support DVM processor for now
-  auto schm = getSplitSchema(mlir::mfuse::kProcessorDVM);
+bool FuseOpSplitter::trySplit(mlir::mfuse::FusedOp op, const std::string &kernelGenerator) {
+  auto schm = getSplitSchema(kernelGenerator);
   auto splitter = mlir::mfuse::split::Splitter::makeSplitter(op, schm);
   bool result = splitter->split();
   return result;

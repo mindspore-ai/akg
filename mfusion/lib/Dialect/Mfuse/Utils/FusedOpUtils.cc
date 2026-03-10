@@ -18,6 +18,7 @@
 
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -170,6 +171,34 @@ llvm::SetVector<Value> findExternalOutputs(llvm::ArrayRef<Operation *> clusterOp
     }
   }
   return externalOutputs;
+}
+
+Operation *findValidInsertPoint(const llvm::SmallVector<Operation *> &clusterOps,
+                                const llvm::SetVector<Value> &externalInputs,
+                                const llvm::SetVector<Value> &externalOutputs,
+                                const llvm::DenseSet<Operation *> &clusterOpSet) {
+  Operation *insertPoint = clusterOps.front();
+  for (Value input : externalInputs) {
+    Operation *defOp = input.getDefiningOp();
+    if (defOp && defOp->getBlock() == insertPoint->getBlock() && insertPoint->isBeforeInBlock(defOp)) {
+      insertPoint = defOp;
+    }
+  }
+
+  for (Value output : externalOutputs) {
+    for (Operation *user : output.getUsers()) {
+      if (clusterOpSet.contains(user)) {
+        continue;
+      }
+      if (user->getBlock() == insertPoint->getBlock() && !insertPoint->isBeforeInBlock(user)) {
+        MLOG(DEBUG) << "FusedOp insert point " << insertPoint->getLoc() << " is not before non-cluster user "
+                    << user->getLoc();
+        return nullptr;
+      }
+    }
+  }
+
+  return insertPoint;
 }
 }  // namespace mfuse
 }  // namespace mlir
