@@ -27,7 +27,7 @@
 #include "mlir/IR/Value.h"
 
 #include "mfusion/Analysis/SymbolicShape/SymExprBuilder.h"
-#include "mfusion/Dialect/Mfuse/Utils/SymbolAttrUtils.h"
+#include "mfusion/Dialect/Mfuse/Support/SymbolAttrUtils.h"
 
 namespace mlir {
 namespace mfuse {

@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "mfusion/Dialect/Mfuse/MfuseDialect.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"

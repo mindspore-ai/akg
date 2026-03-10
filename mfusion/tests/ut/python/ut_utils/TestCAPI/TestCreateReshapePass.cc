@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"

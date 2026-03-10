@@ -23,8 +23,8 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mfusion/Dialect/Dvm/Dvm.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Dvm/IR/Dvm.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_CONVERTMFUSETODVM

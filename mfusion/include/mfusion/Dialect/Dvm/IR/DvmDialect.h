@@ -14,9 +14,20 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_DVM_DVM_H
-#define MFUSION_DIALECT_DVM_DVM_H
+#ifndef MFUSION_DIALECT_DVM_DVMDIALECT_H
+#define MFUSION_DIALECT_DVM_DVMDIALECT_H
 
-#include "mfusion/Dialect/Dvm/DvmDialect.h"
+#include "mlir/IR/Dialect.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/OpImplementation.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Bytecode/BytecodeOpInterface.h"
 
-#endif  // MFUSION_DIALECT_DVM_DVM_H
+#include "mfusion/Dialect/Dvm/IR/DvmEnums.h.inc"
+#include "mfusion/Dialect/Dvm/IR/DvmDialect.h.inc"
+
+#define GET_OP_CLASSES
+#include "mfusion/Dialect/Dvm/IR/Dvm.h.inc"
+
+#endif  // MFUSION_DIALECT_DVM_DVMDIALECT_H

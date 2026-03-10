@@ -19,8 +19,8 @@
 #include <cmath>
 #include <utility>
 
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
-#include "mfusion/Dialect/Mfuse/Utils/ArithUtils.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Support/ArithUtils.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
 #include "mfusion/Support/Logging.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
