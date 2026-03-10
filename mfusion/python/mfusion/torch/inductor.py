@@ -15,10 +15,19 @@
 
 from ._pipeline import PipelineRunner
 
-def fuse_and_optimize(torch_dialect_str: str) -> str:
+def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "DVM") -> str:
     """
     Fuse and optimize the given Torch dialect MLIR string.
+
+    Args:
+        torch_dialect_str: The Torch dialect MLIR string to optimize.
+        kernel_generator: The kernel generator type ('DVM' or 'AKG'). Defaults to 'DVM'.
     """
+    if kernel_generator not in ["DVM", "AKG"]:
+        print(f"Warning: Invalid kernel_generator value '{kernel_generator}', using 'DVM' as default")
+        kernel_generator = "DVM"
+    cluster_pass = f"mfuse-{kernel_generator.lower()}-cluster"
+
     runner = PipelineRunner.from_torch_dialect_str(torch_dialect_str)
 
     runner.run(
@@ -42,12 +51,12 @@ def fuse_and_optimize(torch_dialect_str: str) -> str:
     )
 
     runner.run(
-        pipeline="builtin.module(func.func(mfuse-dvm-cluster),canonicalize)",
-        stage="Mfuse DVM Clustering",
+        pipeline=f"builtin.module(func.func({cluster_pass}),canonicalize)",
+        stage=f"Mfuse {kernel_generator.upper()} Clustering",
     )
 
     runner.run(
-        pipeline="builtin.module(func.func(split),canonicalize)",
+        pipeline=f"builtin.module(func.func(split{{kernel-generator={kernel_generator}}}),canonicalize)",
         stage="Mfuse Split")
 
     runner.run(

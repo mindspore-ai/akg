@@ -17,12 +17,8 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/BaseCluster.h"
 
 #include <algorithm>
-#include <utility>
-#include <unordered_set>
 
 #include "llvm/ADT/SetVector.h"
-#include "llvm/Support/Debug.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -30,8 +26,8 @@
 
 #include "mfusion/Analysis/Cluster/Graph.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
-#include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
 #include "mfusion/Dialect/Mfuse/Utils/FusedOpUtils.h"
+#include "mfusion/Support/Logging.h"
 
 #define DEBUG_TYPE "graph-kernel-cluster"
 
@@ -55,10 +51,10 @@ bool BaseCluster::process(func::FuncOp funcOp) {
   graphMerge(&block, true);
 
   if (graph_->HasCircle()) {
-    LLVM_DEBUG(llvm::dbgs() << "Graph has circle, trying again with conservative strategy\n");
+    MLOG(DEBUG) << "Graph has circle, trying again with conservative strategy";
     graphMerge(&block, false);
     if (graph_->HasCircle()) {
-      LLVM_DEBUG(llvm::dbgs() << "Graph still has circle!\n");
+      MLOG(DEBUG) << "Graph still has circle!";
     }
   }
 
@@ -167,12 +163,9 @@ void BaseCluster::createFusedOp(func::FuncOp funcOp, const std::vector<size_t> &
   // consumed by a later cluster op). This keeps the fused op as early as possible,
   // which avoids breaking dominance for external output users located between cluster ops.
   OpBuilder builder(funcOp.getContext());
-  Operation *insertPoint = clusterOps.front();
-  for (Value input : externalInputs) {
-    Operation *defOp = input.getDefiningOp();
-    if (defOp && defOp->getBlock() == insertPoint->getBlock() && insertPoint->isBeforeInBlock(defOp)) {
-      insertPoint = defOp;
-    }
+  Operation *insertPoint = findValidInsertPoint(clusterOps, externalInputs, externalOutputs, clusterOpSet);
+  if (!insertPoint) {
+    return;
   }
   builder.setInsertionPointAfter(insertPoint);
 
