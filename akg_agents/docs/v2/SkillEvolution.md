@@ -4,15 +4,18 @@
 
 ## 1. Overview
 
-The Skill Evolution system automatically extracts optimization experience and generates reusable `SKILL.md` documents. It runs as a SubAgent registered as the `call_skill_evolution` tool, callable by `KernelAgent`.
+The Skill Evolution system is a general-purpose experience extraction framework: it automatically distills reusable optimization knowledge from Agent runtime logs and interaction records, generating structured `SKILL.md` documents. This gives Agents the ability to "practice → summarize → reuse" in a closed learning loop.
 
-**Two modes**:
+The current implementation focuses on the operator layer. It runs as a SubAgent registered as the `call_skill_evolution` tool, callable by `KernelAgent` during operator generation/optimization workflows.
+
+**Three modes**:
 - **search_log**: Extract evolution chain diffs from search logs — automated optimization patterns
 - **expert_tuning**: Extract human tuning experience from conversation history — "user advice → code change → performance delta" causal chains
+- **error_fix**: Extract debugging experience from error fix records — "error type → fix strategy"
 
-**Goal**: Close the loop of "optimize → summarize → reuse" — turn both automated search logs and human expertise into structured knowledge for future kernel generation.
+**Goal**: Turn automated search logs, human expertise, and debugging experience into structured knowledge for future kernel generation.
 
-**Architecture**: `SkillEvolutionBase` (`core_v2/agents/`) provides shared capabilities (workspace management, logging utilities). `SkillEvolutionAgent` (`op/agents/`) inherits from the base class and implements the two operator-specific modes.
+**Architecture**: `SkillEvolutionBase` (`core_v2/agents/`) provides shared capabilities (workspace management, logging utilities). `SkillEvolutionAgent` (`op/agents/`) inherits from the base class and implements the three operator-specific modes.
 
 ## 2. search_log Mode
 
@@ -176,7 +179,98 @@ Template `analyze_expert_tuning.j2` injects the timeline and instructs the LLM t
 
 **Naming convention**: `skill_name` follows the `{dsl}-exp-{op-category}-{tuning-detail}` format. `source` is `expert_tuning`.
 
-## 4. File Structure
+## 4. error_fix Mode
+
+Extracts "fail → success" error fix records from search logs and accumulates them into a debugging `SKILL.md`.
+
+**Use case**: During the code generation process, code fails multiple times before being successfully fixed. These debugging insights are distilled into reusable skills to help future generation stages avoid similar errors.
+
+### 4.1 Data Source
+
+Shares the same `logs/` directory as `search_log` mode, but focuses on different information:
+
+| File | Content | Key Fields |
+|------|---------|------------|
+| `verification_results.jsonl` | Verification records (both failures and successes) | `task_id`, `passed`, `verify_dir`, `step` |
+| `verify_dir/*_impl.py` | Failed/successful code | Code content |
+
+**Data extraction logic**: For each Task, sort verification records by step and find the first `passed=true` entry. Take the last `passed=false` entry before it as the "failed version". Extract failed code, successful code, and error log.
+
+```
+Task verification sequence: step2(fail) → step5(fail) → step8(fail) → step11(pass)
+Extraction: failed_code=step8, success_code=step11, error_log=step8's error
+```
+
+**Full diff**: Unlike `search_log` mode's 200-line truncation limit, `error_fix` generates untruncated diffs to ensure the LLM sees the complete code change.
+
+**Multi-workflow compatibility**: `error_fix` mode only depends on `verification_results.jsonl` and `verify_dir`. `task_id` is used purely as a grouping key, so it works with adaptive_search (`_Gen1_Task3`), evolve (`1_Island1_Task0`), and kernelgen (`0`) formats alike.
+
+### 4.2 Pipeline
+
+```
+1. collect         — Parse verification_results.jsonl → find fail→success pairs per Task
+                     → read failed/successful code + error log → full diff (untruncated)
+2. LLM Analysis   — Fix cases (error_log + diff) → generate error fix experience
+3. LLM Dedup      — If SKILL.md exists, inject existing + new content; LLM outputs only non-redundant items
+4. Writer          — First run creates `error-fix/SKILL.md`; later runs append deduplicated incremental content
+```
+
+### 4.3 Collector
+
+`collect(log_dir, op_name) -> (records, metadata)`
+
+- Parses `verification_results.jsonl`, groups by `task_id`
+- For each Task, sorts by step and finds the last failure before the first success
+- Reads failed and successful `*_impl.py` from corresponding `verify_dir`
+- Reads the failure step's `error_log` (truncated to the last 1000 chars)
+- Generates an untruncated unified diff from failed to successful code
+- Returns a list of `SuccessfulFixRecord` and environment metadata
+
+**Data structure**:
+
+```python
+@dataclass
+class SuccessfulFixRecord:
+    task_id: str
+    op_name: str
+    error_log: str       # Truncated error log
+    error_step: int      # Failed step number
+    failed_code: str     # Failed version code
+    success_code: str    # Successful version code
+    diff: str            # Unified diff (untruncated)
+    dsl: str
+    backend: str
+    arch: str
+```
+
+### 4.4 LLM Prompt
+
+Template `analyze_error_fix.j2` injects all fix cases (each containing error log and full code diff).
+
+LLM tasks:
+1. Classify common errors (with short titles)
+2. For each error, provide only **error signature** and **fix method**, with brief code comparisons
+3. Merge similar errors and focus on transferable, generalized fix strategies
+
+### 4.5 Dedup and Writer
+
+**Dedup** (`dedup_error_fix.j2`): When `error-fix/SKILL.md` already exists, both the existing body and newly generated content are injected into LLM. The LLM determines which items are new and outputs only the non-redundant incremental content. If everything is duplicate, it outputs "无新增内容" and writing is skipped.
+
+**Writer** (`SkillWriter.write_error_fix`):
+
+- Fixed skill directory name: `error-fix`
+- Default output path: `op/resources/skills/{dsl}/evolved/error-fix/SKILL.md`
+- If `--output-dir DIR` is provided: `DIR/error-fix/SKILL.md`
+- If the file does not exist, create it with fixed frontmatter (`name: error-fix`, `category: example`, `metadata.source: error_fix`)
+- If the file already exists, append the deduplicated incremental content (preserving existing frontmatter and body)
+
+```
+Run 1: LLM generates → create new SKILL.md
+Run 2: LLM generates → compare with existing → append only new items
+Run N: Same — continuously accumulate non-redundant debugging experience
+```
+
+## 5. File Structure
 
 ```
 core_v2/agents/
@@ -186,43 +280,49 @@ op/tools/skill_evolution/
 ├── common.py                   — Shared types, utilities, LLM output parsing, SKILL.md writer
 ├── search_log_utils.py         — search_log mode: collect + compress + to_prompt_vars
 ├── expert_tuning_utils.py      — expert_tuning mode: collect + build_timeline + to_prompt_vars
+├── error_fix_utils.py          — error_fix mode: collect + to_prompt_vars
 └── __init__.py
 
-op/agents/skill_evolution_agent.py — SkillEvolutionAgent (inherits base, search_log / expert_tuning dispatch)
+op/agents/skill_evolution_agent.py — SkillEvolutionAgent (inherits base, three-mode dispatch)
 
 op/resources/prompts/skill_evolution/
 ├── analyze_search_log.j2       — search_log: structured evolution diffs → LLM
-└── analyze_expert_tuning.j2    — expert_tuning: action timeline → LLM
+├── analyze_expert_tuning.j2    — expert_tuning: action timeline → LLM
+├── analyze_error_fix.j2        — error_fix: fix cases → LLM
+└── dedup_error_fix.j2          — error_fix: existing + new content → LLM dedup, output increments only
 
-tests/op/st/test_skill_evolution.py — Standalone CLI script (no Agent framework dependency)
+examples/kernel_related/run_skill_evolution.py — Standalone CLI script (no Agent framework dependency)
 ```
 
-## 5. Standalone CLI Script
+## 6. Standalone CLI Script
 
-`tests/op/st/test_skill_evolution.py` provides an Agent-framework-free entry point.
+`examples/kernel_related/run_skill_evolution.py` provides an Agent-framework-free entry point.
 
 ```bash
 # search_log mode
-python akg_agents/tests/op/st/test_skill_evolution.py search_log /path/to/logs relu
+python examples/kernel_related/run_skill_evolution.py search_log /path/to/logs relu
 
 # expert_tuning mode
-python akg_agents/tests/op/st/test_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx relu
+python examples/kernel_related/run_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx relu
+
+# error_fix mode
+python examples/kernel_related/run_skill_evolution.py error_fix /path/to/logs matmul
 
 # With output directory and model level
-python akg_agents/tests/op/st/test_skill_evolution.py expert_tuning /path/to/conv relu -o ./output -m complex
+python examples/kernel_related/run_skill_evolution.py error_fix /path/to/logs matmul -o ./output -m complex
 ```
 
 | Argument | Description |
 |----------|-------------|
-| `mode` | `search_log` or `expert_tuning` |
-| `log_dir` / `conversation_dir` | Log directory (search_log) or conversation directory (expert_tuning) |
-| `op_name` | Operator name (e.g. relu, l1norm) |
-| `-o / --output-dir` | SKILL.md output directory (defaults to project skills dir) |
+| `mode` | `search_log`, `expert_tuning`, or `error_fix` |
+| `log_dir` / `conversation_dir` | Log directory (search_log / error_fix) or conversation directory (expert_tuning) |
+| `op_name` | Operator name (e.g. relu, l1norm, matmul) |
+| `-o / --output-dir` | SKILL.md output directory |
 | `-m / --model-level` | LLM model level (default: standard) |
 
-## 6. Workspace
+## 7. Workspace
 
-Intermediate files are saved to `{cur_path}/logs/skill_evolution/`:
+In Agent mode, intermediate files are saved to `{cur_path}/logs/skill_evolution/`. In CLI mode, the default location is `~/.akg/skill_evolution/{mode}_{op_name}/` (overridable with `-o`):
 
 **search_log mode:**
 
@@ -244,3 +344,33 @@ Intermediate files are saved to `{cur_path}/logs/skill_evolution/`:
 | `llm_response.txt` | Raw LLM output |
 | `session.log` | Execution log |
 | `result.json` | Final result summary |
+
+**error_fix mode:**
+
+| File | Content |
+|------|---------|
+| `collected_fix_records.json` | Fix records summary (task_id, error_step, has_conductor, diff_lines) |
+| `llm_prompt.txt` | Rendered LLM prompt (with fix cases) |
+| `llm_response.txt` | Raw LLM output |
+| `session.log` | Execution log |
+| `result.json` | Final result summary |
+
+## 8. Workflow Compatibility
+
+Different workflows produce logs with different naming conventions:
+
+| Workflow | File Naming Example | Characteristics |
+|----------|-------------------|-----------------|
+| adaptive_search | `Iteration_Gen1_Task3_Step02_{op}_coder_result.txt` | `Gen` + `Task` hierarchy |
+| evolve | `Iteration1_Island0_Task0_Step05_{op}_coder_prompt.txt` | `Island` + `Task` hierarchy |
+| kernelgen | `Iteration0_Step01_{op}_kernel_gen_prompt.txt` | No Task/Island hierarchy |
+
+Mode compatibility:
+
+| Mode | adaptive_search | evolve | kernelgen | Notes |
+|------|:-:|:-:|:-:|-------|
+| **error_fix** | Y | Y | Y | Only depends on `verification_results.jsonl` + `verify_dir`, independent of file naming |
+| **search_log** | Y | - | - | Depends on `lineage_graph.md` + `speed_up_record.txt`, currently only produced by adaptive_search |
+| **expert_tuning** | - | - | - | Depends on conversation directory `trace.json` / `action_history_fact.json`, does not use workflow logs directly |
+
+> **Note**: To extend `search_log` mode to evolve/kernelgen workflows, additional parsing logic for their lineage and performance files would be needed. `error_fix` mode is already natively compatible with any workflow that produces `verification_results.jsonl`.
