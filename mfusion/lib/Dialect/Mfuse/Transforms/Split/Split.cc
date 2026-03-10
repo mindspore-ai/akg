@@ -40,6 +40,7 @@
 namespace mlir {
 namespace mfuse {
 
+#define GEN_PASS_DECL_SPLIT
 #define GEN_PASS_DEF_SPLIT
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h.inc"
 
@@ -53,7 +54,7 @@ struct SplitPass : public impl::SplitBase<SplitPass> {
 
     FuseOpSplitter fuse_op_splitter;
     for (FusedOp fuseOp : fuseOps) {
-      if (fuse_op_splitter.trySplit(fuseOp)) {
+      if (fuse_op_splitter.trySplit(fuseOp, kernelGenerator)) {
         LLVM_DEBUG(llvm::dbgs() << "Split fuseOp: " << fuseOp << "\n");
       }
     }

@@ -17,7 +17,11 @@
 #ifndef MFUSION_DIALECT_MFUSE_UTILS_FUSED_OP_UTILS_H
 #define MFUSION_DIALECT_MFUSE_UTILS_FUSED_OP_UTILS_H
 
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Utils/OpConstants.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -35,8 +39,18 @@ llvm::SetVector<Value> findExternalInputs(llvm::ArrayRef<Operation *> clusterOps
 
 /// Find external outputs (values used outside the cluster).
 llvm::SetVector<Value> findExternalOutputs(llvm::ArrayRef<Operation *> clusterOps,
-                                          const llvm::DenseSet<Operation *> &constantsToCluster,
-                                          const llvm::DenseSet<Operation *> &clusterOpSet);
+                                           const llvm::DenseSet<Operation *> &constantsToCluster,
+                                           const llvm::DenseSet<Operation *> &clusterOpSet);
+
+/// Find a valid insertion point for the fused operation.
+/// The insertion point must satisfy two SSA dominance constraints:
+///   1. After all external input definitions (so they dominate the fused op's uses).
+///   2. Before all non-cluster users of external outputs (so fused results dominate users).
+/// Returns nullptr if no valid insertion point exists.
+Operation *findValidInsertPoint(const llvm::SmallVector<Operation *> &clusterOps,
+                                const llvm::SetVector<Value> &externalInputs,
+                                const llvm::SetVector<Value> &externalOutputs,
+                                const llvm::DenseSet<Operation *> &clusterOpSet);
 }  // namespace mfuse
 }  // namespace mlir
 

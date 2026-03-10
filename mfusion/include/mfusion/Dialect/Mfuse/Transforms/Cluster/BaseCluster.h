@@ -24,7 +24,6 @@
 #include <vector>
 
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
@@ -93,6 +92,24 @@ class DVMCluster : public BaseCluster {
  public:
   DVMCluster() = default;
   ~DVMCluster() override = default;
+
+  static llvm::DenseSet<llvm::StringRef> getClusterableOps();
+
+  static bool canClusterableOp(const llvm::DenseSet<llvm::StringRef> &opList, Operation *op);
+
+ protected:
+  llvm::DenseSet<llvm::StringRef> getClusterableOpList() override;
+
+  bool isClusterableOp(Operation *op) override;
+
+  std::string getFusionType() override;
+};
+
+/// AKGCluster - Clusters operations checked by AKG backend.
+class AKGCluster : public BaseCluster {
+ public:
+  AKGCluster() = default;
+  ~AKGCluster() override = default;
 
   static llvm::DenseSet<llvm::StringRef> getClusterableOps();
 
