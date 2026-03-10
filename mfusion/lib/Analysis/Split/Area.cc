@@ -19,10 +19,10 @@
 #include <algorithm>
 #include <numeric>
 #include <unordered_set>
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Analysis/Split/OpRegister.h"
-#include "mfusion/Dialect/Mfuse/MfuseDialect.h"
-#include "mfusion/Dialect/Dvm/Dvm.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
+#include "mfusion/Dialect/Dvm/IR/Dvm.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "llvm/Support/raw_ostream.h"

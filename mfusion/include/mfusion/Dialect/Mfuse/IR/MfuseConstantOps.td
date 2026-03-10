@@ -17,7 +17,7 @@
 #ifndef MFUSE_DIALECT_MFUSE_CONSTANT_OPS_TD
 #define MFUSE_DIALECT_MFUSE_CONSTANT_OPS_TD
 
-include "mfusion/Dialect/Mfuse/MfuseTypes.td"
+include "mfusion/Dialect/Mfuse/IR/MfuseTypes.td"
 
 //===----------------------------------------------------------------------===//
 // Operations to create values of custom types from attributes

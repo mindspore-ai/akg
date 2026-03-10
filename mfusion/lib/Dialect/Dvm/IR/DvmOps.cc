@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_DVM_DVM_TD
-#define MFUSION_DIALECT_DVM_DVM_TD
+#include "mfusion/Dialect/Dvm/IR/DvmDialect.h"
+#include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/Builders.h"
 
-include "mfusion/Dialect/Dvm/DvmDialect.td"
-include "mfusion/Dialect/Dvm/DvmOps.td"
-
-#endif // MFUSION_DIALECT_DVM_DVM_TD
+#define GET_OP_CLASSES
+#include "mfusion/Dialect/Dvm/IR/Dvm.cpp.inc"

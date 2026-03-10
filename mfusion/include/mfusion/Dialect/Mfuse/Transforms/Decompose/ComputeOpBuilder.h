@@ -23,7 +23,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Types.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 
 namespace mlir {
 namespace mfuse {

@@ -17,7 +17,7 @@
 #ifndef MFUSE_DIALECT_MFUSE_ACLNN_OPS_TD
 #define MFUSE_DIALECT_MFUSE_ACLNN_OPS_TD
 
-include "mfusion/Dialect/Mfuse/MfuseTypes.td"
+include "mfusion/Dialect/Mfuse/IR/MfuseTypes.td"
 
 //===----------------------------------------------------------------------===//
 // MFUSE Aclnn Operations

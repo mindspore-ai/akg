@@ -1,7 +1,7 @@
 #include "mfusion/Conversion/DialectConversion.pdll"
 #include "mfusion/Conversion/PdllHelper.pdll"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.td"
-#include "mfusion/Dialect/Mfuse/MfuseOps.td"
+#include "mfusion/Dialect/Mfuse/IR/MfuseOps.td"
 
 #include "MfuseMetaToTorch.pdll"
 #include "MfuseAclnnToTorch.pdll"

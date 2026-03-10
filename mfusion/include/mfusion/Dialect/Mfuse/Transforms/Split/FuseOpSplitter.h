@@ -26,7 +26,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
-#include "mfusion/Dialect/Mfuse/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Analysis/Split/Area.h"
 #include "mfusion/Analysis/Split/SplitModel.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Split/SplitSchemer.h"

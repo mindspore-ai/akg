@@ -14,14 +14,24 @@
  * limitations under the License.
  */
 
-#ifndef MFUSE_DIALECT_MFUSE_TD
-#define MFUSE_DIALECT_MFUSE_TD
+#include "mfusion/Dialect/Dvm/IR/DvmDialect.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/DialectImplementation.h"
 
-// Main entry point for MFUSE dialect definitions.
-// This file includes all dialect components organized into separate files.
-include "mfusion/Dialect/Mfuse/MfuseDialect.td"
-include "mfusion/Dialect/Mfuse/MfuseAttributes.td"
-include "mfusion/Dialect/Mfuse/MfuseTypes.td"
-include "mfusion/Dialect/Mfuse/MfuseOps.td"
+#include "llvm/ADT/TypeSwitch.h"
 
-#endif // MFUSE_DIALECT_MFUSE_TD
+#include "mfusion/Dialect/Dvm/IR/DvmDialect.cpp.inc"
+#include "mfusion/Dialect/Dvm/IR/DvmEnums.cpp.inc"
+
+namespace mlir {
+namespace dvm {
+
+void DvmDialect::initialize() {
+  addOperations<
+#define GET_OP_LIST
+#include "mfusion/Dialect/Dvm/IR/Dvm.cpp.inc"
+    >();
+}
+
+}  // namespace dvm
+}  // namespace mlir
