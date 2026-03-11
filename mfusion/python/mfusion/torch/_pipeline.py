@@ -8,6 +8,9 @@ from mfusion import ir
 from mfusion.passmanager import PassManager
 from mfusion.dialects import torch as torch_d
 
+_pipeline_runner_id = 0
+_global_ir_id = 0
+
 
 def _parse_mlir_module_from_text(text: str) -> ir.Module:
     """Parse MLIR module from text IR."""
@@ -16,16 +19,19 @@ def _parse_mlir_module_from_text(text: str) -> ir.Module:
     return ir.Module.parse(text, ctx)
 
 
-def _get_safe_filename(step: int, stage: str) -> str:
+def _get_safe_filename(pipeline_id: int, step: int, stage: str) -> str:
     """Convert stage description into a safe filename.
 
     Example:
-        "Decompose aclnn ops to meta ops"
-        -> "02_decompose_aclnn_ops_to_meta_ops.mlir"
+        pipeline_id=0, step=0, "Original MLIR Module"
+        -> "00_pm00_original_mlir_module_0000.mlir"
     """
+    global _global_ir_id
     name = stage.lower().replace(" ", "_")
     name = re.sub(r"[^a-z0-9_]", "", name)
-    return f"{step:02d}_{name}.mlir"
+    filename = f"{pipeline_id:02d}_pm{step:02d}_{name}_{_global_ir_id:04d}.mlir"
+    _global_ir_id += 1
+    return filename
 
 
 def _get_save_directory() -> Path:
@@ -49,7 +55,10 @@ class PipelineRunner:
     """
 
     def __init__(self, module: ir.Module):
+        global _pipeline_runner_id
         self._module = module
+        self._pipeline_id = _pipeline_runner_id
+        _pipeline_runner_id += 1
         self._step = 0
         self.enabled_print_ir = os.environ.get("MFUSION_PRINT_IR") == "1"
         self.enabled_save_ir = os.environ.get("MFUSION_SAVE_IR") == "1"
@@ -84,7 +93,7 @@ class PipelineRunner:
             save_dir = _get_save_directory()
             save_dir.mkdir(parents=True, exist_ok=True)
             # Use the current step for the filename.
-            filename = _get_safe_filename(self._step, stage_title)
+            filename = _get_safe_filename(self._pipeline_id, self._step, stage_title)
             path = save_dir / filename
             with path.open("w", encoding="utf-8") as f:
                 f.write(str(self._module))
