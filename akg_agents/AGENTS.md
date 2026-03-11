@@ -44,7 +44,7 @@
 | `framework` | `torch`, `mindspore` |
 | `backend` | `cuda`, `ascend`, `cpu` |
 | `dsl` | `triton_cuda`, `triton_ascend`, `cpp`, `cuda_c`, `tilelang_cuda`, `ascendc`, `pypto` |
-| `arch` | cuda: `a100`, `v200`；ascend: `ascend910b1`~`ascend910b4`, `ascend310p3`；cpu: `x86_64`, `aarch64` |
+| `arch` | cuda: `a100`, `v100`；ascend: `ascend910b1`~`ascend910b4`, `ascend310p3`；cpu: `x86_64`, `aarch64` |
 
 ---
 
