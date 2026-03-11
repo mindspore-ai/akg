@@ -27,6 +27,13 @@ declare_mlir_dialect_python_bindings(
   DIALECT_NAME mfuse
 )
 
+declare_mlir_python_sources(MFusionPythonSources.Tools
+  ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mfusion"
+  ADD_TO_PARENT MFusionPythonSources
+  SOURCES
+    tools/opt/__main__.py
+)
+
 # Define Python extension module
 set(_mfusion_private_libs
   LLVMSupport
