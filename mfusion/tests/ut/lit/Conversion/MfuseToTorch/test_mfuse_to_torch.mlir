@@ -125,16 +125,18 @@ func.func @test_reduce_sum_dtype_none(%arg0: tensor<2x2xf32>) -> tensor<2xf32> {
 
 // CHECK-LABEL: func.func @test_cast
 func.func @test_cast(%arg0: tensor<2x2xf32>) -> tensor<2x2xf16> {
-  // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 5
-  // CHECK: torch.aten.to.dtype %{{.*}}, %[[DTYPE]]
+  // CHECK:   %[[INT5:.*]] = torch.constant.int 5
+  // CHECK:   %[[RESULT:.*]] = torch.operator "torch.npu._npu_dtype_cast"(%{{.*}}, %[[INT5]]) : (!torch.vtensor<[2,2],f32>, !torch.int) -> !torch.vtensor<[2,2],f16>
+  // CHECK:   return %[[RESULT]] : !torch.vtensor<[2,2],f16>
   %0 = mfuse.cast %arg0 : (tensor<2x2xf32>) -> tensor<2x2xf16>
   return %0 : tensor<2x2xf16>
 }
 
 // CHECK-LABEL: func.func @test_cast_i32_to_f64
 func.func @test_cast_i32_to_f64(%arg0: tensor<2x2xi32>) -> tensor<2x2xf64> {
-  // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 7
-  // CHECK: torch.aten.to.dtype %{{.*}}, %[[DTYPE]]
+  // CHECK:   %[[INT7:.*]] = torch.constant.int 7
+  // CHECK:   %[[RESULT:.*]] = torch.operator "torch.npu._npu_dtype_cast"(%{{.*}}, %[[INT7]]) : (!torch.vtensor<[2,2],i32>, !torch.int) -> !torch.vtensor<[2,2],f64>
+  // CHECK:   return %[[RESULT]] : !torch.vtensor<[2,2],f64>
   %0 = mfuse.cast %arg0 : (tensor<2x2xi32>) -> tensor<2x2xf64>
   return %0 : tensor<2x2xf64>
 }
