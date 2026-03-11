@@ -33,7 +33,8 @@
 **解决方案：**
 
 - 添加 `TORCH_MLIR_BUILD_EMBEDDED` CMake 选项
-- 当启用该选项时，跳过 `TorchMLIRSiteInitialize` 组件的声明和包含
+- 当启用该选项时，跳过 `TorchMLIRSiteInitialize` 和 `TorchMLIRPythonSources.Tools` 组件的声明和包含
+- 跳过 Tools 组件是为了避免 torch-mlir 的 `tools/opt/__main__.py` 被打包到嵌入项目中，该脚本调用的是 `torch-mlir-opt` 而非嵌入项目自己的 opt 工具
 - 在构建逻辑中添加第三个分支来处理嵌入式构建场景
 - 确保嵌入式构建时不会执行不必要的初始化操作
 
