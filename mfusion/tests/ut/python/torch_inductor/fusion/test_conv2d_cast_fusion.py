@@ -146,4 +146,4 @@ def test_conv2d_cast_fusion_with_conv_two_uses():
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_has_op("torch.aten.convolution"), checker.error or "convolution should exist"
     # The conv->cast branch is fused (that to.dtype is eliminated); the mul->to.dtype path remains.
-    assert checker.check_has_op("torch.aten.to.dtype"), checker.error or "to.dtype after mul should remain"
+    assert checker.check_text_contains("torch.operator \"torch.npu._npu_dtype_cast\""), checker.error or "to.dtype after mul should remain"
