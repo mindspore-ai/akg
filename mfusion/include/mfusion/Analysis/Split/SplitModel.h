@@ -90,7 +90,7 @@ class SplitModel {
   void setDefaultAreaMode(const AreaPtr &area) const { area->setMode(getDefaultAreaMode(area->dom())); }
 
   /// Get default area mode of the dominant node
-  virtual AreaMode getDefaultAreaMode(Operation *node) const;
+  virtual AreaMode getDefaultAreaMode(Node *node) const;
 
   /// Add new pattern
   void addPattern(const FusePatternPtr &pn, bool enable = true);
@@ -99,7 +99,7 @@ class SplitModel {
   void fuseAreas(const AreaPtr &dom, const std::vector<AreaPtr> &areas, FuseDirection direction);
 
   /// Create new area
-  AreaPtr newArea(Operation *op, bool is_output = false);
+  AreaPtr newArea(Node *node, bool is_output = false);
 
   /// Limit the area's size
   void limitAreaSize(const AreaPtr &dom, std::vector<AreaPtr> *areas) const;
@@ -107,9 +107,14 @@ class SplitModel {
   /// Update the area's outputs
   void updateAreaOutput(const AreaPtr &area) const;
 
+  /// Get node list
+  void mapOperationsToNodes(Block *block);
+
   std::list<AreaPtr> areas_;  // use std::list to accelerate the "erase"
   std::shared_ptr<ReachTable> reach_table_{nullptr};
-  std::unordered_map<Operation *, AreaPtr> node_area_map_;
+  std::unordered_map<Node *, AreaPtr> node_area_map_;
+  std::vector<Node *> nodes_;
+  NodePtrList nodes_ptrs_;
 
  private:
   size_t cur_area_id_{0};
