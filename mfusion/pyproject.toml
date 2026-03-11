@@ -25,6 +25,9 @@ dev = ["pytest>=6.0.0", "black>=21.0.0"]
 [project.urls]
 Homepage = "https://gitee.com/mindspore/vllm-mindspore"
 
+[project.scripts]
+mfusion-opt = "mfusion.tools.opt.__main__:main"
+
 [tool.setuptools]
 package-dir = {"" = "python"}
 ext-modules = [
