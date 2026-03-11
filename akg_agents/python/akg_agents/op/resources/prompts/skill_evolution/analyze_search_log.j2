@@ -1,0 +1,81 @@
+你是一个高级算子优化专家。请根据以下自适应搜索的**进化链 diff**，撰写一份 **SKILL.md** 优化经验文档。
+
+这份文档的目标读者是**后续要实现类似算子的 AI agent**，它需要从中获得可直接复用的优化策略和关键写法。
+
+**重要原则**：你的唯一信息来源是下方的进化链 diff 和性能数据。只总结从 diff 中能直接观察到的、带来了可量化性能提升的改动。不要补充通用优化知识（如基本的向量化、分块、mask 等教科书内容），除非 diff 明确显示它是从"没有"变成"有"并带来了显著性能提升。
+
+## 算子信息
+- 名称: {{ op_name }}
+- DSL: {{ dsl }} | 后端: {{ backend }} | 架构: {{ arch }}
+- 搜索结果: {{ success_count }}/{{ total_tasks }} 成功{% if best_speedup > 0 %}, 最佳加速比 {{ "%.2f"|format(best_speedup) }}x{% endif %}
+
+{% if task_desc %}
+## 算子任务描述
+```{{ dsl or "python" }}
+{{ task_desc }}
+```
+{% endif %}
+
+{% if best_code %}
+## 最佳实现方案（{{ best_task_id }}，{{ "%.2f"|format(best_gen_time) }}us / {{ "%.2f"|format(best_speedup) }}x）
+
+（完整代码仅供参考上下文，不要对它做技术罗列。你的分析重点是下方的进化链 diff。）
+
+```{{ dsl or "python" }}
+{{ best_code }}
+```
+{% endif %}
+
+{% if evolution_chains %}
+## 进化链（注释已剥离、仅保留性能递增的节点）
+{% for step in evolution_chains %}
+### {{ step.parent_id }}({{ "%.2f"|format(step.parent_gen_time) }}us/{{ "%.2f"|format(step.parent_speedup) }}x) → {{ step.child_id }}({{ "%.2f"|format(step.child_gen_time) }}us/{{ "%.2f"|format(step.child_speedup) }}x)
+
+```diff
+{{ step.code_diff }}
+```
+{% endfor %}
+{% endif %}
+
+{% if performance_summary %}
+## 性能数据
+{{ performance_summary }}
+{% endif %}
+
+---
+
+## 输出要求
+
+请直接用 Markdown 撰写 SKILL.md 的**正文**（不需要写 YAML frontmatter，代码会自动补充）。
+
+**核心目标：只总结进化链 diff 中实际观察到的、带来性能提升的改动，提炼为可迁移的方法论。**
+
+禁止事项（非常重要）：
+- **禁止**描述最终代码中"已有"但 diff 中未涉及的技术点
+- **禁止**补充教科书式的通用知识（如 tl.arange+mask 的基本用法、基本分块、基本并行等）
+- **禁止**对最终代码做逐技术点罗列
+
+文档结构要求：
+
+1. **任务特征**（2-3 行） — 仅用于界定该方法论所解决的问题类别（如"跨轴broadcast且末维极小"、"大规模统计类操作"），不要罗列具体 shape。
+
+2. **优化方法**（文档主体） — 每个方法必须来自进化链 diff 中可观察到的改动，格式：
+   - 标题：方法名称（如"两阶段 Kernel 策略"、"预排序+二分查找"）
+   - 优化内容：2-3 句话将该改动泛化为可复用的方法（什么条件下用、怎么做、为什么有效）
+   - 如有必要附一个最小代码片段（≤10 行）展示关键写法
+   - 如果多个 diff 步骤属于同类优化，合并为一个方法
+
+3. **适用边界**（2-3 行） — 这些方法在什么条件下可复用，什么条件下需调整。
+
+文档的前两行必须是（注意不要加任何代码围栏）:
+skill_name: 命名格式为 `{dsl}-case-{算子类别}-{优化特征}`，例如 `triton-ascend-case-reduction-amin-large`、`triton-ascend-case-elemwise-broadcast-3d`。当前 dsl={{ dsl }}。
+description: 一句话描述此 skill 提炼的**通用优化方法论**及其适用的问题类别（50-100 字），不要出现具体算子名或具体 shape。
+
+后续跟一个空行再开始正文。
+
+写作要求：
+- 用中文撰写
+- 聚焦泛化性：写出的方法应能直接指导同类新算子的实现，避免仅对当前算子有效的细节
+- 宁少勿滥：如果进化链只体现了 1-2 个有价值的改动，那文档就只写 1-2 个方法，不要凑数
+- 代码片段用 ```python 或 ```diff 格式
+- 控制总长度在 40-150 行之间

@@ -15,6 +15,7 @@
 from .base import AgentBase, Jinja2TemplateWrapper
 from .registry import AgentRegistry, register_agent
 from .react_agent import ReActAgent
+from .skill_evolution_base import SkillEvolutionBase
 
 __all__ = [
     "AgentBase",
@@ -22,4 +23,5 @@ __all__ = [
     "AgentRegistry",
     "register_agent",
     "ReActAgent",
+    "SkillEvolutionBase",
 ]
