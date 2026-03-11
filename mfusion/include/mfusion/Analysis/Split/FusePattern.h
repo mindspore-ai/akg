@@ -197,9 +197,7 @@ class FuseDynReduceFwd : public FusePattern {
 class FuseElemwiseBroadcastBwd : public FusePattern {
  public:
   FuseElemwiseBroadcastBwd(FuseType fuse_type, size_t size_limit)
-      : FusePattern("elemwise_broadcast_bwd", FuseDirection::BACKWARD),
-        fuse_type_(fuse_type),
-        size_limit_(size_limit) {
+      : FusePattern("elemwise_broadcast_bwd", FuseDirection::BACKWARD), fuse_type_(fuse_type), size_limit_(size_limit) {
     name_ += (fuse_type == FuseType::kWidth ? "_width" : "_depth");
   }
   ~FuseElemwiseBroadcastBwd() = default;
