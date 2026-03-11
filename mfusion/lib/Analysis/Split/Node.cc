@@ -26,7 +26,7 @@ namespace split {
 // Node implementation
 std::string Node::toString() const { return debug_name_; }
 
-void Node::addInput(const NodePtr &new_input) {
+void Node::addInput(Node *new_input) {
   if (!new_input) {
     return;
   }
@@ -34,7 +34,7 @@ void Node::addInput(const NodePtr &new_input) {
   inputs_.push_back(new_input);
 }
 
-void Node::setInput(size_t i, const NodePtr &new_input) {
+void Node::setInput(size_t i, Node *new_input) {
   if (!new_input) {
     return;
   }
@@ -49,7 +49,7 @@ void Node::setInput(size_t i, const NodePtr &new_input) {
   inputs_[i] = new_input;
 }
 
-void Node::setInputs(const NodePtrList &inputs) {
+void Node::setInputs(const std::vector<Node *> &inputs) {
   clearInputs();
   inputs_.reserve(inputs.size());
   for (const auto &inp : inputs) {
@@ -66,7 +66,7 @@ void Node::clearInputs() noexcept {
   }
 }
 
-void Node::replaceWith(const NodePtr &other_node) {
+void Node::replaceWith(Node *other_node) {
   if (!other_node || users_.empty()) {
     return;
   }
@@ -78,7 +78,7 @@ void Node::replaceWith(const NodePtr &other_node) {
   }
 }
 
-void Node::removeUser(Node *const user, size_t index) {
+void Node::removeUser(Node *user, size_t index) {
   if (auto iter = users_.find(user); iter != users_.end()) {
     iter->second.erase(index);
     if (iter->second.empty()) {

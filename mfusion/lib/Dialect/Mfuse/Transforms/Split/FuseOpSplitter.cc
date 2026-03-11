@@ -79,11 +79,11 @@ class CppCostModelSplitSchemer : public SplitSchemer {
     auto &areas = model->areas();
     MLOG(DEBUG) << "Total areas size: " << areas.size();
     for (auto &area : areas) {
-      mlir::SmallVector<mlir::Operation *> area_ops;
-      MLOG(DEBUG) << "Current area ops size: " << area->ops().size();
-      for (auto &op : area->ops()) {
-        area_ops.push_back(op);
-        MLOG(DEBUG) << "Current op: " << *op;
+      mlir::SmallVector<Operation *> area_ops;
+      MLOG(DEBUG) << "Current area ops size: " << area->nodes().size();
+      for (auto &node : area->nodes()) {
+        area_ops.push_back(node->op());
+        MLOG(DEBUG) << "Current op: " << *node->op();
       }
       // Sort operations by their original index in the block
       std::sort(area_ops.begin(), area_ops.end(),

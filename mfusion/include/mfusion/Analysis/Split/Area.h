@@ -75,7 +75,7 @@ class Area : public std::enable_shared_from_this<Area> {
 
  public:
   /// Constructor
-  Area(size_t id, Operation *op, bool is_output, const std::unordered_map<Operation *, AreaPtr> &node_area_map);
+  Area(size_t id, Node *node, bool is_output, const std::unordered_map<Node *, AreaPtr> &node_area_map);
   ~Area() = default;
 
   /// Get the ID of this area
@@ -94,13 +94,13 @@ class Area : public std::enable_shared_from_this<Area> {
   const std::vector<AreaWithRelation> &inputsWithRelation() const { return inputs_with_relation_; }
 
   /// Get the outputs of this area
-  std::vector<Operation *> &areaOutputs() { return area_outputs_; }
+  std::vector<Node *> &areaOutputs() { return area_outputs_; }
 
   /// Get the number of inputs
   size_t inputNum() const { return inputs_with_relation_.size(); }
 
   /// Get the number of operators in the area
-  size_t size() const { return ops_.size(); }
+  size_t size() const { return nodes_.size(); }
 
   /// Get all user areas
   std::vector<AreaPtr> users() const;
@@ -115,13 +115,13 @@ class Area : public std::enable_shared_from_this<Area> {
   AreaMode mode() const { return mode_; }
 
   /// Get the dominant operation in this area
-  Operation *dom() const { return isAlive() ? ops_[0] : nullptr; }
+  Node *dom() const { return isAlive() ? nodes_[0] : nullptr; }
 
   /// Get the pattern of this area
   NodePattern pattern() const { return hd_->pattern(); }
 
   /// Get all operations in this area
-  const std::vector<Operation *> &ops() const { return ops_; }
+  const std::vector<Node *> &nodes() const { return nodes_; }
 
   /// Check if this area is an output area
   bool isOutput() const { return is_output_; }
@@ -133,13 +133,13 @@ class Area : public std::enable_shared_from_this<Area> {
   bool computeSizeEqual(const AreaPtr &other) const;
 
   /// Check whether the area is alive (not fused)
-  bool isAlive() const { return !ops_.empty(); }
+  bool isAlive() const { return !nodes_.empty(); }
 
   /// Convert to string representation
   std::string toString() const;
 
-  /// Set the operations in this area
-  void setOps(const std::vector<Operation *> &ops) { ops_ = ops; }
+  /// Set the nodes in this area
+  void setNodes(const std::vector<Node *> &nodes) { nodes_ = nodes; }
 
   /// Set the mode of this area
   void setMode(AreaMode mode) { mode_ = mode; }
@@ -157,11 +157,11 @@ class Area : public std::enable_shared_from_this<Area> {
   std::shared_ptr<NodeHandle> hd_;
   const size_t unique_id_;
   bool is_output_ = false;
-  std::vector<Operation *> ops_;
+  std::vector<Node *> nodes_;
   AreaMode mode_{AreaMode::BASIC};
   std::vector<AreaWithRelation> inputs_with_relation_;
   std::vector<AreaWithRelation> users_;
-  std::vector<Operation *> area_outputs_;
+  std::vector<Node *> area_outputs_;
 };
 
 }  // namespace split

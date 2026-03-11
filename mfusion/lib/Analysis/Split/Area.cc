@@ -39,44 +39,43 @@ bool isDynamic(const Type &type) {
   return shapedType && shapedType.hasRank() && !shapedType.hasStaticShape();
 }
 
-bool shapeEqual(Operation *a, Operation *b, bool skip_leading_one = true) {
+bool shapeEqual(Node *a, Node *b, bool skip_leading_one = true) {
   if (!a || !b) {
     return false;
   }
-
-  auto a_type = mlir::dyn_cast<RankedTensorType>(a->getResult(0).getType());
-  auto b_type = mlir::dyn_cast<RankedTensorType>(b->getResult(0).getType());
-  if (!a_type || !b_type) {
-    return false;
-  }
-  const auto &a_shape = a_type.getShape();
-  const auto &b_shape = b_type.getShape();
-  auto l_shape = a_shape.size() < b_shape.size() ? b_shape : a_shape;
-  auto s_shape = a_shape.size() < b_shape.size() ? a_shape : b_shape;
-  // TODO: support symbolic shape compare.
+  auto l = a->shape.size() < b->shape.size() ? b : a;
+  auto s = a->shape.size() < b->shape.size() ? a : b;
+  const auto &l_shape = l->shape;
+  const auto &s_shape = s->shape;
   auto diff = l_shape.size() - s_shape.size();
   if (diff != 0 && !skip_leading_one) {
+    // shapes with different rank
     return false;
   }
+  // TODO: support symbolic shape compare.
+  // check leading one
   for (size_t i = 0; i < diff; ++i) {
     if (l_shape[i] != 1) {
       return false;
     }
   }
+  // check other dimensions
   for (size_t i = 0; i < s_shape.size(); ++i) {
     auto il = i + diff;
-    if (l_shape[il] != s_shape[i]) {
+    if (l_shape[il] < 0 || s_shape[i] < 0) {
+      return false;
+    } else if (l_shape[il] != s_shape[i]) {
       return false;
     }
   }
   return true;
 }
 
-EdgeRelation getRelation(Operation *op, Operation *input) {
-  if (!op || !input) {
+EdgeRelation getRelation(Node *node, Node *input) {
+  if (!node || !input || !node->op() || !input->op()) {
     llvm::report_fatal_error("op or input is nullptr");
   }
-
+  auto op = node->op();
   // Get operation name and compute type
   std::string op_name = op->getName().getStringRef().str();
   NodePattern op_pattern = OpRegistry::Instance().GetPattern(op_name);
@@ -89,16 +88,16 @@ EdgeRelation getRelation(Operation *op, Operation *input) {
     return EdgeRelation::INJECTIVE;
   }
 
-  auto input_type = mlir::dyn_cast<mlir::RankedTensorType>(input->getResult(0).getType());
+  auto input_type = mlir::dyn_cast<mlir::RankedTensorType>(input->op()->getResult(0).getType());
   if (input_type && isDynamic(input_type)) {
     if (std::all_of(op->getOperands().begin(), op->getOperands().end(),
-                    [input](Value operand) { return operand.getDefiningOp() == input; })) {
+                    [input](Value operand) { return operand.getDefiningOp() == input->op(); })) {
       return EdgeRelation::INJECTIVE;
     }
   }
 
   // naively set the edge relation to "broadcast" if the result shape is not equal to the input shape.
-  return shapeEqual(op, input) ? EdgeRelation::INJECTIVE : EdgeRelation::BROADCAST;
+  return shapeEqual(node, input) ? EdgeRelation::INJECTIVE : EdgeRelation::BROADCAST;
 }
 
 bool sameArea(const AreaWithRelation &a, const AreaWithRelation &b) { return a.first == b.first; }
@@ -109,24 +108,21 @@ bool areaWithRelationCmp(const AreaWithRelation &a, const AreaWithRelation &b) {
 
 }  // namespace
 
-Area::Area(size_t id, Operation *op, bool is_output, const std::unordered_map<Operation *, AreaPtr> &node_area_map)
-    : unique_id_(id), is_output_(is_output), ops_(1, op) {
-  std::string op_name = op->getName().getStringRef().str();
+Area::Area(size_t id, Node *node, bool is_output, const std::unordered_map<Node *, AreaPtr> &node_area_map)
+    : unique_id_(id), is_output_(is_output), nodes_(1, node) {
+  std::string op_name = node->op()->getName().getStringRef().str();
   NodePattern pattern = OpRegistry::Instance().GetPattern(op_name);
   // Initialize NodeHandle
   hd_ = std::make_shared<NodeHandle>(this, pattern);
   // link inputs of the handle node
   auto init_pattern = pattern;
-  for (auto operand : op->getOperands()) {
-    auto *defOp = operand.getDefiningOp();
-    if (defOp) {
-      auto input_relation = getRelation(op, defOp);
-      if (init_pattern == NodePattern::ELEMWISE && input_relation == EdgeRelation::BROADCAST) {
-        hd_->setPattern(NodePattern::BROADCAST);
-      }
-      if (auto inp_area_iter = node_area_map.find(defOp); inp_area_iter != node_area_map.end()) {
-        inputs_with_relation_.emplace_back(std::make_pair(inp_area_iter->second, input_relation));
-      }
+  for (auto input : node->inputs()) {
+    auto input_relation = getRelation(node, input);
+    if (init_pattern == NodePattern::ELEMWISE && input_relation == EdgeRelation::BROADCAST) {
+      hd_->setPattern(NodePattern::BROADCAST);
+    }
+    if (auto inp_area_iter = node_area_map.find(input); inp_area_iter != node_area_map.end()) {
+      inputs_with_relation_.emplace_back(std::make_pair(inp_area_iter->second, input_relation));
     }
   }
   // ELEMWISE if op has one variable input, other inputs are const input with shape [1]
@@ -134,14 +130,11 @@ Area::Area(size_t id, Operation *op, bool is_output, const std::unordered_map<Op
   //      Add(param0, const)
   if (hd_->pattern() == NodePattern::BROADCAST && init_pattern == NodePattern::ELEMWISE) {
     size_t scalar_input_num = 0;
-    size_t input_num = op->getNumOperands();
-    for (auto operand : op->getOperands()) {
-      auto *defOp = operand.getDefiningOp();
-      if (defOp) {
-        auto defType = mlir::dyn_cast<RankedTensorType>(defOp->getResult(0).getType());
-        if (defType && defType.getNumElements() == 1) {
-          scalar_input_num++;
-        }
+    size_t input_num = node->inputNum();
+    for (auto input : node->inputs()) {
+      auto defType = mlir::dyn_cast<RankedTensorType>(input->op()->getResult(0).getType());
+      if (defType && defType.getNumElements() == 1) {
+        scalar_input_num++;
       }
     }
     if (scalar_input_num + 1 == input_num) {
@@ -184,7 +177,7 @@ std::vector<AreaWithRelation> Area::usersWithRelation() const {
 }
 
 int64_t Area::computeSize() const {
-  auto op = dom();
+  auto op = dom()->op();
   auto op_type = op->getResult(0).getType();
   if (isDynamic(op_type)) {
     return 0;
@@ -194,13 +187,13 @@ int64_t Area::computeSize() const {
 }
 
 bool Area::computeSizeEqual(const AreaPtr &other) const {
-  if (!other || ops_.empty() || other->ops_.empty()) {
+  if (!other || nodes_.empty() || other->nodes_.empty()) {
     return false;
   }
   auto op = dom();
   auto other_op = other->dom();
-  auto op_type = op->getResult(0).getType();
-  auto other_op_type = other_op->getResult(0).getType();
+  auto op_type = op->op()->getResult(0).getType();
+  auto other_op_type = other_op->op()->getResult(0).getType();
   if (op_type && other_op_type && !isDynamic(op_type) && !isDynamic(other_op_type)) {
     return computeSize() == other->computeSize();
   }
@@ -210,9 +203,9 @@ bool Area::computeSizeEqual(const AreaPtr &other) const {
 std::string Area::toString() const {
   std::string result;
   llvm::raw_string_ostream os(result);
-  os << "Area " << id() << " (" << ops_.size() << " ops):";
-  for (auto *op : ops_) {
-    os << "\n  " << op->getName().getStringRef().data();
+  os << "Area " << id() << " (" << nodes_.size() << " nodes):";
+  for (auto node : nodes_) {
+    os << "\n  " << node->op()->getName().getStringRef().data();
   }
   return os.str();
 }
@@ -234,9 +227,9 @@ void Area::fuseInput(const AreaPtr &input_area) {
   // Update ops, and discard the input_area's ops.
   // The dominant node is ops[0], keep the dominant with greater pattern.
   if (pattern() < input_area->pattern()) {
-    ops_.swap(input_area->ops_);
+    nodes_.swap(input_area->nodes_);
   }
-  (void)ops_.insert(ops_.cend(), input_area->ops_.cbegin(), input_area->ops_.cend());
+  (void)nodes_.insert(nodes_.cend(), input_area->nodes_.cbegin(), input_area->nodes_.cend());
 
   // update area pattern
   NodePattern new_pattern = std::max(pattern(), input_area->pattern());
@@ -252,7 +245,7 @@ void Area::fuseInput(const AreaPtr &input_area) {
   updateUsersRelation(input_area);
 
   // clear the input_area.
-  input_area->ops_.clear();
+  input_area->nodes_.clear();
   input_area->inputs_with_relation_.clear();
   input_area->hd_->clearInputs();
 }
@@ -264,7 +257,7 @@ void Area::makeUniqueAndSyncInputs() {
   inputs_with_relation_.erase(last, inputs_with_relation_.cend());
   this->hd_->clearInputs();
   std::for_each(inputs_with_relation_.begin(), inputs_with_relation_.end(),
-                [this](const AreaWithRelation &pair) { this->hd_->addInput(pair.first->hd_); });
+                [this](const AreaWithRelation &pair) { this->hd_->addInput(pair.first->hd_.get()); });
 }
 
 void Area::updateUsersRelation(const AreaPtr &input_area) {

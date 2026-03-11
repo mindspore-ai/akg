@@ -39,8 +39,11 @@ class FuseReduceBwd : public FusePattern {
   bool check(const AreaPtr &area) override { return area->isAlive() && area->pattern() == NodePattern::REDUCE; }
   bool match(const AreaPtr &area) override {
     // Check if operation has reduce_output_fuse attribute
-    Operation *op = area->dom();
-    if (!op || !op->hasAttr("reduce_output_fuse")) {
+    if (!area->dom() || !area->dom()->op()) {
+      return false;
+    }
+    Operation *op = area->dom()->op();
+    if (!op->hasAttr("reduce_output_fuse")) {
       return false;
     }
     // Continue with existing matching logic
@@ -62,9 +65,11 @@ class FuseSlice : public FusePattern {
  protected:
   bool check(const AreaPtr &area) override {
     // Check if operation is Slice or StridedSlice
-    auto op = area->dom();
-    return op &&
-           (op->getName().getStringRef() == "mfuse.slice" || op->getName().getStringRef() == "mfuse.strided_slice");
+    if (!area->dom() || !area->dom()->op()) {
+      return false;
+    }
+    auto op = area->dom()->op();
+    return op->getName().getStringRef() == "mfuse.slice" || op->getName().getStringRef() == "mfuse.strided_slice";
   }
   bool match(const AreaPtr &area) override {
     for (const auto &[a, r] : area->usersWithRelation()) {
@@ -85,8 +90,11 @@ class FuseElemAny : public FusePattern {
  protected:
   bool check(const AreaPtr &area) override {
     // Check if operation is ElemAny
-    auto op = area->dom();
-    return op && op->getName().getStringRef() == "mfuse.elem_any";
+    if (!area->dom() || !area->dom()->op()) {
+      return false;
+    }
+    auto op = area->dom()->op();
+    return op->getName().getStringRef() == "mfuse.elem_any";
   }
   bool match(const AreaPtr &area) override {
     for (const auto &[a, r] : area->inputsWithRelation()) {
@@ -158,8 +166,10 @@ class FuseMatMul : public FusePattern {
  protected:
   bool check(const AreaPtr &area) override {
     if (area->size() == 1) {
-      auto op = area->dom();
-      if (!op) return false;
+      if (!area->dom() || !area->dom()->op()) {
+        return false;
+      }
+      auto op = area->dom()->op();
       auto opName = op->getName().getStringRef();
       return opName == "mfuse.matmul" || opName == "mfuse.batch_matmul";
     }
@@ -167,10 +177,10 @@ class FuseMatMul : public FusePattern {
     return false;
   }
 
-  bool isSameShapeSize(int64_t size, const std::vector<Operation *> &output_nodes) {
+  bool isSameShapeSize(int64_t size, const std::vector<Node *> &output_nodes) {
     for (auto &node : output_nodes) {
-      if (std::accumulate(node->getResult(0).getType().cast<mlir::ShapedType>().getShape().begin(),
-                          node->getResult(0).getType().cast<mlir::ShapedType>().getShape().end(),
+      if (std::accumulate(node->op()->getResult(0).getType().cast<mlir::ShapedType>().getShape().begin(),
+                          node->op()->getResult(0).getType().cast<mlir::ShapedType>().getShape().end(),
                           static_cast<int64_t>(1), std::multiplies<int64_t>()) != size) {
         return false;
       }
@@ -181,13 +191,20 @@ class FuseMatMul : public FusePattern {
   bool match(const AreaPtr &dom) override {
     constexpr size_t MAX_FUSE_NUM = 5;
     size_t current_size = 0;
-    auto output_shape = dom->ops().back()->getResult(0).getType().cast<mlir::ShapedType>().getShape();
+    if (dom->nodes().empty()) {
+      return false;
+    }
+    auto output_op = dom->nodes().back()->op();
+    if (!output_op) {
+      return false;
+    }
+    auto output_shape = output_op->getResult(0).getType().cast<mlir::ShapedType>().getShape();
     int64_t matmul_output_size =
       std::accumulate(output_shape.begin(), output_shape.end(), static_cast<int64_t>(1), std::multiplies<int64_t>());
     if (output_shape.back() == 1) {
       return false;
     }
-    auto opName = dom->dom()->getName().getStringRef();
+    auto opName = output_op->getName().getStringRef();
 
     auto users = dom->users();
     std::sort(users.begin(), users.end(),
@@ -196,12 +213,12 @@ class FuseMatMul : public FusePattern {
       if (current_size + a->areaOutputs().size() > MAX_FUSE_NUM) {
         break;
       }
-      if (a->size() == 1 && a->dom()->getName().getStringRef() == "mfuse.reshape") {
+      if (a->size() == 1 && a->dom()->op()->getName().getStringRef() == "mfuse.reshape") {
         continue;
       }
       bool fuse_flag = (opName == "mfuse.matmul" || opName == "mfuse.batch_matmul" || opName == "mfuse.grouped_matmul");
-      if (std::any_of(a->ops().begin(), a->ops().end(),
-                      [](Operation *op) { return op->getName().getStringRef() == "mfuse.reshape"; })) {
+      if (std::any_of(a->nodes().begin(), a->nodes().end(),
+                      [](const Node *node) { return node->op()->getName().getStringRef() == "mfuse.reshape"; })) {
         fuse_flag = fuse_flag && (a->pattern() < NodePattern::BROADCAST);
       } else {
         fuse_flag = fuse_flag && (a->pattern() <= NodePattern::BROADCAST);
@@ -223,8 +240,11 @@ class FuseAllReduceFwd : public FusePattern {
 
  protected:
   bool check(const AreaPtr &area) override {
-    auto op = area->dom();
-    return area->size() == 1 && op && op->getName().getStringRef() == "mfuse.allreduce";
+    if (!area->dom() || !area->dom()->op()) {
+      return false;
+    }
+    auto op = area->dom()->op();
+    return area->size() == 1 && op->getName().getStringRef() == "mfuse.allreduce";
   }
 
   bool match(const AreaPtr &area) override {
@@ -232,9 +252,9 @@ class FuseAllReduceFwd : public FusePattern {
       if (a->userNum() != 1) {
         continue;
       }
-      auto a_dom = a->dom();
-      if (!hasCircle(a, area) && r == EdgeRelation::INJECTIVE && a->size() == 1 && a_dom &&
-          a_dom->getName().getStringRef() == "mfuse.matmul") {
+      auto op = a->dom()->op();
+      if (!hasCircle(a, area) && r == EdgeRelation::INJECTIVE && a->size() == 1 && op &&
+          op->getName().getStringRef() == "mfuse.matmul") {
         fused_areas_.push_back(a);
       }
     }
@@ -251,9 +271,10 @@ class FuseAllReduceBwd : public FusePattern {
  protected:
   bool check(const AreaPtr &area) override {
     static constexpr llvm::StringLiteral kAllReduceOpName = "mfuse.allreduce";
-    auto ops = area->ops();
-    return std::any_of(ops.begin(), ops.end(),
-                       [](const auto &op) { return op->getName().getStringRef() == kAllReduceOpName; });
+    auto nodes = area->nodes();
+    return std::any_of(nodes.begin(), nodes.end(), [](const auto &node) {
+      return node->op() && node->op()->getName().getStringRef() == kAllReduceOpName;
+    });
   }
 
   bool match(const AreaPtr &area) override {
@@ -276,7 +297,7 @@ class FuseVirtualNode : public FusePattern {
   bool check(const AreaPtr &area) override { return area->pattern() == NodePattern::VIRTUAL; }
   bool match(const AreaPtr &area) override {
     for (const auto &inp : area->inputs()) {
-      if (inp && inp->dom()->getName().getStringRef() != "transpose") {
+      if (inp->dom() && inp->dom()->op() && inp->dom()->op()->getName().getStringRef() != "mfuse.permute") {
         fused_areas_.push_back(inp);
       }
     }
