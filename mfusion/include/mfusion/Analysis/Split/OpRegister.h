@@ -19,7 +19,6 @@
 
 #include <string>
 #include "mlir/IR/Operation.h"
-#include "mfusion/Analysis/Split/Area.h"
 
 namespace mlir {
 namespace mfuse {

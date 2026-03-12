@@ -33,37 +33,45 @@ namespace split {
 // Data types using DFormat = std::string;
 typedef std::vector<int64_t> DShape;
 typedef std::unordered_map<std::string, Attribute> DAttrs;
+typedef std::string DFormat;
 
 // Forward declaration
 class Node;
-typedef std::shared_ptr<Node> NodePtr;
+typedef std::unique_ptr<Node> NodePtr;
 typedef std::vector<NodePtr> NodePtrList;
 
+struct NodeBase {
+  DShape shape;
+  // TODO: Add symbolic shape support
+};
+
 // Node base class
-class Node : public std::enable_shared_from_this<Node> {
+class Node : public NodeBase {
  public:
   Node() = default;
-  virtual ~Node() { clearInputs(); }
+  Node(Operation *op) : op_(op) {}
+  virtual ~Node() {}
 
   virtual std::string toString() const;
-  void addInput(const NodePtr &new_input);
-  void setInput(size_t i, const NodePtr &new_input);
-  void setInputs(const NodePtrList &inputs);
+  void addInput(Node *new_input);
+  void setInput(size_t i, Node *new_input);
+  void setInputs(const std::vector<Node *> &inputs);
   void clearInputs() noexcept;
-  void replaceWith(const NodePtr &other_node);
+  void replaceWith(Node *other_node);
   void setAttrs(const DAttrs &attrs) { attrs_ = attrs; }
   void setAttr(const std::string &key, const Attribute &value) { attrs_[key] = value; }
   void setDebugName(const std::string &debug_name) { debug_name_ = debug_name; }
+  Operation *op() const { return op_; }
 
   template <typename T>
-  std::shared_ptr<T> as() {
-    return std::static_pointer_cast<T>(shared_from_this());
+  T *as() {
+    return static_cast<T *>(this);
   }
 
   const std::string &debugName() const { return debug_name_; }
   const DAttrs &attrs() const { return attrs_; }
-  const NodePtr &input(size_t i) const { return inputs_[i]; }
-  const NodePtrList &inputs() const { return inputs_; }
+  const Node *const input(size_t i) const { return inputs_[i]; }
+  const std::vector<Node *> &inputs() const { return inputs_; }
   const std::unordered_map<Node *, std::set<size_t>> &users() const { return users_; }
   size_t inputNum() const { return inputs_.size(); }
   size_t userNum() const { return users_.size(); }
@@ -71,12 +79,13 @@ class Node : public std::enable_shared_from_this<Node> {
  protected:
   mutable std::string debug_name_;
   DAttrs attrs_;
-  NodePtrList inputs_;
+  std::vector<Node *> inputs_;
   std::unordered_map<Node *, std::set<size_t>> users_;
+  Operation *op_;
 
  private:
-  void addUser(Node *const user, size_t index) { users_[user].insert(index); }
-  void removeUser(Node *const user, size_t index);
+  void addUser(Node *user, size_t index) { users_[user].insert(index); }
+  void removeUser(Node *user, size_t index);
 };
 
 }  // namespace split

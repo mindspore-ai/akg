@@ -235,6 +235,40 @@ module {
     return %0 : tensor<2x4xf32>
   }
 
+  // Test reduce_sum operation with complex dependencies on multi-dimensional tensor
+  // CHECK-LABEL: func @test_reduce_sum_operation_multi_rank
+  // CHECK-SAME: %[[ARG0:.*]]: tensor<2x4x4x4xf32>
+  // CHECK: %[[FUSED1:.*]] = mfuse.fused %[[ARG0]] {fusion_type = "dvm"}
+  // CHECK-SAME: : (tensor<2x4x4x4xf32>) -> tensor<2x4xf32>
+  // CHECK: ^bb0(%[[ARG1:.*]]: tensor<2x4x4x4xf32>):
+  // CHECK: %[[ADD1:.*]] = mfuse.add %[[ARG1]], %[[ARG1]] : (tensor<2x4x4x4xf32>, tensor<2x4x4x4xf32>) -> tensor<2x4x4x4xf32>
+  // CHECK: %[[MUL1:.*]] = mfuse.mul %[[ADD1]], %[[ADD1]] : (tensor<2x4x4x4xf32>, tensor<2x4x4x4xf32>) -> tensor<2x4x4x4xf32>
+  // CHECK: %[[SQRT:.*]] = mfuse.sqrt %[[MUL1]] : (tensor<2x4x4x4xf32>) -> tensor<2x4x4x4xf32>
+  // CHECK: %[[ABS:.*]] = mfuse.abs %[[SQRT]] : (tensor<2x4x4x4xf32>) -> tensor<2x4x4x4xf32>
+  // CHECK: %[[REDUCE_SUM:.*]] = mfuse.reduce_sum %[[ABS]] {dimensions = [1, 2], dtype = f32, keepdim = false} : (tensor<2x4x4x4xf32>) -> tensor<2x4xf32>
+  // CHECK: mfuse.yield %[[REDUCE_SUM]] : tensor<2x4xf32>
+  // CHECK: %[[FUSED2:.*]] = mfuse.fused %[[FUSED1]] {fusion_type = "dvm"}
+  // CHECK-SAME: : (tensor<2x4xf32>) -> tensor<2x4xf32>
+  // CHECK: ^bb0(%[[ARG2:.*]]: tensor<2x4xf32>):
+  // CHECK: %[[ADD2:.*]] = mfuse.add %[[ARG2]], %[[ARG2]] : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
+  // CHECK: %[[MUL2:.*]] = mfuse.mul %[[ADD2]], %[[ADD2]] : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
+  // CHECK: mfuse.yield %[[MUL2]] : tensor<2x4xf32>
+  // CHECK: return %[[FUSED2]] : tensor<2x4xf32>
+  func.func @test_reduce_sum_operation_multi_rank(%arg0: tensor<2x4x4x4xf32>) -> tensor<2x4xf32> {
+    %0 = mfuse.fused %arg0 {fusion_type = "dvm"} : (tensor<2x4x4x4xf32>) -> tensor<2x4xf32> {
+    ^bb0(%arg1: tensor<2x4x4x4xf32>):
+      %1 = mfuse.add %arg1, %arg1 : (tensor<2x4x4x4xf32>, tensor<2x4x4x4xf32>) -> tensor<2x4x4x4xf32>
+      %2 = mfuse.mul %1, %1 : (tensor<2x4x4x4xf32>, tensor<2x4x4x4xf32>) -> tensor<2x4x4x4xf32>
+      %3 = mfuse.sqrt %2 : (tensor<2x4x4x4xf32>) -> tensor<2x4x4x4xf32>
+      %4 = mfuse.abs %3 : (tensor<2x4x4x4xf32>) -> tensor<2x4x4x4xf32>
+      %5 = mfuse.reduce_sum %4 {dimensions = [1, 2], dtype = f32, keepdim = false} : (tensor<2x4x4x4xf32>) -> tensor<2x4xf32>
+      %6 = mfuse.add %5, %5 : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
+      %7 = mfuse.mul %6, %6 : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
+      mfuse.yield %7 : tensor<2x4xf32>
+    }
+    return %0 : tensor<2x4xf32>
+  }
+
   // Test matmul operation with complex dependencies
   // CHECK-LABEL: func @test_matmul_operation
   // CHECK-SAME: %arg0: tensor<2x4xf32>

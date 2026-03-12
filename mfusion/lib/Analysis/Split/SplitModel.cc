@@ -35,6 +35,21 @@ namespace mlir {
 namespace mfuse {
 namespace split {
 
+namespace {
+DShape getOutputShape(Operation *op) {
+  // Assume we only care about the first result for now
+  if (op->getResultTypes().empty()) {
+    return {};
+  }
+  auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(op->getResult(0).getType());
+  if (!tensorType) {
+    return {};
+  }
+  DShape shape(tensorType.getShape().begin(), tensorType.getShape().end());
+  return shape;
+}
+}  // namespace
+
 ReachTable::ReachTable(size_t size) : size_(size), reach_(size, std::vector<bool>(size, false)) {
   for (size_t i = 0; i < size_; ++i) {
     reach_[i][i] = true;
@@ -111,47 +126,24 @@ void SplitModel::alignShape(Block *block) const {
   };
 
   // Align shapes for all operations
-  for (auto &op : block->getOperations()) {
-    if (!check_pattern(&op)) {
+  for (auto &node : nodes_) {
+    auto op = node->op();
+    if (!check_pattern(op)) {
       // For non-elemwise/broadcast/reduce operations, ensure they have at least one dimension
-      for (auto result : op.getResults()) {
-        if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(result.getType())) {
-          if (tensorType.getShape().empty()) {
-            auto newType = mlir::RankedTensorType::get({}, tensorType.getElementType());
-            result.setType(newType);
-          }
-        }
+      if (node->shape.empty()) {
+        node->shape.push_back(1LL);
       }
       continue;
     }
-    // For elemwise/broadcast/reduce operations, align shape with inputs
-    size_t maxRank = 0;
-    // Get max rank from results
-    for (auto result : op.getResults()) {
-      if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(result.getType())) {
-        maxRank = std::max(maxRank, (size_t)tensorType.getShape().size());
+    auto cur_shape_size = node->shape.size();
+    for (auto &inp : node->inputs()) {
+      if (inp->shape.size() > cur_shape_size) {
+        cur_shape_size = inp->shape.size();
       }
     }
-    // Get max rank from inputs
-    for (size_t i = 0; i < op.getNumOperands(); ++i) {
-      auto operand = op.getOperand(i);
-      if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(operand.getType())) {
-        maxRank = std::max(maxRank, (size_t)tensorType.getShape().size());
-      }
-    }
-    // Align result shapes
-    for (auto result : op.getResults()) {
-      if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(result.getType())) {
-        size_t currentRank = tensorType.getShape().size();
-        if (currentRank < maxRank) {
-          // Prepend 1s to match max rank
-          SmallVector<int64_t> newShape(maxRank, 1);
-          auto oldShape = tensorType.getShape();
-          std::copy(oldShape.begin(), oldShape.end(), newShape.begin() + (maxRank - currentRank));
-          auto newType = mlir::RankedTensorType::get(newShape, tensorType.getElementType());
-          result.setType(newType);
-        }
-      }
+    if (cur_shape_size > node->shape.size()) {
+      auto num = cur_shape_size - node->shape.size();
+      (void)node->shape.insert(node->shape.cbegin(), num, 1LL);
     }
   }
 }
@@ -174,13 +166,13 @@ void SplitModel::initGraph(Block *block) {
   }
 
   // Initialize areas for all operations
-  for (auto &op : block->getOperations()) {
+  for (auto node : nodes_) {
     // Skip terminator operations (like return)
-    if (mlir::isa<mlir::mfuse::YieldOp>(&op)) {
+    if (mlir::isa<mlir::mfuse::YieldOp>(node->op())) {
       continue;
     }
-    bool is_output = outputs_set.find(&op) != outputs_set.end();
-    newArea(&op, is_output);
+    bool is_output = outputs_set.find(node->op()) != outputs_set.end();
+    newArea(node, is_output);
   }
 
   // Initialize reach table
@@ -196,10 +188,10 @@ void SplitModel::initGraph(Block *block) {
   }
 }
 
-AreaPtr SplitModel::newArea(Operation *op, bool is_output) {
-  auto new_area = std::make_shared<Area>(cur_area_id_++, op, is_output, node_area_map_);
+AreaPtr SplitModel::newArea(Node *node, bool is_output) {
+  auto new_area = std::make_shared<Area>(cur_area_id_++, node, is_output, node_area_map_);
   areas_.emplace_back(new_area);
-  node_area_map_[op] = new_area;
+  node_area_map_[node] = new_area;
   setDefaultAreaMode(new_area);
   updateAreaOutput(new_area);
   return new_area;
@@ -217,13 +209,13 @@ void SplitModel::fuseAreas(const AreaPtr &dom, const std::vector<AreaPtr> &areas
       target->fuseInput(a);
       reach_table_->fuseArea(target->id(), a->id());
     }
-    for (auto &op : target->ops()) {
-      node_area_map_[op] = target;
+    for (auto &node : target->nodes()) {
+      node_area_map_[node] = target;
     }
   } else {
     for (auto a : areas) {
-      for (auto &op : a->ops()) {
-        node_area_map_[op] = target;
+      for (auto &node : a->nodes()) {
+        node_area_map_[node] = target;
       }
       target->fuseInput(a);
       reach_table_->fuseArea(target->id(), a->id());
@@ -264,14 +256,14 @@ void SplitModel::updateAreaOutput(const AreaPtr &area) const {
   area_outputs.clear();
 
   // Iterate through all operations in the area
-  for (auto &op : area->ops()) {
+  for (auto &node : area->nodes()) {
     // Check if this operation has users outside the area
-    for (auto user : op->getUsers()) {
+    for (auto [user, _] : node->users()) {
       // Find the area of the user operation
       auto iter = node_area_map_.find(user);
       if (iter == node_area_map_.end() || iter->second.get() != area.get()) {
         // Add this operation to area outputs
-        area_outputs.push_back(op);
+        area_outputs.push_back(node);
         break;  // No need to check other users
       }
     }
@@ -323,15 +315,15 @@ void SplitModel::runFusePatterns() {
 
 // Get default area mode of the dominant node
 // Function for ascend processors, GPU and CPU need override this function
-AreaMode SplitModel::getDefaultAreaMode(Operation *node) const {
-  if (node == nullptr) {
+AreaMode SplitModel::getDefaultAreaMode(Node *node) const {
+  if (node == nullptr || node->op() == nullptr) {
     return AreaMode::COMPOSITE;
   }
   static constexpr llvm::StringLiteral kReshapeOpName = "mfuse.reshape";
   static constexpr llvm::StringLiteral kAssignOpName = "mfuse.assign";
   static constexpr llvm::StringLiteral kTransposeOpName = "mfuse.permute";
   static constexpr llvm::StringLiteral kCastOpName = "mfuse.cast";
-  llvm::StringRef nodeName = node->getName().getStringRef();
+  llvm::StringRef nodeName = node->op()->getName().getStringRef();
   if (nodeName == kReshapeOpName || nodeName == kAssignOpName) {
     return AreaMode::BASIC;
   }
@@ -347,7 +339,27 @@ void SplitModel::addPattern(const FusePatternPtr &pn, bool enable) {
   patterns_.back().first->setCircleChecker(reach_table_);
 }
 
+void SplitModel::mapOperationsToNodes(Block *block) {
+  std::unordered_map<Operation *, Node *> op_node_map;
+  for (auto &op : block->getOperations()) {
+    nodes_ptrs_.emplace_back(std::make_unique<Node>(&op));
+    auto node = nodes_ptrs_.back().get();
+    node->shape = getOutputShape(&op);
+    nodes_.emplace_back(node);
+    op_node_map[&op] = node;
+  }
+  for (auto &op : block->getOperations()) {
+    auto *node = op_node_map[&op];
+    for (auto operand : op.getOperands()) {
+      if (auto *defOp = operand.getDefiningOp()) {
+        node->addInput(op_node_map[defOp]);
+      }
+    }
+  }
+}
+
 void SplitModel::run(Block *block) {
+  mapOperationsToNodes(block);
   initGraph(block);
   initFusePatterns();
   runFusePatterns();
