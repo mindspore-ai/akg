@@ -335,9 +335,9 @@ void AKGSplitModel::initFusePatterns() {
   addPattern(FuseElemwiseBroadcastBwd::createWidthMatcher(ascend::kBroadcastFusionDepth), true);
 }
 
-void AscendNPUIRSplitModel::initFusePatterns() {
-  // TODO: Add AscendNPUIR-specific fuse patterns
-  LLVM_DEBUG(llvm::dbgs() << "AscendNPUIR not supported now\n");
+void BishengSplitModel::initFusePatterns() {
+  addPattern(FuseElemwiseBroadcastFwd::createDepthMatcher(), true);
+  addPattern(FuseElemwiseBroadcastFwd::createWidthMatcher(), true);
 }
 
 }  // namespace split

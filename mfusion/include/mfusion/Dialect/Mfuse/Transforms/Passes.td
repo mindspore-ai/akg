@@ -106,6 +106,31 @@ def DVMCluster : Pass<"mfuse-dvm-cluster", "::mlir::func::FuncOp"> {
   ];
 }
 
+def BishengCluster : Pass<"mfuse-bisheng-cluster", "::mlir::func::FuncOp"> {
+  let summary = "Cluster Mfuse operations checked by Bisheng backend into mfuse.fused";
+
+  let description = [{
+    This pass clusters operations checked by Bisheng backend into fused
+    subgraphs represented by mfuse.fused operations. It uses a Union-Find
+    algorithm to merge compatible operations while ensuring no cycles
+    are introduced in the dependency graph.
+
+    The pass performs the following steps:
+    1. Build a dependency graph from the function's operations
+    2. Find candidate operations that can be clustered together
+    3. Remove candidates that would introduce cycles
+    4. Merge remaining candidates into clusters
+    5. Create mfuse.fused operations for each cluster
+  }];
+
+  let constructor = "mlir::createBishengClusterPass()";
+
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
 //===----------------------------------------------------------------------===//
 // Recompose pass
 //===----------------------------------------------------------------------===//
@@ -160,13 +185,19 @@ def CopyFusedSubgraphs : Pass<"copy-fused-subgraphs", "::mlir::ModuleOp"> {
   ];
 }
 
-def ConvertDvmSubgraphToMfuseDvmCall : Pass<"convert-dvm-subgraph-to-mfuse-dvm-call", "::mlir::ModuleOp"> {
-  let summary = "Replace DVM subgraph calls with mfuse.dvm_call";
+def ConvertFusedSubgraphToCustomCall : Pass<"convert-fused-subgraph-to-custom-call", "::mlir::ModuleOp"> {
+  let summary = "Replace fused subgraph calls with custom call ops (dvm_call/akg_call/bisheng_call)";
   let description = [{
-    Replaces func.call sites that target outlined DVM subgraphs with mfuse.dvm_call,
-    embeds a self-contained DVM MLIR string, and removes the DVM subgraph function.
+    Replaces func.call sites that target outlined fused subgraphs with corresponding
+    mfuse.dvm_call, mfuse.akg_call, or mfuse.bisheng_call operations based on the
+    kernel generator type. Embeds a self-contained MLIR string and removes the
+    original subgraph function.
   }];
-  let constructor = "mlir::createConvertDvmSubgraphToMfuseDvmCallPass()";
+  let options = [
+    Option<"kernelGenerator", "kernel-generator", "std::string", "\"dvm\"",
+           "Kernel generator type (dvm, akg, or bisheng)">
+  ];
+  let constructor = "mlir::createConvertFusedSubgraphToCustomCallPass()";
   let dependentDialects = [
     "::mlir::mfuse::MfuseDialect",
     "::mlir::func::FuncDialect",
@@ -185,8 +216,8 @@ def Split : Pass<"split", "::mlir::func::FuncOp"> {
     It groups operations into areas and applies split patterns to optimize the execution.
   }];
   let options = [
-    Option<"kernelGenerator", "kernel-generator", "std::string", "\"DVM\"",
-           "Kernel generator type for split (DVM or AKG)">
+    Option<"kernelGenerator", "kernel-generator", "std::string", "\"dvm\"",
+           "Kernel generator type for split (dvm, akg or bisheng), defaults dvm.">
   ];
   let constructor = "mlir::createSplitPass()";
   let dependentDialects = [

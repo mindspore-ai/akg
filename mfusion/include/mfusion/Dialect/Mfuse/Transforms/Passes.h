@@ -21,11 +21,12 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/Decompose.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/DVMCluster.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Cluster/AKGCluster.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Cluster/BishengCluster.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Recompose/Recompose.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPasses.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Outlining/OutlineMfuseFusedSubgraphs.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Outlining/CopyFusedSubgraphs.h"
-#include "mfusion/Dialect/Mfuse/Transforms/ConvertDvmSubgraphToMfuseDvmCall.h"
+#include "mfusion/Dialect/Mfuse/Transforms/ConvertFusedSubgraphToCustomCall.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Split/Split.h"
 
 namespace mlir {
