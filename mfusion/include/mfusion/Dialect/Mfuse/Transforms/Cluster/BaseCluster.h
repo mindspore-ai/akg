@@ -42,7 +42,7 @@ namespace mfuse {
 //===----------------------------------------------------------------------===//
 
 /// Base class for operation clustering passes.
-/// Provides common infrastructure for DVM and AKG clustering.
+/// Provides common infrastructure for Mfuse clustering.
 class BaseCluster {
  public:
   BaseCluster() = default;
@@ -110,6 +110,24 @@ class AKGCluster : public BaseCluster {
  public:
   AKGCluster() = default;
   ~AKGCluster() override = default;
+
+  static llvm::DenseSet<llvm::StringRef> getClusterableOps();
+
+  static bool canClusterableOp(const llvm::DenseSet<llvm::StringRef> &opList, Operation *op);
+
+ protected:
+  llvm::DenseSet<llvm::StringRef> getClusterableOpList() override;
+
+  bool isClusterableOp(Operation *op) override;
+
+  std::string getFusionType() override;
+};
+
+/// BishengCluster - Clusters operations checked by Bisheng backend.
+class BishengCluster : public BaseCluster {
+ public:
+  BishengCluster() = default;
+  ~BishengCluster() override = default;
 
   static llvm::DenseSet<llvm::StringRef> getClusterableOps();
 

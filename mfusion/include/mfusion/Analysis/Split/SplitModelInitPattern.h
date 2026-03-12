@@ -41,10 +41,10 @@ class AKGSplitModel : public SplitModel {
   void initFusePatterns() override;
 };
 
-class AscendNPUIRSplitModel : public SplitModel {
+class BishengSplitModel : public SplitModel {
  public:
-  AscendNPUIRSplitModel() = default;
-  ~AscendNPUIRSplitModel() = default;
+  BishengSplitModel() = default;
+  ~BishengSplitModel() = default;
 
  protected:
   void initFusePatterns() override;
