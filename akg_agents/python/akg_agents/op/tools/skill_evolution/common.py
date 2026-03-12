@@ -162,6 +162,10 @@ def code_diff(
 def parse_skill_output(llm_output: str) -> Tuple[str, str, str]:
     """从 LLM 输出中提取 skill_name、description 和正文
 
+    兼容多种 LLM 输出格式：
+    - search_log / expert_tuning: skill_name + description + 正文
+    - merge_skills: 仅 description + 正文（skill_name 返回空串）
+
     Returns:
         (skill_name, description, markdown_body)
     """
@@ -169,6 +173,10 @@ def parse_skill_output(llm_output: str) -> Tuple[str, str, str]:
         return "", "", ""
 
     text = llm_output.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+
     skill_name = ""
     description = ""
 
@@ -191,12 +199,29 @@ def parse_skill_output(llm_output: str) -> Tuple[str, str, str]:
             continue
         break
 
-    text = "\n".join(lines[consumed:]).strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```\w*\n?", "", text)
-        text = re.sub(r"\n?```\s*$", "", text)
+    body = "\n".join(lines[consumed:]).strip()
+    if body.startswith("```"):
+        body = re.sub(r"^```\w*\n?", "", body)
+        body = re.sub(r"\n?```\s*$", "", body)
 
-    return skill_name, description, text.strip()
+    return skill_name, description, body.strip()
+
+
+# ==================== 路径工具 ====================
+
+
+def get_default_evolved_dir(dsl: str) -> str:
+    """获取 dsl 对应的 evolved skill 默认目录路径"""
+    try:
+        from akg_agents import get_project_root
+        project_root = Path(get_project_root())
+    except ImportError:
+        project_root = Path(__file__).resolve().parents[3]
+
+    dsl_key = dsl.replace("_", "-").lower()
+    return str(
+        project_root / "op" / "resources" / "skills" / dsl_key / "evolved"
+    )
 
 
 # ==================== SKILL.md 写入 ====================
@@ -271,17 +296,7 @@ class SkillWriter:
         return name or f"{dsl_key}-{fallback_prefix}-auto"
 
     def _default_skill_dir(self, dsl: str, skill_name: str) -> str:
-        try:
-            from akg_agents import get_project_root
-            project_root = Path(get_project_root())
-        except ImportError:
-            project_root = Path(__file__).resolve().parents[3]
-
-        dsl_key = dsl.replace("_", "-").lower()
-        return str(
-            project_root / "op" / "resources" / "skills"
-            / dsl_key / "evolved" / skill_name
-        )
+        return os.path.join(get_default_evolved_dir(dsl), skill_name)
 
     ERROR_FIX_SKILL_NAME = "error-fix"
     ERROR_FIX_DESCRIPTION = "常见错误及修复方法，用于代码生成时避免同类问题"
