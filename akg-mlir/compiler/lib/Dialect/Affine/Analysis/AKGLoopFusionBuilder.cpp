@@ -1300,57 +1300,6 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   return maxDepth;
 }
 
-// Helper function to fuse loops into a perfect nest when src has deeper nesting than dst.
-// This moves the src loop to dst's position, then clones dst's operations into src's innermost level.
-// This is necessary to avoid domination issues - values defined between src and dst must be
-// visible at the fusion point.
-//
-// Example:
-// Before:
-//   for i { for j { for k { src_ops } } }  // src (deeper nesting, 3 levels)
-//   for i { for j { dst_ops } }            // dst (shallower nesting, 2 levels)
-//
-// After (with fusionDepth=2):
-//   for i { for j { for k { src_ops; dst_ops } } }
-//
-// The key insight: we need to map ALL dst loop IVs to corresponding src loop IVs,
-// and only clone the innermost dst loop's operations (not the nested loops themselves).
-static void fuseToPerfectNest(affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
-                              SmallVector<affine::AffineForOp, 4> &srcLoops, unsigned fusionDepth) {
-  // Step 1: Move src loop to dst's position (right before dst)
-  // This ensures all values defined between src and dst are visible
-  srcAffineForOp->moveBefore(dstAffineForOp);
-
-  // Step 2: Collect all dst loops to get all loop IVs
-  SmallVector<affine::AffineForOp, 4> dstLoops;
-  collectLoopNest(dstAffineForOp, dstLoops);
-
-  // Step 3: Get the innermost loop of src (after moving)
-  affine::AffineForOp innermostSrcLoop = srcLoops.back();
-
-  // Step 4: Create IRMapping to map ALL dst loop IVs to corresponding src loop IVs
-  IRMapping mapper;
-  // Map each dst loop IV to the corresponding src loop IV
-  // fusionDepth indicates how many outer loops match between src and dst
-  for (unsigned i = 0; i < dstLoops.size() && i < fusionDepth; ++i) {
-    mapper.map(dstLoops[i].getInductionVar(), srcLoops[i].getInductionVar());
-  }
-
-  // Step 5: Find the insertion point in the innermost src loop (before the yield)
-  Block *innermostBody = innermostSrcLoop.getBody();
-  Operation *terminator = innermostBody->getTerminator();
-  OpBuilder builder(innermostBody, terminator->getIterator());
-
-  // Step 6: Clone ONLY the innermost dst loop's operations (not nested loops)
-  // This avoids creating duplicate loop structures
-  affine::AffineForOp innermostDstLoop = dstLoops.back();
-  for (Operation &op : innermostDstLoop.getBody()->getOperations()) {
-    if (!isa<affine::AffineYieldOp>(op)) {
-      builder.clone(op, mapper);
-    }
-  }
-}
-
 // Helper function to perform loop fusion at a specific depth
 // This function handles the common logic of cloning operations from source to destination loops
 static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcLoops,
@@ -1383,32 +1332,7 @@ static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcLoops,
         continue;
       }
 
-      // Handle nested loops - find corresponding loop in destination and merge operations
-      if (auto nestedSrcFor = dyn_cast<affine::AffineForOp>(op)) {
-        // Find corresponding nested loop in destination with same structure
-        affine::AffineForOp correspondingDstLoop;
-        for (auto &dstOp : dstLoop.getBody()->getOperations()) {
-          if (auto dstFor = dyn_cast<affine::AffineForOp>(dstOp)) {
-            // Check if loops have same structure (same bounds)
-            if (hasSameLoopStructure(nestedSrcFor, dstFor)) {
-              correspondingDstLoop = dstFor;
-              break;
-            }
-          }
-        }
-
-        if (correspondingDstLoop) {
-          // Found corresponding loop - merge operations from nested source loop
-          // into the corresponding destination loop (recursive call)
-          cloneLoopBody(nestedSrcFor, correspondingDstLoop);
-        } else {
-          // No corresponding loop found - clone the entire nested loop
-          builder.clone(op, mapper);
-        }
-      } else {
-        // Clone regular operations
-        builder.clone(op, mapper);
-      }
+      builder.clone(op, mapper);
     }
   };
 
@@ -1451,39 +1375,19 @@ void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, affine::Affine
     }
   };
 
-  // Handle case where src has deeper nesting than dst
-  // Check if src depth > dst depth and outer loops have matching bounds
-  if (srcLoops.size() > dstLoops.size() && checkLoopBoundsMatch(srcLoops, dstLoops, dstLoops.size())) {
-    // Fuse src (deeper) into dst's position, clone dst's ops into src's innermost loop
-    unsigned fusionDepth = dstLoops.size();
-    fuseToPerfectNest(srcAffineForOp, dstAffineForOp, srcLoops, fusionDepth);
-    dstAffineForOp.erase();
-    nodeAlias[dstId] = srcId;
-    clearErasedNode(dstId);
-    return;
-  } else if (srcLoops.size() < dstLoops.size() && checkLoopBoundsMatch(srcLoops, dstLoops, srcLoops.size())) {
-    // Handle case where dst has deeper nesting than src
-    // Fuse dst (deeper) into src's position, clone src's ops into dst's innermost loop
-    unsigned fusionDepth = srcLoops.size();
-    fuseToPerfectNest(dstAffineForOp, srcAffineForOp, dstLoops, fusionDepth);
-    srcAffineForOp.erase();
-    nodeAlias[srcId] = dstId;
-    clearErasedNode(srcId);
-    return;
-  } else if (hasSameLoopStructure(srcLoops, dstLoops)) {
-    // Check if loops have the same structure - if so, fuse directly without slice state checks
-    // For same-structure loops, use the full depth for fusion
-    unsigned bestDstLoopDepth = dstLoops.size();
-    assert(bestDstLoopDepth > 0 && "Unexpected loop fusion depth");
-
-    // Perform fusion using the helper function
-    performLoopFusion(srcLoops, dstLoops, bestDstLoopDepth);
-
-    srcAffineForOp.erase();
-    nodeAlias[srcId] = dstId;
-    clearErasedNode(srcId);
+  auto depth = std::min(srcLoops.size(), dstLoops.size());
+  while (depth != 0 && !checkLoopBoundsMatch(srcLoops, dstLoops, depth)) {
+    depth--;
+  }
+  if (depth == 0) {
+    llvm::errs() << "srcLoops and dstLoops have no same loop bounds\n";
     return;
   }
+  performLoopFusion(srcLoops, dstLoops, depth);
+  dstAffineForOp.dump();
+  srcAffineForOp.erase();
+  nodeAlias[srcId] = dstId;
+  clearErasedNode(srcId);
 }
 
 void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
