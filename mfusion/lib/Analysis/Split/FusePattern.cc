@@ -15,7 +15,6 @@
  */
 #include "mfusion/Analysis/Split/FusePattern.h"
 
-#include "mfusion/Analysis/Split/Area.h"
 #include "mfusion/Analysis/Split/SplitModel.h"
 
 namespace mlir {
