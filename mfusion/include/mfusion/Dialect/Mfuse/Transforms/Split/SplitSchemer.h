@@ -27,11 +27,6 @@ namespace mlir {
 namespace mfuse {
 namespace split {
 
-// Forward declarations
-class Area;
-
-using AreaPtr = std::shared_ptr<Area>;
-
 //===----------------------------------------------------------------------===//
 // SplitSchemer
 //===----------------------------------------------------------------------===
