@@ -14,17 +14,19 @@
  * limitations under the License.
  */
 
-#ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_CONVERT_DVM_SUBGRAPH_TO_MFUSE_DVM_CALL_H
-#define MFUSION_DIALECT_MFUSE_TRANSFORMS_CONVERT_DVM_SUBGRAPH_TO_MFUSE_DVM_CALL_H
+#ifndef MFUSION_DIALECT_MFUSE_TRANSFORMS_CONVERT_FUSED_SUBGRAPH_TO_CUSTOM_CALL_H
+#define MFUSION_DIALECT_MFUSE_TRANSFORMS_CONVERT_FUSED_SUBGRAPH_TO_CUSTOM_CALL_H
 
 #include <memory>
+#include <string>
 
 namespace mlir {
 class Pass;
 
-/// Create a pass to replace DVM subgraph calls with mfuse.dvm_call.
-std::unique_ptr<Pass> createConvertDvmSubgraphToMfuseDvmCallPass();
+/// Create a pass to replace fused subgraph calls with custom call ops.
+/// @param kernelGenerator The kernel generator type ("dvm", "akg", or "bisheng")
+std::unique_ptr<Pass> createConvertFusedSubgraphToCustomCallPass(const std::string &kernelGenerator = "dvm");
 
 }  // namespace mlir
 
-#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_CONVERT_DVM_SUBGRAPH_TO_MFUSE_DVM_CALL_H
+#endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_CONVERT_FUSED_SUBGRAPH_TO_CUSTOM_CALL_H

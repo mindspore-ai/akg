@@ -23,6 +23,64 @@ include "mfusion/Dialect/Mfuse/IR/MfuseConstantOps.td"
 include "mfusion/Dialect/Mfuse/IR/MfuseMetaOps.td"
 include "mfusion/Dialect/Mfuse/IR/MfuseAclnnOps.td"
 
+def Mfuse_AkgCallOp : Mfuse_Op<"akg_call"> {
+  let summary = "Invoke an AKG fused subgraph";
+  let description = [{
+    Invokes an AKG fused subgraph.
+
+    Attributes:
+    - `subgraph_mlir`: The AKG dialect MLIR of the fused subgraph, used for
+      backend AKG kernel generation.
+    - `subgraph`: The function name of the fused subgraph in the current MLIR
+      Module.
+    - `is_dynamic`: Whether the fused subgraph has dynamic shape.
+  }];
+
+  let arguments = (ins
+    Variadic<AnyRankedTensor>:$inputs,
+    StrAttr:$subgraph_mlir,
+    StrAttr:$subgraph,
+    BoolAttr:$is_dynamic
+  );
+
+  let results = (outs
+    Variadic<AnyRankedTensor>:$outputs
+  );
+
+  let assemblyFormat = [{
+    $inputs attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Mfuse_BishengCallOp : Mfuse_Op<"bisheng_call"> {
+  let summary = "Invoke a Bisheng fused subgraph";
+  let description = [{
+    Invokes a Bisheng fused subgraph.
+
+    Attributes:
+    - `subgraph_mlir`: The Bisheng dialect MLIR of the fused subgraph, used for
+      backend Bisheng kernel generation.
+    - `subgraph`: The function name of the fused subgraph in the current MLIR
+      Module.
+    - `is_dynamic`: Whether the fused subgraph has dynamic shape.
+  }];
+
+  let arguments = (ins
+    Variadic<AnyRankedTensor>:$inputs,
+    StrAttr:$subgraph_mlir,
+    StrAttr:$subgraph,
+    BoolAttr:$is_dynamic
+  );
+
+  let results = (outs
+    Variadic<AnyRankedTensor>:$outputs
+  );
+
+  let assemblyFormat = [{
+    $inputs attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_DvmCallOp : Mfuse_Op<"dvm_call"> {
   let summary = "Invoke a DVM fused subgraph";
   let description = [{

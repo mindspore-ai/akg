@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s --convert-dvm-subgraph-to-mfuse-dvm-call | FileCheck %s
+// RUN: mfusion-opt %s --convert-fused-subgraph-to-custom-call | FileCheck %s
 
 module {
   func.func @main_mul_fused_0(%a: tensor<2xf32>, %b: tensor<2xf32>) -> tensor<2xf32>
