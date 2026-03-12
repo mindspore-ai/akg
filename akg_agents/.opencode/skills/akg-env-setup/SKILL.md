@@ -306,7 +306,7 @@ python -c "import torch_npu; print(torch_npu.__version__)"
 
 ## 命令模板
 将 <CMD> 替换为实际命令：
-<根据 ENV_TYPE 生成的完整命令模板>
+<根据 ENV_TYPE 和 AKG_AGENTS_DIR 生成的完整命令模板>
 
 ## 验证状态
 - akg_cli: ✅
