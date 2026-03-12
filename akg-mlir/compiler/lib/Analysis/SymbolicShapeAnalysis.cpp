@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include "akg/Analysis/TypeUtils.h"
+#include "mlir/IR/OperationSupport.h"
 #include "symengine/expression.h"
 
 namespace mlir {
@@ -160,6 +161,38 @@ Type SymbolicShapeAnalysis::updateSymbolicShape(Type type, const llvm::SmallVect
   NamedAttribute namedAttr(StringAttr::get(type.getContext(), getSymbolShapeAttrName()),
                            ArrayAttr::get(type.getContext(), symShapeAttr));
   return updateTypeSymbolAttr(type, namedAttr);
+}
+
+Type SymbolicShapeAnalysis::removeSymbolicShape(Type type) const {
+  if (!hasSymbolicShape(type)) {
+    return type;
+  }
+  mlir::DictionaryAttr dict;
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(tensorType.getEncoding());
+  } else if (auto memRefType = dyn_cast<MemRefType>(type)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(memRefType.getMemorySpace());
+  } else if (auto unrankedMemRefType = dyn_cast<UnrankedMemRefType>(type)) {
+    dict = dyn_cast_or_null<mlir::DictionaryAttr>(unrankedMemRefType.getMemorySpace());
+  }
+  mlir::Attribute newAttr = nullptr;
+  if (dict) {
+    NamedAttrList attrList(dict);
+    (void)attrList.erase(StringAttr::get(type.getContext(), getSymbolShapeAttrName()));
+    if (!attrList.empty()) {
+      newAttr = attrList.getDictionary(type.getContext());
+    }
+  }
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    return RankedTensorType::get(tensorType.getShape(), tensorType.getElementType(), newAttr);
+  }
+  if (auto memRefType = dyn_cast<MemRefType>(type)) {
+    return MemRefType::get(memRefType.getShape(), memRefType.getElementType(), memRefType.getLayout(), newAttr);
+  }
+  if (auto unrankedMemRefType = dyn_cast<UnrankedMemRefType>(type)) {
+    return UnrankedMemRefType::get(unrankedMemRefType.getElementType(), newAttr);
+  }
+  return type;
 }
 
 bool SymbolicShapeAnalysis::isSameSymbolicDim(std::string lhs, std::string rhs) {
