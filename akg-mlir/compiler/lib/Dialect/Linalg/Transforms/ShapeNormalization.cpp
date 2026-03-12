@@ -89,6 +89,7 @@ static const OpAdapterRegistry &getOpAdapterRegistry();
 
 struct ShapeNormalState {
   SymbolicShapeAnalysis &manager;
+  bool isSupported = true;
   llvm::StringMap<int64_t> axisSizes;
   llvm::StringMap<std::pair<Value, int64_t>> DynSymtoArgDim;
   DenseSet<Value> ValuesinFunc;
@@ -407,6 +408,12 @@ struct ShapeNormalState {
 
   Type updateValueSymbolicShape(Value v, const SmallVector<std::string> &newShape) {
     Type newType = manager.updateSymbolicShape(v.getType(), newShape);
+    v.setType(newType);
+    return newType;
+  }
+
+  Type removeValueSymbolicShape(Value v) {
+    Type newType = manager.removeSymbolicShape(v.getType());
     v.setType(newType);
     return newType;
   }
@@ -1453,7 +1460,7 @@ struct SubviewAdapter final : OpAdapter {
       }
       for (size_t i = 1; i < flatSym.size(); ++i) {
         if (state.manager.getLabel(flatSym[i]) != state.manager.getLabel(flatSym[i - 1])) {
-          assert(false && "disconnected expanded symshape of slice axis is not supported");
+          state.isSupported = false;
           return;
         }
       }
@@ -1720,6 +1727,20 @@ static bool analyzeShapeNormalization(ModuleOp module, ShapeNormalState &state, 
     state.decompositions[decomp.first()] = expandedAxes;
   }
   assignLabels(module, state);
+  if (!state.isSupported) {
+    for (const auto &value : state.ValuesinFunc) {
+      state.removeValueSymbolicShape(value);
+    }
+    module.walk([&](func::FuncOp func) {
+      SmallVector<Type> newArgTypes;
+      llvm::transform(func.getArguments(), std::back_inserter(newArgTypes),
+                      [](BlockArgument arg) { return arg.getType(); });
+      auto oldFuncType = func.getFunctionType();
+      auto newFuncType = FunctionType::get(func.getContext(), newArgTypes, oldFuncType.getResults());
+      func.setFunctionType(newFuncType);
+    });
+    return false;
+  }
   collectGlobalTargetShapes(module, state);
   return true;
 }
