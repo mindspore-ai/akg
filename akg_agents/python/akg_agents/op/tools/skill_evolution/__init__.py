@@ -20,9 +20,10 @@ Skill 自进化系统
   search_log_utils.py     - search_log 模式：从搜索日志收集 + 压缩进化链
   expert_tuning_utils.py  - expert_tuning 模式：从对话目录提取专家调优经验
   error_fix_utils.py      - error_fix 模式：从错误修复记录提取调试经验
+  merge_utils.py          - merge_skills 模式：将 evolved skills 按主题合并去重
 """
 
-from .common import TaskRecord, EvolutionStep, CompressedData, SkillWriter, parse_skill_output
+from .common import TaskRecord, EvolutionStep, CompressedData, SkillWriter, parse_skill_output, get_default_evolved_dir
 from .search_log_utils import (
     collect as search_log_collect,
     compress as search_log_compress,
@@ -45,6 +46,7 @@ __all__ = [
     "CompressedData",
     "SkillWriter",
     "parse_skill_output",
+    "get_default_evolved_dir",
     "search_log_collect",
     "search_log_compress",
     "search_log_to_prompt_vars",
