@@ -233,6 +233,15 @@ void AffineIteratorConversion::runOnOperation() {
     return;
   }
 
+  // The reduce axis sinks to the innermost layer.
+  func.walk([&](mlir::affine::AffineForOp inner) {
+    if (auto outer = mlir::dyn_cast<mlir::affine::AffineForOp>(inner->getParentOp())) {
+      if (mlir::CommonUtils::isReduceAxis(func, inner->getParentOp())) {
+        mlir::affine::interchangeLoops(outer, inner);
+      }
+    }
+  });
+
   removeInitMemoryCopy(func);
 
   SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(func);
