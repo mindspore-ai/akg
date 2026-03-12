@@ -35,7 +35,7 @@
 当前已落地场景为 **AI 算子代码生成**：通过 LLM 规划与多 Agent 协同，实现多后端、多 DSL 的高性能算子自动生成与优化。后续将持续拓展至算子迁移、性能调优、代码重构等更多 AI Infra 相关场景。
 
 ## 🗓️ 2. 更新日志
-- 2026-03-11：打通集成 AKG Agents 和 Opencode 的算子优化流程
+- 2026-03-11：打通集成 AKG Agents 和 Opencode 的算子优化流程 [op-optimizer](./docs/v2/OpOptimizer.md).
 - 2026-02-26：支持 PyPTO 后端代码生成能力。
 - 2026-02-15：AKG Agents 文档整改。老文档归档至 `docs/v1/`，重构后的新文档统一至 `docs/v2/`。
 - 2026-02-10：核心框架重构（v2）。将通用 Agent 能力与算子场景解耦，构建可复用的多 Agent 协作框架。详见 [框架架构](./docs/v2/CN/Architecture.md)、[Agent 体系](./docs/v2/CN/AgentSystem.md)、[Skill 系统](./docs/v2/CN/SkillSystem.md)、[工作流](./docs/v2/CN/Workflow.md)、[Trace 系统](./docs/v2/CN/Trace.md)、[配置系统](./docs/v2/CN/Configuration.md)。
