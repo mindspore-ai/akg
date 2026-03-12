@@ -451,15 +451,6 @@ void AKGLoopFusion::runPreProcess() {
 
   moveAllocBeforeAffineFor(funcOp);
 
-  // The reduce axis sinks to the innermost layer.
-  funcOp.walk([&](mlir::affine::AffineForOp inner) {
-    if (auto outer = mlir::dyn_cast<mlir::affine::AffineForOp>(inner->getParentOp())) {
-      if (mlir::CommonUtils::isReduceAxis(funcOp, inner->getParentOp())) {
-        mlir::affine::interchangeLoops(outer, inner);
-      }
-    }
-  });
-
   // Replace dim values with large primes before fusion
   replaceDimWithPrimes(funcOp);
 }
