@@ -15,18 +15,18 @@
 
 from ._pipeline import PipelineRunner
 
-def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "DVM") -> str:
+def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> str:
     """
     Fuse and optimize the given Torch dialect MLIR string.
 
     Args:
         torch_dialect_str: The Torch dialect MLIR string to optimize.
-        kernel_generator: The kernel generator type ('DVM' or 'AKG'). Defaults to 'DVM'.
+        kernel_generator: The kernel generator type ('dvm', 'akg' or 'bisheng'). Defaults to 'dvm'.
     """
-    if kernel_generator not in ["DVM", "AKG"]:
-        print(f"Warning: Invalid kernel_generator value '{kernel_generator}', using 'DVM' as default")
-        kernel_generator = "DVM"
-    cluster_pass = f"mfuse-{kernel_generator.lower()}-cluster"
+    kernel_generator = kernel_generator.lower()
+    if kernel_generator not in ["dvm", "akg", "bisheng"]:
+        print(f"Warning: Invalid kernel_generator value '{kernel_generator}', using 'dvm' as default")
+        kernel_generator = "dvm"
 
     runner = PipelineRunner.from_torch_dialect_str(torch_dialect_str)
 
@@ -51,8 +51,8 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "DVM") -> 
     )
 
     runner.run(
-        pipeline=f"builtin.module(func.func({cluster_pass}),canonicalize)",
-        stage=f"Mfuse {kernel_generator.upper()} Clustering",
+        pipeline=f"builtin.module(func.func(mfuse-{kernel_generator}-cluster),canonicalize)",
+        stage=f"Mfuse {kernel_generator} Clustering",
     )
 
     runner.run(
@@ -70,12 +70,12 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "DVM") -> 
     )
 
     runner.run(
-        pipeline="builtin.module(convert-mfuse-to-dvm,convert-dvm-subgraph-to-mfuse-dvm-call,canonicalize)",
-        stage="Lower Fused Subgraphs to DVM Calls",
+        pipeline=f"builtin.module(convert-mfuse-to-dvm,convert-fused-subgraph-to-custom-call{{kernel-generator={kernel_generator}}},canonicalize)",
+        stage="Lower Fused Subgraphs to CustomOp Calls",
     )
 
     runner.run(
-        pipeline="builtin.module(convert-mfuse-to-torch, reconcile-unrealized-casts,canonicalize)",
+        pipeline="builtin.module(convert-mfuse-to-torch,reconcile-unrealized-casts,canonicalize)",
         stage="Convert Mfuse to Torch Dialect Module",
     )
 

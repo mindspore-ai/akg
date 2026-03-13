@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Mfuse/Transforms/ConvertDvmSubgraphToMfuseDvmCall.h"
+#include "mfusion/Dialect/Mfuse/Transforms/ConvertFusedSubgraphToCustomCall.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Outlining/FusionAttributes.h"
 
 #include "llvm/Support/raw_ostream.h"
@@ -31,18 +31,19 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Passes.h"
 
 namespace mlir {
-#define GEN_PASS_DEF_CONVERTDVMSUBGRAPHTOMFUSEDVMCALL
-#include "mfusion/Dialect/Mfuse/Transforms/Passes.h.inc"
-
 namespace mfuse {
+
+#define GEN_PASS_DECL_CONVERTFUSEDSUBGRAPHTOCUSTOMCALL
+#define GEN_PASS_DEF_CONVERTFUSEDSUBGRAPHTOCUSTOMCALL
+#include "mfusion/Dialect/Mfuse/Transforms/Passes.h.inc"
 namespace {
 
-static bool isDvmOutlinedFunc(func::FuncOp func) {
+static bool isOutlinedFunc(func::FuncOp func, const std::string &fusionType) {
   if (!func || !func->hasAttr(mfusion_attrs::kOutlined)) {
     return false;
   }
   auto fusionTypeAttr = func->getAttrOfType<StringAttr>(mfusion_attrs::kFusionType);
-  return fusionTypeAttr && fusionTypeAttr.getValue() == "dvm";
+  return fusionTypeAttr && fusionTypeAttr.getValue() == fusionType;
 }
 
 static bool isDynamicType(Type type) {
@@ -83,7 +84,7 @@ static bool isDynamicSubgraph(func::FuncOp func) {
   return walkResult.wasInterrupted();
 }
 
-static std::string serializeDvmFuncToModuleString(func::FuncOp funcOp) {
+static std::string serializeFuncToModuleString(func::FuncOp funcOp) {
   auto module = ModuleOp::create(funcOp.getLoc());
   OpBuilder builder(module.getBodyRegion());
 
@@ -101,23 +102,37 @@ static std::string serializeDvmFuncToModuleString(func::FuncOp funcOp) {
 static StringAttr getCopiedSubgraphNameAttr(func::FuncOp funcOp) {
   auto attr = funcOp->getAttrOfType<StringAttr>(mfusion_attrs::kCopiedSubgraph);
   if (!attr) {
-    funcOp->emitError("Missing required attribute '")
-        << mfusion_attrs::kCopiedSubgraph << "' on outlined function. "
-        << "Ensure copy-fused-subgraphs pass runs before this pass.";
+    funcOp->emitError("Missing required attribute '") << mfusion_attrs::kCopiedSubgraph << "' on outlined function. "
+                                                      << "Ensure copy-fused-subgraphs pass runs before this pass.";
     return nullptr;
   }
   return attr;
 }
 
-struct ConvertDvmSubgraphToMfuseDvmCallPass
-    : public impl::ConvertDvmSubgraphToMfuseDvmCallBase<ConvertDvmSubgraphToMfuseDvmCallPass> {
+struct ConvertFusedSubgraphToCustomCallPass
+    : public impl::ConvertFusedSubgraphToCustomCallBase<ConvertFusedSubgraphToCustomCallPass> {
+  using Base::Base;
+
+  explicit ConvertFusedSubgraphToCustomCallPass(const std::string &kernelGenerator) {
+    this->kernelGenerator = kernelGenerator;
+  }
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SymbolTable symbolTable(module);
 
+    std::string callOpName;
+    if (kernelGenerator == "akg") {
+      callOpName = "mfuse.akg_call";
+    } else if (kernelGenerator == "bisheng") {
+      callOpName = "mfuse.bisheng_call";
+    } else {
+      callOpName = "mfuse.dvm_call";
+    }
+
     SmallVector<func::FuncOp> outlinedFuncs;
     for (auto func : module.getOps<func::FuncOp>()) {
-      if (isDvmOutlinedFunc(func)) {
+      if (isOutlinedFunc(func, kernelGenerator)) {
         outlinedFuncs.push_back(func);
       }
     }
@@ -127,7 +142,7 @@ struct ConvertDvmSubgraphToMfuseDvmCallPass
       if (!subgraphAttr) {
         return signalPassFailure();
       }
-      std::string subgraphMlir = serializeDvmFuncToModuleString(func);
+      std::string subgraphMlir = serializeFuncToModuleString(func);
       auto subgraphMlirAttr = StringAttr::get(module.getContext(), subgraphMlir);
 
       auto uses = symbolTable.getSymbolUses(func, module);
@@ -136,7 +151,7 @@ struct ConvertDvmSubgraphToMfuseDvmCallPass
           auto callOp = dyn_cast<func::CallOp>(use.getUser());
           if (!callOp) continue;
           OpBuilder builder(callOp);
-          OperationState state(callOp.getLoc(), "mfuse.dvm_call");
+          OperationState state(callOp.getLoc(), callOpName);
           state.addOperands(callOp.getOperands());
           state.addTypes(callOp.getResultTypes());
           state.addAttribute("subgraph_mlir", subgraphMlirAttr);
@@ -156,8 +171,8 @@ struct ConvertDvmSubgraphToMfuseDvmCallPass
 }  // namespace
 }  // namespace mfuse
 
-std::unique_ptr<Pass> createConvertDvmSubgraphToMfuseDvmCallPass() {
-  return std::make_unique<mfuse::ConvertDvmSubgraphToMfuseDvmCallPass>();
+std::unique_ptr<Pass> createConvertFusedSubgraphToCustomCallPass(const std::string &kernelGenerator) {
+  return std::make_unique<mfuse::ConvertFusedSubgraphToCustomCallPass>(kernelGenerator);
 }
 
 }  // namespace mlir
