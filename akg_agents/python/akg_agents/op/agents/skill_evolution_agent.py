@@ -15,10 +15,11 @@
 """
 SkillEvolutionAgent - 算子 Skill 自进化 Agent
 
-支持三种模式：
+支持四种模式：
   search_log:     从搜索日志中收集进化链 diff → LLM 生成 SKILL.md
   expert_tuning:  从对话历史中提取人工调优经验 → LLM 生成 SKILL.md
   error_fix:      从错误修复记录中提取调试经验 → LLM 生成 SKILL.md
+  merge_skills:   将同 DSL 下的 evolved skills 按主题合并去重
 
 注册为 Agent 工具，由 KernelAgent 通过 ToolExecutor 调用。
 """
@@ -48,11 +49,13 @@ class SkillEvolutionAgent(SkillEvolutionBase):
 - 从搜索日志中提取进化链diff，总结能带来性能提升的优化经验（search_log 模式）
 - 从对话历史中提取人工调优经验，“用户建议 → 代码变更 → 性能变化”因果链（expert_tuning 模式）
 - 从错误修复记录中提取调试经验，“错误类型 → 修复策略”（error_fix 模式）
+- 将同一 DSL 下的多个 evolved skills 按优化主题合并去重，减少重复文档（merge_skills 模式）
 
 适用场景：
 - 使用过adaptive_search，想要收集能带来性能提升的优化经验
 - 用户手动指导优化后，想要固化专家经验
 - 使用过adaptive_search、evolve、kernelgen等代码生成工具，想要收集代码生成过程中出现多次失败后成功修复的调试经验
+- evolved skills 数量较多且内容重复时，进行合并精简
 
 输出：生成或更新的 SKILL.md 文件路径
 """
@@ -62,8 +65,8 @@ class SkillEvolutionAgent(SkillEvolutionBase):
         "properties": {
             "mode": {
                 "type": "string",
-                "enum": ["search_log", "expert_tuning", "error_fix"],
-                "description": "模式选择：search_log=搜索日志优化经验，expert_tuning=人工调优经验，error_fix=错误修复经验",
+                "enum": ["search_log", "expert_tuning", "error_fix", "merge_skills"],
+                "description": "模式选择：search_log=搜索日志优化经验，expert_tuning=人工调优经验，error_fix=错误修复经验，merge_skills=合并evolved skills",
                 "default": "search_log",
             },
             "op_name": {
@@ -85,13 +88,18 @@ class SkillEvolutionAgent(SkillEvolutionBase):
                 "description": "算子任务描述（可选）",
                 "default": "",
             },
+            "skills_dir": {
+                "type": "string",
+                "description": "evolved skill 目录（merge_skills 模式必填），dsl/backend 等信息从 skill metadata 中自动提取",
+                "default": "",
+            },
             "output_dir": {
                 "type": "string",
                 "description": "SKILL.md 输出目录（可选，默认写入 op/resources/skills/{dsl}/evolved/{skill_name}/），非特殊需求不需要指定",
                 "default": "",
             },
         },
-        "required": ["op_name"],
+        "required": [],
     }
 
     def __init__(self):
@@ -109,16 +117,23 @@ class SkillEvolutionAgent(SkillEvolutionBase):
         self.dedup_error_fix_template = self.load_template(
             "skill_evolution/dedup_error_fix.j2"
         )
+        self.classify_skills_template = self.load_template(
+            "skill_evolution/classify_skills.j2"
+        )
+        self.merge_cluster_template = self.load_template(
+            "skill_evolution/merge_cluster.j2"
+        )
 
     async def run(
         self,
-        op_name: str,
+        op_name: str = "",
         mode: str = "search_log",
         log_dir: str = "",
         task_desc: str = "",
         output_dir: str = "",
         cur_path: str = "",
         conversation_dir: str = "",
+        skills_dir: str = "",
         **kwargs,
     ) -> Dict[str, Any]:
         if mode == "search_log":
@@ -143,11 +158,17 @@ class SkillEvolutionAgent(SkillEvolutionBase):
                 output_dir=output_dir,
                 cur_path=cur_path,
             )
+        elif mode == "merge_skills":
+            return await self._run_merge_skills(
+                skills_dir=skills_dir,
+                output_dir=output_dir,
+                cur_path=cur_path,
+            )
         else:
             return {
                 "status": "error",
                 "output": "",
-                "error_information": f"不支持的模式: {mode}，可选: search_log, expert_tuning, error_fix",
+                "error_information": f"不支持的模式: {mode}，可选: search_log, expert_tuning, error_fix, merge_skills",
             }
 
     # ==================== 公共：解析 + 写入 SKILL.md ====================
@@ -508,3 +529,211 @@ class SkillEvolutionAgent(SkillEvolutionBase):
 
         except Exception as e:
             return self._error_result("error_fix", e, work_dir, log_lines)
+
+    # ==================== merge_skills 模式 ====================
+
+    async def _run_merge_skills(
+        self,
+        skills_dir: str = "",
+        output_dir: str = "",
+        cur_path: str = "",
+    ) -> Dict[str, Any]:
+        from akg_agents.op.tools.skill_evolution.merge_utils import (
+            scan_evolved_skills, build_summaries, parse_classify_output,
+            archive_skills, write_merged_skill,
+            split_large_cluster,
+        )
+        from akg_agents.op.tools.skill_evolution.common import parse_skill_output
+
+        if not skills_dir:
+            return {
+                "status": "error",
+                "output": "",
+                "error_information": "merge_skills 模式需要提供 skills_dir 参数",
+            }
+
+        evolved_dir = skills_dir
+        work_dir = self._init_workspace(cur_path, "", "merge_skills")
+        log_lines: List[str] = []
+
+        try:
+            self._print(
+                "merge_skills",
+                f"开始: evolved_dir={evolved_dir}",
+                log_lines,
+            )
+            t0 = time.time()
+
+            skills = scan_evolved_skills(evolved_dir)
+            if len(skills) < 2:
+                return self._fail_result(
+                    "merge_skills",
+                    f"evolved 目录下只有 {len(skills)} 个 skill，无需合并",
+                    work_dir, log_lines,
+                )
+
+            self._print("merge_skills", f"扫描到 {len(skills)} 个 skill", log_lines)
+            name_to_skill = {s.name: s for s in skills}
+
+            # --- Phase 1: 摘要聚类 ---
+            summaries = build_summaries(skills)
+            self._save_json(work_dir, "skill_summaries.json", summaries)
+
+            classify_vars = {
+                "skill_count": len(summaries),
+                "summaries": summaries,
+            }
+            classify_output = await self._call_llm_and_save(
+                "merge_classify", self.classify_skills_template,
+                classify_vars, work_dir, log_lines,
+            )
+
+            clusters = parse_classify_output(classify_output)
+            if not clusters:
+                return self._fail_result(
+                    "merge_skills", "LLM 聚类输出解析失败", work_dir, log_lines,
+                )
+
+            self._save_json(work_dir, "clusters.json", clusters)
+            self._print(
+                "merge_skills",
+                f"聚类结果: {len(clusters)} 个簇 — "
+                + ", ".join(f"簇{i}({len(c['skills'])}个)" for i, c in enumerate(clusters)),
+                log_lines,
+            )
+
+            # --- Phase 2: 逐簇合并 ---
+            merged_paths: List[str] = []
+            skills_to_archive: List = []
+
+            for ci, cluster in enumerate(clusters):
+                reason = cluster.get("reason", "")
+                skill_names = cluster["skills"]
+                cluster_label = f"簇{ci}"
+
+                valid_names = [n for n in skill_names if n in name_to_skill]
+                if not valid_names:
+                    self._print("merge_skills", f"{cluster_label} 无有效 skill，跳过", log_lines)
+                    continue
+
+                if len(valid_names) == 1:
+                    self._print("merge_skills", f"{cluster_label} 只有 1 个 skill，保留原样", log_lines)
+                    continue
+
+                cluster_skills = [name_to_skill[n] for n in valid_names]
+                batches = split_large_cluster(valid_names)
+
+                dsl = ""
+                backend = ""
+                for s in cluster_skills:
+                    if not dsl:
+                        dsl = s.metadata.get("dsl", "")
+                    if not backend:
+                        backend = s.metadata.get("backend", "")
+                    if dsl and backend:
+                        break
+                dsl_prefix = dsl.replace("_", "-").lower() if dsl else "unknown"
+
+                merged_body = None
+                merged_name = ""
+                merged_desc = ""
+                for batch_idx, batch_names in enumerate(batches):
+                    batch_skills = [name_to_skill[n] for n in batch_names]
+
+                    if merged_body is not None:
+                        documents = [{"name": "已合并文档", "content": merged_body}]
+                        documents.extend(
+                            {"name": s.name, "content": s.content}
+                            for s in batch_skills
+                        )
+                    else:
+                        documents = [
+                            {"name": s.name, "content": s.content}
+                            for s in batch_skills
+                        ]
+
+                    merge_vars = {
+                        "cluster_reason": reason,
+                        "dsl_prefix": dsl_prefix,
+                        "doc_count": len(documents),
+                        "documents": documents,
+                    }
+
+                    suffix = f"_batch{batch_idx}" if len(batches) > 1 else ""
+                    merge_output = await self._call_llm_and_save(
+                        f"merge_cluster{ci}{suffix}", self.merge_cluster_template,
+                        merge_vars, work_dir, log_lines,
+                    )
+
+                    name, desc, body = parse_skill_output(merge_output)
+                    if not body:
+                        self._print(
+                            "merge_skills",
+                            f"{cluster_label} batch {batch_idx} 合并输出为空，跳过",
+                            log_lines,
+                        )
+                        continue
+
+                    merged_body = body
+                    if name:
+                        merged_name = name
+                    if desc:
+                        merged_desc = desc
+
+                if not merged_name:
+                    merged_name = f"{dsl_prefix}-merged-cluster{ci}"
+                    logger.info(f"[merge_skills] {cluster_label}: LLM 未返回 skill_name，使用默认: {merged_name}")
+
+                if merged_body:
+                    skill_path = write_merged_skill(
+                        name=merged_name,
+                        description=merged_desc,
+                        body=merged_body,
+                        dsl=dsl,
+                        backend=backend,
+                        evolved_dir=output_dir or evolved_dir,
+                    )
+                    merged_paths.append(skill_path)
+                    skills_to_archive.extend(cluster_skills)
+                    self._print(
+                        "merge_skills",
+                        f"{cluster_label} 合并完成: {skill_path}",
+                        log_lines,
+                    )
+
+            # --- 归档原始 skill ---
+            if skills_to_archive:
+                archive_path = archive_skills(skills_to_archive, evolved_dir)
+                self._print(
+                    "merge_skills",
+                    f"已归档 {len(skills_to_archive)} 个原始 skill 至 {archive_path}",
+                    log_lines,
+                )
+
+            elapsed = time.time() - t0
+            self._print("merge_skills", f"完成: {len(merged_paths)} 个合并 skill ({elapsed:.1f}s)", log_lines)
+
+            result_meta: Dict[str, Any] = {
+                "status": "success",
+                "merged_count": len(merged_paths),
+                "merged_paths": merged_paths,
+                "archived_count": len(skills_to_archive),
+                "elapsed_seconds": round(elapsed, 1),
+                "mode": "merge_skills",
+            }
+            self._save_json(work_dir, "result.json", result_meta)
+            self._save_session_log(work_dir, log_lines)
+
+            return {
+                "status": "success",
+                "output": "\n".join([
+                    f"Skill 合并完成: {len(merged_paths)} 个主题",
+                    *[f"  - {p}" for p in merged_paths],
+                    f"- 归档: {len(skills_to_archive)} 个原始 skill",
+                    f"- 工作区: {work_dir}",
+                ]),
+                "error_information": "",
+            }
+
+        except Exception as e:
+            return self._error_result("merge_skills", e, work_dir, log_lines)
