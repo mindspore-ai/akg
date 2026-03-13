@@ -205,8 +205,8 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         # 6. verify_timeout（硬编码，5 分钟）
         config["verify_timeout"] = 300
         
-        # 7. default_workflow（硬编码）
-        config["default_workflow"] = "default_workflow"
+        # 7. default_workflow（仅在未设置时使用默认值，不覆盖已有配置）
+        config.setdefault("default_workflow", "default_workflow")
         
         # 8. max_step（硬编码）
         config["max_step"] = 20

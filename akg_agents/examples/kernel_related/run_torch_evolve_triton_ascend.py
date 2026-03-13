@@ -91,7 +91,7 @@ async def run_torch_evolve_triton_ascend():
     config.device_list = [0, 1, 2, 3]
 
     # 配置文件路径
-    config.config_path = str(Path(get_project_root()) / "config" / "triton_ascend_evolve_config.yaml")
+    config.config_path = str(Path(get_project_root()) / "op" / "config" / "triton_ascend_evolve_config.yaml")
 
     # 选择要运行的任务
     config.op_name = get_op_name()

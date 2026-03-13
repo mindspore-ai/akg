@@ -208,7 +208,7 @@ class EvolveWorkflow(OpBaseWorkflow):
         """根据 arguments 调整 workflow 配置
         
         1. 使用 build_langgraph_task_config() 补齐 docs_dir、agent_model_config 等
-        2. 标记 skip_kernel_gen=True，避免 LangGraphTask 初始化不需要的 KernelGen/Skill
+        2. 设置内部 LangGraphTask 使用 kernelgen_only_workflow（基于 Skill 系统的 KernelGen）
         3. 调用父类 prepare_config 完成 log_dir 重定向 + 创建 WorkflowLogger
         4. 用 _EVOLVE_DEFAULTS 补齐进化参数的默认值
         """
@@ -225,9 +225,10 @@ class EvolveWorkflow(OpBaseWorkflow):
             base_config=base_config,
         )
         
-        # evolve 内部的 LangGraphTask 使用 default_workflow，
-        # 不需要 KernelGen（Skill 系统），跳过以加速初始化
-        full_config["skip_kernel_gen"] = True
+        # evolve 内部的 LangGraphTask 使用 kernelgen_only_workflow，
+        # 需要 KernelGen（Skill 系统），但不需要 KernelDesigner
+        full_config["default_workflow"] = "kernelgen_only_workflow"
+        full_config["skip_kernel_designer"] = True
         
         workflow_resources["config"] = full_config
         

@@ -148,6 +148,9 @@ def create_metadata_matcher(
         
         # 根据匹配模式进行判断
         if match_mode == "include":
+            # 特殊处理：如果 metadata 值包含 "all"，表示适用于所有情况
+            if "all" in values:
+                return True
             return context_value in values
         elif match_mode == "exclude":
             return context_value not in values

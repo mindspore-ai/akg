@@ -34,7 +34,7 @@ from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
 import logging
 _logger = logging.getLogger(__name__)
 from akg_agents.core.sketch import Sketch
-from akg_agents.op.utils.handwrite_loader import HandwriteLoader, HandwriteSampler
+from akg_agents.op.skill.handwrite_sampler import SkillHandwriteLoader, SkillHandwriteSampler
 
 from .evolution_core import (
     save_implementation,
@@ -167,19 +167,16 @@ class InitializationProcessor:
         else:
             logger.info("Island model: Disabled (simple evolution mode)")
         
-        # 创建HandwriteLoader（共享）
-        handwrite_loader = HandwriteLoader(
+        # 创建 SkillHandwriteLoader（共享，基于 Skill 系统的案例加载）
+        handwrite_loader = SkillHandwriteLoader(
             dsl=self.config.dsl,
-            framework=self.config.framework,
-            task_desc=self.config.task_desc,
-            config=self.config.config,
-            arch=self.config.arch,
             backend=self.config.backend,
             op_name=self.config.op_name,
-            rag=self.config.rag  # 传递 rag 参数
+            task_desc=self.config.task_desc,
+            config=self.config.config,
         )
-        await handwrite_loader.select_relevant_pairs()
-        logger.info(f"Shared HandwriteLoader created with {len(handwrite_loader.get_selected_pairs())} selected documents")
+        await handwrite_loader.select_relevant_skills()
+        logger.info(f"Shared SkillHandwriteLoader created with {len(handwrite_loader.get_selected_skills())} selected skills")
         
         # A/B 测试模式：清空 handwrite，仅使用 evolved skill
         ab_test_mode = (self.config.config or {}).get("ab_test_mode", False)
@@ -218,7 +215,7 @@ class InitializationProcessor:
             init_data['island_impls'] = [[] for _ in range(self.config.num_islands)]
             init_data['elite_pool'] = []
             init_data['island_handwrite_samplers'] = [
-                HandwriteSampler(
+                SkillHandwriteSampler(
                     loader=handwrite_loader,
                     sample_num=self.config.handwrite_sample_num,
                     decay_rate=self.config.handwrite_decay_rate
@@ -226,10 +223,10 @@ class InitializationProcessor:
                 for _ in range(self.config.num_islands)
             ]
             if any(sampler._total_count > 0 for sampler in init_data['island_handwrite_samplers']):
-                logger.info(f"Initialized {self.config.num_islands} independent HandwriteSamplers for islands")
+                logger.info(f"Initialized {self.config.num_islands} independent SkillHandwriteSamplers for islands")
         else:
             init_data['individual_handwrite_samplers'] = [
-                HandwriteSampler(
+                SkillHandwriteSampler(
                     loader=handwrite_loader,
                     sample_num=self.config.handwrite_sample_num,
                     decay_rate=self.config.handwrite_decay_rate
@@ -237,7 +234,7 @@ class InitializationProcessor:
                 for _ in range(self.config.parallel_num)
             ]
             if any(sampler._total_count > 0 for sampler in init_data['individual_handwrite_samplers']):
-                logger.info(f"Initialized {self.config.parallel_num} independent HandwriteSamplers for individuals")
+                logger.info(f"Initialized {self.config.parallel_num} independent SkillHandwriteSamplers for individuals")
         
         return init_data
 
@@ -479,7 +476,7 @@ class TaskCreationProcessor:
                     device_pool=None,  # 新写法：使用 WorkerManager
                     framework=self.config.framework,
                     task_type="profile",
-                    workflow="default_workflow",  # LangGraph workflow 名称
+                    workflow=task_config.get("default_workflow", "default_workflow"),
                     inspirations=island_inspirations[island_idx][pid],
                     meta_prompts=island_meta_prompts[island_idx][pid] if island_meta_prompts[island_idx] else None,
                     handwrite_suggestions=island_handwrite_suggestions[island_idx],
@@ -528,7 +525,7 @@ class TaskCreationProcessor:
                 device_pool=None,  # 新写法：使用 WorkerManager
                 framework=self.config.framework,
                 task_type="profile",
-                workflow="default_workflow",  # LangGraph workflow 名称
+                workflow=task_config.get("default_workflow", "default_workflow"),
                 inspirations=inspirations[pid],
                 meta_prompts=meta_prompts[pid] if meta_prompts else None,
                 handwrite_suggestions=handwrite_suggestions_list[pid] if handwrite_suggestions_list else [],
