@@ -41,6 +41,7 @@ from akg_agents.op.workflows.connect_all_workflow import ConnectAllWorkflow
 from akg_agents.op.workflows.kernelgen_only_workflow import KernelGenOnlyWorkflow
 from akg_agents.op.workflows.evolve_workflow import EvolveWorkflow
 from akg_agents.op.workflows.adaptive_search_workflow import AdaptiveSearchWorkflow
+from akg_agents.op.workflows.default_workflow_v2 import DefaultWorkflowV2
 
 # 算子工作流注册表（同时支持短名称和完整名称）
 WORKFLOW_REGISTRY = {
@@ -60,6 +61,8 @@ WORKFLOW_REGISTRY = {
     "evolve_workflow": EvolveWorkflow,
     "adaptive_search": AdaptiveSearchWorkflow,
     "adaptive_search_workflow": AdaptiveSearchWorkflow,
+    "default_v2": DefaultWorkflowV2,
+    "default_workflow_v2": DefaultWorkflowV2,
 }
 
 
@@ -244,6 +247,20 @@ class LangGraphTask(BaseLangGraphTask):
                 logger.debug(traceback.format_exc())
         else:
             logger.info("[LangGraphTask] skip_kernel_gen=True, 跳过 KernelGen 初始化（不加载 Skill）")
+        
+        # KernelDesigner (基于 Skill 系统的算法设计)
+        if not self.config.get("skip_kernel_designer", False):
+            try:
+                from akg_agents.op.agents.kernel_designer import KernelDesigner
+                agents['kernel_designer'] = KernelDesigner(
+                    parser_config_path=parser_config_path
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize KernelDesigner: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+        else:
+            logger.info("[LangGraphTask] skip_kernel_designer=True, 跳过 KernelDesigner 初始化")
         
         # Verifier
         try:

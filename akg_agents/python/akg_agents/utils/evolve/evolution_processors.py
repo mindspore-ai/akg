@@ -460,7 +460,7 @@ class TaskCreationProcessor:
                     device_pool=None,  # 新写法：使用 WorkerManager
                     framework=self.config.framework,
                     task_type="profile",
-                    workflow="default_workflow",  # LangGraph workflow 名称
+                    workflow=task_config.get("default_workflow", "default_workflow"),
                     inspirations=island_inspirations[island_idx][pid],
                     meta_prompts=island_meta_prompts[island_idx][pid] if island_meta_prompts[island_idx] else None,
                     handwrite_suggestions=island_handwrite_suggestions[island_idx],
@@ -509,7 +509,7 @@ class TaskCreationProcessor:
                 device_pool=None,  # 新写法：使用 WorkerManager
                 framework=self.config.framework,
                 task_type="profile",
-                workflow="default_workflow",  # LangGraph workflow 名称
+                workflow=task_config.get("default_workflow", "default_workflow"),
                 inspirations=inspirations[pid],
                 meta_prompts=meta_prompts[pid] if meta_prompts else None,
                 handwrite_suggestions=handwrite_suggestions_list[pid] if handwrite_suggestions_list else [],

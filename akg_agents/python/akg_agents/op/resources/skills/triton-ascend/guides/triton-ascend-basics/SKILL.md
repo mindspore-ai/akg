@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-basics
-description: "Triton Ascend 编程基础，包括核心概念（program_id、block、grid）、内核函数结构、装饰器用法和标准代码模式。适用于初次使用 Triton Ascend、需要了解基本语法结构的任意内核代码生成场景"
+description: "Triton Ascend 编程基础，包括核心概念（program_id、block、grid）、内核函数结构、装饰器用法和标准代码模式。适用使用 Triton Ascend、需要了解基本语法结构的任意内核代码生成场景"
 category: fundamental
 version: "1.0.0"
 metadata:

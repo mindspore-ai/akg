@@ -1,5 +1,51 @@
 {# KernelGen Agent 的用户 Prompt 模板 #}
 
+{% if designer_code %}
+## 算法设计草图
+
+以下是设计阶段生成的算法草图/伪代码，请以此为基础进行代码实现，
+充分利用其中的算法思路和优化策略：
+
+```
+{{ designer_code }}
+```
+
+---
+
+{% endif %}
+
+{% if inspirations %}
+## 进化探索方案
+
+**重要须知**：下面是一些过往方案的代码以及性能指标，请参考这些信息，分析可用的优化方案，并生成优化后的代码。
+
+{{ inspirations }}
+
+一般而言，调整切分方式、修改计算逻辑、调整计算顺序、调整计算精度等，都是可行的优化方案。
+请你尽最大努力来完成代码的优化，得到一个计算速度快的高效算子实现。
+
+---
+
+{% endif %}
+
+{% if handwrite_suggestions %}
+## 手写优化策略与实现参考
+
+以下是针对类似算子的专家级优化策略和实现，请深入理解这些优化思路并应用到草图设计中：
+
+{% for suggestion in handwrite_suggestions %}
+### 参考案例 {{ loop.index }}: {{ suggestion.name }}
+
+**优化策略与要点：**
+```markdown
+{{ suggestion.improvement_doc }}
+```
+
+---
+
+{% endfor %}
+{% endif %}
+
 {% if previous_code and user_requirements %}
 {# ==================== 修改模式 ==================== #}
 
@@ -55,9 +101,8 @@
 
 {% endif %}
 
-## 执行历史和上下文
-
 {% if history_actions %}
+## 执行历史和上下文
 {% for action in history_actions %}
 {% if action.tool_name == "history_summary" %}
 ### 历史总结
@@ -82,8 +127,6 @@
 
 {% endif %}
 {% endfor %}
-{% else %}
-暂无历史上下文。
 {% endif %}
 
 ---
@@ -128,6 +171,17 @@
 ```python
 {{ previous_code }}
 ```
+
+---
+
+{% endif %}
+
+{% if hardware_docs %}
+## 目标硬件信息
+
+**架构**: {{ arch_name or '通用' }}
+
+{{ hardware_docs }}
 
 ---
 
