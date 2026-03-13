@@ -57,20 +57,13 @@ bool isComplexDataType(Operation *op) {
     }
   }
 
-  if (op->getName().getStringRef() != "mfuse.cast" || op->getNumOperands() < 1) {
+  if (op->getName().getStringRef() != "mfuse.cast") {
     return false;
   }
 
-  // Get the output type of op's first input's defining op
-  // This assumes the first operand is produced by another op
+  // Check cast input type
   Value input0 = op->getOperand(0);
-  Operation *defOp = input0.getDefiningOp();
-  if (!defOp) {
-    return false;
-  }
-
-  // Get the output type of the defining op
-  if (auto outputType = getElementType(defOp->getResult(0).getType())) {
+  if (auto outputType = getElementType(input0.getType())) {
     if (mlir::isa<ComplexType>(outputType)) {
       return true;
     }

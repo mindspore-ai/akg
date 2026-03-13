@@ -28,11 +28,13 @@
 namespace mlir {
 namespace mfuse {
 // Common constants
-constexpr float kOne = 1.0f;      // 1
-constexpr float kNegOne = -1.0f;  // -1
-constexpr float kHalf = 0.5f;     // 0.5
-constexpr float kTwo = 2.0f;      // 2
-constexpr float kThree = 3.0f;    // 3
+constexpr float kOne = 1.0f;
+constexpr float kNegOne = -1.0f;
+constexpr float kHalf = 0.5f;
+constexpr float kTwo = 2.0f;
+constexpr float kThree = 3.0f;
+constexpr float kMinTanhClampValue = -8.8f;
+constexpr float kMaxTanhClampValue = 8.8f;
 
 class Expr;
 
@@ -85,6 +87,20 @@ class ComputeOpBuilder {
   }
 
   Value tanh(Value x) { return rewriter.create<AclnnTanhOp>(loc, x); }
+
+  Value clamp(Value a, Value b, Value c) {
+    auto resultType = a.getType();
+    return rewriter.create<AclnnClampOp>(loc, resultType, a, b, c);
+  }
+
+  template <typename T>
+  Value clamp(Value a, T b, T c) {
+    auto resultType = a.getType();
+    auto elemType = mlir::cast<RankedTensorType>(resultType).getElementType();
+    auto value_b = createScalarRankTensor(b, elemType);
+    auto value_c = createScalarRankTensor(c, elemType);
+    return rewriter.create<AclnnClampOp>(loc, resultType, a, value_b, value_c);
+  }
 
   template <typename T>
   Value createScalarRankTensor(T value, Type elementType) {

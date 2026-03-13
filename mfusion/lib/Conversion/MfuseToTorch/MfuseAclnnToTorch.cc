@@ -165,6 +165,45 @@ class ConvertMfuseAclnnSub : public mlir::OpConversionPattern<mlir::mfuse::Aclnn
   }
 };
 
+class ConvertMfuseAclnnClamp : public mlir::OpConversionPattern<mlir::mfuse::AclnnClampOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnClampOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    llvm::SmallVector<mlir::Type, 4> resultTypes;
+    if (failed(getTypeConverter()->convertTypes(op.getResult().getType(), resultTypes))) {
+      return rewriter.notifyMatchFailure(op, "failed to convert result types");
+    }
+    auto input = adaptor.getInput();
+    auto inputType = input.getType();
+    mlir::Value minValue = materializeConstValueToTorchScalar(op.getOperation(), op.getMin(), rewriter);
+    mlir::Value maxValue = materializeConstValueToTorchScalar(op.getOperation(), op.getMax(), rewriter);
+    Value final_result = input;
+    auto inputValueTensorType = inputType.dyn_cast<TorchD::ValueTensorType>();
+    auto boolResultType = TorchD::ValueTensorType::get(op.getResult().getType().getContext(),
+                                                       inputValueTensorType.getSizes(), rewriter.getI1Type());
+    if (!minValue.getType().isa<TorchD::NoneType>()) {
+      auto min_isnan = rewriter.create<TorchD::AtenIsnanOp>(op.getLoc(), boolResultType, input);
+      auto min_ge = rewriter.create<TorchD::AtenGeScalarOp>(op.getLoc(), boolResultType, input, minValue);
+      auto min_condition =
+        rewriter.create<TorchD::AtenBitwiseOrTensorOp>(op.getLoc(), boolResultType, min_ge, min_isnan);
+      final_result =
+        rewriter.create<TorchD::AtenWhereScalarOtherOp>(op.getLoc(), inputType, min_condition, input, minValue);
+    }
+    if (!maxValue.getType().isa<TorchD::NoneType>()) {
+      auto max_isnan = rewriter.create<TorchD::AtenIsnanOp>(op.getLoc(), boolResultType, final_result);
+      auto max_le = rewriter.create<TorchD::AtenLeScalarOp>(op.getLoc(), boolResultType, final_result, maxValue);
+      auto max_condition =
+        rewriter.create<TorchD::AtenBitwiseOrTensorOp>(op.getLoc(), boolResultType, max_le, max_isnan);
+      final_result =
+        rewriter.create<TorchD::AtenWhereScalarOtherOp>(op.getLoc(), inputType, max_condition, final_result, maxValue);
+    }
+    rewriter.replaceOp(op, final_result);
+    return mlir::success();
+  }
+};
+
 }  // namespace
 
 // ============================================================================
@@ -175,6 +214,7 @@ void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, Rewri
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseAclnnAdd>(converter, context);
   patterns.add<ConvertMfuseAclnnAddRmsNorm>(converter, context);
+  patterns.add<ConvertMfuseAclnnClamp>(converter, context);
   patterns.add<ConvertMfuseAclnnGelu>(converter, context);
   patterns.add<ConvertMfuseAclnnGeluBackward>(converter, context);
   patterns.add<ConvertMfuseAclnnSub>(converter, context);
