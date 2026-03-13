@@ -17,6 +17,8 @@
 #ifndef MFUSION_DIALECT_MFUSE_UTILS_FUSED_OP_UTILS_H
 #define MFUSION_DIALECT_MFUSE_UTILS_FUSED_OP_UTILS_H
 
+#include <cstddef>
+
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -29,6 +31,17 @@
 
 namespace mlir {
 namespace mfuse {
+
+constexpr size_t kMinClusterSize = 2;
+struct ClusterBuildInfo {
+  llvm::SmallVector<Operation *> clusterOps;
+  llvm::DenseSet<Operation *> constantsToCluster;
+  llvm::DenseSet<Operation *> clusterOpSet;
+  llvm::SetVector<Value> externalInputs;
+  llvm::SetVector<Value> externalOutputs;
+  Operation *insertPoint{nullptr};
+};
+
 /// Collect constant operations that should be included in the cluster.
 /// This function analyzes operands of cluster operations and determines which
 /// constant operations should be fused into the cluster (vs extracted as inputs).
@@ -51,6 +64,16 @@ Operation *findValidInsertPoint(const llvm::SmallVector<Operation *> &clusterOps
                                 const llvm::SetVector<Value> &externalInputs,
                                 const llvm::SetVector<Value> &externalOutputs,
                                 const llvm::DenseSet<Operation *> &clusterOpSet);
+
+/// Build all information required to materialize a fused operation for a base
+/// cluster slice. The input operations should not include constants; this
+/// helper will collect and append fusible constants automatically.
+bool buildCluster(llvm::ArrayRef<Operation *> baseClusterOps, ClusterBuildInfo &buildInfo);
+
+/// Partition a candidate cluster into valid contiguous slices while preserving
+/// as many original cluster operations as possible.
+llvm::SmallVector<llvm::SmallVector<Operation *>> partitionClusterOps(llvm::ArrayRef<Operation *> baseClusterOps,
+                                                                      size_t minClusterSize = kMinClusterSize);
 }  // namespace mfuse
 }  // namespace mlir
 
