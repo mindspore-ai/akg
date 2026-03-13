@@ -74,7 +74,7 @@ class BaseCluster {
   std::vector<size_t> findCandidates(size_t baseNodeId);
 
   /// Create a mfuse.fused operation for a cluster.
-  void createFusedOp(func::FuncOp funcOp, const std::vector<size_t> &nodeIds);
+  bool createFusedOp(func::FuncOp funcOp, const std::vector<size_t> &nodeIds);
 
   /// Clean up internal state.
   void clean() {

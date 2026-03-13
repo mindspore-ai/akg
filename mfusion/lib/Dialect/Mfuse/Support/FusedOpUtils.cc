@@ -16,13 +16,15 @@
 
 #include "mfusion/Dialect/Mfuse/Support/FusedOpUtils.h"
 
-#include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
-#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
-#include "mfusion/Support/Logging.h"
+#include <vector>
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Value.h"
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Cluster/Utils.h"
+#include "mfusion/Support/Logging.h"
 
 namespace mlir {
 namespace mfuse {
@@ -56,6 +58,27 @@ bool checkForGroupedMatmul(const std::string &opName, DenseElementsAttr denseAtt
     }
   }
   return true;
+}
+
+// DP state for the prefix [0, end).
+struct PartitionState {
+  size_t preservedOps{0};   // Number of original cluster ops preserved in the prefix plan.
+  size_t segmentCount{0};   // Number of valid fused segments selected in the prefix plan.
+  int prevIndex{-1};        // Previous DP position used when reconstructing the chosen plan.
+  int segmentStart{-1};     // Start index of the segment ending at the current DP position, or -1 if skipped.
+  bool initialized{false};  // Whether this DP state has been reached.
+};
+
+struct SliceAnalysis {
+  bool analyzed{false};
+  bool valid{false};
+};
+
+bool isBetterPartition(size_t lhsPreservedOps, size_t lhsSegmentCount, size_t rhsPreservedOps, size_t rhsSegmentCount) {
+  if (lhsPreservedOps != rhsPreservedOps) {
+    return lhsPreservedOps > rhsPreservedOps;
+  }
+  return lhsSegmentCount < rhsSegmentCount;
 }
 }  // namespace
 
@@ -196,6 +219,105 @@ Operation *findValidInsertPoint(const llvm::SmallVector<Operation *> &clusterOps
   }
 
   return insertPoint;
+}
+
+bool buildCluster(llvm::ArrayRef<Operation *> baseClusterOps, ClusterBuildInfo &buildInfo) {
+  if (baseClusterOps.size() < kMinClusterSize) {
+    return false;
+  }
+
+  buildInfo = ClusterBuildInfo{};
+  buildInfo.clusterOps.assign(baseClusterOps.begin(), baseClusterOps.end());
+  // Re-run constant collection per slice so each partition can fuse the
+  // constants it still depends on after splitting.
+  buildInfo.constantsToCluster = collectConstantsToCluster(buildInfo.clusterOps);
+  std::copy(buildInfo.constantsToCluster.begin(), buildInfo.constantsToCluster.end(),
+            std::back_inserter(buildInfo.clusterOps));
+
+  std::sort(buildInfo.clusterOps.begin(), buildInfo.clusterOps.end(),
+            [](Operation *lhs, Operation *rhs) { return lhs->isBeforeInBlock(rhs); });
+
+  buildInfo.clusterOpSet.insert(buildInfo.clusterOps.begin(), buildInfo.clusterOps.end());
+  buildInfo.externalInputs = findExternalInputs(buildInfo.clusterOps, buildInfo.clusterOpSet);
+  buildInfo.externalOutputs =
+    findExternalOutputs(buildInfo.clusterOps, buildInfo.constantsToCluster, buildInfo.clusterOpSet);
+  if (buildInfo.externalOutputs.empty()) {
+    return false;
+  }
+
+  buildInfo.insertPoint = findValidInsertPoint(buildInfo.clusterOps, buildInfo.externalInputs,
+                                               buildInfo.externalOutputs, buildInfo.clusterOpSet);
+  return buildInfo.insertPoint != nullptr;
+}
+
+llvm::SmallVector<llvm::SmallVector<Operation *>> partitionClusterOps(llvm::ArrayRef<Operation *> baseClusterOps,
+                                                                      size_t minClusterSize) {
+  llvm::SmallVector<llvm::SmallVector<Operation *>> partitions;
+  const size_t clusterSize = baseClusterOps.size();
+  if (clusterSize < minClusterSize) {
+    return partitions;
+  }
+
+  std::vector<std::vector<SliceAnalysis>> sliceCache(clusterSize, std::vector<SliceAnalysis>(clusterSize + 1));
+  auto getOrAnalyze = [&](size_t start, size_t end) -> SliceAnalysis & {
+    SliceAnalysis &analysis = sliceCache[start][end];
+    if (!analysis.analyzed) {
+      analysis.analyzed = true;
+      // Cache only legality here. The concrete build info for a slice may
+      // become stale after earlier partitions rewrite and erase operations.
+      ClusterBuildInfo buildInfo;
+      analysis.valid = buildCluster(baseClusterOps.slice(start, end - start), buildInfo);
+    }
+    return analysis;
+  };
+
+  std::vector<PartitionState> dp(clusterSize + 1);
+  dp[0].initialized = true;
+  for (size_t end = 1; end <= clusterSize; ++end) {
+    // Skip the current op and inherit the best plan for the prefix.
+    if (dp[end - 1].initialized) {
+      dp[end] = dp[end - 1];
+      dp[end].prevIndex = static_cast<int>(end - 1);
+      dp[end].segmentStart = -1;
+      dp[end].initialized = true;
+    }
+
+    for (size_t start = 0; start + minClusterSize <= end; ++start) {
+      SliceAnalysis &analysis = getOrAnalyze(start, end);
+      if (!analysis.valid || !dp[start].initialized) {
+        continue;
+      }
+
+      // Prefer the plan that preserves more original cluster ops, and break
+      // ties by using fewer fused segments.
+      size_t candidatePreservedOps = dp[start].preservedOps + (end - start);
+      size_t candidateSegmentCount = dp[start].segmentCount + 1;
+      if (isBetterPartition(candidatePreservedOps, candidateSegmentCount, dp[end].preservedOps, dp[end].segmentCount)) {
+        dp[end].preservedOps = candidatePreservedOps;
+        dp[end].segmentCount = candidateSegmentCount;
+        dp[end].prevIndex = static_cast<int>(start);
+        dp[end].segmentStart = static_cast<int>(start);
+        dp[end].initialized = true;
+      }
+    }
+  }
+
+  if (!dp[clusterSize].initialized || dp[clusterSize].preservedOps < minClusterSize) {
+    return partitions;
+  }
+
+  // Reconstruct the chosen valid slices from the DP predecessor chain.
+  for (int end = static_cast<int>(clusterSize); end > 0;) {
+    const PartitionState &state = dp[end];
+    if (state.segmentStart >= 0) {
+      size_t start = static_cast<size_t>(state.segmentStart);
+      partitions.emplace_back(baseClusterOps.slice(start, static_cast<size_t>(end) - start).begin(),
+                              baseClusterOps.slice(start, static_cast<size_t>(end) - start).end());
+    }
+    end = state.prevIndex;
+  }
+  std::reverse(partitions.begin(), partitions.end());
+  return partitions;
 }
 }  // namespace mfuse
 }  // namespace mlir
