@@ -27,7 +27,7 @@ class Pass;
 /// This pass clones each outlined fusion function and stores the clone's name
 /// in the original function's `mfusion.copied_subgraph` attribute. The cloned
 /// function will be converted to torch dialect and then to fx graph, serving
-/// as the shape inference function for the DVM kernel (torch.operator).
+/// as the shape inference function for the fused kernel (torch.operator).
 ///
 /// Data flow:
 /// - Original function: outlined -> DVM lowering -> serialized as subgraph_mlir

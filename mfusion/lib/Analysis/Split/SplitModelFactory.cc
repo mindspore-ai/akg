@@ -36,8 +36,8 @@ std::shared_ptr<SplitModel> SplitModelFactory::createSplitModel(const std::strin
 SPLIT_MODEL_REGISTER(kProcessorDVM, DVMSplitModel);
 // Register AKGSplitModel for "akg" processor
 SPLIT_MODEL_REGISTER(kProcessorAKG, AKGSplitModel);
-// Register AscendNPUIRSplitModel for "ascend_npuir" processor
-SPLIT_MODEL_REGISTER(kProcessorASCENDNPUIR, AscendNPUIRSplitModel);
+// Register BishengSplitModel for "bisheng" processor
+SPLIT_MODEL_REGISTER(kProcessorBisheng, BishengSplitModel);
 
 }  // namespace split
 }  // namespace mfuse

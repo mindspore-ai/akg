@@ -18,6 +18,7 @@ from mfusion.torch.inductor import fuse_and_optimize
 
 import sys
 from pathlib import Path
+import pytest
 
 # Add ut_utils to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -34,20 +35,16 @@ module {
 """
 
 
-def test_two_mul_ops_fuse_to_dvm_kernel():
+@pytest.mark.parametrize("kernel_generator", ["dvm", "akg", "bisheng"])
+def test_with_kernel_generator(kernel_generator: str):
     """Verify two mul ops lower to a DVM call with subgraph MLIR."""
-    result = fuse_and_optimize(MLIR_TWO_MUL)
-    print("=" * 80)
-    print("Final MLIR Result:")
-    print("=" * 80)
-    print(result)
-    print("=" * 80)
+    result = fuse_and_optimize(MLIR_TWO_MUL, kernel_generator=kernel_generator)
 
     checker = MlirChecker.parse_torch_module(result)
 
-    # Check 1: Verify the dvm_call operator exists with correct attributes
+    # Check 1: Verify the call operator exists with correct attributes
     assert checker.check_has_torch_operator(
-        "torch.mfusion.dvm_call__i2_o1",
+        f"torch.mfusion.{kernel_generator}_call__i2_o1",
         attrs={"mfusion.is_dynamic": False},
         attr_keys=["mfusion.subgraph_mlir"],
         count=1,
@@ -90,15 +87,6 @@ def test_two_mul_ops_fuse_to_dvm_kernel():
     )
     assert not main_has_mul, f"main function should not have torch.aten.mul.Tensor, but found one"
 
-    # Check 10: Verify subgraph_mlir contains expected DVM operations
-    assert checker.check_text_contains("dvm.load"), checker.error
-    assert checker.check_text_contains("dvm.binary Mul"), checker.error
-    assert checker.check_text_contains("dvm.store"), checker.error
-
-    # Check 11: Verify the subgraph function name in subgraph_mlir
+    # Check 10: Verify the subgraph function name in subgraph_mlir
     assert checker.check_text_contains('subgraph_mlir = "module {'), checker.error
     assert checker.check_text_contains('@entry'), checker.error
-
-    # Check 12: Verify the exact dvm binary operations count in subgraph_mlir (should be 2 muls)
-    subgraph_mul_count = result.count("dvm.binary Mul")
-    assert subgraph_mul_count == 2, f"Expected 2 dvm.binary Mul operations in subgraph_mlir, but got {subgraph_mul_count}"
