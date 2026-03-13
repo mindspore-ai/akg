@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s --pass-pipeline="builtin.module(func.func(split{kernel-generator=AKG}))" | FileCheck %s
+// RUN: mfusion-opt %s --pass-pipeline="builtin.module(func.func(split{kernel-generator=akg}))" | FileCheck %s
 
 module {
 // Test 1: Single FusedOp with multiple outputs split into two FusedOps
