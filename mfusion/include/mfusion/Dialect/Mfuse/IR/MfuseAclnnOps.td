@@ -94,6 +94,26 @@ def Mfuse_AclnnBatchMatmulOp : Mfuse_Op<"aclnn.batch_matmul", [Pure]> {
   }];
 }
 
+def Mfuse_AclnnClampOp : Mfuse_Op<"aclnn.clamp", [Pure]> {
+  let summary = "Element-wise clamp operation";
+  let description = [{ 
+    Element-wise clamp operation. Clamps the value of each element in the input tensor to be within the 
+    specified min and max range. Computes: result = max(min(input, max_value), min_value)
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input,
+    AnyRankedTensor:$min,
+    AnyRankedTensor:$max
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{ 
+    $input `,` $min `,` $max attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_AclnnGeluBackwardOp : Mfuse_Op<"aclnn.gelu_backward", [Pure]> {
   let summary = "The aclnnGeluBackwardV2 operation";
   let description = [{
