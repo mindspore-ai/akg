@@ -130,8 +130,7 @@ std::vector<FusionPlan> FusionAnalyzer::topoSortFusionPlans(unsigned numNodes) {
     // Process all outgoing edges from this node
     for (auto &edge : uniqueDependencies) {
       if (edge.fusedBand.from == node) {
-        setFusionType(edge);
-        inferLoopTransforms(edge);
+        setFusionPlanOptions(edge);
         sortedEdges.push_back(edge);
         unsigned to = edge.fusedBand.to;
         inDegree[to]--;
@@ -359,7 +358,24 @@ bool FusionAnalyzer::hasEdgeInFusionPlans(unsigned depGroupId, unsigned fromGrou
 // Determines fusion type: if the nodes that to depends on exist in fusionPlans and have edges (forward) to from,
 // or if from itself is a node that to directly or indirectly depends on (in the dependency graph),
 // then the type is H (provided the dependent node is not load), otherwise it is V
-void FusionAnalyzer::setFusionType(FusionPlan &plan) {
+void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
+  // Infer loop transforms based on group templates (merged from inferLoopTransforms)
+  auto sourceGroup = groups[plan.fusedGroup.from];
+  auto targetGroup = groups[plan.fusedGroup.to];
+  if (sourceGroup != nullptr && targetGroup != nullptr) {
+    if (targetGroup->groupTemplate == OperatorTemplate::Broadcast) {
+      plan.loopTransform = LoopTransform::Replicate;
+    } else if (targetGroup->groupTemplate == OperatorTemplate::Transpose) {
+      if (sourceGroup->groupTemplate == OperatorTemplate::Reshape) {
+        plan.loopTransform = LoopTransform::StripMine;
+      }
+    } else if (targetGroup->groupTemplate == OperatorTemplate::Reduction) {
+      if (sourceGroup->groupTemplate == OperatorTemplate::ReductionInit) {
+        plan.loopTransform = LoopTransform::ReplicateIf;
+      }
+    }
+  }
+
   unsigned fromGroupId = plan.fusedGroup.from;
   unsigned toGroupId = plan.fusedGroup.to;
   auto fromGroup = depGraph.getGroup(fromGroupId);
@@ -456,19 +472,13 @@ void FusionAnalyzer::redirectFusionPlanToTarget(unsigned intersectionId,
 // finds the closest backward intersection point (shortest total path), and redirects
 // the shorter path to the starting group of the longer path to optimize the fusion structure.
 //
-// Example:
-// Assume: newGroup has groupId=19 with fusion plan 19->29
-//         oldGroup has groupId=19 with fusion plan 19->34
-//         fusionPlans contains: 29->39, 34->39
-//
-// Fusion result:
-// 19->29, 29->34, 34->39
-GroupPtr FusionAnalyzer::handleBackwardIntersectionPoints(const GroupPtr oldGroup, const GroupPtr newGroup) {
-  // Find all reachable groups from oldGroup and newGroup
+// Finds whether there exists a backward intersection point between oldGroup and newGroup.
+// On success writes the intersection (shortest total path and reachable sets) into result and returns true.
+bool FusionAnalyzer::findBackwardIntersection(const GroupPtr oldGroup, const GroupPtr newGroup,
+                                              BackwardIntersectionResult &result) {
   auto oldReachable = findReachableGroups(oldGroup->groupId);
   auto newReachable = findReachableGroups(newGroup->groupId);
 
-  // Find the backward intersection point with the shortest total distance (oldPathLen + newPathLen)
   unsigned closestIntersectionId = 0;
   unsigned minTotalDistance = std::numeric_limits<unsigned>::max();
   unsigned minOldPathLen = std::numeric_limits<unsigned>::max();
@@ -476,12 +486,10 @@ GroupPtr FusionAnalyzer::handleBackwardIntersectionPoints(const GroupPtr oldGrou
   bool foundIntersection = false;
 
   for (const auto &[groupId, oldPathLen] : oldReachable) {
-    if (newReachable.find(groupId) != newReachable.end()) {
-      unsigned newPathLen = newReachable[groupId];
+    auto newIt = newReachable.find(groupId);
+    if (newIt != newReachable.end()) {
+      unsigned newPathLen = newIt->second;
       unsigned totalDistance = oldPathLen + newPathLen;
-
-      // Track the backward intersection point with the shortest total distance
-      // If total distances are equal, prefer the one with shorter individual path
       if (totalDistance < minTotalDistance) {
         minTotalDistance = totalDistance;
         closestIntersectionId = groupId;
@@ -492,20 +500,39 @@ GroupPtr FusionAnalyzer::handleBackwardIntersectionPoints(const GroupPtr oldGrou
     }
   }
 
-  // If no backward intersection points, return nullptr
   if (!foundIntersection) {
-    return nullptr;
+    return false;
   }
+  result.closestIntersectionId = closestIntersectionId;
+  result.minOldPathLen = minOldPathLen;
+  result.minNewPathLen = minNewPathLen;
+  result.oldReachable = std::move(oldReachable);
+  result.newReachable = std::move(newReachable);
+  return true;
+}
+
+// Example:
+// Assume: newGroup has groupId=19 with fusion plan 19->29
+//         oldGroup has groupId=19 with fusion plan 19->34
+//         fusionPlans contains: 29->39, 34->39
+//
+// Fusion result:
+// 19->29, 29->34, 34->39
+GroupPtr FusionAnalyzer::handleBackwardIntersectionPoints(const GroupPtr oldGroup, const GroupPtr newGroup,
+                                                          const BackwardIntersectionResult &intersection) {
+  unsigned closestIntersectionId = intersection.closestIntersectionId;
+  unsigned minOldPathLen = intersection.minOldPathLen;
+  unsigned minNewPathLen = intersection.minNewPathLen;
+  const auto &oldReachable = intersection.oldReachable;
+  const auto &newReachable = intersection.newReachable;
 
   // Check cache: normalize cache key to handle reversed (oldGroup, newGroup) order
-  // Ensure first groupId is always smaller to make (A, B, C) and (B, A, C) equivalent
   unsigned firstGroupId = std::min(oldGroup->groupId, newGroup->groupId);
   unsigned secondGroupId = std::max(oldGroup->groupId, newGroup->groupId);
   auto cacheKey = std::make_tuple(firstGroupId, secondGroupId, closestIntersectionId);
   auto cacheIt = intersectionCache.find(cacheKey);
   if (cacheIt != intersectionCache.end()) {
-    unsigned cachedTargetGroupId = cacheIt->second;
-    auto cachedTargetGroup = depGraph.getGroup(cachedTargetGroupId);
+    auto cachedTargetGroup = depGraph.getGroup(cacheIt->second);
     if (cachedTargetGroup != nullptr) {
       return cachedTargetGroup;
     }
@@ -514,7 +541,6 @@ GroupPtr FusionAnalyzer::handleBackwardIntersectionPoints(const GroupPtr oldGrou
   // Determine which group has shorter path and redirect accordingly
   GroupPtr targetGroup;
   if (minOldPathLen < minNewPathLen) {
-    // Old path is shorter, redirect it to newGroup
     if (minOldPathLen == 0) {
       targetGroup = newGroup;
     } else {
@@ -522,7 +548,6 @@ GroupPtr FusionAnalyzer::handleBackwardIntersectionPoints(const GroupPtr oldGrou
       targetGroup = oldGroup;
     }
   } else {
-    // New path is shorter or equal, redirect it to oldGroup
     if (minNewPathLen == 0) {
       targetGroup = oldGroup;
     } else {
@@ -584,6 +609,16 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
     return false;
   }
 
+  // Only consider multi-out when fusedNode's from and to are both load-only nodes
+  // bool bothLoad = false;
+  // if (auto *fromNode = depGraph.getNode(fusePlan.fusedNode.from)) {
+  //   if (auto *toNode = depGraph.getNode(fusePlan.fusedNode.to)) {
+  //     auto fromOp = fromNode->op;
+  //     auto toOp = toNode->op;
+  //     bothLoad = fromOp && toOp && isa<affine::AffineLoadOp>(fromOp) && isa<affine::AffineLoadOp>(toOp);
+  //   }
+  // }
+
   for (auto it = fusionPlans.begin(); it != fusionPlans.end(); ++it) {
     auto &oldPlan = *it;
     bool multiOut = oldPlan.fusedGroup.from == fusePlan.fusedGroup.from;
@@ -597,13 +632,17 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
       }
 
       // Check if backward intersection points exist
-      auto targetGroup = handleBackwardIntersectionPoints(oldGroup, newGroup);
-      if (targetGroup != nullptr) {
-        // Fuse the shorter path to the longer one based on distance to intersection, update the shorter fusion path
-        // Example: A->B->E, C->D->E, update to A->B->C->D->E
-        updateFusionPlanByGroup(oldPlan.fusedGroup.from, oldPlan.fusedGroup.to, targetGroup->groupId,
-                                targetGroup->rootId);
-        return false;
+      BackwardIntersectionResult intersection;
+      bool foundIntersection = findBackwardIntersection(oldGroup, newGroup, intersection);
+      if (foundIntersection) {
+        GroupPtr targetGroup = handleBackwardIntersectionPoints(oldGroup, newGroup, intersection);
+        if (targetGroup != nullptr) {
+          // Fuse the shorter path to the longer one based on distance to intersection, update the shorter fusion path
+          // Example: A->B->E, C->D->E, update to A->B->C->D->E
+          updateFusionPlanByGroup(oldPlan.fusedGroup.from, oldPlan.fusedGroup.to, targetGroup->groupId,
+                                  targetGroup->rootId);
+          return false;
+        }
       }
 
       // No backward intersection points, fuse the new fuseplan into the old fuseplan
@@ -624,36 +663,14 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
   return true;
 }
 
-void FusionAnalyzer::inferLoopTransforms(FusionPlan &plan) {
-  // Get source and target groups from the plan
-  auto sourceGroup = groups[plan.fusedGroup.from];
-  auto targetGroup = groups[plan.fusedGroup.to];
-
-  if (sourceGroup == nullptr || targetGroup == nullptr) {
-    return;
-  }
-
-  // Infer loop transforms based on group templates and set them directly in the plan
-  if (targetGroup->groupTemplate == OperatorTemplate::Broadcast) {
-    plan.loopTransform = LoopTransform::Replicate;
-  } else if (targetGroup->groupTemplate == OperatorTemplate::Transpose) {
-    if (sourceGroup->groupTemplate == OperatorTemplate::Reshape) {
-      plan.loopTransform = LoopTransform::StripMine;
-    }
-  } else if (targetGroup->groupTemplate == OperatorTemplate::Reduction) {
-    if (sourceGroup->groupTemplate == OperatorTemplate::ReductionInit) {
-      plan.loopTransform = LoopTransform::ReplicateIf;
-    }
-  }
-}
-
 // Applies loop transforms and fuses source group into target group.
 // Records the fusion plan and updates group relationships.
-void FusionAnalyzer::applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup) {
+void FusionAnalyzer::applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup, unsigned targetNodeId,
+                                  unsigned sourceNodeId) {
   sourceGroup->fusedGroupId.emplace_back(targetGroup->groupId);
 
-  for (auto fuseTargetId : targetGroup->nodesId) {
-    finished.insert(fuseTargetId);
+  for (auto targetId : targetGroup->nodesId) {
+    finished.insert(targetId);
   }
 
   // Get the for node IDs of sourceGroup and targetGroup
@@ -662,9 +679,9 @@ void FusionAnalyzer::applyAndFuse(const GroupPtr targetGroup, const GroupPtr sou
   FusionPlan fusePlan;
   fusePlan.fusedGroup = FuseEdge(sourceGroup->groupId, targetGroup->groupId);
   fusePlan.fusedBand = FuseEdge(srcNodeId, dstNodeId);
+  fusePlan.fusedNode = FuseEdge(sourceNodeId, targetNodeId);
 
   bool shouldInsert = checkAndFixMultiOut(fusePlan);
-
   if (shouldInsert) {
     addFusionPlan(fusePlan);
   }
@@ -774,9 +791,6 @@ DependenceInfo FusionAnalyzer::getGroupDependencies(const GroupPtr targetGroup, 
         continue;
       }
 
-      // Found a dependency edge - record the main operations (targetNodeId and predId) and memref and loopDepth
-      depInfo.sourceOps.push_back(predNodeId);
-      depInfo.targetOps.push_back(targetNodeId);
       depInfo.loopDepth = std::min(depInfo.loopDepth, directPred.loopDepth);
       if (isa<MemRefType>(directPred.memref.getType())) {
         depInfo.memrefs.push_back(directPred.memref);
@@ -801,35 +815,35 @@ void FusionAnalyzer::plan() {
       break;
     }
 
-    std::vector<unsigned> sourceGroupIds;
-    for (auto fuseTargetId : targetGroup->nodesId) {
-      auto it = directPredecessorsCache.find(fuseTargetId);
+    // (sourceGroupId, sourceNodeId, targetNodeId)
+    std::vector<std::tuple<unsigned, unsigned, unsigned>> sourceEntries;
+    for (auto targetNodeId : targetGroup->nodesId) {
+      auto it = directPredecessorsCache.find(targetNodeId);
       if (it == directPredecessorsCache.end()) {
         continue;
       }
 
       const auto &directPreds = it->second;
-      // Use a set to track unique group IDs we've already seen
       std::unordered_set<unsigned> seenGroupIds;
       for (const auto &directPred : directPreds) {
-        auto id = directPred.nodeId;
-        auto tmp = depGraph.getGroupByNode(id);
-        if (tmp != nullptr && tmp->groupId != targetGroup->groupId) {
-          if (seenGroupIds.insert(tmp->groupId).second) {
-            sourceGroupIds.emplace_back(tmp->groupId);
+        unsigned sourceNodeId = directPred.nodeId;
+        auto sourceGroup = depGraph.getGroupByNode(sourceNodeId);
+        if (sourceGroup != nullptr && sourceGroup->groupId != targetGroup->groupId) {
+          if (seenGroupIds.insert(sourceGroup->groupId).second) {
+            sourceEntries.emplace_back(sourceGroup->groupId, sourceNodeId, targetNodeId);
           }
         }
       }
     }
-    if (sourceGroupIds.empty()) {
-      for (auto fuseTargetId : targetGroup->nodesId) {
-        finished.insert(fuseTargetId);
+    if (sourceEntries.empty()) {
+      for (auto targetNodeId : targetGroup->nodesId) {
+        finished.insert(targetNodeId);
       }
       continue;
     }
-    for (auto id : sourceGroupIds) {
-      auto sourceGroup = groups[id];
-      applyAndFuse(targetGroup, sourceGroup);
+    for (const auto &[sourceGroupId, sourceNodeId, targetNodeId] : sourceEntries) {
+      auto sourceGroup = groups[sourceGroupId];
+      applyAndFuse(targetGroup, sourceGroup, targetNodeId, sourceNodeId);
     }
   }
 
@@ -852,6 +866,7 @@ void FusionAnalyzer::print(llvm::raw_ostream &os) const {
     os << "FusionPlan: Group [" << plan.fusedGroup.from << " -> " << plan.fusedGroup.to << "], "
        << "Band [" << plan.fusedBand.from << " -> " << plan.fusedBand.to << "], "
        << "FusionType: " << plan.fusionType << ", "
+       << "LoopDepth: " << plan.depInfo.loopDepth << ", "
        << "LoopTransform: " << loopTransformToStr[static_cast<int>(plan.loopTransform)] << "\n";
   }
 }
