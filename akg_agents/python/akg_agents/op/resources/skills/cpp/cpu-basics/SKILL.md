@@ -386,6 +386,28 @@ TORCH_CHECK(x.dim() > 0, "Input tensor must have at least one dimension");
 3. **避免动态分配**: 内核内避免 new/delete
 4. **清晰注释**: 添加充分的注释说明计算逻辑
 
+### OpenMP并行编程约束
+
+1. **⚠️ 关键约束**: OpenMP运行时API调用位置限制
+   - **禁止场景**: 不得在SIMD区域、并行区域的intervening code中调用`omp_get_thread_num()`等OpenMP运行时API
+   - **正确用法**: OpenMP API应在并行区域内的正常代码路径中调用,而非在编译器受限的上下文中
+   - **错误示例**:
+     ```cpp
+     // ❌ 错误:在受限上下文中调用OpenMP API
+     std::mt19937 gen(seed + omp_get_thread_num());  // 编译错误!
+     ```
+   - **正确示例**:
+     ```cpp
+     // ✅ 正确:在并行区域内正常调用
+     #pragma omp parallel
+     {
+         int tid = omp_get_thread_num();  // 正确
+         std::mt19937 gen(seed + tid);
+     }
+     ```
+2. **线程安全**: 确保每个线程有独立的随机数生成器实例
+3. **数据竞争**: 避免多个线程同时写入同一内存位置
+
 ### 代码风格要求
 
 1. **不包含测试代码**: 生成的代码不要包含任何测试代码

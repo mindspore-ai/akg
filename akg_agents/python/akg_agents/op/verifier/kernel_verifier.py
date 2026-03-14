@@ -1352,7 +1352,7 @@ if __name__ == "__main__":
             if self.backend == "ascend":
                 code = f"""        # 非triton实现，使用 profiler_npu 计时
         try:
-            from akg_agents.core.verifier.profiler import profiler_npu
+            from akg_agents.op.verifier.profiler import profiler_npu
             patch_imported = True
         except ImportError:
             patch_imported = False

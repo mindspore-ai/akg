@@ -220,13 +220,10 @@ def flash_attention_triton_torch(
 
     stage = 3 if is_causal else 1
 
-    if scale is None:
-        sm_scale = 1.0 / (HEAD_DIM_K**0.5)
-    else:
-        sm_scale = scale
+    sm_scale = 1.0 / (HEAD_DIM_K**0.5)
 
     grid = lambda args: (
-        triton.cdiv(query.shape[2], 64),
+        triton.cdiv(query.shape[2], args['BLOCK_M']),
         query.shape[0] * query.shape[1],
         1,
     )
@@ -242,7 +239,7 @@ def flash_attention_triton_torch(
         PRE_LOAD_V=False
         mask_strides = (1, 1, 1, 1)
 
-    _attn_fwd[grid](
+    flash_attention_kernel[grid](
         query, key, value, attn_mask, sm_scale, o,
         query.stride(0), query.stride(1), query.stride(2), query.stride(3),
         key.stride(0), key.stride(1), key.stride(2), key.stride(3),

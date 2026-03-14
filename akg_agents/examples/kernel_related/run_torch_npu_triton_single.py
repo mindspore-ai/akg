@@ -24,7 +24,7 @@ import os
 
 
 def get_op_name():
-    return 'relu'
+    return 'akg_custom'
 
 
 def get_task_desc():
