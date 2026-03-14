@@ -19,6 +19,8 @@
 import os
 import pytest
 
+os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
+
 from akg_agents.core_v2.llm import (
     create_llm_client,
     LLMProvider,

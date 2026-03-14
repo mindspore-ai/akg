@@ -22,6 +22,7 @@ warnings.warn(
 )
 
 import logging
+import re
 from typing import Tuple, List
 from pathlib import Path
 from akg_agents.op.database.coder_database import CoderDatabase
@@ -89,12 +90,10 @@ class Coder(AgentBase):
         super().__init__(context=context, config=config)
 
         # 使用新的 parser loader（不依赖 workflow.yaml）
+        # 去 JSON 化：coder 不再使用 parser，直接输出纯代码
         from akg_agents.utils.parser_loader import create_agent_parser
         self.code_parser = create_agent_parser("coder", self.parser_config_path)
-        if not self.code_parser:
-            raise ValueError(
-                "Failed to create coder parser. Please check your parser_config.yaml configuration.")
-        self.format_instructions = self.code_parser.get_format_instructions()
+        self.format_instructions = self.code_parser.get_format_instructions() if self.code_parser else ""
 
         if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
             if self.dsl == "triton_cuda":
@@ -198,6 +197,21 @@ class Coder(AgentBase):
             return ""
 
         return "\n".join(all_code)
+
+    @staticmethod
+    def _extract_code(raw_output: str, dsl: str = "") -> str:
+        """从 LLM 输出中提取纯代码。
+
+        支持从 ```python / ```cpp / ```cuda 等代码块提取。
+        若模型直接输出纯代码（无 markdown 包裹），则返回 strip 后的内容。
+        """
+        code = raw_output.strip()
+        # 容错：如果模型用了 ```xxx ... ``` 包裹，提取内部内容
+        pattern = r'```(?:python|cpp|cuda|c\+\+|cuda-c|triton)?\s*\n(.*?)```'
+        matches = re.findall(pattern, code, re.DOTALL)
+        if matches:
+            code = max(matches, key=len).strip()
+        return code
 
     async def _generate_api_docs(self, sketch: str, conductor_suggestion: str, task_info: dict) -> str:
         """
@@ -452,7 +466,12 @@ class Coder(AgentBase):
             self.context.update(to_update_codegen_details)
 
             # 执行LLM生成
-            return await self.run_llm(self.coder_prompt, input_data, self.model_config.get("coder") or "standard")
+            raw_output, prompt, reasoning = await self.run_llm(
+                self.coder_prompt, input_data, self.model_config.get("coder") or "standard"
+            )
+            # 去 JSON 化：从 LLM 输出中提取纯代码
+            generated_code = self._extract_code(raw_output, self.dsl)
+            return generated_code, prompt, reasoning
         except Exception as e:
             logger.error(f"Exception in coder.run: {type(e).__name__}: {e}")
             raise

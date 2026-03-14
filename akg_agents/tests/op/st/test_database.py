@@ -22,10 +22,13 @@ CoderDatabase 测试用例
 4. 异步并发操作
 """
 
+import os
 import pytest
 import asyncio
 import shutil
 from pathlib import Path
+
+os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
 from akg_agents import get_project_root
 from akg_agents.op.database.coder_database import CoderDatabase, DEFAULT_BENCHMARK_PATH
 from akg_agents.op.database.coder_vector_store import CoderVectorStore

@@ -23,6 +23,10 @@ KernelGen Agent - 基于 Skill 系统的内核代码生成 Agent
 """
 
 import logging
+import os
+import re
+import py_compile
+import tempfile
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional
 from akg_agents import get_project_root
@@ -144,42 +148,22 @@ class KernelGen(AgentBase):
         "required": ["op_name", "task_desc", "dsl", "framework", "backend"]
     }
     
-    def __init__(self, parser_config_path: str = None):
-        """
-        初始化 KernelGen Agent
+    def __init__(self):
+        """初始化 KernelGen Agent"""
         
-        Args:
-            parser_config_path: parser 配置文件路径（可选）
-        """
-        
-        # 生成计数器（用于追踪生成步骤）
         self.codegen_step_count = 0
-        self.parser_config_path = parser_config_path
         
-        # 构建基础上下文
         context = {
             "agent_name": "kernel_gen",
             "task_label": "main",
         }
         
-        # 初始化父类
         super().__init__(context=context)
         
-        # ==================== Parser 初始化 ====================
-        # 使用新的 parser loader
-        from akg_agents.utils.parser_loader import create_agent_parser
-        self.code_parser = create_agent_parser("kernel_gen", self.parser_config_path)
-        if not self.code_parser:
-            raise ValueError(
-                "Failed to create kernel_gen parser. Please check your parser_config.yaml configuration.")
-        self.format_instructions = self.code_parser.get_format_instructions()
-        
         # ==================== Skill 系统初始化 ====================
-        # 初始化 Skill Registry 和 Selector
         self._init_skills()
         
         # ==================== Prompt 模板初始化 ====================
-        # 加载 jinja2 模板
         self.system_prompt_template = self.load_template("kernel_gen/system_prompt.j2")
         self.user_prompt_template = self.load_template("kernel_gen/user_prompt.j2")
     
@@ -383,6 +367,45 @@ class KernelGen(AgentBase):
         
         return "\n\n---\n\n".join(skill.content for skill in sorted_skills)
     
+    @staticmethod
+    def _extract_code(raw_output: str) -> str:
+        """从 LLM 输出中提取纯 Python 代码。
+        
+        预期 LLM 直接输出纯代码（无 markdown 包裹）。
+        如果模型仍然输出了 ```python``` 包裹，则做容错清理。
+        """
+        code = raw_output.strip()
+        
+        # 容错：如果模型还是用了 ```python ... ``` 包裹，提取内部内容
+        pattern = r'```(?:python)?\s*\n(.*?)```'
+        matches = re.findall(pattern, code, re.DOTALL)
+        if matches:
+            code = max(matches, key=len).strip()
+        
+        return code
+    
+    @staticmethod
+    def _validate_syntax(code: str) -> Tuple[bool, str]:
+        """使用 py_compile 验证 Python 代码语法。
+        
+        Returns:
+            Tuple[bool, str]: (是否通过, 错误信息)
+        """
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                suffix='.py', mode='w', delete=False, encoding='utf-8'
+            ) as f:
+                f.write(code)
+                tmp_path = f.name
+            py_compile.compile(tmp_path, doraise=True)
+            return True, ""
+        except py_compile.PyCompileError as e:
+            return False, str(e)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+    
     async def run(
         self,
         op_name: str,
@@ -469,11 +492,19 @@ class KernelGen(AgentBase):
                 task_desc=task_desc,
                 user_requirements=user_requirements,
                 previous_code=previous_code,
-                format_instructions=self.format_instructions
             )
             
-            # 5. 组合完整 prompt
-            full_prompt = f"{system_prompt}\n\n{user_prompt}"
+            # 5. 组合完整 prompt，末尾追加输出格式硬约束
+            output_instruction = (
+                "\n\n## 输出格式（必须严格遵守）\n\n"
+                "请直接输出纯 Python 代码。你的输出会被直接保存为 .py 文件并执行，因此：\n"
+                "- 不要使用 ```python``` 代码块包裹\n"
+                "- 不要使用 JSON 格式\n"
+                "- 不要输出任何非代码内容（不要有解释文字、不要有 markdown 标记）\n"
+                "- 相关的思考分析，请以 Python 注释的方式写在代码中\n"
+                "- 确保代码完整可执行，包含所有 import 语句和 class 定义\n"
+            )
+            full_prompt = f"{system_prompt}\n\n{user_prompt}{output_instruction}"
             
             # 6. 创建 Jinja2 模板包装（用于 run_llm）
             template = Jinja2TemplateWrapper("{{ prompt }}")
@@ -494,11 +525,21 @@ class KernelGen(AgentBase):
             self.context.update(to_update_details)
             
             # 8. 调用 LLM
-            generated_code, formatted_prompt, reasoning = await self.run_llm(
+            raw_output, formatted_prompt, reasoning = await self.run_llm(
                 template,
                 {"prompt": full_prompt},
                 model_level or "standard"
             )
+            
+            # 9. 从 LLM 输出中提取纯代码
+            generated_code = self._extract_code(raw_output)
+            
+            # 10. 使用 py_compile 验证语法
+            syntax_ok, syntax_error = self._validate_syntax(generated_code)
+            if syntax_ok:
+                logger.info(f"[KernelGen] py_compile 语法校验通过")
+            else:
+                logger.warning(f"[KernelGen] py_compile 语法校验失败: {syntax_error}")
             
             return generated_code, formatted_prompt, reasoning
         
