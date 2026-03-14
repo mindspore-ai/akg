@@ -348,7 +348,6 @@ class KernelGen(AgentBase):
             logger.info(f"LLM selected {len(selected)} skills: {[s.name for s in selected]}")
             if reason:
                 logger.info(f"Selection reason: {reason}")
-            import pdb; pdb.set_trace()
             return selected if selected else filtered
             
         except Exception as e:
