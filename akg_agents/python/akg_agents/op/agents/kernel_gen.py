@@ -230,6 +230,15 @@ class KernelGen(AgentBase):
         if not self.skill_selector or not loaded_skills:
             return []
         
+        # [HACK] 算子类型精确匹配：attention 类只加载 attention skill，避免 prompt 膨胀
+        ATTENTION_KEYWORDS = ["attention", "flash_attn", "sdpa", "scaled_dot_product", "gqa", "mqa"]
+        combined_text = (op_name + " " + task_desc).lower()
+        if any(kw in combined_text for kw in ATTENTION_KEYWORDS):
+            attention_only = [s for s in loaded_skills if "attention" in s.name.lower()]
+            if attention_only:
+                logger.info(f"[KernelGen] Attention 算子检测到，仅加载 attention skill: {[s.name for s in attention_only]}")
+                return attention_only
+        
         try:
             # 阶段1：粗筛（使用 OperatorSkillSelector）
             context = OperatorSelectionContext(
