@@ -22,6 +22,9 @@ CodeChecker LLM 模式系统测试
 import pytest
 import asyncio
 import os
+
+os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
+
 from akg_agents.core.checker import CodeChecker
 
 

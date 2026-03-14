@@ -26,28 +26,8 @@ parsers:
           mandatory: true
           field_description: "Algorithm pseudocode implementation"
 
-  coder:
-    parser_name: coder_parser
-    parser_definition:
-      output_fields:
-        code:
-          field_type: str
-          mandatory: true
-          field_description: "Complete executable code implementation"
-
-  kernel_gen:
-    parser_name: kernel_gen_parser
-    parser_definition:
-      output_fields:
-        code:
-          field_type: str
-          mandatory: true
-          field_description: "Generated kernel code"
-        reasoning:
-          field_type: str
-          mandatory: false
-          field_description: "Reasoning or explanation for the generated code"
-
+  # coder no longer uses a parser - it outputs raw code directly (de-JSON-ified)
+  # kernel_gen no longer uses a parser - it outputs raw Python code directly
   # verifier does not need a parser (programmatic verification)
   # verifier returns structured data directly
 

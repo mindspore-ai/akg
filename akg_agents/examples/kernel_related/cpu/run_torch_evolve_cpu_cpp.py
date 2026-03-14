@@ -22,6 +22,7 @@
   python examples/kernel_related/run_torch_evolve_cpu_cpp.py
 """
 
+import os
 import asyncio
 from akg_agents.op.evolve import evolve
 from akg_agents.core.async_pool.task_pool import TaskPool
@@ -30,6 +31,7 @@ from akg_agents.utils.environment_check import check_env_for_task
 from akg_agents.op.utils.evolve.runner_manager import RunnerConfig, print_evolve_config, print_evolution_result
 from akg_agents.core.worker.manager import register_local_worker
 
+# os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
 
 def get_op_name():
     return 'akg_agents_relu'
