@@ -229,6 +229,8 @@ class EvolveWorkflow(OpBaseWorkflow):
         # 需要 KernelGen（Skill 系统），但不需要 KernelDesigner
         full_config["default_workflow"] = "kernelgen_only_workflow"
         full_config["skip_kernel_designer"] = True
+        # 禁用 sketch 生成（因为 kernelgen_only_workflow 不需要 sketch）
+        full_config["enable_sketch_generation"] = False
         
         workflow_resources["config"] = full_config
         

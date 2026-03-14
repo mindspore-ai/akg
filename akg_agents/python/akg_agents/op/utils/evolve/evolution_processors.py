@@ -732,32 +732,43 @@ class ResultProcessor:
             
             # 异步生成sketch
             if successful_impls:
-                sketch_tasks = []
-                for impl_info in successful_impls:
-                    if impl_info['impl_code']:
-                        sketch_task = partial(sketch_agent.run, impl_info['task_info'])
-                        task_pool.create_task(sketch_task)
-                        sketch_tasks.append(impl_info)
-                
-                if sketch_tasks:
-                    sketch_results = await task_pool.wait_all()
-                    task_pool.tasks.clear()
-                    
-                    for i, impl_info in enumerate(sketch_tasks):
-                        if impl_info['impl_code'] and i < len(sketch_results):
-                            sketch_content = sketch_results[i]
-                            impl_info['sketch'] = sketch_content if not isinstance(sketch_content, Exception) else ""
-                        
+                # 检查 sketch 生成开关
+                if not self.config.config.get("enable_sketch_generation", True):
+                    logger.debug("Sketch generation disabled by config")
+                    # 即使不生成 sketch，也要保存实现
+                    for impl_info in successful_impls:
+                        impl_info['sketch'] = ""
                         all_implementations.append(impl_info)
-                        
-                        # 保存到岛屿存储
                         save_implementation(impl_info, self.config.islands_storage_dirs[island_idx])
-                        
-                        # 添加到全局最佳实现列表
                         self.init_data['best_implementations'].append(impl_info)
-                        
-                        # 添加到岛屿实现列表
                         self.init_data['island_impls'][island_idx].append(impl_info)
+                else:
+                    sketch_tasks = []
+                    for impl_info in successful_impls:
+                        if impl_info['impl_code']:
+                            sketch_task = partial(sketch_agent.run, impl_info['task_info'])
+                            task_pool.create_task(sketch_task)
+                            sketch_tasks.append(impl_info)
+                    
+                    if sketch_tasks:
+                        sketch_results = await task_pool.wait_all()
+                        task_pool.tasks.clear()
+                        
+                        for i, impl_info in enumerate(sketch_tasks):
+                            if impl_info['impl_code'] and i < len(sketch_results):
+                                sketch_content = sketch_results[i]
+                                impl_info['sketch'] = sketch_content if not isinstance(sketch_content, Exception) else ""
+                            
+                            all_implementations.append(impl_info)
+                            
+                            # 保存到岛屿存储
+                            save_implementation(impl_info, self.config.islands_storage_dirs[island_idx])
+                            
+                            # 添加到全局最佳实现列表
+                            self.init_data['best_implementations'].append(impl_info)
+                            
+                            # 添加到岛屿实现列表
+                            self.init_data['island_impls'][island_idx].append(impl_info)
             
             # 更新精英库
             if successful_impls:
@@ -833,27 +844,37 @@ class ResultProcessor:
         
         # 异步生成sketch
         if successful_impls:
-            sketch_tasks = []
-            for impl_info in successful_impls:
-                if impl_info['impl_code']:
-                    sketch_task = partial(sketch_agent.run, impl_info['task_info'])
-                    task_pool.create_task(sketch_task)
-                    sketch_tasks.append(impl_info)
-            
-            if sketch_tasks:
-                sketch_results = await task_pool.wait_all()
-                task_pool.tasks.clear()
-                
-                for i, impl_info in enumerate(sketch_tasks):
-                    if impl_info['impl_code'] and i < len(sketch_results):
-                        sketch_content = sketch_results[i]
-                        impl_info['sketch'] = sketch_content if not isinstance(sketch_content, Exception) else ""
-                    
+            # 检查 sketch 生成开关
+            if not self.config.config.get("enable_sketch_generation", True):
+                logger.debug("Sketch generation disabled by config")
+                # 即使不生成 sketch，也要保存实现
+                for impl_info in successful_impls:
+                    impl_info['sketch'] = ""
                     round_implementations.append(impl_info)
                     self.init_data['best_implementations'].append(impl_info)
-                    
-                    # 保存到本地文件
                     save_implementation(impl_info, self.config.storage_dir)
+            else:
+                sketch_tasks = []
+                for impl_info in successful_impls:
+                    if impl_info['impl_code']:
+                        sketch_task = partial(sketch_agent.run, impl_info['task_info'])
+                        task_pool.create_task(sketch_task)
+                        sketch_tasks.append(impl_info)
+                
+                if sketch_tasks:
+                    sketch_results = await task_pool.wait_all()
+                    task_pool.tasks.clear()
+                    
+                    for i, impl_info in enumerate(sketch_tasks):
+                        if impl_info['impl_code'] and i < len(sketch_results):
+                            sketch_content = sketch_results[i]
+                            impl_info['sketch'] = sketch_content if not isinstance(sketch_content, Exception) else ""
+                        
+                        round_implementations.append(impl_info)
+                        self.init_data['best_implementations'].append(impl_info)
+                        
+                        # 保存到本地文件
+                        save_implementation(impl_info, self.config.storage_dir)
         
         round_success_rate = round_success_count / round_total_count if round_total_count > 0 else 0.0
         

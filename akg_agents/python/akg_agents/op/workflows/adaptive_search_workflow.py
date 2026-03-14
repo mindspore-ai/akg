@@ -211,6 +211,8 @@ class AdaptiveSearchWorkflow(OpBaseWorkflow):
         
         # adaptive_search 内部的 LangGraphTask 使用 kernelgen_only_workflow
         full_config["default_workflow"] = "kernelgen_only_workflow"
+        # 禁用 sketch 生成
+        full_config["enable_sketch_generation"] = False
         
         workflow_resources["config"] = full_config
         
