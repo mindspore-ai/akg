@@ -20,48 +20,89 @@ from akg_agents.utils.environment_check import check_env_for_task
 import asyncio
 import os
 # 注释掉流式输出，因为需要 session_id（TUI 模式才使用）
-# os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
+os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
 
 
 def get_op_name():
-    return 'relu'
+    return 'akg_custom'
 
 
 def get_task_desc():
     return '''
 import torch
+import torch
 import torch.nn as nn
 
 
 class Model(nn.Module):
-    """
-    ReLU激活函数模型
-    """
-    def __init__(self):
-        super(Model, self).__init__()
+    def __init__(self, sm_scale):
+        super().__init__()
+        self.sm_scale = sm_scale
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
         """
-        计算ReLU激活函数
+        Scaled Dot-Product Attention implementation using PyTorch's optimized function.
+        
+        This function computes: Attention(Q, K, V) = softmax(Q @ K^T * scale) @ V
+        
+        Input tensor layout (required by torch.nn.functional.scaled_dot_product_attention):
+            Shape: (B, H, L, D) where:
+            - B (Batch): Number of sequences processed in parallel
+            - H (Heads): Number of attention heads
+            - L (Length): Sequence length (number of tokens)
+            - D (Dimension): Embedding dimension per head
+            
+        Note: The sequence length MUST be at dimension -2 (second to last),
+              and embedding dimension MUST be at dimension -1 (last).
+        
         Args:
-            x: 输入张量
+            query: Query tensor of shape (B, H, L, D)
+            key: Key tensor of shape (B, H, S, D), where S can differ from L
+            value: Value tensor of shape (B, H, S, D)
+            
         Returns:
-            ReLU激活后的张量
+            Attention output of shape (B, H, L, D)
         """
-        return torch.relu(x)
-
-
-batch_size = 16
-dim = 16384
+        return torch.nn.functional.scaled_dot_product_attention(
+            query, key, value,
+            scale=self.sm_scale
+        )
 
 
 def get_inputs():
-    x = torch.randn(batch_size, dim, dtype=torch.float32, device='cpu')
-    return [x]
+    """
+    Generate input tensors for scaled dot-product attention.
+    
+    Tensor shape: (B, H, L, D)
+        B = 4     : Batch size (number of independent sequences)
+        H = 32    : Number of attention heads (multi-head attention)
+        L = 1024  : Sequence length (number of tokens in each sequence)
+        D = 64    : Head dimension (embedding size per attention head)
+    
+    Total model dimension = H * D = 32 * 64 = 2048
+    
+    Note: For inference, we don't need gradient computation, so .requires_grad_()
+          is removed. Use torch.no_grad() context or set requires_grad=False.
+    """
+    B, H, L, D = 4, 32, 1024, 64
+    dtype = torch.float32
+    
+    q = torch.empty((B, H, L, D), dtype=dtype).normal_(mean=0.0, std=0.5)
+    k = torch.empty((B, H, L, D), dtype=dtype).normal_(mean=0.0, std=0.5)
+    v = torch.empty((B, H, L, D), dtype=dtype).normal_(mean=0.0, std=0.5)
+    
+    return [q, k, v]
 
 
 def get_init_inputs():
-    return []  # No special initialization inputs needed
+    """
+    Initialize the scaling factor for attention.
+    
+    Standard scaling factor is 1/sqrt(D) = 1/sqrt(64) ≈ 0.125
+    Here we use 0.5 for demonstration purposes.
+    """
+    sm_scale = 0.5
+    return [sm_scale]
 '''
 
 

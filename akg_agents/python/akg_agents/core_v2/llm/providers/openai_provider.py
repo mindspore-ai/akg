@@ -82,11 +82,14 @@ class LLMProvider:
         if AsyncOpenAI is None:
             raise ImportError("请安装 openai: pip install openai")
         
+        # 注意：如果遇到 403 Forbidden 错误，可能是 API 拒绝 openai-python User-Agent
+        # 可以尝试设置 default_headers 覆盖 User-Agent（如 'python-httpx/0.28.1'）
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
             timeout=timeout,
-            http_client=httpx.AsyncClient(verify=False, timeout=timeout)
+            http_client=httpx.AsyncClient(verify=False, timeout=timeout),
+            default_headers={'User-Agent': 'python-httpx/0.28.1'},
         )
         
         logger.info(
@@ -117,23 +120,62 @@ class LLMProvider:
         
         response = await self.client.chat.completions.create(**request_kwargs)
         
+        # 检查响应是否有效
+        if not response.choices:
+            logger.error(f"API返回空的choices列表，完整响应: {response}")
+            raise ValueError(
+                f"API返回了无效的响应（choices为空）。\n"
+                f"这通常是因为：\n"
+                f"1. API服务出现问题\n"
+                f"2. 模型名称配置错误\n"
+                f"3. API密钥权限不足\n"
+                f"4. 请求参数不被该模型支持\n\n"
+                f"当前模型: {self.model_name}\n"
+                f"API地址: {self.client.base_url}"
+            )
+        
         # 转换为统一格式
         choice = response.choices[0]
-        # 兼容 reasoning_content / reasoning 两种字段名（与流式路径保持一致）
-        reasoning_content = (
-            getattr(choice.message, "reasoning_content", None)
-            or getattr(choice.message, "reasoning", None)
-            or ""
-        )
+        
+        # 某些API（如智谱GLM-5通过中转）在非流式响应中同时返回delta和message
+        # 需要优先使用message字段
+        if hasattr(choice, 'message') and choice.message:
+            content = choice.message.content or ""
+            # 兼容 reasoning_content / reasoning 两种字段名
+            reasoning = (
+                getattr(choice.message, "reasoning_content", None)
+                or getattr(choice.message, "reasoning", None)
+                or ""
+            )
+        elif hasattr(choice, 'delta') and choice.delta:
+            logger.warning("非流式响应中只有delta字段，这是非标准格式")
+            content = choice.delta.content or ""
+            reasoning = (
+                getattr(choice.delta, "reasoning_content", None)
+                or getattr(choice.delta, "reasoning", None)
+                or ""
+            )
+        else:
+            logger.error(f"无法从响应中提取内容，choice对象: {choice}")
+            content = ""
+            reasoning = ""
+        
         result = {
-            "content": choice.message.content or "",
+            "content": content,
             "tool_calls": [],
-            "reasoning_content": reasoning_content,
+            "reasoning_content": reasoning,
             "finish_reason": choice.finish_reason or "",
             "usage": {}
         }
         
-        if choice.message.tool_calls:
+        # 提取tool_calls（优先从message，降级到delta）
+        tool_calls_source = None
+        if hasattr(choice, 'message') and choice.message and hasattr(choice.message, 'tool_calls'):
+            tool_calls_source = choice.message.tool_calls
+        elif hasattr(choice, 'delta') and choice.delta and hasattr(choice.delta, 'tool_calls'):
+            tool_calls_source = choice.delta.tool_calls
+        
+        if tool_calls_source:
             result["tool_calls"] = [
                 {
                     "id": tc.id,
@@ -143,7 +185,7 @@ class LLMProvider:
                         "arguments": tc.function.arguments
                     }
                 }
-                for tc in choice.message.tool_calls
+                for tc in tool_calls_source
             ]
         
         if response.usage:
@@ -185,8 +227,34 @@ class LLMProvider:
         
         stream_response = await self.client.chat.completions.create(**request_kwargs)
         
+        chunk_count = 0
         async for chunk in stream_response:
-            delta = chunk.choices[0].delta
+            chunk_count += 1
+            
+            # 检查chunk是否有效
+            if not chunk.choices:
+                logger.warning(f"收到空的choices chunk (第{chunk_count}个)，完整chunk: {chunk}")
+                continue
+            
+            choice = chunk.choices[0]
+            
+            # 检查是否有delta字段（标准流式格式）
+            if not hasattr(choice, 'delta'):
+                logger.warning(f"chunk.choices[0]没有delta字段 (第{chunk_count}个)，尝试使用message字段")
+                # 某些非标准API可能在流式中也返回message而不是delta
+                if hasattr(choice, 'message'):
+                    # 将message当作delta处理（一次性返回完整内容）
+                    message = choice.message
+                    if message.content:
+                        content += message.content
+                        yield {"type": "content", "chunk": message.content}
+                    reasoning_chunk = getattr(message, "reasoning_content", None)
+                    if reasoning_chunk:
+                        reasoning += reasoning_chunk
+                        yield {"type": "reasoning", "chunk": reasoning_chunk}
+                continue
+            
+            delta = choice.delta
             
             if chunk.choices[0].finish_reason:
                 finish_reason = chunk.choices[0].finish_reason
