@@ -56,25 +56,48 @@ class Model(nn.Module):
 
 
 def get_inputs():
-    # Using shapes that are representative of large model computations in transformer models
-    # Shape (32, 8, 1024, 64) represents:
-    # - 32 batches
-    # - 8 attention heads
-    # - 1024 sequence length
-    # - 64 head dimension
-    batch, num_heads, seq_len, head_dim = 32, 8, 1024, 64
-    shape = (batch, num_heads, seq_len, head_dim)
+    """
+    Generate input tensors for attention with Rotary Position Embeddings (RoPE).
     
-    query = torch.randn(shape, dtype=torch.bfloat16)
-    key = torch.randn(shape, dtype=torch.bfloat16)
-    value = torch.randn(shape, dtype=torch.bfloat16)
+    Tensor shape: (B, H, L, D)
+        B = 32   : Batch size (number of independent sequences)
+        H = 8    : Number of attention heads (multi-head attention)
+        L = 1024 : Sequence length (number of tokens in each sequence)
+        D = 64   : Head dimension (embedding size per attention head)
+    
+    Total model dimension = H * D = 8 * 64 = 512
+    
+    Note: RoPE is applied to query and key tensors before attention computation,
+          encoding relative positional information through rotation in the complex plane.
+          This is used in models like LLaMA, PaLM, and GPT-NeoX.
+    """
+    B, H, L, D = 32, 8, 1024, 64
+    shape = (B, H, L, D)
+    
+    # Use smaller std to avoid float16 overflow in attention computation
+    query = torch.empty(shape, dtype=torch.float16).normal_(mean=0.0, std=0.1)
+    key = torch.empty(shape, dtype=torch.float16).normal_(mean=0.0, std=0.1)
+    value = torch.empty(shape, dtype=torch.float16).normal_(mean=0.0, std=0.1)
     return [query, key, value]
 
 
 def get_init_inputs():
-    # Parameters for rotary position embedding attention
-    dropout_p = 0.0  # No dropout
-    is_causal = False  # Not causal
-    enable_gqa = True  # Using Grouped-Query Attention
-    max_seq_len = 2048  # Maximum sequence length
+    """
+    Initialize parameters for attention with Rotary Position Embeddings.
+    
+    Returns:
+        dropout_p: 0.0 (no dropout for inference)
+        is_causal: False (not using causal masking)
+        enable_gqa: False (RoPE is orthogonal to GQA, not enabled by default)
+        max_seq_len: 2048 (maximum sequence length for position embeddings)
+    
+    Note: RoPE (Rotary Position Embeddings) encodes positional information by
+          rotating query and key vectors in the embedding space, allowing the
+          model to capture relative positions naturally. RoPE can be combined
+          with GQA if needed, but they are independent features.
+    """
+    dropout_p = 0.0
+    is_causal = False
+    enable_gqa = False
+    max_seq_len = 2048
     return [dropout_p, is_causal, enable_gqa, max_seq_len]

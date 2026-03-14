@@ -11,19 +11,17 @@ class Model(nn.Module):
 
     def forward(self, query, key, value, attn_mask=None):
         """
-        Flash Attention with Causal Masking for autoregressive generation.
+        Scaled Dot-Product Attention with (B, H, L, D) layout.
         
-        Computes: Attention(Q, K, V) = softmax(Q @ K^T / sqrt(d_k) + causal_mask) @ V
+        BNSD naming convention:
+            - B: Batch size
+            - N: Number of attention heads (often called "num_heads" or H)
+            - S: Sequence length (often called L)
+            - D: Head dimension
         
-        Causal masking ensures that each position can only attend to previous positions
-        and itself, preventing information leakage from future tokens. This is essential
-        for autoregressive models like GPT.
+        This is the standard layout required by torch.nn.functional.scaled_dot_product_attention.
         
-        The causal mask is a lower-triangular matrix:
-            [[0, -inf, -inf, -inf],
-             [0,    0, -inf, -inf],
-             [0,    0,    0, -inf],
-             [0,    0,    0,    0]]
+        Computes: Attention(Q, K, V) = softmax(Q @ K^T / sqrt(d_k)) @ V
         
         Input tensor layout: (B, H, L, D) where:
             - B (Batch): Number of sequences processed in parallel
@@ -35,7 +33,7 @@ class Model(nn.Module):
             query: Query tensor of shape (B, H, L, D)
             key: Key tensor of shape (B, H, S, D), where S can differ from L
             value: Value tensor of shape (B, H, S, D)
-            attn_mask: Optional additional attention mask (combined with causal mask)
+            attn_mask: Optional attention mask
             
         Returns:
             Attention output of shape (B, H, L, D)
@@ -48,20 +46,20 @@ class Model(nn.Module):
 
 def get_inputs():
     """
-    Generate input tensors for causal flash attention.
+    Generate input tensors in (B, H, L, D) layout (also known as BNSD).
     
-    Tensor shape: (B, H, L, D)
-        B = 16  : Batch size (number of independent sequences)
-        H = 12  : Number of attention heads (multi-head attention)
-        L = 512 : Sequence length (number of tokens in each sequence)
-        D = 64  : Head dimension (embedding size per attention head)
+    Tensor shape: (B, H, L, D) or (B, N, S, D)
+        B = 32   : Batch size (number of independent sequences)
+        H = 8    : Number of attention heads (N in BNSD notation)
+        L = 1024 : Sequence length (S in BNSD notation, number of tokens)
+        D = 64   : Head dimension (embedding size per attention head)
     
-    Total model dimension = H * D = 12 * 64 = 768
+    Total model dimension = H * D = 8 * 64 = 512
     
-    Note: Causal masking is commonly used in decoder-only models (GPT-style)
-          for autoregressive text generation.
+    Note: BNSD is just an alternative naming convention for BHLD.
+          Both refer to the same tensor layout.
     """
-    B, H, L, D = 16, 12, 512, 64
+    B, H, L, D = 32, 8, 1024, 64
     shape = (B, H, L, D)
     
     # Use smaller std to avoid float16 overflow in attention computation
@@ -73,14 +71,14 @@ def get_inputs():
 
 def get_init_inputs():
     """
-    Initialize parameters for causal flash attention.
+    Initialize parameters for BNSD-layout attention.
     
     Returns:
         dropout_p: 0.0 (no dropout for inference)
-        is_causal: True (enable causal masking for autoregressive generation)
+        is_causal: False (not using causal masking)
         enable_gqa: False (standard multi-head attention)
     """
     dropout_p = 0.0
-    is_causal = True
+    is_causal = False
     enable_gqa = False
     return [dropout_p, is_causal, enable_gqa]

@@ -96,11 +96,15 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
     # 4. 检查硬件
     if backend == 'cuda':
         try:
-            result = subprocess.run(['nvidia-smi'], capture_output=True, timeout=5)
+            result = subprocess.run(['nvidia-smi'], capture_output=True, timeout=30, shell=True)
             if result.returncode != 0:
                 issues.append("⚠️ CUDA设备可能不可用")
-        except Exception:
-            issues.append("⚠️ 未找到 nvidia-smi")
+        except subprocess.TimeoutExpired:
+            issues.append("⚠️ nvidia-smi 执行超时，GPU驱动可能异常")
+        except FileNotFoundError:
+            issues.append("⚠️ 未找到 nvidia-smi 命令")
+        except Exception as e:
+            issues.append(f"⚠️ nvidia-smi 检查失败: {str(e)}")
     elif backend == 'ascend':
         try:
             result = subprocess.run(['npu-smi', 'info'], capture_output=True, timeout=5)

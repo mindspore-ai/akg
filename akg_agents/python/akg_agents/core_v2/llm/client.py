@@ -78,7 +78,7 @@ class LLMClient:
         
         # 流式显示控制
         self.display_reasoning: bool = True
-        self.display_content: bool = False
+        self.display_content: bool = True
         
         # <think> 标签状态机
         self._in_think_tag = False

@@ -19,8 +19,6 @@ from akg_agents.core.worker.manager import register_local_worker
 from akg_agents.utils.environment_check import check_env_for_task
 import asyncio
 import os
-# 注释掉流式输出，因为需要 session_id（TUI 模式才使用）
-# os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
 
 
 def get_op_name():
@@ -31,7 +29,6 @@ def get_task_desc():
     return '''
 import torch
 import torch.nn as nn
-import torch_npu
 
 
 class Model(nn.Module):
@@ -57,36 +54,34 @@ dim = 16384
 
 
 def get_inputs():
-    x = torch.randn(batch_size, dim, dtype=torch.float16, device='npu')
+    x = torch.randn(batch_size, dim, dtype=torch.float16, device='cuda')
     return [x]
 
 
 def get_init_inputs():
-    return []  # No special initialization inputs needed
+    return []
 '''
 
 
-async def run_torch_npu_triton_single():
+async def run_torch_cuda_triton_single():
     op_name = get_op_name()
     task_desc = get_task_desc()
 
     task_pool = TaskPool()
     
-    # 新写法：一行代码注册 LocalWorker
-    await register_local_worker([0], backend="ascend", arch="ascend910b4")
+    await register_local_worker([0], backend="cuda", arch="rtx3090")
     
-    config = load_config("triton_ascend", backend="ascend")  # use offical deepseek api
-    # config = load_config(config_path="./python/akg_agents/op/config/triton_ascend_coderonly_config.yaml")
-
-    check_env_for_task("torch", "ascend", "triton_ascend", config)
+    config = load_config("triton_cuda", backend="cuda")
+    
+    check_env_for_task("torch", "cuda", "triton_cuda", config)
 
     task = LangGraphTask(
         op_name=op_name,
         task_desc=task_desc,
         task_id="0",
-        dsl="triton_ascend",
-        backend="ascend",
-        arch="ascend910b4",
+        dsl="triton_cuda",
+        backend="cuda",
+        arch="rtx3090",
         config=config,
         framework="torch",
         workflow="coder_only_workflow"
@@ -101,5 +96,4 @@ async def run_torch_npu_triton_single():
             print(f"Task {op_name} failed")
 
 if __name__ == "__main__":
-    asyncio.run(run_torch_npu_triton_single())
-
+    asyncio.run(run_torch_cuda_triton_single())
