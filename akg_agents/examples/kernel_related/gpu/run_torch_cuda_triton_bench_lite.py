@@ -68,51 +68,67 @@ def discover_bench_lite_cases(
     bench_lite_dir: Path,
     tiers: Optional[List[str]] = None,
     cases: Optional[List[str]] = None,
-    filter_pattern: Optional[str] = None
+    filter_pattern: Optional[str] = None,
+    skip_npu: bool = True
 ) -> List[Tuple[str, str, Path]]:
     """
     Discover all kernel files in bench_lite directory.
-    
+
     Args:
         bench_lite_dir: Path to bench_lite directory
         tiers: Optional list of tiers to include (e.g., ['t1', 't2'])
         cases: Optional list of case names to include (e.g., ['gelu', 'softmax'])
         filter_pattern: Optional keyword to filter case names (e.g., 'matmul', 'norm')
-        
+        skip_npu: Skip cases that contain 'torch_npu' (default: True)
+
     Returns:
         List of tuples (tier, case_name, file_path)
     """
     if not bench_lite_dir.exists():
         print(f"Warning: Bench lite directory not found: {bench_lite_dir}")
         return []
-    
+
     all_cases = []
-    
+    skipped_cases = []
+
     # Default to all tiers if not specified
     if tiers is None:
         tiers = ['t1', 't2', 't3']
-    
+
     for tier in tiers:
         tier_dir = bench_lite_dir / tier
         if not tier_dir.exists():
             continue
-        
+
         for py_file in sorted(tier_dir.glob("*.py")):
             if py_file.name == "__init__.py":
                 continue
-            
+
             case_name = py_file.stem
-            
+
             # Filter by case names if specified
             if cases is not None and case_name not in cases:
                 continue
-            
+
             # Filter by pattern if specified
             if filter_pattern is not None and filter_pattern.lower() not in case_name.lower():
                 continue
-            
+
+            # Skip NPU cases if requested
+            if skip_npu:
+                content = py_file.read_text()
+                if 'torch_npu' in content:
+                    skipped_cases.append((tier, case_name))
+                    continue
+
             all_cases.append((tier, case_name, py_file))
-    
+
+    if skipped_cases and skip_npu:
+        print(f"Skipped {len(skipped_cases)} NPU-related cases:")
+        for tier, case_name in skipped_cases:
+            print(f"  - {tier}/{case_name}")
+        print()
+
     return all_cases
 
 
@@ -245,7 +261,8 @@ async def run_bench_lite_tests(args):
         bench_lite_dir=bench_lite_dir,
         tiers=args.tiers,
         cases=args.cases,
-        filter_pattern=args.filter
+        filter_pattern=args.filter,
+        skip_npu=True
     )
     
     if not cases:
@@ -479,8 +496,8 @@ Examples:
         "--devices",
         type=int,
         nargs="+",
-        default=[4, 5, 6, 7],
-        help="GPU device IDs, default: [4, 5, 6, 7]"
+        default=[0, 1, 2, 3, 4, 5, 6, 7],
+        help="GPU device IDs, default: [0, 1, 2, 3, 4, 5, 6, 7]"
     )
     
     parser.add_argument(
