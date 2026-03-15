@@ -39,20 +39,19 @@ class Model(nn.Module):
         num_kv_heads = k_nope_buffer.shape[2]
         v_dim = v_buffer.shape[-1]
         
-        block_tables_cpu = block_table.cpu().numpy()
         outputs = []
-        
+
         for i in range(batch):
             kv_len = seq_lens[i].item()
-            
+
             # Split Q into Q_nope and Q_rope
             q_i = q[i:i+1]  # (1, num_heads, qk_dim)
             q_nope = q_i[:, :, :qk_nope_dim]
             q_rope = q_i[:, :, qk_nope_dim:]
-            
+
             # Gather K and V from paged cache
             num_blocks = (kv_len + self.page_size - 1) // self.page_size
-            block_ids = block_tables_cpu[i, :num_blocks]
+            block_ids = block_table[i, :num_blocks]
             
             k_nope = k_nope_buffer[block_ids].view(-1, num_kv_heads, qk_nope_dim)[:kv_len]
             k_rope = k_rope_buffer[block_ids].view(-1, num_kv_heads, qk_rope_dim)[:kv_len]
@@ -88,24 +87,25 @@ def get_inputs():
     qk_rope_dim = 64
     v_dim = 512
     page_size = 128
+    dtype = torch.float32
     
     max_pages = (seq_len + page_size - 1) // page_size
     
     q = torch.randn(
         batch, num_q_heads, qk_nope_dim + qk_rope_dim,
-        dtype=torch.bfloat16
+        dtype=dtype
     )
     k_nope_buffer = torch.randn(
         max_pages * batch, page_size, num_kv_heads, qk_nope_dim,
-        dtype=torch.bfloat16
+        dtype=dtype
     )
     k_rope_buffer = torch.randn(
         max_pages * batch, page_size, num_kv_heads, qk_rope_dim,
-        dtype=torch.bfloat16
+        dtype=dtype
     )
     v_buffer = torch.randn(
         max_pages * batch, page_size, num_kv_heads, v_dim,
-        dtype=torch.bfloat16
+        dtype=dtype
     )
     seq_lens = torch.full((batch,), seq_len, dtype=torch.int32)
     block_table = torch.arange(

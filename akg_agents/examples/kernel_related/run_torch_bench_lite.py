@@ -13,37 +13,43 @@
 # limitations under the License.
 
 """
-Batch testing script for AKG Kernels Bench Lite on GPU with Pass@N support.
+Batch testing script for AKG Kernels Bench Lite with multi-backend support.
 
 This script automatically discovers and tests all kernels in the bench_lite directory,
-generating optimized Triton CUDA code with multiple attempts (Pass@N).
+supporting CPU, GPU (CUDA), and NPU (Ascend) backends.
 
 Features:
+- Multi-backend: CPU (cpp), GPU (triton_cuda), NPU (triton_ascend)
 - Auto-discover all cases in t1/t2/t3 directories
 - Pass@N: Generate N implementations per case, select the best
 - Concurrent execution: LLM code gen + device run in parallel (TaskPool)
-- Device pool: Parallel execution across multiple GPUs
+- Device pool: Parallel execution across multiple devices
 - Detailed results and statistics
 
 Usage:
-  # Run with default settings (Pass@3, 4 GPUs)
-  python run_torch_cuda_triton_bench_lite.py
-  
+  # Run on CPU (cpp)
+  python run_torch_bench_lite.py --backend cpu
+
+  # Run on GPU (triton_cuda)
+  python run_torch_bench_lite.py --backend gpu
+
+  # Run on NPU (triton_ascend)
+  python run_torch_bench_lite.py --backend npu
+
   # Custom Pass@N
-  python run_torch_cuda_triton_bench_lite.py --pass-n 5
-  
-  # Custom devices
-  python run_torch_cuda_triton_bench_lite.py --devices 0 1 2 3
-  
+  python run_torch_bench_lite.py --backend gpu --pass-n 5
+
+  # Custom devices (GPU/NPU)
+  python run_torch_bench_lite.py --backend gpu --devices 0 1 2 3
+
   # Run specific tiers
-  python run_torch_cuda_triton_bench_lite.py --tiers t1 t2
-  
+  python run_torch_bench_lite.py --backend cpu --tiers t1 t2
+
   # Run specific cases
-  python run_torch_cuda_triton_bench_lite.py --cases gelu softmax
-  
-  # Filter cases by keyword (for quick testing)
-  python run_torch_cuda_triton_bench_lite.py --filter matmul
-  python run_torch_cuda_triton_bench_lite.py --filter norm --pass-n 1
+  python run_torch_bench_lite.py --backend gpu --cases gelu softmax
+
+  # Filter cases by keyword
+  python run_torch_bench_lite.py --backend gpu --filter matmul
 """
 
 from akg_agents.op.config.config_validator import load_config
@@ -62,6 +68,34 @@ from datetime import datetime
 import time
 
 os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
+
+# Backend configurations
+BACKEND_CONFIGS = {
+    'cpu': {
+        'name': 'CPU',
+        'backend': 'cpu',
+        'dsl': 'cpp',
+        'arch': 'x86_64',
+        'devices': [0],
+        'skip_npu': True
+    },
+    'gpu': {
+        'name': 'GPU (CUDA)',
+        'backend': 'cuda',
+        'dsl': 'triton_cuda',
+        'arch': 'rtx3090',
+        'devices': [0, 1, 2, 3, 4, 5, 6, 7],
+        'skip_npu': True
+    },
+    'npu': {
+        'name': 'NPU (Ascend)',
+        'backend': 'ascend',
+        'dsl': 'triton_ascend',
+        'arch': 'ascend910b4',
+        'devices': [0],
+        'skip_npu': False
+    }
+}
 
 
 def discover_bench_lite_cases(
@@ -132,55 +166,46 @@ def discover_bench_lite_cases(
     return all_cases
 
 
-def convert_cpu_to_cuda(content: str) -> str:
+def read_kernel_file(file_path: Path, backend: str) -> str:
     """
-    Convert CPU-specific code to CUDA-compatible code.
-    
-    Args:
-        content: Original file content
-        
-    Returns:
-        Converted content for CUDA
-    """
-    content = re.sub(r"device='cpu'", "device='cuda'", content)
-    content = re.sub(r'device="cpu"', 'device="cuda"', content)
-    content = re.sub(r"\.cpu\(\)", ".cuda()", content)
-    
-    return content
+    Read the entire kernel file as task description.
 
-
-def read_kernel_file(file_path: Path) -> str:
-    """
-    Read the entire kernel file as task description and convert for CUDA.
-    
     Args:
         file_path: Path to the kernel file
-        
+        backend: Target backend ('cpu', 'gpu', 'npu')
+
     Returns:
-        File contents as string (converted for CUDA)
+        File contents as string
     """
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
-    
-    return convert_cpu_to_cuda(content)
+
+    # For GPU backend, convert CPU-specific code to CUDA-compatible code
+    if backend == 'gpu':
+        content = re.sub(r"device='cpu'", "device='cuda'", content)
+        content = re.sub(r'device="cpu"', 'device="cuda"', content)
+        content = re.sub(r"\.cpu\(\)", ".cuda()", content)
+
+    return content
 
 
-def _parse_op_name(op_name: str) -> Optional[Tuple[str, str, int]]:
-    """Parse op_name like 't1_gelu_attempt2' -> (tier, case_name, attempt_id)."""
-    match = re.match(r"^(.+?)_(.+?)_attempt(\d+)$", op_name)
+def _parse_op_name(op_name: str) -> Optional[Tuple[str, str, str, int]]:
+    """Parse op_name like 'cpu_t1_gelu_attempt2' -> (backend, tier, case_name, attempt_id)."""
+    match = re.match(r"^(.+?)_(.+?)_(.+?)_attempt(\d+)$", op_name)
     if match:
-        return match.group(1), match.group(2), int(match.group(3))
+        return match.group(1), match.group(2), match.group(3), int(match.group(4))
     return None
 
 
 def _aggregate_results(
     raw_results: list,
     cases: List[Tuple[str, str, Path]],
+    backend: str,
     pass_n: int
 ) -> List[Dict]:
     """
     Aggregate raw task results by case.
-    
+
     raw_results: from task_pool.wait_all(), each item is (op_name, success, task_info)
     """
     # Group by (tier, case_name)
@@ -190,7 +215,7 @@ def _aggregate_results(
             op_name, success = item[0], item[1]
             parsed = _parse_op_name(op_name)
             if parsed:
-                tier, case_name, attempt_id = parsed
+                _, tier, case_name, attempt_id = parsed
                 key = (tier, case_name)
                 if key not in case_results:
                     case_results[key] = []
@@ -208,8 +233,8 @@ def _aggregate_results(
             attempts.append({
                 'attempt_id': a['attempt_id'],
                 'success': a['success'],
-                'elapsed_time': None,  # Parallel mode: no per-attempt timing
-                'info': {'task_id': f"{tier}_{case_name}_attempt{a['attempt_id']}", 'success': a['success']}
+                'elapsed_time': None,
+                'info': {'task_id': f"{backend}_{tier}_{case_name}_attempt{a['attempt_id']}", 'success': a['success']}
             })
 
         successful_attempts = [a for a in attempts if a['success']]
@@ -218,7 +243,7 @@ def _aggregate_results(
 
         best_attempt = None
         if successful_attempts:
-            best_attempt = successful_attempts[0]  # Pick first successful (no timing in parallel)
+            best_attempt = successful_attempts[0]
 
         results.append({
             'tier': tier,
@@ -228,31 +253,40 @@ def _aggregate_results(
             'success_count': success_count,
             'pass_rate': pass_rate,
             'best_attempt': best_attempt,
-            'total_time': None,  # Parallel mode: batch time
+            'total_time': None,
             'overall_success': success_count > 0
         })
 
     return results
 
 
-async def run_bench_lite_tests(args):
+async def run_backend_tests(args, backend: str):
     """
-    Main function to run bench lite tests with Pass@N.
+    Run tests for a single backend.
+
+    Args:
+        args: Command line arguments
+        backend: Backend name ('cpu', 'gpu', 'npu')
+
+    Returns:
+        Tuple of (results, total_elapsed)
     """
+    config = BACKEND_CONFIGS[backend]
+
     print("=" * 80)
-    print("AKG Kernels Bench Lite - GPU (Triton CUDA) with Pass@N")
+    print(f"AKG Kernels Bench Lite - {config['name']} with Pass@{args.pass_n}")
     print("=" * 80)
     print()
-    
+
     # Locate bench_lite directory
-    bench_lite_dir = Path(__file__).parent.parent.parent.parent / "benchmark" / "akg_kernels_bench_lite"
-    
+    bench_lite_dir = Path(__file__).parent.parent.parent / "benchmark" / "akg_kernels_bench_lite"
+
     print(f"Bench Lite Directory: {bench_lite_dir}")
     print(f"Pass@N: {args.pass_n}")
-    print(f"Devices: {args.devices}")
+    print(f"Devices: {args.devices if args.devices else config['devices']}")
     print(f"Max Concurrent: {args.max_concurrent}")
     print()
-    
+
     # Discover cases
     print("Discovering cases...")
     if args.filter:
@@ -262,37 +296,38 @@ async def run_bench_lite_tests(args):
         tiers=args.tiers,
         cases=args.cases,
         filter_pattern=args.filter,
-        skip_npu=True
+        skip_npu=config['skip_npu']
     )
-    
+
     if not cases:
         print("No cases found!")
-        return
-    
+        return [], 0.0
+
     # Group by tier
     tier_counts = {}
     for tier, _, _ in cases:
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
-    
+
     print(f"Found {len(cases)} cases:")
     for tier in sorted(tier_counts.keys()):
         print(f"  {tier}: {tier_counts[tier]} cases")
     print()
-    
+
     # Register worker
-    print("Registering local worker (CUDA RTX 3090)...")
-    await register_local_worker(args.devices, backend="cuda", arch="rtx3090")
+    devices = args.devices if args.devices else config['devices']
+    print(f"Registering local worker ({config['name']}, arch={config['arch']})...")
+    await register_local_worker(devices, backend=config['backend'], arch=config['arch'])
     print("✓ Worker registered")
     print()
-    
+
     # Load configuration
     print("Loading configuration...")
-    config = load_config("triton_cuda", backend="cuda")
-    check_env_for_task("torch", "cuda", "triton_cuda", config)
+    config_obj = load_config(config['dsl'], backend=config['backend'])
+    check_env_for_task("torch", config['backend'], config['dsl'], config_obj)
     print("✓ Configuration loaded")
     print()
-    
-    # Run tests (concurrent: all case×attempt tasks in parallel)
+
+    # Run tests
     print("=" * 80)
     print("Running Tests (concurrent)")
     print("=" * 80)
@@ -306,23 +341,23 @@ async def run_bench_lite_tests(args):
     # Pre-read all task descriptions
     case_task_descs = {}
     for tier, case_name, file_path in cases:
-        case_task_descs[(tier, case_name)] = read_kernel_file(file_path)
+        case_task_descs[(tier, case_name)] = read_kernel_file(file_path, backend)
 
     # Create all tasks (case × attempt)
     for tier, case_name, file_path in cases:
         task_desc = case_task_descs[(tier, case_name)]
         for attempt_id in range(1, args.pass_n + 1):
-            task_id = f"{tier}_{case_name}_attempt{attempt_id}"
-            op_name = f"{tier}_{case_name}_attempt{attempt_id}"  # Unique per attempt for result mapping
+            task_id = f"{backend}_{tier}_{case_name}_attempt{attempt_id}"
+            op_name = f"{backend}_{tier}_{case_name}_attempt{attempt_id}"
 
             task = LangGraphTask(
                 op_name=op_name,
                 task_desc=task_desc,
                 task_id=task_id,
-                dsl="triton_cuda",
-                backend="cuda",
-                arch="rtx3090",
-                config=config,
+                dsl=config['dsl'],
+                backend=config['backend'],
+                arch=config['arch'],
+                config=config_obj,
                 framework="torch",
                 workflow="coder_only_workflow"
             )
@@ -332,23 +367,29 @@ async def run_bench_lite_tests(args):
     total_elapsed = time.time() - start_time
 
     # Aggregate results by case
-    results = _aggregate_results(raw_results, cases, args.pass_n)
-    
-    # Print summary
+    results = _aggregate_results(raw_results, cases, backend, args.pass_n)
+
+    return results, total_elapsed
+
+
+def print_summary(backend: str, results: List[Dict], total_elapsed: float):
+    """Print test summary for a backend."""
+    config = BACKEND_CONFIGS[backend]
+
     print("\n" + "=" * 80)
-    print("Test Summary")
+    print(f"Test Summary - {config['name']}")
     print("=" * 80)
     print()
-    
+
     # Overall statistics
     total_cases = len(results)
     passed_cases = sum(1 for r in results if r['overall_success'])
     failed_cases = total_cases - passed_cases
-    
+
     total_attempts = sum(r['pass_n'] for r in results)
     total_successful_attempts = sum(r['success_count'] for r in results)
     overall_pass_rate = total_successful_attempts / total_attempts if total_attempts > 0 else 0.0
-    
+
     print(f"Total Cases: {total_cases}")
     print(f"Passed Cases: {passed_cases} ({passed_cases/total_cases:.1%})")
     print(f"Failed Cases: {failed_cases} ({failed_cases/total_cases:.1%})")
@@ -357,7 +398,7 @@ async def run_bench_lite_tests(args):
     print(f"Successful Attempts: {total_successful_attempts} ({overall_pass_rate:.1%})")
     print(f"Total Time: {total_elapsed:.2f}s")
     print()
-    
+
     # Per-tier statistics
     print("Per-Tier Statistics:")
     print("-" * 80)
@@ -376,7 +417,7 @@ async def run_bench_lite_tests(args):
             tier_stats[tier]['passed'] += 1
         tier_stats[tier]['attempts'] += result['pass_n']
         tier_stats[tier]['successful_attempts'] += result['success_count']
-    
+
     for tier in sorted(tier_stats.keys()):
         stats = tier_stats[tier]
         case_pass_rate = stats['passed'] / stats['total'] if stats['total'] > 0 else 0.0
@@ -384,29 +425,29 @@ async def run_bench_lite_tests(args):
         print(f"{tier}: {stats['passed']}/{stats['total']} cases ({case_pass_rate:.1%}), "
               f"{stats['successful_attempts']}/{stats['attempts']} attempts ({attempt_pass_rate:.1%})")
     print()
-    
+
     # Detailed results
     print("Detailed Results:")
     print("-" * 80)
     print(f"{'No.':<5} {'Tier':<6} {'Case':<30} {'Pass@N':<8} {'Success':<10} {'Best Time':<12}")
     print("-" * 80)
-    
+
     for i, result in enumerate(results, 1):
         tier = result['tier']
         case_name = result['case_name']
         pass_n_str = f"{result['success_count']}/{result['pass_n']}"
         success_str = "✓ PASS" if result['overall_success'] else "✗ FAIL"
-        
+
         if result['best_attempt'] and result['best_attempt'].get('elapsed_time') is not None:
             best_time_str = f"{result['best_attempt']['elapsed_time']:.2f}s"
         else:
             best_time_str = "N/A"
-        
+
         print(f"{i:<5} {tier:<6} {case_name:<30} {pass_n_str:<8} {success_str:<10} {best_time_str:<12}")
-    
+
     print("-" * 80)
     print()
-    
+
     # Failed cases
     if failed_cases > 0:
         print("Failed Cases (0 successful attempts):")
@@ -414,99 +455,135 @@ async def run_bench_lite_tests(args):
             if not result['overall_success']:
                 print(f"  ✗ {result['tier']}/{result['case_name']}")
         print()
-    
+
+    print("=" * 80)
+    print(f"Batch testing completed! ({passed_cases}/{total_cases} cases passed)")
+    print("=" * 80)
+    print()
+
+    return {
+        'total_cases': total_cases,
+        'passed_cases': passed_cases,
+        'failed_cases': failed_cases,
+        'total_attempts': total_attempts,
+        'successful_attempts': total_successful_attempts,
+        'overall_pass_rate': overall_pass_rate,
+        'total_time': total_elapsed,
+        'tier_stats': tier_stats,
+        'results': results
+    }
+
+
+async def run_bench_lite_tests(args):
+    """
+    Main function to run bench lite tests with multi-backend support.
+    """
+    backend = args.backend
+
+    if backend not in BACKEND_CONFIGS:
+        print(f"Error: Unknown backend '{backend}'. Available: {list(BACKEND_CONFIGS.keys())}")
+        return
+
+    results, total_elapsed = await run_backend_tests(args, backend)
+    if not results:
+        return
+    summary = print_summary(backend, results, total_elapsed)
+
     # Save results to JSON
     if args.output:
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         output_data = {
             'timestamp': datetime.now().isoformat(),
             'config': {
+                'backend': backend,
                 'pass_n': args.pass_n,
-                'devices': args.devices,
+                'devices': args.devices if args.devices else None,
                 'max_concurrent': args.max_concurrent,
                 'tiers': args.tiers,
                 'cases': args.cases,
                 'filter': args.filter
             },
-            'summary': {
-                'total_cases': total_cases,
-                'passed_cases': passed_cases,
-                'failed_cases': failed_cases,
-                'total_attempts': total_attempts,
-                'successful_attempts': total_successful_attempts,
-                'overall_pass_rate': overall_pass_rate,
-                'total_time': total_elapsed
-            },
-            'tier_stats': tier_stats,
-            'results': results
+            'results': summary
         }
-        
+
         with open(output_path, 'w') as f:
             json.dump(output_data, f, indent=2)
-        
+
         print(f"Results saved to: {output_path}")
         print()
-    
-    print("=" * 80)
-    print(f"Batch testing completed! ({passed_cases}/{total_cases} cases passed)")
-    print("=" * 80)
 
 
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(
-        description="Run AKG Kernels Bench Lite on GPU with Pass@N",
+        description="Run AKG Kernels Bench Lite with multi-backend support",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run with default settings (Pass@3, 4 GPUs)
-  python run_torch_cuda_triton_bench_lite.py
-  
+  # Run on CPU
+  python run_torch_bench_lite.py --backend cpu
+
+  # Run on GPU (CUDA)
+  python run_torch_bench_lite.py --backend gpu
+
+  # Run on NPU (Ascend)
+  python run_torch_bench_lite.py --backend npu
+
+  # Run on all backends
+  python run_torch_bench_lite.py --backend all
+
   # Custom Pass@N
-  python run_torch_cuda_triton_bench_lite.py --pass-n 5
-  
-  # Custom devices
-  python run_torch_cuda_triton_bench_lite.py --devices 0 1 2 3
-  
+  python run_torch_bench_lite.py --backend gpu --pass-n 5
+
+  # Custom devices (GPU/NPU)
+  python run_torch_bench_lite.py --backend gpu --devices 0 1 2 3
+
   # Run specific tiers
-  python run_torch_cuda_triton_bench_lite.py --tiers t1 t2
-  
+  python run_torch_bench_lite.py --backend cpu --tiers t1 t2
+
   # Run specific cases
-  python run_torch_cuda_triton_bench_lite.py --cases gelu softmax
-  
-  # Filter cases by keyword (quick testing)
-  python run_torch_cuda_triton_bench_lite.py --filter matmul --pass-n 1
-  python run_torch_cuda_triton_bench_lite.py --filter norm --devices 0 1
-  
+  python run_torch_bench_lite.py --backend gpu --cases gelu softmax
+
+  # Filter cases by keyword
+  python run_torch_bench_lite.py --backend gpu --filter matmul
+
   # Save results to file
-  python run_torch_cuda_triton_bench_lite.py --output results.json
+  python run_torch_bench_lite.py --backend gpu --output results.json
         """
     )
-    
+
+    parser.add_argument(
+        "--backend",
+        type=str,
+        choices=['cpu', 'gpu', 'npu'],
+        default='gpu',
+        help="Backend to run on: cpu, gpu, or npu (default: gpu)"
+    )
+
     parser.add_argument(
         "--pass-n",
         type=int,
         default=3,
         help="Number of attempts per case (Pass@N), default: 3"
     )
-    
+
     parser.add_argument(
         "--devices",
         type=int,
         nargs="+",
-        default=[0, 1, 2, 3, 4, 5, 6, 7],
-        help="GPU device IDs, default: [0, 1, 2, 3, 4, 5, 6, 7]"
+        default=None,
+        help="Device IDs (default: CPU: [0], GPU: [0-7], NPU: [0])"
     )
-    
+
     parser.add_argument(
         "--max-concurrent",
         type=int,
         default=4,
         help="Maximum concurrent tasks, default: 4"
     )
-    
+
     parser.add_argument(
         "--tiers",
         type=str,
@@ -514,7 +591,7 @@ Examples:
         default=None,
         help="Specific tiers to run (e.g., t1 t2), default: all tiers"
     )
-    
+
     parser.add_argument(
         "--cases",
         type=str,
@@ -522,23 +599,23 @@ Examples:
         default=None,
         help="Specific cases to run (e.g., gelu softmax), default: all cases"
     )
-    
+
     parser.add_argument(
         "--filter",
         type=str,
         default=None,
         help="Filter cases by keyword (e.g., 'matmul', 'norm'), default: no filter"
     )
-    
+
     parser.add_argument(
         "--output",
         type=str,
         default=None,
         help="Output JSON file path for results, default: no output file"
     )
-    
+
     args = parser.parse_args()
-    
+
     asyncio.run(run_bench_lite_tests(args))
 
 
