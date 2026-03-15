@@ -21,6 +21,7 @@ generating optimized Triton CUDA code with multiple attempts (Pass@N).
 Features:
 - Auto-discover all cases in t1/t2/t3 directories
 - Pass@N: Generate N implementations per case, select the best
+- Concurrent execution: LLM code gen + device run in parallel (TaskPool)
 - Device pool: Parallel execution across multiple GPUs
 - Detailed results and statistics
 
@@ -148,157 +149,74 @@ def read_kernel_file(file_path: Path) -> str:
     return convert_cpu_to_cuda(content)
 
 
-async def run_single_attempt(
-    tier: str,
-    case_name: str,
-    task_desc: str,
-    attempt_id: int,
-    total_attempts: int,
-    config: dict
-) -> Tuple[str, str, int, bool, float, Optional[Dict]]:
-    """
-    Run a single attempt for a case.
-    
-    Args:
-        tier: Tier name (t1, t2, t3)
-        case_name: Case name
-        task_desc: Task description (kernel code)
-        attempt_id: Current attempt number (1-indexed)
-        total_attempts: Total number of attempts
-        config: Configuration dictionary
-        
-    Returns:
-        Tuple of (tier, case_name, attempt_id, success, elapsed_time, result_info)
-    """
-    start_time = time.time()
-    
-    try:
-        task_pool = TaskPool()
-        
-        # Create unique task ID for this attempt
-        task_id = f"{tier}_{case_name}_attempt{attempt_id}"
-        op_name = f"{tier}_{case_name}"
-        
-        task = LangGraphTask(
-            op_name=op_name,
-            task_desc=task_desc,
-            task_id=task_id,
-            dsl="triton_cuda",
-            backend="cuda",
-            arch="rtx3090",
-            config=config,
-            framework="torch",
-            workflow="coder_only_workflow"
-        )
-        
-        task_pool.create_task(task.run)
-        results = await task_pool.wait_all()
-        
-        for op_name_result, result, _ in results:
-            elapsed_time = time.time() - start_time
-            
-            result_info = {
-                'task_id': task_id,
-                'elapsed_time': elapsed_time,
-                'success': result
-            }
-            
-            return (tier, case_name, attempt_id, result, elapsed_time, result_info)
-        
-        elapsed_time = time.time() - start_time
-        return (tier, case_name, attempt_id, False, elapsed_time, None)
-        
-    except Exception as e:
-        elapsed_time = time.time() - start_time
-        print(f"  ✗ Attempt {attempt_id}/{total_attempts} ERROR: {str(e)}")
-        return (tier, case_name, attempt_id, False, elapsed_time, None)
+def _parse_op_name(op_name: str) -> Optional[Tuple[str, str, int]]:
+    """Parse op_name like 't1_gelu_attempt2' -> (tier, case_name, attempt_id)."""
+    match = re.match(r"^(.+?)_(.+?)_attempt(\d+)$", op_name)
+    if match:
+        return match.group(1), match.group(2), int(match.group(3))
+    return None
 
 
-async def run_case_with_pass_n(
-    tier: str,
-    case_name: str,
-    file_path: Path,
-    pass_n: int,
-    config: dict,
-    case_index: int,
-    total_cases: int
-) -> Dict:
+def _aggregate_results(
+    raw_results: list,
+    cases: List[Tuple[str, str, Path]],
+    pass_n: int
+) -> List[Dict]:
     """
-    Run a single case with Pass@N attempts.
+    Aggregate raw task results by case.
     
-    Args:
-        tier: Tier name
-        case_name: Case name
-        file_path: Path to the kernel file
-        pass_n: Number of attempts
-        config: Configuration dictionary
-        case_index: Current case index (1-indexed)
-        total_cases: Total number of cases
-        
-    Returns:
-        Dictionary with case results
+    raw_results: from task_pool.wait_all(), each item is (op_name, success, task_info)
     """
-    print(f"\n[{case_index}/{total_cases}] {tier}/{case_name}")
-    print("=" * 80)
-    
-    # Read task description
-    task_desc = read_kernel_file(file_path)
-    
-    # Run all attempts
-    print(f"Running Pass@{pass_n} attempts...")
-    
-    attempts = []
-    for attempt_id in range(1, pass_n + 1):
-        print(f"  Attempt {attempt_id}/{pass_n}...", end=" ", flush=True)
-        
-        tier_result, case_result, attempt_num, success, elapsed, info = await run_single_attempt(
-            tier=tier,
-            case_name=case_name,
-            task_desc=task_desc,
-            attempt_id=attempt_id,
-            total_attempts=pass_n,
-            config=config
-        )
-        
-        attempts.append({
-            'attempt_id': attempt_id,
-            'success': success,
-            'elapsed_time': elapsed,
-            'info': info
+    # Group by (tier, case_name)
+    case_results = {}  # (tier, case_name) -> list of (attempt_id, success)
+    for item in raw_results:
+        if len(item) >= 2:
+            op_name, success = item[0], item[1]
+            parsed = _parse_op_name(op_name)
+            if parsed:
+                tier, case_name, attempt_id = parsed
+                key = (tier, case_name)
+                if key not in case_results:
+                    case_results[key] = []
+                case_results[key].append({'attempt_id': attempt_id, 'success': success})
+
+    # Build results in original case order
+    results = []
+    for tier, case_name, file_path in cases:
+        key = (tier, case_name)
+        attempt_list = case_results.get(key, [])
+        attempt_list.sort(key=lambda x: x['attempt_id'])
+
+        attempts = []
+        for a in attempt_list:
+            attempts.append({
+                'attempt_id': a['attempt_id'],
+                'success': a['success'],
+                'elapsed_time': None,  # Parallel mode: no per-attempt timing
+                'info': {'task_id': f"{tier}_{case_name}_attempt{a['attempt_id']}", 'success': a['success']}
+            })
+
+        successful_attempts = [a for a in attempts if a['success']]
+        success_count = len(successful_attempts)
+        pass_rate = success_count / pass_n if pass_n > 0 else 0.0
+
+        best_attempt = None
+        if successful_attempts:
+            best_attempt = successful_attempts[0]  # Pick first successful (no timing in parallel)
+
+        results.append({
+            'tier': tier,
+            'case_name': case_name,
+            'pass_n': pass_n,
+            'attempts': attempts,
+            'success_count': success_count,
+            'pass_rate': pass_rate,
+            'best_attempt': best_attempt,
+            'total_time': None,  # Parallel mode: batch time
+            'overall_success': success_count > 0
         })
-        
-        status = "✓ PASSED" if success else "✗ FAILED"
-        print(f"{status} ({elapsed:.2f}s)")
-    
-    # Calculate statistics
-    successful_attempts = [a for a in attempts if a['success']]
-    success_count = len(successful_attempts)
-    pass_rate = success_count / pass_n if pass_n > 0 else 0.0
-    
-    best_attempt = None
-    if successful_attempts:
-        # Select the fastest successful attempt
-        best_attempt = min(successful_attempts, key=lambda x: x['elapsed_time'])
-    
-    total_time = sum(a['elapsed_time'] for a in attempts)
-    
-    # Print summary
-    print(f"\nResults: {success_count}/{pass_n} passed ({pass_rate:.1%})")
-    if best_attempt:
-        print(f"Best attempt: #{best_attempt['attempt_id']} ({best_attempt['elapsed_time']:.2f}s)")
-    print(f"Total time: {total_time:.2f}s")
-    
-    return {
-        'tier': tier,
-        'case_name': case_name,
-        'pass_n': pass_n,
-        'attempts': attempts,
-        'success_count': success_count,
-        'pass_rate': pass_rate,
-        'best_attempt': best_attempt,
-        'total_time': total_time,
-        'overall_success': success_count > 0
-    }
+
+    return results
 
 
 async def run_bench_lite_tests(args):
@@ -357,27 +275,47 @@ async def run_bench_lite_tests(args):
     print("✓ Configuration loaded")
     print()
     
-    # Run tests
+    # Run tests (concurrent: all case×attempt tasks in parallel)
     print("=" * 80)
-    print("Running Tests")
+    print("Running Tests (concurrent)")
     print("=" * 80)
-    
+    total_tasks = len(cases) * args.pass_n
+    print(f"Submitting {total_tasks} tasks ({len(cases)} cases × Pass@{args.pass_n})...")
+    print()
+
+    task_pool = TaskPool(max_concurrency=args.max_concurrent)
     start_time = time.time()
-    results = []
-    
-    for i, (tier, case_name, file_path) in enumerate(cases, 1):
-        result = await run_case_with_pass_n(
-            tier=tier,
-            case_name=case_name,
-            file_path=file_path,
-            pass_n=args.pass_n,
-            config=config,
-            case_index=i,
-            total_cases=len(cases)
-        )
-        results.append(result)
-    
+
+    # Pre-read all task descriptions
+    case_task_descs = {}
+    for tier, case_name, file_path in cases:
+        case_task_descs[(tier, case_name)] = read_kernel_file(file_path)
+
+    # Create all tasks (case × attempt)
+    for tier, case_name, file_path in cases:
+        task_desc = case_task_descs[(tier, case_name)]
+        for attempt_id in range(1, args.pass_n + 1):
+            task_id = f"{tier}_{case_name}_attempt{attempt_id}"
+            op_name = f"{tier}_{case_name}_attempt{attempt_id}"  # Unique per attempt for result mapping
+
+            task = LangGraphTask(
+                op_name=op_name,
+                task_desc=task_desc,
+                task_id=task_id,
+                dsl="triton_cuda",
+                backend="cuda",
+                arch="rtx3090",
+                config=config,
+                framework="torch",
+                workflow="coder_only_workflow"
+            )
+            task_pool.create_task(task.run, task_name=task_id)
+
+    raw_results = await task_pool.wait_all()
     total_elapsed = time.time() - start_time
+
+    # Aggregate results by case
+    results = _aggregate_results(raw_results, cases, args.pass_n)
     
     # Print summary
     print("\n" + "=" * 80)
@@ -442,7 +380,7 @@ async def run_bench_lite_tests(args):
         pass_n_str = f"{result['success_count']}/{result['pass_n']}"
         success_str = "✓ PASS" if result['overall_success'] else "✗ FAIL"
         
-        if result['best_attempt']:
+        if result['best_attempt'] and result['best_attempt'].get('elapsed_time') is not None:
             best_time_str = f"{result['best_attempt']['elapsed_time']:.2f}s"
         else:
             best_time_str = "N/A"
