@@ -353,6 +353,70 @@ struct ConvertAtenView : public OpConversionPattern<TorchD::AtenViewOp> {
   }
 };
 
+// Default epsilon for RmsNorm; kept in sync with PyTorch/HuggingFace defaults
+// so that ConvertAtenRmsNorm preserves the original F.rms_norm behaviour when
+// eps is not explicitly provided.
+constexpr double kDefaultRmsNormEpsilon = 1e-6;
+
+/// Convert torch.aten.rms_norm → mfuse.aclnn.rms_norm (direct path).
+/// Requires weight to be present and eps to be a constant float.
+/// aten.rms_norm produces 1 result; aclnn.rms_norm produces 2 (yOut, rstdOut).
+/// Only yOut is used to replace the original op; rstdOut is left for DCE.
+struct ConvertAtenRmsNorm : public OpConversionPattern<TorchD::AtenRmsNormOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenRmsNormOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (isa<TorchD::NoneType>(op.getWeight().getType())) {
+      return rewriter.notifyMatchFailure(op, "weight must not be None");
+    }
+
+    double epsVal = kDefaultRmsNormEpsilon;
+    if (!isa<TorchD::NoneType>(op.getEps().getType())) {
+      if (!matchPattern(op.getEps(), TorchD::m_TorchConstantFloat(&epsVal))) {
+        return rewriter.notifyMatchFailure(op, "eps must be a constant float");
+      }
+    }
+
+    llvm::SmallVector<int64_t, 4> normalizedShape;
+    if (!isConstantListInt(op.getNormalizedShape(), normalizedShape)) {
+      return rewriter.notifyMatchFailure(op,
+          "normalized_shape must be constant int list");
+    }
+
+    Value input = adaptor.getInput();
+    Value weight = adaptor.getWeight();
+    auto inputType = cast<RankedTensorType>(input.getType());
+    int64_t inputRank = inputType.getRank();
+    int64_t numNorm = static_cast<int64_t>(normalizedShape.size());
+    if (numNorm > inputRank) {
+      return rewriter.notifyMatchFailure(op,
+          "normalized_shape rank exceeds input rank");
+    }
+
+    auto yOutType = cast<RankedTensorType>(
+        getTypeConverter()->convertType(op.getType()));
+
+    // rstd shape: input shape with last N dims (N = len(normalized_shape))
+    // reduced to 1, matching keepdim=true semantics.
+    auto inputShape = inputType.getShape();
+    SmallVector<int64_t> rstdShape(inputShape.begin(), inputShape.end());
+    for (int64_t i = inputRank - numNorm; i < inputRank; ++i) {
+      rstdShape[i] = 1;
+    }
+    auto rstdType = RankedTensorType::get(
+        rstdShape, inputType.getElementType());
+
+    auto epsilonAttr = rewriter.getF64FloatAttr(epsVal);
+    SmallVector<Type, 2> resultTypes = {yOutType, rstdType};
+    auto rmsNormOp = rewriter.create<mfuse::AclnnRmsNormOp>(
+        op.getLoc(), resultTypes, input, weight, epsilonAttr);
+
+    rewriter.replaceOp(op, rmsNormOp.getYOut());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Pattern population
 //===----------------------------------------------------------------------===//
@@ -363,6 +427,7 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
   patterns.add<ConvertAtenBroadcastTo>(converter, context);
   patterns.add<ConvertAtenReshape>(converter, context);
   patterns.add<ConvertAtenConvolution>(converter, context);
+  patterns.add<ConvertAtenRmsNorm>(converter, context);
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
   patterns.add<ConvertAtenTransposeInt>(converter, context);
   patterns.add<ConvertAtenView>(converter, context);
