@@ -208,6 +208,25 @@ def FuseMatMulReshape : Pass<"fuse-matmul-reshape", "::mlir::ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// FuseRmsNorm pass: fuse decomposed RmsNorm chain to aclnn.rms_norm
+//===----------------------------------------------------------------------===//
+
+def FuseRmsNorm : Pass<"fuse-rms-norm", "::mlir::ModuleOp"> {
+  let summary = "Fuse decomposed RmsNorm (pow+mean+add+rsqrt+mul+mul) into aclnn.rms_norm";
+  let description = [{
+    Matches the pattern: pow(x,2) -> mean.dim -> add.Scalar(eps) -> rsqrt -> mul(x, rsqrt) -> mul(gamma),
+    and replaces it with a single mfuse.aclnn.rms_norm(x, gamma, epsilon).
+    Supports torch.aten for pow/mean/add and mfuse for rsqrt/mul.
+    Also supports decomposed-only chain (add+rsqrt+mul+mul) without pow/mean.
+  }];
+  let constructor = "mlir::mfuse::createFuseRmsNormPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // FuseSwiGlu fusion passes
 //===----------------------------------------------------------------------===//
 
