@@ -92,6 +92,36 @@ class ConvertMfuseAclnnAddRmsNorm : public mlir::OpConversionPattern<mlir::mfuse
   }
 };
 
+/// Converts mfuse.aclnn.rms_norm -> torch.npu.npu_rms_norm, materializing epsilon as Torch scalar.
+class ConvertMfuseAclnnRmsNorm : public mlir::OpConversionPattern<mlir::mfuse::AclnnRmsNormOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnRmsNormOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value x = adaptor.getX();
+    mlir::Value gamma = adaptor.getGamma();
+    double epsilonVal = op.getEpsilonAttr().getValueAsDouble();
+    mlir::Value epsilonScalar = rewriter.create<TorchD::ConstantFloatOp>(
+        op.getLoc(),
+        mlir::FloatAttr::get(mlir::Float64Type::get(rewriter.getContext()), epsilonVal));
+    mlir::SmallVector<mlir::Type> resultTypes;
+    resultTypes.reserve(op.getNumResults());
+    for (unsigned i = 0; i < op.getNumResults(); ++i) {
+      mlir::Type convertedType = getTypeConverter()->convertType(op.getResult(i).getType());
+      if (!convertedType) {
+        return rewriter.notifyMatchFailure(
+            op, "failed to convert result type at index " + std::to_string(i));
+      }
+      resultTypes.push_back(convertedType);
+    }
+    mlir::SmallVector<mlir::Value> operands = {x, gamma, epsilonScalar};
+    rewriter.replaceOpWithNewOp<TorchD::OperatorOp>(
+        op, resultTypes, rewriter.getStringAttr("torch.npu.npu_rms_norm"), operands, 0);
+    return mlir::success();
+  }
+};
+
 /// Converts mfuse.aclnn.gelu -> torch.aten.gelu, materializing attributes as inputs.
 class ConvertMfuseAclnnGelu : public mlir::OpConversionPattern<mlir::mfuse::AclnnGeluOp> {
  public:
@@ -177,6 +207,7 @@ void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, Rewri
   patterns.add<ConvertMfuseAclnnAddRmsNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnGelu>(converter, context);
   patterns.add<ConvertMfuseAclnnGeluBackward>(converter, context);
+  patterns.add<ConvertMfuseAclnnRmsNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnSub>(converter, context);
 }
 
