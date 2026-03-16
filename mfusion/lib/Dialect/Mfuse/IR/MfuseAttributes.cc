@@ -72,8 +72,8 @@ void SymbolInfoAttr::print(mlir::AsmPrinter &printer) const {
   printer << "]>";
 }
 
-std::vector<SymEngine::RCP<const SymEngine::Basic>> SymbolicShapeAttr::getSymEngineExprs() const {
-  std::vector<SymEngine::RCP<const SymEngine::Basic>> exprs;
+llvm::SmallVector<SymEngine::RCP<const SymEngine::Basic>> SymbolicShapeAttr::getSymEngineExprs() const {
+  llvm::SmallVector<SymEngine::RCP<const SymEngine::Basic>> exprs;
   auto listAttr = getExprs();
   exprs.reserve(listAttr.size());
 

@@ -114,7 +114,7 @@ class SplitModel {
   std::shared_ptr<ReachTable> reach_table_{nullptr};
   std::unordered_map<Node *, AreaPtr> node_area_map_;
   std::vector<Node *> nodes_;
-  NodePtrList nodes_ptrs_;
+  std::vector<std::unique_ptr<Node>> nodes_ptrs_;
 
  private:
   size_t cur_area_id_{0};
