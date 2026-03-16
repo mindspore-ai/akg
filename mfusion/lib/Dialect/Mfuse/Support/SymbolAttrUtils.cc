@@ -60,12 +60,11 @@ mlir::FailureOr<llvm::SmallVector<SymbolAttrUtils::SymExpr>> SymbolAttrUtils::ge
   if (ranked.hasStaticShape()) {
     return symBuilder.buildSymExprsFromStaticShape(ranked.getShape());
   }
-  auto symAttr = getSymbolicShapeAttrFromEncoding(type).dyn_cast<mlir::mfuse::SymbolicShapeAttr>();
+  auto symAttr = getSymbolicShapeAttrFromEncoding(type).dyn_cast_or_null<mlir::mfuse::SymbolicShapeAttr>();
   if (!symAttr) {
     return mlir::failure();
   }
-  auto maybeExprs = symAttr.getSymEngineExprs();
-  return llvm::SmallVector<SymbolAttrUtils::SymExpr>(maybeExprs.begin(), maybeExprs.end());
+  return symAttr.getSymEngineExprs();
 }
 
 mlir::Attribute SymbolAttrUtils::mergeEncoding(mlir::RankedTensorType type, mlir::Attribute symshapeAttr) {
