@@ -13,3 +13,7 @@
 	url = https://github.com/wzzll123/MultiKernelBench.git
 	branch = main
 	commit = 55cb5c059573f0bf00f2dc24c75f810059cf2785
+
+[submodule "akg_agents/thirdparty/EvoKernel"]
+	path = akg_agents/thirdparty/EvoKernel
+	url = https://huggingface.co/datasets/noahli/EvoKernel
