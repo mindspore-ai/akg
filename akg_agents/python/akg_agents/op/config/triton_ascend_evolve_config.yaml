@@ -2,7 +2,8 @@
 log_dir: "~/akg_agents_logs"
 
 # Workflow configuration
-default_workflow: "default_workflow"
+default_workflow: "kernelgen_only_workflow"
+enable_sketch_generation: true
 max_step: 20  # 最大迭代步数
 
 # Parser configuration (for LangGraphTask)
