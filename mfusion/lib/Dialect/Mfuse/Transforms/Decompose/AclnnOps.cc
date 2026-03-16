@@ -81,9 +81,14 @@ static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &b
   Type xElementType = x.getType().cast<TensorType>().getElementType();
   Type yElementType = y.getType().cast<TensorType>().getElementType();
 
-  // Check if alpha is 1.0, if so, skip the mul operation
+  // When alpha == 1 we emit add/sub directly. Cast y to match x's element type
+  // (only in this fast-path) to avoid type-promotion producing a wider type
+  // (e.g., f32+f64 → f64) that breaks downstream ops expecting the original
+  // element type. Behaviour for alpha != 1 remains unchanged.
   if (isConstOne(alpha)) {
-    // If alpha is 1.0, just add or subtract x and y
+    if (xElementType != yElementType) {
+      y = builder.cast(y, xElementType);
+    }
     return isAdd ? builder.add(x, y) : builder.sub(x, y);
   }
 

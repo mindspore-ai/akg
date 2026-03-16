@@ -29,7 +29,7 @@ def Mfuse_AclnnAddOp : Mfuse_Op<"aclnn.add", [Pure]> {
   let summary = "The aclnnAdd operation";
   let description = [{
     Element-wise addition of two tensors with an optional alpha scaling factor.
-    Computes: result = x + y * alpha
+    Computes: result = x + y * alpha. Default alpha is 1.0.
   }];
 
   let arguments = (ins
