@@ -40,6 +40,7 @@
 #include "akg/Dialect/Affine/Transforms/ForceConvertAffineForToAffineParallel.h"
 #include "akg/Dialect/Affine/Transforms/GenerateSingleAffineParallel.h"
 #include "akg/Dialect/Affine/Transforms/MergeFusionOp.h"
+#include "akg/Dialect/Affine/Transforms/ReductionSiblingRecompute.h"
 #include "akg/Dialect/Affine/Transforms/RemoveRedundantLoops.h"
 #include "akg/Dialect/Affine/Transforms/ReplaceUnknownDimsToOutputDim.h"
 #include "akg/Dialect/Affine/Transforms/SimplifyShape.h"
