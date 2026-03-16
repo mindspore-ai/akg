@@ -364,29 +364,33 @@ op/resources/prompts/skill_evolution/
 ├── classify_skills.j2          — merge_skills: name + description → LLM 聚类
 └── merge_cluster.j2            — merge_skills: 同簇 skill 全文 → LLM 合并去重
 
-examples/kernel_related/run_skill_evolution.py — 独立 CLI 脚本（不依赖 Agent 框架）
+examples/kernel_related/skill_evolution/
+├── run_skill_evolution.py      — 独立 CLI 脚本（不依赖 Agent 框架）
+├── run_ab_test.py              — A/B 测试批量运行器
+├── ab_test_utils.py            — A/B 测试工具函数
+└── tracking.md                 — 实验结果跟踪文档
 ```
 
 ## 7. 独立 CLI 脚本
 
-`examples/kernel_related/run_skill_evolution.py` 提供不依赖 Agent 框架的独立入口。
+`examples/kernel_related/skill_evolution/run_skill_evolution.py` 提供不依赖 Agent 框架的独立入口。
 
 ```bash
 # search_log 模式
-python examples/kernel_related/run_skill_evolution.py search_log /path/to/logs relu
+python examples/kernel_related/skill_evolution/run_skill_evolution.py search_log /path/to/logs relu
 
 # expert_tuning 模式
-python examples/kernel_related/run_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx relu
+python examples/kernel_related/skill_evolution/run_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx relu
 
 # error_fix 模式
-python examples/kernel_related/run_skill_evolution.py error_fix /path/to/logs matmul
+python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix /path/to/logs matmul
 
 # merge_skills 模式
-python examples/kernel_related/run_skill_evolution.py merge_skills triton_cuda
-python examples/kernel_related/run_skill_evolution.py merge_skills triton_cuda --skills-dir /path/to/evolved -o ./merged
+python examples/kernel_related/skill_evolution/run_skill_evolution.py merge_skills triton_cuda
+python examples/kernel_related/skill_evolution/run_skill_evolution.py merge_skills triton_cuda --skills-dir /path/to/evolved -o ./merged
 
 # 指定输出目录和模型级别
-python examples/kernel_related/run_skill_evolution.py error_fix /path/to/logs matmul -o ./output -m complex
+python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix /path/to/logs matmul -o ./output -m complex
 ```
 
 | 参数 | 说明 |

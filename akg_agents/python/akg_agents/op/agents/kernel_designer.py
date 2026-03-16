@@ -216,10 +216,17 @@ class KernelDesigner(AgentBase):
             if "sketch-design" in skill_dict:
                 selected_skills.append(skill_dict["sketch-design"])
                 logger.info("Selected skill: sketch-design (required)")
+            else:
+                logger.warning("Skill 'sketch-design' not found in loaded skills, skipping required skill")
 
             if enable_hint_mode and has_hint and "hint-mode" in skill_dict:
                 selected_skills.append(skill_dict["hint-mode"])
                 logger.info("Selected skill: hint-mode (hint mode enabled)")
+            else:
+                logger.warning(
+                    "Skill 'hint-mode' not applied: enable_hint_mode=%s, has_hint=%s, in_dict=%s",
+                    enable_hint_mode, has_hint, "hint-mode" in skill_dict,
+                )
 
             logger.info(f"Designer selected {len(selected_skills)} fixed skills: {[s.name for s in selected_skills]}")
             return selected_skills

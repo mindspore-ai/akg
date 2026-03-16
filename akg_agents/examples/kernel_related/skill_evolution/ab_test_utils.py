@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright 2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,21 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-run_ab_test.py - Skill Evolution A/B 测试批量运行器
+A/B 测试工具函数
 
-用法：
-  # 运行 Group 1 的 A/B 测试（先 B 后 A，B 中无 skill 命中的算子自动跳过 A）
-  python run_ab_test.py --group 1 --mode both --device 0
-
-  # 仅收集某次运行的结果（必须指定 --run-dir）
-  python run_ab_test.py --collect-only --run-dir ~/akg_eval_results/run_20260309_155303_a1b2
-
-每次运行会在 output-dir 下创建带时间戳的目录，保证不同运行互不干扰：
-  ~/akg_eval_results/run_20260309_155303_a1b2/
-    ├── run_config.json          # 运行元信息（dsl/backend/arch 等）
-    ├── group_1_B/               # B 组结果
-    ├── group_1_A/               # A 组结果（仅包含 B 中有 skill 命中的算子）
-    └── ab_detail_group1.json    # 汇总的 A/B 详细结果
+包含 Skill Evolution A/B 测试的核心功能：
+- Run ID 和目录管理
+- 配置生成
+- 测试运行
+- 日志文件系统解析
+- 结果收集
+- Tracking.md 更新
 """
 
 import argparse
@@ -36,26 +29,14 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sys
 import tempfile
-import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
-
-
-# ============================================================================
-# 项目路径
-# ============================================================================
-
-def get_project_root() -> Path:
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        if (parent / "python" / "akg_agents").is_dir():
-            return parent
-    raise FileNotFoundError("无法定位项目根目录")
 
 
 # ============================================================================
@@ -80,9 +61,9 @@ def save_run_config(run_dir: str, args: argparse.Namespace) -> None:
         "mode": args.mode,
         "max_rounds": args.max_rounds,
         "device": args.device,
-        "dsl": "triton_cuda",
-        "backend": "cuda",
-        "arch": "rtx3090",
+        "dsl": "triton_ascend",
+        "backend": "ascend",
+        "arch": "ascend910b4",
         "evolved_skill_dir": args.evolved_skill_dir,
         "agent_config": args.agent_config,
         "log_dir": args.log_dir,
@@ -115,10 +96,10 @@ def build_evolve_config(
 
     config = {
         "base": {
-            "dsl": "triton_cuda",
+            "dsl": "triton_ascend",
             "framework": "torch",
-            "backend": "cuda",
-            "arch": "rtx3090",
+            "backend": "ascend",
+            "arch": "ascend910b4",
             "config_path": base_config_path,
         },
         "evolve": {
@@ -216,15 +197,32 @@ def run_group(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _find_operators_with_skills(run_dir: str, group: int) -> List[str]:
-    """从 B 组输出中找出有 evolved skill 命中的算子文件名列表。
+def _find_operators_with_skills(run_dir: str, group: int, op_name: Optional[str] = None) -> Union[List[str], bool]:
+    """从 B 组输出中找出有 evolved skill 命中的算子文件名列表，或检查单个算子是否命中。
 
-    解析 output_{op_name}_*.txt 查找 skill selection 日志，
-    返回有 skill 命中的算子对应的原始 task 文件名（如 01_LayerNorm.py）。
+    参数:
+        run_dir: 运行目录
+        group: 组号
+        op_name: 如果指定，只检查该算子是否命中 skill，返回 bool；否则返回所有命中的算子列表
+
+    解析 output_{op_name}_*.txt 查找 skill selection 日志。
     """
     b_dir = os.path.join(run_dir, f"group_{group}_B")
     if not os.path.isdir(b_dir):
-        return []
+        return [] if op_name is None else False
+
+    if op_name:
+        pattern = os.path.join(b_dir, f"output_{op_name}_*.txt")
+        files = sorted(glob.glob(pattern))
+        if not files:
+            return False
+        with open(files[-1], encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if "skills selected:" in line and "Evolved skill selection complete" in line:
+                    m = re.search(r"skills selected:\s*\[([^\]]*)\]", line)
+                    if m and m.group(1).strip():
+                        return True
+        return False
 
     matched_files: List[str] = []
     for out_file in sorted(glob.glob(os.path.join(b_dir, "output_akg_agents_*.txt"))):
@@ -261,6 +259,51 @@ def _create_filtered_task_dir(
         if src.exists():
             os.symlink(str(src), os.path.join(tmp_dir, fname))
     return tmp_dir
+
+
+def _run_single_operator(
+    group: int,
+    ab_mode: str,
+    run_dir: str,
+    args: argparse.Namespace,
+    project_root: Path,
+    task_file: str,
+):
+    """运行单个算子的 A/B 测试。"""
+    source_dir = (
+        project_root / "benchmark" / "akg_kernels_bench" / "thirdparty" / "pytorch" / f"group_{group}"
+    )
+    tmp_dir = tempfile.mkdtemp(prefix=f"ab_single_g{group}_")
+    src = source_dir / task_file
+    if src.exists():
+        os.symlink(str(src), os.path.join(tmp_dir, task_file))
+
+    label = "无外部知识注入 (baseline)" if ab_mode == "A" else "注入 evolved skill (treatment)"
+    print(f"\n{'='*80}")
+    print(f"  Group {group} — {ab_mode} 组 — {task_file} {label}")
+    print(f"{'='*80}\n")
+
+    config_path = build_evolve_config(
+        group=group,
+        ab_mode=ab_mode,
+        run_dir=run_dir,
+        device=args.device,
+        evolved_skill_dir=args.evolved_skill_dir,
+        base_config_path=args.agent_config,
+        max_rounds=args.max_rounds,
+        project_root=project_root,
+        task_dir=tmp_dir,
+    )
+
+    try:
+        import asyncio
+        sys.path.insert(0, str(project_root / "python"))
+        from akg_agents.op.utils.evolve.runner_manager import run_batch_evolve
+        asyncio.run(run_batch_evolve(config_path=config_path))
+    finally:
+        tmp_dir_cfg = str(Path(config_path).parent)
+        shutil.rmtree(tmp_dir_cfg, ignore_errors=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ============================================================================
@@ -345,6 +388,7 @@ def _parse_selected_skills(output_file: str) -> List[str]:
 
 
 def _find_task_folders(output_dir: str) -> Dict[str, str]:
+    """返回 op_name -> task_folder 的映射。"""
     mapping: Dict[str, str] = {}
     for txt in sorted(glob.glob(os.path.join(output_dir, "realtime_results_*.txt"))):
         current_op = None
@@ -358,6 +402,47 @@ def _find_task_folders(output_dir: str) -> Dict[str, str]:
                     mapping[current_op] = m.group(1)
                     current_op = None
     return mapping
+
+
+def _find_task_folders_list(output_dir: str) -> List[Dict[str, Any]]:
+    """返回按顺序排列的 task_folder 列表，每个元素包含 op_name 和 task_folder。"""
+    folders: List[Dict[str, Any]] = []
+    for txt in sorted(glob.glob(os.path.join(output_dir, "realtime_results_*.txt"))):
+        current_op = None
+        with open(txt, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("akg_agents_"):
+                    current_op = line
+                m = re.match(r"Task文件夹:\s*(\S+)", line)
+                if m and current_op:
+                    folders.append({
+                        "op_name": current_op,
+                        "task_folder": m.group(1)
+                    })
+                    current_op = None
+    return folders
+
+
+def _parse_realtime_results(realtime_file: str) -> Dict[int, Dict[str, Any]]:
+    """解析单个 realtime_results_*.txt 文件，返回按索引排列的映射。"""
+    result: Dict[int, Dict[str, Any]] = {}
+    idx = 0
+    current_op = None
+    with open(realtime_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("akg_agents_"):
+                current_op = line
+            m = re.match(r"Task文件夹:\s*(\S+)", line)
+            if m and current_op:
+                result[idx] = {
+                    "op_name": current_op,
+                    "task_folder": m.group(1)
+                }
+                idx += 1
+                current_op = None
+    return result
 
 
 def _find_output_file(output_dir: str, op_name: str) -> Optional[str]:
@@ -377,7 +462,12 @@ def collect_group_results(
     log_dir_base: str,
     max_rounds: int,
 ) -> List[Dict[str, Any]]:
-    """从日志文件系统收集一个 group+mode 的全部算子详细结果。"""
+    """从日志文件系统收集一个 group+mode 的全部算子详细结果。
+
+    支持两种模式：
+    1. 批量运行：读取最后一个 batch_summary_*.json
+    2. 逐算子运行：合并所有 batch_summary_*.json 文件
+    """
     output_dir = os.path.join(run_dir, f"group_{group}_{ab_mode}")
     if not os.path.isdir(output_dir):
         return []
@@ -387,15 +477,29 @@ def collect_group_results(
     summaries = sorted(glob.glob(os.path.join(output_dir, "batch_summary_*.json")))
     if not summaries:
         return []
-    with open(summaries[-1], encoding="utf-8") as f:
-        batch = json.load(f)
 
-    task_folders = _find_task_folders(output_dir)
+    all_task_results: List[Dict[str, Any]] = []
+    total_execution_time = 0.0
+    for summary_path in summaries:
+        try:
+            with open(summary_path, encoding="utf-8") as f:
+                batch = json.load(f)
+                all_task_results.extend(batch.get("task_results", []))
+                batch_info = batch.get("batch_info", {})
+                total_execution_time += batch_info.get("total_execution_time_seconds", 0)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    if not all_task_results:
+        return []
+
+    task_folder_list = _find_task_folders_list(output_dir)
 
     results: List[Dict[str, Any]] = []
-    for tr in batch.get("task_results", []):
+    for i, tr in enumerate(all_task_results):
         op_name = tr["op_name"]
-        task_folder = task_folders.get(op_name, "")
+        task = task_folder_list[i] if i < len(task_folder_list) else None
+        task_folder = task.get("task_folder", "") if task else ""
         short_name = re.sub(r"^akg_agents_", "", op_name)
 
         op_log_dir = os.path.join(log_base, task_folder, op_name) if task_folder else ""
@@ -449,6 +553,9 @@ def collect_group_results(
         }
         results.append(entry)
 
+    if results and total_execution_time > 0:
+        results[0]["_batch_total_execution_time"] = total_execution_time
+
     return results
 
 
@@ -469,13 +576,16 @@ TRACKING_ROUND_COLS = 3
 
 
 def _split_by_group(content: str) -> Dict[int, str]:
+    sec4_pos = content.find("## 4.")
+    search_end = sec4_pos if sec4_pos > 0 else len(content)
+
     result: Dict[int, str] = {}
     pattern = re.compile(r"^### Group (\d+)", re.MULTILINE)
-    matches = list(pattern.finditer(content))
+    matches = list(pattern.finditer(content, 0, search_end))
     for i, m in enumerate(matches):
         group_num = int(m.group(1))
         start = m.start()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        end = matches[i + 1].start() if i + 1 < len(matches) else search_end
         next_section = re.search(r"^## \d+\.", content[start:end], re.MULTILINE)
         if next_section:
             end = start + next_section.start()
@@ -578,6 +688,9 @@ def update_tracking_md(
     # --- 3. 汇总统计 (Section 4) ---
     content = _update_summary_stats(content, all_results)
 
+    # --- 4. 算子级 Speedup 对比 (Section 5) ---
+    content = _update_speedup_comparison(content, all_results)
+
     with open(tracking_path, "w", encoding="utf-8") as f:
         f.write(content)
     print(f"  tracking.md 已更新: {tracking_path}")
@@ -612,7 +725,10 @@ def _update_experiment_record(
             sr = f"{n_ok}/{len(entries)}"
             speedups = [e["best_speedup"] for e in entries if e.get("best_speedup") is not None]
             avg_sp = _fmt(sum(speedups) / len(speedups) if speedups else 0)
-            total_time = sum(e.get("execution_time_s", 0) or 0 for e in entries)
+            if entries and "_batch_total_execution_time" in entries[0]:
+                total_time = entries[0]["_batch_total_execution_time"]
+            else:
+                total_time = sum(e.get("execution_time_s", 0) or 0 for e in entries)
             skill_ver = "v0.1" if ab == "B" else "N/A"
             note = f"{dsl}/{backend}/{arch}"
             row = (
@@ -628,7 +744,7 @@ def _update_experiment_record(
     if sec2_start < 0:
         return content
 
-    sep_match = re.search(r"\|[-|]+\|\n", content[sec2_start:])
+    sep_match = re.search(r"\|[-:| ]+\|\n", content[sec2_start:])
     if not sep_match:
         return content
 
@@ -636,12 +752,14 @@ def _update_experiment_record(
 
     existing_rows = ""
     rest_start = insert_pos
+    while rest_start < len(content) and content[rest_start] in ['\n', '\r']:
+        rest_start += 1
     while rest_start < len(content) and content[rest_start] == '|':
         line_end = content.find('\n', rest_start)
         if line_end < 0:
             line_end = len(content)
+        existing_rows += content[rest_start:line_end + 1]
         rest_start = line_end + 1
-    existing_rows = content[insert_pos:rest_start]
 
     all_row_text = existing_rows + "\n".join(new_rows) + "\n"
     content = content[:insert_pos] + all_row_text + content[rest_start:]
@@ -678,7 +796,8 @@ def _ensure_summary_groups(content: str, needed_groups: List[int]) -> str:
     cols.extend(["总 A", "总 B"])
 
     header = "| 指标 | " + " | ".join(cols) + " |"
-    sep = "|------" + "|".join(["------"] * len(cols)) + "|"
+    sep_cells = ["------"] * (len(cols) + 1)
+    sep = "|" + "|".join(sep_cells) + "|"
     metric_rows = [
         "成功率", "平均首次成功轮次", "平均 Speedup", "平均生成时间", "Skill 命中率"
     ]
@@ -694,7 +813,11 @@ def _ensure_summary_groups(content: str, needed_groups: List[int]) -> str:
 
 
 def _update_summary_stats(content: str, all_results: List[Dict[str, Any]]) -> str:
-    """更新 '## 4. 汇总统计' 中的指标。"""
+    """更新 '## 4. 汇总统计' 中的指标。
+
+    增量更新：只覆盖当前运行包含的 group 列，保留之前运行写入的其他 group 数据，
+    并从所有 per-group 列重新计算汇总列（总 A / 总 B）。
+    """
     result_groups = sorted({r["group"] for r in all_results})
     content = _ensure_summary_groups(content, result_groups)
     header_groups = _parse_summary_header_groups(content)
@@ -716,17 +839,6 @@ def _update_summary_stats(content: str, all_results: List[Dict[str, Any]]) -> st
         if r.get("selected_skills"):
             s["skill_hits"] += 1
 
-    totals = {"A": {"ok": 0, "total": 0, "speedups": [], "first_rounds": []},
-              "B": {"ok": 0, "total": 0, "speedups": [], "first_rounds": [], "skill_hits": 0}}
-    for key, s in stats.items():
-        ab = "B" if key.endswith("B") else "A"
-        totals[ab]["ok"] += s["ok"]
-        totals[ab]["total"] += s["total"]
-        totals[ab]["speedups"].extend(s["speedups"])
-        totals[ab]["first_rounds"].extend(s["first_rounds"])
-        if ab == "B":
-            totals[ab]["skill_hits"] = totals[ab].get("skill_hits", 0) + s.get("skill_hits", 0)
-
     def _col(key: str, metric: str) -> str:
         if key not in stats:
             return "-"
@@ -743,18 +855,6 @@ def _update_summary_stats(content: str, all_results: List[Dict[str, Any]]) -> st
             return f"{s.get('skill_hits', 0)}/{s['total']}" if s["total"] else "-"
         return "-"
 
-    def _total(ab: str, metric: str) -> str:
-        t = totals[ab]
-        if metric == "sr":
-            return f"{t['ok']}/{t['total']}" if t["total"] else "-"
-        if metric == "sp":
-            return _fmt(sum(t["speedups"]) / len(t["speedups"])) if t["speedups"] else "-"
-        if metric == "fr":
-            return _fmt(sum(t["first_rounds"]) / len(t["first_rounds"]), "{:.1f}") if t["first_rounds"] else "-"
-        if metric == "skill":
-            return f"{t.get('skill_hits', 0)}/{t['total']}" if t["total"] else "-"
-        return "-"
-
     sec4_start = content.find("## 4. 汇总统计")
     sec5_start = content.find("## 5.", sec4_start + 1) if sec4_start >= 0 else -1
     if sec4_start < 0:
@@ -763,21 +863,81 @@ def _update_summary_stats(content: str, all_results: List[Dict[str, Any]]) -> st
 
     sec4_text = content[sec4_start:sec4_end]
 
+    def _parse_existing_row(metric_name: str) -> List[str]:
+        for line in sec4_text.split('\n'):
+            if not line.strip().startswith('|'):
+                continue
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) >= 2 and parts[1] == metric_name:
+                return parts[2:-1] if (parts and parts[-1] == '') else parts[2:]
+        return []
+
+    def _recalc_total(cells: List[str], metric_key: str) -> str:
+        if metric_key in ("sr", "skill"):
+            total_ok, total_n = 0, 0
+            for c in cells:
+                c = c.strip()
+                if c in ("-", "N/A"):
+                    continue
+                m = re.match(r"(\d+)/(\d+)", c)
+                if m:
+                    total_ok += int(m.group(1))
+                    total_n += int(m.group(2))
+            return f"{total_ok}/{total_n}" if total_n > 0 else "-"
+        vals = []
+        for c in cells:
+            c = c.strip()
+            if c in ("-", "N/A"):
+                continue
+            try:
+                vals.append(float(c))
+            except ValueError:
+                continue
+        if not vals:
+            return "-"
+        avg = sum(vals) / len(vals)
+        if metric_key == "time":
+            return _fmt(avg, "{:.0f}")
+        if metric_key == "fr":
+            return _fmt(avg, "{:.1f}")
+        return _fmt(avg)
+
     def _build_row(metric_name: str, metric_key: str) -> None:
         nonlocal sec4_text
-        row_pat = re.compile(r"\| *" + re.escape(metric_name) + r" *\|[^\n]*")
-        vals = []
+
+        existing = _parse_existing_row(metric_name)
+
+        group_cells: List[str] = []
+        col_idx = 0
         for g in header_groups:
             for ab in ["A", "B"]:
                 k = f"Group {g} {ab}"
-                if metric_key == "skill" and ab == "A":
-                    vals.append("N/A")
+                if k in stats:
+                    if metric_key == "skill" and ab == "A":
+                        group_cells.append("N/A")
+                    else:
+                        group_cells.append(_col(k, metric_key))
                 else:
-                    vals.append(_col(k, metric_key))
-        vals.append(_total("A", metric_key) if metric_key != "skill" else "N/A")
-        vals.append(_total("B", metric_key))
-        new_row = f"| {metric_name} | " + " | ".join(vals) + " |"
-        sec4_text = row_pat.sub(new_row, sec4_text)
+                    group_cells.append(existing[col_idx] if col_idx < len(existing) else "-")
+                col_idx += 1
+
+        a_cells = [group_cells[j] for j in range(0, len(group_cells), 2)]
+        b_cells = [group_cells[j] for j in range(1, len(group_cells), 2)]
+
+        total_a = "N/A" if metric_key == "skill" else _recalc_total(a_cells, metric_key)
+        total_b = _recalc_total(b_cells, metric_key)
+
+        all_vals = group_cells + [total_a, total_b]
+        new_row = f"| {metric_name} | " + " | ".join(all_vals) + " |"
+
+        lines = sec4_text.split('\n')
+        for i, line in enumerate(lines):
+            if line.strip().startswith('|') and metric_name in line:
+                parts = [p.strip() for p in line.split('|')]
+                if parts and parts[1] == metric_name:
+                    lines[i] = new_row
+                    break
+        sec4_text = '\n'.join(lines)
 
     _build_row("成功率", "sr")
     _build_row("平均首次成功轮次", "fr")
@@ -789,191 +949,203 @@ def _update_summary_stats(content: str, all_results: List[Dict[str, Any]]) -> st
     return content
 
 
-# ============================================================================
-# 主入口
-# ============================================================================
+def _parse_speedup_groups(
+    section_text: str,
+) -> Dict[int, Dict[str, Dict[str, Optional[float]]]]:
+    """从已有的 '算子级 Speedup 对比' section 文本中解析出 per-group 数据。"""
+    result: Dict[int, Dict[str, Dict[str, Optional[float]]]] = {}
+    current_group: Optional[int] = None
+    for line in section_text.split('\n'):
+        gm = re.match(r"^### Group (\d+)", line)
+        if gm:
+            current_group = int(gm.group(1))
+            result[current_group] = {}
+            continue
+        if current_group is None or not line.startswith('|') or '---' in line:
+            continue
+        cells = [c.strip() for c in line.split('|')]
+        cells = [c for c in cells if c]
+        if len(cells) < 3 or cells[0] == '算子':
+            continue
+        op_name = cells[0]
+        op_data: Dict[str, Optional[float]] = {}
+        for idx, key in [(1, "A"), (2, "B")]:
+            try:
+                val = cells[idx].strip()
+                if val not in ('-', ''):
+                    op_data[key] = float(val)
+            except (ValueError, IndexError):
+                pass
+        result[current_group][op_name] = op_data
+    return result
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Skill Evolution A/B 测试运行器",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "--group", type=int, nargs="+", required=True, choices=[1, 2, 3, 4],
-        help="要测试的 group 编号（可多选）",
-    )
-    parser.add_argument(
-        "--mode", choices=["A", "B", "both"], default="both",
-        help="A=baseline, B=evolved skill, both=先 B 后 A（B 无 skill 命中则跳过 A）",
-    )
-    parser.add_argument(
-        "--device", type=int, default=0,
-        help="NPU/GPU 设备 ID（默认 0）",
-    )
-    parser.add_argument(
-        "--max-rounds", type=int, default=3,
-        help="evolve 迭代轮数（默认 3）",
-    )
-    parser.add_argument(
-        "--output-dir", default="~/akg_eval_results",
-        help="输出根目录（默认 ~/akg_eval_results）",
-    )
-    parser.add_argument(
-        "--evolved-skill-dir",
-        default="python/akg_agents/op/resources/skills/triton-cuda/evolved",
-        help="evolved SKILL.md 所在目录（B 组使用）",
-    )
-    parser.add_argument(
-        "--agent-config",
-        default="op/config/triton_cuda_evolve_config.yaml",
-        help="agent 模型配置文件（相对于 python/akg_agents/）",
-    )
-    parser.add_argument(
-        "--log-dir", default="~/akg_agents_logs",
-        help="agent 日志根目录（默认 ~/akg_agents_logs）",
-    )
-    parser.add_argument(
-        "--tracking-md", default=None,
-        help="tracking.md 路径（默认自动检测）",
-    )
-    parser.add_argument(
-        "--run-dir", default=None,
-        help="指定已有的运行目录（用于 --collect-only）",
-    )
-    parser.add_argument(
-        "--collect-only", action="store_true",
-        help="仅收集已有结果（必须配合 --run-dir 使用）",
-    )
-    args = parser.parse_args()
 
-    if args.collect_only and not args.run_dir:
-        parser.error("--collect-only 必须配合 --run-dir 使用")
+def _update_speedup_comparison(content: str, all_results: List[Dict[str, Any]]) -> str:
+    """更新 '算子级 Speedup 对比' section —— 每个 Group 输出逐算子最佳 Speedup 对比表。
 
-    project_root = get_project_root()
+    增量更新：只覆盖当前运行包含的 group，保留之前运行写入的其他 group 数据。
+    """
+    new_groups: Dict[int, Dict[str, Dict[str, Optional[float]]]] = {}
+    for r in all_results:
+        g = r["group"]
+        op = r["op_name"]
+        ab = r["ab_mode"]
+        new_groups.setdefault(g, {}).setdefault(op, {})[ab] = r.get("best_speedup")
 
-    tracking_path = args.tracking_md or str(
-        project_root / "benchmark" / "akg_kernels_bench" / "thirdparty" / "pytorch" / "tracking.md"
+    if not new_groups:
+        return content
+
+    existing_match = re.search(
+        r"^(## \d+\.)\s*算子级 Speedup 对比", content, re.MULTILINE
     )
 
-    # 确定 run_dir
-    if args.run_dir:
-        run_dir = os.path.expanduser(args.run_dir)
+    if existing_match:
+        sec_start = existing_match.start()
+        next_sec = re.search(r"^## \d+\.", content[sec_start + 1:], re.MULTILINE)
+        sec_end = (sec_start + 1 + next_sec.start()) if next_sec else len(content)
+        section_title = existing_match.group(0).rstrip()
+        existing_groups = _parse_speedup_groups(content[sec_start:sec_end])
     else:
-        run_dir = generate_run_dir(args.output_dir)
+        all_sec_nums = re.findall(r"^## (\d+)\.", content, re.MULTILINE)
+        max_num = max(int(n) for n in all_sec_nums) if all_sec_nums else 0
+        section_title = f"## {max_num + 1}. 算子级 Speedup 对比"
+        sec_start = None
+        sec_end = None
+        existing_groups = {}
 
-    # 读取或生成 run_config
-    run_config_path = os.path.join(run_dir, "run_config.json")
-    if os.path.isfile(run_config_path):
-        with open(run_config_path, encoding="utf-8") as f:
-            run_config = json.load(f)
-    else:
-        save_run_config(run_dir, args)
-        with open(run_config_path, encoding="utf-8") as f:
-            run_config = json.load(f)
+    merged = dict(existing_groups)
+    merged.update(new_groups)
 
-    modes = ["A", "B"] if args.mode == "both" else [args.mode]
-
-    print("=" * 80)
-    print("Skill Evolution A/B 测试")
-    print("=" * 80)
-    print(f"Run Dir: {run_dir}")
-    print(f"Groups:  {args.group}")
-    print(f"Modes:   {modes}")
-    print(f"Rounds:  {args.max_rounds}")
-    print(f"Device:  {args.device}")
-    print(f"DSL:     {run_config.get('dsl', '')} / {run_config.get('backend', '')} / {run_config.get('arch', '')}")
-    if "B" in modes:
-        print(f"Evolved: {args.evolved_skill_dir}")
-    print("=" * 80)
-
-    # ================================================================
-    # Phase 1: 运行测试
-    # ================================================================
-    if not args.collect_only:
-        for group in args.group:
-            if args.mode == "both":
-                # both 模式: B 先跑，根据 B 的 skill 命中情况过滤 A 的算子
-                run_group(group, "B", run_dir, args, project_root)
-
-                matched_files = _find_operators_with_skills(run_dir, group)
-                if matched_files:
-                    print(f"\n  B 组中 {len(matched_files)} 个算子有 skill 命中，将为这些算子运行 A 组")
-                    filtered_dir = _create_filtered_task_dir(project_root, group, matched_files)
-                    try:
-                        run_group(group, "A", run_dir, args, project_root, task_dir=filtered_dir)
-                    finally:
-                        if filtered_dir:
-                            shutil.rmtree(filtered_dir, ignore_errors=True)
-                else:
-                    print(f"\n  B 组中无算子命中 evolved skill，跳过 Group {group} A 组")
+    lines = [section_title, ""]
+    for g in sorted(merged):
+        lines.append(f"### Group {g}")
+        lines.append("")
+        lines.append("| 算子 | A Speedup | B Speedup | 差异 (B-A) |")
+        lines.append("|------|-----------|-----------|------------|")
+        for op in sorted(merged[g]):
+            a_sp = merged[g][op].get("A")
+            b_sp = merged[g][op].get("B")
+            a_str = _fmt(a_sp)
+            b_str = _fmt(b_sp)
+            if a_sp is not None and b_sp is not None:
+                diff = b_sp - a_sp
+                diff_str = f"{diff:+.2f}"
+                if diff > 0:
+                    diff_str = f"**{diff_str}**"
             else:
-                for mode in modes:
-                    run_group(group, mode, run_dir, args, project_root)
+                diff_str = "-"
+            lines.append(f"| {op} | {a_str} | {b_str} | {diff_str} |")
+        lines.append("")
 
-    # ================================================================
-    # Phase 2: 收集结果
-    # ================================================================
-    print(f"\n{'='*80}")
-    print("收集实验结果...")
-    print(f"{'='*80}")
+    new_section = "\n".join(lines) + "\n"
 
-    all_results: List[Dict[str, Any]] = []
-    collect_modes = ["B", "A"] if args.mode == "both" else modes
-    for group in args.group:
-        for mode in collect_modes:
-            group_results = collect_group_results(
-                group=group,
-                ab_mode=mode,
-                run_dir=run_dir,
-                log_dir_base=args.log_dir,
-                max_rounds=args.max_rounds,
-            )
-            all_results.extend(group_results)
-            for r in group_results:
-                sp = _fmt(r.get("best_speedup"))
-                status = "OK" if r["success"] else "FAIL"
-                skills_str = f" skills={r['selected_skills']}" if r["selected_skills"] else ""
-                print(f"  Group {group} {mode} | {r['op_name']:25s} | {status:4s} | speedup={sp}{skills_str}")
+    if sec_start is not None:
+        content = content[:sec_start] + new_section + content[sec_end:]
+    else:
+        content = content.rstrip() + "\n\n" + new_section
 
-    # 保存汇总 JSON
-    for group in args.group:
-        gr = [r for r in all_results if r["group"] == group]
-        if gr:
-            detail_path = os.path.join(run_dir, f"ab_detail_group{group}.json")
-            with open(detail_path, "w", encoding="utf-8") as f:
-                json.dump(gr, f, indent=2, ensure_ascii=False, default=str)
-            print(f"  Group {group} 详细结果: {detail_path}")
+    return content
 
-    # ================================================================
-    # Phase 3: 更新 tracking.md
-    # ================================================================
-    if all_results:
-        print(f"\n{'='*80}")
-        print("更新 tracking.md ...")
-        print(f"{'='*80}")
-        update_tracking_md(all_results, tracking_path, run_config)
 
-    # ================================================================
-    # Phase 4: 汇总
-    # ================================================================
-    print(f"\n{'='*80}")
-    print("测试完成汇总")
-    print(f"{'='*80}")
-    for group in args.group:
-        for mode in collect_modes:
-            gr = [r for r in all_results if r["group"] == group and r["ab_mode"] == mode]
-            if not gr:
+def _clear_tracking_md(tracking_path: str) -> bool:
+    """清空 tracking.md 中的所有实验数据，恢复到初始空表状态。
+
+    保留文件结构（section 标题、表头、算子名列表），只重置数据单元格。
+    Section 1 及 Section 5+ 完整保留不动。
+    """
+    if not os.path.isfile(tracking_path):
+        print(f"  tracking.md 不存在：{tracking_path}，跳过清空")
+        return False
+
+    with open(tracking_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # === Section 2: 清空实验运行记录数据行，保留表头 ===
+    sec2_start = content.find("## 2. 实验运行记录")
+    if sec2_start >= 0:
+        sec3_start = content.find("## 3.", sec2_start + 1)
+        if sec3_start < 0:
+            sec3_start = len(content)
+        sec2_text = content[sec2_start:sec3_start]
+        sep_match = re.search(r'\|[-:| ]+\|\n', sec2_text)
+        if sep_match:
+            content = content[:sec2_start + sep_match.end()] + "\n\n" + content[sec3_start:]
+
+    # === Section 3: 保留 Group 结构和算子名，数据列重置为 "-" ===
+    sec3_start = content.find("## 3. 逐算子详情")
+    if sec3_start >= 0:
+        sec4_start = content.find("## 4.", sec3_start + 1)
+        if sec4_start < 0:
+            sec4_start = len(content)
+        sec3_text = content[sec3_start:sec4_start]
+
+        def _reset_data_row(m: re.Match) -> str:
+            parts = [c.strip() for c in m.group(0).split('|')]
+            n_data = len(parts) - 4
+            if n_data <= 0:
+                return m.group(0)
+            return f"| {parts[1]} | {parts[2]} | " + " | ".join(["-"] * n_data) + " |"
+
+        sec3_text = re.sub(
+            r'^\|[^|]+\| *(?:A|B) *\|[^\n]*',
+            _reset_data_row, sec3_text, flags=re.MULTILINE,
+        )
+        content = content[:sec3_start] + sec3_text + content[sec4_start:]
+
+    # === Section 4: 重置汇总统计指标行 ===
+    sec4_start = content.find("## 4. 汇总统计")
+    if sec4_start >= 0:
+        sec5_start = content.find("## 5.", sec4_start + 1)
+        if sec5_start < 0:
+            sec5_start = len(content)
+        sec4_text = content[sec4_start:sec5_start]
+
+        metric_names = {"成功率", "平均首次成功轮次", "平均 Speedup", "平均生成时间", "Skill 命中率"}
+        lines = sec4_text.split('\n')
+        for i, line in enumerate(lines):
+            if not line.strip().startswith('|'):
                 continue
-            n_ok = sum(1 for r in gr if r["success"])
-            speedups = [r["best_speedup"] for r in gr if r.get("best_speedup") is not None]
-            avg_sp = sum(speedups) / len(speedups) if speedups else 0
-            retries = sum(r.get("total_conductor_retries", 0) for r in gr)
-            print(f"  Group {group} {mode}: {n_ok}/{len(gr)} 成功, 平均speedup={avg_sp:.2f}x, conductor重试={retries}")
+            parts = [c.strip() for c in line.split('|')]
+            if len(parts) < 3 or parts[1] not in metric_names:
+                continue
+            n_data = len(parts) - 3
+            if parts[1] == "Skill 命中率":
+                vals = ["N/A" if j % 2 == 0 else "-" for j in range(n_data)]
+            else:
+                vals = ["-"] * n_data
+            lines[i] = f"| {parts[1]} | " + " | ".join(vals) + " |"
+        content = content[:sec4_start] + '\n'.join(lines) + content[sec5_start:]
 
-    print(f"\n运行目录: {run_dir}")
-    print(f"{'='*80}")
+    # === Section 5: 清空 Speedup 对比数据行，保留 Group 表头 ===
+    existing_match = re.search(
+        r"^(## \d+\.)\s*算子级 Speedup 对比", content, re.MULTILINE
+    )
+    if existing_match:
+        sec5_start = existing_match.start()
+        next_sec = re.search(r"^## \d+\.", content[sec5_start + 1:], re.MULTILINE)
+        sec5_end = (sec5_start + 1 + next_sec.start()) if next_sec else len(content)
+        sec5_text = content[sec5_start:sec5_end]
+        section_title = existing_match.group(0).rstrip()
 
+        group_nums = sorted(set(
+            int(gm.group(1))
+            for gm in re.finditer(r"^### Group (\d+)", sec5_text, re.MULTILINE)
+        ))
+        if not group_nums:
+            group_nums = [1, 2, 3]
 
-if __name__ == "__main__":
-    main()
+        lines = [section_title, ""]
+        for g in group_nums:
+            lines.extend([
+                f"### Group {g}", "",
+                "| 算子 | A Speedup | B Speedup | 差异 (B-A) |",
+                "|------|-----------|-----------|------------|", "",
+            ])
+        lines.append("")
+        content = content[:sec5_start] + "\n".join(lines) + content[sec5_end:]
+
+    with open(tracking_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    print(f"  tracking.md 已清空：{tracking_path}")
+    return True

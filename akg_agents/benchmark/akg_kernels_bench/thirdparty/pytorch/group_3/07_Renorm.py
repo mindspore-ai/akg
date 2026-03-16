@@ -33,8 +33,8 @@ class Model(nn.Module):
         """
         return torch.renorm(x, self.p, self.dim, self.maxnorm)
 
-batch_size = 128
-features = 4096
+batch_size = 256
+features = 16384
 p = 2.0
 dim = 0
 maxnorm = 1.0
