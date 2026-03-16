@@ -40,6 +40,7 @@ from akg_agents.utils.environment_check import check_env_for_task
 logger = logging.getLogger(__name__)
 
 os.environ['AKG_AGENTS_DATA_COLLECT'] = 'on'
+os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
 device_id = get_device_id()
 
 # ==================== 自动模式配置 ====================

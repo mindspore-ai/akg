@@ -15,8 +15,12 @@
 # DEPRECATED: 此测试对应的 FeatureExtractor (core/agent/utils/feature_extractor.py) 已标记废弃，
 # 后续将迁移到 op/agents，届时此测试也需要更新。
 
+import os
 import pytest
 import gc
+
+os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
+
 from akg_agents.core.agent.utils.feature_extractor import FeatureExtractor
 from akg_agents.op.config.config_validator import load_config
 

@@ -1,5 +1,4 @@
 import torch
-import torch_npu
 
 class Model(torch.nn.Module):
     def __init__(self):
