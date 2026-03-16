@@ -169,8 +169,19 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
             )
             workflow.add_node("code_checker", code_checker_node)
             
-            # 添加边：coder -> code_checker
-            workflow.add_edge("coder", "code_checker")
+            # 代码生成后的路由（处理 max_tokens 截断等异常）
+            codegen_router = RouterFactory.create_codegen_router(
+                next_agent="code_checker",
+                code_gen_agent="coder"
+            )
+            workflow.add_conditional_edges(
+                "coder",
+                codegen_router,
+                {
+                    "code_checker": "code_checker",
+                    "conductor": "conductor"
+                }
+            )
             
             # 条件边：code_checker 后的路由
             code_checker_router = RouterFactory.create_code_checker_router(
@@ -187,8 +198,19 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
                 }
             )
         else:
-            # 不启用 CodeChecker，直接 coder -> verifier
-            workflow.add_edge("coder", "verifier")
+            # 不启用 CodeChecker，直接 coder -> verifier（带 codegen 路由）
+            codegen_router = RouterFactory.create_codegen_router(
+                next_agent="verifier",
+                code_gen_agent="coder"
+            )
+            workflow.add_conditional_edges(
+                "coder",
+                codegen_router,
+                {
+                    "verifier": "verifier",
+                    "conductor": "conductor"
+                }
+            )
             logger.info("CodeChecker disabled, using direct coder -> verifier flow")
         
         # 条件边：verifier 后的路由（验证通过跳过 conductor）
@@ -221,4 +243,3 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
         workflow.set_entry_point("coder")
         
         return workflow
-

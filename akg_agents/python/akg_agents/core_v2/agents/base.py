@@ -187,30 +187,8 @@ class AgentBase(ABC):
                 if extracted:
                     reasoning_content = extracted
             
-            # 诊断：检测 max_tokens 截断和 content 为空的异常情况
-            if finish_reason == "length":
-                if not content and reasoning_content:
-                    logger.warning(
-                        f"[AgentBase][{agent_name}] LLM content 为空，finish_reason='length'，"
-                        f"推理 token 耗尽了 max_tokens 配额，未能生成正式回答。"
-                        f"reasoning 长度={len(reasoning_content)}。"
-                        f"建议：增大 max_tokens 或在 extra_body 中限制推理预算"
-                    )
-                else:
-                    logger.warning(
-                        f"[AgentBase][{agent_name}] LLM 输出被截断，finish_reason='length'，"
-                        f"content 可能不完整（content 长度={len(content)}，"
-                        f"reasoning 长度={len(reasoning_content)}）。"
-                        f"建议：增大 max_tokens"
-                    )
-            elif not content and reasoning_content:
-                # finish_reason 不是 length，但 content 为空（如 GLM 默认强制 thinking）
-                logger.warning(
-                    f"[AgentBase][{agent_name}] LLM content 为空但 reasoning_content 非空"
-                    f"（finish_reason='{finish_reason}'，reasoning 长度={len(reasoning_content)}），"
-                    f"将 reasoning_content 作为 content 使用。"
-                    f"可能原因：模型将全部输出放入了 reasoning_content 字段"
-                )
+            # 诊断 LLM 输出状态并记录元信息
+            self._diagnose_llm_output(content, reasoning_content, finish_reason, agent_name)
             
             if not content and reasoning_content:
                 content = reasoning_content
@@ -283,28 +261,7 @@ class AgentBase(ABC):
             if extracted:
                 reasoning_content = extracted
         
-        if finish_reason == "length":
-            if not content and reasoning_content:
-                logger.warning(
-                    f"[AgentBase][{agent_name}] LLM content 为空，finish_reason='length'，"
-                    f"推理 token 耗尽了 max_tokens 配额，未能生成正式回答。"
-                    f"reasoning 长度={len(reasoning_content)}。"
-                    f"建议：增大 max_tokens 或在 extra_body 中限制推理预算"
-                )
-            else:
-                logger.warning(
-                    f"[AgentBase][{agent_name}] LLM 输出被截断，finish_reason='length'，"
-                    f"content 可能不完整（content 长度={len(content)}，"
-                    f"reasoning 长度={len(reasoning_content)}）。"
-                    f"建议：增大 max_tokens"
-                )
-        elif not content and reasoning_content:
-            logger.warning(
-                f"[AgentBase][{agent_name}] LLM content 为空但 reasoning_content 非空"
-                f"（finish_reason='{finish_reason}'，reasoning 长度={len(reasoning_content)}），"
-                f"将 reasoning_content 作为 content 使用。"
-                f"可能原因：模型将全部输出放入了 reasoning_content 字段"
-            )
+        self._diagnose_llm_output(content, reasoning_content, finish_reason, agent_name)
         
         if not content and reasoning_content:
             content = reasoning_content
@@ -441,6 +398,74 @@ class AgentBase(ABC):
             return os.path.join(docs_dir, doc_path)
         
         raise ValueError(f"No doc directory configured for agent type '{agent_type}'.")
+    
+    # ========================= LLM 输出诊断 =========================
+    
+    def _diagnose_llm_output(
+        self,
+        content: str,
+        reasoning_content: str,
+        finish_reason: str,
+        agent_name: str,
+    ) -> None:
+        """
+        诊断 LLM 输出状态，设置 self.last_llm_info 并记录警告日志。
+        
+        覆盖 OpenAI 兼容 API 所有可能的 finish_reason：
+        - "stop":          正常完成
+        - "length":        max_tokens 截断
+        - "content_filter": 输出被安全过滤器拦截
+        - "tool_calls":    模型请求工具调用（run_llm_with_tools 中为正常行为）
+        - "" / None:       未知或缺失
+        """
+        reasoning_only = bool((not content) and reasoning_content)
+        truncated = finish_reason == "length"
+        content_filtered = finish_reason == "content_filter"
+        
+        self.last_llm_info = {
+            "finish_reason": finish_reason,
+            "content_len": len(content or ""),
+            "reasoning_len": len(reasoning_content or ""),
+            "truncated": truncated,
+            "reasoning_only": reasoning_only,
+            "content_filtered": content_filtered,
+        }
+        
+        if content_filtered:
+            logger.warning(
+                f"[AgentBase][{agent_name}] LLM 输出被内容过滤器拦截，"
+                f"finish_reason='content_filter'，content 可能为空或不完整。"
+                f"content 长度={len(content or '')}，reasoning 长度={len(reasoning_content or '')}。"
+                f"建议：调整 prompt 或检查模型安全过滤配置"
+            )
+        elif truncated:
+            if reasoning_only:
+                logger.warning(
+                    f"[AgentBase][{agent_name}] LLM content 为空，finish_reason='length'，"
+                    f"推理 token 耗尽了 max_tokens 配额，未能生成正式回答。"
+                    f"reasoning 长度={len(reasoning_content)}。"
+                    f"建议：增大 max_tokens 或在 extra_body 中限制推理预算"
+                )
+            else:
+                logger.warning(
+                    f"[AgentBase][{agent_name}] LLM 输出被截断，finish_reason='length'，"
+                    f"content 可能不完整（content 长度={len(content)}，"
+                    f"reasoning 长度={len(reasoning_content)}）。"
+                    f"建议：增大 max_tokens"
+                )
+        elif reasoning_only:
+            logger.warning(
+                f"[AgentBase][{agent_name}] LLM content 为空但 reasoning_content 非空"
+                f"（finish_reason='{finish_reason}'，reasoning 长度={len(reasoning_content)}），"
+                f"将 reasoning_content 作为 content 使用。"
+                f"可能原因：模型将全部输出放入了 reasoning_content 字段"
+            )
+        elif not content and not reasoning_content and finish_reason not in ("stop", "tool_calls"):
+            logger.warning(
+                f"[AgentBase][{agent_name}] LLM 输出为空"
+                f"（finish_reason='{finish_reason}'）。"
+                f"建议：检查 API 参数或模型状态"
+            )
     
     # ========================= 工具方法 =========================
     
