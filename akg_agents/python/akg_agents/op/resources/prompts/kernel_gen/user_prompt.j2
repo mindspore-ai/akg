@@ -1,5 +1,15 @@
 {# KernelGen Agent 的用户 Prompt 模板 #}
 
+## 相关技能和知识
+
+{% if skill_contents %}
+{{ skill_contents }}
+{% else %}
+暂无相关 Skill。
+{% endif %}
+
+---
+
 {% if designer_code %}
 ## 算法设计草图
 
@@ -14,37 +24,6 @@
 
 {% endif %}
 
-{% if inspirations %}
-## 进化探索方案
-
-**重要须知**：下面是一些过往方案的代码以及性能指标，请参考这些信息，分析可用的优化方案，并生成优化后的代码。
-
-{{ inspirations }}
-
-一般而言，调整切分方式、修改计算逻辑、调整计算顺序、调整计算精度等，都是可行的优化方案。
-请你尽最大努力来完成代码的优化，得到一个计算速度快的高效算子实现。
-
----
-
-{% endif %}
-
-{% if handwrite_suggestions %}
-## 手写优化策略与实现参考
-
-以下是针对类似算子的专家级优化策略和实现，请深入理解这些优化思路并应用到草图设计中：
-
-{% for suggestion in handwrite_suggestions %}
-### 参考案例 {{ loop.index }}: {{ suggestion.name }}
-
-**优化策略与要点：**
-```markdown
-{{ suggestion.improvement_doc }}
-```
-
----
-
-{% endfor %}
-{% endif %}
 
 {% if previous_code and user_requirements %}
 {# ==================== 修改模式 ==================== #}
@@ -131,16 +110,6 @@
 
 ---
 
-## 相关技能和知识
-
-{% if skill_contents %}
-{{ skill_contents }}
-{% else %}
-暂无相关 Skill。
-{% endif %}
-
----
-
 ## 当前任务
 
 **算子名称**: `{{ op_name }}`  
@@ -160,6 +129,39 @@
 
 ---
 
+{% endif %}
+
+
+{% if inspirations %}
+## 进化探索方案
+
+**重要须知**：下面是一些过往方案的代码以及性能指标，请参考这些信息，分析可用的优化方案，并生成优化后的代码。
+
+{{ inspirations }}
+
+一般而言，调整切分方式、修改计算逻辑、调整计算顺序、调整计算精度等，都是可行的优化方案。
+请你尽最大努力来完成代码的优化，得到一个计算速度快的高效算子实现。
+
+---
+
+{% endif %}
+
+{% if handwrite_suggestions %}
+## 手写优化策略与实现参考
+
+以下是针对类似算子的专家级优化策略和实现，请深入理解这些优化思路并应用到草图设计中：
+
+{% for suggestion in handwrite_suggestions %}
+### 参考案例 {{ loop.index }}: {{ suggestion.name }}
+
+**优化策略与要点：**
+```markdown
+{{ suggestion.improvement_doc }}
+```
+
+---
+
+{% endfor %}
 {% endif %}
 
 {% if previous_code and not user_requirements %}
