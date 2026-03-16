@@ -27,6 +27,8 @@ DEPRECATED: 此测试对应的 OpTaskBuilder (core/agent/op_task_builder.py) 已
 import pytest
 import os
 
+os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
+
 from akg_agents.op.workflows.op_task_builder_workflow import OpTaskBuilderWorkflow, run_op_task_builder
 from akg_agents.op.langgraph_op.op_task_builder_state import OpTaskBuilderStatus
 from akg_agents.utils.common_utils import ParserFactory

@@ -237,9 +237,7 @@ class LangGraphTask(BaseLangGraphTask):
         if not self.config.get("skip_kernel_gen", False):
             try:
                 from akg_agents.op.agents.kernel_gen import KernelGen
-                agents['kernel_gen'] = KernelGen(
-                    parser_config_path=parser_config_path
-                )
+                agents['kernel_gen'] = KernelGen()
             except Exception as e:
                 logger.warning(f"Failed to initialize KernelGen: {e}")
                 import traceback

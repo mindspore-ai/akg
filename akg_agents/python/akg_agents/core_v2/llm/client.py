@@ -144,6 +144,10 @@ class LLMClient:
         - reasoning（原生 reasoning_content 字段）：受 display_reasoning 控制
         - content 中的 <think>...</think> 区域：受 display_reasoning 控制
         - content 中 <think> 之外的区域：受 display_content 控制
+        
+        对于原生 reasoning 字段中包含 </think> 的模型（如某些模型将 thinking +
+        结果全部放入 reasoning_content），</think> 之后的部分会被当作 content
+        流式输出，确保最终结果也能实时展示。
         """
         config = {**self.default_config, **kwargs}
         
@@ -152,6 +156,7 @@ class LLMClient:
         finish_reason = ""
         tool_calls = []
         self._in_think_tag = False
+        self._reasoning_think_done = False
         
         async for chunk in self.provider.generate_stream(messages, tools=tools, **config):
             chunk_type = chunk.get("type")
@@ -164,8 +169,7 @@ class LLMClient:
             elif chunk_type == "reasoning":
                 chunk_text = chunk.get("chunk", "")
                 reasoning_content += chunk_text
-                if self.display_reasoning:
-                    self._safe_send_stream(agent_name, chunk_text, is_reasoning=True)
+                self._route_reasoning_chunk(agent_name, chunk_text)
             
             elif chunk_type == "final":
                 self._update_token_stats(chunk.get("usage", {}))
@@ -217,6 +221,37 @@ class LLMClient:
                     self._safe_send_stream(agent_name, segment, is_reasoning=True)
                 self._in_think_tag = False
                 i = end + len("</think>")
+    
+    def _route_reasoning_chunk(self, agent_name: str, chunk: str) -> None:
+        """
+        处理原生 reasoning 字段的流式 chunk。
+        
+        某些模型（如 DeepSeek R1、GLM 等）将 thinking 和最终结果全部放在原生
+        reasoning_content 字段中，以 </think> 分隔。本方法检测 </think> 标记：
+        - </think> 之前：作为 reasoning 流式输出（受 display_reasoning 控制）
+        - </think> 之后：作为 content 流式输出（受 display_content 控制）
+        """
+        if not chunk:
+            return
+        
+        if self._reasoning_think_done:
+            if self.display_content and chunk:
+                self._safe_send_stream(agent_name, chunk, is_reasoning=False)
+            return
+        
+        marker = "</think>"
+        pos = chunk.find(marker)
+        if pos == -1:
+            if self.display_reasoning and chunk:
+                self._safe_send_stream(agent_name, chunk, is_reasoning=True)
+        else:
+            before = chunk[:pos]
+            after = chunk[pos + len(marker):]
+            if self.display_reasoning and before:
+                self._safe_send_stream(agent_name, before, is_reasoning=True)
+            self._reasoning_think_done = True
+            if self.display_content and after:
+                self._safe_send_stream(agent_name, after, is_reasoning=False)
     
     def _safe_send_stream(self, agent_name: str, chunk: str, is_reasoning: bool = False) -> None:
         """

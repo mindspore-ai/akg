@@ -149,33 +149,8 @@ class NodeFactory:
             result, prompt, reasoning = await coder_instance.run(task_info=state)
             elapsed = time.time() - t0
             
-            # 使用与原 Task 相同的解析逻辑（ParserFactory.robust_parse）
-            # 这样可以处理 LangChain 1.0 后的各种输出格式
+            # 去 JSON 化：Coder 已在内部完成代码提取（_extract_code），直接使用返回的纯代码
             code = result
-            try:
-                from akg_agents.utils.common_utils import ParserFactory
-                
-                # 获取 Coder 的 parser
-                agent_parser = getattr(coder_instance, 'code_parser', None)
-                if agent_parser:
-                    # 使用 robust_parse 进行解析（与原 Task 保持一致）
-                    parsed_result = ParserFactory.robust_parse(result, agent_parser)
-                    if parsed_result:
-                        # 从解析结果中提取 code
-                        code = getattr(parsed_result, 'code', result)
-                        task_id = state.get('task_id', '0')
-                        logger.info(f"[Task {task_id}] Coder 使用 robust_parse 解析成功 (原始长度: {len(result)}, 提取后长度: {len(code)})")
-                    else:
-                        task_id = state.get('task_id', '0')
-                        logger.warning(f"[Task {task_id}] Coder robust_parse 返回空，使用原始输出")
-                else:
-                    # 如果没有 parser，使用原始结果
-                    task_id = state.get('task_id', '0')
-                    logger.warning(f"[Task {task_id}] Coder 没有 parser，使用原始输出")
-            except Exception as e:
-                # 解析失败，使用原始结果
-                task_id = state.get('task_id', '0')
-                logger.warning(f"[Task {task_id}] Coder JSON 解析失败: {e}，使用原始输出")
             
             # 记录到 Trace（通用接口）
             trace_instance.log_record("coder", [
@@ -259,30 +234,11 @@ class NodeFactory:
                 ('reasoning', reasoning),
             ])
             
-            # 使用与 Coder 相同的解析逻辑（ParserFactory.robust_parse）
+            # KernelGen 已在内部完成代码提取和 py_compile 校验，直接使用返回的纯代码
             code = result
-            try:
-                from akg_agents.utils.common_utils import ParserFactory
-                
-                # 获取 KernelGen 的 parser
-                agent_parser = getattr(kernel_gen_instance, 'code_parser', None)
-                if agent_parser:
-                    # 使用 robust_parse 进行解析（与 Coder 保持一致）
-                    parsed_result = ParserFactory.robust_parse(result, agent_parser)
-                    if parsed_result:
-                        # 从解析结果中提取 code
-                        code = getattr(parsed_result, 'code', result)
-                        logger.info(f"[Task {task_id}] KernelGen 使用 robust_parse 解析成功 (原始长度: {len(result)}, 提取后长度: {len(code)})")
-                    else:
-                        logger.warning(f"[Task {task_id}] KernelGen robust_parse 返回空，使用原始输出")
-                else:
-                    logger.warning(f"[Task {task_id}] KernelGen 没有 parser，使用原始输出")
-            except Exception as e:
-                # 解析失败，使用原始结果
-                logger.warning(f"[Task {task_id}] KernelGen 解析失败: {e}，使用原始输出")
             
             return {
-                "coder_code": code,  # 使用 coder_code 字段以保持与现有流程的兼容性
+                "coder_code": code,
                 "coder_prompt": prompt,
                 "coder_reasoning": reasoning,
                 "iteration": state.get("iteration", 0) + 1,
