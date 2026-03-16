@@ -1133,6 +1133,26 @@ void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strate
   }
 }
 
+// Helper function to check if the outermost loops (up to depth) have matching bounds.
+static bool checkLoopBoundsMatch(
+    const SmallVector<affine::AffineForOp, 4> &loops1,
+    const SmallVector<affine::AffineForOp, 4> &loops2,
+    unsigned depth) {
+  if (depth > loops1.size() || depth > loops2.size()) {
+    return false;
+  }
+  for (unsigned i = 0; i < depth; ++i) {
+    auto loop1 = loops1[i];
+    auto loop2 = loops2[i];
+    if (loop1.getLowerBoundMap() != loop2.getLowerBoundMap() ||
+        loop1.getUpperBoundMap() != loop2.getUpperBoundMap() ||
+        loop1.getStep() != loop2.getStep()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo, const affine::FusionStrategy &strategy,
   llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions, const FusionPlan &plan, bool srcDstReversed) {
@@ -1168,6 +1188,16 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   depthSliceUnions.clear();
   depthSliceUnions.resize(loopDepth);
   unsigned maxDepth = 0;
+
+  if (!srcInfo.isPerfect) {
+    auto startDepth = std::min(srcInfo.loops.size(), dstInfo.loops.size());
+    while (startDepth != 0 &&
+          !checkLoopBoundsMatch(srcInfo.loops, dstInfo.loops, startDepth)) {
+      startDepth--;
+    }
+    loopDepth = startDepth;
+  }
+
   for (unsigned depth = loopDepth; depth >= 1; --depth) {
     if (strategy.getStrategy() == affine::FusionStrategy::ProducerConsumer) {
       if (plan.depInfo.loopDepth < depth) {
@@ -1246,23 +1276,6 @@ void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, FusionLoopNest
   affine::AffineForOp srcAffineForOp = srcInfo.root;
   affine::AffineForOp dstAffineForOp = dstInfo.root;
 
-  // Helper lambda to check if the outermost loops (up to depth) have matching bounds
-  auto checkLoopBoundsMatch = [](const SmallVector<affine::AffineForOp, 4> &loops1,
-                                 const SmallVector<affine::AffineForOp, 4> &loops2, unsigned depth) -> bool {
-    if (depth > loops1.size() || depth > loops2.size()) {
-      return false;
-    }
-    for (unsigned i = 0; i < depth; ++i) {
-      auto loop1 = loops1[i];
-      auto loop2 = loops2[i];
-      if (loop1.getLowerBoundMap() != loop2.getLowerBoundMap() ||
-          loop1.getUpperBoundMap() != loop2.getUpperBoundMap() || loop1.getStep() != loop2.getStep()) {
-        return false;
-      }
-    }
-    return true;
-  };
-
   // Helper lambda to clear erased node's loads and stores
   auto clearErasedNode = [this](unsigned nodeId) {
     if (auto *node = mdg.getNode(nodeId)) {
@@ -1281,7 +1294,6 @@ void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, FusionLoopNest
     return;
   }
   performLoopFusion(srcLoops, dstLoops, depth);
-  dstAffineForOp.dump();
   srcAffineForOp.erase();
   nodeAlias[srcId] = dstId;
   clearErasedNode(srcId);
