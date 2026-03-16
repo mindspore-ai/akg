@@ -241,6 +241,21 @@ def AffineReductionAnnotation : Pass<"affine-reduction-annotation", "func::FuncO
   ];
 }
 
+def ReductionSiblingRecompute : Pass<"reduction-sibling-recompute", "func::FuncOp"> {
+  let summary = "Recompute reduction temporaries in sibling loops to unlock store/load elimination";
+  let description = [{
+    Detect local temporary buffers written in a reduction loop and only read later by sibling loops.
+    Clone the producer expression into the sibling loop, forward same-block local store/load pairs,
+    and erase dead temporary stores/allocations so later StoreLoadElim can remove the remaining traffic.
+  }];
+  let constructor = "mlir::createReductionSiblingRecomputePass()";
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "memref::MemRefDialect",
+    "mlir::affine::AffineDialect"
+  ];
+}
+
 def AKGAffineDataCopyGeneration : Pass<"akg-affine-data-copy-generate", "func::FuncOp"> {
   let summary = "Generate explicit copying for affine memory operations";
   let constructor = "mlir::affine::createAKGAffineDataCopyGenerationPass()";
