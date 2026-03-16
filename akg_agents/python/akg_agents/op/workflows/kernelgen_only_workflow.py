@@ -191,8 +191,19 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
             )
             workflow.add_node("code_checker", code_checker_node)
             
-            # 添加边：kernel_gen -> code_checker
-            workflow.add_edge("kernel_gen", "code_checker")
+            # 代码生成后的路由（处理 max_tokens 截断等异常）
+            codegen_router = RouterFactory.create_codegen_router(
+                next_agent="code_checker",
+                code_gen_agent="kernel_gen"
+            )
+            workflow.add_conditional_edges(
+                "kernel_gen",
+                codegen_router,
+                {
+                    "code_checker": "code_checker",
+                    "conductor": "conductor"
+                }
+            )
             
             # 条件边：code_checker 后的路由（指定使用 kernel_gen）
             code_checker_router = RouterFactory.create_code_checker_router(
@@ -210,8 +221,19 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
                 }
             )
         else:
-            # 不启用 CodeChecker，直接 kernel_gen -> verifier
-            workflow.add_edge("kernel_gen", "verifier")
+            # 不启用 CodeChecker，直接 kernel_gen -> verifier（带 codegen 路由）
+            codegen_router = RouterFactory.create_codegen_router(
+                next_agent="verifier",
+                code_gen_agent="kernel_gen"
+            )
+            workflow.add_conditional_edges(
+                "kernel_gen",
+                codegen_router,
+                {
+                    "verifier": "verifier",
+                    "conductor": "conductor"
+                }
+            )
             logger.info("CodeChecker disabled, using direct kernel_gen -> verifier flow")
         
         # 条件边：verifier 后的路由（验证通过跳过 conductor）

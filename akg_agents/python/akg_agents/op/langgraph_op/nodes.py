@@ -31,6 +31,42 @@ class NodeFactory:
     """算子节点工厂：将算子 Agent 包装成 LangGraph 节点"""
     
     @staticmethod
+    def _extract_codegen_status(agent_instance, agent_label: str, task_id: str) -> tuple:
+        """从 agent 的 last_llm_info 提取代码生成异常状态。
+        
+        Args:
+            agent_instance: 执行过 run_llm 的 agent 实例
+            agent_label: 显示名称（"Coder" 或 "KernelGen"）
+            task_id: 任务 ID
+        
+        Returns:
+            (codegen_invalid, codegen_invalid_reason)
+        """
+        llm_info = getattr(agent_instance, "last_llm_info", {}) or {}
+        codegen_invalid = bool(
+            llm_info.get("truncated")
+            or llm_info.get("reasoning_only")
+            or llm_info.get("content_filtered")
+        )
+        codegen_invalid_reason = ""
+        if codegen_invalid:
+            logger.warning(
+                f"[Task {task_id}] {agent_label} 输出异常"
+                f"（finish_reason={llm_info.get('finish_reason', '')}），"
+                f"将跳过后续检查与验证并转入 Conductor 分析。"
+            )
+            codegen_invalid_reason = (
+                f"{agent_label} 输出异常："
+                f"finish_reason={llm_info.get('finish_reason', '')}, "
+                f"truncated={llm_info.get('truncated')}, "
+                f"reasoning_only={llm_info.get('reasoning_only')}, "
+                f"content_filtered={llm_info.get('content_filtered')}, "
+                f"content_len={llm_info.get('content_len')}, "
+                f"reasoning_len={llm_info.get('reasoning_len')}。"
+            )
+        return codegen_invalid, codegen_invalid_reason
+    
+    @staticmethod
     def create_designer_node(designer_instance, trace_instance, config: dict):
         """创建 Designer 节点函数"""
         async def designer_node(state: KernelGenState) -> dict:
@@ -184,6 +220,10 @@ class NodeFactory:
                 ('reasoning', reasoning),
             ])
             
+            codegen_invalid, codegen_invalid_reason = NodeFactory._extract_codegen_status(
+                coder_instance, "Coder", task_id
+            )
+
             return {
                 "coder_code": code,  # 解析后的纯代码
                 "coder_prompt": prompt,
@@ -194,7 +234,11 @@ class NodeFactory:
                 "conductor_suggestion": None,  # 清除旧建议
                 "code_check_errors": None,     # 清除旧的检查错误
                 "code_check_passed": None,     # 重置检查状态
-                "code_check_details": None     # 清除旧的检查详情
+                "code_check_details": None,    # 清除旧的检查详情
+                "codegen_invalid": codegen_invalid,
+                "codegen_invalid_reason": codegen_invalid_reason,
+                "verifier_result": False if codegen_invalid else state.get("verifier_result"),
+                "verifier_error": codegen_invalid_reason if codegen_invalid else state.get("verifier_error", "")
             }
 
         return track_node("coder")(coder_node)
@@ -281,6 +325,10 @@ class NodeFactory:
                 # 解析失败，使用原始结果
                 logger.warning(f"[Task {task_id}] KernelGen 解析失败: {e}，使用原始输出")
             
+            codegen_invalid, codegen_invalid_reason = NodeFactory._extract_codegen_status(
+                kernel_gen_instance, "KernelGen", task_id
+            )
+
             return {
                 "coder_code": code,  # 使用 coder_code 字段以保持与现有流程的兼容性
                 "coder_prompt": prompt,
@@ -289,6 +337,10 @@ class NodeFactory:
                 "step_count": state.get("step_count", 0) + 1,
                 "agent_history": ["kernel_gen"],
                 "conductor_suggestion": None,  # 清除旧建议
+                "codegen_invalid": codegen_invalid,
+                "codegen_invalid_reason": codegen_invalid_reason,
+                "verifier_result": False if codegen_invalid else state.get("verifier_result"),
+                "verifier_error": codegen_invalid_reason if codegen_invalid else state.get("verifier_error", "")
             }
 
         return track_node("kernel_gen")(kernel_gen_node)
@@ -310,7 +362,7 @@ class NodeFactory:
             op_name = state.get('op_name', 'unknown')
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: verifier")
             t0 = time.time()
-            
+
             # 获取 Worker (兼容私有Worker和全局WorkerManager)
             worker = None
             if _private_worker:
@@ -1049,4 +1101,3 @@ class NodeFactory:
             return result
 
         return track_node("task_init")(op_task_builder_node)
-
