@@ -23,6 +23,8 @@
 #include "mfusion/Analysis/Split/FusePattern.h"
 #include "mfusion/Analysis/Split/OpRegister.h"
 #include "mfusion/Dialect/Dvm/IR/Dvm.h"
+#include "mfusion/Dialect/Mfuse/Support/SymbolAttrUtils.h"
+#include "mfusion/Analysis/SymbolicShape/SymExprBuilder.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
@@ -47,6 +49,17 @@ DShape getOutputShape(Operation *op) {
   }
   DShape shape(tensorType.getShape().begin(), tensorType.getShape().end());
   return shape;
+}
+
+std::vector<SymExpr> getOutputSymShape(Operation *op) {
+  if (op->getResultTypes().empty()) {
+    return {};
+  }
+  auto maybeSymExprs = SymbolAttrUtils::getSymbolicShapeExprs(op->getResult(0).getType());
+  if (mlir::succeeded(maybeSymExprs)) {
+    return std::vector<SymExpr>(maybeSymExprs->begin(), maybeSymExprs->end());
+  }
+  return {};
 }
 }  // namespace
 
@@ -144,6 +157,11 @@ void SplitModel::alignShape(Block *block) const {
     if (cur_shape_size > node->shape.size()) {
       auto num = cur_shape_size - node->shape.size();
       (void)node->shape.insert(node->shape.cbegin(), num, 1LL);
+      if (!node->sym_shape.empty()) {
+        static mfusion::SymExprBuilder builder;
+        auto oneExpr = builder.makeInteger(1);
+        (void)node->sym_shape.insert(node->sym_shape.cbegin(), num, oneExpr);
+      }
     }
   }
 }
@@ -345,6 +363,7 @@ void SplitModel::mapOperationsToNodes(Block *block) {
     nodes_ptrs_.emplace_back(std::make_unique<Node>(&op));
     auto node = nodes_ptrs_.back().get();
     node->shape = getOutputShape(&op);
+    node->sym_shape = getOutputSymShape(&op);
     nodes_.emplace_back(node);
     op_node_map[&op] = node;
   }

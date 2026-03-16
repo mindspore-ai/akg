@@ -34,7 +34,7 @@ def Mfuse_SymbolicShapeAttr : AttrDef<Mfuse_Dialect, "SymbolicShape"> {
   let assemblyFormat = "`<` $exprs `>`";
 
   let extraClassDeclaration = [{
-    std::vector<SymEngine::RCP<const SymEngine::Basic>> getSymEngineExprs() const;
+    llvm::SmallVector<SymEngine::RCP<const SymEngine::Basic>> getSymEngineExprs() const;
   }];
 }
 

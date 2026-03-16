@@ -25,24 +25,19 @@
 
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "symengine/basic.h"
 
 namespace mlir {
 namespace mfuse {
 namespace split {
 
-// Data types using DFormat = std::string;
 typedef std::vector<int64_t> DShape;
 typedef std::unordered_map<std::string, Attribute> DAttrs;
-typedef std::string DFormat;
-
-// Forward declaration
-class Node;
-typedef std::unique_ptr<Node> NodePtr;
-typedef std::vector<NodePtr> NodePtrList;
+typedef SymEngine::RCP<const SymEngine::Basic> SymExpr;
 
 struct NodeBase {
   DShape shape;
-  // TODO: Add symbolic shape support
+  std::vector<SymExpr> sym_shape;
 };
 
 // Node base class
