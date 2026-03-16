@@ -476,7 +476,7 @@ class TaskCreationProcessor:
                     device_pool=None,  # 新写法：使用 WorkerManager
                     framework=self.config.framework,
                     task_type="profile",
-                    workflow=task_config.get("kernelgen_only_workflow", "kernelgen_only_workflow"),
+                    workflow=task_config.get("default_workflow", "kernelgen_only_workflow"),
                     inspirations=island_inspirations[island_idx][pid],
                     meta_prompts=island_meta_prompts[island_idx][pid] if island_meta_prompts[island_idx] else None,
                     handwrite_suggestions=island_handwrite_suggestions[island_idx],

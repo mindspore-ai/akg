@@ -152,7 +152,7 @@ class KernelGen(AgentBase):
             },
             "inspirations": {
                 "type": "string",
-                "description": "格式化后的进化探索方案字符串（evolve/kernelgen_only 场景使用）",
+                "description": "格式化后的进化探索方案字符串（可选，evolve/adaptive_search 场景使用）",
                 "default": ""
             },
             "handwrite_suggestions": {
