@@ -432,17 +432,15 @@ def _run_ascend_kernel_for_torch_mlir(
         )
         ascend_compile(output_path, so_path, 16)
         print("[INFO] bishengir-compile success")
-    input_for_mod_ctypes = transform_data_to_ascend(
-        input_for_mod, kernel_name, output_indexes, is_dyn_shape, "ascend"
-    )
     device_id = int(os.environ.get("DEVICE_ID", 0))
     launch(
         str(dump_dir),
         kernel_name,
         device_id,
         is_dyn_shape,
-        *input_for_mod_ctypes,
+        *input_for_mod,
         use_mem_pool=True,
+        output_indexes=output_indexes,
     )
     print("[INFO] kernel launch success")
     for idx, d in enumerate(expect):
