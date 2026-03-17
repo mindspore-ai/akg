@@ -1136,7 +1136,6 @@ struct GlobalAdapter final : OpAdapter {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(oldGetGlobal);
       auto newGetGlobal = rewriter.create<memref::GetGlobalOp>(getGlobalLoc, newMemRefType, oldGetGlobal.getNameAttr());
-      state.ssaMap[oldGetGlobal.getResult()] = newGetGlobal.getResult();
       oldGetGlobal.replaceAllUsesWith(newGetGlobal.getResult());
       oldGetGlobal.erase();
     }
