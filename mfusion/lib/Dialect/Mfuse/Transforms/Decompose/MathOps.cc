@@ -79,7 +79,6 @@ class TanhDecomposePattern : public OpRewritePattern<mfuse::AclnnTanhOp> {
     // Get the input tensor
     Value input = tanhOp.getInput();
     Location loc = tanhOp.getLoc();
-    Type resultType = tanhOp.getOutput().getType();
     auto tensorType = dyn_cast<mlir::RankedTensorType>(input.getType());
     if (!tensorType || !tensorType.getElementType().isF32()) {
       llvm::errs() << "Invalid input type for mfuse.tanh\n";
@@ -89,10 +88,11 @@ class TanhDecomposePattern : public OpRewritePattern<mfuse::AclnnTanhOp> {
     // Create OpBuilder instance
     mlir::mfuse::ComputeOpBuilder builder(rewriter, loc);
 
-    // Tanh(x) = 1 - 2/(e^(2x) + 1)
-    auto two_x = builder.mul(input, kTwo);
+    // Tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
+    auto x = builder.clamp(input, kMinTanhClampValue, kMaxTanhClampValue);
+    auto two_x = builder.mul(x, kTwo);
     auto exp_2x = builder.buildExpr(builder.exp(two_x));
-    auto result = (kOne - exp_2x) / (kOne + exp_2x);
+    auto result = (exp_2x - kOne) / (exp_2x + kOne);
 
     // Replace the original Tanh operation with the decomposed computation
     rewriter.replaceOp(tanhOp, result.getValue());
