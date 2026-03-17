@@ -27,7 +27,7 @@ namespace mfuse {
 
 namespace {
 bool extractConstF64(Value v, double &outVal) {
-  auto constOp = v.getDefiningOp<arith::ConstantOp>();
+  auto constOp = v.getDefiningOp<mfuse::ConstantOp>();
   if (!constOp) {
     return false;
   }
@@ -54,7 +54,7 @@ bool extractConstF64(Value v, double &outVal) {
 }  // namespace
 
 bool isSingleElementInt(Value v, int64_t x) {
-  auto constOp = v.getDefiningOp<arith::ConstantOp>();
+  auto constOp = v.getDefiningOp<mfuse::ConstantOp>();
   if (!constOp) {
     return false;
   }
@@ -104,7 +104,7 @@ bool hasDynamicShape(Type type) {
 }
 
 bool isSingleElementFloat(Value v, double x, double tolerance) {
-  auto constOp = v.getDefiningOp<arith::ConstantOp>();
+  auto constOp = v.getDefiningOp<mfuse::ConstantOp>();
   if (!constOp) {
     return false;
   }
@@ -135,7 +135,7 @@ bool isSingleElementFloat(Value v, double x, double tolerance) {
 }
 
 bool isConstOne(Value v, double tolerance) {
-  auto constOp = v.getDefiningOp<arith::ConstantOp>();
+  auto constOp = v.getDefiningOp<mfuse::ConstantOp>();
   if (!constOp) {
     return false;
   }

@@ -35,9 +35,6 @@ namespace mlir::mfuse {
 class FusedOp;
 class YieldOp;
 
-// Forward declaration of your higher precision logic
-mlir::Type getHigherPrecisionType(mlir::Type typeA, mlir::Type typeB);
-
 // A template helper to promote operands before they reach the main builder.
 // It returns the updated lhs and rhs.
 template <typename ConcreteOp>
@@ -59,7 +56,7 @@ struct SymbolicBuilderHelper {
     // In Torch->Mfuse conversion, Mfuse ops are first built without symshape; a
     // later pass attaches symbolic encodings uniformly. Only attempt inference
     // when inputs already carry symbolic shape.
-    auto rankedResult = resultType.dyn_cast<mlir::RankedTensorType>();
+    auto rankedResult = mlir::dyn_cast<mlir::RankedTensorType>(resultType);
     if (rankedResult && shouldInferSymbolicShape(operands, rankedResult)) {
       auto typeOrError = ConcreteOp::inferSymbolicShapes(builder, state, resultType);
       if (mlir::succeeded(typeOrError)) {

@@ -76,7 +76,7 @@ func.func @test_element_wise_chain(%arg0: tensor<8x8xf32>, %arg1: tensor<8x8xf32
 // CHECK-LABEL: func @test_fuse_op_after_all_inputs
 // CHECK-SAME: %arg0: tensor<2x2xf16>
 // CHECK-SAME: %arg1: tensor<2x2xf16>
-// CHECK: %[[CST:.*]] = arith.constant dense<1> : tensor<i64>
+// CHECK: %[[CST:.*]] = mfuse.constant dense<1> : tensor<i64, {is_scalar = ""}>
 // CHECK: %[[SUB:.*]] = mfuse.aclnn.sub %arg0, %arg1, %[[CST]]
 // CHECK: %[[FUSED:.*]] = mfuse.fused %arg0, %arg1, %[[SUB]] {fusion_type = "dvm"}
 // CHECK: ^bb0(%[[ARG2:.*]]: tensor<2x2xf16>, %[[ARG3:.*]]: tensor<2x2xf16>, %[[ARG4:.*]]: tensor<2x2xf16>):
@@ -87,8 +87,8 @@ func.func @test_element_wise_chain(%arg0: tensor<8x8xf32>, %arg1: tensor<8x8xf32
 // CHECK: mfuse.yield %[[MUL4]]
 // CHECK: return %[[FUSED]]
 func.func @test_fuse_op_after_all_inputs(%arg0: tensor<2x2xf16>, %arg1: tensor<2x2xf16>) -> tensor<2x2xf16> {
-  %cst = arith.constant dense<1> : tensor<i64>
-  %0 = mfuse.aclnn.sub %arg0, %arg1, %cst : (tensor<2x2xf16>, tensor<2x2xf16>, tensor<i64>) -> tensor<2x2xf16>
+  %cst = mfuse.constant dense<1> : tensor<i64, {is_scalar = ""}>
+  %0 = mfuse.aclnn.sub %arg0, %arg1, %cst : (tensor<2x2xf16>, tensor<2x2xf16>, tensor<i64, {is_scalar = ""}>) -> tensor<2x2xf16>
   %1 = mfuse.fused %arg0, %arg1, %0 {fusion_type = "dvm"} : (tensor<2x2xf16>, tensor<2x2xf16>, tensor<2x2xf16>) -> tensor<2x2xf16> {
   ^bb0(%arg2: tensor<2x2xf16>, %arg3: tensor<2x2xf16>, %arg4: tensor<2x2xf16>):
     %2 = mfuse.mul %arg2, %arg3 : (tensor<2x2xf16>, tensor<2x2xf16>) -> tensor<2x2xf16>

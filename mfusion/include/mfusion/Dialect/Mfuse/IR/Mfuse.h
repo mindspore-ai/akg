@@ -31,8 +31,7 @@
 
 #include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
 
-#define GET_ATTRDEF_CLASSES
-#include "mfusion/Dialect/Mfuse/IR/MfuseAttributes.h.inc"
+#include "mfusion/Dialect/Mfuse/IR/MfuseAttributes.h"
 
 #define GET_TYPEDEF_CLASSES
 #include "mfusion/Dialect/Mfuse/IR/MfuseTypes.h.inc"
