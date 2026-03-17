@@ -162,7 +162,6 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
     external_stream = reinterpret_cast<void *>(kwargs["stream"].cast<intptr_t>());
   }
   py::list processed_args = kwargs["processed_args"].cast<py::list>();
-
   akg_log_init();
   auto input = std::vector<mlir::runtime::BaseDevicePtr>();
   auto input_shapes = std::vector<std::vector<int64_t>>();
@@ -170,8 +169,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
 
   ParseInputArgs(is_dynamic, input, input_shapes, bf16_buf_map, processed_args);
 
-  int64_t tiling_key;
-  int64_t tiling_struct_size;
+  int64_t tiling_key, tiling_struct_size;
   std::vector<void *> runtimeargs;
   if (is_dynamic) {
     use_mem_pool = true;
@@ -250,13 +248,13 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
             nullptr, tiling_struct_size * sizeof(int64_t), false));
     }
   }
-
   for (auto iter = runtimeargs.begin(); iter != runtimeargs.end(); iter++) {
     DLOG(INFO) << "runtimeargs[" << iter - runtimeargs.begin() << "]: " << *iter;
   }
 
-  auto kernel_runtime = mlir::runtime::AscendKernelRuntime(device_id, use_mem_pool, external_stream);
-  kernel_runtime.RunOpImpl(path, kernel_name, is_dynamic, input, input_shapes, tiling_key, tiling_struct_size);
+  auto *kernel_runtime =
+      mlir::runtime::AscendKernelRuntime::GetOrCreateRuntime(device_id, use_mem_pool, external_stream);
+  kernel_runtime->RunOpImpl(path, kernel_name, is_dynamic, input, input_shapes, tiling_key, tiling_struct_size);
 
   for (auto iter = bf16_buf_map.begin(); iter != bf16_buf_map.end(); iter++) {
     py::tuple tup = processed_args[iter->first].cast<py::tuple>();
