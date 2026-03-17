@@ -75,6 +75,7 @@ constexpr auto kTileForOneAttr = "__tiled_for___1";
 constexpr auto kMapForToForallAttr = "map_for_to_forall";
 constexpr auto kVectorAttr = "vector";
 constexpr auto kSkipVectorizeAttr = "skip_vectorize";
+constexpr auto kLeafLoopIdAttr = "akg.loop_tiling.leaf_id";
 constexpr auto kBufferSizeInByteAttr = "buffer_size_in_byte";
 constexpr auto kBlockDimAttr = "hacc.block_dim";
 constexpr auto kBlockDimSize = 40;

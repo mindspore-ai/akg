@@ -873,9 +873,13 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
 
   // Get default tile sizes if not specified by user
   SmallVector<unsigned, 4> currentTileSizes = tileSizes;
-  // Skip tiling for reduce axes
+  // For static reduce axes, use extent-sized tiles to keep no-split behavior explicit in metadata.
   if (isReduceAxis) {
-    currentTileSizes = {1, 1};
+    unsigned reduceTile = 1;
+    if (extent > 0) {
+      reduceTile = extent > static_cast<int64_t>(UINT_MAX) ? UINT_MAX : static_cast<unsigned>(extent);
+    }
+    currentTileSizes = {reduceTile, reduceTile};
   }
   if (currentTileSizes.empty()) {
     currentTileSizes = {std::max(getOuterTileSize(axis, blockNumber), innerTileSize), innerTileSize};
