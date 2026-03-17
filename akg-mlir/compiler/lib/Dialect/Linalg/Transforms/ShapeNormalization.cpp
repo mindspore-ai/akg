@@ -22,6 +22,7 @@
 #include <optional>
 #include <memory>
 #include <type_traits>
+#include <variant>
 
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "llvm/ADT/DenseSet.h"
@@ -87,11 +88,14 @@ struct OpAdapterRegistry {
 
 static const OpAdapterRegistry &getOpAdapterRegistry();
 
+using ShapeDimValue = std::variant<Value, std::string, int64_t>;
+
 struct ShapeNormalState {
   SymbolicShapeAnalysis &manager;
   bool isSupported = true;
   llvm::StringMap<int64_t> axisSizes;
   llvm::StringMap<std::pair<Value, int64_t>> DynSymtoArgDim;
+  DenseMap<Value, DenseMap<int64_t, Value>> shapeStoreMap;
   DenseSet<Value> ValuesinFunc;
   DenseMap<Operation *, SmallVector<SmallVector<std::string>>> returnOpShapes;
   DenseMap<Operation *, SmallVector<std::string>> affineMapSymDims;
@@ -364,6 +368,22 @@ struct ShapeNormalState {
     }
     SmallVector<std::string> expandedaxesgroup1 = expandGroupedAxes(axesgroup1);
     SmallVector<std::string> expandedaxesgroup2 = expandGroupedAxes(axesgroup2);
+
+    // TODO(akg): This judgment may need to be improved in the future by the expression of dynamic axis length
+    SmallVector<std::string> dynAxes1, dynAxes2;
+    for (const auto &axis : expandedaxesgroup1) {
+      if (axisSizes.lookup(axis) == ShapedType::kDynamic) dynAxes1.push_back(axis);
+    }
+    for (const auto &axis : expandedaxesgroup2) {
+      if (axisSizes.lookup(axis) == ShapedType::kDynamic) dynAxes2.push_back(axis);
+    }
+    if (dynAxes1 != dynAxes2) {
+      // TODO(akg): static axes being broken by dynamic axes should also return false.
+      result.success = false;
+      result.finestAxes = expandedaxesgroup2;
+      return result;
+    }
+
     FinestSlices Slices = unifyAxesGroupsToSlices(expandedaxesgroup1, expandedaxesgroup2);
     SmallVector<std::string> finestAxes;
     for (size_t i = 0; i < Slices.groupedAxes1.size(); i++) {
@@ -477,6 +497,13 @@ struct ShapeNormalState {
         }
       }
     }
+
+    if (DynSymtoArgDim.find(oldAxis) != DynSymtoArgDim.end()) {
+      if (DynSymtoArgDim[oldAxis].second == -1 && isa<BlockArgument>(DynSymtoArgDim[oldAxis].first)) {
+        DynSymtoArgDim[newAxis] = DynSymtoArgDim[oldAxis];
+      }
+    }
+
     return newAxis;
   }
 
@@ -691,17 +718,30 @@ struct ShapeNormalState {
     SmallVector<Operation *> ops;
     SmallVector<int64_t> targetSizes = getAxesSizes(targetSymShape);
     int64_t rank = static_cast<int64_t>(targetSymShape.size());
-    auto idxTy = rewriter.getIndexType();
-    auto shapeMemrefTy = MemRefType::get({rank}, idxTy);
+    // TODO(akg): Unify the shape value to i64 for now, modify if needed later
+    auto i64Ty = rewriter.getI64Type();
+    auto shapeMemrefTy = MemRefType::get({rank}, i64Ty);
     Value shapeMemref = rewriter.create<memref::AllocOp>(loc, shapeMemrefTy);
     entryMaterializedOps.insert(shapeMemref.getDefiningOp());
     for (int64_t i = 0; i < rank; ++i) {
-      Value dimVal = (targetSizes[i] != ShapedType::kDynamic)
-                       ? rewriter.create<arith::ConstantIndexOp>(loc, targetSizes[i]).getResult()
-                       : rewriter
-                           .create<memref::DimOp>(loc, DynSymtoArgDim[targetSymShape[i]].first,
-                                                  DynSymtoArgDim[targetSymShape[i]].second)
-                           .getResult();
+      Value dimVal;
+      if (targetSizes[i] != ShapedType::kDynamic) {
+        dimVal = rewriter.create<arith::ConstantIndexOp>(loc, targetSizes[i]).getResult();
+      } else {
+        auto [src, idx] = DynSymtoArgDim[targetSymShape[i]];
+        if (idx == -1) {
+          if (src.getType() != i64Ty) {
+            dimVal = rewriter.create<arith::IndexCastOp>(loc, i64Ty, src).getResult();
+          } else {
+            dimVal = src;
+          }
+        } else {
+          dimVal = rewriter.create<memref::DimOp>(loc, src, idx).getResult();
+          if (dimVal.getType() != i64Ty) {
+            dimVal = rewriter.create<arith::IndexCastOp>(loc, i64Ty, dimVal).getResult();
+          }
+        }
+      }
       entryMaterializedOps.insert(dimVal.getDefiningOp());
       rewriter.create<memref::StoreOp>(loc, dimVal, shapeMemref,
                                        ValueRange{rewriter.create<arith::ConstantIndexOp>(loc, i)});
@@ -835,9 +875,26 @@ struct AllocAdapter final : OpAdapter {
     Value result = alloc.getResult();
     auto resultType = dyn_cast<MemRefType>(result.getType());
     if (!resultType) return;
+    auto dynSizes = alloc.getDynamicSizes();
+    size_t dynIdx = 0;
     SmallVector<std::string> symShape;
-    for (int64_t i = 0; i < resultType.getRank(); ++i)
-      symShape.push_back(state.createNewSymbolicDim(resultType.getDimSize(i)));
+    for (int64_t i = 0; i < resultType.getRank(); ++i) {
+      int64_t dimSize = resultType.getDimSize(i);
+      std::string sym = state.createNewSymbolicDim(dimSize);
+      symShape.push_back(sym);
+      if (dimSize == ShapedType::kDynamic && dynIdx < dynSizes.size() &&
+          state.DynSymtoArgDim.find(sym) == state.DynSymtoArgDim.end()) {
+        if (auto dimOp = dyn_cast<memref::DimOp>(dynSizes[dynIdx].getDefiningOp())) {
+          auto cstOp = dimOp.getIndex().getDefiningOp<arith::ConstantOp>();
+          assert(cstOp && "dim index must be constant");
+          int64_t idxVal = cast<IntegerAttr>(cstOp.getValue()).getValue().getSExtValue();
+          state.DynSymtoArgDim[sym] = std::make_pair(dimOp.getSource(), idxVal);
+        } else {
+          state.DynSymtoArgDim[sym] = std::make_pair(dynSizes[dynIdx], static_cast<int64_t>(-1));
+        }
+        dynIdx++;
+      }
+    }
     state.updateValueSymbolicShape(result, symShape);
     state.ValuesinFunc.insert(result);
   }
@@ -852,8 +909,11 @@ struct AllocAdapter final : OpAdapter {
     MemRefType newResultType = MemRefType::get(targetShape, oldResultTy.getElementType());
     newResultType = cast<MemRefType>(state.manager.updateSymbolicShape(newResultType, targetSymShape));
     rewriter.setInsertionPoint(op);
-    Value newAlloc = rewriter.create<memref::AllocOp>(loc, newResultType, alloc.getDynamicSizes(),
-                                                      alloc.getSymbolOperands(), alloc.getAlignmentAttr());
+    SmallVector<Value> dynamicSizes;
+    llvm::transform(alloc.getDynamicSizes(), std::back_inserter(dynamicSizes),
+                   [&state](Value v) { return state.ssaMap.lookup(v) ? state.ssaMap.lookup(v) : v; });
+    Value newAlloc = rewriter.create<memref::AllocOp>(loc, newResultType, dynamicSizes, alloc.getSymbolOperands(),
+                                                      alloc.getAlignmentAttr());
     state.ssaMap[oldResult] = newAlloc;
     oldResult.replaceAllUsesWith(newAlloc);
     state.toDeleteOps.insert(op);
@@ -959,31 +1019,61 @@ struct AffineApplyAdapter final : OpAdapter {
   }
 };
 
+struct StoreOpAdapter final : OpAdapter {
+  bool match(Operation *op) const override { return isa<memref::StoreOp>(op); }
+  void unifyToFinestAxes(Operation *op, ShapeNormalState &state) const override {
+    auto storeOp = cast<memref::StoreOp>(op);
+    Value memref = storeOp.getMemRef();
+    Value value = storeOp.getValueToStore();
+    auto indices = storeOp.getIndices();
+    // TODO(akg): Future implementation of extract requires handling multi-dimensional indices
+    if (indices.size() != 1) return;
+    auto IndexOp = indices[0].getDefiningOp<arith::ConstantOp>();
+    auto indAttr = dyn_cast<IntegerAttr>(IndexOp.getValue());
+    std::optional<int64_t> idxOpt = indAttr.getValue().getSExtValue();
+    state.shapeStoreMap[memref][*idxOpt] = value;
+  }
+  void assignLabels(Operation *op, ShapeNormalState &state) const override {}
+  void rewrite(Operation *op, ShapeNormalState &state, PatternRewriter &rewriter) const override {}
+};
+
 struct DimOpAdapter final : OpAdapter {
   bool match(Operation *op) const override { return isa<memref::DimOp>(op); }
   void unifyToFinestAxes(Operation *op, ShapeNormalState &state) const override {}
-  void assignLabels(Operation *op, ShapeNormalState &state) const override {}
-  void rewrite(Operation *op, ShapeNormalState &state, PatternRewriter &rewriter) const override {
+  void assignLabels(Operation *op, ShapeNormalState &state) const override {
     auto dimOp = cast<memref::DimOp>(op);
     Value source = dimOp.getSource();
     Value indexVal = dimOp.getIndex();
-    std::optional<int64_t> oldIdxOpt;
+    std::optional<int64_t> idxOpt;
     if (auto cstOp = indexVal.getDefiningOp<arith::ConstantOp>()) {
-      if (auto intAttr = dyn_cast<IntegerAttr>(cstOp.getValue())) oldIdxOpt = intAttr.getValue().getSExtValue();
+      if (auto intAttr = dyn_cast<IntegerAttr>(cstOp.getValue())) idxOpt = intAttr.getValue().getSExtValue();
     }
-    if (!oldIdxOpt.has_value()) return;
-    int64_t oldIdx = *oldIdxOpt;
-    SmallVector<std::string> oldSymShape = state.getValueSymbolicShape(source);
-    if (oldIdx < 0 || static_cast<size_t>(oldIdx) >= oldSymShape.size()) return;
-    std::string targetSymDim = oldSymShape[oldIdx];
-    auto it = state.DynSymtoArgDim.find(targetSymDim);
-    assert(it != state.DynSymtoArgDim.end() && "targetSymDim must exist in DynSymtoArgDim");
-    auto [arg, idx] = it->second;
+    if (!idxOpt.has_value()) return;
+    int64_t idx = *idxOpt;
+    SmallVector<std::string> symShape = state.getValueSymbolicShape(source);
+    std::string symdim = symShape[idx];
+    state.manager.assignLabel(symdim);
+    state.affineMapSymDims[op] = {symdim};
+  }
+  void rewrite(Operation *op, ShapeNormalState &state, PatternRewriter &rewriter) const override {
+    if (state.affineMapSymDims[op].size() < 1) return;
+    std::string symdim = state.affineMapSymDims[op][0];
+    auto dynIt = state.DynSymtoArgDim.find(symdim);
+    if (dynIt == state.DynSymtoArgDim.end()) return;
+    auto [arg, idx] = dynIt->second;
     Location loc = op->getLoc();
     rewriter.setInsertionPoint(op);
-    Value newResult = rewriter.create<memref::DimOp>(loc, arg, idx);
-    state.ssaMap[dimOp.getResult()] = newResult;
-    dimOp.getResult().replaceAllUsesWith(newResult);
+    Value newResult;
+    if (idx == -1) {
+      if (arg.getType() != rewriter.getIndexType())
+        newResult = rewriter.create<arith::IndexCastOp>(loc, rewriter.getIndexType(), arg);
+      else
+        newResult = arg;
+    } else {
+      newResult = rewriter.create<memref::DimOp>(loc, arg, idx);
+    }
+    state.ssaMap[op->getResult(0)] = newResult;
+    op->getResult(0).replaceAllUsesWith(newResult);
     state.toDeleteOps.insert(op);
   }
 };
@@ -1046,6 +1136,7 @@ struct GlobalAdapter final : OpAdapter {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(oldGetGlobal);
       auto newGetGlobal = rewriter.create<memref::GetGlobalOp>(getGlobalLoc, newMemRefType, oldGetGlobal.getNameAttr());
+      state.ssaMap[oldGetGlobal.getResult()] = newGetGlobal.getResult();
       oldGetGlobal.replaceAllUsesWith(newGetGlobal.getResult());
       oldGetGlobal.erase();
     }
@@ -1062,9 +1153,9 @@ struct ExpandShapeAdapter final : OpAdapter {
     auto reassociationVec = expandOp.getReassociationIndices();
     SmallVector<ArrayRef<int64_t>> reassociation;
     llvm::copy(reassociationVec, std::back_inserter(reassociation));
-    SmallVector<std::string> resultAxes;
+
     int64_t outputRank = expandOp.getResultType().getRank();
-    resultAxes.resize(outputRank);
+    SmallVector<std::string> resultAxes(outputRank);
     for (size_t reassocIdx = 0; reassocIdx < reassociation.size(); ++reassocIdx) {
       const auto &indices = reassociation[reassocIdx];
       std::string srcAxis = srcSymShape[reassocIdx];
@@ -1089,9 +1180,22 @@ struct ExpandShapeAdapter final : OpAdapter {
         state.updateDecomposition(srcAxis, childAxes);
       }
     }
+    size_t dynIdx = 0;
     for (size_t outDim = 0; outDim < resultAxes.size(); ++outDim) {
       if (resultAxes[outDim].empty())
         resultAxes[outDim] = state.createNewSymbolicDim(expandOp.getResultType().getDimSize(outDim));
+      if (expandOp.getResultType().getDimSize(outDim) == ShapedType::kDynamic &&
+          state.DynSymtoArgDim.find(resultAxes[outDim]) == state.DynSymtoArgDim.end()) {
+        Value dynValue = expandOp.getOutputShape()[dynIdx++];
+        if (auto dimOp = dyn_cast<memref::DimOp>(dynValue.getDefiningOp())) {
+          auto cstOp = dimOp.getIndex().getDefiningOp<arith::ConstantOp>();
+          assert(cstOp && "dim index must be constant");
+          int64_t idxVal = cast<IntegerAttr>(cstOp.getValue()).getValue().getSExtValue();
+          state.DynSymtoArgDim[resultAxes[outDim]] = std::make_pair(dimOp.getSource(), idxVal);
+        } else {
+          state.DynSymtoArgDim[resultAxes[outDim]] = std::make_pair(dynValue, static_cast<int64_t>(-1));
+        }
+      }
     }
     state.updateValueSymbolicShape(result, resultAxes);
     state.ValuesinFunc.insert(result);
@@ -1110,7 +1214,7 @@ struct ExpandShapeAdapter final : OpAdapter {
     if (!resultShape) return;
     Type targetShape = MemRefType::get(targetShapeInt, resultShape.getElementType());
     targetShape = state.manager.updateSymbolicShape(targetShape, targetResultSymShape);
-    if (state.getAxesSizes(targetResultSymShape) == state.getAxesSizes(newSrcSymShape)) {
+    if (targetResultSymShape == newSrcSymShape) {
       state.ssaMap[oldResult] = newSrc;
       oldResult.replaceAllUsesWith(newSrc);
       state.toDeleteOps.insert(op);
@@ -1166,7 +1270,158 @@ struct CollapseShapeAdapter final : OpAdapter {
       if (state.ssaMap.lookup(oldSrc)) op->setOperand(0, state.ssaMap.lookup(oldSrc));
       return;
     }
-    if (state.getAxesSizes(targetResultSymShape) == state.getAxesSizes(newSrcSymShape)) {
+    if (targetResultSymShape == newSrcSymShape) {
+      state.ssaMap[oldResult] = newSrc;
+      oldResult.replaceAllUsesWith(newSrc);
+      state.toDeleteOps.insert(op);
+      return;
+    }
+    auto reshapeOps = state.reshapeValueToSymShape(newSrc, targetResultSymShape, rewriter, loc);
+    if (!reshapeOps.empty()) {
+      Value result = reshapeOps.back()->getResult(0);
+      state.ssaMap[oldResult] = result;
+      oldResult.replaceAllUsesWith(result);
+      state.toDeleteOps.insert(op);
+    }
+  }
+};
+
+struct ReshapeAdapter final : OpAdapter {
+  bool match(Operation *op) const override { return isa<memref::ReshapeOp>(op); }
+
+ private:
+  static ShapeDimValue getShapeDimValueFromValue(Value v, const ShapeNormalState &state) {
+    if (auto cstOp = v.getDefiningOp<arith::ConstantOp>()) {
+      return static_cast<int64_t>(cast<IntegerAttr>(cstOp.getValue()).getValue().getSExtValue());
+    }
+    if (auto dimOp = v.getDefiningOp<memref::DimOp>()) {
+      auto idxCstOp = dimOp.getIndex().getDefiningOp<arith::ConstantOp>();
+      assert(idxCstOp && "dim index must be constant");
+      int64_t dimIdx = cast<IntegerAttr>(idxCstOp.getValue()).getValue().getSExtValue();
+      return state.getValueSymbolicShape(dimOp.getSource())[dimIdx];
+    }
+    return v;
+  }
+  static SmallVector<ShapeDimValue> computeSrcShapeValues(const SmallVector<std::string> &srcSymShape,
+                                                          const ShapeNormalState &state) {
+    SmallVector<ShapeDimValue> srcShapeValues;
+    for (size_t i = 0; i < srcSymShape.size(); ++i) {
+      auto dynIt = state.DynSymtoArgDim.find(srcSymShape[i]);
+      if (dynIt != state.DynSymtoArgDim.end()) {
+        const auto &entry = dynIt->second;
+        if (entry.second == -1) {
+          if (auto cst = entry.first.getDefiningOp<arith::ConstantOp>()) {
+            srcShapeValues.push_back(cast<IntegerAttr>(cst.getValue()).getValue().getSExtValue());
+          } else {
+            srcShapeValues.push_back(entry.first);
+          }
+        } else {
+          srcShapeValues.push_back(srcSymShape[i]);
+        }
+      } else {
+        auto axisIt = state.axisSizes.find(srcSymShape[i]);
+        srcShapeValues.push_back(axisIt != state.axisSizes.end() ? axisIt->second : 0);
+      }
+    }
+    return srcShapeValues;
+  }
+  static void matchDstShapeToSrcShape(const SmallVector<ShapeDimValue> &resultShapeValues,
+                                      const SmallVector<ShapeDimValue> &srcShapeValues,
+                                      const SmallVector<std::string> &srcSymShape,
+                                      SmallVector<std::string> &resultSymShape) {
+    size_t resIdx = 0;
+    size_t srcIdx = 0;
+    while (srcIdx < srcShapeValues.size() && resIdx < resultShapeValues.size()) {
+      if (srcShapeValues[srcIdx] == resultShapeValues[resIdx]) {
+        resultSymShape[resIdx] = srcSymShape[srcIdx];
+        resIdx++;
+        srcIdx++;
+        continue;
+      }
+      size_t srcStart = srcIdx;
+      int64_t tmpSrcProduct = 1;
+      while (srcIdx < srcShapeValues.size() && std::get_if<int64_t>(&srcShapeValues[srcIdx])) {
+        tmpSrcProduct *= std::get<int64_t>(srcShapeValues[srcIdx]);
+        srcIdx++;
+      }
+      size_t resStart = resIdx;
+      int64_t tmpResProduct = 1;
+      while (resIdx < resultShapeValues.size() && std::get_if<int64_t>(&resultShapeValues[resIdx])) {
+        tmpResProduct *= std::get<int64_t>(resultShapeValues[resIdx]);
+        resIdx++;
+      }
+      // TODO(akg): support dynamic axis x/2 * 2
+      if (tmpSrcProduct != tmpResProduct) break;
+      if (srcIdx == srcStart && resIdx == resStart) break;
+    }
+  }
+  static void fillResultSymShape(SmallVector<std::string> &resultSymShape, MemRefType resultType,
+                                 const SmallVector<std::pair<int64_t, Value>> &sortedVals,
+                                 ShapeNormalState &state) {
+    for (size_t i = 0; i < resultSymShape.size(); ++i) {
+      if (resultSymShape[i].empty()) {
+        resultSymShape[i] = state.createNewSymbolicDim(resultType.getShape()[i]);
+      }
+      if (resultType.getShape()[i] != state.axisSizes[resultSymShape[i]]) {
+        resultSymShape[i] = state.createNewSymbolicDim(resultType.getShape()[i]);
+      }
+      if (resultType.getShape()[i] == ShapedType::kDynamic &&
+          state.DynSymtoArgDim.find(resultSymShape[i]) == state.DynSymtoArgDim.end()) {
+        Value val = sortedVals[i].second;
+        if (auto dimOp = val.getDefiningOp<memref::DimOp>()) {
+          auto idxCstOp = dimOp.getIndex().getDefiningOp<arith::ConstantOp>();
+          assert(idxCstOp && "dim index must be constant");
+          int64_t dimIdx = cast<IntegerAttr>(idxCstOp.getValue()).getValue().getSExtValue();
+          state.DynSymtoArgDim[resultSymShape[i]] = std::make_pair(dimOp.getSource(), dimIdx);
+        } else if (val) {
+          state.DynSymtoArgDim[resultSymShape[i]] = std::make_pair(val, static_cast<int64_t>(-1));
+        }
+      }
+    }
+  }
+
+ public:
+  void unifyToFinestAxes(Operation *op, ShapeNormalState &state) const override {
+    auto reshapeOp = cast<memref::ReshapeOp>(op);
+    Value src = reshapeOp.getSource();
+    Value shapeOperand = reshapeOp.getShape();
+    Value result = reshapeOp.getResult();
+    auto resultType = dyn_cast<MemRefType>(result.getType());
+    if (!resultType) return;
+
+    auto &shapeVals = state.shapeStoreMap[shapeOperand];
+    SmallVector<std::pair<int64_t, Value>> sortedVals(shapeVals.begin(), shapeVals.end());
+    llvm::sort(sortedVals, [](const auto &a, const auto &b) { return a.first < b.first; });
+    SmallVector<ShapeDimValue> resultShapeValues;
+    for (auto &[idx, val] : sortedVals) {
+      (void)idx;
+      resultShapeValues.push_back(getShapeDimValueFromValue(val, state));
+    }
+
+    SmallVector<std::string> srcSymShape = state.getValueSymbolicShape(src);
+    SmallVector<ShapeDimValue> srcShapeValues = computeSrcShapeValues(srcSymShape, state);
+    SmallVector<std::string> resultSymShape(resultShapeValues.size());
+    matchDstShapeToSrcShape(resultShapeValues, srcShapeValues, srcSymShape, resultSymShape);
+    // TODO(akg): consider match again from the end
+
+    fillResultSymShape(resultSymShape, resultType, sortedVals, state);
+    state.updateValueSymbolicShape(result, resultSymShape);
+    state.ValuesinFunc.insert(result);
+  }
+  void assignLabels(Operation *op, ShapeNormalState &state) const override {}
+  void rewrite(Operation *op, ShapeNormalState &state, PatternRewriter &rewriter) const override {
+    auto reshapeOp = cast<memref::ReshapeOp>(op);
+    Location loc = op->getLoc();
+    Value oldSrc = reshapeOp.getSource();
+    Value oldResult = reshapeOp.getResult();
+    Value newSrc = state.ssaMap.lookup(oldSrc) ? state.ssaMap.lookup(oldSrc) : oldSrc;
+    SmallVector<std::string> newSrcSymShape = state.getValueSymbolicShape(newSrc);
+    SmallVector<std::string> targetResultSymShape = state.computeTargetSymShape(oldResult);
+    if (targetResultSymShape.empty()) {
+      if (state.ssaMap.lookup(oldSrc)) op->setOperand(0, state.ssaMap.lookup(oldSrc));
+      return;
+    }
+    if (targetResultSymShape == newSrcSymShape) {
       state.ssaMap[oldResult] = newSrc;
       oldResult.replaceAllUsesWith(newSrc);
       state.toDeleteOps.insert(op);
@@ -1418,6 +1673,47 @@ struct GenericAdapter final : OpAdapter {
 
 struct SubviewAdapter final : OpAdapter {
   bool match(Operation *op) const override { return isa<memref::SubViewOp>(op); }
+
+ private:
+  static std::string tryGetSymdimFromDynamicSize(OpFoldResult mixedSize, const std::string &srcSymShapeI,
+                                                 Value result, size_t i, ShapeNormalState &state) {
+    auto getConstInt = [](Value v) -> std::optional<int64_t> {
+      if (auto c = v.getDefiningOp<arith::ConstantOp>()) {
+        if (auto a = dyn_cast<IntegerAttr>(c.getValue())) return a.getValue().getSExtValue();
+      }
+      return std::nullopt;
+    };
+    if (!mixedSize.is<Value>()) return "";
+    Value sizeVal = mixedSize.get<Value>();
+    auto it = state.DynSymtoArgDim.find(srcSymShapeI);
+    if (it == state.DynSymtoArgDim.end()) return "";
+    auto [srcArg, srcIdx] = it->second;
+    if (auto dimOp = sizeVal.getDefiningOp<memref::DimOp>()) {
+      if (srcIdx < 0) return "";
+      std::optional<int64_t> dimIdxOpt;
+      if (auto cstOp = dimOp.getIndex().getDefiningOp<arith::ConstantOp>()) {
+        if (auto a = dyn_cast<IntegerAttr>(cstOp.getValue())) dimIdxOpt = a.getValue().getSExtValue();
+      } else if (auto idxOp = dimOp.getIndex().getDefiningOp<arith::ConstantIndexOp>()) {
+        dimIdxOpt = cast<IntegerAttr>(idxOp.getValue()).getValue().getSExtValue();
+      }
+      if (!dimIdxOpt) return "";
+      int64_t dimIdx = *dimIdxOpt;
+      SmallVector<std::string> sourceSymShape = state.getValueSymbolicShape(srcArg);
+      SmallVector<std::string> sizeSymShape = state.getValueSymbolicShape(dimOp.getSource());
+      if (static_cast<size_t>(dimIdx) < sizeSymShape.size() && static_cast<size_t>(srcIdx) < sourceSymShape.size() &&
+          sizeSymShape[dimIdx] == sourceSymShape[srcIdx])
+        return srcSymShapeI;
+      return "";
+    }
+    if (srcIdx == -1) {
+      auto sizeConst = getConstInt(sizeVal);
+      auto srcConst = getConstInt(srcArg);
+      if (sizeConst && srcConst && *sizeConst == *srcConst) return srcSymShapeI;
+    }
+    return "";
+  }
+
+ public:
   void unifyToFinestAxes(Operation *op, ShapeNormalState &state) const override {
     auto subviewOp = cast<memref::SubViewOp>(op);
     Value src = subviewOp.getSource();
@@ -1427,11 +1723,15 @@ struct SubviewAdapter final : OpAdapter {
     ArrayRef<int64_t> strides = subviewOp.getStaticStrides();
     SmallVector<std::string> srcSymShape = state.getValueSymbolicShape(src);
     SmallVector<std::string> resultSymShape;
+    SmallVector<OpFoldResult> mixedSizes = subviewOp.getMixedSizes();
     for (size_t i = 0; i < srcSymShape.size(); ++i) {
       if (ShapedType::isDynamic(sizes[i])) {
-        std::string newDynAxis = state.createNewSymbolicDim(ShapedType::kDynamic);
-        resultSymShape.push_back(newDynAxis);
-        state.DynSymtoArgDim[newDynAxis] = std::make_pair(result, static_cast<int64_t>(i));
+        std::string symdimToUse = tryGetSymdimFromDynamicSize(mixedSizes[i], srcSymShape[i], result, i, state);
+        if (symdimToUse.empty()) {
+          symdimToUse = state.createNewSymbolicDim(ShapedType::kDynamic);
+          state.DynSymtoArgDim[symdimToUse] = std::make_pair(result, static_cast<int64_t>(i));
+        }
+        resultSymShape.push_back(symdimToUse);
         state.UpdatedAxes[op].push_back(i);
         continue;
       }
@@ -1461,6 +1761,7 @@ struct SubviewAdapter final : OpAdapter {
       for (size_t i = 1; i < flatSym.size(); ++i) {
         if (state.manager.getLabel(flatSym[i]) != state.manager.getLabel(flatSym[i - 1])) {
           state.isSupported = false;
+          // disconnected expanded symshape of slice axis is not supported
           return;
         }
       }
@@ -1563,10 +1864,12 @@ static const OpAdapterRegistry &getOpAdapterRegistry() {
     R.registerAdapter(std::make_unique<ConstantAdapter>());
     R.registerAdapter(std::make_unique<ArithOpAdapter>());
     R.registerAdapter(std::make_unique<AffineApplyAdapter>());
+    R.registerAdapter(std::make_unique<StoreOpAdapter>());
     R.registerAdapter(std::make_unique<DimOpAdapter>());
     R.registerAdapter(std::make_unique<GlobalAdapter>());
     R.registerAdapter(std::make_unique<ExpandShapeAdapter>());
     R.registerAdapter(std::make_unique<CollapseShapeAdapter>());
+    R.registerAdapter(std::make_unique<ReshapeAdapter>());
     R.registerAdapter(std::make_unique<GenericAdapter>());
     R.registerAdapter(std::make_unique<SubviewAdapter>());
   }
@@ -1717,7 +2020,7 @@ void materializeReturnReshapes(ModuleOp module, ShapeNormalState &state, Pattern
 static bool analyzeShapeNormalization(ModuleOp module, ShapeNormalState &state, PatternRewriter &rewriter) {
   for (func::FuncOp func : module.getOps<func::FuncOp>()) {
     for (Operation &op : func.getOps()) {
-      if (!state.isSupportedOp(&op) && !isa<func::ReturnOp, memref::StoreOp, memref::GetGlobalOp>(op)) return false;
+      if (!state.isSupportedOp(&op) && !isa<func::ReturnOp, memref::GetGlobalOp>(op)) return false;
     }
   }
   module.walk([&](func::FuncOp func) { initFinestAxes(func, state, rewriter); });
@@ -1727,6 +2030,8 @@ static bool analyzeShapeNormalization(ModuleOp module, ShapeNormalState &state, 
     state.decompositions[decomp.first()] = expandedAxes;
   }
   assignLabels(module, state);
+  collectGlobalTargetShapes(module, state);
+
   if (!state.isSupported) {
     for (const auto &value : state.ValuesinFunc) {
       state.removeValueSymbolicShape(value);
@@ -1741,7 +2046,6 @@ static bool analyzeShapeNormalization(ModuleOp module, ShapeNormalState &state, 
     });
     return false;
   }
-  collectGlobalTargetShapes(module, state);
   return true;
 }
 
@@ -1750,6 +2054,33 @@ static void rewriteShapeNormalization(ModuleOp module, ShapeNormalState &state, 
   rewriteAllOps(module, state, rewriter);
   materializeReturnReshapes(module, state, rewriter);
   for (Operation *op : state.toDeleteOps) rewriter.eraseOp(op);
+
+  auto isDeadStore = [](memref::StoreOp store) {
+    Value memref = store.getMemRef();
+    if (isa<BlockArgument>(memref)) return false;
+    for (Operation *user : memref.getUsers())
+      if (!isa<memref::StoreOp>(user)) return false;
+    return true;
+  };
+  auto canErase = [&](Operation *op) {
+    if (auto store = dyn_cast<memref::StoreOp>(op)) return isDeadStore(store);
+    for (Value r : op->getResults())
+      if (!r.use_empty()) return false;
+    return true;
+  };
+  for (bool changed = true; changed;) {
+    changed = false;
+    SmallVector<Operation *> ops;
+    module.walk([&](Operation *op) {
+      if (isa<memref::StoreOp, memref::DimOp, memref::AllocOp, arith::ConstantOp>(op)) ops.push_back(op);
+    });
+    for (Operation *op : llvm::reverse(ops)) {
+      if (canErase(op)) {
+        rewriter.eraseOp(op);
+        changed = true;
+      }
+    }
+  }
 }
 
 struct ShapeNormalization : public impl::ShapeNormalizationBase<ShapeNormalization> {
