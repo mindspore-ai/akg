@@ -49,6 +49,34 @@ namespace TorchD = mlir::torch::Torch;
 
 void populateMfuseToTorchTypeConversions(mlir::TypeConverter &converter) {
   converter.addConversion([](mlir::RankedTensorType type) -> mlir::Type {
+    auto encoding = type.getEncoding();
+    if (encoding) {
+      auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(encoding);
+      if (dictAttr && dictAttr.contains(mlir::mfuse::kScalarMarkerAttr)) {
+        // Check the value of is_scalar attribute
+        auto scalarAttr = dictAttr.get(mlir::mfuse::kScalarMarkerAttr);
+        if (auto strAttr = mlir::dyn_cast<mlir::StringAttr>(scalarAttr)) {
+          std::string typeStr = strAttr.getValue().str();
+          // Convert based on the original torch type in is_scalar
+          if (typeStr == "!torch.int") {
+            return TorchD::IntType::get(type.getContext());
+          } else if (typeStr == "!torch.float") {
+            return TorchD::FloatType::get(type.getContext());
+          } else if (typeStr == "!torch.bool") {
+            return TorchD::BoolType::get(type.getContext());
+          }
+        }
+        // Fall back to original logic if is_scalar is not a string or doesn't match known torch types
+        auto elementType = type.getElementType();
+        if (mlir::isa<mlir::FloatType>(elementType)) {
+          return TorchD::FloatType::get(type.getContext());
+        }
+        if (auto intType = mlir::dyn_cast<mlir::IntegerType>(elementType)) {
+          return TorchD::IntType::get(type.getContext());
+        }
+      }
+    }
+
     llvm::SmallVector<int64_t> shape;
     auto sizes = type.getShape();
     shape.reserve(sizes.size());
@@ -69,7 +97,81 @@ void populateMfuseToTorchTypeConversions(mlir::TypeConverter &converter) {
   });
 }
 
+namespace {
+
+// Helper function to convert a dense elements attribute to a Torch constant
+mlir::Value convertDenseElementsAttrToTorchConstant(mlir::OpBuilder &builder, mlir::DenseElementsAttr denseAttr,
+                                                    mlir::Location loc, mlir::Value input) {
+  // Always check encoding
+  auto encoding = mlir::dyn_cast<mlir::RankedTensorType>(input.getType()).getEncoding();
+  if (!encoding) {
+    return {};
+  }
+  auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(encoding);
+  if (!dictAttr || !dictAttr.contains(mlir::mfuse::kScalarMarkerAttr)) {
+    return {};
+  }
+
+  // Check the value of is_scalar attribute
+  auto scalarAttr = dictAttr.get(mlir::mfuse::kScalarMarkerAttr);
+  if (auto strAttr = mlir::dyn_cast<mlir::StringAttr>(scalarAttr)) {
+    std::string typeStr = strAttr.getValue().str();
+
+    // Convert based on the original torch type in is_scalar
+    if (typeStr == "!torch.int") {
+      // For torch.int, ensure we convert to integer even if stored as float
+      if (mlir::isa<mlir::FloatType>(denseAttr.getType().getElementType())) {
+        double val = denseAttr.getSplatValue<mlir::APFloat>().convertToDouble();
+        return builder.create<TorchD::ConstantIntOp>(loc, builder.getI64IntegerAttr(static_cast<int64_t>(val)));
+      }
+      int64_t val = denseAttr.getSplatValue<mlir::APInt>().getSExtValue();
+      return builder.create<TorchD::ConstantIntOp>(loc, builder.getI64IntegerAttr(val));
+    } else if (typeStr == "!torch.float") {
+      // For torch.float, ensure we convert to float even if stored as integer
+      if (mlir::isa<mlir::IntegerType>(denseAttr.getType().getElementType())) {
+        int64_t val = denseAttr.getSplatValue<mlir::APInt>().getSExtValue();
+        return builder.create<TorchD::ConstantFloatOp>(loc, builder.getF64FloatAttr(static_cast<double>(val)));
+      }
+      double val = denseAttr.getSplatValue<mlir::APFloat>().convertToDouble();
+      return builder.create<TorchD::ConstantFloatOp>(loc, builder.getF64FloatAttr(val));
+    } else if (typeStr == "!torch.bool") {
+      auto boolValue = denseAttr.getSplatValue<mlir::APInt>().getBoolValue();
+      return builder.create<TorchD::ConstantBoolOp>(loc, builder.getBoolAttr(boolValue));
+    }
+  }
+
+  // Fall back to original logic if is_scalar is not a string or doesn't match known torch types
+  auto tensorType = denseAttr.getType();
+  mlir::Type elemType = tensorType.getElementType();
+
+  if (mlir::isa<mlir::FloatType>(elemType)) {
+    double val = denseAttr.getSplatValue<mlir::APFloat>().convertToDouble();
+    return builder.create<TorchD::ConstantFloatOp>(loc, builder.getF64FloatAttr(val));
+  }
+
+  if (mlir::isa<mlir::IntegerType>(elemType)) {
+    int64_t val = denseAttr.getSplatValue<mlir::APInt>().getSExtValue();
+    return builder.create<TorchD::ConstantIntOp>(loc, builder.getI64IntegerAttr(val));
+  }
+
+  return {};
+}
+
+}  // namespace
+
 class MfuseToTorchTypeConverter : public mlir::TypeConverter {
+ private:
+  static mlir::Value tryConvertConstant(mlir::OpBuilder &builder, mlir::Type toType, mlir::Value input,
+                                        mlir::Location loc) {
+    if (auto cst = input.getDefiningOp<mlir::mfuse::ConstantOp>()) {
+      if (auto denseAttr = mlir::dyn_cast<mlir::DenseElementsAttr>(cst.getValue())) {
+        // Use the common helper function with encoding check
+        return convertDenseElementsAttrToTorchConstant(builder, denseAttr, loc, input);
+      }
+    }
+    return {};
+  }
+
  public:
   MfuseToTorchTypeConverter() {
     addConversion([](mlir::Type type) { return type; });
@@ -78,6 +180,10 @@ class MfuseToTorchTypeConverter : public mlir::TypeConverter {
     addTargetMaterialization(
       [](mlir::OpBuilder &builder, mlir::Type toType, mlir::ValueRange inputs, mlir::Location loc) -> mlir::Value {
         if (inputs.size() != 1) return {};
+        mlir::Value input = inputs[0];
+        // Try to convert to different types of Torch constants
+        if (auto v = tryConvertConstant(builder, toType, input, loc)) return v;
+        // Fall back to conversion cast if not a handled constant type
         return builder.create<mlir::UnrealizedConversionCastOp>(loc, toType, inputs).getResult(0);
       });
 
@@ -86,6 +192,51 @@ class MfuseToTorchTypeConverter : public mlir::TypeConverter {
         if (inputs.size() != 1) return {};
         return builder.create<mlir::UnrealizedConversionCastOp>(loc, toType, inputs).getResult(0);
       });
+  }
+};
+
+class ConvertMfuseConstantToTorch : public mlir::OpConversionPattern<mlir::mfuse::ConstantOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::ConstantOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    mlir::Attribute value = op.getValue();
+    mlir::Type resultType = op.getResult().getType();
+
+    mlir::Type convertedType = getTypeConverter()->convertType(resultType);
+    if (!convertedType) {
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+    }
+    auto denseAttr = mlir::dyn_cast<mlir::DenseElementsAttr>(value);
+    if (!denseAttr) {
+      return rewriter.notifyMatchFailure(op, "value must be a dense elements attribute");
+    }
+
+    auto tensorType = denseAttr.getType();
+
+    // Use the common helper function to convert tensors with scalar marker encoding
+    if (auto torchCst = convertDenseElementsAttrToTorchConstant(rewriter, denseAttr, loc, op.getResult())) {
+      rewriter.replaceOp(op, torchCst);
+      return mlir::success();
+    }
+
+    llvm::SmallVector<int64_t> shape;
+    auto sizes = mlir::dyn_cast<mlir::RankedTensorType>(resultType).getShape();
+    shape.reserve(sizes.size());
+    std::transform(sizes.begin(), sizes.end(), std::back_inserter(shape),
+                   [](int64_t dim) { return dim == mlir::ShapedType::kDynamic ? TorchD::kUnknownSize : dim; });
+    auto vtensorType = TorchD::ValueTensorType::get(rewriter.getContext(), shape, tensorType.getElementType());
+
+    if (vtensorType) {
+      auto torchTensor = rewriter.create<TorchD::ValueTensorLiteralOp>(loc, vtensorType, denseAttr);
+
+      rewriter.replaceOp(op, torchTensor.getResult());
+      return mlir::success();
+    }
+
+    return rewriter.notifyMatchFailure(op, "failed to convert tensor type");
   }
 };
 
@@ -218,6 +369,7 @@ struct ConvertMfuseToTorchPass
     mlir::populateMfuseMetaToTorchConversionPatterns(converter_, patternList);
     mlir::populateMfuseAclnnToTorchConversionPatterns(converter_, patternList);
     patternList.add<ConvertAkgCallOp, ConvertBishengCallOp, ConvertDvmCallOp>(converter_, ctx);
+    patternList.add<ConvertMfuseConstantToTorch>(converter_, ctx);
 
     patterns_ = std::move(patternList);
     return mlir::success();

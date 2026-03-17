@@ -25,7 +25,6 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchTypes.h"
-#include "mfusion/Conversion/MfuseToTorch/Utils.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Support/ArithUtils.h"
 
@@ -48,13 +47,18 @@ class ConvertMfuseAclnnAdd : public mlir::OpConversionPattern<mlir::mfuse::Aclnn
                                       mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Value x = adaptor.getX();
     mlir::Value y = adaptor.getY();
-    mlir::Value alphaScalar = materializeConstValueToTorchScalar(op.getOperation(), op.getAlpha(), rewriter);
+    mlir::Value alphaScalar = adaptor.getAlpha();
 
     mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
       return mlir::failure();
     }
-    rewriter.replaceOpWithNewOp<TorchD::AtenAddTensorOp>(op, resultType, x, y, alphaScalar);
+    bool isRhsScalar = mlir::isa<TorchD::FloatType>(y.getType()) || mlir::isa<TorchD::IntType>(y.getType());
+    if (isRhsScalar) {
+      rewriter.replaceOpWithNewOp<TorchD::AtenAddScalarOp>(op, resultType, x, y, alphaScalar);
+    } else {
+      rewriter.replaceOpWithNewOp<TorchD::AtenAddTensorOp>(op, resultType, x, y, alphaScalar);
+    }
     return mlir::success();
   }
 };
@@ -184,13 +188,18 @@ class ConvertMfuseAclnnSub : public mlir::OpConversionPattern<mlir::mfuse::Aclnn
                                       mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Value x = adaptor.getX();
     mlir::Value y = adaptor.getY();
-    mlir::Value alphaScalar = materializeConstValueToTorchScalar(op.getOperation(), op.getAlpha(), rewriter);
+    mlir::Value alphaScalar = adaptor.getAlpha();
 
     mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
       return mlir::failure();
     }
-    rewriter.replaceOpWithNewOp<TorchD::AtenSubTensorOp>(op, resultType, x, y, alphaScalar);
+    bool isRhsScalar = mlir::isa<TorchD::FloatType>(y.getType()) || mlir::isa<TorchD::IntType>(y.getType());
+    if (isRhsScalar) {
+      rewriter.replaceOpWithNewOp<TorchD::AtenSubScalarOp>(op, resultType, x, y, alphaScalar);
+    } else {
+      rewriter.replaceOpWithNewOp<TorchD::AtenSubTensorOp>(op, resultType, x, y, alphaScalar);
+    }
     return mlir::success();
   }
 };
@@ -207,8 +216,8 @@ class ConvertMfuseAclnnClamp : public mlir::OpConversionPattern<mlir::mfuse::Acl
     }
     auto input = adaptor.getInput();
     auto inputType = input.getType();
-    mlir::Value minValue = materializeConstValueToTorchScalar(op.getOperation(), op.getMin(), rewriter);
-    mlir::Value maxValue = materializeConstValueToTorchScalar(op.getOperation(), op.getMax(), rewriter);
+    mlir::Value minValue = adaptor.getMin();
+    mlir::Value maxValue = adaptor.getMax();
     Value final_result = input;
     auto inputValueTensorType = inputType.dyn_cast<TorchD::ValueTensorType>();
     auto boolResultType = TorchD::ValueTensorType::get(op.getResult().getType().getContext(),

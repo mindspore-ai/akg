@@ -88,11 +88,11 @@ llvm::DenseSet<Operation *> collectConstantsToCluster(llvm::ArrayRef<Operation *
       }
 
       // Check if this is a constant operation
-      auto arithConstOp = dyn_cast<arith::ConstantOp>(defOp);
-      if (!arithConstOp) {
+      auto constOp = dyn_cast<mfuse::ConstantOp>(defOp);
+      if (!constOp) {
         continue;
       }
-      Type resultType = arithConstOp.getResult().getType();
+      Type resultType = constOp.getResult().getType();
 
       // If constant is not a tensor type (e.g., scalar), include it in cluster
       if (!isa<TensorType>(resultType)) {
@@ -111,7 +111,7 @@ llvm::DenseSet<Operation *> collectConstantsToCluster(llvm::ArrayRef<Operation *
       }
 
       // Get the constant attribute
-      Attribute valueAttr = arithConstOp.getValueAttr();
+      Attribute valueAttr = constOp.getValueAttr();
       if (!valueAttr) {
         continue;
       }

@@ -193,7 +193,7 @@ class MfuseMetaOpsMatMulWithBiasToAclnnPattern : public OpRewritePattern<MatmulW
     }
 
     auto scalarType = RankedTensorType::get({}, rewriter.getI64Type());
-    Value alphaOne = rewriter.create<arith::ConstantOp>(loc, scalarType, DenseElementsAttr::get(scalarType, kAlphaOne));
+    Value alphaOne = rewriter.create<mfuse::ConstantOp>(loc, scalarType, DenseElementsAttr::get(scalarType, kAlphaOne));
     Value addResult = rewriter.create<AclnnAddOp>(loc, resultType, matmulResult, biasForAdd, alphaOne);
     rewriter.replaceOp(op, addResult);
     return success();

@@ -51,18 +51,30 @@ void populateTorchToMfuseTypeConversions(mlir::TypeConverter &converter) {
   converter.addConversion([](TorchD::ValueTensorType type) -> mlir::Type { return type.toBuiltinTensor(); });
 
   converter.addConversion([](TorchD::IntType type) -> mlir::Type {
+    auto ctx = type.getContext();
+    auto scalarMarker =
+      mlir::NamedAttribute(mlir::StringAttr::get(ctx, mlir::mfuse::kScalarMarkerAttr), mlir::StringAttr::get(ctx, ""));
+    auto newEncoding = mlir::DictionaryAttr::get(ctx, {scalarMarker});
     auto elementType = mlir::IntegerType::get(type.getContext(), 64);
-    return mlir::RankedTensorType::get({}, elementType);
+    return mlir::RankedTensorType::get({}, elementType, newEncoding);
   });
 
   converter.addConversion([](TorchD::FloatType type) -> mlir::Type {
+    auto ctx = type.getContext();
+    auto scalarMarker =
+      mlir::NamedAttribute(mlir::StringAttr::get(ctx, mlir::mfuse::kScalarMarkerAttr), mlir::StringAttr::get(ctx, ""));
+    auto newEncoding = mlir::DictionaryAttr::get(ctx, {scalarMarker});
     auto elementType = mlir::Float64Type::get(type.getContext());
-    return mlir::RankedTensorType::get({}, elementType);
+    return mlir::RankedTensorType::get({}, elementType, newEncoding);
   });
 
   converter.addConversion([](TorchD::BoolType type) -> mlir::Type {
-    auto elementType = mlir::IntegerType::get(type.getContext(), 1);
-    return mlir::RankedTensorType::get({}, elementType);
+    auto ctx = type.getContext();
+    auto scalarMarker = mlir::NamedAttribute(mlir::StringAttr::get(ctx, mlir::mfuse::kScalarMarkerAttr),
+                                             mlir::StringAttr::get(ctx, "!torch.bool"));
+    auto newEncoding = mlir::DictionaryAttr::get(ctx, {scalarMarker});
+    auto elementType = mlir::IntegerType::get(ctx, 1);
+    return mlir::RankedTensorType::get({}, elementType, newEncoding);
   });
 
   converter.addConversion(
@@ -104,7 +116,7 @@ class TorchToMfuseTypeConverter : public mlir::TypeConverter {
     if (auto op = input.getDefiningOp<OpTy>()) {
       if (auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(toType)) {
         auto denseAttr = mlir::DenseElementsAttr::get(ranked, op.getValueAttr());
-        return builder.create<mlir::arith::ConstantOp>(loc, ranked, denseAttr).getResult();
+        return builder.create<mlir::mfuse::ConstantOp>(loc, ranked, denseAttr).getResult();
       }
     }
     return {};

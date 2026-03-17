@@ -95,9 +95,9 @@ def test_decompose_pipeline_with_add_scalar():
     # Torch dialect MLIR string with add and rmsnorm operations
     torch_mlir = textwrap.dedent("""
       module {
-        func.func @test_add(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.float) -> !torch.vtensor<[4,4],f32> {
+        func.func @test_add(%arg0: !torch.vtensor<[4,4],f32>, %arg1: !torch.int) -> !torch.vtensor<[4,4],f32> {
           %alpha = torch.constant.float 1.0
-          %0 = torch.aten.add.Scalar %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.float, !torch.float -> !torch.vtensor<[4,4],f32>
+          %0 = torch.aten.add.Scalar %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.int, !torch.float -> !torch.vtensor<[4,4],f32>
           return %0 : !torch.vtensor<[4,4],f32>
         }
       }
@@ -105,7 +105,30 @@ def test_decompose_pipeline_with_add_scalar():
     # Run fuse and optimize
     result = fuse_and_optimize(torch_mlir)
     checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.operator"), checker.error
     assert checker.check_has_op("torch.aten.add.Scalar"), checker.error
+    assert checker.check_text_not_contains("builtin.unrealized_conversion_cast"), checker.error
+
+
+def test_decompose_pipeline_with_add_scalar2():
+    """Test decompose pipeline with add"""
+    # Torch dialect MLIR string with add and rmsnorm operations
+    torch_mlir = textwrap.dedent("""
+      module {
+        func.func @test_add(%arg0: !torch.vtensor<[4,4],f32>) -> !torch.vtensor<[4,4],f32> {
+          %arg1 = torch.constant.int 2
+          %alpha = torch.constant.float 1.0
+          %0 = torch.aten.add.Scalar %arg0, %arg1, %alpha : !torch.vtensor<[4,4],f32>, !torch.int, !torch.float -> !torch.vtensor<[4,4],f32>
+          return %0 : !torch.vtensor<[4,4],f32>
+        }
+      }
+    """)
+    # Run fuse and optimize
+    result = fuse_and_optimize(torch_mlir)
+    checker = MlirChecker.parse_torch_module(result)
+    assert checker.check_no_op("torch.operator"), checker.error
+    assert checker.check_has_op("torch.aten.add.Scalar"), checker.error
+    assert checker.check_text_contains("torch.constant.float 2.0"), checker.error
 
 
 def test_decompose_pipeline_with_add_rmsnorm():

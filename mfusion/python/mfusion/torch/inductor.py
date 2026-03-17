@@ -15,6 +15,7 @@
 
 from ._pipeline import PipelineRunner
 
+
 def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> str:
     """
     Fuse and optimize the given Torch dialect MLIR string.
@@ -62,7 +63,8 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
 
     runner.run(
         pipeline=f"builtin.module(func.func(split{{kernel-generator={kernel_generator}}}),canonicalize)",
-        stage="Mfuse Split")
+        stage="Mfuse Split",
+    )
 
     runner.run(
         pipeline="builtin.module(recompose, canonicalize)",

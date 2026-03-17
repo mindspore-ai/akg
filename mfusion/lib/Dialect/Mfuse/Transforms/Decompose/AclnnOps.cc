@@ -47,11 +47,11 @@ static Value createAlphaValueFromConstant(PatternRewriter &rewriter, Location lo
   if (isa<FloatType>(elementType)) {
     auto floatVal = denseAttr.getSplatValue<APFloat>();
     auto floatAttr = rewriter.getFloatAttr(targetType.getElementType(), floatVal.convertToDouble());
-    return rewriter.create<arith::ConstantOp>(loc, targetType, DenseElementsAttr::get(targetType, floatAttr));
+    return rewriter.create<mfuse::ConstantOp>(loc, targetType, DenseElementsAttr::get(targetType, floatAttr));
   } else {
     auto intVal = denseAttr.getSplatValue<APInt>();
     auto intAttr = rewriter.getIntegerAttr(targetType.getElementType(), intVal.getSExtValue());
-    return rewriter.create<arith::ConstantOp>(loc, targetType, DenseElementsAttr::get(targetType, intAttr));
+    return rewriter.create<mfuse::ConstantOp>(loc, targetType, DenseElementsAttr::get(targetType, intAttr));
   }
 }
 
@@ -73,54 +73,40 @@ static Value decomposeAclnnWithAlpha(OpType op, mlir::mfuse::ComputeOpBuilder &b
   Value y = op.getY();
   Value alpha = op.getAlpha();
   Location loc = op.getLoc();
-
+  Type resultType = op.getResult().getType();
+  auto resultElementType = mlir::cast<RankedTensorType>(resultType).getElementType();
   // Determine if the operation is an add or sub
   bool isAdd = isa<mfuse::AclnnAddOp>(op);
-
-  // Get element types for type checking
-  Type xElementType = x.getType().cast<TensorType>().getElementType();
-  Type yElementType = y.getType().cast<TensorType>().getElementType();
-
-  // When alpha == 1 we emit add/sub directly. Cast y to match x's element type
-  // (only in this fast-path) to avoid type-promotion producing a wider type
-  // (e.g., f32+f64 → f64) that breaks downstream ops expecting the original
-  // element type. Behaviour for alpha != 1 remains unchanged.
   if (isConstOne(alpha)) {
-    if (xElementType != yElementType) {
-      y = builder.cast(y, xElementType);
-    }
     return isAdd ? builder.add(x, y) : builder.sub(x, y);
   }
 
-  if (!isSupportType(xElementType) || !isSupportType(yElementType)) {
+  // Do not decompose add/sub.Scalar to mul + add/sub
+  if (auto rhsEnc = mlir::dyn_cast<mlir::RankedTensorType>(y.getType()).getEncoding()) {
+    if (auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(rhsEnc)) {
+      if (dictAttr.contains(mlir::mfuse::kScalarMarkerAttr)) {
+        return nullptr;
+      }
+    }
+  }
+
+  if (!isSupportType(resultElementType)) {
     return nullptr;
   }
 
   // Check if alpha is a constant
-  auto constantOp = alpha.getDefiningOp<mlir::arith::ConstantOp>();
+  auto constantOp = alpha.getDefiningOp<mlir::mfuse::ConstantOp>();
   Value mulResult;
 
   if (constantOp) {
     // If alpha is a constant, extract its value
     auto denseTensor = mlir::dyn_cast<DenseElementsAttr>(constantOp.getValue());
-    auto elementType = denseTensor.getElementType();
-    // Alpha must be supported float32/float16/bfloat16/int32 type
-    if (!isSupportType(elementType)) {
-      return nullptr;
-    }
-    auto supposedAlphaType = RankedTensorType::get({}, yElementType);
+    auto supposedAlphaType = RankedTensorType::get({}, resultElementType);
     Value alphaValue = createAlphaValueFromConstant(rewriter, loc, denseTensor, supposedAlphaType);
     mulResult = builder.mul(y, alphaValue);
   } else {
     // If alpha is dynamic, convert it to RankedTensorType (0D tensor)
     Value alphaTensor = convertAnyScalarToRankedTensor(rewriter, loc, alpha);
-    auto alphaElementType = alphaTensor.getType().cast<TensorType>().getElementType();
-    if (!isSupportType(alphaElementType)) {
-      return nullptr;
-    }
-    if (alphaElementType != yElementType) {
-      alphaTensor = builder.cast(alphaTensor, yElementType);
-    }
     mulResult = builder.mul(y, alphaTensor);
   }
 

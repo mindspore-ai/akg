@@ -102,4 +102,31 @@ def Mfuse_CreateDtypeOp : Mfuse_Op<"constant.dtype", [ConstantLike, Pure]> {
   }];
 }
 
+def Mfuse_ConstantOp : Mfuse_Op<"constant",
+    [ConstantLike, Pure]> {
+  let summary = "integer or floating point constant";
+  let description = [{
+    The `constant` operation produces an SSA value equal to some integer or
+    floating-point constant specified by an attribute.
+  }];
+
+  let arguments = (ins TypedAttrInterface:$value);
+  let results = (outs AnyRankedTensor:$result);
+
+  let builders = [
+    OpBuilder<(ins "Type":$resultType, 
+               "Attribute":$value)>
+  ];
+
+  let extraClassDeclaration = [{
+    static bool isBuildableWith(Attribute value, Type type);
+    static ConstantOp materialize(OpBuilder &builder, Attribute value,
+                                  Type type, Location loc);
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
 #endif // MFUSE_DIALECT_MFUSE_CONSTANT_OPS_TD
