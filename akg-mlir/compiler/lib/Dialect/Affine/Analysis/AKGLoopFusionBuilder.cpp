@@ -1190,11 +1190,7 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   unsigned maxDepth = 0;
 
   if (!srcInfo.isPerfect) {
-    auto startDepth = std::min(srcInfo.loops.size(), dstInfo.loops.size());
-    while (startDepth != 0 &&
-          !checkLoopBoundsMatch(srcInfo.loops, dstInfo.loops, startDepth)) {
-      startDepth--;
-    }
+    auto startDepth = std::min(srcInfo.perfectDepth, dstInfo.perfectDepth);
     loopDepth = startDepth;
   }
 
@@ -1285,7 +1281,7 @@ void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, FusionLoopNest
     }
   };
 
-  auto depth = std::min(srcLoops.size(), dstLoops.size());
+  auto depth = std::min(srcInfo.perfectDepth, dstInfo.perfectDepth);
   while (depth != 0 && !checkLoopBoundsMatch(srcLoops, dstLoops, depth)) {
     depth--;
   }
