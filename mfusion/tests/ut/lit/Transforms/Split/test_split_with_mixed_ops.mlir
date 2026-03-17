@@ -77,17 +77,17 @@ func.func @test_split_with_comparisons(%arg0: tensor<2x4xf32>, %arg1: tensor<2x4
 // CHECK-SAME: %arg0: tensor<2x4xf32>
 // CHECK-SAME: %arg1: tensor<2x4xf32>
 // CHECK-SAME: %arg2: tensor<2x4xf32>
-// CHECK: %[[CST:.*]] = arith.constant dense<1.000000e+00> : tensor<f64>
-// CHECK: %[[CST_0:.*]] = arith.constant dense<2.000000e+00> : tensor<f64>
+// CHECK: %[[CST:.*]] = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+// CHECK: %[[CST_0:.*]] = mfuse.constant dense<2.000000e+00> : tensor<f64, {is_scalar = ""}>
 // CHECK: %[[ADD:.*]] = mfuse.add %arg0, %arg1
 // CHECK: %[[MUL:.*]] = mfuse.mul %arg2, %arg2
 // CHECK: return %[[ADD]], %[[MUL]]
 func.func @test_split_into_two(%arg0: tensor<2x4xf32>, %arg1: tensor<2x4xf32>, %arg2: tensor<2x4xf32>) -> (tensor<2x4xf32>, tensor<2x4xf32>) {
-  %0 = arith.constant dense<1.000000e+00> : tensor<f64>
-  %1 = arith.constant dense<2.000000e+00> : tensor<f64>
+  %0 = mfuse.constant dense<1.000000e+00> : tensor<f64, {is_scalar = ""}>
+  %1 = mfuse.constant dense<2.000000e+00> : tensor<f64, {is_scalar = ""}>
   // Fused operation that contains two independent computation chains
-  %2:2 = mfuse.fused %arg0, %arg1, %arg2, %0, %1 {fusion_type = "dvm"} : (tensor<2x4xf32>, tensor<2x4xf32>, tensor<2x4xf32>, tensor<f64>, tensor<f64>) -> (tensor<2x4xf32>, tensor<2x4xf32>) {
-  ^bb0(%arg3: tensor<2x4xf32>, %arg4: tensor<2x4xf32>, %arg5: tensor<2x4xf32>, %arg6: tensor<f64>, %arg7: tensor<f64>):
+  %2:2 = mfuse.fused %arg0, %arg1, %arg2, %0, %1 {fusion_type = "dvm"} : (tensor<2x4xf32>, tensor<2x4xf32>, tensor<2x4xf32>, tensor<f64, {is_scalar = ""}>, tensor<f64, {is_scalar = ""}>) -> (tensor<2x4xf32>, tensor<2x4xf32>) {
+  ^bb0(%arg3: tensor<2x4xf32>, %arg4: tensor<2x4xf32>, %arg5: tensor<2x4xf32>, %arg6: tensor<f64, {is_scalar = ""}>, %arg7: tensor<f64, {is_scalar = ""}>):
     // First computation chain: arg0 + arg1 -> result1
     %3 = mfuse.add %arg3, %arg4 : (tensor<2x4xf32>, tensor<2x4xf32>) -> tensor<2x4xf32>
     // Second computation chain: arg2 * arg2 -> result2
