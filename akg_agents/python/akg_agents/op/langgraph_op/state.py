@@ -67,6 +67,10 @@ class KernelGenState(BaseState, total=False):
     code_check_passed: Optional[bool]
     code_check_errors: Optional[str]  # 格式化的错误信息
     code_check_details: Optional[List[Dict[str, Any]]]  # 详细错误列表
+
+    # === 代码生成异常（max_tokens 截断等）===
+    codegen_invalid: Optional[bool]
+    codegen_invalid_reason: Optional[str]
     
     # === Conductor 建议 ===
     conductor_suggestion: Optional[str]
@@ -88,4 +92,3 @@ class KernelGenState(BaseState, total=False):
     
     # === 路径配置 ===
     cur_path: Optional[str]  # 自定义工作路径，用于控制中间文件和代码输出的存放位置
-

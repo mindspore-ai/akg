@@ -304,6 +304,28 @@ class RouterFactory:
             return code_gen_agent
         
         return route_after_code_checker
+
+    @staticmethod
+    def create_codegen_router(next_agent: str, code_gen_agent: str = "coder"):
+        """代码生成后的路由（处理 max_tokens 截断等异常）
+
+        Args:
+            next_agent: 正常情况下的下一节点（"verifier" 或 "code_checker"）
+            code_gen_agent: 代码生成 agent 名称（"coder" 或 "kernel_gen"）
+        """
+        async def route_after_codegen(state: KernelGenState) -> str:
+            task_id = state.get('task_id', '0')
+            if state.get("codegen_invalid"):
+                reason = state.get("codegen_invalid_reason", "")
+                logger.warning(
+                    f"[Task {task_id}] {code_gen_agent} 输出异常，路由至 conductor。"
+                    f"{(' 原因: ' + reason) if reason else ''}"
+                )
+                return "conductor"
+            logger.info(f"[Task {task_id}] {code_gen_agent} 输出正常，路由至 {next_agent}")
+            return next_agent
+
+        return route_after_codegen
     
     @staticmethod
     def create_smart_router(config, conductor_template, model_config):
@@ -331,4 +353,3 @@ class RouterFactory:
             )
         
         return smart_route
-
