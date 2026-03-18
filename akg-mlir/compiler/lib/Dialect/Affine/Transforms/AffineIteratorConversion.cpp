@@ -25,6 +25,7 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
+#include "mlir/Dialect/Affine/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/LoopUtils.h"
 #include "mlir/Dialect/Affine/Passes.h"
@@ -134,64 +135,89 @@ static affine::AffineLoadOp getLoadOp(affine::AffineForOp reduceForOp, Operation
   return loadOp;
 }
 
-static Operation *getInnermostReduceOp(Operation *curOp) {
-  Operation *innermostReduceOp = nullptr;
-  curOp->walk([&](affine::AffineForOp op) -> WalkResult {
-    if (op->getAttr(kReductionLoopAttr)) {
-      innermostReduceOp = op.getOperation();
-      return WalkResult::interrupt();
+static Operation *findReduceArithOp(Operation *curOp) {
+  Operation *reduceArithOp = nullptr;
+  curOp->walk([&](Operation *op) -> WalkResult {
+    if (op->getAttr(kReductionTypeStr)) {
+      bool alreadyConverted = llvm::any_of(op->getOperands(), [](Value v) {
+        return !v.getDefiningOp();
+      });
+      if (!alreadyConverted) {
+        reduceArithOp = op;
+        return WalkResult::interrupt();
+      }
     }
     return WalkResult::advance();
   });
-  return innermostReduceOp;
+  return reduceArithOp;
+}
+
+static arith::ConstantOp resolveInitConstant(affine::AffineStoreOp initStoreOp) {
+  auto definingOp = initStoreOp.getValue().getDefiningOp();
+  arith::ConstantOp constOp = dyn_cast<arith::ConstantOp>(definingOp);
+  if (!constOp) {
+    if (auto initLoad = dyn_cast<affine::AffineLoadOp>(definingOp)) {
+      Value loadMemref = initLoad.getMemRef();
+      for (auto it = Block::reverse_iterator(initLoad.getOperation());
+           it != initLoad->getBlock()->rend(); ++it) {
+        if (auto precedingStore = dyn_cast<affine::AffineStoreOp>(&*it)) {
+          if (precedingStore.getMemRef() == loadMemref) {
+            constOp = dyn_cast<arith::ConstantOp>(precedingStore.getValue().getDefiningOp());
+            break;
+          }
+        }
+      }
+    }
+  }
+  return constOp;
+}
+
+static affine::AffineStoreOp findMatchingStoreOp(affine::AffineForOp reduceLoop, affine::AffineLoadOp loadOp) {
+  affine::AffineStoreOp storeOp = nullptr;
+  reduceLoop.walk([&](affine::AffineStoreOp op) {
+    if (op.getMemref() == loadOp.getMemref()) {
+      storeOp = op;
+    }
+  });
+  return storeOp;
 }
 
 void AffineIteratorConversion::loadRemoveEachBand(Operation *curOp) {
   OpBuilder b(curOp);
-  Operation *reduceArithOp = nullptr;
-  curOp->walk([&](Operation *op) -> WalkResult {
-    // The tail block does not need to be processed.
-    if (op->getAttr(kReductionTypeStr)) {
-      reduceArithOp = op;
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
-  });
+  Operation *reduceArithOp = findReduceArithOp(curOp);
   if (!reduceArithOp) {
     return;
   }
 
-  Operation *reduceLoopOp = getInnermostReduceOp(curOp);
-  if (!reduceLoopOp) {
+  auto axesAttr = reduceArithOp->getAttrOfType<ArrayAttr>(kReductionAxesStr);
+  if (!axesAttr || axesAttr.empty()) {
     return;
   }
+  SmallVector<affine::AffineForOp, 4> enclosingLoops;
+  affine::getAffineForIVs(*reduceArithOp, &enclosingLoops);
+  auto idx = cast<IntegerAttr>(axesAttr[0]).getInt();
+  if (idx < 0 || idx >= static_cast<int64_t>(enclosingLoops.size())) {
+    return;
+  }
+  Operation *reduceLoopOp = enclosingLoops[idx].getOperation();
   affine::AffineStoreOp initStoreOp = nullptr;
   while (isa<affine::AffineForOp>(reduceLoopOp) && reduceLoopOp->getAttr(kReductionLoopAttr)) {
     affine::AffineForOp reduceLoop = cast<affine::AffineForOp>(reduceLoopOp);
-    // init load statement
     affine::AffineLoadOp loadOp = getLoadOp(reduceLoop, reduceArithOp);
-    // init statement
     auto initOp = CommonUtils::getReduceInitOp(reduceArithOp, curOp->getBlock());
     if (initOp) {
       initStoreOp = initOp;
     }
 
-    // reduce result store statement
-    affine::AffineStoreOp storeOp = nullptr;
-    reduceLoop.walk([&](affine::AffineStoreOp op) {
-      if (op.getMemref() == loadOp.getMemref()) {
-        storeOp = op;
-      }
-    });
+    affine::AffineStoreOp storeOp = findMatchingStoreOp(reduceLoop, loadOp);
     if (!storeOp || !initStoreOp || !loadOp) {
       reduceArithOp->emitError("Error: the statement associated with reduce is not found. \n");
       return;
     }
-    auto definingOp = initStoreOp.getValue().getDefiningOp();
-    if (!isa<arith::ConstantOp>(definingOp)) {
+    arith::ConstantOp constOp = resolveInitConstant(initStoreOp);
+    if (!constOp) {
       return;
     }
-    arith::ConstantOp constOp = cast<arith::ConstantOp>(definingOp);
     IRRewriter rewriter(curOp->getContext());
     auto newLoop = cast<affine::AffineForOp>(*reduceLoop.replaceWithAdditionalYields(
       rewriter, constOp.getResult(),
@@ -253,7 +279,24 @@ void AffineIteratorConversion::runOnOperation() {
   (void)std::copy(func.getOps<affine::AffineForOp>().begin(), func.getOps<affine::AffineForOp>().end(),
                   std::back_inserter(bands));
   for (auto band : bands) {
-    loadRemoveEachBand(band);
+    int reductionCount = 0;
+    band.walk([&](Operation *op) {
+      if (op->getAttr(kReductionTypeStr)) {
+        reductionCount++;
+      }
+    });
+    for (int i = 0; i < reductionCount; ++i) {
+      bool hasReduction = false;
+      band.walk([&](Operation *op) {
+        if (op->getAttr(kReductionTypeStr)) {
+          hasReduction = true;
+        }
+      });
+      if (!hasReduction) {
+        break;
+      }
+      loadRemoveEachBand(band);
+    }
   }
 
   // remove empty for
