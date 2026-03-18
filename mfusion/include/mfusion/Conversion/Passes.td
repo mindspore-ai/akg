@@ -48,6 +48,19 @@ def TorchFuseRoPE : Pass<"torch-fuse-rope", "::mlir::ModuleOp"> {
   ];
 }
 
+def TorchFuseRmsNorm : Pass<"torch-fuse-rms-norm", "::mlir::ModuleOp"> {
+  let summary = "Fuse decomposed RmsNorm on Torch dialect into torch.npu.npu_rms_norm";
+  let description = [{
+    Matches decomposed RmsNorm patterns (add+rsqrt+mul+mul, with optional npu_dtype_cast)
+    and replaces them with torch.operator "torch.npu.npu_rms_norm"(x, gamma, eps).
+    Runs before convert-torch-to-mfuse.
+  }];
+  let constructor = "mlir::createTorchFuseRmsNormPass()";
+  let dependentDialects = [
+    "::mlir::torch::Torch::TorchDialect"
+  ];
+}
+
 def ConvertTorchToMfuse : Pass<"convert-torch-to-mfuse", "::mlir::ModuleOp"> {
   let summary = "Convert Torch operations to Mfuse dialect operations";
 

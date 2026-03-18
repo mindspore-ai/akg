@@ -20,7 +20,6 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/MfuseFusion.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseAddRmsNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseGelu.h"
-#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseRmsNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseSwiGlu.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Conv/FuseBiasaddConv.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Conv/FuseConv2DCast.h"

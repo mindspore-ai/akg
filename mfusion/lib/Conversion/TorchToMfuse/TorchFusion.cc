@@ -42,6 +42,7 @@ struct TorchFusionPass : public PassWrapper<TorchFusionPass, OperationPass<Modul
   void runOnOperation() override {
     using PassCreator = std::function<std::unique_ptr<Pass>()>;
     std::vector<std::pair<const char *, PassCreator>> passes = {
+        {"torch-fuse-rms-norm", []() { return createTorchFuseRmsNormPass(); }},
         {"torch-fuse-rope", []() { return createTorchFuseRoPEPass(); }},
     };
 
