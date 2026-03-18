@@ -72,7 +72,6 @@ struct FuseEdge {
 struct FusionPlan {
   FuseEdge fusedGroup{FuseEdge(0, 0)};
   FuseEdge fusedBand{FuseEdge(0, 0)};
-  FuseEdge fusedNode{FuseEdge(0, 0)};
   std::string fusionType{"H"};
   DependenceInfo depInfo;
   LoopTransform loopTransform{LoopTransform::Merge};

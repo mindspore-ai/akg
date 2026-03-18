@@ -99,7 +99,6 @@ bool MemRefDependenceGraphForFusion::init() {
 }
 
 void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
-  std::vector<unsigned> currNodeId;
   block->walk([&](Operation *op) {
     if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
       if (isa<affine::AffineForOp>(op->getParentOp())) {
@@ -152,7 +151,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
       groups[groupId] = group;
 
       funcOperatorType = group->groupTemplate > funcOperatorType ? group->groupTemplate : funcOperatorType;
-    } else if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
+    } else if (isa<affine::AffineReadOpInterface>(op)) {
       // Create graph node for top-level load op.
       Node node(nextNodeId++, op);
       node.loads.push_back(op);
@@ -164,7 +163,7 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
         memrefAccesses[sourceMemref].insert(node.id);
       }
       nodes.insert({node.id, node});
-    } else if (auto storeOp = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+    } else if (isa<affine::AffineWriteOpInterface>(op)) {
       // Create graph node for top-level store op.
       Node node(nextNodeId++, op);
       node.stores.push_back(op);
@@ -637,238 +636,6 @@ static void collectLoopNest(affine::AffineForOp rootLoop, SmallVector<affine::Af
   collectNested(rootLoop);
 }
 
-// Collect operations that are outside the target loop but inside its parent loop.
-// Separates operations into those before the target loop and those after it.
-// parentLoop: the parent loop containing both operations and targetLoop
-// targetLoop: the target loop operation
-// opsBefore: operations before the target loop
-// opsAfter: operations after the target loop
-static void collectOpsOutsideTargetLoop(affine::AffineForOp parentLoop, affine::AffineForOp targetLoop,
-                                        SmallVector<Operation *, 8> &opsBefore, SmallVector<Operation *, 8> &opsAfter) {
-  opsBefore.clear();
-  opsAfter.clear();
-  auto *body = parentLoop.getBody();
-
-  bool foundTargetLoop = false;
-  for (auto &op : body->getOperations()) {
-    if (isa<affine::AffineYieldOp>(op)) continue;
-    if (&op == targetLoop.getOperation()) {
-      foundTargetLoop = true;
-      continue;
-    }
-    // Collect based on position relative to target loop
-    if (foundTargetLoop) {
-      opsAfter.push_back(&op);
-    } else {
-      opsBefore.push_back(&op);
-    }
-  }
-}
-
-// Create AffineIfOp with condition: all intermediate loop IVs equal their lower bounds (first iteration)
-// Condition: iv[j] == lb[j] for all j in [startLevel, endLevel)
-static affine::AffineIfOp createFirstIterationIf(OpBuilder &builder, Location loc, ArrayRef<affine::AffineForOp> loops,
-                                                 unsigned startLevel, unsigned endLevel) {
-  SmallVector<AffineExpr> exprs;
-  SmallVector<bool> eqFlags;
-  SmallVector<Value> dimOperands;
-
-  MLIRContext *context = builder.getContext();
-  unsigned dimIdx = 0;
-
-  for (unsigned j = startLevel; j < endLevel; ++j) {
-    auto loop = loops[j];
-    // Condition: iv == lb, expressed as iv - lb == 0
-    // For constant lower bound: iv - lb == 0
-    if (loop.hasConstantLowerBound()) {
-      int64_t lb = loop.getConstantLowerBound();
-      AffineExpr ivExpr = getAffineDimExpr(dimIdx++, context);
-      exprs.push_back(ivExpr - lb);
-      eqFlags.push_back(true);  // equality constraint
-      dimOperands.push_back(loop.getInductionVar());
-    }
-  }
-
-  if (exprs.empty()) {
-    return nullptr;
-  }
-
-  IntegerSet ifCondSet = IntegerSet::get(dimOperands.size(), 0, exprs, eqFlags);
-  return builder.create<affine::AffineIfOp>(loc, ifCondSet, dimOperands, false);
-}
-
-// Create AffineIfOp with condition: all intermediate loop IVs equal their upper bounds minus step (last iteration)
-// Condition: iv[j] == ub[j] - step[j] for all j in [startLevel, endLevel)
-static affine::AffineIfOp createLastIterationIf(OpBuilder &builder, Location loc, ArrayRef<affine::AffineForOp> loops,
-                                                unsigned startLevel, unsigned endLevel) {
-  SmallVector<AffineExpr> exprs;
-  SmallVector<bool> eqFlags;
-  SmallVector<Value> dimOperands;
-
-  MLIRContext *context = builder.getContext();
-  unsigned dimIdx = 0;
-
-  for (unsigned j = startLevel; j < endLevel; ++j) {
-    auto loop = loops[j];
-    // Condition: iv == ub - step, expressed as iv - ub + step == 0
-    // For constant upper bound: iv - ub + step == 0
-    if (loop.hasConstantUpperBound()) {
-      int64_t ub = loop.getConstantUpperBound();
-      int64_t step = loop.getStepAsInt();
-      AffineExpr ivExpr = getAffineDimExpr(dimIdx++, context);
-      exprs.push_back(ivExpr - ub + step);
-      eqFlags.push_back(true);  // equality constraint
-      dimOperands.push_back(loop.getInductionVar());
-    }
-  }
-
-  if (exprs.empty()) {
-    return nullptr;
-  }
-
-  IntegerSet ifCondSet = IntegerSet::get(dimOperands.size(), 0, exprs, eqFlags);
-  return builder.create<affine::AffineIfOp>(loc, ifCondSet, dimOperands, false);
-}
-
-// Check if two loops have the same structure (same nesting depth and same bounds)
-static bool hasSameLoopStructure(SmallVector<affine::AffineForOp, 4> srcLoops,
-                                 SmallVector<affine::AffineForOp, 4> dstLoops) {
-  // Check if they have the same nesting depth
-  if (srcLoops.size() != dstLoops.size()) {
-    return false;
-  }
-
-  // Check if corresponding loops have the same bounds
-  for (unsigned i = 0; i < srcLoops.size(); ++i) {
-    auto srcLoop = srcLoops[i];
-    auto dstLoop = dstLoops[i];
-
-    // Check step
-    if (srcLoop.getStep() != dstLoop.getStep()) {
-      return false;
-    }
-
-    // Check lower bound maps
-    auto srcLbMap = srcLoop.getLowerBoundMap();
-    auto dstLbMap = dstLoop.getLowerBoundMap();
-    if (srcLbMap != dstLbMap) {
-      return false;
-    }
-
-    // Check upper bound maps
-    auto srcUbMap = srcLoop.getUpperBoundMap();
-    auto dstUbMap = dstLoop.getUpperBoundMap();
-    if (srcUbMap != dstUbMap) {
-      return false;
-    }
-
-    // Check operands (bounds may depend on different values, but maps should match)
-    auto srcLbOperands = srcLoop.getLowerBoundOperands();
-    auto dstLbOperands = dstLoop.getLowerBoundOperands();
-    if (srcLbOperands.size() != dstLbOperands.size()) {
-      return false;
-    }
-
-    auto srcUbOperands = srcLoop.getUpperBoundOperands();
-    auto dstUbOperands = dstLoop.getUpperBoundOperands();
-    if (srcUbOperands.size() != dstUbOperands.size()) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-// Overloaded version: Check if two single loops have the same structure
-static bool hasSameLoopStructure(affine::AffineForOp srcLoop, affine::AffineForOp dstLoop) {
-  SmallVector<affine::AffineForOp, 4> srcLoops;
-  collectLoopNest(srcLoop, srcLoops);
-  SmallVector<affine::AffineForOp, 4> dstLoops;
-  collectLoopNest(dstLoop, dstLoops);
-  return hasSameLoopStructure(srcLoops, dstLoops);
-}
-
-// Helper function to get the constant value from a fixed index
-static std::optional<int64_t> getFixedConstantIndexValue(Operation *op, unsigned dim) {
-  AffineMap map;
-  if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
-    map = loadOp.getAffineMap();
-  } else if (auto storeOp = dyn_cast<affine::AffineWriteOpInterface>(op)) {
-    map = storeOp.getAffineMap();
-  } else {
-    return std::nullopt;
-  }
-
-  if (dim >= map.getNumResults()) return std::nullopt;
-
-  auto expr = map.getResult(dim);
-  if (auto constExpr = dyn_cast<AffineConstantExpr>(expr)) {
-    return constExpr.getValue();
-  }
-  return std::nullopt;
-}
-
-// Helper function to check if bounds represent full loop bounds (constant bounds)
-// Returns true if both lb and ub are constant expressions
-static bool isFullLoopBounds(const AffineMap &lbMap, const AffineMap &ubMap) {
-  if (!lbMap || !ubMap) return false;
-
-  if (lbMap.getNumResults() != 1 || ubMap.getNumResults() != 1) return false;
-
-  // Check if both are constant expressions
-  auto lbExpr = lbMap.getResult(0);
-  auto ubExpr = ubMap.getResult(0);
-
-  return isa<AffineConstantExpr>(lbExpr) && isa<AffineConstantExpr>(ubExpr);
-}
-
-// Returns true if slice dimension sliceDim should be adjusted to d_i..d_i+1.
-// Case 1: sliceDim >= memrefDim
-// Case 2: sliceDim < memrefDim but all shared-memref accesses use the same fixed
-// constant index at this dimension.
-static bool shouldAdjustSliceDim(unsigned sliceDim, unsigned memrefDim, ArrayRef<Operation *> opsA,
-                                 ArrayRef<Operation *> opsB, const affine::ComputationSliceState &sliceUnion) {
-  if (sliceDim >= memrefDim) return true;
-  bool hasShared = false;
-  std::optional<int64_t> fixedVal;
-  for (Operation *a : opsA) {
-    affine::MemRefAccess srcAccess(a);
-    for (Operation *b : opsB) {
-      affine::MemRefAccess dstAccess(b);
-      if (srcAccess.memref != dstAccess.memref) continue;
-      hasShared = true;
-      if (sliceDim >= srcAccess.getRank() || sliceDim >= dstAccess.getRank()) return false;
-      auto srcFixed = getFixedConstantIndexValue(a, sliceDim);
-      auto dstFixed = getFixedConstantIndexValue(b, sliceDim);
-      if (!srcFixed || !dstFixed || *srcFixed != *dstFixed) return false;
-      if (!fixedVal) {
-        fixedVal = *srcFixed;
-      } else if (*fixedVal != *srcFixed) {
-        return false;
-      }
-    }
-  }
-  return hasShared;
-}
-
-// Rewrites slice bounds for dimension sliceDim to d_i..d_i+1 using dstIV.
-static void applySingleIterationBounds(unsigned sliceDim, Value dstIV, MLIRContext *context,
-                                       affine::ComputationSliceState *sliceUnion) {
-  unsigned numMapDims = sliceUnion->lbOperands[sliceDim].size();
-  unsigned numMapSymbols = 0;
-  int dstIVPos = -1;
-  for (unsigned i = 0; i < sliceUnion->lbOperands[sliceDim].size(); ++i) {
-    if (sliceUnion->lbOperands[sliceDim][i] == dstIV) {
-      dstIVPos = static_cast<int>(i);
-      break;
-    }
-  }
-  if (dstIVPos < 0) return;
-  auto dimExpr = getAffineDimExpr(static_cast<unsigned>(dstIVPos), context);
-  sliceUnion->lbs[sliceDim] = AffineMap::get(numMapDims, numMapSymbols, dimExpr);
-  sliceUnion->ubs[sliceDim] = AffineMap::get(numMapDims, numMapSymbols, dimExpr + 1);
-}
-
 void FusionLoopNestInfo::collect(affine::AffineForOp rootOp) {
   root = rootOp;
   loops.clear();
@@ -879,44 +646,6 @@ void FusionLoopNestInfo::collect(affine::AffineForOp rootOp) {
   affine::getPerfectlyNestedLoops(perfectBand, rootOp);
   perfectDepth = static_cast<unsigned>(perfectBand.size());
   isPerfect = (perfectDepth == loopDepth);
-}
-
-// Adjusts slice bounds when they are constant (e.g. 0 to 10).
-// Two cases are adjusted so the fused loop runs one iteration per outer
-// (e.g. last dimension 0..10 becomes d3..d3+1):
-// 1) Dependency uses lower-rank memref (e.g. 3D) but loop nest has more levels
-//    (e.g. 4 loops): adjust dimensions beyond memrefDim (sliceDim >= memrefDim).
-// 2) Shared memref has same rank but one dimension is fixed constant
-//    (e.g. alloc_10[..., 0]): adjust when all shared accesses use that constant.
-void FusionCodeGenHelper::adjustSliceBounds(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB, unsigned loopDepth,
-                                            unsigned numCommonLoops, bool isBackwardSlice,
-                                            affine::ComputationSliceState *sliceUnion) {
-  SmallVector<affine::AffineForOp, 4> srcLoops, dstLoops;
-  if (!opsA.empty()) affine::getAffineForIVs(*opsA[0], &srcLoops);
-  if (!opsB.empty()) affine::getAffineForIVs(*opsB[0], &dstLoops);
-
-  unsigned numSliceLoops = sliceUnion->ivs.size();
-  if (numSliceLoops == 0 || srcLoops.empty() || dstLoops.empty()) return;
-
-  unsigned memrefDim = numSliceLoops;
-  for (Operation *a : opsA) {
-    affine::MemRefAccess srcAccess(a);
-    for (Operation *b : opsB) {
-      affine::MemRefAccess dstAccess(b);
-      if (srcAccess.memref != dstAccess.memref) continue;
-      memrefDim = std::min(memrefDim, std::min(srcAccess.getRank(), dstAccess.getRank()));
-    }
-  }
-
-  MLIRContext *context = opsA[0]->getContext();
-  for (unsigned sliceDim = 0; sliceDim < numSliceLoops; ++sliceDim) {
-    if (!isFullLoopBounds(sliceUnion->lbs[sliceDim], sliceUnion->ubs[sliceDim])) continue;
-    if (sliceDim >= dstLoops.size() || sliceDim >= srcLoops.size()) continue;
-    if (!shouldAdjustSliceDim(sliceDim, memrefDim, opsA, opsB, *sliceUnion)) continue;
-
-    Value dstIV = dstLoops[sliceDim].getInductionVar();
-    applySingleIterationBounds(sliceDim, dstIV, context, sliceUnion);
-  }
 }
 
 static bool isDependentLoadOrStoreOp(Operation *candidate, DenseMap<Value, bool> &memFlags) {
@@ -1064,22 +793,6 @@ static bool isOperationValid(Operation *candidate) {
   return true;
 }
 
-// Collects affine load/store operations from a list of ops into 'memFlags' and
-// 'loadAndStoreOps'. Skips invalid ops and non-affine accesses.
-static void collectLoadAndStoreOpsFromOps(llvm::ArrayRef<Operation *> ops, DenseMap<Value, bool> &memFlags,
-                                          SmallVector<Operation *, 4> &loadAndStoreOps) {
-  for (Operation *op : ops) {
-    if (!isOperationValid(op)) continue;
-    if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
-      memFlags.insert({read.getMemRef(), false});
-      loadAndStoreOps.push_back(op);
-    } else if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
-      memFlags.insert({write.getMemRef(), true});
-      loadAndStoreOps.push_back(op);
-    }
-  }
-}
-
 // Collects affine load/store operations from a loop that access any of 'memrefs'
 // into 'memFlags' and 'loadAndStoreOps'. Skips invalid ops and non-affine accesses.
 static void collectLoadAndStoreOpsFromOps(llvm::ArrayRef<Value> memrefs, affine::AffineForOp loopOp,
@@ -1134,18 +847,15 @@ void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strate
 }
 
 // Helper function to check if the outermost loops (up to depth) have matching bounds.
-static bool checkLoopBoundsMatch(
-    const SmallVector<affine::AffineForOp, 4> &loops1,
-    const SmallVector<affine::AffineForOp, 4> &loops2,
-    unsigned depth) {
+static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, 4> &loops1,
+                                 const SmallVector<affine::AffineForOp, 4> &loops2, unsigned depth) {
   if (depth > loops1.size() || depth > loops2.size()) {
     return false;
   }
   for (unsigned i = 0; i < depth; ++i) {
     auto loop1 = loops1[i];
     auto loop2 = loops2[i];
-    if (loop1.getLowerBoundMap() != loop2.getLowerBoundMap() ||
-        loop1.getUpperBoundMap() != loop2.getUpperBoundMap() ||
+    if (loop1.getLowerBoundMap() != loop2.getLowerBoundMap() || loop1.getUpperBoundMap() != loop2.getUpperBoundMap() ||
         loop1.getStep() != loop2.getStep()) {
       return false;
     }
@@ -1211,11 +921,6 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
     }
   }
 
-  // if (maxDepth > 0) {
-  //   adjustSliceBounds(strategyOpsA, dstAccesses, maxDepth, numCommonLoops, isSrcBeforeDst,
-  //                     &depthSliceUnions[maxDepth - 1]);
-  // }
-
   return maxDepth;
 }
 
@@ -1270,7 +975,6 @@ void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, FusionLoopNest
   auto &srcLoops = srcInfo.loops;
   auto &dstLoops = dstInfo.loops;
   affine::AffineForOp srcAffineForOp = srcInfo.root;
-  affine::AffineForOp dstAffineForOp = dstInfo.root;
 
   // Helper lambda to clear erased node's loads and stores
   auto clearErasedNode = [this](unsigned nodeId) {
@@ -1293,27 +997,6 @@ void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, FusionLoopNest
   srcAffineForOp.erase();
   nodeAlias[srcId] = dstId;
   clearErasedNode(srcId);
-}
-
-// Returns indices into srcLoops for all loops that enclose the loop at
-// srcLoops[insertionLoopIndex] (from outermost to innermost).
-static SmallVector<unsigned, 4> getEnclosingLoopIndices(const SmallVector<affine::AffineForOp, 4> &srcLoops,
-                                                        unsigned insertionLoopIndex) {
-  SmallVector<unsigned, 4> indices;
-  Operation *op = srcLoops[insertionLoopIndex];
-  while (op) {
-    if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
-      for (unsigned i = 0; i < srcLoops.size(); ++i) {
-        if (srcLoops[i] == forOp) {
-          indices.push_back(i);
-          break;
-        }
-      }
-    }
-    op = op->getParentOp();
-  }
-  std::reverse(indices.begin(), indices.end());
-  return indices;
 }
 
 void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,

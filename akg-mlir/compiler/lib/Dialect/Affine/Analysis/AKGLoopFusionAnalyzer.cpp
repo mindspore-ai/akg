@@ -391,24 +391,20 @@ void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
   std::vector<unsigned> toDepGroups = depGraph.getDependentGroups(toGroupId);
   // 2. Check if each node that to depends on exists in fusionPlans and has an edge (forward) to from
   // If all dependent nodes satisfy the condition, return H, otherwise return V
-  if (toDepGroups.empty()) {
-    plan.fusionType = "V";
-    return;
-  }
+  if (!toDepGroups.empty()) {
+    for (auto depGroupId : toDepGroups) {
+      // Skip from itself
+      if (depGroupId == fromGroupId) continue;
 
-  for (auto depGroupId : toDepGroups) {
-    // Skip from itself
-    if (depGroupId == fromGroupId) {
-      continue;
-    }
-
-    if (hasEdgeInFusionPlans(depGroupId, fromGroupId)) {
-      plan.depInfo = getGroupDependencies(toGroup, fromGroup);
-      plan.fusionType = "H";
-      return;
+      if (hasEdgeInFusionPlans(depGroupId, fromGroupId)) {
+        plan.depInfo = getGroupDependencies(toGroup, fromGroup);
+        plan.fusionType = "H";
+        return;
+      }
     }
   }
 
+  plan.depInfo = getGroupDependencies(toGroup, fromGroup);
   plan.fusionType = "V";
 }
 
@@ -609,16 +605,6 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
     return false;
   }
 
-  // Only consider multi-out when fusedNode's from and to are both load-only nodes
-  // bool bothLoad = false;
-  // if (auto *fromNode = depGraph.getNode(fusePlan.fusedNode.from)) {
-  //   if (auto *toNode = depGraph.getNode(fusePlan.fusedNode.to)) {
-  //     auto fromOp = fromNode->op;
-  //     auto toOp = toNode->op;
-  //     bothLoad = fromOp && toOp && isa<affine::AffineLoadOp>(fromOp) && isa<affine::AffineLoadOp>(toOp);
-  //   }
-  // }
-
   for (auto it = fusionPlans.begin(); it != fusionPlans.end(); ++it) {
     auto &oldPlan = *it;
     bool multiOut = oldPlan.fusedGroup.from == fusePlan.fusedGroup.from;
@@ -665,21 +651,15 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
 
 // Applies loop transforms and fuses source group into target group.
 // Records the fusion plan and updates group relationships.
-void FusionAnalyzer::applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup, unsigned targetNodeId,
-                                  unsigned sourceNodeId) {
+void FusionAnalyzer::applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup) {
   sourceGroup->fusedGroupId.emplace_back(targetGroup->groupId);
-
   for (auto targetId : targetGroup->nodesId) {
     finished.insert(targetId);
   }
 
-  // Get the for node IDs of sourceGroup and targetGroup
-  auto srcNodeId = sourceGroup->rootId;
-  auto dstNodeId = targetGroup->rootId;
   FusionPlan fusePlan;
   fusePlan.fusedGroup = FuseEdge(sourceGroup->groupId, targetGroup->groupId);
-  fusePlan.fusedBand = FuseEdge(srcNodeId, dstNodeId);
-  fusePlan.fusedNode = FuseEdge(sourceNodeId, targetNodeId);
+  fusePlan.fusedBand = FuseEdge(sourceGroup->rootId, targetGroup->rootId);
 
   bool shouldInsert = checkAndFixMultiOut(fusePlan);
   if (shouldInsert) {
@@ -785,7 +765,6 @@ DependenceInfo FusionAnalyzer::getGroupDependencies(const GroupPtr targetGroup, 
     const auto &directPreds = it->second;
     for (const auto &directPred : directPreds) {
       auto predNodeId = directPred.nodeId;
-      // Check if predecessor belongs to source group
       auto predGroup = depGraph.getGroupByNode(predNodeId);
       if (predGroup == nullptr || predGroup->groupId != sourceGroup->groupId) {
         continue;
@@ -815,8 +794,7 @@ void FusionAnalyzer::plan() {
       break;
     }
 
-    // (sourceGroupId, sourceNodeId, targetNodeId)
-    std::vector<std::tuple<unsigned, unsigned, unsigned>> sourceEntries;
+    std::unordered_set<unsigned> sourceGroupIds;
     for (auto targetNodeId : targetGroup->nodesId) {
       auto it = directPredecessorsCache.find(targetNodeId);
       if (it == directPredecessorsCache.end()) {
@@ -824,26 +802,32 @@ void FusionAnalyzer::plan() {
       }
 
       const auto &directPreds = it->second;
-      std::unordered_set<unsigned> seenGroupIds;
       for (const auto &directPred : directPreds) {
         unsigned sourceNodeId = directPred.nodeId;
+        auto *sourceNode = depGraph.getNode(sourceNodeId);
+        auto *targetNode = depGraph.getNode(targetNodeId);
+        if (sourceNode && targetNode && isa<affine::AffineLoadOp>(sourceNode->op) &&
+            isa<affine::AffineLoadOp>(targetNode->op)) {
+          continue;
+        }
         auto sourceGroup = depGraph.getGroupByNode(sourceNodeId);
         if (sourceGroup != nullptr && sourceGroup->groupId != targetGroup->groupId) {
-          if (seenGroupIds.insert(sourceGroup->groupId).second) {
-            sourceEntries.emplace_back(sourceGroup->groupId, sourceNodeId, targetNodeId);
-          }
+          sourceGroupIds.insert(sourceGroup->groupId);
         }
       }
     }
-    if (sourceEntries.empty()) {
+    if (sourceGroupIds.empty()) {
       for (auto targetNodeId : targetGroup->nodesId) {
         finished.insert(targetNodeId);
       }
       continue;
     }
-    for (const auto &[sourceGroupId, sourceNodeId, targetNodeId] : sourceEntries) {
-      auto sourceGroup = groups[sourceGroupId];
-      applyAndFuse(targetGroup, sourceGroup, targetNodeId, sourceNodeId);
+
+    for (auto sourceGroupId : sourceGroupIds) {
+      auto sourceGroup = depGraph.getGroup(sourceGroupId);
+      if (sourceGroup != nullptr) {
+        applyAndFuse(targetGroup, sourceGroup);
+      }
     }
   }
 

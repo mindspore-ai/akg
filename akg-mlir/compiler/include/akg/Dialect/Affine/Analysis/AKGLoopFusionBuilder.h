@@ -120,14 +120,6 @@ struct FusionCodeGenHelper {
   void buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> loadAndStoreOpsA,
                          llvm::SmallVector<Operation *, 4> &strategyOpsA);
 
-  // Adjusts slice bounds for fixed index accesses.
-  // When operations access fixed constant indices (e.g., memref[i, j, 0]),
-  // the original computeSliceUnion may return full loop bounds instead of
-  // the correct single-iteration bounds. This function detects such cases
-  // and adjusts the bounds accordingly.
-  void adjustSliceBounds(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB, unsigned loopDepth,
-                         unsigned numCommonLoops, bool isBackwardSlice, affine::ComputationSliceState *sliceUnion);
-
   // Records alias, erases the fused-away loop, and updates plan.depInfo (refreshes
   // alias target node's loads/stores and replaces erased node refs in depInfo).
   void eraseLoopAndCleanupNode(unsigned erasedNodeId, unsigned aliasTargetId, affine::AffineForOp loopToErase);
