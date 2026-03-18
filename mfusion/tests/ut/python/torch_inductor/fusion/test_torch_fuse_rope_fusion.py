@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""UT for Torch FuseRoPE: fuse RoPE pattern to torch.npu.npu_rotary_mul before Torch->Mfuse."""
+"""UT for TorchFuseRoPE: fuse RoPE pattern to torch.npu.npu_rotary_mul on Torch dialect."""
 
 import textwrap
 

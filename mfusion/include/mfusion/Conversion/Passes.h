@@ -41,6 +41,9 @@ std::unique_ptr<Pass> createTorchFusionPass();
 /// Create a pass to fuse RoPE pattern on Torch dialect into torch.npu.npu_rotary_mul.
 std::unique_ptr<Pass> createTorchFuseRoPEPass();
 
+/// Create a pass to fuse RmsNorm pattern on Torch dialect into torch.npu.npu_rms_norm.
+std::unique_ptr<Pass> createTorchFuseRmsNormPass();
+
 /// Create a pass to convert Torch operations to Mfuse dialect operations.
 std::unique_ptr<Pass> createConvertTorchToMfusePass();
 
