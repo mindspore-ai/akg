@@ -23,6 +23,8 @@
 #include "mfusion/Analysis/Split/OpRegister.h"
 #include "mfusion/Dialect/Mfuse/IR/MfuseDialect.h"
 #include "mfusion/Dialect/Dvm/IR/Dvm.h"
+#include "mfusion/Analysis/SymbolicShape/SymExprBuilder.h"
+#include "mfusion/Analysis/SymbolicShape/SymEngineAnalysis.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "llvm/Support/raw_ostream.h"
@@ -39,6 +41,11 @@ bool isDynamic(const Type &type) {
   return shapedType && shapedType.hasRank() && !shapedType.hasStaticShape();
 }
 
+bool symExprEqual(const SymExpr &a, const SymExpr &b) {
+  static mfusion::SymEngineAnalysis analysis;
+  return analysis.isStructurallyEqual(a, b);
+}
+
 bool shapeEqual(Node *a, Node *b, bool skip_leading_one = true) {
   if (!a || !b) {
     return false;
@@ -47,12 +54,14 @@ bool shapeEqual(Node *a, Node *b, bool skip_leading_one = true) {
   auto s = a->shape.size() < b->shape.size() ? a : b;
   const auto &l_shape = l->shape;
   const auto &s_shape = s->shape;
+  const auto &l_sym_shape = l->sym_shape;
+  const auto &s_sym_shape = s->sym_shape;
   auto diff = l_shape.size() - s_shape.size();
+  bool has_symshape = (l_sym_shape.size() == l_shape.size() && s_sym_shape.size() == s_shape.size());
   if (diff != 0 && !skip_leading_one) {
     // shapes with different rank
     return false;
   }
-  // TODO: support symbolic shape compare.
   // check leading one
   for (size_t i = 0; i < diff; ++i) {
     if (l_shape[i] != 1) {
@@ -63,7 +72,9 @@ bool shapeEqual(Node *a, Node *b, bool skip_leading_one = true) {
   for (size_t i = 0; i < s_shape.size(); ++i) {
     auto il = i + diff;
     if (l_shape[il] < 0 || s_shape[i] < 0) {
-      return false;
+      if (!has_symshape || !symExprEqual(l_sym_shape[il], s_sym_shape[i])) {
+        return false;
+      }
     } else if (l_shape[il] != s_shape[i]) {
       return false;
     }
