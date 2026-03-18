@@ -317,6 +317,104 @@ def add_op_prefix(op_name, benchmark="KernelBench"):
     return f"akg_agents_{benchmark.lower()}_{op_name}"
 
 
+def get_evokernel_task_desc(op_name, category="Attention"):
+    """获取 EvoKernel 任务描述
+
+    Args:
+        op_name: 算子名称（文件名，如 "1_ScaledDotProductAttention"）
+        category: 类别名称 ("Attention", "MHC")
+
+    Returns:
+        str: 任务描述代码
+    """
+    current_file_path = os.path.abspath(__file__)
+    commom_path = os.path.dirname(current_file_path)  # tests/op/
+    tests_path = os.path.dirname(commom_path)  # tests/
+    akg_agents_path = os.path.dirname(tests_path)  # akg_agents/
+
+    # Path for EvoKernel benchmarks from submodule
+    base_path = os.path.join(
+        akg_agents_path, 'thirdparty', 'EvoKernel', 'pytorch-references', category)
+
+    # 检查基础路径是否存在
+    if not os.path.exists(base_path):
+        _raise_submodule_error(f"EvoKernel {category} 目录", base_path)
+
+    # 查找文件
+    task_path = os.path.join(base_path, op_name + '.py')
+
+    # 检查文件是否存在
+    if not os.path.exists(task_path):
+        _raise_submodule_error(f"EvoKernel {category} 中的操作 {op_name}", task_path)
+
+    with open(task_path, 'r', encoding='utf-8') as f:
+        benchmark_task_str = f.read()
+    return benchmark_task_str
+
+
+def get_evokernel_op_name(category="all", op_name=None):
+    """获取 EvoKernel 操作名称列表
+
+    Args:
+        category: 类别名称 ("all", "Attention", "MHC")
+        op_name: 特定操作名称（可选）
+
+    Returns:
+        list: 匹配的操作名称列表，如果没有找到则返回 None
+    """
+    current_file_path = os.path.abspath(__file__)
+    commom_path = os.path.dirname(current_file_path)  # tests/op/
+    tests_path = os.path.dirname(commom_path)  # tests/
+    akg_agents_path = os.path.dirname(tests_path)  # akg_agents/
+
+    # Path for EvoKernel benchmarks from submodule
+    base_path = os.path.join(
+        akg_agents_path, 'thirdparty', 'EvoKernel', 'pytorch-references')
+
+    # 检查基础路径是否存在
+    if not os.path.exists(base_path):
+        _raise_submodule_error("EvoKernel 目录", base_path)
+
+    matched_files = []
+
+    if os.path.exists(base_path):
+        if category == "all":
+            # Get all available categories
+            categories = [d for d in os.listdir(
+                base_path) if os.path.isdir(os.path.join(base_path, d))]
+        else:
+            categories = [category] if os.path.isdir(
+                os.path.join(base_path, category)) else []
+
+        for cat in categories:
+            category_path = os.path.join(base_path, cat)
+            if os.path.exists(category_path):
+                for file in os.listdir(category_path):
+                    if file.endswith('.py'):
+                        # Remove .py extension to get the benchmark name
+                        operation_name = file[:-3]
+
+                        # 如果指定了 op_name，只返回匹配的 case
+                        if op_name is not None:
+                            if operation_name == op_name:
+                                matched_files.append(operation_name)
+                                break  # 找到匹配的就停止搜索
+                        else:
+                            matched_files.append(operation_name)
+
+    return matched_files if matched_files else None
+
+
+def get_evokernel_attention_op_name(op_name=None):
+    """获取 EvoKernel Attention 操作名称列表"""
+    return get_evokernel_op_name(category="Attention", op_name=op_name)
+
+
+def get_evokernel_mhc_op_name(op_name=None):
+    """获取 EvoKernel MHC 操作名称列表"""
+    return get_evokernel_op_name(category="MHC", op_name=op_name)
+
+
 def get_folder_names(folder_path):
     python_files = []
 
