@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2025 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,611 +13,733 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Batch testing script for AKG Kernels Bench Lite with multi-backend support.
+"""Benchmark Lite runner with multi-backend support.
 
-This script automatically discovers and tests all kernels in the bench_lite directory,
-supporting CPU, GPU (CUDA), and NPU (Ascend) backends.
+Supports three modes:
+  - correctness: Pass@N correctness evaluation only (default, backward-compatible)
+  - performance: Correctness + performance evaluation + scoring (no leaderboard)
+  - full: Correctness + performance + scoring + leaderboard
 
-Features:
-- Multi-backend: CPU (cpp), GPU (triton_cuda), NPU (triton_ascend)
-- Auto-discover all cases in t1/t2/t3 directories
-- Pass@N: Generate N implementations per case, select the best
-- Concurrent execution: LLM code gen + device run in parallel (TaskPool)
-- Device pool: Parallel execution across multiple devices
-- Detailed results and statistics
+All modes run correctness first, then extract submissions from Agent results
+for performance measurement (performance and full modes).
 
-Usage:
-  # Run on CPU (cpp)
-  python run_torch_bench_lite.py --backend cpu
-
-  # Run on GPU (triton_cuda)
-  python run_torch_bench_lite.py --backend gpu
-
-  # Run on NPU (triton_ascend)
-  python run_torch_bench_lite.py --backend npu
-
-  # Custom Pass@N
-  python run_torch_bench_lite.py --backend gpu --pass-n 5
-
-  # Custom devices (GPU/NPU)
-  python run_torch_bench_lite.py --backend gpu --devices 0 1 2 3
-
-  # Run specific tiers
-  python run_torch_bench_lite.py --backend cpu --tiers t1 t2
-
-  # Run specific cases
-  python run_torch_bench_lite.py --backend gpu --cases gelu softmax
-
-  # Filter cases by keyword
-  python run_torch_bench_lite.py --backend gpu --filter matmul
+Note: ``--submission-dir`` is an *output* directory where extracted Agent
+submissions are written, not an input for pre-existing submissions.
 """
 
-from akg_agents.op.config.config_validator import load_config
-from akg_agents.core.async_pool.task_pool import TaskPool
-from akg_agents.op.langgraph_op.task import LangGraphTask
-from akg_agents.core.worker.manager import register_local_worker
-from akg_agents.utils.environment_check import check_env_for_task
-import asyncio
+from __future__ import annotations
+
 import argparse
-import os
+import asyncio
 import json
-import re
-from pathlib import Path
-from typing import List, Tuple, Dict, Optional
-from datetime import datetime
+import os
+import sys
 import time
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, TypedDict
 
-os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
+os.environ["AKG_AGENTS_STREAM_OUTPUT"] = "on"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# Backend configurations
-BACKEND_CONFIGS = {
-    'cpu': {
-        'name': 'CPU',
-        'backend': 'cpu',
-        'dsl': 'cpp',
-        'arch': 'x86_64',
-        'devices': [0],
-        'skip_npu': True
-    },
-    'gpu': {
-        'name': 'GPU (CUDA)',
-        'backend': 'cuda',
-        'dsl': 'triton_cuda',
-        'arch': 'rtx3090',
-        'devices': [0, 1, 2, 3, 4, 5, 6, 7],
-        'skip_npu': True
-    },
-    'npu': {
-        'name': 'NPU (Ascend)',
-        'backend': 'ascend',
-        'dsl': 'triton_ascend',
-        'arch': 'ascend910b4',
-        'devices': [0],
-        'skip_npu': False
-    }
-}
-
-
-def discover_bench_lite_cases(
-    bench_lite_dir: Path,
-    tiers: Optional[List[str]] = None,
-    cases: Optional[List[str]] = None,
-    filter_pattern: Optional[str] = None,
-    skip_npu: bool = True
-) -> List[Tuple[str, str, Path]]:
-    """
-    Discover all kernel files in bench_lite directory.
-
-    Args:
-        bench_lite_dir: Path to bench_lite directory
-        tiers: Optional list of tiers to include (e.g., ['t1', 't2'])
-        cases: Optional list of case names to include (e.g., ['gelu', 'softmax'])
-        filter_pattern: Optional keyword to filter case names (e.g., 'matmul', 'norm')
-        skip_npu: Skip cases that contain 'torch_npu' (default: True)
-
-    Returns:
-        List of tuples (tier, case_name, file_path)
-    """
-    if not bench_lite_dir.exists():
-        print(f"Warning: Bench lite directory not found: {bench_lite_dir}")
-        return []
-
-    all_cases = []
-    skipped_cases = []
-
-    # Default to all tiers if not specified
-    if tiers is None:
-        tiers = ['t1', 't2', 't3']
-
-    for tier in tiers:
-        tier_dir = bench_lite_dir / tier
-        if not tier_dir.exists():
-            continue
-
-        for py_file in sorted(tier_dir.glob("*.py")):
-            if py_file.name == "__init__.py":
-                continue
-
-            case_name = py_file.stem
-
-            # Filter by case names if specified
-            if cases is not None and case_name not in cases:
-                continue
-
-            # Filter by pattern if specified
-            if filter_pattern is not None and filter_pattern.lower() not in case_name.lower():
-                continue
-
-            # Skip NPU cases if requested
-            if skip_npu:
-                content = py_file.read_text()
-                if 'torch_npu' in content:
-                    skipped_cases.append((tier, case_name))
-                    continue
-
-            all_cases.append((tier, case_name, py_file))
-
-    if skipped_cases and skip_npu:
-        print(f"Skipped {len(skipped_cases)} NPU-related cases:")
-        for tier, case_name in skipped_cases:
-            print(f"  - {tier}/{case_name}")
-        print()
-
-    return all_cases
+from bench_lite_common import (  # noqa: E402
+    aggregate_correctness_results,
+    build_environment_info,
+    build_full_output_payload,
+    build_task_specs,
+    combine_backend_payloads,
+    compute_performance_summary,
+    compute_summary,
+    discover_bench_lite_cases,
+    extract_submissions_from_results,
+    get_bench_lite_dir,
+    print_backend_summary,
+    print_full_summary,
+    print_performance_summary,
+    resolve_backend_config,
+    resolve_devices,
+    run_performance_evaluation,
+    write_leaderboard,
+    DEFAULT_PERF_WARMUP,
+    DEFAULT_PERF_ITERATIONS,
+    DEFAULT_PERF_NUM_TRIALS,
+    DEFAULT_PERF_RTOL,
+    DEFAULT_PERF_ATOL,
+    DEFAULT_PERF_TIMEOUT,
+    DEFAULT_TEAM_NAME,
+    validate_team_name,
+)
+from akg_agents.core.async_pool.task_pool import TaskPool  # noqa: E402
+from akg_agents.core.worker.manager import register_local_worker  # noqa: E402
+from akg_agents.op.config.config_validator import load_config  # noqa: E402
+from akg_agents.op.langgraph_op.task import LangGraphTask  # noqa: E402
+from akg_agents.utils.environment_check import check_env_for_task  # noqa: E402
 
 
-def read_kernel_file(file_path: Path, backend: str) -> str:
-    """
-    Read the entire kernel file as task description.
-
-    Args:
-        file_path: Path to the kernel file
-        backend: Target backend ('cpu', 'gpu', 'npu')
-
-    Returns:
-        File contents as string
-    """
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    # For GPU backend, convert CPU-specific code to CUDA-compatible code
-    if backend == 'gpu':
-        content = re.sub(r"device='cpu'", "device='cuda'", content)
-        content = re.sub(r'device="cpu"', 'device="cuda"', content)
-        content = re.sub(r"\.cpu\(\)", ".cuda()", content)
-
-    return content
-
-
-def _parse_op_name(op_name: str) -> Optional[Tuple[str, str, str, int]]:
-    """Parse op_name like 'cpu_t1_gelu_attempt2' -> (backend, tier, case_name, attempt_id)."""
-    match = re.match(r"^(.+?)_(.+?)_(.+?)_attempt(\d+)$", op_name)
-    if match:
-        return match.group(1), match.group(2), match.group(3), int(match.group(4))
-    return None
-
-
-def _aggregate_results(
-    raw_results: list,
-    cases: List[Tuple[str, str, Path]],
-    backend: str,
+class RunnerConfigPayload(TypedDict, total=False):
+    mode: str
+    backend: str
+    arch: Optional[str]
+    dsl: Optional[str]
+    backend_name: Optional[str]
+    devices: List[int]
     pass_n: int
-) -> List[Dict]:
-    """
-    Aggregate raw task results by case.
-
-    raw_results: from task_pool.wait_all(), each item is (op_name, success, task_info)
-    """
-    # Group by (tier, case_name)
-    case_results = {}  # (tier, case_name) -> list of (attempt_id, success)
-    for item in raw_results:
-        if len(item) >= 2:
-            op_name, success = item[0], item[1]
-            parsed = _parse_op_name(op_name)
-            if parsed:
-                _, tier, case_name, attempt_id = parsed
-                key = (tier, case_name)
-                if key not in case_results:
-                    case_results[key] = []
-                case_results[key].append({'attempt_id': attempt_id, 'success': success})
-
-    # Build results in original case order
-    results = []
-    for tier, case_name, file_path in cases:
-        key = (tier, case_name)
-        attempt_list = case_results.get(key, [])
-        attempt_list.sort(key=lambda x: x['attempt_id'])
-
-        attempts = []
-        for a in attempt_list:
-            attempts.append({
-                'attempt_id': a['attempt_id'],
-                'success': a['success'],
-                'elapsed_time': None,
-                'info': {'task_id': f"{backend}_{tier}_{case_name}_attempt{a['attempt_id']}", 'success': a['success']}
-            })
-
-        successful_attempts = [a for a in attempts if a['success']]
-        success_count = len(successful_attempts)
-        pass_rate = success_count / pass_n if pass_n > 0 else 0.0
-
-        best_attempt = None
-        if successful_attempts:
-            best_attempt = successful_attempts[0]
-
-        results.append({
-            'tier': tier,
-            'case_name': case_name,
-            'pass_n': pass_n,
-            'attempts': attempts,
-            'success_count': success_count,
-            'pass_rate': pass_rate,
-            'best_attempt': best_attempt,
-            'total_time': None,
-            'overall_success': success_count > 0
-        })
-
-    return results
+    max_concurrent: int
+    tiers: Optional[List[str]]
+    cases: Optional[List[str]]
+    filter: Optional[str]
+    team_name: str
+    workflow: str
+    warmup: int
+    iterations: int
+    num_trials: int
+    rtol: float
+    atol: float
+    timeout: int
 
 
-async def run_backend_tests(args, backend: str):
-    """
-    Run tests for a single backend.
-
-    Args:
-        args: Command line arguments
-        backend: Backend name ('cpu', 'gpu', 'npu')
-
-    Returns:
-        Tuple of (results, total_elapsed)
-    """
-    config = BACKEND_CONFIGS[backend]
-
-    print("=" * 80)
-    print(f"AKG Kernels Bench Lite - {config['name']} with Pass@{args.pass_n}")
-    print("=" * 80)
-    print()
-
-    # Locate bench_lite directory
-    bench_lite_dir = Path(__file__).parent.parent.parent / "benchmark" / "akg_kernels_bench_lite"
-
-    print(f"Bench Lite Directory: {bench_lite_dir}")
-    print(f"Pass@N: {args.pass_n}")
-    print(f"Devices: {args.devices if args.devices else config['devices']}")
-    print(f"Max Concurrent: {args.max_concurrent}")
-    print()
-
-    # Discover cases
-    print("Discovering cases...")
-    if args.filter:
-        print(f"Filter: '{args.filter}'")
-    cases = discover_bench_lite_cases(
-        bench_lite_dir=bench_lite_dir,
-        tiers=args.tiers,
-        cases=args.cases,
-        filter_pattern=args.filter,
-        skip_npu=config['skip_npu']
-    )
-
-    if not cases:
-        print("No cases found!")
-        return [], 0.0
-
-    # Group by tier
-    tier_counts = {}
-    for tier, _, _ in cases:
-        tier_counts[tier] = tier_counts.get(tier, 0) + 1
-
-    print(f"Found {len(cases)} cases:")
-    for tier in sorted(tier_counts.keys()):
-        print(f"  {tier}: {tier_counts[tier]} cases")
-    print()
-
-    # Register worker
-    devices = args.devices if args.devices else config['devices']
-    print(f"Registering local worker ({config['name']}, arch={config['arch']})...")
-    await register_local_worker(devices, backend=config['backend'], arch=config['arch'])
-    print("✓ Worker registered")
-    print()
-
-    # Load configuration
-    print("Loading configuration...")
-    config_obj = load_config(config['dsl'], backend=config['backend'])
-    check_env_for_task("torch", config['backend'], config['dsl'], config_obj)
-    print("✓ Configuration loaded")
-    print()
-
-    # Run tests
-    print("=" * 80)
-    print("Running Tests (concurrent)")
-    print("=" * 80)
-    total_tasks = len(cases) * args.pass_n
-    print(f"Submitting {total_tasks} tasks ({len(cases)} cases × Pass@{args.pass_n})...")
-    print()
-
-    task_pool = TaskPool(max_concurrency=args.max_concurrent)
-    start_time = time.time()
-
-    # Pre-read all task descriptions
-    case_task_descs = {}
-    for tier, case_name, file_path in cases:
-        case_task_descs[(tier, case_name)] = read_kernel_file(file_path, backend)
-
-    # Create all tasks (case × attempt)
-    for tier, case_name, file_path in cases:
-        task_desc = case_task_descs[(tier, case_name)]
-        for attempt_id in range(1, args.pass_n + 1):
-            task_id = f"{backend}_{tier}_{case_name}_attempt{attempt_id}"
-            op_name = f"{backend}_{tier}_{case_name}_attempt{attempt_id}"
-
-            task = LangGraphTask(
-                op_name=op_name,
-                task_desc=task_desc,
-                task_id=task_id,
-                dsl=config['dsl'],
-                backend=config['backend'],
-                arch=config['arch'],
-                config=config_obj,
-                framework="torch",
-                workflow="coder_only_workflow"
-            )
-            task_pool.create_task(task.run, task_name=task_id)
-
-    raw_results = await task_pool.wait_all()
-    total_elapsed = time.time() - start_time
-
-    # Aggregate results by case
-    results = _aggregate_results(raw_results, cases, backend, args.pass_n)
-
-    return results, total_elapsed
-
-
-def print_summary(backend: str, results: List[Dict], total_elapsed: float):
-    """Print test summary for a backend."""
-    config = BACKEND_CONFIGS[backend]
-
-    print("\n" + "=" * 80)
-    print(f"Test Summary - {config['name']}")
-    print("=" * 80)
-    print()
-
-    # Overall statistics
-    total_cases = len(results)
-    passed_cases = sum(1 for r in results if r['overall_success'])
-    failed_cases = total_cases - passed_cases
-
-    total_attempts = sum(r['pass_n'] for r in results)
-    total_successful_attempts = sum(r['success_count'] for r in results)
-    overall_pass_rate = total_successful_attempts / total_attempts if total_attempts > 0 else 0.0
-
-    print(f"Total Cases: {total_cases}")
-    print(f"Passed Cases: {passed_cases} ({passed_cases/total_cases:.1%})")
-    print(f"Failed Cases: {failed_cases} ({failed_cases/total_cases:.1%})")
-    print()
-    print(f"Total Attempts: {total_attempts}")
-    print(f"Successful Attempts: {total_successful_attempts} ({overall_pass_rate:.1%})")
-    print(f"Total Time: {total_elapsed:.2f}s")
-    print()
-
-    # Per-tier statistics
-    print("Per-Tier Statistics:")
-    print("-" * 80)
-    tier_stats = {}
-    for result in results:
-        tier = result['tier']
-        if tier not in tier_stats:
-            tier_stats[tier] = {
-                'total': 0,
-                'passed': 0,
-                'attempts': 0,
-                'successful_attempts': 0
-            }
-        tier_stats[tier]['total'] += 1
-        if result['overall_success']:
-            tier_stats[tier]['passed'] += 1
-        tier_stats[tier]['attempts'] += result['pass_n']
-        tier_stats[tier]['successful_attempts'] += result['success_count']
-
-    for tier in sorted(tier_stats.keys()):
-        stats = tier_stats[tier]
-        case_pass_rate = stats['passed'] / stats['total'] if stats['total'] > 0 else 0.0
-        attempt_pass_rate = stats['successful_attempts'] / stats['attempts'] if stats['attempts'] > 0 else 0.0
-        print(f"{tier}: {stats['passed']}/{stats['total']} cases ({case_pass_rate:.1%}), "
-              f"{stats['successful_attempts']}/{stats['attempts']} attempts ({attempt_pass_rate:.1%})")
-    print()
-
-    # Detailed results
-    print("Detailed Results:")
-    print("-" * 80)
-    print(f"{'No.':<5} {'Tier':<6} {'Case':<30} {'Pass@N':<8} {'Success':<10} {'Best Time':<12}")
-    print("-" * 80)
-
-    for i, result in enumerate(results, 1):
-        tier = result['tier']
-        case_name = result['case_name']
-        pass_n_str = f"{result['success_count']}/{result['pass_n']}"
-        success_str = "✓ PASS" if result['overall_success'] else "✗ FAIL"
-
-        if result['best_attempt'] and result['best_attempt'].get('elapsed_time') is not None:
-            best_time_str = f"{result['best_attempt']['elapsed_time']:.2f}s"
-        else:
-            best_time_str = "N/A"
-
-        print(f"{i:<5} {tier:<6} {case_name:<30} {pass_n_str:<8} {success_str:<10} {best_time_str:<12}")
-
-    print("-" * 80)
-    print()
-
-    # Failed cases
-    if failed_cases > 0:
-        print("Failed Cases (0 successful attempts):")
-        for result in results:
-            if not result['overall_success']:
-                print(f"  ✗ {result['tier']}/{result['case_name']}")
-        print()
-
-    print("=" * 80)
-    print(f"Batch testing completed! ({passed_cases}/{total_cases} cases passed)")
-    print("=" * 80)
-    print()
-
-    return {
-        'total_cases': total_cases,
-        'passed_cases': passed_cases,
-        'failed_cases': failed_cases,
-        'total_attempts': total_attempts,
-        'successful_attempts': total_successful_attempts,
-        'overall_pass_rate': overall_pass_rate,
-        'total_time': total_elapsed,
-        'tier_stats': tier_stats,
-        'results': results
-    }
-
-
-async def run_bench_lite_tests(args):
-    """
-    Main function to run bench lite tests with multi-backend support.
-    """
-    backend = args.backend
-
-    if backend not in BACKEND_CONFIGS:
-        print(f"Error: Unknown backend '{backend}'. Available: {list(BACKEND_CONFIGS.keys())}")
-        return
-
-    results, total_elapsed = await run_backend_tests(args, backend)
-    if not results:
-        return
-    summary = print_summary(backend, results, total_elapsed)
-
-    # Save results to JSON
-    if args.output:
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        output_data = {
-            'timestamp': datetime.now().isoformat(),
-            'config': {
-                'backend': backend,
-                'pass_n': args.pass_n,
-                'devices': args.devices if args.devices else None,
-                'max_concurrent': args.max_concurrent,
-                'tiers': args.tiers,
-                'cases': args.cases,
-                'filter': args.filter
-            },
-            'results': summary
-        }
-
-        with open(output_path, 'w') as f:
-            json.dump(output_data, f, indent=2)
-
-        print(f"Results saved to: {output_path}")
-        print()
-
-
-def main():
-    """Main function"""
-    parser = argparse.ArgumentParser(
-        description="Run AKG Kernels Bench Lite with multi-backend support",
+def create_parser() -> argparse.ArgumentParser:
+    """Create the CLI parser."""
+    return argparse.ArgumentParser(
+        description="Run Benchmark Lite evaluation (correctness, performance, or full pipeline)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run on CPU
-  python run_torch_bench_lite.py --backend cpu
-
-  # Run on GPU (CUDA)
+  # Correctness only (default, backward-compatible)
   python run_torch_bench_lite.py --backend gpu
 
-  # Run on NPU (Ascend)
-  python run_torch_bench_lite.py --backend npu
+  # Full pipeline: correctness + performance + scoring
+  python run_torch_bench_lite.py --backend gpu --mode full
 
-  # Run on all backends
-  python run_torch_bench_lite.py --backend all
+  # Full pipeline with custom performance parameters
+  python run_torch_bench_lite.py --backend gpu --mode full --warmup 20 --iterations 200
+
+  # Save full results and leaderboard
+  python run_torch_bench_lite.py --backend gpu --mode full --output results.json
+
+  # Override arch
+  python run_torch_bench_lite.py --backend gpu --arch a100
 
   # Custom Pass@N
   python run_torch_bench_lite.py --backend gpu --pass-n 5
 
-  # Custom devices (GPU/NPU)
-  python run_torch_bench_lite.py --backend gpu --devices 0 1 2 3
-
-  # Run specific tiers
-  python run_torch_bench_lite.py --backend cpu --tiers t1 t2
-
-  # Run specific cases
+  # Run specific tiers or cases
+  python run_torch_bench_lite.py --backend gpu --tiers t1 t2
   python run_torch_bench_lite.py --backend gpu --cases gelu softmax
-
-  # Filter cases by keyword
   python run_torch_bench_lite.py --backend gpu --filter matmul
-
-  # Save results to file
-  python run_torch_bench_lite.py --backend gpu --output results.json
-        """
+        """,
     )
 
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    """
+    Parse and validate command line arguments.
+
+    Args:
+        argv: Optional list of command line arguments.
+
+    Returns:
+        Parsed and validated arguments namespace.
+
+    Raises:
+        SystemExit: If validation fails.
+    """
+    parser = create_parser()
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["correctness", "performance", "full"],
+        default="correctness",
+        help="Evaluation mode: correctness (default), performance (correctness + perf), or full (+ leaderboard)",
+    )
     parser.add_argument(
         "--backend",
         type=str,
-        choices=['cpu', 'gpu', 'npu'],
-        default='gpu',
-        help="Backend to run on: cpu, gpu, or npu (default: gpu)"
+        choices=["cpu", "gpu", "npu", "all"],
+        default="gpu",
+        help="Backend to run on: cpu, gpu, npu, or all (default: gpu)",
     )
-
+    parser.add_argument(
+        "--arch",
+        type=str,
+        default=None,
+        help="Override backend default arch (for example: x86_64, rtx3090, ascend910b4)",
+    )
+    parser.add_argument(
+        "--dsl",
+        type=str,
+        default=None,
+        help="Override backend default DSL (for example: cpp, triton_cuda, triton_ascend, pytorch)",
+    )
+    parser.add_argument(
+        "--backend-name",
+        type=str,
+        default=None,
+        help="Override backend mapping name passed to worker/config (for example: cpu, cuda, ascend)",
+    )
     parser.add_argument(
         "--pass-n",
         type=int,
         default=3,
-        help="Number of attempts per case (Pass@N), default: 3"
+        help="Number of attempts per case (Pass@N), default: 3",
     )
-
     parser.add_argument(
         "--devices",
         type=int,
         nargs="+",
         default=None,
-        help="Device IDs (default: CPU: [0], GPU: [0-7], NPU: [0])"
+        help="Optional device IDs. Defaults are resolved per backend at runtime.",
     )
-
     parser.add_argument(
         "--max-concurrent",
         type=int,
         default=4,
-        help="Maximum concurrent tasks, default: 4"
+        help="Maximum concurrent tasks, default: 4",
     )
-
     parser.add_argument(
         "--tiers",
         type=str,
         nargs="+",
         default=None,
-        help="Specific tiers to run (e.g., t1 t2), default: all tiers"
+        help="Specific tiers to run (for example: t1 t2). Default: all tiers.",
     )
-
     parser.add_argument(
         "--cases",
         type=str,
         nargs="+",
         default=None,
-        help="Specific cases to run (e.g., gelu softmax), default: all cases"
+        help="Specific cases to run (for example: gelu softmax). Default: all cases.",
     )
-
     parser.add_argument(
         "--filter",
         type=str,
         default=None,
-        help="Filter cases by keyword (e.g., 'matmul', 'norm'), default: no filter"
+        help="Filter cases by keyword (for example: matmul, norm).",
     )
-
     parser.add_argument(
         "--output",
         type=str,
         default=None,
-        help="Output JSON file path for results, default: no output file"
+        help="Optional JSON output path for CI artifacts.",
+    )
+    parser.add_argument(
+        "--submission-dir",
+        type=str,
+        default=None,
+        help="Directory to save extracted Agent submissions (default: auto-generated in log_dir).",
+    )
+    parser.add_argument(
+        "--warmup",
+        type=int,
+        default=DEFAULT_PERF_WARMUP,
+        help=f"Performance measurement warmup runs (default: {DEFAULT_PERF_WARMUP})",
+    )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=DEFAULT_PERF_ITERATIONS,
+        help=f"Performance measurement iterations per trial (default: {DEFAULT_PERF_ITERATIONS})",
+    )
+    parser.add_argument(
+        "--num-trials",
+        type=int,
+        default=DEFAULT_PERF_NUM_TRIALS,
+        help=f"Performance measurement trial count (default: {DEFAULT_PERF_NUM_TRIALS})",
+    )
+    parser.add_argument(
+        "--rtol",
+        type=float,
+        default=DEFAULT_PERF_RTOL,
+        help=f"Relative tolerance for post-verification (default: {DEFAULT_PERF_RTOL})",
+    )
+    parser.add_argument(
+        "--atol",
+        type=float,
+        default=DEFAULT_PERF_ATOL,
+        help=f"Absolute tolerance for post-verification (default: {DEFAULT_PERF_ATOL})",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_PERF_TIMEOUT,
+        help=f"Per-case timeout in seconds (default: {DEFAULT_PERF_TIMEOUT})",
+    )
+    parser.add_argument(
+        "--team-name",
+        type=str,
+        default=DEFAULT_TEAM_NAME,
+        help=f"Team/agent identity for submissions and leaderboard (default: {DEFAULT_TEAM_NAME})",
+    )
+    parser.add_argument(
+        "--workflow",
+        type=str,
+        default="coder_only_workflow",
+        help="LangGraph workflow name (default: coder_only_workflow)",
+    )
+    parser.add_argument(
+        "--backends",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Backend execution order for --backend all (default: cpu gpu npu)",
+    )
+    args = parser.parse_args(argv)
+
+    # Validate pass-n
+    if args.pass_n < 1:
+        parser.error("--pass-n must be at least 1")
+
+    # Validate devices if provided
+    if args.devices:
+        if any(d < 0 for d in args.devices):
+            parser.error("--devices must contain non-negative integers only")
+        if len(args.devices) != len(set(args.devices)):
+            parser.error("--devices must contain unique device IDs")
+
+    # --backends only makes sense with --backend all
+    if args.backends and args.backend != "all":
+        parser.error("--backends can only be used with --backend all")
+
+    # Validate backends if provided
+    if args.backends:
+        valid_backends = {"cpu", "gpu", "npu"}
+        invalid = set(args.backends) - valid_backends
+        if invalid:
+            parser.error(f"--backends contains invalid values: {invalid}. Valid: {valid_backends}")
+        # Deduplicate while preserving order
+        seen = set()
+        deduped = []
+        for b in args.backends:
+            if b not in seen:
+                seen.add(b)
+                deduped.append(b)
+        args.backends = deduped
+
+    # --arch/--dsl/--backend-name are per-backend overrides; broadcasting them
+    # to all backends in --backend all mode is semantically invalid.
+    if args.backend == "all":
+        if args.arch is not None:
+            parser.error("--arch cannot be used with --backend all (each backend has its own default arch)")
+        if args.dsl is not None:
+            parser.error("--dsl cannot be used with --backend all (each backend has its own default dsl)")
+        if args.backend_name is not None:
+            parser.error("--backend-name cannot be used with --backend all (each backend has its own mapping name)")
+
+    # Validate team-name (path traversal prevention)
+    try:
+        validate_team_name(args.team_name)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    # Validate performance parameters
+    if args.warmup < 0:
+        parser.error("--warmup must be non-negative")
+    if args.iterations < 1:
+        parser.error("--iterations must be at least 1")
+    if args.num_trials < 1:
+        parser.error("--num-trials must be at least 1")
+    if args.rtol < 0:
+        parser.error("--rtol must be non-negative")
+    if args.atol < 0:
+        parser.error("--atol must be non-negative")
+    if args.timeout < 1:
+        parser.error("--timeout must be at least 1")
+
+    return args
+
+
+def build_runner_config(
+    args: argparse.Namespace,
+    backend: str,
+    devices: List[int],
+    arch: Optional[str],
+    dsl: Optional[str] = None,
+) -> RunnerConfigPayload:
+    config: RunnerConfigPayload = {
+        "mode": args.mode,
+        "backend": backend,
+        "arch": arch,
+        "dsl": dsl,
+        "backend_name": args.backend_name,
+        "devices": devices,
+        "pass_n": args.pass_n,
+        "max_concurrent": args.max_concurrent,
+        "tiers": args.tiers,
+        "cases": args.cases,
+        "filter": args.filter,
+        "team_name": args.team_name,
+        "workflow": args.workflow,
+    }
+    if args.mode in ("performance", "full"):
+        config["warmup"] = args.warmup
+        config["iterations"] = args.iterations
+        config["num_trials"] = args.num_trials
+        config["rtol"] = args.rtol
+        config["timeout"] = args.timeout
+        config["atol"] = args.atol
+    return config
+
+
+async def run_single_backend(args: argparse.Namespace, backend: str) -> Tuple[Dict[str, object], int]:
+    backend_config = resolve_backend_config(
+        backend, args.arch,
+        dsl_override=args.dsl,
+        backend_override=args.backend_name,
     )
 
-    args = parser.parse_args()
+    perf_results = None
+    perf_summary = None
+    perf_config = None
+    discovery = None
+    config_payload = None
+    environment = None
 
-    asyncio.run(run_bench_lite_tests(args))
+    try:
+        devices = resolve_devices(backend, args.devices)
+        bench_lite_dir = get_bench_lite_dir(Path(__file__))
+
+        mode_label = args.mode.upper()
+        print("=" * 80)
+        print(f"Benchmark Lite Runner [{mode_label}] - {backend_config['name']}")
+        print("=" * 80)
+        print(f"Bench Lite Directory: {bench_lite_dir}")
+        print(f"Mode: {args.mode}")
+        print(f"Pass@N: {args.pass_n}")
+        print(f"Arch: {backend_config['arch']}")
+        print(f"Devices: {devices}")
+        print(f"Max Concurrent: {args.max_concurrent}")
+        if args.mode in ("performance", "full"):
+            print(f"Perf Warmup: {args.warmup}  Iterations: {args.iterations}  Trials: {args.num_trials}")
+            print(f"Perf Tolerance: rtol={args.rtol}  atol={args.atol}")
+        print()
+
+        discovery = discover_bench_lite_cases(
+            bench_lite_dir=bench_lite_dir,
+            tiers=args.tiers,
+            cases=args.cases,
+            filter_pattern=args.filter,
+            skip_npu=bool(backend_config["skip_npu"]),
+        )
+
+        environment = build_environment_info(backend, backend_config, devices)
+        config_payload = build_runner_config(args, backend, devices, str(backend_config["arch"]), str(backend_config["dsl"]))
+
+        print("Registering local worker...")
+        await register_local_worker(devices, backend=str(backend_config["backend"]), arch=str(backend_config["arch"]))
+
+        print("Loading backend configuration...")
+        config_obj = load_config(str(backend_config["dsl"]), backend=str(backend_config["backend"]))
+        check_env_for_task("torch", str(backend_config["backend"]), str(backend_config["dsl"]), config_obj)
+
+        if not discovery.cases:
+            summary = compute_summary(
+                results=[],
+                total_elapsed=0.0,
+                skipped_cases=discovery.skipped_cases,
+                environment_error="No runnable cases found for the current selection",
+            )
+            # In performance/full mode, include empty perf fields for schema consistency
+            empty_perf = [] if args.mode in ("performance", "full") else None
+            empty_perf_summary = compute_performance_summary([]) if empty_perf is not None else None
+            empty_perf_config = {
+                "warmup": args.warmup, "iterations": args.iterations,
+                "num_trials": args.num_trials, "rtol": args.rtol,
+                "atol": args.atol, "timeout": args.timeout,
+            } if empty_perf is not None else None
+            payload = build_full_output_payload(
+                backend=backend,
+                mode=args.mode,
+                config_payload=config_payload,
+                environment=environment,
+                summary=summary,
+                results=[],
+                perf_results=empty_perf,
+                perf_summary=empty_perf_summary,
+                perf_config=empty_perf_config,
+            )
+            print_backend_summary(str(backend_config["name"]), summary, [])
+            return payload, 1
+
+        # === Phase 1: Correctness (Pass@N) ===
+        task_pool = TaskPool(max_concurrency=args.max_concurrent)
+        start_time = time.time()
+        for spec in build_task_specs(discovery.cases, backend, backend_config, args.pass_n):
+            task = LangGraphTask(
+                op_name=str(spec["op_name"]),
+                task_desc=str(spec["task_desc"]),
+                task_id=str(spec["task_id"]),
+                dsl=str(spec["dsl"]),
+                backend=str(spec["backend"]),
+                arch=str(spec["arch"]),
+                config=config_obj,
+                framework="torch",
+                workflow=args.workflow,
+            )
+            task_pool.create_task(task.run, task_name=str(spec["task_id"]))
+
+        raw_results = await task_pool.wait_all()
+        total_elapsed = time.time() - start_time
+        results = aggregate_correctness_results(raw_results, discovery.cases, args.pass_n, backend)
+        summary = compute_summary(results, total_elapsed, discovery.skipped_cases)
+
+        print_backend_summary(str(backend_config["name"]), summary, results)
+
+        # === Phase 2 & 3: Submission extraction + Performance evaluation ===
+        if args.mode in ("performance", "full"):
+            submission_base = Path(args.submission_dir) if args.submission_dir else (
+                Path(config_obj.get("log_dir", "")).expanduser() / "bench_lite_submissions"
+                if config_obj.get("log_dir") else
+                bench_lite_dir / "submissions"
+            )
+            submission_base.mkdir(parents=True, exist_ok=True)
+
+            print(f"\nExtracting Agent submissions to: {submission_base}")
+            team_dir = extract_submissions_from_results(
+                raw_results=raw_results,
+                cases=discovery.cases,
+                bench_lite_dir=bench_lite_dir,
+                submission_dir=submission_base,
+                backend=backend,
+                team_name=args.team_name,
+            )
+
+            extracted_count = sum(
+                1 for _ in team_dir.rglob("*.py") if _.name != "__init__.py" and _.name != "meta.json"
+            )
+            print(f"Extracted {extracted_count} submission files.\n")
+
+            perf_config = {
+                "warmup": args.warmup,
+                "iterations": args.iterations,
+                "num_trials": args.num_trials,
+                "rtol": args.rtol,
+                "atol": args.atol,
+                "timeout": args.timeout,
+            }
+            if extracted_count > 0:
+                print("Running performance evaluation...")
+                perf_results = run_performance_evaluation(
+                    team_dir=team_dir,
+                    bench_lite_dir=bench_lite_dir,
+                    warmup_runs=args.warmup,
+                    iterations=args.iterations,
+                    num_trials=args.num_trials,
+                    rtol=args.rtol,
+                    atol=args.atol,
+                    timeout=args.timeout,
+                    backend=backend,
+                )
+                perf_summary = compute_performance_summary(perf_results)
+                print_performance_summary(str(backend_config["name"]), perf_results, perf_summary)
+            else:
+                print("[WARN] No successful submissions extracted - performance evaluation skipped.")
+                perf_results = []
+                perf_summary = compute_performance_summary(perf_results)
+
+        # === Phase 4: Build payload ===
+        if args.mode != "correctness":
+            print_full_summary(
+                str(backend_config["name"]), summary, results, perf_results, perf_summary,
+                mode=args.mode,
+            )
+        payload = build_full_output_payload(
+            backend=backend,
+            mode=args.mode,
+            config_payload=config_payload,
+            environment=environment,
+            summary=summary,
+            results=results,
+            perf_results=perf_results,
+            perf_summary=perf_summary,
+            perf_config=perf_config,
+            submission_dir=str(submission_base) if args.mode in ("performance", "full") else None,
+        )
+
+        # Exit code: non-zero if any correctness failure OR performance-phase failure
+        # In performance/full mode, 0 extracted submissions is also a failure
+        has_correctness_failure = summary["failed_cases"] > 0
+        has_perf_failure = (
+            perf_summary is not None
+            and perf_summary.get("failed_cases", 0) > 0
+        )
+        has_no_perf_data = (
+            args.mode in ("performance", "full")
+            and perf_summary is not None
+            and perf_summary.get("total_cases", 0) == 0
+            and summary.get("passed_cases", 0) > 0
+        )
+        return payload, 1 if (has_correctness_failure or has_perf_failure or has_no_perf_data) else 0
+    except Exception as exc:
+        skipped = discovery.skipped_cases if discovery is not None else []
+        fallback_config = config_payload if config_payload is not None else build_runner_config(
+            args, backend, [], str(backend_config["arch"]), str(backend_config["dsl"]))
+        fallback_env = environment if environment is not None else {
+            "framework": "torch",
+            "dsl": str(backend_config["dsl"]),
+            "backend": backend,
+            "visible_devices": [],
+        }
+        summary = compute_summary(
+            results=[],
+            total_elapsed=0.0,
+            skipped_cases=skipped,
+            environment_error=str(exc),
+        )
+        # In performance/full mode, include empty perf fields for schema consistency
+        fail_perf_results = [] if args.mode in ("performance", "full") else None
+        fail_perf_summary = compute_performance_summary([]) if fail_perf_results is not None else None
+        fail_perf_config = {
+            "warmup": args.warmup, "iterations": args.iterations,
+            "num_trials": args.num_trials, "rtol": args.rtol,
+            "atol": args.atol, "timeout": args.timeout,
+        } if fail_perf_results is not None else None
+        payload = build_full_output_payload(
+            backend=backend,
+            mode=args.mode,
+            config_payload=fallback_config,
+            environment=fallback_env,
+            summary=summary,
+            results=[],
+            perf_results=fail_perf_results,
+            perf_summary=fail_perf_summary,
+            perf_config=fail_perf_config,
+        )
+        print_backend_summary(str(backend_config["name"]), summary, [])
+        return payload, 1
+
+
+def write_output(output_path: str, payload: Dict[str, object]) -> None:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+    print(f"Results saved to: {path}")
+
+
+async def run_bench_lite_tests(args: argparse.Namespace) -> int:
+    if args.backend != "all":
+        payload, exit_code = await run_single_backend(args, args.backend)
+        if args.output:
+            write_output(args.output, payload)
+            if args.mode == "full" and payload.get("performance_results"):
+                lb_path = Path(args.output).with_name("leaderboard.json")
+                write_leaderboard(
+                    payload["performance_results"],
+                    payload["performance_summary"],
+                    lb_path,
+                    args.backend,
+                    team_name=args.team_name,
+                )
+        return exit_code
+
+    backend_payloads: Dict[str, Dict[str, object]] = {}
+    exit_code = 0
+    all_backends = args.backends or ["cpu", "gpu", "npu"]
+    for backend in all_backends:
+        payload, backend_exit_code = await run_single_backend(args, backend)
+        backend_payloads[backend] = payload
+        exit_code = max(exit_code, backend_exit_code)
+
+    combined_summary = combine_backend_payloads(backend_payloads)
+    combined_results = combined_summary.pop("results", [])
+
+    # Aggregate performance results from all backends (if any ran perf evaluation)
+    combined_perf_results: Optional[List[Dict[str, object]]] = None
+    combined_perf_summary: Optional[Dict[str, object]] = None
+    combined_perf_config: Optional[Dict[str, object]] = None
+    if args.mode in ("performance", "full"):
+        all_perf_results: List[Dict[str, object]] = []
+        for bk, bp in backend_payloads.items():
+            for r in bp.get("performance_results", []):
+                entry = dict(r)
+                entry["backend"] = bk
+                all_perf_results.append(entry)
+        # Always produce perf fields for schema consistency (even if empty)
+        combined_perf_results = all_perf_results
+        combined_perf_summary = compute_performance_summary(all_perf_results)
+        combined_perf_config = {
+            "warmup": args.warmup,
+            "iterations": args.iterations,
+            "num_trials": args.num_trials,
+            "rtol": args.rtol,
+            "atol": args.atol,
+            "timeout": args.timeout,
+        }
+
+    # Aggregate actual config/environment from each backend's payload
+    per_backend_env = {}
+    per_backend_arch = {}
+    for bk, bp in backend_payloads.items():
+        bk_env = bp.get("environment", {})
+        per_backend_env[bk] = {
+            "visible_devices": bk_env.get("visible_devices", []),
+            "dsl": bk_env.get("dsl", "unknown"),
+        }
+        bk_cfg = bp.get("config", {})
+        per_backend_arch[bk] = bk_cfg.get("arch", args.arch)
+
+    combined_payload = build_full_output_payload(
+        backend="all",
+        mode=args.mode,
+        config_payload={
+            "mode": args.mode,
+            "backend": "all",
+            "backends": all_backends,
+            "arch": per_backend_arch,
+            "devices": args.devices,
+            "pass_n": args.pass_n,
+            "max_concurrent": args.max_concurrent,
+            "tiers": args.tiers,
+            "cases": args.cases,
+            "filter": args.filter,
+            "team_name": args.team_name,
+            "workflow": args.workflow,
+            "warmup": args.warmup,
+            "iterations": args.iterations,
+            "num_trials": args.num_trials,
+            "rtol": args.rtol,
+            "atol": args.atol,
+            "timeout": args.timeout,
+        },
+        environment={
+            "framework": "torch",
+            "dsl": "multiple",
+            "backend": "all",
+            "per_backend": per_backend_env,
+        },
+        summary=combined_summary,
+        results=combined_results,
+        perf_results=combined_perf_results,
+        perf_summary=combined_perf_summary,
+        perf_config=combined_perf_config,
+        backend_results=backend_payloads,
+    )
+
+    print("\n" + "=" * 80)
+    print(f"Benchmark Lite Summary [{args.mode.upper()}] - ALL BACKENDS")
+    print("=" * 80)
+    print(
+        f"Passed Cases: {combined_summary['passed_cases']}/{combined_summary['total_cases']} "
+        f"({combined_summary['case_pass_rate']:.1%})"
+    )
+    print(
+        f"Successful Attempts: {combined_summary['successful_attempts']}/{combined_summary['total_attempts']} "
+        f"({combined_summary['attempt_pass_rate']:.1%})"
+    )
+    if combined_summary.get("environment_error"):
+        print(f"Environment Errors: {combined_summary['environment_error']}")
+
+    if args.output:
+        write_output(args.output, combined_payload)
+        if args.mode == "full" and combined_perf_results:
+            lb_path = Path(args.output).with_name("leaderboard_all.json")
+            write_leaderboard(combined_perf_results, combined_perf_summary, lb_path, "all",
+                              team_name=args.team_name)
+    return exit_code
+
+
+def main(argv: Optional[List[str]] = None) -> None:
+    args = parse_args(argv)
+    sys.exit(asyncio.run(run_bench_lite_tests(args)))
 
 
 if __name__ == "__main__":

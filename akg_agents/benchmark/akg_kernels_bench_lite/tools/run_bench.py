@@ -39,7 +39,7 @@ import signal
 import sys
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -425,7 +425,7 @@ def run_team(
         "team_name": meta.get("team_name", team),
         "meta": meta,
         "device": device,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now().isoformat(),
         "bench_config": {
             "rtol": rtol,
             "atol": atol,
