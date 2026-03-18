@@ -242,11 +242,12 @@ def AffineReductionAnnotation : Pass<"affine-reduction-annotation", "func::FuncO
 }
 
 def ReductionSiblingRecompute : Pass<"reduction-sibling-recompute", "func::FuncOp"> {
-  let summary = "Recompute reduction temporaries in sibling loops to unlock store/load elimination";
+  let summary = "Recompute reduction temporaries in sibling loops to enable store/load elimination";
   let description = [{
-    Detect local temporary buffers written in a reduction loop and only read later by sibling loops.
-    Clone the producer expression into the sibling loop, forward same-block local store/load pairs,
-    and erase dead temporary stores/allocations so later StoreLoadElim can remove the remaining traffic.
+    Runs on Reduction functions only. Finds sibling loops of reduction loops that load from local
+    buffers written in the reduction loop; replaces those loads with recomputed values (cloning
+    the producer and forwarding same-block store/load). Erases dead stores and unused allocs so
+    later passes can remove the remaining memory traffic.
   }];
   let constructor = "mlir::createReductionSiblingRecomputePass()";
   let dependentDialects = [
