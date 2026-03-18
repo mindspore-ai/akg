@@ -103,6 +103,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
     nestedFusionPM.addPass(mlir::affine::createAffineReductionAnnotationPass());
     nestedFusionPM.addPass(mlir::createAKGLoopFusionPass());
+    nestedFusionPM.addPass(mlir::createReductionSiblingRecomputePass());
     nestedFusionPM.addPass(mlir::createStoreLoadElimPass());
     nestedFusionPM.addPass(mlir::createCanonicalizerPass());
     nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
