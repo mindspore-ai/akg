@@ -12,7 +12,7 @@
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 BENCH_ROOT = Path(__file__).resolve().parent.parent
@@ -66,7 +66,7 @@ def build_leaderboard(reports: list[dict]) -> dict:
         e["rank"] = i + 1
 
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now().isoformat(),
         "total_teams": len(entries),
         "ranking": entries,
     }
