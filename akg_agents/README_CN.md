@@ -36,7 +36,7 @@
 
 ## 🗓️ 2. 更新日志
 - 2026-03-31：新增 [AutoResearch](./docs/v2/CN/AutoResearch.md) 工作流 — Agent 驱动的多轮自主迭代深度优化，基于 KernelVerifier 评测，支持所有 DSL。
-- 2026-03-11：打通集成 AKG Agents 和 Opencode 的算子优化流程 [op-optimizer](./docs/v2/OpOptimizer.md).
+- 2026-03-11：打通集成 AKG Agents 和 OpenCode 的算子优化流程（[akg-op](./docs/v2/CN/AKG-Op.md) Agent）。
 - 2026-02-26：支持 PyPTO 后端代码生成能力。
 - 2026-02-15：AKG Agents 文档整改。老文档归档至 `docs/v1/`，重构后的新文档统一至 `docs/v2/`。
 - 2026-02-10：核心框架重构（v2）。将通用 Agent 能力与算子场景解耦，构建可复用的多 Agent 协作框架。详见 [框架架构](./docs/v2/CN/Architecture.md)、[Agent 体系](./docs/v2/CN/AgentSystem.md)、[Skill 系统](./docs/v2/CN/SkillSystem.md)、[工作流](./docs/v2/CN/Workflow.md)、[Trace 系统](./docs/v2/CN/Trace.md)、[配置系统](./docs/v2/CN/Configuration.md)。
@@ -207,7 +207,7 @@ akg_agents/
 - **[AKG CLI](./docs/v2/CN/AKG_CLI.md)** - 命令行工具使用指南
 
 ### OpenCode 集成
-- **[op-optimizer 使用指南](./docs/v2/CN/OpOptimizer.md)** - 算子优化 Agent 端到端流程：环境准备 → 融合分析（可选）→ 任务提取 → 算子生成 → 代码替换，支持单算子优化与模型融合分析
+- **[akg-op 使用指南](./docs/v2/CN/AKG-Op.md)** - 算子优化 Agent 端到端流程：环境准备 → 融合分析（可选）→ 任务提取 → 算子生成 → 代码集成，支持单算子优化与模型融合分析
 
 ### 贡献
 - **[Skill 贡献指南](./docs/v2/CN/SkillContributionGuide.md)** - 如何贡献新的 Skill
