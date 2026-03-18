@@ -156,7 +156,20 @@ class DefaultWorkflow(OpBaseWorkflow):
         
         # 添加边
         workflow.add_edge("designer", "coder")
-        workflow.add_edge("coder", "verifier")
+
+        # 代码生成后的路由（处理 max_tokens 截断等异常）
+        codegen_router = RouterFactory.create_codegen_router(
+            next_agent="verifier",
+            code_gen_agent="coder"
+        )
+        workflow.add_conditional_edges(
+            "coder",
+            codegen_router,
+            {
+                "verifier": "verifier",
+                "conductor": "conductor"
+            }
+        )
         
         # 条件边：verifier 后的路由（验证通过跳过 conductor）
         verifier_router = RouterFactory.create_verifier_router_with_conductor(
@@ -188,4 +201,3 @@ class DefaultWorkflow(OpBaseWorkflow):
         workflow.set_entry_point("designer")
         
         return workflow
-
