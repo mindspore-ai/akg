@@ -31,6 +31,11 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
     runner = PipelineRunner.from_torch_dialect_str(torch_dialect_str)
 
     runner.run(
+        pipeline="builtin.module(torch-fusion,canonicalize)",
+        stage="Torch Fusion",
+    )
+
+    runner.run(
         pipeline="builtin.module(convert-torch-to-mfuse,convert-torch-symbol-to-mfuse,canonicalize)",
         stage="Convert Torch to Mfuse Dialect Module",
     )

@@ -19,6 +19,35 @@
 
 include "mlir/Pass/PassBase.td"
 
+//===----------------------------------------------------------------------===//
+// Torch dialect fusion passes (run before convert-torch-to-mfuse)
+//===----------------------------------------------------------------------===//
+
+def TorchFusion : Pass<"torch-fusion", "::mlir::ModuleOp"> {
+  let summary = "Torch dialect fusion pipeline (RoPE etc.) before Convert Torch to Mfuse";
+  let description = [{
+    Runs a sequence of fusion passes on Torch IR before convert-torch-to-mfuse.
+    Currently includes torch-fuse-rope; more passes can be added for future extension.
+  }];
+  let constructor = "mlir::createTorchFusionPass()";
+  let dependentDialects = [
+    "::mlir::torch::Torch::TorchDialect"
+  ];
+}
+
+def TorchFuseRoPE : Pass<"torch-fuse-rope", "::mlir::ModuleOp"> {
+  let summary = "Fuse decomposed RoPE on Torch dialect into torch.npu.npu_rotary_mul";
+  let description = [{
+    Matches the RoPE pattern on Torch IR (slice/neg/cat + mul.Tensor + add.Tensor)
+    and replaces it with a single torch.operator "torch.npu.npu_rotary_mul"(x, cos, sin).
+    Runs before convert-torch-to-mfuse.
+  }];
+  let constructor = "mlir::createTorchFuseRoPEPass()";
+  let dependentDialects = [
+    "::mlir::torch::Torch::TorchDialect"
+  ];
+}
+
 def ConvertTorchToMfuse : Pass<"convert-torch-to-mfuse", "::mlir::ModuleOp"> {
   let summary = "Convert Torch operations to Mfuse dialect operations";
 
@@ -29,7 +58,7 @@ def ConvertTorchToMfuse : Pass<"convert-torch-to-mfuse", "::mlir::ModuleOp"> {
   let constructor = "mlir::createConvertTorchToMfusePass()";
 
   let dependentDialects = [
-    "::mlir::torch::TorchDialect",
+    "::mlir::torch::Torch::TorchDialect",
     "::mlir::mfuse::MfuseDialect"
   ];
 }
@@ -45,7 +74,7 @@ def ConvertTorchSymbolToMfuse : Pass<"convert-torch-symbol-to-mfuse", "::mlir::M
   let constructor = "mlir::createConvertTorchSymbolToMfusePass()";
 
   let dependentDialects = [
-    "::mlir::torch::TorchDialect",
+    "::mlir::torch::Torch::TorchDialect",
     "::mlir::mfuse::MfuseDialect"
   ];
 }
@@ -60,7 +89,7 @@ def ConvertMfuseToTorch : Pass<"convert-mfuse-to-torch", "::mlir::ModuleOp"> {
   let constructor = "mlir::createConvertMfuseToTorchPass()";
 
   let dependentDialects = [
-    "::mlir::torch::TorchDialect",
+    "::mlir::torch::Torch::TorchDialect",
     "::mlir::mfuse::MfuseDialect"
   ];
 }
