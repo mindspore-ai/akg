@@ -795,20 +795,19 @@ static bool isOperationValid(Operation *candidate) {
 
 // Collects affine load/store operations from a loop that access any of 'memrefs'
 // into 'memFlags' and 'loadAndStoreOps'. Skips invalid ops and non-affine accesses.
-static void collectLoadAndStoreOpsFromOps(llvm::ArrayRef<Value> memrefs, affine::AffineForOp loopOp,
+static void collectLoadAndStoreOpsFromOps(const llvm::DenseSet<Value> &memrefs, affine::AffineForOp loopOp,
                                           DenseMap<Value, bool> &memFlags,
                                           SmallVector<Operation *, 4> &loadAndStoreOps) {
-  llvm::DenseSet<Value> memrefSet(memrefs.begin(), memrefs.end());
   if (!loopOp) return;
   loopOp->walk([&](Operation *op) {
     if (!isOperationValid(op)) return;
     if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
-      if (memrefSet.contains(read.getMemRef())) {
+      if (memrefs.contains(read.getMemRef())) {
         memFlags.insert({read.getMemRef(), false});
         loadAndStoreOps.push_back(op);
       }
     } else if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
-      if (memrefSet.contains(write.getMemRef())) {
+      if (memrefs.contains(write.getMemRef())) {
         memFlags.insert({write.getMemRef(), true});
         loadAndStoreOps.push_back(op);
       }
@@ -866,6 +865,11 @@ static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, 4> &loop
 unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo, const affine::FusionStrategy &strategy,
   llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions, const FusionPlan &plan, bool srcDstReversed) {
+  if (plan.depInfo.memrefs.empty()) {
+    llvm::dbgs() << "No memrefs found for fusion\n";
+    return 0;
+  }
+
   affine::AffineForOp srcAffineForOp = srcInfo.root;
   affine::AffineForOp dstAffineForOp = dstInfo.root;
 
@@ -892,18 +896,20 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
 
   SmallVector<Operation *, 4> strategyOpsA;
   buildStrategyOpsA(strategy, srcAccesses, strategyOpsA);
+  if (strategyOpsA.empty()) {
+    llvm::dbgs() << "No strategy ops found for fusion\n";
+    return 0;
+  }
+
+  unsigned loopDepth = dstInfo.loopDepth;
+  if (!srcInfo.isPerfect) {
+    loopDepth = std::min(srcInfo.perfectDepth, dstInfo.perfectDepth);
+  }
 
   // Use depth of insertion target (second param = dstAffineForOp).
-  unsigned loopDepth = dstInfo.loopDepth;
   depthSliceUnions.clear();
   depthSliceUnions.resize(loopDepth);
   unsigned maxDepth = 0;
-
-  if (!srcInfo.isPerfect) {
-    auto startDepth = std::min(srcInfo.perfectDepth, dstInfo.perfectDepth);
-    loopDepth = startDepth;
-  }
-
   for (unsigned depth = loopDepth; depth >= 1; --depth) {
     if (strategy.getStrategy() == affine::FusionStrategy::ProducerConsumer) {
       if (plan.depInfo.loopDepth < depth) {
@@ -1041,38 +1047,21 @@ void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::Affine
 
 void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
                                   affine::AffineForOp dstAffineForOp, const FusionPlan &plan) {
-  auto *dstNode = mdg.getNode(dstId);
-  mlir::Value memref;
-  // Skip if node has been erased during previous fusion
-  if (dstNode && dstNode->op) {
-    for (auto op : dstNode->loads) {
-      // Skip invalid operations (may have been erased during previous fusion)
-      if (!isOperationValid(op)) {
-        continue;
-      }
-      auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op);
-      if (!loadOp) {
-        continue;
-      }
-      if (loadOp.getMemRef().getDefiningOp()) {
-        memref = loadOp.getMemRef();
-      }
-    }
-  }
-
   FusionLoopNestInfo srcInfo, dstInfo;
   srcInfo.collect(srcAffineForOp);
   dstInfo.collect(dstAffineForOp);
 
   SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
   unsigned maxLegalFusionDepth = 0;
-  if (memref) {
-    affine::FusionStrategy strategy(memref);
-    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
-  } else {
-    // No memref found, try generic strategy for structure-based fusion
-    affine::FusionStrategy strategy(affine::FusionStrategy::Generic);
-    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
+  for (auto memref : plan.depInfo.memrefs) {
+    if (memref) {
+      affine::FusionStrategy strategy(memref);
+      maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
+    } else {
+      // No memref found, try generic strategy for structure-based fusion
+      affine::FusionStrategy strategy(affine::FusionStrategy::Generic);
+      maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
+    }
   }
 
   // Skip if fusion is not feasible at any loop depths.
