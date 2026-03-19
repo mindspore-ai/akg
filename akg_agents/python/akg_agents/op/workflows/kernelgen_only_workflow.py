@@ -33,17 +33,21 @@ logger = logging.getLogger(__name__)
 class KernelGenOnlyWorkflow(OpBaseWorkflow):
     """KernelGen Only Workflow：基于 Skill 系统的内核代码生成工作流
     
-    优化后的流程（带 CodeChecker）：
+    优化后的流程（带 CodeChecker + FixCodeGen）：
     
-        kernel_gen -> code_checker -> (通过) -> verifier -> (失败) -> conductor -> kernel_gen
-                          |                                                        ^
-                          +----------------> (未通过) -----------------------------+
-                                         (携带错误信息回到 kernel_gen)
+        kernel_gen -> code_checker -> (通过) -> verifier -> (失败) -> conductor -+-> kernel_gen
+                          |                                                      |
+                          +-----> (未通过，回到 kernel_gen) -----+                +-> fix_code_gen -> verifier
+                                                                                 
+    Conductor 判断逻辑：
+    - 局部/小范围错误（如缺少 import、变量名拼写等）→ fix_code_gen（增量修复，使用 fast model）
+    - 全局/架构性错误（如算法逻辑重大缺陷）→ kernel_gen（完整重新生成）
     
     特点：
     - 使用 KernelGen agent（基于 Skill 系统）直接生成代码
     - 跳过 Designer 阶段，直接生成内核代码
     - 支持动态 Skill 选择和知识注入
+    - 支持 FixCodeGen 增量修复，提升小错误修复效率
     """
     
     # ========== 工具配置元数据（用于 KernelAgent 调用）==========
@@ -55,7 +59,9 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
 完整流程：
 1. KernelGen: 基于 Skill 系统动态选择知识，生成代码
 2. Verifier: 验证正确性和性能
-3. Conductor: 分析失败原因并指导修复（如果验证失败）
+3. Conductor: 分析失败原因并决定修复策略（如果验证失败）
+   - 局部错误 → FixCodeGen: 增量修复（search/replace，使用 fast model）
+   - 全局错误 → KernelGen: 完整重新生成
 4. 循环迭代直到成功或达到最大次数
 
 适用场景：
@@ -135,11 +141,13 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
     # ========== Workflow 实现 ==========
     
     def build_graph(self) -> StateGraph:
-        """构建 KernelGen-only 工作流图（带 CodeChecker）"""
+        """构建 KernelGen-only 工作流图（带 CodeChecker + FixCodeGen）"""
         workflow = StateGraph(KernelGenState)
         
         # CodeChecker 做纯静态检查（语法/编译/import），默认开启
         enable_code_checker = self.config.get("enable_code_checker", True)
+        # FixCodeGen 增量修复（默认启用）
+        enable_fix_code_gen = self.config.get("enable_fix_code_gen", True)
         
         # 创建 CodeChecker 实例
         code_checker = None
@@ -181,14 +189,24 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
             kernel_conductor,
             self.trace,
             self.config,
+            self.conductor_template,
             code_gen_agent="kernel_gen",
-            kernel_gen_instance=self.agents['kernel_gen'],
+            enable_fix_code_gen=enable_fix_code_gen,
         )
         
         # 添加节点
         workflow.add_node("kernel_gen", kernel_gen_node)
         workflow.add_node("verifier", verifier_node)
         workflow.add_node("conductor", conductor_node)
+        
+        # FixCodeGen 节点
+        if enable_fix_code_gen:
+            fix_code_gen_node = NodeFactory.create_fix_code_gen_node(
+                self.trace, self.config
+            )
+            workflow.add_node("fix_code_gen", fix_code_gen_node)
+            workflow.add_edge("fix_code_gen", "verifier")
+            logger.info("FixCodeGen enabled: conductor can route to fix_code_gen")
         
         if enable_code_checker and code_checker:
             # 创建 CodeChecker 节点
@@ -258,15 +276,23 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
         )
         
         # Conductor 后的路由（指定使用 kernel_gen）
-        conductor_router = RouterFactory.create_conductor_router(self.config, code_gen_agent="kernel_gen")
+        conductor_edges = {
+            "kernel_gen": "kernel_gen",
+            "finish": END,
+        }
+        if enable_fix_code_gen:
+            conductor_edges["fix_code_gen"] = "fix_code_gen"
+
+        conductor_router = RouterFactory.create_conductor_router(
+            self.config,
+            code_gen_agent="kernel_gen",
+            enable_fix_code_gen=enable_fix_code_gen,
+        )
         
         workflow.add_conditional_edges(
             "conductor",
             conductor_router,
-            {
-                "kernel_gen": "kernel_gen",
-                "finish": END
-            }
+            conductor_edges,
         )
         
         # 设置入口

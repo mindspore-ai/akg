@@ -184,7 +184,8 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             "designer", "coder", "conductor", "verifier", "selector", "op_task_builder"
         ]:
             mc.setdefault(agent_name, mc["default"])
-
+        mc.setdefault("fix_code_gen", "fast")
+        
         # 4. task_label
         if "task_label" not in config:
             try:
