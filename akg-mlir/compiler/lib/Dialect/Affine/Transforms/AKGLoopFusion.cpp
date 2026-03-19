@@ -421,10 +421,14 @@ void AKGLoopFusion::moveAllocBeforeAffineFor(func::FuncOp funcOp) {
 
   SmallVector<Operation *, 8> toMove;
 
-  for (auto it = std::next(firstAffineFor->getIterator()), e = block.end(); it != e; ++it) {
+  for (auto it = std::next(firstAffineFor->getIterator()), e = block.end();
+       it != e; ++it) {
     Operation *op = &*it;
-    if (isa<memref::AllocOp, memref::SubViewOp, memref::ReshapeOp, memref::ExpandShapeOp, memref::CollapseShapeOp,
-            memref::ReinterpretCastOp, memref::MemorySpaceCastOp>(op)) {
+    if (isa<memref::AllocOp, memref::SubViewOp,
+      memref::ReshapeOp, memref::ExpandShapeOp,
+      memref::CollapseShapeOp, memref::ReinterpretCastOp,
+      memref::MemorySpaceCastOp, arith::IndexCastOp,
+      memref::DimOp>(op)) {
       toMove.push_back(op);
     }
   }
