@@ -4,8 +4,9 @@ add_mlir_pdll_library(TorchToMfusePDLLIncGen
   TorchToMfuse.pdll.h.inc
 
   DEPENDS
-  TorchToMfuseAten.pdll
-  TorchToMfuseNpu.pdll
+  TorchAtenToMfuse.pdll
+  TorchNpuToMfuse.pdll
+  TorchPrimToMfuse.pdll
 )
 
 file(GLOB TORCH_TO_MFUSE_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.cc")

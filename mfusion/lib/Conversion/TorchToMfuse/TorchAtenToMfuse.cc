@@ -34,13 +34,6 @@ namespace mlir {
 namespace TorchD = mlir::torch::Torch;
 
 namespace {
-// Check if the shape has at most one dynamic dimension.
-bool isSemiStaticShape(RankedTensorType type) {
-  int64_t dynamicDims = std::count_if(type.getShape().begin(), type.getShape().end(),
-                                      [](int64_t dim) { return dim == ShapedType::kDynamic; });
-  return dynamicDims <= 1;
-}
-
 // Check that `listVal` is a list construct of constant ints and
 // collect the integer values into `out`.
 bool isConstantListInt(Value listVal, llvm::SmallVectorImpl<int64_t> &out) {
@@ -90,6 +83,27 @@ struct ConvertBinaryOpPattern : public OpConversionPattern<SourceOp> {
   }
 };
 
+// Convert reshape like ops to mfuse.reshape
+template <typename SourceOp>
+struct ConvertReshapeLikeOp : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto outType = mlir::dyn_cast<RankedTensorType>(this->getTypeConverter()->convertType(op.getType()));
+    if (!outType) {
+      return rewriter.notifyMatchFailure(op, "result must be ranked tensor");
+    }
+    auto dynamic_dim_count = std::count_if(outType.getShape().begin(), outType.getShape().end(),
+                                           [](int64_t dim) { return dim == ShapedType::kDynamic; });
+    if (dynamic_dim_count > 1) {
+      return rewriter.notifyMatchFailure(op, "result has more than one dynamic dimension");
+    }
+    rewriter.replaceOpWithNewOp<mlir::mfuse::ReshapeOp>(op, outType, adaptor.getSelf());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // (the pattern list should be alphabetically sorted)
 //===----------------------------------------------------------------------===//
@@ -112,24 +126,6 @@ struct ConvertAtenBroadcastTo : public OpConversionPattern<TorchD::AtenBroadcast
     }
 
     rewriter.replaceOpWithNewOp<mlir::mfuse::BroadcastToOp>(op, getTypeConverter()->convertType(op.getType()), self);
-    return success();
-  }
-};
-
-struct ConvertAtenReshape : public OpConversionPattern<TorchD::AtenReshapeOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(TorchD::AtenReshapeOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    auto outType = dyn_cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
-    if (!outType) {
-      return rewriter.notifyMatchFailure(op, "result must be ranked tensor");
-    }
-    if (!isSemiStaticShape(outType)) {
-      return rewriter.notifyMatchFailure(op, "result has more than one dynamic dimension");
-    }
-
-    rewriter.replaceOpWithNewOp<mlir::mfuse::ReshapeOp>(op, outType, adaptor.getSelf());
     return success();
   }
 };
@@ -199,6 +195,62 @@ struct ConvertAtenConvolution : public OpConversionPattern<TorchD::AtenConvoluti
       return rewriter.notifyMatchFailure(op, "result type conversion failed");
     }
     rewriter.replaceOpWithNewOp<mlir::mfuse::Conv2DOp>(op, resultType, input, weight);
+    return success();
+  }
+};
+
+/// Convert torch.aten.expand -> mfuse.broadcast_to.
+/// The size must be a constant list (all elements are constant ints),
+/// and not computed by other operators.
+struct ConvertAtenExpand : public OpConversionPattern<TorchD::AtenExpandOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenExpandOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value self = adaptor.getSelf();
+
+    // Check size is a constant int list.
+    llvm::SmallVector<int64_t, 4> sizeInts;
+    if (!isConstantListInt(op.getSize(), sizeInts)) {
+      return rewriter.notifyMatchFailure(op, "size must be a list construct of constant ints for mfuse.broadcast_to");
+    }
+
+    rewriter.replaceOpWithNewOp<mlir::mfuse::BroadcastToOp>(op, getTypeConverter()->convertType(op.getType()), self);
+    return success();
+  }
+};
+
+struct ConvertAtenPermute : public OpConversionPattern<TorchD::AtenPermuteOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenPermuteOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value self = adaptor.getSelf();
+    auto inType = mlir::dyn_cast<RankedTensorType>(self.getType());
+    if (!inType) {
+      return rewriter.notifyMatchFailure(op, "input type must be ranked tensor");
+    }
+    int64_t inputRank = inType.getRank();
+
+    llvm::SmallVector<int64_t, 4> permValues;
+    if (!isConstantListInt(op.getDims(), permValues)) {
+      return rewriter.notifyMatchFailure(op, "dims must be a list construct of constant ints");
+    }
+
+    if (permValues.size() != static_cast<size_t>(inputRank)) {
+      return rewriter.notifyMatchFailure(op, "dims size must match input rank");
+    }
+
+    for (int64_t &dim : permValues) {
+      dim = TorchD::toPositiveDim(dim, inputRank);
+      if (!TorchD::isValidDim(dim, inputRank)) {
+        return rewriter.notifyMatchFailure(op, "dim out of range");
+      }
+    }
+
+    auto outType = cast<RankedTensorType>(getTypeConverter()->convertType(op->getResult(0).getType()));
+    auto permAttr = rewriter.getI64ArrayAttr(permValues);
+    rewriter.replaceOpWithNewOp<mlir::mfuse::PermuteOp>(op, outType, self, permAttr);
     return success();
   }
 };
@@ -335,33 +387,14 @@ struct ConvertAtenSliceTensor : public OpConversionPattern<TorchD::AtenSliceTens
   }
 };
 
-struct ConvertAtenView : public OpConversionPattern<TorchD::AtenViewOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(TorchD::AtenViewOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    auto outType = dyn_cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
-    if (!outType) {
-      return rewriter.notifyMatchFailure(op, "result must be ranked tensor");
-    }
-    if (!isSemiStaticShape(outType)) {
-      return rewriter.notifyMatchFailure(op, "result has more than one dynamic dimension");
-    }
-
-    rewriter.replaceOpWithNewOp<mlir::mfuse::ReshapeOp>(op, outType, adaptor.getSelf());
-    return success();
-  }
-};
-
 // Default epsilon for RmsNorm; kept in sync with PyTorch/HuggingFace defaults
 // so that ConvertAtenRmsNorm preserves the original F.rms_norm behaviour when
 // eps is not explicitly provided.
 constexpr double kDefaultRmsNormEpsilon = 1e-6;
 
-/// Convert torch.aten.rms_norm → mfuse.aclnn.rms_norm (direct path).
-/// Requires weight to be present and eps to be a constant float.
-/// aten.rms_norm produces 1 result; aclnn.rms_norm produces 2 (yOut, rstdOut).
-/// Only yOut is used to replace the original op; rstdOut is left for DCE.
+/// Convert torch.aten.rms_norm -> mfuse.aclnn.rms_norm (direct path). Requires weight to be present and eps to be a
+/// constant float. aten.rms_norm produces 1 result; aclnn.rms_norm produces 2 (yOut, rstdOut). Only yOut is used to
+/// replace the original op; rstdOut is left for DCE.
 struct ConvertAtenRmsNorm : public OpConversionPattern<TorchD::AtenRmsNormOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -380,8 +413,7 @@ struct ConvertAtenRmsNorm : public OpConversionPattern<TorchD::AtenRmsNormOp> {
 
     llvm::SmallVector<int64_t, 4> normalizedShape;
     if (!isConstantListInt(op.getNormalizedShape(), normalizedShape)) {
-      return rewriter.notifyMatchFailure(op,
-          "normalized_shape must be constant int list");
+      return rewriter.notifyMatchFailure(op, "normalized_shape must be constant int list");
     }
 
     Value input = adaptor.getInput();
@@ -390,12 +422,10 @@ struct ConvertAtenRmsNorm : public OpConversionPattern<TorchD::AtenRmsNormOp> {
     int64_t inputRank = inputType.getRank();
     int64_t numNorm = static_cast<int64_t>(normalizedShape.size());
     if (numNorm > inputRank) {
-      return rewriter.notifyMatchFailure(op,
-          "normalized_shape rank exceeds input rank");
+      return rewriter.notifyMatchFailure(op, "normalized_shape rank exceeds input rank");
     }
 
-    auto yOutType = cast<RankedTensorType>(
-        getTypeConverter()->convertType(op.getType()));
+    auto yOutType = cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
 
     // rstd shape: input shape with last N dims (N = len(normalized_shape))
     // reduced to 1, matching keepdim=true semantics.
@@ -404,13 +434,11 @@ struct ConvertAtenRmsNorm : public OpConversionPattern<TorchD::AtenRmsNormOp> {
     for (int64_t i = inputRank - numNorm; i < inputRank; ++i) {
       rstdShape[i] = 1;
     }
-    auto rstdType = RankedTensorType::get(
-        rstdShape, inputType.getElementType());
+    auto rstdType = RankedTensorType::get(rstdShape, inputType.getElementType());
 
     auto epsilonAttr = rewriter.getF64FloatAttr(epsVal);
     SmallVector<Type, 2> resultTypes = {yOutType, rstdType};
-    auto rmsNormOp = rewriter.create<mfuse::AclnnRmsNormOp>(
-        op.getLoc(), resultTypes, input, weight, epsilonAttr);
+    auto rmsNormOp = rewriter.create<mfuse::AclnnRmsNormOp>(op.getLoc(), resultTypes, input, weight, epsilonAttr);
 
     rewriter.replaceOp(op, rmsNormOp.getYOut());
     return success();
@@ -425,12 +453,21 @@ struct ConvertAtenRmsNorm : public OpConversionPattern<TorchD::AtenRmsNormOp> {
 static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertAtenBroadcastTo>(converter, context);
-  patterns.add<ConvertAtenReshape>(converter, context);
   patterns.add<ConvertAtenConvolution>(converter, context);
+  patterns.add<ConvertAtenExpand>(converter, context);
+  patterns.add<ConvertAtenPermute>(converter, context);
   patterns.add<ConvertAtenRmsNorm>(converter, context);
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
   patterns.add<ConvertAtenTransposeInt>(converter, context);
-  patterns.add<ConvertAtenView>(converter, context);
+}
+
+// Populate reshape-like Aten ops to Mfuse conversion patterns
+static void populateAtenToMfuseReshapeLikeOpPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
+  MLIRContext *context = patterns.getContext();
+  patterns.add<ConvertReshapeLikeOp<TorchD::AtenReshapeOp>>(converter, context);
+  patterns.add<ConvertReshapeLikeOp<TorchD::AtenSqueezeDimOp>>(converter, context);
+  patterns.add<ConvertReshapeLikeOp<TorchD::AtenUnsqueezeOp>>(converter, context);
+  patterns.add<ConvertReshapeLikeOp<TorchD::AtenViewOp>>(converter, context);
 }
 
 // Populate binary Aten ops using the generic pattern so conversion goes through
@@ -466,6 +503,7 @@ static void populateAtenToMfuseBinaryOpPatterns(TypeConverter &converter, Rewrit
 void populateAtenToMfuseConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   populateAtenToMfuseCustomPatterns(converter, patterns);
   populateAtenToMfuseBinaryOpPatterns(converter, patterns);
+  populateAtenToMfuseReshapeLikeOpPatterns(converter, patterns);
 }
 
 }  // namespace mlir
