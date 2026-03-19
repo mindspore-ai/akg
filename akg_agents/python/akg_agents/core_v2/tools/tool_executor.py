@@ -150,6 +150,60 @@ class ToolExecutor:
         self.agent_context = agent_context or {}
         self.history = history or []
     
+    def _get_parameters_schema(self, tool_name: str) -> Optional[Dict[str, Any]]:
+        """获取工具的 PARAMETERS_SCHEMA（统一从三种注册表中查找）"""
+        if tool_name in self.agent_registry:
+            config = self.agent_registry[tool_name].get("config", {})
+            return config.get("function", {}).get("parameters")
+        if tool_name in self.workflow_registry:
+            config = self.workflow_registry[tool_name].get("config", {})
+            return config.get("function", {}).get("parameters")
+        tool_info = ToolRegistry.get_tool(tool_name)
+        if tool_info:
+            return tool_info.parameters
+        return None
+
+    def _validate_required_params(
+        self, tool_name: str, arguments: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """校验 required 参数是否存在且非空
+
+        Returns:
+            None 表示校验通过；否则返回标准错误结果字典。
+        """
+        schema = self._get_parameters_schema(tool_name)
+        if not schema:
+            return None
+
+        required = schema.get("required", [])
+        if not required:
+            return None
+
+        properties = schema.get("properties", {})
+        missing = []
+        for param_name in required:
+            value = arguments.get(param_name)
+            if value is None:
+                missing.append(f"'{param_name}' (未提供)")
+            elif isinstance(value, str) and not value.strip():
+                prop_info = properties.get(param_name, {})
+                if prop_info.get("default") is not None:
+                    continue
+                missing.append(f"'{param_name}' (为空字符串)")
+
+        if missing:
+            msg = (
+                f"工具 '{tool_name}' 缺少必需参数: {', '.join(missing)}。"
+                f"必需参数列表: {required}"
+            )
+            logger.error(f"[ToolExecutor] {msg}")
+            return {
+                "status": "error",
+                "output": "",
+                "error_information": msg,
+            }
+        return None
+
     def _build_history_compress(self, max_items: int = 10) -> List[Dict]:
         """构建压缩的历史记录"""
         if not self.history:
@@ -187,6 +241,11 @@ class ToolExecutor:
             logger.warning(f"[ToolExecutor] 参数表达式解析失败: {e}，使用原始参数")
             resolved_args = arguments
         
+        # 校验 required 参数（在表达式解析之后，执行之前）
+        validation_error = self._validate_required_params(tool_name, resolved_args)
+        if validation_error is not None:
+            return validation_error
+        
         # 带错误捕获执行（只捕获 WARNING+ 和 stderr）
         with _ErrorCapture() as capture:
             # 优先检查是否是注册的 Agent
@@ -222,10 +281,11 @@ class ToolExecutor:
         """通过 ToolRegistry 执行工具（通用分发，不含领域逻辑）"""
         tool_info = ToolRegistry.get_tool(tool_name)
         if tool_info is None:
+            display_name = tool_name if len(tool_name) <= 60 else tool_name[:60] + "..."
             return {
                 "status": "error",
                 "output": "",
-                "error_information": f"未知工具: {tool_name}，可用: {ToolRegistry.list_names()}"
+                "error_information": f"未知工具: '{display_name}'，请检查工具名拼写。可用工具: {ToolRegistry.list_names()}"
             }
         return await ToolRegistry.aexecute(tool_name, arguments)
     

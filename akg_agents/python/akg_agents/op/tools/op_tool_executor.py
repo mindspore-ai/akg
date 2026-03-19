@@ -53,10 +53,11 @@ class OpToolExecutor(ToolExecutor):
         """通过 ToolRegistry 执行工具，domain 类工具自动注入硬件参数。"""
         tool_info = ToolRegistry.get_tool(tool_name)
         if tool_info is None:
+            display_name = tool_name if len(tool_name) <= 60 else tool_name[:60] + "..."
             return {
                 "status": "error",
                 "output": "",
-                "error_information": f"未知工具: {tool_name}，可用: {ToolRegistry.list_names()}"
+                "error_information": f"未知工具: '{display_name}'，请检查工具名拼写。可用工具: {ToolRegistry.list_names()}"
             }
 
         if tool_info.category == "domain":
