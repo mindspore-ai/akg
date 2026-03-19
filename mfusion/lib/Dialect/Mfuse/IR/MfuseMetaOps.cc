@@ -28,6 +28,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mfusion/Analysis/SymbolicShape/SymEngineAnalysis.h"
 #include "mfusion/Dialect/Mfuse/Analysis/BinaryOpCommonInfer.h"
 #include "mfusion/Dialect/Mfuse/Analysis/ReduceOpCommonInfer.h"
@@ -339,6 +340,98 @@ mlir::Type CastOp::inferResultType(mlir::Value input, mlir::Type elementType) {
     return {};
   }
   return mlir::RankedTensorType::get(inType.getShape(), elementType, inType.getEncoding());
+}
+
+namespace {
+
+static mlir::Type getRankedElementType(mlir::Type type) {
+  auto rt = mlir::dyn_cast<mlir::RankedTensorType>(type);
+  return rt ? rt.getElementType() : mlir::Type{};
+}
+
+/// True when cast(cast(x, Tmid), Tout) is equivalent to cast(x, Tout) without extra narrowing:
+/// integer chains with matching signedness and non-decreasing bit width, or float chains
+/// with non-decreasing width where equal-width steps use the same element type (e.g. no f16 vs bf16 mix).
+static bool canComposeWideningCasts(mlir::Type elemIn, mlir::Type elemMid, mlir::Type elemOut) {
+  auto iIn = mlir::dyn_cast<mlir::IntegerType>(elemIn);
+  auto iMid = mlir::dyn_cast<mlir::IntegerType>(elemMid);
+  auto iOut = mlir::dyn_cast<mlir::IntegerType>(elemOut);
+  if (iIn && iMid && iOut) {
+    if (iIn.getSignedness() != iMid.getSignedness() || iMid.getSignedness() != iOut.getSignedness()) {
+      return false;
+    }
+    return iIn.getWidth() <= iMid.getWidth() && iMid.getWidth() <= iOut.getWidth();
+  }
+  auto fIn = mlir::dyn_cast<mlir::FloatType>(elemIn);
+  auto fMid = mlir::dyn_cast<mlir::FloatType>(elemMid);
+  auto fOut = mlir::dyn_cast<mlir::FloatType>(elemOut);
+  if (fIn && fMid && fOut) {
+    const unsigned wIn = fIn.getWidth();
+    const unsigned wMid = fMid.getWidth();
+    const unsigned wOut = fOut.getWidth();
+    if (wIn > wMid || wMid > wOut) {
+      return false;
+    }
+    if (wIn == wMid && elemIn != elemMid) {
+      return false;
+    }
+    if (wMid == wOut && elemMid != elemOut) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+mlir::LogicalResult CastOp::canonicalize(CastOp op, mlir::PatternRewriter &rewriter) {
+  mlir::Value input = op.getInput();
+  mlir::Value outerRes = op.getResult();
+  mlir::Operation *defOp = input.getDefiningOp();
+  if (!defOp) {
+    return mlir::failure();
+  }
+  auto innerCast = mlir::dyn_cast<CastOp>(defOp);
+  if (!innerCast) {
+    return mlir::failure();
+  }
+
+  mlir::Value innerIn = innerCast.getInput();
+  mlir::Value innerRes = innerCast.getResult();
+  mlir::Type elemIn = getRankedElementType(innerIn.getType());
+  mlir::Type elemMid = getRankedElementType(innerRes.getType());
+  mlir::Type elemOut = getRankedElementType(outerRes.getType());
+  if (!elemIn || !elemMid || !elemOut) {
+    return mlir::failure();
+  }
+
+  // Round-trip: result type equals x (narrowing in the middle is never covered by compose rule).
+  if (innerIn.getType() == outerRes.getType()) {
+    rewriter.replaceOp(op, innerIn);
+    if (innerCast->use_empty()) {
+      rewriter.eraseOp(innerCast);
+    }
+    return mlir::success();
+  }
+
+  // Redundant outer: inner result tensor type already equals outer result (e.g. f32→f16→f16).
+  // Not subsumed by canComposeWideningCasts when the first step narrows.
+  if (innerRes.getType() == outerRes.getType()) {
+    rewriter.replaceOp(op, innerRes);
+    return mlir::success();
+  }
+
+  // Widening-only composition: cast(cast(x, T1), T2) → cast(x, T2).
+  if (canComposeWideningCasts(elemIn, elemMid, elemOut)) {
+    auto fused = rewriter.create<CastOp>(op.getLoc(), innerIn, elemOut);
+    rewriter.replaceOp(op, fused.getResult());
+    if (innerCast->use_empty()) {
+      rewriter.eraseOp(innerCast);
+    }
+    return mlir::success();
+  }
+  return mlir::failure();
 }
 
 mlir::OpFoldResult CastOp::fold(FoldAdaptor adaptor) {
