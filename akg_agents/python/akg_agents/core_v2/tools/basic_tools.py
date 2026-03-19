@@ -69,8 +69,10 @@ def read_file(
     limit: int = None,
     encoding: str = "utf-8",
 ) -> Dict[str, Any]:
-    """读取文件内容（带行号）。
+    """读取文件内容。
 
+    返回原始文件内容（不添加行号和元信息头），通过 total_lines 和
+    truncation_hint 字段提供文件长度和截断信息。
     超长文件自动截断到 READ_FILE_MAX_LINES 行。
     二进制文件返回文件元信息而不是内容。
     """
@@ -114,19 +116,23 @@ def read_file(
                 lines = all_lines
                 line_offset = 1
 
-        numbered = [f"{line_offset + i:>5}| {line.rstrip()}" for i, line in enumerate(lines)]
-        content = "\n".join(numbered)
+        content = "\n".join(line.rstrip() for line in lines)
 
-        meta = f"[文件: {path.name}, 总行数: {total}]"
+        truncation_hint = ""
         if offset is not None:
             end_line = line_offset + len(lines) - 1
-            meta += f" [显示: 第{line_offset}-{end_line}行]"
+            truncation_hint = f" [显示: 第{line_offset}-{end_line}行]"
         elif total > READ_FILE_MAX_LINES and limit is None:
-            meta += (f" [已截断: 仅显示前{READ_FILE_MAX_LINES}行]"
-                     f" 提示: 使用 offset/limit 参数查看后续内容")
+            truncation_hint = (f" [已截断: 仅显示前{READ_FILE_MAX_LINES}行]"
+                               f" 提示: 使用 offset/limit 参数查看后续内容")
 
-        output = f"{meta}\n{content}"
-        return {"status": "success", "output": output, "error_information": ""}
+        return {
+            "status": "success",
+            "output": content,
+            "total_lines": total,
+            "truncation_hint": truncation_hint,
+            "error_information": ""
+        }
     except UnicodeDecodeError as e:
         return {"status": "error", "output": "",
                 "error_information": f"文件编码错误 ({encoding}): {str(e)}。尝试使用其他 encoding 参数。"}
@@ -733,13 +739,16 @@ def _register_all():
     ToolRegistry.register(
         name="read_file",
         description=(
-            "读取文件内容（带行号显示）。\n\n"
+            "读取文件内容。\n\n"
             "适用场景:\n"
             "- 查看代码文件、配置文件、日志文件等\n"
             "- 使用 offset/limit 查看大文件的指定区间\n\n"
             "超过 300 行自动截断（可用 offset/limit 翻页）。\n"
             "二进制文件返回文件元信息而不是内容。\n\n"
-            "输出: 带行号的文件内容 + 元信息（文件名、总行数、截断提示）。"
+            "输出字段:\n"
+            "- output: 文件原始内容\n"
+            "- total_lines: 文件总行数\n"
+            "- truncation_hint: 截断/区间提示（如有）"
         ),
         parameters={"type": "object", "properties": {
             "file_path": {"type": "string", "description": "文件路径（绝对或相对路径）"},
