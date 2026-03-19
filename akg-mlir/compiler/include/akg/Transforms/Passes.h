@@ -38,6 +38,7 @@ std::unique_ptr<Pass> createDumpShapeInfoPass();
 std::unique_ptr<Pass> createCopyAttributesToGpuPass();
 std::unique_ptr<Pass> createPromoteTempBufferPass();
 std::unique_ptr<Pass> createStoreLoadElimPass();
+std::unique_ptr<Pass> createAllocBufferShrinkPass();
 std::unique_ptr<Pass> createSymbolRemovalPass();
 std::unique_ptr<Pass> createInferSymbolicShapesPass();
 std::unique_ptr<OperationPass<ModuleOp>> createSymbolicRemovalPass();
