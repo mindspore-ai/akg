@@ -35,6 +35,12 @@ class Pass;
 // Pass creators
 //===----------------------------------------------------------------------===//
 
+/// Create the Torch dialect fusion pipeline pass (runs before convert-torch-to-mfuse).
+std::unique_ptr<Pass> createTorchFusionPass();
+
+/// Create a pass to fuse RoPE pattern on Torch dialect into torch.npu.npu_rotary_mul.
+std::unique_ptr<Pass> createTorchFuseRoPEPass();
+
 /// Create a pass to convert Torch operations to Mfuse dialect operations.
 std::unique_ptr<Pass> createConvertTorchToMfusePass();
 
