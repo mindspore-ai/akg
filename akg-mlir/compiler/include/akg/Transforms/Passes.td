@@ -67,6 +67,11 @@ def StoreLoadElim : Pass<"elim-store-load"> {
   let constructor = "mlir::createStoreLoadElimPass()";
 }
 
+def AllocBufferShrink : Pass<"alloc-buffer-shrink"> {
+  let summary = "Shrink alloc buffers to minimum required size based on loop access patterns";
+  let constructor = "mlir::createAllocBufferShrinkPass()";
+}
+
 def PromoteTempBuffer : Pass<"promote-temp-buffer"> {
   let summary = "Promote temp buffer to gpu's workgroup/private address";
   let constructor = "mlir::createPromoteTempBufferPass()";
