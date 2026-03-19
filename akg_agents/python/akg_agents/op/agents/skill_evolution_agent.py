@@ -480,7 +480,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
                     self._print("error_fix", f"无新增内容，跳过写入 ({elapsed:.1f}s)", log_lines)
                     result_meta: Dict[str, Any] = {
                         "status": "success", "skill_path": skill_path,
-                        "skill_name": SkillWriter.ERROR_FIX_SKILL_NAME,
+                        "skill_name": SkillWriter._error_fix_skill_name(metadata.get("dsl", "")),
                         "elapsed_seconds": round(elapsed, 1),
                         "mode": "error_fix",
                     }
@@ -509,7 +509,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
 
             result_meta_final: Dict[str, Any] = {
                 "status": "success", "skill_path": skill_path,
-                "skill_name": SkillWriter.ERROR_FIX_SKILL_NAME,
+                "skill_name": SkillWriter._error_fix_skill_name(metadata.get("dsl", "")),
                 "elapsed_seconds": round(elapsed, 1),
                 "mode": "error_fix",
             }

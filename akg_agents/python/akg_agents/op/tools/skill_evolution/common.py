@@ -298,8 +298,17 @@ class SkillWriter:
     def _default_skill_dir(self, dsl: str, skill_name: str) -> str:
         return os.path.join(get_default_evolved_dir(dsl), skill_name)
 
-    ERROR_FIX_SKILL_NAME = "error-fix"
-    ERROR_FIX_DESCRIPTION = "常见错误及修复方法，用于代码生成时避免同类问题"
+    @staticmethod
+    def _error_fix_skill_name(dsl: str) -> str:
+        dsl_key = dsl.replace("_", "-").lower().strip("-")
+        return f"{dsl_key}-error-fix" if dsl_key else "error-fix"
+
+    @staticmethod
+    def _error_fix_description(dsl: str) -> str:
+        dsl_key = dsl.replace("_", "-").lower().strip("-")
+        if dsl_key:
+            return f"{dsl_key}常见错误及修复方法，用于代码生成时避免同类问题"
+        return "常见错误及修复方法，用于代码生成时避免同类问题"
 
     def get_error_fix_skill_path(
         self,
@@ -308,10 +317,11 @@ class SkillWriter:
     ) -> str:
         """返回 error_fix SKILL.md 的目标路径（不创建文件）"""
         dsl = metadata.get("dsl", "")
+        skill_name = self._error_fix_skill_name(dsl)
         if output_dir:
-            skill_dir = os.path.join(output_dir, self.ERROR_FIX_SKILL_NAME)
+            skill_dir = os.path.join(output_dir, skill_name)
         else:
-            skill_dir = self._default_skill_dir(dsl, self.ERROR_FIX_SKILL_NAME)
+            skill_dir = self._default_skill_dir(dsl, skill_name)
         return os.path.join(skill_dir, "SKILL.md")
 
     @staticmethod
@@ -366,9 +376,9 @@ class SkillWriter:
             meta["dsl"] = dsl
 
         frontmatter = {
-            "name": self.ERROR_FIX_SKILL_NAME,
-            "description": self.ERROR_FIX_DESCRIPTION,
-            "category": "example",
+            "name": self._error_fix_skill_name(dsl),
+            "description": self._error_fix_description(dsl),
+            "category": "implementation",
             "version": "1.0.0",
             "metadata": meta,
         }
