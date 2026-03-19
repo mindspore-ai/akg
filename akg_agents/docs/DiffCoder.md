@@ -756,3 +756,59 @@ class DiffResult:
 | E：行范围编辑 | 中 | 低 | 1 周内 | 作为 search/replace 的 fallback |
 
 **建议推进顺序**：D（反馈增强）→ 12.1 的改进项 → A（Semantic Edit 调研）→ C（长期关注）
+
+## 13. 实现进度表
+
+> **说明**：本项目实际实现命名为 **FixCodeGen**（而非 DiffCoder），集成在现有 CoderOnlyWorkflow 中，由 Conductor 决策路由到 `coder`（完全重写）或 `fix_code_gen`（增量修复）。
+
+### 13.1 核心组件实现状态
+
+| 设计文档章节 | 设计要素 | 实现状态 | 实现文件 | 备注 |
+|------------|---------|---------|---------|------|
+| 3.1 | `Modification` 数据类 | ✅ 已完成 | `op/utils/diff_utils.py` | MVP 版本含 `old_string`, `new_string`, `reason` |
+| 3.1 | `Modification.replace_all` | ❌ 待实现 | — | 留给实习生 |
+| 3.1 | `Modification.anchor` | ❌ 待实现 | — | 留给实习生 |
+| — | `DiffResult` 数据类 | ✅ 已完成 | `op/utils/diff_utils.py` | 使用 `field(default_factory=list)` |
+| 4.1 | L1 精确匹配 | ✅ 已完成 | `op/utils/diff_utils.py` → `CodeMatcher.exact_match` | |
+| 4.1 | L2 行级 trim 匹配 | ✅ 已完成 | `op/utils/diff_utils.py` → `CodeMatcher.trimmed_line_match` | |
+| 4.1 | L3 空白规范化匹配 | ❌ 待实现 | — | 留给实习生 |
+| 4.1 | L4 模糊匹配 | ❌ 待实现 | — | 留给实习生 |
+| 4.4 | 模糊匹配置信度检查 | ❌ 待实现 | — | 依赖 L4 |
+| — | `DiffApplier` 差异应用器 | ✅ 已完成 | `op/utils/diff_utils.py` → `DiffApplier` | 含 unified diff 生成 |
+| — | `parse_modifications` 解析器 | ✅ 已完成 | `op/utils/diff_utils.py` | 支持 JSON / markdown 包裹容错 |
+| 9.2 | Prompt 模板 | ✅ 已完成 | `op/resources/prompts/fix_code_gen/edit.j2` | |
+| 10 | FixCodeGen 节点 | ✅ 已完成 | `op/langgraph_op/nodes.py` → `NodeFactory.create_fix_code_gen_node` | |
+| 7.4 | State 字段扩展 | ✅ 已完成 | `op/langgraph_op/state.py` | `fix_code_gen_success/diff/message` |
+| 7.4 | Conductor 路由扩展 | ✅ 已完成 | `op/langgraph_op/routers.py` | `enable_fix_code_gen` 参数 |
+| 7.4 | Conductor Prompt 调整 | ✅ 已完成 | `op/resources/prompts/conductor/analyze.j2` | A1/A2 分类引导 |
+| 7.1 | Workflow 集成 | ✅ 已完成 | `op/workflows/coder_only_workflow.py` | 默认启用 fix_code_gen |
+
+### 13.2 测试实现状态
+
+| 测试类型 | 实现状态 | 文件 | 覆盖内容 |
+|---------|---------|------|---------|
+| UT — CodeMatcher | ✅ 已完成 | `tests/ut/test_fix_code_gen.py` | L1/L2 匹配、边界情况、降级逻辑 |
+| UT — DiffApplier | ✅ 已完成 | `tests/ut/test_fix_code_gen.py` | 单/多修改、部分失败、空编辑检测 |
+| UT — parse_modifications | ✅ 已完成 | `tests/ut/test_fix_code_gen.py` | JSON / markdown 包裹 / 格式异常 |
+| UT — FixCodeGen 节点 (Mock) | ✅ 已完成 | `tests/ut/test_fix_code_gen.py` | Mock LLM 验证 State 更新 |
+| ST — 真实 LLM 调用 | ✅ 已完成 | `tests/op/st/test_fix_code_gen.py` | 修复缺少 import torch 的代码 |
+| 集成测试 — 端到端工作流 | ❌ 待实现 | — | 留给实习生 |
+
+### 13.3 待实现功能（按优先级排序，可分配给实习生）
+
+| 优先级 | 功能 | 对应设计文档章节 | 难度 | 负责人 |
+|--------|------|----------------|------|--------|
+| 高 | `replace_all` 全局替换 | 5.1 | 低 | |
+| 高 | `anchor` 锚点消歧 | 5.3 | 中 | |
+| 高 | L3 空白规范化匹配 | 4.2 | 中 | |
+| 高 | L4 模糊匹配 + 置信度检查 | 4.2 + 4.4 | 中 | |
+| 中 | 匹配失败信息回传 LLM 重试 | 8.2 | 高 | |
+| 中 | Modification 冲突预检测 | 6.3 | 中 | |
+| 中 | 匹配级别追踪（可观测性） | 12.3.5 | 低 | |
+| 中 | 模糊匹配窗口行数 +/-1 容差 | 12.3.2 | 低 | |
+| 中 | 错误日志截断策略（保留头尾） | 12.3.4 | 低 | |
+| 低 | Levenshtein 性能优化 | 12.3.1 | 中 | |
+| 低 | 记录 LLM 原始输出到 DiffResult | 12.3.8 | 低 | |
+| 低 | 增强反馈循环（RGym 模式） | 12.2 方案 D | 高 | |
+| 低 | 行范围编辑 fallback | 12.2 方案 E | 高 | |
+| 低 | 端到端集成测试 | 11 | 高 | |
