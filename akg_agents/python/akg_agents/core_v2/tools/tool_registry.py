@@ -223,10 +223,11 @@ class ToolRegistry:
             标准结果字典 {"status", "output", "error_information", ...}
         """
         if name not in cls._tools:
+            display_name = name if len(name) <= 60 else name[:60] + "..."
             return {
                 "status": "error",
                 "output": "",
-                "error_information": f"未知工具: {name}，可用: {cls.list_names()}",
+                "error_information": f"未知工具: '{display_name}'，请检查工具名拼写。可用工具: {cls.list_names()}",
             }
 
         tool = cls._tools[name]
@@ -259,10 +260,11 @@ class ToolRegistry:
             标准结果字典 {"status", "output", "error_information", ...}
         """
         if name not in cls._tools:
+            display_name = name if len(name) <= 60 else name[:60] + "..."
             return {
                 "status": "error",
                 "output": "",
-                "error_information": f"未知工具: {name}，可用: {cls.list_names()}",
+                "error_information": f"未知工具: '{display_name}'，请检查工具名拼写。可用工具: {cls.list_names()}",
             }
 
         tool = cls._tools[name]
