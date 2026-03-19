@@ -213,7 +213,7 @@ Extraction: failed_code=step8, success_code=step11, error_log=step8's error
                      → read failed/successful code + error log → full diff (untruncated)
 2. LLM Analysis   — Fix cases (error_log + diff) → generate error fix experience
 3. LLM Dedup      — If SKILL.md exists, inject existing + new content; LLM outputs only non-redundant items
-4. Writer          — First run creates `error-fix/SKILL.md`; later runs append deduplicated incremental content
+4. Writer          — First run creates `{dsl}-error-fix/SKILL.md`; later runs append deduplicated incremental content
 ```
 
 ### 4.3 Collector
@@ -255,14 +255,14 @@ LLM tasks:
 
 ### 4.5 Dedup and Writer
 
-**Dedup** (`dedup_error_fix.j2`): When `error-fix/SKILL.md` already exists, both the existing body and newly generated content are injected into LLM. The LLM determines which items are new and outputs only the non-redundant incremental content. If everything is duplicate, it outputs "无新增内容" and writing is skipped.
+**Dedup** (`dedup_error_fix.j2`): When `{dsl}-error-fix/SKILL.md` already exists, both the existing body and newly generated content are injected into LLM. The LLM determines which items are new and outputs only the non-redundant incremental content. If everything is duplicate, it outputs "无新增内容" and writing is skipped.
 
 **Writer** (`SkillWriter.write_error_fix`):
 
-- Fixed skill directory name: `error-fix`
-- Default output path: `op/resources/skills/{dsl}/evolved/error-fix/SKILL.md`
-- If `--output-dir DIR` is provided: `DIR/error-fix/SKILL.md`
-- If the file does not exist, create it with fixed frontmatter (`name: error-fix`, `category: example`, `metadata.source: error_fix`)
+- Skill directory name includes DSL prefix: `{dsl}-error-fix` (e.g. `triton-cuda-error-fix`)
+- Default output path: `op/resources/skills/{dsl}/evolved/{dsl}-error-fix/SKILL.md`
+- If `--output-dir DIR` is provided: `DIR/{dsl}-error-fix/SKILL.md`
+- If the file does not exist, create it with frontmatter (`name: {dsl}-error-fix`, `description: {dsl}常见错误及修复方法...`, `category: implementation`, `metadata.source: error_fix`)
 - If the file already exists, append the deduplicated incremental content (preserving existing frontmatter and body)
 
 ```
@@ -286,7 +286,7 @@ Injecting all skill contents into a single LLM call would overflow the context w
 ### 5.2 Pipeline
 
 ```
-1. scan            — Scan evolved/ for all SKILL.md (excluding error-fix/ and .archive/)
+1. scan            — Scan evolved/ for all SKILL.md (excluding *-error-fix/ and .archive/)
 2. classify        — Extract name + description → LLM clusters by theme (summaries only, no full content)
 3. merge per-cluster — For each cluster with >=2 skills, inject full content for LLM to merge and deduplicate
                        Large clusters (>5) are auto-split into sub-batches with rolling merge

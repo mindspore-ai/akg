@@ -213,7 +213,7 @@ Task 验证序列: step2(fail) → step5(fail) → step8(fail) → step11(pass)
                      → 读取失败/成功代码 + 错误日志 → 完整 diff（不截断）
 2. LLM 分析       — 修复案例（error_log + diff）→ 生成错误修复经验
 3. LLM 去重       — 若已有 SKILL.md，注入已有内容和新生成内容，LLM 只输出不重复的新增条目
-4. Writer          — 首次运行创建 `error-fix/SKILL.md`，后续运行追加去重后的增量内容
+4. Writer          — 首次运行创建 `{dsl}-error-fix/SKILL.md`，后续运行追加去重后的增量内容
 ```
 
 ### 4.3 数据收集
@@ -255,14 +255,14 @@ LLM 任务：
 
 ### 4.5 去重与写入
 
-**去重**（`dedup_error_fix.j2`）：当已有 `error-fix/SKILL.md` 时，将已有正文和新生成内容一起注入 LLM，让 LLM 判断哪些条目是新的、哪些已存在。LLM 只输出不重复的增量内容。如果全部重复，输出"无新增内容"，跳过写入。
+**去重**（`dedup_error_fix.j2`）：当已有 `{dsl}-error-fix/SKILL.md` 时，将已有正文和新生成内容一起注入 LLM，让 LLM 判断哪些条目是新的、哪些已存在。LLM 只输出不重复的增量内容。如果全部重复，输出"无新增内容"，跳过写入。
 
 **写入**（`SkillWriter.write_error_fix`）：
 
-- 固定 skill 目录名：`error-fix`
-- 默认输出路径：`op/resources/skills/{dsl}/evolved/error-fix/SKILL.md`
-- 如果传入 `--output-dir DIR`：输出到 `DIR/error-fix/SKILL.md`
-- 文件不存在时新建（含固定 frontmatter：`name: error-fix`、`category: example`、`metadata.source: error_fix`）
+- skill 目录名带 DSL 前缀：`{dsl}-error-fix`（如 `triton-cuda-error-fix`）
+- 默认输出路径：`op/resources/skills/{dsl}/evolved/{dsl}-error-fix/SKILL.md`
+- 如果传入 `--output-dir DIR`：输出到 `DIR/{dsl}-error-fix/SKILL.md`
+- 文件不存在时新建（含 frontmatter：`name: {dsl}-error-fix`、`description: {dsl}常见错误及修复方法...`、`category: implementation`、`metadata.source: error_fix`）
 - 文件已存在时追加去重后的增量内容（保留原有 frontmatter 和正文）
 
 ```
@@ -286,7 +286,7 @@ LLM 任务：
 ### 5.2 流程
 
 ```
-1. scan            — 扫描 evolved/ 下所有 SKILL.md（排除 error-fix/ 和 .archive/）
+1. scan            — 扫描 evolved/ 下所有 SKILL.md（排除 *-error-fix/ 和 .archive/）
 2. classify        — 提取 name + description → LLM 按优化主题聚类（仅摘要，不传全文）
 3. merge per-cluster — 对每个 >=2 个 skill 的簇，传入全文让 LLM 合并去重
                        大簇（>5 个）自动拆分为子批次，滚动合并
