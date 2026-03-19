@@ -60,29 +60,32 @@ namespace mlir {
 
 #define DEBUG_TYPE "akg-loop-fusion"
 
+namespace mlir {
 namespace {
-struct AKGLoopFusion : public mlir::impl::AKGLoopFusionBase<AKGLoopFusion> {
+
+struct AKGLoopFusion : public impl::AKGLoopFusionBase<AKGLoopFusion> {
   AKGLoopFusion() {}
 
   void runOnOperation() override;
 
  private:
-  void runOnBlock(mlir::Block *block, mlir::OperatorTemplate &curOpTemplate);
+  void runOnBlock(Block *block, OperatorTemplate &curOpTemplate);
   void runPreProcess();
+  void runOnLoopFusion();
+  void runPostProcess();
 
-  void replaceDimWithPrimes(mlir::func::FuncOp funcOp);
-  void restoreDimFromPrimes(mlir::func::FuncOp funcOp);
-  void runOnLoopFusion(mlir::func::FuncOp funcOp);
-  void moveAllocBeforeAffineFor(mlir::func::FuncOp funcOp);
+  void replaceDimWithPrimes(func::FuncOp funcOp);
+  void restoreDimFromPrimes();
+  void repairReductionLoopAttrs(func::FuncOp funcOp);
+  void moveAllocBeforeAffineFor(func::FuncOp funcOp);
 
-  std::optional<llvm::SmallVector<std::string>> getSymShapeAttrFromValue(mlir::Value source);
-  std::optional<int64_t> getConstantDimIndex(mlir::Value dimIndex);
-  llvm::SmallVector<int64_t> getDynamicDimIndicesOfValue(mlir::Value v);
-  void collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
-                                     llvm::StringMap<llvm::SmallVector<mlir::Value>> &axisToDimValues);
+  std::optional<SmallVector<std::string>> getSymShapeAttrFromValue(Value source);
+  std::optional<int64_t> getConstantDimIndex(Value dimIndex);
+  SmallVector<int64_t> getDynamicDimIndicesOfValue(Value v);
+  void collectDimOperationsFromLoops(func::FuncOp funcOp, llvm::StringMap<SmallVector<Value>> &axisToDimValues);
 
   // Map: prime constant -> representative dim value (first dim in the group)
-  llvm::DenseMap<mlir::Value, mlir::Value> primeToDimMap;
+  llvm::DenseMap<Value, Value> primeToDimMap;
   // Whether to print fusion information
   bool printFusionInfo{false};
   // Create new symbol
@@ -93,19 +96,18 @@ struct AKGLoopFusion : public mlir::impl::AKGLoopFusionBase<AKGLoopFusion> {
                                         1000099, 1000117, 1000121, 1000133, 1000139};
   static constexpr size_t kNumPrimes = sizeof(kPrimes) / sizeof(kPrimes[0]);
 };
-}  // namespace
 
 int64_t AKGLoopFusion::newSymbolCount = 0;
 
 // Trace back through operations to find the SymShapeAttr for a Value.
 // Handles block arguments, bufferization.to_memref, etc.
-std::optional<llvm::SmallVector<std::string>> AKGLoopFusion::getSymShapeAttrFromValue(mlir::Value source) {
+std::optional<SmallVector<std::string>> AKGLoopFusion::getSymShapeAttrFromValue(Value source) {
   // Get SymShapeAttr from a RankedTensorType.
-  auto getSymShape = [](mlir::Type type) -> std::optional<llvm::SmallVector<std::string>> {
+  auto getSymShape = [](Type type) -> std::optional<SmallVector<std::string>> {
     // RankedTensorType stores SymShapeAttr in its encoding
     // MemRefType stores SymShapeAttr in its memorySpace
-    if (mlir::isa<mlir::RankedTensorType, mlir::MemRefType>(type)) {
-      return mlir::SymbolicShapeAnalysis::getInstance().getSymbolicShape(type);
+    if (isa<RankedTensorType, MemRefType>(type)) {
+      return SymbolicShapeAnalysis::getInstance().getSymbolicShape(type);
     }
     return std::nullopt;
   };
@@ -116,9 +118,9 @@ std::optional<llvm::SmallVector<std::string>> AKGLoopFusion::getSymShapeAttrFrom
   }
 
   // Case 2: Block argument (e.g., function argument)
-  if (auto blockArg = mlir::dyn_cast<mlir::BlockArgument>(source)) {
-    if (auto funcOp = mlir::dyn_cast<mlir::func::FuncOp>(blockArg.getOwner()->getParentOp())) {
-      mlir::Type argType = funcOp.getFunctionType().getInput(blockArg.getArgNumber());
+  if (auto blockArg = dyn_cast<BlockArgument>(source)) {
+    if (auto funcOp = dyn_cast<func::FuncOp>(blockArg.getOwner()->getParentOp())) {
+      Type argType = funcOp.getFunctionType().getInput(blockArg.getArgNumber());
       return getSymShape(argType);
     }
     return std::nullopt;
@@ -126,8 +128,8 @@ std::optional<llvm::SmallVector<std::string>> AKGLoopFusion::getSymShapeAttrFrom
 
   // Case 3: MemRef created from tensor via bufferization.to_memref
   if (auto *defOp = source.getDefiningOp()) {
-    if (auto toMemref = mlir::dyn_cast<mlir::bufferization::ToMemrefOp>(defOp)) {
-      mlir::Value tensor = toMemref.getTensor();
+    if (auto toMemref = dyn_cast<bufferization::ToMemrefOp>(defOp)) {
+      Value tensor = toMemref.getTensor();
       if (auto symShape = getSymShape(tensor.getType())) {
         return symShape;
       }
@@ -140,42 +142,42 @@ std::optional<llvm::SmallVector<std::string>> AKGLoopFusion::getSymShapeAttrFrom
 }
 
 // Extract constant dimension index from a dim operation's index operand.
-std::optional<int64_t> AKGLoopFusion::getConstantDimIndex(mlir::Value dimIndex) {
-  if (auto constOp = dimIndex.getDefiningOp<mlir::arith::ConstantIndexOp>()) {
+std::optional<int64_t> AKGLoopFusion::getConstantDimIndex(Value dimIndex) {
+  if (auto constOp = dimIndex.getDefiningOp<arith::ConstantIndexOp>()) {
     return constOp.value();
   }
-  if (auto constOp = dimIndex.getDefiningOp<mlir::arith::ConstantOp>()) {
-    if (auto intAttr = mlir::dyn_cast<mlir::IntegerAttr>(constOp.getValue())) {
+  if (auto constOp = dimIndex.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
       return intAttr.getInt();
     }
   }
   return std::nullopt;
 }
 
-llvm::SmallVector<int64_t> AKGLoopFusion::getDynamicDimIndicesOfValue(mlir::Value v) {
-  llvm::SmallVector<int64_t> dynDims;
-  auto st = mlir::dyn_cast<mlir::ShapedType>(v.getType());
+SmallVector<int64_t> AKGLoopFusion::getDynamicDimIndicesOfValue(Value v) {
+  SmallVector<int64_t> dynDims;
+  auto st = dyn_cast<ShapedType>(v.getType());
   if (!st || !st.hasRank()) return dynDims;
 
   auto shape = st.getShape();
   for (int64_t i = 0; i < static_cast<int64_t>(shape.size()); ++i) {
-    if (shape[i] == mlir::ShapedType::kDynamic) dynDims.push_back(i);
+    if (shape[i] == ShapedType::kDynamic) dynDims.push_back(i);
   }
   return dynDims;
 }
 
 // Collect dim operations from affine.for loop bounds and group them by axis.
-void AKGLoopFusion::collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
-                                                  llvm::StringMap<llvm::SmallVector<mlir::Value>> &axisToDimValues) {
-  funcOp.walk([&](mlir::affine::AffineForOp forOp) {
+void AKGLoopFusion::collectDimOperationsFromLoops(func::FuncOp funcOp,
+                                                  llvm::StringMap<SmallVector<Value>> &axisToDimValues) {
+  funcOp.walk([&](affine::AffineForOp forOp) {
     // Process a single operand from loop bounds
-    auto processBoundOperand = [&](mlir::Value operand) {
+    auto processBoundOperand = [&](Value operand) {
       auto *defOp = operand.getDefiningOp();
 
-      if (defOp && mlir::isa<mlir::memref::DimOp>(defOp)) {
+      if (defOp && isa<memref::DimOp>(defOp)) {
         // Extract source and dimension index from dim operation
-        mlir::Value source = defOp->getOperand(0);
-        mlir::Value dimIndexValue = defOp->getOperand(1);
+        Value source = defOp->getOperand(0);
+        Value dimIndexValue = defOp->getOperand(1);
 
         auto constIndex = getConstantDimIndex(dimIndexValue);
         if (!constIndex.has_value()) return;  // Skip non-constant dimension index
@@ -191,11 +193,11 @@ void AKGLoopFusion::collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
         std::string axisKey = (*symShape)[*constIndex];
         axisToDimValues[axisKey].push_back(operand);
       } else {
-        mlir::Value useOp;
+        Value useOp;
         int64_t userIndex;
         for (auto &use : defOp->getResult(0).getUses()) {
-          mlir::Operation *userOp = use.getOwner();
-          if (auto allocOp = mlir::dyn_cast<mlir::memref::AllocOp>(userOp)) {
+          Operation *userOp = use.getOwner();
+          if (auto allocOp = dyn_cast<memref::AllocOp>(userOp)) {
             useOp = allocOp.getResult();
             userIndex = static_cast<int64_t>(use.getOperandNumber());
             break;
@@ -226,10 +228,10 @@ void AKGLoopFusion::collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
     };
 
     // Process both upper and lower bound operands
-    for (mlir::Value operand : forOp.getUpperBoundOperands()) {
+    for (Value operand : forOp.getUpperBoundOperands()) {
       processBoundOperand(operand);
     }
-    for (mlir::Value operand : forOp.getLowerBoundOperands()) {
+    for (Value operand : forOp.getLowerBoundOperands()) {
       processBoundOperand(operand);
     }
   });
@@ -237,9 +239,9 @@ void AKGLoopFusion::collectDimOperationsFromLoops(mlir::func::FuncOp funcOp,
 
 // Replace dynamic dim values with large prime constants before fusion.
 // This allows the fusion analysis to treat loops with the same symbolic dimension as having identical bounds.
-void AKGLoopFusion::replaceDimWithPrimes(mlir::func::FuncOp funcOp) {
+void AKGLoopFusion::replaceDimWithPrimes(func::FuncOp funcOp) {
   // Step 1: Collect dim operations and group by axis
-  llvm::StringMap<llvm::SmallVector<mlir::Value>> axisToDimValues;
+  llvm::StringMap<SmallVector<Value>> axisToDimValues;
   collectDimOperationsFromLoops(funcOp, axisToDimValues);
 
   if (axisToDimValues.empty()) {
@@ -247,7 +249,7 @@ void AKGLoopFusion::replaceDimWithPrimes(mlir::func::FuncOp funcOp) {
   }
 
   // Step 2: Replace each axis group with a unique prime constant
-  mlir::OpBuilder builder(funcOp.getContext());
+  OpBuilder builder(funcOp.getContext());
   size_t primeIndex = 0;
 
   for (auto &entry : axisToDimValues) {
@@ -256,12 +258,10 @@ void AKGLoopFusion::replaceDimWithPrimes(mlir::func::FuncOp funcOp) {
       break;
     }
 
-    llvm::StringRef axisKey = entry.getKey();
     auto &dimValues = entry.getValue();
-
     // Select first dim as representative (will be used when restoring)
-    mlir::Value earliestDim;
-    for (mlir::Value dimVal : dimValues) {
+    Value earliestDim;
+    for (Value dimVal : dimValues) {
       if (!earliestDim) {
         earliestDim = dimVal;
         continue;
@@ -282,20 +282,19 @@ void AKGLoopFusion::replaceDimWithPrimes(mlir::func::FuncOp funcOp) {
           earliestDim = dimVal;
         }
       } else {
-        llvm::errs() << "Dim ops for the same axisKey are in different blocks\n";
         return;
       }
     }
 
-    mlir::Value representativeDim = earliestDim ? earliestDim : dimValues.front();
+    Value representativeDim = earliestDim ? earliestDim : dimValues.front();
     builder.setInsertionPointAfterValue(representativeDim);
-    auto primeConst = builder.create<mlir::arith::ConstantIndexOp>(representativeDim.getLoc(), kPrimes[primeIndex]);
+    auto primeConst = builder.create<arith::ConstantIndexOp>(representativeDim.getLoc(), kPrimes[primeIndex]);
 
     // Directly map prime constant to representative dim
     primeToDimMap[primeConst] = representativeDim;
 
     // Replace all dim values in this group with the same prime
-    for (mlir::Value dimValue : dimValues) {
+    for (Value dimValue : dimValues) {
       dimValue.replaceAllUsesWith(primeConst);
     }
 
@@ -305,13 +304,13 @@ void AKGLoopFusion::replaceDimWithPrimes(mlir::func::FuncOp funcOp) {
 
 // Restore the original dim values after fusion is complete.
 // All dim values in the same axis group are replaced with a single representative dim value.
-void AKGLoopFusion::restoreDimFromPrimes(mlir::func::FuncOp funcOp) {
+void AKGLoopFusion::restoreDimFromPrimes() {
   // Replace each prime with its corresponding representative dim
   for (auto &[primeConst, representativeDim] : primeToDimMap) {
     primeConst.replaceAllUsesWith(representativeDim);
 
     // Clean up unused prime constant
-    if (auto constOp = primeConst.getDefiningOp<mlir::arith::ConstantIndexOp>()) {
+    if (auto constOp = primeConst.getDefiningOp<arith::ConstantIndexOp>()) {
       if (constOp.use_empty()) {
         constOp.erase();
       }
@@ -322,9 +321,9 @@ void AKGLoopFusion::restoreDimFromPrimes(mlir::func::FuncOp funcOp) {
   primeToDimMap.clear();
 }
 
-void AKGLoopFusion::runOnBlock(mlir::Block *block, mlir::OperatorTemplate &curOpTemplate) {
+void AKGLoopFusion::runOnBlock(Block *block, OperatorTemplate &curOpTemplate) {
   // build dependence graph
-  auto dependenceGraph = mlir::akg::MemRefDependenceGraphForFusion(block);
+  auto dependenceGraph = akg::MemRefDependenceGraphForFusion(block);
   if (!dependenceGraph.init()) {
     return;
   }
@@ -335,8 +334,8 @@ void AKGLoopFusion::runOnBlock(mlir::Block *block, mlir::OperatorTemplate &curOp
     dependenceGraph.dump();
   }
 
-  mlir::func::FuncOp funcOp = getOperation();
-  mlir::akg::FusionAnalyzer analyzer(dependenceGraph, funcOp);
+  func::FuncOp funcOp = getOperation();
+  akg::FusionAnalyzer analyzer(dependenceGraph, funcOp);
   // Plan the fusion strategy based on analysis
   analyzer.plan();
   if (analyzer.fusionPlans.empty()) {
@@ -347,7 +346,7 @@ void AKGLoopFusion::runOnBlock(mlir::Block *block, mlir::OperatorTemplate &curOp
     analyzer.dump();
   }
 
-  mlir::akg::FusionCodeGenHelper codegenerator = mlir::akg::FusionCodeGenHelper(dependenceGraph);
+  akg::FusionCodeGenHelper codegenerator = akg::FusionCodeGenHelper(dependenceGraph);
 
   // Process each fusion plan
   for (size_t i = 0; i < analyzer.fusionPlans.size(); ++i) {
@@ -382,8 +381,8 @@ void AKGLoopFusion::runOnBlock(mlir::Block *block, mlir::OperatorTemplate &curOp
     }
 
     // Get source and destination affine::AffineForOp operations from the dependence graph
-    auto srcFor = mlir::dyn_cast<mlir::affine::AffineForOp>(dependenceGraph.getNode(actualSrcId)->op);
-    auto dstFor = mlir::dyn_cast<mlir::affine::AffineForOp>(dependenceGraph.getNode(actualDstId)->op);
+    auto srcFor = dyn_cast<affine::AffineForOp>(dependenceGraph.getNode(actualSrcId)->op);
+    auto dstFor = dyn_cast<affine::AffineForOp>(dependenceGraph.getNode(actualDstId)->op);
 
     if (srcFor && dstFor) {
       if (plan.fusionType == "V") {
@@ -403,33 +402,29 @@ void AKGLoopFusion::runOnBlock(mlir::Block *block, mlir::OperatorTemplate &curOp
   }
 }
 
-void AKGLoopFusion::moveAllocBeforeAffineFor(mlir::func::FuncOp funcOp) {
-  mlir::Block &block = funcOp.getBody().front();
+void AKGLoopFusion::moveAllocBeforeAffineFor(func::FuncOp funcOp) {
+  Block &block = funcOp.getBody().front();
 
-  mlir::Operation *firstAffineFor = nullptr;
-  for (mlir::Operation &op : block) {
-    if (llvm::isa<mlir::affine::AffineForOp>(&op)) {
+  Operation *firstAffineFor = nullptr;
+  for (Operation &op : block) {
+    if (isa<affine::AffineForOp>(&op)) {
       firstAffineFor = &op;
       break;
     }
   }
 
   if (!firstAffineFor) {
-    llvm::errs() << "[AKG] moveAllocBeforeAffineFor: no top-level affine.for found in func "
-                 << funcOp.getName() << "\n";
+    llvm::errs() << "[AKG] moveAllocBeforeAffineFor: no top-level affine.for found in func " << funcOp.getName()
+                 << "\n";
     return;
   }
 
+  SmallVector<Operation *, 8> toMove;
 
-  llvm::SmallVector<mlir::Operation *, 8> toMove;
-
-  for (auto it = std::next(firstAffineFor->getIterator()), e = block.end();
-       it != e; ++it) {
-    mlir::Operation *op = &*it;
-    if (llvm::isa<mlir::memref::AllocOp, mlir::memref::SubViewOp,
-      mlir::memref::ReshapeOp, mlir::memref::ExpandShapeOp,
-      mlir::memref::CollapseShapeOp, mlir::memref::ReinterpretCastOp,
-      mlir::memref::MemorySpaceCastOp>(op)) {
+  for (auto it = std::next(firstAffineFor->getIterator()), e = block.end(); it != e; ++it) {
+    Operation *op = &*it;
+    if (isa<memref::AllocOp, memref::SubViewOp, memref::ReshapeOp, memref::ExpandShapeOp, memref::CollapseShapeOp,
+            memref::ReinterpretCastOp, memref::MemorySpaceCastOp>(op)) {
       toMove.push_back(op);
     }
   }
@@ -439,7 +434,7 @@ void AKGLoopFusion::moveAllocBeforeAffineFor(mlir::func::FuncOp funcOp) {
     return;
   }
 
-  for (mlir::Operation *op : toMove) {
+  for (Operation *op : toMove) {
     op->moveBefore(firstAffineFor);
   }
 }
@@ -447,7 +442,7 @@ void AKGLoopFusion::moveAllocBeforeAffineFor(mlir::func::FuncOp funcOp) {
 /// Preprocessing step that performs loop interchange optimization for reduction operations.
 /// Identifies nested loops with reduction axes and interchanges them to improve cache performance.
 void AKGLoopFusion::runPreProcess() {
-  mlir::func::FuncOp funcOp = getOperation();
+  func::FuncOp funcOp = getOperation();
 
   moveAllocBeforeAffineFor(funcOp);
 
@@ -456,21 +451,51 @@ void AKGLoopFusion::runPreProcess() {
 }
 
 void AKGLoopFusion::runOnOperation() {
-  auto funcOp = getOperation();
-
   runPreProcess();
-
-  runOnLoopFusion(funcOp);
-
-  // Restore original dim values after fusion
-  restoreDimFromPrimes(funcOp);
+  runOnLoopFusion();
+  runPostProcess();
 }
 
-void AKGLoopFusion::runOnLoopFusion(mlir::func::FuncOp funcOp) {
-  mlir::OperatorTemplate curOpTemplate = mlir::OperatorTemplate::Default;
-  for (mlir::Region &region : funcOp->getRegions()) {
-    for (mlir::Block &block : region.getBlocks()) {
-      mlir::OperatorTemplate opTemplate;
+void AKGLoopFusion::runPostProcess() {
+  auto funcOp = getOperation();
+  repairReductionLoopAttrs(funcOp);
+  restoreDimFromPrimes();
+}
+
+// After fusion, a reduction loop body may have been merged into a non-reduction
+// loop, causing the {reduction} attribute to be lost.
+void AKGLoopFusion::repairReductionLoopAttrs(func::FuncOp funcOp) {
+  if (CommonUtils::getOperatorType(funcOp) != OperatorTemplate::Reduction) {
+    return;
+  }
+
+  funcOp.walk([&](Operation *op) {
+    if (!op->hasAttr(kReductionTypeStr)) return;
+    auto axesAttr = op->getAttrOfType<ArrayAttr>(kReductionAxesStr);
+    if (!axesAttr) return;
+
+    SmallVector<affine::AffineForOp, 4> enclosingLoops;
+    affine::getAffineForIVs(*op, &enclosingLoops);
+
+    for (auto axis : axesAttr) {
+      auto idx = cast<IntegerAttr>(axis).getInt();
+      if (idx < 0 || idx >= static_cast<int64_t>(enclosingLoops.size())) continue;
+      auto forOp = enclosingLoops[idx];
+      if (!forOp->hasAttr(kReductionLoopAttr)) {
+        OpBuilder builder(forOp.getContext());
+        forOp->setAttr(kReductionLoopAttr, builder.getUnitAttr());
+      }
+    }
+  });
+}
+
+void AKGLoopFusion::runOnLoopFusion() {
+  auto funcOp = getOperation();
+
+  OperatorTemplate curOpTemplate = OperatorTemplate::Default;
+  for (Region &region : funcOp->getRegions()) {
+    for (Block &block : region.getBlocks()) {
+      OperatorTemplate opTemplate;
       runOnBlock(&block, opTemplate);
       if (opTemplate > curOpTemplate) {
         curOpTemplate = opTemplate;
@@ -479,15 +504,17 @@ void AKGLoopFusion::runOnLoopFusion(mlir::func::FuncOp funcOp) {
   }
 
   // modify func operatorType
-  auto iter = mlir::operatorTemplateMap.find((int)curOpTemplate);
-  if (iter == mlir::operatorTemplateMap.end()) {
+  auto iter = operatorTemplateMap.find((int)curOpTemplate);
+  if (iter == operatorTemplateMap.end()) {
     return;
   }
-  mlir::OpBuilder builder(funcOp.getContext());
-  mlir::Attribute opType = builder.getStringAttr(iter->second);
-  funcOp->setAttr(mlir::kOperatorTypeStr, opType);
+  OpBuilder builder(funcOp.getContext());
+  Attribute opType = builder.getStringAttr(iter->second);
+  funcOp->setAttr(kOperatorTypeStr, opType);
 }
 
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createAKGLoopFusionPass() {
-  return std::make_unique<AKGLoopFusion>();
-}
+}  // namespace
+
+std::unique_ptr<OperationPass<func::FuncOp>> createAKGLoopFusionPass() { return std::make_unique<AKGLoopFusion>(); }
+
+}  // namespace mlir

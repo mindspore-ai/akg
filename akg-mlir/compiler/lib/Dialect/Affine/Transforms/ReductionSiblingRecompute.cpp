@@ -20,6 +20,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -51,9 +53,8 @@ struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBas
  private:
   using ValueMap = llvm::DenseMap<Value, Value>;
   struct FuncScanInfo {
-    SmallVector<affine::AffineForOp> outerLoops;
     SmallVector<memref::AllocOp> allocs;
-    llvm::DenseSet<Value> allocResults;
+    static bool isLocalAlloc(Value memref) { return memref && memref.getDefiningOp<memref::AllocOp>(); }
   };
   struct RecomputeCandidate {
     affine::AffineForOp srcLoop;
@@ -61,29 +62,27 @@ struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBas
     affine::AffineLoadOp dstLoad;
     affine::AffineStoreOp srcStore;
   };
+  FuncScanInfo scanInfo = {};
 
+  // Returns true if store and load target the same memref and indices (same block).
   static bool sameAccessInBlock(Operation *storeOp, Operation *loadOp) {
     if (CommonUtils::getStoreMemref(storeOp) != loadOp->getOperand(0)) {
       return false;
     }
     auto storeIndices = CommonUtils::getStoreLoadIndices(storeOp);
     auto loadIndices = CommonUtils::getStoreLoadIndices(loadOp);
-    if (storeIndices.size() != loadIndices.size()) {
+    if (storeIndices.size() != loadIndices.size() || !llvm::equal(storeIndices, loadIndices)) {
       return false;
-    }
-    for (auto [storeIdx, loadIdx] : llvm::zip(storeIndices, loadIndices)) {
-      if (storeIdx != loadIdx) {
-        return false;
-      }
     }
     auto affineStore = dyn_cast<affine::AffineStoreOp>(storeOp);
     auto affineLoad = dyn_cast<affine::AffineLoadOp>(loadOp);
     if (affineStore || affineLoad) {
       return affineStore && affineLoad && affineStore.getAffineMap() == affineLoad.getAffineMap();
     }
-    return isa<memref::StoreOp>(storeOp) && isa<memref::LoadOp>(loadOp);
+    return true;
   }
 
+  // Returns true if store in srcLoop and load in dstLoop access the same element (IVs may differ).
   static bool sameSiblingAccess(affine::AffineStoreOp storeOp, affine::AffineForOp srcLoop, affine::AffineLoadOp loadOp,
                                 affine::AffineForOp dstLoop) {
     if (storeOp.getMemRef() != loadOp.getMemRef() || storeOp.getAffineMap() != loadOp.getAffineMap()) {
@@ -95,10 +94,7 @@ struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBas
       return false;
     }
     for (auto [storeIdx, loadIdx] : llvm::zip(storeIndices, loadIndices)) {
-      if (storeIdx == loadIdx) {
-        continue;
-      }
-      if (storeIdx == srcLoop.getInductionVar() && loadIdx == dstLoop.getInductionVar()) {
+      if (storeIdx == loadIdx || (storeIdx == srcLoop.getInductionVar() && loadIdx == dstLoop.getInductionVar())) {
         continue;
       }
       return false;
@@ -106,89 +102,90 @@ struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBas
     return true;
   }
 
-  static bool isSupportedCloneOp(Operation *op) {
-    if (!op || op->getNumRegions() != 0 || op->getNumResults() == 0) {
-      return false;
-    }
-    if (isa<affine::AffineLoadOp, memref::LoadOp>(op)) {
-      return true;
-    }
-    return isMemoryEffectFree(op);
-  }
-  static bool isCloneTransparentOp(Operation *op) {
+  // Returns true if op is safe to clone (no regions; loads optional; otherwise memory-effect free).
+  static bool isSupportedCloneOp(Operation *op, bool allowLoads = true) {
     if (!op || op->getNumRegions() != 0) {
       return false;
     }
+    if (allowLoads && isa<affine::AffineLoadOp, memref::LoadOp>(op)) {
+      return op->getNumResults() > 0;
+    }
     return isMemoryEffectFree(op);
   }
-  static bool isLocalAllocMemref(Value memref, const llvm::DenseSet<Value> &allocResults) {
-    return memref && allocResults.contains(memref);
+
+  // Lookup value in remap; returns original if not mapped.
+  static Value getRemappedValue(Value value, ValueMap &remap) {
+    if (Value mapped = remap.lookup(value)) {
+      return mapped;
+    }
+    return value;
   }
 
-  Value cloneLoadWithRemappedIndices(Operation *defOp, OpBuilder &builder, ValueMap &remap);
-  Value cloneValueAt(Value value, OpBuilder &builder, ValueMap &remap, llvm::DenseSet<Value> &visitingValues,
-                     const llvm::DenseSet<Value> &allocResults);
-  FuncScanInfo scanFunctionOnce(func::FuncOp func);
-  Operation *findForwardableStore(Operation *loadOp, const llvm::DenseSet<Value> &allocResults);
+  SmallVector<Value> remapIndices(ValueRange indices, ValueMap &remap);
+  Value cloneLoadValue(Operation *defOp, OpBuilder &builder, ValueMap &remap, llvm::DenseSet<Value> &visitingValues);
+  Value cloneValueAt(Value value, OpBuilder &builder, ValueMap &remap, llvm::DenseSet<Value> &visitingValues);
+  Operation *findForwardableStore(Operation *loadOp);
   void collectSiblingCandidates(affine::AffineForOp srcLoop, affine::AffineForOp dstLoop,
-                                SmallVectorImpl<RecomputeCandidate> &candidates,
-                                const llvm::DenseSet<Value> &allocResults);
+                                SmallVectorImpl<RecomputeCandidate> &candidates);
+  void collectCandidates(func::FuncOp func, SmallVectorImpl<RecomputeCandidate> &candidates);
   bool rewriteCandidates(ArrayRef<RecomputeCandidate> candidates, llvm::DenseSet<Value> &rewrittenMemrefs,
-                         SmallVectorImpl<Operation *> &toErase, const llvm::DenseSet<Value> &allocResults);
-  void eraseDeadLocalStores(ArrayRef<memref::AllocOp> allocs, const llvm::DenseSet<Value> &rewrittenMemrefs);
+                         SmallVectorImpl<Operation *> &toErase);
+  void eraseOpsDedup(ArrayRef<Operation *> ops);
+  void eraseDeadLocalStores(const llvm::DenseSet<Value> &rewrittenMemrefs);
 };
 
-Value ReductionSiblingRecomputePass::cloneLoadWithRemappedIndices(Operation *defOp, OpBuilder &builder,
-                                                                  ValueMap &remap) {
+// Remaps index values using remap; returns empty on failure.
+SmallVector<Value> ReductionSiblingRecomputePass::remapIndices(ValueRange indices, ValueMap &remap) {
+  SmallVector<Value> remappedIndices;
+  remappedIndices.reserve(indices.size());
+  for (Value index : indices) {
+    Value remappedIndex = getRemappedValue(index, remap);
+    if (!remappedIndex) {
+      return {};
+    }
+    remappedIndices.push_back(remappedIndex);
+  }
+  return remappedIndices;
+}
+
+// Clones a load op: forwards from local alloc store or creates load with remapped indices.
+Value ReductionSiblingRecomputePass::cloneLoadValue(Operation *defOp, OpBuilder &builder, ValueMap &remap,
+                                                    llvm::DenseSet<Value> &visitingValues) {
+  Value loadMemref;
+  if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(defOp)) {
+    loadMemref = affineLoad.getMemRef();
+  } else if (auto memrefLoad = dyn_cast<memref::LoadOp>(defOp)) {
+    loadMemref = memrefLoad.getMemRef();
+  } else {
+    return {};
+  }
+
+  if (FuncScanInfo::isLocalAlloc(loadMemref)) {
+    if (auto *storeOp = findForwardableStore(defOp)) {
+      return cloneValueAt(CommonUtils::getStoreValue(storeOp), builder, remap, visitingValues);
+    }
+  }
+
+  auto indices = CommonUtils::getStoreLoadIndices(defOp);
+  SmallVector<Value> remappedIndices = remapIndices(indices, remap);
+  if (remappedIndices.empty() && !indices.empty()) {
+    return {};
+  }
   if (auto loadOp = dyn_cast<affine::AffineLoadOp>(defOp)) {
-    SmallVector<Value> remappedIndices;
-    remappedIndices.reserve(loadOp.getIndices().size());
-    for (Value index : loadOp.getIndices()) {
-      Value remappedIndex = remap.lookup(index);
-      if (!remappedIndex) {
-        if (auto blockArg = dyn_cast<BlockArgument>(index)) {
-          remappedIndex = blockArg;
-        } else {
-          remappedIndex = index;
-        }
-      }
-      if (!remappedIndex) {
-        return {};
-      }
-      remappedIndices.push_back(remappedIndex);
-    }
-    auto clonedLoad =
-      builder.create<affine::AffineLoadOp>(loadOp.getLoc(), loadOp.getMemRef(), loadOp.getAffineMap(), remappedIndices);
-    return clonedLoad.getResult();
+    return builder
+      .create<affine::AffineLoadOp>(loadOp.getLoc(), loadOp.getMemRef(), loadOp.getAffineMap(), remappedIndices)
+      .getResult();
   }
-
   if (auto loadOp = dyn_cast<memref::LoadOp>(defOp)) {
-    SmallVector<Value> remappedIndices;
-    remappedIndices.reserve(loadOp.getIndices().size());
-    for (Value index : loadOp.getIndices()) {
-      Value remappedIndex = remap.lookup(index);
-      if (!remappedIndex) {
-        if (auto blockArg = dyn_cast<BlockArgument>(index)) {
-          remappedIndex = blockArg;
-        } else {
-          remappedIndex = index;
-        }
-      }
-      if (!remappedIndex) {
-        return {};
-      }
-      remappedIndices.push_back(remappedIndex);
-    }
-    auto clonedLoad = builder.create<memref::LoadOp>(loadOp.getLoc(), loadOp.getMemRef(), remappedIndices);
-    return clonedLoad.getResult();
+    return builder.create<memref::LoadOp>(loadOp.getLoc(), loadOp.getMemRef(), remappedIndices).getResult();
   }
-
   return {};
 }
 
+// Recursively clones value and its defining op at builder, with IV remapping.
+// Returns {} on cycle or unsupported op.
 Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builder, ValueMap &remap,
-                                                  llvm::DenseSet<Value> &visitingValues,
-                                                  const llvm::DenseSet<Value> &allocResults) {
+                                                  llvm::DenseSet<Value> &visitingValues) {
   if (!value) {
     return {};
   }
@@ -202,45 +199,15 @@ Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builde
   if (!visitingValues.insert(value).second) {
     return {};
   }
+  auto guard = llvm::make_scope_exit([&] { visitingValues.erase(value); });
 
   Operation *defOp = value.getDefiningOp();
   if (!defOp || !isSupportedCloneOp(defOp)) {
-    visitingValues.erase(value);
     return {};
   }
 
-  if (auto loadOp = dyn_cast<affine::AffineLoadOp>(defOp)) {
-    if (isLocalAllocMemref(loadOp.getMemRef(), allocResults)) {
-      Operation *storeOp = findForwardableStore(loadOp, allocResults);
-      if (!storeOp) {
-        visitingValues.erase(value);
-        return {};
-      }
-      Value cloned = cloneValueAt(CommonUtils::getStoreValue(storeOp), builder, remap, visitingValues, allocResults);
-      remap[value] = cloned;
-      visitingValues.erase(value);
-      return cloned;
-    }
-    Value clonedLoad = cloneLoadWithRemappedIndices(defOp, builder, remap);
-    visitingValues.erase(value);
-    if (clonedLoad) {
-      remap[value] = clonedLoad;
-    }
-    return clonedLoad;
-  } else if (auto loadOp = dyn_cast<memref::LoadOp>(defOp)) {
-    if (isLocalAllocMemref(loadOp.getMemRef(), allocResults)) {
-      Operation *storeOp = findForwardableStore(loadOp, allocResults);
-      if (!storeOp) {
-        visitingValues.erase(value);
-        return {};
-      }
-      Value cloned = cloneValueAt(CommonUtils::getStoreValue(storeOp), builder, remap, visitingValues, allocResults);
-      remap[value] = cloned;
-      visitingValues.erase(value);
-      return cloned;
-    }
-    Value clonedLoad = cloneLoadWithRemappedIndices(defOp, builder, remap);
-    visitingValues.erase(value);
+  if (isa<affine::AffineLoadOp, memref::LoadOp>(defOp)) {
+    Value clonedLoad = cloneLoadValue(defOp, builder, remap, visitingValues);
     if (clonedLoad) {
       remap[value] = clonedLoad;
     }
@@ -250,9 +217,8 @@ Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builde
   SmallVector<Value> newOperands;
   newOperands.reserve(defOp->getNumOperands());
   for (Value operand : defOp->getOperands()) {
-    Value cloned = cloneValueAt(operand, builder, remap, visitingValues, allocResults);
+    Value cloned = cloneValueAt(operand, builder, remap, visitingValues);
     if (!cloned) {
-      visitingValues.erase(value);
       return {};
     }
     newOperands.push_back(cloned);
@@ -268,13 +234,12 @@ Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builde
   for (auto [orig, cloned] : llvm::zip(defOp->getResults(), clonedOp->getResults())) {
     remap[orig] = cloned;
   }
-  visitingValues.erase(value);
   return remap.lookup(value);
 }
 
-Operation *ReductionSiblingRecomputePass::findForwardableStore(Operation *loadOp,
-                                                               const llvm::DenseSet<Value> &allocResults) {
-  if (!loadOp || !loadOp->getBlock() || !isLocalAllocMemref(loadOp->getOperand(0), allocResults)) {
+// Finds the dominating store in the same block that writes the same location as loadOp (local alloc only).
+Operation *ReductionSiblingRecomputePass::findForwardableStore(Operation *loadOp) {
+  if (!loadOp || !loadOp->getBlock() || !FuncScanInfo::isLocalAlloc(loadOp->getOperand(0))) {
     return nullptr;
   }
 
@@ -282,16 +247,16 @@ Operation *ReductionSiblingRecomputePass::findForwardableStore(Operation *loadOp
     if (isa<affine::AffineStoreOp, memref::StoreOp>(cursor) && sameAccessInBlock(cursor, loadOp)) {
       return cursor;
     }
-    if (!isCloneTransparentOp(cursor)) {
+    if (!isSupportedCloneOp(cursor, /*allowLoads=*/false)) {
       break;
     }
   }
   return nullptr;
 }
 
+// Collects (srcLoop, dstLoop, load, store) where dstLoop loads from local buffer written by srcLoop (same access).
 void ReductionSiblingRecomputePass::collectSiblingCandidates(affine::AffineForOp srcLoop, affine::AffineForOp dstLoop,
-                                                             SmallVectorImpl<RecomputeCandidate> &candidates,
-                                                             const llvm::DenseSet<Value> &allocResults) {
+                                                             SmallVectorImpl<RecomputeCandidate> &candidates) {
   SmallVector<affine::AffineStoreOp> srcStores;
   srcLoop.walk([&](affine::AffineStoreOp storeOp) { srcStores.push_back(storeOp); });
 
@@ -299,29 +264,21 @@ void ReductionSiblingRecomputePass::collectSiblingCandidates(affine::AffineForOp
   dstLoop.walk([&](affine::AffineLoadOp loadOp) { dstLoads.push_back(loadOp); });
 
   for (affine::AffineLoadOp loadOp : dstLoads) {
-    if (!loadOp || !loadOp->getBlock()) {
+    if (!FuncScanInfo::isLocalAlloc(loadOp.getMemRef())) {
       continue;
     }
-    if (!isLocalAllocMemref(loadOp.getMemRef(), allocResults)) {
-      continue;
-    }
-
-    for (affine::AffineStoreOp storeOp : srcStores) {
-      if (!storeOp || !storeOp->getBlock()) {
-        continue;
-      }
-      if (sameSiblingAccess(storeOp, srcLoop, loadOp, dstLoop)) {
-        candidates.push_back({srcLoop, dstLoop, loadOp, storeOp});
-        break;
-      }
+    auto it = llvm::find_if(
+      srcStores, [&](affine::AffineStoreOp storeOp) { return sameSiblingAccess(storeOp, srcLoop, loadOp, dstLoop); });
+    if (it != srcStores.end()) {
+      candidates.push_back({srcLoop, dstLoop, loadOp, *it});
     }
   }
 }
 
+// Replaces candidate loads with recomputed values; records rewritten memrefs and ops to erase.
 bool ReductionSiblingRecomputePass::rewriteCandidates(ArrayRef<RecomputeCandidate> candidates,
                                                       llvm::DenseSet<Value> &rewrittenMemrefs,
-                                                      SmallVectorImpl<Operation *> &toErase,
-                                                      const llvm::DenseSet<Value> &allocResults) {
+                                                      SmallVectorImpl<Operation *> &toErase) {
   bool changed = false;
   for (const RecomputeCandidate &candidate : candidates) {
     affine::AffineForOp srcLoop = candidate.srcLoop;
@@ -336,7 +293,7 @@ bool ReductionSiblingRecomputePass::rewriteCandidates(ArrayRef<RecomputeCandidat
     remap[srcLoop.getInductionVar()] = dstLoop.getInductionVar();
     OpBuilder builder(loadOp);
     llvm::DenseSet<Value> visitingValues;
-    Value cloned = cloneValueAt(matchedStore.getValueToStore(), builder, remap, visitingValues, allocResults);
+    Value cloned = cloneValueAt(matchedStore.getValueToStore(), builder, remap, visitingValues);
     if (!cloned) {
       continue;
     }
@@ -348,25 +305,64 @@ bool ReductionSiblingRecomputePass::rewriteCandidates(ArrayRef<RecomputeCandidat
   return changed;
 }
 
-ReductionSiblingRecomputePass::FuncScanInfo ReductionSiblingRecomputePass::scanFunctionOnce(func::FuncOp func) {
-  FuncScanInfo info;
+// collects allocs and (reduction loop, sibling loop) load/store candidates for recompute.
+void ReductionSiblingRecomputePass::collectCandidates(func::FuncOp func,
+                                                      SmallVectorImpl<RecomputeCandidate> &candidates) {
   func.walk([&](Operation *op) {
-    if (auto forOp = dyn_cast<affine::AffineForOp>(op); forOp && forOp->getParentOp() == func.getOperation()) {
-      info.outerLoops.push_back(forOp);
-    }
     if (auto allocOp = dyn_cast<memref::AllocOp>(op)) {
-      info.allocs.push_back(allocOp);
-      info.allocResults.insert(allocOp.getResult());
+      scanInfo.allocs.push_back(allocOp);
+      return;
+    }
+    auto outerLoop = dyn_cast<affine::AffineForOp>(op);
+    if (!outerLoop || outerLoop->getParentOp() != func.getOperation()) {
+      return;
+    }
+    SmallVector<affine::AffineForOp> childLoops;
+    for (Operation &childOp : outerLoop.getBody()->getOperations()) {
+      if (auto child = dyn_cast<affine::AffineForOp>(&childOp)) {
+        childLoops.push_back(child);
+      }
+    }
+    for (size_t i = 0; i < childLoops.size(); ++i) {
+      if (!childLoops[i]->hasAttr(kReductionLoopAttr)) {
+        continue;
+      }
+      for (size_t j = i + 1; j < childLoops.size(); ++j) {
+        collectSiblingCandidates(childLoops[i], childLoops[j], candidates);
+      }
     }
   });
-  return info;
 }
 
-void ReductionSiblingRecomputePass::eraseDeadLocalStores(ArrayRef<memref::AllocOp> allocs,
-                                                         const llvm::DenseSet<Value> &rewrittenMemrefs) {
-  for (memref::AllocOp allocOp : allocs) {
+// Erases each op once (dedup by pointer).
+void ReductionSiblingRecomputePass::eraseOpsDedup(ArrayRef<Operation *> ops) {
+  llvm::SmallPtrSet<Operation *, 4> seen;
+  for (Operation *op : ops) {
+    if (op && seen.insert(op).second) {
+      op->erase();
+    }
+  }
+}
+
+// Removes stores (and alloc if unused) for rewritten local memrefs that now have only stores.
+// First forwards any intra-block store-to-load pairs so the loads can be eliminated.
+void ReductionSiblingRecomputePass::eraseDeadLocalStores(const llvm::DenseSet<Value> &rewrittenMemrefs) {
+  for (memref::AllocOp allocOp : scanInfo.allocs) {
     if (!rewrittenMemrefs.contains(allocOp.getResult())) {
       continue;
+    }
+    SmallVector<Operation *> loadsToErase;
+    for (Operation *user : allocOp->getUsers()) {
+      if (!isa<affine::AffineLoadOp, memref::LoadOp>(user)) {
+        continue;
+      }
+      if (auto *storeOp = findForwardableStore(user)) {
+        user->getResult(0).replaceAllUsesWith(CommonUtils::getStoreValue(storeOp));
+        loadsToErase.push_back(user);
+      }
+    }
+    for (Operation *load : loadsToErase) {
+      load->erase();
     }
     bool onlyStores = true;
     SmallVector<Operation *> storeUsers;
@@ -396,42 +392,18 @@ void ReductionSiblingRecomputePass::runOnOperation() {
     return;
   }
 
-  SmallVector<Operation *> toErase;
-  bool changed = false;
-  FuncScanInfo scanInfo = scanFunctionOnce(func);
-  llvm::DenseSet<Value> rewrittenMemrefs;
+  // collects candidates
   SmallVector<RecomputeCandidate> candidates;
+  collectCandidates(func, candidates);
 
-  for (affine::AffineForOp outer : scanInfo.outerLoops) {
-    SmallVector<affine::AffineForOp> childLoops;
-    for (Operation &op : outer.getBody()->getOperations()) {
-      if (auto child = dyn_cast<affine::AffineForOp>(&op)) {
-        childLoops.push_back(child);
-      }
-    }
-
-    for (size_t i = 0; i < childLoops.size(); ++i) {
-      if (!childLoops[i]->hasAttr(kReductionLoopAttr)) {
-        continue;
-      }
-      for (size_t j = i + 1; j < childLoops.size(); ++j) {
-        collectSiblingCandidates(childLoops[i], childLoops[j], candidates, scanInfo.allocResults);
-      }
-    }
-  }
-
-  changed |= rewriteCandidates(candidates, rewrittenMemrefs, toErase, scanInfo.allocResults);
-
-  llvm::SmallVector<Operation *, 4> dedup;
-  for (Operation *op : toErase) {
-    if (op && llvm::find(dedup, op) == dedup.end()) {
-      dedup.push_back(op);
-      op->erase();
-    }
-  }
-
+  // rewrites loads
+  llvm::DenseSet<Value> rewrittenMemrefs;
+  SmallVector<Operation *> toErase;
+  bool changed = rewriteCandidates(candidates, rewrittenMemrefs, toErase);
   if (changed) {
-    eraseDeadLocalStores(scanInfo.allocs, rewrittenMemrefs);
+    // erases ops
+    eraseOpsDedup(toErase);
+    eraseDeadLocalStores(rewrittenMemrefs);
   }
 }
 

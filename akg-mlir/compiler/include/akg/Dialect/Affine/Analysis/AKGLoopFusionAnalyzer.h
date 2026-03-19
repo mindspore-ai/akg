@@ -69,8 +69,7 @@ struct FusionAnalyzer {
   FusionAnalyzer(MemRefDependenceGraphForFusion &depGraph, func::FuncOp funcOp) : depGraph(depGraph), funcOp(funcOp) {}
 
   void plan();
-  void applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup, unsigned targetNodeId,
-                    unsigned sourceNodeId);
+  void applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup);
   bool checkAndFixMultiOut(FusionPlan &fusePlan);
 
   // Debug and print
