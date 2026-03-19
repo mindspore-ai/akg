@@ -110,34 +110,27 @@ std::vector<FusionPlan> FusionAnalyzer::topoSortFusionPlans(unsigned numNodes) {
     inDegree[to]++;
   }
 
-  // Nodes with zero in-degree are generally output nodes
-  std::queue<unsigned> zeroInDegreeNodes;
+  // Sorted set of (inDegree, nodeId) for real-time ordering by ascending in-degree then ascending ID
+  std::set<std::pair<unsigned, unsigned>> nodeQueue;
   std::vector<FusionPlan> sortedEdges;
 
-  // Find all nodes with zero in-degree and add them to the queue
   for (unsigned i = 0; i < numNodes; i++) {
-    if (inDegree[i] == 0) {
-      zeroInDegreeNodes.push(i);
-    }
+    nodeQueue.insert({inDegree[i], i});
   }
 
-  // Process nodes in topological order
-  while (!zeroInDegreeNodes.empty()) {
-    // Get the next node with zero in-degree
-    unsigned node = zeroInDegreeNodes.front();
-    zeroInDegreeNodes.pop();
+  while (!nodeQueue.empty()) {
+    auto it = nodeQueue.begin();
+    auto [deg, node] = *it;
+    nodeQueue.erase(it);
 
-    // Process all outgoing edges from this node
     for (auto &edge : uniqueDependencies) {
       if (edge.fusedBand.from == node) {
         setFusionPlanOptions(edge);
         sortedEdges.push_back(edge);
         unsigned to = edge.fusedBand.to;
+        nodeQueue.erase({inDegree[to], to});
         inDegree[to]--;
-
-        if (inDegree[to] == 0) {
-          zeroInDegreeNodes.push(to);
-        }
+        nodeQueue.insert({inDegree[to], to});
       }
     }
   }
@@ -772,7 +765,7 @@ DependenceInfo FusionAnalyzer::getGroupDependencies(const GroupPtr targetGroup, 
 
       depInfo.loopDepth = std::min(depInfo.loopDepth, directPred.loopDepth);
       if (isa<MemRefType>(directPred.memref.getType())) {
-        depInfo.memrefs.push_back(directPred.memref);
+        depInfo.memrefs.insert(directPred.memref);
       }
     }
   }
@@ -804,12 +797,12 @@ void FusionAnalyzer::plan() {
       const auto &directPreds = it->second;
       for (const auto &directPred : directPreds) {
         unsigned sourceNodeId = directPred.nodeId;
-        auto *sourceNode = depGraph.getNode(sourceNodeId);
-        auto *targetNode = depGraph.getNode(targetNodeId);
-        if (sourceNode && targetNode && isa<affine::AffineLoadOp>(sourceNode->op) &&
-            isa<affine::AffineLoadOp>(targetNode->op)) {
-          continue;
-        }
+        // auto *sourceNode = depGraph.getNode(sourceNodeId);
+        // auto *targetNode = depGraph.getNode(targetNodeId);
+        // if (sourceNode && targetNode && isa<affine::AffineLoadOp>(sourceNode->op) &&
+        //     isa<affine::AffineLoadOp>(targetNode->op)) {
+        //   continue;
+        // }
         auto sourceGroup = depGraph.getGroupByNode(sourceNodeId);
         if (sourceGroup != nullptr && sourceGroup->groupId != targetGroup->groupId) {
           sourceGroupIds.insert(sourceGroup->groupId);

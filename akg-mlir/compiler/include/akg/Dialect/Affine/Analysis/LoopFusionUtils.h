@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
 #include "akg/Utils/AnalysisCommon.hpp"
@@ -35,7 +36,7 @@ enum LoopTransform { Merge, Replicate, ReplicateIf, Permute, StripMine, Collapse
 struct DependenceInfo {
   llvm::SmallVector<Operation *, 4> sourceOps;
   llvm::SmallVector<Operation *, 4> targetOps;
-  std::vector<Value> memrefs;
+  llvm::DenseSet<Value> memrefs;
   unsigned loopDepth = UINT_MAX;
 };
 
