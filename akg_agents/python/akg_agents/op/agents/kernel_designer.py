@@ -23,13 +23,14 @@ KernelDesigner Agent - 基于 Skill 系统的算法草图设计 Agent
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional
 from akg_agents import get_project_root
 
 from akg_agents.core_v2.agents import AgentBase, register_agent, Jinja2TemplateWrapper
 from akg_agents.core_v2.filesystem import ActionRecord
-from akg_agents.utils.common_utils import ParserFactory, remove_copyright_from_text
+from akg_agents.utils.common_utils import remove_copyright_from_text
 from akg_agents.utils.hardware_utils import get_hardware_doc
 
 from akg_agents.core_v2.skill import SkillLoader
@@ -129,42 +130,22 @@ class KernelDesigner(AgentBase):
         "required": ["op_name", "task_desc", "dsl", "backend"]
     }
     
-    def __init__(self, parser_config_path: str = None):
-        """
-        初始化 KernelDesigner Agent
+    def __init__(self):
+        """初始化 KernelDesigner Agent"""
         
-        Args:
-            parser_config_path: parser 配置文件路径（可选）
-        """
-        
-        # 生成计数器（用于追踪生成步骤）
         self.design_step_count = 0
-        self.parser_config_path = parser_config_path
         
-        # 构建基础上下文
         context = {
             "agent_name": "kernel_designer",
             "task_label": "main",
         }
         
-        # 初始化父类
         super().__init__(context=context)
         
-        # ==================== Parser 初始化 ====================
-        # 使用新的 parser loader
-        from akg_agents.utils.parser_loader import create_agent_parser
-        self.code_parser = create_agent_parser("designer", self.parser_config_path)
-        if not self.code_parser:
-            raise ValueError(
-                "Failed to create kernel_designer parser. Please check your parser_config.yaml configuration.")
-        self.format_instructions = self.code_parser.get_format_instructions()
-        
         # ==================== Skill 系统初始化 ====================
-        # 初始化 Skill Registry 和 Selector
         self._init_skills()
         
         # ==================== Prompt 模板初始化 ====================
-        # 加载 jinja2 模板
         self.system_prompt_template = self.load_template("kernel_designer/system_prompt.j2")
         self.user_prompt_template = self.load_template("kernel_designer/user_prompt.j2")
     
@@ -259,6 +240,44 @@ class KernelDesigner(AgentBase):
         
         return "\n\n---\n\n".join(skill.content for skill in sorted_skills)
     
+    @staticmethod
+    def _extract_sketch(raw_output: str) -> str:
+        """从 LLM 输出中提取算法草图。
+        
+        预期 LLM 直接输出草图（无 markdown 包裹）。
+        如果模型输出了代码块包裹，则做容错清理。
+        """
+        text = raw_output.strip()
+        
+        # 容错：提取 ```...``` 代码块中的内容（sketch 可能没有语言标签，或标为 text/plaintext）
+        pattern = r'```(?:\w+)?\s*\n(.*?)```'
+        matches = re.findall(pattern, text, re.DOTALL)
+        if matches:
+            text = max(matches, key=len).strip()
+        
+        return text
+    
+    @staticmethod
+    def _parse_hint_output(raw_output: str) -> Tuple[str, Optional[str]]:
+        """解析 Hint 模式的 JSON 输出，提取 code 和 space_config。
+        
+        Hint 模式仍使用 JSON 格式（需要同时输出 sketch 和 space_config）。
+        
+        Returns:
+            Tuple[str, Optional[str]]: (sketch_code, space_config_code)
+        """
+        import json
+        try:
+            json_match = re.search(r'\{.*\}', raw_output, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+                code = result.get("code", "")
+                space_config = result.get("space_config")
+                return code, space_config
+        except json.JSONDecodeError:
+            pass
+        return raw_output.strip(), None
+    
     async def run(
         self,
         op_name: str,
@@ -337,13 +356,23 @@ class KernelDesigner(AgentBase):
                 arch_name=arch,
                 enable_hint_mode=enable_hint_mode,
                 has_hint=has_hint,
-                format_instructions=self.format_instructions,
                 inspirations=inspirations,
                 handwrite_suggestions=handwrite_suggestions or [],
             )
             
-            # 6. 组合完整 prompt
-            full_prompt = f"{system_prompt}\n\n{user_prompt}"
+            # 6. 组合完整 prompt，非 Hint 模式追加输出格式硬约束
+            if not has_hint:
+                output_instruction = (
+                    "\n\n## 输出格式（必须严格遵守）\n\n"
+                    "请直接输出算法草图（sketch）。你的输出会被直接用于指导后续代码生成，因此：\n"
+                    "- 不要使用 JSON 格式\n"
+                    "- 不要使用 ```代码块``` 包裹\n"
+                    "- 不要输出任何非草图内容（不要有解释文字、不要有 markdown 标记）\n"
+                    "- 直接输出 `sketch op_name { ... }` 格式的算法草图\n"
+                )
+                full_prompt = f"{system_prompt}\n\n{user_prompt}{output_instruction}"
+            else:
+                full_prompt = f"{system_prompt}\n\n{user_prompt}"
             
             # 7. 创建 Jinja2 模板包装（用于 run_llm）
             template = Jinja2TemplateWrapper("{{ prompt }}")
@@ -363,13 +392,21 @@ class KernelDesigner(AgentBase):
             self.context.update(to_update_details)
             
             # 9. 调用 LLM
-            llm_result, formatted_prompt, reasoning = await self.run_llm(
+            raw_output, formatted_prompt, reasoning = await self.run_llm(
                 template,
                 {"prompt": full_prompt},
                 model_level or "standard"
             )
             
-            return llm_result, formatted_prompt, reasoning
+            # 10. 提取草图
+            if has_hint:
+                sketch, space_config = self._parse_hint_output(raw_output)
+                self._last_space_config = space_config
+            else:
+                sketch = self._extract_sketch(raw_output)
+                self._last_space_config = None
+            
+            return sketch, formatted_prompt, reasoning
         
         except Exception as e:
             logger.error(f"Exception in kernel_designer.run: {type(e).__name__}: {e}")

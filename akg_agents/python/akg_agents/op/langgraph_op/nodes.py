@@ -151,27 +151,20 @@ class NodeFactory:
             # 只在 hint 模式启用时才尝试提取 space_config_code
             enable_hint_mode = config.get("enable_hint_mode", False)
             
-            # 使用与原 Task 相同的解析逻辑（ParserFactory.robust_parse）
-            # 这样可以处理 LangChain 1.0 后的各种输出格式
+            # 使用 ParserFactory.robust_parse 解析 JSON 输出
             try:
                 from akg_agents.utils.common_utils import ParserFactory
                 
-                # 获取 Designer 的 parser
                 agent_parser = getattr(designer_instance, 'code_parser', None)
                 if agent_parser:
-                    # 使用 robust_parse 进行解析（与原 Task 保持一致）
                     parsed_result = ParserFactory.robust_parse(result, agent_parser)
                     if parsed_result:
-                        # 从解析结果中提取 code
                         code = getattr(parsed_result, 'code', result)
-                        # 只在 hint 模式下才提取 space_config_code
                         if enable_hint_mode:
                             space_config = getattr(parsed_result, 'space_config_code', None)
                 else:
-                    # 如果没有 parser，使用原始结果
                     logger.warning(f"[Task {state.get('task_id', '0')}] Designer 没有 parser，使用原始输出")
             except Exception as e:
-                # 解析失败，使用原始结果
                 logger.warning(f"[Task {state.get('task_id', '0')}] Designer JSON 解析失败: {e}，使用原始输出")
             
             # 计算新的 step_count
@@ -321,23 +314,12 @@ class NodeFactory:
                 ('reasoning', reasoning),
             ])
 
+            # KernelDesigner 已在内部完成草图提取，直接使用返回的纯草图
             code = result
             space_config = None
 
-            try:
-                from akg_agents.utils.common_utils import ParserFactory
-
-                agent_parser = getattr(kernel_designer_instance, 'code_parser', None)
-                if agent_parser:
-                    parsed_result = ParserFactory.robust_parse(result, agent_parser)
-                    if parsed_result:
-                        code = getattr(parsed_result, 'code', result)
-                        if enable_hint_mode:
-                            space_config = getattr(parsed_result, 'space_config_code', None)
-                else:
-                    logger.warning(f"[Task {task_id}] KernelDesigner 没有 parser，使用原始输出")
-            except Exception as e:
-                logger.warning(f"[Task {task_id}] KernelDesigner 解析失败: {e}，使用原始输出")
+            if enable_hint_mode:
+                space_config = getattr(kernel_designer_instance, '_last_space_config', None)
 
             new_step_count = state.get("step_count", 0) + 1
 

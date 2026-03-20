@@ -451,10 +451,14 @@ class KernelAgent(ReActAgent):
             # 初始化 agents（延迟加载，避免循环依赖）
             from akg_agents.op.agents.kernel_gen import KernelGen
             from akg_agents.op.verifier.kernel_verifier import KernelVerifier
+            from akg_agents.op.agents.kernel_designer import KernelDesigner
             
             try:
                 # 创建 KernelGen（不需要 op 特定参数）
                 kernel_gen = KernelGen()
+                
+                # 创建 KernelDesigner
+                kernel_designer = KernelDesigner()
                 
                 # 创建 KernelVerifier（使用占位符，实际值会在 verifier node 运行时从 state 更新）
                 verifier = KernelVerifier(
@@ -469,6 +473,7 @@ class KernelAgent(ReActAgent):
                 )
                 
                 agents = {
+                    "kernel_designer": kernel_designer,
                     "kernel_gen": kernel_gen,
                     "verifier": verifier
                 }

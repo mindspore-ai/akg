@@ -49,7 +49,7 @@ class DefaultWorkflowV2(OpBaseWorkflow):
     - KernelDesigner 生成的算法草图传递给 KernelGen 指导代码生成
     """
     
-    TOOL_NAME = "use_default_workflow_v2"
+    TOOL_NAME = "call_default_workflow_v2"
     
     DESCRIPTION = """
 使用 Default Workflow V2 进行完整的 kernel 开发（基于 Skill 系统，包含设计阶段）。

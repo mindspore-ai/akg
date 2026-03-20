@@ -17,15 +17,7 @@
 # Independent from workflow.yaml - used only for parser creation
 
 parsers:
-  designer:
-    parser_name: designer_parser
-    parser_definition:
-      output_fields:
-        code:
-          field_type: str
-          mandatory: true
-          field_description: "Algorithm pseudocode implementation"
-
+  # designer no longer uses a parser - it outputs raw sketch directly (de-JSON-ified)
   # coder no longer uses a parser - it outputs raw code directly (de-JSON-ified)
   # kernel_gen no longer uses a parser - it outputs raw Python code directly
   # verifier does not need a parser (programmatic verification)
