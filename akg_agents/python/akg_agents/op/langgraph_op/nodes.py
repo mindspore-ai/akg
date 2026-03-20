@@ -27,6 +27,62 @@ import time
 logger = logging.getLogger(__name__)
 
 
+def format_inspirations(inspirations: list) -> str:
+    """将 inspirations 列表格式化为可读字符串"""
+    if not inspirations:
+        return ""
+
+    result_parts = []
+    has_parent = False
+
+    for i, inspiration in enumerate(inspirations):
+        if not isinstance(inspiration, dict):
+            continue
+
+        sketch = inspiration.get('sketch', '')
+        impl_code = inspiration.get('impl_code', '')
+        profile = inspiration.get('profile', {})
+        is_parent = inspiration.get('is_parent', False)
+
+        if is_parent:
+            has_parent = True
+
+        if sketch or impl_code:
+            gen_time = profile.get('gen_time', float('inf'))
+            base_time = profile.get('base_time', 0.0)
+            speedup = profile.get('speedup', 0.0)
+            autotune_summary = profile.get('autotune_summary', '')
+
+            if gen_time != float('inf'):
+                profile_text = (
+                    f"根据此方案草图生成的代码计算耗时: {gen_time:.4f}us, "
+                    f"基准代码耗时: {base_time:.4f}us, 加速比: {speedup:.2f}x"
+                )
+                if autotune_summary:
+                    profile_text += f"\n\nAutotune配置详情:\n{autotune_summary}"
+            else:
+                profile_text = "代码执行耗时: N/A"
+
+            parent_mark = " 【父代方案】" if is_parent else ""
+            inspiration_text = f"## Inspiration {i + 1}{parent_mark} {profile_text}\n"
+            if sketch:
+                inspiration_text += f"算法草图 ：\n```\n{sketch}\n```\n"
+            if impl_code:
+                inspiration_text += f"代码：\n```\n{impl_code}\n```\n"
+            result_parts.append(inspiration_text)
+
+    if has_parent and result_parts:
+        strategy_note = (
+            "**进化优化策略**：\n"
+            "- 标记为【父代方案】的是本次进化的基础，请以它为主要参考进行改进和优化\n"
+            "- 其他 Inspiration 可作为补充参考，用于交叉变异和借鉴优化思路\n"
+            "- 请在父代方案的基础上，结合其他方案的优点，生成优化后的方案\n\n"
+        )
+        result_parts.insert(0, strategy_note)
+
+    return "\n".join(result_parts)
+
+
 class NodeFactory:
     """算子节点工厂：将算子 Agent 包装成 LangGraph 节点"""
     
@@ -219,6 +275,91 @@ class NodeFactory:
         return track_node("coder")(coder_node)
 
     @staticmethod
+    def create_kernel_designer_node(kernel_designer_instance, trace_instance, config: dict):
+        """创建 KernelDesigner 节点函数（基于 Skill 系统）"""
+        async def kernel_designer_node(state: KernelGenState) -> dict:
+            """KernelDesigner 节点：基于 Skill 系统生成算法草图"""
+            task_id = state.get('task_id', '0')
+            op_name = state.get('op_name', 'unknown')
+            logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: kernel_designer")
+
+            session_id = state.get('session_id', '')
+            if session_id:
+                kernel_designer_instance.context["session_id"] = session_id
+
+            enable_hint_mode = config.get("enable_hint_mode", False)
+
+            inspirations_raw = state.get('inspirations', [])
+            inspirations_text = format_inspirations(inspirations_raw) if inspirations_raw else ""
+            handwrite_suggestions = state.get('handwrite_suggestions', [])
+
+            t0 = time.time()
+            try:
+                result, prompt, reasoning = await kernel_designer_instance.run(
+                    op_name=state.get('op_name', ''),
+                    task_desc=state.get('task_desc', ''),
+                    dsl=state.get('dsl', ''),
+                    backend=state.get('backend', ''),
+                    arch=state.get('arch', ''),
+                    task_id=task_id,
+                    user_requirements=state.get('user_requirements', ''),
+                    enable_hint_mode=enable_hint_mode,
+                    model_level=state.get('model_level', 'standard'),
+                    inspirations=inspirations_text,
+                    handwrite_suggestions=handwrite_suggestions,
+                )
+            except Exception as e:
+                logger.error(f"[Task {task_id}] KernelDesigner.run() 失败: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                raise
+            elapsed = time.time() - t0
+
+            trace_instance.log_record("kernel_designer", [
+                ('result', result),
+                ('prompt', prompt),
+                ('reasoning', reasoning),
+            ])
+
+            code = result
+            space_config = None
+
+            try:
+                from akg_agents.utils.common_utils import ParserFactory
+
+                agent_parser = getattr(kernel_designer_instance, 'code_parser', None)
+                if agent_parser:
+                    parsed_result = ParserFactory.robust_parse(result, agent_parser)
+                    if parsed_result:
+                        code = getattr(parsed_result, 'code', result)
+                        if enable_hint_mode:
+                            space_config = getattr(parsed_result, 'space_config_code', None)
+                else:
+                    logger.warning(f"[Task {task_id}] KernelDesigner 没有 parser，使用原始输出")
+            except Exception as e:
+                logger.warning(f"[Task {task_id}] KernelDesigner 解析失败: {e}，使用原始输出")
+
+            new_step_count = state.get("step_count", 0) + 1
+
+            updates = {
+                "designer_code": code,
+                "designer_prompt": prompt,
+                "designer_reasoning": reasoning,
+                "iteration": state.get("iteration", 0) + 1,
+                "step_count": new_step_count,
+                "agent_history": ["kernel_designer"],
+            }
+
+            if space_config:
+                updates["space_config_code"] = space_config
+                logger.info(f"[Task {task_id}] KernelDesigner 提取了 space_config_code (长度: {len(space_config)})")
+                await NodeFactory._save_space_config(state, space_config, new_step_count, config)
+
+            return updates
+
+        return track_node("kernel_designer")(kernel_designer_node)
+
+    @staticmethod
     def create_kernel_gen_node(kernel_gen_instance, trace_instance):
         """创建 KernelGen 节点函数（基于 Skill 系统）"""
         async def kernel_gen_node(state: KernelGenState) -> dict:
@@ -246,6 +387,18 @@ class NodeFactory:
             if session_id:
                 kernel_gen_instance.context["session_id"] = session_id
             
+            # inspirations 与 designer_code 互斥：
+            # - 有 designer_code → Designer 已将 inspirations 提炼为 sketch，KernelGen 只需看 sketch
+            # - 无 designer_code → kernelgen_only 场景，KernelGen 直接使用 inspirations
+            designer_code = state.get('designer_code', '')
+            if designer_code:
+                inspirations_text = ""
+            else:
+                inspirations_raw = state.get('inspirations', [])
+                inspirations_text = format_inspirations(inspirations_raw) if inspirations_raw else ""
+            
+            handwrite_suggestions = state.get('handwrite_suggestions', [])
+
             # 调用 KernelGen.run()
             t0 = time.time()
             try:
@@ -261,7 +414,10 @@ class NodeFactory:
                     verifier_error=verifier_error,
                     conductor_suggestion=conductor_suggestion,
                     model_level=state.get('model_level', 'standard'),
-                    previous_code=state.get('previous_code', '')
+                    previous_code=state.get('previous_code', ''),
+                    designer_code=designer_code,
+                    inspirations=inspirations_text,
+                    handwrite_suggestions=handwrite_suggestions,
                 )
             except Exception as e:
                 logger.error(f"[Task {task_id}] KernelGen.run() 失败: {e}")

@@ -458,6 +458,11 @@ class AdaptiveSearchController:
     
     async def _generate_pending_sketches(self) -> None:
         """为待处理的成功任务生成 sketch"""
+        # 检查 sketch 生成开关
+        if not self.config.get("enable_sketch_generation", True):
+            logger.debug("Sketch generation disabled by config")
+            return
+        
         pending_records = self.db.get_pending_sketch_records()
         if not pending_records:
             return

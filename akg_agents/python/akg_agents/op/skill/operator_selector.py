@@ -137,6 +137,7 @@ class OperatorSelectionContext(SelectionContext):
     dsl: Optional[str] = None                # DSL类型（triton, cuda等）
     backend: Optional[str] = None            # 后端（cuda, ascend等）
     hardware: Optional[str] = None           # 硬件型号（npu910b, a100等）
+    framework: Optional[str] = None          # 框架（torch, mindspore等）
 
 
 # ==================== 算子生成过滤器 ====================
@@ -145,6 +146,7 @@ class OperatorSelectionContext(SelectionContext):
 backend_filter = create_metadata_matcher("backend")
 dsl_filter = create_metadata_matcher("dsl")
 hardware_filter = create_metadata_matcher("hardware")
+framework_filter = create_metadata_matcher("framework")
 operator_type_filter = create_metadata_matcher("operator_type", "operator_patterns")
 
 # Category 过滤器（支持 include 和 exclude 模式）
@@ -162,15 +164,16 @@ def create_operator_filters() -> List[Callable]:
     1. backend_filter: 后端匹配（cuda, ascend等）
     2. dsl_filter: DSL 匹配（triton, cuda等）
     3. hardware_filter: 硬件型号匹配（npu910b, a100等）
-    4. operator_type_filter: 算子类型匹配（softmax, layernorm等）
-    5. category_include_filter: Category 白名单（只包含指定 category）
-    6. category_exclude_filter: Category 黑名单（排除指定 category）
+    4. framework_filter: 框架匹配（torch, mindspore等）
+    5. operator_type_filter: 算子类型匹配（softmax, layernorm等）
+    6. category_include_filter: Category 白名单（只包含指定 category）
+    7. category_exclude_filter: Category 黑名单（排除指定 category）
     
     Returns:
         过滤器函数列表
     
     扩展说明：
-        如果需要添加新的过滤维度（如 framework、version 等），只需：
+        如果需要添加新的过滤维度（如 version 等），只需：
         1. 在 OperatorSelectionContext 中添加字段
         2. 在此函数中添加一行：xxx_filter = create_metadata_matcher("xxx")
         3. 将 xxx_filter 添加到返回列表
@@ -227,6 +230,7 @@ def create_operator_filters() -> List[Callable]:
         backend_filter, 
         dsl_filter, 
         hardware_filter, 
+        framework_filter,
         operator_type_filter,
         category_include_filter,
         category_exclude_filter

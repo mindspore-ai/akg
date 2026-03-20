@@ -23,7 +23,6 @@ KernelDesigner Agent - 基于 Skill 系统的算法草图设计 Agent
 """
 
 import logging
-import json
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional
 from akg_agents import get_project_root
@@ -33,12 +32,7 @@ from akg_agents.core_v2.filesystem import ActionRecord
 from akg_agents.utils.common_utils import ParserFactory, remove_copyright_from_text
 from akg_agents.utils.hardware_utils import get_hardware_doc
 
-# 导入 skill 系统模块
-from akg_agents.core_v2.skill import (
-    SkillLoader, 
-    SkillSelector, 
-    SelectionContext,
-)
+from akg_agents.core_v2.skill import SkillLoader
 
 # 设置 Skills 目录路径
 project_root = Path(get_project_root())
@@ -178,42 +172,19 @@ class KernelDesigner(AgentBase):
         """初始化 Skill 系统（延迟加载，按 DSL 加载）"""
         self._loader = SkillLoader()
         self._skills_cache: Dict[str, list] = {}  # dsl -> skills
-        
-        # 创建自定义过滤器
-        # Designer 专用过滤器：优先选择 designer 相关的 skills
-        def designer_filter(skill, context):
-            designer_categories = ["guide", "fundamental"]
-            is_designer_skill = (
-                skill.category in designer_categories or
-                (skill.metadata and skill.metadata.get("role") == "designer")
-            )
-            implementation_only = skill.category == "implementation" and not is_designer_skill
-            return not implementation_only
-        
-        # 创建 selector（带自定义过滤器）
-        self.skill_selector = SkillSelector(
-            custom_filters=[designer_filter]
-        )
     
     def _load_skills_by_dsl(self, dsl: str) -> list:
-        """按 DSL 加载对应子目录的 skills，带缓存"""
-        dsl_key = dsl.replace("_", "-")  # triton_ascend -> triton-ascend
+        """加载 Designer 所需的固定 skills，带缓存
+
+        加载范围仅 designer/ 目录：sketch-design、hint-mode 等。
+        cases/（手写优化建议）由上层搜索控制器通过 SkillHandwriteLoader 加载，
+        经采样后以 handwrite_suggestions 参数传入 run()。
+        """
+        dsl_key = dsl.replace("_", "-")
         if dsl_key in self._skills_cache:
             return self._skills_cache[dsl_key]
-        
-        # 加载 DSL 特定目录的 skills
-        dsl_dir = SKILLS_DIR / dsl_key
+
         skills = []
-        if dsl_dir.exists():
-            try:
-                skills = self._loader.load_from_directory(dsl_dir)
-                logger.info(f"Loaded {len(skills)} skills from {dsl_dir}")
-            except Exception as e:
-                logger.error(f"Failed to load skills for DSL '{dsl_key}': {e}")
-        else:
-            logger.warning(f"Skills directory not found for DSL '{dsl_key}': {dsl_dir}")
-        
-        # 也加载 designer 目录的 skills
         designer_dir = SKILLS_DIR / "designer"
         if designer_dir.exists():
             try:
@@ -222,111 +193,47 @@ class KernelDesigner(AgentBase):
                 logger.info(f"Loaded {len(designer_skills)} designer skills from {designer_dir}")
             except Exception as e:
                 logger.error(f"Failed to load designer skills: {e}")
-        
+
         self._skills_cache[dsl_key] = skills
         return skills
     
-    async def _select_skills(self, op_name: str = "", task_desc: str = "",
-                             dsl: str = "", backend: str = "", 
-                             enable_hint_mode: bool = False, has_hint: bool = False) -> List[Any]:
-        """
-        Designer 的 Skill 选择：
-        1. 按 DSL 加载对应子目录的 skills
-        2. 必选：sketch-design
-        3. 可选：hint-mode（当 enable_hint_mode 且 has_hint）
-        4. LLM 选择其他参考 Skills
+    async def _select_skills(self, dsl: str = "",
+                             enable_hint_mode: bool = False,
+                             has_hint: bool = False) -> List[Any]:
+        """Designer 的 Skill 选择（仅固定 skills）
+
+        1. 必选：sketch-design（对应旧 Designer 的 sketch_guide）
+        2. 可选：hint-mode（当 enable_hint_mode 且 has_hint）
         """
         loaded_skills = self._load_skills_by_dsl(dsl)
-        if not self.skill_selector or not loaded_skills:
+        if not loaded_skills:
             return []
-        
+
         try:
             skill_dict = {s.name: s for s in loaded_skills}
             selected_skills = []
-            
-            # 1. 必选：sketch-design
+
             if "sketch-design" in skill_dict:
                 selected_skills.append(skill_dict["sketch-design"])
                 logger.info("Selected skill: sketch-design (required)")
-            
-            # 2. hint-mode（可选）
+            else:
+                logger.warning("Skill 'sketch-design' not found in loaded skills, skipping required skill")
+
             if enable_hint_mode and has_hint and "hint-mode" in skill_dict:
                 selected_skills.append(skill_dict["hint-mode"])
                 logger.info("Selected skill: hint-mode (hint mode enabled)")
-            
-            # 3. 粗筛可用的参考 Skills
-            context = SelectionContext()
-            filtered = self.skill_selector.coarse_filter(loaded_skills, context)
-            
-            # 排除已选
-            already_selected = {s.name for s in selected_skills}
-            candidates = [s for s in filtered if s.name not in already_selected and s.name != "hint-mode"]
-            
-            logger.info(f"Coarse filter: {len(loaded_skills)} -> {len(candidates)} candidates")
-            
-            if not candidates:
-                return selected_skills
-            
-            # 4. LLM 选择参考 Skills
-            skills_info = [{"name": s.name, "description": s.description} for s in candidates]
-            
-            llm_prompt = f"""你是一个 Skill 选择专家。请为以下算法草图设计任务选择相关的参考 Skills。
+            else:
+                logger.warning(
+                    "Skill 'hint-mode' not applied: enable_hint_mode=%s, has_hint=%s, in_dict=%s",
+                    enable_hint_mode, has_hint, "hint-mode" in skill_dict,
+                )
 
-**任务信息**:
-- 算子名称: {op_name}
-- 目标 DSL: {dsl}
-- 目标后端: {backend}
-- 任务描述: {task_desc}
-
-**可用参考 Skills**:
-{json.dumps(skills_info, indent=2, ensure_ascii=False)}
-
-**注意**：
-1. 基于 Sketch 生成算子草图，无关的技能不要选择（如代码生成、测试、工作流等）
-2. 选取最相关的2-3个 Skills 即可，不要选择太多
-
-**输出格式**（JSON）:
- ```json
-{{
-"selected": ["skill-name-1", "skill-name-2", ...],
-"reason": "简要选择理由"
-}}
-```
-"""
-            template = Jinja2TemplateWrapper("{{ prompt }}")
-            response, _, _ = await self.run_llm(template, {"prompt": llm_prompt}, "standard")
-            
-            # 解析响应
-            selected_names, reason = self._parse_llm_selection(response)
-            for name in selected_names:
-                if name in skill_dict and name not in already_selected:
-                    selected_skills.append(skill_dict[name])
-            
-            logger.info(f"Designer selected {len(selected_skills)} skills: {[s.name for s in selected_skills]}")
-            if reason:
-                logger.info(f"Selection reason: {reason}")
+            logger.info(f"Designer selected {len(selected_skills)} fixed skills: {[s.name for s in selected_skills]}")
             return selected_skills
-            
+
         except Exception as e:
             logger.warning(f"Skill selection failed: {e}")
             return selected_skills if 'selected_skills' in locals() else []
-    
-    def _parse_llm_selection(self, response: str) -> Tuple[List[str], str]:
-        """解析 LLM 返回的 skill 选择结果，返回 (名称列表, 理由)"""
-        import re
-        try:
-            # 尝试解析 JSON 对象格式 {"selected": [...], "reason": "..."}
-            json_match = re.search(r'\{[^{}]*"selected"[^{}]*\}', response, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-                return result.get("selected", []), result.get("reason", "")
-            # 回退：尝试解析纯数组格式
-            arr_match = re.search(r'\[.*?\]', response, re.DOTALL)
-            if arr_match:
-                return json.loads(arr_match.group()), ""
-        except json.JSONDecodeError:
-            pass
-        return [], ""
     
     CATEGORY_ORDER = ["fundamental", "guide", "method", "implementation", "example"]
     
@@ -363,7 +270,9 @@ class KernelDesigner(AgentBase):
         user_requirements: str = "",
         enable_hint_mode: bool = False,
         history_compress: Optional[List[dict]] = None,
-        model_level: str = "standard"
+        model_level: str = "standard",
+        inspirations: str = "",
+        handwrite_suggestions: Optional[List[Dict[str, str]]] = None,
     ) -> Tuple[str, str, str]:
         """
         执行算法草图设计
@@ -378,6 +287,11 @@ class KernelDesigner(AgentBase):
             user_requirements: 用户额外需求
             enable_hint_mode: 是否启用 Hint 模式
             model_level: 模型级别
+            inspirations: 格式化后的进化探索方案字符串（evolve/adaptive_search 场景，
+                          运行时动态生成的父代代码和性能数据，非静态知识，Skill 系统无法覆盖）
+            handwrite_suggestions: 手写优化建议列表，由上层搜索控制器
+                          通过 SkillHandwriteLoader + SkillHandwriteSampler 采样后传入。
+                          每个 dict 包含 {name, improvement_doc}。
         
         Returns:
             Tuple[str, str, str]: (生成的草图, 完整 prompt, 推理过程)
@@ -392,14 +306,11 @@ class KernelDesigner(AgentBase):
             if has_hint:
                 logger.info(f"[Task {task_id}] 检测到 hint，启用 Hint 模式")
             
-            # 1. 选择相关 Skills（异步），传递算子信息和 hint 模式
+            # 1. 选择固定 Skills（sketch-design, hint-mode）
             selected_skills = await self._select_skills(
-                op_name=op_name,
-                task_desc=task_desc,
-                dsl=dsl, 
-                backend=backend, 
-                enable_hint_mode=enable_hint_mode, 
-                has_hint=has_hint
+                dsl=dsl,
+                enable_hint_mode=enable_hint_mode,
+                has_hint=has_hint,
             )
             
             # 2. 按 category → name 排序并拼接 skill 内容
@@ -426,7 +337,9 @@ class KernelDesigner(AgentBase):
                 arch_name=arch,
                 enable_hint_mode=enable_hint_mode,
                 has_hint=has_hint,
-                format_instructions=self.format_instructions
+                format_instructions=self.format_instructions,
+                inspirations=inspirations,
+                handwrite_suggestions=handwrite_suggestions or [],
             )
             
             # 6. 组合完整 prompt

@@ -32,6 +32,7 @@ from typing import Dict, Any, Tuple, List, Optional
 from akg_agents import get_project_root
 from akg_agents.core_v2.agents import AgentBase, register_agent, Jinja2TemplateWrapper
 from akg_agents.core_v2.filesystem import ActionRecord
+from akg_agents.utils.hardware_utils import get_hardware_doc
 
 # 导入 skill 系统模块
 from akg_agents.core_v2.skill import SkillLoader
@@ -143,6 +144,24 @@ class KernelGen(AgentBase):
                 "type": "string",
                 "description": "之前生成的 kernel 代码（用于修改优化场景），包含 class ModelNew 等。如果提供，会基于此代码进行修改而非从零生成",
                 "default": ""
+            },
+            "designer_code": {
+                "type": "string",
+                "description": "KernelDesigner 生成的算法草图/伪代码（可选，DefaultWorkflowV2 场景使用）。提供后会以此为基础生成代码",
+                "default": ""
+            },
+            "inspirations": {
+                "type": "string",
+                "description": "格式化后的进化探索方案字符串（可选，evolve/adaptive_search 场景使用）",
+                "default": ""
+            },
+            "handwrite_suggestions": {
+                "type": "array",
+                "description": "手写优化策略与实现参考（可选）",
+                "items": {
+                    "type": "object"
+                },
+                "default": []
             }
         },
         "required": ["op_name", "task_desc", "dsl", "framework", "backend"]
@@ -175,24 +194,29 @@ class KernelGen(AgentBase):
         self.skill_selector = OperatorSkillSelector()
     
     def _load_skills_by_dsl(self, dsl: str) -> list:
-        """按 DSL 加载对应子目录的 skills，带缓存"""
-        dsl_key = dsl.replace("_", "-")  # triton_ascend -> triton-ascend
+        """仅加载 {dsl}/guides/ 下的 skills，带缓存
+        
+        guides/ 包含 KernelGen 所需的全部知识：
+        - API 参考、编程基础、调试指南等
+        - 框架示例代码
+        """
+        dsl_key = dsl.replace("_", "-")
         if dsl_key in self._skills_cache:
             return self._skills_cache[dsl_key]
         
-        dsl_dir = SKILLS_DIR / dsl_key
-        if not dsl_dir.exists():
-            logger.warning(f"Skills directory not found for DSL '{dsl_key}': {dsl_dir}")
+        guides_dir = SKILLS_DIR / dsl_key / "guides"
+        if not guides_dir.exists():
+            logger.warning(f"Guides directory not found for DSL '{dsl_key}': {guides_dir}")
             self._skills_cache[dsl_key] = []
             return []
         
         try:
-            skills = self._loader.load_from_directory(dsl_dir)
+            skills = self._loader.load_from_directory(guides_dir)
             self._skills_cache[dsl_key] = skills
-            logger.info(f"Loaded {len(skills)} skills from {dsl_dir}")
+            logger.info(f"Loaded {len(skills)} guide skills from {guides_dir}")
             return skills
         except Exception as e:
-            logger.error(f"Failed to load skills for DSL '{dsl_key}': {e}")
+            logger.error(f"Failed to load guide skills for DSL '{dsl_key}': {e}")
             self._skills_cache[dsl_key] = []
             return []
     
@@ -206,8 +230,9 @@ class KernelGen(AgentBase):
     ) -> List[Any]:
         """
         两阶段 Skill 选择：
-        1. 按 DSL 加载对应子目录的 skills
-        2. 粗筛：基于 OperatorSkillSelector（backend/dsl metadata 过滤）
+        1. 按 DSL 加载 {dsl}/ 下所有 skills（guides）
+        2. 粗筛：基于 dsl/backend/framework 严格匹配，不匹配的直接排除
+           guides/: DSL/硬件 API 参考、编程基础（代码生成知识）
         3. 精筛：LLM 根据任务描述选择
         """
         loaded_skills = self._load_skills_by_dsl(dsl)
@@ -224,15 +249,20 @@ class KernelGen(AgentBase):
                 return attention_only
         
         try:
-            # 阶段1：粗筛（使用 OperatorSkillSelector）
+            # 阶段1：粗筛（dsl/backend/framework 严格匹配）
+            dsl_key = dsl.replace("_", "-")
             context = OperatorSelectionContext(
-                dsl=dsl.replace("_", "-"),  # triton_ascend -> triton-ascend
+                dsl=dsl_key,
                 backend=backend,
-                include_category_groups=["knowledge"]  # guide, fundamental, dsl, method, implementation, reference
+                framework=framework,
+                exclude_category_groups=["orchestration", "actor"],
             )
             filtered = self.skill_selector.coarse_filter(loaded_skills, context)
             
             logger.info(f"Coarse filter: {len(loaded_skills)} -> {len(filtered)} skills")
+            
+            if not filtered:
+                return []
             
             if len(filtered) <= 5:
                 return filtered
@@ -273,7 +303,7 @@ class KernelGen(AgentBase):
 
 **直接相关（必选）**：
 - 算子模式匹配（如 elementwise、reduce、matmul、attention 等）
-- DSL/后端相关的 API 参考或编程基础以及调试指南
+- DSL/后端相关的编程基础、调试指南或 API 参考
 - 优化策略直接适用于当前算子类型
 
 **间接相关（可选）**：
@@ -283,7 +313,6 @@ class KernelGen(AgentBase):
 
 **不相关（排除）**：
 - 算子类型完全不同且无参考价值
-- 与当前 DSL/后端不匹配
 - 属于工作流、测试、草图设计等非代码生成类
 
 ### 筛选原则
@@ -420,7 +449,10 @@ class KernelGen(AgentBase):
         verifier_error: str = "",
         conductor_suggestion: str = "",
         model_level: str = "standard",
-        previous_code: str = ""
+        previous_code: str = "",
+        designer_code: str = "",
+        inspirations: str = "",
+        handwrite_suggestions: Optional[List[Dict[str, str]]] = None,
     ) -> Tuple[str, str, str]:
         """
         执行代码生成
@@ -439,6 +471,9 @@ class KernelGen(AgentBase):
             conductor_suggestion: Conductor 修复建议
             model_level: 模型级别
             previous_code: 之前生成的代码（修改场景使用）
+            designer_code: KernelDesigner 生成的算法草图（可选，DefaultWorkflowV2 场景使用）
+            inspirations: 格式化后的进化探索方案字符串（evolve/kernelgen_only 场景使用）
+            handwrite_suggestions: 手写优化策略与实现参考
         
         Returns:
             Tuple[str, str, str]: (生成的代码, 完整 prompt, 推理过程)
@@ -480,7 +515,7 @@ class KernelGen(AgentBase):
                 backend=backend,
                 arch=arch
             )
-            
+
             # 4. 渲染 User Prompt
             user_prompt = self.user_prompt_template.format(
                 history_actions=history_compress,
@@ -491,7 +526,12 @@ class KernelGen(AgentBase):
                 func_name=func_name,
                 task_desc=task_desc,
                 user_requirements=user_requirements,
+                hardware_docs=get_hardware_doc(backend, arch),
                 previous_code=previous_code,
+                format_instructions=self.format_instructions,
+                designer_code=designer_code,
+                inspirations=inspirations,
+                handwrite_suggestions=handwrite_suggestions or [],
             )
             
             # 5. 组合完整 prompt，末尾追加输出格式硬约束
