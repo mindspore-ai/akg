@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Skill 自进化系统 - merge_skills 模式工具函数
+Skill 自进化系统 - organize 模式工具函数
 
 提供 evolved skill 扫描、摘要提取、聚类结果解析、归档等功能。
 """
@@ -37,7 +37,7 @@ MAX_CLUSTER_SIZE = 5
 
 
 def scan_evolved_skills(evolved_dir: str) -> List[SkillMetadata]:
-    """扫描指定目录下所有 SKILL.md（排除 .archive/）"""
+    """扫描目录下所有 SKILL.md（排除 .archive/）"""
     evolved_path = Path(evolved_dir)
     if not evolved_path.exists():
         return []
@@ -53,7 +53,7 @@ def scan_evolved_skills(evolved_dir: str) -> List[SkillMetadata]:
         if loaded:
             skills.append(loaded)
 
-    logger.info(f"[merge_skills] 扫描到 {len(skills)} 个 evolved skill")
+    logger.info(f"[organize] 扫描到 {len(skills)} 个 evolved skill")
     return skills
 
 
@@ -114,9 +114,9 @@ def archive_skills(
         dest = os.path.join(archive_base, skill_dir.name)
         try:
             shutil.move(str(skill_dir), dest)
-            logger.info(f"[merge_skills] 归档: {skill_dir.name} -> .archive/{ts}/")
+            logger.info(f"[organize] 归档: {skill_dir.name} -> .archive/{ts}/")
         except OSError as e:
-            logger.warning(f"[merge_skills] 归档失败 {skill_dir.name}: {e}")
+            logger.warning(f"[organize] 归档失败 {skill_dir.name}: {e}")
 
     return archive_base
 

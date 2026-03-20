@@ -101,8 +101,8 @@ def main():
     )
     parser.add_argument(
         "--evolved-skill-dir",
-        default="python/akg_agents/op/resources/skills/triton-ascend",
-        help="evolved SKILL.md 根目录（B 组使用，自动扫描其下 evolved_fix/ 和 evolved_improvement/）",
+        default=str(Path.home() / ".akg" / "evolved_skills" / "triton-ascend"),
+        help="evolved SKILL.md 根目录（B 组使用，默认 ~/.akg/evolved_skills/triton-ascend/，自动扫描其下 evolved-fix/ 和 evolved-improvement/）",
     )
     parser.add_argument(
         "--agent-config",
@@ -188,7 +188,7 @@ def main():
     print(f"Device:  {args.device}")
     print(f"DSL:     {run_config.get('dsl', '')} / {run_config.get('backend', '')} / {run_config.get('arch', '')}")
     if "B" in modes:
-        print(f"Evolved: {args.evolved_skill_dir} (evolved_fix/ + evolved_improvement/)")
+        print(f"Evolved: {args.evolved_skill_dir} (evolved-fix/ + evolved-improvement/)")
     print("=" * 80)
 
     # ================================================================

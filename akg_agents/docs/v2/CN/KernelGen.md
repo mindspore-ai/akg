@@ -59,6 +59,7 @@ KernelGen 使用两阶段 Skill 选择机制：
 
 1. **粗筛（Metadata 过滤）**：使用 `OperatorSkillSelector` 基于 backend / dsl 等 metadata 快速过滤
 2. **精筛（LLM 评估）**：如果候选 Skill 超过 3 个，由 LLM 根据任务描述选择最相关的 Skills
+3. **Extra Skills 注入**：精筛完成后，追加 `extra_skills`（通过 `run()` 参数传入或设置 `kernel_gen.extra_skills` 属性），跳过筛选直接并入，自动去重
 
 ```python
 # 粗筛
@@ -67,6 +68,9 @@ filtered = selector.coarse_filter(loaded_skills, context)
 
 # 精筛（候选 > 3 时）
 selected = llm_select(filtered, task_desc, op_name)
+
+# 追加 extra_skills（跳过筛选，精筛后直接并入）
+kernel_gen.extra_skills = [my_evolved_skill]
 ```
 
 ### Skills 目录
@@ -82,6 +86,7 @@ Skills 存储在 `op/resources/skills/` 目录下，详见 [Skill System 文档]
 
 2. **Skill 选择阶段**
    - 基于任务参数（op_name, dsl, backend 等）执行两阶段 Skill 选择
+   - 精筛后追加 `extra_skills`（如有），确保指定 Skill 一定被选中
    - 返回最相关的 Skills 列表
 
 3. **Prompt 构建阶段**

@@ -166,7 +166,7 @@ def parse_skill_output(llm_output: str) -> Tuple[str, str, str]:
 
     兼容多种 LLM 输出格式：
     - search_log / expert_tuning: skill_name + description + 正文
-    - merge_skills: 仅 description + 正文（skill_name 返回空串）
+    - organize: 仅 description + 正文（skill_name 返回空串）
 
     Returns:
         (skill_name, description, markdown_body)
@@ -215,24 +215,16 @@ def parse_skill_output(llm_output: str) -> Tuple[str, str, str]:
 def get_default_evolved_dir(dsl: str, case_type: str = "") -> str:
     """获取 dsl 对应的 evolved skill 默认目录路径
 
+    默认写入 ~/.akg/evolved_skills/{dsl}/evolved-fix 或 evolved-improvement，
+    与项目内 guides/ 隔离，避免测试时 A 组（baseline）意外加载到 evolved skill。
+
     Args:
         dsl: DSL 类型
-        case_type: "fix" → evolved_fix/, 其余(含空串) → evolved_improvement/
+        case_type: "fix" → evolved-fix/, 其余(含空串) → evolved-improvement/
     """
-    try:
-        from akg_agents import get_project_root
-        project_root = Path(get_project_root())
-    except ImportError:
-        project_root = Path(__file__).resolve().parents[3]
-
-    dir_key = dsl_to_dir_key(dsl)
-    if case_type == "fix":
-        sub = "evolved_fix"
-    else:
-        sub = "evolved_improvement"
-    return str(
-        project_root / "op" / "resources" / "skills" / dir_key / sub
-    )
+    dsl_key = dsl.replace("_", "-").lower()
+    sub = "evolved-fix" if case_type == "fix" else "evolved-improvement"
+    return str(Path.home() / ".akg" / "evolved_skills" / dsl_key / sub)
 
 
 # ==================== SKILL.md 写入 ====================
