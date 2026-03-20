@@ -17,7 +17,7 @@ metadata:
 ## 适用算子
 
 **算术运算**: add, mul, div, sub, pow
-**激活函数**: relu, sigmoid, tanh, gelu, silu, swish
+**激活函数**: relu, sigmoid, tanh（需用 `tl.extra.cuda.libdevice.tanh`）, gelu, silu, swish
 **数学函数**: exp, log, sqrt, sin, cos, abs
 
 ## 优化策略
@@ -197,7 +197,7 @@ def gelu_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     # GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
     x_cubed = x * x * x
     inner = 0.7978845608 * (x + 0.044715 * x_cubed)  # sqrt(2/pi) ≈ 0.7978845608
-    result = 0.5 * x * (1.0 + tl.math.tanh(inner))
+    result = 0.5 * x * (1.0 + tl.extra.cuda.libdevice.tanh(inner))
     
     tl.store(output_ptr + offsets, result, mask=mask)
 
