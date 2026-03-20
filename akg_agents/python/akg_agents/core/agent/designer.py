@@ -22,13 +22,13 @@ warnings.warn(
 )
 
 import logging
+import re
 from typing import Tuple, List
 
 from akg_agents.core_v2.agents import AgentBase, register_agent
 from akg_agents.utils.common_utils import remove_copyright_from_text
 from akg_agents.utils.markdown_utils import extract_function_details
 from akg_agents.utils.hardware_utils import get_hardware_doc
-from akg_agents.utils.parser_registry import create_step_parser
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,16 @@ def get_inspirations(inspirations: List[dict]) -> str:
 
 @register_agent
 class Designer(AgentBase):
+    @staticmethod
+    def _extract_sketch(raw_output: str) -> str:
+        """从 LLM 输出中提取算法草图。"""
+        text = raw_output.strip()
+        pattern = r'```(?:\w+)?\s*\n(.*?)```'
+        matches = re.findall(pattern, text, re.DOTALL)
+        if matches:
+            text = max(matches, key=len).strip()
+        return text
+
     def __init__(
         self,
         op_name: str,
@@ -122,7 +132,7 @@ class Designer(AgentBase):
         backend: str = "",
         arch: str = "",
         workflow_config_path: str = None,  # 已废弃，保留用于向后兼容
-        parser_config_path: str = None,     # 新的 parser 配置路径
+        parser_config_path: str = None,     # 已废弃，保留用于向后兼容
         config: dict = None,
     ):
         self.op_name = op_name
@@ -131,7 +141,6 @@ class Designer(AgentBase):
         self.arch = arch
         self.backend = backend
         self.workflow_config_path = workflow_config_path  # 保留用于向后兼容
-        self.parser_config_path = parser_config_path  # 新的配置路径
         self.config = config
         self.llm_step_count = 0
 
@@ -153,12 +162,6 @@ class Designer(AgentBase):
             context["session_id"] = config["session_id"]
         super().__init__(context=context, config=config)
 
-        # 使用新的 parser loader（不依赖 workflow.yaml）
-        from akg_agents.utils.parser_loader import create_agent_parser
-        self.code_parser = create_agent_parser("designer", self.parser_config_path)
-        # parser 是可选的，不再强制要求
-        self.format_instructions = self.code_parser.get_format_instructions() if self.code_parser else ""
-
         # 初始化designer生成模板
         self.designer_prompt = self.load_template("designer/gen_sketch.j2")
 
@@ -170,7 +173,6 @@ class Designer(AgentBase):
             "op_name": self.op_name,
             "task_desc": remove_copyright_from_text(self.task_desc),
             "hardware_docs": get_hardware_doc(self.backend, self.arch),
-            "format_instructions": self.format_instructions,
             "sketch_guide": self.load_doc("SKETCH_DESIGN_v2.md")
         }
 
@@ -261,35 +263,29 @@ class Designer(AgentBase):
             import json
             from akg_agents.utils.common_utils import ParserFactory
             try:
-                # 使用robust方法解析JSON格式的生成内容（支持markdown代码块包裹等多种格式）
                 extracted_json = ParserFactory._extract_json_comprehensive(llm_result)
                 if extracted_json:
                     result_dict = json.loads(extracted_json)
                 else:
-                    # 尝试直接解析
                     result_dict = json.loads(llm_result)
                 sketch = result_dict.get("sketch", "")
                 reasoning = result_dict.get("reasoning", llm_reasoning)
                 
-                # 如果有space_config，保存到task_info（用于MultiCaseGenerator采样）
-                result_for_return = {"code": sketch}
                 if "space_config" in result_dict:
                     space_config_code = result_dict["space_config"]
                     task_info["space_config_code"] = space_config_code
-                    result_for_return["space_config_code"] = space_config_code  # 也返回给 LangGraph
+                    self._last_space_config = space_config_code
                     task_id = task_info.get('task_id', '0')
                     logger.info(f"[Task {task_id}] Designer生成了参数空间配置")
+                else:
+                    self._last_space_config = None
                 
-                # 转换为标准格式（支持 parser_config.yaml 定义：code + 可选的 space_config_code）
-                # 将{"sketch": "...", "space_config": "...", "reasoning": "..."} 转换为 {"code": "...", "space_config_code": "..."}
-                standard_result = json.dumps(result_for_return, ensure_ascii=False)
-                
-                # 返回: (标准格式的JSON字符串, 格式化提示词, 推理内容)
-                return standard_result, formatted_prompt, reasoning
+                return sketch, formatted_prompt, reasoning
             except json.JSONDecodeError as e:
-                # 如果解析失败，按原有流程返回
                 logger.warning(f"[{self.op_name}] Hint模式下JSON解析失败: {e}，使用原始输出")
-                return llm_result, formatted_prompt, llm_reasoning
+                self._last_space_config = None
+                return self._extract_sketch(llm_result), formatted_prompt, llm_reasoning
         
-        # 非Hint模式，直接返回run_llm的结果
-        return llm_result, formatted_prompt, llm_reasoning
+        # 非Hint模式：提取纯草图
+        self._last_space_config = None
+        return self._extract_sketch(llm_result), formatted_prompt, llm_reasoning
