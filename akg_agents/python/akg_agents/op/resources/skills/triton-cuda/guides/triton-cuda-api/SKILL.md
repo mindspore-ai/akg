@@ -201,6 +201,19 @@ sqrt_val = tl.sqrt(x)
 ```
 - **用途**: 基本数学函数，CUDA 后端直接支持
 
+### tl.sigmoid(x)
+```python
+sigmoid_val = tl.sigmoid(x)
+```
+- **用途**: Sigmoid 激活函数
+
+### tl.extra.cuda.libdevice.tanh(x)
+```python
+tanh_val = tl.extra.cuda.libdevice.tanh(x)
+```
+- **用途**: 双曲正切函数
+- **注意**: CUDA 后端无 `tl.tanh` 或 `tl.math.tanh`，须使用 `tl.extra.cuda.libdevice.tanh`
+
 ### tl.math.exp2(x) / tl.math.log2(x)
 ```python
 exp2_val = tl.math.exp2(x)
