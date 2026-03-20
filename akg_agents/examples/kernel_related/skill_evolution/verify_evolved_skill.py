@@ -26,16 +26,10 @@ verify_evolved_skill.py - 验证特定 evolved skill 对算子生成的效果
 
 用法:
   # 指定单个 skill 文件
-  python verify_evolved_skill.py --task-file /path/to/op.py --skill-paths /path/to/error-fix/SKILL.md
-
-  # 指定 skill 目录（递归加载）
-  python verify_evolved_skill.py --task-file /path/to/op.py --skill-paths /path/to/evolved/
+  python examples/kernel_related/skill_evolution/verify_evolved_skill.py --task-file /path/to/op.py --skill-paths /path/to/error-fix/SKILL.md --dsl triton_cuda --backend cuda --arch a100
 
   # 混合多个路径
-  python verify_evolved_skill.py --task-file /path/to/op.py --skill-paths /path/to/error-fix/SKILL.md /path/to/exp-skill/
-
-  # 指定其他 DSL/backend
-  python verify_evolved_skill.py --task-file /path/to/op.py --skill-paths /path/to/SKILL.md --dsl triton_cuda --backend cuda
+  python examples/kernel_related/skill_evolution/verify_evolved_skill.py --task-file /path/to/op.py --skill-paths /path/to/error-fix/SKILL.md /path/to/exp-skill/
 
 task-file 格式：标准 bench_lite 算子文件（包含 class Model, get_inputs, get_init_inputs）。
 """
@@ -43,7 +37,6 @@ task-file 格式：标准 bench_lite 算子文件（包含 class Model, get_inpu
 import argparse
 import asyncio
 import importlib.util
-import json
 import logging
 import os
 import sys
@@ -69,8 +62,6 @@ def get_project_root() -> Path:
 PROJECT_ROOT = get_project_root()
 sys.path.insert(0, str(PROJECT_ROOT / "python"))
 
-SKILLS_DIR = PROJECT_ROOT / "python" / "akg_agents" / "op" / "resources" / "skills"
-
 
 def load_task_file(task_file: str) -> tuple:
     """从算子文件中提取 op_name 和 task_desc。"""
@@ -82,7 +73,7 @@ def load_task_file(task_file: str) -> tuple:
     mod = importlib.util.module_from_spec(spec)
 
     task_desc = path.read_text(encoding="utf-8")
-    op_name = path.stem
+    op_name = "akg_agents_" + path.stem
     return op_name, task_desc
 
 
@@ -121,30 +112,20 @@ def load_skills_from_paths(paths: list) -> list:
     return skills
 
 
-def inject_evolved_skills(task, dsl: str, evolved_skills: list):
-    """将 evolved skills 强制注入 KernelGen 的 skill 缓存。
+def inject_evolved_skills(task, evolved_skills: list):
+    """通过 KernelGen.extra_skills 属性注入 evolved skills。
 
-    KernelGen._load_skills_by_dsl 只从 guides/ 加载，这里直接往缓存里追加
-    evolved skills，使其参与后续的 skill 选择和 prompt 组装。
+    这些 skills 会在 LLM 精筛完成后自动追加到 selected_skills，
+    绕过粗筛和精筛，同时不干扰原有 guides skill 的正常选择流程。
     """
     kernel_gen = task.agents.get("kernel_gen")
     if not kernel_gen:
         logger.error("LangGraphTask 中未找到 kernel_gen agent")
         return
 
-    dsl_key = dsl.replace("_", "-")
-    existing = kernel_gen._skills_cache.get(dsl_key, [])
-    if not existing:
-        kernel_gen._load_skills_by_dsl(dsl)
-        existing = kernel_gen._skills_cache.get(dsl_key, [])
-
-    existing_names = {s.name for s in existing}
-    new_skills = [s for s in evolved_skills if s.name not in existing_names]
-    kernel_gen._skills_cache[dsl_key] = existing + new_skills
-    logger.info(
-        f"注入 {len(new_skills)} 个 evolved skill 到 KernelGen 缓存 "
-        f"(总计 {len(existing) + len(new_skills)} 个)"
-    )
+    kernel_gen.extra_skills = evolved_skills
+    logger.info(f"已设置 extra_skills，精筛后将追加 {len(evolved_skills)} 个 skill: "
+                f"{[s.name for s in evolved_skills]}")
 
 
 async def run_single(
@@ -183,19 +164,22 @@ async def run_single(
     )
 
     if ab_mode == "B" and evolved_skills:
-        inject_evolved_skills(task, dsl, evolved_skills)
+        inject_evolved_skills(task, evolved_skills)
 
     t0 = time.time()
     _, success, final_state = await task.run()
     elapsed = time.time() - t0
 
+    profile_res = final_state.get("profile_res") or {}
     result = {
         "ab_mode": ab_mode,
         "op_name": op_name,
         "success": success,
+        "iteration": final_state.get("iteration", 0),
         "elapsed_s": round(elapsed, 1),
-        "speedup": final_state.get("best_speedup"),
-        "gen_time_us": final_state.get("best_gen_time"),
+        "speedup": profile_res.get("speedup"),
+        "gen_time_us": profile_res.get("gen_time"),
+        "base_time_us": profile_res.get("base_time"),
         "evolved_skills_injected": [s.name for s in evolved_skills] if ab_mode == "B" else [],
     }
     return result
@@ -212,29 +196,24 @@ def print_results(results: list):
     print(f"\n{'='*80}")
     print("  Evolved Skill 验证结果")
     print(f"{'='*80}")
-    print(f"  {'组别':20s} | 状态 | {'Speedup':>10s} | {'GenTime':>12s} | 耗时")
-    print(f"  {'-'*20}-+------+{'-'*12}+{'-'*14}+-------")
+    print(f"  {'组别':18s} | 状态 | {'Speedup':>10s} | {'GenTime':>12s} | 轮次 | 耗时")
+    print(f"  {'-'*20}-+------+{'-'*12}+{'-'*14}+------+-------")
     for r in results:
         mode_label = "A (baseline)" if r["ab_mode"] == "A" else "B (+ skill)"
         status = "PASS" if r["success"] else "FAIL"
         sp = _fmt_val(r.get("speedup"), "{:.2f}", "x")
         gt = _fmt_val(r.get("gen_time_us"), "{:.1f}", "us")
-        print(f"  {mode_label:20s} | {status:4s} | {sp:>10s} | {gt:>12s} | {r['elapsed_s']}s")
+        itr = r.get("iteration", 0)
+        print(f"  {mode_label:20s} | {status:4s} | {sp:>10s} | {gt:>12s} | {itr:>4d} | {r['elapsed_s']}s")
         if r.get("evolved_skills_injected"):
             print(f"  {'':20s}   注入: {', '.join(r['evolved_skills_injected'])}")
     print(f"{'='*80}")
 
     a = next((r for r in results if r["ab_mode"] == "A"), None)
     b = next((r for r in results if r["ab_mode"] == "B"), None)
-    if a and b:
-        diffs = []
-        if a.get("speedup") is not None and b.get("speedup") is not None:
-            diffs.append(f"Speedup: {b['speedup'] - a['speedup']:+.2f}x")
-        if a.get("gen_time_us") is not None and b.get("gen_time_us") is not None:
-            diffs.append(f"GenTime: {b['gen_time_us'] - a['gen_time_us']:+.1f}us")
-        if diffs:
-            print(f"  差异 (B - A): {' | '.join(diffs)}")
-            print(f"{'='*80}")
+    if a and b and a.get("speedup") is not None and b.get("speedup") is not None:
+        print(f"  Speedup 差异 (B - A): {b['speedup'] - a['speedup']:+.2f}x")
+        print(f"{'='*80}")
 
 
 async def main_async(args):
@@ -269,13 +248,6 @@ async def main_async(args):
         )
         results.append(r)
 
-    output_path = Path(args.output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    result_file = output_path / f"verify_result_{op_name}.json"
-    with open(result_file, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False, default=str)
-    logger.info(f"结果保存: {result_file}")
-
     print_results(results)
 
 
@@ -298,10 +270,7 @@ def main():
     parser.add_argument("--device", type=int, default=0, help="设备 ID（默认 0）")
     parser.add_argument("--workflow", default="kernelgen_only_workflow",
                         help="workflow 名称（默认 kernelgen_only_workflow）")
-    parser.add_argument("--output-dir", "-o", default="~/.akg/skill_verify_results",
-                        help="结果输出目录（默认 ~/.akg/skill_verify_results）")
     args = parser.parse_args()
-    args.output_dir = os.path.expanduser(args.output_dir)
     asyncio.run(main_async(args))
 
 

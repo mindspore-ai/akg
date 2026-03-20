@@ -19,7 +19,7 @@
 | `search_log` | adaptive_search 跑完后，从搜索日志提取进化链 diff 生成优化经验 | 节点 logs 目录 |
 | `expert_tuning` | 用户交互式调优后，从对话历史提取"建议→代码→性能"因果链 | 对话目录 |
 | `error_fix` | 从失败→成功的修复记录中提取调试经验，持续追加到同一 skill | 节点 logs 目录 |
-| `merge_skills` | evolved 目录下 skill 过多时，按主题合并去重 | DSL 名称 |
+| `organize` | `~/.akg/evolved_skills/{dsl}/` 下 skill 过多时，fix 拆分 + improvement 合并去重 | DSL 名称 |
 
 ## 快速上手
 
@@ -38,7 +38,7 @@ python examples/kernel_related/skill_evolution/run_skill_evolution.py expert_tun
 python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix /path/to/logs matmul
 
 # 合并已有 skill
-python examples/kernel_related/skill_evolution/run_skill_evolution.py merge_skills triton_cuda
+python examples/kernel_related/skill_evolution/run_skill_evolution.py organize triton_cuda
 ```
 
 ### 2. 验证 Skill 效果
@@ -49,23 +49,24 @@ python examples/kernel_related/skill_evolution/run_skill_evolution.py merge_skil
 # 验证单个 skill 文件
 python examples/kernel_related/skill_evolution/verify_evolved_skill.py \
     --task-file /path/to/op_task.py \
-    --skill-paths op/resources/skills/triton-ascend/evolved/triton-ascend-error-fix/SKILL.md
+    --skill-paths ~/.akg/evolved_skills/triton-cuda/triton-cuda-error-fix/SKILL.md
+    --dsl triton_cuda --backend cuda --arch a100
 
 # 混合多个路径
 python examples/kernel_related/skill_evolution/verify_evolved_skill.py \
     --task-file /path/to/op_task.py \
     --skill-paths /path/to/error-fix/SKILL.md /path/to/exp-skill/
 
-# 指定其他 DSL/backend，仅跑 B 组
+# 仅跑 B 组
 python examples/kernel_related/skill_evolution/verify_evolved_skill.py \
     --task-file /path/to/op_task.py \
     --skill-paths /path/to/SKILL.md \
-    --dsl triton_cuda --backend cuda --mode B
+    --mode B
 ```
 
 默认使用 `--task-type profile` 同时验证正确性和性能（Speedup / GenTime），如只需正确性验证可传 `--task-type precision_only`。
 
-验证原理：使用 `kernelgen_only_workflow`，A 组仅加载 `guides/` 下原始 skill，B 组额外强制注入指定 skill（跳过选择逻辑），对比两组的 Speedup 和 GenTime。
+验证原理：使用 `kernelgen_only_workflow`，A 组仅加载 `guides/` 下原始 skill，B 组通过 `KernelGen.extra_skills` 在 LLM 精筛完成后追加指定 skill（不参与粗筛和精筛，确保一定被选中），对比两组的 Speedup 和 GenTime。
 
 ### 3. 批量 A/B 测试
 

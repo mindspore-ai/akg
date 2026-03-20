@@ -22,30 +22,30 @@ run_skill_evolution.py - Skill Evolution 独立 CLI 工具（支持四模式）
   - search_log 模式需要先运行 `akg_cli op` 执行 adaptive_search，产生搜索日志
   - expert_tuning 模式需要先运行 `akg_cli op` 进行交互式调优，产生对话记录
   - error_fix 模式需要搜索日志中包含失败→成功的修复记录
-  - organize 模式需要 evolved_fix/ 或 evolved_improvement/ 目录下有 SKILL.md
+  - organize 模式需要 ~/.akg/evolved_skills/{dsl}/ 下有 SKILL.md
   日志默认保存在 ~/.akg/conversations/cli_<session_id>/nodes/<node_id>/logs/
 
 search_log 模式:
-    python run_skill_evolution.py search_log <log_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
+    python examples/kernel_related/skill_evolution/run_skill_evolution.py search_log <log_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
 
 expert_tuning 模式:
-    python run_skill_evolution.py expert_tuning <conversation_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
+    python examples/kernel_related/skill_evolution/run_skill_evolution.py expert_tuning <conversation_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
 
 error_fix 模式:
-    python run_skill_evolution.py error_fix <log_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
+    python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix <log_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
 
 organize 模式（整理：fix=split, improvement=merge）:
-    python run_skill_evolution.py organize <dsl> [--skills-dir DIR] [--output-dir DIR] [--model-level LEVEL]
+    python examples/kernel_related/skill_evolution/run_skill_evolution.py organize <dsl> [--skills-dir DIR] [--output-dir DIR] [--model-level LEVEL]
 
 兼容旧用法（默认 search_log）:
-    python run_skill_evolution.py <log_dir> <op_name>
+    python examples/kernel_related/skill_evolution/run_skill_evolution.py <log_dir> <op_name>
 
 示例:
-    python run_skill_evolution.py search_log /path/to/node_004/logs relu
-    python run_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx rope -o ./output
-    python run_skill_evolution.py error_fix /path/to/node_005/logs matmul -o ./output
-    python run_skill_evolution.py organize triton_ascend
-    python run_skill_evolution.py organize triton_ascend -o ./organized_output
+    python examples/kernel_related/skill_evolution/run_skill_evolution.py search_log /path/to/node_004/logs relu
+    python examples/kernel_related/skill_evolution/run_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx rope -o ./output
+    python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix /path/to/node_005/logs matmul -o ./output
+    python examples/kernel_related/skill_evolution/run_skill_evolution.py organize triton_ascend
+    python examples/kernel_related/skill_evolution/run_skill_evolution.py organize triton_ascend -o ./organized_output
 """
 
 import argparse
@@ -495,7 +495,7 @@ async def _merge_one_category(
 def _find_raw_fix_file(fix_dir: str, dsl: str) -> Optional[Path]:
     """定位 error_fix 追加模式产生的原始文件。
 
-    error_fix 模式始终写入固定路径 evolved_fix/{dsl}-error-fix/SKILL.md，
+    error_fix 模式始终写入固定路径 evolved-fix/{dsl}-error-fix/SKILL.md，
     split 只处理这个文件，不碰已 split 过的产物。
     """
     from akg_agents.op.tools.skill_evolution.common import SkillWriter
@@ -603,7 +603,7 @@ async def _split_fix_skills(
 
 
 def _collect_existing_split_summaries(fix_dir: str, dsl: str) -> str:
-    """收集 evolved_fix/ 下已有 split 产物的 name + description，供 LLM 去重。
+    """收集 evolved-fix/ 下已有 split 产物的 name + description，供 LLM 去重。
 
     跳过原始追加文件和 .archive 目录。
     """
@@ -659,7 +659,7 @@ def _parse_split_output(llm_output: str) -> List[dict]:
 
 
 async def run_organize_skills(dsl: str, skills_dir: str, output_dir: str, model_level: str):
-    """organize 模式: 对 evolved_fix 执行 split，对 evolved_improvement 执行 merge
+    """organize 模式: 对 evolved-fix 执行 split，对 evolved-improvement 执行 merge
 
     skills_dir 如果指定，视为 dsl 根目录（如 triton-ascend/），自动派生子目录。
     """
@@ -673,8 +673,8 @@ async def run_organize_skills(dsl: str, skills_dir: str, output_dir: str, model_
     total_archived = 0
 
     if skills_dir:
-        fix_dir = os.path.join(skills_dir, "evolved_fix")
-        imp_dir = os.path.join(skills_dir, "evolved_improvement")
+        fix_dir = os.path.join(skills_dir, "evolved-fix")
+        imp_dir = os.path.join(skills_dir, "evolved-improvement")
     else:
         fix_dir = get_default_evolved_dir(dsl, case_type="fix")
         imp_dir = get_default_evolved_dir(dsl, case_type="improvement")
@@ -747,7 +747,7 @@ def main():
 
     sp_d = subparsers.add_parser("organize", help="整理 evolved skills：fix 执行 split，improvement 执行 merge")
     sp_d.add_argument("dsl", help="DSL 类型（如 triton_cuda、triton_ascend）")
-    sp_d.add_argument("--skills-dir", "-s", default="", help="evolved skill 目录（留空则自动扫描 evolved_fix/ 和 evolved_improvement/）")
+    sp_d.add_argument("--skills-dir", "-s", default="", help="evolved skill 目录（默认 ~/.akg/evolved_skills/{dsl}/evolved-fix 和 evolved-improvement）")
     sp_d.add_argument("--output-dir", "-o", default="", help="输出目录（默认覆写到原目录）")
     sp_d.add_argument("--model-level", "-m", default="standard", help="LLM 模型级别")
 

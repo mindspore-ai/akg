@@ -144,8 +144,8 @@ def build_evolve_config(
         base = evolved_skill_dir
         if not Path(base).is_absolute():
             base = str(project_root / base)
-        fix_dir = os.path.join(base, "evolved_fix")
-        imp_dir = os.path.join(base, "evolved_improvement")
+        fix_dir = os.path.join(base, "evolved-fix")
+        imp_dir = os.path.join(base, "evolved-improvement")
         dirs = [d for d in (fix_dir, imp_dir) if os.path.isdir(d)]
         agent_config["evolved_skill_dirs"] = dirs
         agent_config["evolved_skill_dir"] = dirs[0] if dirs else base

@@ -95,7 +95,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
             },
             "output_dir": {
                 "type": "string",
-                "description": "SKILL.md 输出目录（可选，默认按 source 类型写入 evolved_fix/ 或 evolved_improvement/），非特殊需求不需要指定",
+                "description": "SKILL.md 输出目录（可选，默认写入 ~/.akg/evolved_skills/{dsl}/evolved-fix 或 evolved-improvement/），非特殊需求不需要指定",
                 "default": "",
             },
         },
@@ -158,8 +158,8 @@ class SkillEvolutionAgent(SkillEvolutionBase):
                 output_dir=output_dir,
                 cur_path=cur_path,
             )
-        elif mode in ("organize", "merge_skills"):
-            return await self._run_merge_skills(
+        elif mode == "organize":
+            return await self._run_organize(
                 skills_dir=skills_dir,
                 output_dir=output_dir,
                 cur_path=cur_path,
@@ -530,9 +530,9 @@ class SkillEvolutionAgent(SkillEvolutionBase):
         except Exception as e:
             return self._error_result("error_fix", e, work_dir, log_lines)
 
-    # ==================== organize / merge_skills 模式 ====================
+    # ==================== organize 模式 ====================
 
-    async def _run_merge_skills(
+    async def _run_organize(
         self,
         skills_dir: str = "",
         output_dir: str = "",
@@ -549,16 +549,16 @@ class SkillEvolutionAgent(SkillEvolutionBase):
             return {
                 "status": "error",
                 "output": "",
-                "error_information": "merge_skills 模式需要提供 skills_dir 参数",
+                "error_information": "organize 模式需要提供 skills_dir 参数",
             }
 
         evolved_dir = skills_dir
-        work_dir = self._init_workspace(cur_path, "", "merge_skills")
+        work_dir = self._init_workspace(cur_path, "", "organize")
         log_lines: List[str] = []
 
         try:
             self._print(
-                "merge_skills",
+                "organize",
                 f"开始: evolved_dir={evolved_dir}",
                 log_lines,
             )
@@ -567,12 +567,12 @@ class SkillEvolutionAgent(SkillEvolutionBase):
             skills = scan_evolved_skills(evolved_dir)
             if len(skills) < 2:
                 return self._fail_result(
-                    "merge_skills",
+                    "organize",
                     f"evolved 目录下只有 {len(skills)} 个 skill，无需合并",
                     work_dir, log_lines,
                 )
 
-            self._print("merge_skills", f"扫描到 {len(skills)} 个 skill", log_lines)
+            self._print("organize", f"扫描到 {len(skills)} 个 skill", log_lines)
             name_to_skill = {s.name: s for s in skills}
 
             # --- Phase 1: 摘要聚类 ---
@@ -591,12 +591,12 @@ class SkillEvolutionAgent(SkillEvolutionBase):
             clusters = parse_classify_output(classify_output)
             if not clusters:
                 return self._fail_result(
-                    "merge_skills", "LLM 聚类输出解析失败", work_dir, log_lines,
+                    "organize", "LLM 聚类输出解析失败", work_dir, log_lines,
                 )
 
             self._save_json(work_dir, "clusters.json", clusters)
             self._print(
-                "merge_skills",
+                "organize",
                 f"聚类结果: {len(clusters)} 个簇 — "
                 + ", ".join(f"簇{i}({len(c['skills'])}个)" for i, c in enumerate(clusters)),
                 log_lines,
@@ -613,11 +613,11 @@ class SkillEvolutionAgent(SkillEvolutionBase):
 
                 valid_names = [n for n in skill_names if n in name_to_skill]
                 if not valid_names:
-                    self._print("merge_skills", f"{cluster_label} 无有效 skill，跳过", log_lines)
+                    self._print("organize", f"{cluster_label} 无有效 skill，跳过", log_lines)
                     continue
 
                 if len(valid_names) == 1:
-                    self._print("merge_skills", f"{cluster_label} 只有 1 个 skill，保留原样", log_lines)
+                    self._print("organize", f"{cluster_label} 只有 1 个 skill，保留原样", log_lines)
                     continue
 
                 cluster_skills = [name_to_skill[n] for n in valid_names]
@@ -668,7 +668,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
                     name, desc, body = parse_skill_output(merge_output)
                     if not body:
                         self._print(
-                            "merge_skills",
+                            "organize",
                             f"{cluster_label} batch {batch_idx} 合并输出为空，跳过",
                             log_lines,
                         )
@@ -682,7 +682,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
 
                 if not merged_name:
                     merged_name = f"{dsl_prefix}-merged-cluster{ci}"
-                    logger.info(f"[merge_skills] {cluster_label}: LLM 未返回 skill_name，使用默认: {merged_name}")
+                    logger.info(f"[organize] {cluster_label}: LLM 未返回 skill_name，使用默认: {merged_name}")
 
                 if merged_body:
                     skill_path = write_merged_skill(
@@ -696,7 +696,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
                     merged_paths.append(skill_path)
                     skills_to_archive.extend(cluster_skills)
                     self._print(
-                        "merge_skills",
+                        "organize",
                         f"{cluster_label} 合并完成: {skill_path}",
                         log_lines,
                     )
@@ -705,13 +705,13 @@ class SkillEvolutionAgent(SkillEvolutionBase):
             if skills_to_archive:
                 archive_path = archive_skills(skills_to_archive, evolved_dir)
                 self._print(
-                    "merge_skills",
+                    "organize",
                     f"已归档 {len(skills_to_archive)} 个原始 skill 至 {archive_path}",
                     log_lines,
                 )
 
             elapsed = time.time() - t0
-            self._print("merge_skills", f"完成: {len(merged_paths)} 个合并 skill ({elapsed:.1f}s)", log_lines)
+            self._print("organize", f"完成: {len(merged_paths)} 个合并 skill ({elapsed:.1f}s)", log_lines)
 
             result_meta: Dict[str, Any] = {
                 "status": "success",
@@ -719,7 +719,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
                 "merged_paths": merged_paths,
                 "archived_count": len(skills_to_archive),
                 "elapsed_seconds": round(elapsed, 1),
-                "mode": "merge_skills",
+                "mode": "organize",
             }
             self._save_json(work_dir, "result.json", result_meta)
             self._save_session_log(work_dir, log_lines)
@@ -736,4 +736,4 @@ class SkillEvolutionAgent(SkillEvolutionBase):
             }
 
         except Exception as e:
-            return self._error_result("merge_skills", e, work_dir, log_lines)
+            return self._error_result("organize", e, work_dir, log_lines)

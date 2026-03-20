@@ -59,6 +59,7 @@ KernelGen uses a two-stage Skill selection mechanism:
 
 1. **Coarse Filter (Metadata Filtering)**: Uses `OperatorSkillSelector` for quick filtering based on backend/dsl metadata
 2. **Fine Filter (LLM Evaluation)**: When candidate Skills exceed 3, LLM selects the most relevant Skills based on task description
+3. **Extra Skills Injection**: After fine filtering, `extra_skills` (via `run()` parameter or `kernel_gen.extra_skills` attribute) are appended, bypassing all filters with automatic deduplication
 
 ```python
 # Coarse filter
@@ -67,6 +68,9 @@ filtered = selector.coarse_filter(loaded_skills, context)
 
 # Fine filter (when candidates > 3)
 selected = llm_select(filtered, task_desc, op_name)
+
+# Append extra_skills (bypass filters, injected after fine selection)
+kernel_gen.extra_skills = [my_evolved_skill]
 ```
 
 ### Skills Directory
@@ -82,6 +86,7 @@ Skills are stored in the `op/resources/skills/` directory. See [Skill System Doc
 
 2. **Skill Selection Stage**
    - Execute two-stage Skill selection based on task parameters (op_name, dsl, backend, etc.)
+   - Append `extra_skills` (if any) after fine selection, ensuring specified Skills are always included
    - Return most relevant Skills list
 
 3. **Prompt Construction Stage**

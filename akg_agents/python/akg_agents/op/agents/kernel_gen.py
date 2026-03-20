@@ -168,11 +168,11 @@ class KernelGen(AgentBase):
                 },
                 "default": []
             },
-            "force_skill_names": {
+            "extra_skills": {
                 "type": "array",
-                "description": "强制加载指定 skill（按 name 匹配，可选）",
+                "description": "额外注入的 skill 对象列表（可选，跳过筛选，精筛后直接追加）",
                 "items": {
-                    "type": "string"
+                    "type": "object"
                 },
                 "default": []
             }
@@ -185,6 +185,7 @@ class KernelGen(AgentBase):
         
         self.codegen_step_count = 0
         self.format_instructions = ""
+        self.extra_skills: List[Any] = []
         
         context = {
             "agent_name": "kernel_gen",
@@ -346,9 +347,9 @@ class KernelGen(AgentBase):
         skill_path = getattr(skill, "skill_path", None)
         if skill_path:
             path_str = str(skill_path)
-            if "evolved_fix" in path_str:
+            if "evolved-fix" in path_str:
                 return "fix"
-            if "evolved_improvement" in path_str:
+            if "evolved-improvement" in path_str:
                 return "improvement"
         return "improvement"
 
@@ -601,7 +602,7 @@ class KernelGen(AgentBase):
         designer_code: str = "",
         inspirations: str = "",
         handwrite_suggestions: Optional[List[Dict[str, str]]] = None,
-        force_skill_names: Optional[List[str]] = None,
+        extra_skills: Optional[List[Any]] = None,
     ) -> Tuple[str, str, str]:
         """
         执行代码生成
@@ -623,7 +624,7 @@ class KernelGen(AgentBase):
             designer_code: KernelDesigner 生成的算法草图（可选，DefaultWorkflowV2 场景使用）
             inspirations: 格式化后的进化探索方案字符串（evolve/kernelgen_only 场景使用）
             handwrite_suggestions: 手写优化策略与实现参考
-            force_skill_names: 强制加载指定 skill（按 name 匹配）
+            extra_skills: 额外注入的 skill 列表，跳过粗筛和精筛，在精筛结果后直接追加
         
         Returns:
             Tuple[str, str, str]: (生成的代码, 完整 prompt, 推理过程)
@@ -635,14 +636,10 @@ class KernelGen(AgentBase):
             func_name = f"{op_name}_{dsl}_{framework}"
             is_pure_modification = bool(previous_code and user_requirements and not verifier_error)
             
-            # Skill 选择（优先级链）
+            # Skill 选择
             if is_pure_modification:
                 selected_skills = []
                 logger.info("[KernelGen] 跳过 skill 加载: 纯修改模式（用户需求明确 + 无报错）")
-            elif force_skill_names:
-                all_skills = self._load_skills_by_dsl(dsl)
-                selected_skills = [s for s in all_skills if s.name in force_skill_names]
-                logger.info(f"[KernelGen] 强制加载 skills: {[s.name for s in selected_skills]}")
             else:
                 if verifier_error:
                     stage = "debug"
@@ -656,6 +653,15 @@ class KernelGen(AgentBase):
                     stage=stage, verifier_error=verifier_error,
                 )
             
+            # 1.5 追加额外注入的 skills（跳过筛选，直接并入）
+            all_extra = (extra_skills or []) + self.extra_skills
+            if all_extra:
+                existing_names = {s.name for s in selected_skills}
+                appended = [s for s in all_extra if s.name not in existing_names]
+                if appended:
+                    selected_skills = selected_skills + appended
+                    logger.info(f"[KernelGen] 追加 {len(appended)} 个 extra_skills: {[s.name for s in appended]}")
+
             # 2. 按 category → name 排序并拼接 skill 内容
             skill_contents = self._assemble_skill_contents(selected_skills)
             
