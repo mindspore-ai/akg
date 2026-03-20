@@ -31,8 +31,8 @@ class Model(nn.Module):
 batch_size = 4
 num_features = 64
 depth = 8
-height = 32
-width = 32
+height = 128
+width = 128
 
 def get_inputs():
     x = torch.randn(batch_size, num_features, depth, height, width)

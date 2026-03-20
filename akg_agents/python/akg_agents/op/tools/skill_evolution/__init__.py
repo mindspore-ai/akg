@@ -21,6 +21,11 @@ Skill 自进化系统
   expert_tuning_utils.py  - expert_tuning 模式：从对话目录提取专家调优经验
   error_fix_utils.py      - error_fix 模式：从错误修复记录提取调试经验
   merge_utils.py          - merge_skills 模式：将 evolved skills 按主题合并去重
+
+A/B 测试相关工具已迁移至 examples/kernel_related/skill_evolution/：
+  ab_test_utils.py        - A/B 测试工具：运行管理、日志解析、结果收集、Tracking 更新
+  run_ab_test.py          - A/B 测试批量运行器
+  tracking.md             - 实验结果跟踪文档
 """
 
 from .common import TaskRecord, EvolutionStep, CompressedData, SkillWriter, parse_skill_output, get_default_evolved_dir

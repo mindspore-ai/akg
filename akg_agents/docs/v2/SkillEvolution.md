@@ -354,6 +354,7 @@ op/tools/skill_evolution/
 ├── merge_utils.py              — merge_skills mode: scan, classify parsing, archive, merge writing
 └── __init__.py
 
+
 op/agents/skill_evolution_agent.py — SkillEvolutionAgent (inherits base, four-mode dispatch)
 
 op/resources/prompts/skill_evolution/
@@ -364,29 +365,33 @@ op/resources/prompts/skill_evolution/
 ├── classify_skills.j2          — merge_skills: name + description → LLM clustering
 └── merge_cluster.j2            — merge_skills: cluster skill contents → LLM merge and dedup
 
-examples/kernel_related/run_skill_evolution.py — Standalone CLI script (no Agent framework dependency)
+examples/kernel_related/skill_evolution/
+├── run_skill_evolution.py      — Standalone CLI script (no Agent framework dependency)
+├── run_ab_test.py              — A/B test batch runner
+├── ab_test_utils.py            — A/B test utility functions
+└── tracking.md                 — Experiment tracking document
 ```
 
 ## 7. Standalone CLI Script
 
-`examples/kernel_related/run_skill_evolution.py` provides an Agent-framework-free entry point.
+`examples/kernel_related/skill_evolution/run_skill_evolution.py` provides an Agent-framework-free entry point.
 
 ```bash
 # search_log mode
-python examples/kernel_related/run_skill_evolution.py search_log /path/to/logs relu
+python examples/kernel_related/skill_evolution/run_skill_evolution.py search_log /path/to/logs relu
 
 # expert_tuning mode
-python examples/kernel_related/run_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx relu
+python examples/kernel_related/skill_evolution/run_skill_evolution.py expert_tuning ~/.akg/conversations/cli_xxx relu
 
 # error_fix mode
-python examples/kernel_related/run_skill_evolution.py error_fix /path/to/logs matmul
+python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix /path/to/logs matmul
 
 # merge_skills mode
-python examples/kernel_related/run_skill_evolution.py merge_skills triton_cuda
-python examples/kernel_related/run_skill_evolution.py merge_skills triton_cuda --skills-dir /path/to/evolved -o ./merged
+python examples/kernel_related/skill_evolution/run_skill_evolution.py merge_skills triton_cuda
+python examples/kernel_related/skill_evolution/run_skill_evolution.py merge_skills triton_cuda --skills-dir /path/to/evolved -o ./merged
 
 # With output directory and model level
-python examples/kernel_related/run_skill_evolution.py error_fix /path/to/logs matmul -o ./output -m complex
+python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix /path/to/logs matmul -o ./output -m complex
 ```
 
 | Argument | Description |

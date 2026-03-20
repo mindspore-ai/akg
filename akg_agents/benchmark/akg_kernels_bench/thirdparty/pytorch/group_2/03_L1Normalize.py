@@ -25,8 +25,8 @@ class Model(nn.Module):
         """
         return F.normalize(x, p=1, dim=1)
 
-batch_size = 16
-dim = 16384
+batch_size = 256
+dim = 65536
 
 def get_inputs():
     x = torch.randn(batch_size, dim)

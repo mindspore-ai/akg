@@ -29,8 +29,8 @@ class Model(nn.Module):
         """
         return self.pdist(x1, x2)
 
-batch_size = 128
-dim = 4096
+batch_size = 256
+dim = 65536
 
 def get_inputs():
     x1 = torch.randn(batch_size, dim)

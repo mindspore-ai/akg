@@ -29,10 +29,10 @@ class Model(nn.Module):
         return self.inorm(x)
 
 batch_size = 4
-num_features = 64
+num_features = 128
 depth = 8
-height = 32
-width = 32
+height = 64
+width = 64
 
 def get_inputs():
     x = torch.randn(batch_size, num_features, depth, height, width)
