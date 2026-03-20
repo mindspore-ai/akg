@@ -38,7 +38,7 @@ def vector_add_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
 
 ### 适用算子
 - 算术运算: add, mul, sub, div
-- 激活函数: relu, sigmoid, tanh, gelu
+- 激活函数: relu, sigmoid, tanh（需用 `tl.extra.cuda.libdevice.tanh`）, gelu
 - 数学函数: exp, log, sqrt, pow
 
 ### 关键要点
@@ -123,13 +123,14 @@ def matmul_kernel(
         # 矩阵乘累加
         accumulator += tl.dot(a, b)
 
-    # 存储结果
+    # 存储结果（需显式转换类型，匹配输出 dtype）
+    c = accumulator.to(c_ptr.dtype.element_ty)
     c_block_ptr = tl.make_block_ptr(
         base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
         offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
         block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0)
     )
-    tl.store(c_block_ptr, accumulator, boundary_check=(0, 1))
+    tl.store(c_block_ptr, c, boundary_check=(0, 1))
 ```
 
 ### Host 侧启动

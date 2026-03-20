@@ -87,7 +87,8 @@ def matmul_kernel(
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
     
-    # 存储结果
+    # 存储结果（需显式转换类型，匹配输出 dtype）
+    c = accumulator.to(c_ptr.dtype.element_ty)
     c_block_ptr = tl.make_block_ptr(
         base=c_ptr,
         shape=(M, N),
@@ -96,7 +97,7 @@ def matmul_kernel(
         block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N),
         order=(1, 0)
     )
-    tl.store(c_block_ptr, accumulator, boundary_check=(0, 1))
+    tl.store(c_block_ptr, c, boundary_check=(0, 1))
 ```
 
 ## 使用 Autotune 优化
@@ -153,12 +154,13 @@ def matmul_kernel_autotune(
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
     
+    c = accumulator.to(c_ptr.dtype.element_ty)
     c_block_ptr = tl.make_block_ptr(
         base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
         offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
         block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0)
     )
-    tl.store(c_block_ptr, accumulator, boundary_check=(0, 1))
+    tl.store(c_block_ptr, c, boundary_check=(0, 1))
 ```
 
 ## Host 侧启动
