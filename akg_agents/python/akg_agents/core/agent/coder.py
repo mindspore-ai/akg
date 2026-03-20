@@ -89,11 +89,7 @@ class Coder(AgentBase):
             context["session_id"] = config["session_id"]
         super().__init__(context=context, config=config)
 
-        # 使用新的 parser loader（不依赖 workflow.yaml）
-        # 去 JSON 化：coder 不再使用 parser，直接输出纯代码
-        from akg_agents.utils.parser_loader import create_agent_parser
-        self.code_parser = create_agent_parser("coder", self.parser_config_path)
-        self.format_instructions = self.code_parser.get_format_instructions() if self.code_parser else ""
+        self.format_instructions = ""
 
         if "triton_cuda" in self.dsl or "triton_ascend" in self.dsl:
             if self.dsl == "triton_cuda":
