@@ -280,9 +280,6 @@ void AllocBufferShrinkPass::rebuildViewChain(memref::AllocOp oldAlloc, memref::A
       Value newSource = replacementMap.lookup(subviewOp.getSource());
       if (!newSource) continue;
 
-      auto newSourceType = dyn_cast<MemRefType>(newSource.getType());
-      auto oldResultType = subviewOp.getType();
-
       SmallVector<OpFoldResult> newOffsets = subviewOp.getMixedOffsets();
       SmallVector<OpFoldResult> newSizes = subviewOp.getMixedSizes();
       SmallVector<OpFoldResult> newStrides = subviewOp.getMixedStrides();
@@ -292,16 +289,8 @@ void AllocBufferShrinkPass::rebuildViewChain(memref::AllocOp oldAlloc, memref::A
         }
       }
 
-      SmallVector<int64_t> newResultShape;
-      for (unsigned d = 0; d < rank; d++) {
-        newResultShape.push_back(shrinkDims[d] ? 1 : oldResultType.getShape()[d]);
-      }
-
-      auto newResultType = MemRefType::get(newResultShape, oldResultType.getElementType(), oldResultType.getLayout(),
-                                           newSourceType.getMemorySpace());
-
       OpBuilder builder(subviewOp);
-      auto newSubview = builder.create<memref::SubViewOp>(subviewOp.getLoc(), newResultType, newSource, newOffsets,
+      auto newSubview = builder.create<memref::SubViewOp>(subviewOp.getLoc(), newSource, newOffsets,
                                                           newSizes, newStrides);
       replacementMap[subviewOp.getResult()] = newSubview.getResult();
 
