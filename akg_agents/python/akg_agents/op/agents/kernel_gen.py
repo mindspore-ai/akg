@@ -171,6 +171,7 @@ class KernelGen(AgentBase):
         """初始化 KernelGen Agent"""
         
         self.codegen_step_count = 0
+        self.format_instructions = ""
         
         context = {
             "agent_name": "kernel_gen",

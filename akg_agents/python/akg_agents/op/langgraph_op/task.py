@@ -252,9 +252,7 @@ class LangGraphTask(BaseLangGraphTask):
         if not self.config.get("skip_kernel_designer", False):
             try:
                 from akg_agents.op.agents.kernel_designer import KernelDesigner
-                agents['kernel_designer'] = KernelDesigner(
-                    parser_config_path=parser_config_path
-                )
+                agents['kernel_designer'] = KernelDesigner()
             except Exception as e:
                 logger.warning(f"Failed to initialize KernelDesigner: {e}")
                 import traceback
