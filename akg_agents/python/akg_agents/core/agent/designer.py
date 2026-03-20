@@ -156,11 +156,8 @@ class Designer(AgentBase):
         # 使用新的 parser loader（不依赖 workflow.yaml）
         from akg_agents.utils.parser_loader import create_agent_parser
         self.code_parser = create_agent_parser("designer", self.parser_config_path)
-        if not self.code_parser:
-            raise ValueError(
-                "Failed to create designer parser. Please check your parser_config.yaml configuration."
-            )
-        self.format_instructions = self.code_parser.get_format_instructions()
+        # parser 是可选的，不再强制要求
+        self.format_instructions = self.code_parser.get_format_instructions() if self.code_parser else ""
 
         # 初始化designer生成模板
         self.designer_prompt = self.load_template("designer/gen_sketch.j2")

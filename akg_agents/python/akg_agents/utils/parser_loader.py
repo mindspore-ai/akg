@@ -96,15 +96,16 @@ def create_agent_parser(agent_name: str, parser_config_path: Optional[str] = Non
     try:
         # 获取配置文件路径
         config_path = _get_parser_config_path(parser_config_path)
-        
+
         # 加载 parser 配置
         parser_config = load_yaml(config_path)
-        
-        # 获取 parsers 配置
-        parsers = parser_config.get('parsers', {})
+
+        # 获取 parsers 配置（处理 None 和空 dict 的情况）
+        parsers = parser_config.get('parsers') or {}
         if not parsers:
-            raise ValueError("No 'parsers' found in parser config")
-        
+            logger.info(f"No parsers configured in {config_path}, returning None for '{agent_name}'")
+            return None
+
         # 检查 Agent 是否存在
         if agent_name not in parsers:
             logger.info(f"Agent '{agent_name}' has no parser configuration, returning None (no parser needed)")

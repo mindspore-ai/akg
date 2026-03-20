@@ -216,7 +216,7 @@ class EvolveWorkflow(OpBaseWorkflow):
         dsl = arguments.get("dsl", "")
         backend = arguments.get("backend", "")
         op_name = arguments.get("op_name", "")
-        
+
         base_config = workflow_resources.get("config") or {}
         full_config = cls.build_langgraph_task_config(
             dsl=dsl,
@@ -224,13 +224,7 @@ class EvolveWorkflow(OpBaseWorkflow):
             op_name=op_name,
             base_config=base_config,
         )
-        
-        # evolve 内部的 LangGraphTask 使用 kernelgen_only_workflow，
-        # 需要 KernelGen（Skill 系统），但不需要 KernelDesigner
-        # full_config["default_workflow"] = "kernelgen_only_workflow"
-        # 禁用 sketch 生成（因为 kernelgen_only_workflow 不需要 sketch）
-        # full_config["enable_sketch_generation"] = False
-        
+
         workflow_resources["config"] = full_config
         
         # 调用父类：log_dir 重定向 + 创建 WorkflowLogger
