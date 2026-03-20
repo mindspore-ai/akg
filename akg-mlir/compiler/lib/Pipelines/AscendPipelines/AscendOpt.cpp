@@ -117,6 +117,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     pm.addPass(mlir::createLegalizeBoolPass());
     // tiling
     pm.addPass(mlir::createNPUAutoTilingPass());
+    pm.addPass(mlir::createAllocBufferShrinkPass());
     // vector
     pm.addPass(mlir::scf::createNPUVectorVectorizePass());
     pm.addPass(mlir::createArithToHIVMConversionPass());
