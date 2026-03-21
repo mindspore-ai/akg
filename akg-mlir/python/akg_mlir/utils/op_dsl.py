@@ -1050,7 +1050,8 @@ def get_op_dsl_torch_mlir():
             f"{get_input(inputs[0][0])}, "
             f"indices=range("
             f"{get_input(inputs[2][0])}, "
-            f"{get_input(inputs[3][0])}, "
+            f"min({get_input(inputs[3][0])}, "
+            f"{get_input(inputs[0][0])}.shape[{get_input(inputs[1][0])}]), "
             f"{get_input(inputs[4][0])}"
             f"), axis={get_input(inputs[1][0])})"
         ),
