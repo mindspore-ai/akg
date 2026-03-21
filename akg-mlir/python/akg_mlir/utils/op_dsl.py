@@ -1093,10 +1093,29 @@ def get_op_dsl_torch_mlir():
             f"{get_input(inputs[1][0])}"
         ),
 
+        "Torch.aten.lt.tensor": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = "
+            f"{get_input(inputs[0][0])} < "
+            f"{get_input(inputs[1][0])}"
+        ),
+
+        "Torch.aten.gt.scalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = "
+            f"{get_input(inputs[0][0])} > "
+            f"{get_input(inputs[1][0])}"
+        ),
+
         "Torch.aten.ge.scalar": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = "
             f"{get_input(inputs[0][0])} >= "
             f"{get_input(inputs[1][0])}"
+        ),
+
+        "Torch.aten.where.self": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.where("
+            f"{get_input(inputs[0][0])}, "
+            f"{get_input(inputs[1][0])}, "
+            f"{get_input(inputs[2][0])})"
         ),
 
         "Torch.aten.exp": lambda inputs, output, attr: (
