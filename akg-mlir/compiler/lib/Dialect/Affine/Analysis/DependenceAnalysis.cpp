@@ -37,11 +37,15 @@
 namespace mlir {
 namespace akg {
 
+static bool isSameOrAliasedMemRef(Value lhs, Value rhs) {
+  return affine::getSourceMemRef(lhs) == affine::getSourceMemRef(rhs);
+}
+
 // Returns the load op count for 'memref'.
 unsigned Node::getLoadOpCount(Value memref) const {
   unsigned loadOpCount = 0;
   for (Operation *loadOp : loads) {
-    if (memref == cast<affine::AffineReadOpInterface>(loadOp).getMemRef()) {
+    if (isSameOrAliasedMemRef(cast<affine::AffineReadOpInterface>(loadOp).getMemRef(), memref)) {
       ++loadOpCount;
     }
   }
@@ -52,7 +56,7 @@ unsigned Node::getLoadOpCount(Value memref) const {
 unsigned Node::getStoreOpCount(Value memref) const {
   unsigned storeOpCount = 0;
   for (Operation *storeOp : stores) {
-    if (memref == cast<affine::AffineWriteOpInterface>(storeOp).getMemRef()) {
+    if (isSameOrAliasedMemRef(cast<affine::AffineWriteOpInterface>(storeOp).getMemRef(), memref)) {
       ++storeOpCount;
     }
   }
@@ -231,12 +235,12 @@ unsigned MemRefDependenceGraph::computeMemrefLoopDepth(int dstId, Value memref) 
   SmallVector<Operation *, 4> targetOps;
   Node *node = getNode(static_cast<unsigned>(dstId));
   for (Operation *loadOp : node->loads) {
-    if (cast<affine::AffineReadOpInterface>(loadOp).getMemRef() == memref) {
+    if (isSameOrAliasedMemRef(cast<affine::AffineReadOpInterface>(loadOp).getMemRef(), memref)) {
       targetOps.push_back(loadOp);
     }
   }
   for (Operation *storeOp : node->stores) {
-    if (cast<affine::AffineWriteOpInterface>(storeOp).getMemRef() == memref) {
+    if (isSameOrAliasedMemRef(cast<affine::AffineWriteOpInterface>(storeOp).getMemRef(), memref)) {
       targetOps.push_back(storeOp);
     }
   }
@@ -350,7 +354,7 @@ void MemRefDependenceGraph::createInitNode(DenseMap<Value, SetVector<unsigned>> 
   });
 }
 
-bool MemRefDependenceGraph::createEdges(const DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
+void MemRefDependenceGraph::addSSAResultEdges() {
   DenseMap<Operation *, unsigned> tempNodes;
   for (auto &idAndNode : nodes) {
     tempNodes.insert({idAndNode.second.op, idAndNode.first});
@@ -371,52 +375,65 @@ bool MemRefDependenceGraph::createEdges(const DenseMap<Value, SetVector<unsigned
       }
     }
   }
+}
 
-  // Walk memref access lists and add graph edges between dependent nodes.
+void MemRefDependenceGraph::addMemrefDependenceEdgesForPair(
+  unsigned srcId, unsigned dstId, Value memref, bool srcHasStore,
+  const SmallVector<std::pair<unsigned, Operation *>, 2> &forLoopEntries) {
+  if (isa<affine::AffineForOp>(getNode(dstId)->op)) {
+    return;
+  }
+  if (!isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(getNode(srcId)->op) ||
+      !isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(getNode(dstId)->op)) {
+    return;
+  }
+
+  bool dstHasStore = getNode(dstId)->getStoreOpCount(memref) > 0;
+  if (!(srcHasStore || dstHasStore) || !hasMemrefAccessDependence(srcId, dstId)) {
+    return;
+  }
+
+  int forLoopNodeId = -1;
+  Operation *dstOp = getNode(dstId)->op;
+  for (auto &[fNodeId, fOp] : forLoopEntries) {
+    if (fOp->isAncestor(dstOp)) {
+      forLoopNodeId = static_cast<int>(fNodeId);
+      break;
+    }
+  }
+  unsigned edgeLoopDepth = computeMemrefLoopDepth(forLoopNodeId, memref);
+  addEdge(srcId, dstId, memref, edgeLoopDepth);
+}
+
+void MemRefDependenceGraph::addMemrefDependenceEdges(Value memref, const SetVector<unsigned> &accessIds) {
+  unsigned n = accessIds.size();
+
+  SmallVector<std::pair<unsigned, Operation *>, 2> forLoopEntries;
+  for (unsigned k = 0; k < n; ++k) {
+    unsigned nodeId = accessIds[k];
+    Operation *op = getNode(nodeId)->op;
+    if (isa<affine::AffineForOp>(op)) {
+      forLoopEntries.emplace_back(nodeId, op);
+    }
+  }
+
+  for (unsigned i = 0; i < n; ++i) {
+    unsigned srcId = accessIds[i];
+    if (isa<affine::AffineForOp>(getNode(srcId)->op)) {
+      continue;
+    }
+    bool srcHasStore = getNode(srcId)->getStoreOpCount(memref) > 0;
+    for (unsigned j = i + 1; j < n; ++j) {
+      addMemrefDependenceEdgesForPair(srcId, accessIds[j], memref, srcHasStore, forLoopEntries);
+    }
+  }
+}
+
+bool MemRefDependenceGraph::createEdges(const DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
+  addSSAResultEdges();
+
   for (auto &memrefAndList : memrefAccesses) {
-    unsigned n = memrefAndList.second.size();
-
-    // Pre-collect for loop nodes from the access list. These nodes are skipped
-    // during edge creation but needed to resolve forLoopNodeId for
-    // computeMemrefLoopDepth.
-    SmallVector<std::pair<unsigned, Operation *>, 2> forLoopEntries;
-    for (unsigned k = 0; k < n; ++k) {
-      unsigned nodeId = memrefAndList.second[k];
-      Operation *op = getNode(nodeId)->op;
-      if (isa<affine::AffineForOp>(op)) {
-        forLoopEntries.emplace_back(nodeId, op);
-      }
-    }
-
-    for (unsigned i = 0; i < n; ++i) {
-      unsigned srcId = memrefAndList.second[i];
-      if (isa<affine::AffineForOp>(getNode(srcId)->op)) {
-        continue;
-      }
-
-      bool srcHasStore = getNode(srcId)->getStoreOpCount(memrefAndList.first) > 0;
-
-      for (unsigned j = i + 1; j < n; ++j) {
-        unsigned dstId = memrefAndList.second[j];
-        if (isa<affine::AffineForOp>(getNode(dstId)->op)) {
-          continue;
-        }
-
-        bool dstHasStore = getNode(dstId)->getStoreOpCount(memrefAndList.first) > 0;
-        if ((srcHasStore || dstHasStore) && hasMemrefAccessDependence(srcId, dstId)) {
-          int forLoopNodeId = -1;
-          Operation *dstOp = getNode(dstId)->op;
-          for (auto &[fNodeId, fOp] : forLoopEntries) {
-            if (fOp->isAncestor(dstOp)) {
-              forLoopNodeId = static_cast<int>(fNodeId);
-              break;
-            }
-          }
-          unsigned edgeLoopDepth = computeMemrefLoopDepth(forLoopNodeId, memrefAndList.first);
-          addEdge(srcId, dstId, memrefAndList.first, edgeLoopDepth);
-        }
-      }
-    }
+    addMemrefDependenceEdges(memrefAndList.first, memrefAndList.second);
   }
   return true;
 }

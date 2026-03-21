@@ -56,12 +56,16 @@ struct BackwardIntersectionResult {
   std::unordered_map<unsigned, unsigned> newReachable;
 };
 
-// Structure to store direct predecessor node ID and corresponding memref
+// Structure to store direct predecessor node ID and corresponding memref.
+// isRAR marks edges where both source and target ops are AffineLoadOp (read-read dependency).
+// These edges are lower priority than store-load (producer-consumer) edges during fusion.
 struct DirectPredecessor {
-  DirectPredecessor(unsigned id, Value ref, unsigned depth = 0) : nodeId(id), memref(ref), loopDepth(depth) {}
+  DirectPredecessor(unsigned id, Value ref, unsigned depth = 0, bool readAfterRead = false)
+      : nodeId(id), memref(ref), loopDepth(depth), isRAR(readAfterRead) {}
   unsigned nodeId;
   Value memref;
   unsigned loopDepth;
+  bool isRAR;
 };
 
 struct FusionAnalyzer {
@@ -121,8 +125,14 @@ struct FusionAnalyzer {
   // Precomputation
   void precomputeDirectPredecessors();
 
-  // Get dependent operations and memrefs between source and target groups
-  // This function efficiently retrieves dependencies using cached direct predecessors
+  // Collects source groups for fusion with the target group.
+  // Prefers store-load (producer-consumer) edges; falls back to load-load edges
+  // only when no store-load edges exist for the target group.
+  void collectFusionSourceGroups(const GroupPtr &targetGroup, std::unordered_set<unsigned> &storeLoadGroups,
+                                 std::unordered_set<unsigned> &readAfterReadGroups);
+
+  // Gets dependent operations and memrefs between source and target groups.
+  // Prefers store-load dependencies; falls back to load-load when none exist.
   DependenceInfo getGroupDependencies(const GroupPtr targetGroup, const GroupPtr sourceGroup);
 
   // Member Variables
