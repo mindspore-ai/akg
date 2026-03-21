@@ -80,8 +80,10 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
   void collectLoadNodeIdsAndNonForNodes(Value memref, const llvm::SetVector<unsigned> &nodeIds,
                                         llvm::SmallVector<unsigned> &loadNodeIds,
                                         llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore);
-  void addAliasedStoreEdges(Value memref, const llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore);
-  void addMultipleLoadEdges(Value memref, llvm::SmallVector<unsigned> &loadNodeIds);
+  void addAliasedStoreEdges(Value memref, const llvm::SetVector<unsigned> &nodeIds,
+                            const llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore);
+  void addMultipleLoadEdges(Value memref, const llvm::SetVector<unsigned> &nodeIds,
+                            llvm::SmallVector<unsigned> &loadNodeIds);
 };
 
 /// Information about an AffineForOp loop nest: root loop, full nest from

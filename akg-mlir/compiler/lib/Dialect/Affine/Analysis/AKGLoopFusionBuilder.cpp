@@ -175,15 +175,22 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
         memrefAccesses[sourceMemref].insert(node.id);
       }
       nodes.insert({node.id, node});
+    } else if (isa<memref::SubViewOp, memref::MemorySpaceCastOp, memref::ExpandShapeOp, memref::CollapseShapeOp,
+                   memref::ReshapeOp, memref::ReinterpretCastOp>(op)) {
+      Node node(nextNodeId++, op);
+      Value result = op->getResult(0);
+      Value source = mlir::affine::getSourceMemRef(result);
+      memrefAccesses[result].insert(node.id);
+      if (source != result) {
+        memrefAccesses[source].insert(node.id);
+      }
+      nodes.insert({node.id, node});
     } else if (op->getNumRegions() != 0 ||
                isa<memref::AllocOp, arith::ConstantOp, affine::AffineApplyOp, affine::AffineYieldOp, func::ReturnOp>(
                  op)) {
       // Return false if another region is found (not currently supported).
       return;
     } else {
-      // Possibly an arith op
-      // Create graph node for top-level op, which could have a memory write
-      // side effect.
       Node node(nextNodeId++, op);
       nodes.insert({node.id, node});
     }
@@ -194,19 +201,32 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
 // or an alias (subview/reshape) of it.
 // This is needed because getStoreOpCount only checks exact memref matches,
 // missing stores through subview/reshape aliases.
+static bool isSameOrAliasedMemRef(Value accessMemref, Value baseMemref) {
+  return mlir::affine::getSourceMemRef(accessMemref) == mlir::affine::getSourceMemRef(baseMemref);
+}
+
 static bool hasAliasedStoreToMemref(Node *node, Value baseMemref) {
   for (Operation *storeOp : node->stores) {
     if (auto writeOp = dyn_cast<affine::AffineWriteOpInterface>(storeOp)) {
       Value storeMemref = writeOp.getMemRef();
-      if (storeMemref == baseMemref) {
-        return true;
-      }
-      if (mlir::affine::getSourceMemRef(storeMemref) == baseMemref) {
+      if (isSameOrAliasedMemRef(storeMemref, baseMemref)) {
         return true;
       }
     }
   }
   return false;
+}
+
+static int getEnclosingForLoopNodeId(MemRefDependenceGraphForFusion &graph, const SetVector<unsigned> &nodeIds,
+                                     unsigned dstId) {
+  Operation *dstOp = graph.getNode(dstId)->op;
+  for (unsigned nodeId : nodeIds) {
+    Operation *candidate = graph.getNode(nodeId)->op;
+    if (isa<affine::AffineForOp>(candidate) && candidate->isAncestor(dstOp)) {
+      return static_cast<int>(nodeId);
+    }
+  }
+  return -1;
 }
 
 void MemRefDependenceGraphForFusion::collectLoadNodeIdsAndNonForNodes(
@@ -215,13 +235,13 @@ void MemRefDependenceGraphForFusion::collectLoadNodeIdsAndNonForNodes(
   for (unsigned nodeId : nodeIds) {
     Node *node = getNode(nodeId);
     if (auto loadOpInterface = dyn_cast<affine::AffineReadOpInterface>(node->op)) {
-      if (loadOpInterface.getMemRef() == memref) {
+      if (isSameOrAliasedMemRef(loadOpInterface.getMemRef(), memref)) {
         loadNodeIds.push_back(nodeId);
       }
     } else if (isa<affine::AffineForOp>(node->op)) {
       for (Operation *loadOpInst : node->loads) {
         if (auto loadOpInterface = dyn_cast<affine::AffineReadOpInterface>(loadOpInst)) {
-          if (loadOpInterface.getMemRef() == memref) {
+          if (isSameOrAliasedMemRef(loadOpInterface.getMemRef(), memref)) {
             int loadNodeId = getNodeId(loadOpInst);
             if (loadNodeId != -1) {
               if (std::find(loadNodeIds.begin(), loadNodeIds.end(), loadNodeId) == loadNodeIds.end()) {
@@ -244,7 +264,8 @@ void MemRefDependenceGraphForFusion::collectLoadNodeIdsAndNonForNodes(
 }
 
 void MemRefDependenceGraphForFusion::addAliasedStoreEdges(
-  Value memref, const SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore) {
+  Value memref, const SetVector<unsigned> &nodeIds,
+  const SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore) {
   for (unsigned i = 0; i < nonForNodesWithStore.size(); ++i) {
     unsigned srcId = nonForNodesWithStore[i].first;
     bool srcHasStore = nonForNodesWithStore[i].second;
@@ -252,13 +273,16 @@ void MemRefDependenceGraphForFusion::addAliasedStoreEdges(
       unsigned dstId = nonForNodesWithStore[j].first;
       bool dstHasStore = nonForNodesWithStore[j].second;
       if ((srcHasStore || dstHasStore) && !hasEdge(srcId, dstId, memref)) {
-        addEdge(srcId, dstId, memref);
+        int forLoopNodeId = getEnclosingForLoopNodeId(*this, nodeIds, dstId);
+        unsigned edgeLoopDepth = computeMemrefLoopDepth(forLoopNodeId, memref);
+        addEdge(srcId, dstId, memref, edgeLoopDepth);
       }
     }
   }
 }
 
-void MemRefDependenceGraphForFusion::addMultipleLoadEdges(Value memref, SmallVector<unsigned> &loadNodeIds) {
+void MemRefDependenceGraphForFusion::addMultipleLoadEdges(Value memref, const SetVector<unsigned> &nodeIds,
+                                                          SmallVector<unsigned> &loadNodeIds) {
   if (loadNodeIds.size() < 2) {
     return;
   }
@@ -268,7 +292,9 @@ void MemRefDependenceGraphForFusion::addMultipleLoadEdges(Value memref, SmallVec
       unsigned srcId = loadNodeIds[i];
       unsigned dstId = loadNodeIds[j];
       if (!hasEdge(srcId, dstId, memref)) {
-        addEdge(srcId, dstId, memref);
+        int forLoopNodeId = getEnclosingForLoopNodeId(*this, nodeIds, dstId);
+        unsigned edgeLoopDepth = computeMemrefLoopDepth(forLoopNodeId, memref);
+        addEdge(srcId, dstId, memref, edgeLoopDepth);
       }
     }
   }
@@ -287,8 +313,8 @@ bool MemRefDependenceGraphForFusion::createEdges(const DenseMap<Value, SetVector
     SmallVector<unsigned> loadNodeIds;
     SmallVector<std::pair<unsigned, bool>, 16> nonForNodesWithStore;
     collectLoadNodeIdsAndNonForNodes(memref, nodeIds, loadNodeIds, nonForNodesWithStore);
-    addAliasedStoreEdges(memref, nonForNodesWithStore);
-    addMultipleLoadEdges(memref, loadNodeIds);
+    addAliasedStoreEdges(memref, nodeIds, nonForNodesWithStore);
+    addMultipleLoadEdges(memref, nodeIds, loadNodeIds);
   }
   return true;
 }
