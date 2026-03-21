@@ -110,27 +110,34 @@ std::vector<FusionPlan> FusionAnalyzer::topoSortFusionPlans(unsigned numNodes) {
     inDegree[to]++;
   }
 
-  // Sorted set of (inDegree, nodeId) for real-time ordering by ascending in-degree then ascending ID
-  std::set<std::pair<unsigned, unsigned>> nodeQueue;
+  // Nodes with zero in-degree are generally output nodes
+  std::queue<unsigned> zeroInDegreeNodes;
   std::vector<FusionPlan> sortedEdges;
 
+  // Find all nodes with zero in-degree and add them to the queue
   for (unsigned i = 0; i < numNodes; i++) {
-    nodeQueue.insert({inDegree[i], i});
+    if (inDegree[i] == 0) {
+      zeroInDegreeNodes.push(i);
+    }
   }
 
-  while (!nodeQueue.empty()) {
-    auto it = nodeQueue.begin();
-    auto [deg, node] = *it;
-    nodeQueue.erase(it);
+  // Process nodes in topological order
+  while (!zeroInDegreeNodes.empty()) {
+    // Get the next node with zero in-degree
+    unsigned node = zeroInDegreeNodes.front();
+    zeroInDegreeNodes.pop();
 
+    // Process all outgoing edges from this node
     for (auto &edge : uniqueDependencies) {
       if (edge.fusedBand.from == node) {
         setFusionPlanOptions(edge);
         sortedEdges.push_back(edge);
         unsigned to = edge.fusedBand.to;
-        nodeQueue.erase({inDegree[to], to});
         inDegree[to]--;
-        nodeQueue.insert({inDegree[to], to});
+
+        if (inDegree[to] == 0) {
+          zeroInDegreeNodes.push(to);
+        }
       }
     }
   }
@@ -646,9 +653,6 @@ bool FusionAnalyzer::checkAndFixMultiOut(FusionPlan &fusePlan) {
 // Records the fusion plan and updates group relationships.
 void FusionAnalyzer::applyAndFuse(const GroupPtr targetGroup, const GroupPtr sourceGroup) {
   sourceGroup->fusedGroupId.emplace_back(targetGroup->groupId);
-  for (auto targetId : targetGroup->nodesId) {
-    finished.insert(targetId);
-  }
 
   FusionPlan fusePlan;
   fusePlan.fusedGroup = FuseEdge(sourceGroup->groupId, targetGroup->groupId);
@@ -717,17 +721,19 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
       }
     }
 
-    // Build direct predecessors list with memrefs and loopDepth
+    // Build direct predecessors list with memrefs and loopDepths
+    auto *targetNode = depGraph.getNode(nodeId);
+    bool targetIsLoad = targetNode && isa<affine::AffineLoadOp>(targetNode->op);
     std::vector<DirectPredecessor> directPreds;
     for (size_t i = 0; i < allPredecessorIds.size(); ++i) {
       if (!skipIdx.count(i)) {
         auto predId = allPredecessorIds[i];
-        // For each direct predecessor, store all memrefs and loopDepth that create the dependency
-        // Typically there's one memref per edge, but we store all to be complete
+        auto *predNode = depGraph.getNode(predId);
+        bool isRAR = targetIsLoad && predNode && isa<affine::AffineLoadOp>(predNode->op);
         const auto &memrefsAndDepths = predToMemrefsAndDepth[predId];
         std::transform(memrefsAndDepths.begin(), memrefsAndDepths.end(), std::back_inserter(directPreds),
-                       [predId](const auto &memrefAndDepth) {
-                         return DirectPredecessor(predId, memrefAndDepth.first, memrefAndDepth.second);
+                       [predId, isRAR](const auto &memrefAndDepth) {
+                         return DirectPredecessor(predId, memrefAndDepth.first, memrefAndDepth.second, isRAR);
                        });
       }
     }
@@ -735,44 +741,70 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
   }
 }
 
+void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup,
+                                               std::unordered_set<unsigned> &storeLoadGroups,
+                                               std::unordered_set<unsigned> &readAfterReadGroups) {
+  for (auto targetNodeId : targetGroup->nodesId) {
+    auto it = directPredecessorsCache.find(targetNodeId);
+    if (it == directPredecessorsCache.end()) {
+      continue;
+    }
+    for (const auto &pred : it->second) {
+      auto sourceGroup = depGraph.getGroupByNode(pred.nodeId);
+      if (sourceGroup == nullptr || sourceGroup->groupId == targetGroup->groupId) {
+        continue;
+      }
+      if (pred.isRAR) {
+        readAfterReadGroups.insert(sourceGroup->groupId);
+      } else {
+        storeLoadGroups.insert(sourceGroup->groupId);
+      }
+    }
+  }
+}
+
 // Gets dependent operations between source and target groups.
 // Uses cached direct predecessors for efficient lookup.
 // Only records the operations (targetNodeId and predId) that have direct dependencies.
 DependenceInfo FusionAnalyzer::getGroupDependencies(const GroupPtr targetGroup, const GroupPtr sourceGroup) {
-  // Check cache first
   auto cacheKey = std::make_pair(sourceGroup->groupId, targetGroup->groupId);
   auto cacheIt = groupDependenciesCache.find(cacheKey);
   if (cacheIt != groupDependenciesCache.end()) {
     return cacheIt->second;
   }
 
-  DependenceInfo depInfo;
-  // Iterate through target group nodes to find dependencies from source group
+  DependenceInfo storeLoadDepInfo;
+  DependenceInfo readAfterReadDepInfo;
+  bool hasStoreLoadDep = false;
   for (auto targetNodeId : targetGroup->nodesId) {
     // Use cached direct predecessors for fast lookup
     auto it = directPredecessorsCache.find(targetNodeId);
     if (it == directPredecessorsCache.end()) {
       continue;
     }
-
-    const auto &directPreds = it->second;
-    for (const auto &directPred : directPreds) {
-      auto predNodeId = directPred.nodeId;
-      auto predGroup = depGraph.getGroupByNode(predNodeId);
+    for (const auto &pred : it->second) {
+      auto predGroup = depGraph.getGroupByNode(pred.nodeId);
       if (predGroup == nullptr || predGroup->groupId != sourceGroup->groupId) {
         continue;
       }
 
-      depInfo.loopDepth = std::min(depInfo.loopDepth, directPred.loopDepth);
-      if (isa<MemRefType>(directPred.memref.getType())) {
-        depInfo.memrefs.insert(directPred.memref);
+      if (!pred.isRAR) {
+        hasStoreLoadDep = true;
+        storeLoadDepInfo.loopDepth = std::min(storeLoadDepInfo.loopDepth, pred.loopDepth);
+        if (isa<MemRefType>(pred.memref.getType())) {
+          storeLoadDepInfo.memrefs.insert(pred.memref);
+        }
+      } else {
+        readAfterReadDepInfo.loopDepth = std::min(readAfterReadDepInfo.loopDepth, pred.loopDepth);
+        if (isa<MemRefType>(pred.memref.getType())) {
+          readAfterReadDepInfo.memrefs.insert(pred.memref);
+        }
       }
     }
   }
 
-  // Cache the result
+  DependenceInfo depInfo = hasStoreLoadDep ? std::move(storeLoadDepInfo) : std::move(readAfterReadDepInfo);
   groupDependenciesCache[cacheKey] = depInfo;
-
   return depInfo;
 }
 
@@ -781,46 +813,51 @@ void FusionAnalyzer::plan() {
   topoSortInit();
   precomputeDirectPredecessors();
 
+  std::unordered_map<unsigned, std::unordered_set<unsigned>> readAfterReadMap;
   while (!finishPlan()) {
     auto targetGroup = getFusionTargetGroup();
     if (targetGroup == nullptr) {
       break;
     }
 
-    std::unordered_set<unsigned> sourceGroupIds;
-    for (auto targetNodeId : targetGroup->nodesId) {
-      auto it = directPredecessorsCache.find(targetNodeId);
-      if (it == directPredecessorsCache.end()) {
-        continue;
-      }
+    std::unordered_set<unsigned> storeLoadGroups;
+    std::unordered_set<unsigned> readAfterReadGroups;
+    collectFusionSourceGroups(targetGroup, storeLoadGroups, readAfterReadGroups);
+    readAfterReadMap[targetGroup->groupId] = readAfterReadGroups;
 
-      const auto &directPreds = it->second;
-      for (const auto &directPred : directPreds) {
-        unsigned sourceNodeId = directPred.nodeId;
-        // auto *sourceNode = depGraph.getNode(sourceNodeId);
-        // auto *targetNode = depGraph.getNode(targetNodeId);
-        // if (sourceNode && targetNode && isa<affine::AffineLoadOp>(sourceNode->op) &&
-        //     isa<affine::AffineLoadOp>(targetNode->op)) {
-        //   continue;
-        // }
-        auto sourceGroup = depGraph.getGroupByNode(sourceNodeId);
-        if (sourceGroup != nullptr && sourceGroup->groupId != targetGroup->groupId) {
-          sourceGroupIds.insert(sourceGroup->groupId);
-        }
-      }
-    }
-    if (sourceGroupIds.empty()) {
-      for (auto targetNodeId : targetGroup->nodesId) {
-        finished.insert(targetNodeId);
-      }
-      continue;
-    }
-
-    for (auto sourceGroupId : sourceGroupIds) {
+    // Phase 1: Process store-load (producer-consumer) edges only.
+    // RAR edges are deferred to Phase 2 to avoid connecting unrelated chains.
+    for (auto sourceGroupId : storeLoadGroups) {
       auto sourceGroup = depGraph.getGroup(sourceGroupId);
       if (sourceGroup != nullptr) {
         applyAndFuse(targetGroup, sourceGroup);
       }
+    }
+
+    for (auto targetId : targetGroup->nodesId) {
+      finished.insert(targetId);
+    }
+  }
+
+  // Phase 2: Process RAR (load-load) edges with backward intersection checking.
+  // Only connect RAR pairs that are not already reachable through Phase 1 plans.
+  for (const auto &[targetGroupId, readAfterReadGroups] : readAfterReadMap) {
+    auto targetGroup = depGraph.getGroup(targetGroupId);
+    if (targetGroup == nullptr) {
+      continue;
+    }
+
+    for (auto sourceGroupId : readAfterReadGroups) {
+      auto sourceGroup = depGraph.getGroup(sourceGroupId);
+      if (sourceGroup == nullptr) {
+        continue;
+      }
+
+      BackwardIntersectionResult intersection;
+      if (findBackwardIntersection(sourceGroup, targetGroup, intersection)) {
+        continue;
+      }
+      applyAndFuse(targetGroup, sourceGroup);
     }
   }
 
