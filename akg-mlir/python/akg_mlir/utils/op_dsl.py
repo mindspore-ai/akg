@@ -994,6 +994,24 @@ def get_op_dsl_torch_mlir():
             f"{get_input(inputs[1][0])})"
         ),
 
+        "Torch.aten.max.dim": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.max("
+            f"{get_input(inputs[0][0])}, "
+            f"axis={get_input(inputs[1][0])}, "
+            f"keepdims={get_input(inputs[2][0])})\n"
+            f"{output[1]['tensor_name']} = (lambda _i, _k, _a: "
+            f"np.expand_dims(_i, axis=_a) if _k else _i)("
+            f"np.argmax({get_input(inputs[0][0])}, "
+            f"axis={get_input(inputs[1][0])}), "
+            f"{get_input(inputs[2][0])}, "
+            f"{get_input(inputs[1][0])})"
+        ),
+
+        "Torch.aten.neg": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.negative("
+            f"{get_input(inputs[0][0])})"
+        ),
+
         "Torch.aten.sqrt": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = np.sqrt("
             f"{get_input(inputs[0][0])})"
@@ -1120,6 +1138,11 @@ def get_op_dsl_torch_mlir():
 
         "Torch.aten.exp": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = np.exp("
+            f"{get_input(inputs[0][0])})"
+        ),
+
+        "Torch.aten.log": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.log("
             f"{get_input(inputs[0][0])})"
         ),
 
