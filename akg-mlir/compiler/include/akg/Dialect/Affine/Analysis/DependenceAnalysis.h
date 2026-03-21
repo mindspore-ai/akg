@@ -112,6 +112,12 @@ struct MemRefDependenceGraph {
 
   virtual void print(raw_ostream &os) const;
   virtual void dump() const { print(llvm::errs()); }
+
+ private:
+  void addMemrefDependenceEdgesForPair(unsigned srcId, unsigned dstId, Value memref, bool srcHasStore,
+                                       const SmallVector<std::pair<unsigned, Operation *>, 2> &forLoopEntries);
+  void addMemrefDependenceEdges(Value memref, const SetVector<unsigned> &accessIds);
+  void addSSAResultEdges();
 };
 
 }  // namespace akg
