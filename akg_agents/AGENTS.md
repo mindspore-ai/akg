@@ -99,3 +99,73 @@ akg_cli --help         # 验证安装
 | `backend` | `cuda`, `ascend`, `cpu` |
 | `dsl` | `triton_cuda`, `triton_ascend`, `cpp`, `cuda_c`, `tilelang_cuda`, `ascendc`, `pypto` |
 | `arch` | cuda: `a100`, `v100`；ascend: `ascend910b1`~`ascend910b4`, `ascend310p3`；cpu: `x86_64`, `aarch64` |
+
+---
+
+## Shell 命令规则
+
+每条 shell 命令运行在独立 session，环境激活不跨命令持久化。
+
+**conda 环境**（`$ENV_TYPE=conda`）：
+```bash
+conda run -n $CONDA_ENV --no-capture-output bash -c \
+  "cd $AKG_AGENTS_DIR && source env.sh && <CMD>"
+```
+
+**venv 环境**（`$ENV_TYPE=venv`）：
+```bash
+bash -c "source $VENV_PATH/bin/activate && cd $AKG_AGENTS_DIR && source env.sh && <CMD>"
+```
+
+> 如果已有 `$HOME_DIR/.akg/check_env.md`，直接使用其中的「命令模板」字段，将 `<CMD>` 替换为实际命令即可。
+
+### 禁止行为
+
+| 行为 | 级别 |
+|------|------|
+| 裸执行 `pip`/`python`（未激活环境） | ⛔ 致命 |
+| 依赖 `conda activate` 或 `source activate` 跨命令持久化 | ⛔ 致命 |
+| 不 `source env.sh` 就运行 akg_agents 相关脚本 | ❌ 错误 |
+| 用 `echo 'y' \|` 管道代替 `--yes` 标志 | ⛔ 致命 |
+
+---
+
+## 环境检查 Skill
+
+| Skill | 用途 | 加载场景 |
+|-------|------|---------|
+| `akg-env-setup` | 环境检查 + 采集 + 缓存；FULL_SETUP 模式额外含当次任务的参数确认和运行时依赖安装 | 安装请求（基础模式）；op-optimizer Phase 1（FULL_SETUP 模式） |
+| `akg-pr` | 基于当前分支与目标分支的 diff 生成 PR 描述文件（.md + .json），写入 `.tmp/pr/` | 用户输入 `/akg_pr` |
+| `akg-issue` | 辅助构建 Issue 描述文件（Bug Report / RFC / Task），写入 `.tmp/issue/` | 用户输入 `/akg_issue` |
+
+---
+
+## PR / Issue 生成规则
+
+### `/akg_pr`
+
+基于当前分支与目标分支（默认 `master`）的 diff，自动生成符合 AKG 规范的 PR 描述。
+
+**产物路径**：`$AKG_AGENTS_DIR/.tmp/pr/`
+- `pr_<branch>_<YYYYMMDD_HHmmss>.md` — PR 描述，遵循 `.github/PULL_REQUEST_TEMPLATE.md` 格式
+- `pr_<branch>_<YYYYMMDD_HHmmss>.json` — 元数据（title, kind, labels, target_branch, validation 等）
+
+**校验规则**（生成后自动执行）：
+- `/kind` 必须为 `bug`/`task`/`feature` 之一
+- PR 描述至少 20 字
+- bug fix PR 必须关联 issue（`Fixes #`）
+- 可通过 `scripts/validate_pr_issue.py <json_file>` 执行校验
+
+### `/akg_issue`
+
+辅助构建 Issue，支持 Bug Report / RFC / Task 三种类型。
+
+**产物路径**：`$AKG_AGENTS_DIR/.tmp/issue/`
+- `issue_<slug>_<YYYYMMDD_HHmmss>.md` — Issue 描述，遵循 `.github/ISSUE_TEMPLATE/` 对应模板格式
+- `issue_<slug>_<YYYYMMDD_HHmmss>.json` — 元数据（title, issue_type, labels, validation 等）
+
+**校验规则**（生成后自动执行）：
+- title 至少 10 字符
+- 必须包含 `kind/*` 标签
+- Bug Report 必须包含环境信息、当前/期望行为、复现步骤
+- 可通过 `scripts/validate_pr_issue.py <json_file>` 执行校验
