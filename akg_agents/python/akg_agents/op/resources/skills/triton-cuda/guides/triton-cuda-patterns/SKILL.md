@@ -5,7 +5,7 @@ category: method
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: triton-cuda
+  dsl: triton_cuda
   operator_patterns: "elementwise, reduce, matmul"
 structure:
   child_skills:

@@ -5,7 +5,7 @@ category: fundamental
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: triton-cuda
+  dsl: triton_cuda
 ---
 
 # Triton CUDA API 参考手册

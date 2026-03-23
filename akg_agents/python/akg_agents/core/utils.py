@@ -82,6 +82,11 @@ def normalize_dsl(dsl: str, backend: str = None) -> str:
     return dsl
 
 
+def dsl_to_dir_key(dsl: str) -> str:
+    """将 DSL 系统名转为 skill 目录/名称前缀（triton_ascend -> triton-ascend）"""
+    return dsl.replace("_", "-").lower()
+
+
 def check_dsl(dsl: str):
     """
     验证实现类型

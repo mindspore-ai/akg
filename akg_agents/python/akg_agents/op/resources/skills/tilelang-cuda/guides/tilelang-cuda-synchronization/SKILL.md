@@ -5,7 +5,7 @@ category: implementation
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: tilelang-cuda
+  dsl: tilelang_cuda
 ---
 
 # TileLang CUDA 同步和线程安全

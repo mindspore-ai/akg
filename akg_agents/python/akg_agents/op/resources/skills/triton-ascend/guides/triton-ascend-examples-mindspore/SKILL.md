@@ -5,7 +5,7 @@ category: example
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
   framework: mindspore
   examples: "vector_add, matmul, layer_norm, softmax, double_kernel"

@@ -446,7 +446,8 @@ async def run_merge_skills(dsl: str, skills_dir: str, output_dir: str, model_lev
                 backend = s.metadata.get("backend", "")
             if cluster_dsl and backend:
                 break
-        dsl_prefix = cluster_dsl.replace("_", "-").lower() if cluster_dsl else dsl.replace("_", "-").lower()
+        from akg_agents.core.utils import dsl_to_dir_key
+        dsl_prefix = dsl_to_dir_key(cluster_dsl) if cluster_dsl else dsl_to_dir_key(dsl)
 
         merged_body = None
         merged_name = ""

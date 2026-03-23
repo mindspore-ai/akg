@@ -5,7 +5,7 @@ category: method
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: cuda-c
+  dsl: cuda_c
 structure:
   child_skills:
     - cuda-c-patterns

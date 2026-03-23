@@ -5,7 +5,7 @@ category: implementation
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: triton-cuda
+  dsl: triton_cuda
 ---
 
 # 内存访问优化

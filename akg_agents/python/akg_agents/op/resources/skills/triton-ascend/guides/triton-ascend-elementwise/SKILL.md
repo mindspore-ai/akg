@@ -1,11 +1,11 @@
 ---
 name: triton-ascend-elementwise
 description: "逐元素算子(element-wise)优化策略，包括 add/mul/relu/sigmoid/tanh/gelu/exp/log 等操作的向量化实现和融合技巧。适用于实现激活函数、逐元素运算、广播操作等向量模式算子的内核代码生成场景"
-category: implementation
+category: guide
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
   operator_patterns: "elementwise"
   algorithms: "add, mul, relu, sigmoid, tanh, gelu, exp, log, div, sub, sqrt, pow"

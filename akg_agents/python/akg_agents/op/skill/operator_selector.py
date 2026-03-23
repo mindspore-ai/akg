@@ -102,21 +102,21 @@ class OperatorSelectionContext(SelectionContext):
         # 使用 Category 筛选：只要 guide 和 example 的 Skill
         context = OperatorSelectionContext(
             operator_type="softmax",
-            dsl="triton-ascend",
+            dsl="triton_ascend",
             backend="ascend",
             include_categories=["guide", "example"]
         )
         
         # 使用分组筛选：只要 knowledge 组
         context = OperatorSelectionContext(
-            dsl="triton-ascend",
+            dsl="triton_ascend",
             backend="ascend",
             include_category_groups=["knowledge"]
         )
         
         # 排除 workflow 和 agent
         context = OperatorSelectionContext(
-            dsl="triton-ascend",
+            dsl="triton_ascend",
             backend="ascend",
             exclude_categories=["workflow", "agent"]
         )
@@ -191,7 +191,7 @@ def create_operator_filters() -> List[Callable]:
         
         # 使用 Category 筛选：只要 guide, example 级别的 Skill
         context = OperatorSelectionContext(
-            dsl="triton-ascend",
+            dsl="triton_ascend",
             backend="ascend",
             include_categories=["guide", "example"]
         )
@@ -199,7 +199,7 @@ def create_operator_filters() -> List[Callable]:
         
         # 使用分组筛选：排除 workflow 和 agent
         context = OperatorSelectionContext(
-            dsl="triton-ascend",
+            dsl="triton_ascend",
             backend="ascend",
             exclude_category_groups=["orchestration", "actor"]
         )

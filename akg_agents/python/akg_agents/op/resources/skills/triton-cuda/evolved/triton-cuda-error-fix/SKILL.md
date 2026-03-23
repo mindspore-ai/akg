@@ -6,7 +6,7 @@ version: 1.0.0
 metadata:
   source: error_fix
   backend: cuda
-  dsl: triton-cuda
+  dsl: triton_cuda
 ---
 
 ### 数学函数调用错误

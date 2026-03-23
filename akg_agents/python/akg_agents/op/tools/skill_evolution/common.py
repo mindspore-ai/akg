@@ -30,6 +30,8 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
+from akg_agents.core.utils import dsl_to_dir_key
+
 logger = logging.getLogger(__name__)
 
 DIFF_MAX_LINES = 200
@@ -218,9 +220,9 @@ def get_default_evolved_dir(dsl: str) -> str:
     except ImportError:
         project_root = Path(__file__).resolve().parents[3]
 
-    dsl_key = dsl.replace("_", "-").lower()
+    dir_key = dsl_to_dir_key(dsl)
     return str(
-        project_root / "op" / "resources" / "skills" / dsl_key / "evolved"
+        project_root / "op" / "resources" / "skills" / dir_key / "evolved"
     )
 
 
@@ -285,29 +287,29 @@ class SkillWriter:
     def _sanitize_skill_name(
         self, name: str, op_name: str, dsl: str, fallback_prefix: str = "case",
     ) -> str:
-        dsl_key = dsl.replace("_", "-").lower()
+        dir_key = dsl_to_dir_key(dsl)
         if not name:
-            name = f"{dsl_key}-{fallback_prefix}-{op_name}"
+            name = f"{dir_key}-{fallback_prefix}-{op_name}"
 
         name = name.lower().strip()
         name = re.sub(r"[^a-z0-9-]", "-", name)
         name = re.sub(r"-+", "-", name)
         name = name.strip("-")
-        return name or f"{dsl_key}-{fallback_prefix}-auto"
+        return name or f"{dir_key}-{fallback_prefix}-auto"
 
     def _default_skill_dir(self, dsl: str, skill_name: str) -> str:
         return os.path.join(get_default_evolved_dir(dsl), skill_name)
 
     @staticmethod
     def _error_fix_skill_name(dsl: str) -> str:
-        dsl_key = dsl.replace("_", "-").lower().strip("-")
-        return f"{dsl_key}-error-fix" if dsl_key else "error-fix"
+        dir_key = dsl_to_dir_key(dsl).strip("-")
+        return f"{dir_key}-error-fix" if dir_key else "error-fix"
 
     @staticmethod
     def _error_fix_description(dsl: str) -> str:
-        dsl_key = dsl.replace("_", "-").lower().strip("-")
-        if dsl_key:
-            return f"{dsl_key}常见错误及修复方法，用于代码生成时避免同类问题"
+        dir_key = dsl_to_dir_key(dsl).strip("-")
+        if dir_key:
+            return f"{dir_key}常见错误及修复方法，用于代码生成时避免同类问题"
         return "常见错误及修复方法，用于代码生成时避免同类问题"
 
     def get_error_fix_skill_path(
@@ -378,7 +380,7 @@ class SkillWriter:
         frontmatter = {
             "name": self._error_fix_skill_name(dsl),
             "description": self._error_fix_description(dsl),
-            "category": "implementation",
+            "category": "case",
             "version": "1.0.0",
             "metadata": meta,
         }
@@ -415,12 +417,12 @@ class SkillWriter:
         if backend:
             meta["backend"] = backend
         if dsl:
-            meta["dsl"] = dsl.replace("_", "-").lower()
+            meta["dsl"] = dsl.lower()
 
         frontmatter = {
             "name": skill_name,
             "description": desc,
-            "category": "example",
+            "category": "case",
             "version": "1.0.0",
             "metadata": meta,
         }

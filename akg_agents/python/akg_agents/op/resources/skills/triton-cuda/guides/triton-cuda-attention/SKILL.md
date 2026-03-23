@@ -5,7 +5,7 @@ category: implementation
 version: "2.0.0"
 metadata:
   backend: cuda
-  dsl: triton-cuda
+  dsl: triton_cuda
   operator_patterns: "attention"
   algorithms: "flash-attention, causal-attention, grouped-query-attention, multi-query-attention"
 ---

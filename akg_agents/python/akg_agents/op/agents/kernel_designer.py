@@ -161,9 +161,8 @@ class KernelDesigner(AgentBase):
         cases/（手写优化建议）由上层搜索控制器通过 SkillHandwriteLoader 加载，
         经采样后以 handwrite_suggestions 参数传入 run()。
         """
-        dsl_key = dsl.replace("_", "-")
-        if dsl_key in self._skills_cache:
-            return self._skills_cache[dsl_key]
+        if dsl in self._skills_cache:
+            return self._skills_cache[dsl]
 
         skills = []
         designer_dir = SKILLS_DIR / "designer"
@@ -175,7 +174,7 @@ class KernelDesigner(AgentBase):
             except Exception as e:
                 logger.error(f"Failed to load designer skills: {e}")
 
-        self._skills_cache[dsl_key] = skills
+        self._skills_cache[dsl] = skills
         return skills
     
     async def _select_skills(self, dsl: str = "",
