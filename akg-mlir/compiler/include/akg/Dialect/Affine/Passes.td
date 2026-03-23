@@ -317,13 +317,13 @@ def Normalize : Pass<"normalize", "func::FuncOp"> {
     let constructor = "mlir::createNormalizePass()";
   }
 
-def PreProcessForFusion : Pass<"pre-process-for-fusion", "func::FuncOp"> {
-  let summary = "Preprocess operations before loop fusion";
+def HoistLoopIndependentOps: Pass<"hoist-loop-independent-ops", "func::FuncOp"> {
+  let summary = "Hoist top-level non-affine ops before the first affine.for when dependency-safe";
   let description = [{
-    PreProcessForFusion pass performs preprocessing operations before loop fusion.
-    It moves allocations before the first affine.for loop and hoists loop-invariant loads.
+    HoistLoopIndependentOps pass performs preprocessing operations before loop fusion.
+    It hoist top-level non-affine ops before the first affine.for when dependency-safe.
   }];
-  let constructor = "mlir::createPreProcessForFusionPass()";
+  let constructor = "mlir::createHoistLoopIndependentOpsPass()";
 }
 
 def BroadcastLoopHoist : Pass<"broadcast-loop-hoist", "func::FuncOp"> {
