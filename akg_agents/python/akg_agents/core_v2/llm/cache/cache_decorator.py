@@ -1,3 +1,4 @@
+#装饰器2次修改
 import functools
 import logging
 from typing import Any, Dict, Optional
@@ -14,6 +15,22 @@ def _resolve_cache_params(client: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]
         return {**base, **kwargs}
     except Exception:
         return dict(kwargs)
+
+
+def _replay_cached_stream(client: Any, agent_name: str, cached_result: Dict[str, Any]) -> None:
+    """Replay cached result to stream channel so stream callers keep UI behavior."""
+    reasoning = cached_result.get("reasoning_content", "") if isinstance(cached_result, dict) else ""
+    content = cached_result.get("content", "") if isinstance(cached_result, dict) else ""
+
+    try:
+        if reasoning and getattr(client, "display_reasoning", True):
+            client._safe_send_stream(agent_name, reasoning, is_reasoning=True)
+        if content and getattr(client, "display_content", True):
+            client._safe_send_stream(agent_name, content, is_reasoning=False)
+        if hasattr(client, "_safe_send_display"):
+            client._safe_send_display("")
+    except Exception as exc:
+        logger.warning(f"Failed to replay cached stream: {exc}")
 
 
 def attach_cache_to_client(
@@ -49,7 +66,7 @@ def attach_cache_to_client(
         cache_refresh = kwargs.pop("cache_refresh", False)
         cache_enable = cache.enable if cache_enable is None else cache_enable
 
-        if not cache_enable or stream:
+        if not cache_enable:
             return await original_generate(
                 messages, stream=stream, agent_name=agent_name, tools=tools, **kwargs
             )
@@ -60,6 +77,8 @@ def attach_cache_to_client(
             if not cache_refresh:
                 cached = cache.get(messages, tools=tools, **cache_params)
                 if cached is not None:
+                    if stream:
+                        _replay_cached_stream(client, agent_name, cached)
                     return cached
         except Exception as exc:
             logger.warning(f"LLM cache lookup failed: {exc}")
