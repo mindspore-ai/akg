@@ -68,6 +68,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
   }
   OpPassManager &nestedFunctionPM = pm.nest<mlir::func::FuncOp>();
   nestedFunctionPM.addPass(mlir::tosa::createTosaToLinalg());
+  nestedFunctionPM.addPass(mlir::createLinalgElementwiseOpFusionPass());
 
   if (options.enableLoopFusion) {
     bool keepFakeOuts = true;
