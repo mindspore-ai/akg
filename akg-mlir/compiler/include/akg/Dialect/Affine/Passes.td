@@ -318,4 +318,13 @@ def Normalize : Pass<"normalize", "func::FuncOp"> {
     let constructor = "mlir::createNormalizePass()";
   }
 
+def PreProcessForFusion : Pass<"pre-process-for-fusion", "func::FuncOp"> {
+  let summary = "Preprocess operations before loop fusion";
+  let description = [{
+    PreProcessForFusion pass performs preprocessing operations before loop fusion.
+    It moves allocations before the first affine.for loop and hoists loop-invariant loads.
+  }];
+  let constructor = "mlir::createPreProcessForFusionPass()";
+}
+
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES
