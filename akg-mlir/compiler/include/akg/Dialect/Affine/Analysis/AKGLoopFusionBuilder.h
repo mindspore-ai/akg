@@ -106,11 +106,11 @@ struct FusionCodeGenHelper {
   unsigned getAliasId(unsigned srcId);
 
   // Fusion operation: perform different types of loop fusion
-  void doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
-               const FusionPlan &plan);
-  void doHFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp, affine::AffineForOp dstAffineForOp,
-               const FusionPlan &plan);
-  void doIFuse(unsigned srcId, unsigned dstId, FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
+  void doVFuse(unsigned srcGroupId, unsigned dstGroupId, affine::AffineForOp srcAffineForOp,
+              affine::AffineForOp dstAffineForOp, const FusionPlan &plan);
+  void doHFuse(unsigned srcGroupId, unsigned dstGroupId, affine::AffineForOp srcAffineForOp,
+              affine::AffineForOp dstAffineForOp, const FusionPlan &plan);
+  void doIFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
 
  private:
   // Finds the maximum legal fusion depth for fusing src loop nest into dst loop nest.
