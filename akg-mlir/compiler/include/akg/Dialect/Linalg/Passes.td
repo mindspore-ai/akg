@@ -138,4 +138,18 @@ def CloneTensorEmpty : Pass<"clone-tensor-empty", "func::FuncOp"> {
   let dependentDialects = ["linalg::LinalgDialect", "tensor::TensorDialect"];
 }
 
+def EraseUnusedOperandsAndResults : Pass<"erase-unused-operands-and-results", "func::FuncOp"> {
+  let summary = "Erase unused linalg.generic operands and tensor results when safe";
+  let description = [{
+    Runs MLIR's `populateEraseUnusedOperandsAndResultsPatterns` on `linalg.generic`
+    with pure tensor semantics: drops dead outputs (and related indexing maps,
+    region args, yield operands) and redundant inputs when valid for loop bounds.
+  }];
+  let constructor = "mlir::createEraseUnusedOperandsAndResultsPass()";
+  let dependentDialects = [
+    "linalg::LinalgDialect",
+    "tensor::TensorDialect"
+  ];
+}
+
 #endif // AKG_MLIR_DIALECT_LINAGLG_PASSES

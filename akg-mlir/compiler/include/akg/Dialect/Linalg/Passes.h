@@ -67,6 +67,9 @@ std::unique_ptr<Pass> createLinalgElementwiseFusionExtPass();
 /// Create a pass to clone tensor.empty operations used as outputs of linalg.generic.
 std::unique_ptr<OperationPass<func::FuncOp>> createCloneTensorEmptyPass();
 
+/// Erase unused linalg.generic operands and tensor results (see MLIR erase-unused patterns).
+std::unique_ptr<OperationPass<func::FuncOp>> createEraseUnusedOperandsAndResultsPass();
+
 /// Pattern to fuse `linalg.generic` -> `linalg.template` operations
 /// when both operations are fusable elementwise operations.
 void populateTemplateOpsFusionPatterns(RewritePatternSet &patterns);
