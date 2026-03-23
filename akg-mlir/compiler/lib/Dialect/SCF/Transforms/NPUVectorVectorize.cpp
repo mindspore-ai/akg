@@ -1036,13 +1036,50 @@ static void vectorizeTailOps(VectorizationContext &tailCtx, VectorizationContext
 
   memref::LoadOp tailLoadOp = nullptr;
 
+  tailCtx.valueMapping.map(ctx.scalarLoop.getInductionVar(), vecLoopUb);
+
   for (Operation &op : ctx.scalarLoop.getBody()->without_terminator()) {
     if (isReductionOp(op)) {
       continue;
     }
 
+    if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
+      vectorizeStore(storeOp, tailCtx);
+      continue;
+    }
+
     if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
       tailLoadOp = loadOp;
+
+      Value vecAxis = ctx.getVectorizationAxis();
+      Value mappedVecAxis = ctx.valueMapping.lookupOrDefault(vecAxis);
+      bool allIndicesLoopInvariant = true;
+      for (Value idx : loadOp.getIndices()) {
+        if (idx == vecAxis || idx == mappedVecAxis) {
+          allIndicesLoopInvariant = false;
+          break;
+        }
+        if (idx.getParentBlock() == ctx.scalarLoop.getBody()) {
+          allIndicesLoopInvariant = false;
+          break;
+        }
+      }
+
+      Value mappedMemRef = tailCtx.valueMapping.lookupOrDefault(loadOp.getMemRef());
+
+      if (allIndicesLoopInvariant) {
+        SmallVector<Value> indices = llvm::map_to_vector(
+            loadOp.getIndices(), [&](Value idx) {
+              return tailCtx.valueMapping.lookupOrDefault(idx);
+            });
+
+        Value scalarLoad = tailCtx.builder.create<memref::LoadOp>(
+            loc, mappedMemRef, indices);
+
+        Value vecValue = vectorizeBroadcastScalar(scalarLoad, tailCtx);
+        tailCtx.valueMapping.map(loadOp.getResult(), vecValue);
+        continue;
+      }
 
       SmallVector<Value> tailIndices = buildTailIndices(
           loadOp, ctx.scalarLoop.getInductionVar(), vecLoopUb, tailCtx.builder);
@@ -1054,7 +1091,7 @@ static void vectorizeTailOps(VectorizationContext &tailCtx, VectorizationContext
           loc, tailCtx.builder.getZeroAttr(memrefElemType));
 
       auto tailRead = tailCtx.builder.create<npuvector::TransferReadOp>(
-          loc, typeInfo.vecType, loadOp.getMemRef(),
+          loc, typeInfo.vecType, mappedMemRef,
           ValueRange(tailIndices), padding, Value(),
           ValueRange(typeInfo.dynamicSizes), tailSize);
 
