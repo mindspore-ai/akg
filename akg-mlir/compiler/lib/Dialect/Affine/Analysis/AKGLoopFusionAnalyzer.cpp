@@ -362,10 +362,6 @@ void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
       if (sourceGroup->groupTemplate == OperatorTemplate::Reshape) {
         plan.loopTransform = LoopTransform::StripMine;
       }
-    } else if (targetGroup->groupTemplate == OperatorTemplate::Reduction) {
-      if (sourceGroup->groupTemplate == OperatorTemplate::ReductionInit) {
-        plan.loopTransform = LoopTransform::ReplicateIf;
-      }
     }
   }
 
