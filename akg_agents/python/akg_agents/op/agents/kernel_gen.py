@@ -168,11 +168,6 @@ class KernelGen(AgentBase):
                 },
                 "default": []
             },
-            "skip_skills": {
-                "type": "boolean",
-                "description": "完全跳过 skill 加载（可选）",
-                "default": False
-            },
             "force_skill_names": {
                 "type": "array",
                 "description": "强制加载指定 skill（按 name 匹配，可选）",
@@ -237,42 +232,10 @@ class KernelGen(AgentBase):
     # ==================== 分层分阶段 Skill 选择 ====================
 
     STAGE_CATEGORIES = {
-        "initial":  {"fundamental", "reference", "guide", "example",
-                     "implementation", "method"},
-        "debug":    {"fundamental", "reference", "guide", "example", "case",
-                     "implementation", "method"},
-        "optimize": {"fundamental", "reference", "guide", "example", "case",
-                     "implementation", "method"},
+        "initial":  {"fundamental", "reference", "guide", "example"},
+        "debug":    {"fundamental", "reference", "guide", "example", "case"},
+        "optimize": {"fundamental", "reference", "guide", "example", "case"},
     }
-
-    def _match_guide_skills(
-        self,
-        guide_candidates: List[Any],
-        op_name: str,
-        task_desc: str,
-    ) -> List[Any]:
-        """基于 algorithms + operator_patterns metadata 做文本匹配。
-        无命中时回退为全部 guide（兜底）。
-        """
-        text = (op_name + " " + task_desc).lower()
-        matched = []
-
-        for skill in guide_candidates:
-            meta = getattr(skill, "metadata", {}) or {}
-            patterns = meta.get("operator_patterns", "")
-            algorithms = meta.get("algorithms", "")
-            keywords = [
-                kw.strip().lower()
-                for kw in (patterns + "," + algorithms).split(",")
-                if kw.strip() and kw.strip().lower() != "all"
-            ]
-            if any(kw in text for kw in keywords):
-                matched.append(skill)
-
-        if not matched:
-            logger.info("[KernelGen] 无 guide 精确命中，回退加载全部 guide")
-            return guide_candidates
-        return matched
 
     async def _select_skills_by_stage(
         self,
@@ -286,8 +249,8 @@ class KernelGen(AgentBase):
     ) -> List[Any]:
         """分层分阶段 Skill 选择：
         Layer 0 (fundamental/reference): 固定注入
-        Layer 1 (guide/implementation/method): algorithms 文本匹配; example: framework 匹配
-        Layer 2 (case): 仅 fix/optimize 阶段，LLM 精筛
+        Layer 1 (guide + example): LLM 一次筛选 guide(1-2 个)，example 跟随 guide 的 operator_type
+        Layer 2 (case): 仅 debug/optimize 阶段，与 guide 一起在同一次 LLM 调用中筛选
         """
         all_skills = self._load_skills_by_dsl(dsl)
         if not all_skills:
@@ -298,7 +261,8 @@ class KernelGen(AgentBase):
         always_skills: List[Any] = []
         guide_candidates: List[Any] = []
         example_candidates: List[Any] = []
-        case_candidates: List[Any] = []
+        case_fix: List[Any] = []
+        case_improve: List[Any] = []
 
         for skill in all_skills:
             cat = getattr(skill, "category", "") or ""
@@ -306,121 +270,188 @@ class KernelGen(AgentBase):
                 continue
             if cat in ("fundamental", "reference"):
                 always_skills.append(skill)
-            elif cat in ("guide", "implementation", "method"):
+            elif cat == "guide":
                 guide_candidates.append(skill)
             elif cat == "example":
                 example_candidates.append(skill)
             elif cat == "case":
-                case_candidates.append(skill)
+                ct = self._infer_case_type(skill)
+                if ct == "fix":
+                    case_fix.append(skill)
+                else:
+                    case_improve.append(skill)
 
-        guide_selected = self._match_guide_skills(guide_candidates, op_name, task_desc)
+        if stage == "debug":
+            case_candidates = case_fix
+        elif stage == "optimize":
+            case_candidates = case_improve
+        else:
+            case_candidates = []
 
-        example_selected = [
-            s for s in example_candidates
-            if not framework
-            or framework in (getattr(s, "metadata", {}) or {}).get("framework", "all")
-        ]
+        guide_selected, case_selected = await self._llm_select_guides_and_cases(
+            guide_candidates=guide_candidates,
+            case_candidates=case_candidates,
+            op_name=op_name,
+            task_desc=task_desc,
+            verifier_error=verifier_error,
+            stage=stage,
+        )
 
-        case_selected: List[Any] = []
-        if case_candidates and stage in ("debug", "optimize"):
-            case_selected = await self._llm_select_cases(
-                case_candidates, op_name, task_desc, verifier_error, stage
-            )
+        selected_types = set()
+        for s in guide_selected:
+            meta = getattr(s, "metadata", {}) or {}
+            ot = meta.get("operator_type", "")
+            if ot:
+                selected_types.add(ot)
+
+        example_selected = []
+        for s in example_candidates:
+            meta = getattr(s, "metadata", {}) or {}
+            ex_type = meta.get("operator_type", "")
+            fw = meta.get("framework", "all")
+            if ex_type and ex_type in selected_types:
+                if not framework or framework in fw or fw == "all":
+                    example_selected.append(s)
+            elif not ex_type and (not framework or framework in fw or fw == "all"):
+                example_selected.append(s)
 
         result = always_skills + guide_selected + example_selected + case_selected
         logger.info(
             f"[KernelGen] stage={stage}, "
             f"L0={len(always_skills)}, L1_guide={len(guide_selected)}, "
-            f"L1_example={len(example_selected)}, L2={len(case_selected)}, "
+            f"L1_example={len(example_selected)}, L2_case={len(case_selected)} "
+            f"(fix_pool={len(case_fix)}, improve_pool={len(case_improve)}), "
             f"total_chars={sum(len(s.content) for s in result)}"
         )
+        excluded_guides = [s.name for s in guide_candidates if s not in guide_selected]
+        excluded_cases = [s.name for s in case_candidates if s not in case_selected]
+        if excluded_guides:
+            logger.info(f"[KernelGen] 排除的 guide: {excluded_guides}")
+        if excluded_cases:
+            logger.info(f"[KernelGen] 排除的 case: {excluded_cases}")
         return result
 
-    async def _llm_select_cases(
+    @staticmethod
+    def _infer_case_type(skill) -> str:
+        """推断 case skill 类型：fix（错误修复）或 improvement（性能优化）。
+        优先级：metadata.case_type > 目录名推断 > 默认 improvement。
+        """
+        meta = getattr(skill, "metadata", {}) or {}
+        ct = meta.get("case_type", "")
+        if ct in ("fix", "improvement"):
+            return ct
+        skill_path = getattr(skill, "skill_path", None)
+        if skill_path:
+            path_str = str(skill_path)
+            if "evolved_fix" in path_str:
+                return "fix"
+        return "improvement"
+
+    async def _llm_select_guides_and_cases(
         self,
-        candidates: List[Any],
+        guide_candidates: List[Any],
+        case_candidates: List[Any],
         op_name: str,
         task_desc: str,
         verifier_error: str,
         stage: str,
-    ) -> List[Any]:
-        """阶段化 LLM 精筛 case 类 skill（仅 debug/optimize 阶段）"""
+    ) -> tuple:
+        """一次 LLM 调用同时筛选 guide 和 case skills。
+        返回 (guide_selected, case_selected)。
+        """
         import json
 
-        skills_info = [{"name": s.name, "description": s.description} for s in candidates]
+        if not guide_candidates and not case_candidates:
+            return [], []
 
-        if stage == "debug":
-            goal = "修复当前错误"
-            context = f"**当前错误**:\n```\n{verifier_error[:500]}\n```"
-            criteria = (
-                "1. 优先选择处理过**相同类型错误**的案例\n"
-                "2. 其次选择**相同算子类型**的案例\n"
-                "3. 只选择与当前错误**强相关**的案例，不相关的不选"
+        guide_info = [{"name": s.name, "description": s.description} for s in guide_candidates]
+        case_info = [{"name": s.name, "description": s.description} for s in case_candidates]
+
+        task_desc_truncated = task_desc[:1500] if len(task_desc) > 1500 else task_desc
+
+        sections = [f"**算子名称**: {op_name}\n**任务描述**:\n```python\n{task_desc_truncated}\n```"]
+
+        if verifier_error:
+            sections.append(f"**当前错误**:\n```\n{verifier_error[:500]}\n```")
+
+        if guide_info:
+            sections.append(
+                f"## 算子优化指南（guide）\n"
+                f"从以下指南中选出与当前算子**最相关的 1 个**（若算子融合了两种不同的计算模式，最多选 2 个）。"
+                f"**只选最大重叠的，不要多选。**\n\n"
+                f"{json.dumps(guide_info, indent=2, ensure_ascii=False)}"
             )
-        else:
-            goal = "提升算子性能"
-            context = f"**当前算子**: {op_name}\n**任务描述**: {task_desc}"
-            criteria = (
-                "1. 优先选择**相同算子类型**的性能优化案例\n"
-                "2. 其次选择**相似优化策略**（如二次切分、计算重组）的案例\n"
-                "3. 只选择与当前优化目标**强相关**的案例，不相关的不选"
+
+        if case_info:
+            if stage == "debug":
+                case_instruction = (
+                    "从以下案例中选出与**当前错误强相关**的案例。"
+                    "优先选处理过相同类型错误的，其次选相同算子类型的。不相关的不选。"
+                )
+            else:
+                case_instruction = (
+                    "从以下案例中选出与**当前算子优化目标强相关**的案例。"
+                    "优先选相同算子类型的优化案例，其次选相似优化策略的。不相关的不选。"
+                )
+            sections.append(
+                f"## 优化/修复案例（case）\n{case_instruction}\n\n"
+                f"{json.dumps(case_info, indent=2, ensure_ascii=False)}"
             )
 
-        llm_prompt = f"""# 案例精筛
+        response_format = '{"guides": ["guide-name-1"], "cases": ["case-name-1", ...], "reason": "选择理由"}'
+        if not case_info:
+            response_format = '{"guides": ["guide-name-1"], "reason": "选择理由"}'
 
-**目标**: {goal}
+        llm_prompt = (
+            f"# Skill 筛选\n\n"
+            + "\n\n".join(sections)
+            + f"\n\n## 返回格式\n返回 JSON:\n```json\n{response_format}\n```"
+        )
 
-{context}
-
-## 候选案例
-{json.dumps(skills_info, indent=2, ensure_ascii=False)}
-
-## 筛选标准
-{criteria}
-
-返回 JSON:
-```json
-{{"selected": ["case-name-1", ...], "reason": "简要说明每个被选中案例的选择理由"}}
-```"""
         try:
             template = Jinja2TemplateWrapper("{{ prompt }}")
-            response, _, _ = await self.run_llm(template, {"prompt": llm_prompt}, "standard")
-            selected_names, reason = self._parse_llm_selection(response)
-            name_to_skill = {s.name: s for s in candidates}
-            result = [name_to_skill[n] for n in selected_names if n in name_to_skill]
+            response, _, _ = await self.run_llm(template, {"prompt": llm_prompt}, "fast")
+            parsed = self._parse_unified_selection(response)
+            guide_names = parsed.get("guides", [])
+            case_names = parsed.get("cases", [])
+            reason = parsed.get("reason", "")
+
+            guide_map = {s.name: s for s in guide_candidates}
+            case_map = {s.name: s for s in case_candidates}
+            guide_selected = [guide_map[n] for n in guide_names if n in guide_map]
+            case_selected = [case_map[n] for n in case_names if n in case_map]
+
             logger.info(
-                f"[KernelGen] Case LLM 筛选结果 (stage={stage}): "
-                f"选中 {len(result)}/{len(candidates)} 个: {[s.name for s in result]}"
+                f"[KernelGen] LLM 筛选结果 (stage={stage}): "
+                f"guide={[s.name for s in guide_selected]}, "
+                f"case={[s.name for s in case_selected]}"
             )
             if reason:
                 logger.info(f"[KernelGen] 筛选理由: {reason}")
-            return result
+
+            if not guide_selected and guide_candidates:
+                logger.info("[KernelGen] LLM 未选中任何 guide，不注入 guide 层知识")
+
+            return guide_selected, case_selected
         except Exception as e:
-            logger.warning(f"[KernelGen] Case LLM selection failed: {e}")
-            return []
-    
-    def _parse_llm_selection(self, response: str) -> Tuple[List[str], str]:
-        """解析 LLM 返回的 skill 选择结果，返回 (名称列表, 理由)"""
+            logger.warning(f"[KernelGen] LLM skill selection failed: {e}")
+            return [], []
+
+    def _parse_unified_selection(self, response: str) -> dict:
+        """解析 LLM 返回的统一筛选结果 JSON"""
         import json
         import re
         try:
-            # 尝试解析 JSON 对象格式 {"selected": [...], "reason": "..."}
-            json_match = re.search(r'\{[^{}]*"selected"[^{}]*\}', response, re.DOTALL)
+            json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
             if json_match:
-                result = json.loads(json_match.group())
-                return result.get("selected", []), result.get("reason", "")
-            # 回退：尝试解析纯数组格式
-            arr_match = re.search(r'\[.*?\]', response, re.DOTALL)
-            if arr_match:
-                return json.loads(arr_match.group()), ""
+                return json.loads(json_match.group())
         except json.JSONDecodeError:
             pass
-        return [], ""
+        return {}
     
     CATEGORY_LAYER = {
         "fundamental": (0, 0), "reference": (0, 1),
         "guide": (1, 0), "example": (1, 1),
-        "implementation": (1, 2), "method": (1, 3),
         "case": (2, 0),
     }
 
@@ -436,23 +467,28 @@ class KernelGen(AgentBase):
 
         sorted_skills = sorted(selected_skills, key=self._sort_key)
 
-        always = [s for s in sorted_skills
-                  if (getattr(s, "category", "") or "") in ("fundamental", "reference")]
+        fundamentals = [s for s in sorted_skills
+                        if (getattr(s, "category", "") or "") in ("fundamental", "reference")]
         guides = [s for s in sorted_skills
-                  if (getattr(s, "category", "") or "") in ("guide", "example", "implementation", "method")]
+                  if (getattr(s, "category", "") or "") == "guide"]
+        examples = [s for s in sorted_skills
+                    if (getattr(s, "category", "") or "") == "example"]
         cases = [s for s in sorted_skills
                  if (getattr(s, "category", "") or "") == "case"]
 
         sections = []
-        if always:
-            content = "\n\n---\n\n".join(s.content for s in always)
+        if fundamentals:
+            content = "\n\n---\n\n".join(s.content for s in fundamentals)
             sections.append(f"### 基础知识与规范\n\n{content}")
         if guides:
             content = "\n\n---\n\n".join(s.content for s in guides)
-            sections.append(f"### 算子模式参考\n\n{content}")
+            sections.append(f"### 算子优化指南\n\n{content}")
+        if examples:
+            content = "\n\n---\n\n".join(s.content for s in examples)
+            sections.append(f"### 代码示例参考\n\n{content}")
         if cases:
             content = "\n\n---\n\n".join(s.content for s in cases)
-            sections.append(f"### 优化案例参考\n\n{content}")
+            sections.append(f"### 优化/修复案例\n\n{content}")
 
         order_desc = [f"{s.name}[{getattr(s, 'category', '?')}]" for s in sorted_skills]
         logger.info(f"Skill assembly order: {order_desc}")
@@ -523,7 +559,6 @@ class KernelGen(AgentBase):
         designer_code: str = "",
         inspirations: str = "",
         handwrite_suggestions: Optional[List[Dict[str, str]]] = None,
-        skip_skills: bool = False,
         force_skill_names: Optional[List[str]] = None,
     ) -> Tuple[str, str, str]:
         """
@@ -546,7 +581,6 @@ class KernelGen(AgentBase):
             designer_code: KernelDesigner 生成的算法草图（可选，DefaultWorkflowV2 场景使用）
             inspirations: 格式化后的进化探索方案字符串（evolve/kernelgen_only 场景使用）
             handwrite_suggestions: 手写优化策略与实现参考
-            skip_skills: 完全跳过 skill 加载
             force_skill_names: 强制加载指定 skill（按 name 匹配）
         
         Returns:
@@ -558,13 +592,11 @@ class KernelGen(AgentBase):
             
             func_name = f"{op_name}_{dsl}_{framework}"
             is_pure_modification = bool(previous_code and user_requirements and not verifier_error)
-            should_skip = skip_skills or is_pure_modification
             
             # Skill 选择（优先级链）
-            if should_skip:
+            if is_pure_modification:
                 selected_skills = []
-                reason = "skip_skills=True" if skip_skills else "纯修改模式（用户需求明确 + 无报错）"
-                logger.info(f"[KernelGen] 跳过 skill 加载: {reason}")
+                logger.info("[KernelGen] 跳过 skill 加载: 纯修改模式（用户需求明确 + 无报错）")
             elif force_skill_names:
                 all_skills = self._load_skills_by_dsl(dsl)
                 selected_skills = [s for s in all_skills if s.name in force_skill_names]

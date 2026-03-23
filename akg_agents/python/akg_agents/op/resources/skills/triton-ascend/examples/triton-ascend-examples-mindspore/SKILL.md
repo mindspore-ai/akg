@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-examples-mindspore
-description: "MindSpore 框架下 Triton Ascend 内核的完整集成示例，包括 vector_add、matmul、layer_norm、softmax 等标准算子实现。适用于需要参考 MindSpore 自定义算子注册、Primitive 定义方式的内核代码生成场景"
+description: "MindSpore 框架下 Triton Ascend 内核的集成示例，展示 MindSpore 自定义算子注册、Primitive 定义、tensor 传入传出等标准写法。当目标框架为 mindspore 时应导入此示例作为代码结构参考。"
 category: example
 version: "1.0.0"
 metadata:
@@ -8,12 +8,9 @@ metadata:
   dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
   framework: mindspore
-  examples: "vector_add, matmul, layer_norm, softmax, double_kernel"
 ---
 
 # MindSpore + Triton Ascend 示例代码
-
-本 Skill 包含完整的可运行示例代码，展示如何在 MindSpore 中使用 Triton Ascend 编写高性能 kernel。
 
 ## MindSpore vs PyTorch 差异
 
@@ -28,9 +25,6 @@ metadata:
 ## 示例列表
 
 ### 1. Vector Add（向量加法）
-**文件**: `mindspore_vector_add.py`
-**算子类型**: Element-wise
-
 **MindSpore 实现**:
 ```python
 import mindspore as ms
@@ -66,9 +60,6 @@ class ModelNew(nn.Cell):
 ```
 
 ### 2. MatMul（矩阵乘法）
-**文件**: `mindspore_matmul.py`
-**算子类型**: MatMul
-
 **关键差异**:
 ```python
 class ModelNew(nn.Cell):
@@ -89,9 +80,6 @@ class ModelNew(nn.Cell):
 ```
 
 ### 3. Layer Norm（层归一化）
-**文件**: `mindspore_layer_norm.py`
-**算子类型**: Reduce + Element-wise
-
 **MindSpore 特有处理**:
 ```python
 class ModelNew(nn.Cell):
@@ -119,10 +107,6 @@ class ModelNew(nn.Cell):
 ```
 
 ### 4. Softmax
-**文件**: `mindspore_softmax.py`
-**算子类型**: Reduce
-
-**实现要点**:
 ```python
 class ModelNew(nn.Cell):
     def __init__(self):
@@ -141,10 +125,6 @@ class ModelNew(nn.Cell):
 ```
 
 ### 5. Double Kernel（双内核调用）
-**文件**: `mindspore_double_kernel.py`
-**算子类型**: 多 Kernel 组合
-
-**多 kernel 调用**:
 ```python
 class ModelNew(nn.Cell):
     def __init__(self):

@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-examples-torch
-description: "PyTorch 框架下 Triton Ascend 内核的完整集成示例，包括 vector_add、matmul、layer_norm、softmax 等标准算子实现。适用于需要参考 PyTorch 算子包装方式、forward/backward 实现模式的内核代码生成场景"
+description: "PyTorch 框架下 Triton Ascend 内核的集成示例，展示 torch 自定义算子注册、tensor 传入传出、grid 配置等标准写法。当目标框架为 torch 时应导入此示例作为代码结构参考。"
 category: example
 version: "1.0.0"
 metadata:
@@ -8,24 +8,13 @@ metadata:
   dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
   framework: torch
-  examples: "vector_add, matmul, layer_norm, softmax, double_kernel"
 ---
 
 # PyTorch + Triton Ascend 示例代码
 
-本 Skill 包含完整的可运行示例代码，展示如何在 PyTorch 中使用 Triton Ascend 编写高性能 kernel。
-
 ## 示例列表
 
 ### 1. Vector Add（向量加法）
-**文件**: `torch_vector_add.py` (需补充)
-**算子类型**: Element-wise
-**关键点**:
-- 最简单的 Triton kernel 示例
-- 一维索引和 mask
-- 标准五步模式
-
-**示例代码结构**:
 ```python
 @triton.jit
 def vector_add_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -49,13 +38,6 @@ class ModelNew(torch.nn.Module):
 ```
 
 ### 2. MatMul（矩阵乘法）
-**文件**: `torch_matmul.py`
-**算子类型**: MatMul
-**关键点**:
-- 使用 `tl.dot` 进行矩阵乘法
-- 2D 索引计算
-- 简单的分块策略
-
 **核心代码**:
 ```python
 @triton.jit
@@ -79,13 +61,6 @@ def matmul_kernel(output_ptr, x_ptr, y_ptr,
 ```
 
 ### 3. Layer Norm（层归一化）
-**文件**: `torch_layer_norm.py`
-**算子类型**: Reduce + Element-wise
-**关键点**:
-- 逐行处理
-- 均值和方差计算
-- 数值稳定性处理
-
 **核心逻辑**:
 ```python
 # 1. 计算均值
@@ -105,13 +80,6 @@ output = normalized * weight + bias
 ```
 
 ### 4. Double Kernel（双内核调用）
-**文件**: `torch_double_kernel.py`
-**算子类型**: 多 Kernel 组合
-**关键点**:
-- 展示如何在一个 forward 中调用多个 kernel
-- 中间结果处理
-- Kernel 之间的数据传递
-
 **示例结构**:
 ```python
 class ModelNew(torch.nn.Module):
