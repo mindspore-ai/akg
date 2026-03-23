@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_PREPROCESSFORFUSION_H_
-#define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_PREPROCESSFORFUSION_H_
+#ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_HOISTLOOPINDEPENDENTOPS_H_
+#define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_HOISTLOOPINDEPENDENTOPS_H_
 
 #include <memory>
 
@@ -26,8 +26,8 @@ namespace func {
 class FuncOp;
 }  // namespace func
 
-std::unique_ptr<OperationPass<func::FuncOp>> createPreProcessForFusionPass();
+std::unique_ptr<OperationPass<func::FuncOp>> createHoistLoopIndependentOpsPass();
 
 }  // namespace mlir
 
-#endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_PREPROCESSFORFUSION_H_
+#endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_HOISTLOOPINDEPENDENTOPS_H_

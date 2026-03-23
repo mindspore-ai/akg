@@ -49,7 +49,7 @@
 #include "akg/Dialect/Affine/Transforms/LegalizeTypeForAscend.h"
 #include "akg/Dialect/Affine/Transforms/BroadcastLoopHoist.h"
 #include "akg/Dialect/Affine/Transforms/Normalize.h"
-#include "akg/Dialect/Affine/Transforms/PreProcessForFusion.h"
+#include "akg/Dialect/Affine/Transforms/HoistLoopIndependentOps.h"
 
 namespace mlir {
 namespace func {
