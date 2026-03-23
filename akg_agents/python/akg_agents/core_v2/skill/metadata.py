@@ -51,7 +51,7 @@ STANDARD_CATEGORIES = {
 CATEGORY_GROUPS = {
     "orchestration": ["workflow", "overview"],
     "actor": ["agent"],
-    "knowledge": ["guide", "fundamental", "method", "implementation", "reference"],
+    "knowledge": ["fundamental", "reference", "guide"],
     "example": ["example", "case"],
 }
 

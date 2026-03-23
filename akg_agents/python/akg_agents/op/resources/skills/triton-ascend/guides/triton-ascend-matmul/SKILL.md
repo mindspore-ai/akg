@@ -1,14 +1,13 @@
 ---
 name: triton-ascend-matmul
-description: "矩阵乘法算子(matmul/bmm/linear)优化策略，包括分块切分、Swizzle 优化、Cube Core 利用和大矩阵处理技巧。适用于实现 GEMM、批量矩阵乘、全连接层等矩阵运算的内核代码生成场景"
+description: "适用于矩阵乘法(matmul)类算子的优化指南。当算子的核心计算涉及二维或更高维的矩阵乘法时应选择此指南，典型算子包括：matmul, mm, bmm, linear, gemm, outer_product, einsum(含矩阵乘), conv(转为矩阵乘实现)等。涵盖 Cube Core 使用、分块(tiling)策略、Swizzle 优化、大 K 维处理等关键技巧。不适用于纯逐元素运算或纯归约运算。对于 attention 机制中的 QK^T 和 score*V 矩阵乘，若算子整体是注意力计算，应优先选择 attention 指南。"
 category: guide
 version: "1.0.0"
 metadata:
   backend: ascend
   dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
-  operator_patterns: "matmul"
-  algorithms: "matmul, bmm, linear"
+  operator_type: "matmul"
 ---
 
 # MatMul 算子优化

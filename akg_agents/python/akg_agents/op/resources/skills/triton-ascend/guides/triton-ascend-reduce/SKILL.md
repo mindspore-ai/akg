@@ -1,14 +1,13 @@
 ---
 name: triton-ascend-reduce
-description: "归约算子(reduce)优化策略，包含 sum/mean/max/min、softmax、layernorm、logsoftmax 等实现技巧。适用于需要在 Ascend NPU 上实现任意维度归约、规范化层或注意力分数计算的内核代码生成场景"
+description: "适用于归约(reduce)类算子的优化指南。当算子需要沿一个或多个维度对数据进行聚合计算时应选择此指南，典型算子包括：sum, mean, max, min, prod, argmax, argmin, cumsum, cumprod, softmax, logsoftmax, layernorm, rmsnorm, groupnorm, instancenorm, batchnorm, l1norm, l2norm, var, std 等。也适用于含归约子步骤的复合算子(如 normalize 类)。不适用于纯逐元素运算或矩阵乘法，但与 attention 机制中的 softmax 部分有重叠——若算子核心是注意力计算，应优先选择 attention 指南。"
 category: guide
 version: "1.0.0"
 metadata:
   backend: ascend
   dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
-  operator_patterns: "reduce"
-  algorithms: "sum, mean, max, min, softmax, layernorm, logsoftmax"
+  operator_type: "reduce"
 ---
 
 # Reduce 算子优化
