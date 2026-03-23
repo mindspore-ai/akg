@@ -1,4 +1,4 @@
-// RUN: akg-opt %s --pre-process-for-fusion | FileCheck %s
+// RUN: akg-opt %s --hoist-loop-independent-ops | FileCheck %s
 
 // CHECK-LABEL:  module {
 // CHECK:  func.func @akg_fused__npu_dtype_cast_add_masked_fill_rsub_1_auto_fallback(%arg0: memref<256x10xi32, {SymShapeAttr = ["s0", "s1"]}>, %arg1: memref<10x10xi1, {SymShapeAttr = ["s2", "s1"]}>) -> memref<256x1x10x10xf32, {SymShapeAttr = ["s0", "1", "s2", "s1"]}> attributes {OperatorType = "Default", hacc.function_kind = #hacc.function_kind<HOST>} {

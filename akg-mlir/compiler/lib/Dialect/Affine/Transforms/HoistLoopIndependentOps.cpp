@@ -14,85 +14,169 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Transforms/PreProcessForFusion.h"
+#include "akg/Dialect/Affine/Transforms/HoistLoopIndependentOps.h"
 
 #include <algorithm>
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Affine/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/Block.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 
 namespace mlir {
-#define GEN_PASS_DEF_PREPROCESSFORFUSION
-#define GEN_PASS_DECL_PREPROCESSFORFUSION
+#define GEN_PASS_DEF_HOISTLOOPINDEPENDENTOPS
+#define GEN_PASS_DECL_HOISTLOOPINDEPENDENTOPS
 #include "akg/Dialect/Affine/Passes.h.inc"
 }  // namespace mlir
 
-#define DEBUG_TYPE "pre-process-for-fusion"
+#define DEBUG_TYPE "hoist-loop-independent-ops"
 
 namespace mlir {
 namespace {
 
-struct PreProcessForFusion : public impl::PreProcessForFusionBase<PreProcessForFusion> {
+struct HoistLoopIndependentOps
+    : public impl::HoistLoopIndependentOpsBase<
+          HoistLoopIndependentOps> {
  public:
-  PreProcessForFusion() {}
+  HoistLoopIndependentOps() {}
 
   void runOnOperation() override {
     auto funcOp = getOperation();
 
-    // Move allocations before the first affine.for
-    moveAllocBeforeAffineFor(funcOp);
-
-    // Hoist loop invariant loads and forward scalar store-load pairs
     hoistLoopInvariantLoad(funcOp);
+
+    moveIndependentOpsBeforeFirstAffineFor(funcOp);
   }
 
  private:
-  void moveAllocBeforeAffineFor(func::FuncOp funcOp) {
+  // Recursively checks whether a Value depends on seenAffineForOps,
+  // i.e., computations inside all previously encountered affine.for ops.
+  static bool valueDependsOnSeenAffineFors(
+      Value v, const llvm::DenseSet<Operation *> &seenAffineForOps,
+      llvm::DenseMap<Value, bool> &valueDepCache,
+      llvm::DenseSet<Operation *> &visitingOps) {
+    auto cacheIt = valueDepCache.find(v);
+    if (cacheIt != valueDepCache.end()) return cacheIt->second;
+
+    bool depends = false;
+
+    if (auto blockArg = dyn_cast<BlockArgument>(v)) {
+      Block *ownerBlock = blockArg.getOwner();
+      Operation *parentOp = ownerBlock ? ownerBlock->getParentOp() : nullptr;
+      depends = (parentOp != nullptr && seenAffineForOps.contains(parentOp));
+    } else if (auto opResult = dyn_cast<OpResult>(v)) {
+      Operation *defOp = opResult.getOwner();
+
+      if (seenAffineForOps.contains(defOp)) {
+        depends = true;
+      } else {
+        if (!visitingOps.contains(defOp)) {
+          visitingOps.insert(defOp);
+          depends = std::any_of(
+              defOp->getOperands().begin(), defOp->getOperands().end(),
+              [&](Value operand) {
+                return valueDependsOnSeenAffineFors(
+                    operand, seenAffineForOps, valueDepCache, visitingOps);
+              });
+          visitingOps.erase(defOp);
+        } else {
+          // Cycles are generally not expected in SSA; handle conservatively.
+          depends = false;
+        }
+      }
+    } else {
+      depends = false;
+    }
+
+    valueDepCache[v] = depends;
+    return depends;
+  }
+
+  // Checks whether any operand of op depends on all previously seen affine.for ops.
+  static bool opDependsOnSeenAffineFors(Operation *op, const llvm::DenseSet<Operation *> &seenAffineForOps,
+                                        llvm::DenseMap<Value, bool> &valueDepCache) {
+    llvm::DenseSet<Operation *> visitingOps;
+    if (std::any_of(op->getOperands().begin(), op->getOperands().end(),
+                    [&](Value operand) {
+                      return valueDependsOnSeenAffineFors(
+                          operand, seenAffineForOps, valueDepCache,
+                          visitingOps);
+                    })) {
+      return true;
+    }
+    return false;
+  }
+
+  static void collectNestedOps(Operation *root, llvm::DenseSet<Operation *> &set) {
+    root->walk([&](Operation *nested) { set.insert(nested); });
+  }
+
+  void moveIndependentOpsBeforeFirstAffineFor(func::FuncOp funcOp) {
     Block &block = funcOp.getBody().front();
 
     Operation *firstAffineFor = nullptr;
     for (Operation &op : block) {
-      if (isa<affine::AffineForOp>(&op)) {
+      if (isa<affine::AffineForOp>(op)) {
         firstAffineFor = &op;
         break;
       }
     }
 
     if (!firstAffineFor) {
-      llvm::errs() << "[AKG] moveAllocBeforeAffineFor: no top-level affine.for found in func " << funcOp.getName()
-                   << "\n";
+      llvm::errs() << "[AKG] HoistLoopIndependentOps: no top-level affine.for found in func "
+                   << funcOp.getName() << "\n";
       return;
     }
 
+    // seenAffineForOps: all top-level affine.for ops encountered so far
+    // during scanning (including their nested operations).
+    llvm::DenseSet<Operation *> seenAffineForOps;
+    collectNestedOps(firstAffineFor, seenAffineForOps);
+
     SmallVector<Operation *, 8> toMove;
+    llvm::DenseMap<Value, bool> valueDepCache;
 
     for (auto it = std::next(firstAffineFor->getIterator()), e = block.end(); it != e; ++it) {
       Operation *op = &*it;
-      if (isa<memref::AllocOp, memref::SubViewOp, memref::ReshapeOp, memref::ExpandShapeOp, memref::CollapseShapeOp,
-              memref::ReinterpretCastOp, memref::MemorySpaceCastOp, arith::IndexCastOp, memref::DimOp>(op)) {
-        toMove.push_back(op);
+
+      if (op == block.getTerminator()) continue;
+
+      // If another top-level affine.for is encountered, include it
+      // in the "previous affine.for set" and continue scanning.
+      if (isa<affine::AffineForOp>(op)) {
+        collectNestedOps(op, seenAffineForOps);
+        continue;
       }
+
+      // For non-affine.for ops: move only if independent of all
+      // previously encountered affine.for computations.
+      if (opDependsOnSeenAffineFors(op, seenAffineForOps, valueDepCache)) continue;
+
+      toMove.push_back(op);
     }
 
     if (toMove.empty()) {
-      llvm::errs() << "[AKG] no allocs to move after first top-level affine.for\n";
+      llvm::errs()
+          << "[AKG] HoistLoopIndependentOps: no independent ops to move "
+          << "after first top-level affine.for in func " << funcOp.getName()
+          << "\n";
       return;
     }
 
+    // Preserve original relative order while moving.
     for (Operation *op : toMove) {
       op->moveBefore(firstAffineFor);
     }
   }
 
-  // Helper function to check if a value depends on a loop IV
+    // Helper function to check if a value depends on a loop IV
   bool valueDependsOnIV(Value value, Value iv) {
     if (value == iv) {
       return true;
@@ -261,7 +345,7 @@ struct PreProcessForFusion : public impl::PreProcessForFusionBase<PreProcessForF
 
 }  // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> createPreProcessForFusionPass() {
-  return std::make_unique<PreProcessForFusion>();
+std::unique_ptr<OperationPass<func::FuncOp>> createHoistLoopIndependentOpsPass() {
+  return std::make_unique<HoistLoopIndependentOps>();
 }
 }  // namespace mlir
