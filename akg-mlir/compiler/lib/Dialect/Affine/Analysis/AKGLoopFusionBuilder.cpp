@@ -399,8 +399,6 @@ OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<
     auto op = getNode(nid)->op;
     if (op->hasAttr(kReductionTypeStr)) {
       return OperatorTemplate::Reduction;
-    } else if (op->hasAttr(kReductionInitAttr)) {
-      return OperatorTemplate::ReductionInit;
     }
 
     if (isa<memref::ExpandShapeOp, memref::CollapseShapeOp>(op)) {
@@ -976,7 +974,7 @@ static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcLoops,
   cloneLoopBody(sourceLoop, targetLoop);
 }
 
-void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, FusionLoopNestInfo &srcInfo,
+void FusionCodeGenHelper::doIFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo,
                                   FusionLoopNestInfo &dstInfo) {
   auto &srcLoops = srcInfo.loops;
   auto &dstLoops = dstInfo.loops;
@@ -1001,11 +999,23 @@ void FusionCodeGenHelper::doIFuse(unsigned srcId, unsigned dstId, FusionLoopNest
   }
   performLoopFusion(srcLoops, dstLoops, depth);
   srcAffineForOp.erase();
+  auto srcGroup = mdg.getGroup(srcGroupId);
+  auto dstGroup = mdg.getGroup(dstGroupId);
+  if (!srcGroup || !dstGroup) {
+      llvm::errs() << "srcGroup is nullptr or dstGroup is nullptr";
+      return;
+  }
+  auto srcId = srcGroup->rootId;
+  auto dstId = dstGroup->rootId;
+  auto srcGroupTemplate = srcGroup->groupTemplate;
+  auto dstGroupTemplate = dstGroup->groupTemplate;
+  srcGroup->groupTemplate = std::max(srcGroupTemplate, dstGroupTemplate);
+  dstGroup->groupTemplate = std::max(srcGroupTemplate, dstGroupTemplate);
   nodeAlias[srcId] = dstId;
   clearErasedNode(srcId);
 }
 
-void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
+void FusionCodeGenHelper::doHFuse(unsigned srcGroupId, unsigned dstGroupId, affine::AffineForOp srcAffineForOp,
                                   affine::AffineForOp dstAffineForOp, const FusionPlan &plan) {
   FusionLoopNestInfo srcInfo, dstInfo;
   srcInfo.collect(srcAffineForOp);
@@ -1025,7 +1035,7 @@ void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::Affine
   if (maxLegalFusionDepth == 0) {
     // When fusing dst into src, try manual slice (e.g. insert at innermost
     // loop that has enough enclosing depth) before falling back to doIFuse.
-    doIFuse(srcId, dstId, srcInfo, dstInfo);
+    doIFuse(srcGroupId, dstGroupId, srcInfo, dstInfo);
     return;
   }
 
@@ -1037,15 +1047,15 @@ void FusionCodeGenHelper::doHFuse(unsigned srcId, unsigned dstId, affine::Affine
   if (srcInfo.isPerfect || !dstInfo.isPerfect) {
     // Fuse src into dst: merge src into dst, then erase src.
     fuseLoops(srcAffineForOp, dstAffineForOp, bestSlice);
-    eraseLoopAndCleanupNode(srcId, dstId, srcAffineForOp);
+    eraseLoopAndCleanupNode(srcGroupId, dstGroupId, srcAffineForOp);
   } else {
     // Fuse dst into src: merge dst into src, then erase dst.
     fuseLoops(dstAffineForOp, srcAffineForOp, bestSlice);
-    eraseLoopAndCleanupNode(dstId, srcId, dstAffineForOp);
+    eraseLoopAndCleanupNode(dstGroupId, srcGroupId, dstAffineForOp);
   }
 }
 
-void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId, affine::AffineForOp srcAffineForOp,
+void FusionCodeGenHelper::doVFuse(unsigned srcGroupId, unsigned dstGroupId, affine::AffineForOp srcAffineForOp,
                                   affine::AffineForOp dstAffineForOp, const FusionPlan &plan) {
   FusionLoopNestInfo srcInfo, dstInfo;
   srcInfo.collect(srcAffineForOp);
@@ -1066,7 +1076,7 @@ void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId, affine::Affine
 
   // Skip if fusion is not feasible at any loop depths.
   if (maxLegalFusionDepth == 0) {
-    doIFuse(srcId, dstId, srcInfo, dstInfo);
+    doIFuse(srcGroupId, dstGroupId, srcInfo, dstInfo);
     return;
   }
 
@@ -1075,12 +1085,23 @@ void FusionCodeGenHelper::doVFuse(unsigned srcId, unsigned dstId, affine::Affine
   affine::ComputationSliceState &bestSlice = depthSliceUnions[bestDstLoopDepth - 1];
   assert(!bestSlice.isEmpty() && "Fusion depth has no computed slice union");
   fuseLoops(srcAffineForOp, dstAffineForOp, bestSlice, true);
-  eraseLoopAndCleanupNode(srcId, dstId, srcAffineForOp);
+  eraseLoopAndCleanupNode(srcGroupId, dstGroupId, srcAffineForOp);
 }
 
-void FusionCodeGenHelper::eraseLoopAndCleanupNode(unsigned erasedNodeId, unsigned aliasTargetId,
+void FusionCodeGenHelper::eraseLoopAndCleanupNode(unsigned erasedGroupId, unsigned aliasTargetGroupId,
                                                   affine::AffineForOp loopToErase) {
-  loopToErase.erase();
+  auto erasedGroup = mdg.getGroup(erasedGroupId);
+  auto aliasTargetGroup = mdg.getGroup(aliasTargetGroupId);
+  if (!erasedGroup || !aliasTargetGroup) {
+      llvm::errs() << "erasedGroup is nullptr or aliasTargetGroup is nullptr";
+      return;
+  }
+  auto erasedNodeId = erasedGroup->rootId;
+  auto aliasTargetId = aliasTargetGroup->rootId;
+  auto erasedNodeGroupTemplate = erasedGroup->groupTemplate;
+  auto aliasTargetGroupTemplate = aliasTargetGroup->groupTemplate;
+  erasedGroup->groupTemplate = std::max(erasedNodeGroupTemplate, aliasTargetGroupTemplate);
+  aliasTargetGroup->groupTemplate = std::max(erasedNodeGroupTemplate, aliasTargetGroupTemplate);
   nodeAlias[erasedNodeId] = aliasTargetId;
 
   // Clear the loads and stores of the erased node to prevent
@@ -1090,6 +1111,8 @@ void FusionCodeGenHelper::eraseLoopAndCleanupNode(unsigned erasedNodeId, unsigne
     erasedNode->stores.clear();
     erasedNode->op = nullptr;
   }
+
+  loopToErase.erase();
 }
 
 std::string Group::getGroupTemplateString() const {

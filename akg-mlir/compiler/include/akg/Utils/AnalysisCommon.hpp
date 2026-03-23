@@ -87,11 +87,11 @@ const std::vector<unsigned> primeTailSteps = {100000153, 100000157, 100000163, 1
                                               100000177, 100000181, 100000183, 100000187, 100000189};
 enum OperatorTemplate {
   Default = 0, Elementwise, Broadcast, Reshape, Transpose,
-  ReductionInit, Reduction, Matmul, Conv
+  Reduction, Matmul, Conv
 };
 const std::unordered_map<int, std::string> operatorTemplateMap = {
   {0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"}, {3, "Reshape"}, {4, "Transpose"},
-  {5, "ReductionInit"},  {6, "Reduction"},  {7, "Matmul"},    {8, "Conv"}};
+  {5, "Reduction"}, {6, "Matmul"}, {7, "Conv"}};
 
 enum ReduceDirection { UNKNOWN = 0, X, Y, ALL };
 const std::unordered_map<int, std::string> reduceDirectionMap = {{0, "unknown"}, {1, "x"}, {2, "y"}, {3, "all"}};
