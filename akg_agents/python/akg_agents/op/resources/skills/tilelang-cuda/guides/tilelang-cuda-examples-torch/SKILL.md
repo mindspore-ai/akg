@@ -5,7 +5,7 @@ category: example
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: tilelang-cuda
+  dsl: tilelang_cuda
   framework: torch
   examples: "matmul, elementwise, layernorm, gemv, flash_attention"
 ---

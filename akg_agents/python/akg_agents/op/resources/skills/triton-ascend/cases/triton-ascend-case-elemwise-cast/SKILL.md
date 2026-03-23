@@ -1,11 +1,11 @@
 ---
 name: triton-ascend-case-elemwise-cast
 description: "大shape类型转换（int8→fp16）优化：通过二次切分（BLOCK_SIZE+TILE_SIZE）提高UB利用率，核数2048时性能最优，适用于shape较大（百万级元素）的elementwise类型转换场景"
-category: example
+category: case
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
 ---
 

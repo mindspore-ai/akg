@@ -1,11 +1,11 @@
 ---
 name: triton-ascend-reduce
 description: "归约算子(reduce)优化策略，包含 sum/mean/max/min、softmax、layernorm、logsoftmax 等实现技巧。适用于需要在 Ascend NPU 上实现任意维度归约、规范化层或注意力分数计算的内核代码生成场景"
-category: implementation
+category: guide
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
   operator_patterns: "reduce"
   algorithms: "sum, mean, max, min, softmax, layernorm, logsoftmax"

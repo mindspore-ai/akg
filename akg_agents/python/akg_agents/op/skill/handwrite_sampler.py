@@ -42,6 +42,7 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 
 from akg_agents import get_project_root
+from akg_agents.core.utils import dsl_to_dir_key
 from akg_agents.core_v2.skill import SkillLoader
 from akg_agents.op.skill.operator_selector import OperatorSkillSelector, OperatorSelectionContext
 
@@ -85,7 +86,7 @@ class SkillHandwriteLoader:
 
         调用后通过 get_selected_skills() 获取结果。
         """
-        dsl_key = self.dsl.replace("_", "-")
+        dsl_key = dsl_to_dir_key(self.dsl)
         cases_dir = SKILLS_DIR / dsl_key / "cases"
         if not cases_dir.exists():
             logger.info(f"No cases directory for DSL '{dsl_key}': {cases_dir}")

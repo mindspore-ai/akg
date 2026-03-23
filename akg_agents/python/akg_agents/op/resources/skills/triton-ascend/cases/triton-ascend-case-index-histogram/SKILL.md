@@ -1,11 +1,11 @@
 ---
 name: triton-ascend-case-index-histogram
 description: "直方图统计（histogram）优化：预排序+二分查找降低算法复杂度（O(n×m)→O(n log n + m log n)，性能提升19倍），转换为float32调用Vec Core硬件加速排序，适用于大规模统计类操作（50万+元素）"
-category: example
+category: case
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
 ---
 

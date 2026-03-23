@@ -66,7 +66,7 @@ def _load_and_coarse_filter(
 
     selector = OperatorSkillSelector()
     context = OperatorSelectionContext(
-        dsl=dsl.replace("_", "-"),
+        dsl=dsl,
         backend=backend,
         include_category_groups=["knowledge", "example"],
     )

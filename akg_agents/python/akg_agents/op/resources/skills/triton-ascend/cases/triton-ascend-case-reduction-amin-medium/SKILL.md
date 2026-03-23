@@ -1,11 +1,11 @@
 ---
 name: triton-ascend-case-reduction-amin-medium
 description: "大规模2D归约（amin）reduce轴很大优化：在优先占满UB前提下为reduce轴分配较大切分尺寸（BLOCK_SIZE_N=16384最优），减少循环次数但需权衡单次迭代负载，适用于非reduce轴中等、reduce轴很大（50万级元素）的场景"
-category: example
+category: case
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
 ---
 
