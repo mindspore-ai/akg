@@ -1,6 +1,7 @@
 ---
 name: vllm-ascend-post-process
 description: "后处理优化 - 对vllm-ascend计算结果进行优化处理，包括Triton Kernel优化、NPU算子优化等。"
+disable-model-invocation: true
 triggers: 
   - 'vllm-ascend后处理优化'
   - 'vllm-ascend post process'

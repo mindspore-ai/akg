@@ -167,6 +167,21 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 \
 </details>
 
 
+## 🧭 使用态 vs 开发态
+
+```
+akg_agents/
+├── workspace/          ← 使用态：在此目录打开 Code Agent，即可使用算子优化能力
+│   ├── .opencode/      　 skills / agents 定义，自动加载
+│   └── AGENTS.md
+└── ...                 ← 开发态：在 akg_agents/ 目录打开，开发框架代码本身
+    ├── AGENTS.md
+    └── python/akg_agents/
+```
+
+- **使用态**（`workspace/`）：面向算子优化用户。打开 OpenCode / Claude Code / Cursor，环境检查、算子生成、融合分析等由内置 Agent 和 Skill 自动编排。
+- **开发态**（`akg_agents/`）：面向框架开发者。基于 `AGENTS.md` 和各目录 `SPEC.md` 开发 akg_agents 代码本身。
+
 ## 📐 5. 设计文档
 
 > 建议先阅读《[框架架构](./docs/v2/CN/Architecture.md)》了解整体架构，再阅读《[Workflow 文档](./docs/v2/CN/Workflow.md)》和《[Skill 系统](./docs/v2/CN/SkillSystem.md)》了解核心机制。
