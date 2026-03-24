@@ -603,7 +603,8 @@ class NodeFactory:
 
     @staticmethod
     def create_kernel_conductor_node(kernel_conductor_instance, trace_instance, config,
-                                     code_gen_agent="kernel_gen", kernel_gen_instance=None):
+                                     code_gen_agent="kernel_gen", kernel_gen_instance=None,
+                                     enable_fix_code_gen=False):
         """创建 KernelConductor 节点（基于 Skill 系统）
 
         Args:
@@ -612,6 +613,7 @@ class NodeFactory:
             config: 配置字典
             code_gen_agent: 代码生成 agent 名称
             kernel_gen_instance: KernelGen 实例，用于获取已缓存的 skill 选择结果
+            enable_fix_code_gen: 是否在可选 agent 中包含 fix_code_gen
         """
         async def kernel_conductor_node(state: KernelGenState) -> dict:
             task_id = state.get('task_id', '0')
@@ -628,7 +630,10 @@ class NodeFactory:
                     'suggestion': attempt.get('suggestion', '')[:500]
                 })
 
-            valid_next_agents = f'{code_gen_agent}, finish'
+            valid_options = [code_gen_agent, "finish"]
+            if enable_fix_code_gen:
+                valid_options.append("fix_code_gen")
+            valid_next_agents = ', '.join(sorted(valid_options))
 
             raw_error = state.get('verifier_error', '')
             model_config = config.get("agent_model_config", {})
@@ -879,7 +884,7 @@ class NodeFactory:
         async def fix_code_gen_node(state: KernelGenState) -> dict:
             from akg_agents.core_v2.agents import AgentBase
             from akg_agents.op.utils.diff_utils import (
-                DiffApplier, parse_modifications,
+                DiffApplier, parse_modifications, truncate_error_log,
             )
 
             task_id = state.get('task_id', '0')
@@ -915,6 +920,9 @@ class NodeFactory:
                 agent_base = AgentBase(context=context, config=config)
                 prompt_template = agent_base.load_template("fix_code_gen/edit.j2")
 
+                error_log = truncate_error_log(
+                    state.get('verifier_error', ''), max_len=5000,
+                )
                 input_data = {
                     'dsl': state.get('dsl', ''),
                     'expert_suggestion': state.get('expert_suggestion', ''),
@@ -922,7 +930,7 @@ class NodeFactory:
                     'framework': state.get('framework', ''),
                     'task_desc': state.get('task_desc', ''),
                     'original_code': original_code,
-                    'error_log': state.get('verifier_error', ''),
+                    'error_log': error_log,
                     'conductor_suggestion': state.get('conductor_suggestion', ''),
                 }
 
@@ -939,7 +947,7 @@ class NodeFactory:
                     ('result', response_text),
                     ('prompt', prompt),
                     ('reasoning', reasoning),
-                ], subdirectory="fix_code_gen")
+                ])
 
                 modifications = parse_modifications(response_text)
                 if not modifications:
@@ -953,23 +961,37 @@ class NodeFactory:
                         "step_count": state.get("step_count", 0) + 1,
                     }
 
-                result = DiffApplier.apply_modifications(original_code, modifications)
+                result = DiffApplier.apply_modifications(
+                    original_code, modifications,
+                    raw_llm_output=response_text,
+                )
 
                 logger.info(
                     f"[Task {task_id}] FixCodeGen: "
                     f"applied={result.applied_count}, "
                     f"errors={len(result.errors)}, "
-                    f"success={result.success}"
+                    f"success={result.success}, "
+                    f"match_levels={result.match_levels}"
                 )
+
+                message_parts = []
+                if result.success:
+                    message_parts.append(
+                        f"成功应用 {result.applied_count} 处修改"
+                    )
+                if result.errors:
+                    message_parts.append(
+                        f"失败项: {'; '.join(result.errors)}"
+                    )
+                if not message_parts:
+                    message_parts.append(
+                        f"修改失败: {'; '.join(result.errors)}"
+                    )
 
                 updates = {
                     "fix_code_gen_success": result.success,
                     "fix_code_gen_diff": result.diff_text,
-                    "fix_code_gen_message": (
-                        f"成功应用 {result.applied_count} 处修改"
-                        if result.success
-                        else f"修改失败: {'; '.join(result.errors)}"
-                    ),
+                    "fix_code_gen_message": " | ".join(message_parts),
                     "agent_history": ["fix_code_gen"],
                     "step_count": state.get("step_count", 0) + 1,
                 }
