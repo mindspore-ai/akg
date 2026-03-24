@@ -74,6 +74,7 @@ class OpRegister {
 OP_REGISTER("mfuse.abs", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.add", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.broadcast_to", NodePattern::BROADCAST);
+OP_REGISTER("mfuse.full", NodePattern::BROADCAST);
 OP_REGISTER("mfuse.cast", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.exp", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.log", NodePattern::ELEMWISE);

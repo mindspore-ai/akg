@@ -309,6 +309,77 @@ struct ConvertAtenPermute : public OpConversionPattern<TorchD::AtenPermuteOp> {
   }
 };
 
+/// Convert torch.aten.full -> mfuse.full.
+/// Extracts the constant fill_value scalar and preserves dtype, layout, device,
+/// pin_memory so that the op can be faithfully converted back to torch dialect.
+struct ConvertAtenFull : public OpConversionPattern<TorchD::AtenFullOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(TorchD::AtenFullOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    // Verify size is a constant int list.
+    llvm::SmallVector<int64_t, 4> sizeInts;
+    if (!isConstantListInt(op.getSize(), sizeInts)) {
+      return rewriter.notifyMatchFailure(op, "size must be a list construct of constant ints");
+    }
+
+    // Extract fill_value as a constant scalar.
+    double fillValue = 0.0;
+    int64_t fillIntValue = 0;
+    if (matchPattern(op.getFillValue(), TorchD::m_TorchConstantFloat(&fillValue))) {
+      // already set
+    } else if (matchPattern(op.getFillValue(), TorchD::m_TorchConstantInt(&fillIntValue))) {
+      fillValue = static_cast<double>(fillIntValue);
+    } else {
+      return rewriter.notifyMatchFailure(op, "fill_value must be a constant scalar");
+    }
+
+    auto outType = dyn_cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
+    if (!outType) {
+      return rewriter.notifyMatchFailure(op, "result type conversion failed");
+    }
+
+    auto fillValueAttr = rewriter.getF64FloatAttr(fillValue);
+
+    // Extract optional dtype (int).
+    mlir::IntegerAttr dtypeAttr;
+    int64_t dtypeInt = 0;
+    if (!isa<TorchD::NoneType>(op.getDtype().getType()) &&
+        matchPattern(op.getDtype(), TorchD::m_TorchConstantInt(&dtypeInt))) {
+      dtypeAttr = rewriter.getI64IntegerAttr(dtypeInt);
+    }
+
+    // Extract optional layout (int).
+    mlir::IntegerAttr layoutAttr;
+    int64_t layoutInt = 0;
+    if (!isa<TorchD::NoneType>(op.getLayout().getType()) &&
+        matchPattern(op.getLayout(), TorchD::m_TorchConstantInt(&layoutInt))) {
+      layoutAttr = rewriter.getI64IntegerAttr(layoutInt);
+    }
+
+    // Extract optional device (Device).
+    mlir::StringAttr deviceAttr;
+    std::string deviceStr;
+    if (!isa<TorchD::NoneType>(op.getDevice().getType())) {
+      if (auto constOp = op.getDevice().getDefiningOp<TorchD::ConstantDeviceOp>()) {
+        deviceAttr = constOp.getValueAttr();
+      }
+    }
+
+    // Extract optional pin_memory (bool?).
+    mlir::BoolAttr pinMemoryAttr;
+    bool pinMemoryVal = false;
+    if (!isa<TorchD::NoneType>(op.getPinMemory().getType()) &&
+        matchPattern(op.getPinMemory(), TorchD::m_TorchConstantBool(&pinMemoryVal))) {
+      pinMemoryAttr = rewriter.getBoolAttr(pinMemoryVal);
+    }
+
+    rewriter.replaceOpWithNewOp<mlir::mfuse::FullOp>(op, outType, fillValueAttr, dtypeAttr, layoutAttr, deviceAttr,
+                                                     pinMemoryAttr);
+    return success();
+  }
+};
+
 struct ConvertAtenSumDimIntList : public OpConversionPattern<TorchD::AtenSumDimIntListOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -508,6 +579,7 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertAtenBroadcastTo>(converter, context);
   patterns.add<ConvertAtenConvolution>(converter, context);
+  patterns.add<ConvertAtenFull>(converter, context);
   patterns.add<ConvertAtenExpand>(converter, context);
   patterns.add<ConvertAtenRmsNorm>(converter, context);
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
