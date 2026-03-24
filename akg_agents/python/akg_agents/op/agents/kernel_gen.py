@@ -677,6 +677,12 @@ class KernelGen(AgentBase):
             error_for_prompt = verifier_error
             if verifier_error and len(verifier_error) > 4000:
                 error_for_prompt = "... (前面省略) ...\n" + verifier_error[-4000:]
+
+            aggregated_api_docs = await self._load_aggregated_api_docs(
+                dsl,
+                backend=backend,
+                arch=arch,
+            )
             user_prompt = self.user_prompt_template.format(
                 history_actions=history_compress,
                 verifier_error=error_for_prompt,
