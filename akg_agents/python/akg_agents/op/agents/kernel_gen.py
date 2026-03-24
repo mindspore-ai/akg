@@ -362,7 +362,14 @@ class KernelGen(AgentBase):
         import json
 
         if not guide_candidates and not case_candidates:
+            logger.info("[KernelGen] guide 和 case 候选均为空，跳过 LLM 筛选")
             return [], []
+
+        logger.debug(
+            f"[KernelGen] 开始 LLM 筛选: "
+            f"guide 候选={[s.name for s in guide_candidates]}, "
+            f"case 候选={[s.name for s in case_candidates]}"
+        )
 
         guide_info = [{"name": s.name, "description": s.description} for s in guide_candidates]
         case_info = [{"name": s.name, "description": s.description} for s in case_candidates]
@@ -405,13 +412,19 @@ class KernelGen(AgentBase):
         llm_prompt = (
             f"# Skill 筛选\n\n"
             + "\n\n".join(sections)
-            + f"\n\n## 返回格式\n返回 JSON:\n```json\n{response_format}\n```"
+            + f"\n\n## 返回格式\n仅返回 JSON，不要有其他文字:\n{response_format}"
         )
 
         try:
             template = Jinja2TemplateWrapper("{{ prompt }}")
             response, _, _ = await self.run_llm(template, {"prompt": llm_prompt}, "fast")
+            logger.debug(f"[KernelGen] LLM 筛选原始响应: {response[:500]}")
+
             parsed = self._parse_unified_selection(response)
+            if not parsed:
+                logger.warning(f"[KernelGen] LLM 返回无法解析为 JSON: {response[:300]}")
+                return [], []
+
             guide_names = parsed.get("guides", [])
             case_names = parsed.get("cases", [])
             reason = parsed.get("reason", "")
@@ -420,6 +433,10 @@ class KernelGen(AgentBase):
             case_map = {s.name: s for s in case_candidates}
             guide_selected = [guide_map[n] for n in guide_names if n in guide_map]
             case_selected = [case_map[n] for n in case_names if n in case_map]
+
+            unmatched_guides = [n for n in guide_names if n not in guide_map]
+            if unmatched_guides:
+                logger.warning(f"[KernelGen] LLM 返回的 guide 名称无法匹配: {unmatched_guides}")
 
             logger.info(
                 f"[KernelGen] LLM 筛选结果 (stage={stage}): "
@@ -438,15 +455,35 @@ class KernelGen(AgentBase):
             return [], []
 
     def _parse_unified_selection(self, response: str) -> dict:
-        """解析 LLM 返回的统一筛选结果 JSON"""
+        """解析 LLM 返回的统一筛选结果 JSON。
+        支持 markdown 代码块包裹、嵌套数组等。
+        """
         import json
         import re
+
+        cleaned = response.strip()
+        fence = re.search(r'```(?:json)?\s*\n?(.*?)```', cleaned, re.DOTALL)
+        if fence:
+            cleaned = fence.group(1).strip()
+
         try:
-            json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
+            return json.loads(cleaned)
         except json.JSONDecodeError:
             pass
+
+        brace_start = cleaned.find('{')
+        if brace_start >= 0:
+            depth = 0
+            for i in range(brace_start, len(cleaned)):
+                if cleaned[i] == '{':
+                    depth += 1
+                elif cleaned[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(cleaned[brace_start:i + 1])
+                        except json.JSONDecodeError:
+                            break
         return {}
     
     CATEGORY_LAYER = {
@@ -630,11 +667,14 @@ class KernelGen(AgentBase):
                 backend=backend,
                 arch=arch,
             )
-
-            # 4. 渲染 User Prompt
+            
+            # 4. 渲染 User Prompt（verifier_error 只保留尾部关键信息）
+            error_for_prompt = verifier_error
+            if verifier_error and len(verifier_error) > 4000:
+                error_for_prompt = "... (前面省略) ...\n" + verifier_error[-4000:]
             user_prompt = self.user_prompt_template.format(
                 history_actions=history_compress,
-                verifier_error=verifier_error,
+                verifier_error=error_for_prompt,
                 conductor_suggestion=conductor_suggestion,
                 skill_contents=skill_contents,
                 aggregated_api_docs=aggregated_api_docs,

@@ -12,17 +12,22 @@ metadata:
 
 # Triton Ascend 编程基础
 
-## 标准内核五步结构
+## 标准内核结构（交错循环）
 
 ```python
 @triton.jit
-def kernel(output_ptr, input_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)                                    # 1. 获取程序 ID
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)     # 2. 计算偏移
-    mask = offsets < n_elements                                # 3. 边界掩码
-    data = tl.load(input_ptr + offsets, mask=mask)             # 4. 加载+计算
-    result = compute(data)
-    tl.store(output_ptr + offsets, result, mask=mask)          # 5. 存储
+def kernel(
+    output_ptr, input_ptr, n_elements,
+    BLOCK_SIZE: tl.constexpr, CORE_NUM: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    num_blocks = tl.cdiv(n_elements, BLOCK_SIZE)
+    for block_id in range(pid, num_blocks, CORE_NUM):
+        offsets = block_id * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        data = tl.load(input_ptr + offsets, mask=mask, other=0.0)
+        result = compute(data)
+        tl.store(output_ptr + offsets, result, mask=mask)
 ```
 
 ## 内核启动模板
@@ -31,22 +36,25 @@ def kernel(output_ptr, input_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
+        try:
+            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
+        except:
+            self.VEC_CORE_NUM = 40
 
     def forward(self, x):
         out = torch.empty_like(x)
         BLOCK_SIZE = 1024
-        grid = (triton.cdiv(x.numel(), BLOCK_SIZE),)
-        kernel[grid](out, x, x.numel(), BLOCK_SIZE=BLOCK_SIZE)
+        grid = (self.VEC_CORE_NUM,)  # Ascend: 固定为核心数
+        kernel[grid](out, x, x.numel(), BLOCK_SIZE=BLOCK_SIZE, CORE_NUM=self.VEC_CORE_NUM)
         return out
 ```
 
 ## 边界处理
 
 ```python
-offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+offsets = block_id * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
 mask = offsets < n_elements
 data = tl.load(ptr + offsets, mask=mask, other=0.0)
-# 条件选择
 result = tl.where(condition, true_val, false_val)
 ```
 
