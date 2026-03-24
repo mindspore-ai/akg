@@ -1,6 +1,7 @@
 ---
 name: sparse-quantization
 description: "【仅适用于 vLLM-MindSpore，不适用于 PTA/vLLM-Ascend 等其他框架】稀疏量化模型加载与适配 - 在 vLLM-MindSpore 中加载稀疏量化模型、适配代码实现或修复常见 Bug。Triggers: '稀疏量化', '加载稀疏量化模型', 'W8A8SC', 'sparse quantization', '稀疏量化适配', '稀疏量化加载', 'sparse-quant'。"
+disable-model-invocation: true
 ---
 
 # 稀疏量化模型加载与适配 Skill
