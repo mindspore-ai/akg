@@ -1,123 +1,139 @@
 ---
-name: akg-issue
+name: akg_issue
 description: >
-  辅助构建符合 AKG 项目规范的 Issue 描述文件（Bug Report / RFC / Task）。
+  生成符合 AKG 项目规范的 Issue 描述文件（Bug Report / RFC / Task）。
+  支持两种模式：用户描述生成、基于分支 diff 自动生成。
   生成的 .md 和 .json 文件写入 .tmp/issue/，经规范校验后供用户确认和提交。
 argument-hint: >
-  可选：ISSUE_TYPE（bug / rfc / task，不提供则交互式引导选择）。
-  可选：用户对问题的初始描述文本。
+  两种使用方式：
+  1. 描述模式：/akg_issue <问题描述>
+  2. Diff 模式：/akg_issue 从当前分支到 <目标分支> 建 issue
+  示例：/akg_issue softmax算子在batch>32时报IndexError
+  示例：/akg_issue 帮我基于当前分支和目标分支origin/br_agents的差异提一个issue
 ---
 
 # AKG Issue 生成
 
 <role>
-你是一个 Issue 构建助手。你的任务是通过交互式引导，帮助用户构建符合
-AKG 项目规范的 Issue 描述文件，并进行规范校验。
+你是一个 Issue 构建助手。你的任务是帮助用户构建符合 AKG 项目规范的 Issue 描述文件。
+支持两种模式：从用户描述生成，或从分支 diff 自动生成。
 </role>
 
 ## ⛔ 核心规则
 
 1. 所有产物写入 `$AKG_AGENTS_DIR/.tmp/issue/`，**禁止写入其他位置**。
-2. 必须基于 `.github/ISSUE_TEMPLATE/` 下对应模板的格式生成内容，不得自创格式。
-3. 生成完成后**必须执行规范校验**，校验不通过必须提示用户修复。
-4. 提交操作由用户自行完成或通过 API 完成，本 skill **不执行 API 调用**。
+2. Issue 模板格式已内嵌在本文档 Step 3a 中，**无需读取外部文件**，直接使用下方模板。
+3. 所有 Issue 标题必须带 `[AKG_AGENTS]` 前缀。
+4. 生成完成后**必须执行规范校验**。
+5. API 提交仅在用户选择后执行。
+6. **禁止在 shell 中打印 Token 值**。检查 Token 是否存在只能用 `[ -z "$VAR" ]` 判断。
+7. **owner 和 repo 必须从 `git remote -v` 的 URL 提取，禁止从用户输入的分支名推断。**
 
 ---
 
 ## 流程总览
 
 ```
-Step 1  确定 Issue 类型
-Step 2  收集信息（根据类型不同）
-Step 3  生成 Issue 描述 (.md) 和元数据 (.json)
-Step 4  规范校验
-Step 5  展示结果，请求用户确认
+Step 0  模式判定（自动）
+Step 1  收集信息（自动 / 交互）
+Step 2  检测远程信息（自动）
+Step 3  生成 Issue 文件（自动）
+Step 4  规范校验（自动）
+Step 5  展示结果 + 用户决策（一次交互）
+Step 6  执行 API 提交（仅当用户选择"提交"时，不再二次确认）
 ```
 
 ---
 
-## Step 1: 确定 Issue 类型
+## Step 0: 模式判定
 
-如果用户未指定 `ISSUE_TYPE`，使用 `question` 工具询问：
+解析 $ARGUMENTS，判定使用哪种模式：
+
+**Diff 模式**触发条件（满足任一）：
+- 输入包含"分支""diff""对比""比较""差异""branch"等关键词
+- 输入格式为"从 A 到 B"或"A → B"
+- 用户明确要求基于代码变更/提交生成 issue
+
+**描述模式**：不满足以上条件的所有情况。
+
+---
+
+## Step 1: 收集信息
+
+### Diff 模式
+
+**目标分支解析**：从用户输入中提取目标分支名。用户输入的分支名直接作为 `git diff` 的目标 ref 使用，例如：
+- 用户说"origin/master" → `git diff origin/master...HEAD`
+- 用户说"master" → `git diff master...HEAD`
+
+⚠️ **分支名仅用于 git diff/log 命令。不要从分支名推断 owner、repo 或平台信息。**
+
+```bash
+git rev-parse --abbrev-ref HEAD
+git diff <target_ref>...HEAD --stat
+git log <target_ref>..HEAD --oneline --no-merges
+git diff <target_ref>...HEAD
+```
+
+无差异 → 报错终止。
+
+基于 diff 自动推断（**不需要向用户询问**）：
+
+| 字段 | 推断逻辑 |
+|------|---------|
+| `issue_type` | 代码变更类型：bug fix 相关 → `bug`，新功能 → `task`，大规模设计/重构 → `rfc` |
+| `title` | `[AKG_AGENTS] <概要描述>` |
+| `labels` | `["kind/<issue_type>"]` |
+| `body` | 按对应模板格式生成，描述本分支做了什么、要解决什么问题 |
+
+### 描述模式
+
+从 $ARGUMENTS 中提取信息：
+
+| 信息 | 提取方式 |
+|------|---------|
+| `issue_type` | 用户明确指定 → 直接用。否则推断：报错/crash/失败 → `bug`，需求/设计/方案 → `rfc`，其他 → `task` |
+| `title` | 从描述提炼一句话摘要，加 `[AKG_AGENTS]` 前缀 |
+| `body` | 按模板格式组织用户描述 |
+
+**如果用户未指定 issue_type 且无法推断**，使用 `question` 工具**一次性**询问：
 
 > 请选择 Issue 类型：
 > 1. Bug Report — 报告一个 bug
 > 2. RFC — 提出新功能或增强方案
 > 3. Task — 跟踪一项任务
 
-从用户的初始描述文本中也可推断类型（包含"报错""失败""崩溃"等关键词 → Bug；
-包含"建议""需要""设计""方案"→ RFC；包含"任务""跟踪""计划"→ Task），
-但推断结果仍需**确认**。
-
----
-
-## Step 2: 收集信息
-
-根据 Issue 类型，分别引导用户提供必要信息。**已有信息直接使用，缺失信息通过 `question` 工具逐项询问。**
-
-### 2a. Bug Report（对应 `.github/ISSUE_TEMPLATE/bug-report.md`）
-
-需要收集：
-
-| 字段 | 必填 | 自动采集 | 说明 |
-|------|------|---------|------|
-| 硬件环境 | ✅ | ✅ 可从 `check_env.md` 获取 | Ascend/GPU/CPU |
-| AKG 版本 | ✅ | ✅ 可从环境检测 | source or binary |
-| Python 版本 | ✅ | ✅ `python --version` | — |
-| OS 平台 | ✅ | ✅ `uname -a` | — |
-| 当前行为 | ✅ | ❌ | 用户描述 |
-| 期望行为 | ✅ | ❌ | 用户描述 |
-| 复现步骤 | ✅ | ❌ | 用户描述 |
-| 日志/截图 | ❌ | ❌ | 用户提供 |
-
-**自动采集环境信息**：
-
-先检查 `$HOME_DIR/.akg/check_env.md` 是否存在：
-- 存在 → 从中提取硬件、Framework 版本等
-- 不存在 → 执行以下命令采集：
+**Bug 类型额外采集环境信息**（自动执行）：
 
 ```bash
+cat $HOME_DIR/.akg/check_env.md 2>/dev/null
 uname -a
 python3 --version 2>/dev/null || python --version
 ```
 
-对于用户需要手动提供的字段，一次性询问（不要逐个问）：
+**信息不足时，一次性列出所有缺失字段**（不要逐个询问）：
 
-> 请提供以下信息：
-> 1. **当前行为**：实际发生了什么？
-> 2. **期望行为**：你期望发生什么？
-> 3. **复现步骤**：如何复现这个问题？（请尽量精确）
-> 4. **相关日志/截图**（可选）：如有请粘贴
+> 请补充以下信息：
+> 1. [Bug] 当前行为：实际发生了什么？
+> 2. [Bug] 期望行为：你期望发生什么？
+> 3. [Bug] 复现步骤
+> （已自动采集：设备=ascend, Python=3.9.7, OS=Linux...）
 
-### 2b. RFC（对应 `.github/ISSUE_TEMPLATE/RFC.md`）
+---
 
-需要收集：
+## Step 2: 检测远程信息
 
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| 背景 | ✅ | 问题现状描述 |
-| 方案设计 | ✅ | 概要设计、伪代码 |
-| 任务拆分 | ❌ | 子任务表格 |
+**无论哪种模式**，都从 git remote 检测平台和仓库信息（用于后续提交）：
 
-> 请提供以下信息：
-> 1. **背景**：要解决什么问题？当前现状是什么？
-> 2. **方案设计**：你的解决方案概述（可包含伪代码）
-> 3. **任务拆分**（可选）：需要拆分为哪些子任务？
+```bash
+git remote -v
+```
 
-### 2c. Task（对应 `.github/ISSUE_TEMPLATE/task-tracking.md`）
+- **远程名**优先级：tracking remote > `origin` > `origin_gitcode` > 第一个
+- **平台**：从 remote URL 识别 `gitcode.com` / `gitee.com` / `github.com`
+- **owner/repo**：从 remote URL 提取（去掉 `.git` 后缀）
 
-需要收集：
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| 任务描述 | ✅ | 任务内容 |
-| 任务目标 | ✅ | 期望达成的目标 |
-| 子任务 | ❌ | 子任务拆分 |
-
-> 请提供以下信息：
-> 1. **任务描述**：这个任务是什么？
-> 2. **任务目标**：完成后达成什么效果？
-> 3. **子任务拆分**（可选）：需要拆分为哪些子任务？
+⚠️ **再次强调：owner 和 repo 只能从 remote URL 提取，不能从用户输入的分支名提取。**
 
 ---
 
@@ -125,13 +141,11 @@ python3 --version 2>/dev/null || python --version
 
 ### 3a. 生成 .md 文件
 
-文件名格式：`issue_<slug>_<YYYYMMDD_HHmmss>.md`
+文件名：`issue_<slug>_<YYYYMMDD_HHmmss>.md`（slug 从 title 取前几个词，空格转 `-`）
 
-`<slug>` 从 title 生成：取前 30 字符，中文保留，空格和特殊字符替换为 `-`，转小写。
+**必须使用以下内嵌模板**：
 
-内容**严格遵循**对应模板格式：
-
-**Bug Report**：
+**Bug Report**（`issue_type == "bug"`）：
 
 ```markdown
 ---
@@ -149,15 +163,15 @@ labels: kind/bug
 - **AKG version (source or binary)**: <版本>
 - **Python version**: <版本>
 - **OS platform and distribution**: <系统信息>
-- **GCC/Compiler version**: <如有>
+- **GCC/Compiler version (if compiled from source)**: <如有>
 
 ## Describe the current behavior
 
-<当前行为>
+<当前行为描述>
 
 ## Describe the expected behavior
 
-<期望行为>
+<期望行为描述>
 
 ## Steps to reproduce the issue
 1. <步骤1>
@@ -173,7 +187,7 @@ labels: kind/bug
 <补充说明>
 ```
 
-**RFC**：
+**RFC**（`issue_type == "rfc"`）：
 
 ```markdown
 ---
@@ -183,18 +197,18 @@ labels: kind/feature or kind/enhancement
 ---
 
 ## Background
-<背景描述>
+<背景描述：问题现状>
 
 ## Introduction
-<方案设计>
+<方案设计：解决方案概述>
 
 ## Trail
 | No. | Task Description | Related Issue(URL) |
 | --- | ---------------- | ------------------ |
-| 1   | <任务1>          | <URL>              |
+| 1   |                  |                    |
 ```
 
-**Task**：
+**Task**（`issue_type == "task"`）：
 
 ```markdown
 ---
@@ -214,34 +228,28 @@ labels: kind/task
 ## Sub Task
 | No. | Task Description | Issue ID |
 | --- | ---------------- | -------- |
-| 1   | <子任务1>        | <ID>     |
+| 1   |                  |          |
 ```
 
 ### 3b. 生成 .json 元数据文件
 
-文件名格式：`issue_<slug>_<YYYYMMDD_HHmmss>.json`
+文件名：`issue_<slug>_<YYYYMMDD_HHmmss>.json`
 
 ```json
 {
   "version": "1.0",
   "type": "issue",
   "issue_type": "<bug|rfc|task>",
-  "title": "<Issue 标题>",
-  "labels": ["kind/<bug|feature|task>"],
-  "assignees": [],
   "platform": "<gitcode|gitee|github>",
   "repo": "<owner/repo>",
+  "title": "[AKG_AGENTS] <标题>",
+  "labels": ["kind/<bug|feature|task>"],
+  "assignees": [],
   "generated_at": "<ISO 8601 时间戳>",
   "body_file": "<对应的 .md 文件名>",
-  "validation": {
-    "passed": null,
-    "errors": [],
-    "warnings": []
-  }
+  "validation": { "passed": null, "errors": [], "warnings": [] }
 }
 ```
-
-**平台和仓库信息**：从 git remote 中检测，逻辑同 `akg-pr` skill。
 
 ### 3c. 写入文件
 
@@ -249,121 +257,166 @@ labels: kind/task
 mkdir -p $AKG_AGENTS_DIR/.tmp/issue
 ```
 
-将 .md 和 .json 写入 `$AKG_AGENTS_DIR/.tmp/issue/`。
-
 ---
 
 ## Step 4: 规范校验
 
-对生成的 Issue 文件执行以下校验规则：
+```bash
+python $AKG_AGENTS_DIR/.opencode/skills/akg-issue/scripts/validate_issue.py $AKG_AGENTS_DIR/.tmp/issue/<json_file>
+```
 
-### 通用规则
+校验规则（脚本已实现）：
+
+**通用**：
 
 | 规则 ID | 描述 | 级别 |
 |---------|------|------|
-| ISS-001 | title 不得为空，至少 10 字符 | error |
+| ISS-000 | title 必须以 `[AKG_AGENTS]` 开头 | error |
+| ISS-001 | title 至少 10 字符 | error |
 | ISS-002 | labels 至少包含一个 `kind/*` 标签 | error |
 
-### Bug Report 规则
+**Bug Report 专项**：BUG-001 ~ BUG-006（/device、软件环境、当前/期望行为、复现步骤、日志）
 
-| 规则 ID | 描述 | 级别 |
-|---------|------|------|
-| BUG-001 | `/device` 必须存在且为 `ascend`/`gpu`/`cpu` 之一 | error |
-| BUG-002 | 软件环境信息至少包含 AKG 版本和 Python 版本 | error |
-| BUG-003 | "当前行为"不得为空 | error |
-| BUG-004 | "期望行为"不得为空 | error |
-| BUG-005 | "复现步骤"至少包含 1 个步骤 | error |
-| BUG-006 | 建议附带相关日志 | warning |
+**RFC 专项**：RFC-001 ~ RFC-003（背景、方案设计、任务拆分）
 
-### RFC 规则
-
-| 规则 ID | 描述 | 级别 |
-|---------|------|------|
-| RFC-001 | "背景"不得为空，至少 20 字符 | error |
-| RFC-002 | "方案设计"不得为空，至少 30 字符 | error |
-| RFC-003 | 建议包含任务拆分表格 | warning |
-
-### Task 规则
-
-| 规则 ID | 描述 | 级别 |
-|---------|------|------|
-| TSK-001 | "任务描述"不得为空 | error |
-| TSK-002 | "任务目标"不得为空 | error |
-| TSK-003 | 建议包含子任务拆分 | warning |
-
-**校验输出格式**：
-
-```
-✅ ISS-001: 标题长度 32 字符
-✅ ISS-002: labels 包含 kind/bug
-✅ BUG-001: /device 已设置 (ascend)
-❌ BUG-005: 复现步骤为空，请补充
-⚠️  BUG-006: 建议附带相关日志以便排查
-```
-
-将校验结果回填到 .json 的 `validation` 字段。
+**Task 专项**：TSK-001 ~ TSK-003（任务描述、任务目标、子任务）
 
 ---
 
-## Step 5: 展示结果并请求确认
+## Step 5: 展示结果 + 用户决策
 
-使用 `question` 工具向用户展示：
+**一次性展示**所有信息，让用户做**一次**决策：
 
-1. 生成的 Issue 标题和类型
-2. Issue 内容摘要
-3. 校验结果
-4. 文件存放路径
-
-> Issue 文件已生成：
+> **Issue 预览**
+>
+> | 字段 | 值 |
+> |------|-----|
+> | 标题 | `[AKG_AGENTS] <标题>` |
+> | 类型 | `<bug/rfc/task>` |
+> | 标签 | `kind/<type>` |
+> | 仓库 | `<owner>/<repo>` (<平台名>) |
+>
+> **正文摘要**：<前 200 字>
+>
+> **校验结果**：<逐条列出>
+>
+> **文件**：
 > - 描述文件：`.tmp/issue/issue_<slug>_<ts>.md`
 > - 元数据文件：`.tmp/issue/issue_<slug>_<ts>.json`
 >
-> 校验结果：<通过/未通过 + 详细信息>
->
 > 请选择：
-> 1. 确认，我将手动提交
-> 2. 需要修改（请说明修改内容）
-> 3. 放弃
+> 1. **提交** — 通过 API 提交到 <平台名>
+> 2. **仅保存** — 只保留本地文件
+> 3. **修改** — 请说明要改什么
+> 4. **放弃**
 
-**处理回复**：
-
-- 确认 → 报告完成，提示用户提交方式
-- 修改 → 根据用户反馈修改文件，重新执行 Step 4
-- 放弃 → 流程结束
+**处理逻辑**：
+- **提交** → 直接执行 Step 6（不再二次确认）
+- **仅保存** → 完成
+- **修改** → 根据反馈修改 → 重新校验 → 重新展示本步骤
+- **放弃** → 完成
 
 ---
 
-## 提交指引（仅告知用户，skill 不执行）
+## Step 6: API 提交
 
-### GitCode API（需要配置 `GITCODE_TOKEN`）
+### 6a. 检查 Token
+
+**⛔ 禁止使用 `echo $TOKEN` 或 `echo "${TOKEN:?}"` 打印 Token 值。**
 
 ```bash
-curl -X POST "https://api.gitcode.com/api/v5/repos/<owner>/<repo>/issues" \
+# GitCode
+if [ -z "$GITCODE_TOKEN" ]; then echo "GITCODE_TOKEN 未设置"; exit 1; fi
+echo "GITCODE_TOKEN 已设置"
+
+# Gitee
+if [ -z "$GITEE_TOKEN" ]; then echo "GITEE_TOKEN 未设置"; exit 1; fi
+echo "GITEE_TOKEN 已设置"
+
+# GitHub
+gh auth status
+```
+
+Token 未设置时提示：
+
+> **GitCode**：登录 GitCode → 右上角头像 → 个人设置 → 访问令牌 → 新建访问令牌（勾选 api 权限）
+> `export GITCODE_TOKEN="你的token"`
+> 文档：https://docs.gitcode.com/docs/help/home/user_center/security_management/user_pat
+>
+> **Gitee**：设置 → 私人令牌 → 生成新令牌（勾选 issues 权限）
+> `export GITEE_TOKEN="你的token"`
+>
+> **GitHub**：`gh auth login`
+
+### 6b. 执行提交
+
+**重要**：title、body 等内容在 Step 3 生成时已存在于上下文中，**无需重新读取文件**，直接使用即可。
+
+**owner 和 repo 必须使用 Step 2 从 `git remote -v` 提取的值。**
+
+**GitCode**（`platform == "gitcode"`）：
+
+使用完整路径 `/repos/<owner>/<repo>/issues`，JSON 格式提交。
+
+```bash
+curl -s -X POST "https://api.gitcode.com/api/v5/repos/<owner>/<repo>/issues?access_token=$GITCODE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "access_token": "'$GITCODE_TOKEN'",
-    "title": "<从 .json 读取>",
-    "body": "<从 .md 读取>",
-    "labels": "<从 .json 读取，逗号分隔>"
+    "title": "<title>",
+    "body": "<body>",
+    "labels": "<labels 逗号分隔>"
   }'
 ```
 
-### Gitee API（需要配置 `GITEE_TOKEN`）
+| 参数 | 必填 | 位置 | 说明 |
+|------|------|------|------|
+| `access_token` | ✅ | query | Token 环境变量 |
+| `owner` | ✅ | URL path | 从 `git remote -v` 的 URL 提取的组织/用户名 |
+| `repo` | ✅ | URL path | 从 `git remote -v` 的 URL 提取的仓库名 |
+| `title` | ✅ | JSON body | Step 3 生成的标题 |
+| `body` | ❌ | JSON body | Step 3 生成的正文 |
+| `labels` | ❌ | JSON body | 逗号分隔的标签名 |
+
+**Gitee**（`platform == "gitee"`）：
 
 ```bash
-curl -X POST "https://gitee.com/api/v5/repos/<owner>/<repo>/issues" \
+curl -s -X POST "https://gitee.com/api/v5/repos/<owner>/issues" \
   -H "Content-Type: application/json" \
   -d '{
-    "access_token": "'$GITEE_TOKEN'",
-    "title": "<从 .json 读取>",
-    "body": "<从 .md 读取>",
-    "labels": "<从 .json 读取，逗号分隔>"
+    "access_token": "'"$GITEE_TOKEN"'",
+    "repo": "<repo>",
+    "title": "<title>",
+    "body": "<body>",
+    "labels": "<labels 逗号分隔>"
   }'
 ```
 
-### GitHub（需要 `gh` CLI 已登录）
+**GitHub**（`platform == "github"`）：
 
 ```bash
-gh issue create --title "<title>" --body-file .tmp/issue/<file>.md \
-  --label "<labels>"
+gh issue create --title "<title>" --body-file $AKG_AGENTS_DIR/.tmp/issue/<file>.md \
+  --label "<label1>" --label "<label2>"
 ```
+
+### 6c. 处理响应
+
+- **成功**（JSON 含 `html_url`）→ 展示 Issue 链接
+- **失败** → 展示完整错误信息，常见排查：
+  - `api token has not permission` → URL 中 owner 不正确，检查 `git remote -v` 输出
+  - `401` → Token 无效或过期
+  - `label` 相关错误 → 标签名不符合要求（长度 2-20，无特殊字符）
+
+**⚠️ Issue 在 PR 中的关联**：
+
+当 PR 需要关联此 Issue 时，如果 PR 是从 fork 仓库提交到官方仓库，**必须使用完整的 Issue URL**：
+
+```markdown
+**Which issue(s) this PR fixes**:
+
+Fixes https://gitcode.com/mindspore/akg/issues/399
+```
+
+**支持的格式**：
+- `Fixes #399` - 同仓库内有效
+- `Fixes https://gitcode.com/mindspore/akg/issues/399` - 跨仓库有效
+- `Closes https://...` / `Resolves https://...` - 关闭/解决 Issue
