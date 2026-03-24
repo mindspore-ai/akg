@@ -164,17 +164,20 @@ class RouterFactory:
             conductor_parser = ParserFactory.get_conductor_parser()
             format_instructions = conductor_parser.get_format_instructions()
             
-            # 构建输入数据（类似 Conductor._llm_decide_next_agent）
-            # 注意：coder_code 和 error_log 不再截断，由模板或 LLM 处理上下文长度
+            raw_error = state.get('verifier_error', '')
+            error_for_prompt = raw_error
+            if raw_error and len(raw_error) > 4000:
+                error_for_prompt = "... (前面省略) ...\n" + raw_error[-4000:]
+
             input_data = {
                 'dsl': state.get('dsl', ''),
-                'expert_suggestion': state.get('expert_suggestion', ''),  # 添加 expert_suggestion
+                'expert_suggestion': state.get('expert_suggestion', ''),
                 'op_name': state.get('op_name', ''),
                 'framework': state.get('framework', ''),
                 'task_desc': state.get('task_desc', ''),
                 'agent_name': 'verifier',
-                'agent_result': state.get('coder_code', ''),  # 完整代码，不截断
-                'error_log': state.get('verifier_error', ''),  # 完整错误日志，不截断
+                'agent_result': state.get('coder_code', ''),
+                'error_log': error_for_prompt,
                 'history_attempts': RouterFactory._format_history(state),
                 'valid_next_agents': ', '.join(sorted(valid_options)),
                 'format_instructions': format_instructions,

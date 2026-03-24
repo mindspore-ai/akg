@@ -15,8 +15,8 @@
 {% endif %}
 
 ---
+{%- if designer_code %}
 
-{% if designer_code %}
 ## 算法设计草图
 
 以下是设计阶段生成的算法草图/伪代码，请以此为基础进行代码实现，
@@ -27,11 +27,8 @@
 ```
 
 ---
-
-{% endif %}
-
-
-{% if previous_code and user_requirements %}
+{%- endif %}
+{%- if previous_code and user_requirements %}
 {# ==================== 修改模式 ==================== #}
 
 ## ⚠️ 任务模式：代码修改
@@ -58,13 +55,12 @@
 4. 输出完整的修改后代码（包含所有 import 和 class 定义）
 
 ---
+{%- endif %}
+{%- if verifier_error or conductor_suggestion %}
 
-{% endif %}
-
-{% if verifier_error or conductor_suggestion %}
 ## 执行历史和反馈
-
 {% if verifier_error %}
+
 ### Verifier 错误信息
 
 上一次代码验证失败，请根据以下错误信息修复代码：
@@ -72,21 +68,18 @@
 ```
 {{ verifier_error }}
 ```
-
 {% endif %}
-
 {% if conductor_suggestion %}
+
 ### Conductor 修复建议
 
 {{ conductor_suggestion }}
-
 {% endif %}
 
 ---
+{%- endif %}
+{%- if history_actions %}
 
-{% endif %}
-
-{% if history_actions %}
 ## 执行历史和上下文
 {% for action in history_actions %}
 {% if action.tool_name == "history_summary" %}
@@ -112,9 +105,8 @@
 
 {% endif %}
 {% endfor %}
-{% endif %}
-
 ---
+{%- endif %}
 
 ## 当前任务
 
@@ -126,19 +118,17 @@
 {{ task_desc }}
 
 ---
-
-{% if user_requirements and not previous_code %}
+{%- if user_requirements and not previous_code %}
 {# 首次生成但有额外需求 #}
+
 ### ⚠️ 用户额外需求（请务必遵守）
 
 {{ user_requirements }}
 
 ---
+{%- endif %}
+{%- if inspirations %}
 
-{% endif %}
-
-
-{% if inspirations %}
 ## 进化探索方案
 
 **重要须知**：下面是一些过往方案的代码以及性能指标，请参考这些信息，分析可用的优化方案，并生成优化后的代码。
@@ -149,10 +139,9 @@
 请你尽最大努力来完成代码的优化，得到一个计算速度快的高效算子实现。
 
 ---
+{%- endif %}
+{%- if handwrite_suggestions %}
 
-{% endif %}
-
-{% if handwrite_suggestions %}
 ## 手写优化策略与实现参考
 
 以下是针对类似算子的专家级优化策略和实现，请深入理解这些优化思路并应用到草图设计中：
@@ -166,12 +155,11 @@
 ```
 
 ---
-
 {% endfor %}
-{% endif %}
-
-{% if previous_code and not user_requirements %}
+{%- endif %}
+{%- if previous_code and not user_requirements %}
 {# 有之前的代码但没有新需求（例如 verifier 迭代修复）#}
+
 ### 上一版代码（参考）
 
 以下是之前生成的代码，可作为参考进行改进：
@@ -181,10 +169,9 @@
 ```
 
 ---
+{%- endif %}
+{%- if hardware_docs %}
 
-{% endif %}
-
-{% if hardware_docs %}
 ## 目标硬件信息
 
 **架构**: {{ arch_name or '通用' }}
@@ -192,8 +179,7 @@
 {{ hardware_docs }}
 
 ---
-
-{% endif %}
+{%- endif %}
 
 ## 生成指令
 

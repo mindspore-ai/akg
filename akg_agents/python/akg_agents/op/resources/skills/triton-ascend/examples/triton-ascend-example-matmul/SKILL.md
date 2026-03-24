@@ -18,14 +18,6 @@ import triton
 import triton.language as tl
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_M': 128, 'BLOCK_K': 256, 'BLOCK_N': 128}),
-        triton.Config({'BLOCK_M': 256, 'BLOCK_K': 128, 'BLOCK_N': 128}),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_K': 512, 'BLOCK_N': 64}),
-    ],
-    key=['M', 'N', 'K'],
-)
 @triton.jit
 def matmul_kernel(
     a_ptr, b_ptr, c_ptr,
@@ -33,7 +25,7 @@ def matmul_kernel(
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
-    num_cores: tl.constexpr,
+    CORE_NUM: tl.constexpr,
     BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr, BLOCK_N: tl.constexpr,
 ):
     NUM_BLOCKS_M = tl.cdiv(M, BLOCK_M)
@@ -41,7 +33,7 @@ def matmul_kernel(
     NUM_BLOCKS = NUM_BLOCKS_M * NUM_BLOCKS_N
     pid = tl.program_id(0)
 
-    for block_idx in range(pid, NUM_BLOCKS, num_cores):
+    for block_idx in range(pid, NUM_BLOCKS, CORE_NUM):
         bm = block_idx // NUM_BLOCKS_N
         bn = block_idx % NUM_BLOCKS_N
         acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
@@ -70,19 +62,29 @@ def matmul_kernel(
                  acc, mask=c_mask)
 
 
-def matmul_triton_ascend(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-    if not A.is_contiguous():
-        A = A.contiguous()
-    if not B.is_contiguous():
-        B = B.contiguous()
-    M, K = A.shape
-    _, N = B.shape
-    C = torch.empty((M, N), dtype=torch.float32, device=A.device)
-    num_cores = 20
-    grid = lambda meta: (num_cores,)
-    matmul_kernel[grid](
-        A, B, C, M, N, K,
-        A.stride(0), A.stride(1), B.stride(0), B.stride(1),
-        C.stride(0), C.stride(1), num_cores=num_cores)
-    return C
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        try:
+            self.CUBE_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("cube_core_num", 20)
+        except:
+            self.CUBE_CORE_NUM = 20
+
+    def forward(self, A, B):
+        if not A.is_contiguous():
+            A = A.contiguous()
+        if not B.is_contiguous():
+            B = B.contiguous()
+        M, K = A.shape
+        _, N = B.shape
+        C = torch.empty((M, N), dtype=torch.float32, device=A.device)
+        BLOCK_M, BLOCK_K, BLOCK_N = 128, 256, 128
+        grid = (self.CUBE_CORE_NUM,)
+        matmul_kernel[grid](
+            A, B, C, M, N, K,
+            A.stride(0), A.stride(1), B.stride(0), B.stride(1),
+            C.stride(0), C.stride(1),
+            CORE_NUM=self.CUBE_CORE_NUM,
+            BLOCK_M=BLOCK_M, BLOCK_K=BLOCK_K, BLOCK_N=BLOCK_N)
+        return C
 ```
