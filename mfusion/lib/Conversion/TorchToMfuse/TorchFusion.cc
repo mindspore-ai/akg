@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "mfusion/Conversion/Passes.h"
-
 #include <functional>
 #include <utility>
 #include <vector>
+
+#include "mfusion/Conversion/Passes.h"
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
@@ -37,7 +37,9 @@ struct TorchFusionPass : public PassWrapper<TorchFusionPass, OperationPass<Modul
     return "Torch dialect fusion pipeline (RoPE etc.) before Convert Torch to Mfuse";
   }
 
-  void getDependentDialects(DialectRegistry &registry) const override { registry.insert<TorchD::TorchDialect>(); }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<TorchD::TorchDialect>();
+  }
 
   void runOnOperation() override {
     using PassCreator = std::function<std::unique_ptr<Pass>()>;
@@ -46,12 +48,15 @@ struct TorchFusionPass : public PassWrapper<TorchFusionPass, OperationPass<Modul
         {"torch-fuse-rope", []() { return createTorchFuseRoPEPass(); }},
     };
 
-    PassManager pm(&getContext());
+    Operation *op = getOperation();
+    MLIRContext &ctx = getContext();
+
+    PassManager pm(&ctx);
     for (const auto &[name, creator] : passes) {
       (void)name;
       pm.addPass(creator());
     }
-    if (failed(pm.run(getOperation()))) {
+    if (failed(pm.run(op))) {
       signalPassFailure();
     }
   }
