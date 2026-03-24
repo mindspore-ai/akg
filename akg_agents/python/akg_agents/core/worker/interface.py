@@ -94,3 +94,16 @@ class WorkerInterface(ABC):
                 - log: 执行日志
         """
         pass
+
+    @abstractmethod
+    async def get_doc(self, doc_name: str) -> str:
+        """
+        获取 Worker 所在环境可见的文档内容。
+
+        Args:
+            doc_name: 文档标识，例如 "triton_ascend_api"
+
+        Returns:
+            str: 文档内容
+        """
+        pass

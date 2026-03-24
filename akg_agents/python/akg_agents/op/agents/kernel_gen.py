@@ -32,6 +32,9 @@ from typing import Dict, Any, Tuple, List, Optional
 from akg_agents import get_project_root
 from akg_agents.core_v2.agents import AgentBase, register_agent, Jinja2TemplateWrapper
 from akg_agents.core_v2.filesystem import ActionRecord
+from akg_agents.op.utils.triton_ascend_api_docs import (
+    resolve_triton_ascend_api_docs,
+)
 from akg_agents.utils.hardware_utils import get_hardware_doc
 
 # 导入 skill 系统模块
@@ -396,6 +399,13 @@ class KernelGen(AgentBase):
         logger.info(f"Skill assembly order: {order_desc}")
         
         return "\n\n---\n\n".join(skill.content for skill in sorted_skills)
+
+    async def _load_aggregated_api_docs(self, dsl: str, backend: str = "", arch: str = "") -> str:
+        """按需加载 Triton Ascend API 文档。"""
+        if dsl != "triton_ascend":
+            return ""
+
+        return await resolve_triton_ascend_api_docs(backend=backend, arch=arch)
     
     @staticmethod
     def _extract_code(raw_output: str) -> str:
@@ -517,12 +527,19 @@ class KernelGen(AgentBase):
                 arch=arch
             )
 
+            aggregated_api_docs = await self._load_aggregated_api_docs(
+                dsl,
+                backend=backend,
+                arch=arch,
+            )
+
             # 4. 渲染 User Prompt
             user_prompt = self.user_prompt_template.format(
                 history_actions=history_compress,
                 verifier_error=verifier_error,
                 conductor_suggestion=conductor_suggestion,
                 skill_contents=skill_contents,
+                aggregated_api_docs=aggregated_api_docs,
                 op_name=op_name,
                 func_name=func_name,
                 task_desc=task_desc,

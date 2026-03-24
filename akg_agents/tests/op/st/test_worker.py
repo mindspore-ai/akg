@@ -5,6 +5,7 @@ import io
 import os
 import textwrap
 import uuid
+import httpx
 from akg_agents.core.worker.local_worker import LocalWorker
 from akg_agents.core.async_pool.device_pool import DevicePool
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
@@ -107,6 +108,75 @@ sys.exit(0)
     
     assert success is False
     assert "timed out" in log
+
+
+def test_local_worker_get_doc(monkeypatch):
+    device_pool = DevicePool([0])
+    worker = LocalWorker(device_pool, backend="ascend")
+
+    monkeypatch.setattr(
+        "akg_agents.core.worker.local_worker.load_triton_ascend_api_docs",
+        lambda: "doc",
+    )
+
+    assert asyncio.run(worker.get_doc("triton_ascend_api")) == "doc"
+
+
+def test_worker_server_docs_endpoint(monkeypatch):
+    from akg_agents.worker import server as worker_server
+
+    class StubWorker:
+        async def get_doc(self, doc_name: str) -> str:
+            assert doc_name == "triton_ascend_api"
+            return "# remote docs"
+
+    monkeypatch.setattr(worker_server, "worker", StubWorker())
+
+    async def _run():
+        transport = httpx.ASGITransport(app=worker_server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await client.get(
+                "/api/v1/docs/triton_ascend_api",
+            )
+
+    response = asyncio.run(_run())
+
+    assert response.status_code == 200
+    assert response.json()["content"] == "# remote docs"
+
+
+def test_remote_worker_get_doc(monkeypatch):
+    from akg_agents.core.worker.remote_worker import RemoteWorker
+
+    class StubResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"content": "# remote docs"}
+
+    class StubAsyncClient:
+        def __init__(self, *args, **kwargs):
+            self.timeout = kwargs.get("timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, params=None):
+            assert url == "http://worker/api/v1/docs/triton_ascend_api"
+            assert params is None
+            return StubResponse()
+
+    monkeypatch.setattr(
+        "akg_agents.core.worker.remote_worker.httpx.AsyncClient",
+        StubAsyncClient,
+    )
+
+    worker = RemoteWorker("http://worker")
+    assert asyncio.run(worker.get_doc("triton_ascend_api")) == "# remote docs"
 
 
 @pytest.mark.level0

@@ -13,6 +13,7 @@ from contextlib import ExitStack
 
 from .interface import WorkerInterface
 from ..async_pool.device_pool import DevicePool
+from akg_agents.op.utils.triton_ascend_api_docs import load_triton_ascend_api_docs
 from akg_agents.op.verifier.profiler_utils import (
     run_profile_scripts_and_collect_results,
     run_msprof,
@@ -145,6 +146,12 @@ class LocalWorker(WorkerInterface):
         except Exception as e:
             logger.error(f"[{task_id}] LocalWorker verification failed: {e}", exc_info=True)
             return False, str(e), {}
+
+    async def get_doc(self, doc_name: str) -> str:
+        """返回 Worker 本地环境可见的文档。"""
+        if doc_name == "triton_ascend_api":
+            return load_triton_ascend_api_docs()
+        raise ValueError(f"Unsupported doc name: {doc_name}")
 
     async def profile(self, package_data: bytes, task_id: str, op_name: str, profile_settings: Dict[str, Any]) -> Dict[str, Any]:
         """
