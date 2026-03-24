@@ -88,9 +88,8 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
          []() { return createFuseMatmulReshapeBiasAddPass(); }},
 
         {"fuse-gelu", []() { return createFuseGeluPass(); }},
-        // fuse-rms-norm-decomposed creates new aclnn.rms_norm ops that
-        // fuse-add-rms-norm can then fold with adjacent add ops.
-        {"fuse-rms-norm", []() { return createFuseRmsNormPass(); }},
+        // RmsNorm is fused on Torch dialect (torch-fusion) before convert-torch-to-mfuse.
+        // fuse-add-rms-norm can then fold adjacent add ops with the resulting aclnn.rms_norm.
         {"fuse-add-rms-norm", []() { return createFuseAddRmsNormPass(); }},
         {"fuse-swi-glu", []() { return createFuseSwiGluPass(); }},
     };
