@@ -20,7 +20,6 @@
 #include "mfusion/Dialect/Mfuse/Support/OpConstants.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/FusionPassMacros.h"
 #include "mfusion/Support/Logging.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -73,6 +72,15 @@ class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
       return failure();
     }
 
+    // To preserve SSA dominance after replacing Add users with x_out (result #2),
+    // create AddRmsNorm at addOp so x_out dominates all original add uses.
+    // Guard: gamma must dominate addOp when both are in the same block.
+    if (auto *gammaDef = gamma.getDefiningOp()) {
+      if (gammaDef->getBlock() == addOp->getBlock() && !gammaDef->isBeforeInBlock(addOp)) {
+        return failure();
+      }
+    }
+
     MLOG(DEBUG) << "FuseAddRmsNormPattern matched AclnnRmsNormOp, fusing with AddOp";
 
     // Create AddRmsNormOp with 3 results: y_out, rstd_out, x_out
@@ -82,7 +90,8 @@ class FuseAddRmsNormPattern : public OpRewritePattern<AclnnRmsNormOp> {
     resultTypes.push_back(addOp.getResult().getType());
 
     // Must pass epsilon attribute
-    auto addRmsNormOp = rewriter.create<AclnnAddRmsNormOp>(rmsNormOp.getLoc(), resultTypes, x1, x2, gamma, epsilon);
+    rewriter.setInsertionPoint(addOp);
+    auto addRmsNormOp = rewriter.create<AclnnAddRmsNormOp>(addOp.getLoc(), resultTypes, x1, x2, gamma, epsilon);
     MLOG(DEBUG) << "Created new AclnnAddRmsNormOp";
 
     // Replace results
