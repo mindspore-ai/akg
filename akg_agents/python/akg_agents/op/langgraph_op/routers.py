@@ -277,16 +277,21 @@ class RouterFactory:
         ]
     
     @staticmethod
-    def create_code_checker_router(config: dict, code_gen_agent: str = "coder"):
+    def create_code_checker_router(config: dict, code_gen_agent: str = "coder",
+                                    enable_fix_code_gen: bool = False):
         """创建 CodeChecker 后的路由决策
 
         CodeChecker 只做纯静态检查（ast.parse / py_compile / import），不涉及 LLM，
         因此不设最大重试次数——每次生成代码后都应该 check，失败就回去修。
         外层 workflow 的 max_iterations 已经能兜底防止死循环。
 
+        当启用 fix_code_gen 时，语法错误优先走增量修复（更高效）；
+        仅当 fix_code_gen 连续失败时回退到完整重新生成。
+
         Args:
             config: 配置字典
             code_gen_agent: 代码生成 agent 名称（默认 "coder"，KernelGen 流程使用 "kernel_gen"）
+            enable_fix_code_gen: 是否启用 fix_code_gen 增量修复
 
         Returns:
             路由函数
@@ -298,6 +303,12 @@ class RouterFactory:
             if passed:
                 logger.info(f"[Task {task_id}] CodeChecker passed, routing to verifier")
                 return "verifier"
+
+            if enable_fix_code_gen:
+                logger.info(
+                    f"[Task {task_id}] CodeChecker failed, routing to fix_code_gen for incremental fix"
+                )
+                return "fix_code_gen"
 
             logger.info(
                 f"[Task {task_id}] CodeChecker failed, routing back to {code_gen_agent} for fix"

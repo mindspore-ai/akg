@@ -189,8 +189,8 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
             kernel_conductor,
             self.trace,
             self.config,
-            self.conductor_template,
             code_gen_agent="kernel_gen",
+            kernel_gen_instance=self.agents.get('kernel_gen'),
             enable_fix_code_gen=enable_fix_code_gen,
         )
         
@@ -231,19 +231,24 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
                 }
             )
             
-            # 条件边：code_checker 后的路由（指定使用 kernel_gen）
+            # 条件边：code_checker 后的路由
             code_checker_router = RouterFactory.create_code_checker_router(
                 self.config,
-                code_gen_agent="kernel_gen"
+                code_gen_agent="kernel_gen",
+                enable_fix_code_gen=enable_fix_code_gen,
             )
+            
+            code_checker_edges = {
+                "verifier": "verifier",       # 检查通过 → Verifier
+                "kernel_gen": "kernel_gen",    # 检查失败（无 fix_code_gen）→ KernelGen 重写
+            }
+            if enable_fix_code_gen:
+                code_checker_edges["fix_code_gen"] = "fix_code_gen"
             
             workflow.add_conditional_edges(
                 "code_checker",
                 code_checker_router,
-                {
-                    "verifier": "verifier",       # 检查通过 → Verifier
-                    "kernel_gen": "kernel_gen"     # 检查失败 → 回到 KernelGen 修复
-                }
+                code_checker_edges,
             )
         else:
             # 不启用 CodeChecker，直接 kernel_gen -> verifier（带 codegen 路由）

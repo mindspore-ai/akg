@@ -126,8 +126,8 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
         """构建 Coder-only 工作流图（带 CodeChecker + FixCodeGen）"""
         workflow = StateGraph(KernelGenState)
         
-        # 检查是否启用 CodeChecker（默认禁用，因为 LLM 检查容易产生假阳性）
-        enable_code_checker = self.config.get("enable_code_checker", False)
+        # CodeChecker 做纯静态检查（语法/编译/import），默认开启
+        enable_code_checker = self.config.get("enable_code_checker", True)
         # FixCodeGen 增量修复（默认启用）
         enable_fix_code_gen = self.config.get("enable_fix_code_gen", True)
         
@@ -202,16 +202,21 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
             
             # 条件边：code_checker 后的路由
             code_checker_router = RouterFactory.create_code_checker_router(
-                self.config
+                self.config,
+                enable_fix_code_gen=enable_fix_code_gen,
             )
+            
+            code_checker_edges = {
+                "verifier": "verifier",  # 检查通过 → Verifier
+                "coder": "coder",        # 检查失败（无 fix_code_gen）→ Coder 重写
+            }
+            if enable_fix_code_gen:
+                code_checker_edges["fix_code_gen"] = "fix_code_gen"
             
             workflow.add_conditional_edges(
                 "code_checker",
                 code_checker_router,
-                {
-                    "verifier": "verifier",  # 检查通过 → Verifier
-                    "coder": "coder"         # 检查失败 → 回到 Coder 修复
-                }
+                code_checker_edges,
             )
         else:
             # 不启用 CodeChecker，直接 coder -> verifier（带 codegen 路由）

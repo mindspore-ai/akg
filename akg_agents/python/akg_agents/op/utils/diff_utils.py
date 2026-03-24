@@ -15,7 +15,7 @@
 """FixCodeGen 增量修复工具
 
 提供 Search/Replace 模式的代码增量修复能力：
-- CodeMatcher: 多级代码匹配器（当前实现 L1 精确匹配 + L2 行级 trim 匹配）
+- CodeMatcher: 多级代码匹配器（L1 精确 / L2 行级 trim / L3 空白规范化 / L4 模糊匹配）
 - DiffApplier: 差异应用器，执行替换并生成 unified diff
 - Modification / DiffResult: 数据类
 """
@@ -23,8 +23,9 @@
 import difflib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,8 @@ class Modification:
     old_string: str
     new_string: str
     reason: str = ""
+    replace_all: bool = False
+    anchor: str = ""
 
 
 @dataclass
@@ -46,18 +49,25 @@ class DiffResult:
     diff_text: str = ""
     applied_count: int = 0
     errors: List[str] = field(default_factory=list)
+    raw_llm_output: str = ""
+    match_levels: Dict[str, int] = field(default_factory=dict)
 
 
 class CodeMatcher:
     """多级代码匹配器
 
-    当前实现：
+    匹配降级链：
       L1 — 精确匹配（str.find）
       L2 — 行级 trim 匹配（逐行 strip 后滑动窗口比较）
+      L3 — 空白规范化匹配（连续空白合并为单个空格后比较）
+      L4 — 模糊匹配（基于编辑距离，含置信度检查和窗口 +/-1 行容差）
 
     所有匹配级别找到匹配后，返回原始代码中的对应片段（而非搜索串本身），
     确保后续 str.replace() 一定能替换成功。
     """
+
+    FUZZY_THRESHOLD = 0.8
+    FUZZY_CONFIDENCE_GAP = 0.1
 
     @classmethod
     def find_match(cls, content: str, search: str) -> Tuple[Optional[str], str]:
@@ -65,7 +75,7 @@ class CodeMatcher:
 
         Returns:
             (matched_text, level): matched_text 为 None 表示全部失败，
-            level 取值 "exact" / "trimmed" / "none"。
+            level 取值 "exact" / "trimmed" / "whitespace_normalized" / "fuzzy" / "none"。
         """
         result = cls.exact_match(content, search)
         if result is not None:
@@ -75,7 +85,47 @@ class CodeMatcher:
         if result is not None:
             return result, "trimmed"
 
+        result = cls.whitespace_normalized_match(content, search)
+        if result is not None:
+            return result, "whitespace_normalized"
+
+        result = cls.fuzzy_match(content, search, threshold=cls.FUZZY_THRESHOLD)
+        if result is not None:
+            return result, "fuzzy"
+
         return None, "none"
+
+    @classmethod
+    def find_match_with_anchor(
+        cls, content: str, search: str, anchor: str,
+    ) -> Tuple[Optional[str], str]:
+        """anchor 消歧匹配：先定位 anchor，再在 anchor 附近搜索 old_string。
+
+        anchor 可能位于 old_string 的中间，此时 old_string 从 anchor 之前开始。
+        通过检查 anchor 在 search 中的位置精确计算回退偏移量。
+
+        Returns:
+            (matched_text, level): 同 find_match。
+        """
+        if not anchor:
+            return cls.find_match(content, search)
+
+        anchor_pos = content.find(anchor)
+        if anchor_pos == -1:
+            logger.warning(f"Anchor not found: '{anchor[:60]}'")
+            return None, "none"
+
+        anchor_in_search = search.find(anchor)
+        if anchor_in_search > 0:
+            search_start = max(0, anchor_pos - anchor_in_search)
+        else:
+            search_start = anchor_pos
+
+        sub_content = content[search_start:]
+        matched, level = cls.find_match(sub_content, search)
+        if matched is None:
+            return None, "none"
+        return matched, level
 
     @classmethod
     def exact_match(cls, content: str, search: str) -> Optional[str]:
@@ -105,7 +155,6 @@ class CodeMatcher:
             return None
 
         stripped_search = [line.strip() for line in search_lines]
-        # 过滤全空的搜索行序列
         if all(s == "" for s in stripped_search):
             return None
 
@@ -117,21 +166,105 @@ class CodeMatcher:
             window = content_lines[i:i + window_size]
             stripped_window = [line.strip() for line in window]
             if stripped_window == stripped_search:
-                # 返回原始内容中的对应片段（保留原始换行符）
                 matched = "\n".join(window)
                 return matched
 
         return None
 
+    @classmethod
+    def whitespace_normalized_match(cls, content: str, search: str) -> Optional[str]:
+        """L3: 空白规范化匹配
+
+        将连续空白统一为单个空格后比较。使用行级滑动窗口，匹配成功返回
+        content 中的原始片段。
+        """
+        if not search:
+            return None
+
+        def normalize(s: str) -> str:
+            return re.sub(r'\s+', ' ', s).strip()
+
+        norm_search = normalize(search)
+        if not norm_search:
+            return None
+
+        content_lines = content.splitlines()
+        search_lines = search.splitlines()
+        window_size = len(search_lines)
+
+        if window_size == 0 or window_size > len(content_lines):
+            return None
+
+        for i in range(len(content_lines) - window_size + 1):
+            window = "\n".join(content_lines[i:i + window_size])
+            if normalize(window) == norm_search:
+                return window
+
+        return None
+
+    @classmethod
+    def fuzzy_match(
+        cls, content: str, search: str, threshold: float = 0.8,
+    ) -> Optional[str]:
+        """L4: 模糊匹配（基于 SequenceMatcher）
+
+        滑动窗口尝试 search_line_count +/-1 行的窗口大小（容差），
+        找到相似度最高的片段。含置信度检查：最佳与次佳相似度差距不足
+        FUZZY_CONFIDENCE_GAP 时拒绝匹配，防止选错位置。
+        """
+        if not search or not content:
+            return None
+
+        content_lines = content.splitlines()
+        search_lines = search.splitlines()
+        search_line_count = len(search_lines)
+
+        if search_line_count == 0:
+            return None
+
+        best_match: Optional[str] = None
+        best_ratio = 0.0
+        second_best_ratio = 0.0
+
+        for delta in [0, -1, 1]:
+            window_size = search_line_count + delta
+            if window_size <= 0 or window_size > len(content_lines):
+                continue
+            for i in range(len(content_lines) - window_size + 1):
+                window = "\n".join(content_lines[i:i + window_size])
+                ratio = difflib.SequenceMatcher(None, search, window).ratio()
+                if ratio > best_ratio:
+                    second_best_ratio = best_ratio
+                    best_ratio = ratio
+                    best_match = window
+                elif ratio > second_best_ratio:
+                    second_best_ratio = ratio
+
+        if best_ratio < threshold:
+            return None
+
+        if best_ratio - second_best_ratio < cls.FUZZY_CONFIDENCE_GAP:
+            logger.warning(
+                f"Fuzzy match rejected: confidence gap too small "
+                f"(best={best_ratio:.3f}, second={second_best_ratio:.3f})"
+            )
+            return None
+
+        return best_match
+
 
 class DiffApplier:
-    """差异应用器：将 Modification 列表逐个应用到代码上"""
+    """差异应用器：将 Modification 列表逐个应用到代码上
+
+    支持 replace_all 全局替换、anchor 锚点消歧、冲突预检测、匹配级别追踪。
+    """
 
     @classmethod
     def apply_modifications(
         cls,
         code: str,
         modifications: List[Modification],
+        raw_llm_output: str = "",
     ) -> DiffResult:
         """逐个顺序应用 modifications，返回 DiffResult。
 
@@ -142,6 +275,11 @@ class DiffApplier:
         current_code = code
         applied_count = 0
         errors: List[str] = []
+        match_levels: Dict[str, int] = {}
+
+        conflict_warnings = cls.detect_conflicts(modifications)
+        for w in conflict_warnings:
+            logger.warning(w)
 
         for idx, mod in enumerate(modifications):
             if mod.old_string == mod.new_string:
@@ -150,23 +288,56 @@ class DiffApplier:
                 )
                 continue
 
-            matched_text, level = CodeMatcher.find_match(current_code, mod.old_string)
-
-            if matched_text is None:
-                errors.append(
-                    f"Modification {idx + 1}: 在代码中未找到匹配 "
-                    f"(old_string 前 60 字符: '{mod.old_string[:60]}...')"
-                )
-                continue
-
-            # 执行替换（只替换第一次出现）
-            current_code = current_code.replace(matched_text, mod.new_string, 1)
-            applied_count += 1
-            logger.debug(
-                f"Modification {idx + 1} 应用成功 (level={level}): {mod.reason}"
+            matched_text, level = CodeMatcher.find_match_with_anchor(
+                current_code, mod.old_string, mod.anchor,
             )
 
-        # 生成 unified diff
+            match_levels[level] = match_levels.get(level, 0) + 1
+
+            if matched_text is None:
+                if mod.anchor and current_code.find(mod.anchor) == -1:
+                    errors.append(
+                        f"Modification {idx + 1}: anchor 未找到 "
+                        f"(anchor: '{mod.anchor[:60]}')"
+                    )
+                else:
+                    errors.append(
+                        f"Modification {idx + 1}: 在代码中未找到匹配 "
+                        f"(old_string 前 60 字符: "
+                        f"'{mod.old_string[:60]}...')"
+                    )
+                continue
+
+            if mod.replace_all:
+                count = current_code.count(matched_text)
+                current_code = current_code.replace(matched_text, mod.new_string)
+                applied_count += count
+                logger.debug(
+                    f"Modification {idx + 1} replace_all={count} (level={level}): "
+                    f"{mod.reason}"
+                )
+            elif mod.anchor:
+                anchor_pos = current_code.find(mod.anchor)
+                anchor_in_old = mod.old_string.find(mod.anchor)
+                if anchor_in_old > 0:
+                    search_start = max(0, anchor_pos - anchor_in_old)
+                else:
+                    search_start = anchor_pos
+                sub_content = current_code[search_start:]
+                replaced_sub = sub_content.replace(matched_text, mod.new_string, 1)
+                current_code = current_code[:search_start] + replaced_sub
+                applied_count += 1
+                logger.debug(
+                    f"Modification {idx + 1} 应用成功 (anchor, level={level}): "
+                    f"{mod.reason}"
+                )
+            else:
+                current_code = current_code.replace(matched_text, mod.new_string, 1)
+                applied_count += 1
+                logger.debug(
+                    f"Modification {idx + 1} 应用成功 (level={level}): {mod.reason}"
+                )
+
         diff_text = cls._generate_diff(original_code, current_code)
 
         success = applied_count > 0
@@ -177,7 +348,25 @@ class DiffApplier:
             diff_text=diff_text,
             applied_count=applied_count,
             errors=errors,
+            raw_llm_output=raw_llm_output,
+            match_levels=match_levels,
         )
+
+    @staticmethod
+    def detect_conflicts(modifications: List[Modification]) -> List[str]:
+        """冲突预检测：扫描 old_string 之间是否存在包含关系"""
+        warnings: List[str] = []
+        for i, mod_a in enumerate(modifications):
+            for j, mod_b in enumerate(modifications):
+                if i >= j:
+                    continue
+                if (mod_a.old_string in mod_b.old_string
+                        or mod_b.old_string in mod_a.old_string):
+                    warnings.append(
+                        f"Modification {i + 1} and {j + 1} may conflict "
+                        f"(overlapping old_string regions)"
+                    )
+        return warnings
 
     @staticmethod
     def _generate_diff(original: str, modified: str) -> str:
@@ -242,6 +431,25 @@ def parse_modifications(llm_output: str) -> List[Modification]:
             old_string=old,
             new_string=new,
             reason=item.get("reason", ""),
+            replace_all=bool(item.get("replace_all", False)),
+            anchor=str(item.get("anchor", "")),
         ))
 
     return modifications
+
+
+def truncate_error_log(error_log: str, max_len: int = 5000) -> str:
+    """截断过长的错误日志，保留头部 1/3 + 尾部 2/3。
+
+    Traceback 的关键信息（实际错误类型和最近的调用帧）在尾部，
+    因此尾部分配更多空间。
+    """
+    if len(error_log) <= max_len:
+        return error_log
+    head_len = max_len // 3
+    tail_len = max_len - head_len - 50
+    return (
+        error_log[:head_len]
+        + f"\n\n... ({len(error_log) - head_len - tail_len} chars truncated) ...\n\n"
+        + error_log[-tail_len:]
+    )
