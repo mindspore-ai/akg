@@ -416,6 +416,36 @@ def Mfuse_FloorOp : Mfuse_Op<"floor", [
   }];
 }
 
+def Mfuse_FullOp : Mfuse_Op<"full", [Pure]> {
+  let summary = "Create a tensor filled with a scalar value.";
+  let description = [{
+    Creates a tensor of the given shape (encoded in the result type) filled
+    with the specified scalar value.
+
+    Preserves the original torch.aten.full parameters so that the op can be
+    faithfully converted back to torch dialect:
+    - fill_value: the scalar fill value (stored as f64).
+    - dtype: optional torch ScalarType integer encoding the element type.
+    - layout: optional torch layout integer.
+    - device: optional device string (e.g. "cpu", "npu").
+    - pin_memory: optional pin_memory flag.
+  }];
+
+  let arguments = (ins
+    F64Attr:$fill_value,
+    OptionalAttr<I64Attr>:$dtype,
+    OptionalAttr<I64Attr>:$layout,
+    OptionalAttr<StrAttr>:$device,
+    OptionalAttr<BoolAttr>:$pin_memory
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $fill_value attr-dict `:` type($result)
+  }];
+}
+
 def Mfuse_GeOp : Mfuse_BroadcastableBinaryOp<"ge", [Pure, SameOperandsElementType]> {
   let summary = "Element-wise greater-than-or-equal comparison of two tensors.";
   let description = [{

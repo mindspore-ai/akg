@@ -275,6 +275,77 @@ class ConvertMfuseAclnnConv2DWithBias : public mlir::OpConversionPattern<mlir::m
   }
 };
 
+/// Converts mfuse.full -> torch.aten.full.
+/// Reconstructs all original torch.aten.full arguments from the preserved attributes.
+class ConvertMfuseFull : public mlir::OpConversionPattern<mlir::mfuse::FullOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::FullOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    auto resultType = mlir::cast<mlir::RankedTensorType>(op.getResult().getType());
+
+    // Build size list from result shape.
+    llvm::SmallVector<mlir::Value> sizeValues;
+    sizeValues.reserve(resultType.getRank());
+    for (int64_t dim : resultType.getShape()) {
+      sizeValues.push_back(rewriter.create<TorchD::ConstantIntOp>(
+        op.getLoc(), rewriter.getI64IntegerAttr(dim)));
+    }
+    auto listType = TorchD::ListType::get(op.getContext(), TorchD::IntType::get(op.getContext()));
+    mlir::Value sizeList = rewriter.create<TorchD::PrimListConstructOp>(op.getLoc(), listType, sizeValues);
+
+    // Build fill_value as a torch float scalar.
+    double fillValue = op.getFillValue().convertToDouble();
+    mlir::Value fillVal = rewriter.create<TorchD::ConstantFloatOp>(
+      op.getLoc(), rewriter.getFloatAttr(rewriter.getF64Type(), fillValue));
+
+    // Restore dtype from saved attribute, or build from element type.
+    mlir::Value dtypeVal;
+    if (auto dtypeAttr = op.getDtypeAttr()) {
+      dtypeVal = rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), dtypeAttr);
+    } else {
+      auto dtypeValOrFailure = buildTorchDtypeValue(resultType.getElementType(), op.getLoc(), rewriter);
+      if (mlir::succeeded(dtypeValOrFailure)) {
+        dtypeVal = *dtypeValOrFailure;
+      } else {
+        dtypeVal = rewriter.create<TorchD::ConstantNoneOp>(op.getLoc());
+      }
+    }
+
+    // Restore layout from saved attribute, or None.
+    mlir::Value layoutVal;
+    if (auto layoutAttr = op.getLayoutAttr()) {
+      layoutVal = rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), layoutAttr);
+    } else {
+      layoutVal = rewriter.create<TorchD::ConstantNoneOp>(op.getLoc());
+    }
+
+    // Restore device from saved attribute, or None.
+    mlir::Value deviceVal;
+    if (auto deviceAttr = op.getDeviceAttr()) {
+      deviceVal = rewriter.create<TorchD::ConstantDeviceOp>(op.getLoc(), deviceAttr);
+    } else {
+      deviceVal = rewriter.create<TorchD::ConstantNoneOp>(op.getLoc());
+    }
+
+    // Restore pin_memory from saved attribute, or None.
+    mlir::Value pinMemoryVal;
+    if (auto pinMemoryAttr = op.getPinMemoryAttr()) {
+      pinMemoryVal = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), pinMemoryAttr.getValue());
+    } else {
+      pinMemoryVal = rewriter.create<TorchD::ConstantNoneOp>(op.getLoc());
+    }
+
+    mlir::Type torchResultType = getTypeConverter()->convertType(resultType);
+    if (!torchResultType) return mlir::failure();
+
+    rewriter.replaceOpWithNewOp<TorchD::AtenFullOp>(
+      op, torchResultType, sizeList, fillVal, dtypeVal, layoutVal, deviceVal, pinMemoryVal);
+    return mlir::success();
+  }
+};
+
 /// Converts mfuse.matmul -> torch.aten.mm (2D) or torch.aten.matmul (ND).
 /// For kernel-generator dvm and 2D operands, trans_x1/trans_x2 are attached as dvm_trans_a/dvm_trans_b
 /// on torch.aten.mm; otherwise transpose is expressed with torch.aten.permute (swap last two dims).
@@ -615,8 +686,9 @@ static void populateMfuseMetaToTorchCustomPatterns(TypeConverter &converter, Rew
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseBroadcastTo>(converter, context);
   patterns.add<ConvertMfuseCast>(converter, context);
-  patterns.add<ConvertMfuseAclnnConv2D>(converter, context);
-  patterns.add<ConvertMfuseAclnnConv2DWithBias>(converter, context);
+  patterns.add<ConvertMfuseConv2D>(converter, context);
+  patterns.add<ConvertMfuseConv2DWithBias>(converter, context);
+  patterns.add<ConvertMfuseFull>(converter, context);
   patterns.add<ConvertMfuseMatmul>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseMatmulWithBias>(converter, context, kernelGenerator);
   patterns.add<ConvertMfusePermute>(converter, context);
