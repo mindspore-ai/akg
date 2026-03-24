@@ -233,23 +233,26 @@ class TaskGenerator:
     
     async def generate_evolved_task(self,
                                     parent: SuccessRecord,
-                                    generation: int) -> LangGraphTask:
+                                    generation: int,
+                                    inspirations: Optional[List[Dict[str, Any]]] = None) -> LangGraphTask:
         """
         生成进化任务（有父代，有灵感）
-        
+
         Args:
             parent: 父代记录
             generation: 新任务的代数
-            
+            inspirations: 外部提供的灵感列表（可选，由进化控制器提供时跳过内部采样）
+
         Returns:
             LangGraphTask: 新任务
         """
         await self._ensure_handwrite_initialized()
-        
+
         task_id = self._generate_task_id(f"_Gen{generation}_Task")
         meta_prompts = self._get_meta_prompts()
         handwrite_suggestions = self._get_handwrite_suggestions()
-        inspirations = self._prepare_inspirations(parent=parent)
+        if inspirations is None:
+            inspirations = self._prepare_inspirations(parent=parent)
         
         # 从 config 中获取 user_requirements（来自 ReAct 多轮对话）
         user_requirements = self.config.get("user_requirements", "")

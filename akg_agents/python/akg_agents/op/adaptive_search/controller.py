@@ -59,6 +59,9 @@ class SearchConfig:
     handwrite_sample_num: int = 2
     handwrite_decay_rate: float = 2.0
     
+    # 进化控制器（外挂增强模块）
+    use_evolution_controller: bool = False
+
     # 其他
     poll_interval: float = 0.5  # 轮询间隔（秒）
     storage_dir: Optional[str] = None  # 存储目录
@@ -165,7 +168,26 @@ class AdaptiveSearchController:
         
         # Sketch agent 用于根据最终代码重新生成 sketch
         self._sketch_agent: Optional[Sketch] = None
-        
+
+        # 进化控制器（可选的外挂增强模块）
+        self.evo_controller = None
+        if self.search_config.use_evolution_controller:
+            try:
+                from akg_agents.op.adaptive_search.evolution_controller import (
+                    EvolutionController,
+                )
+                from akg_agents.op.adaptive_search.evolution_controller.config import (
+                    load_evolution_controller_config,
+                )
+                evo_config = load_evolution_controller_config(
+                    max_total_tasks=self.search_config.max_total_tasks
+                )
+                self.evo_controller = EvolutionController(evo_config)
+                logger.info("EvolutionController enabled")
+            except Exception as e:
+                logger.warning(f"Failed to initialize EvolutionController: {e}")
+                self.evo_controller = None
+
         logger.info(f"AdaptiveSearchController initialized for {op_name}")
         logger.info(f"Storage dir: {self.search_config.storage_dir}")
     
@@ -312,6 +334,13 @@ class AdaptiveSearchController:
         except Exception as e:
             logger.warning(f"Failed to send search end: {e}")
     
+    def _select_parent(self) -> Optional[SuccessRecord]:
+        """选择父代（薄代理：如果启用了进化控制器则委托，否则走原始 UCB）"""
+        if self.evo_controller:
+            progress = self._total_submitted / max(self.search_config.max_total_tasks, 1)
+            return self.evo_controller.select_parent(self.db, progress)
+        return self.selector.select()
+
     async def _submit_initial_task(self) -> str:
         """提交一个初始任务"""
         task = await self.generator.generate_initial_task()
@@ -333,11 +362,11 @@ class AdaptiveSearchController:
     async def _submit_evolved_task(self) -> Optional[str]:
         """
         提交一个进化任务（自动选择父代）
-        
+
         Returns:
             str: 任务 ID，如果无法生成则返回 None
         """
-        parent = self.selector.select()
+        parent = self._select_parent()
         if not parent:
             logger.warning("No parent selected, cannot generate evolved task")
             return None
@@ -346,18 +375,24 @@ class AdaptiveSearchController:
     async def _submit_evolved_task_with_parent(self, parent) -> Optional[str]:
         """
         使用指定父代提交一个进化任务
-        
+
         Args:
             parent: 父代记录
-            
+
         Returns:
             str: 任务 ID，如果无法生成则返回 None
         """
         # 计算新任务的代数
         generation = parent.generation + 1
-        
+
+        # 如果启用了进化控制器，由其选择灵感
+        inspirations = None
+        if self.evo_controller:
+            progress = self._total_submitted / max(self.search_config.max_total_tasks, 1)
+            inspirations = self.evo_controller.select_inspirations(parent, self.db, progress)
+
         # 生成任务
-        task = await self.generator.generate_evolved_task(parent, generation)
+        task = await self.generator.generate_evolved_task(parent, generation, inspirations=inspirations)
         task_id = task.task_id
         
         self._task_generations[task_id] = generation
@@ -408,7 +443,11 @@ class AdaptiveSearchController:
             
             # 更新选择批次状态
             self._update_selection_batch(result.task_id, task_success)
-        
+
+            # 通知进化控制器
+            if self.evo_controller:
+                self.evo_controller.on_result(self.db, success=task_success)
+
         # 异步生成 sketch（根据最终代码重新生成）
         await self._generate_pending_sketches()
     
@@ -495,15 +534,25 @@ class AdaptiveSearchController:
     def _check_stop_conditions(self) -> bool:
         """
         检查停止条件
-        
+
         Returns:
             bool: 是否应该停止
         """
-        # 唯一的停止条件：达到最大任务数
+        # 进化控制器的多维收敛检测
+        if self.evo_controller:
+            should_stop, reason = self.evo_controller.should_stop(
+                self._total_submitted, self._total_success
+            )
+            if should_stop:
+                self._stop_reason = reason
+                return True
+            return False
+
+        # 原始逻辑：唯一的停止条件：达到最大任务数
         if self._total_submitted >= self.search_config.max_total_tasks:
             self._stop_reason = f"Reached max_total_tasks ({self.search_config.max_total_tasks})"
             return True
-        
+
         return False
     
     async def _refill_task_pool(self) -> int:
@@ -535,7 +584,7 @@ class AdaptiveSearchController:
                     submitted += 1
                 else:
                     # DB 非空，选择一个父代，生成 tasks_per_parent 个进化任务
-                    parent = self.selector.select()
+                    parent = self._select_parent()
                     if parent:
                         # 创建选择批次，用于追踪子任务成功/失败
                         batch_id = self._next_batch_id
@@ -574,7 +623,11 @@ class AdaptiveSearchController:
         logger.info(f"Starting adaptive search for {self.op_name}")
         logger.info(f"Config: max_concurrent={self.search_config.max_concurrent}, "
                    f"max_total_tasks={self.search_config.max_total_tasks}, ")
-        
+
+        # 通知进化控制器
+        if self.evo_controller:
+            self.evo_controller.on_search_start()
+
         # 发送搜索开始消息（进入静默模式）
         self._send_search_start()
         

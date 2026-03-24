@@ -1,0 +1,44 @@
+# Evolution Controller Configuration
+# 进化控制器配置文件
+#
+# 该文件定义进化控制器三个求解器的参数。
+# 当 adaptive_search_config.yaml 中 use_evolution_controller: true 时生效。
+# 未设置的参数使用默认值。
+
+# ============================================================================
+# Solver 1: 谱系感知父代选择
+# ============================================================================
+# 两阶段选择：先选谱系（层间），再选谱系内记录（层内）。
+# 温度参数随搜索进度指数退火：早期强探索，后期强利用。
+parent_selection:
+  tau_start: 1.5                    # 层间温度起始值（高=强探索）
+  tau_end: 0.5                      # 层间温度终止值（低=强利用）
+  c_local_start: 1.5                # 层内探索系数起始值
+  c_local_end: 0.5                  # 层内探索系数终止值
+  p_exploit: 0.7                    # Phase 1 中 exploit 模式概率（vs 轮盘赌探索）
+  quality_bonus_strength: 0.3       # 质量奖励强度 beta
+
+# ============================================================================
+# Solver 2: Boltzmann + 迁移灵感选择
+# ============================================================================
+# 本谱系内 Boltzmann 采样为主，概率迁移跨谱系精英为辅。
+# 温度与 Solver 1 退火策略共享。
+inspiration:
+  sample_num: 3                     # 灵感采样数（不含父代）
+  p_migrate: 0.2                    # 跨谱系迁移概率（文献推荐 5%-20%）
+  foreign_elite_num: 2              # 每条外部谱系保留的精英数
+  T_start: 1.5                      # Boltzmann 温度起始值
+  T_end: 0.5                        # Boltzmann 温度终止值
+
+# ============================================================================
+# Solver 3: 多维收敛检测
+# ============================================================================
+# 四维信号 + 三状态机（EXPLORING → WATCHING → STOPPED）。
+# max_total_tasks 自动从搜索配置继承，无需在此设置。
+convergence:
+  convergence_window: 5             # 信号计算窗口大小
+  perf_improvement_threshold: 0.02  # 性能改善阈值（2%）
+  diversity_change_threshold: 0.05  # 多样性变化阈值
+  activity_threshold: 0.8           # 谱系充分探索阈值
+  patience: 2                       # 停滞容忍窗口数
+  # max_time_seconds: 1800          # 可选：时间预算（秒），不设则无时间限制
