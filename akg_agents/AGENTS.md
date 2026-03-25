@@ -1,43 +1,97 @@
-# AKG Agents 通用规则
+# AKG Agents
 
-本文件包含所有涉及 akg_agents 的 agent / skill 共享的通用规则。
+你是专用于 AKG Agents 的开发 Code Agent。请基于本文档（AGENTS.md）以及各目录下分级的 SPEC.md 规格文档来开发 AKG Agents 框架。
+
+AKG Agents 是基于 LLM 的多 Agent 协作框架，面向 AI Infra 和高性能计算。当前核心场景为多后端、多 DSL 内核代码生成，后续将扩展图优化等更上层编译能力。
+
+> **使用态**（以 KernelAgent 做算子生成/优化）请到 `workspace/` 目录打开 code agent。
+> 本文件面向**开发态**——开发 akg_agents 代码本身。
 
 ---
 
-## 环境变量约定
+## 开发前必读
 
-以下变量为 prompt 中的逻辑占位符，由 agent 在运行时根据实际检测结果赋值：
+**开始开发前，建议阅读目标目录及其上级目录的 SPEC.md**，以快速了解每个目录的关键结构与代码开发要求。SPEC.md 描述了该目录"做什么、不做什么、怎么做"。
 
-| 变量 | 含义 | 示例 |
+**涉及关键性修改时，需同步更新对应层级的 SPEC.md**：
+- 新增/删除模块 → 更新该目录的 SPEC.md 中的目录结构和子目录索引
+- 新增/变更对外接口或基类 → 更新 SPEC.md 中的开发约定
+- 涉及跨目录的架构调整 → 更新本文档（AGENTS.md）的目录索引和全局规范
+
+---
+
+## 快速开始
+
+```bash
+pip install -r requirements.txt && pip install -e ./ --no-build-isolation
+source env.sh          # 与 -e 安装二选一
+akg_cli --help         # 验证安装
+
+./run_test.sh -t ut    # 单元测试（不需要 LLM/GPU）
+```
+
+---
+
+## 目录索引
+
+### 核心源码（python/akg_agents/）
+
+| 目录 | 职责 | 规范 |
 |------|------|------|
-| `$HOME_DIR` | 当前用户 home 目录绝对路径（由 `akg-env-setup` Step 0 通过 `echo $HOME` 解析，**禁止猜测**） | 取决于系统 |
-| `$AKG_AGENTS_DIR` | akg_agents 目录（`env.sh`、`setup.py` 所在目录，非仓库根目录） | `$HOME_DIR/akg/akg_agents` |
-| `$ENV_TYPE` | Python 环境类型：`conda` 或 `venv` | `conda` |
-| `$CONDA_ENV` | conda 环境名（仅 `$ENV_TYPE=conda`） | `akg_agents` |
-| `$VENV_PATH` | venv 目录绝对路径（仅 `$ENV_TYPE=venv`） | `$HOME_DIR/akg/akg_agents/.venv` |
+| `core_v2/` | v2 核心框架（Agent、Workflow、Skill、Tool、LLM、Config） | [SPEC.md](python/akg_agents/core_v2/SPEC.md) |
+| `op/` | 算子/内核生成场景层 | [SPEC.md](python/akg_agents/op/SPEC.md) |
+| `cli/` | akg_cli 命令行入口（Typer） | [SPEC.md](python/akg_agents/cli/SPEC.md) |
+| `core/` | 旧版核心（迁移中，不要新增代码） | [SPEC.md](python/akg_agents/core/SPEC.md) |
+| `utils/` | 跨模块共享工具 | [SPEC.md](python/akg_agents/utils/SPEC.md) |
+
+其余子包：`database/`（数据库/向量库）、`server/` + `client/` + `worker/`（远程服务）、`config/`（全局配置入口）、`resources/`（prompts/skills/docs/templates）、`tool/`（code agent 工具定义）。
+
+### 仓库根目录
+
+| 目录 | 职责 | 规范 |
+|------|------|------|
+| `tests/` | 测试 | [SPEC.md](tests/SPEC.md) |
+| `docs/` | 设计文档 | [SPEC.md](docs/SPEC.md) |
+| `examples/` | 使用示例 | [SPEC.md](examples/SPEC.md) |
+| `tools/` | 辅助批跑/检查工具 | [SPEC.md](tools/SPEC.md) |
+| `benchmark/` | 评测集 | [SPEC.md](benchmark/SPEC.md) |
+| `workspace/` | 使用态工作空间（KernelAgent） | [README.md](workspace/README.md) |
+
+其余目录：`akg-cli/`（npm CLI 客户端包）、`scripts/`（构建/发布辅助脚本）、`thirdparty/`（KernelBench 等第三方子模块）。
 
 ---
 
-## 环境缓存（`$HOME_DIR/.akg/check_env.md`）
+## 全局代码规范
 
-首次环境检查通过后，**环境级**信息缓存到 `$HOME_DIR/.akg/check_env.md`（硬件、已安装 Framework、命令模板等）。
+### License 头
 
-**使用规则**：
-1. 任何 akg_agents 功能启动前，先读取 `$HOME_DIR/.akg/check_env.md`
-2. **文件存在** → 直接使用其中的环境配置和命令模板，跳过环境检查
-3. **文件不存在** → 执行完整环境检查流程，通过后写入该文件
+所有 `.py` 文件必须包含 Apache 2.0 License 头：
 
-删除 `$HOME_DIR/.akg/check_env.md` 可强制重新检查环境。
+```python
+# Copyright 2025-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# ...
+```
+
+### 包结构
+
+- Python >= 3.10
+- 源码在 `python/` 目录下（`package_dir={"": "python"}`）
+- 新目录必须放 `__init__.py`
+- 资源文件（`.j2`、`.md`、`.yaml`、`.json`）通过 `setup.py` 的 `package_data` 打包
+
+### 环境
+
+- `env.sh` 只做一件事：`export PYTHONPATH=$(pwd)/python:$PYTHONPATH`
+- 每次新 shell 都需要 `source env.sh`
+- 版本号在 `version.txt`
 
 ---
 
-## ⛔ 算子参数规范化
+## 参数有效值
 
-用户输入的 framework / backend / arch / dsl 可能不规范。**所有传给 akg_agents API、脚本、akg_cli 的参数值都必须是下方有效值之一，否则会报错。**
-
-在构建命令、生成配置、填写参数**之前**，必须逐项对照下表校验。
-
-### 有效值参照
+所有传给 akg_agents API / akg_cli 的参数必须使用以下规范值：
 
 | 参数 | 有效值 |
 |------|--------|
@@ -45,39 +99,3 @@
 | `backend` | `cuda`, `ascend`, `cpu` |
 | `dsl` | `triton_cuda`, `triton_ascend`, `cpp`, `cuda_c`, `tilelang_cuda`, `ascendc`, `pypto` |
 | `arch` | cuda: `a100`, `v100`；ascend: `ascend910b1`~`ascend910b4`, `ascend310p3`；cpu: `x86_64`, `aarch64` |
-
----
-
-## Shell 命令规则
-
-每条 shell 命令运行在独立 session，环境激活不跨命令持久化。
-
-**conda 环境**（`$ENV_TYPE=conda`）：
-```bash
-conda run -n $CONDA_ENV --no-capture-output bash -c \
-  "cd $AKG_AGENTS_DIR && source env.sh && <CMD>"
-```
-
-**venv 环境**（`$ENV_TYPE=venv`）：
-```bash
-bash -c "source $VENV_PATH/bin/activate && cd $AKG_AGENTS_DIR && source env.sh && <CMD>"
-```
-
-> 如果已有 `$HOME_DIR/.akg/check_env.md`，直接使用其中的「命令模板」字段，将 `<CMD>` 替换为实际命令即可。
-
-### 禁止行为
-
-| 行为 | 级别 |
-|------|------|
-| 裸执行 `pip`/`python`（未激活环境） | ⛔ 致命 |
-| 依赖 `conda activate` 或 `source activate` 跨命令持久化 | ⛔ 致命 |
-| 不 `source env.sh` 就运行 akg_agents 相关脚本 | ❌ 错误 |
-| 用 `echo 'y' \|` 管道代替 `--yes` 标志 | ⛔ 致命 |
-
----
-
-## 环境检查 Skill
-
-| Skill | 用途 | 加载场景 |
-|-------|------|---------|
-| `akg-env-setup` | 环境检查 + 采集 + 缓存；FULL_SETUP 模式额外含当次任务的参数确认和运行时依赖安装 | 安装请求（基础模式）；op-optimizer Phase 1（FULL_SETUP 模式） |

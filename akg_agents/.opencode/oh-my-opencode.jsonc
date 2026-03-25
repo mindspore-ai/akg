@@ -1,9 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/dev/assets/oh-my-opencode.schema.json",
-  "agents": {
-    "sisyphus": {
-      // 路由规则：告诉 Sisyphus 何时委派给自定义 subagent
-      "prompt_append": "file://./.opencode/sisyphus-delegation.md"
-    }
-  }
+  // 开发态配置：辅助 akg_agents 代码开发
+  // 使用态（KernelAgent）配置已迁移到 workspace/.opencode/
+  "agents": {}
 }

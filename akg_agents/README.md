@@ -167,6 +167,21 @@ Once launched, you can interact in the following ways:
 </details>
 
 
+## 🧭 Usage Mode vs Development Mode
+
+```
+akg_agents/
+├── workspace/          ← Usage: open a Code Agent here to use operator optimization
+│   ├── .opencode/      　 skills / agents definitions, auto-loaded
+│   └── AGENTS.md
+└── ...                 ← Development: open here to develop the framework itself
+    ├── AGENTS.md
+    └── python/akg_agents/
+```
+
+- **Usage mode** (`workspace/`): For operator optimization users. Open OpenCode / Claude Code / Cursor and the built-in Agents and Skills handle env setup, kernel generation, fusion analysis, etc.
+- **Development mode** (`akg_agents/`): For framework developers. Develop the akg_agents codebase guided by `AGENTS.md` and per-directory `SPEC.md` files.
+
 ## 📐 5. Design Documentation
 
 > Start with [Architecture](./docs/v2/Architecture.md) for an overview, then read [Workflow](./docs/v2/Workflow.md) and [Skill System](./docs/v2/SkillSystem.md) to understand the core mechanisms.
