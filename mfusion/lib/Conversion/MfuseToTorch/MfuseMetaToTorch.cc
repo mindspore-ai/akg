@@ -83,7 +83,7 @@ mlir::Value buildTorchIntListFromI64ArrayAttr(mlir::ArrayAttr attr, mlir::Locati
 // =   Please keep the patterns in alphabetical order by operator name   =
 // ============================================================================
 
-/// Converts mfuse.broadcast_to -> torch.aten.broadcast_to.
+/// Converts mfuse.broadcast_to -> torch.aten.expand.
 class ConvertMfuseBroadcastTo : public mlir::OpConversionPattern<mlir::mfuse::BroadcastToOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
@@ -107,7 +107,8 @@ class ConvertMfuseBroadcastTo : public mlir::OpConversionPattern<mlir::mfuse::Br
     if (!torchResultType) return mlir::failure();
 
     mlir::Value input = adaptor.getInput();
-    rewriter.replaceOpWithNewOp<TorchD::AtenBroadcastToOp>(op, torchResultType, input, sizeList);
+    mlir::Value implicit = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), false);
+    rewriter.replaceOpWithNewOp<TorchD::AtenExpandOp>(op, torchResultType, input, sizeList, implicit);
     return mlir::success();
   }
 };
