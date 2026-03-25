@@ -30,18 +30,52 @@ argument-hint: >
 |---|------|------|
 | C1 | **逐窗口处理** | 每次只读取 1 个 window JSON，分析完并写入 `insights_{i}.json` 后才能读取下一个。**严禁一次性读取多个窗口。** |
 | C2 | **逐窗口写入检查点** | 每个窗口必须写入 `insights_{i}.json` 后才能处理下一个窗口。不得跳过。 |
-| C3 | **输出路径固定** | 最终 SKILL.md 写入 `~/.akg/evolved_skills/{dsl_key}/{skill_name}/SKILL.md`。**不得写入 `.opencode/skills/` 或其他位置。** |
+| C3 | **输出路径固定** | 最终 SKILL.md 写入 `~/.akg/evolved_skills/{dsl_key}/evolved-improvement/{skill_name}/SKILL.md`。**不得写入 `.opencode/skills/` 或其他位置。** |
 | C4 | **按算子特性分组** | 经验按算子特性大类 + 问题子类型二级分组。大类：`elemwise`（逐元素）、`reduction`（归约）、`matmul`（矩阵乘）、`attention`（注意力机制）。子类型描述问题特征（如 broadcast、large-reduce、fused-elemwise）。skill_name 格式为 `op-insight-{category}-{subtype}`，如 `op-insight-elemwise-broadcast`、`op-insight-reduction-large-reduce`。一个 skill 包含该子类型下的**所有**优化手段。 |
 | C5 | **泛化要求** | 正文和 description 中禁止出现具体算子名（softmax、relu、layernorm、gelu 等）和具体 shape，必须用问题类别（如"逐元素类算子"、"归约类算子"）替代。可附关键代码片段来说明做法。 |
+| C6 | **写入前必须检查冲突** | 写入任何 SKILL.md 之前，**必须先检查目标路径是否已存在同名文件**。如果已存在，执行合并逻辑（读取旧文件 → 合并经验 → 去重 → 更新 version），**严禁直接覆盖**。 |
 
 ---
 
 ## Step 1: 确认输入
 
-询问用户：
+**情况 A：用户已提供文件路径** → 确认文件存在，跳到 Step 2。
 
-> 请提供要提取优化经验的对话文件路径（`.jsonl` 文件或目录）。
-> 另外请确认 DSL 标识（如 triton_ascend、triton_cuda、cpp），用于组织输出路径。
+**情况 B：用户未提供文件路径** → 自行定位 Cursor 的 agent-transcripts 目录，然后调用脚本展示预览。
+
+**第一步：**定位 agent-transcripts 目录**
+
+```
+Windows: %USERPROFILE%\.cursor\projects\
+Linux/Mac: ~/.cursor/projects/
+```
+遍历该目录下所有子目录，查找含 `agent-transcripts/` 的项目。
+
+**第二步：调用脚本提取预览**
+
+```bash
+python @scripts/list_transcripts.py <agent-transcripts目录路径> --top 5
+```
+
+脚本接受 agent-transcripts 目录路径作为参数，扫描其中的 JSONL 文件，按修改时间倒序列出每个对话的首条和末条用户消息预览。输出示例：
+
+```
+目录: /path/to/agent-transcripts
+共 5 条对话（按时间倒序）：
+
+  [1] 03-25 15:13  109KB  首: "请你根据这个方案写一个详细的文档..."
+                           末: "帮我改成按算子特性分组..."
+                           路径: /path/to/.../89533e8d....jsonl
+
+  [2] 03-24 14:39   30KB  首: "给我分析一下当前仓库..."
+                           路径: /path/to/.../751ea849....jsonl
+```
+
+也可用 `--json` 获取结构化输出：`python @scripts/list_transcripts.py <目录> --top 5 --json`
+
+**第三步**：将输出展示给用户，让用户选择序号（可多选，如 1,3）。记录选中的文件路径。
+
+**两种情况最后都要确认 DSL 标识**（如 triton_ascend、triton_cuda、cpp），用于组织输出路径。
 
 确认文件存在后进入 Step 2。
 
@@ -76,9 +110,23 @@ python @scripts/preprocess.py <文件路径> --output-dir <工作目录>
 流程伪代码（以 3 个窗口为例）：
 
 ```
-读取 {工作目录}/window_0.json → 分析 → 写入 {工作目录}/insights_0.json
-读取 {工作目录}/window_1.json → 分析 → 写入 {工作目录}/insights_1.json
-读取 {工作目录}/window_2.json → 分析 → 写入 {工作目录}/insights_2.json
+读取 {工作目录}/window_0.json
+  ↓
+分析窗口 0
+  ↓
+写入 {工作目录}/insights_0.json
+  ↓
+读取 {工作目录}/window_1.json
+  ↓
+分析窗口 1
+  ↓
+写入 {工作目录}/insights_1.json
+  ↓
+读取 {工作目录}/window_2.json
+  ↓
+分析窗口 2
+  ↓
+写入 {工作目录}/insights_2.json
 ```
 
 **禁止**：先读完所有 window 再批量生成 insights。每个窗口必须走完"读取→分析→写入"完整周期后才能开始下一个。
@@ -99,19 +147,25 @@ python @scripts/preprocess.py <文件路径> --output-dir <工作目录>
 
 ### 3.2 分析并提取
 
-仔细阅读当前窗口的对话内容，识别**用户明确提出的算子优化建议**。关注：
+仔细阅读当前窗口的对话内容，识别**有价值的算子优化经验**。关注：
 
-1. **优化策略**：用户建议了什么做法（如调整 block size、改变 tiling 方式、利用 shared memory）
+1. **优化策略**：用户建议了什么做法，或 Agent 探索后验证有效的做法（如调整 block size、改变 tiling 方式、利用 shared memory）
 2. **适用条件**：该策略在什么场景下适用（算子类型特征、数据特征、硬件特征）
-3. **效果数据**：用户反馈的 speedup、性能对比
-4. **失败尝试**：用户建议了但没效果或变差的方法
+3. **效果数据**：speedup、性能对比、时间数据
+4. **失败尝试**：尝试了但没效果或变差的方法（不论是用户建议的还是 Agent 探索的）
+
+**经验来源**（两类都要提取）：
+- **用户明确说的**：用户提出的优化建议、反馈的效果数据
+- **Agent 探索发现的**：Agent 在对话中尝试并验证有效的优化（用户确认了效果的）
 
 **提取原则**：
-- 只提取用户明确说的，不要补充教科书知识
+- 必须有效果数据或用户确认，纯推测的不提取
 - 用问题类别（"归约类算子"、"切片重排操作"）替代具体算子名（"softmax"、"window_partition"）——参考 C5 约束
 - 与算子优化无关的内容一律跳过
 - method 字段用文字描述方法论，关键代码片段放 code 字段
 - 不要重复写前面已经提到的内容，宁少勿滥
+
+**参考示例**：查看 `@references/` 目录下的 SKILL.md 示例，了解优化经验的写法风格（任务特征、优化内容、代码示例、总结）。
 
 每条经验格式：
 
@@ -194,7 +248,7 @@ python @scripts/preprocess.py <文件路径> --output-dir <工作目录>
   op-insight-elemwise-autograd
 ```
 
-### 4.3 生成 SKILL.md
+### 4.3 生成 SKILL.md（C6）
 
 对合并后的每个 (category, subtype) 组执行：
 
@@ -213,15 +267,40 @@ python @scripts/preprocess.py <文件路径> --output-dir <工作目录>
 - 参考 cases：`elemwise-broadcast`、`elemwise-cast`、`reduction-amax-large`
 - 示例：`op-insight-elemwise-slice-rearrange`、`op-insight-reduction-large-axis`
 
-**description 规范**（参考 cases 的 description 风格）：
+**description 规范**：
 - 50-100 字，概括该子类型下**包含的优化手段**及其适用场景
 - 不含具体算子名和具体 shape
 - 示例：`"逐元素切片重排类算子优化：批量加载减少内存访问、固定核心数交错分配实现并行、直接切片替代索引映射降低计算开销，适用于涉及非连续内存读写的切片和重排场景"`
 
+### ⚠️ 文件冲突检测（C6 约束，必须执行，不可跳过）
+
+**在写入每个 SKILL.md 之前**，必须先执行以下检查命令：
+
+```bash
+# 对每个要生成的 skill_name，检查目标文件是否已存在
+cat ~/.akg/evolved_skills/{dsl_key}/evolved-improvement/{skill_name}/SKILL.md
+```
+
+根据检查结果分两条路径：
+
+**路径 A：文件不存在**（命令报错 "No such file"）→ 正常创建新文件。
+
+**路径 B：文件已存在**（命令输出了内容）→ **禁止直接覆盖**，必须执行合并：
+
+1. 读取已有 SKILL.md 的完整内容
+2. 提取其中"## 优化方法"下的所有条目（已有经验）
+3. 将新经验与已有经验合并
+4. 去重：title + scenario 相似的只保留描述更完整的一条
+5. 更新 frontmatter 的 version（如 `1.0.0` → `1.1.0`）
+6. 重新生成 description 以涵盖合并后的所有经验
+7. 写入合并后的完整 SKILL.md
+
+合并时向用户报告：`skill {skill_name} 已存在，合并新增 N 条经验（原有 M 条，去重后共 K 条）`
+
 ### 4.4 输出路径（C3）
 
 ```
-~/.akg/evolved_skills/{dsl_key}/{skill_name}/SKILL.md
+~/.akg/evolved_skills/{dsl_key}/evolved-improvement/{skill_name}/SKILL.md
 ```
 
 ### 4.5 文件格式
@@ -266,12 +345,15 @@ metadata:
 {boundaries}
 ```
 
+**参考示例**：查看 `@references/` 目录下的 SKILL.md 示例，格式与写法。
+
 ### 4.6 写入前自检
 
 - [ ] 每个 category 下的 subtype 不超过 3 个（经过 4.2 语义合并）
 - [ ] skill_name 格式为 `op-insight-{category}-{subtype}`，category 是 elemwise/reduction/matmul/attention 之一（C4）
 - [ ] subtype 描述的是合并后的泛化问题子类型（如 slice-rearrange），不是优化手法（C4）
-- [ ] 输出路径在 `~/.akg/evolved_skills/` 下（C3）
+- [ ] 输出路径在 `~/.akg/evolved_skills/{dsl_key}/evolved-improvement/` 下（C3）
+- [ ] 如果目标文件已存在，已执行合并逻辑并更新 version（C6）
 - [ ] description 概括该子类型下包含的优化手段及适用场景，50-100 字，不含具体算子名和 shape（C5）
 - [ ] description 风格参考 cases（列举优化手段 + 说明适用什么场景）
 - [ ] 正文中不含具体算子名和具体 shape（C5）
