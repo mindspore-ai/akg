@@ -334,17 +334,22 @@ class KernelGen(AgentBase):
     @staticmethod
     def _infer_case_type(skill) -> str:
         """推断 case skill 类型：fix（错误修复）或 improvement（性能优化）。
-        优先级：metadata.case_type > 目录名推断 > 默认 improvement。
+        优先级：metadata.case_type > metadata.source > 目录名推断 > 默认 improvement。
         """
         meta = getattr(skill, "metadata", {}) or {}
         ct = meta.get("case_type", "")
         if ct in ("fix", "improvement"):
             return ct
+        source = meta.get("source", "")
+        if source == "error_fix":
+            return "fix"
         skill_path = getattr(skill, "skill_path", None)
         if skill_path:
             path_str = str(skill_path)
             if "evolved_fix" in path_str:
                 return "fix"
+            if "evolved_improvement" in path_str:
+                return "improvement"
         return "improvement"
 
     async def _llm_select_guides_and_cases(

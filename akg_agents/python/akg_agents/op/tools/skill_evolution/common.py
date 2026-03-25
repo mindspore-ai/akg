@@ -212,8 +212,13 @@ def parse_skill_output(llm_output: str) -> Tuple[str, str, str]:
 # ==================== 路径工具 ====================
 
 
-def get_default_evolved_dir(dsl: str) -> str:
-    """获取 dsl 对应的 evolved skill 默认目录路径"""
+def get_default_evolved_dir(dsl: str, case_type: str = "") -> str:
+    """获取 dsl 对应的 evolved skill 默认目录路径
+
+    Args:
+        dsl: DSL 类型
+        case_type: "fix" → evolved_fix/, 其余(含空串) → evolved_improvement/
+    """
     try:
         from akg_agents import get_project_root
         project_root = Path(get_project_root())
@@ -221,8 +226,12 @@ def get_default_evolved_dir(dsl: str) -> str:
         project_root = Path(__file__).resolve().parents[3]
 
     dir_key = dsl_to_dir_key(dsl)
+    if case_type == "fix":
+        sub = "evolved_fix"
+    else:
+        sub = "evolved_improvement"
     return str(
-        project_root / "op" / "resources" / "skills" / dir_key / "evolved"
+        project_root / "op" / "resources" / "skills" / dir_key / sub
     )
 
 
@@ -239,6 +248,13 @@ class SkillWriter:
     _SOURCE_PREFIX_MAP = {
         "expert_tuning": "exp",
         "error_fix": "fix",
+    }
+
+    _SOURCE_CASE_TYPE_MAP = {
+        "error_fix": "fix",
+        "search_log": "improvement",
+        "expert_tuning": "improvement",
+        "merged": "improvement",
     }
 
     def write(
@@ -259,6 +275,7 @@ class SkillWriter:
             dsl = compressed.dsl
 
         fallback_prefix = self._SOURCE_PREFIX_MAP.get(source, "case")
+        case_type = self._SOURCE_CASE_TYPE_MAP.get(source, "improvement")
 
         skill_name = self._sanitize_skill_name(
             skill_name, op_name, dsl,
@@ -268,7 +285,7 @@ class SkillWriter:
         if output_dir:
             skill_dir = os.path.join(output_dir, skill_name)
         else:
-            skill_dir = self._default_skill_dir(dsl, skill_name)
+            skill_dir = self._default_skill_dir(dsl, skill_name, case_type=case_type)
 
         os.makedirs(skill_dir, exist_ok=True)
         skill_path = os.path.join(skill_dir, "SKILL.md")
@@ -297,8 +314,8 @@ class SkillWriter:
         name = name.strip("-")
         return name or f"{dir_key}-{fallback_prefix}-auto"
 
-    def _default_skill_dir(self, dsl: str, skill_name: str) -> str:
-        return os.path.join(get_default_evolved_dir(dsl), skill_name)
+    def _default_skill_dir(self, dsl: str, skill_name: str, case_type: str = "") -> str:
+        return os.path.join(get_default_evolved_dir(dsl, case_type), skill_name)
 
     @staticmethod
     def _error_fix_skill_name(dsl: str) -> str:
@@ -323,7 +340,7 @@ class SkillWriter:
         if output_dir:
             skill_dir = os.path.join(output_dir, skill_name)
         else:
-            skill_dir = self._default_skill_dir(dsl, skill_name)
+            skill_dir = self._default_skill_dir(dsl, skill_name, case_type="fix")
         return os.path.join(skill_dir, "SKILL.md")
 
     @staticmethod
@@ -348,8 +365,9 @@ class SkillWriter:
         metadata: Dict[str, str],
         output_dir: Optional[str] = None,
     ) -> str:
-        """error_fix 专用写入：文件不存在时新建，已存在时追加
+        """error_fix 专用写入：文件不存在时新建，已存在时追加。
 
+        追加完成后自动扫描正文中的错误类型标题，更新 description 和 checklist。
         调用方负责在追加前通过 LLM 去重，确保 markdown_body 只包含新增内容。
         """
         dsl = metadata.get("dsl", "")
@@ -359,19 +377,73 @@ class SkillWriter:
         os.makedirs(os.path.dirname(skill_path), exist_ok=True)
 
         if os.path.isfile(skill_path):
-            with open(skill_path, "a", encoding="utf-8") as f:
-                f.write("\n\n" + markdown_body.strip() + "\n")
-            logger.info(f"[SkillEvolution:Writer] error_fix SKILL.md 已追加: {skill_path}")
+            existing_body = self.read_error_fix_body(skill_path)
+            cl_anchor = "## Quick Checklist"
+            if cl_anchor in existing_body:
+                cut = existing_body.index(cl_anchor)
+                existing_body = existing_body[:cut].rstrip()
+                if existing_body.endswith("---"):
+                    existing_body = existing_body[:-3].rstrip()
+            full_body = existing_body + "\n\n" + markdown_body.strip()
+            logger.info(f"[SkillEvolution:Writer] error_fix SKILL.md 追加并重建: {skill_path}")
         else:
-            frontmatter_text = self._make_error_fix_frontmatter(dsl, backend)
-            with open(skill_path, "w", encoding="utf-8") as f:
-                f.write(frontmatter_text + "\n\n" + markdown_body.strip() + "\n")
-            logger.info(f"[SkillEvolution:Writer] error_fix SKILL.md 已新建: {skill_path}")
+            full_body = markdown_body.strip()
+            logger.info(f"[SkillEvolution:Writer] error_fix SKILL.md 新建: {skill_path}")
+
+        error_types = self._extract_error_types(full_body)
+        description = self._build_error_fix_description(dsl, error_types)
+        checklist = self._build_error_checklist(error_types)
+
+        body_with_checklist = full_body.rstrip()
+        cl_anchor = "## Quick Checklist"
+        if cl_anchor in body_with_checklist:
+            cut_pos = body_with_checklist.index(cl_anchor)
+            before = body_with_checklist[:cut_pos].rstrip()
+            if before.endswith("---"):
+                before = before[:-3].rstrip()
+            body_with_checklist = before
+        body_with_checklist += "\n\n" + checklist
+
+        frontmatter_text = self._make_error_fix_frontmatter(dsl, backend, description)
+        with open(skill_path, "w", encoding="utf-8") as f:
+            f.write(frontmatter_text + "\n\n" + body_with_checklist.strip() + "\n")
 
         return skill_path
 
-    def _make_error_fix_frontmatter(self, dsl: str, backend: str) -> str:
-        meta: Dict[str, str] = {"source": "error_fix"}
+    @staticmethod
+    def _extract_error_types(body: str) -> List[str]:
+        """从 markdown body 中提取 ### 标题作为错误类型列表"""
+        types = []
+        for line in body.splitlines():
+            m = re.match(r'^###\s+(.+)', line)
+            if m:
+                title = m.group(1).strip()
+                if title and title not in types:
+                    types.append(title)
+        return types
+
+    @staticmethod
+    def _build_error_fix_description(dsl: str, error_types: List[str]) -> str:
+        dir_key = dsl_to_dir_key(dsl).strip("-")
+        prefix = f"{dir_key}" if dir_key else ""
+        if not error_types:
+            return f"{prefix} 常见错误及修复方法，用于 debug 阶段避免同类问题"
+        type_list = "、".join(error_types[:6])
+        if len(error_types) > 6:
+            type_list += f"等{len(error_types)}类"
+        return f"{prefix} 常见错误修复：{type_list}"
+
+    @staticmethod
+    def _build_error_checklist(error_types: List[str]) -> str:
+        lines = ["---", "## Quick Checklist", ""]
+        lines.append("生成代码前请逐项检查：")
+        lines.append("")
+        for et in error_types:
+            lines.append(f"- [ ] {et}")
+        return "\n".join(lines)
+
+    def _make_error_fix_frontmatter(self, dsl: str, backend: str, description: str = "") -> str:
+        meta: Dict[str, str] = {"source": "error_fix", "case_type": "fix"}
         if backend:
             meta["backend"] = backend
         if dsl:
@@ -379,7 +451,7 @@ class SkillWriter:
 
         frontmatter = {
             "name": self._error_fix_skill_name(dsl),
-            "description": self._error_fix_description(dsl),
+            "description": description or self._error_fix_description(dsl),
             "category": "case",
             "version": "1.0.0",
             "metadata": meta,
@@ -413,7 +485,8 @@ class SkillWriter:
         default_desc = _desc_map.get(source, f"{op_name} 搜索日志优化经验")
         desc = description or default_desc
 
-        meta: Dict[str, str] = {"source": source}
+        case_type = self._SOURCE_CASE_TYPE_MAP.get(source, "improvement")
+        meta: Dict[str, str] = {"source": source, "case_type": case_type}
         if backend:
             meta["backend"] = backend
         if dsl:

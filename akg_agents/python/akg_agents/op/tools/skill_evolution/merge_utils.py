@@ -32,13 +32,12 @@ from akg_agents.core_v2.skill.metadata import SkillMetadata
 
 logger = logging.getLogger(__name__)
 
-SKIP_SUFFIXES = ("-error-fix",)
 SKIP_DIRS_EXACT = {".archive"}
 MAX_CLUSTER_SIZE = 5
 
 
 def scan_evolved_skills(evolved_dir: str) -> List[SkillMetadata]:
-    """扫描 evolved 目录下所有 SKILL.md（排除 *-error-fix/ 和 .archive/）"""
+    """扫描指定目录下所有 SKILL.md（排除 .archive/）"""
     evolved_path = Path(evolved_dir)
     if not evolved_path.exists():
         return []
@@ -48,7 +47,7 @@ def scan_evolved_skills(evolved_dir: str) -> List[SkillMetadata]:
 
     for skill_md in evolved_path.rglob("SKILL.md"):
         rel = skill_md.relative_to(evolved_path)
-        if any(part in SKIP_DIRS_EXACT or part.endswith(tuple(SKIP_SUFFIXES)) for part in rel.parts):
+        if any(part in SKIP_DIRS_EXACT for part in rel.parts):
             continue
         loaded = loader.load_single(skill_md)
         if loaded:

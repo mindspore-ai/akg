@@ -141,7 +141,14 @@ def build_evolve_config(
 
     agent_config["ab_test_mode"] = True
     if ab_mode == "B" and evolved_skill_dir:
-        agent_config["evolved_skill_dir"] = evolved_skill_dir
+        base = evolved_skill_dir
+        if not Path(base).is_absolute():
+            base = str(project_root / base)
+        fix_dir = os.path.join(base, "evolved_fix")
+        imp_dir = os.path.join(base, "evolved_improvement")
+        dirs = [d for d in (fix_dir, imp_dir) if os.path.isdir(d)]
+        agent_config["evolved_skill_dirs"] = dirs
+        agent_config["evolved_skill_dir"] = dirs[0] if dirs else base
 
     agent_config_dst = os.path.join(tmp_dir, "agent_config.yaml")
     with open(agent_config_dst, "w", encoding="utf-8") as f:
