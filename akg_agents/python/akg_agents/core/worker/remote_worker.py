@@ -1,6 +1,5 @@
 import httpx
 import logging
-import io
 import json
 from typing import Tuple, Dict, Any
 
@@ -72,6 +71,31 @@ class RemoteWorker(WorkerInterface):
                 logger.info(f"[{task_id}] Released remote device {device_id}")
         except Exception as e:
             logger.error(f"[{task_id}] Failed to release remote device: {e}")
+
+    async def get_doc(self, doc_name: str) -> str:
+        """从远端 worker 拉取文档内容。"""
+        doc_url = f"{self.worker_url}/api/v1/docs/{doc_name}"
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.get(doc_url)
+                response.raise_for_status()
+                result = response.json()
+                return result.get("content", "")
+        except httpx.RequestError as e:
+            logger.warning("Failed to fetch remote doc '%s' from %s: %s", doc_name, self.worker_url, e)
+            return ""
+        except httpx.HTTPStatusError as e:
+            logger.warning(
+                "Remote worker returned %s for doc '%s': %s",
+                e.response.status_code,
+                doc_name,
+                e.response.text,
+            )
+            return ""
+        except Exception as e:
+            logger.warning("Unexpected error when fetching remote doc '%s': %s", doc_name, e)
+            return ""
 
     async def verify(self, package_data: bytes, task_id: str, op_name: str, timeout: int = 300) -> Tuple[bool, str, Dict[str, Any]]:
         """

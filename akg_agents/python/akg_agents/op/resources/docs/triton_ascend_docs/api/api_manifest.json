@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "source_name": "api.md",
+  "preamble": "# Triton API 参考手册\n\n本文档提供 Triton 核心 API 的详细参考，包括函数签名、参数说明和使用示例。\n\n",
+  "sections": [
+    {
+      "prefix": "## 1. 内核装饰器\n\n",
+      "entries": [
+        "triton.jit.md"
+      ]
+    },
+    {
+      "prefix": "## 2. 程序 ID 与网格 API\n\n",
+      "entries": [
+        "triton.language.program_id.md",
+        "triton.language.num_programs.md",
+        "triton.cdiv.md"
+      ]
+    },
+    {
+      "prefix": "## 3. 内存操作 API\n\n",
+      "entries": [
+        "triton.language.load.md",
+        "triton.language.store.md",
+        "triton.language.make_block_ptr.md",
+        "triton.language.advance.md"
+      ]
+    },
+    {
+      "prefix": "## 4. 张量创建与操作 API\n\n",
+      "entries": [
+        "triton.language.arange.md",
+        "triton.language.zeros.md",
+        "triton.language.full.md",
+        "triton.language.cast.md"
+      ]
+    },
+    {
+      "prefix": "## 5. 数学运算 API\n\n",
+      "entries": [
+        "triton.language.cdiv.md",
+        "triton.language.dot.md",
+        "triton.language.sum.md",
+        "triton.language.max.md",
+        "triton.language.where.md",
+        "triton.language.cumsum.md",
+        "triton.language.cumprod.md"
+      ]
+    },
+    {
+      "prefix": "## 6. 原子操作 API\n\n",
+      "entries": [
+        "triton.language.atomic_add.md",
+        "triton.language.atomic_max.md",
+        "triton.language.constexpr.md"
+      ]
+    },
+    {
+      "prefix": "## 7. 块分配优化 API\n\n",
+      "entries": [
+        "triton.language.swizzle2d.md"
+      ]
+    },
+    {
+      "prefix": "\n## 8. 切片扩展 API\n\n",
+      "entries": [
+        "triton.language.extra.cann.extension.extract_slice.md",
+        "triton.language.extract_slice.md",
+        "triton.language.extra.cann.extension.insert_slice.md",
+        "triton.language.insert_slice.md"
+      ]
+    }
+  ]
+}

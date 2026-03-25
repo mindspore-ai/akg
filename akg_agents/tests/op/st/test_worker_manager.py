@@ -22,6 +22,9 @@ class MockWorker(WorkerInterface):
                                    profile_settings: Dict[str, Any]) -> Dict[str, Any]:
         return {'time_us': None, 'success': False, 'log': 'mock'}
 
+    async def get_doc(self, doc_name: str) -> str:
+        return f"{self.name}:{doc_name}"
+
 @pytest.mark.asyncio
 async def test_worker_manager_basic_flow():
     """测试基本的注册、选择、释放流程"""
@@ -123,4 +126,3 @@ async def test_worker_manager_tags():
     assert (await manager.select("cuda", tags={"local"})) is w_local
     assert (await manager.select("cuda", tags={"fast", "remote"})) is w_remote
     assert (await manager.select("cuda", tags={"fast", "local"})) is None # 没有同时满足的
-
