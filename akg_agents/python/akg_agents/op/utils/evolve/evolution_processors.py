@@ -184,19 +184,25 @@ class InitializationProcessor:
             handwrite_loader._selected_skills.clear()
             logger.info("A/B test mode: handwrite documents cleared")
 
-        # Evolved skill 选择（对齐 Skill 系统：SkillLoader + 粗筛 + LLM 精筛 + 全部导入）
         evolved_suggestions: list = []
-        evolved_skill_dir = (self.config.config or {}).get("evolved_skill_dir")
-        if evolved_skill_dir:
+        cfg = self.config.config or {}
+        evolved_dirs = cfg.get("evolved_skill_dirs", [])
+        if not evolved_dirs:
+            single = cfg.get("evolved_skill_dir")
+            if single:
+                evolved_dirs = [single]
+        if evolved_dirs:
             from akg_agents.op.utils.evolved_skill_loader import select_evolved_skills
-            evolved_suggestions = await select_evolved_skills(
-                evolved_dir=evolved_skill_dir,
-                op_name=self.config.op_name,
-                task_desc=self.config.task_desc,
-                dsl=self.config.dsl,
-                backend=self.config.backend,
-                config=self.config.config,
-            )
+            for edir in evolved_dirs:
+                sug = await select_evolved_skills(
+                    evolved_dir=edir,
+                    op_name=self.config.op_name,
+                    task_desc=self.config.task_desc,
+                    dsl=self.config.dsl,
+                    backend=self.config.backend,
+                    config=self.config.config,
+                )
+                evolved_suggestions.extend(sug)
         
         # 初始化数据结构
         init_data = {

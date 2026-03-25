@@ -19,7 +19,7 @@ SkillEvolutionAgent - 算子 Skill 自进化 Agent
   search_log:     从搜索日志中收集进化链 diff → LLM 生成 SKILL.md
   expert_tuning:  从对话历史中提取人工调优经验 → LLM 生成 SKILL.md
   error_fix:      从错误修复记录中提取调试经验 → LLM 生成 SKILL.md
-  merge_skills:   将同 DSL 下的 evolved skills 按主题合并去重
+  organize:       整理 evolved skills（fix=按错误类型拆分，improvement=按主题合并）
 
 注册为 Agent 工具，由 KernelAgent 通过 ToolExecutor 调用。
 """
@@ -49,7 +49,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
 - 从搜索日志中提取进化链diff，总结能带来性能提升的优化经验（search_log 模式）
 - 从对话历史中提取人工调优经验，“用户建议 → 代码变更 → 性能变化”因果链（expert_tuning 模式）
 - 从错误修复记录中提取调试经验，“错误类型 → 修复策略”（error_fix 模式）
-- 将同一 DSL 下的多个 evolved skills 按优化主题合并去重，减少重复文档（merge_skills 模式）
+- 整理 evolved skills：fix 按错误类型拆分，improvement 按主题合并去重（organize 模式）
 
 适用场景：
 - 使用过adaptive_search，想要收集能带来性能提升的优化经验
@@ -65,8 +65,8 @@ class SkillEvolutionAgent(SkillEvolutionBase):
         "properties": {
             "mode": {
                 "type": "string",
-                "enum": ["search_log", "expert_tuning", "error_fix", "merge_skills"],
-                "description": "模式选择：search_log=搜索日志优化经验，expert_tuning=人工调优经验，error_fix=错误修复经验，merge_skills=合并evolved skills",
+                "enum": ["search_log", "expert_tuning", "error_fix", "organize"],
+                "description": "模式选择：search_log=搜索日志优化经验，expert_tuning=人工调优经验，error_fix=错误修复经验，organize=整理evolved skills",
                 "default": "search_log",
             },
             "op_name": {
@@ -90,12 +90,12 @@ class SkillEvolutionAgent(SkillEvolutionBase):
             },
             "skills_dir": {
                 "type": "string",
-                "description": "evolved skill 目录（merge_skills 模式必填），dsl/backend 等信息从 skill metadata 中自动提取",
+                "description": "evolved skill 目录（organize 模式必填），dsl/backend 等信息从 skill metadata 中自动提取",
                 "default": "",
             },
             "output_dir": {
                 "type": "string",
-                "description": "SKILL.md 输出目录（可选，默认写入 op/resources/skills/{dsl}/evolved/{skill_name}/），非特殊需求不需要指定",
+                "description": "SKILL.md 输出目录（可选，默认按 source 类型写入 evolved_fix/ 或 evolved_improvement/），非特殊需求不需要指定",
                 "default": "",
             },
         },
@@ -158,7 +158,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
                 output_dir=output_dir,
                 cur_path=cur_path,
             )
-        elif mode == "merge_skills":
+        elif mode in ("organize", "merge_skills"):
             return await self._run_merge_skills(
                 skills_dir=skills_dir,
                 output_dir=output_dir,
@@ -168,7 +168,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
             return {
                 "status": "error",
                 "output": "",
-                "error_information": f"不支持的模式: {mode}，可选: search_log, expert_tuning, error_fix, merge_skills",
+                "error_information": f"不支持的模式: {mode}，可选: search_log, expert_tuning, error_fix, organize",
             }
 
     # ==================== 公共：解析 + 写入 SKILL.md ====================
@@ -530,7 +530,7 @@ class SkillEvolutionAgent(SkillEvolutionBase):
         except Exception as e:
             return self._error_result("error_fix", e, work_dir, log_lines)
 
-    # ==================== merge_skills 模式 ====================
+    # ==================== organize / merge_skills 模式 ====================
 
     async def _run_merge_skills(
         self,
