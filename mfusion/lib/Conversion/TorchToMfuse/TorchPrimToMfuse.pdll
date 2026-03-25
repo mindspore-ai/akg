@@ -1,0 +1,4 @@
+Pattern ConvertPrimsConvertElementType {
+  let root = op<torch.prims.convert_element_type>(input: Value, dtype: Value) -> (resType: Type);
+  replace root with op<mfuse.cast>(convertValue(input)) -> (convertType(resType));
+}

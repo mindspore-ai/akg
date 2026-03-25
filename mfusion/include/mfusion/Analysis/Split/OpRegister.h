@@ -102,7 +102,7 @@ OP_REGISTER("mfuse.assign", NodePattern::VIRTUAL);
 OP_REGISTER("mfuse.reduce_sum", NodePattern::REDUCE);
 OP_REGISTER("mfuse.is_finite", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.reshape", NodePattern::RESHAPE);
-OP_REGISTER("mfuse.permute", NodePattern::RESHAPE);  // Transpose
+OP_REGISTER("mfuse.permute", NodePattern::OPAQUE);  // Transpose
 OP_REGISTER("mfuse.floor", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.ceil", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.trunc", NodePattern::ELEMWISE);
