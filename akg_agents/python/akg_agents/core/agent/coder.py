@@ -26,6 +26,9 @@ import re
 from typing import Tuple, List
 from pathlib import Path
 from akg_agents.op.database.coder_database import CoderDatabase
+from akg_agents.op.utils.triton_ascend_api_docs import (
+    resolve_triton_ascend_api_docs,
+)
 from akg_agents.utils.common_utils import ParserFactory, remove_copyright_from_text, get_md5_hash
 from akg_agents.utils.hardware_utils import get_hardware_doc
 from akg_agents.utils.swft_docs_loader import get_swft_docs_content
@@ -116,7 +119,7 @@ class Coder(AgentBase):
             "func_name": self.func_name,
             "format_instructions": self.format_instructions,
 
-            "api_docs": self.load_doc("api/api.md"),
+            "api_docs": self._load_api_docs_initial(),
             "dsl_basic_docs": self.load_doc("basic_docs.md"),
             "expert_suggestion": self.load_doc("suggestion_docs.md"),
             "backend": self.backend,
@@ -129,6 +132,22 @@ class Coder(AgentBase):
             "source_backend": self.source_backend,  # 源后端（如 cuda -> ascend）
             "source_arch": self.source_arch,        # 源架构（如 a100 -> ascend910b4）
         }
+
+    def _load_api_docs_initial(self) -> str:
+        if self.dsl == "triton_ascend":
+            return ""
+        return self.load_doc("api/api.md")
+
+    async def _ensure_api_docs_loaded(self) -> str:
+        if self.dsl != "triton_ascend":
+            return self.base_doc["api_docs"]
+
+        if not self.base_doc["api_docs"]:
+            self.base_doc["api_docs"] = await resolve_triton_ascend_api_docs(
+                backend=self.backend,
+                arch=self.arch,
+            )
+        return self.base_doc["api_docs"]
 
     def _load_user_examples(self) -> str:
         """
@@ -221,11 +240,14 @@ class Coder(AgentBase):
         Returns:
             str: 适合的API文档内容
         """
-        if len(self.base_doc["api_docs"]) > 6000:  # 如果api文档过长，使用llm进行content压缩
+        api_docs = await self._ensure_api_docs_loaded()
+
+        if len(api_docs) > 6000:  # 如果api文档过长，使用llm进行content压缩
             api_parser = ParserFactory.get_api_parser()
             format_api_instructions = api_parser.get_format_instructions()
             api_input_data = {
                 **self.base_doc,
+                "api_docs": api_docs,
                 "sketch": sketch,  # AUL代码作为sketch
                 "llm_suggestions": conductor_suggestion,  # Conductor建议
                 "error_log": task_info.get('verifier_error', ''),
@@ -252,7 +274,7 @@ class Coder(AgentBase):
                 )
             )
         else:
-            api_docs_suitable = self.base_doc["api_docs"]
+            api_docs_suitable = api_docs
 
         return api_docs_suitable
 

@@ -203,6 +203,32 @@ async def profile_single_task(
         logger.error(f"[{task_id}] Profile single task request failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/v1/docs/{doc_name}")
+async def get_doc(
+    doc_name: str,
+):
+    """
+    获取 worker 当前环境中的文档内容。
+
+    典型场景：
+    - server/agent 本地没有 triton_ascend，但远端 worker 有
+    - 需要基于远端真实运行时返回过滤后的 API 文档
+    """
+    if worker is None:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    try:
+        content = await worker.get_doc(doc_name)
+        return {
+            "doc_name": doc_name,
+            "content": content,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Get doc request failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/v1/acquire_device")
 async def acquire_device(
     task_id: str = Form(...)

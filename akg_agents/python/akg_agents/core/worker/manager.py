@@ -96,6 +96,17 @@ class WorkerManager:
                 return True
             return False
 
+    async def list_matching(self, backend: str, arch: Optional[str] = None, tags: Set[str] = None) -> List[WorkerInterface]:
+        """返回所有匹配条件的 Worker，不修改负载。"""
+        async with self._lock:
+            return [
+                info.worker
+                for info in self._workers
+                if info.backend == backend
+                and (not arch or info.arch == arch)
+                and (not tags or tags.issubset(info.tags))
+            ]
+
     async def release(self, worker: WorkerInterface):
         """
         归还 Worker (减少负载计数)。
@@ -264,4 +275,3 @@ async def register_worker(
         "    export AKG_AGENTS_WORKER_URL=http://<worker-host>:<port>\n"
         "  方式二：指定本地设备列表调用 register_worker(..., device_ids=[0])"
     )
-

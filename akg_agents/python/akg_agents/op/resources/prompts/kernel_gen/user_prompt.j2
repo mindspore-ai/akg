@@ -8,6 +8,12 @@
 暂无相关 Skill。
 {% endif %}
 
+{% if aggregated_api_docs %}
+---
+
+{{ aggregated_api_docs }}
+{% endif %}
+
 ---
 
 {% if designer_code %}
@@ -203,4 +209,3 @@
 - 正确处理边界条件
 - 包含必要的导入和包装函数
 - 代码结构清晰，适当添加注释说明关键逻辑
-
