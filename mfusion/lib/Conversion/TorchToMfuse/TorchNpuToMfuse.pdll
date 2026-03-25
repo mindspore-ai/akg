@@ -3,6 +3,16 @@ Pattern ConvertNpuAddRmsNorm {
   replace root with op<mfuse.aclnn.add_rms_norm>(convertValue(Get0(inputs)), convertValue(Get1(inputs)), convertValue(Get2(inputs))) { epsilon = GetF64Attr(Get3(inputs)) } -> (convertTypes(resTypes));
 }
 
+Pattern Convert_NpuDtypeCast {
+  let root = op<torch.operator>(inputs: ValueRange) { name = attr<"\"torch.npu._npu_dtype_cast\""> } -> (resTypes: TypeRange);
+  replace root with op<mfuse.cast>(convertValue(Get0(inputs))) -> (convertTypes(resTypes));
+}
+
+Pattern Convert_NpuDtypeCastBackward {
+  let root = op<torch.operator>(inputs: ValueRange) { name = attr<"\"torch.npu._npu_dtype_cast_backward\""> } -> (resTypes: TypeRange);
+  replace root with op<mfuse.cast>(convertValue(Get0(inputs))) -> (convertTypes(resTypes));
+}
+
 Pattern ConvertNpuRmsNorm {
   let root = op<torch.operator>(inputs: ValueRange) { name = attr<"\"torch.npu.npu_rms_norm\""> } -> (resTypes: TypeRange);
   replace root with op<mfuse.aclnn.rms_norm>(convertValue(Get0(inputs)), convertValue(Get1(inputs))) { epsilon = GetF64Attr(Get2(inputs)) } -> (convertTypes(resTypes));
