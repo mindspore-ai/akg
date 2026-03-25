@@ -27,7 +27,6 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mfusion/Conversion/MfuseToTorch/Utils.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchTypes.h"
 #include "torch-mlir/Dialect/Torch/Utils/TorchUpstream.h"
@@ -417,17 +416,8 @@ static mlir::FailureOr<std::tuple<mlir::Value, mlir::Value, bool, mlir::Type>> c
   if (!torchResultType) {
     return mlir::failure();
   }
-
-  bool isRhsScalar = false;
-  mlir::Value getRhs = rhs;
-  mlir::Value originRhs = op.getOperand(kRhsIndex);
-  mlir::Value processedRhs = materializeConstValueToTorchScalar(op.getOperation(), originRhs, rewriter);
-  // Check if processedRhs is a Torch scalar constant
-  if (processedRhs.getType().isa<TorchD::FloatType>() || processedRhs.getType().isa<TorchD::IntType>()) {
-    getRhs = processedRhs;
-    isRhsScalar = true;
-  }
-  return std::make_tuple(lhs, getRhs, isRhsScalar, torchResultType);
+  bool isRhsScalar = mlir::isa<TorchD::FloatType>(rhs.getType()) || mlir::isa<TorchD::IntType>(rhs.getType());
+  return std::make_tuple(lhs, rhs, isRhsScalar, torchResultType);
 }
 
 // Convert binary ops with tensor and scalar operands to corresponding torch ops (without alpha parameter)
@@ -514,7 +504,9 @@ static void populateMfusePartBinaryOpToTorchTensorScalarPatterns(TypeConverter &
                ConvertBinaryOpPattern<mfuse::LeOp, TorchD::AtenLeTensorOp, TorchD::AtenLeScalarOp>,
                ConvertBinaryOpPattern<mfuse::LtOp, TorchD::AtenLtTensorOp, TorchD::AtenLtScalarOp>,
                ConvertBinaryOpPattern<mfuse::MulOp, TorchD::AtenMulTensorOp, TorchD::AtenMulScalarOp>,
-               ConvertBinaryOpPattern<mfuse::NeOp, TorchD::AtenNeTensorOp, TorchD::AtenNeScalarOp>>(converter, ctx);
+               ConvertBinaryOpPattern<mfuse::NeOp, TorchD::AtenNeTensorOp, TorchD::AtenNeScalarOp>,
+               ConvertBinaryOpPattern<mfuse::PowOp, TorchD::AtenPowTensorTensorOp, TorchD::AtenPowTensorScalarOp>>(
+    converter, ctx);
 }
 }  // namespace
 

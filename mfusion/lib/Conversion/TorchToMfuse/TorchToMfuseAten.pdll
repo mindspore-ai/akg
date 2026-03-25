@@ -8,6 +8,11 @@ Pattern ConvertAtenAddTensor {
   replace root with op<mfuse.aclnn.add>(convertValues(operands)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenAddScalar {
+  let root = op<torch.aten.add.Scalar>(operands: ValueRange) -> (resType: Type);
+  replace root with op<mfuse.aclnn.add>(convertValues(operands)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenBmm {
   let root = op<torch.aten.bmm>(operands: ValueRange) -> (resType: Type);
   replace root with op<mfuse.aclnn.batch_matmul>(convertValues(operands)) -> (convertType(resType));
@@ -95,6 +100,11 @@ Pattern ConvertAtenSqrt {
 
 Pattern ConvertAtenSubTensor {
   let root = op<torch.aten.sub.Tensor>(operands: ValueRange) -> (resType: Type);
+  replace root with op<mfuse.aclnn.sub>(convertValues(operands)) -> (convertType(resType));
+}
+
+Pattern ConvertAtenSubScalar {
+  let root = op<torch.aten.sub.Scalar>(operands: ValueRange) -> (resType: Type);
   replace root with op<mfuse.aclnn.sub>(convertValues(operands)) -> (convertType(resType));
 }
 
