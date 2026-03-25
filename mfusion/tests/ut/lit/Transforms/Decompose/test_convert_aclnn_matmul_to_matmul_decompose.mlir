@@ -39,8 +39,8 @@ module {
   // CHECK-LABEL: func @mm_add_to_matmul_with_bias
   func.func @mm_add_to_matmul_with_bias(%arg0: tensor<2x4xf32>, %arg1: tensor<4x8xf32>, %arg2: tensor<8xf32>) -> tensor<2x8xf32> {
     %0 = mfuse.aclnn.mm %arg0, %arg1 : (tensor<2x4xf32>, tensor<4x8xf32>) -> tensor<2x8xf32>
-    %cst = arith.constant dense<1.000000e+00> : tensor<f32>
-    %1 = mfuse.aclnn.add %0, %arg2, %cst : (tensor<2x8xf32>, tensor<8xf32>, tensor<f32>) -> tensor<2x8xf32>
+    %cst = mfuse.constant dense<1.000000e+00> : tensor<f32, {is_scalar = ""}>
+    %1 = mfuse.aclnn.add %0, %arg2, %cst : (tensor<2x8xf32>, tensor<8xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2x8xf32>
     // After pass: mm+add fused to matmul_with_bias
     // CHECK-NOT: mfuse.aclnn.mm
     // CHECK-NOT: mfuse.aclnn.add
@@ -52,8 +52,8 @@ module {
   // CHECK-LABEL: func @aclnn_matmul_add_to_matmul_with_bias
   func.func @aclnn_matmul_add_to_matmul_with_bias(%arg0: tensor<2x4x8xf32>, %arg1: tensor<2x8x16xf32>, %arg2: tensor<16xf32>) -> tensor<2x4x16xf32> {
     %0 = mfuse.aclnn.matmul %arg0, %arg1 : (tensor<2x4x8xf32>, tensor<2x8x16xf32>) -> tensor<2x4x16xf32>
-    %cst = arith.constant dense<1.000000e+00> : tensor<f32>
-    %1 = mfuse.aclnn.add %0, %arg2, %cst : (tensor<2x4x16xf32>, tensor<16xf32>, tensor<f32>) -> tensor<2x4x16xf32>
+    %cst = mfuse.constant dense<1.000000e+00> : tensor<f32, {is_scalar = ""}>
+    %1 = mfuse.aclnn.add %0, %arg2, %cst : (tensor<2x4x16xf32>, tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2x4x16xf32>
     // CHECK-NOT: mfuse.aclnn.matmul
     // CHECK-NOT: mfuse.aclnn.add
     // CHECK: mfuse.matmul_with_bias
@@ -75,8 +75,8 @@ module {
   // CHECK-LABEL: func @aclnn_batch_matmul_add_to_matmul_with_bias
   func.func @aclnn_batch_matmul_add_to_matmul_with_bias(%arg0: tensor<2x4x8xf32>, %arg1: tensor<2x8x16xf32>, %arg2: tensor<16xf32>) -> tensor<2x4x16xf32> {
     %0 = mfuse.aclnn.batch_matmul %arg0, %arg1 : (tensor<2x4x8xf32>, tensor<2x8x16xf32>) -> tensor<2x4x16xf32>
-    %cst = arith.constant dense<1.000000e+00> : tensor<f32>
-    %1 = mfuse.aclnn.add %0, %arg2, %cst : (tensor<2x4x16xf32>, tensor<16xf32>, tensor<f32>) -> tensor<2x4x16xf32>
+    %cst = mfuse.constant dense<1.000000e+00> : tensor<f32, {is_scalar = ""}>
+    %1 = mfuse.aclnn.add %0, %arg2, %cst : (tensor<2x4x16xf32>, tensor<16xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2x4x16xf32>
     // CHECK-NOT: mfuse.aclnn.batch_matmul
     // CHECK-NOT: mfuse.aclnn.add
     // CHECK: mfuse.matmul_with_bias

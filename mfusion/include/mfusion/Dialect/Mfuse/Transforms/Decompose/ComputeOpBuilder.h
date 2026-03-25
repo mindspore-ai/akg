@@ -45,46 +45,37 @@ class ComputeOpBuilder {
 
   // ComputeOpBuilder methods
   Value add(Value a, Value b) { return rewriter.create<AddOp>(loc, a, b); }
+  Value sub(Value a, Value b) { return rewriter.create<SubOp>(loc, a, b); }
+  Value mul(Value a, Value b) { return rewriter.create<MulOp>(loc, a, b); }
+  Value div(Value a, Value b) { return rewriter.create<DivOp>(loc, a, b); }
 
+  // Scalar overloads using CRTP-like pattern to avoid code duplication
   template <typename T>
   Value add(Value a, T scalar) {
-    auto tensorType = mlir::cast<RankedTensorType>(a.getType());
-    auto b = createScalarRankTensor(scalar, tensorType.getElementType());
-    return add(a, b);
+    return binOpWithScalar(a, scalar, [&](Value a, Value b) { return add(a, b); });
   }
 
+  template <typename T>
+  Value sub(Value a, T scalar) {
+    return binOpWithScalar(a, scalar, [&](Value a, Value b) { return sub(a, b); });
+  }
+
+  template <typename T>
+  Value mul(Value a, T scalar) {
+    return binOpWithScalar(a, scalar, [&](Value a, Value b) { return mul(a, b); });
+  }
+
+  template <typename T>
+  Value div(Value a, T scalar) {
+    return binOpWithScalar(a, scalar, [&](Value a, Value b) { return div(a, b); });
+  }
+
+  // Other operations
   Value cast(Value input, Type dtype) { return rewriter.create<CastOp>(loc, input, dtype); }
 
   Value exp(Value x) { return rewriter.create<ExpOp>(loc, x); }
 
-  Value div(Value a, Value b) { return rewriter.create<DivOp>(loc, a, b); }
-
-  template <typename T>
-  Value div(Value a, T scalar) {
-    auto tensorType = mlir::cast<RankedTensorType>(a.getType());
-    auto b = createScalarRankTensor(scalar, tensorType.getElementType());
-    return rewriter.create<DivOp>(loc, a, b);
-  }
-
-  Value mul(Value a, Value b) { return rewriter.create<MulOp>(loc, a, b); }
-
-  template <typename T>
-  Value mul(Value a, T scalar) {
-    auto tensorType = mlir::cast<RankedTensorType>(a.getType());
-    auto b = createScalarRankTensor(scalar, tensorType.getElementType());
-    return rewriter.create<MulOp>(loc, a, b);
-  }
-
   Value reciprocal(Value x) { return rewriter.create<ReciprocalOp>(loc, x); }
-
-  Value sub(Value a, Value b) { return rewriter.create<SubOp>(loc, a, b); }
-
-  template <typename T>
-  Value sub(Value a, T scalar) {
-    auto tensorType = mlir::cast<RankedTensorType>(a.getType());
-    auto b = createScalarRankTensor(scalar, tensorType.getElementType());
-    return sub(a, b);
-  }
 
   Value tanh(Value x) { return rewriter.create<AclnnTanhOp>(loc, x); }
 
@@ -107,13 +98,21 @@ class ComputeOpBuilder {
     static_assert(std::is_arithmetic_v<T>, "Value must be arithmetic type");
     auto tensorType = RankedTensorType::get({}, elementType);
     auto denseAttr = DenseElementsAttr::get(tensorType, value);
-    return rewriter.create<mlir::arith::ConstantOp>(loc, tensorType, denseAttr).getResult();
+    return rewriter.create<mlir::mfuse::ConstantOp>(loc, tensorType, denseAttr).getResult();
   }
 
   // Create Expr from Value
   Expr buildExpr(Value value);
 
  private:
+  // Helper function to handle binary operations with scalars
+  template <typename T, typename OpFunc>
+  Value binOpWithScalar(Value a, T scalar, OpFunc opFunc) {
+    auto tensorType = mlir::cast<RankedTensorType>(a.getType());
+    auto b = createScalarRankTensor(scalar, tensorType.getElementType());
+    return opFunc(a, b);
+  }
+
   PatternRewriter &rewriter;
   Location loc;
 

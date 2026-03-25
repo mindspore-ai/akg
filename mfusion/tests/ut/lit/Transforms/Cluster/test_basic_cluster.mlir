@@ -76,10 +76,10 @@ func.func @test_element_wise_chain(%arg0: tensor<8x8xf32>, %arg1: tensor<8x8xf32
 // CHECK-LABEL: func @test_fuse_op_after_all_inputs
 // CHECK-SAME: %arg0: tensor<2x2xf16>
 // CHECK-SAME: %arg1: tensor<2x2xf16>
-// CHECK: %[[CST:.*]] = arith.constant dense<1>
-// CHECK-SAME: : tensor<i64>
+// CHECK: %[[CST:.*]] = mfuse.constant dense<1>
+// CHECK-SAME: : tensor<i64, {is_scalar = ""}>
 // CHECK: %[[SUB:.*]] = mfuse.aclnn.sub %arg0, %arg1, %[[CST]]
-// CHECK-SAME: : (tensor<2x2xf16>, tensor<2x2xf16>, tensor<i64>) -> tensor<2x2xf16>
+// CHECK-SAME: : (tensor<2x2xf16>, tensor<2x2xf16>, tensor<i64, {is_scalar = ""}>) -> tensor<2x2xf16>
 // CHECK: %[[FUSED:.*]] = mfuse.fused %arg0, %arg1, %[[SUB]]
 // CHECK-SAME: {fusion_type = "dvm"}
 // CHECK-SAME: : (tensor<2x2xf16>, tensor<2x2xf16>, tensor<2x2xf16>) -> tensor<2x2xf16>
@@ -97,9 +97,9 @@ func.func @test_element_wise_chain(%arg0: tensor<8x8xf32>, %arg1: tensor<8x8xf32
 // CHECK: return %[[FUSED]]
 // CHECK-SAME: : tensor<2x2xf16>
 func.func @test_fuse_op_after_all_inputs(%arg0: tensor<2x2xf16>, %arg1: tensor<2x2xf16>) -> tensor<2x2xf16> {
-  %cst = arith.constant dense<1> : tensor<i64>
+  %cst = mfuse.constant dense<1> : tensor<i64, {is_scalar = ""}>
   // Non-clusterable operation: aclnn.sub is not in DVM clusterable ops list
-  %0 = mfuse.aclnn.sub %arg0, %arg1, %cst : (tensor<2x2xf16>, tensor<2x2xf16>, tensor<i64>) -> tensor<2x2xf16>
+  %0 = mfuse.aclnn.sub %arg0, %arg1, %cst : (tensor<2x2xf16>, tensor<2x2xf16>, tensor<i64, {is_scalar = ""}>) -> tensor<2x2xf16>
   // First chain: mul -> mul (clusterable, uses %arg0 and %arg1)
   %1 = mfuse.mul %arg0, %arg1 : (tensor<2x2xf16>, tensor<2x2xf16>) -> tensor<2x2xf16>
   %2 = mfuse.mul %1, %1 : (tensor<2x2xf16>, tensor<2x2xf16>) -> tensor<2x2xf16>
@@ -150,7 +150,7 @@ func.func @test_cluster_with_external_output(%arg0: tensor<4x4xf32>, %arg1: tens
 // CHECK-SAME: %arg0: tensor<4x4xf32>
 // CHECK-SAME: %arg1: tensor<4x4xf32>
 // CHECK-SAME: %arg2: tensor<4x4xf32>
-// CHECK: %[[CST:.*]] = arith.constant dense<1>
+// CHECK: %[[CST:.*]] = mfuse.constant dense<1>
 // CHECK: %[[ADD1:.*]] = mfuse.add %arg0, %arg1
 // CHECK: %[[TANH:.*]] = mfuse.aclnn.tanh %[[ADD1]]
 // CHECK: %[[SUB:.*]] = mfuse.aclnn.sub {{%arg2}}, {{%arg2}}, %[[CST]]
@@ -158,13 +158,13 @@ func.func @test_cluster_with_external_output(%arg0: tensor<4x4xf32>, %arg1: tens
 // CHECK: %[[ADD2:.*]] = mfuse.add %[[MUL]], %arg0
 // CHECK: return %[[TANH]], %[[ADD2]]
 func.func @test_insert_point_breaks_dominance(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>, %arg2: tensor<4x4xf32>) -> (tensor<4x4xf32>, tensor<4x4xf32>) {
-  %cst = arith.constant dense<1> : tensor<i64>
+  %cst = mfuse.constant dense<1> : tensor<i64, {is_scalar = ""}>
   // op1: add (clusterable), insert point starts here
   %0 = mfuse.add %arg0, %arg1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
   // non-cluster user of %0, appears before the external input provider
   %1 = mfuse.aclnn.tanh %0 : (tensor<4x4xf32>) -> tensor<4x4xf32>
   // non-cluster op that provides external input to later cluster op
-  %2 = mfuse.aclnn.sub %arg2, %arg2, %cst : (tensor<4x4xf32>, tensor<4x4xf32>, tensor<i64>) -> tensor<4x4xf32>
+  %2 = mfuse.aclnn.sub %arg2, %arg2, %cst : (tensor<4x4xf32>, tensor<4x4xf32>, tensor<i64, {is_scalar = ""}>) -> tensor<4x4xf32>
   // op2: mul (clusterable), uses %2 as external input
   // This moves insert point to after aclnn.sub
   %3 = mfuse.mul %2, %0 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>

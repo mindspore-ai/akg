@@ -273,3 +273,73 @@ func.func @test_reshape_scalar_to_1d(%arg0: tensor<f32>) -> tensor<1xf32> {
   %0 = mfuse.reshape %arg0 : (tensor<f32>) -> tensor<1xf32>
   return %0 : tensor<1xf32>
 }
+
+// CHECK-LABEL: func.func @test_add_i32
+func.func @test_add_i32(%arg0: tensor<2x3xi32>, %arg1: tensor<2x3xi32>) -> tensor<2x3xi32> {
+  // CHECK: torch.aten.add.Tensor
+  %0 = mfuse.add %arg0, %arg1 : (tensor<2x3xi32>, tensor<2x3xi32>) -> tensor<2x3xi32>
+  return %0 : tensor<2x3xi32>
+}
+
+// CHECK-LABEL: func.func @test_add_f16
+func.func @test_add_f16(%arg0: tensor<2x3xf16>, %arg1: tensor<2x3xf16>) -> tensor<2x3xf16> {
+  // CHECK: torch.aten.add.Tensor
+  %0 = mfuse.add %arg0, %arg1 : (tensor<2x3xf16>, tensor<2x3xf16>) -> tensor<2x3xf16>
+  return %0 : tensor<2x3xf16>
+}
+
+// CHECK-LABEL: func.func @test_add_f64
+func.func @test_add_f64(%arg0: tensor<2x3xf64>, %arg1: tensor<2x3xf64>) -> tensor<2x3xf64> {
+  // CHECK: torch.aten.add.Tensor
+  %0 = mfuse.add %arg0, %arg1 : (tensor<2x3xf64>, tensor<2x3xf64>) -> tensor<2x3xf64>
+  return %0 : tensor<2x3xf64>
+}
+
+// CHECK-LABEL: func.func @test_sub
+func.func @test_sub(%arg0: tensor<2x2xf32>, %arg1: tensor<2x2xf32>) -> tensor<2x2xf32> {
+  // CHECK: torch.aten.sub.Tensor
+  %0 = mfuse.sub %arg0, %arg1 : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  return %0 : tensor<2x2xf32>
+}
+
+// CHECK-LABEL: func.func @test_mul_tensor
+func.func @test_mul_tensor(%arg0: tensor<2x3xf32>, %arg1: tensor<f32>) -> tensor<2x3xf32> {
+  // CHECK: torch.aten.mul.Tensor
+  %0 = mfuse.mul %arg0, %arg1 : (tensor<2x3xf32>, tensor<f32>) -> tensor<2x3xf32>
+  return %0 : tensor<2x3xf32>
+}
+
+// CHECK-LABEL: func.func @test_div_vector
+func.func @test_div_vector(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: torch.aten.div.Tensor
+  %0 = mfuse.div %arg0, %arg1 : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  return %0 : tensor<4xf32>
+}
+
+// CHECK-LABEL: func.func @test_div_3d
+func.func @test_div_3d(%arg0: tensor<2x3x4xf32>, %arg1: tensor<2x3x4xf32>) -> tensor<2x3x4xf32> {
+  // CHECK: torch.aten.div.Tensor
+  %0 = mfuse.div %arg0, %arg1 : (tensor<2x3x4xf32>, tensor<2x3x4xf32>) -> tensor<2x3x4xf32>
+  return %0 : tensor<2x3x4xf32>
+}
+
+// CHECK-LABEL: func.func @test_eq_i32
+func.func @test_eq_i32(%arg0: tensor<2x2xi32>, %arg1: tensor<2x2xi32>) -> tensor<2x2xi1> {
+  // CHECK: torch.aten.eq.Tensor
+  %0 = mfuse.eq %arg0, %arg1 : (tensor<2x2xi32>, tensor<2x2xi32>) -> tensor<2x2xi1>
+  return %0 : tensor<2x2xi1>
+}
+
+// CHECK-LABEL: func.func @test_gt
+func.func @test_gt_scalar(%arg0: tensor<3x3xf32>, %arg1: tensor<f32>) -> tensor<3x3xi1> {
+  // CHECK: torch.aten.gt.Tensor
+  %0 = mfuse.gt %arg0, %arg1 : (tensor<3x3xf32>, tensor<f32>) -> tensor<3x3xi1>
+  return %0 : tensor<3x3xi1>
+}
+
+// CHECK-LABEL: func.func @test_le_f64
+func.func @test_le_f64(%arg0: tensor<2x2xf64>, %arg1: tensor<2x2xf64>) -> tensor<2x2xi1> {
+  // CHECK: torch.aten.le.Tensor
+  %0 = mfuse.le %arg0, %arg1 : (tensor<2x2xf64>, tensor<2x2xf64>) -> tensor<2x2xi1>
+  return %0 : tensor<2x2xi1>
+}

@@ -58,7 +58,7 @@ void Rebuilder::createFusedOps() {
   for (size_t i = 0; i < plan.size(); ++i) {
     const auto &groupOps = plan[i];
     if (groupOps.empty() ||
-        (groupOps.size() == 1 && (isa<mfuse::YieldOp>(groupOps.front()) || isa<arith::ConstantOp>(groupOps.front())))) {
+        (groupOps.size() == 1 && (isa<mfuse::YieldOp>(groupOps.front()) || isa<mfuse::ConstantOp>(groupOps.front())))) {
       continue;
     }
     // Skip cases that need inline, already inlined all ops in this fusedOp
