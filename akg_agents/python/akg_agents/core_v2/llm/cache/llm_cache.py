@@ -1,3 +1,17 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import time
 import logging
 from pathlib import Path
@@ -8,8 +22,7 @@ from .cache_utils import (
     generate_cache_key,
     read_cache_file,
     write_cache_file,
-    serialize_cache_data,
-    deserialize_cache_data
+    serialize_cache_data
 )
 
 logger = logging.getLogger(__name__)
@@ -19,7 +32,7 @@ class LLMCache:
     def __init__(
         self,
         max_memory_size: int = 200,
-        cache_file_path: str = "~/.akg/llm_cache/llm_test_cache.json5",
+        cache_file_path: str = "~/.akg/llm_cache/llm_test_cache.json",
         expire_seconds: int = -1,
         auto_clean_expired: bool = True,
         enable: bool = True
@@ -57,6 +70,18 @@ class LLMCache:
         create_time = cache_item.get("create_time", 0)
         return time.time() - create_time > self.expire_seconds
 
+    def _read_valid_cache_item(self, cache_store: Dict[str, Any], cache_key: str, source_name: str) -> Optional[Dict[str, Any]]:
+        cache_item = cache_store.get(cache_key)
+        if cache_item is None:
+            return None
+
+        if self._is_cache_expired(cache_item):
+            del cache_store[cache_key]
+            return None
+
+        logger.info(f"✅ {source_name} cache hit, key={cache_key}")
+        return cache_item
+
     def get(
         self,
         messages: List[Dict[str, str]],
@@ -68,20 +93,17 @@ class LLMCache:
 
         cache_key = generate_cache_key(messages, tools, **kwargs)
 
-        if cache_key in self._memory_cache:
-            cache_item = self._memory_cache[cache_key]
-            if not self._is_cache_expired(cache_item):
-                logger.info(f"✅ Memory cache hit, key={cache_key}")
-                return cache_item.get("result")
-            del self._memory_cache[cache_key]
+        memory_item = self._read_valid_cache_item(self._memory_cache, cache_key, "Memory")
+        if memory_item is not None:
+            return memory_item.get("result")
 
-        if cache_key in self._local_cache:
-            cache_item = self._local_cache[cache_key]
-            if not self._is_cache_expired(cache_item):
-                logger.info(f"✅ Local cache hit, key={cache_key}")
-                self._memory_cache[cache_key] = cache_item
-                return cache_item.get("result")
-            del self._local_cache[cache_key]
+        local_size_before = len(self._local_cache)
+        local_item = self._read_valid_cache_item(self._local_cache, cache_key, "Local")
+        if local_item is not None:
+            self._memory_cache[cache_key] = local_item
+            return local_item.get("result")
+
+        if len(self._local_cache) != local_size_before:
             self._save_local_cache()
 
         logger.info(f"❌ Cache miss, key={cache_key}")
