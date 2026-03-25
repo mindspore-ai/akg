@@ -439,18 +439,27 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
 static void populateAtenToMfuseBinaryOpPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
   patterns.add<ConvertBinaryOpPattern<TorchD::AtenDivTensorOp, mfuse::DivOp>,
+               ConvertBinaryOpPattern<TorchD::AtenDivScalarOp, mfuse::DivOp>,
                ConvertBinaryOpPattern<TorchD::AtenEqTensorOp, mfuse::EqOp>,
+               ConvertBinaryOpPattern<TorchD::AtenEqScalarOp, mfuse::EqOp>,
                ConvertBinaryOpPattern<TorchD::AtenGeTensorOp, mfuse::GeOp>,
+               ConvertBinaryOpPattern<TorchD::AtenGeScalarOp, mfuse::GeOp>,
                ConvertBinaryOpPattern<TorchD::AtenGtTensorOp, mfuse::GtOp>,
+               ConvertBinaryOpPattern<TorchD::AtenGtScalarOp, mfuse::GtOp>,
                ConvertBinaryOpPattern<TorchD::AtenLeTensorOp, mfuse::LeOp>,
+               ConvertBinaryOpPattern<TorchD::AtenLeScalarOp, mfuse::LeOp>,
                ConvertBinaryOpPattern<TorchD::AtenLogicalAndOp, mfuse::LogicalAndOp>,
                ConvertBinaryOpPattern<TorchD::AtenLogicalOrOp, mfuse::LogicalOrOp>,
                ConvertBinaryOpPattern<TorchD::AtenLtTensorOp, mfuse::LtOp>,
+               ConvertBinaryOpPattern<TorchD::AtenLtScalarOp, mfuse::LtOp>,
                ConvertBinaryOpPattern<TorchD::AtenMaximumOp, mfuse::MaximumOp>,
                ConvertBinaryOpPattern<TorchD::AtenMinimumOp, mfuse::MinimumOp>,
                ConvertBinaryOpPattern<TorchD::AtenMulTensorOp, mfuse::MulOp>,
+               ConvertBinaryOpPattern<TorchD::AtenMulScalarOp, mfuse::MulOp>,
                ConvertBinaryOpPattern<TorchD::AtenNeTensorOp, mfuse::NeOp>,
-               ConvertBinaryOpPattern<TorchD::AtenPowTensorTensorOp, mfuse::PowOp>>(converter, ctx);
+               ConvertBinaryOpPattern<TorchD::AtenNeScalarOp, mfuse::NeOp>,
+               ConvertBinaryOpPattern<TorchD::AtenPowTensorTensorOp, mfuse::PowOp>,
+               ConvertBinaryOpPattern<TorchD::AtenPowTensorScalarOp, mfuse::PowOp>>(converter, ctx);
 }
 
 // Populate all Aten ops to Mfuse conversion patterns
