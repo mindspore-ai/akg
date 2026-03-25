@@ -227,11 +227,45 @@ class MultiDimensionalConvergenceDetector:
 
     def get_diagnostics(self) -> dict:
         """获取诊断信息"""
+        w = min(self.window, max(len(self._best_history) // 2, 1))
+
+        # 重新计算当前信号值（用于诊断展示）
+        perf_improvement = None
+        if len(self._best_history) > w:
+            old_best = self._best_history[-(w + 1)]
+            new_best = self._best_history[-1]
+            perf_improvement = (old_best - new_best) / (old_best + 1e-9)
+
+        diversity_change = None
+        if len(self._diversity_history) > w:
+            diversity_change = (
+                self._diversity_history[-1]
+                - self._diversity_history[-(w + 1)]
+            )
+
         return {
             "state": self._state.value,
+            "stop_reason": self._stop_reason,
             "plateau_count": self._plateau_count,
-            "best_history_len": len(self._best_history),
-            "diversity_history_len": len(self._diversity_history),
-            "current_best": self._best_history[-1] if self._best_history else None,
-            "current_diversity": self._diversity_history[-1] if self._diversity_history else None,
+            "patience": self.patience,
+            "window": w,
+            # S1 相关
+            "s1_perf_improvement": round(perf_improvement, 6) if perf_improvement is not None else None,
+            "s1_perf_threshold": self.perf_threshold,
+            "s1_plateau": perf_improvement is not None and perf_improvement < self.perf_threshold,
+            # S2 相关
+            "s2_diversity_change": round(diversity_change, 6) if diversity_change is not None else None,
+            "s2_diversity_threshold": self.diversity_threshold,
+            "s2_trend": (
+                "declining" if diversity_change is not None and diversity_change < -self.diversity_threshold
+                else "increasing" if diversity_change is not None and diversity_change > self.diversity_threshold
+                else "stable"
+            ),
+            # S3 相关
+            "s3_activity": round(self._diversity_history[-1], 4) if self._diversity_history else None,
+            "s3_activity_threshold": self.activity_threshold,
+            # 历史
+            "current_best_gen_time": self._best_history[-1] if self._best_history else None,
+            "current_diversity": round(self._diversity_history[-1], 4) if self._diversity_history else None,
+            "total_success_tracked": len(self._best_history),
         }

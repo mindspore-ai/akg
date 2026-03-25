@@ -916,14 +916,114 @@ class AdaptiveSearchController:
             else:
                 md_content.append(f"| {node_id} | {gen} | ∞ | - | {parent} | {data['selection_count']} |")
         
+        # 追加停止原因和进化控制器诊断信息
+        md_content.append("")
+        md_content.append("## 搜索终止信息")
+        md_content.append("")
+        md_content.append(f"- **停止原因**: {self._stop_reason or 'N/A'}")
+        md_content.append(f"- **总提交**: {self._total_submitted} | **总成功**: {self._total_success} | **总失败**: {self._total_failed}")
+        md_content.append(f"- **使用进化控制器**: {'是' if self.evo_controller else '否'}")
+
+        if self.evo_controller:
+            diag = self.evo_controller.get_diagnostics()
+            conv = diag.get("convergence", {})
+
+            md_content.append("")
+            md_content.append("### 收敛检测器状态")
+            md_content.append("")
+            md_content.append(f"- **最终状态**: {conv.get('state', 'N/A')}")
+            md_content.append(f"- **停止原因**: {conv.get('stop_reason', 'N/A')}")
+            md_content.append("")
+            md_content.append("### 收敛信号详情")
+            md_content.append("")
+            md_content.append("| 信号 | 当前值 | 阈值 | 判定 |")
+            md_content.append("|------|--------|------|------|")
+
+            # S1: 性能停滞
+            s1_imp = conv.get("s1_perf_improvement")
+            s1_thr = conv.get("s1_perf_threshold", "N/A")
+            s1_plateau = conv.get("s1_plateau", False)
+            s1_imp_str = f"{s1_imp:.4%}" if s1_imp is not None else "N/A (数据不足)"
+            md_content.append(
+                f"| S1 性能改善率 | {s1_imp_str} | < {s1_thr} 则停滞 | "
+                f"{'**停滞**' if s1_plateau else '改善中'} |"
+            )
+
+            # S1 count
+            plateau_count = conv.get("plateau_count", 0)
+            patience = conv.get("patience", "N/A")
+            md_content.append(
+                f"| S1 连续停滞窗口数 | {plateau_count} | ≥ {patience} 则触发 | "
+                f"{'**达到**' if plateau_count >= (patience if isinstance(patience, int) else 999) else '未达到'} |"
+            )
+
+            # S2: 多样性趋势
+            s2_change = conv.get("s2_diversity_change")
+            s2_thr = conv.get("s2_diversity_threshold", "N/A")
+            s2_trend = conv.get("s2_trend", "N/A")
+            s2_change_str = f"{s2_change:+.4f}" if s2_change is not None else "N/A"
+            md_content.append(
+                f"| S2 多样性变化 | {s2_change_str} | < -{s2_thr} 则下降 | "
+                f"**{s2_trend}** |"
+            )
+
+            # S3: 谱系活跃度
+            s3_val = conv.get("s3_activity")
+            s3_thr = conv.get("s3_activity_threshold", "N/A")
+            s3_val_str = f"{s3_val:.4f}" if s3_val is not None else "N/A"
+            md_content.append(
+                f"| S3 谱系活跃度 | {s3_val_str} | ≥ {s3_thr} 则充分探索 | "
+                f"{'**充分**' if s3_val is not None and s3_val >= (s3_thr if isinstance(s3_thr, float) else 999) else '未充分'} |"
+            )
+
+            # 收敛判定总结
+            md_content.append("")
+            md_content.append("### 收敛判定逻辑")
+            md_content.append("")
+            md_content.append("WATCHING → STOPPED 需同时满足：S1 连续停滞 ≥ patience **AND** S2 = declining **AND** S3 ≥ activity_threshold")
+            md_content.append("")
+
+            all_met = (s1_plateau
+                       and plateau_count >= (patience if isinstance(patience, int) else 999)
+                       and s2_trend == "declining"
+                       and s3_val is not None and s3_val >= (s3_thr if isinstance(s3_thr, float) else 999))
+            if all_met:
+                md_content.append("**判定结果：三个条件全部满足 → 收敛停止**")
+            else:
+                conditions = []
+                if not s1_plateau or plateau_count < (patience if isinstance(patience, int) else 999):
+                    conditions.append("S1 未持续停滞")
+                if s2_trend != "declining":
+                    conditions.append(f"S2 = {s2_trend}（非 declining）")
+                if s3_val is None or s3_val < (s3_thr if isinstance(s3_thr, float) else 999):
+                    conditions.append(f"S3 = {s3_val_str}（未达阈值 {s3_thr}）")
+                md_content.append(f"**判定结果：未满足收敛条件**（原因：{'; '.join(conditions)}）")
+
+            # 谱系统计
+            lineage_stats = diag.get("lineage_stats", {})
+            if lineage_stats:
+                md_content.append("")
+                md_content.append("### 谱系统计")
+                md_content.append("")
+                md_content.append(f"- **谱系数量**: {diag.get('num_lineages', 'N/A')}")
+                md_content.append(f"- **多样性指数 D**: {diag.get('diversity_index', 'N/A')}")
+                md_content.append("")
+                md_content.append("| 谱系根 | 大小 | 占比 | 最优 speedup | 最大深度 | 总选择次数 |")
+                md_content.append("|--------|------|------|-------------|---------|-----------|")
+                for root_id, stats in lineage_stats.items():
+                    md_content.append(
+                        f"| {root_id} | {stats['size']} | {stats['share']:.1%} | "
+                        f"{stats['best_speedup']:.2f}x | {stats['max_depth']} | {stats['total_selections']} |"
+                    )
+
         # 保存文件
         save_dir = os.path.expanduser(log_dir)
         os.makedirs(save_dir, exist_ok=True)
         save_path = os.path.join(save_dir, f"{self.op_name}_lineage_graph.md")
-        
+
         with open(save_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(md_content))
-        
+
         logger.info(f"Lineage graph saved to: {save_path}")
         return save_path
 
