@@ -343,13 +343,17 @@ class DvmSupportChecker {
   }
 
   static bool reshapeOpCheck(Operation *op) {
-    auto tensorNode = op->getOperand(0);
-    Operation *cubeOp = nullptr;
-    if (op->getName().getStringRef() == "mfuse.matmul" || op->getName().getStringRef() == "mfuse.batch_matmul" ||
-        op->getName().getStringRef() == "mfuse.grouped_matmul") {
-      cubeOp = tensorNode.getDefiningOp();
+    Value input = op->getOperand(0);
+    Operation *producer = input.getDefiningOp();
+    if (!producer) {
+      return false;
     }
-    return cubeOp && DVMCluster::canClusterableOp(DVMCluster::getClusterableOps(), cubeOp);
+    StringRef name = producer->getName().getStringRef();
+    if (name != "mfuse.matmul" && name != "mfuse.batch_matmul" && name != "mfuse.grouped_matmul") {
+      return false;
+    }
+
+    return DVMCluster::canClusterableOp(DVMCluster::getClusterableOps(), producer);
   }
 
   /// MatMul shape check helper
