@@ -699,6 +699,8 @@ class KernelGen(AgentBase):
                 designer_code=designer_code,
                 inspirations=inspirations,
                 handwrite_suggestions=handwrite_suggestions or [],
+                framework=framework,
+                dsl=dsl,
             )
             
             # 5. 组合完整 prompt，末尾追加输出格式硬约束
