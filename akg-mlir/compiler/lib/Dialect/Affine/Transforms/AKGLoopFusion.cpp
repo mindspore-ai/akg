@@ -30,6 +30,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/CommandLine.h"
@@ -76,7 +77,7 @@ struct AKGLoopFusion : public impl::AKGLoopFusionBase<AKGLoopFusion> {
 
   void replaceDimWithPrimes(func::FuncOp funcOp);
   void restoreDimFromPrimes();
-  void repairReductionLoopAttrs(func::FuncOp funcOp);
+  void repairLoopAttrs(func::FuncOp funcOp);
 
   std::optional<SmallVector<std::string>> getSymShapeAttrFromValue(Value source);
   std::optional<int64_t> getConstantDimIndex(Value dimIndex);
@@ -420,35 +421,44 @@ void AKGLoopFusion::runOnOperation() {
 
 void AKGLoopFusion::runPostProcess() {
   auto funcOp = getOperation();
-  repairReductionLoopAttrs(funcOp);
+  repairLoopAttrs(funcOp);
   restoreDimFromPrimes();
 }
 
-// After fusion, a reduction loop body may have been merged into a non-reduction
-// loop, causing the {reduction} attribute to be lost.
-void AKGLoopFusion::repairReductionLoopAttrs(func::FuncOp funcOp) {
-  if (CommonUtils::getOperatorType(funcOp) != OperatorTemplate::Reduction) {
-    return;
+// After fusion, loop attributes (reduction, broadcast, etc.) may be lost
+// because a loop body was merged into another loop. Re-apply them.
+// Rule: if an axis is reduction, only the reduction attr is applied (no others).
+void AKGLoopFusion::repairLoopAttrs(func::FuncOp funcOp) {
+  OpBuilder builder(funcOp.getContext());
+  // Step 1: Collect reduction loops from reduction_axes on reduction ops
+  llvm::SmallSet<Operation *, 8> reductionLoops;
+  if (CommonUtils::getOperatorType(funcOp) == OperatorTemplate::Reduction) {
+    funcOp.walk([&](Operation *op) {
+      if (!op->hasAttr(kReductionTypeStr)) return;
+      auto axesAttr = op->getAttrOfType<ArrayAttr>(kReductionAxesStr);
+      if (!axesAttr) return;
+
+      SmallVector<affine::AffineForOp, 4> enclosingLoops;
+      affine::getAffineForIVs(*op, &enclosingLoops);
+
+      for (auto axis : axesAttr) {
+        auto idx = cast<IntegerAttr>(axis).getInt();
+        if (idx < 0 || idx >= static_cast<int64_t>(enclosingLoops.size())) continue;
+        auto forOp = enclosingLoops[idx];
+        forOp->setAttr(kReductionLoopAttr, builder.getUnitAttr());
+        (void)reductionLoops.insert(forOp.getOperation());
+      }
+    });
   }
 
-  funcOp.walk([&](Operation *op) {
-    if (!op->hasAttr(kReductionTypeStr)) return;
-    auto axesAttr = op->getAttrOfType<ArrayAttr>(kReductionAxesStr);
-    if (!axesAttr) return;
-
-    SmallVector<affine::AffineForOp, 4> enclosingLoops;
-    affine::getAffineForIVs(*op, &enclosingLoops);
-
-    for (auto axis : axesAttr) {
-      auto idx = cast<IntegerAttr>(axis).getInt();
-      if (idx < 0 || idx >= static_cast<int64_t>(enclosingLoops.size())) continue;
-      auto forOp = enclosingLoops[idx];
-      if (!forOp->hasAttr(kReductionLoopAttr)) {
-        OpBuilder builder(forOp.getContext());
-        forOp->setAttr(kReductionLoopAttr, builder.getUnitAttr());
-      }
-    }
-  });
+  // Step 2: Collect broadcast loops via analysis
+  llvm::SmallSet<Operation *, 8> broadcastLoops;
+  CommonUtils::collectBroadcastAxes(funcOp, broadcastLoops);
+  for (auto *loop : broadcastLoops) {
+    // Skip if this axis is a reduction axis
+    if (reductionLoops.count(loop)) continue;
+    loop->setAttr(kBroadcastLoopAttr, builder.getUnitAttr());
+  }
 }
 
 void AKGLoopFusion::runOnLoopFusion() {

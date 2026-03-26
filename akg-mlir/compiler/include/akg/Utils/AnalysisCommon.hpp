@@ -58,6 +58,7 @@ constexpr auto kReduceStr = "Reduction";
 constexpr auto kReductionAxesStr = "reduction_axes";
 constexpr auto kReductionTypeStr = "reduction_type";
 constexpr auto kReductionLoopAttr = "reduction";
+constexpr auto kBroadcastLoopAttr = "broadcast";
 constexpr auto kReductionXLoopAttr = "reduction_x";
 constexpr auto kReductionYLoopAttr = "reduction_y";
 constexpr auto kReductionAllLoopAttr = "reduction_all";
@@ -85,13 +86,10 @@ const std::vector<unsigned> primeSteps = {100000007, 100000009, 100000033, 10000
                                           100000049, 100000073, 100000079, 100000081, 100000091};
 const std::vector<unsigned> primeTailSteps = {100000153, 100000157, 100000163, 100000169, 100000171,
                                               100000177, 100000181, 100000183, 100000187, 100000189};
-enum OperatorTemplate {
-  Default = 0, Elementwise, Broadcast, Reshape, Transpose,
-  Reduction, Matmul, Conv
-};
-const std::unordered_map<int, std::string> operatorTemplateMap = {
-  {0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"}, {3, "Reshape"}, {4, "Transpose"},
-  {5, "Reduction"}, {6, "Matmul"}, {7, "Conv"}};
+enum OperatorTemplate { Default = 0, Elementwise, Broadcast, Reshape, Transpose, Reduction, Matmul, Conv };
+const std::unordered_map<int, std::string> operatorTemplateMap = {{0, "Default"}, {1, "Elementwise"}, {2, "Broadcast"},
+                                                                  {3, "Reshape"}, {4, "Transpose"},   {5, "Reduction"},
+                                                                  {6, "Matmul"},  {7, "Conv"}};
 
 enum ReduceDirection { UNKNOWN = 0, X, Y, ALL };
 const std::unordered_map<int, std::string> reduceDirectionMap = {{0, "unknown"}, {1, "x"}, {2, "y"}, {3, "all"}};
@@ -693,51 +691,59 @@ class CommonUtils {
     return res;
   }
 
+  static void collectSourceLoads(Value value, llvm::SmallSet<Operation *, 8> &loads) {
+    if (auto *defOp = value.getDefiningOp()) {
+      if (isa<affine::AffineLoadOp>(defOp)) {
+        (void)loads.insert(defOp);
+        return;
+      }
+      for (Value operand : defOp->getOperands()) {
+        collectSourceLoads(operand, loads);
+      }
+    }
+  }
+
   static void collectBroadcastAxes(Operation *funcOp, llvm::SmallSet<Operation *, 8> &broadcastAxes) {
-    SmallVector<Operation *> ops;
-    funcOp->walk([&](Operation *op) {
-      if (isa<affine::AffineLoadOp, affine::AffineStoreOp>(op)) {
-        ops.push_back(op);
-      }
-    });
-
-    llvm::SmallSet<Operation *, 8> maxAxes;
-    llvm::SmallSet<Operation *, 8> minAxes;
-    for (auto op : ops) {
-      mlir::ValueRange indices;
-      if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
-        indices = load.getIndices();
-      } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
-        indices = store.getIndices();
-      }
-
-      llvm::SmallSet<Operation *, 8> relatedAxes;
-      for (size_t i = 0; i < indices.size(); ++i) {
-        SmallVector<Operation *, 8> relatedAxesVec;
-        CommonUtils::collectRelatedAxes(indices[i], relatedAxesVec);
-        for (auto axis : relatedAxesVec) {
-          (void)relatedAxes.insert(axis);
+    funcOp->walk([&](affine::AffineStoreOp storeOp) {
+      // Collect related axes from store indices
+      mlir::ValueRange storeIndices = storeOp.getIndices();
+      llvm::SmallSet<Operation *, 8> storeAxes;
+      for (size_t i = 0; i < storeIndices.size(); ++i) {
+        SmallVector<Operation *, 8> axesVec;
+        CommonUtils::collectRelatedAxes(storeIndices[i], axesVec);
+        for (auto axis : axesVec) {
+          (void)storeAxes.insert(axis);
         }
       }
 
-      if (maxAxes.empty() || maxAxes.size() <= relatedAxes.size()) {
-        maxAxes = relatedAxes;
+      // Collect related axes from loads that contribute to the stored value
+      llvm::SmallSet<Operation *, 8> loadAxes;
+      llvm::SmallSet<Operation *, 8> sourceLoads;
+      collectSourceLoads(storeOp.getValueToStore(), sourceLoads);
+      for (auto *loadOp : sourceLoads) {
+        if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(loadOp)) {
+          mlir::ValueRange loadIndices = affineLoad.getIndices();
+          for (size_t i = 0; i < loadIndices.size(); ++i) {
+            SmallVector<Operation *, 8> axesVec;
+            CommonUtils::collectRelatedAxes(loadIndices[i], axesVec);
+            for (auto axis : axesVec) {
+              (void)loadAxes.insert(axis);
+            }
+          }
+        }
       }
-      if (minAxes.empty() || minAxes.size() >= relatedAxes.size()) {
-        minAxes = relatedAxes;
-      }
-    }
 
-    if (minAxes.empty() || maxAxes.empty() || maxAxes.size() == minAxes.size()) {
-      return;
-    }
-
-    for (auto axis : maxAxes) {
-      if (minAxes.count(axis) == 0) {
-        (void)broadcastAxes.insert(axis);
+      if (storeAxes.size() <= loadAxes.size()) {
+        return;
       }
-    }
-    return;
+
+      // Broadcast axes = store axes that no related load depends on
+      for (auto axis : storeAxes) {
+        if (loadAxes.count(axis) == 0) {
+          (void)broadcastAxes.insert(axis);
+        }
+      }
+    });
   }
 
   static SmallVector<Operation *, 8> collectReductionAxes(Operation *funcOp) {

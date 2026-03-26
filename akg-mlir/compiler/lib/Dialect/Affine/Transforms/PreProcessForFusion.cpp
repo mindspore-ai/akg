@@ -16,6 +16,9 @@
 
 #include "akg/Dialect/Affine/Transforms/PreProcessForFusion.h"
 
+#include <algorithm>
+
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Affine/Analysis/Utils.h"
@@ -47,7 +50,7 @@ struct PreProcessForFusion : public impl::PreProcessForFusionBase<PreProcessForF
     // Move allocations before the first affine.for
     moveAllocBeforeAffineFor(funcOp);
 
-    // Hoist loop invariant loads
+    // Hoist loop invariant loads and forward scalar store-load pairs
     hoistLoopInvariantLoad(funcOp);
   }
 
@@ -71,14 +74,10 @@ struct PreProcessForFusion : public impl::PreProcessForFusionBase<PreProcessForF
 
     SmallVector<Operation *, 8> toMove;
 
-    for (auto it = std::next(firstAffineFor->getIterator()), e = block.end();
-         it != e; ++it) {
+    for (auto it = std::next(firstAffineFor->getIterator()), e = block.end(); it != e; ++it) {
       Operation *op = &*it;
-      if (isa<memref::AllocOp, memref::SubViewOp,
-        memref::ReshapeOp, memref::ExpandShapeOp,
-        memref::CollapseShapeOp, memref::ReinterpretCastOp,
-        memref::MemorySpaceCastOp, arith::IndexCastOp,
-        memref::DimOp>(op)) {
+      if (isa<memref::AllocOp, memref::SubViewOp, memref::ReshapeOp, memref::ExpandShapeOp, memref::CollapseShapeOp,
+              memref::ReinterpretCastOp, memref::MemorySpaceCastOp, arith::IndexCastOp, memref::DimOp>(op)) {
         toMove.push_back(op);
       }
     }
@@ -107,7 +106,7 @@ struct PreProcessForFusion : public impl::PreProcessForFusionBase<PreProcessForF
     bool depends = false;
     defOp->walk([&](Operation *op) {
       if (std::any_of(op->getOperands().begin(), op->getOperands().end(),
-                     [&](Value operand) { return operand == iv; })) {
+                      [&](Value operand) { return operand == iv; })) {
         depends = true;
         return WalkResult::interrupt();
       }
@@ -119,7 +118,7 @@ struct PreProcessForFusion : public impl::PreProcessForFusionBase<PreProcessForF
 
   // Helper function to check if a memref is invariant to all loops
   bool isMemrefInvariantToAllLoops(affine::AffineLoadOp loadOp,
-                                  const SmallVector<affine::AffineForOp> &allEnclosingLoops) {
+                                   const SmallVector<affine::AffineForOp> &allEnclosingLoops) {
     Value memref = loadOp.getMemRef();
 
     for (auto enclosingFor : allEnclosingLoops) {
@@ -161,6 +160,88 @@ struct PreProcessForFusion : public impl::PreProcessForFusionBase<PreProcessForF
     return hasStore;
   }
 
+  // Collect loop-invariant loads that are candidates for hoisting
+  SmallVector<Operation *> collectLoopInvariantLoads(affine::AffineForOp outermostLoop) {
+    SmallVector<affine::AffineForOp> nestedLoops;
+    outermostLoop.walk([&](affine::AffineForOp forOp) { nestedLoops.push_back(forOp); });
+
+    SmallVector<Operation *> toHoist;
+    for (auto forOp : nestedLoops) {
+      for (Operation &op : forOp.getBody()->getOperations()) {
+        auto loadOp = dyn_cast<affine::AffineLoadOp>(&op);
+        if (!loadOp) continue;
+
+        Value memref = loadOp.getMemRef();
+        Operation *memrefDefOp = memref.getDefiningOp();
+        if (!memrefDefOp || !isa<memref::AllocOp>(memrefDefOp)) {
+          continue;
+        }
+
+        SmallVector<affine::AffineForOp> allEnclosingLoops;
+        affine::getAffineForIVs(*loadOp, &allEnclosingLoops);
+        allEnclosingLoops.push_back(forOp);
+
+        if (!isMemrefInvariantToAllLoops(loadOp, allEnclosingLoops)) {
+          continue;
+        }
+
+        if (hasStoreToMemrefInLoopTree(forOp, memref)) {
+          continue;
+        }
+
+        toHoist.push_back(loadOp);
+      }
+    }
+    return toHoist;
+  }
+
+  // Try to find a scalar store value that can be forwarded to replace a load
+  std::pair<Value, affine::AffineStoreOp> tryForwardStoreToLoad(Value memref, affine::AffineForOp outermostLoop) {
+    Block *block = outermostLoop->getBlock();
+    for (auto it = Block::iterator(outermostLoop); it != block->begin(); --it) {
+      auto storeOp = dyn_cast<affine::AffineStoreOp>(&*it);
+      if (!storeOp || storeOp.getMemRef() != memref) continue;
+
+      auto memrefType = cast<MemRefType>(memref.getType());
+      if (memrefType.getRank() == 0) {
+        return {storeOp.getValueToStore(), storeOp};
+      }
+      break;
+    }
+    return {Value(), nullptr};
+  }
+
+  // Eliminate a load by forwarding a stored value, or fall back to hoisting
+  void eliminateOrHoistLoad(Operation *op, affine::AffineForOp outermostLoop) {
+    auto loadOp = cast<affine::AffineLoadOp>(op);
+    Value memref = loadOp.getMemRef();
+
+    auto [forwardedValue, matchedStore] = tryForwardStoreToLoad(memref, outermostLoop);
+    if (!forwardedValue) {
+      op->moveBefore(outermostLoop);
+      return;
+    }
+
+    loadOp.getResult().replaceAllUsesWith(forwardedValue);
+    SmallVector<Operation *, 4> toErase;
+    toErase.push_back(op);
+
+    if (matchedStore) {
+      auto users = memref.getUsers();
+      bool memrefStillUsed = std::any_of(
+        users.begin(), users.end(), [&](Operation *user) { return user != op && user != matchedStore.getOperation(); });
+      if (!memrefStillUsed) {
+        toErase.push_back(matchedStore.getOperation());
+        Operation *memrefDefOp = memref.getDefiningOp();
+        if (memrefDefOp) toErase.push_back(memrefDefOp);
+      }
+    }
+
+    for (Operation *eraseOp : toErase) {
+      eraseOp->erase();
+    }
+  }
+
   void hoistLoopInvariantLoad(func::FuncOp funcOp) {
     SmallVector<affine::AffineForOp> outermostLoops;
     funcOp.walk([&](affine::AffineForOp forOp) {
@@ -170,47 +251,9 @@ struct PreProcessForFusion : public impl::PreProcessForFusionBase<PreProcessForF
     });
 
     for (auto outermostLoop : outermostLoops) {
-      SmallVector<affine::AffineForOp> nestedLoops;
-      outermostLoop.walk([&](affine::AffineForOp forOp) {
-        nestedLoops.push_back(forOp);
-      });
-
-      SmallVector<Operation *> toHoist;
-      for (auto forOp : nestedLoops) {
-        for (Operation &op : forOp.getBody()->getOperations()) {
-          auto loadOp = dyn_cast<affine::AffineLoadOp>(&op);
-          if (!loadOp) continue;
-
-          // Check if the memref is from an alloc operation
-          Value memref = loadOp.getMemRef();
-          Operation *memrefDefOp = memref.getDefiningOp();
-          if (!memrefDefOp || !isa<memref::AllocOp>(memrefDefOp)) {
-            continue;
-          }
-
-          // Collect all enclosing loops including the current one
-          SmallVector<affine::AffineForOp> allEnclosingLoops;
-          affine::getAffineForIVs(*loadOp, &allEnclosingLoops);
-          allEnclosingLoops.push_back(forOp);
-
-          // Check if memref is invariant to all loops
-          if (!isMemrefInvariantToAllLoops(loadOp, allEnclosingLoops)) {
-            continue;
-          }
-
-          // Check if there are any stores to the same memref in the loop subtree
-          if (hasStoreToMemrefInLoopTree(forOp, memref)) {
-            continue;
-          }
-
-          // Add to hoist list
-          toHoist.push_back(loadOp);
-        }
-      }
-
-      // Move invariant loads to the outermost loop
+      SmallVector<Operation *> toHoist = collectLoopInvariantLoads(outermostLoop);
       for (Operation *op : toHoist) {
-        op->moveBefore(outermostLoop);
+        eliminateOrHoistLoad(op, outermostLoop);
       }
     }
   }
