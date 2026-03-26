@@ -66,5 +66,21 @@ __all__ = [
     # 控制器
     'AdaptiveSearchController',
     'SearchConfig',
+
+    # 进化控制器
+    'EvolutionController',
+    'EvolutionControllerConfig',
 ]
+
+
+# 进化控制器（延迟导入，避免循环依赖）
+def __getattr__(name):
+    if name in ('EvolutionController', 'EvolutionControllerConfig'):
+        from akg_agents.op.adaptive_search.evolution_controller import (
+            EvolutionController,
+            EvolutionControllerConfig,
+        )
+        return {'EvolutionController': EvolutionController,
+                'EvolutionControllerConfig': EvolutionControllerConfig}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
