@@ -73,6 +73,7 @@ def _create_search_config(
     use_tiered_sampling: Optional[bool] = None,
     handwrite_sample_num: Optional[int] = None,
     handwrite_decay_rate: Optional[float] = None,
+    use_evolution_controller: Optional[bool] = None,
     storage_dir: Optional[str] = None
 ) -> SearchConfig:
     """
@@ -107,7 +108,10 @@ def _create_search_config(
         use_tiered_sampling=use_tiered_sampling if use_tiered_sampling is not None else inspiration.get("use_tiered_sampling", True),
         handwrite_sample_num=handwrite_sample_num or handwrite.get("sample_num", 2),
         handwrite_decay_rate=handwrite_decay_rate or handwrite.get("decay_rate", 2.0),
-        
+
+        # 进化控制器
+        use_evolution_controller=use_evolution_controller if use_evolution_controller is not None else search_config_dict.get("use_evolution_controller", False),
+
         # 存储
         storage_dir=storage_dir
     )
@@ -137,6 +141,8 @@ async def adaptive_search(
     use_tiered_sampling: Optional[bool] = None,
     handwrite_sample_num: Optional[int] = None,
     handwrite_decay_rate: Optional[float] = None,
+    # 进化控制器
+    use_evolution_controller: Optional[bool] = None,
     # 其他
     storage_dir: Optional[str] = None,
     search_config_path: Optional[str] = None
@@ -215,6 +221,7 @@ async def adaptive_search(
         use_tiered_sampling=use_tiered_sampling,
         handwrite_sample_num=handwrite_sample_num,
         handwrite_decay_rate=handwrite_decay_rate,
+        use_evolution_controller=use_evolution_controller,
         storage_dir=storage_dir
     )
     
