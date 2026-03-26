@@ -25,8 +25,6 @@ KernelGen Agent - 基于 Skill 系统的内核代码生成 Agent
 import logging
 import os
 import re
-import py_compile
-import tempfile
 from pathlib import Path
 
 from akg_agents.core_v2.skill.metadata import dsl_to_dir_key
@@ -600,28 +598,6 @@ class KernelGen(AgentBase):
         
         return code
     
-    @staticmethod
-    def _validate_syntax(code: str) -> Tuple[bool, str]:
-        """使用 py_compile 验证 Python 代码语法。
-        
-        Returns:
-            Tuple[bool, str]: (是否通过, 错误信息)
-        """
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                suffix='.py', mode='w', delete=False, encoding='utf-8'
-            ) as f:
-                f.write(code)
-                tmp_path = f.name
-            py_compile.compile(tmp_path, doraise=True)
-            return True, ""
-        except py_compile.PyCompileError as e:
-            return False, str(e)
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-    
     async def run(
         self,
         op_name: str,
@@ -643,6 +619,7 @@ class KernelGen(AgentBase):
         extra_skills: Optional[List[Any]] = None,
         exclude_skill_names: Optional[List[str]] = None,
         force_skill_names: Optional[List[str]] = None,
+        code_check_errors: str = "",
     ) -> Tuple[str, str, str]:
         """
         执行代码生成
@@ -667,6 +644,7 @@ class KernelGen(AgentBase):
             extra_skills: 额外注入的 skill 列表，跳过粗筛和精筛，在精筛结果后直接追加
             exclude_skill_names: 排除指定 skill（覆盖实例属性，AB test A 模式）
             force_skill_names: 强制导入指定 skill（覆盖实例属性，AB test B 模式）
+            code_check_errors: CodeChecker 静态检查错误信息
         
         Returns:
             Tuple[str, str, str]: (生成的代码, 完整 prompt, 推理过程)
@@ -739,6 +717,7 @@ class KernelGen(AgentBase):
                 history_actions=history_compress,
                 verifier_error=error_for_prompt,
                 conductor_suggestion=conductor_suggestion,
+                code_check_errors=code_check_errors,
                 skill_contents=skill_contents,
                 aggregated_api_docs=aggregated_api_docs,
                 op_name=op_name,
@@ -794,13 +773,6 @@ class KernelGen(AgentBase):
             
             # 9. 从 LLM 输出中提取纯代码
             generated_code = self._extract_code(raw_output)
-            
-            # 10. 使用 py_compile 验证语法
-            syntax_ok, syntax_error = self._validate_syntax(generated_code)
-            if syntax_ok:
-                logger.info(f"[KernelGen] py_compile 语法校验通过")
-            else:
-                logger.warning(f"[KernelGen] py_compile 语法校验失败: {syntax_error}")
             
             return generated_code, formatted_prompt, reasoning
         

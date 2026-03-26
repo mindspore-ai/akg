@@ -22,7 +22,7 @@ from akg_agents.op.workflows.base_workflow import OpBaseWorkflow
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.op.langgraph_op.nodes import NodeFactory
 from akg_agents.op.langgraph_op.routers import RouterFactory
-from akg_agents.core.checker import CodeChecker
+from akg_agents.op.utils.code_checker import CodeChecker
 from akg_agents.core_v2.workflows.registry import register_workflow
 
 logger = logging.getLogger(__name__)
@@ -137,8 +137,8 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
         """构建 KernelGen-only 工作流图（带 CodeChecker）"""
         workflow = StateGraph(KernelGenState)
         
-        # 检查是否启用 CodeChecker（默认禁用，因为 LLM 检查容易产生假阳性）
-        enable_code_checker = self.config.get("enable_code_checker", False)
+        # CodeChecker 做纯静态检查（语法/编译/import），默认开启
+        enable_code_checker = self.config.get("enable_code_checker", True)
         
         # 创建 CodeChecker 实例
         code_checker = None
@@ -208,7 +208,6 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
             # 条件边：code_checker 后的路由（指定使用 kernel_gen）
             code_checker_router = RouterFactory.create_code_checker_router(
                 self.config,
-                max_check_retries=self.config.get("max_code_check_retries", 5),
                 code_gen_agent="kernel_gen"
             )
             
