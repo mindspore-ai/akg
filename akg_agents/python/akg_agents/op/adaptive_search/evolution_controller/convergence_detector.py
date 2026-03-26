@@ -62,6 +62,7 @@ class MultiDimensionalConvergenceDetector:
         self._diversity_history: List[float] = []
         self._stop_reason: str = ""
         self._last_checked_history_len: int = 0  # 防止无新数据时重复计算
+        self._frozen_diagnostics: Optional[dict] = None  # 收敛触发瞬间的诊断快照
 
     @property
     def state(self) -> SearchState:
@@ -79,6 +80,10 @@ class MultiDimensionalConvergenceDetector:
             db: 成功记录数据库
             lineage_tree: 谱系树
         """
+        # 触发停止后冻结收敛历史，避免“触发时刻”与“最终收尾”诊断不一致
+        if self._state == SearchState.STOPPED:
+            return
+
         best_record = db.get_best_record()
         if best_record is None:
             return
@@ -103,15 +108,20 @@ class MultiDimensionalConvergenceDetector:
         Returns:
             (should_stop, reason_string)
         """
+        if self._state == SearchState.STOPPED:
+            return True, self._stop_reason
+
         # 安全阀：硬性限制
         if total_submitted >= self.max_total_tasks:
             self._state = SearchState.STOPPED
             self._stop_reason = f"Reached max_total_tasks ({self.max_total_tasks})"
+            self._freeze_diagnostics()
             return True, self._stop_reason
 
         if self.max_time_seconds and elapsed_seconds >= self.max_time_seconds:
             self._state = SearchState.STOPPED
             self._stop_reason = f"Time budget exhausted ({self.max_time_seconds}s)"
+            self._freeze_diagnostics()
             return True, self._stop_reason
 
         # 最少任务保证（防止过早停止）
@@ -127,7 +137,7 @@ class MultiDimensionalConvergenceDetector:
         self._last_checked_history_len = current_len
 
         # 计算收敛信号
-        signals = self._compute_signals(total_success)
+        signals, signal_window = self._compute_signals(total_success)
 
         # 状态转移
         new_state, reason = self._transition(signals)
@@ -142,6 +152,13 @@ class MultiDimensionalConvergenceDetector:
 
         if new_state == SearchState.STOPPED:
             self._stop_reason = reason
+            self._freeze_diagnostics(
+                window=signal_window,
+                plateau_count=signals.s1_count,
+                s1_plateau=signals.s1_plateau,
+                s2_trend=signals.s2_trend,
+                s3_activity=signals.s3_activity,
+            )
             return True, reason
 
         return False, ""
@@ -161,7 +178,7 @@ class MultiDimensionalConvergenceDetector:
 
         return StrategySignal(reason="stopped")
 
-    def _compute_signals(self, total_success: int) -> ConvergenceSignals:
+    def _compute_signals(self, total_success: int) -> Tuple[ConvergenceSignals, int]:
         """计算三维收敛信号（S1 性能停滞、S2 多样性趋势、S3 谱系活跃度）"""
         w = min(self.window, max(total_success // 2, 1))
 
@@ -196,12 +213,13 @@ class MultiDimensionalConvergenceDetector:
             if self._diversity_history else 0.0
         )
 
-        return ConvergenceSignals(
+        signals = ConvergenceSignals(
             s1_plateau=s1_plateau,
             s1_count=self._plateau_count,
             s2_trend=s2_trend,
             s3_activity=s3_activity,
         )
+        return signals, w
 
     def _transition(self, signals: ConvergenceSignals) -> Tuple[SearchState, str]:
         """
@@ -227,7 +245,42 @@ class MultiDimensionalConvergenceDetector:
 
     def get_diagnostics(self) -> dict:
         """获取诊断信息"""
-        w = min(self.window, max(len(self._best_history) // 2, 1))
+        if self._frozen_diagnostics is not None:
+            return dict(self._frozen_diagnostics)
+
+        return self._build_diagnostics()
+
+    def _freeze_diagnostics(
+        self,
+        *,
+        window: Optional[int] = None,
+        plateau_count: Optional[int] = None,
+        s1_plateau: Optional[bool] = None,
+        s2_trend: Optional[str] = None,
+        s3_activity: Optional[float] = None,
+    ) -> None:
+        """冻结收敛触发时刻的诊断快照。"""
+        if self._frozen_diagnostics is not None:
+            return
+        self._frozen_diagnostics = self._build_diagnostics(
+            window=window,
+            plateau_count=plateau_count,
+            s1_plateau=s1_plateau,
+            s2_trend=s2_trend,
+            s3_activity=s3_activity,
+        )
+
+    def _build_diagnostics(
+        self,
+        *,
+        window: Optional[int] = None,
+        plateau_count: Optional[int] = None,
+        s1_plateau: Optional[bool] = None,
+        s2_trend: Optional[str] = None,
+        s3_activity: Optional[float] = None,
+    ) -> dict:
+        """构建当前诊断信息（可带覆盖项，用于冻结触发快照）。"""
+        w = window if window is not None else min(self.window, max(len(self._best_history) // 2, 1))
 
         # 重新计算当前信号值（用于诊断展示）
         perf_improvement = None
@@ -243,26 +296,35 @@ class MultiDimensionalConvergenceDetector:
                 - self._diversity_history[-(w + 1)]
             )
 
+        computed_s1_plateau = perf_improvement is not None and perf_improvement < self.perf_threshold
+        computed_s2_trend = (
+            "declining" if diversity_change is not None and diversity_change < -self.diversity_threshold
+            else "increasing" if diversity_change is not None and diversity_change > self.diversity_threshold
+            else "stable"
+        )
+        computed_s3_activity = self._diversity_history[-1] if self._diversity_history else None
+
+        final_s1_plateau = s1_plateau if s1_plateau is not None else computed_s1_plateau
+        final_s2_trend = s2_trend if s2_trend is not None else computed_s2_trend
+        final_s3_activity = s3_activity if s3_activity is not None else computed_s3_activity
+        final_plateau_count = plateau_count if plateau_count is not None else self._plateau_count
+
         return {
             "state": self._state.value,
             "stop_reason": self._stop_reason,
-            "plateau_count": self._plateau_count,
+            "plateau_count": final_plateau_count,
             "patience": self.patience,
             "window": w,
             # S1 相关
             "s1_perf_improvement": round(perf_improvement, 6) if perf_improvement is not None else None,
             "s1_perf_threshold": self.perf_threshold,
-            "s1_plateau": perf_improvement is not None and perf_improvement < self.perf_threshold,
+            "s1_plateau": final_s1_plateau,
             # S2 相关
             "s2_diversity_change": round(diversity_change, 6) if diversity_change is not None else None,
             "s2_diversity_threshold": self.diversity_threshold,
-            "s2_trend": (
-                "declining" if diversity_change is not None and diversity_change < -self.diversity_threshold
-                else "increasing" if diversity_change is not None and diversity_change > self.diversity_threshold
-                else "stable"
-            ),
+            "s2_trend": final_s2_trend,
             # S3 相关
-            "s3_activity": round(self._diversity_history[-1], 4) if self._diversity_history else None,
+            "s3_activity": round(final_s3_activity, 4) if final_s3_activity is not None else None,
             "s3_activity_threshold": self.activity_threshold,
             # 历史
             "current_best_gen_time": self._best_history[-1] if self._best_history else None,
