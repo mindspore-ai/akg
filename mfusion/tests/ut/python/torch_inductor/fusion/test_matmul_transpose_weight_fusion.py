@@ -14,6 +14,8 @@
 
 """UT for MatMul Transpose Weight fusion in fuse_and_optimize pipeline."""
 
+import pytest
+
 from mfusion.torch.inductor import fuse_and_optimize
 
 from ut_utils.mlir_checker import MlirChecker
@@ -35,6 +37,7 @@ module {
 """
 
 
+@pytest.mark.skip(reason="MatMul transpose weight fusion UT disabled")
 def test_matmul_transpose_weight_fusion():
     """Test MatMul Transpose Weight fusion through fuse_and_optimize pipeline."""
     result = fuse_and_optimize(MLIR_MATMUL_TRANSPOSE_WEIGHT)

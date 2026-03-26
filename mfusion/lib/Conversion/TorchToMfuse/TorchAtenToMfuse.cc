@@ -455,7 +455,6 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
   patterns.add<ConvertAtenBroadcastTo>(converter, context);
   patterns.add<ConvertAtenConvolution>(converter, context);
   patterns.add<ConvertAtenExpand>(converter, context);
-  patterns.add<ConvertAtenPermute>(converter, context);
   patterns.add<ConvertAtenRmsNorm>(converter, context);
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
   patterns.add<ConvertAtenTransposeInt>(converter, context);
