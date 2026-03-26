@@ -71,11 +71,10 @@ use_evolution_controller: true
 
 ### Solver 3：多维收敛检测
 
-监测四个信号：
+监测三个信号：
 - S1：性能是否停滞（最优 gen_time 不再改善）
-- S2：多样性是否在下降（谱系分布是否在坍缩）
+- S2：多样性趋势（用于诊断展示，不参与停机判定）
 - S3：谱系是否被充分探索
-- S4：边际收益是否已消失（新任务是否还能产生突破）
 
 三状态机：`EXPLORING` → `WATCHING` → `STOPPED`
 
@@ -112,7 +111,7 @@ use_evolution_controller: true
 | `perf_improvement_threshold` | 0.01 | 性能改善阈值（1%） |
 | `diversity_change_threshold` | 0.05 | 多样性变化阈值 |
 | `activity_threshold` | 0.8 | 谱系充分探索阈值 |
-| `patience` | 2 | 停滞容忍窗口数 |
+| `patience` | 3 | 停滞容忍窗口数 |
 | `max_total_tasks` | 100 | 安全阀（硬性上限） |
 | `max_time_seconds` | None | 时间预算（秒，可选） |
 

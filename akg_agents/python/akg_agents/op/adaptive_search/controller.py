@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 
-from akg_agents.op.adaptive_search.success_db import SuccessDB
+from akg_agents.op.adaptive_search.success_db import SuccessDB, SuccessRecord
 from akg_agents.op.adaptive_search.task_pool import AsyncTaskPool
 from akg_agents.op.adaptive_search.ucb_selector import UCBParentSelector
 from akg_agents.op.adaptive_search.task_generator import TaskGenerator, TaskGeneratorConfig
@@ -980,21 +980,18 @@ class AdaptiveSearchController:
             md_content.append("")
             md_content.append("### 收敛判定逻辑")
             md_content.append("")
-            md_content.append("WATCHING → STOPPED 需同时满足：S1 连续停滞 ≥ patience **AND** S2 = declining **AND** S3 ≥ activity_threshold")
+            md_content.append("WATCHING → STOPPED 需同时满足：S1 连续停滞 ≥ patience **AND** S3 ≥ activity_threshold（S2 仅用于诊断展示）")
             md_content.append("")
 
             all_met = (s1_plateau
                        and plateau_count >= (patience if isinstance(patience, int) else 999)
-                       and s2_trend == "declining"
                        and s3_val is not None and s3_val >= (s3_thr if isinstance(s3_thr, float) else 999))
             if all_met:
-                md_content.append("**判定结果：三个条件全部满足 → 收敛停止**")
+                md_content.append("**判定结果：停止条件满足（S1+S3） → 收敛停止**")
             else:
                 conditions = []
                 if not s1_plateau or plateau_count < (patience if isinstance(patience, int) else 999):
                     conditions.append("S1 未持续停滞")
-                if s2_trend != "declining":
-                    conditions.append(f"S2 = {s2_trend}（非 declining）")
                 if s3_val is None or s3_val < (s3_thr if isinstance(s3_thr, float) else 999):
                     conditions.append(f"S3 = {s3_val_str}（未达阈值 {s3_thr}）")
                 md_content.append(f"**判定结果：未满足收敛条件**（原因：{'; '.join(conditions)}）")
@@ -1026,4 +1023,3 @@ class AdaptiveSearchController:
 
         logger.info(f"Lineage graph saved to: {save_path}")
         return save_path
-
