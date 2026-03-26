@@ -121,7 +121,6 @@ class DvmSupportChecker {
     auto castCheck = [](Operation *op) { return castCheckFunc(op); };
     auto intOpCheck = [](Operation *op) { return intOpCheckFunc(op); };
     auto compareCheck = [](Operation *op) { return compareCheckFunc(op); };
-    auto transposeOpCheck = [](Operation *op) { return transposeOpCheckFunc(op); };
     // Should add collective_comm_op_check when support AllReduce.
 
     // cast op
@@ -155,8 +154,6 @@ class DvmSupportChecker {
     checkFunc_["mfuse.matmul"] = {matmulOpCheck, inputCheckAll};
     checkFunc_["mfuse.batch_matmul"] = {matmulOpCheck, inputCheckAll};
     checkFunc_["mfuse.grouped_matmul"] = {groupedMatmulOpCheck, inputCheckAll};
-    // transpose op
-    checkFunc_["mfuse.permute"] = {transposeOpCheck, inputCheckAll};
     checkFunc_["mfuse.reshape"] = {reshapeOpCheck};
   }
 
@@ -211,11 +208,6 @@ class DvmSupportChecker {
 
   static bool mulOpCheck(Operation *op) {
     return mixTypeCheck(op, [](Type type) { return isFloatIntType(type); }, {});
-  }
-
-  static bool transposeOpCheckFunc(Operation *op) {
-    Type outputType = getElementType(op->getResult(0).getType());
-    return outputType && (outputType.isF32() || outputType.isF16());
   }
 
   static bool matmulOpCheck(Operation *op) {
@@ -524,10 +516,10 @@ llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOps() {
     "mfuse.logical_or",   "mfuse.logical_not",
     "mfuse.select",       "mfuse.assign",
     "mfuse.reduce_sum",   "mfuse.is_finite",
-    "mfuse.reshape",      "mfuse.permute",
-    "mfuse.floor",        "mfuse.ceil",
-    "mfuse.trunc",        "mfuse.matmul",
-    "mfuse.batch_matmul", "mfuse.grouped_matmul",
+    "mfuse.reshape",      "mfuse.floor",
+    "mfuse.ceil",         "mfuse.trunc",
+    "mfuse.matmul",       "mfuse.batch_matmul",
+    "mfuse.grouped_matmul",
   });
 }
 
