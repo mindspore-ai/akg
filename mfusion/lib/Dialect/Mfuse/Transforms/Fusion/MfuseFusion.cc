@@ -71,7 +71,6 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
         // FuseMatMulBiasAdd: matmul/batch_matmul+add(bias) -> matmul_with_bias;
         // before reshape so direct matmul+add is fused.
         // FuseMatmulUnsqueezeSqueeze: normalize 1D inputs (reshape); after Cast for stable type.
-        // FuseMatmulTransposeWeight: alignment (permute/trans); after shape normalization.
         // FuseBatchMatMul: transpose elimination (permute into trans); BatchMatMul 2D -> MatMul.
         // FuseBatchMatMulToMul: matmul/batch_matmul (k=1) -> mul; after shape normalization.
         // FuseMatmulReshapeBiasAdd: matmul->reshape->add -> matmul_with_bias; last so it sees final matmul form.
@@ -79,8 +78,6 @@ struct MfuseFusionPass : public impl::MfuseFusionBase<MfuseFusionPass> {
         {"fuse-matmul-bias-add", []() { return createFuseMatMulBiasAddPass(); }},
         {"fuse-matmul-unsqueeze-squeeze",
          []() { return createFuseMatmulUnsqueezeSqueezePass(); }},
-        {"fuse-matmul-transpose-weight",
-         []() { return createFuseMatmulTransposeWeightPass(); }},
         {"fuse-batch-matmul",
          []() { return createFuseBatchMatMulPass(); }},
         {"fuse-batch-matmul-to-mul", []() { return createFuseBatchMatMulToMulPass(); }},
