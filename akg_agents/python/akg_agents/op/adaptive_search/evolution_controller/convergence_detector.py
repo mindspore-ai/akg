@@ -17,11 +17,10 @@ Solver 3: Multi-Dimensional Convergence Detector
 
 多维收敛检测器。
 
-四个独立的收敛信号：
+三个独立的收敛信号：
   S1: 性能停滞度 (Performance Plateau)
   S2: 多样性趋势 (Diversity Trend)
   S3: 谱系活跃度 (Lineage Activity)
-  S4: 边际收益 (Marginal Utility)
 
 三状态机：
   EXPLORING → WATCHING → STOPPED
@@ -229,10 +228,10 @@ class MultiDimensionalConvergenceDetector:
         WATCHING: 性能停滞但可能还有探索空间
         STOPPED: 确认收敛或达到极限
         """
-        # 真正收敛：停滞 + 多样性下降 + 谱系充分探索
+        # 真正收敛：持续停滞 + 谱系充分探索
+        # S2 仅用于诊断展示，不参与停止判定。
         if (signals.s1_plateau
                 and signals.s1_count >= self.patience
-                and signals.s2_trend == "declining"
                 and signals.s3_activity >= self.activity_threshold):
             return SearchState.STOPPED, "converged"
 
