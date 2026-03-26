@@ -22,7 +22,7 @@ from akg_agents.op.workflows.base_workflow import OpBaseWorkflow
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.op.langgraph_op.nodes import NodeFactory
 from akg_agents.op.langgraph_op.routers import RouterFactory
-from akg_agents.core.checker import CodeChecker
+from akg_agents.op.utils.code_checker import CodeChecker
 from akg_agents.core_v2.workflows.registry import register_workflow
 
 logger = logging.getLogger(__name__)
@@ -145,7 +145,8 @@ class DefaultWorkflowV2(OpBaseWorkflow):
                 raise RuntimeError(f"Required agent '{agent_name}' is not available. "
                                  f"Available agents: {list(self.agents.keys())}")
         
-        enable_code_checker = self.config.get("enable_code_checker", False)
+        # CodeChecker 做纯静态检查（语法/编译/import），默认开启
+        enable_code_checker = self.config.get("enable_code_checker", True)
         
         code_checker = None
         if enable_code_checker:
@@ -208,7 +209,6 @@ class DefaultWorkflowV2(OpBaseWorkflow):
             
             code_checker_router = RouterFactory.create_code_checker_router(
                 self.config,
-                max_check_retries=self.config.get("max_code_check_retries", 5),
                 code_gen_agent="kernel_gen"
             )
             

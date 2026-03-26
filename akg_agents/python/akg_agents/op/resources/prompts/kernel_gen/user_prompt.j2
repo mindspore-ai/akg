@@ -56,9 +56,20 @@
 
 ---
 {%- endif %}
-{%- if verifier_error or conductor_suggestion %}
 
+{% if verifier_error or conductor_suggestion or code_check_errors %}
 ## 执行历史和反馈
+
+{% if code_check_errors %}
+### 代码静态检查错误（需优先修复）
+
+**以下是代码静态检查发现的问题，这些是语法/编译/导入级别的错误，必须修复：**
+
+{{ code_check_errors }}
+
+**注意：上述问题是基于静态检查发现的确定性错误，请严格按照建议修改。**
+{% endif %}
+
 {% if verifier_error %}
 
 ### Verifier 错误信息
