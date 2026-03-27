@@ -39,7 +39,7 @@
 struct MLogStream {
   llvm::raw_ostream &os;
   bool shouldLog;
-  MLogStream(llvm::raw_ostream &stream, bool log = true) : os(stream), shouldLog(log) {}
+  explicit MLogStream(llvm::raw_ostream &stream, bool log = true) : os(stream), shouldLog(log) {}
   ~MLogStream() { if (shouldLog) os << "\n"; }
   MLogStream(const MLogStream &) = delete;
   MLogStream &operator=(const MLogStream &) = delete;
@@ -75,7 +75,7 @@ namespace MLog {
     }
     errno = 0;
     char *end = nullptr;
-    long v = std::strtol(p, &end, 10);
+    int64_t v = static_cast<int64_t>(std::strtol(p, &end, 10));
     if (errno != 0 || end == p || *end != '\0') {
       return 1;
     }
@@ -100,21 +100,20 @@ namespace MLog {
       case DEBUG:
       case WARNING:
       case ERROR:
-      default:
         return llvm::errs();
     }
+    // This line should never be reached due to the switch covering all enum values
+    return llvm::errs();
   }
-}
+}  // namespace MLog
 
 // Define convenience constants for backward compatibility
 // These allow MLOG(INFO), MLOG(DEBUG), MLOG(WARNING), MLOG(ERROR) syntax
-// Using static constexpr in anonymous namespace to avoid ODR violations
-namespace {
-  static constexpr MLog::Level INFO = MLog::INFO;
-  static constexpr MLog::Level DEBUG = MLog::DEBUG;
-  static constexpr MLog::Level WARNING = MLog::WARNING;
-  static constexpr MLog::Level ERROR = MLog::ERROR;
-}
+// Using inline constexpr to avoid ODR violations
+inline constexpr MLog::Level INFO = MLog::INFO;
+inline constexpr MLog::Level DEBUG = MLog::DEBUG;
+inline constexpr MLog::Level WARNING = MLog::WARNING;
+inline constexpr MLog::Level ERROR = MLog::ERROR;
 
 // Main logging macro with file, function, line information, and log level.
 // Whether a level is printed is controlled by environment variable MLOG_LEVEL (0-3).
@@ -127,8 +126,9 @@ namespace {
   []() -> MLogStream { \
     if (MLog::shouldLog(LEVEL)) { \
       MLogStream stream(MLog::getStream(LEVEL), true); \
-      stream << "[" << MLOG_LEVEL_TO_STRING(LEVEL) << "]" << "[" << __FILE__ << ":" << __LINE__ << ":" << __func__ << "] "; \
-      return std::move(stream); \
+      stream << "[" << MLOG_LEVEL_TO_STRING(LEVEL) << "]" << "[" \
+             << __FILE__ << ":" << __LINE__ << ":" << __func__ << "] "; \
+      return stream; \
     } \
     return MLogStream(llvm::nulls(), false); \
   }()
@@ -136,12 +136,12 @@ namespace {
 // Alternative DEBUG macro using LLVM_DEBUG (per-pass switch via DEBUG_TYPE and LLVM_DEBUG).
 // Use MLOG(DEBUG) with MLOG_LEVEL=0 for simple global debug; use MLOG_DEBUG for pass-specific debug.
 #define MLOG_DEBUG \
-  LLVM_DEBUG(llvm::dbgs() << "[" << MLOG_LEVEL_TO_STRING(DEBUG) << "][" << __FILE__ << ":" << __LINE__ << ":" << __func__ << "] ")
+  LLVM_DEBUG(llvm::dbgs() << "[" << MLOG_LEVEL_TO_STRING(DEBUG) << "]" << "[" \
+             << __FILE__ << ":" << __LINE__ << ":" << __func__ << "] ")
 
 // Convenience macros for each log level (aligned with LLVM conventions)
 #define MLOG_INFO MLOG(MLog::INFO)
 #define MLOG_WARNING MLOG(MLog::WARNING)
 #define MLOG_ERROR MLOG(MLog::ERROR)
 
-#endif // MFUSION_SUPPORT_LOGGING_H
-
+#endif  //  MFUSION_SUPPORT_LOGGING_H

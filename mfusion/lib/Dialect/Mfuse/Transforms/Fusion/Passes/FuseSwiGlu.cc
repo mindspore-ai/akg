@@ -161,7 +161,7 @@ class FuseSwiGluWithReshapePattern : public OpRewritePattern<MulOp> {
     }
     // Check if the reshape output has more than 3 dimensions
     auto reshapeOutputType = dyn_cast<RankedTensorType>(inputReshapeOp.getResult().getType());
-    if (!reshapeOutputType || reshapeOutputType.getRank() > kDim3) {
+    if (!reshapeOutputType || static_cast<size_t>(reshapeOutputType.getRank()) > kDim3) {
       return failure();
     }
     Value originalInput = inputReshapeOp.getInput();

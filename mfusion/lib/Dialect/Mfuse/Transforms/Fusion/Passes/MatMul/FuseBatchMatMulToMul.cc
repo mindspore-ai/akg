@@ -57,7 +57,7 @@ constexpr int64_t kKDimensionSize = static_cast<int64_t>(kDim1);
 /// Returns true if k=1 for both input and weight.
 static bool isKDimensionOne(RankedTensorType inputType, RankedTensorType weightType, bool transposeA, bool transposeB) {
   // Ensure both types have at least rank 2
-  if (inputType.getRank() < kDim2 || weightType.getRank() < kDim2) {
+  if (static_cast<size_t>(inputType.getRank()) < kDim2 || static_cast<size_t>(weightType.getRank()) < kDim2) {
     return false;
   }
   // K is always one of the last two dimensions (batch matmul semantics)

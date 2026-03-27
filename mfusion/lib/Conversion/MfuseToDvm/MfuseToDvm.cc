@@ -48,7 +48,8 @@ static bool isDvmOutlinedOp(Operation *op) {
 struct ConvertMulOp : public OpConversionPattern<mfuse::MulOp> {
   using OpConversionPattern::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(mfuse::MulOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(mfuse::MulOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
     if (!isDvmOutlinedOp(op.getOperation())) {
       return failure();
     }
@@ -67,7 +68,7 @@ static void insertLoadStoreOps(ModuleOp module) {
       Block &entryBlock = func.front();
       OpBuilder builder(&entryBlock, entryBlock.begin());
       for (auto arg : entryBlock.getArguments()) {
-        if (arg.getType().isa<RankedTensorType>()) {
+        if (mlir::isa<RankedTensorType>(arg.getType())) {
           auto loadOp = builder.create<dvm::LoadOp>(func.getLoc(), arg.getType(), arg);
           arg.replaceAllUsesExcept(loadOp.getResult(), loadOp);
         }
@@ -78,7 +79,7 @@ static void insertLoadStoreOps(ModuleOp module) {
       OpBuilder builder(returnOp);
       for (unsigned i = 0; i < returnOp.getNumOperands(); ++i) {
         Value operand = returnOp.getOperand(i);
-        if (operand.getType().isa<RankedTensorType>()) {
+        if (mlir::isa<RankedTensorType>(operand.getType())) {
           auto storeOp = builder.create<dvm::StoreOp>(returnOp.getLoc(), operand.getType(), operand);
           returnOp.setOperand(i, storeOp.getResult());
         }
@@ -111,9 +112,8 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
     target.addLegalDialect<mlir::func::FuncDialect>();
     target.addLegalDialect<mlir::arith::ArithDialect>();
     target.addLegalDialect<mlir::mfuse::MfuseDialect>();
-    target.addDynamicallyLegalOp<mlir::mfuse::MulOp>([](mlir::mfuse::MulOp op) {
-      return !isDvmOutlinedOp(op.getOperation());
-    });
+    target.addDynamicallyLegalOp<mlir::mfuse::MulOp>(
+      [](mlir::mfuse::MulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
 
     RewritePatternSet patterns(ctx);
     patterns.add<ConvertMulOp>(ctx);
