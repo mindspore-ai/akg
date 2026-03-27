@@ -51,7 +51,7 @@ struct MfuseUtCreateReshapePass
       return;
     }
 
-    auto inputType = func.getArgument(0).getType().dyn_cast<mlir::RankedTensorType>();
+    auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(func.getArgument(0).getType());
     if (!inputType || inputType.getRank() != 2) {
       return;
     }

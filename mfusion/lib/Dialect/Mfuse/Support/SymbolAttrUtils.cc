@@ -30,11 +30,11 @@ namespace mfuse {
 // ---------------------------------------------------------------------------
 
 bool SymbolAttrUtils::isSymbolicShapeEncoding(mlir::Attribute encoding) {
-  return encoding && encoding.isa<mlir::mfuse::SymbolicShapeAttr>();
+  return encoding && mlir::isa<mlir::mfuse::SymbolicShapeAttr>(encoding);
 }
 
 mlir::Attribute SymbolAttrUtils::getSymbolicShapeAttrFromEncoding(mlir::Type type) {
-  auto ranked = type.dyn_cast<mlir::RankedTensorType>();
+  auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(type);
   if (!ranked) {
     return {};
   }
@@ -42,7 +42,7 @@ mlir::Attribute SymbolAttrUtils::getSymbolicShapeAttrFromEncoding(mlir::Type typ
   if (!encoding) {
     return {};
   }
-  if (auto dict = encoding.dyn_cast<mlir::DictionaryAttr>()) {
+  if (auto dict = mlir::dyn_cast<mlir::DictionaryAttr>(encoding)) {
     return dict.get(mlir::StringAttr::get(type.getContext(), kSymShapeKey));
   }
   if (isSymbolicShapeEncoding(encoding)) {
@@ -52,7 +52,7 @@ mlir::Attribute SymbolAttrUtils::getSymbolicShapeAttrFromEncoding(mlir::Type typ
 }
 
 mlir::FailureOr<llvm::SmallVector<SymbolAttrUtils::SymExpr>> SymbolAttrUtils::getSymbolicShapeExprs(mlir::Type type) {
-  auto ranked = type.dyn_cast<mlir::RankedTensorType>();
+  auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(type);
   if (!ranked) {
     return mlir::failure();
   }
@@ -60,7 +60,7 @@ mlir::FailureOr<llvm::SmallVector<SymbolAttrUtils::SymExpr>> SymbolAttrUtils::ge
   if (ranked.hasStaticShape()) {
     return symBuilder.buildSymExprsFromStaticShape(ranked.getShape());
   }
-  auto symAttr = getSymbolicShapeAttrFromEncoding(type).dyn_cast_or_null<mlir::mfuse::SymbolicShapeAttr>();
+  auto symAttr = mlir::dyn_cast_or_null<mlir::mfuse::SymbolicShapeAttr>(getSymbolicShapeAttrFromEncoding(type));
   if (!symAttr) {
     return mlir::failure();
   }
@@ -91,7 +91,7 @@ mlir::Attribute SymbolAttrUtils::mergeEncoding(mlir::RankedTensorType type, mlir
     return symshapeAttr;
   }
 
-  if (auto dict = encoding.dyn_cast_or_null<mlir::DictionaryAttr>()) {
+  if (auto dict = mlir::dyn_cast_or_null<mlir::DictionaryAttr>(encoding)) {
     auto existing = dict.get(symKey);
     if (existing == symshapeAttr) {
       return dict;
@@ -158,7 +158,7 @@ mlir::Attribute SymbolAttrUtils::createSymbolicShapeAttr(mlir::OpBuilder &builde
 }
 
 bool SymbolAttrUtils::attachToValue(mlir::Value value, mlir::Attribute symshapeAttr) {
-  auto ranked = value.getType().dyn_cast<mlir::RankedTensorType>();
+  auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(value.getType());
   if (!ranked) {
     return false;
   }
@@ -167,11 +167,11 @@ bool SymbolAttrUtils::attachToValue(mlir::Value value, mlir::Attribute symshapeA
     return true;
   }
 
-  if (auto result = value.dyn_cast<mlir::OpResult>()) {
+  if (auto result = mlir::dyn_cast<mlir::OpResult>(value)) {
     result.setType(newType);
     return true;
   }
-  if (auto arg = value.dyn_cast<mlir::BlockArgument>()) {
+  if (auto arg = mlir::dyn_cast<mlir::BlockArgument>(value)) {
     arg.setType(newType);
     return true;
   }

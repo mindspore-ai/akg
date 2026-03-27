@@ -56,7 +56,7 @@ struct SymbolAttrUtils {
 
   /// Returns true iff type is a RankedTensorType with no dynamic dimensions.
   static inline bool isStaticShape(mlir::Type type) {
-    auto ranked = type.dyn_cast<mlir::RankedTensorType>();
+    auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(type);
     return ranked && ranked.hasStaticShape();
   }
 

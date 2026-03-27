@@ -109,7 +109,7 @@ class Area : public std::enable_shared_from_this<Area> {
   std::vector<AreaWithRelation> usersWithRelation() const;
 
   /// Get the number of users
-  size_t userNum() const { return users_.size(); }
+  size_t userNum() const { return hd_->userNum(); }
 
   /// Get the mode of this area
   AreaMode mode() const { return mode_; }
@@ -160,7 +160,6 @@ class Area : public std::enable_shared_from_this<Area> {
   std::vector<Node *> nodes_;
   AreaMode mode_{AreaMode::BASIC};
   std::vector<AreaWithRelation> inputs_with_relation_;
-  std::vector<AreaWithRelation> users_;
   std::vector<Node *> area_outputs_;
 };
 

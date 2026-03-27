@@ -47,7 +47,7 @@ static bool isOutlinedFunc(func::FuncOp func, const std::string &fusionType) {
 }
 
 static bool isDynamicType(Type type) {
-  auto shapedType = type.dyn_cast<ShapedType>();
+  auto shapedType = mlir::dyn_cast<ShapedType>(type);
   return shapedType && shapedType.hasRank() && !shapedType.hasStaticShape();
 }
 
@@ -57,27 +57,19 @@ static bool isDynamicSubgraph(func::FuncOp func) {
   }
 
   auto funcType = func.getFunctionType();
-  for (Type type : funcType.getInputs()) {
-    if (isDynamicType(type)) {
-      return true;
-    }
+  if (std::any_of(funcType.getInputs().begin(), funcType.getInputs().end(), isDynamicType)) {
+    return true;
   }
-  for (Type type : funcType.getResults()) {
-    if (isDynamicType(type)) {
-      return true;
-    }
+  if (std::any_of(funcType.getResults().begin(), funcType.getResults().end(), isDynamicType)) {
+    return true;
   }
 
   auto walkResult = func.walk([&](Operation *op) {
-    for (Type type : op->getOperandTypes()) {
-      if (isDynamicType(type)) {
-        return WalkResult::interrupt();
-      }
+    if (std::any_of(op->getOperandTypes().begin(), op->getOperandTypes().end(), isDynamicType)) {
+      return WalkResult::interrupt();
     }
-    for (Type type : op->getResultTypes()) {
-      if (isDynamicType(type)) {
-        return WalkResult::interrupt();
-      }
+    if (std::any_of(op->getResultTypes().begin(), op->getResultTypes().end(), isDynamicType)) {
+      return WalkResult::interrupt();
     }
     return WalkResult::advance();
   });
@@ -131,11 +123,9 @@ struct ConvertFusedSubgraphToCustomCallPass
     }
 
     SmallVector<func::FuncOp> outlinedFuncs;
-    for (auto func : module.getOps<func::FuncOp>()) {
-      if (isOutlinedFunc(func, kernelGenerator)) {
-        outlinedFuncs.push_back(func);
-      }
-    }
+    std::copy_if(module.getOps<func::FuncOp>().begin(), module.getOps<func::FuncOp>().end(),
+                 std::back_inserter(outlinedFuncs),
+                 [&](func::FuncOp func) { return isOutlinedFunc(func, kernelGenerator); });
 
     for (auto func : outlinedFuncs) {
       auto subgraphAttr = getCopiedSubgraphNameAttr(func);

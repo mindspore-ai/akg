@@ -190,9 +190,6 @@ std::vector<AreaWithRelation> Area::usersWithRelation() const {
 int64_t Area::computeSize() const {
   auto op = dom()->op();
   auto op_type = op->getResult(0).getType();
-  if (isDynamic(op_type)) {
-    return 0;
-  }
   auto op_shape = mlir::dyn_cast<RankedTensorType>(op_type).getShape();
   return std::accumulate(op_shape.begin(), op_shape.end(), static_cast<int64_t>(1), std::multiplies<int64_t>());
 }

@@ -68,7 +68,7 @@ static LogicalResult fuseMatmulReshapeBiasAdd(Value addLhs, Value addRhs, Operat
     return failure();
   }
 
-  if (matmulType.getRank() < kDim1 || reshapeType.getRank() < kDim1) {
+  if (static_cast<size_t>(matmulType.getRank()) < kDim1 || static_cast<size_t>(reshapeType.getRank()) < kDim1) {
     return failure();
   }
   int64_t lastMatmul = matmulType.getShape().back();
