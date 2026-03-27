@@ -97,15 +97,16 @@ struct ShapeNormalState {
   llvm::StringMap<std::pair<Value, int64_t>> DynSymtoArgDim;
   DenseMap<Value, DenseMap<int64_t, Value>> shapeStoreMap;
   DenseSet<Value> ValuesinFunc;
+  DenseMap<Operation *, DenseMap<Value, DenseMap<int64_t, std::string>>> preservedOneValueIndices;
   DenseMap<Operation *, SmallVector<SmallVector<std::string>>> returnOpShapes;
   DenseMap<Operation *, SmallVector<std::string>> affineMapSymDims;
-  DenseMap<Operation *, SmallVector<int64_t>> UpdatedAxes;
+  DenseMap<Operation *, SmallVector<std::string>> unbreakableAxis;
+  DenseMap<Operation *, SmallVector<int64_t>> UpdatedAxesIndex;
   DenseMap<Value, Value> ssaMap;
   DenseSet<Operation *> entryMaterializedOps;
   DenseSet<Operation *> toDeleteOps;
   llvm::StringMap<SmallVector<std::string>> decompositions;
   llvm::StringMap<GlobalTargetInfo> globalTargets;
-
   ShapeNormalState() : manager(SymbolicShapeAnalysis::getInstance()) { axisSizes["1"] = 1; }
 
   SmallVector<std::string> getDecomposition(const std::string &axis) const {
@@ -417,8 +418,8 @@ struct ShapeNormalState {
     decompositions[parentAxis] = newChildAxes;
   }
 
-  std::string createNewSymbolicDim(int64_t dimSize) {
-    if (dimSize == 1) {
+  std::string createNewSymbolicDim(int64_t dimSize, bool isPreservedOne = false) {
+    if (dimSize == 1 && !isPreservedOne) {
       return "1";
     }
     std::string axis = manager.newSymbolicDim();
@@ -446,29 +447,22 @@ struct ShapeNormalState {
     if (Axis1 == "1") {
       return "1";
     }
-    std::string oldAxis, newAxis;
-
-    if (std::stoi(Axis1.substr(1)) < std::stoi(Axis2.substr(1))) {
-      newAxis = Axis1;
-      oldAxis = Axis2;
-    } else if (std::stoi(Axis1.substr(1)) > std::stoi(Axis2.substr(1))) {
-      newAxis = Axis2;
-      oldAxis = Axis1;
-    } else {
+    int n1 = std::stoi(Axis1.substr(1));
+    int n2 = std::stoi(Axis2.substr(1));
+    if (n1 == n2) {
       return Axis1;
     }
+    std::string newAxis = n1 < n2 ? Axis1 : Axis2;
+    std::string oldAxis = n1 < n2 ? Axis2 : Axis1;
 
     for (Value v : ValuesinFunc) {
       bool needUpdate = false;
       SmallVector<std::string> newSymShape;
       auto symShape = manager.getSymbolicShapeAutoComplete(v.getType());
       for (const std::string &sym : symShape) {
-        if (sym == oldAxis) {
-          newSymShape.push_back(newAxis);
-          needUpdate = true;
-        } else {
-          newSymShape.push_back(sym);
-        }
+        bool isOld = sym == oldAxis;
+        needUpdate |= isOld;
+        newSymShape.push_back(isOld ? newAxis : sym);
       }
       if (needUpdate) {
         Type newType = manager.updateSymbolicShape(v.getType(), newSymShape);
@@ -483,25 +477,20 @@ struct ShapeNormalState {
     }
 
     for (auto &entry : decompositions) {
-      for (size_t i = 0; i < entry.second.size(); i++) {
-        if (entry.second[i] == oldAxis) {
-          entry.second[i] = newAxis;
-        }
-      }
+      std::replace(entry.second.begin(), entry.second.end(), oldAxis, newAxis);
     }
 
     for (auto &entry : affineMapSymDims) {
-      for (size_t i = 0; i < entry.second.size(); i++) {
-        if (entry.second[i] == oldAxis) {
-          entry.second[i] = newAxis;
-        }
-      }
+      std::replace(entry.second.begin(), entry.second.end(), oldAxis, newAxis);
     }
 
-    if (DynSymtoArgDim.find(oldAxis) != DynSymtoArgDim.end()) {
-      if (DynSymtoArgDim[oldAxis].second == -1 && isa<BlockArgument>(DynSymtoArgDim[oldAxis].first)) {
-        DynSymtoArgDim[newAxis] = DynSymtoArgDim[oldAxis];
-      }
+    for (auto &entry : unbreakableAxis) {
+      std::replace(entry.second.begin(), entry.second.end(), oldAxis, newAxis);
+    }
+
+    auto dynIt = DynSymtoArgDim.find(oldAxis);
+    if (dynIt != DynSymtoArgDim.end() && dynIt->second.second == -1 && isa<BlockArgument>(dynIt->second.first)) {
+      DynSymtoArgDim[newAxis] = dynIt->second;
     }
 
     return newAxis;
@@ -528,8 +517,10 @@ struct ShapeNormalState {
 
     for (const std::string &axis : group) {
       int64_t axisSize = axisSizes[axis];
-      if (axisSize == -1) {
+      if (axisSize == ShapedType::kDynamic) {
+        // assert: The result of collapsing a group of axes containing a dynamic axis must also be a dynamic axis
         groupSize = ShapedType::kDynamic;
+        break;
       }
       groupSize *= axisSize;
     }
@@ -726,25 +717,34 @@ struct ShapeNormalState {
     for (int64_t i = 0; i < rank; ++i) {
       Value dimVal;
       if (targetSizes[i] != ShapedType::kDynamic) {
-        dimVal = rewriter.create<arith::ConstantIndexOp>(loc, targetSizes[i]).getResult();
+        auto cstOp = rewriter.create<arith::ConstantOp>(loc, i64Ty, rewriter.getIntegerAttr(i64Ty, targetSizes[i]));
+        entryMaterializedOps.insert(cstOp);
+        dimVal = cstOp.getResult();
       } else {
         auto [src, idx] = DynSymtoArgDim[targetSymShape[i]];
         if (idx == -1) {
           if (src.getType() != i64Ty) {
-            dimVal = rewriter.create<arith::IndexCastOp>(loc, i64Ty, src).getResult();
+            auto castOp = rewriter.create<arith::IndexCastOp>(loc, i64Ty, src);
+            entryMaterializedOps.insert(castOp);
+            dimVal = castOp.getResult();
           } else {
             dimVal = src;
           }
         } else {
-          dimVal = rewriter.create<memref::DimOp>(loc, src, idx).getResult();
+          auto dimOp = rewriter.create<memref::DimOp>(loc, src, idx);
+          entryMaterializedOps.insert(dimOp);
+          dimVal = dimOp.getResult();
           if (dimVal.getType() != i64Ty) {
-            dimVal = rewriter.create<arith::IndexCastOp>(loc, i64Ty, dimVal).getResult();
+            auto castOp = rewriter.create<arith::IndexCastOp>(loc, i64Ty, dimVal);
+            entryMaterializedOps.insert(castOp);
+            dimVal = castOp.getResult();
           }
         }
       }
-      entryMaterializedOps.insert(dimVal.getDefiningOp());
-      rewriter.create<memref::StoreOp>(loc, dimVal, shapeMemref,
-                                       ValueRange{rewriter.create<arith::ConstantIndexOp>(loc, i)});
+      auto indexCst = rewriter.create<arith::ConstantIndexOp>(loc, i);
+      entryMaterializedOps.insert(indexCst);
+      auto storeOp = rewriter.create<memref::StoreOp>(loc, dimVal, shapeMemref, ValueRange{indexCst});
+      entryMaterializedOps.insert(storeOp);
     }
     Type targetRetType = manager.updateSymbolicShape(MemRefType::get(targetSizes, elementType), inputSymshape);
     auto reshapeOp = rewriter.create<memref::ReshapeOp>(loc, targetRetType, newRet, shapeMemref);
@@ -856,6 +856,23 @@ struct ShapeNormalState {
     return ops;
   }
 
+  void applyUnbreakableSymDimLabels(const std::string &symDim) {
+    SmallVector<std::string> flat = expandAxisRecursively(symDim);
+    if (flat.size() == 1) {
+      (void)manager.assignLabel(flat[0]);
+      return;
+    }
+    for (size_t i = 1; i < flat.size(); ++i) {
+      if (manager.getLabel(flat[i]) != manager.getLabel(flat[i - 1])) {
+        isSupported = false;
+        return;
+      }
+    }
+    int64_t newLabel = manager.assignLabel(flat[0]);
+    for (size_t i = 1; i < flat.size(); ++i) manager.assignLabel(flat[i], newLabel);
+    return;
+  }
+
   bool isSupportedOp(Operation *op) const { return getOpAdapterRegistry().get(op) != nullptr; }
   void unifyToFinestAxes(Operation *op) {
     if (const OpAdapter *a = getOpAdapterRegistry().get(op)) a->unifyToFinestAxes(op, *this);
@@ -867,6 +884,9 @@ struct ShapeNormalState {
     if (const OpAdapter *a = getOpAdapterRegistry().get(op)) a->rewrite(op, *this, rewriter);
   }
 };
+
+static Value reshapeValuePreservingRecordedUnitAxes(ShapeNormalState &state, PatternRewriter &rewriter, Operation *op,
+                                                    Value newvalue);
 
 struct AllocAdapter final : OpAdapter {
   bool match(Operation *op) const override { return isa<memref::AllocOp>(op); }
@@ -911,7 +931,7 @@ struct AllocAdapter final : OpAdapter {
     rewriter.setInsertionPoint(op);
     SmallVector<Value> dynamicSizes;
     llvm::transform(alloc.getDynamicSizes(), std::back_inserter(dynamicSizes),
-                   [&state](Value v) { return state.ssaMap.lookup(v) ? state.ssaMap.lookup(v) : v; });
+                    [&state](Value v) { return state.ssaMap.lookup(v) ? state.ssaMap.lookup(v) : v; });
     Value newAlloc = rewriter.create<memref::AllocOp>(loc, newResultType, dynamicSizes, alloc.getSymbolOperands(),
                                                       alloc.getAlignmentAttr());
     state.ssaMap[oldResult] = newAlloc;
@@ -1052,7 +1072,6 @@ struct DimOpAdapter final : OpAdapter {
     int64_t idx = *idxOpt;
     SmallVector<std::string> symShape = state.getValueSymbolicShape(source);
     std::string symdim = symShape[idx];
-    state.manager.assignLabel(symdim);
     state.affineMapSymDims[op] = {symdim};
   }
   void rewrite(Operation *op, ShapeNormalState &state, PatternRewriter &rewriter) const override {
@@ -1355,8 +1374,7 @@ struct ReshapeAdapter final : OpAdapter {
     }
   }
   static void fillResultSymShape(SmallVector<std::string> &resultSymShape, MemRefType resultType,
-                                 const SmallVector<std::pair<int64_t, Value>> &sortedVals,
-                                 ShapeNormalState &state) {
+                                 const SmallVector<std::pair<int64_t, Value>> &sortedVals, ShapeNormalState &state) {
     for (size_t i = 0; i < resultSymShape.size(); ++i) {
       if (resultSymShape[i].empty()) {
         resultSymShape[i] = state.createNewSymbolicDim(resultType.getShape()[i]);
@@ -1467,7 +1485,13 @@ struct GenericAdapter final : OpAdapter {
         if (unifiedAxesNames[inputDimMap[i]].empty()) {
           unifiedAxesNames[inputDimMap[i]] = SymShape[i];
         } else {
-          unifiedAxesNames[inputDimMap[i]] = state.globalReplaceAxis(SymShape[i], unifiedAxesNames[inputDimMap[i]]);
+          std::string updatedAxis = state.globalReplaceAxis(SymShape[i], unifiedAxesNames[inputDimMap[i]]);
+          std::replace_if(
+            unifiedAxesNames.begin(), unifiedAxesNames.end(),
+            [&](const std::string &affineMapName) {
+              return affineMapName == SymShape[i] || affineMapName == unifiedAxesNames[inputDimMap[i]];
+            },
+            updatedAxis);
         }
       }
     }
@@ -1529,17 +1553,53 @@ struct GenericAdapter final : OpAdapter {
     return needAssign;
   }
 
-  static int findAxisIndex(const SmallVector<std::string> &axes, const std::string &a) {
-    auto it = std::find(axes.begin(), axes.end(), a);
-    return it != axes.end() ? (int)(it - axes.begin()) : -1;
+  static void handleGenericIndexOpsForPreservedOne(Operation *op, linalg::GenericOp generic, ShapeNormalState &state,
+                                                   const SmallVector<std::string> &oldUnifiedAxesNames,
+                                                   unsigned numInputs, unsigned numOutputs) {
+    Block *body = generic.getBody();
+    if (!body) return;
+    for (linalg::IndexOp indexOp : body->getOps<linalg::IndexOp>()) {
+      int64_t dim = indexOp.getDim();
+      auto &axesVec = state.unbreakableAxis[indexOp.getOperation()];
+      if (oldUnifiedAxesNames[dim] != "1") {
+        axesVec.push_back(oldUnifiedAxesNames[dim]);
+        continue;
+      }
+
+      std::string newAxis = state.createNewSymbolicDim(1, true);
+      state.manager.assignLabel(newAxis);
+      state.affineMapSymDims[op][dim] = newAxis;
+      axesVec.push_back(newAxis);
+
+      for (int64_t inputIndex = 0; inputIndex < numInputs + numOutputs; ++inputIndex) {
+        Value preservedOneValue =
+          inputIndex < numInputs ? generic.getDpsInputs()[inputIndex] : generic.getDpsInits()[inputIndex - numInputs];
+        AffineMap inputIndexingMap = generic.getIndexingMapsArray()[inputIndex];
+        for (unsigned i = 0; i < inputIndexingMap.getNumResults(); ++i) {
+          if (dyn_cast<AffineDimExpr>(inputIndexingMap.getResult(i)).getPosition() == dim) {
+            state.preservedOneValueIndices[op][preservedOneValue][i] = newAxis;
+          }
+        }
+      }
+    }
   }
 
   void assignLabels(Operation *op, ShapeNormalState &state) const override {
     auto generic = cast<linalg::GenericOp>(op);
     unsigned numInputs = generic.getNumDpsInputs();
     unsigned numOutputs = generic.getNumDpsInits();
-    SmallVector<std::string> unifiedAxesNames = state.expandGroupedAxes(state.affineMapSymDims[op]);
-    if (unifiedAxesNames.empty()) return;
+    SmallVector<std::string> oldUnifiedAxesNames = state.affineMapSymDims[op];
+    SmallVector<std::string> unifiedAxesNames = state.expandGroupedAxes(oldUnifiedAxesNames);
+    handleGenericIndexOpsForPreservedOne(op, generic, state, oldUnifiedAxesNames, numInputs, numOutputs);
+    if (unifiedAxesNames.empty()) {
+      if (Block *body = generic.getBody()) {
+        for (linalg::IndexOp indexOp : body->getOps<linalg::IndexOp>()) {
+          int64_t dim = indexOp.getDim();
+          state.applyUnbreakableSymDimLabels(oldUnifiedAxesNames[dim]);
+        }
+      }
+      return;
+    }
     SmallVector<int64_t> preLabels;
     llvm::transform(unifiedAxesNames, std::back_inserter(preLabels),
                     [&state](const std::string &a) { return state.manager.getLabel(a); });
@@ -1567,6 +1627,18 @@ struct GenericAdapter final : OpAdapter {
         state.manager.assignLabel(unifiedAxesNames[i + 1], currentLabel);
       }
     }
+
+    if (Block *body = generic.getBody()) {
+      for (linalg::IndexOp indexOp : body->getOps<linalg::IndexOp>()) {
+        int64_t dim = indexOp.getDim();
+        state.applyUnbreakableSymDimLabels(oldUnifiedAxesNames[dim]);
+      }
+    }
+  }
+
+  static int findAxisIndex(const SmallVector<std::string> &axes, const std::string &a) {
+    auto it = std::find(axes.begin(), axes.end(), a);
+    return it != axes.end() ? (int)(it - axes.begin()) : -1;
   }
 
   static SmallVector<int64_t> getDuplicateAxisTargetIndicesInAffineMap(
@@ -1650,18 +1722,38 @@ struct GenericAdapter final : OpAdapter {
     auto generic = cast<linalg::GenericOp>(op);
     Location loc = op->getLoc();
     rewriter.setInsertionPoint(op);
+
     SmallVector<Value> newInputs;
-    llvm::transform(generic.getDpsInputs(), std::back_inserter(newInputs),
-                    [&state](Value v) { return state.ssaMap.lookup(v) ? state.ssaMap.lookup(v) : v; });
+    llvm::transform(generic.getDpsInputs(), std::back_inserter(newInputs), [&state, &rewriter, op](Value v) {
+      return state.ssaMap.lookup(v)
+               ? reshapeValuePreservingRecordedUnitAxes(state, rewriter, op, state.ssaMap.lookup(v))
+               : reshapeValuePreservingRecordedUnitAxes(state, rewriter, op, v);
+    });
     SmallVector<Value> newInitOperands;
-    llvm::transform(generic.getDpsInits(), std::back_inserter(newInitOperands),
-                    [&state](Value v) { return state.ssaMap.lookup(v) ? state.ssaMap.lookup(v) : v; });
+    llvm::transform(generic.getDpsInits(), std::back_inserter(newInitOperands), [&state, &rewriter, op](Value v) {
+      return state.ssaMap.lookup(v)
+               ? reshapeValuePreservingRecordedUnitAxes(state, rewriter, op, state.ssaMap.lookup(v))
+               : reshapeValuePreservingRecordedUnitAxes(state, rewriter, op, v);
+    });
+
     auto [newUnifiedAxesNames, duplicateAxisMapping] =
       state.computeTargetSymShapeWithMapping(state.affineMapSymDims[op]);
+
+    if (Block *body = generic.getBody()) {
+      int64_t i = 0;
+      for (linalg::IndexOp indexOp : body->getOps<linalg::IndexOp>()) {
+        std::string symdim = state.unbreakableAxis[indexOp.getOperation()][i++];
+        int64_t dim =
+          std::find(newUnifiedAxesNames.begin(), newUnifiedAxesNames.end(), symdim) - newUnifiedAxesNames.begin();
+        assert(dim != static_cast<int64_t>(newUnifiedAxesNames.size()) && "dim is not in newUnifiedAxesNames");
+        indexOp.setDim(dim);
+      }
+    }
     SmallVector<AffineMap> newIndexingMaps = buildGenericNewIndexingMaps(
       generic, newInputs, newInitOperands, newUnifiedAxesNames, duplicateAxisMapping, state, rewriter);
     SmallVector<utils::IteratorType> newIteratorTypes =
       buildGenericNewIteratorTypes(generic, newUnifiedAxesNames, state.affineMapSymDims[op], state);
+    rewriter.setInsertionPoint(op);
     auto newGeneric = rewriter.create<GenericOp>(loc, SmallVector<Type>(), newInputs, newInitOperands, newIndexingMaps,
                                                  newIteratorTypes, nullptr);
     rewriter.cloneRegionBefore(generic.getRegion(), newGeneric.getRegion(), newGeneric.getRegion().begin());
@@ -1674,8 +1766,8 @@ struct SubviewAdapter final : OpAdapter {
   bool match(Operation *op) const override { return isa<memref::SubViewOp>(op); }
 
  private:
-  static std::string tryGetSymdimFromDynamicSize(OpFoldResult mixedSize, const std::string &srcSymShapeI,
-                                                 Value result, size_t i, ShapeNormalState &state) {
+  static std::string tryGetSymdimFromDynamicSize(OpFoldResult mixedSize, const std::string &srcSymShapeI, Value result,
+                                                 size_t i, ShapeNormalState &state) {
     auto getConstInt = [](Value v) -> std::optional<int64_t> {
       if (auto c = v.getDefiningOp<arith::ConstantOp>()) {
         if (auto a = dyn_cast<IntegerAttr>(c.getValue())) return a.getValue().getSExtValue();
@@ -1731,7 +1823,7 @@ struct SubviewAdapter final : OpAdapter {
           state.DynSymtoArgDim[symdimToUse] = std::make_pair(result, static_cast<int64_t>(i));
         }
         resultSymShape.push_back(symdimToUse);
-        state.UpdatedAxes[op].push_back(i);
+        state.UpdatedAxesIndex[op].push_back(i);
         continue;
       }
       if (offsets[i] == 0 && strides[i] == 1 && sizes[i] == state.axisSizes[srcSymShape[i]]) {
@@ -1739,7 +1831,7 @@ struct SubviewAdapter final : OpAdapter {
       } else {
         assert(sizes[i] > 0 && "sizes[i] must be greater than 0 in memref.subview op");
         resultSymShape.push_back(state.createNewSymbolicDim(sizes[i]));
-        state.UpdatedAxes[op].push_back(i);
+        state.UpdatedAxesIndex[op].push_back(i);
       }
     }
     state.updateValueSymbolicShape(result, resultSymShape);
@@ -1749,28 +1841,19 @@ struct SubviewAdapter final : OpAdapter {
     auto subviewOp = cast<memref::SubViewOp>(op);
     Value src = subviewOp.getSource();
     Value result = subviewOp.getResult();
-    SmallVector<int64_t> updatedAxes = state.UpdatedAxes[op];
-    auto processLabels = [&](std::string symDim) {
-      SmallVector<std::string> flatSym = state.expandAxisRecursively(symDim);
-      if (flatSym.size() < 1) return;
-      if (flatSym.size() == 1) {
-        state.manager.assignLabel(flatSym[0]);
-        return;
-      }
-      for (size_t i = 1; i < flatSym.size(); ++i) {
-        if (state.manager.getLabel(flatSym[i]) != state.manager.getLabel(flatSym[i - 1])) {
-          state.isSupported = false;
-          // disconnected expanded symshape of slice axis is not supported
-          return;
-        }
-      }
-      int64_t newLabel = state.manager.assignLabel(flatSym[0]);
-      for (size_t i = 1; i < flatSym.size(); ++i) state.manager.assignLabel(flatSym[i], newLabel);
-    };
-    for (int64_t SliceInd : updatedAxes) {
-      processLabels(state.getValueSymbolicShape(result)[SliceInd]);
-      processLabels(state.getValueSymbolicShape(src)[SliceInd]);
+    SmallVector<int64_t> updatedAxesIndex = state.UpdatedAxesIndex[op];
+    SmallVector<std::string> subviewUnbreakable;
+    SmallVector<std::string> resultSymShape = state.getValueSymbolicShape(result);
+    SmallVector<std::string> srcSymShape = state.getValueSymbolicShape(src);
+    for (int64_t SliceInd : updatedAxesIndex) {
+      std::string rSym = resultSymShape[SliceInd];
+      std::string sSym = srcSymShape[SliceInd];
+      state.applyUnbreakableSymDimLabels(rSym);
+      state.applyUnbreakableSymDimLabels(sSym);
+      subviewUnbreakable.push_back(rSym);
+      subviewUnbreakable.push_back(sSym);
     }
+    if (!subviewUnbreakable.empty()) state.unbreakableAxis[op] = std::move(subviewUnbreakable);
   }
   void rewrite(Operation *op, ShapeNormalState &state, PatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
@@ -1780,7 +1863,7 @@ struct SubviewAdapter final : OpAdapter {
     Value oldResult = subviewOp.getResult();
     Value newSrc = state.ssaMap.lookup(src) ? state.ssaMap.lookup(src) : src;
     SmallVector<std::string> oldResultSymShape = state.getValueSymbolicShape(oldResult);
-    SmallVector<int64_t> updatedAxes = state.UpdatedAxes[op];
+    SmallVector<int64_t> updatedAxesIndex = state.UpdatedAxesIndex[op];
     SmallVector<OpFoldResult> oldOffsets = subviewOp.getMixedOffsets();
     SmallVector<OpFoldResult> oldSizes = subviewOp.getMixedSizes();
     SmallVector<OpFoldResult> oldStrides = subviewOp.getMixedStrides();
@@ -1788,7 +1871,7 @@ struct SubviewAdapter final : OpAdapter {
     SmallVector<std::string> targetForSubView;
     SmallVector<std::string> targetTemp;
     for (size_t i = 0; i < oldResultSymShape.size(); ++i) {
-      bool slicedTo1 = llvm::is_contained(updatedAxes, static_cast<int64_t>(i)) && oldResultSymShape[i] == "1";
+      bool slicedTo1 = llvm::is_contained(updatedAxesIndex, static_cast<int64_t>(i)) && oldResultSymShape[i] == "1";
       if (slicedTo1) {
         targetForSubView.append(state.computeTargetSymShape(targetTemp));
         targetResultSymShape.append(state.computeTargetSymShape(targetTemp));
@@ -1812,7 +1895,7 @@ struct SubviewAdapter final : OpAdapter {
     }
     size_t OneDimInd = 0;
     DenseSet<int64_t> DynDimIndsInTarget;
-    for (int64_t i : updatedAxes) {
+    for (int64_t i : updatedAxesIndex) {
       size_t pos;
       if (oldResultSymShape[i] == "1") {
         pos = OneDimIndsInTarget[OneDimInd];
@@ -1918,6 +2001,51 @@ void collectGlobalTargetShapes(ModuleOp module, ShapeNormalState &state) {
   });
 }
 
+static Value reshapeValuePreservingRecordedUnitAxes(ShapeNormalState &state, PatternRewriter &rewriter, Operation *op,
+                                                    Value newvalue) {
+  auto opIt = state.preservedOneValueIndices.find(op);
+  if (opIt == state.preservedOneValueIndices.end()) return newvalue;
+  const DenseMap<int64_t, std::string> *inner = nullptr;
+  Value oldvalue;
+
+  for (auto &kv : opIt->second) {
+    Value tmpvalue = state.ssaMap.lookup(kv.first) ? state.ssaMap[kv.first] : kv.first;
+    if (tmpvalue == newvalue) {
+      inner = &kv.second;
+      oldvalue = kv.first;
+      break;
+    }
+  }
+  if (!inner || inner->empty()) return newvalue;
+
+  SmallVector<std::string> inputSymShape = state.getValueSymbolicShape(newvalue);
+  SmallVector<std::string> originSymShape = state.getValueSymbolicShape(oldvalue);
+
+  for (auto &kv : *inner) {
+    originSymShape[kv.first] = kv.second;
+  }
+  SmallVector<std::string> targetSymShape = state.computeTargetSymShape(originSymShape);
+  if (targetSymShape == inputSymShape) return newvalue;
+
+  Location loc = op->getLoc();
+  if (Operation *defOp = newvalue.getDefiningOp()) {
+    rewriter.setInsertionPointAfter(defOp);
+    loc = defOp->getLoc();
+  } else {
+    auto bbArg = dyn_cast<BlockArgument>(newvalue);
+    if (!bbArg) {
+      rewriter.setInsertionPoint(op);
+    } else {
+      Block *owner = bbArg.getOwner();
+      rewriter.setInsertionPointToStart(owner);
+    }
+  }
+
+  SmallVector<Operation *> ops = state.reshapeValueToSymShape(newvalue, targetSymShape, rewriter, loc);
+  if (ops.empty()) return newvalue;
+  return ops.back()->getResult(0);
+}
+
 void assignLabels(ModuleOp module, ShapeNormalState &state) {
   state.manager.clearLabels();
 
@@ -1940,6 +2068,47 @@ void assignLabels(ModuleOp module, ShapeNormalState &state) {
                     [&state](Value v) { return state.getValueSymbolicShape(v); });
     state.returnOpShapes[returnOp] = std::move(shapes);
   });
+
+  for (const auto &entry : state.preservedOneValueIndices) {
+    for (const auto &preservedOneValueEntry : entry.second) {
+      Value preservedOneValue = preservedOneValueEntry.first;
+      SmallVector<std::string> symShape = state.getValueSymbolicShape(preservedOneValue);
+
+      auto assignLabelsOnGroup = [&](const SmallVector<std::string> &rawSymDims) {
+        if (rawSymDims.empty()) return;
+        SmallVector<std::string> symDims = state.expandGroupedAxes(rawSymDims);
+        if (symDims.size() <= 1) return;
+        SmallVector<int64_t> preLabels;
+        llvm::transform(symDims, std::back_inserter(preLabels),
+                        [&state](const std::string &a) { return state.manager.getLabel(a); });
+        SmallVector<bool> breakpoints(symDims.size() - 1, false);
+        for (size_t i = 0; i < breakpoints.size(); ++i) breakpoints[i] = (preLabels[i] != preLabels[i + 1]);
+        int64_t currentLabel = state.manager.assignLabel(symDims[0]);
+        for (size_t i = 0; i < breakpoints.size(); ++i) {
+          if (breakpoints[i]) {
+            currentLabel = state.manager.assignLabel(symDims[i + 1]);
+          } else {
+            state.manager.assignLabel(symDims[i + 1], currentLabel);
+          }
+        }
+      };
+
+      SmallVector<std::string> symDimsSegment;
+      for (size_t i = 0; i < symShape.size(); ++i) {
+        if (preservedOneValueEntry.second.count(i)) {
+          assignLabelsOnGroup(symDimsSegment);
+          symDimsSegment.clear();
+        } else {
+          symDimsSegment.push_back(symShape[i]);
+        }
+      }
+      assignLabelsOnGroup(symDimsSegment);
+    }
+  }
+
+  for (const auto &entry : state.unbreakableAxis) {
+    for (const std::string &sym : entry.second) state.applyUnbreakableSymDimLabels(sym);
+  }
 }
 
 void solveEntryTargetLayouts(func::FuncOp func, ShapeNormalState &state, PatternRewriter &rewriter) {
