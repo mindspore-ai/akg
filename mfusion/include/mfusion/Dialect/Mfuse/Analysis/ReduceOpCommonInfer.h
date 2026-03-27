@@ -86,8 +86,8 @@ class ReduceOpCommonInfer {
       return mlir::failure();
     }
 
-    auto inType = state.operands[0].getType().dyn_cast<mlir::RankedTensorType>();
-    auto outType = resultType.dyn_cast<mlir::RankedTensorType>();
+    auto inType = mlir::dyn_cast<mlir::RankedTensorType>(state.operands[0].getType());
+    auto outType = mlir::dyn_cast<mlir::RankedTensorType>(resultType);
     if (!outType || !inType) {
       return mlir::failure();
     }
@@ -98,8 +98,8 @@ class ReduceOpCommonInfer {
     }
     std::vector<SymbolAttrUtils::SymExpr> inExprs(maybeInExprs->begin(), maybeInExprs->end());
 
-    auto dimensions = state.attributes.get("dimensions").dyn_cast_or_null<mlir::ArrayAttr>();
-    auto keepdimAttr = state.attributes.get("keepdim").dyn_cast_or_null<mlir::BoolAttr>();
+    auto dimensions = mlir::dyn_cast_or_null<mlir::ArrayAttr>(state.attributes.get("dimensions"));
+    auto keepdimAttr = mlir::dyn_cast_or_null<mlir::BoolAttr>(state.attributes.get("keepdim"));
     if (!dimensions || !keepdimAttr) {
       return mlir::failure();
     }

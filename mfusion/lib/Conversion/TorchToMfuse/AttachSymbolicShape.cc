@@ -38,7 +38,7 @@ namespace TorchD = mlir::torch::Torch;
 bool attachToCastResults(mlir::Operation *castOp, mlir::mfuse::SymbolicShapeAttr attr, unsigned exprCount) {
   bool updated = false;
   for (mlir::Value result : castOp->getResults()) {
-    auto ranked = result.getType().dyn_cast<mlir::RankedTensorType>();
+    auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(result.getType());
     if (!ranked) {
       continue;
     }
@@ -161,7 +161,7 @@ struct ConvertTorchSymbolToMfusePass
       bool remove_op = false;
       if (auto castOp = bindOp.getOperand().getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
         for (mlir::Value input : castOp.getInputs()) {
-          auto ranked = input.getType().dyn_cast<mlir::RankedTensorType>();
+          auto ranked = mlir::dyn_cast<mlir::RankedTensorType>(input.getType());
           if (!ranked || ranked.getRank() != static_cast<int64_t>(exprCount)) {
             continue;
           }

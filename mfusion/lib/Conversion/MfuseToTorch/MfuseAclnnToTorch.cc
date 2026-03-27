@@ -219,10 +219,10 @@ class ConvertMfuseAclnnClamp : public mlir::OpConversionPattern<mlir::mfuse::Acl
     mlir::Value minValue = adaptor.getMin();
     mlir::Value maxValue = adaptor.getMax();
     Value final_result = input;
-    auto inputValueTensorType = inputType.dyn_cast<TorchD::ValueTensorType>();
+    auto inputValueTensorType = mlir::dyn_cast<TorchD::ValueTensorType>(inputType);
     auto boolResultType = TorchD::ValueTensorType::get(op.getResult().getType().getContext(),
                                                        inputValueTensorType.getSizes(), rewriter.getI1Type());
-    if (!minValue.getType().isa<TorchD::NoneType>()) {
+    if (!mlir::isa<TorchD::NoneType>(minValue.getType())) {
       auto min_isnan = rewriter.create<TorchD::AtenIsnanOp>(op.getLoc(), boolResultType, input);
       auto min_ge = rewriter.create<TorchD::AtenGeScalarOp>(op.getLoc(), boolResultType, input, minValue);
       auto min_condition =
@@ -230,7 +230,7 @@ class ConvertMfuseAclnnClamp : public mlir::OpConversionPattern<mlir::mfuse::Acl
       final_result =
         rewriter.create<TorchD::AtenWhereScalarOtherOp>(op.getLoc(), inputType, min_condition, input, minValue);
     }
-    if (!maxValue.getType().isa<TorchD::NoneType>()) {
+    if (!mlir::isa<TorchD::NoneType>(maxValue.getType())) {
       auto max_isnan = rewriter.create<TorchD::AtenIsnanOp>(op.getLoc(), boolResultType, final_result);
       auto max_le = rewriter.create<TorchD::AtenLeScalarOp>(op.getLoc(), boolResultType, final_result, maxValue);
       auto max_condition =
