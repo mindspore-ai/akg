@@ -349,7 +349,7 @@ struct ConvertMfuseReduceSum : public mlir::OpConversionPattern<mlir::mfuse::Red
     bool keepdim = op.getKeepdim();
     mlir::Value keepdimVal = rewriter.create<TorchD::ConstantBoolOp>(op.getLoc(), keepdim);
 
-    mlir::Type dtypeType = op.getResult().getType().cast<mlir::RankedTensorType>().getElementType();
+    mlir::Type dtypeType = mlir::cast<mlir::RankedTensorType>(op.getResult().getType()).getElementType();
     mlir::Value dtypeVal;
     if (mlir::isa<mlir::NoneType, mlir::mfuse::NoneType, TorchD::NoneType>(dtypeType)) {
       dtypeVal = rewriter.create<TorchD::ConstantNoneOp>(op.getLoc());

@@ -179,8 +179,8 @@ class FuseMatMul : public FusePattern {
 
   bool isSameShapeSize(int64_t size, const std::vector<Node *> &output_nodes) {
     for (auto &node : output_nodes) {
-      if (std::accumulate(node->op()->getResult(0).getType().cast<mlir::ShapedType>().getShape().begin(),
-                          node->op()->getResult(0).getType().cast<mlir::ShapedType>().getShape().end(),
+      if (std::accumulate(mlir::cast<mlir::ShapedType>(node->op()->getResult(0).getType()).getShape().begin(),
+                          mlir::cast<mlir::ShapedType>(node->op()->getResult(0).getType()).getShape().end(),
                           static_cast<int64_t>(1), std::multiplies<int64_t>()) != size) {
         return false;
       }
@@ -198,7 +198,7 @@ class FuseMatMul : public FusePattern {
     if (!output_op) {
       return false;
     }
-    auto output_shape = output_op->getResult(0).getType().cast<mlir::ShapedType>().getShape();
+    auto output_shape = mlir::cast<mlir::ShapedType>(output_op->getResult(0).getType()).getShape();
     int64_t matmul_output_size =
       std::accumulate(output_shape.begin(), output_shape.end(), static_cast<int64_t>(1), std::multiplies<int64_t>());
     if (output_shape.back() == 1) {

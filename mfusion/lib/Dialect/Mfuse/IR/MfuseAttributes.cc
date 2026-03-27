@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
-
 #include <limits>
-
+#include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/Support/raw_ostream.h"
@@ -78,7 +76,7 @@ llvm::SmallVector<SymEngine::RCP<const SymEngine::Basic>> SymbolicShapeAttr::get
   exprs.reserve(listAttr.size());
 
   for (auto attr : listAttr) {
-    auto strAttr = attr.dyn_cast<mlir::StringAttr>();
+    auto strAttr = mlir::dyn_cast<mlir::StringAttr>(attr);
     if (!strAttr) {
       llvm::errs() << "mfuse.symbolic_shape expects StringAttr entries\n";
       continue;
