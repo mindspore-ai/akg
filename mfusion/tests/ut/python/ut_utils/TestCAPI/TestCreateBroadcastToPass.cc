@@ -51,7 +51,7 @@ struct MfuseUtCreateBroadcastToPass
       return;
     }
 
-    auto inputType = func.getArgument(0).getType().dyn_cast<mlir::RankedTensorType>();
+    auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(func.getArgument(0).getType());
     if (!inputType) {
       return;
     }
@@ -64,7 +64,7 @@ struct MfuseUtCreateBroadcastToPass
     llvm::SmallVector<int64_t, 4> outShape;
     outShape.reserve(outShapeAttr.size());
     for (mlir::Attribute attr : outShapeAttr) {
-      auto intAttr = attr.dyn_cast<mlir::IntegerAttr>();
+      auto intAttr = mlir::dyn_cast<mlir::IntegerAttr>(attr);
       if (!intAttr) {
         return;
       }

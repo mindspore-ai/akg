@@ -36,9 +36,6 @@ namespace mfuse {
 namespace {
 
 // Constants for dimension and alignment checks
-constexpr int kPermStartIndex = 0;          // Starting index for permutation array
-constexpr int kPermSecondLast = 2;          // Offset for second-to-last dimension
-constexpr int kPermLast = 1;                // Offset for last dimension
 constexpr int kUnsqueezeDim = 1;            // Dimension value for unsqueeze operation
 constexpr int kSmallVectorDefaultSize = 4;  // Default size for SmallVector
 

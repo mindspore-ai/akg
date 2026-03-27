@@ -108,7 +108,8 @@ class FuseMatmulTransposeWeightMatmulPattern : public OpRewritePattern<MatmulOp>
       return failure();
     }
 
-    MLOG(DEBUG) << "FuseMatmulTransposeWeightMatmulPattern matched MatmulOp, needTrans1=" << needTrans1 << ", needTrans2=" << needTrans2;
+    MLOG(DEBUG) << "FuseMatmulTransposeWeightMatmulPattern matched MatmulOp, needTrans1=" << needTrans1
+                << ", needTrans2=" << needTrans2;
 
     Location loc = op.getLoc();
     Value newSelf = self;
@@ -116,12 +117,12 @@ class FuseMatmulTransposeWeightMatmulPattern : public OpRewritePattern<MatmulOp>
     bool newTransX1 = transX1;
     bool newTransX2 = transX2;
 
-    if (needTrans1 && selfType.getRank() >= kDim2) {
+    if (needTrans1 && static_cast<size_t>(selfType.getRank()) >= kDim2) {
       newSelf = createLastTwoDimsSwapPermute(rewriter, loc, selfType, self);
       newTransX1 = true;
       MLOG(DEBUG) << "Created permute for self input to align inner axis";
     }
-    if (needTrans2 && otherType.getRank() >= kDim2) {
+    if (needTrans2 && static_cast<size_t>(otherType.getRank()) >= kDim2) {
       newOther = createLastTwoDimsSwapPermute(rewriter, loc, otherType, other);
       newTransX2 = true;
       MLOG(DEBUG) << "Created permute for other input to align inner axis";
@@ -162,7 +163,8 @@ class FuseMatmulTransposeWeightMatmulWithBiasPattern : public OpRewritePattern<M
       return failure();
     }
 
-    MLOG(DEBUG) << "FuseMatmulTransposeWeightMatmulWithBiasPattern matched MatmulWithBiasOp, needTrans1=" << needTrans1 << ", needTrans2=" << needTrans2;
+    MLOG(DEBUG) << "FuseMatmulTransposeWeightMatmulWithBiasPattern matched MatmulWithBiasOp, needTrans1=" << needTrans1
+                << ", needTrans2=" << needTrans2;
 
     Location loc = op.getLoc();
     Value newSelf = self;
@@ -170,12 +172,12 @@ class FuseMatmulTransposeWeightMatmulWithBiasPattern : public OpRewritePattern<M
     bool newTransX1 = transX1;
     bool newTransX2 = transX2;
 
-    if (needTrans1 && selfType.getRank() >= kDim2) {
+    if (needTrans1 && static_cast<size_t>(selfType.getRank()) >= kDim2) {
       newSelf = createLastTwoDimsSwapPermute(rewriter, loc, selfType, self);
       newTransX1 = true;
       MLOG(DEBUG) << "Created permute for self input to align inner axis";
     }
-    if (needTrans2 && otherType.getRank() >= kDim2) {
+    if (needTrans2 && static_cast<size_t>(otherType.getRank()) >= kDim2) {
       newOther = createLastTwoDimsSwapPermute(rewriter, loc, otherType, other);
       newTransX2 = true;
       MLOG(DEBUG) << "Created permute for other input to align inner axis";
