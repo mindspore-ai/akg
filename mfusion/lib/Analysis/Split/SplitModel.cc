@@ -28,10 +28,8 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-
-#define DEBUG_TYPE "split"
+#include "mfusion/Support/Logging.h"
 
 namespace mlir {
 namespace mfuse {
@@ -299,7 +297,7 @@ bool SplitModel::runOnePattern(const FusePatternPtr &pattern) {
       continue;
     }
     if (pattern->run(area)) {
-      LLVM_DEBUG(llvm::dbgs() << "Area " << area->ToString() << " matches " << pattern->ToString() << "\n");
+      MLOG(DEBUG) << "Area " << area->toString() << " matches " << pattern->toString();
       auto &fused_areas = const_cast<std::vector<AreaPtr> &>(pattern->fused_areas());
       limitAreaSize(area, &fused_areas);
       if (!fused_areas.empty()) {
@@ -316,9 +314,11 @@ bool SplitModel::runOnePattern(const FusePatternPtr &pattern) {
 void SplitModel::runFusePatterns() {
   // Run each pattern
   for (auto &[pattern, enable] : patterns_) {
-    if (enable) {
-      runOnePattern(pattern);
+    if (!enable) {
+      continue;
     }
+    MLOG(DEBUG) << "Run pattern " << pattern->name();
+    runOnePattern(pattern);
   }
 
   // Remove fused areas
@@ -352,15 +352,15 @@ AreaMode SplitModel::getDefaultAreaMode(Node *node) const {
 }
 
 void SplitModel::addPattern(const FusePatternPtr &pn, bool enable) {
-  LLVM_DEBUG(llvm::dbgs() << "Adding pattern, enable: " << (enable ? "true" : "false") << "\n");
   patterns_.emplace_back(pn, enable);
   patterns_.back().first->setCircleChecker(reach_table_);
 }
 
 void SplitModel::mapOperationsToNodes(Block *block) {
   std::unordered_map<Operation *, Node *> op_node_map;
+  size_t node_id = 0;
   for (auto &op : block->getOperations()) {
-    nodes_ptrs_.emplace_back(std::make_unique<Node>(&op));
+    nodes_ptrs_.emplace_back(std::make_unique<Node>(&op, node_id++));
     auto node = nodes_ptrs_.back().get();
     node->shape = getOutputShape(&op);
     node->sym_shape = getOutputSymShape(&op);
@@ -380,6 +380,10 @@ void SplitModel::mapOperationsToNodes(Block *block) {
 void SplitModel::run(Block *block) {
   mapOperationsToNodes(block);
   initGraph(block);
+  MLOG(DEBUG) << "== Initial areas ==";
+  for (auto &area : areas_) {
+    MLOG(DEBUG) << area->toString() << ": " << area->dom()->toString();
+  }
   initFusePatterns();
   runFusePatterns();
 }
