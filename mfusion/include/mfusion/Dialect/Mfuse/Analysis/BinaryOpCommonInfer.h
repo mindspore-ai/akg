@@ -76,7 +76,7 @@ class BinaryOpCommonInfer {
   /// Infers result type with symbolic shape for broadcastable binary ops.
   static mlir::Type inferSymbolicShape(mlir::OpBuilder &builder, mlir::Type baseType, mlir::Value lhs,
                                        mlir::Value rhs) {
-    auto rankedResult = baseType.dyn_cast<mlir::RankedTensorType>();
+    auto rankedResult = mlir::dyn_cast<mlir::RankedTensorType>(baseType);
     if (!rankedResult) return baseType;
 
     auto maybeLhsExprs = SymbolAttrUtils::getSymbolicShapeExprs(lhs.getType());

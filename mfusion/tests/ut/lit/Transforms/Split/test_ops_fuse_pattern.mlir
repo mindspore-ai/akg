@@ -182,15 +182,13 @@ module {
   // Test broadcast_to operation with complex dependencies
   // CHECK-LABEL: func @test_broadcast_to_operation
   // CHECK-SAME: %arg0: tensor<4xf32>
-  // CHECK: %[[FUSED1:.*]] = mfuse.fused %arg0
+  // CHECK: %[[FUSED:.*]] = mfuse.fused %arg0
   // CHECK: mfuse.add
   // CHECK: mfuse.mul
-  // CHECK: mfuse.yield
-  // CHECK: %[[FUSED2:.*]] = mfuse.fused %[[FUSED1]]
   // CHECK: mfuse.broadcast_to
   // CHECK: mfuse.add
   // CHECK: mfuse.yield
-  // CHECK: return %[[FUSED2]]
+  // CHECK: return %[[FUSED]]
   func.func @test_broadcast_to_operation(%arg0: tensor<4xf32>) -> tensor<2x4xf32> {
     %0 = mfuse.fused %arg0 {fusion_type = "dvm"} : (tensor<4xf32>) -> tensor<2x4xf32> {
     ^bb0(%arg1: tensor<4xf32>):

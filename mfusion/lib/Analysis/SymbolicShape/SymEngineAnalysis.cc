@@ -38,11 +38,11 @@ mlir::FailureOr<SymEngineAnalysis::SymExpr> SymEngineAnalysis::getOrAssignSymbol
 
 mlir::FailureOr<SymEngineAnalysis::SymExpr> SymEngineAnalysis::convertAffineExpr(
   mlir::AffineExpr expr, llvm::ArrayRef<SymExpr> dimSymbols, llvm::ArrayRef<SymExpr> symbolSymbols) const {
-  if (auto constantExpr = expr.dyn_cast<mlir::AffineConstantExpr>()) {
+  if (auto constantExpr = mlir::dyn_cast<mlir::AffineConstantExpr>(expr)) {
     return builder_.makeInteger(constantExpr.getValue());
   }
 
-  if (auto dimExpr = expr.dyn_cast<mlir::AffineDimExpr>()) {
+  if (auto dimExpr = mlir::dyn_cast<mlir::AffineDimExpr>(expr)) {
     unsigned position = dimExpr.getPosition();
     if (position >= dimSymbols.size()) {
       return mlir::failure();
@@ -50,7 +50,7 @@ mlir::FailureOr<SymEngineAnalysis::SymExpr> SymEngineAnalysis::convertAffineExpr
     return dimSymbols[position];
   }
 
-  if (auto symExpr = expr.dyn_cast<mlir::AffineSymbolExpr>()) {
+  if (auto symExpr = mlir::dyn_cast<mlir::AffineSymbolExpr>(expr)) {
     unsigned position = symExpr.getPosition();
     if (position >= symbolSymbols.size()) {
       return mlir::failure();
@@ -58,7 +58,7 @@ mlir::FailureOr<SymEngineAnalysis::SymExpr> SymEngineAnalysis::convertAffineExpr
     return symbolSymbols[position];
   }
 
-  if (auto binExpr = expr.dyn_cast<mlir::AffineBinaryOpExpr>()) {
+  if (auto binExpr = mlir::dyn_cast<mlir::AffineBinaryOpExpr>(expr)) {
     auto lhs = convertAffineExpr(binExpr.getLHS(), dimSymbols, symbolSymbols);
     auto rhs = convertAffineExpr(binExpr.getRHS(), dimSymbols, symbolSymbols);
     if (mlir::failed(lhs) || mlir::failed(rhs)) {

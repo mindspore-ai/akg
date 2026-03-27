@@ -43,17 +43,18 @@ namespace {
 mlir::Type getHigherPrecisionType(mlir::Type typeA, mlir::Type typeB, bool rhsIsScalar = false) {
   // Helper function to get bit width of a type
   auto getBitWidth = [](mlir::Type type) -> int {
-    if (auto floatType = type.dyn_cast<mlir::FloatType>()) {
+    if (auto floatType = mlir::dyn_cast<mlir::FloatType>(type)) {
       return floatType.getWidth();
     }
-    if (auto integerType = type.dyn_cast<mlir::IntegerType>()) {
+
+    if (auto integerType = mlir::dyn_cast<mlir::IntegerType>(type)) {
       return integerType.getWidth();
     }
     return 0;
   };
 
-  bool isFloatA = typeA.isa<mlir::FloatType>();
-  bool isFloatB = typeB.isa<mlir::FloatType>();
+  bool isFloatA = mlir::isa<mlir::FloatType>(typeA);
+  bool isFloatB = mlir::isa<mlir::FloatType>(typeB);
 
   if (rhsIsScalar) {
     if (isFloatB) {
@@ -136,10 +137,10 @@ static std::optional<mlir::Value> foldUnrealizedConversionCast(mlir::OpBuilder &
 static std::optional<mlir::DenseElementsAttr> foldConstantCast(mlir::DenseElementsAttr dense, mlir::Type srcType,
                                                                mlir::Type dstType, mlir::RankedTensorType resultType) {
   // Type categories
-  bool srcIsInt = srcType.isa<mlir::IntegerType>();
-  bool dstIsInt = dstType.isa<mlir::IntegerType>();
-  bool srcIsFloat = srcType.isa<mlir::FloatType>();
-  bool dstIsFloat = dstType.isa<mlir::FloatType>();
+  bool srcIsInt = mlir::isa<mlir::IntegerType>(srcType);
+  bool dstIsInt = mlir::isa<mlir::IntegerType>(dstType);
+  bool srcIsFloat = mlir::isa<mlir::FloatType>(srcType);
+  bool dstIsFloat = mlir::isa<mlir::FloatType>(dstType);
 
   // Integer -> Integer: adjust width
   if (srcIsInt && dstIsInt) {
@@ -296,8 +297,8 @@ mlir::FailureOr<mlir::Type> BroadcastToOp::inferSymbolicShapes(mlir::OpBuilder &
     return mlir::failure();
   }
 
-  auto inType = state.operands[0].getType().dyn_cast<mlir::RankedTensorType>();
-  auto outType = resultType.dyn_cast<mlir::RankedTensorType>();
+  auto inType = mlir::dyn_cast<mlir::RankedTensorType>(state.operands[0].getType());
+  auto outType = mlir::dyn_cast<mlir::RankedTensorType>(resultType);
   if (!outType || !inType) {
     return mlir::failure();
   }
@@ -348,7 +349,7 @@ mlir::OpFoldResult CastOp::fold(FoldAdaptor adaptor) {
 
   if (auto cst = input.getDefiningOp<mlir::mfuse::ConstantOp>()) {
     auto resultType = mlir::cast<mlir::RankedTensorType>(getResult().getType());
-    auto dense = cst.getValue().dyn_cast<mlir::DenseElementsAttr>();
+    auto dense = mlir::dyn_cast<mlir::DenseElementsAttr>(cst.getValue());
     if (!dense) return {};
 
     auto srcType = dense.getElementType();
@@ -419,8 +420,8 @@ mlir::FailureOr<mlir::Type> ReshapeOp::inferSymbolicShapes(mlir::OpBuilder &buil
     return mlir::failure();
   }
 
-  auto inType = state.operands[0].getType().dyn_cast<mlir::RankedTensorType>();
-  auto outType = resultType.dyn_cast<mlir::RankedTensorType>();
+  auto inType = mlir::dyn_cast<mlir::RankedTensorType>(state.operands[0].getType());
+  auto outType = mlir::dyn_cast<mlir::RankedTensorType>(resultType);
   if (!outType || !inType) {
     return mlir::failure();
   }

@@ -73,5 +73,7 @@ int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
   initializeDialectRegistry(registry);
 
-  return mlir::asMainReturnCode(mlir::MlirOptMain(argc, argv, "MFusion optimizer driver\n", registry));
+  std::string toolName = "MFusion optimizer driver v" + std::to_string(kMFusionOptMajorVersion) + "." +
+                         std::to_string(kMFusionOptMinorVersion) + "\n";
+  return mlir::asMainReturnCode(mlir::MlirOptMain(argc, argv, toolName.c_str(), registry));
 }

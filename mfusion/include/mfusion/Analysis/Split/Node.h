@@ -44,7 +44,7 @@ struct NodeBase {
 class Node : public NodeBase {
  public:
   Node() = default;
-  Node(Operation *op) : op_(op) {}
+  explicit Node(Operation *op) : op_(op) {}
   virtual ~Node() {}
 
   virtual std::string toString() const;
@@ -65,7 +65,7 @@ class Node : public NodeBase {
 
   const std::string &debugName() const { return debug_name_; }
   const DAttrs &attrs() const { return attrs_; }
-  const Node *const input(size_t i) const { return inputs_[i]; }
+  const Node *input(size_t i) const { return inputs_[i]; }
   const std::vector<Node *> &inputs() const { return inputs_; }
   const std::unordered_map<Node *, std::set<size_t>> &users() const { return users_; }
   size_t inputNum() const { return inputs_.size(); }
