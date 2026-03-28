@@ -1,12 +1,12 @@
 ---
-name: akg_pr
+name: akg-pr
 description: >
   基于当前分支与目标分支的 diff，自动生成符合 AKG 项目规范的 PR 描述文件。
   生成的 .md 和 .json 文件写入 .tmp/pr/，经规范校验后供用户确认和提交。
 argument-hint: >
   可选：TARGET_BRANCH（目标分支，默认 master）。
   可选：REMOTE（远程名，默认自动检测）。
-  示例：/akg_pr  /akg_pr origin/br_agents
+  示例：/akg-pr  /akg-pr origin/br_agents
 ---
 
 # AKG PR 生成
@@ -90,7 +90,7 @@ git status --short
 |------|---------|
 | `kind` | 从 commit message 关键词推断：`fix`/`bug` → `bug`，`feat`/`add`/`support` → `feature`，其他 → `task` |
 | `title` | `[AKG_AGENTS] <kind>: <概要描述>`。单 commit 时可直接用 message 加前缀 |
-| `fixes` | 从 commit message 提取 `Fixes #N`、`Close #N`。**未检测到时写 N/A，不要编造**。⚠️ **跨仓库关联 Issue 时必须使用完整 URL**：`Fixes https://gitcode.com/mindspore/akg/issues/399` |
+| `fixes` | 从 commit message 提取 `Fixes #N`、`Close #N`，**未检测到时写 N/A，不要编造**。关联 Issue 时必须使用**完整 URL**：`Fixes https://gitcode.com/mindspore/akg/issues/399` |
 | `description` | AI 总结：做了什么、为什么做、怎么做的 |
 | `reviewer_notes` | 重点变更、潜在风险、需要特别关注的文件 |
 
@@ -111,7 +111,7 @@ git status --short
 
 **Which issue(s) this PR fixes**:
 
-Fixes #<issue_url>（如有，无则写 N/A，必须使用完整 URL）
+Fixes #<issue_url>（如有，无则写 N/A，必须使用完整 URL 而不是数字编号）
 
 **Special notes for your reviewers**:
 
@@ -301,6 +301,6 @@ gh pr create --title "<title>" --body-file $AKG_AGENTS_DIR/.tmp/pr/<file>.md \
 
 - **成功**（JSON 含 `html_url`）→ 展示 PR 链接
 - **失败** → 展示完整错误信息，常见排查：
-  - `api token has not permission` → URL 中 owner/repo 不正确，检查 `git remote -v`
+  - `403` → URL 中 owner/repo 不正确，检查 `git remote -v`
   - `401` → Token 无效或过期
   - `422` → 分支未 push 或 PR 已存在
