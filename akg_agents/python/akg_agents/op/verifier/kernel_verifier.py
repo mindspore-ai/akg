@@ -53,7 +53,14 @@ RUN_TEMPLATE_PATH = os.path.join(get_project_root(), "utils", "compile_tools", "
 FrameworkType = Literal["torch", "mindspore", "numpy"]
 ImplType = Literal["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc", "torch"]
 BackendType = Literal["cuda", "ascend", "cpu"]
-ArchType = Literal["a100", "v100", "h20", "l20", "rtx3090", "ascend910b4", "ascend310p3", "x86_64", "aarch64"]
+ArchType = Literal[
+    "a100", "v100", "h20", "l20", "rtx3090",
+    "ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4",
+    "ascend310p3",
+    "ascend910_9362", "ascend910_9372", "ascend910_9381",
+    "ascend910_9382", "ascend910_9391", "ascend910_9392",
+    "x86_64", "aarch64",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -149,10 +156,14 @@ class KernelVerifier:
         if self.backend == "cuda" and self.arch not in ["a100", "v100", "h20", "l20", "rtx3090"]:
             raise ValueError(f"cuda后端只支持a100、v100、h20、l20和rtx3090架构，当前架构: {self.arch}")
         if self.backend == "ascend":
-            # 支持 ascend910b1, b2, b2c, b3, b4 和 ascend310p3
-            supported_ascend_archs = ["ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4", "ascend310p3"]
+            supported_ascend_archs = [
+                "ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4",
+                "ascend310p3",
+                "ascend910_9362", "ascend910_9372", "ascend910_9381",
+                "ascend910_9382", "ascend910_9391", "ascend910_9392",
+            ]
             if self.arch not in supported_ascend_archs:
-                raise ValueError(f"ascend后端只支持ascend910b1/b2/b2c/b3/b4和ascend310p3架构，当前架构: {self.arch}")
+                raise ValueError(f"ascend后端不支持架构: {self.arch}，支持的架构: {supported_ascend_archs}")
 
         # 保存Worker实例（可以在运行时动态设置）
         self.worker = worker

@@ -47,7 +47,11 @@ class BackendAdapterAscend(BackendAdapter):
     
     def validate_arch(self, arch: str) -> bool:
         """Validate Ascend architecture."""
-        supported_archs = ["ascend910b1", "ascend910b2", "ascend910b2c", 
-                          "ascend910b3", "ascend910b4", "ascend310p3"]
+        supported_archs = [
+            "ascend910b1", "ascend910b2", "ascend910b2c",
+            "ascend910b3", "ascend910b4", "ascend310p3",
+            "ascend910_9362", "ascend910_9372", "ascend910_9381",
+            "ascend910_9382", "ascend910_9391", "ascend910_9392",
+        ]
         return arch in supported_archs
 

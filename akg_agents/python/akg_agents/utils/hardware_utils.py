@@ -480,7 +480,13 @@ def get_hardware_doc(backend: str, arch: str) -> str:
             "ascend910b2c": "hardware/Ascend910B2C.md",
             "ascend910b3": "hardware/Ascend910B3.md",
             "ascend910b4": "hardware/Ascend910B4.md",
-            "ascend310p3": "hardware/Ascend310P3.md"
+            "ascend310p3": "hardware/Ascend310P3.md",
+            "ascend910_9362": "hardware/Ascend910_9362.md",
+            "ascend910_9372": "hardware/Ascend910_9372.md",
+            "ascend910_9381": "hardware/Ascend910_9381.md",
+            "ascend910_9382": "hardware/Ascend910_9382.md",
+            "ascend910_9391": "hardware/Ascend910_9391.md",
+            "ascend910_9392": "hardware/Ascend910_9392.md",
         },
         "cuda": {
             "a100": "hardware/CUDA_A100.md",
