@@ -86,12 +86,14 @@ class LLMCache:
         self,
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict]] = None,
+        cache_key: Optional[str] = None,
         **kwargs
     ) -> Optional[Dict[str, Any]]:
         if not self.enable:
             return None
 
-        cache_key = generate_cache_key(messages, tools, **kwargs)
+        if cache_key is None:
+            cache_key = generate_cache_key(messages, tools, **kwargs)
 
         memory_item = self._read_valid_cache_item(self._memory_cache, cache_key, "Memory")
         if memory_item is not None:
@@ -114,12 +116,14 @@ class LLMCache:
         messages: List[Dict[str, str]],
         result: Dict[str, Any],
         tools: Optional[List[Dict]] = None,
+        cache_key: Optional[str] = None,
         **kwargs
     ) -> None:
         if not self.enable:
             return
 
-        cache_key = generate_cache_key(messages, tools, **kwargs)
+        if cache_key is None:
+            cache_key = generate_cache_key(messages, tools, **kwargs)
 
         cache_item = {
             "cache_key": cache_key,

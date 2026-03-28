@@ -53,3 +53,14 @@ class TestLLMCacheCore:
         expiring_cache._local_cache[cache_key]["create_time"] -= 2
 
         assert expiring_cache.get(test_messages, **test_params) is None
+
+    def test_cache_custom_key_set_and_get(self, llm_cache, test_messages, test_result, test_params):
+        custom_key = "session_hash:agent_hash"
+        llm_cache.set(test_messages, test_result, cache_key=custom_key, **test_params)
+
+        cached_result = llm_cache.get(
+            [{"role": "user", "content": "不同消息也可命中自定义键"}],
+            cache_key=custom_key,
+            **test_params,
+        )
+        assert cached_result == test_result
