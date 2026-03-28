@@ -362,8 +362,6 @@ class NodeFactory:
                 inspirations_raw = state.get('inspirations', [])
                 inspirations_text = format_inspirations(inspirations_raw) if inspirations_raw else ""
             
-            handwrite_suggestions = state.get('handwrite_suggestions', [])
-
             # 调用 KernelGen.run()
             t0 = time.time()
             try:
@@ -382,7 +380,6 @@ class NodeFactory:
                     previous_code=state.get('previous_code', ''),
                     designer_code=designer_code,
                     inspirations=inspirations_text,
-                    handwrite_suggestions=handwrite_suggestions,
                 )
             except Exception as e:
                 logger.error(f"[Task {task_id}] KernelGen.run() 失败: {e}")

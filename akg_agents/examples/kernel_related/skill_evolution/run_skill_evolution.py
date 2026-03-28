@@ -19,11 +19,10 @@ run_skill_evolution.py - Skill Evolution 独立 CLI 工具（支持四模式）
 生成可复用的 SKILL.md 文档。还支持将已有的 evolved skills 按主题合并去重。
 
 前置条件：
-  - search_log 模式需要先运行 `akg_cli op` 执行 adaptive_search，产生搜索日志
-  - expert_tuning 模式需要先运行 `akg_cli op` 进行交互式调优，产生对话记录
-  - error_fix 模式需要搜索日志中包含失败→成功的修复记录
-  - organize 模式需要 ~/.akg/evolved_skills/{dsl}/ 下有 SKILL.md
-  日志默认保存在 ~/.akg/conversations/cli_<session_id>/nodes/<node_id>/logs/
+  - search_log 模式需要先运行 `akg_cli op` 执行 adaptive_search，产生搜索日志，对应日志保存在 ~/.akg/conversations/cli_<session_id>/nodes/<node_id>/logs/
+  - expert_tuning 模式需要先运行 `akg_cli op` 进行交互式调优，产生对话记录，对应对话记录保存在 ~/.akg/conversations/cli_<session_id>/
+  - error_fix 模式需要搜索日志中包含失败→成功的修复记录，对应日志保存在 ~/.akg/conversations/cli_<session_id>/nodes/<node_id>/logs/
+  - organize 模式需要 ~/.akg/evolved_skills/{dsl}/evolved-fix/ 和 ~/.akg/evolved_skills/{dsl}/evolved-improvement/ 下有 SKILL.md
 
 search_log 模式:
     python examples/kernel_related/skill_evolution/run_skill_evolution.py search_log <log_dir> <op_name> [--output-dir DIR] [--model-level LEVEL]
@@ -129,13 +128,18 @@ async def run_search_log(log_dir: str, op_name: str, output_dir: str, model_leve
     work_dir = output_dir or _default_work_dir("search_log", op_name)
     os.makedirs(work_dir, exist_ok=True)
 
+    if not os.path.isdir(log_dir):
+        logger.error(f"log_dir 不存在: {log_dir}")
+        logger.error("提示: log_dir 应指向 adaptive_search 产生的节点 logs 目录")
+        logger.error("      例如: ~/.akg/conversations/cli_xxx/nodes/node_004/logs")
+        sys.exit(1)
+
     logger.info(f"[1/4] 收集数据: log_dir={log_dir}, op_name={op_name}")
     records, metadata = collect(log_dir, op_name)
     metadata["op_name"] = op_name
     if not records:
-        logger.error("未找到任何任务记录，请检查 log_dir 是否正确")
-        logger.error("提示: log_dir 应指向 adaptive_search 产生的节点 logs 目录")
-        logger.error("      例如: ~/.akg/conversations/cli_xxx/nodes/node_004/logs")
+        logger.error("未找到任何任务记录")
+        logger.error("提示: log_dir 应包含 verification_results.jsonl、speed_up_record.txt、lineage_graph.md")
         sys.exit(1)
     logger.info(f"  → {len(records)} 条记录")
 
@@ -204,6 +208,12 @@ async def run_expert_tuning(conversation_dir: str, op_name: str, output_dir: str
     work_dir = output_dir or _default_work_dir("expert_tuning", op_name)
     os.makedirs(work_dir, exist_ok=True)
 
+    if not os.path.isdir(conversation_dir):
+        logger.error(f"conversation_dir 不存在: {conversation_dir}")
+        logger.error("提示: conversation_dir 应指向 akg_cli 的会话目录")
+        logger.error("      例如: ~/.akg/conversations/cli_<session_id>")
+        sys.exit(1)
+
     logger.info(f"[1/4] 读取所有 action: {conversation_dir}")
     sections, metadata = collect(conversation_dir, op_name)
     metadata["op_name"] = op_name
@@ -211,9 +221,7 @@ async def run_expert_tuning(conversation_dir: str, op_name: str, output_dir: str
 
     if not sections:
         logger.error("未读取到任何 action 记录")
-        logger.error("提示: conversation_dir 应指向 akg_cli 的会话目录")
-        logger.error("      例如: ~/.akg/conversations/cli_<session_id>")
-        logger.error("      该目录应包含 nodes/ 子目录")
+        logger.error("提示: conversation_dir 应包含 nodes/ 子目录和 action_history_fact.json 文件")
         sys.exit(1)
 
     full_text = "\n".join(sections)
@@ -285,12 +293,19 @@ async def run_error_fix(log_dir: str, op_name: str, output_dir: str, model_level
     work_dir = output_dir or _default_work_dir("error_fix", op_name)
     os.makedirs(work_dir, exist_ok=True)
 
+    if not os.path.isdir(log_dir):
+        logger.error(f"log_dir 不存在: {log_dir}")
+        logger.error("提示: log_dir 应指向节点的 logs 目录")
+        logger.error("      例如: ~/.akg/conversations/cli_xxx/nodes/node_005/logs")
+        sys.exit(1)
+
     logger.info(f"[1/4] 收集成功修复记录: log_dir={log_dir}, op_name={op_name}")
     records, metadata = collect(log_dir, op_name)
     metadata["op_name"] = op_name
     metadata["source"] = "error_fix"
     if not records:
         logger.error("未找到任何成功修复记录")
+        logger.error("提示: 需要 log_dir 中有 verification_results.jsonl 且包含失败→成功的记录")
         sys.exit(1)
     logger.info(f"  -> {len(records)} 个成功修复记录")
     for r in records:
@@ -679,16 +694,33 @@ async def run_organize_skills(dsl: str, skills_dir: str, output_dir: str, model_
         fix_dir = get_default_evolved_dir(dsl, case_type="fix")
         imp_dir = get_default_evolved_dir(dsl, case_type="improvement")
 
+    fix_exists = os.path.isdir(fix_dir)
+    imp_exists = os.path.isdir(imp_dir)
+    if not fix_exists and not imp_exists:
+        logger.error(f"evolved-fix 和 evolved-improvement 目录均不存在:")
+        logger.error(f"  fix: {fix_dir}")
+        logger.error(f"  improvement: {imp_dir}")
+        logger.error("提示: 请先使用 error_fix/search_log/expert_tuning 模式生成 evolved skill")
+        sys.exit(1)
+
     # --- fix: split ---
     logger.info(f"[organize] === Phase 1: split fix skills ({fix_dir}) ===")
-    fix_paths = await _split_fix_skills(dsl, fix_dir, output_dir, work_dir, model_level)
+    if not fix_exists:
+        logger.info(f"[organize] evolved-fix 目录不存在，跳过 Phase 1")
+        fix_paths = []
+    else:
+        fix_paths = await _split_fix_skills(dsl, fix_dir, output_dir, work_dir, model_level)
     all_paths.extend(fix_paths)
 
     # --- improvement: merge ---
     logger.info(f"[organize] === Phase 2: merge improvement skills ({imp_dir}) ===")
-    merged, archived = await _merge_one_category(
-        dsl, "improvement", imp_dir, output_dir, work_dir, model_level,
-    )
+    if not imp_exists:
+        logger.info(f"[organize] evolved-improvement 目录不存在，跳过 Phase 2")
+        merged, archived = [], []
+    else:
+        merged, archived = await _merge_one_category(
+            dsl, "improvement", imp_dir, output_dir, work_dir, model_level,
+        )
     all_paths.extend(merged)
     total_archived += len(archived)
 

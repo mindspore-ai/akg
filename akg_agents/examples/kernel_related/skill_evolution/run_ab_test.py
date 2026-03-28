@@ -126,6 +126,10 @@ def main():
         help="仅收集已有结果（必须配合 --run-dir 使用）",
     )
     parser.add_argument(
+        "--skill-names", nargs="*", default=None,
+        help="显式指定要 exclude/force 的 skill 名称（替代目录扫描，用于测试单个 skill）",
+    )
+    parser.add_argument(
         "--clear", action="store_true",
         help="清空 tracking.md 中的所有实验数据，恢复初始状态（清空后不运行测试，无需指定 --group）",
     )
