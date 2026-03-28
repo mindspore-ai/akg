@@ -77,7 +77,6 @@ struct AKGLoopFusion : public impl::AKGLoopFusionBase<AKGLoopFusion> {
   void replaceDimWithPrimes(func::FuncOp funcOp);
   void restoreDimFromPrimes();
   void repairReductionLoopAttrs(func::FuncOp funcOp);
-  void moveAllocBeforeAffineFor(func::FuncOp funcOp);
 
   std::optional<SmallVector<std::string>> getSymShapeAttrFromValue(Value source);
   std::optional<int64_t> getConstantDimIndex(Value dimIndex);
@@ -402,49 +401,10 @@ void AKGLoopFusion::runOnBlock(Block *block, OperatorTemplate &curOpTemplate) {
   }
 }
 
-void AKGLoopFusion::moveAllocBeforeAffineFor(func::FuncOp funcOp) {
-  Block &block = funcOp.getBody().front();
-
-  Operation *firstAffineFor = nullptr;
-  for (Operation &op : block) {
-    if (isa<affine::AffineForOp>(&op)) {
-      firstAffineFor = &op;
-      break;
-    }
-  }
-
-  if (!firstAffineFor) {
-    llvm::errs() << "[AKG] moveAllocBeforeAffineFor: no top-level affine.for found in func " << funcOp.getName()
-                 << "\n";
-    return;
-  }
-
-  SmallVector<Operation *, 8> toMove;
-
-  for (auto it = std::next(firstAffineFor->getIterator()), e = block.end(); it != e; ++it) {
-    Operation *op = &*it;
-    if (isa<memref::AllocOp, memref::SubViewOp, memref::ReshapeOp, memref::ExpandShapeOp, memref::CollapseShapeOp,
-            memref::ReinterpretCastOp, memref::MemorySpaceCastOp, arith::IndexCastOp, memref::DimOp>(op)) {
-      toMove.push_back(op);
-    }
-  }
-
-  if (toMove.empty()) {
-    llvm::errs() << "[AKG] no allocs to move after first top-level affine.for\n";
-    return;
-  }
-
-  for (Operation *op : toMove) {
-    op->moveBefore(firstAffineFor);
-  }
-}
-
 /// Preprocessing step that performs loop interchange optimization for reduction operations.
 /// Identifies nested loops with reduction axes and interchanges them to improve cache performance.
 void AKGLoopFusion::runPreProcess() {
   func::FuncOp funcOp = getOperation();
-
-  moveAllocBeforeAffineFor(funcOp);
 
   // Replace dim values with large primes before fusion
   replaceDimWithPrimes(funcOp);
