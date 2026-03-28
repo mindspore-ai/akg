@@ -24,7 +24,12 @@ namespace mfuse {
 namespace split {
 
 // Node implementation
-std::string Node::toString() const { return debug_name_; }
+std::string Node::toString() const {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+  op_->print(os);
+  return result;
+}
 
 void Node::addInput(Node *new_input) {
   if (!new_input) {

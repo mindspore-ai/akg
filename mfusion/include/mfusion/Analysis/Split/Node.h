@@ -44,7 +44,7 @@ struct NodeBase {
 class Node : public NodeBase {
  public:
   Node() = default;
-  explicit Node(Operation *op) : op_(op) {}
+  explicit Node(Operation *op, size_t id = 0) : op_(op), id_(id) {}
   virtual ~Node() {}
 
   virtual std::string toString() const;
@@ -55,15 +55,14 @@ class Node : public NodeBase {
   void replaceWith(Node *other_node);
   void setAttrs(const DAttrs &attrs) { attrs_ = attrs; }
   void setAttr(const std::string &key, const Attribute &value) { attrs_[key] = value; }
-  void setDebugName(const std::string &debug_name) { debug_name_ = debug_name; }
   Operation *op() const { return op_; }
+  size_t id() const { return id_; }
 
   template <typename T>
   T *as() {
     return static_cast<T *>(this);
   }
 
-  const std::string &debugName() const { return debug_name_; }
   const DAttrs &attrs() const { return attrs_; }
   const Node *input(size_t i) const { return inputs_[i]; }
   const std::vector<Node *> &inputs() const { return inputs_; }
@@ -72,11 +71,11 @@ class Node : public NodeBase {
   size_t userNum() const { return users_.size(); }
 
  protected:
-  mutable std::string debug_name_;
   DAttrs attrs_;
   std::vector<Node *> inputs_;
   std::unordered_map<Node *, std::set<size_t>> users_;
   Operation *op_;
+  size_t id_ = 0;
 
  private:
   void addUser(Node *user, size_t index) { users_[user].insert(index); }
