@@ -20,6 +20,8 @@
 import logging
 import os
 import asyncio
+import hashlib
+import json
 from typing import Optional, Dict, Any, Tuple
 
 from akg_agents.core_v2.langgraph_base.base_task import BaseLangGraphTask
@@ -344,6 +346,22 @@ class LangGraphTask(BaseLangGraphTask):
             "user_requirements": self.user_requirements,
         }
 
+        cache_mode = str(self.config.get("cache_mode") or "off").strip().lower()
+        if cache_mode not in {"off", "record", "replay"}:
+            raise ValueError(f"Invalid cache_mode: {cache_mode}, expected one of off/record/replay")
+
+        provided_session_hash = str(self.config.get("cache_session_hash") or "").strip()
+        if cache_mode == "replay" and not provided_session_hash:
+            raise ValueError("cache_session_hash is required when cache_mode is replay")
+
+        cache_session_hash = provided_session_hash or self._generate_cache_session_hash()
+        state["cache_mode"] = cache_mode
+        state["cache_session_hash"] = cache_session_hash
+
+        # 同步到 config，供 AgentBase.run_llm() 透传到 cache 层。
+        self.config["cache_mode"] = cache_mode
+        self.config["cache_session_hash"] = cache_session_hash
+
         # 加载 expert_suggestion（suggestion_docs.md）供 conductor/router 使用
         expert_suggestion = ""
         for agent_key in ("coder", "kernel_gen", "designer"):
@@ -363,6 +381,25 @@ class LangGraphTask(BaseLangGraphTask):
             state.update(init_task_info)
         
         return state
+
+    def _generate_cache_session_hash(self) -> str:
+        """Generate deterministic cache session hash from task identity and runtime config."""
+        payload = {
+            "workflow_name": self.workflow_name,
+            "task_id": self.task_id,
+            "task_desc": self.task_desc,
+            "op_name": self.op_name,
+            "dsl": self.dsl,
+            "backend": self.backend,
+            "arch": self.arch,
+            "framework": self.framework,
+            "task_type": self.task_type,
+            "source_backend": self.source_backend,
+            "source_arch": self.source_arch,
+            "user_requirements": self.user_requirements,
+        }
+        normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.md5(normalized.encode("utf-8")).hexdigest()
     
     async def run(self, init_task_info: Optional[Dict[str, Any]] = None) -> Tuple[str, bool, dict]:
         """执行任务（API 兼容现有 Task）
@@ -389,6 +426,8 @@ class LangGraphTask(BaseLangGraphTask):
                 ),
                 timeout=self.config.get("workflow_timeout", 1800)
             )
+            final_state.setdefault("cache_mode", initial_state.get("cache_mode", "off"))
+            final_state.setdefault("cache_session_hash", initial_state.get("cache_session_hash", ""))
             # 处理结果
             success = final_state.get("verifier_result", False)
             

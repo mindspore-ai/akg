@@ -635,6 +635,8 @@ class NodeFactory:
 
                 # 创建临时的 AgentBase 实例用于调用 run_llm
                 # 构建 context（包含 session_id 等信息，支持流式输出）
+                conductor_step = int(state.get("conductor_step_count") or 0) + 1
+                conductor_hash = f"conductor@{conductor_step}"
                 context = {
                     "agent_name": "conductor",
                     "session_id": state.get("session_id", ""),
@@ -646,7 +648,7 @@ class NodeFactory:
                     "framework": state.get("framework", ""),
                     "workflow_name": state.get("workflow_name", ""),
                     "task_desc": state.get("task_desc", ""),
-                    "hash": state.get("hash", ""),
+                    "hash": conductor_hash,
                 }
 
                 agent_base = AgentBase(context=context, config=config)
@@ -686,7 +688,9 @@ class NodeFactory:
                         "conductor_suggestion": suggestion or "",
                         "conductor_decision": agent_decision or code_gen_agent,
                         "history_attempts": [history_entry],
-                        "agent_history": ["conductor"]
+                        "agent_history": ["conductor"],
+                        "conductor_step_count": conductor_step,
+                        "hash": conductor_hash,
                     }
                 
                 task_id = state.get('task_id', '0')
@@ -695,7 +699,9 @@ class NodeFactory:
                 return {
                     "conductor_suggestion": suggestion or "",
                     "conductor_decision": agent_decision or code_gen_agent,
-                    "agent_history": ["conductor"]
+                    "agent_history": ["conductor"],
+                    "conductor_step_count": conductor_step,
+                    "hash": conductor_hash,
                 }
                 
             except Exception as e:
@@ -706,7 +712,9 @@ class NodeFactory:
                 return {
                     "conductor_suggestion": "",
                     "conductor_decision": "coder",
-                    "agent_history": ["conductor"]
+                    "agent_history": ["conductor"],
+                    "conductor_step_count": conductor_step,
+                    "hash": conductor_hash,
                 }
 
         return track_node("conductor")(conductor_node)
