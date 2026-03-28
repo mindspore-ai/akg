@@ -383,13 +383,15 @@ void AKGLoopFusion::runOnBlock(Block *block, OperatorTemplate &curOpTemplate) {
     auto srcFor = dyn_cast<affine::AffineForOp>(dependenceGraph.getNode(actualSrcId)->op);
     auto dstFor = dyn_cast<affine::AffineForOp>(dependenceGraph.getNode(actualDstId)->op);
 
+    auto actualSrcGroupId = plan.fusedGroup.from;
+    auto actualDstGroupId = plan.fusedGroup.to;
     if (srcFor && dstFor) {
       if (plan.fusionType == "V") {
         // Vertical fusion: calculate loop depth for the destination loop
-        codegenerator.doVFuse(actualSrcId, actualDstId, srcFor, dstFor, plan);
+        codegenerator.doVFuse(actualSrcGroupId, actualDstGroupId, srcFor, dstFor, plan);
       } else if (plan.fusionType == "H") {
         // Horizontal fusion: fuse loops at the same nesting level
-        codegenerator.doHFuse(actualSrcId, actualDstId, srcFor, dstFor, plan);
+        codegenerator.doHFuse(actualSrcGroupId, actualDstGroupId, srcFor, dstFor, plan);
       } else {
         llvm::outs() << "Warning: Could not find valid operations for fusion plan: node " << plan.fusedBand.from
                      << " to " << plan.fusedBand.to << "\n";
