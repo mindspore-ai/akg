@@ -42,7 +42,7 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 
 from akg_agents import get_project_root
-from akg_agents.core.utils import dsl_to_dir_key
+from akg_agents.core_v2.skill.metadata import dsl_to_dir_key
 from akg_agents.core_v2.skill import SkillLoader
 from akg_agents.op.skill.operator_selector import OperatorSkillSelector, OperatorSelectionContext
 

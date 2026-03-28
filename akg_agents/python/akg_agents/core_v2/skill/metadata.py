@@ -245,3 +245,8 @@ class SkillMetadata:
         cat_str = f"[{self.category}]" if self.category else ""
         return f"<SkillMetadata {cat_str} {self.name} v{self.version}>"
 
+
+def dsl_to_dir_key(dsl: str) -> str:
+    """将 DSL 系统名转为 skill 目录/名称前缀（triton_ascend -> triton-ascend）"""
+    return dsl.replace("_", "-").lower()
+

@@ -396,7 +396,7 @@ async def _merge_one_category(
         split_large_cluster,
     )
     from akg_agents.op.tools.skill_evolution.common import parse_skill_output
-    from akg_agents.core.utils import dsl_to_dir_key
+    from akg_agents.core_v2.skill.metadata import dsl_to_dir_key
     import json
 
     label = f"[{case_type}]"
@@ -533,7 +533,7 @@ async def _split_fix_skills(
     """
     from akg_agents.op.tools.skill_evolution.common import SkillWriter
     from akg_agents.op.tools.skill_evolution.merge_utils import archive_skills
-    from akg_agents.core.utils import dsl_to_dir_key
+    from akg_agents.core_v2.skill.metadata import dsl_to_dir_key
     from akg_agents.core_v2.skill.loader import SkillLoader
     import json
 
