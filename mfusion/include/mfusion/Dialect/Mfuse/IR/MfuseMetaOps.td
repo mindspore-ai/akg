@@ -223,6 +223,7 @@ def Mfuse_CastOp : Mfuse_Op<"cast", [Pure, SameOperandsAndResultShape]> {
 
   let hasVerifier = 1;
   let hasFolder = 1;
+  let hasCanonicalizeMethod = 1;
 
   let extraClassDeclaration = [{
     static ::mlir::Type inferResultType(::mlir::Value input, ::mlir::Type elementType);
