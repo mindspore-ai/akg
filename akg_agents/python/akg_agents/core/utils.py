@@ -29,10 +29,14 @@ def check_backend_arch(backend: str, arch: str):
     if backend not in ["ascend", "cuda", "cpu"]:
         raise ValueError("backend must be ascend, cuda or cpu")
     elif backend == "ascend":
-        # 支持 ascend910b1, b2, b2c, b3, b4 和 ascend310p3
-        supported_ascend_archs = ["ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4", "ascend310p3"]
+        supported_ascend_archs = [
+            "ascend910b1", "ascend910b2", "ascend910b2c", "ascend910b3", "ascend910b4",
+            "ascend310p3",
+            "ascend910_9362", "ascend910_9372", "ascend910_9381",
+            "ascend910_9382", "ascend910_9391", "ascend910_9392",
+        ]
         if arch not in supported_ascend_archs:
-            raise ValueError("ascend backend only support ascend910b1/b2/b2c/b3/b4 and ascend310p3")
+            raise ValueError(f"ascend backend only support {supported_ascend_archs}")
     elif backend == "cuda" and arch not in ["a100", "v100", "h20", "l20", "rtx3090"]:
         raise ValueError("cuda backend only support a100, v100, h20, l20, and rtx3090")
     elif backend == "cpu" and arch not in ["x86_64", "aarch64"]:
@@ -107,7 +111,7 @@ def check_task_type(task_type: str):
 
 
 # 配置依赖关系映射表
-# 注意：ascend910b1/b2/b2c/b3/b4 使用相同的配置
+# 注意：ascend910b*/ascend910_93* 使用相同的配置
 VALID_CONFIGS = {
     # framework -> backend -> arch -> dsl
     "mindspore": {
@@ -117,7 +121,13 @@ VALID_CONFIGS = {
             "ascend910b2c": ["triton_ascend", "triton-russia"],
             "ascend910b3": ["triton_ascend", "triton-russia"],
             "ascend910b4": ["triton_ascend", "triton-russia"],
-            "ascend310p3": ["swft"]
+            "ascend310p3": ["swft"],
+            "ascend910_9362": ["triton_ascend", "triton-russia"],
+            "ascend910_9372": ["triton_ascend", "triton-russia"],
+            "ascend910_9381": ["triton_ascend", "triton-russia"],
+            "ascend910_9382": ["triton_ascend", "triton-russia"],
+            "ascend910_9391": ["triton_ascend", "triton-russia"],
+            "ascend910_9392": ["triton_ascend", "triton-russia"],
         },
     },
     "torch": {
@@ -127,7 +137,13 @@ VALID_CONFIGS = {
             "ascend910b2c": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
             "ascend910b3": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
             "ascend910b4": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
-            "ascend310p3": ["swft", "ascendc", "torch"]
+            "ascend310p3": ["swft", "ascendc", "torch"],
+            "ascend910_9362": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
+            "ascend910_9372": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
+            "ascend910_9381": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
+            "ascend910_9382": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
+            "ascend910_9391": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
+            "ascend910_9392": ["triton_ascend", "triton-russia", "tilelang_npuir", "ascendc", "torch", "pypto"],
         },
         "cuda": {
             "a100": ["triton_cuda", "cuda_c", "tilelang_cuda", "torch"],

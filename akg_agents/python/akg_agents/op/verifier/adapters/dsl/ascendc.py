@@ -52,12 +52,18 @@ class DSLAdapterAscendC(DSLAdapter):
             "ascend910b2c": "Ascend910B2C",
             "ascend910b3": "Ascend910B3",
             "ascend910b4": "Ascend910B4",
-            "ascend310p3": "Ascend310P3"
+            "ascend310p3": "Ascend310P3",
+            "ascend910_9362": "Ascend910_9362",
+            "ascend910_9372": "Ascend910_9372",
+            "ascend910_9381": "Ascend910_9381",
+            "ascend910_9382": "Ascend910_9382",
+            "ascend910_9391": "Ascend910_9391",
+            "ascend910_9392": "Ascend910_9392",
         }}
 
         SOC_VERSION = ARCH_TO_SOC_VERSION.get(arch)
         if SOC_VERSION is None:
-            raise ValueError(f"不支持的ascend架构: {{arch}}，AscendC DSL仅支持ascend910b1/b2/b2c/b3/b4和ascend310p3")
+            raise ValueError(f"不支持的ascend架构: {{arch}}，支持的架构: {{list(ARCH_TO_SOC_VERSION.keys())}}")
         try:
             result = subprocess.run(["bash", "run.sh", "-v", SOC_VERSION], check=True, capture_output=True, text=True)
             if result.returncode != 0:
