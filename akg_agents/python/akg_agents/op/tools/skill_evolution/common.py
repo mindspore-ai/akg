@@ -30,7 +30,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
-from akg_agents.core.utils import dsl_to_dir_key
+from akg_agents.core_v2.skill.metadata import dsl_to_dir_key
 
 logger = logging.getLogger(__name__)
 

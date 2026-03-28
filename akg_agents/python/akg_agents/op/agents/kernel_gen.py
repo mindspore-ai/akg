@@ -29,7 +29,7 @@ import py_compile
 import tempfile
 from pathlib import Path
 
-from akg_agents.core.utils import dsl_to_dir_key
+from akg_agents.core_v2.skill.metadata import dsl_to_dir_key
 from typing import Dict, Any, Tuple, List, Optional
 from akg_agents import get_project_root
 from akg_agents.core_v2.agents import AgentBase, register_agent, Jinja2TemplateWrapper
