@@ -211,11 +211,19 @@ bool Area::computeSizeEqual(const AreaPtr &other) const {
 std::string Area::toString() const {
   std::string result;
   llvm::raw_string_ostream os(result);
-  os << "Area " << id() << " (" << nodes_.size() << " nodes):";
+  bool is_first = true;
+  os << "<";
   for (auto node : nodes_) {
-    os << "\n  " << node->op()->getName().getStringRef().data();
+    if (is_first) {
+      is_first = false;
+      os << id() << ":";
+    } else {
+      os << "-";
+    }
+    os << "op" << node->id();
   }
-  return os.str();
+  os << ">";
+  return result;
 }
 
 void Area::fuseInput(const AreaPtr &input_area) {
