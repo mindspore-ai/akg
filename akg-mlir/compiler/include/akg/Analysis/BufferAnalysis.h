@@ -186,7 +186,7 @@ class BufferAnalysis {
   llvm::DenseMap<OpInfo *, GenKillEntry> genKillMap;
   /// Gen-kill status corresponding to buffer
   llvm::DenseMap<Value, BufferStatus> buffer2status;
-  /// Map on buffer alias
+  /// Map on memref buffer alias
   llvm::DenseMap<Value, SmallVector<std::pair<Value, bool>>> buffer2AliasVec;
   int seqIndex{0};
   /// Live ranges collected during analysis
@@ -216,6 +216,12 @@ class BufferAnalysis {
 
   /// Get alias buffers
   llvm::SetVector<Value> GetAliasBuffers(Value aliasBuffer);
+
+  /// Materialize scalar control-flow results at merge/exit points
+  void MaterializeScalarResults(OpInfo *opInfo, const ValueRange &results);
+
+  /// Kill region-local scalar sources whose lifetime is transferred to outer results
+  void KillTransferredScalarSources(OpInfo *opInfo, Region &region, const ValueRange &sources);
 
   /// Process gen buffer based on the result value of op
   void UpdateOpGenInfo(OpInfo *opInfo, const ValueRange &results);
