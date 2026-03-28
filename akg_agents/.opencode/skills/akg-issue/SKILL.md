@@ -1,15 +1,15 @@
 ---
-name: akg_issue
+name: akg-issue
 description: >
   生成符合 AKG 项目规范的 Issue 描述文件（Bug Report / RFC / Task）。
   支持两种模式：用户描述生成、基于分支 diff 自动生成。
   生成的 .md 和 .json 文件写入 .tmp/issue/，经规范校验后供用户确认和提交。
 argument-hint: >
   两种使用方式：
-  1. 描述模式：/akg_issue <问题描述>
-  2. Diff 模式：/akg_issue 从当前分支到 <目标分支> 建 issue
-  示例：/akg_issue softmax算子在batch>32时报IndexError
-  示例：/akg_issue 帮我基于当前分支和目标分支origin/br_agents的差异提一个issue
+  1. 描述模式：/akg-issue <问题描述>
+  2. Diff 模式：/akg-issue 从当前分支到 <目标分支> 建 issue
+  示例：/akg-issue softmax算子在batch>32时报IndexError
+  示例：/akg-issue 帮我基于当前分支和目标分支origin/br_agents的差异提一个issue
 ---
 
 # AKG Issue 生成
@@ -363,8 +363,7 @@ curl -s -X POST "https://api.gitcode.com/api/v5/repos/<owner>/<repo>/issues?acce
   -H "Content-Type: application/json" \
   -d '{
     "title": "<title>",
-    "body": "<body>",
-    "labels": "<labels 逗号分隔>"
+    "body": "<body>"
   }'
 ```
 
@@ -375,7 +374,6 @@ curl -s -X POST "https://api.gitcode.com/api/v5/repos/<owner>/<repo>/issues?acce
 | `repo` | ✅ | URL path | 从 `git remote -v` 的 URL 提取的仓库名 |
 | `title` | ✅ | JSON body | Step 3 生成的标题 |
 | `body` | ❌ | JSON body | Step 3 生成的正文 |
-| `labels` | ❌ | JSON body | 逗号分隔的标签名 |
 
 **Gitee**（`platform == "gitee"`）：
 
@@ -386,8 +384,7 @@ curl -s -X POST "https://gitee.com/api/v5/repos/<owner>/issues" \
     "access_token": "'"$GITEE_TOKEN"'",
     "repo": "<repo>",
     "title": "<title>",
-    "body": "<body>",
-    "labels": "<labels 逗号分隔>"
+    "body": "<body>"
   }'
 ```
 
@@ -402,21 +399,5 @@ gh issue create --title "<title>" --body-file $AKG_AGENTS_DIR/.tmp/issue/<file>.
 
 - **成功**（JSON 含 `html_url`）→ 展示 Issue 链接
 - **失败** → 展示完整错误信息，常见排查：
-  - `api token has not permission` → URL 中 owner 不正确，检查 `git remote -v` 输出
+  - `403` → URL 中 owner 不正确，检查 `git remote -v` 输出
   - `401` → Token 无效或过期
-  - `label` 相关错误 → 标签名不符合要求（长度 2-20，无特殊字符）
-
-**⚠️ Issue 在 PR 中的关联**：
-
-当 PR 需要关联此 Issue 时，如果 PR 是从 fork 仓库提交到官方仓库，**必须使用完整的 Issue URL**：
-
-```markdown
-**Which issue(s) this PR fixes**:
-
-Fixes https://gitcode.com/mindspore/akg/issues/399
-```
-
-**支持的格式**：
-- `Fixes #399` - 同仓库内有效
-- `Fixes https://gitcode.com/mindspore/akg/issues/399` - 跨仓库有效
-- `Closes https://...` / `Resolves https://...` - 关闭/解决 Issue

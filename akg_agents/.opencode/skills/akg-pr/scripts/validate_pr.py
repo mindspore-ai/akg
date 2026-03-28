@@ -68,8 +68,10 @@ def check_pr_fixes_link(body: str, meta: dict) -> CheckResult:
     kind = meta.get("kind", "")
     if kind != "bug":
         return CheckResult("PR-003", "bug fix PR 必须关联 issue", "error", True, "非 bug 类型，跳过")
-    has_fixes = bool(re.search(r"Fixes\s+#\d+", body, re.IGNORECASE))
-    detail = "已关联 issue" if has_fixes else "bug fix PR 未关联 issue，请补充 Fixes #<number>"
+    has_fixes = bool(re.search(
+        r"(Fixes|Closes|Resolves)\s+(#\d+|https?://\S+/issues/\d+)", body, re.IGNORECASE
+    ))
+    detail = "已关联 issue" if has_fixes else "bug fix PR 未关联 issue，请补充 Fixes <issue_url>"
     return CheckResult("PR-003", "bug fix PR 必须关联 issue", "error", has_fixes, detail)
 
 
