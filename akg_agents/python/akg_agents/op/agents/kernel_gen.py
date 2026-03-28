@@ -175,6 +175,18 @@ class KernelGen(AgentBase):
                     "type": "object"
                 },
                 "default": []
+            },
+            "exclude_skill_names": {
+                "type": "array",
+                "description": "排除指定 skill 名称列表（AB test A 模式）",
+                "items": {"type": "string"},
+                "default": []
+            },
+            "force_skill_names": {
+                "type": "array",
+                "description": "强制导入指定 skill 名称列表（AB test B 模式）",
+                "items": {"type": "string"},
+                "default": []
             }
         },
         "required": ["op_name", "task_desc", "dsl", "framework", "backend"]
@@ -186,6 +198,8 @@ class KernelGen(AgentBase):
         self.codegen_step_count = 0
         self.format_instructions = ""
         self.extra_skills: List[Any] = []
+        self.exclude_skill_names: List[str] = []
+        self.force_skill_names: List[str] = []
         
         context = {
             "agent_name": "kernel_gen",
@@ -252,10 +266,24 @@ class KernelGen(AgentBase):
         Layer 0 (fundamental/reference): 固定注入
         Layer 1 (guide + example): LLM 一次筛选 guide(1-2 个)，example 跟随 guide 的 operator_type
         Layer 2 (case): 仅 debug/optimize 阶段，与 guide 一起在同一次 LLM 调用中筛选
+
+        Pre-filter: backend coarse filter via OperatorSkillSelector.
+        self.exclude_skill_names / self.force_skill_names 用于 AB test 控制。
         """
         all_skills = self._load_skills_by_dsl(dsl)
         if not all_skills:
             return []
+
+        context = OperatorSelectionContext(backend=backend)
+        all_skills = self.skill_selector.coarse_filter(all_skills, context)
+
+        if self.exclude_skill_names:
+            excluded_set = set(self.exclude_skill_names)
+            before = len(all_skills)
+            all_skills = [s for s in all_skills if s.name not in excluded_set]
+            logger.info(f"[KernelGen] Excluded {before - len(all_skills)} skills by name")
+
+        full_pool = {s.name: s for s in all_skills}
 
         allowed = self.STAGE_CATEGORIES.get(stage, self.STAGE_CATEGORIES["initial"])
 
@@ -330,6 +358,16 @@ class KernelGen(AgentBase):
             logger.info(f"[KernelGen] 排除的 guide: {excluded_guides}")
         if excluded_cases:
             logger.info(f"[KernelGen] 排除的 case: {excluded_cases}")
+
+        if self.force_skill_names:
+            existing_names = {s.name for s in result}
+            forced = [full_pool[n] for n in self.force_skill_names
+                      if n in full_pool and n not in existing_names]
+            if forced:
+                result.extend(forced)
+                logger.info(f"[KernelGen] Force-included {len(forced)} skills: "
+                            f"{[s.name for s in forced]}")
+
         return result
 
     @staticmethod
@@ -603,6 +641,8 @@ class KernelGen(AgentBase):
         inspirations: str = "",
         handwrite_suggestions: Optional[List[Dict[str, str]]] = None,
         extra_skills: Optional[List[Any]] = None,
+        exclude_skill_names: Optional[List[str]] = None,
+        force_skill_names: Optional[List[str]] = None,
     ) -> Tuple[str, str, str]:
         """
         执行代码生成
@@ -623,12 +663,23 @@ class KernelGen(AgentBase):
             previous_code: 之前生成的代码（修改场景使用）
             designer_code: KernelDesigner 生成的算法草图（可选，DefaultWorkflowV2 场景使用）
             inspirations: 格式化后的进化探索方案字符串（evolve/kernelgen_only 场景使用）
-            handwrite_suggestions: 手写优化策略与实现参考
+            handwrite_suggestions: [DEPRECATED] 不再使用，保留向后兼容
             extra_skills: 额外注入的 skill 列表，跳过粗筛和精筛，在精筛结果后直接追加
+            exclude_skill_names: 排除指定 skill（覆盖实例属性，AB test A 模式）
+            force_skill_names: 强制导入指定 skill（覆盖实例属性，AB test B 模式）
         
         Returns:
             Tuple[str, str, str]: (生成的代码, 完整 prompt, 推理过程)
         """
+        if handwrite_suggestions:
+            logger.warning("[KernelGen] handwrite_suggestions 已弃用，KernelGen 使用内部 skill 选择")
+
+        saved_exclude = self.exclude_skill_names
+        saved_force = self.force_skill_names
+        if exclude_skill_names is not None:
+            self.exclude_skill_names = exclude_skill_names
+        if force_skill_names is not None:
+            self.force_skill_names = force_skill_names
         try:
             if history_compress is None:
                 history_compress = []
@@ -684,11 +735,6 @@ class KernelGen(AgentBase):
             if verifier_error and len(verifier_error) > 4000:
                 error_for_prompt = "... (前面省略) ...\n" + verifier_error[-4000:]
 
-            aggregated_api_docs = await self._load_aggregated_api_docs(
-                dsl,
-                backend=backend,
-                arch=arch,
-            )
             user_prompt = self.user_prompt_template.format(
                 history_actions=history_compress,
                 verifier_error=error_for_prompt,
@@ -704,7 +750,7 @@ class KernelGen(AgentBase):
                 format_instructions=self.format_instructions,
                 designer_code=designer_code,
                 inspirations=inspirations,
-                handwrite_suggestions=handwrite_suggestions or [],
+                handwrite_suggestions=[],
                 framework=framework,
                 dsl=dsl,
             )
@@ -761,3 +807,6 @@ class KernelGen(AgentBase):
         except Exception as e:
             logger.error(f"Exception in kernel_gen.run: {type(e).__name__}: {e}")
             raise
+        finally:
+            self.exclude_skill_names = saved_exclude
+            self.force_skill_names = saved_force

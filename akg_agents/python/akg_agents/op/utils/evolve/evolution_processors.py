@@ -178,36 +178,9 @@ class InitializationProcessor:
         await handwrite_loader.select_relevant_skills()
         logger.info(f"Shared SkillHandwriteLoader created with {len(handwrite_loader.get_selected_skills())} selected skills")
         
-        # A/B 测试模式：清空 handwrite，仅使用 evolved skill
-        ab_test_mode = (self.config.config or {}).get("ab_test_mode", False)
-        if ab_test_mode:
-            handwrite_loader._selected_skills.clear()
-            logger.info("A/B test mode: handwrite documents cleared")
-
-        evolved_suggestions: list = []
-        cfg = self.config.config or {}
-        evolved_dirs = cfg.get("evolved_skill_dirs", [])
-        if not evolved_dirs:
-            single = cfg.get("evolved_skill_dir")
-            if single:
-                evolved_dirs = [single]
-        if evolved_dirs:
-            from akg_agents.op.utils.evolved_skill_loader import select_evolved_skills
-            for edir in evolved_dirs:
-                sug = await select_evolved_skills(
-                    evolved_dir=edir,
-                    op_name=self.config.op_name,
-                    task_desc=self.config.task_desc,
-                    dsl=self.config.dsl,
-                    backend=self.config.backend,
-                    config=self.config.config,
-                )
-                evolved_suggestions.extend(sug)
-        
         # 初始化数据结构
         init_data = {
             'handwrite_loader': handwrite_loader,
-            'evolved_suggestions': evolved_suggestions,
             'all_results': [],
             'best_success_rate': 0.0,
             'round_results': [],
@@ -322,14 +295,12 @@ class TaskCreationProcessor:
         island_meta_prompts = [[] for _ in range(self.config.num_islands)]
         island_handwrite_suggestions = [[] for _ in range(self.config.num_islands)]
         
-        evolved_suggestions = self.init_data.get('evolved_suggestions', [])
-
         if round_idx == 1:
             # 第一轮：初始化空灵感
             for island_idx in range(self.config.num_islands):
                 island_inspirations[island_idx] = [[] for _ in range(self.config.tasks_per_island)]
                 island_meta_prompts[island_idx] = load_meta_prompts(self.config.dsl, self.config.tasks_per_island)
-                island_handwrite_suggestions[island_idx] = [] + evolved_suggestions
+                island_handwrite_suggestions[island_idx] = []
         else:
             # 后续轮次：生成灵感
             for island_idx in range(self.config.num_islands):
@@ -394,7 +365,7 @@ class TaskCreationProcessor:
                 
                 island_meta_prompts[island_idx] = load_meta_prompts(self.config.dsl, self.config.tasks_per_island)
                 sampled_handwrite = self.init_data['island_handwrite_samplers'][island_idx].sample()
-                island_handwrite_suggestions[island_idx] = sampled_handwrite + evolved_suggestions
+                island_handwrite_suggestions[island_idx] = sampled_handwrite
         
         return {
             'inspirations': island_inspirations,
@@ -404,14 +375,11 @@ class TaskCreationProcessor:
     
     def _prepare_simple_inspirations(self, round_idx: int) -> Dict[str, Any]:
         """为简单模式准备灵感数据"""
-        evolved_suggestions = self.init_data.get('evolved_suggestions', [])
-
         if round_idx == 1:
             inspirations = [[] for _ in range(self.config.parallel_num)]
             meta_prompts = load_meta_prompts(self.config.dsl, self.config.parallel_num)
             handwrite_suggestions_list = [
-                [] + evolved_suggestions
-                for _ in range(self.config.parallel_num)
+                [] for _ in range(self.config.parallel_num)
             ]
         else:
             stored_implementations = load_best_implementations(self.config.storage_dir)
@@ -426,7 +394,7 @@ class TaskCreationProcessor:
             
             meta_prompts = load_meta_prompts(self.config.dsl, self.config.parallel_num)
             handwrite_suggestions_list = [
-                self.init_data['individual_handwrite_samplers'][pid].sample() + evolved_suggestions
+                self.init_data['individual_handwrite_samplers'][pid].sample()
                 for pid in range(self.config.parallel_num)
             ]
         

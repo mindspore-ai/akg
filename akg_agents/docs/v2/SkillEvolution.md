@@ -340,7 +340,38 @@ Newly generated skills continue to be written under `~/.akg/evolved_skills/{dsl}
 - If a new skill is clustered with an existing merged skill → incremental merge using the merged skill as base
 - If a new skill forms its own cluster → kept as an independent skill
 
-## 6. File Structure
+## 6. Deployment and AB Testing
+
+### 6.1 Symlink Deployment
+
+Evolved skills are generated under `~/.akg/evolved_skills/{dsl}/` (in `evolved-fix/` and `evolved-improvement/` subdirectories). To make them discoverable by KernelGen's standard skill loading mechanism, create symlinks into the standard skills directory:
+
+```bash
+ln -s ~/.akg/evolved_skills/triton-ascend/evolved-fix \
+      python/akg_agents/op/resources/skills/triton-ascend/evolved-fix
+
+ln -s ~/.akg/evolved_skills/triton-ascend/evolved-improvement \
+      python/akg_agents/op/resources/skills/triton-ascend/evolved-improvement
+```
+
+Once symlinked, KernelGen's `_load_skills_by_dsl()` automatically discovers evolved skills alongside built-in skills, with no code changes needed.
+
+### 6.2 AB Test Mechanism
+
+The AB test compares kernel generation performance with and without evolved skills:
+
+- **A mode (baseline)**: `exclude_skill_names` is set to the target evolved skill names, causing KernelGen to exclude them during selection
+- **B mode (with evolved)**: `force_skill_names` is set to the target evolved skill names, ensuring KernelGen force-includes them after LLM selection
+
+**Skill name sources** (highest to lowest priority):
+1. **Explicit names** (`--skill-names`): Directly specify skill names to exclude/force-include. Use this to test individual skill effectiveness.
+2. **Directory scan** (`--evolved-skill-dir`): Scan the specified directory's `evolved-fix/` and `evolved-improvement/` subdirectories.
+3. **Default scan**: Scan the standard skills directory for evolved subdirectories.
+
+`ab_test_utils.py` provides `_scan_evolved_skill_names()` to automatically scan `evolved-fix` and `evolved-improvement` directories and collect skill names. These are injected into the agent config as `exclude_skill_names` (A mode) or `force_skill_names` (B mode), which are then set on the `KernelGen` instance during `LangGraphTask._init_agents()`.
+
+
+## 7. File Structure
 
 ```
 core_v2/agents/
@@ -372,7 +403,7 @@ examples/kernel_related/skill_evolution/
 └── tracking.md                 — Experiment tracking document
 ```
 
-## 7. Standalone CLI Script
+## 8. Standalone CLI Script
 
 `examples/kernel_related/skill_evolution/run_skill_evolution.py` provides an Agent-framework-free entry point.
 
@@ -402,7 +433,7 @@ python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix 
 | `-o / --output-dir` | SKILL.md output directory |
 | `-m / --model-level` | LLM model level (default: standard) |
 
-## 8. Workspace
+## 9. Workspace
 
 In Agent mode, intermediate files are saved to `{cur_path}/logs/skill_evolution/`. In CLI mode, the default location is `~/.akg/skill_evolution/{mode}_{op_name}/` (overridable with `-o`):
 
@@ -449,7 +480,7 @@ In Agent mode, intermediate files are saved to `{cur_path}/logs/skill_evolution/
 | `merge_{theme}_response.txt` | Per-cluster merge LLM output |
 | `result.json` | Final result summary |
 
-## 9. Workflow Compatibility
+## 10. Workflow Compatibility
 
 Different workflows produce logs with different naming conventions:
 
