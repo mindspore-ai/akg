@@ -108,5 +108,5 @@ akg_cli --help         # 验证安装
 | Skill | 用途 | 加载场景 |
 |-------|------|---------|
 | `akg-env-setup` | 环境检查 + 采集 + 缓存；FULL_SETUP 模式额外含当次任务的参数确认和运行时依赖安装 | 安装请求（基础模式）；op-optimizer Phase 1（FULL_SETUP 模式） |
-| `akg_pr` | 基于当前分支与目标分支的 diff 生成 PR 描述文件（.md + .json），校验后可 API 提交。产物写入 `.tmp/pr/` | 用户输入 `/akg_pr` |
-| `akg_issue` | 生成 Issue 描述文件（Bug Report / RFC / Task），校验后可 API 提交，支持描述模式和 diff 自动生成模式。产物写入 `.tmp/issue/` | 用户输入 `/akg_issue` |
+| `akg-pr` | 基于当前分支与目标分支的 diff 生成 PR 描述文件（.md + .json），校验后可 API 提交。产物写入 `.tmp/pr/` | 用户输入 `/akg-pr` |
+| `akg-issue` | 生成 Issue 描述文件（Bug Report / RFC / Task），校验后可 API 提交，支持描述模式和 diff 自动生成模式。产物写入 `.tmp/issue/` | 用户输入 `/akg-issue` |
