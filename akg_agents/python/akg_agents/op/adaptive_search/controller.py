@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 
-from akg_agents.op.adaptive_search.success_db import SuccessDB
+from akg_agents.op.adaptive_search.success_db import SuccessDB, SuccessRecord
 from akg_agents.op.adaptive_search.task_pool import AsyncTaskPool
 from akg_agents.op.adaptive_search.ucb_selector import UCBParentSelector
 from akg_agents.op.adaptive_search.task_generator import TaskGenerator, TaskGeneratorConfig
