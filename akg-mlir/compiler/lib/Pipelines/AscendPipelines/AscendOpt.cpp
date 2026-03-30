@@ -57,13 +57,13 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
   pm.addPass(mlir::createLegalizeTypePass());
   // pm.addPass(mlir::createFoldDimensionPass());
   if (options.enableLoopFusion) {
-    pm.addPass(mlir::createMindSporeToLinalgNamedPass(!options.enableLoopFusion));
+    pm.addPass(mlir::createMindSporeToLinalgNamedPass(options.dynamicShape, !options.enableLoopFusion));
     pm.addPass(mlir::createLinalgGeneralizeNamedOpsPass());
     pm.addPass(mlir::createMindSporeToTosaPass());
     pm.addPass(mlir::createMindSporeToLinalgPass());
     pm.addPass(mlir::createCloneTensorEmptyPass());
   } else {
-    pm.addPass(mlir::createMindSporeToLinalgNamedPass());
+    pm.addPass(mlir::createMindSporeToLinalgNamedPass(options.dynamicShape));
     pm.addPass(mlir::createMindSporeToTosaPass());
   }
   OpPassManager &nestedFunctionPM = pm.nest<mlir::func::FuncOp>();
