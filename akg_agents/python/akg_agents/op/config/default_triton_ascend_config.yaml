@@ -20,7 +20,7 @@ profile_settings:
   warmup_times: 5
 
 # Verification configuration
-verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
+verify_timeout: 600  # Timeout for verification in seconds (default 5 minutes)
 
 # Multi-case testing configuration
 enable_multi_case_verification: false  # Master switch for multi-case verification (set to false to only generate space_config without verification)
