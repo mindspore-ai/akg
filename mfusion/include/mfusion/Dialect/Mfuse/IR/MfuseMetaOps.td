@@ -863,6 +863,7 @@ def Mfuse_ReshapeOp : Mfuse_Op<"reshape", [
       }]>
   ];
   let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
 
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
