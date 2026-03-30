@@ -418,7 +418,7 @@ def _run_ascend_kernel_for_torch_mlir(
     elif mode == "akg":
         if linalg_file_path is None:
             raise ValueError("linalg_file_path is required for akg mode")
-        output_path = dump_dir / "out_akg.mlir"
+        output_path = dump_dir / f"{kernel_name}_out_akg.mlir"
         dump_log_path = dump_dir / f"{kernel_name}.log"
         run_mlir_ascend_pipeline(
             linalg_file_path,
@@ -430,7 +430,8 @@ def _run_ascend_kernel_for_torch_mlir(
             True,
             str(dump_log_path),
         )
-        ascend_compile(output_path, so_path, 16)
+        block_dim = get_block_dim_from_mlir(str(output_path))
+        ascend_compile(output_path, so_path, block_dim)
         print("[INFO] bishengir-compile success")
     device_id = int(os.environ.get("DEVICE_ID", 0))
     launch(
@@ -604,7 +605,7 @@ def _run_torch_ir_single_file(file_path, compile_args, mode: str):
         linalg_file_path = run_torch_mlir_to_linalg_on_tensors(
             compile_args.torch_mlir_opt,
             file_path,
-            dump_dir / "out_linalg.mlir",
+            dump_dir / f"{kernel_name}_out_linalg.mlir",
         )
     _run_ascend_kernel_for_torch_mlir(
         mode=mode,
