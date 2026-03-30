@@ -75,10 +75,11 @@ def get_named_op_str(
             if "ml_program.global" not in line:
                 processed_lines.append(line)
 
-        func_attr = (
-            "attributes {hacc.entry, "
-            "hacc.function_kind = #hacc.function_kind<HOST>}"
-        )
+        func_attr = ("attributes {hacc.entry, "
+                    "hacc.function_kind = #hacc.function_kind<HOST>}"
+                    if dynamic else
+                    "attributes {hacc.entry, "
+                    "hacc.function_kind = #hacc.function_kind<DEVICE>}")
 
         processed_mlir = "\n".join(processed_lines)
 
@@ -121,7 +122,7 @@ def get_named_op_str(
 
 
 def ascend_compile_with_hfusion(input_file, output_so_path):
-    "bisheng-compile for bisheng pipeline."
+    """bisheng-compile for bisheng pipeline."""
     compile_cmd = [
         "bishengir-compile",
         input_file,
@@ -262,6 +263,153 @@ def run_torch_mlir_to_linalg_on_tensors(
         raise RuntimeError("torch-mlir to linalg-on-tensors failed") from e
 
     return output_path
+
+def format_py_value(v):
+    """Format a Python value as source code for generated NumPy reference code.
+
+    This is mainly used by the bisheng pipeline codegen. String values "inf",
+    "-inf", and "nan" are normalized to valid Python float expressions so the
+    generated code preserves special floating-point literals.
+    """
+    if isinstance(v, str):
+        lv = v.lower()
+        if lv == "inf":
+            return 'float("inf")'
+        if lv == "-inf":
+            return 'float("-inf")'
+        if lv == "nan":
+            return 'float("nan")'
+    return repr(v)
+
+def gen_slice_tensor(dst_name, src, dim, start, end, step):
+    """Generate NumPy code that approximates torch.aten.slice.Tensor semantics.
+
+    The generated code:
+    - builds a slice on dimension `dim` with (`start`, `end`, `step`),
+    - normalizes the large int64 end sentinel to the dimension size,
+    - applies the slice to `src`,
+    - stores the result in `dst_name`.
+
+    Notes:
+    - This is intended for generated NumPy reference code in the bisheng
+      pipeline.
+    - Using Python/NumPy slice syntax preserves negative indices and other
+      standard slicing behavior better than np.take(range(...)).
+    """
+    idx_name = f"_{dst_name}_slices"
+    dim_name = f"_{dst_name}_dim"
+    start_name = f"_{dst_name}_start"
+    end_name = f"_{dst_name}_end"
+    step_name = f"_{dst_name}_step"
+    dim_size_name = f"_{dst_name}_dim_size"
+
+    start_expr = "None" if start is None else f"int({start})"
+    end_expr = "None" if end is None else f"int({end})"
+
+    return "\n".join([
+        f"{dim_name} = int({dim})",
+        f"{start_name} = {start_expr}",
+        f"{end_name} = {end_expr}",
+        f"{step_name} = int({step})",
+        f"{dim_size_name} = {src}.shape[{dim_name}]",
+        f"if {start_name} is None:",
+        f"    {start_name} = 0 if {step_name} > 0 else {dim_size_name} - 1",
+        f"if {end_name} is None or {end_name} >= 2**63 - 1:",
+        f"    {end_name} = {dim_size_name}",
+        f"{idx_name} = [slice(None)] * {src}.ndim",
+        f"{idx_name}[{dim_name}] = slice({start_name}, {end_name}, {step_name})",
+        f"{dst_name} = {src}[tuple({idx_name})]",
+    ])
+
+def gen_slice_scatter(dst_name, base, src, dim, start, end, step):
+    """Generate NumPy code that approximates torch.aten.slice_scatter semantics.
+
+    The generated code:
+    - copies `base` into `dst_name`,
+    - builds a slice on dimension `dim` with (`start`, `end`, `step`),
+    - checks that the target slice shape matches `src.shape`,
+    - assigns `src` into that slice.
+
+    Notes:
+    - This is intended for generated NumPy reference code in the bisheng
+      pipeline.
+    - It matches the common lowering pattern used in our tests, but is not a
+      full reimplementation of every PyTorch edge case.
+    """
+    idx_name = f"_{dst_name}_slices"
+    dim_name = f"_{dst_name}_dim"
+    start_name = f"_{dst_name}_start"
+    end_name = f"_{dst_name}_end"
+    step_name = f"_{dst_name}_step"
+    dim_size_name = f"_{dst_name}_dim_size"
+    target_view_name = f"_{dst_name}_target_view"
+
+    start_expr = "None" if start is None else f"int({start})"
+    end_expr = "None" if end is None else f"int({end})"
+
+    return "\n".join([
+        f"{dst_name} = np.array({base}, copy=True)",
+        f"{dim_name} = int({dim})",
+        f"{start_name} = {start_expr}",
+        f"{end_name} = {end_expr}",
+        f"{step_name} = int({step})",
+        f"{dim_size_name} = {dst_name}.shape[{dim_name}]",
+        f"if {start_name} is None:",
+        f"    {start_name} = 0 if {step_name} > 0 else {dim_size_name} - 1",
+        f"if {end_name} is None or {end_name} >= 2**63 - 1:",
+        f"    {end_name} = {dim_size_name}",
+        f"{idx_name} = [slice(None)] * {dst_name}.ndim",
+        f"{idx_name}[{dim_name}] = slice({start_name}, {end_name}, {step_name})",
+        f"{target_view_name} = {dst_name}[tuple({idx_name})]",
+        f"if {target_view_name}.shape != {src}.shape:",
+        f"    raise ValueError('slice_scatter shape mismatch: %s vs %s' % ({target_view_name}.shape, {src}.shape))",
+        f"{dst_name}[tuple({idx_name})] = {src}",
+    ])
+
+def gen_constant_pad_nd(dst_name, x, pad, value):
+    """Generate reference code for torch.aten.constant_pad_nd.
+
+    Semantics:
+    - `pad` is interpreted from the last dimension outward, pairwise:
+      [left_last, right_last, left_second_last, right_second_last, ...]
+    - positive pad means constant padding with `value`
+    - negative pad means cropping on that side
+
+    Notes:
+    - This generates NumPy-based fallback code in the same style as
+      `gen_slice_scatter`.
+    - It handles the common cases used by our Torch-IR fallback path.
+    """
+    pad_name = f"_{dst_name}_pad"
+    ndim_name = f"_{dst_name}_ndim"
+    num_pad_dims_name = f"_{dst_name}_num_pad_dims"
+    slices_name = f"_{dst_name}_slices"
+    pad_width_name = f"_{dst_name}_pad_width"
+    i_name = f"_{dst_name}_i"
+    dim_name = f"_{dst_name}_dim"
+    left_name = f"_{dst_name}_left"
+    right_name = f"_{dst_name}_right"
+    start_name = f"_{dst_name}_start"
+    end_name = f"_{dst_name}_end"
+    cropped_name = f"_{dst_name}_cropped"
+
+    return "\n".join([
+        f"{pad_name} = list({pad})",
+        f"{ndim_name} = {x}.ndim",
+        f"{num_pad_dims_name} = len({pad_name}) // 2",
+        f"{slices_name} = [slice(None)] * {ndim_name}",
+        f"{pad_width_name} = [(0, 0)] * {ndim_name}",
+        f"for {i_name} in range({num_pad_dims_name}):",
+        f"    {dim_name} = {ndim_name} - 1 - {i_name}",
+        f"    {left_name} = int({pad_name}[2 * {i_name}])",
+        f"    {right_name} = int({pad_name}[2 * {i_name} + 1])",
+        f"    {start_name} = max(-{left_name}, 0)",
+        f"    {end_name} = {x}.shape[{dim_name}] - max(-{right_name}, 0)",
+        f"    {slices_name}[{dim_name}] = slice({start_name}, {end_name})",
+        f"    {pad_width_name}[{dim_name}] = (max({left_name}, 0), max({right_name}, 0))",
+        f"{cropped_name} = {x}[tuple({slices_name})]",
+        f"{dst_name} = np.pad({cropped_name}, {pad_width_name}, mode='constant', constant_values={value})",
+    ])
 
 TORCH_DTYPE_TO_NUMPY = {
     # unsigned
