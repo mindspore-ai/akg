@@ -94,7 +94,7 @@ validate_markers() {
     local framework_markers=("torch" "mindspore" "numpy")
     local dsl_markers=("triton" "ascendc" "cpp" "cuda_c" "tilelang" "tilelang_npuir")
     local backend_markers=("cuda" "ascend" "cpu")
-    local arch_markers=("a100" "v100" "h20" "l20" "rtx3090" "ascend910b4" "ascend910b2" "x86_64")
+    local arch_markers=("a100" "v100" "h20" "l20" "rtx3090" "ascend910b4" "ascend910b2" "ascend910_9362" "ascend910_9372" "ascend910_9381" "ascend910_9382" "ascend910_9391" "ascend910_9392" "x86_64")
 
     # ut 和 op-ut 不需要硬件标记验证
     case "$test_type" in
