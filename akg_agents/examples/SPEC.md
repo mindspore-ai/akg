@@ -30,16 +30,3 @@
 - **不要**把生产级代码放在示例中——示例是教学性质的
 - **不要**把测试代码放在这里——归 `tests/`
 
-## Cache 模式显式设置
-
-以 `kernel_related/cpu/run_torch_cpu_cpp_single.py` 为例，示例脚本支持通过参数显式设置 cache 模式：
-
-```bash
-python examples/kernel_related/cpu/run_torch_cpu_cpp_single.py --cache-mode off
-python examples/kernel_related/cpu/run_torch_cpu_cpp_single.py --cache-mode record
-python examples/kernel_related/cpu/run_torch_cpu_cpp_single.py --cache-mode replay --cache-session-hash <session_hash>
-```
-
-约定：
-- 默认 `cache_mode=off`
-- `cache_mode=replay` 时必须提供 `cache_session_hash`

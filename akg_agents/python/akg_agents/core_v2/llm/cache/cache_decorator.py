@@ -122,6 +122,8 @@ def attach_cache_to_client(
                     if stream:
                         _replay_cached_stream(client, agent_name, cached)
                     return cached
+                if cache_mode == "record":
+                    logger.info("cache_mode=record 未命中缓存，正在调用实时 LLM 并在完成后写入缓存")
                 if cache_mode == "replay":
                     raise RuntimeError(
                         "Replay cache miss for session/content keys; aborting to avoid live LLM call"
