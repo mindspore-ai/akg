@@ -227,7 +227,8 @@ class FrameworkAdapterTorch(FrameworkAdapter):
 """
         elif backend == "ascend":
             if "ascend910" in arch:
-                return f"""    os.environ['DEVICE_ID'] = str({device_id})
+                return f"""    import torch_npu
+    os.environ['DEVICE_ID'] = str({device_id})
     device = torch.device("npu")
     torch.npu.set_device({device_id})
 """
