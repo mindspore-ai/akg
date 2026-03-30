@@ -338,6 +338,7 @@ class NodeFactory:
             
             verifier_error = state.get('verifier_error', '')
             conductor_suggestion = state.get('conductor_suggestion', '')
+            code_check_errors = state.get('code_check_errors', '')
             
             if verifier_error:
                 logger.info(f"[Task {task_id}] KernelGen 收到验证错误信息 (长度: {len(verifier_error)})")
@@ -345,6 +346,10 @@ class NodeFactory:
             if conductor_suggestion:
                 logger.info(f"[Task {task_id}] KernelGen 收到 Conductor 建议 (长度: {len(conductor_suggestion)})")
                 logger.debug(f"[Task {task_id}] 建议内容: {conductor_suggestion[:200]}...")
+            
+            if code_check_errors:
+                logger.info(f"[Task {task_id}] KernelGen 收到 CodeChecker 静态检查错误 (长度: {len(code_check_errors)})")
+                logger.debug(f"[Task {task_id}] 检查错误: {code_check_errors[:300]}...")
             
             # 将 state 中的 session_id 注入到 kernel_gen_instance.context
             # 使 KernelGen 的 run_llm 能正确创建带 session_id 的 LLMClient，支持流式输出到 CLI
@@ -380,6 +385,7 @@ class NodeFactory:
                     previous_code=state.get('previous_code', ''),
                     designer_code=designer_code,
                     inspirations=inspirations_text,
+                    code_check_errors=code_check_errors,
                 )
             except Exception as e:
                 logger.error(f"[Task {task_id}] KernelGen.run() 失败: {e}")
@@ -411,6 +417,9 @@ class NodeFactory:
                 "step_count": state.get("step_count", 0) + 1,
                 "agent_history": ["kernel_gen"],
                 "conductor_suggestion": None,  # 清除旧建议
+                "code_check_errors": None,     # 清除旧的检查错误
+                "code_check_passed": None,     # 重置检查状态
+                "code_check_details": None,    # 清除旧的检查详情
                 "codegen_invalid": codegen_invalid,
                 "codegen_invalid_reason": codegen_invalid_reason,
                 "verifier_result": False if codegen_invalid else state.get("verifier_result"),

@@ -19,7 +19,12 @@ from akg_agents.op.workflows.base_workflow import OpBaseWorkflow
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.op.langgraph_op.nodes import NodeFactory
 from akg_agents.op.langgraph_op.routers import RouterFactory
+from akg_agents.op.utils.code_checker import CodeChecker
 from akg_agents.core_v2.workflows.registry import register_workflow
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @register_workflow(scopes=["op"])
@@ -27,10 +32,9 @@ class DefaultWorkflow(OpBaseWorkflow):
     """默认 Workflow：Designer → Coder ↔ Verifier
     
     Flow:
-        designer -> coder -> verifier
-                      ^         |
-                      |_________|
-                    (if verification fails)
+        designer → coder → code_checker → verifier → conductor → coder
+                       ↑                                    |
+                       +-------- (检查失败，回去修) ---------+
     """
     
     # ========== 工具配置元数据（用于 KernelAgent 调用）==========
@@ -122,6 +126,22 @@ class DefaultWorkflow(OpBaseWorkflow):
                 raise RuntimeError(f"Required agent '{agent_name}' is not available. "
                                  f"Available agents: {list(self.agents.keys())}")
         
+        # CodeChecker 做纯静态检查（语法/编译/import），默认开启
+        enable_code_checker = self.config.get("enable_code_checker", True)
+        
+        code_checker = None
+        if enable_code_checker:
+            dsl = ""
+            verifier = self.agents.get('verifier')
+            if verifier and hasattr(verifier, 'dsl'):
+                dsl = verifier.dsl
+            code_checker = CodeChecker(
+                backend=self.backend or "",
+                dsl=dsl,
+                config=self.config
+            )
+            logger.info(f"CodeChecker enabled: backend={self.backend}, dsl={code_checker.dsl}")
+        
         # 创建节点
         designer_node = NodeFactory.create_designer_node(
             self.agents['designer'], 
@@ -152,24 +172,58 @@ class DefaultWorkflow(OpBaseWorkflow):
         workflow.add_node("designer", designer_node)
         workflow.add_node("coder", coder_node)
         workflow.add_node("verifier", verifier_node)
-        workflow.add_node("conductor", conductor_node)  # 新增 Conductor 节点
+        workflow.add_node("conductor", conductor_node)
         
         # 添加边
         workflow.add_edge("designer", "coder")
 
-        # 代码生成后的路由（处理 max_tokens 截断等异常）
-        codegen_router = RouterFactory.create_codegen_router(
-            next_agent="verifier",
-            code_gen_agent="coder"
-        )
-        workflow.add_conditional_edges(
-            "coder",
-            codegen_router,
-            {
-                "verifier": "verifier",
-                "conductor": "conductor"
-            }
-        )
+        if enable_code_checker and code_checker:
+            code_checker_node = NodeFactory.create_code_checker_node(
+                code_checker,
+                self.trace,
+                self.config
+            )
+            workflow.add_node("code_checker", code_checker_node)
+
+            codegen_router = RouterFactory.create_codegen_router(
+                next_agent="code_checker",
+                code_gen_agent="coder"
+            )
+            workflow.add_conditional_edges(
+                "coder",
+                codegen_router,
+                {
+                    "code_checker": "code_checker",
+                    "conductor": "conductor"
+                }
+            )
+
+            code_checker_router = RouterFactory.create_code_checker_router(
+                self.config,
+                code_gen_agent="coder"
+            )
+            workflow.add_conditional_edges(
+                "code_checker",
+                code_checker_router,
+                {
+                    "verifier": "verifier",
+                    "coder": "coder"
+                }
+            )
+        else:
+            codegen_router = RouterFactory.create_codegen_router(
+                next_agent="verifier",
+                code_gen_agent="coder"
+            )
+            workflow.add_conditional_edges(
+                "coder",
+                codegen_router,
+                {
+                    "verifier": "verifier",
+                    "conductor": "conductor"
+                }
+            )
+            logger.info("CodeChecker disabled, using direct coder -> verifier flow")
         
         # 条件边：verifier 后的路由（验证通过跳过 conductor）
         verifier_router = RouterFactory.create_verifier_router_with_conductor(
@@ -180,8 +234,8 @@ class DefaultWorkflow(OpBaseWorkflow):
             "verifier",
             verifier_router,
             {
-                "conductor": "conductor",  # 验证失败 → Conductor 分析
-                "finish": END              # 验证通过 → 直接结束
+                "conductor": "conductor",
+                "finish": END
             }
         )
         
