@@ -493,7 +493,7 @@ void AKGMemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess, const AKGMemRefAccess &dstAccess,
                                                 unsigned loopDepth, FlatAffineValueConstraints *dependenceConstraints,
                                                 SmallVector<DependenceComponent, 2> *dependenceComponents,
-                                                bool allowRAR) {
+                                                bool allowRAR, bool checkSrcBeforeDst) {
   LLVM_DEBUG(llvm::dbgs() << "Checking for dependence at depth: " << Twine(loopDepth) << " between:\n";);
   LLVM_DEBUG(srcAccess.opInst->dump());
   LLVM_DEBUG(dstAccess.opInst->dump());
@@ -528,7 +528,8 @@ DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess
   // can exist irrespective of lexicographic ordering b/w src and dst.
   unsigned numCommonLoops = getNumCommonLoops(srcDomain, dstDomain);
   assert(loopDepth <= numCommonLoops + 1);
-  if (!allowRAR && loopDepth > numCommonLoops && !srcAppearsBeforeDstInAncestralBlock(srcAccess, dstAccess)) {
+  if (checkSrcBeforeDst && !allowRAR && loopDepth > numCommonLoops &&
+      !srcAppearsBeforeDstInAncestralBlock(srcAccess, dstAccess)) {
     return DependenceResult::NoDependence;
   }
 
@@ -542,7 +543,7 @@ DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess
   IntegerPolyhedron dependenceDomain(dstRel);
 
   // Add 'src' happens before 'dst' ordering constraints.
-  addOrderingConstraints(srcDomain, dstDomain, loopDepth, &dependenceDomain);
+  if (checkSrcBeforeDst) addOrderingConstraints(srcDomain, dstDomain, loopDepth, &dependenceDomain);
 
   // Return 'NoDependence' if the solution space is empty: no dependence.
   if (dependenceDomain.isEmpty()) return DependenceResult::NoDependence;
@@ -661,7 +662,7 @@ static LogicalResult processOpPairForSliceUnion(const AKGMemRefAccess &srcAccess
   // Check dependence between 'srcAccess' and 'dstAccess'.
   DependenceResult result = checkMemrefAccessDependenceAKG(srcAccess, dstAccess, /*loopDepth=*/numCommonLoops + 1,
                                                            &dependenceConstraints, /*dependenceComponents=*/nullptr,
-                                                           /*allowRAR=*/readReadAccesses);
+                                                           /*allowRAR=*/readReadAccesses, /*checkSrcBeforeDst=*/false);
 
   if (result.value == DependenceResult::Failure) {
     LLVM_DEBUG(llvm::dbgs() << "Dependence check failed\n");
