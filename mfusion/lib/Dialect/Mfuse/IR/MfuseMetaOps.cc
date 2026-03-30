@@ -575,6 +575,18 @@ mlir::FailureOr<mlir::Type> ReshapeOp::inferSymbolicShapes(mlir::OpBuilder &buil
   }
 }
 
+// Canonicalize reshape(reshape(a, shape1), shape2) -> reshape(a, shape2)
+mlir::LogicalResult ReshapeOp::canonicalize(ReshapeOp op, mlir::PatternRewriter &rewriter) {
+  auto innerReshape = op.getInput().getDefiningOp<ReshapeOp>();
+  if (!innerReshape) {
+    return mlir::failure();
+  }
+
+  // Create a new ReshapeOp that directly reshapes the inner ReshapeOp's input to the outer shape
+  rewriter.replaceOpWithNewOp<ReshapeOp>(op, op.getResult().getType(), innerReshape.getInput());
+  return mlir::success();
+}
+
 // Implementation of promoteBinaryOperands template function
 template <typename ConcreteOp>
 std::pair<mlir::Value, mlir::Value> promoteBinaryOperands(mlir::OpBuilder &builder, mlir::Location loc, mlir::Value lhs,
