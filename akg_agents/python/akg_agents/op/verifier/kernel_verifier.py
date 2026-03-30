@@ -109,7 +109,8 @@ class KernelVerifier:
                  arch: ArchType = "a100",
                  impl_func_name: Optional[str] = None,
                  config: Optional[Dict[str, Any]] = None,
-                 worker: Optional[WorkerInterface] = None):
+                 worker: Optional[WorkerInterface] = None,
+                 bench_type: Literal["kernelbench", "sol"] = "kernelbench"):
         """
         初始化Kernel验证器。
 
@@ -133,6 +134,7 @@ class KernelVerifier:
         self.backend = backend.lower()
         self.arch = arch.lower()
         self.task_id = task_id
+        self.bench_type = bench_type
         # 获取AscendC代码
         self.context = {}
         # 从config中获取log_dir
@@ -791,6 +793,10 @@ if __name__ == "__main__":
 
     def gen_verify_project(self, impl_code: str, verify_dir: str, device_id: int = 0):
         """生成验证项目文件到指定目录"""
+        if self.bench_type == "sol":
+            from akg_agents.op.verifier.sol_verifier import generate_sol_verify_project
+            return generate_sol_verify_project(self, impl_code, verify_dir, device_id)
+
         logger.info(f"[{self.op_name}] 开始生成验证项目，目录: {verify_dir}, device_id={device_id}")
         
         # ========== 处理参考数据模式 ==========
