@@ -325,7 +325,7 @@ def launch(
 def dump_ascend_meta_data(output_dir, kernel_name, block_dim):
     """
     Dump ascend meta data to JSON file.
-    
+
     Args:
         output_dir: Directory where the binary file and JSON file will be saved
         kernel_name: Name of the kernel
@@ -339,9 +339,9 @@ def dump_ascend_meta_data(output_dir, kernel_name, block_dim):
     # thread info
     title_dict["blockDim"] = block_dim
     # bin file info
-    bin_file_suffix = ".so"
+    bin_file_suffix = ".o"
     title_dict["binFileSuffix"] = bin_file_suffix
-    bin_file_name = "lib" + kernel_name
+    bin_file_name = kernel_name
     title_dict["binFileName"] = bin_file_name
     # sha256
     buf_size = 64 * 1024  # once read 64kb
