@@ -387,20 +387,25 @@ inline bool isOverFlowMode(Type inType, Type outType) {
           isI64ToI8 || isI64ToI16 || isI64ToI32);
 }
 
+static bool isVcSupportedFloatCastPair(Type inType, Type outType) {
+  return (inType.isF16() || inType.isBF16() || inType.isF32() || inType.isF64()) &&
+         (outType.isF16() || outType.isBF16() || outType.isF32() || outType.isF64());
+}
+
 template <typename CastOp>
 struct UnaryArithToHIVMCast : public OpConversionPattern<CastOp> {
   using OpConversionPattern<CastOp>::OpConversionPattern;
   using OpAdaptor = typename OpConversionPattern<CastOp>::OpAdaptor;
 
   static hivm::RoundMode selectRoundModeForTruncF(Type inType, Type outType) {
-    if (inType.isF32() && (outType.isF16() || outType.isBF16() || outType.isF32())) {
+    if (isVcSupportedFloatCastPair(inType, outType)) {
       return hivm::RoundMode::RINT;
     }
     llvm_unreachable("unsupported datatype for arith::TruncFOp to hivm");
   }
 
   static hivm::RoundMode selectRoundModeForExtF(Type inType, Type outType) {
-    if ((inType.isF16() || inType.isBF16()) && outType.isF32()) {
+    if (isVcSupportedFloatCastPair(inType, outType)) {
       return hivm::RoundMode::RINT;
     }
     llvm_unreachable("unsupported datatype for arith::ExtFOp to hivm");
@@ -502,14 +507,14 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
   using OpAdaptor = typename OpConversionPattern<CastOp>::OpAdaptor;
 
   static hivm::RoundMode selectRoundModeForTruncF(Type inType, Type outType) {
-    if (inType.isF32() && (outType.isF16() || outType.isBF16() || outType.isF32())) {
+    if (isVcSupportedFloatCastPair(inType, outType)) {
       return hivm::RoundMode::RINT;
     }
     llvm_unreachable("unsupported datatype for npuvector::TruncFOp to hivm");
   }
 
   static hivm::RoundMode selectRoundModeForExtF(Type inType, Type outType) {
-    if ((inType.isF16() || inType.isBF16()) && outType.isF32()) {
+    if (isVcSupportedFloatCastPair(inType, outType)) {
       return hivm::RoundMode::RINT;
     }
     llvm_unreachable("unsupported datatype for npuvector::ExtFOp to hivm");
@@ -570,9 +575,19 @@ struct UnaryNPUVectorToHIVMCast : public OpConversionPattern<CastOp> {
     auto roundingAttr = rewriter.getAttr<hivm::RoundModeAttr>(rounding);
 
     Value resBuf;
+    // i1 -> i64 is not supported directly (HIR rejects bool_to_int64); use i1 -> f32 -> i64.
     // i8 -> f32 is not supported directly, so we convert i8 -> f16 -> f32.
     // i8 -> i64 is not supported directly, so we convert i8 -> f16 -> f32 -> i64.
-    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(8) &&
+    if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(1) &&
+        elemType.isInteger(64)) {
+      auto f32MemRefType = MemRefType::get(shape, rewriter.getF32Type());
+      Value f32Buf = rewriter.create<memref::AllocOp>(loc, f32MemRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, f32Buf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, srcMemRef, f32Buf, roundingAttr);
+      resBuf = rewriter.create<memref::AllocOp>(loc, memRefType, allocOperands);
+      propagateBufferSizeMark(rewriter, loc, srcMemRef, resBuf);
+      rewriter.create<hivm::VCastOp>(loc, TypeRange{}, f32Buf, resBuf, roundingAttr);
+    } else if (isa<npuvector::ExtUIOp>(op) && srcElemType.isInteger(8) &&
         elemType.isInteger(64)) {
       auto midF16MemRefType = MemRefType::get(shape, rewriter.getF16Type());
       Value midF16Buf = rewriter.create<memref::AllocOp>(loc, midF16MemRefType, allocOperands);
