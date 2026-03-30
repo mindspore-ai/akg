@@ -630,8 +630,9 @@ struct ShapeNormalState {
   }
 
   Type getMemRefTypeWithInheritedStrides(ArrayRef<int64_t> targetShape, Type elementType, MemRefType inputType,
+                                         const SmallVector<std::string> &inputSymShape,
                                          const SmallVector<ReassociationIndices> &reassociation, bool isExpand) {
-    // Only support collapsing into a single axis
+    // Only support collapsing && one axis has valid stride
     if (isExpand) {
       return MemRefType::get(targetShape, elementType);
     }
@@ -640,11 +641,20 @@ struct ShapeNormalState {
     ArrayRef<int64_t> inputStrides = stridedLayout.getStrides();
     int64_t inputOffset = stridedLayout.getOffset();
     SmallVector<int64_t> targetStrides;
+    auto symAxisIsUnit = [&](int64_t dimIdx) {
+      const std::string &axis = inputSymShape[static_cast<size_t>(dimIdx)];
+      // TODO(akg) if axis is a dynamic axis but length is known
+      return axis == "1" || axisSizes[axis] == 1;
+    };
     for (const ReassociationIndices &group : reassociation) {
-      if (!group.empty()) {
-        int64_t s = inputStrides[group.back()];
-        targetStrides.push_back(s);
+      if (group.empty()) continue;
+      int64_t s = inputStrides[group.back()];
+      for (auto it = group.rbegin(); it != group.rend(); ++it) {
+        if (symAxisIsUnit(*it)) continue;
+        s = inputStrides[*it];
+        break;
       }
+      targetStrides.push_back(s);
     }
     if (targetStrides.size() != targetShape.size() ||
         llvm::any_of(targetStrides, [](int64_t s) { return s == ShapedType::kDynamic; }) ||
@@ -808,7 +818,7 @@ struct ShapeNormalState {
       auto reassociation = buildReassociation(targetSymShape, inputSymshape);
       auto inputMemRefTy = cast<MemRefType>(newRet.getType());
       Type collapseTargetType = getMemRefTypeWithInheritedStrides(getAxesSizes(targetSymShape), elementType,
-                                                                  inputMemRefTy, reassociation, false);
+                                                                  inputMemRefTy, inputSymshape, reassociation, false);
       collapseTargetType = manager.updateSymbolicShape(collapseTargetType, inputSymshape);
       auto collapseOp = rewriter.create<memref::CollapseShapeOp>(loc, collapseTargetType, newRet, reassociation);
       ops.push_back(collapseOp);
