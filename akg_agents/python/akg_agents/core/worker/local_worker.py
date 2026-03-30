@@ -109,12 +109,17 @@ class LocalWorker(WorkerInterface):
                 python_exe = sys.executable
                 cmd = [python_exe, script_name]
                 logger.info(f"[{task_id}] Running verification for {op_name}")
+                
+                # 在 Unix 系统上创建新的进程组，以便超时时能够杀死所有子进程
+                preexec_fn = os.setsid if hasattr(os, 'setsid') else None
+                
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
                     cwd=extract_dir,
                     env=env,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
+                    preexec_fn=preexec_fn
                 )
                 
                 try:
@@ -137,9 +142,26 @@ class LocalWorker(WorkerInterface):
                     return success, output_log, artifacts
                 except asyncio.TimeoutError:
                     try:
-                        process.kill()
-                    except ProcessLookupError:
-                        pass
+                        # 尝试优雅地终止进程组
+                        import signal
+                        if hasattr(os, 'killpg'):
+                            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                        else:
+                            process.terminate()
+                        
+                        # 给一点时间让进程退出
+                        await asyncio.sleep(1)
+                        if process.returncode is None:
+                            if hasattr(os, 'killpg'):
+                                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                            else:
+                                process.kill()
+                    except Exception as e:
+                        logger.warning(f"[{task_id}] Error while killing process: {e}")
+                        try:
+                            process.kill()
+                        except:
+                            pass
                     logger.error(f"[{task_id}] Verification timed out.")
                     return False, f"Verification timed out after {timeout} seconds.", {}
 
@@ -248,19 +270,19 @@ class LocalWorker(WorkerInterface):
             logger.error(f"[{task_id}] LocalWorker profiling failed: {e}", exc_info=True)
             return {'gen_time': None, 'base_time': None, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
     
-    def _run_msprof_profiling(self, extract_dir: str, op_name: str, task_id: str, warmup_times: int, run_times: int) -> Tuple[float, float]:
+    def _run_msprof_profiling(self, extract_dir: str, op_name: str, task_id: str, warmup_times: int, run_times: int, timeout: int = 600) -> Tuple[float, float]:
         """Run msprof profiling for Ascend backend (synchronous)"""
         try:
             # Run msprof for base script
             base_script = os.path.join(extract_dir, f"profile_{op_name}_base.py")
-            success, error, base_prof_path = run_msprof(base_script, op_name, task_id)
+            success, error, base_prof_path = run_msprof(base_script, op_name, task_id, timeout=timeout)
             if not success or not base_prof_path:
                 logger.error(f"[{task_id}] Base msprof failed: {error}")
                 return float('inf'), float('inf')
             
             # Run msprof for generation script
             gen_script = os.path.join(extract_dir, f"profile_{op_name}_generation.py")
-            success, error, gen_prof_path = run_msprof(gen_script, op_name, task_id)
+            success, error, gen_prof_path = run_msprof(gen_script, op_name, task_id, timeout=timeout)
             if not success or not gen_prof_path:
                 logger.error(f"[{task_id}] Generation msprof failed: {error}")
                 return float('inf'), float('inf')
@@ -282,19 +304,19 @@ class LocalWorker(WorkerInterface):
             logger.error(f"[{task_id}] msprof profiling failed: {e}", exc_info=True)
             return float('inf'), float('inf')
     
-    def _run_nsys_profiling(self, extract_dir: str, op_name: str, task_id: str, warmup_times: int, run_times: int) -> Tuple[float, float]:
+    def _run_nsys_profiling(self, extract_dir: str, op_name: str, task_id: str, warmup_times: int, run_times: int, timeout: int = 600) -> Tuple[float, float]:
         """Run nsys profiling for CUDA backend (synchronous)"""
         try:
             # Run nsys for base script
             base_script = os.path.join(extract_dir, f"profile_{op_name}_base.py")
-            success, error, base_rep_path = run_nsys(base_script, op_name, task_id)
+            success, error, base_rep_path = run_nsys(base_script, op_name, task_id, timeout=timeout)
             if not success or not base_rep_path:
                 logger.error(f"[{task_id}] Base nsys failed: {error}")
                 return float('inf'), float('inf')
             
             # Run nsys for generation script
             gen_script = os.path.join(extract_dir, f"profile_{op_name}_generation.py")
-            success, error, gen_rep_path = run_nsys(gen_script, op_name, task_id)
+            success, error, gen_rep_path = run_nsys(gen_script, op_name, task_id, timeout=timeout)
             if not success or not gen_rep_path:
                 logger.error(f"[{task_id}] Generation nsys failed: {error}")
                 return float('inf'), float('inf')

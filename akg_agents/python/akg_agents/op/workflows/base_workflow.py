@@ -210,8 +210,11 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         
         # 8. max_step（默认 20，允许外部配置覆盖）
         config.setdefault("max_step", 20)
+        
+        # 9. workflow_timeout（默认 30 分钟，允许外部配置覆盖）
+        config.setdefault("workflow_timeout", 1800)
 
-        # 9. PyPTO 运行模式兜底（0: NPU, 1: SIM）
+        # 10. PyPTO 运行模式兜底（0: NPU, 1: SIM）
         # 说明：远端 worker 不能依赖本地 shell 环境变量，必须在任务级配置中显式下发。
         if dsl_lower == "pypto":
             config.setdefault("pypto_run_mode", 0)
