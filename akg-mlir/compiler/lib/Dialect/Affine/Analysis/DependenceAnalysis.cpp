@@ -380,11 +380,10 @@ void MemRefDependenceGraph::addSSAResultEdges() {
 void MemRefDependenceGraph::addMemrefDependenceEdgesForPair(
   unsigned srcId, unsigned dstId, Value memref, bool srcHasStore,
   const SmallVector<std::pair<unsigned, Operation *>, 2> &forLoopEntries) {
-  if (isa<affine::AffineForOp>(getNode(dstId)->op)) {
-    return;
-  }
-  if (!isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(getNode(srcId)->op) ||
-      !isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(getNode(dstId)->op)) {
+  Operation *srcOp = getNode(srcId)->op;
+  Operation *dstOp = getNode(dstId)->op;
+  if (!isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(srcOp) ||
+      !isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(dstOp)) {
     return;
   }
 
@@ -394,7 +393,6 @@ void MemRefDependenceGraph::addMemrefDependenceEdgesForPair(
   }
 
   int forLoopNodeId = -1;
-  Operation *dstOp = getNode(dstId)->op;
   for (auto &[fNodeId, fOp] : forLoopEntries) {
     if (fOp->isAncestor(dstOp)) {
       forLoopNodeId = static_cast<int>(fNodeId);
