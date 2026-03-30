@@ -27,7 +27,7 @@ from akg_agents.core.agent.designer import Designer
 from akg_agents.core.agent.coder import Coder
 from akg_agents.op.verifier.kernel_verifier import KernelVerifier
 from akg_agents.core.async_pool.device_pool import DevicePool
-from akg_agents.core.utils import check_task_config, check_task_type
+from akg_agents.core_v2.utils import check_task_config, check_task_type
 from akg_agents.core.worker.manager import get_worker_manager
 from akg_agents.core_v2.config.settings import get_akg_env_var
 
