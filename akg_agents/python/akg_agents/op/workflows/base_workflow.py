@@ -208,8 +208,8 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         # 7. default_workflow（仅在未设置时使用默认值，不覆盖已有配置）
         config.setdefault("default_workflow", "default_workflow")
         
-        # 8. max_step（硬编码）
-        config["max_step"] = 20
+        # 8. max_step（默认 20，允许外部配置覆盖）
+        config.setdefault("max_step", 20)
 
         # 9. PyPTO 运行模式兜底（0: NPU, 1: SIM）
         # 说明：远端 worker 不能依赖本地 shell 环境变量，必须在任务级配置中显式下发。

@@ -28,7 +28,7 @@ from pathlib import Path
 
 from akg_agents import get_project_root
 from akg_agents.utils.process_utils import run_command
-from akg_agents.core_v2.utils import normalize_dsl
+from akg_agents.op.utils.config_utils import normalize_dsl
 from akg_agents.op.verifier.adapters.factory import (
     get_framework_adapter, get_dsl_adapter, get_backend_adapter
 )

@@ -8,11 +8,9 @@
 
 | 子目录/文件 | 职责 |
 |------------|------|
-| `evolve/` | 进化搜索相关工具（runner_manager、processors、result_collector） |
-| `langgraph/` | LangGraph 辅助（state、routers、visualizer、node_tracker） |
 | `compile_tools/` | Ascend 编译辅助（CMake 模板、头文件、编译脚本） |
 | `common_utils.py` | 通用工具函数 |
-| 其他 `.py` | case_generator、collector、environment_check 等 |
+| 其他 `.py` | collector、environment_check 等 |
 
 ## 关键约定
 

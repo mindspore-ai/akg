@@ -8,11 +8,9 @@
 
 | 子目录/文件 | 说明 |
 |------------|------|
-| `batch_run/` | 批量跑任务脚本（如 NPU Triton 批跑） |
-| `op_task_builder/` | 独立的 op task 构建辅助 |
-| `random_cases_test/` | 随机用例 / 泛化验证脚本 |
 | `v2/use_llm_check/` | LLM 连通性检查工具（`test_run_llm.py`） |
-| 根目录 `.py` | 单次 evolve/adaptive_search 执行、token 统计等 |
+
+> 批量执行、任务构建、随机验证等脚本已统一迁移至 `python/akg_agents/op/tools/`。
 
 ## 开发约定
 

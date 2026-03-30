@@ -2,7 +2,6 @@
 set -e
 
 # 确保目录存在
-mkdir -p python/akg_agents/resources
 mkdir -p python/akg_agents/op/resources
 
 # 生成 Logo

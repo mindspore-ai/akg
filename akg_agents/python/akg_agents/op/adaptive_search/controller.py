@@ -29,7 +29,7 @@ from akg_agents.op.adaptive_search.success_db import SuccessDB, SuccessRecord
 from akg_agents.op.adaptive_search.task_pool import AsyncTaskPool
 from akg_agents.op.adaptive_search.ucb_selector import UCBParentSelector
 from akg_agents.op.adaptive_search.task_generator import TaskGenerator, TaskGeneratorConfig
-from akg_agents.core.sketch import Sketch
+from akg_agents.op.sketch import Sketch
 from akg_agents.cli.runtime.message_sender import send_message
 from akg_agents.cli.messages import PanelDataMessage
 
