@@ -107,9 +107,9 @@ struct FusionCodeGenHelper {
 
   // Fusion operation: perform different types of loop fusion
   void doVFuse(unsigned srcGroupId, unsigned dstGroupId, affine::AffineForOp srcAffineForOp,
-              affine::AffineForOp dstAffineForOp, const FusionPlan &plan);
+               affine::AffineForOp dstAffineForOp, const FusionPlan &plan);
   void doHFuse(unsigned srcGroupId, unsigned dstGroupId, affine::AffineForOp srcAffineForOp,
-              affine::AffineForOp dstAffineForOp, const FusionPlan &plan);
+               affine::AffineForOp dstAffineForOp, const FusionPlan &plan);
   void doIFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
 
  private:
