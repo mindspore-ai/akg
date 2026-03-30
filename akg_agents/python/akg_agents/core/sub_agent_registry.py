@@ -366,7 +366,7 @@ class EvolveSubAgent(SubAgentBase):
             # 导入 evolve 相关模块
             from akg_agents.op.evolve import evolve
             from akg_agents.core.async_pool.task_pool import TaskPool
-            from akg_agents.core.utils import normalize_dsl
+            from akg_agents.core_v2.utils import normalize_dsl
             from akg_agents.utils.common_utils import load_yaml
             from akg_agents import get_project_root
             import os
@@ -566,7 +566,7 @@ class KernelVerifierSubAgent(SubAgentBase):
             # 导入必要的模块
             from akg_agents.op.verifier.kernel_verifier import KernelVerifier
             from akg_agents.core.worker.manager import get_worker_manager
-            from akg_agents.core.utils import normalize_dsl
+            from akg_agents.core_v2.utils import normalize_dsl
             
             # 获取已生成的代码
             generated_code = kwargs.get("generated_code", "")
@@ -900,7 +900,7 @@ class AdaptiveSearchSubAgent(SubAgentBase):
         try:
             # 导入自适应搜索模块
             from akg_agents.op.adaptive_search import adaptive_search
-            from akg_agents.core.utils import normalize_dsl
+            from akg_agents.core_v2.utils import normalize_dsl
             
             # 加载自适应搜索配置
             search_config = self._load_adaptive_search_config()
