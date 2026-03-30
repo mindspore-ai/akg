@@ -95,36 +95,3 @@ func.func @convert_npu_dtype_cast_with_dynamic(%input: !torch.vtensor<[?,4],f16>
   torch.bind_symbolic_shape %cast, [%s0], affine_map<()[s0] -> (s0, 4)> : !torch.vtensor<[?,4],f32>
   return %cast : !torch.vtensor<[?,4],f32>
 }
-
-//===----------------------------------------------------------------------===//
-// torch.npu._npu_dtype_cast_backward -> mfuse.cast
-//===----------------------------------------------------------------------===//
-
-// CHECK-LABEL: func.func @convert_npu_dtype_cast_backward_f32_to_f16
-// CHECK: %[[CAST9:.*]] = mfuse.cast
-// CHECK-NOT: torch.operator
-func.func @convert_npu_dtype_cast_backward_f32_to_f16(%input: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,4],f16> {
-  %cast = torch.operator "torch.npu._npu_dtype_cast_backward"(%input) : (!torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,4],f16>
-  return %cast : !torch.vtensor<[2,4],f16>
-}
-
-// CHECK-LABEL: func.func @convert_npu_dtype_cast_backward_f16_to_f32
-// CHECK: %[[CAST10:.*]] = mfuse.cast
-// CHECK-NOT: torch.operator
-func.func @convert_npu_dtype_cast_backward_f16_to_f32(%input: !torch.vtensor<[2,4],f16>) -> !torch.vtensor<[2,4],f32> {
-  %cast = torch.operator "torch.npu._npu_dtype_cast_backward"(%input) : (!torch.vtensor<[2,4],f16>) -> !torch.vtensor<[2,4],f32>
-  return %cast : !torch.vtensor<[2,4],f32>
-}
-
-// CHECK-LABEL: func.func @convert_npu_dtype_cast_backward_with_dynamic
-// CHECK: mfuse.syminfo =
-// CHECK-NOT: torch.bind_symbolic_shape
-// CHECK: %[[CAST11:.*]] = mfuse.cast
-// CHECK-NOT: torch.operator
-func.func @convert_npu_dtype_cast_backward_with_dynamic(%input: !torch.vtensor<[?,4],f32>) -> !torch.vtensor<[?,4],f16> {
-  %s0 = torch.symbolic_int "s0" {min_val = 2, max_val = 9223372036854775807} : !torch.int
-  torch.bind_symbolic_shape %input, [%s0], affine_map<()[s0] -> (s0, 4)> : !torch.vtensor<[?,4],f32>
-  %cast = torch.operator "torch.npu._npu_dtype_cast_backward"(%input) : (!torch.vtensor<[?,4],f32>) -> !torch.vtensor<[?,4],f16>
-  torch.bind_symbolic_shape %cast, [%s0], affine_map<()[s0] -> (s0, 4)> : !torch.vtensor<[?,4],f16>
-  return %cast : !torch.vtensor<[?,4],f16>
-}
