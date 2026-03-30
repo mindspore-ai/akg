@@ -21,7 +21,6 @@ from ..utils import (
 from akg_agents.op.config.config_validator import load_config
 from akg_agents.utils.environment_check import check_env_for_task
 
-os.environ['AKG_AGENTS_DATA_COLLECT'] = 'on'
 os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
 device_id = get_device_id()
 

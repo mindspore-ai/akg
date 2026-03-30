@@ -18,7 +18,6 @@ from typing import Dict, Any
 from akg_agents.core.async_pool.task_pool import TaskPool
 from akg_agents.core.async_pool.device_pool import DevicePool
 from akg_agents.core.worker.manager import get_worker_manager
-from akg_agents.utils.collector import get_collector
 from akg_agents.core_v2.config.settings import get_akg_env_var
 
 # 导入处理器和配置
@@ -31,7 +30,6 @@ from akg_agents.op.utils.evolve.evolution_processors import (
 from akg_agents.op.utils.evolve.evolution_utils import pretty_print_results
 
 
-os.environ['AKG_AGENTS_DATA_COLLECT'] = 'on'
 logger = logging.getLogger(__name__)
 
 
@@ -240,15 +238,6 @@ async def evolve(
         # 发送轮次完成的进度更新
         _send_current_progress(phase="round_done")
         
-        # 4.4 数据收集（支持 AKG_AGENTS_* 和 AIKG_*）
-        if get_akg_env_var("DATA_COLLECT", "off").lower() == "on":
-            try:
-                collector = await get_collector()
-                collector.set_config(config)
-                saved_files = await collector.prepare_and_remove_data()
-            except Exception as e:
-                logger.error(f"Failed to prepare data for transmission in evolve round {round_idx}: {e}")
-
         # 4.5 打印轮次结果
         round_result = round_data['round_result']
         pretty_print_results([

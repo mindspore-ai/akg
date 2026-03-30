@@ -102,7 +102,6 @@ The top-level settings dataclass.
 | `default_model` | string | `"standard"` | Default model level |
 | `context_window` | int | `128000` | Context window size in tokens |
 | `stream_output` | bool | `None` | Enable streaming output |
-| `data_collect` | bool | `None` | Enable data collection |
 
 ## 6. Environment Variables
 
