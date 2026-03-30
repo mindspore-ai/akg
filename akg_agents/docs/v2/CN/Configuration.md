@@ -102,7 +102,6 @@ AKG Agents 使用多层级配置系统管理 LLM 服务、Embedding 模型和框
 | `default_model` | string | `"standard"` | 默认模型级别 |
 | `context_window` | int | `128000` | 上下文窗口大小（token） |
 | `stream_output` | bool | `None` | 启用流式输出 |
-| `data_collect` | bool | `None` | 启用数据收集 |
 
 ## 6. 环境变量
 
