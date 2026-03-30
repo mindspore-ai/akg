@@ -108,7 +108,7 @@ class LLMCache:
         if len(self._local_cache) != local_size_before:
             self._save_local_cache()
 
-        logger.info(f"❌ Cache miss, key={cache_key}")
+        logger.debug(f"Cache miss, key={cache_key}")
         return None
 
     def set(

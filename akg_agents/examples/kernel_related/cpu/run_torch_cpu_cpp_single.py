@@ -18,7 +18,6 @@ from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.core.worker.manager import register_local_worker
 from akg_agents.utils.environment_check import check_env_for_task
 import asyncio
-import argparse
 import os
 # 注释掉流式输出，因为需要 session_id（TUI 模式才使用）
 os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
@@ -107,7 +106,7 @@ def get_init_inputs():
 '''
 
 
-async def run_torch_cpu_cpp_single(cache_mode: str = "off", cache_session_hash: str = ""):
+async def run_torch_cpu_cpp_single():
     op_name = get_op_name()
     task_desc = get_task_desc()
 
@@ -117,10 +116,6 @@ async def run_torch_cpu_cpp_single(cache_mode: str = "off", cache_session_hash: 
     await register_local_worker([0], backend="cpu", arch="x86_64")
 
     config = load_config("cpp")  # 使用默认 cpp 配置
-    config["cache_mode"] = cache_mode
-    if cache_session_hash:
-        config["cache_session_hash"] = cache_session_hash
-
     # 也可以指定配置文件路径:
     # config = load_config(config_path="./python/akg_agents/op/config/cpp_coderonly_config.yaml")
 
@@ -147,18 +142,4 @@ async def run_torch_cpu_cpp_single(cache_mode: str = "off", cache_session_hash: 
             print(f"Task {op_name} failed")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run torch cpu cpp single example with cache controls")
-    parser.add_argument(
-        "--cache-mode",
-        choices=["off", "record", "replay"],
-        default="off",
-        help="LLM cache mode, defaults to off",
-    )
-    parser.add_argument(
-        "--cache-session-hash",
-        default="",
-        help="Session hash for replay mode",
-    )
-    args = parser.parse_args()
-
-    asyncio.run(run_torch_cpu_cpp_single(args.cache_mode, args.cache_session_hash))
+    asyncio.run(run_torch_cpu_cpp_single())
