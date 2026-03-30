@@ -1073,7 +1073,10 @@ if __name__ == "__main__":
             
             # worker.verify() 只是执行脚本，不需要管理 device
             # device 已经在生成脚本时设置好了
-            success, log, artifacts = await self.worker.verify(package_data, self.task_id, self.op_name, timeout)
+            # 我们给 worker 传的 timeout 需要稍微大一点，因为脚本内部已经有精确的 timeout 控制
+            # 这里的 timeout 是为了防止脚本死锁导致整个进程挂起
+            worker_timeout = timeout + 30
+            success, log, artifacts = await self.worker.verify(package_data, self.task_id, self.op_name, worker_timeout)
             
             # 同步 artifacts 到 verify_dir（用于 RemoteWorker 场景）
             if artifacts:
@@ -1937,6 +1940,9 @@ if __name__ == "__main__":
         else:
             verify_logs.append(f"总共 {len(all_configs)} 个config\n\n")
         
+        consecutive_timeouts = 0  # 连续超时计数器
+        MAX_CONSECUTIVE_TIMEOUTS = 2  # 最大连续超时次数，达到后触发 Fail-Fast
+        
         # 为每个config生成单独的验证文件并验证
         for i, config in enumerate(all_configs):
             config_num = i + 1
@@ -1962,10 +1968,29 @@ if __name__ == "__main__":
                     verify_logs.append(f"验证通过\n\n")
                     valid_configs.append(config)
                     logger.info(f"[{self.op_name}] Config {config_num} 验证通过")
+                    consecutive_timeouts = 0  # 重置超时计数
                 else:
                     verify_logs.append(f"验证失败\n")
                     verify_logs.append(f"错误日志:\n{config_log}\n\n")
                     logger.info(f"[{self.op_name}] Config {config_num} 验证失败")
+                    
+                    # 检查是否为超时失败
+                    log_lower = config_log.lower()
+                    if "timed out" in log_lower or "timeout after" in log_lower or "timeouterror" in log_lower or "计算超时" in log_lower:
+                        consecutive_timeouts += 1
+                        if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                            skip_count = len(all_configs) - i - 1
+                            warn_msg = f"连续 {consecutive_timeouts} 个 config 验证超时，可能存在死循环，触发 Fail-Fast 机制"
+                            if skip_count > 0:
+                                warn_msg += f"，跳过剩余 {skip_count} 个 config 验证"
+                            logger.warning(f"[{self.op_name}] {warn_msg}")
+                            verify_logs.append(f"{warn_msg}\n\n")
+                            
+                            # 清理当前临时目录后跳出循环
+                            shutil.rmtree(temp_verify_dir, ignore_errors=True)
+                            break
+                    else:
+                        consecutive_timeouts = 0  # 其他错误重置超时计数
                 
                 # 清理临时目录
                 shutil.rmtree(temp_verify_dir, ignore_errors=True)
@@ -1974,6 +1999,7 @@ if __name__ == "__main__":
                 error_msg = str(e)
                 verify_logs.append(f"验证异常: {error_msg}\n\n")
                 logger.error(f"[{self.op_name}] Config {config_num} 验证异常: {error_msg}")
+                consecutive_timeouts = 0  # 异常情况重置计数
         
         # 生成验证结果摘要
         verify_logs.append(f"通过的config数量: {len(valid_configs)}/{len(all_configs)}\n")
