@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import pytest
-from akg_agents.core_v2.utils import check_task_config
+from akg_agents.op.utils.config_utils import check_task_config
 
 
 class TestTaskConfig:
