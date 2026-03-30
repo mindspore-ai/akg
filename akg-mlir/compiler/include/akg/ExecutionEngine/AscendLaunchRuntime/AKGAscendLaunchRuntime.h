@@ -1,5 +1,5 @@
 /**
- * Copyright 2024-2025 Huawei Technologies Co., Ltd
+ * Copyright 2024-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -72,7 +72,8 @@ class AscendKernelRuntime {
   bool ResetDevice(uint32_t device_id);
   void SetCurrentContext();
   void SyncMemory(void *dst, const void *src, uint64_t size, aclrtMemcpyKind kind);
-  void *GetKernelFunc(const std::string &path, const std::string &kernel_name, const std::string &func_name);
+  void *GetKernelFunc(const std::string &path, const std::string &kernel_name, const std::string &func_name,
+                      bool is_dynamic);
   bool UnLoadKernelFunc();
 
   aclrtContext rt_context_{nullptr};
@@ -85,6 +86,7 @@ class AscendKernelRuntime {
   bool use_mem_pool_{true};
 };
 
+uintptr_t GetKernelFunction(const std::string &func_name, const std::string &bin_path);
 }  // namespace runtime
 }  // namespace mlir
 
