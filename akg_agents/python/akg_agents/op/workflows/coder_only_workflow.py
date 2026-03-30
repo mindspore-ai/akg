@@ -20,7 +20,7 @@ from akg_agents.op.workflows.base_workflow import OpBaseWorkflow
 from akg_agents.op.langgraph_op.state import KernelGenState
 from akg_agents.op.langgraph_op.nodes import NodeFactory
 from akg_agents.op.langgraph_op.routers import RouterFactory
-from akg_agents.core.checker import CodeChecker
+from akg_agents.op.utils.code_checker import CodeChecker
 from akg_agents.core_v2.workflows.registry import register_workflow
 
 logger = logging.getLogger(__name__)
@@ -38,8 +38,8 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
                                      (携带错误信息回到 coder)
     
     CodeChecker 的作用：
-    - 在 Verifier 之前进行快速的静态代码检查
-    - 检测常见的语法错误（如 break、continue、while 等禁止语法）
+    - 在 Verifier 之前进行快速的静态代码检查（ast.parse / py_compile / import 校验）
+    - 检测语法错误、编译错误、import 缺失等确定性问题
     - 避免将明显错误的代码送入 Verifier 浪费时间（Verifier 每次执行约 1 分钟）
     """
     
@@ -51,7 +51,7 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
 
 完整流程：
 1. Coder: 根据任务描述生成代码
-2. CodeChecker: 静态代码检查（可选，默认禁用）
+2. CodeChecker: 静态代码检查（默认开启）
 3. Verifier: 验证正确性和性能
 4. Conductor: 分析失败原因并指导修复（如果验证失败）
 5. 循环迭代直到成功或达到最大次数
@@ -121,8 +121,8 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
         """构建 Coder-only 工作流图（带 CodeChecker）"""
         workflow = StateGraph(KernelGenState)
         
-        # 检查是否启用 CodeChecker（默认禁用，因为 LLM 检查容易产生假阳性）
-        enable_code_checker = self.config.get("enable_code_checker", False)
+        # CodeChecker 做纯静态检查（语法/编译/import），默认开启
+        enable_code_checker = self.config.get("enable_code_checker", True)
         
         # 创建 CodeChecker 实例
         code_checker = None
@@ -185,8 +185,7 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
             
             # 条件边：code_checker 后的路由
             code_checker_router = RouterFactory.create_code_checker_router(
-                self.config,
-                max_check_retries=self.config.get("max_code_check_retries", 5)
+                self.config
             )
             
             workflow.add_conditional_edges(
