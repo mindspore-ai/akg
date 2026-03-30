@@ -98,9 +98,10 @@ if __name__ == "__main__":
     parser.add_argument("--arch", type=str, default="a100", help="Architecture type")
     parser.add_argument("--device-id", type=int, default=0, help="Device ID to use")
     parser.add_argument("--timeout", type=int, default=300, help="Timeout per case in seconds")
-    parser.add_argument("--log-dir", type=str, default="./logs/sol_batch", help="Directory to save logs")
+    parser.add_argument("--log-dir", type=str, default="~/akg_agents_logs/sol_batch", help="Directory to save logs")
     
     args = parser.parse_args()
     
+    args.log_dir = os.path.expanduser(args.log_dir)
     os.makedirs(args.log_dir, exist_ok=True)
     asyncio.run(run_batch(args))
