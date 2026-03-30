@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import List
 
 from akg_agents.cli.constants import Backend, Framework
-from akg_agents.core.utils import VALID_CONFIGS, check_backend_arch, check_dsl
+from akg_agents.core_v2.utils import VALID_CONFIGS, check_backend_arch, check_dsl
 
 
 def normalize_backend(v: str) -> str:

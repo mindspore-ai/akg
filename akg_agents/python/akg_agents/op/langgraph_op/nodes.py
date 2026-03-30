@@ -463,7 +463,7 @@ class NodeFactory:
             verifier_instance.framework = state.get('framework', getattr(verifier_instance, 'framework', 'torch'))
             verifier_instance.task_id = state.get('task_id', getattr(verifier_instance, 'task_id', '0'))
             # dsl 需要规范化处理
-            from akg_agents.core.utils import normalize_dsl
+            from akg_agents.core_v2.utils import normalize_dsl
             new_dsl = state.get('dsl', getattr(verifier_instance, 'dsl', ''))
             new_backend = state.get('backend', verifier_instance.backend)
             verifier_instance.dsl = normalize_dsl(new_dsl, new_backend)

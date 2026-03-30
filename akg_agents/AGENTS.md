@@ -99,7 +99,7 @@ akg_cli --help         # 验证安装
 | `framework` | `torch`, `mindspore` |
 | `backend` | `cuda`, `ascend`, `cpu` |
 | `dsl` | `triton_cuda`, `triton_ascend`, `cpp`, `cuda_c`, `tilelang_cuda`, `ascendc`, `pypto` |
-| `arch` | cuda: `a100`, `v100`；ascend: `ascend910b1`~`ascend910b4`, `ascend310p3`；cpu: `x86_64`, `aarch64` |
+| `arch` | cuda: `a100`, `v100`；ascend: `ascend910b1`~`ascend910b4`, `ascend910_9362`, `ascend910_9372`, `ascend910_9381`, `ascend910_9382`, `ascend910_9391`, `ascend910_9392`, `ascend310p3`；cpu: `x86_64`, `aarch64` |
 
 ---
 
