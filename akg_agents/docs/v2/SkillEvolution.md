@@ -12,7 +12,7 @@ The current implementation focuses on the operator layer. It runs as a SubAgent 
 - **search_log**: Extract evolution chain diffs from search logs — automated optimization patterns
 - **expert_tuning**: Extract human tuning experience from conversation history — "user advice → code change → performance delta" causal chains
 - **error_fix**: Extract debugging experience from error fix records — "error type → fix strategy"
-- **merge_skills**: Consolidate evolved skills under the same DSL by optimization theme — "error type → fix strategy"
+- **organize**: Consolidate evolved skills under the same DSL by optimization theme — "error type → fix strategy"
 
 **Goal**: Turn automated search logs, human expertise, and debugging experience into structured knowledge for future kernel generation.
 
@@ -81,7 +81,7 @@ The LLM generates the SKILL.md body directly in Markdown, with `skill_name` and 
 
 ### 2.6 Writer
 
-Assembles YAML frontmatter (name, description, category, backend, dsl, source) + LLM body → writes to `op/resources/skills/{dsl}/cases/{skill_name}/SKILL.md`.
+Assembles YAML frontmatter (name, description, category, backend, dsl, source) + LLM body → writes to `~/.akg/evolved_skills/{dsl}/evolved-improvement/{skill_name}/SKILL.md`.
 
 **Naming convention**: `skill_name` follows the `{dsl}-case-{op-category}-{optimization-detail}` format, e.g. `triton-ascend-case-reduction-amin-large`, `triton-ascend-case-elemwise-broadcast-3d`. `category` is `example`, `source` is `search_log`.
 
@@ -213,7 +213,7 @@ Extraction: failed_code=step8, success_code=step11, error_log=step8's error
                      → read failed/successful code + error log → full diff (untruncated)
 2. LLM Analysis   — Fix cases (error_log + diff) → generate error fix experience
 3. LLM Dedup      — If SKILL.md exists, inject existing + new content; LLM outputs only non-redundant items
-4. Writer          — First run creates `error-fix/SKILL.md`; later runs append deduplicated incremental content
+4. Writer          — First run creates `{dsl}-error-fix/SKILL.md`; later runs append deduplicated incremental content
 ```
 
 ### 4.3 Collector
@@ -255,14 +255,14 @@ LLM tasks:
 
 ### 4.5 Dedup and Writer
 
-**Dedup** (`dedup_error_fix.j2`): When `error-fix/SKILL.md` already exists, both the existing body and newly generated content are injected into LLM. The LLM determines which items are new and outputs only the non-redundant incremental content. If everything is duplicate, it outputs "无新增内容" and writing is skipped.
+**Dedup** (`dedup_error_fix.j2`): When `{dsl}-error-fix/SKILL.md` already exists, both the existing body and newly generated content are injected into LLM. The LLM determines which items are new and outputs only the non-redundant incremental content. If everything is duplicate, it outputs "无新增内容" and writing is skipped.
 
 **Writer** (`SkillWriter.write_error_fix`):
 
-- Fixed skill directory name: `error-fix`
-- Default output path: `op/resources/skills/{dsl}/evolved/error-fix/SKILL.md`
-- If `--output-dir DIR` is provided: `DIR/error-fix/SKILL.md`
-- If the file does not exist, create it with fixed frontmatter (`name: error-fix`, `category: example`, `metadata.source: error_fix`)
+- Skill directory name includes DSL prefix: `{dsl}-error-fix` (e.g. `triton-cuda-error-fix`)
+- Default output path: `~/.akg/evolved_skills/{dsl}/evolved-fix/{dsl}-error-fix/SKILL.md`
+- If `--output-dir DIR` is provided: `DIR/{dsl}-error-fix/SKILL.md`
+- If the file does not exist, create it with frontmatter (`name: {dsl}-error-fix`, `description: {dsl}常见错误及修复方法...`, `category: implementation`, `metadata.source: error_fix`)
 - If the file already exists, append the deduplicated incremental content (preserving existing frontmatter and body)
 
 ```
@@ -271,11 +271,11 @@ Run 2: LLM generates → compare with existing → append only new items
 Run N: Same — continuously accumulate non-redundant debugging experience
 ```
 
-## 5. merge_skills Mode
+## 5. organize Mode
 
 Consolidates multiple evolved skills under the same DSL by optimization theme, reducing redundant documents.
 
-**Use case**: After multiple `search_log` and `expert_tuning` runs, the `evolved/` directory accumulates many skills. Skills from different operators often contain overlapping optimization techniques. Merging produces fewer, more generalized documents.
+**Use case**: After multiple `search_log` and `expert_tuning` runs, `~/.akg/evolved_skills/{dsl}/evolved-improvement/` accumulates many skills. Skills from different operators often contain overlapping optimization techniques. Merging produces fewer, more generalized documents.
 
 ### 5.1 Design Constraint
 
@@ -286,7 +286,7 @@ Injecting all skill contents into a single LLM call would overflow the context w
 ### 5.2 Pipeline
 
 ```
-1. scan            — Scan evolved/ for all SKILL.md (excluding error-fix/ and .archive/)
+1. scan            — Scan `evolved-improvement/` under the DSL directory for all SKILL.md (excluding `.archive/`)
 2. classify        — Extract name + description → LLM clusters by theme (summaries only, no full content)
 3. merge per-cluster — For each cluster with >=2 skills, inject full content for LLM to merge and deduplicate
                        Large clusters (>5) are auto-split into sub-batches with rolling merge
@@ -335,12 +335,43 @@ metadata:
 
 ### 5.6 Incremental Merging
 
-Newly generated skills continue to be written to `evolved/`. The next time `merge_skills` runs:
+Newly generated skills continue to be written under `~/.akg/evolved_skills/{dsl}/`: `error_fix` outputs to `evolved-fix/`, while `search_log` and `expert_tuning` output to `evolved-improvement/`. The next time `organize` runs:
 - Both existing merged skills and newly added individual skills participate in clustering
 - If a new skill is clustered with an existing merged skill → incremental merge using the merged skill as base
 - If a new skill forms its own cluster → kept as an independent skill
 
-## 6. File Structure
+## 6. Deployment and AB Testing
+
+### 6.1 Symlink Deployment
+
+Evolved skills are generated under `~/.akg/evolved_skills/{dsl}/` (in `evolved-fix/` and `evolved-improvement/` subdirectories). To make them discoverable by KernelGen's standard skill loading mechanism, create symlinks into the standard skills directory:
+
+```bash
+ln -s ~/.akg/evolved_skills/triton-ascend/evolved-fix \
+      python/akg_agents/op/resources/skills/triton-ascend/evolved-fix
+
+ln -s ~/.akg/evolved_skills/triton-ascend/evolved-improvement \
+      python/akg_agents/op/resources/skills/triton-ascend/evolved-improvement
+```
+
+Once symlinked, KernelGen's `_load_skills_by_dsl()` automatically discovers evolved skills alongside built-in skills, with no code changes needed.
+
+### 6.2 AB Test Mechanism
+
+The AB test compares kernel generation performance with and without evolved skills:
+
+- **A mode (baseline)**: `exclude_skill_names` is set to the target evolved skill names, causing KernelGen to exclude them during selection
+- **B mode (with evolved)**: `force_skill_names` is set to the target evolved skill names, ensuring KernelGen force-includes them after LLM selection
+
+**Skill name sources** (highest to lowest priority):
+1. **Explicit names** (`--skill-names`): Directly specify skill names to exclude/force-include. Use this to test individual skill effectiveness.
+2. **Directory scan** (`--evolved-skill-dir`): Scan the specified directory's `evolved-fix/` and `evolved-improvement/` subdirectories.
+3. **Default scan**: Scan the standard skills directory for evolved subdirectories.
+
+`ab_test_utils.py` provides `_scan_evolved_skill_names()` to automatically scan `evolved-fix` and `evolved-improvement` directories and collect skill names. These are injected into the agent config as `exclude_skill_names` (A mode) or `force_skill_names` (B mode), which are then set on the `KernelGen` instance during `LangGraphTask._init_agents()`.
+
+
+## 7. File Structure
 
 ```
 core_v2/agents/
@@ -351,7 +382,7 @@ op/tools/skill_evolution/
 ├── search_log_utils.py         — search_log mode: collect + compress + to_prompt_vars
 ├── expert_tuning_utils.py      — expert_tuning mode: collect + build_timeline + to_prompt_vars
 ├── error_fix_utils.py          — error_fix mode: collect + to_prompt_vars
-├── merge_utils.py              — merge_skills mode: scan, classify parsing, archive, merge writing
+├── merge_utils.py              — organize mode: scan, classify parsing, archive, merge writing
 └── __init__.py
 
 
@@ -362,8 +393,8 @@ op/resources/prompts/skill_evolution/
 ├── analyze_expert_tuning.j2    — expert_tuning: action timeline → LLM
 ├── analyze_error_fix.j2        — error_fix: fix cases → LLM
 ├── dedup_error_fix.j2          — error_fix: existing + new content → LLM dedup, output increments only
-├── classify_skills.j2          — merge_skills: name + description → LLM clustering
-└── merge_cluster.j2            — merge_skills: cluster skill contents → LLM merge and dedup
+├── classify_skills.j2          — organize: name + description → LLM clustering
+└── merge_cluster.j2            — organize: cluster skill contents → LLM merge and dedup
 
 examples/kernel_related/skill_evolution/
 ├── run_skill_evolution.py      — Standalone CLI script (no Agent framework dependency)
@@ -372,7 +403,7 @@ examples/kernel_related/skill_evolution/
 └── tracking.md                 — Experiment tracking document
 ```
 
-## 7. Standalone CLI Script
+## 8. Standalone CLI Script
 
 `examples/kernel_related/skill_evolution/run_skill_evolution.py` provides an Agent-framework-free entry point.
 
@@ -386,9 +417,9 @@ python examples/kernel_related/skill_evolution/run_skill_evolution.py expert_tun
 # error_fix mode
 python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix /path/to/logs matmul
 
-# merge_skills mode
-python examples/kernel_related/skill_evolution/run_skill_evolution.py merge_skills triton_cuda
-python examples/kernel_related/skill_evolution/run_skill_evolution.py merge_skills triton_cuda --skills-dir /path/to/evolved -o ./merged
+# organize mode (CLI subcommand: organize)
+python examples/kernel_related/skill_evolution/run_skill_evolution.py organize triton_cuda
+python examples/kernel_related/skill_evolution/run_skill_evolution.py organize triton_cuda --skills-dir /path/to/evolved -o ./merged
 
 # With output directory and model level
 python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix /path/to/logs matmul -o ./output -m complex
@@ -396,13 +427,13 @@ python examples/kernel_related/skill_evolution/run_skill_evolution.py error_fix 
 
 | Argument | Description |
 |----------|-------------|
-| `mode` | `search_log`, `expert_tuning`, `error_fix`, or `merge_skills` |
+| `mode` | `search_log`, `expert_tuning`, `error_fix`, or `organize` (conceptually `organize` in Agent calls and descriptions) |
 | `log_dir` / `conversation_dir` | Log directory (search_log / error_fix) or conversation directory (expert_tuning) |
 | `op_name` | Operator name (e.g. relu, l1norm, matmul) |
 | `-o / --output-dir` | SKILL.md output directory |
 | `-m / --model-level` | LLM model level (default: standard) |
 
-## 8. Workspace
+## 9. Workspace
 
 In Agent mode, intermediate files are saved to `{cur_path}/logs/skill_evolution/`. In CLI mode, the default location is `~/.akg/skill_evolution/{mode}_{op_name}/` (overridable with `-o`):
 
@@ -437,7 +468,7 @@ In Agent mode, intermediate files are saved to `{cur_path}/logs/skill_evolution/
 | `session.log` | Execution log |
 | `result.json` | Final result summary |
 
-**merge_skills mode:**
+**organize mode:**
 
 | File | Content |
 |------|--------|
@@ -449,7 +480,7 @@ In Agent mode, intermediate files are saved to `{cur_path}/logs/skill_evolution/
 | `merge_{theme}_response.txt` | Per-cluster merge LLM output |
 | `result.json` | Final result summary |
 
-## 9. Workflow Compatibility
+## 10. Workflow Compatibility
 
 Different workflows produce logs with different naming conventions:
 
@@ -465,7 +496,7 @@ Mode compatibility:
 |------|:-:|:-:|:-:|-------|
 | **error_fix** | Y | Y | Y | Only depends on `verification_results.jsonl` + `verify_dir`, independent of file naming |
 | **search_log** | Y | - | - | Depends on `lineage_graph.md` + `speed_up_record.txt`, currently only produced by adaptive_search |
-| **merge_skills** | - | - | - | Does not depend on any logs; processes existing evolved skill files |
+| **organize** | - | - | - | Does not depend on any logs; processes existing evolved skill files |
 | **expert_tuning** | - | - | - | Depends on conversation directory `trace.json` / `action_history_fact.json`|
 
 > **Note**: To extend `search_log` mode to evolve/kernelgen workflows, additional parsing logic for their lineage and performance files would be needed. `error_fix` mode is already natively compatible with any workflow that produces `verification_results.jsonl`.

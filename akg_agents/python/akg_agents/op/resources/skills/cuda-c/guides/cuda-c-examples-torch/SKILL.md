@@ -5,7 +5,7 @@ category: example
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: cuda-c
+  dsl: cuda_c
   framework: torch
   examples: "vector_add, relu, matmul, softmax, layernorm, double_kernel"
 ---

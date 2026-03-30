@@ -336,13 +336,11 @@ class NodeFactory:
             op_name = state.get('op_name', 'unknown')
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: kernel_gen")
             
-            # 记录是否有错误信息传递给 KernelGen
             verifier_error = state.get('verifier_error', '')
             conductor_suggestion = state.get('conductor_suggestion', '')
             
             if verifier_error:
                 logger.info(f"[Task {task_id}] KernelGen 收到验证错误信息 (长度: {len(verifier_error)})")
-                logger.debug(f"[Task {task_id}] 错误详情: {verifier_error[:200]}...")
             
             if conductor_suggestion:
                 logger.info(f"[Task {task_id}] KernelGen 收到 Conductor 建议 (长度: {len(conductor_suggestion)})")
@@ -364,8 +362,6 @@ class NodeFactory:
                 inspirations_raw = state.get('inspirations', [])
                 inspirations_text = format_inspirations(inspirations_raw) if inspirations_raw else ""
             
-            handwrite_suggestions = state.get('handwrite_suggestions', [])
-
             # 调用 KernelGen.run()
             t0 = time.time()
             try:
@@ -384,7 +380,6 @@ class NodeFactory:
                     previous_code=state.get('previous_code', ''),
                     designer_code=designer_code,
                     inspirations=inspirations_text,
-                    handwrite_suggestions=handwrite_suggestions,
                 )
             except Exception as e:
                 logger.error(f"[Task {task_id}] KernelGen.run() 失败: {e}")
@@ -550,20 +545,18 @@ class NodeFactory:
                     verifier_params.append(('error_log', verify_log))
                 trace_instance.log_record("verifier", verifier_params)
                 
-                # 记录验证结果
                 if not verify_res:
                     task_id = state.get('task_id', '0')
                     logger.warning(f"[Task {task_id}] Verifier 失败，错误信息 (长度: {len(verify_log)})")
-                    logger.debug(f"[Task {task_id}] 错误详情: {verify_log[:200]}...")
                 
                 return {
                     "verifier_result": verify_res,
                     "verifier_error": verify_log,
-                    "profile_res": profile_res,  # 保留空字典，不转成 None
-                    "multi_case_error": multi_case_error,  # 更新 multi_case_error
+                    "profile_res": profile_res,
+                    "multi_case_error": multi_case_error,
                     "step_count": state.get("step_count", 0) + 1,
                     "agent_history": ["verifier"],
-                    "cur_path": state.get("cur_path", ""),  # 传递工作路径，供错误展示使用
+                    "cur_path": state.get("cur_path", ""),
                 }
             finally:
                 # 只有从 Manager 借来的才需要还
@@ -615,8 +608,11 @@ class NodeFactory:
                 valid_next_agents = f'{code_gen_agent}, finish'
                 valid_options_set = {code_gen_agent, "finish"}
                 
-                # 构建输入数据（与原 Conductor 一致）
-                # 注意：coder_code 和 error_log 不再截断，由模板或 LLM 处理上下文长度
+                raw_error = state.get('verifier_error', '')
+                error_for_prompt = raw_error
+                if raw_error and len(raw_error) > 4000:
+                    error_for_prompt = "... (前面省略) ...\n" + raw_error[-4000:]
+
                 input_data = {
                     'dsl': state.get('dsl', ''),
                     'expert_suggestion': state.get('expert_suggestion', ''),
@@ -624,8 +620,8 @@ class NodeFactory:
                     'framework': state.get('framework', ''),
                     'task_desc': state.get('task_desc', ''),
                     'agent_name': 'verifier',
-                    'agent_result': state.get('coder_code', ''),  # 完整代码，不截断
-                    'error_log': state.get('verifier_error', ''),  # 完整错误日志，不截断
+                    'agent_result': state.get('coder_code', ''),
+                    'error_log': error_for_prompt,
                     'history_attempts': history_for_analysis,
                     'valid_next_agents': valid_next_agents,
                     'format_instructions': format_instructions,

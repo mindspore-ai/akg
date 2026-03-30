@@ -5,7 +5,7 @@ category: example
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: triton-cuda
+  dsl: triton_cuda
   framework: torch
   examples: "vector_add, matmul, layer_norm, softmax, double_kernel"
 ---

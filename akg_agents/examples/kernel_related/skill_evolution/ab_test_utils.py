@@ -36,7 +36,54 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+import logging
 import yaml
+
+logger = logging.getLogger(__name__)
+
+
+def _scan_evolved_skill_names(
+    evolved_skill_dir: str,
+    project_root: Path,
+) -> List[str]:
+    """扫描 evolved-fix/ 和 evolved-improvement/ 下的 SKILL.md 名称。
+
+    Args:
+        evolved_skill_dir: 用户指定的 evolved skill 根目录。
+            为空时扫描标准 skills 目录下的 evolved 子目录。
+        project_root: 项目根目录（akg_agents）。
+
+    Returns:
+        所有 evolved skill 的 name 列表。
+    """
+    from akg_agents.core_v2.skill.loader import SkillLoader
+
+    if evolved_skill_dir:
+        base = evolved_skill_dir
+        if not Path(base).is_absolute():
+            base = str(project_root / base)
+        scan_dirs = [
+            os.path.join(base, "evolved-fix"),
+            os.path.join(base, "evolved-improvement"),
+        ]
+    else:
+        skills_base = str(
+            project_root / "python" / "akg_agents" / "op" / "resources" / "skills" / "triton-ascend"
+        )
+        scan_dirs = [
+            os.path.join(skills_base, "evolved-fix"),
+            os.path.join(skills_base, "evolved-improvement"),
+        ]
+
+    loader = SkillLoader()
+    names: List[str] = []
+    for d in scan_dirs:
+        if not os.path.isdir(d):
+            continue
+        skills = loader.load_from_directory(Path(d))
+        names.extend([s.name for s in skills])
+        logger.info(f"Scanned {len(skills)} evolved skills from {d}")
+    return names
 
 
 # ============================================================================
@@ -86,8 +133,15 @@ def build_evolve_config(
     max_rounds: int,
     project_root: Path,
     task_dir: Optional[str] = None,
+    explicit_skill_names: Optional[List[str]] = None,
 ) -> str:
-    """生成临时 evolve_config.yaml 并返回路径。"""
+    """生成临时 evolve_config.yaml 并返回路径。
+
+    Args:
+        explicit_skill_names: 显式指定的 skill 名称列表。
+            若提供，直接使用此列表而非自动扫描。
+            用于测试单个 skill 时只排除/强制导入目标 skill。
+    """
     if task_dir is None:
         task_dir = str(
             project_root / "benchmark" / "akg_kernels_bench" / "thirdparty" / "pytorch" / f"group_{group}"
@@ -139,9 +193,13 @@ def build_evolve_config(
     with open(agent_config_src, "r", encoding="utf-8") as f:
         agent_config = yaml.safe_load(f) or {}
 
-    agent_config["ab_test_mode"] = True
-    if ab_mode == "B" and evolved_skill_dir:
-        agent_config["evolved_skill_dir"] = evolved_skill_dir
+    evolved_names = explicit_skill_names or _scan_evolved_skill_names(evolved_skill_dir, project_root)
+    if ab_mode == "A":
+        agent_config["exclude_skill_names"] = evolved_names
+        logger.info(f"A/B test A mode: excluding {len(evolved_names)} evolved skills: {evolved_names}")
+    elif ab_mode == "B":
+        agent_config["force_skill_names"] = evolved_names
+        logger.info(f"A/B test B mode: force-including {len(evolved_names)} evolved skills: {evolved_names}")
 
     agent_config_dst = os.path.join(tmp_dir, "agent_config.yaml")
     with open(agent_config_dst, "w", encoding="utf-8") as f:
@@ -185,6 +243,7 @@ def run_group(
         max_rounds=args.max_rounds,
         project_root=project_root,
         task_dir=task_dir,
+        explicit_skill_names=getattr(args, "skill_names", None),
     )
 
     try:
@@ -205,8 +264,10 @@ def _find_operators_with_skills(run_dir: str, group: int, op_name: Optional[str]
         group: 组号
         op_name: 如果指定，只检查该算子是否命中 skill，返回 bool；否则返回所有命中的算子列表
 
-    解析 output_{op_name}_*.txt 查找 skill selection 日志。
+    解析 output_{op_name}_*.txt 查找 KernelGen 的 Force-included 日志。
     """
+    _SKILL_HIT_PATTERN = re.compile(r"Force-included \d+ skills:")
+
     b_dir = os.path.join(run_dir, f"group_{group}_B")
     if not os.path.isdir(b_dir):
         return [] if op_name is None else False
@@ -218,10 +279,8 @@ def _find_operators_with_skills(run_dir: str, group: int, op_name: Optional[str]
             return False
         with open(files[-1], encoding="utf-8", errors="ignore") as f:
             for line in f:
-                if "skills selected:" in line and "Evolved skill selection complete" in line:
-                    m = re.search(r"skills selected:\s*\[([^\]]*)\]", line)
-                    if m and m.group(1).strip():
-                        return True
+                if _SKILL_HIT_PATTERN.search(line):
+                    return True
         return False
 
     matched_files: List[str] = []
@@ -230,10 +289,8 @@ def _find_operators_with_skills(run_dir: str, group: int, op_name: Optional[str]
         task_file_name = None
         with open(out_file, encoding="utf-8", errors="ignore") as f:
             for line in f:
-                if "skills selected:" in line and "Evolved skill selection complete" in line:
-                    m = re.search(r"skills selected:\s*\[([^\]]*)\]", line)
-                    if m and m.group(1).strip():
-                        has_skills = True
+                if _SKILL_HIT_PATTERN.search(line):
+                    has_skills = True
                 if "任务文件:" in line:
                     m = re.search(r"任务文件:\s*(\S+)", line)
                     if m:
@@ -293,6 +350,7 @@ def _run_single_operator(
         max_rounds=args.max_rounds,
         project_root=project_root,
         task_dir=tmp_dir,
+        explicit_skill_names=getattr(args, "skill_names", None),
     )
 
     try:

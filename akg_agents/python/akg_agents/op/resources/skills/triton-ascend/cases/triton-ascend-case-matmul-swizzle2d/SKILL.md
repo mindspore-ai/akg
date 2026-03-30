@@ -1,11 +1,11 @@
 ---
 name: triton-ascend-case-matmul-swizzle2d
 description: "大矩阵乘法Swizzle2D优化：固定核心数启动（grid=20而非所有块）+Swizzle2D块重排（GROUP_SIZE=4）提升缓存局部性，根据M/N比例自适应选择分组方向，适用于大规模矩阵乘法（千万级元素）的Ascend NPU场景"
-category: example
+category: case
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
 ---
 

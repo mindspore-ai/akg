@@ -5,7 +5,7 @@ category: fundamental
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: tilelang-cuda
+  dsl: tilelang_cuda
   operator_patterns: "all"
 ---
 

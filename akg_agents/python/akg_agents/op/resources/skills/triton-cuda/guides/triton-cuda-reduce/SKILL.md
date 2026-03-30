@@ -5,7 +5,7 @@ category: implementation
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: triton-cuda
+  dsl: triton_cuda
   operator_patterns: "reduce"
   algorithms: "sum, mean, max, min, softmax, layernorm, logsoftmax"
 ---

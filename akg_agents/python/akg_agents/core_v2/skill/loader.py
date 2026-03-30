@@ -218,7 +218,7 @@ class SkillLoader:
             if metadata:
                 skills.append(metadata)
                 self._loaded_paths.add(skill_file)
-                logger.info(f"成功加载Skill: {metadata.name} ({skill_file})")
+                logger.debug(f"成功加载Skill: {metadata.name} ({skill_file})")
             else:
                 logger.warning(f"加载Skill失败: {skill_file}")
         

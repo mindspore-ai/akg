@@ -1,113 +1,101 @@
 ---
 name: triton-ascend-elementwise
-description: "逐元素算子(element-wise)优化策略，包括 add/mul/relu/sigmoid/tanh/gelu/exp/log 等操作的向量化实现和融合技巧。适用于实现激活函数、逐元素运算、广播操作等向量模式算子的内核代码生成场景"
-category: implementation
+description: "适用于逐元素(element-wise)类算子的优化指南。当算子的核心计算是对张量每个元素独立执行相同操作时应选择此指南，典型算子包括：relu, sigmoid, tanh, gelu, selu, leaky_relu, elu, swish, softplus, hardsigmoid, hardtanh, exp, log, sqrt, pow, add, mul, sub, div, abs, neg, clamp, cast(类型转换), where, fill, copy 等。也适用于涉及标量广播(broadcast)的运算。不适用于需要跨元素归约(如 sum/mean/max)或矩阵乘法的算子。"
+category: guide
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
-  operator_patterns: "elementwise"
-  algorithms: "add, mul, relu, sigmoid, tanh, gelu, exp, log, div, sub, sqrt, pow"
+  operator_type: "elementwise"
 ---
 
-# Element-wise 算子优化
+# Element-wise 算子编写指南
 
-> 适用于逐元素独立计算的算子
+## 编写模式
 
-## 适用算子
+Element-wise 算子的核心特征：每个输出元素仅依赖对应位置的输入元素，无跨元素依赖。
+通用写法是将张量展平为 1D，用交错循环按 block 遍历全部元素。
 
-**算术运算**: add, mul, div, sub, pow
-**激活函数**: relu, sigmoid, tanh, gelu, silu, swish
-**数学函数**: exp, log, sqrt, sin, cos, abs
-
-## 优化策略
-
-### 1. 连续内存访问优化
-
-张量在内存中连续存储时，可用一维指针遍历，避免多维索引开销。
-
-**方案 1: 转连续 + 一维访问（推荐）**
+### 标准写法
 
 ```python
-class ModelNew(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, input_tensor):
-        # 非连续张量转为连续（一次性开销）
-        if not input_tensor.is_contiguous():
-            input_tensor = input_tensor.contiguous()
-        
-        output_tensor = torch.empty_like(input_tensor)
-        n_elements = input_tensor.numel()
-        grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
-        
-        elementwise_kernel[grid](input_tensor, output_tensor, n_elements, BLOCK_SIZE)
-        return output_tensor
-
 @triton.jit
-def elementwise_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def elementwise_kernel(
+    input_ptr, output_ptr, n_elements,
+    BLOCK_SIZE: tl.constexpr, CORE_NUM: tl.constexpr,
+):
     pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
-    
-    data = tl.load(input_ptr + offsets, mask=mask)
-    result = compute(data)  # 你的计算逻辑
-    tl.store(output_ptr + offsets, result, mask=mask)
-```
-
-**优势**:
-- 正确：`.contiguous()` 一次性开销 vs stride 每次访问都有开销
-- 正确：更好的缓存命中率
-- 正确：编译器优化更容易
-
-**方案 2: 使用 stride 访问（不推荐）**
-
-仅当无法调用 `.contiguous()` 时使用。
-
-### 2. 核心数配置
-
-Element-wise 算子使用 **VEC核心数**（向量计算核心）。
-
-```python
-import torch_npu
+    num_blocks = tl.cdiv(n_elements, BLOCK_SIZE)
+    for block_id in range(pid, num_blocks, CORE_NUM):
+        offsets = block_id * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(input_ptr + offsets, mask=mask, other=0.0)
+        y = compute(x)  # 替换为具体计算
+        tl.store(output_ptr + offsets, y, mask=mask)
 
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        # 在__init__中获取核心数，只执行一次
         try:
             self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
         except:
-            self.VEC_CORE_NUM = 40  # Ascend 910B4 默认
+            self.VEC_CORE_NUM = 40
+
+    def forward(self, x):
+        if not x.is_contiguous():
+            x = x.contiguous()
+        y = torch.empty_like(x)
+        n = x.numel()
+        grid = (self.VEC_CORE_NUM,)
+        elementwise_kernel[grid](x, y, n, BLOCK_SIZE=1024, CORE_NUM=self.VEC_CORE_NUM)
+        return y
 ```
 
-### 3. BLOCK_SIZE 选择
+**要点**：
+- `.contiguous()` 保证一维指针连续访问，避免 stride 计算
+- `torch.empty_like` 创建输出（不用 zeros，省初始化开销）
+- `forward` 的参数签名和数量必须与原始 `Model.forward` 一致
 
-- **推荐值**: 1024-2048
-- **原则**: 平衡并行度和资源占用
-- **考虑因素**:
-  - 更大的 BLOCK_SIZE → 更少的 Grid 启动开销
-  - 更小的 BLOCK_SIZE → 更细粒度的并行
+## 优化技巧
 
-### 4. 核内循环优化
+### 1. 连续内存访问
 
-对于简单的 element-wise 算子，可以通过切分并添加核内循环来隐藏搬运计算开销：
+展平为一维后用连续偏移访问，缓存命中率最高：
+- 非连续张量先 `.contiguous()`
+- 用 `x.numel()` 获取总元素数，忽略原始 shape
+
+### 2. BLOCK_SIZE 选择
+
+- 推荐 1024-2048，平衡流水效率和 UB 占用
+- 数据量很小时可降到 256-512
+- 数据量很大时不需要增大 BLOCK_SIZE，交错循环自动均衡
+
+### 3. 数值稳定性
+
+- `exp` 前减最大值防溢出
+- `sqrt` 前确保非负：`tl.maximum(x, 0.0)` 或 `tl.maximum(x, eps)`
+- 中间计算用 float32 累加，最后转回目标精度
+
+### 4. 融合多步计算
+
+连续的 elementwise 操作应融合在同一个 kernel 内，避免多次 GM 读写：
 
 ```python
-@triton.jit
-def optimized_elementwise(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(0)
-    
-    # 添加核内循环，让编译器进行流水优化
-    for i in range(4):  # 展开4次
-        offsets = (pid * 4 + i) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        
-        data = tl.load(input_ptr + offsets, mask=mask)
-        result = compute(data)
-        tl.store(output_ptr + offsets, result, mask=mask)
+# 融合 x -> relu -> scale -> add_bias
+y = tl.maximum(x, 0.0)  # relu
+y = y * scale            # scale
+y = y + bias             # add_bias
 ```
 
-编译器会自动将核内 for 循环进行多级流水处理。
+### 5. 广播处理
+
+当一个输入是标量或需要广播时，在 kernel 外部处理或在 kernel 中用常量加载：
+
+```python
+# 标量作为 kernel 参数传入
+@triton.jit
+def scale_kernel(x_ptr, out_ptr, scale_val, n, BLOCK_SIZE: tl.constexpr, CORE_NUM: tl.constexpr):
+    ...
+    y = tl.load(x_ptr + offs, mask=mask, other=0.0) * scale_val
+```
