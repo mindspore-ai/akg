@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Skill 自进化系统 - merge_skills 模式工具函数
+Skill 自进化系统 - organize 模式工具函数
 
 提供 evolved skill 扫描、摘要提取、聚类结果解析、归档等功能。
 """
@@ -32,12 +32,12 @@ from akg_agents.core_v2.skill.metadata import SkillMetadata
 
 logger = logging.getLogger(__name__)
 
-SKIP_DIRS = {"error-fix", ".archive"}
+SKIP_DIRS_EXACT = {".archive"}
 MAX_CLUSTER_SIZE = 5
 
 
 def scan_evolved_skills(evolved_dir: str) -> List[SkillMetadata]:
-    """扫描 evolved 目录下所有 SKILL.md（排除 error-fix 和 .archive）"""
+    """扫描目录下所有 SKILL.md（排除 .archive/）"""
     evolved_path = Path(evolved_dir)
     if not evolved_path.exists():
         return []
@@ -47,13 +47,13 @@ def scan_evolved_skills(evolved_dir: str) -> List[SkillMetadata]:
 
     for skill_md in evolved_path.rglob("SKILL.md"):
         rel = skill_md.relative_to(evolved_path)
-        if any(part in SKIP_DIRS for part in rel.parts):
+        if any(part in SKIP_DIRS_EXACT for part in rel.parts):
             continue
         loaded = loader.load_single(skill_md)
         if loaded:
             skills.append(loaded)
 
-    logger.info(f"[merge_skills] 扫描到 {len(skills)} 个 evolved skill")
+    logger.info(f"[organize] 扫描到 {len(skills)} 个 evolved skill")
     return skills
 
 
@@ -114,9 +114,9 @@ def archive_skills(
         dest = os.path.join(archive_base, skill_dir.name)
         try:
             shutil.move(str(skill_dir), dest)
-            logger.info(f"[merge_skills] 归档: {skill_dir.name} -> .archive/{ts}/")
+            logger.info(f"[organize] 归档: {skill_dir.name} -> .archive/{ts}/")
         except OSError as e:
-            logger.warning(f"[merge_skills] 归档失败 {skill_dir.name}: {e}")
+            logger.warning(f"[organize] 归档失败 {skill_dir.name}: {e}")
 
     return archive_base
 

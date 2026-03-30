@@ -69,7 +69,7 @@ AIKG Skill Management System
 """
 
 # 核心模块
-from .metadata import SkillMetadata, SkillStructure, STANDARD_CATEGORIES, CATEGORY_GROUPS
+from .metadata import SkillMetadata, SkillStructure, STANDARD_CATEGORIES, CATEGORY_GROUPS, dsl_to_dir_key
 from .loader import SkillLoader, SkillLoadError
 from .registry import SkillRegistry
 from .hierarchy import (
@@ -105,6 +105,7 @@ __all__ = [
     "SkillStructure",
     "STANDARD_CATEGORIES",
     "CATEGORY_GROUPS",
+    "dsl_to_dir_key",
     # 加载器
     "SkillLoader",
     "SkillLoadError",

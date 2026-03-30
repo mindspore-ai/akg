@@ -1,11 +1,11 @@
 ---
 name: triton-ascend-case-reduction-weighted-swiglu
 description: "3D融合算子（Weighted SwiGLU Backward）优化：Reshape降维将前两维合并简化并行策略，行二次切分避免超UB，在优先占满UB前提下为reduce轴分配较大切分尺寸，grid数较大时可能性能更优，适用于3D张量逐元素+reduce融合的场景"
-category: example
+category: case
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
 ---
 

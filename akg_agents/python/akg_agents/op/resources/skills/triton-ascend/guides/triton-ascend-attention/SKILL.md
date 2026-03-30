@@ -1,14 +1,13 @@
 ---
 name: triton-ascend-attention
-description: "Attention 算子优化策略和 Flash Attention 实现技巧，包括 self-attention、cross-attention、scaled-dot-product-attention 的高效实现。适用于实现 Transformer 注意力机制、多头注意力或需要内存高效注意力计算的内核代码生成场景"
-category: implementation
+description: "适用于注意力(attention)机制类算子的优化指南。当算子的核心计算是 Transformer 风格的注意力运算时应选择此指南，典型算子包括：self_attention, cross_attention, multi_head_attention, flash_attention, scaled_dot_product_attention, causal_attention, masked_attention 等。涵盖 QKV 矩阵乘分块、在线 softmax、因果 mask 处理、Flash Attention 分块策略等关键技巧。不适用于不含注意力结构的普通矩阵乘法或归约运算。"
+category: guide
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
-  operator_patterns: "attention"
-  algorithms: "self-attention, cross-attention, flash-attention, scaled-dot-product-attention"
+  operator_type: "attention"
 ---
 
 # Attention 算子优化

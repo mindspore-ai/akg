@@ -5,7 +5,7 @@ category: fundamental
 version: "1.0.0"
 metadata:
   backend: cuda
-  dsl: cuda-c
+  dsl: cuda_c
   operator_patterns: "all"
 ---
 

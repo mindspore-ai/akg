@@ -1,11 +1,11 @@
 ---
 name: triton-ascend-case-reduction-mean-large
 description: "大规模reduce最后根轴（mean）行二次切分优化：每个kernel计算多行减少线程块数量、kernel内二次切分避免超UB，grid=40且SUB切分不含尾块时性能最优（16.00us），尾块计算会显著降低性能，适用于非reduce轴中等、reduce轴较大的2D归约场景"
-category: example
+category: case
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
 ---
 

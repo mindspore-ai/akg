@@ -6,7 +6,9 @@
 KernelGen 是 AKG Agents 中基于 Skill 系统的内核代码生成 Agent。它继承自 `AgentBase`（`core_v2`），负责根据用户输入和历史上下文，利用 Skill 系统动态选择相关知识和策略，生成高性能内核代码。
 
 ## 核心功能
-- **Skill 驱动的代码生成**：通过两阶段 Skill 选择（粗筛 + LLM 精筛），动态加载最相关的知识
+- **分层分阶段 Skill 选择**：三层 skill 选择（L0 固定注入、L1 LLM 选择 guide+example、L2 LLM 选择 case），按生成阶段（initial/debug/optimize）自适应
+- **Backend 粗筛**：分阶段选择前，先按 backend 元数据预过滤
+- **AB Test 支持**：通过 `exclude_skill_names` / `force_skill_names` 精准控制 evolved skill 的 A/B 测试
 - **多 DSL 支持**：支持 Triton CUDA、Triton Ascend、AscendC 等多种 DSL
 - **多框架适配**：支持 PyTorch、MindSpore、NumPy 等前端框架
 - **Agent 注册机制**：通过 `@register_agent` 装饰器自动注册到 Agent 注册表
@@ -50,27 +52,53 @@ KernelGen 作为 Tool 供 KernelAgent 调用时的配置：
 | verifier_error | str (可选) | Verifier 错误信息 |
 | conductor_suggestion | str (可选) | Conductor 修复建议 |
 | model_level | str (可选) | 模型级别：`standard`、`fast`、`complex`，默认 `standard` |
+| extra_skills | list (可选) | 额外注入的 skill 对象列表，跳过所有筛选直接追加 |
+| exclude_skill_names | list[str] (可选) | 排除指定 skill 名称列表（AB test A 模式） |
+| force_skill_names | list[str] (可选) | 强制导入指定 skill 名称列表（AB test B 模式） |
 
 ## Skill 系统集成
 
-### 两阶段 Skill 选择
+### 分层分阶段 Skill 选择
 
-KernelGen 使用两阶段 Skill 选择机制：
+KernelGen 使用分层分阶段 Skill 选择机制，按当前生成阶段（`initial`、`debug`、`optimize`）自适应：
 
-1. **粗筛（Metadata 过滤）**：使用 `OperatorSkillSelector` 基于 backend / dsl 等 metadata 快速过滤
-2. **精筛（LLM 评估）**：如果候选 Skill 超过 3 个，由 LLM 根据任务描述选择最相关的 Skills
+**预过滤**：通过 `OperatorSkillSelector.coarse_filter()` 按 backend 元数据移除不兼容的 skill。
+
+**Layer 0（固定注入）**：`fundamental` 和 `reference` 类别的 skill 始终包含，不受阶段影响。
+
+**Layer 1（LLM 选择 guide + example）**：`guide` 类别的 skill 由 LLM 根据任务描述和算子特征选择。`example` 类别的 skill 根据所选 guide 的 `operator_type` 自动匹配。
+
+**Layer 2（LLM 选择 case）**：`case` 类别的 skill 仅在 `debug`（fix case）和 `optimize`（improvement case）阶段包含，与 guide 在同一次 LLM 调用中选择。
+
+**阶段映射**：
+
+| 阶段 | 触发条件 | 包含的类别 |
+|------|---------|-----------|
+| `initial` | 首次生成 | fundamental, reference, guide, example |
+| `debug` | 存在 `verifier_error` | fundamental, reference, guide, example, case (fix) |
+| `optimize` | 存在 `inspirations` | fundamental, reference, guide, example, case (improvement) |
+
+**AB Test 控制**：
+- `exclude_skill_names`：匹配的 skill 在选择前被移除（A 模式 —— 不含 evolved skill 的基准）
+- `force_skill_names`：匹配的 skill 在 LLM 选择后强制追加（B 模式 —— 确保 evolved skill 被包含）
+
+可设置为实例属性或作为 `run()` 参数传入（run 参数临时覆盖实例属性）。
 
 ```python
-# 粗筛
-context = OperatorSelectionContext(dsl="triton-ascend", backend="ascend")
-filtered = selector.coarse_filter(loaded_skills, context)
+kernel_gen = KernelGen()
 
-# 精筛（候选 > 3 时）
-selected = llm_select(filtered, task_desc, op_name)
+# AB test A 模式：排除 evolved skills
+kernel_gen.exclude_skill_names = ["triton-ascend-error-fix", "triton-ascend-case-reduce-opt"]
+
+# AB test B 模式：强制导入 evolved skills
+kernel_gen.force_skill_names = ["triton-ascend-error-fix"]
+
+# Extra skills：跳过所有筛选，选择后直接追加
+kernel_gen.extra_skills = [my_custom_skill]
 ```
 
 ### Skills 目录
-Skills 存储在 `op/resources/skills/` 目录下，详见 [Skill System 文档](./SkillSystem.md)。
+Skills 存储在 `op/resources/skills/` 目录下。Evolved skill 可通过软链接从 `~/.akg/evolved_skills/{dsl}/` 链入标准 skill 目录以自动发现。详见 [Skill System 文档](./SkillSystem.md)。
 
 ## 执行流程
 
@@ -81,7 +109,9 @@ Skills 存储在 `op/resources/skills/` 目录下，详见 [Skill System 文档]
    - 加载 Jinja2 Prompt 模板（`system_prompt.j2`、`user_prompt.j2`）
 
 2. **Skill 选择阶段**
-   - 基于任务参数（op_name, dsl, backend 等）执行两阶段 Skill 选择
+   - 先执行 backend 粗筛，再按阶段分层选择（L0 固定注入、L1 LLM 选择 guide+example、L2 LLM 选择 case）
+   - 选择前应用 `exclude_skill_names`，选择后应用 `force_skill_names`（AB test 使用）
+   - 最后追加 `extra_skills`（如有），确保指定 Skill 一定被选中
    - 返回最相关的 Skills 列表
 
 3. **Prompt 构建阶段**

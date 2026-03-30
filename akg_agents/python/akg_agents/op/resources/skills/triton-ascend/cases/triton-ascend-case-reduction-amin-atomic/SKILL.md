@@ -1,11 +1,11 @@
 ---
 name: triton-ascend-case-reduction-amin-atomic
 description: "原子操作归约（amin）优化：非reduce轴很小时将reduce轴映射多核，提供循环内/外两种原子操作方案（减少存储vs减少竞争），通过二次切分+计算重组提升性能，适用于M<<N（如16×262144）的极端shape比例场景"
-category: example
+category: case
 version: "1.0.0"
 metadata:
   backend: ascend
-  dsl: triton-ascend
+  dsl: triton_ascend
   hardware: "Atlas A2, Atlas A3"
 ---
 
