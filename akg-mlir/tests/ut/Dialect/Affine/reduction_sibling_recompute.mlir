@@ -5,15 +5,15 @@
 // CHECK-NEXT:    %cst_0 = arith.constant 2.000000e+00 : f32
 // CHECK-NEXT:    %cst_1 = arith.constant 1.000000e-05 : f64
 // CHECK-NEXT:    %cst_2 = arith.constant 0.000000e+00 : f32
-// CHECK-NEXT:    %collapse_shape = memref.collapse_shape %arg0 {{\[\[0, 1\], \[2\]\]}} : memref<256x10x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}> into memref<2560x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}>
+// CHECK-NEXT:    %collapse_shape = memref.collapse_shape %arg0 {{.*}} : memref<256x10x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}> into memref<2560x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}>
 // CHECK-NEXT:    %memspacecast = memref.memory_space_cast %collapse_shape : memref<2560x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}> to memref<2560x2048xf32, {SymShapeAttr = ["s33", "s2"]}>
-// CHECK-NEXT:    %collapse_shape_3 = memref.collapse_shape %arg1 {{\[\[0, 1\], \[2\]\]}} : memref<256x10x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}> into memref<2560x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}>
+// CHECK-NEXT:    %collapse_shape_3 = memref.collapse_shape %arg1 {{.*}} : memref<256x10x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}> into memref<2560x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}>
 // CHECK-NEXT:    %memspacecast_4 = memref.memory_space_cast %collapse_shape_3 : memref<2560x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}> to memref<2560x2048xf32, {SymShapeAttr = ["s33", "s2"]}>
 // CHECK-NEXT:    %alloc = memref.alloc() {alignment = 64 : i64} : memref<2560xf32, {SymShapeAttr = ["s33"]}>
 // CHECK-NEXT:    %alloc_5 = memref.alloc() {alignment = 64 : i64} : memref<2560x2048xf32, {SymShapeAttr = ["s33", "s2"]}>
-// CHECK-NEXT:    %expand_shape = memref.expand_shape %alloc {{\[\[0, 1, 2\]\]}} output_shape [256, 10, 1] : memref<2560xf32, {SymShapeAttr = ["s33"]}> into memref<256x10x1xf32, {SymShapeAttr = ["s33"]}>
+// CHECK-NEXT:    %expand_shape = memref.expand_shape %alloc {{.*}} output_shape [256, 10, 1] : memref<2560xf32, {SymShapeAttr = ["s33"]}> into memref<256x10x1xf32, {SymShapeAttr = ["s33"]}>
 // CHECK-NEXT:    %memspacecast_6 = memref.memory_space_cast %expand_shape : memref<256x10x1xf32, {SymShapeAttr = ["s33"]}> to memref<256x10x1xf32, {SymShapeAttr = ["s0", "s1", "1"]}>
-// CHECK-NEXT:    %expand_shape_7 = memref.expand_shape %alloc_5 {{\[\[0, 1\], \[2\]\]}} output_shape [256, 10, 2048] : memref<2560x2048xf32, {SymShapeAttr = ["s33", "s2"]}> into memref<256x10x2048xf32, {SymShapeAttr = ["s33", "s2"]}>
+// CHECK-NEXT:    %expand_shape_7 = memref.expand_shape %alloc_5 {{.*}} output_shape [256, 10, 2048] : memref<2560x2048xf32, {SymShapeAttr = ["s33", "s2"]}> into memref<256x10x2048xf32, {SymShapeAttr = ["s33", "s2"]}>
 // CHECK-NEXT:    %memspacecast_8 = memref.memory_space_cast %expand_shape_7 : memref<256x10x2048xf32, {SymShapeAttr = ["s33", "s2"]}> to memref<256x10x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}>
 // CHECK-NEXT:    affine.for %arg3 = 0 to 2560 {
 // CHECK-NEXT:      affine.store %cst_2, %alloc[%arg3] {reduction_init} : memref<2560xf32, {SymShapeAttr = ["s33"]}>

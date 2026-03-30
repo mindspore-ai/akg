@@ -327,4 +327,21 @@ def PreProcessForFusion : Pass<"pre-process-for-fusion", "func::FuncOp"> {
   let constructor = "mlir::createPreProcessForFusionPass()";
 }
 
+def BroadcastLoopHoist : Pass<"broadcast-loop-hoist", "func::FuncOp"> {
+  let summary = "Hoist broadcast loops outward to enable vectorization";
+  let description = [{
+    This pass identifies innermost broadcast loops and hoists them outward
+    by interchanging with their parent loops. This improves vectorization
+    opportunities by ensuring the broadcast dimension is not the innermost loop.
+  }];
+  let constructor = "mlir::createBroadcastLoopHoistPass()";
+  let options = [
+    Option<"insertIf", "insert-if", "bool", /*default=*/"false",
+           "Whether to insert an affine.if guard after loop interchange (default: false)">,
+  ];
+  let dependentDialects = [
+    "mlir::affine::AffineDialect"
+  ];
+}
+
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES
