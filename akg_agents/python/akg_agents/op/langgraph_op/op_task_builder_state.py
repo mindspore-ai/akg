@@ -14,7 +14,7 @@
 
 """OpTaskBuilder 状态定义
 
-用于多轮交互将用户需求转换为 KernelBench 格式的状态。
+用于多轮交互将用户需求转换为 KernelBench 或 SOL-ExecBench 格式的状态。
 """
 
 from typing import TypedDict, Annotated, Optional, List, Dict
@@ -25,7 +25,7 @@ class OpTaskBuilderState(TypedDict, total=False):
     """State definition for OpTaskBuilder workflow.
     
     This state is used for multi-turn interaction to convert user's natural language
-    requirements into KernelBench format op_task_desc.
+    requirements into KernelBench or SOL-ExecBench format op_task_desc.
     """
     
     # === 用户输入 ===
@@ -36,7 +36,7 @@ class OpTaskBuilderState(TypedDict, total=False):
     conversation_history: Annotated[List[Dict[str, str]], add]  # 对话历史记录
     
     # === Agent输出 ===
-    generated_task_desc: Optional[str]      # 生成的KernelBench格式代码
+    generated_task_desc: Optional[str]      # 生成的任务代码（KernelBench格式或SOL格式）
     clarification_question: Optional[str]   # 需要向用户澄清的问题
     modification_suggestion: Optional[str]  # 修改建议
     agent_reasoning: Optional[str]          # Agent的推理过程
@@ -48,6 +48,7 @@ class OpTaskBuilderState(TypedDict, total=False):
     backend: str                        # 后端：cuda/ascend
     arch: str                           # 架构：a100/ascend910b4等
     dsl: str                            # DSL类型
+    bench_type: str                     # 基准测试类型：kernelbench 或 sol
     task_label: Optional[str]           # 任务标签（用于路由）
     
     # === 状态控制 ===

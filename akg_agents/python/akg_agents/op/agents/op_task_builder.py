@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""OpTaskBuilder: 将用户文字需求转换为KernelBench格式的Agent"""
+"""OpTaskBuilder: 将用户文字需求转换为评测任务格式的Agent"""
 
 import logging
 import ast
@@ -31,34 +31,33 @@ logger = logging.getLogger(__name__)
 @register_agent(scopes=["op"])
 class OpTaskBuilder(AgentBase):
     """
-    将用户文字需求转换为 KernelBench 格式的 Agent
+    将用户文字需求转换为评测任务格式的 Agent
     
-    负责理解用户需求并生成符合 KernelBench 规范的任务描述代码。
+    负责理解用户需求并生成符合评测任务规范（如 KernelBench 或 SOL-ExecBench）的任务描述代码。
     """
     
     # Agent 工具配置元数据
     TOOL_NAME = "call_op_task_builder"
     DESCRIPTION = """
-将用户的文字需求转换为 KernelBench 格式的任务描述代码（task_desc）。
+将用户的文字需求转换为评测任务格式的任务描述代码（task_desc）。
 
 功能：
 - 理解用户需求并提取关键信息
-- 生成符合 KernelBench 规范的 Python 代码
-- 包含 class Model(nn.Module)、forward()、get_inputs()、get_init_inputs()
+- 生成符合评测任务规范的代码（支持 KernelBench 或 SOL-ExecBench 格式）
 - 自动进行静态和运行时验证
 - 支持多轮交互和需求澄清
 
 适用场景：
 - 用户只提供了文字需求描述，没有提供 task_desc 代码
-- 需要将"生成 relu 算子"这样的描述转换为 KernelBench 格式代码
+- 需要将"生成 relu 算子"这样的描述转换为标准格式代码
 - 需要多轮对话澄清需求细节（如 shape、dtype 等）
 
 ⚠️ 注意：
-- 如果用户已经提供了 KernelBench 格式的 task_desc 代码，无需调用此工具
+- 如果用户已经提供了符合格式的 task_desc 代码，无需调用此工具
 - task_desc 是后续代码生成和验证的必要输入
 - 生成的 task_desc 需要请用户确认后再进行下一步
 
-输出：KernelBench 格式的 task_desc 代码
+输出：评测任务格式的 task_desc 代码
 """
     
     PARAMETERS_SCHEMA = {
@@ -87,6 +86,11 @@ class OpTaskBuilder(AgentBase):
                         "type": "string",
                         "description": "目标 DSL（例如：'triton_cuda', 'triton_ascend'）",
                         "default": "triton"
+                    },
+                    "bench_type": {
+                        "type": "string",
+                        "description": "基准测试类型（例如：'kernelbench', 'sol'）",
+                        "default": "kernelbench"
                     },
                     "user_feedback": {
                         "type": "string",
@@ -283,6 +287,7 @@ class OpTaskBuilder(AgentBase):
             "format_instructions": self.format_instructions,
             "framework": state.get("framework", "torch"),
             "backend": state.get("backend", "cuda"),
+            "bench_type": state.get("bench_type", "kernelbench"),
         }
     
     async def _call_llm_and_parse(self, input_data: Dict[str, Any], model_level: str = "standard") -> Dict[str, Any]:
@@ -314,6 +319,7 @@ class OpTaskBuilder(AgentBase):
             input_data, 
             model_level or "standard"
         )
+        logger.debug(f"RAW LLM RESULT: {llm_result}")
         
         # 解析LLM输出
         try:
@@ -697,8 +703,12 @@ class OpTaskBuilder(AgentBase):
         # 加载配置
         config = load_config(dsl, backend=backend)
         
-        # 执行静态检查
-        static_check_passed, static_check_error = self._check_task_desc_static(task_desc)
+        # 执行静态检查（SOL 格式暂不进行静态检查）
+        bench_type = state.get("bench_type", "kernelbench")
+        if bench_type == "sol":
+            static_check_passed, static_check_error = True, ""
+        else:
+            static_check_passed, static_check_error = self._check_task_desc_static(task_desc)
         
         if not static_check_passed:
             # 静态检查失败，处理重试
@@ -708,19 +718,20 @@ class OpTaskBuilder(AgentBase):
             )
             return result, should_continue
         
-        # 静态检查通过，执行运行时检查
+        # 静态检查通过，执行运行时检查（SOL 格式暂不进行运行时检查）
         runtime_check_passed = True
         runtime_check_error = ""
-        runtime_check_passed, runtime_check_error = await self._check_task_desc_runtime(
-            task_desc=task_desc,
-            op_name=op_name,
-            framework=state.get("framework", "torch"),
-            backend=backend,
-            arch=state.get("arch", "a100"),
-            dsl=dsl,
-            config=config,
-            timeout=60
-        )
+        if bench_type != "sol":
+            runtime_check_passed, runtime_check_error = await self._check_task_desc_runtime(
+                task_desc=task_desc,
+                op_name=op_name,
+                framework=state.get("framework", "torch"),
+                backend=backend,
+                arch=state.get("arch", "a100"),
+                dsl=dsl,
+                config=config,
+                timeout=60
+            )
         
         # 检查运行时检查结果
         if runtime_check_passed:
@@ -751,7 +762,7 @@ class OpTaskBuilder(AgentBase):
         Returns:
             更新后的状态字典，包含以下字段：
                 - status: 状态（READY/NEED_CLARIFICATION/NEED_MODIFICATION/UNSUPPORTED）
-                - generated_task_desc: 生成的KernelBench格式代码（status=READY时存在，调用方应展示给用户确认）
+                - generated_task_desc: 生成的任务代码（KernelBench格式或SOL格式，status=READY时存在，调用方应展示给用户确认）
                 - op_name: 算子名称（如：relu, matmul, layernorm等）
                 - agent_message: 给用户的消息（所有状态都存在，调用方应展示给用户）
                 - agent_reasoning: Agent的推理过程（用于调试和日志）
