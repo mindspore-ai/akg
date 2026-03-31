@@ -60,16 +60,21 @@ def with_timeout(timeout_seconds):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            # 设置信号处理器
-            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(timeout_seconds)
-            try:
-                result = func(*args, **kwargs)
-                return result
-            finally:
-                # 恢复原来的信号处理器
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
+            # Windows 不支持 SIGALRM，使用线程或其他方式，这里为了兼容先判断
+            if hasattr(signal, 'SIGALRM'):
+                # 设置信号处理器
+                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(timeout_seconds)
+                try:
+                    result = func(*args, **kwargs)
+                    return result
+                finally:
+                    # 恢复原来的信号处理器
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old_handler)
+            else:
+                # 如果不支持 SIGALRM，直接运行（依赖外层进程级别的 timeout）
+                return func(*args, **kwargs)
         return wrapper
     return decorator
 
