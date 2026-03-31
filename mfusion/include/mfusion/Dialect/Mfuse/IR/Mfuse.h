@@ -40,6 +40,7 @@
 #include "mfusion/Dialect/Mfuse/IR/MfuseInterfaces.h.inc"
 
 #include "mfusion/Dialect/Mfuse/IR/MfuseOps.h"
+#include "mfusion/Dialect/Mfuse/IR/MfuseTraits.h"
 
 #define GET_OP_CLASSES
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h.inc"
