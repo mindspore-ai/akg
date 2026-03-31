@@ -309,17 +309,31 @@ struct TilingInfo {
       }
     }
 
-    for (auto func : toErase) func.erase();
+    for (auto func : toErase)
+      func.erase();
 
     DenseMap<int64_t, func::FuncOp> newPerCaseMap;
     auto it = perCaseTilingFuncs.find(selectedKey);
-    if (it != perCaseTilingFuncs.end()) newPerCaseMap[selectedKey] = it->second;
+    if (it != perCaseTilingFuncs.end())
+      newPerCaseMap[selectedKey] = it->second;
     perCaseTilingFuncs = std::move(newPerCaseMap);
 
     DenseMap<int64_t, func::FuncOp> newKernelMap;
     auto kit = tilingKey2Kernel.find(selectedKey);
-    if (kit != tilingKey2Kernel.end()) newKernelMap[selectedKey] = kit->second;
+    if (kit != tilingKey2Kernel.end())
+      newKernelMap[selectedKey] = kit->second;
     tilingKey2Kernel = std::move(newKernelMap);
+
+    if (isTilingFullyStatic()) {
+      SmallVector<func::FuncOp> toEraseAll;
+      for (auto &p : perCaseTilingFuncs) {
+        toEraseAll.push_back(p.second);
+      }
+      for (auto f : toEraseAll) {
+        f.erase();
+      }
+      perCaseTilingFuncs.clear();
+    }
   }
 };
 
@@ -385,14 +399,17 @@ class TilingBase {
       LLVM_DEBUG(llvm::dbgs() << "Successfully simplified host tiling func\n");
     }
 
-    SmallVector<int64_t> tilingKeys;
     if (tilingInfo_.isTilingFullyStatic()) {
       int64_t selectedKey = *tilingInfo_.constTilingKey;
       LLVM_DEBUG(llvm::dbgs() << "Selected tiling key (constant folded): " << selectedKey << "\n");
-      tilingKeys.push_back(selectedKey);
-    } else {
-      tilingKeys = tilingInfo_.getAllKeys();
+
+      if (failed(applyStaticTilingInline(builder, selectedKey))) return failure();
+
+      tilingInfo_.pruneUnusedTilingFuncs(selectedKey, module_);
+      return success();
     }
+
+    SmallVector<int64_t> tilingKeys = tilingInfo_.getAllKeys();
 
     if (tilingKeys.empty()) {
       originalKernel_.emitError("no per-case tiling functions recorded in TilingInfo");
@@ -402,10 +419,6 @@ class TilingBase {
     bool allOk = std::all_of(tilingKeys.begin(), tilingKeys.end(),
                              [&](int64_t key) { return succeeded(initTilingKernel(key, builder)); });
     if (!allOk) return failure();
-
-    if (tilingInfo_.isTilingFullyStatic()) {
-      tilingInfo_.pruneUnusedTilingFuncs(*tilingInfo_.constTilingKey, module_);
-    }
 
     if (failed(applyTilingImpl(builder))) return failure();
     if (failed(fixCallSitesAndCaller(builder))) return failure();
@@ -749,14 +762,65 @@ class TilingBase {
     return success();
   }
 
+  LogicalResult applyStaticTilingInline(OpBuilder &builder, int64_t selectedKey) {
+    auto *ctx = builder.getContext();
+
+    func::FuncOp perCaseFunc = tilingInfo_.getPerCaseTilingFunc(selectedKey);
+    func::FuncOp hostTilingFunc = tilingInfo_.getHostTilingFunc();
+
+    if (!perCaseFunc || !hostTilingFunc) {
+      originalKernel_.emitError("static tiling: missing per-case or host tiling function");
+      return failure();
+    }
+
+    while (!hostTilingFunc.getBody().empty())
+      hostTilingFunc.getBody().front().erase();
+
+    Block *newEntry = hostTilingFunc.addEntryBlock();
+    {
+      IRMapping mapper;
+      Block &oldEntry = perCaseFunc.getBody().front();
+      unsigned numArgs =
+          std::min<unsigned>(oldEntry.getNumArguments(), newEntry->getNumArguments());
+      for (unsigned i = 0; i < numArgs; ++i)
+        mapper.map(oldEntry.getArgument(i), newEntry->getArgument(i));
+
+      OpBuilder b = OpBuilder::atBlockEnd(newEntry);
+      for (Operation &op : oldEntry.getOperations()) {
+        b.clone(op, mapper);
+      }
+    }
+
+    if (failed(mlir::autotiling::applyTilingFromTilingFunc(
+            originalKernel_, builder, /*isStaticShape=*/tilingInfo_.isStaticShape))) {
+      originalKernel_.emitError("static tiling: failed to apply tiling on kernel");
+      return failure();
+    }
+
+    originalKernel_->setAttr(
+        HACCFuncTypeAttr::name,
+        HACCFuncTypeAttr::get(ctx, HACCFuncType::DEVICE));
+
+    originalKernel_->setAttr(
+        BlockDimAttr::name, builder.getI64IntegerAttr(kernelInfo_->blockDim));
+
+    originalKernel_->setAttr(
+        StringAttr::get(ctx, stringifyHACCToLLVMIRTranslateAttr(
+                                 HACCToLLVMIRTranslateAttr::ENTRY)),
+        builder.getUnitAttr());
+
+    originalKernel_->setAttr(mockattr::kEnableAutoMarkBufferSize,
+                             builder.getUnitAttr());
+
+    copyAttrsForDeviceFromHost(originalKernel_, originalKernel_);
+
+    return success();
+  }
+
   LogicalResult fixCallSitesAndCaller(OpBuilder &builder) {
     auto *ctx = builder.getContext();
     auto oldTy = originalKernel_.getFunctionType();
     unsigned oldNumInputs = oldTy.getNumInputs();
-
-    if (tilingInfo_.isTilingFullyStatic()) {
-      return rewriteOriginalKernelBodyStatic(builder, ctx, oldTy, oldNumInputs);
-    }
 
     auto i64Ty = builder.getI64Type();
     auto llvmPtrTy = LLVM::LLVMPointerType::get(ctx);
