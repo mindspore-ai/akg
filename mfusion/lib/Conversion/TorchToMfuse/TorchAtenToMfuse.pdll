@@ -88,6 +88,11 @@ Pattern ConvertAtenReciprocal {
   replace root with op<mfuse.reciprocal>(convertValue(input)) -> (convertType(resType));
 }
 
+Pattern ConvertAtenRelu {
+  let root = op<torch.aten.relu>(input: Value) -> (resType: Type);
+  replace root with op<mfuse.relu>(convertValue(input)) -> (convertType(resType));
+}
+
 Pattern ConvertAtenSigmoid {
   let root = op<torch.aten.sigmoid>(input: Value) -> (resType: Type);
   replace root with op<mfuse.aclnn.sigmoid>(convertValue(input)) -> (convertType(resType));

@@ -834,6 +834,28 @@ def Mfuse_ReduceSumOp : Mfuse_ReduceOp<"reduce_sum", [Pure]> {
   }];
 }
 
+def Mfuse_ReluOp : Mfuse_Op<"relu", [
+    Pure,
+    SameOperandsAndResultType,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+  ]> {
+  let summary = "Element-wise rectified linear unit (ReLU).";
+  let description = [{
+    Computes the rectified linear unit of each element in the input tensor:
+    output = max(input, 0).
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$input
+  );
+
+  let results = (outs AnyRankedTensor:$output);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_ReshapeOp : Mfuse_Op<"reshape", [
     Pure,
     SameOperandsAndResultElementType,
