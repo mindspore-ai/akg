@@ -68,7 +68,6 @@ async def test_op_builder_sol_format():
             assert "outputs" in def_json, "definition.json 缺少 outputs 字段"
             
             ref_py = sol_data["reference.py"]
-            assert "def get_inputs" in ref_py, "reference.py 缺少 get_inputs 函数"
             assert "def run" in ref_py, "reference.py 缺少 run 函数"
             
         except json.JSONDecodeError:

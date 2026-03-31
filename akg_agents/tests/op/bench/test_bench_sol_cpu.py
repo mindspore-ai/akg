@@ -25,7 +25,7 @@ async def test_bench_sol_cpu_cpp():
     backend = "cpu"
     arch = "x86_64"
     
-    config = load_config(config_path="./python/akg_agents/op/config/cpp_coderonly_config.yaml")
+    config = load_config("cpp", backend="cpu")
     
     # 获取 _sol_relu 的路径
     current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))

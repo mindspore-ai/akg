@@ -5,7 +5,7 @@
 当用户要求使用 SOL 格式时，你需要生成符合 SOL 格式的三个文件内容（合并在一个 JSON 字段或按特殊格式输出，视具体实现而定，通常包含 `definition.json`、`workload.jsonl` 和 `reference.py`）。
 - `definition.json`：定义输入输出的名称、形状和数据类型。
 - `workload.jsonl`：定义具体的动态 shape 参数和容差。
-- `reference.py`：包含 `get_inputs(axes_and_scalars, device)` 和 `run(**inputs)` 函数。
+- `reference.py`：必须包含 `run(**inputs)` 函数。
 {% else %}
 ## KernelBench格式要求
 确保导入必要依赖，如：
