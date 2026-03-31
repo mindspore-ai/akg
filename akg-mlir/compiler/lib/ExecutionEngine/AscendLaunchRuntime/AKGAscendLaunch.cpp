@@ -1,5 +1,5 @@
 /**
- * Copyright 2024-2025 Huawei Technologies Co., Ltd
+ * Copyright 2024-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,9 +17,10 @@
 #include <algorithm>
 #include <iterator>
 #include <iostream>
+#include <fstream>
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AKGAscendRun.h"
 
-typedef int64_t (*tiling_function_t)(void*);
+typedef int64_t (*tiling_function_t)(void *);
 typedef int64_t (*get_tiling_struct_size_function_t)();
 
 std::vector<std::vector<uint16_t>> bf16s_;
@@ -54,8 +55,7 @@ py::buffer_info ConvertToBF16(py::buffer_info &buf) {
   std::vector<uint16_t> bf16(size);
   F32ToBF16(reinterpret_cast<float *>(buf.ptr), bf16.data(), size);
   std::for_each(buf.strides.begin(), buf.strides.end(), [](ssize_t &stride) { stride /= 2; });
-  py::buffer_info new_buf(bf16.data(), 2, py::format_descriptor<uint16_t>::format(), buf.ndim, buf.shape,
-                          buf.strides);
+  py::buffer_info new_buf(bf16.data(), 2, py::format_descriptor<uint16_t>::format(), buf.ndim, buf.shape, buf.strides);
   bf16s_.push_back(std::move(bf16));
   return new_buf;
 }
@@ -67,36 +67,30 @@ void ConvertToFP32(py::buffer_info &bf16_buf, py::buffer_info &fp32_buf) {
   return;
 }
 
-mlir::runtime::BaseDevicePtr CreateScalarDevice(const py::handle& arg) {
-  void* data_ptr = nullptr;
+mlir::runtime::BaseDevicePtr CreateScalarDevice(const py::handle &arg) {
+  void *data_ptr = nullptr;
 
   if (py::isinstance<py::int_>(arg)) {
     int64_t val = arg.cast<int64_t>();
-    data_ptr = reinterpret_cast<void*>(val);
+    data_ptr = reinterpret_cast<void *>(val);
   } else if (py::isinstance<py::float_>(arg)) {
     double val = arg.cast<double>();
-    static_assert(sizeof(double) == sizeof(void*), "double size mismatch");
-    std::memcpy(&data_ptr, &val, sizeof(void*));
+    static_assert(sizeof(double) == sizeof(void *), "double size mismatch");
+    std::memcpy(&data_ptr, &val, sizeof(void *));
   } else if (py::isinstance<py::bool_>(arg)) {
     bool val = arg.cast<bool>();
-    data_ptr = reinterpret_cast<void*>(static_cast<intptr_t>(val));
+    data_ptr = reinterpret_cast<void *>(static_cast<intptr_t>(val));
   }
 
   return std::make_shared<mlir::runtime::ScalarDevice>(data_ptr);
 }
 
-void ParseInputArgs(bool is_dynamic,
-                    std::vector<mlir::runtime::BaseDevicePtr> &input,
-                    std::vector<std::vector<int64_t>> &input_shapes,
-                    std::map<uint64_t, py::buffer_info> &bf16_buf_map,
+void ParseInputArgs(bool is_dynamic, std::vector<mlir::runtime::BaseDevicePtr> &input,
+                    std::vector<std::vector<int64_t>> &input_shapes, std::map<uint64_t, py::buffer_info> &bf16_buf_map,
                     const py::list &processed_args) {
   /* Tensor also implements buffer protocol; check tensor first for device ptr. */
-  auto is_tensor_arg = [](const py::handle &h) {
-    return py::hasattr(h, "data_ptr") && py::hasattr(h, "nbytes");
-  };
-  auto is_numpy_arg = [](const py::handle &h) {
-    return py::isinstance<py::buffer>(h) && !py::hasattr(h, "data_ptr");
-  };
+  auto is_tensor_arg = [](const py::handle &h) { return py::hasattr(h, "data_ptr") && py::hasattr(h, "nbytes"); };
+  auto is_numpy_arg = [](const py::handle &h) { return py::isinstance<py::buffer>(h) && !py::hasattr(h, "data_ptr"); };
 
   for (uint16_t i = 0; i < processed_args.size(); i++) {
     py::tuple tup = processed_args[i].cast<py::tuple>();
@@ -105,8 +99,7 @@ void ParseInputArgs(bool is_dynamic,
     bool is_bf16 = tup[2].cast<bool>();
     py::object shape_obj = tup[3];
 
-    if (py::isinstance<py::int_>(data) || py::isinstance<py::float_>(data) ||
-        py::isinstance<py::bool_>(data)) {
+    if (py::isinstance<py::int_>(data) || py::isinstance<py::float_>(data) || py::isinstance<py::bool_>(data)) {
       input.push_back(CreateScalarDevice(data));
       if (is_dynamic) input_shapes.emplace_back();
       continue;
@@ -141,22 +134,20 @@ void ParseInputArgs(bool is_dynamic,
       std::vector<int64_t> input_shape;
       input_shape.reserve(shape_list.size());
       std::transform(shape_list.begin(), shape_list.end(), std::back_inserter(input_shape),
-          [](const py::handle &dim_h) { return dim_h.cast<int64_t>(); });
+                     [](const py::handle &dim_h) { return dim_h.cast<int64_t>(); });
       input_shapes.push_back(std::move(input_shape));
     }
 
     if (use_host) {
-      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(
-          data_addr, nullptr, bytes, is_output));
+      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(data_addr, nullptr, bytes, is_output));
     } else {
-      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(
-          nullptr, data_addr, bytes, is_output));
+      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(nullptr, data_addr, bytes, is_output));
     }
   }
 }
 
-void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bool is_dynamic,
-                    bool use_mem_pool, const py::args &args, py::kwargs kwargs) {
+void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bool is_dynamic, bool use_mem_pool,
+                    const py::args &args, py::kwargs kwargs) {
   void *external_stream = nullptr;
   if (kwargs.contains("stream") && !kwargs["stream"].is_none()) {
     external_stream = reinterpret_cast<void *>(kwargs["stream"].cast<intptr_t>());
@@ -169,7 +160,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
 
   ParseInputArgs(is_dynamic, input, input_shapes, bf16_buf_map, processed_args);
 
-  int64_t tiling_key, tiling_struct_size;
+  int64_t tiling_key, tiling_struct_size = 0;
   std::vector<void *> runtimeargs;
   if (is_dynamic) {
     use_mem_pool = true;
@@ -182,9 +173,9 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
 
     std::string tiling_struct_size_name = kernel_name + "_get_tiling_struct_size_function";
     get_tiling_struct_size_function_t get_tiling_struct_size_function =
-        (get_tiling_struct_size_function_t)dlsym(handle, tiling_struct_size_name.data());
+      (get_tiling_struct_size_function_t)dlsym(handle, tiling_struct_size_name.data());
     tiling_struct_size = get_tiling_struct_size_function();
-    const char* dlsym_error = dlerror();
+    const char *dlsym_error = dlerror();
     if (dlsym_error) {
       std::cerr << "Failed to load symbol: " << dlsym_error << std::endl;
       dlclose(handle);
@@ -201,8 +192,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
         dlclose(handle);
         return;
       }
-      int64_t* arg_tiling_host = static_cast<int64_t*>(
-          aligned_alloc(8, tiling_struct_size * sizeof(int64_t)));
+      int64_t *arg_tiling_host = static_cast<int64_t *>(aligned_alloc(8, tiling_struct_size * sizeof(int64_t)));
 
       for (size_t idx = 0; idx < input.size(); idx++) {
         auto base = input[idx];
@@ -212,40 +202,39 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
         if (!tensor) {
           runtimeargs.push_back(mlir::runtime::GetScalarValuePtr(base));
         } else {
-          void* dev_addr  = tensor->GetDeviceAddress();
-          void* host_addr = tensor->GetHostAddress();
-          void* eff_addr = (dev_addr ? dev_addr : host_addr);
+          void *dev_addr = tensor->GetDeviceAddress();
+          void *host_addr = tensor->GetHostAddress();
+          void *eff_addr = (dev_addr ? dev_addr : host_addr);
           runtimeargs.push_back(eff_addr);
           runtimeargs.push_back(eff_addr);
-          runtimeargs.push_back(reinterpret_cast<void*>(offset));
+          runtimeargs.push_back(reinterpret_cast<void *>(offset));
           int64_t size = 1;
           for (auto dim : shape) {
-            runtimeargs.push_back(reinterpret_cast<void*>(dim));
+            runtimeargs.push_back(reinterpret_cast<void *>(dim));
             size *= dim;
           }
 
-          for (auto& dim : shape) {
+          for (auto &dim : shape) {
             int64_t stride = size / dim;
-            runtimeargs.push_back(reinterpret_cast<void*>(stride));
+            runtimeargs.push_back(reinterpret_cast<void *>(stride));
             size = stride;
           }
         }
       }
-      DLOG(INFO) << "Tiling args - tiling_key: " << tiling_key
-           << ", offset: " << offset
-           << ", tiling_struct_size: " << tiling_struct_size;
-      runtimeargs.push_back(reinterpret_cast<void*>(&tiling_key));
-      runtimeargs.push_back(reinterpret_cast<void*>(arg_tiling_host));
-      runtimeargs.push_back(reinterpret_cast<void*>(arg_tiling_host));
-      runtimeargs.push_back(reinterpret_cast<void*>(offset));
-      runtimeargs.push_back(reinterpret_cast<void*>(tiling_struct_size));
-      runtimeargs.push_back(reinterpret_cast<void*>(1));
-      tiling_function((void*)(runtimeargs.data()));
+      DLOG(INFO) << "Tiling args - tiling_key: " << tiling_key << ", offset: " << offset
+                 << ", tiling_struct_size: " << tiling_struct_size;
+      runtimeargs.push_back(reinterpret_cast<void *>(&tiling_key));
+      runtimeargs.push_back(reinterpret_cast<void *>(arg_tiling_host));
+      runtimeargs.push_back(reinterpret_cast<void *>(arg_tiling_host));
+      runtimeargs.push_back(reinterpret_cast<void *>(offset));
+      runtimeargs.push_back(reinterpret_cast<void *>(tiling_struct_size));
+      runtimeargs.push_back(reinterpret_cast<void *>(1));
+      tiling_function((void *)(runtimeargs.data()));
       for (int64_t i = 0; i < tiling_struct_size; i++) {
         DLOG(INFO) << "arg_tiling_host[" << i << "]: " << arg_tiling_host[i];
       }
-      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(arg_tiling_host,
-            nullptr, tiling_struct_size * sizeof(int64_t), false));
+      input.push_back(std::make_shared<mlir::runtime::TensorDevice>(arg_tiling_host, nullptr,
+                                                                    tiling_struct_size * sizeof(int64_t), false));
     }
   }
   for (auto iter = runtimeargs.begin(); iter != runtimeargs.end(); iter++) {
@@ -253,7 +242,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   }
 
   auto *kernel_runtime =
-      mlir::runtime::AscendKernelRuntime::GetOrCreateRuntime(device_id, use_mem_pool, external_stream);
+    mlir::runtime::AscendKernelRuntime::GetOrCreateRuntime(device_id, use_mem_pool, external_stream);
   kernel_runtime->RunOpImpl(path, kernel_name, is_dynamic, input, input_shapes, tiling_key, tiling_struct_size);
 
   for (auto iter = bf16_buf_map.begin(); iter != bf16_buf_map.end(); iter++) {
@@ -265,10 +254,46 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   return;
 }
 
+void Launch(const std::string &kernel_name, void *func, bool is_dynamic, const py::args &args, py::kwargs kwargs) {
+  void *stream = nullptr;
+  int block_num = 48;
+  if (kwargs.contains("stream") && !kwargs["stream"].is_none()) {
+    stream = reinterpret_cast<void *>(kwargs["stream"].cast<intptr_t>());
+  }
+  if (kwargs.contains("block_num") && !kwargs["block_num"].is_none()) {
+    block_num = kwargs["block_num"].cast<uintptr_t>();
+  }
+  py::list processed_args = kwargs["processed_args"].cast<py::list>();
+  akg_log_init();
+  auto input = std::vector<mlir::runtime::BaseDevicePtr>();
+  auto input_shapes = std::vector<std::vector<int64_t>>();
+  std::map<uint64_t, py::buffer_info> bf16_buf_map;
+
+  ParseInputArgs(is_dynamic, input, input_shapes, bf16_buf_map, processed_args);
+
+  std::vector<void *> runtimeargs;
+  for (const auto &base : input) {
+    auto tensor = mlir::runtime::AsTensorDevice(base);
+    runtimeargs.push_back(tensor->GetDeviceAddress());
+  }
+  for (auto iter = runtimeargs.begin(); iter != runtimeargs.end(); iter++) {
+    DLOG(INFO) << "runtimeargs[" << iter - runtimeargs.begin() << "]: " << *iter;
+  }
+
+  rtError_t ret =
+    rtKernelLaunch(func, block_num, runtimeargs.data(), runtimeargs.size() * sizeof(void *), NULL, stream);
+  if (ret != RT_ERROR_NONE) {
+    LOG(FATAL) << "Call rtKernelLaunch, ret[" << ret << "]";
+    return;
+  }
+
+  return;
+}
+
 // PYBIND interface
 PYBIND11_MODULE(akgAscendLaunch, m) {
-  py::class_<AscendTensorObjStructPyTorch,
-    std::shared_ptr<AscendTensorObjStructPyTorch>>(m, "AscendTensorObjStructPyTorch")
+  py::class_<AscendTensorObjStructPyTorch, std::shared_ptr<AscendTensorObjStructPyTorch>>(
+    m, "AscendTensorObjStructPyTorch")
     .def(py::init<>())
     .def_readwrite("tensor_info", &AscendTensorObjStructPyTorch::tensor_info)
     .def_readwrite("shape_info", &AscendTensorObjStructPyTorch::shape_info)
@@ -279,4 +304,6 @@ PYBIND11_MODULE(akgAscendLaunch, m) {
     .def("data_ptr", &AscendTensorObjStructPyTorch::data_ptr);
   // ascend_run call
   m.def("akg_ascend_run", &akg_ascend_run);
+  m.def("get_kernel_func", &mlir::runtime::GetKernelFunction);
+  m.def("launch", &Launch);
 }

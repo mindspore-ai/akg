@@ -48,7 +48,7 @@ bool isIntegerType(Operation *op) {
 }
 
 static linalg::UnaryFn getLinalgUnaryKind(Operation *op) {
-  linalg::UnaryFn kind;
+  linalg::UnaryFn kind{};
   llvm::TypeSwitch<Operation *>(op)
     .Case([&](mindspore::ExpOp) { kind = linalg::UnaryFn::exp; })
     .Case([&](mindspore::AbsOp) { kind = linalg::UnaryFn::abs; })
@@ -60,7 +60,7 @@ static linalg::UnaryFn getLinalgUnaryKind(Operation *op) {
 }
 
 static linalg::BinaryFn getLinalgBinaryKind(Operation *op) {
-  linalg::BinaryFn kind;
+  linalg::BinaryFn kind{};
   llvm::TypeSwitch<Operation *>(op)
     .Case([&](mindspore::AddOp) { kind = linalg::BinaryFn::add; })
     .Case([&](mindspore::MulOp) { kind = linalg::BinaryFn::mul; })
@@ -578,48 +578,39 @@ static Value getDynamicRankTensor(mindspore::BroadcastToOp brcOp) {
   });
   for (auto msOp : msOps) {
     if (isa<LLVM::ReturnOp>(msOp)) {
-      if (msOp->getNumOperands() == 0)
-        continue;
+      if (msOp->getNumOperands() == 0) continue;
       auto oper0 = msOp->getOperand(0);
-      if (oper0.getDefiningOp() == brcOp)
-        return oper0;
+      if (oper0.getDefiningOp() == brcOp) return oper0;
       continue;
     }
 
-    if (msOp->getNumOperands() < 2)
-      continue;
+    if (msOp->getNumOperands() < 2) continue;
 
     auto oper0 = msOp->getOperand(0);
     auto oper1 = msOp->getOperand(1);
 
-    if (oper0.getDefiningOp() == brcOp)
-      return oper1;
-    if (oper1.getDefiningOp() == brcOp)
-      return oper0;
+    if (oper0.getDefiningOp() == brcOp) return oper1;
+    if (oper1.getDefiningOp() == brcOp) return oper0;
   }
   return brcOp.getOutput();
 }
 
-static LogicalResult broadcastMatchAndRewriteHelper(mindspore::BroadcastToOp brcOp,
-                                                    PatternRewriter &rewriter) {
-  auto loc    = brcOp.getLoc();
+static LogicalResult broadcastMatchAndRewriteHelper(mindspore::BroadcastToOp brcOp, PatternRewriter &rewriter) {
+  auto loc = brcOp.getLoc();
   Value input = brcOp.getInput();
   Value output = brcOp.getOutput();
 
   auto resultTy = dyn_cast<ShapedType>(output.getType());
   if (!resultTy) {
-    return rewriter.notifyMatchFailure(
-        brcOp, "BroadcastToOp result is not a ShapedType");
+    return rewriter.notifyMatchFailure(brcOp, "BroadcastToOp result is not a ShapedType");
   }
 
   Value dynRef = getDynamicRankTensor(brcOp);
   ShapedType dynRefTy;
-  if (auto st = dyn_cast<ShapedType>(dynRef.getType()))
-    dynRefTy = st;
+  if (auto st = dyn_cast<ShapedType>(dynRef.getType())) dynRefTy = st;
 
-  if (!dynRefTy || dynRefTy.getRank() == 0 ||
-      dynRefTy.getRank() != resultTy.getRank()) {
-    dynRef   = output;
+  if (!dynRefTy || dynRefTy.getRank() == 0 || dynRefTy.getRank() != resultTy.getRank()) {
+    dynRef = output;
     dynRefTy = resultTy;
   }
 
@@ -630,24 +621,20 @@ static LogicalResult broadcastMatchAndRewriteHelper(mindspore::BroadcastToOp brc
     }
   }
 
-  Value emptyTensor = rewriter.create<tensor::EmptyOp>(
-      loc, resultTy.getShape(), resultTy.getElementType(), dynDims);
+  Value emptyTensor = rewriter.create<tensor::EmptyOp>(loc, resultTy.getShape(), resultTy.getElementType(), dynDims);
 
   auto *op = brcOp.getOperation();
   auto symbolAttr = op->getAttrOfType<DictionaryAttr>("frontend_symbol");
   if (!symbolAttr) {
-    return rewriter.notifyMatchFailure(
-        brcOp, "missing frontend_symbol attribute on BroadcastToOp");
+    return rewriter.notifyMatchFailure(brcOp, "missing frontend_symbol attribute on BroadcastToOp");
   }
   auto inputShapeAttr = dyn_cast_or_null<ArrayAttr>(symbolAttr.get("input_0"));
   if (!inputShapeAttr) {
-    return rewriter.notifyMatchFailure(
-        brcOp, "missing frontend_symbol.input_0 attribute on BroadcastToOp");
+    return rewriter.notifyMatchFailure(brcOp, "missing frontend_symbol.input_0 attribute on BroadcastToOp");
   }
 
   DenseI64ArrayAttr dimension = computeDimension(brcOp);
-  rewriter.replaceOpWithNewOp<linalg::BroadcastOp>(
-      brcOp, input, emptyTensor, dimension);
+  rewriter.replaceOpWithNewOp<linalg::BroadcastOp>(brcOp, input, emptyTensor, dimension);
   return success();
 }
 
@@ -839,7 +826,8 @@ void populateLowerMindSporeToLinalgNamedPattern(RewritePatternSet &patterns, boo
 
 struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedBase<ConvertMindSporeToLinalgNamedPass> {
  public:
-  explicit ConvertMindSporeToLinalgNamedPass(bool enableHFusion = true) : enableHFusion(enableHFusion) {}
+  explicit ConvertMindSporeToLinalgNamedPass(bool isDynamic = false, bool enableHFusion = true)
+      : isDynamic(isDynamic), enableHFusion(enableHFusion) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<linalg::LinalgDialect>();
@@ -856,8 +844,14 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
 
     target.addLegalDialect<arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect, math::MathDialect,
                            hfusion::HFusionDialect>();
+    OpBuilder builder(getOperation());
     FunctionOpInterface func = getOperation();
-    func->setAttr("hacc.function_kind", hacc::HACCFuncTypeAttr::get(func->getContext(), hacc::HACCFuncType::HOST));
+    func->setAttr(StringAttr::get(func->getContext(),
+                                  hacc::stringifyHACCToLLVMIRTranslateAttr(hacc::HACCToLLVMIRTranslateAttr::ENTRY)),
+                  builder.getUnitAttr());
+    func->setAttr(hacc::HACCFuncTypeAttr::name,
+                  hacc::HACCFuncTypeAttr::get(func->getContext(),
+                                              isDynamic ? hacc::HACCFuncType::HOST : hacc::HACCFuncType::DEVICE));
     populateLowerMindSporeToLinalgNamedPattern(patterns, enableHFusion);
     populateLowerMindSporeCompareToLinalgPattern(patterns);
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
@@ -866,10 +860,11 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
   }
 
  private:
+  bool isDynamic;
   bool enableHFusion;
 };
 
-std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToLinalgNamedPass(bool enableHFusion) {
-  return std::make_unique<ConvertMindSporeToLinalgNamedPass>(enableHFusion);
+std::unique_ptr<OperationPass<func::FuncOp>> createMindSporeToLinalgNamedPass(bool isDynamic, bool enableHFusion) {
+  return std::make_unique<ConvertMindSporeToLinalgNamedPass>(isDynamic, enableHFusion);
 }
 }  // namespace mlir
