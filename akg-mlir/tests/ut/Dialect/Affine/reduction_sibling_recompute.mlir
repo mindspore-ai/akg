@@ -88,3 +88,111 @@ func.func @akg_fused_add_mean_mul_pow_rsqrt_10_auto_fallback(%arg0: memref<256x1
   }
   return %memspacecast_7, %memspacecast_9 : memref<256x10x1xf32, {SymShapeAttr = ["s0", "s1", "1"]}>, memref<256x10x2048xf32, {SymShapeAttr = ["s0", "s1", "s2"]}>
 }
+
+// CHECK-LABEL: func.func @akg_fused__log_softmax__npu_dtype_cast_5_auto_fallback(%arg0: memref<1024x125696xbf16, {SymShapeAttr = ["s0", "s1"]}>) -> (memref<1023x125696xbf16, {SymShapeAttr = ["s3", "s1"]}>, memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>) attributes {OperatorType = "Reduction", hacc.function_kind = #hacc.function_kind<HOST>} {
+// CHECK-NEXT:    %cst = arith.constant 0xFF800000 : f32
+// CHECK-NEXT:    %cst_0 = arith.constant 0.000000e+00 : f32
+// CHECK-NEXT:    %subview = memref.subview %arg0[0, 0] [1023, 125696] [1, 1] : memref<1024x125696xbf16, {SymShapeAttr = ["s0", "s1"]}> to memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s0", "s1"]}>
+// CHECK-NEXT:    %memspacecast = memref.memory_space_cast %subview : memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s0", "s1"]}> to memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:    %alloc = memref.alloc() {alignment = 64 : i64} : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:    %alloc_1 = memref.alloc() {alignment = 64 : i64} : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:    %alloc_2 = memref.alloc() {alignment = 64 : i64} : memref<1023x125696xbf16, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:    %alloc_3 = memref.alloc() {alignment = 64 : i64} : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:    affine.for %arg1 = 0 to 1023 {
+// CHECK-NEXT:      affine.store %cst, %alloc[%arg1] {reduction_init} : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:      affine.for %arg2 = 0 to 125696 {
+// CHECK-NEXT:        %2 = affine.load %memspacecast[%arg1, %arg2] : memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:        %3 = arith.extf %2 : bf16 to f32
+// CHECK-NEXT:        %4 = affine.load %alloc[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:        %5 = arith.maximumf %3, %4 {reduction_axes = [1 : index], reduction_type = "x"} : f32
+// CHECK-NEXT:        affine.store %5, %alloc[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:      } {reduction}
+// CHECK-NEXT:      affine.for %arg2 = 0 to 125696 {
+// CHECK-NEXT:        %2 = affine.load %alloc[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:        %3 = affine.load %memspacecast[%arg1, %arg2] : memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:        %4 = arith.extf %3 : bf16 to f32
+// CHECK-NEXT:        %5 = arith.subf %4, %2 : f32
+// CHECK-NEXT:        %6 = math.exp %5 : f32
+// CHECK-NEXT:      } {broadcast}
+// CHECK-NEXT:      affine.store %cst_0, %alloc_1[%arg1] {reduction_init} : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:      affine.for %arg2 = 0 to 125696 {
+// CHECK-NEXT:        %2 = affine.load %memspacecast[%arg1, %arg2] : memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:        %3 = arith.extf %2 : bf16 to f32
+// CHECK-NEXT:        %4 = affine.load %alloc[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:        %5 = arith.subf %3, %4 : f32
+// CHECK-NEXT:        %6 = math.exp %5 : f32
+// CHECK-NEXT:        %7 = affine.load %alloc_1[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:        %8 = arith.addf %6, %7 {reduction_axes = [1 : index], reduction_type = "x"} : f32
+// CHECK-NEXT:        affine.store %8, %alloc_1[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:      } {reduction}
+// CHECK-NEXT:      %0 = affine.load %alloc_1[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:      %1 = math.log %0 : f32
+// CHECK-NEXT:      affine.for %arg2 = 0 to 125696 {
+// CHECK-NEXT:        %2 = affine.load %memspacecast[%arg1, %arg2] : memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:        %3 = arith.extf %2 : bf16 to f32
+// CHECK-NEXT:        %4 = affine.load %alloc[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+// CHECK-NEXT:        %5 = arith.subf %3, %4 : f32
+// CHECK-NEXT:        %6 = arith.subf %5, %1 : f32
+// CHECK-NEXT:        %7 = arith.truncf %6 : f32 to bf16
+// CHECK-NEXT:        affine.store %7, %alloc_2[%arg1, %arg2] : memref<1023x125696xbf16, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:        %8 = affine.load %alloc_2[%arg1, %arg2] : memref<1023x125696xbf16, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:        %9 = arith.extf %8 : bf16 to f32
+// CHECK-NEXT:        affine.store %9, %alloc_3[%arg1, %arg2] : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:      } {broadcast}
+// CHECK-NEXT:    } {broadcast}
+// CHECK-NEXT:    return %alloc_2, %alloc_3 : memref<1023x125696xbf16, {SymShapeAttr = ["s3", "s1"]}>, memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+// CHECK-NEXT:  }
+
+func.func @akg_fused__log_softmax__npu_dtype_cast_5_auto_fallback(%arg0: memref<1024x125696xbf16, {SymShapeAttr = ["s0", "s1"]}>) -> (memref<1023x125696xbf16, {SymShapeAttr = ["s3", "s1"]}>, memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>) attributes {OperatorType = "Reduction", hacc.function_kind = #hacc.function_kind<HOST>} {
+  %cst = arith.constant 0xFF800000 : f32
+  %cst_0 = arith.constant 0.000000e+00 : f32
+  %subview = memref.subview %arg0[0, 0] [1023, 125696] [1, 1] : memref<1024x125696xbf16, {SymShapeAttr = ["s0", "s1"]}> to memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s0", "s1"]}>
+  %memspacecast = memref.memory_space_cast %subview : memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s0", "s1"]}> to memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s3", "s1"]}>
+  %alloc = memref.alloc() {alignment = 64 : i64} : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+  %alloc_1 = memref.alloc() {alignment = 64 : i64} : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+  %alloc_2 = memref.alloc() {alignment = 64 : i64} : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+  %alloc_3 = memref.alloc() {alignment = 64 : i64} : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+  %alloc_4 = memref.alloc() {alignment = 64 : i64} : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+  %alloc_5 = memref.alloc() {alignment = 64 : i64} : memref<1023x125696xbf16, {SymShapeAttr = ["s3", "s1"]}>
+  %alloc_6 = memref.alloc() {alignment = 64 : i64} : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+  affine.for %arg1 = 0 to 1023 {
+    affine.store %cst, %alloc_1[%arg1] {reduction_init} : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+    affine.for %arg2 = 0 to 125696 {
+      %2 = affine.load %memspacecast[%arg1, %arg2] : memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s3", "s1"]}>
+      %3 = arith.extf %2 : bf16 to f32
+      affine.store %3, %alloc[%arg1, %arg2] : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+      %4 = affine.load %alloc[%arg1, %arg2] : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+      %5 = affine.load %alloc_1[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+      %6 = arith.maximumf %4, %5 {reduction_axes = [1 : index], reduction_type = "x"} : f32
+      affine.store %6, %alloc_1[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+    } {reduction}
+    affine.for %arg2 = 0 to 125696 {
+      %2 = affine.load %alloc_1[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+      %3 = affine.load %alloc[%arg1, %arg2] : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+      %4 = arith.subf %3, %2 : f32
+      affine.store %4, %alloc_2[%arg1, %arg2] : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+      %5 = affine.load %alloc_2[%arg1, %arg2] : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+      %6 = math.exp %5 : f32
+      affine.store %6, %alloc_3[%arg1, %arg2] : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+    } {broadcast}
+    affine.store %cst_0, %alloc_4[%arg1] {reduction_init} : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+    affine.for %arg2 = 0 to 125696 {
+      %2 = affine.load %alloc_3[%arg1, %arg2] : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+      %3 = affine.load %alloc_4[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+      %4 = arith.addf %2, %3 {reduction_axes = [1 : index], reduction_type = "x"} : f32
+      affine.store %4, %alloc_4[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+    } {reduction}
+    %0 = affine.load %alloc_4[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
+    %1 = math.log %0 : f32
+    affine.for %arg2 = 0 to 125696 {
+      %2 = affine.load %alloc_2[%arg1, %arg2] : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+      %3 = arith.subf %2, %1 : f32
+      %4 = arith.truncf %3 : f32 to bf16
+      affine.store %4, %alloc_5[%arg1, %arg2] : memref<1023x125696xbf16, {SymShapeAttr = ["s3", "s1"]}>
+      %5 = affine.load %alloc_5[%arg1, %arg2] : memref<1023x125696xbf16, {SymShapeAttr = ["s3", "s1"]}>
+      %6 = arith.extf %5 : bf16 to f32
+      affine.store %6, %alloc_6[%arg1, %arg2] : memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+    } {broadcast}
+  } {broadcast}
+  return %alloc_5, %alloc_6 : memref<1023x125696xbf16, {SymShapeAttr = ["s3", "s1"]}>, memref<1023x125696xf32, {SymShapeAttr = ["s3", "s1"]}>
+}
