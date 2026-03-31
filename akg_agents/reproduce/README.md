@@ -8,8 +8,15 @@
 reproduce/
 ├── SPEC.md              # 本目录开发规范
 ├── README.md            # 本文件
-├── wip/                 # 临时建设中的脚本（不保证完全验证）
-└── (复现脚本)           # 已验证的复现脚本将放在根目录
+├── RESULT_TEMPLATE.md   # 复现结果记录模板
+└── wip/                 # 临时建设中的脚本（详见 wip/README.md）
+    ├── _common.py
+    ├── reproduce_mhc_coder_only.py
+    ├── reproduce_mhc_kernelgen_skill.py
+    ├── reproduce_kernelbench_coder_only.py
+    ├── reproduce_kernelbench_kernelgen_skill.py
+    ├── reproduce_akgbench_coder_only.py
+    └── reproduce_akgbench_kernelgen_skill.py
 ```
 
 ## 使用说明
@@ -25,8 +32,13 @@ reproduce/
 
 2. 配置必要的环境变量（如 API Key）：
    ```bash
-   export OPENAI_API_KEY=your_key_here
+   export AIKG_API_KEY=your_key_here
    # 或在 ~/.akg_agents/settings.json 中配置
+   ```
+
+3. 初始化第三方 benchmark：
+   ```bash
+   git submodule update --init "akg_agents/thirdparty/*"
    ```
 
 ### 运行脚本
@@ -34,8 +46,23 @@ reproduce/
 每个脚本都支持 `--help` 查看详细参数：
 
 ```bash
-python reproduce/<script_name>.py --help
+python reproduce/wip/<script_name>.py --help
 ```
+
+### 当前可用脚本（wip/）
+
+6 个独立脚本，对比**固定文档导入**（coder_only_workflow）和 **Skill 系统导入**（kernelgen_only_workflow）在不同 benchmark 上的效果：
+
+| 脚本 | Benchmark | 导入方式 | 特有参数 |
+|------|-----------|---------|---------|
+| `reproduce_mhc_coder_only.py` | EvoKernel MHC | 固定文档 | 默认全部；`--op 5` 指定序号 |
+| `reproduce_mhc_kernelgen_skill.py` | EvoKernel MHC | Skill 系统 | 默认全部；`--op 5` 指定序号 |
+| `reproduce_kernelbench_coder_only.py` | KernelBench Level1 | 固定文档 | 默认全部（排除 conv 54-87） |
+| `reproduce_kernelbench_kernelgen_skill.py` | KernelBench Level1 | Skill 系统 | 默认全部（排除 conv 54-87） |
+| `reproduce_akgbench_coder_only.py` | AIKGBench Lite | 固定文档 | 默认全部 tier；`--tiers t1` 指定 |
+| `reproduce_akgbench_kernelgen_skill.py` | AIKGBench Lite | Skill 系统 | 默认全部 tier；`--tiers t1` 指定 |
+
+报告默认保存到 `~/.akg/reproduce_log/`。详细说明见 [wip/README.md](wip/README.md)。
 
 ## wip/ 子目录
 
