@@ -26,7 +26,7 @@ async def test_bench_sol_triton_cuda():
     backend = "cuda"
     arch = "a100"
     
-    config = load_config(config_path="./python/akg_agents/op/config/triton_cuda_coderonly_config.yaml")
+    config = load_config("triton_cuda", backend="cuda")
     
     # 获取 _sol_relu 的路径
     current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
