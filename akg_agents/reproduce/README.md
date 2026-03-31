@@ -32,8 +32,8 @@ reproduce/
 
 2. 配置必要的环境变量（如 API Key）：
    ```bash
-   export AIKG_API_KEY=your_key_here
-   # 或在 ~/.akg_agents/settings.json 中配置
+   export AKG_AGENTS_API_KEY=your_key_here
+   # 或在 ~/.akg/settings.json 中配置
    ```
 
 3. 初始化第三方 benchmark：
@@ -59,8 +59,8 @@ python reproduce/wip/<script_name>.py --help
 | `reproduce_mhc_kernelgen_skill.py` | EvoKernel MHC | Skill 系统 | 默认全部；`--op 5` 指定序号 |
 | `reproduce_kernelbench_coder_only.py` | KernelBench Level1 | 固定文档 | 默认全部（排除 conv 54-87） |
 | `reproduce_kernelbench_kernelgen_skill.py` | KernelBench Level1 | Skill 系统 | 默认全部（排除 conv 54-87） |
-| `reproduce_akgbench_coder_only.py` | AIKGBench Lite | 固定文档 | 默认全部 tier；`--tiers t1` 指定 |
-| `reproduce_akgbench_kernelgen_skill.py` | AIKGBench Lite | Skill 系统 | 默认全部 tier；`--tiers t1` 指定 |
+| `reproduce_akgbench_coder_only.py` | AKGBench Lite | 固定文档 | 默认全部 tier；`--tiers t1` 指定 |
+| `reproduce_akgbench_kernelgen_skill.py` | AKGBench Lite | Skill 系统 | 默认全部 tier；`--tiers t1` 指定 |
 
 报告默认保存到 `~/.akg/reproduce_log/`。详细说明见 [wip/README.md](wip/README.md)。
 
