@@ -56,7 +56,7 @@ def run_profile_scripts_and_collect_results(verify_dir: str, op_name: str, task_
         
         if os.path.exists(base_script_path):
             # 使用 cwd 参数指定工作目录（线程安全），不使用 os.chdir()
-            base_result = run_command(["python", base_script], cmd_msg="base_profile", timeout=300, cwd=verify_dir)
+            base_result = run_command(["python", base_script], cmd_msg="base_profile", timeout=600, cwd=verify_dir)
             if not base_result[0]:
                 logger.error(f"[{op_name}: {task_id}] 基准性能脚本执行失败: {base_result[1]}")
                 # base 失败不影响 generation 的执行
@@ -67,7 +67,7 @@ def run_profile_scripts_and_collect_results(verify_dir: str, op_name: str, task_
 
         # 步骤2：运行生成代码性能测试脚本
         gen_script = f"profile_{op_name}_generation.py"
-        gen_result = run_command(["python", gen_script], cmd_msg="generation_profile", timeout=300, cwd=verify_dir)
+        gen_result = run_command(["python", gen_script], cmd_msg="generation_profile", timeout=600, cwd=verify_dir)
         if not gen_result[0]:
             logger.error(f"[{op_name}: {task_id}] 生成代码性能脚本执行失败: {gen_result[1]}")
             return base_time_us, float('inf')
@@ -125,13 +125,14 @@ def read_profile_result_from_json(verify_dir: str, json_filename: str) -> float:
         return float('inf')
 
 
-def run_msprof(script_path: str, op_name: str = "", task_id: str = "0") -> Tuple[bool, str, Optional[str]]:
+def run_msprof(script_path: str, op_name: str = "", task_id: str = "0", timeout: int = 600) -> Tuple[bool, str, Optional[str]]:
     """运行msprof性能分析
     
     Args:
         script_path: Python脚本路径
         op_name: 算子名称（用于日志）
         task_id: 任务ID（用于日志）
+        timeout: 超时时间（秒）
         
     Returns:
         (success, error_msg, prof_path): 是否成功，错误信息，prof数据路径
@@ -139,7 +140,7 @@ def run_msprof(script_path: str, op_name: str = "", task_id: str = "0") -> Tuple
     try:
         process = subprocess.run(
             f'msprof --application="python {script_path}"',
-            shell=True, capture_output=True, text=True, timeout=600
+            shell=True, capture_output=True, text=True, timeout=timeout
         )
 
         for line in process.stdout.split('\n'):
@@ -208,13 +209,14 @@ def analyze_prof_data(prof_path: str, warmup_times: int, run_times: int, op_name
         return False, f"分析数据时出错: {str(e)}", float('inf')
 
 
-def run_nsys(script_path: str, op_name: str = "", task_id: str = "0") -> Tuple[bool, str, Optional[str]]:
+def run_nsys(script_path: str, op_name: str = "", task_id: str = "0", timeout: int = 600) -> Tuple[bool, str, Optional[str]]:
     """运行nsys性能分析
     
     Args:
         script_path: Python脚本路径
         op_name: 算子名称（用于日志）
         task_id: 任务ID（用于日志）
+        timeout: 超时时间（秒）
         
     Returns:
         (success, error_msg, rep_path): 是否成功，错误信息，nsys报告文件路径
@@ -223,7 +225,7 @@ def run_nsys(script_path: str, op_name: str = "", task_id: str = "0") -> Tuple[b
         output_name = "nsys_report_" + os.path.basename(script_path).replace(".py", "")
         cmd = f'nsys profile --output={output_name} python {script_path}'
         logger.debug(f"[{task_id}:{op_name}] Running nsys profile: {cmd}")
-        process = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+        process = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
         report_path = os.path.join(os.path.dirname(script_path), output_name + ".nsys-rep")
 
         if os.path.exists(report_path):

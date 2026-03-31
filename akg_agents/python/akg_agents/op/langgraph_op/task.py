@@ -19,6 +19,7 @@
 
 import logging
 import os
+import asyncio
 from typing import Optional, Dict, Any, Tuple
 
 from akg_agents.core_v2.langgraph_base.base_task import BaseLangGraphTask
@@ -381,9 +382,12 @@ class LangGraphTask(BaseLangGraphTask):
             logger.info(f"Task {self.task_id}, op_name: {self.op_name}")
             
             # 执行图
-            final_state = await self.app.ainvoke(
-                initial_state,
-                config={"recursion_limit": recursion_limit}
+            final_state = await asyncio.wait_for(
+                self.app.ainvoke(
+                    initial_state,
+                    config={"recursion_limit": recursion_limit}
+                ),
+                timeout=self.config.get("workflow_timeout", 1800)
             )
             # 处理结果
             success = final_state.get("verifier_result", False)
