@@ -55,9 +55,9 @@ def get_inputs():
     shape = (B, H, L, D)
     
     # Use smaller std to avoid float16 overflow in attention computation
-    query = torch.empty(shape, dtype=torch.float16).normal_(mean=0.0, std=0.1)
-    key = torch.empty(shape, dtype=torch.float16).normal_(mean=0.0, std=0.1)
-    value = torch.empty(shape, dtype=torch.float16).normal_(mean=0.0, std=0.1)
+    query = torch.empty(shape, dtype=torch.float16).normal_(mean=0.5, std=0.1)
+    key = torch.empty(shape, dtype=torch.float16).normal_(mean=0.5, std=0.1)
+    value = torch.empty(shape, dtype=torch.float16).normal_(mean=0.5, std=0.1)
     return [query, key, value]
 
 

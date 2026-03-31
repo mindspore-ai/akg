@@ -109,9 +109,9 @@ def get_inputs():
     S = 256  # Key/value sequence length (can differ from L)
     
     # Use smaller std to avoid float16 overflow in attention computation
-    q = torch.empty(B, L, H, D, dtype=torch.float16).normal_(mean=0.0, std=0.1)
-    k = torch.empty(B, S, H, D, dtype=torch.float16).normal_(mean=0.0, std=0.1)
-    v = torch.empty(B, S, H, D, dtype=torch.float16).normal_(mean=0.0, std=0.1)
+    q = torch.empty(B, L, H, D, dtype=torch.float16).normal_(mean=0.5, std=0.1)
+    k = torch.empty(B, S, H, D, dtype=torch.float16).normal_(mean=0.5, std=0.1)
+    v = torch.empty(B, S, H, D, dtype=torch.float16).normal_(mean=0.5, std=0.1)
     
     # Optional: Create a causal mask (upper triangle is True, masking future tokens)
     # causal_mask = torch.triu(torch.ones(L, S, dtype=torch.bool, device='cuda'), diagonal=1)

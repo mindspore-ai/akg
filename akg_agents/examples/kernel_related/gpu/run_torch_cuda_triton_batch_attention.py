@@ -137,7 +137,7 @@ async def run_attention_kernel(
             arch="rtx3090",
             config=config,
             framework="torch",
-            workflow="coder_only_workflow"
+            workflow="kernelgen_only_workflow"
         )
         
         task_pool.create_task(task.run)
