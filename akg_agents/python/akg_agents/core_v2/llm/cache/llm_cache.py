@@ -14,9 +14,9 @@
 
 import time
 import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from cachetools import LRUCache
 
 from .cache_utils import (
     generate_cache_key,
@@ -26,6 +26,32 @@ from .cache_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _OrderedLRUCache(OrderedDict):
+    """A minimal LRU cache with O(1) get/set/delete based on OrderedDict."""
+
+    def __init__(self, maxsize: int):
+        super().__init__()
+        self.maxsize = max(1, int(maxsize))
+
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+
+    def get(self, key, default=None):
+        if key in self:
+            self.move_to_end(key)
+            return super().__getitem__(key)
+        return default
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self.maxsize:
+            self.popitem(last=False)
 
 
 class LLMCache:
@@ -43,7 +69,7 @@ class LLMCache:
         self.expire_seconds = expire_seconds
         self.auto_clean_expired = auto_clean_expired
 
-        self._memory_cache = LRUCache(maxsize=self.max_memory_size)
+        self._memory_cache = _OrderedLRUCache(maxsize=self.max_memory_size)
         self._local_cache = self._load_local_cache()
 
         if self.auto_clean_expired:
