@@ -26,7 +26,7 @@ OpenAI 兼容的 Embedding 模型提供者
 import logging
 from typing import List, Optional
 
-import requests
+import httpx
 from langchain_core.embeddings import Embeddings
 
 logger = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ class OpenAICompatibleEmbeddings(Embeddings):
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
-            response = requests.post(
+            response = httpx.post(
                 self.api_url,
                 json=payload,
                 headers=headers,
@@ -110,6 +110,6 @@ class OpenAICompatibleEmbeddings(Embeddings):
 
             return embeddings
 
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             logger.error(f"Embedding API请求失败: {e}")
             raise RuntimeError(f"Embedding API请求失败: {e}") from e
