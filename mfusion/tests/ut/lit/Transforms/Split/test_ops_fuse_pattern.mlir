@@ -387,4 +387,3 @@ module {
     return %0 : tensor<4x4xf32>
   }
 }
-
