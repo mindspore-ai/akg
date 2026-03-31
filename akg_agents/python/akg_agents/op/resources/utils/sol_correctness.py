@@ -23,6 +23,12 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    try:
+        import torch_npu
+        if torch.npu.is_available():
+            torch.npu.manual_seed_all(seed)
+    except ImportError:
+        pass
 
 def check_tensor_sanity(
     sol_tensor: torch.Tensor,

@@ -75,12 +75,20 @@ def generate_sol_verify_project(verifier, impl_code: str, verify_dir: str, devic
 
     try:
         dsl_imports = dsl_adapter.get_import_statements(verifier.framework)
-        dsl_impl_import = dsl_adapter.get_impl_import(verifier.op_name, verifier.impl_func_name)
+        dsl_impl_import = dsl_adapter.get_impl_import(verifier.op_name, verifier.impl_func_name).strip()
+        # Fix for Python module names starting with numbers
+        if dsl_impl_import.startswith("from ") and dsl_impl_import.split(" ")[1][0].isdigit():
+            module_name = dsl_impl_import.split(" ")[1]
+            import_name = dsl_impl_import.split(" ")[3].strip()
+            dsl_impl_import = f"import importlib.util\nimport sys\nspec = importlib.util.spec_from_file_location('{module_name}', '{module_name}.py')\nmodule = importlib.util.module_from_spec(spec)\nsys.modules['{module_name}'] = module\nspec.loader.exec_module(module)\n{import_name} = getattr(module, '{import_name}')"
+        
         dsl_imports += "\n" + dsl_impl_import
         
         backend_adapter.setup_environment(device_id, verifier.arch)
         create_impl_code = verifier._prepare_code_lines(dsl_adapter.create_impl_module(verifier.framework, framework_adapter))
         device_setup_code = verifier._prepare_code_lines(framework_adapter.get_device_setup_code(verifier.backend, verifier.arch, device_id))
+        
+        sol_execbench_src_dir = os.path.abspath(os.path.join(get_project_root(), "..", "..", "thirdparty", "sol-execbench", "src"))
         
         # 渲染模板
         verify_script = template.render(
@@ -92,7 +100,8 @@ def generate_sol_verify_project(verifier, impl_code: str, verify_dir: str, devic
             device_id=device_id,
             dsl_imports=dsl_imports,
             device_setup_code=device_setup_code,
-            create_impl_code=create_impl_code
+            create_impl_code=create_impl_code,
+            sol_execbench_src_dir=sol_execbench_src_dir
         )
         
         with open(verify_file, "w", encoding="utf-8") as f:
