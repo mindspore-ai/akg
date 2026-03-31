@@ -1035,27 +1035,25 @@ class NodeFactory:
             
             # 获取 Coder 生成的代码
             code = state.get("coder_code", "")
-            new_step_count = state.get("step_count", 0) + 1
             if not code:
                 logger.warning(f"[Task {task_id}] CodeChecker: No code to check")
                 return {
                     "code_check_passed": True,
                     "code_check_errors": "",
                     "code_check_details": [],
-                    "step_count": new_step_count,
                     "agent_history": ["code_checker"]
                 }
             
             # 执行检查
             passed, error_message, errors = await checker_instance.check(code, state)
             
-            # 记录到 Trace
+            # 记录到 Trace（write_record: 不自增 step，与 kernel_gen 共享编号）
             check_result = {
                 "passed": passed,
                 "error_count": len(errors),
                 "errors": errors[:5]
             }
-            trace_instance.log_record("code_checker", [
+            trace_instance.write_record("code_checker", [
                 ('result', json.dumps(check_result, ensure_ascii=False)),
             ])
             
@@ -1093,7 +1091,6 @@ class NodeFactory:
                 "code_check_passed": passed,
                 "code_check_errors": error_message,
                 "code_check_details": errors,
-                "step_count": new_step_count,
                 "agent_history": ["code_checker"]
             }
         

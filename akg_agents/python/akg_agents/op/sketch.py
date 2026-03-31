@@ -161,21 +161,16 @@ class Sketch(AgentBase):
                 sketch_content = parsed_result.sketch
             
             # 记录到 Trace（如果有 log_dir 和 task_id）
-            elapsed = time.time() - start_time
             log_dir = self.config.get("log_dir", "") if self.config else ""
             if log_dir and task_id:
                 try:
                     trace = WorkflowLogger(log_dir=log_dir, category=self.op_name, task_id=task_id)
-                    trace.insert_agent_record(
-                        agent_name="sketch",
-                        result=content,  # 保存原始 LLM 输出
-                        prompt=formatted_prompt,
-                        reasoning=reasoning_content,
-                        session_id=session_id,
-                        elapsed_s=elapsed,
-                    )
+                    trace.log_record("sketch", [
+                        ('result', content),
+                        ('prompt', formatted_prompt),
+                        ('reasoning', reasoning_content),
+                    ])
                 except Exception as e:
-                    # trace 记录失败不应影响主流程
                     logger.warning(f"Failed to insert agent record for sketch: {e}")
             
             return sketch_content
