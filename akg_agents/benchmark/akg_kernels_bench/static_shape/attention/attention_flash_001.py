@@ -56,9 +56,9 @@ def get_inputs():
     dtype = torch.float16
     
     # Use smaller std to avoid float16 overflow in attention computation
-    q = torch.empty((B, H, L, D), dtype=dtype).normal_(mean=0.0, std=0.1)
-    k = torch.empty((B, H, L, D), dtype=dtype).normal_(mean=0.0, std=0.1)
-    v = torch.empty((B, H, L, D), dtype=dtype).normal_(mean=0.0, std=0.1)
+    q = torch.empty((B, H, L, D), dtype=dtype).normal_(mean=0.5, std=0.1)
+    k = torch.empty((B, H, L, D), dtype=dtype).normal_(mean=0.5, std=0.1)
+    v = torch.empty((B, H, L, D), dtype=dtype).normal_(mean=0.5, std=0.1)
     
     return [q, k, v]
 
