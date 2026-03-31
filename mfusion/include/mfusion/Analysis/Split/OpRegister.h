@@ -77,6 +77,7 @@ OP_REGISTER("mfuse.broadcast_to", NodePattern::BROADCAST);
 OP_REGISTER("mfuse.cast", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.exp", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.log", NodePattern::ELEMWISE);
+OP_REGISTER("mfuse.relu", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.maximum", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.minimum", NodePattern::ELEMWISE);
 OP_REGISTER("mfuse.mul", NodePattern::ELEMWISE);

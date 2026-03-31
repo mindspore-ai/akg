@@ -77,6 +77,11 @@ Pattern ConvertMfuseReciprocal {
   replace root with op<torch.aten.reciprocal>(convertValue(input)) -> (convertType(result));
 }
 
+Pattern ConvertMfuseRelu {
+  let root = op<mfuse.relu>(input: Value) -> (result: Type);
+  replace root with op<torch.aten.relu>(convertValue(input)) -> (convertType(result));
+}
+
 Pattern ConvertMfuseSelect {
   let root = op<mfuse.select>(condition: Value, on_true: Value, on_false: Value) -> (result: Type);
   replace root with op<torch.aten.where.self>(convertValue(condition), convertValue(on_true), convertValue(on_false)) -> (convertType(result));

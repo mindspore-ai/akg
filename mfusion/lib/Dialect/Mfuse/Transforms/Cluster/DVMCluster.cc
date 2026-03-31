@@ -140,6 +140,7 @@ class DvmSupportChecker {
     // int op
     checkFunc_["mfuse.add"] = {intOpCheck, inputCheckAll};
     checkFunc_["mfuse.sub"] = {intOpCheck, inputCheckAll};
+    checkFunc_["mfuse.relu"] = {intOpCheck, inputCheckAll};
     checkFunc_["mfuse.mul"] = {mulOpCheck};
     checkFunc_["mfuse.maximum"] = {intOpCheck, inputCheckAll};
     checkFunc_["mfuse.minimum"] = {intOpCheck, inputCheckAll};
@@ -510,20 +511,20 @@ llvm::DenseSet<llvm::StringRef> DVMCluster::getClusterableOps() {
     "mfuse.exp",          "mfuse.log",
     "mfuse.maximum",      "mfuse.minimum",
     "mfuse.mul",          "mfuse.neg",
-    "mfuse.pow",          "mfuse.div",
-    "mfuse.real_div",     "mfuse.reciprocal",
-    "mfuse.rsqrt",        "mfuse.sqrt",
-    "mfuse.sub",          "mfuse.eq",
-    "mfuse.ne",           "mfuse.gt",
-    "mfuse.ge",           "mfuse.lt",
-    "mfuse.le",           "mfuse.logical_and",
-    "mfuse.logical_or",   "mfuse.logical_not",
-    "mfuse.select",       "mfuse.assign",
-    "mfuse.reduce_sum",   "mfuse.is_finite",
-    "mfuse.reshape",      "mfuse.floor",
-    "mfuse.ceil",         "mfuse.trunc",
-    "mfuse.matmul",       "mfuse.batch_matmul",
-    "mfuse.grouped_matmul",
+    "mfuse.relu",         "mfuse.pow",
+    "mfuse.div",          "mfuse.real_div",
+    "mfuse.reciprocal",   "mfuse.rsqrt",
+    "mfuse.sqrt",         "mfuse.sub",
+    "mfuse.eq",           "mfuse.ne",
+    "mfuse.gt",           "mfuse.ge",
+    "mfuse.lt",           "mfuse.le",
+    "mfuse.logical_and",  "mfuse.logical_or",
+    "mfuse.logical_not",  "mfuse.select",
+    "mfuse.assign",       "mfuse.reduce_sum",
+    "mfuse.is_finite",    "mfuse.reshape",
+    "mfuse.floor",        "mfuse.ceil",
+    "mfuse.trunc",        "mfuse.matmul",
+    "mfuse.batch_matmul", "mfuse.grouped_matmul",
   });
 }
 
