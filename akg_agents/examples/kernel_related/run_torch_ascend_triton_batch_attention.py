@@ -13,10 +13,10 @@
 # limitations under the License.
 
 """
-Batch testing script for all attention kernels on GPU (RTX 3090).
+Batch testing script for all attention kernels on NPU (Ascend 910B3).
 
 This script automatically discovers and tests all attention implementations
-in the benchmark directory, generating optimized Triton CUDA code for each variant.
+in the benchmark directory, generating optimized Triton Ascend code for each variant.
 """
 
 from akg_agents.op.config.config_validator import load_config
@@ -42,7 +42,7 @@ def discover_attention_kernels() -> List[Tuple[str, Path]]:
     Returns:
         List of tuples (kernel_name, file_path)
     """
-    benchmark_dir = Path(__file__).parent.parent.parent.parent / "benchmark" / "akg_kernels_bench" / "static_shape" / "attention"
+    benchmark_dir = Path(__file__).parent.parent.parent / "benchmark" / "akg_kernels_bench" / "static_shape" / "attention"
     
     if not benchmark_dir.exists():
         print(f"Warning: Benchmark directory not found: {benchmark_dir}")
@@ -72,37 +72,37 @@ def load_kernel_module(file_path: Path):
     return module
 
 
-def convert_cpu_to_cuda(content: str) -> str:
+def convert_cpu_to_npu(content: str) -> str:
     """
-    Convert CPU-specific code to CUDA-compatible code.
+    Convert CPU-specific code to NPU-compatible code.
     
     Args:
         content: Original file content
         
     Returns:
-        Converted content for CUDA
+        Converted content for NPU
     """
-    content = re.sub(r"device='cpu'", "device='cuda'", content)
-    content = re.sub(r'device="cpu"', 'device="cuda"', content)
-    content = re.sub(r"\.cpu\(\)", ".cuda()", content)
+    content = re.sub(r"device='cpu'", "device='npu'", content)
+    content = re.sub(r'device="cpu"', 'device="npu"', content)
+    content = re.sub(r"\.cpu\(\)", ".npu()", content)
     
     return content
 
 
 def read_kernel_file(file_path: Path) -> str:
     """
-    Read the entire kernel file as task description and convert for CUDA.
+    Read the entire kernel file as task description and convert for NPU.
     
     Args:
         file_path: Path to the kernel file
         
     Returns:
-        File contents as string (converted for CUDA)
+        File contents as string (converted for NPU)
     """
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    return convert_cpu_to_cuda(content)
+    return convert_cpu_to_npu(content)
 
 
 async def run_attention_kernel(
@@ -132,9 +132,9 @@ async def run_attention_kernel(
             op_name=kernel_name,
             task_desc=task_desc,
             task_id=task_id,
-            dsl="triton_cuda",
-            backend="cuda",
-            arch="rtx3090",
+            dsl="triton_ascend",
+            backend="ascend",
+            arch="ascend910b3",
             config=config,
             framework="torch",
             workflow="kernelgen_only_workflow"
@@ -161,7 +161,7 @@ async def run_batch_attention_tests():
     Main function to run batch attention kernel tests.
     """
     print("=" * 80)
-    print("Batch Attention Kernel Testing on GPU (RTX 3090)")
+    print("Batch Attention Kernel Testing on NPU (Ascend 910B3)")
     print("=" * 80)
     print()
     
@@ -177,14 +177,14 @@ async def run_batch_attention_tests():
         print(f"  {i:2d}. {name}")
     print()
     
-    print("Registering local worker (CUDA RTX 3090)...")
-    await register_local_worker([4, 5, 6, 7], backend="cuda", arch="rtx3090")
+    print("Registering local worker (Ascend 910B3)...")
+    await register_local_worker([0, 1, 2, 3], backend="ascend", arch="ascend910b3")
     print("✓ Worker registered")
     print()
     
     print("Loading configuration...")
-    config = load_config("triton_cuda", backend="cuda")
-    check_env_for_task("torch", "cuda", "triton_cuda", config)
+    config = load_config("triton_ascend", backend="ascend", workflow="kernelgen_only")
+    check_env_for_task("torch", "ascend", "triton_ascend", config)
     print("✓ Configuration loaded")
     print()
     
