@@ -29,6 +29,37 @@
 - 包含**必要的导入和包装函数**
 - 为**复杂逻辑添加内联注释**
 
+{% if dsl != "torch" %}
+## DSL 合规性要求（严格执行）
+
+**核心计算逻辑必须完全使用目标 DSL（{{ dsl }}）实现，严禁以下行为：**
+
+1. **禁止用框架 API 替代 kernel 实现**：不得将框架高层计算 API 作为核心计算逻辑。forward()/construct() 中的主要计算必须委托给 DSL kernel。
+{%- if "triton" in dsl %}
+   - 禁止使用 torch.matmul / F.linear / torch.einsum / torch.sigmoid 等替代 Triton kernel。
+   - forward() 中的主要计算必须通过 kernel[grid](...) 语法调用 @triton.jit kernel 完成。
+{%- elif dsl == "cpp" %}
+   - 禁止使用 torch/numpy 高层 API 替代 C++ kernel 实现。
+   - forward() 必须通过 load_inline 加载的 C++ 扩展模块调用 kernel。
+{%- elif dsl == "ascendc" %}
+   - 禁止使用 torch/mindspore 高层 API 替代 AscendC kernel 实现。
+   - forward()/construct() 必须调用编译后的 AscendC kernel。
+{%- elif dsl in ("tilelang_cuda", "tilelang_npuir") %}
+   - 禁止使用 torch 高层 API 替代 TileLang kernel 实现。
+   - forward() 必须调用 TileLang 编译后的 kernel。
+{%- elif dsl == "cuda_c" %}
+   - 禁止使用 torch 高层 API 替代 CUDA C kernel 实现。
+   - forward() 必须调用编译后的 CUDA kernel。
+{%- else %}
+   - 禁止使用框架原生高层 API 替代目标 DSL 的 kernel 实现。
+{%- endif %}
+2. **禁止"备用方案"或"兜底实现"**：不得因为 kernel 实现困难就退回使用框架原生操作来保证正确性。即使算子复杂，也必须用指定 DSL 实现。
+3. **禁止装饰性 kernel**：不得定义 kernel 函数但在 forward()/construct() 中不调用，或者只调用 kernel 做无关紧要的操作（如简单 copy），而将真正的计算交给框架 API。
+4. **允许的框架操作**：forward()/construct() 中仅允许使用框架的内存管理和形状操作（如 torch.empty、.reshape、.contiguous、.to、.view、.stride 等），这些不属于核心计算。
+
+**系统会通过静态分析自动检测以上违规行为，不合规的代码将被拒绝并要求重新生成。**
+{% endif %}
+
 ## 代码结构要求（这一部分照做就行无需思考）
 
 - 代码必须包含 `ModelNew` 类（继承自 `torch.nn.Module`）
