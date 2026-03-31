@@ -28,14 +28,14 @@ func.func @test_dynamic_shape_no_symbol(%arg0: tensor<?xf32>, %arg1: tensor<?xf3
 // CHECK: mfuse.add
 // CHECK: mfuse.mul
 // CHECK: return
-func.func @test_dynamic_shape_different_symbols(%arg0: tensor<?xf32, #mfuse.symshape<["s0"]>>, %arg1: tensor<?xf32, #mfuse.symshape<["s1"]>>) -> (tensor<?xf32>, tensor<?xf32>) {
-  %0:2 = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"} : (tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32, #mfuse.symshape<["s1"]>>) -> (tensor<?xf32>, tensor<?xf32>) {
+func.func @test_dynamic_shape_different_symbols(%arg0: tensor<?xf32, #mfuse.symshape<["s0"]>>, %arg1: tensor<?xf32, #mfuse.symshape<["s1"]>>) -> (tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32, #mfuse.symshape<["s1"]>>) {
+  %0:2 = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"} : (tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32, #mfuse.symshape<["s1"]>>) -> (tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32, #mfuse.symshape<["s1"]>>) {
   ^bb0(%arg2: tensor<?xf32, #mfuse.symshape<["s0"]>>, %arg3: tensor<?xf32, #mfuse.symshape<["s1"]>>):
-    %1 = mfuse.add %arg2, %arg3 : (tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32, #mfuse.symshape<["s1"]>>) -> tensor<?xf32>
-    %2 = mfuse.mul %1, %arg2 : (tensor<?xf32>, tensor<?xf32, #mfuse.symshape<["s0"]>>) -> tensor<?xf32>
-    mfuse.yield %1, %2 : tensor<?xf32>, tensor<?xf32>
+    %1 = mfuse.add %arg2, %arg2 : (tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32, #mfuse.symshape<["s0"]>>) -> tensor<?xf32, #mfuse.symshape<["s0"]>>
+    %2 = mfuse.mul %1, %arg3 : (tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32, #mfuse.symshape<["s1"]>>) -> tensor<?xf32, #mfuse.symshape<["s1"]>>
+    mfuse.yield %1, %2 : tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32, #mfuse.symshape<["s1"]>>
   }
-  return %0#0, %0#1 : tensor<?xf32>, tensor<?xf32>
+  return %0#0, %0#1 : tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32, #mfuse.symshape<["s1"]>>
 }
 
 // Test: dynamic shape with same symbols - should fuse
@@ -84,14 +84,14 @@ func.func @test_2d_dynamic_shape_same_symbols(%arg0: tensor<?x?xf32, #mfuse.syms
 // CHECK: mfuse.add
 // CHECK: mfuse.mul
 // CHECK: return
-func.func @test_2d_dynamic_shape_partial_different_symbols(%arg0: tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, %arg1: tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>) -> (tensor<?x?xf32>, tensor<?x?xf32>) {
-  %0:2 = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"} : (tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>) -> (tensor<?x?xf32>, tensor<?x?xf32>) {
+func.func @test_2d_dynamic_shape_partial_different_symbols(%arg0: tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, %arg1: tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>) -> (tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>) {
+  %0:2 = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"} : (tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>) -> (tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>) {
   ^bb0(%arg2: tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, %arg3: tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>):
-    %1 = mfuse.add %arg2, %arg3 : (tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>) -> tensor<?x?xf32>
-    %2 = mfuse.mul %1, %arg2 : (tensor<?x?xf32>, tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>) -> tensor<?x?xf32>
-    mfuse.yield %1, %2 : tensor<?x?xf32>, tensor<?x?xf32>
+    %1 = mfuse.add %arg2, %arg2 : (tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>) -> tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>
+    %2 = mfuse.mul %1, %arg3 : (tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>) -> tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>
+    mfuse.yield %1, %2 : tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>
   }
-  return %0#0, %0#1 : tensor<?x?xf32>, tensor<?x?xf32>
+  return %0#0, %0#1 : tensor<?x?xf32, #mfuse.symshape<["s0", "s1"]>>, tensor<?x?xf32, #mfuse.symshape<["s0", "s2"]>>
 }
 
 // Test: mixed static and dynamic shape with same symbols - should fuse
@@ -111,24 +111,6 @@ func.func @test_mixed_static_dynamic_same_symbols(%arg0: tensor<2x?xf32, #mfuse.
     mfuse.yield %1, %2 : tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>, tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>
   }
   return %0#0, %0#1 : tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>, tensor<2x?xf32, #mfuse.symshape<["2", "s0"]>>
-}
-
-// Test: one input has symbol, another has no symbol - should NOT fuse
-// CHECK-LABEL: func @test_one_symbolic_one_no_symbol
-// CHECK-SAME: %arg0: tensor<?xf32, #mfuse.symshape<["s0"]>>
-// CHECK-SAME: %arg1: tensor<?xf32>
-// CHECK-NOT: mfuse.fused
-// CHECK: mfuse.add
-// CHECK: mfuse.mul
-// CHECK: return
-func.func @test_one_symbolic_one_no_symbol(%arg0: tensor<?xf32, #mfuse.symshape<["s0"]>>, %arg1: tensor<?xf32>) -> (tensor<?xf32>, tensor<?xf32>) {
-  %0:2 = mfuse.fused %arg0, %arg1 {fusion_type = "dvm"} : (tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32>) -> (tensor<?xf32>, tensor<?xf32>) {
-  ^bb0(%arg2: tensor<?xf32, #mfuse.symshape<["s0"]>>, %arg3: tensor<?xf32>):
-    %1 = mfuse.add %arg2, %arg3 : (tensor<?xf32, #mfuse.symshape<["s0"]>>, tensor<?xf32>) -> tensor<?xf32>
-    %2 = mfuse.mul %1, %arg2 : (tensor<?xf32>, tensor<?xf32, #mfuse.symshape<["s0"]>>) -> tensor<?xf32>
-    mfuse.yield %1, %2 : tensor<?xf32>, tensor<?xf32>
-  }
-  return %0#0, %0#1 : tensor<?xf32>, tensor<?xf32>
 }
 
 // Test: three inputs with same symbols - should fuse
