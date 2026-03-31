@@ -16,7 +16,13 @@ import torch
 from sol_correctness import ToleranceSpec, compute_error_stats, set_seed
 
 # Reference imports
-from reference import get_inputs, run as ref_run
+import sys
+sys.path.append("{{ sol_execbench_src_dir }}")
+
+from sol_execbench.core.bench.io import gen_inputs
+from sol_execbench.core.data import Definition, Workload
+import reference
+ref_run = reference.run
 
 # Timeout decorator
 def timeout_handler(signum, frame):
@@ -56,45 +62,53 @@ def verify_implementations():
 
     # Load definition and workloads
     with open("definition.json", "r", encoding="utf-8") as f:
-        definition = json.load(f)
+        definition_dict = json.load(f)
         
     with open("workload.jsonl", "r", encoding="utf-8") as f:
         workloads = [json.loads(line) for line in f if line.strip()]
 
-    input_names = list(definition.get("inputs", {}).keys())
+    input_names = list(definition_dict.get("inputs", {}).keys())
     
     total_workloads = len(workloads)
     passed_workloads = 0
 
     @with_timeout(300)
-    def verify_workload(workload, wl_idx):
+    def verify_workload(workload_dict, wl_idx):
         # Merge axes
         axes_and_scalars = {}
-        for key, val in definition.get("axes", {}).items():
+        for key, val in definition_dict.get("axes", {}).items():
             if val.get("type") == "const":
                 axes_and_scalars[key] = val.get("value")
-        axes_and_scalars.update(workload.get("axes", {}))
+        axes_and_scalars.update(workload_dict.get("axes", {}))
         
-        tol_dict = workload.get("tolerance", {})
+        tol_dict = workload_dict.get("tolerance", {})
         tolerance = ToleranceSpec(**tol_dict)
+        
+        definition_obj = Definition.model_validate(definition_dict)
+        workload_obj = Workload.model_validate(workload_dict)
+        
+        _custom_inputs_fn = getattr(reference, definition_obj.custom_inputs_entrypoint) if definition_obj.custom_inputs_entrypoint else None
         
         for round_idx in range(10):
             set_seed(42 + round_idx)
             
             # Generate inputs
-            inputs_dict = get_inputs(axes_and_scalars, device)
+            inputs_list = gen_inputs(
+                definition=definition_obj,
+                workload=workload_obj,
+                device=device,
+                safe_tensors=None,
+                custom_inputs_fn=_custom_inputs_fn,
+            )
             
             # Run reference
-            ref_outputs = ref_run(**inputs_dict)
+            ref_outputs = ref_run(*inputs_list)
             if not isinstance(ref_outputs, (list, tuple)):
                 ref_outputs = [ref_outputs]
                 
-            # Prepare inputs for impl_model
-            inputs_for_impl = [inputs_dict[name] for name in input_names]
-            
             # Run implementation
             try:
-                impl_outputs = impl_model(*inputs_for_impl)
+                impl_outputs = impl_model(*inputs_list)
             except Exception as e:
                 raise RuntimeError(f"Implementation execution failed: {e}\n{traceback.format_exc()}")
                 
