@@ -196,7 +196,7 @@ class RouterFactory:
             response_text = result.get("content", "")
             
             # 记录 LLM 调用到 trace（通用接口）
-            trace.log_record("decision", [
+            trace.write_record("decision", [
                 ('result', response_text),
                 ('prompt', prompt),
             ], subdirectory="conductor")
