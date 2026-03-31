@@ -137,7 +137,7 @@ class NodeFactory:
             result, prompt, reasoning = await designer_instance.run(task_info=state)
             elapsed = time.time() - t0
             
-            # 记录到 Trace（通用接口）
+            new_step_count = state.get("step_count", 0) + 1
             trace_instance.log_record("designer", [
                 ('result', result),
                 ('prompt', prompt),
@@ -151,9 +151,6 @@ class NodeFactory:
             enable_hint_mode = config.get("enable_hint_mode", False)
             if enable_hint_mode:
                 space_config = getattr(designer_instance, '_last_space_config', None)
-            
-            # 计算新的 step_count
-            new_step_count = state.get("step_count", 0) + 1
             
             updates = {
                 "designer_code": code,
@@ -221,8 +218,7 @@ class NodeFactory:
             
             # 去 JSON 化：Coder 已在内部完成代码提取（_extract_code），直接使用返回的纯代码
             code = result
-            
-            # 记录到 Trace（通用接口）
+            new_step_count = state.get("step_count", 0) + 1
             trace_instance.log_record("coder", [
                 ('result', result),
                 ('prompt', prompt),
@@ -238,7 +234,7 @@ class NodeFactory:
                 "coder_prompt": prompt,
                 "coder_reasoning": reasoning,
                 "iteration": state.get("iteration", 0) + 1,
-                "step_count": state.get("step_count", 0) + 1,
+                "step_count": new_step_count,
                 "agent_history": ["coder"],
                 "conductor_suggestion": None,  # 清除旧建议
                 "code_check_errors": None,     # 清除旧的检查错误
@@ -293,12 +289,6 @@ class NodeFactory:
                 raise
             elapsed = time.time() - t0
 
-            trace_instance.log_record("kernel_designer", [
-                ('result', result),
-                ('prompt', prompt),
-                ('reasoning', reasoning),
-            ])
-
             # KernelDesigner 已在内部完成草图提取，直接使用返回的纯草图
             code = result
             space_config = None
@@ -307,6 +297,11 @@ class NodeFactory:
                 space_config = getattr(kernel_designer_instance, '_last_space_config', None)
 
             new_step_count = state.get("step_count", 0) + 1
+            trace_instance.log_record("kernel_designer", [
+                ('result', result),
+                ('prompt', prompt),
+                ('reasoning', reasoning),
+            ])
 
             updates = {
                 "designer_code": code,
@@ -395,15 +390,14 @@ class NodeFactory:
             
             elapsed = time.time() - t0
             
-            # 记录到 Trace（通用接口）
+            # KernelGen 已在内部完成代码提取和 py_compile 校验，直接使用返回的纯代码
+            code = result
+            new_step_count = state.get("step_count", 0) + 1
             trace_instance.log_record("kernel_gen", [
                 ('result', result),
                 ('prompt', prompt),
                 ('reasoning', reasoning),
             ])
-            
-            # KernelGen 已在内部完成代码提取和 py_compile 校验，直接使用返回的纯代码
-            code = result
             
             codegen_invalid, codegen_invalid_reason = NodeFactory._extract_codegen_status(
                 kernel_gen_instance, "KernelGen", task_id
@@ -414,7 +408,7 @@ class NodeFactory:
                 "coder_prompt": prompt,
                 "coder_reasoning": reasoning,
                 "iteration": state.get("iteration", 0) + 1,
-                "step_count": state.get("step_count", 0) + 1,
+                "step_count": new_step_count,
                 "agent_history": ["kernel_gen"],
                 "conductor_suggestion": None,  # 清除旧建议
                 "code_check_errors": None,     # 清除旧的检查错误
@@ -491,8 +485,9 @@ class NodeFactory:
                 verifier_instance.task_id = trace_instance.get_log_task_id()
             
             try:
-                # 使用 trace 的 step_count 而非 state 的 step_count，确保验证目录编号与日志文件一致
-                current_step = trace_instance.get_step_count() if hasattr(trace_instance, 'get_step_count') else state.get("step_count", 0)
+                # verify_dir 使用与代码生成节点相同的 step（state step_count）
+                current_step = state.get("step_count", 0)
+                new_step_count = current_step + 1
                 loop = asyncio.get_running_loop()
                 
                 # 单 case 验证（直接传递 state）
@@ -518,7 +513,6 @@ class NodeFactory:
                         verify_log = f"单 case 通过，多 case 失败:\n{multi_log}"
                         multi_case_error = multi_log
                     else:
-                        # 多 case 验证通过，清除错误
                         multi_case_error = ""
                 
                 # Profile（如果所有验证都通过）
@@ -529,9 +523,9 @@ class NodeFactory:
                     task_id = state.get('task_id', '0')
                     logger.info(f"[Task {task_id}] All verifications passed, starting performance test...")
                     profile_res = await verifier_instance.run_profile(
-                        state,  # 传递 state（兼容 task_info）
+                        state,
                         current_step,
-                        -1,  # device_id，Worker 模式默认使用 -1
+                        -1,
                         config.get("profile_settings", {})
                     )
                 
@@ -548,7 +542,6 @@ class NodeFactory:
                 
                 elapsed = time.time() - t0
                 
-                # 记录到 Trace（通用接口）
                 verifier_params = []
                 if not verify_res and verify_log:
                     verifier_params.append(('error_log', verify_log))
@@ -563,7 +556,7 @@ class NodeFactory:
                     "verifier_error": verify_log,
                     "profile_res": profile_res,
                     "multi_case_error": multi_case_error,
-                    "step_count": state.get("step_count", 0) + 1,
+                    "step_count": new_step_count,
                     "agent_history": ["verifier"],
                     "cur_path": state.get("cur_path", ""),
                 }
@@ -673,8 +666,8 @@ class NodeFactory:
                     response_text, conductor_parser, valid_options_set
                 )
                 
-                # 记录到 Trace（通用接口，conductor 记录放入 conductor/ 子目录）
-                trace_instance.log_record("conductor_decision", [
+                # write_record: 不自增 step，与 verifier 共享同一编号
+                trace_instance.write_record("conductor_decision", [
                     ('result', response_text),
                     ('prompt', prompt),
                     ('reasoning', reasoning),
@@ -1042,13 +1035,14 @@ class NodeFactory:
             
             # 获取 Coder 生成的代码
             code = state.get("coder_code", "")
+            new_step_count = state.get("step_count", 0) + 1
             if not code:
                 logger.warning(f"[Task {task_id}] CodeChecker: No code to check")
                 return {
                     "code_check_passed": True,
                     "code_check_errors": "",
                     "code_check_details": [],
-                    "step_count": state.get("step_count", 0) + 1,
+                    "step_count": new_step_count,
                     "agent_history": ["code_checker"]
                 }
             
@@ -1059,9 +1053,8 @@ class NodeFactory:
             check_result = {
                 "passed": passed,
                 "error_count": len(errors),
-                "errors": errors[:5]  # 只记录前5个错误
+                "errors": errors[:5]
             }
-            # 记录到 Trace（通用接口）
             trace_instance.log_record("code_checker", [
                 ('result', json.dumps(check_result, ensure_ascii=False)),
             ])
@@ -1100,7 +1093,7 @@ class NodeFactory:
                 "code_check_passed": passed,
                 "code_check_errors": error_message,
                 "code_check_details": errors,
-                "step_count": state.get("step_count", 0) + 1,
+                "step_count": new_step_count,
                 "agent_history": ["code_checker"]
             }
         
@@ -1172,7 +1165,6 @@ class NodeFactory:
             result = await op_task_builder.run(state)
             
             # 记录到 Trace（如果提供）
-            # 记录到 Trace（通用接口）
             if trace_instance:
                 trace_instance.log_record("OpTaskBuilder", [
                     ('result', result.get("generated_task_desc", "")),
