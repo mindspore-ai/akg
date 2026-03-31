@@ -18,9 +18,3 @@ AIKG Agents module.
 DEPRECATED: 此包已废弃，新版 Agent 请使用 akg_agents.op.agents。
 保留的模块仅供尚未迁移的引用方使用，后续将逐步删除。
 """
-
-from akg_agents.core.agent.op_task_builder import OpTaskBuilder
-
-__all__ = [
-    "OpTaskBuilder",
-]
