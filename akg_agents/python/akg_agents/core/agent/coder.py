@@ -31,7 +31,7 @@ from akg_agents.op.utils.triton_ascend_api_docs import (
 )
 from akg_agents.utils.common_utils import ParserFactory, remove_copyright_from_text, get_md5_hash
 from akg_agents.utils.hardware_utils import get_hardware_doc
-from akg_agents.utils.swft_docs_loader import get_swft_docs_content
+from akg_agents.op.utils.swft_docs_loader import get_swft_docs_content
 from akg_agents.core_v2.agents import AgentBase, register_agent
 from akg_agents import get_project_root
 

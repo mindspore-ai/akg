@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 from akg_agents.utils.common_utils import load_yaml
 from akg_agents import get_project_root
-from akg_agents.core_v2.utils import normalize_dsl
+from akg_agents.op.utils.config_utils import normalize_dsl
 
 logger = logging.getLogger(__name__)
 

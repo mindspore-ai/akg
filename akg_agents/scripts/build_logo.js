@@ -212,15 +212,13 @@ const rendered = renderRows(finalRows);
 const output = `\r\n\r\n${rendered}\r\n\r\n\r\n\x1b[0m\x1b[?25h\x1b[K`;
 
 const base = path.join(__dirname, "..");
-const outPath1 = path.join(base, "python/akg_agents/op/resources/logo.ans");
-const outPath2 = path.join(base, "python/akg_agents/resources/logo.ans");
+const outPath = path.join(base, "python/akg_agents/op/resources/logo.ans");
 
-fs.writeFileSync(outPath1, output, "utf-8");
-fs.writeFileSync(outPath2, output, "utf-8");
-console.log(`Logo written to both locations (${output.length} bytes)`);
+fs.writeFileSync(outPath, output, "utf-8");
+console.log(`Logo written to ${outPath} (${output.length} bytes)`);
 
 // Verify
-const verify = fs.readFileSync(outPath1, "utf-8");
+const verify = fs.readFileSync(outPath, "utf-8");
 console.log(`Has ESC: ${verify.includes("\x1b")}`);
 const plain = verify.replace(/\x1b\[[^m]*m/g, "").replace(/\r/g, "");
 plain.split("\n").filter(l => l.trim()).forEach(l => console.log(l));

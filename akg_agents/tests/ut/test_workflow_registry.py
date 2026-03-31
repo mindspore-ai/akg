@@ -87,8 +87,11 @@ class TestCoderOnlyWorkflowIntegration:
     
     def test_coder_only_workflow_registered(self):
         """测试 CoderOnlyWorkflow 是否正确注册"""
-        # 导入 CoderOnlyWorkflow（触发装饰器）
         from akg_agents.op.workflows.coder_only_workflow import CoderOnlyWorkflow
+
+        # setup_method 调用了 clear()，Python import 缓存不会重新执行模块级装饰器，
+        # 所以需要手动重新注册
+        WorkflowRegistry.register(CoderOnlyWorkflow, scopes=["op"])
         
         # 验证注册成功
         assert WorkflowRegistry.is_registered("CoderOnlyWorkflow")

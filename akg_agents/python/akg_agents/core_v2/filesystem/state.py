@@ -783,6 +783,7 @@ class FileSystemState:
             filename: 文件名
             content: 代码内容
         """
+        filename = filename.replace("\\", "/")
         # 1. 写入文件到 Workspace
         file_path = self.workspace_dir / filename
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -826,6 +827,7 @@ class FileSystemState:
         Returns:
             代码内容
         """
+        filename = filename.replace("\\", "/")
         snapshot_dir = self.get_code_snapshot_dir(node_id)
         file_path = snapshot_dir / filename
         
