@@ -292,9 +292,6 @@ class AKGSettings:
     # 流式输出
     stream_output: bool = False
     
-    # 数据收集
-    data_collect: bool = False
-    
     # 扩展字段
     extra: Dict[str, Any] = field(default_factory=dict)
     
@@ -317,7 +314,6 @@ class AKGSettings:
             "default_model": self.default_model,
             "context_window": self.context_window,
             "stream_output": self.stream_output,
-            "data_collect": self.data_collect,
             "extra": self.extra,
         }
         if self.embedding.is_configured():
@@ -349,7 +345,6 @@ class AKGSettings:
             default_model=data.get("default_model", "standard" if use_defaults else ""),
             context_window=data.get("context_window", 128000 if use_defaults else 128000),
             stream_output=data.get("stream_output", False),
-            data_collect=data.get("data_collect", False),
             extra=data.get("extra", {}),
         )
     
@@ -373,7 +368,6 @@ class AKGSettings:
             default_model=other.default_model if other.default_model else self.default_model,
             context_window=other.context_window if other.context_window != 128000 else self.context_window,
             stream_output=other.stream_output or self.stream_output,
-            data_collect=other.data_collect or self.data_collect,
             extra={**self.extra, **other.extra},
         )
         
@@ -516,11 +510,6 @@ def _load_env_config(settings: AKGSettings) -> AKGSettings:
     if stream := get_akg_env_var("STREAM_OUTPUT"):
         settings.stream_output = stream.lower() in ("true", "1", "yes", "on")
         logger.debug(f"Loaded stream_output from env: {settings.stream_output}")
-    
-    # AKG_AGENTS_DATA_COLLECT / AIKG_DATA_COLLECT
-    if collect := get_akg_env_var("DATA_COLLECT"):
-        settings.data_collect = collect.lower() in ("true", "1", "yes", "on")
-        logger.debug(f"Loaded data_collect from env: {settings.data_collect}")
     
     # Embedding 配置（AKG_AGENTS_EMBEDDING_* / AIKG_EMBEDDING_*）
     env_emb_base_url = get_akg_env_var("EMBEDDING_BASE_URL")

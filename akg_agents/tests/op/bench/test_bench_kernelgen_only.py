@@ -33,7 +33,6 @@ from ..utils import (
 )
 
 # 设置数据收集环境变量（与其他测试保持一致）
-os.environ['AKG_AGENTS_DATA_COLLECT'] = 'on'
 os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
 
 # 指定设备 ID
