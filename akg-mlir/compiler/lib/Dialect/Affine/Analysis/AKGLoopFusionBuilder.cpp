@@ -1028,8 +1028,8 @@ void FusionCodeGenHelper::doIFuse(unsigned srcGroupId, unsigned dstGroupId, Fusi
   auto srcGroup = mdg.getGroup(srcGroupId);
   auto dstGroup = mdg.getGroup(dstGroupId);
   if (!srcGroup || !dstGroup) {
-      llvm::errs() << "srcGroup is nullptr or dstGroup is nullptr";
-      return;
+    llvm::errs() << "srcGroup is nullptr or dstGroup is nullptr";
+    return;
   }
   auto srcId = srcGroup->rootId;
   auto dstId = dstGroup->rootId;
@@ -1119,8 +1119,8 @@ void FusionCodeGenHelper::eraseLoopAndCleanupNode(unsigned erasedGroupId, unsign
   auto erasedGroup = mdg.getGroup(erasedGroupId);
   auto aliasTargetGroup = mdg.getGroup(aliasTargetGroupId);
   if (!erasedGroup || !aliasTargetGroup) {
-      llvm::errs() << "erasedGroup is nullptr or aliasTargetGroup is nullptr";
-      return;
+    llvm::errs() << "erasedGroup is nullptr or aliasTargetGroup is nullptr";
+    return;
   }
   auto erasedNodeId = erasedGroup->rootId;
   auto aliasTargetId = aliasTargetGroup->rootId;

@@ -123,12 +123,11 @@ DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess
                                                 unsigned loopDepth,
                                                 FlatAffineValueConstraints *dependenceConstraints = nullptr,
                                                 SmallVector<DependenceComponent, 2> *dependenceComponents = nullptr,
-                                                bool allowRAR = false);
+                                                bool allowRAR = false, bool checkSrcBeforeDst = true);
 
-SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA,
-                                ArrayRef<Operation *> opsB, unsigned loopDepth,
-                                unsigned numCommonLoops, bool isBackwardSlice,
-                                ComputationSliceState *sliceUnion);
+SliceComputationResult computeSliceUnionAKG(ArrayRef<Operation *> opsA, ArrayRef<Operation *> opsB, unsigned loopDepth,
+                                            unsigned numCommonLoops, bool isBackwardSlice,
+                                            ComputationSliceState *sliceUnion);
 
 }  // namespace affine
 }  // namespace mlir
