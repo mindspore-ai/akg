@@ -21,8 +21,6 @@
 | `core.agent.selector` | op/utils、op/skill | 旧版 Selector |
 | `core.checker` | op/workflows | CodeChecker |
 | `core.tools.basic_tools` | cli/runtime | 旧版工具 |
-| `core.utils` | op/config、op/langgraph_op、op/verifier、cli | 工具函数 |
-| `core.sketch` | op/adaptive_search、op/utils/evolve | Sketch 生成 |
 
 ## 迁移指引
 

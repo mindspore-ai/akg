@@ -33,7 +33,7 @@ from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
 
 import logging
 _logger = logging.getLogger(__name__)
-from akg_agents.core.sketch import Sketch
+from akg_agents.op.sketch import Sketch
 from akg_agents.op.skill.handwrite_sampler import SkillHandwriteLoader, SkillHandwriteSampler
 
 from .evolution_core import (
