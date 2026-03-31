@@ -88,14 +88,12 @@ def collect_env_spec(arch: str) -> dict:
     except FileNotFoundError:
         spec["commit"] = "unknown"
 
-    llm_model = os.environ.get("AIKG_MODEL_NAME", "")
-    if not llm_model:
-        try:
-            from akg_agents.core_v2.llm.factory import create_llm_client
-            client = create_llm_client()
-            llm_model = getattr(client, "model_name", "unknown")
-        except Exception:
-            llm_model = "unknown"
+    try:
+        from akg_agents.core_v2.llm.factory import create_llm_client
+        client = create_llm_client(model_level="standard")
+        llm_model = client.provider.model_name
+    except Exception:
+        llm_model = "unknown"
     spec["llm_model"] = llm_model
 
     return spec

@@ -9,7 +9,7 @@
 | 项目 | 值 |
 |------|---|
 | arch | ascend910b4 |
-| torch | 2.7.1 |
+| torch_npu | 2.7.1 |
 | triton_ascend | 3.2.0 |
 | commit | (git short hash) |
 | llm_model | (模型名称) |
