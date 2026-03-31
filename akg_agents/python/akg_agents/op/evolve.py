@@ -142,6 +142,14 @@ async def evolve(
     
     # 用于跟踪当前轮次的实现
     round_implementations = []
+    
+    # 【优化】在开始进化前，先单独 profile baseline 一次
+    from akg_agents.op.verifier.baseline_profiler import profile_baseline_once
+    baseline_time_us = await profile_baseline_once(
+        op_name, task_desc, dsl, framework, backend, arch, config
+    )
+    if baseline_time_us:
+        logger.info(f"[{op_name}] 后续所有任务将跳过 baseline profile")
 
     # 获取 session_id 用于进度消息
     session_id = str(config.get("session_id") or "").strip()
@@ -208,6 +216,13 @@ async def evolve(
     for round_idx in range(1, max_rounds + 1):
         counters["current_round"] = round_idx
         counters["round_running"] = 0
+        
+        # 【优化】如果已有缓存的 baseline，设置到 config 中
+        if baseline_time_us is not None and baseline_time_us > 0 and baseline_time_us < float('inf'):
+            from akg_agents.op.verifier.baseline_profiler import set_baseline_in_config
+            # 注意：需要同时更新 runtime_config.config，因为 task_processor 使用的是 runtime_config
+            set_baseline_in_config(config, baseline_time_us)
+            set_baseline_in_config(runtime_config.config, baseline_time_us)
 
         # 4.1 创建任务（_tracked_create_task 会自动增加 round_running）
         tasks, task_mapping = task_processor.create_tasks_for_round(

@@ -1109,7 +1109,7 @@ if __name__ == "__main__":
             self.gen_profile_file_from_template(PROFILE_BASE_TEMPLATE_PATH, profile_file,
                                                 device_id, warmup_times, run_times)
         else:
-            logger.info(f"[{self.op_name}] 跳过 base profile 生成（跨后端场景）")
+            logger.info(f"[{self.op_name}] 跳过 base profile 生成（使用缓存 baseline 或跨后端场景）")
         
         # 生成性能测试脚本
         profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_generation.py")
@@ -1497,8 +1497,9 @@ if __name__ == "__main__":
             # 生成profile脚本
             # 对于 RemoteWorker，代码生成时使用 0 作为占位符（实际设备由远程服务器管理）
             # 对于 LocalWorker，使用已经 acquired 的 actual_device_id
-            # 跨后端场景（使用参考数据）下，跳过 base profile
-            skip_base = self.config.get('use_reference_data', False)
+            # 跨后端场景（使用参考数据）或使用缓存 baseline 时，跳过 base profile
+            skip_base_profile = profile_settings.get('skip_base_profile', False)
+            skip_base = self.config.get('use_reference_data', False) or skip_base_profile
             self.gen_profile_project(verify_dir, actual_device_id, warmup_times, run_times, skip_base=skip_base)
 
             # 打包并发送给Worker执行
@@ -1567,18 +1568,6 @@ if __name__ == "__main__":
             # 处理 None 值用于日志输出
             gen_time_display = gen_time if gen_time is not None else float('inf')
             base_time_display = base_time if base_time is not None else float('inf')
-
-            # 跨平台场景：使用外部传入的 base_time（如 GPU kernel 时间）
-            # 这样 speedup = override_base_time_display / gen_time_display 才有意义
-            override_base_time = profile_settings.get('override_base_time_us')
-            if override_base_time is not None and override_base_time > 0:
-                base_time_display = override_base_time
-                # 重新计算 speedup = base / gen
-                if gen_time_display > 0 and gen_time_display != float('inf'):
-                    speedup = base_time_display / gen_time_display
-                else:
-                    speedup = 0.0
-                logger.info(f"[{self.task_id}:{self.op_name}] 跨平台模式: 使用外部 base_time={base_time_display:.2f}us")
 
             self.save_speedup_result(speedup, base_time_display, gen_time_display, unique_dir_name)
             
