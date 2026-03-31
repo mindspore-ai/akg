@@ -168,6 +168,10 @@ class AdaptiveSearchController:
         
         # Sketch agent 用于根据最终代码重新生成 sketch
         self._sketch_agent: Optional[Sketch] = None
+        
+        # 【优化】Baseline 性能缓存（避免重复测量）
+        # 第一个成功任务的 base_time 会被缓存，后续任务复用
+        self._baseline_time_us: Optional[float] = None
 
         # 进化控制器（可选的外挂增强模块）
         self.evo_controller = None
@@ -203,6 +207,12 @@ class AdaptiveSearchController:
                 config=self.config
             )
         return self._sketch_agent
+    
+    def _update_profile_settings_in_config(self) -> None:
+        """【优化】更新 config 中的 profile_settings，传递缓存的 baseline"""
+        if self._baseline_time_us is not None and self._baseline_time_us > 0 and self._baseline_time_us < float('inf'):
+            from akg_agents.op.verifier.baseline_profiler import set_baseline_in_config
+            set_baseline_in_config(self.config, self._baseline_time_us)
     
     def _send_profile_to_history(self, record) -> None:
         """
@@ -343,6 +353,9 @@ class AdaptiveSearchController:
 
     async def _submit_initial_task(self) -> str:
         """提交一个初始任务"""
+        # 【优化】为任务设置 profile_settings（传递缓存的 baseline）
+        self._update_profile_settings_in_config()
+        
         task = await self.generator.generate_initial_task()
         task_id = task.task_id
         
@@ -391,6 +404,9 @@ class AdaptiveSearchController:
             progress = self._total_submitted / max(self.search_config.max_total_tasks, 1)
             inspirations = self.evo_controller.select_inspirations(parent, self.db, progress)
 
+        # 【优化】为任务设置 profile_settings（传递缓存的 baseline）
+        self._update_profile_settings_in_config()
+        
         # 生成任务
         task = await self.generator.generate_evolved_task(parent, generation, inspirations=inspirations)
         task_id = task.task_id
@@ -630,6 +646,15 @@ class AdaptiveSearchController:
 
         # 发送搜索开始消息（进入静默模式）
         self._send_search_start()
+        
+        # 【优化】在开始搜索前，先单独 profile baseline 一次
+        from akg_agents.op.verifier.baseline_profiler import profile_baseline_once
+        self._baseline_time_us = await profile_baseline_once(
+            self.op_name, self.task_desc, self.dsl, self.framework,
+            self.backend, self.arch, self.config
+        )
+        if self._baseline_time_us:
+            logger.info(f"[{self.op_name}] 后续 {self.search_config.max_total_tasks} 个任务将跳过 baseline profile")
         
         # 使用上下文管理器，自动清理所有子任务（正常退出或异常都会清理）
         async with self.task_pool:
