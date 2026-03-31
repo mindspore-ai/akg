@@ -14,27 +14,27 @@
 # limitations under the License.
 
 """
-AIKGBench Lite 算子生成复现 — 固定文档导入 (coder_only_workflow)
+AKGBench Lite 算子生成复现 — 固定文档导入 (coder_only_workflow)
 
 复现目标：
-  使用 coder_only_workflow（固定文档拼接）对 AIKGBench Lite（akg_kernels_bench_lite）
+  使用 coder_only_workflow（固定文档拼接）对 AKGBench Lite（akg_kernels_bench_lite）
   中的算子进行端到端代码生成，记录生成结果和性能数据。
 
 导入方式：
   coder_only_workflow — 由 config 中 docs_dir.coder 指定的固定文档目录，
   将全部文档内容拼接注入 prompt，不经过 Skill 系统的动态选择。
 
-AIKGBench Lite 结构：
+AKGBench Lite 结构：
   benchmark/akg_kernels_bench_lite/
   ├── t1/   (基础算子: gelu, softmax, matmul_basic, ...)
   ├── t2/   (中等复杂度)
   └── t3/   (高复杂度)
 
 前置条件：
-  - conda activate aikg && source env.sh
-  - API key 已配置（AIKG_API_KEY 或环境变量）
+  - source env.sh
+  - API key 已配置（AKG_AGENTS_API_KEY 或 settings.json）
   - Ascend NPU 可用（DEVICE_ID 环境变量，默认 0）
-  - AIKGBench Lite 数据目录存在：benchmark/akg_kernels_bench_lite/
+  - AKGBench Lite 数据目录存在：benchmark/akg_kernels_bench_lite/
 
 运行方式：
   python reproduce/wip/reproduce_akgbench_coder_only.py --help
@@ -52,7 +52,7 @@ AIKGBench Lite 结构：
     "script": "akgbench_lite_coder_only",
     "workflow": "coder_only_workflow",
     "ops_count": 6, "elapsed_s": 456.7,
-    "env_spec": { "arch", "torch", "triton_ascend", "commit", "llm_model", ... },
+    "env_spec": { "arch", "torch_npu", "triton_ascend", "commit", "llm_model", ... },
     "task_log_dir": "~/akg_agents_logs",
     "stats": { ... }
   }
@@ -74,7 +74,7 @@ def _get_bench_lite_dir() -> Path:
     d = PROJECT_ROOT / "benchmark" / "akg_kernels_bench_lite"
     if not d.exists():
         raise FileNotFoundError(
-            f"未找到 AIKGBench Lite 目录: {d}\n"
+            f"未找到 AKGBench Lite 目录: {d}\n"
             "请确认 benchmark/akg_kernels_bench_lite/ 存在。"
         )
     return d
@@ -99,7 +99,7 @@ def _discover_cases(bench_dir: Path, tiers: list, cases: list = None) -> list:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="AIKGBench Lite 复现 — 固定文档导入 (coder_only_workflow)",
+        description="AKGBench Lite 复现 — 固定文档导入 (coder_only_workflow)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--tiers", nargs="+", default=["t1", "t2", "t3"],
@@ -121,7 +121,7 @@ def resolve_ops(args):
     ops = []
     for case_name, tier, file_path in cases:
         task_desc = file_path.read_text(encoding="utf-8")
-        display_name = f"AIKGBench_{tier}_{case_name}"
+        display_name = f"AKGBench_{tier}_{case_name}"
         ops.append((display_name, task_desc))
 
     return ops
