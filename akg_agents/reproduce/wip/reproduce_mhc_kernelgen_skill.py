@@ -26,8 +26,8 @@ EvoKernel MHC 算子生成复现 — Skill 系统导入 (kernelgen_only_workflow
   分层注入 prompt。不使用固定文档拼接。
 
 前置条件：
-  - conda activate aikg && source env.sh
-  - API key 已配置（AIKG_API_KEY 或环境变量）
+  - source env.sh
+  - API key 已配置（AKG_AGENTS_API_KEY 或 settings.json）
   - Ascend NPU 可用（DEVICE_ID 环境变量，默认 0）
   - EvoKernel benchmark 数据已就绪：
       git submodule update --init "akg_agents/thirdparty/*"
@@ -56,7 +56,7 @@ MHC 算子列表（序号 → 名称）：
     "script": "mhc_kernelgen_skill",
     "workflow": "kernelgen_only_workflow",
     "ops_count": 1, "elapsed_s": 123.4,
-    "env_spec": { "arch", "torch", "triton_ascend", "commit", "llm_model", ... },
+    "env_spec": { "arch", "torch_npu", "triton_ascend", "commit", "llm_model", ... },
     "task_log_dir": "~/akg_agents_logs",
     "stats": { ... }
   }

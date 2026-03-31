@@ -40,8 +40,8 @@
 | 2 | `reproduce_mhc_kernelgen_skill.py` | EvoKernel MHC | Skill 系统 | MHC 算子，按序号指定 |
 | 3 | `reproduce_kernelbench_coder_only.py` | KernelBench Level1 | 固定文档 | 默认排除 conv(54-87) |
 | 4 | `reproduce_kernelbench_kernelgen_skill.py` | KernelBench Level1 | Skill 系统 | 默认排除 conv(54-87) |
-| 5 | `reproduce_akgbench_coder_only.py` | AIKGBench Lite | 固定文档 | 按 tier(t1/t2/t3) 选择 |
-| 6 | `reproduce_akgbench_kernelgen_skill.py` | AIKGBench Lite | Skill 系统 | 按 tier(t1/t2/t3) 选择 |
+| 5 | `reproduce_akgbench_coder_only.py` | AKGBench Lite | 固定文档 | 按 tier(t1/t2/t3) 选择 |
+| 6 | `reproduce_akgbench_kernelgen_skill.py` | AKGBench Lite | Skill 系统 | 按 tier(t1/t2/t3) 选择 |
 
 公共模块 `_common.py` 提供环境规范采集、通用运行器、报告生成等共享功能。
 
@@ -109,7 +109,7 @@ MHC 算子序号对照：
 | `--tasks` | Level1 任务序号列表（空格分隔） | 全部 1-100（排除 54-87 conv） |
 | `--include-conv` | 包含 54-87 号 conv 算子 | `false` |
 
-**AIKGBench Lite 脚本** (`reproduce_akgbench_*.py`)：
+**AKGBench Lite 脚本** (`reproduce_akgbench_*.py`)：
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
@@ -137,14 +137,14 @@ python reproduce/wip/reproduce_kernelbench_coder_only.py --tasks 1 5 19 42
 # KernelBench 包含 conv
 python reproduce/wip/reproduce_kernelbench_coder_only.py --include-conv
 
-# AIKGBench Lite 全部 tier（默认）
+# AKGBench Lite 全部 tier（默认）
 python reproduce/wip/reproduce_akgbench_coder_only.py
 python reproduce/wip/reproduce_akgbench_kernelgen_skill.py
 
-# AIKGBench Lite 只跑 t1
+# AKGBench Lite 只跑 t1
 python reproduce/wip/reproduce_akgbench_coder_only.py --tiers t1
 
-# AIKGBench Lite 指定算子
+# AKGBench Lite 指定算子
 python reproduce/wip/reproduce_akgbench_kernelgen_skill.py --cases gelu softmax
 
 # 多卡池化 + 并行度控制
@@ -207,7 +207,7 @@ python reproduce/wip/reproduce_kernelbench_coder_only.py --arch ascend910b3
 | `torch_npu` | `torch_npu.__version__` | torch_npu 版本 |
 | `triton_ascend` | `triton.__version__` | Triton Ascend 版本 |
 | `commit` | `git rev-parse --short HEAD` | akg 项目 git commit |
-| `llm_model` | `$AIKG_MODEL_NAME` 或 LLM client | 使用的 LLM 模型名称 |
+| `llm_model` | `create_llm_client("standard")` 解析结果 | 实际使用的 LLM 模型名称（env > settings.json） |
 | `device_ids` | `--device` 参数 | 使用的设备 ID 列表 |
 | `max_concurrency` | `--concurrency` 参数 | 任务并行度上限 |
 | `task_log_dir` | config `log_dir` | 任务具体日志存储目录 |
@@ -231,6 +231,6 @@ wip/
 ├── reproduce_mhc_kernelgen_skill.py           # MHC — Skill 系统
 ├── reproduce_kernelbench_coder_only.py        # KernelBench — 固定文档
 ├── reproduce_kernelbench_kernelgen_skill.py   # KernelBench — Skill 系统
-├── reproduce_akgbench_coder_only.py           # AIKGBench Lite — 固定文档
-└── reproduce_akgbench_kernelgen_skill.py      # AIKGBench Lite — Skill 系统
+├── reproduce_akgbench_coder_only.py           # AKGBench Lite — 固定文档
+└── reproduce_akgbench_kernelgen_skill.py      # AKGBench Lite — Skill 系统
 ```

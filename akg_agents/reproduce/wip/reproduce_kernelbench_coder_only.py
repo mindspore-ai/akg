@@ -29,8 +29,8 @@ KernelBench Level1 算子生成复现 — 固定文档导入 (coder_only_workflo
   不支持卷积算子生成）。可通过 --include-conv 包含这些算子。
 
 前置条件：
-  - conda activate aikg && source env.sh
-  - API key 已配置（AIKG_API_KEY 或环境变量）
+  - source env.sh
+  - API key 已配置（AKG_AGENTS_API_KEY 或 settings.json）
   - Ascend NPU 可用（DEVICE_ID 环境变量，默认 0）
   - KernelBench 子模块已初始化：
       git submodule update --init "akg_agents/thirdparty/*"
@@ -51,7 +51,7 @@ KernelBench Level1 算子生成复现 — 固定文档导入 (coder_only_workflo
     "script": "kernelbench_coder_only",
     "workflow": "coder_only_workflow",
     "ops_count": 66, "elapsed_s": 1234.5,
-    "env_spec": { "arch", "torch", "triton_ascend", "commit", "llm_model", ... },
+    "env_spec": { "arch", "torch_npu", "triton_ascend", "commit", "llm_model", ... },
     "task_log_dir": "~/akg_agents_logs",
     "stats": { ... }
   }
