@@ -17,13 +17,14 @@
 #include "akg/Dialect/Affine/Transforms/ReductionSiblingRecompute.h"
 
 #include "akg/Utils/AnalysisCommon.hpp"
-#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -52,17 +53,23 @@ struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBas
 
  private:
   using ValueMap = llvm::DenseMap<Value, Value>;
+
+  struct TraceEntry {
+    affine::AffineForOp writerLoop;
+    affine::AffineStoreOp store;
+  };
+
   struct FuncScanInfo {
     SmallVector<memref::AllocOp> allocs;
+    llvm::DenseMap<Value, TraceEntry> memrefTraceMap;
+    llvm::DenseSet<Value> reduceOutputMemrefs;
     static bool isLocalAlloc(Value memref) { return memref && memref.getDefiningOp<memref::AllocOp>(); }
   };
-  struct RecomputeCandidate {
-    affine::AffineForOp srcLoop;
-    affine::AffineForOp dstLoop;
-    affine::AffineLoadOp dstLoad;
-    affine::AffineStoreOp srcStore;
-  };
-  FuncScanInfo scanInfo = {};
+
+  FuncScanInfo scanInfo;
+
+  void printScanInfo(llvm::raw_ostream &os);
+  void dumpScanInfo() { printScanInfo(llvm::dbgs()); }
 
   // Returns true if store and load target the same memref and indices (same block).
   static bool sameAccessInBlock(Operation *storeOp, Operation *loadOp) {
@@ -78,26 +85,6 @@ struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBas
     auto affineLoad = dyn_cast<affine::AffineLoadOp>(loadOp);
     if (affineStore || affineLoad) {
       return affineStore && affineLoad && affineStore.getAffineMap() == affineLoad.getAffineMap();
-    }
-    return true;
-  }
-
-  // Returns true if store in srcLoop and load in dstLoop access the same element (IVs may differ).
-  static bool sameSiblingAccess(affine::AffineStoreOp storeOp, affine::AffineForOp srcLoop, affine::AffineLoadOp loadOp,
-                                affine::AffineForOp dstLoop) {
-    if (storeOp.getMemRef() != loadOp.getMemRef() || storeOp.getAffineMap() != loadOp.getAffineMap()) {
-      return false;
-    }
-    auto storeIndices = storeOp.getIndices();
-    auto loadIndices = loadOp.getIndices();
-    if (storeIndices.size() != loadIndices.size()) {
-      return false;
-    }
-    for (auto [storeIdx, loadIdx] : llvm::zip(storeIndices, loadIndices)) {
-      if (storeIdx == loadIdx || (storeIdx == srcLoop.getInductionVar() && loadIdx == dstLoop.getInductionVar())) {
-        continue;
-      }
-      return false;
     }
     return true;
   }
@@ -122,17 +109,62 @@ struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBas
   }
 
   SmallVector<Value> remapIndices(ValueRange indices, ValueMap &remap);
-  Value cloneLoadValue(Operation *defOp, OpBuilder &builder, ValueMap &remap, llvm::DenseSet<Value> &visitingValues);
-  Value cloneValueAt(Value value, OpBuilder &builder, ValueMap &remap, llvm::DenseSet<Value> &visitingValues);
   Operation *findForwardableStore(Operation *loadOp);
-  void collectSiblingCandidates(affine::AffineForOp srcLoop, affine::AffineForOp dstLoop,
-                                SmallVectorImpl<RecomputeCandidate> &candidates);
-  void collectCandidates(func::FuncOp func, SmallVectorImpl<RecomputeCandidate> &candidates);
-  bool rewriteCandidates(ArrayRef<RecomputeCandidate> candidates, llvm::DenseSet<Value> &rewrittenMemrefs,
-                         SmallVectorImpl<Operation *> &toErase);
-  void eraseOpsDedup(ArrayRef<Operation *> ops);
+
+  // Checks if store in writerLoop and load access the same element, updating remap for IV mapping.
+  bool matchCrossLoopAccess(affine::AffineStoreOp storeOp, affine::AffineForOp writerLoop, affine::AffineLoadOp loadOp,
+                            affine::AffineForOp dstLoop, ValueMap &remap);
+
+  // Cloning with transitive cross-loop tracing.
+  Value cloneLoadValue(Operation *defOp, OpBuilder &builder, ValueMap &remap, llvm::DenseSet<Value> &visitingValues,
+                       affine::AffineForOp dstLoop);
+  Value cloneValueAt(Value value, OpBuilder &builder, ValueMap &remap, llvm::DenseSet<Value> &visitingValues,
+                     affine::AffineForOp dstLoop);
+
+  // Emits a load with remapped indices.
+  Value emitRemappedLoad(Operation *defOp, OpBuilder &builder, ValueMap &remap);
+
+  // Per-loop processing: single walk collects loads + stores, rewrites loads, then updates trace map.
+  void processChildLoop(affine::AffineForOp childLoop, llvm::DenseSet<Value> &rewrittenMemrefs,
+                        SmallVectorImpl<Operation *> &toErase);
+  // Processes direct child affine.for loops of a block as siblings.
+  void processSiblingLoops(Block &block, llvm::DenseSet<Value> &rewrittenMemrefs,
+                           SmallVectorImpl<Operation *> &toErase);
+
+  // Cleanup.
   void eraseDeadLocalStores(const llvm::DenseSet<Value> &rewrittenMemrefs);
 };
+
+void ReductionSiblingRecomputePass::printScanInfo(llvm::raw_ostream &os) {
+  os << "=== ReductionSiblingRecompute ScanInfo ===\n";
+
+  os << "Allocs (" << scanInfo.allocs.size() << "):\n";
+  for (auto allocOp : scanInfo.allocs) {
+    os << "  ";
+    allocOp.getResult().print(os);
+    os << " : " << allocOp.getResult().getType() << "\n";
+  }
+
+  os << "Reduce output memrefs (" << scanInfo.reduceOutputMemrefs.size() << "):\n";
+  for (Value memref : scanInfo.reduceOutputMemrefs) {
+    os << "  ";
+    memref.print(os);
+    os << "\n";
+  }
+
+  os << "Memref trace map (" << scanInfo.memrefTraceMap.size() << "):\n";
+  for (auto &[memref, entry] : scanInfo.memrefTraceMap) {
+    os << "  ";
+    memref.print(os);
+    os << "\n    writerLoop: ";
+    entry.writerLoop.getLoc().print(os);
+    os << "\n    store: ";
+    entry.store->print(os);
+    os << "\n";
+  }
+
+  os << "==========================================\n";
+}
 
 // Remaps index values using remap; returns empty on failure.
 SmallVector<Value> ReductionSiblingRecomputePass::remapIndices(ValueRange indices, ValueMap &remap) {
@@ -148,24 +180,57 @@ SmallVector<Value> ReductionSiblingRecomputePass::remapIndices(ValueRange indice
   return remappedIndices;
 }
 
-// Clones a load op: forwards from local alloc store or creates load with remapped indices.
-Value ReductionSiblingRecomputePass::cloneLoadValue(Operation *defOp, OpBuilder &builder, ValueMap &remap,
-                                                    llvm::DenseSet<Value> &visitingValues) {
-  Value loadMemref;
-  if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(defOp)) {
-    loadMemref = affineLoad.getMemRef();
-  } else if (auto memrefLoad = dyn_cast<memref::LoadOp>(defOp)) {
-    loadMemref = memrefLoad.getMemRef();
-  } else {
-    return {};
+// Finds the dominating store in the same block that writes the same location as loadOp (local alloc only).
+Operation *ReductionSiblingRecomputePass::findForwardableStore(Operation *loadOp) {
+  if (!loadOp || !loadOp->getBlock() || !FuncScanInfo::isLocalAlloc(loadOp->getOperand(0))) {
+    return nullptr;
   }
 
-  if (FuncScanInfo::isLocalAlloc(loadMemref)) {
-    if (auto *storeOp = findForwardableStore(defOp)) {
-      return cloneValueAt(CommonUtils::getStoreValue(storeOp), builder, remap, visitingValues);
+  for (Operation *cursor = loadOp->getPrevNode(); cursor; cursor = cursor->getPrevNode()) {
+    if (isa<affine::AffineStoreOp, memref::StoreOp>(cursor) && sameAccessInBlock(cursor, loadOp)) {
+      return cursor;
+    }
+    if (!isSupportedCloneOp(cursor, /*allowLoads=*/false)) {
+      break;
     }
   }
+  return nullptr;
+}
 
+// Checks if store in writerLoop and load access the same element.
+// Handles both direct (load in dstLoop) and transitive (load in intermediate loop) cases.
+// Updates remap to map writerLoop's IV and load's IV to dstLoop's IV.
+bool ReductionSiblingRecomputePass::matchCrossLoopAccess(affine::AffineStoreOp storeOp, affine::AffineForOp writerLoop,
+                                                         affine::AffineLoadOp loadOp, affine::AffineForOp dstLoop,
+                                                         ValueMap &remap) {
+  if (storeOp.getMemRef() != loadOp.getMemRef() || storeOp.getAffineMap() != loadOp.getAffineMap()) {
+    return false;
+  }
+  auto storeIndices = storeOp.getIndices();
+  auto loadIndices = loadOp.getIndices();
+  if (storeIndices.size() != loadIndices.size()) {
+    return false;
+  }
+  for (auto [storeIdx, loadIdx] : llvm::zip(storeIndices, loadIndices)) {
+    if (storeIdx == loadIdx) {
+      continue;
+    }
+    // The differing index must be the writerLoop's IV.
+    if (storeIdx != writerLoop.getInductionVar()) {
+      return false;
+    }
+    // Map writerLoop's IV to dstLoop's IV.
+    remap[writerLoop.getInductionVar()] = dstLoop.getInductionVar();
+    // If loadIdx is an intermediate loop's IV (not dstLoop's), also remap it.
+    if (loadIdx != dstLoop.getInductionVar()) {
+      remap[loadIdx] = dstLoop.getInductionVar();
+    }
+  }
+  return true;
+}
+
+// Emits a load op with remapped indices at the builder's insertion point.
+Value ReductionSiblingRecomputePass::emitRemappedLoad(Operation *defOp, OpBuilder &builder, ValueMap &remap) {
   auto indices = CommonUtils::getStoreLoadIndices(defOp);
   SmallVector<Value> remappedIndices = remapIndices(indices, remap);
   if (remappedIndices.empty() && !indices.empty()) {
@@ -182,10 +247,51 @@ Value ReductionSiblingRecomputePass::cloneLoadValue(Operation *defOp, OpBuilder 
   return {};
 }
 
+// Clones a load op with transitive cross-loop tracing.
+// For non-local alloc or reduce output memrefs, emits a load with remapped indices.
+// For local alloc non-reduce memrefs, tries same-block forwarding first, then cross-loop tracing via memrefTraceMap.
+Value ReductionSiblingRecomputePass::cloneLoadValue(Operation *defOp, OpBuilder &builder, ValueMap &remap,
+                                                    llvm::DenseSet<Value> &visitingValues,
+                                                    affine::AffineForOp dstLoop) {
+  Value loadMemref;
+  if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(defOp)) {
+    loadMemref = affineLoad.getMemRef();
+  } else if (auto memrefLoad = dyn_cast<memref::LoadOp>(defOp)) {
+    loadMemref = memrefLoad.getMemRef();
+  } else {
+    return {};
+  }
+
+  // Non-local alloc or reduce output: emit load with remapped indices (keep as-is).
+  if (!FuncScanInfo::isLocalAlloc(loadMemref) || scanInfo.reduceOutputMemrefs.contains(loadMemref)) {
+    return emitRemappedLoad(defOp, builder, remap);
+  }
+
+  // Same-block store forwarding (within the source loop body).
+  if (auto *storeOp = findForwardableStore(defOp)) {
+    return cloneValueAt(CommonUtils::getStoreValue(storeOp), builder, remap, visitingValues, dstLoop);
+  }
+
+  // Cross-loop store forwarding via precomputed trace map.
+  auto it = scanInfo.memrefTraceMap.find(loadMemref);
+  if (it != scanInfo.memrefTraceMap.end()) {
+    if (auto loadOp = dyn_cast<affine::AffineLoadOp>(defOp)) {
+      TraceEntry &entry = it->second;
+      if (matchCrossLoopAccess(entry.store, entry.writerLoop, loadOp, dstLoop, remap)) {
+        return cloneValueAt(entry.store.getValueToStore(), builder, remap, visitingValues, dstLoop);
+      }
+    }
+  }
+
+  // Fallback: emit load with remapped indices.
+  return emitRemappedLoad(defOp, builder, remap);
+}
+
 // Recursively clones value and its defining op at builder, with IV remapping.
+// Handles transitive cross-loop dependencies via cloneLoadValue.
 // Returns {} on cycle or unsupported op.
 Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builder, ValueMap &remap,
-                                                  llvm::DenseSet<Value> &visitingValues) {
+                                                  llvm::DenseSet<Value> &visitingValues, affine::AffineForOp dstLoop) {
   if (!value) {
     return {};
   }
@@ -206,8 +312,15 @@ Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builde
     return {};
   }
 
+  // Value defined at the outer loop body level or above: directly accessible from dstLoop.
+  Operation *outerLoop = dstLoop->getParentOp();
+  if (defOp->getParentOp() == outerLoop || !outerLoop->isProperAncestor(defOp)) {
+    remap[value] = value;
+    return value;
+  }
+
   if (isa<affine::AffineLoadOp, memref::LoadOp>(defOp)) {
-    Value clonedLoad = cloneLoadValue(defOp, builder, remap, visitingValues);
+    Value clonedLoad = cloneLoadValue(defOp, builder, remap, visitingValues, dstLoop);
     if (clonedLoad) {
       remap[value] = clonedLoad;
     }
@@ -217,7 +330,7 @@ Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builde
   SmallVector<Value> newOperands;
   newOperands.reserve(defOp->getNumOperands());
   for (Value operand : defOp->getOperands()) {
-    Value cloned = cloneValueAt(operand, builder, remap, visitingValues);
+    Value cloned = cloneValueAt(operand, builder, remap, visitingValues, dstLoop);
     if (!cloned) {
       return {};
     }
@@ -237,110 +350,87 @@ Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builde
   return remap.lookup(value);
 }
 
-// Finds the dominating store in the same block that writes the same location as loadOp (local alloc only).
-Operation *ReductionSiblingRecomputePass::findForwardableStore(Operation *loadOp) {
-  if (!loadOp || !loadOp->getBlock() || !FuncScanInfo::isLocalAlloc(loadOp->getOperand(0))) {
-    return nullptr;
+// Collects candidate loads and stores from the DIRECT body of childLoop (not nested loops),
+// rewrites loads, then updates trace map. Nested loops are handled by recursive processSiblingLoops.
+void ReductionSiblingRecomputePass::processChildLoop(affine::AffineForOp childLoop,
+                                                     llvm::DenseSet<Value> &rewrittenMemrefs,
+                                                     SmallVectorImpl<Operation *> &toErase) {
+  SmallVector<affine::AffineLoadOp> candidateLoads;
+  SmallVector<affine::AffineStoreOp> traceStores;
+
+  // Only iterate direct body ops; nested inner loops will be processed by recursion.
+  for (Operation &op : childLoop.getBody()->getOperations()) {
+    if (auto loadOp = dyn_cast<affine::AffineLoadOp>(&op)) {
+      Value memref = loadOp.getMemRef();
+      if (FuncScanInfo::isLocalAlloc(memref) && !scanInfo.reduceOutputMemrefs.contains(memref) &&
+          scanInfo.memrefTraceMap.count(memref)) {
+        candidateLoads.push_back(loadOp);
+      }
+    } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(&op)) {
+      Value memref = storeOp.getMemRef();
+      if (FuncScanInfo::isLocalAlloc(memref) && !scanInfo.reduceOutputMemrefs.contains(memref)) {
+        traceStores.push_back(storeOp);
+      }
+    }
   }
 
-  for (Operation *cursor = loadOp->getPrevNode(); cursor; cursor = cursor->getPrevNode()) {
-    if (isa<affine::AffineStoreOp, memref::StoreOp>(cursor) && sameAccessInBlock(cursor, loadOp)) {
-      return cursor;
-    }
-    if (!isSupportedCloneOp(cursor, /*allowLoads=*/false)) {
-      break;
-    }
-  }
-  return nullptr;
-}
-
-// Collects (srcLoop, dstLoop, load, store) where dstLoop loads from local buffer written by srcLoop (same access).
-void ReductionSiblingRecomputePass::collectSiblingCandidates(affine::AffineForOp srcLoop, affine::AffineForOp dstLoop,
-                                                             SmallVectorImpl<RecomputeCandidate> &candidates) {
-  SmallVector<affine::AffineStoreOp> srcStores;
-  srcLoop.walk([&](affine::AffineStoreOp storeOp) { srcStores.push_back(storeOp); });
-
-  SmallVector<affine::AffineLoadOp> dstLoads;
-  dstLoop.walk([&](affine::AffineLoadOp loadOp) { dstLoads.push_back(loadOp); });
-
-  for (affine::AffineLoadOp loadOp : dstLoads) {
-    if (!FuncScanInfo::isLocalAlloc(loadOp.getMemRef())) {
+  // Phase 1: rewrite loads using trace map from PREVIOUS siblings.
+  for (affine::AffineLoadOp loadOp : candidateLoads) {
+    auto it = scanInfo.memrefTraceMap.find(loadOp.getMemRef());
+    if (it == scanInfo.memrefTraceMap.end()) {
       continue;
     }
-    auto it = llvm::find_if(
-      srcStores, [&](affine::AffineStoreOp storeOp) { return sameSiblingAccess(storeOp, srcLoop, loadOp, dstLoop); });
-    if (it != srcStores.end()) {
-      candidates.push_back({srcLoop, dstLoop, loadOp, *it});
-    }
-  }
-}
-
-// Replaces candidate loads with recomputed values; records rewritten memrefs and ops to erase.
-bool ReductionSiblingRecomputePass::rewriteCandidates(ArrayRef<RecomputeCandidate> candidates,
-                                                      llvm::DenseSet<Value> &rewrittenMemrefs,
-                                                      SmallVectorImpl<Operation *> &toErase) {
-  bool changed = false;
-  for (const RecomputeCandidate &candidate : candidates) {
-    affine::AffineForOp srcLoop = candidate.srcLoop;
-    affine::AffineForOp dstLoop = candidate.dstLoop;
-    affine::AffineLoadOp loadOp = candidate.dstLoad;
-    affine::AffineStoreOp matchedStore = candidate.srcStore;
-    if (!srcLoop || !dstLoop || !loadOp || !matchedStore) {
-      continue;
-    }
+    TraceEntry &entry = it->second;
 
     ValueMap remap;
-    remap[srcLoop.getInductionVar()] = dstLoop.getInductionVar();
+    if (!matchCrossLoopAccess(entry.store, entry.writerLoop, loadOp, childLoop, remap)) {
+      continue;
+    }
+
     OpBuilder builder(loadOp);
     llvm::DenseSet<Value> visitingValues;
-    Value cloned = cloneValueAt(matchedStore.getValueToStore(), builder, remap, visitingValues);
+    Value cloned = cloneValueAt(entry.store.getValueToStore(), builder, remap, visitingValues, childLoop);
     if (!cloned) {
       continue;
     }
+
     loadOp.getResult().replaceAllUsesWith(cloned);
-    rewrittenMemrefs.insert(matchedStore.getMemRef());
+    rewrittenMemrefs.insert(loadOp.getMemRef());
     toErase.push_back(loadOp);
-    changed = true;
   }
-  return changed;
+
+  // Phase 2: update trace map with this loop's stores for FUTURE siblings.
+  for (affine::AffineStoreOp storeOp : traceStores) {
+    scanInfo.memrefTraceMap[storeOp.getMemRef()] = {childLoop, storeOp};
+  }
 }
 
-// collects allocs and (reduction loop, sibling loop) load/store candidates for recompute.
-void ReductionSiblingRecomputePass::collectCandidates(func::FuncOp func,
-                                                      SmallVectorImpl<RecomputeCandidate> &candidates) {
-  func.walk([&](Operation *op) {
-    if (auto allocOp = dyn_cast<memref::AllocOp>(op)) {
-      scanInfo.allocs.push_back(allocOp);
-      return;
+// Recursively processes sibling loops at all nesting levels.
+// At each level: clears trace map, processes siblings, then recurses into each child loop.
+void ReductionSiblingRecomputePass::processSiblingLoops(Block &block, llvm::DenseSet<Value> &rewrittenMemrefs,
+                                                        SmallVectorImpl<Operation *> &toErase) {
+  SmallVector<affine::AffineForOp> siblings;
+  for (Operation &op : block) {
+    if (auto forOp = dyn_cast<affine::AffineForOp>(&op)) {
+      siblings.push_back(forOp);
     }
-    auto outerLoop = dyn_cast<affine::AffineForOp>(op);
-    if (!outerLoop || outerLoop->getParentOp() != func.getOperation()) {
-      return;
-    }
-    SmallVector<affine::AffineForOp> childLoops;
-    for (Operation &childOp : outerLoop.getBody()->getOperations()) {
-      if (auto child = dyn_cast<affine::AffineForOp>(&childOp)) {
-        childLoops.push_back(child);
-      }
-    }
-    for (size_t i = 0; i < childLoops.size(); ++i) {
-      if (!childLoops[i]->hasAttr(kReductionLoopAttr)) {
-        continue;
-      }
-      for (size_t j = i + 1; j < childLoops.size(); ++j) {
-        collectSiblingCandidates(childLoops[i], childLoops[j], candidates);
-      }
-    }
-  });
-}
+  }
 
-// Erases each op once (dedup by pointer).
-void ReductionSiblingRecomputePass::eraseOpsDedup(ArrayRef<Operation *> ops) {
-  llvm::SmallPtrSet<Operation *, 4> seen;
-  for (Operation *op : ops) {
-    if (op && seen.insert(op).second) {
-      op->erase();
+  // Only process at this level if there are 2+ siblings; otherwise no cross-loop deps to resolve.
+  if (siblings.size() > 1) {
+    auto savedTraceMap = std::move(scanInfo.memrefTraceMap);
+    scanInfo.memrefTraceMap.clear();
+
+    for (affine::AffineForOp loop : siblings) {
+      processChildLoop(loop, rewrittenMemrefs, toErase);
     }
+
+    scanInfo.memrefTraceMap = std::move(savedTraceMap);
+  }
+
+  // Recurse into each child loop's body.
+  for (affine::AffineForOp loop : siblings) {
+    processSiblingLoops(*loop.getBody(), rewrittenMemrefs, toErase);
   }
 }
 
@@ -392,17 +482,41 @@ void ReductionSiblingRecomputePass::runOnOperation() {
     return;
   }
 
-  // collects candidates
-  SmallVector<RecomputeCandidate> candidates;
-  collectCandidates(func, candidates);
+  scanInfo.allocs.clear();
+  scanInfo.memrefTraceMap.clear();
+  scanInfo.reduceOutputMemrefs.clear();
 
-  // rewrites loads
+  // Collect allocs and identify reduce output memrefs across the entire function.
+  func.walk([&](Operation *op) {
+    if (auto allocOp = dyn_cast<memref::AllocOp>(op)) {
+      scanInfo.allocs.push_back(allocOp);
+    } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op)) {
+      if (storeOp->hasAttr(kReductionInitAttr)) {
+        scanInfo.reduceOutputMemrefs.insert(storeOp.getMemRef());
+      } else {
+        Operation *defOp = storeOp.getValueToStore().getDefiningOp();
+        if (defOp && defOp->hasAttr(kReductionAxesStr)) {
+          scanInfo.reduceOutputMemrefs.insert(storeOp.getMemRef());
+        }
+      }
+    }
+  });
+
+  LLVM_DEBUG(dumpScanInfo());
+
   llvm::DenseSet<Value> rewrittenMemrefs;
   SmallVector<Operation *> toErase;
-  bool changed = rewriteCandidates(candidates, rewrittenMemrefs, toErase);
-  if (changed) {
-    // erases ops
-    eraseOpsDedup(toErase);
+
+  // Recursively process sibling loops at all nesting levels.
+  processSiblingLoops(func.getBody().front(), rewrittenMemrefs, toErase);
+
+  if (!toErase.empty()) {
+    llvm::SmallPtrSet<Operation *, 4> seen;
+    for (Operation *op : toErase) {
+      if (op && seen.insert(op).second) {
+        op->erase();
+      }
+    }
     eraseDeadLocalStores(rewrittenMemrefs);
   }
 }
