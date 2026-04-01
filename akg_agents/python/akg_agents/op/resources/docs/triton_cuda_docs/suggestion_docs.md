@@ -6,6 +6,7 @@
 
 ### 块大小选择策略
 - **基础**: 2的幂（256, 512, 1024）
+- **Ascend后端**: 可考虑16的倍数
 - **调优**: 平衡并行度与资源占用，避免过大或过小
 
 ### 内存访问优化
@@ -26,6 +27,9 @@ stable_data = data - max_val
 exp_data = tl.exp(stable_data)
 ```
 
+### 防负值开方处理
+- 在任何平方根操作前，确保被开方数是非负的（例如，使用 max(input, 0.)或 max(input, eps)）
+
 ### 精度提升
 - **中间计算**: 关键步骤转为float32提升精度
 - **累加操作**: 使用高精度累加器防止精度丢失
@@ -37,10 +41,26 @@ exp_data = tl.exp(stable_data)
 - 禁止 lambda表达式 → 使用内联函数或tl.where
 - 禁止 链式布尔运算 → 分步计算mask
 - 禁止 张量直接索引 → 使用tl.load/tl.store
+- 禁止 data_ptr()获取ptr → data_ptr()获取的类型不是triton的pointer类型，直接传入张量，triton得到的就是pointer类型
 
 ### tl.constexpr 正确用法
 - **仅在内核参数中使用**: `BLOCK_SIZE: tl.constexpr`
 - **不可在host侧使用**: 启动函数中不可用tl.constexpr
+
+### Ascend 后端避免使用 tl.where 计算内存偏移
+Ascend 后端对`tl.where`生成的复杂指针运算支持不完全。复杂条件判断可以采用if-else静态分支处理，而非在内存访问时动态计算。
+
+**推荐示例**
+```python
+if input_shape_0 == 1:
+  input_offsets = input_offsets_n
+  case1()
+elif input_shape_1 == 1:
+  input_offsets = input_offsets_m * input_shape_1
+  case2()
+else:
+  case3()
+```
 
 ## 4. 调试与排查清单
 
@@ -63,6 +83,26 @@ exp_data = tl.exp(stable_data)
 - [ ] 内存访问是否连续？
 - [ ] 网格大小是否合理？
 
+### 切分设置
+内核启动网格大小必须不超过65535，且线程块所占的内存必须符合硬件限制。
+
+如果当前切分超出硬件缓存，且内核启动网格大小会超过限制，可以通过以下方法改进：
+**对张量进行多次切分：**如果一次内核启动无法处理整个张量，可以将张量分成多个部分，通过多次启动内核来完成计算
+```python
+if M > max_grid_size:
+    # 使用多批次处理大网络：在循环中多次启动内核
+    for start_row in range(0, M, max_grid_size):
+        end_row = min(start_row + max_grid_size, M)
+        batch_size = end_row - start_row
+
+        # 提取当前批次的数据
+        x_batch = x[start_row:end_row]
+
+        # 启动1D内核处理当前批次
+        grid = (batch_size, )
+        op_kernel[grid](x_batch, x_batch.stride(0), BLOCK_SIZE)
+```
+
 ## 5. 常见错误速查
 
 | 错误类型 | 症状 | 解决方案 |
@@ -79,23 +119,7 @@ exp_data = tl.exp(stable_data)
 - 添加充分的注释说明计算逻辑
 - 使用描述性的变量名
 - 保持内核函数简洁明了
-
----
-
-# 注意conv类卷积算子编写：
-torch module中的卷积算子生成会包含一个随机权重weight，为保证我们生成的triton实现也具有相同的结果，我们可以在triton的host侧代码中生成对应的weight，例如：
-'''
-import torch
-import torch.nn as nn
-import triton
-import triton.language as tl
-
-@triton.jit
-def triton_kernel():
-    pass
-def triton_host():
-    args = ...
-    weight = nn.conv(**args).weight.to(device)
-'''
-具体的参数和''nn''中调用的module要与torch保持一致，device与传入的backend保持一致（如"cuda", "npu")
-我会在调用triton之前固定相同的随机种子，所以在这里只需要正确地创建类的实例，并导出权重
+- device 代码中尽量去掉所有 if 逻辑，将 if 判断条件添加到 mask 中。
+- 在device端所有判断都通过mask实现，不需要任何if
+- 最后检查在triton host端代码初始化的时候，一定先初始化到cpu上，同时数据精度保持和输入相同。初始化后再将 tensor 放到 device端
+- 直接把张量传进 kernel，不要 `.data_ptr()`。
