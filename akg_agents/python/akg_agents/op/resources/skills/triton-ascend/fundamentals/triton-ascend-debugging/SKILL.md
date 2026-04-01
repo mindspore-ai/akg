@@ -62,3 +62,4 @@ metadata:
 | BLOCK_SIZE过大 | 编译失败或运行时错误 | BLOCK_SIZE超过65536或硬件限制 | 减小BLOCK_SIZE，使用循环处理 |
 | tl.where偏移计算 | 编译失败（Ascend后端） | 在内存偏移中使用tl.where | 改用if-else静态分支处理 |
 | 性能低下 | 运行缓慢 | 内存访问不连续、切分不合理 | 优化内存布局、调整BLOCK_SIZE、使用block_ptr |
+| 运行时range边界崩溃 | bishengIR crash | range()的start/stop混用运行时变量和constexpr | 改用全constexpr的range(0, N, BLOCK_K)，循环体内用运行时if跳过 |

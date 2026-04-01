@@ -104,23 +104,22 @@ class ModelNew(torch.nn.Module):
         super().__init__()
 
     def forward(self, a, b):
-    M, K = a.shape
-    K2, N = b.shape
-    assert K == K2
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+        M, K = a.shape
+        K2, N = b.shape
+        assert K == K2
+        c = torch.empty((M, N), device=a.device, dtype=a.dtype)
 
-    num_cores = 20  # Ascend 910B4有20个AI Core
-    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 256
+        num_cores = 20  # Ascend 910B4有20个CUBE Core
+        BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 256
 
-    # 关键:固定核心数启动,grid=(num_cores,)不是(NUM_BLOCKS,)
-    matmul_kernel[(num_cores,)](
-        a, b, c, M, N, K, num_cores,
-        BLOCK_M, BLOCK_N, BLOCK_K
-    )
-    return c
+        matmul_kernel[(num_cores,)](
+            a, b, c, M, N, K, num_cores,
+            BLOCK_M, BLOCK_N, BLOCK_K
+        )
+        return c
 ```
 
 **关键点**:
-- 使用 `grid=(num_cores,)` 固定启动核心数(如20个)
+- 使用 `grid=(num_cores,)` 固定启动核心数(如20个CUBE Core)
 - 每个核心通过 `for block_idx in range(pid, NUM_BLOCKS, num_cores)` 循环处理多个块
 - 不要使用 `grid=(NUM_BLOCKS_M * NUM_BLOCKS_N,)` 为每个块启动一个程序
