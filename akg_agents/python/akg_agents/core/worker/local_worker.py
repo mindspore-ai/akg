@@ -209,6 +209,7 @@ class LocalWorker(WorkerInterface):
                 dsl = profile_settings.get('dsl', '')
                 run_times = profile_settings.get('run_times', 50)
                 warmup_times = profile_settings.get('warmup_times', 5)
+                override_base_time_us = profile_settings.get('override_base_time_us')
                 
                 # 4. Execute profiling based on backend/dsl
                 try:
@@ -218,7 +219,7 @@ class LocalWorker(WorkerInterface):
                         base_time, gen_time = await loop.run_in_executor(
                             None,
                             run_profile_scripts_and_collect_results,
-                            extract_dir, op_name, task_id
+                            extract_dir, op_name, task_id, override_base_time_us
                         )
                         logger.info(f"[{task_id}] Profile results: base={base_time:.2f} us, gen={gen_time:.2f} us")
                     elif backend == "ascend":

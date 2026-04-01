@@ -31,23 +31,30 @@ from akg_agents.utils.process_utils import run_command
 logger = logging.getLogger(__name__)
 
 
-def run_profile_scripts_and_collect_results(verify_dir: str, op_name: str, task_id: str = "0") -> Tuple[float, float]:
+def run_profile_scripts_and_collect_results(verify_dir: str, op_name: str, task_id: str = "0", override_base_time_us: float = None) -> Tuple[float, float]:
     """运行性能测试脚本并收集结果
 
     Args:
         verify_dir: 验证目录，包含性能测试脚本
         op_name: 算子名称
         task_id: 任务ID
+        override_base_time_us: 覆盖的 baseline 时间（微秒），用于 evolve/adaptive_search 场景
 
     Returns:
         (base_time_us, gen_time_us): 基准时间和生成时间（微秒）
         - 如果 base 脚本不存在（跨后端场景），base_time_us 返回 inf
+        - 如果提供了 override_base_time_us，则使用该值作为 base_time_us
     
     注意: 此函数是线程安全的，不使用 os.chdir()。
     多个任务可以在线程池中并发执行而不会互相干扰。
     """
     try:
-        base_time_us = float('inf')
+        # 【优化】如果提供了 override_base_time_us，直接使用（避免重复测量）
+        if override_base_time_us is not None and override_base_time_us > 0 and override_base_time_us < float('inf'):
+            base_time_us = override_base_time_us
+            logger.info(f"[{op_name}: {task_id}] 使用缓存的 baseline: {base_time_us:.2f} us")
+        else:
+            base_time_us = float('inf')
         
         # 步骤1：运行基准性能测试脚本（如果存在）
         # 跨后端场景（使用参考数据）下，base 脚本可能不存在
@@ -63,7 +70,7 @@ def run_profile_scripts_and_collect_results(verify_dir: str, op_name: str, task_
             else:
                 base_time_us = read_profile_result_from_json(verify_dir, "base_profile_result.json")
         else:
-            logger.info(f"[{op_name}: {task_id}] 基准性能脚本不存在（跨后端场景），跳过 base profile")
+            logger.info(f"[{op_name}: {task_id}] 基准性能脚本不存在（使用缓存 baseline 或跨后端场景），跳过 base profile")
 
         # 步骤2：运行生成代码性能测试脚本
         gen_script = f"profile_{op_name}_generation.py"
