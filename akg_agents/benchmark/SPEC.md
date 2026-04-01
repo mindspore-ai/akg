@@ -9,6 +9,7 @@
 | 子目录 | 说明 |
 |--------|------|
 | `kernelbench/` | 适配后的 KernelBench 任务（MindSpore / NumPy 实现） |
+| `sol-execbench/` | SOL-ExecBench 评测集下载脚本和说明文档 |
 | `akg_kernels_bench/` | AKG 高频内核场景集（静态/动态 shape、融合、attention 等，含 Triton Ascend 子树） |
 | `akg_kernels_bench_lite/` | 精简 Ascend NPU 测例（分 t1/t2/t3 难度层级） |
 

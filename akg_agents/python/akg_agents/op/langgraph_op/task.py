@@ -95,7 +95,8 @@ class LangGraphTask(BaseLangGraphTask):
                  handwrite_suggestions: Optional[list] = None,
                  source_backend: Optional[str] = None,
                  source_arch: Optional[str] = None,
-                 user_requirements: Optional[str] = None):
+                 user_requirements: Optional[str] = None,
+                 bench_type: str = "kernelbench"):
         """初始化 LangGraphTask
         
         Args:
@@ -116,6 +117,7 @@ class LangGraphTask(BaseLangGraphTask):
             source_backend: 源后端，用于跨后端转换
             source_arch: 源架构，用于跨后端转换
             user_requirements: 用户额外需求（来自 ReAct 多轮对话）
+            bench_type: 基准测试类型（kernelbench 或 sol）
         """
         # 验证任务配置
         normalized_dsl = check_task_config(framework, backend, arch, dsl)
@@ -136,6 +138,7 @@ class LangGraphTask(BaseLangGraphTask):
         self.source_backend = source_backend.lower() if source_backend else None
         self.source_arch = source_arch.lower() if source_arch else None
         self.user_requirements = user_requirements or config.get("user_requirements", "")
+        self.bench_type = bench_type
         
         # 调用父类初始化
         super().__init__(task_id, config, workflow)
@@ -276,7 +279,8 @@ class LangGraphTask(BaseLangGraphTask):
                 dsl=self.dsl,
                 backend=self.backend,
                 arch=self.arch,
-                config=self.config
+                config=self.config,
+                bench_type=self.bench_type
             )
         except Exception as e:
             logger.warning(f"Failed to initialize Verifier: {e}")
@@ -337,6 +341,7 @@ class LangGraphTask(BaseLangGraphTask):
             "backend": self.backend,
             "arch": self.arch,
             "task_type": self.task_type,
+            "bench_type": self.config.get("bench_type", "kernelbench"),
             "verifier_result": False,
             "verifier_error": "",
             "history_attempts": [],

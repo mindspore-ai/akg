@@ -1,0 +1,176 @@
+import os
+import json
+import numpy as np
+import signal
+import functools
+import traceback
+from typing import Union, Literal, List, Tuple, Any
+
+# Framework imports
+import torch
+
+# DSL imports
+{{ dsl_imports }}
+
+# SOL Correctness imports
+from sol_correctness import ToleranceSpec, compute_error_stats, set_seed
+
+# Reference imports
+import sys
+sys.path.append("{{ sol_execbench_src_dir }}")
+
+from sol_execbench.core.bench.io import gen_inputs
+from sol_execbench.core.data import Definition, Workload
+import reference
+ref_run = reference.run
+
+# Timeout decorator
+def timeout_handler(signum, frame):
+    raise TimeoutError("计算超时")
+
+def with_timeout(timeout_seconds):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(timeout_seconds)
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+        return wrapper
+    return decorator
+
+def verify_implementations():
+    print("Starting SOL-ExecBench verification...")
+    
+    # Device setup
+{% for line in device_setup_code %}
+    {{ line }}
+{% endfor %}
+    
+    # Create impl_model
+    init_params = []
+{% for line in create_impl_code %}
+    {{ line }}
+{% endfor %}
+    
+    if hasattr(impl_model, "to"):
+        impl_model = impl_model.to(device)
+
+    # Load definition and workloads
+    with open("definition.json", "r", encoding="utf-8") as f:
+        definition_dict = json.load(f)
+        
+    with open("workload.jsonl", "r", encoding="utf-8") as f:
+        workloads = [json.loads(line) for line in f if line.strip()]
+
+    input_names = list(definition_dict.get("inputs", {}).keys())
+    
+    total_workloads = len(workloads)
+    passed_workloads = 0
+
+    @with_timeout(300)
+    def verify_workload(workload_dict, wl_idx):
+        # Merge axes
+        axes_and_scalars = {}
+        for key, val in definition_dict.get("axes", {}).items():
+            if val.get("type") == "const":
+                axes_and_scalars[key] = val.get("value")
+        axes_and_scalars.update(workload_dict.get("axes", {}))
+        
+        tol_dict = workload_dict.get("tolerance", {})
+        tolerance = ToleranceSpec(**tol_dict)
+        
+        definition_obj = Definition.model_validate(definition_dict)
+        workload_obj = Workload.model_validate(workload_dict)
+        
+        _custom_inputs_fn = getattr(reference, definition_obj.custom_inputs_entrypoint) if definition_obj.custom_inputs_entrypoint else None
+        
+        for round_idx in range(10):
+            set_seed(42 + round_idx)
+            
+            # Generate inputs
+            inputs_list = gen_inputs(
+                definition=definition_obj,
+                workload=workload_obj,
+                device=device,
+                safe_tensors=None,
+                custom_inputs_fn=_custom_inputs_fn,
+            )
+            
+            # Run reference
+            ref_outputs = ref_run(*inputs_list)
+            if not isinstance(ref_outputs, (list, tuple)):
+                ref_outputs = [ref_outputs]
+                
+            # Run implementation
+            try:
+                impl_outputs = impl_model(*inputs_list)
+            except Exception as e:
+                raise RuntimeError(f"Implementation execution failed: {e}\n{traceback.format_exc()}")
+                
+            if not isinstance(impl_outputs, (list, tuple)):
+                impl_outputs = [impl_outputs]
+                
+            if len(ref_outputs) != len(impl_outputs):
+                raise AssertionError(f"Output count mismatch: ref={len(ref_outputs)}, impl={len(impl_outputs)}")
+                
+            # Compare outputs
+            for i, (ref_out, impl_out) in enumerate(zip(ref_outputs, impl_outputs)):
+                if ref_out is None or impl_out is None:
+                    raise AssertionError(f"Output {i} is None: ref={ref_out is None}, impl={impl_out is None}")
+                    
+                if ref_out.shape != impl_out.shape:
+                    raise AssertionError(f"Shape mismatch at output {i}: ref={ref_out.shape}, impl={impl_out.shape}")
+                    
+                if ref_out.dtype != impl_out.dtype:
+                    raise AssertionError(f"Dtype mismatch at output {i}: ref={ref_out.dtype}, impl={impl_out.dtype}")
+                    
+                correctness, exceeds = compute_error_stats(impl_out, ref_out, tolerance)
+                if exceeds:
+                    msg = f"Verification failed at output {i}\n"
+                    msg += f"Max absolute error: {correctness.max_absolute_error}\n"
+                    msg += f"Max relative error: {correctness.max_relative_error}\n"
+                    if correctness.has_nan:
+                        msg += "Contains NaN\n"
+                    if correctness.has_inf:
+                        msg += "Contains Inf\n"
+                    raise AssertionError(msg)
+                    
+        return True
+
+    import time
+    import uuid
+    verification_id = str(uuid.uuid4())[:8]
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    
+    for idx, workload in enumerate(workloads):
+        try:
+            verify_workload(workload, idx)
+            passed_workloads += 1
+            print(f"[{verification_id}] Workload {idx+1}/{total_workloads} PASSED")
+        except Exception as e:
+            print(f"[{verification_id}] Workload {idx+1}/{total_workloads} FAILED: {e}")
+            
+    if passed_workloads == total_workloads:
+        status = "成功"
+    else:
+        status = "失败"
+        
+    verification_log = f"""[{verification_id}] 验证结果: {status}
+[{verification_id}] 算子: {{ op_name }} | 框架: {{ framework }} | 后端: {{ backend }} | 架构: {{ arch }}
+[{verification_id}] DSL: {{ dsl }} | 设备ID: {{ device_id }} | 时间: {timestamp}
+[{verification_id}] 形状类型: 动态 | 通过的Workload: {passed_workloads}/{total_workloads}
+[{verification_id}] {'='*60}\n\n"""
+
+    print(verification_log)
+    
+    if passed_workloads != total_workloads:
+        sys.exit(1)
+
+if __name__ == "__main__":
+    import sys
+    verify_implementations()

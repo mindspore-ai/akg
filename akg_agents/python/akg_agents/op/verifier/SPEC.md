@@ -9,6 +9,7 @@
 ```
 verifier/
 ├── kernel_verifier.py         # KernelVerifier — 验证入口，组合三类适配器
+├── sol_verifier.py            # SOL-ExecBench 格式验证的专用生成器
 ├── profiler.py                # NPU/CUDA 性能采集
 ├── profiler_utils.py          # profile 脚本执行、msprof/nsys 解析
 ├── l2_cache_clear.py          # Ascend L2 cache 清理
