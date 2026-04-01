@@ -2,15 +2,6 @@ import torch
 import triton
 import triton.language as tl
 
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 512, 'num_cores': 20}),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 256, 'num_cores': 20}),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 1024, 'num_cores': 20}),
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'BLOCK_K': 2048, 'num_cores': 20}),
-    ],
-    key=['M', 'N', 'K'],
-)
 @triton.jit
 def aikg_6_Matmul_with_large_K_dimension__kernel(
     a_ptr, b_ptr, c_ptr,
@@ -127,16 +118,16 @@ def aikg_6_Matmul_with_large_K_dimension__triton_ascend_torch(A: torch.Tensor, B
     stride_cm, stride_cn = C.stride()
     
     # 使用lambda函数定义grid
-    grid = lambda meta: (meta['num_cores'],)
+    num_cores = 20
+    grid = (num_cores,)
     
-    # 启动内核
     aikg_6_Matmul_with_large_K_dimension__kernel[grid](
         A, B, C,
         M, N, K,
         stride_am, stride_ak,
         stride_bk, stride_bn,
         stride_cm, stride_cn,
-        # 注意：autotune参数会自动传入，不要在这里指定
+        BLOCK_M=64, BLOCK_N=64, BLOCK_K=512, num_cores=num_cores,
     )
     
     return C
