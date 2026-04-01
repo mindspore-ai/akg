@@ -37,6 +37,7 @@ llvm::DenseSet<llvm::StringRef> AKGCluster::getClusterableOps() {
     "mfuse.log",
     "mfuse.logical_not",
     "mfuse.neg",
+    "mfuse.relu",
     "mfuse.reciprocal",
     "mfuse.rsqrt",
     "mfuse.sqrt",
