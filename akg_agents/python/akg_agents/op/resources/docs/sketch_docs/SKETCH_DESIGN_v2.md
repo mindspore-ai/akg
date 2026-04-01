@@ -1,347 +1,155 @@
 # UnifiedSketch 设计
 
-## 目标与原则
+## 1. 目标与原则
 
-### 目标
-用最小DSL表达算子设计意图，便于LLM理解和Coder实现。
+用最小 DSL 表达算子设计意图，便于 LLM 理解和 Coder 实现。
 
-### 原则
-- **极简原语**：只有少数核心操作（alloc/load/store/compute/...）
-- **统一语法**：所有操作都是函数调用风格，无语法差异
-- **标准控制流**：使用Python for/range语法，不发明新语法
-- **hint分离**：复杂优化用hint表达，不影响主逻辑清晰性
+## 2. 核心语法元素
 
-## 核心语法元素
+### 2.0 策略锚点 (Strategy Anchors) - 必须包含
 
-### 结构声明
+```python
+# Applied Meta-Strategies: [strat_id1, strat_id2, ...]
+```
+
+### 2.1 结构声明
+
 ```python
 sketch <op_name> {
   symbols: M, N, K;                    # 符号变量声明
   tensors: A[M, K]: f16; B[K, N]: f16; C[M, N]: f32;  # 张量声明
   constexpr: m0, k0, n0
+  ...
 }
 ```
 
-### @llm_hint 装饰器详解
+### 2.2 内存管理 IR：alloc 操作
 
-#### 基本语法
-`@llm_hint` 用于给 LLM 提供优化提示，帮助 coder 选择最优的实现策略。
-
-```python
-@llm_hint("optimization_type")              # 单一提示
-@llm_hint("optimization_type", "context")   # 带上下文的提示
-@llm_hint("opt1", "opt2", "opt3")          # 多重提示
-```
-
-#### 优化类型
-- `"parallel"` - 并行化此循环
-- `"pipeline"` - 流水线优化  
-- `"vectorize"` - 向量化
-- `"unroll"` - 循环展开
-
-#### 硬件上下文提示
-- `"grididx"` - GPU grid 级别并行（对应 blockIdx）
-- `"threadidx"` - GPU thread 级别并行（对应 threadIdx）
-- `"coreidx"` - NPU core 级别并行
-- `"warp"` - GPU warp 级别优化
-- `"simd"` - CPU/NPU SIMD 向量化
-
-### for循环表达
-```python
-# GPU风格：grid + thread 两级并行
-@llm_hint("parallel", "grididx.x")
-for i in range(0, M, 128):                  # block级别
-    @llm_hint("parallel", "threadidx.x") 
-    for j in range(0, N, 32):               # thread级别
-        @llm_hint("pipeline")
-        for k in range(0, K, k_tile):
-            # 计算逻辑
-
-# NPU风格：core级别并行
-@llm_hint("parallel", "coreidx")
-for core_idx in range(num_cores):
-    @llm_hint("pipeline")
-    for k in range(0, K, k_tile):
-        # 每个core的计算
-
-# CPU风格：SIMD向量化
-@llm_hint("parallel")                       # OpenMP并行
-for i in range(0, M, tile_size):
-    @llm_hint("vectorize", "simd")          # SIMD向量化
-    for j in range(tile_size):
-        # 向量化计算
-```
-
-### 核心操作
-1. **alloc** - 内存分配
-2. **load** - 数据加载  
-3. **store** - 数据存储
-4. **compute函数** - 计算操作
-
-## 语法概览
-
-```python
-sketch matmul {
-  symbols: M, N, K;
-  tensors: A[M, K]: f16; B[K, N]: f16; C[M, N]: f32;
-  
-  m0, k0, n0 = 128, 256, 256
-
-  @llm_hint("parallel")
-  for i_outer in range(0, ceil(M, m0)):
-    @llm_hint("parallel")
-    for j_outer in range(0, ceil(N, n0)):
-
-      # 内存分配
-      c_tile = alloc([m0, n0], llm_hint=["accumulator", "init_zero"])
-      a_tile = alloc([m0, k0], llm_hint=["fast", "input_cache"])
-      b_tile = alloc([k0, n0], llm_hint=["fast", "input_cache"])
-
-      @llm_hint("pipeline")
-      for k_outer in range(0, ceil(K, k0)):
-        # 数据搬移
-        load(A[i_outer:i_outer+m0, k_outer:k_outer+k0] -> a_tile)
-        load(B[k_outer:k_outer+k0, j_outer:j_outer+n0] -> b_tile)
-        
-        # 计算操作
-        gemm(a_tile, b_tile, dst=c_tile)
-        
-      # 数据写回
-      store(c_tile -> C[i_outer:i_outer+m0, j_outer:j_outer+n0])
-}
-```
-
-## 内存管理系统
-
-### alloc() 语法
 ```python
 tile = alloc([shape], llm_hint=["存储要求", "用途说明", "性能要求"])
 ```
 
-### hint设计原则
-**语义化描述，让LLM根据硬件文档选择具体实现**
+**llm_hint**
+- **存储要求**: `"fastest"` (Register), `"fast"` (Shared/L1), `"medium"` (L2), `"slow"` (Global)
+- **用途说明**: `"accumulator"`, `"input_cache"`, `"output_buffer"`, `"temp_workspace"`
+- **初始化**: `"init_zero"`, `"init_neg_inf"`, `"no_init"`
 
-#### 存储要求（性能层次）
-- `"fastest"` - 最快访问速度，容量小（让LLM选择register/L0等）
-- `"fast"` - 快速访问，中等容量（让LLM选择shared/L1等）
-- `"medium"` - 中等速度，较大容量（让LLM选择L2/cache等）
-- `"slow"` - 较慢但容量大（让LLM选择global/DDR等）
+### 2.3 数据流 IR：Load/Store 操作
 
-#### 用途说明（帮助LLM理解意图）
-- `"accumulator"` - 累加器，需要频繁读写
-- `"input_cache"` - 输入数据缓存，主要读取
-- `"output_buffer"` - 输出缓冲，主要写入
-- `"temp_workspace"` - 临时工作空间
-- `"shared_between_threads"` - 线程间共享数据
-
-#### 初始化要求
-- `"init_zero"` - 初始化为0
-- `"no_init"` - 不初始化（默认）
-
-### 示例
 ```python
-# 语义化hint方式（推荐）
-c_acc = alloc([128, 128], llm_hint=["fastest", "accumulator", "init_zero"])
-a_cache = alloc([128, 256], llm_hint=["fast", "input_cache"])  
-temp = alloc([128], llm_hint=["fast", "temp_workspace"])
-
-# LLM会根据硬件文档将其映射为：
-# NPU: fastest→L0, fast→L1_buffer
-# GPU: fastest→register, fast→shared_memory  
-# CPU: fastest→register, fast→L1_cache
+load(tensor[slice] -> tile, mask=mask_tile, llm_hint=["..."])
+store(tile -> tensor[slice], mask=mask_tile, llm_hint=["..."])
 ```
 
-## 数据搬移操作
+**llm_hint**:
+- **Parallel**: `"cooperative_load"`, `"cooperative_store"`
+- **Vectorized**: `"vectorized"` (连续), `"strided"`, `"broadcast"`
+- **Boundary**: `"mask_boundary"`, `"assume_aligned"`
+- **Access**: `"block_ptr"` (强制使用块指针优化，需满足线性索引条件), `"atomic_add"` (原子加)
 
-### load() 语法
+### 2.4 计算 IR
+
+- **基础**: `add`, `sub`, `mul`, `div`, `exp`, `log`, `sqrt`, `max`, `min`, `clamp`, `where`, `abs`
+- **线性代数**: `gemm(a,b,dst)`, `dot`, `outer_product`
+- **归约**: `reduce_sum(src, axis)`, `reduce_max`, `reduce_min`, `reduce_argmax`
+- **扫描**: `local_cumsum`, `local_cumprod`
+- **复合**: `softmax`, `relu`, `gelu`, `sigmoid`
+
+### 2.5 @llm_hint & @metaprompt 装饰器
+
 ```python
-load(tensor[slice] -> tile)
+@llm_hint("parallel", "grididx.x/y/z")  # 映射到 Grid 维度
+@llm_hint("pipeline")                   # 启用软件流水线
+@llm_hint("vectorize")                  # 强制向量化
+@llm_hint("unroll")                     # 循环展开
+@metaprompt("strat_id")                 # 标注此处代码实现了哪个元提示策略 (如 strat_tiling_2d_block_ptr)
 ```
 
-### store() 语法  
+
+## 3. For 循环 IR 示例
+
 ```python
-store(tile -> tensor[slice])
-```
-
-### 切片表达
-```python
-# 基本切片
-A[i:i+128, k:k+256]           # 二维切片
-X[start:end]                  # 一维切片
-
-# 完整tile
-A[i_outer:i_outer+m0, k_outer:k_outer+k0]
-```
-
-### 示例
-```python
-load(A[0:128, 0:256] -> a_tile)              # 加载A的子块到a_tile
-store(result_tile -> C[i:i+128, j:j+128])    # 将结果写回C的子块
-```
-
-## 计算操作库
-
-### 基础运算
-```python
-add(src1, src2, dst)          # dst = src1 + src2
-mul(src1, src2, dst)          # dst = src1 * src2  
-sub(src1, src2, dst)          # dst = src1 - src2
-div(src1, src2, dst)          # dst = src1 / src2
-max(src1, src2, dst)          # dst = max(src1, src2)
-min(src1, src2, dst)          # dst = min(src1, src2)
-...
-```
-
-### 数学函数
-```python
-exp(src, dst)                 # dst = exp(src)
-log(src, dst)                 # dst = log(src)
-sqrt(src, dst)                # dst = sqrt(src)
-abs(src, dst)                 # dst = abs(src)
-tanh(src, dst)                # dst = tanh(src)
-sigmoid(src, dst)             # dst = sigmoid(src)
-...
-```
-
-### 线性代数
-```python
-gemm(a, b, dst)               # dst += a @ b (矩阵乘法)
-dot(a, b, result)             # result = dot(a, b) (向量点积)
-reduce_sum(src, axis, dst)    # dst = sum(src, axis=axis) (允许axis为list，指代多轴同时reduce)
-reduce_max(src, axis, dst)    # dst = max(src, axis=axis)
-...
-```
-
-### 复合函数
-```python
-relu(src, dst)                # dst = max(0, src)
-gelu(src, dst)                # dst = gelu(src)
-silu(src, dst)                # dst = silu(src) = src * sigmoid(src)
-softmax(src, dst)             # dst = softmax(src)
-...
-```
-
-## 并行与优化提示
-
-### 多参数 @llm_hint 用法
-
-#### 不同硬件的并行模式
-```python
-# GPU: 使用 grid + thread 两级并行
-@llm_hint("parallel", "grididx")      # 对应 blockIdx.x/y/z
-@llm_hint("parallel", "threadidx")    # 对应 threadIdx.x/y/z
-
-# NPU: 使用 core 级别并行
-@llm_hint("parallel", "coreidx")      # 对应 ai_core 并行
-
-# CPU: 使用线程并行 + SIMD
-@llm_hint("parallel")                 # 对应 OpenMP/TBB 
-@llm_hint("vectorize", "simd")        # 对应 AVX/NEON
-```
-
-#### 组合使用策略
-```python
-# GPU完整示例
-@llm_hint("parallel", "grididx")
-for block_i in range(M_blocks):
-    @llm_hint("parallel", "threadidx") 
-    for thread_j in range(threads_per_block):
+# GPU 风格：Grid 并行
+@llm_hint("parallel", "grididx.x")
+for i in range(0, M, BM):
+    @llm_hint("parallel", "grididx.y") 
+    for j in range(0, N, BN):               
+        a_tile = alloc([BM, BK], llm_hint=["fast", "input_cache"])
+        b_tile = alloc([BK, BN], llm_hint=["fast", "input_cache"])
+        acc = alloc([BM, BN], llm_hint=["fast", "accumulator", "init_zero"])
         @llm_hint("pipeline")
-        for k in range(k_blocks):
-            # 计算逻辑
+        for k in range(0, K, BK):
+            # 根据tensor_a, tensor_b 维度确定，以2维为例
+            a/b/c_i/j/k_idx 是根据 i j k 索引计算得到的
+            mask_a/b/ctile 是根据 a/b/c_i/j/k_idx 的实际范围得到的
+            load(tensor_a[a_i_idx, a_k_idx] -> a_tile, mask=mask_atile, llm_hint=["..."])
+            load(tensor_b[b_k_idx, b_j_idx] -> b_tile, mask=mask_btile, llm_hint=["..."])
+            gemm(a_tile, b_tile, acc)
 
-# NPU完整示例  
-@llm_hint("parallel", "coreidx")
-for core_idx in range(num_cores):
-    @llm_hint("pipeline")
-    for k in range(k_tiles):
-        @llm_hint("vectorize")
-        for i in range(vector_size):
-            # 向量计算
+        mask_store 是根据 c_i_idx, c_j_idx 实际范围得到的
+        store(acc -> tensor_c[c_i_idx, c_j_idx], mask=mask_store, llm_hint=["..."])
 ```
 
-## 常见模式示例
+## 4. UnifiedSketch 规范
 
-### MatMul（如上面语法概览）
+1. **判断逻辑**：在IR中尽量不要使用判断逻辑，需要判断的地方尽量使用mask实现
+2. **坐标逻辑**：索引不要使用...缩写，索引展开为一个个 idx 构成的 slice。同时每个 idx 的边界条件通过 & 的方式添加到 mask 中
+3. **mask**：利用 mask 取代 if 判断放在 load/store 函数中
 
-### Elementwise - ReLU
-```python
-sketch relu {
-  symbols: N;
-  tensors: X[N]: f32; Y[N]: f32;
-  
-  tile_size = 1024
-  
-  @llm_hint("parallel")
-  for i in range(0, ceil(N, tile_size)):
-    x_tile = alloc([tile_size], llm_hint="l1_buffer")
-    y_tile = alloc([tile_size], llm_hint="l1_buffer")
-    
-    load(X[i:i+tile_size] -> x_tile)
-    relu(x_tile, y_tile)
-    store(y_tile -> Y[i:i+tile_size])
-}
-```
+## 基础算子设计提示
 
-### Reduction - Softmax
-```python
-sketch softmax {
-  symbols: B, N;
-  tensors: X[B, N]: f32; Y[B, N]: f32;
-  
-  @llm_hint("parallel")
-  for b in range(B):
-    x_row = alloc([N], llm_hint="l1_buffer")
-    y_row = alloc([N], llm_hint="l1_buffer")
-    max_val = alloc([1], llm_hint="l0c")
-    sum_val = alloc([1], llm_hint="l0c")
-    
-    load(X[b, 0:N] -> x_row)
-    
-    # 三阶段softmax
-    reduce_max(x_row, axis=0, max_val)
-    sub(x_row, max_val, x_row)        # x = x - max
-    exp(x_row, y_row)                 # y = exp(x)
-    reduce_sum(y_row, axis=0, sum_val)
-    div(y_row, sum_val, y_row)        # y = y / sum
-    
-    store(y_row -> Y[b, 0:N])
-}
-```
+1.  循环不变量（如 Norm 均值、Conv 坐标判定）移出最内层循环。
+2.  **Conv3d 输出大小（其他维度同理）**：
+    - $D_{out} = \lfloor \frac{D_{in} + 2 \times \text{padding}[0] - \text{dilation}[0] \times (\text{kernel\_size}[0] - 1) - 1}{\text{stride}[0]} + 1\rfloor$
+    - $H_{out} = \lfloor \frac{H_{in} + 2 \times \text{padding}[1] - \text{dilation}[1] \times (\text{kernel\_size}[1] - 1) - 1}{\text{stride}[1]} + 1\rfloor$
+    - $W_{out} = \lfloor \frac{W_{in} + 2 \times \text{padding}[2] - \text{dilation}[2] \times (\text{kernel\_size}[2] - 1) - 1}{\text{stride}[2]} + 1\rfloor$
+3. **Conv3d Implicit Gemm 维度（考虑group G）**：
+    - M 维度：$N\times D\times  P \times Q = \text{batch size} \times D_{out} \times H_{out}\times W_{out}$
+    - N 维度：$C_{out}/G$
+    - K 维度：$R\times S \times T \times (C_{in}/G) = \text{kernel\_size[0]} \times \text{kernel\_size[1]} \times \text{kernel\_size[2]} \times (C_{in}/G) $
 
-### 复合算子 - GELU
-```python
-sketch gelu {
-  symbols: N;
-  tensors: X[N]: f32; Y[N]: f32;
-  
-  tile_size = 512
-  
-  @llm_hint("parallel")
-  for i in range(0, ceil(N, tile_size)):
-    x_tile = alloc([tile_size], llm_hint="l1_buffer")
-    y_tile = alloc([tile_size], llm_hint="l1_buffer")
-    
-    load(X[i:i+tile_size] -> x_tile)
-    gelu(x_tile, y_tile)              # 让coder决定如何实现
-    store(y_tile -> Y[i:i+tile_size])
-}
-```
+4. **Conv3d 中根据其他坐标计算输入坐标**：
+    - $d_{in} = d_{out} \times \text{stride}_d + r \times  \text{dilation}_d - \text{padding}_d$
+    - $h_{in} = h_{out} \times \text{stride}_h + s \times  \text{dilation}_h - \text{padding}_h$
+    - $w_{in} = w_{out} \times \text{stride}_w + t \times  \text{dilation}_w - \text{padding}_w$
 
-## 最佳实践
+5. **ConvTrans3d 输出大小（其他维度同理）**：
+    - $D_{out} = (D_{in} - 1) \times \text{stride}[0] - 2 \times \text{padding[0]} + \text{dilation[0]} \times (\text{kernel\_size[0]} - 1) + \text{output\_padding[0]} + 1$
+    - $H_{out} = (H_{in} - 1) \times \text{stride}[1] - 2 \times \text{padding[1]} + \text{dilation[1]} \times (\text{kernel\_size[1]} - 1) + \text{output\_padding[1]} + 1$
+    - $W_{out} = (W_{in} - 1) \times \text{stride}[2] - 2 \times \text{padding[2]} + \text{dilation[2]} \times (\text{kernel\_size[2]} - 1) + \text{output\_padding[2]} + 1$
 
-### 编写顺序
-1. **先写基本结构**：symbols, tensors, 主循环框架
-2. **再加内存管理**：alloc合适的tile
-3. **然后加数据流**：load -> compute -> store
-4. **最后加优化hint**：@llm_hint装饰器
+6. **ConvTrans3d Implicit Gemm 维度（group单独考虑）**：
+    - M 维度：$N\times D_{out} \times H_{out} \times W_{out}$
+    - N 维度：$C_{out}/G$
+    - K 维度：$R\times S \times T \times (C_{in} / G)$
 
-### Tile大小设置
-- 考虑硬件内存约束（如NPU UB大小、GPU shared memory限制）
-- 优先选择2的幂次（128, 256, 512, 1024）
-- 保证数据对齐要求
+7. **ConvTrans3d 根据其他坐标计算输入坐标(r,s,t是卷积核维度三维大小)**：
+    - $d_{in} = \frac{d_{out} + \text{pad}_d - r \times \text{dilation}_d}{\text{stride}_d}$
+    - $h_{in} = \frac{h_{out} + \text{pad}_h - s \times \text{dilation}_h}{\text{stride}_h}$
+    - $w_{in} = \frac{w_{out} + \text{pad}_w - t \times \text{dilation}_w}{\text{stride}_w}$
 
-### 错误避免
-- **不要混用抽象层次**：要么用高级函数（gelu），要么用基础运算（add+mul）
-- **明确数据流向**：每个load都要有对应的compute，每个compute都要有对应的store
-- **合理使用hint**：不要过度优化，先保证逻辑正确
+## 5. 硬件 specific 优化
+
+- **GPU (NVIDIA/AMD)**:
+  - `llm_hint="fast"` -> Shared Memory
+  - `llm_hint="fastest"` -> Register File
+  - Grid Mapping: 映射 `grididx.x/y/z` 到 Grid Block。
+- **NPU (Ascend)**:
+  - `llm_hint="fast"` -> L1 Buffer / Unified Buffer
+  - `llm_hint="coreidx"` -> AI Core 并行
+
+## 7. 性能禁忌
+
+1.  **内循环标量化**：禁止单标量 Load，必须 `arange` 向量化。
+4.  **Alloc 滥用**：严禁分配大面积工作空间用于 Input Cache，导致 Register Spilling。
+6.  **标量线程映射**：严禁 One-thread-per-pixel 映射，必须 Block-based。
+7.  **手书归约逻辑**：严禁手写 Tree-reduction，使用 `reduce_sum`。
+8.  **多步扫描同步**：严禁使用全局多步同步扫描。
+9.  **Tile 内标量循环**：严禁 `for i in range(BLOCK_SIZE)`。
+10. **二阶段串行归约**：严禁 "Partial Sum -> Global Sum" 的二阶段写法，使用 Atomic。
+11. **手动线程 ID**：严禁使用 `thread_idx` 或 Grid-Stride Loop。
+12. **手动 Shared Memory**：严禁手动管理 SMEM 进行归约。
+13. **过度分配中间缓冲**：严禁为每个算术步骤 alloc tile，使用 Math Fusion (直接表达式)。
+14. **损失函数多 Pass**：严禁将 Loss 拆分为“写回 + 求和”，必须 Atomic。
+15. **过度 Tiling**：在 Grid 并行度充足时 (如 B*C 很大)，严禁在 Block 内部对 Batch/Instance 维度再次 Tiling (如 `for bc in range(0, B*C, BC)`)，应直接映射 `range(0, B*C, 1)` 到 Grid (Step=1)。
+

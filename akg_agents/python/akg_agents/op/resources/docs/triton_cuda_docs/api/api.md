@@ -37,7 +37,7 @@ grid_size = triton.cdiv(total_elements, block_size)
 ```
 - **参数**: `a`, `b` - 被除数和除数
 - **返回**: 向上取整的除法结果
-- **用途**: 计算启动网格大小
+- **用途**: host侧使用，计算启动网格大小
 
 ## 3. 内存操作 API
 
@@ -135,6 +135,14 @@ float_data = tl.cast(int_data, tl.float32)
 
 ## 5. 数学运算 API
 
+### tl.cdiv(a, b)
+```python
+result = tl.cdiv(offset, BLOCK_SIZE)
+```
+- **参数**: `a`, `b` - 被除数和除数
+- **返回**: 向上取整的除法结果 ⌈a/b⌉
+- **用途**: kernel内部使用，计算向上整除结果，等价于 `(a + b - 1) // b`
+
 ### tl.dot(a, b, acc=None, allow_tf32=True)
 ```python
 result = tl.dot(a, b, acc=accumulator)
@@ -175,6 +183,31 @@ result = tl.where(mask, data, 0.0)
 - **返回**: 根据条件选择的值
 - **用途**: SIMD 友好的条件选择
 
+### tl.cumsum(input, axis=0, reverse=False, dtype=None)
+```python
+cumulative_sum = tl.cumsum(data, axis=0)
+reverse_cumsum = tl.cumsum(data, axis=1, reverse=True)
+```
+- **参数**:
+  - `input`: 输入张量
+  - `axis`: 累积求和的轴 (默认为 0)
+  - `reverse`: 是否反向累积 (默认为 False)
+  - `dtype`: 输出数据类型 (可选，默认与输入相同)
+- **返回**: 累积求和结果张量
+- **用途**: 计算沿指定轴的累积和，常用于前缀和计算
+
+### tl.cumprod(input, axis=0, reverse=False)
+```python
+cumulative_prod = tl.cumprod(data, axis=0)
+reverse_cumprod = tl.cumprod(data, axis=1, reverse=True)
+```
+- **参数**:
+  - `input`: 输入张量
+  - `axis`: 累积乘积的轴 (默认为 0)
+  - `reverse`: 是否反向累积 (默认为 False)
+- **返回**: 累积乘积结果张量
+- **用途**: 计算沿指定轴的累积乘积，常用于概率计算和序列处理
+
 ## 6. 原子操作 API
 
 ### tl.atomic_add(pointer, value)
@@ -200,5 +233,19 @@ tl.atomic_max(max_ptr, local_max)
 BLOCK_SIZE: tl.constexpr = 1024
 ```
 - **用途**: 标记编译时常量参数
-- **约束**: 必须在函数签名中声明 
-请严格按照API文档的方式生成对应的代码
+- **约束**: 必须在函数签名中声明
+
+## 7. 块分配优化 API
+
+### tl.swizzle2d(i, j, size_i, size_j, group_size)
+```python
+task_i, task_j = tl.swizzle2d(block_i, block_j, NUM_BLOCKS_I, NUM_BLOCKS_J, GROUP_SIZE)
+```
+- **参数**:
+  - `i`, `j`: 原始块索引
+  - `size_i`, `size_j`: 总块数
+  - `group_size`: 分组大小(通常为2/4/8)
+- **返回**: 重排后的块索引 (task_i, task_j)
+- **用途**: 2D块重排,提升缓存局部性
+- **适用场景**: 矩阵乘法等多维块计算,改善数据复用
+- **注意**: 仅支持行优先(i方向)分组,列优先需手动实现

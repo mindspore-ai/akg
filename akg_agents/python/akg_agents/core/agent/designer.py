@@ -22,13 +22,17 @@ warnings.warn(
 )
 
 import logging
+import json
 import re
 from typing import Tuple, List
-
 from akg_agents.core_v2.agents import AgentBase, register_agent
 from akg_agents.utils.common_utils import remove_copyright_from_text
 from akg_agents.utils.markdown_utils import extract_function_details
 from akg_agents.utils.hardware_utils import get_hardware_doc
+from akg_agents.utils.parser_registry import create_step_parser
+from akg_agents.database.database import Database
+from akg_agents.core.extractor_torch import extract_kernelbench_shapes_dtypes
+from akg_agents.core.meta_prompt.manager import MetaPromptManager, MetaPromptSearcher
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +115,6 @@ def get_inspirations(inspirations: List[dict]) -> str:
 
     return "\n".join(result_parts)
 
-
 @register_agent
 class Designer(AgentBase):
     @staticmethod
@@ -143,6 +146,7 @@ class Designer(AgentBase):
         self.workflow_config_path = workflow_config_path  # 保留用于向后兼容
         self.config = config
         self.llm_step_count = 0
+        self.meta = {}  # 用于存储算子特征等信息，供生成阶段使用
 
         # 从config中获取model_config
         if config:
@@ -175,6 +179,36 @@ class Designer(AgentBase):
             "hardware_docs": get_hardware_doc(self.backend, self.arch),
             "sketch_guide": self.load_doc("SKETCH_DESIGN_v2.md")
         }
+        
+        ## 添加详细算子信息
+        try:
+            from akg_agents.core.extractor_torch import extract_kernelbench_shapes_dtypes
+            meta = extract_kernelbench_shapes_dtypes(self.base_doc["task_desc"], device="cuda")
+            add_info = ""
+            print("=== Inputs ===")
+            for x in meta["inputs"]:
+                print(x)
+                add_info += x.__str__() + "\n"
+
+            print("=== Parameters ===")
+            for k, v in meta["parameters"].items():
+                print(k, v)
+                add_info += f"{k}: {v}\n"
+
+            if meta.get("graph_tensors"):
+                print("=== Graph tensors (node outputs) ===")
+                for t in meta["graph_tensors"][:20]:
+                    print(t)
+                    add_info += t.__str__() + "\n"
+
+            self.base_doc["task_desc"] += "\n\n\n## 算子参数信息\n" + add_info
+            
+            self.meta = meta  # 存储提取的算子特征信息，供后续生成阶段使用
+        
+        except Exception as e:
+            logger.warning(f"Failed to extract shapes and dtypes: {e}")
+        
+        
 
         # 为SWFT实现类型添加支持的API
         if self.dsl == "swft":
@@ -226,12 +260,98 @@ class Designer(AgentBase):
                 task_id = task_info.get('task_id', '0')
                 logger.info(f"[Task {task_id}] 检测到hint，启用Hint模式")
 
+        ### 元提示搜索器###
+        manager = MetaPromptManager(arch=self.arch, dsl=self.dsl)
+        searcher = MetaPromptSearcher(manager, arch=self.arch)
+        op_features = None
+        if self.meta is not None:
+            op_features = searcher._extract_op_features(self.meta)
+        print("=== Extracted Operator Features ===")
+        print(op_features)
+        print("===================================")
+
+        # 由 MetaPromptManager 根据 op_features 直接返回筛选后的空间
+        filtered_prompt_ids = manager.get_selected_prompt_ids(op_features or {})
+        filtered_prompt_space = manager.get_prompt_space_str(op_features=op_features or {})
+        logger.info(
+            f"Designer preselect meta prompts: {len(filtered_prompt_ids)}/{len(manager.prompts)} selected, ids={filtered_prompt_ids}"
+        )
+
+        
+        # 准备搜索器的格式指令（确保第一阶段返回可解析的 JSON）
+        search_format_instructions = (
+            "你必须返回一个符合以下结构的 JSON 对象：\n"
+            "{\n"
+            '  "selected_ids": ["id1", "id2"],\n'
+            '  "meta_prompt": ["description1", "description2"],\n'
+            '  "params": ["param1 ∈ [values]", "param2 ∈ [values]"],\n'
+            '  "reasoning": "定量决策分析"\n'
+            "}"
+        )
+
+        print("+++ meta prompt space (prefiltered) +++")
+        print(filtered_prompt_space)
+        print("+++++++++++++++++++++++++")
+        meta_input_data = {
+            "dsl": self.dsl,
+            "dsl_basic_docs": self.load_doc("basic_docs.md"),
+            "arch_name": self.arch,
+            "backend": self.backend,
+            "op_name": self.op_name,
+            "task_desc":  self.base_doc["task_desc"],
+            # "task_desc": remove_copyright_from_text(self.task_desc),
+            "hardware_docs": get_hardware_doc(self.backend, self.arch),
+            # "meta_prompt_space": manager.get_prompt_space_str(hw=searcher.hw_profile),
+            "meta_prompt_space": filtered_prompt_space,
+            "op_features": op_features,
+            "format_instructions": search_format_instructions,
+        }
+        meta_input_prompt = self.load_template("designer/search.j2")
+        llm_search_output, _, _ = await self.run_llm(
+            meta_input_prompt, meta_input_data, self.model_config.get("designer") or "standard"
+        )
+        # print("=== LLM Search Output ===")
+        # # print(llm_search_output)
+        # print("=========================")
+        
+        # 解析 LLM 输出的 JSON 字符串
+        llm_search_data = {}
+        if isinstance(llm_search_output, str):
+            try:
+                # 清理可能的 Markdown 代码块标记
+                clean_json = llm_search_output.strip()
+                if clean_json.startswith("```"):
+                    lines = clean_json.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    clean_json = "\n".join(lines).strip()
+                llm_search_data = json.loads(clean_json)
+            except Exception as e:
+                logger.warning(f"Designer: Failed to parse searcher JSON: {e}")
+        elif isinstance(llm_search_output, dict):
+            llm_search_data = llm_search_output
+
+        # # 衔接逻辑：将 LLM 选出的 ID 转化为 Designer 能够理解的结构化规约
+        # if "selected_ids" in llm_search_data:
+        #     selected_ids = llm_search_data["selected_ids"]
+        #     selected_objs = [manager.prompts[pid] for pid in selected_ids if pid in manager.prompts]
+        #     meta_prompts = searcher.format_as_directive(selected_objs)
+        #     logger.info(f"Designer: Linked {len(selected_objs)} meta prompts as directive.")
+        # else:
+        #     meta_prompts = str(llm_search_output)
+        #     logger.warning("Designer: LLM search result format error or not found selected_ids.")
+        meta_prompts = str(llm_search_data)  # 默认使用原始输出，确保不因解析失败而丢失信息
+        print("=== Auto-generated Meta Prompts ===")
+        print(meta_prompts)
+        print("===================================")
         # 基于aul_base_doc构建输入，只更新变化的部分
         input_data = {
             **self.base_doc,
             "llm_suggestions": conductor_suggestion,  # Conductor建议
             "inspirations": get_inspirations(task_info.get('inspirations', [])),
-            "meta_prompts": task_info.get("meta_prompts", ""),
+            "meta_prompts": meta_prompts,
             "handwrite_suggestions": task_info.get("handwrite_suggestions", []),
             "evolve_first_round": evolve_first_round,  # 控制是否显示available_tiling
             "enable_llm_range_inference": self.config.get("enable_llm_range_inference", False),  # LLM推理模式
@@ -257,10 +377,10 @@ class Designer(AgentBase):
         llm_result, formatted_prompt, llm_reasoning = await self.run_llm(
             self.designer_prompt, input_data, self.model_config.get("designer") or "standard"
         )
-        
+
         # ============ 处理Hint模式的输出 ============
         if enable_hint_mode and has_hint:
-            import json
+            # import json
             from akg_agents.utils.common_utils import ParserFactory
             try:
                 extracted_json = ParserFactory._extract_json_comprehensive(llm_result)
