@@ -41,3 +41,6 @@ tmp/
 
 # test result
 #*.txt
+
+# Thirdparty dependencies and datasets
+thirdparty/sol-execbench/
