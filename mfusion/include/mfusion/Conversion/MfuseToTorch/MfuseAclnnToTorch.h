@@ -17,12 +17,14 @@
 #ifndef MFUSION_CONVERSION_MFUSE_ACLNN_TO_TORCH_H
 #define MFUSION_CONVERSION_MFUSE_ACLNN_TO_TORCH_H
 
+#include "llvm/ADT/StringRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 namespace mlir {
 
-void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns);
+void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns,
+                                                 llvm::StringRef kernelGenerator);
 
 }  // namespace mlir
 

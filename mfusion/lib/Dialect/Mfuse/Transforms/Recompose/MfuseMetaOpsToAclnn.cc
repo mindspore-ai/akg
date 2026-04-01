@@ -13,12 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <numeric>
 
-#include "llvm/ADT/SmallVector.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Recompose/RecomposePatterns.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
-#include "mfusion/Dialect/Mfuse/Support/ArithUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -29,63 +26,14 @@ namespace {
 
 constexpr int64_t kRank2D = 2;
 constexpr int64_t kRankBatchMatmul = 3;  // rank >= 3 -> aclnn.batch_matmul
-constexpr int64_t kPermStartIndex = 0;
-constexpr int64_t kPermDimSecondLast = 2;  // index offset: rank - 2
-constexpr int64_t kPermDimLast = 1;        // index offset: rank - 1
 constexpr int64_t kAlphaOne = 1;
 
-/// Base class for Mfuse meta op to aclnn patterns; provides shared trans/permute helpers.
+/// Shared helpers for matmul_with_bias (bias reshape only).
 class MfuseMetaOpsToAclnnPattern {
  protected:
   static constexpr int64_t kRank2DVal = 2;
 
-  /// When trans is true, return perm that swaps the last two dimensions; else identity.
-  static SmallVector<int64_t> permForTrans(int rank, bool trans) {
-    SmallVector<int64_t> perm(rank);
-    std::iota(perm.begin(), perm.end(), kPermStartIndex);
-    if (trans && rank >= kRank2D) {
-      std::swap(perm[rank - kPermDimSecondLast], perm[rank - kPermDimLast]);
-    }
-    return perm;
-  }
-
-  /// If trans is true, insert PermuteOp to swap last two dimensions and return new value; else return v.
-  static Value applyTransToValue(Value v, RankedTensorType type, bool trans, PatternRewriter &rewriter) {
-    if (!trans || type.getRank() < kRank2D) return v;
-    SmallVector<int64_t> perm = permForTrans(type.getRank(), true);
-    SmallVector<int64_t> outShape(type.getRank());
-    for (size_t i = kPermStartIndex; i < perm.size(); ++i) {
-      outShape[i] = type.getShape()[perm[i]];
-    }
-    auto outType = RankedTensorType::get(outShape, type.getElementType());
-    return rewriter.create<PermuteOp>(v.getLoc(), outType, v, rewriter.getI64ArrayAttr(perm));
-  }
-
-  /// Check if two shapes are compatible for broadcasting (bias can broadcast to result).
-  /// Returns true if shapes are compatible, false otherwise.
-  static bool areShapesCompatibleForBroadcast(ArrayRef<int64_t> resultShape, ArrayRef<int64_t> biasShape) {
-    if (resultShape == biasShape) {
-      return true;
-    }
-    // Check if bias can broadcast to result shape (bias should match trailing dimensions).
-    int64_t resultRank = resultShape.size();
-    int64_t biasRank = biasShape.size();
-    if (biasRank > resultRank) {
-      return false;
-    }
-    // Check trailing dimensions match.
-    for (int64_t i = 0; i < biasRank; ++i) {
-      int64_t resultDim = resultShape[resultRank - biasRank + i];
-      int64_t biasDim = biasShape[i];
-      if (resultDim != biasDim && resultDim != ShapedType::kDynamic && biasDim != ShapedType::kDynamic) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   /// Reshape bias to be compatible with result shape for broadcasting.
-  /// If bias shape already matches trailing dimensions, insert Reshape to add leading 1s.
   static Value reshapeBiasForBroadcast(Value bias, RankedTensorType biasType, RankedTensorType resultType,
                                        PatternRewriter &rewriter) {
     Location loc = bias.getLoc();
@@ -94,12 +42,10 @@ class MfuseMetaOpsToAclnnPattern {
     int64_t resultRank = resultShape.size();
     int64_t biasRank = biasShape.size();
 
-    // If ranks are equal and shapes match, no reshape needed.
     if (resultRank == biasRank && resultShape == biasShape) {
       return bias;
     }
 
-    // Build broadcast shape: [1, ..., 1, bias_shape...]
     SmallVector<int64_t> broadcastShape(resultRank);
     int64_t leadingOnes = resultRank - biasRank;
     for (int64_t i = 0; i < leadingOnes; ++i) {
@@ -114,7 +60,8 @@ class MfuseMetaOpsToAclnnPattern {
   }
 };
 
-/// Lower mfuse.matmul to aclnn.matmul, aclnn.mm (2D), or aclnn.batch_matmul. Inherits base for trans helpers.
+/// Lower mfuse.matmul to aclnn.matmul, aclnn.mm (2D), or aclnn.batch_matmul.
+/// Transpose flags are carried on aclnn ops (no mfuse.permute).
 class MatmulToAclnnPattern : public OpRewritePattern<MatmulOp>, public MfuseMetaOpsToAclnnPattern {
  public:
   using OpRewritePattern<MatmulOp>::OpRewritePattern;
@@ -127,27 +74,27 @@ class MatmulToAclnnPattern : public OpRewritePattern<MatmulOp>, public MfuseMeta
     }
 
     Location loc = op.getLoc();
-    Value self = applyTransToValue(op.getSelf(), selfType, op.getTransX1(), rewriter);
-    Value other = applyTransToValue(op.getOther(), otherType, op.getTransX2(), rewriter);
-    if (self != op.getSelf()) selfType = cast<RankedTensorType>(self.getType());
-    if (other != op.getOther()) otherType = cast<RankedTensorType>(other.getType());
+    Value self = op.getSelf();
+    Value other = op.getOther();
+    auto trans1 = rewriter.getBoolAttr(op.getTransX1());
+    auto trans2 = rewriter.getBoolAttr(op.getTransX2());
 
     Type resultType = op.getResult().getType();
     int rank = selfType.getRank();
     Value result;
     if (rank == kRank2DVal && otherType.getRank() == kRank2DVal) {
-      result = rewriter.create<AclnnMmOp>(loc, resultType, self, other);
+      result = rewriter.create<AclnnMmOp>(loc, resultType, self, other, trans1, trans2);
     } else if (rank >= kRankBatchMatmul && otherType.getRank() >= kRankBatchMatmul) {
-      result = rewriter.create<AclnnBatchMatmulOp>(loc, resultType, self, other);
+      result = rewriter.create<AclnnBatchMatmulOp>(loc, resultType, self, other, trans1, trans2);
     } else {
-      result = rewriter.create<AclnnMatmulOp>(loc, resultType, self, other);
+      result = rewriter.create<AclnnMatmulOp>(loc, resultType, self, other, trans1, trans2);
     }
     rewriter.replaceOp(op, result);
     return success();
   }
 };
 
-/// Lower mfuse.matmul_with_bias to aclnn.matmul/aclnn.mm/batch_matmul + aclnn.add. Inherits base for trans helpers.
+/// Lower mfuse.matmul_with_bias to aclnn.matmul/aclnn.mm/batch_matmul + aclnn.add.
 class MfuseMetaOpsMatMulWithBiasToAclnnPattern : public OpRewritePattern<MatmulWithBiasOp>,
                                                  public MfuseMetaOpsToAclnnPattern {
  public:
@@ -161,34 +108,31 @@ class MfuseMetaOpsMatMulWithBiasToAclnnPattern : public OpRewritePattern<MatmulW
     }
 
     Location loc = op.getLoc();
-    Value self = applyTransToValue(op.getSelf(), selfType, op.getTransX1(), rewriter);
-    Value other = applyTransToValue(op.getOther(), otherType, op.getTransX2(), rewriter);
-    if (self != op.getSelf()) selfType = cast<RankedTensorType>(self.getType());
-    if (other != op.getOther()) otherType = cast<RankedTensorType>(other.getType());
+    Value self = op.getSelf();
+    Value other = op.getOther();
+    auto trans1 = rewriter.getBoolAttr(op.getTransX1());
+    auto trans2 = rewriter.getBoolAttr(op.getTransX2());
     Value bias = op.getBias();
 
     Type resultType = op.getResult().getType();
     Value matmulResult;
     int rank = selfType.getRank();
     if (rank == kRank2DVal && otherType.getRank() == kRank2DVal) {
-      matmulResult = rewriter.create<AclnnMmOp>(loc, resultType, self, other);
+      matmulResult = rewriter.create<AclnnMmOp>(loc, resultType, self, other, trans1, trans2);
     } else if (rank >= kRankBatchMatmul && otherType.getRank() >= kRankBatchMatmul) {
-      matmulResult = rewriter.create<AclnnBatchMatmulOp>(loc, resultType, self, other);
+      matmulResult = rewriter.create<AclnnBatchMatmulOp>(loc, resultType, self, other, trans1, trans2);
     } else {
-      matmulResult = rewriter.create<AclnnMatmulOp>(loc, resultType, self, other);
+      matmulResult = rewriter.create<AclnnMatmulOp>(loc, resultType, self, other, trans1, trans2);
     }
 
-    // Check if matmulResult and bias have compatible shapes for Add operation.
     auto matmulResultType = dyn_cast<RankedTensorType>(matmulResult.getType());
     auto biasType = dyn_cast<RankedTensorType>(bias.getType());
     if (!matmulResultType || !biasType) {
       return failure();
     }
 
-    // Reshape bias if shapes are not identical to ensure shape compatibility for broadcasting.
     Value biasForAdd = bias;
     if (matmulResultType.getShape() != biasType.getShape()) {
-      // Reshape bias to be compatible with matmulResult's shape for broadcasting.
       biasForAdd = reshapeBiasForBroadcast(bias, biasType, matmulResultType, rewriter);
     }
 
