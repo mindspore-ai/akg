@@ -2,17 +2,6 @@ import torch
 import triton
 import triton.language as tl
 
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_SIZE_B': 32, 'BLOCK_SIZE_D': 1, 'NUM_CORES': 20}),
-        triton.Config({'BLOCK_SIZE_B': 64, 'BLOCK_SIZE_D': 1, 'NUM_CORES': 20}),
-        triton.Config({'BLOCK_SIZE_B': 128, 'BLOCK_SIZE_D': 1, 'NUM_CORES': 20}),
-        triton.Config({'BLOCK_SIZE_B': 32, 'BLOCK_SIZE_D': 1, 'NUM_CORES': 40}),
-        triton.Config({'BLOCK_SIZE_B': 64, 'BLOCK_SIZE_D': 1, 'NUM_CORES': 40}),
-        triton.Config({'BLOCK_SIZE_B': 128, 'BLOCK_SIZE_D': 1, 'NUM_CORES': 40}),
-    ],
-    key=['B', 'D'],
-)
 @triton.jit
 def aikg_100_HingeLoss_kernel(
     predictions_ptr,
@@ -102,13 +91,13 @@ def aikg_100_HingeLoss_triton_ascend_torch(predictions, targets):
     output = torch.zeros(1, dtype=torch.float32, device=predictions.device)
     
     # 使用lambda函数定义grid，autotune会自动选择最佳配置
-    grid = lambda meta: (meta['NUM_CORES'],)
+    NUM_CORES = 40
+    grid = (NUM_CORES,)
     
-    # 启动内核
     aikg_100_HingeLoss_kernel[grid](
         predictions, targets, output,
-        B, D
-        # BLOCK_SIZE_B, BLOCK_SIZE_D, NUM_CORES 参数由autotune自动传递
+        B, D,
+        BLOCK_SIZE_B=128, BLOCK_SIZE_D=1, NUM_CORES=NUM_CORES,
     )
     
     # 计算平均值

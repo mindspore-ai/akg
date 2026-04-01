@@ -2,15 +2,6 @@ import torch
 import triton
 import triton.language as tl
 
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_SIZE': 16384, 'SUB_BLOCK_SIZE': 1024}),
-        triton.Config({'BLOCK_SIZE': 8192, 'SUB_BLOCK_SIZE': 512}),
-        triton.Config({'BLOCK_SIZE': 4096, 'SUB_BLOCK_SIZE': 256}),
-        triton.Config({'BLOCK_SIZE': 2048, 'SUB_BLOCK_SIZE': 128}),
-    ],
-    key=['total_elements'],
-)
 @triton.jit
 def aikg_94_MSELoss_kernel(
     predictions_ptr,
@@ -86,14 +77,16 @@ def aikg_94_MSELoss_triton_ascend_torch(predictions, targets):
     output = torch.zeros(1, dtype=torch.float32, device=predictions.device)
     
     # 计算网格大小
-    grid = lambda meta: (triton.cdiv(total_elements, meta['BLOCK_SIZE']),)
+    BLOCK_SIZE = 16384
+    SUB_BLOCK_SIZE = 1024
+    grid = (triton.cdiv(total_elements, BLOCK_SIZE),)
     
-    # 启动内核
     aikg_94_MSELoss_kernel[grid](
         predictions,
         targets,
         output,
         total_elements=total_elements,
+        BLOCK_SIZE=BLOCK_SIZE, SUB_BLOCK_SIZE=SUB_BLOCK_SIZE,
     )
     
     # 计算均值: output = output / total_elements
