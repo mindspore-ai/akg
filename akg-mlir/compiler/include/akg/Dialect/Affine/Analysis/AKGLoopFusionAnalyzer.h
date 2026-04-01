@@ -57,15 +57,13 @@ struct BackwardIntersectionResult {
 };
 
 // Structure to store direct predecessor node ID and corresponding memref.
-// isRAR marks edges where both source and target ops are AffineLoadOp (read-read dependency).
-// These edges are lower priority than store-load (producer-consumer) edges during fusion.
 struct DirectPredecessor {
-  DirectPredecessor(unsigned id, Value ref, unsigned depth = 0, bool readAfterRead = false)
-      : nodeId(id), memref(ref), loopDepth(depth), isRAR(readAfterRead) {}
+  DirectPredecessor(unsigned id, Value ref, unsigned depth = 0, DepType type = DepType::OTHER)
+      : nodeId(id), memref(ref), loopDepth(depth), depType(type) {}
   unsigned nodeId;
   Value memref;
   unsigned loopDepth;
-  bool isRAR;
+  DepType depType;
 };
 
 struct FusionAnalyzer {
@@ -90,6 +88,11 @@ struct FusionAnalyzer {
   void initGroups();
   void topoSortInit();
   std::vector<FusionPlan> topoSortFusionPlans(unsigned numNodes);
+  std::vector<FusionPlan> deduplicateAndClassifyEdges();
+  void emitEdgesForNode(const std::vector<FusionPlan> &edges, const std::vector<size_t> &edgeIndices,
+                        std::vector<unsigned> &inDegree, std::vector<FusionPlan> &result,
+                        const std::function<void(unsigned)> &enqueue);
+  bool checkSubviewFusion(unsigned predNodeId, unsigned targetNodeId);
   GroupPtr getFusionTargetGroup();
   bool finishPlan();
 
@@ -98,7 +101,7 @@ struct FusionAnalyzer {
   std::vector<FusionPlan>::iterator findFusionPlanByBand(unsigned fromBandId, unsigned toBandId);
   bool addFusionPlan(const FusionPlan &plan);
   bool updateFusionPlanByGroup(unsigned fromGroupId, unsigned oldToGroupId, unsigned newToGroupId,
-                               unsigned newToNodeId);
+                               unsigned newToBandId);
   bool updateFusionPlanByBand(unsigned oldFromBandId, unsigned oldToBandId, unsigned newFromBandId,
                               unsigned newToBandId);
   bool removeFusionPlanByGroup(unsigned fromGroupId, unsigned toGroupId);
@@ -124,16 +127,17 @@ struct FusionAnalyzer {
 
   // Precomputation
   void precomputeDirectPredecessors();
+  void dumpDirectPredecessors(unsigned nodeId, const std::vector<unsigned> &allPredecessorIds,
+                              const std::unordered_set<size_t> &skipIdx,
+                              const std::vector<DirectPredecessor> &directPreds);
 
   // Collects source groups for fusion with the target group.
   // Prefers store-load (producer-consumer) edges; falls back to load-load edges
   // only when no store-load edges exist for the target group.
-  void collectFusionSourceGroups(const GroupPtr &targetGroup, std::unordered_set<unsigned> &storeLoadGroups,
-                                 std::unordered_set<unsigned> &readAfterReadGroups);
-
-  // Gets dependent operations and memrefs between source and target groups.
-  // Prefers store-load dependencies; falls back to load-load when none exist.
-  DependenceInfo getGroupDependencies(const GroupPtr targetGroup, const GroupPtr sourceGroup);
+  void collectFusionSourceGroups(const GroupPtr &targetGroup, std::unordered_set<unsigned> &warGroupIds,
+                                 std::unordered_set<unsigned> &rarGroupIds);
+  void dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, const char *dependenceType,
+                                   const std::unordered_set<unsigned> &sourceGroups);
 
   // Member Variables
   std::unordered_set<unsigned> finished;
