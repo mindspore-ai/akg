@@ -52,6 +52,7 @@ p = tl.math.exp2(scores)
 - if-else 中负偏移 → tl.maximum(offset, 0)
 - Ascend: 复杂 tl.where → if-else
 - Ascend: while 循环 → for 替代
+- Ascend: range() 的 start/stop 混用运行时变量和 constexpr → 用全 constexpr 的 range + 循环体内运行时 if 跳过
 
 ### While 循环替代（Ascend）
 
