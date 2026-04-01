@@ -1,7 +1,7 @@
 // RUN: mfusion-opt %s -decompose="pattern-type=BEFORE_MANUAL_FUSION" | FileCheck %s
 
 module {
-  // convert-aclnn-matmul-to-matmul: mfuse.aclnn.mm -> mfuse.matmul (trans_x1=false, trans_x2=false)
+  // convert-aclnn-matmul-to-matmul: mfuse.aclnn.mm -> mfuse.matmul (trans flags forwarded)
   // CHECK-LABEL: func @mm_to_matmul_2d
   func.func @mm_to_matmul_2d(%arg0: tensor<2x4xf32>, %arg1: tensor<4x8xf32>) -> tensor<2x8xf32> {
     %0 = mfuse.aclnn.mm %arg0, %arg1 : (tensor<2x4xf32>, tensor<4x8xf32>) -> tensor<2x8xf32>
@@ -9,6 +9,16 @@ module {
     // CHECK-NOT: mfuse.aclnn.mm
     // CHECK: mfuse.matmul
     return %0 : tensor<2x8xf32>
+  }
+  // CHECK: return
+
+  // aclnn.mm with trans_x1/trans_x2 -> mfuse.matmul preserves attrs
+  // CHECK-LABEL: func @mm_to_matmul_2d_trans
+  func.func @mm_to_matmul_2d_trans(%arg0: tensor<8x4xf32>, %arg1: tensor<16x8xf32>) -> tensor<4x16xf32> {
+    %0 = mfuse.aclnn.mm %arg0, %arg1 {trans_x1 = true, trans_x2 = true} : (tensor<8x4xf32>, tensor<16x8xf32>) -> tensor<4x16xf32>
+    // CHECK-NOT: mfuse.aclnn.mm
+    // CHECK: mfuse.matmul{{.*}}trans_x1 = true{{.*}}trans_x2 = true
+    return %0 : tensor<4x16xf32>
   }
   // CHECK: return
 

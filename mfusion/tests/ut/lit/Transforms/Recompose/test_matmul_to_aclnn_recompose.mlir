@@ -48,15 +48,14 @@ module {
     // CHECK: mfuse.aclnn.mm
   }
 
-  // mfuse.matmul 2D with trans -> permute + aclnn.mm
+  // mfuse.matmul 2D with trans -> aclnn.mm (transpose on op attrs; no permute)
   // CHECK-LABEL: func @mm_2d_trans_to_aclnn
   func.func @mm_2d_trans_to_aclnn(%arg0: tensor<8x4xf32>, %arg1: tensor<16x8xf32>) -> tensor<4x16xf32> {
     %0 = mfuse.matmul %arg0, %arg1 {trans_x1 = true, trans_x2 = true} : (tensor<8x4xf32>, tensor<16x8xf32>) -> tensor<4x16xf32>
     return %0 : tensor<4x16xf32>
     // CHECK-NOT: mfuse.matmul
-    // CHECK: mfuse.permute
-    // CHECK: mfuse.permute
-    // CHECK: mfuse.aclnn.mm
+    // CHECK-NOT: mfuse.permute
+    // CHECK: mfuse.aclnn.mm{{.*}}trans_x1 = true{{.*}}trans_x2 = true
   }
 
   // mfuse.matmul_with_bias 2D -> aclnn.mm + aclnn.add (same as matmul_with_bias_2d test)
