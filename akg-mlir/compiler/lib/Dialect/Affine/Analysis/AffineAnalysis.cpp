@@ -59,10 +59,14 @@ using presburger::IntegerRelation;
 using presburger::PresburgerSpace;
 using presburger::VarKind;
 
-Value getSourceMemRef(Value memrefVal) {
+Value getSourceMemRef(Value memrefVal, bool *hasSubView, memref::SubViewOp *firstSubView) {
+  if (hasSubView) *hasSubView = false;
+  if (firstSubView) *firstSubView = memref::SubViewOp();
   Value current = memrefVal;
   while (true) {
     if (auto subview = current.getDefiningOp<memref::SubViewOp>()) {
+      if (hasSubView) *hasSubView = true;
+      if (firstSubView && !*firstSubView) *firstSubView = subview;
       current = subview.getSource();
     } else if (auto reshape = current.getDefiningOp<memref::ReshapeOp>()) {
       current = reshape.getSource();
@@ -538,6 +542,10 @@ DependenceResult checkMemrefAccessDependenceAKG(const AKGMemRefAccess &srcAccess
   // `srcAccess` to the iteration domain of `dstAccess` which access the same
   // memory locations.
   dstRel.inverse();
+  // For 0-d spaces, there will be no IDs. Enable if that's the case.
+  // This ensures Value identifiers survive through mergeAndCompose.
+  if (!dstRel.getSpace().isUsingIds()) dstRel.resetIds();
+  if (!srcRel.getSpace().isUsingIds()) srcRel.resetIds();
   dstRel.mergeAndCompose(srcRel);
   dstRel.convertVarKind(VarKind::Domain, 0, dstRel.getNumDomainVars(), VarKind::Range, 0);
   IntegerPolyhedron dependenceDomain(dstRel);

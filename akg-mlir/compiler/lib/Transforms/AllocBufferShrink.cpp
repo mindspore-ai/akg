@@ -290,8 +290,8 @@ void AllocBufferShrinkPass::rebuildViewChain(memref::AllocOp oldAlloc, memref::A
       }
 
       OpBuilder builder(subviewOp);
-      auto newSubview = builder.create<memref::SubViewOp>(subviewOp.getLoc(), newSource, newOffsets,
-                                                          newSizes, newStrides);
+      auto newSubview =
+        builder.create<memref::SubViewOp>(subviewOp.getLoc(), newSource, newOffsets, newSizes, newStrides);
       replacementMap[subviewOp.getResult()] = newSubview.getResult();
 
     } else if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(op)) {

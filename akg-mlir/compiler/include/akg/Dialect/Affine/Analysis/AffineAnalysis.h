@@ -36,6 +36,7 @@
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Value.h"
 
 namespace mlir {
@@ -62,8 +63,11 @@ bool isLoopMemoryParallelAKG(AffineForOp forOp);
 
 // Helper function to get the source memref from a value that might be a subview
 // or other aliasing operation. This traces back through subview operations
-// to find the underlying memref.
-Value getSourceMemRef(Value memrefVal);
+// to find the underlying memref. If hasSubView is non-null, sets it to true
+// when the chain passes through a SubViewOp. If firstSubView is non-null,
+// stores the first SubViewOp encountered during the chain traversal.
+Value getSourceMemRef(Value memrefVal, bool *hasSubView = nullptr,
+                      memref::SubViewOp *firstSubView = nullptr);
 
 /// Encapsulates a memref load or store access information.
 struct AKGMemRefAccess {

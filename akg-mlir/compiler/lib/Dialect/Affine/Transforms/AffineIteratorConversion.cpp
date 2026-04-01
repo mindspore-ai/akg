@@ -198,9 +198,17 @@ static void eraseInitStore(affine::AffineStoreOp initStore) {
     return;
   }
   auto ifOp = dyn_cast<affine::AffineIfOp>(initStore->getParentOp());
+  // Save the defining op of the stored value before erasing the store,
+  // so we can clean up dead intermediate loads from the init chain
+  // (e.g. store 0->A, load A->%0, store %0->B: after erasing the B store,
+  //  the load becomes dead and should also be removed).
+  auto *defOp = initStore.getValue().getDefiningOp();
   initStore.erase();
   if (ifOp) {
     ifOp.erase();
+  }
+  if (defOp && isa<affine::AffineLoadOp>(defOp) && defOp->use_empty()) {
+    defOp->erase();
   }
 }
 

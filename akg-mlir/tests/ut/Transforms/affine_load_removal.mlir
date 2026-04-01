@@ -87,52 +87,51 @@ func.func @reduction_y(%arg0: memref<5128x12288xf32, {SymShapeAttr = ["s0", "s1"
 // CHECK-NEXT:     %expand_shape_12 = memref.expand_shape %alloc {{\[\[0, 1\]\]}} output_shape [14646, 1] : memref<14646xf32, {SymShapeAttr = ["s0"]}> into memref<14646x1xf32, {SymShapeAttr = ["s0"]}>
 // CHECK-NEXT:     %memspacecast_13 = memref.memory_space_cast %expand_shape_12 : memref<14646x1xf32, {SymShapeAttr = ["s0"]}> to memref<14646x1xf32, {SymShapeAttr = ["s0", "1"]}>
 // CHECK-NEXT:     affine.for %arg2 = 0 to 14646 {
-// CHECK-NEXT:       %0 = affine.load %alloc[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
-// CHECK-NEXT:       %1 = affine.for %arg3 = 0 to 64 iter_args(%arg4 = %cst) -> (f32) {
+// CHECK-NEXT:       %0 = affine.for %arg3 = 0 to 64 iter_args(%arg4 = %cst) -> (f32) {
+// CHECK-NEXT:         %9 = affine.load %arg0[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
+// CHECK-NEXT:         %10 = arith.addf %9, %arg4 {reduction_axes = [1 : index], reduction_type = "x"} : f32
+// CHECK-NEXT:         affine.yield %10 : f32
+// CHECK-NEXT:       } {reduction}
+// CHECK-NEXT:       affine.store %0, %alloc_4[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
+// CHECK-NEXT:       %1 = affine.load %alloc_4[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
+// CHECK-NEXT:       %2 = arith.divf %1, %cst_2 : f32
+// CHECK-NEXT:       affine.store %2, %alloc_5[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
+// CHECK-NEXT:       %3 = affine.for %arg3 = 0 to 64 iter_args(%arg4 = %cst) -> (f32) {
+// CHECK-NEXT:         %9 = affine.load %alloc_5[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
 // CHECK-NEXT:         %10 = affine.load %arg0[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
-// CHECK-NEXT:         %11 = arith.addf %10, %arg4 {reduction_axes = [1 : index], reduction_type = "x"} : f32
-// CHECK-NEXT:         affine.yield %11 : f32
+// CHECK-NEXT:         %11 = arith.subf %10, %9 : f32
+// CHECK-NEXT:         %12 = math.powf %11, %cst_3 : f32
+// CHECK-NEXT:         %13 = arith.addf %12, %arg4 {reduction_axes = [1 : index], reduction_type = "x"} : f32
+// CHECK-NEXT:         affine.yield %13 : f32
 // CHECK-NEXT:       } {reduction}
-// CHECK-NEXT:       affine.store %1, %alloc_4[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
-// CHECK-NEXT:       %2 = affine.load %alloc_4[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
-// CHECK-NEXT:       %3 = arith.divf %2, %cst_2 : f32
-// CHECK-NEXT:       affine.store %3, %alloc_5[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
-// CHECK-NEXT:       %4 = affine.for %arg3 = 0 to 64 iter_args(%arg4 = %cst) -> (f32) {
-// CHECK-NEXT:         %10 = affine.load %alloc_5[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
-// CHECK-NEXT:         %11 = affine.load %arg0[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
-// CHECK-NEXT:         %12 = arith.subf %11, %10 : f32
-// CHECK-NEXT:         %13 = math.powf %12, %cst_3 : f32
-// CHECK-NEXT:         %14 = arith.addf %13, %arg4 {reduction_axes = [1 : index], reduction_type = "x"} : f32
-// CHECK-NEXT:         affine.yield %14 : f32
-// CHECK-NEXT:       } {reduction}
-// CHECK-NEXT:       affine.store %4, %alloc[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
-// CHECK-NEXT:       %5 = affine.load %alloc[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
-// CHECK-NEXT:       %6 = arith.divf %5, %cst_2 : f32
-// CHECK-NEXT:       %7 = arith.truncf %cst_1 : f64 to f32
-// CHECK-NEXT:       %8 = arith.addf %6, %7 : f32
-// CHECK-NEXT:       %9 = math.rsqrt %8 : f32
+// CHECK-NEXT:       affine.store %3, %alloc[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
+// CHECK-NEXT:       %4 = affine.load %alloc[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
+// CHECK-NEXT:       %5 = arith.divf %4, %cst_2 : f32
+// CHECK-NEXT:       %6 = arith.truncf %cst_1 : f64 to f32
+// CHECK-NEXT:       %7 = arith.addf %5, %6 : f32
+// CHECK-NEXT:       %8 = math.rsqrt %7 : f32
 // CHECK-NEXT:       affine.for %arg3 = 0 to 64 {
-// CHECK-NEXT:         %10 = affine.load %arg0[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
-// CHECK-NEXT:         %11 = affine.load %alloc_5[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
-// CHECK-NEXT:         %12 = arith.subf %10, %11 : f32
-// CHECK-NEXT:         %13 = arith.mulf %12, %9 : f32
-// CHECK-NEXT:         affine.store %13, %alloc_7[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
+// CHECK-NEXT:         %9 = affine.load %arg0[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
+// CHECK-NEXT:         %10 = affine.load %alloc_5[%arg2] : memref<14646xf32, {SymShapeAttr = ["s0"]}>
+// CHECK-NEXT:         %11 = arith.subf %9, %10 : f32
+// CHECK-NEXT:         %12 = arith.mulf %11, %8 : f32
+// CHECK-NEXT:         affine.store %12, %alloc_7[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
 // CHECK-NEXT:       }
 // CHECK-NEXT:       affine.for %arg3 = 0 to 256 {
-// CHECK-NEXT:         %10 = affine.load %arg1[%arg2, %arg3] : memref<14646x256xf32, {SymShapeAttr = ["s0", "s3"]}>
-// CHECK-NEXT:         %11 = arith.negf %10 : f32
-// CHECK-NEXT:         %12 = math.exp %11 : f32
-// CHECK-NEXT:         %13 = arith.addf %12, %cst_0 : f32
-// CHECK-NEXT:         %14 = arith.divf %cst_0, %13 : f32
-// CHECK-NEXT:         %15 = affine.load %arg1[%arg2, %arg3] : memref<14646x256xf32, {SymShapeAttr = ["s0", "s3"]}>
-// CHECK-NEXT:         %16 = arith.mulf %15, %14 : f32
-// CHECK-NEXT:         affine.store %16, %alloc_6[%arg2, %arg3] : memref<14646x256xf32, {SymShapeAttr = ["s0", "s3"]}>
+// CHECK-NEXT:         %9 = affine.load %arg1[%arg2, %arg3] : memref<14646x256xf32, {SymShapeAttr = ["s0", "s3"]}>
+// CHECK-NEXT:         %10 = arith.negf %9 : f32
+// CHECK-NEXT:         %11 = math.exp %10 : f32
+// CHECK-NEXT:         %12 = arith.addf %11, %cst_0 : f32
+// CHECK-NEXT:         %13 = arith.divf %cst_0, %12 : f32
+// CHECK-NEXT:         %14 = affine.load %arg1[%arg2, %arg3] : memref<14646x256xf32, {SymShapeAttr = ["s0", "s3"]}>
+// CHECK-NEXT:         %15 = arith.mulf %14, %13 : f32
+// CHECK-NEXT:         affine.store %15, %alloc_6[%arg2, %arg3] : memref<14646x256xf32, {SymShapeAttr = ["s0", "s3"]}>
 // CHECK-NEXT:       }
 // CHECK-NEXT:       affine.for %arg3 = 0 to 64 {
-// CHECK-NEXT:         %10 = affine.load %memspacecast[%arg2, %arg3] : memref<14646x64xf32, strided<[256, 1]>, {SymShapeAttr = ["s0", "s1"]}>
-// CHECK-NEXT:         %11 = affine.load %alloc_7[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
-// CHECK-NEXT:         %12 = arith.mulf %10, %11 : f32
-// CHECK-NEXT:         affine.store %12, %alloc_8[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
+// CHECK-NEXT:         %9 = affine.load %memspacecast[%arg2, %arg3] : memref<14646x64xf32, strided<[256, 1]>, {SymShapeAttr = ["s0", "s1"]}>
+// CHECK-NEXT:         %10 = affine.load %alloc_7[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
+// CHECK-NEXT:         %11 = arith.mulf %9, %10 : f32
+// CHECK-NEXT:         affine.store %11, %alloc_8[%arg2, %arg3] : memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
 // CHECK-NEXT:       }
 // CHECK-NEXT:     }
 // CHECK-NEXT:     return %memspacecast_9, %memspacecast_11, %memspacecast_13, %alloc_8 : memref<14646x1xf32, {SymShapeAttr = ["s0", "1"]}>, memref<14646x1xf32, {SymShapeAttr = ["s0", "1"]}>, memref<14646x1xf32, {SymShapeAttr = ["s0", "1"]}>, memref<14646x64xf32, {SymShapeAttr = ["s0", "s1"]}>
