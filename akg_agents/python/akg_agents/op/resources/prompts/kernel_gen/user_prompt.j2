@@ -128,6 +128,8 @@
 
 {{ task_desc }}
 
+**⚠️ 重要**：验证框架通过 `ModelNew(*get_init_inputs())` 实例化、`model(*get_inputs())` 调用，因此 `__init__` 和 `forward` 的参数必须与上述函数返回值一一对应。
+
 ---
 {%- if user_requirements and not previous_code %}
 {# 首次生成但有额外需求 #}
@@ -398,6 +400,8 @@ def construct(self, input_tensor, ...):
   ...
 {% endif %}
 ```
+- **`__init__` 的参数必须与 `get_init_inputs()` 返回值一一对应**。如果返回空列表则 `__init__(self)` 无额外参数；如果返回 `[num_features, num_groups]`，则必须写 `__init__(self, num_features, num_groups)`。
+- **`forward` 的参数必须与 `get_inputs()` 返回值一一对应**。
 
 {% if "triton_cuda" in dsl or "triton_ascend" in dsl %}
 5. 卷积类算子生成注意事项：
