@@ -470,6 +470,7 @@ class Coder(AgentBase):
                 "enable_hint_mode": enable_hint_mode,  # Hint模式
                 "has_param_space": has_param_space,  # 是否有参数空间
                 "user_requirements": task_info.get('user_requirements', ''),  # 用户额外需求（来自 ReAct）
+                "bench_type": task_info.get('bench_type', 'kernelbench'),
             }
 
             # 执行LLM生成前更新context，确保正确性
