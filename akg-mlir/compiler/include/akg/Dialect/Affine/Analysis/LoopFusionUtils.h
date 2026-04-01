@@ -33,12 +33,24 @@ namespace akg {
 
 enum LoopTransform { Merge, Replicate, ReplicateIf, Permute, StripMine, Collapse, BackTracking };
 
-struct DependenceInfo {
-  llvm::SmallVector<Operation *, 4> sourceOps;
-  llvm::SmallVector<Operation *, 4> targetOps;
-  llvm::DenseSet<Value> memrefs;
-  unsigned loopDepth = UINT_MAX;
-};
+// Dependency type between two memory access operations.
+// RAW: Read-After-Write (producer-consumer, store -> load on same memref)
+// WAR: Write-After-Read (anti-dependence, load -> store on same memref)
+// WAW: Write-After-Write (output dependence, store -> store on same memref)
+// RAR: Read-After-Read (load -> load on same memref, no true data dependence)
+// OTHER: Unclassified or non-memory dependency
+enum class DepType { RAW, WAR, WAW, RAR, OTHER };
+
+inline const char *depTypeToString(DepType type) {
+  switch (type) {
+    case DepType::RAW: return "RAW";
+    case DepType::WAR: return "WAR";
+    case DepType::WAW: return "WAW";
+    case DepType::RAR: return "RAR";
+    case DepType::OTHER: return "OTHER";
+  }
+  return "UNKNOWN";
+}
 
 struct Group {
  public:
@@ -70,16 +82,25 @@ struct FuseEdge {
   unsigned to;
 };
 
+struct DependenceInfo {
+  unsigned predNodeId{UINT_MAX};
+  unsigned targetNodeId{UINT_MAX};
+  DepType depType{DepType::OTHER};
+  Value memref;
+  unsigned loopDepth{UINT_MAX};
+};
+
 struct FusionPlan {
   FuseEdge fusedGroup{FuseEdge(0, 0)};
   FuseEdge fusedBand{FuseEdge(0, 0)};
-  std::string fusionType{"H"};
+
   DependenceInfo depInfo;
+  std::string fusionType{"H"};
   LoopTransform loopTransform{LoopTransform::Merge};
+  bool isSubviewFusion{false};
 };
 
 }  // namespace akg
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_LOOPFUSIONUTILS_H_
-

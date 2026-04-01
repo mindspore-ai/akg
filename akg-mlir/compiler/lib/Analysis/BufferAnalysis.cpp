@@ -21,6 +21,7 @@
 #include <optional>
 #include <set>
 #include <type_traits>
+#include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -47,27 +48,6 @@ static std::optional<int64_t> getStaticTotalSize(ArrayRef<int64_t> shapes) {
     totalSize *= dim;
   }
   return totalSize;
-}
-
-/// Trace back to the original memref from aliasing operations.
-static Value tracebackMemRef(Value memrefVal) {
-  Value current = memrefVal;
-  while (true) {
-    if (auto subview = current.getDefiningOp<memref::SubViewOp>()) {
-      current = subview.getSource();
-    } else if (auto reshape = current.getDefiningOp<memref::ReshapeOp>()) {
-      current = reshape.getSource();
-    } else if (auto expand = current.getDefiningOp<memref::ExpandShapeOp>()) {
-      current = expand.getSrc();
-    } else if (auto collapse = current.getDefiningOp<memref::CollapseShapeOp>()) {
-      current = collapse.getSrc();
-    } else if (auto cast = current.getDefiningOp<memref::ReinterpretCastOp>()) {
-      current = cast.getSource();
-    } else {
-      break;
-    }
-  }
-  return current;
 }
 
 /// Check if an operation defines an alloc-like operation.
@@ -164,7 +144,7 @@ void BufferAnalysis::UpdateOpBufferInfo(Operation *op, const ValueRange &results
 
     if (auto memRefType = dyn_cast<MemRefType>(opType)) {
       // Handle MemRef type
-      Value traceValue = tracebackMemRef(operand);
+      Value traceValue = affine::getSourceMemRef(operand);
       auto tracedMemRefType = cast<MemRefType>(traceValue.getType());
       elementType = tracedMemRefType.getElementType();
       std::optional<int64_t> totalStaticSize = getStaticTotalSize(tracedMemRefType.getShape());
@@ -238,11 +218,8 @@ SetVector<Value> BufferAnalysis::GetAliasBuffers(Value aliasBuffer) {
 
 void BufferAnalysis::MaterializeScalarResults(OpInfo *opInfo, const ValueRange &results) {
   SmallVector<Value> scalarResults;
-  for (Value result : results) {
-    if (isScalarTrackedValue(result)) {
-      scalarResults.push_back(result);
-    }
-  }
+  std::copy_if(results.begin(), results.end(), std::back_inserter(scalarResults),
+               [this](Value result) { return isScalarTrackedValue(result); });
   if (scalarResults.empty()) {
     return;
   }
@@ -583,13 +560,7 @@ void BufferAnalysis::RecursionIR(Region *region, Liveness live) {
     } else if (isa<memref::AllocOp, memref::AllocaOp>(op)) {
       // Handle memref alloc
       UpdateOpBufferInfo(op, op->getResults());
-    } else if (auto affineLoadOp = dyn_cast<mlir::affine::AffineLoadOp>(op)) {
-      // AffineLoad produces a scalar result, register it as buffer
-      UpdateOpBufferInfo(op, op->getResults());
-      UpdateOpGenInfo(curOpInfo, op->getResults());
-      OpKillHandle(curOpInfo, live, op->getBlock());
-    } else if (auto memrefLoadOp = dyn_cast<memref::LoadOp>(op)) {
-      // memref.load produces a scalar result, register it as buffer (corresponding to affine.load)
+    } else if (isa<mlir::affine::AffineLoadOp, memref::LoadOp>(op)) {
       UpdateOpBufferInfo(op, op->getResults());
       UpdateOpGenInfo(curOpInfo, op->getResults());
       OpKillHandle(curOpInfo, live, op->getBlock());
@@ -603,18 +574,14 @@ void BufferAnalysis::RecursionIR(Region *region, Liveness live) {
       UpdateOpGenInfo(curOpInfo, selectOp->getResults());
       OpKillHandle(curOpInfo, live, op->getBlock());
     } else if (op->getNumResults() > 0) {
-      // Handle all other operations that produce results (arith ops, etc.)
-      bool hasScalarOrMemRefResult = false;
-      for (Value result : op->getResults()) {
+      auto results = op->getResults();
+      bool hasScalarOrMemRefResult = std::any_of(results.begin(), results.end(), [](Value result) {
         Type resultType = result.getType();
-        if (resultType.isIntOrFloat() || isa<MemRefType>(resultType)) {
-          hasScalarOrMemRefResult = true;
-          break;
-        }
-      }
+        return resultType.isIntOrFloat() || isa<MemRefType>(resultType);
+      });
       if (hasScalarOrMemRefResult) {
-        UpdateOpBufferInfo(op, op->getResults());
-        UpdateOpGenInfo(curOpInfo, op->getResults());
+        UpdateOpBufferInfo(op, results);
+        UpdateOpGenInfo(curOpInfo, results);
         OpKillHandle(curOpInfo, live, op->getBlock());
       }
     }
