@@ -57,8 +57,7 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
   int getMemrefSourceOfNode(unsigned id);
 
   // Dependency analysis
-  bool isDependencyInGraph(unsigned fromGroupId, unsigned toGroupId);
-  std::vector<unsigned> getDependentGroups(unsigned groupId);
+  std::unordered_set<unsigned> getDependentGroups(unsigned groupId);
 
   // Precomputation for dependency analysis
   void precomputeDependentGroups();
@@ -72,16 +71,20 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
   unsigned nextGroupId = 0;
 
   // Cache for dependent groups (precomputed once, used many times)
-  std::unordered_map<unsigned, std::vector<unsigned>> dependentGroupsCache;
+  std::unordered_map<unsigned, std::unordered_set<unsigned>> dependentGroupsCache;
 
   OperatorTemplate funcOperatorType = OperatorTemplate::Default;
 
  private:
+  bool areNonOverlappingSubviewStores(unsigned nodeIdA, unsigned nodeIdB);
   void collectLoadNodeIdsAndNonForNodes(Value memref, const llvm::SetVector<unsigned> &nodeIds,
                                         llvm::SmallVector<unsigned> &loadNodeIds,
-                                        llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore);
+                                        llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore,
+                                        llvm::SmallVector<std::pair<unsigned, bool>, 8> &forNodesWithStore);
   void addAliasedStoreEdges(Value memref, const llvm::SetVector<unsigned> &nodeIds,
-                            const llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore);
+                            const llvm::SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore,
+                            const llvm::SmallVector<std::pair<unsigned, bool>, 8> &forNodesWithStore,
+                            bool hasLoadsForBaseMemref);
   void addMultipleLoadEdges(Value memref, const llvm::SetVector<unsigned> &nodeIds,
                             llvm::SmallVector<unsigned> &loadNodeIds);
 };
@@ -98,6 +101,15 @@ struct FusionLoopNestInfo {
   void collect(affine::AffineForOp rootOp);
 };
 
+// Describes loop bounds mismatch caused by subview partial coverage.
+struct SubviewBoundsMismatch {
+  unsigned mismatchDim;  // first loop level with mismatched bounds
+  int64_t largerUB;      // upper bound of the larger loop
+  int64_t smallerUB;     // upper bound of the smaller loop
+  int64_t commonLB;      // common lower bound
+  bool srcIsLarger;      // true when src loop has larger iteration range
+};
+
 struct FusionCodeGenHelper {
  public:
   explicit FusionCodeGenHelper(MemRefDependenceGraphForFusion &mdg) : mdg(mdg) {}
@@ -110,7 +122,8 @@ struct FusionCodeGenHelper {
                affine::AffineForOp dstAffineForOp, const FusionPlan &plan);
   void doHFuse(unsigned srcGroupId, unsigned dstGroupId, affine::AffineForOp srcAffineForOp,
                affine::AffineForOp dstAffineForOp, const FusionPlan &plan);
-  void doIFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
+  void doIFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo,
+               const FusionPlan &plan);
 
  private:
   // Finds the maximum legal fusion depth for fusing src loop nest into dst loop nest.
@@ -121,6 +134,11 @@ struct FusionCodeGenHelper {
 
   void buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> loadAndStoreOpsA,
                          llvm::SmallVector<Operation *, 4> &strategyOpsA);
+
+  // Attempts subview-aware fusion when loop bounds differ due to subview partial coverage.
+  // Returns true if subview fusion was performed, false otherwise.
+  bool trySubviewFusion(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo,
+                        FusionLoopNestInfo &dstInfo);
 
   // Records alias, erases the fused-away loop, and updates plan.depInfo (refreshes
   // alias target node's loads/stores and replaces erased node refs in depInfo).

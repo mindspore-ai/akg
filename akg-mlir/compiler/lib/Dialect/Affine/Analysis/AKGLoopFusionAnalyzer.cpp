@@ -24,6 +24,7 @@
 #include <set>
 #include <utility>
 
+#include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "akg/Dialect/Affine/Analysis/AKGLoopFusionBuilder.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 #include "llvm/ADT/DenseMap.h"
@@ -51,6 +52,18 @@
 
 namespace mlir {
 namespace akg {
+
+static DepType classifyDepType(const Node *predNode, const Node *targetNode) {
+  bool predIsStore = predNode != nullptr && isa<affine::AffineWriteOpInterface>(predNode->op);
+  bool predIsLoad = predNode != nullptr && isa<affine::AffineReadOpInterface>(predNode->op);
+  bool targetIsStore = targetNode != nullptr && isa<affine::AffineWriteOpInterface>(targetNode->op);
+  bool targetIsLoad = targetNode != nullptr && isa<affine::AffineReadOpInterface>(targetNode->op);
+  if (predIsStore && targetIsLoad) return DepType::WAR;
+  if (predIsLoad && targetIsStore) return DepType::RAW;
+  if (predIsStore && targetIsStore) return DepType::WAW;
+  if (predIsLoad && targetIsLoad) return DepType::RAR;
+  return DepType::OTHER;
+}
 
 // Comparison function for sorting groups in topological order.
 // For global output groups, prioritizes by group template type, otherwise sorts by group ID.
@@ -82,66 +95,116 @@ void FusionAnalyzer::topoSortInit() {
   }
 }
 
-// Topological sort function for fusion plans
-// Returns a sorted list of fusion plans based on their dependencies
-// Example: Given fusion plans with dependencies: A->B, B->D, A->C, C->D
-// Input: fusionPlans=[(A,B), (B,D), (A,C), (C,D)], numNodes=4
-// Process: Start with nodes having no incoming edges (A), then B,C, finally D
-// Output: [(A,B), (A,C), (B,D), (C,D)] in topological order
-std::vector<FusionPlan> FusionAnalyzer::topoSortFusionPlans(unsigned numNodes) {
-  // Remove duplicate edges based on fusedBand.from and fusedBand.to
+// Deduplicates fusion plans by (fusedBand.from, fusedBand.to), removes self-loops,
+// and calls setFusionPlanOptions on each unique edge.
+std::vector<FusionPlan> FusionAnalyzer::deduplicateAndClassifyEdges() {
   std::set<std::pair<unsigned, unsigned>> seenEdges;
-  std::vector<FusionPlan> uniqueDependencies;
+  std::vector<FusionPlan> edges;
   for (const auto &plan : fusionPlans) {
     if (plan.fusedBand.from == plan.fusedBand.to) {
-      continue;  // Skip self-loops
+      continue;
     }
-    auto edgeKey = std::make_pair(plan.fusedBand.from, plan.fusedBand.to);
-    if (seenEdges.insert(edgeKey).second) {
-      uniqueDependencies.push_back(plan);
-    }
-  }
-
-  std::vector<unsigned> inDegree(numNodes + 1, 0);
-
-  // Calculate in-degree for each node by counting incoming edges
-  for (const auto &edge : uniqueDependencies) {
-    unsigned to = edge.fusedBand.to;
-    inDegree[to]++;
-  }
-
-  // Nodes with zero in-degree are generally output nodes
-  std::queue<unsigned> zeroInDegreeNodes;
-  std::vector<FusionPlan> sortedEdges;
-
-  // Find all nodes with zero in-degree and add them to the queue
-  for (unsigned i = 0; i < numNodes; i++) {
-    if (inDegree[i] == 0) {
-      zeroInDegreeNodes.push(i);
+    if (seenEdges.emplace(plan.fusedBand.from, plan.fusedBand.to).second) {
+      edges.push_back(plan);
     }
   }
+  for (auto &edge : edges) {
+    setFusionPlanOptions(edge);
+  }
+  return edges;
+}
 
-  // Process nodes in topological order
-  while (!zeroInDegreeNodes.empty()) {
-    // Get the next node with zero in-degree
-    unsigned node = zeroInDegreeNodes.front();
-    zeroInDegreeNodes.pop();
+// Emits outgoing edges for a single node during Kahn's traversal.
+// Non-subview edges are emitted before subview edges; within each category,
+// edges are sorted by descending (fusedBand.to, fusedBand.from).
+void FusionAnalyzer::emitEdgesForNode(const std::vector<FusionPlan> &edges, const std::vector<size_t> &edgeIndices,
+                                      std::vector<unsigned> &inDegree, std::vector<FusionPlan> &result,
+                                      const std::function<void(unsigned)> &enqueue) {
+  auto edgeCmpDesc = [](const FusionPlan &a, const FusionPlan &b) {
+    if (a.fusedBand.to != b.fusedBand.to) return a.fusedBand.to > b.fusedBand.to;
+    return a.fusedBand.from > b.fusedBand.from;
+  };
 
-    // Process all outgoing edges from this node
-    for (auto &edge : uniqueDependencies) {
-      if (edge.fusedBand.from == node) {
-        setFusionPlanOptions(edge);
-        sortedEdges.push_back(edge);
-        unsigned to = edge.fusedBand.to;
-        inDegree[to]--;
+  std::vector<FusionPlan> nonSubviewEdges, subviewEdges;
+  for (size_t idx : edgeIndices) {
+    (edges[idx].isSubviewFusion ? subviewEdges : nonSubviewEdges).push_back(edges[idx]);
+  }
+  std::sort(nonSubviewEdges.begin(), nonSubviewEdges.end(), edgeCmpDesc);
+  std::sort(subviewEdges.begin(), subviewEdges.end(), edgeCmpDesc);
 
-        if (inDegree[to] == 0) {
-          zeroInDegreeNodes.push(to);
-        }
+  for (auto *group : {&nonSubviewEdges, &subviewEdges}) {
+    for (auto &edge : *group) {
+      result.push_back(edge);
+      if (--inDegree[edge.fusedBand.to] == 0) {
+        enqueue(edge.fusedBand.to);
       }
     }
   }
-  return sortedEdges;
+}
+
+// Topological sort for fusion plans (Kahn's algorithm with priority scheduling).
+//
+// Sorting rules (in descending priority):
+//   1. Topological order: a node's outgoing edges are emitted only after all its
+//      incoming edges have been emitted (standard Kahn invariant).
+//   2. Node scheduling priority: among zero-in-degree nodes, nodes that have at
+//      least one non-subview outgoing edge (normalQueue) are scheduled before
+//      nodes whose outgoing edges are ALL subview fusions (subviewQueue).
+//      Within each queue, larger band IDs are scheduled first (max-heap).
+//   3. Edge emission order per node: for each scheduled node, non-subview edges
+//      are emitted before subview edges. Within each category, edges are sorted
+//      by descending fusedBand.to (ties broken by descending fusedBand.from).
+std::vector<FusionPlan> FusionAnalyzer::topoSortFusionPlans(unsigned numNodes) {
+  std::vector<FusionPlan> edges = deduplicateAndClassifyEdges();
+
+  // Identify nodes that have at least one non-subview outgoing edge.
+  std::unordered_set<unsigned> normalNodes;
+  for (const auto &edge : edges) {
+    if (!edge.isSubviewFusion) {
+      normalNodes.insert(edge.fusedBand.from);
+    }
+  }
+
+  // Build adjacency list and compute in-degrees.
+  std::unordered_map<unsigned, std::vector<size_t>> adjacency;
+  std::vector<unsigned> inDegree(numNodes + 1, 0);
+  for (size_t i = 0; i < edges.size(); ++i) {
+    adjacency[edges[i].fusedBand.from].push_back(i);
+    inDegree[edges[i].fusedBand.to]++;
+  }
+
+  // Two max-heaps: normalQueue (nodes with non-subview out-edges, higher priority)
+  // and subviewQueue (subview-only nodes, lower priority).
+  std::priority_queue<unsigned> normalQueue, subviewQueue;
+  auto enqueue = [&](unsigned nodeId) {
+    if (normalNodes.count(nodeId)) {
+      normalQueue.push(nodeId);
+    } else {
+      subviewQueue.push(nodeId);
+    }
+  };
+
+  for (unsigned i = 0; i < numNodes; ++i) {
+    if (inDegree[i] == 0) {
+      enqueue(i);
+    }
+  }
+
+  // Kahn's loop — schedule zero-in-degree nodes and emit their outgoing edges.
+  std::vector<FusionPlan> result;
+  result.reserve(edges.size());
+
+  while (!normalQueue.empty() || !subviewQueue.empty()) {
+    unsigned node = !normalQueue.empty() ? normalQueue.top() : subviewQueue.top();
+    (!normalQueue.empty() ? normalQueue : subviewQueue).pop();
+
+    auto adjIt = adjacency.find(node);
+    if (adjIt == adjacency.end()) continue;
+
+    emitEdgesForNode(edges, adjIt->second, inDegree, result, enqueue);
+  }
+
+  return result;
 }
 
 // Gets the next target group for fusion.
@@ -178,7 +241,7 @@ bool FusionAnalyzer::addFusionPlan(const FusionPlan &plan) {
 }
 
 bool FusionAnalyzer::updateFusionPlanByGroup(unsigned fromGroupId, unsigned oldToGroupId, unsigned newToGroupId,
-                                             unsigned newToNodeId) {
+                                             unsigned newToBandId) {
   // Check if the new plan would create a duplicate
   if (findFusionPlanByGroup(fromGroupId, newToGroupId) != fusionPlans.end()) {
     return false;
@@ -192,7 +255,7 @@ bool FusionAnalyzer::updateFusionPlanByGroup(unsigned fromGroupId, unsigned oldT
 
   // Update the plan
   it->fusedGroup.to = newToGroupId;
-  it->fusedBand.to = newToNodeId;
+  it->fusedBand.to = newToBandId;
   return true;
 }
 
@@ -355,6 +418,35 @@ bool FusionAnalyzer::hasEdgeInFusionPlans(unsigned depGroupId, unsigned fromGrou
   return reachable.find(fromGroupId) != reachable.end();
 }
 
+// Checks whether a fusion plan represents a subview fusion.
+bool FusionAnalyzer::checkSubviewFusion(unsigned predNodeId, unsigned targetNodeId) {
+  if (predNodeId == UINT_MAX || targetNodeId == UINT_MAX) return false;
+  Node *predNode = depGraph.getNode(predNodeId);
+  Node *tgtNode = depGraph.getNode(targetNodeId);
+  if (!predNode || !tgtNode) return false;
+
+  auto getMemrefBase = [](Operation *op) -> std::pair<Value, bool> {
+    Value memref;
+    bool hasSubView = false;
+    if (auto readOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
+      memref = readOp.getMemRef();
+    } else if (auto writeOp = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+      memref = writeOp.getMemRef();
+    } else {
+      return {memref, hasSubView};
+    }
+
+    Value base = affine::getSourceMemRef(memref, &hasSubView);
+    return {base, hasSubView};
+  };
+
+  auto [predBase, predSV] = getMemrefBase(predNode->op);
+  auto [tgtBase, tgtSV] = getMemrefBase(tgtNode->op);
+  if (!predBase || !tgtBase) return false;
+
+  return predBase == tgtBase && (predSV || tgtSV);
+}
+
 // Determines fusion type: if the nodes that to depends on exist in fusionPlans and have edges (forward) to from,
 // or if from itself is a node that to directly or indirectly depends on (in the dependency graph),
 // then the type is H (provided the dependent node is not load), otherwise it is V
@@ -374,34 +466,32 @@ void FusionAnalyzer::setFusionPlanOptions(FusionPlan &plan) {
 
   unsigned fromGroupId = plan.fusedGroup.from;
   unsigned toGroupId = plan.fusedGroup.to;
-  auto fromGroup = depGraph.getGroup(fromGroupId);
-  auto toGroup = depGraph.getGroup(toGroupId);
 
-  // 1. If from itself is a node that to directly or indirectly depends on (in the dependency graph), return H
-  if (depGraph.isDependencyInGraph(fromGroupId, toGroupId)) {
-    plan.depInfo = getGroupDependencies(toGroup, fromGroup);
+  auto cacheKey = std::make_pair(fromGroupId, toGroupId);
+  auto cacheIt = groupDependenciesCache.find(cacheKey);
+  if (cacheIt != groupDependenciesCache.end()) {
+    plan.depInfo = cacheIt->second;
+  }
+  plan.isSubviewFusion = checkSubviewFusion(plan.depInfo.predNodeId, plan.depInfo.targetNodeId);
+  plan.fusionType = "V";
+
+  auto toDepGroups = depGraph.getDependentGroups(toGroupId);
+  if (toDepGroups.count(fromGroupId)) {
     plan.fusionType = "H";
     return;
   }
 
-  std::vector<unsigned> toDepGroups = depGraph.getDependentGroups(toGroupId);
-  // 2. Check if each node that to depends on exists in fusionPlans and has an edge (forward) to from
-  // If all dependent nodes satisfy the condition, return H, otherwise return V
-  if (!toDepGroups.empty()) {
-    for (auto depGroupId : toDepGroups) {
-      // Skip from itself
-      if (depGroupId == fromGroupId) continue;
-
-      if (hasEdgeInFusionPlans(depGroupId, fromGroupId)) {
-        plan.depInfo = getGroupDependencies(toGroup, fromGroup);
-        plan.fusionType = "H";
-        return;
+  for (auto depGroupId : toDepGroups) {
+    if (hasEdgeInFusionPlans(depGroupId, fromGroupId)) {
+      auto depCacheKey = std::make_pair(depGroupId, toGroupId);
+      auto depCacheIt = groupDependenciesCache.find(depCacheKey);
+      if (depCacheIt != groupDependenciesCache.end()) {
+        plan.depInfo = depCacheIt->second;
       }
+      plan.fusionType = "H";
+      return;
     }
   }
-
-  plan.depInfo = getGroupDependencies(toGroup, fromGroup);
-  plan.fusionType = "V";
 }
 
 std::pair<GroupPtr, GroupPtr> FusionAnalyzer::determineFusionOrder(const GroupPtr oldGroup, const GroupPtr newGroup) {
@@ -432,6 +522,9 @@ std::pair<GroupPtr, GroupPtr> FusionAnalyzer::determineFusionOrder(const GroupPt
   }
 
   // Default: Avoid fusing child nodes into parent nodes
+  if (oldGroup->groupId < newGroup->groupId) {
+    return std::make_pair(oldGroup, newGroup);
+  }
   return std::make_pair(newGroup, oldGroup);
 }
 
@@ -441,7 +534,7 @@ void FusionAnalyzer::redirectFusionPlanToTarget(unsigned intersectionId,
                                                 const std::unordered_map<unsigned, unsigned> &reachable,
                                                 unsigned pathLen, GroupPtr targetGroup) {
   auto targetGroupId = targetGroup->groupId;
-  auto targetNodeId = targetGroup->rootId;
+  auto targetBandId = targetGroup->rootId;
   for (auto it = fusionPlans.begin(); it != fusionPlans.end(); ++it) {
     if (it->fusedGroup.to != intersectionId) {
       continue;
@@ -450,7 +543,7 @@ void FusionAnalyzer::redirectFusionPlanToTarget(unsigned intersectionId,
     auto fromIt = reachable.find(it->fusedGroup.from);
     if (fromIt != reachable.end() && fromIt->second == pathLen - 1) {
       // Update the plan using the encapsulated method
-      updateFusionPlanByGroup(it->fusedGroup.from, intersectionId, targetGroupId, targetNodeId);
+      updateFusionPlanByGroup(it->fusedGroup.from, intersectionId, targetGroupId, targetBandId);
       return;
     }
   }
@@ -564,11 +657,13 @@ void FusionAnalyzer::setupDirectFusionPlan(FusionPlan &fusePlan, FusionPlan &old
   // Update oldPlan to point to srcGroup
   updateFusionPlanByGroup(oldPlan.fusedGroup.from, oldPlan.fusedGroup.to, srcGroup->groupId, srcGroup->rootId);
 
-  // Link all source groups to destination group
+  // Link all source groups to destination group, but skip oldPlan which was
+  // intentionally updated to point to srcGroup in the step above.
   // Collect plans to update first to avoid iterator invalidation
   std::vector<std::pair<unsigned, unsigned>> plansToUpdate;
   for (const auto &plan : fusionPlans) {
-    if (plan.fusedGroup.to == srcGroup->groupId) {
+    if (plan.fusedGroup.to == srcGroup->groupId &&
+        !(plan.fusedGroup.from == oldPlan.fusedGroup.from && plan.fusedGroup.to == oldPlan.fusedGroup.to)) {
       plansToUpdate.emplace_back(plan.fusedGroup.from, plan.fusedGroup.to);
     }
   }
@@ -588,8 +683,8 @@ Logic for adding to fusionPlans:
    therefore the fusion plan needs to be updated:
    1) B and C have backward intersection points: fuse the shorter path to the longer one based on distance to
 intersection, update the shorter fusion path (handleBackwardIntersectionPoints), e.g.: fusionPlans already has A->B->E,
-C->D->E, now adding A->C, then update fusion plan to A->B->C->D->E 2) B and C have no backward intersection points, fuse
-the new fuseplan into the old fuseplan
+C->D->E, now adding A->C, then update fusion plan to A->B->C->D->E
+   2) B and C have no backward intersection points, fuse the new fuseplan into the old fuseplan
 
 After determining the fusion fusionPlan, we need to determine fusionType:
 If the nodes that to depends on have a dependency relationship with from, or there exists an edge in fusionPlans, then
@@ -660,6 +755,37 @@ void FusionAnalyzer::applyAndFuse(const GroupPtr targetGroup, const GroupPtr sou
   }
 }
 
+void FusionAnalyzer::dumpDirectPredecessors(unsigned nodeId, const std::vector<unsigned> &allPredecessorIds,
+                                            const std::unordered_set<size_t> &skipIdx,
+                                            const std::vector<DirectPredecessor> &directPreds) {
+  auto printFlags = mlir::OpPrintingFlags().skipRegions();
+  auto *targetNode = depGraph.getNode(nodeId);
+
+  llvm::dbgs() << "\n=== DirectPredecessors for nodeId: " << nodeId << " ===\n";
+  llvm::dbgs() << "  Target op: ";
+  if (targetNode) targetNode->op->print(llvm::dbgs(), printFlags);
+  llvm::dbgs() << "\n";
+
+  llvm::dbgs() << "  All predecessors (sorted desc, total=" << allPredecessorIds.size() << "):\n";
+  for (size_t i = 0; i < allPredecessorIds.size(); ++i) {
+    auto predId = allPredecessorIds[i];
+    auto *predNode = depGraph.getNode(predId);
+    bool skipped = skipIdx.count(i) > 0;
+    llvm::dbgs() << "    [" << i << "] ID: " << predId << (skipped ? " (SKIPPED)" : " (DIRECT)") << ", OP: ";
+    if (predNode) predNode->op->print(llvm::dbgs(), printFlags);
+    llvm::dbgs() << "\n";
+  }
+
+  llvm::dbgs() << "  Direct predecessor edges (total=" << directPreds.size() << "):\n";
+  for (const auto &pred : directPreds) {
+    auto *predNode = depGraph.getNode(pred.nodeId);
+    llvm::dbgs() << "    ID: " << pred.nodeId << ", MEMREF: " << pred.memref << ", DEPTH: " << pred.loopDepth
+                 << ", DepType: " << depTypeToString(pred.depType) << ", OP: ";
+    if (predNode) predNode->op->print(llvm::dbgs(), printFlags);
+    llvm::dbgs() << "\n";
+  }
+}
+
 // Gets directly connected predecessor nodes for a given node.
 // Filters out nodes that have indirect connections through other nodes.
 // Example: Given dependency graph A->B->C, A->D->C, B->D
@@ -697,20 +823,20 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
     std::sort(allPredecessorIds.begin(), allPredecessorIds.end(), std::greater<int>());
 
     std::unordered_set<size_t> skipIdx;
-    // i=0: direct predecessor
     for (size_t i = 1; i < allPredecessorIds.size(); ++i) {
       if (skipIdx.count(i)) {
         continue;
       }
-      auto pid = allPredecessorIds[i];
+      auto iCandidateID = allPredecessorIds[i];
       // Predecessor nodes are sorted in descending order, so j < i means checking earlier nodes
       for (size_t j = 0; j < i; ++j) {
         if (skipIdx.count(j)) {
           continue;
         }
-        // Check if there exists an edge from pid to allPredecessorIds[j]
-        // If edge exists, pid is not a direct predecessor but an indirect one, add to skipIdx
-        if (depGraph.hasEdge(pid, allPredecessorIds[j], mlir::Value())) {
+        auto jCandidateID = allPredecessorIds[j];
+        // Check if there exists an edge from iCandidateID to jCandidateID
+        // If edge exists, iCandidateID is not a direct predecessor but an indirect one, add to skipIdx
+        if (depGraph.hasEdge(iCandidateID, jCandidateID, mlir::Value())) {
           skipIdx.insert(i);
           break;
         }
@@ -719,27 +845,34 @@ void FusionAnalyzer::precomputeDirectPredecessors() {
 
     // Build direct predecessors list with memrefs and loopDepths
     auto *targetNode = depGraph.getNode(nodeId);
-    bool targetIsLoad = targetNode && isa<affine::AffineLoadOp>(targetNode->op);
     std::vector<DirectPredecessor> directPreds;
     for (size_t i = 0; i < allPredecessorIds.size(); ++i) {
-      if (!skipIdx.count(i)) {
-        auto predId = allPredecessorIds[i];
-        auto *predNode = depGraph.getNode(predId);
-        bool isRAR = targetIsLoad && predNode && isa<affine::AffineLoadOp>(predNode->op);
-        const auto &memrefsAndDepths = predToMemrefsAndDepth[predId];
-        std::transform(memrefsAndDepths.begin(), memrefsAndDepths.end(), std::back_inserter(directPreds),
-                       [predId, isRAR](const auto &memrefAndDepth) {
-                         return DirectPredecessor(predId, memrefAndDepth.first, memrefAndDepth.second, isRAR);
-                       });
+      if (skipIdx.count(i)) {
+        continue;
       }
+      auto predId = allPredecessorIds[i];
+      auto *predNode = depGraph.getNode(predId);
+      DepType depType = classifyDepType(predNode, targetNode);
+      const auto &memrefsAndDepths = predToMemrefsAndDepth[predId];
+      std::transform(memrefsAndDepths.begin(), memrefsAndDepths.end(), std::back_inserter(directPreds),
+                     [predId, depType](const auto &memrefAndDepth) {
+                       return DirectPredecessor(predId, memrefAndDepth.first, memrefAndDepth.second, depType);
+                     });
     }
-    directPredecessorsCache[nodeId] = std::move(directPreds);
+
+    directPredecessorsCache.emplace(nodeId, std::move(directPreds));
   }
 }
 
-void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup,
-                                               std::unordered_set<unsigned> &storeLoadGroups,
-                                               std::unordered_set<unsigned> &readAfterReadGroups) {
+void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup, std::unordered_set<unsigned> &warGroupIds,
+                                               std::unordered_set<unsigned> &rarGroupIds) {
+  // Accumulate DependenceInfo per source group to pre-populate groupDependenciesCache.
+  struct DepAccum {
+    DependenceInfo warDepInfo;
+    DependenceInfo rarDepInfo;
+    bool haswarDep = false;
+  };
+  std::unordered_map<unsigned, DepAccum> depAccumMap;
   for (auto targetNodeId : targetGroup->nodesId) {
     auto it = directPredecessorsCache.find(targetNodeId);
     if (it == directPredecessorsCache.end()) {
@@ -750,58 +883,55 @@ void FusionAnalyzer::collectFusionSourceGroups(const GroupPtr &targetGroup,
       if (sourceGroup == nullptr || sourceGroup->groupId == targetGroup->groupId) {
         continue;
       }
-      if (pred.isRAR) {
-        readAfterReadGroups.insert(sourceGroup->groupId);
+      unsigned sourceGroupId = sourceGroup->groupId;
+      auto &accum = depAccumMap[sourceGroupId];
+      bool isRAR = (pred.depType == DepType::RAR);
+      auto &depInfo = isRAR ? accum.rarDepInfo : accum.warDepInfo;
+      depInfo.loopDepth = std::min(depInfo.loopDepth, pred.loopDepth);
+      depInfo.memref = pred.memref;
+      depInfo.predNodeId = pred.nodeId;
+      depInfo.targetNodeId = targetNodeId;
+      depInfo.depType = pred.depType;
+      if (isRAR) {
+        rarGroupIds.insert(sourceGroupId);
       } else {
-        storeLoadGroups.insert(sourceGroup->groupId);
+        warGroupIds.insert(sourceGroupId);
+        accum.haswarDep = true;
       }
+    }
+  }
+
+  // Pre-populate groupDependenciesCache
+  for (auto &[sourceGroupId, accum] : depAccumMap) {
+    auto cacheKey = std::make_pair(sourceGroupId, targetGroup->groupId);
+    if (groupDependenciesCache.find(cacheKey) == groupDependenciesCache.end()) {
+      DependenceInfo depInfo = accum.haswarDep ? std::move(accum.warDepInfo) : std::move(accum.rarDepInfo);
+      groupDependenciesCache[cacheKey] = std::move(depInfo);
     }
   }
 }
 
-// Gets dependent operations between source and target groups.
-// Uses cached direct predecessors for efficient lookup.
-// Only records the operations (targetNodeId and predId) that have direct dependencies.
-DependenceInfo FusionAnalyzer::getGroupDependencies(const GroupPtr targetGroup, const GroupPtr sourceGroup) {
-  auto cacheKey = std::make_pair(sourceGroup->groupId, targetGroup->groupId);
-  auto cacheIt = groupDependenciesCache.find(cacheKey);
-  if (cacheIt != groupDependenciesCache.end()) {
-    return cacheIt->second;
+void FusionAnalyzer::dumpCollectFusionSourceInfo(const GroupPtr &targetGroup, const char *dependenceType,
+                                                 const std::unordered_set<unsigned> &sourceGroupIds) {
+  if (sourceGroupIds.empty()) return;
+  auto printFlags = mlir::OpPrintingFlags().skipRegions();
+
+  llvm::dbgs() << "\n=== collectFusionSourceGroups for targetGroup: " << targetGroup->groupId << ", " << dependenceType
+               << " ===\n";
+  for (unsigned sourceGroupId : sourceGroupIds) {
+    llvm::dbgs() << "  sourceGroupId=" << sourceGroupId << "\n";
+    auto cacheKey = std::make_pair(sourceGroupId, targetGroup->groupId);
+    auto cacheIt = groupDependenciesCache.find(cacheKey);
+    if (cacheIt == groupDependenciesCache.end()) continue;
+    const auto &depInfo = cacheIt->second;
+    auto *targetNode = depGraph.getNode(depInfo.targetNodeId);
+    auto *predNode = depGraph.getNode(depInfo.predNodeId);
+    llvm::dbgs() << "    predNodeId: " << depInfo.predNodeId << " (OP: ";
+    if (predNode) predNode->op->print(llvm::dbgs(), printFlags);
+    llvm::dbgs() << ") -> targetNodeId: " << depInfo.targetNodeId << " (OP: ";
+    if (targetNode) targetNode->op->print(llvm::dbgs(), printFlags);
+    llvm::dbgs() << ")\n";
   }
-
-  DependenceInfo storeLoadDepInfo;
-  DependenceInfo readAfterReadDepInfo;
-  bool hasStoreLoadDep = false;
-  for (auto targetNodeId : targetGroup->nodesId) {
-    // Use cached direct predecessors for fast lookup
-    auto it = directPredecessorsCache.find(targetNodeId);
-    if (it == directPredecessorsCache.end()) {
-      continue;
-    }
-    for (const auto &pred : it->second) {
-      auto predGroup = depGraph.getGroupByNode(pred.nodeId);
-      if (predGroup == nullptr || predGroup->groupId != sourceGroup->groupId) {
-        continue;
-      }
-
-      if (!pred.isRAR) {
-        hasStoreLoadDep = true;
-        storeLoadDepInfo.loopDepth = std::min(storeLoadDepInfo.loopDepth, pred.loopDepth);
-        if (isa<MemRefType>(pred.memref.getType())) {
-          storeLoadDepInfo.memrefs.insert(pred.memref);
-        }
-      } else {
-        readAfterReadDepInfo.loopDepth = std::min(readAfterReadDepInfo.loopDepth, pred.loopDepth);
-        if (isa<MemRefType>(pred.memref.getType())) {
-          readAfterReadDepInfo.memrefs.insert(pred.memref);
-        }
-      }
-    }
-  }
-
-  DependenceInfo depInfo = hasStoreLoadDep ? std::move(storeLoadDepInfo) : std::move(readAfterReadDepInfo);
-  groupDependenciesCache[cacheKey] = depInfo;
-  return depInfo;
 }
 
 void FusionAnalyzer::plan() {
@@ -809,21 +939,21 @@ void FusionAnalyzer::plan() {
   topoSortInit();
   precomputeDirectPredecessors();
 
-  std::unordered_map<unsigned, std::unordered_set<unsigned>> readAfterReadMap;
+  std::unordered_map<unsigned, std::unordered_set<unsigned>> rarMap;
   while (!finishPlan()) {
     auto targetGroup = getFusionTargetGroup();
     if (targetGroup == nullptr) {
       break;
     }
 
-    std::unordered_set<unsigned> storeLoadGroups;
-    std::unordered_set<unsigned> readAfterReadGroups;
-    collectFusionSourceGroups(targetGroup, storeLoadGroups, readAfterReadGroups);
-    readAfterReadMap[targetGroup->groupId] = readAfterReadGroups;
+    std::unordered_set<unsigned> warGroupIds;
+    std::unordered_set<unsigned> rarGroupIds;
+    collectFusionSourceGroups(targetGroup, warGroupIds, rarGroupIds);
+    rarMap[targetGroup->groupId] = rarGroupIds;
 
     // Phase 1: Process store-load (producer-consumer) edges only.
     // RAR edges are deferred to Phase 2 to avoid connecting unrelated chains.
-    for (auto sourceGroupId : storeLoadGroups) {
+    for (unsigned sourceGroupId : warGroupIds) {
       auto sourceGroup = depGraph.getGroup(sourceGroupId);
       if (sourceGroup != nullptr) {
         applyAndFuse(targetGroup, sourceGroup);
@@ -837,13 +967,13 @@ void FusionAnalyzer::plan() {
 
   // Phase 2: Process RAR (load-load) edges with backward intersection checking.
   // Only connect RAR pairs that are not already reachable through Phase 1 plans.
-  for (const auto &[targetGroupId, readAfterReadGroups] : readAfterReadMap) {
+  for (const auto &[targetGroupId, rarGroupIds] : rarMap) {
     auto targetGroup = depGraph.getGroup(targetGroupId);
     if (targetGroup == nullptr) {
       continue;
     }
 
-    for (auto sourceGroupId : readAfterReadGroups) {
+    for (unsigned sourceGroupId : rarGroupIds) {
       auto sourceGroup = depGraph.getGroup(sourceGroupId);
       if (sourceGroup == nullptr) {
         continue;
@@ -877,7 +1007,9 @@ void FusionAnalyzer::print(llvm::raw_ostream &os) const {
        << "Band [" << plan.fusedBand.from << " -> " << plan.fusedBand.to << "], "
        << "FusionType: " << plan.fusionType << ", "
        << "LoopDepth: " << plan.depInfo.loopDepth << ", "
-       << "LoopTransform: " << loopTransformToStr[static_cast<int>(plan.loopTransform)] << "\n";
+       << "LoopTransform: " << loopTransformToStr[static_cast<int>(plan.loopTransform)] << ", "
+       << "IsSubviewFusion: " << (plan.isSubviewFusion ? "true" : "false") << ", "
+       << "FusionNodeRecord: (" << plan.depInfo.predNodeId << " -> " << plan.depInfo.targetNodeId << ")\n";
   }
 }
 
