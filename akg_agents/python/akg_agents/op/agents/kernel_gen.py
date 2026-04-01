@@ -620,6 +620,7 @@ class KernelGen(AgentBase):
         exclude_skill_names: Optional[List[str]] = None,
         force_skill_names: Optional[List[str]] = None,
         code_check_errors: str = "",
+        bench_type: str = "kernelbench",
     ) -> Tuple[str, str, str]:
         """
         执行代码生成
@@ -645,6 +646,7 @@ class KernelGen(AgentBase):
             exclude_skill_names: 排除指定 skill（覆盖实例属性，AB test A 模式）
             force_skill_names: 强制导入指定 skill（覆盖实例属性，AB test B 模式）
             code_check_errors: CodeChecker 静态检查错误信息
+            bench_type: 基准测试类型（kernelbench 或 sol）
         
         Returns:
             Tuple[str, str, str]: (生成的代码, 完整 prompt, 推理过程)
@@ -732,6 +734,7 @@ class KernelGen(AgentBase):
                 handwrite_suggestions=[],
                 framework=framework,
                 dsl=dsl,
+                bench_type=bench_type,
             )
             
             # 5. 组合完整 prompt，末尾追加输出格式硬约束

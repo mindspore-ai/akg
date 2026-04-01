@@ -341,7 +341,7 @@ class LangGraphTask(BaseLangGraphTask):
             "backend": self.backend,
             "arch": self.arch,
             "task_type": self.task_type,
-            "bench_type": self.config.get("bench_type", "kernelbench"),
+            "bench_type": self.bench_type,
             "verifier_result": False,
             "verifier_error": "",
             "history_attempts": [],
