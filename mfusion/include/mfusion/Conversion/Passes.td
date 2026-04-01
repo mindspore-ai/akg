@@ -97,6 +97,8 @@ def ConvertMfuseToTorch : Pass<"convert-mfuse-to-torch", "::mlir::ModuleOp"> {
 
   let description = [{
     This pass converts Mfuse dialect operations to the Torch dialect.
+    Pass option kernel-generator (default dvm) controls matmul transpose lowering
+    for mm: dvm uses dvm_trans_* attrs; akg/bisheng insert torch.aten.permute.
   }];
 
   let constructor = "mlir::createConvertMfuseToTorchPass()";
