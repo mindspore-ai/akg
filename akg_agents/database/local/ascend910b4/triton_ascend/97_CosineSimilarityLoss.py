@@ -2,16 +2,6 @@ import torch
 import triton
 import triton.language as tl
 
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_SIZE': 256, 'NUM_CORES': 20}),
-        triton.Config({'BLOCK_SIZE': 512, 'NUM_CORES': 20}),
-        triton.Config({'BLOCK_SIZE': 1024, 'NUM_CORES': 20}),
-        triton.Config({'BLOCK_SIZE': 256, 'NUM_CORES': 40}),
-        triton.Config({'BLOCK_SIZE': 512, 'NUM_CORES': 40}),
-    ],
-    key=['B', 'D']
-)
 @triton.jit
 def aikg_97_CosineSimilarityLoss_kernel(
     predictions_ptr,  # [B, D] f16
@@ -83,11 +73,9 @@ def aikg_97_CosineSimilarityLoss_kernel(
         # 计算余弦相似度
         norm_product = pred_norm * target_norm
         
-        # 直接比较标量值（避免使用tl.get_element）
-        if norm_product == 0.0:
-            cosine_sim = dot_acc
-        else:
-            cosine_sim = dot_acc / norm_product
+        eps = 1e-8
+        norm_product = tl.maximum(norm_product, eps)
+        cosine_sim = dot_acc / norm_product
         
         # 计算1 - cosine_similarity
         loss_per_sample = 1.0 - cosine_sim
@@ -123,15 +111,15 @@ def aikg_97_CosineSimilarityLoss_triton_ascend_torch(predictions, targets):
     output = torch.zeros(1, dtype=torch.float32, device=predictions.device)
     
     # 定义启动网格的lambda函数
-    grid = lambda meta: (meta['NUM_CORES'],)
+    NUM_CORES = 40
+    grid = (NUM_CORES,)
     
-    # 启动内核
     aikg_97_CosineSimilarityLoss_kernel[grid](
         predictions, targets, output,
         B, D,
         predictions.stride(0), predictions.stride(1),
         targets.stride(0), targets.stride(1),
-        # BLOCK_SIZE和NUM_CORES由autotune自动传入
+        BLOCK_SIZE=512, NUM_CORES=NUM_CORES,
     )
     
     # 计算平均损失

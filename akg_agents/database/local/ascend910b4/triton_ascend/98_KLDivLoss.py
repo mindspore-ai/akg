@@ -5,6 +5,9 @@ import triton.language as tl
 @triton.autotune(
     configs=[
         triton.Config({'BLOCK_SIZE_N': 4096}),
+        # triton.Config({'BLOCK_SIZE_N': 2048}),
+        # triton.Config({'BLOCK_SIZE_N': 1024}),
+        # triton.Config({'BLOCK_SIZE_N': 8192}),
     ],
     key=['B', 'N'],
 )

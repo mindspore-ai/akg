@@ -102,13 +102,9 @@ def aikg_14_Matmul_for_upper_triangular_matrices_triton_ascend_torch(A, B):
     # 分配输出张量
     C = torch.empty((N, N), dtype=torch.float32, device=A.device)
     
-    # 计算网格大小
-    grid_cols = triton.cdiv(N, 256)  # 使用最大BLOCK_SIZE计算
-    grid_rows = grid_cols
-    total_blocks = grid_rows * grid_cols
-    
-    # 启动内核
-    grid = lambda meta: (total_blocks,)
+    def grid(meta):
+        gc = triton.cdiv(N, meta['BLOCK_SIZE'])
+        return (gc * gc,)
     
     aikg_14_Matmul_for_upper_triangular_matrices_kernel[grid](
         A, B, C,
@@ -116,7 +112,6 @@ def aikg_14_Matmul_for_upper_triangular_matrices_triton_ascend_torch(A, B):
         A.stride(0), A.stride(1),
         B.stride(0), B.stride(1),
         C.stride(0), C.stride(1),
-        # BLOCK_SIZE和K_TILE由autotune自动传入
     )
     
     return C

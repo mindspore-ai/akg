@@ -2,7 +2,6 @@ import torch
 import triton
 import triton.language as tl
 
-
 @triton.autotune(
     configs=[
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 256}, num_warps=4),
