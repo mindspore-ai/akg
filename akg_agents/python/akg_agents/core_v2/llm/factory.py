@@ -25,6 +25,7 @@ from langchain_core.embeddings import Embeddings
 
 from akg_agents.core_v2.config import get_settings
 from .client import LLMClient
+from .cache import attach_cache_to_client
 from .providers.openai_provider import LLMProvider
 from .providers.embedding_provider import OpenAICompatibleEmbeddings
 
@@ -42,6 +43,8 @@ def create_llm_client(
     top_p: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     presence_penalty: Optional[float] = None,
+    enable_cache: Optional[bool] = None,
+    cache_config_path: Optional[str] = None,
     **kwargs
 ) -> LLMClient:
     """
@@ -62,6 +65,8 @@ def create_llm_client(
         api_key: API 密钥（直接指定，覆盖配置）
         temperature: 温度参数（直接指定，覆盖配置）
         max_tokens: 最大 token 数（直接指定，覆盖配置）
+        enable_cache: 是否启用缓存（可选，覆盖缓存配置）
+        cache_config_path: 缓存配置文件路径（可选）
         **kwargs: 其他配置
     
     Returns:
@@ -165,6 +170,15 @@ def create_llm_client(
         presence_penalty=final_presence_penalty,
         **kwargs
     )
+
+    try:
+        client = attach_cache_to_client(
+            client,
+            enable_cache=enable_cache,
+            cache_config_path=cache_config_path,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to attach LLM cache: {exc}")
     
     return client
 
