@@ -126,6 +126,26 @@ class AgentBase(ABC):
             self.root_dir = os.getcwd()
     
     # ========================= LLM 调用 =========================
+
+    def _build_cache_control_kwargs(self) -> Dict[str, str]:
+        """Build cache control kwargs for llm client generate()."""
+        cache_mode = str(self.config.get("cache_mode") or "off").strip().lower()
+        if cache_mode not in {"off", "record", "replay"}:
+            cache_mode = "off"
+
+        cache_session_hash = str(
+            self.context.get("cache_session_hash")
+            or self.context.get("session_hash")
+            or self.config.get("cache_session_hash")
+            or ""
+        ).strip()
+        cache_agent_hash = str(self.context.get("hash") or "").strip()
+
+        return {
+            "cache_mode": cache_mode,
+            "cache_session_hash": cache_session_hash,
+            "cache_agent_hash": cache_agent_hash,
+        }
     
     async def run_llm(
         self,
@@ -165,6 +185,7 @@ class AgentBase(ABC):
             
             # 创建 LLMClient
             client = create_llm_client(model_level=model_level, session_id=session_id)
+            cache_control = self._build_cache_control_kwargs()
             
             # 调用 LLM
             messages = [
@@ -175,6 +196,7 @@ class AgentBase(ABC):
                 messages,
                 stream=stream,
                 agent_name=agent_name,
+                **cache_control,
             )
             
             content = result.get("content", "")
@@ -244,12 +266,14 @@ class AgentBase(ABC):
         stream = self._stream_enabled()
         
         client = create_llm_client(model_level=model_level, session_id=session_id)
+        cache_control = self._build_cache_control_kwargs()
         
         result = await client.generate(
             messages,
             stream=stream,
             agent_name=agent_name,
             tools=tools,
+            **cache_control,
         )
         
         content = result.get("content", "")

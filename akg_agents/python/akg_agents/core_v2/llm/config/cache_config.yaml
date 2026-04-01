@@ -1,0 +1,9 @@
+cache:
+  enable: true
+  max_memory_size: 200
+  cache_file_path: "~/.akg/llm_cache/llm_test_cache.json"
+  expire_seconds: -1
+  auto_clean_expired: true
+  serialize:
+    ensure_ascii: false
+    indent: 2
