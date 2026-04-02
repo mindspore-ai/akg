@@ -111,7 +111,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
     nestedFusionPM.addPass(mlir::createBroadcastLoopHoistPass());
     nestedFusionPM.addPass(mlir::createReductionSiblingRecomputePass());
     nestedFusionPM.addPass(mlir::createAffineIteratorConversionPass());
-    nestedFusionPM.addPass(mlir::createBF16ToF32Pass());
+    nestedFusionPM.addPass(mlir::createLegalizeTypeForAscendPass());
     nestedFusionPM.addPass(mlir::createNormalizePass());
     nestedFusionPM.addPass(mlir::createConvertAffineToSCFPass());
 

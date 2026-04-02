@@ -285,14 +285,13 @@ def AKGAffineDataCopyGeneration : Pass<"akg-affine-data-copy-generate", "func::F
   ];
 }
 
-def BF16ToF32 : Pass<"bf16-to-f32", "func::FuncOp"> {
-  let summary = "Convert bf16 operands to float32 in affine operations";
+def LegalizeTypeForAscend : Pass<"legalize-type-for-ascend", "func::FuncOp"> {
+  let summary = "Legalize bf16 and float types for Ascend (affine + arith)";
   let description = [{
-    This pass converts bf16 operands to float32 type in affine operations.
-    It inserts type conversion operations (arith::ExtFOp) to extend bf16 values
-    to float32 before they are used in affine operations.
+    Promotes bf16 compute to f32, narrows stores to bf16 memrefs, and legalizes
+    related affine.for / arith casts for Ascend pipelines.
   }];
-  let constructor = "mlir::createBF16ToF32Pass()";
+  let constructor = "mlir::createLegalizeTypeForAscendPass()";
   let dependentDialects = [
     "arith::ArithDialect",
     "affine::AffineDialect"
