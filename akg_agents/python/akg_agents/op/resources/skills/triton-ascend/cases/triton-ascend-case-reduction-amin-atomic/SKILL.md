@@ -116,10 +116,16 @@ tl.atomic_min(output_ptrs, all_row_min)  # 最后统一原子操作
 ## 优化 4：配置
 
 ```python
-# （AI core=40）
-# grid=32<40, UB用满
-triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 8192, 'SUB_BLOCK_SIZE_N': 1024})  # M切分较小，UB用满
-triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 8192, 'SUB_BLOCK_SIZE_N': 512})  # M切分调大至16，N的SUB切分调小至512，防止超UB
+@triton.autotune(
+    configs=[
+        # （AI core=40）
+        # grid=32<40, UB用满
+        triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 8192, 'SUB_BLOCK_SIZE_N': 1024}),  # M切分较小，UB用满
+        triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 8192, 'SUB_BLOCK_SIZE_N': 512}),  # M切分调大至16，N的SUB切分调小至512，防止超UB
+    ],
+    key=[...],
+    restore_value=['out_ptr0'],  # autotune 必须加 restore_value
+)
 ```
 
 ### 优化内容

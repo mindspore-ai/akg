@@ -192,6 +192,10 @@ class CodeChecker:
         if not has_syntax_err:
             errors.extend(self._check_dsl_compliance(code))
 
+        # Step 6: Autotune 规范检测（仅 triton DSL，语法正确时执行）
+        if not has_syntax_err and self.dsl.startswith("triton"):
+            errors.extend(self._check_autotune_compliance(code))
+
         passed = len(errors) == 0
         code_lines = code.split('\n')
         error_message = self._format_errors(errors, code_lines) if errors else ""
@@ -587,6 +591,65 @@ class CodeChecker:
                     f"同时包含 {len(soft_calls)} 处 torch 辅助计算 API: "
                     f"{_fmt_calls(soft_calls)}。（融合算子可能合理，仅记录警告）"
                 )
+
+        return errors
+
+    # ------------------------------------------------------------------
+    # Step 6: Autotune 规范检测
+    # ------------------------------------------------------------------
+
+    _AUTOTUNE_RE = re.compile(r'@triton\.autotune\s*\(', re.MULTILINE)
+    _RESTORE_VALUE_RE = re.compile(r'restore_value\s*=')
+
+    def _check_autotune_compliance(self, code: str) -> List[Dict]:
+        """
+        检查 @triton.autotune 使用是否符合规范：
+        - 必须包含 restore_value 参数
+        """
+        errors = []
+
+        autotune_match = self._AUTOTUNE_RE.search(code)
+        if not autotune_match:
+            return errors
+
+        autotune_line = code[:autotune_match.start()].count('\n') + 1
+
+        paren_depth = 0
+        start = autotune_match.end() - 1
+        end = start
+        for i in range(start, len(code)):
+            if code[i] == '(':
+                paren_depth += 1
+            elif code[i] == ')':
+                paren_depth -= 1
+                if paren_depth == 0:
+                    end = i + 1
+                    break
+        autotune_block = code[start:end]
+
+        if not self._RESTORE_VALUE_RE.search(autotune_block):
+            errors.append({
+                "line": autotune_line,
+                "error_type": "autotune_missing_restore_value",
+                "detail": (
+                    "@triton.autotune 装饰器缺少 restore_value 参数。"
+                    "autotune benchmark 会对每个 config 反复执行 kernel，"
+                    "不同 config 之间的输出会互相污染，导致验证失败。"
+                ),
+                "suggestion": (
+                    "在 @triton.autotune(...) 中添加 restore_value=['输出指针参数名']，"
+                    "列出 kernel 的所有输出指针参数。例如：\n"
+                    "  @triton.autotune(\n"
+                    "      configs=[...],\n"
+                    "      key=[...],\n"
+                    "      restore_value=['output_ptr'],  # 必须添加\n"
+                    "  )"
+                ),
+                "code_snippet": ""
+            })
+            logger.warning(
+                f"CodeChecker: @triton.autotune at line {autotune_line} missing restore_value"
+            )
 
         return errors
 

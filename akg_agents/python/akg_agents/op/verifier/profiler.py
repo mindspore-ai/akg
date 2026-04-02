@@ -41,6 +41,11 @@ from .l2_cache_clear import (
     clear_l2_cache_warnings,
 )
 
+try:
+    from akg_agents.op.utils.triton_autotune_patch import AKG_RESTORE_COPY_KERNEL_NAME
+except ImportError:
+    AKG_RESTORE_COPY_KERNEL_NAME = "AKG_restore_copy"
+
 # 预编译正则表达式，提高性能
 # 过滤 profiler 相关的噪声输出
 _FILTER_PATTERNS = re.compile(
@@ -132,7 +137,8 @@ def suppress_output():
 def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100, 
                       prof_dir_name: Optional[str] = None,
                       clear_l2_cache_flag: bool = False,
-                      dsl: DslType = "other") -> Tuple[float, str]:
+                      dsl: DslType = "other",
+                      filter_restore_copy: bool = False) -> Tuple[float, str]:
     """
     NPU profiler 核心函数。
     
@@ -199,13 +205,15 @@ def profiler_npu_core(fn: Callable, warmup: int = 25, active: int = 100,
             prof.step()
             torch.npu.synchronize()
 
-    exec_time = collect_time(profile_path, active, clear_l2_cache_flag=clear_l2_cache_flag, dsl=dsl)
+    exec_time = collect_time(profile_path, active, clear_l2_cache_flag=clear_l2_cache_flag,
+                             dsl=dsl, filter_restore_copy=filter_restore_copy)
     return exec_time, profile_path
 
 
 def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_name: Optional[str] = None,
                  keep_res: bool = False, suppress_warnings: bool = True,
-                 clear_l2_cache: bool = False, dsl: DslType = "other") -> float:
+                 clear_l2_cache: bool = False, dsl: DslType = "other",
+                 filter_restore_copy: bool = False) -> float:
     """
     NPU profiler 主函数。
 
@@ -231,12 +239,14 @@ def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_nam
         with suppress_output():
             exec_time, profile_path = profiler_npu_core(
                 fn, warmup, active, prof_dir_name, 
-                clear_l2_cache_flag=clear_l2_cache, dsl=dsl
+                clear_l2_cache_flag=clear_l2_cache, dsl=dsl,
+                filter_restore_copy=filter_restore_copy,
             )
     else:
         exec_time, profile_path = profiler_npu_core(
             fn, warmup, active, prof_dir_name,
-            clear_l2_cache_flag=clear_l2_cache, dsl=dsl
+            clear_l2_cache_flag=clear_l2_cache, dsl=dsl,
+            filter_restore_copy=filter_restore_copy,
         )
     
     # profiler 结束后输出收集的 L2 cache 警告消息（绕过 suppress_output）
@@ -254,7 +264,7 @@ def profiler_npu(fn: Callable, warmup: int = 25, active: int = 100, prof_dir_nam
 
 
 def collect_time(base_dir: str, active: int, clear_l2_cache_flag: bool = False,
-                 dsl: DslType = "other") -> float:
+                 dsl: DslType = "other", filter_restore_copy: bool = False) -> float:
     """
     从 profiling 结果中收集时间信息。
 
@@ -293,9 +303,9 @@ def collect_time(base_dir: str, active: int, clear_l2_cache_flag: bool = False,
 
             # 过滤有效操作
             try:
-                # 首先过滤 L2 cache 清除操作（如果启用了清除功能）
-                if clear_l2_cache_flag:
-                    df = _filter_l2_cache_clear_ops(df, dsl)
+                if clear_l2_cache_flag or filter_restore_copy:
+                    df = _filter_l2_cache_clear_ops(df, dsl,
+                                                    filter_restore_copy=filter_restore_copy)
                 
                 valid_ops = df[df['Count'] % active == 0].copy()
 
@@ -319,53 +329,54 @@ def collect_time(base_dir: str, active: int, clear_l2_cache_flag: bool = False,
     return float('inf')
 
 
-def _filter_l2_cache_clear_ops(df: pd.DataFrame, dsl: DslType) -> pd.DataFrame:
+def _filter_l2_cache_clear_ops(df: pd.DataFrame, dsl: DslType,
+                                filter_restore_copy: bool = False) -> pd.DataFrame:
     """
-    从 profiling 结果中过滤掉 L2 cache 清除操作。
-    
+    从 profiling 结果中过滤掉 AKG 框架内部操作。
+
+    过滤内容：
+      - L2 cache 清除 kernel（AKG_l2cache_clear / ZerosLike）
+      - restore_value 的 copy kernel（filter_restore_copy=True 时，
+        按 kernel 名字 AKG_restore_copy 精确过滤，与 l2_cache_clear 同一模式）
+
     Args:
         df: profiling 数据 DataFrame
-        dsl: DSL 类型，决定过滤方式
-             - "triton_ascend": 过滤名为 "AKG_l2cache_clear" 的 kernel（精确匹配）
-             - 其他: 过滤 "ZerosLike" 类型的操作（可能有误判）
-    
+        dsl: DSL 类型
+        filter_restore_copy: 是否过滤 restore_value 产生的 copy 操作。
+             仅在 autotune benchmark 阶段开启，最终 profiling 不开。
+
     Returns:
         pd.DataFrame: 过滤后的 DataFrame
     """
     if dsl == "triton_ascend":
-        # Triton-Ascend：使用专用 kernel 名称精确过滤
-        # 检查 "OP Type" 或 "Name" 列
+        col = None
         if 'OP Type' in df.columns:
-            # 精确匹配 kernel 名称
-            filter_cond = ~df['OP Type'].str.contains(
-                L2_CACHE_CLEAR_KERNEL_NAME, case=False, na=False, regex=False
-            )
-            filtered_df = df[filter_cond]
+            col = 'OP Type'
         elif 'Name' in df.columns:
-            filter_cond = ~df['Name'].str.contains(
-                L2_CACHE_CLEAR_KERNEL_NAME, case=False, na=False, regex=False
-            )
-            filtered_df = df[filter_cond]
+            col = 'Name'
+
+        if col is not None:
+            keep = pd.Series(True, index=df.index)
+            keep &= ~df[col].str.contains(
+                L2_CACHE_CLEAR_KERNEL_NAME, case=False, na=False, regex=False)
+            if filter_restore_copy:
+                keep &= ~df[col].str.contains(
+                    AKG_RESTORE_COPY_KERNEL_NAME, case=False, na=False, regex=False)
+            filtered_df = df[keep]
         else:
-            # 没有可过滤的列，返回原始数据
             filtered_df = df
     else:
-        # 其他 DSL：过滤 "ZerosLike" 类型（参考 testing.py 的实现）
-        # 注意：这种方式可能误过滤用户代码中的 zeros_like/zero_() 操作
         if 'OP Type' in df.columns:
-            # 精确匹配 "ZerosLike"（使用正则表达式 ^ZerosLike$）
             filter_cond = ~df['OP Type'].str.contains(
                 r'^ZerosLike$', case=False, na=False, regex=True
             )
             filtered_df = df[filter_cond]
         elif 'Type' in df.columns:
-            # kernel_details.csv 使用 "Type" 列
             filter_cond = ~df['Type'].str.contains(
                 r'^ZerosLike$', case=False, na=False, regex=True
             )
             filtered_df = df[filter_cond]
         else:
-            # 没有可过滤的列，返回原始数据
             filtered_df = df
-    
+
     return filtered_df

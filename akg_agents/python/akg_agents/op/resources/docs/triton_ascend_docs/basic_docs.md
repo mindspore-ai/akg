@@ -201,58 +201,54 @@ valid_mask = (offsets < n_elements) & (offsets >= 0)
 data = tl.load(ptr + offsets, mask=valid_mask, other=0.0)
 ```
 
-## 5. autotune使用教程
+## 5. Autotune 使用教程（仅限静态 shape）
 
-Autotune 是 Triton 的自动性能优化机制，通过尝试不同的配置参数组合，自动找到最优的内核执行配置。
+Autotune 通过自动 benchmark 多组配置参数，找到当前硬件和数据规模下的最优配置并缓存，免去手动调参。
+
+### 适用场景
+
+- **推荐使用**：输入 shape 固定或变化范围有限（静态 shape），如固定 batch size 的 MatMul、固定序列长度的 Attention 等
+- **禁止使用**：输入 shape 频繁变化（动态 shape）。autotune 根据 `key` 参数缓存最佳 config，动态 shape 下每组新 shape 都会触发一次完整 benchmark，反而严重拖慢性能
+
+### 强制规则
+
+1. **必须写 `restore_value`**：列出 kernel 的**所有输出指针参数名**。autotune benchmark 会对每个 config 反复执行 kernel，`restore_value` 在每次迭代前保存输出张量副本、迭代后恢复原值，防止不同 config 之间的结果互相污染。**不写 `restore_value` 会导致验证失败。**
+2. **调用时不传 configs 参数**：autotune 自动传入。
+3. **configs 参数必须是 constexpr**：在 kernel 中声明为 `PARAM: tl.constexpr`。
+4. **key 参数**：指定哪些输入维度变化时重新 autotune。
+5. **Ascend 不支持调优**：不要对 num_warps、num_ctas、num_stages 等参数进行修改调优，当前 Ascend 后端不支持。
+
+### 标准写法
 
 ```python
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128}),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64}),
+        triton.Config({'BLOCK_SIZE': 1024}),
+        triton.Config({'BLOCK_SIZE': 512}),
     ],
-    key=['M', 'N', 'K'],  # 当这些参数变化时触发重新autotune
+    key=['n_elements'],
+    restore_value=['output_ptr'],  # ⚠ 必须：列出所有输出指针参数名
 )
 @triton.jit
-def matmul_kernel(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
-    BLOCK_SIZE_M: tl.constexpr, # configs中的参数必须声明为constexpr
-    BLOCK_SIZE_N: tl.constexpr, # configs中的参数必须声明为constexpr
-    BLOCK_SIZE_K: tl.constexpr, # configs中的参数必须声明为constexpr
+def kernel(
+    input_ptr, output_ptr, n_elements,
+    BLOCK_SIZE: tl.constexpr,
 ):
-    # kernel实现
+    # kernel 实现
     pass
 
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
+        try:
+            self.VEC_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("vector_core_num", 40)
+        except:
+            self.VEC_CORE_NUM = 40
 
-    def forward(self, a, b):
-    M, K = a.shape
-    K, N = b.shape
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-    
-    grid = lambda meta: (triton.cdiv(M, meta['BLOCK_SIZE_M']) * triton.cdiv(N, meta['BLOCK_SIZE_N']),) # grid设置是tuple
-    
-    # 关键：调用时不要传递configs中的参数（BLOCK_SIZE_M等）
-    matmul_kernel[grid](
-        a, b, c,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        # 不要写：BLOCK_SIZE_M=128  # 错误！autotune会自动传入
-    )
-    return c
+    def forward(self, x):
+        output = torch.empty_like(x)
+        n_elements = x.numel()
+        grid = (self.VEC_CORE_NUM,)
+        kernel[grid](x, output, n_elements)
+        return output
 ```
-
-### 关键要点
-
-1. **grid必须使用lambda**：`grid = lambda meta: (...)`
-3. **不要传递configs参数**：调用kernel时不要传`BLOCK_SIZE`等autotune的参数
-4. **configs参数必须是constexpr**：在kernel中声明为`PARAM: tl.constexpr`
-5. **key参数**：指定哪些输入维度变化时重新autotune
-
-**注意** 不要对'num_warps', 'num_ctas', 'num_stages', 'num_buffers_warp_spec', 'num_consumer_groups', 'reg_dec_producer', ，'reg_inc_consumer', 'maxnreg'进行修改调优，当前Ascend后端不支持

@@ -52,6 +52,19 @@ verifier/
 
 `KernelVerifier` 通过 `get_*_adapter` 工厂方法获取三个适配器实例，然后组合生成验证脚本（Jinja2 模板）、CMake 配置等，最终执行验证和 profiling。
 
+## Autotune 双模式验证
+
+`KernelVerifier` 对 Triton autotune 代码支持两种验证模式：
+
+- **直接验证模式**（默认）：autotune 代码和普通代码一样，一次性跑完整代码验证。
+- **逐 config 验证模式**：逐个 config 单独验证，全部通过后再跑一次完整代码回归验证。如果逐 config 通过但完整代码失败，日志会提示添加 `restore_value`。
+
+逐 config 验证模式有两种开启方式（任一生效）：
+1. 环境变量：`AKG_VERIFY_PER_CONFIG=1`
+2. triton_config YAML 配置：`verify_per_config: true`（默认 `false`）
+
+两种模式均要求 `@triton.autotune` 必须包含 `restore_value` 参数（由 `CodeChecker` 静态检查保障）。
+
 ## 不做什么
 
 - **不要**在适配器中实现 Agent/Workflow 逻辑
