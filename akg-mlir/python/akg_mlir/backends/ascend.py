@@ -173,6 +173,34 @@ def run_akg_opt(
         logging.error("run akg-opt failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
         raise RuntimeError("mlir pipeline failed in case: " + os.path.basename(input_file) + "!\n") from e
 
+
+def check_ascend_compile(output_so_path):
+    """Assert bishengir output exists: non-empty ``.o`` or ``.so`` for the ``-o`` path.
+
+    Checks ``-o`` target first, then same-stem ``.so``/``.o`` alternate.
+
+    Args:
+        output_so_path: Path passed to bishengir ``-o`` (same stem as ``.o``/``.so``).
+
+    Raises:
+        RuntimeError: If neither artifact exists or both are empty.
+    """
+    root, ext = os.path.splitext(output_so_path)
+    ext = ext.lower()
+    cands = [output_so_path]
+    if ext == ".so":
+        cands.append(root + ".o")
+    elif ext == ".o":
+        cands.append(root + ".so")
+    for p in cands:
+        if os.path.isfile(p) and os.path.getsize(p) > 0:
+            return
+    logging.error("bishengir-compile: .o/.so not found at %s", output_so_path)
+    raise RuntimeError(
+        "generate ascend binary: .o or .so not found at " + output_so_path
+    ) from None
+
+
 def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=True, dump_ir=False, dump_log_path=None):
     """Using bishengir-compile to generate Ascend binary.
 
@@ -214,6 +242,7 @@ def ascend_compile(input_file, output_so_path, block_dim, enable_loop_fusion=Tru
         if dump_ir and dump_log_path:
             with os.fdopen(os.open(dump_log_path, os.O_WRONLY | os.O_CREAT, 0o755), "w") as f:
                 f.write(result.stderr)
+        check_ascend_compile(output_so_path)
     except subprocess.CalledProcessError as e:
         logging.error("run bishengir-compile failed! cmd:\n %s \nerror message:\n %s", e.cmd, e.stderr)
         if dump_ir and dump_log_path:
