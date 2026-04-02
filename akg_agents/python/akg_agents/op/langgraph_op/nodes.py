@@ -569,6 +569,121 @@ class NodeFactory:
         return track_node("verifier")(verifier_node)
 
     @staticmethod
+    def create_kernel_conductor_node(kernel_conductor_instance, trace_instance, config,
+                                     code_gen_agent="kernel_gen", kernel_gen_instance=None):
+        """创建 KernelConductor 节点（基于 Skill 系统）
+
+        Args:
+            kernel_conductor_instance: KernelConductor agent 实例
+            trace_instance: Trace 实例
+            config: 配置字典
+            code_gen_agent: 代码生成 agent 名称
+            kernel_gen_instance: KernelGen 实例，用于获取已缓存的 skill 选择结果
+        """
+        async def kernel_conductor_node(state: KernelGenState) -> dict:
+            task_id = state.get('task_id', '0')
+            op_name = state.get('op_name', 'unknown')
+            logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: kernel_conductor")
+
+            session_id = state.get('session_id', '')
+            if session_id:
+                kernel_conductor_instance.context["session_id"] = session_id
+
+            history_for_analysis = []
+            for attempt in state.get("history_attempts", [])[-5:]:
+                history_for_analysis.append({
+                    'suggestion': attempt.get('suggestion', '')[:500]
+                })
+
+            valid_next_agents = f'{code_gen_agent}, finish'
+
+            raw_error = state.get('verifier_error', '')
+            model_config = config.get("agent_model_config", {})
+            model_level = model_config.get("conductor") or "standard"
+
+            conductor_step = int(state.get("conductor_step_count") or 0) + 1
+
+            kernel_conductor_instance.context.update({
+                "task_id": task_id,
+                "op_name": op_name,
+                "hash": f"kernel_conductor@{conductor_step}",
+            })
+
+            # 从 KernelGen 缓存获取 fundamental + guide + fix，传给 conductor
+            # 不传 example（代码示例对错误分析无帮助）和 case_improve（性能优化与修复无关）
+            skill_contents_for_conductor = ""
+            if kernel_gen_instance is not None:
+                cache = getattr(kernel_gen_instance, '_initial_selection_cache', None)
+                if cache:
+                    conductor_skills = cache.get("always", []) + cache.get("guide", [])
+                    # 追加 fix 类 case（evolved-fix 等错误修复经验）
+                    for s in cache.get("case", []):
+                        if kernel_gen_instance._infer_case_type(s) == "fix":
+                            conductor_skills.append(s)
+                    if conductor_skills:
+                        skill_contents_for_conductor = kernel_gen_instance._assemble_skill_contents(conductor_skills)
+                        logger.info(
+                            f"[KernelConductor] 复用 KernelGen skill 缓存 (fundamental+guide+fix): "
+                            f"{len(conductor_skills)} skills, {len(skill_contents_for_conductor)} chars"
+                        )
+
+            try:
+                decision, suggestion, prompt, reasoning = await kernel_conductor_instance.run(
+                    op_name=op_name,
+                    task_desc=state.get('task_desc', ''),
+                    dsl=state.get('dsl', ''),
+                    framework=state.get('framework', ''),
+                    backend=state.get('backend', ''),
+                    error_log=raw_error,
+                    agent_result=state.get('coder_code', ''),
+                    history_attempts=history_for_analysis,
+                    valid_next_agents=valid_next_agents,
+                    model_level=model_level,
+                    skill_contents=skill_contents_for_conductor,
+                )
+
+                trace_instance.write_record("kernel_conductor_decision", [
+                    ('result', f"decision={decision}, suggestion={suggestion[:200]}"),
+                    ('prompt', prompt),
+                    ('reasoning', reasoning),
+                ], subdirectory="conductor")
+
+                if state.get('coder_code') and state.get('verifier_error'):
+                    history_entry = {
+                        'code': state.get('coder_code', ''),
+                        'error': state.get('verifier_error', ''),
+                        'suggestion': suggestion or '',
+                        'task_desc': state.get('task_desc', ''),
+                    }
+                    return {
+                        "conductor_suggestion": suggestion or "",
+                        "conductor_decision": decision or code_gen_agent,
+                        "history_attempts": [history_entry],
+                        "agent_history": ["kernel_conductor"],
+                        "conductor_step_count": conductor_step,
+                    }
+
+                return {
+                    "conductor_suggestion": suggestion or "",
+                    "conductor_decision": decision or code_gen_agent,
+                    "agent_history": ["kernel_conductor"],
+                    "conductor_step_count": conductor_step,
+                }
+
+            except Exception as e:
+                logger.error(f"[Task {task_id}] KernelConductor failed: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                return {
+                    "conductor_suggestion": "",
+                    "conductor_decision": code_gen_agent,
+                    "agent_history": ["kernel_conductor"],
+                    "conductor_step_count": conductor_step,
+                }
+
+        return track_node("kernel_conductor")(kernel_conductor_node)
+
+    @staticmethod
     def create_conductor_node(trace_instance, config, conductor_template, code_gen_agent="coder"):
         """创建 Conductor 分析节点
         
@@ -637,19 +752,18 @@ class NodeFactory:
                 # 创建临时的 AgentBase 实例用于调用 run_llm
                 # 构建 context（包含 session_id 等信息，支持流式输出）
                 conductor_step = int(state.get("conductor_step_count") or 0) + 1
-                conductor_hash = f"conductor@{conductor_step}"
                 context = {
                     "agent_name": "conductor",
                     "session_id": state.get("session_id", ""),
                     "task_id": task_id,
                     "op_name": op_name,
+                    "hash": f"conductor@{conductor_step}",
                     "dsl": state.get("dsl", ""),
                     "backend": state.get("backend", ""),
                     "arch": state.get("arch", ""),
                     "framework": state.get("framework", ""),
                     "workflow_name": state.get("workflow_name", ""),
                     "task_desc": state.get("task_desc", ""),
-                    "hash": conductor_hash,
                 }
 
                 agent_base = AgentBase(context=context, config=config)
@@ -691,7 +805,6 @@ class NodeFactory:
                         "history_attempts": [history_entry],
                         "agent_history": ["conductor"],
                         "conductor_step_count": conductor_step,
-                        "hash": conductor_hash,
                     }
                 
                 task_id = state.get('task_id', '0')
@@ -702,7 +815,6 @@ class NodeFactory:
                     "conductor_decision": agent_decision or code_gen_agent,
                     "agent_history": ["conductor"],
                     "conductor_step_count": conductor_step,
-                    "hash": conductor_hash,
                 }
                 
             except Exception as e:
@@ -715,7 +827,6 @@ class NodeFactory:
                     "conductor_decision": "coder",
                     "agent_history": ["conductor"],
                     "conductor_step_count": conductor_step,
-                    "hash": conductor_hash,
                 }
 
         return track_node("conductor")(conductor_node)

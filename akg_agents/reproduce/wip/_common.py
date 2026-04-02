@@ -159,7 +159,6 @@ async def run_benchmark(
     check_env_for_task(framework, backend, dsl, config)
     await register_local_worker(device_ids, backend=backend, arch=arch)
 
-    os.environ['AKG_AGENTS_DATA_COLLECT'] = 'on'
     os.environ['AKG_AGENTS_STREAM_OUTPUT'] = 'on'
 
     log_dir = config.get("log_dir", "~/akg_agents_logs")

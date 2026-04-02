@@ -42,6 +42,23 @@ metadata:
 - [ ] 是否充分利用了块内并行？
 - [ ] 复杂算子是否考虑拆分为多个简单kernel？
 
+## 禁止使用的语法（Ascend 后端）
+
+| 禁止写法 | 替代方案 |
+|---------|---------|
+| `return` / `break` / `continue` | 使用 mask 控制流程 |
+| lambda 表达式 | 内联函数或 tl.where |
+| 链式布尔运算 `a and b` | 分步计算 mask：`m1 = ...; m2 = ...; m = m1 & m2` |
+| 张量直接索引 `tensor[i]` | `tl.load(ptr + offset)` / `tl.store(ptr + offset, val)` |
+| Python 切片 `b[0]` / `b[i:j]` | `tl.get_element` / `tl.extract_slice` / `tl.insert_slice` |
+| 对 `tl.arange` 结果用 `get_element` | 直接计算索引值 |
+| `while` 循环 | `for i in range(MAX): if i < n:` |
+| `range()` 混用运行时变量和 constexpr | 全 constexpr 的 `range(0, N, BLOCK_K)` + 循环体内运行时 if |
+| `tl.float16(scalar)` | `scalar.to(tl.float16)` |
+| `tl.constexpr` 在 host 侧使用 | 仅在 kernel 参数中使用 |
+| if-else 中负偏移 | `tl.maximum(offset, 0)` |
+| 复杂 `tl.where` 用于内存偏移 | 拆分为 if-else 静态分支 |
+
 ## 常见错误速查表
 
 ### 编译错误

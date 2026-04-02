@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""KernelGen-only workflow: KernelGen → CodeChecker → Verifier"""
+"""KernelGen-only workflow: KernelGen → CodeChecker → Verifier → KernelConductor"""
 
 import logging
 from pathlib import Path
@@ -24,6 +24,7 @@ from akg_agents.op.langgraph_op.nodes import NodeFactory
 from akg_agents.op.langgraph_op.routers import RouterFactory
 from akg_agents.op.utils.code_checker import CodeChecker
 from akg_agents.core_v2.workflows.registry import register_workflow
+from akg_agents.op.agents.kernel_conductor import KernelConductor
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,12 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
             )
             logger.info(f"CodeChecker enabled: backend={self.backend}, dsl={code_checker.dsl}")
         
+        # 创建 KernelConductor 实例（基于 Skill 系统）
+        kernel_conductor = self.agents.get('kernel_conductor')
+        if kernel_conductor is None:
+            kernel_conductor = KernelConductor()
+            logger.info("[KernelGenOnlyWorkflow] 创建 KernelConductor 实例（基于 Skill 系统）")
+
         # 创建节点
         kernel_gen_node = NodeFactory.create_kernel_gen_node(
             self.agents['kernel_gen'],
@@ -170,11 +177,12 @@ class KernelGenOnlyWorkflow(OpBaseWorkflow):
             self.backend,
             self.arch
         )
-        conductor_node = NodeFactory.create_conductor_node(
+        conductor_node = NodeFactory.create_kernel_conductor_node(
+            kernel_conductor,
             self.trace,
             self.config,
-            self.conductor_template,
-            code_gen_agent="kernel_gen"  # 显式指定使用 kernel_gen
+            code_gen_agent="kernel_gen",
+            kernel_gen_instance=self.agents['kernel_gen'],
         )
         
         # 添加节点

@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-elementwise
-description: "适用于逐元素(element-wise)类算子的优化指南。当算子的核心计算是对张量每个元素独立执行相同操作时应选择此指南，典型算子包括：relu, sigmoid, tanh, gelu, selu, leaky_relu, elu, swish, softplus, hardsigmoid, hardtanh, exp, log, sqrt, pow, add, mul, sub, div, abs, neg, clamp, cast(类型转换), where, fill, copy 等。也适用于涉及标量广播(broadcast)的运算。不适用于需要跨元素归约(如 sum/mean/max)或矩阵乘法的算子。"
+description: "适用于纯逐元素(element-wise)类算子的优化指南。当算子的核心计算是对张量每个元素独立执行相同操作、无跨元素依赖时应选择此指南，典型算子包括：relu, sigmoid, tanh, gelu, selu, leaky_relu, elu, swish, softplus, hardsigmoid, hardtanh, softsign, exp, log, sqrt, pow, add, mul, sub, div, abs, neg, clamp, cast(类型转换), where, fill, copy 等。也适用于涉及标量广播(broadcast)的运算。不适用于需要跨元素归约(如 sum/mean/max)或矩阵乘法的算子。如果算子同时包含逐元素计算和全局归约（如损失函数 MSELoss、HuberLoss、HingeLoss），应选择 elementwise-reduce-fused 指南。"
 category: guide
 version: "1.0.0"
 metadata:
