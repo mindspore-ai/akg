@@ -46,7 +46,7 @@
 #include "akg/Dialect/Affine/Transforms/SimplifyShape.h"
 #include "akg/Dialect/Affine/Transforms/UnifyShape.h"
 #include "akg/Dialect/Affine/Transforms/WorkaroundFixReduceInitialization.h"
-#include "akg/Dialect/Affine/Transforms/BF16ToF32.h"
+#include "akg/Dialect/Affine/Transforms/LegalizeTypeForAscend.h"
 #include "akg/Dialect/Affine/Transforms/BroadcastLoopHoist.h"
 #include "akg/Dialect/Affine/Transforms/Normalize.h"
 #include "akg/Dialect/Affine/Transforms/PreProcessForFusion.h"
