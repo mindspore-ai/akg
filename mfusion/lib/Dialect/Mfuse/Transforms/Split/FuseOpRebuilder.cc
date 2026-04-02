@@ -17,6 +17,7 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Split/FuseOpRebuilder.h"
 
 #include "mfusion/Dialect/Mfuse/Support/FusedOpUtils.h"
+#include "mfusion/Support/Logging.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -28,10 +29,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-
-#define DEBUG_TYPE "split-rebuilder"
 
 namespace mlir {
 namespace mfuse {
@@ -67,8 +65,7 @@ void Rebuilder::createFusedOps() {
     }
     SmallVector<Operation *> groupOpsWithConstant(groupOps.begin(), groupOps.end());
     auto constantsToCluster = collectConstantsToCluster(groupOps);
-    LLVM_DEBUG(llvm::dbgs() << "groupOps size: " << groupOps.size()
-                            << " constantsToCluster size: " << constantsToCluster.size() << "\n");
+    MLOG(DEBUG) << "groupOps size: " << groupOps.size() << " constantsToCluster size: " << constantsToCluster.size();
     std::copy(constantsToCluster.begin(), constantsToCluster.end(), std::back_inserter(groupOpsWithConstant));
     std::sort(groupOpsWithConstant.begin(), groupOpsWithConstant.end(),
               [](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
@@ -108,7 +105,7 @@ void Rebuilder::createFusedOpForGroup(const SmallVector<Operation *> &groupOps,
 
   auto fusedOp = mainBuilder.create<mfuse::FusedOp>(fuseOp_.getLoc(), resultTypes, groupInputs.getArrayRef(),
                                                     fuseOp_.getFusionTypeAttr(), nullptr);
-  LLVM_DEBUG(llvm::dbgs() << "Create fusedOp: " << *fusedOp << "\n");
+  MLOG(DEBUG) << "Create fusedOp: " << *fusedOp;
   Block *body = new Block();
   fusedOp.getBody().push_back(body);
 

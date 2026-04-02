@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s --split -mlir-print-ir-after-all | FileCheck %s
+// RUN: mfusion-opt %s --split | FileCheck %s
 
 module {
 // Test splitting with arithmetic constant operations

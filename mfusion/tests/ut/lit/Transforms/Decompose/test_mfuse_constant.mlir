@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s -allow-unregistered-dialect -mlir-print-ir-after-all | FileCheck %s
+// RUN: mfusion-opt %s | FileCheck %s
 
 func.func @test_mfuse_constant() -> tensor<f32, {is_scalar = ""}> {
   // CHECK-LABEL: func @test_mfuse_constant

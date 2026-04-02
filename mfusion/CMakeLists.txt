@@ -78,6 +78,13 @@ include(HandleLLVMOptions)
 set(LLVM_REQUIRES_EH ON)
 set(LLVM_REQUIRES_RTTI ON)
 
+option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+if(ENABLE_ASAN)
+  message(STATUS "AddressSanitizer enabled")
+  add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address)
+endif()
+
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
