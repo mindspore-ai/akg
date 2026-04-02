@@ -19,7 +19,7 @@ import inspect
 import itertools
 from copy import deepcopy
 import numpy as np
-from .torch_mlir_utils import TORCH_DTYPE_TO_NUMPY
+from .torch_mlir_utils import TORCH_DTYPE_TO_NUMPY, format_py_value, gen_slice_scatter, gen_slice_tensor, gen_constant_pad_nd
 
 
 def get_attr(attr_desc, attr_type):
@@ -935,7 +935,7 @@ def get_op_dsl_torch_mlir():
     op_dsl = {
         "Torch.constant.float": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = np.array("
-            f"{get_input(output[0])}, dtype=np.float32)"
+            f"{format_py_value(get_input(output[0]))}, dtype=np.float32)"
         ),
 
         "Torch.constant.int": lambda inputs, output, attr: (
@@ -977,7 +977,7 @@ def get_op_dsl_torch_mlir():
 
         "Torch.aten.sub.scalar": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = ("
-            f"{get_input(inputs[0][0])} + "
+            f"{get_input(inputs[0][0])} - "
             f"({get_input(inputs[2][0])}) * "
             f"{get_input(inputs[1][0])})"
         ),
@@ -1040,20 +1040,21 @@ def get_op_dsl_torch_mlir():
         ),
 
         "Torch.aten.broadcastTo": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']}_shape = "
+            f"[{get_input(inputs[0][0])}.shape[i] if dim == -1 else dim "
+            f"for i, dim in enumerate({get_input(inputs[1][0])})]\n"
             f"{output[0]['tensor_name']} = np.broadcast_to("
             f"{get_input(inputs[0][0])}, "
-            f"{get_input(inputs[1][0])})"
+            f"{output[0]['tensor_name']}_shape)"
         ),
 
-        "Torch.aten.slice.tensor": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = np.take("
-            f"{get_input(inputs[0][0])}, "
-            f"indices=range("
-            f"{get_input(inputs[2][0])}, "
-            f"min({get_input(inputs[3][0])}, "
-            f"{get_input(inputs[0][0])}.shape[{get_input(inputs[1][0])}]), "
-            f"{get_input(inputs[4][0])}"
-            f"), axis={get_input(inputs[1][0])})"
+        "Torch.aten.slice.tensor": lambda inputs, output, attr: gen_slice_tensor(
+            output[0]["tensor_name"],
+            get_input(inputs[0][0]),
+            get_input(inputs[1][0]),
+            get_input(inputs[2][0]),
+            get_input(inputs[3][0]),
+            get_input(inputs[4][0]),
         ),
 
         "Torch.aten.permute": lambda inputs, output, attr: (
@@ -1088,6 +1089,12 @@ def get_op_dsl_torch_mlir():
             f"{get_input(inputs[1][0])})"
         ),
 
+        "Torch.aten.pow.scalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.power("
+            f"{get_input(inputs[0][0])}, "
+            f"{get_input(inputs[1][0])})"
+        ),
+
         "Torch.aten.rsqrt": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = 1.0 / np.sqrt("
             f"{get_input(inputs[0][0])})"
@@ -1096,14 +1103,14 @@ def get_op_dsl_torch_mlir():
         "Torch.aten.clamp": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = np.clip("
             f"{get_input(inputs[0][0])}, "
-            f"{'None' if inputs[1][0].get('data_type') == 'none' else get_input(inputs[1][0])}, "
-            f"{'None' if inputs[2][0].get('data_type') == 'none' else get_input(inputs[2][0])})"
+            f"{'None' if inputs[1][0].get('data_type') == 'none' else format_py_value(get_input(inputs[1][0]))}, "
+            f"{'None' if inputs[2][0].get('data_type') == 'none' else format_py_value(get_input(inputs[2][0]))})"
         ),
 
         "Torch.aten.to.dtype": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']} = "
-            f"{get_input(inputs[0][0])}.astype("
-            f"{TORCH_DTYPE_TO_NUMPY[get_input(inputs[1][0])]})"
+            f"{output[0]['tensor_name']} = np.array("
+            f"{get_input(inputs[0][0])}, "
+            f"dtype={TORCH_DTYPE_TO_NUMPY[get_input(inputs[1][0])]})"
         ),
 
         "Torch.aten.lt.scalar": lambda inputs, output, attr: (
@@ -1115,6 +1122,17 @@ def get_op_dsl_torch_mlir():
         "Torch.aten.lt.tensor": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = "
             f"{get_input(inputs[0][0])} < "
+            f"{get_input(inputs[1][0])}"
+        ),
+
+        "Torch.aten.le.scalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = "
+            f"{get_input(inputs[0][0])} <= {format_py_value(get_input(inputs[1][0]))}"
+        ),
+
+        "Torch.aten.le.Tensor": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = "
+            f"{get_input(inputs[0][0])} <= "
             f"{get_input(inputs[1][0])}"
         ),
 
@@ -1161,10 +1179,42 @@ def get_op_dsl_torch_mlir():
             f"{output[0]['tensor_name']} = np.cos("
             f"{get_input(inputs[0][0])})"
         ),
-
         "Torch.vtensor.literal": lambda inputs, output, attr: (
             f"{output[0]['tensor_name']} = np.array("
-            f"1.0, dtype=np.{output[0]['data_type']})"
+            f"{get_input(output[0])}, dtype=np.{output[0]['data_type']})"
+        ),
+        "Torch.aten.eq.scalar": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.equal("
+            f"{get_input(inputs[0][0])}, {format_py_value(get_input(inputs[1][0]))})"
+        ),
+        "Torch.aten.tanh": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.tanh("
+            f"{get_input(inputs[0][0])})"
+        ),
+        "Torch.aten.unsqueeze": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.expand_dims("
+            f"{get_input(inputs[0][0])}, axis={get_input(inputs[1][0])})"
+        ),
+        "Torch.aten.gt.tensor": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.greater("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Torch.aten.sliceScatter": lambda inputs, output, attr: (
+            gen_slice_scatter(
+                output[0]["tensor_name"],
+                get_input(inputs[0][0]),
+                get_input(inputs[1][0]),
+                get_input(inputs[2][0]),
+                get_input(inputs[3][0]),
+                get_input(inputs[4][0]),
+                get_input(inputs[5][0]),
+            )
+        ),
+        "Torch.aten.constantPadNd": lambda inputs, output, attr: gen_constant_pad_nd(
+            output[0]["tensor_name"],
+            get_input(inputs[0][0]),
+            get_input(inputs[1][0]),
+            get_input(inputs[2][0]),
         ),
     }
     return op_dsl
