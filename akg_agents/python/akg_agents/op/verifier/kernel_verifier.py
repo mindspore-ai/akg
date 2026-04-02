@@ -217,11 +217,11 @@ class KernelVerifier:
     async def check_task_desc_runtime(self, task_desc: str, timeout: int = 60) -> Tuple[bool, str]:
         """
         运行时检查 task_desc 代码是否能正确执行
-        
+
         Args:
             task_desc: task_desc 代码字符串
             timeout: 超时时间
-            
+
         Returns:
             Tuple[bool, str]: (是否通过, 错误信息)
         """
@@ -230,11 +230,18 @@ class KernelVerifier:
         os.makedirs(check_dir, exist_ok=True)
         
         try:
+            # Resolve device_id from worker's DevicePool (same as gen_verify_project)
+            device_id = 0
+            if self.worker:
+                from akg_agents.core.worker.local_worker import LocalWorker
+                if isinstance(self.worker, LocalWorker) and self.worker.device_pool:
+                    device_id = self.worker.device_pool.device_list[0]
+
             # 2. 写入 task_desc 到 reference.py
             ref_file = os.path.join(check_dir, "reference.py")
             with open(ref_file, "w", encoding="utf-8") as f:
                 f.write(task_desc)
-                
+
             # 3. 生成验证脚本 verify_{op_name}.py
             verify_script_content = f"""
 import torch
@@ -256,14 +263,16 @@ def run_check():
             
         print("Successfully imported Model and helper functions.")
         
-        # Determine device
+        # Determine device and set to specific device_id
         device = "cpu"
         if torch.cuda.is_available():
             device = "cuda"
+            torch.cuda.set_device({device_id})
         elif hasattr(torch, 'npu') and torch.npu.is_available():
             device = "npu"
-            
-        print(f"Using device: {{device}}")
+            torch.npu.set_device({device_id})
+
+        print(f"Using device: {{device}}:{device_id}")
         
         # Instantiate model
         try:

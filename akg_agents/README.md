@@ -35,6 +35,7 @@ The framework provides a complete agent infrastructure: ReAct Agent base classes
 The current production scenario is **AI kernel code generation**: leveraging LLM planning and multi-agent collaboration to automate multi-backend, multi-DSL high-performance kernel generation and optimization. Future extensions will cover kernel migration, performance tuning, code refactoring, and more AI Infra related scenarios.
 
 ## 🗓️ 2. Changelog
+- 2026-03-31: Added [AutoResearch](./docs/v2/AutoResearch.md) workflow — agent-driven iterative deep optimization with KernelVerifier eval, supporting all DSLs.
 - 2026-03-11：Streamline the [operator optimization](./docs/v2/OpOptimizer.md) process by integrating AKG Agents and Opencode.
 - 2026-02-26: Supported PyPTO backend code generation.
 - 2026-02-15: Documentation reorganized. Legacy docs archived to `docs/v1/`, new docs consolidated under `docs/v2/`. 
@@ -155,6 +156,8 @@ Once launched, you can interact in the following ways:
 | `kernel_related/cpu/run_torch_cpu_cpp_single.py` | Kernel | Single kernel generation (Torch + CPP) |
 | `kernel_related/cpu/run_torch_evolve_cpu_cpp.py` | Kernel | Evolutionary kernel optimization (Torch + CPP) |
 | `kernel_related/cpu/run_torch_adaptive_search_cpu_cpp.py` | Kernel | UCB adaptive search (Torch + CPP) |
+| **AutoResearch** | | |
+| `scripts/run_autoresearch.py` | Kernel | AutoResearch iterative optimization (all backends, `--desc` / `--ref` / `--kernel`) |
 | **Utilities** | | |
 | `kernel_related/run_kernel_agent.py` | Kernel | KernelAgent (ReAct Agent) interactive invocation |
 | `kernel_related/run_kernel_profile.py` | Kernel | Kernel performance profiling |
@@ -198,6 +201,7 @@ akg_agents/
 
 ### Scenarios
 - **[Kernel Agent](./docs/v2/KernelAgent.md)** - Multi-backend, multi-DSL kernel code generation and optimization (`akg_cli op`)
+- **[AutoResearch](./docs/v2/AutoResearch.md)** - Agent-driven iterative deep optimization workflow (ReAct loop with KernelVerifier eval)
 
 ### OpenCode Integration
 - **[op-optimizer User Guide](./docs/v2/OpOptimizer.md)** - End-to-end operator optimization Agent: env setup → fusion analysis (optional) → task extraction → operator generation → code replacement, supporting single-operator optimization and model fusion analysis
