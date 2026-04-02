@@ -106,8 +106,19 @@ struct ShapeNormalState {
   DenseSet<Operation *> entryMaterializedOps;
   DenseSet<Operation *> toDeleteOps;
   llvm::StringMap<SmallVector<std::string>> decompositions;
+  llvm::StringMap<std::string> axisRenameMap;
   llvm::StringMap<GlobalTargetInfo> globalTargets;
   ShapeNormalState() : manager(SymbolicShapeAnalysis::getInstance()) { axisSizes["1"] = 1; }
+
+  void recordAxisRename(const std::string &oldAxis, const std::string &newAxis) {
+    if (oldAxis == newAxis || oldAxis == "1")
+      return;
+    for (auto &kv : axisRenameMap) {
+      if (kv.second == oldAxis)
+        kv.second = newAxis;
+    }
+    axisRenameMap[oldAxis] = newAxis;
+  }
 
   SmallVector<std::string> getDecomposition(const std::string &axis) const {
     auto it = decompositions.find(axis);
@@ -493,6 +504,7 @@ struct ShapeNormalState {
       DynSymtoArgDim[newAxis] = dynIt->second;
     }
 
+    recordAxisRename(oldAxis, newAxis);
     return newAxis;
   }
 
@@ -1208,6 +1220,14 @@ struct ExpandShapeAdapter final : OpAdapter {
         state.updateDecomposition(srcAxis, childAxes);
       }
     }
+    for (std::string &ax : resultAxes) {
+      if (!ax.empty()) {
+        auto it = state.axisRenameMap.find(ax);
+        if (it != state.axisRenameMap.end()) {
+          ax = it->second;
+        }
+      }
+    }
     size_t dynIdx = 0;
     for (size_t outDim = 0; outDim < resultAxes.size(); ++outDim) {
       if (resultAxes[outDim].empty())
@@ -1496,6 +1516,7 @@ struct GenericAdapter final : OpAdapter {
           unifiedAxesNames[inputDimMap[i]] = SymShape[i];
         } else {
           std::string updatedAxis = state.globalReplaceAxis(SymShape[i], unifiedAxesNames[inputDimMap[i]]);
+          // else: could use axisRenameMap
           std::replace_if(
             unifiedAxesNames.begin(), unifiedAxesNames.end(),
             [&](const std::string &affineMapName) {
