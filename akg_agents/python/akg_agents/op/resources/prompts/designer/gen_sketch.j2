@@ -194,9 +194,19 @@ def get_init_inputs():
 {% for suggestion in handwrite_suggestions %}
 ### 参考案例 {{ loop.index }}: {{ suggestion.name }}
 
+**原始实现：**
+```{{ dsl }}
+{{ suggestion.torch_code }}
+```
+
+**优化后的实现：**
+```{{ dsl }}
+{{ suggestion.triton_code }}
+```
+
 **优化策略与要点：**
 ```markdown
-{{ suggestion.improvement_doc }}
+{{ suggestion.improvement }}
 ```
 
 ---
@@ -206,19 +216,46 @@ def get_init_inputs():
 {% endif %}
 
 {% if meta_prompts %}
-## 额外优化要点
-在设计草图中考虑以下优化建议：
+## 架构实现规约 (Architecture Implementation Directives)
+**以下是已为你预选的最佳元提示组合，你必须严格按此架构路线进行 Sketch 设计，不得随意更改预选策略：**
+
 {{ meta_prompts }}
-{% endif %}
 
-{% if user_requirements %}
-## 用户额外需求（重要！）
+### 如何执行元提示指令：
+1. **对于 implementation_type: Hybrid**:
+  - 你会看到分层实现逻辑（如 `[语义层]`、`[实现层:declarative|explicit]`、`[禁止模式:*]`）。
+  - **模式锁定**：只允许执行当前展示的实现层，严禁自行补充另一模式实现。
+  - 若展示的是 `declarative`：
+    - 你**严禁**在 Sketch 的循环内部手写底层流水线/同步细节（例如手写双缓冲 if/else 轮转）。
+    - 你应通过 `constexpr` 参数和结构化语义表达策略，让编译器完成底层展开。
+  - 若展示的是 `explicit`：
+    - 你必须在 Sketch 中显式写出并行、访存与同步逻辑，并包含边界检查与写回顺序约束。
+  - 若存在 `[禁止模式:*]`：其约束优先级最高，必须严格遵守。
+2. **对于 implementation_type: Manual**:
+   - 你必须按照 `实现逻辑` 中的精准要求，在 Sketch 中编写具体的 IR 指令（如 `load`, `store`, `dot` 等）。
+3. **对于参数配置**:
+    - 不能直接在 Sketch 中使用具体数值（如 `GROUP_SIZE_M = 16`），必须使用 `constexpr` 参数（如 `GROUP_SIZE_M`）。
+    - 仅当预选策略与算子特征明确判定“允许 autotune”时，才可对参数（如 `BLOCK_SIZE`）添加 `@metaprompt(autotune)` 并给出多值范围（例如：`BLOCK_SIZE[@metaprompt(autotune): 16, 32, 64, 128, 256]`）。
+    - 若 searcher 已判定“禁用 autotune”，或算子属于全局归约到标量/小张量、atomic 写回、loss reduction、scatter/index_add/inplace 等副作用场景：严禁添加 `@metaprompt(autotune)`；参数在 Sketch 中仅保留 `constexpr` 变量名，具体取值必须遵循单值参数空间（如 `BLOCK_SIZE` 对应 `params` 中 `BLOCK_SIZE ∈ [256]`）。
+    
 
-**用户在多轮对话交互中明确提出了以下需求，请在设计草图时必须满足：**
-
-{{ user_requirements }}
-
-**请确保草图设计能够支持上述需求，这些需求会在后续代码生成阶段被传递给 Coder。**
+**设计强制要求：**
+1. **显式策略锚点 (Explicit Strategy Anchors)**：在草图代码文件的开头，必须包含 `Applied Meta-Strategies: [ID1, ID2, ...]` 块，且必须严格匹配上述提供的 ID。
+2. **代码级标注 (Code-level Annotation)**：在 Sketch 代码中，凡是体现了上述元提示策略的逻辑块，必须在上方添加 `@metaprompt("strategy_id")`。例如：
+   ```python
+   @metaprompt("strat_tiling_2d_block_ptr")
+   @llm_hint("block_ptr")
+   load(A[m_idx, k_idx] -> a_tile)
+   ```
+3. **决策 transparent化 (Reasoning Transparency)**：在草图的 `reasoning` 字段中，必须结合预选策略进行定量分析。例如：*“由于选用了 strat_parallel_split_k，我设置了 SPLIT_K=8 以确保在 108 个 SM 上达到满载。”*
+4. **参数一致性**：草图中的 `constexpr` 变量名必须与规约中 `对应参数` 字段的名称保持绝对一致（如 `GROUP_SIZE_M`, `SPLIT_K` 等）。
+5. **模式与约束校验**：在 `reasoning` 中必须明确说明：
+  - 已执行的是哪一种实现层（`declarative` 或 `explicit`）；
+  - 未触发哪些禁止模式约束；
+  - 未违反任何互斥策略。
+6. **Autotune 一致性校验**：在 `reasoning` 中必须明确说明是否启用 autotune，并与 searcher 决策保持一致：
+  - 若禁用 autotune：Sketch 中不得出现 `@metaprompt(autotune)`，且参数空间为单值集合；
+  - 若启用 autotune：需给出可重复执行无副作用的依据。
 {% endif %}
 
 {% if enable_llm_range_inference %}
@@ -262,5 +299,5 @@ def get_init_inputs():
 
 仅返回JSON，不要包含任何解释或额外内容。
 {% else %}
-请直接输出算法草图。不要使用 JSON 格式，不要使用代码块包裹，直接输出 `sketch op_name { ... }` 格式的内容。
+请直接输出算法草图。不要使用 JSON 格式，不要使用代码块包裹，算子草图必须以 “Applied Meta-Strategies: [...]” 开头，并单独一行，列出你选用的策略 ID。直接输出 `Applied Meta-Strategies: [...]\n sketch op_name { ... }` 格式的内容。
 {% endif %}
