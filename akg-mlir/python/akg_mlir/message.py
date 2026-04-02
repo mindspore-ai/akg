@@ -24,7 +24,7 @@ import subprocess
 import shutil
 
 from .utils.cpu_profiling_wrapper import wrap_timer_func
-from .backends.ascend import run_akg_opt, write_code, get_block_dim_from_arch, ascend_compile
+from .backends.ascend import run_akg_opt, write_code, get_block_dim_from_mlir, ascend_compile
 
 HOST_SHAPES = "hostShapes"
 DEVICE_SHAPES = "deviceShapes"
@@ -124,7 +124,6 @@ class AkgMlirDriver:
                 compute_capability = target_info.get("compute_capability", "7.0")
                 self.target_info = "v100" if compute_capability == "7.0" else "a100"
                 self.arch = target_info.get("arch", "")
-            self.block_dim = get_block_dim_from_arch(self.arch)
         self.dynamic_shape = dynamic_shape
 
     def compile(self):
@@ -279,6 +278,8 @@ class AkgMlirDriver:
         input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
         so_file = os.path.join(self.output_dir, kernel_name + ".so")
         dump_log = os.path.join(self.output_dir, kernel_name + "_dump_bishengir.log")
+
+        self.block_dim = get_block_dim_from_mlir(input_file)
 
         ascend_compile(
             input_file=input_file,

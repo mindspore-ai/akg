@@ -13,6 +13,7 @@
 # limitations under the License.
 """ akg launch and compile utils """
 import os
+import re
 import sys
 import hashlib
 import json
@@ -43,20 +44,31 @@ def write_code(js_dict, fname):
         json.dump(js_dict, f, sort_keys=True, indent=4, separators=(",", ":"))
 
 
-def get_block_dim_from_arch(arch):
-    """ Get block_dim from architecture name.
-    When arch is None or empty, returns 40 (default for 910B4, same as original hardcoded value).
+# Matches device func attrs like: hacc.block_dim = 40 : i64
+_BLOCK_DIM_MLIR_RE = re.compile(r"hacc\.block_dim\s*=\s*(\d+)\s*:\s*i64")
+
+
+def get_block_dim_from_mlir(mlir_path):
+    """Read ``hacc.block_dim`` from an MLIR file on disk.
+
+    Args: mlir_path (str): Path to the MLIR file.
+
+    Returns: int: Parsed block dimension.
+
+    Raises:
+        FileNotFoundError: If ``mlir_path`` is not a file.
+        ValueError: If no ``hacc.block_dim = <n> : i64`` line is found.
     """
-    if not arch:
-        return 40
-    arch_str = str(arch).upper()
-    if "910B4" in arch_str:
-        return 40
-    if "910B2" in arch_str:
-        return 48
-    error_msg = (f"Unsupported architecture: {arch}. "
-                 f"Supported architectures: 910B4 (block_dim=40), 910B2 (block_dim=48)")
-    raise ValueError(error_msg)
+    if not os.path.isfile(mlir_path):
+        raise FileNotFoundError(f"MLIR file not found: {mlir_path}")
+    with open(mlir_path, "r", encoding="utf-8") as f:
+        text = f.read()
+    match = _BLOCK_DIM_MLIR_RE.search(text)
+    if not match:
+        raise ValueError(
+            f"No hacc.block_dim = <n> : i64 attribute found in {mlir_path}"
+        )
+    return int(match.group(1))
 
 def set_ascend_info(core_type, title_dict):
     """Set ascend binary metadata (magic, coreType, etc.) in title_dict by core type.

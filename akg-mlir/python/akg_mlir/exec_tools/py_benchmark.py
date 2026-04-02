@@ -28,7 +28,7 @@ from bfloat16 import bfloat16
 
 from akg import AkgMlirDriver
 from akg import akgProfileMgr
-from akg.backends.ascend import launch, ascend_compile
+from akg.backends.ascend import launch, ascend_compile, get_block_dim_from_mlir
 from ..utils.composite_op_helper import compare_tensor, gen_json_data
 from ..utils.dynamic_utils import dump_shape_arg_list, get_device_shape
 from ..utils.gen_runtime_code import (ProfilingParams, gen_cuda_runtime_code)
@@ -430,7 +430,8 @@ def _run_ascend_kernel_for_torch_mlir(
             True,
             str(dump_log_path),
         )
-        ascend_compile(output_path, so_path, 16)
+        block_dim = get_block_dim_from_mlir(str(output_path))
+        ascend_compile(output_path, so_path, block_dim)
         print("[INFO] bishengir-compile success")
     device_id = int(os.environ.get("DEVICE_ID", 0))
     launch(
