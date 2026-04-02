@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "akg/Dialect/Affine/Transforms/BF16ToF32.h"
+#include "akg/Dialect/Affine/Transforms/LegalizeTypeForAscend.h"
 
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -28,18 +28,18 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
-#define GEN_PASS_DEF_BF16TOF32
-#define GEN_PASS_DECL_BF16TOF32
+#define GEN_PASS_DEF_LEGALIZETYPEFORASCEND
+#define GEN_PASS_DECL_LEGALIZETYPEFORASCEND
 #include "akg/Dialect/Affine/Passes.h.inc"
 }  // namespace mlir
 
-#define DEBUG_TYPE "bf16-to-f32"
+#define DEBUG_TYPE "legalize-type-for-ascend"
 
 namespace mlir {
 namespace {
 
 // Helper function to convert bf16 value to f32
-static Value convertBF16ToF32(OpBuilder &builder, Location loc, Value value) {
+static Value convertToF32(OpBuilder &builder, Location loc, Value value) {
   Type valueType = value.getType();
   if (isa<BFloat16Type>(valueType)) {
     auto f32Type = builder.getF32Type();
@@ -56,6 +56,20 @@ static Value convertBF16ToF32(OpBuilder &builder, Location loc, Value value) {
       }
     }
     return builder.create<arith::ExtFOp>(loc, f32Type, value);
+  } else if (isa<Float64Type>(valueType)) {
+    auto f32Type = builder.getF32Type();
+    if (auto constantOp = dyn_cast<arith::ConstantOp>(value.getDefiningOp())) {
+      FloatAttr floatAttr = dyn_cast<FloatAttr>(constantOp.getValue());
+      APFloat f64Value = floatAttr.getValue();
+      bool losesInfo = false;
+      APFloat f32Value(f64Value);
+      f32Value.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven, &losesInfo);
+      return builder.create<arith::ConstantOp>(loc, f32Type, FloatAttr::get(f32Type, f32Value));
+    } else if (auto extFOp = dyn_cast<arith::ExtFOp>(value.getDefiningOp())) {
+      if (isa<Float32Type>(extFOp.getIn().getType())) {
+        return extFOp.getIn();
+      }
+    }
   }
   return value;
 }
@@ -113,7 +127,7 @@ struct AffineLoadBF16ToF32Pattern : public OpRewritePattern<affine::AffineLoadOp
     rewriter.setInsertionPointAfter(loadOp);
 
     // Create the conversion operation (f32Value uses loadedValue as input)
-    Value f32Value = convertBF16ToF32(rewriter, loc, loadedValue);
+    Value f32Value = convertToF32(rewriter, loc, loadedValue);
     Operation *conversionOp = f32Value.getDefiningOp();
 
     // Replace all uses of the original load result with the converted f32 value
@@ -136,7 +150,7 @@ struct TruncFOpPattern : public OpRewritePattern<arith::TruncFOp> {
       rewriter.replaceOp(truncOp, value);
       return success();
     }
-    if (isa<arith::ConstantOp>(value.getDefiningOp())) {
+    if (isa<BFloat16Type>(truncOp.getResult().getType()) && isa<arith::ConstantOp>(value.getDefiningOp())) {
       Value bf16Value = convertWideFPToBF16(rewriter, truncOp.getLoc(), value);
       rewriter.replaceOp(truncOp, bf16Value);
     }
@@ -216,9 +230,9 @@ struct AffineForFPToBF16Pattern : public OpRewritePattern<affine::AffineForOp> {
     bool isMatch = false;
     for (size_t i = 0; i < inits.size(); i++) {
       Type valueType = inits[i].get().getType();
-      if (isa<BFloat16Type>(valueType)) {
+      if (isa<BFloat16Type, Float64Type>(valueType)) {
         isMatch = true;
-        auto value = convertBF16ToF32(rewriter, forOp.getLoc(), inits[i].get());
+        auto value = convertToF32(rewriter, forOp.getLoc(), inits[i].get());
         args[i].setType(value.getType());
         results[i].setType(value.getType());
         inits[i].set(value);
@@ -239,9 +253,9 @@ FailureOr<Operation *> legalizeOp(Operation *op, ValueRange operands, const Type
   bool isMatch = false;
   SmallVector<Value, 4> newOperands;
   for (auto operand : operands) {
-    if (isa<BFloat16Type>(operand.getType())) {
+    if (isa<BFloat16Type, Float64Type>(operand.getType())) {
       isMatch = true;
-      Value f32Value = convertBF16ToF32(rewriter, loc, operand);
+      Value f32Value = convertToF32(rewriter, loc, operand);
       newOperands.push_back(f32Value);
     } else {
       newOperands.push_back(operand);
@@ -281,7 +295,7 @@ struct LegalizeBF16RewritePattern final : RewritePattern {
   TypeConverter typeConverter;
 };
 
-class BF16ToF32Pass : public impl::BF16ToF32Base<BF16ToF32Pass> {
+class LegalizeTypeForAscendPass : public impl::LegalizeTypeForAscendBase<LegalizeTypeForAscendPass> {
   void runOnOperation() override {
     func::FuncOp func = getOperation();
     MLIRContext *context = &getContext();
@@ -291,7 +305,7 @@ class BF16ToF32Pass : public impl::BF16ToF32Base<BF16ToF32Pass> {
     TypeConverter typeConverter;
     typeConverter.addConversion([](Type type) -> std::optional<Type> { return type; });
     typeConverter.addConversion([](FloatType type) -> std::optional<Type> {
-      if (type.isBF16()) return Float32Type::get(type.getContext());
+      if (isa<BFloat16Type, Float64Type>(type)) return Float32Type::get(type.getContext());
       return std::nullopt;
     });
 
@@ -315,5 +329,7 @@ class BF16ToF32Pass : public impl::BF16ToF32Base<BF16ToF32Pass> {
 };
 
 }  // namespace
-std::unique_ptr<OperationPass<func::FuncOp>> createBF16ToF32Pass() { return std::make_unique<BF16ToF32Pass>(); }
+std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeTypeForAscendPass() {
+  return std::make_unique<LegalizeTypeForAscendPass>();
+}
 }  // namespace mlir

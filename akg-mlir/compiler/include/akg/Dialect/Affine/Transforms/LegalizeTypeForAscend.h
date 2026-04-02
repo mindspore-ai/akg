@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Huawei Technologies Co., Ltd
+ * Copyright 2025-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_BF16TOF32_H_
-#define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_BF16TOF32_H_
+#ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_LEGALIZETYPEFORASCEND_H_
+#define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_LEGALIZETYPEFORASCEND_H_
 
 #include "mlir/Pass/Pass.h"
 
@@ -24,8 +24,8 @@ namespace func {
 class FuncOp;
 }  // namespace func
 
-std::unique_ptr<OperationPass<func::FuncOp>> createBF16ToF32Pass();
+std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeTypeForAscendPass();
 
 }  // namespace mlir
 
-#endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_BF16TOF32_H_
+#endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_LEGALIZETYPEFORASCEND_H_
