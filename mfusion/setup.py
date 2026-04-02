@@ -40,6 +40,9 @@ class CMakeBuild(build_ext):
         if cmake_prefix_path:
             cmake_args.append(f"-DCMAKE_PREFIX_PATH={cmake_prefix_path}")
 
+        enable_asan = os.environ.get("ENABLE_ASAN", "OFF")
+        cmake_args.append(f"-DENABLE_ASAN={enable_asan}")
+
         # Configure with CMake
         if os.environ.get("INC_BUILD", "0") != "1":
             subprocess.check_call(

@@ -23,7 +23,6 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Value.h"
-#include "llvm/Support/Debug.h"
 
 namespace mlir {
 namespace mfuse {
@@ -96,16 +95,14 @@ llvm::DenseSet<Operation *> collectConstantsToCluster(llvm::ArrayRef<Operation *
 
       // If constant is not a tensor type (e.g., scalar), include it in cluster
       if (!isa<TensorType>(resultType)) {
-        LLVM_DEBUG(llvm::dbgs() << "Constant at index " << idx << " for " << opName
-                                << " is not a tensor type, keeping in cluster\n");
+        MLOG(DEBUG) << "Constant at index " << idx << " for " << opName << " is not a tensor type, keeping in cluster";
         constantsToCluster.insert(defOp);
         continue;
       }
 
       // Check if this constant is used at a value-dependent index
       if (constIndices != nullptr && constIndices->count(idx) != 0) {
-        LLVM_DEBUG(llvm::dbgs() << "Constant at index " << idx << " for " << opName
-                                << " is value-dependent, keeping in cluster\n");
+        MLOG(DEBUG) << "Constant at index " << idx << " for " << opName << " is value-dependent, keeping in cluster";
         constantsToCluster.insert(defOp);
         continue;
       }
@@ -127,8 +124,8 @@ llvm::DenseSet<Operation *> collectConstantsToCluster(llvm::ArrayRef<Operation *
       }
 
       // Include it in the cluster
-      LLVM_DEBUG(llvm::dbgs() << "Constant at index " << idx << " for " << opName
-                              << " is single-element finite value, keeping in cluster\n");
+      MLOG(DEBUG) << "Constant at index " << idx << " for " << opName
+                  << " is single-element finite value, keeping in cluster";
       constantsToCluster.insert(defOp);
     }
   }
