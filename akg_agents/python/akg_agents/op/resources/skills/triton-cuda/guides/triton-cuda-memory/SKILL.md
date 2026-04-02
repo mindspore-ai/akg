@@ -203,6 +203,7 @@ task_m, task_n = tl.swizzle2d(pid_m, pid_n, num_pid_m, num_pid_n, GROUP_SIZE)
         triton.Config({...}, num_stages=4, num_warps=8),
     ],
     key=[...],
+    restore_value=['output_ptr'],  # 必须：列出所有输出指针参数名
 )
 ```
 

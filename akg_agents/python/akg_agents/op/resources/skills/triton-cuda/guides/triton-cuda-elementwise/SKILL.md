@@ -86,6 +86,7 @@ Element-wise 算子通常使用较少的 warp：
         triton.Config({'BLOCK_SIZE': 2048}, num_warps=8),
     ],
     key=['n_elements'],
+    restore_value=['output_ptr'],  # 必须：列出所有输出指针参数名
 )
 @triton.jit
 def optimized_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
