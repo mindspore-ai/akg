@@ -132,40 +132,36 @@ def reduce_str(inputs, output, attr, op_type):
     keepdims_value = get_attr(attr, "keep_dims")
     keepdims = keepdims_value if keepdims_value else keepdims
 
+    in0 = get_input(inputs[0][0])
+    name = output[0]['tensor_name']
     if not axis:
-        s = ( "%s = np.%s(%s.astype(np.float32) if %s.dtype == np.float16 or %s.dtype == bfloat16 else %s, "
-              "keepdims=%s).astype(%s.dtype)" 
-            ) % (output[0]['tensor_name'], op_type, get_input(
-              inputs[0][0]), get_input(inputs[0][0]), get_input(inputs[0][0]),
-              get_input(inputs[0][0]), keepdims, get_input(inputs[0][0]))
+        s = (
+            f"{name} = np.{op_type}({in0}.astype(np.float32) if {in0}.dtype "
+            f"== np.float16 or {in0}.dtype == bfloat16 else {in0}, "
+            f"keepdims={keepdims}).astype({in0}.dtype)"
+        )
     else:
-        s = ( "%s = np.%s(%s.astype(np.float32) if %s.dtype == np.float16 or %s.dtype == bfloat16 else %s, "
-              "axis=tuple(%s), keepdims=%s)" 
-              ".astype(%s.dtype); %s = np.reshape(%s, %s) " 
-            ) % (output[0]['tensor_name'], op_type, get_input(inputs[0][0]), get_input(inputs[0][0]),
-              get_input(inputs[0][0]), get_input(inputs[0][0]), axis, keepdims, get_input(inputs[0][0]),
-              output[0]['tensor_name'], output[0]['tensor_name'], output[0]['shape'])
+        s = (
+            f"{name} = np.{op_type}({in0}.astype(np.float32) if {in0}.dtype "
+            f"== np.float16 or {in0}.dtype == bfloat16 else {in0}, "
+            f"axis=tuple({axis}), keepdims={keepdims})"
+            f".astype({in0}.dtype); {name} = np.reshape({name}, {output[0]['shape']}) "
+        )
     return s
 
 
 def cast_str(inputs, output, attr):
     """gen cast string"""
     dst_type = output[0]["data_type"]
+    tn = output[0]['tensor_name']
+    inp = get_input(inputs[0][0])
     if dst_type == "bfloat16":
         if inputs[0][0].get('value', None) is not None:
-            s = "%s = np.array(%s).astype(bfloat16)" % (
-                output[0]['tensor_name'], get_input(inputs[0][0]))
-        else:
-            s = "%s = %s.astype(bfloat16)" % (
-                output[0]['tensor_name'], get_input(inputs[0][0]))
-        return s
+            return f"{tn} = np.array({inp}).astype(bfloat16)"
+        return f"{tn} = {inp}.astype(bfloat16)"
     if inputs[0][0].get('value', None) is not None:
-        s = "%s = np.array(%s).astype(np.%s)" % (
-            output[0]['tensor_name'], get_input(inputs[0][0]), dst_type)
-    else:
-        s = "%s = %s.astype(np.%s)" % (
-            output[0]['tensor_name'], get_input(inputs[0][0]), dst_type)
-    return s
+        return f"{tn} = np.array({inp}).astype(np.{dst_type})"
+    return f"{tn} = {inp}.astype(np.{dst_type})"
 
 
 def broadcast_str(inputs, output, attr):
@@ -175,8 +171,10 @@ def broadcast_str(inputs, output, attr):
         dst_shape = output[0]["shape"]
     else:
         dst_shape = get_attr(attr, "shape")
-    s = "%s = np.broadcast_to(%s, %s)" % (
-        output[0]["tensor_name"], get_input(inputs[0][0]), dst_shape)
+    s = (
+        f"{output[0]['tensor_name']} = np.broadcast_to("
+        f"{get_input(inputs[0][0])}, {dst_shape})"
+    )
     return s
 
 
@@ -185,8 +183,10 @@ def transpose_str(inputs, output, attr):
     axes = None
     axes_value = get_attr(attr, "perm")
     axes = axes_value if axes_value else axes
-    s = "%s = np.transpose(%s, axes=%s)" % (
-        output[0]['tensor_name'], get_input(inputs[0][0]), axes)
+    s = (
+        f"{output[0]['tensor_name']} = np.transpose("
+        f"{get_input(inputs[0][0])}, axes={axes})"
+    )
     return s
 
 
@@ -196,15 +196,17 @@ def concat_str(inputs, output, attr):
     inputs_list = []
     for i in range(len(inputs[0])):
         inputs_list.append(get_input(inputs[0][i]))
-    s = '{} = np.concatenate(({}), axis={})'.format(
-        output[0]['tensor_name'], ', '.join(inputs_list), axis)
+    s = (
+        f"{output[0]['tensor_name']} = np.concatenate("
+        f"({', '.join(inputs_list)}), axis={axis})"
+    )
     return s
 
 
 def trans_data_two2fractal(input_, src_format, dst_format):
     """two2fractal"""
     if src_format not in ("DefaultFormat", "NCHW"):
-        raise ValueError("src_format %s is not supported!" % src_format)
+        raise ValueError(f"src_format {src_format} is not supported!")
     shape = list(input_.shape)
     m, n = shape[-2], shape[-1]
     m1, n1 = m // 16, n // 16
@@ -219,8 +221,9 @@ def trans_data_two2fractal(input_, src_format, dst_format):
     reshape_shape = shape[:-2] + [m1, m0, n1, n0]
     reshape_input = input_.reshape(reshape_shape)
     if dst_format != "FRACTAL_NZ":
-        raise ValueError("dst_format %s is not supported when src_format is %s" % (
-            dst_format, src_format))
+        raise ValueError(
+            f"dst_format {dst_format} is not supported when src_format is {src_format}"
+        )
     transpose_axis = list(range(len(shape) - 2)) + \
         [x + len(shape) - 2 for x in [2, 0, 1, 3]]
     bench_mark = reshape_input.transpose(transpose_axis)
@@ -255,19 +258,25 @@ def get_trans_data_str(input_name, output_name, ori_shape, src_format, dst_forma
                        ("FRACTAL_NZ", "NCHW")]
 
     if (src_format, dst_format) not in support_formats:
-        raise ValueError("src_format %s and dst_format %s is not supported!" %
-                         (src_format, dst_format))
+        raise ValueError(
+            f"src_format {src_format} and dst_format {dst_format} is not supported!"
+        )
 
     if src_format in ('DefaultFormat', "NCHW") and dst_format == 'FRACTAL_NZ':
-        res = "%s \n%s = %s(%s, '%s', '%s')" % (inspect.getsource(trans_data_two2fractal),
-                                                output_name, trans_data_two2fractal.__name__, input_name,
-                                                src_format, dst_format)
+        res = (
+            f"{inspect.getsource(trans_data_two2fractal)} \n"
+            f"{output_name} = {trans_data_two2fractal.__name__}("
+            f"{input_name}, '{src_format}', '{dst_format}')"
+        )
     elif src_format == 'FRACTAL_NZ' and dst_format in ('DefaultFormat', "NCHW"):
-        res = "%s \n%s = %s(%s, %s)" % (inspect.getsource(trans_data_fractal2two),
-                                        output_name, trans_data_fractal2two.__name__, input_name, ori_shape)
+        res = (
+            f"{inspect.getsource(trans_data_fractal2two)} \n"
+            f"{output_name} = {trans_data_fractal2two.__name__}({input_name}, {ori_shape})"
+        )
     else:
-        raise ValueError("src_format(%s) and dst_format(%s) is not supported!" % (
-            src_format, dst_format))
+        raise ValueError(
+            f"src_format({src_format}) and dst_format({dst_format}) is not supported!"
+        )
     return res
 
 
@@ -290,35 +299,29 @@ def np_matmul_str(inputs, output, attr):
     res = ""
     # Because when matmul calculations are performed on Gpu and Ascend, fp32 is used for accumulation when
     # the input data is fp16, so the input data is casted to fp32
+    out_name = output[0]['tensor_name']
+    in0 = get_input(inputs[0][0])
+    in1 = get_input(inputs[1][0])
     if input_0['data_type'] == "float16":
-        tmp = "%s = %s.astype(np.float32)" % (
-            get_input(input_0), get_input(input_0))
+        tmp = f"{get_input(input_0)} = {get_input(input_0)}.astype(np.float32)"
         res += tmp + "\n"
     if input_1['data_type'] == "float16":
-        tmp = "%s = %s.astype(np.float32)" % (
-            get_input(input_1), get_input(input_1))
+        tmp = f"{get_input(input_1)} = {get_input(input_1)}.astype(np.float32)"
         res += tmp + "\n"
 
     if trans_a and trans_b:
-        res += "%s = np.matmul(np.swapaxes(%s, -1, -2), np.swapaxes(%s, -1, -2))" % \
-               (output[0]['tensor_name'], get_input(
-                   inputs[0][0]), get_input(inputs[1][0]))
+        res += (
+            f"{out_name} = np.matmul(np.swapaxes({in0}, -1, -2), "
+            f"np.swapaxes({in1}, -1, -2))"
+        )
     elif trans_a:
-        res += "%s = np.matmul(np.swapaxes(%s, -1, -2), %s)" % \
-               (output[0]['tensor_name'], get_input(
-                   inputs[0][0]), get_input(inputs[1][0]))
+        res += f"{out_name} = np.matmul(np.swapaxes({in0}, -1, -2), {in1})"
     elif trans_b:
-        res += "%s = np.matmul(%s, np.swapaxes(%s, -1, -2))" % \
-               (output[0]['tensor_name'], get_input(
-                   inputs[0][0]), get_input(inputs[1][0]))
+        res += f"{out_name} = np.matmul({in0}, np.swapaxes({in1}, -1, -2))"
     else:
-        res += "%s = np.matmul(%s, %s)" % \
-               (output[0]['tensor_name'], get_input(
-                   inputs[0][0]), get_input(inputs[1][0]))
+        res += f"{out_name} = np.matmul({in0}, {in1})"
     if output[0]['data_type'] == "float16":
-        res += "\n" + \
-            "%s = %s.astype(np.float16)" % (
-                output[0]['tensor_name'], output[0]['tensor_name'])
+        res += f"\n{out_name} = {out_name}.astype(np.float16)"
     return res
 
 
@@ -391,14 +394,12 @@ def strided_slice_str(inputs, output, attr):
             ':' + str(strides_num) + ","
     slice_string = slice_string[:-1]
 
-    res = "%s = %s[%s]" % (output[0]['tensor_name'],
-                           get_input(inputs[0][0]), slice_string)
+    tn = output[0]['tensor_name']
+    res = f"{tn} = {get_input(inputs[0][0])}[{slice_string}]"
     if new_axis != -1:
-        res += "\n%s = np.expand_dims(%s, axis=%s)" % (
-            output[0]['tensor_name'], output[0]['tensor_name'], str(new_axis))
+        res += f"\n{tn} = np.expand_dims({tn}, axis={new_axis})"
     if shrink_axis != -1:
-        res += "\n%s = np.squeeze(%s, axis=%s)" % (
-            output[0]['tensor_name'], output[0]['tensor_name'], str(shrink_axis))
+        res += f"\n{tn} = np.squeeze({tn}, axis={shrink_axis})"
     return res
 
 
@@ -414,8 +415,10 @@ def slice_str(inputs, output, attr):
         if not i == len(begin) - 1:
             slice_string += ","
 
-    res = "%s = %s[%s]" % (output[0]['tensor_name'],
-                           get_input(inputs[0][0]), slice_string)
+    res = (
+        f"{output[0]['tensor_name']} = "
+        f"{get_input(inputs[0][0])}[{slice_string}]"
+    )
     return res
 
 
@@ -423,8 +426,10 @@ def split_str(inputs, output, attr):
     """gen split string"""
     axis = str(get_attr(attr, "axis"))
     output_num = str(get_attr(attr, "output_num"))
-    res = "%s =np.split(%s, %s, %s)" % (output[0]['tensor_name'],
-                                        get_input(inputs[0][0]), output_num, axis)
+    res = (
+        f"{output[0]['tensor_name']} = np.split("
+        f"{get_input(inputs[0][0])}, {output_num}, {axis})"
+    )
     return res
 
 
@@ -475,10 +480,11 @@ def matmul_str(inputs, output, attr):
         bias_shape = right_ori_shape[-2] if get_attr(
             attr, "transpose_b") else right_ori_shape[-1]
         if bias['shape'][0] != bias_shape:
-            res += "%s = random_gaussian([%s, ], miu=1, sigma=0.1).astype(np.%s) \n" % (
-                get_input(bias), str(bias_shape), bias['data_type'])
-        res += "%s = np.add(%s, %s)\n" % (output_name,
-                                          output_name, get_input(bias))
+            res += (
+                f"{get_input(bias)} = random_gaussian([{bias_shape}, ], "
+                f"miu=1, sigma=0.1).astype(np.{bias['data_type']}) \n"
+            )
+        res += f"{output_name} = np.add({output_name}, {get_input(bias)})\n"
 
     if get_attr(attr, 'process') != 'cpu' and output_format != 'DefaultFormat':
         output_trans_str = get_trans_data_str(
@@ -487,7 +493,7 @@ def matmul_str(inputs, output, attr):
     func_name = "matmul_func"
     params = [get_input(i[0]) for i in inputs]
     func = func_pack(func_name, res, params, output_name)
-    return func + "%s = %s(%s)\n" % (output_name, func_name, ','.join(params))
+    return func + f"{output_name} = {func_name}({','.join(params)})\n"
 
 
 def custom_str(inputs, output, attr):
@@ -497,7 +503,7 @@ def custom_str(inputs, output, attr):
         "output_tensor", "np.zeros")
     params = [get_input(i[0]) for i in inputs]
     output_name = output[0]['tensor_name']
-    return func + "%s = %s(%s)\n" % (output_name, func_name, ','.join(params))
+    return func + f"{output_name} = {func_name}({','.join(params)})\n"
 
 
 def conv_2d_nchwc_str(inputs, output, attr, is_depthwise):
@@ -516,16 +522,14 @@ def conv_2d_nchwc_str(inputs, output, attr, is_depthwise):
 
     indent = "    "
     res = ""
-    res += "n, c_i_o, h, w, c_i_i = {} \n".format(data['shape'])
+    res += f"n, c_i_o, h, w, c_i_i = {data['shape']} \n"
     if is_depthwise:
-        res += "c_o_o, cm_outer, kh, kw, cm_inner, c_o_i = {}\n".format(
-            filter_data['shape'])
+        res += f"c_o_o, cm_outer, kh, kw, cm_inner, c_o_i = {filter_data['shape']}\n"
     else:
-        res += "c_o_o, c_i_o, kh, kw, c_i_i, c_o_i = {}\n".format(
-            filter_data['shape'])
-    res += "s_h, s_w = {}\n".format(stride)
-    res += "d_h, d_w = {}\n".format(dilation)
-    res += "p_l, p_r, p_t, p_b = {}\n".format(padding)
+        res += f"c_o_o, c_i_o, kh, kw, c_i_i, c_o_i = {filter_data['shape']}\n"
+    res += f"s_h, s_w = {stride}\n"
+    res += f"d_h, d_w = {dilation}\n"
+    res += f"p_l, p_r, p_t, p_b = {padding}\n"
     res += "k_h_d = (kh - 1) * d_h + 1\n"
     res += "k_w_d = (kw - 1) * d_w + 1\n"
     res += "out_h = (h + p_t + p_b - k_h_d) // s_h + 1\n"
@@ -534,15 +538,15 @@ def conv_2d_nchwc_str(inputs, output, attr, is_depthwise):
     res += "out_shape = (n, c_o_o, out_h, out_w, c_o_i)\n"
     res += "shape_data_pad = (n, c_i_o, h + p_t + p_b, w + p_l + p_r, c_i_i)\n"
 
-    res += "data_pad = np.zeros(shape_data_pad).astype({})\n".format(
-        support_list[dtype])
+    res += f"data_pad = np.zeros(shape_data_pad).astype({support_list[dtype]})\n"
     if np.sum(padding) > 0:
-        res += ("data_pad[:, :, p_t:p_t+h, p_l:p_l+w, :] = {}\n".format(data['tensor_name']))
+        res += f"data_pad[:, :, p_t:p_t+h, p_l:p_l+w, :] = {data['tensor_name']}\n"
     else:
-        res += ("data_pad = {}\n".format(data['tensor_name']))
+        res += f"data_pad = {data['tensor_name']}\n"
 
-    res += "{} = np.zeros(out_shape).astype({})\n".format(output_name,
-                                                          support_list[out_dtype])
+    res += (
+        f"{output_name} = np.zeros(out_shape).astype({support_list[out_dtype]})\n"
+    )
     res += "for oh in range(out_h):\n"
     res += indent + "for ow in range(out_w):\n"
     if is_depthwise:
@@ -554,18 +558,21 @@ def conv_2d_nchwc_str(inputs, output, attr, is_depthwise):
     if is_depthwise:
         res += indent + indent + indent + indent + \
             indent + "for oc_in in range(c_o_i):\n"
-        compute_str = "{output_name}[:, oc_out, oh, ow, oc_in] = {output_name}[:, oc_out, oh, ow, oc_in] + \
-            data_pad[:, (oc_out*c_o_i+oc_in)//c_i_i, \
-            oh*s_h+khh*d_h, ow*s_w+kww*d_w, (oc_out*c_o_i+oc_in)%c_i_i] * \
-            {filter_name}[oc_out, 0, khh, kww, 0, oc_in]\n".format(output_name=output_name,
-                                                                   filter_name=filter_data['tensor_name'])
+        fn = filter_data['tensor_name']
+        compute_str = (
+            f"{output_name}[:, oc_out, oh, ow, oc_in] = {output_name}[:, oc_out, oh, ow, oc_in] + "
+            f"data_pad[:, (oc_out*c_o_i+oc_in)//c_i_i, "
+            f"oh*s_h+khh*d_h, ow*s_w+kww*d_w, (oc_out*c_o_i+oc_in)%c_i_i] * "
+            f"{fn}[oc_out, 0, khh, kww, 0, oc_in]\n"
+        )
     else:
         res += indent + indent + indent + indent + \
             indent + "for ic_in in range(c_i_i):\n"
-        compute_str = "{output_name}[:, :, oh, ow, :] = {output_name}[:, :, oh, ow, :] + \
-            data_pad[:, ic_out, oh*s_h+khh*d_h, ow*s_w+kww*d_w, ic_in] * {filter_name}[:, \
-            ic_out, khh, kww, ic_in, :]\n".format(
-            output_name=output_name, filter_name=filter_data['tensor_name']
+        fn = filter_data['tensor_name']
+        compute_str = (
+            f"{output_name}[:, :, oh, ow, :] = {output_name}[:, :, oh, ow, :] + "
+            f"data_pad[:, ic_out, oh*s_h+khh*d_h, ow*s_w+kww*d_w, ic_in] * "
+            f"{fn}[:, ic_out, khh, kww, ic_in, :]\n"
         )
     res += indent + indent + indent + indent + indent + indent + compute_str
 
@@ -589,35 +596,38 @@ def conv_2d_str(inputs, output, attr):
     output_name = output[0]["tensor_name"]
 
     res = ""
-    res += "n, h, w, c = {} \n".format(data['shape'])
-    res += "out_c, kh, kw, c = {}\n".format(filter_data['shape'])
-    res += "s_h, s_w = {}\n".format(stride)
-    res += "d_h, d_w = {}\n".format(dilation)
-    res += "p_l, p_r, p_t, p_b = {}\n".format(padding)
+    res += f"n, h, w, c = {data['shape']} \n"
+    res += f"out_c, kh, kw, c = {filter_data['shape']}\n"
+    res += f"s_h, s_w = {stride}\n"
+    res += f"d_h, d_w = {dilation}\n"
+    res += f"p_l, p_r, p_t, p_b = {padding}\n"
     res += "out_h = (h + p_t + p_b - kh) // s_h + 1\n"
     res += "out_w = (w + p_l + p_r - kw) // s_w + 1\n"
 
     res += "out_shape = (n, out_h, out_w, out_c)\n"
     res += "shape_data_pad = (n, h + p_t + p_b, w + p_l + p_r, c)\n"
 
-    res += "data_pad = np.zeros(shape_data_pad).astype({})\n".format(
-        support_list.get(data['data_type']))
+    res += (
+        f"data_pad = np.zeros(shape_data_pad).astype({support_list.get(data['data_type'])})\n"
+    )
     if np.sum(padding) > 0:
-        res += ("data_pad[:, p_t:p_t+h, p_l:p_l+w, :] = {}\n".format(data['tensor_name']))
+        res += f"data_pad[:, p_t:p_t+h, p_l:p_l+w, :] = {data['tensor_name']}\n"
     else:
-        res += ("data_pad = {}\n".format(data['tensor_name']))
+        res += f"data_pad = {data['tensor_name']}\n"
 
     res += "whd = (kh - 1) * d_h + 1\n"
     res += "wwd = (kw - 1) * d_w + 1\n"
-    res += "{} = np.zeros(out_shape).astype({})\n".format(output_name,
-                                                          support_list.get(out_dtype))
+    res += f"{output_name} = np.zeros(out_shape).astype({support_list.get(out_dtype)})\n"
     res += "for i in range(out_h):\n"
     res += indent + "for j in range(out_w):\n"
     res += indent + indent + "for f in range(out_c):\n"
-    res += (indent + indent + indent +
-            "{}[:, i, j, f] = np.sum(data_pad[:, i*s_h:i*s_h+whd:d_h, j*s_w:j*s_w+wwd:d_w, :]"
-            ".astype('float32') *{}[f, :, :, :].astype('float32'),axis=(1, 2, 3))\n"
-            .format(output_name, filter_data['tensor_name']))
+    fn = filter_data['tensor_name']
+    res += (
+        indent + indent + indent +
+        f"{output_name}[:, i, j, f] = np.sum("
+        f"data_pad[:, i*s_h:i*s_h+whd:d_h, j*s_w:j*s_w+wwd:d_w, :]"
+        f".astype('float32') * {fn}[f, :, :, :].astype('float32'), axis=(1, 2, 3))\n"
+    )
     return res
 
 
@@ -627,8 +637,12 @@ def pad_str(inputs, output, attr):
     head_value = get_attr(attr, "head")
     value = get_attr(attr, "pad_val")
     pad_width = list(zip(head_value, tail_value))
-    res = "%s = np.pad(%s, %s, mode='constant', constant_values=(%s, %s))" % (
-          output[0]['tensor_name'], get_input(inputs[0][0]), pad_width, value, value)
+    tn = output[0]['tensor_name']
+    inp = get_input(inputs[0][0])
+    res = (
+        f"{tn} = np.pad({inp}, {pad_width}, mode='constant', "
+        f"constant_values=({value}, {value}))"
+    )
     return res
 
 
@@ -638,14 +652,16 @@ def unpad_str(inputs, output, attr):
     input_shape = inputs[0][0]['shape']
     unpad_after = get_attr(attr, "tail")
     res = ""
-    res += "m, n = {} - {}, {} - {}\n".format(
-        input_shape[-2], unpad_after[-2], input_shape[-1], unpad_after[-1])
-    res += "if {} == 4:\n".format(len(input_shape))
-    res += indent + "%s = %s[:, :, :m, :n]\n" % (
-        output[0]['tensor_name'], get_input(inputs[0][0]))
-    res += "elif {} == 2:\n".format(len(input_shape))
-    res += indent + "%s = %s[:m, :n]\n" % (
-        output[0]['tensor_name'], get_input(inputs[0][0]))
+    res += (
+        f"m, n = {input_shape[-2]} - {unpad_after[-2]}, "
+        f"{input_shape[-1]} - {unpad_after[-1]}\n"
+    )
+    res += f"if {len(input_shape)} == 4:\n"
+    tn = output[0]['tensor_name']
+    inp = get_input(inputs[0][0])
+    res += indent + f"{tn} = {inp}[:, :, :m, :n]\n"
+    res += f"elif {len(input_shape)} == 2:\n"
+    res += indent + f"{tn} = {inp}[:m, :n]\n"
     return res
 
 
@@ -656,21 +672,21 @@ def cummulative_str(inputs, outputs, attr, op_type):
     axis = get_attr(attr, "axis")
     input_shape = inputs[0][0]['shape']
     res = ""
-    res += "axis = {}\n".format(axis)
+    res += f"axis = {axis}\n"
+    in0 = get_input(inputs[0][0])
     if reverse:
-        res += "out = np.flip({}, axis)\n".format(get_input(inputs[0][0]))
-        res += "out = np.{}(out, axis)\n".format(op_type)
+        res += f"out = np.flip({in0}, axis)\n"
+        res += f"out = np.{op_type}(out, axis)\n"
     else:
-        res += "out = np.{}({}, axis)\n".format(op_type,
-                                                get_input(inputs[0][0]))
+        res += f"out = np.{op_type}({in0}, axis)\n"
     if exclusive:
-        res += "from scipy.ndimage.interpolation import shift\n"
-        res += "shift_axis = [0] * {}\n".format(len(input_shape))
+        res += "from scipy.ndimage import shift\n"
+        res += f"shift_axis = [0] * {len(input_shape)}\n"
         res += "shift_axis[axis] = 1\n"
         res += "out = shift(out, shift_axis)\n"
     if reverse:
         res += "out = np.flip(out, axis=axis)\n"
-    res += "{} = out\n".format(outputs[0]['tensor_name'])
+    res += f"{outputs[0]['tensor_name']} = out\n"
     return res
 
 
@@ -685,13 +701,17 @@ def global_pool2d_str(inputs, output, attr):
         # NCHW or NCHWc/ NCHW[x]c
         res += "pool_idxs = (2, 3)\n"
 
-    res += "global_pool_input = {}\n".format(inputs[0][0]["tensor_name"])
+    res += f"global_pool_input = {inputs[0][0]['tensor_name']}\n"
     if pool_type == 'avg':
-        res += "{} = np.mean(global_pool_input, axis=pool_idxs, keepdims=True)\n".format(
-            output[0]["tensor_name"])
+        res += (
+            f"{output[0]['tensor_name']} = np.mean("
+            f"global_pool_input, axis=pool_idxs, keepdims=True)\n"
+        )
     elif pool_type == 'max':
-        res += "{} = np.max(global_pool_input, axis=pool_idxs, keepdims=True)\n".format(
-            output[0]["tensor_name"])
+        res += (
+            f"{output[0]['tensor_name']} = np.max("
+            f"global_pool_input, axis=pool_idxs, keepdims=True)\n"
+        )
     return res
 
 
@@ -710,220 +730,256 @@ def get_op_dsl():
         "Split": split_str,
         "CumSum": lambda inputs, output, attr: cummulative_str(inputs, output, attr, "cumsum"),
         "CumProd": lambda inputs, output, attr: cummulative_str(inputs, output, attr, "cumprod"),
-        "Sin": lambda inputs, output, attr: "%s = np.sin(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "Cos": lambda inputs, output, attr: "%s = np.cos(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "Asin": lambda inputs, output, attr: "%s = np.arcsin(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "ACos": lambda inputs, output, attr: "%s = np.arccos(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "Sign": lambda inputs, output, attr: "%s = np.sign(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "IsNan": lambda inputs, output, attr: "%s = np.isnan(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "IsInf": lambda inputs, output, attr: "%s = np.isinf(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "IsFinite": lambda inputs, output, attr: "%s = np.isfinite(%s)" %
-        (output[0]['tensor_name'],
-         get_input(inputs[0][0])),
-        "Tanh": lambda inputs, output, attr: "%s = np.tanh(%s)" %
-        (output[0]['tensor_name'],
-         get_input(inputs[0][0])),
-        "Mul": lambda inputs, output, attr: "%s = np.multiply(%s, %s)" %
-                                            (output[0]['tensor_name'], get_input(
-                                                inputs[0][0]), get_input(inputs[1][0])),
-        "Pow": lambda inputs, output, attr: "%s = np.power(%s, %s)" %
-                                            (output[0]['tensor_name'], get_input(
-                                                inputs[0][0]), get_input(inputs[1][0])),
-        "Sub": lambda inputs, output, attr: "%s = np.subtract(%s, %s)" %
-                                            (output[0]['tensor_name'], get_input(
-                                                inputs[0][0]), get_input(inputs[1][0])),
-        "TensorAdd": lambda inputs, output, attr: "%s = np.add(%s, %s)" %
-        (output[0]['tensor_name'], get_input(
-            inputs[0][0]), get_input(inputs[1][0])),
-        "Add": lambda inputs, output, attr: "%s = np.add(%s, %s)" %
-                                            (output[0]['tensor_name'], get_input(
-                                                inputs[0][0]), get_input(inputs[1][0])),
-        "Rsqrt": lambda inputs, output, attr: "%s = 1.0/np.sqrt(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "Neg": lambda inputs, output, attr: "%s = np.negative(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "Floor": lambda inputs, output, attr: "%s = np.floor(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "Exp": lambda inputs, output, attr: "%s = np.exp(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "RealDiv": lambda inputs, output, attr: "%s = np.divide(%s, %s)" %
-                                                (output[0]['tensor_name'], get_input(
-                                                    inputs[0][0]), get_input(inputs[1][0])),
-        "Div": lambda inputs, output, attr: "%s = np.divide(%s, %s)" %
-                                            (output[0]['tensor_name'], get_input(
-                                                inputs[0][0]), get_input(inputs[1][0])),
-        "FloorDiv": lambda inputs, output, attr: "%s = np.floor_divide(%s, %s)" %
-        (output[0]['tensor_name'], get_input(
-            inputs[0][0]), get_input(inputs[1][0])),
-        "Mod": lambda inputs, output, attr: "%s = np.fmod(%s, %s)" %
-                                            (output[0]['tensor_name'], get_input(
-                                                inputs[0][0]), get_input(inputs[1][0])),
-        "FloorMod": lambda inputs, output, attr: "%s = np.mod(%s, %s)" %
-        (output[0]['tensor_name'], get_input(
-            inputs[0][0]), get_input(inputs[1][0])),
-        "Minimum": lambda inputs, output, attr: "%s = np.minimum(%s, %s)" %
-                                                (output[0]['tensor_name'], get_input(
-                                                    inputs[0][0]), get_input(inputs[1][0])),
-        "Maximum": lambda inputs, output, attr: "%s = np.maximum(%s, %s)" %
-                                                (output[0]['tensor_name'], get_input(
-                                                    inputs[0][0]), get_input(inputs[1][0])),
-        "Log": lambda inputs, output, attr: "%s = np.log(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "Sqrt": lambda inputs, output, attr: "%s = np.sqrt(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
+        "Sin": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.sin({get_input(inputs[0][0])})"
+        ),
+        "Cos": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.cos({get_input(inputs[0][0])})"
+        ),
+        "Asin": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.arcsin({get_input(inputs[0][0])})"
+        ),
+        "ACos": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.arccos({get_input(inputs[0][0])})"
+        ),
+        "Sign": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.sign({get_input(inputs[0][0])})"
+        ),
+        "IsNan": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.isnan({get_input(inputs[0][0])})"
+        ),
+        "IsInf": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.isinf({get_input(inputs[0][0])})"
+        ),
+        "IsFinite": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.isfinite({get_input(inputs[0][0])})"
+        ),
+        "Tanh": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.tanh({get_input(inputs[0][0])})"
+        ),
+        "Mul": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.multiply("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Pow": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.power("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Sub": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.subtract("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "TensorAdd": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.add("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Add": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.add("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Rsqrt": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = 1.0/np.sqrt({get_input(inputs[0][0])})"
+        ),
+        "Neg": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.negative({get_input(inputs[0][0])})"
+        ),
+        "Floor": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.floor({get_input(inputs[0][0])})"
+        ),
+        "Exp": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.exp({get_input(inputs[0][0])})"
+        ),
+        "RealDiv": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.divide("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Div": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.divide("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "FloorDiv": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.floor_divide("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Mod": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.fmod("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "FloorMod": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.mod("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Minimum": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.minimum("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Maximum": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.maximum("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Log": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.log({get_input(inputs[0][0])})"
+        ),
+        "Sqrt": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.sqrt({get_input(inputs[0][0])})"
+        ),
         "Cast": cast_str,
-        "Reshape": lambda inputs, output, attr: "%s = np.reshape(%s, %s)" %
-                                                (output[0]['tensor_name'], get_input(
-                                                    inputs[0][0]), output[0]['shape']),
-        "OneHot": lambda inputs, output, attr: "%s = one_hot_np(%s, %s, %s, %s, %s, np.%s)" %
-                                            (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "axis"),
-                                                get_input(inputs[1][0]), get_input(
-                                                    inputs[2][0]),
-                                                get_attr(attr, "depth"), output[0]['data_type']),
-        "ZerosLike": lambda inputs, output, attr: "%s = np.zeros_like(%s)" %
-        (output[0]['tensor_name'],
-         get_input(inputs[0][0])),
-        "AddN": lambda inputs, output, attr: "%s = %s" %
-        (output[0]['tensor_name'], ' + '.join([get_input(inputs[0][i])
-                                               for i in range(0, len(inputs[0]))])),
-        "Tile": lambda inputs, output, attr: "%s = np.tile(%s, %s)" %
-        (output[0]['tensor_name'], get_input(
-            inputs[0][0]), get_attr(attr, "multiples")),
-        "Reciprocal": lambda inputs, output, attr: "%s = np.divide(1.0, %s)" %
-        (output[0]['tensor_name'],
-                                                    get_input(inputs[0][0])),
-        "Equal": lambda inputs, output, attr: "%s = np.equal(%s, %s)" %
-        (output[0]['tensor_name'], get_input(
-            inputs[0][0]), get_input(inputs[1][0])),
-        "NotEqual": lambda inputs, output, attr: "%s = np.not_equal(%s, %s)" %
-        (output[0]['tensor_name'], get_input(
-            inputs[0][0]), get_input(inputs[1][0])),
-        "GreaterEqual": lambda inputs, output, attr: "%s = np.greater_equal(%s, %s)" %
-        (output[0]['tensor_name'], get_input(
-            inputs[0][0]), get_input(inputs[1][0])),
-        "Select": lambda inputs, output, attr: "%s = np.where(%s, %s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]),
-                                                get_input(inputs[1][0]), get_input(inputs[2][0])),
-        "InplaceAssign": lambda inputs, output, attr: "%s = %s; %s = %s" %
-        (get_input(inputs[0][0]), get_input(inputs[1][0]),
-         output[0]['tensor_name'], get_input(inputs[2][0])),
-        "Greater": lambda inputs, output, attr: "%s = np.greater(%s, %s)" %
-                                                (output[0]['tensor_name'], get_input(
-                                                    inputs[0][0]), get_input(inputs[1][0])),
-        "SelectGT": lambda inputs, output, attr: "%s = np.where(%s > %s, %s, %s)" %
-                                                (
-                                                    output[0]['tensor_name'], get_input(
-                                                        inputs[0][0]),
-                                                    get_input(inputs[1][0]),
-                                                    get_input(inputs[2][0]), get_input(inputs[3][0])),
-        "SelectLT": lambda inputs, output, attr: "%s = np.where(%s < %s, %s, %s)" %
-                                                (
-                                                    output[0]['tensor_name'], get_input(
-                                                        inputs[0][0]),
-                                                    get_input(inputs[1][0]),
-                                                    get_input(inputs[2][0]), get_input(inputs[3][0])),
-        "Abs": lambda inputs, output, attr: "%s = np.absolute(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "LessEqual": lambda inputs, output, attr: "%s = np.less_equal(%s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]),
-         get_input(inputs[1][0])),
-        "Less": lambda inputs, output, attr: "%s = np.less(%s, %s)" %
-        (output[0]['tensor_name'], get_input(
-            inputs[0][0]), get_input(inputs[1][0])),
-        "EquivFormat": lambda inputs, output, attr: "%s = %s" %
-                                                    (output[0]['tensor_name'],
-                                                     get_input(inputs[0][0])),
-        "ExpandDims": lambda inputs, output, attr: "%s = np.expand_dims(%s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]),
-                                                    get_attr(attr, "axis")),
-        "ElemAny": lambda inputs, output, attr: "%s = (%s.all() > 0).astype(np.%s).reshape(1)" %
-                                                (output[0]['tensor_name'], get_input(inputs[0][0]),
-                                                    output[0]['data_type']),
+        "Reshape": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.reshape("
+            f"{get_input(inputs[0][0])}, {output[0]['shape']})"
+        ),
+        "OneHot": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = one_hot_np({get_input(inputs[0][0])}, "
+            f"{get_attr(attr, 'axis')}, {get_input(inputs[1][0])}, "
+            f"{get_input(inputs[2][0])}, {get_attr(attr, 'depth')}, "
+            f"np.{output[0]['data_type']})"
+        ),
+        "ZerosLike": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.zeros_like({get_input(inputs[0][0])})"
+        ),
+        "AddN": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = " + " + ".join(
+                get_input(inputs[0][i]) for i in range(0, len(inputs[0]))
+            )
+        ),
+        "Tile": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.tile("
+            f"{get_input(inputs[0][0])}, {get_attr(attr, 'multiples')})"
+        ),
+        "Reciprocal": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.divide(1.0, {get_input(inputs[0][0])})"
+        ),
+        "Equal": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.equal("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "NotEqual": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.not_equal("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "GreaterEqual": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.greater_equal("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Select": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.where("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])}, "
+            f"{get_input(inputs[2][0])})"
+        ),
+        "InplaceAssign": lambda inputs, output, attr: (
+            f"{get_input(inputs[0][0])} = {get_input(inputs[1][0])}; "
+            f"{output[0]['tensor_name']} = {get_input(inputs[2][0])}"
+        ),
+        "Greater": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.greater("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "SelectGT": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.where("
+            f"{get_input(inputs[0][0])} > {get_input(inputs[1][0])}, "
+            f"{get_input(inputs[2][0])}, {get_input(inputs[3][0])})"
+        ),
+        "SelectLT": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.where("
+            f"{get_input(inputs[0][0])} < {get_input(inputs[1][0])}, "
+            f"{get_input(inputs[2][0])}, {get_input(inputs[3][0])})"
+        ),
+        "Abs": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.absolute({get_input(inputs[0][0])})"
+        ),
+        "LessEqual": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.less_equal("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Less": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.less("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "EquivFormat": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = {get_input(inputs[0][0])}"
+        ),
+        "ExpandDims": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.expand_dims("
+            f"{get_input(inputs[0][0])}, {get_attr(attr, 'axis')})"
+        ),
+        "ElemAny": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = ({get_input(inputs[0][0])}.all() > 0)"
+            f".astype(np.{output[0]['data_type']}).reshape(1)"
+        ),
         "Transpose": transpose_str,
         "TransData": trans_data_dsl,
         "BroadcastTo": broadcast_str,
         "BatchMatMul": matmul_str,
-        "Assign": lambda inputs, output, attr: "%s = %s; %s = %s" %
-        (get_input(inputs[0][0]), get_input(inputs[1][0]), output[0]['tensor_name'],
-                                                get_input(inputs[1][0])),
+        "Assign": lambda inputs, output, attr: (
+            f"{get_input(inputs[0][0])} = {get_input(inputs[1][0])}; "
+            f"{output[0]['tensor_name']} = {get_input(inputs[1][0])}"
+        ),
         "MatMul": matmul_str,
         "Conv2D": conv_2d_str,
         "PadAkg": pad_str,
         "UnPadAkg": unpad_str,
-        "Asinh": lambda inputs, output, attr: "%s = np.arcsinh(%s)" %
-        (output[0]['tensor_name'],
-         get_input(inputs[0][0])),
-        "Acosh": lambda inputs, output, attr: "%s = np.arccosh(%s)" %
-        (output[0]['tensor_name'],
-         get_input(inputs[0][0])),
-        "Atan2": lambda inputs, output, attr: "%s = np.arctan2(%s, %s)" %
-        (output[0]['tensor_name'], get_input(
-            inputs[0][0]), get_input(inputs[1][0])),
-        "Expm1": lambda inputs, output, attr: "%s = np.expm1(%s)" %
-        (output[0]['tensor_name'],
-         get_input(inputs[0][0])),
-        "LogicalNot": lambda inputs, output, attr: "%s = np.logical_not(%s)" %
-        (output[0]['tensor_name'],
-                                                    get_input(inputs[0][0])),
-        "LogicalAnd": lambda inputs, output, attr: "%s = np.logical_and(%s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]),
-                                                    get_input(inputs[1][0])),
-        "LogicalOr": lambda inputs, output, attr: "%s = np.logical_or(%s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]),
-         get_input(inputs[1][0])),
-        "Erf": lambda inputs, output, attr: "%s = sp.special.erf(%s)" %
-                                            (output[0]['tensor_name'],
-                                             get_input(inputs[0][0])),
-        "TensorScatterAdd": lambda inputs, output, attr: "%s = tensor_scatter_add_np(%s, %s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]),
-         get_input(inputs[1][0]),
-         get_input(inputs[2][0])),
-        "GatherNd": lambda inputs, output, attr: "%s = %s[tuple(%s.transpose().tolist())]" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]),
-         get_input(inputs[1][0])),
-        "UnsortedSegmentSum": lambda inputs, output, attr: "%s = np.zeros([%s,] + %s[%s:]);  np.add.at(%s, %s, %s)" %
-        (output[0]['tensor_name'], get_attr(attr, 'num_segments'),
-         inputs[0][0]['shape'], len(
-            inputs[1][0]['shape']),
-         output[0]['tensor_name'], get_input(
-            inputs[1][0]),
-         get_input(inputs[0][0])),
-        "Gather": lambda inputs, output, attr: "%s = gather_np(%s, %s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]),
-                                                get_attr(attr, "axis")),
-        "StandardNormal": lambda inputs, output, attr: "%s = np.random.standard_normal(%s)" %
-        (output[0]['tensor_name'], get_attr(
-            attr, "shape")),
-        "CImag": lambda inputs, output, attr: "%s = np.imag(%s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0])),
-
-        "CReal": lambda inputs, output, attr: "%s = np.real(%s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0])),
-
-        "Complex": lambda inputs, output, attr: "%s = np.vectorize(complex)(%s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]),
-                                                get_input(inputs[1][0])),
+        "Asinh": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.arcsinh({get_input(inputs[0][0])})"
+        ),
+        "Acosh": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.arccosh({get_input(inputs[0][0])})"
+        ),
+        "Atan2": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.arctan2("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Expm1": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.expm1({get_input(inputs[0][0])})"
+        ),
+        "LogicalNot": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.logical_not({get_input(inputs[0][0])})"
+        ),
+        "LogicalAnd": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.logical_and("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "LogicalOr": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.logical_or("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
+        "Erf": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = "
+            f"__import__('scipy').special.erf({get_input(inputs[0][0])})"
+        ),
+        "TensorScatterAdd": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = tensor_scatter_add_np("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])}, "
+            f"{get_input(inputs[2][0])})"
+        ),
+        "GatherNd": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = {get_input(inputs[0][0])}[tuple("
+            f"{get_input(inputs[1][0])}.transpose().tolist())]"
+        ),
+        "UnsortedSegmentSum": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.zeros([{get_attr(attr, 'num_segments')},] + "
+            f"{inputs[0][0]['shape']}[{len(inputs[1][0]['shape'])}:]);  np.add.at("
+            f"{output[0]['tensor_name']}, {get_input(inputs[1][0])}, "
+            f"{get_input(inputs[0][0])})"
+        ),
+        "Gather": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = gather_np("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])}, "
+            f"{get_attr(attr, 'axis')})"
+        ),
+        "StandardNormal": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.random.standard_normal("
+            f"{get_attr(attr, 'shape')})"
+        ),
+        "CImag": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.imag({get_input(inputs[0][0])})"
+        ),
+        "CReal": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.real({get_input(inputs[0][0])})"
+        ),
+        "Complex": lambda inputs, output, attr: (
+            f"{output[0]['tensor_name']} = np.vectorize(complex)("
+            f"{get_input(inputs[0][0])}, {get_input(inputs[1][0])})"
+        ),
         "Concat": concat_str
     }
     return op_dsl
