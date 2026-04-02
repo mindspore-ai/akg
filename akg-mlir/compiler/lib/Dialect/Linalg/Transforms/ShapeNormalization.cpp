@@ -111,11 +111,9 @@ struct ShapeNormalState {
   ShapeNormalState() : manager(SymbolicShapeAnalysis::getInstance()) { axisSizes["1"] = 1; }
 
   void recordAxisRename(const std::string &oldAxis, const std::string &newAxis) {
-    if (oldAxis == newAxis || oldAxis == "1")
-      return;
+    if (oldAxis == newAxis || oldAxis == "1") return;
     for (auto &kv : axisRenameMap) {
-      if (kv.second == oldAxis)
-        kv.second = newAxis;
+      if (kv.second == oldAxis) kv.second = newAxis;
     }
     axisRenameMap[oldAxis] = newAxis;
   }
@@ -268,9 +266,9 @@ struct ShapeNormalState {
   void skipLeadingSizeOne(const SmallVector<std::string> &axes, const SmallVector<int64_t> &sizes, std::string &axis,
                           int64_t &size, int64_t &idx) {
     while (size == 1 && idx < static_cast<int64_t>(axes.size())) {
+      idx++;
       axis = axes[idx];
       size = sizes[idx];
-      idx++;
     }
   }
 
@@ -289,15 +287,13 @@ struct ShapeNormalState {
 
     int64_t tmpSize = smallSize;
     SmallVector<std::string> tmpAxis = {smallAxis};
-    while (smallIdx < static_cast<int64_t>(smallAxes.size())) {
-      if (tmpSize * smallSizes[smallIdx] >= largeSize) break;
-      tmpSize *= smallSizes[smallIdx];
-      tmpAxis.push_back(smallAxes[smallIdx]);
+    while (smallIdx + 1 < static_cast<int64_t>(smallAxes.size())) {
+      if (tmpSize * smallSizes[smallIdx + 1] >= largeSize) break;
+      tmpSize *= smallSizes[smallIdx + 1];
+      tmpAxis.push_back(smallAxes[smallIdx + 1]);
       smallIdx++;
     }
     int64_t remainder = largeSize % tmpSize;
-    result.finestAxes.push_back(axis1);
-    result.finestAxes.append(tmpAxis);
 
     if (remainder != 0) {
       result.finestAxes.clear();
@@ -306,6 +302,19 @@ struct ShapeNormalState {
       return false;
     }
     int64_t newdimSize = largeSize / tmpSize;
+    if (newdimSize == 1) {
+      idx1++;
+      idx2++;
+      if (idx1 < static_cast<int64_t>(axes1.size())) {
+        axis1 = axes1[idx1];
+        size1 = sizes1[idx1];
+      }
+      if (idx2 < static_cast<int64_t>(axes2.size())) {
+        axis2 = axes2[idx2];
+        size2 = sizes2[idx2];
+      }
+      return true;
+    }
     std::string newdim = createNewSymbolicDim(newdimSize);
     tmpAxis.push_back(newdim);
     updateDecomposition(largeAxis, tmpAxis);
@@ -313,9 +322,9 @@ struct ShapeNormalState {
     smallAxis = newdim;
     if (smallFirst) {
       size2 = newdimSize;
-      if (smallIdx < static_cast<int64_t>(axes1.size())) {
-        axis1 = axes1[smallIdx];
-        size1 = sizes1[smallIdx];
+      if (smallIdx + 1 < static_cast<int64_t>(axes1.size())) {
+        axis1 = axes1[smallIdx + 1];
+        size1 = sizes1[smallIdx + 1];
         idx1 = smallIdx + 1;
       } else {
         axis1 = newdim;
@@ -323,9 +332,9 @@ struct ShapeNormalState {
       }
     } else {
       size1 = newdimSize;
-      if (smallIdx < static_cast<int64_t>(axes2.size())) {
-        axis2 = axes2[smallIdx];
-        size2 = sizes2[smallIdx];
+      if (smallIdx + 1 < static_cast<int64_t>(axes2.size())) {
+        axis2 = axes2[smallIdx + 1];
+        size2 = sizes2[smallIdx + 1];
         idx2 = smallIdx + 1;
       } else {
         axis2 = newdim;
@@ -346,11 +355,11 @@ struct ShapeNormalState {
 
     std::string axis1 = axes1[0], axis2 = axes2[0];
     int64_t size1 = sizes1[0], size2 = sizes2[0];
-    int64_t idx1 = 1, idx2 = 1;
+    int64_t idx1 = 0, idx2 = 0;
     skipLeadingSizeOne(axes1, sizes1, axis1, size1, idx1);
     skipLeadingSizeOne(axes2, sizes2, axis2, size2, idx2);
 
-    while (idx1 < static_cast<int64_t>(axes1.size()) - 1 && idx2 < static_cast<int64_t>(axes2.size()) - 1) {
+    while (idx1 < static_cast<int64_t>(axes1.size()) && idx2 < static_cast<int64_t>(axes2.size())) {
       if (!mergeSmallerAxis(axes1, sizes1, axes2, sizes2, axis1, size1, idx1, axis2, size2, idx2, result))
         return result;
     }
@@ -366,7 +375,6 @@ struct ShapeNormalState {
     }
     for (; idx1 < static_cast<int64_t>(axes1.size()); idx1++) tail.push_back(axes1[idx1]);
     for (; idx2 < static_cast<int64_t>(axes2.size()); idx2++) tail.push_back(axes2[idx2]);
-    result.finestAxes.append(tail);
     updateDecomposition(parentAxis, tail);
     return result;
   }
@@ -403,6 +411,7 @@ struct ShapeNormalState {
       if (!tmpresult.success) {
         result.success = false;
       }
+      if (tmpresult.finestAxes.size() == 0) tmpresult.finestAxes = expandGroupedAxes(Slices.groupedAxes1[i]);
       finestAxes.append(tmpresult.finestAxes);
     }
     result.finestAxes = finestAxes;
