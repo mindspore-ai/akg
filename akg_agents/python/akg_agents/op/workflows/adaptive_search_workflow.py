@@ -209,6 +209,8 @@ class AdaptiveSearchWorkflow(OpBaseWorkflow):
             base_config=base_config,
         )
 
+        full_config["default_workflow"] = "kernelgen_only_workflow"
+        full_config["enable_sketch_generation"] = False
         workflow_resources["config"] = full_config
         
         # 调用父类：log_dir 重定向 + 创建 WorkflowLogger
