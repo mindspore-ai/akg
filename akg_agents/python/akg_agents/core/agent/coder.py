@@ -34,6 +34,7 @@ from akg_agents.utils.hardware_utils import get_hardware_doc
 from akg_agents.op.utils.swft_docs_loader import get_swft_docs_content
 from akg_agents.core_v2.agents import AgentBase, register_agent
 from akg_agents import get_project_root
+from akg_agents.core.extractor_torch import extract_kernelbench_shapes_dtypes
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +121,10 @@ class Coder(AgentBase):
             "format_instructions": self.format_instructions,
 
             "api_docs": self._load_api_docs_initial(),
+            "api_debug_docs": self.load_doc("api/api_debug.md"),
             "dsl_basic_docs": self.load_doc("basic_docs.md"),
             "expert_suggestion": self.load_doc("suggestion_docs.md"),
+            "expert_suggestion_debug": self.load_doc("suggestion_docsdebug.md"),
             "backend": self.backend,
 
             # 可选参数
@@ -148,6 +151,32 @@ class Coder(AgentBase):
                 arch=self.arch,
             )
         return self.base_doc["api_docs"]
+        
+        ## 添加详细算子信息
+        try:
+            from ai_kernel_generator.core.extractor_torch import extract_kernelbench_shapes_dtypes
+            meta = extract_kernelbench_shapes_dtypes(self.base_doc["task_desc"], device="cuda")
+            add_info = ""
+            print("=== Inputs ===")
+            for x in meta["inputs"]:
+                print(x)
+                add_info += x.__str__() + "\n"
+
+            print("=== Parameters ===")
+            for k, v in meta["parameters"].items():
+                print(k, v)
+                add_info += f"{k}: {v}\n"
+
+            if meta.get("graph_tensors"):
+                print("=== Graph tensors (node outputs) ===")
+                for t in meta["graph_tensors"][:20]:
+                    print(t)
+                    add_info += t.__str__() + "\n"
+
+            self.base_doc["task_desc"] += "\n\n\n## 算子参数信息\n" + add_info
+        except Exception as e:
+            logger.warning(f"Failed to extract shapes and dtypes: {e}")
+
 
     def _load_user_examples(self) -> str:
         """
@@ -429,6 +458,62 @@ class Coder(AgentBase):
             self._rag_cache[cache_key] = result
             return result
 
+
+    @staticmethod
+    def _extract_applied_strategy_ids(sketch: str) -> List[str]:
+        """从草图中的 Applied Meta-Strategies 块提取策略 ID 列表。"""
+        if not sketch:
+            return []
+
+        match = re.search(r"Applied\s+Meta-Strategies:\s*\[([^\]]*)\]", sketch, flags=re.IGNORECASE | re.MULTILINE)
+        if not match:
+            return []
+
+        raw_ids = match.group(1)
+        strategy_ids: List[str] = []
+        for item in raw_ids.split(","):
+            pid = item.strip().strip("'\"")
+            if pid:
+                strategy_ids.append(pid)
+        return strategy_ids
+
+    def _build_strategy_glossary(self, sketch: str) -> str:
+        """构建包含实现层约束的策略词典，供 Coder 保持策略一致性。"""
+        strategy_ids = self._extract_applied_strategy_ids(sketch)
+        if not strategy_ids:
+            return ""
+
+        from akg_agents.core.meta_prompt.manager import MetaPromptManager
+
+        # 关键：必须使用当前任务的 arch/dsl 初始化，避免默认配置造成策略失真。
+        manager = MetaPromptManager(arch=self.arch, dsl=self.dsl)
+
+        lines: List[str] = [
+            "## 术语解释 (Strategy Glossary)",
+            f"**目标硬件**: {self.arch or 'default'}",
+            f"**DSL**: {self.dsl}",
+            f"**实现模式**: {manager.realization_mode}",
+            "",
+        ]
+
+        unresolved_ids: List[str] = []
+        for strategy_id in strategy_ids:
+            prompt = manager.prompts.get(strategy_id)
+            if not prompt:
+                unresolved_ids.append(strategy_id)
+                continue
+
+            lines.append(f"- **{strategy_id}** ({prompt.category}) | implementation_type: {prompt.implementation_type}")
+            lines.append(f"  - **核心意图**: {prompt.architectural_intent}")
+            lines.append("  - **实现逻辑**:")
+            lines.append(manager.render_prompt_logic(prompt))
+            lines.append("")
+
+        if unresolved_ids:
+            lines.append(f"- **未解析策略ID**: {', '.join(unresolved_ids)}")
+
+        return "\n".join(lines).strip()
+
     async def run(self, task_info: dict) -> Tuple[str, str, str]:
         """执行代码生成
 
@@ -451,6 +536,25 @@ class Coder(AgentBase):
             # 智能选择最优的示例代码
             dsl_examples = await self._select_optimal_examples(task_info)
 
+            # 策略锚点解析与加强：从 sketch 中提取策略并生成实现层词典
+            strategy_glossary = ""
+            if "Applied Meta-Strategies:" in sketch:
+                try:
+                    strategy_glossary = self._build_strategy_glossary(sketch)
+                    if strategy_glossary:
+                        logger.debug("Strategy glossary generated with current arch/dsl context.")
+                except Exception as e:
+                    logger.warning(f"Failed to generate strategy glossary: {e}")
+            print("strategy_glossary:", strategy_glossary)
+
+            # ============ FIX: 强化 Debug 阶段的策略保持 ============
+            # 如果处于 Debug 模式（有错误日志），且存在优化策略，强制提醒 Coder 保持策略
+            if strategy_glossary and (task_info.get('verifier_error') or conductor_suggestion):
+                glossary_reminder = "\n\n[CRITICAL OPTIMIZATION CONSTRAINT]\nYou are essentially debugging, BUT you must STRICTLY PRESERVE the architectural strategies defined in the 'Strategy Glossary' above (e.g., Split-K, specific tiling).\nDO NOT simplify the code to a naive implementation just to fix the bug. Fix the bug WITHIN the constraints of the high-performance strategy."
+                if conductor_suggestion:
+                   conductor_suggestion += glossary_reminder
+                else:
+                   conductor_suggestion = glossary_reminder
             # ============ Hint模式：参数范围已在sketch的"设计适用范围"注释中 ============
             enable_hint_mode = self.config.get("enable_hint_mode", False)
             has_space_config = "space_config_code" in task_info and task_info.get("space_config_code")
@@ -462,10 +566,11 @@ class Coder(AgentBase):
                 "sketch": sketch,  # sketch中已包含"设计适用范围"注释（含hint信息）
                 "llm_suggestions": conductor_suggestion,  # Conductor建议
                 "coder_code": task_info.get('coder_code', ''),
-                "error_log": task_info.get('verifier_error', '')[:5000],
+                "error_log": task_info.get('verifier_error', ''),
                 "code_check_errors": task_info.get('code_check_errors', ''),  # CodeChecker静态检查错误
                 "api_docs_suitable": api_docs_suitable,
                 "dsl_examples": dsl_examples,
+                "strategy_glossary": strategy_glossary,  # 注入策略锚点词典
                 "enable_llm_range_inference": self.config.get("enable_llm_range_inference", False),  # LLM推理模式
                 "enable_hint_mode": enable_hint_mode,  # Hint模式
                 "has_param_space": has_param_space,  # 是否有参数空间
@@ -483,7 +588,6 @@ class Coder(AgentBase):
             }
             self.context.update(to_update_codegen_details)
 
-            # 执行LLM生成
             raw_output, prompt, reasoning = await self.run_llm(
                 self.coder_prompt, input_data, self.model_config.get("coder") or "standard"
             )
