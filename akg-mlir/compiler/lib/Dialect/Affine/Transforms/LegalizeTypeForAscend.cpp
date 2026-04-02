@@ -153,6 +153,12 @@ struct TruncFOpPattern : public OpRewritePattern<arith::TruncFOp> {
     if (isa<BFloat16Type>(truncOp.getResult().getType()) && isa<arith::ConstantOp>(value.getDefiningOp())) {
       Value bf16Value = convertWideFPToBF16(rewriter, truncOp.getLoc(), value);
       rewriter.replaceOp(truncOp, bf16Value);
+      return success();
+    }
+    if (isa<Float32Type>(truncOp.getResult().getType()) && isa<arith::ConstantOp>(value.getDefiningOp())) {
+      Value f32Value = convertToF32(rewriter, truncOp.getLoc(), value);
+      rewriter.replaceOp(truncOp, f32Value);
+      return success();
     }
     return failure();
   }
