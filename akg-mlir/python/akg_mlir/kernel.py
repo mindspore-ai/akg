@@ -16,7 +16,7 @@ import os
 import logging
 
 from akg.backends.ascend import (
-    ascend_compile, run_akg_opt, dump_ascend_meta_data, get_block_dim_from_arch,
+    ascend_compile, run_akg_opt, dump_ascend_meta_data, get_block_dim_from_mlir,
     launch
 )
 
@@ -36,7 +36,6 @@ class Kernel:
         self.backend = backend if backend is not None else "ascend"
         num_outputs = kernel_meta.get('num_outputs')
         self.output_indexes = self._get_output_index(num_outputs)
-        self.block_dim = get_block_dim_from_arch(self.arch)
 
     def _get_output_index(self, num_outputs: int):
         return [-i for i in range(1, num_outputs + 1)]
@@ -67,6 +66,8 @@ class Kernel:
             arch=self.arch,
             mlir_timing=True
         )
+
+        self.block_dim = get_block_dim_from_mlir(out_file)
 
         output_so_path = os.path.join(self.output_so_dir, f"{self.kernel_name}.so")
         dump_log = os.path.join(self.output_so_dir, self.kernel_name + "_dump_bishengir.log")
