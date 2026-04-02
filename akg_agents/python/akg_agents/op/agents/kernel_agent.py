@@ -248,6 +248,7 @@ class KernelAgent(ReActAgent):
                 kernelgen_only_workflow,  # noqa: F401  基于 Skill 系统的代码生成
                 evolve_workflow,          # noqa: F401  进化式算子生成
                 adaptive_search_workflow, # noqa: F401  自适应搜索算子生成
+                autoresearch_workflow,    # noqa: F401  自主迭代深度优化
             )
         except Exception as e:
             logger.warning(f"[KernelAgent] 导入 workflows 失败: {e}")
@@ -496,4 +497,9 @@ class KernelAgent(ReActAgent):
                 "arch": self.arch
             }
         
-        return self._workflow_resources
+        # Return shallow copy: prepare_config() replaces top-level keys
+        # (config, trace) per-run; without copy those mutations leak back
+        # into the cache and pollute subsequent workflow calls.
+        # Expensive objects (agents, verifier, worker_manager) are shared
+        # by reference — that's correct and desired.
+        return dict(self._workflow_resources)
