@@ -219,6 +219,9 @@ class KernelGen(AgentBase):
         self._skills_cache: Dict[str, list] = {}  # dsl -> skills
         # 使用算子专用的 OperatorSkillSelector
         self.skill_selector = OperatorSkillSelector()
+        # 缓存 initial 阶段的 skill 选择结果，供 debug/optimize 阶段复用
+        # 结构: {"always": [...], "guide": [...], "example": [...], "case": [...]}
+        self._initial_selection_cache: Optional[Dict[str, List[Any]]] = None
     
     def _load_skills_by_dsl(self, dsl: str) -> list:
         """加载 {dsl}/ 整个目录下的 skills（guides + cases + evolved），带缓存"""
@@ -244,12 +247,6 @@ class KernelGen(AgentBase):
     
     # ==================== 分层分阶段 Skill 选择 ====================
 
-    STAGE_CATEGORIES = {
-        "initial":  {"fundamental", "reference", "guide", "example"},
-        "debug":    {"fundamental", "reference", "guide", "example", "case"},
-        "optimize": {"fundamental", "reference", "guide", "example", "case"},
-    }
-
     async def _select_skills_by_stage(
         self,
         op_name: str,
@@ -260,10 +257,19 @@ class KernelGen(AgentBase):
         stage: str,
         verifier_error: str = "",
     ) -> List[Any]:
-        """分层分阶段 Skill 选择：
-        Layer 0 (fundamental/reference): 固定注入
-        Layer 1 (guide + example): LLM 一次筛选 guide(1-2 个)，example 跟随 guide 的 operator_type
-        Layer 2 (case): 仅 debug/optimize 阶段，与 guide 一起在同一次 LLM 调用中筛选
+        """分层分阶段 Skill 选择。
+
+        **一次筛选，分阶段注入：**
+
+        LLM 筛选（仅首次调用，无论 stage）：
+            - LLM 同时看到全部 guide + 全部 case（fix + improve），一次性选出
+            - case 要求至少选 2 个
+            - 按 guide 的 operator_type 自动匹配 example
+            - 缓存选择结果 {"always", "guide", "example", "case"}
+
+        Initial 阶段：注入 always + guide + example（不含 case）
+        Debug 阶段：复用缓存 always + guide + example + 全部 fix case
+        Optimize 阶段：复用缓存 always + guide + example + 从 LLM 选中的 case 中随机采样 1 个
 
         Pre-filter: backend coarse filter via OperatorSkillSelector.
         self.exclude_skill_names / self.force_skill_names 用于 AB test 控制。
@@ -283,8 +289,7 @@ class KernelGen(AgentBase):
 
         full_pool = {s.name: s for s in all_skills}
 
-        allowed = self.STAGE_CATEGORIES.get(stage, self.STAGE_CATEGORIES["initial"])
-
+        # 不受 stage 限制，全量分类所有 skill
         always_skills: List[Any] = []
         guide_candidates: List[Any] = []
         example_candidates: List[Any] = []
@@ -293,8 +298,6 @@ class KernelGen(AgentBase):
 
         for skill in all_skills:
             cat = getattr(skill, "category", "") or ""
-            if cat not in allowed:
-                continue
             if cat in ("fundamental", "reference"):
                 always_skills.append(skill)
             elif cat == "guide":
@@ -308,20 +311,55 @@ class KernelGen(AgentBase):
                 else:
                     case_improve.append(skill)
 
-        if stage == "debug":
-            case_candidates = case_fix
-        elif stage == "optimize":
-            case_candidates = case_improve
-        else:
-            case_candidates = []
+        def _apply_force_skills(result: List[Any]) -> List[Any]:
+            if not self.force_skill_names:
+                return result
+            existing_names = {s.name for s in result}
+            forced = [full_pool[n] for n in self.force_skill_names
+                      if n in full_pool and n not in existing_names]
+            if forced:
+                result = result + forced
+                logger.info(f"[KernelGen] Force-included {len(forced)} skills: "
+                            f"{[s.name for s in forced]}")
+            return result
+
+        # ── debug/optimize：复用缓存，按阶段追加不同内容 ──
+        if stage in ("debug", "optimize") and self._initial_selection_cache is not None:
+            cache = self._initial_selection_cache
+            # 基础部分：always + guide + example（从缓存复用）
+            base = cache["always"] + cache["guide"] + cache["example"]
+            base_names = {s.name for s in base}
+
+            if stage == "debug":
+                extras = [s for s in case_fix if s.name not in base_names]
+                logger.info(
+                    f"[KernelGen] stage=debug 复用缓存 "
+                    f"(always={len(cache['always'])}, guide={len(cache['guide'])}, "
+                    f"example={len(cache['example'])}), "
+                    f"追加 {len(extras)} fix skills"
+                )
+            else:
+                cached_cases = [s for s in cache["case"] if s.name not in base_names]
+                extras = self._sample_cases(cached_cases)
+                logger.info(
+                    f"[KernelGen] stage=optimize 复用缓存 "
+                    f"(always={len(cache['always'])}, guide={len(cache['guide'])}, "
+                    f"example={len(cache['example'])}), "
+                    f"追加 {len(extras)}/{len(cached_cases)} cases (sampled)"
+                )
+
+            result = base + extras
+            return _apply_force_skills(result)
+
+        # ── initial：调用 LLM 一次性筛选 guide + case ──
+        all_case_candidates = case_fix + case_improve
 
         guide_selected, case_selected = await self._llm_select_guides_and_cases(
             guide_candidates=guide_candidates,
-            case_candidates=case_candidates,
+            case_candidates=all_case_candidates,
             op_name=op_name,
             task_desc=task_desc,
             verifier_error=verifier_error,
-            stage=stage,
         )
 
         selected_types = set()
@@ -342,31 +380,56 @@ class KernelGen(AgentBase):
             elif not ex_type and (not framework or framework in fw or fw == "all"):
                 example_selected.append(s)
 
-        result = always_skills + guide_selected + example_selected + case_selected
+        # 缓存完整选择结果（含 case），供后续阶段复用
+        self._initial_selection_cache = {
+            "always": always_skills,
+            "guide": guide_selected,
+            "example": example_selected,
+            "case": case_selected,
+        }
+        logger.info(
+            f"[KernelGen] 缓存选择结果: "
+            f"always={len(always_skills)}, guide={len(guide_selected)}, "
+            f"example={len(example_selected)}, case={len(case_selected)}"
+        )
+
+        # 根据实际 stage 决定注入内容
+        base = always_skills + guide_selected + example_selected
+        if stage == "debug":
+            extras = case_fix
+            extra_label = "all fix"
+        elif stage == "optimize":
+            extras = self._sample_cases(case_selected)
+            extra_label = "LLM-selected cases (sampled)"
+        else:
+            extras = []
+            extra_label = "none (initial)"
+
+        result = base + extras
         logger.info(
             f"[KernelGen] stage={stage}, "
-            f"L0={len(always_skills)}, L1_guide={len(guide_selected)}, "
-            f"L1_example={len(example_selected)}, L2_case={len(case_selected)} "
-            f"(fix_pool={len(case_fix)}, improve_pool={len(case_improve)}), "
+            f"L0_always={len(always_skills)}, L1_guide={len(guide_selected)}, "
+            f"L1_example={len(example_selected)}, L2_case={len(extras)}({extra_label}) "
+            f"(fix_pool={len(case_fix)}, improve_pool={len(case_improve)}, "
+            f"llm_selected_case={len(case_selected)}), "
             f"total_chars={sum(len(s.content) for s in result)}"
         )
         excluded_guides = [s.name for s in guide_candidates if s not in guide_selected]
-        excluded_cases = [s.name for s in case_candidates if s not in case_selected]
+        excluded_cases = [s.name for s in all_case_candidates if s not in case_selected]
         if excluded_guides:
             logger.info(f"[KernelGen] 排除的 guide: {excluded_guides}")
         if excluded_cases:
             logger.info(f"[KernelGen] 排除的 case: {excluded_cases}")
 
-        if self.force_skill_names:
-            existing_names = {s.name for s in result}
-            forced = [full_pool[n] for n in self.force_skill_names
-                      if n in full_pool and n not in existing_names]
-            if forced:
-                result.extend(forced)
-                logger.info(f"[KernelGen] Force-included {len(forced)} skills: "
-                            f"{[s.name for s in forced]}")
+        return _apply_force_skills(result)
 
-        return result
+    @staticmethod
+    def _sample_cases(cases: List[Any], n: int = 1) -> List[Any]:
+        """从候选 case 中随机采样 n 个。如果候选 <= n，全部返回。"""
+        import random
+        if len(cases) <= n:
+            return list(cases)
+        return random.sample(cases, n)
 
     @staticmethod
     def _infer_case_type(skill) -> str:
@@ -395,10 +458,9 @@ class KernelGen(AgentBase):
         case_candidates: List[Any],
         op_name: str,
         task_desc: str,
-        verifier_error: str,
-        stage: str,
+        verifier_error: str = "",
     ) -> tuple:
-        """一次 LLM 调用同时筛选 guide 和 case skills。
+        """一次 LLM 调用同时筛选 guide 和 case skills（只在首次调用时执行）。
         返回 (guide_selected, case_selected)。
         """
         import json
@@ -432,16 +494,10 @@ class KernelGen(AgentBase):
             )
 
         if case_info:
-            if stage == "debug":
-                case_instruction = (
-                    "从以下案例中选出与**当前错误强相关**的案例。"
-                    "优先选处理过相同类型错误的，其次选相同算子类型的。不相关的不选。"
-                )
-            else:
-                case_instruction = (
-                    "从以下案例中选出与**当前算子优化目标强相关**的案例。"
-                    "优先选相同算子类型的优化案例，其次选相似优化策略的。不相关的不选。"
-                )
+            case_instruction = (
+                "从以下案例中选出与**当前算子强相关**的案例（至少选 2 个）。"
+                "包含错误修复案例和性能优化案例，优先选相同算子类型的，其次选相似计算模式的。"
+            )
             sections.append(
                 f"## 优化/修复案例（case）\n{case_instruction}\n\n"
                 f"{json.dumps(case_info, indent=2, ensure_ascii=False)}"
@@ -481,7 +537,7 @@ class KernelGen(AgentBase):
                 logger.warning(f"[KernelGen] LLM 返回的 guide 名称无法匹配: {unmatched_guides}")
 
             logger.info(
-                f"[KernelGen] LLM 筛选结果 (stage={stage}): "
+                f"[KernelGen] LLM 筛选结果: "
                 f"guide={[s.name for s in guide_selected]}, "
                 f"case={[s.name for s in case_selected]}"
             )

@@ -64,6 +64,8 @@
 
 - 代码必须包含 `ModelNew` 类（继承自 `torch.nn.Module`）
 - `ModelNew` 类必须实现 `forward` 方法
+- **`ModelNew.__init__` 的参数必须与任务描述中 `get_init_inputs()` 返回值一一对应，不得省略或硬编码**
+- `forward` 方法的参数签名和数量必须与原始 `Model.forward` 一致
 - 确保所有必要的导入语句
 - 无需生成测试代码
 

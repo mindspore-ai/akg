@@ -21,7 +21,7 @@ Skill 选择与 Evolution 逻辑 UT — 不依赖 LLM，纯逻辑验证
 3. _infer_case_type 路径推断
 4. _parse_unified_selection JSON 解析
 5. _assemble_skill_contents 排序与组装
-6. STAGE_CATEGORIES 阶段-category 映射
+6. Stage → category 注入逻辑（源码检查）
 7. nodes.py / evolution_processors 接口清理验证
 8. evolved_skill_loader 已删除
 9. AB test build_evolve_config A/B 模式
@@ -155,19 +155,30 @@ class TestAssembleSkillContents:
                result.find("代码示例参考") < result.find("优化/修复案例")
 
 
-# ========== 6. STAGE_CATEGORIES ==========
+# ========== 6. Stage → category 注入逻辑 ==========
 
 class TestStageCategories:
-    def test_initial_no_case(self):
+    """验证 _select_skills_by_stage 中各 stage 的 category 注入逻辑。
+
+    实际逻辑内嵌在方法体中（非类属性），通过源码检查确认：
+    - initial: extras = []（不注入 case）
+    - debug:   extras = case_fix
+    - optimize: extras = _sample_cases(...)
+    """
+
+    @pytest.fixture(autouse=True)
+    def _load_source(self):
         from akg_agents.op.agents.kernel_gen import KernelGen
-        cats = KernelGen.STAGE_CATEGORIES["initial"]
-        assert "case" not in cats
-        assert "fundamental" in cats
+        self.source = inspect.getsource(KernelGen._select_skills_by_stage)
+
+    def test_initial_no_case(self):
+        assert 'extras = []\n' in self.source
+        assert '"none (initial)"' in self.source
+        assert 'always_skills' in self.source
 
     def test_debug_and_optimize_have_case(self):
-        from akg_agents.op.agents.kernel_gen import KernelGen
-        assert "case" in KernelGen.STAGE_CATEGORIES["debug"]
-        assert "case" in KernelGen.STAGE_CATEGORIES["optimize"]
+        assert 'extras = case_fix' in self.source or "extras = [s for s in case_fix" in self.source
+        assert '_sample_cases' in self.source
 
 
 # ========== 7. 接口清理验证 ==========

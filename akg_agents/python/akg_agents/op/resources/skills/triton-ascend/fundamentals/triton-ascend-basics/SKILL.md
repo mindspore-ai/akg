@@ -79,3 +79,29 @@ def kernel(..., BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.conste
 3. **configs 参数必须是 constexpr**
 4. **key 参数**: 指定哪些维度变化时重新 autotune
 5. **Ascend 不支持调优**: num_warps / num_ctas / num_stages 等参数
+
+## 核心数选择（重要）
+
+Ascend NPU 有两类计算核心，必须根据算子类型正确选择：
+
+- **VEC_CORE_NUM（向量核心）**：用于 element-wise、reduce、softmax、归一化等 **不含 tl.dot** 的算子
+- **CUBE_CORE_NUM（矩阵核心）**：用于 matmul、attention 等 **包含 tl.dot** 的算子
+
+**硬约束**：涉及 `tl.dot` / 矩阵乘法运算的算子**必须**使用 CUBE_CORE_NUM，混合运算（先 matmul 再 elementwise 后处理）也使用 CUBE_CORE_NUM。核心数获取代码和详细策略见 grid-config 文档。
+
+## 输出张量创建
+
+- 输出张量用 `torch.empty` / `torch.empty_like`（避免 `zeros`/`ones` 初始化开销）
+- `torch.empty_like()` 创建的输出默认连续
+
+## Ascend Triton 不支持的 API
+
+以下 API 在 CUDA Triton 中存在，但在 Ascend Triton 中**不支持**，使用会导致编译错误：
+
+| 不支持的 API | 替代方案 |
+|-------------|---------|
+| `tl.any` / `tl.all` | `tl.sum(mask.to(tl.int32)) > 0` |
+| `tl.histogram` | 手动实现分桶逻辑 |
+| `tl.sort` | 手动排序或分阶段比较 |
+| `tl.gather` / `tl.scatter` (部分) | `tl.load` / `tl.store` + 索引计算 |
+| `num_warps` / `num_ctas` / `num_stages` (autotune 参数) | Ascend 不需要，忽略即可 |

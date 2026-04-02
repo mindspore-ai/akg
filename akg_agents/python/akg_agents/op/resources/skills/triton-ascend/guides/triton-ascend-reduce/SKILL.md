@@ -1,6 +1,6 @@
 ---
 name: triton-ascend-reduce
-description: "适用于归约(reduce)类算子的优化指南。当算子需要沿一个或多个维度对数据进行聚合计算时应选择此指南，典型算子包括：sum, mean, max, min, prod, argmax, argmin, cumsum, cumprod, softmax, logsoftmax, layernorm, rmsnorm, groupnorm, instancenorm, batchnorm, l1norm, l2norm, var, std 等。也适用于含归约子步骤的复合算子(如 normalize 类)。特别重要：当归约维度不是最后一维（如 dim=1 归约 shape=[B,F,D1,D2]），需要正确处理多维索引和两阶段归约。不适用于纯逐元素运算或矩阵乘法，但与 attention 机制中的 softmax 部分有重叠——若算子核心是注意力计算，应优先选择 attention 指南。"
+description: "适用于归约(reduce)类算子和含归约子步骤的复合算子（如归一化）的优化指南。典型算子包括：sum, mean, max, min, prod, argmax, argmin, cumsum, cumprod, softmax, logsoftmax, layernorm, rmsnorm, groupnorm, instancenorm, batchnorm, l1norm, l2norm, frobeniusnorm, var, std, average_pooling, sum_pooling 等。特别重要：当归约维度不是最后一维（如 dim=1 归约 shape=[B,F,D1,D2]），需要正确处理多维索引和两阶段归约。包含 PyTorch normalized_shape 多轴归一化语义说明。不适用于纯逐元素运算或矩阵乘法。如果算子是损失函数（先逐元素计算再全局归约），应选择 elementwise-reduce-fused 指南。"
 category: guide
 version: "1.0.0"
 metadata:
@@ -112,3 +112,25 @@ def norm_forward(x, eps=1e-5):
 3. **2D tile 加载**：用 `[:, None]` 和 `[None, :]` 构造 2D 偏移矩阵，一次 load 获取 `[BLOCK_F, BLOCK_D1D2]` 的数据
 4. **归约沿 axis=0**：`tl.sum(tile, axis=0)` 沿 F 维度归约，保留 D1D2 维度的独立统计量
 5. **grid 规模**：第二维为 `cdiv(D1*D2, BLOCK_SIZE_D1D2)`，对于较大的 D1*D2 可能超过 65535，需要注意 Ascend 的 grid 上限限制
+
+## PyTorch 归一化/归约算子语义（重要）
+
+### normalized_shape 多轴语义
+
+`nn.LayerNorm(normalized_shape)` 中 `normalized_shape` 是 tuple 时，归一化范围是 **最后 `len(normalized_shape)` 个维度的乘积**，不是单个维度。
+
+```python
+# 示例：input shape = (B, F, D1, D2), normalized_shape = (F, D1, D2)
+# 正确：归一化 F×D1×D2 = 最后 3 个维度，N = F * D1 * D2
+# 错误：只归一化 F 维度
+
+# kernel 中正确实现：
+total_norm_size = F * D1 * D2  # normalized_shape 各维度的乘积
+# 沿最后 len(normalized_shape) 个维度做 mean/var
+```
+
+### 损失函数归约
+
+- `nn.MSELoss(reduction='mean')`: 对所有元素取均值
+- `nn.CrossEntropyLoss`: 输入 logits `(N, C)` + targets `(N,)`, 内部含 log_softmax + nll_loss
+- loss 函数多数是 **elementwise 计算 + 全局 reduce**，先按 elementwise 展平处理，最后用 `tl.sum` 或 `tl.atomic_add` 汇总
