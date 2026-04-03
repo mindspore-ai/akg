@@ -1,70 +1,68 @@
-# LLM Cache CLI 使用说明
+# LLM Cache 模块说明
 
 ## 简介
 
-本目录提供缓存读写与查看能力。
+本目录实现 LLM 缓存核心能力，支持三种模式：
 
-## 查看缓存
+- off：不读不写缓存，直接调用实时 LLM。
+- record：可读缓存，未命中时调用实时 LLM，并写入缓存。
+- replay：只读缓存，未命中直接抛异常，不回退实时 LLM。
 
-### 命令入口
+该行为由 cache_mode 单一开关控制，历史参数 cache_enable 仅作兼容并被忽略。
+
+## 核心行为
+
+### 1) replay 严格语义
+
+- replay 未命中时抛出 RuntimeError：
+  Replay cache miss for session/content keys; aborting to avoid live LLM call
+- 保证回放稳定与可追溯，不发生隐式在线调用。
+
+### 2) replay 命中顺序
+
+当前命中顺序如下：
+
+1. session 精确键：session_hash:agent_hash
+2. content 精确键：消息与参数哈希键
+3. session 前缀兜底：session_hash:*（仅在 1/2 都 miss 后启用）
+
+该顺序用于兼容 agent hash 漂移，同时避免前缀命中过早覆盖精确命中。
+
+### 3) 双层缓存
+
+- 内存层：LRU
+- 本地文件层：JSON 文件
+- 支持过期清理（expire_seconds）
+
+## 配置与环境变量
+
+默认缓存配置来自模块内默认值与 YAML 配置，支持环境变量覆盖：
+
+- AKG_AGENTS_CACHE_CONFIG_PATH（兼容 AIKG_CACHE_CONFIG_PATH）
+- AKG_AGENTS_CACHE_FILE_PATH（兼容 AIKG_CACHE_FILE_PATH）
+
+默认缓存文件路径：
+
+- ~/.akg/llm_cache/llm_test_cache.json
+
+## 常用命令
+
+### 查看缓存
 
 ```bash
 python -m akg_agents.core_v2.llm.cache.view_cache [cache_file] [--stats] [-v]
-python /home/liting/akg/akg_agents/python/akg_agents/core_v2/llm/cache/view_cache.py [cache_file] [--stats] [-v]
 ```
 
-### 参数说明
-
-| 参数 | 说明 |
-|------|------|
-| `cache_file` | 可选，缓存文件路径，默认 `~/.akg/llm_cache/llm_test_cache.json` |
-| `--stats` | 输出缓存统计摘要 |
-| `-v`, `--verbose` | 输出缓存条目详情 |
-
-### 常用命令
+示例：
 
 ```bash
-# 仅看统计
 python -m akg_agents.core_v2.llm.cache.view_cache --stats
-
-# 仅看详情
 python -m akg_agents.core_v2.llm.cache.view_cache -v
-
-# 同时看统计和详情
 python -m akg_agents.core_v2.llm.cache.view_cache --stats -v
-
-# 指定缓存文件看统计
 python -m akg_agents.core_v2.llm.cache.view_cache /tmp/llm_cache.json --stats
 ```
 
-### 统计字段说明
-
-| 字段 | 说明 |
-|------|------|
-| 缓存条目总数 | 当前读取到的总条目数 |
-| 本地文件缓存条目数 | 缓存文件中的条目数 |
-| 内存缓存条目数 | 该 CLI 默认无法直接读取其他进程的实时内存缓存，显示为 `N/A` |
-| 过期条目数 | 依据 `create_time + expire_seconds` 计算 |
-| 按会话/前缀聚合统计 | 以 key 前缀聚合（包含 `session_hash:agent_hash` 风格） |
-| 缓存文件路径与大小 | 文件元信息 |
-
-### 常见问题
-
-1. 报错 `unrecognized arguments: --stats`
-
-请确认代码已更新到包含 `--stats` 参数的版本，并使用如下命令查看帮助：
-
-```bash
-python -m akg_agents.core_v2.llm.cache.view_cache -h
-```
-
-2. `--stats` 下内存缓存条目数显示 `N/A`
-
-这是预期行为。该 CLI 读取的是缓存文件视角，无法直接访问其他 Python 进程中的内存态缓存。
-
-## Cache 模式显式设置
-
-以 `kernel_related/cpu/run_torch_cpu_cpp_single_record_and_replay.py` 为例，示例脚本支持通过参数显式设置 cache 模式：
+### 示例脚本切换 cache_mode
 
 ```bash
 python examples/kernel_related/cpu/run_torch_cpu_cpp_single_record_and_replay.py --cache-mode off
@@ -72,20 +70,74 @@ python examples/kernel_related/cpu/run_torch_cpu_cpp_single_record_and_replay.py
 python examples/kernel_related/cpu/run_torch_cpu_cpp_single_record_and_replay.py --cache-mode replay --cache-session-hash <session_hash>
 ```
 
-约定：
+## Replay 样本目录与发现
 
-- 默认 `cache_mode=off`
-- `cache_mode=replay` 时必须提供 `cache_session_hash`
+模块提供固定三组 CPU attention replay 样本发现接口：
+
+- discover_cpu_attention_replay_scenarios
+- get_project_cache_dir
+- ReplayCacheScenario
+
+默认样本目录：
+
+- akg_agents/.cache/
+
+## 测试结构（已迁移）
+
+### 1) 快速 UT
+
+- tests/ut/cache_tests/
+
+包含：
+
+- 缓存核心读写
+- replay miss 严格保护
+- session 前缀兜底命中
+- replay catalog 与环境变量覆盖
+
+执行：
+
+```bash
+PYTHONPATH=akg_agents/python python -m pytest akg_agents/tests/ut/cache_tests -q
+```
+
+### 2) ST：replay 编译与精度验证
+
+- tests/op/st/test_cache_replay_kernel_verification.py
+
+执行：
+
+```bash
+cd akg_agents/tests/op/st
+PYTHONPATH=../../../python python -m pytest test_cache_replay_kernel_verification.py -v
+```
+
+### 3) ST：record/replay 真实样本生成与导出
+
+- tests/op/st/test_cache_record_replay_real_samples.py
+
+该用例会在 record 后导出样本，并进行“最终收敛版本归一化”：
+
+- 若存在 session:0@1, session:0@2...，导出时统一提升为最终收敛 step
+- 防止 replay 命中早期失败版本
+
+执行（真实调用，依赖模型环境）：
+
+```bash
+cd akg_agents/tests/op/st
+PYTHONPATH=../../../python python -m pytest test_cache_record_replay_real_samples.py -v
+```
 
 ## 文件结构
 
 ```text
 cache/
-├── __init__.py        # 模块导出入口，统一暴露 LLMCache 与常用缓存接口
-├── cache_config.py    # 缓存配置加载与默认值管理
-├── cache_decorator.py # client.generate 缓存装饰器，支持 record/replay 逻辑
-├── cache_utils.py     # 缓存键生成、文件读写与兼容性工具函数
-├── llm_cache.py       # 双层缓存核心实现（内存 + 本地文件）
-├── view_cache.py      # 缓存查看 CLI，支持统计与详细条目展示
-└── README.md          # 本文档
+├── __init__.py
+├── cache_config.py
+├── cache_decorator.py
+├── cache_utils.py
+├── llm_cache.py
+├── replay_catalog.py
+├── view_cache.py
+└── README.md
 ```

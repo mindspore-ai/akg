@@ -61,20 +61,11 @@ def attach_cache_to_client(
     client: Any,
     cache: Optional[LLMCache] = None,
     cache_config_path: Optional[str] = None,
-    enable_cache: Optional[bool] = None,
 ) -> Any:
     """Attach cache to a client instance without changing its interface."""
     if cache is None:
         cache_config = load_cache_config(cache_config_path)
-        if enable_cache is not None:
-            cache_config["enable"] = enable_cache
         cache = LLMCache(**cache_config)
-    elif enable_cache is not None:
-        cache.enable = enable_cache
-
-    if not cache.enable:
-        logger.info("LLM cache disabled; skipping attach.")
-        return client
 
     original_generate = client.generate
 
@@ -86,17 +77,13 @@ def attach_cache_to_client(
         tools=None,
         **kwargs
     ):
-        cache_enable = kwargs.pop("cache_enable", None)
+        legacy_cache_enable = kwargs.pop("cache_enable", None)
         cache_refresh = kwargs.pop("cache_refresh", False)
         cache_mode = str(kwargs.pop("cache_mode", "off") or "off").strip().lower()
         cache_session_hash = str(kwargs.pop("cache_session_hash", "") or "").strip()
         cache_agent_hash = str(kwargs.pop("cache_agent_hash", "") or "").strip()
-        cache_enable = cache.enable if cache_enable is None else cache_enable
-
-        if not cache_enable:
-            return await original_generate(
-                messages, stream=stream, agent_name=agent_name, tools=tools, **kwargs
-            )
+        if legacy_cache_enable is not None:
+            logger.warning("cache_enable is deprecated and ignored; use cache_mode instead")
 
         if cache_mode not in {"off", "record", "replay"}:
             logger.warning(f"Unknown cache_mode={cache_mode}, fallback to off")
@@ -118,6 +105,9 @@ def attach_cache_to_client(
                     cached = cache.get(messages, tools=tools, cache_key=session_cache_key, **cache_params)
                 if cached is None:
                     cached = cache.get(messages, tools=tools, cache_key=content_cache_key, **cache_params)
+                if cached is None and cache_mode == "replay" and cache_session_hash:
+                    # 仅在 session/content 精确键都 miss 时，才按 session 前缀兜底
+                    cached = cache.get_first_result_by_prefix(f"{cache_session_hash}:")
                 if cached is not None:
                     if stream:
                         _replay_cached_stream(client, agent_name, cached)

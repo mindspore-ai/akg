@@ -61,9 +61,15 @@ class LLMCache:
         cache_file_path: str = "~/.akg/llm_cache/llm_test_cache.json",
         expire_seconds: int = -1,
         auto_clean_expired: bool = True,
-        enable: bool = True
+        **kwargs,
     ):
-        self.enable = enable
+        if "enable" in kwargs:
+            logger.warning("LLMCache(enable=...) is deprecated and ignored; use cache_mode instead")
+            kwargs.pop("enable", None)
+        if kwargs:
+            unknown = ", ".join(sorted(kwargs.keys()))
+            raise TypeError(f"LLMCache got unexpected keyword arguments: {unknown}")
+
         self.max_memory_size = max_memory_size
         self.cache_file_path = cache_file_path
         self.expire_seconds = expire_seconds
@@ -76,18 +82,13 @@ class LLMCache:
             self.clean_expired_cache()
 
         logger.info(
-            f"LLMCache initialized: enable={self.enable}, "
-            f"memory_size={max_memory_size}, local_cache_path={cache_file_path}"
+            f"LLMCache initialized: memory_size={max_memory_size}, local_cache_path={cache_file_path}"
         )
 
     def _load_local_cache(self) -> Dict[str, Any]:
-        if not self.enable:
-            return {}
         return read_cache_file(self.cache_file_path)
 
     def _save_local_cache(self) -> None:
-        if not self.enable:
-            return
         write_cache_file(self.cache_file_path, self._local_cache)
 
     def _is_cache_expired(self, cache_item: Dict[str, Any]) -> bool:
@@ -96,7 +97,12 @@ class LLMCache:
         create_time = cache_item.get("create_time", 0)
         return time.time() - create_time > self.expire_seconds
 
-    def _read_valid_cache_item(self, cache_store: Dict[str, Any], cache_key: str, source_name: str) -> Optional[Dict[str, Any]]:
+    def _read_valid_cache_item(
+            self,
+            cache_store: Dict[str, Any],
+            cache_key: str,
+            source_name: str,
+    ) -> Optional[Dict[str, Any]]:
         cache_item = cache_store.get(cache_key)
         if cache_item is None:
             return None
@@ -115,9 +121,6 @@ class LLMCache:
         cache_key: Optional[str] = None,
         **kwargs
     ) -> Optional[Dict[str, Any]]:
-        if not self.enable:
-            return None
-
         if cache_key is None:
             cache_key = generate_cache_key(messages, tools, **kwargs)
 
@@ -145,9 +148,6 @@ class LLMCache:
         cache_key: Optional[str] = None,
         **kwargs
     ) -> None:
-        if not self.enable:
-            return
-
         if cache_key is None:
             cache_key = generate_cache_key(messages, tools, **kwargs)
 
@@ -204,6 +204,33 @@ class LLMCache:
     ) -> Optional[Dict[str, Any]]:
         cache_key = generate_cache_key(messages, tools, **kwargs)
         return self.get_cache_by_key(cache_key)
+
+    def get_first_result_by_prefix(self, key_prefix: str) -> Optional[Dict[str, Any]]:
+        """Return first valid cached result whose key starts with key_prefix."""
+        if not key_prefix:
+            return None
+
+        # Prefer memory cache first to keep hot-path behavior consistent with get().
+        for key in sorted(self._memory_cache.keys()):
+            if not key.startswith(key_prefix):
+                continue
+            memory_item = self._read_valid_cache_item(self._memory_cache, key, "Memory")
+            if memory_item is not None:
+                return memory_item.get("result")
+
+        local_size_before = len(self._local_cache)
+        for key in sorted(self._local_cache.keys()):
+            if not key.startswith(key_prefix):
+                continue
+            local_item = self._read_valid_cache_item(self._local_cache, key, "Local")
+            if local_item is not None:
+                self._memory_cache[key] = local_item
+                return local_item.get("result")
+
+        if len(self._local_cache) != local_size_before:
+            self._save_local_cache()
+
+        return None
 
     def export_all_cache(self, export_path: str) -> None:
         export_path = Path(export_path).expanduser()

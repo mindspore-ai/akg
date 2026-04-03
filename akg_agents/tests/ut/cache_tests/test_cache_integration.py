@@ -1,3 +1,17 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import pytest
 
 from akg_agents.core_v2.llm.cache import LLMCache, attach_cache_to_client
@@ -20,12 +34,11 @@ class FakeProvider:
 
 
 @pytest.mark.asyncio
-async def test_cache_attach_and_hit(temp_cache_file):
+async def test_cache_off_mode_bypasses_cache(temp_cache_file):
     cache = LLMCache(
         max_memory_size=10,
         cache_file_path=temp_cache_file,
         expire_seconds=3600,
-        enable=True,
     )
     provider = FakeProvider()
     client = LLMClient(provider=provider)
@@ -33,8 +46,28 @@ async def test_cache_attach_and_hit(temp_cache_file):
 
     messages = [{"role": "user", "content": "hello"}]
 
-    result1 = await client.generate(messages)
-    result2 = await client.generate(messages)
+    result1 = await client.generate(messages, cache_mode="off")
+    result2 = await client.generate(messages, cache_mode="off")
+
+    assert provider.calls == 2
+    assert result1 != result2
+
+
+@pytest.mark.asyncio
+async def test_cache_record_mode_hit(temp_cache_file):
+    cache = LLMCache(
+        max_memory_size=10,
+        cache_file_path=temp_cache_file,
+        expire_seconds=3600,
+    )
+    provider = FakeProvider()
+    client = LLMClient(provider=provider)
+    attach_cache_to_client(client, cache=cache)
+
+    messages = [{"role": "user", "content": "hello"}]
+
+    result1 = await client.generate(messages, cache_mode="record")
+    result2 = await client.generate(messages, cache_mode="record")
 
     assert provider.calls == 1
     assert result1 == result2
@@ -48,7 +81,6 @@ async def test_cache_refresh_and_disable(temp_cache_file):
         max_memory_size=10,
         cache_file_path=temp_cache_file,
         expire_seconds=3600,
-        enable=True,
     )
     provider = FakeProvider()
     client = LLMClient(provider=provider)
@@ -56,9 +88,9 @@ async def test_cache_refresh_and_disable(temp_cache_file):
 
     messages = [{"role": "user", "content": "hello"}]
 
-    await client.generate(messages)
-    await client.generate(messages, cache_refresh=True)
-    await client.generate(messages, cache_enable=False)
+    await client.generate(messages, cache_mode="record")
+    await client.generate(messages, cache_mode="record", cache_refresh=True)
+    await client.generate(messages, cache_mode="off")
 
     assert provider.calls == 3
 
@@ -71,7 +103,6 @@ async def test_cache_session_record_and_replay(temp_cache_file):
         max_memory_size=10,
         cache_file_path=temp_cache_file,
         expire_seconds=3600,
-        enable=True,
     )
     provider = FakeProvider()
     client = LLMClient(provider=provider)
@@ -119,28 +150,18 @@ async def test_cache_session_replay_miss_fallback_and_fill(temp_cache_file):
         max_memory_size=10,
         cache_file_path=temp_cache_file,
         expire_seconds=3600,
-        enable=True,
     )
     provider = FakeProvider()
     client = LLMClient(provider=provider)
     attach_cache_to_client(client, cache=cache)
 
     session_hash = "session-miss"
-    result_first = await client.generate(
-        [{"role": "user", "content": "first-call"}],
-        cache_mode="replay",
-        cache_session_hash=session_hash,
-        cache_agent_hash="0@3",
-    )
-    calls_after_first = provider.calls
+    with pytest.raises(RuntimeError, match="Replay cache miss"):
+        await client.generate(
+            [{"role": "user", "content": "first-call"}],
+            cache_mode="replay",
+            cache_session_hash=session_hash,
+            cache_agent_hash="0@3",
+        )
 
-    result_second = await client.generate(
-        [{"role": "user", "content": "second-call"}],
-        cache_mode="replay",
-        cache_session_hash=session_hash,
-        cache_agent_hash="0@3",
-    )
-
-    assert calls_after_first == 1
-    assert provider.calls == 1
-    assert result_second == result_first
+    assert provider.calls == 0
