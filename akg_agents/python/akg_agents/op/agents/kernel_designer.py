@@ -158,7 +158,7 @@ class KernelDesigner(AgentBase):
         """加载 Designer 所需的固定 skills，带缓存
 
         加载范围仅 designer/ 目录：sketch-design、hint-mode 等。
-        cases/（手写优化建议）由上层搜索控制器通过 SkillHandwriteLoader 加载，
+        cases/（手写优化建议）由上层搜索控制器通过 HandwriteLoader 加载，
         经采样后以 handwrite_suggestions 参数传入 run()。
         """
         if dsl in self._skills_cache:
@@ -308,7 +308,7 @@ class KernelDesigner(AgentBase):
             inspirations: 格式化后的进化探索方案字符串（evolve/adaptive_search 场景，
                           运行时动态生成的父代代码和性能数据，非静态知识，Skill 系统无法覆盖）
             handwrite_suggestions: 手写优化建议列表，由上层搜索控制器
-                          通过 SkillHandwriteLoader + SkillHandwriteSampler 采样后传入。
+                          通过 HandwriteLoader + HandwriteSampler 采样后传入。
                           每个 dict 包含 {name, improvement_doc}。
         
         Returns:

@@ -34,7 +34,7 @@ from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
 import logging
 _logger = logging.getLogger(__name__)
 from akg_agents.op.sketch import Sketch
-from akg_agents.op.skill.handwrite_sampler import SkillHandwriteLoader, SkillHandwriteSampler
+from akg_agents.op.utils.handwrite_loader import HandwriteLoader, HandwriteSampler
 
 from .evolution_core import (
     save_implementation,
@@ -167,16 +167,16 @@ class InitializationProcessor:
         else:
             logger.info("Island model: Disabled (simple evolution mode)")
         
-        # 创建 SkillHandwriteLoader（共享，基于 Skill 系统的案例加载）
-        handwrite_loader = SkillHandwriteLoader(
+        # 创建 HandwriteLoader（共享，基于 Skill 系统的案例加载）
+        handwrite_loader = HandwriteLoader(
             dsl=self.config.dsl,
             backend=self.config.backend,
             op_name=self.config.op_name,
             task_desc=self.config.task_desc,
             config=self.config.config,
         )
-        await handwrite_loader.select_relevant_skills()
-        logger.info(f"Shared SkillHandwriteLoader created with {len(handwrite_loader.get_selected_skills())} selected skills")
+        await handwrite_loader.select_relevant_pairs()
+        logger.info(f"Shared HandwriteLoader created with {len(handwrite_loader.get_selected_pairs())} selected pairs")
         
         # 初始化数据结构
         init_data = {
@@ -194,7 +194,7 @@ class InitializationProcessor:
             init_data['island_impls'] = [[] for _ in range(self.config.num_islands)]
             init_data['elite_pool'] = []
             init_data['island_handwrite_samplers'] = [
-                SkillHandwriteSampler(
+                HandwriteSampler(
                     loader=handwrite_loader,
                     sample_num=self.config.handwrite_sample_num,
                     decay_rate=self.config.handwrite_decay_rate
@@ -202,10 +202,10 @@ class InitializationProcessor:
                 for _ in range(self.config.num_islands)
             ]
             if any(sampler._total_count > 0 for sampler in init_data['island_handwrite_samplers']):
-                logger.info(f"Initialized {self.config.num_islands} independent SkillHandwriteSamplers for islands")
+                logger.info(f"Initialized {self.config.num_islands} independent HandwriteSamplers for islands")
         else:
             init_data['individual_handwrite_samplers'] = [
-                SkillHandwriteSampler(
+                HandwriteSampler(
                     loader=handwrite_loader,
                     sample_num=self.config.handwrite_sample_num,
                     decay_rate=self.config.handwrite_decay_rate
@@ -213,7 +213,7 @@ class InitializationProcessor:
                 for _ in range(self.config.parallel_num)
             ]
             if any(sampler._total_count > 0 for sampler in init_data['individual_handwrite_samplers']):
-                logger.info(f"Initialized {self.config.parallel_num} independent SkillHandwriteSamplers for individuals")
+                logger.info(f"Initialized {self.config.parallel_num} independent HandwriteSamplers for individuals")
         
         return init_data
 

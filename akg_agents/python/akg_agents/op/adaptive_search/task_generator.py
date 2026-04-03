@@ -25,7 +25,7 @@ from typing import Dict, Any, List, Optional
 from akg_agents.op.langgraph_op.task import LangGraphTask
 from akg_agents.op.utils.evolve.evolution_core import sample_inspirations
 from akg_agents.op.utils.evolve.evolution_utils import load_meta_prompts
-from akg_agents.op.skill.handwrite_sampler import SkillHandwriteLoader, SkillHandwriteSampler
+from akg_agents.op.utils.handwrite_loader import HandwriteLoader, HandwriteSampler
 from akg_agents.op.adaptive_search.success_db import SuccessDB, SuccessRecord
 
 logger = logging.getLogger(__name__)
@@ -84,8 +84,8 @@ class TaskGenerator:
         self.gen_config = generator_config or TaskGeneratorConfig()
         
         self._task_counter = 0
-        self._handwrite_loader: Optional[SkillHandwriteLoader] = None
-        self._handwrite_sampler: Optional[SkillHandwriteSampler] = None
+        self._handwrite_loader: Optional[HandwriteLoader] = None
+        self._handwrite_sampler: Optional[HandwriteSampler] = None
         self._handwrite_initialized = False
         
         logger.info(f"TaskGenerator initialized for {op_name}")
@@ -96,16 +96,16 @@ class TaskGenerator:
             return
         
         try:
-            self._handwrite_loader = SkillHandwriteLoader(
+            self._handwrite_loader = HandwriteLoader(
                 dsl=self.dsl,
                 backend=self.backend,
                 op_name=self.op_name,
                 task_desc=self.task_desc,
                 config=self.config,
             )
-            await self._handwrite_loader.select_relevant_skills()
+            await self._handwrite_loader.select_relevant_pairs()
             
-            self._handwrite_sampler = SkillHandwriteSampler(
+            self._handwrite_sampler = HandwriteSampler(
                 loader=self._handwrite_loader,
                 sample_num=self.gen_config.handwrite_sample_num,
                 decay_rate=self.gen_config.handwrite_decay_rate,
