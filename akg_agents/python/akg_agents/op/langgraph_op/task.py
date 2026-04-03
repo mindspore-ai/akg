@@ -44,6 +44,7 @@ from akg_agents.op.workflows.connect_all_workflow import ConnectAllWorkflow
 from akg_agents.op.workflows.kernelgen_only_workflow import KernelGenOnlyWorkflow
 from akg_agents.op.workflows.evolve_workflow import EvolveWorkflow
 from akg_agents.op.workflows.adaptive_search_workflow import AdaptiveSearchWorkflow
+from akg_agents.op.workflows.autoresearch_workflow import AutoresearchWorkflow
 from akg_agents.op.workflows.default_workflow_v2 import DefaultWorkflowV2
 
 # 算子工作流注册表（同时支持短名称和完整名称）
@@ -64,6 +65,8 @@ WORKFLOW_REGISTRY = {
     "evolve_workflow": EvolveWorkflow,
     "adaptive_search": AdaptiveSearchWorkflow,
     "adaptive_search_workflow": AdaptiveSearchWorkflow,
+    "autoresearch": AutoresearchWorkflow,
+    "autoresearch_workflow": AutoresearchWorkflow,
     "default_v2": DefaultWorkflowV2,
     "default_workflow_v2": DefaultWorkflowV2,
 }
@@ -78,27 +81,28 @@ class LangGraphTask(BaseLangGraphTask):
     - 算子专用初始状态准备
     """
     
-    def __init__(self, 
-                 op_name: str, 
-                 task_desc: str, 
-                 task_id: str, 
+    def __init__(self,
+                 op_name: str,
+                 task_desc: str,
+                 task_id: str,
                  backend: str,
-                 arch: str, 
-                 dsl: str, 
-                 config: dict, 
-                 device_pool: Optional[DevicePool] = None, 
+                 arch: str,
+                 dsl: str,
+                 config: dict,
+                 device_pool: Optional[DevicePool] = None,
                  framework: str = "torch",
-                 task_type: str = "precision_only", 
+                 task_type: str = "precision_only",
                  workflow: str = "default",
-                 inspirations: Optional[list] = None, 
+                 inspirations: Optional[list] = None,
                  meta_prompts: Optional[str] = None,
                  handwrite_suggestions: Optional[list] = None,
                  source_backend: Optional[str] = None,
                  source_arch: Optional[str] = None,
                  user_requirements: Optional[str] = None,
-                 bench_type: str = "kernelbench"):
+                 bench_type: str = "kernelbench",
+                 previous_code: Optional[str] = None):
         """初始化 LangGraphTask
-        
+
         Args:
             op_name: 算子名称
             task_desc: 任务描述（框架代码）
@@ -118,6 +122,7 @@ class LangGraphTask(BaseLangGraphTask):
             source_arch: 源架构，用于跨后端转换
             user_requirements: 用户额外需求（来自 ReAct 多轮对话）
             bench_type: 基准测试类型（kernelbench 或 sol）
+            previous_code: 初始 kernel 代码（跳过 KernelGen 生成）
         """
         # 验证任务配置
         normalized_dsl = check_task_config(framework, backend, arch, dsl)
@@ -139,7 +144,8 @@ class LangGraphTask(BaseLangGraphTask):
         self.source_arch = source_arch.lower() if source_arch else None
         self.user_requirements = user_requirements or config.get("user_requirements", "")
         self.bench_type = bench_type
-        
+        self.previous_code = previous_code or ""
+
         # 调用父类初始化
         super().__init__(task_id, config, workflow)
         
@@ -217,11 +223,11 @@ class LangGraphTask(BaseLangGraphTask):
             logger.warning(f"Failed to initialize Designer: {e}")
             import traceback
             logger.debug(traceback.format_exc())
-        
+
         # Coder
         try:
             logger.info(f"[LangGraphTask] _init_agents: self.config.get('rag')={self.config.get('rag')}")
-            
+
             agents['coder'] = Coder(
                 op_name=self.op_name,
                 task_desc=self.task_desc,
@@ -349,6 +355,7 @@ class LangGraphTask(BaseLangGraphTask):
             "meta_prompts": self.meta_prompts,
             "handwrite_suggestions": self.handwrite_suggestions,
             "user_requirements": self.user_requirements,
+            "previous_code": self.previous_code,
         }
 
         cache_mode = str(self.config.get("cache_mode") or "off").strip().lower()
@@ -441,8 +448,11 @@ class LangGraphTask(BaseLangGraphTask):
             return self.op_name, success, final_state
             
         except Exception as e:
-            logger.error(f"LangGraphTask {self.task_id} failed: {e}")
-            return self.op_name, False, {"error": str(e)}
+            logger.error(f"LangGraphTask {self.task_id} failed: "
+                         f"{type(e).__name__}: {e}")
+            return self.op_name, False, {
+                "error": f"{type(e).__name__}: {e}" or "unknown error",
+            }
 
     def visualize(self, output_path: str = None) -> str:
         """生成流程图
