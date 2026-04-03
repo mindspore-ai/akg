@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseAddRmsNorm.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseAddRmsNorm.h"
 
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Support/OpConstants.h"

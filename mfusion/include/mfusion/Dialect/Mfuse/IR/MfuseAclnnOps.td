@@ -254,6 +254,30 @@ def Mfuse_AclnnGeluOp : Mfuse_Op<"aclnn.gelu", [Pure]> {
   }];
 }
 
+def Mfuse_AclnnLayerNormOp : Mfuse_Op<"aclnn.layer_norm", [Pure]> {
+  let summary = "The aclnnLayerNorm operation";
+  let description = [{
+    Operation for LayerNorm computation.
+    Computes: y = (x - mean) / sqrt(var + eps) * gamma + beta
+    Accepts input tensor x, gamma (weight), beta (bias), and epsilon for numerical stability.
+    Produces normalized output tensor.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$x,
+    AnyRankedTensor:$gamma,
+    AnyRankedTensor:$beta,
+    I64ArrayAttr: $normalized_shape,
+    F64Attr:$epsilon
+  );
+
+  let results = (outs AnyRankedTensor:$yOut);
+
+  let assemblyFormat = [{
+    $x `,` $gamma `,` $beta attr-dict `:` functional-type(operands, results)
+  }];
+}
+
 def Mfuse_AclnnMatmulOp : Mfuse_Op<"aclnn.matmul", [Pure]> {
   let summary = "CANN MatMul operation.";
   let description = [{
@@ -435,6 +459,33 @@ def Mfuse_AclnnTanhOp : Mfuse_Op<"aclnn.tanh", [
 
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def Mfuse_AclnnVarMeanOp : Mfuse_Op<"aclnn.var_mean", [Pure]> {
+  let summary = "The aclnnVarMean operation";
+  let description = [{
+    Operation for computing variance and mean of a tensor.
+    Accepts input tensor, dimension list, correction factor, and keepdim flag.
+    Returns variance and mean as two results.
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$self,
+    I64ArrayAttr:$dim,
+    I64Attr:$correction,
+    I1Attr:$keepdim
+  );
+
+  let results = (outs
+    AnyRankedTensor:$varianceOut,
+    AnyRankedTensor:$meanOut
+  );
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $self attr-dict `:` functional-type(operands, results)
   }];
 }
 

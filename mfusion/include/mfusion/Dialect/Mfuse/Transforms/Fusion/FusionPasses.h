@@ -18,14 +18,12 @@
 #define MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_FUSION_PASSES_H
 
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/MfuseFusion.h"
-#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseAddRmsNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseGelu.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseNumToTensor.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseSwiGlu.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Conv/FuseBiasaddConv.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Conv/FuseConvBatchNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Conv/FuseConv2DCast.h"
-#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/FuseBatchNorm.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatMulBiasAdd.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatMulCast.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatmulReshapeBiasAdd.h"
@@ -34,5 +32,8 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseBatchMatMul.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseBatchMatMulToMul.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/MatMul/FuseMatMulReshape.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseAddRmsNorm.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseBatchNorm.h"
+#include "mfusion/Dialect/Mfuse/Transforms/Fusion/Passes/Norm/FuseLayerNorm.h"
 
 #endif  // MFUSION_DIALECT_MFUSE_TRANSFORMS_FUSION_FUSION_PASSES_H
