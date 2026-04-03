@@ -381,6 +381,7 @@ class NodeFactory:
                     designer_code=designer_code,
                     inspirations=inspirations_text,
                     code_check_errors=code_check_errors,
+                    bench_type=state.get('bench_type', 'kernelbench'),
                 )
             except Exception as e:
                 logger.error(f"[Task {task_id}] KernelGen.run() 失败: {e}")

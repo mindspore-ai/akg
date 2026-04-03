@@ -19,6 +19,21 @@ from sol_correctness import ToleranceSpec, compute_error_stats, set_seed
 import sys
 sys.path.append("{{ sol_execbench_src_dir }}")
 
+# ---------- NPU dtype compatibility shim ----------
+# sol-execbench references CUDA-only dtypes (float4_e2m1fn_x2, float8_e4m3fn,
+# float8_e5m2) that do not exist under torch_npu.  Patch them as sentinels so
+# the library can import without AttributeError; any benchmark that actually
+# *uses* these dtypes will still fail with a clear "Unsupported dtype" message.
+_OPTIONAL_DTYPES = {
+    "float4_e2m1fn_x2": None,
+    "float8_e4m3fn": None,
+    "float8_e5m2": None,
+}
+for _attr_name, _fallback in _OPTIONAL_DTYPES.items():
+    if not hasattr(torch, _attr_name):
+        setattr(torch, _attr_name, _fallback)
+# ---------------------------------------------------
+
 from sol_execbench.core.bench.io import gen_inputs
 from sol_execbench.core.data import Definition, Workload
 import reference
