@@ -34,6 +34,24 @@ def FuseAddRmsNorm : Pass<"fuse-addrmsnorm", "::mlir::ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// FuseLayerNorm pass
+//===----------------------------------------------------------------------===//
+
+def FuseLayerNorm : Pass<"fuse-layernorm", "::mlir::ModuleOp"> {
+  let summary = "Fuse var_mean, add, rsqrt, sub, mul, mul, add into LayerNorm";
+  let description = [{
+    Fuses a pattern of var_mean -> add(eps) -> rsqrt -> sub -> mul -> mul -> add
+    into a single mfuse.aclnn.layer_norm operator.
+    Pattern: LayerNorm(x, gamma, beta, eps) = ((x - mean) * rsqrt(var + eps)) * gamma + beta
+  }];
+  let constructor = "mlir::mfuse::createFuseLayerNormPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // FuseGelu pass
 //===----------------------------------------------------------------------===//
 
