@@ -13,12 +13,31 @@ def get_op_name():
 
 
 def get_task_desc(case_dir):
-    with open(case_dir / "definition.json", "r") as f:
+    with open(case_dir / "definition.json", "r", encoding="utf-8") as f:
         def_json = f.read()
-    with open(case_dir / "reference.py", "r") as f:
+    with open(case_dir / "reference.py", "r", encoding="utf-8") as f:
         ref_py = f.read()
-        
-    return f"请实现一个 Triton CUDA 算子。\n\n## definition.json\n```json\n{def_json}\n```\n\n## reference.py\n```python\n{ref_py}\n```\n\n注意：请使用 Triton 编写 kernel，并将其封装在 ModelNew 类的 forward 方法中。"
+
+    workload_sample = ""
+    workload_file = case_dir / "workload.jsonl"
+    if workload_file.exists():
+        import json
+        with open(workload_file, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+        if lines:
+            first = json.loads(lines[0])
+            workload_sample = (
+                f"\n\n## workload 示例（共 {len(lines)} 组，以下为第 1 组）\n"
+                f"```json\n{json.dumps(first, indent=2)}\n```"
+            )
+
+    return (
+        f"请实现一个 Triton CUDA 算子。\n\n"
+        f"## definition.json\n```json\n{def_json}\n```\n\n"
+        f"## reference.py\n```python\n{ref_py}\n```"
+        f"{workload_sample}\n\n"
+        f"注意：请使用 Triton 编写 kernel，并将其封装在 ModelNew 类的 forward 方法中。"
+    )
 
 
 async def run_sol_triton_single():

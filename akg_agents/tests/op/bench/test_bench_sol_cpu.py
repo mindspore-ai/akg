@@ -39,13 +39,31 @@ async def test_bench_sol_cpu_cpp():
     # 注册 LocalWorker
     await register_local_worker([device_id], backend=backend, arch=arch)
     
-    # 读取 definition.json 和 reference.py 作为 task_desc
-    with open(os.path.join(sol_problem_dir, "definition.json"), "r") as f:
+    # 读取 definition.json、reference.py、workload.jsonl 作为 task_desc
+    with open(os.path.join(sol_problem_dir, "definition.json"), "r", encoding="utf-8") as f:
         def_json = f.read()
-    with open(os.path.join(sol_problem_dir, "reference.py"), "r") as f:
+    with open(os.path.join(sol_problem_dir, "reference.py"), "r", encoding="utf-8") as f:
         ref_py = f.read()
-        
-    task_desc = f"请实现一个 C++ CPU 算子。\n\n## definition.json\n```json\n{def_json}\n```\n\n## reference.py\n```python\n{ref_py}\n```\n\n注意：请使用 torch.utils.cpp_extension.load_inline 编译 C++ 代码，并将其封装在 ModelNew 类中。"
+
+    workload_sample = ""
+    workload_path = os.path.join(sol_problem_dir, "workload.jsonl")
+    if os.path.exists(workload_path):
+        with open(workload_path, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+        if lines:
+            first = json.loads(lines[0])
+            workload_sample = (
+                f"\n\n## workload 示例（共 {len(lines)} 组，以下为第 1 组）\n"
+                f"```json\n{json.dumps(first, indent=2)}\n```"
+            )
+
+    task_desc = (
+        f"请实现一个 C++ CPU 算子。\n\n"
+        f"## definition.json\n```json\n{def_json}\n```\n\n"
+        f"## reference.py\n```python\n{ref_py}\n```"
+        f"{workload_sample}\n\n"
+        f"注意：请使用 torch.utils.cpp_extension.load_inline 编译 C++ 代码，并将其封装在 ModelNew 类中。"
+    )
     
     task = AIKGTask(
         op_name="_relu",
