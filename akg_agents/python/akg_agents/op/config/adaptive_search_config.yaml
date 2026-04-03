@@ -76,8 +76,8 @@ use_evolution_controller: false
 # ============================================================================
 # LLM 配置
 # ============================================================================
-# 基础配置文件路径（必填，用于加载 LLM 模型、文档目录等配置）
-config_path: "python/akg_agents/op/config/triton_ascend_evolve_config.yaml"
+# 基础配置文件（必填，用于加载 LLM 模型、文档目录等配置）
+config_path: "triton_ascend_evolve_config.yaml"
 
 # ============================================================================
 # 批量执行配置（用于 run_batch_adaptive_search.py）

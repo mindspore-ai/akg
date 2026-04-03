@@ -79,6 +79,7 @@ class AdaptiveSearchRunnerConfig:
     def from_yaml(cls, config_path: str, skip_task_config: bool = False) -> "AdaptiveSearchRunnerConfig":
         """从 YAML 文件加载配置"""
         config_dict = load_yaml(config_path)
+        config_dir = os.path.dirname(os.path.abspath(config_path))
         
         instance = cls()
         
@@ -90,6 +91,8 @@ class AdaptiveSearchRunnerConfig:
             # 从文件路径加载任务描述
             task_desc = task_config.get("task_desc", "")
             if task_desc:
+                if not os.path.isabs(task_desc):
+                    task_desc = os.path.normpath(os.path.join(config_dir, task_desc))
                 if os.path.isfile(task_desc):
                     with open(task_desc, 'r', encoding='utf-8') as f:
                         instance.task_desc = f.read()
@@ -134,6 +137,9 @@ class AdaptiveSearchRunnerConfig:
         instance.config_path = config_dict.get("config_path")
         if not instance.config_path:
             raise ValueError("config_path 是必填项，请在配置文件中指定 LLM 配置文件路径，如: config_path: 'config/triton_ascend_evolve_config.yaml'")
+        
+        if not os.path.isabs(instance.config_path):
+            instance.config_path = os.path.normpath(os.path.join(config_dir, instance.config_path))
         
         return instance
 

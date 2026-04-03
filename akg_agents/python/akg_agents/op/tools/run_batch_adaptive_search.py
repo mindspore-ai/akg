@@ -96,6 +96,7 @@ class BatchAdaptiveSearchConfig:
     def from_yaml(cls, config_path: str) -> "BatchAdaptiveSearchConfig":
         """从 YAML 文件加载配置"""
         config_dict = load_yaml(config_path)
+        config_dir = os.path.dirname(os.path.abspath(config_path))
         
         instance = cls()
         
@@ -141,6 +142,8 @@ class BatchAdaptiveSearchConfig:
         
         # 基础配置文件路径
         instance.config_path = config_dict.get("config_path")
+        if instance.config_path and not os.path.isabs(instance.config_path):
+            instance.config_path = os.path.normpath(os.path.join(config_dir, instance.config_path))
         
         return instance
 
