@@ -26,6 +26,14 @@ index 47bd30d6..3255a8f0 100644
  }
 
  def Torch_AtenFullLikeOp : Torch_Op<"aten.full_like", [
+@@ -18519,7 +18519,6 @@ def Torch_PrimNumToTensorScalarOp : Torch_Op<"prim.NumToTensor.Scalar", [
+     void PrimNumToTensorScalarOp::print(OpAsmPrinter &printer) {
+       printDefaultTorchOp(printer, *this, 1, 1);
+     }
+   }];
+-  let hasFolder = 1;
+ }
+
 @@ -19111,4 +19108,3 @@ def Torch_TorchvisionNmsOp : Torch_Op<"torchvision.nms", [
      }
    }];
@@ -185,4 +193,35 @@ index 8c1e8915..1d64ce8b 100644
 -}
  //===----------------------------------------------------------------------===//
  // AtenCeilFloatOp
+ //===----------------------------------------------------------------------===//
+@@ -5026,30 +5026,6 @@
+ //===----------------------------------------------------------------------===//
+ // PrimNumToTensorScalarOp
+ //===----------------------------------------------------------------------===//
+-
+-OpFoldResult PrimNumToTensorScalarOp::fold(FoldAdaptor adaptor) {
+-  Attribute a = adaptor.getA();
+-  auto resultTy = dyn_cast<ValueTensorType>(getType());
+-  if (!a)
+-    return {};
+-  if (!resultTy || !resultTy.hasDtype() || !resultTy.hasSizes())
+-    return {};
+-
+-  auto dty = resultTy.getDtype();
+-  if (auto iattr = dyn_cast<IntegerAttr>(a)) {
+-    a = IntegerAttr::get(dty, iattr.getInt());
+-  } else if (auto fattr = dyn_cast<FloatAttr>(a)) {
+-    a = FloatAttr::get(dty, fattr.getValueAsDouble());
+-  } else {
+-    // doesn't handle other types, like complex type
+-    return {};
+-  }
+-
+-  auto mlirTensorType =
+-      RankedTensorType::get(resultTy.getSizes(), resultTy.getDtype());
+-  return SplatElementsAttr::get(mlirTensorType, a);
+-}
+-
+ //===----------------------------------------------------------------------===//
+ // PrimMinSelfIntOp
  //===----------------------------------------------------------------------===//
