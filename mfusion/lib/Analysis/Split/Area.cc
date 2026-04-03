@@ -42,7 +42,7 @@ bool isDynamic(const Type &type) {
 }
 
 bool symExprEqual(const SymExpr &a, const SymExpr &b) {
-  static mfusion::SymEngineAnalysis analysis;
+  mfusion::SymEngineAnalysis analysis;
   return analysis.isStructurallyEqual(a, b);
 }
 
@@ -144,7 +144,7 @@ Area::Area(size_t id, Node *node, bool is_output, const std::unordered_map<Node 
     size_t input_num = node->inputNum();
     for (auto input : node->inputs()) {
       auto defType = mlir::dyn_cast<RankedTensorType>(input->op()->getResult(0).getType());
-      if (defType && defType.getNumElements() == 1) {
+      if (defType && defType.hasStaticShape() && defType.getNumElements() == 1) {
         scalar_input_num++;
       }
     }

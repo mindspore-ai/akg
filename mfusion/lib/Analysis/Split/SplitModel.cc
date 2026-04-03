@@ -156,7 +156,7 @@ void SplitModel::alignShape(Block *block) const {
       auto num = cur_shape_size - node->shape.size();
       (void)node->shape.insert(node->shape.cbegin(), num, 1LL);
       if (!node->sym_shape.empty()) {
-        static mfusion::SymExprBuilder builder;
+        mfusion::SymExprBuilder builder;
         auto oneExpr = builder.makeInteger(1);
         (void)node->sym_shape.insert(node->sym_shape.cbegin(), num, oneExpr);
       }

@@ -79,14 +79,14 @@ func.func @test_reduce_sum_f32_to_f64(%arg0: tensor<2x2xf32>) -> tensor<2xf64> {
 }
 
 // CHECK-LABEL: func.func @test_reduce_sum_i32
-func.func @test_reduce_sum_i32(%arg0: tensor<2x3xi32>) -> tensor<2xi32> {
+func.func @test_reduce_sum_i32(%arg0: tensor<2x3xsi32>) -> tensor<2xsi32> {
   // CHECK-DAG: %[[DIM1:.*]] = torch.constant.int 1
   // CHECK-DAG: %[[DIMS:.*]] = torch.prim.ListConstruct %[[DIM1]]
   // CHECK-DAG: %[[KEEP:.*]] = torch.constant.bool false
   // CHECK-DAG: %[[DTYPE:.*]] = torch.constant.int 3
   // CHECK: torch.aten.sum.dim_IntList %{{.*}}, %[[DIMS]], %[[KEEP]], %[[DTYPE]]
-  %0 = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = false} : (tensor<2x3xi32>) -> tensor<2xi32>
-  return %0 : tensor<2xi32>
+  %0 = mfuse.reduce_sum %arg0 {dimensions = [1], keepdim = false} : (tensor<2x3xsi32>) -> tensor<2xsi32>
+  return %0 : tensor<2xsi32>
 }
 
 // CHECK-LABEL: func.func @test_reduce_sum_keepdim
@@ -133,11 +133,11 @@ func.func @test_cast(%arg0: tensor<2x2xf32>) -> tensor<2x2xf16> {
 }
 
 // CHECK-LABEL: func.func @test_cast_i32_to_f64
-func.func @test_cast_i32_to_f64(%arg0: tensor<2x2xi32>) -> tensor<2x2xf64> {
+func.func @test_cast_i32_to_f64(%arg0: tensor<2x2xsi32>) -> tensor<2x2xf64> {
   // CHECK:   %[[INT7:.*]] = torch.constant.int 7
-  // CHECK:   %[[RESULT:.*]] = torch.operator "torch.npu._npu_dtype_cast"(%{{.*}}, %[[INT7]]) : (!torch.vtensor<[2,2],i32>, !torch.int) -> !torch.vtensor<[2,2],f64>
+  // CHECK:   %[[RESULT:.*]] = torch.operator "torch.npu._npu_dtype_cast"(%{{.*}}, %[[INT7]]) : (!torch.vtensor<[2,2],si32>, !torch.int) -> !torch.vtensor<[2,2],f64>
   // CHECK:   return %[[RESULT]] : !torch.vtensor<[2,2],f64>
-  %0 = mfuse.cast %arg0 : (tensor<2x2xi32>) -> tensor<2x2xf64>
+  %0 = mfuse.cast %arg0 : (tensor<2x2xsi32>) -> tensor<2x2xf64>
   return %0 : tensor<2x2xf64>
 }
 
@@ -219,12 +219,12 @@ func.func @test_reshape_3d(%arg0: tensor<2x3x4xf32>) -> tensor<4x2x3xf32> {
 }
 
 // CHECK-LABEL: func.func @test_reshape_i32
-func.func @test_reshape_i32(%arg0: tensor<2x3xi32>) -> tensor<6xi32> {
+func.func @test_reshape_i32(%arg0: tensor<2x3xsi32>) -> tensor<6xsi32> {
   // CHECK-DAG: %[[DIM0:.*]] = torch.constant.int 6
   // CHECK-DAG: %[[DIMS:.*]] = torch.prim.ListConstruct %[[DIM0]]
   // CHECK: torch.aten.reshape %{{.*}}, %[[DIMS]]
-  %0 = mfuse.reshape %arg0 : (tensor<2x3xi32>) -> tensor<6xi32>
-  return %0 : tensor<6xi32>
+  %0 = mfuse.reshape %arg0 : (tensor<2x3xsi32>) -> tensor<6xsi32>
+  return %0 : tensor<6xsi32>
 }
 
 // CHECK-LABEL: func.func @test_reshape_f16
@@ -275,10 +275,10 @@ func.func @test_reshape_scalar_to_1d(%arg0: tensor<f32>) -> tensor<1xf32> {
 }
 
 // CHECK-LABEL: func.func @test_add_i32
-func.func @test_add_i32(%arg0: tensor<2x3xi32>, %arg1: tensor<2x3xi32>) -> tensor<2x3xi32> {
+func.func @test_add_i32(%arg0: tensor<2x3xsi32>, %arg1: tensor<2x3xsi32>) -> tensor<2x3xsi32> {
   // CHECK: torch.aten.add.Tensor
-  %0 = mfuse.add %arg0, %arg1 : (tensor<2x3xi32>, tensor<2x3xi32>) -> tensor<2x3xi32>
-  return %0 : tensor<2x3xi32>
+  %0 = mfuse.add %arg0, %arg1 : (tensor<2x3xsi32>, tensor<2x3xsi32>) -> tensor<2x3xsi32>
+  return %0 : tensor<2x3xsi32>
 }
 
 // CHECK-LABEL: func.func @test_add_f16
@@ -324,9 +324,9 @@ func.func @test_div_3d(%arg0: tensor<2x3x4xf32>, %arg1: tensor<2x3x4xf32>) -> te
 }
 
 // CHECK-LABEL: func.func @test_eq_i32
-func.func @test_eq_i32(%arg0: tensor<2x2xi32>, %arg1: tensor<2x2xi32>) -> tensor<2x2xi1> {
+func.func @test_eq_i32(%arg0: tensor<2x2xsi32>, %arg1: tensor<2x2xsi32>) -> tensor<2x2xi1> {
   // CHECK: torch.aten.eq.Tensor
-  %0 = mfuse.eq %arg0, %arg1 : (tensor<2x2xi32>, tensor<2x2xi32>) -> tensor<2x2xi1>
+  %0 = mfuse.eq %arg0, %arg1 : (tensor<2x2xsi32>, tensor<2x2xsi32>) -> tensor<2x2xi1>
   return %0 : tensor<2x2xi1>
 }
 

@@ -21,14 +21,16 @@ BUILD_DIR="${MFUSION_DIR}/build"
 THREAD_NUM=$(nproc)
 BUILD_TYPE="Release"
 BUILD_TESTS="OFF"
+ENABLE_ASAN="OFF"
 
 usage()
 {
     echo "Usage:"
-    echo "bash build.sh [-d] [-h] [-i] [-j[n]] [-s path] [-t]"
+    echo "bash build.sh [-a on|off] [-d] [-h] [-i] [-j[n]] [-s path] [-t]"
     echo ""
     echo "Options:"
-    echo "    -d Debug mode"
+    echo "    -a on|off Enable AddressSanitizer (implies Debug mode), default off"
+    echo "    -d Debug mode, default release mode"
     echo "    -h Print usage"
     echo "    -i Incremental build"
     echo "    -j[n] Set the threads when building (Default: the number of cpu)"
@@ -36,9 +38,25 @@ usage()
     echo "    -t Enable unit test (Default: disable)"
 }
 
-while getopts 'dhij:s:t' opt
+while getopts 'a:dhij:s:t' opt
 do
     case "${opt}" in
+        a)
+            case "${OPTARG}" in
+                on)
+                    ENABLE_ASAN="ON"
+                    BUILD_TYPE=Debug
+                    ;;
+                off)
+                    ENABLE_ASAN="OFF"
+                    ;;
+                *)
+                    echo "Invalid value for -a: ${OPTARG}, expected 'on' or 'off'"
+                    usage
+                    exit 1
+                    ;;
+            esac
+            ;;
         d)
             BUILD_TYPE=Debug
             ;;
@@ -98,6 +116,7 @@ echo "---------------- MFusion: build start ----------------"
 export BUILD_JOBS=${THREAD_NUM}
 export BUILD_TYPE=${BUILD_TYPE}
 export BUILD_TESTS=${BUILD_TESTS}
+export ENABLE_ASAN=${ENABLE_ASAN}
 if [[ -n "${PREFIX_PATH}" ]]; then
     export CMAKE_PREFIX_PATH="${PREFIX_PATH}"
 fi
