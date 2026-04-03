@@ -141,11 +141,9 @@ func.func @test_cluster_with_external_output(%arg0: tensor<4x4xf32>, %arg1: tens
   return %1, %2 : tensor<4x4xf32>, tensor<4x4xf32>
 }
 
-// Test scenario: Insert point breaks dominance for non-cluster users
-// When the insert point is moved forward due to external inputs,
-// it may end up after a non-cluster user of an external output.
-// In this case, the cluster cannot be created because the fused op
-// would not dominate the non-cluster user.
+// Test scenario: Insert point breaks dominance for one part of the candidate cluster.
+// The pass should partition the cluster into valid segments instead of dropping the whole cluster.
+// In this case, the valid suffix (mul + add) is preserved as a fused op.
 // CHECK-LABEL: func @test_insert_point_breaks_dominance
 // CHECK-SAME: %arg0: tensor<4x4xf32>
 // CHECK-SAME: %arg1: tensor<4x4xf32>
@@ -154,9 +152,14 @@ func.func @test_cluster_with_external_output(%arg0: tensor<4x4xf32>, %arg1: tens
 // CHECK: %[[ADD1:.*]] = mfuse.add %arg0, %arg1
 // CHECK: %[[TANH:.*]] = mfuse.aclnn.tanh %[[ADD1]]
 // CHECK: %[[SUB:.*]] = mfuse.aclnn.sub {{%arg2}}, {{%arg2}}, %[[CST]]
-// CHECK: %[[MUL:.*]] = mfuse.mul %[[SUB]], %[[ADD1]]
-// CHECK: %[[ADD2:.*]] = mfuse.add %[[MUL]], %arg0
-// CHECK: return %[[TANH]], %[[ADD2]]
+// CHECK: %[[FUSED:.*]] = mfuse.fused %[[SUB]], %[[ADD1]], %arg0
+// CHECK-SAME: {fusion_type = "dvm"}
+// CHECK-SAME: : (tensor<4x4xf32>, tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: ^bb0(%[[ARG3:.*]]: tensor<4x4xf32>, %[[ARG4:.*]]: tensor<4x4xf32>, %[[ARG5:.*]]: tensor<4x4xf32>):
+// CHECK: %[[MUL:.*]] = mfuse.mul %[[ARG3]], %[[ARG4]]
+// CHECK: %[[ADD2:.*]] = mfuse.add %[[MUL]], %[[ARG5]]
+// CHECK: mfuse.yield %[[ADD2]]
+// CHECK: return %[[TANH]], %[[FUSED]]
 func.func @test_insert_point_breaks_dominance(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>, %arg2: tensor<4x4xf32>) -> (tensor<4x4xf32>, tensor<4x4xf32>) {
   %cst = mfuse.constant dense<1> : tensor<i64, {is_scalar = ""}>
   // op1: add (clusterable), insert point starts here
@@ -174,5 +177,91 @@ func.func @test_insert_point_breaks_dominance(%arg0: tensor<4x4xf32>, %arg1: ten
   // insert point is after aclnn.sub, but aclnn.tanh is before aclnn.sub
   // So insert point is NOT before the non-cluster user, cluster cannot be created
   return %1, %4 : tensor<4x4xf32>, tensor<4x4xf32>
+}
+
+// Test scenario: A dominance conflict in the middle should split one candidate
+// cluster into two valid fused ops, preserving both sides.
+// CHECK-LABEL: func @test_split_cluster_on_insert_point_conflict
+// CHECK-SAME: %arg0: tensor<4x4xf32>
+// CHECK-SAME: %arg1: tensor<4x4xf32>
+// CHECK-SAME: %arg2: tensor<4x4xf32>
+// CHECK: %[[ADD1:.*]] = mfuse.fused %arg0, %arg1
+// CHECK-SAME: {fusion_type = "dvm"}
+// CHECK-SAME: : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: ^bb0(%[[ARG3:.*]]: tensor<4x4xf32>, %[[ARG4:.*]]: tensor<4x4xf32>):
+// CHECK: %[[INNER_ADD:.*]] = mfuse.add %[[ARG3]], %[[ARG4]]
+// CHECK: %[[INNER_MUL1:.*]] = mfuse.mul %[[INNER_ADD]], %[[ARG3]]
+// CHECK: mfuse.yield %[[INNER_MUL1]]
+// CHECK: %[[TANH:.*]] = mfuse.aclnn.tanh %[[ADD1]]
+// CHECK: %[[SUB2:.*]] = mfuse.aclnn.sub {{%arg2}}, {{%arg2}}, %[[CST:.*]]
+// CHECK: %[[ADD2:.*]] = mfuse.fused %[[SUB2]], %[[ADD1]], %arg0
+// CHECK-SAME: {fusion_type = "dvm"}
+// CHECK-SAME: : (tensor<4x4xf32>, tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: ^bb0(%[[ARG5:.*]]: tensor<4x4xf32>, %[[ARG6:.*]]: tensor<4x4xf32>, %[[ARG7:.*]]: tensor<4x4xf32>):
+// CHECK: %[[INNER_MUL2:.*]] = mfuse.mul %[[ARG5]], %[[ARG6]]
+// CHECK: %[[INNER_ADD2:.*]] = mfuse.add %[[INNER_MUL2]], %[[ARG7]]
+// CHECK: mfuse.yield %[[INNER_ADD2]]
+// CHECK: return %[[TANH]], %[[ADD2]]
+func.func @test_split_cluster_on_insert_point_conflict(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>, %arg2: tensor<4x4xf32>) -> (tensor<4x4xf32>, tensor<4x4xf32>) {
+  %cst = arith.constant dense<1> : tensor<i64>
+  %0 = mfuse.add %arg0, %arg1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %1 = mfuse.mul %0, %arg0 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %2 = mfuse.aclnn.tanh %1 : (tensor<4x4xf32>) -> tensor<4x4xf32>
+  %3 = mfuse.aclnn.sub %arg2, %arg2, %cst : (tensor<4x4xf32>, tensor<4x4xf32>, tensor<i64>) -> tensor<4x4xf32>
+  %4 = mfuse.mul %3, %1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %5 = mfuse.add %4, %arg0 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  return %2, %5 : tensor<4x4xf32>, tensor<4x4xf32>
+}
+
+// Test scenario: The best valid partition can be a prefix when the suffix is
+// blocked by a late external input and an earlier external user.
+// CHECK-LABEL: func @test_preserve_prefix_when_suffix_invalid
+// CHECK-SAME: %arg0: tensor<4x4xf32>
+// CHECK-SAME: %arg1: tensor<4x4xf32>
+// CHECK-SAME: %arg2: tensor<4x4xf32>
+// CHECK: %[[CST:.*]] = arith.constant dense<1>
+// CHECK: %[[FUSED:.*]] = mfuse.fused %arg0, %arg1
+// CHECK-SAME: {fusion_type = "dvm"}
+// CHECK-SAME: : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+// CHECK: ^bb0(%[[ARG3:.*]]: tensor<4x4xf32>, %[[ARG4:.*]]: tensor<4x4xf32>):
+// CHECK: %[[INNER_ADD:.*]] = mfuse.add %[[ARG3]], %[[ARG4]]
+// CHECK: %[[INNER_MUL:.*]] = mfuse.mul %[[INNER_ADD]], %[[ARG3]]
+// CHECK: mfuse.yield %[[INNER_MUL]]
+// CHECK: %[[TANH:.*]] = mfuse.aclnn.tanh %[[FUSED]]
+// CHECK: %[[SUB:.*]] = mfuse.aclnn.sub %arg2, %arg2, %[[CST]]
+// CHECK: %[[ADD2:.*]] = mfuse.add %[[FUSED]], %[[SUB]]
+// CHECK: return %[[TANH]], %[[ADD2]]
+func.func @test_preserve_prefix_when_suffix_invalid(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>,
+                                                    %arg2: tensor<4x4xf32>) -> (tensor<4x4xf32>, tensor<4x4xf32>) {
+  %cst = arith.constant dense<1> : tensor<i64>
+  %0 = mfuse.add %arg0, %arg1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %1 = mfuse.mul %0, %arg0 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %2 = mfuse.aclnn.tanh %1 : (tensor<4x4xf32>) -> tensor<4x4xf32>
+  %3 = mfuse.aclnn.sub %arg2, %arg2, %cst : (tensor<4x4xf32>, tensor<4x4xf32>, tensor<i64>) -> tensor<4x4xf32>
+  %4 = mfuse.add %1, %3 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  return %2, %4 : tensor<4x4xf32>, tensor<4x4xf32>
+}
+
+// Test scenario: If splitting would leave only single-op partitions, the pass
+// should give up instead of creating one-op fused regions.
+// CHECK-LABEL: func @test_do_not_salvage_singleton_partition
+// CHECK-SAME: %arg0: tensor<4x4xf32>
+// CHECK-SAME: %arg1: tensor<4x4xf32>
+// CHECK-SAME: %arg2: tensor<4x4xf32>
+// CHECK-NOT: mfuse.fused
+// CHECK: %[[CST:.*]] = arith.constant dense<1>
+// CHECK: %[[ADD:.*]] = mfuse.add %arg0, %arg1
+// CHECK: %[[TANH:.*]] = mfuse.aclnn.tanh %[[ADD]]
+// CHECK: %[[SUB:.*]] = mfuse.aclnn.sub %arg2, %arg2, %[[CST]]
+// CHECK: %[[MUL:.*]] = mfuse.mul %[[SUB]], %[[ADD]]
+// CHECK: return %[[TANH]], %[[MUL]]
+func.func @test_do_not_salvage_singleton_partition(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>,
+                                                   %arg2: tensor<4x4xf32>) -> (tensor<4x4xf32>, tensor<4x4xf32>) {
+  %cst = arith.constant dense<1> : tensor<i64>
+  %0 = mfuse.add %arg0, %arg1 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  %1 = mfuse.aclnn.tanh %0 : (tensor<4x4xf32>) -> tensor<4x4xf32>
+  %2 = mfuse.aclnn.sub %arg2, %arg2, %cst : (tensor<4x4xf32>, tensor<4x4xf32>, tensor<i64>) -> tensor<4x4xf32>
+  %3 = mfuse.mul %2, %0 : (tensor<4x4xf32>, tensor<4x4xf32>) -> tensor<4x4xf32>
+  return %1, %3 : tensor<4x4xf32>, tensor<4x4xf32>
 }
 }
