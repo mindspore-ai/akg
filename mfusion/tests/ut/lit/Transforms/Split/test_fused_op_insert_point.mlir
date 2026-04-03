@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s --split -mlir-print-ir-after-all | FileCheck %s
+// RUN: mfusion-opt %s --split | FileCheck %s
 
 module {
 // CHECK-LABEL: func @test_exp_reduce_sum_mul_sub_split

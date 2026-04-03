@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s -decompose="pattern-type=BEFORE_MANUAL_FUSION" -allow-unregistered-dialect -mlir-print-ir-after-all | FileCheck %s
+// RUN: mfusion-opt %s -decompose="pattern-type=BEFORE_MANUAL_FUSION" | FileCheck %s
 
 module {
 // CHECK-LABEL: @aclnn_add_test

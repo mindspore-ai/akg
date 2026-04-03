@@ -17,6 +17,7 @@
 #include "mfusion/Dialect/Mfuse/Transforms/Split/Split.h"
 
 #include "mfusion/Analysis/Split/SplitModel.h"
+#include "mfusion/Support/Logging.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Split/FuseOpSplitter.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Split/SplitSchemer.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
@@ -32,10 +33,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-
-#define DEBUG_TYPE "split"
 
 namespace mlir {
 namespace mfuse {
@@ -54,9 +52,8 @@ struct SplitPass : public impl::SplitBase<SplitPass> {
 
     FuseOpSplitter fuse_op_splitter;
     for (FusedOp fuseOp : fuseOps) {
-      if (fuse_op_splitter.trySplit(fuseOp, kernelGenerator)) {
-        LLVM_DEBUG(llvm::dbgs() << "Split fuseOp: " << fuseOp << "\n");
-      }
+      MLOG(DEBUG) << "Try split fuseOp: " << fuseOp;
+      fuse_op_splitter.trySplit(fuseOp, kernelGenerator);
     }
   }
 };

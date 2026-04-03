@@ -15,6 +15,7 @@
  */
 
 #include "mfusion/Analysis/Split/Node.h"
+#include "mlir/IR/AsmState.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "llvm/Support/raw_ostream.h"
@@ -27,7 +28,7 @@ namespace split {
 std::string Node::toString() const {
   std::string result;
   llvm::raw_string_ostream os(result);
-  op_->print(os);
+  op_->print(os, mlir::OpPrintingFlags().assumeVerified().useLocalScope());
   return result;
 }
 

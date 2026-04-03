@@ -83,7 +83,7 @@ class CppCostModelSplitSchemer : public SplitSchemer {
       MLOG(DEBUG) << "Current area ops size: " << area->nodes().size();
       for (auto &node : area->nodes()) {
         area_ops.push_back(node->op());
-        MLOG(DEBUG) << "Current op: " << *node->op();
+        MLOG(DEBUG) << "Current op: " << node->toString();
       }
       // Sort operations by their original index in the block
       std::sort(area_ops.begin(), area_ops.end(),
