@@ -411,6 +411,48 @@ def gen_constant_pad_nd(dst_name, x, pad, value):
         f"{dst_name} = np.pad({cropped_name}, {pad_width_name}, mode='constant', constant_values={value})",
     ])
 
+def gen_broadcast_to(dst_name, x, shape):
+    """Generate reference code for torch.aten.broadcast_to.
+
+    Semantics:
+    - `shape` is the target shape template.
+    - A value of `-1` means keeping the corresponding input dimension size.
+    - Dimension mapping follows broadcasting right-alignment semantics.
+
+    Notes:
+    - NumPy's np.broadcast_to does not accept `-1` in the shape, so we
+      resolve it first.
+    - `-1` is resolved against the input shape using right alignment.
+    - This generates NumPy-based fallback code.
+    """
+    shape_name = f"_{dst_name}_shape"
+    input_shape_name = f"_{dst_name}_input_shape"
+    input_rank_name = f"_{dst_name}_input_rank"
+    target_rank_name = f"_{dst_name}_target_rank"
+    resolved_shape_name = f"_{dst_name}_resolved_shape"
+    i_name = f"_{dst_name}_i"
+    dim_name = f"_{dst_name}_dim"
+    input_idx_name = f"_{dst_name}_input_idx"
+
+    return "\n".join([
+        f"{shape_name} = list({shape})",
+        f"{input_shape_name} = list({x}.shape)",
+        f"{input_rank_name} = len({input_shape_name})",
+        f"{target_rank_name} = len({shape_name})",
+        f"{resolved_shape_name} = []",
+        f"for {i_name}, {dim_name} in enumerate({shape_name}):",
+        f"    if {dim_name} == -1:",
+        f"        {input_idx_name} = {i_name} - ({target_rank_name} - {input_rank_name})",
+        f"        if {input_idx_name} < 0 or {input_idx_name} >= {input_rank_name}:",
+        f"            raise ValueError("
+        f"f'Cannot resolve -1 in broadcast shape {{{shape_name}}} from input shape {{{input_shape_name}}}'"
+        f")",
+        f"        {resolved_shape_name}.append({input_shape_name}[{input_idx_name}])",
+        "    else:",
+        f"        {resolved_shape_name}.append(int({dim_name}))",
+        f"{dst_name} = np.broadcast_to({x}, {resolved_shape_name})",
+    ])
+
 TORCH_DTYPE_TO_NUMPY = {
     # unsigned
     0:  "np.uint8",

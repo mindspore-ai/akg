@@ -1095,13 +1095,10 @@ def get_op_dsl_torch_mlir():
             f"axis={get_input(inputs[1][0])})"
         ),
 
-        "Torch.aten.broadcastTo": lambda inputs, output, attr: (
-            f"{output[0]['tensor_name']}_shape = "
-            f"[{get_input(inputs[0][0])}.shape[i] if dim == -1 else dim "
-            f"for i, dim in enumerate({get_input(inputs[1][0])})]\n"
-            f"{output[0]['tensor_name']} = np.broadcast_to("
-            f"{get_input(inputs[0][0])}, "
-            f"{output[0]['tensor_name']}_shape)"
+        "Torch.aten.broadcastTo": lambda inputs, output, attr: gen_broadcast_to(
+            output[0]["tensor_name"],
+            get_input(inputs[0][0]),
+            get_input(inputs[1][0]),
         ),
 
         "Torch.aten.slice.tensor": lambda inputs, output, attr: gen_slice_tensor(
