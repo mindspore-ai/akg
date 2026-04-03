@@ -157,3 +157,114 @@ async def test_kernelbench_torch_pypto_kernelgen_only_ascend910b4():
     report_stats = generate_beautiful_test_report(
         results, config, framework, dsl, backend, arch
     )
+
+
+@pytest.mark.level2
+@pytest.mark.torch
+@pytest.mark.triton
+@pytest.mark.ascend
+@pytest.mark.use_model
+@pytest.mark.asyncio
+async def test_kernelbench_torch_triton_ascend950pr_9589_profile():
+    """测试 KernelBench - PyTorch Triton Ascend950PR_9589 (KernelGen-Only + Profile)"""
+    framework = "torch"
+    dsl = "triton_ascend"
+    backend = "ascend"
+    arch = "ascend950pr_9589"
+    benchmark = "KernelBench"
+
+    task_pool = TaskPool()
+
+    config = load_config(config_path="./python/akg_agents/op/config/triton_ascend_kernelgen_config.yaml")
+
+    check_env_for_task(framework, backend, dsl, config)
+
+    await register_local_worker([device_id], backend=backend, arch=arch)
+
+    benchmark_name = get_kernelbench_op_name(
+        task_index_list=[19, ], framework=framework)
+
+    if benchmark_name is None:
+        raise RuntimeError("在 KernelBench 中未找到指定序号的任务文件，请检查 task_index_list 参数是否正确")
+
+
+    for i in range(len(benchmark_name)):
+        task_desc = get_kernelbench_task_desc(
+            benchmark_name[i], framework=framework)
+        op_name = add_op_prefix(benchmark_name[i], benchmark=benchmark)
+
+        task = AIKGTask(
+            op_name=op_name,
+            task_desc=task_desc,
+            task_id=str(i),
+            backend=backend,
+            arch=arch,
+            dsl=dsl,
+            config=config,
+            framework=framework,
+            task_type="profile",
+            workflow="kernelgen_only_workflow"
+        )
+        task_pool.create_task(task.run)
+
+    results = await task_pool.wait_all()
+
+    report_stats = generate_beautiful_test_report(
+        results, config, framework, dsl, backend, arch
+    )
+
+
+@pytest.mark.level2
+@pytest.mark.torch
+@pytest.mark.triton
+@pytest.mark.ascend
+@pytest.mark.use_model
+@pytest.mark.asyncio
+async def test_kernelbench_torch_triton_ascend950dt_95a_profile():
+    """测试 KernelBench - PyTorch Triton Ascend950DT_95A (KernelGen-Only + Profile)"""
+    framework = "torch"
+    dsl = "triton_ascend"
+    backend = "ascend"
+    arch = "ascend950dt_95a"
+    benchmark = "KernelBench"
+
+    task_pool = TaskPool()
+
+    config = load_config(config_path="./python/akg_agents/op/config/triton_ascend_kernelgen_config.yaml")
+
+    check_env_for_task(framework, backend, dsl, config)
+
+    await register_local_worker([device_id], backend=backend, arch=arch)
+
+    # task_index_list = [i for i in range(1, 101) if i not in range(54, 88)]
+    benchmark_name = get_kernelbench_op_name(
+        task_index_list=[19, ], framework=framework)
+
+    if benchmark_name is None:
+        raise RuntimeError("在 KernelBench 中未找到指定序号的任务文件，请检查 task_index_list 参数是否正确")
+
+
+    for i in range(len(benchmark_name)):
+        task_desc = get_kernelbench_task_desc(
+            benchmark_name[i], framework=framework)
+        op_name = add_op_prefix(benchmark_name[i], benchmark=benchmark)
+
+        task = AIKGTask(
+            op_name=op_name,
+            task_desc=task_desc,
+            task_id=str(i),
+            backend=backend,
+            arch=arch,
+            dsl=dsl,
+            config=config,
+            framework=framework,
+            task_type="profile",
+            workflow="kernelgen_only_workflow"
+        )
+        task_pool.create_task(task.run)
+
+    results = await task_pool.wait_all()
+
+    report_stats = generate_beautiful_test_report(
+        results, config, framework, dsl, backend, arch
+    )

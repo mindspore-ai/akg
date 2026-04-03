@@ -59,6 +59,13 @@ ArchType = Literal[
     "ascend310p3",
     "ascend910_9362", "ascend910_9372", "ascend910_9381",
     "ascend910_9382", "ascend910_9391", "ascend910_9392",
+    "ascend950dt_95a",
+    "ascend950pr_950z", "ascend950pr_9572", "ascend950pr_9574", "ascend950pr_9575",
+    "ascend950pr_9576", "ascend950pr_9577", "ascend950pr_9578", "ascend950pr_9579",
+    "ascend950pr_957b", "ascend950pr_957d", "ascend950pr_9581", "ascend950pr_9582",
+    "ascend950pr_9584", "ascend950pr_9587", "ascend950pr_9588", "ascend950pr_9589",
+    "ascend950pr_958a", "ascend950pr_958b", "ascend950pr_9591", "ascend950pr_9592",
+    "ascend950pr_9599",
     "x86_64", "aarch64",
 ]
 
@@ -163,6 +170,13 @@ class KernelVerifier:
                 "ascend310p3",
                 "ascend910_9362", "ascend910_9372", "ascend910_9381",
                 "ascend910_9382", "ascend910_9391", "ascend910_9392",
+                "ascend950dt_95a",
+                "ascend950pr_950z", "ascend950pr_9572", "ascend950pr_9574", "ascend950pr_9575",
+                "ascend950pr_9576", "ascend950pr_9577", "ascend950pr_9578", "ascend950pr_9579",
+                "ascend950pr_957b", "ascend950pr_957d", "ascend950pr_9581", "ascend950pr_9582",
+                "ascend950pr_9584", "ascend950pr_9587", "ascend950pr_9588", "ascend950pr_9589",
+                "ascend950pr_958a", "ascend950pr_958b", "ascend950pr_9591", "ascend950pr_9592",
+                "ascend950pr_9599",
             ]
             if self.arch not in supported_ascend_archs:
                 raise ValueError(f"ascend后端不支持架构: {self.arch}，支持的架构: {supported_ascend_archs}")
