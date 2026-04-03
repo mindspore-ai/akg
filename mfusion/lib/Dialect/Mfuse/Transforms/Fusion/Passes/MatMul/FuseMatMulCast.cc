@@ -77,12 +77,14 @@ class FuseMatMulCastMatmulPattern : public OpRewritePattern<MatmulOp> {
       return rewriter.notifyMatchFailure(matmulOp, "matmul must have exactly one user (the Cast) to fuse");
     }
 
+    auto matmulLoc = matmulOp.getLoc();
+    auto castLoc = castOp.getLoc();
     Type outType = castOp.getResult().getType();
-    Value newMatmul = rewriter.create<MatmulOp>(matmulOp.getLoc(), outType, matmulOp.getSelf(), matmulOp.getOther(),
+    Value newMatmul = rewriter.create<MatmulOp>(matmulLoc, outType, matmulOp.getSelf(), matmulOp.getOther(),
                                                 matmulOp.getTransX1Attr(), matmulOp.getTransX2Attr());
 
     rewriter.replaceOp(castOp, newMatmul);
-    MLOG(DEBUG) << "FuseMatMulCast: fused MatmulOp@" << matmulOp.getLoc() << " + CastOp@" << castOp.getLoc()
+    MLOG(DEBUG) << "FuseMatMulCast: fused MatmulOp@" << matmulLoc << " + CastOp@" << castLoc
                 << " (f16->f32) -> MatmulOp with f32 output";
 
     return success();
@@ -103,12 +105,14 @@ class FuseMatMulCastMatmulWithBiasPattern : public OpRewritePattern<MatmulWithBi
       return rewriter.notifyMatchFailure(op, "matmul_with_bias must have exactly one user (the Cast) to fuse");
     }
 
+    auto opLoc = op.getLoc();
+    auto castLoc = castOp.getLoc();
     Type outType = castOp.getResult().getType();
-    Value newMatmul = rewriter.create<MatmulWithBiasOp>(op.getLoc(), outType, op.getSelf(), op.getOther(), op.getBias(),
+    Value newMatmul = rewriter.create<MatmulWithBiasOp>(opLoc, outType, op.getSelf(), op.getOther(), op.getBias(),
                                                         op.getTransX1Attr(), op.getTransX2Attr());
 
     rewriter.replaceOp(castOp, newMatmul);
-    MLOG(DEBUG) << "FuseMatMulCast: fused MatmulWithBiasOp@" << op.getLoc() << " + CastOp@" << castOp.getLoc()
+    MLOG(DEBUG) << "FuseMatMulCast: fused MatmulWithBiasOp@" << opLoc << " + CastOp@" << castLoc
                 << " (f16->f32) -> MatmulWithBiasOp with f32 output";
 
     return success();

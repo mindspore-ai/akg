@@ -217,9 +217,10 @@ class FuseBatchMatMulToMulPattern : public OpRewritePattern<BatchMatmulOp> {
       weight = *reshaped;
     }
 
-    Value mulResult = rewriter.create<MulOp>(op.getLoc(), outputType, input, weight);
+    auto loc = op.getLoc();
+    Value mulResult = rewriter.create<MulOp>(loc, outputType, input, weight);
     rewriter.replaceOp(op, mulResult);
-    MLOG(DEBUG) << "FuseBatchMatMulToMul: replaced BatchMatmulOp@" << op.getLoc() << " with MulOp (k=1)";
+    MLOG(DEBUG) << "FuseBatchMatMulToMul: replaced BatchMatmulOp@" << loc << " with MulOp (k=1)";
     return success();
   }
 };
@@ -287,11 +288,12 @@ class FuseMatmulToMulPattern : public OpRewritePattern<MatmulOp> {
     }
 
     // Create Mul operation
-    Value mulResult = rewriter.create<MulOp>(op.getLoc(), outputType, input, weight);
+    auto loc = op.getLoc();
+    Value mulResult = rewriter.create<MulOp>(loc, outputType, input, weight);
 
     // Replace the original MatmulOp
     rewriter.replaceOp(op, mulResult);
-    MLOG(DEBUG) << "FuseBatchMatMulToMul: replaced MatmulOp@" << op.getLoc() << " with MulOp (k=1)";
+    MLOG(DEBUG) << "FuseBatchMatMulToMul: replaced MatmulOp@" << loc << " with MulOp (k=1)";
     return success();
   }
 };

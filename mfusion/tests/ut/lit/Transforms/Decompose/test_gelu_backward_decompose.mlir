@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s -decompose="pattern-type=AFTER_MANUAL_FUSION op-list=gelu_backward" -allow-unregistered-dialect -mlir-print-ir-after-all | FileCheck %s
+// RUN: mfusion-opt %s -decompose="pattern-type=AFTER_MANUAL_FUSION op-list=gelu_backward" | FileCheck %s
 
 func.func @test_gelu_backward(%arg0: tensor<4x4xf32>, %arg1: tensor<4x4xf32>) -> tensor<4x4xf32> {
   // geluBackwardOp

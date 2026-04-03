@@ -1,4 +1,4 @@
-// RUN: mfusion-opt %s -recompose -allow-unregistered-dialect | FileCheck %s
+// RUN: mfusion-opt %s -recompose | FileCheck %s
 
 module {
   // mfuse.matmul 2D x 2D -> aclnn.mm

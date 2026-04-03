@@ -163,12 +163,13 @@ class FuseMatMulReshapePattern : public mlir::OpRewritePattern<mfuse::MatmulOp> 
     mlir::Value reshapedOther = createReshapeForSecondInput(op.getOther(), op.getLoc(), rewriter);
 
     // Create new MatmulOp with reshaped second input
-    auto newMatmul = rewriter.create<mfuse::MatmulOp>(op.getLoc(), op.getResult().getType(), op.getSelf(),
-                                                      reshapedOther, op.getTransX1Attr(), op.getTransX2Attr());
+    auto loc = op.getLoc();
+    auto newMatmul = rewriter.create<mfuse::MatmulOp>(loc, op.getResult().getType(), op.getSelf(), reshapedOther,
+                                                      op.getTransX1Attr(), op.getTransX2Attr());
 
     // Replace the original operation
     rewriter.replaceOp(op, newMatmul.getResult());
-    MLOG(DEBUG) << "FuseMatMulReshape: replaced MatmulOp@" << op.getLoc() << " with reshaped second input (N=1)";
+    MLOG(DEBUG) << "FuseMatMulReshape: replaced MatmulOp@" << loc << " with reshaped second input (N=1)";
     return mlir::success();
   }
 };
@@ -188,14 +189,14 @@ class FuseMatMulWithBiasReshapePattern : public mlir::OpRewritePattern<mfuse::Ma
     mlir::Value reshapedOther = createReshapeForSecondInput(op.getOther(), op.getLoc(), rewriter);
 
     // Create new MatmulWithBiasOp with reshaped second input
+    auto loc = op.getLoc();
     auto newMatmulWithBias =
-      rewriter.create<mfuse::MatmulWithBiasOp>(op.getLoc(), op.getResult().getType(), op.getSelf(), reshapedOther,
-                                               op.getBias(), op.getTransX1Attr(), op.getTransX2Attr());
+      rewriter.create<mfuse::MatmulWithBiasOp>(loc, op.getResult().getType(), op.getSelf(), reshapedOther, op.getBias(),
+                                               op.getTransX1Attr(), op.getTransX2Attr());
 
     // Replace the original operation
     rewriter.replaceOp(op, newMatmulWithBias.getResult());
-    MLOG(DEBUG) << "FuseMatMulReshape: replaced MatmulWithBiasOp@" << op.getLoc()
-                << " with reshaped second input (N=1)";
+    MLOG(DEBUG) << "FuseMatMulReshape: replaced MatmulWithBiasOp@" << loc << " with reshaped second input (N=1)";
     return mlir::success();
   }
 };
