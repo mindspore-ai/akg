@@ -65,13 +65,16 @@ metadata:
 
 | 错误类型 | 典型症状 | 常见原因 | 解决方案 |
 |---------|---------|---------|---------|
+| UB/CBUF 溢出 | `ub overflow, requires X bits while 1572864 bits available` | BLOCK 尺寸过大或中间变量过多 | 缩小 BLOCK 尺寸；减少同时活跃的 tensor 数 |
+| HiVM vsel 错误 | `hivm.hir.vsel: Unsupported op for finding the root alloc` | 嵌套 mask + tl.where 组合过于复杂 | 用乘法替代 tl.where：`a * mask.to(dtype)` |
 | 内存越界访问 | 运行时错误、结果异常、随机崩溃 | load/store缺少mask或boundary_check | 添加正确的mask或boundary_check保护 |
 | Grid超限 | 编译失败或运行时错误 | grid总大小超过65535 | 使用交错循环`for i in range(pid, total, core_num)`或连续分块处理 |
-| 控制流错误 | 编译失败、语法错误 | 使用了return/break/continue | 移除禁用语句，使用mask控制流程 |
+| 控制流错误 | `unsupported AST node type: Continue` | 使用了return/break/continue | 改用 if-else 包裹逻辑 |
 | while循环错误 | 编译失败（Ascend后端） | 使用了while循环 | 改用for + if替代：`for i in range(MAX): if i < n:` |
+| constexpr 索引 | `ValueError('unsupported tensor index: constexpr[0]')` | 对 tl.sum 等返回的标量做 `[0]` 索引 | 直接使用标量结果，不要索引 |
 | 切片语法错误 | 编译失败 | 使用了`b[0]`或`b[i:j]`直接切片 | 使用`tl.get_element`或`tl.extract_slice` |
 | tl.arange索引错误 | 编译失败 | 对`tl.arange`结果使用`get_element` | 直接计算索引值而非提取 |
-| 类型转换错误 | 编译警告或错误 | 使用`tl.float16(scalar)`转换 | 改用`scalar.to(tl.float16)` |
+| 类型转换错误 | `cast incompatible` | 隐式 cast 或使用`tl.float16(scalar)` | 用 `.to(tl.float16)` 或显式指定 acc dtype |
 | constexpr误用 | 编译失败 | 在host侧使用tl.constexpr | 仅在kernel参数中使用tl.constexpr |
 | Stride设置错误 | 计算结果错误、数据错位 | stride参数计算或传递错误 | 验证stride设置，检查tensor.stride() |
 | 数值不稳定 | 结果为NaN或Inf | softmax/sqrt等操作溢出 | 减去最大值、检查非负、使用float32 |
