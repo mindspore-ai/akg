@@ -107,7 +107,7 @@ def check_env(framework=None, backend=None, dsl=None, config_path=None, config=N
             issues.append(f"⚠️ nvidia-smi 检查失败: {str(e)}")
     elif backend == 'ascend':
         try:
-            result = subprocess.run(['npu-smi', 'info'], capture_output=True, timeout=5)
+            result = subprocess.run(['npu-smi', 'info'], capture_output=True, timeout=30)
             if result.returncode != 0:
                 issues.append("⚠️ 昇腾设备可能不可用")
         except Exception:
