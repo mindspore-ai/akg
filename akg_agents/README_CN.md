@@ -35,6 +35,7 @@
 当前已落地场景为 **AI 算子代码生成**：通过 LLM 规划与多 Agent 协同，实现多后端、多 DSL 的高性能算子自动生成与优化。后续将持续拓展至算子迁移、性能调优、代码重构等更多 AI Infra 相关场景。
 
 ## 🗓️ 2. 更新日志
+- 2026-03-31：新增 [AutoResearch](./docs/v2/CN/AutoResearch.md) 工作流 — Agent 驱动的多轮自主迭代深度优化，基于 KernelVerifier 评测，支持所有 DSL。
 - 2026-03-11：打通集成 AKG Agents 和 Opencode 的算子优化流程 [op-optimizer](./docs/v2/OpOptimizer.md).
 - 2026-02-26：支持 PyPTO 后端代码生成能力。
 - 2026-02-15：AKG Agents 文档整改。老文档归档至 `docs/v1/`，重构后的新文档统一至 `docs/v2/`。
@@ -155,6 +156,8 @@ akg_cli op --framework torch --backend ascend --arch ascend910b2 \
 | `kernel_related/cpu/run_torch_cpu_cpp_single.py` | Kernel | 单算子生成（Torch + CPP） |
 | `kernel_related/cpu/run_torch_evolve_cpu_cpp.py` | Kernel | 进化算法算子优化（Torch + CPP） |
 | `kernel_related/cpu/run_torch_adaptive_search_cpu_cpp.py` | Kernel | UCB 自适应搜索（Torch + CPP） |
+| **AutoResearch** | | |
+| `scripts/run_autoresearch.py` | Kernel | AutoResearch 迭代优化（全后端，`--desc` / `--ref` / `--kernel`） |
 | **通用工具** | | |
 | `kernel_related/run_kernel_agent.py` | Kernel | KernelAgent（ReAct Agent）交互式调用 |
 | `kernel_related/run_kernel_profile.py` | Kernel | 算子性能 Profiling |
@@ -198,6 +201,7 @@ akg_agents/
 
 ### 场景
 - **[Kernel Agent](./docs/v2/CN/KernelAgent.md)** - 多后端多 DSL 算子代码生成与优化（`akg_cli op`）
+- **[AutoResearch](./docs/v2/CN/AutoResearch.md)** - Agent 驱动的多轮自主迭代深度优化工作流（ReAct 循环 + KernelVerifier 评测）
 
 ### CLI
 - **[AKG CLI](./docs/v2/CN/AKG_CLI.md)** - 命令行工具使用指南
