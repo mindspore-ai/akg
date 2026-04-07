@@ -68,7 +68,12 @@ class ConfigValidator:
             raise ValueError(f"配置校验失败：{str(e)}")
 
 
-def load_config(dsl="", config_path: Optional[str] = None, backend: Optional[str] = None, workflow: Optional[str] = "coder_only"):
+def load_config(
+    dsl="",
+    config_path: Optional[str] = None,
+    backend: Optional[str] = None,
+    workflow: Optional[str] = "coder_only",
+):
     """
     加载并验证配置文件
 
@@ -88,7 +93,7 @@ def load_config(dsl="", config_path: Optional[str] = None, backend: Optional[str
     if dsl:
         normalized_dsl = normalize_dsl(dsl, backend or "")
         dsl = normalized_dsl  # 使用规范化后的DSL
-    
+
     # 2. 有config_path时直接使用config_path
     if config_path:
         final_config_path = Path(config_path)
