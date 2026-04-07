@@ -1,0 +1,1 @@
+../../.opencode/skills/akg-pr/SKILL.md

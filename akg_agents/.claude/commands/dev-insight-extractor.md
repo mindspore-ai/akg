@@ -1,0 +1,1 @@
+../../.opencode/skills/dev-insight-extractor/SKILL.md
