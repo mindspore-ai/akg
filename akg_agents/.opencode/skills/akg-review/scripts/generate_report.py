@@ -28,232 +28,303 @@ from pathlib import Path
 from typing import Dict, List
 
 
+def _status_icon(result: Dict, key: str = "status") -> str:
+    """返回状态图标"""
+    val = result.get(key)
+    if val == "pass":
+        return "✅"
+    if val in ("conflict", "fail"):
+        return "❌"
+    return "❌" if result.get("total_errors", 0) > 0 else "✅"
+
+
+def _table_row(name, result, extras="0") -> str:
+    """生成概览表的一行"""
+    icon = _status_icon(result)
+    errs = result.get("total_errors", 0)
+    warns = result.get("total_warnings", 0)
+    return f"| {name} | {icon} | {errs} | {warns} | {extras} |\n"
+
+
+def _format_issues(issues, header, show_suggestion=True):
+    """格式化一组 issues 为 Markdown"""
+    if not issues:
+        return ""
+    lines = [f"### {header}\n\n"]
+    for issue in issues:
+        rule = issue["rule"]
+        f = issue["file"]
+        ln = issue["line"]
+        lines.append(f"**[{rule}] {f}:{ln}**\n")
+        lines.append(f"- 问题: {issue['message']}\n")
+        if show_suggestion:
+            sug = issue.get("suggestion", "—")
+            lines.append(f"- 建议: {sug}\n")
+        lines.append("\n")
+    return "".join(lines)
+
+
+def _report_header(current_branch, target_branch, status):
+    """报告头部"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return (
+        "# AKG Code Review Report\n\n"
+        f"**分支**: {current_branch}\n"
+        f"**目标**: {target_branch}\n"
+        f"**时间**: {now}\n"
+        f"**状态**: {status}\n\n---\n\n"
+    )
+
+
+def _report_rebase(rebase_result, target_branch):
+    """Rebase 检查部分"""
+    msg = rebase_result.get("message", "未知")
+    parts = [
+        "## 1️⃣ Rebase 冲突检查\n\n",
+        f"**状态**: {msg}\n\n",
+    ]
+    if rebase_result.get("conflicts"):
+        parts.append("### 冲突文件\n\n")
+        for c in rebase_result["conflicts"]:
+            parts.append(f"- **{c['file']}**\n")
+            parts.append(f"  - 类型: {c['type']}\n")
+            parts.append(f"  - 详情: {c['details']}\n\n")
+        remote = (
+            target_branch.split("/")[0]
+            if "/" in target_branch
+            else "origin"
+        )
+        parts.append("**修复建议**:\n```bash\n")
+        parts.append(f"git fetch {remote}\n")
+        parts.append(f"git rebase {target_branch}\n")
+        parts.append("# 解决冲突后\ngit rebase --continue\n")
+        parts.append("```\n\n")
+    parts.append("---\n\n")
+    return "".join(parts)
+
+
+def _report_code_style(code_style_result):
+    """代码规范检查部分"""
+    parts = ["## 2️⃣ 代码规范检查 (Ruff + 自定义)\n\n"]
+    issues = code_style_result.get("issues", [])
+    errs = [i for i in issues if i["level"] == "error"]
+    warns = [i for i in issues if i["level"] == "warning"]
+    infos = [i for i in issues if i["level"] == "info"]
+
+    parts.append(_format_issues(errs, "❌ 错误（必须修复）"))
+    parts.append(_format_issues(warns, "⚠️ 警告（建议修复）"))
+    if infos:
+        parts.append(
+            _format_issues(infos[:10], "ℹ️ 信息（可选优化）",
+                           show_suggestion=False)
+        )
+        if len(infos) > 10:
+            n = len(infos) - 10
+            parts.append(f"... 还有 {n} 个信息级别问题\n\n")
+    if not errs and not warns and not infos:
+        parts.append("✅ 代码规范检查通过\n\n")
+    parts.append("---\n\n")
+    return "".join(parts), errs
+
+
+def _report_bandit(bandit_result):
+    """Bandit 安全检查部分"""
+    parts = ["## 3️⃣ 安全检查 (Bandit)\n\n"]
+    issues = bandit_result.get("issues", [])
+    err_levels = ("error", "HIGH", "MEDIUM")
+    warn_levels = ("warning", "LOW")
+    errs = [i for i in issues if i["level"] in err_levels]
+    warns = [i for i in issues if i["level"] in warn_levels]
+
+    parts.append(_format_issues(errs, "❌ 安全问题（必须修复）"))
+    parts.append(
+        _format_issues(warns, "⚠️ 低风险（建议修复）",
+                       show_suggestion=False)
+    )
+    if not errs and not warns:
+        parts.append("✅ 安全检查通过\n\n")
+    parts.append("---\n\n")
+    return "".join(parts), errs
+
+
+def _report_spec(spec_result):
+    """SPEC.md 合规性检查部分"""
+    parts = ["## 4️⃣ SPEC.md 合规性检查\n\n"]
+    issues = spec_result.get("issues", [])
+    errs = [i for i in issues if i["level"] == "error"]
+    warns = [i for i in issues if i["level"] == "warning"]
+
+    parts.append(_format_issues(errs, "❌ 错误（必须修复）"))
+    parts.append(_format_issues(warns, "⚠️ 警告（建议修复）"))
+    if not errs and not warns:
+        parts.append("✅ SPEC.md 合规性检查通过\n\n")
+    parts.append("---\n\n")
+    return "".join(parts), errs
+
+
 def generate_markdown_report(
     current_branch: str,
     target_branch: str,
     rebase_result: Dict,
     code_style_result: Dict,
+    bandit_result: Dict,
     spec_result: Dict,
     diff_stat: str
 ) -> str:
     """生成 Markdown 格式的审查报告"""
-    
-    # 计算总体状态
     has_errors = (
-        rebase_result.get("status") == "conflict" or
-        code_style_result.get("total_errors", 0) > 0 or
-        spec_result.get("total_errors", 0) > 0
+        rebase_result.get("status") == "conflict"
+        or code_style_result.get("total_errors", 0) > 0
+        or bandit_result.get("total_errors", 0) > 0
+        or spec_result.get("total_errors", 0) > 0
     )
-    
     has_warnings = (
-        code_style_result.get("total_warnings", 0) > 0 or
-        spec_result.get("total_warnings", 0) > 0
+        code_style_result.get("total_warnings", 0) > 0
+        or bandit_result.get("total_warnings", 0) > 0
+        or spec_result.get("total_warnings", 0) > 0
     )
-    
     if has_errors:
-        overall_status = "❌ FAIL"
+        status = "❌ FAIL"
     elif has_warnings:
-        overall_status = "⚠️ WARNING"
+        status = "⚠️ WARNING"
     else:
-        overall_status = "✅ PASS"
-    
-    # 生成报告
-    report = f"""# AKG Code Review Report
+        status = "✅ PASS"
 
-**分支**: {current_branch}
-**目标**: {target_branch}
-**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**状态**: {overall_status}
+    parts = [_report_header(current_branch, target_branch, status)]
 
----
+    # 概览表
+    infos = code_style_result.get("total_infos", 0)
+    parts.append("## 📋 检查概览\n\n")
+    parts.append("| 检查项 | 状态 | 错误 | 警告 | 信息 |\n")
+    parts.append("|--------|------|------|------|------|\n")
+    rebase_row = {
+        "total_errors": len(rebase_result.get("conflicts", [])),
+        "total_warnings": 0,
+        "status": rebase_result.get("status"),
+    }
+    parts.append(_table_row("Rebase 冲突", rebase_row))
+    parts.append(
+        _table_row("代码规范", code_style_result, str(infos))
+    )
+    parts.append(_table_row("安全检查", bandit_result))
+    parts.append(_table_row("SPEC.md 合规", spec_result))
+    parts.append("\n---\n\n")
 
-## 📋 检查概览
+    parts.append(_report_rebase(rebase_result, target_branch))
 
-| 检查项 | 状态 | 错误 | 警告 | 信息 |
-|--------|------|------|------|------|
-| Rebase 冲突 | {"✅" if rebase_result.get("status") == "pass" else "❌"} | {len(rebase_result.get("conflicts", []))} | 0 | 0 |
-| 代码规范 | {"✅" if code_style_result.get("total_errors", 0) == 0 else "❌"} | {code_style_result.get("total_errors", 0)} | {code_style_result.get("total_warnings", 0)} | {code_style_result.get("total_infos", 0)} |
-| SPEC.md 合规 | {"✅" if spec_result.get("total_errors", 0) == 0 else "❌"} | {spec_result.get("total_errors", 0)} | {spec_result.get("total_warnings", 0)} | 0 |
+    cs_text, cs_errs = _report_code_style(code_style_result)
+    parts.append(cs_text)
 
----
+    bd_text, bd_errs = _report_bandit(bandit_result)
+    parts.append(bd_text)
 
-## 1️⃣ Rebase 冲突检查
+    sp_text, sp_errs = _report_spec(spec_result)
+    parts.append(sp_text)
 
-**状态**: {rebase_result.get("message", "未知")}
+    all_errs = cs_errs + bd_errs + sp_errs
+    if all_errs:
+        parts.append("## 📝 修复建议\n\n")
+        parts.append("**必须修复的问题**:\n\n")
+        for i, issue in enumerate(all_errs[:5], 1):
+            parts.append(f"{i}. **{issue['file']}**")
+            if issue.get("line", 0) > 0:
+                parts.append(f" (第 {issue['line']} 行)")
+            parts.append(f"\n   - {issue['message']}\n")
+            sug = issue.get("suggestion", "—")
+            parts.append(f"   - {sug}\n\n")
+        if len(all_errs) > 5:
+            n = len(all_errs) - 5
+            parts.append(f"... 还有 {n} 个错误需要修复\n\n")
 
-"""
-    
-    # Rebase 冲突详情
-    if rebase_result.get("conflicts"):
-        report += "### 冲突文件\n\n"
-        for conflict in rebase_result["conflicts"]:
-            report += f"- **{conflict['file']}**\n"
-            report += f"  - 类型: {conflict['type']}\n"
-            report += f"  - 详情: {conflict['details']}\n\n"
-        
-        report += "**修复建议**:\n"
-        report += "```bash\n"
-        report += f"git fetch origin_gitcode\n"
-        report += f"git rebase {target_branch}\n"
-        report += "# 解决冲突后\n"
-        report += "git rebase --continue\n"
-        report += "```\n\n"
-    
-    report += "---\n\n"
-    
-    # 代码规范检查
-    report += "## 2️⃣ 代码规范检查\n\n"
-    
-    code_issues = code_style_result.get("issues", [])
-    errors = [i for i in code_issues if i["level"] == "error"]
-    warnings = [i for i in code_issues if i["level"] == "warning"]
-    infos = [i for i in code_issues if i["level"] == "info"]
-    
-    if errors:
-        report += "### ❌ 错误（必须修复）\n\n"
-        for issue in errors:
-            report += f"**[{issue['rule']}] {issue['file']}:{issue['line']}**\n"
-            report += f"- 问题: {issue['message']}\n"
-            report += f"- 建议: {issue['suggestion']}\n\n"
-    
-    if warnings:
-        report += "### ⚠️ 警告（建议修复）\n\n"
-        for issue in warnings:
-            report += f"**[{issue['rule']}] {issue['file']}:{issue['line']}**\n"
-            report += f"- 问题: {issue['message']}\n"
-            report += f"- 建议: {issue['suggestion']}\n\n"
-    
-    if infos:
-        report += "### ℹ️ 信息（可选优化）\n\n"
-        # 只显示前 10 个 info 级别问题
-        for issue in infos[:10]:
-            report += f"**[{issue['rule']}] {issue['file']}:{issue['line']}**\n"
-            report += f"- {issue['message']}\n\n"
-        
-        if len(infos) > 10:
-            report += f"... 还有 {len(infos) - 10} 个信息级别问题\n\n"
-    
-    if not errors and not warnings and not infos:
-        report += "✅ 代码规范检查通过\n\n"
-    
-    report += "---\n\n"
-    
-    # SPEC.md 合规性检查
-    report += "## 3️⃣ SPEC.md 合规性检查\n\n"
-    
-    spec_issues = spec_result.get("issues", [])
-    spec_errors = [i for i in spec_issues if i["level"] == "error"]
-    spec_warnings = [i for i in spec_issues if i["level"] == "warning"]
-    
-    if spec_errors:
-        report += "### ❌ 错误（必须修复）\n\n"
-        for issue in spec_errors:
-            report += f"**[{issue['rule']}] {issue['file']}"
-            if issue.get('line', 0) > 0:
-                report += f":{issue['line']}"
-            report += "**\n"
-            report += f"- 问题: {issue['message']}\n"
-            report += f"- 建议: {issue['suggestion']}\n\n"
-    
-    if spec_warnings:
-        report += "### ⚠️ 警告（建议修复）\n\n"
-        for issue in spec_warnings:
-            report += f"**[{issue['rule']}] {issue['file']}"
-            if issue.get('line', 0) > 0:
-                report += f":{issue['line']}"
-            report += "**\n"
-            report += f"- 问题: {issue['message']}\n"
-            report += f"- 建议: {issue['suggestion']}\n\n"
-    
-    if not spec_errors and not spec_warnings:
-        report += "✅ SPEC.md 合规性检查通过\n\n"
-    
-    report += "---\n\n"
-    
-    # 修复建议汇总
-    all_errors = errors + spec_errors
-    if all_errors:
-        report += "## 📝 修复建议\n\n"
-        report += "**必须修复的问题**:\n\n"
-        for i, issue in enumerate(all_errors[:5], 1):
-            report += f"{i}. **{issue['file']}**"
-            if issue.get('line', 0) > 0:
-                report += f" (第 {issue['line']} 行)"
-            report += f"\n   - {issue['message']}\n"
-            report += f"   - {issue['suggestion']}\n\n"
-        
-        if len(all_errors) > 5:
-            report += f"... 还有 {len(all_errors) - 5} 个错误需要修复\n\n"
-    
-    # 变更统计
-    report += "---\n\n"
-    report += "## 📊 变更统计\n\n"
-    report += "```\n"
-    report += diff_stat
-    report += "```\n"
-    
-    return report
+    parts.append("---\n\n## 📊 变更统计\n\n```\n")
+    parts.append(diff_stat)
+    parts.append("```\n")
+
+    return "".join(parts)
+
+
+def _check_mark(metadata, check_name, cmp="pass"):
+    """返回 checklist 的 [x] 或 [ ]"""
+    st = metadata["checks"][check_name]["status"]
+    if cmp == "pass":
+        return "x" if st == "pass" else " "
+    return "x" if st != "fail" else " "
 
 
 def generate_pr_checklist(
     current_branch: str,
     target_branch: str,
-    json_metadata: Dict
+    json_metadata: Dict,
 ) -> str:
     """生成用于贴到 PR 的极简 checklist"""
-    
     status = json_metadata["status"]
     summary = json_metadata["summary"]
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
-    
-    # 状态图标
-    status_icon = "✅" if status == "pass" else ("⚠️" if status == "warning" else "❌")
-    
-    checklist = f"""## Pre-submit Review Checklist
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M')
+    icon = {
+        "pass": "✅", "warning": "⚠️",
+    }.get(status, "❌")
 
-**Branch**: `{current_branch}` → `{target_branch}`  
-**Review Time**: {timestamp}  
-**Status**: {status_icon} {status.upper()}
+    rb = _check_mark(json_metadata, "rebase")
+    cs = _check_mark(json_metadata, "code_style", "fail")
+    bd = _check_mark(json_metadata, "bandit", "fail")
+    sp = _check_mark(json_metadata, "spec_compliance", "fail")
 
-### Checks Performed
+    lines = [
+        "## Pre-submit Review Checklist\n",
+        f"\n**Branch**: `{current_branch}` → `{target_branch}`\n",
+        f"**Review Time**: {ts}\n",
+        f"**Status**: {icon} {status.upper()}\n",
+        "\n### Checks Performed\n",
+        f"\n- [{rb}] Rebase conflict check\n",
+        f"- [{cs}] Code style (Ruff + custom)\n",
+        f"- [{bd}] Security check (Bandit)\n",
+        f"- [{sp}] SPEC.md compliance\n",
+        "\n### Summary\n",
+        f"\n- **Errors**: {summary['total_errors']}\n",
+        f"- **Warnings**: {summary['total_warnings']}\n",
+        f"- **Files Changed**: {summary['files_changed']}\n\n",
+    ]
 
-- [{"x" if json_metadata["checks"]["rebase"]["status"] == "pass" else " "}] Rebase conflict check
-- [{"x" if summary["total_errors"] == 0 else " "}] Code style check (ruff + bandit + custom)
-- [{"x" if json_metadata["checks"]["spec_compliance"]["status"] != "fail" else " "}] SPEC.md compliance check
-
-### Summary
-
-- **Errors**: {summary["total_errors"]}
-- **Warnings**: {summary["total_warnings"]}
-- **Files Changed**: {summary["files_changed"]}
-
-"""
-    
-    # 如果有错误，列出关键问题
     if summary["total_errors"] > 0:
-        checklist += "### Issues Found\n\n"
-        
+        lines.append("### Issues Found\n\n")
         all_errors = []
-        for check_name in ["rebase", "code_style", "spec_compliance"]:
-            check_data = json_metadata["checks"][check_name]
-            if check_name == "rebase" and check_data.get("conflicts"):
-                all_errors.extend([f"Rebase conflict: {c['file']}" for c in check_data["conflicts"][:3]])
-            elif "errors" in check_data:
-                all_errors.extend([f"{e['rule']}: {e['file']}" for e in check_data["errors"][:3]])
-        
-        for i, error in enumerate(all_errors[:5], 1):
-            checklist += f"{i}. {error}\n"
-        
+        checks = json_metadata["checks"]
+        for name in ("rebase", "code_style", "spec_compliance"):
+            data = checks[name]
+            if name == "rebase" and data.get("conflicts"):
+                for c in data["conflicts"][:3]:
+                    all_errors.append(
+                        f"Rebase conflict: {c['file']}"
+                    )
+            elif "errors" in data:
+                for e in data["errors"][:3]:
+                    all_errors.append(
+                        f"{e['rule']}: {e['file']}"
+                    )
+        for i, err in enumerate(all_errors[:5], 1):
+            lines.append(f"{i}. {err}\n")
         if len(all_errors) > 5:
-            checklist += f"\n... and {len(all_errors) - 5} more issues\n"
-        
-        checklist += "\n**Action Required**: Fix all errors before merge.\n"
+            n = len(all_errors) - 5
+            lines.append(f"\n... and {n} more issues\n")
+        lines.append(
+            "\n**Action Required**: "
+            "Fix all errors before merge.\n"
+        )
     else:
-        checklist += "**Result**: ✅ All checks passed. Safe to merge.\n"
-    
-    checklist += f"\n---\n*Generated by `/akg-review`*\n"
-    
-    return checklist
+        lines.append(
+            "**Result**: ✅ All checks passed. "
+            "Safe to merge.\n"
+        )
+    lines.append("\n---\n*Generated by `/akg-review`*\n")
+    return "".join(lines)
+
+
+def _filter_issues(result, level_match):
+    """从结果中按 level 过滤 issues"""
+    issues = result.get("issues", [])
+    if isinstance(level_match, str):
+        return [i for i in issues if i["level"] == level_match]
+    return [i for i in issues if i["level"] in level_match]
 
 
 def generate_json_metadata(
@@ -261,32 +332,39 @@ def generate_json_metadata(
     target_branch: str,
     rebase_result: Dict,
     code_style_result: Dict,
+    bandit_result: Dict,
     spec_result: Dict,
-    report_filename: str
+    report_filename: str,
 ) -> Dict:
     """生成 JSON 元数据"""
-    
-    # 计算总体状态
     total_errors = (
-        len(rebase_result.get("conflicts", [])) +
-        code_style_result.get("total_errors", 0) +
-        spec_result.get("total_errors", 0)
+        len(rebase_result.get("conflicts", []))
+        + code_style_result.get("total_errors", 0)
+        + bandit_result.get("total_errors", 0)
+        + spec_result.get("total_errors", 0)
     )
-    
     total_warnings = (
-        code_style_result.get("total_warnings", 0) +
-        spec_result.get("total_warnings", 0)
+        code_style_result.get("total_warnings", 0)
+        + bandit_result.get("total_warnings", 0)
+        + spec_result.get("total_warnings", 0)
     )
-    
     total_infos = code_style_result.get("total_infos", 0)
-    
+
     if total_errors > 0:
         status = "fail"
     elif total_warnings > 0:
         status = "warning"
     else:
         status = "pass"
-    
+
+    files_changed = (
+        code_style_result
+        .get("summary", {})
+        .get("files_checked", 0)
+    )
+    err_levels = ("error", "HIGH", "MEDIUM")
+    warn_levels = ("warning", "LOW")
+
     return {
         "version": "1.0",
         "type": "review",
@@ -298,28 +376,84 @@ def generate_json_metadata(
             "rebase": {
                 "status": rebase_result.get("status", "error"),
                 "conflicts": rebase_result.get("conflicts", []),
-                "message": rebase_result.get("message", "")
+                "message": rebase_result.get("message", ""),
             },
             "code_style": {
                 "status": code_style_result.get("status", "pass"),
-                "errors": [i for i in code_style_result.get("issues", []) if i["level"] == "error"],
-                "warnings": [i for i in code_style_result.get("issues", []) if i["level"] == "warning"],
-                "infos": [i for i in code_style_result.get("issues", []) if i["level"] == "info"]
+                "errors": _filter_issues(code_style_result, "error"),
+                "warnings": _filter_issues(code_style_result, "warning"),
+                "infos": _filter_issues(code_style_result, "info"),
+            },
+            "bandit": {
+                "status": bandit_result.get("status", "pass"),
+                "errors": _filter_issues(bandit_result, err_levels),
+                "warnings": _filter_issues(bandit_result, warn_levels),
             },
             "spec_compliance": {
                 "status": spec_result.get("status", "pass"),
-                "errors": [i for i in spec_result.get("issues", []) if i["level"] == "error"],
-                "warnings": [i for i in spec_result.get("issues", []) if i["level"] == "warning"]
-            }
+                "errors": _filter_issues(spec_result, "error"),
+                "warnings": _filter_issues(spec_result, "warning"),
+            },
         },
         "summary": {
             "total_errors": total_errors,
             "total_warnings": total_warnings,
             "total_infos": total_infos,
-            "files_changed": code_style_result.get("summary", {}).get("files_checked", 0)
+            "files_changed": files_changed,
         },
-        "report_file": report_filename
+        "report_file": report_filename,
     }
+
+
+def _normalize_ruff_issues(ruff_data) -> List[Dict]:
+    """将 ruff JSON 输出转换为统一的 issue 格式"""
+    if not isinstance(ruff_data, list):
+        return []
+    issues = []
+    for item in ruff_data:
+        loc = item.get("location", {})
+        issues.append({
+            "rule": item.get("code", "RUFF"),
+            "level": "error",
+            "file": item.get("filename", ""),
+            "line": loc.get("row", 0),
+            "message": item.get("message", ""),
+            "suggestion": (
+                item.get("fix", {}).get("message", "—")
+                if item.get("fix") else "—"
+            )
+        })
+    return issues
+
+
+def _normalize_bandit_issues(bandit_data) -> List[Dict]:
+    """将 bandit JSON 输出转换为统一的 issue 格式"""
+    results = bandit_data.get("results", []) if isinstance(bandit_data, dict) else []
+    issues = []
+    severity_map = {"HIGH": "error", "MEDIUM": "error", "LOW": "warning"}
+    for item in results:
+        issues.append({
+            "rule": item.get("test_id", "BANDIT"),
+            "level": severity_map.get(item.get("issue_severity", ""), "warning"),
+            "file": item.get("filename", ""),
+            "line": item.get("line_number", 0),
+            "message": item.get("issue_text", ""),
+            "suggestion": f"Confidence: {item.get('issue_confidence', 'N/A')}"
+        })
+    return issues
+
+
+def _load_json(path: str, default: Dict = None) -> Dict:
+    """安全加载 JSON 文件"""
+    if default is None:
+        default = {}
+    if not path or not Path(path).exists():
+        return default
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return default
 
 
 def main():
@@ -328,114 +462,108 @@ def main():
     parser.add_argument("--target-branch", required=True, help="目标分支")
     parser.add_argument("--rebase-result", required=True, help="Rebase 检查结果 JSON")
     parser.add_argument("--ruff-result", help="Ruff 检查结果 JSON（可选）")
-    parser.add_argument("--custom-style-result", required=True, help="自定义规范检查结果 JSON")
+    parser.add_argument("--bandit-result", help="Bandit 检查结果 JSON（可选）")
+    parser.add_argument(
+        "--custom-style-result", required=True,
+        help="自定义规范检查结果 JSON",
+    )
     parser.add_argument("--spec-result", required=True, help="SPEC 合规性检查结果 JSON")
     parser.add_argument("--output-dir", required=True, help="输出目录")
     parser.add_argument("--repo-path", default=".", help="仓库路径")
-    
+
     args = parser.parse_args()
-    
+
     repo_path = Path(args.repo_path).resolve()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 读取检查结果
-    try:
-        with open(args.rebase_result, 'r', encoding='utf-8') as f:
-            rebase_result = json.load(f)
-    except Exception as e:
-        rebase_result = {"status": "error", "message": str(e), "conflicts": []}
-    
-    # 读取 ruff 结果（可选）
-    ruff_result = {"issues": [], "total_errors": 0}
-    if args.ruff_result and Path(args.ruff_result).exists():
-        try:
-            with open(args.ruff_result, 'r', encoding='utf-8') as f:
-                ruff_data = json.load(f)
-                # ruff 输出格式转换
-                ruff_result["issues"] = ruff_data if isinstance(ruff_data, list) else []
-                ruff_result["total_errors"] = len(ruff_result["issues"])
-        except Exception:
-            pass
-    
-    # 读取自定义规范结果
-    try:
-        with open(args.custom_style_result, 'r', encoding='utf-8') as f:
-            code_style_result = json.load(f)
-    except Exception as e:
-        code_style_result = {"status": "error", "issues": [], "total_errors": 0, "total_infos": 0}
-    
-    # 合并 ruff 和自定义结果
-    code_style_result["issues"] = ruff_result.get("issues", []) + code_style_result.get("issues", [])
-    code_style_result["total_errors"] = ruff_result.get("total_errors", 0) + code_style_result.get("total_errors", 0)
-    
-    try:
-        with open(args.spec_result, 'r', encoding='utf-8') as f:
-            spec_result = json.load(f)
-    except Exception as e:
-        spec_result = {"status": "error", "issues": [], "total_errors": 0, "total_warnings": 0}
-    
-    # 获取 diff stat
+
+    rebase_result = _load_json(
+        args.rebase_result,
+        {"status": "error", "message": "结果文件缺失", "conflicts": []}
+    )
+
+    # Ruff: 转换原始 JSON 数组为统一格式，合并到 code_style
+    ruff_raw = _load_json(args.ruff_result) if args.ruff_result else {}
+    ruff_issues = _normalize_ruff_issues(ruff_raw if isinstance(ruff_raw, list) else [])
+
+    code_style_result = _load_json(
+        args.custom_style_result,
+        {"status": "pass", "issues": [], "total_errors": 0, "total_infos": 0}
+    )
+    code_style_result["issues"] = (
+        ruff_issues + code_style_result.get("issues", [])
+    )
+    ruff_errs = sum(
+        1 for i in ruff_issues if i["level"] == "error"
+    )
+    ruff_warns = sum(
+        1 for i in ruff_issues if i["level"] == "warning"
+    )
+    prev_errs = code_style_result.get("total_errors", 0)
+    prev_warns = code_style_result.get("total_warnings", 0)
+    code_style_result["total_errors"] = prev_errs + ruff_errs
+    code_style_result["total_warnings"] = prev_warns + ruff_warns
+
+    # Bandit: 转换原始 JSON 为统一格式
+    bandit_raw = _load_json(args.bandit_result) if args.bandit_result else {}
+    bandit_issues = _normalize_bandit_issues(bandit_raw)
+    has_bandit_err = any(
+        i["level"] == "error" for i in bandit_issues
+    )
+    bandit_result = {
+        "status": "fail" if has_bandit_err else "pass",
+        "issues": bandit_issues,
+        "total_errors": sum(1 for i in bandit_issues if i["level"] == "error"),
+        "total_warnings": sum(1 for i in bandit_issues if i["level"] == "warning"),
+    }
+
+    spec_result = _load_json(
+        args.spec_result,
+        {"status": "pass", "issues": [], "total_errors": 0, "total_warnings": 0}
+    )
+
     try:
         result = subprocess.run(
             ["git", "diff", f"{args.target_branch}...HEAD", "--stat"],
-            cwd=repo_path,
-            capture_output=True,
-            text=True
+            cwd=repo_path, capture_output=True, text=True
         )
         diff_stat = result.stdout if result.returncode == 0 else "无法获取变更统计"
     except Exception:
         diff_stat = "无法获取变更统计"
-    
-    # 生成文件名
+
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     branch_slug = args.current_branch.replace('/', '_')
     report_filename = f"review_{branch_slug}_{timestamp}.md"
     json_filename = f"review_{branch_slug}_{timestamp}.json"
-    
-    # 生成 Markdown 报告
+
     markdown_content = generate_markdown_report(
-        args.current_branch,
-        args.target_branch,
-        rebase_result,
-        code_style_result,
-        spec_result,
+        args.current_branch, args.target_branch,
+        rebase_result, code_style_result, bandit_result, spec_result,
         diff_stat
     )
-    
-    # 生成 JSON 元数据
+
     json_content = generate_json_metadata(
-        args.current_branch,
-        args.target_branch,
-        rebase_result,
-        code_style_result,
-        spec_result,
+        args.current_branch, args.target_branch,
+        rebase_result, code_style_result, bandit_result, spec_result,
         report_filename
     )
-    
-    # 生成极简 checklist（用于贴到 PR）
+
     checklist_filename = f"checklist_{branch_slug}_{timestamp}.md"
     checklist_content = generate_pr_checklist(
-        args.current_branch,
-        args.target_branch,
-        json_content
+        args.current_branch, args.target_branch, json_content
     )
-    
-    # 写入文件
+
     report_path = output_dir / report_filename
     json_path = output_dir / json_filename
     checklist_path = output_dir / checklist_filename
-    
+
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(markdown_content)
-    
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(json_content, f, indent=2, ensure_ascii=False)
-    
     with open(checklist_path, 'w', encoding='utf-8') as f:
         f.write(checklist_content)
-    
-    # 输出结果
+
     result = {
         "report_file": str(report_path),
         "json_file": str(json_path),
@@ -443,14 +571,9 @@ def main():
         "status": json_content["status"],
         "summary": json_content["summary"]
     }
-    
     print(json.dumps(result, indent=2, ensure_ascii=False))
-    
-    # 返回退出码
-    if json_content["status"] == "fail":
-        sys.exit(1)
-    else:
-        sys.exit(0)
+
+    sys.exit(1 if json_content["status"] == "fail" else 0)
 
 
 if __name__ == "__main__":

@@ -34,24 +34,28 @@ RULES = {
 }
 
 
+LICENSE_MARKERS = [
+    "Copyright",
+    "Huawei Technologies",
+    "Apache License, Version 2.0",
+]
+
+
 def check_license_header(file_path: Path, content: str) -> List[Dict]:
-    """检查 License 头"""
+    """检查 License 头（所有 .py 文件都要求 Apache 2.0 头）"""
     issues = []
-    
-    if file_path.name == "__init__.py" or "test_" in file_path.name:
-        return issues
-    
-    lines = content.split('\n')[:3]
-    header_text = '\n'.join(lines)
-    
-    if "Copyright" not in header_text or "Huawei Technologies" not in header_text:
+
+    header_text = '\n'.join(content.split('\n')[:15])
+
+    missing = [m for m in LICENSE_MARKERS if m not in header_text]
+    if missing:
         issues.append({
             "rule": "CODE-001",
             "level": "error",
             "file": str(file_path),
             "line": 1,
-            "message": "License 头缺失或格式不正确",
-            "suggestion": "添加 Apache 2.0 License 头（年份 2025-2026）"
+            "message": f"License 头缺失或不完整（缺少: {', '.join(missing)}）",
+            "suggestion": "添加完整的 Apache 2.0 License 头（年份 2025-2026）"
         })
     elif "2025-2026" not in header_text and "2026" not in header_text:
         issues.append({
@@ -62,22 +66,22 @@ def check_license_header(file_path: Path, content: str) -> List[Dict]:
             "message": "License 头年份不正确",
             "suggestion": "年份应为 '2025-2026' 或 '2026'"
         })
-    
+
     return issues
 
 
 def check_imports(file_path: Path, content: str) -> List[Dict]:
     """检查导入规范"""
     issues = []
-    
+
     if "kernel_verifier.py" in str(file_path):
         return issues
-    
+
     lines = content.split('\n')
     for i, line in enumerate(lines, 1):
         if line.strip().startswith('#'):
             continue
-        
+
         if re.search(r'from\s+akg_agents\.core\.', line):
             issues.append({
                 "rule": "CODE-002",
@@ -87,26 +91,38 @@ def check_imports(file_path: Path, content: str) -> List[Dict]:
                 "message": f"从 core/ 导入: {line.strip()}",
                 "suggestion": "使用 core_v2/ 替代（core/ 正在迁移）"
             })
-    
+
     return issues
 
 
 def check_parameter_values(file_path: Path, content: str) -> List[Dict]:
     """检查参数值"""
     issues = []
-    
-    VALID_VALUES = {
+
+    valid_values = {
         "backend": ["cuda", "ascend", "cpu"],
         "framework": ["torch", "mindspore"],
-        "dsl": ["triton_cuda", "triton_ascend", "cpp", "cuda_c", "tilelang_cuda", "ascendc", "pypto"],
+        "dsl": [
+            "triton_cuda", "triton_ascend", "cpp",
+            "cuda_c", "tilelang_cuda", "ascendc", "pypto",
+        ],
+        "arch": [
+            "a100", "v100",
+            "ascend910b1", "ascend910b2",
+            "ascend910b3", "ascend910b4",
+            "ascend910_9362", "ascend910_9372",
+            "ascend910_9381", "ascend910_9382",
+            "ascend910_9391", "ascend910_9392",
+            "ascend310p3", "x86_64", "aarch64",
+        ],
     }
-    
+
     lines = content.split('\n')
     for i, line in enumerate(lines, 1):
         if line.strip().startswith('#'):
             continue
-        
-        for param, valid in VALID_VALUES.items():
+
+        for param, valid in valid_values.items():
             match = re.search(rf'{param}\s*=\s*["\']([^"\']+)["\']', line)
             if match and match.group(1) not in valid:
                 issues.append({
@@ -117,38 +133,57 @@ def check_parameter_values(file_path: Path, content: str) -> List[Dict]:
                     "message": f"{param}='{match.group(1)}' 不在有效值范围",
                     "suggestion": f"有效值: {', '.join(valid)}"
                 })
-    
+
     return issues
+
+
+WRONG_PACKAGE_NAMES = {
+    "ai_kernel_generator": "旧包名 'ai_kernel_generator'",
+    "kernel_generator": "旧包名 'kernel_generator'",
+}
+
+WRONG_PACKAGE_REGEX = re.compile(
+    r'\bakg_agent\b(?!s)'
+)
 
 
 def check_package_name(file_path: Path, content: str) -> List[Dict]:
     """检查包名"""
     issues = []
-    
-    # 检查错误的包名（完整匹配，避免误报 akg_agents）
+
     lines = content.split('\n')
     for i, line in enumerate(lines, 1):
         if line.strip().startswith('#') or 'import' not in line:
             continue
-        
-        # 检查 ai_kernel_generator（完整包名）
-        if 'ai_kernel_generator' in line:
+
+        for wrong_name, desc in WRONG_PACKAGE_NAMES.items():
+            if wrong_name in line:
+                issues.append({
+                    "rule": "CODE-013",
+                    "level": "error",
+                    "file": str(file_path),
+                    "line": i,
+                    "message": f"错误的包名 ({desc}): {line.strip()}",
+                    "suggestion": "应为 'akg_agents'"
+                })
+
+        if WRONG_PACKAGE_REGEX.search(line):
             issues.append({
                 "rule": "CODE-013",
                 "level": "error",
                 "file": str(file_path),
                 "line": i,
-                "message": f"错误的包名: {line.strip()}",
-                "suggestion": "应为 'akg_agents'，不是 'ai_kernel_generator'"
+                "message": f"包名少了 s (akg_agent → akg_agents): {line.strip()}",
+                "suggestion": "应为 'akg_agents'（复数）"
             })
-    
+
     return issues
 
 
 def check_todo_comments(file_path: Path, content: str) -> List[Dict]:
     """检查 TODO 注释"""
     issues = []
-    
+
     lines = content.split('\n')
     for i, line in enumerate(lines, 1):
         if re.search(r'#\s*(TODO|FIXME|XXX|HACK)', line, re.IGNORECASE):
@@ -160,17 +195,17 @@ def check_todo_comments(file_path: Path, content: str) -> List[Dict]:
                 "message": f"待办注释: {line.strip()[:80]}",
                 "suggestion": "考虑创建 Issue 跟踪或在本次提交中完成"
             })
-    
+
     return issues
 
 
 def check_file(file_path: Path, repo_path: Path) -> List[Dict]:
     """检查单个文件"""
     issues = []
-    
+
     if file_path.suffix != '.py':
         return issues
-    
+
     try:
         with open(repo_path / file_path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -184,14 +219,14 @@ def check_file(file_path: Path, repo_path: Path) -> List[Dict]:
             "suggestion": "检查文件是否存在且可读"
         })
         return issues
-    
+
     # 执行检查（仅项目特定规则，bandit 已覆盖危险函数）
     issues.extend(check_license_header(file_path, content))
     issues.extend(check_imports(file_path, content))
     issues.extend(check_parameter_values(file_path, content))
     issues.extend(check_package_name(file_path, content))
     issues.extend(check_todo_comments(file_path, content))
-    
+
     return issues
 
 
@@ -200,19 +235,19 @@ def main():
     parser.add_argument("--files", required=True, help="文件列表（空格分隔）")
     parser.add_argument("--repo-path", default=".", help="仓库路径")
     parser.add_argument("--output", help="输出 JSON 文件")
-    
+
     args = parser.parse_args()
-    
+
     repo_path = Path(args.repo_path).resolve()
     files = [f for f in args.files.split() if f]
-    
+
     all_issues = []
     for file_str in files:
         all_issues.extend(check_file(Path(file_str), repo_path))
-    
+
     errors = [i for i in all_issues if i["level"] == "error"]
     infos = [i for i in all_issues if i["level"] == "info"]
-    
+
     result = {
         "status": "fail" if errors else "pass",
         "total_errors": len(errors),
@@ -224,13 +259,13 @@ def main():
             "infos": len(infos)
         }
     }
-    
+
     if args.output:
         with open(args.output, 'w', encoding='utf-8') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
     else:
         print(json.dumps(result, indent=2, ensure_ascii=False))
-    
+
     sys.exit(1 if errors else 0)
 
 

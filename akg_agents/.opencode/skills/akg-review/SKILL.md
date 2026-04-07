@@ -4,8 +4,9 @@ description: >
   提交前代码自审工具。检查 rebase 冲突、代码规范（ruff/bandit）、危险函数、SPEC.md 合规性。
   生成审查报告写入 .tmp/review/。当用户输入 /akg-review 或要求代码审查、提交前检查时使用。
 argument-hint: >
-  可选：TARGET_BRANCH（目标分支，默认 origin_gitcode/br_agents）。
-  示例：/akg-review  /akg-review origin_gitcode/master
+  可选：TARGET_BRANCH（目标分支）。未指定时自动探测并请求确认。
+  示例：/akg-review  /akg-review origin/br_agents  /akg-review origin/master
+
 ---
 
 # AKG Review - 提交前代码自审
@@ -33,7 +34,6 @@ argument-hint: >
 ### Step 0: 依赖检查（自动安装）
 
 ```bash
-# 检查并安装必需工具
 for tool in ruff bandit; do
   if ! command -v $tool &> /dev/null; then
     echo "$tool 未安装，正在安装..."
@@ -41,20 +41,77 @@ for tool in ruff bandit; do
   fi
 done
 
-# 可选工具（已有就用，没有就跳过）
 MYPY_AVAILABLE=$(command -v mypy &> /dev/null && echo "yes" || echo "no")
 VULTURE_AVAILABLE=$(command -v vulture &> /dev/null && echo "yes" || echo "no")
+
+REVIEW_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/akg_review_XXXXXX")
 ```
 
-### Step 1: 确定目标分支 + 收集变更
+### Step 1: 确定目标分支（需用户确认）
+
+**缓存文件**：`$AKG_AGENTS_DIR/.tmp/review_last.txt`，记录上次确认过的参数。
 
 ```bash
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-TARGET_BRANCH=${ARGUMENTS:-origin_gitcode/br_agents}
-
-# 收集变更的 Python 文件
-CHANGED_FILES=$(git diff $TARGET_BRANCH...HEAD --name-only --diff-filter=ACMR | grep '\.py$' || echo "")
+TARGET_BRANCH=${ARGUMENTS:-}
+REVIEW_CACHE="$AKG_AGENTS_DIR/.tmp/review_last.txt"
 ```
+
+**确定 TARGET_BRANCH 的优先级**（依次尝试，取第一个有效值）：
+
+1. 用户本次指定的参数（`$ARGUMENTS`）
+2. 缓存文件中记录的上次值（`$REVIEW_CACHE`）
+3. 自动探测远程分支
+
+```bash
+# 如果用户未指定，尝试读缓存
+if [ -z "$TARGET_BRANCH" ] && [ -f "$REVIEW_CACHE" ]; then
+  CACHED_TARGET=$(grep '^target_branch=' "$REVIEW_CACHE" | cut -d= -f2)
+  if [ -n "$CACHED_TARGET" ] && git rev-parse --verify "$CACHED_TARGET" &>/dev/null; then
+    TARGET_BRANCH="$CACHED_TARGET"
+  fi
+fi
+
+# 如果仍为空，自动探测
+if [ -z "$TARGET_BRANCH" ]; then
+  for candidate in origin/br_agents $(git branch -r | grep '/br_agents$' | head -1 | tr -d ' '); do
+    if git rev-parse --verify "$candidate" &>/dev/null; then
+      TARGET_BRANCH="$candidate"
+      break
+    fi
+  done
+fi
+```
+
+**必须向用户展示以下信息并等待确认后才能继续**：
+
+> 📋 审查参数确认
+>
+> - **当前分支**: `$CURRENT_BRANCH`
+> - **目标分支**: `$TARGET_BRANCH` （来源：用户指定 / 上次缓存 / 自动探测）
+> - **变更文件数**: `git diff $TARGET_BRANCH...HEAD --name-only --relative | wc -l`
+> - **变更 .py 文件数**: `git diff $TARGET_BRANCH...HEAD --name-only --diff-filter=ACMR --relative | grep '\.py$' | wc -l`
+>
+> 确认以上信息正确？(y/n)，或指定其他目标分支。
+
+**⛔ 如果目标分支不存在或用户未确认，停止流程，不要猜测或 fallback。**
+
+确认后**保存本次配置到缓存**，并收集变更文件：
+
+```bash
+mkdir -p "$(dirname "$REVIEW_CACHE")"
+cat > "$REVIEW_CACHE" <<EOF
+target_branch=$TARGET_BRANCH
+current_branch=$CURRENT_BRANCH
+timestamp=$(date +%Y%m%d_%H%M%S)
+EOF
+
+CHANGED_FILES_LIST="$REVIEW_TMP_DIR/changed_files.txt"
+git diff $TARGET_BRANCH...HEAD --name-only --diff-filter=ACMR --relative | grep '\.py$' > "$CHANGED_FILES_LIST" || true
+FILE_COUNT=$(wc -l < "$CHANGED_FILES_LIST" | tr -d ' ')
+```
+
+**⛔ 后续所有工具必须通过 `xargs < "$CHANGED_FILES_LIST"` 或 `cat "$CHANGED_FILES_LIST"` 传入文件，禁止用 shell 变量 `$CHANGED_FILES` 拼接命令（LLM 容易将其整体加引号导致路径错误）。**
 
 ---
 
@@ -65,7 +122,7 @@ python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/check_rebase.py \
   --target-branch "$TARGET_BRANCH" \
   --current-branch "$CURRENT_BRANCH" \
   --repo-path "$AKG_AGENTS_DIR" \
-  --output /tmp/rebase_result.json
+  --output "$REVIEW_TMP_DIR/rebase_result.json"
 ```
 
 ---
@@ -75,11 +132,12 @@ python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/check_rebase.py \
 #### 3a. Ruff 检查（快速、全面）
 
 ```bash
-if [ -n "$CHANGED_FILES" ]; then
-  ruff check $CHANGED_FILES \
+if [ "$FILE_COUNT" -gt 0 ]; then
+  xargs ruff check \
     --select=E,F,W,C,N \
     --output-format=json \
-    > /tmp/ruff_result.json 2>&1 || true
+    < "$CHANGED_FILES_LIST" \
+    > "$REVIEW_TMP_DIR/ruff_result.json" 2>&1 || true
 fi
 ```
 
@@ -88,10 +146,11 @@ fi
 #### 3b. Bandit 安全检查（危险函数、SQL 注入等）
 
 ```bash
-if [ -n "$CHANGED_FILES" ]; then
-  bandit $CHANGED_FILES \
+if [ "$FILE_COUNT" -gt 0 ]; then
+  xargs bandit \
     --format json \
-    --output /tmp/bandit_result.json \
+    --output "$REVIEW_TMP_DIR/bandit_result.json" \
+    < "$CHANGED_FILES_LIST" \
     2>&1 || true
 fi
 ```
@@ -101,31 +160,36 @@ fi
 #### 3c. Mypy 类型检查（可选，如已安装）
 
 ```bash
-if [ "$MYPY_AVAILABLE" = "yes" ] && [ -n "$CHANGED_FILES" ]; then
-  mypy $CHANGED_FILES \
+if [ "$MYPY_AVAILABLE" = "yes" ] && [ "$FILE_COUNT" -gt 0 ]; then
+  xargs mypy \
     --no-error-summary \
     --show-column-numbers \
-    > /tmp/mypy_result.txt 2>&1 || true
+    < "$CHANGED_FILES_LIST" \
+    > "$REVIEW_TMP_DIR/mypy_result.txt" 2>&1 || true
 fi
 ```
 
 #### 3d. Vulture 死代码检测（可选，如已安装）
 
 ```bash
-if [ "$VULTURE_AVAILABLE" = "yes" ] && [ -n "$CHANGED_FILES" ]; then
-  vulture $CHANGED_FILES \
+if [ "$VULTURE_AVAILABLE" = "yes" ] && [ "$FILE_COUNT" -gt 0 ]; then
+  xargs vulture \
     --min-confidence 80 \
-    > /tmp/vulture_result.txt 2>&1 || true
+    < "$CHANGED_FILES_LIST" \
+    > "$REVIEW_TMP_DIR/vulture_result.txt" 2>&1 || true
 fi
 ```
 
 #### 3e. 自定义规则检查（项目特定）
 
 ```bash
-python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/check_code_style.py \
-  --files "$CHANGED_FILES" \
-  --repo-path "$AKG_AGENTS_DIR" \
-  --output /tmp/custom_style_result.json
+if [ "$FILE_COUNT" -gt 0 ]; then
+  CHANGED_FILES_INLINE=$(paste -sd ' ' "$CHANGED_FILES_LIST")
+  python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/check_code_style.py \
+    --files "$CHANGED_FILES_INLINE" \
+    --repo-path "$AKG_AGENTS_DIR" \
+    --output "$REVIEW_TMP_DIR/custom_style_result.json"
+fi
 ```
 
 **自定义检查**（4 条项目特定规则）：
@@ -138,24 +202,19 @@ python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/check_code_style.py \
 | CODE-013 | 错误包名（ai_kernel_generator） | error |
 | CODE-010 | TODO/FIXME 注释 | info |
 
-#### 3f. Mypy 类型检查（可选）
-
-如果环境中有 mypy，自动运行类型检查。
-
-#### 3g. Vulture 死代码检测（可选）
-
-如果环境中有 vulture，检测未使用的函数/变量。
-
 ---
 
 ### Step 4: SPEC.md 合规性检查
 
 ```bash
-python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/check_spec_compliance.py \
-  --files "$CHANGED_FILES" \
-  --base-branch "$TARGET_BRANCH" \
-  --repo-path "$AKG_AGENTS_DIR" \
-  --output /tmp/spec_result.json
+if [ "$FILE_COUNT" -gt 0 ]; then
+  CHANGED_FILES_INLINE=$(paste -sd ' ' "$CHANGED_FILES_LIST")
+  python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/check_spec_compliance.py \
+    --files "$CHANGED_FILES_INLINE" \
+    --base-branch "$TARGET_BRANCH" \
+    --repo-path "$AKG_AGENTS_DIR" \
+    --output "$REVIEW_TMP_DIR/spec_result.json"
+fi
 ```
 
 **检查规则**（7 条架构约束）：
@@ -180,12 +239,16 @@ mkdir -p $AKG_AGENTS_DIR/.tmp/review
 python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/generate_report.py \
   --current-branch "$CURRENT_BRANCH" \
   --target-branch "$TARGET_BRANCH" \
-  --rebase-result /tmp/rebase_result.json \
-  --ruff-result /tmp/ruff_result.json \
-  --custom-style-result /tmp/custom_style_result.json \
-  --spec-result /tmp/spec_result.json \
+  --rebase-result "$REVIEW_TMP_DIR/rebase_result.json" \
+  --ruff-result "$REVIEW_TMP_DIR/ruff_result.json" \
+  --bandit-result "$REVIEW_TMP_DIR/bandit_result.json" \
+  --custom-style-result "$REVIEW_TMP_DIR/custom_style_result.json" \
+  --spec-result "$REVIEW_TMP_DIR/spec_result.json" \
   --output-dir "$AKG_AGENTS_DIR/.tmp/review" \
   --repo-path "$AKG_AGENTS_DIR"
+
+# 清理临时目录
+rm -rf "$REVIEW_TMP_DIR"
 ```
 
 **报告格式**：
@@ -245,7 +308,7 @@ python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/generate_report.py \
 ```markdown
 ## Pre-submit Review Checklist
 
-**Branch**: `feature/xxx` → `origin_gitcode/br_agents`
+**Branch**: `feature/xxx` → `origin/br_agents`
 **Review Time**: 2026-04-02 16:30
 **Status**: ✅ PASS
 
@@ -283,7 +346,7 @@ python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/generate_report.py \
 | **mypy** | 类型检查 | 可选 |
 | **vulture** | 死代码检测 | 可选 |
 | **自定义脚本** | License、包名、参数值、SPEC.md | 内置 |
-| **git worktree** | Rebase 冲突 | 系统自带 |
+| **git worktree** | Rebase 冲突（用 `--detach` 避免分支锁定） | 系统自带 |
 
 ---
 
