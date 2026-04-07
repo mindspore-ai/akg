@@ -16,8 +16,8 @@
 Skill加载器
 
 支持从多个路径加载SKILL.md文件：
-- 项目级：.akg/skills, .claude/skills/, .opencode/skill/
-- 全局级：~/.akg/skills/, ~/.claude/skills/, ~/.config/opencode/skill/
+- 项目级：.akg/skills, .claude/skills/, .opencode/skills/
+- 全局级：~/.akg/skills/, ~/.claude/skills/, ~/.config/opencode/skills/
 - 自定义路径
 """
 
@@ -51,7 +51,7 @@ class SkillLoader:
     STANDARD_PATHS = [
         ".akg/skills",
         ".claude/skills",
-        ".opencode/skill",
+        ".opencode/skills",
     ]
     
     # 全局Skill目录
