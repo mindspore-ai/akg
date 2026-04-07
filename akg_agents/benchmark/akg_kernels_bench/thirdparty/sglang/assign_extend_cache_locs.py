@@ -65,6 +65,7 @@ class Model(nn.Module):
         out_cache_loc = torch.empty(
             (batch_size * draft_token_num,),
             dtype=torch.int64,
+            device=device,
         )
         assign_extend_cache_locs_kernel[(batch_size,)](
             req_pool_indices,

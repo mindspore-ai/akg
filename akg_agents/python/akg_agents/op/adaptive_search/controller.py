@@ -449,7 +449,7 @@ class AdaptiveSearchController:
                 if record:
                     logger.info(
                         f"Task {result.task_id} succeeded: "
-                        f"gen_time={record.gen_time:.4f}ms, speedup={record.speedup:.2f}x"
+                        f"gen_time={record.gen_time:.4f}us, speedup={record.speedup:.2f}x"
                     )
                     
                     # 立即发送性能结果到历史记录
