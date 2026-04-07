@@ -1,7 +1,7 @@
 ---
 name: vllm-mindspore-post-process
 description: "后处理优化 - 对计算结果进行优化处理，包括缓存、并行化、向量化等。"
-disable-model-invocation: true
+
 Triggers: 
   - 'vllm-mindspore后处理优化'
   - 'vllm-mindspore post process'
