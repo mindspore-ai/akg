@@ -21,7 +21,6 @@ metadata:
   - `k0 * n0 * sizeof(B.dtype) ≤ * KB`（L0B）
   - `m0 * n0 * sizeof(C.dtype) ≤ * KB`（L0C）
 - 所有数据传输按 **256 Bytes 对齐**，BLOCK_SIZE 为 32 的倍数最优
-- BLOCK_SIZE 必须小于 65536
 
 ## 2D 数据：优先 tl.make_block_ptr
 
@@ -60,5 +59,4 @@ class ModelNew(torch.nn.Module):
 
 ## 要点
 - 优先 `.contiguous()` + 一维访问
-- `torch.empty_like()` 创建的输出默认连续
 - 连续内存访问效率远高于 stride 计算开销

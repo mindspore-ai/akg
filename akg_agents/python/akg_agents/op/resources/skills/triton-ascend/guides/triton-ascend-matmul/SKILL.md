@@ -14,6 +14,25 @@ metadata:
 
 > 适用于矩阵乘法及相关运算
 
+## 核心数选择（硬约束）
+
+- 涉及 `tl.dot` / 矩阵乘法运算 → **必须使用 CUBE_CORE_NUM**
+- 混合运算（先 matmul 再 elementwise 后处理）→ **CUBE_CORE_NUM**
+- 纯 elementwise / 标量运算 → VEC_CORE_NUM
+
+**使用 VEC_CORE_NUM 启动 matmul kernel 会导致数值结果错误。**
+
+## Tile Size 限制（硬件约束）
+
+MatMul 数据走 L0A/L0B/L0C，tile 大小受硬件存储容量限制，超出会导致 `ub overflow` / `cbuf overflow` 编译错误。
+
+约束公式（具体容量参考目标硬件信息文档）：
+- L0A：`BLOCK_M × BLOCK_K × sizeof(dtype) ≤ L0A容量`
+- L0B：`BLOCK_K × BLOCK_N × sizeof(dtype) ≤ L0B容量`
+- L0C：`BLOCK_M × BLOCK_N × sizeof(acc_dtype) ≤ L0C容量`
+
+遇 `ub overflow` / `cbuf overflow` → **缩小 BLOCK_M, BLOCK_N 或 BLOCK_K**
+
 ## Ascend 后端切分优化
 
 **关键原则**: 充分发挥带宽，算子行宽为 512B 的整数倍。
@@ -102,6 +121,10 @@ def matmul_kernel(
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
+        try:
+            self.CUBE_CORE_NUM = torch_npu.npu.npu_config.get_device_limit(0).get("cube_core_num", 20)
+        except:
+            self.CUBE_CORE_NUM = 20
 
     def forward(self, a, b):
         M, K = a.shape
@@ -109,7 +132,7 @@ class ModelNew(torch.nn.Module):
         assert K == K2
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
 
-        num_cores = 20  # Ascend 910B4有20个CUBE Core
+        num_cores = self.CUBE_CORE_NUM
         BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 256
 
         matmul_kernel[(num_cores,)](
@@ -120,6 +143,6 @@ class ModelNew(torch.nn.Module):
 ```
 
 **关键点**:
-- 使用 `grid=(num_cores,)` 固定启动核心数(如20个CUBE Core)
+- 使用 `grid=(num_cores,)` 固定启动核心数（CUBE_CORE_NUM）
 - 每个核心通过 `for block_idx in range(pid, NUM_BLOCKS, num_cores)` 循环处理多个块
 - 不要使用 `grid=(NUM_BLOCKS_M * NUM_BLOCKS_N,)` 为每个块启动一个程序

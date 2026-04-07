@@ -20,13 +20,13 @@ Matmul 数据走 L0A/L0B/L0C，**不经过 UB**：
 
 | 缓冲区 | 容量 | 用途 | 约束 |
 |--------|------|------|------|
-| L0A | 64 KB | 左矩阵 A tile (m0 × k0) | `m0 × k0 × sizeof(A.dtype) ≤ **KB` |
-| L0B | 64 KB | 右矩阵 B tile (k0 × n0) | `k0 × n0 × sizeof(B.dtype) ≤ **KB` |
-| L0C | 128 KB | 结果 C tile (m0 × n0)，支持累加 | `m0 × n0 × sizeof(C.dtype) ≤ **KB` |
+| L0A | ** KB | 左矩阵 A tile (m0 × k0) | `m0 × k0 × sizeof(A.dtype) ≤ **KB` |
+| L0B | ** KB | 右矩阵 B tile (k0 × n0) | `k0 × n0 × sizeof(B.dtype) ≤ **KB` |
+| L0C | ** KB | 结果 C tile (m0 × n0)，支持累加 | `m0 × n0 × sizeof(C.dtype) ≤ **KB` |
 
-以 fp16 为例（2 字节/元素），L0A 可容纳 32K 个元素，即 BLOCK_M=128, BLOCK_K=256 恰好 64KB。
-
-以 fp32 为例（4 字节/元素），L0A 可容纳 16K 个元素，即 BLOCK_M=128, BLOCK_K=128 恰好 64KB。
+具体容量参考硬件规格：
+以 ascend910b4 fp16 为例（2 字节/元素），L0A 可容纳 32K 个元素，即 BLOCK_M=128, BLOCK_K=256 恰好 64KB。
+以 ascend910b4 fp32 为例（4 字节/元素），L0A 可容纳 16K 个元素，即 BLOCK_M=128, BLOCK_K=128 恰好 64KB。
 
 ### VEC 路径（element-wise / reduce / norm）
 
@@ -34,7 +34,7 @@ Matmul 数据走 L0A/L0B/L0C，**不经过 UB**：
 
 | 缓冲区 | 容量 | 说明 |
 |--------|------|------|
-| UB | 192 KB | 单 VEC 可用，编译器启用 auto-multi-buffer 后实际占用约 2-3 倍基础量 |
+| UB | ** KB | 单 VEC 可用，编译器启用 auto-multi-buffer 后实际占用约 2-3 倍基础量 |
 
 VEC 算子的 BLOCK_SIZE 需满足：所有活跃 tensor 的总大小 × multi-buffer 系数 ≤ 192KB。当 kernel 中有多个中间变量（如 tl.where 产生的临时缓冲）时，实际占用会显著高于 `BLOCK_SIZE × sizeof(dtype) × 输入数`。
 
@@ -58,12 +58,9 @@ for k in range(0, N, BLOCK_K):  # N 和 BLOCK_K 都是 constexpr
     ...
 ```
 
-### 2.2 其他已知限制
+### 2.2 其他编译器限制
 
-- `while` 循环 → 用 `for` + `if` 替代
-- `return` / `break` / `continue` → 用 mask 控制
-- 复杂 `tl.where` 用于内存偏移 → 拆分为 if-else 静态分支
-- BLOCK_SIZE 必须 < 65536
+详见 debugging 文档中的「禁止使用的语法」完整列表。
 
 ## 3. Strided memory access 的性能代价
 
