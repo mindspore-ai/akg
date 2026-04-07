@@ -62,6 +62,29 @@ akg_cli --help         # 验证安装
 
 ---
 
+## Skill 跨工具兼容
+
+Skill 定义统一存放在 `.opencode/skills/` 下，通过软链接让 OpenCode / Claude Code / Cursor 三个工具都能发现：
+
+```
+.opencode/skills/{name}/SKILL.md    ← 唯一数据源（canonical）
+.claude/skills/{name}  → ../../.opencode/skills/{name}   ← Claude Code skill 发现
+.claude/commands/{name}.md → ../../.opencode/skills/{name}/SKILL.md  ← Claude Code / 命令
+.cursor/skills/{name}  → ../../.opencode/skills/{name}   ← Cursor skill 发现
+```
+
+`workspace/` 下的布局与此一致。新增 skill 时：
+
+1. 将 skill 放入 `.opencode/skills/{skill-name}/SKILL.md`
+2. 运行以下命令同步软链接：
+   ```bash
+   ln -sf "../../.opencode/skills/{name}" ".claude/skills/{name}"
+   ln -sf "../../.opencode/skills/{name}/SKILL.md" ".claude/commands/{name}.md"
+   ln -sf "../../.opencode/skills/{name}" ".cursor/skills/{name}"
+   ```
+
+---
+
 ## 全局代码规范
 
 ### License 头

@@ -9,7 +9,7 @@
 
 ## 工作方式
 
-所有 Agent 和 Skill 定义在 `.opencode/agents/` 和 `.opencode/skills/` 下，由 code agent 自动加载，无需手动引用。
+所有 Agent 和 Skill 定义在 `.opencode/agents/` 和 `.opencode/skills/` 下。通过软链接（`.claude/ → .opencode/`、`.cursor/skills/ → ../.opencode/skills/`），OpenCode / Claude Code / Cursor 三个工具均可自动发现和加载，无需手动引用。
 
 - **环境准备、路径约定、变量定义、参数校验、Shell 规则** → 由 `akg-env-setup` skill 在首次使用时自动引导完成，结果缓存到 `~/.akg/check_env.md`
 - **算子优化 / 融合分析** → 切换到 `op-optimizer` agent
