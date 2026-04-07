@@ -430,7 +430,7 @@ def _normalize_bandit_issues(bandit_data) -> List[Dict]:
     """将 bandit JSON 输出转换为统一的 issue 格式"""
     results = bandit_data.get("results", []) if isinstance(bandit_data, dict) else []
     issues = []
-    severity_map = {"HIGH": "error", "MEDIUM": "error", "LOW": "warning"}
+    severity_map = {"HIGH": "error", "MEDIUM": "warning", "LOW": "warning"}
     for item in results:
         issues.append({
             "rule": item.get("test_id", "BANDIT"),
