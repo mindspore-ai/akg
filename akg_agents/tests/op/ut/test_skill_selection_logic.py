@@ -18,10 +18,10 @@ Skill 选择与 Evolution 逻辑 UT — 不依赖 LLM，纯逻辑验证
 覆盖：
 1. dsl_to_dir_key 转换
 2. KernelGen 实例属性、PARAMETERS_SCHEMA、run() 签名
-3. _infer_case_type 路径推断
+3. _infer_case_type metadata 推断（兼容旧 case category）
 4. _parse_unified_selection JSON 解析
-5. _assemble_skill_contents 排序与组装
-6. Stage → category 注入逻辑（源码检查）
+5. _assemble_skill_contents 排序与组装（含 fix/improvement category）
+6. Stage → category 注入逻辑（含 fix/improvement 识别，源码检查）
 7. nodes.py / evolution_processors 接口清理验证
 8. evolved_skill_loader 已删除
 9. AB test build_evolve_config A/B 模式
@@ -91,13 +91,12 @@ class TestKernelGenInterface:
         assert "handwrite_suggestions" in params
 
 
-# ========== 3. _infer_case_type ==========
+# ========== 3. _infer_case_type (兼容旧 category='case' 的 skill) ==========
 
 class TestInferCaseType:
     @dataclass
     class FakeSkill:
         metadata: dict = field(default_factory=dict)
-        skill_path: str = ""
 
     def test_metadata_case_type_fix(self, kg):
         assert kg._infer_case_type(self.FakeSkill(metadata={"case_type": "fix"})) == "fix"
@@ -105,14 +104,11 @@ class TestInferCaseType:
     def test_metadata_source_error_fix(self, kg):
         assert kg._infer_case_type(self.FakeSkill(metadata={"source": "error_fix"})) == "fix"
 
-    def test_path_evolved_fix(self, kg):
-        assert kg._infer_case_type(self.FakeSkill(skill_path="/evolved-fix/x/SKILL.md")) == "fix"
-
-    def test_path_evolved_improvement(self, kg):
-        assert kg._infer_case_type(self.FakeSkill(skill_path="/evolved-improvement/x/SKILL.md")) == "improvement"
+    def test_metadata_case_type_improvement(self, kg):
+        assert kg._infer_case_type(self.FakeSkill(metadata={"case_type": "improvement"})) == "improvement"
 
     def test_default_improvement(self, kg):
-        assert kg._infer_case_type(self.FakeSkill(skill_path="/cases/x/SKILL.md")) == "improvement"
+        assert kg._infer_case_type(self.FakeSkill()) == "improvement"
 
 
 # ========== 4. _parse_unified_selection ==========
@@ -154,6 +150,17 @@ class TestAssembleSkillContents:
         assert result.find("基础知识与规范") < result.find("算子优化指南") < \
                result.find("代码示例参考") < result.find("优化/修复案例")
 
+    def test_fix_and_improvement_in_case_section(self, kg):
+        skills = [
+            self.FakeSkill(name="fx", category="fix", content="fix-content"),
+            self.FakeSkill(name="imp", category="improvement", content="imp-content"),
+            self.FakeSkill(name="f", category="fundamental", content="f"),
+        ]
+        result = kg._assemble_skill_contents(skills)
+        assert "优化/修复案例" in result
+        assert "fix-content" in result
+        assert "imp-content" in result
+
 
 # ========== 6. Stage → category 注入逻辑 ==========
 
@@ -161,9 +168,10 @@ class TestStageCategories:
     """验证 _select_skills_by_stage 中各 stage 的 category 注入逻辑。
 
     实际逻辑内嵌在方法体中（非类属性），通过源码检查确认：
-    - initial: extras = []（不注入 case）
-    - debug:   extras = case_fix
-    - optimize: extras = _sample_cases(...)
+    - initial: extras = []（不注入 fix/improvement）
+    - debug:   extras = case_fix（fix category 全部注入）
+    - optimize: extras = _sample_cases(...)（improvement 参与采样）
+    - 分类时识别 fix / improvement / case 三种 category
     """
 
     @pytest.fixture(autouse=True)
@@ -179,6 +187,10 @@ class TestStageCategories:
     def test_debug_and_optimize_have_case(self):
         assert 'extras = case_fix' in self.source or "extras = [s for s in case_fix" in self.source
         assert '_sample_cases' in self.source
+
+    def test_recognizes_fix_and_improvement_categories(self):
+        assert 'cat == "fix"' in self.source
+        assert 'cat == "improvement"' in self.source
 
 
 # ========== 7. 接口清理验证 ==========

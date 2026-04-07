@@ -1,9 +1,9 @@
 ---
 name: triton-ascend-performance-improvement
 description: |
-  Triton Ascend 性能优化实战经验。从批量自适应搜索中提炼的通用优化模式，覆盖 tile 调优方法论、内存加载优化、reduction 优化、隐式广播等。
-category: evolved-improvement
-version: "1.1.0"
+  Triton Ascend 性能优化实战经验。从批量自适应搜索中提炼的通用优化模式，覆盖 tile 调优方法论、内存加载优化、reduction 优化、隐式广播、多 Pass 合并、数据访问重构等。
+category: improvement
+version: "1.0.0"
 metadata:
   case_type: improvement
   backend: ascend
@@ -67,3 +67,21 @@ c_tile = a_tile[:, None] * b_tile
 stride_am, stride_ak = A.stride(0), A.stride(1)
 kernel[grid](A_ptr, ..., stride_am, stride_ak, ...)
 ```
+
+## 多 Pass 合并为单 Pass
+
+当算子对同一数据进行多次独立遍历时（如 softmax 的 max→exp_sum→normalize，或 topk 的多次扫描），应合并为单次遍历。每减少一次 HBM 读取，理论上可获得等比例加速。多 pass 合并对归约维度较小（能放入单个 BLOCK）的场景效果最佳。
+
+## Strided 访问模式重构
+
+当算子涉及非连续的 strided 访问（如需要访问相邻元素的配对计算），应重构数据加载策略：
+- 改为按语义分组处理，使相关元素落在同一 block 内
+- 避免 `flat_idx % D` + 跨 stride 的随机访问
+- 连续加载后在块内处理配对关系，利用数据局部性
+
+Ascend 硬件对非连续访问有显著性能惩罚，重构后性能差距可达数倍至数十倍。
+
+## Normalization 两阶段优于单 Pass
+
+对于 LayerNorm/RMSNorm 类算子，两阶段方案（第一遍统计 mean/var，第二遍归一化）通常优于单 pass（在线统计）。
+原因：单 pass 循环体内活跃 tensor 增多，UB 压力增大，编译器流水线优化效率下降。实测中 2-pass 比单 pass 快约 20%。

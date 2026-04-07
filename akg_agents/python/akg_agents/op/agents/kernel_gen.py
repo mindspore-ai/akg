@@ -23,27 +23,22 @@ KernelGen Agent - 基于 Skill 系统的内核代码生成 Agent
 """
 
 import logging
-import os
 import re
 from pathlib import Path
-
-from akg_agents.core_v2.skill.metadata import dsl_to_dir_key
 from typing import Dict, Any, Tuple, List, Optional
+
 from akg_agents import get_project_root
 from akg_agents.core_v2.agents import AgentBase, register_agent, Jinja2TemplateWrapper
-from akg_agents.core_v2.filesystem import ActionRecord
-from akg_agents.op.utils.triton_ascend_api_docs import (
-    resolve_triton_ascend_api_docs,
-)
-from akg_agents.utils.hardware_utils import get_hardware_doc
-
-# 导入 skill 系统模块
 from akg_agents.core_v2.skill import SkillLoader
-# 使用算子专用的 SkillSelector
+from akg_agents.core_v2.skill.metadata import dsl_to_dir_key
 from akg_agents.op.skill.operator_selector import (
     OperatorSkillSelector,
     OperatorSelectionContext,
 )
+from akg_agents.op.utils.triton_ascend_api_docs import (
+    resolve_triton_ascend_api_docs,
+)
+from akg_agents.utils.hardware_utils import get_hardware_doc
 
 # 设置 Skills 目录路径
 project_root = Path(get_project_root())
@@ -289,7 +284,6 @@ class KernelGen(AgentBase):
 
         full_pool = {s.name: s for s in all_skills}
 
-        # 不受 stage 限制，全量分类所有 skill
         always_skills: List[Any] = []
         guide_candidates: List[Any] = []
         example_candidates: List[Any] = []
@@ -304,6 +298,10 @@ class KernelGen(AgentBase):
                 guide_candidates.append(skill)
             elif cat == "example":
                 example_candidates.append(skill)
+            elif cat == "fix":
+                case_fix.append(skill)
+            elif cat == "improvement":
+                case_improve.append(skill)
             elif cat == "case":
                 ct = self._infer_case_type(skill)
                 if ct == "fix":
@@ -433,8 +431,10 @@ class KernelGen(AgentBase):
 
     @staticmethod
     def _infer_case_type(skill) -> str:
-        """推断 case skill 类型：fix（错误修复）或 improvement（性能优化）。
-        优先级：metadata.case_type > metadata.source > 目录名推断 > 默认 improvement。
+        """推断 category='case' 的 skill 属于 fix 还是 improvement。
+
+        仅用于兼容旧 skill（category='case' 但无独立 fix/improvement category）。
+        新 evolved skill 应直接使用 category='fix' 或 'improvement'。
         """
         meta = getattr(skill, "metadata", {}) or {}
         ct = meta.get("case_type", "")
@@ -443,13 +443,6 @@ class KernelGen(AgentBase):
         source = meta.get("source", "")
         if source == "error_fix":
             return "fix"
-        skill_path = getattr(skill, "skill_path", None)
-        if skill_path:
-            path_str = str(skill_path)
-            if "evolved-fix" in path_str:
-                return "fix"
-            if "evolved-improvement" in path_str:
-                return "improvement"
         return "improvement"
 
     async def _llm_select_guides_and_cases(
@@ -587,7 +580,7 @@ class KernelGen(AgentBase):
     CATEGORY_LAYER = {
         "fundamental": (0, 0), "reference": (0, 1),
         "guide": (1, 0), "example": (1, 1),
-        "case": (2, 0),
+        "case": (2, 0), "fix": (2, 1), "improvement": (2, 2),
     }
 
     def _sort_key(self, skill):
@@ -602,14 +595,15 @@ class KernelGen(AgentBase):
 
         sorted_skills = sorted(selected_skills, key=self._sort_key)
 
-        fundamentals = [s for s in sorted_skills
-                        if (getattr(s, "category", "") or "") in ("fundamental", "reference")]
-        guides = [s for s in sorted_skills
-                  if (getattr(s, "category", "") or "") == "guide"]
-        examples = [s for s in sorted_skills
-                    if (getattr(s, "category", "") or "") == "example"]
-        cases = [s for s in sorted_skills
-                 if (getattr(s, "category", "") or "") == "case"]
+        def _cat(s):
+            return getattr(s, "category", "") or ""
+
+        fundamentals = [s for s in sorted_skills if _cat(s) in ("fundamental", "reference")]
+        guides = [s for s in sorted_skills if _cat(s) == "guide"]
+        examples = [s for s in sorted_skills if _cat(s) == "example"]
+        fixes = [s for s in sorted_skills if _cat(s) == "fix"]
+        improvements = [s for s in sorted_skills if _cat(s) == "improvement"]
+        cases = [s for s in sorted_skills if _cat(s) == "case"]
 
         sections = []
         if fundamentals:
@@ -621,8 +615,9 @@ class KernelGen(AgentBase):
         if examples:
             content = "\n\n---\n\n".join(s.content for s in examples)
             sections.append(f"### 代码示例参考\n\n{content}")
-        if cases:
-            content = "\n\n---\n\n".join(s.content for s in cases)
+        all_fix_improve = fixes + improvements + cases
+        if all_fix_improve:
+            content = "\n\n---\n\n".join(s.content for s in all_fix_improve)
             sections.append(f"### 优化/修复案例\n\n{content}")
 
         order_desc = [f"{s.name}[{getattr(s, 'category', '?')}]" for s in sorted_skills]
