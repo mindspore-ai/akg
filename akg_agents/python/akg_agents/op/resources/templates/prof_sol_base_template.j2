@@ -1,0 +1,127 @@
+import os
+import json
+import math
+import time
+import sys
+
+import torch
+
+from sol_correctness import set_seed
+
+sys.path.append("{{ sol_execbench_src_dir }}")
+
+_OPTIONAL_DTYPES = {
+    "float4_e2m1fn_x2": None,
+    "float8_e4m3fn": None,
+    "float8_e5m2": None,
+}
+for _attr_name, _fallback in _OPTIONAL_DTYPES.items():
+    if not hasattr(torch, _attr_name):
+        setattr(torch, _attr_name, _fallback)
+
+from sol_execbench.core.bench.io import gen_inputs
+from sol_execbench.core.data import Definition, Workload
+import reference
+ref_run = reference.run
+
+
+def sync_device(backend):
+    if backend == "cuda":
+        torch.cuda.synchronize()
+    elif backend == "ascend":
+        torch.npu.synchronize()
+
+
+def run_sol_base_profile():
+    result_data = None
+    try:
+        backend = "{{ backend }}"
+
+        # Device setup
+    {% for line in device_setup_code %}
+        {{ line }}
+    {% endfor %}
+
+        with open("definition.json", "r", encoding="utf-8") as f:
+            definition_dict = json.load(f)
+        with open("workload.jsonl", "r", encoding="utf-8") as f:
+            workloads = [json.loads(line) for line in f if line.strip()]
+
+        definition_obj = Definition.model_validate(definition_dict)
+        _custom_inputs_fn = (
+            getattr(reference, definition_obj.custom_inputs_entrypoint)
+            if definition_obj.custom_inputs_entrypoint else None
+        )
+
+        warmup_times = {{ warmup_times }}
+        run_times = {{ run_times }}
+        all_workload_times_ms = []
+        method = "sol_base_profiler_npu" if backend == "ascend" else "sol_base_do_bench"
+
+        for wl_idx, workload_dict in enumerate(workloads):
+            workload_obj = Workload.model_validate(workload_dict)
+
+            set_seed(42)
+            inputs_list = gen_inputs(
+                definition=definition_obj,
+                workload=workload_obj,
+                device=device,
+                safe_tensors=None,
+                custom_inputs_fn=_custom_inputs_fn,
+            )
+
+            def base_fn(_inputs=inputs_list):
+                return ref_run(*_inputs)
+
+            for _ in range(warmup_times):
+                _ = base_fn()
+                sync_device(backend)
+
+            sync_device(backend)
+            start_time = time.perf_counter()
+            for _ in range(run_times):
+                _ = base_fn()
+                sync_device(backend)
+            end_time = time.perf_counter()
+
+            execution_time_ms = (end_time - start_time) * 1000.0 / max(run_times, 1)
+            all_workload_times_ms.append(execution_time_ms)
+            print(f"[{{ op_name }}] Workload {wl_idx + 1}/{len(workloads)} base time: {execution_time_ms * 1000:.4f} us")
+
+        log_sum = sum(math.log(max(t, 1e-12)) for t in all_workload_times_ms)
+        geomean_time_ms = math.exp(log_sum / len(all_workload_times_ms))
+
+        result_data = {
+            "execution_time_ms": geomean_time_ms,
+            "execution_time_us": geomean_time_ms * 1000,
+            "avg_time_us": geomean_time_ms * 1000,
+            "warmup_times": warmup_times,
+            "run_times": run_times,
+            "workload_count": len(workloads),
+            "workload_times_us": [t * 1000 for t in all_workload_times_ms],
+            "method": method,
+            "bench_type": "sol",
+        }
+
+        print(f"[{{ op_name }}] Geometric mean base time: {geomean_time_ms * 1000:.4f} us")
+
+    except Exception as e:
+        print(f"[{{ op_name }}] SOL base profiling failed: {e}", flush=True)
+        import traceback; traceback.print_exc()
+        result_data = {
+            "execution_time_ms": None,
+            "execution_time_us": None,
+            "avg_time_us": None,
+            "error": str(e),
+        }
+    finally:
+        if result_data is not None:
+            for k, v in result_data.items():
+                if isinstance(v, float) and (v != v or v == float("inf") or v == float("-inf")):
+                    result_data[k] = None
+            with open("base_profile_result.json", "w") as f:
+                json.dump(result_data, f, indent=2)
+
+
+if __name__ == "__main__":
+    run_sol_base_profile()
