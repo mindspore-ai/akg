@@ -241,6 +241,18 @@ static Value buildSign(PatternRewriter &rewriter, Location loc, Value x, TaylerM
   llvm_unreachable("unsupported TaylerMode");
 }
 
+static Value clipInput(PatternRewriter &rewriter, Location loc, Value input, double maxVal, double minVal) {
+  auto elemTy = getElementTypeOrSelf(input.getType());
+  Value maxCst = buildFloatConst(rewriter, loc, elemTy, maxVal);
+  Value minCst = buildFloatConst(rewriter, loc, elemTy, minVal);
+
+  Value cmpMax = rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OLT, input, maxCst);
+  Value selMax = rewriter.create<arith::SelectOp>(loc, cmpMax, input, maxCst);
+
+  Value cmpMin = rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OGT, selMax, minCst);
+  return rewriter.create<arith::SelectOp>(loc, cmpMin, selMax, minCst);
+}
+
 struct NormalizeSinOp : public OpRewritePattern<math::SinOp> {
   using OpRewritePattern<math::SinOp>::OpRewritePattern;
 
@@ -334,6 +346,54 @@ struct NormalizeCosOp : public OpRewritePattern<math::CosOp> {
 
     // step 5: cos(x) ≈ sinTayler(norm(x, xRound, pi/2)) * sign(xRound)
     Value res = rewriter.create<arith::MulFOp>(loc, cosTayler, signX);
+
+    if (needCastBack) {
+      auto f16Ty = rewriter.getF16Type();
+      res = rewriter.create<arith::TruncFOp>(loc, f16Ty, res);
+    }
+
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
+struct NormalizeTanhOp : public OpRewritePattern<math::TanhOp> {
+  using OpRewritePattern<math::TanhOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(math::TanhOp op, PatternRewriter &rewriter) const override {
+    Value input = op.getOperand();
+    auto inTy = getElementTypeOrSelf(input.getType());
+    auto fTy = dyn_cast<FloatType>(inTy);
+    if (!fTy || (!fTy.isF16() && !fTy.isF32())) return failure();
+
+    Location loc = op.getLoc();
+
+    bool needCastBack = fTy.isF16();
+    if (needCastBack) {
+      auto f32Ty = rewriter.getF32Type();
+      input = rewriter.create<arith::ExtFOp>(loc, f32Ty, input);
+      fTy = f32Ty;
+    }
+
+    // step 1: clip input to [-8.8, 8.8] to avoid overflow in exp(2x)
+    // tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
+    // when x is too large, exp(2x) will overflow
+    Value clippedInput = clipInput(rewriter, loc, input, 8.8, -8.8);
+
+    // step 2: y = exp(2x)
+    Value two = buildFloatConst(rewriter, loc, fTy, 2.0);
+    Value mul2x = rewriter.create<arith::MulFOp>(loc, clippedInput, two);
+    Value exp2x = rewriter.create<math::ExpOp>(loc, mul2x);
+
+    // step 3: number = exp(2x) - 1
+    Value one = buildFloatConst(rewriter, loc, fTy, 1.0);
+    Value number = rewriter.create<arith::SubFOp>(loc, exp2x, one);
+
+    // step 4: denom = exp(2x) + 1
+    Value denom = rewriter.create<arith::AddFOp>(loc, exp2x, one);
+
+    // step 5: tanh(x) = number / denom
+    Value res = rewriter.create<arith::DivFOp>(loc, number, denom);
 
     if (needCastBack) {
       auto f16Ty = rewriter.getF16Type();
@@ -567,6 +627,7 @@ void populateNormalizeMathPatterns(RewritePatternSet &patterns) {
   patterns.add<NormalizePowfOp>(patterns.getContext());
   patterns.add<NormalizeSinOp>(patterns.getContext());
   patterns.add<NormalizeCosOp>(patterns.getContext());
+  patterns.add<NormalizeTanhOp>(patterns.getContext());
 }
 
 namespace {
