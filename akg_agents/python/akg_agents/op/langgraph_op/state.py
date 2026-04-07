@@ -40,6 +40,7 @@ class KernelGenState(BaseState, total=False):
     backend: str                    # 后端：cuda, ascend
     arch: str                       # 架构：a100, ascend910b4
     task_type: str                  # 任务类型：profile, precision_only
+    bench_type: str                 # 基准测试类型：kernelbench, sol
     
     # === Designer 输出 ===
     designer_code: Optional[str]
