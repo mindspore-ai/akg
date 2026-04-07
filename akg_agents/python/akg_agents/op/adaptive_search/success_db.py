@@ -118,7 +118,7 @@ class SuccessDB:
         
         self._records[record.id] = record
         self._record_ids.append(record.id)
-        logger.info(f"Added record {record.id} to SuccessDB. gen_time={record.gen_time:.4f}ms, speedup={record.speedup:.2f}x. DB size: {len(self._records)}")
+        logger.info(f"Added record {record.id} to SuccessDB. gen_time={record.gen_time:.4f}us, speedup={record.speedup:.2f}x. DB size: {len(self._records)}")
         self._save_to_disk()
         return True
     

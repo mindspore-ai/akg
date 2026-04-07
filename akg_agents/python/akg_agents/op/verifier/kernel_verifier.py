@@ -262,13 +262,20 @@ import torch
 import sys
 import os
 
-# Add current directory to sys.path
 sys.path.append(os.getcwd())
+
+def _deep_to(obj, device):
+    if isinstance(obj, torch.Tensor):
+        return obj.to(device)
+    elif isinstance(obj, list):
+        return [_deep_to(x, device) for x in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_deep_to(x, device) for x in obj)
+    return obj
 
 def run_check():
     print("Starting reference check...")
     try:
-        # Import from reference
         try:
             from reference import Model, get_inputs, get_init_inputs
         except ImportError as e:
@@ -277,7 +284,6 @@ def run_check():
             
         print("Successfully imported Model and helper functions.")
         
-        # Determine device and set to specific device_id
         device = "cpu"
         if torch.cuda.is_available():
             device = "cuda"
@@ -288,7 +294,6 @@ def run_check():
 
         print(f"Using device: {{device}}:{device_id}")
         
-        # Instantiate model
         try:
             init_inputs = get_init_inputs()
             model = Model(*init_inputs)
@@ -299,16 +304,19 @@ def run_check():
             print(f"Model instantiation failed: {{e}}")
             return False
             
-        # Get inputs
+        if device != "cpu":
+            torch.set_default_device(device)
         try:
             inputs = get_inputs()
             if device != "cpu":
-                inputs = [inp.to(device) if isinstance(inp, torch.Tensor) else inp for inp in inputs]
+                inputs = _deep_to(inputs, device)
         except Exception as e:
             print(f"get_inputs failed: {{e}}")
             return False
+        finally:
+            if device != "cpu":
+                torch.set_default_device("cpu")
             
-        # Run forward pass
         try:
             output = model(*inputs)
             print("Forward pass successful.")
@@ -361,7 +369,8 @@ if __name__ == "__main__":
             # 清理临时目录
             shutil.rmtree(check_dir, ignore_errors=True)
 
-    async def generate_reference_data(self, task_desc: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
+    async def generate_reference_data(self, task_desc: str, timeout: int = 120,
+                                      save_inputs: bool = False) -> Tuple[bool, str, bytes]:
         """
         在 GPU 上执行 task_desc 并生成参考数据
         
@@ -371,6 +380,8 @@ if __name__ == "__main__":
         Args:
             task_desc: task_desc 代码字符串（Triton-CUDA 代码）
             timeout: 超时时间
+            save_inputs: 是否同时保存 inputs 和 init_inputs 到参考数据中。
+                         当 True 时，验证端可完全脱离源平台依赖（不需要 import framework 代码）。
             
         Returns:
             Tuple[bool, str, bytes]: (是否成功, 日志, 参考数据bytes)
@@ -388,19 +399,48 @@ if __name__ == "__main__":
                 f.write(task_desc)
             
             # 3. 生成参考数据脚本
-            # 使用固定 seed=0 确保可复现性
+            save_inputs_flag = "True" if save_inputs else "False"
             gen_ref_script = f'''
 import torch
 import sys
 import os
 
-# Add current directory to sys.path
 sys.path.append(os.getcwd())
+
+def _deep_to(obj, device):
+    """Recursively move tensors to device, handling nested list/tuple."""
+    if isinstance(obj, torch.Tensor):
+        return obj.to(device)
+    elif isinstance(obj, list):
+        return [_deep_to(x, device) for x in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_deep_to(x, device) for x in obj)
+    return obj
+
+def _deep_clone(obj):
+    """Recursively clone tensors, handling nested list/tuple."""
+    if isinstance(obj, torch.Tensor):
+        return obj.clone()
+    elif isinstance(obj, list):
+        return [_deep_clone(x) for x in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_deep_clone(x) for x in obj)
+    return obj
+
+def _deep_cpu(obj):
+    """Recursively move tensors to CPU, handling nested list/tuple."""
+    if isinstance(obj, torch.Tensor):
+        return obj.cpu()
+    elif isinstance(obj, list):
+        return [_deep_cpu(x) for x in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_deep_cpu(x) for x in obj)
+    return obj
 
 def generate_reference():
     print("Starting reference data generation...")
+    save_inputs = {save_inputs_flag}
     try:
-        # Import from reference
         try:
             from reference import Model, get_inputs, get_init_inputs
         except ImportError as e:
@@ -409,7 +449,6 @@ def generate_reference():
         
         print("Successfully imported Model and helper functions.")
         
-        # Determine device
         device = "cpu"
         if torch.cuda.is_available():
             device = "cuda"
@@ -418,11 +457,9 @@ def generate_reference():
         
         print(f"Using device: {{device}}")
         
-        # Fixed seed for reproducibility
         torch.manual_seed(0)
         print("[INFO] Random seed: 0")
         
-        # Instantiate model
         try:
             init_inputs = get_init_inputs()
             model = Model(*init_inputs)
@@ -433,17 +470,25 @@ def generate_reference():
             print(f"Model instantiation failed: {{e}}")
             return False
         
-        # Get inputs with fixed seed
+        if device != "cpu":
+            torch.set_default_device(device)
+        
         torch.manual_seed(0)
         try:
             inputs = get_inputs()
             if device != "cpu":
-                inputs = [inp.to(device) if isinstance(inp, torch.Tensor) else inp for inp in inputs]
+                inputs = _deep_to(inputs, device)
         except Exception as e:
             print(f"get_inputs failed: {{e}}")
             return False
+        finally:
+            if device != "cpu":
+                torch.set_default_device("cpu")
         
-        # Run forward pass
+        inputs_snapshot = None
+        if save_inputs:
+            inputs_snapshot = _deep_clone(inputs)
+        
         try:
             with torch.no_grad():
                 outputs = model(*inputs)
@@ -452,20 +497,27 @@ def generate_reference():
             print(f"Forward pass failed: {{e}}")
             return False
         
-        # Ensure outputs is a list
         if not isinstance(outputs, (list, tuple)):
             outputs = [outputs]
         
-        # Move to CPU for saving
-        outputs_cpu = [x.cpu() if isinstance(x, torch.Tensor) else x for x in outputs]
+        outputs_cpu = _deep_cpu(outputs)
         
-        # Save reference data
         ref_data = {{
             'op_name': '{self.op_name}',
             'seed': 0,
             'outputs': outputs_cpu,
             'output_shapes': [x.shape if isinstance(x, torch.Tensor) else None for x in outputs_cpu],
+            'output_dtypes': [str(x.dtype) if isinstance(x, torch.Tensor) else None for x in outputs_cpu],
         }}
+        
+        if save_inputs:
+            inputs_cpu = _deep_cpu(inputs_snapshot)
+            ref_data['save_inputs'] = True
+            ref_data['inputs'] = inputs_cpu
+            ref_data['input_shapes'] = [x.shape if isinstance(x, torch.Tensor) else None for x in inputs_cpu]
+            ref_data['input_dtypes'] = [str(x.dtype) if isinstance(x, torch.Tensor) else None for x in inputs_cpu]
+            ref_data['init_inputs'] = init_inputs
+            print(f"[INFO] save_inputs=True, saving inputs ({{len(inputs_cpu)}}) and init_inputs ({{len(init_inputs)}})")
         
         ref_file = os.path.join(os.getcwd(), "{self.op_name}_reference.pt")
         torch.save(ref_data, ref_file)
@@ -848,6 +900,9 @@ if __name__ == "__main__":
                 logger.warning(f"[{self.op_name}] use_reference_data=True 但未找到 reference_data")
                 use_reference_data = False
         
+        # use_reference_inputs 依赖 use_reference_data，且要求 .pt 中包含 inputs
+        use_reference_inputs = self.config.get('use_reference_inputs', False) and use_reference_data
+        
         # 创建框架实现文件
         framework_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
         try:
@@ -1000,6 +1055,7 @@ if __name__ == "__main__":
                 timeout=self.config.get('verify_timeout', 300),
                 # 参考数据模式（用于跨后端转换场景）
                 use_reference_data=use_reference_data,
+                use_reference_inputs=use_reference_inputs,
                 reference_file=reference_file,
                 # Adapter生成的代码
                 framework_imports=self._prepare_code_lines(framework_imports),

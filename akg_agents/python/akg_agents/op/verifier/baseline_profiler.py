@@ -47,6 +47,9 @@ async def profile_baseline_once(
     
     根据 config["bench_type"] 自动选择 KernelBench 或 SOL-ExecBench 的 baseline profiling 流程。
     
+    设备分配通过 worker 的 device_pool acquire/release 管理，
+    与正常 verify/profile 流程保持一致。
+    
     Args:
         op_name: 算子名称
         task_desc: 任务描述（KernelBench: 框架代码；SOL: 中文描述文本）
@@ -89,9 +92,13 @@ async def _profile_kernelbench_baseline(
     timeout: int
 ) -> Optional[float]:
     """KernelBench 模式的 baseline profiling（原有逻辑）"""
+    acquired_device = None
+    worker = None
     try:
         from akg_agents.op.verifier.kernel_verifier import KernelVerifier
         from akg_agents.core.worker.manager import get_worker_manager
+        from akg_agents.core.worker.local_worker import LocalWorker
+        from akg_agents.core.worker.remote_worker import RemoteWorker
         
         logger.info(f"[{op_name}] 🚀 开始预先 profile baseline（只测一次）...")
         
@@ -99,6 +106,17 @@ async def _profile_kernelbench_baseline(
         if not worker:
             logger.warning(f"[{op_name}] 无法获取 worker，跳过预先 profile baseline")
             return None
+        
+        # 从 device_pool acquire 设备（与 run_profile/run 流程一致）
+        device_id = 0
+        if isinstance(worker, LocalWorker) and worker.device_pool:
+            acquired_device = await worker.device_pool.acquire_device()
+            device_id = acquired_device
+            logger.info(f"[{op_name}] Acquired device {device_id} from pool for baseline profile")
+        elif isinstance(worker, RemoteWorker):
+            acquired_device = await worker.acquire_device(task_id="baseline_profile")
+            device_id = acquired_device
+            logger.info(f"[{op_name}] Acquired remote device {device_id} for baseline profile")
         
         verifier = KernelVerifier(
             op_name=op_name,
@@ -117,14 +135,14 @@ async def _profile_kernelbench_baseline(
             warmup_times=warmup_times,
             run_times=run_times,
             timeout=timeout,
-            device_id=0
+            device_id=device_id
         )
         
         if result.get('success', False):
             baseline_time_us = result.get('time_us')
             if baseline_time_us and baseline_time_us > 0 and baseline_time_us < float('inf'):
                 logger.info(f"[{op_name}] ✅ Baseline profile 完成: {baseline_time_us:.2f}us")
-                _save_baseline_profile_scripts(verifier, op_name, task_desc, warmup_times, run_times)
+                _save_baseline_profile_scripts(verifier, op_name, task_desc, warmup_times, run_times, device_id)
                 return baseline_time_us
             else:
                 logger.warning(f"[{op_name}] Baseline profile 结果无效: {baseline_time_us}")
@@ -137,6 +155,19 @@ async def _profile_kernelbench_baseline(
     except Exception as e:
         logger.warning(f"[{op_name}] 预先 profile baseline 失败: {e}")
         return None
+    finally:
+        if acquired_device is not None and worker is not None:
+            try:
+                from akg_agents.core.worker.local_worker import LocalWorker
+                from akg_agents.core.worker.remote_worker import RemoteWorker
+                if isinstance(worker, LocalWorker) and worker.device_pool:
+                    await worker.device_pool.release_device(acquired_device)
+                    logger.info(f"[{op_name}] Released device {acquired_device} after baseline profile")
+                elif isinstance(worker, RemoteWorker):
+                    await worker.release_device(acquired_device, task_id="baseline_profile")
+                    logger.info(f"[{op_name}] Released remote device {acquired_device} after baseline profile")
+            except Exception as e:
+                logger.warning(f"[{op_name}] Failed to release device {acquired_device}: {e}")
 
 
 async def _profile_sol_baseline(
@@ -348,7 +379,8 @@ def _pack_directory(dir_path: str) -> bytes:
 
 
 def _save_baseline_profile_scripts(verifier, op_name: str, task_desc: str, 
-                                   warmup_times: int, run_times: int) -> None:
+                                   warmup_times: int, run_times: int,
+                                   device_id: int = 0) -> None:
     """
     保存 KernelBench baseline profile 脚本到 log 目录
     """
@@ -364,7 +396,7 @@ def _save_baseline_profile_scripts(verifier, op_name: str, task_desc: str,
             f.write(task_desc)
         
         script_file = os.path.join(baseline_dir, f"profile_baseline_{op_name}.py")
-        verifier.gen_profile_single_task_file(script_file, device_id=0, 
+        verifier.gen_profile_single_task_file(script_file, device_id=device_id, 
                                               warmup_times=warmup_times, 
                                               run_times=run_times)
         
