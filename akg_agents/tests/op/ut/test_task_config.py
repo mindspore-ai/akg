@@ -129,6 +129,41 @@ class TestTaskConfig:
         print("正确捕获边界情况错误")
 
     @pytest.mark.level0
+    def test_empty_values_for_each_param(self):
+        """测试每个参数为空时都会报错（防止隐式默认值遗漏）"""
+        # check_task_config 签名: (framework, backend, arch, dsl)
+
+        # framework 为空
+        with pytest.raises((ValueError, AttributeError)):
+            check_task_config("", "ascend", "ascend910b4", "triton_ascend")
+        with pytest.raises((ValueError, AttributeError)):
+            check_task_config(None, "ascend", "ascend910b4", "triton_ascend")
+
+        # backend 为空
+        with pytest.raises((ValueError, AttributeError)):
+            check_task_config("torch", "", "ascend910b4", "triton_ascend")
+        with pytest.raises((ValueError, AttributeError)):
+            check_task_config("torch", None, "ascend910b4", "triton_ascend")
+
+        # arch 为空
+        with pytest.raises((ValueError, AttributeError)):
+            check_task_config("torch", "ascend", "", "triton_ascend")
+        with pytest.raises((ValueError, AttributeError)):
+            check_task_config("torch", "ascend", None, "triton_ascend")
+
+        # dsl 为空
+        with pytest.raises((ValueError, AttributeError)):
+            check_task_config("torch", "ascend", "ascend910b4", "")
+        with pytest.raises((ValueError, AttributeError)):
+            check_task_config("torch", "ascend", "ascend910b4", None)
+
+        # 全部为空
+        with pytest.raises((ValueError, AttributeError)):
+            check_task_config(None, None, None, None)
+
+        print("正确捕获每个参数为空的情况")
+
+    @pytest.mark.level0
     def test_all_valid_combinations(self):
         """测试所有有效的组合"""
         # 根据VALID_CONFIGS映射表测试所有有效组合

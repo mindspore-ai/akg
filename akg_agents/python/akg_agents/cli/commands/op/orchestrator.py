@@ -15,24 +15,23 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import List
 
-import logging
 import typer
 
-log = logging.getLogger(__name__)
-
-from akg_agents.cli.service import CLIAppServices
+from akg_agents.cli.console import AKGConsole
 from akg_agents.cli.constants import DisplayStyle
+from akg_agents.cli.runtime import LocalExecutor
+from akg_agents.cli.service import CLIAppServices, validate_target_config
+from akg_agents.cli.utils.device_parser import parse_devices
+from akg_agents.cli.utils.ui_helpers import print_logo_once
+from ..trace import resolve_session_dir, SessionResolveError
 from .runners import InteractiveOpRunner
 from .types import OpCommandArgs, ResolvedTargetConfig
-from akg_agents.cli.runtime import LocalExecutor
-from akg_agents.cli.utils.ui_helpers import print_logo_once
-from akg_agents.cli.service import validate_target_config
-from akg_agents.cli.utils.device_parser import parse_devices
-from akg_agents.cli.console import AKGConsole
-from ..trace import resolve_session_dir, SessionResolveError
+
+log = logging.getLogger(__name__)
 
 
 class OpCommandOrchestrator:
@@ -62,14 +61,13 @@ class OpCommandOrchestrator:
     @staticmethod
     def _load_target_from_trace(session_dir, console) -> "ResolvedTargetConfig | None":
         """从已有 session 的 trace 中恢复 target 配置 (framework/backend/arch/dsl)
-        
+
         查找策略：
         1. 优先从 root 节点的 task_info 中获取（新版本保存了 dsl/backend/arch）
         2. 回退从 trace.json 的 action arguments 中查找
         """
         import json
-        from pathlib import Path
-        
+
         # 策略 1: 从 root state.json 的 task_info 获取
         root_state_file = session_dir / "nodes" / "root" / "state.json"
         if root_state_file.exists():
@@ -78,14 +76,14 @@ class OpCommandOrchestrator:
                 ti = root_state.get("task_info", {})
                 if ti.get("dsl") and ti.get("backend"):
                     return ResolvedTargetConfig(
-                        framework=ti.get("framework", "torch"),
+                        framework=ti.get("framework", ""),
                         backend=ti["backend"],
                         arch=ti.get("arch", ""),
                         dsl=ti["dsl"],
                     )
             except Exception:
                 pass
-        
+
         # 策略 2: 从 trace.json 的 action arguments 中查找
         trace_file = session_dir / "trace.json"
         if trace_file.exists():
@@ -106,7 +104,7 @@ class OpCommandOrchestrator:
                         )
             except Exception:
                 pass
-        
+
         return None
 
     @staticmethod
@@ -162,7 +160,8 @@ class OpCommandOrchestrator:
                 with open(task_file_path, "r", encoding="utf-8") as f:
                     task_file_content = f.read()
                 akg_console.print(
-                    f"[{DisplayStyle.DIM}]已读取 task_file: {task_file_path} ({len(task_file_content)} 字符)[/{DisplayStyle.DIM}]"
+                    f"[{DisplayStyle.DIM}]已读取 task_file: {task_file_path} "
+                    f"({len(task_file_content)} 字符)[/{DisplayStyle.DIM}]"
                 )
             except Exception as e:
                 akg_console.print(
@@ -211,16 +210,19 @@ class OpCommandOrchestrator:
                             f"- {candidate}" for candidate in e.candidates
                         )
                         akg_console.print(
-                            f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 会话 ID 前缀歧义: {args.resume_session_id}\n"
-                            f"[{DisplayStyle.DIM}]请使用更长的前缀或完整 session_id。候选如下：\n{candidates}[/{DisplayStyle.DIM}]"
+                            f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] "
+                            f"会话 ID 前缀歧义: {args.resume_session_id}\n"
+                            f"[{DisplayStyle.DIM}]请使用更长的前缀或完整 session_id。"
+                            f"候选如下：\n{candidates}[/{DisplayStyle.DIM}]"
                         )
                     else:
                         akg_console.print(
-                            f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 会话不存在: cli_{e.normalized_session_id}\n"
+                            f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] "
+                            f"会话不存在: cli_{e.normalized_session_id}\n"
                             f"[{DisplayStyle.DIM}]路径: {e.expected_path}[/{DisplayStyle.DIM}]"
                         )
                     raise typer.Exit(code=2) from None
-                
+
                 # 从 trace 中恢复 target 配置（framework/backend/arch/dsl）
                 resumed_target = self._load_target_from_trace(session_dir, akg_console)
                 if resumed_target:
@@ -231,7 +233,8 @@ class OpCommandOrchestrator:
                     )
                 else:
                     akg_console.print(
-                        f"[{DisplayStyle.DIM}]恢复会话: cli_{resume_sid} (未找到 target 配置，使用命令行参数)[/{DisplayStyle.DIM}]"
+                        f"[{DisplayStyle.DIM}]恢复会话: cli_{resume_sid} "
+                        f"(未找到 target 配置，使用命令行参数)[/{DisplayStyle.DIM}]"
                     )
 
                 # 显示历史对话
@@ -249,12 +252,14 @@ class OpCommandOrchestrator:
                 )
                 if errs:
                     akg_console.print(
-                        f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] 目标配置非法/不兼容：\n- "
-                        + "\n- ".join(errs)
+                        f"[{DisplayStyle.RED}]错误:[/{DisplayStyle.RED}] "
+                        f"目标配置非法/不兼容：\n- " + "\n- ".join(errs)
                     )
                     akg_console.print(
-                        f"[{DisplayStyle.DIM}]提示：framework/backend/arch/dsl 必须通过命令行显式传入。\n"
-                        f"示例：akg_cli op --framework torch --backend cuda --arch a100 --dsl triton_cuda[/{DisplayStyle.DIM}]"
+                        f"[{DisplayStyle.DIM}]提示：framework/backend/arch/dsl "
+                        f"必须通过命令行显式传入。\n"
+                        f"示例：akg_cli op --framework torch --backend cuda "
+                        f"--arch a100 --dsl triton_cuda[/{DisplayStyle.DIM}]"
                     )
                     raise typer.Exit(code=2)
 

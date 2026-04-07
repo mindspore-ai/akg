@@ -85,16 +85,16 @@ def format_inspirations(inspirations: list) -> str:
 
 class NodeFactory:
     """算子节点工厂：将算子 Agent 包装成 LangGraph 节点"""
-    
+
     @staticmethod
     def _extract_codegen_status(agent_instance, agent_label: str, task_id: str) -> tuple:
         """从 agent 的 last_llm_info 提取代码生成异常状态。
-        
+
         Args:
             agent_instance: 执行过 run_llm 的 agent 实例
             agent_label: 显示名称（"Coder" 或 "KernelGen"）
             task_id: 任务 ID
-        
+
         Returns:
             (codegen_invalid, codegen_invalid_reason)
         """
@@ -121,7 +121,7 @@ class NodeFactory:
                 f"reasoning_len={llm_info.get('reasoning_len')}。"
             )
         return codegen_invalid, codegen_invalid_reason
-    
+
     @staticmethod
     def create_designer_node(designer_instance, trace_instance, config: dict):
         """创建 Designer 节点函数"""
@@ -131,27 +131,27 @@ class NodeFactory:
             task_id = state.get('task_id', '0')
             op_name = state.get('op_name', 'unknown')
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: designer")
-            
+
             # 直接使用 state（KernelGenState 本质上是 dict）
             t0 = time.time()
             result, prompt, reasoning = await designer_instance.run(task_info=state)
-            elapsed = time.time() - t0
-            
+            _elapsed = time.time() - t0
+
             new_step_count = state.get("step_count", 0) + 1
             trace_instance.log_record("designer", [
                 ('result', result),
                 ('prompt', prompt),
                 ('reasoning', reasoning),
             ])
-            
+
             # 去 JSON 化：Designer 已在内部完成草图提取，直接使用返回的纯草图
             code = result
             space_config = None
-            
+
             enable_hint_mode = config.get("enable_hint_mode", False)
             if enable_hint_mode:
                 space_config = getattr(designer_instance, '_last_space_config', None)
-            
+
             updates = {
                 "designer_code": code,
                 "designer_prompt": prompt,
@@ -160,23 +160,35 @@ class NodeFactory:
                 "step_count": new_step_count,
                 "agent_history": ["designer"]
             }
-            
+
             # 优先从返回的 JSON 中提取，如果没有则从 state 中获取（兼容原来的直接修改方式）
             if space_config:
                 updates["space_config_code"] = space_config
-                logger.info(f"[Task {state.get('task_id', '0')}] Designer 从返回JSON中提取了 space_config_code (长度: {len(space_config)})")
+                logger.info(
+                    f"[Task {state.get('task_id', '0')}] "
+                    f"Designer 从返回JSON中提取了 space_config_code "
+                    f"(长度: {len(space_config)})"
+                )
             elif "space_config_code" in state and state["space_config_code"]:
                 # Designer.run() 可能直接修改了 state（原来的行为）
                 space_config = state["space_config_code"]
                 updates["space_config_code"] = space_config
-                logger.info(f"[Task {state.get('task_id', '0')}] Designer 从 state 中提取了 space_config_code (长度: {len(space_config)})")
+                logger.info(
+                    f"[Task {state.get('task_id', '0')}] "
+                    f"Designer 从 state 中提取了 space_config_code "
+                    f"(长度: {len(space_config)})"
+                )
             else:
-                logger.debug(f"[Task {state.get('task_id', '0')}] Designer 未生成 space_config_code（enable_hint_mode={enable_hint_mode}）")
-            
+                logger.debug(
+                    f"[Task {state.get('task_id', '0')}] "
+                    f"Designer 未生成 space_config_code"
+                    f"（enable_hint_mode={enable_hint_mode}）"
+                )
+
             # 如果生成了 space_config，立即保存到文件（不依赖多 case 验证）
             if space_config:
                 await NodeFactory._save_space_config(state, space_config, new_step_count, config)
-            
+
             return updates
 
         return track_node("designer")(designer_node)
@@ -190,32 +202,36 @@ class NodeFactory:
             task_id = state.get('task_id', '0')
             op_name = state.get('op_name', 'unknown')
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: coder")
-            
+
             # 记录是否有错误信息传递给 Coder
             verifier_error = state.get('verifier_error', '')
             conductor_suggestion = state.get('conductor_suggestion', '')
             code_check_errors = state.get('code_check_errors', '')
-            
+
             if verifier_error:
                 task_id = state.get('task_id', '0')
                 logger.info(f"[Task {task_id}] Coder 收到验证错误信息 (长度: {len(verifier_error)})")
                 logger.debug(f"[Task {task_id}] 错误详情: {verifier_error[:200]}...")
-            
+
             if conductor_suggestion:
                 task_id = state.get('task_id', '0')
                 logger.info(f"[Task {task_id}] Coder 收到 Conductor 建议 (长度: {len(conductor_suggestion)})")
                 logger.debug(f"[Task {task_id}] 建议内容: {conductor_suggestion[:200]}...")
-            
+
             if code_check_errors:
                 task_id = state.get('task_id', '0')
-                logger.info(f"[Task {task_id}] Coder 收到 CodeChecker 静态检查错误 (长度: {len(code_check_errors)})")
+                logger.info(
+                    f"[Task {task_id}] "
+                    f"Coder 收到 CodeChecker 静态检查错误 "
+                    f"(长度: {len(code_check_errors)})"
+                )
                 logger.debug(f"[Task {task_id}] 检查错误: {code_check_errors[:300]}...")
-            
+
             # 直接使用 state（KernelGenState 本质上是 dict）
             t0 = time.time()
             result, prompt, reasoning = await coder_instance.run(task_info=state)
-            elapsed = time.time() - t0
-            
+            _elapsed = time.time() - t0
+
             # 去 JSON 化：Coder 已在内部完成代码提取（_extract_code），直接使用返回的纯代码
             code = result
             new_step_count = state.get("step_count", 0) + 1
@@ -224,7 +240,7 @@ class NodeFactory:
                 ('prompt', prompt),
                 ('reasoning', reasoning),
             ])
-            
+
             codegen_invalid, codegen_invalid_reason = NodeFactory._extract_codegen_status(
                 coder_instance, "Coder", task_id
             )
@@ -287,7 +303,7 @@ class NodeFactory:
                 import traceback
                 logger.error(traceback.format_exc())
                 raise
-            elapsed = time.time() - t0
+            _elapsed = time.time() - t0
 
             # KernelDesigner 已在内部完成草图提取，直接使用返回的纯草图
             code = result
@@ -314,7 +330,11 @@ class NodeFactory:
 
             if space_config:
                 updates["space_config_code"] = space_config
-                logger.info(f"[Task {task_id}] KernelDesigner 提取了 space_config_code (长度: {len(space_config)})")
+                logger.info(
+                    f"[Task {task_id}] "
+                    f"KernelDesigner 提取了 space_config_code "
+                    f"(长度: {len(space_config)})"
+                )
                 await NodeFactory._save_space_config(state, space_config, new_step_count, config)
 
             return updates
@@ -330,28 +350,36 @@ class NodeFactory:
             task_id = state.get('task_id', '0')
             op_name = state.get('op_name', 'unknown')
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: kernel_gen")
-            
+
             verifier_error = state.get('verifier_error', '')
             conductor_suggestion = state.get('conductor_suggestion', '')
             code_check_errors = state.get('code_check_errors', '')
-            
+
             if verifier_error:
                 logger.info(f"[Task {task_id}] KernelGen 收到验证错误信息 (长度: {len(verifier_error)})")
-            
+
             if conductor_suggestion:
-                logger.info(f"[Task {task_id}] KernelGen 收到 Conductor 建议 (长度: {len(conductor_suggestion)})")
+                logger.info(
+                    f"[Task {task_id}] "
+                    f"KernelGen 收到 Conductor 建议 "
+                    f"(长度: {len(conductor_suggestion)})"
+                )
                 logger.debug(f"[Task {task_id}] 建议内容: {conductor_suggestion[:200]}...")
-            
+
             if code_check_errors:
-                logger.info(f"[Task {task_id}] KernelGen 收到 CodeChecker 静态检查错误 (长度: {len(code_check_errors)})")
+                logger.info(
+                    f"[Task {task_id}] "
+                    f"KernelGen 收到 CodeChecker 静态检查错误 "
+                    f"(长度: {len(code_check_errors)})"
+                )
                 logger.debug(f"[Task {task_id}] 检查错误: {code_check_errors[:300]}...")
-            
+
             # 将 state 中的 session_id 注入到 kernel_gen_instance.context
             # 使 KernelGen 的 run_llm 能正确创建带 session_id 的 LLMClient，支持流式输出到 CLI
             session_id = state.get('session_id', '')
             if session_id:
                 kernel_gen_instance.context["session_id"] = session_id
-            
+
             # inspirations 与 designer_code 互斥：
             # - 有 designer_code → Designer 已将 inspirations 提炼为 sketch，KernelGen 只需看 sketch
             # - 无 designer_code → kernelgen_only 场景，KernelGen 直接使用 inspirations
@@ -361,7 +389,7 @@ class NodeFactory:
             else:
                 inspirations_raw = state.get('inspirations', [])
                 inspirations_text = format_inspirations(inspirations_raw) if inspirations_raw else ""
-            
+
             # 调用 KernelGen.run()
             t0 = time.time()
             try:
@@ -388,9 +416,9 @@ class NodeFactory:
                 import traceback
                 logger.error(traceback.format_exc())
                 raise
-            
-            elapsed = time.time() - t0
-            
+
+            _elapsed = time.time() - t0
+
             # KernelGen 已在内部完成代码提取和 py_compile 校验，直接使用返回的纯代码
             code = result
             new_step_count = state.get("step_count", 0) + 1
@@ -399,7 +427,7 @@ class NodeFactory:
                 ('prompt', prompt),
                 ('reasoning', reasoning),
             ])
-            
+
             codegen_invalid, codegen_invalid_reason = NodeFactory._extract_codegen_status(
                 kernel_gen_instance, "KernelGen", task_id
             )
@@ -425,14 +453,14 @@ class NodeFactory:
 
     @staticmethod
     def create_verifier_node(verifier_instance, device_pool, trace_instance, config,
-                           private_worker=None, worker_manager=None, backend=None, arch=None):
+                             private_worker=None, worker_manager=None, backend=None, arch=None):
         """创建 Verifier 节点函数（Worker 模式）"""
         # 捕获外层变量到闭包
         _private_worker = private_worker
         _worker_manager = worker_manager
         _backend = backend
         _arch = arch
-        
+
         async def verifier_node(state: KernelGenState) -> dict:
             """Verifier 节点：验证代码正确性（包含单 case + 多 case + profile）"""
             # 记录任务信息
@@ -450,28 +478,33 @@ class NodeFactory:
                     backend=_backend,
                     arch=_arch
                 )
-            
+
             if not worker:
                 raise RuntimeError(
                     f"No available worker for backend={_backend}, arch={_arch}. "
                     "Please register a worker first."
                 )
-            
+
             # 设置 verifier 的 worker
             verifier_instance.worker = worker
-            
+
             # 从 state 更新 verifier 实例的属性（支持延迟初始化模式）
             # 这允许 verifier 在创建时使用占位符，运行时从 state 获取实际值
             verifier_instance.op_name = state.get('op_name', verifier_instance.op_name)
             verifier_instance.framework_code = state.get('task_desc', getattr(verifier_instance, 'framework_code', ''))
-            verifier_instance.framework = state.get('framework', getattr(verifier_instance, 'framework', 'torch'))
+            verifier_instance.framework = state.get('framework') or getattr(verifier_instance, 'framework', None)
+            if not verifier_instance.framework:
+                raise ValueError(
+                    "❌ 缺少关键配置 'framework'，无法初始化 verifier。"
+                    "请确保 state 中显式提供 framework。"
+                )
             verifier_instance.task_id = state.get('task_id', getattr(verifier_instance, 'task_id', '0'))
             # dsl 需要规范化处理
             from akg_agents.op.utils.config_utils import normalize_dsl
             new_dsl = state.get('dsl', getattr(verifier_instance, 'dsl', ''))
             new_backend = state.get('backend', verifier_instance.backend)
             verifier_instance.dsl = normalize_dsl(new_dsl, new_backend)
-            
+
             # 同步 config 中的 log_dir 到 verifier 实例
             # prepare_config 可能已将 log_dir 重定向到 cur_path/logs，
             # 需要同步到 verifier_instance，否则验证日志仍写入默认目录
@@ -480,17 +513,17 @@ class NodeFactory:
                 verifier_instance.log_dir = config_log_dir
                 if hasattr(verifier_instance, 'config') and isinstance(verifier_instance.config, dict):
                     verifier_instance.config['log_dir'] = config_log_dir
-            
+
             # 同步 trace 的 log_task_id 到 verifier 实例，确保验证目录命名与日志文件一致
             if hasattr(trace_instance, 'get_log_task_id'):
                 verifier_instance.task_id = trace_instance.get_log_task_id()
-            
+
             try:
                 # verify_dir 使用与代码生成节点相同的 step（state step_count）
                 current_step = state.get("step_count", 0)
                 new_step_count = current_step + 1
                 loop = asyncio.get_running_loop()
-                
+
                 # 单 case 验证（直接传递 state）
                 # 注意：device_id 使用默认值 -1，由 Worker 内部管理
                 verify_res, verify_log = await verifier_instance.run(
@@ -498,7 +531,7 @@ class NodeFactory:
                     current_step,
                     device_id=-1  # Worker 模式默认使用 -1
                 )
-                
+
                 # 多 case 验证（如果单 case 通过）
                 multi_case_error = ""
                 if verify_res and NodeFactory._should_run_multi_case(config):
@@ -515,7 +548,7 @@ class NodeFactory:
                         multi_case_error = multi_log
                     else:
                         multi_case_error = ""
-                
+
                 # Profile（如果所有验证都通过）
                 profile_res = {}
                 task_type = state.get("task_type", "precision_only")
@@ -529,7 +562,7 @@ class NodeFactory:
                         -1,
                         config.get("profile_settings", {})
                     )
-                
+
                 # 只有所有验证都通过后，才复制到 passed_cases
                 if verify_res:
                     await loop.run_in_executor(
@@ -540,18 +573,18 @@ class NodeFactory:
                         current_step,
                         config
                     )
-                
-                elapsed = time.time() - t0
-                
+
+                _elapsed = time.time() - t0
+
                 verifier_params = []
                 if not verify_res and verify_log:
                     verifier_params.append(('error_log', verify_log))
                 trace_instance.log_record("verifier", verifier_params)
-                
+
                 if not verify_res:
                     task_id = state.get('task_id', '0')
                     logger.warning(f"[Task {task_id}] Verifier 失败，错误信息 (长度: {len(verify_log)})")
-                
+
                 return {
                     "verifier_result": verify_res,
                     "verifier_error": verify_log,
@@ -686,7 +719,7 @@ class NodeFactory:
     @staticmethod
     def create_conductor_node(trace_instance, config, conductor_template, code_gen_agent="coder"):
         """创建 Conductor 分析节点
-        
+
         Args:
             trace_instance: Trace 实例
             config: 配置字典
@@ -695,25 +728,25 @@ class NodeFactory:
         """
         async def conductor_node(state: KernelGenState) -> dict:
             """Conductor 节点：分析错误并生成建议
-            
+
             注意：此节点只在验证失败时被调用（由 verifier router 决定）
             """
             from akg_agents.core_v2.agents import AgentBase
             from akg_agents.utils.common_utils import ParserFactory
             from akg_agents.op.utils.result_processor import ResultProcessor
-            
+
             # 记录任务信息
             task_id = state.get('task_id', '0')
             op_name = state.get('op_name', 'unknown')
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: conductor")
-            
+
             op_name = state.get("op_name", "")
-            
+
             try:
                 # 获取 Conductor 解析器
                 conductor_parser = ParserFactory.get_conductor_parser()
                 format_instructions = conductor_parser.get_format_instructions()
-                
+
                 # 准备历史记录
                 history_for_analysis = []
                 for attempt in state.get("history_attempts", [])[-5:]:  # 最近5次
@@ -721,11 +754,11 @@ class NodeFactory:
                         'code': attempt.get('code', '')[:2000],
                         'suggestion': attempt.get('suggestion', '')[:500]
                     })
-                
+
                 # 使用工作流指定的代码生成 agent（通过参数传入，而非字符串匹配）
                 valid_next_agents = f'{code_gen_agent}, finish'
                 valid_options_set = {code_gen_agent, "finish"}
-                
+
                 raw_error = state.get('verifier_error', '')
                 error_for_prompt = raw_error
                 if raw_error and len(raw_error) > 4000:
@@ -782,14 +815,14 @@ class NodeFactory:
                 agent_decision, suggestion = ResultProcessor.parse_conductor_decision(
                     response_text, conductor_parser, valid_options_set
                 )
-                
+
                 # write_record: 不自增 step，与 verifier 共享同一编号
                 trace_instance.write_record("conductor_decision", [
                     ('result', response_text),
                     ('prompt', prompt),
                     ('reasoning', reasoning),
                 ], subdirectory="conductor")
-                
+
                 # 更新历史记录
                 if state.get('coder_code') and state.get('verifier_error'):
                     history_entry = {
@@ -806,17 +839,18 @@ class NodeFactory:
                         "agent_history": ["conductor"],
                         "conductor_step_count": conductor_step,
                     }
-                
+
                 task_id = state.get('task_id', '0')
-                logger.info(f"[Task {task_id}] Conductor analysis completed, suggestion length: {len(suggestion or '')}")
-                
+                logger.info(
+                    f"[Task {task_id}] Conductor analysis completed, suggestion length: {len(suggestion or '')}")
+
                 return {
                     "conductor_suggestion": suggestion or "",
                     "conductor_decision": agent_decision or code_gen_agent,
                     "agent_history": ["conductor"],
                     "conductor_step_count": conductor_step,
                 }
-                
+
             except Exception as e:
                 task_id = state.get('task_id', '0')
                 logger.error(f"[Task {task_id}] Conductor analysis failed: {e}")
@@ -835,7 +869,7 @@ class NodeFactory:
     async def _save_space_config(state: KernelGenState, space_config_code: str, step_count: int, config: dict):
         """
         保存 space_config 到文件（独立于多 case 验证）
-        
+
         Args:
             state: 当前状态
             space_config_code: 参数空间配置代码
@@ -844,40 +878,40 @@ class NodeFactory:
         """
         try:
             import os
-            
+
             if not space_config_code:
                 return
-            
+
             # 确定保存目录
             log_dir = config.get('log_dir', '')
             if not log_dir:
                 task_id = state.get('task_id', '0')
                 logger.warning(f"[Task {task_id}] 未配置 log_dir，无法保存 space_config")
                 return
-            
+
             op_name = state.get('op_name')
             task_id = state.get('task_id', '0')
-            
+
             expanded_log_dir = os.path.expanduser(log_dir)
             iter_dir = os.path.join(expanded_log_dir, op_name, f"Iteration{task_id}_Step{step_count:02d}")
             os.makedirs(iter_dir, exist_ok=True)
-            
+
             # 保存 space_config.py
             space_config_path = os.path.join(iter_dir, f"{op_name}_space_config.py")
             with open(space_config_path, 'w', encoding='utf-8') as f:
                 f.write(space_config_code)
-            
+
             task_id = state.get('task_id', '0')
             logger.info(f"[Task {task_id}] 保存参数空间配置: {space_config_path}")
-            
+
         except Exception as e:
             task_id = state.get('task_id', '0')
             logger.warning(f"[Task {task_id}] 保存 space_config 失败: {e}")
-    
+
     @staticmethod
     def _should_run_multi_case(config: dict) -> bool:
         """判断是否需要多 case 验证
-        
+
         逻辑：
         1. Hint 模式：enable_hint_mode=True AND enable_multi_case_verification=True
         2. LLM 推理模式：enable_llm_range_inference=True (一定验证，不受 enable_multi_case_verification 控制)
@@ -885,67 +919,66 @@ class NodeFactory:
         enable_multi_case = config.get("enable_multi_case_verification", True)
         enable_hint = config.get("enable_hint_mode", False)
         enable_llm_inference = config.get("enable_llm_range_inference", False)
-        
+
         logger.debug(f"多case验证配置检查: enable_multi_case_verification={enable_multi_case}, "
-                    f"enable_hint_mode={enable_hint}, enable_llm_range_inference={enable_llm_inference}")
-        
+                     f"enable_hint_mode={enable_hint}, enable_llm_range_inference={enable_llm_inference}")
+
         # LLM 推理模式：一定执行多 case 验证
         if enable_llm_inference:
             return True
-        
+
         # Hint 模式：需要同时开启 enable_hint_mode 和 enable_multi_case_verification
         if enable_hint and enable_multi_case:
             return True
-        
+
         return False
-    
+
     @staticmethod
     async def _run_multi_case(state, verifier_instance, step, config, trace):
         """运行多 case 验证（Hint 模式或 LLM 推理模式）
-        
+
         Args:
             state: KernelGenState 状态
             verifier_instance: KernelVerifier 实例
             step: 当前步骤
             config: 配置字典
             trace: Trace 实例
-            
+
         Returns:
             tuple[bool, str]: (验证结果, 错误日志)
         """
         enable_hint = config.get('enable_hint_mode', False)
         enable_llm_inference = config.get('enable_llm_range_inference', False)
         space_config_code = state.get("space_config_code")
-        
-        op_name = state.get('op_name')
+
         task_id = state.get('task_id', '0')
         logger.info(f"[Task {task_id}] 多case验证模式检查:")
         logger.info(f"[Task {task_id}]   enable_hint_mode: {enable_hint}")
         logger.info(f"[Task {task_id}]   enable_llm_range_inference: {enable_llm_inference}")
         logger.info(f"[Task {task_id}]   has_space_config_code: {bool(space_config_code)}")
-        
+
         # 模式1：Hint模式（优先，需要 enable_hint=True 且有 space_config_code）
         if enable_hint and space_config_code:
             logger.info(f"[Task {task_id}] 使用Hint模式进行多case验证")
             return await NodeFactory._run_hint_mode_verification(
                 state, verifier_instance, step, config
             )
-        
+
         # 模式2：LLM推理模式（只需要 enable_llm_inference=True）
         if enable_llm_inference:
             logger.info(f"[Task {task_id}] 使用LLM推理模式进行多case验证")
             return await NodeFactory._run_llm_inference_mode_verification(
                 state, verifier_instance, step, config, trace
             )
-        
+
         # 都未启用或条件不满足
         if enable_hint and not space_config_code:
             logger.warning(f"[Task {task_id}] Hint模式已启用但未找到space_config_code，跳过多case验证")
         else:
             logger.info(f"[Task {task_id}] 未启用多case验证模式")
-        
+
         return True, ""
-    
+
     @staticmethod
     async def _run_hint_mode_verification(state, verifier_instance, step, config):
         """Hint模式的多case验证"""
@@ -953,49 +986,50 @@ class NodeFactory:
             import os
             from akg_agents.op.verifier.kernel_verifier import KernelVerifier
             from akg_agents.op.utils.case_generator import MultiCaseGenerator
-            
+
             op_name = state.get("op_name")
             task_id = state.get("task_id")
             framework = state.get("framework")
             dsl = state.get("dsl")
             backend = state.get("backend")
             arch = state.get("arch")
-            
+
             # 1. 获取space_config_code
             space_config_code = state.get("space_config_code", "")
             if not space_config_code:
                 task_id = state.get('task_id', '0')
                 logger.warning(f"[Task {task_id}] 未找到space_config_code，跳过Hint模式验证")
                 return True, ""
-            
+
             # 2. 确定迭代目录
             log_dir = config.get('log_dir', '')
             if not log_dir:
                 task_id = state.get('task_id', '0')
                 logger.error(f"[Task {task_id}] 未配置log_dir，无法进行Hint模式验证")
                 return False, "log_dir not configured"
-            
+
             expanded_log_dir = os.path.expanduser(log_dir)
             # 使用 verifier_instance.task_id 确保与验证目录命名一致
             log_task_id = verifier_instance.task_id if verifier_instance else task_id
-            iter_dir = os.path.join(expanded_log_dir, op_name, f"Iteration{log_task_id}_multicase_Step{step:02d}_verify")
+            iter_dir = os.path.join(expanded_log_dir, op_name,
+                                    f"Iteration{log_task_id}_multicase_Step{step:02d}_verify")
             os.makedirs(iter_dir, exist_ok=True)
-            
+
             # 3. 保存space_config.py
             space_config_path = os.path.join(iter_dir, f"{op_name}_space_config.py")
             with open(space_config_path, 'w', encoding='utf-8') as f:
                 f.write(space_config_code)
             task_id = state.get('task_id', '0')
             logger.info(f"[Task {task_id}] 保存参数空间配置: {space_config_path}")
-            
+
             # 4. 使用MultiCaseGenerator生成测试文件
             seed = config.get("sampling_seed", 42)
             generator = MultiCaseGenerator(space_config_path, seed=seed)
             multicase_file = os.path.join(iter_dir, f"{op_name}_multicase_{framework}.py")
-            
+
             num_cases = config.get("multi_case_num", 10)
             strategy = config.get("sampling_strategy", "mixed")
-            
+
             generator.generate_multicase_file(
                 output_path=multicase_file,
                 num_cases=num_cases,
@@ -1003,11 +1037,11 @@ class NodeFactory:
             )
             task_id = state.get('task_id', '0')
             logger.info(f"[Task {task_id}] 生成多case测试文件: {multicase_file}")
-            
+
             # 5. 读取生成的多case测试文件内容
             with open(multicase_file, 'r', encoding='utf-8') as f:
                 multicase_task_desc = f.read()
-            
+
             # 6. 创建验证器并验证（直接使用 state）
             multi_case_verifier = KernelVerifier(
                 op_name=op_name,
@@ -1021,14 +1055,14 @@ class NodeFactory:
                 config=config,
                 worker=verifier_instance.worker  # 新增：传递 worker
             )
-            
+
             # 7. 运行验证（device_id 默认 -1，由 Worker 管理）
             multi_verify_res, multi_verify_log = await multi_case_verifier.run(
                 state,  # 直接使用 state
                 step,   # current_step
                 device_id=-1  # Worker 模式默认使用 -1
             )
-            
+
             # 8. 处理验证结果
             if multi_verify_res:
                 task_id = state.get('task_id', '0')
@@ -1038,20 +1072,20 @@ class NodeFactory:
                 task_id = state.get('task_id', '0')
                 logger.warning(f"[Task {task_id}] Hint模式多case验证失败")
                 return False, multi_verify_log
-                
+
         except Exception as e:
             logger.error(f"[{state.get('op_name')}] Hint模式多case验证异常: {e}")
             import traceback
             error_log = traceback.format_exc()
             return False, error_log
-    
+
     @staticmethod
     async def _run_llm_inference_mode_verification(state, verifier_instance, step, config, trace):
         """LLM推理模式的多case验证"""
         try:
             from akg_agents.core.agent.test_case_generator import TestCaseGenerator
             from akg_agents.op.verifier.kernel_verifier import KernelVerifier
-            
+
             op_name = state.get("op_name")
             task_desc = state.get("task_desc")
             task_id = state.get("task_id")
@@ -1059,7 +1093,7 @@ class NodeFactory:
             dsl = state.get("dsl")
             backend = state.get("backend")
             arch = state.get("arch")
-            
+
             # 1. 创建 TestCaseGenerator
             test_gen = TestCaseGenerator(
                 op_name=op_name,
@@ -1068,20 +1102,20 @@ class NodeFactory:
                 dsl=dsl,
                 config=config
             )
-            
+
             # 1.1 准备输入数据（包含之前的错误信息）
             # state 本身已包含所有字段，只需添加 previous_error
             state_with_error = dict(state)
             state_with_error["previous_error"] = state.get("multi_case_error", "")
-            
+
             # 2. 生成多 case task_desc
             t0 = time.time()
             new_task_desc, prompt, reasoning = await test_gen.run(state_with_error)
-            elapsed = time.time() - t0
-            
+            _elapsed = time.time() - t0
+
             task_id = state.get('task_id', '0')
             logger.info(f"[Task {task_id}] 多 case task_desc 生成完成")
-            
+
             # 2.1 记录 TestCaseGenerator 的执行结果
             # 记录到 Trace（通用接口）
             trace.log_record("test_case_generator", [
@@ -1089,7 +1123,7 @@ class NodeFactory:
                 ('prompt', prompt),
                 ('reasoning', reasoning),
             ])
-            
+
             # 3. 使用新 task_desc 创建临时 verifier 进行验证
             # 使用 verifier_instance.task_id 确保与验证目录命名一致
             log_task_id = verifier_instance.task_id if verifier_instance else task_id
@@ -1105,14 +1139,14 @@ class NodeFactory:
                 config=config,
                 worker=verifier_instance.worker  # 新增：传递 worker
             )
-            
+
             # 4. 运行验证（device_id 默认 -1，由 Worker 管理）
             multi_verify_res, multi_verify_log = await multi_case_verifier.run(
                 state,  # 直接使用 state
                 step,   # 使用单 case 验证的 step
                 device_id=-1  # Worker 模式默认使用 -1
             )
-            
+
             # 5. 更新 state 中的 multi_case_error
             if multi_verify_res:
                 task_id = state.get('task_id', '0')
@@ -1126,18 +1160,18 @@ class NodeFactory:
                 # 保存错误信息到 state，供下次迭代使用
                 state["multi_case_error"] = multi_verify_log
                 return False, multi_verify_log
-        
+
         except Exception as e:
             error_msg = str(e)
             logger.error(f"[{state.get('op_name')}] 多 case 验证过程异常: {error_msg}")
             import traceback
             error_detail = traceback.format_exc()
             return False, f"多 case 验证异常: {error_msg}\n{error_detail}"
-    
+
     @staticmethod
     def create_code_checker_node(checker_instance, trace_instance, config: dict):
         """创建 CodeChecker 节点函数
-        
+
         Args:
             checker_instance: CodeChecker 实例
             trace_instance: Trace 实例
@@ -1145,14 +1179,14 @@ class NodeFactory:
         """
         async def code_checker_node(state: KernelGenState) -> dict:
             """CodeChecker 节点：在 Verifier 之前进行代码静态检查
-            
+
             检查 Coder 生成的代码是否符合规范，避免将明显错误的代码送入 Verifier 浪费时间
             """
             # 记录任务信息
             task_id = state.get('task_id', '0')
             op_name = state.get('op_name', 'unknown')
             logger.info(f"Task {task_id}, op_name: {op_name}, current_agent: code_checker")
-            
+
             # 获取 Coder 生成的代码
             code = state.get("coder_code", "")
             if not code:
@@ -1163,10 +1197,10 @@ class NodeFactory:
                     "code_check_details": [],
                     "agent_history": ["code_checker"]
                 }
-            
+
             # 执行检查
             passed, error_message, errors = await checker_instance.check(code, state)
-            
+
             # 记录到 Trace（write_record: 不自增 step，与 kernel_gen 共享编号）
             check_result = {
                 "passed": passed,
@@ -1176,7 +1210,7 @@ class NodeFactory:
             trace_instance.write_record("code_checker", [
                 ('result', json.dumps(check_result, ensure_ascii=False)),
             ])
-            
+
             # 向 CLI 发送检查结果消息
             session_id = state.get('session_id', '')
             if session_id:
@@ -1191,7 +1225,8 @@ class NodeFactory:
                     else:
                         logger.warning(f"[Task {task_id}] CodeChecker: ❌ Found {len(errors)} issues")
                         for err in errors[:3]:
-                            logger.warning(f"[Task {task_id}]   Line {err.get('line', '?')}: {err.get('detail', '')[:80]}")
+                            logger.warning(
+                                f"[Task {task_id}]   Line {err.get('line', '?')}: {err.get('detail', '')[:80]}")
                         send_message(session_id, DisplayMessage(
                             text=f"⚠️ 代码静态检查发现 {len(errors)} 个问题"
                         ))
@@ -1206,21 +1241,21 @@ class NodeFactory:
                     logger.warning(f"[Task {task_id}] CodeChecker: ❌ Found {len(errors)} issues")
                     for err in errors[:3]:
                         logger.warning(f"[Task {task_id}]   Line {err.get('line', '?')}: {err.get('detail', '')[:80]}")
-            
+
             return {
                 "code_check_passed": passed,
                 "code_check_errors": error_message,
                 "code_check_details": errors,
                 "agent_history": ["code_checker"]
             }
-        
+
         return track_node("code_checker")(code_checker_node)
-    
+
     @staticmethod
     def _save_to_passed_cases(state, verifier_instance, current_step: int, config: dict):
         """
         将验证通过的文件复制到 passed_cases 目录
-        
+
         Args:
             state: 当前状态
             verifier_instance: Verifier 实例
@@ -1231,21 +1266,21 @@ class NodeFactory:
             import shutil
             import os
             from pathlib import Path
-            
+
             log_dir = config.get('log_dir', '')
             if not log_dir:
                 return
-            
+
             op_name = state.get("op_name")
-            
+
             # 构建源目录路径
             expanded_log_dir = os.path.expanduser(log_dir)
             unique_dir_name = f"Iteration{verifier_instance.task_id}_Step{current_step:02d}_verify"
             src_dir = os.path.join(expanded_log_dir, op_name, unique_dir_name)
-            
+
             # 构建目标目录路径
             dst_dir = Path(log_dir).expanduser() / "passed_cases" / op_name / unique_dir_name
-            
+
             # 复制目录
             if os.path.exists(src_dir):
                 shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
@@ -1254,33 +1289,33 @@ class NodeFactory:
             else:
                 task_id = state.get('task_id', '0')
                 logger.warning(f"[Task {task_id}] 源目录不存在: {src_dir}")
-        
+
         except Exception as e:
             logger.warning(f"[{state.get('op_name')}] 保存到 passed_cases 失败: {e}")
-    
+
     @staticmethod
     def create_op_task_builder_node(op_task_builder, trace_instance=None):
         """创建 OpTaskBuilder 节点函数
-        
+
         Args:
             op_task_builder: OpTaskBuilder实例
             trace_instance: Trace实例（可选）
-            
+
         Returns:
             异步节点函数
         """
         from akg_agents.op.langgraph_op.op_task_builder_state import OpTaskBuilderState
-        
+
         async def op_task_builder_node(state: OpTaskBuilderState) -> dict:
             """OpTaskBuilder 节点：将用户文字需求转换为KernelBench格式"""
             # 记录任务信息
             user_input = state.get('user_input', '')
             iteration = state.get('iteration', 0)
             logger.info(f"OpTaskBuilder iteration {iteration}, user_input: {user_input[:50]}...")
-            
+
             # 调用 OpTaskBuilder
             result = await op_task_builder.run(state)
-            
+
             # 记录到 Trace（如果提供）
             if trace_instance:
                 trace_instance.log_record("OpTaskBuilder", [
@@ -1288,9 +1323,9 @@ class NodeFactory:
                     ('prompt', result.get("op_task_builder_prompt", "")),
                     ('reasoning', result.get("agent_reasoning", "")),
                 ])
-            
+
             logger.info(f"OpTaskBuilder result: status={result.get('status')}, op_name={result.get('op_name')}")
-            
+
             return result
 
         return track_node("task_init")(op_task_builder_node)

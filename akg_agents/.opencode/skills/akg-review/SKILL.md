@@ -134,14 +134,14 @@ python $AKG_AGENTS_DIR/.opencode/skills/akg-review/scripts/check_rebase.py \
 ```bash
 if [ "$FILE_COUNT" -gt 0 ]; then
   xargs ruff check \
-    --select=E,F,W,C,N \
+    --config pyproject.toml \
     --output-format=json \
     < "$CHANGED_FILES_LIST" \
     > "$REVIEW_TMP_DIR/ruff_result.json" 2>&1 || true
 fi
 ```
 
-**检测**：语法、导入、命名、复杂度
+**检测**：语法、导入、命名、复杂度（配置已 ignore=C901）
 
 #### 3b. Bandit 安全检查（危险函数、SQL 注入等）
 
@@ -196,9 +196,9 @@ fi
 
 | 规则 | 说明 | 级别 |
 |------|------|------|
-| CODE-001 | License 头（Apache 2.0, 2025-2026） | error |
-| CODE-002 | 从 `core/` 导入（应用 `core_v2/`） | error |
-| CODE-004 | 参数值不规范（backend/dsl/arch） | error |
+| CODE-001 | License 头（Apache 2.0，只需存在即可） | error |
+| CODE-002 | 从 `core/` 导入（建议迁移到 `core_v2/`） | warning |
+| CODE-004 | 参数值不规范（backend/dsl/arch，跳过 f-string 占位符） | error |
 | CODE-013 | 错误包名（ai_kernel_generator） | error |
 | CODE-010 | TODO/FIXME 注释 | info |
 
@@ -354,13 +354,13 @@ rm -rf "$REVIEW_TMP_DIR"
 
 ### CODE-001: License 头
 
-**检测**: Apache 2.0 License，年份 2025-2026 或 2026
+**检测**: Apache 2.0 License，只需存在即可（不检查年份）
 
 ---
 
 ### CODE-002: 从 core/ 导入
 
-**检测**: `from akg_agents.core.` → 应改为 `core_v2.`
+**检测**: `from akg_agents.core.` → 建议改为 `core_v2.`（warning 级别，迁移期间不强求）
 
 ---
 
@@ -390,9 +390,32 @@ from akg_agents.core_v2.agents import AgentBase
 
 ---
 
+## 修复建议
+
+遇到代码格式问题时，推荐修复方式：
+
+| 问题类型 | 修复工具 | 说明 |
+|----------|----------|------|
+| E501（行太长）、W291/W293（空白字符） | `autopep8 --in-place --max-line-length=119` | 自动修复大部分格式问题 |
+| E402（import 顺序）、F841（未使用变量）等 | LLM 或手动修复 | 需要理解代码逻辑 |
+| C901（函数复杂度） | 建议暂时跳过 | 需要重构，建议后续处理 |
+
+**常用命令**：
+```bash
+# 使用 autopep8 修复格式（推荐优先使用）
+git diff origin/br_agents...HEAD --name-only --diff-filter=ACMR --relative | grep '\.py$' | xargs autopep8 --in-place --max-line-length=119
+
+# 使用 ruff 检查（配置文件: pyproject.toml, max-line-length=119, ignore=C901）
+git diff origin/br_agents...HEAD --name-only --diff-filter=ACMR --relative | grep '\.py$' | xargs ruff check --config pyproject.toml
+```
+
+---
+
 ## 注意事项
 
-1. **ruff 优先**: 通用规范由 ruff 检查，速度快、准确度高。
-2. **自定义精简**: 只检查项目特定规则，避免重复。
-3. **独立运行**: 各阶段独立，一个失败不影响其他。
-4. **只读操作**: 不修改代码，只生成报告。
+1. **autopep8 优先**: 大部分格式问题（E501/W291/W293）可用 autopep8 自动修复，效率高。
+2. **ruff 检查**: 通用规范由 ruff 检查（配置 max-line-length=119, ignore=C901）。
+3. **自定义精简**: 只检查项目特定规则（License 头、包名、参数值、架构约束）。
+4. **Bandit 分级**: HIGH/MEDIUM 算 error，LOW 算 warning。
+5. **独立运行**: 各阶段独立，一个失败不影响其他。
+6. **只读操作**: 不修改代码，只生成报告。

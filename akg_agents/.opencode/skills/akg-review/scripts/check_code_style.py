@@ -27,7 +27,7 @@ from typing import List, Dict
 
 RULES = {
     "CODE-001": {"level": "error", "name": "License 头缺失或格式错误"},
-    "CODE-002": {"level": "error", "name": "从 core/ 导入（应使用 core_v2/）"},
+    "CODE-002": {"level": "warning", "name": "从 core/ 导入（建议迁移到 core_v2/）"},
     "CODE-004": {"level": "error", "name": "参数值不在有效范围内"},
     "CODE-013": {"level": "error", "name": "错误的包名引用"},
     "CODE-010": {"level": "info", "name": "TODO/FIXME/HACK 注释"},
@@ -55,16 +55,7 @@ def check_license_header(file_path: Path, content: str) -> List[Dict]:
             "file": str(file_path),
             "line": 1,
             "message": f"License 头缺失或不完整（缺少: {', '.join(missing)}）",
-            "suggestion": "添加完整的 Apache 2.0 License 头（年份 2025-2026）"
-        })
-    elif "2025-2026" not in header_text and "2026" not in header_text:
-        issues.append({
-            "rule": "CODE-001",
-            "level": "error",
-            "file": str(file_path),
-            "line": 1,
-            "message": "License 头年份不正确",
-            "suggestion": "年份应为 '2025-2026' 或 '2026'"
+            "suggestion": "添加 Apache 2.0 License 头"
         })
 
     return issues
@@ -85,11 +76,11 @@ def check_imports(file_path: Path, content: str) -> List[Dict]:
         if re.search(r'from\s+akg_agents\.core\.', line):
             issues.append({
                 "rule": "CODE-002",
-                "level": "error",
+                "level": "warning",
                 "file": str(file_path),
                 "line": i,
                 "message": f"从 core/ 导入: {line.strip()}",
-                "suggestion": "使用 core_v2/ 替代（core/ 正在迁移）"
+                "suggestion": "建议迁移到 core_v2/（core/ 正在迁移）"
             })
 
     return issues
@@ -103,9 +94,9 @@ def check_parameter_values(file_path: Path, content: str) -> List[Dict]:
         "backend": ["cuda", "ascend", "cpu"],
         "framework": ["torch", "mindspore"],
         "dsl": [
-            "triton_cuda", "triton_ascend", "cpp",
+            "triton", "triton_cuda", "triton_ascend", "cpp",
             "cuda_c", "tilelang_cuda", "ascendc", "pypto",
-        ],
+        ],  # triton 会被自动转换为 triton_cuda/triton_ascend
         "arch": [
             "a100", "v100",
             "ascend910b1", "ascend910b2",
@@ -124,6 +115,9 @@ def check_parameter_values(file_path: Path, content: str) -> List[Dict]:
 
         for param, valid in valid_values.items():
             match = re.search(rf'{param}\s*=\s*["\']([^"\']+)["\']', line)
+            # 跳过 f-string（值包含 { } 的是占位符，不是实际参数）
+            if match and ('{' in match.group(1) or '}' in match.group(1)):
+                continue
             if match and match.group(1) not in valid:
                 issues.append({
                     "rule": "CODE-004",

@@ -35,24 +35,24 @@ logger = logging.getLogger(__name__)
 def load_adaptive_search_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """
     加载自适应搜索配置
-    
+
     Args:
         config_path: 配置文件路径，为空时使用默认路径
-        
+
     Returns:
         Dict[str, Any]: 配置字典
     """
     if config_path is None:
         config_path = os.path.join(
-            get_project_root(), 
+            get_project_root(),
             "op",
-            "config", 
+            "config",
             "adaptive_search_config.yaml"
         )
-    
+
     if os.path.exists(config_path):
         return load_yaml(config_path)
-    
+
     logger.warning(f"Config file not found: {config_path}, using defaults")
     return {}
 
@@ -78,7 +78,7 @@ def _create_search_config(
 ) -> SearchConfig:
     """
     创建搜索配置
-    
+
     优先级：函数参数 > search_config_dict > 默认值
     """
     # 从配置文件提取参数
@@ -87,30 +87,38 @@ def _create_search_config(
     ucb = search_config_dict.get("ucb_selection", {})
     inspiration = search_config_dict.get("inspiration", {})
     handwrite = search_config_dict.get("handwrite", {})
-    
+
     return SearchConfig(
         # 并发控制
         max_concurrent=max_concurrent or concurrency.get("max_concurrent", 8),
         initial_task_count=initial_task_count or concurrency.get("initial_task_count", 8),
         tasks_per_parent=tasks_per_parent or concurrency.get("tasks_per_parent", 1),
-        
+
         # 停止条件（唯一停止条件：达到最大任务数）
         max_total_tasks=max_total_tasks or stopping.get("max_total_tasks", 100),
-        
+
         # UCB 参数
         exploration_coef=exploration_coef or ucb.get("exploration_coef", 1.414),
         random_factor=random_factor if random_factor is not None else ucb.get("random_factor", 0.1),
         use_softmax=use_softmax if use_softmax is not None else ucb.get("use_softmax", False),
         softmax_temperature=softmax_temperature or ucb.get("softmax_temperature", 1.0),
-        
+
         # 灵感采样参数
         inspiration_sample_num=inspiration_sample_num or inspiration.get("sample_num", 3),
-        use_tiered_sampling=use_tiered_sampling if use_tiered_sampling is not None else inspiration.get("use_tiered_sampling", True),
+        use_tiered_sampling=(
+            use_tiered_sampling
+            if use_tiered_sampling is not None
+            else inspiration.get("use_tiered_sampling", True)
+        ),
         handwrite_sample_num=handwrite_sample_num or handwrite.get("sample_num", 2),
         handwrite_decay_rate=handwrite_decay_rate or handwrite.get("decay_rate", 2.0),
 
         # 进化控制器
-        use_evolution_controller=use_evolution_controller if use_evolution_controller is not None else search_config_dict.get("use_evolution_controller", False),
+        use_evolution_controller=(
+            use_evolution_controller
+            if use_evolution_controller is not None
+            else search_config_dict.get("use_evolution_controller", False)
+        ),
 
         # 存储
         storage_dir=storage_dir
@@ -149,9 +157,9 @@ async def adaptive_search(
 ) -> Dict[str, Any]:
     """
     自适应搜索主函数
-    
+
     使用基于 UCB 选择策略的自适应搜索框架生成优化的 Kernel 实现。
-    
+
     Args:
         op_name: 算子名称
         task_desc: 任务描述（PyTorch 模型代码）
@@ -160,31 +168,31 @@ async def adaptive_search(
         backend: 后端 (cuda, ascend)
         arch: 架构 (a100, ascend910b4)
         config: 全局配置字典
-        
+
         # 并发控制
         max_concurrent: 最大并发任务数
         initial_task_count: 初始任务数
         tasks_per_parent: 每次选择父代后生成的任务数
-        
+
         # 停止条件
         max_total_tasks: 最大总任务数（唯一停止条件）
-        
+
         # UCB 参数
         exploration_coef: UCB 探索系数
         random_factor: 随机扰动因子
         use_softmax: 是否使用 softmax 采样
         softmax_temperature: softmax 温度
-        
+
         # 灵感采样参数
         inspiration_sample_num: 灵感采样数量
         use_tiered_sampling: 是否使用层次化采样
         handwrite_sample_num: 手写建议采样数量
         handwrite_decay_rate: 手写建议衰减率
-        
+
         # 其他
         storage_dir: 存储目录
         search_config_path: 搜索配置文件路径
-        
+
     Returns:
         Dict[str, Any]: 搜索结果，包含：
             - op_name: 算子名称
@@ -201,10 +209,10 @@ async def adaptive_search(
     """
     logger.info(f"Starting adaptive_search for {op_name}")
     logger.info(f"DSL: {dsl}, Framework: {framework}, Backend: {backend}, Arch: {arch}")
-    
+
     # 加载搜索配置
     search_config_dict = load_adaptive_search_config(search_config_path)
-    
+
     # 创建搜索配置
     search_config = _create_search_config(
         config=config,
@@ -224,7 +232,7 @@ async def adaptive_search(
         use_evolution_controller=use_evolution_controller,
         storage_dir=storage_dir
     )
-    
+
     # 创建控制器并运行
     controller = AdaptiveSearchController(
         op_name=op_name,
@@ -236,9 +244,9 @@ async def adaptive_search(
         config=config,
         search_config=search_config
     )
-    
+
     result = await controller.run()
-    
+
     logger.info(f"adaptive_search completed for {op_name}")
     return result
 
@@ -255,7 +263,7 @@ async def adaptive_search_from_config(
 ) -> Dict[str, Any]:
     """
     从配置文件运行自适应搜索
-    
+
     Args:
         op_name: 算子名称
         task_desc: 任务描述
@@ -265,7 +273,7 @@ async def adaptive_search_from_config(
         arch: 架构
         config: 全局配置
         search_config_path: 搜索配置文件路径
-        
+
     Returns:
         Dict[str, Any]: 搜索结果
     """
@@ -279,4 +287,3 @@ async def adaptive_search_from_config(
         config=config,
         search_config_path=search_config_path
     )
-
