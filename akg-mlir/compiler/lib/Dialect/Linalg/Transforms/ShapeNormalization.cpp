@@ -524,6 +524,31 @@ struct ShapeNormalState {
     }
   }
 
+  void unifyAxesWithIdenticalDecompositions() {
+    SmallVector<std::pair<std::string, SmallVector<std::string>>> entries;
+    for (const auto &d : decompositions) {
+      if (d.second.empty()) continue;
+      entries.emplace_back(d.first().str(), d.second);
+    }
+    llvm::StringMap<SmallVector<std::string>> keyToParents;
+    for (const auto &p : entries) {
+      std::string key;
+      for (size_t i = 0; i < p.second.size(); ++i) {
+        if (i) key.push_back('\0');
+        key.append(p.second[i]);
+      }
+      keyToParents[key].push_back(p.first);
+    }
+    for (auto &kv : keyToParents) {
+      SmallVector<std::string> &parents = kv.second;
+      llvm::sort(parents);
+      parents.erase(std::unique(parents.begin(), parents.end()), parents.end());
+      if (parents.size() <= 1) continue;
+      std::string canon = parents[0];
+      for (size_t i = 1; i < parents.size(); ++i) canon = globalReplaceAxis(canon, parents[i]);
+    }
+  }
+
   std::string getOrCreateSymDimNameAndSize(const SmallVector<std::string> &rawGroup) {
     bool isAllOne = !std::any_of(rawGroup.begin(), rawGroup.end(), [](const std::string &axis) { return axis != "1"; });
     if (isAllOne) {
@@ -2019,15 +2044,6 @@ void unifyToFinestAxes(ModuleOp module, ShapeNormalState &state) {
     if (!state.isSupportedOp(op)) return;
     state.unifyToFinestAxes(op);
   });
-
-  module.walk([&](func::FuncOp func) {
-    SmallVector<Type> newArgTypes;
-    llvm::transform(func.getArguments(), std::back_inserter(newArgTypes),
-                    [](BlockArgument arg) { return arg.getType(); });
-    auto oldFuncType = func.getFunctionType();
-    auto newFuncType = FunctionType::get(func.getContext(), newArgTypes, oldFuncType.getResults());
-    func.setFunctionType(newFuncType);
-  });
 }
 
 void collectGlobalTargetShapes(ModuleOp module, ShapeNormalState &state) {
@@ -2237,6 +2253,7 @@ static bool analyzeShapeNormalization(ModuleOp module, ShapeNormalState &state, 
     SmallVector<std::string> expandedAxes = state.expandGroupedAxes(decomp.second);
     state.decompositions[decomp.first()] = expandedAxes;
   }
+  state.unifyAxesWithIdenticalDecompositions();
   assignLabels(module, state);
   collectGlobalTargetShapes(module, state);
 
@@ -2244,16 +2261,17 @@ static bool analyzeShapeNormalization(ModuleOp module, ShapeNormalState &state, 
     for (const auto &value : state.ValuesinFunc) {
       state.removeValueSymbolicShape(value);
     }
-    module.walk([&](func::FuncOp func) {
-      SmallVector<Type> newArgTypes;
-      llvm::transform(func.getArguments(), std::back_inserter(newArgTypes),
-                      [](BlockArgument arg) { return arg.getType(); });
-      auto oldFuncType = func.getFunctionType();
-      auto newFuncType = FunctionType::get(func.getContext(), newArgTypes, oldFuncType.getResults());
-      func.setFunctionType(newFuncType);
-    });
     return false;
   }
+
+  module.walk([&](func::FuncOp func) {
+    SmallVector<Type> newArgTypes;
+    llvm::transform(func.getArguments(), std::back_inserter(newArgTypes),
+                    [](BlockArgument arg) { return arg.getType(); });
+    auto oldFuncType = func.getFunctionType();
+    auto newFuncType = FunctionType::get(func.getContext(), newArgTypes, oldFuncType.getResults());
+    func.setFunctionType(newFuncType);
+  });
   return true;
 }
 
