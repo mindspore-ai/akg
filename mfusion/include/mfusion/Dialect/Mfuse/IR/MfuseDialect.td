@@ -21,6 +21,7 @@ include "mlir/IR/OpBase.td"
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
+include "mfusion/Dialect/Mfuse/IR/MfuseTraits.td"
 
 def Mfuse_Dialect : Dialect {
   let name = "mfuse";
@@ -56,8 +57,10 @@ class Mfuse_TypeWithContainedType<string name, string typeMnemonic> : Mfuse_Type
 }
 
 // Base class for all MFUSE dialect operations.
+// Automatically appends VerifySymbolicShapeTrait so every Mfuse op verifies
+// symbolic-shape consistency (inputs with symshape → outputs must too).
 class Mfuse_Op<string mnemonic, list<Trait> traits = []> :
-    Op<Mfuse_Dialect, mnemonic, traits> {
+    Op<Mfuse_Dialect, mnemonic, !listconcat(traits, [VerifySymbolicShapeTrait])> {
 }
 
 #endif // MFUSE_DIALECT_MFUSE_DIALECT_TD
