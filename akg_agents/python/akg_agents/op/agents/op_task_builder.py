@@ -285,8 +285,8 @@ class OpTaskBuilder(AgentBase):
             "runtime_check_error": runtime_check_error,
             "previous_task_desc": previous_task_desc,
             "format_instructions": self.format_instructions,
-            "framework": state.get("framework", "torch"),
-            "backend": state.get("backend", "cuda"),
+            "framework": state.get("framework", ""),
+            "backend": state.get("backend", ""),
             "bench_type": state.get("bench_type", "kernelbench"),
         }
     
@@ -696,10 +696,12 @@ class OpTaskBuilder(AgentBase):
         Returns:
             Tuple[result_dict, should_continue]
         """
-        # 获取配置参数
-        dsl = state.get("dsl", "triton")
-        backend = state.get("backend", "cuda")
-        
+        # 获取配置参数（默认值为空，由 check_task_config 在 LangGraphTask 中验证）
+        dsl = state.get("dsl", "")
+        backend = state.get("backend", "")
+        framework = state.get("framework", "")
+        arch = state.get("arch", "")
+
         # 加载配置
         config = load_config(dsl, backend=backend)
         
@@ -725,9 +727,9 @@ class OpTaskBuilder(AgentBase):
             runtime_check_passed, runtime_check_error = await self._check_task_desc_runtime(
                 task_desc=task_desc,
                 op_name=op_name,
-                framework=state.get("framework", "torch"),
+                framework=framework,
                 backend=backend,
-                arch=state.get("arch", "a100"),
+                arch=arch,
                 dsl=dsl,
                 config=config,
                 timeout=60

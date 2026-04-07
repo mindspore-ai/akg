@@ -99,7 +99,7 @@ class BatchAdaptiveSearchConfig:
         config_dir = os.path.dirname(os.path.abspath(config_path))
         
         instance = cls()
-        
+
         # 环境配置
         env_config = config_dict.get("environment", {})
         instance.dsl = env_config.get("dsl", instance.dsl)

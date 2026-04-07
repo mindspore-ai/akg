@@ -464,7 +464,9 @@ class NodeFactory:
             # 这允许 verifier 在创建时使用占位符，运行时从 state 获取实际值
             verifier_instance.op_name = state.get('op_name', verifier_instance.op_name)
             verifier_instance.framework_code = state.get('task_desc', getattr(verifier_instance, 'framework_code', ''))
-            verifier_instance.framework = state.get('framework', getattr(verifier_instance, 'framework', 'torch'))
+            verifier_instance.framework = state.get('framework') or getattr(verifier_instance, 'framework', None)
+            if not verifier_instance.framework:
+                raise ValueError("❌ 缺少关键配置 'framework'，无法初始化 verifier。请确保 state 中显式提供 framework。")
             verifier_instance.task_id = state.get('task_id', getattr(verifier_instance, 'task_id', '0'))
             # dsl 需要规范化处理
             from akg_agents.op.utils.config_utils import normalize_dsl

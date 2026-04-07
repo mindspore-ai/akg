@@ -201,7 +201,7 @@ async def adaptive_search(
     """
     logger.info(f"Starting adaptive_search for {op_name}")
     logger.info(f"DSL: {dsl}, Framework: {framework}, Backend: {backend}, Arch: {arch}")
-    
+
     # 加载搜索配置
     search_config_dict = load_adaptive_search_config(search_config_path)
     

@@ -77,16 +77,19 @@ class ServerJobManager:
         if not arch:
             raise ValueError("arch is required when submitting a job.")
 
+        dsl = request_data.get("dsl")
+        if not dsl:
+            raise ValueError("dsl is required when submitting a job.")
+
         # 静态检查 task_desc
         if task_desc:
-            # 临时创建一个 verifier 实例用于检查 (不需要 worker)
             verifier = KernelVerifier(
-                op_name="check", 
-                framework_code="", 
+                op_name="check",
+                framework_code="",
                 config={"log_dir": "/tmp"},
                 backend=backend,
                 arch=arch,
-                dsl=request_data.get("dsl", "triton") # 临时用
+                dsl=dsl
             )
             valid, error = verifier.check_task_desc_static(task_desc)
             if not valid:
