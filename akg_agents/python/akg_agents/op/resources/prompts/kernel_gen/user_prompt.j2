@@ -334,6 +334,8 @@ class ModelNew(nn.Cell):
 {% endif %}
 **注意**：以上self属性只针对于需要用到内置参数的实现，对于使用get_inputs或get_init_inputs传入的参数，需要直接调用。
 
+**⚠️ 关键**：`ModelNew.__init__` 的参数必须与任务描述中 `get_init_inputs()` 的返回值严格一一对应，不得省略、重命名或硬编码。例如任务中 `get_init_inputs()` 返回 `[num_features]`，则 `__init__` 必须接收 `num_features` 参数。
+
 2. 对于无参数的算子（如ReLU），`__init__`可以为空：
 ```python
 {% if framework == "torch" %}
