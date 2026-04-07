@@ -609,16 +609,16 @@ class NodeFactory:
                 "hash": f"kernel_conductor@{conductor_step}",
             })
 
-            # 从 KernelGen 缓存获取 fundamental + guide + fix，传给 conductor
-            # 不传 example（代码示例对错误分析无帮助）和 case_improve（性能优化与修复无关）
             skill_contents_for_conductor = ""
             if kernel_gen_instance is not None:
                 cache = getattr(kernel_gen_instance, '_initial_selection_cache', None)
                 if cache:
                     conductor_skills = cache.get("always", []) + cache.get("guide", [])
-                    # 追加 fix 类 case（evolved-fix 等错误修复经验）
                     for s in cache.get("case", []):
-                        if kernel_gen_instance._infer_case_type(s) == "fix":
+                        cat = getattr(s, "category", "") or ""
+                        if cat == "fix":
+                            conductor_skills.append(s)
+                        elif cat == "case" and kernel_gen_instance._infer_case_type(s) == "fix":
                             conductor_skills.append(s)
                     if conductor_skills:
                         skill_contents_for_conductor = kernel_gen_instance._assemble_skill_contents(conductor_skills)

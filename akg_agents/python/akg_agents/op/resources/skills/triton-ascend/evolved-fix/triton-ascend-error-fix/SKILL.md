@@ -1,10 +1,9 @@
 ---
 name: triton-ascend-error-fix
-description: triton-ascend 常见错误修复（6 类）：UB/CBUF溢出、BiShengIR编译失败、语法限制违反、数值正确性、多维索引分解错误、张量连续性
-category: case
-version: 1.0.0
+description: triton-ascend 常见错误修复：UB/CBUF溢出、BiShengIR编译失败、语法限制违反、数值正确性、多维索引分解错误、张量连续性
+category: fix
+version: "1.0.0"
 metadata:
-  source: error_fix
   case_type: fix
   backend: ascend
   dsl: triton_ascend

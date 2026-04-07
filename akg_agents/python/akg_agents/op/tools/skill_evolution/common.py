@@ -444,7 +444,7 @@ class SkillWriter:
         frontmatter = {
             "name": self._error_fix_skill_name(dsl),
             "description": description or self._error_fix_description(dsl),
-            "category": "case",
+            "category": "fix",
             "version": "1.0.0",
             "metadata": meta,
         }
@@ -484,10 +484,11 @@ class SkillWriter:
         if dsl:
             meta["dsl"] = dsl.lower()
 
+        category = "fix" if case_type == "fix" else "improvement"
         frontmatter = {
             "name": skill_name,
             "description": desc,
-            "category": "case",
+            "category": category,
             "version": "1.0.0",
             "metadata": meta,
         }
