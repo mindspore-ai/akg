@@ -226,7 +226,7 @@ class FrameworkAdapterTorch(FrameworkAdapter):
     torch.cuda.set_device(0)  # 使用第一个CUDA设备
 """
         elif backend == "ascend":
-            if "ascend910" in arch:
+            if "ascend910" in arch or "ascend950" in arch:
                 return f"""    import torch_npu
     os.environ['DEVICE_ID'] = str({device_id})
     device = torch.device("npu")
