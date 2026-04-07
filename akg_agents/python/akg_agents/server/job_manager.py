@@ -1,3 +1,17 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import asyncio
 import uuid
 import logging
@@ -22,7 +36,7 @@ class Model(nn.Module):
     """
     def __init__(self):
         super(Model, self).__init__()
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Applies ReLU activation to the input tensor.
@@ -46,6 +60,7 @@ def get_init_inputs():
     return []  # No special initialization inputs needed
 '''.strip()
 
+
 def _get_task_desc_format_hint() -> str:
     """返回 task_desc 格式提示信息"""
     return f"""
@@ -58,15 +73,16 @@ task_desc must follow the KernelBench format with the following required compone
 Example (PyTorch):
 {TASK_DESC_EXAMPLE}
 
-Note: The example above uses PyTorch. For other frameworks like MindSpore or NumPy, 
+Note: The example above uses PyTorch. For other frameworks like MindSpore or NumPy,
 please refer to the corresponding examples in the akg_agents/examples/ directory.
 """
+
 
 class ServerJobManager:
     def __init__(self):
         self.jobs: Dict[str, Dict[str, Any]] = {}
         self._tasks: Dict[str, asyncio.Task] = {}  # 保存 asyncio.Task 引用，用于取消
-    
+
     async def submit_job(self, request_data: dict) -> str:
         backend = request_data.get("backend")
         arch = request_data.get("arch")
@@ -100,7 +116,7 @@ class ServerJobManager:
             raise ValueError(f"task_desc is required when submitting a job.\n\n{hint}")
 
         worker_manager = get_worker_manager()
-        
+
         # 检查目标 backend 的 Worker 是否可用
         worker_available = await worker_manager.has_worker(
             backend=backend,
@@ -109,7 +125,7 @@ class ServerJobManager:
         if not worker_available:
             # 获取当前所有已注册的 Worker 状态
             all_workers = await worker_manager.get_status()
-            
+
             error_msg = f"No available worker found for backend='{backend}', arch='{arch}'.\n"
             if not all_workers:
                 error_msg += "Reason: No workers are currently registered to the server."
@@ -118,16 +134,19 @@ class ServerJobManager:
                     f"- backend='{w['backend']}', arch='{w['arch']}', capacity={w['capacity']}, tags={w['tags']}"
                     for w in all_workers
                 ])
-                error_msg += f"Reason: Registered workers do not match the requirements.\nCurrently registered workers:\n{worker_list_str}"
-            
+                error_msg += (
+                    f"Reason: Registered workers do not match the requirements.\n"
+                    f"Currently registered workers:\n{worker_list_str}"
+                )
+
             error_msg += "\nPlease register a compatible worker before submitting the job."
-            
+
             raise RuntimeError(error_msg)
-        
+
         # 检查是否是 CUDA-to-Ascend 转换场景
         source_backend = request_data.get("source_backend")
         source_arch = request_data.get("source_arch")
-        
+
         if source_backend and source_backend != backend:
             # CUDA-to-Ascend 转换场景，需要检查 source_backend 的 Worker 是否可用
             source_worker_available = await worker_manager.has_worker(
@@ -136,7 +155,11 @@ class ServerJobManager:
             )
             if not source_worker_available:
                 all_workers = await worker_manager.get_status()
-                error_msg = f"No available worker found for source_backend='{source_backend}', source_arch='{source_arch}'.\n"
+                error_msg = (
+                    f"No available worker found for "
+                    f"source_backend='{source_backend}', "
+                    f"source_arch='{source_arch}'.\n"
+                )
                 if all_workers:
                     worker_list_str = "\n".join([
                         f"- backend='{w['backend']}', arch='{w['arch']}', capacity={w['capacity']}, tags={w['tags']}"
@@ -148,7 +171,7 @@ class ServerJobManager:
 
         job_id = str(uuid.uuid4())
         job_type = request_data.get("job_type", "single")
-        
+
         # 初始化状态
         self.jobs[job_id] = {
             "status": "pending",
@@ -158,25 +181,25 @@ class ServerJobManager:
             "result": None,
             "error": None
         }
-        
+
         # 根据类型启动不同的后台任务，并保存 task 引用
         if job_type == "evolve":
             task = asyncio.create_task(self._run_evolve_job(job_id, request_data))
         else:
             task = asyncio.create_task(self._run_single_job(job_id, request_data))
-        
+
         self._tasks[job_id] = task
-        
+
         # 任务完成后清理 task 引用
         task.add_done_callback(lambda t: self._tasks.pop(job_id, None))
-            
+
         logger.info(f"Job submitted: {job_id} ({job_type})")
         return job_id
 
     async def _check_task_desc_runtime_wrapper(self, job_id: str, data: dict, config: dict) -> bool:
         """
         在任务开始前执行运行时检查
-        
+
         支持跨后端转换场景：
         - 当 source_backend 与 backend 不同时，在源 Worker 上生成参考数据
         - 将参考数据存入 config['reference_data']，供目标 Worker 验证时使用
@@ -185,25 +208,32 @@ class ServerJobManager:
         if not task_desc:
             hint = _get_task_desc_format_hint()
             raise ValueError(f"task_desc is required but was not provided.\n\n{hint}")
-            
+
         backend = data.get("backend")
         arch = data.get("arch")
         source_backend = data.get("source_backend")
         source_arch = data.get("source_arch")
-        
+
         worker_manager = get_worker_manager()
-        
+
         # 检查是否需要生成参考数据（只要有 source_backend 就需要）
         need_reference_data = (source_backend is not None and source_backend != backend)
-        
+
         if need_reference_data:
             # ========== 阶段1: 在源 Worker 上生成参考数据 ==========
-            logger.info(f"[{job_id}] Cross-backend conversion detected (source={source_backend} -> target={backend}). Generating reference data...")
-            
+            logger.info(
+                f"[{job_id}] Cross-backend conversion detected "
+                f"(source={source_backend} -> target={backend}). "
+                f"Generating reference data..."
+            )
+
             source_worker = await worker_manager.select(backend=source_backend, arch=source_arch)
             if not source_worker:
-                raise RuntimeError(f"No available source worker found for reference generation (backend={source_backend}, arch={source_arch})")
-            
+                raise RuntimeError(
+                    f"No available source worker found for reference generation "
+                    f"(backend={source_backend}, arch={source_arch})"
+                )
+
             try:
                 # 根据 source_backend 决定 dsl
                 source_dsl = data.get("source_dsl")
@@ -215,7 +245,7 @@ class ServerJobManager:
                         source_dsl = "triton_ascend"
                     else:
                         source_dsl = "triton"
-                
+
                 # 创建 verifier 用于生成参考数据
                 verifier = KernelVerifier(
                     op_name=data.get("op_name"),
@@ -228,34 +258,34 @@ class ServerJobManager:
                     config=config,
                     worker=source_worker
                 )
-                
+
                 # 生成参考数据
                 success, log, ref_bytes = await verifier.generate_reference_data(task_desc, timeout=120)
-                
+
                 if not success:
                     raise RuntimeError(f"Reference data generation failed on source worker:\n{log}")
-                
+
                 # 将参考数据存入 config
                 config['use_reference_data'] = True
                 config['reference_data'] = ref_bytes
                 logger.info(f"[{job_id}] Reference data generated successfully ({len(ref_bytes)} bytes)")
-                
+
             finally:
                 await worker_manager.release(source_worker)
-            
+
             # ========== 阶段2: 不再需要在目标 Worker 上执行运行时检查 ==========
             # 因为我们已经在源 Worker 上验证过 task_desc 可以正常运行
             logger.info(f"[{job_id}] Skipping target runtime check (reference data already generated)")
             return True
-        
+
         else:
             # ========== 普通场景: 在目标 Worker 上执行运行时检查 ==========
             logger.info(f"[{job_id}] Starting runtime check for task description...")
-            
+
             worker = await worker_manager.select(backend=backend, arch=arch)
             if not worker:
                 raise RuntimeError(f"No available worker found for runtime check (backend={backend}, arch={arch})")
-                
+
             try:
                 # 创建 verifier
                 verifier = KernelVerifier(
@@ -269,17 +299,17 @@ class ServerJobManager:
                     config=config,
                     worker=worker
                 )
-                
+
                 # 执行检查
                 valid, error = await verifier.check_task_desc_runtime(task_desc, timeout=60)
-                
+
                 if not valid:
                     hint = _get_task_desc_format_hint()
                     raise RuntimeError(f"Task description runtime check failed: {error}\n\n{hint}")
-                    
+
                 logger.info(f"[{job_id}] Task description runtime check passed.")
                 return True
-                
+
             finally:
                 # 释放 worker
                 await worker_manager.release(worker)
@@ -293,7 +323,7 @@ class ServerJobManager:
                 config = load_config(data.get("dsl"), backend=data.get("backend"))
             except Exception:
                 config = {}
-            
+
             # 执行运行时检查
             await self._check_task_desc_runtime_wrapper(job_id, data, config)
 
@@ -301,7 +331,7 @@ class ServerJobManager:
             task = LangGraphTask(
                 op_name=data.get("op_name"),
                 task_desc=data.get("task_desc"),
-                task_id=job_id, # 复用 job_id 作为 task_id
+                task_id=job_id,  # 复用 job_id 作为 task_id
                 backend=data.get("backend"),
                 arch=data.get("arch"),
                 dsl=data.get("dsl"),
@@ -311,14 +341,14 @@ class ServerJobManager:
                 source_backend=data.get("source_backend"),  # 跨后端转换的源后端
                 source_arch=data.get("source_arch")         # 跨后端转换的源架构
             )
-            
+
             # 支持注入初始代码 (用于测试或特定场景)
             init_task_info = None
             if data.get("init_code"):
                 init_task_info = {"coder_code": data.get("init_code")}
 
             _, success, task_info = await task.run(init_task_info=init_task_info)
-            
+
             self.jobs[job_id]["status"] = "completed" if success else "failed"
             self.jobs[job_id]["result"] = {
                 "success": success,
@@ -335,12 +365,12 @@ class ServerJobManager:
         self.jobs[job_id]["status"] = "running"
         try:
             config = load_config(data.get("dsl"), backend=data.get("backend"))
-            
+
             # 执行运行时检查
             await self._check_task_desc_runtime_wrapper(job_id, data, config)
-            
+
             task_pool = TaskPool(max_concurrency=data.get("parallel_num", 1))
-            
+
             result = await evolve(
                 op_name=data.get("op_name"),
                 task_desc=data.get("task_desc"),
@@ -357,7 +387,7 @@ class ServerJobManager:
                 elite_size=data.get("elite_size", 0),
                 parent_selection_prob=data.get("parent_selection_prob", 0.5)
             )
-            
+
             # 提取最优结果
             best_result = {
                 "success": result.get("successful_tasks", 0) > 0,
@@ -372,7 +402,7 @@ class ServerJobManager:
                 best_kernel = best_impls[0]
                 best_result["code"] = best_kernel.get("impl_code", "")
                 best_result["profile"] = best_kernel.get("profile", {})
-            
+
             self.jobs[job_id]["status"] = "completed"
             self.jobs[job_id]["result"] = best_result
         except asyncio.CancelledError:
@@ -393,36 +423,37 @@ class ServerJobManager:
     async def cancel_job(self, job_id: str) -> bool:
         """
         取消指定的 job。
-        
+
         Args:
             job_id: 要取消的 job ID
-            
+
         Returns:
             bool: 是否成功取消
         """
         if job_id not in self.jobs:
             logger.warning(f"Cancel request for unknown job: {job_id}")
             return False
-        
+
         job_status = self.jobs[job_id].get("status")
         if job_status in ["completed", "failed", "error", "cancelled"]:
             logger.info(f"Job {job_id} already finished with status: {job_status}")
             return False
-        
+
         # 取消 asyncio task
         task = self._tasks.get(job_id)
         if task and not task.done():
             task.cancel()
             logger.info(f"Cancelled asyncio task for job {job_id}")
-        
+
         # 更新状态
         self.jobs[job_id]["status"] = "cancelled"
         self.jobs[job_id]["error"] = "Job cancelled by user"
         logger.info(f"Job {job_id} cancelled")
         return True
 
+
 _GLOBAL_JOB_MANAGER = ServerJobManager()
+
 
 def get_job_manager():
     return _GLOBAL_JOB_MANAGER
-
