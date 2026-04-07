@@ -44,3 +44,4 @@ tmp/
 
 # Thirdparty dependencies and datasets
 thirdparty/sol-execbench/
+thirdparty/SOL-ExecBench-dataset/
