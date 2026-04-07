@@ -79,12 +79,12 @@ Skills are classified by `category` for filtering and selection. Standard catego
 **Project-level** (relative to project root):
 - `.akg/skills/`
 - `.claude/skills/`
-- `.opencode/skill/`
+- `.opencode/skills/`
 
 **Global-level** (when `enable_global=True`):
 - `~/.akg/skills/`
 - `~/.claude/skills/`
-- `~/.config/opencode/skill/`
+- `~/.config/opencode/skills/`
 
 ### Usage
 
