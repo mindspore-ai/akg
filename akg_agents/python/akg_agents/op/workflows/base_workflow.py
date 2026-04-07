@@ -81,18 +81,18 @@ _DSL_DOCS_DIR_MAP: Dict[str, Dict[str, str]] = {
 
 class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
     """算子工作流基类
-    
+
     继承通用 BaseWorkflow，添加算子生成场景的专用属性：
     - agents: 算子 Agent 字典（designer, coder, verifier）
     - device_pool: 设备池（向后兼容）
     - private_worker / worker_manager: Worker 管理
     - conductor_template: Conductor 分析模板
     """
-    
+
     def __init__(self, agents: dict, device_pool, trace, config: dict,
                  private_worker=None, worker_manager=None, backend=None, arch=None):
         """初始化算子工作流
-        
+
         Args:
             agents: Agent 实例字典 (designer, coder, verifier)
             device_pool: 设备池（向后兼容）
@@ -104,7 +104,7 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             arch: 架构类型（用于 Worker 选择）
         """
         super().__init__(config, trace)
-        
+
         # 算子专用属性
         self.agents = agents
         self.device_pool = device_pool  # 向后兼容
@@ -112,10 +112,10 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         self.worker_manager = worker_manager
         self.backend = backend
         self.arch = arch
-        
+
         # 加载 Conductor 模板
         self._load_conductor_template()
-    
+
     def _load_conductor_template(self):
         """加载算子专用的 Conductor 模板"""
         try:
@@ -126,7 +126,7 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         except Exception as e:
             logger.warning(f"Failed to load conductor template: {e}")
             self.conductor_template = None
-    
+
     @staticmethod
     def build_langgraph_task_config(
         dsl: str,
@@ -135,32 +135,32 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         base_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """构建 LangGraphTask 所需的完整配置
-        
+
         根据 DSL 和 backend 自动填充 docs_dir、agent_model_config、task_label 等配置，
         使 adaptive_search / evolve 内部创建的 LangGraphTask 能正确初始化 Agent。
-        
+
         这些配置在原来的 run_single_adaptive_search.py / run_single_evolve.py 中
         由 load_config() + 手动补齐完成，现在硬编码到 workflow 中。
-        
+
         Args:
             dsl: DSL 类型（如 'triton_ascend', 'triton_cuda'）
             backend: 后端（如 'cuda', 'ascend'）
             op_name: 算子名称（用于 task_label）
             base_config: 基础配置字典（已有的 config，新配置会在此基础上补充）
-        
+
         Returns:
             完整的配置字典
         """
         config = dict(base_config or {})
         dsl_lower = (dsl or "").lower()
-        
+
         # 1. log_dir（若尚未设置）
         if "log_dir" not in config:
             log_root = os.path.expanduser("~/akg_agents_logs")
             config["log_dir"] = str(
                 Path(log_root) / f"Task_{next(tempfile._get_candidate_names())}"
             )
-        
+
         # 2. docs_dir —— 根据 DSL 硬编码映射
         if "docs_dir" not in config:
             docs_dir = _DSL_DOCS_DIR_MAP.get(dsl_lower)
@@ -171,7 +171,7 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
                     f"[OpBaseWorkflow] 未找到 DSL '{dsl}' 对应的 docs_dir 映射，"
                     f"Designer/Coder 可能无法加载文档"
                 )
-        
+
         # 3. agent_model_config —— 各 Agent 默认使用 "standard" 模型级别
         if "agent_model_config" not in config or not isinstance(
             config.get("agent_model_config"), dict
@@ -184,7 +184,7 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             "designer", "coder", "conductor", "verifier", "selector", "op_task_builder"
         ]:
             mc.setdefault(agent_name, mc["default"])
-        
+
         # 4. task_label
         if "task_label" not in config:
             try:
@@ -195,22 +195,22 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
                 )
             except Exception as e:
                 logger.warning(f"[OpBaseWorkflow] 无法生成 task_label: {e}")
-        
+
         # 5. profile_settings（硬编码，不允许用户或 LLM 修改）
         config["profile_settings"] = {
             "run_times": 50,
             "warmup_times": 5,
         }
-        
+
         # 6. verify_timeout（硬编码，5 分钟）
         config["verify_timeout"] = 300
-        
+
         # 7. default_workflow（仅在未设置时使用默认值，不覆盖已有配置）
         config.setdefault("default_workflow", "default_workflow")
-        
+
         # 8. max_step（默认 20，允许外部配置覆盖）
         config.setdefault("max_step", 20)
-        
+
         # 9. workflow_timeout（默认 30 分钟，允许外部配置覆盖）
         config.setdefault("workflow_timeout", 1800)
 
@@ -218,22 +218,22 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         # 说明：远端 worker 不能依赖本地 shell 环境变量，必须在任务级配置中显式下发。
         if dsl_lower == "pypto":
             config.setdefault("pypto_run_mode", 0)
-        
+
         return config
-    
+
     @classmethod
     def prepare_config(cls, workflow_resources: Dict[str, Any], arguments: Dict[str, Any]):
         """根据 arguments 调整 workflow 配置（Op 基础实现）
-        
+
         功能：
         当指定了 cur_path 时（即被 KernelAgent 通过 ToolExecutor 调用）：
         1. 将 log_dir 重定向到 cur_path/logs
         2. 创建 WorkflowLogger 实例并注入到 workflow_resources["trace"]，
            替换掉原始的 TraceSystem 实例，使 workflow 内部的 nodes 统一使用
            WorkflowLogger 记录日志
-        
+
         子类可以覆盖此方法添加额外逻辑，但应先调用 super().prepare_config()。
-        
+
         Args:
             workflow_resources: workflow 资源字典（会被就地修改）
             arguments: 工具调用参数
@@ -241,12 +241,12 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
         # 确保 config 是一个独立副本
         workflow_resources["config"] = dict(workflow_resources.get("config") or {})
         config = workflow_resources["config"]
-        
+
         cur_path = arguments.get("cur_path")
         if cur_path:
             log_dir = str(Path(cur_path) / "logs")
             config["log_dir"] = log_dir
-            
+
             # 创建 WorkflowLogger
             # 使 workflow 内部的 nodes 统一使用 WorkflowLogger 记录日志
             from akg_agents.core_v2.workflow_logger import WorkflowLogger
@@ -257,20 +257,20 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
                 category=category,
                 task_id=task_id,
             )
-            
+
             logger.info(f"[{cls.__name__}] cur_path 已设置，log_dir 重定向到: {log_dir}")
-    
+
     @classmethod
     def build_initial_state(cls, arguments: Dict[str, Any], agent_context: Dict[str, Any]) -> Dict[str, Any]:
         """构建算子 workflow 的初始状态
-        
+
         从 LLM 工具调用参数和 agent 上下文中提取所需字段，
         构建 KernelGenState 的初始值。
-        
+
         Args:
             arguments: LLM 工具调用参数（已注入 cur_path）
             agent_context: Agent 上下文（包含硬件参数等）
-        
+
         Returns:
             KernelGenState 初始状态字典
         """
@@ -278,10 +278,10 @@ class OpBaseWorkflow(BaseWorkflow[KernelGenState]):
             # 算子基础信息
             "op_name": arguments.get("op_name", ""),
             "task_desc": arguments.get("task_desc", ""),
-            "dsl": arguments.get("dsl", agent_context.get("dsl", "")),
-            "framework": arguments.get("framework", agent_context.get("framework", "")),
-            "backend": arguments.get("backend", agent_context.get("backend", "")),
-            "arch": arguments.get("arch", agent_context.get("arch", "")),
+            "dsl": arguments.get("dsl") or agent_context.get("dsl", ""),
+            "framework": arguments.get("framework") or agent_context.get("framework", ""),
+            "backend": arguments.get("backend") or agent_context.get("backend", ""),
+            "arch": arguments.get("arch") or agent_context.get("arch", ""),
             "task_id": arguments.get("task_id", "0"),
             "user_requirements": arguments.get("user_requirements", ""),
             "previous_code": arguments.get("previous_code", ""),
