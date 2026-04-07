@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Sync .opencode/skills/ to .claude/skills/ and .cursor/skills/
-# via individual symlinks so Claude Code and Cursor can discover them.
+# Sync .opencode/skills/ to .claude/skills/, .cursor/skills/ and .qwen/skills/
+# via individual symlinks so Claude Code, Cursor and Qwen Code can discover them.
 #
 # Usage:
 #   ./scripts/sync_skills.sh              # sync akg_agents/
@@ -35,7 +35,7 @@ sync_dir() {
         return
     fi
 
-    for tool_dir in ".claude/skills" ".cursor/skills"; do
+    for tool_dir in ".claude/skills" ".cursor/skills" ".qwen/skills"; do
         local target="$dir/$tool_dir"
         rm -rf "$target"
         mkdir -p "$target"
