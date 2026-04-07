@@ -114,4 +114,3 @@ def load_config(dsl="", config_path: Optional[str] = None, backend: Optional[str
     validator = ConfigValidator(str(final_config_path))
     validator.validate_all()
     return validator.config
-

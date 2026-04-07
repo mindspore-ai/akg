@@ -78,7 +78,7 @@ class OpCommandOrchestrator:
                 ti = root_state.get("task_info", {})
                 if ti.get("dsl") and ti.get("backend"):
                     return ResolvedTargetConfig(
-                        framework=ti.get("framework", "torch"),
+                        framework=ti.get("framework", ""),
                         backend=ti["backend"],
                         arch=ti.get("arch", ""),
                         dsl=ti["dsl"],
