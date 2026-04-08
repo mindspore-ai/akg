@@ -14,8 +14,8 @@ class PathManager:
         for sub_dir in sub_dirs:
             sub_path = os.path.join(profiler_path, sub_dir)
             if os.path.isdir(sub_path) and (
-                re.match(r"^PROF_\d+_\d+_\d+_[a-zA-Z]+", sub_dir) or
-                re.match(r"^PROF_\d+_\d+_[a-zA-Z]+", sub_dir)
+                re.match(r"^PROF_\d+_\d+_\d+_[0-9a-zA-Z]+", sub_dir) or
+                re.match(r"^PROF_\d+_\d+_[0-9a-zA-Z]+", sub_dir)
             ):
                 return sub_path
         return ""
