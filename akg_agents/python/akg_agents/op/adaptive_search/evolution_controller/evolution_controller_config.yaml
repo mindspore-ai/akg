@@ -33,12 +33,12 @@ inspiration:
 # ============================================================================
 # Solver 3: 多维收敛检测
 # ============================================================================
-# 四维信号 + 三状态机（EXPLORING → WATCHING → STOPPED）。
+# 三维信号 + 三状态机（EXPLORING → WATCHING → STOPPED）。
 # max_total_tasks 自动从搜索配置继承，无需在此设置。
 convergence:
   convergence_window: 5             # 信号计算窗口大小
   perf_improvement_threshold: 0.02  # 性能改善阈值（2%）
   diversity_change_threshold: 0.05  # 多样性变化阈值
   activity_threshold: 0.8           # 谱系充分探索阈值
-  patience: 2                       # 停滞容忍窗口数
+  patience: 3                       # 停滞容忍窗口数
   # max_time_seconds: 1800          # 可选：时间预算（秒），不设则无时间限制
