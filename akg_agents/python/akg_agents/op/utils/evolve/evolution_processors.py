@@ -454,7 +454,8 @@ class TaskCreationProcessor:
                     inspirations=island_inspirations[island_idx][pid],
                     meta_prompts=island_meta_prompts[island_idx][pid] if island_meta_prompts[island_idx] else None,
                     handwrite_suggestions=island_handwrite_suggestions[island_idx],
-                    user_requirements=user_requirements,  # 用户额外需求
+                    user_requirements=user_requirements,
+                    bench_type=task_config.get("bench_type", "kernelbench"),
                 )
                 
                 task_pool.create_task(partial(task.run,), task_name=task_id)
@@ -503,7 +504,8 @@ class TaskCreationProcessor:
                 inspirations=inspirations[pid],
                 meta_prompts=meta_prompts[pid] if meta_prompts else None,
                 handwrite_suggestions=handwrite_suggestions_list[pid] if handwrite_suggestions_list else [],
-                user_requirements=user_requirements,  # 用户额外需求
+                user_requirements=user_requirements,
+                bench_type=task_config.get("bench_type", "kernelbench"),
             )
             
             task_pool.create_task(partial(task.run,), task_name=task_id)

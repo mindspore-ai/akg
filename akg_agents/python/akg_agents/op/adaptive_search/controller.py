@@ -135,6 +135,7 @@ class AdaptiveSearchController:
             handwrite_sample_num=self.search_config.handwrite_sample_num,
             handwrite_decay_rate=self.search_config.handwrite_decay_rate
         )
+        self.bench_type = config.get("bench_type", "kernelbench")
         self.generator = TaskGenerator(
             op_name=op_name,
             task_desc=task_desc,
@@ -144,7 +145,8 @@ class AdaptiveSearchController:
             arch=arch,
             config=config,
             db=self.db,
-            generator_config=generator_config
+            generator_config=generator_config,
+            bench_type=self.bench_type,
         )
         
         # 统计信息

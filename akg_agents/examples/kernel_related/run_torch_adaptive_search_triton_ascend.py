@@ -16,6 +16,7 @@
 自适应搜索示例 - Triton Ascend
 
 使用基于 UCB 选择策略的自适应搜索框架生成 Triton Ascend Kernel。
+支持 KernelBench 和 SOL-ExecBench 两种数据集输入。
 
 特点：
 - 异步流水线：任务完成立即补充，无等待浪费
@@ -24,7 +25,11 @@
 - Sketch 更新：根据最终代码重新生成 sketch
 
 用法:
+  # KernelBench 模式（默认，使用内置 ReLU 算子）
   python run_torch_adaptive_search_triton_ascend.py
+  
+  # SOL-ExecBench 模式（指定 SOL 数据集目录）
+  python run_torch_adaptive_search_triton_ascend.py --sol-problem-dir examples/kernel_related/mock_sol_relu
   
   # 自定义参数
   python run_torch_adaptive_search_triton_ascend.py --max-tasks 30 --max-concurrent 4
@@ -32,6 +37,7 @@
 
 import asyncio
 import argparse
+import json
 
 from akg_agents.op.adaptive_search import adaptive_search
 from akg_agents.core.worker.manager import register_worker
@@ -41,14 +47,9 @@ from akg_agents import get_project_root
 from pathlib import Path
 
 
-def get_op_name():
-    """返回算子名称"""
-    return 'akg_agents_relu'
+DEFAULT_OP_NAME = 'akg_agents_relu'
 
-
-def get_task_desc():
-    """返回任务描述（PyTorch + NPU 模型代码）"""
-    return '''
+DEFAULT_TASK_DESC = '''
 import torch
 import torch.nn as nn
 
@@ -84,12 +85,53 @@ def get_init_inputs():
 '''
 
 
-def print_config(args):
+def get_sol_task_desc(case_dir: Path) -> str:
+    """从 SOL 数据集目录构建 task_desc"""
+    with open(case_dir / "definition.json", "r", encoding="utf-8") as f:
+        def_json = f.read()
+    with open(case_dir / "reference.py", "r", encoding="utf-8") as f:
+        ref_py = f.read()
+
+    workload_sample = ""
+    workload_file = case_dir / "workload.jsonl"
+    if workload_file.exists():
+        with open(workload_file, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+        if lines:
+            first = json.loads(lines[0])
+            workload_sample = (
+                f"\n\n## workload 示例（共 {len(lines)} 组，以下为第 1 组）\n"
+                f"```json\n{json.dumps(first, indent=2)}\n```"
+            )
+
+    return (
+        f"请实现一个 Triton Ascend 算子。\n\n"
+        f"## definition.json\n```json\n{def_json}\n```\n\n"
+        f"## reference.py\n```python\n{ref_py}\n```"
+        f"{workload_sample}\n\n"
+        f"注意：请使用 Triton 编写 kernel，并将其封装在 ModelNew 类的 forward 方法中。"
+    )
+
+
+def get_sol_op_name(case_dir: Path) -> str:
+    """从 SOL definition.json 提取算子名称"""
+    def_file = case_dir / "definition.json"
+    if def_file.exists():
+        with open(def_file, "r", encoding="utf-8") as f:
+            definition = json.load(f)
+        return definition.get("name", case_dir.name)
+    return case_dir.name
+
+
+def print_config(args, op_name, bench_type):
     """打印配置信息"""
     print("=" * 60)
     print("自适应搜索配置 (Triton Ascend)")
     print("=" * 60)
-    print(f"算子名称: {get_op_name()}")
+    print(f"算子名称: {op_name}")
+    print(f"bench_type: {bench_type}")
+    if args.sol_problem_dir:
+        print(f"SOL 数据集: {args.sol_problem_dir}")
     print(f"DSL: triton_ascend")
     print(f"框架: torch")
     print(f"后端: ascend")
@@ -166,14 +208,27 @@ def print_result(result):
 async def run_adaptive_search(args):
     """运行自适应搜索"""
     
-    # 打印配置
-    print_config(args)
-    
     # 配置
     dsl = "triton_ascend"
     framework = "torch"
     backend = "ascend"
     arch = "ascend910b4"
+    
+    # 根据输入模式确定 op_name / task_desc / bench_type
+    if args.sol_problem_dir:
+        case_dir = Path(args.sol_problem_dir).resolve()
+        if not (case_dir / "definition.json").exists():
+            raise FileNotFoundError(f"SOL 数据集目录缺少 definition.json: {case_dir}")
+        op_name = get_sol_op_name(case_dir)
+        task_desc = get_sol_task_desc(case_dir)
+        bench_type = "sol"
+    else:
+        op_name = DEFAULT_OP_NAME
+        task_desc = DEFAULT_TASK_DESC
+        bench_type = "kernelbench"
+    
+    # 打印配置
+    print_config(args, op_name, bench_type)
     
     # 配置文件路径
     config_path = str(Path(get_project_root()) / "op" / "config" / "triton_ascend_evolve_config.yaml")
@@ -182,7 +237,7 @@ async def run_adaptive_search(args):
     print(f"\n{'='*60}")
     print("注册 Worker")
     print(f"{'='*60}")
-    print(f"🔗 注册 Worker: devices={args.devices}")
+    print(f"注册 Worker: devices={args.devices}")
     await register_worker(
         backend=backend,
         arch=arch,
@@ -199,9 +254,14 @@ async def run_adaptive_search(args):
     # 添加 task_label 到配置（LangGraphTask 需要）
     from akg_agents.utils.task_label import resolve_task_label
     loaded_config["task_label"] = resolve_task_label(
-        op_name=get_op_name(),
+        op_name=op_name,
         parallel_index=1,
     )
+    
+    # SOL 模式：注入 bench_type 和 sol_problem_dir 到 config
+    if bench_type == "sol":
+        loaded_config["bench_type"] = "sol"
+        loaded_config["sol_problem_dir"] = str(case_dir)
     
     check_env_for_task(framework, backend, dsl, loaded_config)
     
@@ -211,8 +271,8 @@ async def run_adaptive_search(args):
     print(f"{'='*60}\n")
     
     result = await adaptive_search(
-        op_name=get_op_name(),
-        task_desc=get_task_desc(),
+        op_name=op_name,
+        task_desc=task_desc,
         dsl=dsl,
         framework=framework,
         backend=backend,
@@ -250,8 +310,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # 默认配置
+  # 默认配置（KernelBench 模式）
   python run_torch_adaptive_search_triton_ascend.py
+  
+  # SOL-ExecBench 模式
+  python run_torch_adaptive_search_triton_ascend.py --sol-problem-dir examples/kernel_related/mock_sol_relu
   
   # 使用多个 NPU 设备
   python run_torch_adaptive_search_triton_ascend.py --devices 0 1 2 3 --max-concurrent 4
@@ -262,6 +325,15 @@ def main():
   # 更多探索
   python run_torch_adaptive_search_triton_ascend.py --exploration-coef 2.0
         """
+    )
+    
+    # SOL 数据集输入
+    parser.add_argument(
+        "--sol-problem-dir",
+        type=str,
+        default=None,
+        help="SOL-ExecBench 数据集目录路径（包含 definition.json、reference.py、workload.jsonl）。"
+             "指定后自动切换为 SOL bench_type。"
     )
     
     # 设备配置
