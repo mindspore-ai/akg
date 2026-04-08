@@ -17,12 +17,14 @@
 EvoKernel MHC 算子生成复现 — 固定文档导入 (coder_only_workflow)
 
 复现目标：
-  使用 coder_only_workflow（固定文档拼接）对 EvoKernel MHC benchmark 中的算子
-  进行端到端代码生成，记录生成结果和性能数据。
+  使用 coder_only_workflow（固定文档拼接）对 EvoKernel MHC 中的算子进行端到端
+  代码生成。适合作为 kernelgen_only_workflow 的基线对照。
 
 导入方式：
-  coder_only_workflow — 由 config 中 docs_dir.coder 指定的固定文档目录，
-  将全部文档内容拼接注入 prompt，不经过 Skill 系统的动态选择。
+  coder_only_workflow — 将固定参考文档直接拼接到 prompt，不经过 Skill 系统。
+
+默认行为：
+  运行 MHC 全部算子。可通过 --op 指定序号运行子集。
 
 前置条件：
   - source env.sh
@@ -39,25 +41,35 @@ MHC 算子列表（序号 → 名称）：
   05 StreamWrite          10 OrthostochasticProject 15 MhcPostBlock
 
 运行方式：
-  python reproduce/wip/reproduce_mhc_coder_only.py --help
-  python reproduce/wip/reproduce_mhc_coder_only.py                # 默认全部算子
-  python reproduce/wip/reproduce_mhc_coder_only.py --op 5         # 只跑序号 05
-  python reproduce/wip/reproduce_mhc_coder_only.py --op 1 3 5 7   # 只跑指定序号
-  python reproduce/wip/reproduce_mhc_coder_only.py --device 4 5 6 7 --concurrency 4  # 多卡池化
+  # 默认运行全部 MHC 算子
+  python reproduce/wip/reproduce_mhc_coder_only.py
 
-预期输出：
-  控制台打印环境规范 + 每个算子的生成结果（pass/fail、耗时、speedup）。
-  JSON 报告保存到 --output 指定路径（默认 ~/.akg/reproduce_log/）。
+  # 运行单个算子
+  python reproduce/wip/reproduce_mhc_coder_only.py --op 5
 
-结果存储格式：
-  {
-    "script": "mhc_coder_only",
-    "workflow": "coder_only_workflow",
-    "ops_count": 1, "elapsed_s": 123.4,
-    "env_spec": { "arch", "torch_npu", "triton_ascend", "commit", "llm_model", ... },
-    "task_log_dir": "~/akg_agents_logs",
-    "stats": { ... }
-  }
+  # 运行多个算子
+  python reproduce/wip/reproduce_mhc_coder_only.py --op 1 3 5 7
+
+  # Pass@3
+  python reproduce/wip/reproduce_mhc_coder_only.py --pass-n 3
+
+  # 多设备并行
+  python reproduce/wip/reproduce_mhc_coder_only.py --device 4 5 6 7 --concurrency 4 --llm-concurrency 8
+
+可调参数：
+  --op N [N ...]         MHC 算子序号（默认全部；指定后只跑对应序号）
+  --device ID [ID ...]   NPU 设备 ID，可多个以池化（默认 $DEVICE_ID 或 0）
+  --concurrency N        设备并行度上限（默认 4）
+  --llm-concurrency N    LLM 请求并发数（默认与 --concurrency 相同）
+  --arch ARCH            硬件架构（默认 ascend910b4）
+  --pass-n N             Pass@N：每个算子独立运行 N 次（默认 1）
+  --output PATH          JSON 报告输出路径
+  --profile              开启性能测试（默认关闭；开启后验证通过的算子自动跑 speedup）
+
+输出格式：
+  JSON 文件（默认 ~/.akg/reproduce_log/mhc_coder_only_<timestamp>.json），
+  包含 benchmark="EvoKernel_MHC"、stats.op_results（含 profile）等字段。
+  详见 reproduce/SPEC.md 中的 JSON 输出规范。
 """
 
 import argparse
@@ -65,13 +77,16 @@ import asyncio
 
 from _common import (
     setup_logging, collect_env_spec, print_env_spec,
-    run_benchmark, add_common_args, default_output_path,
+    run_benchmark, add_common_args,
+    default_output_path,
     ensure_test_utils_importable,
 )
 
+BENCHMARK = "EvoKernel_MHC"
+DEFAULT_WORKFLOW = "coder_only_workflow"
+
 
 def _index_to_op_name(index: int) -> str:
-    """将序号转为 MHC 文件名前缀格式，如 5 -> '05_StreamWrite'"""
     ensure_test_utils_importable()
     from utils import get_evokernel_mhc_op_name
     all_ops = get_evokernel_mhc_op_name()
@@ -87,7 +102,7 @@ def _index_to_op_name(index: int) -> str:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="EvoKernel MHC 复现 — 固定文档导入 (coder_only_workflow)",
+        description="EvoKernel MHC 复现 — 固定文档导入",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--op", nargs="+", type=int, default=None,
@@ -104,7 +119,6 @@ def resolve_ops(args):
         names = get_evokernel_mhc_op_name()
     else:
         names = [_index_to_op_name(idx) for idx in args.op]
-
     if not names:
         raise RuntimeError(f"未找到 MHC 算子（op={args.op}）")
 
@@ -123,16 +137,21 @@ async def main():
     print_env_spec(env_spec)
 
     ops = resolve_ops(args)
+    workflow = DEFAULT_WORKFLOW
     output = args.output or default_output_path("mhc_coder_only")
 
     await run_benchmark(
         script_name="mhc_coder_only",
-        workflow="coder_only_workflow",
+        workflow=workflow,
+        benchmark=BENCHMARK,
         ops=ops,
         framework="torch", dsl="triton_ascend", backend="ascend",
         arch=args.arch, device_ids=args.device,
         max_concurrency=args.concurrency,
+        llm_concurrency=args.llm_concurrency,
+        pass_n=args.pass_n,
         env_spec=env_spec, output_path=output,
+        enable_profile=args.profile,
     )
 
 

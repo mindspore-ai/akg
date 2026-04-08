@@ -17,13 +17,14 @@
 EvoKernel MHC 算子生成复现 — Skill 系统导入 (kernelgen_only_workflow)
 
 复现目标：
-  使用 kernelgen_only_workflow（Skill 系统分阶段动态选择）对 EvoKernel MHC
-  benchmark 中的算子进行端到端代码生成，记录生成结果和性能数据。
+  使用 kernelgen_only_workflow 对 EvoKernel MHC（Multi-Head Computation）中的
+  算子进行端到端代码生成。MHC 算子通常涉及多头注意力及相关融合模式。
 
 导入方式：
-  kernelgen_only_workflow — 由 KernelGen 内部按生成阶段（initial / debug /
-  optimize）动态调用 LLM 从 SKILL.md 文档库中选择相关 skill，按 category
-  分层注入 prompt。不使用固定文档拼接。
+  kernelgen_only_workflow — 由 KernelGen 按生成阶段动态选择 Skill 注入 prompt。
+
+默认行为：
+  运行 MHC 全部算子。可通过 --op 指定序号运行子集。
 
 前置条件：
   - source env.sh
@@ -40,26 +41,35 @@ MHC 算子列表（序号 → 名称）：
   05 StreamWrite          10 OrthostochasticProject 15 MhcPostBlock
 
 运行方式：
-  python reproduce/wip/reproduce_mhc_kernelgen_skill.py --help
-  python reproduce/wip/reproduce_mhc_kernelgen_skill.py                # 默认全部算子
-  python reproduce/wip/reproduce_mhc_kernelgen_skill.py --op 5         # 只跑序号 05
-  python reproduce/wip/reproduce_mhc_kernelgen_skill.py --op 1 3 5 7   # 只跑指定序号
-  python reproduce/wip/reproduce_mhc_kernelgen_skill.py --device 4 5 6 7 --concurrency 4  # 多卡池化
+  # 默认运行全部 MHC 算子
+  python reproduce/wip/reproduce_mhc_kernelgen_skill.py
 
-预期输出：
-  控制台打印环境规范 + 每个算子的生成结果（pass/fail、耗时、speedup）。
-  日志中可观察到 KernelGen 在各阶段选中/排除的 skill 列表。
-  JSON 报告保存到 --output 指定路径（默认 ~/.akg/reproduce_log/）。
+  # 运行单个算子（按序号）
+  python reproduce/wip/reproduce_mhc_kernelgen_skill.py --op 5
 
-结果存储格式：
-  {
-    "script": "mhc_kernelgen_skill",
-    "workflow": "kernelgen_only_workflow",
-    "ops_count": 1, "elapsed_s": 123.4,
-    "env_spec": { "arch", "torch_npu", "triton_ascend", "commit", "llm_model", ... },
-    "task_log_dir": "~/akg_agents_logs",
-    "stats": { ... }
-  }
+  # 运行多个算子
+  python reproduce/wip/reproduce_mhc_kernelgen_skill.py --op 1 3 5 7
+
+  # Pass@3
+  python reproduce/wip/reproduce_mhc_kernelgen_skill.py --pass-n 3
+
+  # 多设备并行
+  python reproduce/wip/reproduce_mhc_kernelgen_skill.py --device 4 5 6 7 --concurrency 4 --llm-concurrency 8
+
+可调参数：
+  --op N [N ...]         MHC 算子序号（默认全部；指定后只跑对应序号）
+  --device ID [ID ...]   NPU 设备 ID，可多个以池化（默认 $DEVICE_ID 或 0）
+  --concurrency N        设备并行度上限（默认 4）
+  --llm-concurrency N    LLM 请求并发数（默认与 --concurrency 相同）
+  --arch ARCH            硬件架构（默认 ascend910b4）
+  --pass-n N             Pass@N：每个算子独立运行 N 次（默认 1）
+  --output PATH          JSON 报告输出路径
+  --profile              开启性能测试（默认关闭；开启后验证通过的算子自动跑 speedup）
+
+输出格式：
+  JSON 文件（默认 ~/.akg/reproduce_log/mhc_kernelgen_skill_<timestamp>.json），
+  包含 benchmark="EvoKernel_MHC"、stats.op_results（含 profile）等字段。
+  详见 reproduce/SPEC.md 中的 JSON 输出规范。
 """
 
 import argparse
@@ -67,13 +77,16 @@ import asyncio
 
 from _common import (
     setup_logging, collect_env_spec, print_env_spec,
-    run_benchmark, add_common_args, default_output_path,
+    run_benchmark, add_common_args,
+    default_output_path,
     ensure_test_utils_importable,
 )
 
+BENCHMARK = "EvoKernel_MHC"
+DEFAULT_WORKFLOW = "kernelgen_only_workflow"
+
 
 def _index_to_op_name(index: int) -> str:
-    """将序号转为 MHC 文件名前缀格式，如 5 -> '05_StreamWrite'"""
     ensure_test_utils_importable()
     from utils import get_evokernel_mhc_op_name
     all_ops = get_evokernel_mhc_op_name()
@@ -89,7 +102,7 @@ def _index_to_op_name(index: int) -> str:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="EvoKernel MHC 复现 — Skill 系统导入 (kernelgen_only_workflow)",
+        description="EvoKernel MHC 复现 — Skill 系统导入",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--op", nargs="+", type=int, default=None,
@@ -106,7 +119,6 @@ def resolve_ops(args):
         names = get_evokernel_mhc_op_name()
     else:
         names = [_index_to_op_name(idx) for idx in args.op]
-
     if not names:
         raise RuntimeError(f"未找到 MHC 算子（op={args.op}）")
 
@@ -125,16 +137,21 @@ async def main():
     print_env_spec(env_spec)
 
     ops = resolve_ops(args)
+    workflow = DEFAULT_WORKFLOW
     output = args.output or default_output_path("mhc_kernelgen_skill")
 
     await run_benchmark(
         script_name="mhc_kernelgen_skill",
-        workflow="kernelgen_only_workflow",
+        workflow=workflow,
+        benchmark=BENCHMARK,
         ops=ops,
         framework="torch", dsl="triton_ascend", backend="ascend",
         arch=args.arch, device_ids=args.device,
         max_concurrency=args.concurrency,
+        llm_concurrency=args.llm_concurrency,
+        pass_n=args.pass_n,
         env_spec=env_spec, output_path=output,
+        enable_profile=args.profile,
     )
 
 

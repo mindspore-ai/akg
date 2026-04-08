@@ -37,26 +37,36 @@ KernelBench Level1 算子生成复现 — Skill 系统导入 (kernelgen_only_wor
       bash akg_agents/download.sh --with_kernelbench
 
 运行方式：
-  python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py --help
-  python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py                    # 默认全部（排除 conv）
-  python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py --tasks 1 5 19 42  # 指定序号
-  python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py --include-conv     # 包含 conv 算子
-  python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py --device 4 --arch ascend910b3
+  # 默认运行（排除 conv，pass@1）
+  python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py
 
-预期输出：
-  控制台打印环境规范 + 每个算子的生成结果（pass/fail、耗时、speedup）。
-  日志中可观察到 KernelGen 在各阶段选中/排除的 skill 列表。
-  JSON 报告保存到 --output 指定路径（默认 ~/.akg/reproduce_log/）。
+  # 指定算子序号
+  python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py --tasks 1 5 19 42
 
-结果存储格式：
-  {
-    "script": "kernelbench_kernelgen_skill",
-    "workflow": "kernelgen_only_workflow",
-    "ops_count": 66, "elapsed_s": 1234.5,
-    "env_spec": { "arch", "torch_npu", "triton_ascend", "commit", "llm_model", ... },
-    "task_log_dir": "~/akg_agents_logs",
-    "stats": { ... }
-  }
+  # 包含 conv 算子
+  python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py --include-conv
+
+  # Pass@3：每个算子独立尝试 3 次
+  python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py --pass-n 3
+
+  # 多设备并行 + LLM 并发控制
+  python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py --device 4 5 6 7 --concurrency 4 --llm-concurrency 8
+
+可调参数：
+  --tasks N [N ...]      KernelBench Level1 任务序号列表（默认全部，排除 conv 54-87）
+  --include-conv         包含 54-87 号 conv 算子（默认排除）
+  --device ID [ID ...]   NPU 设备 ID，可多个以池化（默认 $DEVICE_ID 或 0）
+  --concurrency N        设备并行度上限（默认 4）
+  --llm-concurrency N    LLM 请求并发数（默认与 --concurrency 相同）
+  --arch ARCH            硬件架构（默认 ascend910b4）
+  --pass-n N             Pass@N：每个算子独立运行 N 次（默认 1）
+  --output PATH          JSON 报告输出路径
+  --profile              开启性能测试（默认关闭；开启后验证通过的算子自动跑 speedup）
+
+输出格式：
+  JSON 文件（默认 ~/.akg/reproduce_log/kernelbench_kernelgen_skill_<timestamp>.json），
+  包含 benchmark、workflow、pass_n、env_spec、stats.op_results（含 profile）等字段。
+  详见 reproduce/SPEC.md 中的 JSON 输出规范。
 """
 
 import argparse
@@ -64,10 +74,13 @@ import asyncio
 
 from _common import (
     setup_logging, collect_env_spec, print_env_spec,
-    run_benchmark, add_common_args, default_output_path,
+    run_benchmark, add_common_args,
+    default_output_path,
     ensure_test_utils_importable,
 )
 
+BENCHMARK = "KernelBench_Level1"
+DEFAULT_WORKFLOW = "kernelgen_only_workflow"
 CONV_RANGE = set(range(54, 88))
 
 
@@ -81,7 +94,7 @@ def _default_task_indices(include_conv: bool) -> list:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="KernelBench Level1 复现 — Skill 系统导入 (kernelgen_only_workflow)",
+        description="KernelBench Level1 复现 — Skill 系统导入",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--tasks", nargs="+", type=int, default=None,
@@ -105,7 +118,16 @@ def resolve_ops(args):
     for n in names:
         td = get_kernelbench_task_desc(n, framework="torch")
         ops.append((add_op_prefix(n, benchmark="KernelBench"), td))
-    return ops
+    return ops, task_indices
+
+
+def _benchmark_label(task_indices):
+    all_no_conv = set(range(1, 101)) - CONV_RANGE
+    if set(task_indices) == all_no_conv:
+        return f"{BENCHMARK}_no_Conv"
+    if set(task_indices) == set(range(1, 101)):
+        return BENCHMARK
+    return f"{BENCHMARK}_custom"
 
 
 async def main():
@@ -115,17 +137,22 @@ async def main():
     env_spec = collect_env_spec(args.arch)
     print_env_spec(env_spec)
 
-    ops = resolve_ops(args)
+    ops, task_indices = resolve_ops(args)
+    workflow = DEFAULT_WORKFLOW
     output = args.output or default_output_path("kernelbench_kernelgen_skill")
 
     await run_benchmark(
         script_name="kernelbench_kernelgen_skill",
-        workflow="kernelgen_only_workflow",
+        workflow=workflow,
+        benchmark=_benchmark_label(task_indices),
         ops=ops,
         framework="torch", dsl="triton_ascend", backend="ascend",
         arch=args.arch, device_ids=args.device,
         max_concurrency=args.concurrency,
+        llm_concurrency=args.llm_concurrency,
+        pass_n=args.pass_n,
         env_spec=env_spec, output_path=output,
+        enable_profile=args.profile,
     )
 
 

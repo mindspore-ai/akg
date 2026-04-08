@@ -17,6 +17,15 @@ wip 复现脚本公共模块
 
 提供环境规范采集、报告生成、结果存储等共享功能。
 所有 reproduce/wip/ 下的脚本通过 from _common import ... 使用。
+
+通用 CLI 参数（由 add_common_args 注册，所有基础脚本共享）：
+  --device ID [ID ...]   NPU 设备 ID，可多个以池化（默认 $DEVICE_ID 或 0）
+  --concurrency N        设备并行度上限（默认 4）
+  --llm-concurrency N    LLM 请求并发数（默认与 --concurrency 相同）
+  --arch ARCH            硬件架构（默认 ascend910b4）
+  --pass-n N             Pass@N：每个算子独立运行 N 次（默认 1）
+  --output PATH          JSON 报告输出路径（默认 ~/.akg/reproduce_log/<script>_<timestamp>.json）
+  --profile              开启性能测试（默认关闭；开启后验证通过的算子自动跑 speedup）
 """
 
 import json
@@ -28,7 +37,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger("reproduce")
 
@@ -109,6 +118,31 @@ def print_env_spec(spec: dict):
 
 
 # ============================================================
+# 性能数据提取
+# ============================================================
+
+def _extract_perf_data(results: list) -> Dict[str, dict]:
+    """从 task 结果中提取每个算子的最优性能数据。
+
+    对于 pass@k 场景（同一算子多次尝试），保留 speedup 最高的一组。
+    """
+    perf = {}
+    for op_name, _success, final_state in results:
+        if not isinstance(final_state, dict):
+            continue
+        profile = final_state.get("profile_res")
+        if not profile or not isinstance(profile, dict):
+            continue
+        existing = perf.get(op_name)
+        if existing is None or profile.get("speedup", 0) > existing.get("speedup", 0):
+            perf[op_name] = {
+                k: v for k, v in profile.items()
+                if k in ("gen_time", "base_time", "speedup")
+            }
+    return perf
+
+
+# ============================================================
 # 通用运行器
 # ============================================================
 
@@ -125,22 +159,15 @@ async def run_benchmark(
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
     env_spec: dict,
     output_path: str,
+    benchmark: str = "",
+    pass_n: int = 1,
+    llm_concurrency: Optional[int] = None,
+    enable_profile: bool = False,
 ):
     """
-    通用 benchmark 运行器。
+    通用 benchmark 运行器（仅用于基础 workflow: coder_only / kernelgen）。
 
-    Args:
-        script_name: 脚本标识名
-        workflow: "coder_only_workflow" 或 "kernelgen_only_workflow"
-        ops: [(display_name, task_desc), ...] 算子列表
-        framework / dsl / backend / arch: 硬件环境参数
-        device_ids: NPU 设备 ID 列表，多设备时自动池化
-        max_concurrency: 任务并行度上限
-        env_spec: collect_env_spec() 返回的环境信息
-        output_path: JSON 报告输出路径
-
-    Returns:
-        dict: 结构化结果
+    adaptive_search / evolve 请使用 reproduce_adaptive_search.py / reproduce_evolve.py。
     """
     from akg_agents.core.async_pool.task_pool import TaskPool
     from akg_agents.op.langgraph_op.task import LangGraphTask as AIKGTask
@@ -150,6 +177,9 @@ async def run_benchmark(
 
     ensure_test_utils_importable()
     from utils import generate_beautiful_test_report
+
+    llm_concurrency = llm_concurrency or max_concurrency
+    task_type = "profile" if enable_profile else "precision_only"
 
     if workflow == "kernelgen_only_workflow":
         config = load_config(config_path=KERNELGEN_CONFIG_PATH)
@@ -164,43 +194,68 @@ async def run_benchmark(
     log_dir = config.get("log_dir", "~/akg_agents_logs")
     log_dir_expanded = os.path.expanduser(log_dir)
 
-    print(f"  算子数量:  {len(ops)}")
+    total_tasks = len(ops) * pass_n
+    print(f"  benchmark: {benchmark}")
+    print(f"  算子数量:  {len(ops)}  (pass@{pass_n}, 总任务 {total_tasks})")
     print(f"  workflow:  {workflow}")
+    print(f"  task_type: {task_type}")
     print(f"  devices:   {device_ids}")
-    print(f"  并行度:    {max_concurrency}")
+    print(f"  设备并发:  {max_concurrency}")
+    print(f"  LLM 并发:  {llm_concurrency}")
     print(f"  任务日志:  {log_dir_expanded}\n")
 
     task_pool = TaskPool(max_concurrency=max_concurrency)
     t0 = time.time()
 
     for i, (op_display, task_desc) in enumerate(ops):
-        task = AIKGTask(
-            op_name=op_display,
-            task_desc=task_desc,
-            task_id=str(i),
-            backend=backend, arch=arch, dsl=dsl,
-            config=config, framework=framework,
-            workflow=workflow,
-        )
-        task_pool.create_task(task.run)
+        for k in range(pass_n):
+            task_id = f"{i}" if pass_n == 1 else f"{i}_k{k}"
+            task = AIKGTask(
+                op_name=op_display,
+                task_desc=task_desc,
+                task_id=task_id,
+                backend=backend, arch=arch, dsl=dsl,
+                config=config, framework=framework,
+                workflow=workflow,
+                task_type=task_type,
+            )
+            task_pool.create_task(task.run)
 
     results = await task_pool.wait_all()
     elapsed = time.time() - t0
+
+    perf_data = _extract_perf_data(results)
 
     report_stats = generate_beautiful_test_report(
         results, config, framework, dsl, backend, arch,
     )
 
+    op_results = {}
+    for op_name, stat in report_stats.get("op_stats", {}).items():
+        entry = {"passed": stat["passed"], "total": stat["total"]}
+        if op_name in perf_data:
+            entry["profile"] = perf_data[op_name]
+        op_results[op_name] = entry
+
     summary = {
+        "benchmark": benchmark,
         "script": script_name,
         "workflow": workflow,
+        "pass_n": pass_n,
         "ops_count": len(ops),
         "elapsed_s": round(elapsed, 1),
         "device_ids": device_ids,
         "max_concurrency": max_concurrency,
+        "llm_concurrency": llm_concurrency,
         "env_spec": env_spec,
         "task_log_dir": log_dir_expanded,
-        "stats": report_stats,
+        "stats": {
+            "total_ops": report_stats["total_ops"],
+            "passed_ops": report_stats["passed_ops"],
+            "failed_ops": report_stats["failed_ops"],
+            "pass_rate": report_stats["pass_rate"],
+            "op_results": op_results,
+        },
     }
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -209,7 +264,9 @@ async def run_benchmark(
 
     print(f"\n{'=' * 70}")
     print(f"  完成: {script_name}")
-    print(f"  算子数: {len(ops)}  |  总耗时: {elapsed:.1f}s")
+    print(f"  算子数: {len(ops)}  |  pass@{pass_n}  |  总耗时: {elapsed:.1f}s")
+    print(f"  通过率: {report_stats['passed_ops']}/{report_stats['total_ops']}"
+          f" ({report_stats['pass_rate']:.1%})")
     print(f"  任务日志: {log_dir_expanded}")
     print(f"  报告: {output_path}")
     print(f"{'=' * 70}\n")
@@ -230,15 +287,27 @@ def add_common_args(parser):
     )
     parser.add_argument(
         "--concurrency", type=int, default=DEFAULT_MAX_CONCURRENCY,
-        help=f"任务并行度上限（默认 {DEFAULT_MAX_CONCURRENCY}）",
+        help=f"设备并行度上限（默认 {DEFAULT_MAX_CONCURRENCY}）",
+    )
+    parser.add_argument(
+        "--llm-concurrency", type=int, default=None,
+        help="LLM 请求并发数（默认与 --concurrency 相同）",
     )
     parser.add_argument(
         "--arch", default="ascend910b4",
         help="硬件架构（默认 ascend910b4）",
     )
     parser.add_argument(
+        "--pass-n", type=int, default=1,
+        help="Pass@N：每个算子独立运行 N 次（默认 1）",
+    )
+    parser.add_argument(
         "--output", default=None,
         help="JSON 报告输出路径（默认 ~/.akg/reproduce_log/<script>_<timestamp>.json）",
+    )
+    parser.add_argument(
+        "--profile", action="store_true",
+        help="开启性能测试（验证通过后自动跑 speedup / gen_time / base_time）",
     )
     return parser
 
