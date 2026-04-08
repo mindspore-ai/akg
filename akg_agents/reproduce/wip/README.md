@@ -34,16 +34,22 @@
 
 ## 脚本列表
 
-| # | 脚本 | Benchmark | 导入方式 | 说明 |
-|---|------|-----------|---------|------|
+| # | 脚本 | Benchmark | 策略 | 说明 |
+|---|------|-----------|------|------|
 | 1 | `reproduce_mhc_coder_only.py` | EvoKernel MHC | 固定文档 | MHC 算子，按序号指定 |
 | 2 | `reproduce_mhc_kernelgen_skill.py` | EvoKernel MHC | Skill 系统 | MHC 算子，按序号指定 |
 | 3 | `reproduce_kernelbench_coder_only.py` | KernelBench Level1 | 固定文档 | 默认排除 conv(54-87) |
 | 4 | `reproduce_kernelbench_kernelgen_skill.py` | KernelBench Level1 | Skill 系统 | 默认排除 conv(54-87) |
 | 5 | `reproduce_akgbench_coder_only.py` | AKGBench Lite | 固定文档 | 按 tier(t1/t2/t3) 选择 |
 | 6 | `reproduce_akgbench_kernelgen_skill.py` | AKGBench Lite | Skill 系统 | 按 tier(t1/t2/t3) 选择 |
+| 7 | `reproduce_adaptive_search.py` | 所有 benchmark | Adaptive Search | 直接调用 `adaptive_search()` API，UCB 策略多方案探索 |
+| 8 | `reproduce_evolve.py` | 所有 benchmark | Evolve | 直接调用 `evolve()` API，多岛屿进化策略 |
 
 公共模块 `_common.py` 提供环境规范采集、通用运行器、报告生成等共享功能。
+
+> **脚本 1-6** 为基础 workflow（单算子直接生成），通过 `LangGraphTask` 调用。
+> **脚本 7-8** 为搜索/进化策略（每个算子内部多次尝试），直接调用 `adaptive_search()` / `evolve()` API。
+> 它们通过 `--benchmark` 参数支持 kernelbench / akgbench / mhc 三种 benchmark。
 
 ---
 
@@ -75,14 +81,34 @@ python reproduce/wip/reproduce_mhc_coder_only.py --help
 
 ### 通用参数
 
-所有脚本共享以下参数：
+基础脚本（1-6）共享以下参数（由 `_common.add_common_args` 提供）：
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--device` | NPU 设备 ID（可指定多个以池化，如 `--device 4 5 6 7`） | `$DEVICE_ID` 或 `0` |
-| `--concurrency` | 任务并行度上限 | `4` |
+| `--concurrency` | 设备任务并行度上限 | `4` |
+| `--llm-concurrency` | LLM 请求并发数 | 与 `--concurrency` 相同 |
 | `--arch` | 硬件架构 | `ascend910b4` |
+| `--pass-n` | Pass@N：每个算子独立运行 N 次 | `1` |
 | `--output` | JSON 报告输出路径 | `~/.akg/reproduce_log/<script>_<timestamp>.json` |
+| `--profile` | 开启性能测试（默认关闭，开启后验证通过的算子自动跑 speedup） | `false` |
+
+### 搜索/进化策略（独立脚本 7-8）
+
+`adaptive_search` 和 `evolve` 因参数空间完全不同，使用**独立脚本**，通过 `--config` 加载 YAML 配置文件：
+
+- `reproduce_adaptive_search.py` — 直接调用 `adaptive_search()` API
+  - 配置文件：`adaptive_search_config.yaml`（`--config` 指定，默认使用项目内置）
+  - 内部创建多个 `LangGraphTask(workflow=kernelgen_only_workflow)` 子任务
+  - UCB 策略选择父代，灵感采样驱动进化
+  - CLI 覆盖：`--max-total-tasks`, `--max-concurrent`, `--exploration-coef` 等
+- `reproduce_evolve.py` — 直接调用 `evolve()` API
+  - 配置文件：`evolve_config.yaml`（`--config` 指定，默认使用项目内置）
+  - 多岛屿模型 + 精英保留 + 迁移策略
+  - CLI 覆盖：`--max-rounds`, `--parallel-num`, `--num-islands` 等
+
+配置优先级：**CLI 参数 > config.yaml > 内置默认值**。
+JSON 输出中 `adaptive_search_config` / `evolve_config` 字段记录最终使用的全部参数。
 
 ### 各脚本特有参数
 
@@ -147,8 +173,24 @@ python reproduce/wip/reproduce_akgbench_coder_only.py --tiers t1
 # AKGBench Lite 指定算子
 python reproduce/wip/reproduce_akgbench_kernelgen_skill.py --cases gelu softmax
 
-# 多卡池化 + 并行度控制
-python reproduce/wip/reproduce_kernelbench_coder_only.py --device 4 5 6 7 --concurrency 4
+# 多卡池化 + LLM 并发控制
+python reproduce/wip/reproduce_kernelbench_coder_only.py --device 4 5 6 7 --concurrency 4 --llm-concurrency 8
+
+# Pass@3：每个算子独立运行 3 次
+python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py --pass-n 3
+
+# Adaptive Search — KernelBench 全部算子
+python reproduce/wip/reproduce_adaptive_search.py --benchmark kernelbench --max-total-tasks 50
+
+# Adaptive Search — 指定序号 + 调参
+python reproduce/wip/reproduce_adaptive_search.py --benchmark kernelbench --tasks 1 5 19 \
+    --max-concurrent 4 --exploration-coef 2.0
+
+# Evolve — KernelBench + 多岛屿
+python reproduce/wip/reproduce_evolve.py --benchmark kernelbench --max-rounds 5 --num-islands 3
+
+# Evolve — AKGBench
+python reproduce/wip/reproduce_evolve.py --benchmark akgbench --tiers 1 2
 
 # 指定架构
 python reproduce/wip/reproduce_kernelbench_coder_only.py --arch ascend910b3
@@ -164,10 +206,15 @@ python reproduce/wip/reproduce_kernelbench_coder_only.py --arch ascend910b3
 
 ```json
 {
+  "benchmark": "KernelBench_Level1_no_Conv",
   "script": "kernelbench_coder_only",
   "workflow": "coder_only_workflow",
+  "pass_n": 1,
   "ops_count": 66,
   "elapsed_s": 456.7,
+  "device_ids": [4, 5, 6, 7],
+  "max_concurrency": 4,
+  "llm_concurrency": 4,
   "env_spec": {
     "arch": "ascend910b4",
     "python": "3.10.0",
@@ -175,25 +222,36 @@ python reproduce/wip/reproduce_kernelbench_coder_only.py --arch ascend910b3
     "torch_npu": "2.7.1",
     "triton_ascend": "3.2.0",
     "commit": "7916e2a8",
-    "llm_model": "deepseek-v32"
+    "llm_model": "deepseek-v3.2"
   },
-  "task_log_dir": "/home/user/akg_agents_logs",
+  "task_log_dir": "/home/user/.akg/reproduce_log",
   "stats": {
-    "total": 66,
-    "passed": 50,
-    "failed": 16,
+    "total_ops": 66,
+    "passed_ops": 50,
+    "failed_ops": 16,
     "pass_rate": 0.758,
-    "details": [
-      {
-        "op_name": "KernelBench_19_ReLU",
-        "status": "passed",
-        "speedup": 1.23,
-        "elapsed_s": 89.2
+    "op_results": {
+      "akg_agents_kernelbench_19_ReLU": {
+        "passed": 1,
+        "total": 1,
+        "profile": {
+          "gen_time": 12.3,
+          "base_time": 15.1,
+          "speedup": 1.23
+        }
+      },
+      "akg_agents_kernelbench_42_Max_Pooling_2D": {
+        "passed": 0,
+        "total": 1
       }
-    ]
+    }
   }
 }
 ```
+
+> `profile` 仅在 profiling 成功时出现（含 `gen_time`=生成耗时、`base_time`=基线耗时、`speedup`=加速比）。
+> `adaptive_search` 和 `evolve` 脚本产出的 JSON 额外包含 `adaptive_search_config` / `evolve_config` 字段
+> 以及每个算子的 `search_stats` / `evolve_stats` 字段。
 
 ### 环境规范字段说明
 
@@ -232,5 +290,7 @@ wip/
 ├── reproduce_kernelbench_coder_only.py        # KernelBench — 固定文档
 ├── reproduce_kernelbench_kernelgen_skill.py   # KernelBench — Skill 系统
 ├── reproduce_akgbench_coder_only.py           # AKGBench Lite — 固定文档
-└── reproduce_akgbench_kernelgen_skill.py      # AKGBench Lite — Skill 系统
+├── reproduce_akgbench_kernelgen_skill.py      # AKGBench Lite — Skill 系统
+├── reproduce_adaptive_search.py               # 所有 benchmark — Adaptive Search (direct API)
+└── reproduce_evolve.py                        # 所有 benchmark — Evolve (direct API)
 ```

@@ -42,6 +42,64 @@
 - 如需特殊依赖，在脚本头部注释或 `requirements.txt` 中说明
 - 优先使用 `akg_agents` 已有依赖，避免引入额外包
 
+## JSON 输出规范
+
+所有复现脚本输出的 JSON 报告**必须**遵守以下约定：
+
+### 必选顶层字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `benchmark` | string | Benchmark 标识，如 `KernelBench_Level1_no_Conv`、`AKGBench_Lite`、`EvoKernel_MHC` |
+| `script` | string | 脚本标识名 |
+| `workflow` | string | 使用的 workflow 完整名（如 `kernelgen_only_workflow`） |
+| `pass_n` | int | Pass@N，每个算子独立运行的次数 |
+| `ops_count` | int | 算子总数 |
+| `elapsed_s` | float | 总耗时（秒） |
+| `device_ids` | list[int] | 使用的设备 ID 列表 |
+| `max_concurrency` | int | 设备任务并行度 |
+| `llm_concurrency` | int | LLM 请求并发数 |
+| `env_spec` | object | 环境规范（由 `collect_env_spec` 自动采集） |
+| `task_log_dir` | string | 任务详细日志目录 |
+| `stats` | object | 统计结果（见下方） |
+
+### 可选顶层字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `adaptive_search_config` | object | adaptive_search 搜索参数（仅 reproduce_adaptive_search.py 输出） |
+| `evolve_config` | object | evolve 进化参数（仅 reproduce_evolve.py 输出） |
+
+### stats 结构
+
+```json
+{
+  "total_ops": 66,
+  "passed_ops": 50,
+  "failed_ops": 16,
+  "pass_rate": 0.758,
+  "op_results": {
+    "<op_name>": {
+      "passed": 1,
+      "total": 1,
+      "profile": { "gen_time": 12.3, "base_time": 15.1, "speedup": 1.23 }
+    }
+  }
+}
+```
+
+- 使用 `op_results`（**不是** `op_stats`）
+- `profile` 可选，仅在 profiling 成功时出现
+
+### 通用参数要求
+
+基础脚本（1-6）通过 `_common.add_common_args` 支持以下通用参数：
+
+- `--device`、`--concurrency`、`--llm-concurrency`、`--arch`
+- `--pass-n`、`--output`、`--profile`
+
+adaptive_search / evolve 独立脚本通过 `--config` 加载 YAML 配置文件，CLI 参数可覆盖。
+
 ## 不做什么
 
 - **不要**把单元测试放在这里——归 `tests/`
