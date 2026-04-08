@@ -58,18 +58,53 @@ data = tl.load(ptr + offsets, mask=mask, other=0.0)
 result = tl.where(condition, true_val, false_val)
 ```
 
-## Autotune 用法
+## Autotune 用法（仅限静态 shape）
+
+Autotune 通过自动 benchmark 多组配置参数，找到当前硬件和数据规模下的最优配置并缓存，免去手动调参。
+
+### 适用场景
+
+- **推荐使用**：输入 shape 固定或变化范围有限（静态 shape），如固定 batch size 的 MatMul、固定序列长度的 Attention 等
+- **禁止使用**：输入 shape 频繁变化（动态 shape）。autotune 根据 `key` 参数缓存最佳 config，动态 shape 下每组新 shape 都会触发一次完整 benchmark，反而严重拖慢性能
+
+### 强制规则
+
+1. **必须写 `restore_value`**：列出 kernel 的**所有输出指针参数名**。autotune benchmark 会对每个 config 反复执行 kernel，`restore_value` 在每次迭代前保存输出张量副本、迭代后恢复原值，防止不同 config 之间的结果互相污染。**不写 `restore_value` 会导致验证失败。**
+2. **调用时不传 configs 参数**：autotune 自动传入。
+3. **configs 参数必须是 constexpr**：在 kernel 中声明为 `PARAM: tl.constexpr`。
+4. **key 参数**：指定哪些输入维度变化时重新 autotune。
+5. **Ascend 不支持调优**：不要对 num_warps、num_ctas、num_stages 等参数进行修改调优，当前 Ascend 后端不支持。
+
+### 标准写法
 
 ```python
+# 正确写法：有 restore_value，grid 固定核心数
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128}),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64}),
+        triton.Config({'BLOCK_SIZE': 1024}),
+        triton.Config({'BLOCK_SIZE': 512}),
     ],
-    key=['M', 'N', 'K'],
+    key=['n_elements'],
+    restore_value=['output_ptr'],  # ⚠ 必须：列出所有输出指针参数名
 )
 @triton.jit
-def kernel(..., BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+def kernel(input_ptr, output_ptr, n_elements,
+           BLOCK_SIZE: tl.constexpr):
+    pass
+
+# Ascend: grid 固定为核心数
+grid = (VEC_CORE_NUM,)
+kernel[grid](input_ptr, output_ptr, n_elements)
+```
+
+```python
+# 错误：缺少 restore_value → CodeChecker 会拦截，验证会失败
+@triton.autotune(
+    configs=[...],
+    key=[...],
+)
+@triton.jit
+def kernel(input_ptr, output_ptr, ...):
     pass
 ```
 

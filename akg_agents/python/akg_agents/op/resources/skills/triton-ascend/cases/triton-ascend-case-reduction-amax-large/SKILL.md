@@ -50,9 +50,15 @@ tl.atomic_min(output_ptrs, all_row_min)
 ## 优化 3：配置
 
 ```python
-# grid=32<40, UB用满
-triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 8192, 'SUB_BLOCK_SIZE_N': 1024})
-triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 8192, 'SUB_BLOCK_SIZE_N': 512})
+@triton.autotune(
+    configs=[
+        # grid=32<40, UB用满
+        triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 8192, 'SUB_BLOCK_SIZE_N': 1024}),
+        triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 8192, 'SUB_BLOCK_SIZE_N': 512}),
+    ],
+    key=[...],
+    restore_value=['out_ptr0'],  # autotune 必须加 restore_value
+)
 ```
 
 ### 总结
