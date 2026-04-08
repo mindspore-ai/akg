@@ -178,14 +178,15 @@ def get_kernelbench_op_name(task_index_list, framework="torch", level="level1"):
         if not os.path.exists(task_path):
             _raise_download_error(f"KernelBench {level} 目录", task_path)
 
-        # PyTorch: 直接查找文件
-        task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
+        # PyTorch: 按 task_index_list 顺序逐个查找，确保返回顺序与输入一致
+        all_files = os.listdir(task_path)
         matched_files = []
-
-        for file in os.listdir(task_path):
-            if file.endswith('.py') and any(file.startswith(task_prefix) for task_prefix in task_prefix_list):
-                benchmark_name = file[:-3]
-                matched_files.append(benchmark_name)
+        for task_index in task_index_list:
+            prefix = f"{task_index}_"
+            for file in all_files:
+                if file.endswith('.py') and file.startswith(prefix):
+                    matched_files.append(file[:-3])
+                    break
     else:
         # MindSpore/NumPy: 查找子目录
         task_path = os.path.join(
@@ -195,14 +196,15 @@ def get_kernelbench_op_name(task_index_list, framework="torch", level="level1"):
         if not os.path.exists(task_path):
             _raise_download_error(f"KernelBench {framework} benchmark 目录", task_path)
 
-        task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
+        all_dirs = os.listdir(task_path)
         matched_files = []
-
-        for dir_name in os.listdir(task_path):
-            dir_path = os.path.join(task_path, dir_name)
-            if os.path.isdir(dir_path) and any(dir_name.startswith(task_prefix) for task_prefix in task_prefix_list):
-                # 对于MindSpore，返回目录名作为benchmark_name
-                matched_files.append(dir_name)
+        for task_index in task_index_list:
+            prefix = f"{task_index}_"
+            for dir_name in all_dirs:
+                dir_path = os.path.join(task_path, dir_name)
+                if os.path.isdir(dir_path) and dir_name.startswith(prefix):
+                    matched_files.append(dir_name)
+                    break
 
     return matched_files if matched_files else None
 

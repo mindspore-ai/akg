@@ -47,12 +47,14 @@ class RouterFactory:
         return route_after_verifier
     
     @staticmethod
-    def create_conductor_router(config: dict, code_gen_agent: str = "coder"):
+    def create_conductor_router(config: dict, code_gen_agent: str = "coder",
+                                enable_fix_code_gen: bool = False):
         """Conductor 分析后的路由决策（使用 Conductor 节点的决策）
         
         Args:
             config: 配置字典
             code_gen_agent: 代码生成 agent 名称（"coder" 或 "kernel_gen"）
+            enable_fix_code_gen: 是否启用 fix_code_gen 增量修复路由
         """
         
         async def route_after_conductor(state: KernelGenState) -> str:
@@ -73,6 +75,9 @@ class RouterFactory:
             repeat_limits = config.get("repeat_limits", {})
             
             possible_next = {code_gen_agent, "finish"}
+            if enable_fix_code_gen:
+                possible_next.add("fix_code_gen")
+
             illegal_agents = RouterFactory._check_agent_limits(
                 step_count=step_count,
                 max_step=max_step,
@@ -81,10 +86,23 @@ class RouterFactory:
                 code_gen_agent=code_gen_agent
             )
             
+            # fix_code_gen 也受重复次数限制
+            if enable_fix_code_gen and agent_history:
+                max_fix_repeats = 3
+                if repeat_limits and 'single_agent' in repeat_limits:
+                    max_fix_repeats = repeat_limits['single_agent'].get("fix_code_gen", 3)
+                if check_agent_repeat_limit(agent_history, "fix_code_gen", max_fix_repeats):
+                    logger.info(f"fix_code_gen exceeds repeat limit {max_fix_repeats}")
+                    illegal_agents.add("fix_code_gen")
+
             valid_next = possible_next - illegal_agents
             
-            if not valid_next or code_gen_agent not in valid_next:
-                logger.info("No valid next agents, finishing task")
+            # 至少需要一个代码生成选项可用
+            code_gen_options = {code_gen_agent}
+            if enable_fix_code_gen:
+                code_gen_options.add("fix_code_gen")
+            if not (valid_next & code_gen_options):
+                logger.info("No valid code gen agents available, finishing task")
                 return "finish"
             
             # 4. 使用 Conductor 节点的决策结果
@@ -93,9 +111,13 @@ class RouterFactory:
                 logger.info(f"Using conductor decision: {conductor_decision}")
                 return conductor_decision
             
-            # 默认策略
-            logger.warning(f"Conductor decision '{conductor_decision}' not in valid options, using {code_gen_agent}")
-            return code_gen_agent
+            # fallback: conductor 选了一个不可用的选项，用默认的代码生成 agent
+            fallback = code_gen_agent if code_gen_agent in valid_next else "finish"
+            logger.warning(
+                f"Conductor decision '{conductor_decision}' not in valid options "
+                f"{valid_next}, falling back to {fallback}"
+            )
+            return fallback
         
         return route_after_conductor
     
@@ -255,16 +277,21 @@ class RouterFactory:
         ]
     
     @staticmethod
-    def create_code_checker_router(config: dict, code_gen_agent: str = "coder"):
+    def create_code_checker_router(config: dict, code_gen_agent: str = "coder",
+                                    enable_fix_code_gen: bool = False):
         """创建 CodeChecker 后的路由决策
 
         CodeChecker 只做纯静态检查（ast.parse / py_compile / import），不涉及 LLM，
         因此不设最大重试次数——每次生成代码后都应该 check，失败就回去修。
         外层 workflow 的 max_iterations 已经能兜底防止死循环。
 
+        当启用 fix_code_gen 时，语法错误优先走增量修复（更高效）；
+        仅当 fix_code_gen 连续失败时回退到完整重新生成。
+
         Args:
             config: 配置字典
             code_gen_agent: 代码生成 agent 名称（默认 "coder"，KernelGen 流程使用 "kernel_gen"）
+            enable_fix_code_gen: 是否启用 fix_code_gen 增量修复
 
         Returns:
             路由函数
@@ -276,6 +303,12 @@ class RouterFactory:
             if passed:
                 logger.info(f"[Task {task_id}] CodeChecker passed, routing to verifier")
                 return "verifier"
+
+            if enable_fix_code_gen:
+                logger.info(
+                    f"[Task {task_id}] CodeChecker failed, routing to fix_code_gen for incremental fix"
+                )
+                return "fix_code_gen"
 
             logger.info(
                 f"[Task {task_id}] CodeChecker failed, routing back to {code_gen_agent} for fix"
