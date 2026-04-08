@@ -21,7 +21,7 @@ async def run_batch(args):
     
     if not level_dir.exists():
         logger.error(f"SOL Bench data directory not found: {level_dir}")
-        logger.error("Please run benchmark/sol-execbench/download.sh first.")
+        logger.error("Please run 'bash download.sh --with_sol_execbench' first.")
         return
         
     code_dir = Path(args.code_dir)

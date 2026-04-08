@@ -67,8 +67,8 @@ pip install -r akg_agents/requirements.txt
 # 4. Install AIKG
 pip install -e ./akg_agents --no-build-isolation
 
-# 5. Initialize third-party submodules (KernelBench, etc., as needed)
-git submodule update --init "akg_agents/thirdparty/*"
+# 5. Download third-party benchmarks as needed
+bash akg_agents/download.sh --with_all_benchmarks
 ```
 
 ### Configure LLM
