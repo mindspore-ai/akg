@@ -58,7 +58,7 @@ akg_cli --help         # 验证安装
 | `reproduce/` | 复现脚本 | [SPEC.md](reproduce/SPEC.md) |
 | `workspace/` | 使用态工作空间（KernelAgent） | [README.md](workspace/README.md) |
 
-其余目录：`akg-cli/`（npm CLI 客户端包）、`scripts/`（构建/发布辅助脚本）、`thirdparty/`（KernelBench 等第三方子模块）。
+其余目录：`akg-cli/`（npm CLI 客户端包）、`scripts/`（构建/发布辅助脚本）、`thirdparty/`（KernelBench 等第三方 benchmark 下载目录）。
 
 ---
 

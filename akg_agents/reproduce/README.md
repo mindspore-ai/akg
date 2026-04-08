@@ -36,9 +36,9 @@ reproduce/
    # 或在 ~/.akg/settings.json 中配置
    ```
 
-3. 初始化第三方 benchmark：
+3. 下载第三方 benchmark：
    ```bash
-   git submodule update --init "akg_agents/thirdparty/*"
+   bash akg_agents/download.sh --with_kernelbench --with_evokernel
    ```
 
 ### 运行脚本
