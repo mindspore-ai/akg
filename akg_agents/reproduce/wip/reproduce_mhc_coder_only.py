@@ -29,7 +29,7 @@ EvoKernel MHC 算子生成复现 — 固定文档导入 (coder_only_workflow)
   - API key 已配置（AKG_AGENTS_API_KEY 或 settings.json）
   - Ascend NPU 可用（DEVICE_ID 环境变量，默认 0）
   - EvoKernel benchmark 数据已就绪：
-      git submodule update --init "akg_agents/thirdparty/*"
+      bash akg_agents/download.sh --with_evokernel
 
 MHC 算子列表（序号 → 名称）：
   01 SinkhornKnopp       06 MhcUpdate           11 FusedMHCKernels
@@ -76,7 +76,7 @@ def _index_to_op_name(index: int) -> str:
     from utils import get_evokernel_mhc_op_name
     all_ops = get_evokernel_mhc_op_name()
     if not all_ops:
-        raise RuntimeError("未找到任何 MHC 算子，请检查 EvoKernel 子模块是否已初始化")
+        raise RuntimeError("未找到任何 MHC 算子，请检查是否已执行 `bash akg_agents/download.sh --with_evokernel`")
     prefix = f"{index:02d}_"
     matched = [op for op in all_ops if op.startswith(prefix)]
     if not matched:

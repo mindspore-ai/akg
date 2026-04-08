@@ -67,8 +67,8 @@ pip install -r akg_agents/requirements.txt
 # 4. 安装 AIKG
 pip install -e ./akg_agents --no-build-isolation
 
-# 5. 初始化第三方子模块（KernelBench 等，按需）
-git submodule update --init "akg_agents/thirdparty/*"
+# 5. 按需下载第三方 benchmark
+bash akg_agents/download.sh --with_all_benchmarks
 ```
 
 ### 配置 LLM

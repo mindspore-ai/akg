@@ -21,7 +21,7 @@ def discover_sol_cases(level="L1") -> List[Tuple[str, Path]]:
     
     if not benchmark_dir.exists():
         print(f"Warning: SOL Benchmark directory not found: {benchmark_dir}")
-        print("Please make sure you have run 'benchmark/sol-execbench/download.sh' first.")
+        print("Please make sure you have run 'bash download.sh --with_sol_execbench' first.")
         return []
     
     sol_cases = []

@@ -20,15 +20,18 @@ def get_device_id(default=0):
     return int(os.getenv("DEVICE_ID", default))
 
 
-def _raise_submodule_error(path_name, path_value):
-    """通用的子模块错误提示函数"""
+def _raise_download_error(path_name, path_value):
+    """通用的第三方 benchmark 下载错误提示函数"""
     error_msg = f"\n{'=' * 60}\n"
     error_msg += f"❌ 找不到 {path_name}\n"
     error_msg += f"   路径: {path_value}\n"
     error_msg += f"{'=' * 60}\n"
-    error_msg += "这通常是因为第三方子模块（如 KernelBench）尚未下载。\n\n"
+    error_msg += "这通常是因为第三方 benchmark（如 KernelBench）尚未下载。\n\n"
     error_msg += "解决方案（在项目根目录执行以下命令）：\n"
-    error_msg += '  git submodule update --init "akg_agents/thirdparty/*"\n'
+    error_msg += "  bash akg_agents/download.sh --with_kernelbench\n"
+    error_msg += "  bash akg_agents/download.sh --with_multikernelbench\n"
+    error_msg += "  bash akg_agents/download.sh --with_evokernel\n"
+    error_msg += "  bash akg_agents/download.sh --with_all_benchmarks\n"
     error_msg += f"{'=' * 60}"
     raise FileNotFoundError(error_msg)
 
@@ -51,8 +54,7 @@ def get_kernelbench_task_desc(op_name, framework="torch", level="level1"):
     akg_agents_path = os.path.dirname(tests_path)  # akg_agents/
 
     if framework == "torch":
-        # Path for torch benchmarks from the KernelBench submodule.
-        # The submodule is at `akg_agents/thirdparty/KernelBench`, and benchmark files are inside `KernelBench/{level}/` subdirectory.
+        # Path for torch benchmarks from the downloaded KernelBench repository.
         base_dir = os.path.join(
             akg_agents_path, 'thirdparty', 'KernelBench', 'KernelBench', level)
         # Files are directly in level directory with naming pattern: {number}_{name}.py
@@ -67,9 +69,9 @@ def get_kernelbench_task_desc(op_name, framework="torch", level="level1"):
     # 检查文件是否存在
     if not os.path.exists(task_path):
         if framework == "torch":
-            _raise_submodule_error("KernelBench 任务文件", task_path)
+            _raise_download_error("KernelBench 任务文件", task_path)
         else:
-            _raise_submodule_error(f"{framework} benchmark 任务文件", task_path)
+            _raise_download_error(f"{framework} benchmark 任务文件", task_path)
 
     with open(task_path, "r", encoding="utf-8") as f:
         benchmark_task_str = f.read()
@@ -89,7 +91,7 @@ def get_multikernelbench_task_desc(op_name, framework="torch"):
 
     # 检查基础路径是否存在
     if not os.path.exists(base_path):
-        _raise_submodule_error("MultiKernelBench 目录", base_path)
+        _raise_download_error("MultiKernelBench 目录", base_path)
 
     # Find the file in any category
     for category in os.listdir(base_path):
@@ -101,7 +103,7 @@ def get_multikernelbench_task_desc(op_name, framework="torch"):
                     return f.read()
 
     # If not found in any category, raise an error
-    _raise_submodule_error(f"MultiKernelBench 中的操作 {op_name}", f"已搜索目录: {base_path}")
+    _raise_download_error(f"MultiKernelBench 中的操作 {op_name}", f"已搜索目录: {base_path}")
 
 
 def get_akg_kernels_bench_task_desc(op_name, category=None, framework="torch"):
@@ -122,7 +124,7 @@ def get_akg_kernels_bench_task_desc(op_name, category=None, framework="torch"):
 
     # 检查基础路径是否存在
     if not os.path.exists(base_path):
-        _raise_submodule_error("AIKGBench 目录", base_path)
+        _raise_download_error("AIKGBench 目录", base_path)
 
     # 确定要搜索的类别列表
     if category:
@@ -150,9 +152,9 @@ def get_akg_kernels_bench_task_desc(op_name, category=None, framework="torch"):
 
     # 如果未找到，抛出错误
     if category:
-        _raise_submodule_error(f"AIKGBench 类别 {categories[0]} 中的操作 {op_name}", f"已搜索目录: {os.path.join(base_path, categories[0])}")
+        _raise_download_error(f"AIKGBench 类别 {categories[0]} 中的操作 {op_name}", f"已搜索目录: {os.path.join(base_path, categories[0])}")
     else:
-        _raise_submodule_error(f"AIKGBench 中的操作 {op_name}", f"已搜索目录: {base_path}")
+        _raise_download_error(f"AIKGBench 中的操作 {op_name}", f"已搜索目录: {base_path}")
 
 
 def get_kernelbench_op_name(task_index_list, framework="torch", level="level1"):
@@ -169,12 +171,12 @@ def get_kernelbench_op_name(task_index_list, framework="torch", level="level1"):
         task_path = os.path.join(
             akg_agents_path, 'thirdparty', 'KernelBench', 'KernelBench', level)
 
-        # 检查 KernelBench 子模块目录是否存在
+        # 检查 KernelBench 下载目录是否存在
         kernelbench_root = os.path.join(akg_agents_path, 'thirdparty', 'KernelBench')
         if not os.path.exists(kernelbench_root) or not os.listdir(kernelbench_root):
-            _raise_submodule_error("KernelBench 子模块目录", kernelbench_root)
+            _raise_download_error("KernelBench 下载目录", kernelbench_root)
         if not os.path.exists(task_path):
-            _raise_submodule_error(f"KernelBench {level} 目录", task_path)
+            _raise_download_error(f"KernelBench {level} 目录", task_path)
 
         # PyTorch: 直接查找文件
         task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
@@ -191,7 +193,7 @@ def get_kernelbench_op_name(task_index_list, framework="torch", level="level1"):
 
         # 检查 benchmark 目录是否存在
         if not os.path.exists(task_path):
-            _raise_submodule_error(f"KernelBench {framework} benchmark 目录", task_path)
+            _raise_download_error(f"KernelBench {framework} benchmark 目录", task_path)
 
         task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
         matched_files = []
@@ -218,7 +220,7 @@ def get_multikernelbench_op_name(category="all", framework="torch", op_name=None
 
     # 检查基础路径是否存在
     if not os.path.exists(base_path):
-        _raise_submodule_error("MultiKernelBench 目录", base_path)
+        _raise_download_error("MultiKernelBench 目录", base_path)
 
     matched_files = []
 
@@ -272,7 +274,7 @@ def get_akg_kernels_bench_op_name(category="all", subcategory="all", framework="
 
     # 检查基础路径是否存在
     if not os.path.exists(base_path):
-        _raise_submodule_error("AIKGBench 目录", base_path)
+        _raise_download_error("AIKGBench 目录", base_path)
 
     matched_files = []
 
@@ -332,20 +334,20 @@ def get_evokernel_task_desc(op_name, category="Attention"):
     tests_path = os.path.dirname(commom_path)  # tests/
     akg_agents_path = os.path.dirname(tests_path)  # akg_agents/
 
-    # Path for EvoKernel benchmarks from submodule
+    # Path for EvoKernel benchmarks from the downloaded repository
     base_path = os.path.join(
         akg_agents_path, 'thirdparty', 'EvoKernel', 'pytorch-references', category)
 
     # 检查基础路径是否存在
     if not os.path.exists(base_path):
-        _raise_submodule_error(f"EvoKernel {category} 目录", base_path)
+        _raise_download_error(f"EvoKernel {category} 目录", base_path)
 
     # 查找文件
     task_path = os.path.join(base_path, op_name + '.py')
 
     # 检查文件是否存在
     if not os.path.exists(task_path):
-        _raise_submodule_error(f"EvoKernel {category} 中的操作 {op_name}", task_path)
+        _raise_download_error(f"EvoKernel {category} 中的操作 {op_name}", task_path)
 
     with open(task_path, 'r', encoding='utf-8') as f:
         benchmark_task_str = f.read()
@@ -367,13 +369,13 @@ def get_evokernel_op_name(category="all", op_name=None):
     tests_path = os.path.dirname(commom_path)  # tests/
     akg_agents_path = os.path.dirname(tests_path)  # akg_agents/
 
-    # Path for EvoKernel benchmarks from submodule
+    # Path for EvoKernel benchmarks from the downloaded repository
     base_path = os.path.join(
         akg_agents_path, 'thirdparty', 'EvoKernel', 'pytorch-references')
 
     # 检查基础路径是否存在
     if not os.path.exists(base_path):
-        _raise_submodule_error("EvoKernel 目录", base_path)
+        _raise_download_error("EvoKernel 目录", base_path)
 
     matched_files = []
 
