@@ -99,6 +99,94 @@ func.func @test_vadd_npuvector_scalar_dynamic(%arg0 : memref<?xf32>, %arg1 : mem
 
 // -----
 
+// CHECK-LABEL: func.func @test_transfer_read_mixed_arg_and_alloc
+func.func @test_transfer_read_mixed_arg_and_alloc(%arg0 : memref<128xf32>, %arg1 : memref<128xf32>) {
+  // CHECK: %[[A:.*]] = memref.alloc() : memref<128xf32>
+  // CHECK: %[[SV_A:.*]] = memref.subview %[[A]][0] [128] [1]
+  // CHECK: %{{.*}} = arith.constant 0 : index
+  // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
+  // CHECK: %[[SV0:.*]] = memref.subview %arg0[0] [128] [1]
+  // CHECK: %[[UB0:.*]] = memref.alloc() : memref<128xf32>
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<128xf32, {{.*}}>) outs(%[[UB0]] : memref<128xf32>)
+  // CHECK: %[[SV1:.*]] = memref.subview %[[SV_A]][0] [128] [1]
+  // CHECK-NOT: hivm.hir.load
+  // CHECK: hivm.hir.vadd ins(%[[UB0]], %[[SV1]]
+  %a = memref.alloc() : memref<128xf32>
+  %sv_a = memref.subview %a[0] [128] [1] : memref<128xf32> to memref<128xf32, strided<[1]>>
+  %c0 = arith.constant 0 : index
+  %cst = arith.constant 0.000000e+00 : f32
+  %v0 = npuvector.transfer_read %arg0[%c0], %cst : memref<128xf32>, !npuvector<128xf32>
+  %v1 = npuvector.transfer_read %sv_a[%c0], %cst : memref<128xf32, strided<[1]>>, !npuvector<128xf32>
+  %0 = arith.addf %v0, %v1 : !npuvector<128xf32>
+  npuvector.transfer_write %0, %arg1[%c0] : !npuvector<128xf32>, memref<128xf32>
+  return
+}
+
+// -----
+
+// npuvector.transpose 3D static: [2,1,0] 8x16x32 -> 32x16x8 (only dim 0 and 2 swap, HIVM supports 2-axis transpose directly)
+// CHECK-LABEL: func.func @test_npuvector_transpose_3d_static
+func.func @test_npuvector_transpose_3d_static(%arg0 : memref<8x16x32xf32>, %arg1 : memref<32x16x8xf32>) {
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
+  // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0, 0] [8, 16, 32] [1, 1, 1] : memref<8x16x32xf32> to memref<8x16x32xf32, {{.*}}>
+  // CHECK: %[[UB0:.*]] = memref.alloc() : memref<8x16x32xf32>
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<8x16x32xf32, {{.*}}>) outs(%[[UB0]] : memref<8x16x32xf32>)
+  // CHECK: %[[UB_TRANS:.*]] = memref.alloc() : memref<32x16x8xf32>
+  // CHECK: hivm.hir.vtranspose ins(%[[UB0]] : memref<8x16x32xf32>) outs(%[[UB_TRANS]] : memref<32x16x8xf32>) permutation = [2, 1, 0]
+  // CHECK: %[[SV_OUT:.*]] = memref.subview %arg1[0, 0, 0] [32, 16, 8] [1, 1, 1] : memref<32x16x8xf32> to memref<32x16x8xf32, {{.*}}>
+  // CHECK: hivm.hir.store ins(%[[UB_TRANS]] : memref<32x16x8xf32>) outs(%[[SV_OUT]] : memref<32x16x8xf32, {{.*}}>)
+  %c0 = arith.constant 0 : index
+  %cst = arith.constant 0.000000e+00 : f32
+  %v0 = npuvector.transfer_read %arg0[%c0, %c0, %c0], %cst : memref<8x16x32xf32>, !npuvector<8x16x32xf32>
+  %trans = npuvector.transpose %v0, [2, 1, 0] : !npuvector<8x16x32xf32> to !npuvector<32x16x8xf32>
+  npuvector.transfer_write %trans, %arg1[%c0, %c0, %c0] : !npuvector<32x16x8xf32>, memref<32x16x8xf32>
+  return
+}
+
+// -----
+
+// npuvector.transpose 3D dynamic: all three dims dynamic ?x?x?, perm [2,1,0] (only dim 0 and 2 swap)
+// CHECK-LABEL: func.func @test_npuvector_transpose_3d_dynamic
+func.func @test_npuvector_transpose_3d_dynamic(%arg0: memref<?x?x?xf32>, %arg1: memref<?x?x?xf32>) {
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: %[[C1:.*]] = arith.constant 1 : index
+  // CHECK: %[[C2:.*]] = arith.constant 2 : index
+  // CHECK: %[[DIM0:.*]] = memref.dim %arg0, %[[C0]] : memref<?x?x?xf32>
+  // CHECK: %[[DIM1:.*]] = memref.dim %arg0, %[[C1]] : memref<?x?x?xf32>
+  // CHECK: %[[DIM2:.*]] = memref.dim %arg0, %[[C2]] : memref<?x?x?xf32>
+  // CHECK: hivm.hir.vtranspose {{.*}} permutation = [2, 1, 0]
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c4096 = arith.constant 4096 : index
+  %cst = arith.constant 0.000000e+00 : f32
+  %dim0 = memref.dim %arg0, %c0 : memref<?x?x?xf32>
+  %dim1 = memref.dim %arg0, %c1 : memref<?x?x?xf32>
+  %dim2 = memref.dim %arg0, %c2 : memref<?x?x?xf32>
+  %v0 = npuvector.transfer_read %arg0[%c0, %c0, %c0][%dim0, %dim1, %dim2][%c4096, %c4096, %c4096], %cst : memref<?x?x?xf32>, !npuvector<?x?x?xf32>
+  %trans = npuvector.transpose %v0, [2, 1, 0] : !npuvector<?x?x?xf32> to !npuvector<?x?x?xf32>
+  npuvector.transfer_write %trans, %arg1[%c0, %c0, %c0] : !npuvector<?x?x?xf32>, memref<?x?x?xf32>
+  return
+}
+
+// -----
+
+// npuvector.transpose 3D [1,2,0]: all 3 axes participate, must decompose to 2 adjacent 2-axis vtranspose
+// CHECK-LABEL: func.func @test_npuvector_transpose_3d_121
+func.func @test_npuvector_transpose_3d_121(%arg0 : memref<8x16x32xf32>, %arg1 : memref<8x32x16xf32>) {
+  // CHECK: hivm.hir.vtranspose {{.*}} permutation = [1, 0, 2]
+  // CHECK: hivm.hir.vtranspose {{.*}} permutation = [0, 2, 1]
+  %c0 = arith.constant 0 : index
+  %cst = arith.constant 0.000000e+00 : f32
+  %v0 = npuvector.transfer_read %arg0[%c0, %c0, %c0], %cst : memref<8x16x32xf32>, !npuvector<8x16x32xf32>
+  %trans = npuvector.transpose %v0, [1, 2, 0] : !npuvector<8x16x32xf32> to !npuvector<8x32x16xf32>
+  npuvector.transfer_write %trans, %arg1[%c0, %c0, %c0] : !npuvector<8x32x16xf32>, memref<8x32x16xf32>
+  return
+}
+
+// -----
+
 func.func @test_addi(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg2 : memref<32x32xi32>) {
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
   // CHECK: %{{.*}} = arith.constant 0 : i32
@@ -696,10 +784,10 @@ func.func @test_cmpf_oeq(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>)
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -724,10 +812,10 @@ func.func @test_cmpf_one(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <ne>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -752,10 +840,10 @@ func.func @test_cmpf_ole(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <le>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -780,10 +868,10 @@ func.func @test_cmpf_olt(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <lt>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -808,10 +896,10 @@ func.func @test_cmpf_oge(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <ge>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -836,10 +924,10 @@ func.func @test_cmpf_ogt(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <gt>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -864,10 +952,10 @@ func.func @test_cmpf_ueq(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>)
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -892,10 +980,10 @@ func.func @test_cmpf_une(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <ne>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -920,10 +1008,10 @@ func.func @test_cmpf_ule(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <le>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -948,10 +1036,10 @@ func.func @test_cmpf_ult(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <lt>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -976,10 +1064,10 @@ func.func @test_cmpf_uge(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <ge>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -1004,10 +1092,10 @@ func.func @test_cmpf_ugt(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <gt>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xf32>
@@ -1033,10 +1121,10 @@ func.func @test_cmpi_eq(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %a
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi1>)
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xi32>
@@ -1062,10 +1150,10 @@ func.func @test_cmpi_ne(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %a
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <ne>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xi32>
@@ -1091,10 +1179,10 @@ func.func @test_cmpi_slt(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <lt>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xi32>
@@ -1120,10 +1208,10 @@ func.func @test_cmpi_sgt(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <gt>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xi32>
@@ -1149,10 +1237,10 @@ func.func @test_cmpi_sle(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <le>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xi32>
@@ -1178,10 +1266,10 @@ func.func @test_cmpi_sge(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <ge>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xi32>
@@ -1207,10 +1295,10 @@ func.func @test_cmpi_ult(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <lt>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xi32>
@@ -1236,10 +1324,10 @@ func.func @test_cmpi_ugt(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <gt>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xi32>
@@ -1265,10 +1353,10 @@ func.func @test_cmpi_ule(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <le>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xi32>
@@ -1294,10 +1382,10 @@ func.func @test_cmpi_uge(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi1>
   // CHECK: hivm.hir.vcmp ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi1>) compare_mode = <ge>
   // CHECK-FIXME: %[[SEL_RES:.*]] = memref.alloc() : memref<32x32xi32>
@@ -1322,17 +1410,17 @@ func.func @test_mulsi_extended(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT_0:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: %[[UB_OUT_1:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: hivm.hir.vmulext ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT_0]], %[[UB_OUT_1]] : memref<32x32xi32>, memref<32x32xi32>)
   // CHECK: %[[SV_OUT_0:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT_0]] : memref<32x32xi32>) outs(%[[SV_OUT_0]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT_0]] : memref<32x32xi32>) outs(%[[SV_OUT_0]] : memref<32x32xi32, {{.*}}>)
   // CHECK: %[[SV_OUT_1:.*]] = memref.subview %arg3[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT_1]] : memref<32x32xi32>) outs(%[[SV_OUT_1]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT_1]] : memref<32x32xi32>) outs(%[[SV_OUT_1]] : memref<32x32xi32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0 : i32
@@ -1351,17 +1439,17 @@ func.func @test_mului_extended(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT_0:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: %[[UB_OUT_1:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: hivm.hir.vmulext ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT_0]], %[[UB_OUT_1]] : memref<32x32xi32>, memref<32x32xi32>)
   // CHECK: %[[SV_OUT_0:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT_0]] : memref<32x32xi32>) outs(%[[SV_OUT_0]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT_0]] : memref<32x32xi32>) outs(%[[SV_OUT_0]] : memref<32x32xi32, {{.*}}>)
   // CHECK: %[[SV_OUT_1:.*]] = memref.subview %arg3[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT_1]] : memref<32x32xi32>) outs(%[[SV_OUT_1]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT_1]] : memref<32x32xi32>) outs(%[[SV_OUT_1]] : memref<32x32xi32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0 : i32
@@ -1380,14 +1468,14 @@ func.func @test_andi(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg2
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: hivm.hir.vand ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0 : i32
@@ -1405,14 +1493,14 @@ func.func @test_ori(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg2 
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: hivm.hir.vor ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0 : i32
@@ -1430,14 +1518,14 @@ func.func @test_xori(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg2
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: hivm.hir.vxor ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0 : i32
@@ -1455,14 +1543,14 @@ func.func @test_remsi(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: hivm.hir.vmod ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0 : i32
@@ -1480,14 +1568,14 @@ func.func @test_remf(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %arg2
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xf32>
   // CHECK: hivm.hir.vmod ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xf32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
@@ -1505,14 +1593,14 @@ func.func @test_remui(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: hivm.hir.vmod ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0 : i32
@@ -1530,14 +1618,14 @@ func.func @test_minnumf(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %a
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xf32>
   // CHECK: hivm.hir.vmin ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xf32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
@@ -1555,14 +1643,14 @@ func.func @test_minimumf(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xf32>
   // CHECK: hivm.hir.vmin ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xf32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
@@ -1580,14 +1668,14 @@ func.func @test_maxnumf(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %a
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xf32>
   // CHECK: hivm.hir.vmax ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xf32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
@@ -1605,14 +1693,14 @@ func.func @test_maximumf(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %
   // CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}) outs(%[[UB0]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xf32, {{.*}}>) outs(%[[UB0]] : memref<32x32xf32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xf32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}) outs(%[[UB1]] : memref<32x32xf32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xf32, {{.*}}>) outs(%[[UB1]] : memref<32x32xf32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xf32>
   // CHECK: hivm.hir.vmax ins(%[[UB0]], %[[UB1]] : memref<32x32xf32>, memref<32x32xf32>) outs(%[[UB_OUT]] : memref<32x32xf32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xf32> to memref<32x32xf32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xf32>) outs(%[[SV_OUT]] : memref<32x32xf32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
@@ -1630,14 +1718,14 @@ func.func @test_shli(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg2
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: hivm.hir.vshl ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi32>)
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0 : i32
@@ -1655,14 +1743,14 @@ func.func @test_shrsi(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: hivm.hir.vshr ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi32>) round : true
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0 : i32
@@ -1680,14 +1768,14 @@ func.func @test_shrui(%arg0 : memref<32x32xi32>, %arg1 : memref<32x32xi32>, %arg
   // CHECK: %{{.*}} = arith.constant 0 : i32
   // CHECK: %[[SV0:.*]] = memref.subview %arg0[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB0:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}) outs(%[[UB0]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV0]] : memref<32x32xi32, {{.*}}>) outs(%[[UB0]] : memref<32x32xi32>)
   // CHECK: %[[SV1:.*]] = memref.subview %arg1[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
   // CHECK: %[[UB1:.*]] = memref.alloc() : memref<32x32xi32>
-  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}) outs(%[[UB1]] : memref<32x32xi32>)
+  // CHECK: hivm.hir.load ins(%[[SV1]] : memref<32x32xi32, {{.*}}>) outs(%[[UB1]] : memref<32x32xi32>)
   // CHECK: %[[UB_OUT:.*]] = memref.alloc() : memref<32x32xi32>
   // CHECK: hivm.hir.vshr ins(%[[UB0]], %[[UB1]] : memref<32x32xi32>, memref<32x32xi32>) outs(%[[UB_OUT]] : memref<32x32xi32>) round : true
   // CHECK: %[[SV_OUT:.*]] = memref.subview %arg2[0, 0] [32, 32] [1, 1] : memref<32x32xi32> to memref<32x32xi32, strided<[32, 1]>>
-  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}})
+  // CHECK: hivm.hir.store ins(%[[UB_OUT]] : memref<32x32xi32>) outs(%[[SV_OUT]] : memref<32x32xi32, {{.*}}>)
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0 : i32
