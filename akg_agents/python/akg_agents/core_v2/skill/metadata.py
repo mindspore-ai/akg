@@ -45,6 +45,8 @@ STANDARD_CATEGORIES = {
     "reference": "参考文档（Reference）",
     "example": "代码示例（Example）",
     "case": "具体案例（Case Study）",
+    "improvement": "性能优化经验（Performance Improvement）",
+    "fix": "错误修复经验（Error Fix）",
 }
 
 # 粗粒度分组，用于 include_category_groups / exclude_category_groups 过滤
@@ -53,6 +55,7 @@ CATEGORY_GROUPS = {
     "actor": ["agent"],
     "knowledge": ["fundamental", "reference", "guide"],
     "example": ["example", "case"],
+    "evolved": ["improvement", "fix"],
 }
 
 # 旧 level 字段到默认 category 的映射（兼容未更新的 SKILL.md）

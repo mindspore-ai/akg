@@ -1,10 +1,11 @@
 ---
 name: triton-cuda-error-fix
 description: triton-cuda常见错误及修复方法，用于代码生成时避免同类问题
-category: implementation
-version: 1.0.0
+category: fix
+version: "1.0.0"
 metadata:
   source: error_fix
+  case_type: fix
   backend: cuda
   dsl: triton_cuda
 ---
