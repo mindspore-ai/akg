@@ -33,8 +33,8 @@ KernelBench Level1 算子生成复现 — Skill 系统导入 (kernelgen_only_wor
   - source env.sh
   - API key 已配置（AKG_AGENTS_API_KEY 或 settings.json）
   - Ascend NPU 可用（DEVICE_ID 环境变量，默认 0）
-  - KernelBench 子模块已初始化：
-      git submodule update --init "akg_agents/thirdparty/*"
+  - KernelBench benchmark 已下载：
+      bash akg_agents/download.sh --with_kernelbench
 
 运行方式：
   python reproduce/wip/reproduce_kernelbench_kernelgen_skill.py --help

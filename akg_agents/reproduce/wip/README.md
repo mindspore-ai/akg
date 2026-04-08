@@ -56,8 +56,8 @@ source env.sh
 # 2. 配置 API Key
 export AKG_AGENTS_API_KEY=your_key_here
 
-# 3. 初始化第三方 benchmark（KernelBench / EvoKernel）
-git submodule update --init "akg_agents/thirdparty/*"
+# 3. 下载第三方 benchmark（KernelBench / EvoKernel）
+bash akg_agents/download.sh --with_kernelbench --with_evokernel
 
 # 4. 确认 NPU 可用
 export DEVICE_ID=0   # 可选，默认 0

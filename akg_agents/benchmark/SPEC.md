@@ -30,4 +30,4 @@
 ## 不做什么
 
 - **不要**把性能测试脚本放在这里——归 `tests/op/bench/`
-- **不要**修改 `thirdparty/KernelBench` 子模块的源码
+- **不要**修改 `thirdparty/KernelBench` 下载仓库的源码
