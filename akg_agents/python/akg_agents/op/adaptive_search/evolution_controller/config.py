@@ -81,7 +81,7 @@ class ConvergenceConfig:
     perf_improvement_threshold: float = 0.02
     diversity_change_threshold: float = 0.05
     activity_threshold: float = 0.8
-    patience: int = 2
+    patience: int = 3
     max_total_tasks: int = 100
     max_time_seconds: Optional[float] = None
 
@@ -154,7 +154,7 @@ def load_evolution_controller_config(
             perf_improvement_threshold=conv.get("perf_improvement_threshold", 0.02),
             diversity_change_threshold=conv.get("diversity_change_threshold", 0.05),
             activity_threshold=conv.get("activity_threshold", 0.8),
-            patience=conv.get("patience", 2),
+            patience=conv.get("patience", 3),
             max_total_tasks=max_total_tasks,
             max_time_seconds=conv.get("max_time_seconds", None),
         ),
