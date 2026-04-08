@@ -30,13 +30,16 @@ logger = logging.getLogger(__name__)
 class CoderOnlyWorkflow(OpBaseWorkflow):
     """Coder Only Workflow：跳过设计阶段，直接生成代码
     
-    优化后的流程（带 CodeChecker）：
+    优化后的流程（带 CodeChecker + FixCodeGen）：
     
-        coder -> code_checker -> (通过) -> verifier -> (失败) -> conductor -> coder
-                      |                                                       ^
-                      +----------------> (未通过) ----------------------------+
-                                     (携带错误信息回到 coder)
+        coder -> code_checker -> (通过) -> verifier -> (失败) -> conductor -+-> coder
+                      |                                                     |
+                      +-----> (未通过，回到 coder) -----+                    +-> fix_code_gen -> verifier
     
+    Conductor 判断逻辑：
+    - 局部/小范围错误（如缺少 import、变量名拼写等）→ fix_code_gen（增量修复，使用 fast model）
+    - 全局/架构性错误（如算法逻辑重大缺陷）→ coder（完整重新生成）
+
     CodeChecker 的作用：
     - 在 Verifier 之前进行快速的静态代码检查（ast.parse / py_compile / import 校验）
     - 检测语法错误、编译错误、import 缺失等确定性问题
@@ -53,7 +56,9 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
 1. Coder: 根据任务描述生成代码
 2. CodeChecker: 静态代码检查（默认开启）
 3. Verifier: 验证正确性和性能
-4. Conductor: 分析失败原因并指导修复（如果验证失败）
+4. Conductor: 分析失败原因并决定修复策略（如果验证失败）
+   - 局部错误 → FixCodeGen: 增量修复（search/replace，使用 fast model）
+   - 全局错误 → Coder: 完整重新生成
 5. 循环迭代直到成功或达到最大次数
 
 适用场景：
@@ -118,11 +123,13 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
     # ========== Workflow 实现 ==========
     
     def build_graph(self) -> StateGraph:
-        """构建 Coder-only 工作流图（带 CodeChecker）"""
+        """构建 Coder-only 工作流图（带 CodeChecker + FixCodeGen）"""
         workflow = StateGraph(KernelGenState)
         
         # CodeChecker 做纯静态检查（语法/编译/import），默认开启
         enable_code_checker = self.config.get("enable_code_checker", True)
+        # FixCodeGen 增量修复（默认启用）
+        enable_fix_code_gen = self.config.get("enable_fix_code_gen", True)
         
         # 创建 CodeChecker 实例
         code_checker = None
@@ -152,13 +159,23 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
         conductor_node = NodeFactory.create_conductor_node(
             self.trace,
             self.config,
-            self.conductor_template
+            self.conductor_template,
+            enable_fix_code_gen=enable_fix_code_gen,
         )
         
         # 添加节点
         workflow.add_node("coder", coder_node)
         workflow.add_node("verifier", verifier_node)
         workflow.add_node("conductor", conductor_node)
+        
+        # FixCodeGen 节点
+        if enable_fix_code_gen:
+            fix_code_gen_node = NodeFactory.create_fix_code_gen_node(
+                self.trace, self.config
+            )
+            workflow.add_node("fix_code_gen", fix_code_gen_node)
+            workflow.add_edge("fix_code_gen", "verifier")
+            logger.info("FixCodeGen enabled: conductor can route to fix_code_gen")
         
         if enable_code_checker and code_checker:
             # 创建 CodeChecker 节点
@@ -185,16 +202,21 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
             
             # 条件边：code_checker 后的路由
             code_checker_router = RouterFactory.create_code_checker_router(
-                self.config
+                self.config,
+                enable_fix_code_gen=enable_fix_code_gen,
             )
+            
+            code_checker_edges = {
+                "verifier": "verifier",  # 检查通过 → Verifier
+                "coder": "coder",        # 检查失败（无 fix_code_gen）→ Coder 重写
+            }
+            if enable_fix_code_gen:
+                code_checker_edges["fix_code_gen"] = "fix_code_gen"
             
             workflow.add_conditional_edges(
                 "code_checker",
                 code_checker_router,
-                {
-                    "verifier": "verifier",  # 检查通过 → Verifier
-                    "coder": "coder"         # 检查失败 → 回到 Coder 修复
-                }
+                code_checker_edges,
             )
         else:
             # 不启用 CodeChecker，直接 coder -> verifier（带 codegen 路由）
@@ -227,15 +249,22 @@ class CoderOnlyWorkflow(OpBaseWorkflow):
         )
         
         # Conductor 后的路由
-        conductor_router = RouterFactory.create_conductor_router(self.config)
+        conductor_edges = {
+            "coder": "coder",
+            "finish": END,
+        }
+        if enable_fix_code_gen:
+            conductor_edges["fix_code_gen"] = "fix_code_gen"
+
+        conductor_router = RouterFactory.create_conductor_router(
+            self.config,
+            enable_fix_code_gen=enable_fix_code_gen,
+        )
         
         workflow.add_conditional_edges(
             "conductor",
             conductor_router,
-            {
-                "coder": "coder",
-                "finish": END
-            }
+            conductor_edges,
         )
         
         # 设置入口

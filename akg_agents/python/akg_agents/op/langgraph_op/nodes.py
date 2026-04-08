@@ -603,7 +603,8 @@ class NodeFactory:
 
     @staticmethod
     def create_kernel_conductor_node(kernel_conductor_instance, trace_instance, config,
-                                     code_gen_agent="kernel_gen", kernel_gen_instance=None):
+                                     code_gen_agent="kernel_gen", kernel_gen_instance=None,
+                                     enable_fix_code_gen=False):
         """创建 KernelConductor 节点（基于 Skill 系统）
 
         Args:
@@ -612,6 +613,7 @@ class NodeFactory:
             config: 配置字典
             code_gen_agent: 代码生成 agent 名称
             kernel_gen_instance: KernelGen 实例，用于获取已缓存的 skill 选择结果
+            enable_fix_code_gen: 是否在可选 agent 中包含 fix_code_gen
         """
         async def kernel_conductor_node(state: KernelGenState) -> dict:
             task_id = state.get('task_id', '0')
@@ -628,7 +630,10 @@ class NodeFactory:
                     'suggestion': attempt.get('suggestion', '')[:500]
                 })
 
-            valid_next_agents = f'{code_gen_agent}, finish'
+            valid_options = [code_gen_agent, "finish"]
+            if enable_fix_code_gen:
+                valid_options.append("fix_code_gen")
+            valid_next_agents = ', '.join(sorted(valid_options))
 
             raw_error = state.get('verifier_error', '')
             model_config = config.get("agent_model_config", {})
@@ -717,7 +722,8 @@ class NodeFactory:
         return track_node("kernel_conductor")(kernel_conductor_node)
 
     @staticmethod
-    def create_conductor_node(trace_instance, config, conductor_template, code_gen_agent="coder"):
+    def create_conductor_node(trace_instance, config, conductor_template,
+                              code_gen_agent="coder", enable_fix_code_gen=False):
         """创建 Conductor 分析节点
 
         Args:
@@ -725,6 +731,7 @@ class NodeFactory:
             config: 配置字典
             conductor_template: Conductor 模板
             code_gen_agent: 代码生成 agent 名称（"coder" 或 "kernel_gen"）
+            enable_fix_code_gen: 是否在可选 agent 中包含 fix_code_gen
         """
         async def conductor_node(state: KernelGenState) -> dict:
             """Conductor 节点：分析错误并生成建议
@@ -756,9 +763,11 @@ class NodeFactory:
                     })
 
                 # 使用工作流指定的代码生成 agent（通过参数传入，而非字符串匹配）
-                valid_next_agents = f'{code_gen_agent}, finish'
                 valid_options_set = {code_gen_agent, "finish"}
-
+                if enable_fix_code_gen:
+                    valid_options_set.add("fix_code_gen")
+                valid_next_agents = ', '.join(sorted(valid_options_set))
+                
                 raw_error = state.get('verifier_error', '')
                 error_for_prompt = raw_error
                 if raw_error and len(raw_error) > 4000:
@@ -864,6 +873,145 @@ class NodeFactory:
                 }
 
         return track_node("conductor")(conductor_node)
+
+    @staticmethod
+    def create_fix_code_gen_node(trace_instance, config):
+        """创建 FixCodeGen 增量修复节点
+
+        接收 Conductor 的建议，对现有代码进行 Search/Replace 增量修复，
+        而非完全重新生成。适用于局部、可定位的错误（如缺少 import、API 调用错误等）。
+        """
+        async def fix_code_gen_node(state: KernelGenState) -> dict:
+            from akg_agents.core_v2.agents import AgentBase
+            from akg_agents.op.utils.diff_utils import (
+                DiffApplier, parse_modifications, truncate_error_log,
+            )
+
+            task_id = state.get('task_id', '0')
+            op_name = state.get('op_name', 'unknown')
+            logger.info(
+                f"Task {task_id}, op_name: {op_name}, current_agent: fix_code_gen"
+            )
+
+            original_code = state.get('coder_code', '')
+            if not original_code:
+                logger.warning(f"[Task {task_id}] FixCodeGen: 没有待修复的代码")
+                return {
+                    "fix_code_gen_success": False,
+                    "fix_code_gen_message": "没有待修复的代码",
+                    "agent_history": ["fix_code_gen"],
+                    "step_count": state.get("step_count", 0) + 1,
+                }
+
+            try:
+                context = {
+                    "agent_name": "fix_code_gen",
+                    "session_id": state.get("session_id", ""),
+                    "task_id": task_id,
+                    "op_name": op_name,
+                    "dsl": state.get("dsl", ""),
+                    "backend": state.get("backend", ""),
+                    "arch": state.get("arch", ""),
+                    "framework": state.get("framework", ""),
+                    "workflow_name": state.get("workflow_name", ""),
+                    "task_desc": state.get("task_desc", ""),
+                    "hash": state.get("hash", ""),
+                }
+                agent_base = AgentBase(context=context, config=config)
+                prompt_template = agent_base.load_template("fix_code_gen/edit.j2")
+
+                error_log = truncate_error_log(
+                    state.get('verifier_error', ''), max_len=5000,
+                )
+                input_data = {
+                    'dsl': state.get('dsl', ''),
+                    'expert_suggestion': state.get('expert_suggestion', ''),
+                    'op_name': op_name,
+                    'framework': state.get('framework', ''),
+                    'task_desc': state.get('task_desc', ''),
+                    'original_code': original_code,
+                    'error_log': error_log,
+                    'conductor_suggestion': state.get('conductor_suggestion', ''),
+                }
+
+                model_config = config.get("agent_model_config", {})
+                model_level = model_config.get("fix_code_gen") or "fast"
+
+                response_text, prompt, reasoning = await agent_base.run_llm(
+                    prompt=prompt_template,
+                    input=input_data,
+                    model_level=model_level,
+                )
+
+                trace_instance.log_record("fix_code_gen", [
+                    ('result', response_text),
+                    ('prompt', prompt),
+                    ('reasoning', reasoning),
+                ])
+
+                modifications = parse_modifications(response_text)
+                if not modifications:
+                    logger.warning(
+                        f"[Task {task_id}] FixCodeGen: 未解析到有效的修改指令"
+                    )
+                    return {
+                        "fix_code_gen_success": False,
+                        "fix_code_gen_message": "未解析到有效的修改指令",
+                        "agent_history": ["fix_code_gen"],
+                        "step_count": state.get("step_count", 0) + 1,
+                    }
+
+                result = DiffApplier.apply_modifications(
+                    original_code, modifications,
+                    raw_llm_output=response_text,
+                )
+
+                logger.info(
+                    f"[Task {task_id}] FixCodeGen: "
+                    f"applied={result.applied_count}, "
+                    f"errors={len(result.errors)}, "
+                    f"success={result.success}, "
+                    f"match_levels={result.match_levels}"
+                )
+
+                message_parts = []
+                if result.success:
+                    message_parts.append(
+                        f"成功应用 {result.applied_count} 处修改"
+                    )
+                if result.errors:
+                    message_parts.append(
+                        f"失败项: {'; '.join(result.errors)}"
+                    )
+                if not message_parts:
+                    message_parts.append(
+                        f"修改失败: {'; '.join(result.errors)}"
+                    )
+
+                updates = {
+                    "fix_code_gen_success": result.success,
+                    "fix_code_gen_diff": result.diff_text,
+                    "fix_code_gen_message": " | ".join(message_parts),
+                    "agent_history": ["fix_code_gen"],
+                    "step_count": state.get("step_count", 0) + 1,
+                }
+                if result.success:
+                    updates["coder_code"] = result.modified_code
+
+                return updates
+
+            except Exception as e:
+                logger.error(f"[Task {task_id}] FixCodeGen failed: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                return {
+                    "fix_code_gen_success": False,
+                    "fix_code_gen_message": f"FixCodeGen 异常: {e}",
+                    "agent_history": ["fix_code_gen"],
+                    "step_count": state.get("step_count", 0) + 1,
+                }
+
+        return track_node("fix_code_gen")(fix_code_gen_node)
 
     @staticmethod
     async def _save_space_config(state: KernelGenState, space_config_code: str, step_count: int, config: dict):

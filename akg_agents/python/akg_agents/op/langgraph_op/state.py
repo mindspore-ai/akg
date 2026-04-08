@@ -91,5 +91,10 @@ class KernelGenState(BaseState, total=False):
     backend_api_doc: Optional[str]
     workflow_name: Optional[str]
     
+    # === FixCodeGen 输出 ===
+    fix_code_gen_success: Optional[bool]
+    fix_code_gen_diff: Optional[str]
+    fix_code_gen_message: Optional[str]
+    
     # === 路径配置 ===
     cur_path: Optional[str]  # 自定义工作路径，用于控制中间文件和代码输出的存放位置
