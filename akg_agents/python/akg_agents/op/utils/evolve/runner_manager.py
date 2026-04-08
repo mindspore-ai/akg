@@ -559,17 +559,23 @@ class BatchTaskPool:
 
 
 def discover_task_files(task_dir: str) -> List[Path]:
-    """发现所有任务文件"""
+    """发现所有任务文件（.py 文件和 SOL 数据集目录）"""
     task_path = Path(task_dir)
     if not task_path.exists():
         raise FileNotFoundError(f"任务目录不存在: {task_dir}")
 
     task_files = list(task_path.glob("*.py"))
-    task_files.sort()
 
-    print(f"发现 {len(task_files)} 个任务文件:")
+    for sub_dir in sorted(task_path.iterdir()):
+        if sub_dir.is_dir() and (sub_dir / "definition.json").exists():
+            task_files.append(sub_dir)
+
+    task_files.sort(key=lambda p: p.name)
+
+    print(f"发现 {len(task_files)} 个任务:")
     for i, file_path in enumerate(task_files, 1):
-        print(f"  {i}. {file_path.name}")
+        suffix = " [SOL]" if file_path.is_dir() else ""
+        print(f"  {i}. {file_path.name}{suffix}")
 
     return task_files
 
@@ -582,7 +588,12 @@ def run_single_task_subprocess(task_file: Path, output_dir: Path, index: int, to
     Args:
         assigned_device: 分配给此任务的设备ID（本地模式），如果为None则从配置文件读取device_pool（远程模式）
     """
-    op_name = "akg_agents_" + task_file.stem
+    if task_file.is_dir() and (task_file / "definition.json").exists():
+        with open(task_file / "definition.json", "r", encoding="utf-8") as _f:
+            _def = json.load(_f)
+        op_name = _def.get("name", task_file.name)
+    else:
+        op_name = "akg_agents_" + task_file.stem
 
     if not use_compact_output:
         print(f"\n" + "="*80)
@@ -947,7 +958,7 @@ async def run_batch_evolve(config_path: str = None) -> None:
         task_files = discover_task_files(task_dir)
 
         if not task_files:
-            print("未找到任何.py文件")
+            print("未找到任何任务（.py 文件或 SOL 数据集目录）")
             return
 
         # 尝试检查是否有可用 Worker，但不强制依赖 WorkerManager 实例

@@ -24,6 +24,7 @@
 import sys
 import asyncio
 import os
+import json
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, List
@@ -87,6 +88,13 @@ class AdaptiveSearchRunnerConfig:
         task_config = config_dict.get("task", {})
         if not skip_task_config:
             instance.op_name = task_config.get("op_name", instance.op_name)
+            
+            # SOL 数据集目录
+            sol_problem_dir = task_config.get("sol_problem_dir", "")
+            if sol_problem_dir:
+                if not os.path.isabs(sol_problem_dir):
+                    sol_problem_dir = os.path.normpath(os.path.join(config_dir, sol_problem_dir))
+                instance._sol_problem_dir = sol_problem_dir
             
             # 从文件路径加载任务描述
             task_desc = task_config.get("task_desc", "")
@@ -238,6 +246,43 @@ def load_task_description(task_file: str) -> str:
     return task_file
 
 
+def load_sol_task(sol_dir: str):
+    """Load SOL dataset: returns (op_name, task_desc, sol_problem_dir)"""
+    case_dir = Path(sol_dir).resolve()
+    if not (case_dir / "definition.json").exists():
+        raise FileNotFoundError(f"SOL dataset missing definition.json: {case_dir}")
+    
+    with open(case_dir / "definition.json", "r", encoding="utf-8") as f:
+        def_json = f.read()
+    definition = json.loads(def_json)
+    op_name = definition.get("name", case_dir.name)
+    
+    with open(case_dir / "reference.py", "r", encoding="utf-8") as f:
+        ref_py = f.read()
+    
+    workload_sample = ""
+    workload_file = case_dir / "workload.jsonl"
+    if workload_file.exists():
+        with open(workload_file, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+        if lines:
+            first = json.loads(lines[0])
+            workload_sample = (
+                f"\n\n## workload 示例（共 {len(lines)} 组，以下为第 1 组）\n"
+                f"```json\n{json.dumps(first, indent=2)}\n```"
+            )
+    
+    task_desc = (
+        f"请实现一个 Triton Ascend 算子。\n\n"
+        f"## definition.json\n```json\n{def_json}\n```\n\n"
+        f"## reference.py\n```python\n{ref_py}\n```"
+        f"{workload_sample}\n\n"
+        f"注意：请使用 Triton 编写 kernel，并将其封装在 ModelNew 类的 forward 方法中。"
+    )
+    
+    return op_name, task_desc, str(case_dir)
+
+
 def parse_default_config():
     """解析默认配置"""
     project_root = get_project_root()
@@ -320,7 +365,14 @@ def parse_batch_runner_mode(args):
         except Exception as e:
             print(f"警告: 无法加载配置文件 {config_path}: {e}")
     
-    task_desc = load_task_description(task_file)
+    # 检测 SOL 数据集：如果 task_file 是目录且包含 definition.json
+    if os.path.isdir(task_file) and os.path.exists(os.path.join(task_file, "definition.json")):
+        sol_op_name, task_desc, sol_problem_dir = load_sol_task(task_file)
+        op_name = sol_op_name
+        config._sol_problem_dir = sol_problem_dir
+        print(f"SOL 模式: 数据集目录={sol_problem_dir}")
+    else:
+        task_desc = load_task_description(task_file)
     
     print(f"任务: {op_name}")
     print(f"任务文件: {task_file}")
@@ -370,6 +422,12 @@ async def run_wrapper(op_name: str, task_desc: str, config: AdaptiveSearchRunner
     
     # 检查环境
     check_env_for_task(config.framework, config.backend, config.dsl, loaded_config)
+    
+    # SOL 模式：注入 bench_type 和 sol_problem_dir
+    sol_problem_dir = getattr(config, '_sol_problem_dir', None)
+    if sol_problem_dir:
+        loaded_config["bench_type"] = "sol"
+        loaded_config["sol_problem_dir"] = sol_problem_dir
     
     # 运行自适应搜索
     print("\n开始自适应搜索...")
