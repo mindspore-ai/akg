@@ -28,6 +28,8 @@ structure:
 - [ ] **避免 host 端 permute**: 非最后维 reduce 在 kernel 内用多维索引处理
 - [ ] **隐式广播**: 用 `a[:, None] * b` 替代 `tl.broadcast_to`，减少临时 tensor
 - [ ] **load 时直接 mask**: `tl.load(ptr, mask=m, other=0.0)` 优于先加载再 `tl.where`
+- [ ] **核心数配置**: grid 数设为核心数（VEC/CUBE），过大时启动开销反增
+- [ ] **256B 对齐**: 数据搬运以 256B 为单位，对齐可提升带宽
 
 ## Reduction 优化
 

@@ -21,6 +21,7 @@ profile_settings:
 
 # Verification configuration
 verify_timeout: 300  # Timeout for verification in seconds (default 5 minutes)
+verify_per_config: false  # Enable per-config verification for autotune (also controllable via AKG_VERIFY_PER_CONFIG=1)
 
 # Multi-case testing configuration
 enable_multi_case_verification: false  # For Hint mode only: controls whether to run verification (false = only generate space_config file without verification)

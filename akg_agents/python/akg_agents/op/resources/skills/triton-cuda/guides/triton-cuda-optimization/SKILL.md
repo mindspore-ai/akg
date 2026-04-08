@@ -44,6 +44,7 @@ CUDA 后端特有的两个重要参数：
         triton.Config({'BLOCK_SIZE': 512}, num_warps=2, num_stages=4),
     ],
     key=['n_elements'],
+    restore_value=['output_ptr'],  # 必须：列出所有输出指针参数名
 )
 ```
 

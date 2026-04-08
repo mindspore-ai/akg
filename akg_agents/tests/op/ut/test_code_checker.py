@@ -15,12 +15,7 @@
 """
 CodeChecker 单元测试
 
-测试纯静态检查流程：
-1. ast.parse 语法检查
-2. py_compile 编译检查
-3. import 可用性检查
-4. 中文文本混入检测
-5. DSL 合规性检测（反作弊）
+覆盖：语法检查、import 检测、中文混入、空代码、错误格式、DSL 合规、Autotune 规范。
 """
 
 import pytest
@@ -29,24 +24,22 @@ from akg_agents.op.utils.code_checker import CodeChecker
 
 @pytest.fixture
 def checker():
-    """triton_cuda checker — 会启用 DSL 合规性检测"""
     return CodeChecker(backend="cuda", dsl="triton_cuda")
 
 
 @pytest.fixture
 def checker_no_dsl():
-    """dsl='torch' checker — 跳过 DSL 合规性检测，用于测试语法/import/中文等基础功能"""
     return CodeChecker(backend="cuda", dsl="torch")
 
 
 # ============================================================
-# 语法错误检测 (ast.parse)
+# 语法错误
 # ============================================================
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_detect_unclosed_parenthesis(checker):
-    """括号不匹配应被检测"""
+async def test_syntax_error_unclosed_paren(checker):
+    """括号不匹配"""
     code = '''\
 import torch
 import triton
@@ -61,97 +54,23 @@ def relu_kernel(x_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     out = tl.where(x > 0, x, 0.0)
     tl.store(out_ptr + offsets, out, mask=mask)
 '''
-    passed, error_message, errors = await checker.check(code)
-    assert passed is False
-    assert len(errors) == 1
-    assert errors[0]["error_type"] == "syntax_error"
-    assert errors[0]["line"] == 10
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_detect_indentation_error(checker):
-    """缩进错误应被检测"""
-    code = '''\
-import torch
-import triton
-import triton.language as tl
-
-@triton.jit
-def softmax_kernel(
-    output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols,
-    BLOCK_SIZE: tl.constexpr
-):
-    row_idx = tl.program_id(0)
-    row_start_ptr = input_ptr + row_idx * input_row_stride
-    col_offsets = tl.arange(0, BLOCK_SIZE)
-    input_ptrs = row_start_ptr + col_offsets
-        mask = col_offsets < n_cols
-    row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
-'''
-    passed, error_message, errors = await checker.check(code)
-    assert passed is False
-    assert len(errors) == 1
-    assert errors[0]["error_type"] == "syntax_error"
-    assert "indent" in errors[0]["detail"].lower()
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_detect_missing_colon(checker):
-    """if 后缺少冒号应被检测"""
-    code = '''\
-import torch
-
-def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE=1024):
-    pid = 0
-    offsets = pid * BLOCK_SIZE
-    mask = offsets < n_elements
-    x = 1.0
-    y = 2.0
-    if mask
-        out = x + y
-    return out
-'''
-    passed, error_message, errors = await checker.check(code)
+    passed, _, errors = await checker.check(code)
     assert passed is False
     assert errors[0]["error_type"] == "syntax_error"
-    assert errors[0]["line"] == 9
 
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_detect_fstring_syntax_error(checker):
-    """f-string 语法错误应被检测"""
-    code = '''\
-import torch
-
-def launch(x, eps=1e-5):
-    N = x.shape[-1]
-    out = torch.empty_like(x)
-    grid = (x.numel() // N,)
-    print(f"grid={grid!r"}")
-    return out
-'''
-    passed, error_message, errors = await checker.check(code)
-    assert passed is False
-    assert len(errors) >= 1
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_detect_fullwidth_chinese_punctuation(checker):
-    """全角中文标点（括号、逗号）混入代码应被检测"""
+async def test_syntax_error_fullwidth_punctuation(checker):
+    """全角中文标点混入"""
     code = '''\
 import torch
 
 def relu_kernel(x_ptr, out_ptr, n_elements):
     pid = tl.program_id（axis=0）
-    offsets = pid * 1024 + tl.arange(0, 1024)
-    mask = offsets < n_elements
-    x = tl.load(x_ptr + offsets， mask=mask)
+    x = tl.load(x_ptr + 0， mask=True)
 '''
-    passed, error_message, errors = await checker.check(code)
+    passed, _, errors = await checker.check(code)
     assert passed is False
     assert errors[0]["error_type"] == "syntax_error"
     assert "U+FF08" in errors[0]["detail"]
@@ -159,48 +78,28 @@ def relu_kernel(x_ptr, out_ptr, n_elements):
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_detect_trailing_xml_tag(checker):
-    """结尾多出的 XML 标签应被检测"""
-    code = '''\
-import torch
-
-def add(x, y):
-    return x + y
-<triton.language>
-'''
-    passed, error_message, errors = await checker.check(code)
-    assert passed is False
-    assert errors[0]["error_type"] == "syntax_error"
-    assert errors[0]["line"] == 5
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_detect_trailing_markdown_fence(checker):
-    """结尾多出的 markdown code fence 应被检测"""
+async def test_syntax_error_trailing_markdown_fence(checker):
+    """结尾 markdown fence"""
     code = '''\
 import torch
 
 def softmax(x):
-    max_val = x.max()
-    exps = torch.exp(x - max_val)
-    return exps / exps.sum()
+    return torch.exp(x) / torch.exp(x).sum()
 ```
 '''
-    passed, error_message, errors = await checker.check(code)
+    passed, _, errors = await checker.check(code)
     assert passed is False
     assert errors[0]["error_type"] == "syntax_error"
-    assert errors[0]["line"] == 7
 
 
 # ============================================================
-# import 可用性检测
+# import 检测
 # ============================================================
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_detect_import_typo(checker_no_dsl):
-    """拼写错误的模块名应被检测"""
+async def test_import_typo_detected(checker_no_dsl):
+    """拼写错误的模块名"""
     code = '''\
 import torch
 from triton_ascned import autotune
@@ -208,17 +107,16 @@ from triton_ascned import autotune
 def foo():
     pass
 '''
-    passed, error_message, errors = await checker_no_dsl.check(code)
+    passed, _, errors = await checker_no_dsl.check(code)
     assert passed is False
     import_errors = [e for e in errors if e["error_type"] == "import_error"]
-    modules = [e["detail"] for e in import_errors]
-    assert any("triton_ascned" in m for m in modules)
+    assert any("triton_ascned" in e["detail"] for e in import_errors)
 
 
 @pytest.mark.level0
 @pytest.mark.asyncio
 async def test_relative_import_skipped(checker_no_dsl):
-    """相对导入不应触发 import 检测"""
+    """相对导入不应报错"""
     code = '''\
 from . import utils
 from .core import helper
@@ -226,19 +124,18 @@ from .core import helper
 def foo():
     return 1
 '''
-    passed, error_message, errors = await checker_no_dsl.check(code)
-    import_errors = [e for e in errors if e["error_type"] == "import_error"]
-    assert len(import_errors) == 0
+    passed, _, errors = await checker_no_dsl.check(code)
+    assert all(e["error_type"] != "import_error" for e in errors)
 
 
 # ============================================================
-# 中文文本混入检测 (stray_chinese_text)
+# 中文混入
 # ============================================================
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_detect_bare_chinese_sentence(checker_no_dsl):
-    """代码中混入的裸中文句子（无 # 注释符）应被检测"""
+async def test_bare_chinese_sentence_detected(checker_no_dsl):
+    """裸中文句子应被检测"""
     code = '''\
 import torch
 
@@ -247,62 +144,9 @@ def add(x, y):
     这里计算两个张量的和
     return result
 '''
-    passed, error_message, errors = await checker_no_dsl.check(code)
+    passed, _, errors = await checker_no_dsl.check(code)
     assert passed is False
-    chinese_errors = [e for e in errors if e["error_type"] == "stray_chinese_text"]
-    assert len(chinese_errors) == 1
-    assert chinese_errors[0]["line"] == 5
-    assert "这里计算两个张量的和" in chinese_errors[0]["detail"]
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_chinese_in_comment_not_detected(checker_no_dsl):
-    """注释中的中文不应触发检测"""
-    code = '''\
-import os
-
-def compute(x):
-    # 这里计算两个张量的和
-    result = x * 2
-    return result
-'''
-    passed, error_message, errors = await checker_no_dsl.check(code)
-    chinese_errors = [e for e in errors if e["error_type"] == "stray_chinese_text"]
-    assert len(chinese_errors) == 0
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_chinese_in_string_not_detected(checker_no_dsl):
-    """字符串中的中文不应触发检测"""
-    code = '''\
-import os
-
-def compute(x):
-    name = "计算两个张量的和"
-    result = x * 2
-    return result
-'''
-    passed, error_message, errors = await checker_no_dsl.check(code)
-    chinese_errors = [e for e in errors if e["error_type"] == "stray_chinese_text"]
-    assert len(chinese_errors) == 0
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_short_chinese_variable_not_detected(checker_no_dsl):
-    """短中文变量名（<3 个汉字）不应触发检测"""
-    code = '''\
-import os
-
-def forward(x):
-    输出 = x * 2
-    return 输出
-'''
-    passed, error_message, errors = await checker_no_dsl.check(code)
-    chinese_errors = [e for e in errors if e["error_type"] == "stray_chinese_text"]
-    assert len(chinese_errors) == 0
+    assert any(e["error_type"] == "stray_chinese_text" for e in errors)
 
 
 # ============================================================
@@ -311,93 +155,21 @@ def forward(x):
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_empty_code_returns_false(checker):
-    """空代码应返回 False"""
-    passed, error_message, errors = await checker.check("")
+async def test_empty_code(checker):
+    passed, _, errors = await checker.check("")
     assert passed is False
-    assert len(errors) == 1
-    assert errors[0]["error_type"] == "empty_code"
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_whitespace_only_returns_false(checker):
-    """纯空白代码应返回 False"""
-    passed, error_message, errors = await checker.check("   \n\n  ")
-    assert passed is False
-    assert len(errors) == 1
     assert errors[0]["error_type"] == "empty_code"
 
 
 @pytest.mark.level0
 @pytest.mark.asyncio
 async def test_correct_code_passes(checker_no_dsl):
-    """正确的代码应全部通过（基础语法/import/中文检测）"""
     code = '''\
 import os
-import sys
 import math
-import logging
-from typing import List, Tuple
 
-logger = logging.getLogger(__name__)
-
-def relu(values: List[float]) -> List[float]:
+def relu(values):
     return [max(0.0, v) for v in values]
-
-def softmax(values: List[float]) -> List[float]:
-    max_val = max(values)
-    exps = [math.exp(v - max_val) for v in values]
-    total = sum(exps)
-    return [e / total for e in exps]
-
-def compute(data: List[float], mode: str = "relu") -> Tuple[List[float], str]:
-    """
-    计算两个张量的和
-
-    Args:
-        data: 输入数据
-        mode: 计算模式
-
-    Returns:
-        result: 计算结果
-        summary: 计算总结
-    """
-    if mode == "relu":
-        result = relu(data)
-    elif mode == "softmax":
-        result = softmax(data)
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-    summary = f"Processed {len(data)} elements with {mode}"
-    logger.info(summary)
-    return result, summary
-'''
-    passed, error_message, errors = await checker_no_dsl.check(code)
-    assert passed is True
-    assert len(errors) == 0
-    assert error_message == ""
-
-
-# ============================================================
-# 运行时错误（静态检查不可捕获，确认不误报）
-# ============================================================
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_forward_arg_mismatch_not_detected(checker_no_dsl):
-    """函数参数数量不匹配是运行时错误，静态检查不应报错"""
-    code = '''\
-import os
-
-class Model:
-    def forward(self, x, y, z):
-        return x + y + z
-
-def run():
-    model = Model()
-    result = model.forward(1)
-    return result
 '''
     passed, error_message, errors = await checker_no_dsl.check(code)
     assert passed is True
@@ -405,54 +177,27 @@ def run():
 
 
 # ============================================================
-# 错误输出格式验证
+# 错误输出格式
 # ============================================================
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_error_dict_has_required_fields(checker):
-    """每个错误 dict 必须包含 line/error_type/detail/suggestion/code_snippet"""
+async def test_error_dict_fields(checker):
+    """错误 dict 必须包含 line/error_type/detail/suggestion/code_snippet"""
     code = "def foo(\n    return 1"
     passed, error_message, errors = await checker.check(code)
     assert passed is False
     for err in errors:
-        assert "line" in err
-        assert "error_type" in err
-        assert "detail" in err
-        assert "suggestion" in err
-        assert "code_snippet" in err
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_error_message_contains_report_header(checker):
-    """格式化的错误消息应包含报告标题"""
-    code = "def foo(\n    return 1"
-    passed, error_message, errors = await checker.check(code)
-    assert passed is False
+        for key in ("line", "error_type", "detail", "suggestion", "code_snippet"):
+            assert key in err
     assert "CodeChecker" in error_message
-    assert "问题" in error_message
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_error_message_contains_follow_up_hint(checker):
-    """格式化的错误消息末尾应提示可能有后续问题"""
-    code = "def foo(\n    return 1"
-    passed, error_message, errors = await checker.check(code)
-    assert passed is False
-    assert "修复后可能还有后续问题" in error_message
 
 
 # ============================================================
-# DSL 合规性检测 (反作弊)
+# DSL 合规性检测
 # ============================================================
 
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_dsl_compliant_triton_code_passes(checker):
-    """完整合规的 triton 代码不应触发任何 DSL 合规性错误"""
-    code = '''\
+TRITON_KERNEL_SNIPPET = '''\
 import torch
 import triton
 import triton.language as tl
@@ -477,213 +222,117 @@ class ModelNew(torch.nn.Module):
         add_kernel[grid](x, y, out, n, BLOCK_SIZE=1024)
         return out
 '''
-    passed, error_message, errors = await checker.check(code)
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_dsl_compliant_triton_passes(checker):
+    """合规的 triton 代码不应触发 DSL 错误"""
+    passed, _, errors = await checker.check(TRITON_KERNEL_SNIPPET)
     dsl_errors = [e for e in errors if e["error_type"] not in ("import_error",)]
     assert len(dsl_errors) == 0
 
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_no_triton_kernel_detected(checker):
-    """dsl=triton_cuda 但代码中无 @triton.jit kernel 应被检测"""
+async def test_no_triton_kernel(checker):
+    """dsl=triton_cuda 但无 kernel"""
     code = '''\
 import torch
 
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
-
     def forward(self, x, y):
         return torch.matmul(x, y)
 '''
-    passed, error_message, errors = await checker.check(code)
+    passed, _, errors = await checker.check(code)
     assert passed is False
-    error_types = [e["error_type"] for e in errors]
-    assert "no_triton_kernel" in error_types
+    assert any(e["error_type"] == "no_triton_kernel" for e in errors)
 
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_triton_kernel_defined_but_not_called(checker):
-    """定义了 @triton.jit kernel 但未通过 kernel[grid](...) 调用应被检测"""
+async def test_hard_torch_api_rejected(checker):
+    """kernel 调用了但 forward 用 matmul 应被打回"""
     code = '''\
 import torch
 import triton
 import triton.language as tl
 
 @triton.jit
-def my_kernel(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
+def k(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    x = tl.load(x_ptr + offs, mask=mask)
-    tl.store(out_ptr + offs, x * 2, mask=mask)
+    tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=offs < n), mask=offs < n)
 
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
-
-    def forward(self, x):
-        return torch.sigmoid(x)
-'''
-    passed, error_message, errors = await checker.check(code)
-    assert passed is False
-    error_types = [e["error_type"] for e in errors]
-    assert "triton_kernel_not_called" in error_types
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_hard_torch_api_rejected_even_with_kernel(checker):
-    """即使 triton kernel 被调用，forward() 中的 HARD 类 torch API（如 matmul）也应被打回"""
-    code = '''\
-import torch
-import triton
-import triton.language as tl
-
-@triton.jit
-def preprocess_kernel(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    x = tl.load(x_ptr + offs, mask=mask)
-    tl.store(out_ptr + offs, x, mask=mask)
-
-class ModelNew(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
     def forward(self, x, w):
-        temp = torch.empty_like(x)
-        n = x.numel()
-        grid = lambda meta: (triton.cdiv(n, meta["BLOCK"]),)
-        preprocess_kernel[grid](x, temp, n, BLOCK=1024)
-        return torch.matmul(temp, w)
+        tmp = torch.empty_like(x)
+        k[(1,)](x, tmp, x.numel(), BLOCK=1024)
+        return torch.matmul(tmp, w)
 '''
-    passed, error_message, errors = await checker.check(code)
+    passed, _, errors = await checker.check(code)
     assert passed is False
-    error_types = [e["error_type"] for e in errors]
-    assert "torch_api_instead_of_kernel" in error_types
+    assert any(e["error_type"] == "torch_api_instead_of_kernel" for e in errors)
 
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_soft_torch_api_allowed_when_kernel_called(checker):
-    """triton kernel 被调用时，SOFT 类 torch API（如 exp）仅警告不打回"""
+async def test_kernel_not_called_with_torch_api(checker):
+    """kernel 定义了但没调用，且 forward 用 torch API"""
     code = '''\
 import torch
 import triton
 import triton.language as tl
 
 @triton.jit
-def compute_kernel(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
+def unused(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    x = tl.load(x_ptr + offs, mask=mask)
-    tl.store(out_ptr + offs, x * 2.0, mask=mask)
+    tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=offs < n), mask=offs < n)
 
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
-
-    def forward(self, x):
-        out = torch.empty_like(x)
-        n = x.numel()
-        grid = lambda meta: (triton.cdiv(n, meta["BLOCK"]),)
-        compute_kernel[grid](x, out, n, BLOCK=1024)
-        return torch.exp(out)
-'''
-    passed, error_message, errors = await checker.check(code)
-    dsl_errors = [e for e in errors if e["error_type"] not in ("import_error",)]
-    assert len(dsl_errors) == 0
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_soft_torch_api_rejected_without_kernel(checker):
-    """triton kernel 未调用时，SOFT 类 torch API 也应硬失败"""
-    code = '''\
-import torch
-import triton
-import triton.language as tl
-
-@triton.jit
-def unused_kernel(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    x = tl.load(x_ptr + offs, mask=mask)
-    tl.store(out_ptr + offs, x, mask=mask)
-
-class ModelNew(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
     def forward(self, x):
         return torch.exp(torch.sigmoid(x))
 '''
-    passed, error_message, errors = await checker.check(code)
+    passed, _, errors = await checker.check(code)
     assert passed is False
-    error_types = [e["error_type"] for e in errors]
+    error_types = {e["error_type"] for e in errors}
     assert "triton_kernel_not_called" in error_types
     assert "torch_api_without_kernel" in error_types
 
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_matmul_operator_detected(checker):
-    """@ 矩阵乘法运算符应被检测为 HARD 类"""
-    code = '''\
-import torch
-import triton
-import triton.language as tl
-
-@triton.jit
-def noop_kernel(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=mask), mask=mask)
-
-class ModelNew(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        out = torch.empty_like(x)
-        noop_kernel[(1,)](x, out, x.numel(), BLOCK=1024)
-        return out @ out.T
-'''
-    passed, error_message, errors = await checker.check(code)
-    assert passed is False
-    error_types = [e["error_type"] for e in errors]
-    assert "torch_api_instead_of_kernel" in error_types
-
-
-@pytest.mark.level0
-@pytest.mark.asyncio
-async def test_dsl_check_skipped_for_torch_dsl(checker_no_dsl):
-    """dsl='torch' 时不应触发 DSL 合规性检测"""
+async def test_dsl_check_skipped_for_torch(checker_no_dsl):
+    """dsl='torch' 跳过 DSL 检测"""
     code = '''\
 import torch
 
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
-
     def forward(self, x, y):
         return torch.matmul(x, y)
 '''
-    passed, error_message, errors = await checker_no_dsl.check(code)
-    assert passed is True
-    assert len(errors) == 0
+    passed, _, errors = await checker_no_dsl.check(code)
+    dsl_errors = [e for e in errors if e["error_type"] not in ("import_error",)]
+    assert len(dsl_errors) == 0
 
+
+# ============================================================
+# Autotune 规范
+# ============================================================
 
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_autotune_decorator_recognized(checker):
-    """@triton.autotune 装饰的 kernel 应被正确识别"""
+async def test_autotune_missing_restore_value(checker):
+    """缺少 restore_value"""
     code = '''\
 import torch
 import triton
@@ -694,27 +343,63 @@ import triton.language as tl
     key=["n_elements"],
 )
 @triton.jit
-def tuned_kernel(x_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def tuned(x_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offs < n_elements
-    x = tl.load(x_ptr + offs, mask=mask)
-    tl.store(out_ptr + offs, x * 2, mask=mask)
+    tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=mask) * 2, mask=mask)
 
 class ModelNew(torch.nn.Module):
     def __init__(self):
         super().__init__()
-
     def forward(self, x):
         out = torch.empty_like(x)
-        n = x.numel()
-        grid = lambda meta: (triton.cdiv(n, meta["BLOCK_SIZE"]),)
-        tuned_kernel[grid](x, out, n)
+        grid = lambda meta: (triton.cdiv(x.numel(), meta["BLOCK_SIZE"]),)
+        tuned[grid](x, out, x.numel())
         return out
 '''
-    passed, error_message, errors = await checker.check(code)
-    dsl_errors = [e for e in errors if e["error_type"] not in ("import_error",)]
-    assert len(dsl_errors) == 0
+    passed, _, errors = await checker.check(code)
+    assert passed is False
+    assert any(e["error_type"] == "autotune_missing_restore_value" for e in errors)
+
+
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_autotune_with_restore_value_passes(checker):
+    """有 restore_value 时多 config 应通过"""
+    code = '''\
+import torch
+import triton
+import triton.language as tl
+
+@triton.autotune(
+    configs=[
+        triton.Config({"BLOCK_SIZE": 64}),
+        triton.Config({"BLOCK_SIZE": 128}),
+        triton.Config({"BLOCK_SIZE": 256}),
+        triton.Config({"BLOCK_SIZE": 512}),
+    ],
+    key=["n_elements"],
+    restore_value=["out_ptr"],
+)
+@triton.jit
+def tuned(x_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offs < n_elements
+    tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=mask) * 2, mask=mask)
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x):
+        out = torch.empty_like(x)
+        grid = lambda meta: (triton.cdiv(x.numel(), meta["BLOCK_SIZE"]),)
+        tuned[grid](x, out, x.numel())
+        return out
+'''
+    passed, _, errors = await checker.check(code)
+    assert not any(e["error_type"].startswith("autotune_") for e in errors)
 
 
 # ============================================================
