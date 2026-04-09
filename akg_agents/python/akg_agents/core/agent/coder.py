@@ -135,26 +135,9 @@ class Coder(AgentBase):
             "source_backend": self.source_backend,  # 源后端（如 cuda -> ascend）
             "source_arch": self.source_arch,        # 源架构（如 a100 -> ascend910b4）
         }
-
-    def _load_api_docs_initial(self) -> str:
-        if self.dsl == "triton_ascend":
-            return ""
-        return self.load_doc("api/api.md")
-
-    async def _ensure_api_docs_loaded(self) -> str:
-        if self.dsl != "triton_ascend":
-            return self.base_doc["api_docs"]
-
-        if not self.base_doc["api_docs"]:
-            self.base_doc["api_docs"] = await resolve_triton_ascend_api_docs(
-                backend=self.backend,
-                arch=self.arch,
-            )
-        return self.base_doc["api_docs"]
-        
         ## 添加详细算子信息
         try:
-            from ai_kernel_generator.core.extractor_torch import extract_kernelbench_shapes_dtypes
+            from akg_agents.core.extractor_torch import extract_kernelbench_shapes_dtypes
             meta = extract_kernelbench_shapes_dtypes(self.base_doc["task_desc"], device="cuda")
             add_info = ""
             print("=== Inputs ===")
@@ -176,6 +159,24 @@ class Coder(AgentBase):
             self.base_doc["task_desc"] += "\n\n\n## 算子参数信息\n" + add_info
         except Exception as e:
             logger.warning(f"Failed to extract shapes and dtypes: {e}")
+
+
+    def _load_api_docs_initial(self) -> str:
+        if self.dsl == "triton_ascend":
+            return ""
+        return self.load_doc("api/api.md")
+
+    async def _ensure_api_docs_loaded(self) -> str:
+        if self.dsl != "triton_ascend":
+            return self.base_doc["api_docs"]
+
+        if not self.base_doc["api_docs"]:
+            self.base_doc["api_docs"] = await resolve_triton_ascend_api_docs(
+                backend=self.backend,
+                arch=self.arch,
+            )
+        return self.base_doc["api_docs"]
+        
 
 
     def _load_user_examples(self) -> str:
