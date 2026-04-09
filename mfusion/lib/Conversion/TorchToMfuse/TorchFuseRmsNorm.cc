@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-#include "mfusion/Conversion/Passes.h"
-
 #include <optional>
-
+#include "mfusion/Conversion/Passes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -92,46 +90,33 @@ struct MatchState {
   Value dims;
 };
 
-/// Full path: mean.dim(pow(x,2)). Simplified: add(variance,eps) with variance not from mean.dim.
-static LogicalResult matchVarianceSource(TorchD::AtenMulTensorOp outMul, TorchD::AtenAddScalarOp add,
-                                         Value normX, PatternRewriter &rewriter, TorchD::AtenMeanDimOp &meanOut,
+/// Full path: mean.dim(pow(x,2))
+static LogicalResult matchVarianceSource(TorchD::AtenMulTensorOp outMul, TorchD::AtenAddScalarOp add, Value normX,
+                                         PatternRewriter &rewriter, TorchD::AtenMeanDimOp &meanOut,
                                          TorchD::AtenPowTensorScalarOp &powOut, Value &dimsForErase) {
   meanOut = stripCasts(add.getSelf()).getDefiningOp<TorchD::AtenMeanDimOp>();
   powOut = nullptr;
   dimsForErase = Value();
 
-  if (meanOut) {
-    powOut = stripCasts(meanOut.getSelf()).getDefiningOp<TorchD::AtenPowTensorScalarOp>();
-    if (!powOut) {
-      return rewriter.notifyMatchFailure(outMul, "mean input is not pow.Tensor_Scalar");
-    }
-    auto power = getConstInt(powOut.getExponent());
-    if (!power || *power != 2) {
-      return rewriter.notifyMatchFailure(outMul, "pow exponent must be 2");
-    }
-    if (stripCasts(powOut.getSelf()) != stripCasts(normX)) {
-      return rewriter.notifyMatchFailure(outMul, "pow input does not match norm x");
-    }
-    if (!getConstBool(meanOut.getKeepdim()).has_value()) {
-      return rewriter.notifyMatchFailure(outMul, "keepdim must be constant");
-    }
-    dimsForErase = meanOut.getDim();
-    return success();
+  if (!meanOut) {
+    return rewriter.notifyMatchFailure(outMul, "add input is not mean.dim");
   }
 
-  // Backward-compat: variance not defined by mean.dim in this region (e.g. block args).
-  // npu_rms_norm recomputes from x; fusion is only sound when variance matches x's second moment.
-  Value variance = stripCasts(add.getSelf());
-  auto vType = dyn_cast<TorchD::ValueTensorType>(variance.getType());
-  auto xType = dyn_cast<TorchD::ValueTensorType>(stripCasts(normX).getType());
-  if (!vType || !xType || vType.getDtype() != xType.getDtype()) {
-    return rewriter.notifyMatchFailure(
-        outMul, "simplified pattern: variance and x must be vtensor types with same dtype");
+  powOut = stripCasts(meanOut.getSelf()).getDefiningOp<TorchD::AtenPowTensorScalarOp>();
+  if (!powOut) {
+    return rewriter.notifyMatchFailure(outMul, "mean input is not pow.Tensor_Scalar");
   }
-  if (!variance.hasOneUse()) {
-    return rewriter.notifyMatchFailure(outMul,
-                                        "simplified pattern: add.Scalar self must have a single use (the add)");
+  auto power = getConstInt(powOut.getExponent());
+  if (!power || *power != 2) {
+    return rewriter.notifyMatchFailure(outMul, "pow exponent must be 2");
   }
+  if (stripCasts(powOut.getSelf()) != stripCasts(normX)) {
+    return rewriter.notifyMatchFailure(outMul, "pow input does not match norm x");
+  }
+  if (!getConstBool(meanOut.getKeepdim()).has_value()) {
+    return rewriter.notifyMatchFailure(outMul, "keepdim must be constant");
+  }
+  dimsForErase = meanOut.getDim();
   return success();
 }
 
@@ -163,8 +148,7 @@ static void resolveDtypeCasts(TorchD::AtenPowTensorScalarOp pow, Value normX, To
 }
 
 static LogicalResult matchRmsNorm(TorchD::AtenMulTensorOp outMul, MatchState &st, PatternRewriter &rewriter) {
-  // Match: pow(x,2)->mean->add->rsqrt->mul(x,rsqrt)->mul(gamma), optional npu_dtype_casts,
-  // or simplified add(variance,eps)->rsqrt->mul->mul.
+  // Match: pow(x,2)->mean->add->rsqrt->mul(x,rsqrt)->mul(gamma), optional npu_dtype_casts
 
   Value a = outMul.getSelf();
   Value b = outMul.getOther();
@@ -307,10 +291,10 @@ class TorchFuseRmsNormPattern : public OpRewritePattern<TorchD::AtenMulTensorOp>
     Value fusedX = st.dtypeCastBefore ? st.dtypeCastBefore.getOperand(0) : st.x;
     SmallVector<Value> operands = {fusedX, st.gamma, st.eps};
 
-    rewriter.setInsertionPoint(st.rsqrt);
-    auto fused = rewriter.create<TorchD::OperatorOp>(st.rsqrt.getLoc(), resultTypes,
-                                                       rewriter.getStringAttr("torch.npu.npu_rms_norm"), operands,
-                                                       /*numRegions=*/0);
+    rewriter.setInsertionPoint(st.outMul);
+    auto fused = rewriter.create<TorchD::OperatorOp>(st.outMul.getLoc(), resultTypes,
+                                                     rewriter.getStringAttr("torch.npu.npu_rms_norm"), operands,
+                                                     /*numRegions=*/0);
 
     rewriter.replaceOp(st.outMul, fused.getResult(0));
 
