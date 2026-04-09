@@ -58,7 +58,8 @@ class TaskGenerator:
                  arch: str,
                  config: Dict[str, Any],
                  db: SuccessDB,
-                 generator_config: Optional[TaskGeneratorConfig] = None):
+                 generator_config: Optional[TaskGeneratorConfig] = None,
+                 bench_type: str = "kernelbench"):
         """
         初始化任务生成器
         
@@ -72,6 +73,7 @@ class TaskGenerator:
             config: 全局配置
             db: 成功任务数据库
             generator_config: 生成器配置
+            bench_type: 基准测试类型（kernelbench 或 sol）
         """
         self.op_name = op_name
         self.task_desc = task_desc
@@ -82,6 +84,7 @@ class TaskGenerator:
         self.config = config
         self.db = db
         self.gen_config = generator_config or TaskGeneratorConfig()
+        self.bench_type = bench_type
         
         self._task_counter = 0
         self._handwrite_loader: Optional[HandwriteLoader] = None
@@ -226,9 +229,10 @@ class TaskGenerator:
             meta_prompts=meta_prompts,
             handwrite_suggestions=handwrite_suggestions,
             user_requirements=user_requirements,  # 用户额外需求
+            bench_type=self.bench_type,
         )
         
-        logger.info(f"Generated initial task: {task_id}")
+        logger.info(f"Generated initial task: {task_id} (bench_type={self.bench_type})")
         return task
     
     async def generate_evolved_task(self,
@@ -271,6 +275,7 @@ class TaskGenerator:
             meta_prompts=meta_prompts,
             handwrite_suggestions=handwrite_suggestions,
             user_requirements=user_requirements,  # 用户额外需求
+            bench_type=self.bench_type,
         )
         
         logger.info(f"Generated evolved task: {task_id} (parent={parent.id[:16]}, gen={generation})")

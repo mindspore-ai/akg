@@ -24,6 +24,7 @@
 import sys
 import asyncio
 import os
+import json
 from pathlib import Path
 
 # 添加项目根目录到sys.path
@@ -35,10 +36,53 @@ from akg_agents.op.utils.evolve.runner_manager import (
     apply_custom_task_config,
     load_task_description,
     run_single_evolve,
-    print_evolve_config
+    print_evolve_config,
+    print_evolution_result
 )
 from akg_agents.core.worker.manager import register_worker
 from akg_agents.core_v2.config.settings import get_akg_env_var
+from akg_agents.op.config.config_validator import load_config
+from akg_agents.utils.environment_check import check_env_for_task
+from akg_agents.core.async_pool.task_pool import TaskPool
+from akg_agents.op.evolve import evolve
+from akg_agents.core.worker.manager import get_worker_manager
+
+
+def load_sol_task(sol_dir: str):
+    """Load SOL dataset: returns (op_name, task_desc, sol_problem_dir)"""
+    case_dir = Path(sol_dir).resolve()
+    if not (case_dir / "definition.json").exists():
+        raise FileNotFoundError(f"SOL dataset missing definition.json: {case_dir}")
+    
+    with open(case_dir / "definition.json", "r", encoding="utf-8") as f:
+        def_json = f.read()
+    definition = json.loads(def_json)
+    op_name = definition.get("name", case_dir.name)
+    
+    with open(case_dir / "reference.py", "r", encoding="utf-8") as f:
+        ref_py = f.read()
+    
+    workload_sample = ""
+    workload_file = case_dir / "workload.jsonl"
+    if workload_file.exists():
+        with open(workload_file, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+        if lines:
+            first = json.loads(lines[0])
+            workload_sample = (
+                f"\n\n## workload 示例（共 {len(lines)} 组，以下为第 1 组）\n"
+                f"```json\n{json.dumps(first, indent=2)}\n```"
+            )
+    
+    task_desc = (
+        f"请实现一个 Triton Ascend 算子。\n\n"
+        f"## definition.json\n```json\n{def_json}\n```\n\n"
+        f"## reference.py\n```python\n{ref_py}\n```"
+        f"{workload_sample}\n\n"
+        f"注意：请使用 Triton 编写 kernel，并将其封装在 ModelNew 类的 forward 方法中。"
+    )
+    
+    return op_name, task_desc, str(case_dir)
 
 
 def print_usage():
@@ -145,8 +189,15 @@ def parse_batch_runner_mode(args):
         config.device_list = [device]
         print(f"本地 Worker 模式: 使用分配的设备 {device}")
 
-    # 读取任务描述文件
-    task_desc = load_task_description(task_file)
+    # 检测 SOL 数据集：如果 task_file 是目录且包含 definition.json
+    if os.path.isdir(task_file) and os.path.exists(os.path.join(task_file, "definition.json")):
+        sol_op_name, task_desc, sol_problem_dir = load_sol_task(task_file)
+        op_name = sol_op_name
+        config._sol_problem_dir = sol_problem_dir
+        print(f"SOL 模式: 数据集目录={sol_problem_dir}")
+    else:
+        # 读取任务描述文件
+        task_desc = load_task_description(task_file)
 
     print(f"任务: {op_name}")
     print(f"任务文件: {task_file}")
@@ -168,12 +219,61 @@ def parse_batch_runner_mode(args):
 
 async def run_wrapper(op_name, task_desc, config):
     """包装运行函数，负责注册Worker"""
-    # 注册 Worker
     await register_worker(
         backend=config.backend,
         arch=config.arch,
         device_ids=config.device_list
     )
+    
+    sol_problem_dir = getattr(config, '_sol_problem_dir', None)
+    if sol_problem_dir:
+        if config.config_path and os.path.exists(config.config_path):
+            loaded_config = load_config(config_path=config.config_path)
+        else:
+            loaded_config = load_config(dsl=config.dsl, backend=config.backend)
+        
+        if "agent_model_config" not in loaded_config or not isinstance(
+            loaded_config.get("agent_model_config"), dict
+        ):
+            loaded_config["agent_model_config"] = {}
+        mc = loaded_config["agent_model_config"]
+        default_level = mc.get("default") or "standard"
+        mc.setdefault("default", default_level)
+        for agent_name in ["designer", "coder", "conductor", "verifier", "selector", "op_task_builder"]:
+            mc.setdefault(agent_name, mc["default"])
+        
+        loaded_config["bench_type"] = "sol"
+        loaded_config["sol_problem_dir"] = sol_problem_dir
+        
+        is_remote = get_akg_env_var("WORKER_URL") is not None
+        check_env_for_task(config.framework, config.backend, config.dsl, loaded_config, is_remote=is_remote)
+        
+        if not await get_worker_manager().has_worker(backend=config.backend, arch=config.arch):
+            raise RuntimeError(
+                f"未检测到可用的 Worker。请先注册 Worker 后再调用 evolve：\n"
+                f"  await register_worker(backend='{config.backend}', arch='{config.arch}', device_ids=[0])\n"
+                f"或设置环境变量 AKG_AGENTS_WORKER_URL 指向远程 Worker 服务。"
+            )
+        
+        task_pool = TaskPool(max_concurrency=config.parallel_num)
+        evolution_result = await evolve(
+            op_name=op_name,
+            task_desc=task_desc,
+            dsl=config.dsl,
+            framework=config.framework,
+            backend=config.backend,
+            arch=config.arch,
+            config=loaded_config,
+            task_pool=task_pool,
+            max_rounds=config.max_rounds,
+            parallel_num=config.parallel_num,
+            num_islands=config.num_islands,
+            migration_interval=config.migration_interval,
+            elite_size=config.elite_size,
+            parent_selection_prob=config.parent_selection_prob,
+            handwrite_decay_rate=config.handwrite_decay_rate,
+        )
+        return print_evolution_result(evolution_result, config)
     
     return await run_single_evolve(op_name=op_name, task_desc=task_desc, evolve_config=config)
 
