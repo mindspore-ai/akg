@@ -9,9 +9,11 @@ from typing import Union, Literal, List, Tuple, Any
 {% for line in framework_imports %}
 {{ line }}
 {% endfor %}
+{% if not use_reference_inputs %}
 {% for line in framework_model_import %}
 {{ line }}
 {% endfor %}
+{% endif %}
 TensorType = {{ tensor_type_name }}
 
 {% if framework == "mindspore" %}
@@ -96,6 +98,10 @@ def verify_implementations():
     
     # 加载参考数据（如果启用）
     reference_outputs = None
+    {% if use_reference_inputs %}
+    reference_inputs = None
+    reference_init_inputs = []
+    {% endif %}
     if use_reference_data and reference_file and os.path.exists(reference_file):
         print(f"[INFO] 使用参考数据模式: {reference_file}")
         {% if framework == "torch" %}
@@ -103,11 +109,21 @@ def verify_implementations():
         reference_outputs = reference_data.get('outputs', [])
         print(f"[INFO] 参考数据种子: {reference_data.get('seed', 'unknown')}")
         print(f"[INFO] 参考输出数量: {len(reference_outputs)}")
+        {% if use_reference_inputs %}
+        reference_inputs = reference_data.get('inputs', None)
+        reference_init_inputs = reference_data.get('init_inputs', [])
+        print(f"[INFO] 使用参考输入模式: inputs={reference_inputs is not None}, init_inputs={len(reference_init_inputs)}")
+        {% endif %}
         {% elif framework == "numpy" %}
         import numpy as np
         reference_data = np.load(reference_file, allow_pickle=True).item()
         reference_outputs = reference_data.get('outputs', [])
         print(f"[INFO] 参考输出数量: {len(reference_outputs)}")
+        {% if use_reference_inputs %}
+        reference_inputs = reference_data.get('inputs', None)
+        reference_init_inputs = reference_data.get('init_inputs', [])
+        print(f"[INFO] 使用参考输入模式: inputs={reference_inputs is not None}, init_inputs={len(reference_init_inputs)}")
+        {% endif %}
         {% endif %}
     elif use_reference_data:
         print(f"[WARN] 参考数据模式已启用，但参考文件不存在: {reference_file}")
@@ -188,17 +204,25 @@ def verify_implementations():
             raise AssertionError(error_msg)
 
     # 获取初始化参数和输入数据
+    {% if use_reference_inputs %}
+    init_params = reference_init_inputs
+    {% else %}
     init_params = get_init_inputs()
+    {% endif %}
     
     # 设置随机种子以确保framework_model和impl_model的权重一致
     {% for line in set_seed_code %}
     {{ line }}
     {% endfor %}
     
+    {% if use_reference_inputs %}
+    framework_model = None
+    {% else %}
     framework_model = FrameworkModel(*init_params)
     
     {% if framework == "torch" %}
     framework_model = framework_model.to(device)
+    {% endif %}
     {% endif %}
     
     # 创建 impl_model（用于 ModelNew 类格式的 DSL）
@@ -239,6 +263,10 @@ def verify_implementations():
     
     {% else %}
     # 静态shape：获取单组输入数据
+    {% if use_reference_inputs %}
+    inputs_for_impl = [process_input(x) for x in reference_inputs]
+    inputs_for_framework = inputs_for_impl
+    {% else %}
     # 设置随机种子以确保数据可复现（先准备impl输入）
     {% for line in set_seed_code %}
     {{ line }}
@@ -255,6 +283,7 @@ def verify_implementations():
     inputs_for_framework = get_inputs()
     {% if framework == "torch" %}
     inputs_for_framework = [process_input(x) for x in inputs_for_framework]
+    {% endif %}
     {% endif %}
     
     # 获取参考输出（如果使用参考数据模式）

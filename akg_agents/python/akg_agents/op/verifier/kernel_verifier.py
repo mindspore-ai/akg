@@ -16,18 +16,14 @@ import os
 import re
 import shutil
 import logging
-import subprocess
 import json
-import sys
 import textwrap
 from datetime import datetime
 from typing import Optional, Literal, Tuple, Dict, Any, List
 from jinja2 import Template
-import pandas as pd
 from pathlib import Path
 
 from akg_agents import get_project_root
-from akg_agents.utils.process_utils import run_command
 from akg_agents.op.utils.config_utils import normalize_dsl
 from akg_agents.op.verifier.adapters.factory import (
     get_framework_adapter, get_dsl_adapter, get_backend_adapter
@@ -36,11 +32,12 @@ from akg_agents.core.worker.interface import WorkerInterface
 import tarfile
 import io
 import ast
-import asyncio
 
 # 模板路径
-TEMPLATE_PATH = os.path.join(get_project_root(), "op", "resources", "templates", "kernel_verify_template_refactored.j2")
-PROFILE_BASE_TEMPLATE_PATH = os.path.join(get_project_root(), "op", "resources", "templates", "prof_base_template_refactored.j2")
+TEMPLATE_PATH = os.path.join(get_project_root(), "op", "resources", "templates",
+                             "kernel_verify_template_refactored.j2")
+PROFILE_BASE_TEMPLATE_PATH = os.path.join(get_project_root(), "op", "resources",
+                                          "templates", "prof_base_template_refactored.j2")
 PROFILE_GENERATION_TEMPLATE_PATH = os.path.join(
     get_project_root(), "op", "resources", "templates", "prof_generation_template_refactored.j2")
 PROFILE_SINGLE_TASK_TEMPLATE_PATH = os.path.join(
@@ -51,7 +48,8 @@ RUN_TEMPLATE_PATH = os.path.join(get_project_root(), "utils", "compile_tools", "
 
 # 类型定义
 FrameworkType = Literal["torch", "mindspore", "numpy"]
-ImplType = Literal["triton_cuda", "triton_ascend", "triton-russia", "swft", "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc", "torch"]
+ImplType = Literal["triton_cuda", "triton_ascend", "triton-russia", "swft",
+                   "cuda_c", "cpp", "tilelang_npuir", "tilelang_cuda", "ascendc", "torch"]
 BackendType = Literal["cuda", "ascend", "cpu"]
 ArchType = Literal[
     "a100", "v100", "h20", "l20", "rtx3090",
@@ -75,7 +73,7 @@ logger = logging.getLogger(__name__)
 def sync_artifacts_to_directory(artifacts: Dict[str, str], target_dir: str, task_id: str = "0") -> None:
     """
     将 artifacts 同步到目标目录。
-    
+
     Args:
         artifacts: 从 Worker 返回的 artifacts 字典，格式为 {relative_path: file_content}
                    例如: {"autotune_info_case_0.json": "{...}", "subdir/result.jsonl": "..."}
@@ -84,19 +82,19 @@ def sync_artifacts_to_directory(artifacts: Dict[str, str], target_dir: str, task
     """
     if not artifacts:
         return
-        
+
     logger.info(f"[{task_id}] Syncing {len(artifacts)} artifact files to {target_dir}")
-    
+
     for rel_path, content in artifacts.items():
         # 构建完整路径
         full_path = os.path.join(target_dir, rel_path)
-        
+
         # 确保目录存在
         dir_path = os.path.dirname(full_path)
         if dir_path and not os.path.exists(dir_path):
             os.makedirs(dir_path, exist_ok=True)
             logger.debug(f"[{task_id}] Created directory: {dir_path}")
-        
+
         try:
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -187,20 +185,20 @@ class KernelVerifier:
     def check_task_desc_static(self, code: str) -> Tuple[bool, str]:
         """
         静态检查 task_desc 代码是否符合规范
-        
+
         Args:
             code: task_desc 代码字符串
-            
+
         Returns:
             Tuple[bool, str]: (是否通过, 错误信息)
         """
         try:
             tree = ast.parse(code)
-            
+
             has_model_class = False
             has_get_inputs = False
             has_get_init_inputs = False
-            
+
             for node in tree.body:
                 if isinstance(node, ast.ClassDef) and node.name == 'Model':
                     has_model_class = True
@@ -209,7 +207,7 @@ class KernelVerifier:
                         has_get_inputs = True
                     elif node.name == 'get_init_inputs':
                         has_get_init_inputs = True
-            
+
             missing = []
             if not has_model_class:
                 missing.append("class Model")
@@ -217,12 +215,12 @@ class KernelVerifier:
                 missing.append("function get_inputs")
             if not has_get_init_inputs:
                 missing.append("function get_init_inputs")
-                
+
             if missing:
                 return False, f"Missing required components in task_desc: {', '.join(missing)}"
-                
+
             return True, ""
-            
+
         except SyntaxError as e:
             return False, f"Syntax error in task_desc: {e}"
         except Exception as e:
@@ -242,7 +240,7 @@ class KernelVerifier:
         # 1. 创建临时验证目录
         check_dir = os.path.join(os.path.expanduser(self.log_dir), f"{self.op_name}_check_desc_{self.task_id}")
         os.makedirs(check_dir, exist_ok=True)
-        
+
         try:
             # Resolve device_id from worker's DevicePool (same as gen_verify_project)
             device_id = 0
@@ -262,13 +260,20 @@ import torch
 import sys
 import os
 
-# Add current directory to sys.path
 sys.path.append(os.getcwd())
+
+def _deep_to(obj, device):
+    if isinstance(obj, torch.Tensor):
+        return obj.to(device)
+    elif isinstance(obj, list):
+        return [_deep_to(x, device) for x in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_deep_to(x, device) for x in obj)
+    return obj
 
 def run_check():
     print("Starting reference check...")
     try:
-        # Import from reference
         try:
             from reference import Model, get_inputs, get_init_inputs
         except ImportError as e:
@@ -277,7 +282,6 @@ def run_check():
             
         print("Successfully imported Model and helper functions.")
         
-        # Determine device and set to specific device_id
         device = "cpu"
         if torch.cuda.is_available():
             device = "cuda"
@@ -288,7 +292,6 @@ def run_check():
 
         print(f"Using device: {{device}}:{device_id}")
         
-        # Instantiate model
         try:
             init_inputs = get_init_inputs()
             model = Model(*init_inputs)
@@ -299,16 +302,19 @@ def run_check():
             print(f"Model instantiation failed: {{e}}")
             return False
             
-        # Get inputs
+        if device != "cpu":
+            torch.set_default_device(device)
         try:
             inputs = get_inputs()
             if device != "cpu":
-                inputs = [inp.to(device) if isinstance(inp, torch.Tensor) else inp for inp in inputs]
+                inputs = _deep_to(inputs, device)
         except Exception as e:
             print(f"get_inputs failed: {{e}}")
             return False
+        finally:
+            if device != "cpu":
+                torch.set_default_device("cpu")
             
-        # Run forward pass
         try:
             output = model(*inputs)
             print("Forward pass successful.")
@@ -336,42 +342,45 @@ if __name__ == "__main__":
             verify_file = os.path.join(check_dir, f"verify_{self.op_name}.py")
             with open(verify_file, "w", encoding="utf-8") as f:
                 f.write(verify_script_content)
-                
+
             # 4. 打包目录
             package_data = self._pack_directory(check_dir)
-            
+
             # 5. 使用 Worker 执行
             if not self.worker:
                 raise RuntimeError("Worker not set for runtime check")
-                
+
             # 注意：这里我们不需要显式管理 device，因为 reference check 通常只做一个简单的 forward pass
             # 如果是 remote worker，它会自动分发；如果是 local worker，它通常不需要特定的 device lock (除非 OOM)
             # 但为了安全起见，调用方应该已经处理了 resource locking
-            
+
             success, log, _ = await self.worker.verify(package_data, f"{self.task_id}_check", self.op_name, timeout)
-            
+
             if success and "REFERENCE_CHECK_SUCCESS" in log:
                 return True, ""
             else:
                 return False, f"Runtime check failed:\n{log}"
-                
+
         except Exception as e:
             return False, f"Runtime check exception: {str(e)}"
         finally:
             # 清理临时目录
             shutil.rmtree(check_dir, ignore_errors=True)
 
-    async def generate_reference_data(self, task_desc: str, timeout: int = 120) -> Tuple[bool, str, bytes]:
+    async def generate_reference_data(self, task_desc: str, timeout: int = 120,
+                                      save_inputs: bool = False) -> Tuple[bool, str, bytes]:
         """
         在 GPU 上执行 task_desc 并生成参考数据
-        
+
         用于 CUDA-to-Ascend 转换场景：在 GPU Worker 上执行 Triton-CUDA 代码，
         保存输出作为参考数据，供 NPU Worker 验证转换后的代码正确性。
-        
+
         Args:
             task_desc: task_desc 代码字符串（Triton-CUDA 代码）
             timeout: 超时时间
-            
+            save_inputs: 是否同时保存 inputs 和 init_inputs 到参考数据中。
+                         当 True 时，验证端可完全脱离源平台依赖（不需要 import framework 代码）。
+
         Returns:
             Tuple[bool, str, bytes]: (是否成功, 日志, 参考数据bytes)
             - 成功时 bytes 为 .pt 文件内容
@@ -380,27 +389,56 @@ if __name__ == "__main__":
         # 1. 创建临时目录
         ref_dir = os.path.join(os.path.expanduser(self.log_dir), f"{self.op_name}_gen_ref_{self.task_id}")
         os.makedirs(ref_dir, exist_ok=True)
-        
+
         try:
             # 2. 写入 task_desc 到 reference.py
             ref_file = os.path.join(ref_dir, "reference.py")
             with open(ref_file, "w", encoding="utf-8") as f:
                 f.write(task_desc)
-            
+
             # 3. 生成参考数据脚本
-            # 使用固定 seed=0 确保可复现性
+            save_inputs_flag = "True" if save_inputs else "False"
             gen_ref_script = f'''
 import torch
 import sys
 import os
 
-# Add current directory to sys.path
 sys.path.append(os.getcwd())
+
+def _deep_to(obj, device):
+    """Recursively move tensors to device, handling nested list/tuple."""
+    if isinstance(obj, torch.Tensor):
+        return obj.to(device)
+    elif isinstance(obj, list):
+        return [_deep_to(x, device) for x in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_deep_to(x, device) for x in obj)
+    return obj
+
+def _deep_clone(obj):
+    """Recursively clone tensors, handling nested list/tuple."""
+    if isinstance(obj, torch.Tensor):
+        return obj.clone()
+    elif isinstance(obj, list):
+        return [_deep_clone(x) for x in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_deep_clone(x) for x in obj)
+    return obj
+
+def _deep_cpu(obj):
+    """Recursively move tensors to CPU, handling nested list/tuple."""
+    if isinstance(obj, torch.Tensor):
+        return obj.cpu()
+    elif isinstance(obj, list):
+        return [_deep_cpu(x) for x in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_deep_cpu(x) for x in obj)
+    return obj
 
 def generate_reference():
     print("Starting reference data generation...")
+    save_inputs = {save_inputs_flag}
     try:
-        # Import from reference
         try:
             from reference import Model, get_inputs, get_init_inputs
         except ImportError as e:
@@ -409,7 +447,6 @@ def generate_reference():
         
         print("Successfully imported Model and helper functions.")
         
-        # Determine device
         device = "cpu"
         if torch.cuda.is_available():
             device = "cuda"
@@ -418,11 +455,9 @@ def generate_reference():
         
         print(f"Using device: {{device}}")
         
-        # Fixed seed for reproducibility
         torch.manual_seed(0)
         print("[INFO] Random seed: 0")
         
-        # Instantiate model
         try:
             init_inputs = get_init_inputs()
             model = Model(*init_inputs)
@@ -433,17 +468,25 @@ def generate_reference():
             print(f"Model instantiation failed: {{e}}")
             return False
         
-        # Get inputs with fixed seed
+        if device != "cpu":
+            torch.set_default_device(device)
+        
         torch.manual_seed(0)
         try:
             inputs = get_inputs()
             if device != "cpu":
-                inputs = [inp.to(device) if isinstance(inp, torch.Tensor) else inp for inp in inputs]
+                inputs = _deep_to(inputs, device)
         except Exception as e:
             print(f"get_inputs failed: {{e}}")
             return False
+        finally:
+            if device != "cpu":
+                torch.set_default_device("cpu")
         
-        # Run forward pass
+        inputs_snapshot = None
+        if save_inputs:
+            inputs_snapshot = _deep_clone(inputs)
+        
         try:
             with torch.no_grad():
                 outputs = model(*inputs)
@@ -452,20 +495,27 @@ def generate_reference():
             print(f"Forward pass failed: {{e}}")
             return False
         
-        # Ensure outputs is a list
         if not isinstance(outputs, (list, tuple)):
             outputs = [outputs]
         
-        # Move to CPU for saving
-        outputs_cpu = [x.cpu() if isinstance(x, torch.Tensor) else x for x in outputs]
+        outputs_cpu = _deep_cpu(outputs)
         
-        # Save reference data
         ref_data = {{
             'op_name': '{self.op_name}',
             'seed': 0,
             'outputs': outputs_cpu,
             'output_shapes': [x.shape if isinstance(x, torch.Tensor) else None for x in outputs_cpu],
+            'output_dtypes': [str(x.dtype) if isinstance(x, torch.Tensor) else None for x in outputs_cpu],
         }}
+        
+        if save_inputs:
+            inputs_cpu = _deep_cpu(inputs_snapshot)
+            ref_data['save_inputs'] = True
+            ref_data['inputs'] = inputs_cpu
+            ref_data['input_shapes'] = [x.shape if isinstance(x, torch.Tensor) else None for x in inputs_cpu]
+            ref_data['input_dtypes'] = [str(x.dtype) if isinstance(x, torch.Tensor) else None for x in inputs_cpu]
+            ref_data['init_inputs'] = init_inputs
+            print(f"[INFO] save_inputs=True, saving inputs ({{len(inputs_cpu)}}) and init_inputs ({{len(init_inputs)}})")
         
         ref_file = os.path.join(os.getcwd(), "{self.op_name}_reference.pt")
         torch.save(ref_data, ref_file)
@@ -495,83 +545,83 @@ if __name__ == "__main__":
             script_file = os.path.join(ref_dir, f"verify_{self.op_name}.py")
             with open(script_file, "w", encoding="utf-8") as f:
                 f.write(gen_ref_script)
-            
+
             # 4. 打包目录
             package_data = self._pack_directory(ref_dir)
-            
+
             # 5. 使用 Worker.generate_reference 执行
             if not self.worker:
                 raise RuntimeError("Worker not set for reference generation")
-            
+
             # 直接调用 Worker 的 generate_reference 方法
             # 该方法会执行脚本并返回 .pt 文件的 bytes
             success, log, ref_bytes = await self.worker.generate_reference(
                 package_data, f"{self.task_id}_gen_ref", self.op_name, timeout
             )
-            
+
             if not success:
                 return False, f"Reference generation failed:\n{log}", b''
-            
+
             return True, log, ref_bytes
-            
+
         except Exception as e:
             return False, f"Reference generation exception: {str(e)}", b''
         finally:
             # 清理临时目录
             shutil.rmtree(ref_dir, ignore_errors=True)
 
-    async def profile_single_task(self, task_desc: str, warmup_times: int = 5, 
-                                   run_times: int = 50, timeout: int = 300,
-                                   device_id: int = 0) -> Dict[str, Any]:
+    async def profile_single_task(self, task_desc: str, warmup_times: int = 5,
+                                  run_times: int = 50, timeout: int = 300,
+                                  device_id: int = 0) -> Dict[str, Any]:
         """
         执行单个任务的性能测试（只测量 task_desc 的性能，不进行 base vs generation 对比）
-        
+
         此功能用于单独测量某段代码（包含 Model 类）的执行性能，会临时创建目录并生成 profile 脚本。
-        
+
         Args:
             task_desc: 包含 Model, get_inputs, get_init_inputs 的代码字符串
             warmup_times: 预热次数
             run_times: 实际运行次数
             timeout: 超时时间
             device_id: 设备ID
-            
+
         Returns:
             Dict[str, Any]: 包含 time_us, success, log 等字段
         """
         # 1. 创建临时目录
-        profile_dir = os.path.join(os.path.expanduser(self.log_dir), 
-                                    f"{self.op_name}_profile_single_{self.task_id}")
+        profile_dir = os.path.join(os.path.expanduser(self.log_dir),
+                                   f"{self.op_name}_profile_single_{self.task_id}")
         os.makedirs(profile_dir, exist_ok=True)
-        
+
         try:
             # 2. 写入 task_desc 到 framework_model.py（供模板导入）
             framework_file = os.path.join(profile_dir, "framework_model.py")
             with open(framework_file, "w", encoding="utf-8") as f:
                 f.write(task_desc)
-            
+
             # 3. 使用模板生成性能测试脚本
             script_file = os.path.join(profile_dir, f"profile_single_{self.op_name}.py")
             self.gen_profile_single_task_file(script_file, device_id, warmup_times, run_times)
-            
+
             # 4. 打包目录
             package_data = self._pack_directory(profile_dir)
-            
+
             # 5. 使用 Worker.profile_single_task 执行
             if not self.worker:
                 raise RuntimeError("Worker not set for profile_single_task")
-            
+
             profile_settings = {
                 'warmup_times': warmup_times,
                 'run_times': run_times,
                 'timeout': timeout
             }
-            
+
             result = await self.worker.profile_single_task(
                 package_data, f"{self.task_id}_profile_single", self.op_name, profile_settings
             )
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"[{self.op_name}] profile_single_task exception: {e}", exc_info=True)
             return {'time_us': float('inf'), 'success': False, 'log': f"Profile single task exception: {str(e)}"}
@@ -579,11 +629,11 @@ if __name__ == "__main__":
             # 清理临时目录
             shutil.rmtree(profile_dir, ignore_errors=True)
 
-    def gen_profile_single_task_file(self, profile_file: str, device_id: int, 
-                                      warmup_times: int, run_times: int):
+    def gen_profile_single_task_file(self, profile_file: str, device_id: int,
+                                     warmup_times: int, run_times: int):
         """使用模板生成单任务性能测试脚本"""
         logger.info(f"[{self.op_name}] 开始生成单任务性能测试文件")
-        
+
         # 从文件加载模板
         try:
             with open(PROFILE_SINGLE_TASK_TEMPLATE_PATH, "r", encoding="utf-8") as f:
@@ -608,23 +658,23 @@ if __name__ == "__main__":
         try:
             framework_imports = framework_adapter.get_import_statements()
             # 注意：不使用 framework_adapter.get_framework_import()，因为模板从固定的 framework_model.py 导入
-            
+
             # 生成设备设置代码
             backend_adapter.setup_environment(device_id, self.arch)
             device_setup_code = framework_adapter.get_device_setup_code(self.backend, self.arch, device_id)
-            
+
             # 生成输入处理代码
             process_input_code = framework_adapter.get_process_input_code(self.backend, self.dsl)
-            
+
             # 生成set_seed代码
             set_seed_code = framework_adapter.get_set_seed_code(self.backend)
-            
+
             # 获取TensorType名称
             tensor_type_name = framework_adapter.get_tensor_type_name()
-            
+
             # 生成benchmark代码（使用base模式，测量framework_model的性能）
-            benchmark_code = self._generate_base_benchmark_code(framework_adapter, None, 
-                                                                 warmup_times, run_times)
+            benchmark_code = self._generate_base_benchmark_code(framework_adapter, None,
+                                                                warmup_times, run_times)
         except Exception as e:
             logger.error(f"[{self.op_name}] 代码片段生成失败: {e}", exc_info=True)
             raise
@@ -741,21 +791,21 @@ if __name__ == "__main__":
         if import_lines:
             return "\n".join(import_lines) + "\n\n"
         return ""
-    
+
     def generate_ascendc_project(self, impl_code: str, verify_dir: str):
         """生成AscendC项目文件"""
         try:
             # 生成CMakeLists.txt
-            cmake_file = os.path.join(verify_dir, f"CMakeLists.txt")
+            cmake_file = os.path.join(verify_dir, "CMakeLists.txt")
             with open(CMAKE_TEMPLATE_PATH, "r", encoding="utf-8") as f:
                 template = Template(f.read())
             cmake_code = template.render(op_name=self.op_name)
             with open(cmake_file, "w", encoding="utf-8") as f:
                 f.write(cmake_code)
             shutil.copy(RUN_TEMPLATE_PATH, verify_dir)
-            
+
             # 填充代码
-            try: 
+            try:
                 compile(impl_code, "<string>", "exec")
                 exec(impl_code, self.context)
             except Exception as e:
@@ -765,29 +815,29 @@ if __name__ == "__main__":
             host_tiling_src = self.context.get('host_tiling_src')
             python_binding_src = self.context.get('python_bind_src')
             kernel_src = self.context.get('kernel_src')
-            
+
             # 检查代码是否为None
             if host_tiling_src is None:
-                raise Exception(f"host_tiling_src is None - 生成的代码中缺少host侧tiling部分")
+                raise Exception("host_tiling_src is None - 生成的代码中缺少host侧tiling部分")
             if python_binding_src is None:
-                raise Exception(f"python_bind_src is None - 生成的代码中缺少内核调用python_bind部分")
+                raise Exception("python_bind_src is None - 生成的代码中缺少内核调用python_bind部分")
             if kernel_src is None:
-                raise Exception(f"kernel_src is None - 生成的代码中缺少kernel主函数部分")
+                raise Exception("kernel_src is None - 生成的代码中缺少kernel主函数部分")
 
             # 写入文件
             with open(os.path.join(verify_dir, f"{self.op_name}_tiling.cpp"), "w") as f:
                 f.write(host_tiling_src)
-            with open(os.path.join(verify_dir, f"pybind11.cpp"), "w") as f:
+            with open(os.path.join(verify_dir, "pybind11.cpp"), "w") as f:
                 f.write(python_binding_src)
             with open(os.path.join(verify_dir, f"{self.op_name}_kernel.cpp"), "w") as f:
                 f.write(kernel_src)
-                
+
             logger.info(f"[{self.op_name}] AscendC项目文件生成完成")
-            
+
         except Exception as e:
             logger.error(f"AscendC项目生成失败: {e}")
             raise Exception(f"AscendC项目生成失败: {e}")
-        
+
     def _detect_dynamic_shape(self) -> bool:
         """
         检测框架代码是否包含动态shape函数
@@ -821,11 +871,11 @@ if __name__ == "__main__":
             return generate_sol_verify_project(self, impl_code, verify_dir, device_id)
 
         logger.info(f"[{self.op_name}] 开始生成验证项目，目录: {verify_dir}, device_id={device_id}")
-        
+
         # ========== 处理参考数据模式 ==========
         use_reference_data = self.config.get('use_reference_data', False)
         reference_file = None
-        
+
         if use_reference_data:
             reference_data_bytes = self.config.get('reference_data')
             if reference_data_bytes:
@@ -847,7 +897,10 @@ if __name__ == "__main__":
             else:
                 logger.warning(f"[{self.op_name}] use_reference_data=True 但未找到 reference_data")
                 use_reference_data = False
-        
+
+        # use_reference_inputs 依赖 use_reference_data，且要求 .pt 中包含 inputs
+        use_reference_inputs = self.config.get('use_reference_inputs', False) and use_reference_data
+
         # 创建框架实现文件
         framework_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
         try:
@@ -917,10 +970,10 @@ if __name__ == "__main__":
         try:
             framework_imports = framework_adapter.get_import_statements()
             logger.debug(f"[{self.op_name}] Framework imports生成成功 (长度: {len(framework_imports)})")
-            
+
             framework_model_import = framework_adapter.get_framework_import(self.op_name, is_dynamic_shape)
             logger.debug(f"[{self.op_name}] Framework model import生成成功 (长度: {len(framework_model_import)})")
-            
+
             dsl_imports = dsl_adapter.get_import_statements(self.framework)
             logger.debug(f"[{self.op_name}] DSL imports生成成功 (长度: {len(dsl_imports)})")
             if self.dsl == "pypto" and hasattr(dsl_adapter, "get_runtime_env_override_code"):
@@ -928,39 +981,39 @@ if __name__ == "__main__":
                     pypto_run_mode=self.config.get("pypto_run_mode"),
                     pypto_runtime_debug_mode=0,
                 )
-            
+
             dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
             logger.debug(f"[{self.op_name}] DSL impl import生成成功 (长度: {len(dsl_impl_import)})")
-            
+
             special_setup_code = dsl_adapter.get_special_setup_code()
             logger.debug(f"[{self.op_name}] Special setup code生成成功 (长度: {len(special_setup_code)})")
-            
+
             # 生成设备设置代码
             backend_adapter.setup_environment(device_id, self.arch)
             logger.debug(f"[{self.op_name}] Backend环境设置完成: device_id={device_id}, arch={self.arch}")
-            
+
             device_setup_code = framework_adapter.get_device_setup_code(self.backend, self.arch, device_id)
             logger.debug(f"[{self.op_name}] Device setup code生成成功 (长度: {len(device_setup_code)})")
-            
+
             # 生成输入处理代码
             process_input_code = framework_adapter.get_process_input_code(self.backend, self.dsl)
             logger.debug(f"[{self.op_name}] Process input code生成成功 (长度: {len(process_input_code)})")
-            
+
             # 生成创建 impl_model 的代码（用于 ModelNew 类格式的 DSL）
             create_impl_code = dsl_adapter.create_impl_module(self.framework, framework_adapter)
             logger.debug(f"[{self.op_name}] Create impl module code生成成功 (长度: {len(create_impl_code)})")
-            
+
             # 生成调用实现代码
             call_impl_code = dsl_adapter.call_impl(
                 self.impl_func_name, "inputs_for_impl", device_id,
                 framework_adapter, self.op_name, "data_dir", "framework_output"
             )
             logger.debug(f"[{self.op_name}] Call impl code生成成功 (长度: {len(call_impl_code)})")
-            
+
             # 生成set_seed代码
             set_seed_code = framework_adapter.get_set_seed_code(self.backend)
             logger.debug(f"[{self.op_name}] Set seed code生成成功 (长度: {len(set_seed_code)})")
-            
+
             # 生成binary I/O函数（如果需要）
             binary_io_functions = ""
             needs_binary_io = dsl_adapter.needs_binary_io()
@@ -969,15 +1022,15 @@ if __name__ == "__main__":
                 logger.info(f"[{self.op_name}] Binary I/O函数生成成功 (长度: {len(binary_io_functions)})")
             else:
                 logger.debug(f"[{self.op_name}] 不需要Binary I/O函数")
-            
+
             # 获取TensorType名称（完整路径）
             tensor_type_name = framework_adapter.get_tensor_type_name()
             logger.debug(f"[{self.op_name}] TensorType名称: {tensor_type_name}")
-            
+
             # 生成 compare 函数代码（由 FrameworkAdapter 生成，使用框架原生操作）
             compare_code = framework_adapter.get_compare_code()
             logger.debug(f"[{self.op_name}] Compare code生成成功 (长度: {len(compare_code)})")
-            
+
             # 生成 compare outputs 代码（用于调用 compare 函数）
             compare_outputs_code = framework_adapter.get_compare_outputs_code()
             logger.debug(f"[{self.op_name}] Compare outputs code生成成功 (长度: {len(compare_outputs_code)})")
@@ -1000,6 +1053,7 @@ if __name__ == "__main__":
                 timeout=self.config.get('verify_timeout', 300),
                 # 参考数据模式（用于跨后端转换场景）
                 use_reference_data=use_reference_data,
+                use_reference_inputs=use_reference_inputs,
                 reference_file=reference_file,
                 # Adapter生成的代码
                 framework_imports=self._prepare_code_lines(framework_imports),
@@ -1031,7 +1085,7 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error(f"[{self.op_name}] 验证脚本写入失败: {verify_file}, 错误: {e}")
             raise
-    
+
     def _pack_directory(self, dir_path: str) -> bytes:
         """将目录打包为tar字节流"""
         tar_buffer = io.BytesIO()
@@ -1046,7 +1100,7 @@ if __name__ == "__main__":
     async def run_verify(self, verify_dir: str, timeout: int = 300, device_id: int = 0):
         """
         运行验证脚本
-        
+
         注意：device 的管理（acquire/release）由调用方（verifier.run()）负责
         这个方法只负责执行已经生成好的脚本
 
@@ -1057,7 +1111,7 @@ if __name__ == "__main__":
         """
         verify_script = os.path.join(verify_dir, f"verify_{self.op_name}.py")
         logger.info(f"[{self.op_name}] 准备运行验证脚本: {verify_script}, timeout={timeout}秒")
-        
+
         try:
             # 调用Worker执行验证
             if not self.worker:
@@ -1082,13 +1136,13 @@ if __name__ == "__main__":
                     stacklevel=2
                 )
                 logger.warning(f"⚠️  [{self.op_name}] Worker not set, creating temporary LocalWorker (deprecated)")
-                
+
                 from akg_agents.core.worker.local_worker import LocalWorker
                 from akg_agents.core.async_pool.device_pool import DevicePool
                 logger.info(f"[{self.op_name}] Worker not set, creating LocalWorker with device [{device_id}]")
                 device_pool = DevicePool([device_id])
                 self.worker = LocalWorker(device_pool=device_pool, backend=self.backend)
-            
+
             from akg_agents.core.worker.local_worker import LocalWorker
             if isinstance(self.worker, LocalWorker):
                 if not hasattr(self.worker, 'device_pool') or self.worker.device_pool is None:
@@ -1099,32 +1153,32 @@ if __name__ == "__main__":
                 package_data = verify_dir
             else:
                 package_data = self._pack_directory(verify_dir)
-            
+
             # worker.verify() 只是执行脚本，不需要管理 device
             # device 已经在生成脚本时设置好了
             # 我们给 worker 传的 timeout 需要稍微大一点，因为脚本内部已经有精确的 timeout 控制
             # 这里的 timeout 是为了防止脚本死锁导致整个进程挂起
             worker_timeout = timeout + 30
             success, log, artifacts = await self.worker.verify(package_data, self.task_id, self.op_name, worker_timeout)
-            
+
             # 同步 artifacts 到 verify_dir（用于 RemoteWorker 场景）
             if artifacts:
                 sync_artifacts_to_directory(artifacts, verify_dir, self.task_id)
-            
+
             if success:
                 logger.info(f"[{self.op_name}] 验证执行成功")
             else:
                 logger.error(f"[{self.op_name}] 验证执行失败，日志如下：\n{log}")
             return success, log
-            
+
         except Exception as e:
             logger.error(f"[{self.op_name}] 验证执行异常: {e}", exc_info=True)
             return False, str(e)
 
-    def gen_profile_project(self, verify_dir: str, device_id: int = 0, warmup_times: int = 5, 
+    def gen_profile_project(self, verify_dir: str, device_id: int = 0, warmup_times: int = 5,
                             run_times: int = 50, skip_base: bool = False):
         """生成profile项目文件到指定目录
-        
+
         Args:
             verify_dir: 验证目录
             device_id: 设备ID
@@ -1145,7 +1199,7 @@ if __name__ == "__main__":
                                                 device_id, warmup_times, run_times)
         else:
             logger.info(f"[{self.op_name}] 跳过 base profile 生成（使用缓存 baseline 或跨后端场景）")
-        
+
         # 生成性能测试脚本
         profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_generation.py")
         self.gen_profile_file_from_template(PROFILE_GENERATION_TEMPLATE_PATH,
@@ -1155,7 +1209,7 @@ if __name__ == "__main__":
         """从模板生成profile文件"""
         template_name = os.path.basename(template_path)
         logger.info(f"[{self.op_name}] 开始生成性能测试文件，使用模板: {template_name}")
-        
+
         # 从文件加载模板
         try:
             with open(template_path, "r", encoding="utf-8") as f:
@@ -1192,45 +1246,45 @@ if __name__ == "__main__":
                 )
             dsl_impl_import = dsl_adapter.get_impl_import(self.op_name, self.impl_func_name)
             special_setup_code = dsl_adapter.get_special_setup_code()
-            
+
             # 生成设备设置代码
             backend_adapter.setup_environment(device_id, self.arch)
             device_setup_code = framework_adapter.get_device_setup_code(self.backend, self.arch, device_id)
-            
+
             # 生成输入处理代码
             process_input_code = framework_adapter.get_process_input_code(self.backend, self.dsl)
-            
+
             # 生成创建 impl_model 的代码（用于 ModelNew 类格式的 DSL）
             create_impl_code = dsl_adapter.create_impl_module(self.framework, framework_adapter)
             logger.debug(f"[{self.op_name}] 性能测试Create impl module code生成成功 (长度: {len(create_impl_code)})")
-            
+
             # 生成set_seed代码
             set_seed_code = framework_adapter.get_set_seed_code(self.backend)
-            
+
             # 生成binary I/O函数（如果需要）
             binary_io_functions = ""
             needs_binary_io = dsl_adapter.needs_binary_io()
             if needs_binary_io:
                 binary_io_functions = framework_adapter.get_binary_io_functions(self.op_name)
                 logger.info(f"[{self.op_name}] 性能测试Binary I/O函数生成成功")
-            
+
             # 获取TensorType名称（完整路径）
             tensor_type_name = framework_adapter.get_tensor_type_name()
-            
+
             # 判断是base还是generation模板
             is_base_template = "base" in template_path.lower()
             logger.debug(f"[{self.op_name}] 性能测试模板类型: {'base' if is_base_template else 'generation'}")
-            
+
             # 生成benchmark代码
             if is_base_template:
                 # Base模板：benchmark framework model
-                benchmark_code = self._generate_base_benchmark_code(framework_adapter, dsl_adapter, 
-                                                                     warmup_times, run_times)
+                benchmark_code = self._generate_base_benchmark_code(framework_adapter, dsl_adapter,
+                                                                    warmup_times, run_times)
                 logger.debug(f"[{self.op_name}] Base benchmark代码生成成功 (长度: {len(benchmark_code)})")
             else:
                 # Generation模板：benchmark implementation
                 benchmark_code = dsl_adapter.benchmark_impl(
-                    self.impl_func_name, "inputs", warmup_times, run_times, 
+                    self.impl_func_name, "inputs", warmup_times, run_times,
                     self.backend, self.op_name, case_idx=0,
                     framework_model="framework_model" if needs_binary_io else None,
                     framework_adapter=framework_adapter if needs_binary_io else None,
@@ -1284,10 +1338,10 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error(f"[{self.op_name}] 性能测试脚本写入失败: {profile_file}, 错误: {e}")
             raise
-    
+
     def _generate_base_benchmark_code(self, framework_adapter, dsl_adapter, warmup, runs, clear_l2_cache: bool = True):
         """生成base benchmark代码（benchmark framework model）
-        
+
         Args:
             framework_adapter: 框架适配器
             dsl_adapter: DSL适配器
@@ -1466,12 +1520,12 @@ if __name__ == "__main__":
 
     async def run_profile(self, task_info: Dict[str, Any], current_step: int = 0, device_id: int = -1, profile_settings: dict = {}) -> dict:
         """运行profile分析
-        
+
         注意：与 run() 方法类似，device 的管理在此方法中统一完成
-        
+
         Args:
             device_id: 设备ID（默认-1表示自动管理，LocalWorker会自动从device_pool获取）
-        
+
         Returns:
             dict: 性能分析结果，包含以下字段：
                 - gen_time: 生成代码执行时间（微秒）
@@ -1486,7 +1540,7 @@ if __name__ == "__main__":
         acquired_device = None
         from akg_agents.core.worker.local_worker import LocalWorker
         from akg_agents.core.worker.remote_worker import RemoteWorker
-        
+
         if self.worker and isinstance(self.worker, LocalWorker):
             # LocalWorker: 从本地 device_pool 获取设备
             acquired_device = await self.worker.device_pool.acquire_device()
@@ -1501,7 +1555,7 @@ if __name__ == "__main__":
             # 没有 worker（旧流程兼容）
             actual_device_id = device_id if device_id != -1 else 0
             logger.info(f"[{self.op_name}] Using device {actual_device_id} (no worker, deprecated flow)")
-        
+
         try:
             run_times = profile_settings.get("run_times", 50)
             warmup_times = profile_settings.get("warmup_times", 5)
@@ -1510,10 +1564,10 @@ if __name__ == "__main__":
             expanded_log_dir = os.path.expanduser(self.log_dir)
             unique_dir_name = f"Iteration{self.task_id}_Step{current_step:02d}_verify"
             verify_dir = os.path.join(expanded_log_dir, self.op_name, unique_dir_name)
-            
+
             # 确保目录存在
             os.makedirs(verify_dir, exist_ok=True)
-            
+
             # 检查是否需要先生成代码文件（独立调用 profile 时需要）
             if self.bench_type == "sol":
                 # SOL: 检查 definition.json 和 impl 文件
@@ -1523,13 +1577,13 @@ if __name__ == "__main__":
                 # KernelBench: 检查框架实现文件和 DSL 实现文件
                 needed_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
                 impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
-            
+
             if not os.path.exists(needed_file) or not os.path.exists(impl_file):
                 # 代码文件不存在，需要先生成
                 impl_code = task_info.get("coder_code", "")
                 if not impl_code:
                     raise ValueError(f"[{self.op_name}] task_info 中缺少 coder_code，无法生成性能测试代码文件")
-                
+
                 logger.info(f"[{self.op_name}] 代码文件不存在，先生成代码文件...")
                 self.gen_verify_project(impl_code, verify_dir, actual_device_id)
                 logger.info(f"[{self.op_name}] 代码文件生成完成")
@@ -1544,7 +1598,7 @@ if __name__ == "__main__":
 
             # 打包并发送给Worker执行
             package_data = self._pack_directory(verify_dir)
-            
+
             if not self.worker:
                 # 检查 device_id 是否为 -1（表示自动管理）
                 if device_id == -1:
@@ -1568,13 +1622,13 @@ if __name__ == "__main__":
                     stacklevel=2
                 )
                 logger.warning(f"⚠️  [{self.op_name}] Worker not set, creating temporary LocalWorker (deprecated)")
-                
+
                 from akg_agents.core.worker.local_worker import LocalWorker
                 from akg_agents.core.async_pool.device_pool import DevicePool
                 logger.info(f"[{self.op_name}] Worker not set, creating LocalWorker with device [{actual_device_id}]")
                 device_pool = DevicePool([actual_device_id])
                 self.worker = LocalWorker(device_pool=device_pool, backend=self.backend)
-            
+
             # 检查LocalWorker是否有device_pool
             from akg_agents.core.worker.local_worker import LocalWorker
             if isinstance(self.worker, LocalWorker):
@@ -1583,7 +1637,7 @@ if __name__ == "__main__":
                         f"[{self.op_name}] LocalWorker must have device_pool. "
                         "This should be provided by Task when creating _private_worker."
                     )
-            
+
             # 传递完整的 profile_settings 给 Worker
             full_settings = {
                 **profile_settings,
@@ -1591,31 +1645,31 @@ if __name__ == "__main__":
                 'dsl': self.dsl,
                 'op_name': self.op_name
             }
-            
+
             result = await self.worker.profile(package_data, self.task_id, self.op_name, full_settings)
-            
+
             # 同步 artifacts 到 verify_dir（用于 RemoteWorker 场景）
             artifacts = result.get('artifacts', {})
             if artifacts:
                 sync_artifacts_to_directory(artifacts, verify_dir, self.task_id)
-            
+
             # 从 Worker 返回的结果中提取数据
             # 注意：跨后端场景下 base_time 可能是 None（跳过 base profile）
             gen_time = result.get('gen_time')
             base_time = result.get('base_time')
             speedup = result.get('speedup', 0.0)
-            
+
             # 处理 None 值用于日志输出
             gen_time_display = gen_time if gen_time is not None else float('inf')
             base_time_display = base_time if base_time is not None else float('inf')
 
             self.save_speedup_result(speedup, base_time_display, gen_time_display, unique_dir_name)
-            
+
             speedup_percent = speedup * 100.0
             logger.info(f"orig performance is {base_time_display:.2f} us")
             logger.info(f"akg_agents performance is {gen_time_display:.2f} us")
             logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，加速比（基准为100%）: {speedup_percent:.2f} %")
-            
+
             # 构建返回结果
             result = {
                 'gen_time': gen_time_display,
@@ -1623,14 +1677,14 @@ if __name__ == "__main__":
                 'speedup': speedup,
                 'unique_dir': unique_dir_name  # 添加 unique_dir
             }
-            
+
             # 只在 triton_ascend 情况下添加 autotune_summary
             if "triton_ascend" in self.dsl and self.backend == "ascend":
                 autotune_summary = self.read_autotune_results_from_directory(verify_dir)
                 if autotune_summary:
                     result['autotune_summary'] = autotune_summary
                     logger.info(f"[{self.op_name}: {self.task_id}] Autotune配置详情:\n{autotune_summary}")
-            
+
             return result
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
@@ -1645,7 +1699,7 @@ if __name__ == "__main__":
             if acquired_device is not None:
                 from akg_agents.core.worker.local_worker import LocalWorker
                 from akg_agents.core.worker.remote_worker import RemoteWorker
-                
+
                 if isinstance(self.worker, LocalWorker):
                     await self.worker.device_pool.release_device(acquired_device)
                     logger.info(f"[{self.op_name}] Released local device {acquired_device}")
@@ -1655,65 +1709,64 @@ if __name__ == "__main__":
 
     def read_autotune_results_from_directory(self, verify_dir: str) -> str:
         """从验证目录读取所有autotune结果并格式化输出
-        
+
         读取指定目录下的所有 autotune_info_case_*.json 文件，
         并以类似 TRITON_PRINT_AUTOTUNING=1 的格式输出。
-        
+
         Args:
             verify_dir: 验证目录路径
-            
+
         Returns:
             格式化的autotune结果字符串，格式如下：
-            
+
             Case 0:
             All config timings for kernel_name:
               Config 1: BLOCK_M=128, BLOCK_N=256 -> 145.2300us (BEST)
               Config 2: BLOCK_M=64, BLOCK_N=128 -> 178.5600us
               ...
         """
-        from pathlib import Path
-        
+
         result_lines = []
-        
+
         # 查找所有autotune文件
         verify_path = Path(verify_dir)
         autotune_files = sorted(verify_path.glob("autotune_info_case_*.json"))
-        
+
         if not autotune_files:
             return ""
-        
+
         # 逐个读取并格式化
         for autotune_file in autotune_files:
             # 提取case索引
             case_idx = autotune_file.stem.split('_')[-1]
-            
+
             try:
                 with open(autotune_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                
+
                 result_lines.append(f"Case {case_idx}:")
-                
+
                 # 遍历每个kernel
                 for kernel_name, configs in data.items():
                     result_lines.append(f"All config timings for {kernel_name}:")
-                    
+
                     # 按rank排序输出
                     sorted_configs = sorted(configs, key=lambda x: x['rank'])
-                    
+
                     for config_info in sorted_configs:
                         config_str = config_info['config']
                         timing_us = config_info['timing_us']
                         is_best = config_info['is_best']
                         rank = config_info['rank']
-                        
+
                         status = " (BEST)" if is_best else ""
                         result_lines.append(f"  Config {rank}: {config_str} -> {timing_us:.4f}us{status}")
-                
+
                 result_lines.append("")  # 空行分隔不同case
-                
+
             except Exception as e:
                 logger.warning(f"[{self.op_name}: {self.task_id}] 读取autotune文件失败 {autotune_file.name}: {e}")
-        
+
         return "\n".join(result_lines)
 
     # ------------------------------------------------------------------
@@ -1726,7 +1779,6 @@ if __name__ == "__main__":
 
     def _extract_autotune_configs(self, code: str) -> list:
         """从 triton 代码中提取所有未被注释的 autotune config"""
-        import re
 
         pattern = r'@triton\.autotune\s*\(\s*configs\s*=\s*\[(.*?)\]'
         match = re.search(pattern, code, re.DOTALL)
@@ -1750,7 +1802,6 @@ if __name__ == "__main__":
 
     def _count_all_autotune_configs(self, code: str) -> int:
         """统计所有 autotune config 的数量（包括已注释的）"""
-        import re
 
         pattern = r'@triton\.autotune\s*\(\s*configs\s*=\s*\[(.*?)\]'
         match = re.search(pattern, code, re.DOTALL)
@@ -1760,7 +1811,6 @@ if __name__ == "__main__":
 
     def _generate_single_config_code(self, original_code: str, config_to_keep: str, config_index: int) -> str:
         """生成只包含单个 config 的代码"""
-        import re
 
         all_configs = self._extract_autotune_configs(original_code)
         if not all_configs:
@@ -1772,7 +1822,6 @@ if __name__ == "__main__":
 
     def _generate_final_code_with_valid_configs(self, original_code: str, valid_configs: list, all_configs: list) -> str:
         """生成最终代码：保留正确的 config，注释掉错误的 config"""
-        import re
 
         if not all_configs:
             return original_code
@@ -1786,15 +1835,15 @@ if __name__ == "__main__":
                 commented_lines = [f"        # {line}" if line.strip() else line for line in config_lines]
                 new_configs_lines.append('\n'.join(commented_lines) + ',  # Failed verification')
 
-        new_configs_block = f"configs=[\n" + "\n".join(new_configs_lines) + "\n    ]"
+        new_configs_block = "configs=[\n" + "\n".join(new_configs_lines) + "\n    ]"
         pattern = r'configs\s*=\s*\[(.*?)\]'
         return re.sub(pattern, new_configs_block, original_code, count=1, flags=re.DOTALL)
 
-    def _save_verification_result_to_jsonl(self, verify_dir: str, current_step: int, verification_passed: bool, 
-                                          verify_logs: str, all_configs_count: int = 0, valid_configs_count: int = 0):
+    def _save_verification_result_to_jsonl(self, verify_dir: str, current_step: int, verification_passed: bool,
+                                           verify_logs: str, all_configs_count: int = 0, valid_configs_count: int = 0):
         """
         保存验证结果到JSONL文件
-        
+
         Args:
             verify_dir: 验证目录
             current_step: 当前步骤
@@ -1817,13 +1866,13 @@ if __name__ == "__main__":
             "backend": self.backend,
             "arch": self.arch
         }
-        
+
         if all_configs_count > 0:
             result_info["autotune_configs"] = {
                 "total": all_configs_count,
                 "passed": valid_configs_count
             }
-        
+
         with open(result_jsonl_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(result_info, ensure_ascii=False, indent=2) + '\n\n')
 
@@ -1843,9 +1892,9 @@ if __name__ == "__main__":
             if total_configs_count > 0:
                 logger.info(f"[{self.op_name}] 检测到 {total_configs_count} 个 config，但全部已被注释")
                 verify_logs = [
-                    f"=== Autotune Config 验证 ===\n",
+                    "=== Autotune Config 验证 ===\n",
                     f"检测到 {total_configs_count} 个 config，全部已被注释（之前验证失败）\n",
-                    f"跳过验证，直接返回失败结果\n",
+                    "跳过验证，直接返回失败结果\n",
                 ]
                 try:
                     self.gen_verify_project(target_code, verify_dir, device_id)
@@ -1868,7 +1917,7 @@ if __name__ == "__main__":
 
         valid_configs = []
         verify_logs = []
-        verify_logs.append(f"=== Autotune Config 逐条验证 ===\n")
+        verify_logs.append("=== Autotune Config 逐条验证 ===\n")
         if skipped_count > 0:
             verify_logs.append(f"检测到 {total_configs_count} 个 config，其中 {skipped_count} 个已被注释\n")
             verify_logs.append(f"待验证 config 数量: {len(all_configs)}\n\n")
@@ -1876,7 +1925,7 @@ if __name__ == "__main__":
             verify_logs.append(f"总共 {len(all_configs)} 个 config\n\n")
 
         consecutive_timeouts = 0
-        MAX_CONSECUTIVE_TIMEOUTS = 2
+        max_consecutive_timeouts = 2
 
         for i, config in enumerate(all_configs):
             config_num = i + 1
@@ -1892,7 +1941,7 @@ if __name__ == "__main__":
                 config_res, config_log = await self.run_verify(temp_verify_dir, timeout=verify_timeout)
 
                 if config_res:
-                    verify_logs.append(f"验证通过\n\n")
+                    verify_logs.append("验证通过\n\n")
                     valid_configs.append(config)
                     logger.info(f"[{self.op_name}] Config {config_num} 验证通过")
                     consecutive_timeouts = 0
@@ -1902,7 +1951,7 @@ if __name__ == "__main__":
                     log_lower = config_log.lower()
                     if "timed out" in log_lower or "timeout after" in log_lower or "timeouterror" in log_lower or "计算超时" in log_lower:
                         consecutive_timeouts += 1
-                        if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                        if consecutive_timeouts >= max_consecutive_timeouts:
                             skip_count = len(all_configs) - i - 1
                             warn_msg = f"连续 {consecutive_timeouts} 个 config 超时，触发 Fail-Fast"
                             if skip_count > 0:
@@ -1924,7 +1973,7 @@ if __name__ == "__main__":
 
         full_code_verify_passed = True
         if len(valid_configs) == len(all_configs) and len(all_configs) > 1:
-            verify_logs.append(f"\n=== 完整代码回归验证（所有 config 合并） ===\n")
+            verify_logs.append("\n=== 完整代码回归验证（所有 config 合并） ===\n")
             logger.info(f"[{self.op_name}] 逐 config 全部通过，开始完整代码回归验证...")
 
             try:
@@ -1934,16 +1983,16 @@ if __name__ == "__main__":
                 full_res, full_log = await self.run_verify(full_verify_dir, timeout=verify_timeout)
 
                 if full_res:
-                    verify_logs.append(f"完整代码回归验证通过\n")
+                    verify_logs.append("完整代码回归验证通过\n")
                     logger.info(f"[{self.op_name}] 完整代码回归验证通过")
                 else:
                     full_code_verify_passed = False
                     verify_logs.append(f"完整代码回归验证失败！\n错误日志:\n{full_log}\n\n")
                     verify_logs.append(
-                        f"【关键问题】每个 config 单独验证均通过，但所有 config 合并后验证失败。\n"
-                        f"这通常是因为 @triton.autotune 装饰器缺少 restore_value 参数。\n"
-                        f"autotune benchmark 会反复执行 kernel，不同 config 的输出会互相污染。\n"
-                        f"请在 @triton.autotune 中添加 restore_value=['所有输出指针参数名']。\n"
+                        "【关键问题】每个 config 单独验证均通过，但所有 config 合并后验证失败。\n"
+                        "这通常是因为 @triton.autotune 装饰器缺少 restore_value 参数。\n"
+                        "autotune benchmark 会反复执行 kernel，不同 config 的输出会互相污染。\n"
+                        "请在 @triton.autotune 中添加 restore_value=['所有输出指针参数名']。\n"
                     )
                     logger.warning(f"[{self.op_name}] 逐 config 通过但完整代码验证失败，疑似缺少 restore_value")
 
@@ -1959,13 +2008,13 @@ if __name__ == "__main__":
             verify_logs.append(f"验证通过，保留了 {len(valid_configs)} 个正确的 config\n")
             logger.info(f"[{self.op_name}] Autotune config 验证完成: {len(valid_configs)}/{len(all_configs)} 通过")
         elif len(valid_configs) > 0 and not full_code_verify_passed:
-            verify_logs.append(f"逐 config 验证通过但完整代码验证失败，需要添加 restore_value\n")
+            verify_logs.append("逐 config 验证通过但完整代码验证失败，需要添加 restore_value\n")
             logger.info(f"[{self.op_name}] 需要添加 restore_value")
         else:
-            verify_logs.append(f"所有 config 都未通过验证\n")
+            verify_logs.append("所有 config 都未通过验证\n")
             logger.info(f"[{self.op_name}] 所有 config 都未通过验证")
 
-        verify_logs.append(f"\n=== 生成最终验证项目 ===\n")
+        verify_logs.append("\n=== 生成最终验证项目 ===\n")
         try:
             self.gen_verify_project(final_code, verify_dir, device_id)
             logger.info(f"[{self.op_name}] 最终验证项目生成成功")
@@ -2003,7 +2052,7 @@ if __name__ == "__main__":
 
         # 动态创建验证目录
         verify_dir = self._create_verify_dir(current_step)
-        
+
         # 【关键】对于 LocalWorker 和 RemoteWorker，在 run() 方法开始时就 acquire device
         # 整个 verify 流程（生成脚本 + 执行）都使用这个 device_id
         # 最后在 finally 中统一释放
@@ -2011,7 +2060,7 @@ if __name__ == "__main__":
         acquired_device = None
         from akg_agents.core.worker.local_worker import LocalWorker
         from akg_agents.core.worker.remote_worker import RemoteWorker
-        
+
         if self.worker and isinstance(self.worker, LocalWorker):
             # LocalWorker: 从本地 device_pool 获取设备
             acquired_device = await self.worker.device_pool.acquire_device()
@@ -2026,7 +2075,7 @@ if __name__ == "__main__":
             # 没有 worker（旧流程兼容）
             actual_device_id = device_id if device_id != -1 else 0
             logger.info(f"[{self.op_name}] Using device {actual_device_id} (no worker, deprecated flow)")
-        
+
         try:
             verify_per_config = (
                 os.environ.get("AKG_VERIFY_PER_CONFIG", "0") == "1"
@@ -2064,7 +2113,7 @@ if __name__ == "__main__":
             verify_res, verify_log = await self.run_verify(
                 verify_dir, timeout=verify_timeout, device_id=actual_device_id
             )
-        
+
             # 拼接项目生成日志和验证日志
             verify_log = project_gen_log + verify_log
 
@@ -2082,7 +2131,7 @@ if __name__ == "__main__":
             if acquired_device is not None:
                 from akg_agents.core.worker.local_worker import LocalWorker
                 from akg_agents.core.worker.remote_worker import RemoteWorker
-                
+
                 if isinstance(self.worker, LocalWorker):
                     await self.worker.device_pool.release_device(acquired_device)
                     logger.info(f"[{self.op_name}] Released local device {acquired_device}")
