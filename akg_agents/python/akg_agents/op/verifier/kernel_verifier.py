@@ -1132,6 +1132,12 @@ if __name__ == "__main__":
             run_times: 运行次数
             skip_base: 是否跳过 base profile（跨后端场景下设为 True）
         """
+        if self.bench_type == "sol":
+            from akg_agents.op.verifier.sol_verifier import generate_sol_profile_project
+            return generate_sol_profile_project(
+                self, verify_dir, device_id, warmup_times, run_times, skip_base
+            )
+
         # 生成基准性能测试脚本（如果不跳过）
         if not skip_base:
             profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_base.py")
@@ -1509,11 +1515,16 @@ if __name__ == "__main__":
             os.makedirs(verify_dir, exist_ok=True)
             
             # 检查是否需要先生成代码文件（独立调用 profile 时需要）
-            # 代码文件包括：框架实现文件（{op_name}_{framework}.py）和 DSL 实现文件（{op_name}_{dsl}_impl.py）
-            framework_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
-            impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
+            if self.bench_type == "sol":
+                # SOL: 检查 definition.json 和 impl 文件
+                needed_file = os.path.join(verify_dir, "definition.json")
+                impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
+            else:
+                # KernelBench: 检查框架实现文件和 DSL 实现文件
+                needed_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
+                impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.dsl}_impl.py")
             
-            if not os.path.exists(framework_file) or not os.path.exists(impl_file):
+            if not os.path.exists(needed_file) or not os.path.exists(impl_file):
                 # 代码文件不存在，需要先生成
                 impl_code = task_info.get("coder_code", "")
                 if not impl_code:
