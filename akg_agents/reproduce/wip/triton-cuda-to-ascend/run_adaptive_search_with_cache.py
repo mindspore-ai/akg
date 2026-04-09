@@ -99,7 +99,7 @@ def resolve_paths(args):
     pt_path = os.path.join(cache_dir, args.source, f"{args.op}.pt")
     if not os.path.exists(pt_path):
         print(f"错误：参考数据文件不存在: {pt_path}")
-        print(f"请先在 CUDA 环境运行 gen_reference_cache.py 生成缓存")
+        print("请先在 CUDA 环境运行 gen_reference_cache.py 生成缓存")
         sys.exit(1)
 
     benchmark_base = SOURCE_BENCHMARK_MAP.get(args.source)
@@ -138,7 +138,7 @@ def print_result(result):
     if lineage_graph:
         print(f"谱系图：{lineage_graph}")
 
-    print(f"\n最佳实现（前5个）：")
+    print("\n最佳实现（前5个）：")
     best_impls = result.get('best_implementations', [])
     if best_impls:
         for i, impl in enumerate(best_impls[:5], 1):
@@ -180,7 +180,7 @@ async def run_single(op_name, pt_path, benchmark_file, args, worker_registered=F
     arch = args.arch
 
     print(f"\n{'='*70}")
-    print(f"  自适应搜索 + 参考数据模式 (Triton-CUDA → Triton-Ascend)")
+    print("  自适应搜索 + 参考数据模式 (Triton-CUDA → Triton-Ascend)")
     print(f"{'='*70}")
     print(f"  算子:       {op_name}")
     print(f"  参考数据:   {pt_path}")
@@ -224,7 +224,7 @@ async def run_single(op_name, pt_path, benchmark_file, args, worker_registered=F
 
     from akg_agents.op.adaptive_search import adaptive_search
 
-    print(f"\n  开始自适应搜索...\n")
+    print("\n  开始自适应搜索...\n")
 
     result = await adaptive_search(
         op_name=op_name,
@@ -338,7 +338,7 @@ async def run_batch(args):
     total = len(cases)
     done = sum(1 for c in cases if progress["cases"].get(f"{c[0]}/{c[1]}", {}).get("status") in ("done", "error"))
     print(f"\n{'='*70}")
-    print(f"  批量自适应搜索 (Triton-CUDA → Triton-Ascend)")
+    print("  批量自适应搜索 (Triton-CUDA → Triton-Ascend)")
     print(f"{'='*70}")
     print(f"  总 cases:    {total}")
     print(f"  已完成:      {done}")
@@ -415,7 +415,7 @@ async def run_batch(args):
     save_progress(progress_dir, progress)
 
     print(f"\n{'='*70}")
-    print(f"  批量搜索完成")
+    print("  批量搜索完成")
     print(f"{'='*70}")
     print(f"  总计: {total}  成功: {succeeded}  失败: {failed}  跳过(已完成): {skipped}")
     print(f"  进度文件: {_progress_file_path(progress_dir)}")

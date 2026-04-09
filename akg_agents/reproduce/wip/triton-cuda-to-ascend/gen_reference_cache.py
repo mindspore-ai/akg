@@ -64,7 +64,6 @@ import asyncio
 import json
 import logging
 import os
-import sys
 import time
 from pathlib import Path
 
@@ -260,7 +259,7 @@ async def main():
         return
 
     print(f"\n{'='*70}")
-    print(f"  Triton-CUDA 参考数据批量生成")
+    print("  Triton-CUDA 参考数据批量生成")
     print(f"{'='*70}")
     print(f"  算子总数:   {len(all_ops)}")
     print(f"  数据源:     {', '.join(args.source)}")
@@ -304,7 +303,7 @@ async def main():
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
     print(f"\n{'='*70}")
-    print(f"  完成")
+    print("  完成")
     print(f"{'='*70}")
     print(f"  成功: {success_count}/{len(results)}")
     print(f"  失败: {fail_count}/{len(results)}")
@@ -313,14 +312,14 @@ async def main():
     print(f"{'='*70}")
 
     if fail_count > 0:
-        print(f"\n  失败算子:")
+        print("\n  失败算子:")
         for r in results:
             if not r["success"]:
                 print(f"    - {r['source']}/{r['op_name']}: {r['error'][:100]}")
 
     print(f"\n  下一步：将 {output_dir} 拷贝到 Ascend 环境后运行：")
-    print(f"  python reproduce/wip/triton-cuda-to-ascend/run_adaptive_search_with_cache.py \\")
-    print(f"      --source sglang")
+    print("  python reproduce/wip/triton-cuda-to-ascend/run_adaptive_search_with_cache.py \\")
+    print("      --source sglang")
 
 
 if __name__ == "__main__":
