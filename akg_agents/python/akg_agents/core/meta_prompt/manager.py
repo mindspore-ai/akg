@@ -1,5 +1,6 @@
 import logging
 import math
+import re
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass, field
 
@@ -779,9 +780,101 @@ class MetaPromptSearcher:
         "default": HardwareProfile(name="Generic"),
     }
 
+    # 语义词表配置：后续扩展算子识别时只需修改这里，无需改流程逻辑。
+    SEMANTIC_RULES = {
+        "matrix": {
+            "exact": ("matmul", "gemm", "linear", "bmm", "addmm", "einsum", "dot", "mm"),
+            "prefix": tuple(),
+            "suffix": tuple(),
+        },
+        "conv": {
+            "exact": (
+                "conv", "conv1d", "conv2d", "conv3d",
+                "conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
+                "conv1d_transpose", "conv2d_transpose", "conv3d_transpose",
+                "deconv", "deconv1d", "deconv2d", "deconv3d",
+            ),
+            "prefix": ("conv_", "convtranspose", "conv_transpose"),
+            "suffix": tuple(),
+        },
+        "epilogue": {
+            "exact": ("relu", "gelu", "silu", "tanh", "sigmoid", "bias", "add", "mul", "scale", "dropout", "clamp", "leaky_relu", "hardswish"),
+            "prefix": tuple(),
+            "suffix": tuple(),
+        },
+        "reduction": {
+            "exact": (
+                "sum", "mean", "amax", "amin", "max", "min", "prod", "median", "var", "std",
+                "argmax", "argmin", "topk", "kthvalue", "logsumexp", "any", "all",
+                "softmax", "log_softmax", "normalize",
+            ),
+            "prefix": ("cum", "reduce"),
+            "suffix": ("norm", "pool", "loss"),
+        },
+        "online_reduction": {
+            "exact": (
+                "softmax", "log_softmax", "normalize", "layer_norm", "group_norm", "batch_norm", "instance_norm",
+                "layernorm", "groupnorm", "batchnorm", "instancenorm", "rms_norm", "rmsnorm", "inorm", "bn",
+            ),
+            "prefix": tuple(),
+            "suffix": ("norm",),
+        },
+    }
+
     def __init__(self, manager: MetaPromptManager, arch: str = "default"):
         self.manager = manager
         self.hw_profile = self.DEFAULT_PROFILES.get(arch.lower(), self.DEFAULT_PROFILES["default"])
+
+    def extract_op_features(self, op_meta: Dict[str, Any]) -> Dict[str, Any]:
+        """Public API for extracting operator features from op_meta."""
+        return self._extract_op_features(op_meta)
+
+    def _tokenize_target(self, target: str) -> List[str]:
+        """Normalize a target string into tokens and underscore subtokens."""
+        normalized = re.sub(r"[^a-z0-9_]+", " ", str(target).lower()).strip()
+        raw_tokens = [tok for tok in normalized.split() if tok]
+        expanded: List[str] = []
+        for tok in raw_tokens:
+            expanded.append(tok)
+            if "_" in tok:
+                expanded.extend(part for part in tok.split("_") if part)
+
+        # 保序去重，确保规则命中稳定且便于调试。
+        return list(dict.fromkeys(expanded))
+
+    def _matches_semantic_rule(
+        self,
+        target: str,
+        exact: Optional[set] = None,
+        prefix: Optional[tuple] = None,
+        suffix: Optional[tuple] = None,
+    ) -> bool:
+        """Generic semantic matcher reused by all operator families."""
+        tokens = self._tokenize_target(target)
+        if not tokens:
+            return False
+
+        exact = exact or set()
+        prefix = prefix or tuple()
+        suffix = suffix or tuple()
+
+        if any(tok in exact for tok in tokens):
+            return True
+        if prefix and any(tok.startswith(prefix) for tok in tokens):
+            return True
+        if suffix and any(tok.endswith(suffix) for tok in tokens):
+            return True
+        return False
+
+    def _rule_matches(self, target: str, rule_name: str) -> bool:
+        """Match semantic rule by name using class-level configurable vocabularies."""
+        rule = self.SEMANTIC_RULES.get(rule_name, {})
+        return self._matches_semantic_rule(
+            target,
+            exact=set(rule.get("exact", ())),
+            prefix=tuple(rule.get("prefix", ())),
+            suffix=tuple(rule.get("suffix", ())),
+        )
 
     def _extract_op_features(self, op_meta: Dict[str, Any]) -> Dict[str, Any]:
         """从元数据中纯提取特征，适配 extractor_torch.py 的返回结构。
@@ -797,34 +890,29 @@ class MetaPromptSearcher:
             # 尝试从最后一个节点获取形状
             out_shape = graph_tensors[-1].get("shape", [])
         
-        # fallback: 如果没有图张量，尝试使用第一个输入的形状（仅限简单逐点运算）
-        if not out_shape and op_meta.get("inputs"):
-            first_input = op_meta["inputs"][0]
-            if isinstance(first_input, dict):
-                out_shape = first_input.get("shape", [])
+        # fallback: 仅使用 extractor 提供的输出形状兜底，不能再回退到输入形状
+        if not out_shape:
+            fallback_shape = op_meta.get("fallback_output_shape")
+            if isinstance(fallback_shape, (tuple, list)):
+                out_shape = list(fallback_shape)
 
         total_output = 1
         for s in out_shape: 
             if isinstance(s, int): total_output *= s
 
-        # 2. 算子语义推导 (计算强度与 Reduction 检测)
-        is_compute_heavy = False
-        is_reduction = False
+        # 2. 算子语义推导 (静态分析优先，图语义与参数规模补充)
+        static_hints = op_meta.get("static_feature_hints", {}) if isinstance(op_meta, dict) else {}
+        parameter_stats = op_meta.get("parameter_stats", {}) if isinstance(op_meta, dict) else {}
+
+        is_compute_heavy = bool(static_hints.get("is_compute_heavy", False))
+        is_reduction = bool(static_hints.get("is_reduction", False))
         
-        compute_ops = ["matmul", "gemm", "conv", "linear", "bmm", "addmm", "einsum", "dot"]
-        reduction_ops = ["sum", "mean", "max", "min", "prod", "argmin", "argmax", "norm", "topk"]
-        # 注意：计算型算子通常隐含了内积缩约过程，故也包含在 reduction 检测中
-        reduction_ops.extend(compute_ops)
-
-        # Level2: Epilogue 与在线归约算子集合
-        epilogue_ops = ["relu", "gelu", "silu", "tanh", "sigmoid", "bias", "add",
-                        "mul", "scale", "dropout", "clamp", "leaky_relu", "hardswish"]
-        online_reduction_ops = ["softmax", "log_softmax", "layer_norm", "rms_norm",
-                                "group_norm", "batch_norm", "normalize"]
-
         # 遍历图节点进行语义识别
+        static_has_epilogue = bool(static_hints.get("has_epilogue", False))
         has_epilogue = False
-        has_online_reduction = False
+        has_online_reduction = bool(static_hints.get("has_online_reduction", False))
+        is_matrix_op = bool(static_hints.get("is_matrix", False))
+        is_conv_op = bool(static_hints.get("is_conv", False))
         compute_node_count = 0
         epilogue_node_count = 0
         online_reduction_count = 0
@@ -835,38 +923,71 @@ class MetaPromptSearcher:
         # 记录主计算节点，用于后续判断 Epilogue 是否在其之后
         main_compute_node_indices = []
         for i, node in enumerate(graph_tensors):
-            target_str = str(node.get("target", "")).lower()
+            semantic_target = str(node.get("canonical_target", node.get("target", ""))).lower()
+            module_type = str(node.get("module_type", "")).lower()
+
+            is_matrix_hit = (
+                self._rule_matches(semantic_target, "matrix")
+                or self._rule_matches(module_type, "matrix")
+            )
+            is_conv_hit = (
+                self._rule_matches(semantic_target, "conv")
+                or self._rule_matches(module_type, "conv")
+            )
+            is_main_compute = is_matrix_hit or is_conv_hit
+            is_reduction_like = self._rule_matches(semantic_target, "reduction") or self._rule_matches(module_type, "reduction")
+            is_online_reduction_like = self._rule_matches(semantic_target, "online_reduction") or self._rule_matches(module_type, "online_reduction")
             
             # 1. 识别主计算节点
-            is_main_compute = any(op in target_str for op in compute_ops)
             if is_main_compute:
                 is_compute_heavy = True
                 compute_node_count += 1
                 main_compute_node_indices.append(i)
                 output_roots.add(node.get("name", id(node)))
 
-            if any(op in target_str for op in reduction_ops):
+            if is_matrix_hit:
+                is_matrix_op = True
+            if is_conv_hit:
+                is_conv_op = True
+
+            if is_main_compute or is_reduction_like:
                 is_reduction = True
             
             # 2. 识别在线归约算子
-            if any(op in target_str for op in online_reduction_ops):
+            if is_online_reduction_like:
                 has_online_reduction = True
                 online_reduction_count += 1
                 is_reduction = True
 
+        # 参数规模作为 compute-heavy 的补充信号（由 extractor 提供统计）。
+        total_param_numel = int(parameter_stats.get("total_numel", 0) or 0)
+        max_param_numel = int(parameter_stats.get("max_tensor_numel", 0) or 0)
+        if total_param_numel >= 1_000_000 or max_param_numel >= 1_000_000:
+            is_compute_heavy = is_compute_heavy or is_matrix_op or is_conv_op
+
         # 3. 识别真正的 Epilogue 节点 (必须发生在至少一个主计算节点之后)
         for i, node in enumerate(graph_tensors):
-            target_str = str(node.get("target", "")).lower()
+            semantic_target = str(node.get("canonical_target", node.get("target", ""))).lower()
+            module_type = str(node.get("module_type", "")).lower()
             
             # 只有在主计算节点之后出现的逐点算子才算真正的 Epilogue
             is_after_main = any(i > main_idx for main_idx in main_compute_node_indices)
             
-            if is_after_main and any(op in target_str for op in epilogue_ops):
+            if is_after_main and (self._rule_matches(semantic_target, "epilogue") or self._rule_matches(module_type, "epilogue")):
                 # 排除掉已经是主计算的节点
-                is_main = any(op in target_str for op in compute_ops)
+                is_main = (
+                    self._rule_matches(semantic_target, "matrix")
+                    or self._rule_matches(semantic_target, "conv")
+                    or self._rule_matches(module_type, "matrix")
+                    or self._rule_matches(module_type, "conv")
+                )
                 if not is_main:
                     has_epilogue = True
                     epilogue_node_count += 1
+
+        # 静态提示仅作为补充：必须存在主计算节点时才允许判定为 epilogue。
+        if (not has_epilogue) and static_has_epilogue and bool(main_compute_node_indices):
+            has_epilogue = True
 
         # 3. Level2: 融合深度推断
         # fusion_depth = 计算节点数 + epilogue 节点数 + 在线归约节点数
@@ -883,14 +1004,21 @@ class MetaPromptSearcher:
         # is_small_grid = (total_output / avg_block_size) < self.hw_profile.compute_units
         has_tensor_cores = self.hw_profile.has_tensor_cores
 
+        # 严格语义判定：不再使用 rank 兜底，避免形状启发式误判。
+        rank = len(out_shape)
+        is_matrix = is_matrix_op
+        is_conv = is_conv_op
+
         return {
             # Level1 算子语义特征（硬件无关）
-            "rank": len(out_shape),
-            "is_matrix": len(out_shape) >= 2,
-            "is_conv": len(out_shape) >= 4,
+            "rank": rank,
+            "is_matrix": is_matrix,
+            "is_conv": is_conv,
             "total_output": total_output,
             "is_compute_heavy": is_compute_heavy,
             "is_reduction": is_reduction,
+            "total_param_numel": total_param_numel,
+            "max_param_numel": max_param_numel,
             # Level2 融合特征
             "fusion_depth": fusion_depth,
             "has_epilogue": has_epilogue,
