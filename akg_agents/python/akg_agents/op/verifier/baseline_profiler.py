@@ -268,8 +268,8 @@ if os.path.exists("base_profile_result.json"):
             stripped = line.strip()
             if stripped and op_name in stripped:
                 logger.info(f"[{op_name}] {stripped}")
-                # 解析 "Workload N/M base time: 1234.5678 us"
-                if "base time:" in stripped and "us" in stripped:
+                # 解析 "Workload N/M base time: 1234.5678 us"（排除 Geometric mean 汇总行）
+                if "base time:" in stripped and "us" in stripped and "Geometric mean" not in stripped:
                     try:
                         time_str = stripped.split("base time:")[1].strip().replace("us", "").strip()
                         workload_times_us.append(float(time_str))
