@@ -43,22 +43,22 @@ class SearchConfig:
     max_concurrent: int = 8
     initial_task_count: int = 8
     tasks_per_parent: int = 1  # 每次选择父代后生成的任务数
-    
+
     # 停止条件（唯一停止条件：达到最大任务数）
     max_total_tasks: int = 100
-    
+
     # UCB 选择参数
     exploration_coef: float = 1.414
     random_factor: float = 0.1
     use_softmax: bool = False
     softmax_temperature: float = 1.0
-    
+
     # 灵感采样参数
     inspiration_sample_num: int = 3
     use_tiered_sampling: bool = True
     handwrite_sample_num: int = 2
     handwrite_decay_rate: float = 2.0
-    
+
     # 进化控制器（外挂增强模块）
     use_evolution_controller: bool = False
 
@@ -70,14 +70,14 @@ class SearchConfig:
 class AdaptiveSearchController:
     """
     自适应搜索控制器
-    
+
     协调以下组件：
     - AsyncTaskPool: 管理并发任务执行
     - SuccessDB: 存储成功任务
     - UCBParentSelector: 选择父代
     - TaskGenerator: 生成新任务
     """
-    
+
     def __init__(self,
                  op_name: str,
                  task_desc: str,
@@ -89,7 +89,7 @@ class AdaptiveSearchController:
                  search_config: Optional[SearchConfig] = None):
         """
         初始化控制器
-        
+
         Args:
             op_name: 算子名称
             task_desc: 任务描述
@@ -108,7 +108,7 @@ class AdaptiveSearchController:
         self.arch = arch
         self.config = config
         self.search_config = search_config or SearchConfig()
-        
+
         # 设置存储目录
         if not self.search_config.storage_dir:
             home = os.path.expanduser("~")
@@ -117,7 +117,7 @@ class AdaptiveSearchController:
                 home, "akg_agents_adaptive_search", op_name, timestamp
             )
         os.makedirs(self.search_config.storage_dir, exist_ok=True)
-        
+
         # 初始化组件
         self.db = SuccessDB(storage_dir=self.search_config.storage_dir)
         self.task_pool = AsyncTaskPool(max_concurrent=self.search_config.max_concurrent)
@@ -128,7 +128,7 @@ class AdaptiveSearchController:
             use_softmax=self.search_config.use_softmax,
             softmax_temperature=self.search_config.softmax_temperature
         )
-        
+
         generator_config = TaskGeneratorConfig(
             inspiration_sample_num=self.search_config.inspiration_sample_num,
             use_tiered_sampling=self.search_config.use_tiered_sampling,
@@ -148,7 +148,7 @@ class AdaptiveSearchController:
             generator_config=generator_config,
             bench_type=self.bench_type,
         )
-        
+
         # 统计信息
         self._total_submitted = 0
         self._total_completed = 0
@@ -156,21 +156,21 @@ class AdaptiveSearchController:
         self._total_failed = 0
         self._start_time: Optional[datetime] = None
         self._stop_reason: Optional[str] = None
-        
+
         # 任务代数追踪
         self._task_generations: Dict[str, int] = {}  # task_id -> generation
         self._task_parents: Dict[str, Optional[str]] = {}  # task_id -> parent_id
-        
+
         # 选择批次追踪（用于失败时回滚 selection_count）
         # task_id -> batch_id
         self._task_to_batch: Dict[str, int] = {}
         # batch_id -> {parent_id, child_ids, completed, success_count}
         self._selection_batches: Dict[int, Dict[str, Any]] = {}
         self._next_batch_id: int = 0
-        
+
         # Sketch agent 用于根据最终代码重新生成 sketch
         self._sketch_agent: Optional[Sketch] = None
-        
+
         # 【优化】Baseline 性能缓存（避免重复测量）
         # 第一个成功任务的 base_time 会被缓存，后续任务复用
         self._baseline_time_us: Optional[float] = None
@@ -196,7 +196,7 @@ class AdaptiveSearchController:
 
         logger.info(f"AdaptiveSearchController initialized for {op_name}")
         logger.info(f"Storage dir: {self.search_config.storage_dir}")
-    
+
     def _get_sketch_agent(self) -> Sketch:
         """获取或创建 Sketch agent"""
         if self._sketch_agent is None:
@@ -209,34 +209,34 @@ class AdaptiveSearchController:
                 config=self.config
             )
         return self._sketch_agent
-    
+
     def _update_profile_settings_in_config(self) -> None:
         """【优化】更新 config 中的 profile_settings，传递缓存的 baseline"""
         if self._baseline_time_us is not None and self._baseline_time_us > 0 and self._baseline_time_us < float('inf'):
             from akg_agents.op.verifier.baseline_profiler import set_baseline_in_config
             set_baseline_in_config(self.config, self._baseline_time_us)
-    
+
     def _send_profile_to_history(self, record) -> None:
         """
         立即发送性能结果到历史记录
-        
+
         Args:
             record: SuccessRecord 对象
         """
         if not record:
             return
-        
+
         profile = record.profile
         if not isinstance(profile, dict):
             return
-        
+
         try:
             gen_time = float(profile.get("gen_time") or 0.0)
             base_time = float(profile.get("base_time") or 0.0)
             speedup = float(record.speedup or 0.0)
         except Exception:
             gen_time = base_time = speedup = 0.0
-        
+
         # 检查是否有有效的性能数据
         if gen_time > 0.0 or base_time > 0.0 or speedup > 0.0:
             session_id = str(self.config.get("session_id") or "").strip()
@@ -245,13 +245,13 @@ class AdaptiveSearchController:
                 unique_dir = profile.get('unique_dir', '')
                 base_log_dir = self.config.get('log_dir', '')
                 log_dir = ""
-                
+
                 if base_log_dir and unique_dir:
                     log_dir = os.path.join(os.path.expanduser(base_log_dir), self.op_name, unique_dir)
                 elif unique_dir:
                     # 如果没有 base_log_dir，尝试使用 unique_dir 作为相对路径
                     log_dir = unique_dir
-                
+
                 try:
                     send_message(
                         session_id,
@@ -265,20 +265,21 @@ class AdaptiveSearchController:
                             },
                         ),
                     )
-                    logger.debug(f"Sent profile result to history immediately: op_name={self.op_name}, speedup={speedup:.2f}x")
+                    logger.debug(
+                        f"Sent profile result to history immediately: op_name={self.op_name}, speedup={speedup:.2f}x")
                 except Exception as e:
                     logger.warning(f"Failed to send profile result to history: {e}")
-    
+
     def _send_progress_update(self) -> None:
         """
         发送进度更新到 CLI
-        
+
         发送当前任务进度信息，包括已提交、已完成、成功/失败数量。
         """
         session_id = str(self.config.get("session_id") or "").strip()
         if not session_id:
             return
-        
+
         try:
             send_message(
                 session_id,
@@ -302,13 +303,13 @@ class AdaptiveSearchController:
             )
         except Exception as e:
             logger.warning(f"Failed to send progress update: {e}")
-    
+
     def _send_search_start(self) -> None:
         """发送自适应搜索开始消息，进入静默模式"""
         session_id = str(self.config.get("session_id") or "").strip()
         if not session_id:
             return
-        
+
         try:
             send_message(
                 session_id,
@@ -323,13 +324,13 @@ class AdaptiveSearchController:
             logger.debug(f"Sent adaptive_search_start message for {self.op_name}")
         except Exception as e:
             logger.warning(f"Failed to send search start: {e}")
-    
+
     def _send_search_end(self) -> None:
         """发送自适应搜索结束消息，退出静默模式"""
         session_id = str(self.config.get("session_id") or "").strip()
         if not session_id:
             return
-        
+
         try:
             send_message(
                 session_id,
@@ -345,7 +346,7 @@ class AdaptiveSearchController:
             logger.debug(f"Sent adaptive_search_end message for {self.op_name}")
         except Exception as e:
             logger.warning(f"Failed to send search end: {e}")
-    
+
     def _select_parent(self) -> Optional[SuccessRecord]:
         """选择父代（薄代理：如果启用了进化控制器则委托，否则走原始 UCB）"""
         if self.evo_controller:
@@ -357,23 +358,23 @@ class AdaptiveSearchController:
         """提交一个初始任务"""
         # 【优化】为任务设置 profile_settings（传递缓存的 baseline）
         self._update_profile_settings_in_config()
-        
+
         task = await self.generator.generate_initial_task()
         task_id = task.task_id
-        
+
         self._task_generations[task_id] = 0
         self._task_parents[task_id] = None
-        
+
         await self.task_pool.submit(
             task_id=task_id,
             coroutine_factory=task.run,
             generation=0,
             parent_id=None
         )
-        
+
         self._total_submitted += 1
         return task_id
-    
+
     async def _submit_evolved_task(self) -> Optional[str]:
         """
         提交一个进化任务（自动选择父代）
@@ -386,7 +387,7 @@ class AdaptiveSearchController:
             logger.warning("No parent selected, cannot generate evolved task")
             return None
         return await self._submit_evolved_task_with_parent(parent)
-    
+
     async def _submit_evolved_task_with_parent(self, parent) -> Optional[str]:
         """
         使用指定父代提交一个进化任务
@@ -408,36 +409,36 @@ class AdaptiveSearchController:
 
         # 【优化】为任务设置 profile_settings（传递缓存的 baseline）
         self._update_profile_settings_in_config()
-        
+
         # 生成任务
         task = await self.generator.generate_evolved_task(parent, generation, inspirations=inspirations)
         task_id = task.task_id
-        
+
         self._task_generations[task_id] = generation
         self._task_parents[task_id] = parent.id
-        
+
         await self.task_pool.submit(
             task_id=task_id,
             coroutine_factory=task.run,
             generation=generation,
             parent_id=parent.id
         )
-        
+
         self._total_submitted += 1
         return task_id
-    
+
     async def _process_results(self) -> None:
         """处理已完成的任务结果"""
         results = self.task_pool.pop_completed_results()
-        
+
         for result in results:
             self._total_completed += 1
             task_success = False
-            
+
             if result.success:
                 self._total_success += 1
                 task_success = True
-                
+
                 # 添加到 DB（sketch 暂时为空）
                 record = self.db.add_from_result(
                     task_id=result.task_id,
@@ -445,20 +446,20 @@ class AdaptiveSearchController:
                     generation=result.generation,
                     parent_id=result.parent_id
                 )
-                
+
                 if record:
                     logger.info(
                         f"Task {result.task_id} succeeded: "
-                        f"gen_time={record.gen_time:.4f}ms, speedup={record.speedup:.2f}x"
+                        f"gen_time={record.gen_time:.4f}us, speedup={record.speedup:.2f}x"
                     )
-                    
+
                     # 立即发送性能结果到历史记录
                     self._send_profile_to_history(record)
             else:
                 self._total_failed += 1
                 error = result.error or result.final_state.get("error", "Unknown error")
                 logger.warning(f"Task {result.task_id} failed: {error}")
-            
+
             # 更新选择批次状态
             self._update_selection_batch(result.task_id, task_success)
 
@@ -468,11 +469,11 @@ class AdaptiveSearchController:
 
         # 异步生成 sketch（根据最终代码重新生成）
         await self._generate_pending_sketches()
-    
+
     def _update_selection_batch(self, task_id: str, success: bool) -> None:
         """
         更新选择批次状态，如果批次完成且全部失败则回滚父代的 selection_count
-        
+
         Args:
             task_id: 完成的任务 ID
             success: 任务是否成功
@@ -480,16 +481,16 @@ class AdaptiveSearchController:
         if task_id not in self._task_to_batch:
             # 初始任务不属于任何批次
             return
-        
+
         batch_id = self._task_to_batch[task_id]
         if batch_id not in self._selection_batches:
             return
-        
+
         batch = self._selection_batches[batch_id]
         batch['completed'] += 1
         if success:
             batch['success_count'] += 1
-        
+
         # 检查批次是否完成
         total_children = len(batch['child_ids'])
         if batch['completed'] >= total_children:
@@ -507,25 +508,25 @@ class AdaptiveSearchController:
                     f"Selection batch {batch_id} completed: "
                     f"{batch['success_count']}/{total_children} succeeded"
                 )
-            
+
             # 清理批次数据
             for child_id in batch['child_ids']:
                 self._task_to_batch.pop(child_id, None)
             del self._selection_batches[batch_id]
-    
+
     async def _generate_pending_sketches(self) -> None:
         """为待处理的成功任务生成 sketch"""
         # 检查 sketch 生成开关
         if not self.config.get("enable_sketch_generation", True):
             logger.debug("Sketch generation disabled by config")
             return
-        
+
         pending_records = self.db.get_pending_sketch_records()
         if not pending_records:
             return
-        
+
         sketch_agent = self._get_sketch_agent()
-        
+
         for record in pending_records:
             try:
                 # 从 meta_info 中获取完整的 task_info
@@ -533,10 +534,10 @@ class AdaptiveSearchController:
                 if not task_info:
                     # 如果没有 task_info，构造一个基本的
                     task_info = {"coder_code": record.impl_code}
-                
+
                 # 调用 Sketch agent 生成 sketch
                 sketch = await sketch_agent.run(task_info)
-                
+
                 if sketch and not isinstance(sketch, Exception):
                     self.db.update_sketch(record.id, sketch)
                     logger.debug(f"Generated sketch for record {record.id}")
@@ -544,11 +545,11 @@ class AdaptiveSearchController:
                     # 生成失败，使用空 sketch
                     self.db.update_sketch(record.id, "")
                     logger.warning(f"Failed to generate sketch for record {record.id}")
-                    
+
             except Exception as e:
                 logger.warning(f"Exception generating sketch for {record.id}: {e}")
                 self.db.update_sketch(record.id, "")
-    
+
     def _check_stop_conditions(self) -> bool:
         """
         检查停止条件
@@ -572,30 +573,30 @@ class AdaptiveSearchController:
             return True
 
         return False
-    
+
     async def _refill_task_pool(self) -> int:
         """
         填充任务池
-        
+
         逻辑：
         1. 先从等待队列取任务填充运行池
         2. 如果等待队列空且有空位且未达到最大任务数，选父代生成 n 个新任务
         3. 新任务有空位就运行，其余放入等待队列
-        
+
         Returns:
             int: 提交的新任务数量
         """
         submitted = 0
-        
+
         # 1. 从等待队列填充运行池
-        filled = await self.task_pool.refill_from_queue()
-        
+        await self.task_pool.refill_from_queue()
+
         # 2. 只有等待队列空了才生成新任务
         if self.task_pool.get_waiting_count() == 0:
             # 检查是否需要生成新任务
-            if (self.task_pool.has_capacity() and 
-                self._total_submitted < self.search_config.max_total_tasks):
-                
+            if (self.task_pool.has_capacity() and
+                    self._total_submitted < self.search_config.max_total_tasks):
+
                 if self.db.is_empty():
                     # DB 为空，生成初始任务
                     await self._submit_initial_task()
@@ -613,7 +614,7 @@ class AdaptiveSearchController:
                             'completed': 0,
                             'success_count': 0
                         }
-                        
+
                         # 生成 n 个任务（有空位运行，其余放等待队列）
                         for _ in range(self.search_config.tasks_per_parent):
                             if self._total_submitted >= self.search_config.max_total_tasks:
@@ -627,20 +628,20 @@ class AdaptiveSearchController:
                         # 无法选择父代，生成初始任务
                         await self._submit_initial_task()
                         submitted += 1
-        
+
         return submitted
-    
+
     async def run(self) -> Dict[str, Any]:
         """
         运行自适应搜索
-        
+
         Returns:
             Dict[str, Any]: 搜索结果
         """
         self._start_time = datetime.now()
         logger.info(f"Starting adaptive search for {self.op_name}")
         logger.info(f"Config: max_concurrent={self.search_config.max_concurrent}, "
-                   f"max_total_tasks={self.search_config.max_total_tasks}, ")
+                    f"max_total_tasks={self.search_config.max_total_tasks}, ")
 
         # 通知进化控制器
         if self.evo_controller:
@@ -648,7 +649,7 @@ class AdaptiveSearchController:
 
         # 发送搜索开始消息（进入静默模式）
         self._send_search_start()
-        
+
         # 【优化】在开始搜索前，先单独 profile baseline 一次
         from akg_agents.op.verifier.baseline_profiler import profile_baseline_once
         self._baseline_time_us = await profile_baseline_once(
@@ -657,7 +658,7 @@ class AdaptiveSearchController:
         )
         if self._baseline_time_us:
             logger.info(f"[{self.op_name}] 后续 {self.search_config.max_total_tasks} 个任务将跳过 baseline profile")
-        
+
         # 使用上下文管理器，自动清理所有子任务（正常退出或异常都会清理）
         async with self.task_pool:
             try:
@@ -672,32 +673,32 @@ class AdaptiveSearchController:
                     # 等待任务完成
                     if self.task_pool.get_running_count() > 0:
                         await self.task_pool.wait_for_any(timeout=self.search_config.poll_interval)
-                    
+
                     # 处理完成的结果（更新 _total_success 等计数器）
                     await self._process_results()
-                    
+
                     # 发送进度更新到 CLI
                     self._send_progress_update()
                     # 检查停止条件：达到最大任务数
                     if self._check_stop_conditions():
                         logger.info(f"Stop condition met: {self._stop_reason}")
                         break
-                    
+
                     # 如果任务池空闲且已达到最大任务数，退出
                     if self.task_pool.is_idle() and self._total_submitted >= self.search_config.max_total_tasks:
                         logger.info("All tasks completed")
                         break
-                    
+
                     # 填充任务池
                     await self._refill_task_pool()
-                    
+
                     # 如果任务池空闲但还没达到最大任务数，继续生成
                     if self.task_pool.is_idle() and self._total_submitted < self.search_config.max_total_tasks:
                         await self._refill_task_pool()
-                    
+
                     # 避免空转
                     await asyncio.sleep(0.1)
-                
+
                 # 3. 等待剩余任务完成
                 remaining = self.task_pool.get_running_count()
                 if remaining > 0:
@@ -707,46 +708,46 @@ class AdaptiveSearchController:
                         await self._process_results()
                         # 发送进度更新到 CLI
                         self._send_progress_update()
-            
+
             except asyncio.CancelledError:
                 # 用户取消操作，记录日志并向上传播
                 # 清理工作由上下文管理器自动完成
                 logger.info(f"Adaptive search for {self.op_name} was cancelled by user")
                 self._stop_reason = "Cancelled by user"
                 raise  # 重新抛出，__aexit__ 会自动清理
-                
+
             except Exception as e:
                 # 其他异常，记录日志
                 # 清理工作由上下文管理器自动完成
                 logger.error(f"Search failed with exception: {e}", exc_info=True)
                 self._stop_reason = f"Exception: {e}"
-        
+
         # 退出 async with 时，上下文管理器已自动清理所有子任务
-        
+
         # 发送搜索结束消息（退出静默模式）
         self._send_search_end()
-        
+
         # 4. 收集结果
         elapsed_time = (datetime.now() - self._start_time).total_seconds()
         result = self._collect_results(elapsed_time)
-        
+
         logger.info(f"Adaptive search completed for {self.op_name}")
         logger.info(f"Results: {self._total_success} successful, {self._total_failed} failed, "
-                   f"{elapsed_time:.1f}s elapsed")
+                    f"{elapsed_time:.1f}s elapsed")
         logger.info(f"Stop reason: {self._stop_reason}")
-        
+
         return result
-    
+
     def _collect_results(self, elapsed_time: float) -> Dict[str, Any]:
         """收集搜索结果"""
         # 获取最佳实现
         best_implementations = []
         log_dir = self.config.get('log_dir', '')
-        
+
         for record in self.db.get_all_sorted_by_performance()[:10]:
             # 从 profile 中获取 unique_dir（格式如 Iteration_Init_Task1_Step02_verify）
             unique_dir = record.profile.get('unique_dir', '')
-            
+
             best_implementations.append({
                 'id': record.id,  # 完整任务 ID
                 'impl_code': record.impl_code,
@@ -759,14 +760,14 @@ class AdaptiveSearchController:
                 'selection_count': record.selection_count,  # 被选为父代的次数
                 'verify_dir': unique_dir,  # 验证文件夹名（如 Iteration_Init_Task1_Step02_verify）
             })
-        
+
         # 从 config 中获取 log_dir 和 task_folder
         log_dir = self.config.get('log_dir', '')
         task_folder = os.path.basename(log_dir) if log_dir else ''
-        
+
         # 生成谱系图
         lineage_graph_path = self._generate_lineage_graph(log_dir)
-        
+
         return {
             'op_name': self.op_name,
             'total_submitted': self._total_submitted,
@@ -792,31 +793,31 @@ class AdaptiveSearchController:
                 'random_factor': self.search_config.random_factor
             }
         }
-    
+
     def _generate_lineage_graph(self, log_dir: str) -> Optional[str]:
         """
         生成任务谱系图（父子关系图）- Mermaid 格式
-        
+
         Args:
             log_dir: 日志目录路径
-            
+
         Returns:
             str: Mermaid 文件保存路径，失败返回 None
         """
         if not log_dir:
             logger.warning("log_dir not specified, skipping lineage graph generation")
             return None
-        
+
         records = self.db.get_all()
         if not records:
             logger.warning("No successful tasks, skipping lineage graph generation")
             return None
-        
+
         # 构建节点数据
         nodes: Dict[str, Dict[str, Any]] = {}
         edges: List[Tuple[str, str]] = []
         record_ids = {r.id for r in records}
-        
+
         for record in records:
             nodes[record.id] = {
                 'gen_time': record.gen_time,
@@ -827,7 +828,7 @@ class AdaptiveSearchController:
             }
             if record.parent_id and record.parent_id in record_ids:
                 edges.append((record.parent_id, record.id))
-        
+
         # 按代数分组
         generations: Dict[int, List[str]] = {}
         for node_id, data in nodes.items():
@@ -835,36 +836,36 @@ class AdaptiveSearchController:
             if gen not in generations:
                 generations[gen] = []
             generations[gen].append(node_id)
-        
+
         # 对每代内按 gen_time 排序
         for gen in generations:
             generations[gen] = sorted(generations[gen], key=lambda x: nodes[x]['gen_time'])
-        
+
         max_gen = max(generations.keys()) if generations else 0
-        
+
         # 获取性能范围用于着色
         valid_times = [data['gen_time'] for data in nodes.values() if data['gen_time'] != float('inf')]
         best_gen_time = min(valid_times) if valid_times else 0
         worst_gen_time = max(valid_times) if valid_times else 1
-        
+
         # 生成 Mermaid 代码
         mermaid_lines = []
         mermaid_lines.append("```mermaid")
         mermaid_lines.append("flowchart TB")
         mermaid_lines.append("")
-        
+
         # 添加子图（按代数分组）
         for gen in sorted(generations.keys()):
             node_ids = generations[gen]
             gen_label = "初始任务" if gen == 0 else f"Gen{gen}"
-            
+
             mermaid_lines.append(f"    subgraph {gen_label}")
             for node_id in node_ids:
                 data = nodes[node_id]
                 gen_time = data['gen_time']
                 speedup = data['speedup']
                 sel_count = data['selection_count']
-                
+
                 # 节点显示内容
                 if gen_time != float('inf'):
                     node_label = f"{node_id}<br/>{gen_time:.2f}us | {speedup:.2f}x"
@@ -872,29 +873,29 @@ class AdaptiveSearchController:
                         node_label += f"<br/>选{sel_count}次"
                 else:
                     node_label = f"{node_id}<br/>∞"
-                
+
                 # 节点 ID 需要转换为合法的 Mermaid ID
                 safe_id = node_id.replace('-', '_')
                 mermaid_lines.append(f'        {safe_id}["{node_label}"]')
-            
+
             mermaid_lines.append("    end")
             mermaid_lines.append("")
-        
+
         # 添加边（父子关系）
         mermaid_lines.append("    %% 父子关系")
         for parent_id, child_id in edges:
             safe_parent = parent_id.replace('-', '_')
             safe_child = child_id.replace('-', '_')
             mermaid_lines.append(f"    {safe_parent} --> {safe_child}")
-        
+
         mermaid_lines.append("")
-        
+
         # 添加样式（根据性能着色）
         mermaid_lines.append("    %% 样式：绿色=性能好，红色=性能差")
         for node_id, data in nodes.items():
             gen_time = data['gen_time']
             safe_id = node_id.replace('-', '_')
-            
+
             if gen_time != float('inf') and worst_gen_time > best_gen_time:
                 ratio = (gen_time - best_gen_time) / (worst_gen_time - best_gen_time)
                 # 从绿色(#90EE90)到红色(#FFB6C1)
@@ -906,11 +907,11 @@ class AdaptiveSearchController:
                     color = "#FFB6C1"  # 浅红
             else:
                 color = "#D3D3D3"  # 浅灰
-            
+
             mermaid_lines.append(f"    style {safe_id} fill:{color}")
-        
+
         mermaid_lines.append("```")
-        
+
         # 构建完整的 Markdown 内容
         md_content = []
         md_content.append(f"# Task Lineage Graph - {self.op_name}")
@@ -932,23 +933,25 @@ class AdaptiveSearchController:
         md_content.append("")
         md_content.append("| 任务 ID | 代数 | gen_time | speedup | 父代 | 被选次数 |")
         md_content.append("|---------|------|----------|---------|------|----------|")
-        
+
         # 按 gen_time 排序输出详情
         sorted_nodes = sorted(nodes.items(), key=lambda x: x[1]['gen_time'])
         for node_id, data in sorted_nodes:
             gen = "初始" if data['generation'] == 0 else f"G{data['generation']}"
             parent = data['parent_id'] if data['parent_id'] else "-"
             if data['gen_time'] != float('inf'):
-                md_content.append(f"| {node_id} | {gen} | {data['gen_time']:.2f}us | {data['speedup']:.2f}x | {parent} | {data['selection_count']} |")
+                md_content.append(
+                    f"| {node_id} | {gen} | {data['gen_time']:.2f}us | {data['speedup']:.2f}x | {parent} | {data['selection_count']} |")
             else:
                 md_content.append(f"| {node_id} | {gen} | ∞ | - | {parent} | {data['selection_count']} |")
-        
+
         # 追加停止原因和进化控制器诊断信息
         md_content.append("")
         md_content.append("## 搜索终止信息")
         md_content.append("")
         md_content.append(f"- **停止原因**: {self._stop_reason or 'N/A'}")
-        md_content.append(f"- **总提交**: {self._total_submitted} | **总成功**: {self._total_success} | **总失败**: {self._total_failed}")
+        md_content.append(
+            f"- **总提交**: {self._total_submitted} | **总成功**: {self._total_success} | **总失败**: {self._total_failed}")
         md_content.append(f"- **使用进化控制器**: {'是' if self.evo_controller else '否'}")
 
         if self.evo_controller:
