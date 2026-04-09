@@ -58,6 +58,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
   // pm.addPass(mlir::createFoldDimensionPass());
   if (options.enableLoopFusion) {
     pm.addPass(mlir::createMindSporeToLinalgNamedPass(options.dynamicShape, !options.enableLoopFusion));
+    pm.addPass(mlir::createCopyReturnedBlockArgsPass());
     pm.addPass(mlir::createLinalgGeneralizeNamedOpsPass());
     pm.addPass(mlir::createMindSporeToTosaPass());
     pm.addPass(mlir::createMindSporeToLinalgPass());
@@ -72,9 +73,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const mlir::AscendOptPipelin
   nestedFunctionPM.addPass(mlir::createEraseUnusedOperandsAndResultsPass());
 
   if (options.enableLoopFusion) {
-    bool keepFakeOuts = true;
     pm.addPass(mlir::createDecomposeTensorPass());
-    pm.addPass(mlir::createLinalgCopyBufferizePass(keepFakeOuts));
     pm.addPass(mlir::bufferization::createEmptyTensorToAllocTensorPass());
 
     mlir::bufferization::OneShotBufferizationOptions bufferizationOpts;

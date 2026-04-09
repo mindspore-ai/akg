@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2026 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -69,6 +69,9 @@ std::unique_ptr<OperationPass<func::FuncOp>> createCloneTensorEmptyPass();
 
 /// Erase unused linalg.generic operands and tensor results (see MLIR erase-unused patterns).
 std::unique_ptr<OperationPass<func::FuncOp>> createEraseUnusedOperandsAndResultsPass();
+
+/// Copy function inputs that are returned directly so `return` uses a copied value.
+std::unique_ptr<OperationPass<func::FuncOp>> createCopyReturnedBlockArgsPass();
 
 /// Pattern to fuse `linalg.generic` -> `linalg.template` operations
 /// when both operations are fusable elementwise operations.
