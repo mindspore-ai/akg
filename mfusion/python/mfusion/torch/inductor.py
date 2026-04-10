@@ -77,12 +77,18 @@ def fuse_and_optimize(torch_dialect_str: str, kernel_generator: str = "dvm") -> 
     )
 
     runner.run(
-        pipeline=f"builtin.module(convert-mfuse-to-dvm,convert-fused-subgraph-to-custom-call{{kernel-generator={kernel_generator}}},canonicalize)",
+        pipeline=(
+            f"builtin.module(convert-mfuse-to-dvm,convert-fused-subgraph-to-custom-call"
+            f"{{kernel-generator={kernel_generator}}},canonicalize)"
+        ),
         stage="Lower Fused Subgraphs to CustomOp Calls",
     )
 
     runner.run(
-        pipeline="builtin.module(convert-mfuse-to-torch,reconcile-unrealized-casts,canonicalize)",
+        pipeline=(
+            f"builtin.module(convert-mfuse-to-torch{{kernel-generator={kernel_generator}}},"
+            f"reconcile-unrealized-casts,canonicalize)"
+        ),
         stage="Convert Mfuse to Torch Dialect Module",
     )
 

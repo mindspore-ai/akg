@@ -18,6 +18,8 @@
 
 #include <algorithm>
 #include <iterator>
+#include <string>
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -30,6 +32,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/TypeID.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mfusion/Conversion/MfuseToTorch/MfuseMetaToTorch.h"
 #include "mfusion/Conversion/MfuseToTorch/MfuseAclnnToTorch.h"
@@ -42,6 +45,8 @@
 #include "torch-mlir/Dialect/Torch/IR/TorchTypes.h"
 
 #include "MfuseToTorch.pdll.h.inc"
+
+#include "llvm/Support/CommandLine.h"
 
 namespace {
 
@@ -345,11 +350,34 @@ class ConvertDvmCallOp : public mlir::OpConversionPattern<mlir::mfuse::DvmCallOp
   }
 };
 
-struct ConvertMfuseToTorchPass
-    : public mlir::PassWrapper<ConvertMfuseToTorchPass, mlir::OperationPass<mlir::ModuleOp>> {
-  mlir::StringRef getArgument() const final { return "convert-mfuse-to-torch"; }
+/// PassWrapper instantiates clonePass() as make_unique<Derived>(*this), which requires a copy ctor.
+/// Pass::Option holds non-copyable llvm::cl::opt, so we inherit OperationPass<ModuleOp> directly and
+/// implement clonePass() without copying (Pass::clone() applies copyOptionValuesFrom after clonePass).
+struct ConvertMfuseToTorchPass : public mlir::OperationPass<mlir::ModuleOp> {
+  // cppcheck-suppress unknownMacro
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertMfuseToTorchPass)
 
-  mlir::StringRef getDescription() const final { return "Convert Mfuse operations to Torch dialect operations"; }
+  ConvertMfuseToTorchPass()
+      : mlir::OperationPass<mlir::ModuleOp>(mlir::TypeID::get<ConvertMfuseToTorchPass>()) {}
+
+  mlir::StringRef getName() const override { return "convert-mfuse-to-torch"; }
+
+  mlir::StringRef getArgument() const override { return "convert-mfuse-to-torch"; }
+
+  mlir::StringRef getDescription() const override { return "Convert Mfuse operations to Torch dialect operations"; }
+
+  mlir::Pass::Option<std::string> kernelGenerator{
+    *this, "kernel-generator",
+    llvm::cl::desc("Kernel backend: dvm (transpose as attrs on mm) or akg/bisheng (permute before mm)."),
+    llvm::cl::init("dvm")};
+
+  std::unique_ptr<mlir::Pass> clonePass() const override {
+    return std::make_unique<ConvertMfuseToTorchPass>();
+  }
+
+  static bool classof(const mlir::Pass *pass) {
+    return pass->getTypeID() == mlir::TypeID::get<ConvertMfuseToTorchPass>();
+  }
 
   void getDependentDialects(mlir::DialectRegistry &registry) const override {
     registry.insert<mlir::arith::ArithDialect>();
@@ -366,8 +394,9 @@ struct ConvertMfuseToTorchPass
     mlir::registerPDLLHelperFunctions(patternList);
     populateGeneratedPDLLPatterns(patternList, mlir::PDLConversionConfig(&converter_));
     mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::func::FuncOp>(patternList, converter_);
-    mlir::populateMfuseMetaToTorchConversionPatterns(converter_, patternList);
-    mlir::populateMfuseAclnnToTorchConversionPatterns(converter_, patternList);
+    llvm::StringRef kg = kernelGenerator.getValue();
+    mlir::populateMfuseMetaToTorchConversionPatterns(converter_, patternList, kg);
+    mlir::populateMfuseAclnnToTorchConversionPatterns(converter_, patternList, kg);
     patternList.add<ConvertAkgCallOp, ConvertBishengCallOp, ConvertDvmCallOp>(converter_, ctx);
     patternList.add<ConvertMfuseConstantToTorch>(converter_, ctx);
 

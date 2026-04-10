@@ -21,6 +21,7 @@
 #include <optional>
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -38,6 +39,56 @@ namespace mlir {
 namespace TorchD = mlir::torch::Torch;
 
 namespace {
+
+static bool isDvmKernelGenerator(llvm::StringRef kernelGenerator) {
+  return kernelGenerator == "dvm";
+}
+
+static std::optional<int64_t> getTorchOrRankedTensorRank(mlir::Type ty) {
+  if (auto vtt = mlir::dyn_cast<TorchD::ValueTensorType>(ty)) {
+    if (!vtt.hasSizes()) {
+      return std::nullopt;
+    }
+    return static_cast<int64_t>(vtt.getSizes().size());
+  }
+  if (auto rt = mlir::dyn_cast<mlir::RankedTensorType>(ty)) {
+    return static_cast<int64_t>(rt.getRank());
+  }
+  return std::nullopt;
+}
+
+static bool isTwoDMatmulOperandTypes(mlir::Type selfTy, mlir::Type otherTy) {
+  auto r1 = getTorchOrRankedTensorRank(selfTy);
+  auto r2 = getTorchOrRankedTensorRank(otherTy);
+  return r1 && r2 && *r1 == 2 && *r2 == 2;
+}
+
+static mlir::FailureOr<mlir::Value> buildSwapLastTwoDimsPermute(mlir::Location loc, mlir::Value v,
+                                                              mlir::ConversionPatternRewriter &rewriter) {
+  auto vtt = mlir::dyn_cast<TorchD::ValueTensorType>(v.getType());
+  if (!vtt || !vtt.hasSizes()) {
+    return mlir::failure();
+  }
+  auto sizes = vtt.getSizes();
+  int64_t rank = static_cast<int64_t>(sizes.size());
+  if (rank < 2) {
+    return mlir::failure();
+  }
+  llvm::SmallVector<int64_t> newSizes(sizes.begin(), sizes.end());
+  std::swap(newSizes[rank - 2], newSizes[rank - 1]);
+  mlir::Type permResultType = vtt.getWithSizesAndDtype(newSizes, vtt.getOptionalDtype());
+  llvm::SmallVector<mlir::Value> permDims;
+  permDims.reserve(static_cast<size_t>(rank));
+  for (int64_t i = 0; i < rank - 2; ++i) {
+    permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(i)));
+  }
+  permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(rank - 1)));
+  permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(rank - 2)));
+  mlir::MLIRContext *ctx = rewriter.getContext();
+  auto listType = TorchD::ListType::get(ctx, TorchD::IntType::get(ctx));
+  mlir::Value permList = rewriter.create<TorchD::PrimListConstructOp>(loc, listType, permDims);
+  return rewriter.create<TorchD::AtenPermuteOp>(loc, permResultType, v, permList).getResult();
+}
 
 std::optional<int64_t> getTorchScalarTypeInt(mlir::Type type) {
   if (mlir::isa<mlir::NoneType, mlir::mfuse::NoneType, TorchD::NoneType>(type)) {
@@ -184,75 +235,115 @@ class ConvertMfuseConv2DWithBias : public mlir::OpConversionPattern<mlir::mfuse:
   }
 };
 
-/// Converts mfuse.matmul -> torch.aten.mm (for 2D matrices) or torch.aten.matmul (for ND or transposed).
-/// For simple 2D case (trans_x1=false, trans_x2=false), uses torch.aten.mm.
-/// For other cases (ND or transposed), uses torch.aten.matmul.
+/// Converts mfuse.matmul -> torch.aten.mm (2D) or torch.aten.matmul (ND).
+/// For kernel-generator dvm and 2D operands, trans_x1/trans_x2 are attached as dvm_trans_a/dvm_trans_b
+/// on torch.aten.mm; otherwise transpose is expressed with torch.aten.permute (swap last two dims).
 class ConvertMfuseMatmul : public mlir::OpConversionPattern<mlir::mfuse::MatmulOp> {
  public:
-  using OpConversionPattern::OpConversionPattern;
+  ConvertMfuseMatmul(mlir::TypeConverter &converter, mlir::MLIRContext *ctx, llvm::StringRef kernelGenerator)
+      : OpConversionPattern(converter, ctx), kernelGenerator_(kernelGenerator.str()) {}
 
   mlir::LogicalResult matchAndRewrite(mlir::mfuse::MatmulOp op, OpAdaptor adaptor,
                                       mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Value self = adaptor.getSelf();
     mlir::Value other = adaptor.getOther();
-    bool transX1 = op.getTransX1();
-    bool transX2 = op.getTransX2();
+    bool trans1 = op.getTransX1();
+    bool trans2 = op.getTransX2();
 
     auto resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
       return mlir::failure();
     }
 
-    // Check if inputs are 2D and no transpose is needed
-    auto selfType = mlir::dyn_cast<mlir::RankedTensorType>(self.getType());
-    auto otherType = mlir::dyn_cast<mlir::RankedTensorType>(other.getType());
+    mlir::Location loc = op.getLoc();
+    const bool twoD = isTwoDMatmulOperandTypes(self.getType(), other.getType());
+    const bool dvm = isDvmKernelGenerator(kernelGenerator_);
 
-    // For simple 2D case without transpose, use torch.aten.mm
-    if (!transX1 && !transX2 && selfType && otherType && selfType.getRank() == 2 && otherType.getRank() == 2) {
-      rewriter.replaceOpWithNewOp<TorchD::AtenMmOp>(op, resultType, self, other);
+    if (twoD && dvm) {
+      auto newMm = rewriter.create<TorchD::AtenMmOp>(loc, resultType, self, other);
+      newMm->setAttr("dvm_trans_a", rewriter.getBoolAttr(trans1));
+      newMm->setAttr("dvm_trans_b", rewriter.getBoolAttr(trans2));
+      rewriter.replaceOp(op, newMm.getResult());
       return mlir::success();
     }
 
-    // For other cases (ND or transposed), use torch.aten.matmul
-    // Note: torch.aten.matmul doesn't support transpose attributes directly,
-    // so we would need to insert transpose ops if transX1 or transX2 is true.
-    // For now, we'll use torch.aten.matmul and let downstream passes handle transpose.
-    rewriter.replaceOpWithNewOp<TorchD::AtenMatmulOp>(op, resultType, self, other);
+    if (trans1) {
+      auto permOr = buildSwapLastTwoDimsPermute(loc, self, rewriter);
+      if (mlir::failed(permOr)) {
+        return mlir::failure();
+      }
+      self = *permOr;
+    }
+    if (trans2) {
+      auto permOr = buildSwapLastTwoDimsPermute(loc, other, rewriter);
+      if (mlir::failed(permOr)) {
+        return mlir::failure();
+      }
+      other = *permOr;
+    }
+    if (twoD) {
+      rewriter.replaceOpWithNewOp<TorchD::AtenMmOp>(op, resultType, self, other);
+    } else {
+      rewriter.replaceOpWithNewOp<TorchD::AtenMatmulOp>(op, resultType, self, other);
+    }
     return mlir::success();
   }
+
+ private:
+  std::string kernelGenerator_;
 };
 
 /// Converts mfuse.matmul_with_bias -> torch.aten.mm/matmul + torch.aten.add.Tensor.
 /// Since torch.aten.mm/matmul don't support bias directly, we decompose it into
-/// matmul followed by add.
+/// matmul followed by add. Transpose handling matches ConvertMfuseMatmul.
 class ConvertMfuseMatmulWithBias : public mlir::OpConversionPattern<mlir::mfuse::MatmulWithBiasOp> {
  public:
-  using OpConversionPattern::OpConversionPattern;
+  ConvertMfuseMatmulWithBias(mlir::TypeConverter &converter, mlir::MLIRContext *ctx, llvm::StringRef kernelGenerator)
+      : OpConversionPattern(converter, ctx), kernelGenerator_(kernelGenerator.str()) {}
 
   mlir::LogicalResult matchAndRewrite(mlir::mfuse::MatmulWithBiasOp op, OpAdaptor adaptor,
                                       mlir::ConversionPatternRewriter &rewriter) const override {
     mlir::Value self = adaptor.getSelf();
     mlir::Value other = adaptor.getOther();
     mlir::Value bias = adaptor.getBias();
-    bool transX1 = op.getTransX1();
-    bool transX2 = op.getTransX2();
+    bool trans1 = op.getTransX1();
+    bool trans2 = op.getTransX2();
 
     auto resultType = getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType) {
       return mlir::failure();
     }
 
-    // Check if inputs are 2D and no transpose is needed
-    auto selfType = mlir::dyn_cast<mlir::RankedTensorType>(self.getType());
-    auto otherType = mlir::dyn_cast<mlir::RankedTensorType>(other.getType());
+    mlir::Location loc = op.getLoc();
+    const bool twoD = isTwoDMatmulOperandTypes(self.getType(), other.getType());
+    const bool dvm = isDvmKernelGenerator(kernelGenerator_);
 
     mlir::Value matmulResult;
-    // For simple 2D case without transpose, use torch.aten.mm
-    if (!transX1 && !transX2 && selfType && otherType && selfType.getRank() == 2 && otherType.getRank() == 2) {
-      matmulResult = rewriter.create<TorchD::AtenMmOp>(op.getLoc(), resultType, self, other);
+    if (twoD && dvm) {
+      auto newMm = rewriter.create<TorchD::AtenMmOp>(loc, resultType, self, other);
+      newMm->setAttr("dvm_trans_a", rewriter.getBoolAttr(trans1));
+      newMm->setAttr("dvm_trans_b", rewriter.getBoolAttr(trans2));
+      matmulResult = newMm.getResult();
     } else {
-      // For other cases (ND or transposed), use torch.aten.matmul
-      matmulResult = rewriter.create<TorchD::AtenMatmulOp>(op.getLoc(), resultType, self, other);
+      if (trans1) {
+        auto permOr = buildSwapLastTwoDimsPermute(loc, self, rewriter);
+        if (mlir::failed(permOr)) {
+          return mlir::failure();
+        }
+        self = *permOr;
+      }
+      if (trans2) {
+        auto permOr = buildSwapLastTwoDimsPermute(loc, other, rewriter);
+        if (mlir::failed(permOr)) {
+          return mlir::failure();
+        }
+        other = *permOr;
+      }
+      if (twoD) {
+        matmulResult = rewriter.create<TorchD::AtenMmOp>(loc, resultType, self, other).getResult();
+      } else {
+        matmulResult = rewriter.create<TorchD::AtenMatmulOp>(loc, resultType, self, other).getResult();
+      }
     }
 
     // Add bias: torch.aten.add.Tensor(matmul_result, bias, alpha=1)
@@ -265,6 +356,9 @@ class ConvertMfuseMatmulWithBias : public mlir::OpConversionPattern<mlir::mfuse:
     rewriter.replaceOp(op, addResult);
     return mlir::success();
   }
+
+ private:
+  std::string kernelGenerator_;
 };
 
 struct ConvertMfuseCast : public mlir::OpConversionPattern<mlir::mfuse::CastOp> {
@@ -476,14 +570,15 @@ class ConvertBinaryOpWithAlphaPattern : public OpConversionPattern<SourceOp> {
 // =   Please keep the patterns in alphabetical order by operator name   =
 // ============================================================================
 
-static void populateMfuseMetaToTorchCustomPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
+static void populateMfuseMetaToTorchCustomPatterns(TypeConverter &converter, RewritePatternSet &patterns,
+                                                   llvm::StringRef kernelGenerator) {
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseBroadcastTo>(converter, context);
   patterns.add<ConvertMfuseCast>(converter, context);
   patterns.add<ConvertMfuseConv2D>(converter, context);
   patterns.add<ConvertMfuseConv2DWithBias>(converter, context);
-  patterns.add<ConvertMfuseMatmul>(converter, context);
-  patterns.add<ConvertMfuseMatmulWithBias>(converter, context);
+  patterns.add<ConvertMfuseMatmul>(converter, context, kernelGenerator);
+  patterns.add<ConvertMfuseMatmulWithBias>(converter, context, kernelGenerator);
   patterns.add<ConvertMfusePermute>(converter, context);
   patterns.add<ConvertMfuseReduceSum>(converter, context);
   patterns.add<ConvertMfuseReshape>(converter, context);
@@ -511,8 +606,9 @@ static void populateMfusePartBinaryOpToTorchTensorScalarPatterns(TypeConverter &
 }
 }  // namespace
 
-void populateMfuseMetaToTorchConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
-  populateMfuseMetaToTorchCustomPatterns(converter, patterns);
+void populateMfuseMetaToTorchConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns,
+                                              llvm::StringRef kernelGenerator) {
+  populateMfuseMetaToTorchCustomPatterns(converter, patterns, kernelGenerator);
   populateMfusePartBinaryOpToTorchTensorScalarPatterns(converter, patterns);
 }
 

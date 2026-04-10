@@ -1,9 +1,4 @@
-// This file is skipped by default: the following `REQUIRES` line needs the lit feature
-// `mfusion_convert_aten_permute_lit`. The test configuration does not register that feature,
-// so none of these tests run.
-// Reason: `ConvertAtenPermute` is not wired into Torch->Mfuse (no `patterns.add` in TorchAtenToMfuse.cc).
-// To run again: add `mfusion_convert_aten_permute_lit` to lit `available_features` and re-register the pattern.
-// REQUIRES: mfusion_convert_aten_permute_lit
+// ConvertAtenPermute is registered in TorchAtenToMfuse.cc (populateAtenToMfuseCustomPatterns).
 
 // RUN: mfusion-opt %s --convert-torch-to-mfuse --convert-torch-symbol-to-mfuse --canonicalize | FileCheck %s
 

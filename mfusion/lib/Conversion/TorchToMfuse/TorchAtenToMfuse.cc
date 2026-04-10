@@ -458,6 +458,9 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
   patterns.add<ConvertAtenRmsNorm>(converter, context);
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
   patterns.add<ConvertAtenTransposeInt>(converter, context);
+  // aten.permute -> mfuse.permute so fuse-batch-matmul can fold swap-last-two-dims + matmul into trans_x*.
+  // (transpose.int is handled by ConvertAtenTransposeInt; graphs that use permute need this too.)
+  patterns.add<ConvertAtenPermute>(converter, context);
 }
 
 // Populate reshape-like Aten ops to Mfuse conversion patterns
