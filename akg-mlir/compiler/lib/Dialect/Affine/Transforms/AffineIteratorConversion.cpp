@@ -203,6 +203,40 @@ static void eraseInitStore(affine::AffineStoreOp initStore) {
   // (e.g. store 0->A, load A->%0, store %0->B: after erasing the B store,
   //  the load becomes dead and should also be removed).
   auto *defOp = initStore.getValue().getDefiningOp();
+
+  // Propagate the init constant to downstream dependent init chains:
+  // if this store writes a constant to memref A, and a subsequent load from A
+  // feeds into another {reduction_init} store (for memref B), replace that
+  // store's value with the constant directly. Without this, removing the init
+  // store for A leaves the load reading uninitialized/stale data (A may later
+  // hold the iter_args reduction result), breaking the downstream init chain.
+  arith::ConstantOp constOp = resolveInitConstant(initStore);
+  if (constOp) {
+    Value memref = initStore.getMemRef();
+    Operation *anchor = ifOp ? ifOp.getOperation() : initStore.getOperation();
+    Block *block = anchor->getBlock();
+    SmallVector<affine::AffineLoadOp> deadLoads;
+    for (auto it = std::next(Block::iterator(anchor)); it != block->end(); ++it) {
+      auto loadOp = dyn_cast<affine::AffineLoadOp>(&*it);
+      if (!loadOp || loadOp.getMemRef() != memref) {
+        continue;
+      }
+      for (auto &use : llvm::make_early_inc_range(loadOp.getResult().getUses())) {
+        if (auto store = dyn_cast<affine::AffineStoreOp>(use.getOwner())) {
+          if (store->getAttr(kReductionInitAttr)) {
+            use.set(constOp.getResult());
+          }
+        }
+      }
+      if (loadOp.use_empty()) {
+        deadLoads.push_back(loadOp);
+      }
+    }
+    for (auto load : deadLoads) {
+      load.erase();
+    }
+  }
+
   initStore.erase();
   if (ifOp) {
     ifOp.erase();
