@@ -78,13 +78,16 @@ def Mfuse_AclnnBatchMatmulOp : Mfuse_Op<"aclnn.batch_matmul", [Pure]> {
     Performs batch matrix multiplication of two tensors (rank >= 3).
     Semantics align with CANN BatchMatMul: for each batch index,
     output[..., :, :] = matrix(self[..., :, :]) * matrix(mat2[..., :, :]).
-    Input x shape (*B, N, C) or (*B, C, N) if transpose_a; y shape (*B, C, M) or (*B, M, C) if transpose_b.
-    Output shape (*B, N, M). Trans is applied by upper Mfuse ops (Permute) before lowering.
+    Input x shape (*B, N, C) or (*B, C, N) if trans_x1; y shape (*B, C, M) or (*B, M, C) if trans_x2.
+    Output shape (*B, N, M). Optional trans_x1/trans_x2 swap the last two dimensions of each
+    operand for the matmul without inserting mfuse.permute (DVM-friendly).
   }];
 
   let arguments = (ins
     AnyRankedTensor:$self,
-    AnyRankedTensor:$mat2
+    AnyRankedTensor:$mat2,
+    DefaultValuedAttr<BoolAttr, "false">:$trans_x1,
+    DefaultValuedAttr<BoolAttr, "false">:$trans_x2
   );
 
   let results = (outs AnyRankedTensor:$out);
@@ -156,13 +159,16 @@ def Mfuse_AclnnMatmulOp : Mfuse_Op<"aclnn.matmul", [Pure]> {
   let summary = "CANN MatMul operation.";
   let description = [{
     Performs matrix multiplication of two tensors (supports 1D to 6D).
-    Semantics align with CANN MatMul: out = self * mat2; trans and bias
-    are applied by upper Mfuse ops before lowering to this aclnn op.
+    Semantics align with CANN MatMul: out = self * mat2.
+    Optional trans_x1/trans_x2 swap the last two dimensions of each operand for the matmul
+    without inserting mfuse.permute (DVM-friendly).
   }];
 
   let arguments = (ins
     AnyRankedTensor:$self,
-    AnyRankedTensor:$mat2
+    AnyRankedTensor:$mat2,
+    DefaultValuedAttr<BoolAttr, "false">:$trans_x1,
+    DefaultValuedAttr<BoolAttr, "false">:$trans_x2
   );
 
   let results = (outs AnyRankedTensor:$out);
@@ -176,12 +182,15 @@ def Mfuse_AclnnMmOp : Mfuse_Op<"aclnn.mm", [Pure]> {
   let summary = "CANN mm operation (2D matrix multiplication).";
   let description = [{
     Performs matrix multiplication of two 2D tensors. Corresponds to the 2D
-    case of CANN MatMul; trans is applied by upper Mfuse ops before lowering.
+    case of CANN MatMul. Optional trans_x1/trans_x2 swap the last two dimensions
+    of each operand without inserting mfuse.permute (DVM-friendly).
   }];
 
   let arguments = (ins
     AnyRankedTensor:$self,
-    AnyRankedTensor:$mat2
+    AnyRankedTensor:$mat2,
+    DefaultValuedAttr<BoolAttr, "false">:$trans_x1,
+    DefaultValuedAttr<BoolAttr, "false">:$trans_x2
   );
 
   let results = (outs AnyRankedTensor:$out);

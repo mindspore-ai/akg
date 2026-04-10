@@ -25,6 +25,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchTypes.h"
+#include "llvm/ADT/StringRef.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Support/ArithUtils.h"
 
@@ -33,6 +34,10 @@ namespace mlir {
 namespace TorchD = mlir::torch::Torch;
 
 namespace {
+
+static bool isDvmKernelGenerator(llvm::StringRef kernelGenerator) {
+  return kernelGenerator == "dvm";
+}
 
 // ============================================================================
 // =   Please keep the patterns in alphabetical order by operator name   =
@@ -243,19 +248,94 @@ class ConvertMfuseAclnnClamp : public mlir::OpConversionPattern<mlir::mfuse::Acl
   }
 };
 
+/// Converts mfuse.aclnn.mm -> torch.aten.mm. For kernel-generator dvm, trans_x1/trans_x2 are
+/// preserved as discardable attrs; otherwise swap last two dims via torch.aten.permute.
+class ConvertMfuseAclnnMm : public mlir::OpConversionPattern<mlir::mfuse::AclnnMmOp> {
+ public:
+  ConvertMfuseAclnnMm(mlir::TypeConverter &converter, mlir::MLIRContext *context,
+                      llvm::StringRef kernelGenerator)
+      : OpConversionPattern(converter, context), kernelGenerator_(kernelGenerator.str()) {}
+
+  mlir::LogicalResult matchAndRewrite(mlir::mfuse::AclnnMmOp op, OpAdaptor adaptor,
+                                      mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Value self = adaptor.getSelf();
+    mlir::Value mat2 = adaptor.getMat2();
+    mlir::Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return mlir::failure();
+    }
+    mlir::Location loc = op.getLoc();
+    if (isDvmKernelGenerator(kernelGenerator_)) {
+      auto newMm = rewriter.create<TorchD::AtenMmOp>(loc, resultType, self, mat2);
+      newMm->setAttr("dvm_trans_a", rewriter.getBoolAttr(op.getTransX1()));
+      newMm->setAttr("dvm_trans_b", rewriter.getBoolAttr(op.getTransX2()));
+      rewriter.replaceOp(op, newMm.getResult());
+      return mlir::success();
+    }
+    if (op.getTransX1()) {
+      auto permOr = buildSwapLastTwoDimsPermute(loc, self, rewriter);
+      if (mlir::failed(permOr)) {
+        return mlir::failure();
+      }
+      self = *permOr;
+    }
+    if (op.getTransX2()) {
+      auto permOr = buildSwapLastTwoDimsPermute(loc, mat2, rewriter);
+      if (mlir::failed(permOr)) {
+        return mlir::failure();
+      }
+      mat2 = *permOr;
+    }
+    rewriter.replaceOpWithNewOp<TorchD::AtenMmOp>(op, resultType, self, mat2);
+    return mlir::success();
+  }
+
+ private:
+  static mlir::FailureOr<mlir::Value> buildSwapLastTwoDimsPermute(mlir::Location loc, mlir::Value v,
+                                                                mlir::ConversionPatternRewriter &rewriter) {
+    auto vtt = mlir::dyn_cast<TorchD::ValueTensorType>(v.getType());
+    if (!vtt || !vtt.hasSizes()) {
+      return mlir::failure();
+    }
+    auto sizes = vtt.getSizes();
+    int64_t rank = static_cast<int64_t>(sizes.size());
+    if (rank < 2) {
+      return mlir::failure();
+    }
+    llvm::SmallVector<int64_t> newSizes(sizes.begin(), sizes.end());
+    std::swap(newSizes[rank - 2], newSizes[rank - 1]);
+    mlir::Type permResultType = vtt.getWithSizesAndDtype(newSizes, vtt.getOptionalDtype());
+    llvm::SmallVector<mlir::Value> permDims;
+    permDims.reserve(static_cast<size_t>(rank));
+    for (int64_t i = 0; i < rank - 2; ++i) {
+      permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(i)));
+    }
+    permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(rank - 1)));
+    permDims.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(rank - 2)));
+    mlir::MLIRContext *ctx = rewriter.getContext();
+    auto listType = TorchD::ListType::get(ctx, TorchD::IntType::get(ctx));
+    mlir::Value permList = rewriter.create<TorchD::PrimListConstructOp>(loc, listType, permDims);
+    return rewriter.create<TorchD::AtenPermuteOp>(loc, permResultType, v, permList).getResult();
+  }
+
+  std::string kernelGenerator_;
+};
+
 }  // namespace
 
 // ============================================================================
 // =   Please keep the patterns in alphabetical order by operator name   =
 // ============================================================================
 
-void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns) {
+void populateMfuseAclnnToTorchConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns,
+                                                 llvm::StringRef kernelGenerator) {
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseAclnnAdd>(converter, context);
   patterns.add<ConvertMfuseAclnnAddRmsNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnClamp>(converter, context);
   patterns.add<ConvertMfuseAclnnGelu>(converter, context);
   patterns.add<ConvertMfuseAclnnGeluBackward>(converter, context);
+  patterns.add<ConvertMfuseAclnnMm>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseAclnnRmsNorm>(converter, context);
   patterns.add<ConvertMfuseAclnnSub>(converter, context);
 }
