@@ -47,6 +47,25 @@ namespace mlir {
 namespace mlir {
 namespace {
 
+// Collects nested affine.for ops from op up to (not including) outerLoop, outermost first.
+static SmallVector<affine::AffineForOp> getNestedLoopChain(Operation *op, Operation *outerLoop) {
+  SmallVector<affine::AffineForOp> chain;
+  for (Operation *parent = op->getParentOp(); parent && parent != outerLoop; parent = parent->getParentOp()) {
+    if (auto forOp = dyn_cast<affine::AffineForOp>(parent)) {
+      chain.push_back(forOp);
+    }
+  }
+  std::reverse(chain.begin(), chain.end());
+  return chain;
+}
+
+// Returns true if two affine.for loops have the same iteration bounds and step.
+static bool sameLoopBounds(affine::AffineForOp a, affine::AffineForOp b) {
+  return a.getLowerBoundMap() == b.getLowerBoundMap() && a.getUpperBoundMap() == b.getUpperBoundMap() &&
+         a.getStep() == b.getStep() && llvm::equal(a.getLowerBoundOperands(), b.getLowerBoundOperands()) &&
+         llvm::equal(a.getUpperBoundOperands(), b.getUpperBoundOperands());
+}
+
 struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBase<ReductionSiblingRecomputePass> {
  public:
   void runOnOperation() override;
@@ -211,19 +230,37 @@ bool ReductionSiblingRecomputePass::matchCrossLoopAccess(affine::AffineStoreOp s
   if (storeIndices.size() != loadIndices.size()) {
     return false;
   }
+  // Collect nested loop chains for inner loop IV matching.
+  auto storeNested = getNestedLoopChain(storeOp, writerLoop);
+  auto loadNested = getNestedLoopChain(loadOp, dstLoop);
+
   for (auto [storeIdx, loadIdx] : llvm::zip(storeIndices, loadIndices)) {
     if (storeIdx == loadIdx) {
       continue;
     }
-    // The differing index must be the writerLoop's IV.
-    if (storeIdx != writerLoop.getInductionVar()) {
-      return false;
+    // The differing index is the writerLoop's IV.
+    if (storeIdx == writerLoop.getInductionVar()) {
+      // Map writerLoop's IV to dstLoop's IV.
+      remap[writerLoop.getInductionVar()] = dstLoop.getInductionVar();
+      // If loadIdx is an intermediate loop's IV (not dstLoop's), also remap it.
+      if (loadIdx != dstLoop.getInductionVar()) {
+        remap[loadIdx] = dstLoop.getInductionVar();
+      }
+      continue;
     }
-    // Map writerLoop's IV to dstLoop's IV.
-    remap[writerLoop.getInductionVar()] = dstLoop.getInductionVar();
-    // If loadIdx is an intermediate loop's IV (not dstLoop's), also remap it.
-    if (loadIdx != dstLoop.getInductionVar()) {
-      remap[loadIdx] = dstLoop.getInductionVar();
+    // Try matching inner loop IVs at corresponding nesting depths.
+    bool matched = false;
+    for (auto [sLoop, lLoop] : llvm::zip(storeNested, loadNested)) {
+      if (storeIdx == sLoop.getInductionVar()) {
+        if (sameLoopBounds(sLoop, lLoop)) {
+          remap[storeIdx] = lLoop.getInductionVar();
+          matched = true;
+        }
+        break;
+      }
+    }
+    if (!matched) {
+      return false;
     }
   }
   return true;
@@ -350,29 +387,29 @@ Value ReductionSiblingRecomputePass::cloneValueAt(Value value, OpBuilder &builde
   return remap.lookup(value);
 }
 
-// Collects candidate loads and stores from the DIRECT body of childLoop (not nested loops),
-// rewrites loads, then updates trace map. Nested loops are handled by recursive processSiblingLoops.
+// Collects candidate loads and stores from childLoop (including nested inner loops),
+// rewrites loads, then updates trace map.
 void ReductionSiblingRecomputePass::processChildLoop(affine::AffineForOp childLoop,
                                                      llvm::DenseSet<Value> &rewrittenMemrefs,
                                                      SmallVectorImpl<Operation *> &toErase) {
   SmallVector<affine::AffineLoadOp> candidateLoads;
   SmallVector<affine::AffineStoreOp> traceStores;
 
-  // Only iterate direct body ops; nested inner loops will be processed by recursion.
-  for (Operation &op : childLoop.getBody()->getOperations()) {
-    if (auto loadOp = dyn_cast<affine::AffineLoadOp>(&op)) {
+  // Walk all ops including nested inner loops to find candidate loads and stores.
+  childLoop.walk([&](Operation *opPtr) {
+    if (auto loadOp = dyn_cast<affine::AffineLoadOp>(opPtr)) {
       Value memref = loadOp.getMemRef();
       if (FuncScanInfo::isLocalAlloc(memref) && !scanInfo.reduceOutputMemrefs.contains(memref) &&
           scanInfo.memrefTraceMap.count(memref)) {
         candidateLoads.push_back(loadOp);
       }
-    } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(&op)) {
+    } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(opPtr)) {
       Value memref = storeOp.getMemRef();
       if (FuncScanInfo::isLocalAlloc(memref) && !scanInfo.reduceOutputMemrefs.contains(memref)) {
         traceStores.push_back(storeOp);
       }
     }
-  }
+  });
 
   // Phase 1: rewrite loads using trace map from PREVIOUS siblings.
   for (affine::AffineLoadOp loadOp : candidateLoads) {
