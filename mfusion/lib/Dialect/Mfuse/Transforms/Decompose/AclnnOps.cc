@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <utility>
+
 #include "llvm/Support/FormatVariadic.h"
 #include "mfusion/Dialect/Mfuse/IR/Mfuse.h"
 #include "mfusion/Dialect/Mfuse/Transforms/Decompose/ComputeOpBuilder.h"
@@ -158,9 +160,24 @@ static Operation *findAclnnMatmulFromAddOperands(Value x, Value y, Value &bias) 
   return nullptr;
 }
 
+/// Read trans_x1/trans_x2 from an aclnn matmul-like op (mm, matmul, batch_matmul).
+/// Returns (false, false) if \p op is not one of these (caller should only pass matched ops).
+static std::pair<bool, bool> getAclnnMatmulTransposeFlags(Operation *op) {
+  if (auto mm = dyn_cast<AclnnMmOp>(op)) {
+    return {mm.getTransX1(), mm.getTransX2()};
+  }
+  if (auto m = dyn_cast<AclnnMatmulOp>(op)) {
+    return {m.getTransX1(), m.getTransX2()};
+  }
+  if (auto bm = dyn_cast<AclnnBatchMatmulOp>(op)) {
+    return {bm.getTransX1(), bm.getTransX2()};
+  }
+  return {false, false};
+}
+
 //===----------------------------------------------------------------------===//
 // ConvertAclnnMatmulToMatmul: aclnn.mm / aclnn.matmul / aclnn.batch_matmul =>
-// mfuse.matmul (trans_x1=false, trans_x2=false)
+// mfuse.matmul (trans_x1/trans_x2 forwarded from aclnn)
 //===----------------------------------------------------------------------===//
 
 /// Template pattern to convert aclnn matmul-like ops (mm/matmul/batch_matmul)
@@ -176,8 +193,8 @@ class ConvertAclnnMatmulLikeToMatMulPattern : public OpRewritePattern<AclnnMatmu
     Value self = op.getSelf();
     Value mat2 = op.getMat2();
     Type resultType = getMatmulResult(op).getType();
-    auto newMatmul =
-      rewriter.create<MatmulOp>(loc, resultType, self, mat2, rewriter.getBoolAttr(false), rewriter.getBoolAttr(false));
+    auto newMatmul = rewriter.create<MatmulOp>(loc, resultType, self, mat2, rewriter.getBoolAttr(op.getTransX1()),
+                                               rewriter.getBoolAttr(op.getTransX2()));
     rewriter.replaceOp(op, newMatmul.getResult());
     return success();
   }
@@ -216,8 +233,10 @@ class ConvertAclnnMatmulAddToMatMulWithBiasPattern : public OpRewritePattern<Add
     Value other = matmulOp->getOperand(1);
     Type resultType = addOp.getResult().getType();
     Location loc = addOp.getLoc();
-    auto newOp = rewriter.create<MatmulWithBiasOp>(loc, resultType, self, other, bias, rewriter.getBoolAttr(false),
-                                                   rewriter.getBoolAttr(false));
+    const auto transFlags = getAclnnMatmulTransposeFlags(matmulOp);
+    auto newOp = rewriter.create<MatmulWithBiasOp>(loc, resultType, self, other, bias,
+                                                   rewriter.getBoolAttr(transFlags.first),
+                                                   rewriter.getBoolAttr(transFlags.second));
     rewriter.replaceOp(addOp, newOp.getResult());
     return success();
   }
