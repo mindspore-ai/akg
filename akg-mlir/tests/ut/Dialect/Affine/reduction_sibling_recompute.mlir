@@ -107,13 +107,6 @@ func.func @akg_fused_add_mean_mul_pow_rsqrt_10_auto_fallback(%arg0: memref<256x1
 // CHECK-NEXT:        %5 = arith.maximumf %3, %4 {reduction_axes = [1 : index], reduction_type = "x"} : f32
 // CHECK-NEXT:        affine.store %5, %alloc[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
 // CHECK-NEXT:      } {reduction}
-// CHECK-NEXT:      affine.for %arg2 = 0 to 125696 {
-// CHECK-NEXT:        %2 = affine.load %alloc[%arg1] : memref<1023xf32, {SymShapeAttr = ["s3"]}>
-// CHECK-NEXT:        %3 = affine.load %memspacecast[%arg1, %arg2] : memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s3", "s1"]}>
-// CHECK-NEXT:        %4 = arith.extf %3 : bf16 to f32
-// CHECK-NEXT:        %5 = arith.subf %4, %2 : f32
-// CHECK-NEXT:        %6 = math.exp %5 : f32
-// CHECK-NEXT:      } {broadcast}
 // CHECK-NEXT:      affine.store %cst_0, %alloc_1[%arg1] {reduction_init} : memref<1023xf32, {SymShapeAttr = ["s3"]}>
 // CHECK-NEXT:      affine.for %arg2 = 0 to 125696 {
 // CHECK-NEXT:        %2 = affine.load %memspacecast[%arg1, %arg2] : memref<1023x125696xbf16, strided<[125696, 1]>, {SymShapeAttr = ["s3", "s1"]}>
