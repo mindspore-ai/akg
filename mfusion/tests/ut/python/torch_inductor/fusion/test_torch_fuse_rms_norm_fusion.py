@@ -64,14 +64,23 @@ def test_torch_fuse_rms_norm_complete():
     result = fuse_and_optimize(MLIR_RMS_NORM_COMPLETE)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        checker.error or "Expected torch.npu.npu_rms_norm after torch-fuse-rms-norm (complete formula)"
+        checker.error
+        or "Expected torch.npu.npu_rms_norm after torch-fuse-rms-norm (complete formula)"
     )
     # Verify the original operations are fused away
-    assert not checker.check_text_contains('torch.aten.pow.Tensor_Scalar'), "pow should be fused"
-    assert not checker.check_text_contains('torch.aten.mean.dim'), "mean should be fused"
-    assert not checker.check_text_contains('torch.aten.add.Scalar'), "add should be fused"
-    assert not checker.check_text_contains('torch.aten.rsqrt'), "rsqrt should be fused"
-    assert not checker.check_text_contains('torch.aten.mul.Tensor'), "mul operations should be fused"
+    assert not checker.check_text_contains(
+        "torch.aten.pow.Tensor_Scalar"
+    ), "pow should be fused"
+    assert not checker.check_text_contains(
+        "torch.aten.mean.dim"
+    ), "mean should be fused"
+    assert not checker.check_text_contains(
+        "torch.aten.add.Scalar"
+    ), "add should be fused"
+    assert not checker.check_text_contains("torch.aten.rsqrt"), "rsqrt should be fused"
+    assert not checker.check_text_contains(
+        "torch.aten.mul.Tensor"
+    ), "mul operations should be fused"
 
 
 # Smallest inference RmsNorm: rsqrt is only used by mul(x, rsqrt); return only the final mul output.
@@ -108,10 +117,12 @@ def test_torch_fuse_rms_norm_inference_second_result_unused():
     API/training); it is not a missing replacement.
     """
     result = fuse_and_optimize(MLIR_RMS_NORM_INFERENCE_SECOND_UNUSED)
-    assert ':2 = torch.operator "torch.npu.npu_rms_norm"' in result, "Expected 2-result fused op"
-    assert re.search(r"return %[0-9]+#0 : !torch\.vtensor<\[1,2\],f32>", result), (
-        "Expected return to use only fused result #0 (second result unused in this graph)"
-    )
+    assert (
+        ':2 = torch.operator "torch.npu.npu_rms_norm"' in result
+    ), "Expected 2-result fused op"
+    assert re.search(
+        r"return %[0-9]+#0 : !torch\.vtensor<\[1,2\],f32>", result
+    ), "Expected return to use only fused result #0 (second result unused in this graph)"
 
 
 # Complete RMSNorm formula with mixed precision: bf16 input, f32 compute, bf16 output
@@ -165,7 +176,8 @@ def test_torch_fuse_rms_norm_mixed_precision_complete():
     result = fuse_and_optimize(MLIR_RMS_NORM_MIXED_PRECISION_COMPLETE)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        checker.error or "Expected torch.npu.npu_rms_norm after torch-fuse-rms-norm (mixed precision, complete)"
+        checker.error
+        or "Expected torch.npu.npu_rms_norm after torch-fuse-rms-norm (mixed precision, complete)"
     )
 
 
@@ -211,15 +223,23 @@ def test_torch_fuse_rms_norm_no_fusion_wrong_power():
     """RMSNorm should not fuse when power is not 2."""
     result = fuse_and_optimize(MLIR_RMS_NORM_NO_FUSION_WRONG_POWER)
     checker = MlirChecker.parse_torch_module(result)
-    assert not checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        "RMSNorm with wrong power should not be fused"
-    )
+    assert not checker.check_text_contains(
+        'torch.operator "torch.npu.npu_rms_norm"'
+    ), "RMSNorm with wrong power should not be fused"
     # Verify the original operations are preserved
-    assert checker.check_text_contains('torch.aten.pow.Tensor_Scalar'), "pow should be preserved"
-    assert checker.check_text_contains('torch.aten.mean.dim'), "mean should be preserved"
-    assert checker.check_text_contains('torch.aten.add.Scalar'), "add should be preserved"
-    assert checker.check_text_contains('torch.aten.rsqrt'), "rsqrt should be preserved"
-    assert checker.check_text_contains('torch.aten.mul.Tensor'), "mul operations should be preserved"
+    assert checker.check_text_contains(
+        "torch.aten.pow.Tensor_Scalar"
+    ), "pow should be preserved"
+    assert checker.check_text_contains(
+        "torch.aten.mean.dim"
+    ), "mean should be preserved"
+    assert checker.check_text_contains(
+        "torch.aten.add.Scalar"
+    ), "add should be preserved"
+    assert checker.check_text_contains("torch.aten.rsqrt"), "rsqrt should be preserved"
+    assert checker.check_text_contains(
+        "torch.aten.mul.Tensor"
+    ), "mul operations should be preserved"
 
 
 # RMSNorm should not fuse when add alpha is not 1
@@ -264,9 +284,9 @@ def test_torch_fuse_rms_norm_no_fusion_wrong_add_alpha():
     """RMSNorm should not fuse when add alpha is not 1."""
     result = fuse_and_optimize(MLIR_RMS_NORM_NO_FUSION_WRONG_ADD_ALPHA)
     checker = MlirChecker.parse_torch_module(result)
-    assert not checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        "RMSNorm with wrong add alpha should not be fused"
-    )
+    assert not checker.check_text_contains(
+        'torch.operator "torch.npu.npu_rms_norm"'
+    ), "RMSNorm with wrong add alpha should not be fused"
 
 
 # RMSNorm should not fuse when norm has multiple uses
@@ -312,9 +332,9 @@ def test_torch_fuse_rms_norm_no_fusion_multiple_norm_uses():
     """RMSNorm should not fuse when norm has multiple uses."""
     result = fuse_and_optimize(MLIR_RMS_NORM_NO_FUSION_MULTIPLE_NORM_USES)
     checker = MlirChecker.parse_torch_module(result)
-    assert not checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        "RMSNorm with multiple norm uses should not be fused"
-    )
+    assert not checker.check_text_contains(
+        'torch.operator "torch.npu.npu_rms_norm"'
+    ), "RMSNorm with multiple norm uses should not be fused"
 
 
 # Training graph: rsqrt result returned for backward pass (multi-use rsqrt)
@@ -361,13 +381,11 @@ def test_torch_fuse_rms_norm_training_graph():
     result = fuse_and_optimize(MLIR_RMS_NORM_TRAINING_GRAPH)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        checker.error or "Expected torch.npu.npu_rms_norm in training graph with rsqrt returned for backward"
+        checker.error
+        or "Expected torch.npu.npu_rms_norm in training graph with rsqrt returned for backward"
     )
 
 
-# Original RMSNorm (simplified) - for backward compatibility
-# RmsNorm in Torch: add(mean, eps) -> rsqrt -> mul(x, rsqrt) -> mul(gamma)
-# This tests the original implementation for backward compatibility
 MLIR_RMS_NORM_ORIGINAL = textwrap.dedent(
     """
 module {
@@ -385,12 +403,12 @@ module {
 )
 
 
-def test_torch_fuse_rms_norm_original():
-    """Original simplified RMSNorm (add+rsqrt+mul+mul) should still fuse for backward compatibility."""
+def test_torch_not_fuse_rms_norm_original():
+    """Original (add+rsqrt+mul+mul) should not fuse"""
     result = fuse_and_optimize(MLIR_RMS_NORM_ORIGINAL)
     checker = MlirChecker.parse_torch_module(result)
-    assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        checker.error or "Expected torch.npu.npu_rms_norm after torch-fuse-rms-norm (original simplified)"
+    assert not checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
+        checker.error or "Not fuse torch.npu.npu_rms_norm after torch-fuse-rms-norm"
     )
 
 
@@ -429,7 +447,8 @@ def test_torch_fuse_rms_norm_mixed_precision_original():
     result = fuse_and_optimize(MLIR_RMS_NORM_MIXED_PRECISION_ORIGINAL)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        checker.error or "Expected torch.npu.npu_rms_norm after torch-fuse-rms-norm (mixed precision, original)"
+        checker.error
+        or "Expected torch.npu.npu_rms_norm after torch-fuse-rms-norm (mixed precision, original)"
     )
 
 
@@ -468,7 +487,8 @@ def test_torch_fuse_rms_norm_training_rsqrt_returned_original():
     result = fuse_and_optimize(MLIR_RMS_NORM_TRAINING_RSQRT_RETURNED_ORIGINAL)
     checker = MlirChecker.parse_torch_module(result)
     assert checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        checker.error or "Expected torch.npu.npu_rms_norm in training graph with rsqrt returned (original)"
+        checker.error
+        or "Expected torch.npu.npu_rms_norm in training graph with rsqrt returned (original)"
     )
 
 
@@ -476,14 +496,21 @@ def test_torch_fuse_rms_norm_training_rsqrt_returned_original():
 MLIR_RMS_NORM_NO_FUSION_MULTIPLE_USES_ORIGINAL = textwrap.dedent(
     """
 module {
-  func.func @main(%x: !torch.vtensor<[2,4],f32>, %gamma: !torch.vtensor<[2,4],f32>, %mean: !torch.vtensor<[2,4],f32>) -> (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32>) attributes {torch.assume_strict_symbolic_shapes} {
+  func.func @main(%x: !torch.vtensor<[1,2],f32>, %gamma: !torch.vtensor<[1,2],f32>) -> (!torch.vtensor<[1,2],f32>, !torch.vtensor<[1,2],f32>) attributes {torch.assume_strict_symbolic_shapes} {
+    %int2 = torch.constant.int 2
+    %int_neg1 = torch.constant.int -1
+    %true = torch.constant.bool true
+    %none = torch.constant.none
     %one = torch.constant.int 1
-    %eps = torch.constant.float 1.0e-05
-    %add = torch.aten.add.Scalar %mean, %eps, %one : !torch.vtensor<[2,4],f32>, !torch.float, !torch.int -> !torch.vtensor<[2,4],f32>
-    %r = torch.aten.rsqrt %add : !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
-    %norm = torch.aten.mul.Tensor %x, %r : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
-    %out = torch.aten.mul.Tensor %gamma, %norm : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
-    return %out, %norm : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32>
+    %eps = torch.constant.float 1.000000e-05
+    %pow = torch.aten.pow.Tensor_Scalar %x, %int2 : !torch.vtensor<[1,2],f32>, !torch.int -> !torch.vtensor<[1,2],f32>
+    %dims = torch.prim.ListConstruct %int_neg1 : (!torch.int) -> !torch.list<int>
+    %mean = torch.aten.mean.dim %pow, %dims, %true, %none : !torch.vtensor<[1,2],f32>, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[1,2,1],f32>
+    %add = torch.aten.add.Scalar %mean, %eps, %one : !torch.vtensor<[1,2,1],f32>, !torch.float, !torch.int -> !torch.vtensor<[1,2,1],f32>
+    %rsqrt = torch.aten.rsqrt %add : !torch.vtensor<[1,2,1],f32> -> !torch.vtensor<[1,2,1],f32>
+    %norm = torch.aten.mul.Tensor %x, %rsqrt : !torch.vtensor<[1,2],f32>, !torch.vtensor<[1,2,1],f32> -> !torch.vtensor<[1,2],f32>
+    %out = torch.aten.mul.Tensor %norm, %gamma : !torch.vtensor<[1,2],f32>, !torch.vtensor<[1,2],f32> -> !torch.vtensor<[1,2],f32>
+    return %out, %norm : !torch.vtensor<[1,2],f32>, !torch.vtensor<[1,2],f32>
   }
 }
 """
@@ -494,6 +521,6 @@ def test_torch_fuse_rms_norm_no_fusion_multiple_uses_original():
     """When normalized value has multiple uses, fusion should not apply (original simplified)."""
     result = fuse_and_optimize(MLIR_RMS_NORM_NO_FUSION_MULTIPLE_USES_ORIGINAL)
     checker = MlirChecker.parse_torch_module(result)
-    assert not checker.check_text_contains('torch.operator "torch.npu.npu_rms_norm"'), (
-        "Normalized value has multiple uses; torch-fuse-rms-norm should NOT fuse this pattern (original)"
-    )
+    assert not checker.check_text_contains(
+        'torch.operator "torch.npu.npu_rms_norm"'
+    ), "Normalized value has multiple uses; torch-fuse-rms-norm should NOT fuse this pattern (original)"
