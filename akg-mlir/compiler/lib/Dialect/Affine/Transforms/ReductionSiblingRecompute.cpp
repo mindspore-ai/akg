@@ -31,6 +31,7 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 
 namespace mlir {
 #ifndef GEN_PASS_DEF_REDUCTIONSIBLINGRECOMPUTE
@@ -66,6 +67,20 @@ static bool sameLoopBounds(affine::AffineForOp a, affine::AffineForOp b) {
          llvm::equal(a.getUpperBoundOperands(), b.getUpperBoundOperands());
 }
 
+static Value traceToAlloc(Value memref) {
+  while (memref) {
+    if (memref.getDefiningOp<memref::AllocOp>()) return memref;
+    if (auto *defOp = memref.getDefiningOp()) {
+      if (auto viewOp = dyn_cast<ViewLikeOpInterface>(defOp)) {
+        memref = viewOp.getViewSource();
+        continue;
+      }
+    }
+    break;
+  }
+  return memref;
+}
+
 struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBase<ReductionSiblingRecomputePass> {
  public:
   void runOnOperation() override;
@@ -82,6 +97,7 @@ struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBas
     SmallVector<memref::AllocOp> allocs;
     llvm::DenseMap<Value, TraceEntry> memrefTraceMap;
     llvm::DenseSet<Value> reduceOutputMemrefs;
+    llvm::DenseSet<Value> retainedMemrefs;
     static bool isLocalAlloc(Value memref) { return memref && memref.getDefiningOp<memref::AllocOp>(); }
   };
 
@@ -152,6 +168,8 @@ struct ReductionSiblingRecomputePass : public impl::ReductionSiblingRecomputeBas
 
   // Cleanup.
   void eraseDeadLocalStores(const llvm::DenseSet<Value> &rewrittenMemrefs);
+  void eraseDeadChain(Value val);
+  void eraseDeadLoops(func::FuncOp func);
 };
 
 void ReductionSiblingRecomputePass::printScanInfo(llvm::raw_ostream &os) {
@@ -166,6 +184,13 @@ void ReductionSiblingRecomputePass::printScanInfo(llvm::raw_ostream &os) {
 
   os << "Reduce output memrefs (" << scanInfo.reduceOutputMemrefs.size() << "):\n";
   for (Value memref : scanInfo.reduceOutputMemrefs) {
+    os << "  ";
+    memref.print(os);
+    os << "\n";
+  }
+
+  os << "Retained memrefs (" << scanInfo.retainedMemrefs.size() << "):\n";
+  for (Value memref : scanInfo.retainedMemrefs) {
     os << "  ";
     memref.print(os);
     os << "\n";
@@ -200,16 +225,29 @@ SmallVector<Value> ReductionSiblingRecomputePass::remapIndices(ValueRange indice
 }
 
 // Finds the dominating store in the same block that writes the same location as loadOp (local alloc only).
+// Scans backward past loads and stores to different memrefs, since local allocs cannot alias.
 Operation *ReductionSiblingRecomputePass::findForwardableStore(Operation *loadOp) {
   if (!loadOp || !loadOp->getBlock() || !FuncScanInfo::isLocalAlloc(loadOp->getOperand(0))) {
     return nullptr;
   }
+  Value targetMemref = loadOp->getOperand(0);
 
   for (Operation *cursor = loadOp->getPrevNode(); cursor; cursor = cursor->getPrevNode()) {
-    if (isa<affine::AffineStoreOp, memref::StoreOp>(cursor) && sameAccessInBlock(cursor, loadOp)) {
-      return cursor;
+    if (isa<affine::AffineStoreOp, memref::StoreOp>(cursor)) {
+      if (sameAccessInBlock(cursor, loadOp)) {
+        return cursor;
+      }
+      // A store to a different memref cannot alias a local alloc; safe to skip.
+      // A store to the same memref with different indices could alias; must stop.
+      if (CommonUtils::getStoreMemref(cursor) != targetMemref) {
+        continue;
+      }
+      break;
     }
-    if (!isSupportedCloneOp(cursor, /*allowLoads=*/false)) {
+    if (isa<affine::AffineLoadOp, memref::LoadOp>(cursor)) {
+      continue;
+    }
+    if (!isMemoryEffectFree(cursor)) {
       break;
     }
   }
@@ -299,8 +337,9 @@ Value ReductionSiblingRecomputePass::cloneLoadValue(Operation *defOp, OpBuilder 
     return {};
   }
 
-  // Non-local alloc or reduce output: emit load with remapped indices (keep as-is).
-  if (!FuncScanInfo::isLocalAlloc(loadMemref) || scanInfo.reduceOutputMemrefs.contains(loadMemref)) {
+  // Non-local alloc, reduce output, or retained alloc: emit load with remapped indices (keep as-is).
+  if (!FuncScanInfo::isLocalAlloc(loadMemref) || scanInfo.reduceOutputMemrefs.contains(loadMemref) ||
+      scanInfo.retainedMemrefs.contains(loadMemref)) {
     return emitRemappedLoad(defOp, builder, remap);
   }
 
@@ -400,7 +439,7 @@ void ReductionSiblingRecomputePass::processChildLoop(affine::AffineForOp childLo
     if (auto loadOp = dyn_cast<affine::AffineLoadOp>(opPtr)) {
       Value memref = loadOp.getMemRef();
       if (FuncScanInfo::isLocalAlloc(memref) && !scanInfo.reduceOutputMemrefs.contains(memref) &&
-          scanInfo.memrefTraceMap.count(memref)) {
+          !scanInfo.retainedMemrefs.contains(memref) && scanInfo.memrefTraceMap.count(memref)) {
         candidateLoads.push_back(loadOp);
       }
     } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(opPtr)) {
@@ -412,6 +451,9 @@ void ReductionSiblingRecomputePass::processChildLoop(affine::AffineForOp childLo
   });
 
   // Phase 1: rewrite loads using trace map from PREVIOUS siblings.
+  // Share remap across all candidate loads so that common sub-expressions
+  // (e.g., a tanh chain referenced by multiple loads) are cloned only once.
+  ValueMap remap;
   for (affine::AffineLoadOp loadOp : candidateLoads) {
     auto it = scanInfo.memrefTraceMap.find(loadOp.getMemRef());
     if (it == scanInfo.memrefTraceMap.end()) {
@@ -419,7 +461,6 @@ void ReductionSiblingRecomputePass::processChildLoop(affine::AffineForOp childLo
     }
     TraceEntry &entry = it->second;
 
-    ValueMap remap;
     if (!matchCrossLoopAccess(entry.store, entry.writerLoop, loadOp, childLoop, remap)) {
       continue;
     }
@@ -505,11 +546,66 @@ void ReductionSiblingRecomputePass::eraseDeadLocalStores(const llvm::DenseSet<Va
       continue;
     }
     for (Operation *store : storeUsers) {
+      Value storedVal = CommonUtils::getStoreValue(store);
       store->erase();
+      eraseDeadChain(storedVal);
     }
     if (allocOp->use_empty()) {
       allocOp.erase();
     }
+  }
+}
+
+// Backward-propagates dead code elimination from a value whose sole user was just erased.
+// Iteratively erases the defining op and its operands if they become unused.
+// Uses a worklist to avoid use-after-free when sibling operands share defining ops
+// (e.g., erasing one operand's chain can free the defining op of another operand).
+void ReductionSiblingRecomputePass::eraseDeadChain(Value val) {
+  if (!val) return;
+  auto *startOp = val.getDefiningOp();
+  if (!startOp) return;
+
+  SmallVector<Operation *> worklist;
+  llvm::SmallPtrSet<Operation *, 16> erased;
+  worklist.push_back(startOp);
+
+  while (!worklist.empty()) {
+    Operation *defOp = worklist.pop_back_val();
+    if (erased.count(defOp) || !defOp->use_empty()) continue;
+    if (!isMemoryEffectFree(defOp) && !isa<affine::AffineLoadOp, memref::LoadOp>(defOp)) continue;
+
+    for (Value operand : defOp->getOperands()) {
+      if (auto *inputOp = operand.getDefiningOp()) {
+        if (!erased.count(inputOp)) {
+          worklist.push_back(inputOp);
+        }
+      }
+    }
+    erased.insert(defOp);
+    defOp->erase();
+  }
+}
+
+// Single-pass removal of affine.for loops whose bodies contain no store operations.
+// Walks bottom-up (reverse) so inner dead loops are erased before outer ones.
+void ReductionSiblingRecomputePass::eraseDeadLoops(func::FuncOp func) {
+  SmallVector<affine::AffineForOp> deadLoops;
+  func.walk([&](affine::AffineForOp forOp) {
+    bool hasSideEffect = false;
+    forOp.walk([&](Operation *inner) -> WalkResult {
+      if (inner == forOp.getOperation()) return WalkResult::advance();
+      if (isa<affine::AffineStoreOp, memref::StoreOp>(inner)) {
+        hasSideEffect = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (!hasSideEffect) {
+      deadLoops.push_back(forOp);
+    }
+  });
+  for (affine::AffineForOp loop : llvm::reverse(deadLoops)) {
+    loop.erase();
   }
 }
 
@@ -522,6 +618,7 @@ void ReductionSiblingRecomputePass::runOnOperation() {
   scanInfo.allocs.clear();
   scanInfo.memrefTraceMap.clear();
   scanInfo.reduceOutputMemrefs.clear();
+  scanInfo.retainedMemrefs.clear();
 
   // Collect allocs and identify reduce output memrefs across the entire function.
   func.walk([&](Operation *op) {
@@ -535,6 +632,17 @@ void ReductionSiblingRecomputePass::runOnOperation() {
         if (defOp && defOp->hasAttr(kReductionAxesStr)) {
           scanInfo.reduceOutputMemrefs.insert(storeOp.getMemRef());
         }
+      }
+    }
+  });
+
+  // Identify retained local allocs: those reachable from return values
+  // (directly or through view-like ops) that must not be eliminated.
+  func.walk([&](func::ReturnOp returnOp) {
+    for (Value retVal : returnOp.getOperands()) {
+      Value underlying = traceToAlloc(retVal);
+      if (FuncScanInfo::isLocalAlloc(underlying)) {
+        scanInfo.retainedMemrefs.insert(underlying);
       }
     }
   });
@@ -555,6 +663,7 @@ void ReductionSiblingRecomputePass::runOnOperation() {
       }
     }
     eraseDeadLocalStores(rewrittenMemrefs);
+    eraseDeadLoops(func);
   }
 }
 
