@@ -204,3 +204,106 @@ time python -u run_test_all_kernels_evolve_passk.py \
 ### 说明
 
 运行该命令后，系统会自动完成 Designer → Coder → Verifier 的生成、编译、运行与校验流程。日志、临时产物和评测结果将输出到工作区对应目录中，便于进一步分析。
+
+---
+
+## 9 Code Review 问题修复（P0 / P1）
+
+本节对应 Code Review 报告（[`review.md`](./review.md)，审查对象 commit `fe19fda5`）中标记的 3 个 P0 阻断性问题与 3 个 P1 高风险问题，逐条说明修复方案与修复位置。
+
+### 问题修复
+
+#### P0-1 安全漏洞：`exec()` 无沙箱保护 → 已修复
+
+**原始问题**：`extractor_torch.py` 中 `exec(code_str, ns, ns)` 直接执行用户代码，无任何沙箱保护，可执行任意系统命令。
+
+**修复方案（两层防护）**：
+
+- **第一层（AST 静态检查）**：新增 `_validate_code_safety(code_str)`，在 `exec()` 执行前用 `ast.parse()` + `ast.walk()` 扫描代码树，命中黑名单（`_DANGEROUS_MODULES`：`os`、`subprocess`、`sys` 等；`_DANGEROUS_CALLS`：`eval`、`__import__`、`system` 等）则直接抛 `ValueError`，阻止执行。
+- **第二层（运行时沙箱）**：用 `_SAFE_BUILTINS` 白名单替换 `__builtins__`，仅放行 KernelBench 代码所需的内建函数（`range`、`len`、`isinstance` 等）；通过 `_restricted_import()` 拦截 `__import__`，仅允许 `torch`、`math`、`numpy` 等安全模块导入。`exec()` 改为 `exec(code_str, ns, ns)`，其中 `ns = {"__builtins__": _SAFE_BUILTINS, "__name__": "__kernelbench_sandbox__"}`。
+
+#### P0-2 运行时错误：错误包名引用 → 已修复
+
+**原始问题**：`coder.py` 中 `from ai_kernel_generator.core.extractor_torch import ...`，包名写错，导致 `ModuleNotFoundError`。
+
+**修复方案**：改为正确包名：
+```python
+from akg_agents.core.extractor_torch import extract_kernelbench_shapes_dtypes
+```
+
+#### P0-3 逻辑错误：FX trace 失败时用输入 shape 冒充输出 shape → 已修复
+
+**原始问题**：`symbolic_trace` 失败时 `graph_tensors` 为空，代码 fallback 为直接取第一个输入的 shape 作为输出 shape，对 matmul、conv、reduction 等算子完全错误。
+
+**修复方案**：
+
+- 新增 `_infer_output_shape_via_forward(model, real_inputs)` 函数：将输入转为 meta tensor，在 `torch.no_grad()` 下跑一次 meta forward，从输出张量中读取真实 shape，作为 `fallback_output_shape` 返回。
+- 删除原来用输入 shape 冒充输出 shape 的 fallback 逻辑；`_extract_op_features()` 仅使用 `op_meta["fallback_output_shape"]`，不再回退到输入 shape。
+
+#### P1-4 算子名称匹配过于宽泛（子串误命中）→ 已修复
+
+**原始问题**：用 `any(op in target_str for op in compute_ops)` 做子串匹配，`"mm"` 会命中 `"comma"`，`"add"` 会命中 `"baddc"` 等。
+
+**修复方案**：引入 token 级精确匹配机制（详见 5.5.2 节），将 `manager.py` 中所有算子语义判断替换为基于 `SEMANTIC_RULES` 词表的 `_rule_matches()` 调用，匹配粒度从字符级子串提升到 token 级，彻底消除误命中。
+
+#### P1-5 异常处理过于宽泛且静默失败 → 已修复
+
+**原始问题**：`except Exception as e` 捕获所有异常；`import logging` 在函数内部；只记录 `warning` 级别；失败后静默继续。
+
+**修复方案**：
+- 将 `import logging` / `logger = logging.getLogger(__name__)` 移至文件顶部；
+- `except` 改为具体类型 `except (RuntimeError, TypeError, AttributeError)`；
+- 改为 `logger.error(..., exc_info=True)` 记录完整堆栈；
+- FX trace 失败后 `gm` 保持 `None`，`graph_tensors` 为空，但不再直接返回错误 shape（由 P0-3 修复兜底）。
+
+#### P1-6 违反封装原则：外部直接调用私有方法 → 已修复
+
+**原始问题**：`designer.py` 中 `searcher._extract_op_features(self.meta)` 直接调用以 `_` 开头的私有方法。
+
+**修复方案**：在 `MetaPromptSearcher` 中新增公共方法：
+```python
+def extract_op_features(self, op_meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Public API for extracting operator features from op_meta."""
+    return self._extract_op_features(op_meta)
+```
+`designer.py` 改为调用 `searcher.extract_op_features(self.meta)`，私有实现可独立演进。
+
+### 代码改动
+
+本节记录在上述第一阶段工作（commit `8da1e29a`）基础上，本轮新增的具体代码改动，方便追踪增量变更。
+
+####  `extractor_torch.py`：引入 AST 静态分析，构建双路并行提取
+
+**原有状态**：仅依赖 FX `symbolic_trace` + `ShapeProp` 提取语义；FX trace 失败时 `graph_tensors` 为空，`static_feature_hints` 中所有布尔值全部退化为 `False`，语义信息完全丢失。
+
+**本轮改动**：
+
+1. **新增 `_ast_extract_op_hints(tree)`**：对 KernelBench 算子源码的 AST 进行静态扫描，无需执行代码，识别三类调用模式并直接映射到语义标签：
+   - `nn.Xxx`（`__init__` 中的模块实例化）：如 `nn.Conv2d` → `is_conv`，`nn.BatchNorm2d` → `has_online_reduction`
+   - `F.xxx`（`forward` 中的 functional 调用）：如 `F.softmax` → `has_online_reduction`
+   - `torch.xxx`（顶层函数）：如 `torch.matmul` → `is_matrix`
+   - 自动解析 `import torch.nn as nn` / `import torch.nn.functional as F` 等别名，支持 `torch.nn.Xxx` 完整路径
+
+2. **`_validate_code_safety()` 改为返回 `ast.AST`**：原先返回 `None`，现在返回已解析好的 AST 树，供下游 `_ast_extract_op_hints()` 直接复用，避免对同一段代码进行二次 `ast.parse()`。
+
+3. **`_build_static_feature_hints()` 新增 `ast_hints` 参数**：将 FX 结果与 AST 结果取 OR 合并。FX trace 成功时 AST 作为补充信号；FX trace 失败时 AST 成为**唯一**语义来源，保证 `static_feature_hints` 不全为 `False`。
+
+4. **`extract_kernelbench_shapes_dtypes()` 主函数**：调用链改为 `tree = _validate_code_safety(code_str)` → `ast_hints = _ast_extract_op_hints(tree)` → `_build_static_feature_hints(..., ast_hints)`，完成双路整合。
+
+#### `manager.py`：算子语义识别精准化与公共接口暴露
+
+**原有状态**：`_extract_op_features()` 内部使用字符串 `in` 子串匹配做语义识别，存在误命中风险（如 `"mm"` 子串匹配 `"comma"`）；Epilogue 检测无位置约束；`_extract_op_features` 为私有方法，外部调用需直接访问私有接口。
+
+**本轮改动**：
+
+1. **新增 `SEMANTIC_RULES` 类级词表**：将五类语义的关键词（`matrix`、`conv`、`epilogue`、`reduction`、`online_reduction`）集中配置，按 `exact` / `prefix` / `suffix` 三种模式组织。扩展算子识别只需改此词表，无需改动流程逻辑。
+
+2. **新增 `_tokenize_target(target)`**：将算子名拆分为 token 列表，同时展开下划线子 token（如 `conv_transpose2d` → `["conv_transpose2d", "conv", "transpose2d", "2d"]`），使匹配粒度精确到 token 而非子串。
+
+3. **新增 `_matches_semantic_rule(target, exact, prefix, suffix)`**：基于 token 列表的通用语义匹配器，被所有算子类别复用。
+
+4. **新增 `_rule_matches(target, rule_name)`**：按名称查找 `SEMANTIC_RULES` 词表并调用 `_matches_semantic_rule()`；`_extract_op_features()` 中所有语义判断由 `self._rule_matches()` 统一完成，替代原有的散落子串匹配。
+
+5. **Epilogue 检测增加位置感知**：在 `_extract_op_features()` 中，只有出现在至少一个主计算节点（矩阵/卷积）**之后**的逐点算子才被判定为 Epilogue，避免将算子开头的激活函数误报。
+
+6. **新增 `extract_op_features()` 公共方法**：作为 `_extract_op_features()` 的外部访问入口，外部代码（如 `designer.py`）改为调用公共方法，私有实现可独立演进。

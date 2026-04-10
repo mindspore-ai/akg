@@ -265,7 +265,7 @@ class Designer(AgentBase):
         searcher = MetaPromptSearcher(manager, arch=self.arch)
         op_features = None
         if self.meta is not None:
-            op_features = searcher._extract_op_features(self.meta)
+            op_features = searcher.extract_op_features(self.meta)
         print("=== Extracted Operator Features ===")
         print(op_features)
         print("===================================")
