@@ -12,7 +12,8 @@ endif()
 set(TORCHMLIR_VERSION "2025.8.13" CACHE INTERNAL "Torch-MLIR 2025.8.13 daily version")
 set(TORCHMLIR_COMMIT "155680c08e08bff6d2e6883415e3f5a1b474d96e" CACHE INTERNAL "Torch-MLIR commit hash")
 set(TORCHMLIR_SHA256 "f39644fbaae44400da69862251d888bcee5c1fec54b62c77a1a8596958620705")
-set(TORCHMLIR_URL "https://gitee.com/mirrors_llvm/torch-mlir/repository/archive/${TORCHMLIR_COMMIT}.zip")
+set(TORCHMLIR_BASE "gitee.com/mirrors_llvm/torch-mlir/repository/archive")
+set(TORCHMLIR_URL "https://${TORCHMLIR_BASE}/${TORCHMLIR_COMMIT}.zip")
 
 akg_add_pkg(torch_mlir
     VER ${TORCHMLIR_VERSION}
@@ -25,6 +26,7 @@ akg_add_pkg(torch_mlir
     PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/004-disable-torch-to-linalg.patch
     PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/005-fix-compilation-errors.patch
     PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/006-disable-aten-fold-constant.patch
+    PATCHES ${TOP_DIR}/third_party/patch/torch-mlir/007-disable-adaptive-avg-pool2d-canonicalizer.patch
 )
 
 set(TORCHMLIR_SOURCE_DIR ${torch_mlir_DIRPATH})
