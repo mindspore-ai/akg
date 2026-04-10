@@ -88,9 +88,11 @@ def Dvm_BinaryOpType : I32EnumAttr<"BinaryOpType", "DVM binary operation type",
 }
 
 def Dvm_ReduceOpSum : I32EnumAttrCase<"Sum", 0>;
+def Dvm_ReduceOpMax : I32EnumAttrCase<"Max", 1>;
+def Dvm_ReduceOpMin : I32EnumAttrCase<"Min", 2>;
 
 def Dvm_ReduceOpType : I32EnumAttr<"ReduceOpType", "DVM reduce operation type",
-    [Dvm_ReduceOpSum]> {
+    [Dvm_ReduceOpSum, Dvm_ReduceOpMax, Dvm_ReduceOpMin]> {
   let cppNamespace = "::mlir::dvm";
   let description = [{
     Enum for ReduceOp input parameter.
