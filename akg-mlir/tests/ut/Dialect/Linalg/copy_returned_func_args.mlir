@@ -1,4 +1,4 @@
-// RUN: akg-opt %s --copy-returned-block-args | FileCheck %s
+// RUN: akg-opt %s --copy-returned-func-args | FileCheck %s
 
 // CHECK-LABEL: func @return_tensor_arg
 // CHECK-SAME: (%[[ARG:.*]]: tensor<2x3xf32>)
