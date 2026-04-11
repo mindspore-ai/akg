@@ -374,6 +374,18 @@ class LangGraphTask(BaseLangGraphTask):
         self.config["cache_mode"] = cache_mode
         self.config["cache_session_hash"] = cache_session_hash
 
+        # Replay Guard: attach node-level snapshot store for record/replay
+        if cache_mode in ("record", "replay"):
+            try:
+                from akg_agents.core_v2.langgraph_base.replay_guard import ReplaySnapshotStore
+                from akg_agents.core_v2.llm.cache.cache_config import load_cache_config
+                cache_cfg = load_cache_config()
+                cache_file = cache_cfg.get("cache_file_path", "~/.akg/llm_cache/llm_test_cache.json")
+                guard = ReplaySnapshotStore(cache_file_path=cache_file, mode=cache_mode)
+                state["_replay_guard"] = guard
+            except Exception as exc:
+                logger.warning(f"[ReplayGuard] Failed to initialize: {exc}")
+
         # 加载 expert_suggestion（suggestion_docs.md）供 conductor/router 使用
         expert_suggestion = ""
         for agent_key in ("coder", "kernel_gen", "designer"):
