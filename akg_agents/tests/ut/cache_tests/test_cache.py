@@ -1,3 +1,17 @@
+# Copyright 2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import pytest
 from akg_agents.core_v2.llm.cache import LLMCache, generate_cache_key
 
@@ -28,11 +42,6 @@ class TestLLMCacheCore:
         llm_cache.clear_all_cache()
         assert len(llm_cache.get_all_cache_keys()) == 0
 
-    def test_cache_disabled(self, temp_cache_file, test_messages, test_result, test_params):
-        disabled_cache = LLMCache(enable=False, cache_file_path=temp_cache_file)
-        disabled_cache.set(test_messages, test_result, **test_params)
-        assert disabled_cache.get(test_messages, **test_params) is None
-
     def test_cache_messages_complete_saved(self, llm_cache, test_messages, test_result, test_params):
         llm_cache.set(test_messages, test_result, **test_params)
         cache_key = generate_cache_key(test_messages, **test_params)
@@ -44,7 +53,6 @@ class TestLLMCacheCore:
             max_memory_size=10,
             cache_file_path=temp_cache_file,
             expire_seconds=1,
-            enable=True,
         )
         expiring_cache.set(test_messages, test_result, **test_params)
 
@@ -64,3 +72,8 @@ class TestLLMCacheCore:
             **test_params,
         )
         assert cached_result == test_result
+
+    def test_cache_legacy_enable_kwarg_is_ignored(self, temp_cache_file, test_messages, test_result, test_params):
+        cache = LLMCache(enable=False, cache_file_path=temp_cache_file)
+        cache.set(test_messages, test_result, **test_params)
+        assert cache.get(test_messages, **test_params) == test_result

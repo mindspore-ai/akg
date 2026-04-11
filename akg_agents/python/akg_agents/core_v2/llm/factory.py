@@ -43,18 +43,17 @@ def create_llm_client(
     top_p: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     presence_penalty: Optional[float] = None,
-    enable_cache: Optional[bool] = None,
     cache_config_path: Optional[str] = None,
     **kwargs
 ) -> LLMClient:
     """
     根据配置创建 LLMClient
-    
+
     优先级：
     1. 函数参数（直接指定）
     2. 配置文件/环境变量中的模型配置
     3. 默认值
-    
+
     Args:
         model_level: settings.json 中 models 的级别/名称
                      - 预定义级别："complex" / "standard" / "fast"
@@ -65,22 +64,21 @@ def create_llm_client(
         api_key: API 密钥（直接指定，覆盖配置）
         temperature: 温度参数（直接指定，覆盖配置）
         max_tokens: 最大 token 数（直接指定，覆盖配置）
-        enable_cache: 是否启用缓存（可选，覆盖缓存配置）
         cache_config_path: 缓存配置文件路径（可选）
         **kwargs: 其他配置
-    
+
     Returns:
         LLMClient 实例
-    
+
     使用示例：
         # 方式 1：使用配置中的模型级别
         complex_client = create_llm_client(model_level="complex")
         standard_client = create_llm_client(model_level="standard")
         fast_client = create_llm_client(model_level="fast")
-        
+
         # 方式 2：使用自定义配置（如 coder, designer）
         coder_client = create_llm_client(model_level="coder", session_id="xxx")
-        
+
         # 方式 3：直接指定参数（不依赖配置）
         client = create_llm_client(
             model_name="gpt-4",
@@ -88,20 +86,20 @@ def create_llm_client(
             api_key="sk-xxx",
             temperature=0.7
         )
-        
+
         # 方式 4：使用默认配置
         client = create_llm_client()  # 使用 default_model
     """
     # 加载配置
     settings = get_settings()
-    
+
     # 确定要使用的 model_level
     if model_level is None:
         model_level = settings.default_model
-    
+
     # 从配置中获取对应的模型配置
     model_config = settings.models.get(model_level)
-    
+
     if model_config is None:
         # 如果调用方显式传了连接参数，允许无配置使用
         if base_url and api_key and model_name:
@@ -136,19 +134,21 @@ def create_llm_client(
         final_temperature = temperature if temperature is not None else model_config.temperature
         final_max_tokens = max_tokens if max_tokens is not None else model_config.max_tokens
         final_top_p = top_p if top_p is not None else model_config.top_p
-        final_frequency_penalty = frequency_penalty if frequency_penalty is not None else model_config.frequency_penalty
+        final_frequency_penalty = (
+            frequency_penalty if frequency_penalty is not None else model_config.frequency_penalty
+        )
         final_presence_penalty = presence_penalty if presence_penalty is not None else model_config.presence_penalty
         final_timeout = kwargs.pop("timeout", model_config.timeout)
         final_extra_body = kwargs.pop("extra_body", model_config.extra_body)
         # 向后兼容：thinking_enabled=True → 默认 extra_body
         if not final_extra_body and kwargs.pop("thinking_enabled", False):
             final_extra_body = {"thinking": {"type": "enabled"}}
-    
+
     logger.info(
         f"Creating LLMClient: level={model_level}, model={final_model_name}, "
         f"base_url={final_base_url}, extra_body={bool(final_extra_body)}"
     )
-    
+
     # 创建 Provider
     provider = LLMProvider(
         model_name=final_model_name,
@@ -158,7 +158,7 @@ def create_llm_client(
         extra_body=final_extra_body,
         **kwargs
     )
-    
+
     # 创建 Client
     client = LLMClient(
         provider=provider,
@@ -174,12 +174,11 @@ def create_llm_client(
     try:
         client = attach_cache_to_client(
             client,
-            enable_cache=enable_cache,
             cache_config_path=cache_config_path,
         )
     except Exception as exc:
         logger.warning(f"Failed to attach LLM cache: {exc}")
-    
+
     return client
 
 
@@ -191,35 +190,35 @@ def create_embedding_model(
 ) -> Embeddings:
     """
     根据配置创建 Embedding 模型
-    
+
     优先级：
     1. 函数参数（直接指定）
     2. 环境变量 AKG_AGENTS_EMBEDDING_*
     3. settings.json 中的 embedding 配置
-    
+
     Args:
         base_url: API 地址（直接指定，覆盖配置）
         api_key: API 密钥（直接指定，覆盖配置）
         model_name: 模型名称（直接指定，覆盖配置）
         timeout: 超时时间（秒）
-    
+
     Returns:
         Embeddings: LangChain 兼容的 Embedding 模型实例
-    
+
     Raises:
         ValueError: 配置不完整时抛出
-    
+
     使用示例：
         # 方式 1：使用配置（环境变量或 settings.json）
         embedding = create_embedding_model()
-        
+
         # 方式 2：直接指定参数
         embedding = create_embedding_model(
             base_url="https://api.siliconflow.cn/v1",
             api_key="sk-xxx",
             model_name="BAAI/bge-large-zh-v1.5"
         )
-    
+
     环境变量：
         AKG_AGENTS_EMBEDDING_BASE_URL: API 地址
         AKG_AGENTS_EMBEDDING_API_KEY: API 密钥
@@ -228,13 +227,13 @@ def create_embedding_model(
     """
     # 加载配置
     settings = get_settings()
-    
+
     # 确定最终配置（参数 > 配置）
     final_base_url = base_url or settings.embedding.base_url
     final_api_key = api_key or settings.embedding.api_key
     final_model_name = model_name or settings.embedding.model_name
     final_timeout = timeout if timeout is not None else settings.embedding.timeout
-    
+
     # 检查配置是否完整
     if not final_base_url or not final_api_key or not final_model_name:
         missing = []
@@ -244,17 +243,17 @@ def create_embedding_model(
             missing.append("api_key (AKG_AGENTS_EMBEDDING_API_KEY)")
         if not final_model_name:
             missing.append("model_name (AKG_AGENTS_EMBEDDING_MODEL_NAME)")
-        
+
         raise ValueError(
             f"Embedding 配置不完整，缺少: {', '.join(missing)}。\n"
             f"请设置环境变量或在 settings.json 中配置 embedding 字段。"
         )
-    
+
     # 构建 embedding API 端点
     embedding_url = f"{final_base_url.rstrip('/')}/embeddings"
-    
+
     logger.info(f"Creating embedding model: url={embedding_url}, model={final_model_name}")
-    
+
     return OpenAICompatibleEmbeddings(
         api_url=embedding_url,
         model_name=final_model_name,
