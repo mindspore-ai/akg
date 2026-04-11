@@ -71,7 +71,7 @@ std::unique_ptr<OperationPass<func::FuncOp>> createCloneTensorEmptyPass();
 std::unique_ptr<OperationPass<func::FuncOp>> createEraseUnusedOperandsAndResultsPass();
 
 /// Copy function inputs that are returned directly so `return` uses a copied value.
-std::unique_ptr<OperationPass<func::FuncOp>> createCopyReturnedBlockArgsPass();
+std::unique_ptr<OperationPass<func::FuncOp>> createCopyReturnedFuncArgsPass();
 
 /// Pattern to fuse `linalg.generic` -> `linalg.template` operations
 /// when both operations are fusable elementwise operations.

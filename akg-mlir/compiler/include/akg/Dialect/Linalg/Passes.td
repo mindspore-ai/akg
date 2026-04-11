@@ -152,15 +152,15 @@ def EraseUnusedOperandsAndResults : Pass<"erase-unused-operands-and-results", "f
   ];
 }
 
-def CopyReturnedBlockArgs : Pass<"copy-returned-block-args", "func::FuncOp"> {
-  let summary = "Copy returned function block arguments via linalg.copy (tensor) or alloc+linalg.copy (memref)";
+def CopyReturnedFuncArgs : Pass<"copy-returned-func-args", "func::FuncOp"> {
+  let summary = "Copy returned function arguments via linalg.copy (tensor) or alloc+linalg.copy (memref)";
   let description = [{
     When a `func.return` operand is a block argument of the function entry block
     (i.e. a direct function input), this pass inserts a copy (`tensor.empty` +
     `linalg.copy` for ranked tensors, `memref.alloc` + `linalg.copy` for memrefs)
     before the return and replaces the operand with the copied value.
   }];
-  let constructor = "mlir::createCopyReturnedBlockArgsPass()";
+  let constructor = "mlir::createCopyReturnedFuncArgsPass()";
   let dependentDialects = [
     "linalg::LinalgDialect",
     "tensor::TensorDialect",
