@@ -62,5 +62,19 @@
     },
     "create_time": 1775565379.232678,
     "expire_seconds": -1
+  },
+  "_node_snapshots": {
+    "coder@0": {
+      "coder_code": {
+        "__hash": "5b5a6bd5a15a40ce",
+        "__len": 7693
+      },
+      "codegen_invalid": false,
+      "codegen_invalid_reason": null
+    },
+    "verifier@1": {
+      "verifier_result": true,
+      "verifier_error": ""
+    }
   }
 }
