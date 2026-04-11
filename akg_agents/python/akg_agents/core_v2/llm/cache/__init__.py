@@ -16,6 +16,11 @@ from .llm_cache import LLMCache
 from .cache_utils import generate_cache_key, read_cache_file, write_cache_file
 from .cache_config import load_cache_config
 from .cache_decorator import attach_cache_to_client
+from .replay_catalog import (
+    ReplayCacheScenario,
+    get_project_cache_dir,
+    discover_cpu_attention_replay_scenarios,
+)
 
 __all__ = [
     "LLMCache",
@@ -24,4 +29,7 @@ __all__ = [
     "write_cache_file",
     "load_cache_config",
     "attach_cache_to_client",
+    "ReplayCacheScenario",
+    "get_project_cache_dir",
+    "discover_cpu_attention_replay_scenarios",
 ]
