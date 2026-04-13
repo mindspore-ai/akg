@@ -18,6 +18,14 @@ index 47bd30d6..3255a8f0 100644
  }
 
  def Torch_AtenNewZerosOp : Torch_Op<"aten.new_zeros", [
+@@ -11511,7 +11511,6 @@
+       printDefaultTorchOp(printer, *this, 2, 1);
+     }
+   }];
+-  let hasFolder = 1;
+ }
+ 
+ def Torch_AtenLiftFreshCopyOp : Torch_Op<"aten.lift_fresh_copy", [
 @@ -13775,7 +13773,6 @@ def Torch_AtenFullOp : Torch_Op<"aten.full", [
        printDefaultTorchOp(printer, *this, 6, 1);
      }
@@ -35,6 +43,27 @@ diff --git a/lib/Dialect/Torch/IR/TorchOps.cpp b/lib/Dialect/Torch/IR/TorchOps.c
 index 8c1e8915..8fe7abdf 100644
 --- a/lib/Dialect/Torch/IR/TorchOps.cpp
 +++ b/lib/Dialect/Torch/IR/TorchOps.cpp
+@@ -2917,20 +2917,6 @@
+         op, op.getType(), op.getSelf(), op.getMask(), scalarVal);
+     return failure();
+   });
+-}
+-
+-//===----------------------------------------------------------------------===//
+-// AtenCloneOp
+-//===----------------------------------------------------------------------===//
+-
+-OpFoldResult AtenCloneOp::fold(FoldAdaptor adaptor) {
+-  // note: memory_format would be ignored
+-  if (getSelf().getType() == getResult().getType() &&
+-      llvm::dyn_cast<ValueTensorType>(getSelf().getType())) {
+-    // self should have value semantics
+-    return getSelf();
+-  }
+-  return {};
+ }
+ 
+ //===----------------------------------------------------------------------===//
 @@ -4835,130 +4835,6 @@ OpFoldResult AtenItemOp::fold(FoldAdaptor adaptor) {
    return nullptr;
  }
