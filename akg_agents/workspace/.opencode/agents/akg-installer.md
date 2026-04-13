@@ -194,12 +194,8 @@ bash -c "source $VENV_PATH/bin/activate && cd $AKG_AGENTS_DIR && source env.sh &
 
 | 行为 | 级别 |
 |------|------|
-| 裸执行 `pip`/`python`（未激活环境） | ⛔ 致命 |
-| 依赖 `conda activate` / `source activate` 跨命令持久化 | ⛔ 致命 |
 | 扫描或使用指定环境以外的环境 | ⛔ 致命 |
 | 当前目录已在仓库内却仍克隆到其他位置 | ⛔ 致命 |
-| 用 `echo 'y' \|` 管道代替 `--yes` 标志 | ⛔ 致命 |
 | 覆盖 settings.json 不备份 | ❌ 错误 |
 | 有 API Key 却跳过 test_run_llm.py | ❌ 错误 |
 | 无 API Key 时不检查 OpenCode 配置 | ❌ 错误 |
-| 不 `source env.sh` 就运行验证脚本 | ❌ 错误 |

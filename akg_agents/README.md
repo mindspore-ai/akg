@@ -36,7 +36,7 @@ The current production scenario is **AI kernel code generation**: leveraging LLM
 
 ## 🗓️ 2. Changelog
 - 2026-03-31: Added [AutoResearch](./docs/v2/AutoResearch.md) workflow — agent-driven iterative deep optimization with KernelVerifier eval, supporting all DSLs.
-- 2026-03-11：Streamline the [operator optimization](./docs/v2/OpOptimizer.md) process by integrating AKG Agents and Opencode.
+- 2026-03-11：Streamline the [operator optimization](./docs/v2/AKG-Op.md) process by integrating AKG Agents and OpenCode (`akg-op` Agent).
 - 2026-02-26: Supported PyPTO backend code generation.
 - 2026-02-15: Documentation reorganized. Legacy docs archived to `docs/v1/`, new docs consolidated under `docs/v2/`. 
 - 2026-02-10: Core framework refactored (v2). Decoupled general-purpose Agent capabilities from kernel-specific logic to build a reusable multi-agent collaboration framework. See [Architecture](./docs/v2/Architecture.md), [Agent System](./docs/v2/AgentSystem.md), [Skill System](./docs/v2/SkillSystem.md), [Workflow](./docs/v2/Workflow.md), [Trace System](./docs/v2/Trace.md), [Configuration](./docs/v2/Configuration.md).
@@ -204,7 +204,7 @@ akg_agents/
 - **[AutoResearch](./docs/v2/AutoResearch.md)** - Agent-driven iterative deep optimization workflow (ReAct loop with KernelVerifier eval)
 
 ### OpenCode Integration
-- **[op-optimizer User Guide](./docs/v2/OpOptimizer.md)** - End-to-end operator optimization Agent: env setup → fusion analysis (optional) → task extraction → operator generation → code replacement, supporting single-operator optimization and model fusion analysis
+- **[akg-op User Guide](./docs/v2/AKG-Op.md)** - End-to-end operator optimization Agent: env setup → fusion analysis (optional) → task extraction → operator generation → code integration, supporting single-operator optimization and model fusion analysis
 
 ### CLI
 - **[AKG CLI](./docs/v2/AKG_CLI.md)** - Command-line tool usage guide
