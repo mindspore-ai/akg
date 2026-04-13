@@ -239,4 +239,106 @@ module {
 
     return %out, %rsqrt : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32>
   }
+
+  // CHECK-LABEL: func @test_rms_norm_fusion_reciprocal_sqrt
+  // reciprocal(sqrt(add)) is mathematically rsqrt(add) for positive add.
+  func.func @test_rms_norm_fusion_reciprocal_sqrt(%x: !torch.vtensor<[2,4],f32>, %gamma: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,4],f32> {
+    %int2 = torch.constant.int 2
+    %int_neg1 = torch.constant.int -1
+    %true = torch.constant.bool true
+    %none = torch.constant.none
+    %one = torch.constant.int 1
+    %eps = torch.constant.float 1.000000e-05
+    %pow = torch.aten.pow.Tensor_Scalar %x, %int2 : !torch.vtensor<[2,4],f32>, !torch.int -> !torch.vtensor<[2,4],f32>
+    %dims = torch.prim.ListConstruct %int_neg1 : (!torch.int) -> !torch.list<int>
+    %mean = torch.aten.mean.dim %pow, %dims, %true, %none : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[2,4,1],f32>
+    %add = torch.aten.add.Scalar %mean, %eps, %one : !torch.vtensor<[2,4,1],f32>, !torch.float, !torch.int -> !torch.vtensor<[2,4,1],f32>
+    %sqrt = torch.aten.sqrt %add : !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4,1],f32>
+    %scale = torch.aten.reciprocal %sqrt : !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4,1],f32>
+    %norm = torch.aten.mul.Tensor %x, %scale : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4],f32>
+    %out = torch.aten.mul.Tensor %norm, %gamma : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
+
+    // CHECK: {{.*}}:2 = torch.operator "torch.npu.npu_rms_norm"({{[^)]*}}) : (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32>, !torch.float) -> (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32>)
+    // CHECK-NOT: torch.aten.sqrt
+    // CHECK-NOT: torch.aten.reciprocal
+    // CHECK-NOT: torch.aten.rsqrt
+
+    return %out : !torch.vtensor<[2,4],f32>
+  }
+
+  // CHECK-LABEL: func @test_rms_norm_fusion_pow_neg_half
+  // pow(add, -0.5) matches rsqrt(add) for positive add.
+  func.func @test_rms_norm_fusion_pow_neg_half(%x: !torch.vtensor<[2,4],f32>, %gamma: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,4],f32> {
+    %int2 = torch.constant.int 2
+    %int_neg1 = torch.constant.int -1
+    %true = torch.constant.bool true
+    %none = torch.constant.none
+    %one = torch.constant.int 1
+    %eps = torch.constant.float 1.000000e-05
+    %nh = torch.constant.float -5.000000e-01
+    %pow = torch.aten.pow.Tensor_Scalar %x, %int2 : !torch.vtensor<[2,4],f32>, !torch.int -> !torch.vtensor<[2,4],f32>
+    %dims = torch.prim.ListConstruct %int_neg1 : (!torch.int) -> !torch.list<int>
+    %mean = torch.aten.mean.dim %pow, %dims, %true, %none : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[2,4,1],f32>
+    %add = torch.aten.add.Scalar %mean, %eps, %one : !torch.vtensor<[2,4,1],f32>, !torch.float, !torch.int -> !torch.vtensor<[2,4,1],f32>
+    %scale = torch.aten.pow.Tensor_Scalar %add, %nh : !torch.vtensor<[2,4,1],f32>, !torch.float -> !torch.vtensor<[2,4,1],f32>
+    %norm = torch.aten.mul.Tensor %x, %scale : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4],f32>
+    %out = torch.aten.mul.Tensor %norm, %gamma : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
+
+    // CHECK: {{.*}}:2 = torch.operator "torch.npu.npu_rms_norm"({{[^)]*}}) : (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32>, !torch.float) -> (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32>)
+    // CHECK-NOT: torch.aten.pow.Tensor_Scalar
+    // CHECK-NOT: torch.aten.rsqrt
+
+    return %out : !torch.vtensor<[2,4],f32>
+  }
+
+  // CHECK-LABEL: func @test_rms_norm_fusion_mul_xx_variance
+  // mean.dim(mul(x,x)) instead of mean.dim(pow(x,2))
+  func.func @test_rms_norm_fusion_mul_xx_variance(%x: !torch.vtensor<[2,4],f32>, %gamma: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,4],f32> {
+    %int_neg1 = torch.constant.int -1
+    %true = torch.constant.bool true
+    %none = torch.constant.none
+    %one = torch.constant.int 1
+    %eps = torch.constant.float 1.000000e-05
+    %xx = torch.aten.mul.Tensor %x, %x : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
+    %dims = torch.prim.ListConstruct %int_neg1 : (!torch.int) -> !torch.list<int>
+    %mean = torch.aten.mean.dim %xx, %dims, %true, %none : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[2,4,1],f32>
+    %add = torch.aten.add.Scalar %mean, %eps, %one : !torch.vtensor<[2,4,1],f32>, !torch.float, !torch.int -> !torch.vtensor<[2,4,1],f32>
+    %rsqrt = torch.aten.rsqrt %add : !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4,1],f32>
+    %norm = torch.aten.mul.Tensor %x, %rsqrt : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4],f32>
+    %out = torch.aten.mul.Tensor %norm, %gamma : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
+
+    // CHECK: {{.*}}:2 = torch.operator "torch.npu.npu_rms_norm"({{[^)]*}}) : (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32>, !torch.float) -> (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32>)
+    // CHECK-NOT: torch.aten.pow.Tensor_Scalar
+    // CHECK-NOT: torch.aten.mean.dim
+    // CHECK-NOT: torch.aten.mul.Tensor
+
+    return %out : !torch.vtensor<[2,4],f32>
+  }
+
+  // CHECK-LABEL: func @test_rms_norm_fusion_div_ones_over_sqrt
+  // div(ones_like(sqrt(add)), sqrt(add)) == 1/sqrt(add)
+  func.func @test_rms_norm_fusion_div_ones_over_sqrt(%x: !torch.vtensor<[2,4],f32>, %gamma: !torch.vtensor<[2,4],f32>) -> !torch.vtensor<[2,4],f32> {
+    %int2 = torch.constant.int 2
+    %int_neg1 = torch.constant.int -1
+    %true = torch.constant.bool true
+    %none = torch.constant.none
+    %one = torch.constant.int 1
+    %eps = torch.constant.float 1.000000e-05
+    %pow = torch.aten.pow.Tensor_Scalar %x, %int2 : !torch.vtensor<[2,4],f32>, !torch.int -> !torch.vtensor<[2,4],f32>
+    %dims = torch.prim.ListConstruct %int_neg1 : (!torch.int) -> !torch.list<int>
+    %mean = torch.aten.mean.dim %pow, %dims, %true, %none : !torch.vtensor<[2,4],f32>, !torch.list<int>, !torch.bool, !torch.none -> !torch.vtensor<[2,4,1],f32>
+    %add = torch.aten.add.Scalar %mean, %eps, %one : !torch.vtensor<[2,4,1],f32>, !torch.float, !torch.int -> !torch.vtensor<[2,4,1],f32>
+    %sqrt = torch.aten.sqrt %add : !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4,1],f32>
+    %ones = torch.aten.ones_like %sqrt, %none, %none, %none, %none, %none : !torch.vtensor<[2,4,1],f32>, !torch.none, !torch.none, !torch.none, !torch.none, !torch.none -> !torch.vtensor<[2,4,1],f32>
+    %scale = torch.aten.div.Tensor %ones, %sqrt : !torch.vtensor<[2,4,1],f32>, !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4,1],f32>
+    %norm = torch.aten.mul.Tensor %x, %scale : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32> -> !torch.vtensor<[2,4],f32>
+    %out = torch.aten.mul.Tensor %norm, %gamma : !torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32> -> !torch.vtensor<[2,4],f32>
+
+    // CHECK: {{.*}}:2 = torch.operator "torch.npu.npu_rms_norm"({{[^)]*}}) : (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4],f32>, !torch.float) -> (!torch.vtensor<[2,4],f32>, !torch.vtensor<[2,4,1],f32>)
+    // CHECK-NOT: torch.aten.ones_like
+    // CHECK-NOT: torch.aten.div.Tensor
+    // CHECK-NOT: torch.aten.sqrt
+
+    return %out : !torch.vtensor<[2,4],f32>
+  }
 }
