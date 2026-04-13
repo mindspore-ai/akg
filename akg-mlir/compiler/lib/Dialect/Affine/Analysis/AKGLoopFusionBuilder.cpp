@@ -59,15 +59,9 @@ using llvm::SmallVector;
 using mlir::kReductionInitAttr;
 using mlir::kReductionTypeStr;
 
-// Get group by group ID, returns nullptr if group doesn't exist
-GroupPtr MemRefDependenceGraphForFusion::getGroup(unsigned groupId) {
-  return groups.find(groupId) != groups.end() ? groups[groupId] : nullptr;
-}
-
-// Get group by node ID, returns nullptr if node is not in any group
-GroupPtr MemRefDependenceGraphForFusion::getGroupByNode(unsigned nodeId) {
-  return nodeToGroup.find(nodeId) != nodeToGroup.end() ? nodeToGroup[nodeId] : nullptr;
-}
+// ===----------------------------------------------------------------------===//
+// LoopNestStateCollector implementation
+// ===----------------------------------------------------------------------===//
 
 // Collect loop nest state from operations in the block
 void LoopNestStateCollector::collect(Operation *opToWalk) {
@@ -85,6 +79,140 @@ void LoopNestStateCollector::collect(Operation *opToWalk) {
       }
     }
   });
+}
+
+// ===----------------------------------------------------------------------===//
+// MemRefDependenceGraphForFusion implementation
+// ===----------------------------------------------------------------------===//
+
+// --- Static helpers for MemRefDependenceGraphForFusion ---
+
+// Check if a node has a store to a memref that is either the given base memref itself,
+// or an alias (subview/reshape) of it.
+// This is needed because getStoreOpCount only checks exact memref matches,
+// missing stores through subview/reshape aliases.
+static bool isSameOrAliasedMemRef(Value accessMemref, Value baseMemref) {
+  return mlir::affine::getSourceMemRef(accessMemref) == mlir::affine::getSourceMemRef(baseMemref);
+}
+
+static bool hasAliasedStoreToMemref(Node *node, Value baseMemref) {
+  for (Operation *storeOp : node->stores) {
+    if (auto writeOp = dyn_cast<affine::AffineWriteOpInterface>(storeOp)) {
+      Value storeMemref = writeOp.getMemRef();
+      if (isSameOrAliasedMemRef(storeMemref, baseMemref)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static int getEnclosingForLoopNodeId(MemRefDependenceGraphForFusion &graph, const SetVector<unsigned> &nodeIds,
+                                     unsigned dstId) {
+  Operation *dstOp = graph.getNode(dstId)->op;
+  for (unsigned nodeId : nodeIds) {
+    Operation *candidate = graph.getNode(nodeId)->op;
+    if (isa<affine::AffineForOp>(candidate) && candidate->isAncestor(dstOp)) {
+      return static_cast<int>(nodeId);
+    }
+  }
+  return -1;
+}
+
+static llvm::ArrayRef<int64_t> getStaticShape(Value memrefVal, llvm::SmallVector<int64_t, 4> &shapeBuf) {
+  auto memrefType = mlir::dyn_cast<mlir::MemRefType>(memrefVal.getType());
+  if (!memrefType || !memrefType.hasStaticShape()) {
+    return {};
+  }
+  shapeBuf.assign(memrefType.getShape().begin(), memrefType.getShape().end());
+  return shapeBuf;
+}
+
+static int64_t getShapeProduct(llvm::ArrayRef<int64_t> shape) {
+  if (shape.empty()) return -1;
+  int64_t prod = 1;
+  for (int64_t d : shape) {
+    if (d < 0) return -1;
+    prod *= d;
+  }
+  return prod;
+}
+
+static bool isSameShape(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+static bool isPermutationShape(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
+  if (a.size() != b.size()) return false;
+  llvm::SmallVector<int64_t, 4> aSorted(a.begin(), a.end());
+  llvm::SmallVector<int64_t, 4> bSorted(b.begin(), b.end());
+  std::sort(aSorted.begin(), aSorted.end());
+  std::sort(bSorted.begin(), bSorted.end());
+  return isSameShape(aSorted, bSorted);
+}
+
+static bool isBroadcastLike(llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int64_t> outShape) {
+  if (inShape.size() != outShape.size()) return false;
+
+  bool diffFound = false;
+  for (size_t i = 0; i < inShape.size(); ++i) {
+    auto inD = inShape[i];
+    auto outD = outShape[i];
+    if (inD == outD) continue;
+
+    diffFound = true;
+    if (inD != 1) {
+      return false;
+    }
+  }
+  return diffFound;
+}
+
+static bool isReshape(llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int64_t> outShape) {
+  if (inShape.size() == outShape.size()) return false;
+
+  auto inProd = getShapeProduct(inShape);
+  auto outProd = getShapeProduct(outShape);
+  if (inProd > 0 && outProd > 0 && inProd == outProd) {
+    return true;
+  }
+  return false;
+}
+
+static bool isSubsequence(llvm::ArrayRef<int64_t> big, llvm::ArrayRef<int64_t> small) {
+  if (small.empty()) return false;
+
+  size_t i = 0;
+  size_t j = 0;
+
+  while (i < big.size() && j < small.size()) {
+    if (big[i] == small[j]) ++j;
+    ++i;
+  }
+
+  return j == small.size();
+}
+
+static bool isSubsequencePart(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
+  if (a.size() == b.size()) return false;
+
+  return isSubsequence(a, b) || isSubsequence(b, a);
+}
+
+// --- MemRefDependenceGraphForFusion member functions ---
+
+// Get group by group ID, returns nullptr if group doesn't exist
+GroupPtr MemRefDependenceGraphForFusion::getGroup(unsigned groupId) {
+  return groups.find(groupId) != groups.end() ? groups[groupId] : nullptr;
+}
+
+// Get group by node ID, returns nullptr if node is not in any group
+GroupPtr MemRefDependenceGraphForFusion::getGroupByNode(unsigned nodeId) {
+  return nodeToGroup.find(nodeId) != nodeToGroup.end() ? nodeToGroup[nodeId] : nullptr;
 }
 
 bool MemRefDependenceGraphForFusion::init() {
@@ -198,38 +326,6 @@ void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<un
   });
 }
 
-// Check if a node has a store to a memref that is either the given base memref itself,
-// or an alias (subview/reshape) of it.
-// This is needed because getStoreOpCount only checks exact memref matches,
-// missing stores through subview/reshape aliases.
-static bool isSameOrAliasedMemRef(Value accessMemref, Value baseMemref) {
-  return mlir::affine::getSourceMemRef(accessMemref) == mlir::affine::getSourceMemRef(baseMemref);
-}
-
-static bool hasAliasedStoreToMemref(Node *node, Value baseMemref) {
-  for (Operation *storeOp : node->stores) {
-    if (auto writeOp = dyn_cast<affine::AffineWriteOpInterface>(storeOp)) {
-      Value storeMemref = writeOp.getMemRef();
-      if (isSameOrAliasedMemRef(storeMemref, baseMemref)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-static int getEnclosingForLoopNodeId(MemRefDependenceGraphForFusion &graph, const SetVector<unsigned> &nodeIds,
-                                     unsigned dstId) {
-  Operation *dstOp = graph.getNode(dstId)->op;
-  for (unsigned nodeId : nodeIds) {
-    Operation *candidate = graph.getNode(nodeId)->op;
-    if (isa<affine::AffineForOp>(candidate) && candidate->isAncestor(dstOp)) {
-      return static_cast<int>(nodeId);
-    }
-  }
-  return -1;
-}
-
 void MemRefDependenceGraphForFusion::collectLoadNodeIdsAndNonForNodes(
   Value memref, const SetVector<unsigned> &nodeIds, SmallVector<unsigned> &loadNodeIds,
   SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore,
@@ -321,8 +417,7 @@ bool MemRefDependenceGraphForFusion::areNonOverlappingSubviewStores(unsigned nod
 void MemRefDependenceGraphForFusion::addAliasedStoreEdges(
   Value memref, const SetVector<unsigned> &nodeIds,
   const SmallVector<std::pair<unsigned, bool>, 16> &nonForNodesWithStore,
-  const SmallVector<std::pair<unsigned, bool>, 8> &forNodesWithStore,
-  bool hasLoadsForBaseMemref) {
+  const SmallVector<std::pair<unsigned, bool>, 8> &forNodesWithStore, bool hasLoadsForBaseMemref) {
   // Handle non-for node pairs (e.g. SubViewOp, MemorySpaceCastOp).
   for (unsigned i = 0; i < nonForNodesWithStore.size(); ++i) {
     unsigned srcId = nonForNodesWithStore[i].first;
@@ -333,9 +428,7 @@ void MemRefDependenceGraphForFusion::addAliasedStoreEdges(
       if ((srcHasStore || dstHasStore) && !hasEdge(srcId, dstId, memref)) {
         // Skip WAW edge for non-overlapping subview stores only when
         // downstream loads exist — those RAW edges already provide ordering.
-        if (srcHasStore && dstHasStore &&
-            areNonOverlappingSubviewStores(srcId, dstId) &&
-            hasLoadsForBaseMemref) {
+        if (srcHasStore && dstHasStore && areNonOverlappingSubviewStores(srcId, dstId) && hasLoadsForBaseMemref) {
           continue;
         }
         int forLoopNodeId = getEnclosingForLoopNodeId(*this, nodeIds, dstId);
@@ -419,90 +512,6 @@ void MemRefDependenceGraphForFusion::print(raw_ostream &os) const {
     }
     os << "]\n";
   }
-}
-
-static llvm::ArrayRef<int64_t> getStaticShape(Value memrefVal, llvm::SmallVector<int64_t, 4> &shapeBuf) {
-  auto memrefType = mlir::dyn_cast<mlir::MemRefType>(memrefVal.getType());
-  if (!memrefType || !memrefType.hasStaticShape()) {
-    return {};
-  }
-  shapeBuf.assign(memrefType.getShape().begin(), memrefType.getShape().end());
-  return shapeBuf;
-}
-
-static int64_t getShapeProduct(llvm::ArrayRef<int64_t> shape) {
-  if (shape.empty()) return -1;
-  int64_t prod = 1;
-  for (int64_t d : shape) {
-    if (d < 0) return -1;
-    prod *= d;
-  }
-  return prod;
-}
-
-static bool isSameShape(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
-  if (a.size() != b.size()) return false;
-  for (size_t i = 0; i < a.size(); ++i) {
-    if (a[i] != b[i]) return false;
-  }
-  return true;
-}
-
-static bool isPermutationShape(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
-  if (a.size() != b.size()) return false;
-  llvm::SmallVector<int64_t, 4> aSorted(a.begin(), a.end());
-  llvm::SmallVector<int64_t, 4> bSorted(b.begin(), b.end());
-  std::sort(aSorted.begin(), aSorted.end());
-  std::sort(bSorted.begin(), bSorted.end());
-  return isSameShape(aSorted, bSorted);
-}
-
-static bool isBroadcastLike(llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int64_t> outShape) {
-  if (inShape.size() != outShape.size()) return false;
-
-  bool diffFound = false;
-  for (size_t i = 0; i < inShape.size(); ++i) {
-    auto inD = inShape[i];
-    auto outD = outShape[i];
-    if (inD == outD) continue;
-
-    diffFound = true;
-    if (inD != 1) {
-      return false;
-    }
-  }
-  return diffFound;
-}
-
-static bool isReshape(llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int64_t> outShape) {
-  if (inShape.size() == outShape.size()) return false;
-
-  auto inProd = getShapeProduct(inShape);
-  auto outProd = getShapeProduct(outShape);
-  if (inProd > 0 && outProd > 0 && inProd == outProd) {
-    return true;
-  }
-  return false;
-}
-
-static bool isSubsequence(llvm::ArrayRef<int64_t> big, llvm::ArrayRef<int64_t> small) {
-  if (small.empty()) return false;
-
-  size_t i = 0;
-  size_t j = 0;
-
-  while (i < big.size() && j < small.size()) {
-    if (big[i] == small[j]) ++j;
-    ++i;
-  }
-
-  return j == small.size();
-}
-
-static bool isSubsequencePart(llvm::ArrayRef<int64_t> a, llvm::ArrayRef<int64_t> b) {
-  if (a.size() == b.size()) return false;
-
-  return isSubsequence(a, b) || isSubsequence(b, a);
 }
 
 OperatorTemplate MemRefDependenceGraphForFusion::getGroupType(const std::vector<unsigned> &nodes) {
@@ -661,22 +670,9 @@ void MemRefDependenceGraphForFusion::precomputeDependentGroups() {
   }
 }
 
-unsigned FusionCodeGenHelper::getAliasId(unsigned srcId) {
-  // Follow the alias chain to find the final destination
-  std::unordered_set<unsigned> visited;
-  unsigned currentId = srcId;
-
-  while (nodeAlias.find(currentId) != nodeAlias.end()) {
-    if (visited.count(currentId)) {
-      // Circular alias detected, break to avoid infinite loop
-      break;
-    }
-    visited.insert(currentId);
-    currentId = nodeAlias[currentId];
-  }
-
-  return currentId;
-}
+// ===----------------------------------------------------------------------===//
+// FusionLoopNestInfo implementation
+// ===----------------------------------------------------------------------===//
 
 // Collect all loops in a loop nest starting from the given loop
 // This includes the loop itself and all nested loops, ordered from outermost to innermost
@@ -714,6 +710,224 @@ void FusionLoopNestInfo::collect(affine::AffineForOp rootOp) {
   perfectDepth = static_cast<unsigned>(perfectBand.size());
   isPerfect = (perfectDepth == loopDepth);
 }
+
+// ===----------------------------------------------------------------------===//
+// SubviewFusionHelper implementation
+// ===----------------------------------------------------------------------===//
+
+IntegerSet SubviewFusionHelper::buildGuardCondSet(MLIRContext *ctx, AffineExpr condExpr) {
+  return IntegerSet::get(/*dimCount=*/1, /*symbolCount=*/0, {condExpr}, /*eqFlags=*/{false});
+}
+
+// Helper: check whether two loops have identical LB, UB, and step.
+static bool loopBoundsMatch(affine::AffineForOp a, affine::AffineForOp b) {
+  return a.getUpperBoundMap() == b.getUpperBoundMap() && a.getLowerBoundMap() == b.getLowerBoundMap() &&
+         a.getStep() == b.getStep();
+}
+
+// Helper: check whether two loops have identical LB and step (UB may differ).
+static bool loopLBStepMatch(affine::AffineForOp a, affine::AffineForOp b) {
+  return a.getLowerBoundMap() == b.getLowerBoundMap() && a.getStep() == b.getStep();
+}
+
+std::optional<SubviewFusionPlan> SubviewFusionHelper::buildSubviewFusionPlan(FusionLoopNestInfo &srcInfo,
+                                                                             FusionLoopNestInfo &dstInfo) {
+  if (srcInfo.loopDepth != dstInfo.loopDepth) return buildExtraDimPlan(srcInfo, dstInfo);
+  return buildMismatchUBPlan(srcInfo, dstInfo);
+}
+
+std::optional<SubviewFusionPlan> SubviewFusionHelper::buildExtraDimPlan(FusionLoopNestInfo &srcInfo,
+                                                                        FusionLoopNestInfo &dstInfo) {
+  FusionLoopNestInfo *deeper, *shallower;
+  bool srcIsDeeper;
+  if (srcInfo.loopDepth > dstInfo.loopDepth) {
+    deeper = &srcInfo;
+    shallower = &dstInfo;
+    srcIsDeeper = true;
+  } else {
+    deeper = &dstInfo;
+    shallower = &srcInfo;
+    srcIsDeeper = false;
+  }
+
+  if (deeper->loopDepth != shallower->loopDepth + 1) return std::nullopt;
+
+  unsigned N = deeper->loopDepth;
+  unsigned M = shallower->loopDepth;
+
+  for (unsigned p = 0; p < N; ++p) {
+    bool matched = true;
+    for (unsigned i = 0; i < p && matched; ++i) matched = loopBoundsMatch(deeper->loops[i], shallower->loops[i]);
+    for (unsigned i = p; i < M && matched; ++i) matched = loopBoundsMatch(deeper->loops[i + 1], shallower->loops[i]);
+    if (!matched) continue;
+
+    auto extraLoop = deeper->loops[p];
+    if (!extraLoop.hasConstantLowerBound() || !extraLoop.hasConstantUpperBound()) return std::nullopt;
+
+    SubviewFusionPlan plan;
+    plan.skeletonInfo = deeper;
+    plan.otherInfo = shallower;
+    plan.otherIsSrc = !srcIsDeeper;
+    for (unsigned i = 0; i < p; ++i) plan.dimMap.push_back(i);
+    for (unsigned i = p; i < M; ++i) plan.dimMap.push_back(i + 1);
+    plan.guardDimPos = p;
+    plan.guardKind = SubviewFusionPlan::ExtraDimEqLB;
+    plan.extraDimLB = extraLoop.getConstantLowerBound();
+    int64_t lb = extraLoop.getConstantLowerBound();
+    int64_t ub = extraLoop.getConstantUpperBound();
+    int64_t step = extraLoop.getStep().getSExtValue();
+    plan.needsGuard = (ub - lb > step);
+    return plan;
+  }
+  return std::nullopt;
+}
+
+std::optional<SubviewFusionPlan> SubviewFusionHelper::buildMismatchUBPlan(FusionLoopNestInfo &srcInfo,
+                                                                          FusionLoopNestInfo &dstInfo) {
+  unsigned srcDepth = srcInfo.loopDepth;
+  int mismatchPos = -1;
+  for (unsigned i = 0; i < srcDepth; ++i) {
+    if (loopBoundsMatch(srcInfo.loops[i], dstInfo.loops[i])) continue;
+    if (loopLBStepMatch(srcInfo.loops[i], dstInfo.loops[i])) {
+      if (mismatchPos != -1) return std::nullopt;  // multiple mismatches
+      mismatchPos = static_cast<int>(i);
+    } else {
+      return std::nullopt;
+    }
+  }
+  if (mismatchPos == -1) return std::nullopt;
+
+  auto srcLoop = srcInfo.loops[mismatchPos];
+  auto dstLoop = dstInfo.loops[mismatchPos];
+  if (!srcLoop.hasConstantUpperBound() || !dstLoop.hasConstantUpperBound()) return std::nullopt;
+
+  int64_t srcUB = srcLoop.getConstantUpperBound();
+  int64_t dstUB = dstLoop.getConstantUpperBound();
+  bool srcIsSkeleton = (srcUB >= dstUB);
+
+  SubviewFusionPlan plan;
+  plan.skeletonInfo = srcIsSkeleton ? &srcInfo : &dstInfo;
+  plan.otherInfo = srcIsSkeleton ? &dstInfo : &srcInfo;
+  plan.otherIsSrc = !srcIsSkeleton;
+  for (unsigned i = 0; i < srcDepth; ++i) plan.dimMap.push_back(i);
+  plan.guardDimPos = static_cast<unsigned>(mismatchPos);
+  plan.guardKind = SubviewFusionPlan::UpperBoundLT;
+  plan.smallerUB = std::min(srcUB, dstUB);
+  plan.needsGuard = true;
+  return plan;
+}
+
+SmallVector<CloneStage> SubviewFusionHelper::collectCloneStages(const FusionLoopNestInfo &info) {
+  SmallVector<CloneStage> stages;
+
+  if (info.isPerfect) {
+    // Single stage: all ops in the innermost body.
+    auto innermost = info.loops[info.loopDepth - 1];
+    auto body = innermost.getBody()->without_terminator();
+    CloneStage stage;
+    std::transform(body.begin(), body.end(), std::back_inserter(stage), [](Operation &op) { return &op; });
+    stages.push_back(std::move(stage));
+    return stages;
+  }
+
+  // Imperfect nest: one stage per level from perfectDepth-1 onward.
+  for (unsigned level = info.perfectDepth - 1; level < info.loopDepth; ++level) {
+    auto currentLoop = info.loops[level];
+
+    // Identify the main-chain inner for (if any) and reject side branches.
+    affine::AffineForOp nextLevelFor;
+    if (level + 1 < info.loopDepth) {
+      unsigned forCount = 0;
+      for (Operation &op : currentLoop.getBody()->without_terminator()) {
+        if (auto forOp = dyn_cast<affine::AffineForOp>(&op)) {
+          forCount++;
+          if (forOp == info.loops[level + 1]) nextLevelFor = forOp;
+        }
+      }
+      if (forCount > 1) return {};  // side-branch for — bail out
+    }
+
+    CloneStage stage;
+    for (Operation &op : currentLoop.getBody()->without_terminator()) {
+      if (nextLevelFor && &op == nextLevelFor.getOperation()) continue;
+      stage.push_back(&op);
+    }
+    if (!stage.empty()) stages.push_back(std::move(stage));
+  }
+  return stages;
+}
+
+void SubviewFusionHelper::emitCloneStages(const SubviewFusionPlan &plan, const SmallVector<CloneStage> &stages,
+                                          IRMapping &mapper) {
+  auto targetLoop = plan.skeletonInfo->loops[plan.skeletonInfo->loopDepth - 1];
+  Block *targetBody = targetLoop.getBody();
+  Block::iterator insertPt = plan.otherIsSrc ? targetBody->begin() : std::prev(targetBody->end());
+
+  // Build guard condition once, apply to every stage.
+  Value guardIV;
+  IntegerSet condSet;
+  if (plan.needsGuard) {
+    guardIV = plan.skeletonInfo->loops[plan.guardDimPos].getInductionVar();
+    OpBuilder exprBuilder(targetLoop->getContext());
+    AffineExpr condExpr;
+    if (plan.guardKind == SubviewFusionPlan::ExtraDimEqLB) {
+      condExpr = exprBuilder.getAffineConstantExpr(plan.extraDimLB) - exprBuilder.getAffineDimExpr(0);
+    } else {
+      condExpr = exprBuilder.getAffineConstantExpr(plan.smallerUB - 1) - exprBuilder.getAffineDimExpr(0);
+    }
+    condSet = buildGuardCondSet(targetLoop->getContext(), condExpr);
+  }
+
+  for (const auto &stage : stages) {
+    OpBuilder builder(targetBody, insertPt);
+    Operation *anchorOp = nullptr;
+
+    if (guardIV) {
+      auto ifOp = builder.create<affine::AffineIfOp>(targetLoop.getLoc(), condSet, ValueRange{guardIV},
+                                                     /*withElseRegion=*/false);
+      anchorOp = ifOp;
+      builder.setInsertionPointToStart(ifOp.getThenBlock());
+    }
+
+    for (auto *op : stage) {
+      auto *cloned = builder.clone(*op, mapper);
+      if (!guardIV) anchorOp = cloned;
+    }
+
+    if (anchorOp) insertPt = std::next(Block::iterator(anchorOp));
+  }
+}
+
+bool SubviewFusionHelper::tryFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo,
+                                  FusionLoopNestInfo &dstInfo, unsigned &erasedGroupId, unsigned &aliasTargetGroupId,
+                                  affine::AffineForOp &loopToErase) {
+  auto plan = buildSubviewFusionPlan(srcInfo, dstInfo);
+  if (!plan) return false;
+
+  auto stages = collectCloneStages(*plan->otherInfo);
+  if (stages.empty()) return false;
+
+  // Build IV mapping: other.loops[i].iv → skeleton.loops[dimMap[i]].iv
+  IRMapping mapper;
+  for (unsigned i = 0; i < plan->otherInfo->loopDepth; ++i) {
+    mapper.map(plan->otherInfo->loops[i].getInductionVar(),
+               plan->skeletonInfo->loops[plan->dimMap[i]].getInductionVar());
+  }
+
+  emitCloneStages(*plan, stages, mapper);
+
+  bool keepSrc = (plan->skeletonInfo == &srcInfo);
+  erasedGroupId = keepSrc ? dstGroupId : srcGroupId;
+  aliasTargetGroupId = keepSrc ? srcGroupId : dstGroupId;
+  loopToErase = plan->otherInfo->root;
+  return true;
+}
+
+// ===----------------------------------------------------------------------===//
+// FusionCodeGenHelper implementation
+// ===----------------------------------------------------------------------===//
+
+// --- Static helpers for FusionCodeGenHelper ---
 
 static bool isDependentLoadOrStoreOp(Operation *candidate, DenseMap<Value, bool> &memFlags) {
   auto lookupMemFlag = [&](Value memref) -> DenseMap<Value, bool>::iterator {
@@ -867,28 +1081,6 @@ static bool isOperationValid(Operation *candidate) {
   return true;
 }
 
-// // Collects affine load/store operations from a loop that access any of 'memrefs'
-// // into 'memFlags' and 'loadAndStoreOps'. Skips invalid ops and non-affine accesses.
-// static void collectLoadAndStoreOpsFromOps(const llvm::DenseSet<Value> &memrefs, affine::AffineForOp loopOp,
-//                                           DenseMap<Value, bool> &memFlags,
-//                                           SmallVector<Operation *, 4> &loadAndStoreOps) {
-//   if (!loopOp) return;
-//   loopOp->walk([&](Operation *op) {
-//     if (!isOperationValid(op)) return;
-//     if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
-//       if (memrefs.contains(read.getMemRef())) {
-//         memFlags.insert({read.getMemRef(), false});
-//         loadAndStoreOps.push_back(op);
-//       }
-//     } else if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
-//       if (memrefs.contains(write.getMemRef())) {
-//         memFlags.insert({write.getMemRef(), true});
-//         loadAndStoreOps.push_back(op);
-//       }
-//     }
-//   });
-// }
-
 // Collects affine load/store operations from a loop that access any of 'memrefs'
 // into 'memFlags' and 'loadAndStoreOps'. Skips invalid ops and non-affine accesses.
 static void collectLoadAndStoreOpsFromOps(Value depMemref, affine::AffineForOp loopOp, DenseMap<Value, bool> &memFlags,
@@ -932,6 +1124,88 @@ static void collectLoadAndStoreOpsFromOps(Value depMemref, affine::AffineForOp l
   });
 }
 
+// Helper function to check if the outermost loops (up to depth) have matching bounds.
+static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, 4> &loops1,
+                                 const SmallVector<affine::AffineForOp, 4> &loops2, unsigned depth) {
+  if (depth > loops1.size() || depth > loops2.size()) {
+    return false;
+  }
+  for (unsigned i = 0; i < depth; ++i) {
+    auto loop1 = loops1[i];
+    auto loop2 = loops2[i];
+    if (loop1.getLowerBoundMap() != loop2.getLowerBoundMap() || loop1.getUpperBoundMap() != loop2.getUpperBoundMap() ||
+        loop1.getStep() != loop2.getStep()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Helper function to perform loop fusion at a specific depth
+// This function handles the common logic of cloning operations from source to destination loops
+static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcLoops,
+                              SmallVector<affine::AffineForOp, 4> dstLoops, unsigned bestDstLoopDepth) {
+  // Create IRMapping to map source loop IVs to destination loop IVs
+  IRMapping mapper;
+  for (unsigned i = 0; i < bestDstLoopDepth && i < srcLoops.size() && i < dstLoops.size(); ++i) {
+    mapper.map(srcLoops[i].getInductionVar(), dstLoops[i].getInductionVar());
+  }
+
+  // Recursively clone operations from source loop body to destination loop body
+  // This function handles nested loops by merging their operations
+  std::function<void(affine::AffineForOp, affine::AffineForOp)> cloneLoopBody = [&](affine::AffineForOp srcLoop,
+                                                                                    affine::AffineForOp dstLoop) {
+    // Map the induction variables
+    mapper.map(srcLoop.getInductionVar(), dstLoop.getInductionVar());
+
+    // This ensures srcLoops operations are placed before dstLoops operations
+    Block::iterator insertPoint = dstLoop.getBody()->begin();
+    // Find first non-terminator operation (skip terminator if it exists)
+    while (insertPoint != dstLoop.getBody()->end() && isa<affine::AffineYieldOp>(*insertPoint)) {
+      ++insertPoint;
+    }
+    OpBuilder builder(dstLoop.getBody(), insertPoint);
+
+    // Clone all operations from source loop body to destination loop body
+    for (Operation &op : srcLoop.getBody()->getOperations()) {
+      // Skip the terminator (affine.yield)
+      if (isa<affine::AffineYieldOp>(op)) {
+        continue;
+      }
+
+      builder.clone(op, mapper);
+    }
+  };
+
+  // Get the destination loop at fusion depth
+  affine::AffineForOp targetLoop = dstLoops[bestDstLoopDepth - 1];
+
+  // Get the corresponding source loop
+  affine::AffineForOp sourceLoop = srcLoops[bestDstLoopDepth - 1];
+
+  // Clone operations from source loop body to destination loop body
+  cloneLoopBody(sourceLoop, targetLoop);
+}
+
+// --- FusionCodeGenHelper member functions ---
+
+unsigned FusionCodeGenHelper::getAliasId(unsigned srcId) {
+  // Follow the alias chain to find the final destination
+  std::unordered_set<unsigned> visited;
+  unsigned currentId = srcId;
+
+  while (nodeAlias.find(currentId) != nodeAlias.end()) {
+    if (visited.count(currentId)) {
+      // Circular alias detected, break to avoid infinite loop
+      break;
+    }
+    visited.insert(currentId);
+    currentId = nodeAlias[currentId];
+  }
+
+  return currentId;
+}
+
 void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> allOpsA,
                                             llvm::SmallVector<Operation *, 4> &strategyOpsA) {
   strategyOpsA.clear();
@@ -960,23 +1234,6 @@ void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strate
       break;
     }
   }
-}
-
-// Helper function to check if the outermost loops (up to depth) have matching bounds.
-static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, 4> &loops1,
-                                 const SmallVector<affine::AffineForOp, 4> &loops2, unsigned depth) {
-  if (depth > loops1.size() || depth > loops2.size()) {
-    return false;
-  }
-  for (unsigned i = 0; i < depth; ++i) {
-    auto loop1 = loops1[i];
-    auto loop2 = loops2[i];
-    if (loop1.getLowerBoundMap() != loop2.getLowerBoundMap() || loop1.getUpperBoundMap() != loop2.getUpperBoundMap() ||
-        loop1.getStep() != loop2.getStep()) {
-      return false;
-    }
-  }
-  return true;
 }
 
 unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
@@ -1052,157 +1309,15 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   return maxDepth;
 }
 
-// Helper function to perform loop fusion at a specific depth
-// This function handles the common logic of cloning operations from source to destination loops
-static void performLoopFusion(SmallVector<affine::AffineForOp, 4> srcLoops,
-                              SmallVector<affine::AffineForOp, 4> dstLoops, unsigned bestDstLoopDepth) {
-  // Create IRMapping to map source loop IVs to destination loop IVs
-  IRMapping mapper;
-  for (unsigned i = 0; i < bestDstLoopDepth && i < srcLoops.size() && i < dstLoops.size(); ++i) {
-    mapper.map(srcLoops[i].getInductionVar(), dstLoops[i].getInductionVar());
-  }
-
-  // Recursively clone operations from source loop body to destination loop body
-  // This function handles nested loops by merging their operations
-  std::function<void(affine::AffineForOp, affine::AffineForOp)> cloneLoopBody = [&](affine::AffineForOp srcLoop,
-                                                                                    affine::AffineForOp dstLoop) {
-    // Map the induction variables
-    mapper.map(srcLoop.getInductionVar(), dstLoop.getInductionVar());
-
-    // This ensures srcLoops operations are placed before dstLoops operations
-    Block::iterator insertPoint = dstLoop.getBody()->begin();
-    // Find first non-terminator operation (skip terminator if it exists)
-    while (insertPoint != dstLoop.getBody()->end() && isa<affine::AffineYieldOp>(*insertPoint)) {
-      ++insertPoint;
-    }
-    OpBuilder builder(dstLoop.getBody(), insertPoint);
-
-    // Clone all operations from source loop body to destination loop body
-    for (Operation &op : srcLoop.getBody()->getOperations()) {
-      // Skip the terminator (affine.yield)
-      if (isa<affine::AffineYieldOp>(op)) {
-        continue;
-      }
-
-      builder.clone(op, mapper);
-    }
-  };
-
-  // Get the destination loop at fusion depth
-  affine::AffineForOp targetLoop = dstLoops[bestDstLoopDepth - 1];
-
-  // Get the corresponding source loop
-  affine::AffineForOp sourceLoop = srcLoops[bestDstLoopDepth - 1];
-
-  // Clone operations from source loop body to destination loop body
-  cloneLoopBody(sourceLoop, targetLoop);
-}
-
-// Detects loop bounds mismatch between src and dst caused by subview.
-// Returns info about the first dimension where bounds differ (same LB/step, different UB).
-static std::optional<SubviewBoundsMismatch> detectSubviewBoundsMismatch(const FusionLoopNestInfo &srcInfo,
-                                                                        const FusionLoopNestInfo &dstInfo,
-                                                                        unsigned depth) {
-  if (depth == 0 || depth > srcInfo.loops.size() || depth > dstInfo.loops.size()) {
-    return std::nullopt;
-  }
-  for (unsigned i = 0; i < depth; ++i) {
-    auto srcLoop = srcInfo.loops[i];
-    auto dstLoop = dstInfo.loops[i];
-    // Require same lower bound and step
-    if (srcLoop.getLowerBoundMap() != dstLoop.getLowerBoundMap() || srcLoop.getStep() != dstLoop.getStep()) {
-      return std::nullopt;
-    }
-    // Check for upper bound mismatch
-    if (srcLoop.getUpperBoundMap() != dstLoop.getUpperBoundMap()) {
-      // Both upper bounds and lower bound must be constant for us to handle
-      if (!srcLoop.hasConstantUpperBound() || !dstLoop.hasConstantUpperBound() || !srcLoop.hasConstantLowerBound()) {
-        return std::nullopt;
-      }
-      int64_t srcUB = srcLoop.getConstantUpperBound();
-      int64_t dstUB = dstLoop.getConstantUpperBound();
-      int64_t srcLB = srcLoop.getConstantLowerBound();
-      SubviewBoundsMismatch mismatch;
-      mismatch.mismatchDim = i;
-      mismatch.commonLB = srcLB;
-      if (srcUB > dstUB) {
-        mismatch.largerUB = srcUB;
-        mismatch.smallerUB = dstUB;
-        mismatch.srcIsLarger = true;
-      } else {
-        mismatch.largerUB = dstUB;
-        mismatch.smallerUB = srcUB;
-        mismatch.srcIsLarger = false;
-      }
-      return mismatch;
-    }
-  }
-  return std::nullopt;  // all bounds match, no mismatch
-}
-
-// Fuses smallerLoop's body into largerLoop, wrapping the cloned ops inside
-// an affine.if that guards execution to the subview's valid range.
-// The largerLoop keeps its original (wider) bounds; the smallerLoop's ops
-// only execute when the induction variable is within [commonLB, smallerUB).
-static void fuseWithSubviewGuard(SmallVector<affine::AffineForOp, 4> &smallerLoops,
-                                 SmallVector<affine::AffineForOp, 4> &largerLoops,
-                                 const SubviewBoundsMismatch &mismatch, unsigned depth, bool insertAtBeginning) {
-  // Build IV mapping for shared loop levels
-  IRMapping mapper;
-  for (unsigned i = 0; i < depth && i < smallerLoops.size() && i < largerLoops.size(); ++i) {
-    mapper.map(smallerLoops[i].getInductionVar(), largerLoops[i].getInductionVar());
-  }
-
-  // Target: innermost shared loop body in the larger loop
-  affine::AffineForOp targetLoop = largerLoops[depth - 1];
-  Block *targetBody = targetLoop.getBody();
-
-  // When smaller loop is the producer (src), insert at the beginning so its
-  // ops execute before the consumer; otherwise insert before the yield.
-  auto insertionPoint = insertAtBeginning ? targetBody->begin() : std::prev(targetBody->end());
-  OpBuilder builder(targetBody, insertionPoint);
-
-  // Build the affine.if condition: iv < smallerUB
-  // IntegerSet constraint: smallerUB - 1 - d0 >= 0, i.e. d0 <= smallerUB - 1
-  Value guardIV = largerLoops[mismatch.mismatchDim].getInductionVar();
-  // Constraint: smallerUB - 1 - d0 >= 0  (d0 < smallerUB)
-  auto dimExpr = builder.getAffineDimExpr(0);
-  auto condExpr = builder.getAffineConstantExpr(mismatch.smallerUB - 1) - dimExpr;
-  auto condSet = IntegerSet::get(/*dimCount=*/1, /*symbolCount=*/0, {condExpr}, /*eqFlags=*/{false});
-
-  auto ifOp = builder.create<affine::AffineIfOp>(targetLoop.getLoc(), condSet, ValueRange{guardIV},
-                                                 /*withElseRegion=*/false);
-
-  // Clone smallerLoop's innermost body into the affine.if's then-block
-  affine::AffineForOp sourceLoop = smallerLoops[depth - 1];
-  OpBuilder ifBuilder(ifOp.getThenBlock(), ifOp.getThenBlock()->begin());
-  for (Operation &op : sourceLoop.getBody()->without_terminator()) {
-    ifBuilder.clone(op, mapper);
-  }
-}
-
 void FusionCodeGenHelper::doIFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo,
                                   FusionLoopNestInfo &dstInfo, const FusionPlan &plan) {
   auto &srcLoops = srcInfo.loops;
   auto &dstLoops = dstInfo.loops;
   affine::AffineForOp srcAffineForOp = srcInfo.root;
 
-  // Helper lambda to clear erased node's loads and stores
-  auto clearErasedNode = [this](unsigned nodeId) {
-    if (auto *node = mdg.getNode(nodeId)) {
-      node->loads.clear();
-      node->stores.clear();
-      node->op = nullptr;
-    }
-  };
-
   auto depth = std::min(srcInfo.perfectDepth, dstInfo.perfectDepth);
   while (depth != 0 && !checkLoopBoundsMatch(srcLoops, dstLoops, depth)) {
     depth--;
-  }
-
-  if (plan.isSubviewFusion && trySubviewFusion(srcGroupId, dstGroupId, srcInfo, dstInfo)) {
-    return;
   }
 
   if (depth == 0) {
@@ -1224,7 +1339,11 @@ void FusionCodeGenHelper::doIFuse(unsigned srcGroupId, unsigned dstGroupId, Fusi
   srcGroup->groupTemplate = std::max(srcGroupTemplate, dstGroupTemplate);
   dstGroup->groupTemplate = std::max(srcGroupTemplate, dstGroupTemplate);
   nodeAlias[srcId] = dstId;
-  clearErasedNode(srcId);
+  if (auto *node = mdg.getNode(srcId)) {
+    node->loads.clear();
+    node->stores.clear();
+    node->op = nullptr;
+  }
 }
 
 void FusionCodeGenHelper::doHFuse(unsigned srcGroupId, unsigned dstGroupId, affine::AffineForOp srcAffineForOp,
@@ -1233,7 +1352,11 @@ void FusionCodeGenHelper::doHFuse(unsigned srcGroupId, unsigned dstGroupId, affi
   srcInfo.collect(srcAffineForOp);
   dstInfo.collect(dstAffineForOp);
 
-  if (plan.isSubviewFusion && trySubviewFusion(srcGroupId, dstGroupId, srcInfo, dstInfo)) {
+  unsigned erasedGid, aliasGid;
+  affine::AffineForOp loopToErase;
+  if (plan.isSubviewFusion &&
+      subviewHelper.tryFuse(srcGroupId, dstGroupId, srcInfo, dstInfo, erasedGid, aliasGid, loopToErase)) {
+    eraseLoopAndCleanupNode(erasedGid, aliasGid, loopToErase);
     return;
   }
 
@@ -1241,7 +1364,6 @@ void FusionCodeGenHelper::doHFuse(unsigned srcGroupId, unsigned dstGroupId, affi
   affine::FusionStrategy strategy(affine::FusionStrategy::ProducerConsumer);
 
   unsigned maxLegalFusionDepth = 0;
-  // If src is perfectly nested or both are non-perfectly neste, fuse src into dst.
   if (srcInfo.isPerfect || !dstInfo.isPerfect) {
     maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
   } else {
@@ -1249,8 +1371,6 @@ void FusionCodeGenHelper::doHFuse(unsigned srcGroupId, unsigned dstGroupId, affi
   }
 
   if (maxLegalFusionDepth == 0) {
-    // When fusing dst into src, try manual slice (e.g. insert at innermost
-    // loop that has enough enclosing depth) before falling back to doIFuse.
     doIFuse(srcGroupId, dstGroupId, srcInfo, dstInfo, plan);
     return;
   }
@@ -1261,11 +1381,9 @@ void FusionCodeGenHelper::doHFuse(unsigned srcGroupId, unsigned dstGroupId, affi
   assert(!bestSlice.isEmpty() && "Missing slice union for depth");
 
   if (srcInfo.isPerfect || !dstInfo.isPerfect) {
-    // Fuse src into dst: merge src into dst, then erase src.
     fuseLoops(srcAffineForOp, dstAffineForOp, bestSlice);
     eraseLoopAndCleanupNode(srcGroupId, dstGroupId, srcAffineForOp);
   } else {
-    // Fuse dst into src: merge dst into src, then erase dst.
     fuseLoops(dstAffineForOp, srcAffineForOp, bestSlice);
     eraseLoopAndCleanupNode(dstGroupId, srcGroupId, dstAffineForOp);
   }
@@ -1283,12 +1401,10 @@ void FusionCodeGenHelper::doVFuse(unsigned srcGroupId, unsigned dstGroupId, affi
     affine::FusionStrategy strategy(plan.depInfo.memref);
     maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
   } else {
-    // No memref found, try generic strategy for structure-based fusion
     affine::FusionStrategy strategy(affine::FusionStrategy::Generic);
     maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
   }
 
-  // Skip if fusion is not feasible at any loop depths.
   if (maxLegalFusionDepth == 0) {
     doIFuse(srcGroupId, dstGroupId, srcInfo, dstInfo, plan);
     return;
@@ -1300,24 +1416,6 @@ void FusionCodeGenHelper::doVFuse(unsigned srcGroupId, unsigned dstGroupId, affi
   assert(!bestSlice.isEmpty() && "Fusion depth has no computed slice union");
   fuseLoops(srcAffineForOp, dstAffineForOp, bestSlice, true);
   eraseLoopAndCleanupNode(srcGroupId, dstGroupId, srcAffineForOp);
-}
-
-bool FusionCodeGenHelper::trySubviewFusion(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo,
-                                           FusionLoopNestInfo &dstInfo) {
-  auto depth = std::min(srcInfo.perfectDepth, dstInfo.perfectDepth);
-  auto mismatch = detectSubviewBoundsMismatch(srcInfo, dstInfo, depth);
-  if (!mismatch) {
-    return false;
-  }
-  affine::AffineForOp smallerLoop = mismatch->srcIsLarger ? dstInfo.root : srcInfo.root;
-  auto &largerLoops = mismatch->srcIsLarger ? srcInfo.loops : dstInfo.loops;
-  auto &smallerLoops = mismatch->srcIsLarger ? dstInfo.loops : srcInfo.loops;
-  unsigned erasedGroupId = mismatch->srcIsLarger ? dstGroupId : srcGroupId;
-  unsigned keptGroupId = mismatch->srcIsLarger ? srcGroupId : dstGroupId;
-
-  fuseWithSubviewGuard(smallerLoops, largerLoops, *mismatch, depth, !mismatch->srcIsLarger);
-  eraseLoopAndCleanupNode(erasedGroupId, keptGroupId, smallerLoop);
-  return true;
 }
 
 void FusionCodeGenHelper::eraseLoopAndCleanupNode(unsigned erasedGroupId, unsigned aliasTargetGroupId,
@@ -1336,8 +1434,6 @@ void FusionCodeGenHelper::eraseLoopAndCleanupNode(unsigned erasedGroupId, unsign
   aliasTargetGroup->groupTemplate = std::max(erasedNodeGroupTemplate, aliasTargetGroupTemplate);
   nodeAlias[erasedNodeId] = aliasTargetId;
 
-  // Clear the loads and stores of the erased node to prevent
-  // subsequent accesses to invalid operation pointers during fusion analysis
   if (auto *erasedNode = mdg.getNode(erasedNodeId)) {
     erasedNode->loads.clear();
     erasedNode->stores.clear();
@@ -1346,6 +1442,10 @@ void FusionCodeGenHelper::eraseLoopAndCleanupNode(unsigned erasedGroupId, unsign
 
   loopToErase.erase();
 }
+
+// ===----------------------------------------------------------------------===//
+// Group implementation
+// ===----------------------------------------------------------------------===//
 
 std::string Group::getGroupTemplateString() const {
   auto it = operatorTemplateMap.find(static_cast<int>(groupTemplate));
