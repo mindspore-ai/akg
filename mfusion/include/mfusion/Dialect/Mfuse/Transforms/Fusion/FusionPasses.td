@@ -207,6 +207,23 @@ def FuseMatMulReshape : Pass<"fuse-matmul-reshape", "::mlir::ModuleOp"> {
   ];
 }
 
+//===----------------------------------------------------------------------===
+// FuseNumToTensor pass
+//===----------------------------------------------------------------------===
+
+def FuseNumToTensor : Pass<"fuse-num-to-tensor", "::mlir::ModuleOp"> {
+  let summary = "Fuse NumToTensor (Cast) operations into a full op";
+  let description = [{
+    Fuses a pattern of Cast(NumToTensor(constant))  or single NumToTensor(constant) into a full operation.
+    This eliminates redundant operations by creating a full op with the desired type and shape on npu device.
+  }];
+  let constructor = "mlir::mfuse::createFuseNumToTensorPass()";
+  let dependentDialects = [
+    "::mlir::mfuse::MfuseDialect",
+    "::mlir::func::FuncDialect"
+  ];
+}
+
 //===----------------------------------------------------------------------===//
 // FuseSwiGlu fusion passes
 //===----------------------------------------------------------------------===//

@@ -154,15 +154,15 @@ Torch-MLIR 跟踪的是 LLVM 主干的较新版本，而本项目使用的是 LL
 ### 006-disable-aten-fold-constant.patch
 
 **描述：**  
-禁用 `aten.ones`、`aten.zeros`、`aten.full` 和 `aten.clone` 的fold方法，使这些 Op 在 canonicalization 时不再被折叠。
+禁用 `aten.ones`、`aten.zeros`、`aten.full` 、`prim.NumToTensor.Scalar` 和 `aten.clone` 的fold方法，使这几个 Op 在 canonicalization 时不再被折叠。
 
 **问题：**  
-在 mfusion 的 `fuse_and_optimize` 流程中会执行 `canonicalize`。Torch-MLIR 中若`aten.ones`、`aten.zeros`、`aten.full` 启用了 `hasFolder` 并实现了 `fold()`，当输入为编译期常量时会被折叠，导致后续 pipeline 中出现不符合预期的操作，与当前处理方式不符。若`aten.clone` 启用了 `hasFolder` 并实现了 `fold()`，可能会将本来非连续转连续的处理操作优化掉，导致后续算子的输入异常。
+在 mfusion 的 `fuse_and_optimize` 流程中会执行 `canonicalize`。Torch-MLIR 中若`aten.ones`、`aten.zeros`、`aten.full`、`prim.NumToTensor.Scalar` 启用了 `hasFolder` 并实现了 `fold()`，当输入为编译期常量时会被折叠为 `torch.vtensor.literal`，导致后续 pipeline 中出现 literal，与当前处理方式不符。若`aten.clone` 启用了 `hasFolder` 并实现了 `fold()`，可能会将本来非连续转连续的处理操作优化掉，导致后续算子的输入异常。
 
 **解决方案：**
 
-1. **TableGen（.td）**：在 `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td` 中移除 `AtenOnesOp`、`AtenZerosOp`、`AtenFullOp` 和 `AtenCloneOp` 的 `let hasFolder = 1;`，使 TableGen 不再为这些 Op 声明 fold。
-2. **C++ 实现（.cpp）**：在 `lib/Dialect/Torch/IR/TorchOps.cpp` 中删除 `AtenOnesOp::fold`、`AtenZerosOp::fold`、`AtenFullOp::fold` 和 `AtenCloneOp::fold` 的完整实现块，与 .td 中取消 hasFolder 保持一致，避免链接未定义符号。
+1. **TableGen（.td）**：在 `include/torch-mlir/Dialect/Torch/IR/GeneratedTorchOps.td` 中移除 `AtenOnesOp`、`AtenZerosOp`、`AtenFullOp`、`PrimNumToTensorScalarOp` 和 `AtenCloneOp` 的 `let hasFolder = 1;`，使 TableGen 不再为这些 Op 声明 fold。
+2. **C++ 实现（.cpp）**：在 `lib/Dialect/Torch/IR/TorchOps.cpp` 中删除 `AtenOnesOp::fold`、`AtenZerosOp::fold`、`AtenFullOp::fold`、`PrimNumToTensorScalarOp::fold` 和 `AtenCloneOp::fold` 的完整实现块，与 .td 中取消 hasFolder 保持一致，避免链接未定义符号。
 
 **修改的文件：**
 

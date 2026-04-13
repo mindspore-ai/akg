@@ -424,7 +424,7 @@ def Mfuse_FullOp : Mfuse_Op<"full", [Pure]> {
 
     Preserves the original torch.aten.full parameters so that the op can be
     faithfully converted back to torch dialect:
-    - fill_value: the scalar fill value (stored as f64).
+    - fill_value: the scalar fill value
     - dtype: optional torch ScalarType integer encoding the element type.
     - layout: optional torch layout integer.
     - device: optional device string (e.g. "cpu", "npu").
@@ -432,7 +432,7 @@ def Mfuse_FullOp : Mfuse_Op<"full", [Pure]> {
   }];
 
   let arguments = (ins
-    F64Attr:$fill_value,
+    AnyRankedTensor:$fill_value,
     OptionalAttr<I64Attr>:$dtype,
     OptionalAttr<I64Attr>:$layout,
     OptionalAttr<StrAttr>:$device,
@@ -442,7 +442,7 @@ def Mfuse_FullOp : Mfuse_Op<"full", [Pure]> {
   let results = (outs AnyRankedTensor:$result);
 
   let assemblyFormat = [{
-    $fill_value attr-dict `:` type($result)
+    $fill_value attr-dict `:` functional-type(operands, results)
   }];
 }
 
@@ -793,6 +793,23 @@ def Mfuse_NegOp : Mfuse_Op<"neg", [
   let assemblyFormat = [{
     $input attr-dict `:` functional-type(operands, results)
   }];
+}
+
+def Mfuse_NumToTensorOp : Mfuse_Op<"num_to_tensor", [Pure]> {
+  let summary = "Convert a numeric value to a tensor.";
+  let description = [{
+    Converts a numeric value to a tensor with the specified shape.
+  }];
+
+  let arguments = (ins AnyRankedTensor:$value);
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $value attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
 }
 
 def Mfuse_PermuteOp : Mfuse_Op<"permute", [Pure, SameOperandsAndResultElementType]> {

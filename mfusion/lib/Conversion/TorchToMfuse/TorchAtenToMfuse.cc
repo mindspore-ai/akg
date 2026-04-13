@@ -323,23 +323,10 @@ struct ConvertAtenFull : public OpConversionPattern<TorchD::AtenFullOp> {
       return rewriter.notifyMatchFailure(op, "size must be a list construct of constant ints");
     }
 
-    // Extract fill_value as a constant scalar.
-    double fillValue = 0.0;
-    int64_t fillIntValue = 0;
-    if (matchPattern(op.getFillValue(), TorchD::m_TorchConstantFloat(&fillValue))) {
-      // already set
-    } else if (matchPattern(op.getFillValue(), TorchD::m_TorchConstantInt(&fillIntValue))) {
-      fillValue = static_cast<double>(fillIntValue);
-    } else {
-      return rewriter.notifyMatchFailure(op, "fill_value must be a constant scalar");
-    }
-
     auto outType = dyn_cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
     if (!outType) {
       return rewriter.notifyMatchFailure(op, "result type conversion failed");
     }
-
-    auto fillValueAttr = rewriter.getF64FloatAttr(fillValue);
 
     // Extract optional dtype (int).
     mlir::IntegerAttr dtypeAttr;
@@ -366,7 +353,7 @@ struct ConvertAtenFull : public OpConversionPattern<TorchD::AtenFullOp> {
       }
     }
 
-    // Extract optional pin_memory (bool?).
+    // Extract optional pin_memory (bool).
     mlir::BoolAttr pinMemoryAttr;
     bool pinMemoryVal = false;
     if (!isa<TorchD::NoneType>(op.getPinMemory().getType()) &&
@@ -374,8 +361,8 @@ struct ConvertAtenFull : public OpConversionPattern<TorchD::AtenFullOp> {
       pinMemoryAttr = rewriter.getBoolAttr(pinMemoryVal);
     }
 
-    rewriter.replaceOpWithNewOp<mlir::mfuse::FullOp>(op, outType, fillValueAttr, dtypeAttr, layoutAttr, deviceAttr,
-                                                     pinMemoryAttr);
+    rewriter.replaceOpWithNewOp<mlir::mfuse::FullOp>(op, outType, adaptor.getFillValue(), dtypeAttr, layoutAttr,
+                                                     deviceAttr, pinMemoryAttr);
     return success();
   }
 };
@@ -579,8 +566,8 @@ static void populateAtenToMfuseCustomPatterns(TypeConverter &converter, RewriteP
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertAtenBroadcastTo>(converter, context);
   patterns.add<ConvertAtenConvolution>(converter, context);
-  patterns.add<ConvertAtenFull>(converter, context);
   patterns.add<ConvertAtenExpand>(converter, context);
+  patterns.add<ConvertAtenFull>(converter, context);
   patterns.add<ConvertAtenRmsNorm>(converter, context);
   patterns.add<ConvertAtenSumDimIntList>(converter, context);
   patterns.add<ConvertAtenTransposeInt>(converter, context);

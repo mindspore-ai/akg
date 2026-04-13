@@ -40,9 +40,7 @@ namespace TorchD = mlir::torch::Torch;
 
 namespace {
 
-static bool isDvmKernelGenerator(llvm::StringRef kernelGenerator) {
-  return kernelGenerator == "dvm";
-}
+static bool isDvmKernelGenerator(llvm::StringRef kernelGenerator) { return kernelGenerator == "dvm"; }
 
 static std::optional<int64_t> getTorchOrRankedTensorRank(mlir::Type ty) {
   if (auto vtt = mlir::dyn_cast<TorchD::ValueTensorType>(ty)) {
@@ -64,7 +62,7 @@ static bool isTwoDMatmulOperandTypes(mlir::Type selfTy, mlir::Type otherTy) {
 }
 
 static mlir::FailureOr<mlir::Value> buildSwapLastTwoDimsPermute(mlir::Location loc, mlir::Value v,
-                                                              mlir::ConversionPatternRewriter &rewriter) {
+                                                                mlir::ConversionPatternRewriter &rewriter) {
   auto vtt = mlir::dyn_cast<TorchD::ValueTensorType>(v.getType());
   if (!vtt || !vtt.hasSizes()) {
     return mlir::failure();
@@ -133,7 +131,7 @@ mlir::Value buildTorchIntListFromI64ArrayAttr(mlir::ArrayAttr attr, mlir::Locati
 /// Same as `buildTorchIntListFromI64ArrayAttr` but accepts `DenseI64ArrayAttr` or `ArrayAttr` of `IntegerAttr`
 /// (common for ODS `I64ArrayAttr`). Fails if \p attr is neither.
 static mlir::FailureOr<mlir::Value> buildTorchIntListFromI64LikeAttr(mlir::Attribute attr, mlir::Location loc,
-                                                                      mlir::ConversionPatternRewriter &rewriter) {
+                                                                     mlir::ConversionPatternRewriter &rewriter) {
   llvm::SmallVector<mlir::Value> values;
   if (auto dense = mlir::dyn_cast<mlir::DenseI64ArrayAttr>(attr)) {
     values.reserve(dense.asArrayRef().size());
@@ -147,15 +145,14 @@ static mlir::FailureOr<mlir::Value> buildTorchIntListFromI64LikeAttr(mlir::Attri
       if (!intAttr) {
         return mlir::failure();
       }
-      values.push_back(
-        rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(intAttr.getInt())));
+      values.push_back(rewriter.create<TorchD::ConstantIntOp>(loc, rewriter.getI64IntegerAttr(intAttr.getInt())));
     }
   } else {
     return mlir::failure();
   }
   mlir::MLIRContext *ctx = rewriter.getContext();
-  return rewriter.create<TorchD::PrimListConstructOp>(loc, TorchD::ListType::get(ctx, TorchD::IntType::get(ctx)),
-                                                      values)
+  return rewriter
+    .create<TorchD::PrimListConstructOp>(loc, TorchD::ListType::get(ctx, TorchD::IntType::get(ctx)), values)
     .getResult();
 }
 
@@ -237,8 +234,8 @@ class ConvertMfuseAclnnConv2D : public mlir::OpConversionPattern<mlir::mfuse::Ac
     }
     mlir::Value noneBias = rewriter.create<TorchD::ConstantNoneOp>(op.getLoc());
     auto conv = buildAtenConvolutionFromMfuseConvAttrs(rewriter, op.getLoc(), resultType, input, weight, noneBias,
-                                                        op.getStride(), op.getPadding(), op.getDilation(),
-                                                        op.getTransposed(), op.getOutputPadding(), op.getGroups());
+                                                       op.getStride(), op.getPadding(), op.getDilation(),
+                                                       op.getTransposed(), op.getOutputPadding(), op.getGroups());
     if (failed(conv)) {
       return rewriter.notifyMatchFailure(
         op, "mfuse conv stride/padding/dilation/output_padding must be DenseI64ArrayAttr or ArrayAttr of integers");
@@ -283,22 +280,23 @@ class ConvertMfuseFull : public mlir::OpConversionPattern<mlir::mfuse::FullOp> {
 
   mlir::LogicalResult matchAndRewrite(mlir::mfuse::FullOp op, OpAdaptor adaptor,
                                       mlir::ConversionPatternRewriter &rewriter) const override {
-    auto resultType = mlir::cast<mlir::RankedTensorType>(op.getResult().getType());
+    auto resultType = mlir::dyn_cast<mlir::RankedTensorType>(op.getResult().getType());
+    if (!resultType) {
+      return mlir::failure();
+    }
 
     // Build size list from result shape.
     llvm::SmallVector<mlir::Value> sizeValues;
     sizeValues.reserve(resultType.getRank());
-    for (int64_t dim : resultType.getShape()) {
-      sizeValues.push_back(rewriter.create<TorchD::ConstantIntOp>(
-        op.getLoc(), rewriter.getI64IntegerAttr(dim)));
-    }
+    const auto &shape = resultType.getShape();
+    std::transform(shape.begin(), shape.end(), std::back_inserter(sizeValues), [&](int64_t dim) {
+      return rewriter.create<TorchD::ConstantIntOp>(op.getLoc(), rewriter.getI64IntegerAttr(dim));
+    });
     auto listType = TorchD::ListType::get(op.getContext(), TorchD::IntType::get(op.getContext()));
     mlir::Value sizeList = rewriter.create<TorchD::PrimListConstructOp>(op.getLoc(), listType, sizeValues);
 
-    // Build fill_value as a torch float scalar.
-    double fillValue = op.getFillValue().convertToDouble();
-    mlir::Value fillVal = rewriter.create<TorchD::ConstantFloatOp>(
-      op.getLoc(), rewriter.getFloatAttr(rewriter.getF64Type(), fillValue));
+    // Get fill_value from operand and convert to torch scalar.
+    mlir::Value fillVal = adaptor.getFillValue();
 
     // Restore dtype from saved attribute, or build from element type.
     mlir::Value dtypeVal;
@@ -340,8 +338,8 @@ class ConvertMfuseFull : public mlir::OpConversionPattern<mlir::mfuse::FullOp> {
     mlir::Type torchResultType = getTypeConverter()->convertType(resultType);
     if (!torchResultType) return mlir::failure();
 
-    rewriter.replaceOpWithNewOp<TorchD::AtenFullOp>(
-      op, torchResultType, sizeList, fillVal, dtypeVal, layoutVal, deviceVal, pinMemoryVal);
+    rewriter.replaceOpWithNewOp<TorchD::AtenFullOp>(op, torchResultType, sizeList, fillVal, dtypeVal, layoutVal,
+                                                    deviceVal, pinMemoryVal);
     return mlir::success();
   }
 };
@@ -686,8 +684,8 @@ static void populateMfuseMetaToTorchCustomPatterns(TypeConverter &converter, Rew
   MLIRContext *context = patterns.getContext();
   patterns.add<ConvertMfuseBroadcastTo>(converter, context);
   patterns.add<ConvertMfuseCast>(converter, context);
-  patterns.add<ConvertMfuseConv2D>(converter, context);
-  patterns.add<ConvertMfuseConv2DWithBias>(converter, context);
+  patterns.add<ConvertMfuseAclnnConv2D>(converter, context);
+  patterns.add<ConvertMfuseAclnnConv2DWithBias>(converter, context);
   patterns.add<ConvertMfuseFull>(converter, context);
   patterns.add<ConvertMfuseMatmul>(converter, context, kernelGenerator);
   patterns.add<ConvertMfuseMatmulWithBias>(converter, context, kernelGenerator);
@@ -719,7 +717,7 @@ static void populateMfusePartBinaryOpToTorchTensorScalarPatterns(TypeConverter &
 }  // namespace
 
 void populateMfuseMetaToTorchConversionPatterns(TypeConverter &converter, RewritePatternSet &patterns,
-                                              llvm::StringRef kernelGenerator) {
+                                                llvm::StringRef kernelGenerator) {
   populateMfuseMetaToTorchCustomPatterns(converter, patterns, kernelGenerator);
   populateMfusePartBinaryOpToTorchTensorScalarPatterns(converter, patterns);
 }
