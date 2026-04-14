@@ -111,11 +111,101 @@ module {
     return %0 : tensor<2xf32>
   }
 
+  // CHECK-LABEL: func @main_constant_fused
+  // CHECK-SAME: (%[[A:.*]]: tensor<2xf32>)
+  // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<2xf32> -> tensor<2xf32>
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<1.000000e+00> : tensor<f32>
+  // CHECK: %[[ADD:.*]] = dvm.binary Add %[[LOADA]], %[[CONST]] : tensor<2xf32>, tensor<2xf32> -> tensor<2xf32>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[ADD]] : tensor<2xf32> -> tensor<2xf32>
+  // CHECK: return %[[STORE]] : tensor<2xf32>
+  // CHECK-NOT: mfuse.constant
+  // CHECK-NOT: mfuse.add
+  func.func @main_constant_fused(%a: tensor<2xf32>) -> tensor<2xf32> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %0 = mfuse.constant dense<1.0> : tensor<f32, {is_scalar = ""}>
+    %1 = mfuse.add %a, %0 : (tensor<2xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2xf32>
+    return %1 : tensor<2xf32>
+  }
+
+  // CHECK-LABEL: func @main_constant_i32_fused
+  // CHECK-SAME: (%[[A:.*]]: tensor<2xi32>)
+  // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<2xi32> -> tensor<2xi32>
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<42> : tensor<i32>
+  // CHECK: %[[ADD:.*]] = dvm.binary Add %[[LOADA]], %[[CONST]] : tensor<2xi32>, tensor<2xi32> -> tensor<2xi32>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[ADD]] : tensor<2xi32> -> tensor<2xi32>
+  // CHECK: return %[[STORE]] : tensor<2xi32>
+  // CHECK-NOT: mfuse.constant
+  // CHECK-NOT: mfuse.add
+  func.func @main_constant_i32_fused(%a: tensor<2xi32>) -> tensor<2xi32> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %0 = mfuse.constant dense<42> : tensor<i32, {is_scalar = ""}>
+    %1 = mfuse.add %a, %0 : (tensor<2xi32>, tensor<i32, {is_scalar = ""}>) -> tensor<2xi32>
+    return %1 : tensor<2xi32>
+  }
+
+  // CHECK-LABEL: func @main_constant_i64_fused
+  // CHECK-SAME: (%[[A:.*]]: tensor<2xi64>)
+  // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<2xi64> -> tensor<2xi64>
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<100> : tensor<i64>
+  // CHECK: %[[MUL:.*]] = dvm.binary Mul %[[LOADA]], %[[CONST]] : tensor<2xi64>, tensor<2xi64> -> tensor<2xi64>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[MUL]] : tensor<2xi64> -> tensor<2xi64>
+  // CHECK: return %[[STORE]] : tensor<2xi64>
+  // CHECK-NOT: mfuse.constant
+  // CHECK-NOT: mfuse.mul
+  func.func @main_constant_i64_fused(%a: tensor<2xi64>) -> tensor<2xi64> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %0 = mfuse.constant dense<100> : tensor<i64, {is_scalar = ""}>
+    %1 = mfuse.mul %a, %0 : (tensor<2xi64>, tensor<i64, {is_scalar = ""}>) -> tensor<2xi64>
+    return %1 : tensor<2xi64>
+  }
+
+  // CHECK-LABEL: func @main_constant_f16_fused
+  // CHECK-SAME: (%[[A:.*]]: tensor<2xf16>)
+  // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<2xf16> -> tensor<2xf16>
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<2.5> : tensor<f16>
+  // CHECK: %[[MUL:.*]] = dvm.binary Mul %[[LOADA]], %[[CONST]] : tensor<2xf16>, tensor<2xf16> -> tensor<2xf16>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[MUL]] : tensor<2xf16> -> tensor<2xf16>
+  // CHECK: return %[[STORE]] : tensor<2xf16>
+  // CHECK-NOT: mfuse.constant
+  // CHECK-NOT: mfuse.mul
+  func.func @main_constant_f16_fused(%a: tensor<2xf16>) -> tensor<2xf16> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %0 = mfuse.constant dense<2.5> : tensor<f16, {is_scalar = ""}>
+    %1 = mfuse.mul %a, %0 : (tensor<2xf16>, tensor<f16, {is_scalar = ""}>) -> tensor<2xf16>
+    return %1 : tensor<2xf16>
+  }
+
+  // CHECK-LABEL: func @main_constant_f64_fused
+  // CHECK-SAME: (%[[A:.*]]: tensor<2xf64>)
+  // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<2xf64> -> tensor<2xf64>
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<3.1415926535897931> : tensor<f64>
+  // CHECK: %[[MUL:.*]] = dvm.binary Mul %[[LOADA]], %[[CONST]] : tensor<2xf64>, tensor<2xf64> -> tensor<2xf64>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[MUL]] : tensor<2xf64> -> tensor<2xf64>
+  // CHECK: return %[[STORE]] : tensor<2xf64>
+  // CHECK-NOT: mfuse.constant
+  // CHECK-NOT: mfuse.mul
+  func.func @main_constant_f64_fused(%a: tensor<2xf64>) -> tensor<2xf64> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %0 = mfuse.constant dense<3.141592653589793> : tensor<f64, {is_scalar = ""}>
+    %1 = mfuse.mul %a, %0 : (tensor<2xf64>, tensor<f64, {is_scalar = ""}>) -> tensor<2xf64>
+    return %1 : tensor<2xf64>
+  }
+
+  // CHECK-LABEL: func @main_constant_negative_fused
+  // CHECK-SAME: (%[[A:.*]]: tensor<2xf32>)
+  // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<2xf32> -> tensor<2xf32>
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<-5.500000e+00> : tensor<f32>
+  // CHECK: %[[ADD:.*]] = dvm.binary Add %[[LOADA]], %[[CONST]] : tensor<2xf32>, tensor<2xf32> -> tensor<2xf32>
+  // CHECK: %[[STORE:.*]] = dvm.store %[[ADD]] : tensor<2xf32> -> tensor<2xf32>
+  // CHECK: return %[[STORE]] : tensor<2xf32>
+  // CHECK-NOT: mfuse.constant
+  // CHECK-NOT: mfuse.add
+  func.func @main_constant_negative_fused(%a: tensor<2xf32>) -> tensor<2xf32> attributes {mfusion.outlined, mfusion.fusion_type = "dvm"} {
+    %0 = mfuse.constant dense<-5.5> : tensor<f32, {is_scalar = ""}>
+    %1 = mfuse.add %a, %0 : (tensor<2xf32>, tensor<f32, {is_scalar = ""}>) -> tensor<2xf32>
+    return %1 : tensor<2xf32>
+  }
+
   // CHECK-LABEL: func @main_neg_fused
   // CHECK-SAME: (%[[A:.*]]: tensor<2xf32>)
   // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<2xf32> -> tensor<2xf32>
-  // CHECK: %[[CONST:.*]] = arith.constant dense<0.000000e+00> : tensor<2xf32>
-  // CHECK: %[[NEG:.*]] = dvm.binary Sub %[[CONST]], %[[LOADA]] : tensor<2xf32>, tensor<2xf32> -> tensor<2xf32>
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<0.000000e+00> : tensor<f32>
+  // CHECK: %[[NEG:.*]] = dvm.binary Sub %[[CONST]], %[[LOADA]] : tensor<f32>, tensor<2xf32> -> tensor<2xf32>
   // CHECK: %[[STORE:.*]] = dvm.store %[[NEG]] : tensor<2xf32> -> tensor<2xf32>
   // CHECK: return %[[STORE]] : tensor<2xf32>
   // CHECK-NOT: mfuse.neg
@@ -200,8 +290,8 @@ module {
   // CHECK-LABEL: func @main_relu_fused
   // CHECK-SAME: (%[[A:.*]]: tensor<2xf32>)
   // CHECK: %[[LOADA:.*]] = dvm.load %[[A]] : tensor<2xf32> -> tensor<2xf32>
-  // CHECK: %[[CONST:.*]] = arith.constant dense<0.000000e+00> : tensor<2xf32>
-  // CHECK: %[[RELU:.*]] = dvm.binary Maximum %[[LOADA]], %[[CONST]] : tensor<2xf32>, tensor<2xf32> -> tensor<2xf32>
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<0.000000e+00> : tensor<f32>
+  // CHECK: %[[RELU:.*]] = dvm.binary Maximum %[[LOADA]], %[[CONST]] : tensor<2xf32>, tensor<f32> -> tensor<2xf32>
   // CHECK: %[[STORE:.*]] = dvm.store %[[RELU]] : tensor<2xf32> -> tensor<2xf32>
   // CHECK: return %[[STORE]] : tensor<2xf32>
   // CHECK-NOT: mfuse.relu
@@ -310,9 +400,9 @@ module {
   // CHECK-SAME: (%[[A:.*]]: tensor<4x8xf32>, %[[B:.*]]: tensor<8x16xf32>)
   // CHECK: %[[LOADA:.*]] = dvm.load %[[A]]
   // CHECK: %[[LOADB:.*]] = dvm.load %[[B]]
-  // CHECK: %[[CONST:.*]] = arith.constant dense<0.000000e+00>
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<0.000000e+00> : tensor<f32>
   // CHECK: %[[MATMUL:.*]] = dvm.matmul %[[LOADA]], %[[LOADB]]
-  // CHECK: %[[RELU:.*]] = dvm.binary Maximum %[[MATMUL]], %[[CONST]]
+  // CHECK: %[[RELU:.*]] = dvm.binary Maximum %[[MATMUL]], %[[CONST]] : tensor<4x16xf32>, tensor<f32>
   // CHECK: %[[STORE:.*]] = dvm.store %[[RELU]]
   // CHECK: return %[[STORE]]
   // CHECK-NOT: mfuse.matmul
@@ -360,8 +450,8 @@ module {
   // CHECK: %[[LOADB:.*]] = dvm.load %[[B]]
   // CHECK: %[[LOADC:.*]] = dvm.load %[[C]]
   // CHECK: %[[ADD:.*]] = dvm.binary Add %[[LOADA]], %[[LOADB]]
-  // CHECK: %[[CONST:.*]] = arith.constant dense<0.000000e+00>
-  // CHECK: %[[RELU:.*]] = dvm.binary Maximum %[[ADD]], %[[CONST]]
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<0.000000e+00> : tensor<f32>
+  // CHECK: %[[RELU:.*]] = dvm.binary Maximum %[[ADD]], %[[CONST]] : tensor<2xf32>, tensor<f32>
   // CHECK: %[[MAX:.*]] = dvm.binary Maximum %[[RELU]], %[[LOADC]]
   // CHECK: %[[STORE:.*]] = dvm.store %[[MAX]]
   // CHECK: return %[[STORE]]
@@ -424,8 +514,8 @@ module {
   // CHECK: %[[MATMUL:.*]] = dvm.matmul %[[LOADA]], %[[LOADB]]
   // CHECK: %[[ADD:.*]] = dvm.binary Add %[[MATMUL]], %[[LOADC]]
   // CHECK: %[[SUB:.*]] = dvm.binary Sub %[[ADD]], %[[LOADD]]
-  // CHECK: %[[CONST:.*]] = arith.constant
-  // CHECK: %[[RELU:.*]] = dvm.binary Maximum %[[SUB]], %[[CONST]]
+  // CHECK: %[[CONST:.*]] = dvm.constant dense<0.000000e+00> : tensor<f32>
+  // CHECK: %[[RELU:.*]] = dvm.binary Maximum %[[SUB]], %[[CONST]] : tensor<4x16xf32>, tensor<f32>
   // CHECK: %[[SQRT:.*]] = dvm.unary Sqrt %[[RELU]]
   // CHECK: %[[STORE:.*]] = dvm.store %[[SQRT]]
   // CHECK: return %[[STORE]]

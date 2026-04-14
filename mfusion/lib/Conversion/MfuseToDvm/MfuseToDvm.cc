@@ -154,13 +154,13 @@ struct ConvertNegOp : public OpConversionPattern<mfuse::NegOp> {
       return failure();
     }
 
-    // Create dense elements attribute with 0 value
-    auto shape = inputType.getShape();
-    auto denseAttr = DenseElementsAttr::get(RankedTensorType::get(shape, elementType), constantAttr);
+    // Create dense elements attribute with 0 value (scalar shape)
+    std::vector<int64_t> scalarShape;
+    auto denseAttr = DenseElementsAttr::get(RankedTensorType::get(scalarShape, elementType), constantAttr);
 
-    // Create arith.constant for the 0 tensor
+    // Create dvm.constant for the 0 scalar
     auto constantOp =
-      rewriter.create<arith::ConstantOp>(op.getLoc(), RankedTensorType::get(shape, elementType), denseAttr);
+      rewriter.create<dvm::ConstantOp>(op.getLoc(), RankedTensorType::get(scalarShape, elementType), denseAttr);
 
     // Create dvm.binary Sub: 0 - x
     auto subAttr = dvm::BinaryOpTypeAttr::get(getContext(), dvm::BinaryOpType::Sub);
@@ -301,11 +301,12 @@ struct ConvertReluOp : public OpConversionPattern<mfuse::ReluOp> {
       return failure();
     }
 
-    auto shape = inputType.getShape();
-    auto denseAttr = DenseElementsAttr::get(RankedTensorType::get(shape, elementType), constantAttr);
+    // Create dense elements attribute with 0 value (scalar shape)
+    std::vector<int64_t> scalarShape;
+    auto denseAttr = DenseElementsAttr::get(RankedTensorType::get(scalarShape, elementType), constantAttr);
 
     auto constantOp =
-      rewriter.create<arith::ConstantOp>(op.getLoc(), RankedTensorType::get(shape, elementType), denseAttr);
+      rewriter.create<dvm::ConstantOp>(op.getLoc(), RankedTensorType::get(scalarShape, elementType), denseAttr);
 
     // Create dvm.binary Maximum: max(x, 0)
     auto maxAttr = dvm::BinaryOpTypeAttr::get(getContext(), dvm::BinaryOpType::Maximum);
@@ -389,6 +390,71 @@ struct ConvertGroupedMatmulOp : public OpConversionPattern<mfuse::GroupedMatmulO
     rewriter.replaceOpWithNewOp<dvm::GroupedMatMulOp>(op, op.getResult().getType(), adaptor.getX(), adaptor.getWeight(),
                                                       transAAttr, transBAttr, adaptor.getBias(), adaptor.getGroupList(),
                                                       groupTypeAttr);
+    return success();
+  }
+};
+
+// Convert mfuse::ConstantOp (scalar only) to dvm::ConstantOp
+// Only supports scalar constants (is_scalar=true). Non-scalar constants are not supported.
+struct ConvertConstantOp : public OpConversionPattern<mfuse::ConstantOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(mfuse::ConstantOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (!isDvmOutlinedOp(op.getOperation())) {
+      return failure();
+    }
+    // Check if this is a scalar constant by examining the tensor encoding
+    auto resultType = op.getResult().getType();
+    auto rankedType = llvm::dyn_cast<RankedTensorType>(resultType);
+    if (!rankedType) {
+      return failure();
+    }
+
+    // Check if the tensor has is_scalar encoding
+    auto encoding = rankedType.getEncoding();
+    bool isScalar = false;
+    if (auto dictAttr = llvm::dyn_cast<DictionaryAttr>(encoding)) {
+      if (auto isScalarAttr = dictAttr.get(mfuse::kScalarMarkerAttr)) {
+        isScalar = true;
+      }
+    }
+
+    if (!isScalar) {
+      return op->emitError(
+        "non-scalar constant is not supported in DVM conversion, "
+        "only scalar constants (is_scalar=true) are supported");
+    }
+
+    // Get the value attribute from mfuse::ConstantOp
+    auto valueAttr = op.getValue();
+
+    // Create a new tensor type without encoding for dvm.constant
+    auto elementType = rankedType.getElementType();
+    auto scalarShape = rankedType.getShape();
+    // For scalar constants, the shape is empty (e.g., tensor<f32>)
+    // We need to preserve the shape for non-scalar broadcast
+    auto newTensorType = RankedTensorType::get(scalarShape, elementType);
+
+    // Create clean dense attribute without encoding
+    Attribute cleanValueAttr;
+    if (auto denseAttr = llvm::dyn_cast<DenseElementsAttr>(valueAttr)) {
+      // Create new dense attribute with same values but without encoding
+      auto oldType = denseAttr.getType();
+      auto newDenseType = RankedTensorType::get(oldType.getShape(), oldType.getElementType());
+      cleanValueAttr = denseAttr.reshape(newDenseType);
+    } else {
+      cleanValueAttr = valueAttr;
+    }
+
+    // Create dvm::ConstantOp with clean dense attribute
+    auto constOp = rewriter.create<dvm::ConstantOp>(op.getLoc(), newTensorType, cleanValueAttr);
+
+    // Replace all uses of mfuse::ConstantOp result with dvm::ConstantOp result
+    rewriter.replaceAllUsesWith(op.getResult(), constOp.getResult());
+
+    // Erase the original mfuse::ConstantOp
+    rewriter.eraseOp(op.getOperation());
     return success();
   }
 };
@@ -531,6 +597,10 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
     target.addDynamicallyLegalOp<mlir::mfuse::BatchMatmulOp>(
       [](mlir::mfuse::BatchMatmulOp op) { return !isDvmOutlinedOp(op.getOperation()); });
 
+    // Constant op - convert to arith.constant for inlining
+    target.addDynamicallyLegalOp<mlir::mfuse::ConstantOp>(
+      [](mlir::mfuse::ConstantOp op) { return !isDvmOutlinedOp(op.getOperation()); });
+
     // Operations not supported by DVM - mark as illegal in dvm outlined functions
     // target.addIllegalOp<mlir::mfuse::Conv2DOp>();
     // target.addIllegalOp<mlir::mfuse::Conv2DWithBiasOp>();
@@ -582,6 +652,7 @@ struct ConvertMfuseToDvmPass : public PassWrapper<ConvertMfuseToDvmPass, Operati
     patterns.add<ConvertBatchMatmulOp>(ctx);
     patterns.add<ConvertMatmulWithBiasOp>(ctx);
     patterns.add<ConvertGroupedMatmulOp>(ctx);
+    patterns.add<ConvertConstantOp>(ctx);
 
     if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
       signalPassFailure();
