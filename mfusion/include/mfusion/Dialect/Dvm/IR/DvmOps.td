@@ -19,6 +19,7 @@
 
 include "mfusion/Dialect/Dvm/IR/DvmDialect.td"
 include "mlir/IR/OpBase.td"
+include "mlir/IR/BuiltinAttributes.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/IR/EnumAttr.td"
@@ -290,6 +291,49 @@ def Dvm_SelectOp : Dvm_Op<"select", [Pure]> {
   let assemblyFormat = [{
     $cond `,` $lhs `,` $rhs attr-dict
     `:` `(` type($cond) `,` type($lhs) `,` type($rhs) `)` `->` type($result)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// Constant Operation
+// Represents a scalar constant value that can be inlined in code generation
+//===----------------------------------------------------------------------===//
+
+def Dvm_ConstantOp : Dvm_Op<"constant", [Pure, ConstantLike]> {
+  let summary = "Scalar constant operation";
+  let description = [{
+    Creates a scalar constant value as a tensor from dense attribute.
+
+    This op is used to represent constant scalar values in DVM. During Python
+    code generation, if an operand comes from a dvm.constant, the constant
+    value can be inlined directly instead of creating a separate load operation.
+
+    Example: `dvm.constant dense<9.7> : tensor<1xf32>`
+    Python: `k.add(arg0, 9.7)` instead of loading a constant tensor first.
+
+    Note: Only scalar constants (shape=[], i.e., tensor<xf32>) are supported.
+    The result type must be explicitly specified in the MLIR.
+  }];
+
+  let arguments = (ins TypedAttrInterface:$value);
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let hasCustomAssemblyFormat = 1;
+
+  let builders = [
+    OpBuilder<(ins "::mlir::Type":$resultType, "::mlir::Attribute":$value), [{
+      $_state.addAttribute("value", value);
+      $_state.addTypes(resultType);
+    }]>
+  ];
+
+  let extraClassDeclaration = [{
+    ::mlir::LogicalResult verify();
+
+    ::mlir::OpFoldResult fold(FoldAdaptor adaptor) {
+      return getValueAttr();
+    }
   }];
 }
 
