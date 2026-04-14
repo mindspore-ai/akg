@@ -106,6 +106,8 @@ struct DynamicAxisMapping {
   Value upperBound;
 };
 
+constexpr auto kInnerLoopAttr = "inner";
+
 // Loop tiling core helpers
 static Value calculateOffsetForPointLoop(mlir::Location loc, ArrayRef<std::pair<Value, Value>> levelInfo,
                                          Value tilesize, OpBuilder &builder);
@@ -902,7 +904,11 @@ static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf:
     if (origLoop.getNumResults() == 0) {
       bounds.inits = ValueRange{};
     } else {
-      bounds.inits = escapeReduceIterArgs ? ValueRange(origLoop.getInitArgs()) : ValueRange{};
+      bounds.inits =
+        escapeReduceIterArgs
+          ? (prevLoop.getNumRegionIterArgs() > 0 ? ValueRange(prevLoop.getRegionIterArgs())
+                                                 : ValueRange(origLoop.getInitArgs()))
+          : ValueRange{};
     }
     return bounds;
   }
@@ -947,12 +953,14 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
 
   // Special handling for reduction loops: keep original loop bounds in point loop
   if (origLoop->hasAttr(kReductionLoopAttr)) {
-    (void)prevLoop;
     bounds.lb = getOrCreateConstantStatic(loc, 0, builder, constantCache);
     bounds.ub = recreateConstantOrSelf(origLoop.getUpperBound(), builder);
     bounds.step = recreateConstantOrSelf(origLoop.getStep(), builder);
-    // Use original init args to preserve reduction semantics per point iteration
-    bounds.inits = origLoop.getInitArgs();
+    // Reduction point loops should continue the accumulator chain from the
+    // immediate wrapper when iter_args are present.
+    bounds.inits =
+      prevLoop.getNumRegionIterArgs() > 0 ?
+      ValueRange(prevLoop.getRegionIterArgs()) : ValueRange(origLoop.getInitArgs());
     return bounds;
   }
 
@@ -986,7 +994,9 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
   bounds.lb = builder.create<mlir::affine::AffineMinOp>(loc, minMap, ValueRange{lbCandidate, clampedOrigUb});
 
   // ub = min((sum(ivs) + 1) * lastTilesize, origUb)
-  Value sumIvsPlus1 = builder.create<arith::AddIOp>(loc, sumIvs, builder.create<arith::ConstantIndexOp>(loc, 1));
+  auto plusOneMap =
+    AffineMap::get(1, 0, builder.getAffineDimExpr(0) + builder.getAffineConstantExpr(1), builder.getContext());
+  Value sumIvsPlus1 = builder.create<mlir::affine::AffineApplyOp>(loc, plusOneMap, ValueRange{sumIvs});
   Value ubCandidate = builder.create<mlir::affine::AffineApplyOp>(loc, mulMap, ValueRange{sumIvsPlus1, lastTilesize});
 
   bounds.ub = builder.create<mlir::affine::AffineMinOp>(loc, minMap, ValueRange{ubCandidate, clampedOrigUb});
@@ -1236,6 +1246,14 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, Mutab
 
   mlir::scf::ForOp newLoop = replaceLoopWithNewBounds(loop, bounds, loc, loopBuilder);
   newLoops[curTile] = newLoop;
+
+  if (i == tileNum && !origLoop->hasAttr(kReductionLoopAttr) && lastTile >= 0 &&
+      lastTile < static_cast<int>(tileSizesInt.size())) {
+    unsigned pointVectorSize = tileSizesInt[lastTile];
+    if (pointVectorSize != static_cast<unsigned>(-1)) {
+      newLoop->setAttr(kInnerLoopAttr, loopBuilder.getI64IntegerAttr(pointVectorSize));
+    }
+  }
 
   updateReductionAttrsForTileLoop(i, j, bandSize, tileNum, origLoop, newLoop, loopBuilder);
   recordTileLevelInfoForLoop(i, j, tileNum, curTile, tileSizeValues, kernelsizeConstant, newLoop, tileLevelInfo);
@@ -1730,15 +1748,21 @@ static ReduceDirection getReduceType(mlir::scf::ForOp loop) {
 // Mark all inline-needed reduction loops with reduction attribute or delete attribute
 static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &builder, int64_t vectorSize) {
   funcOp->walk([&](mlir::scf::ForOp forOp) {
+    mlir::scf::ForOp loopWithPointVectorSize = forOp;
+    auto pointVectorSizeAttr = loopWithPointVectorSize->getAttrOfType<IntegerAttr>(kInnerLoopAttr);
     if (isInnermostScfLoop(forOp)) {
       auto reduceType = ReduceDirection::UNKNOWN;
       if (isTransposeLikeInnermostLoop(forOp)) {
+        if (pointVectorSizeAttr) {
+          loopWithPointVectorSize->removeAttr(kInnerLoopAttr);
+        }
         return;
       }
 
       // set vector attribute to innermost loops
       if (!forOp->hasAttr(kReductionLoopAttr)) {
-        forOp->setAttr(kVectorAttr, builder.getI64IntegerAttr(vectorSize));
+        int64_t pointVectorSize = pointVectorSizeAttr ? pointVectorSizeAttr.getInt() : vectorSize;
+        forOp->setAttr(kVectorAttr, builder.getI64IntegerAttr(pointVectorSize));
       } else {
         forOp->removeAttr(kReductionLoopAttr);
         reduceType = getReduceType(forOp);
@@ -1776,6 +1800,10 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
       if (forOp->hasAttr(kReductionLoopAttr)) {
         forOp->removeAttr(kReductionLoopAttr);
       }
+    }
+
+    if (pointVectorSizeAttr) {
+      loopWithPointVectorSize->removeAttr(kInnerLoopAttr);
     }
   });
 }
