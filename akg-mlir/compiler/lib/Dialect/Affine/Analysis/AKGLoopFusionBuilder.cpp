@@ -715,7 +715,11 @@ void FusionLoopNestInfo::collect(affine::AffineForOp rootOp) {
 // SubviewFusionHelper implementation
 // ===----------------------------------------------------------------------===//
 
-IntegerSet SubviewFusionHelper::buildGuardCondSet(MLIRContext *ctx, AffineExpr condExpr) {
+IntegerSet FusionGuard::buildCondSet(MLIRContext *ctx) const {
+  OpBuilder builder(ctx);
+  AffineExpr d0 = builder.getAffineDimExpr(0);
+  AffineExpr condExpr = (kind == ExtraDimEqLB) ? builder.getAffineConstantExpr(boundValue) - d0
+                                               : builder.getAffineConstantExpr(boundValue - 1) - d0;
   return IntegerSet::get(/*dimCount=*/1, /*symbolCount=*/0, {condExpr}, /*eqFlags=*/{false});
 }
 
@@ -730,91 +734,108 @@ static bool loopLBStepMatch(affine::AffineForOp a, affine::AffineForOp b) {
   return a.getLowerBoundMap() == b.getLowerBoundMap() && a.getStep() == b.getStep();
 }
 
-std::optional<SubviewFusionPlan> SubviewFusionHelper::buildSubviewFusionPlan(FusionLoopNestInfo &srcInfo,
-                                                                             FusionLoopNestInfo &dstInfo) {
-  if (srcInfo.loopDepth != dstInfo.loopDepth) return buildExtraDimPlan(srcInfo, dstInfo);
-  return buildMismatchUBPlan(srcInfo, dstInfo);
+// Build an identity dim map: [0, 1, ..., depth-1].
+static SmallVector<int, 4> makeIdentityDimMap(unsigned depth) {
+  SmallVector<int, 4> map;
+  for (unsigned i = 0; i < depth; ++i) map.push_back(i);
+  return map;
 }
 
-std::optional<SubviewFusionPlan> SubviewFusionHelper::buildExtraDimPlan(FusionLoopNestInfo &srcInfo,
-                                                                        FusionLoopNestInfo &dstInfo) {
-  FusionLoopNestInfo *deeper, *shallower;
-  bool srcIsDeeper;
-  if (srcInfo.loopDepth > dstInfo.loopDepth) {
-    deeper = &srcInfo;
-    shallower = &dstInfo;
-    srcIsDeeper = true;
-  } else {
-    deeper = &dstInfo;
-    shallower = &srcInfo;
-    srcIsDeeper = false;
+// Build a dim map that skips one position: [0,..,skipPos-1, skipPos+1,..,depth].
+static SmallVector<int, 4> makeSkipOneDimMap(unsigned secondaryDepth, unsigned skipPos) {
+  SmallVector<int, 4> map;
+  for (unsigned i = 0; i < skipPos; ++i) map.push_back(i);
+  for (unsigned i = skipPos; i < secondaryDepth; ++i) map.push_back(i + 1);
+  return map;
+}
+
+bool SubviewFusionHelper::buildSubviewFusionPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, int srcRank,
+                                                 int dstRank) {
+  // If rank is unavailable (-1), fallback to loop depth.
+  int effectiveSrcRank = (srcRank >= 0 && dstRank >= 0) ? srcRank : static_cast<int>(srcInfo.loopDepth);
+  int effectiveDstRank = (srcRank >= 0 && dstRank >= 0) ? dstRank : static_cast<int>(dstInfo.loopDepth);
+
+  if (effectiveSrcRank != effectiveDstRank) {
+    return buildExtraDimPlan(srcInfo, dstInfo, effectiveSrcRank, effectiveDstRank);
   }
+  return buildSameRankPlan(srcInfo, dstInfo);
+}
 
-  if (deeper->loopDepth != shallower->loopDepth + 1) return std::nullopt;
+bool SubviewFusionHelper::buildExtraDimPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, int srcRank,
+                                            int dstRank) {
+  // Primary = the side with higher memref rank (or loop depth as fallback).
+  bool srcIsPrimary = (srcRank > dstRank);
+  FusionLoopNestInfo *primary = srcIsPrimary ? &srcInfo : &dstInfo;
+  FusionLoopNestInfo *secondary = srcIsPrimary ? &dstInfo : &srcInfo;
 
-  unsigned N = deeper->loopDepth;
-  unsigned M = shallower->loopDepth;
+  // Primary must have exactly one more loop than secondary.
+  if (primary->loopDepth != secondary->loopDepth + 1) return false;
+
+  unsigned N = primary->loopDepth;
+  unsigned M = secondary->loopDepth;
 
   for (unsigned p = 0; p < N; ++p) {
     bool matched = true;
-    for (unsigned i = 0; i < p && matched; ++i) matched = loopBoundsMatch(deeper->loops[i], shallower->loops[i]);
-    for (unsigned i = p; i < M && matched; ++i) matched = loopBoundsMatch(deeper->loops[i + 1], shallower->loops[i]);
+    for (unsigned i = 0; i < p && matched; ++i) matched = loopBoundsMatch(primary->loops[i], secondary->loops[i]);
+    for (unsigned i = p; i < M && matched; ++i) matched = loopBoundsMatch(primary->loops[i + 1], secondary->loops[i]);
     if (!matched) continue;
 
-    auto extraLoop = deeper->loops[p];
-    if (!extraLoop.hasConstantLowerBound() || !extraLoop.hasConstantUpperBound()) return std::nullopt;
+    auto extraLoop = primary->loops[p];
+    if (!extraLoop.hasConstantLowerBound() || !extraLoop.hasConstantUpperBound()) return false;
 
-    SubviewFusionPlan plan;
-    plan.skeletonInfo = deeper;
-    plan.otherInfo = shallower;
-    plan.otherIsSrc = !srcIsDeeper;
-    for (unsigned i = 0; i < p; ++i) plan.dimMap.push_back(i);
-    for (unsigned i = p; i < M; ++i) plan.dimMap.push_back(i + 1);
-    plan.guardDimPos = p;
-    plan.guardKind = SubviewFusionPlan::ExtraDimEqLB;
-    plan.extraDimLB = extraLoop.getConstantLowerBound();
     int64_t lb = extraLoop.getConstantLowerBound();
     int64_t ub = extraLoop.getConstantUpperBound();
     int64_t step = extraLoop.getStep().getSExtValue();
-    plan.needsGuard = (ub - lb > step);
-    return plan;
+
+    // Guard needed only when the extra dimension iterates more than once.
+    FusionGuard guard;
+    if (ub - lb > step) {
+      guard = {FusionGuard::ExtraDimEqLB, p, lb};
+    }
+
+    plan.srcInfo = &srcInfo;
+    plan.dstInfo = &dstInfo;
+    plan.srcIsPrimary = srcIsPrimary;
+    plan.dimMap = makeSkipOneDimMap(M, p);
+    plan.guard = guard;
+    return true;
   }
-  return std::nullopt;
+  return false;
 }
 
-std::optional<SubviewFusionPlan> SubviewFusionHelper::buildMismatchUBPlan(FusionLoopNestInfo &srcInfo,
-                                                                          FusionLoopNestInfo &dstInfo) {
-  unsigned srcDepth = srcInfo.loopDepth;
+bool SubviewFusionHelper::buildSameRankPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo) {
+  unsigned depth = srcInfo.loopDepth;
   int mismatchPos = -1;
-  for (unsigned i = 0; i < srcDepth; ++i) {
+  for (unsigned i = 0; i < depth; ++i) {
     if (loopBoundsMatch(srcInfo.loops[i], dstInfo.loops[i])) continue;
     if (loopLBStepMatch(srcInfo.loops[i], dstInfo.loops[i])) {
-      if (mismatchPos != -1) return std::nullopt;  // multiple mismatches
+      if (mismatchPos != -1) return false;  // multiple mismatches
       mismatchPos = static_cast<int>(i);
     } else {
-      return std::nullopt;
+      return false;
     }
   }
-  if (mismatchPos == -1) return std::nullopt;
+
+  plan.srcInfo = &srcInfo;
+  plan.dstInfo = &dstInfo;
+  plan.dimMap = makeIdentityDimMap(depth);
+
+  if (mismatchPos == -1) {
+    // All bounds match exactly — trivial fusion, no guard needed.
+    plan.srcIsPrimary = true;
+    return true;
+  }
 
   auto srcLoop = srcInfo.loops[mismatchPos];
   auto dstLoop = dstInfo.loops[mismatchPos];
-  if (!srcLoop.hasConstantUpperBound() || !dstLoop.hasConstantUpperBound()) return std::nullopt;
+  if (!srcLoop.hasConstantUpperBound() || !dstLoop.hasConstantUpperBound()) return false;
 
   int64_t srcUB = srcLoop.getConstantUpperBound();
   int64_t dstUB = dstLoop.getConstantUpperBound();
-  bool srcIsSkeleton = (srcUB >= dstUB);
 
-  SubviewFusionPlan plan;
-  plan.skeletonInfo = srcIsSkeleton ? &srcInfo : &dstInfo;
-  plan.otherInfo = srcIsSkeleton ? &dstInfo : &srcInfo;
-  plan.otherIsSrc = !srcIsSkeleton;
-  for (unsigned i = 0; i < srcDepth; ++i) plan.dimMap.push_back(i);
-  plan.guardDimPos = static_cast<unsigned>(mismatchPos);
-  plan.guardKind = SubviewFusionPlan::UpperBoundLT;
-  plan.smallerUB = std::min(srcUB, dstUB);
-  plan.needsGuard = true;
-  return plan;
+  plan.srcIsPrimary = (srcUB >= dstUB);
+  plan.guard = {FusionGuard::SmallerUB, static_cast<unsigned>(mismatchPos), std::min(srcUB, dstUB)};
+  return true;
 }
 
 SmallVector<CloneStage> SubviewFusionHelper::collectCloneStages(const FusionLoopNestInfo &info) {
@@ -857,25 +878,19 @@ SmallVector<CloneStage> SubviewFusionHelper::collectCloneStages(const FusionLoop
   return stages;
 }
 
-void SubviewFusionHelper::emitCloneStages(const SubviewFusionPlan &plan, const SmallVector<CloneStage> &stages,
-                                          IRMapping &mapper) {
-  auto targetLoop = plan.skeletonInfo->loops[plan.skeletonInfo->loopDepth - 1];
+void SubviewFusionHelper::emitCloneStages(const SmallVector<CloneStage> &stages, IRMapping &mapper) {
+  auto targetLoop = plan.primaryInfo()->loops[plan.primaryInfo()->loopDepth - 1];
   Block *targetBody = targetLoop.getBody();
-  Block::iterator insertPt = plan.otherIsSrc ? targetBody->begin() : std::prev(targetBody->end());
+  // Secondary is src → insert at start (src body first); secondary is dst → insert at end (dst body last).
+  bool secondaryIsSrc = !plan.srcIsPrimary;
+  Block::iterator insertPt = secondaryIsSrc ? targetBody->begin() : std::prev(targetBody->end());
 
   // Build guard condition once, apply to every stage.
   Value guardIV;
   IntegerSet condSet;
-  if (plan.needsGuard) {
-    guardIV = plan.skeletonInfo->loops[plan.guardDimPos].getInductionVar();
-    OpBuilder exprBuilder(targetLoop->getContext());
-    AffineExpr condExpr;
-    if (plan.guardKind == SubviewFusionPlan::ExtraDimEqLB) {
-      condExpr = exprBuilder.getAffineConstantExpr(plan.extraDimLB) - exprBuilder.getAffineDimExpr(0);
-    } else {
-      condExpr = exprBuilder.getAffineConstantExpr(plan.smallerUB - 1) - exprBuilder.getAffineDimExpr(0);
-    }
-    condSet = buildGuardCondSet(targetLoop->getContext(), condExpr);
+  if (plan.guard.isNeeded()) {
+    guardIV = plan.primaryInfo()->loops[plan.guard.dimPos].getInductionVar();
+    condSet = plan.guard.buildCondSet(targetLoop->getContext());
   }
 
   for (const auto &stage : stages) {
@@ -898,29 +913,27 @@ void SubviewFusionHelper::emitCloneStages(const SubviewFusionPlan &plan, const S
   }
 }
 
-bool SubviewFusionHelper::tryFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo,
-                                  FusionLoopNestInfo &dstInfo, unsigned &erasedGroupId, unsigned &aliasTargetGroupId,
-                                  affine::AffineForOp &loopToErase) {
-  auto plan = buildSubviewFusionPlan(srcInfo, dstInfo);
-  if (!plan) return false;
-
-  auto stages = collectCloneStages(*plan->otherInfo);
-  if (stages.empty()) return false;
-
-  // Build IV mapping: other.loops[i].iv → skeleton.loops[dimMap[i]].iv
-  IRMapping mapper;
-  for (unsigned i = 0; i < plan->otherInfo->loopDepth; ++i) {
-    mapper.map(plan->otherInfo->loops[i].getInductionVar(),
-               plan->skeletonInfo->loops[plan->dimMap[i]].getInductionVar());
+std::optional<SubviewFusionPlan> SubviewFusionHelper::tryFuse(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo,
+                                                              int srcRank, int dstRank) {
+  plan = {};  // reset for each fusion attempt
+  if (!buildSubviewFusionPlan(srcInfo, dstInfo, srcRank, dstRank)) {
+    return std::nullopt;
   }
 
-  emitCloneStages(*plan, stages, mapper);
+  auto stages = collectCloneStages(*plan.secondaryInfo());
+  if (stages.empty()) {
+    return std::nullopt;
+  }
 
-  bool keepSrc = (plan->skeletonInfo == &srcInfo);
-  erasedGroupId = keepSrc ? dstGroupId : srcGroupId;
-  aliasTargetGroupId = keepSrc ? srcGroupId : dstGroupId;
-  loopToErase = plan->otherInfo->root;
-  return true;
+  // Build IV mapping: secondary.loops[i].iv → primary.loops[dimMap[i]].iv
+  IRMapping mapper;
+  for (unsigned i = 0; i < plan.secondaryInfo()->loopDepth; ++i) {
+    mapper.map(plan.secondaryInfo()->loops[i].getInductionVar(),
+               plan.primaryInfo()->loops[plan.dimMap[i]].getInductionVar());
+  }
+
+  emitCloneStages(stages, mapper);
+  return plan;
 }
 
 // ===----------------------------------------------------------------------===//
@@ -1124,6 +1137,37 @@ static void collectLoadAndStoreOpsFromOps(Value depMemref, affine::AffineForOp l
   });
 }
 
+// Collects load/store access ops from src and dst loops that touch depMemref.
+// Returns false if depMemref is null.
+static bool collectFusionAccesses(Value depMemref, affine::AffineForOp srcForOp, affine::AffineForOp dstForOp,
+                                  FusionAccessInfo &info) {
+  if (!depMemref) {
+    llvm::dbgs() << "No memrefs found for fusion\n";
+    return false;
+  }
+  collectLoadAndStoreOpsFromOps(depMemref, srcForOp, info.srcMemFlags, info.srcAccesses);
+  collectLoadAndStoreOpsFromOps(depMemref, dstForOp, info.dstMemFlags, info.dstAccesses);
+  return true;
+}
+
+// Extracts the maximum memref rank across all access ops in the list.
+// Returns -1 if no valid access is found.
+static int getRankFromAccesses(const SmallVector<Operation *, 4> &accesses) {
+  int maxRank = -1;
+  for (auto *op : accesses) {
+    Value memref;
+    if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
+      memref = read.getMemRef();
+    } else if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+      memref = write.getMemRef();
+    }
+    if (memref) {
+      maxRank = std::max(maxRank, static_cast<int>(cast<MemRefType>(memref.getType()).getRank()));
+    }
+  }
+  return maxRank;
+}
+
 // Helper function to check if the outermost loops (up to depth) have matching bounds.
 static bool checkLoopBoundsMatch(const SmallVector<affine::AffineForOp, 4> &loops1,
                                  const SmallVector<affine::AffineForOp, 4> &loops2, unsigned depth) {
@@ -1238,27 +1282,14 @@ void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strate
 
 unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo, const affine::FusionStrategy &strategy,
-  llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions, const FusionPlan &plan, bool srcDstReversed) {
-  if (!plan.depInfo.memref) {
-    llvm::dbgs() << "No memrefs found for fusion\n";
-    return 0;
-  }
-
+  llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions, const FusionPlan &plan,
+  FusionAccessInfo &accessInfo, bool srcDstReversed) {
   affine::AffineForOp srcAffineForOp = srcInfo.root;
   affine::AffineForOp dstAffineForOp = dstInfo.root;
-
-  DenseMap<Value, bool> srcMemFlags;
-  SmallVector<Operation *, 4> srcAccesses;
-  DenseMap<Value, bool> dstMemFlags;
-  SmallVector<Operation *, 4> dstAccesses;
-
-  if (!srcDstReversed) {
-    collectLoadAndStoreOpsFromOps(plan.depInfo.memref, srcAffineForOp, srcMemFlags, srcAccesses);
-    collectLoadAndStoreOpsFromOps(plan.depInfo.memref, dstAffineForOp, dstMemFlags, dstAccesses);
-  } else {
-    collectLoadAndStoreOpsFromOps(plan.depInfo.memref, dstAffineForOp, srcMemFlags, srcAccesses);
-    collectLoadAndStoreOpsFromOps(plan.depInfo.memref, srcAffineForOp, dstMemFlags, dstAccesses);
-  }
+  auto &srcMemFlags = accessInfo.srcMemFlags;
+  auto &srcAccesses = accessInfo.srcAccesses;
+  auto &dstMemFlags = accessInfo.dstMemFlags;
+  auto &dstAccesses = accessInfo.dstAccesses;
 
   bool isSrcBeforeDst = srcAffineForOp->isBeforeInBlock(dstAffineForOp);
   affine::AffineForOp loopA = isSrcBeforeDst ? srcAffineForOp : dstAffineForOp;
@@ -1352,22 +1383,34 @@ void FusionCodeGenHelper::doHFuse(unsigned srcGroupId, unsigned dstGroupId, affi
   srcInfo.collect(srcAffineForOp);
   dstInfo.collect(dstAffineForOp);
 
-  unsigned erasedGid, aliasGid;
-  affine::AffineForOp loopToErase;
-  if (plan.isSubviewFusion &&
-      subviewHelper.tryFuse(srcGroupId, dstGroupId, srcInfo, dstInfo, erasedGid, aliasGid, loopToErase)) {
-    eraseLoopAndCleanupNode(erasedGid, aliasGid, loopToErase);
+  // Collect accesses once in true src/dst order, shared by subview and regular fusion paths.
+  FusionAccessInfo accessInfo;
+  if (!collectFusionAccesses(plan.depInfo.memref, srcAffineForOp, dstAffineForOp, accessInfo)) {
+    doIFuse(srcGroupId, dstGroupId, srcInfo, dstInfo, plan);
     return;
+  }
+
+  // Try subview fusion first.
+  if (plan.isSubviewFusion) {
+    int srcRank = getRankFromAccesses(accessInfo.srcAccesses);
+    int dstRank = getRankFromAccesses(accessInfo.dstAccesses);
+    if (auto fusionPlan = subviewHelper.tryFuse(srcInfo, dstInfo, srcRank, dstRank)) {
+      unsigned erasedGid = fusionPlan->srcIsPrimary ? dstGroupId : srcGroupId;
+      unsigned aliasGid = fusionPlan->srcIsPrimary ? srcGroupId : dstGroupId;
+      eraseLoopAndCleanupNode(erasedGid, aliasGid, fusionPlan->secondaryInfo()->root);
+      return;
+    }
   }
 
   SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
   affine::FusionStrategy strategy(affine::FusionStrategy::ProducerConsumer);
 
   unsigned maxLegalFusionDepth = 0;
-  if (srcInfo.isPerfect || !dstInfo.isPerfect) {
-    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
+  bool keepSrcDst = srcInfo.isPerfect || !dstInfo.isPerfect;
+  if (keepSrcDst) {
+    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan, accessInfo);
   } else {
-    maxLegalFusionDepth = findMaxLegalFusionDepth(dstInfo, srcInfo, strategy, depthSliceUnions, plan, true);
+    maxLegalFusionDepth = findMaxLegalFusionDepth(dstInfo, srcInfo, strategy, depthSliceUnions, plan, accessInfo, true);
   }
 
   if (maxLegalFusionDepth == 0) {
@@ -1380,10 +1423,12 @@ void FusionCodeGenHelper::doHFuse(unsigned srcGroupId, unsigned dstGroupId, affi
   affine::ComputationSliceState &bestSlice = depthSliceUnions[bestDepth - 1];
   assert(!bestSlice.isEmpty() && "Missing slice union for depth");
 
-  if (srcInfo.isPerfect || !dstInfo.isPerfect) {
+  if (keepSrcDst) {
+    // Fusion from src to dst.
     fuseLoops(srcAffineForOp, dstAffineForOp, bestSlice);
     eraseLoopAndCleanupNode(srcGroupId, dstGroupId, srcAffineForOp);
   } else {
+    // Fusion from dst to src.
     fuseLoops(dstAffineForOp, srcAffineForOp, bestSlice);
     eraseLoopAndCleanupNode(dstGroupId, srcGroupId, dstAffineForOp);
   }
@@ -1395,14 +1440,17 @@ void FusionCodeGenHelper::doVFuse(unsigned srcGroupId, unsigned dstGroupId, affi
   srcInfo.collect(srcAffineForOp);
   dstInfo.collect(dstAffineForOp);
 
+  FusionAccessInfo accessInfo;
+  collectFusionAccesses(plan.depInfo.memref, srcAffineForOp, dstAffineForOp, accessInfo);
+
   SmallVector<affine::ComputationSliceState, 8> depthSliceUnions;
   unsigned maxLegalFusionDepth = 0;
   if (plan.depInfo.memref) {
     affine::FusionStrategy strategy(plan.depInfo.memref);
-    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
+    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan, accessInfo);
   } else {
     affine::FusionStrategy strategy(affine::FusionStrategy::Generic);
-    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan);
+    maxLegalFusionDepth = findMaxLegalFusionDepth(srcInfo, dstInfo, strategy, depthSliceUnions, plan, accessInfo);
   }
 
   if (maxLegalFusionDepth == 0) {
