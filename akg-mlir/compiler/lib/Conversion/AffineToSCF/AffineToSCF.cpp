@@ -77,6 +77,11 @@ class AffineForToSCFPattern : public OpRewritePattern<affine::AffineForOp> {
       scfForOp->setAttr(kReductionLoopAttr, rewriter.getUnitAttr());
     }
 
+    // Copy broadcast attribute from affine.for to scf.for
+    if (op->getAttr(kBroadcastLoopAttr)) {
+      scfForOp->setAttr(kBroadcastLoopAttr, rewriter.getUnitAttr());
+    }
+
     // Move the body from affine.for to scf.for
     rewriter.eraseBlock(scfForOp.getBody());
     rewriter.inlineRegionBefore(op.getRegion(), scfForOp.getRegion(), scfForOp.getRegion().end());
