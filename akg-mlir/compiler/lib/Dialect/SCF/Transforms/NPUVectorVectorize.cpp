@@ -50,6 +50,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/Pass/Pass.h"
@@ -1682,61 +1683,11 @@ static void collectVectorizationStrategy(
 static LogicalResult vectorizeLoopMultiDim(scf::ForOp nestedLoop,
                                            VectorizationContext &parentCtx) {
   if (parentCtx.loopToVectorDim.count(nestedLoop)) {
-    unsigned dim = parentCtx.loopToVectorDim.lookup(nestedLoop);
-    int64_t nestedActualStep = parentCtx.vectorSizes[dim];
-    Location loc = nestedLoop.getLoc();
-
     Value lb = parentCtx.valueMapping.lookupOrDefault(nestedLoop.getLowerBound());
-    Value ub = parentCtx.valueMapping.lookupOrDefault(nestedLoop.getUpperBound());
-
-    bool needLoop = false;
-    if (parentCtx.isDynamic()) {
-      needLoop = true;
-    } else {
-      auto ubConst = nestedLoop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
-      auto lbConst = nestedLoop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
-      if (ubConst && lbConst) {
-        int64_t tripCount = ubConst.value() - lbConst.value();
-        needLoop = (nestedActualStep < tripCount);
-      }
-    }
-
-    Value nestedStepValue;
-    if (needLoop) {
-      if (parentCtx.vectorSizeValues[dim]) {
-        // Recompute in current block using MAPPED lb/ub: nestedLoop.getUpperBound()
-        // returns original SSA from the block that gets erased. Using mapped values
-        // avoids dangling refs and verifier crash (Type::isSignlessIntOrIndex on
-        // invalid operand).
-        Value maxStep = parentCtx.builder.create<arith::ConstantIndexOp>(
-            loc, nestedActualStep);
-        nestedStepValue = computeDynamicVectorSize(
-            ub, lb, maxStep, parentCtx.builder, loc);
-      } else {
-        nestedStepValue =
-            parentCtx.builder.create<arith::ConstantIndexOp>(loc, nestedActualStep);
-      }
-      scf::ForOp innerVecLoop = parentCtx.builder.create<scf::ForOp>(
-          nestedLoop.getLoc(), lb, ub, nestedStepValue, std::nullopt,
-          [](OpBuilder &, Location, Value, ValueRange) {});
-      parentCtx.valueMapping.map(nestedLoop.getInductionVar(),
-                                 innerVecLoop.getInductionVar());
-      parentCtx.builder.setInsertionPointToStart(innerVecLoop.getBody());
-
-      for (Operation &op : nestedLoop.getBody()->without_terminator()) {
-        if (failed(vectorizeOneOp(op, parentCtx))) {
-          return failure();
-        }
-      }
-
-      parentCtx.builder.create<scf::YieldOp>(nestedLoop.getLoc());
-      parentCtx.builder.setInsertionPointAfter(innerVecLoop);
-    } else {
-      parentCtx.valueMapping.map(nestedLoop.getInductionVar(), lb);
-      for (Operation &op : nestedLoop.getBody()->without_terminator()) {
-        if (failed(vectorizeOneOp(op, parentCtx))) {
-          return failure();
-        }
+    parentCtx.valueMapping.map(nestedLoop.getInductionVar(), lb);
+    for (Operation &op : nestedLoop.getBody()->without_terminator()) {
+      if (failed(vectorizeOneOp(op, parentCtx))) {
+        return failure();
       }
     }
     return success();
@@ -1811,27 +1762,7 @@ static LogicalResult createVecLoopAndPopulateBody(VectorizationContext &ctx,
   return success();
 }
 
-static LogicalResult vectorizeLoopElementwiseCase(VectorizationContext &ctx,
-                                                  scf::ForOp scalarLoop,
-                                                  int64_t actualStep) {
-  bool needLoop = false;
-  if (ctx.isDynamic()) {
-    needLoop = true;
-  } else {
-    auto ubConst = scalarLoop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
-    auto lbConst = scalarLoop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
-    if (ubConst && lbConst) {
-      int64_t tripCount = ubConst.value() - lbConst.value();
-      needLoop = (actualStep < tripCount);
-    }
-  }
-  if (needLoop) {
-    ctx.builder.setInsertionPoint(scalarLoop);
-    if (failed(createVectorizedLoop(ctx)))
-      return failure();
-    finalizeElementwise(ctx);
-    return success();
-  }
+static LogicalResult vectorizeLoopElementwiseCase(VectorizationContext &ctx) {
   return vectorizeElementwiseInline(ctx);
 }
 
@@ -1879,7 +1810,7 @@ static LogicalResult vectorizeLoop(
 
   switch (mode) {
   case VectorizationMode::Elementwise:
-    return vectorizeLoopElementwiseCase(ctx, scalarLoop, actualStep);
+    return vectorizeLoopElementwiseCase(ctx);
   case VectorizationMode::ReductionX:
     return vectorizeLoopReductionXCase(ctx, scalarLoop);
   case VectorizationMode::ReductionY:
@@ -1917,21 +1848,7 @@ static void runMultiDimPath(scf::ForOp loop, VectorizationMode mode,
   collectVectorizationStrategy(loop, ctx, attrBuilder, nextDim);
   if (ctx.vectorSizes.empty()) return;
   ctx.builder.setInsertionPoint(loop);
-  bool needLoop = false;
-  if (ctx.isDynamic()) {
-    needLoop = true;
-  } else {
-    auto ubConst = loop.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
-    auto lbConst = loop.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
-    if (ubConst && lbConst)
-      needLoop = (ctx.vectorSizes[0] < ubConst.value() - lbConst.value());
-  }
-  if (needLoop) {
-    if (failed(createVectorizedLoop(ctx))) return;
-    finalizeElementwise(ctx);
-  } else {
-    (void)vectorizeElementwiseInline(ctx);
-  }
+  (void)vectorizeElementwiseInline(ctx);
 }
 
 static void runNormal1DPath(scf::ForOp loop, VectorizationMode mode,
