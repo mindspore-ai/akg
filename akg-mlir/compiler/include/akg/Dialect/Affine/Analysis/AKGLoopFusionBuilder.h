@@ -101,13 +101,54 @@ struct FusionLoopNestInfo {
   void collect(affine::AffineForOp rootOp);
 };
 
-// Describes loop bounds mismatch caused by subview partial coverage.
-struct SubviewBoundsMismatch {
-  unsigned mismatchDim;  // first loop level with mismatched bounds
-  int64_t largerUB;      // upper bound of the larger loop
-  int64_t smallerUB;     // upper bound of the smaller loop
-  int64_t commonLB;      // common lower bound
-  bool srcIsLarger;      // true when src loop has larger iteration range
+/// Describes a unified subview fusion plan: skeleton choice, dimension alignment,
+/// guard condition, and insertion order.
+struct SubviewFusionPlan {
+  FusionLoopNestInfo *skeletonInfo;
+  FusionLoopNestInfo *otherInfo;
+  bool otherIsSrc;
+  llvm::SmallVector<int, 4> dimMap;
+  unsigned guardDimPos;
+  enum GuardKind { ExtraDimEqLB, UpperBoundLT } guardKind;
+  int64_t extraDimLB = 0;
+  int64_t smallerUB = 0;
+  bool needsGuard = true;
+};
+
+/// One stage of operations to clone from the erased (other) side.
+using CloneStage = llvm::SmallVector<Operation *, 8>;
+
+/// Handles subview-aware loop fusion using a unified plan-based pipeline:
+///   1. buildSubviewFusionPlan — select skeleton, compute dimension alignment, determine guard
+///   2. collectCloneStages — extract per-level op groups from the erased side
+///   3. emitCloneStages — clone stages into skeleton's innermost body with IV mapping and guards
+/// Covers: perfect-vs-perfect, perfect-vs-imperfect, imperfect-vs-perfect.
+/// Ordering: src body first, dst body second.
+struct SubviewFusionHelper {
+  /// Attempts subview fusion between src and dst loop nests.
+  /// Returns true if fusion was performed. On success, output params contain the info needed for cleanup.
+  bool tryFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo,
+               unsigned &erasedGroupId, unsigned &aliasTargetGroupId, affine::AffineForOp &loopToErase);
+
+ private:
+  /// Builds a unified fusion plan: selects skeleton, computes dimension alignment, and determines guard.
+  std::optional<SubviewFusionPlan> buildSubviewFusionPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
+
+  /// Handles the case where one nest has exactly one extra loop dimension.
+  std::optional<SubviewFusionPlan> buildExtraDimPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
+
+  /// Handles the same-depth case where one dimension has a different upper bound.
+  std::optional<SubviewFusionPlan> buildMismatchUBPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
+
+  /// Collects clone stages from the other (erased) side's loop body.
+  /// Perfect nest → 1 stage; imperfect nest → one stage per level from perfectDepth-1.
+  llvm::SmallVector<CloneStage> collectCloneStages(const FusionLoopNestInfo &info);
+
+  /// Emits all clone stages into the skeleton's innermost loop body with IV mapping and optional guard.
+  void emitCloneStages(const SubviewFusionPlan &plan, const llvm::SmallVector<CloneStage> &stages, IRMapping &mapper);
+
+  /// Builds guard condition: condExpr >= 0 over a single dim.
+  IntegerSet buildGuardCondSet(MLIRContext *ctx, AffineExpr condExpr);
 };
 
 struct FusionCodeGenHelper {
@@ -135,17 +176,13 @@ struct FusionCodeGenHelper {
   void buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> loadAndStoreOpsA,
                          llvm::SmallVector<Operation *, 4> &strategyOpsA);
 
-  // Attempts subview-aware fusion when loop bounds differ due to subview partial coverage.
-  // Returns true if subview fusion was performed, false otherwise.
-  bool trySubviewFusion(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo,
-                        FusionLoopNestInfo &dstInfo);
-
   // Records alias, erases the fused-away loop, and updates plan.depInfo (refreshes
   // alias target node's loads/stores and replaces erased node refs in depInfo).
   void eraseLoopAndCleanupNode(unsigned erasedNodeId, unsigned aliasTargetId, affine::AffineForOp loopToErase);
 
   MemRefDependenceGraphForFusion &mdg;
   std::unordered_map<unsigned, unsigned> nodeAlias;
+  SubviewFusionHelper subviewHelper;
 };
 
 }  // namespace akg
