@@ -89,8 +89,6 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
                             llvm::SmallVector<unsigned> &loadNodeIds);
 };
 
-/// Information about an AffineForOp loop nest: root loop, full nest from
-/// collectLoopNest, perfectly-nested band depth, and whether the nest is perfectly nested.
 struct FusionLoopNestInfo {
   affine::AffineForOp root;
   llvm::SmallVector<affine::AffineForOp, 4> loops;
@@ -101,54 +99,76 @@ struct FusionLoopNestInfo {
   void collect(affine::AffineForOp rootOp);
 };
 
-/// Describes a unified subview fusion plan: skeleton choice, dimension alignment,
-/// guard condition, and insertion order.
-struct SubviewFusionPlan {
-  FusionLoopNestInfo *skeletonInfo;
-  FusionLoopNestInfo *otherInfo;
-  bool otherIsSrc;
-  llvm::SmallVector<int, 4> dimMap;
-  unsigned guardDimPos;
-  enum GuardKind { ExtraDimEqLB, UpperBoundLT } guardKind;
-  int64_t extraDimLB = 0;
-  int64_t smallerUB = 0;
-  bool needsGuard = true;
+// Holds collected load/store accesses and memref flags for both sides of a fusion.
+// Always stores data in true src/dst order; callers handle reversal when needed.
+struct FusionAccessInfo {
+  DenseMap<Value, bool> srcMemFlags;
+  llvm::SmallVector<Operation *, 4> srcAccesses;
+  DenseMap<Value, bool> dstMemFlags;
+  llvm::SmallVector<Operation *, 4> dstAccesses;
 };
 
-/// One stage of operations to clone from the erased (other) side.
-using CloneStage = llvm::SmallVector<Operation *, 8>;
+// Guard condition applied to cloned operations during subview fusion.
+struct FusionGuard {
+  // ExtraDimEqLB: secondary has fewer loops;
+  // cloned ops execute only when the extra dimension's IV equals its lower bound (boundValue - IV >= 0).
 
-/// Handles subview-aware loop fusion using a unified plan-based pipeline:
-///   1. buildSubviewFusionPlan — select skeleton, compute dimension alignment, determine guard
-///   2. collectCloneStages — extract per-level op groups from the erased side
-///   3. emitCloneStages — clone stages into skeleton's innermost body with IV mapping and guards
-/// Covers: perfect-vs-perfect, perfect-vs-imperfect, imperfect-vs-perfect.
-/// Ordering: src body first, dst body second.
+  // SmallerUB: same loop count, one dimension has a smaller upper bound;
+  // cloned ops execute only when IV < boundValue (boundValue-1-IV >= 0).
+  enum Kind { None, ExtraDimEqLB, SmallerUB };
+  Kind kind = None;
+  // Which primary loop dimension to guard on.
+  unsigned dimPos = 0;
+  // LB for ExtraDimEqLB, UB for SmallerUB.
+  int64_t boundValue = 0;
+
+  bool isNeeded() const { return kind != None; }
+
+  // Builds an IntegerSet encoding the guard condition over a single dimension.
+  IntegerSet buildCondSet(MLIRContext *ctx) const;
+};
+
+struct SubviewFusionPlan {
+  FusionLoopNestInfo *srcInfo;
+  FusionLoopNestInfo *dstInfo;
+  // true when the src side provides the loop structure (kept)
+  bool srcIsPrimary;
+  // dimMap[i] maps secondary loop i → primary loop dimMap[i] for IV alignment
+  llvm::SmallVector<int, 4> dimMap;
+  // optional condition wrapping the cloned operations
+  FusionGuard guard;
+
+  FusionLoopNestInfo *primaryInfo() const { return srcIsPrimary ? srcInfo : dstInfo; }
+  FusionLoopNestInfo *secondaryInfo() const { return srcIsPrimary ? dstInfo : srcInfo; }
+};
+
+using CloneStage = llvm::SmallVector<Operation *, 8>;
 struct SubviewFusionHelper {
-  /// Attempts subview fusion between src and dst loop nests.
-  /// Returns true if fusion was performed. On success, output params contain the info needed for cleanup.
-  bool tryFuse(unsigned srcGroupId, unsigned dstGroupId, FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo,
-               unsigned &erasedGroupId, unsigned &aliasTargetGroupId, affine::AffineForOp &loopToErase);
+  // Attempts subview fusion between src and dst loop nests.
+  // srcRank/dstRank: memref ranks of the dependency accesses (-1 → falls back to loop depth).
+  // Returns the fusion plan if fusion was performed, nullopt otherwise.
+  std::optional<SubviewFusionPlan> tryFuse(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, int srcRank,
+                                           int dstRank);
 
  private:
-  /// Builds a unified fusion plan: selects skeleton, computes dimension alignment, and determines guard.
-  std::optional<SubviewFusionPlan> buildSubviewFusionPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
+  // Builds a fusion plan into this->plan. Returns true on success.
+  // Dispatches to buildExtraDimPlan or buildSameRankPlan.
+  bool buildSubviewFusionPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, int srcRank, int dstRank);
 
-  /// Handles the case where one nest has exactly one extra loop dimension.
-  std::optional<SubviewFusionPlan> buildExtraDimPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
+  // Handles ranks differing by exactly one (one nest has an extra loop dimension).
+  bool buildExtraDimPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo, int srcRank, int dstRank);
 
-  /// Handles the same-depth case where one dimension has a different upper bound.
-  std::optional<SubviewFusionPlan> buildMismatchUBPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
+  // Handles same-rank case: all bounds match (trivial) or exactly one UB differs.
+  bool buildSameRankPlan(FusionLoopNestInfo &srcInfo, FusionLoopNestInfo &dstInfo);
 
-  /// Collects clone stages from the other (erased) side's loop body.
-  /// Perfect nest → 1 stage; imperfect nest → one stage per level from perfectDepth-1.
+  // Collects clone stages from the secondary side's loop body.
+  // Perfect nest → 1 stage; imperfect nest → one stage per level from perfectDepth-1.
   llvm::SmallVector<CloneStage> collectCloneStages(const FusionLoopNestInfo &info);
 
-  /// Emits all clone stages into the skeleton's innermost loop body with IV mapping and optional guard.
-  void emitCloneStages(const SubviewFusionPlan &plan, const llvm::SmallVector<CloneStage> &stages, IRMapping &mapper);
+  // Emits all clone stages into the primary side's innermost body with IV mapping and optional guard.
+  void emitCloneStages(const llvm::SmallVector<CloneStage> &stages, IRMapping &mapper);
 
-  /// Builds guard condition: condExpr >= 0 over a single dim.
-  IntegerSet buildGuardCondSet(MLIRContext *ctx, AffineExpr condExpr);
+  SubviewFusionPlan plan;
 };
 
 struct FusionCodeGenHelper {
@@ -168,10 +188,11 @@ struct FusionCodeGenHelper {
 
  private:
   // Finds the maximum legal fusion depth for fusing src loop nest into dst loop nest.
+  // accessInfo: pre-collected accesses in true src/dst order; srcDstReversed swaps references internally.
   unsigned findMaxLegalFusionDepth(const FusionLoopNestInfo &srcInfo, const FusionLoopNestInfo &dstInfo,
                                    const affine::FusionStrategy &strategy,
                                    llvm::SmallVector<affine::ComputationSliceState, 8> &depthSliceUnions,
-                                   const FusionPlan &plan, bool srcDstReversed = false);
+                                   const FusionPlan &plan, FusionAccessInfo &accessInfo, bool srcDstReversed = false);
 
   void buildStrategyOpsA(const affine::FusionStrategy &strategy, llvm::ArrayRef<Operation *> loadAndStoreOpsA,
                          llvm::SmallVector<Operation *, 4> &strategyOpsA);
