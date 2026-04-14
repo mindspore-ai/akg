@@ -46,51 +46,23 @@ def NPUVector_TransferReadOp :
                    AnyType:$padding,
                    Optional<VectorOf<[I1]>>:$mask,
                    Variadic<Index>:$dynamicSizes,
-                   Optional<Index>:$maxSize)>,
+                   Variadic<Index>:$maxSizes)>,
     Results<(outs AnyVectorOrNPUVectorOfAnyRank:$vector)> {
 
-  let summary = "Reads a supervector from memory into an SSA vector value with dynamic shape support.";
+  let summary = "NPU super-vector load from memref/tensor with explicit dynamic tile sizes.";
 
   let description = [{
-    The `npu_vector.transfer_read` op performs a read from a slice within a
-    [MemRef](../LangRef.md#memref-type) or a Ranked
-    [Tensor](../LangRef.md#tensor-type) supplied as its first operand
-    into a [vector](../LangRef.md#vector-type) of the same base elemental type.
+    NPUVector wrapper around the same idea as `vector.transfer_read`: load a slice of a
+    `memref` or ranked `tensor` into a `vector` or `!npuvector` value with matching
+    element type.
 
-    This operation supports dynamic shapes, allowing vector dimensions to be
-    specified as dynamic (using ShapedType::kDynamic).
-
-    The slice is further defined by a full-rank index within the MemRef/Tensor,
-    supplied as the operands `[1 .. 1 + rank(memref/tensor))` that defines the
-    starting point of the transfer (e.g. `%A[%i0, %i1, %i2]`).
-
-    The permutation_map [attribute](../LangRef.md#attributes) is an
-    [affine-map](Affine.md#affine-maps) which specifies the transposition on the
-    slice to match the vector shape. The permutation map may be implicit and
-    omitted from parsing and printing if it is the canonical minor identity map
-    (i.e. if it does not permute or broadcast any dimension).
-
-    The size of the slice is specified by the size of the vector, given as the
-    return type. Dynamic dimensions in the vector type are supported.
-
-    An SSA value `padding` of the same elemental type as the MemRef/Tensor is
-    provided to specify a fallback value in the case of out-of-bounds accesses
-    and/or masking.
-
-    An optional SSA value `mask` may be specified to mask out elements read from
-    the MemRef/Tensor. The `mask` type is an `i1` vector with a shape that
-    matches how elements are read from the MemRef/Tensor, *before* any
-    permutation or broadcasting. Elements whose corresponding mask element is
-    `0` are masked out and replaced with `padding`.
-
-    For every vector dimension, the boolean array attribute `in_bounds`
-    specifies if the transfer is guaranteed to be within the source bounds. If
-    set to "false", accesses (including the starting point) may run
-    out-of-bounds along the respective vector dimension as the index increases.
-    Non-vector and broadcast dimensions *must* always be in-bounds. The
-    `in_bounds` array length has to be equal to the vector rank. This attribute
-    has a default value: `false` (i.e. "out-of-bounds"). When skipped in the
-    textual IR, the default value is assumed.
+    Compared to upstream `vector.transfer_read`, this op **emphasizes explicit dynamic
+    tile metadata for Ascend/NPU**: result ranks may use `ShapedType::kDynamic`;
+    `dynamicSizes` supplies index SSA values for those dynamic extents (one per `?`, in
+    shape order); optional `maxSizes` supplies matching upper bounds (same arity as
+    `dynamicSizes` when present). Semantics of `padding`, `mask`, `permutation_map`,
+    and `in_bounds` follow the MLIR Vector dialect contract for `transfer_read`---see
+    LLVM's `VectorOps.td` / LangRef rather than duplicating them here.
 
     Example:
 
@@ -106,7 +78,7 @@ def NPUVector_TransferReadOp :
   let assemblyFormat = [{
     $source `[` $indices `]`
     (`[` $dynamicSizes^ `]`)?
-    (`[` $maxSize^ `]`)?
+    (`[` $maxSizes^ `]`)?
     `,` $padding
     (`,` $mask^ `:` type($mask))?
     attr-dict
@@ -144,46 +116,17 @@ def NPUVector_TransferWriteOp :
                    Optional<VectorOf<[I1]>>:$mask)>,
     Results<(outs Optional<AnyRankedTensor>:$result)> {
 
-  let summary = "The npu_vector.transfer_write op writes a supervector to memory with dynamic shape support.";
+  let summary = "NPU super-vector store to memref/tensor; supports dynamic tile shapes.";
 
   let description = [{
-    The `npu_vector.transfer_write` op performs a write from a
-    [vector](../LangRef.md#vector-type), supplied as its first operand, into a
-    slice within a [MemRef](../LangRef.md#memref-type) or a Ranked
-    [Tensor](../LangRef.md#tensor-type) of the same base elemental type,
-    supplied as its second operand.
+    NPUVector wrapper around the same idea as `vector.transfer_write`: store a
+    `vector` or `!npuvector` into the matching slice of a `memref` or ranked `tensor`
+    with the same element type.
 
-    This operation supports dynamic shapes, allowing vector dimensions to be
-    specified as dynamic (using ShapedType::kDynamic).
-
-    The slice is further defined by a full-rank index within the MemRef/Tensor,
-    supplied as the operands `[2 .. 2 + rank(memref/tensor))` that defines the
-    starting point of the transfer (e.g. `%A[%i0, %i1, %i2, %i3]`).
-
-    The permutation_map [attribute](../LangRef.md#attributes) is an
-    [affine-map](Affine.md#affine-maps) which specifies the transposition on the
-    slice to match the vector shape. The permutation map may be implicit and
-    omitted from parsing and printing if it is the canonical minor identity map
-    (i.e. if it does not permute any dimension). In contrast to `transfer_read`,
-    write ops cannot have broadcast dimensions.
-
-    The size of the slice is specified by the size of the vector. Dynamic
-    dimensions in the vector type are supported.
-
-    An optional SSA value `mask` may be specified to mask out elements written
-    to the MemRef/Tensor. The `mask` type is an `i1` vector with a shape that
-    matches how elements are written into the MemRef/Tensor, *after* applying
-    any permutation. Elements whose corresponding mask element is `0` are
-    masked out.
-
-    For every vector dimension, the boolean array attribute `in_bounds`
-    specifies if the transfer is guaranteed to be within the source bounds. If
-    set to "false", accesses (including the starting point) may run
-    out-of-bounds along the respective vector dimension as the index increases.
-    Non-vector and broadcast dimensions *must* always be in-bounds. The
-    `in_bounds` array length has to be equal to the vector rank. This attribute
-    has a default value: `false` (i.e. "out-of-bounds"). When skipped in the
-    textual IR, the default value is assumed.
+    **Extension**: the value may have dynamic extents (`?`) so it lines up with
+    `transfer_read` and vectorization passes that emit dynamic tiles. Semantics of
+    `permutation_map`, `mask`, and `in_bounds` match upstream `vector.transfer_write`;
+    refer to LLVM `VectorOps.td` for the full text.
 
     Example:
 
@@ -235,25 +178,21 @@ def NPUVector_ReductionOp :
                  Arith_FastMathAttr,
                  "::mlir::arith::FastMathFlags::none">:$fastmath)>,
     Results<(outs AnyType:$dest)> {
-  let summary = "reduction operation with dynamic shape support";
+  let summary = "Fold an n-D NPU/vector tile to a scalar; supports dynamic rank sizes.";
   let description = [{
-    Reduces a vector "horizontally" into a scalar using the given
-    operation: `add`/`mul`/`minsi`/`minui`/`maxsi`/`maxui`/`and`/`or`/`xor` for
-    integers, and `add`/`mul`/`minnumf`/`maxnumf`/`minimumf`/`maximumf` for
-    floats. Reductions also allow an optional fused accumulator.
+    **Full-tensor reduction** of a `vector` or `!npuvector` to a scalar using the same
+    `CombiningKind` enumeration as `vector.reduction`; an optional fused accumulator
+    operand is allowed.
 
-    This operation supports dynamic shapes, allowing the input vector to have
-    dynamic dimensions. The reduction is performed along all dimensions of the
-    vector, producing a scalar result.
+    Unlike the upstream `vector.reduction` docs (often phrased around 1-D), this op is
+    defined for **multi-dimensional tiles**, including dynamic `?` extents, for NPU
+    reduction lowering.
 
     Example:
 
     ```mlir
-    %1 = npu_vector.reduction <add>, %0 : vector<?xf32> into f32
-
-    %3 = npu_vector.reduction <xor>, %2 : vector<?xi32> into i32
-
-    %4 = npu_vector.reduction <mul>, %0, %1 : vector<?x?xf32> into f32
+    %1 = npuvector.reduction <add>, %0 : !npuvector<?xf32> into f32
+    %2 = npuvector.reduction <xor>, %v : !npuvector<?xi32> into i32
     ```
   }];
   let extraClassDeclaration = [{
@@ -646,47 +585,90 @@ def NPUVector_BroadcastOp :
   NPUVector_Op<"broadcast", [Pure, AttrSizedOperandSegments]>,
     Arguments<(ins AnyType:$source,
                    Variadic<Index>:$dynamicSizes,
-                   Optional<Index>:$maxSize)>,
+                   Variadic<Index>:$maxSizes)>,
     Results<(outs NPUVectorOfAnyRank:$result)> {
 
-  let summary = "broadcast a scalar or vector to an NPU vector";
+  let summary = "Broadcast to !npuvector with optional runtime sizes and max tile.";
   
   let description = [{
-    The `npuvector.broadcast` operation broadcasts a scalar value or a 
-    lower-dimensional vector to an NPU vector by replicating the value 
-    across all elements.
-    
-    This operation supports dynamic shapes in the result vector, allowing
-    dimensions to be specified as dynamic (using `?`).
-    
-    The legality rules are:
-    - The source operand must have the same element type as the result type
-    - A scalar can be broadcast to any NPU vector
-    - A k-D vector can be broadcast to an n-D vector if k <= n and
-      trailing dimensions match
-    
+    Builds on `vector.broadcast` (replicate a scalar or smaller vector to a target
+    shape) by adding **per-dimension runtime sizes** via `dynamicSizes` and optional
+    **per-dimension upper bounds** `maxSizes` (same arity as `dynamicSizes` when present),
+    so broadcasts align with dynamic vectorization and `transfer_read` tiles.
+
+    Element type must match the result; a scalar can broadcast to any-rank `!npuvector`;
+    when promoting rank, trailing dimensions must be compatible in the same sense as
+    MLIR's `vector.broadcast` legality rules (see upstream docs).
+
     Example:
     
     ```mlir
-    // Broadcast scalar to static vector
-    %0 = arith.constant 2.0 : f32
-    %1 = npuvector.broadcast %0 : f32 to npuvector<1024xf32>
-    
-    // Broadcast scalar to dynamic vector
-    %2 = npuvector.broadcast %0 : f32 to npuvector<?xf32>
-    
-    // Broadcast vector to higher dimension
-    %3 = npuvector.broadcast %1 : npuvector<1024xf32> to npuvector<8x1024xf32>
+    %c = arith.constant 2.0 : f32
+    %1 = npuvector.broadcast %c [%vs] [%max] : f32 to !npuvector<?xf32>
     ```
   }];
   
-  let assemblyFormat = "$source (`[` $dynamicSizes^ `]`)? (`[` $maxSize^ `]`)? `:` type($source) `to` qualified(type($result)) attr-dict";
+  let assemblyFormat = "$source (`[` $dynamicSizes^ `]`)? (`[` $maxSizes^ `]`)? `:` type($source) `to` qualified(type($result)) attr-dict";
   
   let builders = [
     OpBuilder<(ins "Type":$resultType, "Value":$source, "ValueRange":$dynamicSizes), [{
-      build($_builder, $_state, resultType, source, dynamicSizes, /*maxSize=*/Value());
+      build($_builder, $_state, resultType, source, dynamicSizes, /*maxSizes=*/ValueRange());
     }]>
   ];
+}
+
+//===----------------------------------------------------------------------===//
+// TransposeOp
+//===----------------------------------------------------------------------===//
+
+def NPUVector_TransposeOp :
+  NPUVector_Op<"transpose", [Pure,
+    PredOpTrait<"operand and result have same element type",
+                TCresVTEtIsSameAsOpBase<0, 0>>]>,
+    Arguments<(ins NPUVectorOfAnyRank:$vector,
+                  DenseI64ArrayAttr:$permutation)>,
+    Results<(outs NPUVectorOfAnyRank:$result)> {
+  let summary = "Permute ranks of an !npuvector (dynamic dims preserved by position).";
+  let description = [{
+    Permutes axes of an `!npuvector`. **Semantics align with `vector.transpose`**
+    (see LLVM `VectorOps.td`) but operands use the NPU vector type; static dimensions
+    are reordered by shape, while dynamic `?` extents remain runtime-sized and move to
+    the result axis given by `permutation`.
+
+    `permutation` must be a permutation of `[0, n-1]`.
+
+    Example:
+
+    ```mlir
+    %1 = npuvector.transpose %0, [1, 0]
+      : !npuvector<2x3xf32> to !npuvector<3x2xf32>
+    ```
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$vec, "ArrayRef<int64_t>":$perm), [{
+      auto srcType = ::llvm::cast<NPUVectorType>(vec.getType());
+      SmallVector<int64_t> resultShape(perm.size());
+      for (unsigned i = 0; i < static_cast<unsigned>(perm.size()); ++i)
+        resultShape[i] = srcType.getShape()[perm[i]];
+      build($_builder, $_state,
+            NPUVectorType::get(resultShape, srcType.getElementType()),
+            vec, $_builder.getDenseI64ArrayAttr(perm));
+    }]>
+  ];
+
+  let extraClassDeclaration = [{
+    NPUVectorType getSourceVectorType() {
+      return ::llvm::cast<NPUVectorType>(getVector().getType());
+    }
+    NPUVectorType getResultVectorType() {
+      return ::llvm::cast<NPUVectorType>(getResult().getType());
+    }
+  }];
+
+  let assemblyFormat = [{
+    $vector `,` $permutation attr-dict `:` qualified(type($vector)) `to` qualified(type($result))
+  }];
 }
 
 #endif // NPUVECTOR_OPS
