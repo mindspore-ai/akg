@@ -35,6 +35,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -68,6 +69,11 @@ using mlir::autotiling::TilingTaskDesc;
 namespace mlir {
 namespace autotiling {
 
+static constexpr const char *kLeafLoopIdAttr = "leaf_id";
+static constexpr const char *kInnerLoopAttr = "inner";
+static constexpr const char *kDeleteLoopAttr = "delete";
+static constexpr const char *kNotInnerDimensionBroadcastLoopAttr = "not_inner_dimension_broadcast";
+
 // Main tiling functions
 static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuilder &builder, func::FuncOp &tilingFunc,
                                              bool isStaticShape);
@@ -89,6 +95,7 @@ struct LeafBranchBandPlan {
 static LogicalResult buildLeafBranchBandPlanForRoot(mlir::scf::ForOp rootLoop, LeafBranchBandPlan &plan);
 static LogicalResult buildLeafBranchBandPlans(func::FuncOp funcOp, std::vector<LeafBranchBandPlan> &plans,
                                               bool &hasUnsupportedTreeShape);
+static bool isInnermostScfLoop(mlir::scf::ForOp forOp);
 
 static LogicalResult wrapFunctionBodyWithFor(func::FuncOp func, OpBuilder &builder);
 // Helper struct for loop bounds
@@ -106,11 +113,7 @@ struct DynamicAxisMapping {
   Value upperBound;
 };
 
-constexpr auto kInnerLoopAttr = "inner";
-
 // Loop tiling core helpers
-static Value calculateOffsetForPointLoop(mlir::Location loc, ArrayRef<std::pair<Value, Value>> levelInfo,
-                                         Value tilesize, OpBuilder &builder);
 static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop, Value tilesize,
                                                  unsigned tilesizeInt, OpBuilder &builder,
                                                  std::map<int64_t, Value> &constantCache,
@@ -124,9 +127,6 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
                                         OpBuilder &builder, std::map<int64_t, Value> &constantCache);
 static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const LoopBounds &bounds, mlir::Location loc,
                                                  OpBuilder &builder);
-static void insertArgInnerCalculationInPointLoop(mlir::scf::ForOp newLoop, mlir::scf::ForOp origLoop,
-                                                 ArrayRef<std::pair<Value, Value>> levelInfo, Value lastTilesize,
-                                                 mlir::Location loc, int lastTile, ArrayRef<Value> tileSizeValues);
 static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, MutableArrayRef<mlir::scf::ForOp> newLoops,
                                   ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
                                   ArrayRef<unsigned> tileSizesInt,
@@ -235,7 +235,6 @@ static LogicalResult createTailBlockDynamicImpl(mlir::scf::ForOp forOp, mlir::Va
 static std::tuple<std::optional<int64_t>, mlir::Value, mlir::Value> getDifferenceUbAndLb(mlir::scf::ForOp forOp);
 static std::optional<int64_t> getConstantIndexValue(mlir::Value value);
 static std::optional<int64_t> getConstantStep(mlir::scf::ForOp forOp);
-static void moveLoopBody(mlir::scf::ForOp src, mlir::scf::ForOp dest);
 static bool isAncestorOp(mlir::Operation *maybeAncestor, mlir::Operation *op);
 static mlir::LogicalResult verifyBandIsNestedChain(llvm::ArrayRef<mlir::scf::ForOp> band);
 
@@ -277,26 +276,6 @@ static mlir::LogicalResult cloneNonPerfectChainIntoPointLoops(llvm::ArrayRef<mli
                                                               unsigned tileSizesNum, mlir::OpBuilder &builder,
                                                               mlir::IRMapping &mapping);
 static mlir::Value remapOrSelf(mlir::Value v, mlir::IRMapping &mapping);
-
-// Helper function to move loop body from src to dest
-[[maybe_unused]] static void moveLoopBody(mlir::scf::ForOp src, mlir::scf::ForOp dest) {
-  auto &destOps = dest.getBody()->getOperations();
-  auto &srcOps = src.getBody()->getOperations();
-
-  // Find the insertion point: before the terminator in dest body
-  mlir::Block::iterator insertLoc;
-  auto *terminator = dest.getBody()->getTerminator();
-  if (terminator) {
-    insertLoc = terminator->getIterator();
-  } else {
-    insertLoc = dest.getBody()->end();
-  }
-
-  // Move all operations except the terminator (scf.yield)
-  if (srcOps.size() > 1) {
-    destOps.splice(insertLoc, srcOps, srcOps.begin(), std::prev(srcOps.end()));
-  }
-}
 
 // Helper: collect all defining ops in the operand tree (post-order)
 static void getOperandsTree(mlir::Operation *op, llvm::SmallVectorImpl<mlir::Operation *> &ops,
@@ -387,6 +366,131 @@ static mlir::Value cloneUpperBoundDefinition(mlir::Value upperBound, func::FuncO
   }
   llvm::dbgs() << "cloneUpperBoundDefinition: upper bound not mapped, fallback\n";
   return Value();
+}
+
+static bool isNoSplitLoop(mlir::scf::ForOp loop) {
+  return loop && (loop->hasAttr(kReductionLoopAttr) || loop->hasAttr(kNotInnerDimensionBroadcastLoopAttr));
+}
+
+static bool isReductionLoop(mlir::scf::ForOp loop) { return loop && loop->hasAttr(kReductionLoopAttr); }
+
+static bool valueDependsOnTarget(Value value, Value target, llvm::DenseSet<Value> &visitedValues,
+                                 llvm::SmallPtrSetImpl<Operation *> &visitedOps) {
+  if (value == target) {
+    return true;
+  }
+
+  if (!visitedValues.insert(value).second) {
+    return false;
+  }
+
+  auto blockArg = dyn_cast<BlockArgument>(value);
+  if (blockArg) {
+    return false;
+  }
+
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp || !visitedOps.insert(defOp).second) {
+    return false;
+  }
+
+  if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+    auto opResult = dyn_cast<OpResult>(value);
+    if (opResult) {
+      unsigned resultIdx = opResult.getResultNumber();
+      auto dependsOnYieldOperand = [&](Region &region) {
+        auto yieldOp = dyn_cast<scf::YieldOp>(region.front().getTerminator());
+        if (!yieldOp || resultIdx >= yieldOp.getNumOperands()) {
+          return false;
+        }
+        return valueDependsOnTarget(yieldOp.getOperand(resultIdx), target, visitedValues, visitedOps);
+      };
+      if (dependsOnYieldOperand(ifOp.getThenRegion()) || dependsOnYieldOperand(ifOp.getElseRegion())) {
+        return true;
+      }
+    }
+  }
+
+  return std::any_of(defOp->operand_begin(), defOp->operand_end(),
+                     [&](Value operand) { return valueDependsOnTarget(operand, target, visitedValues, visitedOps); });
+}
+
+static bool valueDependsOnLoopIV(Value value, mlir::scf::ForOp loop) {
+  if (!value || !loop) {
+    return false;
+  }
+
+  llvm::DenseSet<Value> visitedValues;
+  llvm::SmallPtrSet<Operation *, 32> visitedOps;
+  return valueDependsOnTarget(value, loop.getInductionVar(), visitedValues, visitedOps);
+}
+
+static mlir::scf::ForOp findInnermostContiguousStoreLoop(Operation *op, Value contiguousIndex) {
+  if (!op || !contiguousIndex) {
+    return mlir::scf::ForOp();
+  }
+
+  for (Operation *parent = op->getParentOp(); parent; parent = parent->getParentOp()) {
+    auto forOp = dyn_cast<mlir::scf::ForOp>(parent);
+    if (!forOp) {
+      continue;
+    }
+    if (valueDependsOnLoopIV(contiguousIndex, forOp)) {
+      return forOp;
+    }
+  }
+
+  return mlir::scf::ForOp();
+}
+
+static bool isInnerDimensionBroadcastLoop(mlir::scf::ForOp loop) {
+  if (!loop) {
+    return false;
+  }
+
+  bool isInnerDimension = false;
+  loop.getBody()->walk([&](Operation *op) {
+    SmallVector<Value, 4> indices;
+    if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      indices.append(store.getIndices().begin(), store.getIndices().end());
+    } else {
+      return WalkResult::advance();
+    }
+
+    if (indices.empty()) {
+      return WalkResult::advance();
+    }
+
+    mlir::scf::ForOp innermostContiguousLoop = findInnermostContiguousStoreLoop(op, indices.back());
+    if (innermostContiguousLoop == loop) {
+      isInnerDimension = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+
+  return isInnerDimension;
+}
+
+static void setNotInnerDimensionBroadcastLoopAttr(func::FuncOp funcOp) {
+  OpBuilder builder(funcOp.getContext());
+  funcOp.walk([&](mlir::scf::ForOp loop) {
+    if (!loop->hasAttr(kBroadcastLoopAttr) || isInnerDimensionBroadcastLoop(loop)) {
+      if (loop->hasAttr(kNotInnerDimensionBroadcastLoopAttr)) {
+        loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
+      }
+      return;
+    }
+    loop->setAttr(kNotInnerDimensionBroadcastLoopAttr, builder.getUnitAttr());
+  });
+}
+
+static void clearNotInnerDimensionBroadcastLoopAttr(func::FuncOp funcOp) {
+  funcOp.walk([&](mlir::scf::ForOp loop) {
+    if (loop->hasAttr(kNotInnerDimensionBroadcastLoopAttr)) {
+      loop->removeAttr(kNotInnerDimensionBroadcastLoopAttr);
+    }
+  });
 }
 
 // Helper function to get constant index value from Value
@@ -725,15 +829,6 @@ static Value getOrCreateConstantStatic(Location loc, int64_t value, OpBuilder &b
   return constVal;
 }
 
-// Helper function to extract induction variables from a band
-[[maybe_unused]] static void extractForInductionVarsStatic(ArrayRef<mlir::scf::ForOp> band,
-                                                           SmallVectorImpl<mlir::Value> *origLoopIVs) {
-  origLoopIVs->clear();
-  origLoopIVs->reserve(band.size());
-  std::transform(band.begin(), band.end(), std::back_inserter(*origLoopIVs),
-                 [](mlir::scf::ForOp forOp) { return forOp.getInductionVar(); });
-}
-
 // Helper to check if a value is defined inside the band
 [[maybe_unused]] static bool isDefinedInBand(Value v, mlir::scf::ForOp outermostLoop) {
   if (!v) return false;
@@ -814,34 +909,6 @@ static void constructTiledLoopStatic(mlir::scf::ForOp rootScfForOp, unsigned wid
   }
 }
 
-// Helper: Calculate offset for point loop (offset = sum(ivs) * tilesize)
-[[maybe_unused]] static Value calculateOffsetForPointLoop(mlir::Location loc,
-                                                          ArrayRef<std::pair<Value, Value>> levelInfo, Value tilesize,
-                                                          OpBuilder &builder) {
-  SmallVector<Value> ivs;
-  for (const auto &[iv, _] : levelInfo) {
-    ivs.push_back(iv);
-  }
-
-  Value sumIvs;
-  if (ivs.empty()) {
-    sumIvs = builder.create<arith::ConstantIndexOp>(loc, 0);
-  } else if (ivs.size() == 1) {
-    sumIvs = ivs[0];
-  } else {
-    auto sumExpr = builder.getAffineDimExpr(0);
-    for (size_t k = 1; k < ivs.size(); ++k) {
-      sumExpr = sumExpr + builder.getAffineDimExpr(k);
-    }
-    auto sumMap = AffineMap::get(ivs.size(), 0, sumExpr, builder.getContext());
-    sumIvs = builder.create<mlir::affine::AffineApplyOp>(loc, sumMap, ivs);
-  }
-
-  auto mulMap =
-    AffineMap::get(1, 1, builder.getAffineDimExpr(0) * builder.getAffineSymbolExpr(0), builder.getContext());
-  return builder.create<mlir::affine::AffineApplyOp>(loc, mulMap, ValueRange{sumIvs, tilesize});
-}
-
 // Helper: Create bounds for first level tile loop
 static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::ForOp origLoop, Value tilesize,
                                                  unsigned tilesizeInt, OpBuilder &builder,
@@ -849,13 +916,17 @@ static LoopBounds createFirstLevelTileLoopBounds(mlir::Location loc, mlir::scf::
                                                  bool dropFirstLevelReductionIterArgs) {
   LoopBounds bounds;
 
-  // Special handling for reduction loops: skip tiling, only execute once
-  if (origLoop->hasAttr(kReductionLoopAttr)) {
+  // No-split loops keep wrapper levels single-iteration and preserve the real range in the point loop.
+  if (isNoSplitLoop(origLoop)) {
     bounds.lb = getOrCreateConstantStatic(loc, 0, builder, constantCache);
     bounds.ub = getOrCreateConstantStatic(loc, 1, builder, constantCache);
     bounds.step = getOrCreateConstantStatic(loc, 1, builder, constantCache);
-    // Only the mapped outermost axis must drop first-level iter_args.
-    bounds.inits = dropFirstLevelReductionIterArgs ? ValueRange{} : ValueRange(origLoop.getInitArgs());
+    if (isReductionLoop(origLoop)) {
+      // Only the mapped outermost reduction axis must drop first-level iter_args.
+      bounds.inits = dropFirstLevelReductionIterArgs ? ValueRange{} : ValueRange(origLoop.getInitArgs());
+    } else {
+      bounds.inits = origLoop.getInitArgs();
+    }
     return bounds;
   }
 
@@ -892,23 +963,22 @@ static LoopBounds createMiddleLevelTileLoopBounds(mlir::Location loc, mlir::scf:
                                                   bool escapeReduceIterArgs) {
   LoopBounds bounds;
 
-  // Special handling for reduction loops: skip tiling
-  // Middle-level is a trivial wrapper; real iteration stays in point loop.
-  if (origLoop->hasAttr(kReductionLoopAttr)) {
+  // No-split loops keep wrapper levels single-iteration and preserve the real range in the point loop.
+  if (isNoSplitLoop(origLoop)) {
     bounds.lb = getOrCreateConstantStatic(loc, 0, builder, constantCache);
     bounds.ub = getOrCreateConstantStatic(loc, 1, builder, constantCache);
     bounds.step = getOrCreateConstantStatic(loc, 1, builder, constantCache);
-    // For reduction loops with iter_args:
-    // - escape: keep init here so sinkReduceLoopResultsToMiddleLevel can use this loop's results.
-    // - non-escape: no iter_args on wrapper levels.
-    if (origLoop.getNumResults() == 0) {
-      bounds.inits = ValueRange{};
+    if (isReductionLoop(origLoop)) {
+      // For reduction loops with iter_args:
+      // - escape: keep init here so sinkReduceLoopResultsToMiddleLevel can use this loop's results.
+      // - non-escape: no iter_args on wrapper levels.
+      if (origLoop.getNumResults() == 0) {
+        bounds.inits = ValueRange{};
+      } else {
+        bounds.inits = escapeReduceIterArgs ? ValueRange(origLoop.getInitArgs()) : ValueRange{};
+      }
     } else {
-      bounds.inits =
-        escapeReduceIterArgs
-          ? (prevLoop.getNumRegionIterArgs() > 0 ? ValueRange(prevLoop.getRegionIterArgs())
-                                                 : ValueRange(origLoop.getInitArgs()))
-          : ValueRange{};
+      bounds.inits = prevLoop.getResults();
     }
     return bounds;
   }
@@ -951,16 +1021,17 @@ static LoopBounds createPointLoopBounds(mlir::Location loc, mlir::scf::ForOp ori
                                         OpBuilder &builder, std::map<int64_t, Value> &constantCache) {
   LoopBounds bounds;
 
-  // Special handling for reduction loops: keep original loop bounds in point loop
-  if (origLoop->hasAttr(kReductionLoopAttr)) {
-    bounds.lb = getOrCreateConstantStatic(loc, 0, builder, constantCache);
+  // No-split loops keep the original iteration space in the point loop.
+  if (isNoSplitLoop(origLoop)) {
+    bounds.lb = recreateConstantOrSelf(origLoop.getLowerBound(), builder);
     bounds.ub = recreateConstantOrSelf(origLoop.getUpperBound(), builder);
     bounds.step = recreateConstantOrSelf(origLoop.getStep(), builder);
-    // Reduction point loops should continue the accumulator chain from the
-    // immediate wrapper when iter_args are present.
-    bounds.inits =
-      prevLoop.getNumRegionIterArgs() > 0 ?
-      ValueRange(prevLoop.getRegionIterArgs()) : ValueRange(origLoop.getInitArgs());
+    if (isReductionLoop(origLoop)) {
+      // Use original init args to preserve reduction semantics per point iteration.
+      bounds.inits = origLoop.getInitArgs();
+    } else {
+      bounds.inits = prevLoop.getResults();
+    }
     return bounds;
   }
 
@@ -1085,52 +1156,6 @@ static mlir::scf::ForOp replaceLoopWithNewBounds(mlir::scf::ForOp oldLoop, const
   return newLoop;
 }
 
-// Helper: Insert argInner calculation in point loop body
-[[maybe_unused]] static void insertArgInnerCalculationInPointLoop(mlir::scf::ForOp newLoop, mlir::scf::ForOp origLoop,
-                                                                  ArrayRef<std::pair<Value, Value>> levelInfo,
-                                                                  Value lastTilesize, mlir::Location loc, int lastTile,
-                                                                  ArrayRef<Value> tileSizeValues) {
-  auto *newBody = newLoop.getBody();
-
-  // Calculate offset
-  SmallVector<Value> ivs;
-  for (const auto &[iv, _] : levelInfo) {
-    ivs.push_back(iv);
-  }
-
-  OpBuilder bodyBuilder(newLoop.getContext());
-  bodyBuilder.setInsertionPointToStart(newBody);
-
-  Value sumIvs;
-  if (ivs.empty()) {
-    sumIvs = bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
-  } else if (ivs.size() == 1) {
-    sumIvs = ivs[0];
-  } else {
-    auto sumExpr = bodyBuilder.getAffineDimExpr(0);
-    for (size_t k = 1; k < ivs.size(); ++k) {
-      sumExpr = sumExpr + bodyBuilder.getAffineDimExpr(k);
-    }
-    auto sumMap = AffineMap::get(ivs.size(), 0, sumExpr, bodyBuilder.getContext());
-    sumIvs = bodyBuilder.create<mlir::affine::AffineApplyOp>(loc, sumMap, ivs);
-  }
-
-  auto mulMap = AffineMap::get(1, 1, bodyBuilder.getAffineDimExpr(0) * bodyBuilder.getAffineSymbolExpr(0),
-                               bodyBuilder.getContext());
-  Value offset = bodyBuilder.create<mlir::affine::AffineApplyOp>(loc, mulMap, ValueRange{sumIvs, lastTilesize});
-
-  // argInner = point_iv + offset
-  Value argInner = bodyBuilder.create<arith::AddIOp>(loc, newLoop.getInductionVar(), offset);
-
-  // Replace origLoop IV with argInner
-  origLoop.getInductionVar().replaceAllUsesWith(argInner);
-
-  // Update iter args
-  for (auto it : llvm::zip(origLoop.getRegionIterArgs(), newLoop.getRegionIterArgs())) {
-    std::get<0>(it).replaceAllUsesWith(std::get<1>(it));
-  }
-}
-
 static bool buildLoopBoundsForTileLevel(int i, int j, int bandSize, int tileNum, int curTile, int lastTile,
                                         MutableArrayRef<mlir::scf::ForOp> newLoops, ArrayRef<mlir::scf::ForOp> band,
                                         ArrayRef<Value> tileSizeValues, ArrayRef<unsigned> tileSizesInt,
@@ -1168,35 +1193,62 @@ static bool buildLoopBoundsForTileLevel(int i, int j, int bandSize, int tileNum,
   return true;
 }
 
-static void updateReductionAttrsForTileLoop(int i, int j, int bandSize, int tileNum, mlir::scf::ForOp origLoop,
-                                            mlir::scf::ForOp newLoop, mlir::OpBuilder &builder) {
-  if (!origLoop || !origLoop->hasAttr(kReductionLoopAttr)) {
+static void updateLoopAttrsForTileLoop(int i, int j, int bandSize, int tileNum, mlir::scf::ForOp origLoop,
+                                       mlir::scf::ForOp newLoop, mlir::OpBuilder &builder) {
+  if (!origLoop) {
     return;
   }
 
-  ReduceDirection reduceType = getReduceType(origLoop);
-  if (reduceType == ReduceDirection::Y) {
-    // For reduce-y, remove all wrappers and keep only the point loop in final IR.
-    if (i < tileNum) {
+  if (isReductionLoop(origLoop)) {
+    ReduceDirection reduceType = getReduceType(origLoop);
+    if (reduceType == ReduceDirection::Y) {
+      // For reduce-y, remove all wrappers and keep only the point loop in final IR.
+      if (i < tileNum) {
+        newLoop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
+      }
+      if (i == tileNum) {
+        newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(kVectorSize));
+      }
+      return;
+    }
+
+    // For reduction loops: delete only middle-level trivial wrappers (no iter_args/results).
+    // Keep first-level loops (i==0) even if trivial.
+    // First-level iter_args retention is controlled separately by mapped-outermost policy.
+    if (i > 0 && i < tileNum && newLoop.getNumResults() == 0 && newLoop.getNumRegionIterArgs() == 0) {
       newLoop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
     }
-    if (i == tileNum) {
+
+    // For inner point loop: preserve reduction attribute from original loop.
+    if (i == tileNum && j == (bandSize - 1)) {
       newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(kVectorSize));
     }
     return;
   }
 
-  // For reduction loops: delete only middle-level trivial wrappers (no iter_args/results).
-  // Keep first-level loops (i==0) even if trivial.
-  // First-level iter_args retention is controlled separately by mapped-outermost policy.
-  if (i > 0 && i < tileNum && newLoop.getNumResults() == 0 && newLoop.getNumRegionIterArgs() == 0) {
+  if (origLoop->hasAttr(kNotInnerDimensionBroadcastLoopAttr) && i < tileNum) {
     newLoop->setAttr(kDeleteLoopAttr, builder.getUnitAttr());
   }
+}
 
-  // For inner point loop: preserve reduction attribute from original loop.
-  if (i == tileNum && j == (bandSize - 1)) {
-    newLoop->setAttr(kReductionLoopAttr, builder.getI64IntegerAttr(kVectorSize));
+static bool isInternalLoopTilingAttrName(StringRef attrName) {
+  return attrName == kLeafLoopIdAttr || attrName == kDeleteLoopAttr || attrName == kInnerLoopAttr;
+}
+
+static void copySemanticLoopAttrsToPointLoop(mlir::scf::ForOp origLoop, mlir::scf::ForOp pointLoop) {
+  if (!origLoop || !pointLoop) {
+    return;
   }
+
+  for (NamedAttribute attr : origLoop->getAttrs()) {
+    StringRef name = attr.getName().strref();
+    if (isInternalLoopTilingAttrName(name)) {
+      continue;
+    }
+    pointLoop->setAttr(attr.getName(), attr.getValue());
+  }
+
+  pointLoop->setAttr(kInnerLoopAttr, UnitAttr::get(pointLoop.getContext()));
 }
 
 static void recordTileLevelInfoForLoop(int i, int j, int tileNum, int curTile, ArrayRef<Value> tileSizeValues,
@@ -1247,15 +1299,17 @@ static void processSingleTileLoop(int i, int j, int bandSize, int tileNum, Mutab
   mlir::scf::ForOp newLoop = replaceLoopWithNewBounds(loop, bounds, loc, loopBuilder);
   newLoops[curTile] = newLoop;
 
-  if (i == tileNum && !origLoop->hasAttr(kReductionLoopAttr) && lastTile >= 0 &&
-      lastTile < static_cast<int>(tileSizesInt.size())) {
-    unsigned pointVectorSize = tileSizesInt[lastTile];
-    if (pointVectorSize != static_cast<unsigned>(-1)) {
-      newLoop->setAttr(kInnerLoopAttr, loopBuilder.getI64IntegerAttr(pointVectorSize));
+  if (i == tileNum) {
+    copySemanticLoopAttrsToPointLoop(origLoop, newLoop);
+    if (!origLoop->hasAttr(kReductionLoopAttr) && lastTile >= 0 && lastTile < static_cast<int>(tileSizesInt.size())) {
+      unsigned pointVectorSize = tileSizesInt[lastTile];
+      if (pointVectorSize != static_cast<unsigned>(-1)) {
+        newLoop->setAttr(kInnerLoopAttr, loopBuilder.getI64IntegerAttr(pointVectorSize));
+      }
     }
   }
 
-  updateReductionAttrsForTileLoop(i, j, bandSize, tileNum, origLoop, newLoop, loopBuilder);
+  updateLoopAttrsForTileLoop(i, j, bandSize, tileNum, origLoop, newLoop, loopBuilder);
   recordTileLevelInfoForLoop(i, j, tileNum, curTile, tileSizeValues, kernelsizeConstant, newLoop, tileLevelInfo);
 }
 
@@ -1596,10 +1650,13 @@ static LogicalResult applyTilingToBand(ArrayRef<mlir::scf::ForOp> band, ArrayRef
                                      dropMappedOutermostFirstLevelIterArgs, builder);
 }
 
-static void clearTemporaryLeafIdAttrs(func::FuncOp funcOp) {
-  funcOp.walk([](mlir::scf::ForOp loop) {
+static void clearTemporaryLoopIdentificationAttrs(func::FuncOp funcOp, bool clearPointLoopAttr = true) {
+  funcOp.walk([&](mlir::scf::ForOp loop) {
     if (loop->hasAttr(kLeafLoopIdAttr)) {
       loop->removeAttr(kLeafLoopIdAttr);
+    }
+    if (clearPointLoopAttr && loop->hasAttr(kInnerLoopAttr)) {
+      loop->removeAttr(kInnerLoopAttr);
     }
   });
 }
@@ -1744,25 +1801,66 @@ static ReduceDirection getReduceType(mlir::scf::ForOp loop) {
   return result;
 }
 
-// Mark all innermost scf.for loops with vector attribute
-// Mark all inline-needed reduction loops with reduction attribute or delete attribute
+static bool hasPointLoopInAncestorChain(mlir::scf::ForOp loop) {
+  for (mlir::scf::ForOp curLoop = loop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
+    if (curLoop->hasAttr(kInnerLoopAttr)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool isVectorSelectablePointLoop(mlir::scf::ForOp loop) {
+  return loop && loop->hasAttr(kInnerLoopAttr) && !loop->hasAttr(kNotInnerDimensionBroadcastLoopAttr);
+}
+
+static bool shouldSkipVectorAttrCandidate(mlir::scf::ForOp loop, bool restrictToPointLoops, bool skipDeleteLoops) {
+  if (!loop) {
+    return true;
+  }
+  if (restrictToPointLoops && !isVectorSelectablePointLoop(loop)) {
+    return true;
+  }
+  if (skipDeleteLoops && loop->hasAttr(kDeleteLoopAttr)) {
+    return true;
+  }
+  return false;
+}
+
+static mlir::scf::ForOp findVectorAttrTargetLoop(mlir::scf::ForOp startLoop, bool skipDeleteLoops) {
+  bool restrictToPointLoops = hasPointLoopInAncestorChain(startLoop);
+
+  for (mlir::scf::ForOp curLoop = startLoop; curLoop; curLoop = curLoop->getParentOfType<mlir::scf::ForOp>()) {
+    if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, skipDeleteLoops)) {
+      continue;
+    }
+    return curLoop;
+  }
+
+  return mlir::scf::ForOp();
+}
+
+// Mark all innermost scf.for loops with vector attribute.
 static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &builder, int64_t vectorSize) {
   funcOp->walk([&](mlir::scf::ForOp forOp) {
-    mlir::scf::ForOp loopWithPointVectorSize = forOp;
-    auto pointVectorSizeAttr = loopWithPointVectorSize->getAttrOfType<IntegerAttr>(kInnerLoopAttr);
     if (isInnermostScfLoop(forOp)) {
       auto reduceType = ReduceDirection::UNKNOWN;
       if (isTransposeLikeInnermostLoop(forOp)) {
-        if (pointVectorSizeAttr) {
-          loopWithPointVectorSize->removeAttr(kInnerLoopAttr);
-        }
         return;
       }
 
       // set vector attribute to innermost loops
       if (!forOp->hasAttr(kReductionLoopAttr)) {
-        int64_t pointVectorSize = pointVectorSizeAttr ? pointVectorSizeAttr.getInt() : vectorSize;
-        forOp->setAttr(kVectorAttr, builder.getI64IntegerAttr(pointVectorSize));
+        if (mlir::scf::ForOp vectorTarget = findVectorAttrTargetLoop(forOp, /*skipDeleteLoops=*/false)) {
+          int64_t targetVectorSize = vectorSize;
+          if (auto pointVectorSizeAttr = vectorTarget->getAttrOfType<IntegerAttr>(kInnerLoopAttr)) {
+            targetVectorSize = pointVectorSizeAttr.getInt();
+          }
+          if (vectorTarget->hasAttr(kBroadcastLoopAttr)) {
+            vectorTarget->removeAttr(kBroadcastLoopAttr);
+          }
+          vectorTarget->setAttr(kVectorAttr, builder.getI64IntegerAttr(targetVectorSize));
+        }
       } else {
         forOp->removeAttr(kReductionLoopAttr);
         reduceType = getReduceType(forOp);
@@ -1770,7 +1868,7 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
         if (reduceType == ReduceDirection::X) {
           forOp->setAttr(kReductionXLoopAttr, builder.getI64IntegerAttr(vectorSize));
         } else if (reduceType == ReduceDirection::Y) {
-          forOp->setAttr(kReductionYLoopAttr, builder.getI64IntegerAttr(vectorSize));
+          forOp->setAttr(kReductionYLoopAttr, builder.getUnitAttr());
         } else if (reduceType == ReduceDirection::ALL) {
           forOp->setAttr(kReductionAllLoopAttr, builder.getI64IntegerAttr(vectorSize));
         }
@@ -1781,14 +1879,14 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
       // For reduce-y: clear reduction tags outward and set vector tag on the first non-reduction parent loop.
       if (reduceType == ReduceDirection::Y) {
         mlir::scf::ForOp curLoop = forOp;
+        bool restrictToPointLoops = hasPointLoopInAncestorChain(curLoop);
         while (curLoop) {
           if (curLoop->hasAttr(kReductionLoopAttr)) {
             curLoop->removeAttr(kReductionLoopAttr);
             curLoop = curLoop->getParentOfType<mlir::scf::ForOp>();
             continue;
           }
-          // Skip temporary wrappers that will be inlined later.
-          if (curLoop->hasAttr(kDeleteLoopAttr)) {
+          if (shouldSkipVectorAttrCandidate(curLoop, restrictToPointLoops, /*skipDeleteLoops=*/true)) {
             curLoop = curLoop->getParentOfType<mlir::scf::ForOp>();
             continue;
           }
@@ -1800,10 +1898,6 @@ static void markInnermostLoopsWithVectorAttr(func::FuncOp funcOp, OpBuilder &bui
       if (forOp->hasAttr(kReductionLoopAttr)) {
         forOp->removeAttr(kReductionLoopAttr);
       }
-    }
-
-    if (pointVectorSizeAttr) {
-      loopWithPointVectorSize->removeAttr(kInnerLoopAttr);
     }
   });
 }
@@ -1860,14 +1954,11 @@ static void markOutermostLoopsForParallelMapping(func::FuncOp funcOp, OpBuilder 
   }
 }
 
-// Inline reduce PointLoops that execute only once (lb=0, ub=1, step=1)
-// These loops have kReductionLoopAttr and their IV is not actually used
-static void inlineReducePointLoops(func::FuncOp funcOp, OpBuilder &builder) {
-  // Collect all reduce point loops that need to be inlined
+// Inline loops marked with delete when they are guaranteed to execute exactly once.
+static void inlineDeleteMarkedLoops(func::FuncOp funcOp, OpBuilder &builder) {
   SmallVector<mlir::scf::ForOp, 8> loopsToInline;
 
   funcOp->walk([&](mlir::scf::ForOp forOp) {
-    // Check if this loop has delete attribute
     if (!forOp->hasAttr(kDeleteLoopAttr)) {
       return;
     }
@@ -1880,7 +1971,6 @@ static void inlineReducePointLoops(func::FuncOp funcOp, OpBuilder &builder) {
     builder.setInsertionPoint(loop);
 
     Block *loopBody = loop.getBody();
-    [[maybe_unused]] Block *parentBlock = loop->getBlock();
 
     // Handle iter_args: replace region iter args with loop's init args
     for (auto [regionArg, initArg] : llvm::zip(loop.getRegionIterArgs(), loop.getInitArgs())) {
@@ -2098,6 +2188,10 @@ static LogicalResult createTilingFuncDefault(func::FuncOp originalKernel, OpBuil
   std::vector<SmallVector<int, 6>> allBandConstraintMaxs;
   if (!isStaticShape) {
     if (!hasUnsupportedTreeShape) {
+      setNotInnerDimensionBroadcastLoopAttr(originalKernel);
+      [[maybe_unused]] auto clearBroadcastTagGuard =
+        llvm::make_scope_exit([&] { clearNotInnerDimensionBroadcastLoopAttr(originalKernel); });
+      (void)clearBroadcastTagGuard;
       size_t levelToTile = 0;
       if (failed(calculateTileSizesForBands(originalKernel, true, bandsToUse, allBandTileSizes, allBandConstraintMaxs,
                                             levelToTile))) {
@@ -2459,7 +2553,7 @@ static LogicalResult applySingleLinearBandDecoupled(func::FuncOp originalKernel,
                                                     ArrayRef<mlir::scf::ForOp> band, ArrayRef<Value> tileSizeValues,
                                                     ArrayRef<unsigned> tileSizesInt, int64_t &nextLeafId) {
   if (band.empty() || tileSizeValues.size() != tileSizesInt.size() || tileSizeValues.size() % band.size() != 0) {
-    clearTemporaryLeafIdAttrs(originalKernel);
+    clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
     originalKernel.emitError("invalid linear-band tiling metadata for band " + std::to_string(bandIdx));
     return failure();
   }
@@ -2467,7 +2561,7 @@ static LogicalResult applySingleLinearBandDecoupled(func::FuncOp originalKernel,
   unsigned bandSize = static_cast<unsigned>(band.size());
   unsigned tileLevels = static_cast<unsigned>(tileSizeValues.size() / bandSize);
   if (tileLevels == 0) {
-    clearTemporaryLeafIdAttrs(originalKernel);
+    clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
     originalKernel.emitError("empty tile levels for linear band " + std::to_string(bandIdx));
     return failure();
   }
@@ -2485,7 +2579,7 @@ static LogicalResult applySingleLinearBandDecoupled(func::FuncOp originalKernel,
   for (unsigned dim = 0; dim < bandSize; ++dim) {
     mlir::scf::ForOp activeAxisLoop;
     if (failed(findUniqueLoopByLeafId(originalKernel, axisLoopIds[dim], activeAxisLoop))) {
-      clearTemporaryLeafIdAttrs(originalKernel);
+      clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
       originalKernel.emitError("failed to locate unique linear axis loop by temporary id");
       return failure();
     }
@@ -2510,7 +2604,7 @@ static LogicalResult applySingleLinearBandDecoupled(func::FuncOp originalKernel,
     SmallVector<mlir::scf::ForOp, 1> axisBand{activeAxisLoop};
     if (failed(
           applyTilingToBand(axisBand, axisTileValues, axisTileSizesInt, builder, axisConstantCache, originalKernel))) {
-      clearTemporaryLeafIdAttrs(originalKernel);
+      clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
       originalKernel.emitError("Failed to apply linear axis tiling for band " + std::to_string(bandIdx));
       return failure();
     }
@@ -2551,7 +2645,7 @@ static LogicalResult collectAndTagLeafBranchLoops(func::FuncOp originalKernel, O
   mlir::scf::ForOp representativeLeaf = band[plan.representativeLeafDim];
   mlir::scf::ForOp branchPoint = representativeLeaf->getParentOfType<mlir::scf::ForOp>();
   if (!branchPoint) {
-    clearTemporaryLeafIdAttrs(originalKernel);
+    clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
     originalKernel.emitError("failed to locate leaf-branch parent loop for band " + std::to_string(bandIdx));
     return failure();
   }
@@ -2562,7 +2656,7 @@ static LogicalResult collectAndTagLeafBranchLoops(func::FuncOp originalKernel, O
       !llvm::all_of(branchLeaves, [](mlir::scf::ForOp loop) { return isLeafForLoop(loop); }) ||
       llvm::find(branchLeaves, representativeLeaf) == branchLeaves.end() ||
       branchLeaves.size() != plan.peerLeafLoops.size() + 1) {
-    clearTemporaryLeafIdAttrs(originalKernel);
+    clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
     originalKernel.emitError("invalid leaf-branch structure for band " + std::to_string(bandIdx));
     return failure();
   }
@@ -2588,7 +2682,7 @@ static LogicalResult applySharedPrefixBand(func::FuncOp originalKernel, OpBuilde
   }
   if (failed(applyTilingToBand(prefixBand, prefixTileValues, prefixTileSizesInt, builder, prefixConstantCache,
                                originalKernel))) {
-    clearTemporaryLeafIdAttrs(originalKernel);
+    clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
     originalKernel.emitError("Failed to apply shared-prefix tiling for band " + std::to_string(bandIdx));
     return failure();
   }
@@ -2601,7 +2695,7 @@ static LogicalResult applyLeafBandsById(func::FuncOp originalKernel, OpBuilder &
   for (int64_t leafId : branchLeafIds) {
     mlir::scf::ForOp activeLeafLoop;
     if (failed(findUniqueLoopByLeafId(originalKernel, leafId, activeLeafLoop))) {
-      clearTemporaryLeafIdAttrs(originalKernel);
+      clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
       originalKernel.emitError("failed to locate unique leaf loop by temporary id");
       return failure();
     }
@@ -2616,7 +2710,7 @@ static LogicalResult applyLeafBandsById(func::FuncOp originalKernel, OpBuilder &
     SmallVector<mlir::scf::ForOp, 1> leafBand{activeLeafLoop};
     if (failed(
           applyTilingToBand(leafBand, leafTileValues, leafTileSizesInt, builder, leafConstantCache, originalKernel))) {
-      clearTemporaryLeafIdAttrs(originalKernel);
+      clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
       originalKernel.emitError("Failed to apply leaf tiling for band " + std::to_string(bandIdx));
       return failure();
     }
@@ -2630,7 +2724,7 @@ static LogicalResult applySingleLeafBranchBandDecoupled(func::FuncOp originalKer
                                                         int64_t &nextLeafId) {
   if (band.empty() || plan.representativeLeafDim == 0 || plan.representativeLeafDim >= band.size() ||
       tileSizeValues.size() != tileSizesInt.size() || tileSizeValues.size() % band.size() != 0) {
-    clearTemporaryLeafIdAttrs(originalKernel);
+    clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
     originalKernel.emitError("invalid leaf-branch tiling metadata for band " + std::to_string(bandIdx));
     return failure();
   }
@@ -2638,7 +2732,7 @@ static LogicalResult applySingleLeafBranchBandDecoupled(func::FuncOp originalKer
   unsigned bandSize = static_cast<unsigned>(band.size());
   unsigned tileLevels = static_cast<unsigned>(tileSizeValues.size() / bandSize);
   if (tileLevels == 0) {
-    clearTemporaryLeafIdAttrs(originalKernel);
+    clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
     originalKernel.emitError("empty tile levels for leaf-branch band " + std::to_string(bandIdx));
     return failure();
   }
@@ -2690,7 +2784,7 @@ static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuild
       return failure();
     }
 
-    clearTemporaryLeafIdAttrs(originalKernel);
+    clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
   }
 
   return success();
@@ -2698,13 +2792,13 @@ static LogicalResult applyAllBandsWithPlans(func::FuncOp originalKernel, OpBuild
 
 static void runApplyPostProcessing(func::FuncOp originalKernel, OpBuilder &builder) {
   // Step 5: Post-processing - mark attributes.
-  clearTemporaryLeafIdAttrs(originalKernel);
+  clearTemporaryLoopIdentificationAttrs(originalKernel, /*clearPointLoopAttr=*/false);
   markInnermostLoopsWithVectorAttr(originalKernel, builder, kVectorSize);
+  inlineDeleteMarkedLoops(originalKernel, builder);
+  clearNotInnerDimensionBroadcastLoopAttr(originalKernel);
+  clearTemporaryLoopIdentificationAttrs(originalKernel);
   setBlockDimAttribute(originalKernel, builder);
   markOutermostLoopsForParallelMapping(originalKernel, builder);
-
-  // Step 6: Inline reduce point loops (they execute only once, IV is unused).
-  inlineReducePointLoops(originalKernel, builder);
 }
 
 LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &builder, bool isStaticShape) {
@@ -2721,6 +2815,11 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
 
   std::vector<SmallVector<mlir::scf::ForOp, 6>> bandsToUse;
   collectRepresentativeBands(leafBranchPlans, bandsToUse);
+
+  setNotInnerDimensionBroadcastLoopAttr(originalKernel);
+  [[maybe_unused]] auto clearBroadcastTagGuard =
+    llvm::make_scope_exit([&] { clearNotInnerDimensionBroadcastLoopAttr(originalKernel); });
+  (void)clearBroadcastTagGuard;
 
   // Setup builder.
   OpBuilder::InsertionGuard guard(builder);
@@ -3285,7 +3384,7 @@ static mlir::LogicalResult cloneNonPerfectChainIntoPointLoops(llvm::ArrayRef<mli
 }
 
 // Helper function to remap or return self if not mapped
-[[maybe_unused]] static mlir::Value remapOrSelf(mlir::Value v, mlir::IRMapping &mapping) {
+static mlir::Value remapOrSelf(mlir::Value v, mlir::IRMapping &mapping) {
   if (!v) {
     return v;
   }

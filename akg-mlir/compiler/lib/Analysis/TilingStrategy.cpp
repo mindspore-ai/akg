@@ -21,10 +21,12 @@
 #include <numeric>
 #include "akg/Dialect/Affine/Analysis/GpuTemplateTilingSolver.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
+#include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/Support/MathExtras.h"
 
 namespace mlir {
 namespace autotiling {
+static constexpr const char *kNotInnerDimensionBroadcastLoopAttr = "not_inner_dimension_broadcast";
 using akg::utils::GpuInfo;
 using akg::utils::StrategyHelper;
 using llvm::SmallVector;
@@ -823,10 +825,44 @@ unsigned getOuterTileSize(const AxisPtr axis, unsigned blockNumber) {
   return tileSizePerBlock;
 }
 
+static void configureDynamicAxisTiling(const AxisPtr axis, bool isFullTileAxis) {
+  // Ensure we have at least 2 levels for dynamic axes.
+  for (size_t i = axis->configs[kTileCfg].size(); i < 2; ++i) {
+    axis->doExtraTile();
+  }
+
+  auto tileConfig0 = axis->tryGetConfig(0, kTileCfg);
+  auto tileConfig1 = axis->tryGetConfig(1, kTileCfg);
+
+  if (isFullTileAxis) {
+    if (tileConfig0 != nullptr) {
+      tileConfig0->value = 1;
+      axis->tryAddConstraint(0, Constraint({1}));
+    }
+    if (tileConfig1 != nullptr) {
+      tileConfig1->value = 1;
+      axis->tryAddConstraint(1, Constraint({1}));
+    }
+    return;
+  }
+
+  if (tileConfig0 != nullptr) {
+    unsigned value = UINT_MAX;
+    tileConfig0->value = value;  // Special marker for dynamic axis
+    axis->tryAddConstraint(0, Constraint({value}));
+  }
+
+  constexpr unsigned MIN_TILE_SIZE = 512;
+  if (tileConfig1 != nullptr) {
+    tileConfig1->value = static_cast<int>(MIN_TILE_SIZE);
+    axis->tryAddConstraint(1, Constraint({static_cast<int>(MIN_TILE_SIZE)}));
+  }
+}
+
 // Helper function to process tiling for a single axis (unified algorithm for both static and dynamic axes)
 // For dynamic axes, calculate tile sizes based on 40 blocks (including tail block)
 static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4> &tileSizes, unsigned innerTileSize,
-                              unsigned blockNumber, size_t &maxLevelToTile, bool isReduceAxis = false) {
+                              unsigned blockNumber, size_t &maxLevelToTile, bool isFullTileAxis = false) {
   if (axis == nullptr) {
     return;
   }
@@ -840,28 +876,7 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
   // First level: -1 (will be converted to UINT_MAX in unsigned storage, indicates dynamic calculation)
   // Second level: default minimum tile size (512)
   if (hasDynamicUpperBound || !hasStaticBounds) {
-    // For dynamic axes, set first level to -1, second level to minimum tile size
-    // Ensure we have at least 2 levels for dynamic axes
-    for (size_t i = axis->configs[kTileCfg].size(); i < 2; ++i) {
-      axis->doExtraTile();
-    }
-
-    // First level: set to -1 (will be handled specially in constructTiledIndex)
-    auto tileConfig0 = axis->tryGetConfig(0, kTileCfg);
-    if (tileConfig0 != nullptr) {
-      unsigned value = UINT_MAX;
-      tileConfig0->value = value;  // Special marker for dynamic axis
-      axis->tryAddConstraint(0, Constraint({value}));
-    }
-
-    // Second level: use default minimum tile size
-    const unsigned MIN_TILE_SIZE = 512;
-    auto tileConfig1 = axis->tryGetConfig(1, kTileCfg);
-    if (tileConfig1 != nullptr) {
-      tileConfig1->value = static_cast<int>(MIN_TILE_SIZE);
-      axis->tryAddConstraint(1, Constraint({static_cast<int>(MIN_TILE_SIZE)}));
-    }
-
+    configureDynamicAxisTiling(axis, isFullTileAxis);
     maxLevelToTile = std::max(maxLevelToTile, static_cast<size_t>(2));
     return;
   }
@@ -874,12 +889,12 @@ static void processAxisTiling(const AxisPtr axis, const SmallVector<unsigned, 4>
   // Get default tile sizes if not specified by user
   SmallVector<unsigned, 4> currentTileSizes = tileSizes;
   // For static reduce axes, use extent-sized tiles to keep no-split behavior explicit in metadata.
-  if (isReduceAxis) {
-    unsigned reduceTile = 1;
+  if (isFullTileAxis) {
+    unsigned fullTile = 1;
     if (extent > 0) {
-      reduceTile = extent > static_cast<int64_t>(UINT_MAX) ? UINT_MAX : static_cast<unsigned>(extent);
+      fullTile = extent > static_cast<int64_t>(UINT_MAX) ? UINT_MAX : static_cast<unsigned>(extent);
     }
-    currentTileSizes = {reduceTile, reduceTile};
+    currentTileSizes = {fullTile, fullTile};
   }
   if (currentTileSizes.empty()) {
     currentTileSizes = {std::max(getOuterTileSize(axis, blockNumber), innerTileSize), innerTileSize};
@@ -984,16 +999,16 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
       continue;
     }
 
-    // Check if this axis is a reduction axis
-    bool isReduceAxis = false;
-    if (isReduceOp && axis && axis->loop) {
-      auto loopOp = axis->getLoopOperation();
-      if (loopOp) {
-        isReduceAxis = loopOp->hasAttr(kReductionLoopAttr);
-      }
+    // No-split axes use explicit full/no-split tile metadata.
+    bool isFullTileAxis = false;
+    auto *loopOp = axis ? axis->getLoopOperation() : nullptr;
+    if (loopOp && isReduceOp && loopOp->hasAttr(kReductionLoopAttr)) {
+      isFullTileAxis = true;
+    } else if (loopOp && loopOp->hasAttr(kNotInnerDimensionBroadcastLoopAttr)) {
+      isFullTileAxis = true;
     }
 
-    processAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, isReduceAxis);
+    processAxisTiling(axis, tileSizes, innerTileSize, blockNumber, maxLevelToTile, isFullTileAxis);
   }
 
   npuGraph->levelToTile = std::max(npuGraph->levelToTile, maxLevelToTile);
