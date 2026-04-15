@@ -35,6 +35,7 @@ docs/
 | `AKG_CLI.md` | akg_cli 命令参考 |
 | `OpOptimizer.md` | 算子优化流程 |
 | `LocalModelDeployment.md` | 本地 LLM 部署 |
+| `SolarRoofline.md` | Solar roofline 依赖安装与运行时接入 |
 
 ### 规范
 

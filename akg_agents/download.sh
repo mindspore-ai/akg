@@ -7,6 +7,7 @@ WITH_SOL_EXECBENCH=false
 WITH_KERNELBENCH=false
 WITH_MULTIKERNELBENCH=false
 WITH_EVOKERNEL=false
+WITH_SOLAR=false
 WITH_ALL_BENCHMARKS=false
 for arg in "$@"; do
   if [ "$arg" = "--with_local_model" ]; then
@@ -19,6 +20,8 @@ for arg in "$@"; do
     WITH_MULTIKERNELBENCH=true
   elif [ "$arg" = "--with_evokernel" ]; then
     WITH_EVOKERNEL=true
+  elif [ "$arg" = "--with_solar" ]; then
+    WITH_SOLAR=true
   elif [ "$arg" = "--with_all_benchmarks" ]; then
     WITH_ALL_BENCHMARKS=true
   fi
@@ -35,6 +38,7 @@ SOL_EXECBENCH_FALLBACK_DIR="${THIRDPARTY_DIR}/SOL-ExecBench-dataset"
 KERNELBENCH_DIR="${THIRDPARTY_DIR}/KernelBench"
 MULTIKERNELBENCH_DIR="${THIRDPARTY_DIR}/MultiKernelBench"
 EVOKERNEL_DIR="${THIRDPARTY_DIR}/EvoKernel"
+SOLAR_DIR="${SOLAR_DIR:-${THIRDPARTY_DIR}/SOLAR}"
 
 KERNELBENCH_REPO_URL="https://github.com/ScalingIntelligence/KernelBench.git"
 # 优先以历史 .gitmodules 中记录的 commit 为准。
@@ -43,6 +47,8 @@ MULTIKERNELBENCH_REPO_URL="https://github.com/wzzll123/MultiKernelBench.git"
 MULTIKERNELBENCH_COMMIT="55cb5c059573f0bf00f2dc24c75f810059cf2785"
 EVOKERNEL_REPO_URL="https://huggingface.co/datasets/noahli/EvoKernel"
 EVOKERNEL_COMMIT="af61b2a307d6d9f8d313893f2c87414c51a97863"
+SOLAR_REPO_URL="${SOLAR_REPO_URL:-https://github.com/NVlabs/SOLAR.git}"
+SOLAR_REF="${SOLAR_REF:-}"
 
 function check_python_and_deps() {
   if ! command -v python3 &> /dev/null; then
@@ -219,6 +225,43 @@ function download_evokernel() {
   clone_and_checkout_repo "EvoKernel" "${EVOKERNEL_REPO_URL}" "${EVOKERNEL_DIR}" "${EVOKERNEL_COMMIT}" "true"
 }
 
+function download_and_install_solar() {
+  check_git
+
+  echo "开始下载并安装 Solar..."
+  clone_and_checkout_repo "Solar" "${SOLAR_REPO_URL}" "${SOLAR_DIR}" "${SOLAR_REF}"
+
+  if [ -f "${SOLAR_DIR}/install.sh" ]; then
+    echo "使用 Solar 自带 install.sh 安装依赖..."
+    bash "${SOLAR_DIR}/install.sh" --skip-torch
+  elif [ -f "${SOLAR_DIR}/requirements.txt" ]; then
+    echo "未找到 Solar install.sh，回退为 requirements.txt 安装..."
+    pip3 install -r "${SOLAR_DIR}/requirements.txt"
+  else
+    echo "错误：Solar 仓库缺少 install.sh / requirements.txt: ${SOLAR_DIR}"
+    exit 1
+  fi
+
+  if [ -f "${SOLAR_DIR}/setup.py" ] || [ -f "${SOLAR_DIR}/pyproject.toml" ]; then
+    echo "安装 Solar Python 包..."
+    pip3 install -e "${SOLAR_DIR}" --no-deps
+  else
+    echo "错误：Solar 仓库缺少 setup.py / pyproject.toml: ${SOLAR_DIR}"
+    exit 1
+  fi
+
+  echo "校验 Solar 安装..."
+  python3 - <<'PY'
+import solar
+from solar.graph import PyTorchProcessor
+from solar.einsum import PyTorchToEinsum
+from solar.analysis import EinsumGraphAnalyzer
+from solar.perf import EinsumGraphPerfModel
+print("solar import ok:", solar.__file__)
+print("solar api ok")
+PY
+}
+
 # 主逻辑
 if $WITH_ALL_BENCHMARKS; then
   WITH_SOL_EXECBENCH=true
@@ -247,4 +290,9 @@ fi
 
 if $WITH_EVOKERNEL; then
   download_evokernel
+fi
+
+if $WITH_SOLAR; then
+  check_python_and_deps
+  download_and_install_solar
 fi

@@ -182,6 +182,8 @@ async def profile_kernel(
         gen_time = profile_result.get('gen_time')
         base_time = profile_result.get('base_time')
         speedup = profile_result.get('speedup', 0.0)
+        roofline_time = profile_result.get('roofline_time')
+        roofline_speedup = profile_result.get('roofline_speedup', 0.0)
 
         if gen_time is None or base_time is None or gen_time == float('inf') or base_time == float('inf'):
             error_msg = profile_result.get('error_log', '性能测试执行失败')
@@ -189,7 +191,10 @@ async def profile_kernel(
                 "status": "fail", "output": "",
                 "error_information": f"性能分析失败！{error_msg}",
                 "gen_time_us": gen_time, "base_time_us": base_time,
-                "speedup": 0.0, "profile_dir": str(log_dir)
+                "speedup": 0.0,
+                "roofline_time_us": roofline_time,
+                "roofline_speedup": roofline_speedup,
+                "profile_dir": str(log_dir),
             }
 
         if speedup >= 1.0:
@@ -199,6 +204,13 @@ async def profile_kernel(
         else:
             perf_status = "无法计算加速比"
 
+        roofline_text = ""
+        if roofline_time is not None:
+            roofline_text = (
+                f"\nRoofline(Fused): {roofline_time:.2f} us\n"
+                f"相对 Roofline: {roofline_speedup:.4f}x"
+            )
+
         return {
             "status": "success",
             "output": (
@@ -207,10 +219,14 @@ async def profile_kernel(
                 f"框架实现: {base_time:.2f} us\n"
                 f"生成代码: {gen_time:.2f} us\n"
                 f"性能对比: {perf_status}"
+                f"{roofline_text}"
             ),
             "error_information": "",
             "gen_time_us": gen_time, "base_time_us": base_time,
-            "speedup": speedup, "profile_dir": str(log_dir)
+            "speedup": speedup,
+            "roofline_time_us": roofline_time,
+            "roofline_speedup": roofline_speedup,
+            "profile_dir": str(log_dir),
         }
 
     except ImportError as e:
