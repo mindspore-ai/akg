@@ -46,6 +46,9 @@ class WorkerInterface(ABC):
                 - gen_time: 生成代码执行时间
                 - base_time: 基准代码执行时间
                 - speedup: 加速比
+                - roofline_time: SOLAR fused roofline 预测时间（微秒，可选）
+                - roofline_speedup: roofline_time / gen_time（可选）
+                - roofline: roofline 详情字典（可选）
                 - artifacts: 执行过程中生成的文件内容，格式为 {relative_path: json_content}
         """
         pass

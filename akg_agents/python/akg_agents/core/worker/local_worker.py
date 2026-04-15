@@ -21,6 +21,11 @@ from akg_agents.op.verifier.profiler_utils import (
     run_nsys,
     analyze_nsys_data
 )
+from akg_agents.op.verifier.roofline_utils import (
+    augment_roofline_metrics,
+    compute_roofline_profile,
+    write_roofline_profile_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +188,8 @@ class LocalWorker(WorkerInterface):
         这个方法只负责执行已经生成好的 profile 脚本
         
         Returns:
-            Dict[str, Any]: 包含 gen_time, base_time, speedup, artifacts 等字段
+            Dict[str, Any]: 包含 gen_time, base_time, speedup, roofline,
+            roofline_time, roofline_speedup, artifacts 等字段
         """
         try:
             # 2. Create temp directory and extract
@@ -240,7 +246,15 @@ class LocalWorker(WorkerInterface):
                         )
                     else:
                         logger.warning(f"[{task_id}] Unsupported backend for profiling: {backend}")
-                        return {'gen_time': None, 'base_time': None, 'speedup': 0.0, 'artifacts': {}}
+                        return {
+                            'gen_time': None,
+                            'base_time': None,
+                            'speedup': 0.0,
+                            'roofline_time': None,
+                            'roofline_speedup': 0.0,
+                            'roofline': None,
+                            'artifacts': {},
+                        }
                     
                     # 5. Calculate speedup
                     # 注意：跨后端场景下 base_time 可能是 inf（跳过 base profile）
@@ -249,6 +263,22 @@ class LocalWorker(WorkerInterface):
                     else:
                         speedup = 0.0  # 无法计算 speedup
                     
+                    roofline_result = compute_roofline_profile(
+                        verify_dir=extract_dir,
+                        op_name=op_name,
+                        task_id=task_id,
+                        profile_settings=profile_settings,
+                    )
+                    roofline_result = augment_roofline_metrics(
+                        roofline_result,
+                        gen_time_us=gen_time,
+                        base_time_us=base_time if base_time < float('inf') else None,
+                    )
+                    write_roofline_profile_result(extract_dir, roofline_result)
+
+                    roofline_time = roofline_result.get("time_us") if roofline_result.get("success") else None
+                    roofline_speedup = roofline_result.get("speedup_vs_generated", 0.0)
+
                     # 6. 收集执行过程中生成的 JSON 文件
                     artifacts = collect_json_artifacts(extract_dir)
                     if artifacts:
@@ -256,20 +286,43 @@ class LocalWorker(WorkerInterface):
                     
                     # 7. 处理返回值，确保 JSON 可序列化（inf -> None）
                     # JSON 标准不支持 float('inf')
+                    serializable_gen_time = gen_time if gen_time < float('inf') else None
+                    serializable_base_time = base_time if base_time < float('inf') else None
                     return {
-                        'gen_time': gen_time if gen_time < float('inf') else None,
-                        'base_time': base_time if base_time < float('inf') else None,
+                        'gen_time': serializable_gen_time,
+                        'base_time': serializable_base_time,
                         'speedup': speedup,
+                        'roofline_time': roofline_time,
+                        'roofline_speedup': roofline_speedup,
+                        'roofline': roofline_result,
                         'artifacts': artifacts
                     }
                     
                 except Exception as e:
                     logger.error(f"[{task_id}] Profiling execution failed: {e}", exc_info=True)
-                    return {'gen_time': None, 'base_time': None, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
+                    return {
+                        'gen_time': None,
+                        'base_time': None,
+                        'speedup': 0.0,
+                        'roofline_time': None,
+                        'roofline_speedup': 0.0,
+                        'roofline': None,
+                        'artifacts': {},
+                        'error': str(e),
+                    }
         
         except Exception as e:
             logger.error(f"[{task_id}] LocalWorker profiling failed: {e}", exc_info=True)
-            return {'gen_time': None, 'base_time': None, 'speedup': 0.0, 'artifacts': {}, 'error': str(e)}
+            return {
+                'gen_time': None,
+                'base_time': None,
+                'speedup': 0.0,
+                'roofline_time': None,
+                'roofline_speedup': 0.0,
+                'roofline': None,
+                'artifacts': {},
+                'error': str(e),
+            }
     
     def _run_msprof_profiling(self, extract_dir: str, op_name: str, task_id: str, warmup_times: int, run_times: int, timeout: int = 600) -> Tuple[float, float]:
         """Run msprof profiling for Ascend backend (synchronous)"""
