@@ -24,7 +24,6 @@
 import sys
 import asyncio
 import os
-import json
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, List
@@ -36,6 +35,7 @@ from akg_agents import get_project_root
 from akg_agents.op.adaptive_search import adaptive_search
 from akg_agents.core.worker.manager import register_worker
 from akg_agents.op.config.config_validator import load_config
+from akg_agents.op.utils.sol_utils import load_sol_task, load_task_source, resolve_path_from_base
 from akg_agents.utils.environment_check import check_env_for_task
 from akg_agents.utils.common_utils import load_yaml
 
@@ -75,6 +75,7 @@ class AdaptiveSearchRunnerConfig:
     
     # 配置文件路径
     config_path: Optional[str] = None
+    _sol_problem_dir: Optional[str] = field(default=None, init=False, repr=False)
     
     @classmethod
     def from_yaml(cls, config_path: str, skip_task_config: bool = False) -> "AdaptiveSearchRunnerConfig":
@@ -87,25 +88,25 @@ class AdaptiveSearchRunnerConfig:
         # 任务配置
         task_config = config_dict.get("task", {})
         if not skip_task_config:
-            instance.op_name = task_config.get("op_name", instance.op_name)
-            
-            # SOL 数据集目录
+            explicit_op_name = task_config.get("op_name")
+            if explicit_op_name:
+                instance.op_name = explicit_op_name
+
             sol_problem_dir = task_config.get("sol_problem_dir", "")
             if sol_problem_dir:
-                if not os.path.isabs(sol_problem_dir):
-                    sol_problem_dir = os.path.normpath(os.path.join(config_dir, sol_problem_dir))
-                instance._sol_problem_dir = sol_problem_dir
-            
-            # 从文件路径加载任务描述
-            task_desc = task_config.get("task_desc", "")
-            if task_desc:
-                if not os.path.isabs(task_desc):
-                    task_desc = os.path.normpath(os.path.join(config_dir, task_desc))
-                if os.path.isfile(task_desc):
-                    with open(task_desc, 'r', encoding='utf-8') as f:
-                        instance.task_desc = f.read()
-                else:
-                    raise FileNotFoundError(f"Task description file not found: {task_desc}")
+                resolved_sol_dir = resolve_path_from_base(sol_problem_dir, config_dir)
+                sol_op_name, task_desc, resolved_sol_dir = load_sol_task(resolved_sol_dir)
+                instance.op_name = explicit_op_name or sol_op_name
+                instance.task_desc = task_desc
+                instance._sol_problem_dir = resolved_sol_dir
+            else:
+                task_desc = task_config.get("task_desc", "")
+                if task_desc:
+                    resolved_task_path = resolve_path_from_base(task_desc, config_dir)
+                    task_op_name, task_desc, resolved_sol_dir = load_task_source(resolved_task_path)
+                    instance.op_name = explicit_op_name or task_op_name or instance.op_name
+                    instance.task_desc = task_desc
+                    instance._sol_problem_dir = resolved_sol_dir
         
         # 环境配置
         env_config = config_dict.get("environment", {})
@@ -244,43 +245,6 @@ def load_task_description(task_file: str) -> str:
         with open(task_file, 'r', encoding='utf-8') as f:
             return f.read()
     return task_file
-
-
-def load_sol_task(sol_dir: str):
-    """Load SOL dataset: returns (op_name, task_desc, sol_problem_dir)"""
-    case_dir = Path(sol_dir).resolve()
-    if not (case_dir / "definition.json").exists():
-        raise FileNotFoundError(f"SOL dataset missing definition.json: {case_dir}")
-    
-    with open(case_dir / "definition.json", "r", encoding="utf-8") as f:
-        def_json = f.read()
-    definition = json.loads(def_json)
-    op_name = definition.get("name", case_dir.name)
-    
-    with open(case_dir / "reference.py", "r", encoding="utf-8") as f:
-        ref_py = f.read()
-    
-    workload_sample = ""
-    workload_file = case_dir / "workload.jsonl"
-    if workload_file.exists():
-        with open(workload_file, "r", encoding="utf-8") as f:
-            lines = [l.strip() for l in f if l.strip()]
-        if lines:
-            first = json.loads(lines[0])
-            workload_sample = (
-                f"\n\n## workload 示例（共 {len(lines)} 组，以下为第 1 组）\n"
-                f"```json\n{json.dumps(first, indent=2)}\n```"
-            )
-    
-    task_desc = (
-        f"请实现一个 Triton Ascend 算子。\n\n"
-        f"## definition.json\n```json\n{def_json}\n```\n\n"
-        f"## reference.py\n```python\n{ref_py}\n```"
-        f"{workload_sample}\n\n"
-        f"注意：请使用 Triton 编写 kernel，并将其封装在 ModelNew 类的 forward 方法中。"
-    )
-    
-    return op_name, task_desc, str(case_dir)
 
 
 def parse_default_config():
